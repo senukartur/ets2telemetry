@@ -150,9 +150,9 @@ export async function runHardModeSmoke({application, dashboard, source, config, 
     const details = dashboard.getByTestId('hard-mode-details'); await details.waitFor({state: 'visible'});
     assert.equal(await details.locator('[data-testid^="hard-mode-detail-rule-"]').count(), 12);
     await renderedFixture('HARD_MODE_INLINE_' + lang, {details: true});
-    const drawerText = await dashboard.getByTestId('hard-mode-card').innerText();
-    for (const caveat of (lang === 'en' ? ['Read-only checks observe persisted settings.', 'Unpersisted menu or console changes and transient changes between checks are not verified.', 'Manual delivery is required; actual Expert placement is not verified.', 'Current settings pass is separate from delivered-trip qualification.'] : ['Проверка только читает сохранённые настройки.', 'Несохранённые изменения в меню или консоли и временные изменения между проверками не проверяются.', 'Требуется ручная парковка; фактическое место уровня «Эксперт» не подтверждается.', 'Соответствие текущих настроек не означает, что завершённый рейс будет засчитан как Hard Mode.'])) assert.ok(drawerText.includes(caveat), `Missing ${lang} drawer caveat: ${caveat}`);
-    if (lang === 'ru') assert.doesNotMatch(await details.innerText(), /Detected:|Required:|Reason:|Check again|Current settings|Read-only/);
+    const pageText = await dashboard.getByTestId('hard-mode-card').innerText();
+    for (const caveat of (lang === 'en' ? ['Read-only checks observe persisted settings.', 'Unpersisted menu or console changes and transient changes between checks are not verified.', 'Manual delivery is required; actual Expert placement is not verified.', 'Current settings pass is separate from delivered-trip qualification.'] : ['Проверка только читает сохранённые настройки.', 'Несохранённые изменения в меню или консоли и временные изменения между проверками не проверяются.', 'Требуется ручная парковка; фактическое место уровня «Эксперт» не подтверждается.', 'Соответствие текущих настроек не означает, что завершённый рейс будет засчитан как Hard Mode.'])) assert.ok(pageText.includes(caveat), `Missing ${lang} page caveat: ${caveat}`);
+    if (lang === 'ru') assert.doesNotMatch(pageText, /Detected:|Required:|Reason:|Check again|Current settings|Read-only/);
     await dashboard.getByTestId('shell.content').evaluate(node => {node.scrollTop = 0;});
     await dashboard.screenshot({path: path.join(config.output, `hard-mode-checklist-${lang}.png`)});
     await clickTestId(dashboard, 'hard-mode-refresh');

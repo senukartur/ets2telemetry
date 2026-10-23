@@ -316,9 +316,9 @@ en: {
   'live.truck': 'Truck', 'live.plate': 'Plate', 'live.trailer': 'Trailer', 'live.odometer': 'Odometer', 'live.session': 'Game session', 'live.clock': 'Game clock', 'live.mode': 'Mode', 'live.protocol': 'Protocol', 'live.lostEvents': 'Lost events',
   'live.waitTitle': 'Waiting for the game', 'live.waitText': 'Start Euro Truck Simulator 2 or American Truck Simulator. The plugin connects on its own; nothing to click here.',
   'complete.complete': 'Complete', 'complete.partial': 'Partial', 'complete.unknown': 'Unknown',
-  'hm.title': 'Hard Mode', 'hm.active': 'Active', 'hm.inactive': 'Not active', 'hm.lost': 'Lost for this trip', 'hm.count': '{n} of 12 settings meet Hard Mode', 'hm.view': 'View checklist',
+  'hm.title': 'Hard Mode', 'hm.active': 'Active', 'hm.inactive': 'Not active', 'hm.lost': 'Lost for this trip', 'hm.count': '{n} of 12 settings meet Hard Mode',
   'hm.lostText': '{what} changed to {v} at {time}. This trip will be recorded as standard.', 'hm.tripYes': 'This trip qualifies', 'hm.tripNo': 'This trip does not qualify',
-  'hm.sheet': 'Hard Mode checklist', 'hm.profile': 'Profile', 'hm.file': 'Settings file', 'hm.read': 'Read {s} s ago', 'hm.recheck': 'Check again',
+  'hm.profile': 'Profile', 'hm.file': 'Settings file', 'hm.read': 'Read {s} s ago', 'hm.recheck': 'Check again',
   'hm.col.setting': 'Setting', 'hm.col.required': 'Required', 'hm.col.detected': 'In game', 'hm.readonly': 'Read-only: the app never changes game settings. Change them in the game under Options → Gameplay; this list updates on its own.',
   'hm.rule': 'All 12 must pass at the same time. Relaxing any of them during a job removes Hard Mode from that trip.',
   'hm.c.fuel': 'Realistic fuel consumption', 'hm.c.airbrake': 'Air brake simulation', 'hm.c.police': 'Police and fines', 'hm.c.fatigue': 'Fatigue simulation', 'hm.c.limiter': 'Speed limiter',
@@ -385,9 +385,9 @@ ru: {
   'live.truck': 'Грузовик', 'live.plate': 'Номер', 'live.trailer': 'Прицеп', 'live.odometer': 'Одометр', 'live.session': 'Игровая сессия', 'live.clock': 'Часы игры', 'live.mode': 'Режим', 'live.protocol': 'Протокол', 'live.lostEvents': 'Потеряно событий',
   'live.waitTitle': 'Ожидание игры', 'live.waitText': 'Запустите Euro Truck Simulator 2 или American Truck Simulator. Плагин подключится сам, здесь ничего нажимать не нужно.',
   'complete.complete': 'Полная', 'complete.partial': 'С пропусками', 'complete.unknown': 'Неизвестно',
-  'hm.title': 'Hard Mode', 'hm.active': 'Активен', 'hm.inactive': 'Не активен', 'hm.lost': 'Потерян для этого рейса', 'hm.count': '{n} из 12 настроек соответствуют Hard Mode', 'hm.view': 'Открыть чек-лист',
+  'hm.title': 'Hard Mode', 'hm.active': 'Активен', 'hm.inactive': 'Не активен', 'hm.lost': 'Потерян для этого рейса', 'hm.count': '{n} из 12 настроек соответствуют Hard Mode',
   'hm.lostText': '{what}: значение изменено на {v} в {time}. Рейс будет записан как обычный.', 'hm.tripYes': 'Рейс засчитывается как Hard Mode', 'hm.tripNo': 'Рейс не засчитывается как Hard Mode',
-  'hm.sheet': 'Чек-лист Hard Mode', 'hm.profile': 'Профиль', 'hm.file': 'Файл настроек', 'hm.read': 'Прочитано {s} с назад', 'hm.recheck': 'Проверить снова',
+  'hm.profile': 'Профиль', 'hm.file': 'Файл настроек', 'hm.read': 'Прочитано {s} с назад', 'hm.recheck': 'Проверить снова',
   'hm.col.setting': 'Настройка', 'hm.col.required': 'Нужно', 'hm.col.detected': 'В игре', 'hm.readonly': 'Только чтение: программа не меняет настройки игры. Измените их в игре: Опции → Геймплей; список обновится сам.',
   'hm.rule': 'Все 12 условий должны выполняться одновременно. Если ослабить любую настройку во время заказа, рейс теряет Hard Mode.',
   'hm.c.fuel': 'Реалистичный расход топлива', 'hm.c.airbrake': 'Пневмотормоза', 'hm.c.police': 'Штрафы / полиция', 'hm.c.fatigue': 'Усталость', 'hm.c.limiter': 'Ограничитель скорости',
@@ -946,7 +946,7 @@ function overlayScene() {
 
 /* ---------- Notes per screen (English, for agents) ---------- */
 var NOTES = {
-  live: ['Live (ui-spec §5.1)', ['Variant B instrument layout in Yukon style: hero gradient tile with the speed gauge (ring = speed, inner arc = RPM), gear block and fuel tank.', 'Hard Mode card (ET-026c) opens the checklist sheet. Try the Hard Mode control above: 12/12, 10/12 and lost mid-trip.', 'Waiting shows the empty-state banner and dashes; Lost greys values and shows a stale badge; Paused keeps values with a paused badge.'],
+  live: ['Live (ui-spec §5.1)', ['Variant B instrument layout in Yukon style: hero gradient tile with the speed gauge (ring = speed, inner arc = RPM), gear block and fuel tank.', 'Hard Mode has its own page between Live and Journal, with all conditions inline and no drawer. Try the Hard Mode control above: 12/12, 10/12 and lost mid-trip.', 'Waiting shows the empty-state banner and dashes; Lost greys values and shows a stale badge; Paused keeps values with a paused badge.'],
     ['shell.topbar.status', 'live.instrument', 'live.job', 'live.trip']],
   journal: ['Journal (ui-spec §5.3)', ['Table per the Yukon guide: header #1A2332, dividers #2B3544, numbers right-aligned, no zebra.', 'Columns map to JournalTripSummary: outcome open/delivered/cancelled/none, recording complete/partial/unknown. "Delivered late" is a display of a delivered outcome with lateness.', 'Sync column is server-phase (Later) and is hidden until sync exists. Click a row for trip details.'],
     ['journal.filters', 'journal.table', 'journal.pager']],
