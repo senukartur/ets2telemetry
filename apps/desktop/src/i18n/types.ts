@@ -394,7 +394,7 @@ export type I18nKey =
 
   | 'ui.unavailable' | 'ui.planned' | 'ui.accountNote' | 'ui.diagnostics' | 'ui.details' | 'ui.help' | 'ui.helpNote' | 'ui.chartPage' | 'ui.chartNote' | 'ui.actualUnavailable' | 'ui.searchPlanned' | 'ui.status.connected' | 'ui.status.paused' | 'ui.status.waiting' | 'ui.status.stale' | 'ui.status.disconnected' | 'ui.status.incompatible' | 'ui.status.unavailable' | 'ui.status.restarting' | 'ui.status.service-failed' | 'ui.plugin' | 'ui.origin' | 'ui.current' | 'ui.notCurrent' | 'ui.observedProgress' | 'ui.readOnly'
   | 'app.name' | 'app.sub' | 'app.window'
-  | 'nav.live' | 'nav.journal' | 'nav.settings' | 'nav.account' | 'nav.group.drive' | 'nav.group.app' | 'nav.group.company'
+  | 'nav.live' | 'nav.hardMode' | 'nav.journal' | 'nav.settings' | 'nav.account' | 'nav.group.drive' | 'nav.group.app' | 'nav.group.company'
   | 'tag.later' | 'tag.planned' | 'side.exit' | 'side.lang'
   | 'rec.recording' | 'rec.trip' | 'rec.paused' | 'rec.pausedSub'
   | 'rec.waiting' | 'rec.waitingSub' | 'rec.lost' | 'rec.lostSub'
@@ -408,9 +408,9 @@ export type I18nKey =
   | 'live.truck' | 'live.plate' | 'live.trailer' | 'live.odometer' | 'live.session' | 'live.clock' | 'live.mode' | 'live.protocol' | 'live.lostEvents'
   | 'live.waitTitle' | 'live.waitText'
   | 'complete.complete' | 'complete.partial' | 'complete.unknown'
-  | 'hm.title' | 'hm.active' | 'hm.inactive' | 'hm.lost' | 'hm.count' | 'hm.view'
+  | 'hm.title' | 'hm.active' | 'hm.inactive' | 'hm.lost' | 'hm.count'
   | 'hm.lostText' | 'hm.tripYes' | 'hm.tripNo'
-  | 'hm.sheet' | 'hm.profile' | 'hm.file' | 'hm.read' | 'hm.recheck'
+  | 'hm.profile' | 'hm.file' | 'hm.read' | 'hm.recheck'
   | 'hm.col.setting' | 'hm.col.required' | 'hm.col.detected' | 'hm.readonly'
   | 'hm.rule'
   | 'hm.c.fuel' | 'hm.c.airbrake' | 'hm.c.police' | 'hm.c.fatigue' | 'hm.c.limiter'
@@ -460,7 +460,7 @@ export type I18nKey =
   | 'fmt.in' | 'fmt.dur' | 'fmt.min' | 'fmt.day' | 'fmt.date'
   | 'u.kmh' | 'u.mph' | 'u.l' | 'u.gal' | 'u.km' | 'u.mi' | 'u.rpm' | 'u.t' | 'u.lb' | 'u.l100' | 'u.mpg'
   | 'ov.edit' | 'ov.drag' | 'ov.hidden' | 'ov.hiddenT' | 'ov.noSignal' | 'ov.paused'
-  | 'hm.status.pass' | 'hm.status.fail' | 'hm.status.unknown' | 'hm.status.lost' | 'hm.state.pass' | 'hm.state.fail' | 'hm.state.unknown' | 'hm.configuredCount' | 'hm.reading' | 'hm.checking' | 'hm.progress' | 'hm.unavailable' | 'hm.source.local' | 'hm.source.cloud' | 'hm.source.fixture' | 'hm.source.unknown' | 'hm.age' | 'hm.detected' | 'hm.required' | 'hm.reason' | 'hm.value.unknown' | 'hm.value.invalid' | 'hm.value.skilled' | 'hm.value.other' | 'hm.required.parking' | 'hm.notice' | 'hm.distinction' | 'hm.evidence' | 'hm.loss' | 'hm.audit' | 'hm.firstLoss' | 'hm.manual.pending' | 'hm.manual.yes' | 'hm.manual.no' | 'hm.snapshots' | 'hm.notEvaluated' | 'hm.close' | 'hm.reason.compliant' | 'hm.reason.outside-limit' | 'hm.reason.missing' | 'hm.reason.malformed' | 'hm.reason.conflicting' | 'hm.reason.source-unproven' | 'hm.reason.interrupted' | 'hm.reason.historical' | 'hm.reason.source-changed' | 'hm.reason.parking-unproven'
+  | 'hm.status.pass' | 'hm.status.fail' | 'hm.status.unknown' | 'hm.status.lost' | 'hm.state.pass' | 'hm.state.fail' | 'hm.state.unknown' | 'hm.configuredCount' | 'hm.reading' | 'hm.checking' | 'hm.progress' | 'hm.unavailable' | 'hm.source.local' | 'hm.source.cloud' | 'hm.source.fixture' | 'hm.source.unknown' | 'hm.age' | 'hm.detected' | 'hm.required' | 'hm.reason' | 'hm.value.unknown' | 'hm.value.invalid' | 'hm.value.skilled' | 'hm.value.other' | 'hm.required.parking' | 'hm.notice' | 'hm.distinction' | 'hm.evidence' | 'hm.loss' | 'hm.audit' | 'hm.firstLoss' | 'hm.manual.pending' | 'hm.manual.yes' | 'hm.manual.no' | 'hm.snapshots' | 'hm.notEvaluated' | 'hm.reason.compliant' | 'hm.reason.outside-limit' | 'hm.reason.missing' | 'hm.reason.malformed' | 'hm.reason.conflicting' | 'hm.reason.source-unproven' | 'hm.reason.interrupted' | 'hm.reason.historical' | 'hm.reason.source-changed' | 'hm.reason.parking-unproven'
   | 'hm.shortNotice'
   | 'lang.title' | 'lang.en' | 'lang.ru' | 'lang.saveFailed';
 

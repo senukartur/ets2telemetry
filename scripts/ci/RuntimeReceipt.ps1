@@ -790,8 +790,8 @@ function Test-UiReceipt {
     $flags = @('bilingual','bothSizes','security','offlineFonts','recordingIndicator')
     $screens = @()
     switch -CaseSensitive ($ExpectedUiCase) {
-        'shell' { $flags += @('navigation','headingFocus','journalUnmount','menuKeyboard','exitAvailable','laterAccount'); $screens = @('live','journal','settings','account') }
-        'live' { $flags += @('numericGauge','unavailableVsZero','paused','staleDashes','rawNames','unsupportedTrip','jobViewport','hmNamesReadable','tankUnknownVsZero'); $screens = @('current','zero','missing','paused','stale') }
+        'shell' { $flags += @('navigation','headingFocus','hardModePage','journalUnmount','menuKeyboard','exitAvailable','laterAccount'); $screens = @('live','hardMode','journal','settings','account') }
+        'live' { $flags += @('numericGauge','unavailableVsZero','paused','staleDashes','rawNames','unsupportedTrip','jobViewport','hmNamesReadable','fullWidthTelemetry','tankUnknownVsZero'); $screens = @('current','zero','missing','paused','stale') }
         'journal' { $flags += @('syntheticBanner','pageReturn','chartBounded','rawTabs','searchPlanned','tripRegions','tableReadable','signedChart'); $screens = @('list','trip','intervals','timeline','samples') }
         'settings' { $flags += @('allPanels','allSections','committedSave','sourceSelector','uninstallRefusal','refusedSave','readOnly','controlsKeyboard','lastEnabled','fontLicense','overlayVisibility','visibilityFailedSave'); $screens = @('general','units','overlay','sections','plugin','data','about','save-error') }
         'overlay' { $flags += @('fourLayouts','transparent','contained','independentFont','missing','paused','staleDashes','heroSubsets','formatterProfiles'); $screens = @('strip','card','cluster','hud') }
@@ -1009,7 +1009,7 @@ function Test-RuntimeReceipt {
     if ($ExpectedScenario -ceq 'hard-mode') {
         $hardMode = $driver.hardMode
         if ($null -eq $hardMode) { $validation.reason = 'HARD_MODE_RESULT_MISSING'; return $validation }
-        foreach ($field in @('unknown','fail','pass','hints','hover','drawer','bilingual','languageHotChange','keyboard','refresh','lost','restoredLost','irreversible','badge','export','overlayExcluded','persisted')) {
+        foreach ($field in @('unknown','fail','pass','hints','hover','inlineDetails','bilingual','languageHotChange','keyboard','refresh','lost','restoredLost','irreversible','badge','export','overlayExcluded','persisted')) {
             if ($hardMode.$field -isnot [bool] -or !$hardMode.$field) { $validation.reason = 'HARD_MODE_RESULT_INVALID'; return $validation }
         }
         if ($hardMode.schemaVersion -ne 3 -or @($hardMode.flags).Count -ne 2 -or $hardMode.flags[0] -isnot [bool] -or $hardMode.flags[0] -or

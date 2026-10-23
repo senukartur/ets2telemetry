@@ -35,11 +35,16 @@ import {t} from './i18n';
 import './index.css';
 
 export default function App() {
-  const [route, setRoute] = useState<'live' | 'journal' | 'settings' | 'account'>('live');
+  const [route, setRoute] = useState<'live' | 'hardMode' | 'journal' | 'settings' | 'account'>('live');
   const [panel, setPanel] = useState<'general' | 'units' | 'overlay' | 'sections' | 'plugin' | 'data' | 'about'>('general');
   const heading = useRef<HTMLHeadingElement>(null);
+  const content = useRef<HTMLElement>(null);
   const hardMode = useHardModeStatus();
-  useEffect(() => {heading.current?.focus();}, [route]);
+  useEffect(() => {
+    // Each top-level destination starts at its heading, including after the long inline checklist.
+    if (content.current) content.current.scrollTop = 0;
+    heading.current?.focus();
+  }, [route]);
   const [startup, setStartup] = useState<string>('Starting');
   const [live, setLive] = useState<LiveTelemetry>();
   const [app, setApp] = useState<AppState>();
@@ -77,13 +82,13 @@ export default function App() {
     }, () => setUnits('failed'));
   };
 
-  const nav = [{id: 'live', Icon: Gauge}, {id: 'journal', Icon: BookOpen}, {id: 'settings', Icon: Settings2}, {id: 'account', Icon: Cloud}] as const;
+  const nav = [{id: 'live', Icon: Gauge}, {id: 'hardMode', Icon: Flame}, {id: 'journal', Icon: BookOpen}, {id: 'settings', Icon: Settings2}, {id: 'account', Icon: Cloud}] as const;
   const settingsPanels = ['general', 'units', 'overlay', 'sections', 'plugin', 'data', 'about'] as const;
   return <div className="yu-app" data-testid="shell.root">
     <div className="yu-titlebar" data-testid="shell.titlebar"><img src={logo} alt="" /><span>Yukon Union Telemetry</span></div>
     <div className="yu-body"><aside className="yu-sidebar" data-testid="shell.sidebar"><div className="yu-lockup" data-testid="shell.sidebar.lockup"><img src={logo} alt="" /><div><strong>Yukon Union</strong><small>{t('app.sub', undefined, language)}</small></div></div>
-      <nav aria-label={t('app.window', undefined, language)}>{nav.map(({id, Icon}, index) => <React.Fragment key={id}>
-        {index === 0 || index === 2 || index === 3 ? <p className="yu-nav-group">{t(index === 0 ? 'nav.group.drive' : index === 2 ? 'nav.group.app' : 'nav.group.company', undefined, language)}{index === 3 ? ` · ${t('tag.later', undefined, language)}` : ''}</p> : null}
+      <nav aria-label={t('app.window', undefined, language)}>{nav.map(({id, Icon}) => <React.Fragment key={id}>
+        {id === 'live' || id === 'settings' || id === 'account' ? <p className="yu-nav-group">{t(id === 'live' ? 'nav.group.drive' : id === 'settings' ? 'nav.group.app' : 'nav.group.company', undefined, language)}{id === 'account' ? ` · ${t('tag.later', undefined, language)}` : ''}</p> : null}
         <button type="button" className="yu-nav-item" aria-current={route === id ? 'page' : undefined} onClick={() => setRoute(id)} data-testid={`tab-${id}`}><Icon aria-hidden="true" />{t(`nav.${id}`, undefined, language)}</button>
       </React.Fragment>)}</nav>
       <div className="yu-sidebar-footer"><div className="yu-recording" data-testid="shell.sidebar.recording"><strong><span className="yu-dot" data-tone={recordingTone(health?.recording.state)} data-testid="shell.recording.indicator" />{recording.short}</strong><p>{recording.detail[0] ?? recording.notice}</p></div>
@@ -98,11 +103,12 @@ export default function App() {
         <Badge variant={connectionTone(live?.status)} data-testid="shell.status.connection"><Gauge aria-hidden="true" />{live?.observation?.source.game.toUpperCase() ?? ''} {t(`ui.status.${live?.status ?? 'waiting'}`, undefined, language)}</Badge>
         <Badge variant={pluginTone(targets)} data-testid="shell.status.plugin"><Plug aria-hidden="true" />{t('ui.plugin', undefined, language)} {installed}/{targets.length} · {pluginStatusText(targets, language)}</Badge>
         <Badge variant={hardModeTone(hardMode.status)} data-testid="shell.status.hardMode"><Flame aria-hidden="true" />{hmView.headline}</Badge>
-      </header><main className="yu-content" data-testid="shell.content">
+      </header><main ref={content} className="yu-content" data-testid="shell.content">
         <div hidden={route !== 'live'} className="yu-stack" data-testid="live.screen">
-          <LiveDashboard live={live} units={settings?.units} language={language} hardMode={<HardModeCard language={language} controller={hardMode} />} />
+          <LiveDashboard live={live} units={settings?.units} language={language} />
           <p data-testid="prototype-notice" className="yu-muted">{recording.notice}</p>
         </div>
+        <div hidden={route !== 'hardMode'} className="yu-stack" data-testid="hardMode.screen"><HardModeCard language={language} controller={hardMode} /></div>
         {route === 'journal' ? <JournalBoundary language={language}><Journal units={settings?.units} recording={health?.recording.state} language={language} /></JournalBoundary> : null}
         <div hidden={route !== 'settings'} className="yu-settings" data-testid="settings.screen"><nav className="yu-settings-nav" aria-label={t('nav.settings', undefined, language)} data-testid="settings.nav">{settingsPanels.map(id => <button key={id} type="button" aria-current={panel === id ? 'page' : undefined} data-testid={`settings.nav.${id}`} onClick={() => setPanel(id)}>{t(`s.${id}`, undefined, language)}</button>)}</nav>
           <div className="yu-stack"><div hidden={panel !== 'general'} className="yu-stack" data-testid="settings.general"><LanguageCard settings={settings} onSaved={saved} controller={languageController} showSaveError={lastCard === 'language'} />

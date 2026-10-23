@@ -846,13 +846,13 @@ it('requires an intact current driver receipt and normal Job exit without overwr
 }, receiptBatchTimeout(cases.length) + 5000);
 
 function hardModeCases() {
-  const hardMode = {unknown: true, fail: true, pass: true, hints: true, hover: true, drawer: true, bilingual: true, languageHotChange: true, keyboard: true, refresh: true, lost: true, restoredLost: true, irreversible: true, badge: true,
+  const hardMode = {unknown: true, fail: true, pass: true, hints: true, hover: true, inlineDetails: true, bilingual: true, languageHotChange: true, keyboard: true, refresh: true, lost: true, restoredLost: true, irreversible: true, badge: true,
     export: true, overlayExcluded: true, persisted: true, schemaVersion: 3, flags: [false, true], errors: []};
   const body = (value: unknown) => JSON.stringify({passed: true, commit: 'candidate', mode: 'packaged', scenarioKind: 'hard-mode', hardMode: value});
   const accepted = {scenario: 'hard-mode', code: 0, available: true, reason: null};
   const rejected = {...accepted, reason: 'HARD_MODE_RESULT_INVALID'};
   return [{name: 'intact Hard Mode receipt', body: body(hardMode), ...accepted},
-    ...['unknown','fail','pass','hints','hover','drawer','bilingual','languageHotChange','keyboard','refresh','lost','restoredLost','irreversible','badge','export','overlayExcluded','persisted'].flatMap(field => [
+    ...['unknown','fail','pass','hints','hover','inlineDetails','bilingual','languageHotChange','keyboard','refresh','lost','restoredLost','irreversible','badge','export','overlayExcluded','persisted'].flatMap(field => [
       {name: `Hard Mode missing ${field}`, body: body({...hardMode, [field]: undefined}), ...rejected},
       {name: `Hard Mode false ${field}`, body: body({...hardMode, [field]: false}), ...rejected}]),
     {name: 'Hard Mode false delivered flag', body: body({...hardMode, flags: [false, false]}), ...rejected},

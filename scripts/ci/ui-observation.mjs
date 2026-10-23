@@ -86,9 +86,28 @@ export async function runUiSmoke({application, dashboard, overlay, source, confi
     for (const size of sizes) {
       await resize(dashboard, size);
       if (config.uiCase === 'shell') {
-        for (const route of ['live', 'journal', 'settings', 'account']) {
+        for (const route of ['live', 'hardMode', 'journal', 'settings', 'account']) {
           await focusRoute(dashboard, route); await save(route, language, size);
         }
+        assert.deepEqual(await dashboard.locator('.yu-sidebar nav button').evaluateAll(nodes => nodes.map(node => node.getAttribute('data-testid'))), ['tab-live', 'tab-hardMode', 'tab-journal', 'tab-settings', 'tab-account']);
+        await dashboard.getByTestId('tab-hardMode').focus(); await dashboard.keyboard.press('Enter');
+        await dashboard.waitForFunction(() => globalThis.document.activeElement?.getAttribute('data-testid') === 'screen-title');
+        assert.equal(await dashboard.getByTestId('hardMode.screen').isVisible(), true);
+        assert.equal(await dashboard.getByTestId('hard-mode-drawer').count(), 0);
+        await dashboard.getByTestId('shell.content').evaluate(node => {node.scrollTop = node.scrollHeight;});
+        assert.ok(await dashboard.getByTestId('shell.content').evaluate(node => node.scrollTop > 0));
+        await dashboard.getByTestId('tab-live').click();
+        await dashboard.waitForFunction(() => globalThis.document.activeElement?.getAttribute('data-testid') === 'screen-title');
+        assert.equal(await dashboard.getByTestId('shell.content').evaluate(node => node.scrollTop), 0, 'UI_ROUTE_RETAINS_HARD_MODE_SCROLL');
+        for (const zoom of [1.5, 2]) {
+          await application.evaluate(({BrowserWindow}, zoom) => {BrowserWindow.getAllWindows().find(window => !window.webContents.getURL().endsWith('?view=overlay')).webContents.setZoomFactor(zoom);}, zoom);
+          for (const route of ['live', 'hardMode']) {
+            await focusRoute(dashboard, route);
+            assert.equal(await dashboard.getByTestId('shell.content').evaluate(node => node.scrollWidth <= node.clientWidth), true, `UI_ZOOM_OVERFLOW_${route}_${zoom}`);
+          }
+        }
+        await application.evaluate(({BrowserWindow}) => {BrowserWindow.getAllWindows().find(window => !window.webContents.getURL().endsWith('?view=overlay')).webContents.setZoomFactor(1);});
+        record.flags.hardModePage = true;
         await focusRoute(dashboard, 'live');
         assert.equal(await dashboard.getByTestId('journal').count(), 0);
         const trigger = dashboard.getByTestId('shell.language'); await trigger.focus(); await dashboard.keyboard.press('Enter');
@@ -113,7 +132,15 @@ export async function runUiSmoke({application, dashboard, overlay, source, confi
           }) && content.scrollTop === 0;
         });
         assert.equal(jobVisible, true, `UI_JOB_NOT_READABLE_WITHOUT_SCROLL_${language}_${size.width}`); record.flags.jobViewport = true;
+        assert.equal(await dashboard.getByTestId('live.screen').getByTestId('hard-mode-card').count(), 0);
+        assert.equal(await dashboard.getByTestId('live.instrument').evaluate(node => Math.abs(node.getBoundingClientRect().width - node.closest('[data-testid="live-telemetry"]').getBoundingClientRect().width) < 1), true);
+        record.flags.fullWidthTelemetry = true;
+        await focusRoute(dashboard, 'hardMode');
+        assert.equal(await dashboard.getByTestId('hard-mode-checklist').count(), 0);
+        assert.equal(await dashboard.getByTestId('hard-mode-drawer').count(), 0);
+        assert.equal(await dashboard.locator('[data-testid^="hard-mode-detail-rule-"]').count(), 12);
         assert.equal(await dashboard.locator('[data-testid^="hard-mode-name-"]').evaluateAll(nodes => nodes.length === 12 && nodes.every(node => node.getBoundingClientRect().height >= 32 && node.scrollWidth <= node.clientWidth)), true, `UI_HM_NAMES_OVERFLOW_${language}_${size.width}`); record.flags.hmNamesReadable = true;
+        await screen(dashboard, 'live');
         assert.equal(await dashboard.getByTestId('live.instrument.tank').getAttribute('data-state'), 'value');
         assert.equal(await dashboard.locator('.yu-tank i').evaluate(node => node.style.height), '7.3%');
         assert.equal(await dashboard.locator('.yu-tank-unavailable').count(), 0);

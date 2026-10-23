@@ -1,6 +1,6 @@
 import {performance} from 'node:perf_hooks';
 // Fail-fixture presentation only. This never supplies or preserves delivered-trip qualification evidence.
-export async function hardModeFixtureSnapshot({hint, drawer} = {}) {
+export async function hardModeFixtureSnapshot({hint, details} = {}) {
   const status = await globalThis.desktop.getHardModeStatus();
   const nodes = selector => [...globalThis.document.querySelectorAll(selector)];
   const visible = node => Boolean(node && node.getClientRects().length && globalThis.getComputedStyle(node).visibility === 'visible');
@@ -15,10 +15,10 @@ export async function hardModeFixtureSnapshot({hint, drawer} = {}) {
     const matches = nodes('[data-testid="hard-mode-hint-' + hint + '"]'), node = matches[0];
     snapshot.hint = {count: matches.length, visible: visible(node), lines: node ? [...node.querySelectorAll(':scope > p')].map(p => p.innerText) : []};
   }
-  if (drawer) {
-    const matches = nodes('[data-testid="hard-mode-drawer"]');
-    snapshot.drawer = {count: matches.length, visible: visible(matches[0]), rows: nodes('[data-testid^="hard-mode-drawer-rule-"]').map(node => ({
-      id: node.getAttribute('data-testid').slice('hard-mode-drawer-rule-'.length), lines: [...node.querySelectorAll(':scope > p')].map(p => p.innerText)}))};
+  if (details) {
+    const matches = nodes('[data-testid="hard-mode-details"]');
+    snapshot.details = {count: matches.length, visible: visible(matches[0]), rows: nodes('[data-testid^="hard-mode-detail-rule-"]').map(node => ({
+      id: node.getAttribute('data-testid').slice('hard-mode-detail-rule-'.length), lines: [...node.querySelectorAll(':scope > p')].map(p => p.innerText)}))};
   }
   return snapshot;
 }
@@ -36,10 +36,10 @@ function matchesFixture(snapshot, expected) {
     const rule = expected.rules.find(rule => rule.id === expected.hint), hint = snapshot.hint;
     if (!hint || hint.count !== 1 || !hint.visible || JSON.stringify(hint.lines.slice(0, 4)) !== JSON.stringify(rule.tooltip)) return false;
   }
-  if (expected.drawer) {
-    const drawer = snapshot.drawer;
-    if (!drawer || drawer.count !== 1 || !drawer.visible || drawer.rows?.length !== 12) return false;
-    if (!expected.rules.every((rule, index) => drawer.rows[index].id === rule.id && JSON.stringify(drawer.rows[index].lines.slice(0, 4)) === JSON.stringify(rule.drawer))) return false;
+  if (expected.details) {
+    const details = snapshot.details;
+    if (!details || details.count !== 1 || !details.visible || details.rows?.length !== 12) return false;
+    if (!expected.rules.every((rule, index) => details.rows[index].id === rule.id && JSON.stringify(details.rows[index].lines.slice(0, 4)) === JSON.stringify(rule.details))) return false;
   }
   return true;
 }
