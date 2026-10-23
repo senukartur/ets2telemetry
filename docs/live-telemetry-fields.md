@@ -54,11 +54,11 @@ Exact constants: mile 1,609.344 m; US gallon 3.785411784 L; pound 0.45359237 kg;
 | Deadline | game minutes | job `delivery.time` − `game.time` | v1 | `in 5 h 12 min` or `late by 5 h 12 min`; missing when either is missing |
 | Cargo, origin, destination | text | job config | v0 ids; v1 ids and names | Localized name, else id; a provided empty name falls through to the id |
 | Cargo mass | kg | `cargo.mass` | v1 | t 1 dp or lb 0 dp |
-| Market, special job | text, boolean | `job.market`, `is.special.job` | v1 | Raw market id; `yes`/`no` |
+| Market, special job | text, boolean | `job.market`, `is.special.job` | v1 | telemetry-core keeps the raw market id; since ET-045a the dashboard and journal show a label for the five SDK 1.15 values (below), an unknown value verbatim; `yes`/`no` |
 | Cargo loaded | boolean | `cargo.loaded` | v1 | Shown only for the `cargo_market` market (SDK 1.15: always true elsewhere) |
 | Expected income | money u64 | job `income` | v0 `{rawValue, currency}`, v1 money | Exact raw digits, no grouping or symbol; `12345 EUR (SDK-documented)` or `12345 (currency unknown)` |
 | Revenue, penalty | money s64 | `job.delivered`, `job.cancelled` | v1 events | Normalized only; a zero revenue stays `0` |
-| Truck | text | truck config | v0 `truckId`; v1 brand, name, id, plate | Brand and model name, else model name, else model id; plate separately |
+| Truck | text | truck config | v0 `truckId`; v1 brand, name, id, plate | Brand and model name, else model name, else model id; plate separately. Under v0 the row is the model id; since ET-045a it shows v1's brand and name for the same model id (F4(c) below) |
 | Trailers | text | `trailer.N` config | v1, 10 slots | Per occupied slot: name, else body type, else id; an `invalid` slot shows `(invalid)`; joined by `, `. No occupied or invalid slot while current is the `absent` state `none` ("no trailer attached"), unless a slot is `not-supported`, which makes the row `not-supported`; only invalid slots make the row `invalid` |
 | World position | game coordinates | `truck.world.placement` | v1 | `x …, y …, z …` 1 dp; game-world coordinates, not GPS (`game-world-coordinates`) |
 | Bearing | degrees | placement heading | v1 | ((1 − heading) mod 1) × 360°, integer; 0° north, 90° east. The SDK heading is counterclockwise from north (`scssdk_value.h`) |
@@ -67,6 +67,18 @@ Exact constants: mile 1,609.344 m; US gallon 3.785411784 L; pound 0.45359237 kg;
 Rounding uses `Number.prototype.toFixed` on the converted value, and a rounded negative zero is shown as positive zero for every quantity. A provided empty text value shows `(empty)`.
 
 Owner-requested presentation update, October 22, 2026 (ET-012e): the Live dashboard gauge, its accessible name and every overlay layout show speed as an integer after conversion to the selected game's km/h or mph profile. They use the existing `fixed(..., 0)` rounding, including negative values and normalization of rounded negative zero to `0`. For example, 25 m/s shows `90 km/h` or `56 mph`. The canonical numeric reading, gauge ratio, telemetry-core's general one-decimal formatter, journal samples and exports retain their existing precision. Fuel and consumption formatting are unchanged.
+
+Standstill gauge, October 24, 2026 (ET-045a): the Live gauge draws no speed arc while the displayed integer is `0`. Its ratio is `0` then, so a tiny positive SDK speed such as 0.1 m/s (`0 km/h`) no longer paints the round line cap as a dot that blinks while the speed flickers around zero. Once the number is non-zero the ratio keeps its fractional precision (1.25 m/s shows `5` with the ratio 4.5/130). Unavailable or stale speed still has no ratio, reverse still draws no arc, and the RPM arc, the canonical reading, journal samples and exports are unchanged.
+
+Job market labels (ET-045a). The dashboard's Job badge and market row and the journal's trip details show these labels; telemetry-core, the v1 projection, storage and the JSON export keep the raw value. Any other value, an inherited name such as `constructor` and `(empty)` are shown verbatim.
+
+| SDK 1.15 `job.market` | English | Russian |
+| --- | --- | --- |
+| `cargo_market` | Cargo market | Рынок грузов |
+| `quick_job` | Quick job | Быстрый заказ |
+| `freight_market` | Freight market | Грузоперевозки |
+| `external_contracts` | External contracts | Внешние контракты |
+| `external_market` | External market | Внешний рынок |
 
 ## Money
 
@@ -116,7 +128,7 @@ Every row has one source ([live-sources.ts](../apps/desktop/src/live-sources.ts)
 - **v0 rows stay on v0.** Every field v0 carries (`V0_CARRIED_FIELDS`) comes from the v0 observation, with v0's presence and currentness, even when v1 reports another value (for example the gear). Without a v0 observation those rows are not current although v1 is.
 - **v1-only rows** (route remaining, deadline, source city and company, destination company, cargo mass, market, special job, cargo loaded, license plate, trailers, world position, heading, game mode, lost events) come from the v1 view under v1's own currentness. Without a v1 observation for the current selection they are hidden, as before ET-010c. After a v1 disconnect the observation is kept, so they read `unavailable` with "not current".
 - **(b) Job identity guard.** The v1 job rows (deadline, source city and company, destination company, cargo mass, market, special job, cargo loaded) count only for the job v0 reports: v0 has a job and v1's cargo id and destination city id equal v0's. Another job, or no v1 job, makes them `unavailable` with "not current" (cargo loaded stays hidden when v1's own job is not a cargo-market job). Without a v0 job they are hidden. The non-job v1 rows are not guarded.
-- **(c) Names.** Cargo and destination city keep v0's presence and currentness; while both sources are current and the job matches they show v1's localized name (else its id) instead of the game id.
+- **(c) Names.** Cargo and destination city keep v0's presence and currentness; while both sources are current and the job matches they show v1's localized name (else its id) instead of the game id. Since ET-045a the truck row does the same with its own guard: while both sources are current, both truck readings have a value and v1's model id equals v0's `truckId`, it shows v1's brand and name (else name, else id). Another model id keeps the v0 id. There is no id-to-model table, so an unrecognized id is never given an invented name.
 - **(d) Paused.** v0 decides while it is current; otherwise current v1 data may report a paused game.
 - **(e) Origin.** v1 data counts only when its origin and game equal the v0 observation's, whenever v0 has an observation.
 - **Units** (F9) are the card's: the displayed game's profile, so 18,000 kg reads `18.0 t` or `39683 lb`.
@@ -134,14 +146,14 @@ ET-012a builds the overlay's sections in main through the same view model as the
 | RPM | `engine-rpm`, plus a ring fraction on a fixed 0–3000 rpm scale (L12) | Shown | Unchanged (v0) |
 | Fuel | `fuel`, with `fuel-level` as detail | Shown; the percentage only while the capacity is known | Unchanged (v0) |
 | Range | `estimated-range` (the game's estimate) | Shown | Unchanged (v0) |
-| SDK consumption | `sdk-average-consumption` (the SDK mean, labelled "SDK mean", never a trip average) | Shown | Unchanged (v0) |
+| Consumption | `sdk-average-consumption` (the SDK mean, never a trip average). Since ET-045a it is labelled "Consumption" / "Расход" in every layout and in the section toggles, and the strip's "SDK mean" caption is removed; the dashboard keeps "SDK average consumption" with its note | Shown | Unchanged (v0) |
 | Cargo | `cargo`, with `cargo-mass` as detail | Shown as the cargo id; the mass needs v1 | v1's cargo name and the mass for the same job; otherwise the v0 id without a mass |
 | Origin | `source-city`, `source-company` | Hidden: v0 does not carry them | Shown for the same job |
 | Destination | `destination-city`, `destination-company` | Shown as the destination city id; the company needs v1 | v1's city name and the company for the same job; otherwise the v0 id |
 | Distance driven | none | Always hidden: it needs trip accounting (ET-014); the odometer is never a stand-in (REG-008, decision L8) | Unchanged: hidden |
 | Distance remaining | `route-remaining` | Hidden: v0 does not carry the navigation distance | Shown, not job-guarded |
 | Deadline | `deadline` | Hidden: v0 does not carry the delivery deadline | Shown for the same job, from v1's own game time |
-| Expected income | `expected-income` (exact raw digits, no grouping, SDK-documented or unknown currency; never revenue) | Shown | Unchanged (v0) |
+| Expected income | `expected-income` (exact raw digits, no grouping, SDK-documented or unknown currency; never revenue). Since ET-045a the overlay shows `12345 EUR` without the "(SDK-documented)" suffix (telemetry-core `formatMoneyAmount`); an unknown currency still reads `(currency unknown)`. The dashboard, journal and export keep the suffix | Shown | Unchanged (v0) |
 | Game time | `game-time` | Shown | Unchanged (v0) |
 
 A section with several fields joins the fields that have a value with ", ". A part v0 does not carry counts as carried only while a v1 observation of the current selection and origin exists. A shown v1 section whose v1 carriage is lost while an update still carries a v0 observation (main stripped an invalid projection, or the v1 origin or game stopped matching) keeps an `unavailable` dash, current or not (L5); an update without a v0 observation (a selection change, a service failure or restart, a lost channel) clears it. A v1 part has a value only while the v0 data is current, the v1 data is current and, for job parts, both describe the same job; the overlay's overall state, freshness, source, paused state and placement stay v0's. The section states while current and while not current are described in [the minimal overlay](minimal-overlay.md#section-states).
