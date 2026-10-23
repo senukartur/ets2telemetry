@@ -1,5 +1,6 @@
 import type {AppLanguage, LiveTelemetry, OverlayPresentation, OverlaySectionId, OverlaySectionView, OverlaySettings, UnitProfiles} from '../../../packages/contracts/src';
 import {resolveDisplayUnits} from '../../../packages/telemetry-core/src/display-profile';
+import {formatMoneyAmount} from '../../../packages/telemetry-core/src/format';
 import {carriesField, type LiveFieldId} from '../../../packages/telemetry-core/src/live-view';
 import {liveSources, V1_JOB_FIELDS} from './live-sources';
 import {DEFAULT_OVERLAY_SETTINGS, OVERLAY_SECTION_IDS} from './overlay-sections';
@@ -89,6 +90,13 @@ export function overlayPresentation(live: LiveTelemetry, units: UnitProfiles = D
     }
     let texts = parts.map(valueOf).filter((text): text is string => text !== undefined);
     if (id === 'speed' && state?.speed.available) texts = [speedNumber(state.speed.value, profile) + ' ' + speedUnit(profile)];
+    // ET-045a: the overlay shows the same exact income digits and documented currency without the "(SDK-documented)"
+    // provenance suffix, built from the normalized v0 money value, never by reparsing the display text. The field's
+    // state still decides whether there is a value, so the dash and hiding rules are unchanged.
+    if (id === 'expected-income' && sources.field('expected-income').state === 'value') {
+      const job = sources.v0State?.job, income = job?.state === 'value' ? job.value.expectedIncome : undefined;
+      if (income?.state === 'value') texts = [formatMoneyAmount(income.value)];
+    }
     if (id === 'game-time') {
       texts = texts.map(t => localizeGameTimeString(t, language));
     } else if (id === 'deadline') {

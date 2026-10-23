@@ -69,7 +69,6 @@ export const STRINGS = Object.freeze({
   overlayStale: 'Stale',
   overlaySynthetic: 'Synthetic',
   overlayReplay: 'Replay',
-  overlaySdkMean: 'SDK mean',
   overlaySaveFailed: 'The overlay change was not saved; the previous overlay settings stay in use.',
   overlayLastSection: 'At least one section stays on.',
   overlayHiddenNote: 'While telemetry is current, a section without data is hidden (speed and fuel show a dash). While it is not current, every shown section is a dash.',
@@ -140,7 +139,6 @@ export const STRINGS_RU: Readonly<Record<StringKey, string>> = Object.freeze({
   overlayStale: 'Устарело',
   overlaySynthetic: 'Синтетический',
   overlayReplay: 'Повтор',
-  overlaySdkMean: 'среднее SDK',
   overlaySaveFailed: 'Изменение оверлея не удалось сохранить; остаются предыдущие настройки.',
   overlayLastSection: 'Хотя бы одна секция должна оставаться включённой.',
   overlayHiddenNote: 'Пока данные актуальны, секция без данных скрыта (скорость и топливо показывают прочерк). Пока данные не актуальны, каждая показанная секция — прочерк.',
@@ -551,14 +549,18 @@ export function getOverlayLayoutText(layout: OverlayLayout, language: AppLanguag
   return language === 'ru' ? OVERLAY_LAYOUT_TEXT_RU[layout] : OVERLAY_LAYOUT_TEXT[layout];
 }
 
-/** Full labels for the settings card and the overlay card layout. Income is expected income, never revenue. */
+/**
+ * Full labels for the settings card and the overlay card layout. Income is expected income, never revenue. The
+ * consumption section still shows the SDK mean, never a trip average; its user-facing label omits the SDK qualifier
+ * (ET-045a), while the dashboard keeps "SDK average consumption" with its note.
+ */
 export const OVERLAY_SECTION_TEXT: Readonly<Record<OverlaySectionId, string>> = Object.freeze({
-  'speed': 'Speed', 'gear': 'Gear', 'rpm': 'Engine RPM', 'fuel': 'Fuel', 'range': 'Estimated range', 'sdk-consumption': 'SDK average consumption',
+  'speed': 'Speed', 'gear': 'Gear', 'rpm': 'Engine RPM', 'fuel': 'Fuel', 'range': 'Estimated range', 'sdk-consumption': 'Consumption',
   'cargo': 'Cargo', 'origin': 'Origin', 'destination': 'Destination', 'distance-driven': 'Distance driven', 'distance-remaining': 'Distance remaining',
   'deadline': 'Delivery deadline', 'expected-income': 'Expected income', 'game-time': 'Game time'
 });
 export const OVERLAY_SECTION_TEXT_RU: Readonly<Record<OverlaySectionId, string>> = Object.freeze({
-  'speed': 'Скорость', 'gear': 'Передача', 'rpm': 'Обороты двигателя', 'fuel': 'Топливо', 'range': 'Запас хода', 'sdk-consumption': 'Средний расход по SDK',
+  'speed': 'Скорость', 'gear': 'Передача', 'rpm': 'Обороты двигателя', 'fuel': 'Топливо', 'range': 'Запас хода', 'sdk-consumption': 'Расход',
   'cargo': 'Груз', 'origin': 'Отправление', 'destination': 'Назначение', 'distance-driven': 'Пройденное расстояние', 'distance-remaining': 'Оставшееся расстояние',
   'deadline': 'Срок доставки', 'expected-income': 'Ожидаемый доход', 'game-time': 'Игровое время'
 });
@@ -568,12 +570,12 @@ export function getOverlaySectionText(section: OverlaySectionId, language: AppLa
 
 /** Short labels for the strip, cluster panel and HUD. */
 export const OVERLAY_SECTION_SHORT_TEXT: Readonly<Record<OverlaySectionId, string>> = Object.freeze({
-  'speed': 'Speed', 'gear': 'Gear', 'rpm': 'RPM', 'fuel': 'Fuel', 'range': 'Range', 'sdk-consumption': 'SDK mean',
+  'speed': 'Speed', 'gear': 'Gear', 'rpm': 'RPM', 'fuel': 'Fuel', 'range': 'Range', 'sdk-consumption': 'Consumption',
   'cargo': 'Cargo', 'origin': 'From', 'destination': 'To', 'distance-driven': 'Driven', 'distance-remaining': 'Remaining',
   'deadline': 'Due', 'expected-income': 'Expected', 'game-time': 'Time'
 });
 export const OVERLAY_SECTION_SHORT_TEXT_RU: Readonly<Record<OverlaySectionId, string>> = Object.freeze({
-  'speed': 'Скорость', 'gear': 'Передача', 'rpm': 'Обороты', 'fuel': 'Топливо', 'range': 'Запас хода', 'sdk-consumption': 'Расход SDK',
+  'speed': 'Скорость', 'gear': 'Передача', 'rpm': 'Обороты', 'fuel': 'Топливо', 'range': 'Запас хода', 'sdk-consumption': 'Расход',
   'cargo': 'Груз', 'origin': 'Откуда', 'destination': 'Куда', 'distance-driven': 'Пройдено', 'distance-remaining': 'Осталось',
   'deadline': 'Срок', 'expected-income': 'Ожидается', 'game-time': 'Время'
 });

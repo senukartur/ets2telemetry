@@ -10,17 +10,20 @@ const base: OverlayPresentation = {source: 'ETS2', origin: 'game', status: 'conn
     {id: 'fuel', state: 'value', text: '250.0 L', detail: '25%'}, {id: 'sdk-consumption', state: 'value', text: '25.0 L/100 km'},
     {id: 'cargo', state: 'value', text: 'cargo.logs'}, {id: 'game-time', state: 'value', text: 'Day 1, 08:00'}], editing: false};
 
-it('keeps the speed and fuel number apart from their unit and labels the SDK mean', () => {
+// ET-045a (owner request): the consumption section is labelled "Consumption" without the SDK qualifier and the strip's
+// "SDK mean" caption is gone; the value is still the SDK mean in the same unit.
+it('keeps the speed and fuel number apart from their unit and labels the consumption without an SDK caption', () => {
   const view = overlayView(base);
-  expect(view.items.map(item => [item.testId, item.value, item.unit, item.detail, item.detailTestId, item.caption])).toEqual([
-    ['overlay-speed', '90', 'km/h', undefined, undefined, undefined],
-    ['overlay-rpm', '1500 rpm', undefined, undefined, undefined, undefined],
-    ['overlay-fuel', '250.0', 'L', '25%', 'overlay-fuel-level', undefined],
-    ['overlay-sdk-consumption', '25.0 L/100 km', undefined, undefined, undefined, 'SDK mean'],
-    ['overlay-cargo', 'cargo.logs', undefined, undefined, undefined, undefined],
-    ['overlay-game-time', 'Day 1, 08:00', undefined, undefined, undefined, undefined]
+  expect(view.items.map(item => [item.testId, item.value, item.unit, item.detail, item.detailTestId])).toEqual([
+    ['overlay-speed', '90', 'km/h', undefined, undefined],
+    ['overlay-rpm', '1500 rpm', undefined, undefined, undefined],
+    ['overlay-fuel', '250.0', 'L', '25%', 'overlay-fuel-level'],
+    ['overlay-sdk-consumption', '25.0 L/100 km', undefined, undefined, undefined],
+    ['overlay-cargo', 'cargo.logs', undefined, undefined, undefined],
+    ['overlay-game-time', 'Day 1, 08:00', undefined, undefined, undefined]
   ]);
-  expect(view.items.map(item => item.label)).toEqual(['Speed', 'Engine RPM', 'Fuel', 'SDK average consumption', 'Cargo', 'Game time']);
+  expect(view.items.map(item => item.label)).toEqual(['Speed', 'Engine RPM', 'Fuel', 'Consumption', 'Cargo', 'Game time']);
+  expect(view.items.map(item => item.short)).toEqual(['Speed', 'RPM', 'Fuel', 'Consumption', 'Cargo', 'Time']);
   expect(view.items[1].ring).toBe(0.5);
   expect(view).toMatchObject({layout: 'strip', dim: false, tags: []});
 });
@@ -68,16 +71,16 @@ it('passes the edit mode through and starts in driving mode before the first del
 it('localizes labels, units and tags in Russian when language is ru', () => {
   const ruBase: OverlayPresentation = {...base, language: 'ru'};
   const view = overlayView(ruBase);
-  expect(view.items.map(item => [item.testId, item.value, item.unit, item.caption])).toEqual([
-    ['overlay-speed', '90', 'км/ч', undefined],
-    ['overlay-rpm', '1500 об/мин', undefined, undefined],
-    ['overlay-fuel', '250.0', 'л', undefined],
-    ['overlay-sdk-consumption', '25.0 л/100 км', undefined, 'среднее SDK'],
-    ['overlay-cargo', 'cargo.logs', undefined, undefined],
-    ['overlay-game-time', 'День 1, 08:00', undefined, undefined]
+  expect(view.items.map(item => [item.testId, item.value, item.unit])).toEqual([
+    ['overlay-speed', '90', 'км/ч'],
+    ['overlay-rpm', '1500 об/мин', undefined],
+    ['overlay-fuel', '250.0', 'л'],
+    ['overlay-sdk-consumption', '25.0 л/100 км', undefined],
+    ['overlay-cargo', 'cargo.logs', undefined],
+    ['overlay-game-time', 'День 1, 08:00', undefined]
   ]);
-  expect(view.items.map(item => item.label)).toEqual(['Скорость', 'Обороты двигателя', 'Топливо', 'Средний расход по SDK', 'Груз', 'Игровое время']);
-  expect(view.items.map(item => item.short)).toEqual(['Скорость', 'Обороты', 'Топливо', 'Расход SDK', 'Груз', 'Время']);
+  expect(view.items.map(item => item.label)).toEqual(['Скорость', 'Обороты двигателя', 'Топливо', 'Расход', 'Груз', 'Игровое время']);
+  expect(view.items.map(item => item.short)).toEqual(['Скорость', 'Обороты', 'Топливо', 'Расход', 'Груз', 'Время']);
 
   const paused = overlayView({...ruBase, paused: true, status: 'paused'});
   expect(paused.tags).toEqual([{id: 'paused', testId: 'overlay-tag-paused', text: 'Пауза'}]);
@@ -136,4 +139,21 @@ it.each(['strip', 'card', 'cluster', 'hud'] as const)('validates display-only %s
     for (const value of [undefined, null, NaN, Infinity, -0.1, 1.1, '1', {}, true])
       expect(overlayView({...base, layout, sections, contentAnchorY: value as number}).contentAnchorY).toBe(layout === 'cluster' ? 1 : 0);
   }
+});
+
+it('carries no SDK caption on any item in any layout or language, and keeps the income amount without a suffix (ET-045a)', () => {
+  const sections: OverlayPresentation['sections'] = [...base.sections, {id: 'expected-income', state: 'value', text: '1234567 EUR'},
+    {id: 'range', state: 'value', text: '900 km'}];
+  for (const layout of ['strip', 'card', 'cluster', 'hud'] as const) for (const language of ['en', 'ru'] as const) {
+    const view = overlayView({...base, layout, language, sections});
+    for (const item of view.items) {
+      expect(Object.keys(item), `${layout} ${language} ${item.id}`).not.toContain('caption');
+      expect(`${item.label} ${item.short} ${item.value} ${item.detail ?? ''}`, `${layout} ${language} ${item.id}`).not.toMatch(/SDK/);
+    }
+    expect(view.items.find(item => item.id === 'expected-income')?.value).toBe('1234567 EUR');
+    const consumption = view.items.find(item => item.id === 'sdk-consumption')!;
+    expect([consumption.label, consumption.short]).toEqual(language === 'en' ? ['Consumption', 'Consumption'] : ['Расход', 'Расход']);
+  }
+  expect(overlayView({...base, language: 'ru', sections: [{id: 'expected-income', state: 'value', text: '12345 (currency unknown)'}]}).items[0]?.value)
+    .toBe('12345 (валюта неизвестна)');
 });
