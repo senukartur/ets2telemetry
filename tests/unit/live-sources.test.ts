@@ -75,6 +75,36 @@ describe('localized names (decision F4(c))', () => {
   });
 });
 
+describe('readable truck name for the same truck (ET-045a item 5)', () => {
+  // The smoke pair's v0 truck id is truck.volvo; v1 snapshot-live reports vehicle.synthetic_truck "Synthetic Brand"/"Synthetic Truck".
+  const sameTruck = (v1: Parameters<typeof smokePair>[0] = {}, v0Patch: Parameters<typeof smokePair>[1] = {}) => {
+    const live = smokePair(v1, v0Patch);
+    live.observation!.state.configuration.truckId = {available: true, value: 'vehicle.synthetic_truck'};
+    return live;
+  };
+  it('shows v1 brand and name for the same model id while both sources are current', () => {
+    expect(sources(sameTruck()).field('truck')).toMatchObject({state: 'value', text: 'Synthetic Brand Synthetic Truck'});
+  });
+  it('keeps the v0 id for another model id, a v1 source that is not current, or without v1', () => {
+    expect(sources(smokePair()).field('truck')).toMatchObject({state: 'value', text: 'truck.volvo'});
+    expect(sources(sameTruck({status: 'stale', fresh: false, reason: 'No recent SDK capture'})).field('truck'))
+      .toMatchObject({state: 'value', text: 'vehicle.synthetic_truck'});
+    const withoutV1 = smokeV0(); withoutV1.observation!.state.configuration.truckId = {available: true, value: 'vehicle.synthetic_truck'};
+    expect(sources(withoutV1).field('truck')).toMatchObject({state: 'value', text: 'vehicle.synthetic_truck'});
+    const noV1Truck = sameTruck(); noV1Truck.v1!.observation!.state.configuration.truck = {available: false, reason: 'not-observed'};
+    expect(sources(noV1Truck).field('truck')).toMatchObject({state: 'value', text: 'vehicle.synthetic_truck'});
+  });
+  it('falls back to the id when v1 carries no brand or name, and never invents a model name', () => {
+    const live = sameTruck(), truck = live.v1!.observation!.state.configuration.truck;
+    if (!truck.available) throw new Error('fixture truck');
+    truck.value.brand = {available: false, reason: 'not-observed'}; truck.value.name = {available: false, reason: 'not-observed'};
+    expect(sources(live).field('truck')).toMatchObject({state: 'value', text: 'vehicle.synthetic_truck'});
+  });
+  it('keeps the v0 presence and currentness: a stale v0 truck row stays not current', () => {
+    expect(sources(sameTruck({}, {status: 'stale', fresh: false})).field('truck')).toMatchObject(NOT_CURRENT);
+  });
+});
+
 describe('job identity guard (decision F4(b))', () => {
   it('shows v1 job fields as not current for another cargo or destination city, and leaves the other v1 fields alone', () => {
     const combined = sources(smokePair({ids: 'fixture'}));
