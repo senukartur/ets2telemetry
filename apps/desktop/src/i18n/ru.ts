@@ -423,6 +423,7 @@ export const RU_DICTIONARY: TranslationDictionary = Object.freeze({
   'app.sub': 'Телеметрия · ETS2 · ATS',
   'app.window': 'Yukon Union Telemetry',
   'nav.live': 'Сейчас',
+  'nav.hardMode': 'Hard Mode',
   'nav.journal': 'Журнал',
   'nav.settings': 'Настройки',
   'nav.account': 'Аккаунт и синхронизация',

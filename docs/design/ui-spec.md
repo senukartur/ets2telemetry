@@ -108,7 +108,7 @@ Design canvas 1280 × 800; minimum window 1100 × 720. Layout: title bar (32 px)
 | `shell.titlebar` | Window title bar, `#0B1120`, logo 20 px and "Yukon Union Telemetry" | Electron `titleBarStyle: 'hidden'` with `titleBarOverlay: {color: '#0B1120', symbolColor: '#D1D5DB', height: 32}`; native caption buttons stay. Closing still hides to the tray (ET-011). |
 | `shell.sidebar` | Navigation column, `#0B1120`, right border `#1F2937` | shadcn `sidebar` component or a plain `nav`; items are buttons with `aria-current="page"` when active |
 | `shell.sidebar.lockup` | Logo 40 px, "Yukon Union" 15 px/700, "Telemetry · ETS2 · ATS" 11 px muted | The logo is decorative here (`alt=""`); follow the logo rules in §3 |
-| `shell.sidebar.nav` | Groups: **Drive** (Live, Journal), **Application** (Settings), **Company · Later** (Account & sync) | Active item: `--yu-selected-bg`, `--yu-selected-border`, `--yu-selected-fg`, 600 weight; others `--yu-text-secondary`; height 38 px, radius 10 px |
+| `shell.sidebar.nav` | Groups: **Drive** (Live, Hard Mode, Journal), **Application** (Settings), **Company · Later** (Account & sync) | Active item: `--yu-selected-bg`, `--yu-selected-border`, `--yu-selected-fg`, 600 weight; others `--yu-text-secondary`; height 38 px, radius 10 px |
 | `shell.sidebar.recording` | Recording box at the bottom: dot, headline, one detail line | Bound to `AppState.health.recording` (`RecordingHealth`); texts from `RECORDING_STATE_SHORT_TEXT` |
 | — | Language button (globe, code, chevron) and Exit | Language opens a menu (shadcn `dropdown-menu`) with English and Русский. Exit calls `exitApplication()` (explicit full exit) |
 | `shell.topbar` | Screen title and status chips | — |
@@ -138,7 +138,7 @@ Game mode text comes from the trip's game-mode evidence; while it is unknown, sh
 | Slider | `slider` (add) | Track `--yu-border`, range `--yu-accent-light` |
 | Progress bar | `progress` (add) | 8 px high; fill `--yu-accent-light`, `--yu-ok-fg` when complete, `--yu-progress-pending` for low fuel or pending |
 | Hard Mode parameter hints | `tooltip` | Each of the twelve parameter names: hover and keyboard focus; noninteractive, Escape dismissal |
-| Hard Mode checklist drawer | `sheet` (installed Radix Dialog) | Right drawer, 470px maximum viewport width; modal focus trap, Escape and focus restoration |
+| Hard Mode page | `card`, `button`, `tooltip` | Inline evidence and caveats; ordinary page scroll, no drawer (ET-047) |
 | Language menu | `dropdown-menu` (add) | Panel `--yu-bg-card`, selected item `--yu-accent` with white text |
 | Tooltips on icon-only items | `tooltip` (add) | Overlay icons have no tooltips (the overlay never takes the mouse while driving) |
 | Charts | `chart` (add, Recharts) or plain SVG | Area under the line at 16% opacity, grid `--yu-divider`, last point emphasized |
@@ -158,7 +158,7 @@ Owner-requested amendment, October 22, 2026 (ET-012e): the central speed number 
 | `live.instrument.gauge` | 260 px gauge: outer ring = speed (0–130 km/h or 0–80 mph, ticks every 10, labels every 20), inner arc = engine RPM, centre speed 54 px/800 with unit, RPM text below | `speed`, `engine-rpm` from telemetry-core's live view in the game's unit profile |
 | `live.instrument.gear` | Gear block 64 px, stale or paused badge under it | `gear` (`N`, `1…n`, `R1…Rn`) |
 | `live.instrument.fuel` | Vertical tank (fill `--yu-ok-fg`, below 30% `--yu-progress-pending`), fuel amount and capacity with %, range with "game's estimate", SDK average consumption with its note | `fuel`, `fuel-capacity`, `fuel-level`, `estimated-range`, `sdk-average-consumption` |
-| `live.hardMode` | Hard Mode card: status chip (Active / Not active / Lost for this trip), "N of 12" with a progress bar, a two-column list of the 12 criteria with ✓/✕, hints attached to each parameter name on hover/keyboard focus, and View checklist opening the right drawer | ET-026 status IPC (ET-026c). When lost, an error badge says which setting changed, its value and the time |
+| `hardMode.screen` | Dedicated Hard Mode page (ET-047), replacing the former Live card: status chip (Active / Not active / Lost for this trip), "N of 12" with a progress bar, a two-column list of the 12 criteria with ✓/✕, hints attached to each parameter name on hover/keyboard focus, and all detected/required/state/reason/cvar details inline | ET-026 status IPC (ET-026c). When lost, an error badge says which setting changed, its value and the time |
 | `live.job` | Current job: cargo and mass badge, market badge, deadline badge; a route progress line with a truck marker; origin city and company, driven, remaining with "planned …", expected income, destination city and company | `cargo`, `cargo-mass`, `market`, `deadline`, `source-city/company`, `destination-city/company`, `route-remaining`, `planned-distance`, `expected-income`; driven = observed distance of the open trip (ET-014). A field without data is hidden, not zero |
 | `live.trip` | This trip: real time, game time, fuel used, recording completeness badge | Open trip from `AppState.health.recording` and the trip recorder |
 | `live.truck` | Truck, plate, trailer(s), odometer | `truck`, `truck-plate`, `trailers`, `odometer` |
@@ -166,22 +166,13 @@ Owner-requested amendment, October 22, 2026 (ET-012e): the central speed number 
 
 States: **Waiting**: banner and dashes. **Paused**: values stay current with a ◷ paused badge. **Stale or disconnected**: values greyed with a ✕ "stale 12 s" badge; never shown as current. **Incompatible**: error banner (see §6).
 
-### 5.2 Hard Mode parameter hints and checklist (`hardMode.hint*`, `hardMode.sheet`)
+### 5.2 Hard Mode page and supplementary hints (`hardMode.screen`, `hardMode.hint*`)
 
-Latest owner clarification, October 21, 2026: restore the mockup's 470px right checklist Sheet with View checklist and Check again, while retaining all twelve compact-card parameter-name hints. This supersedes the earlier no-drawer refinement. Use the accepted ET-029 selected-language EN/RU framework for every Hard Mode label, status, reason, source/age, notice and trip explanation; preserve SDK names and raw audit/cvar evidence.
+Owner decision, October 23, 2026 (ET-047): Hard Mode is a dedicated Drive destination between Live and Journal. This supersedes the October 21 drawer requirement. The Live instrument spans the available content width. Keep the global top-bar Hard Mode status on every route.
 
-| Spec id | Content |
-| --- | --- |
-| `hardMode.sheet` | Accessible 470px right drawer with title/count, twelve detected/required/state/reason rows, source/age, bounded Check again, retained first loss and read-only/persisted-setting notices |
-| `hardMode.hint` | Noninteractive hint on name hover and keyboard focus: friendly/exact raw **Detected**, **Required**, state, a localized friendly reason and optional secondary cvar |
-| `live.hardMode.criteria` | Twelve names with explicit pass/fail/unknown words and ✓/✕/? icons; visible keyboard focus |
-| `live.hardMode.source` | Sanitized source category (Local / Steam Cloud / Synthetic or replay / Unproven) and observation age, readable in the card; no profile name, account or filesystem path crosses IPC |
-| `live.hardMode.refresh` | **Check again**, bounded read-only refresh, loading/unavailable text in the card |
-| `live.hardMode.notice` | Read-only/persisted-setting boundary and current settings versus trip qualification; first loss retains value/time even when all current rules pass |
+The full page shows a summary with status, N/12, progress, source/observation age and Check again, followed by twelve inline detected/required/state/reason/cvar entries and persisted/read-only/manual-delivery caveats. Retain first-loss value/time even after settings recover. No View checklist trigger or Hard Mode drawer remains. Use two columns when the card is wider than 680px, otherwise one, with normal page scrolling and wrapping. Reuse Yukon tokens, offline Onest and lucide Flame; status includes text/icons as well as color.
 
-Hints open on hover or focus, dismiss with Escape without moving focus, and contain no links or controls. Tab moves normally through the parameter names. The separate checklist drawer traps focus while open, closes on Escape and restores focus to View checklist. Selected-language changes update both hints and an already-open drawer without changing evidence or qualification.
-
-The 12 criteria use the owner-approved observed persisted-setting matrix: realistic fuel `g_fuel_simulation = 1`; air brakes `g_hardcore_simulation = 1`; police `g_police = 1`; fatigue `g_fatigue = 1`; speed limiter `g_use_speed_limiter = 1`; truck stability `g_truck_stability ≤ 0.5`; trailer stability `g_trailer_stability ≤ 0.5`; configured skilled parking `g_simple_parking_doubles = 0` and `g_parking_difficulty = 2`; rain `g_bad_weather_factor ≥ 0.12`; road events `g_road_events ≥ 0.30`; braking intensity `g_brake_intensity ≤ 0.75`; traffic `g_traffic ≥ 1.0`. Display booleans as On/Off and fractions as percentages, retaining the exact raw value alongside. The evaluator owns comparisons and its `1e-6` tolerance. Manual completion additionally requires available `autoParkUsed == false` at delivery; actual Expert placement is not verified. Explain that unpersisted runtime settings/transient changes between observations are not detected. Unknown/failure/source switch/interruption irreversibly loses qualification, preserving the first lost value/time even when current settings recover.
+The existing parameter hints remain optional supplementary information: hover/focus, Escape dismissal, normal Tab order. Essential evidence and explanations are always inline. Changing language updates the page without changing evidence. The dashboard-lifetime controller remains shared with the shell; navigating or refreshing cannot restore trip qualification. Focus moves to the screen heading after route changes. Keep EN/RU parity, keyboard operation and visible focus. Validate minimum/wide desktop widths; renderer emulation does not establish native Windows DPI acceptance.
 
 ### 5.3 Journal (`journal.*`)
 
@@ -334,3 +325,8 @@ App-owned EN/RU labels and numeric unit labels are localized; raw SDK names, mon
 Spec IDs use compatible existing IDs where established (`hard-mode-*`, `journal-*`, `overlay-*`) plus `shell.*`, `settings.*`, `live.instrument*`, `trip.header`, `trip.tiles`, `trip.chart` and `trip.hardMode`. Native caption behavior, actual Windows 100%/150% scaling, game overlay input/focus/z-order and performance require manual evidence; viewport screenshots do not establish them.
 
 ET-028 Live compaction keeps all twelve actual parameter names with state icons and complete accessible rule/state labels, hover/keyboard hints, source/age and both actions. The grid uses two columns below a 360px card width, three only above that threshold, with wrapping and ≥32px targets. A short saved-settings limitation stays visible; full observation/manual-parking/qualification caveats remain in the accessible 470px drawer. Current Live screenshot checks require the Job heading and both route endpoints fully inside the content viewport without scrolling, and separately reject overflowing parameter labels.
+
+
+## ET-047 current presentation — October 23, 2026
+
+ET-047 supersedes earlier compact-card/drawer descriptions, including the dated ET-028 compaction notes below. Live has one full-width instrument above Job. Hard Mode lives between Live and Journal, and exposes all evidence/caveats inline. Optional tooltips do not hide essential information. Existing ET-026 qualification, freshness and source authority remain unchanged. See [ET-047 validation](../validation/et-047.md).

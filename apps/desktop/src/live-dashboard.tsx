@@ -11,7 +11,7 @@ import {displayProfile} from './unit-profiles';
 import {getStrings} from './strings';
 import {t, translateUnit} from './i18n';
 
-export function LiveDashboard({live, units, language = 'en', hardMode}: {live: LiveTelemetry | undefined; units: UnitProfiles | undefined; language?: AppLanguage; hardMode?: React.ReactNode}) {
+export function LiveDashboard({live, units, language = 'en'}: {live: LiveTelemetry | undefined; units: UnitProfiles | undefined; language?: AppLanguage}) {
   const text = useMemo(() => liveDashboardText(live, units, language), [live, units, language]);
   const view = useMemo(() => desktopLiveView(live, units), [live, units]);
   const strings = getStrings(language), profile = displayProfile(live, units);
@@ -41,7 +41,7 @@ export function LiveDashboard({live, units, language = 'en', hardMode}: {live: L
         </div></div>
         {text.paused ? <Badge variant="warn" data-testid="live-paused">{strings.livePaused}</Badge> : null}
       </CardContent></Card>
-    {hardMode}</div>
+    </div>
       <Card data-testid="live.job"><CardHeader><CardTitle><h2 className="flex gap-2"><Package className="size-4" aria-hidden="true" />{t('live.job', undefined, language)}</h2></CardTitle></CardHeader><CardContent className="space-y-3">
         <div className="flex flex-wrap gap-2"><Badge variant="neutral">{value('cargo')}</Badge><Badge variant="neutral">{value('cargo-mass')}</Badge><Badge variant="neutral">{value('market')}</Badge></div>
         <div className="yu-route" data-testid="live.job.route"><div><MapPin aria-hidden="true" /><strong data-testid="live.job.origin">{value('source-city')}</strong><p>{value('source-company')}</p></div><span aria-hidden="true">→</span><div className="text-right"><Flag aria-hidden="true" /><strong data-testid="live.job.destination">{value('destination-city')}</strong><p>{value('destination-company')}</p></div></div>

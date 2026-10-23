@@ -4,11 +4,11 @@ import path from 'node:path';
 import {temporaryResources} from '../shared/resources';
 import {receiptBatchTimeout, validateRuntimeReceipts} from '../shared/runtime-receipt-validator';
 
-const screens = {shell: ['live', 'journal', 'settings', 'account'], live: ['current', 'zero', 'missing', 'paused', 'stale'],
+const screens = {shell: ['live', 'hardMode', 'journal', 'settings', 'account'], live: ['current', 'zero', 'missing', 'paused', 'stale'],
   journal: ['list', 'trip', 'intervals', 'timeline', 'samples'], settings: ['general', 'units', 'overlay', 'sections', 'plugin', 'data', 'about', 'save-error'], overlay: ['strip', 'card', 'cluster', 'hud']};
 const common = ['bilingual', 'bothSizes', 'security', 'offlineFonts', 'recordingIndicator'];
-const flags = {shell: ['navigation', 'headingFocus', 'journalUnmount', 'menuKeyboard', 'exitAvailable', 'laterAccount'],
-  live: ['numericGauge', 'unavailableVsZero', 'paused', 'staleDashes', 'rawNames', 'unsupportedTrip', 'jobViewport', 'hmNamesReadable','tankUnknownVsZero'],
+const flags = {shell: ['navigation', 'headingFocus','hardModePage', 'journalUnmount', 'menuKeyboard', 'exitAvailable', 'laterAccount'],
+  live: ['numericGauge', 'unavailableVsZero', 'paused', 'staleDashes', 'rawNames', 'unsupportedTrip', 'jobViewport', 'hmNamesReadable','fullWidthTelemetry','tankUnknownVsZero'],
   journal: ['syntheticBanner', 'pageReturn', 'chartBounded', 'rawTabs', 'searchPlanned', 'tripRegions', 'tableReadable','signedChart'], settings: ['allPanels', 'allSections', 'committedSave', 'sourceSelector', 'uninstallRefusal', 'refusedSave', 'readOnly', 'controlsKeyboard', 'lastEnabled', 'fontLicense', 'overlayVisibility', 'visibilityFailedSave'],
   overlay: ['fourLayouts', 'transparent', 'contained', 'independentFont', 'missing', 'paused', 'staleDashes', 'heroSubsets','formatterProfiles']};
 type Case = keyof typeof screens;
@@ -46,6 +46,10 @@ it('requires every UI language/size/screen, assertion and plain screenshot file 
     {name: 'file absent', uiCase: 'live', omitFile: true}, {name: 'invalid PNG signature', uiCase: 'live', badPng: true},
     {name: 'escaping filename', uiCase: 'live', change: value => {value.ui.screenshots[0].file = '../outside.png';}},
     {name: 'wrong image size', uiCase: 'live', change: value => {value.ui.screenshots[0].imageWidth = 1279;}},
+    ...['hardModePage'].flatMap(flag => [
+      {name: `false shell ${flag}`, uiCase: 'shell' as const, change: (value: Fixture) => {value.ui.flags[flag] = false;}},
+      {name: `missing shell ${flag}`, uiCase: 'shell' as const, change: (value: Fixture) => {delete value.ui.flags[flag];}}
+    ]),
     ...['formatterProfiles'].flatMap(flag => [
       {name: `false overlay ${flag}`, uiCase: 'overlay' as const, change: (value: Fixture) => {value.ui.flags[flag] = false;}},
       {name: `missing overlay ${flag}`, uiCase: 'overlay' as const, change: (value: Fixture) => {delete value.ui.flags[flag];}}

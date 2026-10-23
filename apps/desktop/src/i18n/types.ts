@@ -394,7 +394,7 @@ export type I18nKey =
 
   | 'ui.unavailable' | 'ui.planned' | 'ui.accountNote' | 'ui.diagnostics' | 'ui.details' | 'ui.help' | 'ui.helpNote' | 'ui.chartPage' | 'ui.chartNote' | 'ui.actualUnavailable' | 'ui.searchPlanned' | 'ui.status.connected' | 'ui.status.paused' | 'ui.status.waiting' | 'ui.status.stale' | 'ui.status.disconnected' | 'ui.status.incompatible' | 'ui.status.unavailable' | 'ui.status.restarting' | 'ui.status.service-failed' | 'ui.plugin' | 'ui.origin' | 'ui.current' | 'ui.notCurrent' | 'ui.observedProgress' | 'ui.readOnly'
   | 'app.name' | 'app.sub' | 'app.window'
-  | 'nav.live' | 'nav.journal' | 'nav.settings' | 'nav.account' | 'nav.group.drive' | 'nav.group.app' | 'nav.group.company'
+  | 'nav.live' | 'nav.hardMode' | 'nav.journal' | 'nav.settings' | 'nav.account' | 'nav.group.drive' | 'nav.group.app' | 'nav.group.company'
   | 'tag.later' | 'tag.planned' | 'side.exit' | 'side.lang'
   | 'rec.recording' | 'rec.trip' | 'rec.paused' | 'rec.pausedSub'
   | 'rec.waiting' | 'rec.waitingSub' | 'rec.lost' | 'rec.lostSub'

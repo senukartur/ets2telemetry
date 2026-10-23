@@ -55,7 +55,7 @@ button:not(:disabled), select:not(:disabled) { cursor: pointer; }
 .yu-kv dt { color: var(--yu-text-muted); } .yu-kv dd { margin: 0; text-align: right; overflow-wrap: anywhere; }
 @media (prefers-reduced-motion: reduce) { *, *::before, *::after { animation-duration: .01ms !important; transition-duration: .01ms !important; scroll-behavior: auto !important; } }
 
-.yu-live-top { display: grid; grid-template-columns: minmax(0, 1.85fr) minmax(280px, 1fr); gap: 14px; align-items: start; }
+.yu-live-top { container-type: inline-size; display: grid; grid-template-columns: minmax(0, 1fr); gap: 14px; align-items: start; }
 .yu-live-bottom { display: grid; grid-template-columns: repeat(3, minmax(0,1fr)); gap: 14px; }
 .yu-instrument { background: var(--yu-tile-gradient); border-color: var(--yu-tile-border); }
 .yu-instrument > [data-slot="card-content"] { display: grid; grid-template-columns: minmax(180px, 1.2fr) 64px minmax(130px,1fr); gap: 10px; align-items: center; padding: 12px; }
@@ -84,10 +84,6 @@ button:not(:disabled), select:not(:disabled) { cursor: pointer; }
 .yu-live-fields h3 { color: var(--yu-accent-light); padding-bottom: 6px; }
 .yu-connection { display: flex; gap: 12px; align-items: center; padding: 14px 18px; border: 1px solid var(--yu-border); border-radius: 12px; background: var(--yu-bg-inset); }
 .yu-connection svg { width: 26px; height: 26px; color: var(--yu-text-muted); } .yu-connection p { color: var(--yu-text-muted); font-size: 12px; margin-top: 4px; }
-[data-testid="hard-mode-card"] button { font-size: 12px; }
-[data-testid="hard-mode-card"] [data-slot="card-content"] { gap: 8px; display: flex; flex-direction: column; }
-[data-testid="hard-mode-card"] [data-slot="card-content"] > * { margin-top: 0; }
-[data-testid="hard-mode-card"] progress { accent-color: var(--yu-accent-light); }
 
 /* Journal keeps every raw read and paged table; summary cards and chart are presentation only. */
 .yu-journal-filters {padding-bottom:14px;border-bottom:1px solid var(--yu-border);align-items:end}
@@ -118,8 +114,6 @@ button:not(:disabled), select:not(:disabled) { cursor: pointer; }
 .yu-dot[data-tone="neutral"] {background:var(--yu-text-muted)}
 .yu-dot[data-tone="warn"] {background:var(--yu-warn-fg)}
 .yu-dot[data-tone="error"] {background:var(--yu-err-fg)}
-[data-testid="hard-mode-card"] [data-testid^="hard-mode-name-"] {font-size:11px;line-height:16px;padding:2px 0;width:100%}
-[data-testid="hard-mode-card"] [data-slot="card-content"]>p.text-xs {font-size:11px;line-height:15px}
 
 /* Fixed primary column widths stay readable; the table scrolls inside its card at the minimum window size. */
 [data-testid="journal-table"] {min-width:1560px;table-layout:fixed}
@@ -183,20 +177,39 @@ button:not(:disabled), select:not(:disabled) { cursor: pointer; }
 .yu-font-license summary:focus-visible { outline: 2px solid var(--yu-accent); outline-offset: 2px; }
 .yu-font-license pre { white-space: pre-wrap; overflow-wrap: anywhere; max-height: 260px; overflow: auto; font-size: 12px; color: var(--yu-text-secondary); }
 
-[data-testid="hard-mode-card"] [data-slot="card-header"] {padding:10px 12px}
-[data-testid="hard-mode-card"] .yu-hard-mode-summary {padding:10px 12px;gap:6px}
-[data-testid="hard-mode-card"] {container-type:inline-size;min-width:0}
-.yu-hard-mode-rules {display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:2px 6px;margin:0;padding:0;list-style:none}
-.yu-hard-mode-rules button {display:flex;align-items:center;gap:4px;width:100%;min-height:32px;line-height:14px;min-width:0;overflow-wrap:anywhere;hyphens:none}
-.yu-hard-mode-rules button>span:first-child {flex:none}
-.yu-hard-mode-rules [data-state="fail"] button {color:var(--yu-err-fg)}
-.yu-hard-mode-actions {display:flex;gap:6px;flex-wrap:wrap}
-.yu-hard-mode-actions button {padding-inline:8px;flex:1;font-size:12px}
 
-.yu-hard-mode-rules li,.yu-hard-mode-rules button>span:last-child {min-width:0}
-@container (min-width:360px) {.yu-hard-mode-rules {grid-template-columns:repeat(3,minmax(0,1fr))}}
 
 .yu-gear {min-width:0}
 .yu-instrument [data-testid="live-paused"] {grid-column:1/-1;justify-self:start;white-space:normal;overflow-wrap:normal;max-width:100%;height:auto}
 
 .yu-tank-unavailable { position: absolute; inset: 0; display: grid; place-items: center; color: var(--yu-text-muted); font-size: 20px; }
+
+/* Hard Mode is a full page: essential evidence is inline, with ordinary content scrolling. */
+[data-testid="hard-mode-card"] { min-width: 0; container-type: inline-size; }
+.yu-hard-mode-summary { display: grid; gap: 18px; }
+.yu-hard-mode-overview { display: flex; gap: 24px; align-items: start; justify-content: space-between; }
+.yu-hard-mode-overview > div { flex: 1; max-width: 540px; min-width: 0; }
+.yu-hard-mode-overview [role="status"] { font-size: 16px; font-weight: 600; margin-bottom: 8px; }
+.yu-hard-mode-overview progress { accent-color: var(--yu-accent-light); display: block; margin-bottom: 10px; }
+.yu-hard-mode-rules { display: grid; grid-template-columns: repeat(2,minmax(0,1fr)); gap: 14px; padding: 0; margin: 0; list-style: none; }
+.yu-hard-mode-rules li { min-width: 0; border: 1px solid var(--yu-border); border-radius: 10px; padding: 12px 14px; background: var(--yu-bg-inset); }
+.yu-hard-mode-rules button { display: flex; gap: 8px; align-items: center; width: 100%; min-height: 32px; text-align: left; font-weight: 600; line-height: 1.5; }
+.yu-hard-mode-rules button > span:first-child { flex: none; }
+.yu-hard-mode-values { display: grid; gap: 5px; margin-top: 8px; line-height: 1.5; }
+.yu-hard-mode-state { color: var(--yu-text-secondary); }
+.yu-hard-mode-rules [data-state="fail"] .yu-hard-mode-state { color: var(--yu-err-fg); }
+.yu-hard-mode-rules [data-state="pass"] .yu-hard-mode-state { color: var(--yu-ok-fg); }
+.yu-hard-mode-notice { display: grid; gap: 8px; padding: 14px 16px; background: var(--yu-bg-inset); border-left: 3px solid var(--yu-accent-light); border-radius: 6px; line-height: 1.6; color: var(--yu-text-secondary); }
+@container (max-width: 680px) {
+  .yu-hard-mode-rules { grid-template-columns: minmax(0,1fr); }
+  .yu-hard-mode-overview { flex-wrap: wrap; gap: 12px; }
+}
+
+@container (max-width: 560px) {
+  .yu-instrument > [data-slot="card-content"] { grid-template-columns: minmax(0,1fr) 64px; }
+  .yu-instrument .yu-fuel { grid-column: 1 / -1; min-width: 0; }
+}
+@media (max-width: 900px) {
+  .yu-live-bottom, .yu-live-fields { grid-template-columns: minmax(0,1fr); }
+  .yu-job-metrics { grid-template-columns: minmax(0,1fr); }
+}
