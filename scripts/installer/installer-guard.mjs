@@ -351,6 +351,30 @@ export function checkInstalled(facts) {
   if (facts.realBinaryRootExists !== false) refuse('REAL_INSTALL_PRESENT');
 }
 
+/** The product executable Squirrel installs in every `app-<version>` folder; it carries the product icon as resource 0. */
+export const PRODUCT_EXECUTABLE = 'ETS2TelemetryDesktop.exe';
+/** Squirrel's own icon file in the binary root (`CreateUninstallerRegistryEntry` at the pinned Squirrel commit). */
+export const ROOT_ICON_FILE = 'app.ico';
+/**
+ * ET-045g: the shape of the HKCU registration's DisplayIcon value, without recording it (it is a machine path).
+ * `displayIcon` is the raw value the harness read, `binaryRoot` R's binary root and `version` the installed version.
+ * Shapes: `root-app-ico` (Squirrel's `<binaryRoot>\app.ico`), `app-exe-index-0` (`<binaryRoot>\app-<v>\ETS2TelemetryDesktop.exe,0`),
+ * `absent` (no value or an empty one) and `other` (anything else: quoted, relative, another folder, file or index).
+ * `versionMatches` says whether `app-<v>` names `version`; it is null for every other shape.
+ */
+export function classifyRegistrationIcon({displayIcon, binaryRoot, version}) {
+  const other = {shape: 'other', versionMatches: null};
+  if (displayIcon === undefined || displayIcon === null || displayIcon === '') return {shape: 'absent', versionMatches: null};
+  if (typeof displayIcon !== 'string' || !isDrivePath(displayIcon) || !isDrivePath(binaryRoot) || /["\r\n]/.test(displayIcon) ||
+    displayIcon.split(/[\\/]/).some(part => part === '.' || part === '..')) return other;
+  if (normalizePath(displayIcon) === normalizePath(path.win32.join(binaryRoot, ROOT_ICON_FILE))) return {shape: 'root-app-ico', versionMatches: null};
+  const match = /^(.+)\\([^\\]+)\\([^\\]+),0$/.exec(displayIcon);
+  if (match && normalizePath(match[1]) === normalizePath(binaryRoot) && APP_FOLDER.test(match[2]) && match[3].toLowerCase() === PRODUCT_EXECUTABLE.toLowerCase()) {
+    return {shape: 'app-exe-index-0', versionMatches: typeof version === 'string' && match[2] === `app-${version}`};
+  }
+  return other;
+}
+
 /** The minimal PATH of an installed launch (U11): only Windows' own folders, no Node, npm, Git or build tools. */
 export function minimalPath(systemRoot) {
   if (!isDrivePath(systemRoot)) refuse('SYSTEM_ROOT_INVALID');

@@ -73,12 +73,14 @@ $clock = [Diagnostics.Stopwatch]::StartNew()
 
 $registryViews = @([Microsoft.Win32.RegistryView]::Registry64, [Microsoft.Win32.RegistryView]::Registry32)
 function Read-RegistrationView([Microsoft.Win32.RegistryView]$View) {
-    # The HKCU uninstall key Squirrel writes, in one registry view; only read here.
+    # The HKCU uninstall key Squirrel writes, in one registry view; only read here. ET-045g adds DisplayIcon, which the
+    # driver's installed command reduces to its shape (classifyRegistrationIcon); the value itself never reaches the evidence.
     $hive = [Microsoft.Win32.RegistryKey]::OpenBaseKey([Microsoft.Win32.RegistryHive]::CurrentUser, $View)
     try {
         $key = $hive.OpenSubKey($uninstallKey, $false)
         if (!$key) { return $null }
-        try { return [ordered]@{installLocation=$key.GetValue('InstallLocation'); displayVersion=$key.GetValue('DisplayVersion'); uninstallString=$key.GetValue('UninstallString')} }
+        try { return [ordered]@{installLocation=$key.GetValue('InstallLocation'); displayVersion=$key.GetValue('DisplayVersion'); uninstallString=$key.GetValue('UninstallString');
+            displayIcon=$key.GetValue('DisplayIcon')} }
         finally { $key.Dispose() }
     } finally { $hive.Dispose() }
 }
@@ -141,8 +143,9 @@ function Invoke-InstalledSmoke([string]$Executable, [string[]]$Scenarios, [strin
     }
 }
 function Assert-Installed([string]$Label, [string]$Version) {
-    # The registration and the binary root must lie in R; otherwise abort at once, with no uninstall.
-    Invoke-Driver 'installed' @($Label) 30000
+    # The registration and the binary root must lie in R; otherwise abort at once, with no uninstall. The driver also
+    # records icon-<label>.json (ET-045g): the DisplayIcon shape and the hash of the binary root's app.ico.
+    Invoke-Driver 'installed' @($Label, $Version) 30000
     $registration = Read-Registration
     if ($registration.displayVersion -cne $Version) { throw ('Registered version differs after ' + $Label) }
     $executable = Join-Path $binaryRoot ('app-' + $Version + '\ETS2TelemetryDesktop.exe')

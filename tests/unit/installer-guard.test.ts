@@ -1,11 +1,12 @@
 import {execFile} from 'node:child_process';
-import {mkdir, readdir, readFile, writeFile} from 'node:fs/promises';
+import {createHash} from 'node:crypto';
+import {mkdir, readdir, readFile, realpath, rm, writeFile} from 'node:fs/promises';
 import path from 'node:path';
 import {fileURLToPath} from 'node:url';
 import {promisify} from 'node:util';
 import {describe, expect, it} from 'vitest';
 import {checkedPaths, checkInstalled, checkInstallTest, checkLaunchEnvironment, checkRunPlan, checkRunSignal, FACTS_VARIABLE, factsEvidence, installedEnvironment,
-  checkDataRootUnchanged, checkDecoyUnchanged, checkUninstallResidue, DATA_ROOT_REQUIRED, electronRuntimeNames, InstallerGuardError, RESIDUE_MAX_ENTRIES, isGuardedProcess, isHostedRunner, minimalPath, normalizePath, ownsRegistration, parseUninstallString, resolveRealLocation, runLayout,
+  checkDataRootUnchanged, checkDecoyUnchanged, checkUninstallResidue, classifyRegistrationIcon, DATA_ROOT_REQUIRED, electronRuntimeNames, PRODUCT_EXECUTABLE, InstallerGuardError, RESIDUE_MAX_ENTRIES, isGuardedProcess, isHostedRunner, minimalPath, normalizePath, ownsRegistration, parseUninstallString, resolveRealLocation, runLayout,
   steamLibraryPaths, uninstallEnvironment, type RunPlanFacts} from '../../scripts/installer/installer-guard.mjs';
 import {temporaryResources} from '../shared/resources';
 
@@ -277,6 +278,39 @@ describe('after each install', () => {
   });
 });
 
+// ET-045g (REG-017): the Installed apps icon. The harness reads the registration's DisplayIcon, and the driver records only
+// its shape and the hash of the binary root's app.ico; the value is a machine path and never reaches the evidence.
+describe('registration icon shape (ET-045g)', () => {
+  const binaryRoot = runLayout(RUN_ROOT).binaryRoot;
+  const shape = (displayIcon: unknown, version = '0.1.1') => classifyRegistrationIcon({displayIcon, binaryRoot, version});
+  it('recognizes Squirrel\'s root app.ico, case-insensitively', () => {
+    expect(shape(`${binaryRoot}\\app.ico`)).toEqual({shape: 'root-app-ico', versionMatches: null});
+    expect(shape(`${binaryRoot.toUpperCase()}\\APP.ICO`)).toEqual({shape: 'root-app-ico', versionMatches: null});
+  });
+  it('recognizes the versioned product executable with icon index 0 and compares its version', () => {
+    expect(PRODUCT_EXECUTABLE).toBe('ETS2TelemetryDesktop.exe');
+    expect(shape(`${binaryRoot}\\app-0.1.1\\ETS2TelemetryDesktop.exe,0`)).toEqual({shape: 'app-exe-index-0', versionMatches: true});
+    expect(shape(`${binaryRoot}\\app-0.1.0\\ETS2TelemetryDesktop.exe,0`)).toEqual({shape: 'app-exe-index-0', versionMatches: false});
+    expect(shape(`${binaryRoot}\\app-0.1.0-alpha1\\ETS2TelemetryDesktop.exe,0`, '0.1.0-alpha1')).toEqual({shape: 'app-exe-index-0', versionMatches: true});
+  });
+  it('reports no value or an empty one as absent', () => {
+    for (const value of [undefined, null, '']) expect(shape(value)).toEqual({shape: 'absent', versionMatches: null});
+  });
+  it.each([
+    ['a quoted value', `"${binaryRoot}\\app-0.1.1\\ETS2TelemetryDesktop.exe",0`],
+    ['a relative value', 'app-0.1.1\\ETS2TelemetryDesktop.exe,0'],
+    ['another icon index', `${binaryRoot}\\app-0.1.1\\ETS2TelemetryDesktop.exe,1`],
+    ['no icon index', `${binaryRoot}\\app-0.1.1\\ETS2TelemetryDesktop.exe`],
+    ['another executable', `${binaryRoot}\\app-0.1.1\\Update.exe,0`],
+    ['a folder that is not app-<version>', `${binaryRoot}\\resources\\ETS2TelemetryDesktop.exe,0`],
+    ['another binary root', `${REAL.localAppData}\\ETS2TelemetryDesktop\\app-0.1.1\\ETS2TelemetryDesktop.exe,0`],
+    ['an app.ico elsewhere', `${REAL.localAppData}\\ETS2TelemetryDesktop\\app.ico`],
+    ['a parent segment', `${binaryRoot}\\app-0.1.1\\..\\app-0.1.1\\ETS2TelemetryDesktop.exe,0`],
+    ['a downloaded URL', 'https://raw.githubusercontent.com/electron/electron/main/shell/browser/resources/win/electron.ico'],
+    ['a number', 7]
+  ])('reports %s as other', (_name, value) => expect(shape(value)).toEqual({shape: 'other', versionMatches: null}));
+});
+
 describe('launch environment', () => {
   const layout = runLayout(RUN_ROOT);
   const overrides = {LOCALAPPDATA: layout.base, APPDATA: layout.appData, TEMP: layout.temp, TMP: layout.temp, ETS2TELEMETRY_PROFILE_DIR: layout.profile,
@@ -351,6 +385,48 @@ describe('machine facts never reach the evidence', () => {
       expect(JSON.parse(text).result).toEqual({phase: 'plan', facts: factsEvidence(passing, runRoot)});
     } finally {await resources.dispose();}
   }, 40000);
+  // ET-045g: the installed command's icon observation, against a fake binary root in a temporary run root.
+  it('records the DisplayIcon shape and the root app.ico hash without a path (the driver itself)', async () => {
+    const resources = await temporaryResources();
+    try {
+      // The real location, so the driver's realpath checks of R's binary root agree with the raw path.
+      const base = await realpath(resources.directory);
+      const runRoot = path.join(base, `installer-${ID}`), evidence = path.join(base, `installer-${ID}-evidence`);
+      const binaryRoot = runLayout(runRoot).binaryRoot;
+      await mkdir(binaryRoot, {recursive: true});
+      await mkdir(evidence);
+      const config = path.join(evidence, 'config.json');
+      await writeFile(config, JSON.stringify({runRoot, evidence, setup: path.join(base, 'Setup.exe'), stepBudgetMs: 1000}));
+      // A synthetic one-entry ICO, distinct from the tracked product icon.
+      const legacy = Buffer.alloc(22 + 8);
+      legacy.writeUInt16LE(1, 2); legacy.writeUInt16LE(1, 4); legacy.writeUInt8(1, 6); legacy.writeUInt8(1, 7); legacy.writeUInt16LE(1, 10);
+      legacy.writeUInt16LE(32, 12); legacy.writeUInt32LE(8, 14); legacy.writeUInt32LE(22, 18);
+      const tracked = await readFile(path.resolve('resources/icon/app.ico'));
+      const hash = (bytes: Buffer) => createHash('sha256').update(bytes).digest('hex');
+      const run = async (label: string, version: string, displayIcon: string | null) => {
+        const registration = {installLocation: binaryRoot, displayVersion: version, uninstallString: `"${binaryRoot}\\Update.exe" --uninstall`, displayIcon};
+        const env = {...process.env, [FACTS_VARIABLE]: JSON.stringify({...machine, registration, realBinaryRootExists: false})};
+        const {stdout} = await promisify(execFile)(process.execPath, [path.resolve('scripts/installer/installer-lifecycle.mjs'), 'installed', config, label, version],
+          {env, encoding: 'utf8', timeout: 30000, windowsHide: true});
+        expect(JSON.parse(stdout.trim().split(/\r?\n/).at(-1)!)).toMatchObject({command: 'installed', passed: true});
+        const text = await readFile(path.join(evidence, `icon-${label}.json`), 'utf8');
+        assertClean(text);
+        return JSON.parse(text);
+      };
+      await writeFile(path.join(binaryRoot, 'app.ico'), legacy);
+      expect(await run('install-0.1.0', '0.1.0', `${binaryRoot}\\app.ico`)).toEqual({label: 'install-0.1.0', version: '0.1.0',
+        displayIcon: {shape: 'root-app-ico', versionMatches: null},
+        rootIcon: {present: true, regularFile: true, bytes: legacy.length, sha256: hash(legacy), equalsTracked: false, readError: null}, trackedSha256: hash(tracked)});
+      await writeFile(path.join(binaryRoot, 'app.ico'), tracked);
+      expect(await run('update-0.1.1', '0.1.1', `${binaryRoot}\\app-0.1.1\\ETS2TelemetryDesktop.exe,0`)).toMatchObject({
+        displayIcon: {shape: 'app-exe-index-0', versionMatches: true}, rootIcon: {present: true, sha256: hash(tracked), equalsTracked: true}});
+      await rm(path.join(binaryRoot, 'app.ico'));
+      expect(await run('repair-0.1.0', '0.1.0', null)).toMatchObject({displayIcon: {shape: 'absent', versionMatches: null},
+        rootIcon: {present: false, regularFile: false, bytes: null, sha256: null, equalsTracked: false, readError: null}});
+      expect((await readdir(evidence)).sort()).toEqual(['config.json', 'icon-install-0.1.0.json', 'icon-repair-0.1.0.json', 'icon-update-0.1.1.json',
+        'installed-install-0.1.0.json', 'installed-repair-0.1.0.json', 'installed-update-0.1.1.json']);
+    } finally {await resources.dispose();}
+  }, 60000);
   it('never writes the facts to a file in the harness', async () => {
     const harness = await readFile(path.resolve('scripts/installer/Invoke-InstallerLifecycle.ps1'), 'utf8');
     expect(harness).not.toMatch(/facts\.json|factsFile/i);
