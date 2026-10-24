@@ -100,12 +100,29 @@ function sectionsAre(expected) {
   return [...globalThis.document.querySelectorAll('[data-testid^="overlay-section-"]')].map(node => node.getAttribute('data-testid').replace('overlay-section-', '')).join(',') === expected;
 }
 /**
+ * Runs `body`, then always `restore`. A restore failure after a failed body never replaces the body's own error: it is
+ * appended to that error's message. After a passing body a restore failure is thrown as it is.
+ */
+async function withRestore(body, restore) {
+  let result;
+  try {result = await body();}
+  catch (error) {
+    try {await restore();}
+    catch (restoreError) {
+      if (error instanceof Error) error.message += `; restore also failed: ${restoreError instanceof Error ? restoreError.message : String(restoreError)}`;
+    }
+    throw error;
+  }
+  await restore();
+  return result;
+}
+/**
  * The strip at 100%, 50% and 200%: every digit-count step in both unit profiles leaves every section and the row in place,
  * then two real source transitions (9 to 100 km/h, gear 9 to 10, 999 to 1000 rpm) do the same end to end.
  */
 async function observeStripNumbers({application, overlay, source, language, record}) {
   record.stableNumbers ??= [];
-  try {
+  await withRestore(async () => {
     for (const frame of STRIP_FRAMES) {
       await overlayFrame(application, overlay, frame);
       for (const speedUnit of SPEED_UNITS[language]) {
@@ -125,10 +142,10 @@ async function observeStripNumbers({application, overlay, source, language, reco
     const moved = movedBoxes(before, await overlay.evaluate(stripBoxes));
     record.stableNumbers.push({language, zoom: 1, transition: '9/9/999 to 100/10/1000', moved});
     assert.deepEqual(moved, [], `UI_STRIP_LIVE_TRANSITION_MOVED_${language}`);
-  } finally {
+  }, async () => {
     source.setReading(25, 73); source.setEngine(600, -1);
     await overlayFrame(application, overlay, STRIP_FRAMES[0]);
-  }
+  });
   await overlay.waitForFunction(numberTexts, {speed: '90', gear: 'R1', rpm: '600'}, {timeout: 5000});
   record.flags.stableNumbers = true;
 }
@@ -149,7 +166,7 @@ async function observeClusterCentre({application, dashboard, overlay, language, 
   };
   const all = (await dashboard.evaluate(() => globalThis.desktop.getAppState())).settings.overlay.sections;
   const shown = await overlay.evaluate(shownSections);
-  try {
+  await withRestore(async () => {
     for (const frame of CLUSTER_FRAMES) {await overlayFrame(application, overlay, frame); await check(frame, ['speed', 'gear', 'rpm']);}
     for (const subset of [['rpm'], ['speed', 'rpm']]) {
       await dashboard.evaluate(({all, subset}) => globalThis.desktop.setOverlaySections(Object.fromEntries(Object.keys(all).map(id => [id, subset.includes(id)]))), {all, subset});
@@ -157,10 +174,10 @@ async function observeClusterCentre({application, dashboard, overlay, language, 
       await overlayFrame(application, overlay, CLUSTER_FRAMES[1]);
       await check(CLUSTER_FRAMES[1], subset);
     }
-  } finally {
+  }, async () => {
     await dashboard.evaluate(all => globalThis.desktop.setOverlaySections(all), all);
     await overlayFrame(application, overlay, CLUSTER_FRAMES[1]);
-  }
+  });
   await overlay.waitForFunction(sectionsAre, shown, {timeout: 5000});
   record.flags.clusterRpmContained = true;
 }
