@@ -55,6 +55,11 @@ it('holds an actual isolated synthetic pipe open, resumes fresh/missing/zero rea
     const changed = messages.length; source.setReading(20, 71);
     await vi.waitFor(() => expect(messages.slice(changed).some(message => message.data?.state?.speed.value === 20 && message.data?.state?.fuel.value === 71)).toBe(true), {timeout: 1500, interval: 20});
     expect(() => source.setReading(Number.NaN, 0)).toThrow(); expect(() => source.setReading(0, -1)).toThrow();
+    // ET-045d: the engine setter changes RPM and gear in the next frame and refuses values that are no reading.
+    const engine = messages.length; source.setEngine(1000, 10);
+    await vi.waitFor(() => expect(messages.slice(engine).some(message => message.data?.state?.engineRpm?.value === 1000 && message.data?.state?.engineRpm?.available === true &&
+      message.data?.state?.gear?.value === 10)).toBe(true), {timeout: 1500, interval: 20});
+    for (const [rpm, gear] of [[Number.NaN, 1], [Number.POSITIVE_INFINITY, 1], [-1, 1], [999, 1.5], [999, Number.NaN]]) expect(() => source.setEngine(rpm, gear)).toThrow();
     await source.stop();
     expect(source.statistics()).toMatchObject({connections: 1, activeClients: 0, stopped: true, origin: 'synthetic', history: false, identity});
     expect(messages.every(message => message.source.pluginSessionId === identity.pluginSessionId)).toBe(true);

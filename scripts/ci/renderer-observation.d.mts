@@ -28,5 +28,14 @@ export function overlayV1Observation(expected: OverlayV1Expectation): Record<str
 export function waitForOverlayV1(page: Page, expected: OverlayV1Expectation): Promise<Record<string, string | null>>;
 export interface OverlayOverflow {layout: string | null; root: {width: number; height: number} | null; sections: string[]; outside: string[]; truncated: string[]}
 export function overlayOverflow(): OverlayOverflow;
+/** ET-045d: the speed, gear and RPM value and unit texts one probe step writes into the rendered overlay. */
+export interface NumberProbeStep {speed?: string; speedUnit?: string; gear?: string; rpm?: string; rpmUnit?: string}
+export type ProbeEdges = {left: number; top: number; right: number; bottom: number};
+export interface StripNumberProbe {ok: boolean; reason?: string; restored: boolean; baseline?: Record<string, ProbeEdges>;
+  steps: {texts: Record<string, string>; moved: string[]; truncated: string[]}[]}
+export function stripNumberProbe(steps: readonly NumberProbeStep[]): StripNumberProbe;
+export interface ClusterCentreProbe {ok: boolean; reason?: string; restored: boolean; ring?: {track: string; limit: number; centre: {x: number; y: number}};
+  steps: {texts: Record<string, string>; reach: Record<string, number>; outside: string[]; truncated: string[]}[]}
+export function clusterCentreProbe(steps: readonly NumberProbeStep[]): ClusterCentreProbe;
 
 export function zeroLiveObservation(language: string): boolean;
