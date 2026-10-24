@@ -6,6 +6,8 @@ import {readFile, writeFile, rename, mkdir, rmdir} from 'node:fs/promises';
 import {screen, settingsPanel, chooseLanguage} from './ui-navigation.mjs';
 import {until} from './lifecycle-observation.mjs';
 import {overlayOverflow, zeroLiveObservation} from './renderer-observation.mjs';
+import {stubSaveDialog} from './journal-observation.mjs';
+import {pluginActionResult} from './plugin-fixture.mjs';
 
 export const UI_CASES = ['shell', 'live', 'journal', 'settings', 'overlay'];
 const sizes = [{width: 1280, height: 800}, {width: 1100, height: 720}];
@@ -73,6 +75,39 @@ async function focusRoute(page, route) {
   await screen(page, route);
   assert.equal(await page.getByTestId(`tab-${route}`).getAttribute('aria-current'), 'page');
   if (changed) await page.waitForFunction(() => globalThis.document.activeElement?.getAttribute('data-testid') === 'screen-title', undefined, {timeout: 5000});
+}
+const EXPORT_RESULT = {
+  en: {word: 'Information', title: 'Information — Diagnostics export', message: 'Export cancelled. Nothing was written.'},
+  ru: {word: 'Информация', title: 'Информация — Экспорт диагностики', message: 'Экспорт отменён. Ничего не записано.'}
+};
+const dashboardZoom = (application, zoom) => application.evaluate(({BrowserWindow}, zoom) => {
+  BrowserWindow.getAllWindows().find(window => !window.webContents.getURL().endsWith('?view=overlay')).webContents.setZoomFactor(zoom);
+}, zoom);
+/** The export result stays on one line box inside the Game plugin card: no horizontal overflow, no box outside the card. */
+const exportResultContained = page => page.evaluate(() => new Promise(resolve => globalThis.requestAnimationFrame(() => globalThis.requestAnimationFrame(() => {
+  const body = globalThis.document.querySelector('[data-testid="plugin-export-diagnostics-result"]'), card = globalThis.document.querySelector('[data-testid="plugin-card"]');
+  if (!body || !card) {resolve(false); return;}
+  const box = body.getBoundingClientRect(), bounds = card.getBoundingClientRect();
+  resolve(body.scrollWidth <= body.clientWidth && box.width > 0 && box.left >= bounds.left - 0.5 && box.right <= bounds.right + 0.5);
+}))));
+/**
+ * ET-045b: "Export diagnostics…" from the keyboard with a cancelled Save dialog answers beside its button as information,
+ * in the selected language, keeps focus on the button and fits the card (at 1100×720 also at zoom 1.5). Nothing is written.
+ */
+async function observeExportResult({application, dashboard, language, size, record}) {
+  await stubSaveDialog(application, {canceled: true, filePath: ''});
+  await dashboard.getByTestId('plugin-export-diagnostics').focus(); await dashboard.keyboard.press('Enter');
+  const expected = EXPORT_RESULT[language];
+  const shown = await until(() => pluginActionResult(dashboard, {slot: 'plugin-export-diagnostics', trigger: 'plugin-export-diagnostics'}),
+    value => value?.pending === null && value.message === expected.message, `UI_ACTION_RESULT_${language}_${size.width}`, 5000);
+  assert.deepEqual({severity: shown.severity, word: shown.word, title: shown.title, message: shown.message, polite: shown.polite, focused: shown.focused, nextToTrigger: shown.nextToTrigger},
+    {severity: 'info', ...expected, polite: true, focused: true, nextToTrigger: true});
+  assert.equal(await exportResultContained(dashboard), true, `UI_ACTION_RESULT_OVERFLOW_${language}_${size.width}`);
+  if (size.width === 1100) {
+    await dashboardZoom(application, 1.5);
+    try {assert.equal(await exportResultContained(dashboard), true, `UI_ACTION_RESULT_ZOOM_OVERFLOW_${language}`);} finally {await dashboardZoom(application, 1);}
+  }
+  record.flags.actionResult = true;
 }
 export async function runUiSmoke({application, dashboard, overlay, source, config, record}) {
   assert.ok(UI_CASES.includes(config.uiCase));
@@ -212,6 +247,7 @@ export async function runUiSmoke({application, dashboard, overlay, source, confi
             assert.equal(await dashboard.getByTestId('autostart-toggle').isDisabled(), true);
             assert.equal(await dashboard.getByTestId('autostart-not-installed-note').isVisible(), true);
           }
+          if (panel === 'plugin') await observeExportResult({application, dashboard, language, size, record});
           await save(panel, language, size);
         }
         const license = dashboard.getByTestId('settings.about.font-license');

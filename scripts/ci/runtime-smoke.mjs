@@ -521,7 +521,7 @@ try {
     // exits orderly; run B, a restart with the same profile, must reach the same states without writing. The shared close
     // path below owns run B.
     result.plugin = {};
-    await runPluginJourney({dashboard: window, fixture: pluginFixture, config, before: pluginBefore, record: result.plugin, phase});
+    await runPluginJourney({application, dashboard: window, fixture: pluginFixture, config, before: pluginBefore, record: result.plugin, phase});
     tracing = false; await application.context().tracing.stop({path: path.join(config.output, 'trace.zip')}); phase('tracing-stopped');
     await observeExit({application, launcher, request: () => application.close(), requireRequest: true,
       record: result.plugin.exitObservation = {}, message: 'APP_CLOSE_TIMEOUT_8_SECONDS'});
