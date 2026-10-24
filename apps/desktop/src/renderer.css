@@ -71,7 +71,11 @@ html:has(.overlay-body) { background: transparent; }
 .overlay-gauge { position: relative; flex: none; width: 200px; height: 200px; border-radius: 50%; background: var(--yu-ov-panel); border: 1px solid var(--yu-ov-border); }
 .overlay-ring { position: absolute; inset: 6px; width: 186px; height: 186px; }
 .overlay-ring-track { fill: none; stroke: rgba(255, 255, 255, .15); stroke-width: 6; }
-.overlay-ring-value { fill: none; stroke: var(--yu-ov-accent); stroke-width: 6; stroke-linecap: round; }
+.overlay-ring-value { fill: none; stroke: var(--yu-ov-rpm); stroke-width: 6; stroke-linecap: round; }
+/* Speed arc (ET-045f) on the outer speed track: the offset eases over 150 ms between updates and jumps under reduced motion
+   (Windows "Animation effects" off). It is the overlay's only transition; the RPM arc stays static. */
+.overlay-speed-arc { fill: none; stroke: var(--yu-ov-accent); stroke-width: 6; stroke-linecap: round; transition: stroke-dashoffset 150ms linear; }
+@media (prefers-reduced-motion: reduce) { .overlay-speed-arc { transition: none; } }
 /* Gauge centre (ET-045d): three grid rows, so the speed sits exactly in the middle, the gear badge just above it and the RPM
    just below it. Each part is capped in width and clips with an ellipsis, so even its corners stay inside the inner ring. */
 .overlay-gauge-centre { position: absolute; inset: 0; display: grid; grid-template-columns: minmax(0, 1fr); grid-template-rows: minmax(0, 1fr) auto minmax(0, 1fr); row-gap: 3px; justify-items: center; }

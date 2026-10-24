@@ -3,7 +3,7 @@ import type {Page} from '@playwright/test';
 import {runInNewContext} from 'node:vm';
 import {afterEach, describe, expect, it, vi} from 'vitest';
 import {
-  clusterCentreProbe, completeLiveObservation, currentTelemetryObservation, notCurrentLiveObservation, overlayOverflow, overlayV1Observation, SYNTHETIC_V0_HIDDEN_ROWS,
+  clusterCentreProbe, clusterSpeedArcProbe, completeLiveObservation, currentTelemetryObservation, notCurrentLiveObservation, overlayOverflow, overlayV1Observation, SYNTHETIC_V0_HIDDEN_ROWS,
   SYNTHETIC_V0_LIVE_ROWS, SYNTHETIC_V0_VALUE_IDS, SYNTHETIC_V0V1_HIDDEN_ROWS, SYNTHETIC_V0V1_LIVE_ROWS, SYNTHETIC_V1_OVERLAY_CURRENT, SYNTHETIC_V1_OVERLAY_STOPPED,
   SYNTHETIC_V1_OVERLAY_V0_STALE, SYNTHETIC_V1_OVERLAY_V1_STALE, SYNTHETIC_V1_LIVE_ROWS, SYNTHETIC_V1_VALUE_IDS, stripNumberProbe, v1NotCurrentObservation, waitForCompleteLive, waitForCurrentTelemetry,
   waitForNotCurrentLive, type RendererObservation
@@ -453,5 +453,47 @@ describe('ET-045d cluster centre probe', () => {
     expect(runProbe(clusterCentreProbe, fakeCluster({layout: 'strip'}).globals, steps)).toMatchObject({ok: false, reason: 'no-gauge'});
     expect(runProbe(clusterCentreProbe, fakeCluster({rpmTrack: false, speedTrack: false}).globals, steps)).toMatchObject({ok: false, reason: 'no-gauge'});
     expect(runProbe(clusterCentreProbe, fakeCluster({omit: ['overlay-gear']}).globals, steps)).toMatchObject({ok: false, reason: 'missing gear'});
+  });
+});
+
+// ET-045f: the speed arc probe only reads the fake gauge; it never writes a node.
+function fakeSpeedArc({layout = 'cluster', svg = true, track = true, arc = true, rpm = true, duplicate = false, strokeWidth = '6px', transform = 'rotate(-90 60 60)'}: {layout?: string; svg?: boolean; track?: boolean; arc?: boolean; rpm?: boolean; duplicate?: boolean; strokeWidth?: string;
+  transform?: string | null} = {}) {
+  const C = String(2 * Math.PI * 52);
+  const arcNode = {getAttribute: (name: string) => ({r: '52', 'stroke-dasharray': `${C} ${C}`, ...(transform === null ? {} : {transform})} as Record<string, string>)[name] ?? null,
+    style: {getPropertyValue: (name: string) => name === 'stroke-dashoffset' ? '100.5309649148734' : ''},
+    computed: {transitionProperty: 'stroke-dashoffset', transitionDuration: '0.15s', transitionTimingFunction: 'linear', stroke: 'rgb(96, 165, 250)', strokeWidth}};
+  const rpmNode = {getAttribute: (name: string) => name === 'stroke-dasharray' ? '50.26548245743669 251.32741228718345' : null, computed: {stroke: 'rgb(37, 99, 235)'}};
+  const all: Record<string, object[]> = {'overlay-speed-arc': arc ? (duplicate ? [arcNode, arcNode] : [arcNode]) : [], 'overlay-rpm-arc': rpm ? [rpmNode] : []};
+  const root = {getAttribute: () => layout, querySelectorAll: (selector: string) => all[testId(selector)] ?? [],
+    querySelector: (selector: string) => selector === '.overlay-ring' ? (svg ? {} : null) : testId(selector) === 'overlay-speed-track' && track ? {} : null};
+  return {document: {querySelector: (selector: string) => selector === '[data-testid="overlay-root"]' ? root : null},
+    getComputedStyle: (node: {computed: object}) => node.computed};
+}
+const runArcProbe = (globals: object) => JSON.parse(JSON.stringify(runInNewContext(`(${clusterSpeedArcProbe.toString()})()`, globals))) as unknown;
+describe('ET-045f cluster speed arc probe', () => {
+  const C = 2 * Math.PI * 52;
+  it('reads a drawn speed arc and the RPM arc', () => {
+    expect(runArcProbe(fakeSpeedArc())).toEqual({ok: true, layout: 'cluster', track: true,
+      arc: {r: 52, transform: 'rotate(-90 60 60)', dasharray: `${C} ${C}`, offset: 100.5309649148734, transitionProperty: 'stroke-dashoffset', transitionDuration: '0.15s', transitionTimingFunction: 'linear',
+        stroke: 'rgb(96, 165, 250)', strokeWidth: '6px'},
+      rpmArc: {dasharray: '50.26548245743669 251.32741228718345', stroke: 'rgb(37, 99, 235)'}});
+  });
+  // Review nit: a CSS stroke regression (the RPM rule's 3 px) or a lost rotation is reported as it is, so the UI shard's
+  // 6px and rotate(-90 60 60) assertions fail on it.
+  it('reports a regressed stroke width and a missing rotation as rendered', () => {
+    expect(runArcProbe(fakeSpeedArc({strokeWidth: '3px', transform: null}))).toMatchObject({ok: true, arc: {strokeWidth: '3px', transform: null}});
+    expect(runArcProbe(fakeSpeedArc({transform: 'rotate(0 60 60)'}))).toMatchObject({arc: {strokeWidth: '6px', transform: 'rotate(0 60 60)'}});
+  });
+  it('reads an absent arc as null beside the speed track', () => {
+    expect(runArcProbe(fakeSpeedArc({arc: false}))).toMatchObject({ok: true, track: true, arc: null, rpmArc: {stroke: 'rgb(37, 99, 235)'}});
+    expect(runArcProbe(fakeSpeedArc({arc: false, rpm: false}))).toMatchObject({ok: true, arc: null, rpmArc: null});
+  });
+  it('fails closed outside the Cluster, without its gauge, with a duplicated arc or an arc without its track', () => {
+    expect(runArcProbe({document: {querySelector: () => null}})).toMatchObject({ok: false, reason: 'no-gauge', layout: null, arc: null});
+    expect(runArcProbe(fakeSpeedArc({layout: 'strip'}))).toMatchObject({ok: false, reason: 'no-gauge', layout: 'strip'});
+    expect(runArcProbe(fakeSpeedArc({svg: false}))).toMatchObject({ok: false, reason: 'no-gauge'});
+    expect(runArcProbe(fakeSpeedArc({duplicate: true}))).toMatchObject({ok: false, reason: 'duplicate-arc'});
+    expect(runArcProbe(fakeSpeedArc({track: false}))).toMatchObject({ok: false, reason: 'arc-without-track', track: false});
   });
 });

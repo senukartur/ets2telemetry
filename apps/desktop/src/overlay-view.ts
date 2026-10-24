@@ -30,6 +30,8 @@ export interface OverlayItem {
   detailTestId?: string;
   /** Engine RPM ring fraction in [0, 1]. */
   ring?: number;
+  /** Speed arc fraction in [0, 1] on the speed gauge scale (ET-045f); set only on an available speed. */
+  speedRing?: number;
   unavailable: boolean;
 }
 export type OverlayTagId = 'paused' | 'no-signal' | 'stale' | 'origin';
@@ -89,7 +91,8 @@ export function overlayView(presentation: OverlayPresentation = OVERLAY_PLACEHOL
       ...(VALUE_RESERVES[section.id] ? {reserve: VALUE_RESERVES[section.id]} : {})
     };
     // Speed and fuel keep the separate number and unit of the ET-008 smoke contract; the unit stays visible beside a dash.
-    if (section.id === 'speed') return {...base, value: available ? presentation.speed : DASH, unit: translateUnit(presentation.speedUnit, language)};
+    if (section.id === 'speed') return {...base, value: available ? presentation.speed : DASH, unit: translateUnit(presentation.speedUnit, language),
+      ...(available && section.speedRing !== undefined ? {speedRing: section.speedRing} : {})};
     if (section.id === 'fuel') return {...base, value: available ? presentation.fuel : DASH, unit: translateUnit(language === 'ru' && presentation.fuelUnit === 'US gal' ? 'gal' : presentation.fuelUnit, language),
       ...(available && section.detail ? {detail: section.detail, detailTestId: 'overlay-fuel-level'} : {})};
     // ET-045d (W2): the RPM number and its unit are separate like speed and fuel, so the strip can reserve the number's

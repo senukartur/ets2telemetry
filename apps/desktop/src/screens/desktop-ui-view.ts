@@ -8,18 +8,21 @@ import {appCopy} from './app-copy';
 import type {AppLanguage} from '../../../../packages/contracts/src';
 import {initialLive} from '../live-state';
 import {DEFAULT_UNIT_PROFILES, displayGame, profileFor} from '../unit-profiles';
+import {SPEED_GAUGE_FULL_SCALE, speedGaugeFraction} from '../speed-gauge';
 /** Geometry only clamps normalized numeric readings; formatted telemetry is never parsed or replaced by demo values. */
 export const clampRatio = (value: number | null) => value === null || !Number.isFinite(value) ? null : Math.max(0, Math.min(1, value));
 export function desktopLiveView(live: LiveTelemetry | undefined, profiles: UnitProfiles = DEFAULT_UNIT_PROFILES) {
   const telemetry = live ?? initialLive(), game = displayGame(telemetry), profile = profileFor(profiles, game), units = resolveDisplayUnits(game, {profile});
   const sources = liveSources(telemetry, units), state = sources.v0State, current = sources.v0View.connection.current;
-  const speed = current && state?.speed.state === 'value' ? convertSpeed(state.speed.value, units.speed) : null;
+  const metersPerSecond = current && state?.speed.state === 'value' ? state.speed.value : null;
+  const speed = metersPerSecond === null ? null : convertSpeed(metersPerSecond, units.speed);
   const rpm = current && state?.engineRpm.state === 'value' ? state.engineRpm.value : null;
   const fuel = current && state?.fuel.state === 'value' && state.fuelCapacity.state === 'value' && state.fuelCapacity.value > 0 ? state.fuel.value / state.fuelCapacity.value : null;
-  const scaleMax = units.speed === 'mph' ? 80 : 130, speedText = speed === null ? '—' : fixed(speed, 0);
+  const scaleMax = SPEED_GAUGE_FULL_SCALE[units.speed], speedText = speed === null ? '—' : fixed(speed, 0);
   // ET-045a: the speed arc follows the displayed integer, so a reading that shows 0 draws no arc (a round line cap
   // would paint a dot that blinks as the SDK speed flickers around zero). Above 0 the ratio keeps its fractional precision.
-  const speedRatio = speed === null ? null : speedText === '0' ? 0 : clampRatio(speed / scaleMax);
+  // ET-045f: the Cluster overlay's speed arc shares this rule and scale (speed-gauge.ts).
+  const speedRatio = metersPerSecond === null ? null : speedGaugeFraction(metersPerSecond, profile) ?? null;
   return {sources, units, current, speed, speedText, rpm, scaleMax, speedRatio, rpmRatio: clampRatio(rpm === null ? null : rpm / 3000), fuelRatio: clampRatio(fuel)};
 }
 export function gaugeArc(radius: number, start: number, end: number, center = 130): string {

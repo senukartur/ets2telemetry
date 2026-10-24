@@ -2,7 +2,7 @@ import {expect, it} from 'vitest';
 import type {OverlayPresentation} from '../../packages/contracts/src';
 import {
   CLUSTER_GAUGE_SECTIONS, DEFAULT_OVERLAY_SETTINGS, enabledSectionCount, isOverlayLayout, OVERLAY_GROUPS, OVERLAY_PRESETS, OVERLAY_SECTION_IDS, OVERLAY_SECTION_REQUIREMENTS,
-  parseOverlaySections, sameSections, staleOverlay
+  isGaugeFraction, overlayGauges, parseOverlaySections, sameSections, staleOverlay
 } from '../../apps/desktop/src/overlay-sections';
 
 // Hand-written expectations (ET-012a plan, design step 2).
@@ -88,4 +88,43 @@ it('turns a presentation stale: placeholders for every shown section, same layou
   expect(staleOverlay(current)).toEqual({source: 'ATS', origin: 'game', status: 'stale', speed: '—', speedUnit: 'mph', fuel: '—', fuelUnit: 'US gal',
     freshness: 'stale', layout: 'cluster', paused: false, sections: [{id: 'speed', state: 'unavailable'}, {id: 'rpm', state: 'unavailable'}, {id: 'fuel', state: 'unavailable'}], editing: true});
   expect(current.sections[0]).toEqual({id: 'speed', state: 'value', text: '56 mph'});
+});
+
+// ET-045f: the Cluster gauge fractions are validated in main and the overlay preload with one rule.
+it('accepts only finite gauge fractions in [0, 1]', () => {
+  for (const value of [0, 0.5, 1]) expect(isGaugeFraction(value), String(value)).toBe(true);
+  for (const value of [-0.0001, 1.0001, Number.NaN, Number.POSITIVE_INFINITY, Number.NEGATIVE_INFINITY, '0.5', null, undefined, {}])
+    expect(isGaugeFraction(value), JSON.stringify(value) ?? 'undefined').toBe(false);
+});
+
+it('keeps valid gauge fractions on current speed and RPM values only, leaving everything else unchanged', () => {
+  const current: OverlayPresentation = {source: 'ETS2', origin: 'game', status: 'connected', speed: '90', speedUnit: 'km/h', fuel: '73.0', fuelUnit: 'L',
+    freshness: 'current', layout: 'cluster', paused: false, editing: false, sections: [{id: 'speed', state: 'value', text: '90 km/h', speedRing: 9 / 13},
+      {id: 'gear', state: 'value', text: 'R1'}, {id: 'rpm', state: 'value', text: '600 rpm', ring: 0.2}, {id: 'fuel', state: 'value', text: '73.0 L', detail: '73%'}]};
+  expect(overlayGauges(current)).toBe(current);
+  const at = (index: number, section: object): OverlayPresentation => ({...current, sections: current.sections.map((old, position) => position === index ? section as typeof old : old)});
+  // A fraction on another section, or out of range, is removed; the section's other fields are kept.
+  for (const [index, bad, good] of [
+    [2, {id: 'rpm', state: 'value', text: '600 rpm', ring: 0.2, speedRing: 0.5}, {id: 'rpm', state: 'value', text: '600 rpm', ring: 0.2}],
+    [0, {id: 'speed', state: 'value', text: '90 km/h', speedRing: 9 / 13, ring: 0.4}, {id: 'speed', state: 'value', text: '90 km/h', speedRing: 9 / 13}],
+    [3, {id: 'fuel', state: 'value', text: '73.0 L', detail: '73%', ring: 0.5}, {id: 'fuel', state: 'value', text: '73.0 L', detail: '73%'}],
+    [0, {id: 'speed', state: 'value', text: '90 km/h', speedRing: 2}, {id: 'speed', state: 'value', text: '90 km/h'}],
+    [0, {id: 'speed', state: 'value', text: '90 km/h', speedRing: Number.NaN}, {id: 'speed', state: 'value', text: '90 km/h'}],
+    [0, {id: 'speed', state: 'value', text: '90 km/h', speedRing: '0.5'}, {id: 'speed', state: 'value', text: '90 km/h'}],
+    [2, {id: 'rpm', state: 'value', text: '600 rpm', ring: -1}, {id: 'rpm', state: 'value', text: '600 rpm'}],
+    [2, {id: 'rpm', state: 'value', text: '600 rpm', ring: Number.POSITIVE_INFINITY}, {id: 'rpm', state: 'value', text: '600 rpm'}]
+  ] as const) {
+    const input = at(index, bad), output = overlayGauges(input);
+    expect(output, JSON.stringify(bad)).toEqual(at(index, good));
+    expect(output.sections.filter((_section, position) => position !== index)).toEqual(current.sections.filter((_section, position) => position !== index));
+    expect(input.sections[index]).toEqual(bad);
+  }
+  // Not current: no section keeps a fraction.
+  for (const freshness of ['stale', 'unavailable'] as const) expect(overlayGauges({...current, freshness})).toEqual({...current, freshness,
+    sections: [{id: 'speed', state: 'value', text: '90 km/h'}, {id: 'gear', state: 'value', text: 'R1'}, {id: 'rpm', state: 'value', text: '600 rpm'}, {id: 'fuel', state: 'value', text: '73.0 L', detail: '73%'}]});
+  // The preload's expiry carries no fraction at all.
+  expect(staleOverlay(current).sections.some(section => 'ring' in section || 'speedRing' in section)).toBe(false);
+  // Sections that are not an array pass through to the existing delivery checks unchanged.
+  const malformed = {...current, sections: 'x'} as unknown as OverlayPresentation;
+  expect(overlayGauges(malformed)).toBe(malformed);
 });

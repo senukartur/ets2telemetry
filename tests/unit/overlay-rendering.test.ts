@@ -1,3 +1,4 @@
+import {readFileSync} from 'node:fs';
 import React from 'react';
 import {renderToStaticMarkup} from 'react-dom/server';
 import {expect, it, vi} from 'vitest';
@@ -66,4 +67,36 @@ it.each(['strip', 'card', 'cluster', 'hud'] as const)('applies saved alpha only 
   }
   for (const backgroundOpacity of [undefined, 39, 101, NaN, 60.5])
     expect(overlayView({...base, layout, backgroundOpacity}).backgroundOpacity).toBe(80);
+});
+
+// ET-045f: the Cluster's speed arc on the outer track (r 52) from 12 o'clock clockwise; its dash offset is the unfilled part
+// of the circumference 2π × 52, so a fraction of 0.5 leaves half of it. No arc at 0, without a fraction or while the speed is
+// unavailable; the RPM arc keeps its static markup, and the other layouts draw no speed arc.
+const SPEED_C = 2 * Math.PI * 52, RPM_C = 2 * Math.PI * 40;
+const arcSections = (speedRing?: number): OverlayPresentation['sections'] => [{id: 'speed', state: 'value', text: '90 km/h', ...(speedRing === undefined ? {} : {speedRing})},
+  {id: 'rpm', state: 'value', text: '1500 rpm', ring: 0.5}, {id: 'fuel', state: 'value', text: '73.0 L'}];
+const renderView = (presentation: OverlayPresentation) => renderToStaticMarkup(React.createElement(OverlayContent, {view: overlayView(presentation)}));
+it('renders the Cluster speed arc on the outer track only for a positive fraction, before the RPM ring', () => {
+  const html = renderView({...base, layout: 'cluster', sections: arcSections(0.5)});
+  expect(html.match(/data-testid="overlay-speed-arc"/g)).toHaveLength(1);
+  expect(html).toContain(`<circle class="overlay-speed-arc" data-testid="overlay-speed-arc" cx="60" cy="60" r="52" transform="rotate(-90 60 60)" stroke-dasharray="${String(SPEED_C)} ${String(SPEED_C)}" style="stroke-dashoffset:${String(SPEED_C * 0.5)}"></circle>`);
+  expect(html).toContain(`<circle class="overlay-ring-value" data-testid="overlay-rpm-arc" cx="60" cy="60" r="40" transform="rotate(-90 60 60)" stroke-dasharray="${String(0.5 * RPM_C)} ${String(RPM_C)}"></circle>`);
+  const order = ['overlay-speed-track', 'overlay-speed-arc', 'overlay-rpm-track', 'overlay-rpm-arc'].map(id => html.indexOf(`data-testid="${id}"`));
+  expect(order.every((position, index) => position >= 0 && (index === 0 || position > order[index - 1]))).toBe(true);
+  for (const presentation of [{...base, layout: 'cluster' as const, sections: arcSections(0)}, {...base, layout: 'cluster' as const, sections: arcSections()},
+    {...base, layout: 'cluster' as const, freshness: 'stale' as const, speed: '—', sections: [{id: 'speed' as const, state: 'unavailable' as const}, ...arcSections().slice(1)]}]) {
+    const without = renderView(presentation);
+    expect(without).not.toContain('overlay-speed-arc');
+    expect(without).toContain('data-testid="overlay-speed-track"');
+  }
+  for (const layout of ['strip', 'card', 'hud'] as const) expect(renderView({...base, layout, sections: arcSections(0.5)}), layout).not.toContain('overlay-speed-arc');
+});
+it('eases only the speed arc over 150 ms, not under reduced motion, and colours the RPM arc with its own token', () => {
+  const css = readFileSync('apps/desktop/src/renderer.css', 'utf8'), tokens = readFileSync('apps/desktop/src/shell/overlay-tokens.css', 'utf8');
+  expect(css).toMatch(/\.overlay-speed-arc \{[^}]*stroke: var\(--yu-ov-accent\);[^}]*transition: stroke-dashoffset 150ms linear;[^}]*\}/);
+  expect(css).toMatch(/@media \(prefers-reduced-motion: reduce\) \{ \.overlay-speed-arc \{ transition: none; \} \}/);
+  expect(css.match(/transition\s*:/g)).toHaveLength(2);
+  expect(css).toMatch(/\.overlay-ring-value \{[^}]*stroke: var\(--yu-ov-rpm\);/);
+  expect(tokens).toMatch(/--yu-ov-rpm: #2563EB;/);
+  expect(tokens).toMatch(/--yu-ov-accent: #60A5FA;/);
 });

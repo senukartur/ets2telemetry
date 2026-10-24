@@ -137,11 +137,11 @@ The **Protocol v1 source** section (`live-section-source`, F5) appears last once
 
 ## Overlay
 
-ET-012a builds the overlay's sections in main through the same view model as the dashboard card, in the same per-game unit profile, so a value reads the same on both; since ET-010c both read every field through the combiner [live-sources.ts](../apps/desktop/src/live-sources.ts). The renderer receives only the formatted text ([overlay-presentation.ts](../apps/desktop/src/overlay-presentation.ts)); no `LiveTelemetry` reaches the overlay renderer (ET-008 boundary, decision L7). For ET-010c only, coordinator decision C1 supersedes L7's statement that the bridge carries v0 only; `OverlayPresentation`, the overlay preload and the overlay IPC are unchanged.
+ET-012a builds the overlay's sections in main through the same view model as the dashboard card, in the same per-game unit profile, so a value reads the same on both; since ET-010c both read every field through the combiner [live-sources.ts](../apps/desktop/src/live-sources.ts). The renderer receives only the formatted text and two validated gauge fractions in [0, 1], the RPM `ring` and, since ET-045f, the speed `speedRing` ([overlay-presentation.ts](../apps/desktop/src/overlay-presentation.ts)); no `LiveTelemetry` reaches the overlay renderer (ET-008 boundary, decision L7). For ET-010c only, coordinator decision C1 supersedes L7's statement that the bridge carries v0 only; `OverlayPresentation`, the overlay preload and the overlay IPC are unchanged.
 
 | Section | Fields | Under protocol v0 alone | With protocol v1 (ET-010c) |
 | --- | --- | --- | --- |
-| Speed | `speed` | Shown | Unchanged (v0) |
+| Speed | `speed`. Since ET-045f a current value also carries `speedRing`, the fraction of the 130 km/h or 80 mph gauge scale of the displayed profile (the Live instrument's), capped at 1; it is 0 while the displayed integer is 0 and in reverse, and absent while the speed is unavailable or not current. The Cluster draws it as the outer arc | Shown | Unchanged (v0) |
 | Gear | `gear` | Shown | Unchanged (v0) |
 | RPM | `engine-rpm`, plus a ring fraction on a fixed 0–3000 rpm scale (L12) | Shown | Unchanged (v0) |
 | Fuel | `fuel`, with `fuel-level` as detail | Shown; the percentage only while the capacity is known | Unchanged (v0) |

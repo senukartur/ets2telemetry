@@ -5,7 +5,8 @@
   --yu-ov-text: #F3F4F6;
   --yu-ov-muted: rgba(209, 213, 219, 0.72);
   --yu-ov-icon: rgba(156, 163, 175, 0.9);
-  --yu-ov-accent: #60A5FA;
+  --yu-ov-accent: #60A5FA;                 /* also the Cluster speed arc (ET-045f) */
+  --yu-ov-rpm: #2563EB;                    /* Cluster RPM arc, distinct from the speed arc (ui-spec overlay.cluster) */
   --yu-ov-fuel: #8FD3AE;
   --yu-ov-low: #E8C58A;
   --yu-ov-bad: #F3B4A4;

@@ -12,6 +12,8 @@ import './renderer.css';
 
 /** Ring geometry of the cluster's RPM gauge in SVG user units. */
 const RING_RADIUS = 40, RING_CIRCUMFERENCE = 2 * Math.PI * RING_RADIUS;
+/** The cluster's outer speed ring (ET-045f): the speed arc lies on the speed track. */
+const SPEED_RING_RADIUS = 52, SPEED_RING_CIRCUMFERENCE = 2 * Math.PI * SPEED_RING_RADIUS;
 
 /** `data-reserve` (ET-045d) lets the strip's CSS reserve the widest expected value invisibly; the text stays the value. */
 function Value({item}: {item: OverlayItem}) {
@@ -66,17 +68,22 @@ function CardLayout({view}: {view: OverlayView}) {
 }
 
 /**
- * A round speed gauge with the RPM ring and a gear badge, and the remaining sections in a side panel of fixed-height
+ * A round speed gauge with the speed arc on its outer ring (ET-045f), the RPM ring inside it and a gear badge, and the
+ * remaining sections in a side panel of fixed-height
  * rows that takes its content height (ET-012d); main reserves the window's height for the panel's rows. The gauge centre
  * (ET-045d) is a three-row grid: the gear above, the speed exactly centred and the RPM below, each capped so that it stays
  * inside the inner ring.
  */
 function Cluster({view}: {view: OverlayView}) {
-  const gauge = view.gauge, ring = gauge?.rpm?.ring ?? 0;
+  const gauge = view.gauge, ring = gauge?.rpm?.ring ?? 0, speedRing = gauge?.speed?.speedRing ?? 0;
   return <div className="overlay-cluster-body">
     {gauge ? <div className="overlay-gauge">
       <svg className="overlay-ring" viewBox="0 0 120 120" aria-hidden="true" focusable="false">
-        {gauge.speed ? <circle className="overlay-ring-track overlay-speed-track" data-testid="overlay-speed-track" cx="60" cy="60" r="52" /> : null}
+        {gauge.speed ? <circle className="overlay-ring-track overlay-speed-track" data-testid="overlay-speed-track" cx="60" cy="60" r={SPEED_RING_RADIUS} /> : null}
+        {/* ET-045f: the speed arc from 12 o'clock clockwise; its offset eases between updates (renderer.css). None at 0, in
+            reverse or without a current speed, so the round cap never paints a dot. */}
+        {gauge.speed && speedRing > 0 ? <circle className="overlay-speed-arc" data-testid="overlay-speed-arc" cx="60" cy="60" r={SPEED_RING_RADIUS} transform="rotate(-90 60 60)"
+          strokeDasharray={`${SPEED_RING_CIRCUMFERENCE} ${SPEED_RING_CIRCUMFERENCE}`} style={{strokeDashoffset: SPEED_RING_CIRCUMFERENCE * (1 - speedRing)}} /> : null}
         {gauge.rpm ? <circle className="overlay-ring-track overlay-rpm-track" data-testid="overlay-rpm-track" cx="60" cy="60" r={RING_RADIUS} /> : null}
         {/* No arc without a current reading or at 0 rpm: a round line cap would otherwise draw a dot. */}
         {ring > 0 ? <circle className="overlay-ring-value" data-testid="overlay-rpm-arc" cx="60" cy="60" r={RING_RADIUS} transform="rotate(-90 60 60)"
