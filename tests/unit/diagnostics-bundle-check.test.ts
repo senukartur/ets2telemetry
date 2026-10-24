@@ -191,3 +191,14 @@ describe('leaks and broken bundles', () => {
     const run = valid(); run.logs.main[1].facts!.where = RUN; fails(run, /run path/);
   });
 });
+
+it.each([undefined, null, '80', false, 39, 101, 65.5])('rejects missing or invalid diagnostic background opacity %j', backgroundOpacity => {
+  const parsed = JSON.parse(bundle(['USER'])) as {settings: {overlay: Record<string, unknown>}};
+  if (backgroundOpacity === undefined) delete parsed.settings.overlay.backgroundOpacity;
+  else parsed.settings.overlay.backgroundOpacity = backgroundOpacity;
+  expect(() => schemaTokens(parsed)).toThrow();
+});
+it.each([40, 65, 80, 100])('accepts the production diagnostic opacity %i', backgroundOpacity => {
+  const text = bundle(['USER'], {}, {settings: {...SETTINGS, overlay: {...SETTINGS.overlay, backgroundOpacity}}});
+  expect(() => check(text, ['USER'])).not.toThrow();
+});

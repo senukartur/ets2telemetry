@@ -1,6 +1,6 @@
 /* Overlay tokens only; independent of the main window and shadcn. */
 :root {
-  --yu-ov-panel: rgba(11, 17, 32, 0.80);   /* opacity setting scales the alpha, 40-100% */
+  --yu-ov-panel: rgba(11, 17, 32, 0.80);   /* backgroundOpacity / 100: 40–100%, default 80%; foreground opacity is independent */
   --yu-ov-border: rgba(55, 65, 81, 0.9);
   --yu-ov-text: #F3F4F6;
   --yu-ov-muted: rgba(209, 213, 219, 0.72);

@@ -187,7 +187,7 @@ try {
   result.actual = await window.evaluate(async () => ({require: typeof globalThis.require,
     process: typeof globalThis.process, keys: Object.keys(globalThis.desktop),
     frozen: Object.isFrozen(globalThis.desktop), status: await globalThis.desktop.getStatus()}));
-  assert.deepEqual(result.actual, {require: 'undefined', process: 'undefined', keys: ['getStatus', 'selectSource', 'subscribeLive', 'getAppState', 'subscribeAppState', 'exitApplication', 'setLanguage', 'setAutostart', 'setUnitProfile', 'setOverlayEnabled', 'setOverlayLayout', 'setOverlaySections',
+  assert.deepEqual(result.actual, {require: 'undefined', process: 'undefined', keys: ['getStatus', 'selectSource', 'subscribeLive', 'getAppState', 'subscribeAppState', 'exitApplication', 'setLanguage', 'setAutostart', 'setUnitProfile', 'setOverlayBackgroundOpacity', 'setOverlayEnabled', 'setOverlayLayout', 'setOverlaySections',
     'beginOverlayEdit', 'setOverlayEditScale', 'resetOverlayEditPlacement', 'finishOverlayEdit',
     'listJournalTrips', 'getJournalTrip', 'listJournalEvents', 'listJournalIntervals', 'listJournalSamples', 'exportJournalTrip',
     'retryPluginSetup', 'choosePluginFolder', 'setPluginGameExcluded', 'showPluginFile', 'openPluginFolder', 'exportDiagnostics', 'uninstallApplication', 'getHardModeStatus', 'refreshHardMode'],
@@ -608,7 +608,7 @@ finally {
     else result.history = verifyHistoryEvents(result.serviceEvents, telemetrySource && restartRecord ? [true, false] : config.scenario === 'ui' && config.uiCase === 'journal' ? [false] : [true]);
     const deliberateUiErrors = config.scenario === 'ui' && config.uiCase === 'settings' ? result.mainEvents.filter(row => row.event === 'SETTINGS_WRITE_FAILED') : [];
     if (config.scenario === 'ui' && config.uiCase === 'settings') {
-      assert.deepEqual(deliberateUiErrors.map(row => row.facts), Array.from({length: 8}, () => ({step: 'target', code: null})));
+      assert.deepEqual(deliberateUiErrors.map(row => row.facts), Array.from({length: 12}, () => ({step: 'target', code: null})));
       result.ui.saveFailureFacts = deliberateUiErrors.map(row => row.facts);
       result.ui.readOnly.mainEvents = await diagnosticEvents(config.diagnosticsRestart);
       result.ui.readOnly.serviceEvents = await diagnosticEvents(path.join(config.diagnosticsRestart, 'service'));

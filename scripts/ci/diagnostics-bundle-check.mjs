@@ -100,7 +100,7 @@ const BUNDLE_SCHEMA = object({
     language: oneOf(ENUMS.language),
     autostart: boolean,
     units: map(ENUMS.pluginGame, oneOf(ENUMS.unitProfile)),
-    overlay: object({enabled: boolean, layout: oneOf(ENUMS.overlayLayout), sections: map(ENUMS.overlaySection, boolean),
+    overlay: object({enabled: boolean, backgroundOpacity: number, layout: oneOf(ENUMS.overlayLayout), sections: map(ENUMS.overlaySection, boolean),
       placements: map(ENUMS.overlayLayout, object({x: number, y: number, scale: number}))}),
     state: oneOf(ENUMS.settingsState), writable: boolean, saveError: nullable(pattern(CODE))
   }),
@@ -152,6 +152,8 @@ export function schemaTokens(bundle) {
   walk(bundle, BUNDLE_SCHEMA, 'bundle');
   // Current settings always carry visibility; an old input cannot pass merely by omitting the new field.
   assert.equal(typeof bundle.settings?.overlay?.enabled, 'boolean', 'Bundle misses boolean bundle.settings.overlay.enabled');
+  const opacity = bundle.settings?.overlay?.backgroundOpacity;
+  assert.ok(Number.isInteger(opacity) && opacity >= 40 && opacity <= 100, 'Bundle misses valid background opacity');
   return [...tokens];
 }
 

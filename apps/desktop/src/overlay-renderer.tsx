@@ -113,7 +113,7 @@ function Hud({view}: {view: OverlayView}) {
 /** Painted content aligns inside the unchanged native capacity; the diagnostic marker stays outside. */
 export function OverlayContent({view}: {view: OverlayView}) {
   return <div className="overlay-content" data-testid="overlay-content" data-anchor-y={view.contentAnchorY}
-      style={{top: view.contentAnchorY * 100 + '%', transform: 'translateY(-' + view.contentAnchorY * 100 + '%)'}}>
+      style={{'--yu-ov-panel': `rgba(11, 17, 32, ${view.backgroundOpacity / 100})`, top: view.contentAnchorY * 100 + '%', transform: 'translateY(-' + view.contentAnchorY * 100 + '%)'} as React.CSSProperties}>
     {view.layout === 'card' ? <CardLayout view={view} /> : view.layout === 'cluster' ? <Cluster view={view} /> : view.layout === 'hud' ? <Hud view={view} /> : <Strip view={view} />}
     </div>;
 }
