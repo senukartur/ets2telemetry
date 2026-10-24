@@ -120,7 +120,11 @@ export const LAYOUT_SMOKE_ZOOM = 0.7;
  * ET-045d cluster's 225 px viewport for a 159 DIP window (227.14) and a two-DIP error (2.86) still fail.
  */
 export const zoomedViewportTolerance = zoom => 1 / zoom + 0.5;
-/** The overlay window Windows applied for a smoke resize: within one DIP below and two DIP above the requested size. */
+/**
+ * The overlay window Windows applied for a smoke resize: within one DIP below and two DIP above the requested size. Only
+ * +1 DIP was observed (150%); the second DIP is a margin for other fractional scales. Containment stays exact against
+ * the reserved content height, and the viewport is checked against the actual content size, not the request.
+ */
 export function verifyAppliedWindow(requested, actual) {
   const near = (value, wanted) => Number.isFinite(value) && value >= wanted - 1 && value <= wanted + 2;
   assert.ok(actual && near(actual.width, requested.width) && near(actual.height, requested.height),

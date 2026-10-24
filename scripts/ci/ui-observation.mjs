@@ -106,8 +106,9 @@ function cssDisplayGeometry() {
 }
 // ET-045d stable numbers and Cluster containment. The probes write texts into the rendered overlay and restore them
 // (renderer-observation.mjs). ET-045e: the zoom and window frames are the zoom factors of the overlay's 100%, 50% and
-// 300% settings (overlayZoom: 0.7, 0.35 and 2.1), every window at least 60 DIP high and the 50% Cluster at least 160 wide,
-// because Windows keeps a window above an unmeasured minimum size. The first strip frame and the second Cluster frame are
+// 300% settings (overlayZoom: 0.7, 0.35 and 2.1). The 50% probe frames (strip 640 × 60, Cluster 160 × 100) are probe
+// sizes with margin, not product windows; Windows accepted the smaller 50% product windows (SCALE_RANGE_FRAMES, Cluster
+// 154 × 95) in the fix-round smokes. The first strip frame and the second Cluster frame are
 // the 100% ones; the probes restore the layout loop's own frame (`dimensions` at zoom 1) afterwards.
 const SPEED_UNITS = {en: ['km/h', 'mph'], ru: ['км/ч', 'миль/ч']}, RPM_UNIT = {en: 'rpm', ru: 'об/мин'};
 const STRIP_FRAMES = [{zoom: 0.7, width: 1280, height: 80}, {zoom: 0.35, width: 640, height: 60}, {zoom: 2.1, width: 1000, height: 720}];
@@ -250,8 +251,8 @@ function textBoxes() {
     .map(node => ({kind: String(node.className).split(' ')[0], text: node.textContent, width: node.getBoundingClientRect().width}));
 }
 /**
- * ET-045e (decision Z8): every layout in the selected language at the 50% setting, zoom 0.35, at least its product window
- * (SCALE_RANGE_FRAMES). Every shown section must lie inside the window with the content aligned; this gates the
+ * ET-045e (decision Z8): every layout in the selected language at the 50% setting, zoom 0.35, in its product window
+ * (SCALE_RANGE_FRAMES; only the strip is raised to the measured 38 DIP minimum height). Every shown section must lie inside the window with the content aligned; this gates the
  * `scaleRange` flag. Chromium applies its minimum font size before the zoom for explicit px sizes, so text should shrink
  * with the zoom: the CSS width of each value, label and unit box with the same text is compared with the 100% product
  * window (zoom 0.7), and a ratio above 1.01 is recorded as an enlargement, never asserted. In English the six
