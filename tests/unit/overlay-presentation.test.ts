@@ -72,6 +72,26 @@ it('keeps the speed section text equal to the legacy speed number and unit', () 
   expect(presentation.speed).toBe('90');
 });
 
+// ET-045d: the digit-count transitions the strip must absorb without a jump, hand-computed from each profile's rounding to
+// whole numbers (toFixed(0), so 9.5 rounds up): 2.5 m/s is 9 km/h, 10/3.6 m/s 10 km/h, 27.5 m/s 99 km/h and 100/3.6 m/s
+// 100 km/h; 4.02336 m/s is 9 mph, 4.4704 m/s 10 mph, 44.25696 m/s 99 mph and 44.704 m/s 100 mph. Reverse is negative.
+it.each([
+  ['metric', [[0, '0'], [2.5, '9'], [10 / 3.6, '10'], [27.5, '99'], [100 / 3.6, '100'], [-1.3889, '-5']], 'km/h'],
+  ['us-customary', [[0, '0'], [4.02336, '9'], [4.4704, '10'], [44.25696, '99'], [44.704, '100'], [-2.2352, '-5']], 'mph']
+] as const)('formats the speed digit-count transitions in the %s profile and RPM 999 and 1000', (profile, rows, unit) => {
+  for (const [metersPerSecond, number] of rows) {
+    const current = live(), state = current.observation!.state;
+    state.speed = {available: true, value: metersPerSecond, unit: 'm/s'};
+    const presentation = overlayPresentation(current, {ets2: profile, ats: profile});
+    expect(presentation.speed, String(metersPerSecond)).toBe(number);
+    expect(presentation.sections[0], String(metersPerSecond)).toEqual({id: 'speed', state: 'value', text: `${number} ${unit}`});
+  }
+  for (const [rpm, text] of [[999, '999 rpm'], [1000, '1000 rpm']] as const) {
+    const current = live(); current.observation!.state.engineRpm = {available: true, value: rpm, unit: 'rpm'};
+    expect(overlayPresentation(current, {ets2: profile, ats: profile}).sections.find(section => section.id === 'rpm')).toEqual({id: 'rpm', state: 'value', text, ring: rpm / 3000});
+  }
+});
+
 it('shows zero speed and zero fuel as values, distinct from an unavailable dash', () => {
   const current = live(), state = current.observation!.state;
   state.fuel = {available: true, value: 0, unit: 'L'};

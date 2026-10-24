@@ -30,3 +30,27 @@ it.each(['en', 'ru'] as const)('renders exactly one visible speed number/unit an
   const missing = renderToStaticMarkup(React.createElement(LiveDashboard, {live, units: undefined, language}));
   expect(missing).toContain(language === 'en' ? 'aria-label="Speed: unavailable;' : 'aria-label="Скорость: недоступно;');
 });
+
+// ET-045d: the strip's stable widths come from data-reserve on the value element, while the value's text stays exactly the
+// number (the reserve is CSS content); the RPM unit is its own element, and the cluster gauge marks its RPM track.
+it.each(['en', 'ru'] as const)('renders reserves beside exact value texts and a separate RPM unit in %s', language => {
+  const sections: OverlayPresentation['sections'] = [{id: 'speed', state: 'value', text: '9 km/h'}, {id: 'gear', state: 'value', text: 'N'},
+    {id: 'rpm', state: 'value', text: '999 rpm', ring: 0.333}, {id: 'fuel', state: 'value', text: '73.0 L'}];
+  const unit = language === 'en' ? 'rpm' : 'об/мин';
+  for (const layout of ['strip', 'card', 'cluster', 'hud'] as const) {
+    const html = renderToStaticMarkup(React.createElement(OverlayContent, {view: overlayView({...base, layout, language, speed: '9', sections})}));
+    expect(html, layout).toContain('<strong class="overlay-value" data-testid="overlay-speed" data-reserve="000">9</strong>');
+    expect(html, layout).toContain('<strong class="overlay-value" data-testid="overlay-gear" data-reserve="R0">N</strong>');
+    expect(html, layout).toContain('<strong class="overlay-value" data-testid="overlay-rpm" data-reserve="0000">999</strong>');
+    expect(html, layout).toContain(`<span class="overlay-unit" data-testid="overlay-rpm-unit">${unit}</span>`);
+    expect(html, layout).toContain('<strong class="overlay-value" data-testid="overlay-fuel">73.0</strong>');
+    expect(html.match(/data-reserve=/g), layout).toHaveLength(3);
+  }
+  const cluster = renderToStaticMarkup(React.createElement(OverlayContent, {view: overlayView({...base, layout: 'cluster', language, speed: '9', sections})}));
+  expect(cluster).toContain('data-testid="overlay-rpm-track"');
+  const centre = /<div class="overlay-gauge-centre">(.*?)<\/div><\/div><div class="overlay-surface overlay-panel">/.exec(cluster)?.[1] ?? '';
+  expect([...centre.matchAll(/<div class="(overlay-gauge-[a-z]+)" data-testid="(overlay-section-[a-z]+)"/g)].map(match => [match[1], match[2]]))
+    .toEqual([['overlay-gauge-speed', 'overlay-section-speed'], ['overlay-gauge-gear', 'overlay-section-gear'], ['overlay-gauge-rpm', 'overlay-section-rpm']]);
+  const speedOnly = renderToStaticMarkup(React.createElement(OverlayContent, {view: overlayView({...base, layout: 'cluster', language, speed: '9', sections: sections.slice(0, 1)})}));
+  expect(speedOnly).toContain('data-testid="overlay-speed-track"'); expect(speedOnly).not.toContain('overlay-rpm-track');
+});
