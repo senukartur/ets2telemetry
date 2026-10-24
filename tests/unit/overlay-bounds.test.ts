@@ -23,7 +23,7 @@ const JOB_FOCUS = {x: 2601, y: 1152, width: 640, height: 40};
 const DRIVING_ONLY = {x: 2601, y: 1171, width: 640, height: 21};
 const CLIENT = {x: 2560 / SCALE, y: 240, width: 2560 / SCALE, height: 960};
 
-type Mode = 'faithful' | 'ignore-first-shrink' | 'min-height-40' | 'inflate-clamp-38' | 'deferred' | 'refuse-all';
+type Mode = 'faithful' | 'ignore-first-shrink' | 'min-height-40' | 'inflate-clamp-38' | 'ignore-position' | 'deferred' | 'refuse-all';
 interface Report {event: string; facts: Record<string, string | number>}
 
 function live(): LiveTelemetry {
@@ -43,7 +43,8 @@ function live(): LiveTelemetry {
  * A window whose setBounds Windows may apply differently, as the owner's evidence showed: `faithful` applies it;
  * `ignore-first-shrink` applies x, y and width but keeps the height on the first call that lowers it (H-stale);
  * `min-height-40` never goes below `minHeight`, 40 DIP unless a test changes it (H-min); `inflate-clamp-38` adds 1 DIP of
- * rounding to the width and never goes below 38 DIP, as the ET-045c probe measured at 150%; `deferred` reports the previous rectangle on the first read after
+ * rounding to the width and never goes below 38 DIP, as the ET-045c probe measured at 150%; `ignore-position` applies the
+ * size but keeps the position; `deferred` reports the previous rectangle on the first read after
  * the first setBounds; `refuse-all` keeps the window where it is. getBounds() always returns the window's actual bounds.
  */
 function fakeWindow(initial: DipRect = {x: 0, y: 0, width: 640, height: 59}) {
@@ -56,6 +57,7 @@ function fakeWindow(initial: DipRect = {x: 0, y: 0, width: 640, height: 59}) {
       calls.push('setBounds');
       const previous = {...state.bounds};
       if (state.mode === 'refuse-all') return;
+      if (state.mode === 'ignore-position') {state.bounds = {...previous, width: requested.width, height: requested.height}; return;}
       if (state.mode === 'ignore-first-shrink' && !state.shrinkIgnored && requested.height < previous.height) {
         state.shrinkIgnored = true; state.bounds = {x: requested.x, y: requested.y, width: requested.width, height: previous.height}; return;
       }
@@ -126,6 +128,8 @@ it('reproduces the owner case in edit mode: a shrink Windows did not apply is re
   expect(t.state.bounds).toEqual(DRIVING_ONLY);
   expect(DRIVING_ONLY.y + DRIVING_ONLY.height).toBeLessThanOrEqual(CLIENT.y + CLIENT.height);
   expect(t.state.visible).toBe(true); expect(t.calls.slice(from).filter(call => call === 'showInactive')).toHaveLength(1);
+  // Review round 2: the hidden window is re-applied while still hidden and shown only once its rectangle is accepted.
+  expect(t.calls.indexOf('showInactive', from)).toBeGreaterThan(t.calls.lastIndexOf('setBounds'));
   raisedAfterLastSetBounds(t); noActivation(t);
   expect(t.mismatches()).toHaveLength(1);
   expect(t.mismatches()[0].facts).toMatchObject({mode: 'edit', outcome: 'reapplied', attempts: 1, reqX: 2601, reqY: 1171, reqW: 640, reqH: 21,
@@ -328,4 +332,73 @@ it('logs a repeated mismatch once and bounds the distinct mismatch lines per lau
   }
   expect(t.mismatches()).toHaveLength(BOUNDS_MISMATCH_REPORT_LIMIT);
   expect(t.reports.filter(report => report.event === 'OVERLAY_BOUNDS_SET')).toHaveLength(31);
+});
+
+// Review round 2. A hidden window is never shown before a rectangle is accepted, so a refused one does not flash over the
+// game at a wrong size before it hides.
+it('never shows a hidden window whose rectangle Windows refuses', () => {
+  const t = setup(); drivingJobFocus(t);
+  t.metadata.foreground = false; t.overlay.update(t.current); expect(t.state.visible).toBe(false);
+  t.setMode('refuse-all'); t.metadata.x -= 300; t.metadata.foreground = true; const from = t.calls.length;
+  t.overlay.update(t.current);
+  // Request {2401, 1152, 640, 40}, two re-applies; the size is unchanged, so there is nothing to fit.
+  expect(t.calls.slice(from)).toEqual(['setBounds', 'setBounds', 'setBounds']);
+  expect(t.window.showInactive).toHaveBeenCalledOnce(); expect(t.state.visible).toBe(false);
+  expect(t.mismatches().map(report => report.facts)).toEqual([expect.objectContaining({mode: 'driving', outcome: 'hidden', reqX: 2401, actX: 2601})]);
+});
+
+// Review round 2. A fail-closed driving hide recovers on the next distinct game client observation and never churns
+// while nothing changes. Windows first applies the size but not the position.
+it('recovers a position-only refusal when the game returns to the front, with no setBounds while nothing changes', () => {
+  const t = setup(); drivingJobFocus(t);
+  t.setMode('ignore-position'); t.metadata.x -= 300; let from = t.calls.length;
+  t.overlay.update(t.current);
+  expect(setBoundsSince(t.calls, from)).toBe(3); expect(t.state.visible).toBe(false); expect(t.state.bounds).toEqual(JOB_FOCUS);
+  // Window reports renew with the same client rectangle: nothing is set again.
+  from = t.calls.length;
+  for (let report = 1; report <= 5; report++) t.overlay.update({...t.current, observation: {...t.current.observation!, windowReceivedMonotonicMs: report * 100}});
+  expect(t.calls.slice(from)).toEqual([]);
+  // The mismatch clears; the game leaves the front and returns, a distinct observation: one bounded re-verification.
+  t.setMode('faithful'); t.metadata.foreground = false; t.overlay.update(t.current); expect(t.calls.slice(from)).toEqual([]);
+  t.metadata.foreground = true; t.overlay.update(t.current);
+  expect(t.state.bounds).toEqual({...JOB_FOCUS, x: 2401}); expect(t.state.visible).toBe(true);
+  expect(setBoundsSince(t.calls, from)).toBe(1);
+  expect(t.calls.indexOf('showInactive', from)).toBeGreaterThan(t.calls.lastIndexOf('setBounds')); raisedAfterLastSetBounds(t); noActivation(t);
+  expect(t.mismatches().map(report => report.facts.outcome)).toEqual(['hidden', 'reapplied']);
+  from = t.calls.length; t.overlay.update(t.current); t.overlay.update(t.current); expect(t.calls.slice(from)).toEqual([]);
+});
+
+it.each(['restored', 'moved', 'reloaded', 're-enabled'] as const)('recovers a refusal that clears on its own once the game client is %s', trigger => {
+  const t = setup(); drivingJobFocus(t);
+  t.setMode('refuse-all'); t.metadata.x -= 300; t.overlay.update(t.current); expect(t.state.visible).toBe(false);
+  t.setMode('faithful'); let from = t.calls.length;
+  t.overlay.update(t.current); t.overlay.update(t.current); expect(t.calls.slice(from)).toEqual([]);
+  from = t.calls.length;
+  if (trigger === 'restored') {t.metadata.minimized = true; t.overlay.update(t.current); t.metadata.minimized = false; t.overlay.update(t.current);}
+  // 3 physical px are 2 DIP: a new request {2403, 1152, 640, 40}.
+  if (trigger === 'moved') {t.metadata.x += 3; t.overlay.update(t.current);}
+  if (trigger === 'reloaded') {t.overlay.loaded(false); t.overlay.loaded(true);}
+  if (trigger === 're-enabled') {t.overlay.setEnabled(false); t.overlay.setEnabled(true);}
+  expect(t.state.visible).toBe(true); expect(t.state.bounds).toEqual({...JOB_FOCUS, x: trigger === 'moved' ? 2403 : 2401});
+  expect(setBoundsSince(t.calls, from)).toBe(1);
+  from = t.calls.length; t.overlay.update(t.current); expect(t.calls.slice(from)).toEqual([]);
+});
+
+it('logs a hide once per refused request and recovers an edit refusal when the edit overlay may show again', () => {
+  const t = setup(); drivingJobFocus(t);
+  t.setMode('refuse-all');
+  // Two refused requests with the same size difference: each hide is logged, once.
+  t.metadata.x -= 300; t.overlay.update(t.current); t.overlay.update(t.current);
+  t.metadata.x -= 30; t.overlay.update(t.current);
+  expect(t.mismatches().map(report => [report.facts.outcome, report.facts.reqX])).toEqual([['hidden', 2401], ['hidden', 2381]]);
+  t.metadata.foreground = false;
+  expect(t.overlay.beginEdit(true)).toMatchObject({placement: 'too-large'}); expect(t.window.showInactive).toHaveBeenCalledOnce();
+  t.setMode('faithful'); let from = t.calls.length;
+  t.overlay.update(t.current); expect(t.calls.slice(from)).toEqual([]);
+  // The dashboard loses and regains the front: the edit overlay may show again and verifies once more.
+  t.overlay.setOwnForeground(false); from = t.calls.length; t.overlay.setOwnForeground(true);
+  expect(t.overlay.editState()).toEqual({active: true, layout: 'strip', scale: 0.5, placement: 'visible'});
+  expect(t.state.visible).toBe(true); expect(setBoundsSince(t.calls, from)).toBe(1);
+  expect(t.calls.indexOf('setIgnoreMouseEvents(false)', from)).toBeLessThan(t.calls.indexOf('setBounds', from));
+  expect(t.calls.indexOf('showInactive', from)).toBeGreaterThan(t.calls.lastIndexOf('setBounds'));
 });

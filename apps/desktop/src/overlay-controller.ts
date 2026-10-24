@@ -103,10 +103,11 @@ const sameEditState = (left: OverlayEditState | undefined, right: OverlayEditSta
  * Every hide happens before the window becomes click-through again, and the taskbar tab is never left enabled.
  *
  * Verified bounds (ET-045c): a requested rectangle is checked against the window's actual bounds after it is set and on
- * every later placement. A mismatch beyond one DIP per edge is applied again up to twice, after an inactive show if the
- * window was still hidden; a window that keeps another size is placed at that size by the same fractions when it fits;
- * otherwise the overlay hides fail-closed for that request, which edit mode reports as `too-large`. The saved placement
- * and the draft never change. While the user drags the edit overlay nothing is verified.
+ * every later placement. A mismatch beyond one DIP per edge is applied again up to twice, still hidden if the window was
+ * hidden; a window that keeps another size is placed at that size by the same fractions when it fits; otherwise the
+ * overlay hides fail-closed for that request, which edit mode reports as `too-large`, until a distinct game client
+ * observation re-arms it. The window shows only once a rectangle is accepted. The saved placement and the draft never
+ * change. While the user drags the edit overlay nothing is verified.
  */
 export class OverlayController {
   private live?: LiveTelemetry;
@@ -122,6 +123,8 @@ export class OverlayController {
   private fit?: FitContext;
   private readonly boundsReport: (event: OverlayBoundsEvent, facts: OverlayBoundsFacts) => void;
   private readonly mismatchKeys = new Set<string>();
+  /** The last game client observation that could show the overlay; undefined while a gate keeps it hidden. */
+  private observedClient?: string;
   private physical?: PhysicalClientBounds;
   private topologyReceipt?: string;
   private placement: OverlayPlacement;
@@ -272,6 +275,18 @@ export class OverlayController {
   private forgetBounds(): void {
     this.requested = this.accepted = this.physical = this.fit = undefined; this.verification = freshVerification();
   }
+  /**
+   * ET-045c recovery: a fail-closed request gets one more bounded verification on the next distinct game client
+   * observation. That is a changed client rectangle, or a gate that opens again: the game back in front or restored, a
+   * fresh window report after an expired one, the overlay enabled or loaded again, or the edit overlay allowed to show
+   * again. Equal observations re-arm nothing, so a refused request sets no bounds while nothing changes.
+   */
+  private observeClient(physical: PhysicalClientBounds | undefined): void {
+    const key = physical && `${physical.x},${physical.y},${physical.width},${physical.height}`;
+    if (key === this.observedClient) return;
+    this.observedClient = key;
+    if (this.verification.refused) this.verification = freshVerification();
+  }
   private topologyPending(): boolean {return this.topologyReceipt !== undefined && this.topologyReceipt === this.receipt();}
   private reportEdit(): void {
     const state = this.editState();
@@ -292,8 +307,8 @@ export class OverlayController {
   // level lost while hidden or moved cannot leave the overlay behind the game. A visible overlay is
   // checked on each update and restored if something external cleared WS_EX_TOPMOST.
   // A re-apply after verification (ET-045c) is a placement change: it re-asserts topmost after the last setBounds.
-  private present(moved: boolean, shownNow = false): void {
-    const shown = shownNow || !this.visible;
+  private present(moved: boolean): void {
+    const shown = !this.visible;
     if (!this.visible) this.showWindow();
     const lost = !this.window.isAlwaysOnTop();
     if (lost && !this.topmostLossReported) {this.topmostLossReported = true; this.topmostLost(shown ? 'show' : 'visible');}
@@ -309,14 +324,15 @@ export class OverlayController {
   }
   /**
    * Sets a changed request, then verifies the window's actual bounds against the accepted rectangle (ET-045c). A
-   * mismatch is applied again up to BOUNDS_REAPPLY_LIMIT times, after an inactive show in the same task if the window
-   * was meant to show but is still hidden. A window that keeps another size is then placed once at that size by the
-   * same fractions, if that fits and lies on a display. When nothing matches inside the client the overlay hides, and
-   * this request is not set again until it or what it was computed from changes. Returns whether the overlay shows.
+   * mismatch is applied again up to BOUNDS_REAPPLY_LIMIT times. A window that keeps another size is then placed once at
+   * that size by the same fractions, if that fits and lies on a display. A hidden window stays hidden throughout: it is
+   * shown, with the topmost re-assertion, only once a rectangle is accepted, so it never flashes at a wrong size. When
+   * nothing matches inside the client the overlay hides, and this request is not set again until it changes or a
+   * distinct game client observation re-arms it (observeClient). Returns whether the overlay shows.
    */
   private applyVerified(requested: DipRect, fit: FitContext): boolean {
     this.fit = fit;
-    let applied = false, shown = false;
+    let applied = false;
     if (!this.requested || !sameRect(requested, this.requested)) {
       this.window.setBounds(requested); applied = true;
       this.requested = this.accepted = requested; this.verification = freshVerification();
@@ -327,7 +343,6 @@ export class OverlayController {
       const first = actual;
       while (verification.attempts < BOUNDS_REAPPLY_LIMIT && !nearRect(actual, accepted)) {
         verification.attempts++;
-        if (!this.visible) {this.showWindow(); shown = true;}
         this.window.setBounds(accepted); applied = true;
         actual = this.window.getBounds();
       }
@@ -344,7 +359,10 @@ export class OverlayController {
       }
       const matched = nearRect(actual, accepted) && insideClient(actual, fit.client);
       outcome = !matched ? 'hidden' : sameRect(accepted, requested) ? 'reapplied' : 'fitted';
-      const key = `${fit.mode}|${outcome}|${first.width - requested.width}|${first.height - requested.height}`;
+      // A hide is logged once per request; the other outcomes once per size difference, so a deterministic minimum
+      // height logs once. Both stay within the per-launch limit.
+      const key = outcome === 'hidden' ? `${fit.mode}|hidden|${requested.x},${requested.y},${requested.width},${requested.height}`
+        : `${fit.mode}|${outcome}|${first.width - requested.width}|${first.height - requested.height}`;
       if (!this.mismatchKeys.has(key) && this.mismatchKeys.size < BOUNDS_MISMATCH_REPORT_LIMIT) {
         this.mismatchKeys.add(key); this.reportBounds('OVERLAY_BOUNDS_MISMATCH', outcome, requested, first, fit);
       }
@@ -354,7 +372,7 @@ export class OverlayController {
         return false;
       }
     }
-    this.present(applied, shown);
+    this.present(applied);
     if (applied) this.reportBounds('OVERLAY_BOUNDS_SET', outcome, requested, actual, fit);
     return true;
   }
@@ -370,11 +388,13 @@ export class OverlayController {
   }
   private place(): void {
     if (this.window.isDestroyed()) return;
-    if (!this.enabled) {this.hide(); return;}
+    if (!this.enabled) {this.hide(); this.observeClient(undefined); return;}
     if (!this.moving) this.syncZoom();
     if (this.edit) {this.placeEditing(this.edit); return;}
     const physical = this.live && currentGameClientBounds(this.live);
-    if (!this.ready || !physical || this.topologyPending()) {this.hide(); return;}
+    const open = this.ready && physical !== undefined && !this.topologyPending();
+    this.observeClient(open ? physical : undefined);
+    if (!open || !physical) {this.hide(); return;}
     // The same client area: the window is only verified again (ET-045c), which sets nothing while it matches.
     if (this.requested && this.fit && this.physical && Object.keys(physical).every(key => physical[key as keyof PhysicalClientBounds] === this.physical![key as keyof PhysicalClientBounds])) {
       this.applyVerified(this.requested, this.fit); return;
@@ -408,6 +428,7 @@ export class OverlayController {
         status = this.ownForeground && !gameForeground(this.live!) ? 'visible' : 'not-foreground';
       }
     }
+    this.observeClient(status === 'visible' && bounds ? physical : undefined);
     if (status !== 'visible' || !bounds) this.hide();
     else if (!this.moving && !this.showInteractive(bounds, {layout: edit.layout, client: this.client!, placement: edit.draft, mode: 'edit'})) {
       // Windows did not apply the draft's rectangle (ET-045c): reported as the existing fit refusal, with no IPC change.
