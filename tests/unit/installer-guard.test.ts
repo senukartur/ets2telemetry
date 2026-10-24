@@ -1,5 +1,6 @@
 import {execFile} from 'node:child_process';
 import {createHash} from 'node:crypto';
+import {existsSync} from 'node:fs';
 import {mkdir, readdir, readFile, realpath, rm, writeFile} from 'node:fs/promises';
 import path from 'node:path';
 import {fileURLToPath} from 'node:url';
@@ -635,6 +636,48 @@ describe('data root of a blocked in-app uninstall', () => {
     const withNotes = {...BEFORE, 'data\\notes.txt': file('3'.repeat(64))};
     expect(outcome(() => checkDataRootUnchanged(withNotes, {...withNotes, 'data\\notes.txt': file('4'.repeat(64))}))).toBe('DATA_ROOT_ENTRY_CHANGED data\\notes.txt');
   });
+});
+
+// ET-045h fix round 1 (REG-013, REG-017): the hosted run 40134013831 failed right after links-install-0.1.0, because
+// Assert-ProductLinks called `Split-Path -LiteralPath ... -Parent`, which no parameter set accepts; `-Plan` never runs the
+// helpers. tests/windows/Test-InstallerLinkHelpers.ps1 loads the harness's shortcut helpers from its AST and runs them
+// against fake Desktop and Start menu folders in a temporary folder, with Invoke-Driver replaced by a recorder, under
+// Windows PowerShell 5.1 and, where installed (the hosted runner), PowerShell 7. No installer, registry write or real
+// folder is used; Read-UninstallEntries only reads HKCU and finds nothing for a run root in the temporary folder.
+describe('harness shortcut helpers at runtime (ET-045h)', () => {
+  const checkout = fileURLToPath(new URL('../..', import.meta.url));
+  const systemRoot = process.env.SystemRoot ?? 'C:\\Windows';
+  const pwsh = (process.env.PATH ?? '').split(path.delimiter).map(folder => path.join(folder, 'pwsh.exe')).find(file => existsSync(file));
+  const shells: [string, string][] = [['Windows PowerShell 5.1', path.join(systemRoot, 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe')]];
+  if (pwsh) shells.push(['PowerShell 7', pwsh]);
+  it.each(shells)('runs the shortcut helpers under %s', async (_name, shell) => {
+    const resources = await temporaryResources();
+    try {
+      const root = path.join(resources.directory, 'helpers');
+      await mkdir(root);
+      const {stdout} = await promisify(execFile)(shell, ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File',
+        path.join(checkout, 'tests', 'windows', 'Test-InstallerLinkHelpers.ps1'), '-Harness', path.join(checkout, 'scripts', 'installer', 'Invoke-InstallerLifecycle.ps1'),
+        '-Root', root], {encoding: 'utf8', timeout: 60000, windowsHide: true});
+      const result = JSON.parse(stdout.trim().split(/\r?\n/).at(-1)!) as Record<string, unknown>;
+      expect(result).toMatchObject({
+        rowsInstalled: ['desktop||Yukon Union Telemetry', 'start-menu|Artur Sianiuk|Yukon Union Telemetry'],
+        linkFolders: {desktop: path.join(root, 'Desktop'), startMenu: path.join(root, 'Programs', 'Artur Sianiuk')},
+        linksCall: {command: 'links', arguments: ['install-0.1.0', 'installed', 'desktop||Yukon Union Telemetry', 'start-menu|Artur Sianiuk|Yukon Union Telemetry'],
+          timeoutMs: 30000},
+        rowsWithOrphans: ['desktop||ETS2Telemetry Desktop', 'desktop||Yukon Union Telemetry', 'start-menu|Artur Sianiuk|ETS2Telemetry Desktop',
+          'start-menu|Artur Sianiuk|Yukon Union Telemetry'],
+        plantExists: 'PLANT_TARGET_EXISTS before again',
+        notRemoved: 'LEGACY_SHORTCUT_NOT_REMOVED after install-again-0.1.0',
+        orphansRemoved: 'ACCEPTED', plantedAfterAssert: 0,
+        decoyKept: 'ACCEPTED', decoyDeleted: true, decoyChanged: 'FOREIGN_SHORTCUT_CHANGED after decoy',
+        cleanupRemovedPlanted: true, cleanupKeptChanged: true, cleanupFailure: null,
+        hostedOnly: 'LEGACY_NAMES_HOSTED_ONLY before local',
+        uninstallEntries: [],
+        steps: ['shortcuts-install-0.1.0', 'legacy-names-before-install-again-0.1.0', 'legacy-names-install-again-0.1.0', 'legacy-names-decoy',
+          'legacy-names-before-complete-running']
+      });
+    } finally {await resources.dispose();}
+  }, 90000);
 });
 
 describe('harness Job bounds', () => {

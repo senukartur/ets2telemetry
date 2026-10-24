@@ -349,7 +349,8 @@ function Assert-ProductLinks([string]$Label, [bool]$Installed) {
     Invoke-Driver 'links' (@($Label, $expectation) + $rows) 30000
     if ($expectation -eq 'installed' -and $null -eq $script:linkFolders) {
         $folders = @{}
-        foreach ($row in (Find-ProductLinkFiles)) { if ($row.name -ceq 'Yukon Union Telemetry') { $folders[$row.location] = Split-Path -LiteralPath $row.file -Parent } }
+        # [IO.Path]::GetDirectoryName, not Split-Path: -LiteralPath and -Parent are in different parameter sets (hosted run 40134013831).
+        foreach ($row in (Find-ProductLinkFiles)) { if ($row.name -ceq 'Yukon Union Telemetry') { $folders[$row.location] = [IO.Path]::GetDirectoryName($row.file) } }
         if ($folders.Count -ne 2) { throw ('PRODUCT_SHORTCUT_FOLDERS_UNKNOWN after ' + $Label) }
         $script:linkFolders = $folders
     }
@@ -436,6 +437,15 @@ function Assert-LegacyNames([string]$Label, [string]$Planted) {
         [void]$script:plantedLinks.Remove($row)
     }
     $script:report.steps += ,[ordered]@{step=('legacy-names-' + $Label); ownedRemoved=$removed; decoysKept=$kept}
+}
+function Remove-PlantedLinks {
+    # ET-045h, in the finally block: an old-name shortcut this run planted and a hook did not remove is deleted, but only
+    # with its planted bytes; a changed or foreign file stays. A failure is recorded and never stops the cleanup.
+    foreach ($row in @($script:plantedLinks)) {
+        try {
+            if ((Test-Path -LiteralPath $row.file -PathType Leaf) -and (Get-FileHash -LiteralPath $row.file -Algorithm SHA256).Hash -ceq $row.sha256) { Remove-Item -LiteralPath $row.file }
+        } catch { $script:report.plantedLinkCleanupFailure = $_.Exception.Message }
+    }
 }
 function Get-VendorHelper([string]$Version) {
     # Squirrel's helper of the installed version, before an uninstall: the only executable its residue may keep.
@@ -614,12 +624,7 @@ try {
 } catch {
     $report.failure = $_.Exception.Message
 } finally {
-    # ET-045h: an old-name shortcut this run planted and a hook did not remove is deleted, but only with its planted bytes.
-    foreach ($row in @($plantedLinks)) {
-        try {
-            if ((Test-Path -LiteralPath $row.file -PathType Leaf) -and (Get-FileHash -LiteralPath $row.file -Algorithm SHA256).Hash -ceq $row.sha256) { Remove-Item -LiteralPath $row.file }
-        } catch { $report.plantedLinkCleanupFailure = $_.Exception.Message }
-    }
+    Remove-PlantedLinks
     if ($guarded) {
         # Keep the Squirrel logs and the application diagnostics before R is deleted; binaries and databases stay out of the upload.
         try {
