@@ -1172,7 +1172,7 @@ The owner requested smaller ordinary overlay values, bottom attachment, removal 
 
 The owner requested a dedicated Hard Mode page between Live and Journal and clarified that all information belongs inline, removing the need for the checklist drawer. This supersedes the October 21 drawer presentation requirement only. The Live instrument spans the available content width; the global status and dashboard-lifetime observer remain. Preserve all twelve conditions, detected/required/state/reason/cvar evidence, source/age, first loss, bounded refresh and read-only/manual-delivery caveats in EN/RU. Navigation cannot restore qualification. UI work follows ui-ux-pro-max guidance within the existing Yukon design system. See [ET-047 validation](docs/validation/et-047.md) for actual checks and pending acceptance; no merge/release or real-history enablement is implied.
 
-## ET-045d overlay numbers and typography — October 2026
+## ET-045d overlay numbers and typography — October 24, 2026
 
 At the owner's ET-045 request (items 7, 8 and 2, October 23–24, 2026), under the owner's standing delegation, the coordinator adopted the architect's decisions W1–W8; the owner did not review them individually.
 
@@ -1185,4 +1185,4 @@ At the owner's ET-045 request (items 7, 8 and 2, October 23–24, 2026), under t
 - **W7 evidence.** Unit tests pin the texts; synchronous probes in the overlay UI shard measure the real renderer and restore every text; a few real source transitions run end to end.
 - **W8 unchanged.** `OverlayPresentation`, preload, IPC, settings, presets, wire, storage, export, native code and `GAME_HISTORY_RECORDING`.
 
-For typography only, this supersedes the ordinary-value sizes of the ET-012e presentation followup above. The owner's real-game retest remains pending in [ET-045d validation](docs/validation/et-045d.md); see [the minimal overlay](docs/minimal-overlay.md#stable-numbers-and-value-typography-et-045d-october-2026). No display, DPI or performance claim follows.
+For typography only, this supersedes the ordinary-value sizes of the ET-012e presentation followup above. The owner's real-game retest remains pending in [ET-045d validation](docs/validation/et-045d.md); see [the minimal overlay](docs/minimal-overlay.md#stable-numbers-and-value-typography-et-045d-october-24-2026). No display, DPI or performance claim follows.
