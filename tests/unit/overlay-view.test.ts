@@ -42,6 +42,22 @@ it('splits the cluster into a gauge and a side panel, and drops the gauge withou
   expect(panelOnly.gauge).toBeUndefined(); expect(panelOnly.panel.map(item => item.id)).toEqual(['fuel', 'cargo']);
 });
 
+// ET-045f: the speed item carries the projection's speed arc fraction only while the speed is available.
+it('passes the speed arc fraction onto an available speed item in both languages and onto the Cluster gauge', () => {
+  const sections: OverlayPresentation['sections'] = [{id: 'speed', state: 'value', text: '90 km/h', speedRing: 9 / 13}, ...base.sections.slice(1)];
+  for (const language of ['en', 'ru'] as const) {
+    const view = overlayView({...base, layout: 'cluster', sections, language});
+    expect(view.items[0], language).toMatchObject({id: 'speed', value: '90', speedRing: 9 / 13});
+    expect(view.gauge?.speed?.speedRing, language).toBe(9 / 13);
+    expect(view.gauge?.rpm?.ring, language).toBe(0.5); expect(view.gauge?.rpm?.speedRing, language).toBeUndefined();
+    expect(view.items.filter(item => item.speedRing !== undefined).map(item => item.id), language).toEqual(['speed']);
+  }
+  expect(overlayView({...base, layout: 'cluster', sections: [{id: 'speed', state: 'value', text: '0 km/h', speedRing: 0}]}).gauge?.speed?.speedRing).toBe(0);
+  const unavailable = overlayView({...base, layout: 'cluster', freshness: 'stale', speed: '—', sections: [{id: 'speed', state: 'unavailable'}]});
+  expect(unavailable.gauge?.speed).toMatchObject({value: '—', unavailable: true}); expect('speedRing' in unavailable.gauge!.speed!).toBe(false);
+  expect('speedRing' in overlayView(base).items[0]).toBe(false);
+});
+
 it('dims stale placeholders and tags no signal, paused and non-game origins', () => {
   const stale = overlayView({...base, status: 'stale', freshness: 'stale', speed: '—', fuel: '—',
     sections: base.sections.map(section => ({id: section.id, state: 'unavailable' as const}))});
