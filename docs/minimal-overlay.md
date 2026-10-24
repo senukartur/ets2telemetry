@@ -183,3 +183,28 @@ At the owner's ET-045 request (items 7, 8 and 2, October 23–24, 2026) the over
 - **No geometry change (W6).** Row heights, the strip's item caps, the nominal sizes and every window size are unchanged: with every section at scale 1 the strip is still 1280 × 116 and the card, cluster and HUD 300 × 384, 440 × 267 and 320 × 354. The window size never depends on values.
 
 Right-aligned digits leave blank space before a one- or two-digit speed, and the Cluster RPM unit is small and muted; both are owner review points. The owner's retest above a real game remains pending.
+
+### Rebased scale and strip width (ET-045e, October 24, 2026)
+
+ET-045 items 9 and 6, under owner decisions D1 (option b) and D5 and decisions Z1–Z9 in [concept.md](../concept.md#et-045e-rebased-overlay-scale-and-strip-width--october-24-2026). This section supersedes, for the current build, the statements above that `scale` is in [0.5, 2], that the scale is the document's zoom factor, that the strip is `floor(min(1280 × scale, cw − 32))` wide and every listed window size; those statements stay as the historical ET-012b–ET-045d record.
+
+- **Scale and zoom (Z1, Z2).** A placement's `scale` is the user's setting, shown as a percentage, in [0.5, 3] (50–300%) in 10% steps. The overlay document's zoom factor is `zoom = overlayZoom(scale) = round(scale × 700) / 1000` (`apps/desktop/src/overlay-placement.ts`): 0.35 at 50%, 0.7 at 100%, 1.05 at 150%, 1.4 at 200% and 2.1 at 300%. The new 100% therefore renders exactly as the earlier 70% did. Saved numbers are kept and reinterpreted ([settings v7](settings.md)). Only window geometry, `webContents.setZoomFactor` and the creation `webPreferences.zoomFactor` use the zoom; placements, the `overlay-edit:set-scale` request, `AppState.overlayEdit.scale`, the dashboard percentage and diagnostic facts keep the setting.
+- **Card, cluster and HUD (Z4).** The ET-012d formulas with the zoom in place of the scale: `round(nominal width × zoom)` wide and `max(round(nominal height × zoom), ceil(content × zoom + 2 × border × max(1, zoom)))` high.
+- **Strip width (Z3, D5).** `width = floor(min(1280 × max(1, scale), cw − 32))`, at least `round(480 × zoom)`, otherwise the strip hides. Its rows are counted at the CSS width `floor(width / zoom)`, and it is `ceil(38 × rows × zoom + 2 × max(1, zoom))` high. At and below 100% the strip keeps up to 1280 DIP of the game's client width and only its text shrinks, so it never becomes narrower than at 100%; above 100% the width grows with the setting (CSS capacity about 1828 px from 100% to 300%). `cw` is always the game's client area from `screen.screenToDipRect`, never the display width. The window is created `round(1280 × max(1, scale))` wide with its rows at that width's CSS width.
+
+With every section the created windows (`overlayWindowSize`) are, in DIP; in a client area narrower than the strip's width plus 32 DIP the strip narrows to that client and may need more rows:
+
+| Setting (zoom) | Strip | Card | Cluster | HUD |
+| --- | --- | --- | --- | --- |
+| 50% (0.35) | 1280 × 16 (one row) | 105 × 136 | 154 × 95 | 112 × 124 |
+| 100% (0.7) | 1280 × 56 (two rows) | 210 × 270 | 308 × 188 | 224 × 248 |
+| 150% (1.05) | 1920 × 82 | 315 × 404 | 462 × 281 | 336 × 372 |
+| 200% (1.4) | 2560 × 110 | 420 × 538 | 616 × 374 | 448 × 496 |
+| 300% (2.1) | 3840 × 164 | 630 × 807 | 924 × 561 | 672 × 744 |
+| ET-045d 70% (0.7) | 896 × 82 (three rows) | 210 × 270 | 308 × 188 | 224 × 248 |
+| ET-045d 100% (1) | 1280 × 116 (three rows) | 300 × 384 | 440 × 267 | 320 × 354 |
+
+The card, cluster and HUD at the new 100% are pixel-identical to the earlier 70%. The strip at the new 100% has the earlier 70% text but, by D5, the full 1280 DIP width: two rows instead of three. In the owner's 2560 × 1440 client at 150% (1706.67 × 960 DIP) the strip with every section is 1280 × 16 at 50%, 1280 × 56 at 100%, 1674 × 122 at 150%, 1674 × 216 at 200% and 1674 × 404 at 300%. At the owner's saved x 0.8485, y 1 and 50% it is requested at {2058, 1176, 1280, 16}; the 16 DIP request lies below the 38 DIP minimum height the ET-045c probe measured, so ET-045c's bounded fit keeps it at {2058, 1154, 1280, 38}, inside the client with its content at the window's bottom (`contentAnchorY`). The minimum fit thresholds at 100% with every section are 368 DIP of client width for the strip and 242 × 302, 340 × 220 and 256 × 280 for the card, cluster and HUD.
+
+- **Small zoom (Z8).** No minimum font size is set and nothing is clamped in the product. Whether Chromium enlarges text at zoom 0.35 is measured by the UI overlay smoke and recorded, not gated; containment and alignment at 50% are gated ([CI](ci.md)). At 50% the card (105 DIP) and HUD (112 DIP) may meet an unmeasured Windows minimum width; the local bounds probe records the actual sizes, and a horizontal offset from it is a recorded limit, not handled.
+- **Unchanged.** Row heights, the strip's item caps, ET-045d typography, the fixed-row model, ET-045c's bounds verification and fit, edit mode, IPC channels and the preload surface. Real-game readability at 50%, bottom placement, click-through and focus over ETS2 and ATS remain pending in [ET-045e validation](validation/et-045e.md).

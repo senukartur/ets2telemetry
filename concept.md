@@ -1190,3 +1190,19 @@ At the owner's ET-045 request (items 7, 8 and 2, October 23–24, 2026), under t
 - **W8 unchanged.** `OverlayPresentation`, preload, IPC, settings, presets, wire, storage, export, native code and `GAME_HISTORY_RECORDING`.
 
 For typography only, this supersedes the ordinary-value sizes of the ET-012e presentation followup above. The owner's real-game retest remains pending in [ET-045d validation](docs/validation/et-045d.md); see [the minimal overlay](docs/minimal-overlay.md#stable-numbers-and-value-typography-et-045d-october-24-2026). No display, DPI or performance claim follows.
+
+## ET-045e rebased overlay scale and strip width — October 24, 2026
+
+Items 9 and 6 of [ET-045](https://trello.com/c/OmNYTBsp), under the owner's decisions of October 24, 2026: D1 option b (saved scale numbers are kept and reinterpreted so the new 100% equals the old 70%; the range is 50–300%) and D5 (the strip is never narrower than at scale 1). Under the owner's delegation the coordinator adopted the architect's decisions Z1–Z9; the owner did not review them individually.
+
+- **Z1 units.** The scale range is [0.5, 3] in 0.1 steps with default placements at 1. `OVERLAY_SCALE_ZOOM = 0.7` and the pure `overlayZoom(scale) = round(scale × 700) / 1000` live in `overlay-placement.ts`. Multiplying the saved values, storing the zoom and applying 0.7 in CSS were rejected.
+- **Z2 one boundary.** Placements, `overlay-edit:set-scale`, `AppState.overlayEdit.scale`, the dashboard and diagnostics carry the setting; only geometry internals, `setZoomFactor` and `webPreferences.zoomFactor` use the zoom.
+- **Z3 strip width.** `floor(min(1280 × max(1, scale), cw − 32))`, at least `round(480 × zoom)`, with rows at `floor(width / zoom)`; created `round(1280 × max(1, scale))` wide. `cw` is always the game client, never the display.
+- **Z4 card, cluster, HUD.** ET-012d's formulas with the zoom; the new 100% is pixel-identical to the old 70%.
+- **Z5 settings v7.** An identity v6-to-v7 step keeps every number (`migratedFrom: 6`); validation is [0.5, 3]; out-of-range values fall back alone and are never clamped; no startup write. Older builds read v7 as newer-version. Not bumping was rejected because an older build would misread the numbers or replace values above 2.
+- **Z6 IPC.** `parseOverlayEditScale` accepts one finite number in [0.5, 3], rounded to two decimals; no new channel, bridge method or preload key.
+- **Z7 controls.** The existing Smaller/Larger buttons and "Scale: N%"/"Размер: N%" show the setting and disable at 50% and 300%; Reset returns to 100%. No new strings and no slider.
+- **Z8 small zoom.** No product clamp and no minimum font size; Chromium's text behaviour at zoom 0.35 is measured by the UI smoke and recorded, containment is gated. The 16 DIP strip at 50% relies on ET-045c's bounded fit to the measured minimum height.
+- **Z9 owner comparison.** Reference screenshots of the new 100% and the old 70% and 100% strip go to the run output and ignored `.local/`; nothing is committed.
+
+For the scale's range and meaning, the strip width and the window sizes, this supersedes M2's and M4's [0.5, 2] range and `1280 × scale` width, M10's set-scale range and the window sizes stated by ET-012c, ET-012d and ET-028 above, and settings v6 as the current format; earlier dated text is unchanged. See [the minimal overlay](docs/minimal-overlay.md#rebased-scale-and-strip-width-et-045e-october-24-2026), [settings](docs/settings.md) and [ET-045e validation](docs/validation/et-045e.md). No display, DPI, game or performance claim follows.
