@@ -94,7 +94,7 @@ it('turns a presentation stale: placeholders for every shown section, same layou
 it('accepts only finite gauge fractions in [0, 1]', () => {
   for (const value of [0, 0.5, 1]) expect(isGaugeFraction(value), String(value)).toBe(true);
   for (const value of [-0.0001, 1.0001, Number.NaN, Number.POSITIVE_INFINITY, Number.NEGATIVE_INFINITY, '0.5', null, undefined, {}])
-    expect(isGaugeFraction(value), String(value)).toBe(false);
+    expect(isGaugeFraction(value), JSON.stringify(value) ?? 'undefined').toBe(false);
 });
 
 it('keeps valid gauge fractions on current speed and RPM values only, leaving everything else unchanged', () => {

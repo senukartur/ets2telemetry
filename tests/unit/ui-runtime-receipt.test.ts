@@ -10,7 +10,7 @@ const common = ['bilingual', 'bothSizes', 'security', 'offlineFonts', 'recording
 const flags = {shell: ['navigation', 'headingFocus','hardModePage', 'journalUnmount', 'menuKeyboard', 'exitAvailable', 'laterAccount'],
   live: ['numericGauge', 'unavailableVsZero', 'paused', 'staleDashes', 'rawNames', 'unsupportedTrip', 'jobViewport', 'hmNamesReadable','fullWidthTelemetry','tankUnknownVsZero'],
   journal: ['syntheticBanner', 'pageReturn', 'chartBounded', 'rawTabs', 'searchPlanned', 'tripRegions', 'tableReadable','signedChart'], settings: ['allPanels', 'allSections', 'committedSave', 'sourceSelector', 'uninstallRefusal', 'refusedSave', 'readOnly', 'controlsKeyboard', 'lastEnabled', 'fontLicense', 'overlayVisibility', 'visibilityFailedSave', 'actionResult', 'overlayOpacity','opacityFailedSave','opacityReadOnly','overlayUnified', 'overlayEditing', 'overlayScroll', 'scaleControl'],
-  overlay: ['fourLayouts', 'transparent', 'contained', 'independentFont', 'missing', 'paused', 'staleDashes', 'heroSubsets','formatterProfiles', 'stableNumbers', 'opacityKeyboardFocus','opacityGestures','backgroundOpacityOverlay','clusterRpmContained', 'scaleRange']};
+  overlay: ['fourLayouts', 'transparent', 'contained', 'independentFont', 'missing', 'paused', 'staleDashes', 'heroSubsets','formatterProfiles', 'stableNumbers', 'opacityKeyboardFocus','opacityGestures','backgroundOpacityOverlay','clusterRpmContained', 'scaleRange', 'clusterSpeedArc']};
 // ET-045e: six English 1280x800 overlay scale references, captured at their own window sizes, beside the 64 layout screenshots.
 const references = ['scale-strip', 'scale-card', 'scale-cluster', 'scale-hud', 'scale-strip-old70', 'scale-strip-old100'];
 type Case = keyof typeof screens;
@@ -59,8 +59,9 @@ it('requires every UI language/size/screen, assertion and plain screenshot file 
     {name: 'missing overlay scale reference', uiCase: 'overlay', change: value => {value.ui.screenshots = value.ui.screenshots.filter(shot => shot.screen !== 'scale-strip-old70');}},
     {name: 'overlay scale reference in another size', uiCase: 'overlay', change: value => {value.ui.screenshots.find(shot => shot.screen === 'scale-hud')!.width = 1100;}},
     {name: 'overlay scale reference with another image size', uiCase: 'overlay', change: value => {value.ui.screenshots.find(shot => shot.screen === 'scale-card')!.imageHeight = 57;}},
-    // ET-045d: the stable strip numbers and the contained Cluster centre are mandatory overlay assertions.
-    ...['formatterProfiles', 'stableNumbers', 'opacityKeyboardFocus','opacityGestures','backgroundOpacityOverlay','clusterRpmContained', 'scaleRange'].flatMap(flag => [
+    // ET-045d: the stable strip numbers and the contained Cluster centre are mandatory overlay assertions; ET-045f adds the
+    // Cluster speed arc.
+    ...['formatterProfiles', 'stableNumbers', 'opacityKeyboardFocus','opacityGestures','backgroundOpacityOverlay','clusterRpmContained', 'scaleRange', 'clusterSpeedArc'].flatMap(flag => [
       {name: `false overlay ${flag}`, uiCase: 'overlay' as const, change: (value: Fixture) => {value.ui.flags[flag] = false;}},
       {name: `missing overlay ${flag}`, uiCase: 'overlay' as const, change: (value: Fixture) => {delete value.ui.flags[flag];}}
     ]),
@@ -94,4 +95,4 @@ it('requires every UI language/size/screen, assertion and plain screenshot file 
     variants.forEach((variant, index) => expect(results[index], variant.name).toMatchObject({passed: variant.accepted === true, driverResultAvailable: true,
       reason: variant.accepted ? null : 'UI_RESULT_INCOMPLETE_OR_INVALID'}));
   } finally {await resources.dispose();}
-}, receiptBatchTimeout(99) + 5000);
+}, receiptBatchTimeout(101) + 5000);

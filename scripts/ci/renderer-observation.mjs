@@ -330,6 +330,30 @@ export function clusterCentreProbe(steps) {
   return {ok: restored && results.every(result => !result.outside.length && !result.truncated.length), restored, ring, steps: results};
 }
 
+// ET-045f Cluster speed arc. Self-contained browser callback that only reads the rendered Cluster gauge: whether the speed
+// track is shown, the speed arc's radius, dash array, inline dash offset (the target the transition eases to), computed
+// transition and stroke, and the RPM arc's dash array and stroke. An arc that is not drawn reads null. A missing Cluster
+// gauge or ring SVG, a duplicated arc, or a speed arc without its track fails closed.
+export function clusterSpeedArcProbe() {
+  const root = globalThis.document.querySelector('[data-testid="overlay-root"]');
+  const layout = root ? root.getAttribute('data-layout') : null;
+  const svg = root?.querySelector('.overlay-ring');
+  const empty = {layout, track: false, arc: null, rpmArc: null};
+  if (!root || layout !== 'cluster' || !svg) return {ok: false, reason: 'no-gauge', ...empty};
+  const arcs = [...root.querySelectorAll('[data-testid="overlay-speed-arc"]')], rpms = [...root.querySelectorAll('[data-testid="overlay-rpm-arc"]')];
+  if (arcs.length > 1 || rpms.length > 1) return {ok: false, reason: 'duplicate-arc', ...empty};
+  const track = Boolean(root.querySelector('[data-testid="overlay-speed-track"]'));
+  let arc = null, rpmArc = null;
+  if (arcs.length) {
+    const style = globalThis.getComputedStyle(arcs[0]);
+    arc = {r: Number(arcs[0].getAttribute('r')), dasharray: arcs[0].getAttribute('stroke-dasharray'), offset: Number.parseFloat(arcs[0].style.getPropertyValue('stroke-dashoffset')),
+      transitionProperty: style.transitionProperty, transitionDuration: style.transitionDuration, transitionTimingFunction: style.transitionTimingFunction, stroke: style.stroke};
+  }
+  if (rpms.length) rpmArc = {dasharray: rpms[0].getAttribute('stroke-dasharray'), stroke: globalThis.getComputedStyle(rpms[0]).stroke};
+  if (arc && !track) return {ok: false, reason: 'arc-without-track', layout, track, arc, rpmArc};
+  return {ok: true, layout, track, arc, rpmArc};
+}
+
 /** ET-015c PR-4: the recording texts of a service that records nothing (production, GAME_HISTORY_RECORDING false). */
 export const RECORDING_DISABLED_TEXT = Object.freeze({headline: 'Off: this version does not record game history', detail: null, losses: null, alert: null,
   notice: 'Prototype live display. No trip recording or durable history.'});

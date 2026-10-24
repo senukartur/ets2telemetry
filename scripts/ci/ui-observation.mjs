@@ -5,7 +5,7 @@ import path from 'node:path';
 import {readFile, writeFile, rename, mkdir, rmdir} from 'node:fs/promises';
 import {screen, settingsPanel, chooseLanguage} from './ui-navigation.mjs';
 import {until} from './lifecycle-observation.mjs';
-import {clusterCentreProbe, overlayOverflow, stripNumberProbe, zeroLiveObservation} from './renderer-observation.mjs';
+import {clusterCentreProbe, clusterSpeedArcProbe, overlayOverflow, stripNumberProbe, zeroLiveObservation} from './renderer-observation.mjs';
 import {SCALE_RANGE_FRAMES, SCALE_RANGE_ZOOM, SCALE_REFERENCE_FRAMES} from './overlay-observation.mjs';
 import {stubSaveDialog} from './journal-observation.mjs';
 import {pluginActionResult} from './plugin-fixture.mjs';
@@ -244,6 +244,69 @@ async function observeClusterCentre({application, dashboard, overlay, language, 
   });
   await overlay.waitForFunction(sectionsAre, shown, {timeout: 5000});
   record.flags.clusterRpmContained = true;
+}
+/**
+ * ET-045f: the Cluster speed arc in the real renderer. The arc's dash offset is the unfilled part of the circumference
+ * C = 2π × 52, so it is C × (1 − fraction) on the 130 km/h or 80 mph scale: 25 m/s is 90 km/h (9/13, offset C × 4/13) or
+ * 55.923 mph (0.6990426), 50 m/s is 180 km/h (capped at 1, offset 0). A displayed 0 (0.1 m/s) and reverse (-1.4 m/s shows
+ * -5) draw no arc. The offset eases over 150 ms linear, and not at all under reduced motion. The reading, the ETS2 profile
+ * and the media emulation are restored afterwards.
+ */
+const SPEED_ARC_C = 2 * Math.PI * 52, RPM_ARC_DASHARRAY = '50.26548245743669 251.32741228718345';
+const SPEED_ARC_OFFSET_90_KMH = 100.5309649148734, SPEED_ARC_OFFSET_56_MPH = 98.3305007691772;
+async function speedArc(overlay, label) {
+  const result = await overlay.evaluate(clusterSpeedArcProbe);
+  assert.equal(result.ok, true, `UI_CLUSTER_SPEED_ARC_PROBE_${label}: ${result.reason ?? ''}`);
+  return result;
+}
+function assertArcOffset(result, expected, label) {
+  assert.ok(result.arc, `UI_CLUSTER_SPEED_ARC_MISSING_${label}`);
+  assert.equal(result.arc.r, 52, `UI_CLUSTER_SPEED_ARC_RADIUS_${label}`);
+  assert.equal(result.arc.dasharray, `${SPEED_ARC_C} ${SPEED_ARC_C}`, `UI_CLUSTER_SPEED_ARC_DASHARRAY_${label}`);
+  assert.ok(Math.abs(result.arc.offset - expected) <= 0.01, `UI_CLUSTER_SPEED_ARC_OFFSET_${label}: ${result.arc.offset} vs ${expected}`);
+}
+const arcDuration = expected => globalThis.document.querySelector('[data-testid="overlay-speed-arc"]') !== null &&
+  globalThis.getComputedStyle(globalThis.document.querySelector('[data-testid="overlay-speed-arc"]')).transitionDuration === expected;
+async function observeClusterSpeedArc({dashboard, overlay, source, language, record}) {
+  record.clusterSpeedArc ??= [];
+  const speedIs = speed => overlay.waitForFunction(numberTexts, {speed}, {timeout: 5000});
+  await withRestore(async () => {
+    source.setReading(25, 73); source.setEngine(600, -1); await speedIs('90');
+    const metric = await speedArc(overlay, `metric_${language}`);
+    assertArcOffset(metric, SPEED_ARC_OFFSET_90_KMH, `metric_${language}`);
+    assert.deepEqual([metric.arc.transitionProperty, metric.arc.transitionDuration, metric.arc.transitionTimingFunction], ['stroke-dashoffset', '0.15s', 'linear'], `UI_CLUSTER_SPEED_ARC_TRANSITION_${language}`);
+    assert.equal(metric.arc.stroke, 'rgb(96, 165, 250)', `UI_CLUSTER_SPEED_ARC_STROKE_${language}`);
+    assert.deepEqual(metric.rpmArc, {dasharray: RPM_ARC_DASHARRAY, stroke: 'rgb(37, 99, 235)'}, `UI_CLUSTER_RPM_ARC_${language}`);
+    record.clusterSpeedArc.push({language, step: 'metric-90', ...metric});
+    await dashboard.evaluate(() => globalThis.desktop.setUnitProfile('ets2', 'us-customary')); await speedIs('56');
+    const us = await speedArc(overlay, `us_${language}`);
+    assertArcOffset(us, SPEED_ARC_OFFSET_56_MPH, `us_${language}`); record.clusterSpeedArc.push({language, step: 'us-56', ...us});
+    await dashboard.evaluate(() => globalThis.desktop.setUnitProfile('ets2', 'metric')); await speedIs('90');
+    for (const [metersPerSecond, text] of [[0.1, '0'], [-1.4, '-5']]) {
+      source.setReading(metersPerSecond, 73); await speedIs(text);
+      const none = await speedArc(overlay, `none_${text}_${language}`);
+      assert.equal(none.arc, null, `UI_CLUSTER_SPEED_ARC_AT_${text}_${language}`);
+      assert.equal(none.track, true, `UI_CLUSTER_SPEED_TRACK_AT_${text}_${language}`);
+      assert.ok(none.rpmArc, `UI_CLUSTER_RPM_ARC_AT_${text}_${language}`);
+      record.clusterSpeedArc.push({language, step: `none-${text}`, ...none});
+    }
+    source.setReading(50, 73); await speedIs('180');
+    const full = await speedArc(overlay, `full_${language}`);
+    assertArcOffset(full, 0, `full_${language}`); record.clusterSpeedArc.push({language, step: 'full-180', ...full});
+    // Reduced motion (Windows "Animation effects" off) removes the transition; clearing the emulation restores it.
+    await overlay.emulateMedia({reducedMotion: 'reduce'});
+    await overlay.waitForFunction(arcDuration, '0s', {timeout: 5000});
+    await overlay.emulateMedia({reducedMotion: null});
+    await overlay.waitForFunction(arcDuration, '0.15s', {timeout: 5000});
+    record.clusterSpeedArc.push({language, step: 'reduced-motion', reduced: '0s', restored: '0.15s'});
+  }, async () => {
+    await overlay.emulateMedia({reducedMotion: null});
+    await dashboard.evaluate(() => globalThis.desktop.setUnitProfile('ets2', 'metric'));
+    source.setReading(25, 73); source.setEngine(600, -1);
+  });
+  await speedIs('90');
+  assertArcOffset(await speedArc(overlay, `restored_${language}`), SPEED_ARC_OFFSET_90_KMH, `restored_${language}`);
+  record.flags.clusterSpeedArc = true;
 }
 /** Self-contained: the CSS width and text of every overlay value, label and unit box, in document order. */
 function textBoxes() {
@@ -687,13 +750,21 @@ export async function runUiSmoke({application, dashboard, overlay, source, confi
           // ET-045d: stable strip numbers and the Cluster centre, at the first size; screenshots stay as before.
           if (layout === 'strip' && size === sizes[0]) await observeStripNumbers({application, overlay, source, language, record});
           if (layout === 'cluster' && size === sizes[0]) await observeClusterCentre({application, dashboard, overlay, language, record});
+          // ET-045f: the Cluster speed arc in both profiles, at 0, in reverse, at full scale and under reduced motion.
+          if (layout === 'cluster' && size === sizes[0]) await observeClusterSpeedArc({dashboard, overlay, source, language, record});
           const numberWidths = layout === 'strip' ? await overlay.evaluate(stripBoxes) : undefined;
           {
             source.setUnavailable();
             await until(() => overlay.getByTestId('overlay-speed').textContent(), text => text === '—', 'UI_OVERLAY_MISSING');
+            if (layout === 'cluster') assert.equal(await overlay.getByTestId('overlay-speed-arc').count(), 0, `UI_CLUSTER_SPEED_ARC_WHILE_MISSING_${language}_${size.width}`);
             await save(`${layout}-missing`, language, size, overlay);
             source.setReading(25, 73); source.setPaused(true); await waitState(dashboard, 'paused');
             await overlay.waitForFunction(() => globalThis.document.querySelector('[data-testid="overlay-root"]')?.getAttribute('data-status') === 'paused', undefined, {timeout: 5000});
+            if (layout === 'cluster') {
+              // A paused current game keeps its 90 km/h arc.
+              await overlay.waitForFunction(numberTexts, {speed: '90'}, {timeout: 5000});
+              assertArcOffset(await speedArc(overlay, `paused_${language}_${size.width}`), SPEED_ARC_OFFSET_90_KMH, `paused_${language}_${size.width}`);
+            }
             await save(`${layout}-paused`, language, size, overlay);
             source.setPaused(false); await waitState(dashboard, 'connected'); source.hold();
             try {
@@ -707,6 +778,7 @@ export async function runUiSmoke({application, dashboard, overlay, source, confi
               assert.deepEqual((await overlay.evaluate(overlayOverflow)).outside, []);
               assert.equal(await overlay.locator('.overlay-tag').evaluateAll(nodes => nodes.length <= 2 && nodes.every(node => node.scrollWidth <= node.clientWidth)), true);
               assert.equal(await overlay.getByTestId('overlay-rpm-arc').count(), 0);
+              assert.equal(await overlay.getByTestId('overlay-speed-arc').count(), 0);
               if (numberWidths) {
                 // Dashes keep the current widths of the reserved speed, gear and RPM sections (ET-045d).
                 const stale = await overlay.evaluate(stripBoxes), width = box => box[2] - box[0];

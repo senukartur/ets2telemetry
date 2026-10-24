@@ -37,5 +37,10 @@ export function stripNumberProbe(steps: readonly NumberProbeStep[]): StripNumber
 export interface ClusterCentreProbe {ok: boolean; reason?: string; restored: boolean; ring?: {track: string; limit: number; centre: {x: number; y: number}};
   steps: {texts: Record<string, string>; reach: Record<string, number>; outside: string[]; truncated: string[]}[]}
 export function clusterCentreProbe(steps: readonly NumberProbeStep[]): ClusterCentreProbe;
+/** ET-045f: the rendered Cluster speed arc and RPM arc; an arc that is not drawn is null. */
+export interface SpeedArcObservation {r: number; dasharray: string | null; offset: number; transitionProperty: string; transitionDuration: string; transitionTimingFunction: string; stroke: string}
+export interface ClusterSpeedArcProbe {ok: boolean; reason?: string; layout: string | null; track: boolean; arc: SpeedArcObservation | null;
+  rpmArc: {dasharray: string | null; stroke: string} | null}
+export function clusterSpeedArcProbe(): ClusterSpeedArcProbe;
 
 export function zeroLiveObservation(language: string): boolean;
