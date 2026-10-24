@@ -20,8 +20,13 @@ export const ICON_RESOURCE_DIRECTORY = 'icon';
 export const INSTALLED_ICON_FILE = 'app.ico';
 /** The tracked icon is about 170 KiB; anything larger is not read. */
 export const MAX_ICON_BYTES = 1024 * 1024;
-/** The HKCU uninstall entry Squirrel creates for this application (the Squirrel id, `PRODUCT_ROOT_NAME`). */
-export const UNINSTALL_ENTRY_KEY = `HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\${PRODUCT_ROOT_NAME}`;
+/**
+ * The HKCU uninstall entry Squirrel creates for this application (the Squirrel id, `PRODUCT_ROOT_NAME`). Built when
+ * called rather than at module load, so loading this module never reads the roots module's exports.
+ */
+export function uninstallEntryKey(): string {
+  return `HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\${PRODUCT_ROOT_NAME}`;
+}
 export const DISPLAY_ICON_VALUE = 'DisplayIcon';
 /** The longest DisplayIcon data the registry port accepts. */
 export const MAX_DISPLAY_ICON_LENGTH = 1024;
@@ -165,7 +170,7 @@ export interface UninstallEntryRegistry {
 }
 
 /**
- * The production port: `%SystemRoot%\System32\reg.exe add <UNINSTALL_ENTRY_KEY> /v DisplayIcon /t REG_SZ /d <data> /f`
+ * The production port: `%SystemRoot%\System32\reg.exe add <uninstallEntryKey()> /v DisplayIcon /t REG_SZ /d <data> /f`
  * with no shell, a hidden window and a deadline. The key and value name are fixed; data that validDisplayIconData
  * refuses fails without starting reg.exe. A missing key is created, which Squirrel's later CreateSubKey keeps.
  */
@@ -174,7 +179,7 @@ export function regExeUninstallEntry(env: Readonly<Record<string, string | undef
   return {
     setDisplayIcon: async (data, timeoutMs) => {
       if (!validDisplayIconData(data)) return false;
-      return (await runFixedProgram(execFile, reg, ['add', UNINSTALL_ENTRY_KEY, '/v', DISPLAY_ICON_VALUE, '/t', 'REG_SZ', '/d', data, '/f'],
+      return (await runFixedProgram(execFile, reg, ['add', uninstallEntryKey(), '/v', DISPLAY_ICON_VALUE, '/t', 'REG_SZ', '/d', data, '/f'],
         {timeoutMs: Math.max(1, timeoutMs), maxOutputBytes: 64 * 1024})).ok;
     }
   };

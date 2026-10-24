@@ -2,7 +2,7 @@ import {readFileSync} from 'node:fs';
 import * as fsp from 'node:fs/promises';
 import path from 'node:path';
 import {afterEach, beforeEach, describe, expect, it} from 'vitest';
-import {DISPLAY_ICON_VALUE, displayIconFor, MAX_ICON_BYTES, placeInstalledIcon, registerInstalledIcon, regExeUninstallEntry, UNINSTALL_ENTRY_KEY,
+import {DISPLAY_ICON_VALUE, displayIconFor, MAX_ICON_BYTES, placeInstalledIcon, registerInstalledIcon, regExeUninstallEntry, uninstallEntryKey,
   validDisplayIconData, validIcoBytes, type IconFileSystem} from '../../apps/desktop/src/installed-app-icon';
 import {ATOMIC_RENAME_RETRY_DELAYS_MS} from '../../apps/desktop/src/plugin-setup/atomic-json-file';
 import type {ExecFilePort} from '../../apps/desktop/src/plugin-setup/fixed-program';
@@ -184,9 +184,9 @@ describe('DisplayIcon', () => {
   it('runs reg.exe add on this product\'s uninstall entry only, with the exact arguments, no shell and the given timeout', async () => {
     const {execFile, calls} = fakeExec();
     expect(await regExeUninstallEntry({SystemRoot: 'C:\\Windows'}, execFile).setDisplayIcon(DATA, 2000)).toBe(true);
-    expect(UNINSTALL_ENTRY_KEY).toBe('HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\ETS2TelemetryDesktop');
+    expect(uninstallEntryKey()).toBe('HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\ETS2TelemetryDesktop');
     expect(DISPLAY_ICON_VALUE).toBe('DisplayIcon');
-    expect(calls).toEqual([{file: 'C:\\Windows\\System32\\reg.exe', args: ['add', UNINSTALL_ENTRY_KEY, '/v', 'DisplayIcon', '/t', 'REG_SZ', '/d', DATA, '/f'],
+    expect(calls).toEqual([{file: 'C:\\Windows\\System32\\reg.exe', args: ['add', uninstallEntryKey(), '/v', 'DisplayIcon', '/t', 'REG_SZ', '/d', DATA, '/f'],
       timeout: 2000, shell: false, windowsHide: true}]);
   });
 
