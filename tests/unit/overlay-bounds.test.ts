@@ -12,15 +12,23 @@ import {OVERLAY_PRESETS} from '../../apps/desktop/src/overlay-sections';
 // session had a 2560 × 1440 physical game client at 150% on a 5120 × 2160 display; the fake screen divides by 1.5, so the
 // client {2560, 360, 2560, 1440} is {1706.67, 240, 1706.67, 960} DIP with its bottom at 1200, on a 3413.33 × 1440 display.
 //
-// Hand-computed strip rectangles at the owner's saved placement x 0.8485, y 1, scale 0.5 (overlay-geometry.ts): the strip
-// is floor(min(1280 × 0.5, 1706.67 − 32)) = 640 wide at CSS width 1280; free width 1706.67 − 32 − 640 = 1034.67, so
-// x = round(1706.67 + 16 + 0.8485 × 1034.67) = round(2600.58) = 2601. At zoom 0.5 a row is 19 DIP and the snapped border
-// adds 2: Job focus needs two rows, ceil(38 × 2 × 0.5 + 2) = 40; Driving only one, ceil(19 + 2) = 21; Everything three,
-// ceil(57 + 2) = 59. The bottom anchor puts the top at 240 + 8 + (960 − 16 − height): 1152, 1171 and 1133.
+// ET-045e (decisions Z2 and Z3) re-derived these rectangles because the requirement for the scale changed: a setting's
+// zoom is setting × 0.7 and the strip is floor(min(1280 × max(1, setting), client width − 32)) wide (overlay-geometry.ts).
+// At the owner's saved setting 0.5 (zoom 0.35) the strip is now 1280 wide at CSS width 3657 and every preset needs one row,
+// ceil(13.3 + 2) = 16 DIP, so a preset change no longer changes its rectangle there. Each ET-045c scenario keeps its
+// discriminating relation (a request below the window's height or Windows' minimum, a rectangle that changes or not on a
+// preset change) at the same fractions at the setting 1 (zoom 0.7): the strip is 1280 wide, free width
+// 1706.67 − 32 − 1280 = 394.67, so x = round(1706.67 + 16 + 0.8485 × 394.67) = round(2057.54) = 2058. At CSS width 1828
+// (inner 1801) Everything needs two rows, ceil(76 × 0.7 + 2) = 56, and Driving only one, ceil(26.6 + 2) = 29. The bottom
+// anchor puts the top at 240 + 8 + (960 − 16 − height): 1136 and 1163; the owner's 50% strip is at 1176.
 const SCALE = 1.5;
 const OWNER: OverlayPlacement = {x: 0.8485, y: 1, scale: 0.5};
-const JOB_FOCUS = {x: 2601, y: 1152, width: 640, height: 40};
-const DRIVING_ONLY = {x: 2601, y: 1171, width: 640, height: 21};
+/** The owner's fractions at the setting 1, where Everything and Driving only differ. */
+const AT_100: OverlayPlacement = {...OWNER, scale: 1};
+const EVERYTHING = {x: 2058, y: 1136, width: 1280, height: 56};
+const DRIVING_ONLY = {x: 2058, y: 1163, width: 1280, height: 29};
+/** Driving only kept 40 DIP high by Windows and fitted at the same fractions: 248 + 944 − 40 = 1152. */
+const FITTED_40 = {x: 2058, y: 1152, width: 1280, height: 40};
 const CLIENT = {x: 2560 / SCALE, y: 240, width: 2560 / SCALE, height: 960};
 
 type Mode = 'faithful' | 'ignore-first-shrink' | 'min-height-40' | 'inflate-clamp-38' | 'ignore-position' | 'deferred' | 'refuse-all';
@@ -86,7 +94,7 @@ function fakeWindow(initial: DipRect = {x: 0, y: 0, width: 640, height: 59}) {
   return {window, state, calls, setMode};
 }
 
-function setup(sections: OverlaySections = OVERLAY_PRESETS['job-focus'], placement: OverlayPlacement = OWNER) {
+function setup(sections: OverlaySections = OVERLAY_PRESETS.everything, placement: OverlayPlacement = AT_100) {
   const fake = fakeWindow(), current = live(), reports: Report[] = [];
   const metadata = current.observation!.state.window;
   if (!metadata.available) throw new Error('Expected window metadata');
@@ -102,17 +110,17 @@ type Setup = ReturnType<typeof setup>;
 const inside = (rect: DipRect, client: DipRect = CLIENT) => rect.x >= client.x && rect.y >= client.y &&
   rect.x + rect.width <= client.x + client.width && rect.y + rect.height <= client.y + client.height;
 const setBoundsSince = (calls: string[], from: number) => calls.slice(from).filter(call => call === 'setBounds').length;
-/** Driving mode, Job focus, the game in front: the window is placed at the hand-computed Job focus rectangle. */
-function drivingJobFocus(t: Setup) {
+/** Driving mode, Everything at the setting 1, the game in front: the window is placed at the hand-computed rectangle. */
+function drivingEverything(t: Setup) {
   t.overlay.loaded(true); t.overlay.update(t.current);
-  expect(t.state.bounds).toEqual(JOB_FOCUS); expect(t.state.visible).toBe(true);
+  expect(t.state.bounds).toEqual(EVERYTHING); expect(t.state.visible).toBe(true);
 }
-/** The owner's sequence before the edit: Job focus while driving, then the dashboard in front saves Driving only. */
+/** The owner's sequence before the edit at the setting 1: Everything while driving, then the dashboard in front saves Driving only. */
 function ownerBeforeEdit(t: Setup) {
-  drivingJobFocus(t);
+  drivingEverything(t);
   t.metadata.foreground = false; t.overlay.update(t.current); expect(t.state.visible).toBe(false);
-  t.overlay.setLayout('strip', OWNER, OVERLAY_PRESETS['driving-only']);
-  expect(t.state.visible).toBe(false); expect(t.state.bounds).toEqual(JOB_FOCUS);
+  t.overlay.setLayout('strip', AT_100, OVERLAY_PRESETS['driving-only']);
+  expect(t.state.visible).toBe(false); expect(t.state.bounds).toEqual(EVERYTHING);
 }
 function noActivation(t: Setup) {expect(t.window.show).not.toHaveBeenCalled(); expect(t.window.focus).not.toHaveBeenCalled();}
 /** The last topmost re-assertion follows the last setBounds and precedes the last moveTop. */
@@ -124,7 +132,7 @@ function raisedAfterLastSetBounds(t: Setup) {
 it('reproduces the owner case in edit mode: a shrink Windows did not apply is re-applied before the overlay shows', () => {
   const t = setup(); ownerBeforeEdit(t);
   t.setMode('ignore-first-shrink'); const from = t.calls.length;
-  expect(t.overlay.beginEdit(true)).toEqual({active: true, layout: 'strip', scale: 0.5, placement: 'visible'});
+  expect(t.overlay.beginEdit(true)).toEqual({active: true, layout: 'strip', scale: 1, placement: 'visible'});
   expect(t.state.bounds).toEqual(DRIVING_ONLY);
   expect(DRIVING_ONLY.y + DRIVING_ONLY.height).toBeLessThanOrEqual(CLIENT.y + CLIENT.height);
   expect(t.state.visible).toBe(true); expect(t.calls.slice(from).filter(call => call === 'showInactive')).toHaveLength(1);
@@ -132,21 +140,21 @@ it('reproduces the owner case in edit mode: a shrink Windows did not apply is re
   expect(t.calls.indexOf('showInactive', from)).toBeGreaterThan(t.calls.lastIndexOf('setBounds'));
   raisedAfterLastSetBounds(t); noActivation(t);
   expect(t.mismatches()).toHaveLength(1);
-  expect(t.mismatches()[0].facts).toMatchObject({mode: 'edit', outcome: 'reapplied', attempts: 1, reqX: 2601, reqY: 1171, reqW: 640, reqH: 21,
-    actX: 2601, actY: 1171, actW: 640, actH: 40, clientX: 1706.67, clientY: 240, clientW: 1706.67, clientH: 960});
+  expect(t.mismatches()[0].facts).toMatchObject({mode: 'edit', outcome: 'reapplied', attempts: 1, reqX: 2058, reqY: 1163, reqW: 1280, reqH: 29,
+    actX: 2058, actY: 1163, actW: 1280, actH: 56, clientX: 1706.67, clientY: 240, clientW: 1706.67, clientH: 960});
   // The interactive edit overlay stays interactive, never a taskbar tab.
   expect({ignoreMouse: t.state.ignoreMouse, focusable: t.state.focusable, movable: t.state.movable, skipTaskbar: t.state.skipTaskbar})
     .toEqual({ignoreMouse: false, focusable: true, movable: true, skipTaskbar: true});
   // Steady state: further updates neither move nor raise it again.
   const settled = t.calls.length; t.overlay.update(t.current); t.overlay.update(t.current);
   expect(t.calls.slice(settled)).toEqual([]);
-  expect(t.overlay.endEdit()).toEqual(OWNER);
+  expect(t.overlay.endEdit()).toEqual(AT_100);
 });
 
 it('corrects a driving overlay inside the same sections change while the game is in front', () => {
-  const t = setup(); drivingJobFocus(t);
+  const t = setup(); drivingEverything(t);
   t.setMode('ignore-first-shrink'); const from = t.calls.length;
-  t.overlay.setLayout('strip', OWNER, OVERLAY_PRESETS['driving-only']);
+  t.overlay.setLayout('strip', AT_100, OVERLAY_PRESETS['driving-only']);
   expect(t.state.bounds).toEqual(DRIVING_ONLY); expect(t.state.visible).toBe(true);
   expect(setBoundsSince(t.calls, from)).toBe(2); expect(t.window.showInactive).toHaveBeenCalledOnce();
   raisedAfterLastSetBounds(t); noActivation(t);
@@ -158,74 +166,101 @@ it('corrects a driving overlay inside the same sections change while the game is
 it('fits a window Windows keeps at least 40 DIP high at the same fractions, inside the client', () => {
   const t = setup(); ownerBeforeEdit(t);
   t.setMode('min-height-40'); const from = t.calls.length;
-  expect(t.overlay.beginEdit(true)).toEqual({active: true, layout: 'strip', scale: 0.5, placement: 'visible'});
-  // 1 request + 2 re-applies + 1 fit; the fit places 640 × 40 at x 0.8485, y 1: {2601, 1152, 640, 40}.
+  expect(t.overlay.beginEdit(true)).toEqual({active: true, layout: 'strip', scale: 1, placement: 'visible'});
+  // 1 request + 2 re-applies + 1 fit; the fit places 1280 × 40 at x 0.8485, y 1: {2058, 1152, 1280, 40}.
   expect(setBoundsSince(t.calls, from)).toBe(4);
-  expect(t.state.bounds).toEqual(JOB_FOCUS); expect(inside(t.state.bounds)).toBe(true); expect(t.state.visible).toBe(true);
+  expect(t.state.bounds).toEqual(FITTED_40); expect(inside(t.state.bounds)).toBe(true); expect(t.state.visible).toBe(true);
   raisedAfterLastSetBounds(t); noActivation(t);
-  expect(t.mismatches().map(report => report.facts)).toEqual([expect.objectContaining({mode: 'edit', outcome: 'fitted', attempts: 2, reqH: 21, actH: 40})]);
+  expect(t.mismatches().map(report => report.facts)).toEqual([expect.objectContaining({mode: 'edit', outcome: 'fitted', attempts: 2, reqH: 29, actH: 40})]);
   // The bottom anchor keeps the content at the window's bottom; the draft and the saved fractions are unchanged.
   expect(t.overlay.contentAnchorY).toBe(1);
   const settled = t.calls.length; t.overlay.update(t.current); expect(t.calls.slice(settled)).toEqual([]);
-  expect(t.overlay.endEdit()).toEqual(OWNER);
+  expect(t.overlay.endEdit()).toEqual(AT_100);
   // Driving mode fits the same way from the unchanged saved placement.
   t.metadata.foreground = true; t.overlay.update(t.current);
-  expect(t.state.bounds).toEqual(JOB_FOCUS); expect(t.state.visible).toBe(true);
+  expect(t.state.bounds).toEqual(FITTED_40); expect(t.state.visible).toBe(true);
+});
+
+// ET-045e: the owner's saved 50% strip now requests 1280 × 16 at {2058, 1176}, below the 38 DIP minimum height the ET-045c
+// probe measured at 150%. It is fitted at the same fractions to {2058, 248 + 944 − 38 = 1154, 1280, 38}, inside the
+// client with its content at the window's bottom, and every preset keeps that rectangle without another setBounds.
+it('fits the owner 50% strip, which now requests 16 DIP, to a 38 DIP minimum at the bottom of the client', () => {
+  const t = setup(OVERLAY_PRESETS.everything, OWNER); t.setMode('min-height-40'); t.state.minHeight = 38;
+  t.overlay.loaded(true); t.overlay.update(t.current);
+  expect(t.state.bounds).toEqual({x: 2058, y: 1154, width: 1280, height: 38}); expect(inside(t.state.bounds)).toBe(true); expect(t.state.visible).toBe(true);
+  expect(t.state.bounds.y + t.state.bounds.height).toBe(CLIENT.y + CLIENT.height - 8);
+  expect(t.mismatches().map(report => report.facts)).toEqual([expect.objectContaining({mode: 'driving', outcome: 'fitted', reqX: 2058, reqY: 1176, reqW: 1280,
+    reqH: 16, actH: 38})]);
+  for (const sections of [OVERLAY_PRESETS['driving-only'], OVERLAY_PRESETS['job-focus'], OVERLAY_PRESETS.everything]) {
+    const from = t.calls.length;
+    t.overlay.setLayout('strip', OWNER, sections);
+    expect(overlayBounds('strip', CLIENT, OWNER, sections)).toEqual({x: 2058, y: 1176, width: 1280, height: 16});
+    expect(setBoundsSince(t.calls, from)).toBe(0); expect(t.state.bounds).toEqual({x: 2058, y: 1154, width: 1280, height: 38});
+  }
+  t.metadata.foreground = false; t.overlay.update(t.current);
+  expect(t.overlay.beginEdit(true)).toEqual({active: true, layout: 'strip', scale: 0.5, placement: 'visible'});
+  expect(t.window.webContents.setZoomFactor).not.toHaveBeenCalled();
+  noActivation(t);
 });
 
 it('hides fail-closed when Windows refuses every rectangle, reports too-large while editing and stops retrying', () => {
-  const t = setup(); drivingJobFocus(t);
+  const t = setup(); drivingEverything(t);
   t.setMode('refuse-all');
-  // The game window moves 300 physical px left while Driving only is saved: the new request cannot be applied.
+  // The game window moves 300 physical px (200 DIP) left while Driving only is saved: the new request cannot be applied.
   t.metadata.x -= 300; let from = t.calls.length;
-  t.overlay.setLayout('strip', OWNER, OVERLAY_PRESETS['driving-only']);
-  // Request {2401, 1171, 640, 21}, two re-applies, then the actual 640 × 40 fitted at {2401, 1152}: all refused.
+  t.overlay.setLayout('strip', AT_100, OVERLAY_PRESETS['driving-only']);
+  // Request {1858, 1163, 1280, 29}, two re-applies, then the actual 1280 × 56 fitted at {1858, 1136}: all refused.
   expect(setBoundsSince(t.calls, from)).toBe(4); expect(t.state.visible).toBe(false);
   expect(t.calls.slice(from).filter(call => call === 'setAlwaysOnTop')).toEqual([]);
-  expect(t.mismatches().map(report => report.facts)).toEqual([expect.objectContaining({mode: 'driving', outcome: 'hidden', reqX: 2401, reqY: 1171, actX: 2601, actY: 1152})]);
+  expect(t.mismatches().map(report => report.facts)).toEqual([expect.objectContaining({mode: 'driving', outcome: 'hidden', reqX: 1858, reqY: 1163, actX: 2058, actY: 1136})]);
   from = t.calls.length; for (let index = 0; index < 5; index++) t.overlay.update(t.current);
   expect(t.calls.slice(from)).toEqual([]);
   // Edit mode is a new attempt for the same rectangle; it fails closed as too large and hides before click-through.
   t.metadata.foreground = false; from = t.calls.length;
-  expect(t.overlay.beginEdit(true)).toEqual({active: true, layout: 'strip', scale: 0.5, placement: 'too-large'});
+  expect(t.overlay.beginEdit(true)).toEqual({active: true, layout: 'strip', scale: 1, placement: 'too-large'});
   expect(setBoundsSince(t.calls, from)).toBe(4); expect(t.state.visible).toBe(false);
   expect({ignoreMouse: t.state.ignoreMouse, focusable: t.state.focusable, movable: t.state.movable, skipTaskbar: t.state.skipTaskbar})
     .toEqual({ignoreMouse: true, focusable: false, movable: false, skipTaskbar: true});
   from = t.calls.length; t.overlay.update(t.current); t.overlay.update(t.current);
   expect(t.calls.slice(from)).toEqual([]); expect(t.overlay.editState()).toMatchObject({placement: 'too-large'});
-  // Everything is a new rectangle {2401, 1133, 640, 59}; with Windows applying it again, the edit overlay shows.
+  // Everything is a new request {1858, 1136, 1280, 56}; with Windows applying it again, the edit overlay shows.
   t.setMode('faithful'); from = t.calls.length;
-  t.overlay.setLayout('strip', OWNER, OVERLAY_PRESETS.everything);
-  expect(t.state.bounds).toEqual({x: 2401, y: 1133, width: 640, height: 59});
-  expect(t.overlay.editState()).toEqual({active: true, layout: 'strip', scale: 0.5, placement: 'visible'});
+  t.overlay.setLayout('strip', AT_100, OVERLAY_PRESETS.everything);
+  expect(t.state.bounds).toEqual({x: 1858, y: 1136, width: 1280, height: 56});
+  expect(t.overlay.editState()).toEqual({active: true, layout: 'strip', scale: 1, placement: 'visible'});
   expect(setBoundsSince(t.calls, from)).toBe(1); expect(t.state.visible).toBe(true); noActivation(t);
 });
 
 it('re-applies once when the first read after setBounds still reports the previous rectangle', () => {
-  const t = setup(); drivingJobFocus(t);
+  const t = setup(); drivingEverything(t);
   t.setMode('deferred'); const from = t.calls.length;
-  t.overlay.setLayout('strip', OWNER, OVERLAY_PRESETS['driving-only']);
+  t.overlay.setLayout('strip', AT_100, OVERLAY_PRESETS['driving-only']);
   expect(t.state.bounds).toEqual(DRIVING_ONLY); expect(t.state.visible).toBe(true);
   expect(setBoundsSince(t.calls, from)).toBe(2); expect(t.window.hide).not.toHaveBeenCalled();
   expect(t.mismatches().map(report => report.facts.outcome)).toEqual(['reapplied']);
 });
 
-// Faithful Windows: every sections change at every bottom and side anchor and at 50, 100 and 200 % sets each changed
+// Faithful Windows: every sections change at every bottom and side anchor and at 50, 100, 200 and 300 % sets each changed
 // rectangle exactly once, ends contained with its margins and reports no mismatch; an unchanged rectangle sets nothing
-// and does not raise the window again. At scale 2 the strip is floor(min(2560, 1674.67)) = 1674 wide, inner 837 CSS:
-// Everything needs five rows, ceil(76 × 5 + 4) = 384, and Driving only two, ceil(76 × 2 + 4) = 156. The cycle mixes the
-// presets with single-section toggles, whose rows may or may not change.
+// and does not raise the window again. At 50% every preset is one 16 DIP row, so no change moves the window. At 200% the
+// strip is floor(min(2560, 1674.67)) = 1674 wide, CSS 1195, inner 1169: Everything needs four rows, ceil(152 × 1.4 + 2.8)
+// = 216, and Driving only one, ceil(53.2 + 2.8) = 56. At 300% it is 1674 wide, CSS 797, inner 771: Everything needs five
+// rows, ceil(190 × 2.1 + 4.2) = 404, and Driving only two, ceil(76 × 2.1 + 4.2) = 164. The cycle mixes the presets with
+// single-section toggles, whose rows may or may not change.
 const SECTION_CYCLE: OverlaySections[] = [OVERLAY_PRESETS['driving-only'], OVERLAY_PRESETS['job-focus'], {...OVERLAY_PRESETS['job-focus'], deadline: false},
   {...OVERLAY_PRESETS['job-focus'], deadline: false, cargo: false}, OVERLAY_PRESETS['driving-only'], {...OVERLAY_PRESETS['driving-only'], range: false},
   OVERLAY_PRESETS.everything, {...OVERLAY_PRESETS.everything, 'game-time': false}, OVERLAY_PRESETS['job-focus'], OVERLAY_PRESETS.everything];
-const MATRIX = [0.5, 1, 2].flatMap(scale => [0, 1].flatMap(y => [0.5, 0.8485, 1].map(x => ({x, y, scale}))));
+const MATRIX = [0.5, 1, 2, 3].flatMap(scale => [0, 1].flatMap(y => [0.5, 0.8485, 1].map(x => ({x, y, scale}))));
+const EVERYTHING_SIZE: Record<number, {width: number; height: number}> = {0.5: {width: 1280, height: 16}, 1: {width: 1280, height: 56},
+  2: {width: 1674, height: 216}, 3: {width: 1674, height: 404}};
+const DRIVING_ONLY_HEIGHT: Record<number, number> = {0.5: 16, 1: 29, 2: 56, 3: 164};
 it.each(MATRIX.flatMap(placement => (['driving', 'edit'] as const).map(mode => ({placement, mode}))))(
   'keeps a faithfully placed strip inside the client across presets at $placement.x, $placement.y, scale $placement.scale ($mode)', ({placement, mode}) => {
     const t = setup(OVERLAY_PRESETS.everything, placement); t.overlay.loaded(true);
     if (mode === 'edit') {t.metadata.foreground = false; t.overlay.update(t.current); t.overlay.beginEdit(true);}
     else t.overlay.update(t.current);
     expect(t.state.visible).toBe(true);
-    if (placement.scale === 2) expect(t.state.bounds).toMatchObject({width: 1674, height: 384});
+    expect(t.state.bounds).toMatchObject(EVERYTHING_SIZE[placement.scale]);
     let previous = t.state.bounds;
     for (const sections of SECTION_CYCLE) {
       const from = t.calls.length;
@@ -235,7 +270,7 @@ it.each(MATRIX.flatMap(placement => (['driving', 'edit'] as const).map(mode => (
       expect(t.state.bounds).toEqual(expected);
       expect(setBoundsSince(t.calls, from)).toBe(changed ? 1 : 0);
       expect(t.calls.slice(from).filter(call => call === 'setAlwaysOnTop')).toHaveLength(changed ? 1 : 0);
-      if (placement.scale === 2 && sections === OVERLAY_PRESETS['driving-only']) expect(expected.height).toBe(156);
+      if (sections === OVERLAY_PRESETS['driving-only']) expect(expected.height).toBe(DRIVING_ONLY_HEIGHT[placement.scale]);
       // Contained with the strip's 16 DIP side and 8 DIP top and bottom margins, within the 1 DIP of rounding.
       expect(expected.x).toBeGreaterThanOrEqual(CLIENT.x + 16 - 1); expect(expected.x + expected.width).toBeLessThanOrEqual(CLIENT.x + CLIENT.width - 16 + 1);
       expect(expected.y).toBeGreaterThanOrEqual(CLIENT.y + 8 - 1); expect(expected.y + expected.height).toBeLessThanOrEqual(CLIENT.y + CLIENT.height - 8 + 1);
@@ -247,16 +282,17 @@ it.each(MATRIX.flatMap(placement => (['driving', 'edit'] as const).map(mode => (
 
 it.each(['cancel', 'escape', 'minimize'] as const)('discards the draft on %s after a sections change and returns to the verified saved placement', reason => {
   // Main ends the edit through endEdit() for Cancel, Escape and a minimized dashboard alike, and drops the returned draft.
-  const t = setup(); drivingJobFocus(t);
+  const t = setup(); drivingEverything(t);
   t.metadata.foreground = false; t.overlay.update(t.current); t.overlay.beginEdit(true);
-  t.overlay.setEditScale(1); t.overlay.setLayout('strip', OWNER, OVERLAY_PRESETS['driving-only']);
-  // At scale 1 Driving only is 1280 × 40 at x = round(1722.67 + 0.8485 × 394.67) = 2058, y = 248 + 904 = 1152.
-  expect(t.state.bounds).toEqual({x: 2058, y: 1152, width: 1280, height: 40}); expect(t.state.visible).toBe(true);
+  t.overlay.setEditScale(2); t.overlay.setLayout('strip', AT_100, OVERLAY_PRESETS['driving-only']);
+  // At 200% (zoom 1.4) Driving only is 1674 × 56 at x = round(1722.67 + 0.8485 × 0.67) = 1723, y = 248 + 888 = 1136.
+  expect(t.state.bounds).toEqual({x: 1723, y: 1136, width: 1674, height: 56}); expect(t.state.visible).toBe(true);
+  expect(t.window.webContents.setZoomFactor).toHaveBeenLastCalledWith(1.4);
   const from = t.calls.length;
-  expect(t.overlay.endEdit(), reason).toEqual({...OWNER, scale: 1});
+  expect(t.overlay.endEdit(), reason).toEqual({...AT_100, scale: 2});
   expect(t.calls.slice(from, from + 5)).toEqual(['hide', 'setMovable(false)', 'setIgnoreMouseEvents(true)', 'setFocusable(false)', 'setSkipTaskbar(true)']);
-  expect(t.window.webContents.setZoomFactor).toHaveBeenLastCalledWith(0.5);
-  // Back in driving mode at the saved scale 0.5 with the current sections; Windows first keeps the 40 DIP height.
+  expect(t.window.webContents.setZoomFactor).toHaveBeenLastCalledWith(0.7);
+  // Back in driving mode at the saved setting 1 with the current sections; Windows first keeps the 56 DIP height.
   t.setMode('ignore-first-shrink'); t.metadata.foreground = true; t.overlay.update(t.current);
   expect(t.state.bounds).toEqual(DRIVING_ONLY); expect(t.state.visible).toBe(true);
   expect({ignoreMouse: t.state.ignoreMouse, focusable: t.state.focusable, movable: t.state.movable, skipTaskbar: t.state.skipTaskbar})
@@ -270,49 +306,50 @@ it('does not verify or move the window while it is dragged, then snaps the drop 
   t.metadata.foreground = false; t.overlay.update(t.current); t.overlay.beginEdit(true);
   expect(t.state.bounds).toEqual(DRIVING_ONLY);
   t.overlay.moveStarted(); const from = t.calls.length, reads = t.window.getBounds.mock.calls.length;
-  t.overlay.update(t.current); t.overlay.setLayout('strip', OWNER, OVERLAY_PRESETS['job-focus']); t.overlay.update(t.current);
+  t.overlay.update(t.current); t.overlay.setLayout('strip', AT_100, OVERLAY_PRESETS.everything); t.overlay.update(t.current);
   expect(t.calls.slice(from)).toEqual([]); expect(t.window.getBounds.mock.calls.length).toBe(reads);
   // Driving only again, still held; then the native drag leaves the window below the client and the drop snaps to y 1.
-  t.overlay.setLayout('strip', OWNER, OVERLAY_PRESETS['driving-only']);
-  t.state.bounds = {x: 2000, y: 1500, width: 640, height: 21}; t.overlay.moved({x: 2000, y: 1500, width: 640, height: 21});
-  // Free width 1034.67: (2000 − 1722.67) / 1034.67 = 0.26804 → 0.268, x = round(1722.67 + 277.29) = 2000.
-  expect(t.state.bounds).toEqual({x: 2000, y: 1171, width: 640, height: 21});
+  t.overlay.setLayout('strip', AT_100, OVERLAY_PRESETS['driving-only']);
+  t.state.bounds = {x: 2000, y: 1500, width: 1280, height: 29}; t.overlay.moved({x: 2000, y: 1500, width: 1280, height: 29});
+  // Free width 394.67: (2000 − 1722.67) / 394.67 = 0.70270 → 0.7027, x = round(1722.67 + 277.33) = 2000.
+  expect(t.state.bounds).toEqual({x: 2000, y: 1163, width: 1280, height: 29});
   expect(setBoundsSince(t.calls, from)).toBe(1); expect(t.window.getBounds.mock.calls.length).toBeGreaterThan(reads);
-  expect(t.overlay.endEdit()).toEqual({x: 0.268, y: 1, scale: 0.5}); expect(t.mismatches()).toEqual([]);
+  expect(t.overlay.endEdit()).toEqual({x: 0.7027, y: 1, scale: 1}); expect(t.mismatches()).toEqual([]);
 });
 
 // Review round 1. A fitted window is taller than the layout: a drop where it stands must keep its fractions. With the
 // window kept 40 DIP high, the free height is 944 − 40 = 904 and a drop at the fitted top 1152 is (1152 − 248) / 904 = 1;
-// against the layout's 21 DIP it would be 904 / 923 = 0.9794 and walk the content up by about 19 DIP on every drop.
+// against the layout's 29 DIP it would be 904 / 915 = 0.988 and walk the content up by about 11 DIP on every drop.
 it('keeps the fractions of a fitted window dropped where it stands, and repeated horizontal drops do not walk', () => {
   const t = setup(OVERLAY_PRESETS['driving-only']); t.setMode('min-height-40'); t.overlay.loaded(true);
   t.metadata.foreground = false; t.overlay.update(t.current); t.overlay.beginEdit(true);
-  expect(t.state.bounds).toEqual(JOB_FOCUS);
-  // Free width 1034.67: 2401 → (2401 − 1722.67) / 1034.67 = 0.6556, 2200 → 0.4613, 2000 → 0.268; x snaps back to the drop.
-  for (const [x, fraction] of [[2401, 0.6556], [2200, 0.4613], [2000, 0.268]] as const) {
+  expect(t.state.bounds).toEqual(FITTED_40);
+  // Free width 394.67: 2058 → (2058 − 1722.67) / 394.67 = 0.8497, 1900 → 0.4493, 1800 → 0.1959; x snaps back to the drop.
+  for (const [x, fraction] of [[2058, 0.8497], [1900, 0.4493], [1800, 0.1959]] as const) {
     t.overlay.moveStarted(); t.state.bounds = {...t.state.bounds, x}; t.overlay.moved({...t.state.bounds});
-    expect(t.state.bounds).toEqual({x, y: 1152, width: 640, height: 40}); expect(t.state.visible).toBe(true);
+    expect(t.state.bounds).toEqual({x, y: 1152, width: 1280, height: 40}); expect(t.state.visible).toBe(true);
     expect(t.overlay.editState()).toMatchObject({placement: 'visible'}); expect(t.overlay.contentAnchorY).toBe(1);
     expect(t.state.bounds.y + t.state.bounds.height).toBe(1192);
-    expect(Math.abs(fraction - (x - CLIENT.x - 16) / 1034.67)).toBeLessThan(0.0001);
+    expect(Math.abs(fraction - (x - CLIENT.x - 16) / 394.67)).toBeLessThan(0.0001);
   }
   // Done saves the returned draft: y stays 1.
-  expect(t.overlay.endEdit()).toEqual({x: 0.268, y: 1, scale: 0.5});
+  expect(t.overlay.endEdit()).toEqual({x: 0.1959, y: 1, scale: 1});
 });
 
-// Review round 1. A width-limited strip in a 750 × 1440 physical client (500 × 960 DIP at (1706.67, 240)) is
-// floor(min(640, 500 − 32)) = 468 wide with no free width, so x = 1706.67 + 16 = 1723 whatever the fraction. Speed and
-// gear need one row at zoom 0.5 (tags 96 + 96, speed 140 and gear 90 with three 14 px gaps, 464 of the 908 inner CSS px):
-// 21 high at y 1171. Windows adds 1 DIP of width and keeps 38 high. Fitting the inflated width (469) would leave −1 DIP
-// of free width and refuse the strip; only the height is fitted: {1723, 248 + 944 − 38 = 1154, 468, 38}.
+// Review round 1, re-derived for ET-045e. A width-limited strip in a 750 × 1440 physical client (500 × 960 DIP at
+// (1706.67, 240)) at the owner's 50% is floor(min(1280, 500 − 32)) = 468 wide with no free width, so
+// x = 1706.67 + 16 = 1723 whatever the fraction. Speed and gear need one row at zoom 0.35 (tags 96 + 96, speed 140 and gear
+// 90 with three 14 px gaps, 464 of the 1307 inner CSS px of floor(468 / 0.35) = 1337): 16 high at y 1176. Windows adds
+// 1 DIP of width and keeps 38 high. Fitting the inflated width (469) would leave −1 DIP of free width and refuse the
+// strip; only the height is fitted: {1723, 248 + 944 − 38 = 1154, 468, 38}.
 it('fits only the axis Windows changed, so a width-limited strip with a rounded width stays visible', () => {
-  const t = setup({...OVERLAY_PRESETS['driving-only'], rpm: false, fuel: false, range: false}); t.metadata.width = 750;
+  const t = setup({...OVERLAY_PRESETS['driving-only'], rpm: false, fuel: false, range: false}, OWNER); t.metadata.width = 750;
   expect(overlayBounds('strip', {...CLIENT, width: 500}, OWNER, {...OVERLAY_PRESETS['driving-only'], rpm: false, fuel: false, range: false}))
-    .toEqual({x: 1723, y: 1171, width: 468, height: 21});
+    .toEqual({x: 1723, y: 1176, width: 468, height: 16});
   t.setMode('inflate-clamp-38'); t.overlay.loaded(true); t.overlay.update(t.current);
   expect(t.state.bounds).toEqual({x: 1723, y: 1154, width: 469, height: 38}); expect(t.state.visible).toBe(true);
   expect(t.state.bounds.x + t.state.bounds.width).toBeLessThanOrEqual(CLIENT.x + 500);
-  expect(t.mismatches().map(report => report.facts)).toEqual([expect.objectContaining({mode: 'driving', outcome: 'fitted', reqW: 468, reqH: 21, actW: 469, actH: 38})]);
+  expect(t.mismatches().map(report => report.facts)).toEqual([expect.objectContaining({mode: 'driving', outcome: 'fitted', reqW: 468, reqH: 16, actW: 469, actH: 38})]);
   t.metadata.foreground = false; t.overlay.update(t.current);
   expect(t.overlay.beginEdit(true)).toEqual({active: true, layout: 'strip', scale: 0.5, placement: 'visible'});
   expect(t.state.bounds).toEqual({x: 1723, y: 1154, width: 469, height: 38});
@@ -324,7 +361,7 @@ it('logs a repeated mismatch once and bounds the distinct mismatch lines per lau
   const t = setup(OVERLAY_PRESETS['driving-only']); t.setMode('min-height-40'); t.overlay.loaded(true); t.overlay.update(t.current);
   // The game window moves back and forth by 30 physical px (20 DIP), so every update is a new request on the display.
   for (let move = 0; move < 5; move++) {t.metadata.x += move % 2 === 0 ? -30 : 30; t.overlay.update(t.current); expect(t.state.bounds.height).toBe(40);}
-  expect(t.mismatches().map(report => report.facts)).toEqual([expect.objectContaining({mode: 'driving', outcome: 'fitted', reqH: 21, actH: 40})]);
+  expect(t.mismatches().map(report => report.facts)).toEqual([expect.objectContaining({mode: 'driving', outcome: 'fitted', reqH: 29, actH: 40})]);
   // Each new minimum is another size difference; they are still fitted after the limit, but no longer logged.
   for (let step = 1; step <= 25; step++) {
     t.state.minHeight = 40 + step; t.metadata.x += step % 2 === 0 ? -30 : 30; t.overlay.update(t.current);
@@ -337,23 +374,23 @@ it('logs a repeated mismatch once and bounds the distinct mismatch lines per lau
 // Review round 2. A hidden window is never shown before a rectangle is accepted, so a refused one does not flash over the
 // game at a wrong size before it hides.
 it('never shows a hidden window whose rectangle Windows refuses', () => {
-  const t = setup(); drivingJobFocus(t);
+  const t = setup(); drivingEverything(t);
   t.metadata.foreground = false; t.overlay.update(t.current); expect(t.state.visible).toBe(false);
   t.setMode('refuse-all'); t.metadata.x -= 300; t.metadata.foreground = true; const from = t.calls.length;
   t.overlay.update(t.current);
-  // Request {2401, 1152, 640, 40}, two re-applies; the size is unchanged, so there is nothing to fit.
+  // Request {1858, 1136, 1280, 56}, two re-applies; the size is unchanged, so there is nothing to fit.
   expect(t.calls.slice(from)).toEqual(['setBounds', 'setBounds', 'setBounds']);
   expect(t.window.showInactive).toHaveBeenCalledOnce(); expect(t.state.visible).toBe(false);
-  expect(t.mismatches().map(report => report.facts)).toEqual([expect.objectContaining({mode: 'driving', outcome: 'hidden', reqX: 2401, actX: 2601})]);
+  expect(t.mismatches().map(report => report.facts)).toEqual([expect.objectContaining({mode: 'driving', outcome: 'hidden', reqX: 1858, actX: 2058})]);
 });
 
 // Review round 2. A fail-closed driving hide recovers on the next distinct game client observation and never churns
 // while nothing changes. Windows first applies the size but not the position.
 it('recovers a position-only refusal when the game returns to the front, with no setBounds while nothing changes', () => {
-  const t = setup(); drivingJobFocus(t);
+  const t = setup(); drivingEverything(t);
   t.setMode('ignore-position'); t.metadata.x -= 300; let from = t.calls.length;
   t.overlay.update(t.current);
-  expect(setBoundsSince(t.calls, from)).toBe(3); expect(t.state.visible).toBe(false); expect(t.state.bounds).toEqual(JOB_FOCUS);
+  expect(setBoundsSince(t.calls, from)).toBe(3); expect(t.state.visible).toBe(false); expect(t.state.bounds).toEqual(EVERYTHING);
   // Window reports renew with the same client rectangle: nothing is set again.
   from = t.calls.length;
   for (let report = 1; report <= 5; report++) t.overlay.update({...t.current, observation: {...t.current.observation!, windowReceivedMonotonicMs: report * 100}});
@@ -361,7 +398,7 @@ it('recovers a position-only refusal when the game returns to the front, with no
   // The mismatch clears; the game leaves the front and returns, a distinct observation: one bounded re-verification.
   t.setMode('faithful'); t.metadata.foreground = false; t.overlay.update(t.current); expect(t.calls.slice(from)).toEqual([]);
   t.metadata.foreground = true; t.overlay.update(t.current);
-  expect(t.state.bounds).toEqual({...JOB_FOCUS, x: 2401}); expect(t.state.visible).toBe(true);
+  expect(t.state.bounds).toEqual({...EVERYTHING, x: 1858}); expect(t.state.visible).toBe(true);
   expect(setBoundsSince(t.calls, from)).toBe(1);
   expect(t.calls.indexOf('showInactive', from)).toBeGreaterThan(t.calls.lastIndexOf('setBounds')); raisedAfterLastSetBounds(t); noActivation(t);
   expect(t.mismatches().map(report => report.facts.outcome)).toEqual(['hidden', 'reapplied']);
@@ -369,35 +406,35 @@ it('recovers a position-only refusal when the game returns to the front, with no
 });
 
 it.each(['restored', 'moved', 'reloaded', 're-enabled'] as const)('recovers a refusal that clears on its own once the game client is %s', trigger => {
-  const t = setup(); drivingJobFocus(t);
+  const t = setup(); drivingEverything(t);
   t.setMode('refuse-all'); t.metadata.x -= 300; t.overlay.update(t.current); expect(t.state.visible).toBe(false);
   t.setMode('faithful'); let from = t.calls.length;
   t.overlay.update(t.current); t.overlay.update(t.current); expect(t.calls.slice(from)).toEqual([]);
   from = t.calls.length;
   if (trigger === 'restored') {t.metadata.minimized = true; t.overlay.update(t.current); t.metadata.minimized = false; t.overlay.update(t.current);}
-  // 3 physical px are 2 DIP: a new request {2403, 1152, 640, 40}.
+  // 3 physical px are 2 DIP: a new request {1860, 1136, 1280, 56}.
   if (trigger === 'moved') {t.metadata.x += 3; t.overlay.update(t.current);}
   if (trigger === 'reloaded') {t.overlay.loaded(false); t.overlay.loaded(true);}
   if (trigger === 're-enabled') {t.overlay.setEnabled(false); t.overlay.setEnabled(true);}
-  expect(t.state.visible).toBe(true); expect(t.state.bounds).toEqual({...JOB_FOCUS, x: trigger === 'moved' ? 2403 : 2401});
+  expect(t.state.visible).toBe(true); expect(t.state.bounds).toEqual({...EVERYTHING, x: trigger === 'moved' ? 1860 : 1858});
   expect(setBoundsSince(t.calls, from)).toBe(1);
   from = t.calls.length; t.overlay.update(t.current); expect(t.calls.slice(from)).toEqual([]);
 });
 
 it('logs a hide once per refused request and recovers an edit refusal when the edit overlay may show again', () => {
-  const t = setup(); drivingJobFocus(t);
+  const t = setup(); drivingEverything(t);
   t.setMode('refuse-all');
   // Two refused requests with the same size difference: each hide is logged, once.
   t.metadata.x -= 300; t.overlay.update(t.current); t.overlay.update(t.current);
   t.metadata.x -= 30; t.overlay.update(t.current);
-  expect(t.mismatches().map(report => [report.facts.outcome, report.facts.reqX])).toEqual([['hidden', 2401], ['hidden', 2381]]);
+  expect(t.mismatches().map(report => [report.facts.outcome, report.facts.reqX])).toEqual([['hidden', 1858], ['hidden', 1838]]);
   t.metadata.foreground = false;
   expect(t.overlay.beginEdit(true)).toMatchObject({placement: 'too-large'}); expect(t.window.showInactive).toHaveBeenCalledOnce();
   t.setMode('faithful'); let from = t.calls.length;
   t.overlay.update(t.current); expect(t.calls.slice(from)).toEqual([]);
   // The dashboard loses and regains the front: the edit overlay may show again and verifies once more.
   t.overlay.setOwnForeground(false); from = t.calls.length; t.overlay.setOwnForeground(true);
-  expect(t.overlay.editState()).toEqual({active: true, layout: 'strip', scale: 0.5, placement: 'visible'});
+  expect(t.overlay.editState()).toEqual({active: true, layout: 'strip', scale: 1, placement: 'visible'});
   expect(t.state.visible).toBe(true); expect(setBoundsSince(t.calls, from)).toBe(1);
   expect(t.calls.indexOf('setIgnoreMouseEvents(false)', from)).toBeLessThan(t.calls.indexOf('setBounds', from));
   expect(t.calls.indexOf('showInactive', from)).toBeGreaterThan(t.calls.lastIndexOf('setBounds'));

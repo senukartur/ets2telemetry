@@ -18,6 +18,7 @@ import {
   getOverlaySectionText, getSettingsSaveErrorText, getStrings
 } from './strings';
 
+/** The scale setting as a percentage (ET-045e decision Z7): 1 is 100%, whose zoom matches the 70% of earlier builds. */
 const percent = (scale: number) => `${Math.round(scale * 100)}%`;
 
 /**

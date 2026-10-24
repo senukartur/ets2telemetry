@@ -75,7 +75,10 @@ export interface DesktopBridge {
    * in front. Refused while settings are read-only or the application exits. Nothing is saved until `finishOverlayEdit`.
    */
   beginOverlayEdit(): Promise<OverlayEditState>;
-  /** Sets the edited scale: exactly one finite number in [0.5, 2], rounded to two decimals. */
+  /**
+   * Sets the edited scale setting: exactly one finite number in [0.5, 3], rounded to two decimals (ET-045e; [0.5, 2]
+   * before). Main applies `overlayZoom(scale)` = scale × 0.7 as the overlay's zoom factor.
+   */
   setOverlayEditScale(scale: number): Promise<OverlayEditState>;
   /** Moves the edited placement back to the layout's default anchor at scale 1. */
   resetOverlayEditPlacement(): Promise<OverlayEditState>;

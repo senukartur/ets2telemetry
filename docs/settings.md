@@ -4,6 +4,8 @@ ET-011b stores the user's settings in a small JSON file and uses them to choose 
 
 ET-012e added saved overlay visibility in historical format v6, defaulting to enabled. ET-049 makes v7 the current format by adding background opacity. Accepted ET-031 v5 remains the autostart format; earlier ET-012 visibility-v5 records describe an unmerged prototype schema, not a second historical v5 contract.
 
+ET-045e update, October 24, 2026 (decision Z5, owner decision D1 option b; ET-049 took v7 first, so ET-045e uses v8): the current format is **v8**. It has exactly the fields and canonical layout of ET-049's v7 document below with `"version": 8`. What changed is the meaning of each placement's `scale`: it is the user's setting, shown as a percentage, and the overlay document's zoom factor is now setting × 0.7 (`overlayZoom` in `apps/desktop/src/overlay-placement.ts`), so the new 100% looks like the earlier 70%. Its range is [0.5, 3] (50–300%) instead of [0.5, 2]. Saved numbers are kept and reinterpreted, never rewritten: a v7 file migrates to v8 by an identity step (`migratedFrom: 7`), and the owner's saved strip at 0.5 now renders at the earlier 35% (choose 70% for the earlier 50% look). See [ET-045e validation](validation/et-045e.md). The v7 and v6 headings below keep their ET-049 and ET-012e wording; read "current" there as the field layout that v8 retains.
+
 ## Location
 
 The file is `%LOCALAPPDATA%\ETS2Telemetry\settings\settings.json`. Main resolves `%LOCALAPPDATA%` at runtime through `dataPaths(LOCALAPPDATA).settings` (`apps/desktop/src/paths.ts`), separately from the application binaries and from `telemetry.sqlite`, so an application update does not replace it. When `LOCALAPPDATA` is missing or not an absolute path, there is no settings location: defaults apply and nothing can be saved (`unavailable`). Preserving the file across a real installed update and an optional uninstall removal belong to ET-018. Since ET-018 PR-1 the installer lifecycle proves that install, repair and update keep the file byte-identical. An uninstall deletes it with the rest of the data folder, from Windows Settings or from the application; the [in-app uninstall](uninstall.md#in-app-uninstall) and the Journal tab's export note say so ([user guide](user-guide.md#uninstalling)).
@@ -20,7 +22,7 @@ Opacity persists independently of layout and placement drafts, including Done/Ca
 
 ## Historical format v6 (ET-012e integrated with ET-031)
 
-The following describes the pre-ET-049 v6 format and its earlier migration steps. Current reads/writes use v7 as specified above.
+The following describes the pre-ET-049 v6 format and its earlier migration steps. Current reads/writes use v7 as specified above (v8 since ET-045e, with the same fields).
 
 ```json
 {
@@ -81,16 +83,16 @@ The application writes exactly this shape: UTF-8 without a byte order mark, two-
 
 - a leading UTF-8 byte order mark is accepted and unknown keys are ignored;
 - a file larger than 64 KiB, bytes that are not UTF-8, anything other than a JSON object, a missing or different `format` marker, or a `version` that is not an integer makes the file **invalid**;
-- a version 1, 2, 3, 4 or 5 file is migrated in memory ([below](#migration-from-v1-v2-v3-v4-and-v5)) and then read as v6;
+- a version 1 to 7 file is migrated in memory ([below](#migration-from-v1-v2-v3-v4-and-v5)) and then read as v8 (ET-045e);
 - a missing `version` or a version below 1 is **unsupported-older**: there is no migration path, so such a file uses defaults;
-- a version above 6 is **newer-version**: written by a later application version;
+- a version above 8 is **newer-version** (since ET-045e): written by a later application version;
 - `language` must be exactly `en` or `ru` (default: `en`);
 - `autostart` must be a strict boolean (default: `false`), independently of overlay visibility;
 - each `units.ets2` and `units.ats` value must be exactly `metric` or `us-customary`;
 - `overlay.enabled` must be a boolean (default: `true`); strings and numbers are not coerced;
 - `overlay.layout` must be exactly `strip`, `card`, `cluster` or `hud`;
 - `overlay.sections` must be an object of booleans that enables at least one section;
-- `overlay.placements` must be an object; each layout's placement must have `x` and `y` that are finite numbers in [0, 1] and a `scale` that is a finite number in [0.5, 2]. Values are rounded to four decimals (`x`, `y`) and two decimals (`scale`) when read and when written.
+- `overlay.placements` must be an object; each layout's placement must have `x` and `y` that are finite numbers in [0, 1] and a `scale` that is a finite number in [0.5, 3] (ET-045e; [0.5, 2] before). Values are rounded to four decimals (`x`, `y`) and two decimals (`scale`) when read and when written.
 
 An invalid or missing value falls back to its default on its own (**loaded-with-fallbacks**); the other values still apply. The fallback field paths include `language`, `autostart` and `overlay.enabled`; the remaining paths are `units.ets2`, `units.ats`, `overlay.layout`, `overlay.sections`, `overlay.sections.<id>`, `overlay.placements` and `overlay.placements.<layout>`:
 
@@ -121,10 +123,12 @@ Format v1 (ET-011b) had only the `units` block; format v2 (ET-012a) added the ov
 - v3 to v4 (ET-029) adds `"language": "en"`.
 - v4 to v5 (accepted ET-031) adds `"autostart": false` exactly as the accepted migration.
 - v5 to v6 (ET-012e) adds `"enabled": true` inside an object-valued overlay, preserving autostart, language, units, layouts, sections and placements. A stray pre-v6 visibility key is replaced by the default; malformed overlay values continue through normal fallback.
+- v6 to v7 (ET-049) adds `backgroundOpacity` 80 ([above](#current-format-v7-background-opacity-et-049)).
+- v7 to v8 (ET-045e) changes only `version`. Every placement number is kept, so each saved scale now means the rebased setting. An earlier scale in (2, 3] could only come from a hand-edited file; after this step it passes the v8 range check instead of falling back.
 
-A v1 file passes all five steps. A migrated file loads as `loaded` (or `loaded-with-fallbacks`) and its load row carries `migratedFrom: 1`, `migratedFrom: 2`, `migratedFrom: 3`, `migratedFrom: 4` or `migratedFrom: 5`. Nothing is written at startup: the file stays v1, v2, v3, v4 or v5 on disk until the first save of any setting writes the complete v6 document. A migrated file is valid, so it is never quarantined.
+A v1 file passes all seven steps. A migrated file loads as `loaded` (or `loaded-with-fallbacks`) and its load row carries `migratedFrom: 1` to `migratedFrom: 7`. Nothing is written at startup: the file stays v1 to v7 on disk until the first save of any setting writes the complete v8 document. A migrated file is valid, so it is never quarantined.
 
-**Downgrade.** The accepted v5 application reads v6 as newer-version and refuses writes, preserving both flags. An application supporting only v4 reads v5 as newer-version and refuses writes. An ET-011b build reads a v2 or v3 file, and an ET-012a build a v3 file, as `newer-version`: it uses defaults, never modifies the file and refuses to save (`SETTINGS_READ_ONLY`). Going back to such a build therefore shows default units and overlay settings until a newer build runs again. Making `placements` an optional key in v2 instead was rejected (decision M2), so that an older build never rewrites a file and silently drops the placements.
+**Downgrade.** A build before ET-045e, including ET-049, reads v8 as newer-version: it shows read-only defaults and never modifies the file. The bump was chosen over keeping v7 so that an older build neither misreads the rebased numbers at the earlier zoom nor replaces a scale above 2 with its default on its next save. Running an ET-045e build with an earlier build's profile therefore makes that earlier build read-only until a newer build runs again; use a separate profile for frozen candidates. The accepted v5 application reads v6 as newer-version and refuses writes, preserving both flags. An application supporting only v4 reads v5 as newer-version and refuses writes. An ET-011b build reads a v2 or v3 file, and an ET-012a build a v3 file, as `newer-version`: it uses defaults, never modifies the file and refuses to save (`SETTINGS_READ_ONLY`). Going back to such a build therefore shows default units and overlay settings until a newer build runs again. Making `placements` an optional key in v2 instead was rejected (decision M2), so that an older build never rewrites a file and silently drops the placements.
 
 ## Overlay settings (ET-012a)
 
@@ -133,7 +137,7 @@ A v1 file passes all five steps. A migrated file loads as `loaded` (or `loaded-w
 | `overlay.enabled` (ET-012e) | `true` or `false` | `true` |
 | `overlay.layout` | `strip` (one or more 38 px rows at the top centre, as many as the enabled sections need), `card` (top right), `cluster` (round speed gauge and side panel at the bottom left), `hud` (shadowed text at the top left) | `strip` |
 | `overlay.sections.<id>` | `true` or `false` for each of the fourteen sections; at least one `true` | all `true` |
-| `overlay.placements.<layout>` (ET-012b) | `x` and `y` in [0, 1], `scale` in [0.5, 2]; see [overlay placements](#overlay-placements-and-edit-mode-et-012b) | the ET-012a anchor of each layout at scale 1: strip `0.5, 0`, card `1, 0`, cluster `0, 1`, HUD `0, 0` |
+| `overlay.placements.<layout>` (ET-012b) | `x` and `y` in [0, 1], `scale` in [0.5, 3] (ET-045e; zoom = scale × 0.7); see [overlay placements](#overlay-placements-and-edit-mode-et-012b) | the ET-012a anchor of each layout at scale 1: strip `0.5, 0`, card `1, 0`, cluster `0, 1`, HUD `0, 0` |
 
 The settings card groups the sections as Driving (`speed`, `gear`, `rpm`), Fuel (`fuel`, `range`, `sdk-consumption`), Job (`cargo`, `origin`, `destination`, `distance-driven`, `distance-remaining`, `deadline`, `expected-income`) and Time (`game-time`). Which sections the live bridge can fill today, and how a section without data appears, is described in [live telemetry fields](live-telemetry-fields.md#overlay) and [the minimal overlay](minimal-overlay.md#layouts-and-sections-et-012a). Since ET-012c a sections save can change the strip's height: the strip reserves rows for every enabled section, whether or not it currently has data, and is re-placed after the durable save ([geometry](minimal-overlay.md#geometry-and-placements-et-012b)). The settings format is unchanged.
 
@@ -143,14 +147,14 @@ Each layout has its own placement, so switching layouts keeps every layout where
 
 ET-012e presentation amendment, October 22, 2026: the same `y` also aligns the painted layout vertically within the reserved native window. Sparse content therefore aligns with the top, centre or bottom of the usable client area at `y = 0`, `0.5` or `1` without resizing the window when fields appear or disappear. Main publishes this display-only anchor from the committed placement, or the edit draft while editing; it is not a new saved setting or renderer command. During a held native drag the internal anchor stays fixed and the application applies no new zoom or bounds. After release the recomputed fraction can shift the painted content inside the window by `(reserved height - painted height) × change in y`; this can be large when little native travel remains and is a separate owner usability check. Bottom alignment does not establish pointer-drop continuity. The schema, scale range and native-window fraction definition are unchanged.
 
-Placements change only through the overlay **edit mode** (decisions M5 and M10–M12). The mode lives in main's memory only: it is never saved, and every start is in driving mode. The **Overlay** card's **Position and size** block shows the saved scale of the current layout and an **Edit position** button, enabled while settings can be saved. In edit mode the block shows where the overlay is (`visible`, waiting for the game window, too large for it, or hidden while another application or the game is in front), **Smaller** and **Larger** (10 % steps within 50–200 %), **Reset to default**, **Done**, **Cancel** and a help line: drag the outlined overlay over the game; Enter on the overlay saves and Esc cancels. The layout radio group is disabled while editing; section, preset and unit changes stay possible. Dragging, scaling and resetting change only main's draft and write nothing.
+Placements change only through the overlay **edit mode** (decisions M5 and M10–M12). The mode lives in main's memory only: it is never saved, and every start is in driving mode. The **Overlay** card's **Position and size** block shows the saved scale of the current layout and an **Edit position** button, enabled while settings can be saved. In edit mode the block shows where the overlay is (`visible`, waiting for the game window, too large for it, or hidden while another application or the game is in front), **Smaller** and **Larger** (10 % steps within 50–300 % since ET-045e, 50–200 % before; the percentage is the setting, whose zoom is setting × 0.7), **Reset to default**, **Done**, **Cancel** and a help line: drag the outlined overlay over the game; Enter on the overlay saves and Esc cancels. The layout radio group is disabled while editing; section, preset and unit changes stay possible. Dragging, scaling and resetting change only main's draft and write nothing.
 
 The preload bridge appends four methods, each over its own fixed-shape invoke channel. Main accepts them only from the trusted dashboard main frame (never from the overlay), validates them again and refuses them once the exit has started:
 
 | Method | Channel | Request | Result |
 | --- | --- | --- | --- |
 | `beginOverlayEdit()` | `overlay-edit:begin` | no argument; refused while settings cannot be saved (`writable` false) | the edit state; a second call returns the current state |
-| `setOverlayEditScale(scale)` | `overlay-edit:set-scale` | exactly one finite number in [0.5, 2], rounded to two decimals; only while editing | the edit state |
+| `setOverlayEditScale(scale)` | `overlay-edit:set-scale` | exactly one finite number in [0.5, 3] (ET-045e; [0.5, 2] before), rounded to two decimals; only while editing; main applies `overlayZoom(scale)` as the zoom factor | the edit state |
 | `resetOverlayEditPlacement()` | `overlay-edit:reset` | no argument; the layout's default placement at scale 1; only while editing | the edit state |
 | `finishOverlayEdit(outcome)` | `overlay-edit:finish` | exactly `save` or `cancel`; only while editing | the settings view |
 
@@ -183,7 +187,7 @@ Loading happens once at startup, in parallel with the service start. Loading nev
 | `loaded-with-fallbacks` | A v3 (or migrated v1 or v2) file with some invalid fields | Valid fields from the file, defaults for the others | Yes; the save rewrites the whole file |
 | `invalid-file` | Not a usable settings file | Defaults | Yes; the first save quarantines the file |
 | `unsupported-older` | An older format without a migration path | Defaults | Yes; the first save quarantines the file |
-| `newer-version` | Written by a newer version (version 7 or later) | Defaults | No (`SETTINGS_READ_ONLY`); the file is never modified |
+| `newer-version` | Written by a newer version (version 9 or later since ET-045e) | Defaults | No (`SETTINGS_READ_ONLY`); the file is never modified |
 | `unreadable` | The file or directory is a symbolic link or junction, not a plain file or directory, or could not be read, or the read had not settled within the read limit (about 30 s) | Defaults | No (`SETTINGS_WRITE_FAILED`) |
 | `unavailable` | No valid settings location | Defaults | No (`SETTINGS_WRITE_FAILED`) |
 
@@ -252,7 +256,7 @@ A successful off save gates visibility before hiding and cancelling edit mode, d
 
 While the startup read is still `loading`, the overlay remains hidden even though the pending settings view carries the enabled default. A completed read applies its saved value and final geometry. Once the read limit reports `unreadable`, the existing default-true fallback applies; the loading gate does not change corruption or read-limit policy.
 
-The first save writes canonical v6; v1–v5 load without startup writes. Missing or invalid current-format visibility falls back independently to true with `overlay.enabled`. Older applications treat v6 as newer-version and refuse writes rather than erase visibility. Historical fixture files remain unchanged. See [ET-012e evidence and pending manual checks](validation/et-012e.md).
+The first save writes canonical v6 (v7 since ET-049, v8 since ET-045e); v1–v5 (v1–v7 since ET-045e) load without startup writes. Missing or invalid current-format visibility falls back independently to true with `overlay.enabled`. Older applications treat v6 as newer-version and refuse writes rather than erase visibility. Historical fixture files remain unchanged. See [ET-012e evidence and pending manual checks](validation/et-012e.md).
 
 ### Startup autostart authority
 

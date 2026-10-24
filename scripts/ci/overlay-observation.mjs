@@ -36,11 +36,14 @@ export async function waitForOverlay(page, expected) {
 // ET-012c strip containment. The synthetic checkpoint fixture (tests/fixtures/protocol-v0/checkpoint.json) carries
 // current values for these sections, in canonical order; range stays hidden because its estimate is not observed.
 export const STRIP_SMOKE_SECTIONS = Object.freeze(['speed', 'gear', 'rpm', 'fuel', 'sdk-consumption', 'cargo', 'destination', 'expected-income', 'game-time']);
-// The hidden overlay window is created at the strip's reserved size for every section at scale 1, 1280 x 116
-// (overlay-geometry.ts). Without a game window main never places it, and Windows limits a window to the screen size, so
-// on a narrow screen it is narrower (1024 on the hosted runner of CI run 38878781715). The height is not limited, and the
-// width must stay within the strip's own limits of 480 to 1280.
-export const STRIP_SMOKE_WINDOW = Object.freeze({innerHeight: 116, minWidth: 480, maxWidth: 1280});
+// The hidden overlay window is created at the strip's reserved size for every section at the scale setting 1, 1280 x 56
+// DIP at zoom 0.7 (overlay-geometry.ts, ET-045e), so its CSS viewport is 56 / 0.7 = 80 high, within one CSS px of
+// rounding, and up to 1280 / 0.7 = 1828.57 wide. Without a game window main never places it, and Windows limits a window
+// to the screen size, so on a narrow screen it is narrower (1024 DIP, about 1462 CSS px, on the hosted runner of CI run
+// 38878781715). The height is not limited, and the CSS width must stay within the strip's own limits of 480 to 1829.
+// The height may differ by one DIP of physical rounding at a fractional display scale (1 / 0.7 CSS px) plus half a CSS
+// px of viewport rounding, the same rule as zoomedViewportTolerance below (ET-045e verifier round 1).
+export const STRIP_SMOKE_WINDOW = Object.freeze({innerHeight: 80, heightTolerance: 1 / 0.7 + 0.5, minWidth: 480, maxWidth: 1829});
 
 // Self-contained browser callback: false until exactly one current strip root shows exactly the expected sections, then
 // one coherent read of where they lie. `outside` lists sections with an empty box or one not fully inside both the root
@@ -78,7 +81,8 @@ export function stripLayoutObservation(expected) {
 export function verifyStripLayout(observation) {
   assert.deepEqual(observation.outside, [], 'Enabled strip sections lie outside the overlay window');
   const {innerWidth, innerHeight} = observation.viewport;
-  assert.equal(innerHeight, STRIP_SMOKE_WINDOW.innerHeight, 'The strip overlay window must have its reserved size');
+  assert.ok(Number.isFinite(innerHeight) && Math.abs(innerHeight - STRIP_SMOKE_WINDOW.innerHeight) <= STRIP_SMOKE_WINDOW.heightTolerance,
+    'The strip overlay window must have its reserved size');
   assert.ok(Number.isFinite(innerWidth) && innerWidth >= STRIP_SMOKE_WINDOW.minWidth && innerWidth <= STRIP_SMOKE_WINDOW.maxWidth,
     `The strip overlay window width must lie between ${STRIP_SMOKE_WINDOW.minWidth} and ${STRIP_SMOKE_WINDOW.maxWidth}`);
   assert.deepEqual(observation.uncapped, [], 'Every strip item must have a maximum width');
@@ -93,17 +97,63 @@ export async function waitForStripLayout(page, expected) {
 // ET-012d containment of the card, cluster and HUD (decisions K10 and K11). The telemetry smoke first saves exactly the
 // twelve sections the v0 and v1 pair shows (SYNTHETIC_V1_STRIP_SECTIONS: every section but range and distance driven),
 // so the window reserves no row for a hidden section. Without a game window main never places the hidden overlay, so
-// the smoke sizes it to each layout's window for those sections at scale 1 (overlayWindowSize in overlay-geometry.ts:
-// the card and HUD at their nominal floor, the cluster at its exact reserve of 36 + 21 × 9 = 225). The reserved CSS
-// heights are 48 + 24 × 12 = 336, 225 and 18 + 24 × 12 = 306 (layoutReservedCss in overlay-rows.ts). A unit test ties
-// these hand-written values to both functions. All three windows are smaller than the hosted runner's 1024 x 768
-// screen, so Windows does not narrow them.
+// the smoke sizes it to each layout's window for those sections at the scale setting 1 (overlayWindowSize in
+// overlay-geometry.ts) at that setting's zoom, overlayZoom(1) = 0.7 (ET-045e): the card and HUD at their nominal floor,
+// round(300 × 0.7) × round(360 × 0.7) = 210 × 252 and 224 × 224 DIP, the cluster 308 wide and ceil(223 × 0.7 + 2) = 159
+// high for its reserve of 36 + 21 × 9 = 225 CSS px. Their CSS viewports are 300 × 360, 440 × 227.14 and 320 × 320. The
+// reserved CSS heights are 48 + 24 × 12 = 336, 225 and 18 + 24 × 12 = 306 (layoutReservedCss in overlay-rows.ts). A unit
+// test ties these hand-written values to both functions and the zoom to overlayZoom. All three windows are smaller than
+// the hosted runner's 1024 x 768 screen, so Windows does not narrow them.
 export const LAYOUT_SMOKE_WINDOWS = Object.freeze({
-  card: Object.freeze({width: 300, height: 360}),
-  cluster: Object.freeze({width: 440, height: 225}),
-  hud: Object.freeze({width: 320, height: 320})
+  card: Object.freeze({width: 210, height: 252}),
+  cluster: Object.freeze({width: 308, height: 159}),
+  hud: Object.freeze({width: 224, height: 224})
 });
+export const LAYOUT_SMOKE_ZOOM = 0.7;
+/**
+ * ET-045e verifier round 1: at a fractional display scale Windows applies a window size in whole physical pixels, and
+ * `getBounds`/`getContentBounds` convert that back to DIP rounded, so the DIP readback can differ from the CSS viewport
+ * by up to one DIP (at 150% the 210 DIP card's bounds read back as 211 while its content and viewport stayed 210 DIP and
+ * 300 CSS px; the 159 DIP cluster's content read back as 160, viewport 229 CSS px). The expected CSS viewport is
+ * therefore the window's actual content size in DIP (`getContentBounds`) divided by the zoom, within one DIP of
+ * rounding (1 / zoom CSS px) plus half a CSS px of the viewport's own rounding. At zoom 0.7 that is 1.93 CSS px, so the
+ * ET-045d cluster's 225 px viewport for a 159 DIP window (227.14) and a two-DIP error (2.86) still fail.
+ */
+export const zoomedViewportTolerance = zoom => 1 / zoom + 0.5;
+/**
+ * The overlay window Windows applied for a smoke resize: within one DIP below and two DIP above the requested size. Only
+ * +1 DIP was observed (150%); the second DIP is a margin for other fractional scales. Containment stays exact against
+ * the reserved content height, and the viewport is checked against the actual content size, not the request.
+ */
+export function verifyAppliedWindow(requested, actual) {
+  const near = (value, wanted) => Number.isFinite(value) && value >= wanted - 1 && value <= wanted + 2;
+  assert.ok(actual && near(actual.width, requested.width) && near(actual.height, requested.height),
+    `The overlay window was not applied at the requested size: ${JSON.stringify(requested)} became ${JSON.stringify(actual)}`);
+  return actual;
+}
 export const LAYOUT_SMOKE_RESERVED_CSS = Object.freeze({card: 336, cluster: 225, hud: 306});
+// ET-045e review frames for the UI overlay shard, at the zoom of a scale setting (overlayZoom in overlay-placement.ts).
+// SCALE_REFERENCE_FRAMES are the product windows with every section at the new 100% (overlayWindowSize(layout, 1)) and
+// the ET-045d strip at its 70% (896 × 82 at zoom 0.7) and 100% (1280 × 116 at zoom 1) for the owner's comparison.
+// SCALE_RANGE_FRAMES are the product windows at 50% (zoom 0.35: strip 1280 × 16, card 105 × 136, cluster 154 × 95, HUD
+// 112 × 124), the strip raised to the 38 DIP minimum height that the ET-045c probe measured at 150%. The ET-045e probe at
+// 150% showed Windows accepting the card, cluster and HUD within one DIP (106 × 136, 154 × 96, 112 × 124); if a hosted
+// runner refuses a size, the frame wait fails and the refusal is recorded.
+export const SCALE_REFERENCE_FRAMES = Object.freeze([
+  Object.freeze({name: 'scale-strip', layout: 'strip', zoom: 0.7, width: 1280, height: 56}),
+  Object.freeze({name: 'scale-card', layout: 'card', zoom: 0.7, width: 210, height: 270}),
+  Object.freeze({name: 'scale-cluster', layout: 'cluster', zoom: 0.7, width: 308, height: 188}),
+  Object.freeze({name: 'scale-hud', layout: 'hud', zoom: 0.7, width: 224, height: 248}),
+  Object.freeze({name: 'scale-strip-old70', layout: 'strip', zoom: 0.7, width: 896, height: 82}),
+  Object.freeze({name: 'scale-strip-old100', layout: 'strip', zoom: 1, width: 1280, height: 116})
+]);
+export const SCALE_RANGE_ZOOM = 0.35;
+export const SCALE_RANGE_FRAMES = Object.freeze({
+  strip: Object.freeze({width: 1280, height: 38}),
+  card: Object.freeze({width: 105, height: 136}),
+  cluster: Object.freeze({width: 154, height: 95}),
+  hud: Object.freeze({width: 112, height: 124})
+});
 
 // Self-contained browser callback: false until exactly one current root of the expected layout shows exactly the
 // expected sections, then one coherent read of where they lie. `outside` lists sections with an empty box or one not
@@ -159,10 +209,13 @@ export function layoutContainmentObservation(expected) {
 /**
  * Every shown section lies inside the overlay window and its clipping ancestors, no value is clipped by its row, the one
  * surface holding the rows lies inside the window, the lowest section ends within the CSS height the row model reserves
- * for the shown sections below that surface's top (0.01 px of float noise allowed), and the viewport has the window's
- * size, allowing one DIP of rounding (getBounds can round a window up by one DIP).
+ * for the shown sections below that surface's top (0.01 px of float noise allowed), and the CSS viewport has the
+ * window's DIP size divided by the zoom. At zoom 1 it may be one DIP larger (getBounds can round a window up by one
+ * DIP). At another zoom (ET-045e) `window` is the actual content size read back after the resize, and the viewport may
+ * differ from it by `zoomedViewportTolerance(zoom)` CSS px either way: one DIP of rounding and half a CSS px of
+ * viewport rounding.
  */
-export function verifyLayoutContainment(observation, window, reservedCss) {
+export function verifyLayoutContainment(observation, window, reservedCss, zoom = 1) {
   assert.deepEqual(observation.outside, [], 'Enabled overlay sections lie outside the overlay window');
   assert.deepEqual(observation.clipped, [], 'Overlay section values are clipped by their rows');
   assert.ok(Array.isArray(observation.surfaces) && observation.surfaces.length === 1, 'Exactly one overlay surface must hold the rows');
@@ -170,7 +223,8 @@ export function verifyLayoutContainment(observation, window, reservedCss) {
   assert.ok(Number.isFinite(observation.bottom) && Number.isFinite(reservedCss) && observation.bottom <= reservedCss + 0.01,
     'Overlay sections extend below the height the row model reserves');
   const {innerWidth, innerHeight} = observation.viewport;
-  const reserved = (actual, expected) => Number.isFinite(actual) && actual >= expected && actual <= expected + 1;
+  const reserved = (actual, dip) => Number.isFinite(actual) && Number.isFinite(zoom) && zoom > 0 &&
+    (zoom === 1 ? actual >= dip && actual <= dip + 1 : Math.abs(actual - dip / zoom) <= zoomedViewportTolerance(zoom));
   assert.ok(reserved(innerWidth, window.width) && reserved(innerHeight, window.height), 'The overlay window must have the reserved size');
   return observation;
 }
@@ -419,9 +473,10 @@ async function waitForEditing(page, expected) {
   const handle = await page.waitForFunction(overlayEditing, expected, {timeout: 10000, polling: 50});
   try {return await handle.jsonValue();} finally {await handle.dispose();}
 }
+// Chromium keeps a zoom level (a power of 1.2) and converts it back, so each factor is compared at six decimals.
 async function zoomFactors(application) {
   const windows = await application.evaluate(({BrowserWindow}) => BrowserWindow.getAllWindows().map(window =>
-    ({url: window.webContents.mainFrame.url, zoom: window.webContents.getZoomFactor()})));
+    ({url: window.webContents.mainFrame.url, zoom: Math.round(window.webContents.getZoomFactor() * 1e6) / 1e6})));
   const of = search => windows.filter(window => new URL(window.url).search === search).map(window => window.zoom);
   return {overlay: of('?view=overlay'), dashboard: of('')};
 }
@@ -429,13 +484,14 @@ async function zoomFactors(application) {
 // The Driving only preset of apps/desktop/src/overlay-sections.ts.
 const DRIVING_ONLY_SECTIONS = ['speed', 'gear', 'rpm', 'fuel', 'range'];
 // ET-012b edit mode (REG-016, REG-017). The synthetic source has no game window, so edit mode waits for the game: the
-// overlay never shows, never becomes focusable and stays topmost while its document is marked as editing. A saved scale
-// reaches only the overlay's zoom factor; the dashboard keeps 1 in its own session. Recorded for review only;
-// RuntimeReceipt.ps1 does not validate this field.
+// overlay never shows, never becomes focusable and stays topmost while its document is marked as editing. A scale
+// reaches only the overlay's zoom factor, overlayZoom(scale) = scale × 0.7 since ET-045e (0.7 at 100%, 2.1 at 300%, 0.35
+// at 50%, 1.05 at 150%); the dashboard keeps 1 in its own session. Recorded for review only; RuntimeReceipt.ps1 does
+// not validate this field.
 async function runEditStep(application, dashboard, overlay) {
   const step = {};
   step.zoomBefore = await zoomFactors(application);
-  assert.deepEqual(step.zoomBefore, {overlay: [1], dashboard: [1]});
+  assert.deepEqual(step.zoomBefore, {overlay: [0.7], dashboard: [1]});
   step.begun = await dashboard.evaluate(() => globalThis.desktop.beginOverlayEdit());
   assert.deepEqual(step.begun, {active: true, layout: 'card', scale: 1, placement: 'waiting-for-game'});
   step.renderedWhileEditing = await waitForEditing(overlay, 'true');
@@ -455,6 +511,14 @@ async function runEditStep(application, dashboard, overlay) {
   step.windowsAfterSectionsPreset = await windowSecurity(application);
   step.sectionsRestored = await dashboard.evaluate(sections => globalThis.desktop.setOverlaySections(sections), original);
   assert.deepEqual(step.sectionsRestored.overlay.sections, original);
+  step.largest = await dashboard.evaluate(() => globalThis.desktop.setOverlayEditScale(3));
+  assert.deepEqual(step.largest, {active: true, layout: 'card', scale: 3, placement: 'waiting-for-game'});
+  step.zoomAtLargest = await zoomFactors(application);
+  assert.deepEqual(step.zoomAtLargest, {overlay: [2.1], dashboard: [1]});
+  step.smallest = await dashboard.evaluate(() => globalThis.desktop.setOverlayEditScale(0.5));
+  assert.deepEqual(step.smallest, {active: true, layout: 'card', scale: 0.5, placement: 'waiting-for-game'});
+  step.zoomAtSmallest = await zoomFactors(application);
+  assert.deepEqual(step.zoomAtSmallest, {overlay: [0.35], dashboard: [1]});
   step.scaled = await dashboard.evaluate(() => globalThis.desktop.setOverlayEditScale(1.5));
   assert.deepEqual(step.scaled, {active: true, layout: 'card', scale: 1.5, placement: 'waiting-for-game'});
   step.saved = await dashboard.evaluate(() => globalThis.desktop.finishOverlayEdit('save'));
@@ -466,7 +530,7 @@ async function runEditStep(application, dashboard, overlay) {
   assert.deepEqual(step.appState, {active: false});
   step.windowsAfterSave = await windowSecurity(application);
   step.zoomAfterSave = await zoomFactors(application);
-  assert.deepEqual(step.zoomAfterSave, {overlay: [1.5], dashboard: [1]});
+  assert.deepEqual(step.zoomAfterSave, {overlay: [1.05], dashboard: [1]});
   return step;
 }
 

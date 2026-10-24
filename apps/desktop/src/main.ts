@@ -31,7 +31,7 @@ import {observeLatencyFrames} from './latency-frames';
 import {overlayWindowSize} from './overlay-geometry';
 import {isOverlayOpacity} from './overlay-opacity';
 import {isOverlayLayout, parseOverlaySections} from './overlay-sections';
-import {isOverlayEditOutcome, parseOverlayEditScale, type OverlayEditOutcome} from './overlay-placement';
+import {isOverlayEditOutcome, overlayZoom, parseOverlayEditScale, type OverlayEditOutcome} from './overlay-placement';
 import {OwnForegroundGate} from './overlay-edit';
 import {captureActivation, type CaptureGrant} from './capture-activation';
 import {monitorEventLoopLag} from './event-loop-lag';
@@ -536,9 +536,10 @@ function runApplication(profileError: unknown): void {
   function createOverlay(): void {
     // Created at the saved layout's size for its saved scale and sections: the strip as high as its sections need
     // (ET-012c), the card, cluster and HUD at least their nominal size times the scale and taller when their sections
-    // need more rows (ET-012d). The controller sets the actual bounds inside the game's client area. The scale is also
-    // the document's zoom factor (ET-012b decision M4); the overlay's own session keeps that zoom away from the
-    // dashboard, whose file:// origin it would otherwise share.
+    // need more rows (ET-012d). The controller sets the actual bounds inside the game's client area. The document's zoom
+    // factor is overlayZoom(scale), the setting times 0.7 (ET-045e decision Z2; ET-012b decision M4 used the setting
+    // itself); the overlay's own session keeps that zoom away from the dashboard, whose file:// origin it would
+    // otherwise share.
     const settings = settingsStore.view(), layout = settings.overlay.layout, placement = settings.overlay.placements[layout];
     const size = overlayWindowSize(layout, placement.scale, settings.overlay.sections);
     const created = overlay = new BrowserWindow({width: size.width, height: size.height, show: false, frame: false,
@@ -546,7 +547,7 @@ function runApplication(profileError: unknown): void {
       focusable: false, skipTaskbar: true, resizable: false, movable: false, minimizable: false, maximizable: false, fullscreenable: false,
       // A dedicated in-memory session separates the overlay's browser context from the dashboard.
       webPreferences: {partition: 'ets2telemetry-overlay', preload: path.join(__dirname, 'overlay-preload.cjs'), contextIsolation: true, sandbox: true, nodeIntegration: false,
-        zoomFactor: placement.scale}});
+        zoomFactor: overlayZoom(placement.scale)}});
     timeline?.('OVERLAY_WINDOW_CREATED'); observeLoads(created.webContents, 'OVERLAY');
     if (latency) {
       const frames = observeLatencyFrames(created, latency, () => lastOverlay.freshness === 'current' && !lastOverlay.paused && !overlayEdit.active,
@@ -911,7 +912,7 @@ function runApplication(profileError: unknown): void {
     timeline?.('OVERLAY_EDIT_STARTED');
     return controller.beginEdit(focusGate.inFront);
   });
-  // Exactly one finite scale in [0.5, 2], rounded to two decimals.
+  // Exactly one finite scale setting in [0.5, 3], rounded to two decimals; the controller applies its zoom (ET-045e).
   ipcMain.handle('overlay-edit:set-scale', (event, ...request: unknown[]) => {
     const scale = request.length === 1 ? parseOverlayEditScale(request[0]) : undefined;
     const controller = editRequest(event, scale !== undefined);
