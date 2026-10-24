@@ -310,18 +310,14 @@ async function observeClusterSpeedArc({dashboard, overlay, source, language, rec
     source.setReading(50, 73); await speedIs('180');
     const full = await speedArc(overlay, `full_${language}`);
     assertArcOffset(full, 0, `full_${language}`); record.clusterSpeedArc.push({language, step: 'full-180', ...full});
-    // Reduced motion (Windows "Animation effects" off) removes the transition; clearing the emulation restores it. On a
-    // GitHub-hosted runner the emulated media feature did not reach the overlay renderer within 5 s (PR #182, run
-    // 40139749258), although it does locally. The loaded stylesheet must always hold the reduced-motion rule for the arc;
-    // the emulation is then tried as well, and whether the computed duration followed it is recorded, not required.
+    // Reduced motion (Windows "Animation effects" off) removes the transition. The loaded stylesheet must hold that rule
+    // for the arc. Playwright's `emulateMedia({reducedMotion})` is not used: on GitHub-hosted runners the emulated feature
+    // reached the overlay renderer late or not at all (PR #182, runs 40139749258 and 40141031694), although it worked
+    // locally, so the computed duration under the emulation is not a stable gate.
     assert.ok(await overlay.evaluate(reducedMotionRule), `UI_CLUSTER_SPEED_ARC_REDUCED_MOTION_RULE_${language}`);
-    await overlay.emulateMedia({reducedMotion: 'reduce'});
-    const emulated = await overlay.waitForFunction(arcDuration, '0s', {timeout: 3000, polling: 50}).then(() => true, () => false);
-    await overlay.emulateMedia({reducedMotion: null});
-    await overlay.waitForFunction(arcDuration, '0.15s', {timeout: 5000, polling: 50});
-    record.clusterSpeedArc.push({language, step: 'reduced-motion', rule: true, emulated, reduced: emulated ? '0s' : null, restored: '0.15s'});
+    assert.ok(await overlay.evaluate(arcDuration, '0.15s'), `UI_CLUSTER_SPEED_ARC_DURATION_${language}`);
+    record.clusterSpeedArc.push({language, step: 'reduced-motion', rule: true, duration: '0.15s'});
   }, async () => {
-    await overlay.emulateMedia({reducedMotion: null});
     await dashboard.evaluate(() => globalThis.desktop.setUnitProfile('ets2', 'metric'));
     source.setReading(25, 73); source.setEngine(600, -1);
   });
