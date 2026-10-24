@@ -1,5 +1,6 @@
 import {execFile} from 'node:child_process';
 import {createHash} from 'node:crypto';
+import {existsSync, realpathSync} from 'node:fs';
 import {mkdir, readdir, readFile, realpath, rm, writeFile} from 'node:fs/promises';
 import path from 'node:path';
 import {fileURLToPath} from 'node:url';
@@ -8,6 +9,7 @@ import {describe, expect, it} from 'vitest';
 import {checkedPaths, checkInstalled, checkInstallTest, checkLaunchEnvironment, checkRunPlan, checkRunSignal, FACTS_VARIABLE, factsEvidence, installedEnvironment,
   checkDataRootUnchanged, checkDecoyUnchanged, checkRegistrationIcon, checkUninstallResidue, classifyRegistrationIcon, DATA_ROOT_REQUIRED, electronRuntimeNames, PRODUCT_EXECUTABLE, InstallerGuardError, RESIDUE_MAX_ENTRIES, isGuardedProcess, isHostedRunner, minimalPath, normalizePath, ownsRegistration, parseUninstallString, resolveRealLocation, runLayout,
   steamLibraryPaths, uninstallEnvironment, type RunPlanFacts} from '../../scripts/installer/installer-guard.mjs';
+import {checkProductLinks, checkRegistrationNames, checkUninstallEntries, classifyProductLinks} from '../../scripts/installer/installer-guard.mjs';
 import {temporaryResources} from '../shared/resources';
 
 // ET-018 PR-1 (REG-017, U12): the installer lifecycle's fail-closed guards. Pure decisions over hand-written facts; no
@@ -278,6 +280,65 @@ describe('after each install', () => {
   });
 });
 
+// ET-045h (REG-013, REG-017): the product name. The harness reads the product shortcuts (names only) and the HKCU Uninstall
+// subkeys pointing into R; these pure checks decide.
+describe('product shortcuts, the Uninstall entry and the display names (ET-045h)', () => {
+  const NEW = 'Yukon Union Telemetry', OLD = 'ETS2Telemetry Desktop';
+  const installedLinks = [`desktop||${NEW}`, `start-menu|Artur Sianiuk|${NEW}`];
+
+  it('accepts one current-name shortcut per location after an install, in the Start menu company folder', () => {
+    const classification = classifyProductLinks(installedLinks);
+    expect(classification).toEqual({total: 2, desktop: {current: 1, legacy: 0, other: 0, currentFolders: ['']},
+      'start-menu': {current: 1, legacy: 0, other: 0, currentFolders: ['Artur Sianiuk']}});
+    expect(refusal(() => checkProductLinks(classification, 'installed'))).toBe('ACCEPTED');
+  });
+  it.each([
+    ['an old-name shortcut beside the new one', [...installedLinks, `start-menu|Artur Sianiuk|${OLD}`], 'LEGACY_SHORTCUT_REMAINS'],
+    ['only the old name on the Desktop', [`desktop||${OLD}`, installedLinks[1]], 'LEGACY_SHORTCUT_REMAINS'],
+    ['a product shortcut of another name', [...installedLinks, 'desktop||Something else'], 'PRODUCT_SHORTCUT_OTHER_NAME'],
+    ['no Start menu shortcut', [installedLinks[0]], 'PRODUCT_SHORTCUT_MISSING'],
+    ['two Desktop shortcuts', [...installedLinks, `desktop|Folder|${NEW}`], 'PRODUCT_SHORTCUT_DUPLICATE'],
+    ['a Start menu shortcut in another folder', [installedLinks[0], `start-menu|Other|${NEW}`], 'PRODUCT_SHORTCUT_FOLDER'],
+    ['a Desktop shortcut in a subfolder', [`desktop|Folder|${NEW}`, installedLinks[1]], 'PRODUCT_SHORTCUT_FOLDER']
+  ])('refuses %s after an install', (_name, rows, code) => expect(refusal(() => checkProductLinks(classifyProductLinks(rows), 'installed'))).toBe(code));
+  it('expects no product shortcut of any name after an uninstall', () => {
+    expect(refusal(() => checkProductLinks(classifyProductLinks([]), 'none'))).toBe('ACCEPTED');
+    expect(refusal(() => checkProductLinks(classifyProductLinks([`start-menu|Artur Sianiuk|${OLD}`]), 'none'))).toBe('PRODUCT_SHORTCUT_UNEXPECTED');
+    expect(refusal(() => checkProductLinks(classifyProductLinks(installedLinks), 'other' as 'none'))).toBe('PRODUCT_LINK_EXPECTATION_INVALID');
+  });
+  it.each([
+    ['a path for a name', [`desktop||C:\\Users\\x\\${NEW}`]],
+    ['an absolute folder', [`start-menu|C:\\Programs|${NEW}`]],
+    ['a folder that climbs', [`start-menu|..\\Other|${NEW}`]],
+    ['an unknown location', [`taskbar||${NEW}`]],
+    ['a missing field', [`desktop|${NEW}`]],
+    ['an empty name', ['desktop||']]
+  ])('refuses a link row with %s', (_name, rows) => expect(refusal(() => classifyProductLinks(rows))).toBe('PRODUCT_LINK_ROW_INVALID'));
+
+  const binaryRoot = runLayout(RUN_ROOT).binaryRoot;
+  const entry = (view: string, name = 'ETS2TelemetryDesktop', installLocation: string | null = binaryRoot) => ({view, name, installLocation});
+  it('accepts the one ETS2TelemetryDesktop entry, seen in both registry views', () => {
+    expect(checkUninstallEntries([entry('Registry64'), entry('Registry32')], RUN_ROOT)).toEqual({views: 2, names: ['ETS2TelemetryDesktop']});
+    expect(checkUninstallEntries([entry('Registry64'), entry('Registry64', 'Other', 'D:\\Other')], RUN_ROOT)).toEqual({views: 1, names: ['ETS2TelemetryDesktop']});
+  });
+  it.each([
+    ['no entry', [], 'UNINSTALL_ENTRY_MISSING'],
+    ['only an entry outside R', [entry('Registry64', 'ETS2TelemetryDesktop', `${REAL.localAppData}\\ETS2TelemetryDesktop`)], 'UNINSTALL_ENTRY_MISSING'],
+    ['an entry without a location', [entry('Registry64', 'ETS2TelemetryDesktop', null)], 'UNINSTALL_ENTRY_MISSING'],
+    ['two entries in one view', [entry('Registry64'), entry('Registry64', 'ETS2TelemetryDesktop2')], 'UNINSTALL_ENTRY_DUPLICATE'],
+    ['a foreign key name inside R', [entry('Registry64', 'YukonUnionTelemetry')], 'UNINSTALL_ENTRY_FOREIGN_NAME']
+  ])('refuses %s', (_name, rows, code) => expect(refusal(() => checkUninstallEntries(rows, RUN_ROOT))).toBe(code));
+  it('refuses rows that are not a list', () => expect(refusal(() => checkUninstallEntries(null as never, RUN_ROOT))).toBe('UNINSTALL_ENTRIES_INVALID'));
+
+  it('accepts only the product DisplayName and Publisher', () => {
+    expect(checkRegistrationNames({displayName: NEW, publisher: 'Yukon Union Telemetry contributors'})).toEqual({displayName: NEW,
+      publisher: 'Yukon Union Telemetry contributors'});
+    expect(refusal(() => checkRegistrationNames({displayName: OLD, publisher: 'Yukon Union Telemetry contributors'}))).toBe('DISPLAY_NAME_NOT_PRODUCT');
+    expect(refusal(() => checkRegistrationNames({displayName: NEW, publisher: 'ETS2Telemetry contributors'}))).toBe('PUBLISHER_NOT_PRODUCT');
+    expect(refusal(() => checkRegistrationNames(null))).toBe('DISPLAY_NAME_NOT_PRODUCT');
+  });
+});
+
 // ET-045g (REG-017): the Installed apps icon. The harness reads the registration's DisplayIcon, and the driver records only
 // its shape and the hash of the binary root's app.ico; the value is a machine path and never reaches the evidence.
 describe('registration icon shape (ET-045g)', () => {
@@ -418,9 +479,12 @@ describe('machine facts never reach the evidence', () => {
     const config = path.join(evidence, 'config.json');
     await writeFile(config, JSON.stringify({runRoot, evidence, setup: path.join(base, 'Setup.exe'), stepBudgetMs: 1000}));
     /** Runs one driver command with this registration in the facts; resolves with its result line, also when it failed. */
-    const command = (args: string[], version: string, displayIcon: string | null) => {
-      const registration = {installLocation: binaryRoot, displayVersion: version, uninstallString: `"${binaryRoot}\\Update.exe" --uninstall`, displayIcon};
-      const env = {...process.env, [FACTS_VARIABLE]: JSON.stringify({...machine, registration, realBinaryRootExists: false})};
+    // ET-045h: the product DisplayName and Publisher and the one Uninstall entry in R, unless a case replaces them.
+    const command = (args: string[], version: string, displayIcon: string | null, names: {displayName?: string; publisher?: string} = {},
+      uninstallEntries: {view: string; name: string; installLocation: string}[] = [{view: 'Registry64', name: 'ETS2TelemetryDesktop', installLocation: binaryRoot}]) => {
+      const registration = {installLocation: binaryRoot, displayVersion: version, uninstallString: `"${binaryRoot}\\Update.exe" --uninstall`, displayIcon,
+        displayName: 'Yukon Union Telemetry', publisher: 'Yukon Union Telemetry contributors', ...names};
+      const env = {...process.env, [FACTS_VARIABLE]: JSON.stringify({...machine, registration, uninstallEntries, realBinaryRootExists: false})};
       return new Promise<{passed: boolean; failure: {code?: string} | null}>((resolve, reject) => {
         execFile(process.execPath, [path.resolve('scripts/installer/installer-lifecycle.mjs'), args[0], config, ...args.slice(1)],
           {env, encoding: 'utf8', timeout: 30000, windowsHide: true}, (_error, stdout) => {
@@ -457,6 +521,14 @@ describe('machine facts never reach the evidence', () => {
       await mkdir(path.join(binaryRoot, 'app-0.1.1', 'resources', 'icon'), {recursive: true});
       await writeFile(path.join(binaryRoot, 'app-0.1.1', 'resources', 'icon', 'app.ico'), tracked);
       expect(await command(['installed', 'update-0.1.1', '0.1.1'], '0.1.1', `${binaryRoot}\\app-0.1.1\\ETS2TelemetryDesktop.exe,0`)).toMatchObject({passed: true});
+      // ET-045h: the old DisplayName or Publisher of an install made before the rename, or a second entry, is refused.
+      const current = `${binaryRoot}\\app-0.1.1\\ETS2TelemetryDesktop.exe,0`;
+      expect(await command(['installed', 'old-name-0.1.1', '0.1.1'], '0.1.1', current, {displayName: 'ETS2Telemetry Desktop'}))
+        .toMatchObject({passed: false, failure: {code: 'DISPLAY_NAME_NOT_PRODUCT'}});
+      expect(await command(['installed', 'old-publisher-0.1.1', '0.1.1'], '0.1.1', current, {publisher: 'ETS2Telemetry contributors'}))
+        .toMatchObject({passed: false, failure: {code: 'PUBLISHER_NOT_PRODUCT'}});
+      expect(await command(['installed', 'two-entries-0.1.1', '0.1.1'], '0.1.1', current, {}, [{view: 'Registry64', name: 'ETS2TelemetryDesktop', installLocation: binaryRoot},
+        {view: 'Registry64', name: 'YukonUnionTelemetry', installLocation: binaryRoot}])).toMatchObject({passed: false, failure: {code: 'UNINSTALL_ENTRY_DUPLICATE'}});
       expect(await observed('update-0.1.1')).toMatchObject({displayIcon: {shape: 'app-exe-index-0', versionMatches: true},
         rootIcon: {present: true, sha256: hash(tracked), equalsTracked: true}, bundledIcon: {present: true, sha256: hash(tracked), equalsTracked: true}});
       // A DisplayIcon of the previous version, or no value at all, is refused.
@@ -465,8 +537,11 @@ describe('machine facts never reach the evidence', () => {
       await rm(path.join(binaryRoot, 'app.ico'));
       expect(await command(['installed', 'repair-0.1.0', '0.1.0'], '0.1.0', null)).toMatchObject({passed: false, failure: {code: 'DISPLAY_ICON_NOT_PRODUCT_EXECUTABLE'}});
       expect(await observed('repair-0.1.0')).toMatchObject({displayIcon: {shape: 'absent', versionMatches: null}, rootIcon: missing});
-      expect((await readdir(evidence)).sort()).toEqual(['config.json', 'icon-install-0.1.0.json', 'icon-repair-0.1.0.json', 'icon-stale-0.1.1.json',
-        'icon-update-0.1.1.json', 'installed-install-0.1.0.json', 'installed-repair-0.1.0.json', 'installed-stale-0.1.1.json', 'installed-update-0.1.1.json']);
+      expect((await readdir(evidence)).sort()).toEqual(['config.json', 'icon-install-0.1.0.json', 'icon-old-name-0.1.1.json', 'icon-old-publisher-0.1.1.json',
+        'icon-repair-0.1.0.json', 'icon-stale-0.1.1.json', 'icon-two-entries-0.1.1.json', 'icon-update-0.1.1.json', 'installed-install-0.1.0.json',
+        'installed-old-name-0.1.1.json', 'installed-old-publisher-0.1.1.json', 'installed-repair-0.1.0.json', 'installed-stale-0.1.1.json',
+        'installed-two-entries-0.1.1.json', 'installed-update-0.1.1.json']);
+      for (const name of await readdir(evidence)) if (name.startsWith('installed-')) expect(await readFile(path.join(evidence, name), 'utf8')).not.toMatch(DRIVE_PATH);
     } finally {await resources.dispose();}
   }, 60000);
   it('plants a legacy app.ico and allows a DisplayIcon write only for views whose key points into R (the driver itself)', async () => {
@@ -563,6 +638,58 @@ describe('data root of a blocked in-app uninstall', () => {
   });
 });
 
+// ET-045h fix round 1 (REG-013, REG-017): the hosted run 40134013831 failed right after links-install-0.1.0, because
+// Assert-ProductLinks called `Split-Path -LiteralPath ... -Parent`, which no parameter set accepts; `-Plan` never runs the
+// helpers. tests/windows/Test-InstallerLinkHelpers.ps1 loads the harness's shortcut helpers from its AST and runs them
+// against fake Desktop and Start menu folders in a temporary folder, with Invoke-Driver replaced by a recorder, under
+// Windows PowerShell 5.1 and, where installed (the hosted runner), PowerShell 7. No installer, registry write or real
+// folder is used; Read-UninstallEntries only reads HKCU and finds nothing for a run root in the temporary folder.
+describe('harness shortcut helpers at runtime (ET-045h)', () => {
+  const checkout = fileURLToPath(new URL('../..', import.meta.url));
+  const systemRoot = process.env.SystemRoot ?? 'C:\\Windows';
+  const pwsh = (process.env.PATH ?? '').split(path.delimiter).map(folder => path.join(folder, 'pwsh.exe')).find(file => existsSync(file));
+  const shells: [string, string][] = [['Windows PowerShell 5.1', path.join(systemRoot, 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe')]];
+  if (pwsh) shells.push(['PowerShell 7', pwsh]);
+  // Windows PowerShell 5.1 started from PowerShell 7 (the hosted step's shell) inherits PS7's PSModulePath and then cannot
+  // load its own Microsoft.PowerShell.Utility (Get-FileHash). 5.1 therefore gets an empty PSModulePath, under every spelling
+  // of the name, so it computes its default module path, as tests/shared/runtime-receipt-validator.ts does.
+  const environment = (shell: string) => shell === pwsh ? process.env
+    : {...Object.fromEntries(Object.entries(process.env).filter(([name]) => name.toUpperCase() !== 'PSMODULEPATH')), PSModulePath: ''};
+  // The temporary folder can be named in 8.3 form (C:\Users\RUNNER~1) while the helpers report long names, so the shortcut
+  // folders are compared as real paths.
+  const real = (file: unknown) => typeof file === 'string' ? realpathSync.native(file) : file;
+  it.each(shells)('runs the shortcut helpers under %s', async (_name, shell) => {
+    const resources = await temporaryResources();
+    try {
+      const root = path.join(resources.directory, 'helpers');
+      await mkdir(root);
+      const {stdout} = await promisify(execFile)(shell, ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File',
+        path.join(checkout, 'tests', 'windows', 'Test-InstallerLinkHelpers.ps1'), '-Harness', path.join(checkout, 'scripts', 'installer', 'Invoke-InstallerLifecycle.ps1'),
+        '-Root', root], {encoding: 'utf8', timeout: 60000, windowsHide: true, env: environment(shell)});
+      const result = JSON.parse(stdout.trim().split(/\r?\n/).at(-1)!) as Record<string, unknown>;
+      const folders = result.linkFolders as {desktop?: unknown; startMenu?: unknown} | undefined;
+      expect({desktop: real(folders?.desktop), startMenu: real(folders?.startMenu)})
+        .toEqual({desktop: real(path.join(root, 'Desktop')), startMenu: real(path.join(root, 'Programs', 'Artur Sianiuk'))});
+      expect(result).toMatchObject({
+        rowsInstalled: ['desktop||Yukon Union Telemetry', 'start-menu|Artur Sianiuk|Yukon Union Telemetry'],
+        linksCall: {command: 'links', arguments: ['install-0.1.0', 'installed', 'desktop||Yukon Union Telemetry', 'start-menu|Artur Sianiuk|Yukon Union Telemetry'],
+          timeoutMs: 30000},
+        rowsWithOrphans: ['desktop||ETS2Telemetry Desktop', 'desktop||Yukon Union Telemetry', 'start-menu|Artur Sianiuk|ETS2Telemetry Desktop',
+          'start-menu|Artur Sianiuk|Yukon Union Telemetry'],
+        plantExists: 'PLANT_TARGET_EXISTS before again',
+        notRemoved: 'LEGACY_SHORTCUT_NOT_REMOVED after install-again-0.1.0',
+        orphansRemoved: 'ACCEPTED', plantedAfterAssert: 0,
+        decoyKept: 'ACCEPTED', decoyDeleted: true, decoyChanged: 'FOREIGN_SHORTCUT_CHANGED after decoy',
+        cleanupRemovedPlanted: true, cleanupKeptChanged: true, cleanupFailure: null,
+        hostedOnly: 'LEGACY_NAMES_HOSTED_ONLY before local',
+        uninstallEntries: [],
+        steps: ['shortcuts-install-0.1.0', 'legacy-names-before-install-again-0.1.0', 'legacy-names-install-again-0.1.0', 'legacy-names-decoy',
+          'legacy-names-before-complete-running']
+      });
+    } finally {await resources.dispose();}
+  }, 90000);
+});
+
 describe('harness Job bounds', () => {
   const checkout = fileURLToPath(new URL('../..', import.meta.url));
   const read = (relative: string) => readFile(path.join(checkout, relative), 'utf8');
@@ -587,11 +714,18 @@ describe('harness Job bounds', () => {
     expect(folders.length).toBeGreaterThan(5);
     expect(folders.filter(folder => folder !== 'diagnostics' && !/^diagnostics\\[a-z0-9.-]+$/.test(folder))).toEqual([]);
   });
-  // ET-045g: the harness's only registry value write is the legacy DisplayIcon, after the driver's legacy-icon decision.
-  it('writes a registry value only in Set-LegacyIcon, and only to views the driver says point into R', async () => {
+  // ET-045g: the harness's registry value writes are the legacy DisplayIcon, after the driver's legacy-icon decision, and
+  // (ET-045h) the old DisplayName and Publisher, after the driver's legacy-names decision.
+  it('writes a registry value only in Set-LegacyIcon and Set-LegacyNames, and only to views the driver says point into R', async () => {
     const harness = await read('scripts/installer/Invoke-InstallerLifecycle.ps1');
     const writes = [...harness.matchAll(/\.SetValue\(/g)];
-    expect(writes).toHaveLength(1);
+    expect(writes).toHaveLength(3);
+    const names = harness.slice(harness.indexOf('function Set-LegacyNames'), harness.indexOf('\n}', harness.indexOf('function Set-LegacyNames')));
+    expect([...names.matchAll(/\.SetValue\(/g)]).toHaveLength(2);
+    expect(names.indexOf("Invoke-Driver 'legacy-names'")).toBeGreaterThan(-1);
+    expect(names.indexOf("Invoke-Driver 'legacy-names'")).toBeLessThan(names.indexOf('.SetValue('));
+    expect(names).toContain('if ($owned[$index] -ne $true) { continue }');
+    expect(names).toContain("if (!$hosted) { throw ('LEGACY_NAMES_HOSTED_ONLY before ' + $Label) }");
     const body = harness.slice(harness.indexOf('function Set-LegacyIcon'), harness.indexOf('\n}', harness.indexOf('function Set-LegacyIcon')));
     expect(body).toContain('.SetValue(');
     expect(body.indexOf("Invoke-Driver 'legacy-icon'")).toBeGreaterThan(-1);

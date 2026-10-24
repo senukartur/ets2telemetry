@@ -592,30 +592,30 @@ function Write-Readme([string]$Uninstall, [string]$DataRoot, $Folders, [string[]
     foreach ($hash in $Known) { [void]$hashes.Add($hash) }
     foreach ($folder in $Folders) { foreach ($hash in $folder.hashes) { [void]$hashes.Add([string]$hash) } }
     $lines = New-Object Collections.Generic.List[string]
-    $lines.Add('ETS2Telemetry was uninstalled, but its cleanup could not finish.'); $lines.Add('Reason: ' + $Code); $lines.Add('')
+    $lines.Add('Yukon Union Telemetry was uninstalled, but its cleanup could not finish.'); $lines.Add('Reason: ' + $Code); $lines.Add('')
     switch ($Mode) {
-        'stopped' { $lines.Add('ETS2Telemetry tried ' + $Attempts + ' times and stopped trying at sign-in. Finish the cleanup with the steps below.') }
+        'stopped' { $lines.Add('Yukon Union Telemetry tried ' + $Attempts + ' times and stopped trying at sign-in. Finish the cleanup with the steps below.') }
         'failed-retry' {
-            $lines.Add('An unexpected error stopped this cleanup attempt. ETS2Telemetry tries again at your next Windows sign-in (attempt ' + $Attempts + ' of ' + $MaxAttempts + ' was made).')
+            $lines.Add('An unexpected error stopped this cleanup attempt. Yukon Union Telemetry tries again at your next Windows sign-in (attempt ' + $Attempts + ' of ' + $MaxAttempts + ' was made).')
             $lines.Add('You only need the steps below if that does not happen.')
         }
         'failed-stopped' { $lines.Add('An unexpected error stopped the automatic cleanup, and it does not run again. Finish the cleanup with the steps below.') }
         default {
-            $lines.Add('ETS2Telemetry tries again at your next Windows sign-in, once the games are closed (attempt ' + $Attempts + ' of ' + $MaxAttempts + ' was made).')
+            $lines.Add('Yukon Union Telemetry tries again at your next Windows sign-in, once the games are closed (attempt ' + $Attempts + ' of ' + $MaxAttempts + ' was made).')
             $lines.Add('You only need the steps below if that does not happen.')
         }
     }
     $lines.Add(''); $lines.Add('Close Euro Truck Simulator 2, American Truck Simulator and TruckersMP first.'); $lines.Add('')
     if (@($Folders).Count) {
-        $lines.Add("Remove the ETS2Telemetry plugin from these game folders, but only when the file's SHA-256 is one of the hashes below:")
+        $lines.Add("Remove the Yukon Union Telemetry plugin from these game folders, but only when the file's SHA-256 is one of the hashes below:")
         foreach ($folder in $Folders) { $lines.Add('  ' + $folder.game + ': ' + (Join-Path (Get-PluginsDirectory $folder.root) $PluginFile)) }
         $lines.Add(''); $lines.Add('Check a file with: Get-FileHash -Algorithm SHA256 "<file>"'); $lines.Add(''); $lines.Add("Hashes of this application's plugin:")
         foreach ($hash in $hashes) { $lines.Add('  ' + $hash) }
         $lines.Add('')
     }
     $lines.Add('Then delete the folders "plugins" and "uninstall" in ' + $DataRoot + '.')
-    $lines.Add('If that folder holds anything else, it is not a file ETS2Telemetry knows: check it first, and delete the folder only when nothing you need is left.')
-    $lines.Add(''); $lines.Add('Reinstalling ETS2Telemetry instead cancels this cleanup and keeps the plugin in use.'); $lines.Add('')
+    $lines.Add('If that folder holds anything else, it is not a file Yukon Union Telemetry knows: check it first, and delete the folder only when nothing you need is left.')
+    $lines.Add(''); $lines.Add('Reinstalling Yukon Union Telemetry instead cancels this cleanup and keeps the plugin in use.'); $lines.Add('')
     Write-AtomicText $Uninstall 'README.txt' ($lines -join "`r`n")
 }
 function Write-FailureReadme([string]$Uninstall, [string]$DataRoot, [string]$Code, [bool]$Retry, $Attempts) {
@@ -630,7 +630,7 @@ function Write-FailureReadme([string]$Uninstall, [string]$DataRoot, [string]$Cod
         Write-Readme $Uninstall $DataRoot $intent.folders $intent.known $Code $count $mode
         return
     }
-    $notice = 'Reason: ' + $Code + "`r`n" + 'The automatic cleanup of ETS2Telemetry stopped, and it does not run again. Finish the cleanup with the steps below.'
+    $notice = 'Reason: ' + $Code + "`r`n" + 'The automatic cleanup of Yukon Union Telemetry stopped, and it does not run again. Finish the cleanup with the steps below.'
     $readme = Join-Path $Uninstall 'README.txt'
     $earlier = ''
     if ((Get-Kind $readme) -eq 'file' -and (New-Object IO.FileInfo($readme)).Length -le 65536) { $earlier = [IO.File]::ReadAllText($readme, $Utf8) }
@@ -642,17 +642,17 @@ function Show-Summary($Roots) {
     # One message box, production only: a test run never shows a window that could block it.
     if ($Roots.mode -ne 'production') { $script:Result.messageBox = 'suppressed'; return }
     $text = switch ($script:Result.outcome) {
-        'complete' { 'ETS2Telemetry finished removing its game plugin and its local data.' }
-        'deferred' { 'ETS2Telemetry could not finish removing its game plugin yet: ' + (Get-ReasonText $script:Result.code) + '. It tries again at your next sign-in (attempt ' + $script:Result.attempts + ' of ' + $MaxAttempts + ').' }
-        'stopped' { 'ETS2Telemetry stopped trying to remove its game plugin after ' + $script:Result.attempts + ' attempts: ' + (Get-ReasonText $script:Result.code) + '. README.txt in ' + $Roots.uninstall + ' lists the steps to finish by hand.' }
-        'refused' { if ($script:Result.readme) { 'ETS2Telemetry could not finish removing its game plugin and its local data (' + $script:Result.code + '). README.txt in ' + $Roots.uninstall + ' says what happens next and how to finish by hand.' } else { $null } }
+        'complete' { 'Yukon Union Telemetry finished removing its game plugin and its local data.' }
+        'deferred' { 'Yukon Union Telemetry could not finish removing its game plugin yet: ' + (Get-ReasonText $script:Result.code) + '. It tries again at your next sign-in (attempt ' + $script:Result.attempts + ' of ' + $MaxAttempts + ').' }
+        'stopped' { 'Yukon Union Telemetry stopped trying to remove its game plugin after ' + $script:Result.attempts + ' attempts: ' + (Get-ReasonText $script:Result.code) + '. README.txt in ' + $Roots.uninstall + ' lists the steps to finish by hand.' }
+        'refused' { if ($script:Result.readme) { 'Yukon Union Telemetry could not finish removing its game plugin and its local data (' + $script:Result.code + '). README.txt in ' + $Roots.uninstall + ' says what happens next and how to finish by hand.' } else { $null } }
         default { $null }
     }
     if ($null -eq $text) { return }
     try {
         Add-Type -AssemblyName System.Windows.Forms
         $icon = if ($script:Result.outcome -eq 'complete') { [Windows.Forms.MessageBoxIcon]::Information } else { [Windows.Forms.MessageBoxIcon]::Warning }
-        [void][Windows.Forms.MessageBox]::Show($text, 'ETS2Telemetry uninstall', [Windows.Forms.MessageBoxButtons]::OK, $icon)
+        [void][Windows.Forms.MessageBox]::Show($text, 'Yukon Union Telemetry uninstall', [Windows.Forms.MessageBoxButtons]::OK, $icon)
         $script:Result.messageBox = 'shown'
     } catch { $script:Result.messageBox = 'failed' }
 }

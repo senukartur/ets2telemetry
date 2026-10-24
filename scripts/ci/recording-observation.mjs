@@ -107,7 +107,7 @@ const RECORDING_TEXT_INTERRUPTED = Object.freeze({headline: 'Connection lost; re
  * the redelivered eventSeq 5 is a duplicate, not a loss, so no event is lost.
  */
 const RECORDING_LOSSES_AFTER_REDELIVERY = Object.freeze({...NO_LOSSES, notConnected: 1});
-const RECORDING_TEXT_LOSSES_AFTER_REDELIVERY = Object.freeze(['Gaps recorded since ETS2Telemetry started', 'Intervals without a connection: 1']);
+const RECORDING_TEXT_LOSSES_AFTER_REDELIVERY = Object.freeze(['Gaps recorded since Yukon Union Telemetry started', 'Intervals without a connection: 1']);
 /** The states in which the durable cursor is active with fresh v1 data: recording, or recording a paused game. */
 const RECORDED_STATES = Object.freeze(['recording', 'paused']);
 const RECORDED_HEADLINES = Object.freeze(['Recording', 'Game paused; recording continues when it resumes']);

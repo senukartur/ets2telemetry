@@ -257,7 +257,7 @@ function Test-RecordingStatusReceipt {
     if ($null -eq $closed -or $closed.target -cne 'synthetic' -or $null -ne $closed.code -or $closed.state -cnotin @('recording','paused','interrupted') -or
         !(Test-ReceiptInteger -Value $closed.losses.lostEvents -Minimum 0 -Maximum 0) -or
         !(Test-ReceiptInteger -Value $closed.losses.notConnected -Minimum 1 -Maximum 1)) { return $false }
-    if ((@($status.reopened.losses) -join '|') -cne 'Gaps recorded since ETS2Telemetry started|Intervals without a connection: 1') { return $false }
+    if ((@($status.reopened.losses) -join '|') -cne 'Gaps recorded since Yukon Union Telemetry started|Intervals without a connection: 1') { return $false }
     # The reopened dashboard is closed again, so the tray exit runs with the main window closed.
     if ($status.closedAgain.dashboard -isnot [bool] -or $status.closedAgain.dashboard) { return $false }
     # Each dashboard text log the driver records holds the text it was waited for.

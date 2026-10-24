@@ -8,8 +8,8 @@ import {crc32, deflateRawSync} from 'node:zlib';
 import {createPackageWithOptions} from '@electron/asar';
 import {afterEach, beforeEach, describe, expect, it} from 'vitest';
 import {writePluginBundle} from '../../scripts/plugin-bundle.mjs';
-import {AUTHENTICODE_STATUSES, SIGNING_FAILURES, inspectInstaller, packedNativeEntries, nugetVersion, parseAuthenticodeOutput, readAuthenticode, readZip, releaseIdentity, setupExeName,
-  windowsPowerShell, type AuthenticodeResult} from '../../scripts/release-identity.mjs';
+import {AUTHENTICODE_STATUSES, SIGNING_FAILURES, VERSION_INFO_SCRIPT, assertVersionInfo, inspectInstaller, packedNativeEntries, nugetVersion, parseAuthenticodeOutput, parseVersionInfoOutput,
+  readAuthenticode, readVersionInfo, readZip, releaseIdentity, setupExeName, windowsPowerShell, type AuthenticodeResult} from '../../scripts/release-identity.mjs';
 
 // ET-018 PR-6 (plan U14, U16; docs/release.md): the release identity and `inspect-package --installer` on a fake package
 // tree, a fake Squirrel make output and a fake vendor folder in a temporary checkout. Every PE image is an inert synthetic
@@ -116,12 +116,16 @@ function zip(entries: [string, Buffer][]) {
 interface MakeOptions {
   change?: (entries: Map<string, Buffer>) => void;
   nuspecVersion?: string;
+  nuspecTitle?: string;
+  nuspecAuthors?: string;
   releases?: (nupkg: Buffer) => string;
 }
 /** Builds the make output from the package as it is now: Setup, the full NuGet package and RELEASES. */
-async function buildMake(tree: Tree, {change, nuspecVersion = nugetVersion(VERSION), releases}: MakeOptions = {}) {
+async function buildMake(tree: Tree, {change, nuspecVersion = nugetVersion(VERSION), nuspecTitle = 'Yukon Union Telemetry', nuspecAuthors = 'Yukon Union Telemetry contributors',
+  releases}: MakeOptions = {}) {
   const entries = new Map<string, Buffer>();
-  entries.set('ETS2TelemetryDesktop.nuspec', Buffer.from(`<package><metadata><id>ETS2TelemetryDesktop</id><version>${nuspecVersion}</version></metadata></package>`));
+  entries.set('ETS2TelemetryDesktop.nuspec', Buffer.from(`<package><metadata><id>ETS2TelemetryDesktop</id><version>${nuspecVersion}</version><title>${nuspecTitle}</title>`
+    + `<authors>${nuspecAuthors}</authors></metadata></package>`));
   for (const relative of await listRelative(tree.packageDirectory)) {
     if (['LICENSES.chromium.html', 'version'].includes(relative)) continue;
     entries.set(`lib/net45/${relative}`, await readFile(path.join(tree.packageDirectory, relative)));
@@ -267,7 +271,7 @@ describe('the NuGet projection (inspect-package --installer)', () => {
     expect(facts.projectedFiles).toBe((await listRelative(tree.packageDirectory)).length - 2);
     expect(facts.additions).toEqual(['ETS2TelemetryDesktop.nuspec', '[Content_Types].xml', '_rels/.rels', 'lib/net45/ETS2TelemetryDesktop_ExecutionStub.exe',
       'lib/net45/squirrel.exe', `package/services/metadata/core-properties/${'0123456789abcdef'.repeat(2)}.psmdcp`]);
-    expect(facts).toMatchObject({setup: `ETS2Telemetry-Setup-${VERSION}.exe`, nupkg: `ETS2TelemetryDesktop-${VERSION}-full.nupkg`, releases: 'RELEASES'});
+    expect(facts).toMatchObject({setup: `YukonUnionTelemetry-Setup-${VERSION}.exe`, nupkg: `ETS2TelemetryDesktop-${VERSION}-full.nupkg`, releases: 'RELEASES'});
   });
 
   const mismatches: [string, MakeOptions, string][] = [
@@ -278,6 +282,9 @@ describe('the NuGet projection (inspect-package --installer)', () => {
     ['Update.exe missing', {change: entries => entries.delete('lib/net45/squirrel.exe')}, 'Squirrel addition missing: lib/net45/squirrel.exe'],
     ['the execution stub missing', {change: entries => entries.delete('lib/net45/ETS2TelemetryDesktop_ExecutionStub.exe')}, 'Squirrel addition missing'],
     ['another nuspec version', {nuspecVersion: '0.1.0'}, 'Nuspec version differs from package.json'],
+    // ET-045h: Squirrel writes the Installed apps DisplayName and Publisher from these two.
+    ['the old nuspec title', {nuspecTitle: 'ETS2Telemetry Desktop'}, 'Nuspec title differs from the product name'],
+    ['the old nuspec authors', {nuspecAuthors: 'ETS2Telemetry contributors'}, 'Nuspec authors differ from the publisher'],
     ['a RELEASES SHA-1 of other bytes', {releases: nupkg => `${'0'.repeat(40)} ETS2TelemetryDesktop-${VERSION}-full.nupkg ${nupkg.length}`}, 'RELEASES SHA-1 differs'],
     ['a RELEASES size of other bytes', {releases: nupkg => `${createHash('sha1').update(nupkg).digest('hex')} ETS2TelemetryDesktop-${VERSION}-full.nupkg 1`}, 'RELEASES size differs'],
     ['two RELEASES entries', {releases: () => `${'0'.repeat(40)} a.nupkg 1\n${'0'.repeat(40)} b.nupkg 1`}, 'RELEASES must hold exactly one entry']
@@ -458,17 +465,67 @@ describe('Authenticode output', () => {
   });
 });
 
+describe('executable version information (ET-045h)', () => {
+  const encode = (text: string) => Buffer.from(text, 'utf8').toString('base64');
+  const output = (values: (string | null)[]) => ['ProductName', 'FileDescription', 'CompanyName', 'OriginalFilename']
+    .map((field, index) => { const value = values[index]; return `${field} ${value === null ? '-' : encode(value)}`; }).join('\r\n') + '\r\n';
+  const product = ['Yukon Union Telemetry', 'Yukon Union Telemetry', 'Artur Sianiuk', 'ETS2TelemetryDesktop.exe'];
+  const rest = 'FileDescription -\nCompanyName -\nOriginalFilename -';
+
+  it('parses one line per field, in order, with empty values as null', () => {
+    expect(parseVersionInfoOutput(output(product))).toEqual({ProductName: 'Yukon Union Telemetry', FileDescription: 'Yukon Union Telemetry', CompanyName: 'Artur Sianiuk',
+      OriginalFilename: 'ETS2TelemetryDesktop.exe'});
+    expect(parseVersionInfoOutput(output(['Łódź ®', null, null, 'a.exe']))).toEqual({ProductName: 'Łódź ®', FileDescription: null, CompanyName: null, OriginalFilename: 'a.exe'});
+  });
+  const invalid: [string, string, string][] = [
+    ['too few lines', 'ProductName -\nFileDescription -\nCompanyName -', 'wrong number of lines'],
+    ['too many lines', `ProductName -\n${rest}\nProductName -`, 'wrong number of lines'],
+    ['fields out of order', 'FileDescription -\nProductName -\nCompanyName -\nOriginalFilename -', 'out of order'],
+    ['a malformed line', `ProductName\n${rest}`, 'Invalid version information line 0'],
+    ['a non-canonical encoding', `ProductName ${encode('Yukon').slice(0, -2)}5=\n${rest}`, 'Invalid'],
+    ['a value that is not UTF-8', `ProductName ${Buffer.from([0xff, 0xfe]).toString('base64')}\n${rest}`, 'not valid']
+  ];
+  for (const [label, stdout, message] of invalid) it(`refuses ${label}`, () => {expect(() => parseVersionInfoOutput(stdout)).toThrow(message);});
+
+  it('accepts only the product name, the pinned company and the technical executable name', () => {
+    expect(() => assertVersionInfo(parseVersionInfoOutput(output(product)))).not.toThrow();
+    expect(() => assertVersionInfo(parseVersionInfoOutput(output(['ETS2Telemetry Desktop', ...product.slice(1)])))).toThrow('ProductName');
+    expect(() => assertVersionInfo(parseVersionInfoOutput(output([product[0], 'ETS2Telemetry Desktop', ...product.slice(2)])))).toThrow('FileDescription');
+    expect(() => assertVersionInfo(parseVersionInfoOutput(output([product[0], product[1], null, product[3]])))).toThrow('CompanyName');
+    expect(() => assertVersionInfo(parseVersionInfoOutput(output([...product.slice(0, 3), 'Yukon Union Telemetry.exe'])))).toThrow('OriginalFilename');
+  });
+
+  it('reads a real version resource through the fixed Windows PowerShell script, read only', () => {
+    expect(VERSION_INFO_SCRIPT).toContain('[Diagnostics.FileVersionInfo]::GetVersionInfo');
+    const system = path.join(process.env.SystemRoot ?? 'C:\\Windows', 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe');
+    const info = readVersionInfo(system);
+    expect(info.CompanyName).toBe('Microsoft Corporation');
+    expect(info.OriginalFilename?.toLowerCase()).toContain('powershell');
+    expect(info.ProductName).toMatch(/Windows/);
+  }, 60000);
+});
+
 describe('maker metadata', () => {
-  it('names Setup with the package version and sets the NuGet authors and description', async () => {
+  it('names Setup with the package version and sets the NuGet title, authors and description', async () => {
     const forge = (await import(pathToFileURL(path.resolve('forge.config.cjs')).href) as {default: {makers: {name: string; config: Record<string, string>}[]}}).default;
     const {version} = JSON.parse(await readFile(path.resolve('package.json'), 'utf8')) as {version: string};
     const squirrel = forge.makers.find(maker => maker.name === '@electron-forge/maker-squirrel')?.config;
-    expect(squirrel).toMatchObject({name: 'ETS2TelemetryDesktop', setupExe: setupExeName(version)});
-    expect(setupExeName(version)).toBe(`ETS2Telemetry-Setup-${version}.exe`);
+    // ET-045h (owner decision D2): the display names change; the Squirrel id keeps the install root and the Uninstall key.
+    expect(squirrel).toMatchObject({name: 'ETS2TelemetryDesktop', title: 'Yukon Union Telemetry', authors: 'Yukon Union Telemetry contributors',
+      setupExe: setupExeName(version)});
+    expect(setupExeName(version)).toBe(`YukonUnionTelemetry-Setup-${version}.exe`);
     // The installer lifecycle finds Setup by this name.
     expect(await readFile(path.resolve('scripts/installer/Invoke-InstallerLifecycle.ps1'), 'utf8')).toContain(`'out/make/squirrel.windows/x64/${setupExeName(version)}'`);
     expect(squirrel?.authors).toMatch(/\S/);
     expect(squirrel?.description).toMatch(/\S/);
+  });
+
+  it('sets the executable version resource to the product name, keeping the Start menu company and the executable name', async () => {
+    const forge = (await import(pathToFileURL(path.resolve('forge.config.cjs')).href) as {default: {packagerConfig: Record<string, unknown>}}).default;
+    expect(forge.packagerConfig).toMatchObject({executableName: 'ETS2TelemetryDesktop', appBundleId: 'com.ets2telemetry.desktop',
+      win32metadata: {CompanyName: 'Artur Sianiuk', FileDescription: 'Yukon Union Telemetry', ProductName: 'Yukon Union Telemetry'}});
+    // package.json productName keeps userData, the single-instance lock and the out/ folder.
+    expect((JSON.parse(await readFile(path.resolve('package.json'), 'utf8')) as {productName: string}).productName).toBe('ETS2Telemetry Desktop');
   });
 
   it('converts versions the way electron-winstaller does', () => {

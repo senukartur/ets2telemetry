@@ -133,7 +133,7 @@ jobs:
         with:
           name: windows-installer-${{ github.run_id }}-${{ github.run_attempt }}
           path: |
-            out/make/squirrel.windows/x64/ETS2Telemetry-Setup-*.exe
+            out/make/squirrel.windows/x64/YukonUnionTelemetry-Setup-*.exe
             out/make/squirrel.windows/x64/*-full.nupkg
             out/make/squirrel.windows/x64/RELEASES
             out/make/squirrel.windows/x64/release-identity.json

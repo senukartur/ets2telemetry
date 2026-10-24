@@ -25,6 +25,12 @@ export const VENDOR_DIRECTORY = 'node_modules/electron-winstaller/vendor';
 export const NUGET_ID = 'ETS2TelemetryDesktop';
 export const EXECUTABLE = 'ETS2TelemetryDesktop.exe';
 export const RELEASES = 'RELEASES';
+/** The product's display name (ET-045h, owner decision D2): the nuspec title and the executable's ProductName and FileDescription. */
+export const PRODUCT_NAME = 'Yukon Union Telemetry';
+/** The nuspec authors, which Squirrel writes as the Installed apps Publisher (ET-045h H1). */
+export const PUBLISHER = 'Yukon Union Telemetry contributors';
+/** The executable's CompanyName, which names the Start menu folder of the shortcuts (ET-045h H2). */
+export const COMPANY_NAME = 'Artur Sianiuk';
 /** The statuses of System.Management.Automation.SignatureStatus in Windows PowerShell 5.1. */
 export const AUTHENTICODE_STATUSES = ['Valid', 'UnknownError', 'NotSigned', 'HashMismatch', 'NotTrusted', 'NotSupportedFileFormat', 'Incompatible'];
 /**
@@ -48,7 +54,7 @@ const SIGNATURE_TIMEOUT_MS = 120000;
 const SIGNATURE_MAX_OUTPUT = 1024 * 1024;
 
 /** The versioned Setup name of forge.config.cjs. */
-export const setupExeName = version => `ETS2Telemetry-Setup-${version}.exe`;
+export const setupExeName = version => `YukonUnionTelemetry-Setup-${version}.exe`;
 /** electron-winstaller's convertVersion: NuGet takes the prerelease label without dots and drops build metadata. */
 export function nugetVersion(version) {
   const [main, ...prerelease] = version.split('+')[0].split('-');
@@ -253,6 +259,9 @@ function checkInstaller({packageDirectory, makeDirectory, version, executable = 
   const nuspec = zip.extract(`${NUGET_ID}.nuspec`).toString('utf8');
   assert.equal(/<id>([^<]*)<\/id>/.exec(nuspec)?.[1], NUGET_ID, 'Nuspec id differs');
   assert.equal(/<version>([^<]*)<\/version>/.exec(nuspec)?.[1], nugetVersion(version), 'Nuspec version differs from package.json');
+  // Squirrel writes the Installed apps DisplayName from the title and the Publisher from the authors (ET-045h).
+  assert.equal(/<title>([^<]*)<\/title>/.exec(nuspec)?.[1], PRODUCT_NAME, 'Nuspec title differs from the product name');
+  assert.equal(/<authors>([^<]*)<\/authors>/.exec(nuspec)?.[1], PUBLISHER, 'Nuspec authors differ from the publisher');
 
   const projection = new Map(), excluded = [];
   for (const relative of listFiles(packageDirectory)) {
@@ -343,6 +352,66 @@ export function readAuthenticode(files, env = process.env) {
   if (result.error) throw result.error;
   assert.equal(result.status, 0, `Get-AuthenticodeSignature failed: ${String(result.stderr).slice(0, 2000)}`);
   return parseAuthenticodeOutput(result.stdout, files.length);
+}
+
+// --- Executable version information (ET-045h) -----------------------------------------------------------------------
+
+/** The version resource fields that name the product, in the order VERSION_INFO_SCRIPT prints them. */
+export const VERSION_INFO_FIELDS = ['ProductName', 'FileDescription', 'CompanyName', 'OriginalFilename'];
+/**
+ * The fixed Windows PowerShell 5.1 script. It reads one base64 UTF-8 path from standard input, so the path never becomes
+ * script text, and prints one line per VERSION_INFO_FIELDS entry: `<field> <base64 UTF-8 value or ->`. It reads the
+ * resource with [Diagnostics.FileVersionInfo] and never runs the file.
+ */
+export const VERSION_INFO_SCRIPT = [
+  "$ErrorActionPreference = 'Stop'",
+  '$file = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String([Console]::In.ReadToEnd().Trim()))',
+  '$info = [Diagnostics.FileVersionInfo]::GetVersionInfo($file)',
+  `foreach ($field in @(${VERSION_INFO_FIELDS.map(field => `'${field}'`).join(', ')})) {`,
+  '  $value = [string]$info.$field',
+  "  $encoded = if ($value.Length) { [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($value)) } else { '-' }",
+  "  [Console]::Out.Write($field + ' ' + $encoded + [char]10)",
+  '}'
+].join('\n');
+
+/** Parses the script's output strictly: exactly one line per field, in order; an empty value is null. */
+export function parseVersionInfoOutput(stdout) {
+  const lines = stdout.split(/\r?\n/).filter(line => line.length);
+  assert.equal(lines.length, VERSION_INFO_FIELDS.length, 'Version information output has the wrong number of lines');
+  const info = {};
+  lines.forEach((line, index) => {
+    const match = /^([A-Za-z]+) ([A-Za-z0-9+/]+={0,2}|-)$/.exec(line);
+    assert.ok(match, `Invalid version information line ${index}`);
+    assert.equal(match[1], VERSION_INFO_FIELDS[index], 'Version information output is out of order');
+    if (match[2] === '-') {info[match[1]] = null; return;}
+    const bytes = Buffer.from(match[2], 'base64');
+    assert.equal(bytes.toString('base64'), match[2], 'Invalid version information encoding');
+    info[match[1]] = new TextDecoder('utf-8', {fatal: true}).decode(bytes);
+  });
+  return info;
+}
+
+/** The version resource of one absolute path, from one bounded Windows PowerShell call. */
+export function readVersionInfo(file, env = process.env) {
+  const shell = windowsPowerShell(env);
+  const result = spawnSync(shell.executable, ['-NoLogo', '-NoProfile', '-NonInteractive', '-Command', VERSION_INFO_SCRIPT], {
+    input: Buffer.from(file, 'utf8').toString('base64') + '\n', env: shell.env, encoding: 'utf8', timeout: SIGNATURE_TIMEOUT_MS,
+    maxBuffer: SIGNATURE_MAX_OUTPUT, windowsHide: true});
+  if (result.error) throw result.error;
+  assert.equal(result.status, 0, `FileVersionInfo failed: ${String(result.stderr).slice(0, 2000)}`);
+  return parseVersionInfoOutput(result.stdout);
+}
+
+/**
+ * Checks the packaged executable's version resource (`inspect-package`): ProductName and FileDescription are the product
+ * name, which Squirrel uses for the shortcut name; CompanyName names the Start menu folder; OriginalFilename keeps the
+ * executable's technical name.
+ */
+export function assertVersionInfo(info, executable = EXECUTABLE) {
+  assert.equal(info.ProductName, PRODUCT_NAME, 'Executable ProductName differs from the product name');
+  assert.equal(info.FileDescription, PRODUCT_NAME, 'Executable FileDescription differs from the product name');
+  assert.equal(info.CompanyName, COMPANY_NAME, 'Executable CompanyName differs');
+  assert.equal(info.OriginalFilename, executable, 'Executable OriginalFilename differs');
 }
 
 // --- The identity --------------------------------------------------------------------------------------------------

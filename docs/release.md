@@ -15,12 +15,12 @@ ET-018 PR-6 (October 18, 2026) records what a release build is made of and wheth
 
 | File | What it is |
 | --- | --- |
-| `ETS2Telemetry-Setup-<version>.exe` | The installer the user runs. The name comes from `setupExe` in `forge.config.cjs`; it carries the `package.json` version. |
+| `YukonUnionTelemetry-Setup-<version>.exe` | The installer the user runs. The name comes from `setupExe` in `forge.config.cjs`; it carries the `package.json` version. Before ET-045h it was `ETS2Telemetry-Setup-<version>.exe`. |
 | `ETS2TelemetryDesktop-<version>-full.nupkg` | The full NuGet package that Setup installs, with the application under `lib/net45/`. A prerelease version loses the dots in its label (`0.2.0-beta.1` becomes `0.2.0-beta1`), as electron-winstaller converts it. |
 | `RELEASES` | One line: the package's SHA-1, its name and its size. |
 | `release-identity.json` | Written by `node scripts/release-identity.mjs` after the make; see below. |
 
-The maker also sets `authors` (`ETS2Telemetry contributors`, which electron-winstaller also uses for the NuGet `owners` and `copyright`) and `description` in the package's nuspec. They are cosmetic.
+The maker also sets `title` (`Yukon Union Telemetry`, the Installed apps DisplayName), `authors` (`Yukon Union Telemetry contributors`, the Installed apps Publisher, which electron-winstaller also uses for the NuGet `owners` and `copyright`; `ETS2Telemetry contributors` before ET-045h) and `description` in the package's nuspec ([product name](#product-name-et-045h)).
 
 ### Installed apps icon (ET-045g)
 
@@ -37,6 +37,36 @@ Residual risks, by which part of the hook fails:
 - **The icon placement fails on a fresh install.** Then `app.ico` is missing, so Squirrel downloads the atom again (online) and points `DisplayIcon` at it for that version.
 - **The `DisplayIcon` write fails after the icon was placed, on a fresh install.** Squirrel then skips its icon branch, because `app.ico` exists, so the entry has no `DisplayIcon`. Windows shows a generic icon until the next install or update.
 - **The `DisplayIcon` write fails on an update.** The entry keeps its old value. If that value is Squirrel's `<install root>\app.ico`, the file now holds the product bytes. If it is the previous version's executable, it still shows the product icon while that `app-` folder exists. After two such failures in a row, the value names an `app-` folder that no longer exists, and Windows shows a generic icon, not the atom. If Squirrel's install fails after the hook created the key, a key with only `DisplayIcon` stays; it has no `DisplayName`, so Installed apps does not list it, and the next install or uninstall replaces or deletes it. Names, the Setup file name and the Squirrel id are unchanged here (ET-045h). The real Installed apps view remains an owner check ([ET-045g validation](validation/et-045g.md)).
+
+### Product name (ET-045h)
+
+Under owner decision D2 of October 24, 2026 the product's user-facing name is **Yukon Union Telemetry**. Only display names changed; every technical identity stays, so an update keeps one installation, one Installed apps entry, the single-instance lock, the settings, the history and the plugin ownership.
+
+| What Windows shows | Source | Value |
+| --- | --- | --- |
+| Installed apps DisplayName | nuspec `title` (maker `title`) | `Yukon Union Telemetry` |
+| Installed apps Publisher | nuspec `authors` (maker `authors`) | `Yukon Union Telemetry contributors` |
+| Shortcut name, Task Manager, file Properties | executable `ProductName` and `FileDescription` (`packagerConfig.win32metadata`) | `Yukon Union Telemetry` |
+| Start menu folder | executable `CompanyName` | `Artur Sianiuk` (pinned to the value packager inferred before; H2) |
+| Setup file | maker `setupExe` | `YukonUnionTelemetry-Setup-<version>.exe` |
+
+Unchanged on purpose: `package.json` `productName` `ETS2Telemetry Desktop` (it decides `%APPDATA%\ETS2Telemetry Desktop`, the single-instance lock and `out/ETS2Telemetry Desktop-win32-x64`), the Squirrel id `ETS2TelemetryDesktop` (the install root `%LOCALAPPDATA%\ETS2TelemetryDesktop`, the Uninstall key and the shortcut AUMID), the executable `ETS2TelemetryDesktop.exe` and its `OriginalFilename`, `appBundleId`, the data root `%LOCALAPPDATA%\ETS2Telemetry`, the plugin DLL, pipes, environment variables, the RunOnce value and the receipt, export and diagnostic schemas and file names. Changing `productName` or the Squirrel id would move userData and the lock and create a parallel installation with a second Uninstall entry.
+
+`inspect-package.mjs` reads the executable's version resource through one bounded Windows PowerShell call (`[Diagnostics.FileVersionInfo]`, nothing is run) and requires `ProductName` = `FileDescription` = `Yukon Union Telemetry`, `CompanyName` = `Artur Sianiuk` and `OriginalFilename` = `ETS2TelemetryDesktop.exe`. `--installer` and the release identity also require the nuspec `title` and `authors` above. `tests/unit/product-name.test.ts` fails on any user-facing "ETS2Telemetry" outside literal folder and file names.
+
+### Shortcut migration (ET-045h)
+
+Squirrel names a shortcut after the executable's `ProductName` and puts the Start menu entry in `Programs\<CompanyName>` (pinned commit `eef37460ae`). Before ET-045h that was `ETS2Telemetry Desktop.lnk`; now it is `Yukon Union Telemetry.lnk`. `Update.exe --createShortcut` writes only the current name and `--removeShortcut` removes only the current name, so without migration an updated install would show both shortcuts and an uninstall would leave the old one.
+
+- **Install and updated.** A newer Setup over an existing install runs `--squirrel-install`; only `Update.exe --update` runs `--squirrel-updated`. Both hooks, after `--createShortcut` succeeded, delete `ETS2Telemetry Desktop.lnk` on the Desktop and in `Programs\Artur Sianiuk` (`apps/desktop/src/legacy-shortcuts.ts`), but only when:
+  - it is a plain file of at most 64 KiB, not a link;
+  - the new-name shortcut exists beside it, so the user is never left without one;
+  - it can be read (Electron's `shell.readShortcutLink`) and belongs to this install: no AUMID or Squirrel's `com.squirrel.ETS2TelemetryDesktop.ETS2TelemetryDesktop`, and a target of the install root's stub `ETS2TelemetryDesktop.exe`, an `app-<version>\ETS2TelemetryDesktop.exe`, or `Update.exe --processStart ETS2TelemetryDesktop.exe` (optionally with `--process-start-args <one argument>`).
+
+  A foreign, unreadable or unexpected file with the old name is kept. The step has a 1 s budget and runs beside the deferral disarm, so the hooks' worst case stays 12 s inside Squirrel's 15 s. A kept old shortcut still starts the application (it points at the stub), and the next install or update tries again.
+- **Uninstall.** After `--removeShortcut`, the hook deletes this install's old-name shortcuts in the same two places without requiring a current one. The receipt keeps its fields: `shortcuts` is `removed` only when `--removeShortcut` succeeded, no owned old-name shortcut failed to delete and none was left undecided (past the deadline, uninspectable or unreadable), otherwise `failed`; a shortcut proven foreign does not count ([uninstall](uninstall.md)).
+- **Not touched.** Taskbar and Start pins (the user made them; Squirrel retargets them, and they keep their old label until pinned again), the `Artur Sianiuk` folder, other files and the autostart Run value.
+- **Limitation.** The hook finds the Start menu as `<Roaming AppData known folder>\Microsoft\Windows\Start Menu\Programs`. A Start Menu redirected apart from Roaming AppData is not found, and its old shortcut stays.
 
 Only the artifact built by Windows CI on a push to `main` or a dispatch is ever shipped, never a local build: MSVC builds are not reproducible, and the [released plugin list](plugin-setup.md#released-plugin-list) must name the shipped DLL's hash.
 
@@ -78,7 +108,7 @@ Only the artifact built by Windows CI on a push to `main` or a dispatch is ever 
 
 - the folder holds exactly Setup, the full package and RELEASES (and `release-identity.json` once written), so a stale Setup of another version fails;
 - RELEASES has one entry that names the package with its SHA-1 and size;
-- the nuspec has the id `ETS2TelemetryDesktop` and the converted `package.json` version;
+- the nuspec has the id `ETS2TelemetryDesktop`, the converted `package.json` version, the title `Yukon Union Telemetry` and the authors `Yukon Union Telemetry contributors` (ET-045h);
 - the package's payload carries exactly the **projection** of the portable package, with the same SHA-256 for every file.
 
 The projection follows the `<files>` rules of electron-winstaller 5.4.4's `template.nuspectemplate`: `locales\**`, `resources\**`, top-level `*.bin`, `*.dll`, `*.pak`, `*.exe.config` and `*.exe.sig`, `icudtl.dat`, `LICENSE`, the application executable, and `vk_swiftshader_icd.json` and `swiftshader\**`. The portable package's other files are left out; today these are `LICENSES.chromium.html` and `version`. A left-out file that is a native image fails, because it would ship in the portable package only.
@@ -91,7 +121,7 @@ Windows CI runs both on pushes to `main` and on dispatch, after the maker, and u
 
 Each item is required. Step 4 needs the owner's explicit authorization for this release; no other step publishes anything.
 
-1. **Version.** A PR sets `package.json` `version` to a version no earlier build has used: every alpha gets its own prerelease version, for example `0.1.0-alpha.1`, then `0.1.0-alpha.2`. Never ship two alphas with the same version: Squirrel would treat the second as a repair of the first instead of an update, and the released plugin list would get two entries with the same `appVersion`. NuGet drops the dots of the label (`0.1.0-alpha1`), so Setup is `ETS2Telemetry-Setup-0.1.0-alpha.1.exe`, the package `ETS2TelemetryDesktop-0.1.0-alpha1-full.nupkg` and the installed folder `app-0.1.0-alpha1`. NuGet's version 1 rules compare that label as text, so `alpha10` would sort before `alpha2`: after `alpha.9`, move to the next patch version instead.
+1. **Version.** A PR sets `package.json` `version` to a version no earlier build has used: every alpha gets its own prerelease version, for example `0.1.0-alpha.1`, then `0.1.0-alpha.2`. Never ship two alphas with the same version: Squirrel would treat the second as a repair of the first instead of an update, and the released plugin list would get two entries with the same `appVersion`. NuGet drops the dots of the label (`0.1.0-alpha1`), so Setup is `YukonUnionTelemetry-Setup-0.1.0-alpha.1.exe`, the package `ETS2TelemetryDesktop-0.1.0-alpha1-full.nupkg` and the installed folder `app-0.1.0-alpha1`. NuGet's version 1 rules compare that label as text, so `alpha10` would sort before `alpha2`: after `alpha.9`, move to the next patch version instead.
    - **Toolchain check (October 18, 2026).** With `0.1.0-alpha.1` in a local working copy, `npm run make`, `npm run inspect:package -- --installer` and `node scripts/release-identity.mjs` all passed, with the names above, `versions.nuget` `0.1.0-alpha1`, the plugin bundle's `appVersion` `0.1.0-alpha.1` and the executable's file and product version `0.1.0-alpha.1`. Installing it and Squirrel's ordering of two alphas were not observed; the installer lifecycle of the version PR is the first check.
    - **Installer lifecycle.** It pins its installer versions (`0.1.0`, the `app-0.1.0` folder, the registered version, and the `0.1.1` fixture) and finds Setup by name. `tests/unit/release-identity.test.ts` fails until `scripts/installer/Invoke-InstallerLifecycle.ps1` names the new Setup, so update the lifecycle's versions in the same PR; its fixture version must stay above the new version.
 2. **Build.** After the merge, the push to `main` runs Windows CI. All three jobs must pass, including the installer lifecycle; download `windows-installer-<run>-<attempt>` from that run.
