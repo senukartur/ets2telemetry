@@ -1220,3 +1220,19 @@ Items 9 and 6 of [ET-045](https://trello.com/c/OmNYTBsp), under the owner's deci
 - **Z9 owner comparison.** Reference screenshots of the new 100% and the old 70% and 100% strip go to the run output and ignored `.local/`; nothing is committed.
 
 For the scale's range and meaning, the strip width and the window sizes, this supersedes M2's and M4's [0.5, 2] range and `1280 × scale` width, M10's set-scale range and the window sizes stated by ET-012c, ET-012d and ET-028 above, and settings v7 (ET-049) as the current format; earlier dated text is unchanged. See [the minimal overlay](docs/minimal-overlay.md#rebased-scale-and-strip-width-et-045e-october-24-2026), [settings](docs/settings.md) and [ET-045e validation](docs/validation/et-045e.md). No display, DPI, game or performance claim follows.
+
+## ET-045f Cluster speed arc — October 24, 2026
+
+Item 3 of [ET-045](https://trello.com/c/OmNYTBsp), under the owner's decision D4 of October 24, 2026: the Cluster shows speed on the outer ring and RPM on the inner ring, with a validated numeric overlay payload field. The coordinator adopted the architect's decisions Y1–Y9 under the owner's delivery authorization for ET-045; the owner did not review them individually.
+
+- **Y1 field.** The `value` variant of `OverlaySectionView` gains the optional `speedRing`, set only on the speed section of a current projection with an available, finite speed: the fraction in [0, 1] of the speed gauge scale of the displayed game's unit profile, 0 while the displayed integer is 0. It is absent while the speed is unavailable, stale, not current or disabled. Reusing `ring` on the speed section and a top-level field were rejected.
+- **Y2 one scale rule.** `apps/desktop/src/speed-gauge.ts` holds `SPEED_GAUGE_FULL_SCALE` (130 km/h, 80 mph) and `speedGaugeFraction`, which uses telemetry-core's conversion and the overlay's own speed formatter and never reads display text. The dashboard's Live instrument uses the same helper for its ratio and scale, with unchanged behaviour.
+- **Y3 reverse.** A negative speed gives 0 (no arc); the centre still shows the signed number.
+- **Y4 validation.** `isGaugeFraction` (a finite number in [0, 1]) and `overlayGauges` in `overlay-sections.ts`: main attaches `speedRing` and the RPM `ring` only when valid, and the overlay preload applies `overlayGauges` to every delivery before its expiry and listener, so a malformed fraction is dropped without dropping the update or the channel.
+- **Y5 geometry.** The arc lies on the existing outer track (radius 52, stroke 6) from 12 o'clock clockwise, with dash array `C C` (C = 2π × 52) and inline offset C × (1 − fraction), drawn only above 0, in the order speed track, speed arc, RPM track, RPM arc. The ET-045d centre grid is unchanged.
+- **Y6 motion.** `transition: stroke-dashoffset 150ms linear`, and `transition: none` under `prefers-reduced-motion: reduce`. The arc appears and disappears instantly; the RPM arc stays static.
+- **Y7 colours.** The speed arc uses `--yu-ov-accent` (#60A5FA) and the RPM arc the new token `--yu-ov-rpm` (#2563EB), following the ui-spec's `overlay.cluster`; the RPM colour is an owner review point.
+- **Y8 unchanged.** Window sizes, rows, caps, typography and reserves, the strip, card and HUD, settings, presets, IPC channels and bridge methods, the dashboard preload, the wire, storage, export, native code and `GAME_HISTORY_RECORDING`.
+- **Y9 evidence.** Unit tests pin the fractions, validators, view and markup; the overlay UI shard reads the real renderer's arc, transition and reduced-motion behaviour ([ET-045f validation](docs/validation/et-045f.md)).
+
+This records the overlay payload change authorized by D4: the overlay projection now carries a second validated number. For the Cluster only, it supersedes the ET-028 statement that the outer speed track is decorative; earlier dated text is unchanged. No game, display or performance claim follows.
