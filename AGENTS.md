@@ -842,3 +842,19 @@ ET-045a implements items 1, 4, 5, 10 and 11 of [ET-045](https://trello.com/c/OmN
 ## ET-045b contextual action results — October 24, 2026
 
 ET-045 item 15 only. Each Game plugin card action now answers next to its trigger, with the action, the game and a severity (information, done, refused, failed) shown by tone, icon and word in EN/RU; information, done and refused are polite announcements and failures assertive, and focus stays on the control. A Steam folder duplicate is information. Renderer only: no IPC, preload, main, contract, settings, wire, storage, export or native change, and `GAME_HISTORY_RECORDING` is unchanged. Owner packaged/installed, Windows scaling, real dialog focus and Narrator checks remain pending in [ET-045b validation](docs/validation/et-045b.md).
+
+## ET-045 delivery authorization and decisions — October 24, 2026
+
+On October 24, 2026 the owner authorized delivering the ET-045 packages sequentially through squash merge, with decisions at the coordinator's discretion, and decided D1–D5:
+
+- **D1:** option b. Saved scale numbers are kept and reinterpreted, so the new 100% equals the old 70%; the range is 50–300%.
+- **D2:** display names only change; the setup file is renamed to `YukonUnionTelemetry-Setup-<version>.exe`.
+- **D3:** an install/update hook writes `app.ico` and `DisplayIcon`.
+- **D4:** the Cluster shows speed on the outer ring and RPM on the inner ring, with a validated numeric overlay payload field.
+- **D5:** the strip is never narrower than at scale 1.
+
+This supersedes the ET-045a statement above that D1–D5 await the owner. It authorizes no release, and every package keeps its code gates and pending real-game checks; see [ET-045 validation](docs/validation/et-045.md).
+
+## ET-045c overlay bounds verification — October 24, 2026
+
+ET-045c implements item 12 of ET-045 only. In the owner's ATS TruckersMP windowed session at 150%, the Driving only strip at x 0.8485, y 1, scale 0.5 kept a taller window than the 21 DIP that main requested and extended below the game client. The overlay controller cached its own last request, called `setBounds` only when the next rectangle differed, and never read the actual bounds. The fix verifies the actual bounds after every request and placement (1 DIP per edge), re-applies a mismatch at most twice, fits a window that keeps another size at the same fractions when it fits (only on axes changed beyond 2 DIP of rounding, and drops convert against that size), and otherwise hides fail-closed, reporting `too-large` while editing, until the next distinct game client observation re-arms one more bounded verification. A hidden window is shown only once its rectangle is accepted. Mismatches write bounded fact-only `OVERLAY_BOUNDS_MISMATCH` lines (a hide once per refused request, other outcomes once per mode, outcome and size difference, at most 16 per launch); every verified apply is recorded only in the opt-in diagnostic timeline. On the development machine at 150% the verifier's probe measured a 38 DIP minimum height for the overlay window; the enforcing mechanism and the owner's machine are unverified, and no game result follows. No settings, IPC, preload, wire, storage or native change. The owner's real-game retest is pending; see [ET-045c validation](docs/validation/et-045c.md).
