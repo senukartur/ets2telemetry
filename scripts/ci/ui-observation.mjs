@@ -806,9 +806,9 @@ function scaleControls() {
 }
 /**
  * ET-045e (decision Z7): the existing edit controls step the scale setting in 10% steps within 50-300%. From the saved
- * scale (100% unless ET-048's editing check saved another), Smaller steps down to 50% with Smaller disabled, and Larger
- * 25 times reaches 300% with Larger disabled, in the selected language. Cancel discards the draft: the settings file
- * keeps its bytes and the saved scale is unchanged.
+ * scale (100% unless ET-048's editing check saved another), Smaller steps down to 50% with Smaller disabled in both
+ * languages. In English, Larger 25 times reaches 300% with Larger disabled; in Russian one Larger step shows 60% with both
+ * enabled. Cancel discards the draft: the settings file keeps its bytes and the saved scale is unchanged.
  */
 async function observeScaleControl({dashboard, config, language, record}) {
   const settingsFile = path.join(config.localappdata, 'ETS2Telemetry', 'settings', 'settings.json');
