@@ -165,3 +165,30 @@ it('keeps the edit mode flag on quiet transport expiry and starts each subscript
   port.deliver({...projected, editing: false}, 2); expect(receive.mock.lastCall?.[0]).toMatchObject({editing: false});
   stop();
 });
+
+// ET-045f: the preload delivers only valid gauge fractions. A malformed speed or RPM fraction is dropped (no arc) without
+// dropping the update, the credit or the channel, and the quiet expiry carries no fraction.
+it('delivers valid gauge fractions unchanged and drops malformed ones without dropping the update or the channel', async () => {
+  const arcs: OverlayPresentation = {...projected, layout: 'cluster', sections: [{id: 'speed', state: 'value', text: '90 km/h', speedRing: 9 / 13},
+    {id: 'rpm', state: 'value', text: '1500 rpm', ring: 0.5}, {id: 'fuel', state: 'unavailable'}]};
+  const receive = vi.fn(), stop = bridge.subscribeOverlay(receive), port = attach();
+  port.deliver(arcs, 1); expect(receive.mock.lastCall?.[0]).toEqual(arcs);
+  const at = (index: number, section: object): OverlayPresentation => ({...arcs, sections: arcs.sections.map((old, position) => position === index ? section as typeof old : old)});
+  const cases: [OverlayPresentation, OverlayPresentation][] = [
+    [at(0, {id: 'speed', state: 'value', text: '90 km/h', speedRing: 2}), at(0, {id: 'speed', state: 'value', text: '90 km/h'})],
+    [at(0, {id: 'speed', state: 'value', text: '90 km/h', speedRing: Number.NaN}), at(0, {id: 'speed', state: 'value', text: '90 km/h'})],
+    [at(1, {id: 'rpm', state: 'value', text: '1500 rpm', ring: 0.5, speedRing: 0.5}), arcs],
+    [at(1, {id: 'rpm', state: 'value', text: '1500 rpm', ring: -1}), at(1, {id: 'rpm', state: 'value', text: '1500 rpm'})]
+  ];
+  for (const [index, [input, output]] of cases.entries()) {
+    port.deliver(input, index + 2);
+    expect(receive.mock.lastCall?.[0], String(index)).toEqual(output);
+    expect(port.postMessage).toHaveBeenLastCalledWith({type: 'consumed', delivery: index + 2});
+  }
+  expect(port.closed).toBe(false); expect(subscriptions()).toBe(1);
+  await vi.advanceTimersByTimeAsync(500);
+  const expired = receive.mock.lastCall?.[0] as OverlayPresentation;
+  expect(expired.freshness).toBe('stale');
+  expect(expired.sections).toEqual([{id: 'speed', state: 'unavailable'}, {id: 'rpm', state: 'unavailable'}, {id: 'fuel', state: 'unavailable'}]);
+  stop();
+});

@@ -88,6 +88,36 @@ export function enabledSectionCount(sections: OverlaySections): number {
   return OVERLAY_SECTION_IDS.filter(id => sections[id]).length;
 }
 
+/** A Cluster gauge fraction (ET-045f): a finite number in [0, 1]. */
+export function isGaugeFraction(value: unknown): value is number {
+  return typeof value === 'number' && Number.isFinite(value) && value >= 0 && value <= 1;
+}
+
+/**
+ * The projection with only valid gauge fractions (ET-045f): `speedRing` stays only on a current speed value and `ring` only
+ * on a current RPM value, each a finite number in [0, 1]; every other copy is removed, and nothing else changes. Returns
+ * the same object when nothing is removed, so the overlay preload can apply it to every delivery. A malformed fraction is
+ * dropped (no arc) without dropping the update.
+ */
+export function overlayGauges(presentation: OverlayPresentation): OverlayPresentation {
+  const sections: unknown = presentation.sections;
+  if (!Array.isArray(sections)) return presentation;
+  const current = presentation.freshness === 'current';
+  let changed = false;
+  const cleaned = (sections as OverlayPresentation['sections']).map(section => {
+    if (typeof section !== 'object' || section === null || section.state !== 'value' || !('ring' in section || 'speedRing' in section)) return section;
+    const keepSpeed = current && section.id === 'speed' && isGaugeFraction(section.speedRing);
+    const keepRing = current && section.id === 'rpm' && isGaugeFraction(section.ring);
+    if (('speedRing' in section && !keepSpeed) || ('ring' in section && !keepRing)) {
+      changed = true;
+      const {ring, speedRing, ...rest} = section;
+      return {...rest, ...(keepRing ? {ring} : {}), ...(keepSpeed ? {speedRing} : {})};
+    }
+    return section;
+  });
+  return changed ? {...presentation, sections: cleaned} : presentation;
+}
+
 /**
  * The overlay preload's view after its quiet deadline: stale, not paused, and every section it was showing becomes an
  * unavailable placeholder. The layout and the displayed units stay, so the overlay neither jumps nor shows old values.

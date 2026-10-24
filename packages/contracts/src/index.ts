@@ -172,12 +172,14 @@ export interface JournalSamplePage {database: JournalDatabase; samples: JournalS
 /**
  * One overlay section, formatted by main in the displayed game's unit profile. `value`: current text with an optional
  * secondary `detail` (such as the fuel level) and, for engine RPM, a `ring` fraction in [0, 1] of the fixed 0-3000 rpm
- * display scale. `unavailable`: rendered as a dash, never as zero or a last-known value. A disabled section, one the
- * protocol in use does not carry, (except speed and fuel) one without data while current, or, while not current, one
- * the previous projection did not show is left out of the list.
+ * display scale. For speed (ET-045f), `speedRing` is the fraction in [0, 1] of the speed gauge scale of the displayed
+ * game's unit profile (130 km/h or 80 mph), 0 while the displayed integer is 0 or the truck reverses; it is set only on a
+ * current value. Both fractions are validated in main and in the overlay preload. `unavailable`: rendered as a dash, never
+ * as zero or a last-known value. A disabled section, one the protocol in use does not carry, (except speed and fuel) one
+ * without data while current, or, while not current, one the previous projection did not show is left out of the list.
  */
 export type OverlaySectionView =
-  | {id: OverlaySectionId; state: 'value'; text: string; detail?: string; ring?: number}
+  | {id: OverlaySectionId; state: 'value'; text: string; detail?: string; ring?: number; speedRing?: number}
   | {id: OverlaySectionId; state: 'unavailable'};
 /** Read-only display projection: no source selection, HWND or native placement authority. */
 export interface OverlayPresentation {

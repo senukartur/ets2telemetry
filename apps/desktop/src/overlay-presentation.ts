@@ -3,7 +3,8 @@ import {resolveDisplayUnits} from '../../../packages/telemetry-core/src/display-
 import {formatMoneyAmount} from '../../../packages/telemetry-core/src/format';
 import {carriesField, type LiveFieldId} from '../../../packages/telemetry-core/src/live-view';
 import {liveSources, V1_JOB_FIELDS} from './live-sources';
-import {DEFAULT_OVERLAY_SETTINGS, OVERLAY_SECTION_IDS} from './overlay-sections';
+import {DEFAULT_OVERLAY_SETTINGS, isGaugeFraction, OVERLAY_SECTION_IDS} from './overlay-sections';
+import {speedGaugeFraction} from './speed-gauge';
 import {DEFAULT_UNIT_PROFILES, displayGame, isExplicitFixture, profileFor, speedNumber, speedUnit, volumeNumber, volumeUnit} from './unit-profiles';
 import {localizeDeadlineString, localizeGameTimeString} from './i18n';
 
@@ -110,7 +111,10 @@ export function overlayPresentation(live: LiveTelemetry, units: UnitProfiles = D
     const detailText = detail ? valueOf(detail) : undefined;
     const rpm = sources.v0State?.engineRpm;
     const ring = id === 'rpm' && rpm?.state === 'value' && Number.isFinite(rpm.value) ? Math.min(1, Math.max(0, rpm.value / RPM_RING_FULL_SCALE)) : undefined;
-    sections.push({id, state: 'value', text: texts.join(', '), ...(detailText ? {detail: detailText} : {}), ...(ring === undefined ? {} : {ring})});
+    // ET-045f: the Cluster's speed arc on the gauge scale of the displayed profile, from the same canonical m/s as the text.
+    const speedRing = id === 'speed' && state?.speed.available ? speedGaugeFraction(state.speed.value, profile) : undefined;
+    sections.push({id, state: 'value', text: texts.join(', '), ...(detailText ? {detail: detailText} : {}), ...(isGaugeFraction(ring) ? {ring} : {}),
+      ...(isGaugeFraction(speedRing) ? {speedRing} : {})});
   }
   return {
     source: game === 'ats' ? 'ATS' : game === 'ets2' ? 'ETS2' : 'No game', origin: observation?.source.origin ?? 'none', status: live.status,

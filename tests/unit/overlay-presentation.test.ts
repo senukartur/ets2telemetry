@@ -4,7 +4,7 @@ import type {LiveTelemetry, OverlayPresentation, OverlaySectionView} from '../..
 import {validateMessage} from '../../packages/contracts/src/protocol-v0';
 import {initialLive} from '../../apps/desktop/src/live-state';
 import {overlayPresentation} from '../../apps/desktop/src/overlay-presentation';
-import {OVERLAY_PRESETS} from '../../apps/desktop/src/overlay-sections';
+import {DEFAULT_OVERLAY_SETTINGS, OVERLAY_PRESETS} from '../../apps/desktop/src/overlay-sections';
 import {DEFAULT_OVERLAY_PLACEMENTS} from '../../apps/desktop/src/overlay-placement';
 import {overlayView} from '../../apps/desktop/src/overlay-view';
 import {
@@ -32,7 +32,7 @@ const ids = (sections: readonly OverlaySectionView[]) => sections.map(section =>
 
 it('shows the v0 sections of the fixture in metric for ETS2, in canonical order, with absent ones left out', () => {
   expect(overlayPresentation(live()).sections).toEqual([
-    {id: 'speed', state: 'value', text: '0 km/h'},
+    {id: 'speed', state: 'value', text: '0 km/h', speedRing: 0},
     {id: 'gear', state: 'value', text: 'R1'},
     {id: 'rpm', state: 'value', text: '600 rpm', ring: 0.2},
     // Fuel is not observed: the baseline section stays as a dash, never 0.
@@ -54,7 +54,7 @@ it('formats every section in the US customary profile for ATS, leaving canonical
   const presentation = overlayPresentation(current, {ets2: 'metric', ats: 'us-customary'});
   expect(presentation).toMatchObject({source: 'ATS', speed: '56', speedUnit: 'mph', fuel: '66.0', fuelUnit: 'US gal', freshness: 'current'});
   expect(presentation.sections.slice(0, 6)).toEqual([
-    {id: 'speed', state: 'value', text: '56 mph'},
+    {id: 'speed', state: 'value', text: '56 mph', speedRing: expect.closeTo(55.92340730136005 / 80, 12)},
     {id: 'gear', state: 'value', text: 'R1'},
     {id: 'rpm', state: 'value', text: '600 rpm', ring: 0.2},
     {id: 'fuel', state: 'value', text: '66.0 US gal', detail: '25%'},
@@ -68,23 +68,26 @@ it('keeps the speed section text equal to the legacy speed number and unit', () 
   const current = live();
   current.observation!.state.speed = {available: true, value: 25, unit: 'm/s'};
   const presentation = overlayPresentation(current);
-  expect(presentation.sections[0]).toEqual({id: 'speed', state: 'value', text: `${presentation.speed} ${presentation.speedUnit}`});
+  // ET-045f: 90 km/h on the 130 km/h gauge scale is 9/13.
+  expect(presentation.sections[0]).toEqual({id: 'speed', state: 'value', text: `${presentation.speed} ${presentation.speedUnit}`, speedRing: expect.closeTo(9 / 13, 12)});
   expect(presentation.speed).toBe('90');
 });
 
 // ET-045d: the digit-count transitions the strip must absorb without a jump, hand-computed from each profile's rounding to
 // whole numbers (toFixed(0), so 9.5 rounds up): 2.5 m/s is 9 km/h, 10/3.6 m/s 10 km/h, 27.5 m/s 99 km/h and 100/3.6 m/s
 // 100 km/h; 4.02336 m/s is 9 mph, 4.4704 m/s 10 mph, 44.25696 m/s 99 mph and 44.704 m/s 100 mph. Reverse is negative.
+// ET-045f: each row's speed arc is the whole number over the 130 km/h or 80 mph gauge scale (these readings convert to
+// whole numbers), 0 at 0 and in reverse, and capped at 1 above the scale (99 and 100 mph).
 it.each([
-  ['metric', [[0, '0'], [2.5, '9'], [10 / 3.6, '10'], [27.5, '99'], [100 / 3.6, '100'], [-1.3889, '-5']], 'km/h'],
-  ['us-customary', [[0, '0'], [4.02336, '9'], [4.4704, '10'], [44.25696, '99'], [44.704, '100'], [-2.2352, '-5']], 'mph']
+  ['metric', [[0, '0', 0], [2.5, '9', 9 / 130], [10 / 3.6, '10', 10 / 130], [27.5, '99', 99 / 130], [100 / 3.6, '100', 100 / 130], [-1.3889, '-5', 0]], 'km/h'],
+  ['us-customary', [[0, '0', 0], [4.02336, '9', 9 / 80], [4.4704, '10', 10 / 80], [44.25696, '99', 1], [44.704, '100', 1], [-2.2352, '-5', 0]], 'mph']
 ] as const)('formats the speed digit-count transitions in the %s profile and RPM 999 and 1000', (profile, rows, unit) => {
-  for (const [metersPerSecond, number] of rows) {
+  for (const [metersPerSecond, number, fraction] of rows) {
     const current = live(), state = current.observation!.state;
     state.speed = {available: true, value: metersPerSecond, unit: 'm/s'};
     const presentation = overlayPresentation(current, {ets2: profile, ats: profile});
     expect(presentation.speed, String(metersPerSecond)).toBe(number);
-    expect(presentation.sections[0], String(metersPerSecond)).toEqual({id: 'speed', state: 'value', text: `${number} ${unit}`});
+    expect(presentation.sections[0], String(metersPerSecond)).toEqual({id: 'speed', state: 'value', text: `${number} ${unit}`, speedRing: fraction === 0 || fraction === 1 ? fraction : expect.closeTo(fraction, 12)});
   }
   for (const [rpm, text] of [[999, '999 rpm'], [1000, '1000 rpm']] as const) {
     const current = live(); current.observation!.state.engineRpm = {available: true, value: rpm, unit: 'rpm'};
@@ -96,7 +99,7 @@ it('shows zero speed and zero fuel as values, distinct from an unavailable dash'
   const current = live(), state = current.observation!.state;
   state.fuel = {available: true, value: 0, unit: 'L'};
   expect(overlayPresentation(current).sections.filter(section => section.id === 'speed' || section.id === 'fuel')).toEqual([
-    {id: 'speed', state: 'value', text: '0 km/h'}, {id: 'fuel', state: 'value', text: '0.0 L', detail: '0%'}]);
+    {id: 'speed', state: 'value', text: '0 km/h', speedRing: 0}, {id: 'fuel', state: 'value', text: '0.0 L', detail: '0%'}]);
   state.speed = {available: false, reason: 'not-observed', unit: 'm/s'};
   expect(overlayPresentation(current).sections[0]).toEqual({id: 'speed', state: 'unavailable'});
 });
@@ -200,6 +203,31 @@ it.each([
   expect(overlayPresentation(current).sections.find(section => section.id === 'rpm')).toEqual({id: 'rpm', state: 'value', text: `${rpm} rpm`, ring});
 });
 
+// ET-045f (REG-009, REG-002): the Cluster speed arc fraction rides only on a current speed value. 25 m/s is 90 km/h, 9/13
+// of the 130 km/h scale, in both languages; a paused current game keeps it, and stale, disconnected or unavailable speed
+// carries none.
+it('attaches the speed arc fraction only to a current speed value, in both languages and while paused', () => {
+  const moving = () => {const current = live(); current.observation!.state.speed = {available: true, value: 25, unit: 'm/s'}; return current;};
+  const en = overlayPresentation(moving()), ru = overlayPresentation(moving(), undefined, undefined, undefined, false, 'ru');
+  expect(en.sections[0]).toEqual({id: 'speed', state: 'value', text: '90 km/h', speedRing: expect.closeTo(9 / 13, 12)});
+  expect(ru.sections[0]).toEqual(en.sections[0]);
+  for (const presentation of [en, ru]) expect(presentation.sections.filter(section => 'speedRing' in section).map(section => section.id)).toEqual(['speed']);
+  const paused = {...moving(), status: 'paused' as const};
+  expect(overlayPresentation(paused)).toMatchObject({paused: true, freshness: 'current'});
+  expect(overlayPresentation(paused).sections[0]).toEqual(en.sections[0]);
+  for (const status of ['stale', 'disconnected'] as const) {
+    const presentation = overlayPresentation({...moving(), fresh: false, status}, undefined, undefined, en);
+    expect(presentation.sections[0], status).toEqual({id: 'speed', state: 'unavailable'});
+    expect(presentation.sections.some(section => 'speedRing' in section || 'ring' in section), status).toBe(false);
+  }
+  const unavailable = moving(); unavailable.observation!.state.speed = {available: false, reason: 'not-observed', unit: 'm/s'};
+  expect(overlayPresentation(unavailable).sections[0]).toEqual({id: 'speed', state: 'unavailable'});
+  const disabled = overlayPresentation(moving(), undefined, {...DEFAULT_OVERLAY_SETTINGS, layout: 'cluster', sections: {...ALL, speed: false}});
+  expect(ids(disabled.sections)).not.toContain('speed');
+  expect(disabled.sections.some(section => 'speedRing' in section)).toBe(false);
+  expect(disabled.sections.find(section => section.id === 'rpm')).toEqual({id: 'rpm', state: 'value', text: '600 rpm', ring: 0.2});
+});
+
 // ET-045a (owner request): the overlay drops the "(SDK-documented)" provenance suffix; the dashboard, journal and export keep it.
 it('keeps the exact raw income digits without grouping and states a documented currency without the SDK suffix', () => {
   const current = live(), job = current.observation!.state.configuration.job;
@@ -238,7 +266,7 @@ function withV1(options: V1Options = {}, v0 = live()): LiveTelemetry {
 }
 const V1_STALE: V1Options = {status: 'stale', fresh: false, reason: 'Main has no recent v1 SDK capture'};
 const FULL: OverlaySectionView[] = [
-  {id: 'speed', state: 'value', text: '0 km/h'},
+  {id: 'speed', state: 'value', text: '0 km/h', speedRing: 0},
   {id: 'gear', state: 'value', text: 'R1'},
   {id: 'rpm', state: 'value', text: '600 rpm', ring: 0.2},
   {id: 'fuel', state: 'unavailable'},
@@ -266,7 +294,7 @@ it('keeps v1 sections as dashes when v1, then v0, stops being current, and drops
   const first = overlayPresentation(withV1());
   const v1Stale = overlayPresentation(withV1(V1_STALE), undefined, undefined, first);
   expect(v1Stale.sections).toEqual([
-    {id: 'speed', state: 'value', text: '0 km/h'},
+    {id: 'speed', state: 'value', text: '0 km/h', speedRing: 0},
     {id: 'gear', state: 'value', text: 'R1'},
     {id: 'rpm', state: 'value', text: '600 rpm', ring: 0.2},
     {id: 'fuel', state: 'unavailable'},
@@ -326,7 +354,7 @@ it('keeps v1 sections that were never shown absent without v1 data (fix round 1)
 // an update still carries a v0 observation (ET-012a L5), for example when main strips an invalid projection or the v1 origin stops
 // matching. An update without a v0 observation (a selection change, a service restart or a lost channel) clears it.
 const LOST_V1: OverlaySectionView[] = [
-  {id: 'speed', state: 'value', text: '0 km/h'},
+  {id: 'speed', state: 'value', text: '0 km/h', speedRing: 0},
   {id: 'gear', state: 'value', text: 'R1'},
   {id: 'rpm', state: 'value', text: '600 rpm', ring: 0.2},
   {id: 'fuel', state: 'unavailable'},
