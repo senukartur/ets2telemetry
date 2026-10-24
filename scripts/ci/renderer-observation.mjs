@@ -232,6 +232,104 @@ export function overlayOverflow() {
   return {...(alignment ? {alignment} : {}), layout: root.getAttribute('data-layout'), root: {width: Math.round(bounds.width), height: Math.round(bounds.height)}, sections, outside, truncated};
 }
 
+// ET-045d stable numbers. Self-contained browser callback for the strip: it writes each step's texts into the existing text
+// nodes of the speed, gear and RPM values and units (keys speed, speedUnit, gear, rpm, rpmUnit; a key a later step leaves
+// out keeps step 0's text), forces a layout and measures every section and the strip row. A box that differs from step 0's
+// by more than 0.01 px at any edge is `moved`; a speed, gear or RPM value cut off inside its box is `truncated`. Every
+// original text is restored in `finally` within the same task, so React and the projection never see the probe. A missing
+// strip or a text node a step needs fails closed.
+export function stripNumberProbe(steps) {
+  const ids = {speed: 'overlay-speed', speedUnit: 'overlay-speed-unit', gear: 'overlay-gear', rpm: 'overlay-rpm', rpmUnit: 'overlay-rpm-unit'};
+  const root = globalThis.document.querySelector('[data-testid="overlay-root"]');
+  const row = root?.querySelector('.overlay-strip-row');
+  if (!root || root.getAttribute('data-layout') !== 'strip' || !row || !Array.isArray(steps) || !steps.length) return {ok: false, reason: 'no-strip', restored: true, steps: []};
+  const nodes = {};
+  for (const [key, id] of Object.entries(ids)) {
+    const element = root.querySelector(`[data-testid="${id}"]`), node = element?.firstChild;
+    nodes[key] = element && element.childNodes.length === 1 && node.nodeType === 3 ? node : null;
+  }
+  const missing = [...new Set(steps.flatMap(step => Object.keys(step)))].filter(key => !(key in ids) || !nodes[key]);
+  if (missing.length) return {ok: false, reason: `missing ${missing.join(',')}`, restored: true, steps: []};
+  const original = Object.fromEntries(Object.entries(nodes).map(([key, node]) => [key, node ? node.nodeValue : null]));
+  const edges = box => ({left: box.left, top: box.top, right: box.right, bottom: box.bottom});
+  const measure = () => {
+    const boxes = {row: edges(row.getBoundingClientRect())};
+    for (const element of root.querySelectorAll('[data-testid^="overlay-section-"]')) boxes[element.getAttribute('data-testid').slice('overlay-section-'.length)] = edges(element.getBoundingClientRect());
+    return boxes;
+  };
+  const results = [];
+  let baseline, first;
+  try {
+    for (const [index, step] of steps.entries()) {
+      const texts = {...(index === 0 ? original : first), ...step};
+      if (index === 0) first = texts;
+      for (const [key, node] of Object.entries(nodes)) if (node) node.nodeValue = texts[key];
+      void root.offsetWidth;
+      const boxes = measure();
+      if (index === 0) baseline = boxes;
+      const moved = [...new Set([...Object.keys(baseline), ...Object.keys(boxes)])].filter(id => !boxes[id] || !baseline[id] ||
+        ['left', 'top', 'right', 'bottom'].some(edge => Math.abs(boxes[id][edge] - baseline[id][edge]) > 0.01));
+      const truncated = ['speed', 'gear', 'rpm'].filter(key => {const element = nodes[key]?.parentElement; return Boolean(element) && element.scrollWidth > element.clientWidth;});
+      results.push({texts: Object.fromEntries(Object.keys(ids).filter(key => nodes[key]).map(key => [key, texts[key]])), moved, truncated});
+    }
+  } finally {
+    for (const [key, node] of Object.entries(nodes)) if (node) node.nodeValue = original[key];
+  }
+  const restored = Object.entries(nodes).every(([key, node]) => !node || node.nodeValue === original[key]);
+  return {ok: restored && results.every(result => !result.moved.length && !result.truncated.length), restored, baseline, steps: results};
+}
+
+// ET-045d Cluster containment. Self-contained browser callback for the Cluster gauge: like stripNumberProbe it writes each
+// step's texts into the existing text nodes (a key a step leaves out keeps its original text) and restores them in
+// `finally`. For each step every corner of the speed, speed unit, gear, RPM and RPM unit boxes and of the three centre parts
+// must lie inside the inner edge of the innermost rendered track ring, (r - stroke / 2) x rendered width / 120, less
+// 0.01 px; the RPM ring is innermost and the speed ring stands in while RPM is off. No shown speed, gear or RPM value may be
+// cut off. A missing gauge, ring or needed text node fails closed.
+export function clusterCentreProbe(steps) {
+  const ids = {speed: 'overlay-speed', speedUnit: 'overlay-speed-unit', gear: 'overlay-gear', rpm: 'overlay-rpm', rpmUnit: 'overlay-rpm-unit'};
+  const parts = ['overlay-speed', 'overlay-speed-unit', 'overlay-gear', 'overlay-rpm', 'overlay-rpm-unit', 'overlay-section-speed', 'overlay-section-gear', 'overlay-section-rpm'];
+  const root = globalThis.document.querySelector('[data-testid="overlay-root"]');
+  const svg = root?.querySelector('.overlay-ring');
+  const track = root?.querySelector('[data-testid="overlay-rpm-track"]') ?? root?.querySelector('[data-testid="overlay-speed-track"]');
+  if (!root || root.getAttribute('data-layout') !== 'cluster' || !svg || !track || !Array.isArray(steps) || !steps.length) return {ok: false, reason: 'no-gauge', restored: true, steps: []};
+  const nodes = {};
+  for (const [key, id] of Object.entries(ids)) {
+    const element = root.querySelector(`[data-testid="${id}"]`), node = element?.firstChild;
+    nodes[key] = element && element.childNodes.length === 1 && node.nodeType === 3 ? node : null;
+  }
+  const missing = [...new Set(steps.flatMap(step => Object.keys(step)))].filter(key => !(key in ids) || !nodes[key]);
+  if (missing.length) return {ok: false, reason: `missing ${missing.join(',')}`, restored: true, steps: []};
+  const original = Object.fromEntries(Object.entries(nodes).map(([key, node]) => [key, node ? node.nodeValue : null]));
+  const results = [];
+  let ring;
+  try {
+    for (const step of steps) {
+      for (const [key, node] of Object.entries(nodes)) if (node) node.nodeValue = key in step ? step[key] : original[key];
+      void root.offsetWidth;
+      const frame = svg.getBoundingClientRect(), scale = frame.width / 120;
+      const centre = {x: frame.left + frame.width / 2, y: frame.top + frame.height / 2};
+      const stroke = Number.parseFloat(globalThis.getComputedStyle(track).strokeWidth);
+      const limit = (Number(track.getAttribute('r')) - stroke / 2) * scale - 0.01;
+      ring = {track: track.getAttribute('data-testid'), limit, centre};
+      const outside = [], reach = {};
+      for (const id of parts) {
+        const element = root.querySelector(`[data-testid="${id}"]`);
+        if (!element) continue;
+        const box = element.getBoundingClientRect();
+        const far = Math.max(...[[box.left, box.top], [box.right, box.top], [box.left, box.bottom], [box.right, box.bottom]].map(([x, y]) => Math.hypot(x - centre.x, y - centre.y)));
+        reach[id] = far;
+        if (!Number.isFinite(limit) || !(far <= limit)) outside.push(id);
+      }
+      const truncated = ['speed', 'gear', 'rpm'].filter(key => {const element = nodes[key]?.parentElement; return Boolean(element) && element.scrollWidth > element.clientWidth;});
+      results.push({texts: Object.fromEntries(Object.keys(ids).filter(key => nodes[key]).map(key => [key, nodes[key].nodeValue])), reach, outside, truncated});
+    }
+  } finally {
+    for (const [key, node] of Object.entries(nodes)) if (node) node.nodeValue = original[key];
+  }
+  const restored = Object.entries(nodes).every(([key, node]) => !node || node.nodeValue === original[key]);
+  return {ok: restored && results.every(result => !result.outside.length && !result.truncated.length), restored, ring, steps: results};
+}
+
 /** ET-015c PR-4: the recording texts of a service that records nothing (production, GAME_HISTORY_RECORDING false). */
 export const RECORDING_DISABLED_TEXT = Object.freeze({headline: 'Off: this version does not record game history', detail: null, losses: null, alert: null,
   notice: 'Prototype live display. No trip recording or durable history.'});
