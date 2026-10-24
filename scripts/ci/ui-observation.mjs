@@ -240,6 +240,7 @@ async function observeUnifiedOverlay({application, dashboard, language, size, re
   assert.equal(await dashboard.getByTestId('settings.sections').count(), 0);
   assert.equal(await dashboard.getByRole('button', {name: /^(Choose sections|Выбрать секции)$/}).count(), 0);
   assert.equal(await dashboard.getByTestId('overlay-settings').count(), 1);
+  assert.equal(await dashboard.locator('[data-testid^="overlay-requirement-"]').count(), 0, 'UI_OVERLAY_TECHNICAL_NOTES_ABSENT');
   const visible = await dashboard.getByTestId('overlay-settings').evaluate(card => {
     const ids = ['overlay-enabled', 'overlay-layout', 'overlay-placement', 'overlay-presets', 'overlay-sections'];
     return ids.every(id => card.querySelector(`[data-testid="${id}"]`)?.checkVisibility()) &&
@@ -257,7 +258,7 @@ async function observeUnifiedOverlay({application, dashboard, language, size, re
       assert.equal(await dashboard.getByTestId('overlay-switch-game-time').evaluate(node => node === globalThis.document.activeElement), true);
       const observation = await dashboard.getByTestId('overlay-settings').evaluate(card => new Promise(resolve => globalThis.requestAnimationFrame(() => {
         const scroll = globalThis.document.querySelector('.yu-content'), bounds = scroll.getBoundingClientRect(), focus = globalThis.document.activeElement.getBoundingClientRect();
-        const overflow = [scroll, card, ...card.querySelectorAll('section, label, button:not([role="radio"]):not([role="switch"]), p, [data-testid^="overlay-requirement-"]')]
+        const overflow = [scroll, card, ...card.querySelectorAll('section, label, button:not([role="radio"]):not([role="switch"]), p')]
           .filter(node => node.scrollWidth > node.clientWidth + 1).map(node => node.getAttribute('data-testid') ?? node.tagName);
         // Radix rails/dots intentionally have expanded pseudo-hit areas; check their boxes, not scrollWidth.
         const controlsContained = [...card.querySelectorAll('button')].every(node => {const box = node.getBoundingClientRect(), parent = card.getBoundingClientRect(); return box.left >= parent.left && box.right <= parent.right;});

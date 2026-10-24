@@ -250,6 +250,8 @@ Startup queries actual registration while intent is unknown and never writes log
 
 ## Unified Overlay page (ET-048)
 
-Settings > Overlay contains one mounted card for visibility, layout, position/size, presets and the fourteen grouped section switches with their existing requirement notes. The separate Overlay sections destination and Choose sections action are removed. Opacity remains informational Planned text. Ordinary page scrolling and wrapping keep the lower controls reachable, including keyboard focus at renderer zoom.
+Settings > Overlay contains one mounted card for visibility, layout, position/size, presets and the fourteen grouped section switches. The separate Overlay sections destination and Choose sections action are removed. Opacity remains informational Planned text. Ordinary page scrolling and wrapping keep the lower controls reachable, including keyboard focus at renderer zoom.
+
+Owner follow-up, October 24, 2026: individual section rows show their label, icon and switch without the parenthetical protocol-v1, game-ID or trip-tracking notes. This presentation change applies to EN/RU; availability rules and the general unavailable/stale explanation remain unchanged.
 
 Navigation and rendering do not save settings. Each selection still shows only after the existing committed save; errors remain in the requesting card. Layout is locked during a position edit, while presets and sections keep their existing availability and final-section guard. Scale/reset affect main's draft only; Cancel writes nothing and Done persists through the existing handler. A committed visibility-off save cancels the draft; failure preserves it. Read-only behavior, settings v6, migrations, durability, IPC and ET-045 geometry/typography corrections are unchanged. See [ET-048 validation](validation/et-048.md) for evidence and manual limits.
