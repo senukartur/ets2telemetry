@@ -291,7 +291,7 @@ export const RECORDING_CODE_TEXT: Readonly<Record<RecordingCode, string>> = Obje
   WORKER_FAILED: 'the storage worker failed',
   TIMEOUT: 'storage did not answer in time',
   DATA_PATH_INVALID: 'the data folder cannot be used',
-  DATABASE_UNRECOGNIZED: 'the database file is not an Yukon Union Telemetry database',
+  DATABASE_UNRECOGNIZED: 'the database file is not a Yukon Union Telemetry database',
   SCHEMA_NEWER: 'the database was written by a newer version',
   PURPOSE_MISMATCH: 'the database holds another kind of data',
   DURABILITY_UNVERIFIED: 'safe disk writes could not be confirmed',

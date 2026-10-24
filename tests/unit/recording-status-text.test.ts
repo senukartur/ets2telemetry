@@ -44,7 +44,7 @@ it('names the cause of every recording code in the retrying and stopped headline
     INVALID_INPUT: 'storage refused invalid data', UNKNOWN_SESSION: 'storage does not know this game session', UNKNOWN_TRIP: 'storage does not know this trip',
     SESSION_CONFLICT: 'this game session conflicts with the stored one', VALUE_OUT_OF_RANGE: 'a value was out of range', STORAGE_CLOSED: 'the database is closed',
     STORAGE_BUSY: 'storage is busy', WORKER_FAILED: 'the storage worker failed', TIMEOUT: 'storage did not answer in time',
-    DATA_PATH_INVALID: 'the data folder cannot be used', DATABASE_UNRECOGNIZED: 'the database file is not an Yukon Union Telemetry database',
+    DATA_PATH_INVALID: 'the data folder cannot be used', DATABASE_UNRECOGNIZED: 'the database file is not a Yukon Union Telemetry database',
     SCHEMA_NEWER: 'the database was written by a newer version', PURPOSE_MISMATCH: 'the database holds another kind of data',
     DURABILITY_UNVERIFIED: 'safe disk writes could not be confirmed', BACKUP_FAILED: 'the backup before a database upgrade failed',
     MIGRATION_FAILED: 'the database upgrade failed', INTERNAL: 'an internal error occurred', TRIP_ORDER_VIOLATION: 'trip events arrived out of order',
