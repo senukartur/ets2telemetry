@@ -9,8 +9,8 @@ import type {UninstallPorts, UninstallResult} from '../../apps/desktop/src/unins
 import {EXECUTOR_FILE, executorCommand, RUN_ONCE_VALUE} from '../../apps/desktop/src/uninstall/executor';
 import {resolveUninstallRoots} from '../../apps/desktop/src/uninstall/roots';
 import {guardedTempRoot, type GuardedRoot} from '../shared/guarded-fs';
-import {CURRENT, exists, fakeRunOnce, FOREIGN, gameFolder, installFixture, installRecord, KNOWN, listTree, notRunning, seedData, TEST_RUN_ONCE, useRunOnceKey, UTC,
-  writeRegistry, type FakeGameFolder, type FakeRunOnce, type InstallFixture} from '../shared/uninstall-fixture';
+import {CURRENT, exists, fakeRunOnce, fakeUninstallEntry, FOREIGN, gameFolder, installFixture, installRecord, KNOWN, listTree, notRunning, seedData, TEST_RUN_ONCE,
+  useRunOnceKey, UTC, writeRegistry, type FakeGameFolder, type FakeRunOnce, type FakeUninstallEntry, type InstallFixture} from '../shared/uninstall-fixture';
 
 // REG-015, REG-017 (ET-018 U2, U6): the Squirrel event handler on fake installs under the guarded temporary root. Every
 // port is injected: no Update.exe, no lock, no tasklist and no %TEMP% receipt is real, and the handler never sees the
@@ -31,10 +31,17 @@ const SCRIPT = readFileSync(path.join(import.meta.dirname, '..', '..', 'resource
 const RUN_ONCE_ENTRY = `${TEST_RUN_ONCE}\\${RUN_ONCE_VALUE}`;
 const WINDOWS = 'C:\\Windows';
 
+/** The tracked product icon, which the production port reads from the packaged resources (ET-045g). */
+const ICON = readFileSync(path.join(import.meta.dirname, '..', '..', 'resources', 'icon', 'app.ico'));
+
 interface Harness {
   ports: SquirrelPorts;
   /** The in-memory RunOnce registry; the real key is never written. */
   registry: FakeRunOnce;
+  /** The in-memory uninstall entry (ET-045g); the real key is never written. */
+  entry: FakeUninstallEntry;
+  /** How often the bundled icon was read. */
+  iconReads: () => number;
   receipts: {name: string; receipt: UninstallReceipt; text: string}[];
   updates: {installRoot: string; args: readonly string[]}[];
   lockRequests: () => number;
@@ -45,11 +52,12 @@ interface Harness {
 }
 /** Fake ports around `fixture`; the clock advances only through `delay` and `advance`. */
 function harness(fixture: InstallFixture, overrides: Partial<SquirrelPorts> & {env?: Record<string, string>; locks?: boolean[]} = {}): Harness {
-  let clock = 1000, requests = 0, locked: () => void = () => undefined;
+  let clock = 1000, requests = 0, iconReads = 0, locked: () => void = () => undefined;
   const firstLockRequest = new Promise<void>(resolve => {locked = resolve;});
   const receipts: Harness['receipts'] = [], updates: Harness['updates'] = [], order: string[] = [];
   const {env, locks, ...rest} = overrides;
   const registry = fakeRunOnce({onSet: () => order.push('register')});
+  const entry = fakeUninstallEntry({onSet: () => order.push('display-icon')});
   const ports: SquirrelPorts = {
     appVersion: '0.1.0',
     executableName: 'ETS2TelemetryDesktop.exe',
@@ -67,6 +75,8 @@ function harness(fixture: InstallFixture, overrides: Partial<SquirrelPorts> & {e
     runOnce: registry,
     windowsDirectory: WINDOWS,
     readExecutor: () => Promise.resolve(SCRIPT),
+    readBundledIcon: () => {iconReads++; return Promise.resolve(ICON);},
+    uninstallEntry: entry,
     checkRunning: notRunning,
     readKnown: () => Promise.resolve(KNOWN),
     countOtherProcesses: () => Promise.resolve(0),
@@ -78,7 +88,8 @@ function harness(fixture: InstallFixture, overrides: Partial<SquirrelPorts> & {e
     now: () => new Date(UTC),
     ...rest
   };
-  return {ports, registry, receipts, updates, order, lockRequests: () => requests, firstLockRequest, advance: milliseconds => {clock += milliseconds;}};
+  return {ports, registry, entry, iconReads: () => iconReads, receipts, updates, order, lockRequests: () => requests, firstLockRequest,
+    advance: milliseconds => {clock += milliseconds;}};
 }
 
 interface Scene {fixture: InstallFixture; game: FakeGameFolder; unrelated: string}
@@ -97,6 +108,13 @@ const deferralFiles = (fixture: InstallFixture) => ['pending.json', 'README.txt'
 async function seedDeferral(fixture: InstallFixture): Promise<void> {
   await fsp.mkdir(path.win32.join(fixture.dataRoot, 'uninstall'), {recursive: true});
   for (const file of deferralFiles(fixture)) await fsp.writeFile(file, 'deferred');
+}
+/** The entry the install and updated hooks add to the base (ET-045g): the product icon in Squirrel's install root. */
+const ICON_ENTRY = 'ETS2TelemetryDesktop\\app.ico';
+/** `tree` without `added`, after checking that each of `added` is in it exactly once. */
+function withoutAdded(tree: string[], added: readonly string[]): string[] {
+  for (const entry of added) expect(tree.filter(row => row === entry)).toEqual([entry]);
+  return tree.filter(row => !added.includes(row));
 }
 /** A receipt never names a path: no drive letter, no backslash, nothing of the test root. */
 function expectNoPath(text: string, fixture: InstallFixture) {
@@ -132,6 +150,8 @@ describe('parseSquirrelArgs', () => {
 });
 
 describe('install, updated and obsolete', () => {
+  // ET-045g changed this case for install and updated: they now also add the product icon to Squirrel's install root,
+  // and nothing else; obsolete still changes nothing.
   it.each(['install', 'updated', 'obsolete'] as const)('%s never runs the engine, never requests the lock and keeps every data entry', async name => {
     const {fixture} = await scene();
     const before = await listTree(fixture.base);
@@ -141,7 +161,7 @@ describe('install, updated and obsolete', () => {
     expect(engine).not.toHaveBeenCalled();
     expect(test.lockRequests()).toBe(0);
     expect(test.receipts).toEqual([]);
-    expect(await listTree(fixture.base)).toEqual(before);
+    expect(withoutAdded(await listTree(fixture.base), name === 'obsolete' ? [] : [ICON_ENTRY])).toEqual(before);
   });
 
   it('obsolete does not even resolve the roots', async () => {
@@ -182,8 +202,107 @@ describe('install, updated and obsolete', () => {
     await runSquirrelEvent(event(name), harness(fixture).ports);
     for (const file of deferralFiles(fixture)) expect(await exists(file)).toBe(false);
     expect(await exists(path.win32.join(fixture.dataRoot, 'uninstall'))).toBe(false);
-    expect(await listTree(fixture.base)).toEqual(before);
+    // ET-045g: the product icon in Squirrel's install root is the only addition.
+    expect(withoutAdded(await listTree(fixture.base), [ICON_ENTRY])).toEqual(before);
     expect(await fsp.readFile(game.dll)).toEqual(CURRENT);
+  });
+});
+
+// REG-017 (ET-045g, owner decision D3): install and updated place the bundled product icon in Squirrel's install root and
+// set this product's DisplayIcon, so Squirrel never downloads its default Electron icon. The registry is a fake.
+describe('the Installed apps icon (ET-045g)', () => {
+  const displayIcon = (fixture: InstallFixture) => `${path.win32.dirname(fixture.executable)}\\ETS2TelemetryDesktop.exe,0`;
+  const iconFile = (fixture: InstallFixture) => path.win32.join(fixture.installRoot, 'app.ico');
+
+  it.each([['install', true], ['install', false], ['updated', true], ['updated', false]] as const)(
+    '%s places the bundled icon and sets DisplayIcon once to the versioned executable (test root: %s)', async (name, testRoot) => {
+      const {fixture} = await scene({testRoot});
+      const test = harness(fixture, testRoot ? {} : {env: {LOCALAPPDATA: fixture.base}});
+      expect(await runSquirrelEvent(event(name), test.ports)).toBe(0);
+      expect(await fsp.readFile(iconFile(fixture))).toEqual(ICON);
+      expect(test.entry.calls).toEqual([displayIcon(fixture)]);
+      expect(displayIcon(fixture)).toMatch(/\\app-0\.1\.0\\ETS2TelemetryDesktop\.exe,0$/);
+      expect(test.iconReads()).toBe(1);
+    });
+
+  it('updated replaces a legacy app.ico that Squirrel downloaded earlier', async () => {
+    const {fixture} = await scene();
+    await fsp.writeFile(iconFile(fixture), 'the Electron icon Squirrel downloaded');
+    const test = harness(fixture);
+    expect(await runSquirrelEvent(event('updated'), test.ports)).toBe(0);
+    expect(await fsp.readFile(iconFile(fixture))).toEqual(ICON);
+    expect(test.entry.calls).toEqual([displayIcon(fixture)]);
+  });
+
+  it.each(['obsolete', 'uninstall'] as const)('%s never reads the icon or writes DisplayIcon', async name => {
+    const {fixture} = await scene();
+    const test = harness(fixture);
+    await runSquirrelEvent(event(name), test.ports);
+    expect(test.iconReads()).toBe(0);
+    expect(test.entry.calls).toEqual([]);
+  });
+
+  it('a portable or development layout reads no icon and writes no DisplayIcon', async () => {
+    const {fixture} = await scene();
+    const test = harness(fixture, {resolveRoots: () => resolveUninstallRoots({executable: path.win32.join(guard.root, 'portable', 'app.exe'), env: {}, fs: fixture.fs})});
+    for (const name of ['install', 'updated'] as const) expect(await runSquirrelEvent(event(name), test.ports)).toBe(0);
+    expect(test.iconReads()).toBe(0);
+    expect(test.entry.calls).toEqual([]);
+    expect(await exists(iconFile(fixture))).toBe(false);
+  });
+
+  it('a registry that keeps failing is tried twice, and the shortcuts, the icon and the deferral cancel still happen', async () => {
+    const {fixture} = await scene({shortcuts: true});
+    await seedDeferral(fixture);
+    const entry = fakeUninstallEntry({results: [false]});
+    const test = harness(fixture, {uninstallEntry: entry});
+    expect(await runSquirrelEvent(event('install'), test.ports)).toBe(0);
+    expect(entry.calls).toEqual([displayIcon(fixture), displayIcon(fixture)]);
+    expect(test.updates).toEqual([{installRoot: fixture.installRoot, args: ['--createShortcut=ETS2TelemetryDesktop.exe']}]);
+    expect(await fsp.readFile(iconFile(fixture))).toEqual(ICON);
+    for (const file of deferralFiles(fixture)) expect(await exists(file)).toBe(false);
+  });
+
+  it('a first registry failure is retried once and then set', async () => {
+    const {fixture} = await scene();
+    const entry = fakeUninstallEntry({results: [false, true]});
+    expect(await runSquirrelEvent(event('updated'), harness(fixture, {uninstallEntry: entry}).ports)).toBe(0);
+    expect(entry.calls).toHaveLength(2);
+    expect(entry.displayIcon()).toBe(displayIcon(fixture));
+  });
+
+  it.each([
+    ['cannot be read', () => Promise.resolve(undefined)],
+    ['throws', () => Promise.reject(new Error('unreadable'))],
+    ['is not an icon file', () => Promise.resolve(Buffer.from('not an icon'))]
+  ] as const)('a bundled icon that %s writes no file, still sets DisplayIcon and keeps the shortcuts and the deferral cancel', async (_name, readBundledIcon) => {
+    const {fixture} = await scene({shortcuts: true});
+    await seedDeferral(fixture);
+    const test = harness(fixture, {readBundledIcon});
+    expect(await runSquirrelEvent(event('install'), test.ports)).toBe(0);
+    expect(await exists(iconFile(fixture))).toBe(false);
+    expect((await fsp.readdir(fixture.installRoot)).filter(entry => entry.startsWith('app.ico'))).toEqual([]);
+    expect(test.entry.calls).toEqual([displayIcon(fixture)]);
+    expect(test.updates).toHaveLength(1);
+    for (const file of deferralFiles(fixture)) expect(await exists(file)).toBe(false);
+  });
+
+  it('runs beside the shortcuts: DisplayIcon is set while Update.exe --createShortcut is still running', async () => {
+    const {fixture} = await scene({shortcuts: true});
+    let release: (ok: boolean) => void = () => undefined, started: () => void = () => undefined;
+    const shortcutStarted = new Promise<void>(resolve => {started = resolve;});
+    let iconSet: () => void = () => undefined;
+    const displayIconSet = new Promise<void>(resolve => {iconSet = resolve;});
+    const entry = fakeUninstallEntry({onSet: () => iconSet()});
+    const test = harness(fixture, {uninstallEntry: entry, runUpdate: () => {started(); return new Promise<boolean>(resolve => {release = resolve;});}});
+    let finished = false;
+    const run = runSquirrelEvent(event('install'), test.ports).then(code => {finished = true; return code;});
+    await shortcutStarted;
+    await displayIconSet;
+    expect(finished).toBe(false);
+    expect(entry.calls).toEqual([displayIcon(fixture)]);
+    release(true);
+    expect(await run).toBe(0);
   });
 });
 
