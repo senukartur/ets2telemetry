@@ -74,6 +74,11 @@ describe('format version 2 (J15, ET-026)', () => {
     expect(lines.filter(line => line.startsWith('{"id":"7"') || line.startsWith('{"eventSeq":') || line.startsWith('{"id":"11"'))).toHaveLength(4);
     expect(lines.slice(-3)).toEqual([']', '}', '']);
   });
+  it('keeps the raw SDK job market value, never the journal display label (ET-045a)', () => {
+    const document = JSON.parse(serialize(detail, {})) as {job: {values: {market: unknown}}};
+    expect(document.job.values.market).toEqual({available: true, value: 'freight_market'});
+    for (const label of ['Freight market', 'Грузоперевозки']) expect(serialize(detail, {})).not.toContain(label);
+  });
   it('writes empty sections as empty arrays', () => {
     const closed = changed(detail, d => { d.exportBounds = {committedThroughEventSeq: '4', lastSampleId: null, lastIntervalId: null}; d.samples = {count: 0, firstUtcMs: null, lastUtcMs: null};
       d.intervals = {items: [], total: 0, nextCursor: null}; });

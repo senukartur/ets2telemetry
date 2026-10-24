@@ -69,7 +69,6 @@ export const STRINGS = Object.freeze({
   overlayStale: 'Stale',
   overlaySynthetic: 'Synthetic',
   overlayReplay: 'Replay',
-  overlaySdkMean: 'SDK mean',
   overlaySaveFailed: 'The overlay change was not saved; the previous overlay settings stay in use.',
   overlayLastSection: 'At least one section stays on.',
   overlayHiddenNote: 'While telemetry is current, a section without data is hidden (speed and fuel show a dash). While it is not current, every shown section is a dash.',
@@ -140,7 +139,6 @@ export const STRINGS_RU: Readonly<Record<StringKey, string>> = Object.freeze({
   overlayStale: 'Устарело',
   overlaySynthetic: 'Синтетический',
   overlayReplay: 'Повтор',
-  overlaySdkMean: 'среднее SDK',
   overlaySaveFailed: 'Изменение оверлея не удалось сохранить; остаются предыдущие настройки.',
   overlayLastSection: 'Хотя бы одна секция должна оставаться включённой.',
   overlayHiddenNote: 'Пока данные актуальны, секция без данных скрыта (скорость и топливо показывают прочерк). Пока данные не актуальны, каждая показанная секция — прочерк.',
@@ -539,6 +537,27 @@ export const LIVE_SECTION_TEXT: Readonly<Record<LiveSectionId, string>> = Object
   motion: 'Driving', fuel: 'Fuel', distance: 'Distance', time: 'Time', job: 'Job', vehicle: 'Vehicle', position: 'Position'
 });
 
+/** The job market values SCS SDK 1.15 documents for `job.market`. */
+export type JobMarket = 'cargo_market' | 'quick_job' | 'freight_market' | 'external_contracts' | 'external_market';
+/**
+ * Display labels of the SDK job markets (ET-045a), written for this application rather than copied from the game. Only
+ * the dashboard and journal display change: telemetry-core, the v1 projection, storage and the JSON export keep the raw
+ * value, and an unknown value is shown verbatim.
+ */
+export const JOB_MARKET_TEXT: Readonly<Record<JobMarket, string>> = Object.freeze({
+  'cargo_market': 'Cargo market', 'quick_job': 'Quick job', 'freight_market': 'Freight market',
+  'external_contracts': 'External contracts', 'external_market': 'External market'
+});
+export const JOB_MARKET_TEXT_RU: Readonly<Record<JobMarket, string>> = Object.freeze({
+  'cargo_market': 'Рынок грузов', 'quick_job': 'Быстрый заказ', 'freight_market': 'Грузоперевозки',
+  'external_contracts': 'Внешние контракты', 'external_market': 'Внешний рынок'
+});
+/** The label of a raw SDK market value; an unknown value (or an inherited name such as `constructor`) stays verbatim. */
+export function getJobMarketText(raw: string, language: AppLanguage = 'en'): string {
+  const table = language === 'ru' ? JOB_MARKET_TEXT_RU : JOB_MARKET_TEXT;
+  return Object.hasOwn(table, raw) ? table[raw as JobMarket] : raw;
+}
+
 // Overlay labels (ET-012a). Each map covers every id, so a new layout, section, group, preset or requirement fails to
 // compile until it has a text. Values are formatted by telemetry-core in main; these maps hold only labels.
 export const OVERLAY_LAYOUT_TEXT: Readonly<Record<OverlayLayout, string>> = Object.freeze({
@@ -551,14 +570,18 @@ export function getOverlayLayoutText(layout: OverlayLayout, language: AppLanguag
   return language === 'ru' ? OVERLAY_LAYOUT_TEXT_RU[layout] : OVERLAY_LAYOUT_TEXT[layout];
 }
 
-/** Full labels for the settings card and the overlay card layout. Income is expected income, never revenue. */
+/**
+ * Full labels for the settings card and the overlay card layout. Income is expected income, never revenue. The
+ * consumption section still shows the SDK mean, never a trip average; its user-facing label omits the SDK qualifier
+ * (ET-045a), while the dashboard keeps "SDK average consumption" with its note.
+ */
 export const OVERLAY_SECTION_TEXT: Readonly<Record<OverlaySectionId, string>> = Object.freeze({
-  'speed': 'Speed', 'gear': 'Gear', 'rpm': 'Engine RPM', 'fuel': 'Fuel', 'range': 'Estimated range', 'sdk-consumption': 'SDK average consumption',
+  'speed': 'Speed', 'gear': 'Gear', 'rpm': 'Engine RPM', 'fuel': 'Fuel', 'range': 'Estimated range', 'sdk-consumption': 'Consumption',
   'cargo': 'Cargo', 'origin': 'Origin', 'destination': 'Destination', 'distance-driven': 'Distance driven', 'distance-remaining': 'Distance remaining',
   'deadline': 'Delivery deadline', 'expected-income': 'Expected income', 'game-time': 'Game time'
 });
 export const OVERLAY_SECTION_TEXT_RU: Readonly<Record<OverlaySectionId, string>> = Object.freeze({
-  'speed': 'Скорость', 'gear': 'Передача', 'rpm': 'Обороты двигателя', 'fuel': 'Топливо', 'range': 'Запас хода', 'sdk-consumption': 'Средний расход по SDK',
+  'speed': 'Скорость', 'gear': 'Передача', 'rpm': 'Обороты двигателя', 'fuel': 'Топливо', 'range': 'Запас хода', 'sdk-consumption': 'Расход',
   'cargo': 'Груз', 'origin': 'Отправление', 'destination': 'Назначение', 'distance-driven': 'Пройденное расстояние', 'distance-remaining': 'Оставшееся расстояние',
   'deadline': 'Срок доставки', 'expected-income': 'Ожидаемый доход', 'game-time': 'Игровое время'
 });
@@ -568,12 +591,12 @@ export function getOverlaySectionText(section: OverlaySectionId, language: AppLa
 
 /** Short labels for the strip, cluster panel and HUD. */
 export const OVERLAY_SECTION_SHORT_TEXT: Readonly<Record<OverlaySectionId, string>> = Object.freeze({
-  'speed': 'Speed', 'gear': 'Gear', 'rpm': 'RPM', 'fuel': 'Fuel', 'range': 'Range', 'sdk-consumption': 'SDK mean',
+  'speed': 'Speed', 'gear': 'Gear', 'rpm': 'RPM', 'fuel': 'Fuel', 'range': 'Range', 'sdk-consumption': 'Consumption',
   'cargo': 'Cargo', 'origin': 'From', 'destination': 'To', 'distance-driven': 'Driven', 'distance-remaining': 'Remaining',
   'deadline': 'Due', 'expected-income': 'Expected', 'game-time': 'Time'
 });
 export const OVERLAY_SECTION_SHORT_TEXT_RU: Readonly<Record<OverlaySectionId, string>> = Object.freeze({
-  'speed': 'Скорость', 'gear': 'Передача', 'rpm': 'Обороты', 'fuel': 'Топливо', 'range': 'Запас хода', 'sdk-consumption': 'Расход SDK',
+  'speed': 'Скорость', 'gear': 'Передача', 'rpm': 'Обороты', 'fuel': 'Топливо', 'range': 'Запас хода', 'sdk-consumption': 'Расход',
   'cargo': 'Груз', 'origin': 'Откуда', 'destination': 'Куда', 'distance-driven': 'Пройдено', 'distance-remaining': 'Осталось',
   'deadline': 'Срок', 'expected-income': 'Ожидается', 'game-time': 'Время'
 });

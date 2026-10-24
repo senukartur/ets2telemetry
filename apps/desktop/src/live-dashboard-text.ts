@@ -43,9 +43,13 @@ export interface LiveSectionText {
 }
 export interface LiveDashboardText {paused: boolean; sections: LiveSectionText[]}
 
-/** Translate generated absence copy before applying the SDK-name exclusion. */
+/**
+ * Translate generated absence copy before applying the SDK-name exclusion. A known SDK job market value shows its label
+ * (ET-045a); an unknown one stays verbatim.
+ */
 export function liveFieldValue(field: LiveField, language: AppLanguage): string {
-  return field.state === 'value' ? ((field.id === 'special-job' || field.id === 'cargo-loaded') ? field.text === 'yes' ? (language === 'ru' ? 'да' : 'yes') : (language === 'ru' ? 'нет' : 'no') : ['cargo', 'source-city', 'source-company', 'destination-city', 'destination-company', 'truck', 'truck-plate', 'trailers', 'market', 'game-mode'].includes(field.id) ? field.text : localizedMeasurement(field.text, language)) : appCopy(field.text, language);
+  if (field.state === 'value' && field.id === 'market') return BASE_COPY.getJobMarketText(field.text, language);
+  return field.state === 'value' ? ((field.id === 'special-job' || field.id === 'cargo-loaded') ? field.text === 'yes' ? (language === 'ru' ? 'да' : 'yes') : (language === 'ru' ? 'нет' : 'no') : ['cargo', 'source-city', 'source-company', 'destination-city', 'destination-company', 'truck', 'truck-plate', 'trailers', 'game-mode'].includes(field.id) ? field.text : localizedMeasurement(field.text, language)) : appCopy(field.text, language);
 }
 
 function createLiveText(language: AppLanguage) {

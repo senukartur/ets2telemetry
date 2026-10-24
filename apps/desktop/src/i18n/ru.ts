@@ -649,7 +649,7 @@ export const RU_DICTIONARY: TranslationDictionary = Object.freeze({
   'sec.rpm': 'Обороты',
   'sec.fuel': 'Уровень топлива',
   'sec.range': 'Запас хода',
-  'sec.sdk-consumption': 'Средний расход',
+  'sec.sdk-consumption': 'Расход',
   'sec.cargo': 'Груз',
   'sec.origin': 'Откуда',
   'sec.destination': 'Куда',

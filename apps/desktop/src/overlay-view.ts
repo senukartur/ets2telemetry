@@ -22,8 +22,6 @@ export interface OverlayItem {
   unit?: string;
   detail?: string;
   detailTestId?: string;
-  /** Context that must stay beside the value, such as "SDK mean" (never a trip average). */
-  caption?: string;
   /** Engine RPM ring fraction in [0, 1]. */
   ring?: number;
   unavailable: boolean;
@@ -92,8 +90,7 @@ export function overlayView(presentation: OverlayPresentation = OVERLAY_PLACEHOL
     // Cargo detail is the numeric cargo-mass field (SECTION_FIELDS); name/company details retain SDK bytes.
     return {...base, value,
       ...(available && section.detail ? {detail: section.id === 'cargo' ? localizedMeasurement(section.detail, language) : section.detail, detailTestId: `overlay-${section.id}-detail`} : {}),
-      ...(available && section.ring !== undefined ? {ring: section.ring} : {}),
-      ...(section.id === 'sdk-consumption' ? {caption: strings.overlaySdkMean} : {})};
+      ...(available && section.ring !== undefined ? {ring: section.ring} : {})};
   });
   const byId = new Map(items.map(item => [item.id, item]));
   const groups = OVERLAY_GROUPS.map(group => ({id: group.id, items: group.sections.flatMap(id => byId.get(id) ?? [])})).filter(group => group.items.length > 0);
