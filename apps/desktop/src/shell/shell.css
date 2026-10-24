@@ -213,3 +213,12 @@ button:not(:disabled), select:not(:disabled) { cursor: pointer; }
   .yu-live-bottom, .yu-live-fields { grid-template-columns: minmax(0,1fr); }
   .yu-job-metrics { grid-template-columns: minmax(0,1fr); }
 }
+
+/* ET-045b action results: the severity's tone plus a 3px left border; the icon and the word carry it too, never colour alone. */
+.yu-action-result { border-left-width: 3px; }
+.yu-action-result[data-severity="info"] { color: var(--yu-neutral-fg); background: var(--yu-neutral-bg); border-color: var(--yu-neutral-border); }
+.yu-action-result[data-severity="success"] { color: var(--yu-ok-fg); background: var(--yu-ok-bg); border-color: var(--yu-ok-border); }
+.yu-action-result[data-severity="refused"] { color: var(--yu-warn-fg); background: var(--yu-warn-bg); border-color: var(--yu-warn-border); }
+.yu-action-result[data-severity="failed"] { color: var(--yu-err-fg); background: var(--yu-err-bg); border-color: var(--yu-err-border); }
+/* An empty region takes no space between its trigger and the next control. */
+.yu-action-result-region:not(:has(.yu-action-result)) { margin-block: 0; }
