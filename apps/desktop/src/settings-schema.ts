@@ -4,10 +4,10 @@ import {DEFAULT_OVERLAY_PLACEMENTS, normalizeFraction, normalizeScale, parseOver
 import {DEFAULT_OVERLAY_SECTIONS, DEFAULT_OVERLAY_SETTINGS, isOverlayLayout, OVERLAY_LAYOUTS, OVERLAY_SECTION_IDS} from './overlay-sections';
 import {DEFAULT_UNIT_PROFILES, isUnitProfile, UNIT_GAMES} from './unit-profiles';
 
-// Settings file format v7 (docs/settings.md). Pure parsing and serialization; the store owns file access.
+// Settings file format v8 (docs/settings.md). Pure parsing and serialization; the store owns file access.
 
 export const SETTINGS_FORMAT = 'ets2telemetry.settings';
-export const SETTINGS_VERSION = 7;
+export const SETTINGS_VERSION = 8;
 /** Larger files are rejected as invalid without being parsed. */
 export const MAX_SETTINGS_BYTES = 64 * 1024;
 
@@ -35,7 +35,7 @@ export const DEFAULT_SETTINGS: Settings = Object.freeze({
 export type SettingsField = 'overlay.backgroundOpacity' | 'overlay.enabled' | 'language' | 'autostart' | `units.${UnitGame}` | 'overlay.layout' | 'overlay.sections' | `overlay.sections.${OverlaySectionId}`
   | 'overlay.placements' | `overlay.placements.${OverlayLayout}`;
 /** Set when the file was upgraded in memory from an older format; the file itself stays unchanged until the next save. */
-type Migrated = {migratedFrom?: 1 | 2 | 3 | 4 | 5 | 6};
+type Migrated = {migratedFrom?: 1 | 2 | 3 | 4 | 5 | 6 | 7};
 export type ParsedSettings =
   | ({state: 'loaded'; settings: Settings} & Migrated)
   /** A valid file with some invalid or missing fields; they use defaults until the next save rewrites them. */
@@ -59,6 +59,11 @@ const isRecord = (value: unknown): value is Record<string, unknown> => typeof va
  * v3 -> v4 adds the interface language (ET-029). v4 -> v5 adds autostart false (accepted ET-031).
  * v5 -> v6 adds overlay visibility true, preserving the accepted autostart preference (ET-012e integration).
  * v6 -> v7 adds backgroundOpacity 80, retaining the current visual default (ET-049).
+ * v7 -> v8 changes only the version (ET-045e decision Z5, owner decision D1 option b; ET-049 took v7 first): every saved
+ * scale number is kept and now means a setting whose zoom is setting × 0.7, valid in [0.5, 3] instead of [0.5, 2]. The
+ * bump makes an older build read a v8 file as newer-version (read-only defaults) instead of misreading the rebased
+ * numbers or replacing a scale above 2 with its default on the next save. A hand-edited earlier scale in (2, 3] passes
+ * after this migration.
  * Version 0 and below have no path.
  */
 const MIGRATIONS: ReadonlyMap<number, (raw: Record<string, unknown>) => Record<string, unknown>> = new Map<number, (raw: Record<string, unknown>) => Record<string, unknown>>([
@@ -67,7 +72,8 @@ const MIGRATIONS: ReadonlyMap<number, (raw: Record<string, unknown>) => Record<s
   [3, (raw: Record<string, unknown>) => ({...raw, version: 4, language: 'en'})],
   [4, (raw: Record<string, unknown>) => ({...raw, version: 5, autostart: false})],
   [5, (raw: Record<string, unknown>) => ({...raw, version: 6, overlay: isRecord(raw.overlay) ? {...raw.overlay, enabled: true} : raw.overlay})],
-  [6, (raw: Record<string, unknown>) => ({...raw, version: 7, overlay: isRecord(raw.overlay) ? {...raw.overlay, backgroundOpacity: DEFAULT_OVERLAY_OPACITY} : raw.overlay})]
+  [6, (raw: Record<string, unknown>) => ({...raw, version: 7, overlay: isRecord(raw.overlay) ? {...raw.overlay, backgroundOpacity: DEFAULT_OVERLAY_OPACITY} : raw.overlay})],
+  [7, (raw: Record<string, unknown>) => ({...raw, version: 8})]
 ]);
 
 /** Upgrades an older raw document to the current version through the migration chain, or undefined without a complete path. */
@@ -99,7 +105,7 @@ function parseSections(raw: unknown, fallbackFields: SettingsField[]): OverlaySe
 
 /**
  * The placements; a missing or non-object record falls back as a whole, and each layout's placement falls back alone
- * when its x or y is not a finite number in [0, 1] or its scale not one in [0.5, 2]. Out-of-range values are never clamped.
+ * when its x or y is not a finite number in [0, 1] or its scale not one in [0.5, 3]. Out-of-range values are never clamped.
  */
 function parsePlacements(raw: unknown, fallbackFields: SettingsField[]): OverlaySettings['placements'] {
   if (!isRecord(raw)) {fallbackFields.push('overlay.placements'); return DEFAULT_OVERLAY_PLACEMENTS;}
@@ -145,7 +151,7 @@ export function parseSettings(bytes: Uint8Array): ParsedSettings {
     document = migrateToCurrent(raw, version);
     if (!document) return {state: 'unsupported-older'};
   }
-  const migrated: Migrated = version === 1 || version === 2 || version === 3 || version === 4 || version === 5 || version === 6 ? {migratedFrom: version} : {};
+  const migrated: Migrated = version === 1 || version === 2 || version === 3 || version === 4 || version === 5 || version === 6 || version === 7 ? {migratedFrom: version} : {};
   const fallbackFields: SettingsField[] = [];
 
   let language: AppLanguage = DEFAULT_APP_LANGUAGE;
@@ -169,7 +175,7 @@ export function parseSettings(bytes: Uint8Array): ParsedSettings {
 }
 
 /**
- * The exact v7 file content: UTF-8 without a byte order mark, two-space indentation, a trailing newline, language,
+ * The exact v8 file content: UTF-8 without a byte order mark, two-space indentation, a trailing newline, language,
  * all fourteen overlay sections in canonical order and the placements of all four layouts in canonical order, each with
  * x and y rounded to four decimals and the scale to two.
  */

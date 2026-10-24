@@ -124,3 +124,7 @@ Journal reads one cursor page at a time and updates only on Refresh. Its wide ta
 ## Showing or hiding the overlay
 
 Open **Settings → Overlay** and change **Show overlay** (Russian: **Показывать оверлей**). The switch changes after saving succeeds and stays saved after restarting. Hiding the overlay keeps telemetry updating. It does not change whether recording is available. Turning it off during position editing discards unsaved position and size changes; editing is unavailable while it is off. Turning it on shows it when a supported game is in front and current telemetry/window information is available. If saving fails, the previous setting and edit draft stay in effect.
+
+## Overlay size (ET-045e)
+
+In **Settings → Overlay**, **Edit position** shows **Smaller** and **Larger** (Russian: **Меньше** and **Больше**), which change the overlay's size in 10% steps from 50% to 300%. Since this version 100% is the size that earlier versions showed at 70%, so a size you saved before now looks about 30% smaller; choose a larger percentage (for example 70% instead of 50%) to keep the earlier look. The strip keeps its full width inside the game window at 100% and below and only its text gets smaller. Once this version saves a setting, earlier versions show default settings and cannot save until this version runs again; keep a separate Windows user profile for older test builds.

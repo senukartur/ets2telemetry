@@ -166,7 +166,8 @@ const bridge: DesktopBridge = {
     const copy = parseOverlaySections(sections);
     return copy ? ipcRenderer.invoke('settings:set-overlay-sections', {...copy}) : Promise.reject(new Error('Invalid overlay sections request'));
   },
-  // ET-012b overlay edit mode: fixed channels; only a validated scale or outcome is forwarded, and main validates again.
+  // ET-012b overlay edit mode: fixed channels; only a validated scale setting ([0.5, 3] since ET-045e) or outcome is
+  // forwarded, and main validates again.
   beginOverlayEdit: () => ipcRenderer.invoke('overlay-edit:begin'),
   setOverlayEditScale: scale => {
     const value = parseOverlayEditScale(scale);

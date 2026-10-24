@@ -794,11 +794,12 @@ function Test-UiReceipt {
         'shell' { $flags += @('navigation','headingFocus','hardModePage','journalUnmount','menuKeyboard','exitAvailable','laterAccount'); $screens = @('live','hardMode','journal','settings','account') }
         'live' { $flags += @('numericGauge','unavailableVsZero','paused','staleDashes','rawNames','unsupportedTrip','jobViewport','hmNamesReadable','fullWidthTelemetry','tankUnknownVsZero'); $screens = @('current','zero','missing','paused','stale') }
         'journal' { $flags += @('syntheticBanner','pageReturn','chartBounded','rawTabs','searchPlanned','tripRegions','tableReadable','signedChart'); $screens = @('list','trip','intervals','timeline','samples') }
-        'settings' { $flags += @('allPanels','allSections','committedSave','sourceSelector','uninstallRefusal','refusedSave','readOnly','controlsKeyboard','lastEnabled','fontLicense','overlayVisibility','visibilityFailedSave','actionResult','overlayOpacity','opacityFailedSave','opacityReadOnly','overlayUnified','overlayEditing','overlayScroll'); $screens = @('general','units','overlay','overlay-sections','plugin','data','about','save-error') }
-        'overlay' { $flags += @('fourLayouts','transparent','contained','independentFont','missing','paused','staleDashes','heroSubsets','formatterProfiles','stableNumbers','opacityKeyboardFocus','opacityGestures','backgroundOpacityOverlay','clusterRpmContained'); $screens = @('strip','card','cluster','hud') }
+        'settings' { $flags += @('allPanels','allSections','committedSave','sourceSelector','uninstallRefusal','refusedSave','readOnly','controlsKeyboard','lastEnabled','fontLicense','overlayVisibility','visibilityFailedSave','actionResult','overlayOpacity','opacityFailedSave','opacityReadOnly','overlayUnified','overlayEditing','overlayScroll','scaleControl'); $screens = @('general','units','overlay','overlay-sections','plugin','data','about','save-error') }
+        'overlay' { $flags += @('fourLayouts','transparent','contained','independentFont','missing','paused','staleDashes','heroSubsets','formatterProfiles','stableNumbers','opacityKeyboardFocus','opacityGestures','backgroundOpacityOverlay','clusterRpmContained','scaleRange'); $screens = @('strip','card','cluster','hud') }
     }
     foreach ($flag in $flags) { if ($ui.flags.$flag -isnot [bool] -or !$ui.flags.$flag) { return $false } }
-    if (@($ui.screenshots).Count -ne $(if ($ExpectedUiCase -ceq 'overlay') { 64 } elseif ($ExpectedUiCase -ceq 'settings') { 34 } else { 4 * $screens.Count })) { return $false }
+    # ET-045e: the overlay shard adds six English 1280x800 scale reference screenshots to its 64 layout screenshots.
+    if (@($ui.screenshots).Count -ne $(if ($ExpectedUiCase -ceq 'overlay') { 70 } elseif ($ExpectedUiCase -ceq 'settings') { 34 } else { 4 * $screens.Count })) { return $false }
     foreach ($language in @('en','ru')) {
         foreach ($size in @(@{width=1280;height=800},@{width=1100;height=720})) {
             $pairScreens = $screens
@@ -825,6 +826,27 @@ function Test-UiReceipt {
                 if ($imageWidth -ne $row.imageWidth -or $imageHeight -ne $row.imageHeight) { return $false }
                 if ($ExpectedUiCase -cne 'overlay' -and ($imageWidth -ne $size.width -or $imageHeight -ne $size.height)) { return $false }
             }
+        }
+    }
+    if ($ExpectedUiCase -ceq 'overlay') {
+        foreach ($screen in @('scale-strip','scale-card','scale-cluster','scale-hud','scale-strip-old70','scale-strip-old100')) {
+            $rows = @($ui.screenshots | Where-Object { $_.screen -ceq $screen })
+            if ($rows.Count -ne 1) { return $false }
+            $row = $rows[0]
+            $expectedFile = "ui-overlay-$screen-en-1280x800.png"
+            if ($row.language -cne 'en' -or $row.width -ne 1280 -or $row.height -ne 800 -or $row.file -cne $expectedFile -or
+                !(Test-ReceiptInteger -Value $row.bytes -Minimum 501 -Maximum 5242880) -or
+                !(Test-ReceiptInteger -Value $row.imageWidth -Minimum 1 -Maximum 2560) -or !(Test-ReceiptInteger -Value $row.imageHeight -Minimum 1 -Maximum 1600)) { return $false }
+            $file = Join-Path $Directory $expectedFile
+            if (!(Test-Path -LiteralPath $file -PathType Leaf)) { return $false }
+            $item = Get-Item -LiteralPath $file
+            if ($item.Attributes -band [IO.FileAttributes]::ReparsePoint -or $item.Length -ne $row.bytes) { return $false }
+            $header = New-Object byte[] 24
+            $stream = [IO.File]::OpenRead($file)
+            try { if ($stream.Read($header, 0, 24) -ne 24) { return $false } } finally { $stream.Dispose() }
+            if (($header[0..7] -join ',') -cne '137,80,78,71,13,10,26,10' -or
+                ([double]$header[16] * 16777216 + [double]$header[17] * 65536 + [double]$header[18] * 256 + $header[19]) -ne $row.imageWidth -or
+                ([double]$header[20] * 16777216 + [double]$header[21] * 65536 + [double]$header[22] * 256 + $header[23]) -ne $row.imageHeight) { return $false }
         }
     }
     if ($ExpectedUiCase -ceq 'settings') {

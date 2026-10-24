@@ -284,7 +284,7 @@ it('validates overlay section records strictly before IPC and forwards a fresh c
 });
 // ET-012b: four appended overlay edit methods; each validates before IPC and forwards only fixed or validated values.
 it('requests the overlay edit mode through fixed channels and forwards only a validated scale or outcome', async () => {
-  for (const scale of [Number.NaN, Number.POSITIVE_INFINITY, 0.49, 2.01, '1.5', null, undefined, [1], {scale: 1}]) {
+  for (const scale of [Number.NaN, Number.POSITIVE_INFINITY, 0.49, 3.01, '1.5', null, undefined, [1], {scale: 1}]) {
     await expect(bridge.setOverlayEditScale(scale as never)).rejects.toThrow('Invalid overlay edit request');
   }
   for (const outcome of ['Save', 'done', '', undefined, null, 1, {outcome: 'save'}]) {
@@ -297,8 +297,10 @@ it('requests the overlay edit mode through fixed channels and forwards only a va
   await Reflect.apply(bridge.resetOverlayEditPlacement, bridge, [{x: 0}]);
   await Reflect.apply(bridge.finishOverlayEdit, bridge, ['save', {x: 0}]);
   await bridge.finishOverlayEdit('cancel');
+  // ET-045e: the 300% maximum is forwarded unchanged.
+  await bridge.setOverlayEditScale(3);
   expect(ipc.invoke.mock.calls).toEqual([['overlay-edit:begin'], ['overlay-edit:set-scale', 1.23], ['overlay-edit:reset'], ['overlay-edit:finish', 'save'],
-    ['overlay-edit:finish', 'cancel']]);
+    ['overlay-edit:finish', 'cancel'], ['overlay-edit:set-scale', 3]]);
 });
 // ET-017 PR-4 (P16): the five plugin setup methods. Each validates its arguments before it invokes its fixed channel and
 // forwards only the validated values; anything else rejects without IPC. Extra arguments are never forwarded.
