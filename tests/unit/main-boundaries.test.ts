@@ -29,7 +29,7 @@ let overlayContents: typeof contents;
 let windows: (EventEmitter & {webContents: typeof contents; hide: ReturnType<typeof vi.fn>; showInactive: ReturnType<typeof vi.fn>; setBounds: ReturnType<typeof vi.fn>;
   topmost: boolean; setAlwaysOnTop: ReturnType<typeof vi.fn>; moveTop: ReturnType<typeof vi.fn>; setIgnoreMouseEvents: ReturnType<typeof vi.fn>; setFocusable: ReturnType<typeof vi.fn>;
   minimized: boolean; minimize: ReturnType<typeof vi.fn>; restore: ReturnType<typeof vi.fn>; show: ReturnType<typeof vi.fn>; focus: ReturnType<typeof vi.fn>;
-  focused: boolean; setMovable: ReturnType<typeof vi.fn>; setSkipTaskbar: ReturnType<typeof vi.fn>; bounds: Electron.Rectangle})[];
+  focused: boolean; setMovable: ReturnType<typeof vi.fn>; setSkipTaskbar: ReturnType<typeof vi.fn>; bounds: Electron.Rectangle; visible: boolean})[];
 // ET-016 PR-5: the Save dialog of the trip export; each case sets its answer.
 let showSaveDialog: ReturnType<typeof vi.fn<(window: unknown, options: unknown) => Promise<{canceled: boolean; filePath?: string}>>>;
 // ET-017 PR-4: the folder dialog and the shell calls of plugin setup; each case sets its answers.
@@ -135,7 +135,7 @@ function installFixture() {
       })();
       minimized = false; isMinimized = () => this.minimized; minimize = vi.fn(() => {this.minimized = true;}); restore = vi.fn(() => {this.minimized = false;}); show = vi.fn(); focus = vi.fn();
       visible = false; isVisible = () => this.visible;
-      hide = vi.fn(() => {this.visible = false;}); showInactive = vi.fn(() => {this.visible = true;}); setBounds = vi.fn(); setIgnoreMouseEvents = vi.fn(); setFocusable = vi.fn(); destroy = vi.fn(() => this.emit('closed'));
+      hide = vi.fn(() => {this.visible = false;}); showInactive = vi.fn(() => {this.visible = true;}); setBounds = vi.fn((bounds: Electron.Rectangle) => {this.bounds = {...bounds};}); setIgnoreMouseEvents = vi.fn(); setFocusable = vi.fn(); destroy = vi.fn(() => this.emit('closed'));
       // ET-012b: focus feeds the edit mode's own-foreground gate; the overlay becomes movable only while edited.
       focused = false; isFocused = () => this.focused; setMovable = vi.fn(); setSkipTaskbar = vi.fn(); bounds = {x: 0, y: 0, width: 0, height: 0}; getBounds = () => ({...this.bounds});
       // Models Windows: isAlwaysOnTop() reports the HWND style, which external z-order changes can clear.
@@ -453,6 +453,27 @@ it('re-asserts the overlay topmost level after showing and records a fact-only d
   expect(overlay.topmost).toBe(true);
   expect(log.mock.calls.filter(call => call[0] === 'OVERLAY_TOPMOST_RESTORED')).toEqual([['OVERLAY_TOPMOST_RESTORED', undefined, {phase: 'show'}]]);
   expect(windows[0].setAlwaysOnTop).not.toHaveBeenCalled();
+});
+// ET-045c: the default strip in the 1920 × 1080 client at (-1920, 0) is {-1600, 8, 1280, 116}. A window that keeps its
+// 0 × 0 creation bounds is applied again twice, cannot be fitted and hides; the default log gets one fact-only line.
+it('logs an overlay window Windows did not place as requested, and keeps every verified apply out of the default log', async () => {
+  vi.stubEnv('ETS2TELEMETRY_SOURCE_KIND', 'ets2'); await ready(); ipc.emit('overlay:subscribe', overlayTrusted());
+  const overlay = windows[1]; overlay.setBounds.mockImplementation(() => undefined);
+  deliver(currentGame());
+  expect(overlay.setBounds.mock.calls).toEqual(Array.from({length: 3}, () => [{x: -1600, y: 8, width: 1280, height: 116}]));
+  expect(overlay.visible).toBe(false); expect(overlay.show).not.toHaveBeenCalled(); expect(overlay.focus).not.toHaveBeenCalled();
+  expect(log.mock.calls.filter(call => String(call[0]).startsWith('OVERLAY_BOUNDS_'))).toEqual([['OVERLAY_BOUNDS_MISMATCH', undefined, {mode: 'driving', outcome: 'hidden',
+    attempts: 2, reqX: -1600, reqY: 8, reqW: 1280, reqH: 116, actX: 0, actY: 0, actW: 0, actH: 0, clientX: -1920, clientY: 0, clientW: 1920, clientH: 1080}]]);
+  // The refused request is not set again on later updates.
+  deliver(currentGame(), 2); expect(overlay.setBounds).toHaveBeenCalledTimes(3);
+});
+it('records every verified overlay apply only in the opt-in diagnostic timeline', async () => {
+  vi.stubEnv('ETS2TELEMETRY_SOURCE_KIND', 'ets2'); vi.stubEnv('ETS2TELEMETRY_DIAGNOSTIC_DIR', 'C:\\isolated\\diagnostics');
+  await ready(); ipc.emit('overlay:subscribe', overlayTrusted());
+  deliver(currentGame());
+  expect(windows[1].visible).toBe(true);
+  expect(log.mock.calls.filter(call => String(call[0]).startsWith('OVERLAY_BOUNDS_'))).toEqual([['OVERLAY_BOUNDS_SET', undefined, {mode: 'driving', outcome: 'exact',
+    attempts: 0, reqX: -1600, reqY: 8, reqW: 1280, reqH: 116, actX: -1600, actY: 8, actW: 1280, actH: 116, clientX: -1920, clientY: 0, clientW: 1920, clientH: 1080}]]);
 });
 it('retains the dedicated overlay session construction across reload and renderer recovery', async () => {
   await ready(); const dashboard = windows[0], overlay = windows[1];

@@ -118,10 +118,21 @@ export function overlayWindowSize(layout: OverlayLayout, scale: number, sections
 export function overlayBounds(layout: OverlayLayout, client: DipRect, placement: OverlayPlacement = DEFAULT_OVERLAY_PLACEMENTS[layout],
   sections: OverlaySections = DEFAULT_OVERLAY_SECTIONS): DipRect | undefined {
   const size = overlaySize(layout, client, placement.scale, sections);
-  if (!size) return undefined;
+  return size && placeSize(layout, client, placement, size);
+}
+
+/**
+ * Positions a window of the given DIP size by the placement's fractions of the free space between the layout's margins:
+ * left = round(client.x + margin + x × (client width − 2 × margin − width)) and the same for the top. Undefined when the
+ * size does not fit inside the margins. `overlayBounds` uses it for the layout's own size; ET-045c uses it for an actual
+ * window size that Windows applied instead of the requested one. The placement's scale is not used.
+ */
+export function placeSize(layout: OverlayLayout, client: DipRect, placement: OverlayPlacement, size: {width: number; height: number}): DipRect | undefined {
+  if (!validArea(client) || ![size.width, size.height, placement.x, placement.y].every(Number.isFinite) || size.width <= 0 || size.height <= 0) return undefined;
   const margin = overlayMargins(layout);
   const freeX = client.width - 2 * margin.x - size.width, freeY = client.height - 2 * margin.y - size.height;
-  return {x: Math.round(client.x + margin.x + placement.x * freeX), y: Math.round(client.y + margin.y + placement.y * freeY), ...size};
+  if (freeX < 0 || freeY < 0) return undefined;
+  return {x: Math.round(client.x + margin.x + placement.x * freeX), y: Math.round(client.y + margin.y + placement.y * freeY), width: size.width, height: size.height};
 }
 
 /**

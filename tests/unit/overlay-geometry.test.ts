@@ -1,6 +1,6 @@
 import {expect, it} from 'vitest';
 import type {OverlaySectionId, OverlaySections} from '../../packages/contracts/src';
-import {overlayBounds, overlaySize, overlayWindowSize, placementFromBounds, surfaceHeightDip, type DipRect} from '../../apps/desktop/src/overlay-geometry';
+import {overlayBounds, overlaySize, overlayWindowSize, placementFromBounds, placeSize, surfaceHeightDip, type DipRect} from '../../apps/desktop/src/overlay-geometry';
 import {DEFAULT_OVERLAY_PLACEMENTS} from '../../apps/desktop/src/overlay-placement';
 import {DEFAULT_OVERLAY_SECTIONS, OVERLAY_PRESETS, OVERLAY_SECTION_IDS} from '../../apps/desktop/src/overlay-sections';
 
@@ -325,6 +325,39 @@ it('round-trips a placement through its bounds within one DIP', () => {
           expect(Math.abs(again.x - placed.x)).toBeLessThanOrEqual(1);
           expect(Math.abs(again.y - placed.y)).toBeLessThanOrEqual(1);
           expect({width: again.width, height: again.height}).toEqual({width: placed.width, height: placed.height});
+        }
+      }
+    }
+  }
+});
+
+// ET-045c: placeSize positions any window size by the placement's fractions, so the controller can place the size Windows
+// actually applied. Hand-computed in the owner's 2560 × 1440 physical client at 150%, 1706.67 × 960 DIP at (1706.67, 240):
+// a 640 × 40 strip at x 0.8485, y 1 has free space 1674.67 − 640 = 1034.67 and 944 − 40 = 904, so
+// x = round(1722.67 + 877.91) = 2601 and y = 248 + 904 = 1152.
+it('positions any size by the placement fractions and refuses one that does not fit inside the margins', () => {
+  const area = client(2560 / 1.5, 240, 2560 / 1.5, 960);
+  expect(placeSize('strip', area, {x: 0.8485, y: 1, scale: 0.5}, {width: 640, height: 40})).toEqual({x: 2601, y: 1152, width: 640, height: 40});
+  // The same placement for a 21 high window: y = 248 + 944 − 21 = 1171.
+  expect(placeSize('strip', area, {x: 0.8485, y: 1, scale: 0.5}, {width: 640, height: 21})).toEqual({x: 2601, y: 1171, width: 640, height: 21});
+  // A card keeps 16 on every side: 300 × 384 in 1920 × 1080 at x 1, y 0 is at 1920 − 16 − 300 = 1604, 16.
+  expect(placeSize('card', client(0, 0, 1920, 1080), {x: 1, y: 0, scale: 1}, {width: 300, height: 384})).toEqual({x: 1604, y: 16, width: 300, height: 384});
+  // Exactly the margins fit; one DIP more does not.
+  expect(placeSize('strip', client(0, 0, 672, 100), {x: 0.5, y: 0.5, scale: 1}, {width: 640, height: 84})).toEqual({x: 16, y: 8, width: 640, height: 84});
+  expect(placeSize('strip', client(0, 0, 672, 100), {x: 0.5, y: 0.5, scale: 1}, {width: 641, height: 84})).toBeUndefined();
+  expect(placeSize('strip', client(0, 0, 672, 100), {x: 0.5, y: 0.5, scale: 1}, {width: 640, height: 85})).toBeUndefined();
+  expect(placeSize('card', client(0, 0, 0, 100), {x: 0, y: 0, scale: 1}, {width: 10, height: 10})).toBeUndefined();
+  expect(placeSize('card', client(0, 0, 100, 100), {x: 0, y: 0, scale: 1}, {width: 0, height: 10})).toBeUndefined();
+});
+it('equals overlayBounds for every layout at the layout size', () => {
+  for (const area of [client(0, 0, 1920, 1080), client(-639.3333, 10.6667, 1279.3333, 719.3333), client(2560 / 1.5, 240, 2560 / 1.5, 960)]) {
+    for (const layout of ['strip', 'card', 'cluster', 'hud'] as const) {
+      for (const sections of [DEFAULT_OVERLAY_SECTIONS, OVERLAY_PRESETS['job-focus'], OVERLAY_PRESETS['driving-only']]) {
+        for (const scale of [0.5, 1, 2]) {
+          for (const [x, y] of [[0, 0], [0.8485, 1], [0.5, 0.25]]) {
+            const placement = {x, y, scale}, size = overlaySize(layout, area, scale, sections);
+            expect(size ? placeSize(layout, area, placement, size) : undefined).toEqual(overlayBounds(layout, area, placement, sections));
+          }
         }
       }
     }

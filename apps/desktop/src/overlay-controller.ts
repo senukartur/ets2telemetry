@@ -1,5 +1,5 @@
 import type {LiveTelemetry, OverlayEditPlacement, OverlayEditState, OverlayLayout, OverlayPlacement, OverlaySections} from '../../../packages/contracts/src';
-import {overlayBounds, placementFromBounds, type DipRect} from './overlay-geometry';
+import {overlayBounds, placementFromBounds, placeSize, type DipRect} from './overlay-geometry';
 import {DEFAULT_OVERLAY_PLACEMENTS, samePlacement} from './overlay-placement';
 import {DEFAULT_OVERLAY_SECTIONS, sameSections} from './overlay-sections';
 import {currentGameClientBounds, gameForeground, visibleGameClientBounds, type PhysicalClientBounds} from './window-placement';
@@ -15,6 +15,8 @@ export interface OverlayWindow {
   isDestroyed(): boolean;
   hide(): void;
   setBounds(bounds: PhysicalClientBounds): void;
+  /** The window's actual DIP bounds, read back from the HWND; ET-045c verifies them against the requested bounds. */
+  getBounds(): DipRect;
   showInactive(): void;
   /** On Windows this reads the HWND's actual WS_EX_TOPMOST style, not a cached flag. */
   isAlwaysOnTop(): boolean;
@@ -42,9 +44,41 @@ export interface OverlayControllerOptions {
   editChanged?: (state: OverlayEditState) => void;
   /** Fraction-only content alignment change; does not carry an observation or native command. */
   anchorChanged?: (anchor: number) => void;
+  /**
+   * Fixed-code, numbers-only facts about verified window bounds (ET-045c). `OVERLAY_BOUNDS_MISMATCH` reports at most one
+   * line per outcome per requested rectangle; `OVERLAY_BOUNDS_SET` follows every verified apply and belongs only in an
+   * opt-in diagnostic timeline.
+   */
+  boundsReport?: (event: OverlayBoundsEvent, facts: OverlayBoundsFacts) => void;
 }
+/**
+ * ET-045c: the actual window may differ from a requested rectangle by this much on each edge, which absorbs DIP to
+ * physical pixel rounding at fractional scale factors.
+ */
+export const BOUNDS_TOLERANCE_DIP = 1;
+/** ET-045c: how often one requested rectangle is applied again after the actual window did not match it. */
+export const BOUNDS_REAPPLY_LIMIT = 2;
+export type OverlayBoundsEvent = 'OVERLAY_BOUNDS_MISMATCH' | 'OVERLAY_BOUNDS_SET';
+/** `exact` for an apply that matched at once; the others follow a mismatch. */
+export type OverlayBoundsOutcome = 'exact' | 'reapplied' | 'fitted' | 'hidden';
+/** Requested, actual and game client rectangles in DIP, rounded to two decimals; no handle, path or value. */
+export type OverlayBoundsFacts = {mode: 'driving' | 'edit'; outcome: OverlayBoundsOutcome; attempts: number;
+  reqX: number; reqY: number; reqW: number; reqH: number; actX: number; actY: number; actW: number; actH: number;
+  clientX: number; clientY: number; clientW: number; clientH: number};
 interface EditDraft {layout: OverlayLayout; draft: OverlayPlacement}
+/** What a fallback needs to place the actual window size at the same fractions. */
+interface FitContext {layout: OverlayLayout; client: DipRect; placement: OverlayPlacement; mode: 'driving' | 'edit'}
+/** Per-request verification state: reset whenever the request or what it was computed from changes. */
+interface Verification {attempts: number; fitted: boolean; refused: boolean; reported: Set<OverlayBoundsOutcome>}
+const freshVerification = (): Verification => ({attempts: 0, fitted: false, refused: false, reported: new Set()});
 const sameRect = (left: DipRect, right: DipRect) => left.x === right.x && left.y === right.y && left.width === right.width && left.height === right.height;
+const near = (left: number, right: number) => Math.abs(left - right) <= BOUNDS_TOLERANCE_DIP;
+/** Every edge within the tolerance; a non-finite actual rectangle never matches. */
+const nearRect = (actual: DipRect, wanted: DipRect) => near(actual.x, wanted.x) && near(actual.y, wanted.y) &&
+  near(actual.x + actual.width, wanted.x + wanted.width) && near(actual.y + actual.height, wanted.y + wanted.height);
+const insideClient = (actual: DipRect, client: DipRect) => actual.x >= client.x - BOUNDS_TOLERANCE_DIP && actual.y >= client.y - BOUNDS_TOLERANCE_DIP &&
+  actual.x + actual.width <= client.x + client.width + BOUNDS_TOLERANCE_DIP && actual.y + actual.height <= client.y + client.height + BOUNDS_TOLERANCE_DIP;
+const round2 = (value: number) => Math.round(value * 100) / 100;
 const validArea = (rect: DipRect) => [rect.x, rect.y, rect.width, rect.height].every(Number.isFinite) && rect.width > 0 && rect.height > 0;
 const sameEditState = (left: OverlayEditState | undefined, right: OverlayEditState) => left !== undefined && (left.active || right.active
   ? left.active && right.active && left.layout === right.layout && left.scale === right.scale && left.placement === right.placement : true);
@@ -56,6 +90,12 @@ const sameEditState = (left: OverlayEditState | undefined, right: OverlayEditSta
  * window, ignores the mouse and is never focusable or movable. Edit mode (ET-012b): the overlay shows only while one of
  * this application's windows is in front and the game is not, and only then is it interactive, so it can be dragged.
  * Every hide happens before the window becomes click-through again, and the taskbar tab is never left enabled.
+ *
+ * Verified bounds (ET-045c): a requested rectangle is checked against the window's actual bounds after it is set and on
+ * every later placement. A mismatch beyond one DIP per edge is applied again up to twice, after an inactive show if the
+ * window was still hidden; a window that keeps another size is placed at that size by the same fractions when it fits;
+ * otherwise the overlay hides fail-closed for that request, which edit mode reports as `too-large`. The saved placement
+ * and the draft never change. While the user drags the edit overlay nothing is verified.
  */
 export class OverlayController {
   private live?: LiveTelemetry;
@@ -63,7 +103,13 @@ export class OverlayController {
   private enabled: boolean;
   private visible = false;
   private topmostLossReported = false;
-  private bounds?: PhysicalClientBounds;
+  /** The rectangle last requested through setBounds, or adopted from a finished drag; a placement compares against it. */
+  private requested?: DipRect;
+  /** What the actual window must match: the request, or its fit to the size Windows applied instead. */
+  private accepted?: DipRect;
+  private verification = freshVerification();
+  private fit?: FitContext;
+  private readonly boundsReport: (event: OverlayBoundsEvent, facts: OverlayBoundsFacts) => void;
   private physical?: PhysicalClientBounds;
   private topologyReceipt?: string;
   private placement: OverlayPlacement;
@@ -90,6 +136,7 @@ export class OverlayController {
     this.editChanged = options.editChanged ?? (() => {});
     this.reportedEdit = {active: false};
     this.reportedAnchor = this.placement.y; this.anchorChanged = options.anchorChanged ?? (() => {});
+    this.boundsReport = options.boundsReport ?? (() => {});
   }
   get contentAnchorY(): number {return this.heldAnchor ?? (this.edit?.draft ?? this.placement).y;}
   private reportAnchor(): void {
@@ -110,26 +157,32 @@ export class OverlayController {
     const placed = layout === this.layout && samePlacement(placement, this.placement), sectionsChanged = !sameSections(sections, this.sections);
     if (placed && !sectionsChanged) return;
     this.layout = layout; this.placement = placement; this.sections = sections;
+    // ET-045c: any saved change verifies the window again, even when its rectangle stays the same.
+    this.verification = freshVerification();
     this.reportAnchor();
     // Main refuses a layout change while editing; should one arrive anyway, the edit is cancelled.
     if (this.edit && this.edit.layout !== layout) {this.endEdit(); return;}
     if (this.edit) {if (sectionsChanged) this.place(); return;}
     // A new layout or placement always moves the window; new sections only invalidate the cached client observation.
     if (placed) this.physical = undefined;
-    else this.bounds = this.physical = undefined;
+    else this.forgetBounds();
     this.place();
   }
   /** Applies committed visibility first, so discarding an edit cannot briefly re-show the driving overlay. */
   setEnabled(enabled: boolean): void {
     if (enabled === this.enabled) return;
     this.enabled = enabled;
-    if (!enabled) this.endEdit();
+    if (!enabled) {this.endEdit(); this.verification = freshVerification();}
     this.place();
   }
-  loaded(ready: boolean): void {this.ready = ready; this.place();}
+  loaded(ready: boolean): void {
+    this.ready = ready;
+    if (!ready) this.verification = freshVerification();
+    this.place();
+  }
   topologyChanged(): void {
     // A removed/reconfigured monitor invalidates the previous coordinate observation.
-    this.topologyReceipt = this.receipt(); this.bounds = this.physical = undefined;
+    this.topologyReceipt = this.receipt(); this.forgetBounds();
     if (this.live?.observation) this.live = {...this.live, observation: {...this.live.observation, windowFresh: false}};
     this.place();
   }
@@ -142,7 +195,7 @@ export class OverlayController {
     if (!this.edit) {
       this.edit = {layout: this.layout, draft: this.placement};
       this.ownForeground = ownForeground; this.editStatus = 'waiting-for-game';
-      this.bounds = this.physical = undefined;
+      this.forgetBounds();
       this.place();
     }
     this.reportEdit();
@@ -171,7 +224,7 @@ export class OverlayController {
     const edit = this.edit;
     if (!edit) return undefined;
     if (!this.window.isDestroyed()) this.hide();
-    this.edit = undefined; this.moving = false; this.heldAnchor = undefined; this.reportAnchor(); this.client = undefined; this.bounds = this.physical = undefined;
+    this.edit = undefined; this.moving = false; this.heldAnchor = undefined; this.reportAnchor(); this.client = undefined; this.forgetBounds();
     this.place();
     this.reportEdit();
     return edit.draft;
@@ -184,7 +237,9 @@ export class OverlayController {
     this.moving = false; this.heldAnchor = undefined;
     if (this.visible && this.client) {
       this.edit.draft = placementFromBounds(this.edit.layout, this.client, bounds, this.edit.draft, this.sections);
-      this.bounds = {x: bounds.x, y: bounds.y, width: bounds.width, height: bounds.height};
+      // The dropped bounds are the window's actual bounds; the snap below is verified against them (ET-045c).
+      this.requested = this.accepted = {x: bounds.x, y: bounds.y, width: bounds.width, height: bounds.height};
+      this.verification = freshVerification();
     }
     this.place(); this.reportAnchor();
   }
@@ -195,6 +250,10 @@ export class OverlayController {
   private receipt(): string | undefined {
     const observation = this.live?.observation;
     return observation && `${observation.source.pluginSessionId}|${observation.source.processInstanceId}|${observation.windowReceivedMonotonicMs}`;
+  }
+  /** The next placement sets its rectangle again and verifies it from scratch. */
+  private forgetBounds(): void {
+    this.requested = this.accepted = this.physical = this.fit = undefined; this.verification = freshVerification();
   }
   private topologyPending(): boolean {return this.topologyReceipt !== undefined && this.topologyReceipt === this.receipt();}
   private reportEdit(): void {
@@ -215,12 +274,66 @@ export class OverlayController {
   // Every show and placement change re-asserts topmost without activation (SWP_NOACTIVATE), so a
   // level lost while hidden or moved cannot leave the overlay behind the game. A visible overlay is
   // checked on each update and restored if something external cleared WS_EX_TOPMOST.
-  private present(moved: boolean): void {
-    const shown = !this.visible;
-    if (shown) {this.window.showInactive(); this.visible = true; this.topmostLossReported = false;}
+  // A re-apply after verification (ET-045c) is a placement change: it re-asserts topmost after the last setBounds.
+  private present(moved: boolean, shownNow = false): void {
+    const shown = shownNow || !this.visible;
+    if (!this.visible) this.showWindow();
     const lost = !this.window.isAlwaysOnTop();
     if (lost && !this.topmostLossReported) {this.topmostLossReported = true; this.topmostLost(shown ? 'show' : 'visible');}
     if (shown || moved || lost) {this.window.setAlwaysOnTop(true, OVERLAY_TOPMOST_LEVEL); this.window.moveTop();}
+  }
+  private showWindow(): void {this.window.showInactive(); this.visible = true; this.topmostLossReported = false;}
+  private reportBounds(event: OverlayBoundsEvent, outcome: OverlayBoundsOutcome, requested: DipRect, actual: DipRect, fit: FitContext): void {
+    const {client} = fit;
+    this.boundsReport(event, {mode: fit.mode, outcome, attempts: this.verification.attempts,
+      reqX: round2(requested.x), reqY: round2(requested.y), reqW: round2(requested.width), reqH: round2(requested.height),
+      actX: round2(actual.x), actY: round2(actual.y), actW: round2(actual.width), actH: round2(actual.height),
+      clientX: round2(client.x), clientY: round2(client.y), clientW: round2(client.width), clientH: round2(client.height)});
+  }
+  /**
+   * Sets a changed request, then verifies the window's actual bounds against the accepted rectangle (ET-045c). A
+   * mismatch is applied again up to BOUNDS_REAPPLY_LIMIT times, after an inactive show in the same task if the window
+   * was meant to show but is still hidden. A window that keeps another size is then placed once at that size by the
+   * same fractions, if that fits and lies on a display. When nothing matches inside the client the overlay hides, and
+   * this request is not set again until it or what it was computed from changes. Returns whether the overlay shows.
+   */
+  private applyVerified(requested: DipRect, fit: FitContext): boolean {
+    this.fit = fit;
+    let applied = false, shown = false;
+    if (!this.requested || !sameRect(requested, this.requested)) {
+      this.window.setBounds(requested); applied = true;
+      this.requested = this.accepted = requested; this.verification = freshVerification();
+    } else if (this.verification.refused) {this.hide(); return false;}
+    const verification = this.verification;
+    let accepted = this.accepted ?? requested, actual = this.window.getBounds(), outcome: OverlayBoundsOutcome = 'exact';
+    if (!nearRect(actual, accepted)) {
+      const first = actual;
+      while (verification.attempts < BOUNDS_REAPPLY_LIMIT && !nearRect(actual, accepted)) {
+        verification.attempts++;
+        if (!this.visible) {this.showWindow(); shown = true;}
+        this.window.setBounds(accepted); applied = true;
+        actual = this.window.getBounds();
+      }
+      if (!nearRect(actual, accepted) && !verification.fitted && (actual.width !== accepted.width || actual.height !== accepted.height)) {
+        verification.fitted = true;
+        const fitted = placeSize(fit.layout, fit.client, fit.placement, {width: actual.width, height: actual.height});
+        if (fitted && this.onDisplay(fitted)) {
+          this.window.setBounds(fitted); applied = true; this.accepted = accepted = fitted;
+          actual = this.window.getBounds();
+        }
+      }
+      const matched = nearRect(actual, accepted) && insideClient(actual, fit.client);
+      outcome = !matched ? 'hidden' : sameRect(accepted, requested) ? 'reapplied' : 'fitted';
+      if (!verification.reported.has(outcome)) {verification.reported.add(outcome); this.reportBounds('OVERLAY_BOUNDS_MISMATCH', outcome, requested, first, fit);}
+      if (!matched) {
+        verification.refused = true; this.hide();
+        this.reportBounds('OVERLAY_BOUNDS_SET', outcome, requested, actual, fit);
+        return false;
+      }
+    }
+    this.present(applied, shown);
+    if (applied) this.reportBounds('OVERLAY_BOUNDS_SET', outcome, requested, actual, fit);
+    return true;
   }
   private onDisplay(bounds: DipRect): boolean {
     return this.screen.getAllDisplays().some(({bounds: display}) =>
@@ -239,8 +352,9 @@ export class OverlayController {
     if (this.edit) {this.placeEditing(this.edit); return;}
     const physical = this.live && currentGameClientBounds(this.live);
     if (!this.ready || !physical || this.topologyPending()) {this.hide(); return;}
-    if (this.bounds && this.physical && Object.keys(physical).every(key => physical[key as keyof PhysicalClientBounds] === this.physical![key as keyof PhysicalClientBounds])) {
-      this.present(false); return;
+    // The same client area: the window is only verified again (ET-045c), which sets nothing while it matches.
+    if (this.requested && this.fit && this.physical && Object.keys(physical).every(key => physical[key as keyof PhysicalClientBounds] === this.physical![key as keyof PhysicalClientBounds])) {
+      this.applyVerified(this.requested, this.fit); return;
     }
     try {
       const client = this.screen.screenToDipRect(null, physical);
@@ -248,10 +362,8 @@ export class OverlayController {
       // Each layout has its own placement and size inside the client area (overlay-geometry.ts); a layout that does not fit hides.
       const bounds = overlayBounds(this.layout, client, this.placement, this.sections);
       if (!bounds || !this.onDisplay(bounds)) {this.hide(); return;}
-      const moved = !this.bounds || !sameRect(bounds, this.bounds);
-      if (moved) {this.window.setBounds(bounds); this.bounds = bounds;}
+      this.applyVerified(bounds, {layout: this.layout, client, placement: this.placement, mode: 'driving'});
       this.physical = physical;
-      this.present(moved);
     } catch {this.hide();}
   }
   /**
@@ -274,20 +386,26 @@ export class OverlayController {
       }
     }
     if (status !== 'visible' || !bounds) this.hide();
-    else if (!this.moving) this.showInteractive(bounds);
+    else if (!this.moving && !this.showInteractive(bounds, {layout: edit.layout, client: this.client!, placement: edit.draft, mode: 'edit'})) {
+      // Windows did not apply the draft's rectangle (ET-045c): reported as the existing fit refusal, with no IPC change.
+      status = 'too-large';
+    }
     this.editStatus = status;
     this.reportEdit();
   }
-  /** Interactive first, then zoom and bounds, an inactive show and the topmost re-assertion (decision M7). Never show() or focus(). */
-  private showInteractive(bounds: DipRect): void {
+  /**
+   * Interactive first, then zoom and bounds, an inactive show and the topmost re-assertion (decision M7). Never show() or
+   * focus(). Bounds are applied again after the first show only when verification found a mismatch (ET-045c); a request
+   * Windows refused stays hidden and does not become interactive again.
+   */
+  private showInteractive(bounds: DipRect, fit: FitContext): boolean {
+    if (this.verification.refused && this.requested && sameRect(bounds, this.requested)) {this.hide(); return false;}
     if (!this.interactive) {
       this.window.setIgnoreMouseEvents(false); this.window.setFocusable(true);
       // setFocusable(true) enables the taskbar tab on Windows; the overlay never shows one.
       this.window.setSkipTaskbar(true); this.window.setMovable(true);
       this.interactive = true;
     }
-    const moved = !this.bounds || !sameRect(bounds, this.bounds);
-    if (moved) {this.window.setBounds(bounds); this.bounds = bounds;}
-    this.present(moved);
+    return this.applyVerified(bounds, fit);
   }
 }
