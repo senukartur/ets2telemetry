@@ -192,9 +192,9 @@ Columns:
 | `tests/unit/uninstall-engine.test.ts` | Node unit (Vitest) | REG-015, REG-017 | T, V (et-018) | ET-018 (PR-2) | PR (tests job, `npm test`) | security |
 | `tests/unit/uninstall-plugin-cleanup.test.ts` | Node unit (Vitest) | REG-015, REG-017 | T, V (et-018) | ET-018 (PR-2) | PR (tests job, `npm test`) | security |
 | `tests/unit/uninstall-roots.test.ts` | Node unit (Vitest) | REG-017 | T, V (et-018) | ET-018 (PR-2) | PR (tests job, `npm test`) | security |
-| `tests/unit/squirrel-events.test.ts` | Node unit (Vitest) | REG-015, REG-017 | T, V (et-018) | ET-018 (PR-3); ET-045g; ET-045h |
+| `tests/unit/squirrel-events.test.ts` | Node unit (Vitest) | REG-015, REG-017 | T, V (et-018) | ET-018 (PR-3); ET-045g; ET-045h | PR (tests job, `npm test`) | security |
 | `tests/unit/legacy-shortcuts.test.ts` | Node unit (Vitest) on an in-memory file system and fake shortcut reader | REG-012, REG-017 | F, V (et-045h) | ET-045h | PR (tests job, `npm test`) | security (exact candidates, ownership, no link followed, deadline) |
-| `tests/unit/product-name.test.ts` | Node unit (Vitest) over the tracked copy, executor, window title and maker config | REG-012, REG-015, REG-017 | F, V (et-045h) | ET-045h | PR (tests job, `npm test`) | regression (no user-facing old name; kept technical identities) | PR (tests job, `npm test`) | security |
+| `tests/unit/product-name.test.ts` | Node unit (Vitest) over the tracked copy, executor, window title and maker config | REG-012, REG-015, REG-017 | F, V (et-045h) | ET-045h | PR (tests job, `npm test`) | regression (no user-facing old name; kept technical identities) |
 | `tests/unit/installed-app-icon.test.ts` | Node unit (Vitest) on a guarded temporary install root; injected execFile, never `reg.exe` | REG-017 | F, V (et-045g) | ET-045g | PR (tests job, `npm test`) | security (fixed key and value, no link followed) |
 | `tests/unit/fixed-program.test.ts` | Node unit (Vitest) with real child processes | REG-012, REG-015 | T, V (et-018) | ET-018 (PR-3) | PR (tests job, `npm test`) | regression |
 | `tests/unit/uninstall-deferral.test.ts` | Node unit (Vitest) | REG-017 | T, V (et-018) | ET-018 (PR-3) | PR (tests job, `npm test`) | security |
