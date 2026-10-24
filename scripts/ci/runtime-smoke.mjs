@@ -17,7 +17,7 @@ import {
   waitForCompleteLive, waitForCurrentTelemetry, waitForNotCurrentLive, waitForOverlayV1, waitForRecordingText, waitForV1NotCurrentLive
 } from './renderer-observation.mjs';
 import {
-  captureHiddenOverlay, LAYOUT_SMOKE_RESERVED_CSS, LAYOUT_SMOKE_WINDOWS, rendererPages, runOverlaySmoke, verifyLayoutContainment, verifyStripLayout, waitForLayoutContainment, waitForStripLayout, windowSecurity,
+  captureHiddenOverlay, LAYOUT_SMOKE_RESERVED_CSS, LAYOUT_SMOKE_WINDOWS, LAYOUT_SMOKE_ZOOM, rendererPages, runOverlaySmoke, verifyLayoutContainment, verifyStripLayout, waitForLayoutContainment, waitForStripLayout, windowSecurity,
   verifyRendererStyles
 } from './overlay-observation.mjs';
 import {runLifecycleSmoke, seedLifecycleSettings, until, verifyLifecycleRestart} from './lifecycle-observation.mjs';
@@ -234,16 +234,19 @@ try {
       const observation = await waitForCurrentTelemetry(window);
       (result.rendererObservations ??= []).push({phase, ...observation});
     };
-    // `zoom` mirrors ET-012b's scale, which the controller applies as the overlay document's zoom factor.
+    // `zoom` is the overlay document's zoom factor, which the controller derives from a scale setting (overlayZoom,
+    // ET-045e: the setting times 0.7). Chromium keeps a zoom level and converts it back, so the factor read back is
+    // rounded to six decimals.
     const resizeOverlay = (width, height, zoom = 1) => application.evaluate(({BrowserWindow}, size) => {
       const target = BrowserWindow.getAllWindows().find(candidate => candidate.webContents.getURL().includes('view=overlay'));
       if (!target) return null;
       target.webContents.setZoomFactor(size.zoom);
-      target.setBounds({...target.getBounds(), width: size.width, height: size.height}); return {...target.getBounds(), zoom: target.webContents.getZoomFactor()};
+      target.setBounds({...target.getBounds(), width: size.width, height: size.height});
+      return {...target.getBounds(), zoom: Math.round(target.webContents.getZoomFactor() * 1e6) / 1e6};
     }, {width, height, zoom});
     const overlayWindow = () => application.evaluate(({BrowserWindow}) => {
       const target = BrowserWindow.getAllWindows().find(candidate => candidate.webContents.getURL().includes('view=overlay'));
-      return target ? {...target.getBounds(), zoom: target.webContents.getZoomFactor()} : null;
+      return target ? {...target.getBounds(), zoom: Math.round(target.webContents.getZoomFactor() * 1e6) / 1e6} : null;
     });
     const overlayState = () => overlay.evaluate(() => ({layout: globalThis.document.querySelector('[data-testid="overlay-root"]')?.getAttribute('data-layout') ?? null,
       width: globalThis.innerWidth, height: globalThis.innerHeight, sections: globalThis.document.querySelectorAll('[data-testid^="overlay-section-"]').length}));
@@ -262,12 +265,15 @@ try {
     // ET-012d (decisions K10 and K11): the card, HUD and cluster with every v1 section the pair shows. The saved sections
     // are first set to exactly those twelve, so each window reserves no row for a hidden section (range and distance
     // driven); without a game window the controller never places the overlay, so the hidden window is sized here
-    // (LAYOUT_SMOKE_WINDOWS for those sections at scale 1, tied to overlayWindowSize by a unit test). Each observation is
-    // stored before it is verified, so a failed receipt keeps it. The original sections and the strip are restored at
-    // the size the product created in every case; the first error, a failed assertion or a failed restore, fails the run.
+    // (LAYOUT_SMOKE_WINDOWS for those sections at the scale setting 1 and its zoom LAYOUT_SMOKE_ZOOM, tied to
+    // overlayWindowSize and overlayZoom by a unit test). Each observation is stored before it is verified, so a failed
+    // receipt keeps it. The original sections and the strip are restored to the DIP bounds and zoom factor the product
+    // created (ET-045e: a restore at zoom 1 would ask for the CSS size in DIP, 1828 wide, which the hosted 1024 screen
+    // cannot hold) in every case; the first error, a failed assertion or a failed restore, fails the run.
     const assertLayouts = async record => {
-      let base = null, sections = null, original = null, failed;
+      let base = null, product = null, sections = null, original = null, failed;
       try {
+        product = record.productWindow = await overlayWindow();
         base = await overlay.evaluate(() => ({width: globalThis.innerWidth, height: globalThis.innerHeight}));
         sections = await overlay.evaluate(() => globalThis.document.querySelectorAll('[data-testid^="overlay-section-"]').length);
         original = (await window.evaluate(() => globalThis.desktop.getAppState())).settings.overlay.sections;
@@ -278,34 +284,37 @@ try {
           const size = LAYOUT_SMOKE_WINDOWS[layout];
           const saved = await window.evaluate(value => globalThis.desktop.setOverlayLayout(value), layout);
           assert.equal(saved.overlay.layout, layout);
-          (record.windows ??= {})[layout] = await resizeOverlay(size.width, size.height, 1);
-          await renderedLayout(layout, size.width, null, 10000, size.height);
+          (record.windows ??= {})[layout] = await resizeOverlay(size.width, size.height, LAYOUT_SMOKE_ZOOM);
+          // The document's CSS viewport is the window's DIP size divided by the zoom factor.
+          await renderedLayout(layout, size.width / LAYOUT_SMOKE_ZOOM, null, 10000, size.height / LAYOUT_SMOKE_ZOOM);
           verifyLayoutContainment(record[layout] = await waitForLayoutContainment(overlay, {layout, sections: SYNTHETIC_V1_STRIP_SECTIONS}), size,
-            LAYOUT_SMOKE_RESERVED_CSS[layout]);
+            LAYOUT_SMOKE_RESERVED_CSS[layout], LAYOUT_SMOKE_ZOOM);
         }
       } catch (error) {failed = error;}
       try {
         await window.evaluate(() => globalThis.desktop.setOverlayLayout('strip'));
         if (original) assert.deepEqual((await window.evaluate(value => globalThis.desktop.setOverlaySections(value), original)).overlay.sections, original);
-        if (base) {await resizeOverlay(base.width, base.height, 1); await renderedLayout('strip', base.width, sections, 10000, base.height);}
+        if (product && base) {
+          await resizeOverlay(product.width, product.height, product.zoom); await renderedLayout('strip', base.width, sections, 10000, base.height);
+        }
         record.restored = 'strip';
       } catch (error) {failed ??= error;}
       if (failed) throw failed;
     };
     const measureLayouts = async layouts => {
       const record = {};
-      let sections = null, base = null;
+      let sections = null, base = null, product = null;
       try {
-        // The product created the strip window at overlayWindowSize(...) for the enabled sections (ET-012c); every size
-        // here derives from it, and the restore returns to it, so strip geometry is never read at a size the product
-        // would not use. A layout given without a size is the strip at `zoom` times that size.
-        // The document's inner size at zoom 1 is the window's DIP size; getBounds can round it up by one DIP.
-        record.window = await overlayWindow();
+        // The product created the strip window at overlayWindowSize(...) for the enabled sections (ET-012c) at the zoom
+        // of its scale setting (ET-045e); every size here derives from its DIP bounds and zoom, and the restore returns
+        // to exactly those, so strip geometry is never read at a size the product would not use. A layout given without
+        // a size is the product window scaled by `zoom` / the product's zoom, so its CSS viewport stays the same.
+        product = record.window = await overlayWindow();
         base = await overlay.evaluate(() => ({width: globalThis.innerWidth, height: globalThis.innerHeight})); record.base = base;
         sections = await overlay.evaluate(() => globalThis.document.querySelectorAll('[data-testid^="overlay-section-"]').length);
-        for (const [layout, givenWidth, givenHeight, zoom = 1] of layouts) {
-          const width = givenWidth ?? base.width * zoom, height = givenHeight ?? base.height * zoom;
-          const key = zoom === 1 ? layout : `${layout}@${zoom}`;
+        for (const [layout, givenWidth, givenHeight, zoom = product.zoom] of layouts) {
+          const width = givenWidth ?? Math.round(product.width * zoom / product.zoom), height = givenHeight ?? Math.round(product.height * zoom / product.zoom);
+          const key = zoom === product.zoom ? layout : `${layout}@${zoom}`;
           const saved = await window.evaluate(value => globalThis.desktop.setOverlayLayout(value), layout);
           record[key] = {saved: saved.overlay.layout, resized: await resizeOverlay(width, height, zoom)};
           // The document's CSS width is the window's DIP width divided by the zoom factor.
@@ -315,7 +324,7 @@ try {
       } catch (error) {record.error = failure(error); record.stateAtError = await overlayState().catch(() => null);}
       try {
         await window.evaluate(() => globalThis.desktop.setOverlayLayout('strip'));
-        if (base) {await resizeOverlay(base.width, base.height, 1); await renderedLayout('strip', base.width, sections, 10000);}
+        if (product && base) {await resizeOverlay(product.width, product.height, product.zoom); await renderedLayout('strip', base.width, sections, 10000);}
         record.restored = 'strip';
       } catch (error) {record.restoreError = failure(error);}
       return record;
@@ -337,9 +346,9 @@ try {
     // The layout saves are real settings writes in the isolated profile: a failed write logs SETTINGS_WRITE_FAILED,
     // which the strict diagnostic postcondition below rejects, so it fails the run as a product failure.
     await assertLayouts(result.telemetry.layoutContainment = {});
-    // For review only, recorded and never asserted: the strip at ET-012b's largest scale, 2, twice the size the product
-    // created with a document zoom of 2 (2560 x 220 DIP for every section where the screen allows it), then restored.
-    result.telemetry.overlayLayoutOverflow = await measureLayouts([['strip', null, null, 2]]);
+    // For review only, recorded and never asserted: the strip at ET-045e's largest setting, 300% (zoom 2.1), three times
+    // the DIP size the product created at 100% (zoom 0.7), so 3840 x 168 DIP where the screen allows it, then restored.
+    result.telemetry.overlayLayoutOverflow = await measureLayouts([['strip', null, null, 2.1]]);
     // Hold the v0 source on the same connection until main's freshness expiry: every v0 card value must become not
     // current while the v1 rows stay current and the overlay keeps only dashes; then return after resume. The later
     // single-connection assertion proves the hold did not reconnect.

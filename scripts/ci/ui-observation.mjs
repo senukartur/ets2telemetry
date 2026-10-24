@@ -6,6 +6,7 @@ import {readFile, writeFile, rename, mkdir, rmdir} from 'node:fs/promises';
 import {screen, settingsPanel, chooseLanguage} from './ui-navigation.mjs';
 import {until} from './lifecycle-observation.mjs';
 import {clusterCentreProbe, overlayOverflow, stripNumberProbe, zeroLiveObservation} from './renderer-observation.mjs';
+import {SCALE_RANGE_FRAMES, SCALE_RANGE_ZOOM, SCALE_REFERENCE_FRAMES} from './overlay-observation.mjs';
 import {stubSaveDialog} from './journal-observation.mjs';
 import {pluginActionResult} from './plugin-fixture.mjs';
 
@@ -51,10 +52,13 @@ function cssDisplayGeometry() {
   return {results, restored: content.getAttribute('style') === original.style && content.getAttribute('data-anchor-y') === original.anchor};
 }
 // ET-045d stable numbers and Cluster containment. The probes write texts into the rendered overlay and restore them
-// (renderer-observation.mjs); the zoom and window frames are the overlay's 50/100/200% scales at the layout's sizes.
+// (renderer-observation.mjs). ET-045e: the zoom and window frames are the zoom factors of the overlay's 100%, 50% and
+// 300% settings (overlayZoom: 0.7, 0.35 and 2.1), every window at least 60 DIP high and the 50% Cluster at least 160 wide,
+// because Windows keeps a window above an unmeasured minimum size. The first strip frame and the second Cluster frame are
+// the 100% ones; the probes restore the layout loop's own frame (`dimensions` at zoom 1) afterwards.
 const SPEED_UNITS = {en: ['km/h', 'mph'], ru: ['км/ч', 'миль/ч']}, RPM_UNIT = {en: 'rpm', ru: 'об/мин'};
-const STRIP_FRAMES = [{zoom: 1, width: 1280, height: 116}, {zoom: 0.5, width: 640, height: 120}, {zoom: 2, width: 1000, height: 720}];
-const CLUSTER_FRAMES = [{zoom: 0.5, width: 220, height: 135}, {zoom: 1, width: 440, height: 267}, {zoom: 2, width: 880, height: 534}];
+const STRIP_FRAMES = [{zoom: 0.7, width: 1280, height: 80}, {zoom: 0.35, width: 640, height: 60}, {zoom: 2.1, width: 1000, height: 720}];
+const CLUSTER_FRAMES = [{zoom: 0.35, width: 160, height: 100}, {zoom: 0.7, width: 308, height: 188}, {zoom: 2.1, width: 924, height: 561}];
 function stripSteps(speedUnit, rpmUnit) {
   return [{speed: '0', speedUnit, gear: 'N', rpm: '0', rpmUnit}, ...['9', '10', '99', '100', '-5', '—'].map(speed => ({speed})),
     ...['1', '9', '10', '12', 'R1'].map(gear => ({gear})), ...['999', '1000', '2528', '9999', '—'].map(rpm => ({rpm}))];
@@ -140,11 +144,11 @@ async function observeStripNumbers({application, overlay, source, language, reco
     source.setReading(100 / 3.6, 73); source.setEngine(1000, 10);
     await overlay.waitForFunction(numberTexts, {speed: '100', gear: '10', rpm: '1000'}, {timeout: 5000});
     const moved = movedBoxes(before, await overlay.evaluate(stripBoxes));
-    record.stableNumbers.push({language, zoom: 1, transition: '9/9/999 to 100/10/1000', moved});
+    record.stableNumbers.push({language, zoom: STRIP_FRAMES[0].zoom, transition: '9/9/999 to 100/10/1000', moved});
     assert.deepEqual(moved, [], `UI_STRIP_LIVE_TRANSITION_MOVED_${language}`);
   }, async () => {
     source.setReading(25, 73); source.setEngine(600, -1);
-    await overlayFrame(application, overlay, STRIP_FRAMES[0]);
+    await overlayFrame(application, overlay, {zoom: 1, ...dimensions.strip});
   });
   await overlay.waitForFunction(numberTexts, {speed: '90', gear: 'R1', rpm: '600'}, {timeout: 5000});
   record.flags.stableNumbers = true;
@@ -176,10 +180,52 @@ async function observeClusterCentre({application, dashboard, overlay, language, 
     }
   }, async () => {
     await dashboard.evaluate(all => globalThis.desktop.setOverlaySections(all), all);
-    await overlayFrame(application, overlay, CLUSTER_FRAMES[1]);
+    await overlayFrame(application, overlay, {zoom: 1, ...dimensions.cluster});
   });
   await overlay.waitForFunction(sectionsAre, shown, {timeout: 5000});
   record.flags.clusterRpmContained = true;
+}
+/** Self-contained: the CSS width and text of every overlay value, label and unit box, in document order. */
+function textBoxes() {
+  return [...globalThis.document.querySelectorAll('.overlay-value, .overlay-label, .overlay-unit')]
+    .map(node => ({kind: String(node.className).split(' ')[0], text: node.textContent, width: node.getBoundingClientRect().width}));
+}
+/**
+ * ET-045e (decision Z8): every layout in the selected language at the 50% setting, zoom 0.35, at least its product window
+ * (SCALE_RANGE_FRAMES). Every shown section must lie inside the window with the content aligned; this gates the
+ * `scaleRange` flag. Chromium applies its minimum font size before the zoom for explicit px sizes, so text should shrink
+ * with the zoom: the CSS width of each value, label and unit box with the same text is compared with the 100% product
+ * window (zoom 0.7), and a ratio above 1.01 is recorded as an enlargement, never asserted. In English the six
+ * owner-comparison references (SCALE_REFERENCE_FRAMES) are captured as extra screenshots. The layout loop's frames are
+ * set again by the next layout or size.
+ */
+async function observeScaleRange({application, dashboard, overlay, language, size, record, save}) {
+  record.scaleRange ??= [];
+  for (const layout of layouts) {
+    await dashboard.evaluate(layout => globalThis.desktop.setOverlayLayout(layout), layout);
+    await overlay.waitForFunction(layout => globalThis.document.querySelector('[data-testid="overlay-root"]')?.getAttribute('data-layout') === layout, layout, {timeout: 5000});
+    const reference = SCALE_REFERENCE_FRAMES.find(frame => frame.layout === layout);
+    await overlayFrame(application, overlay, reference);
+    const atHundred = await overlay.evaluate(textBoxes);
+    const frame = {zoom: SCALE_RANGE_ZOOM, ...SCALE_RANGE_FRAMES[layout]};
+    await overlayFrame(application, overlay, frame);
+    const overflow = await overlay.evaluate(overlayOverflow), atFifty = await overlay.evaluate(textBoxes);
+    const ratios = atFifty.map((box, index) => atHundred[index]?.text === box.text && atHundred[index].width > 0 ? box.width / atHundred[index].width : null)
+      .filter(ratio => ratio !== null);
+    record.scaleRange.push({language, layout, frame, outside: overflow.outside, aligned: overflow.alignment?.aligned ?? null, boxes: ratios.length,
+      maxWidthRatio: ratios.length ? Math.max(...ratios) : null, enlarged: ratios.filter(ratio => ratio > 1.01).length});
+    assert.deepEqual(overflow.outside, [], `UI_SCALE_RANGE_OUTSIDE_${language}_${layout}`);
+    assert.equal(overflow.alignment?.aligned, true, `UI_SCALE_RANGE_UNALIGNED_${language}_${layout}`);
+  }
+  if (language === 'en') {
+    for (const reference of SCALE_REFERENCE_FRAMES) {
+      await dashboard.evaluate(layout => globalThis.desktop.setOverlayLayout(layout), reference.layout);
+      await overlay.waitForFunction(layout => globalThis.document.querySelector('[data-testid="overlay-root"]')?.getAttribute('data-layout') === layout, reference.layout, {timeout: 5000});
+      await overlayFrame(application, overlay, reference);
+      await save(reference.name, language, size, overlay);
+    }
+  }
+  record.flags.scaleRange = true;
 }
 async function capture({page, application, config, record, name, language, size, overlay = false}) {
   const file = `ui-${config.uiCase}-${name}-${language}-${size.width}x${size.height}.png`;
@@ -400,6 +446,7 @@ export async function runUiSmoke({application, dashboard, overlay, source, confi
         assert.equal(await visibility.getAttribute('data-state'), 'checked');
         assert.equal(await dashboard.getByTestId('overlay-edit-start').isEnabled(), true);
         record.flags.overlayVisibility = true;
+        if (size === sizes[0]) await observeScaleControl({dashboard, config, language, record});
         await settingsPanel(dashboard, 'sections'); assert.equal(await dashboard.locator('[data-testid^="overlay-switch-"]').count(), 14);
         await dashboard.getByTestId('overlay-preset-driving-only').click();
         await until(() => dashboard.evaluate(() => globalThis.desktop.getAppState()), state => !state.settings.overlay.sections.cargo, 'UI_SECTIONS_SAVED');
@@ -496,6 +543,8 @@ export async function runUiSmoke({application, dashboard, overlay, source, confi
             await waitState(dashboard, 'connected');
           }
         }
+        // ET-045e: the 50% range and, in English, the owner's scale references, at the first size.
+        if (size === sizes[0]) await observeScaleRange({application, dashboard, overlay, language, size, record, save});
         Object.assign(record.flags, {fourLayouts: true, transparent: true, contained: true, independentFont: true, missing: true, paused: true, staleDashes: true});
       }
     }
@@ -572,6 +621,47 @@ export async function runUiSmoke({application, dashboard, overlay, source, confi
   record.flags.offlineFonts = await dashboard.evaluate(() => [...globalThis.document.fonts].some(font => font.family.includes('Onest')));
   assert.equal(record.flags.offlineFonts, true);
   await chooseLanguage(dashboard, 'en'); await screen(dashboard, 'live');
+}
+
+const SCALE_CONTROL_TEXT = {en: 'Scale', ru: 'Размер'};
+/** Self-contained: the edit scale text and whether the Smaller and Larger buttons are disabled. */
+function scaleControls() {
+  const node = id => globalThis.document.querySelector(`[data-testid="${id}"]`);
+  return {text: node('overlay-edit-scale')?.textContent ?? null, smallerDisabled: node('overlay-scale-down')?.disabled ?? null, largerDisabled: node('overlay-scale-up')?.disabled ?? null};
+}
+/**
+ * ET-045e (decision Z7): the existing edit controls step the scale setting in 10% steps within 50-300%. From 100%, Smaller
+ * five times reaches 50% with Smaller disabled, and Larger 25 times reaches 300% with Larger disabled, in the selected
+ * language. Cancel discards the draft: the settings file keeps its bytes and the saved scale stays 100%.
+ */
+async function observeScaleControl({dashboard, config, language, record}) {
+  const settingsFile = path.join(config.localappdata, 'ETS2Telemetry', 'settings', 'settings.json');
+  assert.ok(!path.relative(config.output, settingsFile).startsWith('..'));
+  const bytes = await readFile(settingsFile), label = SCALE_CONTROL_TEXT[language];
+  await settingsPanel(dashboard, 'overlay');
+  const layout = (await dashboard.evaluate(() => globalThis.desktop.getAppState())).settings.overlay.layout;
+  await dashboard.getByTestId('overlay-edit-start').click();
+  // Each click waits for its own 10% step to render, so the next click steps from the scale main pushed.
+  const shown = percent => until(() => dashboard.evaluate(scaleControls), value => value.text === `${label}: ${percent}%`, `UI_SCALE_CONTROL_${language}_${percent}`, 5000);
+  const step = async (button, from, delta, times) => {
+    let value;
+    for (let index = 1; index <= times; index++) {await dashboard.getByTestId(button).click(); value = await shown(from + delta * index);}
+    return value;
+  };
+  const start = await shown(100);
+  const smallest = await step('overlay-scale-down', 100, -10, 5);
+  assert.deepEqual({smaller: smallest.smallerDisabled, larger: smallest.largerDisabled}, {smaller: true, larger: false}, `UI_SCALE_CONTROL_MIN_${language}`);
+  const largest = await step('overlay-scale-up', 50, 10, 25);
+  assert.deepEqual({smaller: largest.smallerDisabled, larger: largest.largerDisabled}, {smaller: false, larger: true}, `UI_SCALE_CONTROL_MAX_${language}`);
+  await dashboard.getByTestId('overlay-edit-cancel').click();
+  const saved = await until(() => dashboard.evaluate(() => ({text: globalThis.document.querySelector('[data-testid="overlay-saved-scale"]')?.textContent ?? null})),
+    value => value.text !== null, `UI_SCALE_CONTROL_CANCELLED_${language}`, 5000);
+  assert.equal(saved.text, `${label}: 100%`);
+  const state = await dashboard.evaluate(() => globalThis.desktop.getAppState());
+  assert.deepEqual(state.overlayEdit, {active: false}); assert.equal(state.settings.overlay.placements[layout].scale, 1);
+  assert.deepEqual(await readFile(settingsFile), bytes, `UI_SCALE_CONTROL_WROTE_${language}`);
+  (record.scaleControl ??= []).push({language, start: start.text, smallest, largest, cancelled: saved.text});
+  record.flags.scaleControl = true;
 }
 
 /** Newer-version settings deliberately retain the existing EN fallback; there is no forced language override. */

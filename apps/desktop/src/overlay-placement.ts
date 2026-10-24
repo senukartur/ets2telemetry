@@ -1,12 +1,30 @@
 import type {OverlayLayout, OverlayPlacement, OverlayPlacements} from '../../../packages/contracts/src';
 
-// Overlay placements (ET-012b decisions M2-M4). Pure data and validation without Node built-ins, so main, the
-// dashboard preload and renderer, the settings schema and plain Node tests share one definition.
+// Overlay placements (ET-012b decisions M2-M4; scale range and rebase ET-045e decisions Z1 and Z2). Pure data and
+// validation without Node built-ins, so main, the dashboard preload and renderer, the settings schema and plain Node
+// tests share one definition.
 
+/**
+ * The scale is the user's setting, saved in each placement and shown as a percentage: 0.5 is 50%, 3 is 300%. Since
+ * ET-045e (owner decision D1, option b) it is no longer the overlay document's zoom factor: the zoom is the setting times
+ * `OVERLAY_SCALE_ZOOM` (`overlayZoom`), so the new 100% looks like the 70% of earlier builds. Saved numbers are kept
+ * and reinterpreted, never rewritten.
+ */
 export const OVERLAY_SCALE_MIN = 0.5;
-export const OVERLAY_SCALE_MAX = 2;
+export const OVERLAY_SCALE_MAX = 3;
 /** The dashboard's smaller/larger buttons change the scale by this step. */
 export const OVERLAY_SCALE_STEP = 0.1;
+/** The zoom factor of the scale setting 1 (100%): the size that earlier builds showed at 70%. */
+export const OVERLAY_SCALE_ZOOM = 0.7;
+
+/**
+ * The overlay document's zoom factor for a scale setting: setting × 0.7, rounded to three decimals so that one setting
+ * always gives the same factor (0.5 → 0.35, 1 → 0.7, 1.23 → 0.861, 3 → 2.1). Only window geometry and the Chromium
+ * zoom factor use it; placements, IPC, the dashboard and diagnostics keep the setting.
+ */
+export function overlayZoom(scale: number): number {
+  return Math.round(scale * OVERLAY_SCALE_ZOOM * 1000) / 1000;
+}
 
 const placement = (x: number, y: number): OverlayPlacement => Object.freeze({x, y, scale: 1});
 /**
@@ -30,14 +48,14 @@ export const clampFraction = (value: number): number => Math.min(1, Math.max(0, 
 export function isPlacementFraction(value: unknown): value is number {
   return typeof value === 'number' && Number.isFinite(value) && value >= 0 && value <= 1;
 }
-/** A finite number in [0.5, 2]. */
+/** A finite number in [0.5, 3]. */
 export function isOverlayScale(value: unknown): value is number {
   return typeof value === 'number' && Number.isFinite(value) && value >= OVERLAY_SCALE_MIN && value <= OVERLAY_SCALE_MAX;
 }
 
 /**
  * One placement from the settings file: an object whose `x` and `y` are fractions in [0, 1] and whose `scale` is in
- * [0.5, 2]. Out-of-range values are rejected, never clamped; unknown keys are ignored. Returns a normalised frozen copy.
+ * [0.5, 3]. Out-of-range values are rejected, never clamped; unknown keys are ignored. Returns a normalised frozen copy.
  */
 export function parseOverlayPlacement(value: unknown): OverlayPlacement | undefined {
   if (typeof value !== 'object' || value === null || Array.isArray(value)) return undefined;
@@ -47,7 +65,7 @@ export function parseOverlayPlacement(value: unknown): OverlayPlacement | undefi
 }
 
 /**
- * The scale argument of an IPC request: exactly one finite number in [0.5, 2], rounded to two decimals. A rounded
+ * The scale argument of an IPC request: exactly one finite number in [0.5, 3], rounded to two decimals. A rounded
  * value stays inside the range because both bounds have two decimals.
  */
 export function parseOverlayEditScale(value: unknown): number | undefined {
@@ -59,7 +77,7 @@ export function isOverlayEditOutcome(value: unknown): value is OverlayEditOutcom
   return value === 'save' || value === 'cancel';
 }
 
-/** The next scale one step smaller or larger, rounded and kept inside [0.5, 2]. */
+/** The next scale one step smaller or larger, rounded and kept inside [0.5, 3]. */
 export function stepOverlayScale(scale: number, direction: -1 | 1): number {
   return normalizeScale(Math.min(OVERLAY_SCALE_MAX, Math.max(OVERLAY_SCALE_MIN, scale + direction * OVERLAY_SCALE_STEP)));
 }

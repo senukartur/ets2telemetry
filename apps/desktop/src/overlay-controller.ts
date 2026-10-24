@@ -1,6 +1,6 @@
 import type {LiveTelemetry, OverlayEditPlacement, OverlayEditState, OverlayLayout, OverlayPlacement, OverlaySections} from '../../../packages/contracts/src';
 import {overlayBounds, placementFromBounds, placeSize, type DipRect} from './overlay-geometry';
-import {DEFAULT_OVERLAY_PLACEMENTS, samePlacement} from './overlay-placement';
+import {DEFAULT_OVERLAY_PLACEMENTS, overlayZoom, samePlacement} from './overlay-placement';
 import {DEFAULT_OVERLAY_SECTIONS, sameSections} from './overlay-sections';
 import {currentGameClientBounds, gameForeground, visibleGameClientBounds, type PhysicalClientBounds} from './window-placement';
 
@@ -36,7 +36,7 @@ export interface OverlayScreen {
 export interface OverlayControllerOptions {
   /** Persisted visibility gate; evaluated before edit and driving authority. */
   enabled?: boolean;
-  /** The saved placement of the initial layout; the overlay window was created at its scale. */
+  /** The saved placement of the initial layout; the overlay window was created at its scale setting's size and zoom. */
   placement?: OverlayPlacement;
   /** The saved enabled sections; every layout reserves rows for them (ET-012c, ET-012d). Defaults to every section. */
   sections?: OverlaySections;
@@ -147,7 +147,7 @@ export class OverlayController {
     this.enabled = options.enabled ?? true;
     this.placement = options.placement ?? DEFAULT_OVERLAY_PLACEMENTS[layout];
     this.sections = options.sections ?? DEFAULT_OVERLAY_SECTIONS;
-    this.zoom = this.placement.scale;
+    this.zoom = overlayZoom(this.placement.scale);
     this.editChanged = options.editChanged ?? (() => {});
     this.reportedEdit = {active: false};
     this.reportedAnchor = this.placement.y; this.anchorChanged = options.anchorChanged ?? (() => {});
@@ -201,7 +201,7 @@ export class OverlayController {
     if (this.live?.observation) this.live = {...this.live, observation: {...this.live.observation, windowFresh: false}};
     this.place();
   }
-  /** Re-applies the current scale as the overlay document's zoom factor, for example after the document loaded again. */
+  /** Re-applies the zoom factor of the scale in use (overlayZoom, ET-045e), for example after the document loaded again. */
   restoreZoom(): void {if (!this.window.isDestroyed()) this.window.webContents.setZoomFactor(this.zoom);}
 
   /** Enters edit mode for the current layout from its saved placement; `ownForeground` is the gate's current state. */
@@ -380,11 +380,11 @@ export class OverlayController {
     return this.screen.getAllDisplays().some(({bounds: display}) =>
       bounds.x >= display.x && bounds.y >= display.y && bounds.x + bounds.width <= display.x + display.width && bounds.y + bounds.height <= display.y + display.height);
   }
-  /** The scale in use (the draft while editing) is the overlay document's zoom factor, applied even while hidden. */
+  /** The zoom factor of the scale in use (the draft while editing), overlayZoom(scale) since ET-045e, applied even while hidden. */
   private syncZoom(): void {
-    const scale = this.edit ? this.edit.draft.scale : this.placement.scale;
-    if (scale === this.zoom) return;
-    this.zoom = scale; this.window.webContents.setZoomFactor(scale);
+    const zoom = overlayZoom(this.edit ? this.edit.draft.scale : this.placement.scale);
+    if (zoom === this.zoom) return;
+    this.zoom = zoom; this.window.webContents.setZoomFactor(zoom);
   }
   private place(): void {
     if (this.window.isDestroyed()) return;

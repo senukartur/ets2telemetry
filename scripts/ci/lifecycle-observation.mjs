@@ -13,9 +13,10 @@ import {observeExit} from './exit-observation.mjs';
 // until the first save quarantines it; run B must load the saved file without writing.
 const SETTINGS_SEED = '{"format":"ets2telemetry.settings","version":1,"units":{"ets2":"metric",';
 // ET-012a: every save writes the overlay block (strip layout and every section by default). ET-012b: the block also
-// holds the placements of all four layouts (the ET-012a anchors at scale 1 by default), so the format is v3.
+// holds the placements of all four layouts (the ET-012a anchors at scale 1 by default), so the format is v3. ET-045e:
+// the current format is v7, whose scale 1 renders at zoom 0.7.
 const placementLines = (layout, x, y, last = false) => [`      "${layout}": {`, `        "x": ${x},`, `        "y": ${y},`, '        "scale": 1', last ? '      }' : '      },'];
-const SETTINGS_SAVED = ['{', '  "format": "ets2telemetry.settings",', '  "version": 6,', '  "language": "en",', '  "autostart": false,', '  "units": {', '    "ets2": "us-customary",', '    "ats": "us-customary"', '  },',
+const SETTINGS_SAVED = ['{', '  "format": "ets2telemetry.settings",', '  "version": 7,', '  "language": "en",', '  "autostart": false,', '  "units": {', '    "ets2": "us-customary",', '    "ats": "us-customary"', '  },',
   '  "overlay": {', '    "enabled": false,', '    "layout": "strip",', '    "sections": {', '      "speed": true,', '      "gear": true,', '      "rpm": true,', '      "fuel": true,',
   '      "range": true,', '      "sdk-consumption": true,', '      "cargo": true,', '      "origin": true,', '      "destination": true,', '      "distance-driven": true,',
   '      "distance-remaining": true,', '      "deadline": true,', '      "expected-income": true,', '      "game-time": true', '    },', '    "placements": {',
@@ -268,14 +269,15 @@ export async function verifyLifecycleRestart({application, record, rendererPages
   assert.equal(files.find(file => file.name === 'settings.json').content, SETTINGS_SAVED);
   assert.equal(files.find(file => QUARANTINE_NAME.test(file.name)).content, SETTINGS_SEED);
   record.settingsRestartLoaded = true;
-  // ET-012b: the restart restores the saved placements, starts in driving mode and gives the overlay document the saved
-  // scale of its layout as zoom factor, without writing. Run A saves only units and visibility (the receipt requires exactly two
+  // ET-012b: the restart restores the saved placements, starts in driving mode and gives the overlay document the zoom
+  // factor of its layout's saved scale (ET-045e: overlayZoom, 0.7 for the default 100%), without writing. Run A saves only units and visibility (the receipt requires exactly two
   // SETTINGS_SAVED rows), so the saved placements are the defaults here; the overlay smoke saves an edited scale.
   record.restart.placements = state.settings.overlay.placements;
   record.restart.overlayEdit = (await dashboard.evaluate(() => globalThis.desktop.getAppState())).overlayEdit;
   assert.deepEqual(record.restart.overlayEdit, {active: false});
   record.restart.zoom = await application.evaluate(({BrowserWindow}) => BrowserWindow.getAllWindows().map(window =>
-    ({url: window.webContents.mainFrame.url, zoom: window.webContents.getZoomFactor()})).map(({url, zoom}) => ({view: new URL(url).search, zoom})));
-  assert.deepEqual(record.restart.zoom.sort((left, right) => left.view.localeCompare(right.view)), [{view: '', zoom: 1}, {view: '?view=overlay', zoom: 1}]);
+    ({url: window.webContents.mainFrame.url, zoom: window.webContents.getZoomFactor()})).map(({url, zoom}) => ({view: new URL(url).search, zoom: Math.round(zoom * 1e6) / 1e6})));
+  // Chromium keeps a zoom level (a power of 1.2) and converts it back, so the factor is compared at six decimals.
+  assert.deepEqual(record.restart.zoom.sort((left, right) => left.view.localeCompare(right.view)), [{view: '', zoom: 1}, {view: '?view=overlay', zoom: 0.7}]);
   record.restartPlacementsRestored = true;
 }

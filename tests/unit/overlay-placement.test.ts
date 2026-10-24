@@ -1,10 +1,22 @@
 import {expect, it} from 'vitest';
 import {
-  DEFAULT_OVERLAY_PLACEMENTS, isOverlayEditOutcome, isOverlayScale, isPlacementFraction, normalizeFraction, normalizeScale, parseOverlayEditScale,
-  parseOverlayPlacement, samePlacement, stepOverlayScale, withPlacement
+  DEFAULT_OVERLAY_PLACEMENTS, isOverlayEditOutcome, isOverlayScale, isPlacementFraction, normalizeFraction, normalizeScale, OVERLAY_SCALE_MAX,
+  OVERLAY_SCALE_MIN, OVERLAY_SCALE_STEP, OVERLAY_SCALE_ZOOM, overlayZoom, parseOverlayEditScale, parseOverlayPlacement, samePlacement, stepOverlayScale,
+  withPlacement
 } from '../../apps/desktop/src/overlay-placement';
 
-// ET-012b placement values (decisions M2-M4 and M10). Hand-written expectations.
+// ET-012b placement values (decisions M2-M4 and M10); the 50-300% range and the zoom factor of a setting are ET-045e
+// decisions Z1 and Z2 (owner decision D1, option b). Hand-written expectations.
+
+it('keeps the setting range 50-300% in 10% steps, with the new 100% at the zoom of the earlier 70%', () => {
+  expect([OVERLAY_SCALE_MIN, OVERLAY_SCALE_MAX, OVERLAY_SCALE_STEP, OVERLAY_SCALE_ZOOM]).toEqual([0.5, 3, 0.1, 0.7]);
+});
+
+it.each([
+  [0.5, 0.35], [1, 0.7], [1.1, 0.77], [1.23, 0.861], [1.5, 1.05], [2, 1.4], [3, 2.1]
+])('gives the scale setting %s the zoom factor %s', (scale, zoom) => {
+  expect(overlayZoom(scale)).toBe(zoom);
+});
 
 it('keeps the default placements frozen at the ET-012a anchors', () => {
   expect(DEFAULT_OVERLAY_PLACEMENTS).toEqual({strip: {x: 0.5, y: 0, scale: 1}, card: {x: 1, y: 0, scale: 1}, cluster: {x: 0, y: 1, scale: 1}, hud: {x: 0, y: 0, scale: 1}});
@@ -26,14 +38,16 @@ it.each([0, 1, 0.5, -0])('accepts %s as a position fraction', value => {
 
 it.each([
   ['NaN', Number.NaN], ['+Infinity', Number.POSITIVE_INFINITY], ['-Infinity', Number.NEGATIVE_INFINITY], ['a string', '1'], ['a boolean', false],
-  ['zero', 0], ['just below the minimum', 0.4999], ['just above the maximum', 2.0001], ['a negative scale', -1]
+  ['zero', 0], ['just below the minimum', 0.4999], ['just above the maximum', 3.0001], ['one step above the maximum', 3.01],
+  ['one step below the minimum', 0.49], ['a negative scale', -1]
 ])('rejects %s as a scale', (_name, value) => {
   expect(isOverlayScale(value)).toBe(false);
   expect(parseOverlayEditScale(value)).toBeUndefined();
 });
 
 it.each([
-  {value: 0.5, expected: 0.5}, {value: 2, expected: 2}, {value: 1, expected: 1}, {value: 1.234, expected: 1.23}, {value: 1.999, expected: 2},
+  {value: 0.5, expected: 0.5}, {value: 2, expected: 2}, {value: 2.5, expected: 2.5}, {value: 3, expected: 3}, {value: 1, expected: 1},
+  {value: 1.234, expected: 1.23}, {value: 1.999, expected: 2}, {value: 2.999, expected: 3},
   {value: 0.5049, expected: 0.5}, {value: 1.3000000000000003, expected: 1.3}
 ])('accepts and rounds the edit scale $value to $expected', ({value, expected}) => {
   expect(parseOverlayEditScale(value)).toBe(expected);
@@ -54,9 +68,15 @@ it('parses a file placement, normalised and frozen, and ignores unknown keys', (
   expect(Object.isFrozen(parsed)).toBe(true);
 });
 
+it('accepts file placements up to the ET-045e maximum of 3 without changing them', () => {
+  expect(parseOverlayPlacement({x: 0, y: 0, scale: 3})).toEqual({x: 0, y: 0, scale: 3});
+  expect(parseOverlayPlacement({x: 0.8485, y: 1, scale: 2.5})).toEqual({x: 0.8485, y: 1, scale: 2.5});
+});
+
 it.each([
   ['a missing scale', {x: 0, y: 0}], ['an out-of-range x', {x: 1.5, y: 0, scale: 1}], ['a negative y', {x: 0, y: -0.1, scale: 1}],
-  ['an out-of-range scale', {x: 0, y: 0, scale: 3}], ['a string x', {x: '0', y: 0, scale: 1}], ['an array', [0, 0, 1]], ['null', null], ['a number', 1]
+  ['an out-of-range scale', {x: 0, y: 0, scale: 3.01}], ['a scale below the minimum', {x: 0, y: 0, scale: 0.49}],
+  ['a NaN scale', {x: 0, y: 0, scale: Number.NaN}], ['an infinite scale', {x: 0, y: 0, scale: Number.POSITIVE_INFINITY}], ['a string x', {x: '0', y: 0, scale: 1}], ['an array', [0, 0, 1]], ['null', null], ['a number', 1]
 ])('rejects %s as a file placement instead of clamping it', (_name, value) => {
   expect(parseOverlayPlacement(value)).toBeUndefined();
 });
@@ -68,7 +88,8 @@ it('accepts only the two edit outcomes', () => {
 
 it('steps the scale by 0.1 inside its bounds', () => {
   expect(stepOverlayScale(1, 1)).toBe(1.1); expect(stepOverlayScale(1.2, 1)).toBe(1.3); expect(stepOverlayScale(1, -1)).toBe(0.9);
-  expect(stepOverlayScale(1.95, 1)).toBe(2); expect(stepOverlayScale(2, 1)).toBe(2);
+  expect(stepOverlayScale(1.95, 1)).toBe(2.05); expect(stepOverlayScale(2, 1)).toBe(2.1);
+  expect(stepOverlayScale(2.9, 1)).toBe(3); expect(stepOverlayScale(2.95, 1)).toBe(3); expect(stepOverlayScale(3, 1)).toBe(3);
   expect(stepOverlayScale(0.55, -1)).toBe(0.5); expect(stepOverlayScale(0.5, -1)).toBe(0.5);
 });
 
