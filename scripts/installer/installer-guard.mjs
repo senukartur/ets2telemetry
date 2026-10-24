@@ -462,3 +462,82 @@ export function factsEvidence(facts, runRoot) {
 export function ownsRegistration(runRoot, installLocation) {
   return isDrivePath(installLocation) && isDrivePath(runRoot) && isInside(installLocation, runRoot) && normalizePath(installLocation) !== normalizePath(runRoot);
 }
+
+// --- ET-045h: the product name, the shortcuts and the single Uninstall entry --------------------------------------------
+
+/** The Installed apps DisplayName and the shortcut name since ET-045h (forge.config.cjs `title`, `win32metadata.ProductName`). */
+export const PRODUCT_DISPLAY_NAME = 'Yukon Union Telemetry';
+/** The Installed apps Publisher since ET-045h (forge.config.cjs `authors`). */
+export const PRODUCT_PUBLISHER = 'Yukon Union Telemetry contributors';
+/** The shortcut name and DisplayName of every build before ET-045h. */
+export const LEGACY_DISPLAY_NAME = 'ETS2Telemetry Desktop';
+/** The Start menu folder Squirrel puts the shortcut in (forge.config.cjs `win32metadata.CompanyName`). */
+export const SHORTCUT_COMPANY = 'Artur Sianiuk';
+export const SHORTCUT_LOCATIONS = Object.freeze(['desktop', 'start-menu']);
+const LINK_ROW = /^(desktop|start-menu)\|([^|]*)\|([^|]+)$/;
+/** A relative folder or file name: no drive, no leading or doubled separator, no `..`, nothing that could be a machine path. */
+const relativeName = value => typeof value === 'string' && value.length <= 128 && !/[:\0]/.test(value) && !/^[\\/]/.test(value)
+  && !value.split(/[\\/]/).some(part => part === '..' || part === '.' || (value !== '' && part === ''));
+
+/**
+ * ET-045h: the harness's product shortcuts (links on the Desktop or in the Start menu whose target lies in R's binary
+ * root), each `<location>|<folder>|<name>`: the location, the folder relative to it ('' for the location itself) and the
+ * file name without `.lnk`. Names only, never a path. Returns, per location, how many carry the current name, the legacy
+ * name or another name, and the folders of the current-name links. Throws on a malformed row.
+ */
+export function classifyProductLinks(rows) {
+  const result = {total: 0};
+  for (const location of SHORTCUT_LOCATIONS) result[location] = {current: 0, legacy: 0, other: 0, currentFolders: []};
+  for (const row of rows) {
+    const match = typeof row === 'string' ? LINK_ROW.exec(row) : null;
+    if (!match || !relativeName(match[2]) || !relativeName(match[3]) || match[3].includes('\\') || match[3].includes('/')) refuse('PRODUCT_LINK_ROW_INVALID');
+    const [, location, folder, name] = match;
+    const entry = result[location];
+    result.total++;
+    if (name === PRODUCT_DISPLAY_NAME) {entry.current++; entry.currentFolders.push(folder);}
+    else if (name === LEGACY_DISPLAY_NAME) entry.legacy++;
+    else entry.other++;
+  }
+  return result;
+}
+/**
+ * ET-045h: `installed` (a hosted install whose test file asks for shortcuts): exactly one current-name product shortcut on
+ * the Desktop itself and one in the Start menu's company folder, and no product shortcut of the legacy or any other
+ * name. `none` (after an uninstall, or a run without shortcuts): no product shortcut of any name. Throws the first refusal.
+ */
+export function checkProductLinks(classification, expectation) {
+  if (expectation === 'none') {
+    if (classification.total !== 0) refuse('PRODUCT_SHORTCUT_UNEXPECTED', String(classification.total));
+    return;
+  }
+  if (expectation !== 'installed') refuse('PRODUCT_LINK_EXPECTATION_INVALID');
+  for (const location of SHORTCUT_LOCATIONS) {
+    const entry = classification[location];
+    if (entry.legacy !== 0) refuse('LEGACY_SHORTCUT_REMAINS', location);
+    if (entry.other !== 0) refuse('PRODUCT_SHORTCUT_OTHER_NAME', location);
+    if (entry.current === 0) refuse('PRODUCT_SHORTCUT_MISSING', location);
+    if (entry.current !== 1) refuse('PRODUCT_SHORTCUT_DUPLICATE', location);
+    if (entry.currentFolders[0] !== (location === 'desktop' ? '' : SHORTCUT_COMPANY)) refuse('PRODUCT_SHORTCUT_FOLDER', location);
+  }
+}
+/**
+ * ET-045h: one installation keeps one Installed apps entry. `rows` are the HKCU Uninstall subkeys the harness read, per
+ * registry view, as `{view, name, installLocation}`. Among those whose InstallLocation lies in the run root, every view
+ * holds at most one, at least one view holds one, and each is named PRODUCT_ROOT. Returns names only. Throws the first refusal.
+ */
+export function checkUninstallEntries(rows, runRoot) {
+  if (!Array.isArray(rows)) refuse('UNINSTALL_ENTRIES_INVALID');
+  const inside = rows.filter(row => isDrivePath(row?.installLocation) && isDrivePath(runRoot) && isInside(row.installLocation, runRoot));
+  if (inside.length === 0) refuse('UNINSTALL_ENTRY_MISSING');
+  const perView = new Map();
+  for (const row of inside) perView.set(row.view, (perView.get(row.view) ?? 0) + 1);
+  if ([...perView.values()].some(count => count > 1)) refuse('UNINSTALL_ENTRY_DUPLICATE');
+  if (inside.some(row => row.name !== PRODUCT_ROOT)) refuse('UNINSTALL_ENTRY_FOREIGN_NAME');
+  return {views: perView.size, names: [...new Set(inside.map(row => row.name))]};
+}
+/** ET-045h: the registration's DisplayName and Publisher are the product's (Squirrel writes both from the nuspec on every install and update). */
+export function checkRegistrationNames(registration) {
+  if (registration?.displayName !== PRODUCT_DISPLAY_NAME) refuse('DISPLAY_NAME_NOT_PRODUCT');
+  if (registration?.publisher !== PRODUCT_PUBLISHER) refuse('PUBLISHER_NOT_PRODUCT');
+  return {displayName: PRODUCT_DISPLAY_NAME, publisher: PRODUCT_PUBLISHER};
+}

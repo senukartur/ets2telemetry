@@ -16,7 +16,7 @@ import {t} from './i18n';
  * before interpolation; raw SDK values never enter those lookups. Pure data, safe for renderer bundles.
  */
 export const STRINGS = Object.freeze({
-  appName: 'ETS2Telemetry',
+  appName: 'Yukon Union Telemetry',
   startupPending: 'Starting',
   startupReady: 'Telemetry service ready; isolated storage probe verified',
   startupFailed: 'Startup failed',
@@ -27,16 +27,16 @@ export const STRINGS = Object.freeze({
   storageLabel: 'Storage self-test',
   recordingLabel: 'Recording',
   recordingProblemTitle: 'Recording problem',
-  recordingLossesTitle: 'Gaps recorded since ETS2Telemetry started',
+  recordingLossesTitle: 'Gaps recorded since Yukon Union Telemetry started',
   recordingUpperBound: 'These totals may be an upper bound: after a telemetry service restart in the same game session a restored-database loss is counted again. The database itself is correct.',
   recordingTrayPrefix: 'Recording: ',
   lastErrorLabel: 'Last problem',
-  closeToTray: 'Closing this window keeps ETS2Telemetry running in the notification area. Open it again from the tray icon; use Exit to stop it.',
-  exitAction: 'Exit ETS2Telemetry',
+  closeToTray: 'Closing this window keeps Yukon Union Telemetry running in the notification area. Open it again from the tray icon; use Exit to stop it.',
+  exitAction: 'Exit Yukon Union Telemetry',
   exitPending: 'Exiting…',
   exitFailed: 'Exit request failed',
-  trayOpen: 'Open ETS2Telemetry',
-  trayExit: 'Exit ETS2Telemetry',
+  trayOpen: 'Open Yukon Union Telemetry',
+  trayExit: 'Exit Yukon Union Telemetry',
   trayStarting: 'Starting',
   trayExiting: 'Exiting',
   serviceFailedTitle: 'Telemetry service problem',
@@ -89,7 +89,7 @@ export const STRINGS = Object.freeze({
 export type StringKey = keyof typeof STRINGS;
 
 export const STRINGS_RU: Readonly<Record<StringKey, string>> = Object.freeze({
-  appName: 'ETS2Telemetry',
+  appName: 'Yukon Union Telemetry',
   startupPending: 'Запуск',
   startupReady: 'Служба телеметрии готова; изолированное хранилище проверено',
   startupFailed: 'Ошибка запуска',
@@ -100,15 +100,15 @@ export const STRINGS_RU: Readonly<Record<StringKey, string>> = Object.freeze({
   storageLabel: 'Проверка хранилища',
   recordingLabel: 'Запись',
   recordingProblemTitle: 'Проблема записи',
-  recordingLossesTitle: 'Пропуски, записанные с момента запуска ETS2Telemetry',
+  recordingLossesTitle: 'Пропуски, записанные с момента запуска Yukon Union Telemetry',
   recordingUpperBound: 'Эти итоги могут быть верхней оценкой: после перезапуска службы телеметрии в той же игровой сессии потеря при восстановлении базы учитывается снова. Сама база данных корректна.',
   recordingTrayPrefix: 'Запись: ',
   lastErrorLabel: 'Последняя ошибка',
-  closeToTray: 'Закрытие этого окна оставляет ETS2Telemetry работать в области уведомлений. Откройте его снова из значка в трее; для полной остановки используйте «Выход».',
-  exitAction: 'Выйти из ETS2Telemetry',
+  closeToTray: 'Закрытие этого окна оставляет Yukon Union Telemetry работать в области уведомлений. Откройте его снова из значка в трее; для полной остановки используйте «Выход».',
+  exitAction: 'Выйти из Yukon Union Telemetry',
   exitPending: 'Выход…',
   exitFailed: 'Не удалось завершить работу',
-  trayOpen: 'Открыть ETS2Telemetry',
+  trayOpen: 'Открыть Yukon Union Telemetry',
   trayExit: 'Выход',
   trayStarting: 'Запуск',
   trayExiting: 'Завершение работы',
@@ -196,13 +196,13 @@ export function getStorageHealthText(health: StorageHealth, language: AppLanguag
 
 export const APP_ERROR_TEXT: Readonly<Record<AppErrorCode, string>> = Object.freeze({
   SERVICE_EXITED: 'The telemetry service stopped unexpectedly.',
-  SERVICE_RESTART_EXHAUSTED: 'Automatic service restart limit reached. Exit and start ETS2Telemetry again.',
+  SERVICE_RESTART_EXHAUSTED: 'Automatic service restart limit reached. Exit and start Yukon Union Telemetry again.',
   STORAGE_FAILED: 'The isolated storage self-test failed.',
   SERVICE_START_TIMEOUT: 'The telemetry service did not start in time.'
 });
 export const APP_ERROR_TEXT_RU: Readonly<Record<AppErrorCode, string>> = Object.freeze({
   SERVICE_EXITED: 'Служба телеметрии неожиданно завершила работу.',
-  SERVICE_RESTART_EXHAUSTED: 'Достигнут предел автоматических перезапусков службы. Закройте и снова запустите ETS2Telemetry.',
+  SERVICE_RESTART_EXHAUSTED: 'Достигнут предел автоматических перезапусков службы. Закройте и снова запустите Yukon Union Telemetry.',
   STORAGE_FAILED: 'Сбой самотестирования изолированного хранилища.',
   SERVICE_START_TIMEOUT: 'Служба телеметрии не запустилась вовремя.'
 });
@@ -221,7 +221,7 @@ export const RECORDING_STATE_TEXT: Readonly<Record<RecordingHealth['state'], str
   'paused': 'Game paused; recording continues when it resumes',
   'interrupted': 'Connection lost; recording resumes on reconnection, and the missing time is recorded as a gap',
   'retrying': 'Retrying: {cause}. Nothing is acknowledged until storage commits; events while reconnecting are recorded as a gap',
-  'stopped': 'Stopped: {cause}. Restart ETS2Telemetry after fixing it',
+  'stopped': 'Stopped: {cause}. Restart Yukon Union Telemetry after fixing it',
   'live-only': 'Not recording this game session: the database is behind the plugin (restored database); recording resumes with the next game session',
   'not-recorded-source': 'Not recording the selected source'
 });
@@ -234,7 +234,7 @@ export const RECORDING_STATE_TEXT_RU: Readonly<Record<RecordingHealth['state'], 
   'paused': 'Игра на паузе; запись продолжится после снятия с паузы',
   'interrupted': 'Соединение потеряно; запись возобновится при повторном подключении, а пропущенное время запишется как пропуск',
   'retrying': 'Повторная попытка: {cause}. Данные не подтверждаются до фиксации в хранилище; события во время переподключения записываются как пропуск',
-  'stopped': 'Остановлено: {cause}. Перезапустите ETS2Telemetry после устранения причины',
+  'stopped': 'Остановлено: {cause}. Перезапустите Yukon Union Telemetry после устранения причины',
   'live-only': 'Эта игровая сессия не записывается: база данных отстаёт от плагина (восстановленная база данных); запись возобновится со следующей игровой сессии',
   'not-recorded-source': 'Выбранный источник не записывается'
 });
@@ -291,7 +291,7 @@ export const RECORDING_CODE_TEXT: Readonly<Record<RecordingCode, string>> = Obje
   WORKER_FAILED: 'the storage worker failed',
   TIMEOUT: 'storage did not answer in time',
   DATA_PATH_INVALID: 'the data folder cannot be used',
-  DATABASE_UNRECOGNIZED: 'the database file is not an ETS2Telemetry database',
+  DATABASE_UNRECOGNIZED: 'the database file is not a Yukon Union Telemetry database',
   SCHEMA_NEWER: 'the database was written by a newer version',
   PURPOSE_MISMATCH: 'the database holds another kind of data',
   DURABILITY_UNVERIFIED: 'safe disk writes could not be confirmed',
@@ -322,7 +322,7 @@ export const RECORDING_CODE_TEXT_RU: Readonly<Record<RecordingCode, string>> = O
   WORKER_FAILED: 'сбой рабочего процесса хранилища',
   TIMEOUT: 'хранилище не ответило вовремя',
   DATA_PATH_INVALID: 'папка данных недоступна для использования',
-  DATABASE_UNRECOGNIZED: 'файл базы данных не является базой ETS2Telemetry',
+  DATABASE_UNRECOGNIZED: 'файл базы данных не является базой Yukon Union Telemetry',
   SCHEMA_NEWER: 'база данных создана более новой версией',
   PURPOSE_MISMATCH: 'база данных предназначена для другого типа данных',
   DURABILITY_UNVERIFIED: 'не удалось подтвердить надёжную запись на диск',
@@ -440,12 +440,12 @@ export function getPrototypeNoticeText(key: 'disabled' | 'unknown' | 'test' | 'h
 
 /** The Alert below the recording row while recording is retrying, stopped or live-only. */
 export const RECORDING_ALERT_TEXT = Object.freeze({
-  retrying: 'ETS2Telemetry retries automatically. Live telemetry and the overlay keep working.',
+  retrying: 'Yukon Union Telemetry retries automatically. Live telemetry and the overlay keep working.',
   stopped: 'Recording stopped until the telemetry service starts again. Live telemetry and the overlay keep working.',
   liveOnly: 'Live telemetry and the overlay keep working; this game session is not recorded.'
 });
 export const RECORDING_ALERT_TEXT_RU = Object.freeze({
-  retrying: 'ETS2Telemetry выполняет повторные попытки автоматически. Живая телеметрия и оверлей продолжают работать.',
+  retrying: 'Yukon Union Telemetry выполняет повторные попытки автоматически. Живая телеметрия и оверлей продолжают работать.',
   stopped: 'Запись остановлена до перезапуска службы телеметрии. Живая телеметрия и оверлей продолжают работать.',
   liveOnly: 'Живая телеметрия и оверлей продолжают работать; эта игровая сессия не записывается.'
 });
@@ -748,17 +748,17 @@ export const JOURNAL_ERROR_TEXT: Readonly<Record<JournalCallCode, string>> = Obj
 export const JOURNAL_EXPORT_STRINGS = Object.freeze({
   button: 'Export JSON',
   exporting: 'Exporting…',
-  note: 'Uninstalling ETS2Telemetry removes its local trip history and settings. The JSON export is a copy for your own records; it cannot be imported back.',
+  note: 'Uninstalling Yukon Union Telemetry removes its local trip history and settings. The JSON export is a copy for your own records; it cannot be imported back.',
   saved: 'Saved the trip as JSON: {events} events, {intervals} completeness intervals and {samples} one-second samples.',
   cancelled: 'Export cancelled. Nothing was written.',
   refused: 'The export request was refused.'
 });
 /** The export's own refusal codes as fixed text; the journal codes use JOURNAL_ERROR_TEXT. */
 export const JOURNAL_EXPORT_ERROR_TEXT: Readonly<Record<JournalExportCode, string>> = Object.freeze({
-  EXPORT_TARGET_REFUSED: 'That location cannot be used. Choose a folder outside the ETS2Telemetry data folder.',
+  EXPORT_TARGET_REFUSED: 'That location cannot be used. Choose a folder outside the Yukon Union Telemetry data folder, %LOCALAPPDATA%\\ETS2Telemetry.',
   EXPORT_WRITE_FAILED: 'The file could not be written. A file that already had this name is unchanged.',
   EXPORT_IN_PROGRESS: 'Another export is still running. Try again when it has finished.',
-  EXPORT_INTERRUPTED: 'The export stopped because ETS2Telemetry is exiting. Nothing was written.'
+  EXPORT_INTERRUPTED: 'The export stopped because Yukon Union Telemetry is exiting. Nothing was written.'
 });
 export const JOURNAL_GAME_TEXT: Readonly<Record<UnitGame, string>> = Object.freeze({ets2: 'ETS2', ats: 'ATS'});
 /** Outcome and recording completeness are separate (J13); neither is inferred from the other. */
@@ -924,10 +924,10 @@ export const PLUGIN_REASON_TEXT: Readonly<Record<PluginBlockReason, string>> = O
   VERIFY_FAILED: 'The copied plugin did not match the bundled one; nothing was kept.',
   RUNNING_CHECK_FAILED: 'Running games could not be checked; it is tried again shortly.',
   REGISTRY_UNAVAILABLE: 'The plugin setup record could not be saved or is from a newer version.',
-  BUNDLE_UNAVAILABLE: 'The bundled plugin is missing or damaged; reinstall ETS2Telemetry.'
+  BUNDLE_UNAVAILABLE: 'The bundled plugin is missing or damaged; reinstall Yukon Union Telemetry.'
 });
 export const PLUGIN_FOLDER_REFUSAL_TEXT: Readonly<Record<PluginFolderRefusal, string>> = Object.freeze({
-  FOLDER_UNSUPPORTED_PATH: 'This folder cannot be used: choose a local game folder outside the ETS2Telemetry folders.',
+  FOLDER_UNSUPPORTED_PATH: 'This folder cannot be used: choose a local game folder outside the Yukon Union Telemetry folders: %LOCALAPPDATA%\\ETS2Telemetry and the program folder.',
   FOLDER_NOT_GAME: 'This folder is not a game folder of this game.',
   FOLDER_WRONG_GAME: 'This folder holds the other game.',
   FOLDER_LINKED: 'The game\'s folders in this folder are linked elsewhere; it cannot be used.',
@@ -947,10 +947,10 @@ export const CONNECTION_DIAGNOSIS_TEXT: Readonly<Record<ConnectionDiagnosisCode,
   PLUGIN_UNRECOGNIZED: 'A file that this application did not install is in place of the plugin. Move it away, then press Retry.',
   PLUGIN_OUTDATED: 'An older plugin is installed. If its folder line below says it waits for the game, TruckersMP or another program, it is updated once that closes; otherwise resolve the problem shown there, then press Retry.',
   PLUGIN_PENDING_GAME_CLOSE: 'The plugin is changed automatically once the game, TruckersMP or the program using the file is closed. Then start the game again.',
-  PLUGIN_BUNDLE_UNAVAILABLE: 'The bundled plugin is missing or damaged. Reinstall ETS2Telemetry.',
+  PLUGIN_BUNDLE_UNAVAILABLE: 'The bundled plugin is missing or damaged. Reinstall Yukon Union Telemetry.',
   PLUGIN_NOT_CHECKED: 'The plugin could not be checked in a game folder; see the folder line below.',
   PLUGIN_MISSING: 'The plugin is not installed in a game folder. Turn on "Manage the plugin for this game" or press Retry.',
-  TRANSPORT_FAILED: 'The game\'s plugin could not be connected, or it is incompatible, and the connection is not tried again by itself. After the plugin is fixed, choose another source and then the game again in Settings > Data, or exit ETS2Telemetry from the tray and start it again.',
+  TRANSPORT_FAILED: 'The game\'s plugin could not be connected, or it is incompatible, and the connection is not tried again by itself. After the plugin is fixed, choose another source and then the game again in Settings > Data, or exit Yukon Union Telemetry from the tray and start it again.',
   NO_RUNNING_SOURCE: 'The plugin is in place. Start the game to connect.'
 });
 export const CONNECTION_DIAGNOSIS_NOTE_TEXT: Readonly<Record<ConnectionDiagnosisNote, string>> = Object.freeze({
@@ -958,7 +958,7 @@ export const CONNECTION_DIAGNOSIS_NOTE_TEXT: Readonly<Record<ConnectionDiagnosis
   OTHER_FOLDER_BLOCKED_PERMISSION: 'Another folder of this game could not be changed because Windows denied access; see its line below.',
   OTHER_FOLDER_UNRECOGNIZED: 'Another folder of this game holds a file that this application did not install; see its line below.',
   OTHER_FOLDER_PENDING_GAME_CLOSE: 'Another folder of this game is changed once the game, TruckersMP or the program using the file is closed.',
-  OTHER_FOLDER_BUNDLE_UNAVAILABLE: 'The bundled plugin is missing or damaged, so another folder of this game was not set up. Reinstall ETS2Telemetry.',
+  OTHER_FOLDER_BUNDLE_UNAVAILABLE: 'The bundled plugin is missing or damaged, so another folder of this game was not set up. Reinstall Yukon Union Telemetry.',
   OTHER_FOLDER_NOT_CHECKED: 'The plugin could not be checked in another folder of this game; see its line below.',
   OTHER_FOLDER_MISSING: 'Another folder of this game does not hold the plugin; see its line below.'
 });
@@ -972,8 +972,8 @@ export const DIAGNOSTICS_EXPORT_STRINGS = Object.freeze({
 });
 export const DIAGNOSTICS_EXPORT_ERROR_TEXT: Readonly<Record<DiagnosticsExportRefusal | DiagnosticsExportFailure, string>> = Object.freeze({
   EXPORT_IN_PROGRESS: 'Another diagnostics export is still running.',
-  EXPORT_INTERRUPTED: 'The export stopped because ETS2Telemetry is exiting. Nothing was written.',
-  EXPORT_TARGET_REFUSED: 'That location cannot be used. Choose a folder outside the ETS2Telemetry data folder.',
+  EXPORT_INTERRUPTED: 'The export stopped because Yukon Union Telemetry is exiting. Nothing was written.',
+  EXPORT_TARGET_REFUSED: 'That location cannot be used. Choose a folder outside the Yukon Union Telemetry data folder, %LOCALAPPDATA%\\ETS2Telemetry.',
   BUNDLE_FAILED: 'The diagnostics could not be collected. Nothing was written.',
   DIALOG_FAILED: 'The Save dialog could not be opened. Nothing was written.',
   EXPORT_WRITE_FAILED: 'The file could not be written. A file that already had this name is unchanged.'
@@ -984,42 +984,42 @@ export const DIAGNOSTICS_EXPORT_ERROR_TEXT: Readonly<Record<DiagnosticsExportRef
  * location only. uninstall-text.ts builds every message from these.
  */
 export const UNINSTALL_STRINGS = Object.freeze({
-  title: 'Uninstall ETS2Telemetry',
+  title: 'Uninstall Yukon Union Telemetry',
   warningTitle: 'Uninstalling deletes your local data',
   warning: [
     'Your local trip history, which is not synchronized anywhere, is deleted for good, with its backups.',
     'Your settings, logs, captures and synthetic recordings are deleted as well.',
     'Trip exports you saved elsewhere stay where they are.',
-    'The ETS2Telemetry game plugin is removed from your game folders while the games are closed.'
+    'The Yukon Union Telemetry game plugin is removed from your game folders while the games are closed.'
   ] as readonly string[],
-  button: 'Uninstall ETS2Telemetry…',
+  button: 'Uninstall Yukon Union Telemetry…',
   pending: 'Checking your game folders…',
-  notInstalled: 'Uninstalling is available only in an installed copy of ETS2Telemetry. This copy is portable or a development build; delete its folder to remove it.',
+  notInstalled: 'Uninstalling is available only in an installed copy of Yukon Union Telemetry. This copy is portable or a development build; delete its folder to remove it.',
   cancelled: 'Uninstall cancelled. Nothing was changed.',
-  started: 'Removing ETS2Telemetry. The application closes now and Windows finishes the uninstall.',
-  blocked: 'ETS2Telemetry was not uninstalled, and nothing was changed: {reason}',
-  interrupted: 'ETS2Telemetry was not uninstalled: {reason} Before it stopped, it had removed its game plugin from some game folders (plugin files removed: {count}). Your data was kept. ETS2Telemetry puts the plugin back automatically in every game folder it manages while that game is closed.',
+  started: 'Removing Yukon Union Telemetry. The application closes now and Windows finishes the uninstall.',
+  blocked: 'Yukon Union Telemetry was not uninstalled, and nothing was changed: {reason}',
+  interrupted: 'Yukon Union Telemetry was not uninstalled: {reason} Before it stopped, it had removed its game plugin from some game folders (plugin files removed: {count}). Your data was kept. Yukon Union Telemetry puts the plugin back automatically in every game folder it manages while that game is closed.',
   blockedFolder: '{target}: {reason}',
-  failed: 'ETS2Telemetry was not uninstalled: {reason}',
+  failed: 'Yukon Union Telemetry was not uninstalled: {reason}',
   requestFailed: 'The uninstall request was refused.',
-  confirmTitle: 'Uninstall ETS2Telemetry',
-  confirmMessage: 'Uninstall ETS2Telemetry and delete its local data?',
+  confirmTitle: 'Uninstall Yukon Union Telemetry',
+  confirmMessage: 'Uninstall Yukon Union Telemetry and delete its local data?',
   confirmCancel: 'Cancel',
   confirmUninstall: 'Uninstall',
-  finishedTitle: 'ETS2Telemetry was uninstalled',
-  finishedMessage: 'ETS2Telemetry removed its game plugin and its local data. Windows now removes the program files.',
-  finishedPartial: 'ETS2Telemetry removed its game plugin, but some local data could not be deleted. Windows now removes the program files.',
+  finishedTitle: 'Yukon Union Telemetry was uninstalled',
+  finishedMessage: 'Yukon Union Telemetry removed its game plugin and its local data. Windows now removes the program files.',
+  finishedPartial: 'Yukon Union Telemetry removed its game plugin, but some local data could not be deleted. Windows now removes the program files.',
   finishedRemoved: 'Plugin files removed: {count}.',
-  finishedUnrecognized: 'Files with the plugin\'s name that ETS2Telemetry did not install were left as they are: {count}.',
-  finishedKept: 'Files and folders in the data folder that ETS2Telemetry does not know were kept: {count}. Delete %LOCALAPPDATA%\\ETS2Telemetry by hand if you do not need them.',
+  finishedUnrecognized: 'Files with the plugin\'s name that Yukon Union Telemetry did not install were left as they are: {count}.',
+  finishedKept: 'Files and folders in the data folder that Yukon Union Telemetry does not know were kept: {count}. Delete %LOCALAPPDATA%\\ETS2Telemetry by hand if you do not need them.',
   finishedFailed: 'Could not be deleted: {entries}. Delete %LOCALAPPDATA%\\ETS2Telemetry by hand.',
   /** The wipe ran out of time (BUDGET_EXPIRED): the intent stays, and the uninstall hook of the handover finishes it. */
-  finishedPending: 'ETS2Telemetry removed its game plugin. The Windows uninstall that starts now finishes removing its local data and removes the program files.',
+  finishedPending: 'Yukon Union Telemetry removed its game plugin. The Windows uninstall that starts now finishes removing its local data and removes the program files.',
   finishedExpired: 'Not deleted yet, because this step ran out of time: {entries}. The Windows uninstall that starts now finishes removing them.',
   spawnFailedTitle: 'Windows uninstall could not start',
-  spawnFailed: 'ETS2Telemetry removed its plugin and data, but the Windows uninstall could not be started. Uninstall ETS2Telemetry from Windows Settings, Apps.',
+  spawnFailed: 'Yukon Union Telemetry removed its plugin and data, but the Windows uninstall could not be started. Uninstall Yukon Union Telemetry from Windows Settings, Apps.',
   /** The handover failed after a wipe that did not finish: the intent stays, and the Windows-initiated hook reads it. */
-  spawnFailedPartial: 'ETS2Telemetry removed its plugin, but some of its local data remains, and the Windows uninstall could not be started. Uninstall ETS2Telemetry from Windows Settings, Apps: that removes the program files and finishes removing the remaining data where it can.'
+  spawnFailedPartial: 'Yukon Union Telemetry removed its plugin, but some of its local data remains, and the Windows uninstall could not be started. Uninstall Yukon Union Telemetry from Windows Settings, Apps: that removes the program files and finishes removing the remaining data where it can.'
 });
 export const UNINSTALL_TARGET_TEXT = Object.freeze({
   steam: '{game} (Steam folder {number})',
@@ -1044,7 +1044,7 @@ export const UNINSTALL_REASON_TEXT: Readonly<Record<UninstallBlockCode, string>>
   FOLDER_UNAVAILABLE: 'the game folder is not available right now (for example a disconnected drive). Connect it, then try again.',
   BUDGET_EXPIRED: 'checking the game folders took too long. Try again.',
   REGISTRY_INVALID: 'the plugin setup record is damaged, so the game folders are not known.',
-  REGISTRY_NEWER: 'the plugin setup record was written by a newer version of ETS2Telemetry.',
+  REGISTRY_NEWER: 'the plugin setup record was written by a newer version of Yukon Union Telemetry.',
   REGISTRY_UNREADABLE: 'the plugin setup record could not be read. Try again.'
 });
 /** Why the in-app uninstall failed before it changed anything. */

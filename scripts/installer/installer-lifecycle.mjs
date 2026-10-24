@@ -9,9 +9,11 @@ import {promisify} from 'node:util';
 import {_electron as electron} from '@playwright/test';
 import {rendererPages} from '../ci/overlay-observation.mjs';
 import {settingsPanel, waitForStartup} from '../ci/ui-navigation.mjs';
+import {assertVersionInfo, readVersionInfo} from '../release-identity.mjs';
 import {checkedPaths, checkInstalled, checkLaunchEnvironment, checkRunPlan, checkRunSignal, FACTS_VARIABLE, factsEvidence, InstallerGuardError, installedEnvironment, normalizePath,
   checkDataRootUnchanged, checkDecoyUnchanged, checkUninstallResidue, checkRegistrationIcon, classifyRegistrationIcon, electronRuntimeNames, ownsRegistration, parseUninstallString, resolveRealLocation, RUN_ONCE_KEY, RUN_ROOT_NAME,
-  ROOT_ICON_FILE, runLayout, steamLibraryPaths, uninstallEnvironment} from './installer-guard.mjs';
+  checkProductLinks, checkRegistrationNames, checkUninstallEntries, classifyProductLinks, PRODUCT_EXECUTABLE, ROOT_ICON_FILE, runLayout, steamLibraryPaths,
+  uninstallEnvironment} from './installer-guard.mjs';
 
 // ET-018 PR-1, PR-3 and PR-4 (REG-013, REG-015, REG-017; plan U8, U10-U13): the Node driver of the installer lifecycle in a marked test root. The
 // PowerShell harness scripts/installer/Invoke-InstallerLifecycle.ps1 orchestrates the steps and runs every command below
@@ -27,6 +29,16 @@ import {checkedPaths, checkInstalled, checkLaunchEnvironment, checkRunPlan, chec
 //   legacy-icon <config> <label> <location per view...>
 //                                             ET-045g: writes a synthetic legacy app.ico into R's binary root and decides per
 //                                             registry view whether the harness may point DisplayIcon at it (ownsRegistration)
+//   installed (ET-045h)                       also checks the DisplayName and Publisher (checkRegistrationNames) and the one
+//                                             Uninstall entry in R (checkUninstallEntries)
+//   version-info <config> <label> <version>   ET-045h: the installed app-<version> executable's version resource, which
+//                                             names the shortcuts (assertVersionInfo); read with FileVersionInfo, never run
+//   legacy-names <config> <label> <location per view...>
+//                                             ET-045h: after checkInstalled, decides per registry view whether the harness
+//                                             may plant the old DisplayName and Publisher (ownsRegistration)
+//   links <config> <label> <installed|none> [<location>|<folder>|<name>...]
+//                                             ET-045h: checks the harness's product shortcuts, names only
+//                                             (classifyProductLinks, checkProductLinks)
 //   seed <config>                             writes the synthetic data root, the settings, the registry and the export
 //   snapshot <config> <label>                 hashes every file of the data root and the export folder
 //   compare <config> <before> <after>         an installer hook must leave both byte-identical (no data write)
@@ -169,7 +181,46 @@ async function installed(config, label, version) {
   const icon = await iconObservation(layout, registration, label, version);
   await writeEvidence(config, `icon-${label}.json`, icon);
   checkRegistrationIcon(icon);
-  return {uninstallInsideRunRoot, iconChecked: true, facts: factsEvidence(facts, config.runRoot)};
+  // ET-045h: the Installed apps names, and one entry for one installation. Names only reach the evidence.
+  const names = checkRegistrationNames(registration);
+  const uninstallEntries = checkUninstallEntries(facts.uninstallEntries, config.runRoot);
+  return {uninstallInsideRunRoot, iconChecked: true, names, uninstallEntries, facts: factsEvidence(facts, config.runRoot)};
+}
+
+/**
+ * ET-045h: the installed executable's version resource. Squirrel names the shortcuts after its ProductName and the Start
+ * menu folder after its CompanyName; one bounded Windows PowerShell call reads it (release-identity.mjs).
+ */
+function versionInfo(config, label, version) {
+  assert.match(String(label), /^[a-z0-9.-]{1,40}$/, 'VERSION_INFO_LABEL_INVALID');
+  assert.match(String(version), /^[0-9]{1,4}\.[0-9]{1,4}\.[0-9]{1,4}$/, 'VERSION_INFO_VERSION_INVALID');
+  const info = readVersionInfo(path.win32.join(runLayout(config.runRoot).binaryRoot, `app-${version}`, PRODUCT_EXECUTABLE), process.env);
+  assertVersionInfo(info);
+  return {versionInfo: info};
+}
+
+/**
+ * ET-045h, before an update: the harness plants the old DisplayName and Publisher of an install made before ET-045h. After
+ * checkInstalled, this decides for each registry view whether its key points into R (ownsRegistration; `-` for a view
+ * without the key); only those keys get the values, and the update that follows must replace them.
+ */
+async function legacyNames(config, label, locations) {
+  const facts = machineFacts();
+  const layout = runLayout(config.runRoot);
+  const registration = facts.registration ?? {};
+  checkInstalled({runRoot: config.runRoot, installLocation: registration.installLocation, binaryRoot: layout.binaryRoot,
+    resolvedInstallLocation: typeof registration.installLocation === 'string' ? await resolveRealLocation(registration.installLocation, realpath) : null,
+    resolvedBinaryRoot: await resolveRealLocation(layout.binaryRoot, realpath), realBinaryRootExists: facts.realBinaryRootExists});
+  assert.match(String(label), /^[a-z0-9.-]{1,40}$/, 'LEGACY_NAMES_LABEL_INVALID');
+  return {ownsRegistration: locations.map(location => location !== '-' && ownsRegistration(config.runRoot, location))};
+}
+
+/** ET-045h: the product shortcuts the harness found, as names only; `installed` or `none` (checkProductLinks). */
+function links(label, expectation, rows) {
+  assert.match(String(label), /^[a-z0-9.-]{1,40}$/, 'LINKS_LABEL_INVALID');
+  const classification = classifyProductLinks(rows);
+  checkProductLinks(classification, expectation);
+  return {expectation, classification};
 }
 
 /** The tracked product icon (resources/icon/app.ico), which forge.config.cjs embeds in the executable and Setup.exe. */
@@ -1060,6 +1111,9 @@ try {
       case 'guard': result.result = await guard(config, label); break;
       case 'installed': result.result = await installed(config, label, rest[2]); break;
       case 'legacy-icon': result.result = await legacyIcon(config, label, rest.slice(2)); break;
+      case 'legacy-names': result.result = await legacyNames(config, label, rest.slice(2)); break;
+      case 'links': result.result = links(label, rest[2], rest.slice(3)); break;
+      case 'version-info': result.result = versionInfo(config, label, rest[2]); break;
       case 'seed': result.result = await seed(config); break;
       case 'snapshot': result.result = await snapshot(config); break;
       case 'compare': result.result = await compare(config, rest[1], rest[2]); break;

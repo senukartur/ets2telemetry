@@ -58,7 +58,7 @@ it('cancelling also removes the copied deferred-cleanup executor (PR-5)', async 
 it('the README promises the automatic cleanup at the next sign-in only when the executor is registered', () => {
   const root = path.win32.join(fixture.testRoot, 'Games', 'ETS2');
   const automatic = deferralReadme(fixture.dataRoot, [{game: 'ets2', root, hashes: []}], KNOWN, 'GAME_RUNNING', true);
-  expect(automatic).toContain('ETS2Telemetry finishes this cleanup by itself at your next Windows sign-in, once the games are closed (at most 10 attempts).');
+  expect(automatic).toContain('Yukon Union Telemetry finishes this cleanup by itself at your next Windows sign-in, once the games are closed (at most 10 attempts).');
   expect(automatic).toContain('Get-FileHash');
   expect(deferralReadme(fixture.dataRoot, [{game: 'ets2', root, hashes: []}], KNOWN, 'GAME_RUNNING')).not.toContain('by itself');
 });

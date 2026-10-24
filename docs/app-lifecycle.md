@@ -29,7 +29,7 @@ Since ET-018 PR-3 (plan U2) `apps/desktop/src/squirrel-events.ts` replaces elect
 
 | Event | What runs | Exit code |
 | --- | --- | --- |
-| `--squirrel-install`, `--squirrel-updated` | `Update.exe --createShortcut=<executable>` (a production install; a test install only when its test file sets `shortcuts: true`) and, at the same time, the [Installed apps icon](release.md#installed-apps-icon-et-045g) (ET-045g): the packaged `resources\icon\app.ico` is placed at `<install root>\app.ico`, and this product's uninstall entry gets `DisplayIcon = <install root>\app-<version>\ETS2TelemetryDesktop.exe,0` (two attempts of at most 2 s). Then a pending [uninstall deferral](uninstall.md#deferral) is cancelled, with the copied executor and its RunOnce registration (ET-018 PR-5). A failure of the shortcuts or the icon changes neither the other step nor the exit code; at worst the hook takes 12 s. No data is written otherwise. | 0 |
+| `--squirrel-install`, `--squirrel-updated` | `Update.exe --createShortcut=<executable>` (a production install; a test install only when its test file sets `shortcuts: true`) and, at the same time, the [Installed apps icon](release.md#installed-apps-icon-et-045g) (ET-045g): the packaged `resources\icon\app.ico` is placed at `<install root>\app.ico`, and this product's uninstall entry gets `DisplayIcon = <install root>\app-<version>\ETS2TelemetryDesktop.exe,0` (two attempts of at most 2 s). Then, at the same time, this install's old "ETS2Telemetry Desktop" shortcuts are deleted beside the new ones, only after `--createShortcut` succeeded, only where the "Yukon Union Telemetry" one exists and only when they belong to this install (ET-045h, [shortcut migration](release.md#shortcut-migration-et-045h); at most 1 s), and a pending [uninstall deferral](uninstall.md#deferral) is cancelled, with the copied executor and its RunOnce registration (ET-018 PR-5). A failure of the shortcuts, the icon or the old-name step changes neither the other steps nor the exit code; at worst the hook takes 12 s (10 s shortcuts, then the larger of the 1 s old-name step and the 2 s disarm), as before. No data is written otherwise. | 0 |
 | `--squirrel-obsolete` | Nothing; the previous version after an update quits. | 0 |
 | `--squirrel-uninstall` | The [uninstall hook](uninstall.md#squirrel-uninstall-hook): the instance lock with the `uninstall-exit` payload, the engine within 8 s, the receipt. | 0, 3 or 4 |
 
@@ -50,7 +50,7 @@ ET-031 adds an optional Start with Windows capability:
 
 Closing the dashboard window destroys that window and retires only its document state: its live subscription, its application-state subscription and its renderer epoch. The telemetry service, the upstream live channel, main's freshness clocks, the overlay and the tray stay as they are. The overlay keeps following the game while the main window is closed. A source request still in flight from the closed document is rejected when it completes. An active overlay edit mode (ET-012b) is cancelled without saving when the dashboard closes, is minimized or its document is retired, and when the exit begins; see [the minimal overlay](minimal-overlay.md#edit-mode-et-012b).
 
-Reopening (tray icon click, the tray's **Open ETS2Telemetry**, or a second launch) creates a new window that subscribes again through the existing bridge; main reuses the single upstream channel. A service restart while the window is closed recreates no window and no second overlay: windows are created once, on first readiness.
+Reopening (tray icon click, the tray's **Open Yukon Union Telemetry**, or a second launch) creates a new window that subscribes again through the existing bridge; main reuses the single upstream channel. A service restart while the window is closed recreates no window and no second overlay: windows are created once, on first readiness.
 
 The overlay window refuses close requests until the application exits. If creating the tray icon throws, main logs `TRAY_UNAVAILABLE` and closing the dashboard minimizes it instead. This fallback covers only a constructor that throws: on Windows, Electron does not throw or report it when the shell rejects the icon registration (`Shell_NotifyIcon`), so the application cannot detect a missing icon and the dashboard still closes to the tray. Launching ETS2Telemetry again is the guaranteed way back in every case, because the second launch reopens the dashboard. Whether the real icon appears is a manual check.
 
@@ -64,8 +64,8 @@ The context menu contains:
 
 1. a disabled status line, for example `Service: ready · Storage self-test: verified`;
 2. the disabled line `Recording: <short headline>` with the [recording status](#recording-on-the-dashboard-and-in-the-tray-et-015c-pr-4), for example `Recording: off in this version` in production or `Recording: on · synthetic test database` for a synthetic recording target (ET-015c PR-4);
-3. **Open ETS2Telemetry**;
-4. **Exit ETS2Telemetry**.
+3. **Open Yukon Union Telemetry**;
+4. **Exit Yukon Union Telemetry**.
 
 A left click opens the dashboard. The tooltip shows the service state and, when ready, the selected source and its status; it stays under the 127-character Windows limit and carries no readings, paths or identities. Tooltip, menu and icon are rebuilt only when they change, at most twice per second. There are no balloon notifications.
 
@@ -75,8 +75,8 @@ Every way to leave the application goes through one idempotent exit coordinator 
 
 | Trigger | Reason logged |
 | --- | --- |
-| Tray **Exit ETS2Telemetry** | `tray` |
-| Dashboard **Exit ETS2Telemetry** button (`exitApplication()`) | `renderer` |
+| Tray **Exit Yukon Union Telemetry** | `tray` |
+| Dashboard **Exit Yukon Union Telemetry** button (`exitApplication()`) | `renderer` |
 | `app.quit()`, including Playwright's `close()` | `app-quit` (`before-quit` is prevented and redirected) |
 | Windows sign-out or shutdown (`session-end` on any window) | `session-end` |
 | The Squirrel uninstall hook's `uninstall-exit` payload (ET-018 PR-3) | `uninstall` |
@@ -117,7 +117,7 @@ path remains asynchronous.
 
 ## In-app uninstall (ET-018 PR-4)
 
-The Live tab's **Uninstall ETS2Telemetry** card calls the bridge method `uninstallApplication()` on the `app:uninstall` channel. Main accepts it only from the trusted dashboard's main frame (the overlay and any other sender are refused), only with zero arguments (preload refuses any argument before IPC, and main refuses again), and refuses it once the exit has begun. The answer is `{outcome: 'cancelled' | 'not-installed' | 'blocked' | 'interrupted' | 'started' | 'failed', code?, removed?, blocked?: [{targetId, reason}]}` with fixed codes and the plugin card's target ids, never a path. The steps before `started` are in [uninstall](uninstall.md#in-app-uninstall).
+The Live tab's **Uninstall Yukon Union Telemetry** card calls the bridge method `uninstallApplication()` on the `app:uninstall` channel. Main accepts it only from the trusted dashboard's main frame (the overlay and any other sender are refused), only with zero arguments (preload refuses any argument before IPC, and main refuses again), and refuses it once the exit has begun. The answer is `{outcome: 'cancelled' | 'not-installed' | 'blocked' | 'interrupted' | 'started' | 'failed', code?, removed?, blocked?: [{targetId, reason}]}` with fixed codes and the plugin card's target ids, never a path. The steps before `started` are in [uninstall](uninstall.md#in-app-uninstall).
 
 After `started`, main runs the exit in this order:
 
@@ -203,7 +203,7 @@ A pure builder, `apps/desktop/src/recording-status-text.ts`, turns `AppState.hea
 The cause is a fixed phrase per recording code, for example `the disk is full` for `DISK_FULL` or `no permission to write the database` for `PERMISSION_DENIED`; a missing code reads as `an internal error occurred`. No path or error text is shown. Below the headline the row shows:
 
 - the detail (`health-recording-detail`): `Synthetic test database (never game history)` or `Replay test database (never game history)` for a test target, then the current trip: `Current trip is partial`, `Current trip is recorded completely so far` or `The current trip's completeness is not known yet`, with `waiting for its delivery outcome` or `checking a loaded save` for those phases, or `The current job is not tracked as a trip: it started before recording, or a recording gap ended its trip` (since ET-016 PR-7 a job that started before recording opens a partial trip once the replayed events have drained);
-- the losses (`health-recording-losses`), only when a total is non-zero: the title `Gaps recorded since ETS2Telemetry started` and one line per non-zero counter (lost events, event loss intervals, intervals without a connection, one-second sample loss intervals, restored-database intervals, dropped one-second samples). With a restored-database loss a note says the totals may be an upper bound, since a telemetry service restart in the same game session counts it again ([TD-004](technical-debt.md#td-004-restore-loss-counted-once-in-the-live-loss-totals)); the database itself is correct. Totals start again with each application start. `unknown` carries no totals, although main keeps them, so the loss lines are hidden while the status is `unknown` and reappear, with the earlier service processes' counts included, when a service reports again; after the supervisor's restarts are exhausted they stay hidden until the application restarts ([TD-005](technical-debt.md#td-005-loss-totals-hidden-while-the-recording-status-is-unknown)).
+- the losses (`health-recording-losses`), only when a total is non-zero: the title `Gaps recorded since Yukon Union Telemetry started` and one line per non-zero counter (lost events, event loss intervals, intervals without a connection, one-second sample loss intervals, restored-database intervals, dropped one-second samples). With a restored-database loss a note says the totals may be an upper bound, since a telemetry service restart in the same game session counts it again ([TD-004](technical-debt.md#td-004-restore-loss-counted-once-in-the-live-loss-totals)); the database itself is correct. Totals start again with each application start. `unknown` carries no totals, although main keeps them, so the loss lines are hidden while the status is `unknown` and reappear, with the earlier service processes' counts included, when a service reports again; after the supervisor's restarts are exhausted they stay hidden until the application restarts ([TD-005](technical-debt.md#td-005-loss-totals-hidden-while-the-recording-status-is-unknown)).
 
 For `retrying`, `stopped` and `live-only` a shadcn `Alert` titled **Recording problem** follows the list (`health-recording-alert`; destructive except for `retrying`) and says that live telemetry and the overlay keep working. The status card's prototype notice (`prototype-notice`) follows the state: `No trip recording or durable history` while disabled, a not-known notice while unknown, `Only a test database is recorded, never game history` for a test target, and a notice that game history recording is new for the history target. Before main's first push the row shows a dash.
 

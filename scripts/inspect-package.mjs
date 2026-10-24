@@ -6,7 +6,7 @@ import * as asar from '@electron/asar';
 import {sha256, sourceHashes} from './source-inputs.mjs';
 import {verifyPackage} from './package-integrity.mjs';
 import {verifyPluginBundleAgainstTree} from './plugin-bundle.mjs';
-import {assertNoPackedNativeCode, inspectInstaller, MAKE_DIRECTORY, PACKAGE_DIRECTORY} from './release-identity.mjs';
+import {assertNoPackedNativeCode, assertVersionInfo, inspectInstaller, MAKE_DIRECTORY, PACKAGE_DIRECTORY, readVersionInfo} from './release-identity.mjs';
 
 // Read bytes and resolve paths only. Never import application entries or native bindings.
 // `--installer` (ET-018 PR-6) also checks the Squirrel make output: the full NuGet package must carry exactly the
@@ -57,6 +57,11 @@ const report = {checkedUtc: new Date().toISOString(), directory, applicationLaun
   ...integrity,
   asarSha256: sha256(readFileSync(archive)), executableSha256: sha256(readFileSync(executable)),
   nativeSha256: sha256(nativeBytes), compiledFilesVerified: files, sources: metadata.sources};
+// The executable's version resource (ET-045h): the product's display name, which Squirrel gives the shortcuts, the
+// Start menu folder's CompanyName and the unchanged technical file name. Read with FileVersionInfo; nothing is run.
+const versionInfo = readVersionInfo(executable);
+assertVersionInfo(versionInfo);
+report.versionInfo = versionInfo;
 const clientDirectory = path.join(directory, 'resources/telemetry-client');
 const clientMetadata = JSON.parse(readFileSync(path.join(clientDirectory, 'build-evidence.json'), 'utf8'));
 assert.deepEqual(clientMetadata.sources, metadata.sources, 'Native client and desktop sources differ');
@@ -95,5 +100,5 @@ if (installerCheck) {
 mkdirSync('.local/diagnostics', {recursive: true});
 writeFileSync('.local/diagnostics/package-inspection.json', JSON.stringify(report, null, 2) + '\n');
 console.log(JSON.stringify({applicationLaunched: false, ...integrity, compiledFilesVerified: files.length, asarSha256: report.asarSha256, executableSha256: report.executableSha256, pluginSha256: report.nativePlugin.sha256,
-  uninstallExecutorSha256: report.uninstallExecutor.sha256, productIconSha256: report.productIcon.sha256,
+  uninstallExecutorSha256: report.uninstallExecutor.sha256, productIconSha256: report.productIcon.sha256, versionInfo: report.versionInfo,
   ...(report.installer ? {installer: {setup: report.installer.setup, nupkg: report.installer.nupkg, projectedFiles: report.installer.projectedFiles, additions: report.installer.additions}} : {})}, null, 2));

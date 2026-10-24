@@ -29,8 +29,8 @@ describe('i18n settings lifecycle and reflection', () => {
     const trayEn = trayModel(trayInputEn);
     expect(trayEn.menu[0]).toEqual({kind: 'status', label: 'Service: ready · Storage self-test: verified'});
     expect(trayEn.menu[1]).toEqual({kind: 'status', label: 'Recording: off in this version'});
-    expect(trayEn.menu[3]).toEqual({kind: 'open', label: 'Open ETS2Telemetry', enabled: true});
-    expect(trayEn.menu[5]).toEqual({kind: 'exit', label: 'Exit ETS2Telemetry', enabled: true});
+    expect(trayEn.menu[3]).toEqual({kind: 'open', label: 'Open Yukon Union Telemetry', enabled: true});
+    expect(trayEn.menu[5]).toEqual({kind: 'exit', label: 'Exit Yukon Union Telemetry', enabled: true});
 
     const overlayPresentationEn: OverlayPresentation = {
       source: 'ETS2', origin: 'game', status: 'connected', speed: '80.0', speedUnit: 'km/h',
@@ -59,7 +59,7 @@ describe('i18n settings lifecycle and reflection', () => {
     const trayRu = trayModel(trayInputRu);
     expect(trayRu.menu[0]).toEqual({kind: 'status', label: 'Служба: готово · Проверка хранилища: проверено'});
     expect(trayRu.menu[1]).toEqual({kind: 'status', label: 'Запись: отключено в этой версии'});
-    expect(trayRu.menu[3]).toEqual({kind: 'open', label: 'Открыть ETS2Telemetry', enabled: true});
+    expect(trayRu.menu[3]).toEqual({kind: 'open', label: 'Открыть Yukon Union Telemetry', enabled: true});
     expect(trayRu.menu[5]).toEqual({kind: 'exit', label: 'Выход', enabled: true});
 
     const overlayPresentationRu: OverlayPresentation = {

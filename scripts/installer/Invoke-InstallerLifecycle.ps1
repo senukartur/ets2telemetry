@@ -26,17 +26,26 @@ param(
 # version's executable, and the binary root's app.ico has the tracked icon's bytes; before the update it plants the
 # Electron-icon state of an install made before the fix, which the update must replace, and it compares the shell's
 # pixels of both icons after the install and the update.
+# ET-045h checks the product name after every install, repair and update: the registration's DisplayName and Publisher,
+# one HKCU Uninstall entry pointing into R and the installed executable's version resource; on a hosted runner, exactly one
+# "Yukon Union Telemetry" shortcut on the Desktop and one in the Start menu's company folder, and no "ETS2Telemetry
+# Desktop" one. It plants the old names of an install made before ET-045h (L1 before the update: an owned Start menu
+# shortcut, a foreign Desktop decoy and the old DisplayName and Publisher; L2 before a Setup over an uninstalled root:
+# owned orphans in both locations; L3 before a Windows-initiated uninstall: an owned Start menu shortcut), which the
+# hooks must remove while the decoy stays byte-identical.
 # Squirrel's binary root is redirected with SQUIRREL_TEMP = R\LocalAppData, and every child process gets LOCALAPPDATA,
 # APPDATA and TEMP inside R. R is deleted at the end, and any HKCU uninstall key that still points into R. It runs on a
 # GitHub-hosted runner, or locally only with -AllowLocal on the owner's explicit request (docs/installer-testing.md).
 $ErrorActionPreference = 'Stop'
 $checkout = (Resolve-Path -LiteralPath (Join-Path $PSScriptRoot '../..')).Path
 # The versioned Setup name of forge.config.cjs (ET-018 PR-6); release-identity.test.ts checks that the two agree.
-$setup = Join-Path $checkout 'out/make/squirrel.windows/x64/ETS2Telemetry-Setup-0.1.0.exe'
+$setup = Join-Path $checkout 'out/make/squirrel.windows/x64/YukonUnionTelemetry-Setup-0.1.0.exe'
 $planSteps = @('signal','facts','guard-plan','create-run-root','guard-ready','build-fixture-0.1.1','seed','install-0.1.0','icon-identity-install-0.1.0','installed-smokes-0.1.0',
     'data-launch-0.1.0','verify-0.1.0','repair-0.1.0',
-    'legacy-icon-before-update-0.1.1','legacy-display-icon-before-update-0.1.1','update-0.1.1','icon-identity-update-0.1.1','installed-smokes-0.1.1','data-launch-0.1.1','verify-0.1.1','games',
-    'windows-uninstall-complete-running','install-0.1.0-again','plugin-launch-installed','windows-uninstall-deferred-game','run-once-blocked-game',
+    'legacy-icon-before-update-0.1.1','legacy-display-icon-before-update-0.1.1','legacy-names-before-update-0.1.1','update-0.1.1','icon-identity-update-0.1.1',
+    'legacy-names-update-0.1.1','installed-smokes-0.1.1','data-launch-0.1.1','verify-0.1.1','games',
+    'legacy-names-before-complete-running','windows-uninstall-complete-running','legacy-names-complete-running',
+    'legacy-names-before-install-again-0.1.0','install-0.1.0-again','legacy-names-install-again-0.1.0','plugin-launch-installed','windows-uninstall-deferred-game','run-once-blocked-game',
     'reinstall-0.1.0-over-deferral','plugin-launch-adopted','windows-uninstall-final-deferred','run-once-complete',
     'install-0.1.0-for-app','plugin-launch-for-app','app-uninstall-blocked-game','app-uninstall-verify-blocked-game',
     'app-uninstall-complete','app-uninstall-verify-complete','cleanup')
@@ -150,13 +159,37 @@ function Read-RegistrationView([Microsoft.Win32.RegistryView]$View) {
         $key = $hive.OpenSubKey($uninstallKey, $false)
         if (!$key) { return $null }
         try { return [ordered]@{installLocation=$key.GetValue('InstallLocation'); displayVersion=$key.GetValue('DisplayVersion'); uninstallString=$key.GetValue('UninstallString');
-            displayIcon=$key.GetValue('DisplayIcon')} }
+            displayIcon=$key.GetValue('DisplayIcon'); displayName=$key.GetValue('DisplayName'); publisher=$key.GetValue('Publisher')} }
         finally { $key.Dispose() }
     } finally { $hive.Dispose() }
 }
 function Read-Registration {
     foreach ($view in $registryViews) { $row = Read-RegistrationView $view; if ($row) { return $row } }
     return $null
+}
+function Read-UninstallEntries {
+    # ET-045h: every HKCU Uninstall subkey, per registry view, whose InstallLocation names a folder inside R: one install
+    # must keep one entry (checkUninstallEntries). Read only, at most 1024 subkeys per view; the rows travel only in the
+    # facts variable.
+    $rows = @()
+    foreach ($view in $registryViews) {
+        $hive = [Microsoft.Win32.RegistryKey]::OpenBaseKey([Microsoft.Win32.RegistryHive]::CurrentUser, $view)
+        try {
+            $parent = $hive.OpenSubKey('Software\Microsoft\Windows\CurrentVersion\Uninstall', $false)
+            if (!$parent) { continue }
+            try {
+                foreach ($name in @($parent.GetSubKeyNames() | Select-Object -First 1024)) {
+                    $key = $parent.OpenSubKey($name, $false)
+                    if (!$key) { continue }
+                    try { $location = [string]$key.GetValue('InstallLocation') } finally { $key.Dispose() }
+                    if ($location -and $location.StartsWith($runRoot, [StringComparison]::OrdinalIgnoreCase)) {
+                        $rows += ,[ordered]@{view=[string]$view; name=$name; installLocation=$location}
+                    }
+                }
+            } finally { $parent.Dispose() }
+        } finally { $hive.Dispose() }
+    }
+    return ,$rows
 }
 function Get-FactJson {
     # Machine facts for the guards. They travel in an environment variable of one driver command and are never written to
@@ -181,7 +214,7 @@ function Get-FactJson {
     }
     $registration = Read-Registration
     $facts = [ordered]@{real=$real; realBinaryRootExists=(Test-Path -LiteralPath (Join-Path $real.localAppData 'ETS2TelemetryDesktop')); registrationExists=($null -ne $registration);
-        registration=$registration; steamPath=$steamPath; libraryFolders=$libraryFolders; libraryFoldersState=$libraryFoldersState;
+        registration=$registration; uninstallEntries=(Read-UninstallEntries); steamPath=$steamPath; libraryFolders=$libraryFolders; libraryFoldersState=$libraryFoldersState;
         processes=@(Get-Process | ForEach-Object { $_.ProcessName + '.exe' } | Sort-Object -Unique)}
     $json = $facts | ConvertTo-Json -Depth 4 -Compress
     if ($json.Length -gt 32000) { throw 'FACTS_TOO_LARGE: the machine facts do not fit one environment variable.' }
@@ -214,8 +247,11 @@ function Invoke-InstalledSmoke([string]$Executable, [string[]]$Scenarios, [strin
 }
 function Assert-Installed([string]$Label, [string]$Version) {
     # The registration and the binary root must lie in R; otherwise abort at once, with no uninstall. The driver also
-    # records icon-<label>.json (ET-045g): the DisplayIcon shape and the hash of the binary root's app.ico.
+    # records icon-<label>.json (ET-045g): the DisplayIcon shape and the hash of the binary root's app.ico. ET-045h: it also
+    # checks the DisplayName, the Publisher and the one Uninstall entry in R, and version-info the installed executable's
+    # version resource, which names the shortcuts.
     Invoke-Driver 'installed' @($Label, $Version) 30000
+    Invoke-Driver 'version-info' @($Label, $Version) 30000
     $registration = Read-Registration
     if ($registration.displayVersion -cne $Version) { throw ('Registered version differs after ' + $Label) }
     $executable = Join-Path $binaryRoot ('app-' + $Version + '\ETS2TelemetryDesktop.exe')
@@ -274,29 +310,142 @@ function Set-LegacyIcon([string]$Label) {
     if ($set -lt 1 -or (Read-Registration).displayIcon -cne $planted) { throw ('LEGACY_ICON_NOT_PLANTED before ' + $Label) }
 }
 
-$shortcutFolders = @([Environment]::GetFolderPath('DesktopDirectory'), [Environment]::GetFolderPath('Programs'))
-function Get-ProductLinkCount {
-    # Shortcuts (.lnk) on the Desktop and in the Start menu whose target lies in R's binary root; read only, counted only.
+$shortcutFolders = [ordered]@{desktop=[Environment]::GetFolderPath('DesktopDirectory'); 'start-menu'=[Environment]::GetFolderPath('Programs')}
+function Find-ProductLinkFiles {
+    # Shortcuts (.lnk) on the Desktop and in the Start menu whose target lies in R's binary root; read only. Each row keeps
+    # the file for this session only; the evidence gets the location, the folder relative to it and the name (Get-ProductLinks).
     $shell = New-Object -ComObject WScript.Shell
-    $count = 0
+    $rows = @()
     try {
-        foreach ($folder in $shortcutFolders) {
+        foreach ($location in $shortcutFolders.Keys) {
+            $folder = $shortcutFolders[$location]
             if (!$folder -or !(Test-Path -LiteralPath $folder)) { continue }
             foreach ($item in @(Get-ChildItem -LiteralPath $folder -Filter '*.lnk' -Recurse -File -ErrorAction SilentlyContinue)) {
                 $link = $shell.CreateShortcut($item.FullName)
-                try { if ($link.TargetPath -and [IO.Path]::GetFullPath($link.TargetPath).StartsWith($binaryRoot + '\', [StringComparison]::OrdinalIgnoreCase)) { $count++ } }
-                finally { [Runtime.InteropServices.Marshal]::FinalReleaseComObject($link) | Out-Null }
+                try { $target = $link.TargetPath } finally { [Runtime.InteropServices.Marshal]::FinalReleaseComObject($link) | Out-Null }
+                if (!$target -or ![IO.Path]::GetFullPath($target).StartsWith($binaryRoot + '\', [StringComparison]::OrdinalIgnoreCase)) { continue }
+                $relative = $item.DirectoryName.Substring([IO.Path]::GetFullPath($folder).TrimEnd('\').Length).TrimStart('\')
+                $rows += ,[ordered]@{file=$item.FullName; location=$location; folder=$relative; name=[IO.Path]::GetFileNameWithoutExtension($item.Name)}
             }
         }
     } finally { [Runtime.InteropServices.Marshal]::FinalReleaseComObject($shell) | Out-Null }
-    return $count
+    return ,$rows
 }
+function Get-ProductLinks {
+    # ET-045h: names only, as `<location>|<folder>|<name>` for the driver's links command.
+    # Find-ProductLinkFiles returns its rows as one array; the assignment unwraps it before the pipeline.
+    $files = Find-ProductLinkFiles
+    return ,@($files | ForEach-Object { $_.location + '|' + $_.folder + '|' + $_.name })
+}
+$linkFolders = $null
 function Assert-ProductLinks([string]$Label, [bool]$Installed) {
     # A test install creates shortcuts only on a GitHub-hosted runner (its test file says so), and an uninstall removes them.
-    $count = Get-ProductLinkCount
-    $script:report.steps += ,[ordered]@{step=('shortcuts-' + $Label); productLinks=$count}
-    if ($Installed -and $hosted) { if ($count -lt 1) { throw ('Product shortcuts missing after ' + $Label) } }
-    elseif ($count -ne 0) { throw ('PRODUCT_SHORTCUT_UNEXPECTED after ' + $Label + ': ' + $count) }
+    # ET-045h: an install leaves exactly one "Yukon Union Telemetry" shortcut on the Desktop and one in the Start menu's
+    # company folder, and none of the old name (checkProductLinks). The first time, the folders of those two are kept for
+    # Set-LegacyNames, so the old names go where Squirrel itself put the shortcuts.
+    $rows = Get-ProductLinks
+    $expectation = if ($Installed -and $hosted) { 'installed' } else { 'none' }
+    $script:report.steps += ,[ordered]@{step=('shortcuts-' + $Label); productLinks=$rows.Count; expectation=$expectation}
+    Invoke-Driver 'links' (@($Label, $expectation) + $rows) 30000
+    if ($expectation -eq 'installed' -and $null -eq $script:linkFolders) {
+        $folders = @{}
+        # [IO.Path]::GetDirectoryName, not Split-Path: -LiteralPath and -Parent are in different parameter sets (hosted run 40134013831).
+        foreach ($row in (Find-ProductLinkFiles)) { if ($row.name -ceq 'Yukon Union Telemetry') { $folders[$row.location] = [IO.Path]::GetDirectoryName($row.file) } }
+        if ($folders.Count -ne 2) { throw ('PRODUCT_SHORTCUT_FOLDERS_UNKNOWN after ' + $Label) }
+        $script:linkFolders = $folders
+    }
+}
+# ET-045h: the old-name shortcuts this run planted: the file, its SHA-256 and whether the hook must remove it (owned) or
+# keep it byte-identical (decoy). The finally block deletes any that is left with the bytes it was planted with.
+$plantedLinks = [Collections.Generic.List[object]]::new()
+function New-PlantedLink([string]$File, [string]$Target, [string]$WorkingDirectory, [string]$Kind, [string]$Label) {
+    if (Test-Path -LiteralPath $File) { throw ('PLANT_TARGET_EXISTS before ' + $Label) }
+    $shell = New-Object -ComObject WScript.Shell
+    try {
+        $link = $shell.CreateShortcut($File)
+        try { $link.TargetPath = $Target; $link.WorkingDirectory = $WorkingDirectory; $link.Save() }
+        finally { [Runtime.InteropServices.Marshal]::FinalReleaseComObject($link) | Out-Null }
+    } finally { [Runtime.InteropServices.Marshal]::FinalReleaseComObject($shell) | Out-Null }
+    if (!(Test-Path -LiteralPath $File -PathType Leaf)) { throw ('PLANT_FAILED before ' + $Label) }
+    $script:plantedLinks.Add([ordered]@{file=$File; sha256=(Get-FileHash -LiteralPath $File -Algorithm SHA256).Hash; kind=$Kind; label=$Label})
+}
+function Set-LegacyNames([string]$Label, [string]$Mode, [string]$Version) {
+    # ET-045h: the state an install made before ET-045h leaves behind (hosted only: only there does the test install manage
+    # shortcuts). `update` (L1): an owned "ETS2Telemetry Desktop" shortcut in the Start menu folder, a foreign decoy of that
+    # name on the Desktop (its target lies outside the binary root) and the old DisplayName and Publisher, only in the
+    # registry views whose key the driver says points into R. `orphans` (L2): owned old-name shortcuts in both folders after
+    # an uninstall. `uninstall` (L3): an owned old-name shortcut in the Start menu folder. Owned ones target Squirrel's stub.
+    if (!$hosted) { throw ('LEGACY_NAMES_HOSTED_ONLY before ' + $Label) }
+    if ($null -eq $script:linkFolders) { throw ('LEGACY_NAMES_FOLDERS_UNKNOWN before ' + $Label) }
+    $stub = Join-Path $binaryRoot 'ETS2TelemetryDesktop.exe'
+    $workingDirectory = Join-Path $binaryRoot ('app-' + $Version)
+    $old = 'ETS2Telemetry Desktop.lnk'
+    $startMenu = Join-Path $script:linkFolders['start-menu'] $old
+    $desktop = Join-Path $script:linkFolders['desktop'] $old
+    $registryViewsSet = 0
+    switch ($Mode) {
+        'update' {
+            New-PlantedLink $startMenu $stub $workingDirectory 'owned' $Label
+            New-PlantedLink $desktop (Join-Path $runRoot 'decoy-target\ETS2TelemetryDesktop.exe') (Join-Path $runRoot 'decoy-target') 'decoy' $Label
+            $locations = @($registryViews | ForEach-Object {
+                $row = Read-RegistrationView $_
+                if ($row -and $row.installLocation) { [string]$row.installLocation } else { '-' }
+            })
+            Invoke-Driver 'legacy-names' (@($Label) + $locations) 30000
+            $owned = @((Get-Content -LiteralPath (Join-Path $evidence ('legacy-names-' + $Label + '.json')) -Raw | ConvertFrom-Json).result.ownsRegistration)
+            if ($owned.Count -ne $registryViews.Count) { throw 'legacy-names returned no decision per registry view.' }
+            for ($index = 0; $index -lt $registryViews.Count; $index++) {
+                if ($owned[$index] -ne $true) { continue }
+                $hive = [Microsoft.Win32.RegistryKey]::OpenBaseKey([Microsoft.Win32.RegistryHive]::CurrentUser, $registryViews[$index])
+                try {
+                    $key = $hive.OpenSubKey($uninstallKey, $true)
+                    if ($key) {
+                        try {
+                            $key.SetValue('DisplayName', 'ETS2Telemetry Desktop', [Microsoft.Win32.RegistryValueKind]::String)
+                            $key.SetValue('Publisher', 'ETS2Telemetry contributors', [Microsoft.Win32.RegistryValueKind]::String)
+                            $registryViewsSet++
+                        } finally { $key.Dispose() }
+                    }
+                } finally { $hive.Dispose() }
+            }
+            $registration = Read-Registration
+            if ($registryViewsSet -lt 1 -or $registration.displayName -cne 'ETS2Telemetry Desktop' -or $registration.publisher -cne 'ETS2Telemetry contributors') {
+                throw ('LEGACY_NAMES_NOT_PLANTED before ' + $Label)
+            }
+        }
+        'orphans' { New-PlantedLink $desktop $stub $workingDirectory 'owned' $Label; New-PlantedLink $startMenu $stub $workingDirectory 'owned' $Label }
+        'uninstall' { New-PlantedLink $startMenu $stub $workingDirectory 'owned' $Label }
+        default { throw ('LEGACY_NAMES_MODE_INVALID: ' + $Mode) }
+    }
+    $script:report.steps += ,[ordered]@{step=('legacy-names-' + $Label); mode=$Mode; plantedLinks=@($script:plantedLinks | Where-Object { $_.label -ceq $Label }).Count;
+        registryViewsSet=$registryViewsSet}
+}
+function Assert-LegacyNames([string]$Label, [string]$Planted) {
+    # ET-045h: after the step that follows Set-LegacyNames $Planted, every owned old-name shortcut is gone and the decoy is
+    # byte-identical; the decoy is then deleted. The current-name shortcuts are Assert-ProductLinks's part.
+    $removed = 0; $kept = 0
+    foreach ($row in @($script:plantedLinks | Where-Object { $_.label -ceq $Planted })) {
+        $present = Test-Path -LiteralPath $row.file -PathType Leaf
+        if ($row.kind -ceq 'owned') {
+            if ($present) { throw ('LEGACY_SHORTCUT_NOT_REMOVED after ' + $Label) }
+            $removed++
+        } else {
+            if (!$present -or (Get-FileHash -LiteralPath $row.file -Algorithm SHA256).Hash -cne $row.sha256) { throw ('FOREIGN_SHORTCUT_CHANGED after ' + $Label) }
+            Remove-Item -LiteralPath $row.file
+            $kept++
+        }
+        [void]$script:plantedLinks.Remove($row)
+    }
+    $script:report.steps += ,[ordered]@{step=('legacy-names-' + $Label); ownedRemoved=$removed; decoysKept=$kept}
+}
+function Remove-PlantedLinks {
+    # ET-045h, in the finally block: an old-name shortcut this run planted and a hook did not remove is deleted, but only
+    # with its planted bytes; a changed or foreign file stays. A failure is recorded and never stops the cleanup.
+    foreach ($row in @($script:plantedLinks)) {
+        try {
+            if ((Test-Path -LiteralPath $row.file -PathType Leaf) -and (Get-FileHash -LiteralPath $row.file -Algorithm SHA256).Hash -ceq $row.sha256) { Remove-Item -LiteralPath $row.file }
+        } catch { $script:report.plantedLinkCleanupFailure = $_.Exception.Message }
+    }
 }
 function Get-VendorHelper([string]$Version) {
     # Squirrel's helper of the installed version, before an uninstall: the only executable its residue may keep.
@@ -394,15 +543,20 @@ try {
     $env:ETS2TELEMETRY_DIAGNOSTIC_DIR = Join-Path $runRoot 'diagnostics\repair-0.1.0'
     Invoke-Driver 'step' @('repair-0.1.0', $setup, '--silent') 60000
     $null = Assert-Installed 'repair-0.1.0' '0.1.0'
+    Assert-ProductLinks 'repair-0.1.0' $true
     Invoke-Driver 'snapshot' @('repair-0.1.0') 30000
     Invoke-Driver 'compare' @('launch-0.1.0', 'repair-0.1.0') 30000
     # ET-045g: an install made before the fix, which the update must give the product icon.
     Set-LegacyIcon 'before-update-0.1.1'
+    # ET-045h L1: the old names of an install made before ET-045h; Update.exe --update runs --squirrel-updated.
+    if ($hosted) { Set-LegacyNames 'before-update-0.1.1' 'update' '0.1.0' }
 
     $env:ETS2TELEMETRY_DIAGNOSTIC_DIR = Join-Path $runRoot 'diagnostics\update-0.1.1'
     Invoke-Driver 'step' @('update-0.1.1', (Join-Path $binaryRoot 'Update.exe'), '--update', (Join-Path $runRoot 'fixture\feed')) 60000
     $executableB = Assert-Installed 'update-0.1.1' '0.1.1'
     Assert-IconIdentity 'update-0.1.1' '0.1.1'
+    if ($hosted) { Assert-LegacyNames 'update-0.1.1' 'before-update-0.1.1' }
+    Assert-ProductLinks 'update-0.1.1' $true
     Invoke-Driver 'snapshot' @('update-0.1.1') 30000
     Invoke-Driver 'compare' @('repair-0.1.0', 'update-0.1.1') 30000
 
@@ -415,12 +569,18 @@ try {
     Invoke-Driver 'games' @() 30000
     $helper = Get-VendorHelper '0.1.1'
     $report.uninstallRun = $true
+    # ET-045h L3: an owned old-name shortcut, which the uninstall hook removes after --removeShortcut.
+    if ($hosted) { Set-LegacyNames 'before-complete-running' 'uninstall' '0.1.1' }
     Invoke-Driver 'windows-uninstall' @('complete-running', $executableB, 'complete') 60000
     Assert-Uninstalled 'complete-running' $helper
+    if ($hosted) { Assert-LegacyNames 'complete-running' 'before-complete-running' }
 
     $env:ETS2TELEMETRY_DIAGNOSTIC_DIR = Join-Path $runRoot 'diagnostics\install-again-0.1.0'
+    # ET-045h L2: owned old-name orphans in both folders; a Setup over the uninstalled root runs --squirrel-install.
+    if ($hosted) { Set-LegacyNames 'before-install-again-0.1.0' 'orphans' '0.1.0' }
     Invoke-Driver 'step' @('install-again-0.1.0', $setup, '--silent') 60000
     $executableA = Assert-Installed 'install-again-0.1.0' '0.1.0'
+    if ($hosted) { Assert-LegacyNames 'install-again-0.1.0' 'before-install-again-0.1.0' }
     Assert-ProductLinks 'install-again-0.1.0' $true
     $env:ETS2TELEMETRY_DIAGNOSTIC_DIR = $null
     Invoke-Driver 'plugin-launch' @('installed', $executableA, 'installed') 60000
@@ -433,6 +593,7 @@ try {
     $env:ETS2TELEMETRY_DIAGNOSTIC_DIR = Join-Path $runRoot 'diagnostics\reinstall-0.1.0'
     Invoke-Driver 'step' @('reinstall-0.1.0', $setup, '--silent') 60000
     $executableA = Assert-Installed 'reinstall-0.1.0' '0.1.0'
+    Assert-ProductLinks 'reinstall-0.1.0' $true
     $env:ETS2TELEMETRY_DIAGNOSTIC_DIR = $null
     Invoke-Driver 'plugin-launch' @('adopted', $executableA, 'adopted') 60000
     $helper = Get-VendorHelper '0.1.0'
@@ -463,6 +624,7 @@ try {
 } catch {
     $report.failure = $_.Exception.Message
 } finally {
+    Remove-PlantedLinks
     if ($guarded) {
         # Keep the Squirrel logs and the application diagnostics before R is deleted; binaries and databases stay out of the upload.
         try {

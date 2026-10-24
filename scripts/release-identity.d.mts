@@ -37,6 +37,12 @@ export const VENDOR_DIRECTORY: string;
 export const NUGET_ID: string;
 export const EXECUTABLE: string;
 export const RELEASES: string;
+export const PRODUCT_NAME: 'Yukon Union Telemetry';
+export const PUBLISHER: 'Yukon Union Telemetry contributors';
+export const COMPANY_NAME: 'Artur Sianiuk';
+export const VERSION_INFO_FIELDS: readonly ['ProductName', 'FileDescription', 'CompanyName', 'OriginalFilename'];
+export const VERSION_INFO_SCRIPT: string;
+export type VersionInfo = Record<'ProductName' | 'FileDescription' | 'CompanyName' | 'OriginalFilename', string | null>;
 export const AUTHENTICODE_STATUSES: string[];
 export const AUTHENTICODE_SCRIPT: string;
 export const SIGNING_FAILURES: string[];
@@ -59,6 +65,9 @@ export function inspectInstaller(options: {packageDirectory: string; makeDirecto
 export function parseAuthenticodeOutput(stdout: string, count: number): AuthenticodeResult[];
 export function windowsPowerShell(env?: Readonly<Record<string, string | undefined>>): {executable: string; env: Record<string, string | undefined>};
 export function readAuthenticode(files: string[], env?: Readonly<Record<string, string | undefined>>): AuthenticodeResult[];
+export function parseVersionInfoOutput(stdout: string): VersionInfo;
+export function readVersionInfo(file: string, env?: Readonly<Record<string, string | undefined>>): VersionInfo;
+export function assertVersionInfo(info: VersionInfo, executable?: string): void;
 export function releaseIdentity(options: {
   checkout?: string;
   packageDirectory?: string;
