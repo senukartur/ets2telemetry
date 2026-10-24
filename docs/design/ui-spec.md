@@ -204,13 +204,14 @@ Settings move from the single long Live column to their own screen with a left s
 | --- | --- | --- |
 | General | `settings.general` | Interface language (segmented English / Русский); Start with Windows (switch, marked **Planned**: autostart is not authorized); Closing the window (read-only: hides to the tray) |
 | Units | `settings.units` | One segmented control per game: Metric (km/h, L) / US customary (mph, gal); note that stored values never change |
-| Overlay | `settings.overlay` | Show overlay (switch); `settings.overlay.layout`: four layout cards with thumbnails (Strip, Card, Cluster, Minimal); Sections ("N of M sections shown", button to the next panel); Scale and Background opacity sliders; `settings.overlay.edit`: **Move overlay** (primary), which starts layout-edit mode (ET-012b) |
-| Overlay sections | `settings.sections` | `settings.sections.presets` (Everything, Job focus, Driving only) in the card header; `settings.sections.groups`: switches grouped Driving / Fuel / Job / Time / Status with requirement notes (`needs protocol v1`, `needs trip tracking`, `ids until v1`) from `OVERLAY_SECTION_REQUIREMENTS`; hint "A section without data stays hidden; it never shows zero." |
+| Overlay | `settings.overlay` | One card with labelled visibility, layout (four thumbnails), position/size, presets and grouped sections blocks. All fourteen switches and requirement notes are on this page; no separate sections destination or Choose sections action. Background opacity remains informational **Planned** text below the card. |
 | Game plugin | `settings.plugin` | One row per game: path, status badge (`installed` ✓ / `outdated` ◷ / `missing` / `blocked` ✕), Reinstall, Open folder |
 | Data and storage | `settings.data` | Database path, size and trip count, backup with "Create backup", diagnostics bundle |
 | About | `settings.about` | Brand block `settings.about.brand` (logo 64 px, "Yukon Union Telemetry", "Telemetry · ETS2 · ATS"); version; Uninstall (danger outline) with the existing data-loss warning flow (ET-018) |
 
-Settings save as today: a choice shows as selected only after main saved it; a refused save shows its message in the same card.
+Settings save as today: a choice shows as selected only after main saved it; a refused save shows its message in the same card. ET-048 keeps one mounted `OverlaySettingsCard`, with one Overlay heading, h3 block headings and h4 Driving / Fuel / Job / Time groups. No nested scroller, tabs or accordion: the existing content area scrolls, controls wrap, and lower controls remain keyboard reachable at renderer zoom. Section notes retain `OVERLAY_SECTION_REQUIREMENTS` and the unavailable/stale explanation.
+
+Edit position enters the existing main-owned draft. Layout is unavailable during editing; presets and section switches keep their existing availability. Scale/reset change only the draft, Cancel writes nothing and Done uses the existing durable save. Visibility-off prevents editing and a committed off save discards the draft; a failed save retains the committed selection and existing error. Read-only guards and the final-enabled-section guard remain. ET-048 changes presentation only: settings v6, preload/IPC, geometry and ET-045 corrections retain their existing contracts.
 
 ### 5.6 Account and sync (`account.*`, server phase)
 

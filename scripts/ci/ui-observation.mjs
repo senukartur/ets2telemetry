@@ -11,7 +11,7 @@ import {pluginActionResult} from './plugin-fixture.mjs';
 
 export const UI_CASES = ['shell', 'live', 'journal', 'settings', 'overlay'];
 const sizes = [{width: 1280, height: 800}, {width: 1100, height: 720}];
-const panels = ['general', 'units', 'overlay', 'sections', 'plugin', 'data', 'about'];
+const panels = ['general', 'units', 'overlay', 'plugin', 'data', 'about'];
 const layouts = ['strip', 'card', 'cluster', 'hud'];
 const dimensions = {strip: {width: 1280, height: 116}, card: {width: 300, height: 384}, cluster: {width: 440, height: 267}, hud: {width: 320, height: 354}};
 const waitState = (page, state) => until(() => page.getByTestId('telemetry-status').innerText(), value => value.startsWith(`${state}:`), `UI_LIVE_${state}`, 5000);
@@ -214,6 +214,76 @@ const EXPORT_RESULT = {
 const dashboardZoom = (application, zoom) => application.evaluate(({BrowserWindow}, zoom) => {
   BrowserWindow.getAllWindows().find(window => !window.webContents.getURL().endsWith('?view=overlay')).webContents.setZoomFactor(zoom);
 }, zoom);
+async function observeUnifiedOverlay({application, dashboard, language, size, record}) {
+  assert.deepEqual(await dashboard.getByTestId('settings.nav').locator('button').evaluateAll(nodes => nodes.map(node => node.getAttribute('data-testid'))), panels.map(id => `settings.nav.${id}`));
+  assert.equal(await dashboard.getByTestId('settings.sections').count(), 0);
+  assert.equal(await dashboard.getByRole('button', {name: /^(Choose sections|Выбрать секции)$/}).count(), 0);
+  assert.equal(await dashboard.getByTestId('overlay-settings').count(), 1);
+  const visible = await dashboard.getByTestId('overlay-settings').evaluate(card => {
+    const ids = ['overlay-enabled', 'overlay-layout', 'overlay-placement', 'overlay-presets', 'overlay-sections'];
+    return ids.every(id => card.querySelector(`[data-testid="${id}"]`)?.checkVisibility()) &&
+      card.querySelectorAll('[data-testid^="overlay-switch-"]').length === 14 &&
+      [...card.querySelectorAll('[data-testid^="overlay-switch-"]')].every(node => node.checkVisibility());
+  });
+  assert.equal(visible, true, 'UI_OVERLAY_UNIFIED_CONTROLS');
+  record.flags.overlayUnified = true;
+  for (const zoom of [1, 1.5, 2]) {
+    await dashboardZoom(application, zoom);
+    try {
+      await dashboard.getByTestId('overlay-switch-expected-income').focus();
+      await dashboard.keyboard.press('Tab');
+      assert.equal(await dashboard.getByTestId('overlay-switch-game-time').evaluate(node => node === globalThis.document.activeElement), true);
+      const observation = await dashboard.getByTestId('overlay-settings').evaluate(card => new Promise(resolve => globalThis.requestAnimationFrame(() => {
+        const scroll = globalThis.document.querySelector('.yu-content'), bounds = scroll.getBoundingClientRect(), focus = globalThis.document.activeElement.getBoundingClientRect();
+        const overflow = [scroll, card, ...card.querySelectorAll('section, label, button:not([role="radio"]):not([role="switch"]), p, [data-testid^="overlay-requirement-"]')]
+          .filter(node => node.scrollWidth > node.clientWidth + 1).map(node => node.getAttribute('data-testid') ?? node.tagName);
+        // Radix rails/dots intentionally have expanded pseudo-hit areas; check their boxes, not scrollWidth.
+        const controlsContained = [...card.querySelectorAll('button')].every(node => {const box = node.getBoundingClientRect(), parent = card.getBoundingClientRect(); return box.left >= parent.left && box.right <= parent.right;});
+        resolve({overflow, controlsContained, scrolled: scroll.scrollTop > 0, focusVisible: focus.width > 0 && focus.left >= bounds.left && focus.right <= bounds.right && focus.top >= bounds.top && focus.bottom <= bounds.bottom});
+      })));
+      assert.deepEqual(observation.overflow, [], `UI_OVERLAY_OVERFLOW_${language}_${size.width}_${zoom}`);
+      assert.equal(observation.controlsContained, true); assert.equal(observation.scrolled, true); assert.equal(observation.focusVisible, true);
+      (record.overlayScroll ??= []).push({language, width: size.width, zoom, ...observation});
+    } finally {await dashboardZoom(application, 1);}
+  }
+  record.flags.overlayScroll = true;
+}
+async function observeOverlayEditing({dashboard, config, record}) {
+  const file = path.join(config.localappdata, 'ETS2Telemetry', 'settings', 'settings.json');
+  const initial = (await dashboard.evaluate(() => globalThis.desktop.getAppState())).settings.overlay;
+  const bytes = await readFile(file);
+  const state = () => dashboard.evaluate(() => globalThis.desktop.getAppState());
+  const begin = async () => {
+    await dashboard.getByTestId('overlay-edit-start').click();
+    await until(state, value => value.overlayEdit.active, 'UI_OVERLAY_EDIT_STARTED');
+    for (const layout of layouts) assert.equal(await dashboard.locator(`#overlay-layout-${layout}`).isDisabled(), true);
+    assert.equal(await dashboard.getByTestId('overlay-preset-driving-only').isEnabled(), true);
+    assert.equal(await dashboard.getByTestId('overlay-switch-cargo').isEnabled(), true);
+  };
+  const scaleUp = async () => {
+    const before = (await state()).overlayEdit.scale;
+    await dashboard.getByTestId('overlay-scale-up').click();
+    return until(state, value => value.overlayEdit.active && value.overlayEdit.scale > before, 'UI_OVERLAY_SCALE_DRAFT');
+  };
+  await begin(); await scaleUp(); assert.deepEqual(await readFile(file), bytes);
+  await dashboard.getByTestId('overlay-placement-reset').click();
+  await until(state, value => value.overlayEdit.active && value.overlayEdit.scale === 1, 'UI_OVERLAY_RESET_DRAFT');
+  assert.deepEqual(await readFile(file), bytes);
+  await scaleUp(); await dashboard.getByTestId('overlay-edit-cancel').click();
+  await until(state, value => !value.overlayEdit.active, 'UI_OVERLAY_CANCELLED');
+  assert.deepEqual((await state()).settings.overlay.placements, initial.placements); assert.deepEqual(await readFile(file), bytes);
+  await begin(); const draft = await scaleUp();
+  await dashboard.getByTestId('overlay-preset-driving-only').focus(); await dashboard.keyboard.press('Enter');
+  await until(state, value => !value.settings.overlay.sections.cargo, 'UI_OVERLAY_EDIT_PRESET');
+  await dashboard.getByTestId('overlay-switch-cargo').focus(); await dashboard.keyboard.press('Space');
+  await until(state, value => value.settings.overlay.sections.cargo, 'UI_OVERLAY_EDIT_SECTION');
+  assert.deepEqual((await state()).settings.overlay.placements, initial.placements);
+  await dashboard.getByTestId('overlay-edit-done').click();
+  await until(state, value => !value.overlayEdit.active && value.settings.overlay.placements[initial.layout].scale === draft.overlayEdit.scale, 'UI_OVERLAY_DONE_SAVED');
+  assert.equal(JSON.parse(await readFile(file, 'utf8')).overlay.placements[initial.layout].scale, draft.overlayEdit.scale);
+  assert.notDeepEqual(await readFile(file), bytes);
+  record.flags.overlayEditing = true;
+}
 /** The export result has no horizontal overflow and its box lies inside the Game plugin card. */
 const exportResultContained = page => page.evaluate(() => new Promise(resolve => globalThis.requestAnimationFrame(() => globalThis.requestAnimationFrame(() => {
   const body = globalThis.document.querySelector('[data-testid="plugin-export-diagnostics-result"]'), card = globalThis.document.querySelector('[data-testid="plugin-card"]');
@@ -400,11 +470,17 @@ export async function runUiSmoke({application, dashboard, overlay, source, confi
         assert.equal(await visibility.getAttribute('data-state'), 'checked');
         assert.equal(await dashboard.getByTestId('overlay-edit-start').isEnabled(), true);
         record.flags.overlayVisibility = true;
-        await settingsPanel(dashboard, 'sections'); assert.equal(await dashboard.locator('[data-testid^="overlay-switch-"]').count(), 14);
-        await dashboard.getByTestId('overlay-preset-driving-only').click();
+        await observeUnifiedOverlay({application, dashboard, language, size, record});
+        await dashboard.locator('.yu-content').evaluate(node => {node.scrollTop = node.scrollHeight;});
+        await save('overlay-sections', language, size);
+        if (language === 'en' && size.width === 1280) await observeOverlayEditing({dashboard, config, record});
+        assert.equal(await dashboard.locator('[data-testid^="overlay-switch-"]').count(), 14);
+        await dashboard.getByTestId('overlay-preset-driving-only').focus(); await dashboard.keyboard.press('Enter');
         await until(() => dashboard.evaluate(() => globalThis.desktop.getAppState()), state => !state.settings.overlay.sections.cargo, 'UI_SECTIONS_SAVED');
+        const navigationBytes = await readFile(path.join(config.localappdata, 'ETS2Telemetry', 'settings', 'settings.json'));
         await settingsPanel(dashboard, 'data'); assert.equal(await dashboard.getByTestId('source-select').isEnabled(), true);
-        await settingsPanel(dashboard, 'sections'); assert.equal(await dashboard.getByTestId('overlay-switch-cargo').getAttribute('data-state'), 'unchecked');
+        await settingsPanel(dashboard, 'overlay'); assert.equal(await dashboard.getByTestId('overlay-switch-cargo').getAttribute('data-state'), 'unchecked');
+        assert.deepEqual(await readFile(path.join(config.localappdata, 'ETS2Telemetry', 'settings', 'settings.json')), navigationBytes);
         await dashboard.getByTestId('overlay-switch-cargo').focus(); await dashboard.keyboard.press('Space');
         await until(() => dashboard.evaluate(() => globalThis.desktop.getAppState()), state => state.settings.overlay.sections.cargo, 'UI_SWITCH_KEYBOARD_SAVED');
         if (language === 'en' && size.width === 1280) {
@@ -589,8 +665,8 @@ export async function runUiReadOnly({application, dashboard, config, record, set
     await waitOverlayVisibility(dashboard, {enabled: true, writable: false}, 'UI_OVERLAY_READ_ONLY_RENDERED');
     for (const layout of layouts) assert.equal(await dashboard.locator(`#overlay-layout-${layout}`).isDisabled(), true);
     assert.equal(await dashboard.getByTestId('overlay-edit-start').isDisabled(), true);
-    await settingsPanel(dashboard, 'sections');
     assert.equal(await dashboard.locator('[data-testid^="overlay-switch-"]:disabled').count(), 14);
+    assert.equal(await dashboard.locator('[data-testid^="overlay-preset-"]:disabled').count(), 3);
   }
   const file = path.join(config.localappdata, 'ETS2Telemetry', 'settings', 'settings.json');
   assert.equal(await readFile(file, 'utf8'), settingsBytes);

@@ -5,11 +5,11 @@ import {temporaryResources} from '../shared/resources';
 import {receiptBatchTimeout, validateRuntimeReceipts} from '../shared/runtime-receipt-validator';
 
 const screens = {shell: ['live', 'hardMode', 'journal', 'settings', 'account'], live: ['current', 'zero', 'missing', 'paused', 'stale'],
-  journal: ['list', 'trip', 'intervals', 'timeline', 'samples'], settings: ['general', 'units', 'overlay', 'sections', 'plugin', 'data', 'about', 'save-error'], overlay: ['strip', 'card', 'cluster', 'hud']};
+  journal: ['list', 'trip', 'intervals', 'timeline', 'samples'], settings: ['general', 'units', 'overlay', 'overlay-sections', 'plugin', 'data', 'about', 'save-error'], overlay: ['strip', 'card', 'cluster', 'hud']};
 const common = ['bilingual', 'bothSizes', 'security', 'offlineFonts', 'recordingIndicator'];
 const flags = {shell: ['navigation', 'headingFocus','hardModePage', 'journalUnmount', 'menuKeyboard', 'exitAvailable', 'laterAccount'],
   live: ['numericGauge', 'unavailableVsZero', 'paused', 'staleDashes', 'rawNames', 'unsupportedTrip', 'jobViewport', 'hmNamesReadable','fullWidthTelemetry','tankUnknownVsZero'],
-  journal: ['syntheticBanner', 'pageReturn', 'chartBounded', 'rawTabs', 'searchPlanned', 'tripRegions', 'tableReadable','signedChart'], settings: ['allPanels', 'allSections', 'committedSave', 'sourceSelector', 'uninstallRefusal', 'refusedSave', 'readOnly', 'controlsKeyboard', 'lastEnabled', 'fontLicense', 'overlayVisibility', 'visibilityFailedSave', 'actionResult'],
+  journal: ['syntheticBanner', 'pageReturn', 'chartBounded', 'rawTabs', 'searchPlanned', 'tripRegions', 'tableReadable','signedChart'], settings: ['allPanels', 'allSections', 'committedSave', 'sourceSelector', 'uninstallRefusal', 'refusedSave', 'readOnly', 'controlsKeyboard', 'lastEnabled', 'fontLicense', 'overlayVisibility', 'visibilityFailedSave', 'actionResult', 'overlayUnified', 'overlayEditing', 'overlayScroll'],
   overlay: ['fourLayouts', 'transparent', 'contained', 'independentFont', 'missing', 'paused', 'staleDashes', 'heroSubsets','formatterProfiles', 'stableNumbers', 'clusterRpmContained']};
 type Case = keyof typeof screens;
 const sizes = [{width: 1280, height: 800}, {width: 1100, height: 720}];
@@ -37,6 +37,8 @@ it('requires every UI language/size/screen, assertion and plain screenshot file 
     {name: 'read-only bytes changed', uiCase: 'settings', change: value => {value.ui.readOnly.bytesUnchanged = false;}},
     {name: 'unverified second renderer security', uiCase: 'settings', change: value => {value.ui.readOnly.windows = value.ui.readOnly.windows.map(window => ({...window, sandbox: false}));}},
     {name: 'extra expected error not allowed', uiCase: 'settings', change: value => {value.ui.saveFailureFacts.pop();}},
+    {name: 'obsolete separate sections screenshot', uiCase: 'settings', change: value => {const shot = value.ui.screenshots.find(shot => shot.screen === 'overlay-sections')!; shot.screen = 'sections'; shot.file = shot.file.replace('overlay-sections', 'sections');}},
+    {name: 'missing unified lower screenshot', uiCase: 'settings', change: value => {value.ui.screenshots = value.ui.screenshots.filter(shot => !(shot.screen === 'overlay-sections' && shot.language === 'ru' && shot.width === 1100));}},
     {name: 'missing language', uiCase: 'live', change: value => {value.ui.languages.pop();}},
     {name: 'missing size', uiCase: 'live', change: value => {value.ui.sizes = value.ui.sizes.slice(0, 1);}},
     {name: 'wrong shard', uiCase: 'live', change: value => {value.ui.case = 'shell';}},
@@ -59,7 +61,7 @@ it('requires every UI language/size/screen, assertion and plain screenshot file 
       {name: `false journal ${flag}`, uiCase: 'journal' as const, change: (value: Fixture) => {value.ui.flags[flag] = false;}},
       {name: `missing journal ${flag}`, uiCase: 'journal' as const, change: (value: Fixture) => {delete value.ui.flags[flag];}}
     ]),
-    ...['controlsKeyboard', 'lastEnabled', 'fontLicense', 'overlayVisibility', 'visibilityFailedSave', 'actionResult'].flatMap(flag => [
+    ...['controlsKeyboard', 'lastEnabled', 'fontLicense', 'overlayVisibility', 'visibilityFailedSave', 'actionResult', 'overlayUnified', 'overlayEditing', 'overlayScroll'].flatMap(flag => [
       {name: `false settings ${flag}`, uiCase: 'settings' as const, change: (value: Fixture) => {value.ui.flags[flag] = false;}},
       {name: `missing settings ${flag}`, uiCase: 'settings' as const, change: (value: Fixture) => {delete value.ui.flags[flag];}}
     ]),

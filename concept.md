@@ -1190,3 +1190,7 @@ At the owner's ET-045 request (items 7, 8 and 2, October 23–24, 2026), under t
 - **W8 unchanged.** `OverlayPresentation`, preload, IPC, settings, presets, wire, storage, export, native code and `GAME_HISTORY_RECORDING`.
 
 For typography only, this supersedes the ordinary-value sizes of the ET-012e presentation followup above. The owner's real-game retest remains pending in [ET-045d validation](docs/validation/et-045d.md); see [the minimal overlay](docs/minimal-overlay.md#stable-numbers-and-value-typography-et-045d-october-24-2026). No display, DPI or performance claim follows.
+
+## ET-048 unified Overlay settings presentation — October 24, 2026
+
+All existing overlay controls now share Settings > Overlay: visibility, layout, position/size, presets and grouped sections with requirement notes. The separate sections destination and cross-page action are removed; opacity remains Planned. One mounted card retains committed-save, main-owned draft, read-only/error and final-section behavior. This is presentation only; settings v6, IPC, geometry and ET-045 corrections are unchanged. See [ET-048 validation](docs/validation/et-048.md). Renderer zoom evidence does not establish Windows DPI, Narrator or real-game acceptance; ET-042/043/044/045 obligations remain unchanged.
