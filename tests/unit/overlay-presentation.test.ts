@@ -160,7 +160,7 @@ it('shows only the speed and fuel placeholders while not current without a previ
   expect(overlayPresentation(stale).sections).toEqual([{id: 'speed', state: 'unavailable'}, {id: 'fuel', state: 'unavailable'}]);
   // A section disabled since the previous projection is left out.
   const previous = overlayPresentation(live());
-  expect(ids(overlayPresentation(stale, undefined, {enabled: true, layout: 'strip', sections: {...ALL, gear: false, fuel: false}, placements: PLACEMENTS}, previous).sections))
+  expect(ids(overlayPresentation(stale, undefined, {enabled: true, backgroundOpacity: 80, layout: 'strip', sections: {...ALL, gear: false, fuel: false}, placements: PLACEMENTS}, previous).sections))
     .toEqual(['speed', 'rpm', 'sdk-consumption', 'cargo', 'destination', 'expected-income', 'game-time']);
 });
 
@@ -170,15 +170,15 @@ it('shows placeholders before the first observation', () => {
 });
 
 it('leaves disabled sections out and passes the layout through', () => {
-  const presentation = overlayPresentation(live(), undefined, {enabled: true, layout: 'cluster', sections: OVERLAY_PRESETS['driving-only'], placements: PLACEMENTS});
+  const presentation = overlayPresentation(live(), undefined, {enabled: true, backgroundOpacity: 80, layout: 'cluster', sections: OVERLAY_PRESETS['driving-only'], placements: PLACEMENTS});
   expect(presentation.layout).toBe('cluster');
   expect(ids(presentation.sections)).toEqual(['speed', 'gear', 'rpm', 'fuel']);
   const stale = {...live(), fresh: false, status: 'stale' as const};
-  const jobFocus = {enabled: true, layout: 'hud' as const, sections: OVERLAY_PRESETS['job-focus'], placements: PLACEMENTS};
+  const jobFocus = {enabled: true, backgroundOpacity: 80, layout: 'hud' as const, sections: OVERLAY_PRESETS['job-focus'], placements: PLACEMENTS};
   expect(ids(overlayPresentation(stale, undefined, jobFocus, overlayPresentation(live(), undefined, jobFocus)).sections))
     .toEqual(['speed', 'gear', 'fuel', 'cargo', 'destination']);
   // The legacy speed and fuel fields stay in the projection whatever the sections are.
-  expect(overlayPresentation(live(), undefined, {enabled: true, layout: 'strip', sections: {...ALL, speed: false, fuel: false}, placements: PLACEMENTS})).toMatchObject({speed: '0', fuel: '—'});
+  expect(overlayPresentation(live(), undefined, {enabled: true, backgroundOpacity: 80, layout: 'strip', sections: {...ALL, speed: false, fuel: false}, placements: PLACEMENTS})).toMatchObject({speed: '0', fuel: '—'});
 });
 
 it('reports a paused game only while current', () => {
@@ -392,7 +392,7 @@ it('produces the overlay texts the telemetry smoke expects for the smoke pair', 
     {status: 'disconnected', fresh: false}), undefined, undefined, current), SYNTHETIC_V1_OVERLAY_STOPPED);
 });
 it('leaves disabled v1 sections out and passes no source identity, boundary, window or clock data to the renderer', () => {
-  expect(ids(overlayPresentation(withV1(), undefined, {enabled: true, layout: 'hud', sections: OVERLAY_PRESETS['job-focus'], placements: PLACEMENTS}).sections))
+  expect(ids(overlayPresentation(withV1(), undefined, {enabled: true, backgroundOpacity: 80, layout: 'hud', sections: OVERLAY_PRESETS['job-focus'], placements: PLACEMENTS}).sections))
     .toEqual(['speed', 'gear', 'fuel', 'cargo', 'destination', 'distance-remaining', 'deadline']);
   const json = JSON.stringify(overlayPresentation(withV1()));
   for (const text of ['10000000-0000-4000-8000-000000000001', '00000000-0000-4000-8000-000000000001', 'pluginSessionId', 'boundaryOrder', 'handle', '65538', 'clockMapping'])

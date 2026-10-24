@@ -2,6 +2,7 @@ import {randomUUID} from 'node:crypto';
 import * as nodeFs from 'node:fs/promises';
 import path from 'node:path';
 import type {AppLanguage, OverlayLayout, OverlayPlacement, OverlaySections, SettingsSaveError, SettingsState, SettingsView, UnitGame, UnitProfile} from '../../../packages/contracts/src';
+import {isOverlayOpacity} from './overlay-opacity';
 import {withPlacement} from './overlay-placement';
 import {enabledSectionCount} from './overlay-sections';
 import type {DiagnosticFacts} from './diagnostics';
@@ -175,6 +176,12 @@ export class SettingsStore {
   /** Serialized save of one game's profile. Resolves with the applied settings only after the durable rename. */
   setUnitProfile(game: UnitGame, profile: UnitProfile): Promise<SettingsView> {
     return this.enqueue(settings => ({next: {...settings, units: Object.freeze({...settings.units, [game]: profile})}, facts: {game, profile}}));
+  }
+
+  /** One durable opacity commit per completed slider gesture, sharing the bounded queue. */
+  setOverlayBackgroundOpacity(backgroundOpacity: number): Promise<SettingsView> {
+    if (!isOverlayOpacity(backgroundOpacity)) return Promise.reject(new Error('Invalid overlay opacity request'));
+    return this.enqueue(settings => ({next: {...settings, overlay: Object.freeze({...settings.overlay, backgroundOpacity})}, facts: {overlayBackgroundOpacity: backgroundOpacity}}));
   }
 
   /** Serialized visibility save through the shared bounded durable queue. */

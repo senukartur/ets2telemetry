@@ -1193,6 +1193,14 @@ For typography only, this supersedes the ordinary-value sizes of the ET-012e pre
 
 ## ET-048 unified Overlay settings presentation — October 24, 2026
 
+All existing overlay controls now share Settings > Overlay: visibility, layout, position/size, presets and grouped sections. The separate sections destination and cross-page action are removed; opacity remains Planned. One mounted card retains committed-save, main-owned draft, read-only/error and final-section behavior. This is presentation only; settings v6, IPC, geometry and ET-045 corrections are unchanged. See [ET-048 validation](docs/validation/et-048.md). Renderer zoom evidence does not establish Windows DPI, Narrator or real-game acceptance; ET-042/043/044/045 obligations remain unchanged.
+
+Owner follow-up, October 24, 2026: remove the parenthetical technical requirement notes below individual section switches in both EN and RU. Labels, icons, toggles, presets, data-availability rules and the general unavailable/stale explanation remain unchanged. This supersedes earlier presentation instructions to show those per-section notes.
+
+## ET-049 overlay background opacity — October 24, 2026
+
+The owner requested implementation of [ET-049](https://trello.com/c/GyBnLV5M). Settings format v7 adds a shared per-user overlay background percentage, 40–100 in whole steps, default 80; v6 migrates in memory without startup writes and preserves all prior settings. The unified Overlay page shows a candidate slider and an explicit committed percentage; one completed gesture/keyboard step submits a bounded durable save. Only a successful save changes the overlay. Its background token uses percentage/100, including both Cluster surfaces; Minimal keeps its backgroundless design. Foreground opacity, edit drafts, native window/input/freshness and recording remain unchanged. This supersedes opacity's unsupported status in the ET-028 snapshot only. Required real-game checks and code gates remain separate; see [settings](docs/settings.md#current-format-v7-background-opacity-et-049) and [validation](docs/validation/et-049.md).
+
 All existing overlay controls now share Settings > Overlay: visibility, layout, position/size, presets and grouped sections with requirement notes. The separate sections destination and cross-page action are removed; opacity remains Planned. One mounted card retains committed-save, main-owned draft, read-only/error and final-section behavior. This is presentation only; settings v6, IPC, geometry and ET-045 corrections are unchanged. See [ET-048 validation](docs/validation/et-048.md). Renderer zoom evidence does not establish Windows DPI, Narrator or real-game acceptance; ET-042/043/044/045 obligations remain unchanged.
 
 ## ET-045g Installed apps icon — October 24, 2026

@@ -9,6 +9,59 @@ import {clusterCentreProbe, overlayOverflow, stripNumberProbe, zeroLiveObservati
 import {stubSaveDialog} from './journal-observation.mjs';
 import {pluginActionResult} from './plugin-fixture.mjs';
 
+// ET-049: genuine keyboard and held-pointer gestures; the overlay still uses committed settings.
+async function observeOpacityControl({dashboard, config, language, record}) {
+  const slider = dashboard.getByRole('slider', {name: language === 'en' ? 'Background opacity' : 'Непрозрачность фона', exact: true});
+  const value = () => dashboard.evaluate(() => globalThis.desktop.getAppState());
+  const wait = expected => until(value, state => state.settings.overlay.backgroundOpacity === expected && !state.settings.saveError, 'UI_OPACITY_COMMITTED');
+  await slider.focus();
+  for (const [key, expected] of [['End', 100], ['Home', 40], ['ArrowRight', 41]]) {
+    await dashboard.keyboard.press(key); await wait(expected);
+    await until(() => slider.getAttribute('aria-valuenow'), v => v === String(expected), 'UI_OPACITY_THUMB');
+    assert.equal(await slider.getAttribute('aria-valuetext'), `${expected}%`);
+    await until(() => slider.getAttribute('aria-disabled'), value => value === 'false', 'UI_OPACITY_KEYBOARD_COMMIT_SETTLED');
+    assert.equal(await slider.evaluate(node => node === globalThis.document.activeElement), true, 'UI_OPACITY_KEYBOARD_FOCUS_LOST');
+  }
+  await dashboard.evaluate(() => globalThis.desktop.setOverlayBackgroundOpacity(80)); await wait(80);
+  const track = await dashboard.getByTestId('overlay-opacity').boundingBox(), thumb = await slider.boundingBox();
+  assert.ok(track && thumb); await dashboard.mouse.move(thumb.x + thumb.width / 2, thumb.y + thumb.height / 2); await dashboard.mouse.down();
+  try {
+    await dashboard.mouse.move(track.x + track.width * 0.3, thumb.y + thumb.height / 2, {steps: 8});
+    const candidate = Number(await slider.getAttribute('aria-valuenow')); assert.ok(candidate < 80 && candidate >= 40);
+    assert.equal((await value()).settings.overlay.backgroundOpacity, 80, 'Held drag must not write');
+    assert.match(await dashboard.getByTestId('overlay-opacity-saved').innerText(), /80%/);
+    await dashboard.mouse.up(); await wait(candidate);
+    assert.equal(JSON.parse(await readFile(path.join(config.localappdata, 'ETS2Telemetry/settings/settings.json'), 'utf8')).overlay.backgroundOpacity, candidate);
+  } finally {await dashboard.mouse.up();}
+  await dashboard.evaluate(() => globalThis.desktop.setOverlayBackgroundOpacity(80)); await wait(80);
+  record.flags.opacityKeyboardFocus = true;
+  record.flags.opacityGestures = true;
+}
+async function observeOpacitySurfaces({dashboard, overlay, layout, language, size, record}) {
+  // The four existing language/size cells cover every alpha for every layout, without four redundant saves per cell.
+  const value = [40, 65, 80, 100][(language === 'ru' ? 2 : 0) + (size.width === 1100 ? 1 : 0)];
+  {
+    await dashboard.evaluate(value => globalThis.desktop.setOverlayBackgroundOpacity(value), value);
+    await overlay.waitForFunction(alpha => globalThis.getComputedStyle(globalThis.document.querySelector('[data-testid="overlay-content"]')).getPropertyValue('--yu-ov-panel').trim() === `rgba(11, 17, 32, ${alpha})`, value / 100);
+    const facts = await overlay.evaluate(() => {
+      const style = node => globalThis.getComputedStyle(node);
+      const root = globalThis.document.querySelector('[data-testid="overlay-root"]');
+      return {rootBackground: style(root).backgroundColor, rootOpacity: style(root).opacity,
+        contentOpacity: style(globalThis.document.querySelector('[data-testid="overlay-content"]')).opacity,
+        speedOpacity: style(globalThis.document.querySelector('[data-testid="overlay-speed"]')).opacity,
+        surfaces: [...globalThis.document.querySelectorAll('.overlay-surface,.overlay-gauge')].map(node => style(node).backgroundColor),
+        hud: globalThis.document.querySelector('.overlay-hud-lines') ? style(globalThis.document.querySelector('.overlay-hud-lines')).backgroundColor : null};
+    });
+    assert.equal(facts.rootBackground, 'rgba(0, 0, 0, 0)');
+    assert.equal(facts.rootOpacity, '1'); assert.equal(facts.contentOpacity, '1'); assert.equal(facts.speedOpacity, '1');
+    if (layout === 'hud') {assert.equal(facts.hud, 'rgba(0, 0, 0, 0)'); assert.equal(facts.surfaces.length, 0);}
+    else {assert.ok(facts.surfaces.length >= (layout === 'cluster' ? 2 : 1)); assert.ok(facts.surfaces.every(color => color === (value === 100 ? 'rgb(11, 17, 32)' : `rgba(11, 17, 32, ${value / 100})`)));}
+  }
+  await dashboard.evaluate(() => globalThis.desktop.setOverlayBackgroundOpacity(80));
+  await overlay.waitForFunction(() => globalThis.getComputedStyle(globalThis.document.querySelector('[data-testid="overlay-content"]')).getPropertyValue('--yu-ov-panel').includes('0.8'));
+  record.flags.backgroundOpacityOverlay = true;
+}
+
 export const UI_CASES = ['shell', 'live', 'journal', 'settings', 'overlay'];
 const sizes = [{width: 1280, height: 800}, {width: 1100, height: 720}];
 const panels = ['general', 'units', 'overlay', 'plugin', 'data', 'about'];
@@ -240,6 +293,7 @@ async function observeUnifiedOverlay({application, dashboard, language, size, re
   assert.equal(await dashboard.getByTestId('settings.sections').count(), 0);
   assert.equal(await dashboard.getByRole('button', {name: /^(Choose sections|Выбрать секции)$/}).count(), 0);
   assert.equal(await dashboard.getByTestId('overlay-settings').count(), 1);
+  assert.equal(await dashboard.locator('[data-testid^="overlay-requirement-"]').count(), 0, 'UI_OVERLAY_TECHNICAL_NOTES_ABSENT');
   const visible = await dashboard.getByTestId('overlay-settings').evaluate(card => {
     const ids = ['overlay-enabled', 'overlay-layout', 'overlay-placement', 'overlay-presets', 'overlay-sections'];
     return ids.every(id => card.querySelector(`[data-testid="${id}"]`)?.checkVisibility()) &&
@@ -257,14 +311,14 @@ async function observeUnifiedOverlay({application, dashboard, language, size, re
       assert.equal(await dashboard.getByTestId('overlay-switch-game-time').evaluate(node => node === globalThis.document.activeElement), true);
       const observation = await dashboard.getByTestId('overlay-settings').evaluate(card => new Promise(resolve => globalThis.requestAnimationFrame(() => {
         const scroll = globalThis.document.querySelector('.yu-content'), bounds = scroll.getBoundingClientRect(), focus = globalThis.document.activeElement.getBoundingClientRect();
-        const overflow = [scroll, card, ...card.querySelectorAll('section, label, button:not([role="radio"]):not([role="switch"]), p, [data-testid^="overlay-requirement-"]')]
+        const overflow = [scroll, card, ...card.querySelectorAll('section, label, button:not([role="radio"]):not([role="switch"]), p')]
           .filter(node => node.scrollWidth > node.clientWidth + 1).map(node => node.getAttribute('data-testid') ?? node.tagName);
         // Radix rails/dots intentionally have expanded pseudo-hit areas; check their boxes, not scrollWidth.
         const controlsContained = [...card.querySelectorAll('button')].every(node => {const box = node.getBoundingClientRect(), parent = card.getBoundingClientRect(); return box.left >= parent.left && box.right <= parent.right;});
-        resolve({overflow, controlsContained, scrolled: scroll.scrollTop > 0, focusVisible: focus.width > 0 && focus.left >= bounds.left && focus.right <= bounds.right && focus.top >= bounds.top && focus.bottom <= bounds.bottom});
+        resolve({overflow, controlsContained, focusTop: focus.top, focusBottom: focus.bottom, viewportTop: bounds.top, viewportBottom: bounds.bottom, scrolled: scroll.scrollTop > 0, focusVisible: focus.width > 0 && focus.left >= bounds.left && focus.right <= bounds.right && focus.top >= bounds.top && focus.bottom <= bounds.bottom});
       })));
       assert.deepEqual(observation.overflow, [], `UI_OVERLAY_OVERFLOW_${language}_${size.width}_${zoom}`);
-      assert.equal(observation.controlsContained, true); assert.equal(observation.scrolled, true); assert.equal(observation.focusVisible, true);
+      assert.equal(observation.controlsContained, true, JSON.stringify({language, zoom, ...observation})); assert.equal(observation.scrolled, true, JSON.stringify({language, zoom, ...observation})); assert.equal(observation.focusVisible, true, JSON.stringify({language, zoom, ...observation}));
       (record.overlayScroll ??= []).push({language, width: size.width, zoom, ...observation});
     } finally {await dashboardZoom(application, 1);}
   }
@@ -492,6 +546,12 @@ export async function runUiSmoke({application, dashboard, overlay, source, confi
         assert.equal(await visibility.getAttribute('data-state'), 'checked');
         assert.equal(await dashboard.getByTestId('overlay-edit-start').isEnabled(), true);
         record.flags.overlayVisibility = true;
+        const opacityControl = dashboard.getByRole('slider', {name: language === 'en' ? 'Background opacity' : 'Непрозрачность фона', exact: true});
+        assert.equal(await opacityControl.getAttribute('aria-valuemin'), '40');
+        assert.equal(await opacityControl.getAttribute('aria-valuemax'), '100');
+        assert.equal(await opacityControl.getAttribute('aria-valuenow'), '80');
+        assert.equal(await opacityControl.getAttribute('aria-disabled'), 'false');
+        record.flags.overlayOpacity = true;
         await observeUnifiedOverlay({application, dashboard, language, size, record});
         await dashboard.locator('.yu-content').evaluate(node => {node.scrollTop = node.scrollHeight;});
         await save('overlay-sections', language, size);
@@ -535,6 +595,13 @@ export async function runUiSmoke({application, dashboard, overlay, source, confi
           assert.equal(await dashboard.getByTestId('overlay-enabled').getAttribute('data-state'), 'checked');
           assert.equal(await dashboard.getByTestId('overlay-edit-start').isEnabled(), true);
           record.flags.visibilityFailedSave = true;
+          const opacity = dashboard.getByRole('slider'); await opacity.focus(); await dashboard.keyboard.press('Home');
+          await until(() => dashboard.getByRole('slider').getAttribute('aria-valuenow'), value => value === '80', 'UI_OPACITY_FAILED_THUMB');
+          await dashboard.getByTestId('overlay-settings-error').waitFor({state: 'visible'});
+          assert.equal((await dashboard.evaluate(() => globalThis.desktop.getAppState())).settings.overlay.backgroundOpacity, 80);
+          assert.match(await dashboard.getByTestId('overlay-opacity-saved').innerText(), /80%/);
+          assert.equal(await opacity.evaluate(node => node === globalThis.document.activeElement), true, 'UI_OPACITY_FAILED_SAVE_FOCUS_LOST');
+          record.flags.opacityFailedSave = true;
           await settingsPanel(dashboard, 'units');
         } finally {await rmdir(settingsFile); await rename(backup, settingsFile);}
         assert.deepEqual(await readFile(settingsFile), bytes);
@@ -559,6 +626,8 @@ export async function runUiSmoke({application, dashboard, overlay, source, confi
           assert.deepEqual(await overlay.evaluate(() => ({html: globalThis.getComputedStyle(globalThis.document.documentElement).backgroundColor, body: globalThis.getComputedStyle(globalThis.document.body).backgroundColor})), {html: 'rgba(0, 0, 0, 0)', body: 'rgba(0, 0, 0, 0)'});
           if (layout === 'card') {assert.equal(await overlay.getByTestId('overlay-card-hero').count(), 1); assert.equal(await overlay.getByTestId('overlay-card-hero').getAttribute('data-count'), '3');}
           if (layout === 'cluster') {assert.equal(await overlay.getByTestId('overlay-rpm-arc').getAttribute('stroke-dasharray'), '50.26548245743669 251.32741228718345');}
+          if (layout === 'strip' && language === 'en' && size === sizes[0]) await observeOpacityControl({dashboard, config, language, record});
+          await observeOpacitySurfaces({dashboard, overlay, layout, language, size, record});
           await save(layout, language, size, overlay);
           // ET-045d: stable strip numbers and the Cluster centre, at the first size; screenshots stay as before.
           if (layout === 'strip' && size === sizes[0]) await observeStripNumbers({application, overlay, source, language, record});
@@ -684,6 +753,9 @@ export async function runUiReadOnly({application, dashboard, config, record, set
     for (const game of ['ets2', 'ats']) for (const profile of ['metric', 'us-customary']) assert.equal(await dashboard.locator(`#units-${game}-${profile}`).isDisabled(), true);
     await capture({page: dashboard, application, config, record, name: 'read-only', language: 'en', size});
     await settingsPanel(dashboard, 'overlay');
+    const opacity = dashboard.getByRole('slider');
+    assert.equal(await opacity.getAttribute('aria-disabled'), 'true');
+    record.flags.opacityReadOnly = true;
     await waitOverlayVisibility(dashboard, {enabled: true, writable: false}, 'UI_OVERLAY_READ_ONLY_RENDERED');
     for (const layout of layouts) assert.equal(await dashboard.locator(`#overlay-layout-${layout}`).isDisabled(), true);
     assert.equal(await dashboard.getByTestId('overlay-edit-start').isDisabled(), true);

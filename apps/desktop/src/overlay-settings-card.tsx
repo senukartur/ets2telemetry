@@ -1,19 +1,21 @@
-import React, {useState} from 'react';
+import React, {useRef, useState} from 'react';
 import type {AppLanguage, OverlayEditState, SettingsView} from '../../../packages/contracts/src';
 import {Button} from '@/components/ui/button';
 import {Card, CardContent, CardHeader, CardTitle} from '@/components/ui/card';
 import {Label} from '@/components/ui/label';
 import {RadioGroup, RadioGroupItem} from '@/components/ui/radio-group';
+import {Slider} from '@/components/ui/slider';
+import {OVERLAY_OPACITY_MAX, OVERLAY_OPACITY_MIN} from './overlay-opacity';
 import {Switch} from '@/components/ui/switch';
 import {OVERLAY_SECTION_ICONS} from './overlay-icons';
 import {OVERLAY_SCALE_MAX, OVERLAY_SCALE_MIN, stepOverlayScale} from './overlay-placement';
 import {
   DEFAULT_OVERLAY_SETTINGS, enabledSectionCount, isOverlayLayout, OVERLAY_GROUPS, OVERLAY_LAYOUTS, OVERLAY_PRESET_IDS, OVERLAY_PRESETS,
-  OVERLAY_SECTION_REQUIREMENTS, sameSections
+  sameSections
 } from './overlay-sections';
 import {
   getOverlayEditPlacementText, getOverlayGroupText, getOverlayLayoutText, getOverlayPresetText,
-  getOverlayRequirementText, getOverlaySectionText, getSettingsSaveErrorText, getStrings
+  getOverlaySectionText, getSettingsSaveErrorText, getStrings
 } from './strings';
 
 const percent = (scale: number) => `${Math.round(scale * 100)}%`;
@@ -35,6 +37,8 @@ export function OverlaySettingsCard({settings, edit, onSaved, onRequest, showSav
   onRequest: () => void;
   showSaveError: boolean;
 }) {
+  const [opacityDraft, setOpacityDraft] = useState<number>();
+  const opacitySaving = useRef(false);
   const [request, setRequest] = useState<'idle' | 'saving' | 'failed'>('idle');
   const [editRequest, setEditRequest] = useState<'idle' | 'pending' | 'failed'>('idle');
   const language: AppLanguage = settings?.language ?? 'en';
@@ -55,6 +59,13 @@ export function OverlaySettingsCard({settings, edit, onSaved, onRequest, showSav
     if (outcome === 'save') onRequest();
     setEditRequest('pending');
     void window.desktop.finishOverlayEdit(outcome).then(view => {onSaved(view); setEditRequest('idle');}, () => setEditRequest('failed'));
+  };
+  const commitOpacity = ([value]: number[]) => {
+    if (opacitySaving.current || !settings?.writable) return;
+    if (value === overlay.backgroundOpacity) {setOpacityDraft(undefined); return;}
+    opacitySaving.current = true; onRequest(); setRequest('saving');
+    void window.desktop.setOverlayBackgroundOpacity(value).then(view => {onSaved(view); setRequest('idle');}, () => setRequest('failed'))
+      .finally(() => {opacitySaving.current = false; setOpacityDraft(undefined);});
   };
   const busy = editRequest === 'pending' || request === 'saving';
   return <Card size="sm" className="yu-overlay-settings" data-testid="overlay-settings"><CardHeader><CardTitle><h2>{strings.overlayTitle}</h2></CardTitle></CardHeader>
@@ -77,6 +88,17 @@ export function OverlaySettingsCard({settings, edit, onSaved, onRequest, showSav
             </svg><span>{getOverlayLayoutText(layout, language)}</span></Label>
           </div>)}
         </RadioGroup>
+      </section>
+      <section className="yu-overlay-block" aria-labelledby="overlay-opacity-label">
+        <Label id="overlay-opacity-label" htmlFor="overlay-opacity-thumb">{strings.overlayOpacityLabel}</Label>
+        <div className="flex flex-wrap items-center gap-4">
+          <Slider className="max-w-sm min-w-32" data-testid="overlay-opacity" thumbId="overlay-opacity-thumb"
+            labelId="overlay-opacity-label" descriptionId="overlay-opacity-help" min={OVERLAY_OPACITY_MIN} max={OVERLAY_OPACITY_MAX} step={1}
+            value={[opacityDraft ?? overlay.backgroundOpacity]} disabled={!settings?.writable} pending={busy}
+            onPointerCancel={() => setOpacityDraft(undefined)} onValueChange={([value]) => setOpacityDraft(value)} onValueCommit={commitOpacity} />
+          <span className="text-sm tabular-nums" data-testid="overlay-opacity-saved">{strings.overlayOpacitySaved}: {overlay.backgroundOpacity}%</span>
+        </div>
+        <p id="overlay-opacity-help" className="text-xs text-muted-foreground">{strings.overlayOpacityHelp}</p>
       </section>
       <section className="yu-overlay-block" aria-labelledby="overlay-placement-label" data-testid="overlay-placement">
         <h3 id="overlay-placement-label" className="font-medium">{strings.overlayPlacementLabel}</h3>
@@ -121,12 +143,11 @@ export function OverlaySettingsCard({settings, edit, onSaved, onRequest, showSav
         {OVERLAY_GROUPS.map(group => <section key={group.id} className="space-y-2" aria-labelledby={`overlay-group-${group.id}`}>
           <h4 id={`overlay-group-${group.id}`} className="text-sm text-muted-foreground">{getOverlayGroupText(group.id, language)}</h4>
           {group.sections.map(id => {
-            const Icon = OVERLAY_SECTION_ICONS[id], requirement = OVERLAY_SECTION_REQUIREMENTS[id], checked = overlay.sections[id];
+            const Icon = OVERLAY_SECTION_ICONS[id], checked = overlay.sections[id];
             return <div key={id} className="yu-overlay-section-row">
               <Switch id={`overlay-section-${id}`} data-testid={`overlay-switch-${id}`} checked={checked} disabled={locked || (checked && enabled === 1)}
                 onCheckedChange={next => save(() => window.desktop.setOverlaySections({...overlay.sections, [id]: next}))} />
-              <div><Label htmlFor={`overlay-section-${id}`}><Icon className="size-4" aria-hidden="true" />{getOverlaySectionText(id, language)}</Label>
-              {requirement ? <span className="text-xs text-muted-foreground" data-testid={`overlay-requirement-${id}`}>({getOverlayRequirementText(requirement, language)})</span> : null}</div>
+              <div><Label htmlFor={`overlay-section-${id}`}><Icon className="size-4" aria-hidden="true" />{getOverlaySectionText(id, language)}</Label></div>
             </div>;
           })}
         </section>)}

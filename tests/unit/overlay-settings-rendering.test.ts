@@ -11,6 +11,7 @@ vi.mock('@/components/ui/card', () => ({Card: 'div', CardContent: 'div', CardHea
 vi.mock('@/components/ui/button', () => ({Button: 'button'}));
 vi.mock('@/components/ui/label', () => ({Label: 'label'}));
 vi.mock('@/components/ui/radio-group', () => ({RadioGroup: 'fieldset', RadioGroupItem: 'button'}));
+vi.mock('@/components/ui/slider', () => ({Slider: 'input'}));
 vi.mock('@/components/ui/switch', () => ({Switch: ({checked, ...props}: {checked: boolean}) =>
   React.createElement('button', {...props, role: 'switch', 'aria-checked': checked})}));
 
@@ -24,6 +25,7 @@ const control = (html: string, id: string) => html.match(new RegExp('<[^>]*data-
 it.each(['en', 'ru'] as const)('renders every overlay control together with unique IDs and localized groups in %s', language => {
   const html = render(settings(language)), strings = getStrings(language);
   expect(html).not.toMatch(/<[^>]*\shidden(?:="[^"]*")?[\s>]/);
+  expect(html).not.toContain('data-testid="overlay-requirement-');
   for (const id of ['overlay-settings', 'overlay-enabled', 'overlay-layout', 'overlay-placement', 'overlay-presets',
     ...['everything', 'job-focus', 'driving-only'].map(id => `overlay-preset-${id}`), ...OVERLAY_SECTION_IDS.map(id => `overlay-switch-${id}`)])
     expect(html.match(new RegExp('data-testid="' + id + '"', 'g')), id).toHaveLength(1);
@@ -35,7 +37,7 @@ it.each(['en', 'ru'] as const)('renders every overlay control together with uniq
     expect(html).toContain(`for="overlay-section-${id}"`);
     expect(html).toContain(escaped(getOverlaySectionText(id, language)));
     const requirement = OVERLAY_SECTION_REQUIREMENTS[id];
-    if (requirement) expect(html).toContain(escaped(getOverlayRequirementText(requirement, language)));
+    if (requirement) expect(html).not.toContain(escaped(getOverlayRequirementText(requirement, language)));
   }
 });
 

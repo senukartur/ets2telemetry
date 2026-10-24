@@ -230,11 +230,9 @@ button[aria-disabled="true"], [role="switch"][aria-disabled="true"] { cursor: no
 .yu-overlay-block { display: grid; gap: 12px; min-width: 0; }
 .yu-overlay-block + .yu-overlay-block { border-top: 1px solid var(--yu-divider); padding-top: 18px; }
 .yu-overlay-section-groups { display: grid; grid-template-columns: repeat(2,minmax(0,1fr)); gap: 20px 24px; }
-.yu-overlay-section-row { display: grid; grid-template-columns: auto minmax(0,1fr); align-items: start; gap: 10px; }
-.yu-overlay-section-row > [role="switch"] { margin-top: 7px; }
+.yu-overlay-section-row { display: grid; grid-template-columns: auto minmax(0,1fr); align-items: center; gap: 10px; }
 .yu-overlay-section-row label { line-height: 1.5; flex-wrap: wrap; }
 .yu-overlay-section-row label svg { flex: none; }
-.yu-overlay-section-row [data-testid^="overlay-requirement-"] { display: block; line-height: 1.5; }
 .yu-overlay-settings button:not([role="radio"]):not([role="switch"]) { white-space: normal; height: auto; }
 @container (max-width: 540px) {
   .yu-overlay-section-groups { grid-template-columns: minmax(0,1fr); }
@@ -245,3 +243,6 @@ button[aria-disabled="true"], [role="switch"][aria-disabled="true"] { cursor: no
 @media (max-width: 900px) {
   .yu-settings { grid-template-columns: minmax(0,1fr); }
 }
+
+/* Keep keyboard focus rings clear of the scroll viewport at fractional renderer zoom (ET-049). */
+.yu-overlay-settings :is(button, [role="slider"]) { scroll-margin-block: 8px; }
