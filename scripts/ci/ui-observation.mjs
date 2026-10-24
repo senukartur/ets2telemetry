@@ -14,10 +14,13 @@ async function observeOpacityControl({dashboard, config, language, record}) {
   const slider = dashboard.getByRole('slider', {name: language === 'en' ? 'Background opacity' : 'Непрозрачность фона', exact: true});
   const value = () => dashboard.evaluate(() => globalThis.desktop.getAppState());
   const wait = expected => until(value, state => state.settings.overlay.backgroundOpacity === expected && !state.settings.saveError, 'UI_OPACITY_COMMITTED');
+  await slider.focus();
   for (const [key, expected] of [['End', 100], ['Home', 40], ['ArrowRight', 41]]) {
-    await slider.focus(); await dashboard.keyboard.press(key); await wait(expected);
+    await dashboard.keyboard.press(key); await wait(expected);
     await until(() => slider.getAttribute('aria-valuenow'), v => v === String(expected), 'UI_OPACITY_THUMB');
     assert.equal(await slider.getAttribute('aria-valuetext'), `${expected}%`);
+    await until(() => slider.getAttribute('aria-disabled'), value => value === 'false', 'UI_OPACITY_KEYBOARD_COMMIT_SETTLED');
+    assert.equal(await slider.evaluate(node => node === globalThis.document.activeElement), true, 'UI_OPACITY_KEYBOARD_FOCUS_LOST');
   }
   await dashboard.evaluate(() => globalThis.desktop.setOverlayBackgroundOpacity(80)); await wait(80);
   const track = await dashboard.getByTestId('overlay-opacity').boundingBox(), thumb = await slider.boundingBox();
@@ -31,6 +34,7 @@ async function observeOpacityControl({dashboard, config, language, record}) {
     assert.equal(JSON.parse(await readFile(path.join(config.localappdata, 'ETS2Telemetry/settings/settings.json'), 'utf8')).overlay.backgroundOpacity, candidate);
   } finally {await dashboard.mouse.up();}
   await dashboard.evaluate(() => globalThis.desktop.setOverlayBackgroundOpacity(80)); await wait(80);
+  record.flags.opacityKeyboardFocus = true;
   record.flags.opacityGestures = true;
 }
 async function observeOpacitySurfaces({dashboard, overlay, layout, language, size, record}) {
@@ -596,6 +600,7 @@ export async function runUiSmoke({application, dashboard, overlay, source, confi
           await dashboard.getByTestId('overlay-settings-error').waitFor({state: 'visible'});
           assert.equal((await dashboard.evaluate(() => globalThis.desktop.getAppState())).settings.overlay.backgroundOpacity, 80);
           assert.match(await dashboard.getByTestId('overlay-opacity-saved').innerText(), /80%/);
+          assert.equal(await opacity.evaluate(node => node === globalThis.document.activeElement), true, 'UI_OPACITY_FAILED_SAVE_FOCUS_LOST');
           record.flags.opacityFailedSave = true;
           await settingsPanel(dashboard, 'units');
         } finally {await rmdir(settingsFile); await rename(backup, settingsFile);}

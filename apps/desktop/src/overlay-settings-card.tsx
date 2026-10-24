@@ -94,7 +94,7 @@ export function OverlaySettingsCard({settings, edit, onSaved, onRequest, showSav
         <div className="flex flex-wrap items-center gap-4">
           <Slider className="max-w-sm min-w-32" data-testid="overlay-opacity" thumbId="overlay-opacity-thumb"
             labelId="overlay-opacity-label" descriptionId="overlay-opacity-help" min={OVERLAY_OPACITY_MIN} max={OVERLAY_OPACITY_MAX} step={1}
-            value={[opacityDraft ?? overlay.backgroundOpacity]} disabled={locked || busy}
+            value={[opacityDraft ?? overlay.backgroundOpacity]} disabled={!settings?.writable} pending={busy}
             onPointerCancel={() => setOpacityDraft(undefined)} onValueChange={([value]) => setOpacityDraft(value)} onValueCommit={commitOpacity} />
           <span className="text-sm tabular-nums" data-testid="overlay-opacity-saved">{strings.overlayOpacitySaved}: {overlay.backgroundOpacity}%</span>
         </div>
