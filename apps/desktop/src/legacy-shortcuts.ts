@@ -27,7 +27,12 @@ export const LEGACY_SHORTCUT_NAMES: readonly string[] = Object.freeze(['ETS2Tele
 export const SQUIRREL_APP_ID = 'ETS2TelemetryDesktop';
 /** A shortcut Squirrel writes is a few KiB; a larger file at that name is not one of them. */
 export const MAX_SHORTCUT_BYTES = 64 * 1024;
-/** The whole step gets at most this long inside a Squirrel hook. */
+/**
+ * The whole step gets at most this long inside a Squirrel hook. The deadline is checked between candidates and before
+ * each unlink, not inside a call: `shell.readShortcutLink` is synchronous and `lstat`/`unlink` have no timeout, so a
+ * redirected or offline Desktop can make one call outlast it. The documented hook worst cases assume local, responsive
+ * folders; past them only Squirrel's own hook timeout applies, an old shortcut is then kept and the exit code is unchanged.
+ */
 export const LEGACY_SHORTCUT_BUDGET_MS = 1000;
 const APP_DIRECTORY = /^app-\d{1,9}\.\d{1,9}\.\d{1,9}(-[0-9A-Za-z.-]{1,40})?$/i;
 const DRIVE_PATH = /^[A-Za-z]:\\/;

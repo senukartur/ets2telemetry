@@ -651,9 +651,10 @@ describe('harness shortcut helpers at runtime (ET-045h)', () => {
   const shells: [string, string][] = [['Windows PowerShell 5.1', path.join(systemRoot, 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe')]];
   if (pwsh) shells.push(['PowerShell 7', pwsh]);
   // Windows PowerShell 5.1 started from PowerShell 7 (the hosted step's shell) inherits PS7's PSModulePath and then cannot
-  // load its own Microsoft.PowerShell.Utility (Get-FileHash), so 5.1 gets its system module path, as plugin-installer.test.ts does.
+  // load its own Microsoft.PowerShell.Utility (Get-FileHash). 5.1 therefore gets an empty PSModulePath, under every spelling
+  // of the name, so it computes its default module path, as tests/shared/runtime-receipt-validator.ts does.
   const environment = (shell: string) => shell === pwsh ? process.env
-    : {...process.env, PSModulePath: path.win32.join(systemRoot, 'System32', 'WindowsPowerShell', 'v1.0', 'Modules')};
+    : {...Object.fromEntries(Object.entries(process.env).filter(([name]) => name.toUpperCase() !== 'PSMODULEPATH')), PSModulePath: ''};
   // The temporary folder can be named in 8.3 form (C:\Users\RUNNER~1) while the helpers report long names, so the shortcut
   // folders are compared as real paths.
   const real = (file: unknown) => typeof file === 'string' ? realpathSync.native(file) : file;
