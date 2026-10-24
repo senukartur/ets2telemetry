@@ -1,6 +1,7 @@
 import {createHash} from 'node:crypto';
 import * as fsp from 'node:fs/promises';
 import path from 'node:path';
+import type {UninstallEntryRegistry} from '../../apps/desktop/src/installed-app-icon';
 import type {RunningCheck} from '../../apps/desktop/src/plugin-setup/plugin-installer';
 import type {InstallRecord, PendingIntent} from '../../apps/desktop/src/plugin-setup/plugin-registry';
 import type {UninstallFileSystem} from '../../apps/desktop/src/uninstall/engine';
@@ -125,6 +126,34 @@ export interface FakeRunOnce extends RunOnceRegistry {
   /** `set <key>`, `remove <key>` and `read <key>`, in order. */
   readonly calls: string[];
 }
+export interface FakeUninstallEntry extends UninstallEntryRegistry {
+  /** The DisplayIcon data of every attempt, in order. */
+  readonly calls: string[];
+  /** The value after the last successful attempt, or null. */
+  readonly displayIcon: () => string | null;
+}
+/**
+ * ET-045g: an in-memory uninstall-entry registry; it never reaches Windows. `results` answers the attempts in order (the
+ * last answer repeats; default success), and `gate` holds every attempt until it resolves.
+ */
+export function fakeUninstallEntry(options: {results?: readonly boolean[]; gate?: Promise<void>; onSet?: () => void} = {}): FakeUninstallEntry {
+  const calls: string[] = [];
+  let value: string | null = null;
+  return {
+    calls,
+    displayIcon: () => value,
+    setDisplayIcon: async data => {
+      calls.push(data);
+      options.onSet?.();
+      if (options.gate) await options.gate;
+      const results = options.results ?? [true];
+      const ok = results[Math.min(calls.length - 1, results.length - 1)];
+      if (ok) value = data;
+      return ok;
+    }
+  };
+}
+
 /** An in-memory RunOnce registry for the uninstall tests; `fail` makes every set and remove fail, `onSet` observes a set. */
 export function fakeRunOnce(options: {fail?: boolean; onSet?: () => void} = {}): FakeRunOnce {
   const values = new Map<string, string>(), calls: string[] = [];

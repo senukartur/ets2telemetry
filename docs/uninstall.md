@@ -103,6 +103,8 @@ ET-018 PR-3 (plan U2, U6). Windows Settings, Apps and Control Panel run the regi
 
 `complete` is impossible while anything remains: the hook downgrades an engine result of `complete` to `deferred` with `RESIDUE_REMAINS` when a folder is blocked, a data entry failed or the data root still exists.
 
+**The Installed apps icon (ET-045g).** The install and updated hooks place `<install root>\app.ico` and set the uninstall entry's `DisplayIcon` ([releases](release.md#installed-apps-icon-et-045g)). Both belong to Squirrel's layout, not to the data root: Squirrel's uninstall deletes the install root's files, `app.ico` among them, and `RemoveUninstallerRegistryEntry` deletes the key with its `DisplayIcon`. The engine, its roots (U3) and its allowlist (U4) are unchanged and never touch either. The hosted [residue check](installer-testing.md#binary-root-residue) refuses an `app.ico` left in the binary root.
+
 ### Receipt
 
 `%TEMP%\ETS2Telemetry-uninstall-<yyyymmddThhmmssmmmZ>.json`, created new (never overwritten), with fixed codes, counts and allowlisted entry names only, never a path:

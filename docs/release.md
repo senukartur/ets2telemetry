@@ -22,6 +22,22 @@ ET-018 PR-6 (October 18, 2026) records what a release build is made of and wheth
 
 The maker also sets `authors` (`ETS2Telemetry contributors`, which electron-winstaller also uses for the NuGet `owners` and `copyright`) and `description` in the package's nuspec. They are cosmetic.
 
+### Installed apps icon (ET-045g)
+
+Windows Settings → Installed apps showed the Electron atom, while the window, tray, taskbar, Start menu and Desktop icons were right. The cause is in the pinned tools: electron-winstaller 5.4.4 sets `iconUrl` to the Electron icon on GitHub when the maker gives none, and Squirrel's `CreateUninstallerRegistryEntry` (commit `eef37460ae`) downloads it into `<install root>\app.ico` and points the uninstall entry's `DisplayIcon` at that file, but only when the file does not exist yet ([installer testing](installer-testing.md#squirrel-behaviour-of-the-pinned-electron-winstaller)). `setupIcon` changes only Setup.exe's own icon.
+
+Under owner decision D3 of October 24, 2026 our own hooks fix it, without relying on `iconUrl`:
+
+- Forge ships `resources/icon` as an extra resource, so every installed version has `app-<version>\resources\icon\app.ico`, the tracked icon that is also embedded in the executable and Setup. `inspect-package.mjs` requires exactly that file with the tracked bytes; `--installer` checks that the NuGet package carries the same files.
+- `--squirrel-install` and `--squirrel-updated` run before Squirrel's registration. Beside the shortcuts, they place that icon at `<install root>\app.ico` (atomically, read back and compared, never through a link; a failure keeps the previous file) and set `DisplayIcon` of `HKCU\Software\Microsoft\Windows\CurrentVersion\Uninstall\ETS2TelemetryDesktop` to `<install root>\app-<version>\ETS2TelemetryDesktop.exe,0` through `reg.exe` with fixed arguments, one retry and 2 s per attempt (`apps/desktop/src/installed-app-icon.ts`). With `app.ico` in place Squirrel downloads nothing and leaves `DisplayIcon` alone. The value changes with every version, so Windows is not expected to reuse an icon it cached for the old value; the owner check confirms it. Nothing clears the icon cache.
+- `iconUrl` stays the default: electron-winstaller accepts HTTP(S) URLs only, and no other value was verified.
+
+Residual risks, by which part of the hook fails:
+
+- **The icon placement fails on a fresh install.** Then `app.ico` is missing, so Squirrel downloads the atom again (online) and points `DisplayIcon` at it for that version.
+- **The `DisplayIcon` write fails after the icon was placed, on a fresh install.** Squirrel then skips its icon branch, because `app.ico` exists, so the entry has no `DisplayIcon`. Windows shows a generic icon until the next install or update.
+- **The `DisplayIcon` write fails on an update.** The entry keeps its old value. If that value is Squirrel's `<install root>\app.ico`, the file now holds the product bytes. If it is the previous version's executable, it still shows the product icon while that `app-` folder exists. After two such failures in a row, the value names an `app-` folder that no longer exists, and Windows shows a generic icon, not the atom. If Squirrel's install fails after the hook created the key, a key with only `DisplayIcon` stays; it has no `DisplayName`, so Installed apps does not list it, and the next install or uninstall replaces or deletes it. Names, the Setup file name and the Squirrel id are unchanged here (ET-045h). The real Installed apps view remains an owner check ([ET-045g validation](validation/et-045g.md)).
+
 Only the artifact built by Windows CI on a push to `main` or a dispatch is ever shipped, never a local build: MSVC builds are not reproducible, and the [released plugin list](plugin-setup.md#released-plugin-list) must name the shipped DLL's hash.
 
 ## Release identity

@@ -66,6 +66,18 @@ export function checkInstallTest(document: unknown, runRoot: string): void;
 export function checkRunPlan(facts: RunPlanFacts): string[];
 export function checkedPaths(facts: {runRoot: string; paths?: string[]; decoy?: string}): string[];
 export function checkInstalled(facts: InstalledFacts): void;
+export const PRODUCT_EXECUTABLE: string;
+export const ROOT_ICON_FILE: string;
+export type RegistrationIconShape = 'root-app-ico' | 'app-exe-index-0' | 'absent' | 'other';
+export function classifyRegistrationIcon(facts: {displayIcon: unknown; binaryRoot: string; version: string}): {shape: RegistrationIconShape; versionMatches: boolean | null};
+export interface IconFileObservation {regularFile: boolean; sha256: string | null}
+export interface RegistrationIconObservation {
+  displayIcon: {shape: RegistrationIconShape; versionMatches: boolean | null};
+  rootIcon: IconFileObservation;
+  bundledIcon: IconFileObservation;
+  trackedSha256: string;
+}
+export function checkRegistrationIcon(observation: RegistrationIconObservation): void;
 export function minimalPath(systemRoot: string | undefined): string;
 export function installedEnvironment(base: Readonly<Record<string, string | undefined>>, overrides: Record<string, string>): Record<string, string>;
 export function checkLaunchEnvironment(env: Readonly<Record<string, string | undefined>>, context: {runRoot: string; real: KnownFolders}): void;

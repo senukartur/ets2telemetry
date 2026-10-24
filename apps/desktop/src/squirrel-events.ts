@@ -1,6 +1,8 @@
 import {mkdirSync} from 'node:fs';
 import * as nodeFs from 'node:fs/promises';
 import path from 'node:path';
+import {ICON_RESOURCE_DIRECTORY, INSTALLED_ICON_FILE, MAX_ICON_BYTES, registerInstalledIcon, regExeUninstallEntry, type InstalledIconResult,
+  type UninstallEntryRegistry} from './installed-app-icon';
 import {nodeExecFile, runFixedProgram, systemRoot} from './plugin-setup/fixed-program';
 import {checkRunningGames, listProcessSessions} from './plugin-setup/game-processes';
 import {pluginBundleDirectory, readPluginBundle} from './plugin-setup/plugin-bundle';
@@ -18,7 +20,9 @@ import {resolveUninstallRoots, type UninstallRoots, type UninstallRootsRefusal} 
 //
 // - `--squirrel-install` and `--squirrel-updated` create the shortcuts through `Update.exe --createShortcut` (skipped in a
 //   test install unless its test file asks for them) and cancel a pending uninstall deferral, with its RunOnce
-//   registration. They never delete data.
+//   registration. Beside the shortcuts, they place the bundled product icon at `<install root>\app.ico` and set this
+//   product's DisplayIcon to the versioned executable's icon 0 (ET-045g, owner decision D3; installed-app-icon.ts), so
+//   Windows Settings shows the product icon instead of the Electron atom Squirrel would download. They never delete data.
 // - `--squirrel-obsolete` (the previous version after an update) quits. It never deletes anything.
 // - `--squirrel-uninstall` closes a running instance through the single-instance lock, then runs the uninstall engine
 //   within a global 8 s deadline, inside Squirrel's 10 s hook budget. Before the engine deletes anything it copies the
@@ -161,6 +165,10 @@ export interface SquirrelPorts {
   readonly windowsDirectory: string;
   /** The packaged deferred-cleanup executor's bytes, or undefined when it cannot be read. */
   readExecutor(): Promise<Uint8Array | undefined>;
+  /** ET-045g: the packaged product icon's bytes (`resources\icon\app.ico`), or undefined when it cannot be read. */
+  readBundledIcon(): Promise<Uint8Array | undefined>;
+  /** ET-045g: this product's uninstall entry DisplayIcon through reg.exe in production; tests inject a fake. */
+  readonly uninstallEntry: UninstallEntryRegistry;
   readonly checkRunning: RunningCheck;
   /** The bundle's own and earlier released plugin hashes; empty when the bundle cannot be read. */
   readKnown(): Promise<readonly string[]>;
@@ -204,17 +212,25 @@ export async function runSquirrelEvent(args: SquirrelArgs, ports: SquirrelPorts)
 }
 
 /**
- * install and updated: the shortcuts, then cancelling a pending deferral and its RunOnce registration. Nothing is deleted
- * but the deferral's own files.
+ * install and updated: the shortcuts and, at the same time, the Installed apps icon (ET-045g), then cancelling a pending
+ * deferral and its RunOnce registration. Nothing is deleted but the deferral's own files. Squirrel waits 15 s for these
+ * hooks: the shortcuts take at most SHORTCUT_TIMEOUT_MS (10 s) and the icon at most two DisplayIcon attempts of
+ * REG_TIMEOUT_MS (2 s each) beside them, and the disarm at most REG_TIMEOUT_MS after both, so 12 s at worst. A failure of
+ * either step changes neither the other nor the exit code.
  */
-async function installed(ports: SquirrelPorts): Promise<{shortcuts: ShortcutState; deferral: CancelOutcome | 'not-installed'; executor: ExecutorState}> {
+async function installed(ports: SquirrelPorts): Promise<{shortcuts: ShortcutState; icon: InstalledIconResult | 'not-run'; deferral: CancelOutcome | 'not-installed';
+  executor: ExecutorState}> {
   const roots = await ports.resolveRoots().catch((): UninstallRoots => ({ok: false, code: 'NOT_INSTALLED'}));
-  if (!roots.ok) return {shortcuts: 'skipped', deferral: 'not-installed', executor: 'not-run'};
-  const shortcuts: ShortcutState = !wantsShortcuts(roots, ports) ? 'skipped'
-    : await ports.runUpdate(roots.installRoot, [`--createShortcut=${ports.executableName}`], SHORTCUT_TIMEOUT_MS).then((ok): ShortcutState => ok ? 'created' : 'failed', (): ShortcutState => 'failed');
+  if (!roots.ok) return {shortcuts: 'skipped', icon: 'not-run', deferral: 'not-installed', executor: 'not-run'};
+  const shortcutStep: Promise<ShortcutState> = !wantsShortcuts(roots, ports) ? Promise.resolve<ShortcutState>('skipped')
+    : ports.runUpdate(roots.installRoot, [`--createShortcut=${ports.executableName}`], SHORTCUT_TIMEOUT_MS).then((ok): ShortcutState => ok ? 'created' : 'failed', (): ShortcutState => 'failed');
+  const iconStep = registerInstalledIcon({roots, fs: ports.fs, readBundledIcon: () => ports.readBundledIcon(), registry: ports.uninstallEntry,
+    executableName: ports.executableName, timeoutMs: REG_TIMEOUT_MS, delay: milliseconds => ports.delay(milliseconds)})
+    .catch((): InstalledIconResult => ({icon: 'failed', displayIcon: 'failed'}));
+  const [shortcuts, icon] = await Promise.all([shortcutStep, iconStep]);
   const deferral = await cancelDeferral(ports.fs, roots.dataRoot).catch((): CancelOutcome => 'failed');
   const executor = deferral === 'none' ? 'not-run' : await disarmExecutor(roots, ports.runOnce, REG_TIMEOUT_MS).catch((): ExecutorState => 'failed');
-  return {shortcuts, deferral, executor};
+  return {shortcuts, icon, deferral, executor};
 }
 
 /** Production installs always manage shortcuts; a test install only when its test file sets `shortcuts: true`. */
@@ -417,6 +433,15 @@ export function productionSquirrelPorts(options: {app: SquirrelApp; appVersion: 
       if (!stats.isFile() || stats.isSymbolicLink() || stats.size > MAX_EXECUTOR_BYTES) return undefined;
       return nodeFs.readFile(file);
     },
+    // ET-045g: the product icon Forge ships as an extra resource (resources\icon\app.ico); registerInstalledIcon checks
+    // that it is an icon file.
+    readBundledIcon: async () => {
+      const file = path.join(options.resourcesPath, ICON_RESOURCE_DIRECTORY, INSTALLED_ICON_FILE);
+      const stats = await nodeFs.lstat(file);
+      if (!stats.isFile() || stats.isSymbolicLink() || stats.size > MAX_ICON_BYTES) return undefined;
+      return nodeFs.readFile(file);
+    },
+    uninstallEntry: regExeUninstallEntry(env),
     checkRunning: signal => checkRunningGames({signal}),
     // Only this process's Windows session: another user's copy cannot hold this install's files open for long, and its
     // processes are never waited on (their session number is not this one).
