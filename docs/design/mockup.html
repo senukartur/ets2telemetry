@@ -222,7 +222,6 @@ table.t tbody tr:hover td { background: rgba(255,255,255,.025); }
 .lopt .th i { position: absolute; background: rgba(11,17,32,.85); border: 1px solid rgba(96,165,250,.5); border-radius: 3px; }
 .secrow { display: flex; width: 100%; align-items: center; justify-content: space-between; gap: 10px; min-height: 40px; padding: 0 2px; border: 0; border-top: 1px solid var(--yu-divider); background: transparent; color: var(--yu-text); font-size: 13px; cursor: pointer; text-align: left; }
 .secrow:first-of-type { border-top: 0; }
-.secrow .req { font-size: 11px; color: var(--yu-text-muted); margin-left: 6px; }
 
 /* Wizard */
 .wiz { flex: 1; display: grid; grid-template-columns: 300px minmax(0,1fr); min-height: 0; }
@@ -753,7 +752,6 @@ function tripScreen() {
 
 /* ---------- Settings ---------- */
 var SECGROUPS = [['driving', ['speed', 'gear', 'rpm']], ['fuel', ['fuel', 'range', 'sdk-consumption']], ['job', ['cargo', 'origin', 'destination', 'distance-driven', 'distance-remaining', 'deadline', 'expected-income']], ['time', ['game-time']], ['status', ['hard-mode']]];
-var SECREQ = { 'origin': 'v1', 'distance-remaining': 'v1', 'deadline': 'v1', 'distance-driven': 'trip', 'cargo': 'ids', 'destination': 'ids' };
 var ALLSECS = []; SECGROUPS.forEach(function (g) { g[1].forEach(function (s) { ALLSECS.push(s); }); });
 var PRESETS = { everything: ALLSECS, job: ['speed', 'gear', 'fuel', 'cargo', 'destination', 'distance-remaining', 'deadline', 'hard-mode'], driving: ['speed', 'gear', 'rpm', 'fuel', 'range'] };
 function on(k) { return !S.on || S.on[k] !== false; }
@@ -778,7 +776,7 @@ function settingsScreen() {
     var preset = ['everything', 'job', 'driving'].filter(function (p) { return currentSections.every(function (k) { return on(k) === (PRESETS[p].indexOf(k) >= 0); }); })[0];
     var groups = SECGROUPS.filter(function (g) { return g[0] !== 'status'; }).map(function (g) {
       return '<section aria-labelledby="settings-overlay-group-' + g[0] + '"><h4 id="settings-overlay-group-' + g[0] + '" class="label b6">' + t('g.' + g[0]) + '</h4>' + g[1].map(function (id) {
-        return '<button class="secrow" data-sect="' + id + '" aria-pressed="' + on(id) + '"><span>' + t('sec.' + id) + (SECREQ[id] ? '<span class="req">' + t('sec.req.' + SECREQ[id]) + '</span>' : '') + '</span><span class="switch ' + (on(id) ? 'on' : '') + '"></span></button>';
+        return '<button class="secrow" data-sect="' + id + '" aria-pressed="' + on(id) + '"><span>' + t('sec.' + id) + '</span><span class="switch ' + (on(id) ? 'on' : '') + '"></span></button>';
       }).join('') + '</section>';
     }).join('');
     var presets = '<section data-spec="settings.overlay.presets"><h3>' + t('s.o.presets') + '</h3><div class="row" style="flex-wrap:wrap">' + ['everything', 'job', 'driving'].map(function (id) {
@@ -952,8 +950,8 @@ var NOTES = {
     ['journal.filters', 'journal.table', 'journal.pager']],
   trip: ['Trip details (ui-spec §5.4)', ['Planned, observed and game-reported distance stay separate; expected income and revenue/penalty stay separate; real and game time stay separate.', 'Tabs map to the existing Summary / Timeline / Completeness views of ET-016.', 'Hard Mode card shows the evaluation at job start and at delivery (ET-026b snapshot).'],
     ['trip.header', 'trip.tiles', 'trip.detailTabs', 'trip.hardMode', 'trip.money']],
-  settingsRu: ['Настройки (ui-spec §5.5)', ['Одна страница «Оверлей»: видимость, вид, положение и размер, наборы и четырнадцать переключателей с пояснениями.', 'При редактировании вид заблокирован; размер и сброс — черновик до «Готово», а отмена ничего не записывает. Непрозрачность запланирована.'], ['settings.nav', 'settings.overlay', 'settings.overlay.presets', 'settings.overlay.groups']],
-  settings : ['Settings (ui-spec §5.5)', ['Left sub-navigation replaces the current single long dashboard column. Each panel is a card with the blue title bar.', 'One Overlay page contains visibility, layout, position and size, presets and all fourteen section switches with requirement notes. Layout is locked during editing; scale and reset are drafts until Done, and Cancel writes nothing. Opacity is Planned.', 'Start with Windows is shown as Planned: autostart is not authorized yet.'],
+  settingsRu: ['Настройки (ui-spec §5.5)', ['Одна страница «Оверлей»: видимость, вид, положение и размер, наборы и четырнадцать переключателей без технических пояснений в скобках.', 'При редактировании вид заблокирован; размер и сброс — черновик до «Готово», а отмена ничего не записывает. Непрозрачность запланирована.'], ['settings.nav', 'settings.overlay', 'settings.overlay.presets', 'settings.overlay.groups']],
+  settings : ['Settings (ui-spec §5.5)', ['Left sub-navigation replaces the current single long dashboard column. Each panel is a card with the blue title bar.', 'One Overlay page contains visibility, layout, position and size, presets and all fourteen section switches without parenthetical technical notes. Layout is locked during editing; scale and reset are drafts until Done, and Cancel writes nothing. Opacity is Planned.', 'Start with Windows is shown as Planned: autostart is not authorized yet.'],
     ['settings.nav', 'settings.overlay', 'settings.overlay.presets', 'settings.overlay.groups']],
   hardMode: ['Hard Mode (ET-047)', ['Dedicated page between Live and Journal. All twelve conditions and evidence are inline; no drawer. Current settings do not restore lost trip qualification.'], ['hardMode.screen', 'hardMode.criteria']],
   account: ['Account & sync (ui-spec §5.6)', ['Server phase, not in the MVP. Drawn so the shell reserves its place and the dashboard team sees the flow.', 'Token is masked by default; uploading is not acceptance.', 'Switch Connection to Lost to see the offline queue state.'], ['account.token', 'account.status', 'account.firstSync']],
