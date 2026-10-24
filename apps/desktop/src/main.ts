@@ -66,7 +66,7 @@ if (squirrelArgs.kind !== 'none') {
   // Before anything else: no GPU or network-service child process may outlive this process (Squirrel deletes the folder).
   prepareSquirrelProcess(app);
   void runSquirrelEvent(squirrelArgs, productionSquirrelPorts({app, appVersion: version, executable: process.execPath, env: process.env, mainDirectory: __dirname,
-    resourcesPath: process.resourcesPath})).then(code => app.exit(code), () => app.exit(EXIT_CODES.refused));
+    resourcesPath: process.resourcesPath, shell})).then(code => app.exit(code), () => app.exit(EXIT_CODES.refused));
 } else {
   // The diagnostic profile override must precede the single-instance lock, which Electron keys by userData.
   let profileError: unknown;

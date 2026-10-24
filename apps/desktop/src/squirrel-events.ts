@@ -3,6 +3,7 @@ import * as nodeFs from 'node:fs/promises';
 import path from 'node:path';
 import {ICON_RESOURCE_DIRECTORY, INSTALLED_ICON_FILE, MAX_ICON_BYTES, registerInstalledIcon, regExeUninstallEntry, type InstalledIconResult,
   type UninstallEntryRegistry} from './installed-app-icon';
+import {LEGACY_SHORTCUT_BUDGET_MS, removeLegacyShortcuts, type LegacyShortcutResult, type ShortcutFolders, type ShortcutLink} from './legacy-shortcuts';
 import {nodeExecFile, runFixedProgram, systemRoot} from './plugin-setup/fixed-program';
 import {checkRunningGames, listProcessSessions} from './plugin-setup/game-processes';
 import {pluginBundleDirectory, readPluginBundle} from './plugin-setup/plugin-bundle';
@@ -22,13 +23,15 @@ import {resolveUninstallRoots, type UninstallRoots, type UninstallRootsRefusal} 
 //   test install unless its test file asks for them) and cancel a pending uninstall deferral, with its RunOnce
 //   registration. Beside the shortcuts, they place the bundled product icon at `<install root>\app.ico` and set this
 //   product's DisplayIcon to the versioned executable's icon 0 (ET-045g, owner decision D3; installed-app-icon.ts), so
-//   Windows Settings shows the product icon instead of the Electron atom Squirrel would download. They never delete data.
+//   Windows Settings shows the product icon instead of the Electron atom Squirrel would download. Once the new-name
+//   shortcuts exist, they delete this install's old "ETS2Telemetry Desktop" shortcuts beside them (ET-045h, owner
+//   decision D2; legacy-shortcuts.ts). They never delete data.
 // - `--squirrel-obsolete` (the previous version after an update) quits. It never deletes anything.
 // - `--squirrel-uninstall` closes a running instance through the single-instance lock, then runs the uninstall engine
 //   within a global 8 s deadline, inside Squirrel's 10 s hook budget. Before the engine deletes anything it copies the
 //   deferred-cleanup executor and registers it under RunOnce (ET-018 PR-5, U7); only a complete run removes the
 //   registration, last. It writes one bounded receipt into %TEMP% with fixed codes and counts, never a path, and exits
-//   0 (complete), 3 (deferred) or 4 (refused).
+//   0 (complete), 3 (deferred) or 4 (refused). Beside the engine it removes the shortcuts, the old-name ones included.
 // - `--squirrel-firstrun` alone starts the application normally. Any other argument that starts with `--squirrel` is
 //   refused: the process exits 4 and changes nothing.
 //
@@ -169,6 +172,10 @@ export interface SquirrelPorts {
   readBundledIcon(): Promise<Uint8Array | undefined>;
   /** ET-045g: this product's uninstall entry DisplayIcon through reg.exe in production; tests inject a fake. */
   readonly uninstallEntry: UninstallEntryRegistry;
+  /** ET-045h: the Desktop and Start menu Programs folders Squirrel writes shortcuts to; undefined when unknown. */
+  shortcutFolders(): ShortcutFolders | undefined;
+  /** ET-045h: a shortcut's target, arguments and AUMID (Electron's shell.readShortcutLink); undefined on any failure. */
+  readShortcut(file: string): ShortcutLink | undefined;
   readonly checkRunning: RunningCheck;
   /** The bundle's own and earlier released plugin hashes; empty when the bundle cannot be read. */
   readKnown(): Promise<readonly string[]>;
@@ -212,25 +219,48 @@ export async function runSquirrelEvent(args: SquirrelArgs, ports: SquirrelPorts)
 }
 
 /**
- * install and updated: the shortcuts and, at the same time, the Installed apps icon (ET-045g), then cancelling a pending
- * deferral and its RunOnce registration. Nothing is deleted but the deferral's own files. Squirrel waits 15 s for these
- * hooks: the shortcuts take at most SHORTCUT_TIMEOUT_MS (10 s) and the icon at most two DisplayIcon attempts of
- * REG_TIMEOUT_MS (2 s each) beside them, and the disarm at most REG_TIMEOUT_MS after both, so 12 s at worst. A failure of
- * either step changes neither the other nor the exit code.
+ * install and updated: the shortcuts and, at the same time, the Installed apps icon (ET-045g), then, at the same time,
+ * the old-name shortcuts (ET-045h) and cancelling a pending deferral with its RunOnce registration. Nothing is deleted
+ * but the deferral's own files and this install's old-name shortcuts. Squirrel waits 15 s for these hooks: the shortcuts
+ * take at most SHORTCUT_TIMEOUT_MS (10 s) and the icon at most two DisplayIcon attempts of REG_TIMEOUT_MS (2 s each)
+ * beside them; after both, the old-name shortcuts take at most LEGACY_SHORTCUT_BUDGET_MS (1 s) beside the disarm's
+ * REG_TIMEOUT_MS, so 12 s at worst. A failure of any step changes neither the others nor the exit code.
+ *
+ * Squirrel runs `--squirrel-install` for every Setup, also a newer Setup over an existing install, and
+ * `--squirrel-updated` only for `Update.exe --update`, so both events migrate the old-name shortcuts. They are deleted
+ * only after `--createShortcut` succeeded and only where the new-name shortcut exists: a failed creation never leaves the
+ * user without a shortcut, and the next install or update tries again.
  */
 async function installed(ports: SquirrelPorts): Promise<{shortcuts: ShortcutState; icon: InstalledIconResult | 'not-run'; deferral: CancelOutcome | 'not-installed';
-  executor: ExecutorState}> {
+  executor: ExecutorState; legacyShortcuts: LegacyShortcutResult | 'not-run'}> {
   const roots = await ports.resolveRoots().catch((): UninstallRoots => ({ok: false, code: 'NOT_INSTALLED'}));
-  if (!roots.ok) return {shortcuts: 'skipped', icon: 'not-run', deferral: 'not-installed', executor: 'not-run'};
-  const shortcutStep: Promise<ShortcutState> = !wantsShortcuts(roots, ports) ? Promise.resolve<ShortcutState>('skipped')
+  if (!roots.ok) return {shortcuts: 'skipped', icon: 'not-run', deferral: 'not-installed', executor: 'not-run', legacyShortcuts: 'not-run'};
+  const managed = wantsShortcuts(roots, ports);
+  const shortcutStep: Promise<ShortcutState> = !managed ? Promise.resolve<ShortcutState>('skipped')
     : ports.runUpdate(roots.installRoot, [`--createShortcut=${ports.executableName}`], SHORTCUT_TIMEOUT_MS).then((ok): ShortcutState => ok ? 'created' : 'failed', (): ShortcutState => 'failed');
   const iconStep = registerInstalledIcon({roots, fs: ports.fs, readBundledIcon: () => ports.readBundledIcon(), registry: ports.uninstallEntry,
     executableName: ports.executableName, timeoutMs: REG_TIMEOUT_MS, delay: milliseconds => ports.delay(milliseconds)})
     .catch((): InstalledIconResult => ({icon: 'failed', displayIcon: 'failed'}));
   const [shortcuts, icon] = await Promise.all([shortcutStep, iconStep]);
-  const deferral = await cancelDeferral(ports.fs, roots.dataRoot).catch((): CancelOutcome => 'failed');
-  const executor = deferral === 'none' ? 'not-run' : await disarmExecutor(roots, ports.runOnce, REG_TIMEOUT_MS).catch((): ExecutorState => 'failed');
-  return {shortcuts, icon, deferral, executor};
+  const legacyStep = managed && shortcuts === 'created' ? legacyShortcuts(ports, roots.installRoot, true, Number.POSITIVE_INFINITY)
+    : Promise.resolve<'not-run'>('not-run');
+  const deferralStep = (async () => {
+    const deferral = await cancelDeferral(ports.fs, roots.dataRoot).catch((): CancelOutcome => 'failed');
+    const executor = deferral === 'none' ? 'not-run' : await disarmExecutor(roots, ports.runOnce, REG_TIMEOUT_MS).catch((): ExecutorState => 'failed');
+    return {deferral, executor};
+  })();
+  const [legacy, {deferral, executor}] = await Promise.all([legacyStep, deferralStep]);
+  return {shortcuts, icon, deferral, executor, legacyShortcuts: legacy};
+}
+
+/**
+ * The old-name shortcut step (ET-045h): at most LEGACY_SHORTCUT_BUDGET_MS from now, never past `deadline`. A failure
+ * counts as one failed removal; it never throws.
+ */
+function legacyShortcuts(ports: SquirrelPorts, installRoot: string, requireCurrent: boolean, deadline: number): Promise<LegacyShortcutResult> {
+  return removeLegacyShortcuts({installRoot, executableName: ports.executableName, requireCurrent, deadline: Math.min(deadline, ports.clock() + LEGACY_SHORTCUT_BUDGET_MS),
+    ports: {fs: ports.fs, folders: () => ports.shortcutFolders(), readShortcut: file => ports.readShortcut(file), clock: () => ports.clock()}})
+    .catch((): LegacyShortcutResult => ({removed: 0, kept: 0, failed: 1}));
 }
 
 /** Production installs always manage shortcuts; a test install only when its test file sets `shortcuts: true`. */
@@ -289,8 +319,11 @@ async function uninstall(ports: SquirrelPorts, state: HookState, deadline: numbe
     try {await ports.removeLoginItem(roots.installRoot, ports.executableName);} catch {/* best effort */}
   }
   // The shortcuts go beside the cleanup; Squirrel does not remove them for an application that handles its events.
+  // `--removeShortcut` removes only the current name, so this install's old-name shortcuts go after it (ET-045h), without
+  // requiring a current one; `removed` means both steps succeeded (the receipt keeps its fields).
   const shortcuts = !wantsShortcuts(roots, ports) ? Promise.resolve<ShortcutState>('skipped')
-    : ports.runUpdate(roots.installRoot, [`--removeShortcut=${ports.executableName}`], REMOVE_SHORTCUT_TIMEOUT_MS).then((ok): ShortcutState => ok ? 'removed' : 'failed', (): ShortcutState => 'failed');
+    : ports.runUpdate(roots.installRoot, [`--removeShortcut=${ports.executableName}`], REMOVE_SHORTCUT_TIMEOUT_MS).then(ok => ok, () => false)
+      .then(async (ok): Promise<ShortcutState> => (await legacyShortcuts(ports, roots.installRoot, false, deadline)).failed === 0 && ok ? 'removed' : 'failed');
 
   // 3. The engine, within what is left of the deadline.
   const known = await ports.readKnown().catch(() => []);
@@ -387,7 +420,7 @@ export function deadlineSignal(milliseconds: number): AbortSignal {
 
 /** Electron's part of the production ports. */
 export interface SquirrelApp {
-  getPath(name: 'appData' | 'userData' | 'temp'): string;
+  getPath(name: 'appData' | 'userData' | 'temp' | 'desktop'): string;
   setPath(name: 'userData' | 'sessionData', value: string): void;
   requestSingleInstanceLock(additionalData?: Record<string, unknown>): boolean;
   releaseSingleInstanceLock(): void;
@@ -395,11 +428,18 @@ export interface SquirrelApp {
   setLoginItemSettings?(settings: {openAtLogin: boolean; path?: string; args?: string[]}): void;
 }
 export const ROAMING_USER_DATA_NAME = 'ETS2Telemetry Desktop';
+/** Electron's part of the shortcut reader (ET-045h): `shell.readShortcutLink`, synchronous, throwing on any error. */
+export interface SquirrelShell {
+  readShortcutLink(shortcutPath: string): {target: string; args?: string; appUserModelId?: string};
+}
 
-/** The production ports: the running executable's install, the bundled plugin manifest, tasklist and Update.exe. */
+/**
+ * The production ports: the running executable's install, the bundled plugin manifest, tasklist and Update.exe. Without
+ * `shell` no shortcut can be read, so every old-name shortcut is kept.
+ */
 export function productionSquirrelPorts(options: {app: SquirrelApp; appVersion: string; executable: string; env: Readonly<Record<string, string | undefined>>;
-  mainDirectory: string; resourcesPath: string}): SquirrelPorts {
-  const {app, env} = options;
+  mainDirectory: string; resourcesPath: string; shell?: SquirrelShell}): SquirrelPorts {
+  const {app, env, shell} = options;
   const fs = nodeFs as unknown as SquirrelPorts['fs'];
   return {
     appVersion: options.appVersion,
@@ -442,6 +482,20 @@ export function productionSquirrelPorts(options: {app: SquirrelApp; appVersion: 
       return nodeFs.readFile(file);
     },
     uninstallEntry: regExeUninstallEntry(env),
+    // ET-045h: Electron resolves both from the shell's known folders, as Squirrel's Environment.GetFolderPath does. A
+    // Start Menu redirected apart from Roaming is not found (docs/release.md, "Shortcut migration").
+    shortcutFolders: () => {
+      try {
+        return {desktop: app.getPath('desktop'), startMenuPrograms: path.win32.join(app.getPath('appData'), 'Microsoft', 'Windows', 'Start Menu', 'Programs')};
+      } catch {return undefined;}
+    },
+    readShortcut: file => {
+      if (!shell) return undefined;
+      try {
+        const link = shell.readShortcutLink(file);
+        return {target: link.target, ...(link.args === undefined ? {} : {args: link.args}), ...(link.appUserModelId === undefined ? {} : {appUserModelId: link.appUserModelId})};
+      } catch {return undefined;}
+    },
     checkRunning: signal => checkRunningGames({signal}),
     // Only this process's Windows session: another user's copy cannot hold this install's files open for long, and its
     // processes are never waited on (their session number is not this one).
