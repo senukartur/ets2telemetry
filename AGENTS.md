@@ -838,3 +838,19 @@ The owner requested a dedicated Hard Mode page between Live and Journal and clar
 ## ET-045a readable labels and standstill gauge — October 24, 2026
 
 ET-045a implements items 1, 4, 5, 10 and 11 of [ET-045](https://trello.com/c/OmNYTBsp): the Live speed arc is not drawn while the displayed speed is `0`; known SDK job markets show EN/RU labels on the dashboard and in the journal while telemetry-core, storage and the export keep raw values; the truck row shows v1's brand and name only for the same model id; the overlay labels the SDK mean "Consumption" / "Расход" without the strip caption and shows expected income without "(SDK-documented)" (dashboard, journal and export keep it). No settings, IPC, wire, storage, export or native change. The other items are later packages, and D1–D5 await the owner. The owner's ETS2 retest and all other game checks remain pending; see [ET-045 validation](docs/validation/et-045.md).
+
+## ET-045 delivery authorization and decisions — October 24, 2026
+
+On October 24, 2026 the owner authorized delivering the ET-045 packages sequentially through squash merge, with decisions at the coordinator's discretion, and decided D1–D5:
+
+- **D1:** option b. Saved scale numbers are kept and reinterpreted, so the new 100% equals the old 70%; the range is 50–300%.
+- **D5:** the strip is never narrower than at scale 1.
+- **D4:** the Cluster shows speed on the outer ring and RPM on the inner ring, with a validated numeric overlay payload field.
+- **D3:** an install/update hook writes `app.ico` and `DisplayIcon`.
+- **D2:** display names only change; the setup file is renamed to `YukonUnionTelemetry-Setup-<version>.exe`.
+
+This supersedes the ET-045a statement above that D1–D5 await the owner. It authorizes no release, and every package keeps its code gates and pending real-game checks; see [ET-045 validation](docs/validation/et-045.md).
+
+## ET-045c overlay bounds verification — October 24, 2026
+
+ET-045c implements item 12 of ET-045 only. In the owner's ATS TruckersMP windowed session at 150%, the Driving only strip at x 0.8485, y 1, scale 0.5 kept a taller window than the 21 DIP that main requested and extended below the game client. The overlay controller cached its own last request, called `setBounds` only when the next rectangle differed, and never read the actual bounds. The fix verifies the actual bounds after every request and placement (1 DIP per edge), re-applies a mismatch at most twice, fits a window that keeps another size at the same fractions when it fits, and otherwise hides fail-closed, reporting `too-large` while editing. Mismatches write one fact-only `OVERLAY_BOUNDS_MISMATCH` line; every verified apply is recorded only in the opt-in diagnostic timeline. Why Windows kept the taller window is still unknown. No settings, IPC, preload, wire, storage or native change. The owner's real-game retest is pending; see [ET-045c validation](docs/validation/et-045c.md).
