@@ -214,6 +214,27 @@ const EXPORT_RESULT = {
 const dashboardZoom = (application, zoom) => application.evaluate(({BrowserWindow}, zoom) => {
   BrowserWindow.getAllWindows().find(window => !window.webContents.getURL().endsWith('?view=overlay')).webContents.setZoomFactor(zoom);
 }, zoom);
+async function observeSettingsNavigation({dashboard, language, size, zoom, record}) {
+  const placements = [];
+  for (const panel of ['overlay', ...panels.filter(id => id !== 'overlay')]) {
+    await dashboard.getByTestId(`settings.nav.${panel}`).click({timeout: 5000});
+    assert.equal(await dashboard.getByTestId(`settings.${panel}`).isVisible(), true);
+    const placement = await dashboard.getByTestId('settings.screen').evaluate(grid => new Promise(resolve => globalThis.requestAnimationFrame(() => {
+      const bounds = grid.getBoundingClientRect(), nav = grid.firstElementChild.getBoundingClientRect(), content = grid.lastElementChild.getBoundingClientRect();
+      resolve({columns: globalThis.getComputedStyle(grid).gridTemplateColumns, nav: {left: nav.left - bounds.left, top: nav.top - bounds.top, width: nav.width, height: nav.height},
+        content: {left: content.left - bounds.left, top: content.top - bounds.top}, viewportWidth: globalThis.innerWidth});
+    })));
+    assert.ok(placement.viewportWidth <= 900, 'UI_SETTINGS_RESPONSIVE_BREAKPOINT');
+    assert.equal(placement.columns.split(' ').length, 1, `UI_SETTINGS_SINGLE_COLUMN_${panel}`);
+    assert.equal(placement.nav.left, placement.content.left);
+    assert.ok(placement.content.top >= placement.nav.top + placement.nav.height);
+    if (placements.length) assert.deepEqual(placement, placements[0].placement, `UI_SETTINGS_NAVIGATION_JUMP_${language}_${size.width}_${zoom}_${panel}`);
+    placements.push({panel, placement});
+  }
+  await dashboard.getByTestId('settings.nav.overlay').click({timeout: 5000});
+  assert.equal(await dashboard.getByTestId('settings.overlay').isVisible(), true);
+  (record.settingsNavigation ??= []).push({language, width: size.width, zoom, placements});
+}
 async function observeUnifiedOverlay({application, dashboard, language, size, record}) {
   assert.deepEqual(await dashboard.getByTestId('settings.nav').locator('button').evaluateAll(nodes => nodes.map(node => node.getAttribute('data-testid'))), panels.map(id => `settings.nav.${id}`));
   assert.equal(await dashboard.getByTestId('settings.sections').count(), 0);
@@ -230,6 +251,7 @@ async function observeUnifiedOverlay({application, dashboard, language, size, re
   for (const zoom of [1, 1.5, 2]) {
     await dashboardZoom(application, zoom);
     try {
+      if (zoom > 1) await observeSettingsNavigation({dashboard, language, size, zoom, record});
       await dashboard.getByTestId('overlay-switch-expected-income').focus();
       await dashboard.keyboard.press('Tab');
       assert.equal(await dashboard.getByTestId('overlay-switch-game-time').evaluate(node => node === globalThis.document.activeElement), true);

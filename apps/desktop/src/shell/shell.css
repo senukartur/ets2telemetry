@@ -243,5 +243,5 @@ button[aria-disabled="true"], [role="switch"][aria-disabled="true"] { cursor: no
   .yu-overlay-settings .yu-layout-options { grid-template-columns: minmax(0,1fr); }
 }
 @media (max-width: 900px) {
-  .yu-settings:has([data-testid="settings.overlay"]:not([hidden])) { grid-template-columns: minmax(0,1fr); }
+  .yu-settings { grid-template-columns: minmax(0,1fr); }
 }
