@@ -29,7 +29,7 @@ Since ET-018 PR-3 (plan U2) `apps/desktop/src/squirrel-events.ts` replaces elect
 
 | Event | What runs | Exit code |
 | --- | --- | --- |
-| `--squirrel-install`, `--squirrel-updated` | `Update.exe --createShortcut=<executable>` (a production install; a test install only when its test file sets `shortcuts: true`), then a pending [uninstall deferral](uninstall.md#deferral) is cancelled, with the copied executor and its RunOnce registration (ET-018 PR-5). No data is written otherwise. | 0 |
+| `--squirrel-install`, `--squirrel-updated` | `Update.exe --createShortcut=<executable>` (a production install; a test install only when its test file sets `shortcuts: true`) and, at the same time, the [Installed apps icon](release.md#installed-apps-icon-et-045g) (ET-045g): the packaged `resources\icon\app.ico` is placed at `<install root>\app.ico`, and this product's uninstall entry gets `DisplayIcon = <install root>\app-<version>\ETS2TelemetryDesktop.exe,0` (two attempts of at most 2 s). Then a pending [uninstall deferral](uninstall.md#deferral) is cancelled, with the copied executor and its RunOnce registration (ET-018 PR-5). A failure of the shortcuts or the icon changes neither the other step nor the exit code; at worst the hook takes 12 s. No data is written otherwise. | 0 |
 | `--squirrel-obsolete` | Nothing; the previous version after an update quits. | 0 |
 | `--squirrel-uninstall` | The [uninstall hook](uninstall.md#squirrel-uninstall-hook): the instance lock with the `uninstall-exit` payload, the engine within 8 s, the receipt. | 0, 3 or 4 |
 

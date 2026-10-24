@@ -81,6 +81,13 @@ assert.equal(sha256(executorBytes), sha256(readFileSync('resources/uninstall/Com
 assert.ok(executorBytes.length > 0 && executorBytes.length <= 256 * 1024 && executorBytes.every(byte => byte === 9 || byte === 10 || byte === 13 || (byte >= 32 && byte < 127)),
   'Uninstall executor must be plain ASCII within 256 KiB');
 report.uninstallExecutor = {sha256: sha256(executorBytes), size: executorBytes.length};
+// The product icon (ET-045g): exactly the tracked resources/icon/app.ico, alone in its folder. The install and updated
+// hooks place it in Squirrel's install root for the Installed apps entry; --installer checks the NuGet package carries it.
+const iconDirectory = path.join(directory, 'resources/icon');
+assert.deepEqual(readdirSync(iconDirectory).sort(), ['app.ico'], 'Unexpected files beside the packaged product icon');
+const iconBytes = readFileSync(path.join(iconDirectory, 'app.ico'));
+assert.equal(sha256(iconBytes), sha256(readFileSync('resources/icon/app.ico')), 'Packaged product icon differs from the tracked icon');
+report.productIcon = {sha256: sha256(iconBytes), size: iconBytes.length};
 if (installerCheck) {
   const version = JSON.parse(readFileSync('package.json', 'utf8')).version;
   report.installer = inspectInstaller({packageDirectory: directory, makeDirectory: path.resolve(MAKE_DIRECTORY), version});
@@ -88,5 +95,5 @@ if (installerCheck) {
 mkdirSync('.local/diagnostics', {recursive: true});
 writeFileSync('.local/diagnostics/package-inspection.json', JSON.stringify(report, null, 2) + '\n');
 console.log(JSON.stringify({applicationLaunched: false, ...integrity, compiledFilesVerified: files.length, asarSha256: report.asarSha256, executableSha256: report.executableSha256, pluginSha256: report.nativePlugin.sha256,
-  uninstallExecutorSha256: report.uninstallExecutor.sha256,
+  uninstallExecutorSha256: report.uninstallExecutor.sha256, productIconSha256: report.productIcon.sha256,
   ...(report.installer ? {installer: {setup: report.installer.setup, nupkg: report.installer.nupkg, projectedFiles: report.installer.projectedFiles, additions: report.installer.additions}} : {})}, null, 2));

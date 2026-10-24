@@ -15,7 +15,10 @@ module.exports = {
   rebuildConfig: {ignoreModules:['better-sqlite3']},
   packagerConfig: {
     // resources/uninstall holds the deferred-cleanup executor that an uninstall copies and registers (ET-018 PR-5, U7).
-    extraResource: ['.local/package-native/telemetry-client', '.local/package-native/telemetry-plugin', 'resources/uninstall'],
+    // resources/icon ships app.ico, which the install and updated hooks place in Squirrel's install root and name as the
+    // Installed apps DisplayIcon (ET-045g, docs/release.md). The Squirrel maker keeps electron-winstaller's default
+    // iconUrl, the Electron icon (HTTP(S) only); with app.ico already in place Squirrel never downloads it.
+    extraResource: ['.local/package-native/telemetry-client', '.local/package-native/telemetry-plugin', 'resources/uninstall', 'resources/icon'],
     // The physical Node worker must resolve SQLite's JavaScript loader without ASAR patches.
     asar: { unpack: '**/*.{node,cjs}', unpackDir: '**/better-sqlite3' }, executableName: 'ETS2TelemetryDesktop',
     appBundleId: 'com.ets2telemetry.desktop',
