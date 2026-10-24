@@ -2,12 +2,13 @@
 // scripted; the target checks and the partial-file write are the shared export-file.ts routine. Expected outcomes and log
 // rows are written by hand from P17. No real user or data folder is touched: LOCALAPPDATA is a temporary folder.
 import {existsSync} from 'node:fs';
-import {mkdir, readdir, readFile, symlink, writeFile} from 'node:fs/promises';
+import {mkdir, readdir, readFile, symlink, unlink, writeFile} from 'node:fs/promises';
 import * as realFs from 'node:fs/promises';
 import path from 'node:path';
 import {afterEach, beforeEach, describe, expect, it, vi} from 'vitest';
 import {DiagnosticBundleExporter, diagnosticBundleFileName, type DiagnosticBundleExporterOptions} from '../../apps/desktop/src/diagnostic-bundle-writer';
 import type {ExportFileSystem} from '../../apps/desktop/src/export-file';
+import {exactLengthPath} from '../shared/paths';
 import {temporaryResources} from '../shared/resources';
 
 const BUNDLE = '{"format": "ets2telemetry.diagnostics", "version": 1}\n';
@@ -43,18 +44,6 @@ it('names the default file by the UTC time and offers it in Documents', async ()
   await f.instance.export();
   expect(f.showSaveDialog).toHaveBeenCalledExactlyOnceWith('C:\\Users\\owner\\Documents\\ets2telemetry-diagnostics-20261017T083015Z.json');
 });
-
-function exactLengthPath(parentDir: string, fileName: string, targetLen = 282): string {
-  let remaining = targetLen - path.join(parentDir, fileName).length - 1;
-  const segments: string[] = [];
-  while (remaining > 0) {
-    const chunk = Math.min(remaining, 80);
-    segments.push('d'.repeat(chunk));
-    remaining -= chunk;
-    if (remaining > 0) remaining -= 1;
-  }
-  return path.join(parentDir, ...segments, fileName);
-}
 
 describe('a cancelled Save dialog', () => {
   it('builds, reads and writes nothing and answers cancelled', async () => {
@@ -210,13 +199,17 @@ describe('ordinary long target path (282 chars, ET-046)', () => {
     expect(longTarget.length).toBe(282);
     await mkdir(path.dirname(longTarget), {recursive: true});
 
-    // Without \\?\ prefix
+    // Without \\?\\ prefix
     const f1 = exporter({target: longTarget});
     await expect(f1.instance.export()).resolves.toEqual({outcome: 'saved'});
     expect(existsSync(longTarget)).toBe(true);
     expect(await readFile(longTarget, 'utf8')).toBe(BUNDLE);
 
-    // With \\?\ prefix
+    // Unlink before second run to prove extended-path export actually writes and recreates target
+    await unlink(longTarget);
+    expect(existsSync(longTarget)).toBe(false);
+
+    // With \\?\\ prefix
     const extTarget = `\\\\?\\${longTarget}`;
     const f2 = exporter({target: extTarget});
     await expect(f2.instance.export()).resolves.toEqual({outcome: 'saved'});
@@ -247,12 +240,17 @@ describe('ordinary long target path (282 chars, ET-046)', () => {
     expect(parentFiles.filter(name => name.endsWith('.partial'))).toEqual([]);
   });
 
-  it('refuses a 282-character target inside the data directory before bundle generation', async () => {
+  it('refuses a 282-character target inside the data directory with and without extended prefix before bundle generation', async () => {
     const dataLogs = path.join(local, 'ETS2Telemetry', 'logs');
     const longInsideData = exactLengthPath(dataLogs, 'diagnostics-long.json', 282);
     expect(longInsideData.length).toBe(282);
-    const f = exporter({target: longInsideData});
-    await expect(f.instance.export()).resolves.toEqual({outcome: 'refused', code: 'EXPORT_TARGET_REFUSED'});
-    expect(f.build).not.toHaveBeenCalled();
+
+    const f1 = exporter({target: longInsideData});
+    await expect(f1.instance.export()).resolves.toEqual({outcome: 'refused', code: 'EXPORT_TARGET_REFUSED'});
+    expect(f1.build).not.toHaveBeenCalled();
+
+    const f2 = exporter({target: `\\\\?\\${longInsideData}`});
+    await expect(f2.instance.export()).resolves.toEqual({outcome: 'refused', code: 'EXPORT_TARGET_REFUSED'});
+    expect(f2.build).not.toHaveBeenCalled();
   });
 });

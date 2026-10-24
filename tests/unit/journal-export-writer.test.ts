@@ -2,7 +2,7 @@
 // Save dialog are scripted; the file system is the real one, wrapped only where a case injects a failure. Expected
 // results, files and log rows are written by hand from J16 (REG-014).
 import {existsSync} from 'node:fs';
-import {mkdir, readdir, readFile, symlink, writeFile} from 'node:fs/promises';
+import {mkdir, readdir, readFile, symlink, unlink, writeFile} from 'node:fs/promises';
 import * as realFs from 'node:fs/promises';
 import path from 'node:path';
 import {afterEach, beforeEach, describe, expect, it, vi} from 'vitest';
@@ -11,6 +11,7 @@ import {exportTargetRefused, JournalExporter, type ExportFileSystem, type Journa
 import {stripExtendedPrefix} from '../../apps/desktop/src/export-file';
 import type {JournalQuery} from '../../apps/desktop/src/journal-contract';
 import {changed, DETAIL, EVENT, INTERVAL, SAMPLE, TRIP} from '../shared/journal-replies';
+import {exactLengthPath} from '../shared/paths';
 import {temporaryResources} from '../shared/resources';
 import {tripExportProblems} from '../shared/trip-export-validator';
 
@@ -52,18 +53,6 @@ function exporter(options: Partial<JournalExporterOptions> & {target?: string | 
 }
 const events = (log: ReturnType<typeof vi.fn>) => log.mock.calls.map(call => [call[0], call[2] ?? null]);
 const listing = async (directory = out) => (await readdir(directory)).sort();
-
-function exactLengthPath(parentDir: string, fileName: string, targetLen = 282): string {
-  let remaining = targetLen - path.join(parentDir, fileName).length - 1;
-  const segments: string[] = [];
-  while (remaining > 0) {
-    const chunk = Math.min(remaining, 80);
-    segments.push('d'.repeat(chunk));
-    remaining -= chunk;
-    if (remaining > 0) remaining -= 1;
-  }
-  return path.join(parentDir, ...segments, fileName);
-}
 
 describe('a cancelled Save dialog (J16)', () => {
   it('writes nothing and answers cancelled', async () => {
@@ -287,6 +276,14 @@ describe('refused targets (J16)', () => {
     expect(exportTargetRefused(target, 'C:\\Users\\owner\\AppData\\Local')).toBe(true);
   });
   it.each([
+    '\\\\?\\C:\\Users\\owner\\AppData\\Local\\ETS2Telemetry\\trip.json',
+    '\\\\?\\c:\\users\\owner\\appdata\\local\\ets2telemetry\\trip.json',
+    '\\\\?\\C:\\Users\\owner\\AppData\\Local\\ETS2Telemetry\\..\\ETS2Telemetry\\trip.json',
+    '\\\\?\\C:\\Users\\owner\\AppData\\Local\\ETS2Telemetry\\data\\trip.json'
+  ])('refuses standard or extended path inside the data directory %j', target => {
+    expect(exportTargetRefused(target, 'C:\\Users\\owner\\AppData\\Local')).toBe(true);
+  });
+  it.each([
     ['\\\\?\\C:\\exports\\trip.json', 'C:\\exports\\trip.json'],
     ['\\\\?\\UNC\\server\\share\\trip.json', '\\\\server\\share\\trip.json'],
     ['\\\\?\\pipe\\trip', '\\\\?\\pipe\\trip'],
@@ -369,14 +366,18 @@ describe('ordinary long target path (282 chars, ET-046)', () => {
     expect(longTarget.length).toBe(282);
     await mkdir(path.dirname(longTarget), {recursive: true});
 
-    // Test without \\?\ prefix
+    // Test without \\?\\ prefix
     const f1 = exporter({target: longTarget});
     await expect(f1.instance.export(TRIP)).resolves.toEqual({ok: true, value: {outcome: 'saved', events: 2, intervals: 1, samples: 1}});
     expect(existsSync(longTarget)).toBe(true);
     const doc1 = JSON.parse(await readFile(longTarget, 'utf8')) as {header: unknown};
     expect(tripExportProblems(doc1)).toEqual([]);
 
-    // Test with \\?\ prefix
+    // Unlink before second run to prove extended-path export actually writes and recreates target
+    await unlink(longTarget);
+    expect(existsSync(longTarget)).toBe(false);
+
+    // Test with \\?\\ prefix
     const extTarget = `\\\\?\\${longTarget}`;
     const f2 = exporter({target: extTarget});
     await expect(f2.instance.export(TRIP)).resolves.toEqual({ok: true, value: {outcome: 'saved', events: 2, intervals: 1, samples: 1}});
@@ -408,19 +409,17 @@ describe('ordinary long target path (282 chars, ET-046)', () => {
     expect(parentFiles.filter(name => name.endsWith('.partial'))).toEqual([]);
   });
 
-  it('cancels cleanly without writing when dialog is cancelled', async () => {
-    const longTarget = exactLengthPath(out, 'trip-long.json', 282);
-    await mkdir(path.dirname(longTarget), {recursive: true});
-    const f = exporter({target: null});
-    await expect(f.instance.export(TRIP)).resolves.toEqual({ok: true, value: {outcome: 'cancelled'}});
-    expect(existsSync(longTarget)).toBe(false);
-  });
-
-  it('refuses a 282-character path inside the data directory', async () => {
+  it('refuses a 282-character path inside the data directory with and without extended prefix', async () => {
     const dataDir = path.join(local, 'ETS2Telemetry');
     const longInsideData = exactLengthPath(dataDir, 'trip-long.json', 282);
     expect(longInsideData.length).toBe(282);
-    const f = exporter({target: longInsideData});
-    await expect(f.instance.export(TRIP)).resolves.toEqual({ok: false, code: 'EXPORT_TARGET_REFUSED'});
+
+    // Without \\?\\ prefix
+    const f1 = exporter({target: longInsideData});
+    await expect(f1.instance.export(TRIP)).resolves.toEqual({ok: false, code: 'EXPORT_TARGET_REFUSED'});
+
+    // With \\?\\ prefix
+    const f2 = exporter({target: `\\\\?\\${longInsideData}`});
+    await expect(f2.instance.export(TRIP)).resolves.toEqual({ok: false, code: 'EXPORT_TARGET_REFUSED'});
   });
 });

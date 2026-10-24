@@ -39,7 +39,7 @@ export function stripExtendedPrefix(target: string): string {
     if (/^\\\\\?\\[A-Za-z]:/i.test(target)) {
       return target.slice(4);
     }
-    const uncMatch = /^\\\\\?\\UNC\\(.*)$/i.exec(target);
+    const uncMatch = /^\\\\\?\\UNC\\([^\\?.\\][^\\]*\\.*)$/i.exec(target);
     if (uncMatch) {
       return `\\\\${uncMatch[1]}`;
     }
@@ -70,7 +70,7 @@ export function exportTargetRefused(target: unknown, localAppData: string | unde
   if (raw.startsWith('\\\\.\\') || raw.startsWith('\\??\\')) return true;
   if (raw.startsWith('\\\\?\\')) {
     if (target.includes('/')) return true;
-    if (!/^\\\\\?\\[A-Za-z]:\\/.test(raw) && !/^\\\\\?\\UNC\\[^\\]+\\[^\\]+/i.test(raw)) return true;
+    if (!/^\\\\\?\\[A-Za-z]:\\/i.test(raw) && !/^\\\\\?\\UNC\\[^\\?.\\][^\\]*\\[^\\]+/i.test(raw)) return true;
   } else {
     if (!/^[A-Za-z]:\\/.test(raw) && !/^\\\\[^\\?.]/.test(raw)) return true;
   }
