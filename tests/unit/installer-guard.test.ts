@@ -1,6 +1,6 @@
 import {execFile} from 'node:child_process';
 import {createHash} from 'node:crypto';
-import {existsSync} from 'node:fs';
+import {existsSync, realpathSync} from 'node:fs';
 import {mkdir, readdir, readFile, realpath, rm, writeFile} from 'node:fs/promises';
 import path from 'node:path';
 import {fileURLToPath} from 'node:url';
@@ -650,6 +650,13 @@ describe('harness shortcut helpers at runtime (ET-045h)', () => {
   const pwsh = (process.env.PATH ?? '').split(path.delimiter).map(folder => path.join(folder, 'pwsh.exe')).find(file => existsSync(file));
   const shells: [string, string][] = [['Windows PowerShell 5.1', path.join(systemRoot, 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe')]];
   if (pwsh) shells.push(['PowerShell 7', pwsh]);
+  // Windows PowerShell 5.1 started from PowerShell 7 (the hosted step's shell) inherits PS7's PSModulePath and then cannot
+  // load its own Microsoft.PowerShell.Utility (Get-FileHash), so 5.1 gets its system module path, as plugin-installer.test.ts does.
+  const environment = (shell: string) => shell === pwsh ? process.env
+    : {...process.env, PSModulePath: path.win32.join(systemRoot, 'System32', 'WindowsPowerShell', 'v1.0', 'Modules')};
+  // The temporary folder can be named in 8.3 form (C:\Users\RUNNER~1) while the helpers report long names, so the shortcut
+  // folders are compared as real paths.
+  const real = (file: unknown) => typeof file === 'string' ? realpathSync.native(file) : file;
   it.each(shells)('runs the shortcut helpers under %s', async (_name, shell) => {
     const resources = await temporaryResources();
     try {
@@ -657,11 +664,13 @@ describe('harness shortcut helpers at runtime (ET-045h)', () => {
       await mkdir(root);
       const {stdout} = await promisify(execFile)(shell, ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File',
         path.join(checkout, 'tests', 'windows', 'Test-InstallerLinkHelpers.ps1'), '-Harness', path.join(checkout, 'scripts', 'installer', 'Invoke-InstallerLifecycle.ps1'),
-        '-Root', root], {encoding: 'utf8', timeout: 60000, windowsHide: true});
+        '-Root', root], {encoding: 'utf8', timeout: 60000, windowsHide: true, env: environment(shell)});
       const result = JSON.parse(stdout.trim().split(/\r?\n/).at(-1)!) as Record<string, unknown>;
+      const folders = result.linkFolders as {desktop?: unknown; startMenu?: unknown} | undefined;
+      expect({desktop: real(folders?.desktop), startMenu: real(folders?.startMenu)})
+        .toEqual({desktop: real(path.join(root, 'Desktop')), startMenu: real(path.join(root, 'Programs', 'Artur Sianiuk'))});
       expect(result).toMatchObject({
         rowsInstalled: ['desktop||Yukon Union Telemetry', 'start-menu|Artur Sianiuk|Yukon Union Telemetry'],
-        linkFolders: {desktop: path.join(root, 'Desktop'), startMenu: path.join(root, 'Programs', 'Artur Sianiuk')},
         linksCall: {command: 'links', arguments: ['install-0.1.0', 'installed', 'desktop||Yukon Union Telemetry', 'start-menu|Artur Sianiuk|Yukon Union Telemetry'],
           timeoutMs: 30000},
         rowsWithOrphans: ['desktop||ETS2Telemetry Desktop', 'desktop||Yukon Union Telemetry', 'start-menu|Artur Sianiuk|ETS2Telemetry Desktop',
