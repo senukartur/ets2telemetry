@@ -47,9 +47,9 @@ it('formats both profiles with telemetry-core conversions and no signed zero', (
 
 it('repeats no conversion constant in the desktop display projections', () => {
   // telemetry-core is the single numeric source (ET-010 N2); these modules may only call it.
-  // ET-012a adds the overlay renderer's view model, its components and the overlay settings card.
+  // ET-012a adds the overlay renderer's view model, its components and the overlay settings card; ET-045f the speed gauge scale.
   for (const file of ['unit-profiles.ts', 'overlay-presentation.ts', 'speed-display.ts', 'dashboard-renderer.tsx', 'overlay-view.ts', 'overlay-renderer.tsx',
-    'overlay-settings-card.tsx']) {
+    'overlay-settings-card.tsx', 'speed-gauge.ts']) {
     const source = readFileSync(`apps/desktop/src/${file}`, 'utf8');
     expect(source, file).not.toMatch(/\b(?:3\.6|2\.236\d*|3\.785\d*|1609\.344|0\.6213\d*|0\.4535\d*|235\.21\d*)\b/);
     expect(source, file).not.toMatch(/\.toFixed\(/);
