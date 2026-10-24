@@ -22,6 +22,10 @@ param(
 # in-app scenarios on a fresh install, answered through the smoke-only dialog seam: (5) the uninstall button while the fake
 # game host runs: blocked, nothing changes and the application stays installed; (4) the button again: the plugin and the
 # data root are removed, the application exits and hands over to Update.exe --uninstall, and the residue check follows.
+# ET-045g checks the Installed apps icon after every install, repair and update: DisplayIcon names icon 0 of the installed
+# version's executable, and the binary root's app.ico has the tracked icon's bytes; before the update it plants the
+# Electron-icon state of an install made before the fix, which the update must replace, and it compares the shell's
+# pixels of both icons after the install and the update.
 # Squirrel's binary root is redirected with SQUIRREL_TEMP = R\LocalAppData, and every child process gets LOCALAPPDATA,
 # APPDATA and TEMP inside R. R is deleted at the end, and any HKCU uninstall key that still points into R. It runs on a
 # GitHub-hosted runner, or locally only with -AllowLocal on the owner's explicit request (docs/installer-testing.md).
@@ -29,8 +33,8 @@ $ErrorActionPreference = 'Stop'
 $checkout = (Resolve-Path -LiteralPath (Join-Path $PSScriptRoot '../..')).Path
 # The versioned Setup name of forge.config.cjs (ET-018 PR-6); release-identity.test.ts checks that the two agree.
 $setup = Join-Path $checkout 'out/make/squirrel.windows/x64/ETS2Telemetry-Setup-0.1.0.exe'
-$planSteps = @('signal','facts','guard-plan','create-run-root','guard-ready','build-fixture-0.1.1','seed','install-0.1.0','installed-smokes-0.1.0',
-    'data-launch-0.1.0','verify-0.1.0','repair-0.1.0','update-0.1.1','installed-smokes-0.1.1','data-launch-0.1.1','verify-0.1.1','games',
+$planSteps = @('signal','facts','guard-plan','create-run-root','guard-ready','build-fixture-0.1.1','seed','install-0.1.0','icon-identity-0.1.0','installed-smokes-0.1.0',
+    'data-launch-0.1.0','verify-0.1.0','repair-0.1.0','legacy-icon-0.1.0','update-0.1.1','icon-identity-0.1.1','installed-smokes-0.1.1','data-launch-0.1.1','verify-0.1.1','games',
     'windows-uninstall-complete-running','install-0.1.0-again','plugin-launch-installed','windows-uninstall-deferred-game','run-once-blocked-game',
     'reinstall-0.1.0-over-deferral','plugin-launch-adopted','windows-uninstall-final-deferred','run-once-complete',
     'install-0.1.0-for-app','plugin-launch-for-app','app-uninstall-blocked-game','app-uninstall-verify-blocked-game',
@@ -50,6 +54,71 @@ $driver = Join-Path $PSScriptRoot 'installer-lifecycle.mjs'
 if (!(Test-Path -LiteralPath $setup -PathType Leaf)) { throw 'Squirrel Setup.exe missing: run npm run make first.' }
 # Compiled before the environment changes below: Windows PowerShell's Add-Type needs the real TEMP.
 if (-not ('ETS2Telemetry.Diagnostics.BoundedProcess' -as [type])) { Add-Type -Path (Join-Path $checkout 'scripts/watchdog/BoundedProcess.cs') }
+# ET-045g: the pixels the Windows shell draws for icon 0 of a file at its large and small sizes (ExtractIconEx); it only
+# reads the file. No System.Drawing, so Windows PowerShell 5.1 and PowerShell 7 compile it alike.
+if (-not ('ETS2Telemetry.Diagnostics.ShellIconPixels' -as [type])) {
+    Add-Type -TypeDefinition @'
+using System;
+using System.Runtime.InteropServices;
+namespace ETS2Telemetry.Diagnostics {
+  public sealed class IconPixels { public int Width; public int Height; public byte[] Pixels; }
+  public static class ShellIconPixels {
+    [StructLayout(LayoutKind.Sequential)] struct IconInfo { public int IsIcon; public int HotspotX; public int HotspotY; public IntPtr Mask; public IntPtr Color; }
+    [StructLayout(LayoutKind.Sequential)] struct Bitmap { public int Type; public int Width; public int Height; public int WidthBytes; public ushort Planes; public ushort BitsPixel; public IntPtr Bits; }
+    [StructLayout(LayoutKind.Sequential)] struct BitmapInfoHeader {
+      public uint Size; public int Width; public int Height; public ushort Planes; public ushort BitCount; public uint Compression; public uint SizeImage;
+      public int XPelsPerMeter; public int YPelsPerMeter; public uint ClrUsed; public uint ClrImportant;
+    }
+    // Room for the three colour masks GetDIBits may write after the header.
+    [StructLayout(LayoutKind.Sequential)] struct BitmapInfo { public BitmapInfoHeader Header; public uint Mask0; public uint Mask1; public uint Mask2; }
+    [DllImport("shell32.dll", CharSet = CharSet.Unicode)] static extern uint ExtractIconExW(string file, int index, IntPtr[] large, IntPtr[] small, uint icons);
+    [DllImport("user32.dll")] static extern bool DestroyIcon(IntPtr icon);
+    [DllImport("user32.dll")] static extern bool GetIconInfo(IntPtr icon, out IconInfo info);
+    [DllImport("user32.dll")] static extern IntPtr GetDC(IntPtr window);
+    [DllImport("user32.dll")] static extern int ReleaseDC(IntPtr window, IntPtr dc);
+    [DllImport("gdi32.dll")] static extern int GetObjectW(IntPtr handle, int size, out Bitmap bitmap);
+    [DllImport("gdi32.dll")] static extern int GetDIBits(IntPtr dc, IntPtr bitmap, uint start, uint lines, byte[] bits, ref BitmapInfo info, uint usage);
+    [DllImport("gdi32.dll")] static extern bool DeleteObject(IntPtr handle);
+
+    // The large and the small icon 0 of `file`, as top-down 32-bit pixels; every handle is released.
+    public static IconPixels[] Read(string file) {
+      IntPtr[] large = new IntPtr[1], small = new IntPtr[1];
+      ExtractIconExW(file, 0, large, small, 1);
+      try {
+        if (large[0] == IntPtr.Zero || small[0] == IntPtr.Zero) throw new InvalidOperationException("ICON_NOT_EXTRACTED");
+        return new IconPixels[] { Pixels(large[0]), Pixels(small[0]) };
+      } finally {
+        if (large[0] != IntPtr.Zero) DestroyIcon(large[0]);
+        if (small[0] != IntPtr.Zero) DestroyIcon(small[0]);
+      }
+    }
+    static IconPixels Pixels(IntPtr icon) {
+      IconInfo info;
+      if (!GetIconInfo(icon, out info)) throw new InvalidOperationException("ICON_INFO_FAILED");
+      try {
+        if (info.Color == IntPtr.Zero) throw new InvalidOperationException("ICON_WITHOUT_COLOR");
+        Bitmap bitmap;
+        if (GetObjectW(info.Color, Marshal.SizeOf(typeof(Bitmap)), out bitmap) == 0 || bitmap.Width < 1 || bitmap.Height < 1 || bitmap.Width > 512 || bitmap.Height > 512)
+          throw new InvalidOperationException("ICON_BITMAP_INVALID");
+        BitmapInfo header = new BitmapInfo();
+        header.Header.Size = (uint)Marshal.SizeOf(typeof(BitmapInfoHeader));
+        header.Header.Width = bitmap.Width; header.Header.Height = -bitmap.Height; header.Header.Planes = 1; header.Header.BitCount = 32;
+        byte[] bits = new byte[bitmap.Width * bitmap.Height * 4];
+        IntPtr dc = GetDC(IntPtr.Zero);
+        try { if (GetDIBits(dc, info.Color, 0, (uint)bitmap.Height, bits, ref header, 0) != bitmap.Height) throw new InvalidOperationException("ICON_PIXELS_UNREAD"); }
+        finally { ReleaseDC(IntPtr.Zero, dc); }
+        IconPixels result = new IconPixels();
+        result.Width = bitmap.Width; result.Height = bitmap.Height; result.Pixels = bits;
+        return result;
+      } finally {
+        if (info.Color != IntPtr.Zero) DeleteObject(info.Color);
+        if (info.Mask != IntPtr.Zero) DeleteObject(info.Mask);
+      }
+    }
+  }
+}
+'@
+}
 
 $id = [guid]::NewGuid().ToString('N')
 $evidence = Join-Path ([IO.Path]::GetFullPath($OutputRoot)) ('installer-' + $id + '-evidence')
@@ -151,6 +220,57 @@ function Assert-Installed([string]$Label, [string]$Version) {
     $executable = Join-Path $binaryRoot ('app-' + $Version + '\ETS2TelemetryDesktop.exe')
     if (!(Test-Path -LiteralPath $executable -PathType Leaf) -or !(Test-Path -LiteralPath (Join-Path $binaryRoot 'Update.exe') -PathType Leaf)) { throw ('Installed files missing after ' + $Label) }
     return $executable
+}
+function Get-IconDigest([string]$File) {
+    # The large and small shell icon 0 of one file: their sizes and the SHA-256 of their pixels, never the file's path.
+    $sha = [Security.Cryptography.SHA256]::Create()
+    try {
+        return ,@([ETS2Telemetry.Diagnostics.ShellIconPixels]::Read($File) | ForEach-Object {
+            [ordered]@{width=$_.Width; height=$_.Height; sha256=([BitConverter]::ToString($sha.ComputeHash([byte[]]$_.Pixels)).Replace('-', '').ToLowerInvariant())}
+        })
+    } finally { $sha.Dispose() }
+}
+function Assert-IconIdentity([string]$Label, [string]$Version) {
+    # ET-045g: what the shell draws for icon 0 of the installed executable (DisplayIcon) and of the binary root's app.ico
+    # must be the same pixels at the large and the small shell size. icon-identity-<label>.json keeps sizes and hashes only.
+    $started = $clock.Elapsed.TotalSeconds
+    $executable = Get-IconDigest (Join-Path $binaryRoot ('app-' + $Version + '\ETS2TelemetryDesktop.exe'))
+    $rootIcon = Get-IconDigest (Join-Path $binaryRoot 'app.ico')
+    $equal = $executable.Count -eq 2 -and $rootIcon.Count -eq 2
+    for ($index = 0; $equal -and $index -lt 2; $index++) {
+        $equal = $executable[$index].width -eq $rootIcon[$index].width -and $executable[$index].height -eq $rootIcon[$index].height -and
+            $executable[$index].sha256 -ceq $rootIcon[$index].sha256
+    }
+    $record = [ordered]@{label=$Label; version=$Version; sizes=@('large','small'); executable=$executable; rootIcon=$rootIcon; equal=$equal}
+    ConvertTo-Json -InputObject $record -Depth 4 | Set-Content -LiteralPath (Join-Path $evidence ('icon-identity-' + $Label + '.json')) -Encoding utf8
+    $script:report.steps += ,[ordered]@{step=('icon-identity-' + $Label); equal=$equal; seconds=[math]::Round($clock.Elapsed.TotalSeconds - $started, 1)}
+    if (!$equal) { throw ('ICON_IDENTITY_DIFFERS after ' + $Label) }
+}
+function Set-LegacyIcon([string]$Label) {
+    # ET-045g: the state an install made before the fix keeps until its next update: Squirrel's downloaded Electron icon at
+    # the binary root's app.ico and DisplayIcon pointing at it. The driver plants the file after checkInstalled and decides
+    # per registry view whether the key points into R (ownsRegistration); only those keys get the value. The update that
+    # follows must replace both (Assert-Installed).
+    $locations = @($registryViews | ForEach-Object {
+        $row = Read-RegistrationView $_
+        if ($row -and $row.installLocation) { [string]$row.installLocation } else { '-' }
+    })
+    Invoke-Driver 'legacy-icon' (@($Label) + $locations) 30000
+    $result = (Get-Content -LiteralPath (Join-Path $evidence ('legacy-icon-' + $Label + '.json')) -Raw | ConvertFrom-Json).result
+    $owned = @($result.ownsRegistration)
+    if ($owned.Count -ne $registryViews.Count) { throw 'legacy-icon returned no decision per registry view.' }
+    $planted = Join-Path $binaryRoot 'app.ico'
+    $set = 0
+    for ($index = 0; $index -lt $registryViews.Count; $index++) {
+        if ($owned[$index] -ne $true) { continue }
+        $hive = [Microsoft.Win32.RegistryKey]::OpenBaseKey([Microsoft.Win32.RegistryHive]::CurrentUser, $registryViews[$index])
+        try {
+            $key = $hive.OpenSubKey($uninstallKey, $true)
+            if ($key) { try { $key.SetValue('DisplayIcon', $planted, [Microsoft.Win32.RegistryValueKind]::String); $set++ } finally { $key.Dispose() } }
+        } finally { $hive.Dispose() }
+    }
+    $script:report.steps += ,[ordered]@{step=('legacy-display-icon-' + $Label); viewsSet=$set}
+    if ($set -lt 1 -or (Read-Registration).displayIcon -cne $planted) { throw ('LEGACY_ICON_NOT_PLANTED before ' + $Label) }
 }
 
 $shortcutFolders = @([Environment]::GetFolderPath('DesktopDirectory'), [Environment]::GetFolderPath('Programs'))
@@ -260,6 +380,7 @@ try {
     $env:ETS2TELEMETRY_DIAGNOSTIC_DIR = Join-Path $runRoot 'diagnostics\install-0.1.0'
     Invoke-Driver 'step' @('install-0.1.0', $setup, '--silent') 60000
     $executableA = Assert-Installed 'install-0.1.0' '0.1.0'
+    Assert-IconIdentity 'install-0.1.0' '0.1.0'
     Assert-ProductLinks 'install-0.1.0' $true
     Invoke-Driver 'snapshot' @('install-0.1.0') 30000
     Invoke-Driver 'compare' @('seed', 'install-0.1.0') 30000
@@ -274,10 +395,13 @@ try {
     $null = Assert-Installed 'repair-0.1.0' '0.1.0'
     Invoke-Driver 'snapshot' @('repair-0.1.0') 30000
     Invoke-Driver 'compare' @('launch-0.1.0', 'repair-0.1.0') 30000
+    # ET-045g: an install made before the fix, which the update must give the product icon.
+    Set-LegacyIcon 'before-update-0.1.1'
 
     $env:ETS2TELEMETRY_DIAGNOSTIC_DIR = Join-Path $runRoot 'diagnostics\update-0.1.1'
     Invoke-Driver 'step' @('update-0.1.1', (Join-Path $binaryRoot 'Update.exe'), '--update', (Join-Path $runRoot 'fixture\feed')) 60000
     $executableB = Assert-Installed 'update-0.1.1' '0.1.1'
+    Assert-IconIdentity 'update-0.1.1' '0.1.1'
     Invoke-Driver 'snapshot' @('update-0.1.1') 30000
     Invoke-Driver 'compare' @('repair-0.1.0', 'update-0.1.1') 30000
 

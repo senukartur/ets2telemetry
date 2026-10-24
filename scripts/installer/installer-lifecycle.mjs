@@ -10,7 +10,7 @@ import {_electron as electron} from '@playwright/test';
 import {rendererPages} from '../ci/overlay-observation.mjs';
 import {settingsPanel, waitForStartup} from '../ci/ui-navigation.mjs';
 import {checkedPaths, checkInstalled, checkLaunchEnvironment, checkRunPlan, checkRunSignal, FACTS_VARIABLE, factsEvidence, InstallerGuardError, installedEnvironment, normalizePath,
-  checkDataRootUnchanged, checkDecoyUnchanged, checkUninstallResidue, classifyRegistrationIcon, electronRuntimeNames, ownsRegistration, parseUninstallString, resolveRealLocation, RUN_ONCE_KEY, RUN_ROOT_NAME,
+  checkDataRootUnchanged, checkDecoyUnchanged, checkUninstallResidue, checkRegistrationIcon, classifyRegistrationIcon, electronRuntimeNames, ownsRegistration, parseUninstallString, resolveRealLocation, RUN_ONCE_KEY, RUN_ROOT_NAME,
   ROOT_ICON_FILE, runLayout, steamLibraryPaths, uninstallEnvironment} from './installer-guard.mjs';
 
 // ET-018 PR-1, PR-3 and PR-4 (REG-013, REG-015, REG-017; plan U8, U10-U13): the Node driver of the installer lifecycle in a marked test root. The
@@ -22,7 +22,11 @@ import {checkedPaths, checkInstalled, checkLaunchEnvironment, checkRunPlan, chec
 //   signal [--allow-local]                    the CI signal (checkRunSignal); first, before anything is read
 //   guard <config> <plan|ready>               the fail-closed preflight (checkRunPlan) on the harness's facts
 //   installed <config> <label> <version>      checkInstalled on the facts the harness read after an installer step; ET-045g
-//                                             also records icon-<label>.json: the DisplayIcon shape and the root app.ico hash
+//                                             also records icon-<label>.json (the DisplayIcon shape and the root and packaged
+//                                             app.ico hashes) and applies checkRegistrationIcon
+//   legacy-icon <config> <label> <location per view...>
+//                                             ET-045g: writes a synthetic legacy app.ico into R's binary root and decides per
+//                                             registry view whether the harness may point DisplayIcon at it (ownsRegistration)
 //   seed <config>                             writes the synthetic data root, the settings, the registry and the export
 //   snapshot <config> <label>                 hashes every file of the data root and the export folder
 //   compare <config> <before> <after>         an installer hook must leave both byte-identical (no data write)
@@ -161,36 +165,78 @@ async function installed(config, label, version) {
   const uninstallInsideRunRoot = typeof registration.uninstallString === 'string' &&
     registration.uninstallString.toLowerCase().includes(normalizePath(path.win32.join(layout.binaryRoot, 'Update.exe')));
   assert.ok(uninstallInsideRunRoot, 'UNINSTALL_STRING_OUTSIDE_RUN_ROOT');
-  await writeEvidence(config, `icon-${label}.json`, await iconObservation(layout, registration, label, version));
-  return {uninstallInsideRunRoot, facts: factsEvidence(facts, config.runRoot)};
+  // ET-045g: the observation goes to the evidence first, so a refusal can be read beside it.
+  const icon = await iconObservation(layout, registration, label, version);
+  await writeEvidence(config, `icon-${label}.json`, icon);
+  checkRegistrationIcon(icon);
+  return {uninstallInsideRunRoot, iconChecked: true, facts: factsEvidence(facts, config.runRoot)};
 }
 
 /** The tracked product icon (resources/icon/app.ico), which forge.config.cjs embeds in the executable and Setup.exe. */
 const TRACKED_ICON = path.join(checkout, 'resources', 'icon', 'app.ico');
 const ICON_READ_LIMIT = 4 * 1024 * 1024;
+/** The kind, size and SHA-256 of one icon file, compared with the tracked icon; never its path. */
+async function iconFileState(file, trackedSha256) {
+  const state = {present: false, regularFile: false, bytes: null, sha256: null, equalsTracked: false, readError: null};
+  try {
+    const item = await lstat(file);
+    state.present = true;
+    state.regularFile = item.isFile() && !item.isSymbolicLink();
+    state.bytes = item.size;
+    if (state.regularFile && item.size <= ICON_READ_LIMIT) {
+      state.sha256 = sha256(await readFile(file));
+      state.equalsTracked = state.sha256 === trackedSha256;
+    }
+  } catch (error) {
+    if (error?.code !== 'ENOENT') state.readError = typeof error?.code === 'string' ? error.code : 'UNKNOWN';
+  }
+  return state;
+}
 /**
  * ET-045g: what the Installed apps entry shows after an installer step, without a path: the DisplayIcon value's shape
- * (classifyRegistrationIcon) and the kind, size and SHA-256 of Squirrel's `<binaryRoot>\app.ico`, compared with the
- * tracked icon. It records only and asserts nothing about the icon.
+ * (classifyRegistrationIcon), Squirrel's `<binaryRoot>\app.ico` and the installed version's packaged
+ * `app-<version>\resources\icon\app.ico`, each compared with the tracked icon. checkRegistrationIcon judges it.
  */
 async function iconObservation(layout, registration, label, version) {
   const trackedSha256 = sha256(await readFile(TRACKED_ICON));
-  const rootIcon = {present: false, regularFile: false, bytes: null, sha256: null, equalsTracked: false, readError: null};
-  try {
-    const file = path.win32.join(layout.binaryRoot, ROOT_ICON_FILE);
-    const item = await lstat(file);
-    rootIcon.present = true;
-    rootIcon.regularFile = item.isFile() && !item.isSymbolicLink();
-    rootIcon.bytes = item.size;
-    if (rootIcon.regularFile && item.size <= ICON_READ_LIMIT) {
-      rootIcon.sha256 = sha256(await readFile(file));
-      rootIcon.equalsTracked = rootIcon.sha256 === trackedSha256;
-    }
-  } catch (error) {
-    if (error?.code !== 'ENOENT') rootIcon.readError = typeof error?.code === 'string' ? error.code : 'UNKNOWN';
-  }
   return {label, version, displayIcon: classifyRegistrationIcon({displayIcon: registration.displayIcon, binaryRoot: layout.binaryRoot, version}),
-    rootIcon, trackedSha256};
+    rootIcon: await iconFileState(path.win32.join(layout.binaryRoot, ROOT_ICON_FILE), trackedSha256),
+    bundledIcon: await iconFileState(path.win32.join(layout.binaryRoot, `app-${version}`, 'resources', 'icon', ROOT_ICON_FILE), trackedSha256),
+    trackedSha256};
+}
+
+/**
+ * A synthetic one-entry icon (a 1x1 32-bit image of fixed bytes), distinct from the product icon: the stand-in for the
+ * Electron icon that Squirrel downloaded into an existing install before ET-045g.
+ */
+function legacyIconBytes() {
+  const bytes = Buffer.alloc(22 + 8, 0x5a);
+  bytes.writeUInt16LE(0, 0); bytes.writeUInt16LE(1, 2); bytes.writeUInt16LE(1, 4);
+  bytes.writeUInt8(1, 6); bytes.writeUInt8(1, 7); bytes.writeUInt8(0, 8); bytes.writeUInt8(0, 9); bytes.writeUInt16LE(1, 10); bytes.writeUInt16LE(32, 12);
+  bytes.writeUInt32LE(8, 14); bytes.writeUInt32LE(22, 18);
+  return bytes;
+}
+/**
+ * ET-045g, before the update: plants the state of an install made before the fix. After checkInstalled, the binary
+ * root's app.ico becomes legacyIconBytes() (a link there refuses), and for each registry view whose InstallLocation
+ * points into R (ownsRegistration; `-` for a view without the key) the harness may then set DisplayIcon to that file.
+ * The update must replace both.
+ */
+async function legacyIcon(config, label, locations) {
+  const facts = machineFacts();
+  const layout = runLayout(config.runRoot);
+  const registration = facts.registration ?? {};
+  checkInstalled({runRoot: config.runRoot, installLocation: registration.installLocation, binaryRoot: layout.binaryRoot,
+    resolvedInstallLocation: typeof registration.installLocation === 'string' ? await resolveRealLocation(registration.installLocation, realpath) : null,
+    resolvedBinaryRoot: await resolveRealLocation(layout.binaryRoot, realpath), realBinaryRootExists: facts.realBinaryRootExists});
+  assert.match(String(label), /^[a-z0-9.-]{1,40}$/, 'LEGACY_ICON_LABEL_INVALID');
+  const file = path.win32.join(layout.binaryRoot, ROOT_ICON_FILE);
+  const before = await lstat(file).catch(error => {if (error?.code === 'ENOENT') return null; throw error;});
+  assert.ok(before === null || (before.isFile() && !before.isSymbolicLink()), 'LEGACY_ICON_TARGET_INVALID');
+  const bytes = legacyIconBytes();
+  await writeFile(file, bytes);
+  assert.equal(sha256(await readFile(file)), sha256(bytes), 'LEGACY_ICON_WRITE_FAILED');
+  return {legacySha256: sha256(bytes), replacedExisting: before !== null, ownsRegistration: locations.map(location => location !== '-' && ownsRegistration(config.runRoot, location))};
 }
 
 /** The fixture's committed SHA-256 from tests/fixtures/storage/manifest.txt; the fixture itself is never written. */
@@ -1013,6 +1059,7 @@ try {
     switch (command) {
       case 'guard': result.result = await guard(config, label); break;
       case 'installed': result.result = await installed(config, label, rest[2]); break;
+      case 'legacy-icon': result.result = await legacyIcon(config, label, rest.slice(2)); break;
       case 'seed': result.result = await seed(config); break;
       case 'snapshot': result.result = await snapshot(config); break;
       case 'compare': result.result = await compare(config, rest[1], rest[2]); break;

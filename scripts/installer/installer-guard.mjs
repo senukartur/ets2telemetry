@@ -374,6 +374,22 @@ export function classifyRegistrationIcon({displayIcon, binaryRoot, version}) {
   }
   return other;
 }
+const SHA256_HEX = /^[0-9a-f]{64}$/;
+/**
+ * ET-045g, after each install, repair and update: the Installed apps entry shows the product icon. `observation` is the
+ * driver's icon record: `displayIcon` from classifyRegistrationIcon, `rootIcon` the binary root's app.ico
+ * `{regularFile, sha256}`, `bundledIcon` the installed version's `resources\icon\app.ico` `{regularFile, sha256}` and
+ * `trackedSha256` the tracked resources/icon/app.ico. DisplayIcon must name icon 0 of the installed version's executable,
+ * and both icon files must have the tracked bytes. Throws the first refusal.
+ */
+export function checkRegistrationIcon(observation) {
+  const {displayIcon, rootIcon, bundledIcon, trackedSha256} = observation ?? {};
+  if (typeof trackedSha256 !== 'string' || !SHA256_HEX.test(trackedSha256)) refuse('TRACKED_ICON_INVALID');
+  if (displayIcon?.shape !== 'app-exe-index-0') refuse('DISPLAY_ICON_NOT_PRODUCT_EXECUTABLE', typeof displayIcon?.shape === 'string' ? displayIcon.shape : undefined);
+  if (displayIcon.versionMatches !== true) refuse('DISPLAY_ICON_VERSION_MISMATCH');
+  if (bundledIcon?.regularFile !== true || bundledIcon.sha256 !== trackedSha256) refuse('BUNDLED_ICON_NOT_PRODUCT');
+  if (rootIcon?.regularFile !== true || rootIcon.sha256 !== trackedSha256) refuse('ROOT_ICON_NOT_PRODUCT');
+}
 
 /** The minimal PATH of an installed launch (U11): only Windows' own folders, no Node, npm, Git or build tools. */
 export function minimalPath(systemRoot) {

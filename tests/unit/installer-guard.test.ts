@@ -6,7 +6,7 @@ import {fileURLToPath} from 'node:url';
 import {promisify} from 'node:util';
 import {describe, expect, it} from 'vitest';
 import {checkedPaths, checkInstalled, checkInstallTest, checkLaunchEnvironment, checkRunPlan, checkRunSignal, FACTS_VARIABLE, factsEvidence, installedEnvironment,
-  checkDataRootUnchanged, checkDecoyUnchanged, checkUninstallResidue, classifyRegistrationIcon, DATA_ROOT_REQUIRED, electronRuntimeNames, PRODUCT_EXECUTABLE, InstallerGuardError, RESIDUE_MAX_ENTRIES, isGuardedProcess, isHostedRunner, minimalPath, normalizePath, ownsRegistration, parseUninstallString, resolveRealLocation, runLayout,
+  checkDataRootUnchanged, checkDecoyUnchanged, checkRegistrationIcon, checkUninstallResidue, classifyRegistrationIcon, DATA_ROOT_REQUIRED, electronRuntimeNames, PRODUCT_EXECUTABLE, InstallerGuardError, RESIDUE_MAX_ENTRIES, isGuardedProcess, isHostedRunner, minimalPath, normalizePath, ownsRegistration, parseUninstallString, resolveRealLocation, runLayout,
   steamLibraryPaths, uninstallEnvironment, type RunPlanFacts} from '../../scripts/installer/installer-guard.mjs';
 import {temporaryResources} from '../shared/resources';
 
@@ -309,6 +309,26 @@ describe('registration icon shape (ET-045g)', () => {
     ['a downloaded URL', 'https://raw.githubusercontent.com/electron/electron/main/shell/browser/resources/win/electron.ico'],
     ['a number', 7]
   ])('reports %s as other', (_name, value) => expect(shape(value)).toEqual({shape: 'other', versionMatches: null}));
+
+  const TRACKED = 'a'.repeat(64);
+  const product = {regularFile: true, sha256: TRACKED};
+  const observation = (displayIcon: unknown, changes: Record<string, unknown> = {}) => ({displayIcon: shape(displayIcon), rootIcon: product, bundledIcon: product,
+    trackedSha256: TRACKED, ...changes}) as Parameters<typeof checkRegistrationIcon>[0];
+  it('accepts icon 0 of the installed version\'s executable with the product icon in both places', () => {
+    expect(refusal(() => checkRegistrationIcon(observation(`${binaryRoot}\\app-0.1.1\\ETS2TelemetryDesktop.exe,0`)))).toBe('ACCEPTED');
+  });
+  it.each([
+    ['a DisplayIcon of another version', `${binaryRoot}\\app-0.1.0\\ETS2TelemetryDesktop.exe,0`, {}, 'DISPLAY_ICON_VERSION_MISMATCH'],
+    ['Squirrel\'s root app.ico', `${binaryRoot}\\app.ico`, {}, 'DISPLAY_ICON_NOT_PRODUCT_EXECUTABLE'],
+    ['no DisplayIcon', null, {}, 'DISPLAY_ICON_NOT_PRODUCT_EXECUTABLE'],
+    ['a quoted value', `"${binaryRoot}\\app-0.1.1\\ETS2TelemetryDesktop.exe",0`, {}, 'DISPLAY_ICON_NOT_PRODUCT_EXECUTABLE'],
+    ['a relative value', 'app-0.1.1\\ETS2TelemetryDesktop.exe,0', {}, 'DISPLAY_ICON_NOT_PRODUCT_EXECUTABLE'],
+    ['a root app.ico of other bytes', `${binaryRoot}\\app-0.1.1\\ETS2TelemetryDesktop.exe,0`, {rootIcon: {regularFile: true, sha256: 'b'.repeat(64)}}, 'ROOT_ICON_NOT_PRODUCT'],
+    ['no root app.ico', `${binaryRoot}\\app-0.1.1\\ETS2TelemetryDesktop.exe,0`, {rootIcon: {regularFile: false, sha256: null}}, 'ROOT_ICON_NOT_PRODUCT'],
+    ['a packaged icon of other bytes', `${binaryRoot}\\app-0.1.1\\ETS2TelemetryDesktop.exe,0`, {bundledIcon: {regularFile: true, sha256: 'c'.repeat(64)}},
+      'BUNDLED_ICON_NOT_PRODUCT'],
+    ['no tracked hash', `${binaryRoot}\\app-0.1.1\\ETS2TelemetryDesktop.exe,0`, {trackedSha256: 'not a hash'}, 'TRACKED_ICON_INVALID']
+  ])('refuses %s', (_name, value, changes, code) => expect(refusal(() => checkRegistrationIcon(observation(value, changes)))).toBe(code));
 });
 
 describe('launch environment', () => {
@@ -385,46 +405,96 @@ describe('machine facts never reach the evidence', () => {
       expect(JSON.parse(text).result).toEqual({phase: 'plan', facts: factsEvidence(passing, runRoot)});
     } finally {await resources.dispose();}
   }, 40000);
-  // ET-045g: the installed command's icon observation, against a fake binary root in a temporary run root.
-  it('records the DisplayIcon shape and the root app.ico hash without a path (the driver itself)', async () => {
+  // ET-045g: the installed command's icon observation and check, and the legacy-icon plant, against a fake binary root in
+  // a temporary run root. No registry is read or written: the registration comes in the facts.
+  async function iconRun() {
     const resources = await temporaryResources();
+    // The real location, so the driver's realpath checks of R's binary root agree with the raw path.
+    const base = await realpath(resources.directory);
+    const runRoot = path.join(base, `installer-${ID}`), evidence = path.join(base, `installer-${ID}-evidence`);
+    const binaryRoot = runLayout(runRoot).binaryRoot;
+    await mkdir(binaryRoot, {recursive: true});
+    await mkdir(evidence);
+    const config = path.join(evidence, 'config.json');
+    await writeFile(config, JSON.stringify({runRoot, evidence, setup: path.join(base, 'Setup.exe'), stepBudgetMs: 1000}));
+    /** Runs one driver command with this registration in the facts; resolves with its result line, also when it failed. */
+    const command = (args: string[], version: string, displayIcon: string | null) => {
+      const registration = {installLocation: binaryRoot, displayVersion: version, uninstallString: `"${binaryRoot}\\Update.exe" --uninstall`, displayIcon};
+      const env = {...process.env, [FACTS_VARIABLE]: JSON.stringify({...machine, registration, realBinaryRootExists: false})};
+      return new Promise<{passed: boolean; failure: {code?: string} | null}>((resolve, reject) => {
+        execFile(process.execPath, [path.resolve('scripts/installer/installer-lifecycle.mjs'), args[0], config, ...args.slice(1)],
+          {env, encoding: 'utf8', timeout: 30000, windowsHide: true}, (_error, stdout) => {
+            try {resolve(JSON.parse(String(stdout).trim().split(/\r?\n/).at(-1)!) as {passed: boolean; failure: {code?: string} | null});} catch {reject(new Error('DRIVER_OUTPUT_INVALID'));}
+          });
+      });
+    };
+    return {resources, runRoot, evidence, binaryRoot, command};
+  }
+  const hash = (bytes: Buffer) => createHash('sha256').update(bytes).digest('hex');
+  it('records the DisplayIcon shape and both app.ico hashes without a path, then requires the product icon (the driver itself)', async () => {
+    const {resources, evidence, binaryRoot, command} = await iconRun();
     try {
-      // The real location, so the driver's realpath checks of R's binary root agree with the raw path.
-      const base = await realpath(resources.directory);
-      const runRoot = path.join(base, `installer-${ID}`), evidence = path.join(base, `installer-${ID}-evidence`);
-      const binaryRoot = runLayout(runRoot).binaryRoot;
-      await mkdir(binaryRoot, {recursive: true});
-      await mkdir(evidence);
-      const config = path.join(evidence, 'config.json');
-      await writeFile(config, JSON.stringify({runRoot, evidence, setup: path.join(base, 'Setup.exe'), stepBudgetMs: 1000}));
       // A synthetic one-entry ICO, distinct from the tracked product icon.
       const legacy = Buffer.alloc(22 + 8);
       legacy.writeUInt16LE(1, 2); legacy.writeUInt16LE(1, 4); legacy.writeUInt8(1, 6); legacy.writeUInt8(1, 7); legacy.writeUInt16LE(1, 10);
       legacy.writeUInt16LE(32, 12); legacy.writeUInt32LE(8, 14); legacy.writeUInt32LE(22, 18);
       const tracked = await readFile(path.resolve('resources/icon/app.ico'));
-      const hash = (bytes: Buffer) => createHash('sha256').update(bytes).digest('hex');
-      const run = async (label: string, version: string, displayIcon: string | null) => {
-        const registration = {installLocation: binaryRoot, displayVersion: version, uninstallString: `"${binaryRoot}\\Update.exe" --uninstall`, displayIcon};
-        const env = {...process.env, [FACTS_VARIABLE]: JSON.stringify({...machine, registration, realBinaryRootExists: false})};
-        const {stdout} = await promisify(execFile)(process.execPath, [path.resolve('scripts/installer/installer-lifecycle.mjs'), 'installed', config, label, version],
-          {env, encoding: 'utf8', timeout: 30000, windowsHide: true});
-        expect(JSON.parse(stdout.trim().split(/\r?\n/).at(-1)!)).toMatchObject({command: 'installed', passed: true});
+      const observed = async (label: string) => {
         const text = await readFile(path.join(evidence, `icon-${label}.json`), 'utf8');
         assertClean(text);
-        return JSON.parse(text);
+        return JSON.parse(text) as unknown;
       };
+      const missing = {present: false, regularFile: false, bytes: null, sha256: null, equalsTracked: false, readError: null};
+      // The pre-fix state: Squirrel's downloaded icon and its DisplayIcon. Recorded first, then refused.
       await writeFile(path.join(binaryRoot, 'app.ico'), legacy);
-      expect(await run('install-0.1.0', '0.1.0', `${binaryRoot}\\app.ico`)).toEqual({label: 'install-0.1.0', version: '0.1.0',
-        displayIcon: {shape: 'root-app-ico', versionMatches: null},
-        rootIcon: {present: true, regularFile: true, bytes: legacy.length, sha256: hash(legacy), equalsTracked: false, readError: null}, trackedSha256: hash(tracked)});
+      expect(await command(['installed', 'install-0.1.0', '0.1.0'], '0.1.0', `${binaryRoot}\\app.ico`))
+        .toMatchObject({passed: false, failure: {code: 'DISPLAY_ICON_NOT_PRODUCT_EXECUTABLE'}});
+      expect(await observed('install-0.1.0')).toEqual({label: 'install-0.1.0', version: '0.1.0', displayIcon: {shape: 'root-app-ico', versionMatches: null},
+        rootIcon: {present: true, regularFile: true, bytes: legacy.length, sha256: hash(legacy), equalsTracked: false, readError: null}, bundledIcon: missing,
+        trackedSha256: hash(tracked)});
+      // The fixed state of version 0.1.1: the hook's app.ico and the packaged icon have the tracked bytes.
       await writeFile(path.join(binaryRoot, 'app.ico'), tracked);
-      expect(await run('update-0.1.1', '0.1.1', `${binaryRoot}\\app-0.1.1\\ETS2TelemetryDesktop.exe,0`)).toMatchObject({
-        displayIcon: {shape: 'app-exe-index-0', versionMatches: true}, rootIcon: {present: true, sha256: hash(tracked), equalsTracked: true}});
+      await mkdir(path.join(binaryRoot, 'app-0.1.1', 'resources', 'icon'), {recursive: true});
+      await writeFile(path.join(binaryRoot, 'app-0.1.1', 'resources', 'icon', 'app.ico'), tracked);
+      expect(await command(['installed', 'update-0.1.1', '0.1.1'], '0.1.1', `${binaryRoot}\\app-0.1.1\\ETS2TelemetryDesktop.exe,0`)).toMatchObject({passed: true});
+      expect(await observed('update-0.1.1')).toMatchObject({displayIcon: {shape: 'app-exe-index-0', versionMatches: true},
+        rootIcon: {present: true, sha256: hash(tracked), equalsTracked: true}, bundledIcon: {present: true, sha256: hash(tracked), equalsTracked: true}});
+      // A DisplayIcon of the previous version, or no value at all, is refused.
+      expect(await command(['installed', 'stale-0.1.1', '0.1.1'], '0.1.1', `${binaryRoot}\\app-0.1.0\\ETS2TelemetryDesktop.exe,0`))
+        .toMatchObject({passed: false, failure: {code: 'DISPLAY_ICON_VERSION_MISMATCH'}});
       await rm(path.join(binaryRoot, 'app.ico'));
-      expect(await run('repair-0.1.0', '0.1.0', null)).toMatchObject({displayIcon: {shape: 'absent', versionMatches: null},
-        rootIcon: {present: false, regularFile: false, bytes: null, sha256: null, equalsTracked: false, readError: null}});
-      expect((await readdir(evidence)).sort()).toEqual(['config.json', 'icon-install-0.1.0.json', 'icon-repair-0.1.0.json', 'icon-update-0.1.1.json',
-        'installed-install-0.1.0.json', 'installed-repair-0.1.0.json', 'installed-update-0.1.1.json']);
+      expect(await command(['installed', 'repair-0.1.0', '0.1.0'], '0.1.0', null)).toMatchObject({passed: false, failure: {code: 'DISPLAY_ICON_NOT_PRODUCT_EXECUTABLE'}});
+      expect(await observed('repair-0.1.0')).toMatchObject({displayIcon: {shape: 'absent', versionMatches: null}, rootIcon: missing});
+      expect((await readdir(evidence)).sort()).toEqual(['config.json', 'icon-install-0.1.0.json', 'icon-repair-0.1.0.json', 'icon-stale-0.1.1.json',
+        'icon-update-0.1.1.json', 'installed-install-0.1.0.json', 'installed-repair-0.1.0.json', 'installed-stale-0.1.1.json', 'installed-update-0.1.1.json']);
+    } finally {await resources.dispose();}
+  }, 60000);
+  it('plants a legacy app.ico and allows a DisplayIcon write only for views whose key points into R (the driver itself)', async () => {
+    const {resources, runRoot, evidence, binaryRoot, command} = await iconRun();
+    try {
+      const tracked = await readFile(path.resolve('resources/icon/app.ico'));
+      await writeFile(path.join(binaryRoot, 'app.ico'), tracked);
+      expect(await command(['legacy-icon', 'before-update-0.1.1', binaryRoot, `${REAL.localAppData}\\ETS2TelemetryDesktop`], '0.1.0', null)).toMatchObject({passed: true});
+      const planted = await readFile(path.join(binaryRoot, 'app.ico'));
+      expect(planted.equals(tracked)).toBe(false);
+      expect([planted.readUInt16LE(0), planted.readUInt16LE(2), planted.readUInt16LE(4)]).toEqual([0, 1, 1]);
+      const text = await readFile(path.join(evidence, 'legacy-icon-before-update-0.1.1.json'), 'utf8');
+      assertClean(text);
+      expect((JSON.parse(text) as {result: unknown}).result).toEqual({legacySha256: hash(planted), replacedExisting: true, ownsRegistration: [true, false]});
+      expect(await command(['legacy-icon', 'other', '-', '-'], '0.1.0', null)).toMatchObject({passed: true});
+      expect((JSON.parse(await readFile(path.join(evidence, 'legacy-icon-other.json'), 'utf8')) as {result: {ownsRegistration: boolean[]}}).result.ownsRegistration)
+        .toEqual([false, false]);
+      // A registration outside R refuses before anything is written.
+      await rm(path.join(binaryRoot, 'app.ico'));
+      const outside = await new Promise<{passed: boolean; failure: {code?: string} | null}>((resolve, reject) => {
+        const registration = {installLocation: `${REAL.localAppData}\\ETS2TelemetryDesktop`, displayVersion: '0.1.0', uninstallString: null, displayIcon: null};
+        execFile(process.execPath, [path.resolve('scripts/installer/installer-lifecycle.mjs'), 'legacy-icon', path.join(evidence, 'config.json'), 'refused', '-', '-'],
+          {env: {...process.env, [FACTS_VARIABLE]: JSON.stringify({...machine, registration, realBinaryRootExists: false})}, encoding: 'utf8', timeout: 30000, windowsHide: true},
+          (_error, stdout) => {try {resolve(JSON.parse(String(stdout).trim().split(/\r?\n/).at(-1)!) as {passed: boolean; failure: {code?: string} | null});} catch {reject(new Error('DRIVER_OUTPUT_INVALID'));}});
+      });
+      expect(outside).toMatchObject({passed: false, failure: {code: 'INSTALL_OUTSIDE_RUN_ROOT'}});
+      expect(await readdir(binaryRoot)).toEqual([]);
+      expect(runRoot).toContain(`installer-${ID}`);
     } finally {await resources.dispose();}
   }, 60000);
   it('never writes the facts to a file in the harness', async () => {
@@ -516,6 +586,18 @@ describe('harness Job bounds', () => {
     const folders = [...(await read('scripts/installer/Invoke-InstallerLifecycle.ps1')).matchAll(/Join-Path \$runRoot '(diagnostics[^']*)'/g)].map(match => match[1]);
     expect(folders.length).toBeGreaterThan(5);
     expect(folders.filter(folder => folder !== 'diagnostics' && !/^diagnostics\\[a-z0-9.-]+$/.test(folder))).toEqual([]);
+  });
+  // ET-045g: the harness's only registry value write is the legacy DisplayIcon, after the driver's legacy-icon decision.
+  it('writes a registry value only in Set-LegacyIcon, and only to views the driver says point into R', async () => {
+    const harness = await read('scripts/installer/Invoke-InstallerLifecycle.ps1');
+    const writes = [...harness.matchAll(/\.SetValue\(/g)];
+    expect(writes).toHaveLength(1);
+    const body = harness.slice(harness.indexOf('function Set-LegacyIcon'), harness.indexOf('\n}', harness.indexOf('function Set-LegacyIcon')));
+    expect(body).toContain('.SetValue(');
+    expect(body.indexOf("Invoke-Driver 'legacy-icon'")).toBeGreaterThan(-1);
+    expect(body.indexOf("Invoke-Driver 'legacy-icon'")).toBeLessThan(body.indexOf('.SetValue('));
+    expect(body).toContain('if ($owned[$index] -ne $true) { continue }');
+    expect(harness).toContain("Set-LegacyIcon 'before-update-0.1.1'");
   });
   it('keeps the in-app uninstall run\'s own budget below the cap', async () => {
     const cap = await jobCap();
