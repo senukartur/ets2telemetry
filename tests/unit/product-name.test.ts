@@ -135,7 +135,7 @@ describe('the technical identities stay', () => {
 });
 
 describe('Russian copy for the renamed texts', () => {
-  const tables = Object.entries(STRINGS_MODULE).filter((entry): entry is [string, object] => typeof entry[1] === 'object' && entry[1] !== null);
+  const tables = Object.entries(STRINGS_MODULE as Record<string, unknown>).filter((entry): entry is [string, object] => typeof entry[1] === 'object' && entry[1] !== null);
   const englishTexts = new Set(tables.filter(([name]) => !name.endsWith('_RU')).flatMap(([, table]) => strings(table)));
 
   // The English text of strings.ts is the lookup key of APP_COPY_KEYS: a text renamed without its key would silently show

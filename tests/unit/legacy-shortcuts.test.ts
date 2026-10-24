@@ -135,7 +135,7 @@ describe('removeLegacyShortcuts', () => {
   });
 
   it.each([
-    ['a foreign shortcut', {[DESKTOP_OLD]: {kind: 'file'}, [DESKTOP_NEW]: {kind: 'file'}} as Record<string, Entry>, {[DESKTOP_OLD]: {target: 'C:\\Other\\Other.exe'}}],
+    ['a foreign shortcut', {[DESKTOP_OLD]: {kind: 'file'}, [DESKTOP_NEW]: {kind: 'file'}}, {[DESKTOP_OLD]: {target: 'C:\\Other\\Other.exe'}}],
     ['an unreadable shortcut', {[DESKTOP_OLD]: {kind: 'file'}, [DESKTOP_NEW]: {kind: 'file'}}, {[DESKTOP_OLD]: 'throws' as const}],
     ['a shortcut the reader cannot describe', {[DESKTOP_OLD]: {kind: 'file'}, [DESKTOP_NEW]: {kind: 'file'}}, {}],
     ['a link at the old name', {[DESKTOP_OLD]: {kind: 'link'}, [DESKTOP_NEW]: {kind: 'file'}}, {[DESKTOP_OLD]: STUB}],

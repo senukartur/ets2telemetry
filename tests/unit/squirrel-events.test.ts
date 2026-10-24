@@ -326,13 +326,13 @@ async function shortcutScene(fixture: InstallFixture, files: {legacy?: boolean; 
   return scene;
 }
 /** Ports that see the fake folders and read every shortcut as this install's root stub, unless `links` says otherwise. */
-function shortcutPorts(fixture: InstallFixture, scene: ShortcutScene, links: Record<string, ShortcutLink | undefined> = {}): Partial<SquirrelPorts> & {reads: string[]} {
+function shortcutPorts(fixture: InstallFixture, scene: ShortcutScene, links: Record<string, ShortcutLink | undefined> = {}): {reads: string[]; ports: Pick<SquirrelPorts, 'shortcutFolders' | 'readShortcut'>} {
   const reads: string[] = [];
-  return {reads, shortcutFolders: () => ({desktop: scene.desktop, startMenuPrograms: scene.programs}),
+  return {reads, ports: {shortcutFolders: () => ({desktop: scene.desktop, startMenuPrograms: scene.programs}),
     readShortcut: file => {
       reads.push(file);
       return file in links ? links[file] : {target: path.win32.join(fixture.installRoot, 'ETS2TelemetryDesktop.exe'), appUserModelId: 'com.squirrel.ETS2TelemetryDesktop.ETS2TelemetryDesktop'};
-    }};
+    }}};
 }
 const RECEIPT_KEYS = ['appVersion', 'code', 'createdUtc', 'data', 'elapsedMs', 'executor', 'failedStep', 'format', 'instance', 'mode', 'otherProcesses', 'outcome', 'plugins',
   'processWaitMs', 'readme', 'roaming', 'shortcuts', 'startupOffsetMs', 'version'];
@@ -341,7 +341,7 @@ describe('the old-name shortcuts (ET-045h)', () => {
   it.each(['install', 'updated'] as const)('%s deletes this install\'s old-name shortcuts once Update.exe created the new ones', async name => {
     const {fixture} = await scene({shortcuts: true});
     const shortcuts = await shortcutScene(fixture);
-    const {reads, ...ports} = shortcutPorts(fixture, shortcuts);
+    const {reads, ports} = shortcutPorts(fixture, shortcuts);
     const test = harness(fixture, ports);
     expect(await runSquirrelEvent(event(name), test.ports)).toBe(0);
     expect(await exists(shortcuts.legacy.desktop)).toBe(false);
@@ -358,7 +358,7 @@ describe('the old-name shortcuts (ET-045h)', () => {
     const {fixture} = await scene({shortcuts: true});
     const shortcuts = await shortcutScene(fixture);
     await fsp.rm(shortcuts.current.startMenu);
-    const {reads, ...ports} = shortcutPorts(fixture, shortcuts, {[shortcuts.legacy.desktop]: {target: path.win32.join(fixture.testRoot, 'decoy-target', 'ETS2TelemetryDesktop.exe')}});
+    const {reads, ports} = shortcutPorts(fixture, shortcuts, {[shortcuts.legacy.desktop]: {target: path.win32.join(fixture.testRoot, 'decoy-target', 'ETS2TelemetryDesktop.exe')}});
     expect(await runSquirrelEvent(event('updated'), harness(fixture, ports).ports)).toBe(0);
     expect(await fsp.readFile(shortcuts.legacy.desktop, 'utf8')).toBe('old shortcut');
     expect(await fsp.readFile(shortcuts.legacy.startMenu, 'utf8')).toBe('old shortcut');
@@ -380,7 +380,7 @@ describe('the old-name shortcuts (ET-045h)', () => {
     'keeps the old-name shortcuts when Update.exe --createShortcut %s', async (_label, runUpdate) => {
       const {fixture} = await scene({shortcuts: true});
       const shortcuts = await shortcutScene(fixture);
-      const {reads, ...ports} = shortcutPorts(fixture, shortcuts);
+      const {reads, ports} = shortcutPorts(fixture, shortcuts);
       expect(await runSquirrelEvent(event('install'), harness(fixture, {...ports, runUpdate}).ports)).toBe(0);
       expect(reads).toEqual([]);
       expect(await exists(shortcuts.legacy.desktop)).toBe(true);
@@ -391,11 +391,11 @@ describe('the old-name shortcuts (ET-045h)', () => {
     const {fixture} = await scene({shortcuts: true});
     await seedDeferral(fixture);
     const shortcuts = await shortcutScene(fixture);
-    const {reads: _reads, ...ports} = shortcutPorts(fixture, shortcuts);
+    const {ports} = shortcutPorts(fixture, shortcuts);
     const unlink = (target: string) => target.toLowerCase().endsWith('.lnk') ? Promise.reject(Object.assign(new Error('EPERM'), {code: 'EPERM'})) : fixture.fs.unlink(target);
-    const test = harness(fixture, {...ports, fs: {...fixture.fs, unlink} as SquirrelPorts['fs'], shortcutFolders: () => {throw new Error('no known folder');}});
+    const test = harness(fixture, {...ports, fs: {...fixture.fs, unlink}, shortcutFolders: () => {throw new Error('no known folder');}});
     expect(await runSquirrelEvent(event('install'), test.ports)).toBe(0);
-    const failing = harness(fixture, {...ports, fs: {...fixture.fs, unlink} as SquirrelPorts['fs']});
+    const failing = harness(fixture, {...ports, fs: {...fixture.fs, unlink}});
     expect(await runSquirrelEvent(event('updated'), failing.ports)).toBe(0);
     expect(await exists(shortcuts.legacy.desktop)).toBe(true);
     expect(await fsp.readFile(path.win32.join(fixture.installRoot, 'app.ico'))).toEqual(ICON);
@@ -411,7 +411,7 @@ describe('the old-name shortcuts (ET-045h)', () => {
     let release: () => void = () => undefined, started: () => void = () => undefined;
     const removalStarted = new Promise<void>(resolve => {started = resolve;});
     const held: FakeRunOnce = {...registry, remove: (key, value, timeoutMs) => {started(); return new Promise<void>(resolve => {release = resolve;}).then(() => registry.remove(key, value, timeoutMs));}};
-    const {reads, ...ports} = shortcutPorts(fixture, shortcuts);
+    const {reads, ports} = shortcutPorts(fixture, shortcuts);
     const test = harness(fixture, {...ports, runOnce: held});
     let finished = false;
     const run = runSquirrelEvent(event('updated'), test.ports).then(code => {finished = true; return code;});
@@ -428,8 +428,8 @@ describe('the old-name shortcuts (ET-045h)', () => {
     const {fixture} = await scene({shortcuts: true});
     const shortcuts = await shortcutScene(fixture);
     let advance: (milliseconds: number) => void = () => undefined;
-    const {reads, ...ports} = shortcutPorts(fixture, shortcuts);
-    const test = harness(fixture, {...ports, readShortcut: file => {advance(1000); return ports.readShortcut!(file);}});
+    const {reads, ports} = shortcutPorts(fixture, shortcuts);
+    const test = harness(fixture, {...ports, readShortcut: file => {advance(1000); return ports.readShortcut(file);}});
     advance = test.advance;
     expect(await runSquirrelEvent(event('install'), test.ports)).toBe(0);
     expect(reads).toEqual([shortcuts.legacy.desktop]);
@@ -441,9 +441,9 @@ describe('the old-name shortcuts (ET-045h)', () => {
     const {fixture} = await scene({shortcuts: true});
     const shortcuts = await shortcutScene(fixture, {current: false});
     const order: string[] = [];
-    const {reads, ...ports} = shortcutPorts(fixture, shortcuts);
+    const {reads, ports} = shortcutPorts(fixture, shortcuts);
     const test = harness(fixture, {...ports, runUpdate: (_installRoot, args) => {order.push(args[0]); return Promise.resolve(true);},
-      readShortcut: file => {order.push('read'); return ports.readShortcut!(file);}});
+      readShortcut: file => {order.push('read'); return ports.readShortcut(file);}});
     expect(await runSquirrelEvent(event('uninstall'), test.ports)).toBe(EXIT_CODES.complete);
     expect(order).toEqual(['--removeShortcut=ETS2TelemetryDesktop.exe', 'read', 'read']);
     expect(await exists(shortcuts.legacy.desktop)).toBe(false);
@@ -456,9 +456,9 @@ describe('the old-name shortcuts (ET-045h)', () => {
   it('uninstall reports the shortcuts failed when an old-name shortcut cannot be deleted, and keeps the engine\'s outcome', async () => {
     const {fixture, game} = await scene({shortcuts: true});
     const shortcuts = await shortcutScene(fixture, {current: false});
-    const {reads: _reads, ...ports} = shortcutPorts(fixture, shortcuts);
+    const {ports} = shortcutPorts(fixture, shortcuts);
     const unlink = (target: string) => target.toLowerCase().endsWith('.lnk') ? Promise.reject(Object.assign(new Error('EPERM'), {code: 'EPERM'})) : fixture.fs.unlink(target);
-    const test = harness(fixture, {...ports, fs: {...fixture.fs, unlink} as SquirrelPorts['fs']});
+    const test = harness(fixture, {...ports, fs: {...fixture.fs, unlink}});
     expect(await runSquirrelEvent(event('uninstall'), test.ports)).toBe(EXIT_CODES.complete);
     expect(test.receipts[0].receipt).toMatchObject({outcome: 'complete', code: null, shortcuts: 'failed', failedStep: null});
     expect(Object.keys(test.receipts[0].receipt).sort()).toEqual(RECEIPT_KEYS);
@@ -469,7 +469,7 @@ describe('the old-name shortcuts (ET-045h)', () => {
   it('uninstall keeps a foreign old-name shortcut and still reports the shortcuts removed', async () => {
     const {fixture} = await scene({shortcuts: true});
     const shortcuts = await shortcutScene(fixture, {current: false});
-    const {reads: _reads, ...ports} = shortcutPorts(fixture, shortcuts, {[shortcuts.legacy.desktop]: {target: 'C:\\Program Files\\Other\\Other.exe'}});
+    const {ports} = shortcutPorts(fixture, shortcuts, {[shortcuts.legacy.desktop]: {target: 'C:\\Program Files\\Other\\Other.exe'}});
     const test = harness(fixture, ports);
     expect(await runSquirrelEvent(event('uninstall'), test.ports)).toBe(EXIT_CODES.complete);
     expect(await fsp.readFile(shortcuts.legacy.desktop, 'utf8')).toBe('old shortcut');

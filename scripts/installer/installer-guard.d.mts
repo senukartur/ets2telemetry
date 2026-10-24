@@ -89,3 +89,15 @@ export interface FactsEvidence {
 }
 export function factsEvidence(facts: unknown, runRoot: string): FactsEvidence;
 export function ownsRegistration(runRoot: string, installLocation: string): boolean;
+export const PRODUCT_DISPLAY_NAME: 'Yukon Union Telemetry';
+export const PRODUCT_PUBLISHER: 'Yukon Union Telemetry contributors';
+export const LEGACY_DISPLAY_NAME: 'ETS2Telemetry Desktop';
+export const SHORTCUT_COMPANY: 'Artur Sianiuk';
+export const SHORTCUT_LOCATIONS: readonly ['desktop', 'start-menu'];
+export interface ProductLinkCounts {current: number; legacy: number; other: number; currentFolders: string[]}
+export interface ProductLinkClassification {total: number; desktop: ProductLinkCounts; 'start-menu': ProductLinkCounts}
+export function classifyProductLinks(rows: readonly string[]): ProductLinkClassification;
+export function checkProductLinks(classification: ProductLinkClassification, expectation: 'installed' | 'none'): void;
+export interface UninstallEntryRow {view: string; name: string; installLocation: string | null}
+export function checkUninstallEntries(rows: readonly UninstallEntryRow[], runRoot: string): {views: number; names: string[]};
+export function checkRegistrationNames(registration: {displayName?: unknown; publisher?: unknown} | null | undefined): {displayName: string; publisher: string};
