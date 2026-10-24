@@ -186,13 +186,15 @@ Columns:
 | `tests/unit/history-samples.test.ts` | Node unit (Vitest) | REG-001, REG-002, REG-003, REG-009, REG-018 | R, F | ET-015b (#85) | PR (tests job, `npm test`) | gap |
 | `tests/unit/history-storage.test.ts` | Node unit (Vitest) | REG-007, REG-011 | R | ET-013 (#60); ET-038 | PR (tests job, `npm test`) | regression |
 | `tests/unit/installer-driver-provenance.test.ts` | Node unit (Vitest) | REG-017 (historical provenance) | T, V (et-001) | ET-001 (#5) | PR (tests job, `npm test`) | — |
-| `tests/unit/installer-guard.test.ts` | Node unit (Vitest) | REG-017 | T, V (et-018) | ET-018 (PR-1); ET-045g | PR (tests job, `npm test`) | security |
+| `tests/unit/installer-guard.test.ts` | Node unit (Vitest) | REG-013, REG-017 | T, V (et-018) | ET-018 (PR-1); ET-045g; ET-045h | PR (tests job, `npm test`) | security |
 | `tests/unit/installer-ui-navigation.test.ts` | Inert Node unit (Vitest), production navigation helpers and hidden-control/budget fixture | REG-017 | T, R (et-028 closeout) | ET-028 | PR (tests job, `npm test`) | exact visible startup, About warning, remaining deadline |
 | `tests/unit/uninstall-data-wipe.test.ts` | Node unit (Vitest) | REG-017 | T, V (et-018) | ET-018 (PR-2) | PR (tests job, `npm test`) | security |
 | `tests/unit/uninstall-engine.test.ts` | Node unit (Vitest) | REG-015, REG-017 | T, V (et-018) | ET-018 (PR-2) | PR (tests job, `npm test`) | security |
 | `tests/unit/uninstall-plugin-cleanup.test.ts` | Node unit (Vitest) | REG-015, REG-017 | T, V (et-018) | ET-018 (PR-2) | PR (tests job, `npm test`) | security |
 | `tests/unit/uninstall-roots.test.ts` | Node unit (Vitest) | REG-017 | T, V (et-018) | ET-018 (PR-2) | PR (tests job, `npm test`) | security |
-| `tests/unit/squirrel-events.test.ts` | Node unit (Vitest) | REG-015, REG-017 | T, V (et-018) | ET-018 (PR-3); ET-045g | PR (tests job, `npm test`) | security |
+| `tests/unit/squirrel-events.test.ts` | Node unit (Vitest) | REG-015, REG-017 | T, V (et-018) | ET-018 (PR-3); ET-045g; ET-045h |
+| `tests/unit/legacy-shortcuts.test.ts` | Node unit (Vitest) on an in-memory file system and fake shortcut reader | REG-012, REG-017 | F, V (et-045h) | ET-045h | PR (tests job, `npm test`) | security (exact candidates, ownership, no link followed, deadline) |
+| `tests/unit/product-name.test.ts` | Node unit (Vitest) over the tracked copy, executor, window title and maker config | REG-012, REG-015, REG-017 | F, V (et-045h) | ET-045h | PR (tests job, `npm test`) | regression (no user-facing old name; kept technical identities) | PR (tests job, `npm test`) | security |
 | `tests/unit/installed-app-icon.test.ts` | Node unit (Vitest) on a guarded temporary install root; injected execFile, never `reg.exe` | REG-017 | F, V (et-045g) | ET-045g | PR (tests job, `npm test`) | security (fixed key and value, no link followed) |
 | `tests/unit/fixed-program.test.ts` | Node unit (Vitest) with real child processes | REG-012, REG-015 | T, V (et-018) | ET-018 (PR-3) | PR (tests job, `npm test`) | regression |
 | `tests/unit/uninstall-deferral.test.ts` | Node unit (Vitest) | REG-017 | T, V (et-018) | ET-018 (PR-3) | PR (tests job, `npm test`) | security |
@@ -512,3 +514,5 @@ ET-049 observer-budget history and its preserved failure are recorded once in [t
 
 
 ET-049 focus regression extends REG-016 in the existing overlay UI shard: consecutive keyboard commits retain the actual focused thumb without another focus() call. `ui-runtime-receipt.test.ts` requires `opacityKeyboardFocus` and rejects missing/false evidence; no new entrypoint.
+
+ET-045h (October 24, 2026) extends partial REG-012, REG-013, REG-015 and REG-017 with the new `tests/unit/legacy-shortcuts.test.ts` and `tests/unit/product-name.test.ts`, and with ET-045h cases in `squirrel-events.test.ts`, `installer-guard.test.ts` and `release-identity.test.ts`. The hosted installer lifecycle gains the old-name scenarios L1-L3, the DisplayName/Publisher, single-entry and version-resource checks and exact shortcut names per location ([installer testing](installer-testing.md), [ET-045h validation](validation/et-045h.md)).

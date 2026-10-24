@@ -29,7 +29,7 @@ Since ET-018 PR-3 (plan U2) `apps/desktop/src/squirrel-events.ts` replaces elect
 
 | Event | What runs | Exit code |
 | --- | --- | --- |
-| `--squirrel-install`, `--squirrel-updated` | `Update.exe --createShortcut=<executable>` (a production install; a test install only when its test file sets `shortcuts: true`) and, at the same time, the [Installed apps icon](release.md#installed-apps-icon-et-045g) (ET-045g): the packaged `resources\icon\app.ico` is placed at `<install root>\app.ico`, and this product's uninstall entry gets `DisplayIcon = <install root>\app-<version>\ETS2TelemetryDesktop.exe,0` (two attempts of at most 2 s). Then a pending [uninstall deferral](uninstall.md#deferral) is cancelled, with the copied executor and its RunOnce registration (ET-018 PR-5). A failure of the shortcuts or the icon changes neither the other step nor the exit code; at worst the hook takes 12 s. No data is written otherwise. | 0 |
+| `--squirrel-install`, `--squirrel-updated` | `Update.exe --createShortcut=<executable>` (a production install; a test install only when its test file sets `shortcuts: true`) and, at the same time, the [Installed apps icon](release.md#installed-apps-icon-et-045g) (ET-045g): the packaged `resources\icon\app.ico` is placed at `<install root>\app.ico`, and this product's uninstall entry gets `DisplayIcon = <install root>\app-<version>\ETS2TelemetryDesktop.exe,0` (two attempts of at most 2 s). Then, at the same time, this install's old "ETS2Telemetry Desktop" shortcuts are deleted beside the new ones, only after `--createShortcut` succeeded, only where the "Yukon Union Telemetry" one exists and only when they belong to this install (ET-045h, [shortcut migration](release.md#shortcut-migration-et-045h); at most 1 s), and a pending [uninstall deferral](uninstall.md#deferral) is cancelled, with the copied executor and its RunOnce registration (ET-018 PR-5). A failure of the shortcuts, the icon or the old-name step changes neither the other steps nor the exit code; at worst the hook takes 12 s (10 s shortcuts, then the larger of the 1 s old-name step and the 2 s disarm), as before. No data is written otherwise. | 0 |
 | `--squirrel-obsolete` | Nothing; the previous version after an update quits. | 0 |
 | `--squirrel-uninstall` | The [uninstall hook](uninstall.md#squirrel-uninstall-hook): the instance lock with the `uninstall-exit` payload, the engine within 8 s, the receipt. | 0, 3 or 4 |
 
@@ -50,7 +50,7 @@ ET-031 adds an optional Start with Windows capability:
 
 Closing the dashboard window destroys that window and retires only its document state: its live subscription, its application-state subscription and its renderer epoch. The telemetry service, the upstream live channel, main's freshness clocks, the overlay and the tray stay as they are. The overlay keeps following the game while the main window is closed. A source request still in flight from the closed document is rejected when it completes. An active overlay edit mode (ET-012b) is cancelled without saving when the dashboard closes, is minimized or its document is retired, and when the exit begins; see [the minimal overlay](minimal-overlay.md#edit-mode-et-012b).
 
-Reopening (tray icon click, the tray's **Open ETS2Telemetry**, or a second launch) creates a new window that subscribes again through the existing bridge; main reuses the single upstream channel. A service restart while the window is closed recreates no window and no second overlay: windows are created once, on first readiness.
+Reopening (tray icon click, the tray's **Open Yukon Union Telemetry**, or a second launch) creates a new window that subscribes again through the existing bridge; main reuses the single upstream channel. A service restart while the window is closed recreates no window and no second overlay: windows are created once, on first readiness.
 
 The overlay window refuses close requests until the application exits. If creating the tray icon throws, main logs `TRAY_UNAVAILABLE` and closing the dashboard minimizes it instead. This fallback covers only a constructor that throws: on Windows, Electron does not throw or report it when the shell rejects the icon registration (`Shell_NotifyIcon`), so the application cannot detect a missing icon and the dashboard still closes to the tray. Launching ETS2Telemetry again is the guaranteed way back in every case, because the second launch reopens the dashboard. Whether the real icon appears is a manual check.
 
@@ -64,8 +64,8 @@ The context menu contains:
 
 1. a disabled status line, for example `Service: ready · Storage self-test: verified`;
 2. the disabled line `Recording: <short headline>` with the [recording status](#recording-on-the-dashboard-and-in-the-tray-et-015c-pr-4), for example `Recording: off in this version` in production or `Recording: on · synthetic test database` for a synthetic recording target (ET-015c PR-4);
-3. **Open ETS2Telemetry**;
-4. **Exit ETS2Telemetry**.
+3. **Open Yukon Union Telemetry**;
+4. **Exit Yukon Union Telemetry**.
 
 A left click opens the dashboard. The tooltip shows the service state and, when ready, the selected source and its status; it stays under the 127-character Windows limit and carries no readings, paths or identities. Tooltip, menu and icon are rebuilt only when they change, at most twice per second. There are no balloon notifications.
 
@@ -75,8 +75,8 @@ Every way to leave the application goes through one idempotent exit coordinator 
 
 | Trigger | Reason logged |
 | --- | --- |
-| Tray **Exit ETS2Telemetry** | `tray` |
-| Dashboard **Exit ETS2Telemetry** button (`exitApplication()`) | `renderer` |
+| Tray **Exit Yukon Union Telemetry** | `tray` |
+| Dashboard **Exit Yukon Union Telemetry** button (`exitApplication()`) | `renderer` |
 | `app.quit()`, including Playwright's `close()` | `app-quit` (`before-quit` is prevented and redirected) |
 | Windows sign-out or shutdown (`session-end` on any window) | `session-end` |
 | The Squirrel uninstall hook's `uninstall-exit` payload (ET-018 PR-3) | `uninstall` |
@@ -117,7 +117,7 @@ path remains asynchronous.
 
 ## In-app uninstall (ET-018 PR-4)
 
-The Live tab's **Uninstall ETS2Telemetry** card calls the bridge method `uninstallApplication()` on the `app:uninstall` channel. Main accepts it only from the trusted dashboard's main frame (the overlay and any other sender are refused), only with zero arguments (preload refuses any argument before IPC, and main refuses again), and refuses it once the exit has begun. The answer is `{outcome: 'cancelled' | 'not-installed' | 'blocked' | 'interrupted' | 'started' | 'failed', code?, removed?, blocked?: [{targetId, reason}]}` with fixed codes and the plugin card's target ids, never a path. The steps before `started` are in [uninstall](uninstall.md#in-app-uninstall).
+The Live tab's **Uninstall Yukon Union Telemetry** card calls the bridge method `uninstallApplication()` on the `app:uninstall` channel. Main accepts it only from the trusted dashboard's main frame (the overlay and any other sender are refused), only with zero arguments (preload refuses any argument before IPC, and main refuses again), and refuses it once the exit has begun. The answer is `{outcome: 'cancelled' | 'not-installed' | 'blocked' | 'interrupted' | 'started' | 'failed', code?, removed?, blocked?: [{targetId, reason}]}` with fixed codes and the plugin card's target ids, never a path. The steps before `started` are in [uninstall](uninstall.md#in-app-uninstall).
 
 After `started`, main runs the exit in this order:
 

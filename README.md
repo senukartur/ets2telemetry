@@ -1,5 +1,7 @@
 # ETS2Telemetry
 
+The application's user-facing name is **Yukon Union Telemetry** (ET-045h). The repository, the folders, the executable and other technical identities keep the ETS2Telemetry name.
+
 A planned Windows telemetry utility for **Euro Truck Simulator 2 (ETS2)** and **American Truck Simulator (ATS)**, intended for drivers in a virtual trucking company.
 
 The local MVP will display live truck metrics in an overlay, maintain a trip journal, and record one telemetry sample per real second during active simulation. It will work without an account or internet connection.
