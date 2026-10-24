@@ -12,10 +12,7 @@ html:has(.overlay-body) { background: transparent; }
 .overlay-icon { flex: none; color: var(--yu-ov-icon); }
 .overlay-value-group { display: inline-flex; align-items: baseline; gap: 4px; white-space: nowrap; min-width: 0; }
 .overlay-value { font-weight: 600; }
-.overlay-unit, .overlay-detail, .overlay-caption { flex: none; color: var(--yu-ov-muted); font-size: 12px; }
-.overlay-caption { font-size: 10px; text-transform: uppercase; letter-spacing: .04em; }
-/* Only the strip has no labels, so only there does the SDK mean need its caption. */
-.overlay:not(.overlay-strip) .overlay-caption { display: none; }
+.overlay-unit, .overlay-detail { flex: none; color: var(--yu-ov-muted); font-size: 12px; }
 .overlay-label { display: inline-flex; flex: none; align-items: center; gap: 4px; color: var(--yu-ov-text); font-size: 12px; white-space: nowrap; }
 .overlay-source { font-size: 12px; font-weight: 600; white-space: nowrap; }
 .overlay-tag { display: inline-flex; align-items: center; gap: 3px; padding: 1px 6px; border-radius: 4px; font-size: 11px; font-weight: 600; white-space: nowrap; background: rgba(255, 255, 255, .16); }

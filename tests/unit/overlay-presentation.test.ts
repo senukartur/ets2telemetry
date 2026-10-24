@@ -180,12 +180,33 @@ it.each([
   expect(overlayPresentation(current).sections.find(section => section.id === 'rpm')).toEqual({id: 'rpm', state: 'value', text: `${rpm} rpm`, ring});
 });
 
-it('keeps the exact raw income digits without grouping and states a documented currency', () => {
+// ET-045a (owner request): the overlay drops the "(SDK-documented)" provenance suffix; the dashboard, journal and export keep it.
+it('keeps the exact raw income digits without grouping and states a documented currency without the SDK suffix', () => {
   const current = live(), job = current.observation!.state.configuration.job;
   if (!job.available) throw new Error('Expected job');
   job.value.expectedIncome = {rawValue: '1234567', currency: {status: 'verified', code: 'EUR', source: 'scssdk_telemetry_job.h'}};
   expect(overlayPresentation(current).sections.find(section => section.id === 'expected-income')).toEqual(
-    {id: 'expected-income', state: 'value', text: '1234567 EUR (SDK-documented)'});
+    {id: 'expected-income', state: 'value', text: '1234567 EUR'});
+});
+it('states an unknown income currency as unknown and keeps digits beyond 2^53 exact (ET-045a)', () => {
+  const current = live(), job = current.observation!.state.configuration.job;
+  if (!job.available) throw new Error('Expected job');
+  job.value.expectedIncome = {rawValue: '9007199254740993', currency: {status: 'unknown'}};
+  expect(overlayPresentation(current).sections.find(section => section.id === 'expected-income')).toEqual(
+    {id: 'expected-income', state: 'value', text: '9007199254740993 (currency unknown)'});
+  job.value.expectedIncome = {rawValue: '18446744073709551615', currency: {status: 'verified', code: 'USD', source: 'scssdk_telemetry_job.h'}};
+  expect(overlayPresentation(current).sections.find(section => section.id === 'expected-income')).toEqual(
+    {id: 'expected-income', state: 'value', text: '18446744073709551615 USD'});
+});
+it('keeps the income section shape as a dash while stale, and leaves it out while current without a job (ET-045a)', () => {
+  const current = live(), job = current.observation!.state.configuration.job;
+  if (!job.available) throw new Error('Expected job');
+  job.value.expectedIncome = {rawValue: '1234567', currency: {status: 'verified', code: 'EUR', source: 'scssdk_telemetry_job.h'}};
+  const previous = overlayPresentation(current);
+  const stale = overlayPresentation({...current, fresh: false, status: 'stale'}, undefined, undefined, previous);
+  expect(stale.sections.find(section => section.id === 'expected-income')).toEqual({id: 'expected-income', state: 'unavailable'});
+  const noJob = live(); noJob.observation!.state.configuration.job = {available: false, reason: 'not-observed'};
+  expect(overlayPresentation(noJob).sections.find(section => section.id === 'expected-income')).toBeUndefined();
 });
 
 // ET-010c decision F7: protocol v1 sections from the same combiner as the card. The v1 input is the hand projection of

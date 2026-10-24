@@ -253,6 +253,31 @@ describe('ET-010c card with the v1 smoke projection', () => {
   });
 });
 
+describe('ET-045a job market labels', () => {
+  const marketOf = (raw: string) => {
+    const telemetry = smokePair(), job = telemetry.v1!.observation!.state.configuration.job;
+    if (!job.available) throw new Error('fixture job');
+    job.value.market = {available: true, value: raw};
+    return telemetry;
+  };
+  it.each([
+    ['cargo_market', 'Cargo market', 'Рынок грузов'], ['quick_job', 'Quick job', 'Быстрый заказ'], ['freight_market', 'Freight market', 'Грузоперевозки'],
+    ['external_contracts', 'External contracts', 'Внешние контракты'], ['external_market', 'External market', 'Внешний рынок']
+  ])('shows the SDK market %s as %s / %s without changing the state', (raw, en, ru) => {
+    const telemetry = marketOf(raw), before = structuredClone(telemetry);
+    expect(row(liveDashboardText(telemetry), 'market')).toMatchObject({value: en});
+    expect(row(liveDashboardText(telemetry, undefined, 'ru'), 'market')).toMatchObject({value: ru});
+    expect(telemetry).toEqual(before);
+  });
+  it('keeps an unknown, inherited or empty market value verbatim in both languages', () => {
+    for (const language of ['en', 'ru'] as const) {
+      for (const raw of ['some_future_market', 'constructor', 'toString']) expect(row(liveDashboardText(marketOf(raw), undefined, language), 'market'), raw).toMatchObject({value: raw});
+      expect(row(liveDashboardText(marketOf(''), undefined, language), 'market')).toMatchObject({value: '(empty)'});
+      expect(liveFieldValue({id: 'market', state: 'value', text: '(empty)'}, language)).toBe('(empty)');
+    }
+  });
+});
+
 describe('ET-010c v1 rows under each source state', () => {
   it('shows no v0 row from v1 without a v0 observation, while the v1 rows stay current', () => {
     const text = liveDashboardText({...initialLive('synthetic'), v1: v1Projection()});

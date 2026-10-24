@@ -13,7 +13,7 @@ import type {LiveJob, NormalizedLiveState, Reading} from '../../../packages/tele
 export const V1_JOB_FIELDS: ReadonlySet<LiveFieldId> = new Set<LiveFieldId>([
   'deadline', 'source-city', 'source-company', 'destination-company', 'cargo-mass', 'market', 'special-job', 'cargo-loaded'
 ]);
-/** v0-carried fields that show v1's localized name for the same job (decision F4(c)). */
+/** v0-carried fields that show v1's localized name for the same job (decision F4(c)). The truck row has its own guard. */
 const NAMED_FIELDS: ReadonlySet<LiveFieldId> = new Set<LiveFieldId>(['cargo', 'destination-city']);
 
 /**
@@ -65,12 +65,16 @@ export function liveSources(live: LiveTelemetry, units: DisplayUnits): LiveSourc
   const v1View = carried ? buildLiveView(carried.v1, v1State, units) : undefined;
   const v0Current = v0View.connection.current, v1Current = !!v1View?.connection.current;
   const job = jobIdentity(v0State?.job.state === 'value' ? v0State.job.value : undefined, v1State?.job);
+  // ET-045a: v0 carries only the truck's model id; v1's SDK brand and name describe the same truck only for the same id.
+  const sameTruck = v0State?.truck.state === 'value' && v1State?.truck.state === 'value' && sameValue(v0State.truck.value.model.id, v1State.truck.value.model.id);
   const v0Fields = fieldsOf(v0View), v1Fields = v1View ? fieldsOf(v1View) : undefined;
   const field = (id: LiveFieldId): LiveField => {
     if (carriesField('v0', id)) {
       const base = v0Fields.get(id)!;
-      // A localized name replaces the game id only for the same job, and only while both sources are current.
-      const named = NAMED_FIELDS.has(id) && base.state === 'value' && v1Current && job === 'match' ? v1Fields!.get(id)! : undefined;
+      // A localized name replaces the game id only for the same job (the truck: the same model id), and only while both
+      // sources are current. Presence and currentness stay v0's.
+      const sameEntity = NAMED_FIELDS.has(id) ? job === 'match' : id === 'truck' && sameTruck;
+      const named = sameEntity && base.state === 'value' && v1Current ? v1Fields!.get(id)! : undefined;
       return named?.state === 'value' ? {...base, text: named.text} : base;
     }
     if (!v1Fields) return {id, state: 'hidden', text: '', reason: 'not-carried'};

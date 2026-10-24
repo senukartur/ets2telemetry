@@ -649,7 +649,7 @@ export const EN_DICTIONARY: TranslationDictionary = Object.freeze({
   'sec.rpm': 'Engine RPM',
   'sec.fuel': 'Fuel level',
   'sec.range': 'Range',
-  'sec.sdk-consumption': 'Average consumption',
+  'sec.sdk-consumption': 'Consumption',
   'sec.cargo': 'Cargo',
   'sec.origin': 'Origin',
   'sec.destination': 'Destination',

@@ -18,7 +18,6 @@ function Value({item}: {item: OverlayItem}) {
     <strong className="overlay-value" data-testid={item.testId}>{item.value}</strong>
     {item.unit ? <span className="overlay-unit" data-testid={`${item.testId}-unit`}>{item.unit}</span> : null}
     {item.detail ? <span className="overlay-detail" data-testid={item.detailTestId}>{item.detail}</span> : null}
-    {item.caption ? <span className="overlay-caption">{item.caption}</span> : null}
   </span>;
 }
 /** `maxWidth` (strip only) caps each tag at the width the strip reserves for it. */
