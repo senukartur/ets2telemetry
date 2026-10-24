@@ -331,8 +331,8 @@ export function clusterCentreProbe(steps) {
 }
 
 // ET-045f Cluster speed arc. Self-contained browser callback that only reads the rendered Cluster gauge: whether the speed
-// track is shown, the speed arc's radius, dash array, inline dash offset (the target the transition eases to), computed
-// transition and stroke, and the RPM arc's dash array and stroke. An arc that is not drawn reads null. A missing Cluster
+// track is shown, the speed arc's radius, transform, dash array, inline dash offset (the target the transition eases to),
+// computed transition, stroke and stroke width, and the RPM arc's dash array and stroke. An arc that is not drawn reads null. A missing Cluster
 // gauge or ring SVG, a duplicated arc, or a speed arc without its track fails closed.
 export function clusterSpeedArcProbe() {
   const root = globalThis.document.querySelector('[data-testid="overlay-root"]');
@@ -346,8 +346,8 @@ export function clusterSpeedArcProbe() {
   let arc = null, rpmArc = null;
   if (arcs.length) {
     const style = globalThis.getComputedStyle(arcs[0]);
-    arc = {r: Number(arcs[0].getAttribute('r')), dasharray: arcs[0].getAttribute('stroke-dasharray'), offset: Number.parseFloat(arcs[0].style.getPropertyValue('stroke-dashoffset')),
-      transitionProperty: style.transitionProperty, transitionDuration: style.transitionDuration, transitionTimingFunction: style.transitionTimingFunction, stroke: style.stroke};
+    arc = {r: Number(arcs[0].getAttribute('r')), transform: arcs[0].getAttribute('transform'), dasharray: arcs[0].getAttribute('stroke-dasharray'), offset: Number.parseFloat(arcs[0].style.getPropertyValue('stroke-dashoffset')),
+      transitionProperty: style.transitionProperty, transitionDuration: style.transitionDuration, transitionTimingFunction: style.transitionTimingFunction, stroke: style.stroke, strokeWidth: style.strokeWidth};
   }
   if (rpms.length) rpmArc = {dasharray: rpms[0].getAttribute('stroke-dasharray'), stroke: globalThis.getComputedStyle(rpms[0]).stroke};
   if (arc && !track) return {ok: false, reason: 'arc-without-track', layout, track, arc, rpmArc};

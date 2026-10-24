@@ -262,6 +262,8 @@ async function speedArc(overlay, label) {
 function assertArcOffset(result, expected, label) {
   assert.ok(result.arc, `UI_CLUSTER_SPEED_ARC_MISSING_${label}`);
   assert.equal(result.arc.r, 52, `UI_CLUSTER_SPEED_ARC_RADIUS_${label}`);
+  assert.equal(result.arc.transform, 'rotate(-90 60 60)', `UI_CLUSTER_SPEED_ARC_TRANSFORM_${label}`);
+  assert.equal(result.arc.strokeWidth, '6px', `UI_CLUSTER_SPEED_ARC_STROKE_WIDTH_${label}`);
   assert.equal(result.arc.dasharray, `${SPEED_ARC_C} ${SPEED_ARC_C}`, `UI_CLUSTER_SPEED_ARC_DASHARRAY_${label}`);
   assert.ok(Math.abs(result.arc.offset - expected) <= 0.01, `UI_CLUSTER_SPEED_ARC_OFFSET_${label}: ${result.arc.offset} vs ${expected}`);
 }

@@ -457,11 +457,12 @@ describe('ET-045d cluster centre probe', () => {
 });
 
 // ET-045f: the speed arc probe only reads the fake gauge; it never writes a node.
-function fakeSpeedArc({layout = 'cluster', svg = true, track = true, arc = true, rpm = true, duplicate = false} = {}) {
+function fakeSpeedArc({layout = 'cluster', svg = true, track = true, arc = true, rpm = true, duplicate = false, strokeWidth = '6px', transform = 'rotate(-90 60 60)'}: {layout?: string; svg?: boolean; track?: boolean; arc?: boolean; rpm?: boolean; duplicate?: boolean; strokeWidth?: string;
+  transform?: string | null} = {}) {
   const C = String(2 * Math.PI * 52);
-  const arcNode = {getAttribute: (name: string) => ({r: '52', 'stroke-dasharray': `${C} ${C}`} as Record<string, string>)[name] ?? null,
+  const arcNode = {getAttribute: (name: string) => ({r: '52', 'stroke-dasharray': `${C} ${C}`, ...(transform === null ? {} : {transform})} as Record<string, string>)[name] ?? null,
     style: {getPropertyValue: (name: string) => name === 'stroke-dashoffset' ? '100.5309649148734' : ''},
-    computed: {transitionProperty: 'stroke-dashoffset', transitionDuration: '0.15s', transitionTimingFunction: 'linear', stroke: 'rgb(96, 165, 250)'}};
+    computed: {transitionProperty: 'stroke-dashoffset', transitionDuration: '0.15s', transitionTimingFunction: 'linear', stroke: 'rgb(96, 165, 250)', strokeWidth}};
   const rpmNode = {getAttribute: (name: string) => name === 'stroke-dasharray' ? '50.26548245743669 251.32741228718345' : null, computed: {stroke: 'rgb(37, 99, 235)'}};
   const all: Record<string, object[]> = {'overlay-speed-arc': arc ? (duplicate ? [arcNode, arcNode] : [arcNode]) : [], 'overlay-rpm-arc': rpm ? [rpmNode] : []};
   const root = {getAttribute: () => layout, querySelectorAll: (selector: string) => all[testId(selector)] ?? [],
@@ -474,8 +475,15 @@ describe('ET-045f cluster speed arc probe', () => {
   const C = 2 * Math.PI * 52;
   it('reads a drawn speed arc and the RPM arc', () => {
     expect(runArcProbe(fakeSpeedArc())).toEqual({ok: true, layout: 'cluster', track: true,
-      arc: {r: 52, dasharray: `${C} ${C}`, offset: 100.5309649148734, transitionProperty: 'stroke-dashoffset', transitionDuration: '0.15s', transitionTimingFunction: 'linear', stroke: 'rgb(96, 165, 250)'},
+      arc: {r: 52, transform: 'rotate(-90 60 60)', dasharray: `${C} ${C}`, offset: 100.5309649148734, transitionProperty: 'stroke-dashoffset', transitionDuration: '0.15s', transitionTimingFunction: 'linear',
+        stroke: 'rgb(96, 165, 250)', strokeWidth: '6px'},
       rpmArc: {dasharray: '50.26548245743669 251.32741228718345', stroke: 'rgb(37, 99, 235)'}});
+  });
+  // Review nit: a CSS stroke regression (the RPM rule's 3 px) or a lost rotation is reported as it is, so the UI shard's
+  // 6px and rotate(-90 60 60) assertions fail on it.
+  it('reports a regressed stroke width and a missing rotation as rendered', () => {
+    expect(runArcProbe(fakeSpeedArc({strokeWidth: '3px', transform: null}))).toMatchObject({ok: true, arc: {strokeWidth: '3px', transform: null}});
+    expect(runArcProbe(fakeSpeedArc({transform: 'rotate(0 60 60)'}))).toMatchObject({arc: {strokeWidth: '6px', transform: 'rotate(0 60 60)'}});
   });
   it('reads an absent arc as null beside the speed track', () => {
     expect(runArcProbe(fakeSpeedArc({arc: false}))).toMatchObject({ok: true, track: true, arc: null, rpmArc: {stroke: 'rgb(37, 99, 235)'}});
