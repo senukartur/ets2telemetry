@@ -1,7 +1,7 @@
 import {describe, expect, it} from 'vitest';
 import type {DiagnosticsExportResult, PluginFolderChoice} from '../../packages/contracts/src';
-import {actionResultId, PLUGIN_ACTION_ANSWERS, pluginActionResultText, pluginActionSeverity, pluginActionSlot, pluginActionTriggerId, type ActionSeverity, type PluginAction,
-  type PluginActionOutcome} from '../../apps/desktop/src/plugin-action-result';
+import {actionResultId, createPluginActionController, SHOW_FILE_REFUSAL_SEVERITY, PLUGIN_ACTION_ANSWERS, pluginActionResultText, pluginActionSeverity, pluginActionSlot, pluginActionTriggerId, type ActionSeverity, type PluginAction,
+  type PluginActionOutcome, type PluginActionResult} from '../../apps/desktop/src/plugin-action-result';
 
 // REG-015 (ET-045b): every answer of a Game plugin card action has a hand-written severity, and representative results a
 // hand-written EN/RU title and message. Nothing produced here may carry a path.
@@ -23,6 +23,7 @@ describe('severity of every answer', () => {
     expect(pluginActionSeverity({kind: 'folder-choice', choice})).toBe(severity);
   });
   it('classifies both show-file answers', () => {
+    expect(SHOW_FILE_REFUSAL_SEVERITY).toEqual({BUNDLE_UNAVAILABLE: 'failed'});
     expect(pluginActionSeverity({kind: 'show-file', result: {outcome: 'shown'}})).toBe('success');
     expect(pluginActionSeverity({kind: 'show-file', result: {outcome: 'refused', code: 'BUNDLE_UNAVAILABLE'}})).toBe('failed');
   });
@@ -125,5 +126,78 @@ describe('localized text', () => {
     const texts = (['en', 'ru'] as const).flatMap(language => actions.flatMap(action => outcomes.map(outcome => pluginActionResultText({action, outcome}, 'Steam folder 1', language))));
     expect(texts.every(Boolean)).toBe(true);
     expect(JSON.stringify(texts)).not.toMatch(/[A-Za-z]:\\\\|\\\\\\\\|steamapps|win_x64/);
+  });
+});
+
+describe('the card action controller', () => {
+  const BODY = {element: 'body'}, ELSEWHERE = {element: 'another control'};
+  function harness(active: () => unknown = () => BODY) {
+    const log: string[] = [], focused: string[] = [];
+    let pending = false, result: PluginActionResult | null = null;
+    const controller = createPluginActionController({
+      setPending: value => {pending = value; log.push(`pending ${String(value)}`);},
+      setResult: value => {result = value; log.push(value ? `result ${value.outcome.kind}` : 'result cleared');},
+      activeElement: active, body: () => BODY, focus: id => {focused.push(id);}
+    });
+    return {controller, log, focused, state: () => ({pending, result})};
+  }
+  function deferred<T>() {
+    let resolve!: (value: T) => void;
+    const promise = new Promise<T>(yes => {resolve = yes;});
+    return {promise, resolve};
+  }
+  const choose = {kind: 'choose-folder', game: 'ats'} as const;
+
+  it('ignores a second press or switch toggle while an action is pending, with no second bridge call', async () => {
+    const {controller, state} = harness();
+    const first = deferred<{outcome: 'cancelled'}>();
+    let calls = 0;
+    const settled = controller.run(choose, () => {calls++; return first.promise;}, PLUGIN_ACTION_ANSWERS.chooseFolder);
+    expect(settled).not.toBeNull();
+    expect(controller.run(choose, () => {calls++; return Promise.resolve({outcome: 'cancelled' as const});}, PLUGIN_ACTION_ANSWERS.chooseFolder)).toBeNull();
+    expect(controller.run({kind: 'manage', game: 'ets2'}, () => {calls++; return Promise.resolve(undefined);}, PLUGIN_ACTION_ANSWERS.manage)).toBeNull();
+    expect(calls).toBe(1);
+    expect(state().pending).toBe(true);
+    first.resolve({outcome: 'cancelled'});
+    await settled;
+    expect(state()).toEqual({pending: false, result: {action: choose, outcome: {kind: 'folder-choice', choice: {outcome: 'cancelled'}}}});
+    // Once settled, the next action starts again.
+    expect(controller.run(choose, () => {calls++; return Promise.resolve({outcome: 'cancelled' as const});}, PLUGIN_ACTION_ANSWERS.chooseFolder)).not.toBeNull();
+    expect(calls).toBe(2);
+  });
+
+  it('turns a rejected or throwing bridge call into a failed result of that action', async () => {
+    const {controller, state} = harness();
+    const retry = {kind: 'retry'} as const;
+    await controller.run(retry, () => Promise.reject(new Error('IPC refused')), PLUGIN_ACTION_ANSWERS.retry);
+    expect(state()).toEqual({pending: false, result: {action: retry, outcome: {kind: 'request-failed'}}});
+    expect(pluginActionResultText(state().result!, null, 'en')?.severity).toBe('failed');
+    const show = {kind: 'show-file', game: 'ets2', targetId: 'ets2:steam:0'} as const;
+    await controller.run(show, () => {throw new Error('no bridge');}, PLUGIN_ACTION_ANSWERS.showFile);
+    expect(state()).toEqual({pending: false, result: {action: show, outcome: {kind: 'request-failed'}}});
+  });
+
+  it('clears the shown result when the next action starts, and a successful switch change shows none', async () => {
+    const {controller, log, state} = harness();
+    await controller.run(choose, () => Promise.resolve({outcome: 'refused' as const, code: 'FOLDER_DUPLICATE' as const}), PLUGIN_ACTION_ANSWERS.chooseFolder);
+    expect(state().result?.outcome).toEqual({kind: 'folder-choice', choice: {outcome: 'refused', code: 'FOLDER_DUPLICATE'}});
+    const manage = deferred<undefined>();
+    const settled = controller.run({kind: 'manage', game: 'ats'}, () => manage.promise, PLUGIN_ACTION_ANSWERS.manage);
+    expect(state()).toEqual({pending: true, result: null});
+    manage.resolve(undefined);
+    await settled;
+    expect(state()).toEqual({pending: false, result: null});
+    expect(log).toEqual(['pending true', 'result cleared', 'pending false', 'result folder-choice', 'pending true', 'result cleared', 'pending false', 'result cleared']);
+  });
+
+  it('returns focus to the trigger only when focus was lost to the body or to nothing', async () => {
+    let active: unknown = BODY;
+    const {controller, focused} = harness(() => active);
+    await controller.run(choose, () => Promise.resolve({outcome: 'cancelled' as const}), PLUGIN_ACTION_ANSWERS.chooseFolder);
+    active = null;
+    await controller.run({kind: 'show-file', game: 'ets2', targetId: 'ets2:manual:0'}, () => Promise.resolve({outcome: 'shown' as const}), PLUGIN_ACTION_ANSWERS.showFile);
+    active = ELSEWHERE;
+    await controller.run({kind: 'export-diagnostics'}, () => Promise.resolve({outcome: 'saved' as const}), PLUGIN_ACTION_ANSWERS.exportDiagnostics);
+    expect(focused).toEqual(['plugin-ats-choose', 'plugin-target-ets2-manual-0-show-file']);
   });
 });

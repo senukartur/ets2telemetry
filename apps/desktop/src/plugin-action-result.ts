@@ -48,6 +48,10 @@ export const EXPORT_PROBLEM_SEVERITY: Readonly<Record<DiagnosticsExportRefusal |
   EXPORT_IN_PROGRESS: 'refused', EXPORT_INTERRUPTED: 'refused', EXPORT_TARGET_REFUSED: 'refused',
   DIALOG_FAILED: 'failed', BUNDLE_FAILED: 'failed', EXPORT_WRITE_FAILED: 'failed'
 });
+/** Every refused "Show plugin file" answer by severity: the bundled file the driver needs is not available. */
+export const SHOW_FILE_REFUSAL_SEVERITY: Readonly<Record<Extract<PluginShowFileResult, {outcome: 'refused'}>['code'], ActionSeverity>> = Object.freeze({
+  BUNDLE_UNAVAILABLE: 'failed'
+});
 const SEVERITY_WORD: Readonly<Record<ActionSeverity, I18nKey>> = Object.freeze({
   info: 'act.sev.info', success: 'act.sev.success', refused: 'act.sev.refused', failed: 'act.sev.failed'
 });
@@ -58,7 +62,7 @@ export function pluginActionSeverity(outcome: PluginActionOutcome): ActionSeveri
     case 'folder-choice':
       return outcome.choice.outcome === 'chosen' ? 'success' : outcome.choice.outcome === 'cancelled' ? 'info' : FOLDER_REFUSAL_SEVERITY[outcome.choice.code];
     case 'show-file':
-      return outcome.result.outcome === 'shown' ? 'success' : 'failed';
+      return outcome.result.outcome === 'shown' ? 'success' : SHOW_FILE_REFUSAL_SEVERITY[outcome.result.code];
     case 'diagnostics-export':
       return outcome.result.outcome === 'saved' ? 'success' : outcome.result.outcome === 'cancelled' ? 'info' : EXPORT_PROBLEM_SEVERITY[outcome.result.code];
     case 'request-failed':
@@ -141,4 +145,45 @@ export function pluginActionResultText(result: PluginActionResult, folder: strin
   const severity = pluginActionSeverity(result.outcome);
   const severityWord = t(SEVERITY_WORD[severity], undefined, language);
   return {severity, severityWord, title: t('act.title', {severity: severityWord, action}, language), message: messageText(result, language)};
+}
+
+/** What the card action controller needs from React and the DOM, injected so that it runs and is tested without either. */
+export interface PluginActionControllerPorts {
+  setPending(pending: boolean): void;
+  setResult(result: PluginActionResult | null): void;
+  /** The focused element, or null. */
+  activeElement(): unknown;
+  /** The document body. */
+  body(): unknown;
+  /** Focuses the element with this id when it exists. */
+  focus(id: string): void;
+}
+/** Starts one card action; answers null when another action is still pending and this one was ignored. */
+export type PluginActionRun = <T>(action: PluginAction, start: () => Promise<T>, answer: (value: T) => PluginActionOutcome | null) => Promise<void> | null;
+
+/**
+ * The Game plugin card's action controller (ET-045b). One action at a time: while one is pending a further press or switch
+ * toggle is ignored and starts no bridge call. Starting an action clears the shown result; its answer, or
+ * `request-failed` for a rejected call, becomes the one current result. After the answer focus returns to the trigger
+ * only when it was lost (the active element is the body or none, for example after a native dialog closed); it is never
+ * taken from an element the user moved to. Because a new action cannot start while one is pending, no answer can belong
+ * to a superseded action.
+ */
+export function createPluginActionController(ports: PluginActionControllerPorts): {run: PluginActionRun} {
+  let pending = false;
+  const run = <T,>(action: PluginAction, start: () => Promise<T>, answer: (value: T) => PluginActionOutcome | null): Promise<void> | null => {
+    if (pending) return null;
+    pending = true;
+    ports.setPending(true); ports.setResult(null);
+    const settle = (outcome: PluginActionOutcome | null) => {
+      pending = false;
+      ports.setPending(false); ports.setResult(outcome ? {action, outcome} : null);
+      const active = ports.activeElement();
+      if (active === null || active === undefined || active === ports.body()) ports.focus(pluginActionTriggerId(action));
+    };
+    let started: Promise<T>;
+    try {started = start();} catch {started = Promise.reject(new Error('PLUGIN_ACTION_START_FAILED'));}
+    return started.then(value => settle(answer(value)), () => settle({kind: 'request-failed'}));
+  };
+  return {run};
 }

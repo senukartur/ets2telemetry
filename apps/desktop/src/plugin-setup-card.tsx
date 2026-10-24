@@ -1,4 +1,4 @@
-import React, {useRef, useState} from 'react';
+import React, {useState} from 'react';
 import type {AppLanguage, PluginGame, PluginSetupView} from '../../../packages/contracts/src';
 import {Alert, AlertDescription} from '@/components/ui/alert';
 import {Badge} from '@/components/ui/badge';
@@ -8,8 +8,8 @@ import {Label} from '@/components/ui/label';
 import {Switch} from '@/components/ui/switch';
 import {ActionResultRegion} from './action-result';
 import type {ConnectionDiagnosis} from './connection-diagnosis';
-import {actionResultId, PLUGIN_ACTION_ANSWERS as ANSWERS, pluginActionResultText, pluginActionSlot, pluginActionTriggerId, pluginTargetTestId as targetTestId, type PluginAction, type PluginActionOutcome,
-  type PluginActionResult} from './plugin-action-result';
+import {actionResultId, createPluginActionController, PLUGIN_ACTION_ANSWERS as ANSWERS, pluginActionResultText, pluginActionSlot, pluginActionTriggerId, pluginTargetTestId as targetTestId,
+  type PluginAction, type PluginActionOutcome, type PluginActionResult, type PluginActionRun} from './plugin-action-result';
 import {connectionDiagnosisText, pluginSetupText} from './plugin-setup-text';
 import * as BASE_COPY from './strings';
 import {copyTable} from './screens/app-copy';
@@ -26,36 +26,30 @@ const PENDING_CLASS = 'aria-disabled:opacity-50';
  * answers of the bridge methods, through plugin-setup-text.ts: never a path. The overlay is untouched.
  *
  * ET-045b: the answer of the last card action appears next to its control, with a severity (plugin-action-result.ts).
- * Starting any card action clears it; it stays until the next card action or until the card unmounts. While a call is
- * pending the controls are aria-disabled and keep focus; after the answer, focus returns to the trigger only when it was
- * lost (for example to the body after a native dialog closed).
+ * The card action controller there runs one action at a time, clears the shown result when an action starts and returns
+ * focus to the trigger only when it was lost; this component holds its state and the DOM access.
  */
-export function PluginSetupCard({view, diagnosis, onView, language = 'en'}: {language?: AppLanguage; view: PluginSetupView | undefined; diagnosis: ConnectionDiagnosis | undefined; onView: (view: PluginSetupView) => void}) {
+type PluginSetupCardProps = {language?: AppLanguage; view: PluginSetupView | undefined; diagnosis: ConnectionDiagnosis | undefined; onView: (view: PluginSetupView) => void};
+export function PluginSetupCard(props: PluginSetupCardProps) {
   const [pending, setPending] = useState(false);
   const [result, setResult] = useState<PluginActionResult | null>(null);
-  const pendingRef = useRef(false);
-  const sequenceRef = useRef(0);
+  const [controller] = useState(() => createPluginActionController({setPending, setResult,
+    activeElement: () => globalThis.document.activeElement, body: () => globalThis.document.body,
+    focus: id => globalThis.document.getElementById(id)?.focus()}));
+  return <PluginSetupCardView {...props} pending={pending} result={result} run={controller.run} />;
+}
+
+/**
+ * The card for a given pending state and current result, without state of its own. `run` starts an action through the
+ * card action controller.
+ */
+export function PluginSetupCardView({view, diagnosis, onView, language = 'en', pending, result, run}: PluginSetupCardProps & {pending: boolean; result: PluginActionResult | null; run: PluginActionRun}) {
   const {DIAGNOSTICS_EXPORT_STRINGS, PLUGIN_STRINGS} = copyTable(BASE_COPY, language);
   if (!view) return null;
   const text = pluginSetupText(view, language);
   const connection = diagnosis ? connectionDiagnosisText(diagnosis, language) : undefined;
   const disabled = !text.actionable;
-  /** Runs one card action at a time; `answer` maps the bridge's value to a shown outcome, or null for none. */
-  const call = <T,>(action: PluginAction, start: () => Promise<T>, answer: (value: T) => PluginActionOutcome | null) => {
-    if (pendingRef.current) return;
-    pendingRef.current = true;
-    const sequence = ++sequenceRef.current;
-    setPending(true); setResult(null);
-    const settle = (outcome: PluginActionOutcome | null) => {
-      // A late answer of a superseded call changes nothing.
-      if (sequence !== sequenceRef.current) return;
-      pendingRef.current = false;
-      setPending(false); setResult(outcome ? {action, outcome} : null);
-      const active = globalThis.document.activeElement;
-      if (!active || active === globalThis.document.body) globalThis.document.getElementById(pluginActionTriggerId(action))?.focus();
-    };
-    void start().then(value => settle(answer(value)), () => settle({kind: 'request-failed'}));
-  };
+  const call = <T,>(action: PluginAction, start: () => Promise<T>, answer: (value: T) => PluginActionOutcome | null) => {void run(action, start, answer);};
   const withView = (answer: (next: PluginSetupView) => PluginActionOutcome | null) => (next: PluginSetupView) => {onView(next); return answer(next);};
   // The shown result, re-localized on every render; a folder that is no longer listed shows none.
   const folderLabel = (action: PluginAction) => action.kind === 'show-file' || action.kind === 'open-folder'

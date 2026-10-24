@@ -11,12 +11,13 @@ const ICON: Readonly<Record<ActionSeverity, LucideIcon>> = Object.freeze({info: 
 /** One result body: a shadcn Alert in the severity's Yukon tone. `role` is explicit because the Alert defaults to `alert`. */
 export function ActionResult({id, testId, severity, severityWord, title, message, role}: ActionResultText & {id: string; testId: string; role?: 'alert'}) {
   const Icon = ICON[severity];
-  // The title is "{severity} — {action}"; the severity word is marked so that it can be read on its own.
+  // The title is "{severity} — {action}"; the severity word is marked so that it can be read on its own. A title without
+  // the word is shown as it is, never with the word repeated.
   const at = title.indexOf(severityWord);
-  const before = at < 0 ? '' : title.slice(0, at), after = at < 0 ? ` ${title}` : title.slice(at + severityWord.length);
+  const before = at < 0 ? title : title.slice(0, at), after = at < 0 ? '' : title.slice(at + severityWord.length);
   return <Alert id={id} role={role} data-testid={testId} data-severity={severity} className="yu-action-result">
     <Icon aria-hidden="true" data-testid={`${testId}-icon`} />
-    <AlertTitle data-testid={`${testId}-title`}>{before}<span data-testid={`${testId}-severity`}>{severityWord}</span>{after}</AlertTitle>
+    <AlertTitle data-testid={`${testId}-title`}>{before}{at < 0 ? null : <span data-testid={`${testId}-severity`}>{severityWord}</span>}{after}</AlertTitle>
     <AlertDescription className="text-current" data-testid={`${testId}-message`}>{message}</AlertDescription>
   </Alert>;
 }

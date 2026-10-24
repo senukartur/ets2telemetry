@@ -83,7 +83,7 @@ const EXPORT_RESULT = {
 const dashboardZoom = (application, zoom) => application.evaluate(({BrowserWindow}, zoom) => {
   BrowserWindow.getAllWindows().find(window => !window.webContents.getURL().endsWith('?view=overlay')).webContents.setZoomFactor(zoom);
 }, zoom);
-/** The export result stays on one line box inside the Game plugin card: no horizontal overflow, no box outside the card. */
+/** The export result has no horizontal overflow and its box lies inside the Game plugin card. */
 const exportResultContained = page => page.evaluate(() => new Promise(resolve => globalThis.requestAnimationFrame(() => globalThis.requestAnimationFrame(() => {
   const body = globalThis.document.querySelector('[data-testid="plugin-export-diagnostics-result"]'), card = globalThis.document.querySelector('[data-testid="plugin-card"]');
   if (!body || !card) {resolve(false); return;}

@@ -3,7 +3,7 @@ import {renderToStaticMarkup} from 'react-dom/server';
 import {describe, expect, it, vi} from 'vitest';
 import type {PluginSetupView} from '../../packages/contracts/src';
 import {ActionResultRegion} from '../../apps/desktop/src/action-result';
-import {PluginSetupCard} from '../../apps/desktop/src/plugin-setup-card';
+import {PluginSetupCard, PluginSetupCardView} from '../../apps/desktop/src/plugin-setup-card';
 import type {ActionResultText} from '../../apps/desktop/src/plugin-action-result';
 
 // REG-015 (ET-045b): the markup of an action result and its live regions. Only the shadcn containers are substituted;
@@ -44,6 +44,11 @@ describe('an action result', () => {
     expect(html).toMatch(/<svg[^>]*class="lucide lucide-circle-x[^"]*"[^>]*aria-hidden="true"/);
     expect(html).toContain('data-severity="failed"');
   });
+  it('shows a title without the severity word as it is, without repeating the word', () => {
+    const html = region({severity: 'info', severityWord: 'Information', title: 'Game folder for American Truck Simulator', message: 'Fixed answer.'});
+    expect(html).toContain('data-testid="plugin-ats-choose-result-title">Game folder for American Truck Simulator</div>');
+    expect(html).not.toContain('Information');
+  });
   it('keeps an empty polite region before any result', () => {
     expect(region(null)).toBe(`<div data-testid="plugin-ats-choose-result-region" class="yu-action-result-region">${politeOpen}</div></div>`);
   });
@@ -75,6 +80,23 @@ describe('the Game plugin card before any action', () => {
     expect(html).not.toContain('plugin-result"');
     expect(html).not.toContain('aria-disabled="');
     expect(html).not.toContain('aria-describedby');
+  });
+  it('shows a stored rejected call as an alert in its own folder row, described by the button that started it', () => {
+    const stored = renderToStaticMarkup(React.createElement(PluginSetupCardView, {view, diagnosis: undefined, onView: () => undefined, language: 'en', pending: false, run: () => null,
+      result: {action: {kind: 'show-file', game: 'ets2', targetId: 'ets2:steam:0'}, outcome: {kind: 'request-failed'}}}));
+    expect(stored).toContain(`Open game plugins folder</button></div><div data-testid="plugin-target-ets2-steam-0-result-region" class="yu-action-result-region">${politeOpen}</div>`
+      + '<div data-slot="alert" role="alert" id="plugin-target-ets2-steam-0-result" data-testid="plugin-target-ets2-steam-0-result" data-severity="failed" class="yu-action-result">');
+    expect(stored).toContain('<span data-testid="plugin-target-ets2-steam-0-result-severity">Failed</span> — Plugin file for Euro Truck Simulator 2 (Steam folder 1)');
+    expect(stored).toContain('data-testid="plugin-target-ets2-steam-0-result-message">The request failed; nothing changed.</div>');
+    expect(stored.match(/role="alert"/g)).toHaveLength(1);
+    expect(stored.match(/aria-describedby="[^"]*"/g)).toEqual(['aria-describedby="plugin-target-ets2-steam-0-result"']);
+    expect(stored).toMatch(/id="plugin-target-ets2-steam-0-show-file" data-testid="plugin-target-ets2-steam-0-show-file" aria-describedby="plugin-target-ets2-steam-0-result"/);
+    expect(stored).not.toContain('aria-disabled="');
+  });
+  it('marks every control pending while a call runs, keeping them focusable', () => {
+    const pending = renderToStaticMarkup(React.createElement(PluginSetupCardView, {view, diagnosis: undefined, onView: () => undefined, language: 'en', pending: true, run: () => null, result: null}));
+    expect(pending.match(/aria-disabled="true"/g)).toHaveLength(8);
+    expect(pending).not.toMatch(/ disabled=""/);
   });
   it('marks the static mode note as a note, not an alert', () => {
     expect(html).toContain('<div data-slot="alert" role="note"><div data-slot="alert-description" data-testid="plugin-mode">Test mode: plugin setup works only inside a test folder.</div></div>');
