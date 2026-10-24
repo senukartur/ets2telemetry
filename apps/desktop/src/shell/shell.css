@@ -224,3 +224,24 @@ button:not(:disabled), select:not(:disabled) { cursor: pointer; }
 button[aria-disabled="true"], [role="switch"][aria-disabled="true"] { cursor: not-allowed; }
 /* An empty region takes no space between its trigger and the next control. */
 .yu-action-result-region:not(:has(.yu-action-result)) { margin-block: 0; }
+
+/* Overlay settings use the page's ordinary scroll area, including at renderer zoom. */
+.yu-overlay-settings { min-width: 0; container-type: inline-size; }
+.yu-overlay-block { display: grid; gap: 12px; min-width: 0; }
+.yu-overlay-block + .yu-overlay-block { border-top: 1px solid var(--yu-divider); padding-top: 18px; }
+.yu-overlay-section-groups { display: grid; grid-template-columns: repeat(2,minmax(0,1fr)); gap: 20px 24px; }
+.yu-overlay-section-row { display: grid; grid-template-columns: auto minmax(0,1fr); align-items: start; gap: 10px; }
+.yu-overlay-section-row > [role="switch"] { margin-top: 7px; }
+.yu-overlay-section-row label { line-height: 1.5; flex-wrap: wrap; }
+.yu-overlay-section-row label svg { flex: none; }
+.yu-overlay-section-row [data-testid^="overlay-requirement-"] { display: block; line-height: 1.5; }
+.yu-overlay-settings button:not([role="radio"]):not([role="switch"]) { white-space: normal; height: auto; }
+@container (max-width: 540px) {
+  .yu-overlay-section-groups { grid-template-columns: minmax(0,1fr); }
+}
+@container (max-width: 320px) {
+  .yu-overlay-settings .yu-layout-options { grid-template-columns: minmax(0,1fr); }
+}
+@media (max-width: 900px) {
+  .yu-settings { grid-template-columns: minmax(0,1fr); }
+}
