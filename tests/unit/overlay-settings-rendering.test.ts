@@ -11,6 +11,7 @@ vi.mock('@/components/ui/card', () => ({Card: 'div', CardContent: 'div', CardHea
 vi.mock('@/components/ui/button', () => ({Button: 'button'}));
 vi.mock('@/components/ui/label', () => ({Label: 'label'}));
 vi.mock('@/components/ui/radio-group', () => ({RadioGroup: 'fieldset', RadioGroupItem: 'button'}));
+vi.mock('@/components/ui/slider', () => ({Slider: 'input'}));
 vi.mock('@/components/ui/switch', () => ({Switch: ({checked, ...props}: {checked: boolean}) =>
   React.createElement('button', {...props, role: 'switch', 'aria-checked': checked})}));
 

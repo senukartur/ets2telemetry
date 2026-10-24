@@ -54,3 +54,16 @@ it.each(['en', 'ru'] as const)('renders reserves beside exact value texts and a 
   const speedOnly = renderToStaticMarkup(React.createElement(OverlayContent, {view: overlayView({...base, layout: 'cluster', language, speed: '9', sections: sections.slice(0, 1)})}));
   expect(speedOnly).toContain('data-testid="overlay-speed-track"'); expect(speedOnly).not.toContain('overlay-rpm-track');
 });
+
+it.each(['strip', 'card', 'cluster', 'hud'] as const)('applies saved alpha only to background tokens in %s', layout => {
+  for (const backgroundOpacity of [40, 65, 80, 100]) {
+    const view = overlayView({...base, layout, backgroundOpacity});
+    const html = renderToStaticMarkup(React.createElement(OverlayContent, {view}));
+    expect(html).toContain(`--yu-ov-panel:rgba(11, 17, 32, ${backgroundOpacity / 100})`);
+    expect(html).not.toContain('opacity:');
+    expect(html).toContain('data-testid="overlay-speed"');
+    expect(view.contentAnchorY).toBe(layout === 'cluster' ? 1 : 0);
+  }
+  for (const backgroundOpacity of [undefined, 39, 101, NaN, 60.5])
+    expect(overlayView({...base, layout, backgroundOpacity}).backgroundOpacity).toBe(80);
+});

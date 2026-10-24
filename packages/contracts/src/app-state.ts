@@ -108,6 +108,8 @@ export type OverlayPlacements = Readonly<Record<OverlayLayout, OverlayPlacement>
 export interface OverlaySettings {
   /** Persisted user visibility gate, independent of source/window authority (ET-012e). */
   enabled: boolean;
+  /** Background alpha in whole percentages, 40–100; foreground keeps its own opacity (ET-049). */
+  backgroundOpacity: number;
   layout: OverlayLayout;
   sections: OverlaySections;
   /** The saved position and scale of every layout (ET-012b). */

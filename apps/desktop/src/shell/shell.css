@@ -245,3 +245,6 @@ button[aria-disabled="true"], [role="switch"][aria-disabled="true"] { cursor: no
 @media (max-width: 900px) {
   .yu-settings { grid-template-columns: minmax(0,1fr); }
 }
+
+/* Keep keyboard focus rings clear of the scroll viewport at fractional renderer zoom (ET-049). */
+.yu-overlay-settings :is(button, [role="slider"]) { scroll-margin-block: 8px; }

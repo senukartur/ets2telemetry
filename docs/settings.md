@@ -8,7 +8,19 @@ ET-012e adds saved overlay visibility in current format v6, defaulting to enable
 
 The file is `%LOCALAPPDATA%\ETS2Telemetry\settings\settings.json`. Main resolves `%LOCALAPPDATA%` at runtime through `dataPaths(LOCALAPPDATA).settings` (`apps/desktop/src/paths.ts`), separately from the application binaries and from `telemetry.sqlite`, so an application update does not replace it. When `LOCALAPPDATA` is missing or not an absolute path, there is no settings location: defaults apply and nothing can be saved (`unavailable`). Preserving the file across a real installed update and an optional uninstall removal belong to ET-018. Since ET-018 PR-1 the installer lifecycle proves that install, repair and update keep the file byte-identical. An uninstall deletes it with the rest of the data folder, from Windows Settings or from the application; the [in-app uninstall](uninstall.md#in-app-uninstall) and the Journal tab's export note say so ([user guide](user-guide.md#uninstalling)).
 
-## Format v6 (ET-012e integrated with ET-031)
+## Current format v7: background opacity (ET-049)
+
+Format v7 adds `overlay.backgroundOpacity`, a whole percentage from 40 through 100, default 80. It serializes immediately after `overlay.enabled`; the remainder is the v6 shape below, with `"version": 7`. An invalid/missing value in v7 falls back independently to 80 (`overlay.backgroundOpacity`); values are neither coerced nor clamped. The v6-to-v7 pure migration installs 80 even if an older document carries an unknown stray opacity key, preserving all existing preferences. The v1–v6 chain remains supported without startup writes, and the next durable save writes v7. A version greater than 7 is read-only; a v6 application treats v7 as newer-version and cannot drop the new setting.
+
+Settings > Overlay uses an EN/RU, labelled keyboard-accessible slider (40–100%, step 1). Its thumb is a candidate during a held gesture; the adjacent **Saved** percentage and the overlay retain the committed value. Releasing a gesture or a keyboard step submits one save, and the control is locked until it settles. No movement-event writes are queued. Failure restores the thumb to the committed value and displays the existing contextual settings error; read-only disables the slider. The shared four-request main-owned settings queue remains the final bound for all callers.
+
+`setOverlayBackgroundOpacity(number)` uses `settings:set-overlay-background-opacity`, exactly one validated whole percentage, from the trusted dashboard main frame only. Preload and main validate independently; the store also rejects invalid values. Settings diagnostics carry `backgroundOpacity`, and save facts carry only `overlayBackgroundOpacity`. Main publishes the committed percentage as a display-only overlay field without renewing source freshness. The content container sets `--yu-ov-panel` to `rgba(11,17,32,percentage/100)`; it changes only Strip/Card surfaces and both Cluster surfaces. Minimal remains backgroundless. Text, badges, icons, gauges, stale dimming, the transparent root/margins and edit outline/fill retain their own styles. No native window opacity is used.
+
+Opacity persists independently of layout and placement drafts, including Done/Cancel/Escape, tray reopen, reload and restart. Tests cover migration, write failure/recovery/read-only, durable ordering/queue bounds, strict IPC and display publication. UI journeys check EN/RU keyboard/held-pointer behavior, failed writes, read-only, computed background-only rendering at 40/65/80/100 across all four layouts, and existing input/security/scroll assertions. Real-game appearance/input and installed-update evidence remain pending. See [ET-049 validation](validation/et-049.md).
+
+## Historical format v6 (ET-012e integrated with ET-031)
+
+The following describes the pre-ET-049 v6 format and its earlier migration steps. Current reads/writes use v7 as specified above.
 
 ```json
 {

@@ -67,6 +67,7 @@ export interface DesktopBridge {
   setOverlayLayout(layout: OverlayLayout): Promise<SettingsView>;
   /** Persists visibility; disabling discards an active placement draft only after the durable save. */
   setOverlayEnabled(enabled: boolean): Promise<SettingsView>;
+  setOverlayBackgroundOpacity(opacity: number): Promise<SettingsView>;
   /** Persists the complete overlay section set: exactly the fourteen ids, booleans only, at least one enabled. */
   setOverlaySections(sections: OverlaySections): Promise<SettingsView>;
   /**
@@ -177,6 +178,8 @@ export type OverlaySectionView =
   | {id: OverlaySectionId; state: 'unavailable'};
 /** Read-only display projection: no source selection, HWND or native placement authority. */
 export interface OverlayPresentation {
+  /** Saved background opacity in whole percentages; absent legacy projections use 80%. */
+  backgroundOpacity?: number;
   /** Opt-in diagnostic pixels only; no renderer command or game-protocol field. */
   diagnosticFrame?: number;
   /** Display-only vertical content anchor in [0, 1]; never a native coordinate or source observation. */

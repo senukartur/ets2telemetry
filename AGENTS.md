@@ -862,3 +862,8 @@ ET-045c implements item 12 of ET-045 only. In the owner's ATS TruckersMP windowe
 ## ET-045d stable overlay numbers and typography — October 24, 2026
 
 ET-045 items 7, 8 and 2 only. In the strip, speed, gear and RPM reserve the width of `000`, `R0` and `0000` through an invisible CSS block in the value's font, so 9↔10, 99↔100 and 999↔1000 never resize a section or move a neighbour; RPM shows its localized unit separately in every layout. Overlay values are slightly smaller and never below the 12 px labels, and the Cluster's speed, gear and RPM stay inside the inner ring at 50/100/200%. Decisions W1–W8 are in [concept.md](concept.md#et-045d-overlay-numbers-and-typography--october-24-2026). No window size, row height, cap, settings, IPC, preload, payload, wire, storage, export or native change, and `GAME_HISTORY_RECORDING` is unchanged. The owner's ETS2/ATS retest and every other game check remain pending in [ET-045d validation](docs/validation/et-045d.md).
+
+
+## ET-049 overlay background opacity — October 24, 2026
+
+The owner requested implementation of [ET-049](https://trello.com/c/GyBnLV5M). The candidate adds a 40–100% background-only slider (default 80), settings format v7 with in-memory v6 migration and no startup rewrite, exact validated dashboard IPC and committed overlay publication. Minimal stays backgroundless. No recording, wire, native or placement-draft semantics change. Code checks and pending owner-operated game/input/DPI/Narrator/installed-update evidence are recorded in [ET-049 validation](docs/validation/et-049.md); no merge or release is authorized by this request.

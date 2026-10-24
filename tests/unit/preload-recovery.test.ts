@@ -168,7 +168,7 @@ it('marks v1 data stale when the subscription closes or a replacement port await
 it('preserves the frozen narrow bridge and rejects privileged source values before IPC', async () => {
   expect(Object.isFrozen(bridge)).toBe(true); expect(Object.keys(bridge).sort()).toEqual(['beginOverlayEdit', 'choosePluginFolder', 'exitApplication', 'exportDiagnostics', 'exportJournalTrip', 'finishOverlayEdit', 'getAppState', 'getHardModeStatus', 'getJournalTrip', 'getStatus',
     'listJournalEvents', 'listJournalIntervals', 'listJournalSamples', 'listJournalTrips', 'openPluginFolder', 'refreshHardMode',
-    'resetOverlayEditPlacement', 'retryPluginSetup', 'selectSource', 'setAutostart', 'setLanguage', 'setOverlayEditScale', 'setOverlayEnabled', 'setOverlayLayout', 'setOverlaySections', 'setPluginGameExcluded', 'setUnitProfile',
+    'resetOverlayEditPlacement', 'retryPluginSetup', 'selectSource', 'setAutostart', 'setLanguage', 'setOverlayBackgroundOpacity', 'setOverlayEditScale', 'setOverlayEnabled', 'setOverlayLayout', 'setOverlaySections', 'setPluginGameExcluded', 'setUnitProfile',
     'showPluginFile', 'subscribeAppState', 'subscribeLive', 'uninstallApplication']);
   await expect(bridge.selectSource('C:\\arbitrary.exe' as never)).rejects.toThrow('Invalid source selection');
   expect(ipc.invoke).not.toHaveBeenCalled();
@@ -209,7 +209,7 @@ it('appends the application state and exit methods after the original three brid
   // ET-016 PR-5 the trip export, ET-017 PR-4 the five plugin setup methods, ET-017 PR-6 the diagnostics export and ET-018
   // PR-4 the in-app uninstall.
   expect(Object.keys(bridge)).toEqual(['getStatus', 'selectSource', 'subscribeLive', 'getAppState', 'subscribeAppState', 'exitApplication', 'setLanguage', 'setAutostart', 'setUnitProfile',
-    'setOverlayEnabled', 'setOverlayLayout', 'setOverlaySections', 'beginOverlayEdit', 'setOverlayEditScale', 'resetOverlayEditPlacement', 'finishOverlayEdit',
+    'setOverlayBackgroundOpacity', 'setOverlayEnabled', 'setOverlayLayout', 'setOverlaySections', 'beginOverlayEdit', 'setOverlayEditScale', 'resetOverlayEditPlacement', 'finishOverlayEdit',
     'listJournalTrips', 'getJournalTrip', 'listJournalEvents', 'listJournalIntervals', 'listJournalSamples', 'exportJournalTrip',
     'retryPluginSetup', 'choosePluginFolder', 'setPluginGameExcluded', 'showPluginFile', 'openPluginFolder', 'exportDiagnostics', 'uninstallApplication', 'getHardModeStatus', 'refreshHardMode']);
 });
@@ -353,4 +353,13 @@ it('validates Hard Mode replies and rejects every supplied argument before IPC',
   for (const method of [bridge.getHardModeStatus, bridge.refreshHardMode]) for (const argument of ['C:/private/config.cfg', {state: 'pass'}, undefined])
     await expect(Reflect.apply(method, bridge, [argument])).rejects.toThrow('Invalid Hard Mode request');
   ipc.invoke.mockResolvedValue({...status, filename: 'private'}); await expect(bridge.getHardModeStatus()).rejects.toThrow('Invalid Hard Mode status');
+});
+
+it('validates opacity as exactly one whole percentage before IPC', async () => {
+  for (const value of [undefined, null, '80', true, NaN, Infinity, 39, 101, 80.5, {}, []])
+    await expect(bridge.setOverlayBackgroundOpacity(value as never)).rejects.toThrow('Invalid overlay opacity request');
+  for (const args of [[], [80, {}]]) await expect(Reflect.apply(bridge.setOverlayBackgroundOpacity, bridge, args)).rejects.toThrow('Invalid overlay opacity request');
+  for (const value of [40, 65, 80, 100]) await bridge.setOverlayBackgroundOpacity(value);
+  expect(ipc.invoke.mock.calls.filter(call => call[0] === 'settings:set-overlay-background-opacity'))
+    .toEqual([40, 65, 80, 100].map(value => ['settings:set-overlay-background-opacity', value]));
 });

@@ -119,7 +119,7 @@ export function overlayPresentation(live: LiveTelemetry, units: UnitProfiles = D
     fuel: current && state?.fuel.available ? volumeNumber(state.fuel.value, profile) : '—',
     fuelUnit: volumeUnit(profile),
     freshness: current ? 'current' : live.status === 'stale' ? 'stale' : 'unavailable',
-    layout: overlay.layout,
+    layout: overlay.layout, backgroundOpacity: overlay.backgroundOpacity,
     paused: current && sources.v0View.connection.paused,
     sections,
     editing,
