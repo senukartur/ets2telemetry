@@ -557,7 +557,10 @@ function runApplication(profileError: unknown): void {
     // taskbar, which drops WS_EX_TOPMOST while a borderless full-screen game is foreground.
     created.setAlwaysOnTop(true, OVERLAY_TOPMOST_LEVEL);
     overlayController = new OverlayController(created, screen, phase => log('OVERLAY_TOPMOST_RESTORED', undefined, {phase}), layout,
-      {enabled: settings.state !== 'loading' && settings.overlay.enabled, placement, sections: settings.overlay.sections, editChanged: overlayEditChanged, anchorChanged: publishOverlayAnchor});
+      {enabled: settings.state !== 'loading' && settings.overlay.enabled, placement, sections: settings.overlay.sections, editChanged: overlayEditChanged, anchorChanged: publishOverlayAnchor,
+        // ET-045c: a window Windows did not place as requested is a default fact-only log line; every verified apply
+        // goes only to the opt-in diagnostic timeline.
+        boundsReport: (event, facts) => {if (event === 'OVERLAY_BOUNDS_MISMATCH') log(event, undefined, facts); else timeline?.(event, facts);}});
     created.webContents.setWindowOpenHandler(() => ({action: 'deny'}));
     created.webContents.on('will-navigate', event => event.preventDefault());
     // A loaded document starts at the default zoom; the scale in use applies again.

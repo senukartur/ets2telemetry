@@ -88,6 +88,13 @@ export function formatPosition(position: {x: number; y: number; z: number}): str
 export function formatMoney(money: MoneyValue): string {
   return money.currency.basis === 'sdk-documented' ? `${money.raw} ${money.currency.code} (SDK-documented)` : `${money.raw} (currency unknown)`;
 }
+/**
+ * The same exact raw digits and currency as formatMoney, without the "(SDK-documented)" provenance suffix, for compact
+ * displays such as the overlay (ET-045a). An unknown currency is still stated as unknown.
+ */
+export function formatMoneyAmount(money: MoneyValue): string {
+  return money.currency.basis === 'sdk-documented' ? `${money.raw} ${money.currency.code}` : `${money.raw} (currency unknown)`;
+}
 export function formatBoolean(value: boolean, labels: {yes?: string; no?: string} = {}): string {
   return value ? (labels.yes ?? 'yes') : (labels.no ?? 'no');
 }

@@ -113,13 +113,14 @@ function Test-LifecycleReceipt {
 
 # ET-017 PR-5 plugin journey (scenario `plugin`): both runs in the test-root mode, the Steam folders installed with the
 # bundled plugin, unrelated and unrecognized files unchanged, the card shown without a path, the exclusion removing the
-# plugin, and a restart that writes nothing; both runs exit orderly.
+# plugin, and a restart that writes nothing; both runs exit orderly. Since ET-045b run A must also show the ATS folder
+# duplicate as information beside its button (pluginFolderResultContextual).
 function Test-PluginReceipt {
     param([object]$Driver)
     $plugin = $Driver.plugin
     if ($null -eq $plugin) { return $false }
     foreach ($field in @('pluginSteamInstalled','pluginUnrelatedUnchanged','pluginUnrecognizedUnchanged','pluginCardShown','pluginNoPathShown',
-        'pluginExclusionRemoved','pluginRestartStates','pluginRestartUnchanged','pluginEventsVerified','pluginDiagnosticsExported')) {
+        'pluginExclusionRemoved','pluginRestartStates','pluginRestartUnchanged','pluginEventsVerified','pluginDiagnosticsExported','pluginFolderResultContextual')) {
         if ($plugin.$field -isnot [bool] -or $plugin.$field -ne $true) { return $false }
     }
     if (!(Test-ReceiptInteger -Value $plugin.runAExit -Minimum 0 -Maximum 0) -or !(Test-ReceiptInteger -Value $plugin.restartLauncherExit -Minimum 0 -Maximum 0)) { return $false }
@@ -793,8 +794,8 @@ function Test-UiReceipt {
         'shell' { $flags += @('navigation','headingFocus','hardModePage','journalUnmount','menuKeyboard','exitAvailable','laterAccount'); $screens = @('live','hardMode','journal','settings','account') }
         'live' { $flags += @('numericGauge','unavailableVsZero','paused','staleDashes','rawNames','unsupportedTrip','jobViewport','hmNamesReadable','fullWidthTelemetry','tankUnknownVsZero'); $screens = @('current','zero','missing','paused','stale') }
         'journal' { $flags += @('syntheticBanner','pageReturn','chartBounded','rawTabs','searchPlanned','tripRegions','tableReadable','signedChart'); $screens = @('list','trip','intervals','timeline','samples') }
-        'settings' { $flags += @('allPanels','allSections','committedSave','sourceSelector','uninstallRefusal','refusedSave','readOnly','controlsKeyboard','lastEnabled','fontLicense','overlayVisibility','visibilityFailedSave'); $screens = @('general','units','overlay','sections','plugin','data','about','save-error') }
-        'overlay' { $flags += @('fourLayouts','transparent','contained','independentFont','missing','paused','staleDashes','heroSubsets','formatterProfiles'); $screens = @('strip','card','cluster','hud') }
+        'settings' { $flags += @('allPanels','allSections','committedSave','sourceSelector','uninstallRefusal','refusedSave','readOnly','controlsKeyboard','lastEnabled','fontLicense','overlayVisibility','visibilityFailedSave','actionResult'); $screens = @('general','units','overlay','sections','plugin','data','about','save-error') }
+        'overlay' { $flags += @('fourLayouts','transparent','contained','independentFont','missing','paused','staleDashes','heroSubsets','formatterProfiles','stableNumbers','clusterRpmContained'); $screens = @('strip','card','cluster','hud') }
     }
     foreach ($flag in $flags) { if ($ui.flags.$flag -isnot [bool] -or !$ui.flags.$flag) { return $false } }
     if (@($ui.screenshots).Count -ne $(if ($ExpectedUiCase -ceq 'overlay') { 64 } elseif ($ExpectedUiCase -ceq 'settings') { 34 } else { 4 * $screens.Count })) { return $false }

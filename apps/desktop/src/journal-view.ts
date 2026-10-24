@@ -228,7 +228,7 @@ function journalDetailText(detail: JournalTripDetail, options: JournalTextOption
   sections.push(section('job', [
     field('sourceCity', nameOf(job.sourceCity)), field('sourceCompany', nameOf(job.sourceCompany)), field('destinationCity', nameOf(job.destinationCity)),
     field('destinationCompany', nameOf(job.destinationCompany)), field('cargo', nameOf(job.cargo)), field('cargoMass', show(job.cargoMass, kg => formatMass(kg, units.mass))),
-    field('market', nameOf(job.market)), field('specialJob', show(job.isSpecialJob, v => formatLocalizedBoolean(v, language))), field('cargoLoaded', show(job.cargoLoaded, v => formatLocalizedBoolean(v, language))),
+    field('market', show(job.market, market => market === '' ? name(market) : BASE_COPY.getJobMarketText(market, language))), field('specialJob', show(job.isSpecialJob, v => formatLocalizedBoolean(v, language))), field('cargoLoaded', show(job.cargoLoaded, v => formatLocalizedBoolean(v, language))),
     field('deadline', show(job.deliveryDeadline, minutes => gameTime(minutes, language)), JOURNAL_NOTE_TEXT.deadline), field('jobSource', jobSource)
   ]));
   if (delivered) {

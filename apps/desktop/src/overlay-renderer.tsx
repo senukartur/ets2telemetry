@@ -13,12 +13,12 @@ import './renderer.css';
 /** Ring geometry of the cluster's RPM gauge in SVG user units. */
 const RING_RADIUS = 40, RING_CIRCUMFERENCE = 2 * Math.PI * RING_RADIUS;
 
+/** `data-reserve` (ET-045d) lets the strip's CSS reserve the widest expected value invisibly; the text stays the value. */
 function Value({item}: {item: OverlayItem}) {
   return <span className="overlay-value-group">
-    <strong className="overlay-value" data-testid={item.testId}>{item.value}</strong>
+    <strong className="overlay-value" data-testid={item.testId} data-reserve={item.reserve}>{item.value}</strong>
     {item.unit ? <span className="overlay-unit" data-testid={`${item.testId}-unit`}>{item.unit}</span> : null}
     {item.detail ? <span className="overlay-detail" data-testid={item.detailTestId}>{item.detail}</span> : null}
-    {item.caption ? <span className="overlay-caption">{item.caption}</span> : null}
   </span>;
 }
 /** `maxWidth` (strip only) caps each tag at the width the strip reserves for it. */
@@ -67,7 +67,9 @@ function CardLayout({view}: {view: OverlayView}) {
 
 /**
  * A round speed gauge with the RPM ring and a gear badge, and the remaining sections in a side panel of fixed-height
- * rows that takes its content height (ET-012d); main reserves the window's height for the panel's rows.
+ * rows that takes its content height (ET-012d); main reserves the window's height for the panel's rows. The gauge centre
+ * (ET-045d) is a three-row grid: the gear above, the speed exactly centred and the RPM below, each capped so that it stays
+ * inside the inner ring.
  */
 function Cluster({view}: {view: OverlayView}) {
   const gauge = view.gauge, ring = gauge?.rpm?.ring ?? 0;
@@ -75,7 +77,7 @@ function Cluster({view}: {view: OverlayView}) {
     {gauge ? <div className="overlay-gauge">
       <svg className="overlay-ring" viewBox="0 0 120 120" aria-hidden="true" focusable="false">
         {gauge.speed ? <circle className="overlay-ring-track overlay-speed-track" data-testid="overlay-speed-track" cx="60" cy="60" r="52" /> : null}
-        {gauge.rpm ? <circle className="overlay-ring-track overlay-rpm-track" cx="60" cy="60" r={RING_RADIUS} /> : null}
+        {gauge.rpm ? <circle className="overlay-ring-track overlay-rpm-track" data-testid="overlay-rpm-track" cx="60" cy="60" r={RING_RADIUS} /> : null}
         {/* No arc without a current reading or at 0 rpm: a round line cap would otherwise draw a dot. */}
         {ring > 0 ? <circle className="overlay-ring-value" data-testid="overlay-rpm-arc" cx="60" cy="60" r={RING_RADIUS} transform="rotate(-90 60 60)"
           strokeDasharray={`${ring * RING_CIRCUMFERENCE} ${RING_CIRCUMFERENCE}`} /> : null}

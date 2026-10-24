@@ -84,6 +84,8 @@ async function buildFixture(output) {
     games: {ets2: {excluded: false, manualRoot: path.win32.normalize(manualRoot)}, ats: {excluded: false, manualRoot: null}}, installs: [], pending: [], failures: []}, null, 2) + '\n');
   return {
     root: canonical,
+    // ET-045b: the ATS Steam game root, which the stubbed folder dialog answers in run A. In memory only, never recorded.
+    roots: {ats: ats.root},
     files: {
       ets2Plugin: path.join(ets2.win64, 'plugins', PLUGIN_FILE), atsPlugin: path.join(ats.win64, 'plugins', PLUGIN_FILE),
       atsPlugins: path.join(ats.win64, 'plugins'), manualPlugin: path.join(manual, 'plugins', PLUGIN_FILE),
@@ -157,6 +159,42 @@ function assertNoPath(text, fixture) {
   assert.doesNotMatch(text, /[A-Za-z]:[\\/]|\\\\/, 'Game plugin card shows a path');
 }
 
+/** Replaces main's folder dialog, as stubSaveDialog replaces the Save dialog, and records each call without its path. */
+async function stubOpenDialog(application, answer) {
+  await application.evaluate(({dialog}, value) => {
+    const calls = globalThis.__ets2telemetrySmokeOpenDialog = [];
+    dialog.showOpenDialog = (window, options) => {
+      calls.push({window: Boolean(window), properties: options?.properties ?? null});
+      return Promise.resolve(value);
+    };
+  }, answer);
+}
+const openDialogCalls = application => application.evaluate(() => globalThis.__ets2telemetrySmokeOpenDialog ?? []);
+/** The fixed duplicate answer (strings.ts PLUGIN_FOLDER_REFUSAL_TEXT.FOLDER_DUPLICATE). */
+const FOLDER_DUPLICATE_TEXT = 'This game folder is already found through Steam; nothing changed.';
+/**
+ * ET-045b: one action result as the renderer shows it, read by its slot: severity, word, title, message, its place next to
+ * its trigger (or the trigger's row with `inRow`) and inside its game, its live region, the icon, focus and aria-describedby. Null while no result is shown.
+ */
+const actionResult = (page, {slot, trigger, inRow = false}) => page.evaluate(({slot, trigger, inRow}) => {
+  const document = globalThis.document, body = document.querySelector(`[data-testid="${slot}-result"]`);
+  if (!body) return null;
+  const control = document.getElementById(trigger), region = document.querySelector(`[data-testid="${slot}-result-region"]`);
+  const polite = region?.querySelector('[role="status"]');
+  const row = inRow ? control?.parentElement : control;
+  return {severity: body.getAttribute('data-severity'), word: document.querySelector(`[data-testid="${slot}-result-severity"]`)?.textContent ?? null,
+    title: document.querySelector(`[data-testid="${slot}-result-title"]`)?.textContent ?? null, message: document.querySelector(`[data-testid="${slot}-result-message"]`)?.textContent ?? null,
+    game: body.closest('[data-testid="plugin-ets2"]') ? 'ets2' : body.closest('[data-testid="plugin-ats"]') ? 'ats' : null,
+    nextToTrigger: Boolean(region && row?.nextElementSibling === region),
+    polite: Boolean(polite?.contains(body) && polite.getAttribute('aria-live') === 'polite' && polite.getAttribute('aria-atomic') === 'true'),
+    bodyRole: body.getAttribute('role'), alerts: region?.querySelectorAll('[role="alert"]').length ?? null,
+    iconHidden: body.querySelector('svg')?.getAttribute('aria-hidden') ?? null,
+    focused: document.activeElement === control, describedBy: control?.getAttribute('aria-describedby') ?? null, id: body.id,
+    pending: control?.getAttribute('aria-disabled') ?? null,
+    otherResults: [...document.querySelectorAll('[data-testid$="-result"][data-severity]')].filter(node => node !== body).length};
+}, {slot, trigger, inRow});
+export {actionResult as pluginActionResult};
+
 const RUN_A = {'ets2:steam:0': ['installed', null], 'ets2:manual:0': ['blocked', 'UNRECOGNIZED_FILE'], 'ats:steam:0': ['installed', null]};
 const RUN_A_EXCLUDED = {...RUN_A, 'ats:steam:0': ['excluded', null]};
 const CARD_A = {'plugin-target-ets2-steam-0-state': 'Installed', 'plugin-target-ets2-manual-0-state': 'Blocked', 'plugin-target-ats-steam-0-state': 'Installed'};
@@ -167,7 +205,7 @@ const CARD_EXCLUDED = {...CARD_A, 'plugin-target-ats-steam-0-state': 'Not manage
  * files byte-identical; the card shows Installed / Blocked / Installed; switching ATS off in the card removes its plugin
  * and the plugins folder this application created for it.
  */
-export async function runPluginJourney({dashboard, fixture, config, before, record, phase = () => undefined}) {
+export async function runPluginJourney({application, dashboard, fixture, config, before, record, phase = () => undefined}) {
   await settingsPanel(dashboard, 'plugin');
   const bundled = await bundledPluginHash(config);
   record.view = await until(() => appPlugins(dashboard), settled(RUN_A), 'PLUGIN_SETUP_NOT_SETTLED', 30000);
@@ -182,10 +220,31 @@ export async function runPluginJourney({dashboard, fixture, config, before, reco
   record.pluginUnrelatedUnchanged = true;
   assert.deepEqual(after.manualPlugin, before.manualPlugin);
   record.pluginUnrecognizedUnchanged = true;
+  // ET-045b: choosing the ATS Steam folder again from the keyboard answers FOLDER_DUPLICATE beside "Choose game folder…" of
+  // ATS, as information, inside the polite live region, with focus kept on the button and nothing written.
+  await stubOpenDialog(application, {canceled: false, filePaths: [fixture.roots.ats]});
+  await dashboard.getByTestId('plugin-ats-choose').focus();
+  await dashboard.keyboard.press('Enter');
+  const folderSlot = {slot: 'plugin-ats-choose', trigger: 'plugin-ats-choose'};
+  record.folderResult = await until(() => actionResult(dashboard, folderSlot), value => value !== null && value.pending === null, 'PLUGIN_FOLDER_RESULT_NOT_SHOWN', 10000);
+  assert.deepEqual(record.folderResult, {severity: 'info', word: 'Information', title: 'Information — Game folder for American Truck Simulator', message: FOLDER_DUPLICATE_TEXT,
+    game: 'ats', nextToTrigger: true, polite: true, bodyRole: null, alerts: 0, iconHidden: 'true', focused: true, describedBy: 'plugin-ats-choose-result',
+    id: 'plugin-ats-choose-result', pending: null, otherResults: 0});
+  assert.deepEqual(await openDialogCalls(application), [{window: true, properties: ['openDirectory']}]);
+  const registry = await fixtureStep('REGISTRY', async () => JSON.parse(await readFile(fixture.files.registry, 'utf8')));
+  assert.equal(registry.games.ats.manualRoot, null);
+  assertNoPath(await cardText(dashboard), fixture);
+  await dashboard.getByTestId('plugin-ats-choose-result').scrollIntoViewIfNeeded();
+  await dashboard.screenshot({path: path.join(config.output, 'plugin-folder-result.png')});
+  record.pluginFolderResultContextual = true;
+  phase('plugin-folder-result');
   // Switching ATS off goes through the card's switch and the plugin bridge, as a driver would.
   await dashboard.getByTestId('plugin-ats-managed').click();
   record.excludedView = await until(() => appPlugins(dashboard), view => view.games.ats.excluded && settled(RUN_A_EXCLUDED)(view), 'PLUGIN_EXCLUSION_NOT_APPLIED', 20000);
   record.excludedCard = await until(() => cardStates(dashboard), value => JSON.stringify(value) === JSON.stringify(CARD_EXCLUDED), 'PLUGIN_CARD_NOT_EXCLUDED', 10000);
+  // The next card action cleared the folder result; a successful switch change shows none of its own.
+  assert.equal(await actionResult(dashboard, folderSlot), null);
+  assert.equal(await actionResult(dashboard, {slot: 'plugin-ats-managed', trigger: 'plugin-ats-managed', inRow: true}), null);
   const excluded = await snapshotPluginFixture(fixture);
   assert.equal(excluded.atsPlugin, 'absent'); assert.equal(excluded.atsPlugins, 'absent');
   assert.deepEqual([excluded.ets2Plugin, excluded.manualPlugin, excluded.unrelatedDll, excluded.unrelatedText],
@@ -208,7 +267,9 @@ export async function verifyPluginRestart({dashboard, fixture, before, record, p
   phase('plugin-run-b-settled');
 }
 
-const exportResult = page => page.evaluate(() => globalThis.document.querySelector('[data-testid="plugin-result"]')?.textContent ?? null);
+const EXPORT_SLOT = {slot: 'plugin-export-diagnostics', trigger: 'plugin-export-diagnostics'};
+/** ET-045b: the export's answer beside its button, once the call settled. */
+const exportResult = page => actionResult(page, EXPORT_SLOT).then(value => value && value.pending === null ? value : null);
 const DIAGNOSTICS_CANCELLED = 'Export cancelled. Nothing was written.';
 const DIAGNOSTICS_SAVED = 'Diagnostics saved.';
 
@@ -225,12 +286,15 @@ export async function runDiagnosticsExport({application, dashboard, config, fixt
   await mkdir(directory);
   const button = dashboard.getByTestId('plugin-export-diagnostics');
   await stubSaveDialog(application, {canceled: true, filePath: ''});
-  await button.click();
-  await until(() => exportResult(dashboard), value => value === DIAGNOSTICS_CANCELLED, 'DIAGNOSTICS_EXPORT_NOT_CANCELLED', 10000);
+  await button.focus(); await dashboard.keyboard.press('Enter');
+  const cancelled = await until(() => exportResult(dashboard), value => value?.message === DIAGNOSTICS_CANCELLED, 'DIAGNOSTICS_EXPORT_NOT_CANCELLED', 10000);
+  assert.deepEqual([cancelled.severity, cancelled.polite, cancelled.focused, cancelled.nextToTrigger, cancelled.describedBy], ['info', true, true, true, 'plugin-export-diagnostics-result']);
   assert.deepEqual(await readdir(directory), []);
   await stubSaveDialog(application, {canceled: false, filePath: file});
-  await button.click();
-  await until(() => exportResult(dashboard), value => value === DIAGNOSTICS_SAVED, 'DIAGNOSTICS_EXPORT_NOT_SAVED', 10000);
+  await button.focus(); await dashboard.keyboard.press('Enter');
+  const saved = await until(() => exportResult(dashboard), value => value?.message === DIAGNOSTICS_SAVED, 'DIAGNOSTICS_EXPORT_NOT_SAVED', 10000);
+  assert.deepEqual([saved.severity, saved.word, saved.title, saved.polite, saved.focused, saved.otherResults], ['success', 'Done', 'Done — Diagnostics export', true, true, 0]);
+  record.diagnosticsResultSeverities = [cancelled.severity, saved.severity];
   const offered = await dialogCalls(application);
   assert.equal(offered.length, 1);
   assert.equal(offered[0].window, true);

@@ -16,8 +16,11 @@ export function desktopLiveView(live: LiveTelemetry | undefined, profiles: UnitP
   const speed = current && state?.speed.state === 'value' ? convertSpeed(state.speed.value, units.speed) : null;
   const rpm = current && state?.engineRpm.state === 'value' ? state.engineRpm.value : null;
   const fuel = current && state?.fuel.state === 'value' && state.fuelCapacity.state === 'value' && state.fuelCapacity.value > 0 ? state.fuel.value / state.fuelCapacity.value : null;
-  const scaleMax = units.speed === 'mph' ? 80 : 130;
-  return {sources, units, current, speed, speedText: speed === null ? '—' : fixed(speed, 0), rpm, scaleMax, speedRatio: clampRatio(speed === null ? null : speed / scaleMax), rpmRatio: clampRatio(rpm === null ? null : rpm / 3000), fuelRatio: clampRatio(fuel)};
+  const scaleMax = units.speed === 'mph' ? 80 : 130, speedText = speed === null ? '—' : fixed(speed, 0);
+  // ET-045a: the speed arc follows the displayed integer, so a reading that shows 0 draws no arc (a round line cap
+  // would paint a dot that blinks as the SDK speed flickers around zero). Above 0 the ratio keeps its fractional precision.
+  const speedRatio = speed === null ? null : speedText === '0' ? 0 : clampRatio(speed / scaleMax);
+  return {sources, units, current, speed, speedText, rpm, scaleMax, speedRatio, rpmRatio: clampRatio(rpm === null ? null : rpm / 3000), fuelRatio: clampRatio(fuel)};
 }
 export function gaugeArc(radius: number, start: number, end: number, center = 130): string {
   const point = (angle: number) => {const rad = angle * Math.PI / 180; return [center + radius * Math.sin(rad), center - radius * Math.cos(rad)];};

@@ -254,6 +254,8 @@ The overlay keeps its own minimal stylesheet with the `--yu-ov-*` tokens: panel 
 
 The October 22 ET-012e amendment applies integer speed to all four layouts. Ordinary values use 20 px in Strip, 13 px in Card, 12 px in the Cluster panel and 14 px in HUD; preserve the existing primary speed/gear hierarchy, label and unit sizes, fixed row heights and styles. In the implemented Strip and HUD, primary speed remains 22 px and 16 px respectively. The saved vertical placement also aligns painted content inside the stable reserved window: top at `y = 0`, centre at `0.5`, bottom at `1`. Dragging freezes that internal anchor until release; placement accuracy and possible release adjustment require the focused owner checks described in [the minimal overlay](../minimal-overlay.md#geometry-and-placements-et-012b).
 
+ET-045d amendment, October 24, 2026 (owner request, ET-045 items 7, 8 and 2): values are slightly smaller and never below the 12 px labels; units and details are 12 px except the 11 px Cluster RPM unit, which is a unit, not a value. Strip values are 17 px and speed 19 px, both weight 700; Card row values and the hero RPM 12 px and the hero speed 34, 24 or 16 px at weight 700 for three, two or one hero parts, with the gear at 19 px (16 px alone); the Cluster gauge speed 34 px, its gear 14 px and its RPM a 12 px number with an 11 px unit; Cluster panel values stay 12 px; HUD values 13 px and speed 15 px. In the strip, speed, gear and RPM reserve the width of `000`, `R0` and `0000` with right-aligned digits, so a change of digit count never moves a section; RPM shows its unit separately in every layout. The Cluster centre places the gear just above the exactly centred speed and the RPM just below it, each capped so it stays inside the inner ring. This supersedes, for typography only, the October 22 sizes above and the historical "speed 22 px/800" in the `overlay.strip` row below; layouts, anchors and window sizes are unchanged. See [the minimal overlay](../minimal-overlay.md#stable-numbers-and-value-typography-et-045d-october-24-2026).
+
 | Spec id | Layout | Default anchor |
 | --- | --- | --- |
 | `overlay.strip` | One 38 px row with icons instead of labels; groups separated by thin dividers; speed 22 px/800, gear in a blue-outlined chip, mini bars for RPM and fuel | Top centre (clear of the in-game route advisor at the bottom right) |
@@ -330,3 +332,19 @@ ET-028 Live compaction keeps all twelve actual parameter names with state icons 
 ## ET-047 current presentation — October 23, 2026
 
 ET-047 supersedes earlier compact-card/drawer descriptions, including the dated ET-028 compaction notes below. Live has one full-width instrument above Job. Hard Mode lives between Live and Journal, and exposes all evidence/caveats inline. Optional tooltips do not hide essential information. Existing ET-026 qualification, freshness and source authority remain unchanged. See [ET-047 validation](../validation/et-047.md).
+
+## ET-045b action results — October 24, 2026
+
+The answer of a user action appears next to the control that started it, as the next element after the control or its row, never as a toast, a card-wide status line or a line far from its control. The first adopter is the Game plugin card; see [game plugin setup](../plugin-setup.md#the-game-plugin-card).
+
+| Severity | Tone tokens | Icon | Word (EN / RU) |
+| --- | --- | --- | --- |
+| Information | `--yu-neutral-*` | `Info` | Information / Информация |
+| Done | `--yu-ok-*` | `CircleCheck` | Done / Готово |
+| Refused | `--yu-warn-*` | `Ban` | Refused / Отклонено |
+| Failed | `--yu-err-*` | `CircleX` | Failed / Ошибка |
+
+- **Shape.** A shadcn Alert with the tone's text, background and border, a 3 px left border, the icon (`aria-hidden`), a title "{severity} — {action}" that names the action and its game, and the fixed answer text in the tone colour. Icon and word always accompany the tone, never colour alone.
+- **Announcements.** Information, done and refused live in a persistent polite `role="status"` region that exists from the first render; a failure appears alone as `role="alert"`, outside it. The control names its shown result in `aria-describedby`.
+- **Focus and lifetime.** A pending control stays focusable (`aria-disabled`); focus returns to the control only when it was lost. One current result per card: it stays until the next action of that card, with no auto-hide and no dismiss button.
+- **Not yet adopted.** The Journal export result, the uninstall card result, the settings, overlay, autostart and language save messages and the Hard Mode lines keep their existing presentation; each is a follow-up candidate.

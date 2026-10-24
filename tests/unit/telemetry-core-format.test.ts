@@ -3,7 +3,7 @@
 import {describe, expect, it} from 'vitest';
 import {
   fixed, formatBearing, formatBoolean, formatConsumption, formatDeadline, formatDistance, formatGameDuration, formatGameTime, formatGear,
-  formatMass, formatMoney, formatPercent, formatPosition, formatRpm, formatSpeed, formatVolume, L100KM_US_MPG
+  formatMass, formatMoney, formatMoneyAmount, formatPercent, formatPosition, formatRpm, formatSpeed, formatVolume, L100KM_US_MPG
 } from '../../packages/telemetry-core/src';
 
 describe('rounding and signed zero', () => {
@@ -113,5 +113,15 @@ describe('money', () => {
     expect(formatMoney({kind: 'penalty', raw: '-9223372036854775808', sdkType: 's64', currency: {basis: 'unknown'}}))
       .toBe('-9223372036854775808 (currency unknown)');
     expect(formatMoney({kind: 'revenue', raw: '0', sdkType: 's64', currency: {basis: 'unknown'}})).toBe('0 (currency unknown)');
+  });
+  it('shows the same exact amount and currency without the SDK provenance suffix for compact displays (ET-045a)', () => {
+    const eur = {kind: 'expected-income', raw: '1234567', sdkType: 'u64', currency: {basis: 'sdk-documented', code: 'EUR', source: 'scssdk_telemetry_eut2.h'}} as const;
+    expect(formatMoneyAmount(eur)).toBe('1234567 EUR');
+    expect(formatMoney(eur)).toBe('1234567 EUR (SDK-documented)');
+    expect(formatMoneyAmount({kind: 'expected-income', raw: '18446744073709551615', sdkType: 'u64', currency: {basis: 'sdk-documented', code: 'USD', source: 'scssdk_telemetry_ats.h'}}))
+      .toBe('18446744073709551615 USD');
+    expect(formatMoneyAmount({kind: 'expected-income', raw: '9007199254740993.123456', sdkType: 'v0-decimal', currency: {basis: 'unknown'}}))
+      .toBe('9007199254740993.123456 (currency unknown)');
+    expect(formatMoneyAmount({kind: 'revenue', raw: '0', sdkType: 's64', currency: {basis: 'unknown'}})).toBe('0 (currency unknown)');
   });
 });

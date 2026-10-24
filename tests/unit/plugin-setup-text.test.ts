@@ -174,7 +174,7 @@ describe('call answers', () => {
       FOLDER_NOT_GAME: 'This folder is not a game folder of this game.',
       FOLDER_WRONG_GAME: 'This folder holds the other game.',
       FOLDER_LINKED: 'The game\'s folders in this folder are linked elsewhere; it cannot be used.',
-      FOLDER_DUPLICATE: 'This game folder is already found through Steam.',
+      FOLDER_DUPLICATE: 'This game folder is already found through Steam; nothing changed.',
       SETUP_DISABLED: 'Plugin setup is off in this launch.',
       REGISTRY_UNAVAILABLE: 'The plugin setup record could not be saved.',
       BUSY: 'A folder dialog is already open.'
@@ -256,6 +256,8 @@ it('localizes static templates before inserting plugin identity and folder ordin
   expect(text.games.ets2.title).toBe('Euro Truck Simulator 2');
   expect(text.games.ets2.targets[0]).toMatchObject({id: 'ets2:steam:0', state: 'installed', label: 'Папка Steam 1', status: 'Установлен'});
   expect(pluginFolderChoiceText({outcome: 'cancelled'}, 'ru')).toBe('Папка не выбрана; ничего не изменено.');
+  // ET-045b: the changed English duplicate text keeps its Russian translation (APP_COPY_KEYS follows the English text).
+  expect(pluginFolderChoiceText({outcome: 'refused', code: 'FOLDER_DUPLICATE'}, 'ru')).toBe('Эта папка игры уже найдена через Steam; ничего не изменено.');
 });
 
 

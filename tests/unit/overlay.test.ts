@@ -150,7 +150,9 @@ it('clears v1 data on invalidation and keeps its expiry across it', async () => 
 });
 function controller(layout?: OverlayLayout) {
   // Models Windows: isAlwaysOnTop() reads the HWND's WS_EX_TOPMOST, which external z-order changes can clear.
-  const window = {isDestroyed: () => false, hide: vi.fn(), setBounds: vi.fn(), showInactive: vi.fn(), topmost: true,
+  // ET-045c: Windows applies the requested bounds faithfully here; getBounds() reads them back.
+  const window = {isDestroyed: () => false, hide: vi.fn(), bounds: {x: 0, y: 0, width: 0, height: 0},
+    setBounds: vi.fn((bounds: Electron.Rectangle) => {window.bounds = {...bounds};}), getBounds: (): Electron.Rectangle => ({...window.bounds}), showInactive: vi.fn(), topmost: true,
     isAlwaysOnTop: (): boolean => window.topmost, setAlwaysOnTop: vi.fn<(flag: boolean, level: string) => void>(flag => {window.topmost = flag;}), moveTop: vi.fn(),
     // Never called by the controller: activating or focusing the overlay would steal driving input.
     show: vi.fn(), focus: vi.fn(), setFocusable: vi.fn(), setIgnoreMouseEvents: vi.fn(),
@@ -339,9 +341,10 @@ function trackedController(layout: OverlayLayout = 'cluster', placement?: Overla
   const state = {visible: false, ignoreMouse: true, focusable: false, movable: false, skipTaskbar: true, topmost: true};
   const calls: string[] = [];
   const record = (name: string) => {calls.push(name);};
-  const window = {isDestroyed: () => false,
+  const window = {isDestroyed: () => false, bounds: {x: 0, y: 0, width: 0, height: 0},
     hide: vi.fn(() => {record('hide'); state.visible = false;}),
-    setBounds: vi.fn(() => record('setBounds')),
+    // ET-045c: Windows applies the requested bounds faithfully here; getBounds() reads them back.
+    setBounds: vi.fn((bounds: Electron.Rectangle) => {record('setBounds'); window.bounds = {...bounds};}), getBounds: (): Electron.Rectangle => ({...window.bounds}),
     showInactive: vi.fn(() => {record('showInactive'); state.visible = true;}),
     isAlwaysOnTop: () => state.topmost,
     setAlwaysOnTop: vi.fn((flag: boolean) => {record('setAlwaysOnTop'); state.topmost = flag;}),
@@ -508,7 +511,8 @@ it('does not move the window while it is dragged and snaps a drop past the edges
 it('keeps a drop inside the client area where it was dropped', () => {
   const tracked = trackedController('cluster', {x: 0.5, y: 0.5, scale: 1}), {overlay, window} = tracked;
   editing(tracked); overlay.moveStarted(); window.setBounds.mockClear();
-  overlay.moved({x: -600, y: 200, width: 440, height: 267});
+  // The native drag moved the window itself (ET-045c: the controller verifies against its actual bounds).
+  window.bounds = {x: -600, y: 200, width: 440, height: 267}; overlay.moved({x: -600, y: 200, width: 440, height: 267});
   // (-600 + 944) / 488 = 0.70492 and (200 - 16) / 241 = 0.76349, rounded to four decimals; the window stays where it was dropped.
   expect(window.setBounds).not.toHaveBeenCalled();
   expect(overlay.endEdit()).toEqual({x: 0.7049, y: 0.7635, scale: 1});

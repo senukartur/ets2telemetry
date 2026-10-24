@@ -426,6 +426,8 @@ async function zoomFactors(application) {
   return {overlay: of('?view=overlay'), dashboard: of('')};
 }
 
+// The Driving only preset of apps/desktop/src/overlay-sections.ts.
+const DRIVING_ONLY_SECTIONS = ['speed', 'gear', 'rpm', 'fuel', 'range'];
 // ET-012b edit mode (REG-016, REG-017). The synthetic source has no game window, so edit mode waits for the game: the
 // overlay never shows, never becomes focusable and stays topmost while its document is marked as editing. A saved scale
 // reaches only the overlay's zoom factor; the dashboard keeps 1 in its own session. Recorded for review only;
@@ -442,6 +444,17 @@ async function runEditStep(application, dashboard, overlay) {
   step.windowsWhileEditing = await windowSecurity(application);
   await assert.rejects(dashboard.evaluate(() => globalThis.desktop.setOverlayLayout('hud')), /cannot change while its position is edited/);
   step.layoutLocked = true;
+  // ET-045c: a sections preset saved while editing keeps edit mode, its draft and the window security. The synthetic
+  // source has no game window, so this cannot show containment inside a game client; unit tests cover that.
+  const original = (await dashboard.evaluate(() => globalThis.desktop.getAppState())).settings.overlay.sections;
+  const drivingOnly = Object.fromEntries(Object.keys(original).map(id => [id, DRIVING_ONLY_SECTIONS.includes(id)]));
+  step.sectionsPreset = await dashboard.evaluate(sections => globalThis.desktop.setOverlaySections(sections), drivingOnly);
+  assert.deepEqual(step.sectionsPreset.overlay.sections, drivingOnly);
+  step.afterSectionsPreset = (await dashboard.evaluate(() => globalThis.desktop.getAppState())).overlayEdit;
+  assert.deepEqual(step.afterSectionsPreset, {active: true, layout: 'card', scale: 1, placement: 'waiting-for-game'});
+  step.windowsAfterSectionsPreset = await windowSecurity(application);
+  step.sectionsRestored = await dashboard.evaluate(sections => globalThis.desktop.setOverlaySections(sections), original);
+  assert.deepEqual(step.sectionsRestored.overlay.sections, original);
   step.scaled = await dashboard.evaluate(() => globalThis.desktop.setOverlayEditScale(1.5));
   assert.deepEqual(step.scaled, {active: true, layout: 'card', scale: 1.5, placement: 'waiting-for-game'});
   step.saved = await dashboard.evaluate(() => globalThis.desktop.finishOverlayEdit('save'));

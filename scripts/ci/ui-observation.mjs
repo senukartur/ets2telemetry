@@ -5,7 +5,9 @@ import path from 'node:path';
 import {readFile, writeFile, rename, mkdir, rmdir} from 'node:fs/promises';
 import {screen, settingsPanel, chooseLanguage} from './ui-navigation.mjs';
 import {until} from './lifecycle-observation.mjs';
-import {overlayOverflow, zeroLiveObservation} from './renderer-observation.mjs';
+import {clusterCentreProbe, overlayOverflow, stripNumberProbe, zeroLiveObservation} from './renderer-observation.mjs';
+import {stubSaveDialog} from './journal-observation.mjs';
+import {pluginActionResult} from './plugin-fixture.mjs';
 
 export const UI_CASES = ['shell', 'live', 'journal', 'settings', 'overlay'];
 const sizes = [{width: 1280, height: 800}, {width: 1100, height: 720}];
@@ -48,6 +50,137 @@ function cssDisplayGeometry() {
   }
   return {results, restored: content.getAttribute('style') === original.style && content.getAttribute('data-anchor-y') === original.anchor};
 }
+// ET-045d stable numbers and Cluster containment. The probes write texts into the rendered overlay and restore them
+// (renderer-observation.mjs); the zoom and window frames are the overlay's 50/100/200% scales at the layout's sizes.
+const SPEED_UNITS = {en: ['km/h', 'mph'], ru: ['км/ч', 'миль/ч']}, RPM_UNIT = {en: 'rpm', ru: 'об/мин'};
+const STRIP_FRAMES = [{zoom: 1, width: 1280, height: 116}, {zoom: 0.5, width: 640, height: 120}, {zoom: 2, width: 1000, height: 720}];
+const CLUSTER_FRAMES = [{zoom: 0.5, width: 220, height: 135}, {zoom: 1, width: 440, height: 267}, {zoom: 2, width: 880, height: 534}];
+function stripSteps(speedUnit, rpmUnit) {
+  return [{speed: '0', speedUnit, gear: 'N', rpm: '0', rpmUnit}, ...['9', '10', '99', '100', '-5', '—'].map(speed => ({speed})),
+    ...['1', '9', '10', '12', 'R1'].map(gear => ({gear})), ...['999', '1000', '2528', '9999', '—'].map(rpm => ({rpm}))];
+}
+function clusterSteps(parts, speedUnit, rpmUnit) {
+  const base = {...(parts.includes('speed') ? {speedUnit} : {}), ...(parts.includes('rpm') ? {rpmUnit} : {})}, steps = [];
+  if (parts.includes('rpm')) steps.push(...['999', '1000', '2528', '9999'].map(rpm => ({...base, rpm})));
+  if (parts.includes('gear')) steps.push(...['N', '12', 'R1'].map(gear => ({...base, gear})));
+  if (parts.includes('speed')) steps.push(...['100', '-5', '—'].map(speed => ({...base, speed})));
+  if (parts.length === 3) steps.push({...base, speed: '100', gear: '12', rpm: '9999'});
+  return steps;
+}
+async function overlayFrame(application, overlay, frame) {
+  await application.evaluate(({BrowserWindow}, {zoom, width, height}) => {
+    const window = BrowserWindow.getAllWindows().find(candidate => candidate.webContents.getURL().endsWith('?view=overlay'));
+    window.webContents.setZoomFactor(zoom); window.setContentSize(width, height);
+  }, frame);
+  // The CSS viewport times the zoom is the DIP content size; at a fractional device scale Windows may round it by a pixel.
+  await overlay.waitForFunction(({zoom, width, height}) => Math.abs(globalThis.innerWidth * zoom - width) <= 1.5 && Math.abs(globalThis.innerHeight * zoom - height) <= 1.5, frame, {timeout: 5000});
+  await settled(overlay);
+}
+/** Self-contained: every strip section's and the strip row's edges in CSS px. */
+function stripBoxes() {
+  const boxes = {};
+  for (const element of globalThis.document.querySelectorAll('[data-testid^="overlay-section-"], .overlay-strip-row')) {
+    const box = element.getBoundingClientRect();
+    boxes[element.getAttribute('data-testid') ?? 'row'] = [box.left, box.top, box.right, box.bottom];
+  }
+  return boxes;
+}
+const movedBoxes = (before, after) => [...new Set([...Object.keys(before), ...Object.keys(after)])]
+  .filter(id => !before[id] || !after[id] || before[id].some((edge, index) => Math.abs(edge - after[id][index]) > 0.01));
+/** Self-contained: the overlay's speed, gear and RPM texts match `expected` exactly. */
+function numberTexts(expected) {
+  return Object.entries(expected).every(([id, text]) => globalThis.document.querySelector(`[data-testid="overlay-${id}"]`)?.textContent === text);
+}
+/** Self-contained: the shown section ids, in order. */
+function shownSections() {
+  return [...globalThis.document.querySelectorAll('[data-testid^="overlay-section-"]')].map(node => node.getAttribute('data-testid').replace('overlay-section-', '')).join(',');
+}
+/** Self-contained: the shown section ids, in order, are exactly `expected` (comma-separated). */
+function sectionsAre(expected) {
+  return [...globalThis.document.querySelectorAll('[data-testid^="overlay-section-"]')].map(node => node.getAttribute('data-testid').replace('overlay-section-', '')).join(',') === expected;
+}
+/**
+ * Runs `body`, then always `restore`. A restore failure after a failed body never replaces the body's own error: it is
+ * appended to that error's message. After a passing body a restore failure is thrown as it is.
+ */
+async function withRestore(body, restore) {
+  let result;
+  try {result = await body();}
+  catch (error) {
+    try {await restore();}
+    catch (restoreError) {
+      if (error instanceof Error) error.message += `; restore also failed: ${restoreError instanceof Error ? restoreError.message : String(restoreError)}`;
+    }
+    throw error;
+  }
+  await restore();
+  return result;
+}
+/**
+ * The strip at 100%, 50% and 200%: every digit-count step in both unit profiles leaves every section and the row in place,
+ * then two real source transitions (9 to 100 km/h, gear 9 to 10, 999 to 1000 rpm) do the same end to end.
+ */
+async function observeStripNumbers({application, overlay, source, language, record}) {
+  record.stableNumbers ??= [];
+  await withRestore(async () => {
+    for (const frame of STRIP_FRAMES) {
+      await overlayFrame(application, overlay, frame);
+      for (const speedUnit of SPEED_UNITS[language]) {
+        const result = await overlay.evaluate(stripNumberProbe, stripSteps(speedUnit, RPM_UNIT[language]));
+        const failed = result.steps.filter(step => step.moved.length || step.truncated.length);
+        record.stableNumbers.push({language, zoom: frame.zoom, speedUnit, ok: result.ok, restored: result.restored, steps: result.steps.length, failed});
+        assert.equal(result.restored, true, `UI_STRIP_NUMBER_PROBE_NOT_RESTORED_${language}_${frame.zoom}`);
+        assert.equal(result.ok, true, `UI_STRIP_NUMBERS_UNSTABLE_${language}_${frame.zoom}_${speedUnit}: ${result.reason ?? JSON.stringify(failed)}`);
+      }
+    }
+    await overlayFrame(application, overlay, STRIP_FRAMES[0]);
+    source.setReading(2.5, 73); source.setEngine(999, 9);
+    await overlay.waitForFunction(numberTexts, {speed: '9', gear: '9', rpm: '999'}, {timeout: 5000});
+    const before = await overlay.evaluate(stripBoxes);
+    source.setReading(100 / 3.6, 73); source.setEngine(1000, 10);
+    await overlay.waitForFunction(numberTexts, {speed: '100', gear: '10', rpm: '1000'}, {timeout: 5000});
+    const moved = movedBoxes(before, await overlay.evaluate(stripBoxes));
+    record.stableNumbers.push({language, zoom: 1, transition: '9/9/999 to 100/10/1000', moved});
+    assert.deepEqual(moved, [], `UI_STRIP_LIVE_TRANSITION_MOVED_${language}`);
+  }, async () => {
+    source.setReading(25, 73); source.setEngine(600, -1);
+    await overlayFrame(application, overlay, STRIP_FRAMES[0]);
+  });
+  await overlay.waitForFunction(numberTexts, {speed: '90', gear: 'R1', rpm: '600'}, {timeout: 5000});
+  record.flags.stableNumbers = true;
+}
+/**
+ * The Cluster at 50%, 100% and 200% with speed, gear and RPM, then at 100% with RPM alone and with speed and RPM: every
+ * centre part stays inside the inner ring in both unit profiles. All sections are restored afterwards.
+ */
+async function observeClusterCentre({application, dashboard, overlay, language, record}) {
+  record.clusterCentre ??= [];
+  const check = async (frame, parts) => {
+    for (const speedUnit of parts.includes('speed') ? SPEED_UNITS[language] : [undefined]) {
+      const result = await overlay.evaluate(clusterCentreProbe, clusterSteps(parts, speedUnit, RPM_UNIT[language]));
+      const failed = result.steps.filter(step => step.outside.length || step.truncated.length);
+      record.clusterCentre.push({language, zoom: frame.zoom, parts, speedUnit: speedUnit ?? null, ok: result.ok, restored: result.restored, ring: result.ring ?? null, steps: result.steps.length, failed});
+      assert.equal(result.restored, true, `UI_CLUSTER_PROBE_NOT_RESTORED_${language}_${frame.zoom}`);
+      assert.equal(result.ok, true, `UI_CLUSTER_CENTRE_OUTSIDE_RING_${language}_${frame.zoom}_${parts.join('+')}: ${result.reason ?? JSON.stringify(failed)}`);
+    }
+  };
+  const all = (await dashboard.evaluate(() => globalThis.desktop.getAppState())).settings.overlay.sections;
+  const shown = await overlay.evaluate(shownSections);
+  await withRestore(async () => {
+    for (const frame of CLUSTER_FRAMES) {await overlayFrame(application, overlay, frame); await check(frame, ['speed', 'gear', 'rpm']);}
+    for (const subset of [['rpm'], ['speed', 'rpm']]) {
+      await dashboard.evaluate(({all, subset}) => globalThis.desktop.setOverlaySections(Object.fromEntries(Object.keys(all).map(id => [id, subset.includes(id)]))), {all, subset});
+      await overlay.waitForFunction(sectionsAre, subset.join(','), {timeout: 5000});
+      await overlayFrame(application, overlay, CLUSTER_FRAMES[1]);
+      await check(CLUSTER_FRAMES[1], subset);
+    }
+  }, async () => {
+    await dashboard.evaluate(all => globalThis.desktop.setOverlaySections(all), all);
+    await overlayFrame(application, overlay, CLUSTER_FRAMES[1]);
+  });
+  await overlay.waitForFunction(sectionsAre, shown, {timeout: 5000});
+  record.flags.clusterRpmContained = true;
+}
 async function capture({page, application, config, record, name, language, size, overlay = false}) {
   const file = `ui-${config.uiCase}-${name}-${language}-${size.width}x${size.height}.png`;
   await settled(page);
@@ -73,6 +206,39 @@ async function focusRoute(page, route) {
   await screen(page, route);
   assert.equal(await page.getByTestId(`tab-${route}`).getAttribute('aria-current'), 'page');
   if (changed) await page.waitForFunction(() => globalThis.document.activeElement?.getAttribute('data-testid') === 'screen-title', undefined, {timeout: 5000});
+}
+const EXPORT_RESULT = {
+  en: {word: 'Information', title: 'Information — Diagnostics export', message: 'Export cancelled. Nothing was written.'},
+  ru: {word: 'Информация', title: 'Информация — Экспорт диагностики', message: 'Экспорт отменён. Ничего не записано.'}
+};
+const dashboardZoom = (application, zoom) => application.evaluate(({BrowserWindow}, zoom) => {
+  BrowserWindow.getAllWindows().find(window => !window.webContents.getURL().endsWith('?view=overlay')).webContents.setZoomFactor(zoom);
+}, zoom);
+/** The export result has no horizontal overflow and its box lies inside the Game plugin card. */
+const exportResultContained = page => page.evaluate(() => new Promise(resolve => globalThis.requestAnimationFrame(() => globalThis.requestAnimationFrame(() => {
+  const body = globalThis.document.querySelector('[data-testid="plugin-export-diagnostics-result"]'), card = globalThis.document.querySelector('[data-testid="plugin-card"]');
+  if (!body || !card) {resolve(false); return;}
+  const box = body.getBoundingClientRect(), bounds = card.getBoundingClientRect();
+  resolve(body.scrollWidth <= body.clientWidth && box.width > 0 && box.left >= bounds.left - 0.5 && box.right <= bounds.right + 0.5);
+}))));
+/**
+ * ET-045b: "Export diagnostics…" from the keyboard with a cancelled Save dialog answers beside its button as information,
+ * in the selected language, keeps focus on the button and fits the card (at 1100×720 also at zoom 1.5). Nothing is written.
+ */
+async function observeExportResult({application, dashboard, language, size, record}) {
+  await stubSaveDialog(application, {canceled: true, filePath: ''});
+  await dashboard.getByTestId('plugin-export-diagnostics').focus(); await dashboard.keyboard.press('Enter');
+  const expected = EXPORT_RESULT[language];
+  const shown = await until(() => pluginActionResult(dashboard, {slot: 'plugin-export-diagnostics', trigger: 'plugin-export-diagnostics'}),
+    value => value?.pending === null && value.message === expected.message, `UI_ACTION_RESULT_${language}_${size.width}`, 5000);
+  assert.deepEqual({severity: shown.severity, word: shown.word, title: shown.title, message: shown.message, polite: shown.polite, focused: shown.focused, nextToTrigger: shown.nextToTrigger},
+    {severity: 'info', ...expected, polite: true, focused: true, nextToTrigger: true});
+  assert.equal(await exportResultContained(dashboard), true, `UI_ACTION_RESULT_OVERFLOW_${language}_${size.width}`);
+  if (size.width === 1100) {
+    await dashboardZoom(application, 1.5);
+    try {assert.equal(await exportResultContained(dashboard), true, `UI_ACTION_RESULT_ZOOM_OVERFLOW_${language}`);} finally {await dashboardZoom(application, 1);}
+  }
+  record.flags.actionResult = true;
 }
 export async function runUiSmoke({application, dashboard, overlay, source, config, record}) {
   assert.ok(UI_CASES.includes(config.uiCase));
@@ -212,6 +378,7 @@ export async function runUiSmoke({application, dashboard, overlay, source, confi
             assert.equal(await dashboard.getByTestId('autostart-toggle').isDisabled(), true);
             assert.equal(await dashboard.getByTestId('autostart-not-installed-note').isVisible(), true);
           }
+          if (panel === 'plugin') await observeExportResult({application, dashboard, language, size, record});
           await save(panel, language, size);
         }
         const license = dashboard.getByTestId('settings.about.font-license');
@@ -288,12 +455,17 @@ export async function runUiSmoke({application, dashboard, overlay, source, confi
           await application.evaluate(({BrowserWindow}, size) => {const window = BrowserWindow.getAllWindows().find(candidate => candidate.webContents.getURL().endsWith('?view=overlay')); window.webContents.setZoomFactor(1); window.setContentSize(size.width, size.height);}, dimensions[layout]);
           await overlay.waitForFunction(layout => globalThis.document.querySelector('[data-testid="overlay-root"]')?.getAttribute('data-layout') === layout, layout, {timeout: 5000});
           const overflow = await overlay.evaluate(overlayOverflow); assert.deepEqual(overflow.outside, []); assert.equal(overflow.alignment?.aligned, true);
-          assert.equal(await overlay.getByTestId('overlay-fuel').evaluate(node => globalThis.getComputedStyle(node).fontSize), {strip: '20px', card: '13px', cluster: '12px', hud: '14px'}[layout]);
-          assert.equal(await overlay.getByTestId('overlay-speed').evaluate(node => globalThis.getComputedStyle(node).fontSize), {strip: '22px', card: '40px', cluster: '40px', hud: '16px'}[layout]);
+          // ET-045d value typography: slightly smaller values, never below the 12 px labels (units 12 px except the 11 px Cluster RPM unit).
+          assert.equal(await overlay.getByTestId('overlay-fuel').evaluate(node => globalThis.getComputedStyle(node).fontSize), {strip: '17px', card: '12px', cluster: '12px', hud: '13px'}[layout]);
+          assert.equal(await overlay.getByTestId('overlay-speed').evaluate(node => globalThis.getComputedStyle(node).fontSize), {strip: '19px', card: '34px', cluster: '34px', hud: '15px'}[layout]);
           assert.deepEqual(await overlay.evaluate(() => ({html: globalThis.getComputedStyle(globalThis.document.documentElement).backgroundColor, body: globalThis.getComputedStyle(globalThis.document.body).backgroundColor})), {html: 'rgba(0, 0, 0, 0)', body: 'rgba(0, 0, 0, 0)'});
           if (layout === 'card') {assert.equal(await overlay.getByTestId('overlay-card-hero').count(), 1); assert.equal(await overlay.getByTestId('overlay-card-hero').getAttribute('data-count'), '3');}
           if (layout === 'cluster') {assert.equal(await overlay.getByTestId('overlay-rpm-arc').getAttribute('stroke-dasharray'), '50.26548245743669 251.32741228718345');}
           await save(layout, language, size, overlay);
+          // ET-045d: stable strip numbers and the Cluster centre, at the first size; screenshots stay as before.
+          if (layout === 'strip' && size === sizes[0]) await observeStripNumbers({application, overlay, source, language, record});
+          if (layout === 'cluster' && size === sizes[0]) await observeClusterCentre({application, dashboard, overlay, language, record});
+          const numberWidths = layout === 'strip' ? await overlay.evaluate(stripBoxes) : undefined;
           {
             source.setUnavailable();
             await until(() => overlay.getByTestId('overlay-speed').textContent(), text => text === '—', 'UI_OVERLAY_MISSING');
@@ -313,6 +485,12 @@ export async function runUiSmoke({application, dashboard, overlay, source, confi
               assert.deepEqual((await overlay.evaluate(overlayOverflow)).outside, []);
               assert.equal(await overlay.locator('.overlay-tag').evaluateAll(nodes => nodes.length <= 2 && nodes.every(node => node.scrollWidth <= node.clientWidth)), true);
               assert.equal(await overlay.getByTestId('overlay-rpm-arc').count(), 0);
+              if (numberWidths) {
+                // Dashes keep the current widths of the reserved speed, gear and RPM sections (ET-045d).
+                const stale = await overlay.evaluate(stripBoxes), width = box => box[2] - box[0];
+                for (const id of ['overlay-section-speed', 'overlay-section-gear', 'overlay-section-rpm'])
+                  assert.ok(stale[id] && Math.abs(width(stale[id]) - width(numberWidths[id])) <= 0.01, `UI_STRIP_STALE_WIDTH_CHANGED_${id}_${language}_${size.width}`);
+              }
               await save(`${layout}-stale`, language, size, overlay);
             } finally {source.resume();}
             await waitState(dashboard, 'connected');
