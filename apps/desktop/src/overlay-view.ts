@@ -1,4 +1,5 @@
 import type {OverlayLayout, OverlayPresentation, OverlaySectionId} from '../../../packages/contracts/src';
+import {DEFAULT_OVERLAY_OPACITY, isOverlayOpacity} from './overlay-opacity';
 import {CARD_ROW_HEIGHT_CSS} from './overlay-rows';
 import {localizedMeasurement} from './screens/app-copy';
 import {CLUSTER_GAUGE_SECTIONS, OVERLAY_GROUPS, type OverlayGroupId} from './overlay-sections';
@@ -54,6 +55,7 @@ export interface OverlayView {
   /** The overlay edit mode (ET-012b): the renderer outlines the overlay and makes it a drag region. */
   editing: boolean;
   contentAnchorY: number;
+  backgroundOpacity: number;
 }
 
 /** What the overlay shows before main's first delivery: no signal, no sections. */
@@ -127,6 +129,7 @@ export function overlayView(presentation: OverlayPresentation = OVERLAY_PLACEHOL
     paused: presentation.paused, dim: presentation.freshness !== 'current', tags, items, groups,
     ...(gaugeShown ? {gauge: {speed: byId.get('speed'), gear: byId.get('gear'), rpm: byId.get('rpm')}} : {}),
     panel: gaugeShown ? items.filter(item => !CLUSTER_GAUGE_SECTIONS.has(item.id)) : items,
+    backgroundOpacity: isOverlayOpacity(presentation.backgroundOpacity) ? presentation.backgroundOpacity : DEFAULT_OVERLAY_OPACITY,
     editing: presentation.editing === true, contentAnchorY: contentAnchorY(presentation)
   };
 }

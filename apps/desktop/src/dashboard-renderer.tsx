@@ -36,7 +36,7 @@ import './index.css';
 
 export default function App() {
   const [route, setRoute] = useState<'live' | 'hardMode' | 'journal' | 'settings' | 'account'>('live');
-  const [panel, setPanel] = useState<'general' | 'units' | 'overlay' | 'sections' | 'plugin' | 'data' | 'about'>('general');
+  const [panel, setPanel] = useState<'general' | 'units' | 'overlay' | 'plugin' | 'data' | 'about'>('general');
   const heading = useRef<HTMLHeadingElement>(null);
   const content = useRef<HTMLElement>(null);
   const hardMode = useHardModeStatus();
@@ -83,7 +83,7 @@ export default function App() {
   };
 
   const nav = [{id: 'live', Icon: Gauge}, {id: 'hardMode', Icon: Flame}, {id: 'journal', Icon: BookOpen}, {id: 'settings', Icon: Settings2}, {id: 'account', Icon: Cloud}] as const;
-  const settingsPanels = ['general', 'units', 'overlay', 'sections', 'plugin', 'data', 'about'] as const;
+  const settingsPanels = ['general', 'units', 'overlay', 'plugin', 'data', 'about'] as const;
   return <div className="yu-app" data-testid="shell.root">
     <div className="yu-titlebar" data-testid="shell.titlebar"><img src={logo} alt="" /><span>Yukon Union Telemetry</span></div>
     <div className="yu-body"><aside className="yu-sidebar" data-testid="shell.sidebar"><div className="yu-lockup" data-testid="shell.sidebar.lockup"><img src={logo} alt="" /><div><strong>Yukon Union</strong><small>{t('app.sub', undefined, language)}</small></div></div>
@@ -131,8 +131,8 @@ export default function App() {
       : units === 'failed' ? <p role="status" data-testid="settings-error">{strings.unitsSaveFailed}</p> : null}
   </CardContent></Card>
 </div>
-          <div hidden={panel !== 'overlay' && panel !== 'sections'} data-testid={panel === 'sections' ? 'settings.sections' : 'settings.overlay'}><OverlaySettingsCard settings={settings} edit={app?.overlayEdit} onSaved={saved} onRequest={() => setLastCard('overlay')} showSaveError={lastCard === 'overlay'} panel={panel === 'sections' ? 'sections' : 'overlay'} />
-            {panel === 'overlay' ? <div className="yu-placeholder mt-4"><p>{t('s.o.opacity', undefined, language)} — {t('ui.planned', undefined, language)}</p><Button variant="outline" className="mt-3" onClick={() => setPanel('sections')}>{t('s.o.choose', undefined, language)}</Button></div> : null}</div>
+          <div hidden={panel !== 'overlay'} data-testid="settings.overlay"><OverlaySettingsCard settings={settings} edit={app?.overlayEdit} onSaved={saved} onRequest={() => setLastCard('overlay')} showSaveError={lastCard === 'overlay'} />
+            </div>
           <div hidden={panel !== 'plugin'} data-testid="settings.plugin"><PluginSetupCard language={language} view={app?.plugins} diagnosis={app ? connectionDiagnosis(app.plugins, live?.status ?? 'waiting', live?.selection ?? 'game', app.health) : undefined} onView={plugins => setApp(current => current && {...current, plugins})} /></div>
           <div hidden={panel !== 'data'} className="yu-stack" data-testid="settings.data"><Card><CardHeader><CardTitle><h2>{t('ui.diagnostics', undefined, language)}</h2></CardTitle></CardHeader><CardContent className="space-y-3"><p data-testid="startup-status">{startup}</p>
             <label>{strings.sourceLabel} <select data-testid="source-select" value={live?.selection ?? 'game'} onChange={event => {void window.desktop.selectSource(event.target.value as SourceSelection).catch(() => setStartup(strings.sourceSelectionFailed));}}><option value="game">{strings.sourceSelectPrompt}</option><option value="ets2">Euro Truck Simulator 2</option><option value="ats">American Truck Simulator</option><option value="synthetic">{strings.sourceSyntheticFixture}</option><option value="replay">{strings.sourceReplayFixture}</option></select></label>

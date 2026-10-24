@@ -29,6 +29,7 @@ import {overlayPresentation} from './overlay-presentation';
 import {latencyEnabled, OverlayLatency} from './overlay-latency';
 import {observeLatencyFrames} from './latency-frames';
 import {overlayWindowSize} from './overlay-geometry';
+import {isOverlayOpacity} from './overlay-opacity';
 import {isOverlayLayout, parseOverlaySections} from './overlay-sections';
 import {isOverlayEditOutcome, overlayZoom, parseOverlayEditScale, type OverlayEditOutcome} from './overlay-placement';
 import {OwnForegroundGate} from './overlay-edit';
@@ -863,6 +864,12 @@ function runApplication(profileError: unknown): void {
     const [game, profile] = request;
     if (request.length !== 2 || !isUnitGame(game) || !isUnitProfile(profile)) throw new Error('Invalid unit profile request');
     return saveSettings(() => settingsStore.setUnitProfile(game, profile));
+  });
+  ipcMain.handle('settings:set-overlay-background-opacity', async (event, ...request: unknown[]) => {
+    if (!trusted(event)) throw new Error('Untrusted settings request');
+    const [opacity] = request;
+    if (request.length !== 1 || !isOverlayOpacity(opacity)) throw new Error('Invalid overlay opacity request');
+    return saveSettings(() => settingsStore.setOverlayBackgroundOpacity(opacity));
   });
   // Exactly one boolean, from the trusted dashboard frame. A failed write leaves visibility and any draft untouched.
   ipcMain.handle('settings:set-overlay-enabled', async (event, ...request: unknown[]) => {

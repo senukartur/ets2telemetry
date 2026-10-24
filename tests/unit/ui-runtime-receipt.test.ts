@@ -5,12 +5,12 @@ import {temporaryResources} from '../shared/resources';
 import {receiptBatchTimeout, validateRuntimeReceipts} from '../shared/runtime-receipt-validator';
 
 const screens = {shell: ['live', 'hardMode', 'journal', 'settings', 'account'], live: ['current', 'zero', 'missing', 'paused', 'stale'],
-  journal: ['list', 'trip', 'intervals', 'timeline', 'samples'], settings: ['general', 'units', 'overlay', 'sections', 'plugin', 'data', 'about', 'save-error'], overlay: ['strip', 'card', 'cluster', 'hud']};
+  journal: ['list', 'trip', 'intervals', 'timeline', 'samples'], settings: ['general', 'units', 'overlay', 'overlay-sections', 'plugin', 'data', 'about', 'save-error'], overlay: ['strip', 'card', 'cluster', 'hud']};
 const common = ['bilingual', 'bothSizes', 'security', 'offlineFonts', 'recordingIndicator'];
 const flags = {shell: ['navigation', 'headingFocus','hardModePage', 'journalUnmount', 'menuKeyboard', 'exitAvailable', 'laterAccount'],
   live: ['numericGauge', 'unavailableVsZero', 'paused', 'staleDashes', 'rawNames', 'unsupportedTrip', 'jobViewport', 'hmNamesReadable','fullWidthTelemetry','tankUnknownVsZero'],
-  journal: ['syntheticBanner', 'pageReturn', 'chartBounded', 'rawTabs', 'searchPlanned', 'tripRegions', 'tableReadable','signedChart'], settings: ['allPanels', 'allSections', 'committedSave', 'sourceSelector', 'uninstallRefusal', 'refusedSave', 'readOnly', 'controlsKeyboard', 'lastEnabled', 'fontLicense', 'overlayVisibility', 'visibilityFailedSave', 'actionResult', 'scaleControl'],
-  overlay: ['fourLayouts', 'transparent', 'contained', 'independentFont', 'missing', 'paused', 'staleDashes', 'heroSubsets','formatterProfiles', 'stableNumbers', 'clusterRpmContained', 'scaleRange']};
+  journal: ['syntheticBanner', 'pageReturn', 'chartBounded', 'rawTabs', 'searchPlanned', 'tripRegions', 'tableReadable','signedChart'], settings: ['allPanels', 'allSections', 'committedSave', 'sourceSelector', 'uninstallRefusal', 'refusedSave', 'readOnly', 'controlsKeyboard', 'lastEnabled', 'fontLicense', 'overlayVisibility', 'visibilityFailedSave', 'actionResult', 'overlayOpacity','opacityFailedSave','opacityReadOnly','overlayUnified', 'overlayEditing', 'overlayScroll', 'scaleControl'],
+  overlay: ['fourLayouts', 'transparent', 'contained', 'independentFont', 'missing', 'paused', 'staleDashes', 'heroSubsets','formatterProfiles', 'stableNumbers', 'opacityKeyboardFocus','opacityGestures','backgroundOpacityOverlay','clusterRpmContained', 'scaleRange']};
 // ET-045e: six English 1280x800 overlay scale references, captured at their own window sizes, beside the 64 layout screenshots.
 const references = ['scale-strip', 'scale-card', 'scale-cluster', 'scale-hud', 'scale-strip-old70', 'scale-strip-old100'];
 type Case = keyof typeof screens;
@@ -20,8 +20,8 @@ const serviceEvents = [{event: 'STORAGE_VERIFIED'}, ...['ingestion', 'capture', 
 const windows = [{url: 'file:///app/renderer/index.html', rendererPid: 100, sandbox: true, isolation: true, node: false, isDefaultSession: true, isOverlaySession: false, sessionPersistent: true, alwaysOnTop: false},
   {url: 'file:///app/renderer/index.html?view=overlay', rendererPid: 101, sandbox: true, isolation: true, node: false, isDefaultSession: false, isOverlaySession: true, sessionPersistent: false, alwaysOnTop: true}];
 function fixture(uiCase: Case) {
-  return {passed: true, commit: 'candidate', mode: 'packaged', scenarioKind: 'ui', mainEvents: [...mainEvents, ...Array.from({length: 8}, () => ({event: 'SETTINGS_WRITE_FAILED', facts: {step: 'target', code: null}}))], serviceEvents, ui: {case: uiCase, languages: ['en', 'ru'], sizes,
-    firstLauncherExit: 0, saveFailureFacts: Array.from({length: 8}, () => ({step: 'target', code: null})),
+  return {passed: true, commit: 'candidate', mode: 'packaged', scenarioKind: 'ui', mainEvents: [...mainEvents, ...Array.from({length: 12}, () => ({event: 'SETTINGS_WRITE_FAILED', facts: {step: 'target', code: null}}))], serviceEvents, ui: {case: uiCase, languages: ['en', 'ru'], sizes,
+    firstLauncherExit: 0, saveFailureFacts: Array.from({length: 12}, () => ({step: 'target', code: null})),
     readOnly: {state: 'newer-version', writable: false, language: 'en', bytesUnchanged: true, launcherExit: 0, windows, mainEvents: [...mainEvents, {event: 'SETTINGS_FALLBACK', facts: {state: 'newer-version'}}], serviceEvents},
     flags: Object.fromEntries([...common, ...flags[uiCase]].map(flag => [flag, true])),
     screenshots: ['en', 'ru'].flatMap(language => sizes.flatMap(size => (uiCase === 'overlay' ? screens.overlay.flatMap(layout => [layout, `${layout}-missing`, `${layout}-paused`, `${layout}-stale`]) : screens[uiCase]).map(screen => ({file: `ui-${uiCase}-${screen}-${language}-${size.width}x${size.height}.png`, language,
@@ -40,6 +40,8 @@ it('requires every UI language/size/screen, assertion and plain screenshot file 
     {name: 'read-only bytes changed', uiCase: 'settings', change: value => {value.ui.readOnly.bytesUnchanged = false;}},
     {name: 'unverified second renderer security', uiCase: 'settings', change: value => {value.ui.readOnly.windows = value.ui.readOnly.windows.map(window => ({...window, sandbox: false}));}},
     {name: 'extra expected error not allowed', uiCase: 'settings', change: value => {value.ui.saveFailureFacts.pop();}},
+    {name: 'obsolete separate sections screenshot', uiCase: 'settings', change: value => {const shot = value.ui.screenshots.find(shot => shot.screen === 'overlay-sections')!; shot.screen = 'sections'; shot.file = shot.file.replace('overlay-sections', 'sections');}},
+    {name: 'missing unified lower screenshot', uiCase: 'settings', change: value => {value.ui.screenshots = value.ui.screenshots.filter(shot => !(shot.screen === 'overlay-sections' && shot.language === 'ru' && shot.width === 1100));}},
     {name: 'missing language', uiCase: 'live', change: value => {value.ui.languages.pop();}},
     {name: 'missing size', uiCase: 'live', change: value => {value.ui.sizes = value.ui.sizes.slice(0, 1);}},
     {name: 'wrong shard', uiCase: 'live', change: value => {value.ui.case = 'shell';}},
@@ -58,7 +60,7 @@ it('requires every UI language/size/screen, assertion and plain screenshot file 
     {name: 'overlay scale reference in another size', uiCase: 'overlay', change: value => {value.ui.screenshots.find(shot => shot.screen === 'scale-hud')!.width = 1100;}},
     {name: 'overlay scale reference with another image size', uiCase: 'overlay', change: value => {value.ui.screenshots.find(shot => shot.screen === 'scale-card')!.imageHeight = 57;}},
     // ET-045d: the stable strip numbers and the contained Cluster centre are mandatory overlay assertions.
-    ...['formatterProfiles', 'stableNumbers', 'clusterRpmContained', 'scaleRange'].flatMap(flag => [
+    ...['formatterProfiles', 'stableNumbers', 'opacityKeyboardFocus','opacityGestures','backgroundOpacityOverlay','clusterRpmContained', 'scaleRange'].flatMap(flag => [
       {name: `false overlay ${flag}`, uiCase: 'overlay' as const, change: (value: Fixture) => {value.ui.flags[flag] = false;}},
       {name: `missing overlay ${flag}`, uiCase: 'overlay' as const, change: (value: Fixture) => {delete value.ui.flags[flag];}}
     ]),
@@ -66,7 +68,7 @@ it('requires every UI language/size/screen, assertion and plain screenshot file 
       {name: `false journal ${flag}`, uiCase: 'journal' as const, change: (value: Fixture) => {value.ui.flags[flag] = false;}},
       {name: `missing journal ${flag}`, uiCase: 'journal' as const, change: (value: Fixture) => {delete value.ui.flags[flag];}}
     ]),
-    ...['controlsKeyboard', 'lastEnabled', 'fontLicense', 'overlayVisibility', 'visibilityFailedSave', 'actionResult', 'scaleControl'].flatMap(flag => [
+    ...['controlsKeyboard', 'lastEnabled', 'fontLicense', 'overlayVisibility', 'visibilityFailedSave', 'actionResult', 'overlayOpacity','opacityFailedSave','opacityReadOnly','overlayUnified', 'overlayEditing', 'overlayScroll', 'scaleControl'].flatMap(flag => [
       {name: `false settings ${flag}`, uiCase: 'settings' as const, change: (value: Fixture) => {value.ui.flags[flag] = false;}},
       {name: `missing settings ${flag}`, uiCase: 'settings' as const, change: (value: Fixture) => {delete value.ui.flags[flag];}}
     ]),
@@ -92,4 +94,4 @@ it('requires every UI language/size/screen, assertion and plain screenshot file 
     variants.forEach((variant, index) => expect(results[index], variant.name).toMatchObject({passed: variant.accepted === true, driverResultAvailable: true,
       reason: variant.accepted ? null : 'UI_RESULT_INCOMPLETE_OR_INVALID'}));
   } finally {await resources.dispose();}
-}, receiptBatchTimeout(70) + 5000);
+}, receiptBatchTimeout(99) + 5000);

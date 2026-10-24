@@ -4,6 +4,7 @@ import type {AppState, DesktopBridge, LiveTelemetry} from '../../../packages/con
 import {initialLive, sourceSelection} from './live-state';
 import {expiredV1, liveV1Key, parseLiveV1, RENDERER_V1_EXPIRED_REASON, V1_LIVE_EXPIRY_MS} from './live-v1';
 import {RecoveryBudget} from './recovery-budget';
+import {isOverlayOpacity} from './overlay-opacity';
 import {isOverlayLayout, parseOverlaySections} from './overlay-sections';
 import {isOverlayEditOutcome, parseOverlayEditScale} from './overlay-placement';
 import {isUnitGame, isUnitProfile} from './unit-profiles';
@@ -149,6 +150,9 @@ const bridge: DesktopBridge = {
   setUnitProfile: (game, profile) => isUnitGame(game) && isUnitProfile(profile)
     ? ipcRenderer.invoke('settings:set-unit-profile', game, profile)
     : Promise.reject(new Error('Invalid unit profile request')),
+  setOverlayBackgroundOpacity: (...request: unknown[]) => request.length === 1 && isOverlayOpacity(request[0])
+    ? ipcRenderer.invoke('settings:set-overlay-background-opacity', request[0])
+    : Promise.reject(new Error('Invalid overlay opacity request')),
   // Exactly one boolean; malformed renderer calls never reach IPC.
   setOverlayEnabled: (...request: unknown[]) => request.length === 1 && typeof request[0] === 'boolean'
     ? ipcRenderer.invoke('settings:set-overlay-enabled', request[0])

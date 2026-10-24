@@ -1,12 +1,14 @@
 // REG-015, REG-017 (ET-017 PR-6, P17): the diagnostic bundle export in main, on real temporary folders. The Save dialog is
 // scripted; the target checks and the partial-file write are the shared export-file.ts routine. Expected outcomes and log
 // rows are written by hand from P17. No real user or data folder is touched: LOCALAPPDATA is a temporary folder.
-import {mkdir, readdir, readFile, symlink, writeFile} from 'node:fs/promises';
+import {existsSync} from 'node:fs';
+import {mkdir, readdir, readFile, symlink, unlink, writeFile} from 'node:fs/promises';
 import * as realFs from 'node:fs/promises';
 import path from 'node:path';
 import {afterEach, beforeEach, describe, expect, it, vi} from 'vitest';
 import {DiagnosticBundleExporter, diagnosticBundleFileName, type DiagnosticBundleExporterOptions} from '../../apps/desktop/src/diagnostic-bundle-writer';
 import type {ExportFileSystem} from '../../apps/desktop/src/export-file';
+import {exactLengthPath} from '../shared/paths';
 import {temporaryResources} from '../shared/resources';
 
 const BUNDLE = '{"format": "ets2telemetry.diagnostics", "version": 1}\n';
@@ -188,5 +190,67 @@ describe('one export at a time, and the application exit', () => {
     expect(await readFile(path.join(out, 'diagnostics.json'), 'utf8')).toBe('old bundle');
     await expect(running).resolves.toEqual({outcome: 'refused', code: 'EXPORT_INTERRUPTED'});
     expect(f.instance.idle()).toBeUndefined();
+  });
+});
+
+describe('ordinary long target path (282 chars, ET-046)', () => {
+  it('writes valid bundle, syncs, and renames with and without extended prefix', async () => {
+    const longTarget = exactLengthPath(out, 'diagnostics-long.json', 282);
+    expect(longTarget.length).toBe(282);
+    await mkdir(path.dirname(longTarget), {recursive: true});
+
+    // Without \\?\\ prefix
+    const f1 = exporter({target: longTarget});
+    await expect(f1.instance.export()).resolves.toEqual({outcome: 'saved'});
+    expect(existsSync(longTarget)).toBe(true);
+    expect(await readFile(longTarget, 'utf8')).toBe(BUNDLE);
+
+    // Unlink before second run to prove extended-path export actually writes and recreates target
+    await unlink(longTarget);
+    expect(existsSync(longTarget)).toBe(false);
+
+    // With \\?\\ prefix
+    const extTarget = `\\\\?\\${longTarget}`;
+    const f2 = exporter({target: extTarget});
+    await expect(f2.instance.export()).resolves.toEqual({outcome: 'saved'});
+    expect(existsSync(longTarget)).toBe(true);
+    expect(await readFile(longTarget, 'utf8')).toBe(BUNDLE);
+  });
+
+  it('cleans up partial on failure and leaves existing target intact', async () => {
+    const longTarget = exactLengthPath(out, 'diagnostics-long.json', 282);
+    await mkdir(path.dirname(longTarget), {recursive: true});
+    await writeFile(longTarget, 'old bundle');
+
+    const fs: ExportFileSystem = {
+      ...realFs,
+      open: async (target, flags) => {
+        const handle = await realFs.open(target, flags);
+        return {
+          writeFile: () => Promise.reject(Object.assign(new Error('disk fail'), {code: 'EIO'})),
+          sync: () => handle.sync(),
+          close: () => handle.close()
+        };
+      }
+    };
+    const f = exporter({target: longTarget, fs});
+    await expect(f.instance.export()).resolves.toEqual({outcome: 'failed', code: 'EXPORT_WRITE_FAILED'});
+    expect(await readFile(longTarget, 'utf8')).toBe('old bundle');
+    const parentFiles = await readdir(path.dirname(longTarget));
+    expect(parentFiles.filter(name => name.endsWith('.partial'))).toEqual([]);
+  });
+
+  it('refuses a 282-character target inside the data directory with and without extended prefix before bundle generation', async () => {
+    const dataLogs = path.join(local, 'ETS2Telemetry', 'logs');
+    const longInsideData = exactLengthPath(dataLogs, 'diagnostics-long.json', 282);
+    expect(longInsideData.length).toBe(282);
+
+    const f1 = exporter({target: longInsideData});
+    await expect(f1.instance.export()).resolves.toEqual({outcome: 'refused', code: 'EXPORT_TARGET_REFUSED'});
+    expect(f1.build).not.toHaveBeenCalled();
+
+    const f2 = exporter({target: `\\\\?\\${longInsideData}`});
+    await expect(f2.instance.export()).resolves.toEqual({outcome: 'refused', code: 'EXPORT_TARGET_REFUSED'});
+    expect(f2.build).not.toHaveBeenCalled();
   });
 });

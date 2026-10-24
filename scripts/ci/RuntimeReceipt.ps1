@@ -794,8 +794,8 @@ function Test-UiReceipt {
         'shell' { $flags += @('navigation','headingFocus','hardModePage','journalUnmount','menuKeyboard','exitAvailable','laterAccount'); $screens = @('live','hardMode','journal','settings','account') }
         'live' { $flags += @('numericGauge','unavailableVsZero','paused','staleDashes','rawNames','unsupportedTrip','jobViewport','hmNamesReadable','fullWidthTelemetry','tankUnknownVsZero'); $screens = @('current','zero','missing','paused','stale') }
         'journal' { $flags += @('syntheticBanner','pageReturn','chartBounded','rawTabs','searchPlanned','tripRegions','tableReadable','signedChart'); $screens = @('list','trip','intervals','timeline','samples') }
-        'settings' { $flags += @('allPanels','allSections','committedSave','sourceSelector','uninstallRefusal','refusedSave','readOnly','controlsKeyboard','lastEnabled','fontLicense','overlayVisibility','visibilityFailedSave','actionResult','scaleControl'); $screens = @('general','units','overlay','sections','plugin','data','about','save-error') }
-        'overlay' { $flags += @('fourLayouts','transparent','contained','independentFont','missing','paused','staleDashes','heroSubsets','formatterProfiles','stableNumbers','clusterRpmContained','scaleRange'); $screens = @('strip','card','cluster','hud') }
+        'settings' { $flags += @('allPanels','allSections','committedSave','sourceSelector','uninstallRefusal','refusedSave','readOnly','controlsKeyboard','lastEnabled','fontLicense','overlayVisibility','visibilityFailedSave','actionResult','overlayOpacity','opacityFailedSave','opacityReadOnly','overlayUnified','overlayEditing','overlayScroll','scaleControl'); $screens = @('general','units','overlay','overlay-sections','plugin','data','about','save-error') }
+        'overlay' { $flags += @('fourLayouts','transparent','contained','independentFont','missing','paused','staleDashes','heroSubsets','formatterProfiles','stableNumbers','opacityKeyboardFocus','opacityGestures','backgroundOpacityOverlay','clusterRpmContained','scaleRange'); $screens = @('strip','card','cluster','hud') }
     }
     foreach ($flag in $flags) { if ($ui.flags.$flag -isnot [bool] -or !$ui.flags.$flag) { return $false } }
     # ET-045e: the overlay shard adds six English 1280x800 scale reference screenshots to its 64 layout screenshots.
@@ -853,10 +853,10 @@ function Test-UiReceipt {
         $readOnly = $ui.readOnly
         if ($null -eq $readOnly -or $readOnly.state -cne 'newer-version' -or $readOnly.language -cne 'en' -or
             $readOnly.writable -isnot [bool] -or $readOnly.writable -or $readOnly.bytesUnchanged -isnot [bool] -or !$readOnly.bytesUnchanged -or
-            $ui.firstLauncherExit -ne 0 -or $readOnly.launcherExit -ne 0 -or @($ui.saveFailureFacts).Count -ne 8) { return $false }
+            $ui.firstLauncherExit -ne 0 -or $readOnly.launcherExit -ne 0 -or @($ui.saveFailureFacts).Count -ne 12) { return $false }
         foreach ($fact in $ui.saveFailureFacts) { if ($fact.step -cne 'target' -or $null -ne $fact.code) { return $false } }
         $expectedErrors = @($Driver.mainEvents | Where-Object { $_.event -ceq 'SETTINGS_WRITE_FAILED' })
-        if ($expectedErrors.Count -ne 8) { return $false }
+        if ($expectedErrors.Count -ne 12) { return $false }
         foreach ($row in $expectedErrors) { if ($row.facts.step -cne 'target' -or $null -ne $row.facts.code) { return $false } }
         if (!(Test-OrderlyRunEvent -MainEvents @($Driver.mainEvents | Where-Object { $_.event -cne 'SETTINGS_WRITE_FAILED' }) -ServiceEvents @($Driver.serviceEvents)) -or
             !(Test-OrderlyRunEvent -MainEvents @($readOnly.mainEvents) -ServiceEvents @($readOnly.serviceEvents)) -or

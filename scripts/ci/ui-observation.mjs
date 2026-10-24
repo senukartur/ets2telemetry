@@ -10,9 +10,62 @@ import {SCALE_RANGE_FRAMES, SCALE_RANGE_ZOOM, SCALE_REFERENCE_FRAMES} from './ov
 import {stubSaveDialog} from './journal-observation.mjs';
 import {pluginActionResult} from './plugin-fixture.mjs';
 
+// ET-049: genuine keyboard and held-pointer gestures; the overlay still uses committed settings.
+async function observeOpacityControl({dashboard, config, language, record}) {
+  const slider = dashboard.getByRole('slider', {name: language === 'en' ? 'Background opacity' : 'Непрозрачность фона', exact: true});
+  const value = () => dashboard.evaluate(() => globalThis.desktop.getAppState());
+  const wait = expected => until(value, state => state.settings.overlay.backgroundOpacity === expected && !state.settings.saveError, 'UI_OPACITY_COMMITTED');
+  await slider.focus();
+  for (const [key, expected] of [['End', 100], ['Home', 40], ['ArrowRight', 41]]) {
+    await dashboard.keyboard.press(key); await wait(expected);
+    await until(() => slider.getAttribute('aria-valuenow'), v => v === String(expected), 'UI_OPACITY_THUMB');
+    assert.equal(await slider.getAttribute('aria-valuetext'), `${expected}%`);
+    await until(() => slider.getAttribute('aria-disabled'), value => value === 'false', 'UI_OPACITY_KEYBOARD_COMMIT_SETTLED');
+    assert.equal(await slider.evaluate(node => node === globalThis.document.activeElement), true, 'UI_OPACITY_KEYBOARD_FOCUS_LOST');
+  }
+  await dashboard.evaluate(() => globalThis.desktop.setOverlayBackgroundOpacity(80)); await wait(80);
+  const track = await dashboard.getByTestId('overlay-opacity').boundingBox(), thumb = await slider.boundingBox();
+  assert.ok(track && thumb); await dashboard.mouse.move(thumb.x + thumb.width / 2, thumb.y + thumb.height / 2); await dashboard.mouse.down();
+  try {
+    await dashboard.mouse.move(track.x + track.width * 0.3, thumb.y + thumb.height / 2, {steps: 8});
+    const candidate = Number(await slider.getAttribute('aria-valuenow')); assert.ok(candidate < 80 && candidate >= 40);
+    assert.equal((await value()).settings.overlay.backgroundOpacity, 80, 'Held drag must not write');
+    assert.match(await dashboard.getByTestId('overlay-opacity-saved').innerText(), /80%/);
+    await dashboard.mouse.up(); await wait(candidate);
+    assert.equal(JSON.parse(await readFile(path.join(config.localappdata, 'ETS2Telemetry/settings/settings.json'), 'utf8')).overlay.backgroundOpacity, candidate);
+  } finally {await dashboard.mouse.up();}
+  await dashboard.evaluate(() => globalThis.desktop.setOverlayBackgroundOpacity(80)); await wait(80);
+  record.flags.opacityKeyboardFocus = true;
+  record.flags.opacityGestures = true;
+}
+async function observeOpacitySurfaces({dashboard, overlay, layout, language, size, record}) {
+  // The four existing language/size cells cover every alpha for every layout, without four redundant saves per cell.
+  const value = [40, 65, 80, 100][(language === 'ru' ? 2 : 0) + (size.width === 1100 ? 1 : 0)];
+  {
+    await dashboard.evaluate(value => globalThis.desktop.setOverlayBackgroundOpacity(value), value);
+    await overlay.waitForFunction(alpha => globalThis.getComputedStyle(globalThis.document.querySelector('[data-testid="overlay-content"]')).getPropertyValue('--yu-ov-panel').trim() === `rgba(11, 17, 32, ${alpha})`, value / 100);
+    const facts = await overlay.evaluate(() => {
+      const style = node => globalThis.getComputedStyle(node);
+      const root = globalThis.document.querySelector('[data-testid="overlay-root"]');
+      return {rootBackground: style(root).backgroundColor, rootOpacity: style(root).opacity,
+        contentOpacity: style(globalThis.document.querySelector('[data-testid="overlay-content"]')).opacity,
+        speedOpacity: style(globalThis.document.querySelector('[data-testid="overlay-speed"]')).opacity,
+        surfaces: [...globalThis.document.querySelectorAll('.overlay-surface,.overlay-gauge')].map(node => style(node).backgroundColor),
+        hud: globalThis.document.querySelector('.overlay-hud-lines') ? style(globalThis.document.querySelector('.overlay-hud-lines')).backgroundColor : null};
+    });
+    assert.equal(facts.rootBackground, 'rgba(0, 0, 0, 0)');
+    assert.equal(facts.rootOpacity, '1'); assert.equal(facts.contentOpacity, '1'); assert.equal(facts.speedOpacity, '1');
+    if (layout === 'hud') {assert.equal(facts.hud, 'rgba(0, 0, 0, 0)'); assert.equal(facts.surfaces.length, 0);}
+    else {assert.ok(facts.surfaces.length >= (layout === 'cluster' ? 2 : 1)); assert.ok(facts.surfaces.every(color => color === (value === 100 ? 'rgb(11, 17, 32)' : `rgba(11, 17, 32, ${value / 100})`)));}
+  }
+  await dashboard.evaluate(() => globalThis.desktop.setOverlayBackgroundOpacity(80));
+  await overlay.waitForFunction(() => globalThis.getComputedStyle(globalThis.document.querySelector('[data-testid="overlay-content"]')).getPropertyValue('--yu-ov-panel').includes('0.8'));
+  record.flags.backgroundOpacityOverlay = true;
+}
+
 export const UI_CASES = ['shell', 'live', 'journal', 'settings', 'overlay'];
 const sizes = [{width: 1280, height: 800}, {width: 1100, height: 720}];
-const panels = ['general', 'units', 'overlay', 'sections', 'plugin', 'data', 'about'];
+const panels = ['general', 'units', 'overlay', 'plugin', 'data', 'about'];
 const layouts = ['strip', 'card', 'cluster', 'hud'];
 const dimensions = {strip: {width: 1280, height: 116}, card: {width: 300, height: 384}, cluster: {width: 440, height: 267}, hud: {width: 320, height: 354}};
 const waitState = (page, state) => until(() => page.getByTestId('telemetry-status').innerText(), value => value.startsWith(`${state}:`), `UI_LIVE_${state}`, 5000);
@@ -266,6 +319,99 @@ const EXPORT_RESULT = {
 const dashboardZoom = (application, zoom) => application.evaluate(({BrowserWindow}, zoom) => {
   BrowserWindow.getAllWindows().find(window => !window.webContents.getURL().endsWith('?view=overlay')).webContents.setZoomFactor(zoom);
 }, zoom);
+async function observeSettingsNavigation({dashboard, language, size, zoom, record}) {
+  const placements = [];
+  for (const panel of ['overlay', ...panels.filter(id => id !== 'overlay')]) {
+    await dashboard.getByTestId(`settings.nav.${panel}`).click({timeout: 5000});
+    assert.equal(await dashboard.getByTestId(`settings.${panel}`).isVisible(), true);
+    const placement = await dashboard.getByTestId('settings.screen').evaluate(grid => new Promise(resolve => globalThis.requestAnimationFrame(() => {
+      const bounds = grid.getBoundingClientRect(), nav = grid.firstElementChild.getBoundingClientRect(), content = grid.lastElementChild.getBoundingClientRect();
+      resolve({columns: globalThis.getComputedStyle(grid).gridTemplateColumns, nav: {left: nav.left - bounds.left, top: nav.top - bounds.top, width: nav.width, height: nav.height},
+        content: {left: content.left - bounds.left, top: content.top - bounds.top}, viewportWidth: globalThis.innerWidth});
+    })));
+    assert.ok(placement.viewportWidth <= 900, 'UI_SETTINGS_RESPONSIVE_BREAKPOINT');
+    assert.equal(placement.columns.split(' ').length, 1, `UI_SETTINGS_SINGLE_COLUMN_${panel}`);
+    assert.equal(placement.nav.left, placement.content.left);
+    assert.ok(placement.content.top >= placement.nav.top + placement.nav.height);
+    if (placements.length) assert.deepEqual(placement, placements[0].placement, `UI_SETTINGS_NAVIGATION_JUMP_${language}_${size.width}_${zoom}_${panel}`);
+    placements.push({panel, placement});
+  }
+  await dashboard.getByTestId('settings.nav.overlay').click({timeout: 5000});
+  assert.equal(await dashboard.getByTestId('settings.overlay').isVisible(), true);
+  (record.settingsNavigation ??= []).push({language, width: size.width, zoom, placements});
+}
+async function observeUnifiedOverlay({application, dashboard, language, size, record}) {
+  assert.deepEqual(await dashboard.getByTestId('settings.nav').locator('button').evaluateAll(nodes => nodes.map(node => node.getAttribute('data-testid'))), panels.map(id => `settings.nav.${id}`));
+  assert.equal(await dashboard.getByTestId('settings.sections').count(), 0);
+  assert.equal(await dashboard.getByRole('button', {name: /^(Choose sections|Выбрать секции)$/}).count(), 0);
+  assert.equal(await dashboard.getByTestId('overlay-settings').count(), 1);
+  assert.equal(await dashboard.locator('[data-testid^="overlay-requirement-"]').count(), 0, 'UI_OVERLAY_TECHNICAL_NOTES_ABSENT');
+  const visible = await dashboard.getByTestId('overlay-settings').evaluate(card => {
+    const ids = ['overlay-enabled', 'overlay-layout', 'overlay-placement', 'overlay-presets', 'overlay-sections'];
+    return ids.every(id => card.querySelector(`[data-testid="${id}"]`)?.checkVisibility()) &&
+      card.querySelectorAll('[data-testid^="overlay-switch-"]').length === 14 &&
+      [...card.querySelectorAll('[data-testid^="overlay-switch-"]')].every(node => node.checkVisibility());
+  });
+  assert.equal(visible, true, 'UI_OVERLAY_UNIFIED_CONTROLS');
+  record.flags.overlayUnified = true;
+  for (const zoom of [1, 1.5, 2]) {
+    await dashboardZoom(application, zoom);
+    try {
+      if (zoom > 1) await observeSettingsNavigation({dashboard, language, size, zoom, record});
+      await dashboard.getByTestId('overlay-switch-expected-income').focus();
+      await dashboard.keyboard.press('Tab');
+      assert.equal(await dashboard.getByTestId('overlay-switch-game-time').evaluate(node => node === globalThis.document.activeElement), true);
+      const observation = await dashboard.getByTestId('overlay-settings').evaluate(card => new Promise(resolve => globalThis.requestAnimationFrame(() => {
+        const scroll = globalThis.document.querySelector('.yu-content'), bounds = scroll.getBoundingClientRect(), focus = globalThis.document.activeElement.getBoundingClientRect();
+        const overflow = [scroll, card, ...card.querySelectorAll('section, label, button:not([role="radio"]):not([role="switch"]), p')]
+          .filter(node => node.scrollWidth > node.clientWidth + 1).map(node => node.getAttribute('data-testid') ?? node.tagName);
+        // Radix rails/dots intentionally have expanded pseudo-hit areas; check their boxes, not scrollWidth.
+        const controlsContained = [...card.querySelectorAll('button')].every(node => {const box = node.getBoundingClientRect(), parent = card.getBoundingClientRect(); return box.left >= parent.left && box.right <= parent.right;});
+        resolve({overflow, controlsContained, focusTop: focus.top, focusBottom: focus.bottom, viewportTop: bounds.top, viewportBottom: bounds.bottom, scrolled: scroll.scrollTop > 0, focusVisible: focus.width > 0 && focus.left >= bounds.left && focus.right <= bounds.right && focus.top >= bounds.top && focus.bottom <= bounds.bottom});
+      })));
+      assert.deepEqual(observation.overflow, [], `UI_OVERLAY_OVERFLOW_${language}_${size.width}_${zoom}`);
+      assert.equal(observation.controlsContained, true, JSON.stringify({language, zoom, ...observation})); assert.equal(observation.scrolled, true, JSON.stringify({language, zoom, ...observation})); assert.equal(observation.focusVisible, true, JSON.stringify({language, zoom, ...observation}));
+      (record.overlayScroll ??= []).push({language, width: size.width, zoom, ...observation});
+    } finally {await dashboardZoom(application, 1);}
+  }
+  record.flags.overlayScroll = true;
+}
+async function observeOverlayEditing({dashboard, config, record}) {
+  const file = path.join(config.localappdata, 'ETS2Telemetry', 'settings', 'settings.json');
+  const initial = (await dashboard.evaluate(() => globalThis.desktop.getAppState())).settings.overlay;
+  const bytes = await readFile(file);
+  const state = () => dashboard.evaluate(() => globalThis.desktop.getAppState());
+  const begin = async () => {
+    await dashboard.getByTestId('overlay-edit-start').click();
+    await until(state, value => value.overlayEdit.active, 'UI_OVERLAY_EDIT_STARTED');
+    for (const layout of layouts) assert.equal(await dashboard.locator(`#overlay-layout-${layout}`).isDisabled(), true);
+    assert.equal(await dashboard.getByTestId('overlay-preset-driving-only').isEnabled(), true);
+    assert.equal(await dashboard.getByTestId('overlay-switch-cargo').isEnabled(), true);
+  };
+  const scaleUp = async () => {
+    const before = (await state()).overlayEdit.scale;
+    await dashboard.getByTestId('overlay-scale-up').click();
+    return until(state, value => value.overlayEdit.active && value.overlayEdit.scale > before, 'UI_OVERLAY_SCALE_DRAFT');
+  };
+  await begin(); await scaleUp(); assert.deepEqual(await readFile(file), bytes);
+  await dashboard.getByTestId('overlay-placement-reset').click();
+  await until(state, value => value.overlayEdit.active && value.overlayEdit.scale === 1, 'UI_OVERLAY_RESET_DRAFT');
+  assert.deepEqual(await readFile(file), bytes);
+  await scaleUp(); await dashboard.getByTestId('overlay-edit-cancel').click();
+  await until(state, value => !value.overlayEdit.active, 'UI_OVERLAY_CANCELLED');
+  assert.deepEqual((await state()).settings.overlay.placements, initial.placements); assert.deepEqual(await readFile(file), bytes);
+  await begin(); const draft = await scaleUp();
+  await dashboard.getByTestId('overlay-preset-driving-only').focus(); await dashboard.keyboard.press('Enter');
+  await until(state, value => !value.settings.overlay.sections.cargo, 'UI_OVERLAY_EDIT_PRESET');
+  await dashboard.getByTestId('overlay-switch-cargo').focus(); await dashboard.keyboard.press('Space');
+  await until(state, value => value.settings.overlay.sections.cargo, 'UI_OVERLAY_EDIT_SECTION');
+  assert.deepEqual((await state()).settings.overlay.placements, initial.placements);
+  await dashboard.getByTestId('overlay-edit-done').click();
+  await until(state, value => !value.overlayEdit.active && value.settings.overlay.placements[initial.layout].scale === draft.overlayEdit.scale, 'UI_OVERLAY_DONE_SAVED');
+  assert.equal(JSON.parse(await readFile(file, 'utf8')).overlay.placements[initial.layout].scale, draft.overlayEdit.scale);
+  assert.notDeepEqual(await readFile(file), bytes);
+  record.flags.overlayEditing = true;
+}
 /** The export result has no horizontal overflow and its box lies inside the Game plugin card. */
 const exportResultContained = page => page.evaluate(() => new Promise(resolve => globalThis.requestAnimationFrame(() => globalThis.requestAnimationFrame(() => {
   const body = globalThis.document.querySelector('[data-testid="plugin-export-diagnostics-result"]'), card = globalThis.document.querySelector('[data-testid="plugin-card"]');
@@ -452,12 +598,25 @@ export async function runUiSmoke({application, dashboard, overlay, source, confi
         assert.equal(await visibility.getAttribute('data-state'), 'checked');
         assert.equal(await dashboard.getByTestId('overlay-edit-start').isEnabled(), true);
         record.flags.overlayVisibility = true;
+        const opacityControl = dashboard.getByRole('slider', {name: language === 'en' ? 'Background opacity' : 'Непрозрачность фона', exact: true});
+        assert.equal(await opacityControl.getAttribute('aria-valuemin'), '40');
+        assert.equal(await opacityControl.getAttribute('aria-valuemax'), '100');
+        assert.equal(await opacityControl.getAttribute('aria-valuenow'), '80');
+        assert.equal(await opacityControl.getAttribute('aria-disabled'), 'false');
+        record.flags.overlayOpacity = true;
+        await observeUnifiedOverlay({application, dashboard, language, size, record});
+        await dashboard.locator('.yu-content').evaluate(node => {node.scrollTop = node.scrollHeight;});
+        await save('overlay-sections', language, size);
+        if (language === 'en' && size.width === 1280) await observeOverlayEditing({dashboard, config, record});
+        // ET-045e: after ET-048's editing check, which may have saved another scale.
         if (size === sizes[0]) await observeScaleControl({dashboard, config, language, record});
-        await settingsPanel(dashboard, 'sections'); assert.equal(await dashboard.locator('[data-testid^="overlay-switch-"]').count(), 14);
-        await dashboard.getByTestId('overlay-preset-driving-only').click();
+        assert.equal(await dashboard.locator('[data-testid^="overlay-switch-"]').count(), 14);
+        await dashboard.getByTestId('overlay-preset-driving-only').focus(); await dashboard.keyboard.press('Enter');
         await until(() => dashboard.evaluate(() => globalThis.desktop.getAppState()), state => !state.settings.overlay.sections.cargo, 'UI_SECTIONS_SAVED');
+        const navigationBytes = await readFile(path.join(config.localappdata, 'ETS2Telemetry', 'settings', 'settings.json'));
         await settingsPanel(dashboard, 'data'); assert.equal(await dashboard.getByTestId('source-select').isEnabled(), true);
-        await settingsPanel(dashboard, 'sections'); assert.equal(await dashboard.getByTestId('overlay-switch-cargo').getAttribute('data-state'), 'unchecked');
+        await settingsPanel(dashboard, 'overlay'); assert.equal(await dashboard.getByTestId('overlay-switch-cargo').getAttribute('data-state'), 'unchecked');
+        assert.deepEqual(await readFile(path.join(config.localappdata, 'ETS2Telemetry', 'settings', 'settings.json')), navigationBytes);
         await dashboard.getByTestId('overlay-switch-cargo').focus(); await dashboard.keyboard.press('Space');
         await until(() => dashboard.evaluate(() => globalThis.desktop.getAppState()), state => state.settings.overlay.sections.cargo, 'UI_SWITCH_KEYBOARD_SAVED');
         if (language === 'en' && size.width === 1280) {
@@ -490,6 +649,13 @@ export async function runUiSmoke({application, dashboard, overlay, source, confi
           assert.equal(await dashboard.getByTestId('overlay-enabled').getAttribute('data-state'), 'checked');
           assert.equal(await dashboard.getByTestId('overlay-edit-start').isEnabled(), true);
           record.flags.visibilityFailedSave = true;
+          const opacity = dashboard.getByRole('slider'); await opacity.focus(); await dashboard.keyboard.press('Home');
+          await until(() => dashboard.getByRole('slider').getAttribute('aria-valuenow'), value => value === '80', 'UI_OPACITY_FAILED_THUMB');
+          await dashboard.getByTestId('overlay-settings-error').waitFor({state: 'visible'});
+          assert.equal((await dashboard.evaluate(() => globalThis.desktop.getAppState())).settings.overlay.backgroundOpacity, 80);
+          assert.match(await dashboard.getByTestId('overlay-opacity-saved').innerText(), /80%/);
+          assert.equal(await opacity.evaluate(node => node === globalThis.document.activeElement), true, 'UI_OPACITY_FAILED_SAVE_FOCUS_LOST');
+          record.flags.opacityFailedSave = true;
           await settingsPanel(dashboard, 'units');
         } finally {await rmdir(settingsFile); await rename(backup, settingsFile);}
         assert.deepEqual(await readFile(settingsFile), bytes);
@@ -514,6 +680,8 @@ export async function runUiSmoke({application, dashboard, overlay, source, confi
           assert.deepEqual(await overlay.evaluate(() => ({html: globalThis.getComputedStyle(globalThis.document.documentElement).backgroundColor, body: globalThis.getComputedStyle(globalThis.document.body).backgroundColor})), {html: 'rgba(0, 0, 0, 0)', body: 'rgba(0, 0, 0, 0)'});
           if (layout === 'card') {assert.equal(await overlay.getByTestId('overlay-card-hero').count(), 1); assert.equal(await overlay.getByTestId('overlay-card-hero').getAttribute('data-count'), '3');}
           if (layout === 'cluster') {assert.equal(await overlay.getByTestId('overlay-rpm-arc').getAttribute('stroke-dasharray'), '50.26548245743669 251.32741228718345');}
+          if (layout === 'strip' && language === 'en' && size === sizes[0]) await observeOpacityControl({dashboard, config, language, record});
+          await observeOpacitySurfaces({dashboard, overlay, layout, language, size, record});
           await save(layout, language, size, overlay);
           // ET-045d: stable strip numbers and the Cluster centre, at the first size; screenshots stay as before.
           if (layout === 'strip' && size === sizes[0]) await observeStripNumbers({application, overlay, source, language, record});
@@ -636,16 +804,19 @@ function scaleControls() {
   return {text: node('overlay-edit-scale')?.textContent ?? null, smallerDisabled: node('overlay-scale-down')?.disabled ?? null, largerDisabled: node('overlay-scale-up')?.disabled ?? null};
 }
 /**
- * ET-045e (decision Z7): the existing edit controls step the scale setting in 10% steps within 50-300%. From 100%, Smaller
- * five times reaches 50% with Smaller disabled, and Larger 25 times reaches 300% with Larger disabled, in the selected
- * language. Cancel discards the draft: the settings file keeps its bytes and the saved scale stays 100%.
+ * ET-045e (decision Z7): the existing edit controls step the scale setting in 10% steps within 50-300%. From the saved
+ * scale (100% unless ET-048's editing check saved another), Smaller steps down to 50% with Smaller disabled, and Larger
+ * 25 times reaches 300% with Larger disabled, in the selected language. Cancel discards the draft: the settings file
+ * keeps its bytes and the saved scale is unchanged.
  */
 async function observeScaleControl({dashboard, config, language, record}) {
   const settingsFile = path.join(config.localappdata, 'ETS2Telemetry', 'settings', 'settings.json');
   assert.ok(!path.relative(config.output, settingsFile).startsWith('..'));
   const bytes = await readFile(settingsFile), label = SCALE_CONTROL_TEXT[language];
   await settingsPanel(dashboard, 'overlay');
-  const layout = (await dashboard.evaluate(() => globalThis.desktop.getAppState())).settings.overlay.layout;
+  const overlay = (await dashboard.evaluate(() => globalThis.desktop.getAppState())).settings.overlay, layout = overlay.layout;
+  const savedScale = overlay.placements[layout].scale, from = Math.round(savedScale * 100);
+  assert.ok(from >= 50 && from <= 300 && from % 10 === 0, `UI_SCALE_CONTROL_SAVED_SCALE_${savedScale}`);
   await dashboard.getByTestId('overlay-edit-start').click();
   // Each click waits for its own 10% step to render, so the next click steps from the scale main pushed.
   const shown = percent => until(() => dashboard.evaluate(scaleControls), value => value.text === `${label}: ${percent}%`, `UI_SCALE_CONTROL_${language}_${percent}`, 5000);
@@ -654,17 +825,17 @@ async function observeScaleControl({dashboard, config, language, record}) {
     for (let index = 1; index <= times; index++) {await dashboard.getByTestId(button).click(); value = await shown(from + delta * index);}
     return value;
   };
-  const start = await shown(100);
-  const smallest = await step('overlay-scale-down', 100, -10, 5);
+  const start = await shown(from);
+  const smallest = (from - 50) / 10 ? await step('overlay-scale-down', from, -10, (from - 50) / 10) : start;
   assert.deepEqual({smaller: smallest.smallerDisabled, larger: smallest.largerDisabled}, {smaller: true, larger: false}, `UI_SCALE_CONTROL_MIN_${language}`);
   const largest = await step('overlay-scale-up', 50, 10, 25);
   assert.deepEqual({smaller: largest.smallerDisabled, larger: largest.largerDisabled}, {smaller: false, larger: true}, `UI_SCALE_CONTROL_MAX_${language}`);
   await dashboard.getByTestId('overlay-edit-cancel').click();
   const saved = await until(() => dashboard.evaluate(() => ({text: globalThis.document.querySelector('[data-testid="overlay-saved-scale"]')?.textContent ?? null})),
     value => value.text !== null, `UI_SCALE_CONTROL_CANCELLED_${language}`, 5000);
-  assert.equal(saved.text, `${label}: 100%`);
+  assert.equal(saved.text, `${label}: ${from}%`);
   const state = await dashboard.evaluate(() => globalThis.desktop.getAppState());
-  assert.deepEqual(state.overlayEdit, {active: false}); assert.equal(state.settings.overlay.placements[layout].scale, 1);
+  assert.deepEqual(state.overlayEdit, {active: false}); assert.equal(state.settings.overlay.placements[layout].scale, savedScale);
   assert.deepEqual(await readFile(settingsFile), bytes, `UI_SCALE_CONTROL_WROTE_${language}`);
   (record.scaleControl ??= []).push({language, start: start.text, smallest, largest, cancelled: saved.text});
   record.flags.scaleControl = true;
@@ -682,11 +853,14 @@ export async function runUiReadOnly({application, dashboard, config, record, set
     for (const game of ['ets2', 'ats']) for (const profile of ['metric', 'us-customary']) assert.equal(await dashboard.locator(`#units-${game}-${profile}`).isDisabled(), true);
     await capture({page: dashboard, application, config, record, name: 'read-only', language: 'en', size});
     await settingsPanel(dashboard, 'overlay');
+    const opacity = dashboard.getByRole('slider');
+    assert.equal(await opacity.getAttribute('aria-disabled'), 'true');
+    record.flags.opacityReadOnly = true;
     await waitOverlayVisibility(dashboard, {enabled: true, writable: false}, 'UI_OVERLAY_READ_ONLY_RENDERED');
     for (const layout of layouts) assert.equal(await dashboard.locator(`#overlay-layout-${layout}`).isDisabled(), true);
     assert.equal(await dashboard.getByTestId('overlay-edit-start').isDisabled(), true);
-    await settingsPanel(dashboard, 'sections');
     assert.equal(await dashboard.locator('[data-testid^="overlay-switch-"]:disabled').count(), 14);
+    assert.equal(await dashboard.locator('[data-testid^="overlay-preset-"]:disabled').count(), 3);
   }
   const file = path.join(config.localappdata, 'ETS2Telemetry', 'settings', 'settings.json');
   assert.equal(await readFile(file, 'utf8'), settingsBytes);

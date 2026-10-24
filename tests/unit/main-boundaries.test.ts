@@ -77,15 +77,15 @@ const ALL_SECTIONS = {'speed': true, 'gear': true, 'rpm': true, 'fuel': true, 'r
   'destination': true, 'distance-driven': true, 'distance-remaining': true, 'deadline': true, 'expected-income': true, 'game-time': true};
 // ET-012b: the overlay settings carry the placements of every layout (the ET-012a anchors at scale 1 by default).
 const PLACEMENTS = {strip: {x: 0.5, y: 0, scale: 1}, card: {x: 1, y: 0, scale: 1}, cluster: {x: 0, y: 1, scale: 1}, hud: {x: 0, y: 0, scale: 1}};
-const DEFAULT_OVERLAY = {enabled: true, layout: 'strip', sections: ALL_SECTIONS, placements: PLACEMENTS};
+const DEFAULT_OVERLAY = {enabled: true, backgroundOpacity: 80, layout: 'strip', sections: ALL_SECTIONS, placements: PLACEMENTS};
 // ET-012b: the application state carries the overlay edit mode, which every start leaves in driving mode.
 const DRIVING = {active: false};
 // ET-017: the application state carries the plugin setup view. These cases run with ETS2TELEMETRY_SOURCE_KIND set and
 // unpackaged, so the mode gate disables plugin setup: nothing is read or written, and no game is ever discovered.
 const NO_PLUGIN_GAME = {excluded: false, discovery: 'pending', manualFolder: 'none', targets: [], unlistedFolders: 0};
 const PLUGINS_DISABLED = {mode: 'disabled', bundled: null, running: false, games: {ets2: NO_PLUGIN_GAME, ats: NO_PLUGIN_GAME}};
-let settingsView: {autostart: boolean; units: {ets2: string; ats: string}; overlay: {enabled: boolean; layout: string; sections: Record<string, boolean>; placements: Record<string, {x: number; y: number; scale: number}>}; state: string; writable: boolean; saveError: string | null};
-type OverlayWrite = (kind: 'enabled' | 'layout' | 'sections' | 'placement', value: unknown) => Promise<unknown>;
+let settingsView: {autostart: boolean; units: {ets2: string; ats: string}; overlay: {enabled: boolean; backgroundOpacity: number; layout: string; sections: Record<string, boolean>; placements: Record<string, {x: number; y: number; scale: number}>}; state: string; writable: boolean; saveError: string | null};
+type OverlayWrite = (kind: 'backgroundOpacity' | 'enabled' | 'layout' | 'sections' | 'placement', value: unknown) => Promise<unknown>;
 let overlayWrite: ReturnType<typeof vi.fn<OverlayWrite>>;
 type SettingsWrite = (game: string, profile: string) => Promise<unknown>;
 let settingsWrite: ReturnType<typeof vi.fn<SettingsWrite>>;
@@ -175,6 +175,7 @@ function installFixture() {
       view() {return settingsView;}
       load() {return settingsLoading.then(() => {settingsLoaded = true; return settingsView;});}
       setUnitProfile(game: string, profile: string) {return settingsWrite(game, profile);}
+      setOverlayBackgroundOpacity(opacity: number) {return overlayWrite('backgroundOpacity', opacity);}
       setOverlayEnabled(enabled: boolean) {return overlayWrite('enabled', enabled);}
       setAutostart(autostart: boolean) {return autostartWrite(autostart);}
       setOverlayLayout(layout: string) {return overlayWrite('layout', layout);}
@@ -1314,11 +1315,11 @@ it('creates the overlay window at the strip size reserved for every section by d
   await ready(); expect(configurations[1]).toMatchObject({width: 1280, height: 56, webPreferences: {zoomFactor: 0.7}});
 });
 it('creates the overlay window at the size the saved layout reserves for its sections', async () => {
-  settingsView = {...settingsView, overlay: {enabled: true, layout: 'cluster', sections: ALL_SECTIONS, placements: PLACEMENTS}}; await ready();
+  settingsView = {...settingsView, overlay: {enabled: true, backgroundOpacity: 80, layout: 'cluster', sections: ALL_SECTIONS, placements: PLACEMENTS}}; await ready();
   expect(configurations[1]).toMatchObject({width: 308, height: 188, webPreferences: {zoomFactor: 0.7}});
 });
 it('delivers the saved layout and sections in the overlay document first projection', async () => {
-  settingsView = {...settingsView, overlay: {enabled: true, layout: 'card', sections: {...ALL_SECTIONS, rpm: false, cargo: false}, placements: PLACEMENTS}}; await ready();
+  settingsView = {...settingsView, overlay: {enabled: true, backgroundOpacity: 80, layout: 'card', sections: {...ALL_SECTIONS, rpm: false, cargo: false}, placements: PLACEMENTS}}; await ready();
   // Twelve sections reserve 48 + 24 × 12 = 336 CSS px: ceil(334 × 0.7 + 2) = 236, below the card's nominal round(360 × 0.7) = 252.
   expect(configurations[1]).toMatchObject({width: 210, height: 252});
   ipc.emit('overlay:subscribe', overlayTrusted());
@@ -1333,7 +1334,7 @@ it('rejects overlay settings requests from untrusted senders, frames and the ove
     await expect(saveOverlay('settings:set-overlay-layout', event, 'card')).rejects.toThrow('Untrusted');
     await expect(saveOverlay('settings:set-overlay-sections', event, ALL_SECTIONS)).rejects.toThrow('Untrusted');
   }
-  for (const request of [['bar'], ['Card'], [], ['card', 'hud'], [{enabled: true, layout: 'card'}]])
+  for (const request of [['bar'], ['Card'], [], ['card', 'hud'], [{enabled: true, backgroundOpacity: 80, layout: 'card'}]])
     await expect(saveOverlay('settings:set-overlay-layout', trusted(), ...request)).rejects.toThrow('Invalid overlay layout request');
   for (const request of [[], [ALL_SECTIONS, 'extra'], [{...ALL_SECTIONS, theme: true}], [{...ALL_SECTIONS, rpm: 1}],
     [Object.fromEntries(Object.keys(ALL_SECTIONS).map(id => [id, false]))], [[true]], ['all']])
@@ -1358,7 +1359,7 @@ it('applies an overlay layout only after the durable save, then republishes and 
   expect(overlayWrite).toHaveBeenCalledExactlyOnceWith('layout', 'card');
   expect(pushes()).toHaveLength(before); expect(windows[1].setBounds).toHaveBeenCalledOnce();
   expect(overlayProjection(overlayChannel)).toMatchObject({layout: 'strip'});
-  settingsView = {...settingsView, overlay: {enabled: true, layout: 'card', sections: ALL_SECTIONS, placements: PLACEMENTS}, state: 'loaded'}; saved.resolve(settingsView);
+  settingsView = {...settingsView, overlay: {enabled: true, backgroundOpacity: 80, layout: 'card', sections: ALL_SECTIONS, placements: PLACEMENTS}, state: 'loaded'}; saved.resolve(settingsView);
   await expect(request).resolves.toEqual(settingsView);
   expect(pushes().at(-1)).toMatchObject({settings: settingsView});
   expect(windows[1].setBounds).toHaveBeenLastCalledWith({x: -226, y: 16, width: 210, height: 270});
@@ -1383,7 +1384,7 @@ it('applies overlay sections after the durable save and hands the store only a v
   expect(sectionIds(overlayProjection(overlayChannel))).toContain('rpm');
   const input = {...ALL_SECTIONS, rpm: false, cargo: false};
   overlayWrite.mockImplementation((_kind, value) => {
-    settingsView = {...settingsView, overlay: {enabled: true, layout: 'strip', sections: value as Record<string, boolean>, placements: PLACEMENTS}, state: 'loaded'}; return Promise.resolve(settingsView);
+    settingsView = {...settingsView, overlay: {enabled: true, backgroundOpacity: 80, layout: 'strip', sections: value as Record<string, boolean>, placements: PLACEMENTS}, state: 'loaded'}; return Promise.resolve(settingsView);
   });
   await saveOverlay('settings:set-overlay-sections', trusted(), input);
   const [kind, forwarded] = overlayWrite.mock.calls[0];
@@ -1397,7 +1398,7 @@ it('applies overlay sections after the durable save and hands the store only a v
 // row at 1280 DIP wide: ceil(26.6 + 2) = 29 high at zoom 0.7 (ET-045e).
 const DRIVING_ONLY = Object.fromEntries(Object.keys(ALL_SECTIONS).map(id => [id, ['speed', 'gear', 'rpm', 'fuel', 'range'].includes(id)]));
 it('creates the strip overlay window as high as its saved sections need', async () => {
-  settingsView = {...settingsView, overlay: {enabled: true, layout: 'strip', sections: DRIVING_ONLY, placements: PLACEMENTS}}; await ready();
+  settingsView = {...settingsView, overlay: {enabled: true, backgroundOpacity: 80, layout: 'strip', sections: DRIVING_ONLY, placements: PLACEMENTS}}; await ready();
   expect(configurations[1]).toMatchObject({width: 1280, height: 29});
 });
 it('re-places the strip for saved sections only after the durable save and re-asserts topmost once without showing it again', async () => {
@@ -1412,7 +1413,7 @@ it('re-places the strip for saved sections only after the durable save and re-as
   await vi.advanceTimersByTimeAsync(10);
   // Not durable yet: the strip keeps its rows.
   expect(overlayWrite).toHaveBeenCalledOnce(); expect(overlay.setBounds).toHaveBeenCalledOnce(); expect(overlay.setAlwaysOnTop).not.toHaveBeenCalled();
-  settingsView = {...settingsView, overlay: {enabled: true, layout: 'strip', sections: DRIVING_ONLY, placements: PLACEMENTS}, state: 'loaded'}; saved.resolve(settingsView);
+  settingsView = {...settingsView, overlay: {enabled: true, backgroundOpacity: 80, layout: 'strip', sections: DRIVING_ONLY, placements: PLACEMENTS}, state: 'loaded'}; saved.resolve(settingsView);
   await expect(request).resolves.toEqual(settingsView);
   expect(overlay.setBounds.mock.calls).toEqual([[{x: -1600, y: 8, width: 1280, height: 56}], [{x: -1600, y: 8, width: 1280, height: 29}]]);
   expect(overlay.setAlwaysOnTop.mock.calls).toEqual([[true, 'screen-saver']]); expect(overlay.moveTop).toHaveBeenCalledOnce();
@@ -1440,7 +1441,7 @@ it('refuses overlay settings requests once exiting', async () => {
 // ET-010c decisions F2, F3 and F7: main validates the v1 projection before freshness and the overlay see it, expires it
 // on its own clock and feeds it into the overlay projection. The v1 input is snapshot-live with the v0 job ids under the
 // ETS2 game origin; the overlay origin text is written by hand from it. Since ET-012b the projection also carries `editing`.
-const OVERLAY_KEYS = ['source', 'origin', 'status', 'speed', 'speedUnit', 'fuel', 'fuelUnit', 'freshness', 'layout', 'paused', 'sections', 'editing', 'language', 'contentAnchorY'];
+const OVERLAY_KEYS = ['source', 'origin', 'status', 'speed', 'speedUnit', 'fuel', 'fuelUnit', 'freshness', 'layout', 'backgroundOpacity', 'paused', 'sections', 'editing', 'language', 'contentAnchorY'];
 const ORIGIN_VALUE = {id: 'origin', state: 'value', text: 'Synthetic City A, Synthetic Company A'};
 const sectionOf = (projection: Record<string, unknown>, id: string) => (projection.sections as {id: string}[]).find(section => section.id === id);
 function readingWithV1(options: V1Options = {}): LiveTelemetry {
@@ -1531,7 +1532,7 @@ it('re-places the overlay when a late settings read brings another layout', asyn
   ipc.emit('overlay:subscribe', overlayTrusted()); const overlayChannel = channels[1];
   consumeOverlay(overlayChannel); deliver(currentReading()); await vi.advanceTimersByTimeAsync(50); consumeOverlay(overlayChannel);
   expect(windows[1].setBounds).not.toHaveBeenCalled(); expect(windows[1].showInactive).not.toHaveBeenCalled();
-  settingsView = {...settingsView, overlay: {enabled: true, layout: 'hud', sections: ALL_SECTIONS, placements: PLACEMENTS}, state: 'loaded', writable: true};
+  settingsView = {...settingsView, overlay: {enabled: true, backgroundOpacity: 80, layout: 'hud', sections: ALL_SECTIONS, placements: PLACEMENTS}, state: 'loaded', writable: true};
   settingsChanged!();
   expect(windows[1].setBounds).toHaveBeenLastCalledWith({x: -1904, y: 16, width: 224, height: 248});
   await vi.advanceTimersByTimeAsync(50);
@@ -1608,7 +1609,7 @@ it.each([false, true])('keeps the real pending settings defaults hidden until a 
     await vi.advanceTimersByTimeAsync(real.SETTINGS_LOAD_BUDGET_MS);
     expect(stores).toHaveLength(1); const store = stores[0];
     expect(store.settled).toBe(true);
-    expect(store.view()).toMatchObject({state: 'loading', writable: false, overlay: {enabled: true, layout: 'strip'}});
+    expect(store.view()).toMatchObject({state: 'loading', writable: false, overlay: {enabled: true, backgroundOpacity: 80, layout: 'strip'}});
     expect(windows).toHaveLength(2);
     ipc.emit('overlay:subscribe', overlayTrusted());
     const current = currentReading(); current.observation!.receivedMonotonicMs = performance.now();
@@ -1653,7 +1654,7 @@ function hiddenBeforeClickThrough(target = windows[1]) {
 const EDITABLE = {ignoreMouse: false, focusable: true, movable: true, skipTaskbar: true};
 
 it('creates the overlay window at the saved scale of its layout and applies that zoom after every load', async () => {
-  settingsView = {...settingsView, overlay: {enabled: true, layout: 'cluster', sections: ALL_SECTIONS, placements: {...PLACEMENTS, cluster: {x: 0, y: 1, scale: 1.5}}}}; await ready();
+  settingsView = {...settingsView, overlay: {enabled: true, backgroundOpacity: 80, layout: 'cluster', sections: ALL_SECTIONS, placements: {...PLACEMENTS, cluster: {x: 0, y: 1, scale: 1.5}}}}; await ready();
   // ET-045e: the saved setting 1.5 is zoom 1.05, so the cluster with every section is round(440 × 1.05) = 462 wide and
   // ceil(265 × 1.05 + 2.1) = 281 high (ET-012d's 660 × 401 at zoom 1.5).
   expect(configurations[1]).toMatchObject({width: 462, height: 281, webPreferences: {zoomFactor: 1.05, partition: 'ets2telemetry-overlay'}});
@@ -2947,4 +2948,31 @@ it('coalesces fraction-only overlay alignment through credits without reprojecti
   ipc.emit('overlay:unsubscribe', overlayTrusted()); const retired = channel.port1.postMessage.mock.calls.length;
   windows[1].emit('moved'); await vi.advanceTimersByTimeAsync(50);
   expect(channel.port1.postMessage).toHaveBeenCalledTimes(retired);
+});
+
+const opacityRequest = (event: unknown, ...request: unknown[]) => Promise.resolve().then(() => Reflect.apply(handlers.get('settings:set-overlay-background-opacity')!, undefined, [event, ...request]));
+it('rejects malformed opacity and all untrusted frames without writing', async () => {
+  await ready();
+  for (const event of [{sender: {}, senderFrame: contents.mainFrame}, overlayTrusted(), {sender: contents, senderFrame: {}}])
+    await expect(opacityRequest(event, 40)).rejects.toThrow('Untrusted');
+  for (const args of [[], [null], ['80'], [NaN], [Infinity], [39], [101], [60.5], [80, {}]])
+    await expect(opacityRequest(trusted(), ...args)).rejects.toThrow('Invalid overlay opacity request');
+  expect(overlayWrite).not.toHaveBeenCalled();
+});
+it('publishes opacity only after commit, without changing the edit draft or source authority', async () => {
+  const channel = await editableOverlay();
+  await edit('overlay-edit:begin', trusted()); await edit('overlay-edit:set-scale', trusted(), 1.5);
+  const draft = structuredClone(editPushes().at(-1));
+  const saved = deferred<typeof settingsView>(); overlayWrite.mockReturnValueOnce(saved.promise);
+  const pending = opacityRequest(trusted(), 40); await settle();
+  expect(overlayWrite).toHaveBeenCalledExactlyOnceWith('backgroundOpacity', 40);
+  expect(settingsView.overlay.backgroundOpacity).toBe(80);
+  const sourcePosts = child.postMessage.mock.calls.length;
+  settingsView = {...settingsView, overlay: {...settingsView.overlay, backgroundOpacity: 40}, state: 'loaded'}; saved.resolve(settingsView);
+  await pending;
+  expect(editPushes().at(-1)).toEqual(draft); expect(child.postMessage.mock.calls).toHaveLength(sourcePosts);
+  await vi.advanceTimersByTimeAsync(50); consumeOverlay(channel); await vi.advanceTimersByTimeAsync(50);
+  expect(channel.port1.postMessage.mock.lastCall?.[0].update.backgroundOpacity).toBe(40);
+  settingsIdle = undefined; void handlers.get('app:exit')!(trusted()); await settle();
+  await expect(opacityRequest(trusted(), 65)).rejects.toThrow('retired');
 });
