@@ -11,11 +11,11 @@ import {OVERLAY_SECTION_ICONS} from './overlay-icons';
 import {OVERLAY_SCALE_MAX, OVERLAY_SCALE_MIN, stepOverlayScale} from './overlay-placement';
 import {
   DEFAULT_OVERLAY_SETTINGS, enabledSectionCount, isOverlayLayout, OVERLAY_GROUPS, OVERLAY_LAYOUTS, OVERLAY_PRESET_IDS, OVERLAY_PRESETS,
-  OVERLAY_SECTION_REQUIREMENTS, sameSections
+  sameSections
 } from './overlay-sections';
 import {
   getOverlayEditPlacementText, getOverlayGroupText, getOverlayLayoutText, getOverlayPresetText,
-  getOverlayRequirementText, getOverlaySectionText, getSettingsSaveErrorText, getStrings
+  getOverlaySectionText, getSettingsSaveErrorText, getStrings
 } from './strings';
 
 const percent = (scale: number) => `${Math.round(scale * 100)}%`;
@@ -143,12 +143,11 @@ export function OverlaySettingsCard({settings, edit, onSaved, onRequest, showSav
         {OVERLAY_GROUPS.map(group => <section key={group.id} className="space-y-2" aria-labelledby={`overlay-group-${group.id}`}>
           <h4 id={`overlay-group-${group.id}`} className="text-sm text-muted-foreground">{getOverlayGroupText(group.id, language)}</h4>
           {group.sections.map(id => {
-            const Icon = OVERLAY_SECTION_ICONS[id], requirement = OVERLAY_SECTION_REQUIREMENTS[id], checked = overlay.sections[id];
+            const Icon = OVERLAY_SECTION_ICONS[id], checked = overlay.sections[id];
             return <div key={id} className="yu-overlay-section-row">
               <Switch id={`overlay-section-${id}`} data-testid={`overlay-switch-${id}`} checked={checked} disabled={locked || (checked && enabled === 1)}
                 onCheckedChange={next => save(() => window.desktop.setOverlaySections({...overlay.sections, [id]: next}))} />
-              <div><Label htmlFor={`overlay-section-${id}`}><Icon className="size-4" aria-hidden="true" />{getOverlaySectionText(id, language)}</Label>
-              {requirement ? <span className="text-xs text-muted-foreground" data-testid={`overlay-requirement-${id}`}>({getOverlayRequirementText(requirement, language)})</span> : null}</div>
+              <div><Label htmlFor={`overlay-section-${id}`}><Icon className="size-4" aria-hidden="true" />{getOverlaySectionText(id, language)}</Label></div>
             </div>;
           })}
         </section>)}
