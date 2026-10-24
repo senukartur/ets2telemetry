@@ -58,8 +58,9 @@ $configFile = Join-Path $output 'config.json'
 $config | ConvertTo-Json | Set-Content -LiteralPath $configFile -Encoding utf8
 . (Join-Path $PSScriptRoot 'RuntimeReceipt.ps1')
 Add-Type -Path (Join-Path $checkout 'scripts/watchdog/BoundedProcess.cs')
-# Every scenario but the soak runs in a 60 s Job. The plugin journey had 120 s until October 18, 2026; its hosted step took at most
-# 14 s, so 60 s keeps more than four times that (docs/ci.md#et-017-plugin-smoke-scenario).
+# Every scenario but the soak and the UI shards runs in a 60 s Job. The plugin journey had 120 s until October 18, 2026; its hosted
+# step took at most 14 s, so 60 s keeps more than four times that (docs/ci.md#et-017-plugin-smoke-scenario). Since ET-045e the UI
+# shards run under RunExtended with 120 s: hosted settings shards took 48-61 s and timed out at 60 s (docs/ci.md#yukon-ui-shard-job).
 $started = [datetime]::UtcNow
 $limits = '60 s; 16 processes; 2 GiB; 25% CPU; kill-on-close'
 if ($Scenario -eq 'soak') {
@@ -70,6 +71,11 @@ if ($Scenario -eq 'soak') {
     $code = [ETS2Telemetry.Diagnostics.BoundedProcess]::RunExtended($node,
         [string[]]@((Join-Path $PSScriptRoot 'runtime-smoke.mjs'), $configFile),
         $checkout, (Join-Path $output 'job'), $timeoutMs, $true)
+} elseif ($Scenario -eq 'ui') {
+    $limits = 'RunExtended 120 s; 16 processes; 2 GiB; 25% CPU; kill-on-close'
+    $code = [ETS2Telemetry.Diagnostics.BoundedProcess]::RunExtended($node,
+        [string[]]@((Join-Path $PSScriptRoot 'runtime-smoke.mjs'), $configFile),
+        $checkout, (Join-Path $output 'job'), 120000, $true)
 } else {
     $code = [ETS2Telemetry.Diagnostics.BoundedProcess]::Run($node,
         [string[]]@((Join-Path $PSScriptRoot 'runtime-smoke.mjs'), $configFile),

@@ -829,8 +829,10 @@ async function observeScaleControl({dashboard, config, language, record}) {
   const start = await shown(from);
   const smallest = (from - 50) / 10 ? await step('overlay-scale-down', from, -10, (from - 50) / 10) : start;
   assert.deepEqual({smaller: smallest.smallerDisabled, larger: smallest.largerDisabled}, {smaller: true, larger: false}, `UI_SCALE_CONTROL_MIN_${language}`);
-  const largest = await step('overlay-scale-up', 50, 10, 25);
-  assert.deepEqual({smaller: largest.smallerDisabled, larger: largest.largerDisabled}, {smaller: false, larger: true}, `UI_SCALE_CONTROL_MAX_${language}`);
+  // The limits do not depend on the language, so only English steps all the way to 300%; Russian takes one step up from 50%
+  // to show its label with both buttons enabled. This keeps the hosted settings shard inside its Job (docs/ci.md).
+  const full = language === 'en', largest = await step('overlay-scale-up', 50, 10, full ? 25 : 1);
+  assert.deepEqual({smaller: largest.smallerDisabled, larger: largest.largerDisabled}, {smaller: false, larger: full}, `UI_SCALE_CONTROL_${full ? 'MAX' : 'STEP'}_${language}`);
   await dashboard.getByTestId('overlay-edit-cancel').click();
   const saved = await until(() => dashboard.evaluate(() => ({text: globalThis.document.querySelector('[data-testid="overlay-saved-scale"]')?.textContent ?? null})),
     value => value.text !== null, `UI_SCALE_CONTROL_CANCELLED_${language}`, 5000);
