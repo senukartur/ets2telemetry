@@ -314,7 +314,7 @@ export const APP_COPY_KEYS: Readonly<Record<string, I18nKey>> = Object.freeze({
   "This folder is not a game folder of this game.": "copy.this-folder-is-not-a-game-folder-of-this-game",
   "This folder holds the other game.": "copy.this-folder-holds-the-other-game",
   "The game's folders in this folder are linked elsewhere; it cannot be used.": "copy.the-game-s-folders-in-this-folder-are-linked-elsewhere-it-cannot-be",
-  "This game folder is already found through Steam.": "copy.this-game-folder-is-already-found-through-steam",
+  "This game folder is already found through Steam; nothing changed.": "copy.this-game-folder-is-already-found-through-steam",
   "Plugin setup is off in this launch.": "copy.plugin-setup-is-off-in-this-launch",
   "The plugin setup record could not be saved.": "copy.the-plugin-setup-record-could-not-be-saved",
   "A folder dialog is already open.": "copy.a-folder-dialog-is-already-open",
