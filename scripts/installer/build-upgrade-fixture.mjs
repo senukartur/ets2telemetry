@@ -37,9 +37,10 @@ const executableBefore = sha256(await readFile(path.join(packaged, 'ETS2Telemetr
 await cp(packaged, appDirectory, {recursive: true, errorOnExist: true, force: false});
 try {
   // The same options the Forge Squirrel maker passes (forge.config.cjs, read here, and @electron-forge/maker-squirrel), with
-  // the installer version raised; `version` overrides the package.json version only in the NuGet metadata.
+  // the installer version raised; `version` overrides the package.json version only in the NuGet metadata. The maker's
+  // `title` (the Installed apps DisplayName, ET-045h) applies here too.
   const maker = createRequire(import.meta.url)('../../forge.config.cjs').makers.find(entry => entry.name === '@electron-forge/maker-squirrel').config;
-  await createWindowsInstaller({title: 'ETS2Telemetry Desktop', noMsi: true, exe: 'ETS2TelemetryDesktop.exe', ...maker, appDirectory, outputDirectory: feed,
+  await createWindowsInstaller({noMsi: true, exe: 'ETS2TelemetryDesktop.exe', ...maker, appDirectory, outputDirectory: feed,
     setupExe: setupExeName(FIXTURE_VERSION), version: FIXTURE_VERSION});
 } finally {
   await rm(appDirectory, {recursive: true, force: true, maxRetries: 5, retryDelay: 200});
