@@ -45,8 +45,8 @@ export interface OverlayControllerOptions {
   /** Fraction-only content alignment change; does not carry an observation or native command. */
   anchorChanged?: (anchor: number) => void;
   /**
-   * Fixed-code, numbers-only facts about verified window bounds (ET-045c). `OVERLAY_BOUNDS_MISMATCH` reports at most one
-   * line per outcome per requested rectangle; `OVERLAY_BOUNDS_SET` follows every verified apply and belongs only in an
+   * Fixed-code, numbers-only facts about verified window bounds (ET-045c). `OVERLAY_BOUNDS_MISMATCH` reports one line per
+   * mode, outcome and size difference, at most BOUNDS_MISMATCH_REPORT_LIMIT per launch; `OVERLAY_BOUNDS_SET` follows every verified apply and belongs only in an
    * opt-in diagnostic timeline.
    */
   boundsReport?: (event: OverlayBoundsEvent, facts: OverlayBoundsFacts) => void;
@@ -58,6 +58,12 @@ export interface OverlayControllerOptions {
 export const BOUNDS_TOLERANCE_DIP = 1;
 /** ET-045c: how often one requested rectangle is applied again after the actual window did not match it. */
 export const BOUNDS_REAPPLY_LIMIT = 2;
+/**
+ * ET-045c: distinct `OVERLAY_BOUNDS_MISMATCH` lines per controller, that is per application launch. A line is distinct
+ * by mode, outcome and the size difference Windows applied, so a deterministic minimum height logs once, not once per
+ * request; later distinct mismatches are still handled but not logged.
+ */
+export const BOUNDS_MISMATCH_REPORT_LIMIT = 16;
 export type OverlayBoundsEvent = 'OVERLAY_BOUNDS_MISMATCH' | 'OVERLAY_BOUNDS_SET';
 /** `exact` for an apply that matched at once; the others follow a mismatch. */
 export type OverlayBoundsOutcome = 'exact' | 'reapplied' | 'fitted' | 'hidden';
@@ -69,10 +75,15 @@ interface EditDraft {layout: OverlayLayout; draft: OverlayPlacement}
 /** What a fallback needs to place the actual window size at the same fractions. */
 interface FitContext {layout: OverlayLayout; client: DipRect; placement: OverlayPlacement; mode: 'driving' | 'edit'}
 /** Per-request verification state: reset whenever the request or what it was computed from changes. */
-interface Verification {attempts: number; fitted: boolean; refused: boolean; reported: Set<OverlayBoundsOutcome>}
-const freshVerification = (): Verification => ({attempts: 0, fitted: false, refused: false, reported: new Set()});
+interface Verification {attempts: number; fitted: boolean; refused: boolean}
+const freshVerification = (): Verification => ({attempts: 0, fitted: false, refused: false});
 const sameRect = (left: DipRect, right: DipRect) => left.x === right.x && left.y === right.y && left.width === right.width && left.height === right.height;
 const near = (left: number, right: number) => Math.abs(left - right) <= BOUNDS_TOLERANCE_DIP;
+/** A dimension that differs only by DIP-to-pixel rounding at both edges; Windows did not change that axis. */
+const roundingOnly = (actual: number, wanted: number) => Math.abs(actual - wanted) <= 2 * BOUNDS_TOLERANCE_DIP;
+/** True when Windows kept another size on at least one axis beyond rounding. */
+const resized = (actual: {width: number; height: number}, wanted: {width: number; height: number}) =>
+  !roundingOnly(actual.width, wanted.width) || !roundingOnly(actual.height, wanted.height);
 /** Every edge within the tolerance; a non-finite actual rectangle never matches. */
 const nearRect = (actual: DipRect, wanted: DipRect) => near(actual.x, wanted.x) && near(actual.y, wanted.y) &&
   near(actual.x + actual.width, wanted.x + wanted.width) && near(actual.y + actual.height, wanted.y + wanted.height);
@@ -110,6 +121,7 @@ export class OverlayController {
   private verification = freshVerification();
   private fit?: FitContext;
   private readonly boundsReport: (event: OverlayBoundsEvent, facts: OverlayBoundsFacts) => void;
+  private readonly mismatchKeys = new Set<string>();
   private physical?: PhysicalClientBounds;
   private topologyReceipt?: string;
   private placement: OverlayPlacement;
@@ -236,7 +248,12 @@ export class OverlayController {
     if (!this.edit) return;
     this.moving = false; this.heldAnchor = undefined;
     if (this.visible && this.client) {
-      this.edit.draft = placementFromBounds(this.edit.layout, this.client, bounds, this.edit.draft, this.sections);
+      // A fitted window (ET-045c) has the size Windows kept, not the layout's: on each axis Windows changed, the drop
+      // converts against the free space of that actual size, so a drop where it stood keeps its fractions.
+      const requested = this.requested, fitted = this.accepted && requested && resized(this.accepted, requested) ? this.accepted : undefined;
+      const size = fitted && requested ? {width: roundingOnly(fitted.width, requested.width) ? requested.width : bounds.width,
+        height: roundingOnly(fitted.height, requested.height) ? requested.height : bounds.height} : undefined;
+      this.edit.draft = placementFromBounds(this.edit.layout, this.client, bounds, this.edit.draft, this.sections, size);
       // The dropped bounds are the window's actual bounds; the snap below is verified against them (ET-045c).
       this.requested = this.accepted = {x: bounds.x, y: bounds.y, width: bounds.width, height: bounds.height};
       this.verification = freshVerification();
@@ -314,9 +331,12 @@ export class OverlayController {
         this.window.setBounds(accepted); applied = true;
         actual = this.window.getBounds();
       }
-      if (!nearRect(actual, accepted) && !verification.fitted && (actual.width !== accepted.width || actual.height !== accepted.height)) {
+      if (!nearRect(actual, accepted) && !verification.fitted && resized(actual, requested)) {
         verification.fitted = true;
-        const fitted = placeSize(fit.layout, fit.client, fit.placement, {width: actual.width, height: actual.height});
+        // Only an axis Windows changed takes the actual dimension; a rounding difference keeps the request's, so a strip
+        // as wide as the client allows is not refused for one inflated DIP.
+        const fitted = placeSize(fit.layout, fit.client, fit.placement, {width: roundingOnly(actual.width, requested.width) ? requested.width : actual.width,
+          height: roundingOnly(actual.height, requested.height) ? requested.height : actual.height});
         if (fitted && this.onDisplay(fitted)) {
           this.window.setBounds(fitted); applied = true; this.accepted = accepted = fitted;
           actual = this.window.getBounds();
@@ -324,7 +344,10 @@ export class OverlayController {
       }
       const matched = nearRect(actual, accepted) && insideClient(actual, fit.client);
       outcome = !matched ? 'hidden' : sameRect(accepted, requested) ? 'reapplied' : 'fitted';
-      if (!verification.reported.has(outcome)) {verification.reported.add(outcome); this.reportBounds('OVERLAY_BOUNDS_MISMATCH', outcome, requested, first, fit);}
+      const key = `${fit.mode}|${outcome}|${first.width - requested.width}|${first.height - requested.height}`;
+      if (!this.mismatchKeys.has(key) && this.mismatchKeys.size < BOUNDS_MISMATCH_REPORT_LIMIT) {
+        this.mismatchKeys.add(key); this.reportBounds('OVERLAY_BOUNDS_MISMATCH', outcome, requested, first, fit);
+      }
       if (!matched) {
         verification.refused = true; this.hide();
         this.reportBounds('OVERLAY_BOUNDS_SET', outcome, requested, actual, fit);

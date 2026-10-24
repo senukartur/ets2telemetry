@@ -363,3 +363,11 @@ it('equals overlayBounds for every layout at the layout size', () => {
     }
   }
 });
+// ET-045c review: a fitted window converts against its actual size. In the owner's client a Driving only strip kept
+// 40 DIP high at the fitted top 1152 has free height 944 − 40 = 904: (1152 − 248) / 904 = 1; against the layout's 21 DIP
+// (free 923) it would be 904 / 923 = 0.97942 → 0.9794. x is (2601 − 1722.67) / 1034.67 = 0.84890 → 0.8489 either way.
+it('converts a drop against an explicit window size when one is given', () => {
+  const area = client(2560 / 1.5, 240, 2560 / 1.5, 960), previous = {x: 0.8485, y: 1, scale: 0.5}, drop = {x: 2601, y: 1152, width: 640, height: 40};
+  expect(placementFromBounds('strip', area, drop, previous, OVERLAY_PRESETS['driving-only'])).toEqual({x: 0.8489, y: 0.9794, scale: 0.5});
+  expect(placementFromBounds('strip', area, drop, previous, OVERLAY_PRESETS['driving-only'], {width: 640, height: 40})).toEqual({x: 0.8489, y: 1, scale: 0.5});
+});

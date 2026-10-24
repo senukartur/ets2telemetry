@@ -139,10 +139,12 @@ export function placeSize(layout: OverlayLayout, client: DipRect, placement: Ove
  * The placement that puts a window dragged to `bounds` as close as possible to that position: each fraction is clamped
  * to [0, 1] and rounded to four decimals, so a drag past an edge snaps back inside the client area. Where the layout
  * leaves no free space on an axis, or does not fit at all, the previous fraction is kept. The scale is unchanged.
+ * `windowSize` replaces the layout's own size when Windows keeps the window at another size (ET-045c), so a drop of a
+ * fitted window converts against the free space of the size it actually has and a drop where it stood keeps its fractions.
  */
 export function placementFromBounds(layout: OverlayLayout, client: DipRect, bounds: DipRect, previous: OverlayPlacement,
-  sections: OverlaySections = DEFAULT_OVERLAY_SECTIONS): OverlayPlacement {
-  const size = overlaySize(layout, client, previous.scale, sections);
+  sections: OverlaySections = DEFAULT_OVERLAY_SECTIONS, windowSize?: {width: number; height: number}): OverlayPlacement {
+  const size = windowSize ?? overlaySize(layout, client, previous.scale, sections);
   if (!size || ![bounds.x, bounds.y].every(Number.isFinite)) return previous;
   const margin = overlayMargins(layout);
   const freeX = client.width - 2 * margin.x - size.width, freeY = client.height - 2 * margin.y - size.height;

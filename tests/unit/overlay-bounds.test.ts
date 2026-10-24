@@ -3,7 +3,7 @@ import {expect, it, vi} from 'vitest';
 import type {LiveTelemetry, OverlayEditState, OverlayPlacement, OverlaySections} from '../../packages/contracts/src';
 import {validateMessage} from '../../packages/contracts/src/protocol-v0';
 import {initialLive} from '../../apps/desktop/src/live-state';
-import {OverlayController} from '../../apps/desktop/src/overlay-controller';
+import {BOUNDS_MISMATCH_REPORT_LIMIT, OverlayController} from '../../apps/desktop/src/overlay-controller';
 import {overlayBounds, type DipRect} from '../../apps/desktop/src/overlay-geometry';
 import {OVERLAY_PRESETS} from '../../apps/desktop/src/overlay-sections';
 
@@ -23,7 +23,7 @@ const JOB_FOCUS = {x: 2601, y: 1152, width: 640, height: 40};
 const DRIVING_ONLY = {x: 2601, y: 1171, width: 640, height: 21};
 const CLIENT = {x: 2560 / SCALE, y: 240, width: 2560 / SCALE, height: 960};
 
-type Mode = 'faithful' | 'ignore-first-shrink' | 'min-height-40' | 'deferred' | 'refuse-all';
+type Mode = 'faithful' | 'ignore-first-shrink' | 'min-height-40' | 'inflate-clamp-38' | 'deferred' | 'refuse-all';
 interface Report {event: string; facts: Record<string, string | number>}
 
 function live(): LiveTelemetry {
@@ -42,13 +42,14 @@ function live(): LiveTelemetry {
 /**
  * A window whose setBounds Windows may apply differently, as the owner's evidence showed: `faithful` applies it;
  * `ignore-first-shrink` applies x, y and width but keeps the height on the first call that lowers it (H-stale);
- * `min-height-40` never goes below 40 DIP (H-min); `deferred` reports the previous rectangle on the first read after
+ * `min-height-40` never goes below `minHeight`, 40 DIP unless a test changes it (H-min); `inflate-clamp-38` adds 1 DIP of
+ * rounding to the width and never goes below 38 DIP, as the ET-045c probe measured at 150%; `deferred` reports the previous rectangle on the first read after
  * the first setBounds; `refuse-all` keeps the window where it is. getBounds() always returns the window's actual bounds.
  */
 function fakeWindow(initial: DipRect = {x: 0, y: 0, width: 640, height: 59}) {
   const calls: string[] = [];
   const state = {mode: 'faithful' as Mode, bounds: {...initial}, visible: false, topmost: true, ignoreMouse: true, focusable: false, movable: false,
-    skipTaskbar: true, shrinkIgnored: false, deferPending: false, deferred: undefined as DipRect | undefined};
+    skipTaskbar: true, shrinkIgnored: false, deferPending: false, deferred: undefined as DipRect | undefined, minHeight: 40};
   const window = {
     isDestroyed: () => false,
     setBounds: vi.fn((requested: DipRect) => {
@@ -58,7 +59,8 @@ function fakeWindow(initial: DipRect = {x: 0, y: 0, width: 640, height: 59}) {
       if (state.mode === 'ignore-first-shrink' && !state.shrinkIgnored && requested.height < previous.height) {
         state.shrinkIgnored = true; state.bounds = {x: requested.x, y: requested.y, width: requested.width, height: previous.height}; return;
       }
-      state.bounds = {...requested, height: state.mode === 'min-height-40' ? Math.max(40, requested.height) : requested.height};
+      if (state.mode === 'inflate-clamp-38') {state.bounds = {...requested, width: requested.width + 1, height: Math.max(38, requested.height)}; return;}
+      state.bounds = {...requested, height: state.mode === 'min-height-40' ? Math.max(state.minHeight, requested.height) : requested.height};
       if (state.mode === 'deferred' && state.deferPending) {state.deferPending = false; state.deferred = previous;}
     }),
     getBounds: vi.fn((): DipRect => {
@@ -273,4 +275,57 @@ it('does not verify or move the window while it is dragged, then snaps the drop 
   expect(t.state.bounds).toEqual({x: 2000, y: 1171, width: 640, height: 21});
   expect(setBoundsSince(t.calls, from)).toBe(1); expect(t.window.getBounds.mock.calls.length).toBeGreaterThan(reads);
   expect(t.overlay.endEdit()).toEqual({x: 0.268, y: 1, scale: 0.5}); expect(t.mismatches()).toEqual([]);
+});
+
+// Review round 1. A fitted window is taller than the layout: a drop where it stands must keep its fractions. With the
+// window kept 40 DIP high, the free height is 944 − 40 = 904 and a drop at the fitted top 1152 is (1152 − 248) / 904 = 1;
+// against the layout's 21 DIP it would be 904 / 923 = 0.9794 and walk the content up by about 19 DIP on every drop.
+it('keeps the fractions of a fitted window dropped where it stands, and repeated horizontal drops do not walk', () => {
+  const t = setup(OVERLAY_PRESETS['driving-only']); t.setMode('min-height-40'); t.overlay.loaded(true);
+  t.metadata.foreground = false; t.overlay.update(t.current); t.overlay.beginEdit(true);
+  expect(t.state.bounds).toEqual(JOB_FOCUS);
+  // Free width 1034.67: 2401 → (2401 − 1722.67) / 1034.67 = 0.6556, 2200 → 0.4613, 2000 → 0.268; x snaps back to the drop.
+  for (const [x, fraction] of [[2401, 0.6556], [2200, 0.4613], [2000, 0.268]] as const) {
+    t.overlay.moveStarted(); t.state.bounds = {...t.state.bounds, x}; t.overlay.moved({...t.state.bounds});
+    expect(t.state.bounds).toEqual({x, y: 1152, width: 640, height: 40}); expect(t.state.visible).toBe(true);
+    expect(t.overlay.editState()).toMatchObject({placement: 'visible'}); expect(t.overlay.contentAnchorY).toBe(1);
+    expect(t.state.bounds.y + t.state.bounds.height).toBe(1192);
+    expect(Math.abs(fraction - (x - CLIENT.x - 16) / 1034.67)).toBeLessThan(0.0001);
+  }
+  // Done saves the returned draft: y stays 1.
+  expect(t.overlay.endEdit()).toEqual({x: 0.268, y: 1, scale: 0.5});
+});
+
+// Review round 1. A width-limited strip in a 750 × 1440 physical client (500 × 960 DIP at (1706.67, 240)) is
+// floor(min(640, 500 − 32)) = 468 wide with no free width, so x = 1706.67 + 16 = 1723 whatever the fraction. Speed and
+// gear need one row at zoom 0.5 (tags 96 + 96, speed 140 and gear 90 with three 14 px gaps, 464 of the 908 inner CSS px):
+// 21 high at y 1171. Windows adds 1 DIP of width and keeps 38 high. Fitting the inflated width (469) would leave −1 DIP
+// of free width and refuse the strip; only the height is fitted: {1723, 248 + 944 − 38 = 1154, 468, 38}.
+it('fits only the axis Windows changed, so a width-limited strip with a rounded width stays visible', () => {
+  const t = setup({...OVERLAY_PRESETS['driving-only'], rpm: false, fuel: false, range: false}); t.metadata.width = 750;
+  expect(overlayBounds('strip', {...CLIENT, width: 500}, OWNER, {...OVERLAY_PRESETS['driving-only'], rpm: false, fuel: false, range: false}))
+    .toEqual({x: 1723, y: 1171, width: 468, height: 21});
+  t.setMode('inflate-clamp-38'); t.overlay.loaded(true); t.overlay.update(t.current);
+  expect(t.state.bounds).toEqual({x: 1723, y: 1154, width: 469, height: 38}); expect(t.state.visible).toBe(true);
+  expect(t.state.bounds.x + t.state.bounds.width).toBeLessThanOrEqual(CLIENT.x + 500);
+  expect(t.mismatches().map(report => report.facts)).toEqual([expect.objectContaining({mode: 'driving', outcome: 'fitted', reqW: 468, reqH: 21, actW: 469, actH: 38})]);
+  t.metadata.foreground = false; t.overlay.update(t.current);
+  expect(t.overlay.beginEdit(true)).toEqual({active: true, layout: 'strip', scale: 0.5, placement: 'visible'});
+  expect(t.state.bounds).toEqual({x: 1723, y: 1154, width: 469, height: 38});
+});
+
+// Review round 1. A deterministic minimum height produces the same mismatch for every lower request: the default log
+// gets one line per mode, outcome and size difference, and at most BOUNDS_MISMATCH_REPORT_LIMIT per launch.
+it('logs a repeated mismatch once and bounds the distinct mismatch lines per launch', () => {
+  const t = setup(OVERLAY_PRESETS['driving-only']); t.setMode('min-height-40'); t.overlay.loaded(true); t.overlay.update(t.current);
+  // The game window moves back and forth by 30 physical px (20 DIP), so every update is a new request on the display.
+  for (let move = 0; move < 5; move++) {t.metadata.x += move % 2 === 0 ? -30 : 30; t.overlay.update(t.current); expect(t.state.bounds.height).toBe(40);}
+  expect(t.mismatches().map(report => report.facts)).toEqual([expect.objectContaining({mode: 'driving', outcome: 'fitted', reqH: 21, actH: 40})]);
+  // Each new minimum is another size difference; they are still fitted after the limit, but no longer logged.
+  for (let step = 1; step <= 25; step++) {
+    t.state.minHeight = 40 + step; t.metadata.x += step % 2 === 0 ? -30 : 30; t.overlay.update(t.current);
+    expect(t.state.bounds.height).toBe(40 + step); expect(t.state.visible).toBe(true);
+  }
+  expect(t.mismatches()).toHaveLength(BOUNDS_MISMATCH_REPORT_LIMIT);
+  expect(t.reports.filter(report => report.event === 'OVERLAY_BOUNDS_SET')).toHaveLength(31);
 });
