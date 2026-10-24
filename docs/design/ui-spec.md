@@ -330,3 +330,19 @@ ET-028 Live compaction keeps all twelve actual parameter names with state icons 
 ## ET-047 current presentation — October 23, 2026
 
 ET-047 supersedes earlier compact-card/drawer descriptions, including the dated ET-028 compaction notes below. Live has one full-width instrument above Job. Hard Mode lives between Live and Journal, and exposes all evidence/caveats inline. Optional tooltips do not hide essential information. Existing ET-026 qualification, freshness and source authority remain unchanged. See [ET-047 validation](../validation/et-047.md).
+
+## ET-045b action results — October 24, 2026
+
+The answer of a user action appears next to the control that started it, as the next element after the control or its row, never as a toast, a card-wide status line or a line far from its control. The first adopter is the Game plugin card; see [game plugin setup](../plugin-setup.md#the-game-plugin-card).
+
+| Severity | Tone tokens | Icon | Word (EN / RU) |
+| --- | --- | --- | --- |
+| Information | `--yu-neutral-*` | `Info` | Information / Информация |
+| Done | `--yu-ok-*` | `CircleCheck` | Done / Готово |
+| Refused | `--yu-warn-*` | `Ban` | Refused / Отклонено |
+| Failed | `--yu-err-*` | `CircleX` | Failed / Ошибка |
+
+- **Shape.** A shadcn Alert with the tone's text, background and border, a 3 px left border, the icon (`aria-hidden`), a title "{severity} — {action}" that names the action and its game, and the fixed answer text in the tone colour. Icon and word always accompany the tone, never colour alone.
+- **Announcements.** Information, done and refused live in a persistent polite `role="status"` region that exists from the first render; a failure appears alone as `role="alert"`, outside it. The control names its shown result in `aria-describedby`.
+- **Focus and lifetime.** A pending control stays focusable (`aria-disabled`); focus returns to the control only when it was lost. One current result per card: it stays until the next action of that card, with no auto-hide and no dismiss button.
+- **Not yet adopted.** The Journal export result, the uninstall card result, the settings, overlay, autostart and language save messages and the Hard Mode lines keep their existing presentation; each is a follow-up candidate.

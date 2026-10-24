@@ -925,7 +925,7 @@ export const PLUGIN_FOLDER_REFUSAL_TEXT: Readonly<Record<PluginFolderRefusal, st
   FOLDER_NOT_GAME: 'This folder is not a game folder of this game.',
   FOLDER_WRONG_GAME: 'This folder holds the other game.',
   FOLDER_LINKED: 'The game\'s folders in this folder are linked elsewhere; it cannot be used.',
-  FOLDER_DUPLICATE: 'This game folder is already found through Steam.',
+  FOLDER_DUPLICATE: 'This game folder is already found through Steam; nothing changed.',
   SETUP_DISABLED: 'Plugin setup is off in this launch.',
   REGISTRY_UNAVAILABLE: 'The plugin setup record could not be saved.',
   BUSY: 'A folder dialog is already open.'

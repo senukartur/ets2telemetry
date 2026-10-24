@@ -457,6 +457,8 @@ export type I18nKey =
   | 'st.noToken' | 'st.noTokenT' | 'st.addToken'
   | 'st.offline' | 'st.firstSync' | 'st.firstSyncT'
   | 'c.done' | 'c.reset' | 'c.close' | 'c.retry'
+  | 'act.title' | 'act.sev.info' | 'act.sev.success' | 'act.sev.refused' | 'act.sev.failed'
+  | 'act.plugin.manage' | 'act.plugin.chooseFolder' | 'act.plugin.showFile' | 'act.plugin.openFolder' | 'act.plugin.retry' | 'act.diagnostics.export'
   | 'fmt.in' | 'fmt.dur' | 'fmt.min' | 'fmt.day' | 'fmt.date'
   | 'u.kmh' | 'u.mph' | 'u.l' | 'u.gal' | 'u.km' | 'u.mi' | 'u.rpm' | 'u.t' | 'u.lb' | 'u.l100' | 'u.mpg'
   | 'ov.edit' | 'ov.drag' | 'ov.hidden' | 'ov.hiddenT' | 'ov.noSignal' | 'ov.paused'
