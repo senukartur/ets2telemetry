@@ -12,7 +12,8 @@ html:has(.overlay-body) { background: transparent; }
 .overlay-icon { flex: none; color: var(--yu-ov-icon); }
 .overlay-value-group { display: inline-flex; align-items: baseline; gap: 4px; white-space: nowrap; min-width: 0; }
 /* Value sizes (ET-045d): strip 17 px/700 with speed 19 px, card rows 12 px with a 34/24/16 px hero speed, cluster panel
-   12 px with a 34 px gauge speed, HUD 13 px with speed 15 px. No value is smaller than its 12 px label or unit. */
+   12 px with a 34 px gauge speed, HUD 13 px with speed 15 px. No value is smaller than its 12 px label; units and details
+   are 12 px except the 11 px Cluster RPM unit, which is a unit, not a value. */
 .overlay-value { font-weight: 600; }
 .overlay-unit, .overlay-detail { flex: none; color: var(--yu-ov-muted); font-size: 12px; }
 .overlay-label { display: inline-flex; flex: none; align-items: center; gap: 4px; color: var(--yu-ov-text); font-size: 12px; white-space: nowrap; }
