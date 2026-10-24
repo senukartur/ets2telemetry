@@ -260,7 +260,7 @@ async function installed(ports: SquirrelPorts): Promise<{shortcuts: ShortcutStat
 function legacyShortcuts(ports: SquirrelPorts, installRoot: string, requireCurrent: boolean, deadline: number): Promise<LegacyShortcutResult> {
   return removeLegacyShortcuts({installRoot, executableName: ports.executableName, requireCurrent, deadline: Math.min(deadline, ports.clock() + LEGACY_SHORTCUT_BUDGET_MS),
     ports: {fs: ports.fs, folders: () => ports.shortcutFolders(), readShortcut: file => ports.readShortcut(file), clock: () => ports.clock()}})
-    .catch((): LegacyShortcutResult => ({removed: 0, kept: 0, failed: 1}));
+    .catch((): LegacyShortcutResult => ({removed: 0, kept: 0, unresolved: 0, failed: 1}));
 }
 
 /** Production installs always manage shortcuts; a test install only when its test file sets `shortcuts: true`. */
@@ -320,10 +320,15 @@ async function uninstall(ports: SquirrelPorts, state: HookState, deadline: numbe
   }
   // The shortcuts go beside the cleanup; Squirrel does not remove them for an application that handles its events.
   // `--removeShortcut` removes only the current name, so this install's old-name shortcuts go after it (ET-045h), without
-  // requiring a current one; `removed` means both steps succeeded (the receipt keeps its fields).
+  // requiring a current one. `removed` means both steps succeeded: --removeShortcut exited 0, no owned old-name shortcut
+  // failed to delete, and none was left undecided (past the deadline, uninspectable or unreadable), so no shortcut of
+  // this install can remain. A shortcut proven foreign stays and does not count. The receipt keeps its fields.
   const shortcuts = !wantsShortcuts(roots, ports) ? Promise.resolve<ShortcutState>('skipped')
     : ports.runUpdate(roots.installRoot, [`--removeShortcut=${ports.executableName}`], REMOVE_SHORTCUT_TIMEOUT_MS).then(ok => ok, () => false)
-      .then(async (ok): Promise<ShortcutState> => (await legacyShortcuts(ports, roots.installRoot, false, deadline)).failed === 0 && ok ? 'removed' : 'failed');
+      .then(async (ok): Promise<ShortcutState> => {
+        const legacy = await legacyShortcuts(ports, roots.installRoot, false, deadline);
+        return ok && legacy.failed === 0 && legacy.unresolved === 0 ? 'removed' : 'failed';
+      });
 
   // 3. The engine, within what is left of the deadline.
   const known = await ports.readKnown().catch(() => []);

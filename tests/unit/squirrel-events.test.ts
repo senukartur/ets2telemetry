@@ -477,6 +477,28 @@ describe('the old-name shortcuts (ET-045h)', () => {
     expect(test.receipts[0].receipt.shortcuts).toBe('removed');
   });
 
+  interface ReaderScene {ports: Pick<SquirrelPorts, 'readShortcut'>; advance(milliseconds: number): void}
+  // Fix round 1: an old-name shortcut whose ownership was never decided may still be this install's, so the receipt must
+  // not call the shortcuts removed. A shortcut proven foreign (the case above) does not count.
+  it.each([
+    ['cannot be read', (scene: ReaderScene): SquirrelPorts['readShortcut'] =>
+      file => file.endsWith('ETS2Telemetry Desktop.lnk') && file.includes('Desktop\\') ? undefined : scene.ports.readShortcut(file)],
+    ['takes the whole 1 s budget', (scene: ReaderScene): SquirrelPorts['readShortcut'] =>
+      file => {scene.advance(1000); return scene.ports.readShortcut(file);}]
+  ] as const)('uninstall reports the shortcuts failed when an old-name shortcut %s, and keeps the engine\'s outcome', async (_label, reader) => {
+    const {fixture, game} = await scene({shortcuts: true});
+    const shortcuts = await shortcutScene(fixture, {current: false});
+    const {ports} = shortcutPorts(fixture, shortcuts);
+    let advance: (milliseconds: number) => void = () => undefined;
+    const test = harness(fixture, {...ports, readShortcut: file => reader({ports, advance})(file)});
+    advance = test.advance;
+    expect(await runSquirrelEvent(event('uninstall'), test.ports)).toBe(EXIT_CODES.complete);
+    expect(test.receipts[0].receipt).toMatchObject({outcome: 'complete', code: null, shortcuts: 'failed', failedStep: null});
+    expect(Object.keys(test.receipts[0].receipt).sort()).toEqual(RECEIPT_KEYS);
+    expect(await exists(game.dll)).toBe(false);
+    expect(await exists(shortcuts.legacy.desktop)).toBe(true);
+  });
+
   it('uninstall in a test install without shortcuts never looks at them', async () => {
     const {fixture} = await scene();
     const shortcuts = await shortcutScene(fixture);

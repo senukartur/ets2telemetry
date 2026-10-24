@@ -123,55 +123,56 @@ describe('ownsShortcut', () => {
 describe('removeLegacyShortcuts', () => {
   it('removes owned old-name shortcuts in both locations once the new ones exist, and touches nothing else', async () => {
     const shell = fake({entries: both, links: {[DESKTOP_OLD]: STUB, [START_OLD]: {target: `${INSTALL_ROOT}\\app-0.1.0\\${EXE}`, appUserModelId: AUMID}}});
-    expect(await run(shell)).toEqual({removed: 2, kept: 0, failed: 0});
+    expect(await run(shell)).toEqual({removed: 2, kept: 0, unresolved: 0, failed: 0});
     expect(shell.calls).toEqual([`lstat ${DESKTOP_OLD}`, `lstat ${DESKTOP_NEW}`, `unlink ${DESKTOP_OLD}`, `lstat ${START_OLD}`, `lstat ${START_NEW}`, `unlink ${START_OLD}`]);
   });
 
   it('counts absent old names as nothing', async () => {
     const shell = fake({entries: {[DESKTOP_NEW]: {kind: 'file'}, [START_NEW]: {kind: 'file'}}});
-    expect(await run(shell)).toEqual({removed: 0, kept: 0, failed: 0});
+    expect(await run(shell)).toEqual({removed: 0, kept: 0, unresolved: 0, failed: 0});
     expect(unlinks(shell)).toEqual([]);
     expect(shell.reads).toEqual([]);
   });
 
   it.each([
-    ['a foreign shortcut', {[DESKTOP_OLD]: {kind: 'file'}, [DESKTOP_NEW]: {kind: 'file'}}, {[DESKTOP_OLD]: {target: 'C:\\Other\\Other.exe'}}],
-    ['an unreadable shortcut', {[DESKTOP_OLD]: {kind: 'file'}, [DESKTOP_NEW]: {kind: 'file'}}, {[DESKTOP_OLD]: 'throws' as const}],
-    ['a shortcut the reader cannot describe', {[DESKTOP_OLD]: {kind: 'file'}, [DESKTOP_NEW]: {kind: 'file'}}, {}],
-    ['a link at the old name', {[DESKTOP_OLD]: {kind: 'link'}, [DESKTOP_NEW]: {kind: 'file'}}, {[DESKTOP_OLD]: STUB}],
-    ['a folder at the old name', {[DESKTOP_OLD]: {kind: 'directory'}, [DESKTOP_NEW]: {kind: 'file'}}, {[DESKTOP_OLD]: STUB}],
-    ['an oversize file', {[DESKTOP_OLD]: {kind: 'file', size: MAX_SHORTCUT_BYTES + 1}, [DESKTOP_NEW]: {kind: 'file'}}, {[DESKTOP_OLD]: STUB}],
-    ['an old name that cannot be inspected', {[DESKTOP_OLD]: {kind: 'error', code: 'EACCES'}, [DESKTOP_NEW]: {kind: 'file'}}, {[DESKTOP_OLD]: STUB}],
-    ['no new-name shortcut beside it', {[DESKTOP_OLD]: {kind: 'file'}}, {[DESKTOP_OLD]: STUB}],
-    ['a new-name entry that is a link', {[DESKTOP_OLD]: {kind: 'file'}, [DESKTOP_NEW]: {kind: 'link'}}, {[DESKTOP_OLD]: STUB}]
-  ] as const)('keeps %s', async (_label, entries, links) => {
+    ['a foreign shortcut', {[DESKTOP_OLD]: {kind: 'file'}, [DESKTOP_NEW]: {kind: 'file'}}, {[DESKTOP_OLD]: {target: 'C:\\Other\\Other.exe'}}, 0],
+    ['an unreadable shortcut', {[DESKTOP_OLD]: {kind: 'file'}, [DESKTOP_NEW]: {kind: 'file'}}, {[DESKTOP_OLD]: 'throws' as const}, 1],
+    ['a shortcut the reader cannot describe', {[DESKTOP_OLD]: {kind: 'file'}, [DESKTOP_NEW]: {kind: 'file'}}, {}, 1],
+    ['a link at the old name', {[DESKTOP_OLD]: {kind: 'link'}, [DESKTOP_NEW]: {kind: 'file'}}, {[DESKTOP_OLD]: STUB}, 0],
+    ['a folder at the old name', {[DESKTOP_OLD]: {kind: 'directory'}, [DESKTOP_NEW]: {kind: 'file'}}, {[DESKTOP_OLD]: STUB}, 0],
+    ['an oversize file', {[DESKTOP_OLD]: {kind: 'file', size: MAX_SHORTCUT_BYTES + 1}, [DESKTOP_NEW]: {kind: 'file'}}, {[DESKTOP_OLD]: STUB}, 0],
+    ['an old name that cannot be inspected', {[DESKTOP_OLD]: {kind: 'error', code: 'EACCES'}, [DESKTOP_NEW]: {kind: 'file'}}, {[DESKTOP_OLD]: STUB}, 1],
+    ['no new-name shortcut beside it', {[DESKTOP_OLD]: {kind: 'file'}}, {[DESKTOP_OLD]: STUB}, 0],
+    ['a new-name entry that is a link', {[DESKTOP_OLD]: {kind: 'file'}, [DESKTOP_NEW]: {kind: 'link'}}, {[DESKTOP_OLD]: STUB}, 0]
+  ] as const)('keeps %s', async (_label, entries, links, undecided) => {
     const shell = fake({entries, links});
-    expect(await run(shell)).toEqual({removed: 0, kept: 1, failed: 0});
+    // Unresolved: its ownership was never decided, so an uninstall receipt must not call the shortcuts removed.
+    expect(await run(shell)).toEqual({removed: 0, kept: 1, unresolved: undecided, failed: 0});
     expect(unlinks(shell)).toEqual([]);
   });
 
   it('accepts an exactly 64 KiB shortcut', async () => {
     const shell = fake({entries: {[DESKTOP_OLD]: {kind: 'file', size: MAX_SHORTCUT_BYTES}, [DESKTOP_NEW]: {kind: 'file'}}, links: {[DESKTOP_OLD]: STUB}});
-    expect(await run(shell)).toEqual({removed: 1, kept: 0, failed: 0});
+    expect(await run(shell)).toEqual({removed: 1, kept: 0, unresolved: 0, failed: 0});
   });
 
   it('removes an owned old name without a new one when the current one is not required (uninstall)', async () => {
     const shell = fake({entries: {[DESKTOP_OLD]: {kind: 'file'}, [START_OLD]: {kind: 'file'}}, links: {[DESKTOP_OLD]: STUB, [START_OLD]: STUB}});
-    expect(await run(shell, false)).toEqual({removed: 2, kept: 0, failed: 0});
+    expect(await run(shell, false)).toEqual({removed: 2, kept: 0, unresolved: 0, failed: 0});
     expect(shell.calls).not.toContain(`lstat ${DESKTOP_NEW}`);
     expect(unlinks(shell)).toEqual([`unlink ${DESKTOP_OLD}`, `unlink ${START_OLD}`]);
   });
 
   it('counts a failed deletion as failed, without a retry, and still handles the next location', async () => {
     const shell = fake({entries: both, links: {[DESKTOP_OLD]: STUB, [START_OLD]: STUB}, unlinkFails: [DESKTOP_OLD]});
-    expect(await run(shell)).toEqual({removed: 1, kept: 0, failed: 1});
+    expect(await run(shell)).toEqual({removed: 1, kept: 0, unresolved: 0, failed: 1});
     expect(unlinks(shell)).toEqual([`unlink ${DESKTOP_OLD}`, `unlink ${START_OLD}`]);
   });
 
   it('keeps every candidate left at the deadline and deletes nothing after it', async () => {
     // Reading the desktop shortcut takes the whole budget: it is kept, and the Start menu is never inspected.
     const shell = fake({entries: both, links: {[DESKTOP_OLD]: STUB, [START_OLD]: STUB}, onRead: (_file, clock) => clock.advance(1000)});
-    expect(await run(shell)).toEqual({removed: 0, kept: 2, failed: 0});
+    expect(await run(shell)).toEqual({removed: 0, kept: 2, unresolved: 2, failed: 0});
     expect(unlinks(shell)).toEqual([]);
     expect(shell.calls).not.toContain(`lstat ${START_OLD}`);
   });
@@ -179,7 +180,7 @@ describe('removeLegacyShortcuts', () => {
   it('keeps everything when the deadline has already passed', async () => {
     const shell = fake({entries: both, links: {[DESKTOP_OLD]: STUB, [START_OLD]: STUB}});
     shell.advance(1000);
-    expect(await run(shell)).toEqual({removed: 0, kept: 2, failed: 0});
+    expect(await run(shell)).toEqual({removed: 0, kept: 2, unresolved: 2, failed: 0});
     expect(shell.calls).toEqual([]);
   });
 
@@ -190,7 +191,7 @@ describe('removeLegacyShortcuts', () => {
     ['UNC', {desktop: FOLDERS.desktop, startMenuPrograms: '\\\\server\\share\\Programs'}]
   ])('touches nothing when the folders are %s', async (_label, folders) => {
     const shell = fake({entries: both, links: {[DESKTOP_OLD]: STUB, [START_OLD]: STUB}, folders});
-    expect(await run(shell)).toEqual({removed: 0, kept: 0, failed: 0});
+    expect(await run(shell)).toEqual({removed: 0, kept: 0, unresolved: 0, failed: 0});
     expect(shell.calls).toEqual([]);
     expect(shell.reads).toEqual([]);
   });

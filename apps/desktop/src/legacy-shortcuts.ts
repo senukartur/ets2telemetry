@@ -56,8 +56,14 @@ export interface LegacyShortcutPorts {
 export interface LegacyShortcutResult {
   /** Owned old-name shortcuts deleted. */
   readonly removed: number;
-  /** Old-name files left in place: foreign, unreadable, not a plain file, without the new shortcut, or past the deadline. */
+  /** Old-name files left in place: foreign, not a plain file, without the new shortcut, unresolved (below). */
   readonly kept: number;
+  /**
+   * The part of `kept` whose ownership was never decided, so it may still be this install's shortcut: candidates left at
+   * the deadline, a file that could not be inspected, and a shortcut that could not be read. A shortcut proven foreign or
+   * a link, folder or oversize file at the old name is not unresolved.
+   */
+  readonly unresolved: number;
   /** Owned old-name shortcuts whose deletion failed. */
   readonly failed: number;
 }
@@ -116,41 +122,46 @@ export function ownsShortcut(link: ShortcutLink, installRoot: string, executable
   return tokens.length === 2 || (tokens.length === 4 && tokens[2] === '--process-start-args');
 }
 
-type Probe = 'file' | 'absent' | 'other';
+/** `not-file`: a link, a folder or an oversize file, never a shortcut Squirrel wrote; `error`: it could not be inspected. */
+type Probe = 'file' | 'absent' | 'not-file' | 'error';
 async function probe(ports: LegacyShortcutPorts, file: string): Promise<Probe> {
   try {
     const stats = await ports.fs.lstat(file, {bigint: true});
-    return stats.isFile() && !stats.isSymbolicLink() && stats.size <= BigInt(MAX_SHORTCUT_BYTES) ? 'file' : 'other';
+    return stats.isFile() && !stats.isSymbolicLink() && stats.size <= BigInt(MAX_SHORTCUT_BYTES) ? 'file' : 'not-file';
   } catch (error) {
-    return isAbsentError(error) ? 'absent' : 'other';
+    return isAbsentError(error) ? 'absent' : 'error';
   }
 }
 
 /**
  * Removes the owned old-name shortcuts at Squirrel's two locations, in a fixed order (desktop, then Start menu), until
- * `deadline` on `ports.clock()`; candidates left at the deadline are kept. An absent file is not counted. Never throws,
- * never retries, never removes a folder.
+ * `deadline` on `ports.clock()`; candidates left at the deadline are kept and unresolved. An absent file is not counted.
+ * Unknown folders touch nothing and count nothing. Never throws, never retries, never removes a folder.
  */
 export async function removeLegacyShortcuts(options: {installRoot: string; executableName: string; ports: LegacyShortcutPorts; requireCurrent: boolean;
   deadline: number}): Promise<LegacyShortcutResult> {
   const {installRoot, executableName, ports, requireCurrent, deadline} = options;
-  let removed = 0, kept = 0, failed = 0;
+  let removed = 0, kept = 0, unresolved = 0, failed = 0;
   let folders: ShortcutFolders | undefined;
   try {folders = ports.folders();} catch {folders = undefined;}
   if (!folders || typeof folders.desktop !== 'string' || typeof folders.startMenuPrograms !== 'string'
-    || !DRIVE_PATH.test(folders.desktop) || !DRIVE_PATH.test(folders.startMenuPrograms)) return {removed, kept, failed};
+    || !DRIVE_PATH.test(folders.desktop) || !DRIVE_PATH.test(folders.startMenuPrograms)) return {removed, kept, unresolved, failed};
   const candidates = legacyShortcutCandidates(folders);
   const pastDeadline = () => {try {return ports.clock() >= deadline;} catch {return true;}};
   for (const [index, candidate] of candidates.entries()) {
-    if (pastDeadline()) {kept += candidates.length - index; break;}
+    // Every candidate from here on stays unchecked, so it may still be ours.
+    if (pastDeadline()) {kept += candidates.length - index; unresolved += candidates.length - index; break;}
     const legacy = await probe(ports, candidate.legacy);
     if (legacy === 'absent') continue;
-    if (legacy !== 'file') {kept++; continue;}
+    if (legacy === 'not-file') {kept++; continue;}
+    if (legacy === 'error') {kept++; unresolved++; continue;}
     if (requireCurrent && await probe(ports, candidate.current) !== 'file') {kept++; continue;}
     let link: ShortcutLink | undefined;
     try {link = ports.readShortcut(candidate.legacy);} catch {link = undefined;}
-    if (!link || !ownsShortcut(link, installRoot, executableName) || pastDeadline()) {kept++; continue;}
+    if (!link) {kept++; unresolved++; continue;}
+    if (!ownsShortcut(link, installRoot, executableName)) {kept++; continue;}
+    if (pastDeadline()) {kept++; unresolved++; continue;}
     try {await ports.fs.unlink(candidate.legacy); removed++;} catch {failed++;}
   }
-  return {removed, kept, failed};
+  return {removed, kept, unresolved, failed};
 }
