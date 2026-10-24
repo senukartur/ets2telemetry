@@ -69,6 +69,12 @@ export async function startLiveSmokeSource(checkout) {
       checkpoint.data.state.speed = {available: true, value: speedMps, unit: 'm/s'};
       checkpoint.data.state.fuel = {available: true, value: fuelL, unit: 'L'};
     },
+    // ET-045d: engine RPM and the gear index (negative is reverse, 0 neutral) for the overlay's digit-count transitions.
+    setEngine: (rpm, gearIndex) => {
+      assert.ok(Number.isFinite(rpm) && rpm >= 0 && Number.isInteger(gearIndex));
+      checkpoint.data.state.engineRpm = {available: true, value: rpm, unit: 'rpm'};
+      checkpoint.data.state.gear = {available: true, value: gearIndex, unit: 'index'};
+    },
     setCapacity: value => {checkpoint.data.state.fuelCapacity = value === null ? {available: false, reason: 'not-observed', unit: 'L'} : {available: true, value, unit: 'L'};},
     setPaused: value => {checkpoint.data.state.simulation = value ? 'paused' : 'running';},
     setUnavailable: () => {

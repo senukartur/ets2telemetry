@@ -3,9 +3,9 @@ import type {Page} from '@playwright/test';
 import {runInNewContext} from 'node:vm';
 import {afterEach, describe, expect, it, vi} from 'vitest';
 import {
-  completeLiveObservation, currentTelemetryObservation, notCurrentLiveObservation, overlayOverflow, overlayV1Observation, SYNTHETIC_V0_HIDDEN_ROWS,
+  clusterCentreProbe, completeLiveObservation, currentTelemetryObservation, notCurrentLiveObservation, overlayOverflow, overlayV1Observation, SYNTHETIC_V0_HIDDEN_ROWS,
   SYNTHETIC_V0_LIVE_ROWS, SYNTHETIC_V0_VALUE_IDS, SYNTHETIC_V0V1_HIDDEN_ROWS, SYNTHETIC_V0V1_LIVE_ROWS, SYNTHETIC_V1_OVERLAY_CURRENT, SYNTHETIC_V1_OVERLAY_STOPPED,
-  SYNTHETIC_V1_OVERLAY_V0_STALE, SYNTHETIC_V1_OVERLAY_V1_STALE, SYNTHETIC_V1_LIVE_ROWS, SYNTHETIC_V1_VALUE_IDS, v1NotCurrentObservation, waitForCompleteLive, waitForCurrentTelemetry,
+  SYNTHETIC_V1_OVERLAY_V0_STALE, SYNTHETIC_V1_OVERLAY_V1_STALE, SYNTHETIC_V1_LIVE_ROWS, SYNTHETIC_V1_VALUE_IDS, stripNumberProbe, v1NotCurrentObservation, waitForCompleteLive, waitForCurrentTelemetry,
   waitForNotCurrentLive, type RendererObservation
 } from '../../scripts/ci/renderer-observation.mjs';
 
@@ -322,4 +322,136 @@ it.each(['wrong number','wrong unit','wrong accessible name','missing accessible
   }
   if (fault === 'clipped viewport') globals.innerWidth = 100;
   expect(runInNewContext('(' + currentTelemetryObservation.toString() + ')()', globals)).toBe(false);
+});
+
+// ET-045d probes over a small fake layout: each value's width is 8 px per character, at least its reserve when `reserve` is
+// set, and the strip lays its sections out from the left with a 14 px gap. Playwright serializes the probes, so they run
+// from source in a fresh context, as above.
+interface FakeText {nodeType: 3; nodeValue: string; parentElement?: FakeValue}
+interface FakeValue {childNodes: FakeText[]; firstChild: FakeText; readonly scrollWidth: number; readonly clientWidth: number}
+function fakeValue(text: string, width: (value: string) => number, cap = 1000): FakeValue {
+  const node: FakeText = {nodeType: 3, nodeValue: text};
+  const element = {childNodes: [node], firstChild: node, get scrollWidth() {return width(node.nodeValue);}, get clientWidth() {return Math.min(cap, width(node.nodeValue));}};
+  node.parentElement = element; return element;
+}
+const edges = (left: number, top: number, width: number, height: number) => ({left, top, right: left + width, bottom: top + height, width, height});
+const testId = (selector: string) => /data-testid="([^"]+)"/.exec(selector)?.[1] ?? '';
+function fakeStrip({reserve = true, jitter = 0, rpmCap = 1000, omit = [] as string[], layout = 'strip', throwAt = -1} = {}) {
+  const reserves: Record<string, number> = {speed: 3, gear: 2, rpm: 4};
+  const width = (key: string) => (value: string) => 8 * Math.max(value.length, reserve ? reserves[key] : 0);
+  const values: Record<string, FakeValue> = {'overlay-speed': fakeValue('90', width('speed')), 'overlay-speed-unit': fakeValue('km/h', () => 32),
+    'overlay-gear': fakeValue('R1', width('gear')), 'overlay-rpm': fakeValue('600', width('rpm'), rpmCap), 'overlay-rpm-unit': fakeValue('rpm', () => 24)};
+  for (const id of omit) delete values[id];
+  let measured = 0;
+  const sectionWidth = (id: string) => id === 'speed' ? 22 + values['overlay-speed'].clientWidth + 36 : id === 'gear' ? 22 + values['overlay-gear'].clientWidth
+    : id === 'rpm' ? 22 + values['overlay-rpm'].clientWidth + 28 : 100;
+  const order = ['speed', 'gear', 'rpm', 'fuel'];
+  const sections = order.map((id, index) => ({getAttribute: () => `overlay-section-${id}`, getBoundingClientRect: () => {
+    if (id === 'speed' && measured++ === throwAt) throw new Error('layout failed');
+    const left = 12 + order.slice(0, index).reduce((sum, other) => sum + sectionWidth(other) + 14, 0) + (id === 'fuel' ? jitter * measured : 0);
+    return edges(left, 1, sectionWidth(id), 38);
+  }}));
+  const row = {getBoundingClientRect: () => edges(0, 0, 1280, 40)};
+  const root = {offsetWidth: 1280, getAttribute: () => layout, querySelectorAll: () => sections,
+    querySelector: (selector: string) => selector === '.overlay-strip-row' ? row : values[testId(selector)] ?? null};
+  const document = {querySelector: (selector: string) => selector === '[data-testid="overlay-root"]' ? root : null};
+  const texts = () => Object.fromEntries(Object.entries(values).map(([id, value]) => [id, value.firstChild.nodeValue]));
+  return {globals: {document}, texts};
+}
+interface ProbeResult {ok: boolean; reason?: string; restored: boolean; ring?: {track: string; limit: number};
+  steps: {texts: Record<string, string>; moved?: string[]; truncated: string[]; outside?: string[]}[]}
+const runProbe = (probe: {toString(): string}, globals: object, steps: unknown) =>
+  JSON.parse(JSON.stringify(runInNewContext(`(${probe.toString()})(steps)`, {...globals, steps}))) as ProbeResult;
+describe('ET-045d strip number probe', () => {
+  const steps = [{speed: '0', speedUnit: 'km/h', rpm: '0', rpmUnit: 'rpm'}, {speed: '9'}, {speed: '10'}, {speed: '99'}, {speed: '100'}, {speed: '-5'}, {speed: '—'},
+    {gear: 'N'}, {gear: '10'}, {gear: 'R1'}, {rpm: '999'}, {rpm: '1000'}, {rpm: '9999'}, {rpm: '—'}];
+  it('accepts reserved widths and restores every text node', () => {
+    const fake = fakeStrip(), before = fake.texts();
+    const result = runProbe(stripNumberProbe, fake.globals, steps);
+    expect(result).toMatchObject({ok: true, restored: true}); expect(result.steps).toHaveLength(steps.length);
+    expect(result.steps.every(step => !step.moved?.length && !step.truncated.length)).toBe(true);
+    expect(result.steps[4].texts).toEqual({speed: '100', speedUnit: 'km/h', gear: 'R1', rpm: '0', rpmUnit: 'rpm'});
+    expect(fake.texts()).toEqual(before);
+  });
+  it('reports the section that grows with a digit and every neighbour it moves', () => {
+    const fake = fakeStrip({reserve: false}), before = fake.texts();
+    const result = runProbe(stripNumberProbe, fake.globals, steps);
+    expect(result.ok).toBe(false); expect(result.restored).toBe(true);
+    expect(result.steps[1].moved).toEqual([]);
+    expect(result.steps[2].moved).toEqual(['speed', 'gear', 'rpm', 'fuel']);
+    expect(result.steps[11].moved).toEqual(['rpm', 'fuel']);
+    expect(fake.texts()).toEqual(before);
+  });
+  it('ignores differences up to 0.01 px and reports larger ones', () => {
+    expect(runProbe(stripNumberProbe, fakeStrip({jitter: 0.0004}).globals, steps).ok).toBe(true);
+    const result = runProbe(stripNumberProbe, fakeStrip({jitter: 0.02}).globals, steps);
+    expect(result.ok).toBe(false); expect(result.steps[1].moved).toEqual(['fuel']);
+  });
+  it('reports a value cut off inside its box', () => {
+    const result = runProbe(stripNumberProbe, fakeStrip({rpmCap: 24}).globals, steps);
+    expect(result.ok).toBe(false); expect(result.steps[11].truncated).toEqual(['rpm']);
+  });
+  it('fails closed without a strip or a text node a step needs, and restores texts when layout throws', () => {
+    expect(runProbe(stripNumberProbe, {document: {querySelector: () => null}}, steps)).toMatchObject({ok: false, reason: 'no-strip', steps: []});
+    expect(runProbe(stripNumberProbe, fakeStrip({layout: 'card'}).globals, steps)).toMatchObject({ok: false, reason: 'no-strip'});
+    expect(runProbe(stripNumberProbe, fakeStrip().globals, [])).toMatchObject({ok: false, reason: 'no-strip'});
+    expect(runProbe(stripNumberProbe, fakeStrip({omit: ['overlay-rpm-unit']}).globals, steps)).toMatchObject({ok: false, reason: 'missing rpmUnit'});
+    expect(runProbe(stripNumberProbe, fakeStrip().globals, [{fuel: '1.0'}])).toMatchObject({ok: false, reason: 'missing fuel'});
+    const fake = fakeStrip({throwAt: 3}), before = fake.texts();
+    expect(() => runInNewContext(`(${stripNumberProbe.toString()})(steps)`, {...fake.globals, steps})).toThrow('layout failed');
+    expect(fake.texts()).toEqual(before);
+  });
+});
+
+// The fake gauge: a 186 px ring frame at the origin (centre 93, 93; scale 1.55), the speed centred, the gear above and the
+// RPM below it, 8 px per character wide; the RPM ring's inner edge is (40 - 1.5) x 1.55 = 59.675 px from the centre.
+function fakeCluster({rpmTrack = true, speedTrack = true, omit = [] as string[], layout = 'cluster'} = {}) {
+  const values: Record<string, FakeValue> = {'overlay-speed': fakeValue('90', value => 20 * value.length), 'overlay-speed-unit': fakeValue('km/h', () => 30),
+    'overlay-gear': fakeValue('R1', value => 8 * value.length), 'overlay-rpm': fakeValue('600', value => 8 * value.length), 'overlay-rpm-unit': fakeValue('rpm', () => 24)};
+  for (const id of omit) delete values[id];
+  const centred = (width: number, top: number, height: number) => edges(93 - width / 2, 93 + top, width, height);
+  const wide = (id: string) => values[id]?.scrollWidth ?? 0;
+  const boxes: Record<string, () => ReturnType<typeof edges>> = {
+    'overlay-speed': () => centred(wide('overlay-speed'), -23, 34), 'overlay-speed-unit': () => centred(30, 11, 12),
+    'overlay-gear': () => centred(wide('overlay-gear'), -44, 16), 'overlay-rpm': () => centred(wide('overlay-rpm'), 27, 14),
+    'overlay-rpm-unit': () => centred(24, 27, 14), 'overlay-section-speed': () => centred(Math.max(wide('overlay-speed'), 30), -23, 46),
+    'overlay-section-gear': () => centred(wide('overlay-gear') + 16, -45, 18), 'overlay-section-rpm': () => centred(wide('overlay-rpm') + 27, 27, 14)};
+  const tracks: Record<string, {r: string; stroke: string}> = {...(rpmTrack ? {'overlay-rpm-track': {r: '40', stroke: '3px'}} : {}), ...(speedTrack ? {'overlay-speed-track': {r: '52', stroke: '6px'}} : {})};
+  const element = (id: string) => {
+    if (id in tracks) return {getAttribute: (name: string) => name === 'r' ? tracks[id].r : id, strokeWidth: tracks[id].stroke};
+    if (!(id in boxes) || (!id.startsWith('overlay-section-') && !(id in values))) return null;
+    return Object.assign(values[id] ?? {}, {getBoundingClientRect: boxes[id]});
+  };
+  const svg = {getBoundingClientRect: () => edges(0, 0, 186, 186)};
+  const root = {offsetWidth: 440, getAttribute: () => layout, querySelector: (selector: string) => selector === '.overlay-ring' ? svg : element(testId(selector))};
+  const document = {querySelector: (selector: string) => selector === '[data-testid="overlay-root"]' ? root : null};
+  const texts = () => Object.fromEntries(Object.entries(values).map(([id, value]) => [id, value.firstChild.nodeValue]));
+  return {globals: {document, getComputedStyle: (node: {strokeWidth?: string}) => ({strokeWidth: node.strokeWidth})}, texts};
+}
+describe('ET-045d cluster centre probe', () => {
+  const steps = [{rpm: '999', rpmUnit: 'rpm'}, {rpm: '1000'}, {rpm: '9999', rpmUnit: 'об/мин'}, {gear: 'N'}, {gear: '12'}, {speed: '100'}, {speed: '—', speedUnit: 'миль/ч'}];
+  it('accepts parts inside the inner ring and restores every text node', () => {
+    const fake = fakeCluster(), before = fake.texts();
+    const result = runProbe(clusterCentreProbe, fake.globals, steps);
+    expect(result).toMatchObject({ok: true, restored: true, ring: {track: 'overlay-rpm-track'}});
+    expect(result.ring?.limit).toBeCloseTo(59.665, 3);
+    expect(result.steps[2].texts).toEqual({speed: '90', speedUnit: 'km/h', gear: 'R1', rpm: '9999', rpmUnit: 'об/мин'});
+    expect(fake.texts()).toEqual(before);
+  });
+  it('reports a centre part that crosses the inner ring', () => {
+    const fake = fakeCluster(), before = fake.texts();
+    const result = runProbe(clusterCentreProbe, fake.globals, [{rpm: '2528 об/мин'}]);
+    expect(result.ok).toBe(false); expect(result.steps[0].outside).toEqual(['overlay-rpm', 'overlay-section-rpm']);
+    expect(fake.texts()).toEqual(before);
+  });
+  it('measures against the speed ring while RPM is off', () => {
+    const result = runProbe(clusterCentreProbe, fakeCluster({rpmTrack: false}).globals, [{rpm: '2528 об/мин'}]);
+    expect(result).toMatchObject({ok: true, ring: {track: 'overlay-speed-track'}});
+  });
+  it('fails closed without a gauge, a ring or a text node a step needs', () => {
+    expect(runProbe(clusterCentreProbe, {document: {querySelector: () => null}}, steps)).toMatchObject({ok: false, reason: 'no-gauge', steps: []});
+    expect(runProbe(clusterCentreProbe, fakeCluster({layout: 'strip'}).globals, steps)).toMatchObject({ok: false, reason: 'no-gauge'});
+    expect(runProbe(clusterCentreProbe, fakeCluster({rpmTrack: false, speedTrack: false}).globals, steps)).toMatchObject({ok: false, reason: 'no-gauge'});
+    expect(runProbe(clusterCentreProbe, fakeCluster({omit: ['overlay-gear']}).globals, steps)).toMatchObject({ok: false, reason: 'missing gear'});
+  });
 });

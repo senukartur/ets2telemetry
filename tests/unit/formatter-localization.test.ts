@@ -34,13 +34,14 @@ it.each(['ets2', 'ats'] as const)('binds every real formatter unit to EN/RU loca
     expect(format.formatConsumption(-1, u.consumption)).toEqual({reason: 'invalid'});
     for (const [actual, en, ru] of rows) {expect(localizedMeasurement(actual, 'en')).toBe(en); expect(localizedMeasurement(actual, 'ru')).toBe(ru);}
     for (const language of ['en', 'ru'] as const) {
+      // ET-045d (W2): the overlay RPM number and its localized unit are separate; the other measurements stay one text.
       const sections = [
-        {id: 'rpm' as const, text: format.formatRpm(600), expected: language === 'en' ? '600 rpm' : '600 об/мин'},
-        {id: 'range' as const, text: format.formatDistance(1000, u.distance, 1), expected: language === 'en' ? metric ? '1.0 km' : '0.6 mi' : metric ? '1.0 км' : '0.6 миль'},
-        {id: 'sdk-consumption' as const, text: consumption.text, expected: language === 'en' ? metric ? '30.0 L/100 km' : '7.8 US mpg' : metric ? '30.0 л/100 км' : '7.8 миль/гал'}
+        {id: 'rpm' as const, text: format.formatRpm(600), expected: ['600', language === 'en' ? 'rpm' : 'об/мин']},
+        {id: 'range' as const, text: format.formatDistance(1000, u.distance, 1), expected: [language === 'en' ? metric ? '1.0 km' : '0.6 mi' : metric ? '1.0 км' : '0.6 миль', undefined]},
+        {id: 'sdk-consumption' as const, text: consumption.text, expected: [language === 'en' ? metric ? '30.0 L/100 km' : '7.8 US mpg' : metric ? '30.0 л/100 км' : '7.8 миль/гал', undefined]}
       ];
       const view = overlayView({...OVERLAY_PLACEHOLDER, language, sections: sections.map(section => ({id: section.id, text: section.text, state: 'value'}))});
-      expect(view.items.map(item => item.value)).toEqual(sections.map(section => section.expected));
+      expect(view.items.map(item => [item.value, item.unit])).toEqual(sections.map(section => section.expected));
       const mass = overlayView({...OVERLAY_PLACEHOLDER, language, sections: [{id: 'cargo', state: 'value', text: '18.0 t', detail: format.formatMass(18000, u.mass)}]}).items[0];
       expect(mass.value).toBe('18.0 t'); expect(mass.detail).toBe(language === 'en' ? metric ? '18.0 t' : '39683 lb' : metric ? '18.0 т' : '39683 фунт');
     }

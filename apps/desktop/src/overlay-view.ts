@@ -17,9 +17,14 @@ export interface OverlayItem {
   label: string;
   /** Short label for the strip, cluster panel and HUD. */
   short: string;
-  /** The formatted text, or a dash while unavailable. Speed and fuel hold the number only; `unit` holds the unit. */
+  /** The formatted text, or a dash while unavailable. Speed, fuel and RPM hold the number only; `unit` holds the unit. */
   value: string;
   unit?: string;
+  /**
+   * Widest value text the strip reserves for this section (ET-045d), so a value change such as 99 to 100 never resizes the
+   * section or moves its neighbours. Rendered invisibly; set only for speed, gear and RPM.
+   */
+  reserve?: string;
   detail?: string;
   detailTestId?: string;
   /** Engine RPM ring fraction in [0, 1]. */
@@ -55,6 +60,13 @@ export interface OverlayView {
 export const OVERLAY_PLACEHOLDER: OverlayPresentation = Object.freeze({source: 'No game', origin: 'none', status: 'waiting', speed: '—', speedUnit: 'km/h',
   fuel: '—', fuelUnit: 'L', freshness: 'unavailable', layout: 'strip', paused: false, sections: Object.freeze([]), editing: false, language: 'en'});
 const DASH = '—';
+/**
+ * Stable value widths of the strip (ET-045d W1): a three-digit speed, a reverse gear with one digit ("R0" is wider than
+ * "00" in Onest's tabular figures) and a four-digit RPM. A wider value grows under the section's cap and ellipsis.
+ */
+const VALUE_RESERVES: Partial<Record<OverlaySectionId, string>> = {speed: '000', gear: 'R0', rpm: '0000'};
+/** telemetry-core's formatRpm always ends in this suffix; only that exact form is split into number and unit. */
+const RPM_SUFFIX = ' rpm';
 /** Old projections retain their layout anchor; malformed provided values never become CSS/native coordinates. */
 export function contentAnchorY(presentation: Pick<OverlayPresentation, 'layout' | 'contentAnchorY'>): number {
   const value = presentation.contentAnchorY;
@@ -71,19 +83,28 @@ export function overlayView(presentation: OverlayPresentation = OVERLAY_PLACEHOL
       testId: `overlay-${section.id}` as const,
       label: getOverlaySectionText(section.id, language),
       short: getOverlaySectionShortText(section.id, language),
-      unavailable: !available
+      unavailable: !available,
+      ...(VALUE_RESERVES[section.id] ? {reserve: VALUE_RESERVES[section.id]} : {})
     };
     // Speed and fuel keep the separate number and unit of the ET-008 smoke contract; the unit stays visible beside a dash.
     if (section.id === 'speed') return {...base, value: available ? presentation.speed : DASH, unit: translateUnit(presentation.speedUnit, language)};
     if (section.id === 'fuel') return {...base, value: available ? presentation.fuel : DASH, unit: translateUnit(language === 'ru' && presentation.fuelUnit === 'US gal' ? 'gal' : presentation.fuelUnit, language),
       ...(available && section.detail ? {detail: section.detail, detailTestId: 'overlay-fuel-level'} : {})};
+    // ET-045d (W2): the RPM number and its unit are separate like speed and fuel, so the strip can reserve the number's
+    // width and the cluster can size the unit apart. Only the fixed suffix is split; no number is parsed.
+    if (section.id === 'rpm') {
+      if (!available) return {...base, value: DASH, unit: translateUnit('rpm', language)};
+      const ring = section.ring !== undefined ? {ring: section.ring} : {};
+      return section.text.endsWith(RPM_SUFFIX) ? {...base, value: section.text.slice(0, -RPM_SUFFIX.length), unit: translateUnit('rpm', language), ...ring}
+        : {...base, value: section.text, ...ring};
+    }
     let value = available ? section.text : DASH;
     if (available) {
       if (section.id === 'game-time') {
         value = localizeGameTimeString(value, language);
       } else if (section.id === 'deadline') {
         value = localizeDeadlineString(value, language);
-      } else if (['rpm', 'sdk-consumption', 'range', 'distance-driven', 'distance-remaining', 'expected-income'].includes(section.id)) {
+      } else if (['sdk-consumption', 'range', 'distance-driven', 'distance-remaining', 'expected-income'].includes(section.id)) {
         value = localizedMeasurement(value, language);
       }
     }
