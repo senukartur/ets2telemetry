@@ -925,7 +925,7 @@ it('an uninstall-exit request before first readiness still exits once', async ()
 it.each(['tray', 'renderer', 'app-quit', 'session-end', 'uninstall'] as const)('runs one orderly exit for a %s request and removes the tray before exiting', async reason => {
   trayAvailable = true; await ready(); ipc.emit('overlay:subscribe', overlayTrusted());
   const request = () => {
-    if (reason === 'tray') trayMenuItem('Exit ETS2Telemetry').click!();
+    if (reason === 'tray') trayMenuItem('Exit Yukon Union Telemetry').click!();
     else if (reason === 'renderer') void handlers.get('app:exit')!(trusted());
     else if (reason === 'app-quit') {const event = {preventDefault: vi.fn()}; app.emit('before-quit', event); expect(event.preventDefault).toHaveBeenCalled();}
     else if (reason === 'uninstall') app.emit('second-instance', {}, ['ETS2TelemetryDesktop.exe', '--squirrel-uninstall', '0.1.0'], 'C:\\isolated', {ets2telemetry: 'uninstall-exit'});
@@ -936,8 +936,8 @@ it.each(['tray', 'renderer', 'app-quit', 'session-end', 'uninstall'] as const)('
   expect(child.postMessage.mock.calls.filter(call => call[0].type === 'stop')).toHaveLength(1);
   expect(channels.every(channel => channel.port1.close.mock.calls.length > 0)).toBe(true);
   expect(windows[1].hide).not.toHaveBeenCalled();
-  expect(trays[0].setToolTip).toHaveBeenLastCalledWith('ETS2Telemetry\nExiting');
-  expect(trayMenuItem('Exit ETS2Telemetry').enabled).toBe(false); expect(trayMenuItem('Open ETS2Telemetry').enabled).toBe(false);
+  expect(trays[0].setToolTip).toHaveBeenLastCalledWith('Yukon Union Telemetry\nExiting');
+  expect(trayMenuItem('Exit Yukon Union Telemetry').enabled).toBe(false); expect(trayMenuItem('Open Yukon Union Telemetry').enabled).toBe(false);
   // Exiting is final: tray and overlay close requests no longer reopen or keep anything.
   trays[0].emit('click'); expect(windows).toHaveLength(2);
   const overlayClose = {preventDefault: vi.fn()}; windows[1].emit('close', overlayClose); expect(overlayClose.preventDefault).not.toHaveBeenCalled();
@@ -1018,7 +1018,7 @@ it('recovers a post-readiness service failure report with a supervised restart a
   child.emit('exit', 1); expect(states().at(-1)).toMatchObject({service: 'restarting', lastError: 'STORAGE_FAILED'});
   await vi.advanceTimersByTimeAsync(250); children[1].emit('message', {type: 'ready'}); await settle();
   expect(states().at(-1)).toEqual({service: 'ready', storage: 'verified', recording: {state: 'unknown'}, lastError: 'STORAGE_FAILED'});
-  await vi.advanceTimersByTimeAsync(500); expect(trays[0].setToolTip).toHaveBeenLastCalledWith(expect.stringMatching(/^ETS2Telemetry\nService ready/));
+  await vi.advanceTimersByTimeAsync(500); expect(trays[0].setToolTip).toHaveBeenLastCalledWith(expect.stringMatching(/^Yukon Union Telemetry\nService ready/));
   expect(app.exit).not.toHaveBeenCalled(); expect(windows).toHaveLength(2);
 });
 it('keeps a pre-readiness service failure report fatal', async () => {
@@ -1035,9 +1035,9 @@ it('shows restart exhaustion in health and the tray and stays running until an e
   }
   expect(handlers.get('app:get-state')!(trusted())).toEqual({health: {service: 'failed', storage: 'pending', recording: {state: 'unknown'}, lastError: 'SERVICE_RESTART_EXHAUSTED'}, settings: {autostart: false, units: {ets2: 'metric', ats: 'us-customary'}, overlay: DEFAULT_OVERLAY, state: 'defaults', writable: true, saveError: null}, overlayEdit: DRIVING, plugins: PLUGINS_DISABLED, autostart: 'not-installed'});
   await vi.advanceTimersByTimeAsync(500);
-  expect(trays[0].setImage).toHaveBeenCalled(); expect(trays[0].setToolTip).toHaveBeenLastCalledWith('ETS2Telemetry\nService failed');
+  expect(trays[0].setImage).toHaveBeenCalled(); expect(trays[0].setToolTip).toHaveBeenLastCalledWith('Yukon Union Telemetry\nService failed');
   expect(app.exit).not.toHaveBeenCalled();
-  trayMenuItem('Exit ETS2Telemetry').click!(); await settle(); expect(app.exit).toHaveBeenCalledOnce(); expect(trays[0].destroy).toHaveBeenCalledOnce();
+  trayMenuItem('Exit Yukon Union Telemetry').click!(); await settle(); expect(app.exit).toHaveBeenCalledOnce(); expect(trays[0].destroy).toHaveBeenCalledOnce();
 });
 it('registers no diagnostic lifecycle events outside the isolated live smoke configuration', async () => {
   trayAvailable = true; await ready();
@@ -1117,8 +1117,8 @@ it.each(['overlay-restart-exhausted', 'service-recovery-timeout'] as const)('mar
   app.emit('second-instance', {}, [], 'C:\\isolated'); trays[0].emit('click');
   expect(windows).toHaveLength(count); expect(log).toHaveBeenCalledWith('SECOND_INSTANCE', undefined, {action: 'ignored-exiting'});
   const overlayClose = {preventDefault: vi.fn()}; windows[1].emit('close', overlayClose); expect(overlayClose.preventDefault).not.toHaveBeenCalled();
-  expect(trayMenuItem('Open ETS2Telemetry').enabled).toBe(false); expect(trayMenuItem('Exit ETS2Telemetry').enabled).toBe(false);
-  expect(trays[0].setToolTip).toHaveBeenLastCalledWith('ETS2Telemetry\nExiting');
+  expect(trayMenuItem('Open Yukon Union Telemetry').enabled).toBe(false); expect(trayMenuItem('Exit Yukon Union Telemetry').enabled).toBe(false);
+  expect(trays[0].setToolTip).toHaveBeenLastCalledWith('Yukon Union Telemetry\nExiting');
   expect(log).not.toHaveBeenCalledWith('APP_EXIT_REQUESTED', undefined, expect.anything());
   child.emit('exit', trigger === 'overlay-restart-exhausted' ? 0 : 1); await settle();
   expect(app.exit).toHaveBeenCalledExactlyOnceWith(1);
@@ -2153,7 +2153,7 @@ it('accepts journal replies only from the current service and answers pending re
   const exiting = journalCall('journal:list-trips', trusted(), {});
   await settle();
   expect(journalSent(children[2])).toHaveLength(1);
-  trayMenuItem('Exit ETS2Telemetry').click!();
+  trayMenuItem('Exit Yukon Union Telemetry').click!();
   await expect(exiting).resolves.toEqual({ok: false, code: 'SERVICE_UNAVAILABLE'});
   await expect(journalCall('journal:list-trips', trusted(), {})).resolves.toEqual({ok: false, code: 'SERVICE_UNAVAILABLE'});
 });
@@ -2258,7 +2258,7 @@ it('answers a running export EXPORT_INTERRUPTED when the application exits, and 
   const reading = exportCall(trusted(), TRIP);
   await settle();
   expect(journalSent()).toHaveLength(1);
-  trayMenuItem('Exit ETS2Telemetry').click!();
+  trayMenuItem('Exit Yukon Union Telemetry').click!();
   await expect(reading).resolves.toEqual({ok: false, code: 'EXPORT_INTERRUPTED'});
   await expect(exportCall(trusted(), TRIP)).resolves.toEqual({ok: false, code: 'EXPORT_INTERRUPTED'});
   expect(showSaveDialog).not.toHaveBeenCalled();
@@ -2269,7 +2269,7 @@ it('ends an export whose dialog is open at the exit as interrupted, without a wr
   showSaveDialog.mockImplementationOnce(() => new Promise(resolve => { answer = resolve; }));
   const running = exportCall(trusted(), TRIP);
   await answerExportReads();
-  trayMenuItem('Exit ETS2Telemetry').click!();
+  trayMenuItem('Exit Yukon Union Telemetry').click!();
   answer({canceled: false, filePath: 'C:\\Users\\owner\\Documents\\trip.json'});
   await expect(running).resolves.toEqual({ok: false, code: 'EXPORT_INTERRUPTED'});
   expect(journalSent()).toHaveLength(2);
@@ -2623,7 +2623,7 @@ it('after started: the explicit exit with reason uninstall, the final log rows, 
   expect(log.finalize.mock.invocationCallOrder[0]).toBeLessThan(appUninstallFake.finishAfterExit.mock.invocationCallOrder[0]);
   expect(showMessageBox).toHaveBeenCalledOnce();
   const [options] = showMessageBox.mock.calls[0] as [{title: string; message: string; detail: string}];
-  expect(options.title).toBe('ETS2Telemetry was uninstalled');
+  expect(options.title).toBe('Yukon Union Telemetry was uninstalled');
   expect(options.detail).toContain('American Truck Simulator: the game is no longer installed in a recorded folder');
   expect(showMessageBox.mock.invocationCallOrder[0]).toBeLessThan(appUninstallFake.handOver.mock.invocationCallOrder[0]);
   expect(app.exit).toHaveBeenCalledExactlyOnceWith(0);

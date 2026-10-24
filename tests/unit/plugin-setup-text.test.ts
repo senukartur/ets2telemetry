@@ -97,7 +97,7 @@ describe('a game folder', () => {
     VERIFY_FAILED: 'The copied plugin did not match the bundled one; nothing was kept.',
     RUNNING_CHECK_FAILED: 'Running games could not be checked; it is tried again shortly.',
     REGISTRY_UNAVAILABLE: 'The plugin setup record could not be saved or is from a newer version.',
-    BUNDLE_UNAVAILABLE: 'The bundled plugin is missing or damaged; reinstall ETS2Telemetry.'
+    BUNDLE_UNAVAILABLE: 'The bundled plugin is missing or damaged; reinstall Yukon Union Telemetry.'
   };
   const MANUAL_COPY = 'To install it by hand: close the game, copy the plugin file into the game\'s plugins folder (Windows may ask for administrator rights), then press Retry.';
   // PR #111 delta review: an unrecognized file shows only "Move it away, then press Retry", never the copy hint beside it.
@@ -170,7 +170,7 @@ describe('call answers', () => {
     expect(pluginFolderChoiceText({outcome: 'chosen'})).toBe('Game folder saved; the plugin is being set up there.');
     expect(pluginFolderChoiceText({outcome: 'cancelled'})).toBe('No folder chosen; nothing changed.');
     const refusals = {
-      FOLDER_UNSUPPORTED_PATH: 'This folder cannot be used: choose a local game folder outside the ETS2Telemetry folders.',
+      FOLDER_UNSUPPORTED_PATH: 'This folder cannot be used: choose a local game folder outside the Yukon Union Telemetry folders.',
       FOLDER_NOT_GAME: 'This folder is not a game folder of this game.',
       FOLDER_WRONG_GAME: 'This folder holds the other game.',
       FOLDER_LINKED: 'The game\'s folders in this folder are linked elsewhere; it cannot be used.',
@@ -199,10 +199,10 @@ describe('the connection diagnosis and the diagnostics export', () => {
     // VERIFY_FAILED, DISK_FULL or REGISTRY_UNAVAILABLE (not polled), so the text fits both and points to the folder line.
     PLUGIN_OUTDATED: 'An older plugin is installed. If its folder line below says it waits for the game, TruckersMP or another program, it is updated once that closes; otherwise resolve the problem shown there, then press Retry.',
     PLUGIN_PENDING_GAME_CLOSE: 'The plugin is changed automatically once the game, TruckersMP or the program using the file is closed. Then start the game again.',
-    PLUGIN_BUNDLE_UNAVAILABLE: 'The bundled plugin is missing or damaged. Reinstall ETS2Telemetry.',
+    PLUGIN_BUNDLE_UNAVAILABLE: 'The bundled plugin is missing or damaged. Reinstall Yukon Union Telemetry.',
     PLUGIN_NOT_CHECKED: 'The plugin could not be checked in a game folder; see the folder line below.',
     PLUGIN_MISSING: 'The plugin is not installed in a game folder. Turn on "Manage the plugin for this game" or press Retry.',
-    TRANSPORT_FAILED: 'The game\'s plugin could not be connected, or it is incompatible, and the connection is not tried again by itself. After the plugin is fixed, choose another source and then the game again in Settings > Data, or exit ETS2Telemetry from the tray and start it again.',
+    TRANSPORT_FAILED: 'The game\'s plugin could not be connected, or it is incompatible, and the connection is not tried again by itself. After the plugin is fixed, choose another source and then the game again in Settings > Data, or exit Yukon Union Telemetry from the tray and start it again.',
     NO_RUNNING_SOURCE: 'The plugin is in place. Start the game to connect.'
   };
   it.each(Object.entries(DIAGNOSES))('describes %s', (code, line) => {
@@ -219,7 +219,7 @@ describe('the connection diagnosis and the diagnostics export', () => {
       'Another folder of this game could not be changed because Windows denied access; see its line below.',
       'Another folder of this game holds a file that this application did not install; see its line below.',
       'Another folder of this game is changed once the game, TruckersMP or the program using the file is closed.',
-      'The bundled plugin is missing or damaged, so another folder of this game was not set up. Reinstall ETS2Telemetry.',
+      'The bundled plugin is missing or damaged, so another folder of this game was not set up. Reinstall Yukon Union Telemetry.',
       'The plugin could not be checked in another folder of this game; see its line below.',
       'Another folder of this game does not hold the plugin; see its line below.']});
   });
@@ -227,8 +227,8 @@ describe('the connection diagnosis and the diagnostics export', () => {
     expect(diagnosticsExportText({outcome: 'saved'})).toBe('Diagnostics saved.');
     expect(diagnosticsExportText({outcome: 'cancelled'})).toBe('Export cancelled. Nothing was written.');
     expect(diagnosticsExportText({outcome: 'refused', code: 'EXPORT_IN_PROGRESS'})).toBe('Another diagnostics export is still running.');
-    expect(diagnosticsExportText({outcome: 'refused', code: 'EXPORT_INTERRUPTED'})).toBe('The export stopped because ETS2Telemetry is exiting. Nothing was written.');
-    expect(diagnosticsExportText({outcome: 'refused', code: 'EXPORT_TARGET_REFUSED'})).toBe('That location cannot be used. Choose a folder outside the ETS2Telemetry data folder.');
+    expect(diagnosticsExportText({outcome: 'refused', code: 'EXPORT_INTERRUPTED'})).toBe('The export stopped because Yukon Union Telemetry is exiting. Nothing was written.');
+    expect(diagnosticsExportText({outcome: 'refused', code: 'EXPORT_TARGET_REFUSED'})).toBe('That location cannot be used. Choose a folder outside the Yukon Union Telemetry data folder.');
     expect(diagnosticsExportText({outcome: 'failed', code: 'BUNDLE_FAILED'})).toBe('The diagnostics could not be collected. Nothing was written.');
     expect(diagnosticsExportText({outcome: 'failed', code: 'DIALOG_FAILED'})).toBe('The Save dialog could not be opened. Nothing was written.');
     expect(diagnosticsExportText({outcome: 'failed', code: 'EXPORT_WRITE_FAILED'})).toBe('The file could not be written. A file that already had this name is unchanged.');

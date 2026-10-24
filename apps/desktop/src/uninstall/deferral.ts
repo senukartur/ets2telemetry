@@ -20,25 +20,25 @@ export function deferralReadme(dataRoot: string, folders: readonly {game: string
   code: string | null, automatic = false): string {
   const hashes = [...new Set([...known, ...folders.flatMap(folder => folder.hashes)])].sort();
   const lines = [
-    'ETS2Telemetry was uninstalled, but its cleanup could not finish.',
+    'Yukon Union Telemetry was uninstalled, but its cleanup could not finish.',
     `Reason: ${code ?? 'unknown'}`,
     ''
   ];
   if (automatic) {
-    lines.push(`ETS2Telemetry finishes this cleanup by itself at your next Windows sign-in, once the games are closed (at most ${MAX_ATTEMPTS} attempts).`,
+    lines.push(`Yukon Union Telemetry finishes this cleanup by itself at your next Windows sign-in, once the games are closed (at most ${MAX_ATTEMPTS} attempts).`,
       'You only need the steps below if that does not happen.', '');
   }
   lines.push('Close Euro Truck Simulator 2, American Truck Simulator and TruckersMP first.', '');
   if (folders.length) {
-    lines.push('Remove the ETS2Telemetry plugin from these game folders, but only when the file\'s SHA-256 is one of the hashes below:');
+    lines.push('Remove the Yukon Union Telemetry plugin from these game folders, but only when the file\'s SHA-256 is one of the hashes below:');
     for (const folder of folders) lines.push(`  ${folder.game}: ${pluginTargetOf(folder.root)}`);
     lines.push('', 'Check a file with: Get-FileHash -Algorithm SHA256 "<file>"', '', 'Hashes of this application\'s plugin:');
     for (const hash of hashes) lines.push(`  ${hash}`);
     lines.push('');
   }
   lines.push(`Then delete the folders "plugins" and "uninstall" in ${dataRoot}.`,
-    'If that folder holds anything else, it is not a file ETS2Telemetry knows: check it first, and delete the folder only when nothing you need is left.',
-    '', 'Reinstalling ETS2Telemetry instead cancels this cleanup and keeps the plugin in use.', '');
+    'If that folder holds anything else, it is not a file Yukon Union Telemetry knows: check it first, and delete the folder only when nothing you need is left.',
+    '', 'Reinstalling Yukon Union Telemetry instead cancels this cleanup and keeps the plugin in use.', '');
   return lines.join('\r\n');
 }
 

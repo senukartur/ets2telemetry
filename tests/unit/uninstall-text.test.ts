@@ -43,7 +43,7 @@ describe('answers', () => {
   });
   it('an interrupted removal does not claim that nothing changed: plugins removed, data kept, the plugin put back', () => {
     const text = appUninstallResultText({outcome: 'interrupted', code: 'GAME_RUNNING', removed: 2, blocked: [{targetId: 'ets2:steam:0', reason: 'GAME_RUNNING'}]});
-    expect(text.line).toContain('ETS2Telemetry was not uninstalled: the game is running.');
+    expect(text.line).toContain('Yukon Union Telemetry was not uninstalled: the game is running.');
     expect(text.line).not.toContain('nothing was changed');
     expect(text.line).toContain('removed its game plugin from some game folders (plugin files removed: 2)');
     expect(text.line).toContain('Your data was kept.');
@@ -116,7 +116,7 @@ describe('the result dialog', () => {
     const text = handoverFailedText({data, notes: [], removed: 1, unrecognized: 0});
     expect(text).toBe(UNINSTALL_STRINGS.spawnFailedPartial);
     expect(text).toContain('some of its local data remains');
-    expect(text).toContain('Uninstall ETS2Telemetry from Windows Settings, Apps');
+    expect(text).toContain('Uninstall Yukon Union Telemetry from Windows Settings, Apps');
     expect(text).not.toContain('removed its plugin and data');
   });
   it('a complete wipe says so', () => {
@@ -131,6 +131,6 @@ it('localizes renderer uninstall results while keeping game identity and exact t
   expect(appUninstallResultText({outcome: 'cancelled'}, 'ru')).toEqual({line: 'Удаление отменено. Ничего не изменено.', folders: []});
   expect(uninstallTargetText('ats:steam:1', 'ru')).toBe('American Truck Simulator (папка Steam 2)');
   expect(appUninstallResultText({outcome: 'blocked', code: 'GAME_RUNNING', blocked: [{targetId: 'ets2:steam:0', reason: 'GAME_RUNNING'}]}, 'ru')).toEqual({
-    line: 'ETS2Telemetry не удалена, ничего не изменено: игра запущена. Закройте её и повторите.',
+    line: 'Yukon Union Telemetry не удалена, ничего не изменено: игра запущена. Закройте её и повторите.',
     folders: ['Euro Truck Simulator 2 (папка Steam 1): игра запущена. Закройте её и повторите.']});
 });

@@ -447,7 +447,7 @@ export async function runJournalExport({application, dashboard, config, record})
   const dataFolder = path.join(config.localappdata, 'ETS2Telemetry', 'synthetic');
   const before = (await readdir(dataFolder)).sort();
   await stubSaveDialog(application, {canceled: false, filePath: path.join(config.localappdata.toUpperCase(), 'ETS2TELEMETRY', 'SYNTHETIC', 'trip.json')});
-  const refused = await exportTrip(dashboard, T.delivered, 'That location cannot be used. Choose a folder outside the ETS2Telemetry data folder.');
+  const refused = await exportTrip(dashboard, T.delivered, 'That location cannot be used. Choose a folder outside the Yukon Union Telemetry data folder.');
   assert.equal(refused.failed, 'true');
   record.exportFolder = (await readdir(folder)).sort();
   record.dataFolderUnchanged = JSON.stringify((await readdir(dataFolder)).sort()) === JSON.stringify(before);

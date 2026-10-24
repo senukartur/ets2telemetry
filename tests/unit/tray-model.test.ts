@@ -16,13 +16,13 @@ it('builds the status, recording, open and exit menu and disables actions while 
     {kind: 'status', label: 'Service: ready · Storage self-test: verified'},
     {kind: 'status', label: 'Recording: off in this version'},
     {kind: 'separator'},
-    {kind: 'open', label: 'Open ETS2Telemetry', enabled: true},
+    {kind: 'open', label: 'Open Yukon Union Telemetry', enabled: true},
     {kind: 'separator'},
-    {kind: 'exit', label: 'Exit ETS2Telemetry', enabled: true}
+    {kind: 'exit', label: 'Exit Yukon Union Telemetry', enabled: true}
   ]);
   const exiting = trayModel({...ready, exiting: true});
   expect(exiting.menu.filter(item => item.kind === 'open' || item.kind === 'exit').every(item => 'enabled' in item && !item.enabled)).toBe(true);
-  expect(exiting.tooltip).toBe('ETS2Telemetry\nExiting');
+  expect(exiting.tooltip).toBe('Yukon Union Telemetry\nExiting');
 });
 
 it('builds localized Russian menu and tooltip when language is ru', () => {
@@ -31,19 +31,19 @@ it('builds localized Russian menu and tooltip when language is ru', () => {
     {kind: 'status', label: 'Служба: готово · Проверка хранилища: проверено'},
     {kind: 'status', label: 'Запись: отключено в этой версии'},
     {kind: 'separator'},
-    {kind: 'open', label: 'Открыть ETS2Telemetry', enabled: true},
+    {kind: 'open', label: 'Открыть Yukon Union Telemetry', enabled: true},
     {kind: 'separator'},
     {kind: 'exit', label: 'Выход', enabled: true}
   ]);
-  expect(trayModel(ruReady).tooltip).toBe('ETS2Telemetry\nСлужба готово · Источник: ETS2 (connected)');
+  expect(trayModel(ruReady).tooltip).toBe('Yukon Union Telemetry\nСлужба готово · Источник: ETS2 (connected)');
   const exiting = trayModel({...ruReady, exiting: true});
-  expect(exiting.tooltip).toBe('ETS2Telemetry\nЗавершение работы');
+  expect(exiting.tooltip).toBe('Yukon Union Telemetry\nЗавершение работы');
 });
 
 it('keeps tooltips within the notification-area limit and free of readings or paths', () => {
-  expect(trayModel({...ready, health: health('starting', 'pending')}).tooltip).toBe('ETS2Telemetry\nStarting');
-  expect(trayModel(ready).tooltip).toBe('ETS2Telemetry\nService ready · Source: ETS2 (connected)');
-  expect(trayModel({...ready, health: health('restarting', 'pending')}).tooltip).toBe('ETS2Telemetry\nService restarting');
+  expect(trayModel({...ready, health: health('starting', 'pending')}).tooltip).toBe('Yukon Union Telemetry\nStarting');
+  expect(trayModel(ready).tooltip).toBe('Yukon Union Telemetry\nService ready · Source: ETS2 (connected)');
+  expect(trayModel({...ready, health: health('restarting', 'pending')}).tooltip).toBe('Yukon Union Telemetry\nService restarting');
   for (const service of ['starting', 'ready', 'restarting', 'failed', 'stopping'] as const) for (const selection of ['game', 'ets2', 'ats', 'synthetic', 'replay'] as const)
     for (const status of ['waiting', 'connected', 'service-failed', 'incompatible'] as const) for (const exiting of [false, true])
       expect(trayModel({health: health(service), exiting, source: {selection, status}}).tooltip.length).toBeLessThanOrEqual(TRAY_TOOLTIP_LIMIT);
@@ -63,7 +63,7 @@ it('shows the recording status as the second status line', () => {
     .toEqual({kind: 'status', label: 'Recording: not this game session · replay test database'});
   // The line stays while exiting; only the actions are disabled. The tooltip never carries it.
   expect(recordingLine({...withRecording({state: 'unknown'}), exiting: true})).toEqual({kind: 'status', label: 'Recording: not known'});
-  expect(trayModel(withRecording({state: 'unknown'})).tooltip).toBe('ETS2Telemetry\nService ready · Source: ETS2 (connected)');
+  expect(trayModel(withRecording({state: 'unknown'})).tooltip).toBe('Yukon Union Telemetry\nService ready · Source: ETS2 (connected)');
 });
 it('keeps every recording line within the notification-area limit', () => {
   const states: RecordingState[] = ['opening', 'waiting', 'recording', 'paused', 'interrupted', 'retrying', 'not-recorded-source', 'live-only', 'stopped'];
@@ -102,13 +102,13 @@ it('applies only changed parts at most twice per second, ending with the latest 
   }
   presenter.update({...ready, source: {selection: 'ets2', status: 'stale'}}); await vi.advanceTimersByTimeAsync(500);
   expect(view.setToolTip.mock.calls.length).toBeLessThanOrEqual(1 + 3);
-  expect(view.setToolTip).toHaveBeenLastCalledWith('ETS2Telemetry\nService ready · Source: ETS2 (stale)');
+  expect(view.setToolTip).toHaveBeenLastCalledWith('Yukon Union Telemetry\nService ready · Source: ETS2 (stale)');
   // Source status changes alter neither the menu nor the icon.
   expect(view.setMenu).toHaveBeenCalledOnce(); expect(view.setTone).toHaveBeenCalledOnce();
   presenter.update({...ready, health: health('failed', 'pending')}); presenter.update({...ready, exiting: true}, true);
-  expect(view.setToolTip).toHaveBeenLastCalledWith('ETS2Telemetry\nExiting'); expect(view.setTone).toHaveBeenLastCalledWith('busy');
+  expect(view.setToolTip).toHaveBeenLastCalledWith('Yukon Union Telemetry\nExiting'); expect(view.setTone).toHaveBeenLastCalledWith('busy');
   presenter.dispose(); presenter.update(ready); await vi.advanceTimersByTimeAsync(1000);
-  expect(view.setToolTip).toHaveBeenLastCalledWith('ETS2Telemetry\nExiting'); expect(vi.getTimerCount()).toBe(0);
+  expect(view.setToolTip).toHaveBeenLastCalledWith('Yukon Union Telemetry\nExiting'); expect(vi.getTimerCount()).toBe(0);
 });
 
 function chunks(png: Buffer) {
