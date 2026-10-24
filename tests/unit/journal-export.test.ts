@@ -203,7 +203,7 @@ describe('the result text (J16, J18)', () => {
     [{ok: true, value: {outcome: 'saved', events: 105, intervals: 104, samples: 3600}},
       {text: 'Saved the trip as JSON: 105 events, 104 completeness intervals and 3600 one-second samples.', failed: false}],
     [{ok: true, value: {outcome: 'cancelled'}}, {text: 'Export cancelled. Nothing was written.', failed: false}],
-    [{ok: false, code: 'EXPORT_TARGET_REFUSED'}, {text: 'That location cannot be used. Choose a folder outside the Yukon Union Telemetry data folder.', failed: true}],
+    [{ok: false, code: 'EXPORT_TARGET_REFUSED'}, {text: 'That location cannot be used. Choose a folder outside the Yukon Union Telemetry data folder, %LOCALAPPDATA%\\ETS2Telemetry.', failed: true}],
     [{ok: false, code: 'EXPORT_WRITE_FAILED'}, {text: 'The file could not be written. A file that already had this name is unchanged.', failed: true}],
     [{ok: false, code: 'EXPORT_IN_PROGRESS'}, {text: 'Another export is still running. Try again when it has finished.', failed: true}],
     [{ok: false, code: 'EXPORT_INTERRUPTED'}, {text: 'The export stopped because Yukon Union Telemetry is exiting. Nothing was written.', failed: true}],

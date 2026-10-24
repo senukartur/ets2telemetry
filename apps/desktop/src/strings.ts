@@ -755,7 +755,7 @@ export const JOURNAL_EXPORT_STRINGS = Object.freeze({
 });
 /** The export's own refusal codes as fixed text; the journal codes use JOURNAL_ERROR_TEXT. */
 export const JOURNAL_EXPORT_ERROR_TEXT: Readonly<Record<JournalExportCode, string>> = Object.freeze({
-  EXPORT_TARGET_REFUSED: 'That location cannot be used. Choose a folder outside the Yukon Union Telemetry data folder.',
+  EXPORT_TARGET_REFUSED: 'That location cannot be used. Choose a folder outside the Yukon Union Telemetry data folder, %LOCALAPPDATA%\\ETS2Telemetry.',
   EXPORT_WRITE_FAILED: 'The file could not be written. A file that already had this name is unchanged.',
   EXPORT_IN_PROGRESS: 'Another export is still running. Try again when it has finished.',
   EXPORT_INTERRUPTED: 'The export stopped because Yukon Union Telemetry is exiting. Nothing was written.'
@@ -927,7 +927,7 @@ export const PLUGIN_REASON_TEXT: Readonly<Record<PluginBlockReason, string>> = O
   BUNDLE_UNAVAILABLE: 'The bundled plugin is missing or damaged; reinstall Yukon Union Telemetry.'
 });
 export const PLUGIN_FOLDER_REFUSAL_TEXT: Readonly<Record<PluginFolderRefusal, string>> = Object.freeze({
-  FOLDER_UNSUPPORTED_PATH: 'This folder cannot be used: choose a local game folder outside the Yukon Union Telemetry folders.',
+  FOLDER_UNSUPPORTED_PATH: 'This folder cannot be used: choose a local game folder outside the Yukon Union Telemetry folders: %LOCALAPPDATA%\\ETS2Telemetry and the program folder.',
   FOLDER_NOT_GAME: 'This folder is not a game folder of this game.',
   FOLDER_WRONG_GAME: 'This folder holds the other game.',
   FOLDER_LINKED: 'The game\'s folders in this folder are linked elsewhere; it cannot be used.',
@@ -973,7 +973,7 @@ export const DIAGNOSTICS_EXPORT_STRINGS = Object.freeze({
 export const DIAGNOSTICS_EXPORT_ERROR_TEXT: Readonly<Record<DiagnosticsExportRefusal | DiagnosticsExportFailure, string>> = Object.freeze({
   EXPORT_IN_PROGRESS: 'Another diagnostics export is still running.',
   EXPORT_INTERRUPTED: 'The export stopped because Yukon Union Telemetry is exiting. Nothing was written.',
-  EXPORT_TARGET_REFUSED: 'That location cannot be used. Choose a folder outside the Yukon Union Telemetry data folder.',
+  EXPORT_TARGET_REFUSED: 'That location cannot be used. Choose a folder outside the Yukon Union Telemetry data folder, %LOCALAPPDATA%\\ETS2Telemetry.',
   BUNDLE_FAILED: 'The diagnostics could not be collected. Nothing was written.',
   DIALOG_FAILED: 'The Save dialog could not be opened. Nothing was written.',
   EXPORT_WRITE_FAILED: 'The file could not be written. A file that already had this name is unchanged.'

@@ -1,4 +1,4 @@
-import {readFileSync} from 'node:fs';
+import {readdirSync, readFileSync} from 'node:fs';
 import path from 'node:path';
 import {pathToFileURL} from 'node:url';
 import {describe, expect, it} from 'vitest';
@@ -109,6 +109,47 @@ describe('the user-facing product name', () => {
     expect(SHORTCUT_NAME).toBe(forge.packagerConfig.win32metadata.ProductName);
     expect(SHORTCUT_COMPANY).toBe(forge.packagerConfig.win32metadata.CompanyName);
     for (const text of [squirrel.title, squirrel.authors, squirrel.setupExe, ...Object.values(forge.packagerConfig.win32metadata)]) expect(text).not.toMatch(OLD_NAME);
+  });
+});
+
+// Fix round 1: the packaged journal smoke still expected the old export note (scripts/ci/journal-observation.mjs). Every
+// smoke driver, receipt check and unit test is scanned for the old form of a product-naming UI text: the current text
+// with "Yukon Union Telemetry" put back to "ETS2Telemetry", split at its {placeholders}, each fragment of at least 20
+// characters, both as written at runtime and as written in a source literal (a backslash doubled).
+describe('test and smoke expectations of the UI copy', () => {
+  const NAME = 'Yukon Union Telemetry';
+  const oldFragments = () => {
+    const texts = [...Object.values(EN_DICTIONARY), ...Object.values(RU_DICTIONARY),
+      ...Object.values(STRINGS_MODULE).filter(table => typeof table === 'object').flatMap(strings)];
+    const fragments = new Set<string>();
+    for (const text of texts) {
+      if (!text.includes(NAME)) continue;
+      for (const part of text.replaceAll(NAME, 'ETS2Telemetry').split(/\{\w+\}/)) {
+        if (part.includes('ETS2Telemetry') && part.trim().length >= 20) fragments.add(part.trim());
+      }
+    }
+    return [...fragments];
+  };
+  const sourceFiles = () => {
+    const folders: [string, RegExp][] = [['scripts/ci', /\.(mjs|cjs|ps1|psm1)$/], ['scripts/installer', /\.(mjs|ps1)$/], ['tests/unit', /\.ts$/], ['tests/windows', /\.(ps1|mjs)$/]];
+    return folders.flatMap(([folder, pattern]) => readdirSync(path.join(checkout, folder)).filter(name => pattern.test(name)).map(name => `${folder}/${name}`))
+      .filter(file => file !== 'tests/unit/product-name.test.ts');
+  };
+
+  it('collects the old forms of the renamed texts', () => {
+    const fragments = oldFragments();
+    expect(fragments).toContain('Uninstalling ETS2Telemetry removes its local trip history and settings. The JSON export is a copy for your own records; it cannot be imported back.');
+    expect(fragments).toContain('Gaps recorded since ETS2Telemetry started');
+    expect(sourceFiles()).toContain('scripts/ci/journal-observation.mjs');
+  });
+
+  it('finds no old-name UI text in any smoke expectation or unit test', () => {
+    const fragments = oldFragments();
+    const offending = sourceFiles().flatMap(file => {
+      const text = read(file);
+      return fragments.filter(fragment => text.includes(fragment) || text.includes(fragment.replaceAll('\\', '\\\\'))).map(fragment => `${file}: ${fragment}`);
+    });
+    expect(offending).toEqual([]);
   });
 });
 

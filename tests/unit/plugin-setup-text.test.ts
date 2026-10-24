@@ -170,7 +170,7 @@ describe('call answers', () => {
     expect(pluginFolderChoiceText({outcome: 'chosen'})).toBe('Game folder saved; the plugin is being set up there.');
     expect(pluginFolderChoiceText({outcome: 'cancelled'})).toBe('No folder chosen; nothing changed.');
     const refusals = {
-      FOLDER_UNSUPPORTED_PATH: 'This folder cannot be used: choose a local game folder outside the Yukon Union Telemetry folders.',
+      FOLDER_UNSUPPORTED_PATH: 'This folder cannot be used: choose a local game folder outside the Yukon Union Telemetry folders: %LOCALAPPDATA%\\ETS2Telemetry and the program folder.',
       FOLDER_NOT_GAME: 'This folder is not a game folder of this game.',
       FOLDER_WRONG_GAME: 'This folder holds the other game.',
       FOLDER_LINKED: 'The game\'s folders in this folder are linked elsewhere; it cannot be used.',
@@ -228,7 +228,7 @@ describe('the connection diagnosis and the diagnostics export', () => {
     expect(diagnosticsExportText({outcome: 'cancelled'})).toBe('Export cancelled. Nothing was written.');
     expect(diagnosticsExportText({outcome: 'refused', code: 'EXPORT_IN_PROGRESS'})).toBe('Another diagnostics export is still running.');
     expect(diagnosticsExportText({outcome: 'refused', code: 'EXPORT_INTERRUPTED'})).toBe('The export stopped because Yukon Union Telemetry is exiting. Nothing was written.');
-    expect(diagnosticsExportText({outcome: 'refused', code: 'EXPORT_TARGET_REFUSED'})).toBe('That location cannot be used. Choose a folder outside the Yukon Union Telemetry data folder.');
+    expect(diagnosticsExportText({outcome: 'refused', code: 'EXPORT_TARGET_REFUSED'})).toBe('That location cannot be used. Choose a folder outside the Yukon Union Telemetry data folder, %LOCALAPPDATA%\\ETS2Telemetry.');
     expect(diagnosticsExportText({outcome: 'failed', code: 'BUNDLE_FAILED'})).toBe('The diagnostics could not be collected. Nothing was written.');
     expect(diagnosticsExportText({outcome: 'failed', code: 'DIALOG_FAILED'})).toBe('The Save dialog could not be opened. Nothing was written.');
     expect(diagnosticsExportText({outcome: 'failed', code: 'EXPORT_WRITE_FAILED'})).toBe('The file could not be written. A file that already had this name is unchanged.');
