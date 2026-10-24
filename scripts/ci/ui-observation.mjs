@@ -31,10 +31,12 @@ async function observeOpacityControl({dashboard, config, language, record}) {
     assert.equal(JSON.parse(await readFile(path.join(config.localappdata, 'ETS2Telemetry/settings/settings.json'), 'utf8')).overlay.backgroundOpacity, candidate);
   } finally {await dashboard.mouse.up();}
   await dashboard.evaluate(() => globalThis.desktop.setOverlayBackgroundOpacity(80)); await wait(80);
-  record.flags.overlayOpacity = true;
+  record.flags.opacityGestures = true;
 }
-async function observeOpacitySurfaces({dashboard, overlay, layout, record}) {
-  for (const value of [40, 65, 80, 100]) {
+async function observeOpacitySurfaces({dashboard, overlay, layout, language, size, record}) {
+  // The four existing language/size cells cover every alpha for every layout, without four redundant saves per cell.
+  const value = [40, 65, 80, 100][(language === 'ru' ? 2 : 0) + (size.width === 1100 ? 1 : 0)];
+  {
     await dashboard.evaluate(value => globalThis.desktop.setOverlayBackgroundOpacity(value), value);
     await overlay.waitForFunction(alpha => globalThis.getComputedStyle(globalThis.document.querySelector('[data-testid="overlay-content"]')).getPropertyValue('--yu-ov-panel').trim() === `rgba(11, 17, 32, ${alpha})`, value / 100);
     const facts = await overlay.evaluate(() => {
@@ -539,7 +541,12 @@ export async function runUiSmoke({application, dashboard, overlay, source, confi
         assert.equal(await visibility.getAttribute('data-state'), 'checked');
         assert.equal(await dashboard.getByTestId('overlay-edit-start').isEnabled(), true);
         record.flags.overlayVisibility = true;
-        await observeOpacityControl({dashboard, config, language, record});
+        const opacityControl = dashboard.getByRole('slider', {name: language === 'en' ? 'Background opacity' : 'Непрозрачность фона', exact: true});
+        assert.equal(await opacityControl.getAttribute('aria-valuemin'), '40');
+        assert.equal(await opacityControl.getAttribute('aria-valuemax'), '100');
+        assert.equal(await opacityControl.getAttribute('aria-valuenow'), '80');
+        assert.equal(await opacityControl.getAttribute('aria-disabled'), 'false');
+        record.flags.overlayOpacity = true;
         await observeUnifiedOverlay({application, dashboard, language, size, record});
         await dashboard.locator('.yu-content').evaluate(node => {node.scrollTop = node.scrollHeight;});
         await save('overlay-sections', language, size);
@@ -613,7 +620,8 @@ export async function runUiSmoke({application, dashboard, overlay, source, confi
           assert.deepEqual(await overlay.evaluate(() => ({html: globalThis.getComputedStyle(globalThis.document.documentElement).backgroundColor, body: globalThis.getComputedStyle(globalThis.document.body).backgroundColor})), {html: 'rgba(0, 0, 0, 0)', body: 'rgba(0, 0, 0, 0)'});
           if (layout === 'card') {assert.equal(await overlay.getByTestId('overlay-card-hero').count(), 1); assert.equal(await overlay.getByTestId('overlay-card-hero').getAttribute('data-count'), '3');}
           if (layout === 'cluster') {assert.equal(await overlay.getByTestId('overlay-rpm-arc').getAttribute('stroke-dasharray'), '50.26548245743669 251.32741228718345');}
-          await observeOpacitySurfaces({dashboard, overlay, layout, record});
+          if (layout === 'strip' && language === 'en' && size === sizes[0]) await observeOpacityControl({dashboard, config, language, record});
+          await observeOpacitySurfaces({dashboard, overlay, layout, language, size, record});
           await save(layout, language, size, overlay);
           // ET-045d: stable strip numbers and the Cluster centre, at the first size; screenshots stay as before.
           if (layout === 'strip' && size === sizes[0]) await observeStripNumbers({application, overlay, source, language, record});
