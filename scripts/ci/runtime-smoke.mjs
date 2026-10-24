@@ -17,7 +17,7 @@ import {
   waitForCompleteLive, waitForCurrentTelemetry, waitForNotCurrentLive, waitForOverlayV1, waitForRecordingText, waitForV1NotCurrentLive
 } from './renderer-observation.mjs';
 import {
-  captureHiddenOverlay, LAYOUT_SMOKE_RESERVED_CSS, LAYOUT_SMOKE_WINDOWS, LAYOUT_SMOKE_ZOOM, rendererPages, runOverlaySmoke, verifyLayoutContainment, verifyStripLayout, waitForLayoutContainment, waitForStripLayout, windowSecurity,
+  captureHiddenOverlay, LAYOUT_SMOKE_RESERVED_CSS, LAYOUT_SMOKE_WINDOWS, LAYOUT_SMOKE_ZOOM, rendererPages, verifyAppliedWindow, zoomedViewportTolerance, runOverlaySmoke, verifyLayoutContainment, verifyStripLayout, waitForLayoutContainment, waitForStripLayout, windowSecurity,
   verifyRendererStyles
 } from './overlay-observation.mjs';
 import {runLifecycleSmoke, seedLifecycleSettings, until, verifyLifecycleRestart} from './lifecycle-observation.mjs';
@@ -242,24 +242,25 @@ try {
       if (!target) return null;
       target.webContents.setZoomFactor(size.zoom);
       target.setBounds({...target.getBounds(), width: size.width, height: size.height});
-      return {...target.getBounds(), zoom: Math.round(target.webContents.getZoomFactor() * 1e6) / 1e6};
+      return {...target.getBounds(), content: target.getContentBounds(), zoom: Math.round(target.webContents.getZoomFactor() * 1e6) / 1e6};
     }, {width, height, zoom});
     const overlayWindow = () => application.evaluate(({BrowserWindow}) => {
       const target = BrowserWindow.getAllWindows().find(candidate => candidate.webContents.getURL().includes('view=overlay'));
-      return target ? {...target.getBounds(), zoom: Math.round(target.webContents.getZoomFactor() * 1e6) / 1e6} : null;
+      return target ? {...target.getBounds(), content: target.getContentBounds(), zoom: Math.round(target.webContents.getZoomFactor() * 1e6) / 1e6} : null;
     });
     const overlayState = () => overlay.evaluate(() => ({layout: globalThis.document.querySelector('[data-testid="overlay-root"]')?.getAttribute('data-layout') ?? null,
       width: globalThis.innerWidth, height: globalThis.innerHeight, sections: globalThis.document.querySelectorAll('[data-testid^="overlay-section-"]').length}));
     // A short bound for the review-only layouts keeps missed waits well inside the Job's 60 s limit; the strip
     // restore keeps the usual 10 s. `sections` is null when the count could not be read, and is then not compared.
-    // `height`, when given, is compared the same way as the width.
-    const renderedLayout = async (layout, width, sections, timeout, height = null) => {
+    // `height`, when given, is compared the same way as the width. `tolerance` is in CSS px: 1 for a viewport read back
+    // at the same size, zoomedViewportTolerance(zoom) for one computed from a window's DIP readback at a zoom.
+    const renderedLayout = async (layout, width, sections, timeout, height = null, tolerance = 1) => {
       const handle = await overlay.waitForFunction(expected => {
         const root = globalThis.document.querySelector('[data-testid="overlay-root"]');
-        return root?.getAttribute('data-layout') === expected.layout && Math.abs(globalThis.innerWidth - expected.width) <= 1 &&
-          (expected.height === null || Math.abs(globalThis.innerHeight - expected.height) <= 1) &&
+        return root?.getAttribute('data-layout') === expected.layout && Math.abs(globalThis.innerWidth - expected.width) <= expected.tolerance &&
+          (expected.height === null || Math.abs(globalThis.innerHeight - expected.height) <= expected.tolerance) &&
           (expected.sections === null || globalThis.document.querySelectorAll('[data-testid^="overlay-section-"]').length === expected.sections);
-      }, {layout, width, height, sections}, {timeout});
+      }, {layout, width, height, sections, tolerance}, {timeout});
       await handle.dispose();
     };
     // ET-012d (decisions K10 and K11): the card, HUD and cluster with every v1 section the pair shows. The saved sections
@@ -284,10 +285,14 @@ try {
           const size = LAYOUT_SMOKE_WINDOWS[layout];
           const saved = await window.evaluate(value => globalThis.desktop.setOverlayLayout(value), layout);
           assert.equal(saved.overlay.layout, layout);
-          (record.windows ??= {})[layout] = await resizeOverlay(size.width, size.height, LAYOUT_SMOKE_ZOOM);
-          // The document's CSS viewport is the window's DIP size divided by the zoom factor.
-          await renderedLayout(layout, size.width / LAYOUT_SMOKE_ZOOM, null, 10000, size.height / LAYOUT_SMOKE_ZOOM);
-          verifyLayoutContainment(record[layout] = await waitForLayoutContainment(overlay, {layout, sections: SYNTHETIC_V1_STRIP_SECTIONS}), size,
+          const resized = (record.windows ??= {})[layout] = await resizeOverlay(size.width, size.height, LAYOUT_SMOKE_ZOOM);
+          // Fail closed when Windows did not apply the requested size within its rounding, then expect the document's
+          // CSS viewport from the actual content size: DIP / zoom within one DIP of readback rounding and one CSS px
+          // (ET-045e verifier round 1: 159 DIP read back as 160 at 150%).
+          const actual = verifyAppliedWindow(size, resized?.content && {width: resized.content.width, height: resized.content.height});
+          const tolerance = zoomedViewportTolerance(LAYOUT_SMOKE_ZOOM);
+          await renderedLayout(layout, actual.width / LAYOUT_SMOKE_ZOOM, null, 10000, actual.height / LAYOUT_SMOKE_ZOOM, tolerance);
+          verifyLayoutContainment(record[layout] = await waitForLayoutContainment(overlay, {layout, sections: SYNTHETIC_V1_STRIP_SECTIONS}), actual,
             LAYOUT_SMOKE_RESERVED_CSS[layout], LAYOUT_SMOKE_ZOOM);
         }
       } catch (error) {failed = error;}
@@ -295,7 +300,10 @@ try {
         await window.evaluate(() => globalThis.desktop.setOverlayLayout('strip'));
         if (original) assert.deepEqual((await window.evaluate(value => globalThis.desktop.setOverlaySections(value), original)).overlay.sections, original);
         if (product && base) {
-          await resizeOverlay(product.width, product.height, product.zoom); await renderedLayout('strip', base.width, sections, 10000, base.height);
+          // The content size, not getBounds, which can read one DIP larger at a fractional display scale (verifier round 1:
+          // a restore to the 1281 DIP bounds asked for a 1830 CSS px viewport instead of the recorded 1828).
+          await resizeOverlay(product.content.width, product.content.height, product.zoom);
+          await renderedLayout('strip', base.width, sections, 10000, base.height, product.zoom === 1 ? 1 : zoomedViewportTolerance(product.zoom));
         }
         record.restored = 'strip';
       } catch (error) {failed ??= error;}
@@ -313,18 +321,22 @@ try {
         base = await overlay.evaluate(() => ({width: globalThis.innerWidth, height: globalThis.innerHeight})); record.base = base;
         sections = await overlay.evaluate(() => globalThis.document.querySelectorAll('[data-testid^="overlay-section-"]').length);
         for (const [layout, givenWidth, givenHeight, zoom = product.zoom] of layouts) {
-          const width = givenWidth ?? Math.round(product.width * zoom / product.zoom), height = givenHeight ?? Math.round(product.height * zoom / product.zoom);
+          const width = givenWidth ?? Math.round(product.content.width * zoom / product.zoom), height = givenHeight ?? Math.round(product.content.height * zoom / product.zoom);
           const key = zoom === product.zoom ? layout : `${layout}@${zoom}`;
           const saved = await window.evaluate(value => globalThis.desktop.setOverlayLayout(value), layout);
           record[key] = {saved: saved.overlay.layout, resized: await resizeOverlay(width, height, zoom)};
-          // The document's CSS width is the window's DIP width divided by the zoom factor.
-          await renderedLayout(layout, width / zoom, sections, 3000);
+          // The document's CSS width is the requested DIP width divided by the zoom factor, within one DIP of rounding at a
+          // fractional display scale; a window the screen clamped still times out and is recorded.
+          await renderedLayout(layout, width / zoom, sections, 3000, null, zoom === 1 ? 1 : zoomedViewportTolerance(zoom));
           record[key].overflow = await overlay.evaluate(overlayOverflow);
         }
       } catch (error) {record.error = failure(error); record.stateAtError = await overlayState().catch(() => null);}
       try {
         await window.evaluate(() => globalThis.desktop.setOverlayLayout('strip'));
-        if (product && base) {await resizeOverlay(product.width, product.height, product.zoom); await renderedLayout('strip', base.width, sections, 10000);}
+        if (product && base) {
+          await resizeOverlay(product.content.width, product.content.height, product.zoom);
+          await renderedLayout('strip', base.width, sections, 10000, null, product.zoom === 1 ? 1 : zoomedViewportTolerance(product.zoom));
+        }
         record.restored = 'strip';
       } catch (error) {record.restoreError = failure(error);}
       return record;

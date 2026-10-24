@@ -22,8 +22,8 @@ export const OVERLAY_MARGIN_DIP = 16;
 export const STRIP_TOP_MARGIN_DIP = 8;
 /** The strip's widest window at scale settings up to 1; above 1 it is this width times the setting (ET-045e decision Z3). */
 export const STRIP_MAX_WIDTH_DIP = 1280;
-/** The strip's narrowest content width in CSS px; the window must be at least this times the zoom. */
-export const STRIP_MIN_WIDTH_DIP = 480;
+/** The strip's narrowest content width in CSS px (STRIP_MIN_WIDTH_DIP until ET-045e); the window is at least this × zoom. */
+export const STRIP_MIN_WIDTH_CSS = 480;
 /** Absorbs binary floating-point noise in a scaled height, such as 110 × 1.1 = 121.00000000000001. */
 const HEIGHT_EPSILON = 1e-6;
 
@@ -93,7 +93,7 @@ export function overlaySize(layout: OverlayLayout, client: DipRect, scale: numbe
   const margin = overlayMargins(layout);
   if (layout === 'strip') {
     const width = Math.floor(Math.min(stripMaxWidth(scale), client.width - 2 * margin.x));
-    if (width < Math.round(STRIP_MIN_WIDTH_DIP * zoom)) return undefined;
+    if (width < Math.round(STRIP_MIN_WIDTH_CSS * zoom)) return undefined;
     const rows = stripRowCount(sections, Math.floor(width / zoom), zoom);
     if (rows === undefined) return undefined;
     const height = stripHeight(rows, zoom);

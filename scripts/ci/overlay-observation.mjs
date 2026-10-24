@@ -41,7 +41,9 @@ export const STRIP_SMOKE_SECTIONS = Object.freeze(['speed', 'gear', 'rpm', 'fuel
 // rounding, and up to 1280 / 0.7 = 1828.57 wide. Without a game window main never places it, and Windows limits a window
 // to the screen size, so on a narrow screen it is narrower (1024 DIP, about 1462 CSS px, on the hosted runner of CI run
 // 38878781715). The height is not limited, and the CSS width must stay within the strip's own limits of 480 to 1829.
-export const STRIP_SMOKE_WINDOW = Object.freeze({innerHeight: 80, heightTolerance: 1, minWidth: 480, maxWidth: 1829});
+// The height may differ by one DIP of physical rounding at a fractional display scale (1 / 0.7 CSS px) plus half a CSS
+// px of viewport rounding, the same rule as zoomedViewportTolerance below (ET-045e verifier round 1).
+export const STRIP_SMOKE_WINDOW = Object.freeze({innerHeight: 80, heightTolerance: 1 / 0.7 + 0.5, minWidth: 480, maxWidth: 1829});
 
 // Self-contained browser callback: false until exactly one current strip root shows exactly the expected sections, then
 // one coherent read of where they lie. `outside` lists sections with an empty box or one not fully inside both the root
@@ -108,13 +110,31 @@ export const LAYOUT_SMOKE_WINDOWS = Object.freeze({
   hud: Object.freeze({width: 224, height: 224})
 });
 export const LAYOUT_SMOKE_ZOOM = 0.7;
+/**
+ * ET-045e verifier round 1: at a fractional display scale Windows applies a window size in whole physical pixels, and
+ * `getBounds`/`getContentBounds` convert that back to DIP rounded, so the DIP readback can differ from the CSS viewport
+ * by up to one DIP (at 150% the 210 DIP card's bounds read back as 211 while its content and viewport stayed 210 DIP and
+ * 300 CSS px; the 159 DIP cluster's content read back as 160, viewport 229 CSS px). The expected CSS viewport is
+ * therefore the window's actual content size in DIP (`getContentBounds`) divided by the zoom, within one DIP of
+ * rounding (1 / zoom CSS px) plus half a CSS px of the viewport's own rounding. At zoom 0.7 that is 1.93 CSS px, so the
+ * ET-045d cluster's 225 px viewport for a 159 DIP window (227.14) and a two-DIP error (2.86) still fail.
+ */
+export const zoomedViewportTolerance = zoom => 1 / zoom + 0.5;
+/** The overlay window Windows applied for a smoke resize: within one DIP below and two DIP above the requested size. */
+export function verifyAppliedWindow(requested, actual) {
+  const near = (value, wanted) => Number.isFinite(value) && value >= wanted - 1 && value <= wanted + 2;
+  assert.ok(actual && near(actual.width, requested.width) && near(actual.height, requested.height),
+    `The overlay window was not applied at the requested size: ${JSON.stringify(requested)} became ${JSON.stringify(actual)}`);
+  return actual;
+}
 export const LAYOUT_SMOKE_RESERVED_CSS = Object.freeze({card: 336, cluster: 225, hud: 306});
 // ET-045e review frames for the UI overlay shard, at the zoom of a scale setting (overlayZoom in overlay-placement.ts).
 // SCALE_REFERENCE_FRAMES are the product windows with every section at the new 100% (overlayWindowSize(layout, 1)) and
 // the ET-045d strip at its 70% (896 × 82 at zoom 0.7) and 100% (1280 × 116 at zoom 1) for the owner's comparison.
 // SCALE_RANGE_FRAMES are the product windows at 50% (zoom 0.35: strip 1280 × 16, card 105 × 136, cluster 154 × 95, HUD
-// 112 × 124), raised to at least 160 × 60 DIP because Windows keeps a window above an unmeasured minimum size (the
-// ET-045c probe measured 38 DIP of height at 150%); the containment checks hold in the larger window too.
+// 112 × 124), the strip raised to the 38 DIP minimum height that the ET-045c probe measured at 150%. The ET-045e probe at
+// 150% showed Windows accepting the card, cluster and HUD within one DIP (106 × 136, 154 × 96, 112 × 124); if a hosted
+// runner refuses a size, the frame wait fails and the refusal is recorded.
 export const SCALE_REFERENCE_FRAMES = Object.freeze([
   Object.freeze({name: 'scale-strip', layout: 'strip', zoom: 0.7, width: 1280, height: 56}),
   Object.freeze({name: 'scale-card', layout: 'card', zoom: 0.7, width: 210, height: 270}),
@@ -125,10 +145,10 @@ export const SCALE_REFERENCE_FRAMES = Object.freeze([
 ]);
 export const SCALE_RANGE_ZOOM = 0.35;
 export const SCALE_RANGE_FRAMES = Object.freeze({
-  strip: Object.freeze({width: 1280, height: 60}),
-  card: Object.freeze({width: 160, height: 136}),
-  cluster: Object.freeze({width: 160, height: 95}),
-  hud: Object.freeze({width: 160, height: 124})
+  strip: Object.freeze({width: 1280, height: 38}),
+  card: Object.freeze({width: 105, height: 136}),
+  cluster: Object.freeze({width: 154, height: 95}),
+  hud: Object.freeze({width: 112, height: 124})
 });
 
 // Self-contained browser callback: false until exactly one current root of the expected layout shows exactly the
@@ -187,7 +207,9 @@ export function layoutContainmentObservation(expected) {
  * surface holding the rows lies inside the window, the lowest section ends within the CSS height the row model reserves
  * for the shown sections below that surface's top (0.01 px of float noise allowed), and the CSS viewport has the
  * window's DIP size divided by the zoom. At zoom 1 it may be one DIP larger (getBounds can round a window up by one
- * DIP); at another zoom (ET-045e) it may differ by one CSS px either way, because the viewport rounds a fractional CSS size.
+ * DIP). At another zoom (ET-045e) `window` is the actual content size read back after the resize, and the viewport may
+ * differ from it by `zoomedViewportTolerance(zoom)` CSS px either way: one DIP of rounding and half a CSS px of
+ * viewport rounding.
  */
 export function verifyLayoutContainment(observation, window, reservedCss, zoom = 1) {
   assert.deepEqual(observation.outside, [], 'Enabled overlay sections lie outside the overlay window');
@@ -198,7 +220,7 @@ export function verifyLayoutContainment(observation, window, reservedCss, zoom =
     'Overlay sections extend below the height the row model reserves');
   const {innerWidth, innerHeight} = observation.viewport;
   const reserved = (actual, dip) => Number.isFinite(actual) && Number.isFinite(zoom) && zoom > 0 &&
-    (zoom === 1 ? actual >= dip && actual <= dip + 1 : Math.abs(actual - dip / zoom) <= 1);
+    (zoom === 1 ? actual >= dip && actual <= dip + 1 : Math.abs(actual - dip / zoom) <= zoomedViewportTolerance(zoom));
   assert.ok(reserved(innerWidth, window.width) && reserved(innerHeight, window.height), 'The overlay window must have the reserved size');
   return observation;
 }

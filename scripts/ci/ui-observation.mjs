@@ -76,8 +76,13 @@ async function overlayFrame(application, overlay, frame) {
     const window = BrowserWindow.getAllWindows().find(candidate => candidate.webContents.getURL().endsWith('?view=overlay'));
     window.webContents.setZoomFactor(zoom); window.setContentSize(width, height);
   }, frame);
-  // The CSS viewport times the zoom is the DIP content size; at a fractional device scale Windows may round it by a pixel.
-  await overlay.waitForFunction(({zoom, width, height}) => Math.abs(globalThis.innerWidth * zoom - width) <= 1.5 && Math.abs(globalThis.innerHeight * zoom - height) <= 1.5, frame, {timeout: 5000});
+  // The CSS viewport times the zoom is the DIP content size. At a fractional device scale Windows may round it by about a
+  // DIP, and the integer viewport adds up to half a CSS px, `zoom / 2` DIP (ET-045e verifier round 1, the same rule as
+  // zoomedViewportTolerance), so the bound is max(1.5, 1 + zoom / 2) DIP.
+  await overlay.waitForFunction(({zoom, width, height}) => {
+    const tolerance = Math.max(1.5, 1 + zoom / 2);
+    return Math.abs(globalThis.innerWidth * zoom - width) <= tolerance && Math.abs(globalThis.innerHeight * zoom - height) <= tolerance;
+  }, frame, {timeout: 5000});
   await settled(overlay);
 }
 /** Self-contained: every strip section's and the strip row's edges in CSS px. */
@@ -121,8 +126,9 @@ async function withRestore(body, restore) {
   return result;
 }
 /**
- * The strip at 100%, 50% and 200%: every digit-count step in both unit profiles leaves every section and the row in place,
- * then two real source transitions (9 to 100 km/h, gear 9 to 10, 999 to 1000 rpm) do the same end to end.
+ * The strip at the zooms of 100%, 50% and 300% (0.7, 0.35, 2.1): every digit-count step in both unit profiles leaves
+ * every section and the row in place, then two real source transitions (9 to 100 km/h, gear 9 to 10, 999 to 1000 rpm)
+ * do the same end to end.
  */
 async function observeStripNumbers({application, overlay, source, language, record}) {
   record.stableNumbers ??= [];
@@ -154,8 +160,8 @@ async function observeStripNumbers({application, overlay, source, language, reco
   record.flags.stableNumbers = true;
 }
 /**
- * The Cluster at 50%, 100% and 200% with speed, gear and RPM, then at 100% with RPM alone and with speed and RPM: every
- * centre part stays inside the inner ring in both unit profiles. All sections are restored afterwards.
+ * The Cluster at the zooms of 50%, 100% and 300% (0.35, 0.7, 2.1) with speed, gear and RPM, then at 100% with RPM alone
+ * and with speed and RPM: every centre part stays inside the inner ring in both unit profiles. All sections are restored afterwards.
  */
 async function observeClusterCentre({application, dashboard, overlay, language, record}) {
   record.clusterCentre ??= [];

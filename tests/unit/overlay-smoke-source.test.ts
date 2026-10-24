@@ -152,8 +152,8 @@ describe('ET-012c strip containment observation', () => {
   it('names the sections the synthetic checkpoint fixture shows in the strip', async () => {
     const {STRIP_SMOKE_SECTIONS, STRIP_SMOKE_WINDOW} = await import(observationModule);
     expect(STRIP_SMOKE_SECTIONS).toEqual(EXPECTED);
-    // ET-045e: 56 / 0.7 = 80 CSS px within one px of rounding; 1280 / 0.7 = 1828.57 at most.
-    expect(STRIP_SMOKE_WINDOW).toEqual({innerHeight: 80, heightTolerance: 1, minWidth: 480, maxWidth: 1829});
+    // ET-045e: 56 / 0.7 = 80 CSS px within one DIP and one CSS px of rounding (verifier round 1); 1280 / 0.7 = 1828.57 at most.
+    expect(STRIP_SMOKE_WINDOW).toEqual({innerHeight: 80, heightTolerance: 1 / 0.7 + 0.5, minWidth: 480, maxWidth: 1829});
   });
   it('reports every shown section inside the window and the strip row, every item capped, and records truncation and rows', async () => {
     expect(await observeStrip({truncated: ['cargo']})).toEqual({viewport: {innerWidth: 1828, innerHeight: 80}, sections: EXPECTED,
@@ -292,7 +292,7 @@ describe('ET-012d card, cluster and HUD containment observation', () => {
   });
   // ET-045e review frames for the UI overlay shard, hand-written in overlay-observation.mjs: the new 100% references are
   // the product windows with every section at the setting 1 and its zoom; the old references are ET-045d's strip at 70%
-  // (896 × 82) and 100% (1280 × 116); the 50% range frames are at least the product windows at zoom 0.35.
+  // (896 × 82) and 100% (1280 × 116); the 50% range frames are the product windows at zoom 0.35.
   it('ties the scale reference and range frames to the product geometry', async () => {
     const {SCALE_REFERENCE_FRAMES, SCALE_RANGE_FRAMES, SCALE_RANGE_ZOOM} = await import(observationModule);
     const {overlayWindowSize} = await import('../../apps/desktop/src/overlay-geometry');
@@ -308,7 +308,8 @@ describe('ET-012d card, cluster and HUD containment observation', () => {
     expect(SCALE_RANGE_ZOOM).toBe(overlayZoom(0.5));
     for (const layout of ['strip', 'card', 'cluster', 'hud'] as const) {
       const product = overlayWindowSize(layout, 0.5), frame = SCALE_RANGE_FRAMES[layout];
-      expect(frame, layout).toEqual({width: Math.max(160, product.width), height: Math.max(60, product.height)});
+      // The product window at 50%, only the strip raised to the 38 DIP minimum height measured at 150%.
+      expect(frame, layout).toEqual({width: product.width, height: layout === 'strip' ? Math.max(38, product.height) : product.height});
     }
   });
   // The fake rows end at 28 + 21 × 11 + 18 = 277 in the card and HUD and at 28 + 21 × 8 + 18 = 214 in the cluster panel.
@@ -369,19 +370,28 @@ describe('ET-012d card, cluster and HUD containment observation', () => {
     expect(await observeLayout('cluster', options)).toBe(false);
   });
   it('accepts the reserved window with every section inside and every value in its row, and rejects any other result', async () => {
-    const {verifyLayoutContainment} = await import(observationModule);
+    const {verifyAppliedWindow, verifyLayoutContainment, zoomedViewportTolerance} = await import(observationModule);
     const valid = await observeLayout('cluster');
     expect(verifyLayoutContainment(valid, WINDOWS.cluster, RESERVED.cluster, ZOOM)).toBe(valid);
     expect(() => verifyLayoutContainment({...valid, outside: ['game-time']}, WINDOWS.cluster, RESERVED.cluster, ZOOM)).toThrow('Enabled overlay sections lie outside the overlay window');
     expect(() => verifyLayoutContainment({...valid, clipped: ['fuel']}, WINDOWS.cluster, RESERVED.cluster, ZOOM)).toThrow('Overlay section values are clipped by their rows');
-    // ET-045e: at zoom 0.7 the 308 x 159 DIP window is 440 x 227.14 CSS px, within one CSS px either way: 439 x 227 and
-    // 441 x 228 pass; 438, 442, 226 (the ET-045d cluster's 225 included) and 229 fail.
-    for (const viewport of [{innerWidth: 439, innerHeight: 227}, {innerWidth: 441, innerHeight: 228}])
+    // ET-045e verifier round 1 and review: at zoom 0.7 the 308 x 159 DIP window is 440 x 227.14 CSS px, and the viewport
+    // may differ by one DIP of rounding (1 / 0.7 CSS px) plus half a CSS px, 1.93 CSS px either way: 439 x 226 and
+    // 441 x 229 pass; 438, 442, 230 and the ET-045d cluster's 225 and 267 fail.
+    expect(zoomedViewportTolerance(ZOOM)).toBeCloseTo(1 / 0.7 + 0.5, 12);
+    for (const viewport of [{innerWidth: 439, innerHeight: 226}, {innerWidth: 441, innerHeight: 229}, {innerWidth: 440, innerHeight: 227}])
       expect(verifyLayoutContainment({...valid, viewport}, WINDOWS.cluster, RESERVED.cluster, ZOOM), JSON.stringify(viewport)).toBeTruthy();
-    for (const viewport of [{innerWidth: 438, innerHeight: 227}, {innerWidth: 442, innerHeight: 227}, {innerWidth: 440, innerHeight: 226},
-      {innerWidth: 440, innerHeight: 225}, {innerWidth: 440, innerHeight: 229}, {innerWidth: 440, innerHeight: 267}])
+    for (const viewport of [{innerWidth: 438, innerHeight: 227}, {innerWidth: 442, innerHeight: 227}, {innerWidth: 440, innerHeight: 225},
+      {innerWidth: 440, innerHeight: 230}, {innerWidth: 440, innerHeight: 267}])
       expect(() => verifyLayoutContainment({...valid, viewport}, WINDOWS.cluster, RESERVED.cluster, ZOOM), JSON.stringify(viewport))
         .toThrow('The overlay window must have the reserved size');
+    // The verifier's 150% run: the cluster's content read back as 308 x 160 DIP (440 x 228.57 CSS) with a 440 x 229
+    // viewport, which passes against that actual size. A content size two DIP off the viewport (308 x 161, 230 CSS) fails.
+    const actual = verifyAppliedWindow(WINDOWS.cluster, {width: 308, height: 160});
+    for (const viewport of [{innerWidth: 440, innerHeight: 229}, {innerWidth: 440, innerHeight: 228}])
+      expect(verifyLayoutContainment({...valid, viewport}, actual, RESERVED.cluster, ZOOM), JSON.stringify(viewport)).toBeTruthy();
+    expect(() => verifyLayoutContainment({...valid, viewport: {innerWidth: 440, innerHeight: 227}}, verifyAppliedWindow(WINDOWS.cluster, {width: 308, height: 161}),
+      RESERVED.cluster, ZOOM)).toThrow('The overlay window must have the reserved size');
     // At zoom 1 the CSS viewport is the DIP window, which getBounds can round up by one DIP: 300 x 360 and 301 x 361 pass
     // for a 300 x 360 window; one pixel short or two over fails.
     const card = await observeLayout('card');
@@ -390,6 +400,14 @@ describe('ET-012d card, cluster and HUD containment observation', () => {
     for (const viewport of [{innerWidth: 299, innerHeight: 360}, {innerWidth: 300, innerHeight: 359}, {innerWidth: 302, innerHeight: 360}])
       expect(() => verifyLayoutContainment({...card, viewport}, {width: 300, height: 360}, RESERVED.card), JSON.stringify(viewport))
         .toThrow('The overlay window must have the reserved size');
+  });
+  it('accepts an applied window within one DIP below and two above the request and refuses any other', async () => {
+    const {verifyAppliedWindow} = await import(observationModule);
+    for (const actual of [{width: 308, height: 159}, {width: 309, height: 160}, {width: 307, height: 161}, {width: 310, height: 158}])
+      expect(verifyAppliedWindow(WINDOWS.cluster, actual), JSON.stringify(actual)).toBe(actual);
+    for (const actual of [{width: 306, height: 159}, {width: 311, height: 159}, {width: 308, height: 157}, {width: 308, height: 162},
+      {width: Number.NaN, height: 159}, undefined])
+      expect(() => verifyAppliedWindow(WINDOWS.cluster, actual), JSON.stringify(actual)).toThrow('The overlay window was not applied at the requested size');
   });
   it('requires the lowest section to end within the reserved height of the shown sections', async () => {
     const {verifyLayoutContainment} = await import(observationModule);

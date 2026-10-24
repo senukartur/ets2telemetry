@@ -95,8 +95,9 @@ export type OverlaySections = Readonly<Record<OverlaySectionId, boolean>>;
 /**
  * One layout's saved position and size (ET-012b). `x` and `y` are fractions in [0, 1] of the free space left inside the
  * game's client area once the margins and the scaled overlay are taken away: 0 is the left or top margin, 1 the right
- * or bottom one. `scale` multiplies the layout's size and content, in [0.5, 2]. Never pixels, so a placement stays
- * inside any client area it fits by construction.
+ * or bottom one. `scale` is the user's size setting in [0.5, 3] (50–300%, ET-045e; [0.5, 2] before), applied as the
+ * overlay document's zoom `overlayZoom(scale)` = scale × 0.7, so 100% looks like the earlier 70%. Never pixels, so a
+ * placement stays inside any client area it fits by construction.
  */
 export interface OverlayPlacement {
   x: number;
