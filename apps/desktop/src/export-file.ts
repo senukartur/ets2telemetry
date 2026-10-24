@@ -28,25 +28,52 @@ export type ExportWriteStep = 'target' | 'open' | 'write' | 'sync' | 'close' | '
 
 export const exportErrorCode = (error: unknown) => error && typeof error === 'object' && 'code' in error ? String(error.code) : undefined;
 const DEVICE_NAME = /^(con|prn|aux|nul|conin\$|conout\$|com[0-9¹²³]|lpt[0-9¹²³])(\..*)?$/i;
+
+/**
+ * Strips Win32 extended-length file prefixes: maps `\\?\[A-Za-z]:` to `[A-Za-z]:` and `\\?\UNC\<server>\<share>` to
+ * `\\<server>\<share>`. Non-file extended paths (`\\?\pipe\`, `\\?\Volume{...}`) and paths without extended prefixes
+ * are returned unchanged.
+ */
+export function stripExtendedPrefix(target: string): string {
+  if (target.startsWith('\\\\?\\')) {
+    if (/^\\\\\?\\[A-Za-z]:/i.test(target)) {
+      return target.slice(4);
+    }
+    const uncMatch = /^\\\\\?\\UNC\\([^\\?.\\][^\\]*\\.*)$/i.exec(target);
+    if (uncMatch) {
+      return `\\\\${uncMatch[1]}`;
+    }
+  }
+  return target;
+}
+
 /**
  * A Windows path as Windows compares it: resolved, with the trailing dots and spaces Windows drops from each component
- * removed, in lower case (NTFS names are case-insensitive by default).
+ * removed, in lower case (NTFS names are case-insensitive by default). Extended prefixes are canonicalized before
+ * resolving so standard and extended drive/UNC paths evaluate symmetrically.
  */
 function comparable(target: string): string {
-  return path.win32.resolve(target).split('\\').map((part, index) => index === 0 ? part : part.replace(/[. ]+$/, '')).join('\\').toLowerCase();
+  const stripped = stripExtendedPrefix(target);
+  return path.win32.resolve(stripped).split('\\').map((part, index) => index === 0 ? part : part.replace(/[. ]+$/, '')).join('\\').toLowerCase();
 }
 const inside = (target: string, root: string) => target === root || target.startsWith(`${root}\\`);
 
 /**
- * Whether a chosen target is refused by name (J16): anything that is not a drive or UNC path, a `\\?\` or `\\.\` device
- * path, a DOS device name in any component, or a path inside `<LOCALAPPDATA>\ETS2Telemetry` (normalized and
- * case-insensitive). Without a usable LOCALAPPDATA the data directory is unknown, so every target is refused.
+ * Whether a chosen target is refused by name (J16): anything that is not an ordinary drive or UNC path (standard or
+ * extended-length), a device path (`\\.\`, `\??\`, `\\?\pipe\`, `\\?\Volume{...}`), a DOS device name in any component,
+ * or a path inside `<LOCALAPPDATA>\ETS2Telemetry` (normalized and case-insensitive). Without a usable LOCALAPPDATA the
+ * data directory is unknown, so every target is refused.
  */
 export function exportTargetRefused(target: unknown, localAppData: string | undefined): boolean {
   if (typeof target !== 'string' || target.length === 0 || target.includes('\0')) return true;
   const raw = target.replaceAll('/', '\\');
-  if (raw.startsWith('\\\\?\\') || raw.startsWith('\\\\.\\') || raw.startsWith('\\??\\')) return true;
-  if (!/^[A-Za-z]:\\/.test(raw) && !/^\\\\[^\\?.]/.test(raw)) return true;
+  if (raw.startsWith('\\\\.\\') || raw.startsWith('\\??\\')) return true;
+  if (raw.startsWith('\\\\?\\')) {
+    if (target.includes('/')) return true;
+    if (!/^\\\\\?\\[A-Za-z]:\\/i.test(raw) && !/^\\\\\?\\UNC\\[^\\?.\\][^\\]*\\[^\\]+/i.test(raw)) return true;
+  } else {
+    if (!/^[A-Za-z]:\\/.test(raw) && !/^\\\\[^\\?.]/.test(raw)) return true;
+  }
   const resolved = comparable(raw);
   if (resolved.split('\\').slice(1).some(part => DEVICE_NAME.test(part.trim()))) return true;
   if (!localAppData || !path.win32.isAbsolute(localAppData)) return true;
