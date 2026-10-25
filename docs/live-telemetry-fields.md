@@ -38,7 +38,7 @@ Exact constants: mile 1,609.344 m; US gallon 3.785411784 L; pound 0.45359237 kg;
 | Field | Canonical | SDK source | Wire | Display (`metric` / `us-customary`) and rounding |
 | --- | --- | --- | --- | --- |
 | Speed | m/s, signed | `truck.speed` | v0, v1 | General telemetry-core formatting: km/h or mph, 1 dp, rounded −0.0 becomes 0.0. The Live gauge and overlay use the integer presentation override below; negative means reverse |
-| Gear | index | `truck.displayed.gear`, s32 | v0, v1 | `N`, `1`…`n`, `R1`…`Rn` |
+| Gear | index | `truck.displayed.gear`, s32 | v0, v1 | `N`, `1`…`n`, `R1`…`Rn`. Since ET-050 (October 25, 2026) the displayed game's gear display mode applies: `automatic` as before, `manual` shows forward gear g as `ceil(g / 2)` plus `L` (odd) or `H` (even), so `1L`, `1H`, `2L` … `8H`, with the same `N` and `R1`…`Rn`. Storage, samples, the journal and the export keep the raw integer index |
 | Engine RPM | rpm | `truck.engine.rpm` | v0, v1 | integer, `600 rpm` |
 | Fuel | L | `truck.fuel.amount` | v0, v1 | L or US gal, 1 dp |
 | Fuel capacity | L | truck config `fuel.capacity` | v0, v1 | L or US gal, 0 dp |
