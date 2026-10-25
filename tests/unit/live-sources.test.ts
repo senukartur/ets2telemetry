@@ -3,10 +3,11 @@
 // tests/fixtures/protocol-v1/snapshot-live.json in the ETS2 metric profile.
 import {describe, expect, it} from 'vitest';
 import type {LiveTelemetry} from '../../packages/contracts/src';
+import type {GearboxState} from '../../packages/contracts/src/protocol-v1';
 import {resolveDisplayUnits} from '../../packages/telemetry-core/src/display-profile';
 import {initialLive} from '../../apps/desktop/src/live-state';
 import {liveSources} from '../../apps/desktop/src/live-sources';
-import {smokePair, smokeV0, v1Projection} from '../shared/live-v1-fixtures';
+import {gearboxFixture, gearboxPair, smokePair, smokeV0, v1Projection} from '../shared/live-v1-fixtures';
 
 const METRIC = resolveDisplayUnits('ets2', {profile: 'metric'});
 const sources = (live: LiveTelemetry) => liveSources(live, METRIC);
@@ -202,5 +203,66 @@ describe('gear display mode (ET-050)', () => {
     expect(manual.v1View!.sections.flatMap(section => section.fields).find(field => field.id === 'gear')).toMatchObject({state: 'value', text: '2L'});
     expect(liveSources(smokePair({}, {status: 'stale', fresh: false}), METRIC, 'manual').field('gear')).toMatchObject(NOT_CURRENT);
     expect(liveSources({...initialLive('synthetic'), v1: v1Projection()}, METRIC, 'manual').field('gear')).toMatchObject(NOT_CURRENT);
+  });
+});
+
+// ET-050b B6: manual mode shows the gearbox-aware labels only for the current v1 truck with v0's model id and a layout
+// that validates; everything else keeps the GD2 formula. The layouts are the minor-1 fixtures' CAP-01 tables (the ATS Mack
+// 18-speed and the ETS2 12-speed); the expected labels are written by hand from the owner's Mack HUD (LL, LH, 1L…8H).
+describe('gearbox-aware gear labels (ET-050b)', () => {
+  const gearboxOf = gearboxFixture, pair = gearboxPair;
+  const MACK = gearboxOf('checkpoint-ats-mack'), TWELVE = gearboxOf('checkpoint'), ZERO_SELECTORS = gearboxOf('snapshot-zero-selectors');
+  const gearText = (live: LiveTelemetry, mode: 'automatic' | 'manual' = 'manual') => liveSources(live, METRIC, mode).field('gear');
+  it.each([[1, 'LL'], [2, 'LH'], [3, '1L'], [4, '1H'], [10, '4H'], [11, '5L'], [12, '5H'], [18, '8H'], [0, 'N'], [-1, 'R1'], [-4, 'R4']] as const)(
+    'Mack gear %s is %s in manual mode', (gear, text) => {
+      expect(gearText(pair(gear))).toEqual({id: 'gear', state: 'value', text});
+      expect(liveSources(pair(gear), METRIC, 'manual').v1View!.sections.flatMap(section => section.fields).find(field => field.id === 'gear')?.text).toBe(text);
+    });
+  it('keeps the automatic mode unchanged', () => {
+    for (const [gear, text] of [[1, '1'], [3, '3'], [18, '18'], [-1, 'R1'], [0, 'N']] as const) expect(gearText(pair(gear), 'automatic')).toMatchObject({state: 'value', text});
+  });
+  it('labels the ETS2 12-speed layout like the formula, and a zero-selector layout with plain numbers', () => {
+    for (const [gear, text] of [[1, '1L'], [2, '1H'], [7, '4L'], [12, '6H']] as const) expect(gearText(pair(gear, {gearbox: TWELVE}))).toMatchObject({text});
+    for (const [gear, text] of [[1, '1'], [6, '6']] as const) expect(gearText(pair(gear, {gearbox: ZERO_SELECTORS}))).toMatchObject({text});
+  });
+  it('falls back to the formula for another truck model, a stale or uncarried v1 projection and a minor-0 source', () => {
+    const formula = (live: LiveTelemetry) => expect(gearText(live)).toEqual({id: 'gear', state: 'value', text: '1L'});
+    formula(pair(1, {truckId: 'vehicle.synthetic_truck'}));
+    formula(pair(1, {v1: {status: 'stale', fresh: false}}));
+    formula(pair(1, {v1: {status: 'disconnected', fresh: false}}));
+    formula(pair(1, {v1: {selection: 'replay'}}));
+    formula(pair(1, {v1: {game: 'ats'}}));
+    // Minor 0: the projection's gearbox is not-supported in every part (B7).
+    formula(pair(1, {gearbox: {forwardGears: {available: false, reason: 'not-supported'}, reverseGears: {available: false, reason: 'not-supported'},
+      hshifter: {available: false, reason: 'not-supported'}}}));
+    const noTruck = pair(1); noTruck.v1!.observation!.state.configuration.truck = {available: false, reason: 'not-observed'};
+    formula(noTruck);
+    const noV0Truck = pair(1); noV0Truck.observation!.state.configuration.truckId = {available: false, reason: 'not-observed'};
+    formula(noV0Truck);
+  });
+  it('falls back to the formula when the layout does not validate or a part is unavailable', () => {
+    const formula = (gearbox: GearboxState) => expect(gearText(pair(1, {gearbox}))).toMatchObject({text: '1L'});
+    formula({...MACK, forwardGears: {available: true, value: 12}});
+    formula({...MACK, reverseGears: {available: false, reason: 'not-observed'}});
+    formula({...MACK, hshifter: {available: false, reason: 'invalid'}});
+    // The minor-1 snapshot fixture: counts observed, no hshifter callback yet.
+    formula(gearboxOf('snapshot'));
+  });
+  it('follows a layout change in the same update object instead of a remembered one', () => {
+    const live = pair(1);
+    expect(gearText(live)).toMatchObject({text: 'LL'});
+    // Equal contents in a new object give the same labels.
+    expect(gearText(pair(1))).toMatchObject({text: 'LL'});
+    // The caller changes its own objects in place to the 12-speed layout: the labels follow, nothing stale is held.
+    const gearbox = live.v1!.observation!.state.gearbox, twelve = structuredClone(TWELVE);
+    gearbox.forwardGears = twelve.forwardGears;
+    if (gearbox.hshifter.available && twelve.hshifter.available) gearbox.hshifter.value.slots.splice(0, gearbox.hshifter.value.slots.length, ...twelve.hshifter.value.slots);
+    expect(gearText(live)).toMatchObject({text: '1L'});
+    live.observation!.state.gear = {available: true, value: 12, unit: 'index'};
+    expect(gearText(live)).toMatchObject({text: '6H'});
+    expect(gearText(pair(18))).toMatchObject({text: '8H'});
+  });
+  it('keeps the not-current state while v0 is stale', () => {
+    expect(gearText({...pair(1), status: 'stale', fresh: false})).toMatchObject(NOT_CURRENT);
   });
 });

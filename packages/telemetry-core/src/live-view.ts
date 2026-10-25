@@ -8,6 +8,7 @@ import {
   formatBearing, formatBoolean, formatConsumption, formatDeadline, formatDistance, formatGameTime, formatGear, formatMass, formatMoney,
   formatPercent, formatPosition, formatRpm, formatSpeed, formatVolume
 } from './format';
+import type {GearLabels} from './gear-labels';
 import {missing, valueOf, type GameModeView, type LiveTrailer, type LiveTruck, type MissingReason, type NamedEntity, type NormalizedLiveState, type Reading} from './readings';
 
 export type ViewReason = MissingReason | 'not-current' | 'zero-consumption' | 'no-trailer';
@@ -137,7 +138,13 @@ function gameModeText(mode: GameModeView): string {
   return `${mode.mode === 'truckersmp' ? 'TruckersMP' : 'single-player'} (${mode.confidence} evidence, ${mode.method})`;
 }
 
-export function buildLiveView(live: LiveViewSource, state: NormalizedLiveState | undefined, units: DisplayUnits, gear: GearDisplayMode = 'automatic'): LiveDashboardView {
+/**
+ * How the gear row is formatted (ET-050, ET-050b): the per-game display mode, and in `manual` mode the gearbox-aware
+ * labels the caller derived for this truck (B6). Without labels manual mode uses the GD2 formula.
+ */
+export interface GearDisplay {mode: GearDisplayMode; labels?: GearLabels}
+
+export function buildLiveView(live: LiveViewSource, state: NormalizedLiveState | undefined, units: DisplayUnits, gear: GearDisplay = {mode: 'automatic'}): LiveDashboardView {
   const current = isCurrent(live) && state !== undefined;
   const observation = live.observation;
   const origin = observation?.source.origin ?? 'none';
@@ -166,7 +173,7 @@ export function buildLiveView(live: LiveViewSource, state: NormalizedLiveState |
   const sections: LiveSection[] = [
     {id: 'motion', fields: [
       f('speed', s.speed, value => formatSpeed(value, units.speed)),
-      f('gear', s.gear, value => formatGear(value, gear)),
+      f('gear', s.gear, value => formatGear(value, gear.mode, gear.labels)),
       f('engine-rpm', s.engineRpm, formatRpm)
     ]},
     {id: 'fuel', fields: [

@@ -4,7 +4,9 @@ import {clampRatio, connectionTone, desktopLiveView, gaugeArc, hardModeTone, plu
 import {liveDashboardText} from '../../apps/desktop/src/live-dashboard-text';
 import {unknownHardMode} from '../../packages/telemetry-core/src/hard-mode';
 import type {HardModeStatus} from '../../packages/contracts/src/hard-mode';
-import {smokePair, smokeV0} from '../shared/live-v1-fixtures';
+import type {LiveTelemetry} from '../../packages/contracts/src';
+import {NOT_SUPPORTED_GEARBOX} from '../../packages/contracts/src/protocol-v1';
+import {gearboxPair, smokePair, smokeV0} from '../shared/live-v1-fixtures';
 describe('desktop numeric presentation (REG-002/003/009/014)', () => {
   it('uses normalized canonical values and clamps only geometry, not the displayed reading', () => {
     const live = smokeV0(); live.observation!.state.speed = {available: true, value: 100, unit: 'm/s'};
@@ -130,5 +132,19 @@ describe('gear display mode on the Live instrument (ET-050)', () => {
     }
     expect(desktopLiveView({...withGear(3), fresh: false, status: 'stale'}, undefined, {ets2: 'manual', ats: 'manual'}).sources.field('gear'))
       .toMatchObject({state: 'missing', reason: 'not-current'});
+  });
+});
+
+// ET-050b B6: the Live instrument shows the current v1 truck's gearbox labels in manual mode through the same field.
+describe('gearbox-aware labels on the Live instrument (ET-050b)', () => {
+  const manual = {ets2: 'manual', ats: 'automatic'} as const;
+  const gear = (live: LiveTelemetry, modes?: {ets2: 'automatic' | 'manual'; ats: 'automatic' | 'manual'}) => desktopLiveView(live, undefined, modes).sources.field('gear');
+  it('shows LL, 1L and 8H for the Mack layout and the formula otherwise', () => {
+    for (const [value, text] of [[1, 'LL'], [3, '1L'], [18, '8H']] as const) expect(gear(gearboxPair(value), manual)).toMatchObject({state: 'value', text});
+    expect(gear(gearboxPair(1))).toMatchObject({text: '1'});
+    expect(gear(gearboxPair(1, {truckId: 'vehicle.synthetic_truck'}), manual)).toMatchObject({text: '1L'});
+    expect(gear(gearboxPair(1, {v1: {status: 'stale', fresh: false}}), manual)).toMatchObject({text: '1L'});
+    // A minor-0 source: every gearbox part is not-supported (B7).
+    expect(gear(gearboxPair(1, {gearbox: NOT_SUPPORTED_GEARBOX}), manual)).toMatchObject({text: '1L'});
   });
 });

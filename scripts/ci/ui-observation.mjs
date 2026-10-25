@@ -119,13 +119,13 @@ const STRIP_FRAMES = [{zoom: 0.7, width: 1280, height: 80}, {zoom: 0.35, width: 
 const CLUSTER_FRAMES = [{zoom: 0.35, width: 160, height: 100}, {zoom: 0.7, width: 308, height: 188}, {zoom: 2.1, width: 924, height: 561}];
 function stripSteps(speedUnit, rpmUnit) {
   return [{speed: '0', speedUnit, gear: 'N', rpm: '0', rpmUnit}, ...['9', '10', '99', '100', '-5', '—'].map(speed => ({speed})),
-    // ET-050: the manual range-splitter forms share the gear's mode-independent reserve.
-    ...['1', '9', '10', '12', 'R1', '1L', '1H', '9H'].map(gear => ({gear})), ...['999', '1000', '2528', '9999', '—'].map(rpm => ({rpm}))];
+    // ET-050: the manual range-splitter forms share the gear's mode-independent reserve; ET-050b adds the crawler labels.
+    ...['1', '9', '10', '12', 'R1', '1L', '1H', '9H', 'LL', 'LH'].map(gear => ({gear})), ...['999', '1000', '2528', '9999', '—'].map(rpm => ({rpm}))];
 }
 function clusterSteps(parts, speedUnit, rpmUnit) {
   const base = {...(parts.includes('speed') ? {speedUnit} : {}), ...(parts.includes('rpm') ? {rpmUnit} : {})}, steps = [];
   if (parts.includes('rpm')) steps.push(...['999', '1000', '2528', '9999'].map(rpm => ({...base, rpm})));
-  if (parts.includes('gear')) steps.push(...['N', '12', 'R1', '1L', '1H', '9H'].map(gear => ({...base, gear})));
+  if (parts.includes('gear')) steps.push(...['N', '12', 'R1', '1L', '1H', '9H', 'LL', 'LH'].map(gear => ({...base, gear})));
   if (parts.includes('speed')) steps.push(...['100', '-5', '—'].map(speed => ({...base, speed})));
   if (parts.length === 3) steps.push({...base, speed: '100', gear: '12', rpm: '9999'});
   return steps;
@@ -222,8 +222,11 @@ async function observeStripNumbers({application, overlay, source, language, reco
  * ET-050: ETS2's manual gear display chosen by keyboard on Settings > Units, then real source gears on the overlay and the
  * dashboard's Live instrument (3 is 2L, 16 is 8H, reverse R1 and neutral N), and automatic again (3 is 3). The source's
  * gear and the automatic mode are restored afterwards.
+ * ET-050b: the v1 source serves the Mack 18F/4R layout with another truck model id, so the steps above prove the formula
+ * for a mismatched truck. Then the v1 truck becomes v0's (B6): 1 is LL, 2 LH, 3 1L and 18 8H on the overlay, the Live
+ * instrument and the Live details row; another model id again gives the formula (1 is 1L). The v1 truck id is restored.
  */
-async function observeGearDisplay({dashboard, overlay, source, language, record}) {
+async function observeGearDisplay({dashboard, overlay, source, sourceV1, language, record}) {
   record.gearDisplay ??= [];
   const gearIs = async text => {
     await overlay.waitForFunction(numberTexts, {gear: text}, {timeout: 5000});
@@ -238,20 +241,54 @@ async function observeGearDisplay({dashboard, overlay, source, language, record}
     await dashboard.waitForFunction(id => globalThis.document.getElementById(id)?.getAttribute('aria-checked') === 'true',
       `gear-display-ets2-${mode}`, {timeout: 5000});
   };
+  const labelIs = async text => {
+    await gearIs(text);
+    await dashboard.waitForFunction(text => globalThis.document.querySelector('[data-testid="live-gear"]')?.textContent === text, text, {timeout: 5000});
+  };
   await withRestore(async () => {
     await choose('manual');
     for (const [gear, text] of [[3, '2L'], [16, '8H'], [-1, 'R1'], [0, 'N']]) {
       source.setEngine(600, gear); await gearIs(text); record.gearDisplay.push({language, mode: 'manual', gear, text});
     }
+    sourceV1.setTruckId('truck.volvo');
+    for (const [gear, text] of [[1, 'LL'], [2, 'LH'], [3, '1L'], [18, '8H'], [-1, 'R1']]) {
+      source.setEngine(600, gear); await labelIs(text); record.gearDisplay.push({language, mode: 'manual', layout: 'mack', gear, text});
+    }
+    sourceV1.setTruckId(undefined);
+    source.setEngine(600, 1); await labelIs('1L'); record.gearDisplay.push({language, mode: 'manual', layout: 'other-truck', gear: 1, text: '1L'});
     await choose('automatic');
     source.setEngine(600, 3); await gearIs('3'); record.gearDisplay.push({language, mode: 'automatic', gear: 3, text: '3'});
   }, async () => {
-    source.setEngine(600, -1);
+    source.setEngine(600, -1); sourceV1.setTruckId(undefined);
     if ((await dashboard.evaluate(() => globalThis.desktop.getAppState())).settings.gearDisplay.ets2 !== 'automatic')
       await dashboard.evaluate(() => globalThis.desktop.setGearDisplay('ets2', 'automatic'));
   });
   await overlay.waitForFunction(numberTexts, {gear: 'R1'}, {timeout: 5000});
   record.flags.gearDisplayManual = true;
+}
+/**
+ * ET-050b: in each layout at the first size, ETS2's manual mode with the v1 truck equal to v0's shows the Mack crawler
+ * label for gear 1 (LL) in the overlay's gear part (the Card hero, the Cluster badge, the strip and HUD sections), and the
+ * shown sections still lie inside the window. The gear, the v1 truck id and the automatic mode are restored afterwards.
+ */
+async function observeGearboxLabel({dashboard, overlay, source, sourceV1, layout, language, record}) {
+  record.gearboxLabels ??= [];
+  await withRestore(async () => {
+    await dashboard.evaluate(() => globalThis.desktop.setGearDisplay('ets2', 'manual'));
+    await until(() => dashboard.evaluate(() => globalThis.desktop.getAppState()), state => state.settings.gearDisplay.ets2 === 'manual' && state.settings.saveError === null,
+      'UI_GEARBOX_MANUAL_SAVED');
+    sourceV1.setTruckId('truck.volvo'); source.setEngine(600, 1);
+    await overlay.waitForFunction(numberTexts, {gear: 'LL'}, {timeout: 5000});
+    assert.deepEqual((await overlay.evaluate(overlayOverflow)).outside, [], `UI_GEARBOX_LABEL_OUTSIDE_${layout}_${language}`);
+    record.gearboxLabels.push({language, layout, gear: 1, text: 'LL'});
+  }, async () => {
+    source.setEngine(600, -1); sourceV1.setTruckId(undefined);
+    if ((await dashboard.evaluate(() => globalThis.desktop.getAppState())).settings.gearDisplay.ets2 !== 'automatic')
+      await dashboard.evaluate(() => globalThis.desktop.setGearDisplay('ets2', 'automatic'));
+  });
+  await overlay.waitForFunction(numberTexts, {gear: 'R1'}, {timeout: 5000});
+  // Every layout in both languages.
+  if (new Set(record.gearboxLabels.map(entry => `${entry.language}:${entry.layout}`)).size === layouts.length * 2) record.flags.gearboxLabels = true;
 }
 /**
  * The Cluster at the zooms of 50%, 100% and 300% (0.35, 0.7, 2.1) with speed, gear and RPM, then at 100% with RPM alone
@@ -559,7 +596,7 @@ async function observeExportResult({application, dashboard, language, size, reco
   }
   record.flags.actionResult = true;
 }
-export async function runUiSmoke({application, dashboard, overlay, source, config, record}) {
+export async function runUiSmoke({application, dashboard, overlay, source, sourceV1, config, record}) {
   assert.ok(UI_CASES.includes(config.uiCase));
   Object.assign(record, {case: config.uiCase, screenshots: [], languages: [], sizes, flags: {}});
   const save = (name, language, size, page = dashboard) => capture({page, application, config, record, name, language, size, overlay: page === overlay});
@@ -823,7 +860,9 @@ export async function runUiSmoke({application, dashboard, overlay, source, confi
           await save(layout, language, size, overlay);
           // ET-045d: stable strip numbers and the Cluster centre, at the first size; screenshots stay as before.
           if (layout === 'strip' && size === sizes[0]) await observeStripNumbers({application, overlay, source, language, record});
-          if (layout === 'strip' && size === sizes[0]) await observeGearDisplay({dashboard, overlay, source, language, record});
+          if (layout === 'strip' && size === sizes[0]) await observeGearDisplay({dashboard, overlay, source, sourceV1, language, record});
+          // ET-050b: the Mack crawler label LL in every layout.
+          if (size === sizes[0]) await observeGearboxLabel({dashboard, overlay, source, sourceV1, layout, language, record});
           if (layout === 'cluster' && size === sizes[0]) await observeClusterCentre({application, dashboard, overlay, language, record});
           // ET-045f: the Cluster speed arc in both profiles, at 0, in reverse, at full scale and under reduced motion.
           if (layout === 'cluster' && size === sizes[0]) await observeClusterSpeedArc({dashboard, overlay, source, language, record});

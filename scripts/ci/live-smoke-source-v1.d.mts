@@ -9,6 +9,8 @@ export interface LiveSmokeSourceV1 {
   /** Stops sending snapshots on the open connection until `resume`. */
   hold(): void;
   resume(): void;
+  /** ET-050b: the v1 truck's model id for the following state messages; undefined restores the fixture's own id. */
+  setTruckId(id: string | undefined): void;
   statistics(): LiveSmokeSourceV1Statistics;
 }
 export function startLiveSmokeSourceV1(checkout: string): Promise<LiveSmokeSourceV1>;

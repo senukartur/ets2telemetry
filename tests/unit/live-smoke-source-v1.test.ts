@@ -1,6 +1,7 @@
 // ET-010c decision F8: the synthetic protocol v1 smoke source over an actual Windows named pipe, consumed by the
 // production V1Ingestion (strict validation, live-only hello). REG-003 (hydrating checkpoint shown as current state
 // only), REG-010 (hold on the same connection goes stale, never reconnects) and REG-011 (stop disconnects).
+import {readFileSync} from 'node:fs';
 import path from 'node:path';
 import {pathToFileURL} from 'node:url';
 import {expect, it, vi} from 'vitest';
@@ -28,9 +29,21 @@ it('serves validated live-only v1 data that goes stale while held on the same co
     expect(observation.capture.clockId).toBe(identity.clockId);
     const job = observation.state.configuration.job;
     expect(job.available && [job.value.cargoId, job.value.destinationCityId]).toEqual([{available: true, value: 'cargo.logs'}, {available: true, value: 'city.warszawa'}]);
+    // ET-050b: the source selects minor 1, so every state carries the Mack gearbox of the minor-1 fixture, and the v1
+    // truck keeps the fixture's model id until setTruckId names v0's.
+    const mack = (JSON.parse(readFileSync('tests/fixtures/protocol-v1/minor1/checkpoint-ats-mack.json', 'utf8')) as {data: {state: {gearbox: unknown}}}).data.state.gearbox;
+    expect(observation.state.gearbox).toEqual(mack);
+    expect(liveV1Projection(ingestion.current)?.observation?.state.gearbox).toEqual(mack);
+    const truckId = () => {const truck = ingestion.current.observation!.state.configuration.truck; return truck.available ? truck.value.id : undefined;};
+    expect(truckId()).toEqual({available: true, value: 'vehicle.synthetic_truck'});
+    source.setTruckId('truck.volvo');
+    await vi.waitFor(() => expect(truckId()).toEqual({available: true, value: 'truck.volvo'}), {timeout: 2000, interval: 20});
+    source.setTruckId(undefined);
+    await vi.waitFor(() => expect(truckId()).toEqual({available: true, value: 'vehicle.synthetic_truck'}), {timeout: 2000, interval: 20});
     // The fixture window reaches the service and is stripped by its projection.
     expect(observation.state.window.available).toBe(true);
-    expect(JSON.stringify(liveV1Projection(ingestion.current))).not.toMatch(/"window"|handle|65538/);
+    // ET-050b: the gearbox's `handlePosition` keys are legitimate, so the window handle is matched as its own key.
+    expect(JSON.stringify(liveV1Projection(ingestion.current))).not.toMatch(/"window"|"handle"|65538/);
     // The service's own 500 ms expiry: held data goes stale on the same connection within one second.
     const boundary = BigInt(observation.state.boundaryOrder);
     source.hold();

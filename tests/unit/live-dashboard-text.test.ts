@@ -16,7 +16,8 @@ import {
   SYNTHETIC_V0_HIDDEN_ROWS, SYNTHETIC_V0_LIVE_ROWS, SYNTHETIC_V0_VALUE_IDS, SYNTHETIC_V0V1_HIDDEN_ROWS, SYNTHETIC_V0V1_LIVE_ROWS, SYNTHETIC_V1_LIVE_ROWS,
   SYNTHETIC_V1_VALUE_IDS
 } from '../../scripts/ci/renderer-observation.mjs';
-import {smokePair, smokeV0, v0Live, v1Projection} from '../shared/live-v1-fixtures';
+import {gearboxPair, smokePair, smokeV0, v0Live, v1Projection} from '../shared/live-v1-fixtures';
+import {NOT_SUPPORTED_GEARBOX} from '../../packages/contracts/src/protocol-v1';
 import {scenarioPath} from '../shared/simulator-v1-expected';
 
 type V0State = Extract<v0.ServerMessage, {kind: 'checkpoint' | 'snapshot'}>;
@@ -442,3 +443,17 @@ describe('gear display mode (ET-050)', () => {
   });
 });
 const AUTO = {ets2: 'automatic', ats: 'automatic'} as const;
+
+// ET-050b B6: the Live details row shows the gearbox-aware labels in manual mode for the current v1 truck with v0's model
+// id, in both languages; L and H stay Latin in RU. Anything else keeps the GD2 formula.
+describe('gearbox-aware gear labels (ET-050b)', () => {
+  const UNITS = {ets2: 'metric', ats: 'us-customary'} as const, MANUAL = {ets2: 'manual', ats: 'manual'} as const;
+  it.each(['en', 'ru'] as const)('shows the Mack layout labels in %s', language => {
+    for (const [gear, text] of [[1, 'LL'], [2, 'LH'], [3, '1L'], [18, '8H'], [-2, 'R2'], [0, 'N']] as const)
+      expect(values(liveDashboardText(gearboxPair(gear), UNITS, language, MANUAL)).gear).toBe(text);
+    expect(values(liveDashboardText(gearboxPair(1), UNITS, language, AUTO)).gear).toBe('1');
+    expect(values(liveDashboardText(gearboxPair(1, {truckId: 'vehicle.synthetic_truck'}), UNITS, language, MANUAL)).gear).toBe('1L');
+    expect(values(liveDashboardText(gearboxPair(18, {v1: {status: 'stale', fresh: false}}), UNITS, language, MANUAL)).gear).toBe('9H');
+    expect(values(liveDashboardText(gearboxPair(1, {gearbox: NOT_SUPPORTED_GEARBOX}), UNITS, language, MANUAL)).gear).toBe('1L');
+  });
+});

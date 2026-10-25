@@ -35,6 +35,7 @@ it.each(['en', 'ru'] as const)('renders exactly one visible speed number/unit an
 // ET-045d: the strip's stable widths come from data-reserve on the value element, while the value's text stays exactly the
 // number (the reserve is CSS content); the RPM unit is its own element, and the cluster gauge marks its RPM track.
 // ET-050 (GD6): the gear reserve requirement changed to the mode-independent multi-line 'R0\n0H\n0L'.
+// ET-050b (B8): the requirement changed again; the reserve adds the crawler labels, 'R0\n0H\n0L\nLH\nLL'.
 it.each(['en', 'ru'] as const)('renders reserves beside exact value texts and a separate RPM unit in %s', language => {
   const sections: OverlayPresentation['sections'] = [{id: 'speed', state: 'value', text: '9 km/h'}, {id: 'gear', state: 'value', text: 'N'},
     {id: 'rpm', state: 'value', text: '999 rpm', ring: 0.333}, {id: 'fuel', state: 'value', text: '73.0 L'}];
@@ -42,7 +43,7 @@ it.each(['en', 'ru'] as const)('renders reserves beside exact value texts and a 
   for (const layout of ['strip', 'card', 'cluster', 'hud'] as const) {
     const html = renderToStaticMarkup(React.createElement(OverlayContent, {view: overlayView({...base, layout, language, speed: '9', sections})}));
     expect(html, layout).toContain('<strong class="overlay-value" data-testid="overlay-speed" data-reserve="000">9</strong>');
-    expect(html, layout).toContain('<strong class="overlay-value" data-testid="overlay-gear" data-reserve="R0\n0H\n0L">N</strong>');
+    expect(html, layout).toContain('<strong class="overlay-value" data-testid="overlay-gear" data-reserve="R0\n0H\n0L\nLH\nLL">N</strong>');
     expect(html, layout).toContain('<strong class="overlay-value" data-testid="overlay-rpm" data-reserve="0000">999</strong>');
     expect(html, layout).toContain(`<span class="overlay-unit" data-testid="overlay-rpm-unit">${unit}</span>`);
     expect(html, layout).toContain('<strong class="overlay-value" data-testid="overlay-fuel">73.0</strong>');
@@ -60,11 +61,12 @@ it.each(['en', 'ru'] as const)('renders reserves beside exact value texts and a 
 
 // ET-050: manual gear text reaches every layout unchanged in both languages, with the same mode-independent reserve.
 it.each(['en', 'ru'] as const)('renders manual gear labels exactly in every layout in %s', language => {
-  for (const text of ['1L', '1H', '8H', '9H', 'R1', 'N']) {
+  // ET-050b: the gearbox-aware crawler labels reach every layout the same way.
+  for (const text of ['1L', '1H', '8H', '9H', 'R1', 'N', 'LL', 'LH', 'L']) {
     const sections: OverlayPresentation['sections'] = [{id: 'speed', state: 'value', text: '9 km/h'}, {id: 'gear', state: 'value', text}];
     for (const layout of ['strip', 'card', 'cluster', 'hud'] as const) {
       const html = renderToStaticMarkup(React.createElement(OverlayContent, {view: overlayView({...base, layout, language, speed: '9', sections})}));
-      expect(html, `${layout} ${text}`).toContain(`<strong class="overlay-value" data-testid="overlay-gear" data-reserve="R0\n0H\n0L">${text}</strong>`);
+      expect(html, `${layout} ${text}`).toContain(`<strong class="overlay-value" data-testid="overlay-gear" data-reserve="R0\n0H\n0L\nLH\nLL">${text}</strong>`);
     }
   }
 });

@@ -112,4 +112,10 @@ describe('CAP-01 replay gearbox (ET-050b)', () => {
       hshifter: {available: true, value: {selectorCount: 2, slots: twelve}}});
     expect(states(8).at(-1)!.data.state.gearbox?.hshifter).toEqual({available: false, reason: 'not-observed'});
   });
+  // The real-trace case: run2's last truck re-send (revision 12) has no hshifter callback after it, so its last state still
+  // carries the earlier 12-speed layout beside the re-sent 12F/4R counts. A truck callback never clears the layout.
+  it('keeps run2\'s 12-speed layout across its last truck re-send, which no hshifter callback follows', () => {
+    expect(states(2).at(-1)!.data.state.gearbox).toEqual({forwardGears: {available: true, value: 12}, reverseGears: {available: true, value: 4},
+      hshifter: {available: true, value: {selectorCount: 2, slots: twelve}}});
+  });
 });

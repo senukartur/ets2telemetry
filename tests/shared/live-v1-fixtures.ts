@@ -4,7 +4,7 @@
 import {readFileSync} from 'node:fs';
 import type {LiveTelemetry, LiveTelemetryV1, SourceSelection} from '../../packages/contracts/src';
 import * as v0 from '../../packages/contracts/src/protocol-v0';
-import {decodePayload, type LiveStateV1, type ServerMessage} from '../../packages/contracts/src/protocol-v1';
+import {decodePayload, type GearboxState, type LiveStateV1, type ServerMessage} from '../../packages/contracts/src/protocol-v1';
 import type {V1SourceState} from '../../apps/desktop/src/v1-ingestion';
 
 export type V0State = Extract<v0.ServerMessage, {kind: 'checkpoint' | 'snapshot'}>;
@@ -84,4 +84,28 @@ export function v1SourceState(name = 'snapshot-live', patch: Partial<V1SourceSta
     durable: {state: 'failed', code: 'WORKER_FAILED'},
     ...patch
   };
+}
+
+/** A minor-1 fixture's gearbox (ET-050b): `checkpoint-ats-mack` is the ATS Mack 18-speed, `checkpoint` the ETS2 12-speed. */
+export function gearboxFixture(name: string): GearboxState {
+  const message = JSON.parse(readFileSync(`tests/fixtures/protocol-v1/minor1/${name}.json`, 'utf8')) as {data: {state: {gearbox: GearboxState}}};
+  return message.data.state.gearbox;
+}
+export interface GearboxPairOptions {
+  /** Default: the Mack 18-speed. */
+  gearbox?: GearboxState;
+  /** The v1 truck model id; by default v0's `truck.volvo`, so both sources describe the same truck (ET-045a). */
+  truckId?: string;
+  v1?: V1Options;
+  v0Patch?: Partial<LiveTelemetry>;
+}
+/** The smoke pair with `gear` in both sources and a minor-1 gearbox in the v1 projection (ET-050b B6 inputs). */
+export function gearboxPair(gear: number, options: GearboxPairOptions = {}): LiveTelemetry {
+  const live = smokePair(options.v1, options.v0Patch);
+  live.observation!.state.gear = {available: true, value: gear, unit: 'index'};
+  const state = live.v1!.observation!.state, truck = state.configuration.truck;
+  state.gear = {available: true, value: gear, unit: 'index'};
+  state.gearbox = structuredClone(options.gearbox ?? gearboxFixture('checkpoint-ats-mack'));
+  if (truck.available) truck.value.id = {available: true, value: options.truckId ?? 'truck.volvo'};
+  return live;
 }
