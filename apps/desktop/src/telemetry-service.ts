@@ -129,15 +129,17 @@ function onV1State(state: V1SourceState): void {
     previous.fresh === state.fresh && previous.observation === state.observation) return;
   v1Live = liveV1Projection(state); publishLive();
 }
-// ET-015a recording gate (R3, R10): game selections stay live-only while GAME_HISTORY_RECORDING is false. Only
-// ETS2TELEMETRY_RECORDING=synthetic:<name>|replay:<name> constructs the trip recorder, over a database in the synthetic
-// directory that replaces history, and makes only the matching selection durable once that database is open. The
+// ET-015a recording gate (R3, R10): since the owner's authorization of October 25, 2026 GAME_HISTORY_RECORDING is true, so
+// the ets2 and ats selections are durable over the history database. ETS2TELEMETRY_RECORDING=synthetic:<name>|replay:<name>
+// instead constructs the trip recorder over a database in the synthetic directory that replaces history, and makes only
+// the matching selection durable once that database is open. A selection that is not durable stays live-only. The
 // durable history database (ET-013, OD-2), or the recording target that replaces it, is opened at start in its own
 // storage worker without delaying readiness or live telemetry; the ET-001 temporary probe below stays the readiness gate,
 // and opening the database lets the live-only v1 connection reconnect durable (R10). This wiring lives in
 // recording-runtime.ts (ET-015c, G13), so the storage suite drives the same code with a real storage worker. ET-015c
 // (G4): the recording status goes to main on the parent port as {type: 'recording', status}, from the start until the
-// orderly stop begins; production, which builds no recorder, reports {state: 'disabled'} once.
+// orderly stop begins; a service whose plan has no durable selection builds no recorder and reports {state: 'disabled'} once,
+// which production no longer does.
 const runtime = createRecordingRuntime({env: process.env, gameHistory: GAME_HISTORY_RECORDING, localAppData: process.env.LOCALAPPDATA, log,
   createWorker: () => historyWorker(__dirname), connectGame: (configuration, game) => new NativePipeClient(configuration, game, diagnoseV1Broker, 'v1'),
   hardModeEvidence: () => hardMode.evidence(), onHardModeTrip: details => {port.postMessage({type: 'hard-mode', update: 'trip', trip: details});},

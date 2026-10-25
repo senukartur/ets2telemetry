@@ -40,8 +40,8 @@ export interface RecordingTrip {
   untrackedJob: boolean;
 }
 /**
- * The recording status in the application health (ET-015c, G2). `disabled`: this service records nothing (production
- * until the enablement PR). `unknown`: main has no current report, because the service is not running or sent an invalid
+ * The recording status in the application health (ET-015c, G2). `disabled`: this service records nothing (it builds no
+ * recorder, which production no longer does since the game recording enablement of October 25, 2026). `unknown`: main has no current report, because the service is not running or sent an invalid
  * one. Otherwise the service's state with its target, a fixed code, its committed losses and the current trip. Fixed
  * enums and counts only: never text, paths or identifiers.
  */
