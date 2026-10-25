@@ -2,6 +2,7 @@ import {readFileSync} from 'node:fs';
 import {expect, it} from 'vitest';
 import type {LiveTelemetry, OverlayPresentation, OverlaySectionView} from '../../packages/contracts/src';
 import {validateMessage} from '../../packages/contracts/src/protocol-v0';
+import {NOT_SUPPORTED_GEARBOX} from '../../packages/contracts/src/protocol-v1';
 import {initialLive} from '../../apps/desktop/src/live-state';
 import {overlayPresentation} from '../../apps/desktop/src/overlay-presentation';
 import {DEFAULT_OVERLAY_SETTINGS, OVERLAY_PRESETS} from '../../apps/desktop/src/overlay-sections';
@@ -472,4 +473,6 @@ it('formats the gear section with the current Mack layout labels in manual mode 
   expect(gearOf(gearboxPair(1))).toEqual({id: 'gear', state: 'value', text: '1'});
   expect(gearOf(gearboxPair(1, {truckId: 'vehicle.synthetic_truck'}), manual)).toEqual({id: 'gear', state: 'value', text: '1L'});
   expect(gearOf(gearboxPair(1, {v1: {status: 'stale', fresh: false}}), manual)).toEqual({id: 'gear', state: 'value', text: '1L'});
+  // A minor-0 source: every gearbox part is not-supported (B7).
+  expect(gearOf(gearboxPair(1, {gearbox: NOT_SUPPORTED_GEARBOX}), manual)).toEqual({id: 'gear', state: 'value', text: '1L'});
 });
