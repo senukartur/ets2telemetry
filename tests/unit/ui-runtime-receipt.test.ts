@@ -10,7 +10,7 @@ const common = ['bilingual', 'bothSizes', 'security', 'offlineFonts', 'recording
 const flags = {shell: ['navigation', 'headingFocus','hardModePage', 'journalUnmount', 'menuKeyboard', 'exitAvailable', 'laterAccount'],
   live: ['numericGauge', 'unavailableVsZero', 'paused', 'staleDashes', 'rawNames', 'unsupportedTrip', 'jobViewport', 'hmNamesReadable','fullWidthTelemetry','tankUnknownVsZero'],
   journal: ['syntheticBanner', 'pageReturn', 'chartBounded', 'rawTabs', 'searchPlanned', 'tripRegions', 'tableReadable','signedChart'], settings: ['allPanels', 'allSections', 'committedSave', 'sourceSelector', 'uninstallRefusal', 'refusedSave', 'readOnly', 'controlsKeyboard', 'lastEnabled', 'fontLicense', 'overlayVisibility', 'visibilityFailedSave', 'actionResult', 'overlayOpacity','opacityFailedSave','opacityReadOnly','overlayUnified', 'overlayEditing', 'overlayScroll', 'scaleControl', 'gearDisplay', 'gearDisplayFailedSave'],
-  overlay: ['fourLayouts', 'transparent', 'contained', 'independentFont', 'missing', 'paused', 'staleDashes', 'heroSubsets','formatterProfiles', 'stableNumbers', 'opacityKeyboardFocus','opacityGestures','backgroundOpacityOverlay','clusterRpmContained', 'scaleRange', 'clusterSpeedArc', 'gearDisplayManual']};
+  overlay: ['fourLayouts', 'transparent', 'contained', 'independentFont', 'missing', 'paused', 'staleDashes', 'heroSubsets','formatterProfiles', 'stableNumbers', 'opacityKeyboardFocus','opacityGestures','backgroundOpacityOverlay','clusterRpmContained', 'scaleRange', 'clusterSpeedArc', 'gearDisplayManual', 'gearboxLabels']};
 // ET-045e: six English 1280x800 overlay scale references, captured at their own window sizes, beside the 64 layout screenshots.
 const references = ['scale-strip', 'scale-card', 'scale-cluster', 'scale-hud', 'scale-strip-old70', 'scale-strip-old100'];
 type Case = keyof typeof screens;
@@ -62,7 +62,7 @@ it('requires every UI language/size/screen, assertion and plain screenshot file 
     {name: 'overlay scale reference with another image size', uiCase: 'overlay', change: value => {value.ui.screenshots.find(shot => shot.screen === 'scale-card')!.imageHeight = 57;}},
     // ET-045d: the stable strip numbers and the contained Cluster centre are mandatory overlay assertions; ET-045f adds the
     // Cluster speed arc.
-    ...['formatterProfiles', 'stableNumbers', 'opacityKeyboardFocus','opacityGestures','backgroundOpacityOverlay','clusterRpmContained', 'scaleRange', 'clusterSpeedArc', 'gearDisplayManual'].flatMap(flag => [
+    ...['formatterProfiles', 'stableNumbers', 'opacityKeyboardFocus','opacityGestures','backgroundOpacityOverlay','clusterRpmContained', 'scaleRange', 'clusterSpeedArc', 'gearDisplayManual', 'gearboxLabels'].flatMap(flag => [
       {name: `false overlay ${flag}`, uiCase: 'overlay' as const, change: (value: Fixture) => {value.ui.flags[flag] = false;}},
       {name: `missing overlay ${flag}`, uiCase: 'overlay' as const, change: (value: Fixture) => {delete value.ui.flags[flag];}}
     ]),

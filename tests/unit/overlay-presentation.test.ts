@@ -2,6 +2,7 @@ import {readFileSync} from 'node:fs';
 import {expect, it} from 'vitest';
 import type {LiveTelemetry, OverlayPresentation, OverlaySectionView} from '../../packages/contracts/src';
 import {validateMessage} from '../../packages/contracts/src/protocol-v0';
+import {NOT_SUPPORTED_GEARBOX} from '../../packages/contracts/src/protocol-v1';
 import {initialLive} from '../../apps/desktop/src/live-state';
 import {overlayPresentation} from '../../apps/desktop/src/overlay-presentation';
 import {DEFAULT_OVERLAY_SETTINGS, OVERLAY_PRESETS} from '../../apps/desktop/src/overlay-sections';
@@ -10,7 +11,7 @@ import {overlayView} from '../../apps/desktop/src/overlay-view';
 import {
   SYNTHETIC_V1_OVERLAY_CURRENT, SYNTHETIC_V1_OVERLAY_STOPPED, SYNTHETIC_V1_OVERLAY_V0_STALE, SYNTHETIC_V1_OVERLAY_V1_STALE, SYNTHETIC_V1_STRIP_SECTIONS
 } from '../../scripts/ci/renderer-observation.mjs';
-import {smokePair, v1Projection, type V1Options} from '../shared/live-v1-fixtures';
+import {gearboxPair, smokePair, v1Projection, type V1Options} from '../shared/live-v1-fixtures';
 
 // REG-009 partial (ET-012a): the overlay sections over the v0 snapshot fixture. Expected texts are hand-computed from the
 // fixture: speed 0 m/s, fuel not observed, capacity 1000 L, 600 rpm, gear -1, SDK mean 25 L/100 km, range not observed,
@@ -459,4 +460,19 @@ it('formats the gear section in the displayed game\'s gear display mode only', (
   const stale = {...ets2, fresh: false, status: 'stale' as const};
   expect(gearOf(stale, modes)).toEqual(gearOf(stale));
   expect(gearOf(stale, modes)?.state).not.toBe('value');
+});
+
+// ET-050b B6: the overlay's gear section uses the same labels as the dashboard, from the one liveSources point; every
+// layout renders that text (overlay-rendering.test.ts).
+it('formats the gear section with the current Mack layout labels in manual mode only', () => {
+  const manual = {ets2: 'manual', ats: 'automatic'} as const;
+  const gearOf = (current: LiveTelemetry, gearDisplay?: {ets2: 'automatic' | 'manual'; ats: 'automatic' | 'manual'}) =>
+    overlayPresentation(current, undefined, undefined, undefined, false, 'ru', gearDisplay).sections.find(section => section.id === 'gear');
+  for (const [gear, text] of [[1, 'LL'], [2, 'LH'], [3, '1L'], [18, '8H'], [-1, 'R1'], [0, 'N']] as const)
+    expect(gearOf(gearboxPair(gear), manual)).toEqual({id: 'gear', state: 'value', text});
+  expect(gearOf(gearboxPair(1))).toEqual({id: 'gear', state: 'value', text: '1'});
+  expect(gearOf(gearboxPair(1, {truckId: 'vehicle.synthetic_truck'}), manual)).toEqual({id: 'gear', state: 'value', text: '1L'});
+  expect(gearOf(gearboxPair(1, {v1: {status: 'stale', fresh: false}}), manual)).toEqual({id: 'gear', state: 'value', text: '1L'});
+  // A minor-0 source: every gearbox part is not-supported (B7).
+  expect(gearOf(gearboxPair(1, {gearbox: NOT_SUPPORTED_GEARBOX}), manual)).toEqual({id: 'gear', state: 'value', text: '1L'});
 });

@@ -181,19 +181,27 @@ describe('REG-009 v1 dashboard values', () => {
     expect(all.position.notes).toEqual(['game-world-coordinates']);
   });
   it('formats the gear in the selected display mode only (ET-050)', () => {
-    const manual = buildLiveView(live('snapshot'), state, resolveDisplayUnits('ets2'), 'manual');
+    const manual = buildLiveView(live('snapshot'), state, resolveDisplayUnits('ets2'), {mode: 'manual'});
     expect(fields(manual).gear).toEqual({id: 'gear', state: 'value', text: '2L'});
-    expect(fields(buildLiveView(live('snapshot'), state, resolveDisplayUnits('ets2'), 'automatic')).gear.text).toBe('3');
+    expect(fields(buildLiveView(live('snapshot'), state, resolveDisplayUnits('ets2'), {mode: 'automatic'})).gear.text).toBe('3');
     expect(texts(manual)).toEqual({...texts(viewOf(live('snapshot'), state)), gear: '2L'});
     const reverse = live('checkpoint');
-    expect(fields(buildLiveView(reverse, normalizeV0State(reverse.observation!.state), resolveDisplayUnits('ets2'), 'manual')).gear.text).toBe('R1');
+    expect(fields(buildLiveView(reverse, normalizeV0State(reverse.observation!.state), resolveDisplayUnits('ets2'), {mode: 'manual'})).gear.text).toBe('R1');
     for (const status of ['stale', 'disconnected'] as const) {
       const stale = live('checkpoint', {status, fresh: false});
-      expect(fields(buildLiveView(stale, normalizeV0State(stale.observation!.state), resolveDisplayUnits('ets2'), 'manual')).gear)
+      expect(fields(buildLiveView(stale, normalizeV0State(stale.observation!.state), resolveDisplayUnits('ets2'), {mode: 'manual'})).gear)
         .toEqual({id: 'gear', state: 'missing', text: 'unavailable', reason: 'not-current'});
     }
-    expect(fields(buildLiveView(live('snapshot'), {...state, gear: {state: 'missing', reason: 'not-observed'}}, resolveDisplayUnits('ets2'), 'manual')).gear)
+    expect(fields(buildLiveView(live('snapshot'), {...state, gear: {state: 'missing', reason: 'not-observed'}}, resolveDisplayUnits('ets2'), {mode: 'manual'})).gear)
       .toEqual({id: 'gear', state: 'missing', text: 'unavailable', reason: 'not-observed'});
+  });
+  it('uses the labels it is given in manual mode only (ET-050b B3)', () => {
+    // A hand-written label table: gear 3 is LH, as a crawler pair could be. buildLiveView never derives labels itself.
+    const labels = {forward: new Map([[3, 'LH']]), reverse: new Map([[1, 'R1']])};
+    expect(fields(buildLiveView(live('snapshot'), state, resolveDisplayUnits('ets2'), {mode: 'manual', labels})).gear.text).toBe('LH');
+    expect(fields(buildLiveView(live('snapshot'), state, resolveDisplayUnits('ets2'), {mode: 'automatic', labels})).gear.text).toBe('3');
+    // A gear the table does not cover falls back to the GD2 formula.
+    expect(fields(buildLiveView(live('snapshot'), state, resolveDisplayUnits('ets2'), {mode: 'manual', labels: {forward: new Map([[4, 'X']]), reverse: new Map()}})).gear.text).toBe('2L');
   });
   it('shows cargo loaded only for the cargo market', () => {
     if (state.job.state !== 'value') throw new Error('job expected');

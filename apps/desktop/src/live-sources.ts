@@ -1,6 +1,8 @@
 import type {LiveTelemetry} from '../../../packages/contracts/src';
+import type {GearboxState, HShifterLayout} from '../../../packages/contracts/src/protocol-v1';
 import type {DisplayUnits, GearDisplayMode} from '../../../packages/telemetry-core/src/display-profile';
-import {buildLiveView, carriesField, type LiveDashboardView, type LiveField, type LiveFieldId} from '../../../packages/telemetry-core/src/live-view';
+import {deriveGearLabels} from '../../../packages/telemetry-core/src/gear-labels';
+import {buildLiveView, carriesField, isCurrent, type GearDisplay, type LiveDashboardView, type LiveField, type LiveFieldId} from '../../../packages/telemetry-core/src/live-view';
 import {normalizeV0State} from '../../../packages/telemetry-core/src/normalize-v0';
 import {normalizeV1State} from '../../../packages/telemetry-core/src/normalize-v1';
 import type {LiveJob, NormalizedLiveState, Reading} from '../../../packages/telemetry-core/src/readings';
@@ -54,20 +56,55 @@ function fieldsOf(view: LiveDashboardView): Map<LiveFieldId, LiveField> {
 }
 const notCurrent = (field: LiveField): LiveField => ({id: field.id, state: 'missing', text: 'unavailable', reason: 'not-current', ...(field.notes ? {notes: field.notes} : {})});
 
-/** `gear` (ET-050) selects only how the gear row is formatted; every other field and every reading is unchanged. */
+/**
+ * The last H-shifter layout seen, as a frozen copy. Every live update arrives as a new object, so an unchanged layout is
+ * replaced by this copy and deriveGearLabels' identity-keyed memo hits instead of deriving again at up to 20 Hz. The
+ * copy, not the caller's object, is kept, so a caller that later changes its own object cannot alter the memo.
+ */
+let lastLayout: HShifterLayout | undefined;
+function stableLayout(layout: HShifterLayout): HShifterLayout {
+  const last = lastLayout;
+  if (last !== undefined && last.selectorCount === layout.selectorCount && last.slots.length === layout.slots.length &&
+    last.slots.every((slot, index) => {
+      const other = layout.slots[index];
+      return slot.gear === other.gear && slot.handlePosition === other.handlePosition && slot.selectors === other.selectors;
+    })) return last;
+  const copy: HShifterLayout = Object.freeze({selectorCount: layout.selectorCount,
+    slots: Object.freeze(layout.slots.map(slot => Object.freeze({gear: slot.gear, handlePosition: slot.handlePosition, selectors: slot.selectors}))) as HShifterLayout['slots']});
+  lastLayout = copy;
+  return copy;
+}
+/**
+ * ET-050b B6: manual mode uses the gearbox-aware labels only while the v1 projection is carried and current, its truck
+ * has the same model id as v0's (the ET-045a rule) and its layout validates against the gear counts. Anything else,
+ * including a minor-0 source whose gearbox is `not-supported`, keeps the GD2 formula; a stale layout is never held.
+ */
+function gearDisplay(mode: GearDisplayMode, applies: boolean, gearbox: GearboxState | undefined): GearDisplay {
+  if (mode !== 'manual' || !applies || gearbox === undefined || !gearbox.hshifter.available) return {mode};
+  const labels = deriveGearLabels({...gearbox, hshifter: {available: true, value: stableLayout(gearbox.hshifter.value)}});
+  return labels ? {mode, labels} : {mode};
+}
+
+/**
+ * `gear` (ET-050) selects only how the gear row is formatted; every other field and every reading is unchanged. In
+ * manual mode the labels follow the current v1 truck's gearbox layout when it applies (ET-050b B6), else the formula.
+ */
 export function liveSources(live: LiveTelemetry, units: DisplayUnits, gear: GearDisplayMode = 'automatic'): LiveSources {
   const v0State = live.observation ? normalizeV0State(live.observation.state) : undefined;
-  const v0View = buildLiveView(live, v0State, units, gear);
   const v1 = live.v1, v1Observation = v1?.observation, v0Source = live.observation?.source;
   const carried = v1 && v1Observation && v1.selection === live.selection &&
     (!v0Source || (v1Observation.source.origin === v0Source.origin && v1Observation.source.game === v0Source.game)) ? {v1, observation: v1Observation} : undefined;
   const v1Carried = carried !== undefined;
   const v1State = carried ? normalizeV1State(carried.observation.state, carried.observation.sourceStatus) : undefined;
-  const v1View = carried ? buildLiveView(carried.v1, v1State, units, gear) : undefined;
-  const v0Current = v0View.connection.current, v1Current = !!v1View?.connection.current;
-  const job = jobIdentity(v0State?.job.state === 'value' ? v0State.job.value : undefined, v1State?.job);
+  // The same currentness buildLiveView reports for the v1 view.
+  const v1Current = carried !== undefined && isCurrent(carried.v1);
   // ET-045a: v0 carries only the truck's model id; v1's SDK brand and name describe the same truck only for the same id.
   const sameTruck = v0State?.truck.state === 'value' && v1State?.truck.state === 'value' && sameValue(v0State.truck.value.model.id, v1State.truck.value.model.id);
+  const display = gearDisplay(gear, v1Current && sameTruck, carried?.observation.state.gearbox);
+  const v0View = buildLiveView(live, v0State, units, display);
+  const v1View = carried ? buildLiveView(carried.v1, v1State, units, display) : undefined;
+  const v0Current = v0View.connection.current;
+  const job = jobIdentity(v0State?.job.state === 'value' ? v0State.job.value : undefined, v1State?.job);
   const v0Fields = fieldsOf(v0View), v1Fields = v1View ? fieldsOf(v1View) : undefined;
   const field = (id: LiveFieldId): LiveField => {
     if (carriesField('v0', id)) {

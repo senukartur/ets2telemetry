@@ -238,3 +238,24 @@ A crashed or killed game leaves its v0 and v1 discovery records behind. Before E
 - During directory enumeration, `native/telemetry-client/src/client.cpp` validates all ten record fields for both `ets2` and `ats`, checks process liveness before counting records toward the 256-entry / 128-record bounds, and sweeps demonstrably stale records via `sweep_stale_record` (`CreateFileW` with `DELETE | READ_CONTROL`, `FILE_SHARE_READ | FILE_SHARE_DELETE`, and `FILE_FLAG_OPEN_REPARSE_POINT`, tolerating `ERROR_FILE_NOT_FOUND`, `ERROR_DELETE_PENDING`, and `ERROR_SHARING_VIOLATION`, then `SetFileInformationByHandle(FileDispositionInfo)`) while preserving ownership, ACL, reparse and `BY_HANDLE_FILE_INFORMATION` identity checks ([native transport boundary](native-transport-boundary-v0.md#discovery-and-service-policy)).
 - When `OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION | SYNCHRONIZE, FALSE, pid)` returns `ERROR_ACCESS_DENIED` on a reused PID, the broker probes `OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, pid)` + `GetProcessTimes` (failing closed if that process is still live with the recorded `processCreationTime`, or sweeping immediately if that open returns `ERROR_INVALID_PARAMETER`) and then sweeps the record only when **both** the derived pipe endpoint does not exist (`WaitNamedPipeW` returns `ERROR_FILE_NOT_FOUND`) **and** `sweep_stale_record` succeeds; otherwise it fails closed at stage `server-process`.
 - Covered by `native-pipe-client-{creation,dead,stale-live,dead-live}` (including 260 stale records alongside one live server, reused inaccessible PIDs, >256 non-record entries and >128 live records) and `tests/integration/v1-chain-process-death.test.ts` case 2.
+
+## TD-020: Gearbox labels the SDK cannot describe
+
+Recorded October 25, 2026 by the coordinator with ET-050b PR-6 ([validation](validation/et-050b.md)). **This entry was a coordinator decision under the owner's approval of ET-050b (B1–B9).**
+
+ET-050b derives manual gear labels from the SDK H-shifter layout, because the SDK exposes no transmission names. The derivation cannot know:
+- the game's own gear names (`transmission_names` in the truck definitions), so a modded or unusual gearbox may differ from the in-game dashboard;
+- reverse names such as `RL`/`RH` or `RLL`, so reverse stays `R1`…`Rn` (B4);
+- the ETS2 crawler naming, which no capture has shown; the crawler constant is the ATS form (`L`, `LL`/`LH`, B5);
+- layouts with more than one crawler position, which fall back to the formula;
+- a truck change without a following `hshifter` callback: the previous layout stays with the new truck's counts until the counts disagree with the slots (then the formula) or a new callback arrives, so a window with the old layout's labels is possible when the counts happen to match.
+
+**Until then:** the formula is the fallback, and the owner's real-game checks decide whether any of these needs work. Reading game files or adding a model table is not authorized by this entry.
+
+## TD-021: The session's protocol minor in the stored identity
+
+Recorded October 25, 2026 by the coordinator with ET-050b PR-6, from the PR-5 review. **This entry was a coordinator decision under the owner's approval of ET-050b (B1–B9).**
+
+`upsertSession` in `packages/storage/src/sqlite/writes.ts` compares `protocol_minor` with the stored plugin session, so a minor change within one plugin session is `SESSION_CONFLICT`, which the durable sink maps to `unavailable` (fail-closed, nothing lost). Plugin setup never replaces the DLL while a game runs, so a supported update cannot cause it; it occurs only after an application downgrade during a game session with a minor-1 plugin loaded, or with a development build that has PR-4 but not PR-5.
+
+**Before `GAME_HISTORY_RECORDING` is enabled,** the enablement PR decides whether `upsertSession` should stop comparing `protocol_minor`, keeping the first-seen minor in `plugin_sessions` and the per-event minor in `events.protocol_minor`. No schema or storage change is authorized by this entry.

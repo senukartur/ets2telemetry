@@ -14,7 +14,7 @@ export interface GearLabels {forward: ReadonlyMap<number, string>; reverse: Read
  */
 export const CRAWLER_LABELS = {single: 'L', low: 'LL', high: 'LH'} as const;
 
-interface Cell {low: boolean; split: Map<number, number>}
+interface Cell {split: Map<number, number>}
 interface SlotLabel {label: string; crawler: boolean; number: number; higher: boolean}
 
 /**
@@ -80,7 +80,7 @@ function derive(forwardGears: number, reverseGears: number, layout: HShifterLayo
     const low = rangeState(slot) === lowState;
     const position = cells.get(slot.handlePosition) ?? {};
     cells.set(slot.handlePosition, position);
-    const cell = (low ? position.low : position.high) ?? {low, split: new Map<number, number>()};
+    const cell = (low ? position.low : position.high) ?? {split: new Map<number, number>()};
     if (low) position.low = cell; else position.high = cell;
     const state = splitterBit !== undefined && (slot.selectors & splitterBit) !== 0 ? 1 : 0;
     // Ignored bits may fold several slots into one cell state; they must agree on the gear.

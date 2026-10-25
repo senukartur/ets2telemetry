@@ -453,7 +453,7 @@ try {
     result.telemetry.v1DisconnectedHidden = true;
   }
   if (config.scenario === 'ui') {
-    await runUiSmoke({application, dashboard: window, overlay, source: telemetrySource, config, record: result.ui = {}});
+    await runUiSmoke({application, dashboard: window, overlay, source: telemetrySource, sourceV1: telemetrySourceV1, config, record: result.ui = {}});
     if (config.uiCase === 'settings') {
       // Same 60-second Job: a normal first run, then an isolated newer-version read-only launch.
       await application.context().tracing.stop({path: path.join(config.output, 'ui-settings-first-trace.zip')}); tracing = false;

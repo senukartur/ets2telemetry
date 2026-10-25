@@ -44,7 +44,7 @@ html:has(.overlay-body) { background: transparent; }
    an invisible zero-height block of the same font, so 9 to 10, 99 to 100 or 999 to 1000 never resizes the section or moves
    its neighbours. Digits align right, so the unit stays put. The reserve is CSS content: the value's text is unchanged. */
 .overlay-strip .overlay-value[data-reserve] { text-align: right; }
-/* ET-050: a multi-line reserve (the gear's "R0", "0H", "0L") keeps its lines, so the widest one sets the width. */
+/* ET-050: a multi-line reserve (the gear's "R0", "0H", "0L" and, since ET-050b, "LH", "LL") keeps its lines, so the widest one sets the width. */
 .overlay-strip .overlay-value[data-reserve]::after { content: attr(data-reserve); display: block; height: 0; overflow: hidden; visibility: hidden; white-space: pre; }
 
 /* Card, cluster panel and HUD (ET-012d): fixed-height rows, one per enabled section, in a window main sized for them

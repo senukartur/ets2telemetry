@@ -9,20 +9,30 @@ import {performance} from 'node:perf_hooks';
 // with a new seq and SDK boundary on a monotonic capture clock. The job's cargo and destination city ids are set to the
 // v0 smoke checkpoint's in memory (fixture files are untouched), so the dashboard shows both sources for the same job.
 // The fixtures' game window is kept, so the service's projection must strip it. Clock probes are read and ignored.
+// ET-050b: it answers the service's minor-1 offer with minor 1, as a current plugin does, and every state carries the
+// gearbox of the minor-1 fixture checkpoint-ats-mack (the CAP-01 ATS Mack 18F/4R layout). The v1 truck's model id differs
+// from the v0 smoke checkpoint's (truck.volvo), so the dashboard keeps the GD2 formula until `setTruckId('truck.volvo')`
+// makes both sources describe the same truck (ET-050b B6).
 const CLIENT_FRAME_BYTES = 4096;
 /** Every capture is at least snapshot-live's own capture, so its oldest retained event never lies in the future. */
 const CAPTURE_BASE_NS = 1_000_250_000_000n;
+/** The protocol v1 minor this source selects (ET-050b). */
+const MINOR = 1;
 
 export async function startLiveSmokeSourceV1(checkout) {
   const endpoint = `\\\\.\\pipe\\ETS2Telemetry-SYNTHETIC-TEST-v1-${process.pid}-${randomUUID()}`;
   const fixture = async name => JSON.parse(await readFile(`${checkout}/tests/fixtures/protocol-v1/${name}.json`, 'utf8'));
-  const [welcome, checkpoint, snapshot] = await Promise.all([fixture('welcome-live'), fixture('checkpoint-live'), fixture('snapshot-live')]);
+  const [welcome, checkpoint, snapshot, mack] = await Promise.all([fixture('welcome-live'), fixture('checkpoint-live'), fixture('snapshot-live'),
+    fixture('minor1/checkpoint-ats-mack')]);
+  welcome.data.minor = MINOR;
+  const fixtureTruckId = checkpoint.data.state.configuration.truck.value.id.value;
   const source = {...welcome.source, pluginSessionId: randomUUID(), processInstanceId: randomUUID(), processId: process.pid};
   const clockId = randomUUID();
   for (const message of [checkpoint, snapshot]) {
     const job = message.data.state.configuration.job.value;
     job.cargoId = {available: true, value: 'cargo.logs'};
     job.destinationCityId = {available: true, value: 'city.warszawa'};
+    message.data.state.gearbox = structuredClone(mack.data.state.gearbox);
   }
   let seq = 0n, boundary = BigInt(checkpoint.data.state.boundaryOrder), connections = 0, frames = 0, probes = 0, stopped = false, held = false;
   const origin = performance.now(), clients = new Set();
@@ -32,7 +42,7 @@ export async function startLiveSmokeSourceV1(checkout) {
   };
   const message = template => {
     const value = structuredClone(template);
-    value.source = source; value.seq = (++seq).toString();
+    value.version = {major: 1, minor: MINOR}; value.source = source; value.seq = (++seq).toString();
     value.capture = {clockId, monotonicNs: (CAPTURE_BASE_NS + BigInt(Math.floor((performance.now() - origin) * 1e6))).toString()};
     if (value.kind === 'checkpoint') value.data.boundarySeq = value.seq;
     // Each state message is a new SDK boundary, which is what renews the service's v1 freshness.
@@ -52,14 +62,14 @@ export async function startLiveSmokeSourceV1(checkout) {
     const accept = value => {
       if (!started) {
         assert.equal(value.kind, 'hello'); assert.deepEqual(value.version, {major: 1, minor: 0});
-        // ET-050b B1: the service offers minor 1; these minor-0 fixtures answer as a plugin from before ET-050b would.
+        // ET-050b B1: the service offers minor 1 in a {1,0} hello, and this source selects it.
         assert.deepEqual({minMinor: value.data.minMinor, maxMinor: value.data.maxMinor, durableEvents: value.data.durableEvents}, {minMinor: 0, maxMinor: 1, durableEvents: false});
         started = true; clearTimeout(deadline);
         send(welcome, () => send(checkpoint, loop));
       } else {
         // The live-only client measures the source clock; no reply is required, so a probe stays outstanding.
-        // Its probes carry the minor the welcome selected, 0.
-        assert.equal(value.kind, 'clock.probe'); assert.deepEqual(value.version, {major: 1, minor: 0}); probes++;
+        // Its probes carry the minor the welcome selected, 1.
+        assert.equal(value.kind, 'clock.probe'); assert.deepEqual(value.version, {major: 1, minor: MINOR}); probes++;
       }
     };
     socket.on('data', bytes => {
@@ -85,6 +95,11 @@ export async function startLiveSmokeSourceV1(checkout) {
   };
   return {endpoint, stop,
     hold: () => {held = true;}, resume: () => {held = false;},
+    // ET-050b: the v1 truck's model id for the following state messages; undefined restores the fixture's own id.
+    setTruckId: id => {
+      assert.ok(id === undefined || (typeof id === 'string' && id.length > 0));
+      for (const message of [checkpoint, snapshot]) message.data.state.configuration.truck.value.id = {available: true, value: id ?? fixtureTruckId};
+    },
     statistics: () => ({connections, frames, probes, activeClients: clients.size, held, stopped, origin: 'synthetic', history: false,
       identity: {...source, clockId}})};
 }
