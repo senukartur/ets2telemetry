@@ -22,7 +22,10 @@ export interface LiveTelemetryV1 {
   reason: string;
   /** Fresh connected or paused v1 data backed by an observation. */
   fresh: boolean;
-  /** The latest v1 observation of this selection; kept after a disconnect, so its values read as not current. */
+  /**
+   * The latest v1 observation of this selection; kept after a disconnect, so its values read as not current. Its state
+   * always carries the gearbox (ET-050b B7), `not-supported` in every part under a minor-0 connection.
+   */
   observation?: LiveObservationV1;
 }
 export interface LiveTelemetry {

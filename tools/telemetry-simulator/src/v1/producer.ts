@@ -3,8 +3,8 @@
 // docs/native-transport-v1.md#caller-sequence), answers one client at a time and builds every server message through the
 // unchanged ET-002b encoder, AckValidator and FrameDecoder. Every time is an explicit source-clock argument.
 import {
-  FrameDecoder, PROTOCOL_V1, V1_LIMITS, decodePayload, encodeFrame, negotiateV1, ProtocolError,
-  type Available, type DeliveryStatus, type EndData, type GapData, type ServerMessage, type SourceIdentity, type SourceStatus, type Uint64
+  FrameDecoder, PROTOCOL_V1, V1_LIMITS, V1_MAX_MINOR, decodePayload, encodeFrame, negotiateV1, ProtocolError,
+  type Available, type DeliveryStatus, type EndData, type GapData, type ServerMessage, type SourceIdentity, type SourceStatus, type Uint64, type V1Minor
 } from '../../../../packages/contracts/src/protocol-v1';
 import {AckValidator} from '../../../../packages/contracts/src/protocol-v1-delivery';
 import {EventStore, wireCounts, type EndCursor, type GapRange, type LossCause, type Outbound, type StoreStatus, type StoredEvent} from './store';
@@ -42,7 +42,8 @@ export function deliveryStatus(s: StoreStatus, durable: boolean): DeliveryStatus
 }
 
 interface Connection {
-  phase: 'hello' | 'live' | 'closed'; durable: boolean; decoder: FrameDecoder; validator?: AckValidator;
+  /** `minor` is the negotiated minor (ET-050b B1), 0 until the hello; the decoder exists from then on. */
+  phase: 'hello' | 'live' | 'closed'; durable: boolean; minor: V1Minor; decoder?: FrameDecoder; validator?: AckValidator;
   /** The hello read so far, at most one 4,096-byte frame and its prefix. */
   helloBytes: Uint8Array;
   lastCapture: bigint; lastStateNs: bigint; pendingDueNs?: bigint; lastProbe: bigint;
@@ -68,7 +69,7 @@ export class V1Producer {
   /** A client opened the pipe. One client per endpoint; the caller refuses a second one. */
   open(): void {
     if (this.conn) throw new Error('A client is already connected');
-    this.conn = {phase: 'hello', durable: false, decoder: new FrameDecoder('client'), helloBytes: new Uint8Array(0), sentThrough: 0n, lastCapture: 0n, lastStateNs: 0n, lastProbe: 0n};
+    this.conn = {phase: 'hello', durable: false, minor: 0, helloBytes: new Uint8Array(0), sentThrough: 0n, lastCapture: 0n, lastStateNs: 0n, lastProbe: 0n};
   }
   /** The client is gone: the gate closes first, then a durable connection starts the store's retention window. */
   close(nowNs: bigint): void {
@@ -106,13 +107,15 @@ export class V1Producer {
   private envelope<K extends ServerMessage['kind']>(kind: K, data: Extract<ServerMessage, {kind: K}>['data'], nowNs: bigint, carried: (bigint | undefined)[] = []): Out {
     const c = this.conn!, capture = max(nowNs, c.lastCapture, ...carried.filter((t): t is bigint => t !== undefined));
     c.lastCapture = capture; this.seq++;
-    const message = {version: PROTOCOL_V1, kind, source: this.source, seq: this.seq.toString(), capture: {clockId: this.captureClockId, monotonicNs: capture.toString()}, data} as ServerMessage;
-    return {message, frame: encodeFrame(message)};
+    // Every message of the connection carries its negotiated minor (B1).
+    const message = {version: {major: 1, minor: c.minor}, kind, source: this.source, seq: this.seq.toString(), capture: {clockId: this.captureClockId, monotonicNs: capture.toString()}, data} as ServerMessage;
+    return {message, frame: encodeFrame(message, {maxMinor: c.minor})};
   }
   private stateData(): {data: {state: Extract<ServerMessage, {kind: 'snapshot'}>['data']['state']; status: SourceStatus; continuity: {coalescedSnapshots: Uint64; offlineTransitions: Uint64}}; oldest?: bigint} {
     const s = this.store.status(), p = this.adapter.published;
     return {oldest: s.oldestRetainedNs, data: {
-      state: {...structuredClone(p.state), window: {available: false, reason: 'not-supported'}},
+      // B1: `state.gearbox` exactly on a minor-1 connection; minor 0 never carries it.
+      state: {...structuredClone(p.state), window: {available: false, reason: 'not-supported'}, ...(this.conn!.minor === 1 ? {gearbox: structuredClone(p.gearbox)} : {})},
       status: {gameMode: this.adapter.gameMode, eventLoss: wireCounts(s.eventLoss), delivery: deliveryStatus(s, this.conn!.durable)},
       continuity: {coalescedSnapshots: this.coalesced.toString(), offlineTransitions: p.offlineTransitions.toString()}
     }};
@@ -141,14 +144,15 @@ export class V1Producer {
     const c = this.conn; if (!c || c.phase === 'closed') throw new Error('No open connection');
     if (c.phase === 'hello') return this.hello(c, bytes, nowNs);
     const out: Out[] = []; let probe: {id: string} | undefined;
-    c.decoder.push(bytes, m => {
+    c.decoder!.push(bytes, m => {
       if (m.kind === 'ack') {
         const through = c.validator!.accept(m);
         if (through !== undefined && this.store.release(BigInt(through)) === undefined) throw new Error('Producer invariant violation: release');
       } else if (m.kind === 'clock.probe') {
-        // OD-5 S6: probe IDs strictly increase, and no probe may arrive while the reply to the previous one is unsent.
-        const id = BigInt(m.data.probeId); if (id <= c.lastProbe || probe) throw new ProtocolError('Clock probe order');
-        c.lastProbe = id; probe = {id: m.data.probeId};
+        // AckValidator.probe requires the checkpoint and the connection's minor (B1), as the native endpoint does. OD-5
+        // S6: probe IDs strictly increase, and no probe may arrive while the reply to the previous one is unsent.
+        const probeId = c.validator!.probe(m), id = BigInt(probeId); if (id <= c.lastProbe || probe) throw new ProtocolError('Clock probe order');
+        c.lastProbe = id; probe = {id: probeId};
       } else throw new ProtocolError('Only ack and clock.probe follow the checkpoint');
     });
     // The reply is built after the whole read was accepted, so a rejected read consumes no message seq.
@@ -165,10 +169,14 @@ export class V1Producer {
     // Another major, another envelope minor or any other kind closes the connection without an error frame (§2).
     const m = decodePayload(buffer.subarray(4), 'client'); c.helloBytes = new Uint8Array(0);
     if (m.kind !== 'hello') throw new ProtocolError('Hello expected');
-    c.durable = negotiateV1(m).durableEvents; c.phase = 'live';
-    const out: Out[] = [this.envelope('welcome', {minor: 0, durableEvents: c.durable, limits: {...V1_LIMITS}, capabilities: {gameplayEvents: this.adapter.config.gameplayEvents, eventTypes: this.adapter.eventTypes()},
+    // B1: the simulator selects min(hello maxMinor, 1); a hello offering only minor 0 gets the original minor-0 bytes.
+    const negotiated = negotiateV1(m, {allowDurable: true, maxMinor: V1_MAX_MINOR});
+    c.durable = negotiated.durableEvents; c.minor = negotiated.minor; c.phase = 'live';
+    // Client frames after the hello carry the connection's minor; the decoder and the validator refuse any other.
+    c.decoder = new FrameDecoder('client', {maxMinor: c.minor});
+    const out: Out[] = [this.envelope('welcome', {minor: c.minor, durableEvents: c.durable, limits: {...V1_LIMITS}, capabilities: {gameplayEvents: this.adapter.config.gameplayEvents, eventTypes: this.adapter.eventTypes()},
       versions: structuredClone(this.adapter.config.versions), gameMode: this.adapter.gameMode}, nowNs)];
-    c.validator = new AckValidator(this.source.pluginSessionId, c.durable);
+    c.validator = new AckValidator(this.source.pluginSessionId, c.durable, c.minor);
     if (this.retired) { out.push(this.end(this.retired, nowNs)!); return out; }
     // Connect the store before the gate opens, so that every record copied for this consumer is retained.
     if (c.durable) this.store.connect();

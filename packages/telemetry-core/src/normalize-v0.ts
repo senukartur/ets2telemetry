@@ -35,7 +35,7 @@ export function normalizeV0State(state: CurrentState): NormalizedLiveState {
     odometer: mapReading(fromAvailable(state.odometer), meters => ({kind: 'odometer' as const, meters})),
     navigationDistance: NOT_CARRIED,
     gameTime: {minutes: mapReading(fromAvailable(state.gameTime), minutes => BigInt(minutes)), clockId: state.gameTime.clockId},
-    worldPlacement: NOT_CARRIED, job, truck, trailers: NOT_CARRIED, gameMode: NOT_CARRIED, eventLoss: NOT_CARRIED,
+    worldPlacement: NOT_CARRIED, job, truck, trailers: NOT_CARRIED, gameMode: NOT_CARRIED, eventLoss: NOT_CARRIED, gearbox: NOT_CARRIED,
     configurationRevision: configuration.revision
   };
 }

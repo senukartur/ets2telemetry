@@ -84,3 +84,32 @@ describe('minimized CAP-01 replay corpus', () => {
     expect(replay(7).atEnvelope(39).data.record).toMatchObject({type: 'player.tollgate.paid', amount: {value: {raw: '4'}}});
   });
 });
+
+// ET-050b: the CAP-01 hshifter and truck captures become the minor-1 gearbox; trip outputs above are unchanged. The
+// layouts are the CAP-01 slot tables of the ET-050b plan, written by hand (slot order: handle position, then selectors).
+describe('CAP-01 replay gearbox (ET-050b)', () => {
+  const slots = (rows: [number, number, number][]) => rows.map(([gear, handlePosition, selectors]) => ({gear, handlePosition, selectors}));
+  const eighteen = slots([[-1, 2, 0], [-3, 2, 1], [-2, 2, 2], [-4, 2, 3], [1, 3, 0], [2, 3, 2], [3, 4, 0], [11, 4, 1], [4, 4, 2], [12, 4, 3], [5, 5, 0], [13, 5, 1],
+    [6, 5, 2], [14, 5, 3], [7, 6, 0], [15, 6, 1], [8, 6, 2], [16, 6, 3], [9, 7, 0], [17, 7, 1], [10, 7, 2], [18, 7, 3]]);
+  const twelve = slots([[-1, 1, 0], [-3, 1, 1], [-2, 1, 2], [-4, 1, 3], [1, 2, 0], [7, 2, 1], [2, 2, 2], [8, 2, 3], [3, 3, 0], [9, 3, 1], [4, 3, 2], [10, 3, 3],
+    [5, 4, 0], [11, 4, 1], [6, 4, 2], [12, 4, 3]]);
+  const states = (run: number) => replay(run).result.transcript.flatMap(l => l.message.kind === 'snapshot' || l.message.kind === 'checkpoint' ? [l.message] : []);
+  it('serves the minor-1 gearbox on every state message of the replay connection', () => {
+    for (const run of [2, 4, 7, 8, 9]) {
+      const all = states(run);
+      expect(all.length).toBeGreaterThan(0);
+      for (const m of all) { expect(m.version).toEqual({major: 1, minor: 1}); expect(m.data.state.gearbox).toBeDefined(); }
+    }
+  });
+  it('carries the ATS Mack 18F/4R layout once run4 and run7 configured their trucks', () => {
+    for (const run of [4, 7]) {
+      expect(states(run).at(-1)!.data.state.gearbox).toEqual({forwardGears: {available: true, value: 18}, reverseGears: {available: true, value: 4},
+        hshifter: {available: true, value: {selectorCount: 2, slots: eighteen}}});
+    }
+  });
+  it('carries the ETS2 12-speed layout in run9 and none in run8, which captured no hshifter callback', () => {
+    expect(states(9).at(-1)!.data.state.gearbox).toEqual({forwardGears: {available: true, value: 12}, reverseGears: {available: true, value: 4},
+      hshifter: {available: true, value: {selectorCount: 2, slots: twelve}}});
+    expect(states(8).at(-1)!.data.state.gearbox?.hshifter).toEqual({available: false, reason: 'not-observed'});
+  });
+});

@@ -4,7 +4,7 @@ import type {HardModeObservation} from '../../../contracts/src/hard-mode';
 // is a no-op whose effects are never applied again (protocol v1 §10, docs/storage.md "Write commands").
 import {createHash} from 'node:crypto';
 import type Database from 'better-sqlite3';
-import {validateServerMessage, type Available, type EventRecord, type GapData, type ServerMessage, type SourceIdentity} from '../../../contracts/src/protocol-v1';
+import {V1_MAX_MINOR, validateServerMessage, type Available, type EventRecord, type GapData, type ServerMessage, type SourceIdentity} from '../../../contracts/src/protocol-v1';
 import {
   MAX_EFFECTS, MAX_SAMPLE_BATCH, type AttachInput, type AttachResult, type CommitOptions, type CommitResult, type CompletenessInterval, type CompletenessOptions, type EventReference, type SampleAppendOptions,
   type SampleAppendResult, type SampleInput, type TripEffect, type Uint64
@@ -32,9 +32,13 @@ const CLOSE_REASONS = ['outcome', 'configuration-cleared', 'different-job', 'res
 const ATTRIBUTIONS = ['trip', 'trip-before-loaded', 'free-driving', 'ambiguous'];
 const INTERVAL_KINDS = ['event-loss', 'not-connected', 'storage-unavailable', 'sample-loss', 'discontinuity', 'restore-loss'];
 
+/**
+ * A validated welcome, event or gap of either minor this contract implements (ET-050b B1). The envelope minor selects the
+ * schema; the per-connection minor rule is the consumer's, and the welcome's minor is stored with its session.
+ */
 function serverMessage(input: unknown, kind: 'welcome' | 'event' | 'gap'): ServerMessage {
   let message: ServerMessage;
-  try { message = validateServerMessage(input); } catch { fail('INVALID_INPUT'); }
+  try { message = validateServerMessage(input, {maxMinor: V1_MAX_MINOR}); } catch { fail('INVALID_INPUT'); }
   if (message.kind !== kind) fail('INVALID_INPUT');
   return message;
 }

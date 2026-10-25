@@ -8,6 +8,7 @@
 #include <algorithm>
 #include <filesystem>
 #include <memory>
+#include <optional>
 #include <regex>
 #include <thread>
 #include <atomic>
@@ -327,9 +328,13 @@ struct Credits {
   // Protocol v1 only: `helloSent` orders client frames after the hello on the pipe, and `stop` ends a pending client write.
   Handle helloSent{CreateEventW(nullptr, TRUE, FALSE, nullptr)}, stop{CreateEventW(nullptr, TRUE, FALSE, nullptr)};
   std::atomic<bool> stopping{false}, rejected{false}; std::atomic<ClientFailure> client{ClientFailure::none}; std::atomic<DWORD> clientError{ERROR_SUCCESS};
+  // Protocol v1 only (ET-050b B1): the highest minor a client frame may carry, min(hello maxMinor, 1). The broker does not
+  // parse the welcome, so it bounds client frames by the offer and requires one minor for every relayed frame; the
+  // plugin then refuses any frame whose minor is not the connection's. Declared before the reader, which reads it.
+  const unsigned maxMinor;
   std::thread reader;
   // Without a pipe the control stream is v0/CAP0 credit bytes; with one it is the protocol v1 tagged stream.
-  explicit Credits(HANDLE pipe = nullptr, HANDLE process = nullptr) : reader([this, pipe, process] {
+  explicit Credits(HANDLE pipe = nullptr, HANDLE process = nullptr, unsigned max_minor = 0) : maxMinor(max_minor), reader([this, pipe, process] {
     if (pipe) tagged(pipe, process); else credit_bytes();
     SetEvent(cancelled.value); SetEvent(done.value);
   }) {}
@@ -413,10 +418,12 @@ ClientFailure client_write(HANDLE pipe, HANDLE process, HANDLE stop, const unsig
   return ClientFailure::none;
 }
 // Protocol v1 control stream: tagged records. 0x01 is one relay credit. 0x02, a u32 little-endian length of
-// 1-4,096 and that many bytes are exactly one v1 client frame of kind ack or clock.probe; it is validated, then
-// written to the pipe after the hello, in stdin order. Any other tag, length or message ends the relay.
+// 1-4,096 and that many bytes are exactly one v1 client frame of kind ack or clock.probe; it is validated at most at
+// the hello's offered minor, must carry the same minor as every earlier relayed frame, then is written to the pipe after
+// the hello, in stdin order. Any other tag, length, minor or message ends the relay.
 void Credits::tagged(HANDLE pipe, HANDLE process) {
   try {
+    std::optional<unsigned> relayedMinor;
     while (!stopping) {
       unsigned char tag = 0; if (!read_control(&tag, 1)) return;
       if (tag == 1) {if (!ReleaseSemaphore(ready.value, 1, nullptr)) {rejected = true; return;} continue;}
@@ -425,8 +432,9 @@ void Credits::tagged(HANDLE pipe, HANDLE process) {
       const auto length = frame_length(frame.data());
       if (!length || length > v1::limits.client_frame_bytes) {client = ClientFailure::frame; return;}
       frame.resize(length + 4); if (!read_control(frame.data() + 4, length)) return;
-      const auto message = v1::decode_payload(std::string(reinterpret_cast<const char*>(frame.data() + 4), length), v1::Sender::client);
-      if (message.kind != "ack" && message.kind != "clock.probe") {client = ClientFailure::frame; return;}
+      const auto message = v1::decode_payload(std::string(reinterpret_cast<const char*>(frame.data() + 4), length), v1::Sender::client, maxMinor);
+      if ((message.kind != "ack" && message.kind != "clock.probe") || (relayedMinor && *relayedMinor != message.minor)) {client = ClientFailure::frame; return;}
+      relayedMinor = message.minor;
       // Both events can be set at once, and the wait then reports helloSent: a stop is checked again before writing.
       HANDLE waits[] = {helloSent.value, stop.value}; if (WaitForMultipleObjects(2, waits, FALSE, INFINITE) != WAIT_OBJECT_0 || WaitForSingleObject(stop.value, 0) == WAIT_OBJECT_0) return;
       DWORD error = ERROR_SUCCESS; const auto result = client_write(pipe, process, stop.value, frame.data(), static_cast<DWORD>(frame.size()), error);
@@ -518,12 +526,15 @@ int wmain(int argc, wchar_t** argv) {
     stage = "hello"; unsigned char prefix[4]; stdio_io(GetStdHandle(STD_INPUT_HANDLE), prefix, 4, false); const auto helloLength = frame_length(prefix); if (!helloLength || helloLength > 4096) fail();
     std::vector<unsigned char> hello(helloLength + 4); std::copy(prefix, prefix + 4, hello.begin()); stdio_io(GetStdHandle(STD_INPUT_HANDLE), hello.data() + 4, helloLength, false);
     const std::string helloPayload(reinterpret_cast<char*>(hello.data() + 4), helloLength);
+    // ET-050b B1: the v1 hello is always version 1.0; its offer, capped at the contract's highest minor, bounds the client
+    // frames this broker relays.
+    unsigned clientMaxMinor = 0;
     if (capture) ets2telemetry::cap0::validate_hello(helloPayload);
-    else if (protocolV1) v1::negotiate(v1::decode_payload(helloPayload, v1::Sender::client));
+    else if (protocolV1) clientMaxMinor = v1::negotiate(v1::decode_payload(helloPayload, v1::Sender::client), true, v1::highest_minor).minor;
     else v0::negotiate(v0::decode_payload(helloPayload));
     const std::size_t frameBound = protocolV1 ? v1::limits.server_frame_bytes : v0::max_frame_bytes;
     // Declared after the pipe and process handles, so its reader (and any v1 client write) is joined before they close.
-    stage = "relay"; Credits credits(protocolV1 ? pipe.value : nullptr, protocolV1 ? process.value : nullptr);
+    stage = "relay"; Credits credits(protocolV1 ? pipe.value : nullptr, protocolV1 ? process.value : nullptr, clientMaxMinor);
     try {
     pipe_io(pipe.value, process.value, hello.data(), static_cast<DWORD>(hello.size()), true, credits.cancelled.value);
     SetEvent(credits.helloSent.value);

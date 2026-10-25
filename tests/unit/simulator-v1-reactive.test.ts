@@ -1,7 +1,11 @@
 import {randomUUID} from 'node:crypto';
 import net from 'node:net';
 import {describe, expect, it} from 'vitest';
-import {FrameDecoder, PROTOCOL_V1, encodeFrame, type ServerMessage} from '../../packages/contracts/src/protocol-v1';
+import {FrameDecoder, PROTOCOL_V1, V1_MAX_MINOR, encodeFrame as encodeAnyMinor, type ProtocolMessage, type ServerMessage} from '../../packages/contracts/src/protocol-v1';
+// ET-050b: these raw clients offer the contract's highest minor, as the scripted client does, so their connections are
+// minor 1 and every frame after the hello carries {1,1}.
+const M1 = {major: 1, minor: 1} as const;
+const encodeFrame = (message: ProtocolMessage) => encodeAnyMinor(message, {maxMinor: V1_MAX_MINOR});
 import {V1Consumer} from '../../packages/contracts/src/protocol-v1-delivery';
 import {readFixtureFile} from '../../tools/telemetry-simulator/src/fixture-file';
 import {rawFrame} from '../../tools/telemetry-simulator/src/v1/faults';
@@ -16,9 +20,9 @@ const SOURCE = {versions: {telemetryApi: {major: 1, minor: 1}, gameTelemetry: {m
 const inline = (steps: Json[], transport: Json[]): Json => ({format: 'ets2telemetry-simulator-v1', schemaVersion: 1, id: 'reactive-test', purpose: 'Reactive test', reg: ['REG-011'],
   origin: 'synthetic', game: 'ets2', seed: 'reactive-test', provenance: null, source: SOURCE, steps, transport});
 /** A hello from a client instance the simulator has never seen. */
-const hello = (durableEvents: boolean) => encodeFrame({version: PROTOCOL_V1, kind: 'hello', data: {clientInstanceId: randomUUID(), minMinor: 0, maxMinor: 0, durableEvents}});
+const hello = (durableEvents: boolean) => encodeFrame({version: PROTOCOL_V1, kind: 'hello', data: {clientInstanceId: randomUUID(), minMinor: 0, maxMinor: V1_MAX_MINOR, durableEvents}});
 function rawClient(endpoint: string, first?: Uint8Array) {
-  const socket = net.connect(endpoint), decoder = new FrameDecoder('server'), messages: ServerMessage[] = [];
+  const socket = net.connect(endpoint), decoder = new FrameDecoder('server', {maxMinor: V1_MAX_MINOR}), messages: ServerMessage[] = [];
   let bytes = 0;
   const closed = new Promise<{bytes: number; messages: ServerMessage[]}>(resolve => {
     socket.on('data', chunk => { bytes += chunk.length; decoder.push(chunk, m => messages.push(m as ServerMessage)); });
@@ -68,10 +72,10 @@ describe('simulator v1 reactive serving for any contract consumer', () => {
     try {
       const client = rawClient(server.endpoint, hello(false));
       await until(() => client.messages.length === 2);
-      client.socket.write(encodeFrame({version: PROTOCOL_V1, kind: 'clock.probe', data: {probeId: '1'}}));
+      client.socket.write(encodeFrame({version: M1, kind: 'clock.probe', data: {probeId: '1'}}));
       await until(() => client.messages.some(m => m.kind === 'clock.reply'));
       await server.stop();
-      const {messages} = await client.closed, consumer = new V1Consumer(false);
+      const {messages} = await client.closed, consumer = new V1Consumer(false, {maxMinor: V1_MAX_MINOR});
       for (const m of messages) { if (m.kind === 'clock.reply') consumer.expectClockReply('1'); consumer.accept(m); }
       const reply = messages.find(m => m.kind === 'clock.reply')!;
       if (reply.kind !== 'clock.reply') throw new Error('reply');
@@ -162,7 +166,7 @@ describe('simulator v1 reactive serving for any contract consumer', () => {
   it('awaits a scripted ACK slower than the quiesce bound when asked to', async () => {
     const steps = [{atMs: 10, action: 'lifecycle', event: 'simulation.started'}];
     const s = inline(steps, [{atMs: 0, action: 'connect', client: {durable: true}}, {atMs: 100, action: 'disconnect'}]);
-    const ack = (welcome: ServerMessage) => encodeFrame({version: PROTOCOL_V1, kind: 'ack', data: {pluginSessionId: welcome.source.pluginSessionId, throughEventSeq: '1'}});
+    const ack = (welcome: ServerMessage) => encodeFrame({version: M1, kind: 'ack', data: {pluginSessionId: welcome.source.pluginSessionId, throughEventSeq: '1'}});
     const slow = await serveV1Reactive(s, {scale: 0, quiesceMs: 20, awaitScriptedAcks: true});
     try {
       const client = rawClient(slow.endpoint, hello(true));

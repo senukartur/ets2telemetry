@@ -3,7 +3,7 @@ import {resolve} from 'node:path';
 import {describe, expect, it} from 'vitest';
 import {
   decodePayload, encodeFrame, EVENT_TYPES, FrameDecoder, fraction, GAP_RECORD_BYTES, kmToMetersFloat, kmToMetersU32, MAX_EVENT_SEQ, negotiateV1, PROTOCOL_V1,
-  ProtocolError, sdkMoney, sdkText, V1_GEARBOX, V1_LIMITS, V1_MAX_MINOR, validateLiveObservationV1, type GearboxState, type ProtocolMessage, type Sender, type ServerMessage
+  NOT_SUPPORTED_GEARBOX, ProtocolError, sdkMoney, sdkText, V1_GEARBOX, V1_LIMITS, V1_MAX_MINOR, validateLiveObservationV1, type GearboxState, type ProtocolMessage, type Sender, type ServerMessage
 } from '../../packages/contracts/src/protocol-v1';
 import * as v0 from '../../packages/contracts/src/protocol-v0';
 import {Cap0Error, decodeCap0Payload, encodeCap0Hello} from '../../packages/contracts/src/capture-cap0';
@@ -420,14 +420,22 @@ describe('ET-050b protocol v1 minor-1 corpus', () => {
       expect(() => negotiateV1(client('hello'), {allowDurable: true, maxMinor})).toThrow(ProtocolError);
     }
   });
-  it('does not project the gearbox into the live observation yet', () => {
+  // ET-050b B7 (PR-5): the live observation always carries the gearbox, validated with the minor-1 rules. This replaces
+  // the PR-1 expectation that the gearbox was not projected yet.
+  it('requires the gearbox in the live observation and validates it with the minor-1 rules', () => {
     const m = m1Server('checkpoint'); if (m.kind !== 'checkpoint') throw new Error('fixture');
     const withGearbox: Partial<typeof m.data.state> = {...m.data.state}; delete withGearbox.window;
     const withoutGearbox = {...withGearbox}; delete withoutGearbox.gearbox;
     const live = (state: unknown) => ({source: m.source, seq: m.seq, capture: m.capture, state, sourceStatus: {gameMode: m.data.status.gameMode, eventLoss: m.data.status.eventLoss},
       receivedMonotonicMs: 0, hydration: true});
-    expect(validateLiveObservationV1(live(withoutGearbox)).state).toEqual(withoutGearbox);
-    expect(() => validateLiveObservationV1(live(withGearbox))).toThrow(ProtocolError);
+    expect(validateLiveObservationV1(live(withGearbox)).state).toEqual(withGearbox);
+    expect(validateLiveObservationV1(live({...withoutGearbox, gearbox: NOT_SUPPORTED_GEARBOX})).state.gearbox).toEqual({
+      forwardGears: {available: false, reason: 'not-supported'}, reverseGears: {available: false, reason: 'not-supported'}, hshifter: {available: false, reason: 'not-supported'}});
+    expect(() => validateLiveObservationV1(live(withoutGearbox))).toThrow(ProtocolError);
+    const duplicate = structuredClone(withGearbox) as typeof withGearbox & {gearbox: GearboxState};
+    if (!duplicate.gearbox.hshifter.available) throw new Error('fixture');
+    duplicate.gearbox.hshifter.value.slots.push({...duplicate.gearbox.hshifter.value.slots[0]});
+    expect(() => validateLiveObservationV1(live(duplicate))).toThrow(ProtocolError);
   });
 });
 

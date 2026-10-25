@@ -35,7 +35,7 @@ describe('simulator v1 scenario schema', () => {
     ['root', (s: Json) => { s.unused = 1; }],
     ['source', (s: Json) => { source(s).processId = 4; }],
     ['source step', (s: Json) => { steps(s)[0].unused = true; }],
-    ['attribute', (s: Json) => { (steps(s)[0].attributes as Json[])[0].index = 1; }],
+    ['attribute', (s: Json) => { (steps(s)[0].attributes as Json[])[0].arrayIndex = 1; }],
     ['frame channel', (s: Json) => { (steps(s)[4].channels as Json)['truck.speed'] = 1; }],
     ['client', (s: Json) => { (transport(s)[0].client as Json).replayFaults = true; }],
     ['transport step', (s: Json) => { transport(s)[1].client = {durable: true}; }],

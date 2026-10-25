@@ -12,7 +12,7 @@ import type {CommitResult, Result, StorageErrorCode} from '../../packages/storag
 import {storageError} from '../../packages/storage/src/errors';
 import type {CoverageMessage, DurableSink} from '../../apps/desktop/src/durable-sink';
 import type {TelemetrySocket} from '../../apps/desktop/src/native-pipe-client';
-import {V1Ingestion, type V1IngestionOptions, type V1SourceState} from '../../apps/desktop/src/v1-ingestion';
+import {V1_CLIENT_MAX_MINOR, V1Ingestion, type V1IngestionOptions, type V1SourceState} from '../../apps/desktop/src/v1-ingestion';
 import {header, payload} from '../shared/cap0-fixtures';
 
 const V1 = resolve('tests/fixtures/protocol-v1');
@@ -28,7 +28,8 @@ const CAPTURE_CLOCK = '30000000-0000-4000-8000-000000000001';
 
 class FakeSocket extends EventEmitter implements TelemetrySocket {
   readonly sent: ClientMessage[] = []; destroyed = false; authority?: SourceIdentity; completion?: Promise<void>;
-  write(bytes: Uint8Array) { this.sent.push(decodePayload(bytes.subarray(4), 'client') as ClientMessage); }
+  // Either minor decodes here; the ET-050b cases check which minor each message carries.
+  write(bytes: Uint8Array) { this.sent.push(decodePayload(bytes.subarray(4), 'client', {maxMinor: 1}) as ClientMessage); }
   destroy() { this.destroyed = true; }
   feed(...parts: Uint8Array[]) { this.emit('data', concat(...parts)); }
   get hello() { const h = this.sent[0]; if (h?.kind !== 'hello') throw new Error('hello expected'); return h.data; }
@@ -87,7 +88,8 @@ function edited(name: string, edit: (m: ServerMessage & {data: Record<string, un
 describe('ET-006b protocol v1 ingestion', () => {
   it('sends one live-only hello without a sink and a durable hello with one', () => {
     start(); connectLatest();
-    expect(latest().sent).toEqual([{version: {major: 1, minor: 0}, kind: 'hello', data: {clientInstanceId: ingestion!.clientInstanceId, minMinor: 0, maxMinor: 0, durableEvents: false}}]);
+    // ET-050b B1: the hello is version 1.0 and offers minor 1 (it offered 0 before ET-050b PR-5).
+    expect(latest().sent).toEqual([{version: {major: 1, minor: 0}, kind: 'hello', data: {clientInstanceId: ingestion!.clientInstanceId, minMinor: 0, maxMinor: 1, durableEvents: false}}]);
     void ingestion!.stop();
     start({sink: new Sink()}); connectLatest();
     expect(latest().hello.durableEvents).toBe(true);
@@ -467,5 +469,70 @@ describe('ET-006b protocol v1 ingestion', () => {
     await settle(); expect([done, latest().destroyed]).toEqual([false, true]);
     complete(); await settle(); expect(done).toBe(true);
     ingestion = undefined;
+  });
+});
+
+// ET-050b B1, B7: one negotiated minor per connection. The minor-1 fixtures are in tests/fixtures/protocol-v1/minor1;
+// the original fixtures are minor 0, as a plugin from before ET-050b sends them. Expected values are written by hand.
+const M1 = resolve(V1, 'minor1');
+const frame1 = (name: string) => prefix(fileBytes(resolve(M1, `${name}.json`)));
+const server1 = (name: string) => decodePayload(fileBytes(resolve(M1, `${name}.json`)), 'server', {maxMinor: 1}) as ServerMessage;
+describe('ET-050b protocol v1 minor negotiation', () => {
+  it('derives the hello offer, the probe and ACK minors and the clock mapping from one negotiated minor', async () => {
+    expect(V1_CLIENT_MAX_MINOR).toBe(1);
+    const sink = new Sink(); start({sink}); connectLatest();
+    expect(latest().hello.maxMinor).toBe(V1_CLIENT_MAX_MINOR);
+    latest().feed(frame1('welcome'), frame1('checkpoint'), frame1('event-job-configured'));
+    await settle();
+    expect(state().status).toBe('connected');
+    // The checkpoint's probe and the ACK after the commit carry the welcome's minor 1.
+    expect(latest().sent.slice(1).map(m => [m.kind, m.version])).toEqual([['clock.probe', {major: 1, minor: 1}], ['ack', {major: 1, minor: 1}]]);
+    expect([sink.commits, latest().acks]).toEqual([['event 1'], ['1']]);
+    // t0 = 2,000,000,000,000; the minor-1 reply has the same times as the minor-0 fixture, so the mapping is the same.
+    clock.ns = 2_000_000_500_000n; latest().feed(frame1('snapshot'), frame1('clock-reply'));
+    expect(state().status).toBe('connected');
+    expect(state().clockMapping).toEqual({sourceClockId: CAPTURE_CLOCK, clientClockId: ingestion!.clientClockId, offsetNs: '-999550450000', uncertaintyNs: '150000', measuredAtClientNs: '2000000500000'});
+    await advance(1000);
+    expect(latest().sent.at(-1)).toEqual({version: {major: 1, minor: 1}, kind: 'clock.probe', data: {probeId: '2'}});
+  });
+
+  it('accepts a minor-0 welcome from an older plugin and then writes every probe and ACK at minor 0', async () => {
+    const sink = new Sink(); start({sink}); connectLatest();
+    expect(latest().hello.maxMinor).toBe(1);
+    latest().feed(frame1('welcome-minor-0'), frame1('checkpoint-minor-0'), frame1('event-job-configured-minor-0'));
+    await settle();
+    expect(state().status).toBe('connected');
+    expect(latest().sent.slice(1).map(m => [m.kind, m.version])).toEqual([['clock.probe', {major: 1, minor: 0}], ['ack', {major: 1, minor: 0}]]);
+    // A minor-0 state carries no gearbox; the live projection reports it as not-supported (live-v1.test.ts).
+    expect(state().observation && Object.hasOwn(state().observation!.state, 'gearbox')).toBe(false);
+    clock.ns = 2_000_000_500_000n; latest().feed(frame('clock-reply'));
+    expect(state().clockMapping?.offsetNs).toBe('-999550450000');
+  });
+
+  it.each([
+    ['a minor-1 frame after a minor-0 welcome', () => concat(frame1('welcome-minor-0'), frame1('checkpoint'))],
+    ['a minor-0 frame after a minor-1 welcome', () => concat(frame1('welcome'), frame1('checkpoint-minor-0'))],
+    ['a minor-0 state with a gearbox', () => concat(frame1('welcome-minor-0'), frame1('checkpoint-minor-0-with-gearbox'))],
+    ['a minor-1 state without a gearbox', () => concat(frame1('welcome'), frame1('checkpoint-without-gearbox'))],
+    ['a welcome above the offer', () => frame1('welcome-minor-2')]
+  ])('closes the connection as incompatible on %s', (_name, bytes) => {
+    start({sink: new Sink()}); connectLatest(); latest().feed(bytes());
+    expect([state().status, state().fresh, state().observation]).toEqual(['incompatible', false, undefined]);
+  });
+
+  it('replaces the gearbox with every new state: snapshots within a connection and the hydrating checkpoint of the next', async () => {
+    start({sink: new Sink()}); connectLatest();
+    latest().feed(frame1('welcome'), frame1('checkpoint'));
+    const checkpoint = server1('checkpoint'), snapshot = server1('snapshot-counts-not-observed');
+    if (checkpoint.kind !== 'checkpoint' || snapshot.kind !== 'snapshot') throw new Error('fixture');
+    expect(state().observation?.state.gearbox).toEqual(checkpoint.data.state.gearbox);
+    latest().feed(frame1('snapshot-counts-not-observed'));
+    expect(state().observation?.state.gearbox).toEqual(snapshot.data.state.gearbox);
+    expect(state().observation?.state.gearbox?.forwardGears).toEqual({available: false, reason: 'not-observed'});
+    // The next connection's checkpoint, from an older plugin, hydrates a state without any gearbox.
+    latest().emit('close'); await advance(250); connectLatest();
+    latest().feed(frame1('welcome-minor-0'), frame1('checkpoint-minor-0'));
+    expect(state().observation?.hydration).toBe(true);
+    expect(Object.hasOwn(state().observation!.state, 'gearbox')).toBe(false);
   });
 });

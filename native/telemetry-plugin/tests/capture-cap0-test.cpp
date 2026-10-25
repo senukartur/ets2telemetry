@@ -778,6 +778,18 @@ int controlled_host(const char* dll_path, const char* directory_utf8, const char
     std::vector<scs_named_value_t> job{named("cargo.id", text("cargo.fixture")), named("income", u64(UINT64_MAX)), named("planned_distance.km", u32(321)), scs_named_value_t{}};
     std::vector<scs_named_value_t> delivered{named("revenue", s64(INT64_MIN)), named("distance.km", f32(12.5F)), scs_named_value_t{}};
     BigConfiguration big(255, 1024, 'b');
+    // ET-050b `gearbox`: the CAP-01 12-speed layout (two selector bits, reverse on handle position 1, neutral slots on
+    // position 0) in the SDK's order, with selector.count sent without and with index 0, then a truck with 12F/4R.
+    std::vector<scs_named_value_t> hshifter{named("selector.count", u32(2)), named("selector.count", u32(2), 0)};
+    {
+      const std::int32_t gears[5][4] = {{0, 0, 0, 0}, {-1, -3, -2, -4}, {1, 7, 2, 8}, {3, 9, 4, 10}, {5, 11, 6, 12}};
+      for (std::uint32_t handle = 0, slot = 0; handle < 5; ++handle) for (std::uint32_t selectors = 0; selectors < 4; ++selectors, ++slot) {
+        hshifter.push_back(named("slot.gear", s32(gears[handle][selectors]), slot)); hshifter.push_back(named("slot.handle.position", u32(handle), slot));
+        hshifter.push_back(named("slot.selectors", u32(selectors), slot));
+      }
+      hshifter.push_back(scs_named_value_t{});
+    }
+    std::vector<scs_named_value_t> truck{named("id", text("vehicle.fixture")), named("gears.forward", u32(12)), named("gears.reverse", u32(4)), scs_named_value_t{}};
     const auto deadline = GetTickCount64() + 30000; std::string commands; bool exit = false;
     while (!exit && GetTickCount64() < deadline) {
       DWORD available = 0; if (!PeekNamedPipe(input, nullptr, 0, nullptr, &available, nullptr)) break;
@@ -791,6 +803,7 @@ int controlled_host(const char* dll_path, const char* directory_utf8, const char
           else if (action == "pause") host.event(SCS_TELEMETRY_EVENT_paused);
           else if (action == "start") host.event(SCS_TELEMETRY_EVENT_started);
           else if (action == "burst") for (unsigned i = 0; i < 64; ++i) host.config("job", big.attributes.data());
+          else if (action == "gearbox") { host.config("hshifter", hshifter.data()); host.config("truck", truck.data()); }
           else require(false, "unknown controlled command");
           std::cout << "{\"phase\":\"" << action << "\"}\n" << std::flush;
         }

@@ -3,7 +3,7 @@
 // consumer and must close the connection without an error frame (docs/protocol/v1.md §2-§4, §10, §11, OD-5 S6). Wire
 // faults model a broken producer: they are written outside the producer and the encoder, and the client's FrameDecoder
 // or V1Consumer must reject them. Every function here is pure and deterministic.
-import {PROTOCOL_V1, V1_LIMITS, encodeFrame, type ClientMessage, type EndData, type ServerMessage} from '../../../../packages/contracts/src/protocol-v1';
+import {PROTOCOL_V1, V1_LIMITS, V1_MAX_MINOR, encodeFrame as encodeV1Frame, type ClientMessage, type EndData, type ProtocolMessage, type ServerMessage, type V1Minor} from '../../../../packages/contracts/src/protocol-v1';
 import {PROTOCOL_V0, encodeFrame as encodeV0Frame} from '../../../../packages/contracts/src/protocol-v0';
 import {encodeCap0Hello} from '../../../../packages/contracts/src/capture-cap0';
 
@@ -38,12 +38,14 @@ export function rawFrame(payload: string | Uint8Array): Uint8Array {
 export function prefixOnly(length: number): Uint8Array { const p = new Uint8Array(4); new DataView(p.buffer).setUint32(0, length, true); return p; }
 const concat = (...parts: Uint8Array[]) => { const out = new Uint8Array(parts.reduce((n, p) => n + p.length, 0)); let o = 0; for (const p of parts) { out.set(p, o); o += p.length; } return out; };
 const half = (frame: Uint8Array) => frame.slice(0, Math.max(1, Math.floor(frame.length / 2)));
+/** Valid frames of either minor; each fault message carries its connection's minor, or 1.0 for a hello (ET-050b B1). */
+const encodeFrame = (message: ProtocolMessage) => encodeV1Frame(message, {maxMinor: V1_MAX_MINOR});
 
 function hello(clientInstanceId: string, durableEvents: boolean): ClientMessage {
   return {version: PROTOCOL_V1, kind: 'hello', data: {clientInstanceId, minMinor: 0, maxMinor: 0, durableEvents}};
 }
-const ack = (pluginSessionId: string, through: bigint): ClientMessage => ({version: PROTOCOL_V1, kind: 'ack', data: {pluginSessionId, throughEventSeq: through.toString()}});
-const probe = (id: bigint): ClientMessage => ({version: PROTOCOL_V1, kind: 'clock.probe', data: {probeId: id.toString()}});
+const ackAt = (pluginSessionId: string, through: bigint, minor: V1Minor = 0): ClientMessage => ({version: {major: 1, minor}, kind: 'ack', data: {pluginSessionId, throughEventSeq: through.toString()}});
+const probeAt = (id: bigint, minor: V1Minor = 0): ClientMessage => ({version: {major: 1, minor}, kind: 'clock.probe', data: {probeId: id.toString()}});
 
 /** What a hello-phase fault knows: the client instance and the plugin session it expects from earlier connections. */
 export interface HelloFaultContext {clientInstanceId: string; pluginSessionId: string}
@@ -60,10 +62,10 @@ export function helloFaultBytes(fault: HelloFault, c: HelloFaultContext): FaultB
     case 'helloOtherMajor': return done(rawFrame(JSON.stringify({version: {major: 2, minor: 0}, kind: 'hello', data: body})));
     case 'helloOtherMinor': return done(rawFrame(JSON.stringify({version: {major: 1, minor: 1}, kind: 'hello', data: body})));
     case 'helloUnknownKind': return done(rawFrame(JSON.stringify({version: PROTOCOL_V1, kind: 'subscribe', data: {}})));
-    case 'ackBeforeHello': return done(encodeFrame(ack(c.pluginSessionId, 0n)));
+    case 'ackBeforeHello': return done(encodeFrame(ackAt(c.pluginSessionId, 0n)));
     // OD-5 S6: a byte beyond the hello in the same read, or any client message before the checkpoint.
     case 'helloExtraBytes': return done(concat(valid, Uint8Array.of(0)));
-    case 'ackBeforeCheckpoint': return done(concat(valid, encodeFrame(ack(c.pluginSessionId, 0n))));
+    case 'ackBeforeCheckpoint': return done(concat(valid, encodeFrame(ackAt(c.pluginSessionId, 0n))));
     case 'helloPartialEof': return done(half(valid), true);
     case 'helloTimeout': return done(new Uint8Array(0));
   }
@@ -72,15 +74,17 @@ export function helloFaultBytes(fault: HelloFault, c: HelloFaultContext): FaultB
 /**
  * What a live client fault knows about its connection: the plugin session, the durable grant, the producer's accepted
  * ACK point A' (the checkpoint's value or the last ACK that reached the producer), the next eventSeq the connection must
- * cover and the last probe ID sent.
+ * cover, the last probe ID sent and the connection's minor, which every ACK and probe fault carries, so that each is
+ * refused for its own reason and not for its minor.
  */
-export interface LiveFaultContext {clientInstanceId: string; pluginSessionId: string; durable: boolean; acceptedAck: bigint; nextEventSeq: bigint; lastProbeId: bigint; foreignSessionId: string}
+export interface LiveFaultContext {clientInstanceId: string; pluginSessionId: string; durable: boolean; acceptedAck: bigint; nextEventSeq: bigint; lastProbeId: bigint; foreignSessionId: string; minor: V1Minor}
 /** Bytes of a live client fault; `stallRead` sends nothing. Preconditions a fault cannot meet are scenario errors. */
 export function liveFaultBytes(fault: LiveFault, c: LiveFaultContext): FaultBytes {
   const need = (ok: boolean, reason: string) => { if (!ok) throw new Error(`Client fault ${fault} needs ${reason}`); };
   if (DURABLE_ONLY.includes(fault)) need(c.durable, 'a durable connection');
   if (fault === 'ackLiveOnly') need(!c.durable, 'a live-only connection');
   const done = (bytes: Uint8Array, endsInput = false): FaultBytes => ({bytes, endsInput});
+  const ack = (session: string, through: bigint) => ackAt(session, through, c.minor), probe = (id: bigint) => probeAt(id, c.minor);
   switch (fault) {
     case 'secondHello': return done(encodeFrame(hello(c.clientInstanceId, c.durable)));
     // A live-only client never acknowledges, not even its checkpoint's own value.
@@ -93,7 +97,7 @@ export function liveFaultBytes(fault: LiveFault, c: LiveFaultContext): FaultByte
     case 'probeRepeat': need(c.lastProbeId >= 1n, 'an earlier probe on the connection'); return done(encodeFrame(probe(c.lastProbeId)));
     // Two probes in one write: the second arrives while the reply to the first is still unsent (OD-5 S6).
     case 'probeWhileReplyUnsent': return done(concat(encodeFrame(probe(c.lastProbeId + 1n)), encodeFrame(probe(c.lastProbeId + 2n))));
-    case 'unknownKind': return done(rawFrame(JSON.stringify({version: PROTOCOL_V1, kind: 'subscribe', data: {}})));
+    case 'unknownKind': return done(rawFrame(JSON.stringify({version: {major: 1, minor: c.minor}, kind: 'subscribe', data: {}})));
     case 'oversizedFrame': return done(prefixOnly(V1_LIMITS.clientFrameBytes + 1));
     case 'malformedFrame': return done(rawFrame('{"kind":'));
     case 'partialFrameEof': return done(half(encodeFrame(ack(c.pluginSessionId, c.acceptedAck))), true);
@@ -114,7 +118,7 @@ export function wireFaultBytes(fault: WireFault, c: WireFaultContext): {bytes: U
   const snapshot = (seq: string, cap = capture, source = c.last.source) => {
     if (c.lastState.kind !== 'checkpoint' && c.lastState.kind !== 'snapshot') throw new Error('Wire fault needs a state message on the connection');
     const {state, status, continuity} = c.lastState.data;
-    return {version: PROTOCOL_V1, kind: 'snapshot', source, seq, capture: cap, data: {state, status, continuity}};
+    return {version: c.last.version, kind: 'snapshot', source, seq, capture: cap, data: {state, status, continuity}};
   };
   const event = (eventSeq: string) => {
     if (c.lastEvent?.kind !== 'event') throw new Error(`Wire fault ${fault} needs an event on the connection`);
@@ -131,7 +135,7 @@ export function wireFaultBytes(fault: WireFault, c: WireFaultContext): {bytes: U
     case 'oversizedPrefix': return done(prefixOnly(V1_LIMITS.serverFrameBytes + 1));
     case 'partialEof': return done(half(frame(snapshot(next))), true);
     case 'v0Frame': return done(encodeV0Frame({version: PROTOCOL_V0, kind: 'welcome', source: c.last.source, seq: next, capture, data: {diagnostics: false, durableRecording: false}}));
-    case 'frameAfterEnd': return done(concat(frame({version: PROTOCOL_V1, kind: 'end', source: c.last.source, seq: next, capture, data: c.end}), frame(snapshot((BigInt(next) + 1n).toString()))));
+    case 'frameAfterEnd': return done(concat(frame({version: c.last.version, kind: 'end', source: c.last.source, seq: next, capture, data: c.end}), frame(snapshot((BigInt(next) + 1n).toString()))));
     case 'seqSkip': return done(new Uint8Array(0));
   }
 }
