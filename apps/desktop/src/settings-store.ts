@@ -1,12 +1,13 @@
 import {randomUUID} from 'node:crypto';
 import * as nodeFs from 'node:fs/promises';
 import path from 'node:path';
-import type {AppLanguage, OverlayLayout, OverlayPlacement, OverlaySections, SettingsSaveError, SettingsState, SettingsView, UnitGame, UnitProfile} from '../../../packages/contracts/src';
+import type {AppLanguage, GearDisplayMode, OverlayLayout, OverlayPlacement, OverlaySections, SettingsSaveError, SettingsState, SettingsView, UnitGame, UnitProfile} from '../../../packages/contracts/src';
 import {isOverlayOpacity} from './overlay-opacity';
 import {withPlacement} from './overlay-placement';
 import {enabledSectionCount} from './overlay-sections';
 import type {DiagnosticFacts} from './diagnostics';
 import {dataPaths} from './paths';
+import {isGearDisplayMode, isUnitGame} from './unit-profiles';
 import {DEFAULT_SETTINGS, MAX_SETTINGS_BYTES, parseSettings, serializeSettings, type Settings} from './settings-schema';
 
 // Persistent settings in %LOCALAPPDATA%\ETS2Telemetry\settings\settings.json (docs/settings.md). Main owns the only
@@ -120,7 +121,7 @@ export class SettingsStore {
   get knownAutostartIntent(): boolean | undefined {return this.autostartKnown ? this.settings.autostart : undefined;}
 
   view(): SettingsView {
-    return {language: this.settings.language, autostart: this.settings.autostart, units: this.settings.units, overlay: this.settings.overlay, state: this.state, writable: !READ_ONLY_STATES.includes(this.state), saveError: this.saveError};
+    return {language: this.settings.language, autostart: this.settings.autostart, units: this.settings.units, gearDisplay: this.settings.gearDisplay, overlay: this.settings.overlay, state: this.state, writable: !READ_ONLY_STATES.includes(this.state), saveError: this.saveError};
   }
 
   /**
@@ -176,6 +177,15 @@ export class SettingsStore {
   /** Serialized save of one game's profile. Resolves with the applied settings only after the durable rename. */
   setUnitProfile(game: UnitGame, profile: UnitProfile): Promise<SettingsView> {
     return this.enqueue(settings => ({next: {...settings, units: Object.freeze({...settings.units, [game]: profile})}, facts: {game, profile}}));
+  }
+
+  /**
+   * Serialized save of one game's gear display mode (ET-050) through the shared bounded durable queue. Resolves with the
+   * applied settings only after the durable rename; the facts name the game and the mode.
+   */
+  setGearDisplay(game: UnitGame, mode: GearDisplayMode): Promise<SettingsView> {
+    if (!isUnitGame(game) || !isGearDisplayMode(mode)) return Promise.reject(new Error('Invalid gear display request'));
+    return this.enqueue(settings => ({next: {...settings, gearDisplay: Object.freeze({...settings.gearDisplay, [game]: mode})}, facts: {game, gearDisplay: mode}}));
   }
 
   /** One durable opacity commit per completed slider gesture, sharing the bounded queue. */

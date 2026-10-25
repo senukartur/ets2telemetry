@@ -65,6 +65,13 @@ export type UnitGame = 'ets2' | 'ats';
  */
 export type UnitProfile = 'metric' | 'us-customary';
 export type UnitProfiles = Readonly<Record<UnitGame, UnitProfile>>;
+/**
+ * Gear presentation (ET-050). It must equal telemetry-core's `GearDisplayMode`; apps/desktop/src/unit-profiles.ts
+ * asserts that at compile time. `automatic` shows 1, 2, 3...; `manual` shows range-splitter pairs 1L, 1H, 2L, 2H...;
+ * neutral and reverse are N and R1, R2... in both. Only the displayed text changes; stored gear stays an integer.
+ */
+export type GearDisplayMode = 'automatic' | 'manual';
+export type GearDisplayModes = Readonly<Record<UnitGame, GearDisplayMode>>;
 /** Application user interface languages (ET-029). */
 export type AppLanguage = 'en' | 'ru';
 /** Windows login item registration state (ET-031). */
@@ -132,6 +139,8 @@ export interface SettingsView {
   language: AppLanguage;
   autostart: boolean;
   units: UnitProfiles;
+  /** The per-game gear display mode (ET-050). */
+  gearDisplay: GearDisplayModes;
   /** The saved overlay layout, sections and placements, or their defaults (strip, every section, the default anchors). */
   overlay: OverlaySettings;
   state: SettingsState;

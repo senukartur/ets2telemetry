@@ -84,11 +84,13 @@ const DRIVING = {active: false};
 // unpackaged, so the mode gate disables plugin setup: nothing is read or written, and no game is ever discovered.
 const NO_PLUGIN_GAME = {excluded: false, discovery: 'pending', manualFolder: 'none', targets: [], unlistedFolders: 0};
 const PLUGINS_DISABLED = {mode: 'disabled', bundled: null, running: false, games: {ets2: NO_PLUGIN_GAME, ats: NO_PLUGIN_GAME}};
-let settingsView: {autostart: boolean; units: {ets2: string; ats: string}; overlay: {enabled: boolean; backgroundOpacity: number; layout: string; sections: Record<string, boolean>; placements: Record<string, {x: number; y: number; scale: number}>}; state: string; writable: boolean; saveError: string | null};
+let settingsView: {autostart: boolean; units: {ets2: string; ats: string}; gearDisplay?: {ets2: string; ats: string}; overlay: {enabled: boolean; backgroundOpacity: number; layout: string; sections: Record<string, boolean>; placements: Record<string, {x: number; y: number; scale: number}>}; state: string; writable: boolean; saveError: string | null};
 type OverlayWrite = (kind: 'backgroundOpacity' | 'enabled' | 'layout' | 'sections' | 'placement', value: unknown) => Promise<unknown>;
 let overlayWrite: ReturnType<typeof vi.fn<OverlayWrite>>;
 type SettingsWrite = (game: string, profile: string) => Promise<unknown>;
 let settingsWrite: ReturnType<typeof vi.fn<SettingsWrite>>;
+// ET-050: the gear display setter of the fake store.
+let gearWrite: ReturnType<typeof vi.fn<SettingsWrite>>;
 let autostartWrite: ReturnType<typeof vi.fn<(enabled: boolean) => Promise<typeof settingsView>>>;
 let settingsIdle: Promise<void> | undefined;
 let settingsDirectories: unknown[];
@@ -164,7 +166,7 @@ function installFixture() {
   vi.doMock('../../apps/desktop/src/broker-artifact', () => ({brokerConfiguration: resolveBroker, createBrokerResolver: () => resolveBroker}));
   vi.stubEnv('ETS2TELEMETRY_SOURCE_KIND', 'synthetic');
   settingsView = {autostart: false, units: {ets2: 'metric', ats: 'us-customary'}, overlay: DEFAULT_OVERLAY, state: 'defaults', writable: true, saveError: null};
-  settingsWrite = vi.fn<SettingsWrite>(); overlayWrite = vi.fn<OverlayWrite>(); autostartWrite = vi.fn((enabled: boolean) => {settingsView = {...settingsView, autostart: enabled}; return Promise.resolve(settingsView);}); settingsIdle = undefined; settingsDirectories = []; settingsLoaded = true; settingsLoading = Promise.resolve();
+  settingsWrite = vi.fn<SettingsWrite>(); gearWrite = vi.fn<SettingsWrite>(); overlayWrite = vi.fn<OverlayWrite>(); autostartWrite = vi.fn((enabled: boolean) => {settingsView = {...settingsView, autostart: enabled}; return Promise.resolve(settingsView);}); settingsIdle = undefined; settingsDirectories = []; settingsLoaded = true; settingsLoading = Promise.resolve();
   settingsChanged = undefined; autostartKnown = true;
   vi.doMock('../../apps/desktop/src/settings-store', () => ({
     settingsDirectory: (localAppData: unknown) => typeof localAppData === 'string' ? `${localAppData}\\ETS2Telemetry\\settings` : undefined, SettingsError: FakeSettingsError, SettingsBusyError: FakeSettingsBusyError,
@@ -175,6 +177,7 @@ function installFixture() {
       view() {return settingsView;}
       load() {return settingsLoading.then(() => {settingsLoaded = true; return settingsView;});}
       setUnitProfile(game: string, profile: string) {return settingsWrite(game, profile);}
+      setGearDisplay(game: string, mode: string) {return gearWrite(game, mode);}
       setOverlayBackgroundOpacity(opacity: number) {return overlayWrite('backgroundOpacity', opacity);}
       setOverlayEnabled(enabled: boolean) {return overlayWrite('enabled', enabled);}
       setAutostart(autostart: boolean) {return autostartWrite(autostart);}
@@ -1278,6 +1281,59 @@ it.each(['SETTINGS_WRITE_FAILED', 'SETTINGS_READ_ONLY'] as const)('keeps the uni
   const saved = {health, settings: {autostart: false, units: {ets2: 'metric', ats: 'us-customary'}, overlay: DEFAULT_OVERLAY, state: 'loaded', writable: true, saveError: null}, overlayEdit: DRIVING, plugins: PLUGINS_DISABLED, autostart: 'not-installed'};
   expect(handlers.get('app:get-state')!(trusted())).toEqual(saved);
   expect(contents.send).toHaveBeenLastCalledWith('app:state', saved);
+});
+// ET-050: the gear display setter is trusted-frame only, validates exactly a game and a mode, and republishes the
+// overlay's formatted gear text after the durable save without renewing SDK or window freshness.
+const saveGear = (event: unknown, ...request: unknown[]) => Promise.resolve().then(() => Reflect.apply(handlers.get('settings:set-gear-display')!, undefined, [event, ...request]));
+const gearText = (projection: Record<string, unknown>) => (projection.sections as {id: string; text?: string}[]).find(section => section.id === 'gear')?.text;
+it('rejects gear display requests from untrusted senders, frames and the overlay, and invalid values', async () => {
+  trayAvailable = true; await ready();
+  for (const event of [{sender: {}, senderFrame: contents.mainFrame}, {sender: contents, senderFrame: {}}, overlayTrusted()])
+    await expect(saveGear(event, 'ets2', 'manual')).rejects.toThrow('Untrusted');
+  for (const request of [['ets2', 'Manual'], ['ets2', 'semi'], ['synthetic', 'manual'], ['ETS2', 'manual'], ['ats'], [], ['ats', 'manual', 'C:\\settings.json'], [{}, 'manual'], ['ats', 1]])
+    await expect(saveGear(trusted(), ...request)).rejects.toThrow('Invalid gear display request');
+  expect(gearWrite).not.toHaveBeenCalled(); expect(settingsWrite).not.toHaveBeenCalled();
+  expect(contents.send).not.toHaveBeenCalledWith('app:state', expect.anything());
+});
+it('applies a gear display mode only after the durable save and republishes the overlay gear without renewing authority', async () => {
+  trayAvailable = true; vi.stubEnv('ETS2TELEMETRY_SOURCE_KIND', 'ets2'); await ready();
+  ipc.emit('app:subscribe-state', trusted()); ipc.emit('overlay:subscribe', overlayTrusted()); const overlayChannel = channels[1];
+  const reading = currentReading(); reading.observation!.state.gear = {available: true, value: 3, unit: 'index'};
+  consumeOverlay(overlayChannel); deliver(reading); await vi.advanceTimersByTimeAsync(50);
+  expect(gearText(overlayProjection(overlayChannel))).toBe('3');
+  expect(windows[1].showInactive).toHaveBeenCalledOnce(); consumeOverlay(overlayChannel);
+  const pushes = () => contents.send.mock.calls.filter(call => call[0] === 'app:state').map(call => call[1] as {settings: unknown});
+  const before = pushes().length, saved = deferred<typeof settingsView>();
+  gearWrite.mockReturnValue(saved.promise);
+  const request = saveGear(trusted(), 'ets2', 'manual');
+  await vi.advanceTimersByTimeAsync(100);
+  // Not durable yet: nothing applied, pushed or republished.
+  expect(gearWrite).toHaveBeenCalledExactlyOnceWith('ets2', 'manual');
+  expect(pushes()).toHaveLength(before); expect(gearText(overlayProjection(overlayChannel))).toBe('3');
+  settingsView = {...settingsView, gearDisplay: {ets2: 'manual', ats: 'automatic'}, state: 'loaded'}; saved.resolve(settingsView);
+  await expect(request).resolves.toEqual(settingsView);
+  expect(pushes().at(-1)).toMatchObject({settings: {gearDisplay: {ets2: 'manual', ats: 'automatic'}}});
+  await vi.advanceTimersByTimeAsync(50);
+  expect(gearText(overlayProjection(overlayChannel))).toBe('2L');
+  expect(overlayProjection(overlayChannel)).toMatchObject({source: 'ETS2', freshness: 'current'});
+  consumeOverlay(overlayChannel);
+  // The republication renewed neither SDK nor window receipts: both still expire from the original delivery.
+  expect(windows[1].showInactive).toHaveBeenCalledOnce();
+  await drainOverlay(overlayChannel, 400);
+  expect(overlayProjection(overlayChannel)).toMatchObject({freshness: 'stale'});
+  expect(windows[1].hide).toHaveBeenCalled();
+  // The dashboard's live update stays the raw integer gear.
+  ipc.emit('telemetry:subscribe', trusted());
+  expect(channels.at(-1)!.port1.postMessage.mock.lastCall![0].update.observation.state.gear).toEqual({available: true, value: 3, unit: 'index'});
+});
+it.each(['SETTINGS_WRITE_FAILED', 'SETTINGS_READ_ONLY'] as const)('keeps the gear display mode and reports %s in the settings view', async code => {
+  trayAvailable = true; await ready();
+  gearWrite.mockImplementation(() => {settingsView = {...settingsView, saveError: code}; return Promise.reject(new FakeSettingsError(code));});
+  await expect(saveGear(trusted(), 'ats', 'manual')).rejects.toThrow(code === 'SETTINGS_READ_ONLY' ? 'Settings are read-only' : 'Settings could not be saved');
+  expect(handlers.get('app:get-state')!(trusted())).toMatchObject({settings: {saveError: code}});
+  expect(settingsView.gearDisplay).toBeUndefined();
+  settingsIdle = undefined; void handlers.get('app:exit')!(trusted()); await settle();
+  await expect(saveGear(trusted(), 'ats', 'manual')).rejects.toThrow('retired'); expect(gearWrite).toHaveBeenCalledOnce();
 });
 it('waits for an in-flight settings save before exiting and refuses new saves once exiting', async () => {
   trayAvailable = true; await ready();

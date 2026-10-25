@@ -417,3 +417,28 @@ it('localizes an absent trailer sentinel without translating an SDK trailer name
   expect(liveFieldValue({id: 'trailers', state: 'value', text: 'none'}, 'ru')).toBe('none');
   expect(liveFieldValue({id: 'trailers', state: 'absent', text: 'none'}, 'en')).toBe('none');
 });
+
+// ET-050: the gear row follows the displayed game's gear display mode in both languages; L and H stay Latin in RU.
+describe('gear display mode (ET-050)', () => {
+  const withGear = (value: number, game: 'ets2' | 'ats' = 'ets2') => {
+    const telemetry = smokeCheckpoint(); telemetry.observation!.source.game = game; telemetry.observation!.state.gear = {available: true, value, unit: 'index'};
+    return telemetry;
+  };
+  const UNITS = {ets2: 'metric', ats: 'us-customary'} as const;
+  it.each(['en', 'ru'] as const)('formats the gear row by the displayed game in %s', language => {
+    const ets2Manual = {ets2: 'manual', ats: 'automatic'} as const;
+    expect(values(liveDashboardText(withGear(3), UNITS, language, ets2Manual)).gear).toBe('2L');
+    expect(values(liveDashboardText(withGear(3), UNITS, language, {ets2: 'automatic', ats: 'manual'})).gear).toBe('3');
+    expect(values(liveDashboardText(withGear(3), UNITS, language)).gear).toBe('3');
+    expect(values(liveDashboardText(withGear(3, 'ats'), UNITS, language, ets2Manual)).gear).toBe('3');
+    expect(values(liveDashboardText(withGear(3, 'ats'), UNITS, language, {ets2: 'automatic', ats: 'manual'})).gear).toBe('2L');
+    for (const [gear, text] of [[1, '1L'], [2, '1H'], [16, '8H'], [-1, 'R1'], [-2, 'R2'], [0, 'N']] as const)
+      expect(values(liveDashboardText(withGear(gear), UNITS, language, ets2Manual)).gear).toBe(text);
+    for (const [gear, text] of [[-1, 'R1'], [0, 'N']] as const) expect(values(liveDashboardText(withGear(gear), UNITS, language, AUTO)).gear).toBe(text);
+  });
+  it('keeps a not-current gear row unavailable in manual mode', () => {
+    const stale = smokeCheckpoint({status: 'stale', fresh: false});
+    expect(row(liveDashboardText(stale, UNITS, 'en', {ets2: 'manual', ats: 'manual'}), 'gear')).toMatchObject({value: 'unavailable', reason: 'not current'});
+  });
+});
+const AUTO = {ets2: 'automatic', ats: 'automatic'} as const;

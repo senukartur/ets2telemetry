@@ -180,6 +180,21 @@ describe('REG-009 v1 dashboard values', () => {
     expect(all['planned-distance'].notes).toEqual(['job-offer-excludes-ferry']);
     expect(all.position.notes).toEqual(['game-world-coordinates']);
   });
+  it('formats the gear in the selected display mode only (ET-050)', () => {
+    const manual = buildLiveView(live('snapshot'), state, resolveDisplayUnits('ets2'), 'manual');
+    expect(fields(manual).gear).toEqual({id: 'gear', state: 'value', text: '2L'});
+    expect(fields(buildLiveView(live('snapshot'), state, resolveDisplayUnits('ets2'), 'automatic')).gear.text).toBe('3');
+    expect(texts(manual)).toEqual({...texts(viewOf(live('snapshot'), state)), gear: '2L'});
+    const reverse = live('checkpoint');
+    expect(fields(buildLiveView(reverse, normalizeV0State(reverse.observation!.state), resolveDisplayUnits('ets2'), 'manual')).gear.text).toBe('R1');
+    for (const status of ['stale', 'disconnected'] as const) {
+      const stale = live('checkpoint', {status, fresh: false});
+      expect(fields(buildLiveView(stale, normalizeV0State(stale.observation!.state), resolveDisplayUnits('ets2'), 'manual')).gear)
+        .toEqual({id: 'gear', state: 'missing', text: 'unavailable', reason: 'not-current'});
+    }
+    expect(fields(buildLiveView(live('snapshot'), {...state, gear: {state: 'missing', reason: 'not-observed'}}, resolveDisplayUnits('ets2'), 'manual')).gear)
+      .toEqual({id: 'gear', state: 'missing', text: 'unavailable', reason: 'not-observed'});
+  });
   it('shows cargo loaded only for the cargo market', () => {
     if (state.job.state !== 'value') throw new Error('job expected');
     const cargoMarket = {...state, job: value({...state.job.value, market: value('cargo_market'), cargoLoaded: value(false)})};

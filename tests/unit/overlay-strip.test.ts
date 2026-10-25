@@ -165,4 +165,10 @@ it('matches the strip rules in renderer.css', () => {
   expect(rule('.overlay-strip .overlay-item')).toMatch(/min-width: 0;[^}]*overflow: hidden;/);
   expect(rule('.overlay-strip .overlay-value')).toMatch(/min-width: 0;[^}]*overflow: hidden;[^}]*text-overflow: ellipsis;/);
   expect(rule('.overlay-strip .overlay-tag')).toContain('overflow: hidden;');
+  // ET-050 (GD6): the invisible reserve keeps the lines of the gear's multi-line reserve and adds no height.
+  const reserve = rule('.overlay-strip .overlay-value[data-reserve]::after');
+  expect(reserve).toContain('content: attr(data-reserve);');
+  expect(reserve).toContain('height: 0;');
+  expect(reserve).toContain('visibility: hidden;');
+  expect(reserve).toContain('white-space: pre;');
 });

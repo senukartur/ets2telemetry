@@ -168,7 +168,7 @@ it('marks v1 data stale when the subscription closes or a replacement port await
 it('preserves the frozen narrow bridge and rejects privileged source values before IPC', async () => {
   expect(Object.isFrozen(bridge)).toBe(true); expect(Object.keys(bridge).sort()).toEqual(['beginOverlayEdit', 'choosePluginFolder', 'exitApplication', 'exportDiagnostics', 'exportJournalTrip', 'finishOverlayEdit', 'getAppState', 'getHardModeStatus', 'getJournalTrip', 'getStatus',
     'listJournalEvents', 'listJournalIntervals', 'listJournalSamples', 'listJournalTrips', 'openPluginFolder', 'refreshHardMode',
-    'resetOverlayEditPlacement', 'retryPluginSetup', 'selectSource', 'setAutostart', 'setLanguage', 'setOverlayBackgroundOpacity', 'setOverlayEditScale', 'setOverlayEnabled', 'setOverlayLayout', 'setOverlaySections', 'setPluginGameExcluded', 'setUnitProfile',
+    'resetOverlayEditPlacement', 'retryPluginSetup', 'selectSource', 'setAutostart', 'setGearDisplay', 'setLanguage', 'setOverlayBackgroundOpacity', 'setOverlayEditScale', 'setOverlayEnabled', 'setOverlayLayout', 'setOverlaySections', 'setPluginGameExcluded', 'setUnitProfile',
     'showPluginFile', 'subscribeAppState', 'subscribeLive', 'uninstallApplication']);
   await expect(bridge.selectSource('C:\\arbitrary.exe' as never)).rejects.toThrow('Invalid source selection');
   expect(ipc.invoke).not.toHaveBeenCalled();
@@ -207,9 +207,9 @@ it('does not reassert service subscription after the callback unsubscribes its o
 it('appends the application state and exit methods after the original three bridge keys', () => {
   // ET-012a appends the two overlay settings methods, ET-012b the four overlay edit methods, ET-016 PR-3 the five journal reads,
   // ET-016 PR-5 the trip export, ET-017 PR-4 the five plugin setup methods, ET-017 PR-6 the diagnostics export and ET-018
-  // PR-4 the in-app uninstall.
+  // PR-4 the in-app uninstall. ET-050 adds the gear display setter right after the unit profile setter.
   expect(Object.keys(bridge)).toEqual(['getStatus', 'selectSource', 'subscribeLive', 'getAppState', 'subscribeAppState', 'exitApplication', 'setLanguage', 'setAutostart', 'setUnitProfile',
-    'setOverlayBackgroundOpacity', 'setOverlayEnabled', 'setOverlayLayout', 'setOverlaySections', 'beginOverlayEdit', 'setOverlayEditScale', 'resetOverlayEditPlacement', 'finishOverlayEdit',
+    'setGearDisplay', 'setOverlayBackgroundOpacity', 'setOverlayEnabled', 'setOverlayLayout', 'setOverlaySections', 'beginOverlayEdit', 'setOverlayEditScale', 'resetOverlayEditPlacement', 'finishOverlayEdit',
     'listJournalTrips', 'getJournalTrip', 'listJournalEvents', 'listJournalIntervals', 'listJournalSamples', 'exportJournalTrip',
     'retryPluginSetup', 'choosePluginFolder', 'setPluginGameExcluded', 'showPluginFile', 'openPluginFolder', 'exportDiagnostics', 'uninstallApplication', 'getHardModeStatus', 'refreshHardMode']);
 });
@@ -257,6 +257,22 @@ it('validates unit profile requests before IPC and forwards exactly a game and a
   ipc.invoke.mockResolvedValueOnce(view);
   await expect(Reflect.apply(bridge.setUnitProfile, bridge, ['ets2', 'us-customary', {path: 'C:\\arbitrary'}])).resolves.toEqual(view);
   expect(ipc.invoke.mock.calls).toEqual([['settings:set-unit-profile', 'ets2', 'us-customary']]);
+});
+// ET-050: the gear display setter forwards exactly a game and a mode, both validated before IPC.
+it('validates gear display requests before IPC and forwards exactly a game and a mode', async () => {
+  for (const [game, mode] of [['ets2', 'Manual'], ['ets2', 'semi'], ['ETS2', 'manual'], ['synthetic', 'manual'], ['ats', 'C:\\settings.json'], [undefined, undefined],
+    [{}, 'manual'], ['ats', 1], ['ats', true]]) {
+    await expect(bridge.setGearDisplay(game as never, mode as never)).rejects.toThrow('Invalid gear display request');
+  }
+  for (const args of [[], ['ets2'], ['ets2', 'manual', {path: 'C:\\arbitrary'}]]) {
+    await expect(Reflect.apply(bridge.setGearDisplay, bridge, args)).rejects.toThrow('Invalid gear display request');
+  }
+  expect(ipc.invoke).not.toHaveBeenCalled();
+  const view = {gearDisplay: {ets2: 'manual', ats: 'automatic'}, state: 'loaded', writable: true, saveError: null};
+  ipc.invoke.mockResolvedValueOnce(view);
+  await expect(bridge.setGearDisplay('ets2', 'manual')).resolves.toEqual(view);
+  await bridge.setGearDisplay('ats', 'automatic');
+  expect(ipc.invoke.mock.calls).toEqual([['settings:set-gear-display', 'ets2', 'manual'], ['settings:set-gear-display', 'ats', 'automatic']]);
 });
 // ET-012a: two appended overlay settings methods; each validates before IPC and forwards only the validated value.
 const ALL_ON = {'speed': true, 'gear': true, 'rpm': true, 'fuel': true, 'range': true, 'sdk-consumption': true, 'cargo': true, 'origin': true,

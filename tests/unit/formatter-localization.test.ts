@@ -81,3 +81,15 @@ it('never routes game names resembling units, deadlines, money notes or UI words
     }
   }
 });
+
+// ET-050: manual gear labels keep their Latin L and H in Russian on the dashboard and the overlay.
+it.each(['en', 'ru'] as const)('keeps manual gear labels unchanged in %s', language => {
+  for (const [gear, text] of [[1, '1L'], [2, '1H'], [3, '2L'], [16, '8H'], [18, '9H'], [-1, 'R1'], [0, 'N']] as const) {
+    const live = smokePair(); live.observation!.state.gear = {available: true, value: gear, unit: 'index'};
+    const modes = {ets2: 'manual', ats: 'manual'} as const;
+    expect(localizedMeasurement(text, language)).toBe(text);
+    expect(liveDashboardText(live, undefined, language, modes).sections.flatMap(section => section.rows).find(row => row.id === 'gear')?.value).toBe(text);
+    const view = overlayView(overlayPresentation(live, undefined, undefined, undefined, false, language, modes));
+    expect(view.items.find(item => item.id === 'gear')).toMatchObject({value: text});
+  }
+});

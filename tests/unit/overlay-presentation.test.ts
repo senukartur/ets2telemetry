@@ -436,3 +436,27 @@ it('marks the edit mode without changing any section or value, and defaults to d
   expect(overlayPresentation(stale, undefined, undefined, editing, true)).toMatchObject({freshness: 'stale', editing: true, speed: '—'});
   expect(overlayPresentation(initialLive('game'), undefined, undefined, undefined, true)).toMatchObject({source: 'No game', freshness: 'unavailable', editing: true});
 });
+
+// ET-050: each live update uses its own displayed game's gear display mode; unavailable and stale gear stay as before.
+it('formats the gear section in the displayed game\'s gear display mode only', () => {
+  const modes = {ets2: 'manual', ats: 'automatic'} as const;
+  const gearOf = (current: LiveTelemetry, gearDisplay?: {ets2: 'automatic' | 'manual'; ats: 'automatic' | 'manual'}) =>
+    overlayPresentation(current, undefined, undefined, undefined, false, 'en', gearDisplay).sections.find(section => section.id === 'gear');
+  const ets2 = live(); ets2.observation!.state.gear = {available: true, value: 3, unit: 'index'};
+  expect(gearOf(ets2, modes)).toEqual({id: 'gear', state: 'value', text: '2L'});
+  expect(gearOf(ets2)).toEqual({id: 'gear', state: 'value', text: '3'});
+  const ats = live(); ats.selection = 'ats'; ats.observation!.source.game = 'ats'; ats.observation!.state.gear = {available: true, value: 3, unit: 'index'};
+  expect(gearOf(ats, modes)).toEqual({id: 'gear', state: 'value', text: '3'});
+  expect(gearOf(ats, {ets2: 'automatic', ats: 'manual'})).toEqual({id: 'gear', state: 'value', text: '2L'});
+  expect(gearOf(live(), modes)).toEqual({id: 'gear', state: 'value', text: 'R1'});
+  const neutral = live(); neutral.observation!.state.gear = {available: true, value: 0, unit: 'index'};
+  expect(gearOf(neutral, modes)).toEqual({id: 'gear', state: 'value', text: 'N'});
+  // No game (an initial, observation-less update) uses automatic; unavailable and stale gear are unchanged by the mode.
+  expect(overlayPresentation(initialLive('ets2'), undefined, undefined, undefined, false, 'en', {ets2: 'manual', ats: 'manual'}).sections)
+    .toEqual(overlayPresentation(initialLive('ets2')).sections);
+  const missing = live(); missing.observation!.state.gear = {available: false, reason: 'not-observed', unit: 'index'};
+  expect(gearOf(missing, modes)).toEqual(gearOf(missing));
+  const stale = {...ets2, fresh: false, status: 'stale' as const};
+  expect(gearOf(stale, modes)).toEqual(gearOf(stale));
+  expect(gearOf(stale, modes)?.state).not.toBe('value');
+});

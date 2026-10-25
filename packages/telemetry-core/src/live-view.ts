@@ -3,7 +3,7 @@
 // labels and reason texts are the application's (apps/desktop/src/strings.ts).
 import type {LiveTelemetry} from '../../contracts/src';
 import {deadlineRemaining, fuelLevel} from './derived';
-import type {DisplayProfileId, DisplayUnits, GameId} from './display-profile';
+import type {DisplayProfileId, DisplayUnits, GameId, GearDisplayMode} from './display-profile';
 import {
   formatBearing, formatBoolean, formatConsumption, formatDeadline, formatDistance, formatGameTime, formatGear, formatMass, formatMoney,
   formatPercent, formatPosition, formatRpm, formatSpeed, formatVolume
@@ -137,7 +137,7 @@ function gameModeText(mode: GameModeView): string {
   return `${mode.mode === 'truckersmp' ? 'TruckersMP' : 'single-player'} (${mode.confidence} evidence, ${mode.method})`;
 }
 
-export function buildLiveView(live: LiveViewSource, state: NormalizedLiveState | undefined, units: DisplayUnits): LiveDashboardView {
+export function buildLiveView(live: LiveViewSource, state: NormalizedLiveState | undefined, units: DisplayUnits, gear: GearDisplayMode = 'automatic'): LiveDashboardView {
   const current = isCurrent(live) && state !== undefined;
   const observation = live.observation;
   const origin = observation?.source.origin ?? 'none';
@@ -166,7 +166,7 @@ export function buildLiveView(live: LiveViewSource, state: NormalizedLiveState |
   const sections: LiveSection[] = [
     {id: 'motion', fields: [
       f('speed', s.speed, value => formatSpeed(value, units.speed)),
-      f('gear', s.gear, formatGear),
+      f('gear', s.gear, value => formatGear(value, gear)),
       f('engine-rpm', s.engineRpm, formatRpm)
     ]},
     {id: 'fuel', fields: [

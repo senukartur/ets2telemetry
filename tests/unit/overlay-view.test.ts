@@ -193,6 +193,8 @@ it.each(['en', 'ru'] as const)('splits the RPM number from its localized unit in
 
 // ET-045d (W1): the strip reserves a three-digit speed, a two-character reverse gear and a four-digit RPM, so 9↔10, 99↔100 and
 // 999↔1000 never resize a section. Other sections keep their content width under their caps.
+// ET-050 (GD6): the requirement for the gear reserve changed. It is mode-independent and covers the reverse and both manual
+// forms on separate lines ('R0\n0H\n0L' instead of 'R0'), so the expected gear reserve below changed accordingly.
 it('reserves stable value widths for speed, gear and RPM only, in every layout, language and state', () => {
   const sections: OverlayPresentation['sections'] = [{id: 'speed', state: 'value', text: '9 km/h'}, {id: 'gear', state: 'value', text: 'N'},
     {id: 'rpm', state: 'value', text: '999 rpm'}, {id: 'fuel', state: 'value', text: '7.0 L'}, {id: 'range', state: 'value', text: '90 km'},
@@ -200,7 +202,7 @@ it('reserves stable value widths for speed, gear and RPM only, in every layout, 
   for (const layout of ['strip', 'card', 'cluster', 'hud'] as const) for (const language of ['en', 'ru'] as const) for (const available of [true, false]) {
     const view = overlayView({...base, layout, language, speed: available ? '9' : '—', fuel: available ? '7.0' : '—',
       sections: available ? sections : sections.map(section => ({id: section.id, state: 'unavailable' as const}))});
-    expect(view.items.map(item => [item.id, item.reserve]), `${layout} ${language} ${available}`).toEqual([['speed', '000'], ['gear', 'R0'], ['rpm', '0000'],
+    expect(view.items.map(item => [item.id, item.reserve]), `${layout} ${language} ${available}`).toEqual([['speed', '000'], ['gear', 'R0\n0H\n0L'], ['rpm', '0000'],
       ['fuel', undefined], ['range', undefined], ['sdk-consumption', undefined], ['game-time', undefined]]);
   }
 });

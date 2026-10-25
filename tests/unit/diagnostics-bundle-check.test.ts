@@ -1,5 +1,5 @@
 import {describe, expect, it} from 'vitest';
-import type {AppHealth, AppLanguage, LiveTelemetry, OverlayLayout, OverlaySectionId, PluginDiscoveryOutcome, PluginGame, PluginManualFolderState, PluginSetupMode, PluginSetupView, PluginTargetState,
+import type {AppHealth, AppLanguage, GearDisplayMode, LiveTelemetry, OverlayLayout, OverlaySectionId, PluginDiscoveryOutcome, PluginGame, PluginManualFolderState, PluginSetupMode, PluginSetupView, PluginTargetState,
   PluginTargetView, RecordingHealth, RecordingTarget, RecordingTrip, ServiceHealth, SettingsState, SettingsView, SourceSelection, StorageHealth, UnitProfile} from '../../packages/contracts/src';
 import {DEFAULT_OVERLAY_SETTINGS} from '../../apps/desktop/src/overlay-sections';
 import {buildDiagnosticBundle, type DiagnosticBundleInput} from '../../apps/desktop/src/diagnostic-bundle';
@@ -10,7 +10,7 @@ import {checkDiagnosticsBundle, ENUMS, runtimeStrings, schemaTokens} from '../..
 // smoke reads (`mode`, `root`). The names and paths are invented.
 
 const HEALTH: AppHealth = {service: 'ready', storage: 'verified', recording: {state: 'disabled'}, lastError: null};
-const SETTINGS: SettingsView = {language: 'en', autostart: false, units: {ets2: 'metric', ats: 'us-customary'}, overlay: DEFAULT_OVERLAY_SETTINGS, state: 'defaults', writable: true, saveError: null};
+const SETTINGS: SettingsView = {language: 'en', autostart: false, units: {ets2: 'metric', ats: 'us-customary'}, gearDisplay: {ets2: 'automatic', ats: 'automatic'}, overlay: DEFAULT_OVERLAY_SETTINGS, state: 'defaults', writable: true, saveError: null};
 const PLUGINS: PluginSetupView = {mode: 'test-root', bundled: {version: '0.2.0', sha256Prefix: '0123456789ab'}, running: false, games: {
   ets2: {excluded: false, discovery: 'found', manualFolder: 'set', unlistedFolders: 0, targets: []},
   ats: {excluded: true, discovery: 'found', manualFolder: 'none', unlistedFolders: 0, targets: []}}};
@@ -92,6 +92,7 @@ describe('names outside the runtime strings', () => {
       tripCompleteness: {unknown: true, partial: true, complete: true} satisfies Record<NonNullable<RecordingTrip['completeness']>, true>,
       language: {en: true, ru: true} satisfies Record<AppLanguage, true>,
       unitProfile: {metric: true, 'us-customary': true} satisfies Record<UnitProfile, true>,
+      gearDisplay: {automatic: true, manual: true} satisfies Record<GearDisplayMode, true>,
       overlayLayout: {strip: true, card: true, cluster: true, hud: true} satisfies Record<OverlayLayout, true>,
       settingsState: {loading: true, defaults: true, loaded: true, 'loaded-with-fallbacks': true, 'invalid-file': true, 'unsupported-older': true, 'newer-version': true,
         unreadable: true, unavailable: true} satisfies Record<SettingsState, true>,
@@ -197,6 +198,22 @@ it.each([undefined, null, '80', false, 39, 101, 65.5])('rejects missing or inval
   if (backgroundOpacity === undefined) delete parsed.settings.overlay.backgroundOpacity;
   else parsed.settings.overlay.backgroundOpacity = backgroundOpacity;
   expect(() => schemaTokens(parsed)).toThrow();
+});
+// ET-050: both games' gear display modes are mandatory and limited to the two exact modes.
+it.each([
+  ['missing block', undefined], ['null block', null], ['missing game', {ets2: 'manual'}], ['unknown mode', {ets2: 'manual', ats: 'Manual'}],
+  ['non-string mode', {ets2: 1, ats: 'automatic'}], ['extra game', {ets2: 'manual', ats: 'manual', other: 'manual'}]
+])('rejects a diagnostic gear display with a %s', (_name, gearDisplay) => {
+  const parsed = JSON.parse(bundle(['USER'])) as {settings: Record<string, unknown>};
+  if (gearDisplay === undefined) delete parsed.settings.gearDisplay;
+  else parsed.settings.gearDisplay = gearDisplay;
+  expect(() => schemaTokens(parsed)).toThrow();
+});
+it.each([['automatic', 'automatic'], ['manual', 'automatic'], ['manual', 'manual']] as const)('accepts the production diagnostic gear display ets2=%s ats=%s', (ets2, ats) => {
+  const text = bundle(['USER'], {}, {settings: {...SETTINGS, gearDisplay: {ets2, ats}}});
+  expect(() => check(text, ['USER'])).not.toThrow();
+  expect(JSON.parse(text)).toMatchObject({settings: {gearDisplay: {ets2, ats}}});
+  expect(schemaTokens(JSON.parse(text))).toContain('gearDisplay');
 });
 it.each([40, 65, 80, 100])('accepts the production diagnostic opacity %i', backgroundOpacity => {
   const text = bundle(['USER'], {}, {settings: {...SETTINGS, overlay: {...SETTINGS.overlay, backgroundOpacity}}});

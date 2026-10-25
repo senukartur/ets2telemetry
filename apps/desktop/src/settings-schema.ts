@@ -1,13 +1,13 @@
 import {DEFAULT_OVERLAY_OPACITY, isOverlayOpacity} from './overlay-opacity';
-import type {AppLanguage, OverlayLayout, OverlayPlacement, OverlaySectionId, OverlaySections, OverlaySettings, UnitGame, UnitProfiles} from '../../../packages/contracts/src';
+import type {AppLanguage, GearDisplayMode, GearDisplayModes, OverlayLayout, OverlayPlacement, OverlaySectionId, OverlaySections, OverlaySettings, UnitGame, UnitProfiles} from '../../../packages/contracts/src';
 import {DEFAULT_OVERLAY_PLACEMENTS, normalizeFraction, normalizeScale, parseOverlayPlacement} from './overlay-placement';
 import {DEFAULT_OVERLAY_SECTIONS, DEFAULT_OVERLAY_SETTINGS, isOverlayLayout, OVERLAY_LAYOUTS, OVERLAY_SECTION_IDS} from './overlay-sections';
-import {DEFAULT_UNIT_PROFILES, isUnitProfile, UNIT_GAMES} from './unit-profiles';
+import {DEFAULT_GEAR_DISPLAY, DEFAULT_UNIT_PROFILES, isGearDisplayMode, isUnitProfile, UNIT_GAMES} from './unit-profiles';
 
-// Settings file format v8 (docs/settings.md). Pure parsing and serialization; the store owns file access.
+// Settings file format v9 (docs/settings.md). Pure parsing and serialization; the store owns file access.
 
 export const SETTINGS_FORMAT = 'ets2telemetry.settings';
-export const SETTINGS_VERSION = 8;
+export const SETTINGS_VERSION = 9;
 /** Larger files are rejected as invalid without being parsed. */
 export const MAX_SETTINGS_BYTES = 64 * 1024;
 
@@ -22,20 +22,23 @@ export interface Settings {
   language: AppLanguage;
   autostart: boolean;
   units: UnitProfiles;
+  /** Per-game gear display mode (ET-050). */
+  gearDisplay: GearDisplayModes;
   overlay: OverlaySettings;
 }
 export const DEFAULT_SETTINGS: Settings = Object.freeze({
   language: DEFAULT_APP_LANGUAGE,
   autostart: false,
   units: DEFAULT_UNIT_PROFILES,
+  gearDisplay: DEFAULT_GEAR_DISPLAY,
   overlay: DEFAULT_OVERLAY_SETTINGS
 });
 
 /** Field paths that can fall back to their default independently. */
-export type SettingsField = 'overlay.backgroundOpacity' | 'overlay.enabled' | 'language' | 'autostart' | `units.${UnitGame}` | 'overlay.layout' | 'overlay.sections' | `overlay.sections.${OverlaySectionId}`
+export type SettingsField = 'overlay.backgroundOpacity' | 'overlay.enabled' | 'language' | 'autostart' | `units.${UnitGame}` | `gearDisplay.${UnitGame}` | 'overlay.layout' | 'overlay.sections' | `overlay.sections.${OverlaySectionId}`
   | 'overlay.placements' | `overlay.placements.${OverlayLayout}`;
 /** Set when the file was upgraded in memory from an older format; the file itself stays unchanged until the next save. */
-type Migrated = {migratedFrom?: 1 | 2 | 3 | 4 | 5 | 6 | 7};
+type Migrated = {migratedFrom?: 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8};
 export type ParsedSettings =
   | ({state: 'loaded'; settings: Settings} & Migrated)
   /** A valid file with some invalid or missing fields; they use defaults until the next save rewrites them. */
@@ -64,6 +67,9 @@ const isRecord = (value: unknown): value is Record<string, unknown> => typeof va
  * bump makes an older build read a v8 file as newer-version (read-only defaults) instead of misreading the rebased
  * numbers or replacing a scale above 2 with its default on the next save. A hand-edited earlier scale in (2, 3] passes
  * after this migration.
+ * v8 -> v9 adds automatic gear display for both games (ET-050). A stray pre-v9 `gearDisplay` key is replaced, so an
+ * older file never carries a hand-edited mode into v9; the bump makes an older build read a v9 file as newer-version
+ * instead of dropping the mode on its next save.
  * Version 0 and below have no path.
  */
 const MIGRATIONS: ReadonlyMap<number, (raw: Record<string, unknown>) => Record<string, unknown>> = new Map<number, (raw: Record<string, unknown>) => Record<string, unknown>>([
@@ -73,7 +79,8 @@ const MIGRATIONS: ReadonlyMap<number, (raw: Record<string, unknown>) => Record<s
   [4, (raw: Record<string, unknown>) => ({...raw, version: 5, autostart: false})],
   [5, (raw: Record<string, unknown>) => ({...raw, version: 6, overlay: isRecord(raw.overlay) ? {...raw.overlay, enabled: true} : raw.overlay})],
   [6, (raw: Record<string, unknown>) => ({...raw, version: 7, overlay: isRecord(raw.overlay) ? {...raw.overlay, backgroundOpacity: DEFAULT_OVERLAY_OPACITY} : raw.overlay})],
-  [7, (raw: Record<string, unknown>) => ({...raw, version: 8})]
+  [7, (raw: Record<string, unknown>) => ({...raw, version: 8})],
+  [8, (raw: Record<string, unknown>) => ({...raw, version: 9, gearDisplay: {ets2: DEFAULT_GEAR_DISPLAY.ets2, ats: DEFAULT_GEAR_DISPLAY.ats}})]
 ]);
 
 /** Upgrades an older raw document to the current version through the migration chain, or undefined without a complete path. */
@@ -151,7 +158,7 @@ export function parseSettings(bytes: Uint8Array): ParsedSettings {
     document = migrateToCurrent(raw, version);
     if (!document) return {state: 'unsupported-older'};
   }
-  const migrated: Migrated = version === 1 || version === 2 || version === 3 || version === 4 || version === 5 || version === 6 || version === 7 ? {migratedFrom: version} : {};
+  const migrated: Migrated = version === 1 || version === 2 || version === 3 || version === 4 || version === 5 || version === 6 || version === 7 || version === 8 ? {migratedFrom: version} : {};
   const fallbackFields: SettingsField[] = [];
 
   let language: AppLanguage = DEFAULT_APP_LANGUAGE;
@@ -169,13 +176,22 @@ export function parseSettings(bytes: Uint8Array): ParsedSettings {
     if (isUnitProfile(value)) resolved[game] = value;
     else {resolved[game] = DEFAULT_UNIT_PROFILES[game]; fallbackFields.push(`units.${game}`);}
   }
+  // Each game's gear display mode falls back alone; a missing or non-object block falls back for both games.
+  const gearDisplay = isRecord(document.gearDisplay) ? document.gearDisplay : {};
+  const gears = {} as Record<UnitGame, GearDisplayMode>;
+  for (const game of UNIT_GAMES) {
+    const value = gearDisplay[game];
+    if (isGearDisplayMode(value)) gears[game] = value;
+    else {gears[game] = DEFAULT_GEAR_DISPLAY[game]; fallbackFields.push(`gearDisplay.${game}`);}
+  }
   const overlay = parseOverlay(document.overlay, fallbackFields);
-  const settings: Settings = {language, autostart, units: Object.freeze(resolved), overlay: Object.freeze(overlay)};
+  const settings: Settings = {language, autostart, units: Object.freeze(resolved), gearDisplay: Object.freeze(gears), overlay: Object.freeze(overlay)};
   return fallbackFields.length ? {state: 'loaded-with-fallbacks', settings, fallbackFields, ...migrated} : {state: 'loaded', settings, ...migrated};
 }
 
 /**
- * The exact v8 file content: UTF-8 without a byte order mark, two-space indentation, a trailing newline, language,
+ * The exact v9 file content: UTF-8 without a byte order mark, two-space indentation, a trailing newline, language,
+ * both games' unit profiles followed by their gear display modes,
  * all fourteen overlay sections in canonical order and the placements of all four layouts in canonical order, each with
  * x and y rounded to four decimals and the scale to two.
  */
@@ -191,6 +207,7 @@ export function serializeSettings(settings: Settings): string {
     language: settings.language,
     autostart: settings.autostart,
     units: {ets2: settings.units.ets2, ats: settings.units.ats},
+    gearDisplay: {ets2: settings.gearDisplay.ets2, ats: settings.gearDisplay.ats},
     overlay: {enabled: settings.overlay.enabled, backgroundOpacity: settings.overlay.backgroundOpacity, layout: settings.overlay.layout, sections, placements}
   }, null, 2) + '\n';
 }

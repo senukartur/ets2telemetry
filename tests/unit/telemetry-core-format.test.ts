@@ -3,7 +3,8 @@
 import {describe, expect, it} from 'vitest';
 import {
   fixed, formatBearing, formatBoolean, formatConsumption, formatDeadline, formatDistance, formatGameDuration, formatGameTime, formatGear,
-  formatMass, formatMoney, formatMoneyAmount, formatPercent, formatPosition, formatRpm, formatSpeed, formatVolume, L100KM_US_MPG
+  formatMass, formatMoney, formatMoneyAmount, formatPercent, formatPosition, formatRpm, formatSpeed, formatVolume, GEAR_DISPLAY_MODES, isGearDisplayMode,
+  L100KM_US_MPG
 } from '../../packages/telemetry-core/src';
 
 describe('rounding and signed zero', () => {
@@ -68,6 +69,24 @@ describe('REG-009 SDK average consumption', () => {
 
 describe('labels for gear, engine and level', () => {
   it.each([[0, 'N'], [1, '1'], [12, '12'], [-1, 'R1'], [-2, 'R2'], [-100, 'R100']] as const)('gear %s is %s', (gear, text) => expect(formatGear(gear)).toBe(text));
+  // ET-050: the default is automatic, and both modes keep neutral and reverse.
+  it.each([[0, 'N'], [1, '1'], [2, '2'], [3, '3'], [9, '9'], [12, '12'], [100, '100'], [-1, 'R1'], [-2, 'R2'], [-100, 'R100']] as const)(
+    'automatic gear %s is %s', (gear, text) => expect(formatGear(gear, 'automatic')).toBe(text));
+  it.each([
+    [0, 'N'], [1, '1L'], [2, '1H'], [3, '2L'], [4, '2H'], [5, '3L'], [6, '3H'], [7, '4L'], [8, '4H'], [9, '5L'], [10, '5H'], [11, '6L'],
+    [12, '6H'], [13, '7L'], [14, '7H'], [15, '8L'], [16, '8H'], [18, '9H'], [99, '50L'], [100, '50H'], [-1, 'R1'], [-2, 'R2'], [-100, 'R100']
+  ] as const)('manual gear %s is %s', (gear, text) => expect(formatGear(gear, 'manual')).toBe(text));
+  it('defaults to automatic and shows a non-integer forward value as its plain number in both modes', () => {
+    for (const gear of [-3, -1, 0, 1, 2, 7, 16]) expect(formatGear(gear)).toBe(formatGear(gear, 'automatic'));
+    expect(formatGear(2.5, 'manual')).toBe('2.5');
+    expect(formatGear(2.5, 'automatic')).toBe('2.5');
+    expect(formatGear(Number.MAX_SAFE_INTEGER + 1, 'manual')).toBe(String(Number.MAX_SAFE_INTEGER + 1));
+  });
+  it('accepts only the exact gear display mode strings', () => {
+    expect(GEAR_DISPLAY_MODES).toEqual(['automatic', 'manual']);
+    for (const mode of GEAR_DISPLAY_MODES) expect(isGearDisplayMode(mode)).toBe(true);
+    for (const value of ['Manual', 'AUTOMATIC', ' manual', 'manual ', '', 'auto', 0, 1, true, null, undefined, {}, ['manual']]) expect(isGearDisplayMode(value)).toBe(false);
+  });
   it('rounds engine speed and percentages to integers', () => {
     expect(formatRpm(600)).toBe('600 rpm');
     expect(formatRpm(599.4)).toBe('599 rpm');

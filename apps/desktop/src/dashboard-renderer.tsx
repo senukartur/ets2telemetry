@@ -22,6 +22,7 @@ import {LiveDashboard} from './live-dashboard';
 import {LanguageCard} from './language-card';
 import {AutostartCard} from './autostart-card';
 import {OverlaySettingsCard} from './overlay-settings-card';
+import {GearDisplayCard} from './gear-display-card';
 import {PluginSetupCard} from './plugin-setup-card';
 import {UninstallCard} from './uninstall-card';
 import {connectionDiagnosis} from './connection-diagnosis';
@@ -51,7 +52,7 @@ export default function App() {
   const [exit, setExit] = useState<'idle' | 'pending' | 'failed'>('idle');
   const [units, setUnits] = useState<'idle' | 'saving' | 'failed'>('idle');
   // Main reports one `saveError` for the whole settings file; it is shown in the card whose request caused it.
-  const [lastCard, setLastCard] = useState<'units' | 'overlay' | 'language' | 'autostart'>('units');
+  const [lastCard, setLastCard] = useState<'units' | 'gear' | 'overlay' | 'language' | 'autostart'>('units');
   const [startupLine] = useState(() => createStartupLine(() => window.desktop.getStatus(), setStartup));
   useEffect(() => {
     startupLine.start();
@@ -105,7 +106,7 @@ export default function App() {
         <Badge variant={hardModeTone(hardMode.status)} data-testid="shell.status.hardMode"><Flame aria-hidden="true" />{hmView.headline}</Badge>
       </header><main ref={content} className="yu-content" data-testid="shell.content">
         <div hidden={route !== 'live'} className="yu-stack" data-testid="live.screen">
-          <LiveDashboard live={live} units={settings?.units} language={language} />
+          <LiveDashboard live={live} units={settings?.units} gearDisplay={settings?.gearDisplay} language={language} />
           <p data-testid="prototype-notice" className="yu-muted">{recording.notice}</p>
         </div>
         <div hidden={route !== 'hardMode'} className="yu-stack" data-testid="hardMode.screen"><HardModeCard language={language} controller={hardMode} /></div>
@@ -114,7 +115,7 @@ export default function App() {
           <div className="yu-stack"><div hidden={panel !== 'general'} className="yu-stack" data-testid="settings.general"><LanguageCard settings={settings} onSaved={saved} controller={languageController} showSaveError={lastCard === 'language'} />
             <AutostartCard settings={settings} status={app?.autostart} onSaved={saved} onRequest={() => setLastCard('autostart')} showSaveError={lastCard === 'autostart'} />
             <Card><CardHeader><CardTitle><h2>{t('s.general', undefined, language)}</h2></CardTitle></CardHeader><CardContent className="space-y-3"><p>{t('s.closeD', undefined, language)}</p><p>{t('ui.helpNote', undefined, language)}</p><Button variant="outline" onClick={() => setPanel('plugin')}><CircleHelp aria-hidden="true" />{t('ob.s2', undefined, language)}</Button></CardContent></Card>
-          </div><div hidden={panel !== 'units'} data-testid="settings.units">  <Card size="sm"><CardHeader><CardTitle><h2>{strings.unitsTitle}</h2></CardTitle></CardHeader><CardContent className="space-y-3">
+          </div><div hidden={panel !== 'units'} className="yu-stack" data-testid="settings.units">  <Card size="sm"><CardHeader><CardTitle><h2>{strings.unitsTitle}</h2></CardTitle></CardHeader><CardContent className="space-y-3">
     {UNIT_GAMES.map(game => <div key={game} className="space-y-2">
       <p id={`units-${game}-label`}>{getUnitGameText(game, language)}</p>
       {/* A choice shows as selected only after main saved it; a failed save leaves the previous one. */}
@@ -130,6 +131,7 @@ export default function App() {
     {settings?.saveError && lastCard === 'units' ? <p role="status" data-testid="settings-error">{getSettingsSaveErrorText(settings.saveError, language)}</p>
       : units === 'failed' ? <p role="status" data-testid="settings-error">{strings.unitsSaveFailed}</p> : null}
   </CardContent></Card>
+  <GearDisplayCard settings={settings} onSaved={saved} onRequest={() => setLastCard('gear')} showSaveError={lastCard === 'gear'} />
 </div>
           <div hidden={panel !== 'overlay'} data-testid="settings.overlay"><OverlaySettingsCard settings={settings} edit={app?.overlayEdit} onSaved={saved} onRequest={() => setLastCard('overlay')} showSaveError={lastCard === 'overlay'} />
             </div>
