@@ -83,6 +83,7 @@ scs_value_t text(const char* s) { auto v = value_of(SCS_VALUE_TYPE_string); v.va
 scs_value_t s64(std::int64_t n) { auto v = value_of(SCS_VALUE_TYPE_s64); v.value_s64.value = n; return v; }
 scs_value_t u32(std::uint32_t n) { auto v = value_of(SCS_VALUE_TYPE_u32); v.value_u32.value = n; return v; }
 scs_named_value_t named(const char* name, scs_value_t value) { scs_named_value_t n{}; n.name = name; n.index = SCS_U32_NIL; n.value = value; return n; }
+scs_named_value_t indexed(const char* name, scs_value_t value, scs_u32_t index) { auto n = named(name, value); n.index = index; return n; }
 // Gameplay events of one fixed shape: job.cancelled with a penalty.
 struct Penalty { scs_named_value_t attributes[2]; explicit Penalty(std::int64_t amount) : attributes{named("cancel.penalty", s64(amount)), scs_named_value_t{}} {} };
 void cancelled(Host& host, unsigned count, std::int64_t amount = 5) { Penalty p(amount); for (unsigned i = 0; i < count; ++i) host.gameplay(SCS_TELEMETRY_GAMEPLAY_EVENT_job_cancelled, p.attributes); }
@@ -118,13 +119,15 @@ std::vector<std::uint8_t> framed(const std::string& payload) {
   std::vector<std::uint8_t> out{static_cast<std::uint8_t>(n), static_cast<std::uint8_t>(n >> 8), static_cast<std::uint8_t>(n >> 16), static_cast<std::uint8_t>(n >> 24)};
   out.insert(out.end(), payload.begin(), payload.end()); return out;
 }
-std::string hello_payload(bool durable) {
-  return std::string("{\"version\":{\"major\":1,\"minor\":0},\"kind\":\"hello\",\"data\":{\"clientInstanceId\":\"50000000-0000-4000-8000-000000000001\",\"minMinor\":0,\"maxMinor\":0,\"durableEvents\":") + (durable ? "true" : "false") + "}}";
+// A hello is always version 1.0; `max_minor` is the highest minor it offers. ACKs and probes carry the connection minor.
+std::string hello_payload(bool durable, unsigned max_minor = 0) {
+  return std::string("{\"version\":{\"major\":1,\"minor\":0},\"kind\":\"hello\",\"data\":{\"clientInstanceId\":\"50000000-0000-4000-8000-000000000001\",\"minMinor\":0,\"maxMinor\":") +
+    std::to_string(max_minor) + ",\"durableEvents\":" + (durable ? "true" : "false") + "}}";
 }
-std::string ack_payload(const std::string& session, std::uint64_t through) {
-  return "{\"version\":{\"major\":1,\"minor\":0},\"kind\":\"ack\",\"data\":{\"pluginSessionId\":\"" + session + "\",\"throughEventSeq\":\"" + std::to_string(through) + "\"}}";
+std::string ack_payload(const std::string& session, std::uint64_t through, unsigned minor = 0) {
+  return "{\"version\":{\"major\":1,\"minor\":" + std::to_string(minor) + "},\"kind\":\"ack\",\"data\":{\"pluginSessionId\":\"" + session + "\",\"throughEventSeq\":\"" + std::to_string(through) + "\"}}";
 }
-std::string probe_payload(std::uint64_t id) { return "{\"version\":{\"major\":1,\"minor\":0},\"kind\":\"clock.probe\",\"data\":{\"probeId\":\"" + std::to_string(id) + "\"}}"; }
+std::string probe_payload(std::uint64_t id, unsigned minor = 0) { return "{\"version\":{\"major\":1,\"minor\":" + std::to_string(minor) + "},\"kind\":\"clock.probe\",\"data\":{\"probeId\":\"" + std::to_string(id) + "\"}}"; }
 const char* v0_hello = "{\"version\":{\"major\":0,\"minor\":0},\"kind\":\"hello\",\"data\":{\"clientInstanceId\":\"00000000-0000-4000-8000-000000000001\",\"minMinor\":0,\"maxMinor\":0,\"diagnostics\":true}}";
 
 enum class ReadResult { data, timeout, closed };
@@ -153,11 +156,13 @@ Handle open_pipe(const std::wstring& name) {
 
 // The controlled v1 client: every server message passes through the ET-002b Consumer, which enforces identity, order,
 // contiguous eventSeq coverage, the durable grant and a terminal `end`.
+// `max_minor` is the highest minor its hello offers (default 0); its decoder and Consumer accept the same.
 struct Client {
-  Handle pipe; v1::FrameDecoder decoder{v1::Sender::server}; v1::Consumer consumer; bool durable; bool eof = false;
+  Handle pipe; v1::FrameDecoder decoder; v1::Consumer consumer; bool durable; unsigned max_minor; bool eof = false;
   std::vector<v1::Message> messages; std::vector<v1::Applied> applied;
-  Client(Handle h, bool durable_events) : pipe(std::move(h)), consumer(durable_events), durable(durable_events) {}
-  void hello() { send(pipe.get(), framed(hello_payload(durable))); }
+  Client(Handle h, bool durable_events, unsigned minor = 0)
+    : pipe(std::move(h)), decoder(v1::Sender::server, minor), consumer(durable_events, minor), durable(durable_events), max_minor(minor) {}
+  void hello() { send(pipe.get(), framed(hello_payload(durable, max_minor))); }
   // Reads until `predicate` holds; false on timeout or EOF.
   bool read_until(const std::function<bool()>& predicate, ULONGLONG ms = 3000) {
     const auto end = GetTickCount64() + ms * timing_scale; std::vector<std::uint8_t> bytes;
@@ -202,7 +207,7 @@ struct Client {
 // transaction. Returns the ACK sent, or 0.
 std::uint64_t commit_and_ack(Client& client, v1::DurableAckCursor& cursor, std::size_t& committed) {
   for (; committed < client.applied.size(); ++committed) if (const auto& c = client.applied[committed].coverage) { cursor.received(c->first_event_seq, c->last_event_seq); cursor.commit(c->first_event_seq, c->last_event_seq); }
-  if (auto ack = cursor.ack()) { send(client.pipe.get(), v1::encode_frame(*ack)); return ack->ack->through_event_seq; }
+  if (auto ack = cursor.ack()) { send(client.pipe.get(), v1::encode_frame(*ack, v1::highest_minor)); return ack->ack->through_event_seq; }
   return 0;
 }
 
@@ -228,7 +233,7 @@ struct Fixture {
   }
   void start() { require(server->start(directory), "v1 worker start"); require(until([&] { return server->status() == v1::ServerStatus::listening; }), "v1 listening"); }
   Handle connect() { return open_pipe(server->endpoint()); }
-  std::unique_ptr<Client> client(bool durable) { auto c = std::make_unique<Client>(connect(), durable); return c; }
+  std::unique_ptr<Client> client(bool durable, unsigned max_minor = 0) { auto c = std::make_unique<Client>(connect(), durable, max_minor); return c; }
   std::unique_ptr<sdk::V1Current> current() const { auto c = std::make_unique<sdk::V1Current>(); require(adapter->read_v1_current(*c), "v1 slot"); return c; }
   std::wstring record() const { const auto c = current(); return directory + L"\\" + wide(c->identity.process_instance_id.c_str()) + L".json"; }
   bool listening() const { return until([&] { return server->status() == v1::ServerStatus::listening; }); }
@@ -377,6 +382,63 @@ void handshake() {
   client->read_until([] { return false; }, 100);
   const auto snapshots = client->count("snapshot") - before; std::cout << "snapshotsPerSecond=" << snapshots << '\n';
   require(snapshots >= 5 && snapshots <= 22, "snapshot cadence bounded at 20 Hz");
+  require(f.host.wrong_thread == 0, "the worker never calls the SDK");
+}
+
+// ET-050b PR-4: minor 1 over an actual pipe. A hello offering maxMinor 1 selects minor 1: every message in both
+// directions carries it and checkpoints and snapshots carry `state.gearbox`. A hello offering only minor 0 gets minor 0
+// without a gearbox, and a client frame at the other minor closes the connection.
+struct HShifterAttributes {
+  // A two-selector layout over handle positions 0-3: reverse at position 1, forward 1-8 at positions 2 and 3.
+  std::vector<scs_named_value_t> list;
+  HShifterAttributes() {
+    const std::int32_t gears[16]{0, 0, 0, 0, -1, -3, -2, -4, 1, 5, 2, 6, 3, 7, 4, 8};
+    list.push_back(named("selector.count", u32(2)));
+    for (std::uint32_t i = 0; i < 16; ++i) {
+      auto gear = value_of(SCS_VALUE_TYPE_s32); gear.value_s32.value = gears[i];
+      list.push_back(indexed("slot.gear", gear, i)); list.push_back(indexed("slot.handle.position", u32(i / 4), i)); list.push_back(indexed("slot.selectors", u32(i % 4), i));
+    }
+    list.push_back({});
+  }
+};
+void gearbox() {
+  Fixture f; HShifterAttributes layout;
+  scs_named_value_t truck[]{named("id", text("vehicle.synthetic_truck")), named("gears.forward", u32(8)), named("gears.reverse", u32(4)), scs_named_value_t{}};
+  f.host.event(SCS_TELEMETRY_EVENT_started); f.host.config("truck", truck); f.host.config("hshifter", layout.list.data()); f.host.frame();
+  f.start();
+  auto c = f.client(true, 1); c->handshake();
+  // Copies: later reads grow the message list.
+  const auto welcome = c->messages[0]; const auto checkpoint = c->messages[1];
+  require(welcome.minor == 1 && welcome.welcome->minor == 1 && checkpoint.minor == 1 && c->consumer.minor() == 1u, "maxMinor 1 selects minor 1");
+  const auto g = *checkpoint.state->gearbox;
+  require(g.forward_gears.value == 8u && g.reverse_gears.value == 4u && g.hshifter.value && g.hshifter.value->selector_count == 2 && g.hshifter.value->slots.size() == 12, "the checkpoint carries the gear counts and the layout");
+  require(g.hshifter.value->slots.front().gear == -1 && g.hshifter.value->slots.front().handle_position == 1 && g.hshifter.value->slots.back().gear == 8 && g.hshifter.value->slots.back().handle_position == 3 && g.hshifter.value->slots.back().selectors == 3, "SDK slot order, neutral slots omitted");
+  // A changed layout reaches the next snapshot; the callback itself emits no event.
+  const auto events_before = c->count("event");
+  scs_named_value_t empty[]{scs_named_value_t{}};
+  f.host.config("hshifter", empty);
+  require(c->status_until(f.host, [](const v1::StateView& s) { return s.gearbox && !s.gearbox->hshifter.value && s.gearbox->hshifter.reason == v1::Reason::not_observed && s.gearbox->forward_gears.value == 8u; }), "an empty hshifter callback: a not-observed layout in the next snapshot");
+  require(c->count("event") == events_before, "the hshifter callback emits no event");
+  // Events, a clock probe and an ACK at minor 1.
+  cancelled(f.host, 2); f.host.frame();
+  require(c->pump(f.host, [&] { return c->count("event") >= events_before + 2; }), "events delivered at minor 1");
+  c->consumer.expect_clock_reply(1); send(c->pipe.get(), framed(probe_payload(1, 1)));
+  require(c->read_until([&] { return c->count("clock.reply") == 1; }), "a minor-1 probe gets a clock reply");
+  v1::DurableAckCursor cursor(c->session()); cursor.begin_connection(checkpoint.state->status.delivery.acked_through_event_seq, 1); std::size_t committed = 0;
+  const auto through = commit_and_ack(*c, cursor, committed);
+  require(through >= 2 && c->status_until(f.host, [&](const v1::StateView& s) { return s.status.delivery.acked_through_event_seq == through; }), "a minor-1 ACK releases the store");
+  for (const auto& m : c->messages) require(m.minor == 1, "every server message of the connection carries minor 1");
+  // An ACK at minor 0 on the minor-1 connection closes it.
+  send(c->pipe.get(), framed(ack_payload(c->session(), through))); require(c->closed(), "an ACK at another minor closes the connection");
+  require(f.listening(), "endpoint relistens");
+  // A maxMinor-0 hello gets minor 0 and no gearbox, with the original minor-0 checkpoint shape.
+  auto old = f.client(true); old->handshake();
+  require(old->messages[0].minor == 0 && old->messages[0].welcome->minor == 0 && old->messages[1].minor == 0 && !old->messages[1].state->gearbox, "maxMinor 0 selects minor 0");
+  require(!std::get<v0::Json::Object>(old->messages[1].wire.at("data").at("state").value).count("gearbox"), "a minor-0 checkpoint has no gearbox key");
+  f.host.config("hshifter", layout.list.data());
+  require(old->status_until(f.host, [](const v1::StateView& s) { return !s.gearbox; }), "minor-0 snapshots carry no gearbox");
+  send(old->pipe.get(), framed(probe_payload(1, 1))); require(old->closed(), "a minor-1 probe on a minor-0 connection closes it");
+  require(f.listening(), "endpoint relistens after the minor-0 client");
   require(f.host.wrong_thread == 0, "the worker never calls the SDK");
 }
 
@@ -1188,7 +1250,7 @@ void dll_lifecycle(const char* path) {
 int main(int argc, char** argv) {
   try {
     const std::map<std::string, std::function<void()>> cases{
-      {"handshake", handshake}, {"live-only", live_only}, {"durable", durable_delivery}, {"redelivery", redelivery}, {"stalled-reader", stalled_reader},
+      {"handshake", handshake}, {"gearbox", gearbox}, {"live-only", live_only}, {"durable", durable_delivery}, {"redelivery", redelivery}, {"stalled-reader", stalled_reader},
       {"fuzz", fuzz}, {"rejection", rejection}, {"collision", collision}, {"policy", policy}, {"v0-isolation", v0_isolation}, {"cap0-isolation", cap0_isolation}, {"shutdown", shutdown}
 #ifdef ETS2TELEMETRY_TRANSPORT_TEST_HOOKS
       , {"retention", [] { retention(); Fixture clamp; clamp.start(); capture_clamp(clamp); }}, {"overflow", overflow}, {"ack-control", ack_control}, {"exhaustion", exhaustion}, {"invariant", [] { invariant(); invariant_at_shutdown(); invariant_end_failed(); invariant_stop_budget(); }}

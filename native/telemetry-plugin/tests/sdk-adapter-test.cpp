@@ -5,6 +5,9 @@
 #include <chrono>
 #include <cmath>
 #include <cstring>
+#include <deque>
+#include <filesystem>
+#include <fstream>
 #include <future>
 #include <iostream>
 #include <map>
@@ -14,6 +17,8 @@
 #include <string>
 #include <thread>
 #include <vector>
+#include <iterator>
+#include "protocol-json.hpp"
 #include "common/scssdk_telemetry_common_gameplay_events.h"
 
 using namespace ets2telemetry::sdk;
@@ -813,6 +818,194 @@ void v1_session_boundary() {
   require(first && first->has_record && first->record.event_seq == 1 && v1_read(*adapter)->identity.plugin_session_id.c_str() == std::string(second->identity.plugin_session_id.c_str()), "the new session starts at eventSeq 1");
   adapter->shutdown(); adapter->attach_events(nullptr);
 }
+
+// ET-050b PR-4: the minor-1 gearbox capture. The CAP-01 run4 (ATS Mack Anthem 18-speed) and run2 (ETS2 DAF, then Volvo,
+// 12-speed) truck and hshifter configuration callbacks are replayed attribute by attribute from the committed sanitized
+// replay fixtures, in their capture order, and the encoded `state.gearbox` must equal the hand-written minor-1 fixtures.
+struct CapturedConfig {
+  std::string id; std::deque<std::string> names, strings; std::vector<scs_named_value_t> attributes;
+  const scs_named_value_t* list() const { return attributes.data(); }
+};
+std::string read_file(const std::filesystem::path& path) {
+  std::ifstream input(path, std::ios::binary); require(static_cast<bool>(input), "fixture readable");
+  return {std::istreambuf_iterator<char>(input), std::istreambuf_iterator<char>()};
+}
+v1::Json parse_file(const std::filesystem::path& path) { return ets2telemetry::v0::detail::Parser(read_file(path)).parse(); }
+// The truck and hshifter configuration callbacks of one CAP-01 replay, in step order, with their exact attribute names,
+// SDK indices, types and values. Every value type these callbacks carry is mapped; another type fails the test.
+std::vector<std::unique_ptr<CapturedConfig>> cap01_configs(const std::filesystem::path& path) {
+  const auto root = parse_file(path); std::vector<std::unique_ptr<CapturedConfig>> output;
+  for (const auto& step : std::get<v1::Json::Array>(root.at("steps").value)) {
+    if (step.at("action").string() != "capture") continue;
+    const auto& data = step.at("data"); const auto& callback = data.at("callback");
+    if (callback.at("group").string() != "configuration" || !callback.at("id").at("available").boolean()) continue;
+    const auto id = callback.at("id").at("value").string();
+    if (id != "truck" && id != "hshifter") continue;
+    auto config = std::make_unique<CapturedConfig>(); config->id = id;
+    const auto& observations = std::get<v1::Json::Array>(data.at("observations").value);
+    require(data.at("attributes").at("terminated").boolean() && data.at("attributes").at("count").number() == static_cast<double>(observations.size()), "a complete terminated capture");
+    for (const auto& o : observations) {
+      const auto& name = config->names.emplace_back(o.at("name").at("value").string());
+      const auto& index = o.at("arrayIndex");
+      const auto i = index.at("available").boolean() ? static_cast<scs_u32_t>(index.at("value").number()) : SCS_U32_NIL;
+      const auto& type = o.at("sdkType").string(); const auto& value = o.at("value").at("value");
+      scs_value_t v{};
+      if (type == "u32") v = u32(static_cast<std::uint32_t>(value.number()));
+      else if (type == "s32") v = s32(static_cast<std::int32_t>(value.number()));
+      else if (type == "float") v = floating(static_cast<float>(value.number()));
+      else if (type == "bool") v = boolean(value.boolean());
+      else if (type == "string") v = text(config->strings.emplace_back(value.string()).c_str());
+      else if (type == "fvector") { v.type = SCS_VALUE_TYPE_fvector; v.value_fvector = {static_cast<float>(value.at("x").number()), static_cast<float>(value.at("y").number()), static_cast<float>(value.at("z").number())}; }
+      else throw std::runtime_error("unmapped CAP-01 value type " + type);
+      config->attributes.push_back(attribute(name.c_str(), v, i));
+    }
+    config->attributes.push_back({});
+    output.push_back(std::move(config));
+  }
+  return output;
+}
+v1::Message decode_minor1(const std::vector<std::uint8_t>& frame) { return v1::decode_payload(std::string(frame.begin() + 4, frame.end()), v1::Sender::server, 1); }
+// The encoded minor-1 gearbox of the adapter's current v1 slot, through the encoder and the minor-1 contract decoder.
+std::string gearbox_wire(Adapter& adapter) {
+  const auto current = v1_read(adapter); const v1::Encoder encoder(v1_identity(*current)); v1::StatusInfo status; status.continuity = current->continuity;
+  return ets2telemetry::v0::detail::serialize(decode_minor1(v1::encode(encoder.checkpoint(1, UINT64_MAX, current->state, status, 1), 1)).wire.at("data").at("state").at("gearbox"));
+}
+std::string fixture_gearbox(const std::filesystem::path& minor1, const char* name) {
+  const auto message = v1::decode_payload(read_file(minor1 / (std::string(name) + ".json")), v1::Sender::server, 1);
+  return ets2telemetry::v0::detail::serialize(message.wire.at("data").at("state").at("gearbox"));
+}
+std::string part_reason(Adapter& adapter, const char* part) {
+  const auto node = ets2telemetry::v0::detail::Parser(gearbox_wire(adapter)).parse().at(part);
+  return node.at("available").boolean() ? std::string("available") : node.at("reason").string();
+}
+// One hshifter or truck callback that must change no revision, assign no eventSeq, copy no record and call no SDK API.
+struct Quiet {
+  Adapter& adapter; Host& host; v1::EventChannel& channel; std::uint64_t revision, next; unsigned calls;
+  Quiet(Adapter& a, Host& h, v1::EventChannel& c) : adapter(a), host(h), channel(c), revision(v1_read(a)->state.configuration.revision), next(c.next_event_seq()), calls(h.api_calls) {}
+  void check(const char* what) const {
+    require(!channel.front() && channel.next_event_seq() == next && host.api_calls == calls, what);
+    require(v1_read(adapter)->state.configuration.revision == revision, "the hshifter callback changes no configuration revision");
+  }
+};
+void v1_gearbox(const std::filesystem::path& fixtures) {
+  const auto minor1 = fixtures / "protocol-v1" / "minor1";
+  // run4: hshifter (CAP0 revision 3) arrives before the truck (revision 4).
+  {
+    const auto configs = cap01_configs(fixtures / "simulator-v1" / "cap01" / "cap01-run4.json");
+    require(configs.size() == 4 && configs[0]->id == "hshifter" && configs[1]->id == "truck" && configs[0]->attributes.size() == 99, "run4: hshifter (98 attributes), then three truck callbacks");
+    auto adapter = std::make_unique<Adapter>(); Host host; auto params = host.params("ats");
+    require(adapter->initialize(SCS_TELEMETRY_VERSION_1_01, &params) == SCS_RESULT_ok, "run4 init"); read(*adapter);
+    auto channel = std::make_unique<v1::EventChannel>(); require(channel->prepare(), "v1 channel prepared");
+    adapter->attach_events(channel.get()); channel->set_gate(v1::Gate::durable);
+    host.event(SCS_TELEMETRY_EVENT_started); host.frame_end(); V1Ring ring; ring.drain(*channel);
+    require(part_reason(*adapter, "hshifter") == "not-observed" && part_reason(*adapter, "forwardGears") == "not-observed", "no gearbox before its callbacks");
+    const Quiet quiet(*adapter, host, *channel);
+    host.config("hshifter", configs[0]->list()); quiet.check("the hshifter callback copies no v1 record and calls no SDK API");
+    host.frame_end(); quiet.check("the publication after the hshifter callback");
+    const auto pod = v1_read(*adapter)->state.gearbox;
+    require(pod.hshifter.available() && pod.hshifter.value.selector_count == 2 && !pod.forward_gears.available(), "run4 POD: an available two-selector layout, counts not observed yet");
+    unsigned copied = 0, nonzero = 0;
+    for (std::size_t i = 0; i < pod.hshifter.value.slots.size(); ++i) {
+      const auto& slot = pod.hshifter.value.slots[i];
+      if (!slot.seen) continue;
+      ++copied; if (slot.gear) ++nonzero;
+      require(slot.seen == (v1::slot_gear_seen | v1::slot_handle_seen | v1::slot_selectors_seen) && slot.handle_position == i / 4 && slot.selectors == i % 4, "run4 POD: every SDK slot copied whole, in SDK order");
+    }
+    require(copied == 32 && nonzero == 22 && pod.hshifter.value.slots[8].gear == -1 && pod.hshifter.value.slots[12].gear == 1 && pod.hshifter.value.slots[13].gear == 0 && pod.hshifter.value.slots[31].gear == 18, "run4 POD: 32 slots, 22 geared, the crawler and the top gear");
+    host.config("truck", configs[1]->list()); host.frame_end(); ring.drain(*channel);
+    require(ring.records.size() == 2 && type_of(ring.records.back()) == "truck.configured", "the truck callback still emits truck.configured");
+    require(gearbox_wire(*adapter) == fixture_gearbox(minor1, "checkpoint-ats-mack"), "run4 replay equals minor1/checkpoint-ats-mack's gearbox");
+    // A later truck re-send keeps the layout; minor 0 never carries it.
+    host.config("truck", configs[2]->list()); host.frame_end();
+    require(gearbox_wire(*adapter) == fixture_gearbox(minor1, "checkpoint-ats-mack"), "the layout survives a truck re-send");
+    const auto current = v1_read(*adapter); const v1::Encoder encoder(v1_identity(*current)); v1::StatusInfo status; status.continuity = current->continuity;
+    const auto minor0 = v1_decode(v1::encode(encoder.checkpoint(1, UINT64_MAX, current->state, status)));
+    require(minor0.minor == 0 && !minor0.state->gearbox && !std::get<v1::Json::Object>(minor0.wire.at("data").at("state").value).count("gearbox"), "a minor-0 checkpoint has no gearbox");
+    adapter->shutdown(); adapter->attach_events(nullptr);
+  }
+  // run2: the truck (8), then hshifter (9) before a truck change (10), then hshifter (11) and truck (12) again.
+  {
+    const auto configs = cap01_configs(fixtures / "simulator-v1" / "cap01" / "cap01-run2.json");
+    require(configs.size() == 5 && configs[0]->id == "truck" && configs[1]->id == "hshifter" && configs[2]->id == "truck" && configs[3]->id == "hshifter" && configs[4]->id == "truck", "run2 callback order");
+    auto adapter = std::make_unique<Adapter>(); Host host; auto params = host.params();
+    require(adapter->initialize(SCS_TELEMETRY_VERSION_1_01, &params) == SCS_RESULT_ok, "run2 init"); read(*adapter);
+    auto channel = std::make_unique<v1::EventChannel>(); require(channel->prepare(), "v1 channel prepared");
+    adapter->attach_events(channel.get()); channel->set_gate(v1::Gate::durable);
+    host.event(SCS_TELEMETRY_EVENT_started); host.config("truck", configs[0]->list()); host.frame_end();
+    require(gearbox_wire(*adapter) == fixture_gearbox(minor1, "snapshot"), "counts 12/4 before any layout (minor1/snapshot)");
+    V1Ring ring; ring.drain(*channel);
+    const Quiet quiet(*adapter, host, *channel);
+    host.config("hshifter", configs[1]->list()); host.frame_end(); quiet.check("run2 hshifter callback");
+    require(gearbox_wire(*adapter) == fixture_gearbox(minor1, "checkpoint"), "run2 replay equals minor1/checkpoint's gearbox");
+    host.config("truck", configs[2]->list()); host.frame_end();
+    require(gearbox_wire(*adapter) == fixture_gearbox(minor1, "checkpoint"), "a truck change keeps the latest layout");
+    host.config("hshifter", configs[3]->list()); host.config("truck", configs[4]->list()); host.frame_end();
+    require(gearbox_wire(*adapter) == fixture_gearbox(minor1, "checkpoint"), "the second hshifter and truck callbacks");
+    // A truck clear makes the counts not-observed and keeps the layout (minor1/snapshot-counts-not-observed).
+    scs_named_value_t empty[]{{}};
+    host.config("truck", empty); host.frame_end();
+    require(gearbox_wire(*adapter) == fixture_gearbox(minor1, "snapshot-counts-not-observed"), "truck clear: counts not observed, layout kept");
+    adapter->shutdown(); adapter->attach_events(nullptr);
+  }
+  // Synthetic edge cases: empty, null, partial, over-bound and inconsistent lists.
+  auto adapter = std::make_unique<Adapter>(); Host host; auto params = host.params();
+  require(adapter->initialize(SCS_TELEMETRY_VERSION_1_01, &params) == SCS_RESULT_ok, "gearbox edge init"); read(*adapter);
+  auto channel = std::make_unique<v1::EventChannel>(); require(channel->prepare(), "v1 channel prepared");
+  adapter->attach_events(channel.get()); channel->set_gate(v1::Gate::durable); host.frame_end();
+  const auto run2 = cap01_configs(fixtures / "simulator-v1" / "cap01" / "cap01-run2.json");
+  const auto layout = [&](const scs_named_value_t* list) { const Quiet quiet(*adapter, host, *channel); host.config("hshifter", list); host.frame_end(); quiet.check("hshifter edge case"); return part_reason(*adapter, "hshifter"); };
+  const auto state = [&] { return v1_read(*adapter)->state.gearbox.hshifter.state; };
+  require(layout(run2[1]->list()) == "available", "the CAP-01 layout");
+  scs_named_value_t empty[]{{}};
+  require(layout(empty) == "not-observed" && state() == v1::FieldState::not_observed, "an empty list replaces the layout with not-observed");
+  require(layout(nullptr) == "invalid" && state() == v1::FieldState::invalid, "a null list is invalid");
+  scs_named_value_t only_count[]{attribute("selector.count", u32(0)), {}};
+  require(layout(only_count) == "available" && v1_read(*adapter)->state.gearbox.hshifter.value.selector_count == 0, "a layout with no slots");
+  scs_named_value_t partial[]{attribute("selector.count", u32(2)), attribute("slot.gear", s32(1), 0), attribute("slot.handle.position", u32(1), 0), {}};
+  require(layout(partial) == "invalid" && state() == v1::FieldState::available, "an incomplete slot triple: copied, then invalid on the wire");
+  scs_named_value_t over[]{attribute("selector.count", u32(2)), attribute("slot.gear", s32(1), 64), attribute("slot.handle.position", u32(1), 64), attribute("slot.selectors", u32(0), 64), {}};
+  require(layout(over) == "invalid" && state() == v1::FieldState::invalid, "slot index 64 is invalid, never truncated");
+  scs_named_value_t edge[]{attribute("selector.count", u32(2)), attribute("slot.gear", s32(1), 63), attribute("slot.handle.position", u32(1), 63), attribute("slot.selectors", u32(0), 63), {}};
+  require(layout(edge) == "available", "slot index 63 is the last slot");
+  scs_named_value_t wrong_gear[]{attribute("selector.count", u32(2)), attribute("slot.gear", u32(1), 0), attribute("slot.handle.position", u32(1), 0), attribute("slot.selectors", u32(0), 0), {}};
+  scs_named_value_t wrong_count[]{attribute("selector.count", s32(2)), {}};
+  scs_named_value_t wrong_handle[]{attribute("selector.count", u32(2)), attribute("slot.gear", s32(1), 0), attribute("slot.handle.position", s32(1), 0), attribute("slot.selectors", u32(0), 0), {}};
+  require(layout(wrong_gear) == "invalid" && layout(wrong_count) == "invalid" && layout(wrong_handle) == "invalid", "a type mismatch is invalid");
+  scs_named_value_t disagree[]{attribute("selector.count", u32(2)), attribute("selector.count", u32(3), 0), {}};
+  scs_named_value_t agree[]{attribute("selector.count", u32(2)), attribute("selector.count", u32(2), 0), {}};
+  require(layout(disagree) == "invalid" && layout(agree) == "available", "selector.count copies must agree");
+  scs_named_value_t uncounted[]{attribute("slot.gear", s32(1), 0), attribute("slot.handle.position", u32(1), 0), attribute("slot.selectors", u32(0), 0), {}};
+  scs_named_value_t unindexed[]{attribute("selector.count", u32(2)), attribute("slot.gear", s32(1)), {}};
+  scs_named_value_t repeated[]{attribute("selector.count", u32(2)), attribute("slot.gear", s32(1), 0), attribute("slot.gear", s32(1), 0), attribute("slot.handle.position", u32(1), 0), attribute("slot.selectors", u32(0), 0), {}};
+  require(layout(uncounted) == "invalid" && layout(unindexed) == "invalid" && layout(repeated) == "invalid", "a missing count, an unindexed or a repeated slot attribute is invalid");
+  scs_named_value_t duplicate[]{attribute("selector.count", u32(2)), attribute("slot.gear", s32(1), 0), attribute("slot.handle.position", u32(1), 0), attribute("slot.selectors", u32(0), 0),
+    attribute("slot.gear", s32(2), 1), attribute("slot.handle.position", u32(1), 1), attribute("slot.selectors", u32(0), 1), {}};
+  scs_named_value_t range[]{attribute("selector.count", u32(1)), attribute("slot.gear", s32(1), 0), attribute("slot.handle.position", u32(1), 0), attribute("slot.selectors", u32(2), 0), {}};
+  require(layout(duplicate) == "invalid" && layout(range) == "invalid", "a duplicate pair or out-of-range selectors are invalid on the wire");
+  std::array<scs_named_value_t, max_attributes> unterminated{};
+  for (auto& value : unterminated) value = attribute("selector.count", u32(2));
+  require(layout(unterminated.data()) == "invalid", "an unterminated list is invalid");
+  // Truck counts: a wrong type, a null list and an empty list.
+  scs_named_value_t truck_wrong[]{attribute("id", text("truck.a")), attribute("gears.forward", s32(12)), attribute("gears.reverse", u32(4)), {}};
+  host.config("truck", truck_wrong); host.frame_end();
+  require(part_reason(*adapter, "forwardGears") == "invalid" && part_reason(*adapter, "reverseGears") == "available", "a mistyped gear count is invalid");
+  host.config("truck", nullptr); host.frame_end();
+  require(part_reason(*adapter, "forwardGears") == "invalid" && part_reason(*adapter, "reverseGears") == "invalid", "a null truck list makes unseen counts invalid");
+  scs_named_value_t truck_none[]{attribute("id", text("truck.a")), {}};
+  host.config("truck", truck_none); host.frame_end();
+  require(part_reason(*adapter, "forwardGears") == "not-observed", "a truck without gear counts");
+  // A worker holding the v1 slot never stalls the hshifter callback, and the layout reaches the next publication.
+  host.config("hshifter", empty); host.frame_end();
+  std::promise<void> held, release; auto release_signal = release.get_future();
+  std::thread worker([&] { auto lock = AdapterTestAccess::hold_v1(*adapter); held.set_value(); release_signal.wait(); }); held.get_future().wait();
+  auto callbacks = std::async(std::launch::async, [&] { host.config("hshifter", run2[1]->list()); host.frame_end(); });
+  const bool completed = callbacks.wait_for(std::chrono::seconds(10)) == std::future_status::ready;
+  release.set_value(); worker.join(); callbacks.get();
+  require(completed, "the hshifter callback completes while a worker holds the v1 slot");
+  require(state() == v1::FieldState::not_observed, "the contended publication keeps the older slot");
+  host.frame_end(); require(part_reason(*adapter, "hshifter") == "available", "the layout reaches the next publication");
+  adapter->shutdown(); adapter->attach_events(nullptr);
+}
 }
 int main(int argc, char** argv) {
   try {
@@ -824,6 +1017,8 @@ int main(int argc, char** argv) {
     else if (argc == 2 && std::string(argv[1]) == "v1-isolation") v1_isolation();
     else if (argc == 2 && std::string(argv[1]) == "v1-drain") v1_drain_into_store();
     else if (argc == 2 && std::string(argv[1]) == "v1-session") v1_session_boundary();
+    // ET-050b: needs the repository's tests/fixtures directory for the CAP-01 replays and the minor-1 fixtures.
+    else if (argc == 3 && std::string(argv[1]) == "v1-gearbox") v1_gearbox(argv[2]);
     else {
       lifecycle(); config_terminal_and_bounds(); clocks_and_contention(); failure_cleanup(); deferred_log(); missing_game_time_reset(); game_time_reset_callback_orders(); game_time_reset_frame_delimitation();
       v1_capture_records(); v1_state_and_gate(); v1_nonblocking(); v1_isolation(); v1_drain_into_store(); v1_session_boundary();

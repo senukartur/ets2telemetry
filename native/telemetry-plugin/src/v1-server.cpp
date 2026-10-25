@@ -16,6 +16,9 @@ constexpr ULONGLONG snapshot_interval_ms = limits.snapshot_interval_ms, write_de
 constexpr ULONGLONG end_budget_ms = 250, end_items_ms = 150, end_reserve_ms = 100;
 // After the channel's last eventSeq, its open loss run reaches the worker with the next frame_end flush.
 constexpr ULONGLONG exhaustion_flush_ms = 250;
+// The highest minor the endpoint serves (ET-050b B1): it selects min(hello maxMinor, 1). A minor-1 connection carries
+// `state.gearbox`; a hello offering only minor 0 gets the original minor-0 bytes.
+constexpr unsigned endpoint_max_minor = highest_minor;
 // The only game-log entry of the v1 endpoint, handed to the SDK thread (Caller sequence step 4).
 const sdk::DeferredLog invariant_log{SCS_LOG_TYPE_error, "ETS2Telemetry: protocol v1 endpoint retired: invariant violation"};
 
@@ -88,8 +91,12 @@ void set_clock_offset_for_test(std::int64_t offset_ns) noexcept { clock_offset_f
 // the retention window of a durable consumer and observes the completion of every operation before the run loop resets
 // or closes the pipe.
 struct Server::Connection {
-  Connection(Server& s, HANDLE p, bool durable_events, transport::PeerIdentity identity)
-    : server(s), pipe(p), durable(durable_events), peer(std::move(identity)), validator(s.plugin_session_id_, durable_events),
+  // `negotiated` is the hello's result: the durable grant and the selected minor, which every message of the connection
+  // carries in both directions. The decoder rejects a client frame above that minor and the validator an ACK or probe at
+  // another minor.
+  Connection(Server& s, HANDLE p, const Negotiated& negotiated, transport::PeerIdentity identity)
+    : server(s), pipe(p), durable(negotiated.durable_events), minor(negotiated.minor), peer(std::move(identity)),
+      validator(s.plugin_session_id_, negotiated.durable_events, negotiated.minor), decoder(Sender::client, negotiated.minor),
       inbound(p), outbound(p), pending(std::make_unique<sdk::V1Current>()), scratch(std::make_unique<sdk::V1Current>()) {}
   ~Connection() { close(); }
   Connection(const Connection&) = delete;
@@ -103,14 +110,14 @@ struct Server::Connection {
   void handle(const Message&, std::uint64_t received_ns);
   bool send();
   void poll_state();
-  bool write(Json wire) { return outbound.write(encode(std::move(wire)), GetTickCount64() + write_deadline_ms); }
+  bool write(Json wire) { return outbound.write(encode(std::move(wire), minor), GetTickCount64() + write_deadline_ms); }
   bool complete_write(ULONGLONG deadline);
   Outcome finish(EndReason, ULONGLONG deadline, ULONGLONG items_until);
   const window::Snapshot* window_now(window::Snapshot& storage) const noexcept;
   void close() noexcept;
 
-  Server& server; HANDLE pipe; const bool durable; transport::PeerIdentity peer;
-  AckValidator validator; FrameDecoder decoder{Sender::client};
+  Server& server; HANDLE pipe; const bool durable; const unsigned minor; transport::PeerIdentity peer;
+  AckValidator validator; FrameDecoder decoder;
   // Declared before the operations, so each operation observes its completion before this buffer is released.
   std::array<std::uint8_t, limits.client_frame_bytes + 4> input{};
   Io inbound, outbound;
@@ -233,7 +240,7 @@ bool Server::Connection::send() {
   auto& store = *server.store_; const auto& encoder = *server.encoder_;
   if (phase == Phase::welcome) {
     auto info = server.welcome_; info.durable_events = durable;
-    if (!write(encoder.welcome(server.next_seq(), capture.stamp(server.now_ns()), info))) return false;
+    if (!write(encoder.welcome(server.next_seq(), capture.stamp(server.now_ns()), info, minor))) return false;
     phase = Phase::checkpoint; return true;
   }
   if (phase == Phase::checkpoint) {
@@ -245,7 +252,7 @@ bool Server::Connection::send() {
     const auto now = GetTickCount64(); window::Snapshot storage; const auto* w = window_now(storage);
     pending->state.window = window_field(*pending, w, server.process_creation_, now);
     StatusInfo info; info.durable = durable; info.delivery = store.status(); info.continuity = continuity(*pending, server.coalesced_);
-    if (!write(encoder.checkpoint(server.next_seq(), capture.stamp(server.now_ns(), info.delivery.oldest_retained_ns.value_or(0)), pending->state, info))) return false;
+    if (!write(encoder.checkpoint(server.next_seq(), capture.stamp(server.now_ns(), info.delivery.oldest_retained_ns.value_or(0)), pending->state, info, minor))) return false;
     validator.checkpoint(info.delivery.acked_through_event_seq);
     sent_boundary = pending->state.boundary_order; sent_window_revision = w ? w->revision : 0; sent_window_available = pending->state.window.available();
     next_poll = next_snapshot = now + snapshot_interval_ms; phase = Phase::live;
@@ -255,7 +262,7 @@ bool Server::Connection::send() {
   if (probe) {
     // received <= sent <= capture: the send time is the encode time, which is the capture time.
     const auto sent = capture.stamp(server.now_ns(), probe->second);
-    if (!write(encoder.clock_reply(server.next_seq(), sent, probe->first, probe->second, sent))) return false;
+    if (!write(encoder.clock_reply(server.next_seq(), sent, probe->first, probe->second, sent, minor))) return false;
     probe.reset(); return true;
   }
   poll_state();
@@ -264,7 +271,7 @@ bool Server::Connection::send() {
     window::Snapshot storage; const auto* w = window_now(storage);
     pending->state.window = window_field(*pending, w, server.process_creation_, now);
     StatusInfo info; info.durable = durable; info.delivery = store.status(); info.continuity = continuity(*pending, server.coalesced_);
-    if (!write(encoder.snapshot(server.next_seq(), capture.stamp(server.now_ns(), info.delivery.oldest_retained_ns.value_or(0)), pending->state, info))) return false;
+    if (!write(encoder.snapshot(server.next_seq(), capture.stamp(server.now_ns(), info.delivery.oldest_retained_ns.value_or(0)), pending->state, info, minor))) return false;
     sent_boundary = pending->state.boundary_order; sent_window_revision = w ? w->revision : 0; sent_window_available = pending->state.window.available();
     has_pending = false; next_snapshot = now + snapshot_interval_ms;
     return true;
@@ -274,7 +281,7 @@ bool Server::Connection::send() {
   const auto item = store.next_outbound();
   if (!item) return true;
   std::vector<std::uint8_t> frame;
-  try { frame = encode(encoder.outbound(server.next_seq(), capture.stamp(server.now_ns(), carried_ns(*item)), *item)); }
+  try { frame = encode(encoder.outbound(server.next_seq(), capture.stamp(server.now_ns(), carried_ns(*item)), *item, minor), minor); }
   catch (const SequenceSpent&) { throw; }
   // A retained item that cannot be encoded would leave a hole in this connection's coverage.
   catch (...) { throw Retire(EndReason::source_retired, true); }
@@ -323,13 +330,13 @@ Server::Outcome Server::Connection::finish(EndReason reason, ULONGLONG deadline,
         const auto item = store.next_outbound();
         if (!item) break;
         std::vector<std::uint8_t> frame;
-        try { frame = encode(encoder.outbound(server.next_seq(), capture.stamp(server.now_ns(), carried_ns(*item)), *item)); } catch (...) { break; }
+        try { frame = encode(encoder.outbound(server.next_seq(), capture.stamp(server.now_ns(), carried_ns(*item)), *item, minor), minor); } catch (...) { break; }
         if (!outbound.write(std::move(frame), deadline)) return Outcome::reset;
         validator.sent(item->last_event_seq());
         if (!complete_write(deadline)) return Outcome::reset;
       }
     }
-    auto end = encode(encoder.end(server.next_seq(), capture.stamp(server.now_ns()), reason, store.end_cursor()));
+    auto end = encode(encoder.end(server.next_seq(), capture.stamp(server.now_ns()), reason, store.end_cursor(), minor), minor);
     server.end_attempts_.fetch_add(1);
     if (!outbound.write(std::move(end), deadline) || !complete_write(deadline))
       return Outcome::reset;
@@ -523,10 +530,11 @@ Server::Outcome Server::serve(HANDLE pipe, const std::wstring& directory, const 
       if (!length || length > limits.client_frame_bytes || received > static_cast<std::size_t>(length) + 4) return Outcome::reset;
     }
   }
-  // Another major, another envelope minor or any other kind closes the connection without an error frame (§2).
+  // Another major, another envelope minor or any other kind closes the connection without an error frame (§2). A hello
+  // is always version 1.0; its maxMinor selects the connection minor (ET-050b B1).
   const auto message = decode_payload(std::string(reinterpret_cast<const char*>(hello.data()) + 4, length), Sender::client);
   if (message.kind != "hello") return Outcome::reset;
-  Connection connection(*this, pipe, negotiate(message).durable_events, std::move(peer));
+  Connection connection(*this, pipe, negotiate(message, true, endpoint_max_minor), std::move(peer));
   return connection.run();
 }
 

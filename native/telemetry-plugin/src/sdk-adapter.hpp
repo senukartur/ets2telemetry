@@ -175,6 +175,10 @@ class Adapter final {
   v1::ConfigurationPod v1_configuration_{};
   v1::Continuity v1_continuity_{};
   bool v1_configuration_dirty_ = true;
+  // Minor-1 gearbox (ET-050b B2): truck gear counts and the latest hshifter layout. A callback that changes it sets only
+  // this dirty flag; the next publication copies it into the slot, like the configuration.
+  v1::GearboxPod v1_gearbox_{};
+  bool v1_gearbox_dirty_ = true;
   // The v1 slot. The SDK thread only try-locks it and copies the configuration only after a configuration boundary.
   V1Current v1_published_{};
   std::mutex v1_mutex_;

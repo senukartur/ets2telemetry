@@ -31,32 +31,37 @@ std::vector<std::string> welcome_event_types(bool gameplay_events_registered, bo
 
 // Every builder returns the wire tree of one server message. `capture_ns` must not precede any source-clock time the
 // message carries (occurred, lost or retention times); encode() rejects such a message.
+// `minor` is the minor the connection selected (ET-050b B1, default 0). Every message of a connection carries it in its
+// envelope and the welcome announces it; only checkpoints and snapshots differ in content, by `state.gearbox` in minor
+// 1. A minor-0 message is byte-identical to the original minor-0 encoding: it never carries the gearbox.
 class Encoder {
  public:
   explicit Encoder(SessionIdentity identity) : identity_(std::move(identity)) {}
   const SessionIdentity& identity() const noexcept { return identity_; }
-  Json welcome(std::uint64_t seq, std::uint64_t capture_ns, const WelcomeInfo&) const;
-  Json checkpoint(std::uint64_t seq, std::uint64_t capture_ns, const StatePod&, const StatusInfo&) const;
-  Json snapshot(std::uint64_t seq, std::uint64_t capture_ns, const StatePod&, const StatusInfo&) const;
-  Json event(std::uint64_t seq, std::uint64_t capture_ns, const EventRecord&, bool redelivered) const;
-  Json gap(std::uint64_t seq, std::uint64_t capture_ns, const GapRange&, bool redelivered) const;
+  Json welcome(std::uint64_t seq, std::uint64_t capture_ns, const WelcomeInfo&, unsigned minor = 0) const;
+  Json checkpoint(std::uint64_t seq, std::uint64_t capture_ns, const StatePod&, const StatusInfo&, unsigned minor = 0) const;
+  Json snapshot(std::uint64_t seq, std::uint64_t capture_ns, const StatePod&, const StatusInfo&, unsigned minor = 0) const;
+  Json event(std::uint64_t seq, std::uint64_t capture_ns, const EventRecord&, bool redelivered, unsigned minor = 0) const;
+  Json gap(std::uint64_t seq, std::uint64_t capture_ns, const GapRange&, bool redelivered, unsigned minor = 0) const;
   // An event or gap returned by EventStore::next_outbound().
-  Json outbound(std::uint64_t seq, std::uint64_t capture_ns, const Outbound&) const;
-  Json clock_reply(std::uint64_t seq, std::uint64_t capture_ns, std::uint64_t probe_id, std::uint64_t received_ns, std::uint64_t sent_ns) const;
-  Json end(std::uint64_t seq, std::uint64_t capture_ns, EndReason, const EndCursor&) const;
+  Json outbound(std::uint64_t seq, std::uint64_t capture_ns, const Outbound&, unsigned minor = 0) const;
+  Json clock_reply(std::uint64_t seq, std::uint64_t capture_ns, std::uint64_t probe_id, std::uint64_t received_ns, std::uint64_t sent_ns, unsigned minor = 0) const;
+  Json end(std::uint64_t seq, std::uint64_t capture_ns, EndReason, const EndCursor&, unsigned minor = 0) const;
   // Encoded payload bytes of this event with the worst-case envelope: maximum seq and capture time and
-  // `redelivered: false`, the longer literal (OD-5 S3). Every later encoding of the record fits within it. Nullopt
+  // `redelivered: false`, the longer literal (OD-5 S3). Every later encoding of the record fits within it, at either
+  // minor: an event's body does not depend on the minor, and both minors are one digit long. Nullopt
   // means the record cannot be sent: the contract rejects it, it exceeds the 16,384-byte event bound, or encoding
   // failed for any other reason, such as allocation. It never throws, so every drained eventSeq gets coverage.
   std::optional<std::size_t> measure_event(const EventRecord&) const noexcept;
  private:
-  Json envelope(const char* kind, std::uint64_t seq, std::uint64_t capture_ns, Json data) const;
-  Json state_data(const StatePod&, const StatusInfo&) const;
+  Json envelope(const char* kind, std::uint64_t seq, std::uint64_t capture_ns, Json data, unsigned minor) const;
+  Json state_data(const StatePod&, const StatusInfo&, unsigned minor) const;
   SessionIdentity identity_;
 };
 
-// Validates and frames one server message through v1::encode_frame. Throws v1::ProtocolError.
-std::vector<std::uint8_t> encode(Json wire);
+// Validates and frames one server message through v1::encode_frame, accepting envelope minors up to `minor` (default
+// 0). Throws v1::ProtocolError.
+std::vector<std::uint8_t> encode(Json wire, unsigned minor = 0);
 
 // Measures one drained event and retains it, or records it as lost: encodingFailed when it cannot be sent, otherwise
 // the store's admission causes. The lost time of an event is its occurred.monotonicNs (OD-5 S1). It never throws: the
