@@ -1276,7 +1276,7 @@ No wire, fixture, native, schema, recording-eligibility or release change follow
 - **B3 modes.** ET-050's two modes and settings v9 stay. `manual` shows labels derived from the gearbox while a valid layout is current, otherwise the GD2 formula. A valid layout without selectors shows plain numbers in manual mode.
 - **B4 reverse and neutral.** Reverse stays `R1`…`Rn` and neutral `N`.
 - **B5 crawler.** Exactly one crawler handle position is named `L` when it has no splitter pair and `LL`/`LH` when it has one, in both games. It is a single constant, which an ETS2 crawler observation may change. More than one crawler position falls back to the formula.
-- **B6 currency.** A layout applies only while the v1 projection is carried and current (500 ms), its truck model id equals v0's (the ET-045a same-truck rule) and the layout validates against the counts; otherwise the formula applies. A stale layout is never held.
+- **B6 freshness.** A layout applies only while the v1 projection is carried and current (500 ms), its truck model id equals v0's (the ET-045a same-truck rule) and the layout validates against the counts; otherwise the formula applies. A stale layout is never held.
 - **B7 projection.** The live update's v1 projection gains `state.gearbox`, validated in main and in the dashboard preload; under minor 0 every part is `{available: false, reason: 'not-supported'}`. No IPC channel or bridge method is added, and the overlay renderer still receives only formatted text.
 - **B8 strip reserve.** The strip's gear reserve becomes `R0`, `0H`, `0L`, `LH`, `LL`. For the gear only this supersedes GD6; the 90 px cap, row heights and window sizes are unchanged.
 - **B9 delivery.** Six PRs in order, each from `main` after the previous one merges:

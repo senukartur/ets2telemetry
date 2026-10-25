@@ -20,8 +20,8 @@ const CLIENT_CLOCK = '60000000-0000-4000-8000-000000000001';
 
 /**
  * Drives one shared stream. `S:` frames go through the consumer, and the harness mirrors them into the producer-side
- * ACK validator (created at welcome, as the producer does). `C:` frames go through negotiation, the ACK validator or
- * the probe registry. `A:<uint64>` requires the cursor to produce exactly that ACK and sends it to the validator;
+ * ACK validator (created at welcome, as the producer does). `C:` frames go through negotiation, the ACK validator, or
+ * the validator's probe check and then the consumer's probe registry. `A:<uint64>` requires the cursor to produce exactly that ACK and sends it to the validator;
  * `A:-` requires that the cursor produces none. `R` starts a new connection. Coverage is committed immediately to stand
  * in for a storage transaction; the actual UNIQUE insert belongs to ET-013/ET-015a. Every rejection comes from contract
  * code; harness misuse and an unexpected cursor ACK throw a plain Error, never a ProtocolError, which fails the stream test.
@@ -64,7 +64,8 @@ function runStream(durable: boolean, steps: string[], corpus: Corpus = MINOR_0):
         const m = validateClientMessage(decodePayload(bytes(name, corpus.dir), 'client', options), options);
         if (m.kind === 'hello') { if (negotiateV1(m, {allowDurable: true, maxMinor: corpus.maxMinor}).durableEvents !== durable) throw new Error('Harness: stream hello mismatch'); }
         else if (m.kind === 'ack') producer().accept(m);
-        else consumer.expectClockReply(m.data.probeId);
+        // A probe passes the producer-side check at the connection minor, then registers with the consumer.
+        else consumer.expectClockReply(producer().probe(m));
       } else throw new Error(`Unknown step ${step}`);
     } catch (error) { return {cursor, applied, failedAt: index, error}; }
   }
@@ -360,8 +361,22 @@ describe('ET-050b one minor per connection', () => {
     expect(() => minor0.accept(ack(1, '1'))).toThrow(/Unsupported protocol version/);
     expect(() => new AckValidator(P1, true, 2)).toThrow(ProtocolError);
   });
-  it('maps a minor-1 clock reply', () => {
-    expect(computeClockMapping({reply: m1('clock-reply'), probeId: '1', clientClockId: CLIENT_CLOCK, probeSentNs: '5000000000', replyReceivedNs: '5000800000'}))
+  it('accepts producer-side clock probes only after the checkpoint and at the connection minor', () => {
+    const probe = (minor: number, probeId = '1') => ({version: {major: 1, minor}, kind: 'clock.probe', data: {probeId}});
+    const minor1 = new AckValidator(P1, false, 1); minor1.checkpoint('0');
+    expect(minor1.probe(probe(1))).toBe('1');
+    expect(() => minor1.probe(probe(0, '2'))).toThrow(/minor differs/); expect(() => minor1.probe(probe(1, '3'))).toThrow(/closed/);
+    const minor0 = new AckValidator(P1, true); minor0.checkpoint('0');
+    expect(() => minor0.probe(probe(1))).toThrow(/Unsupported protocol version/);
+    const early = new AckValidator(P1, true, 1); expect(() => early.probe(probe(1))).toThrow(/before checkpoint/);
+    const notProbe = new AckValidator(P1, true); notProbe.checkpoint('0');
+    expect(() => notProbe.probe({version: {major: 1, minor: 0}, kind: 'ack', data: {pluginSessionId: P1, throughEventSeq: '0'}})).toThrow(/Clock probe expected/);
+  });
+  it('maps a clock reply at the caller maximum minor, which defaults to 0', () => {
+    const input = {reply: m1('clock-reply'), probeId: '1', clientClockId: CLIENT_CLOCK, probeSentNs: '5000000000', replyReceivedNs: '5000800000'};
+    expect(computeClockMapping({...input, maxMinor: 1}))
       .toEqual({sourceClockId: '30000000-0000-4000-8000-000000000001', clientClockId: CLIENT_CLOCK, offsetNs: '995449400000', uncertaintyNs: '300000', measuredAtClientNs: '5000800000'});
+    expect(() => computeClockMapping(input)).toThrow(/Unsupported protocol version/);
+    expect(() => computeClockMapping({...input, maxMinor: 2})).toThrow(ProtocolError);
   });
 });

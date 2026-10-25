@@ -326,7 +326,7 @@ describe('ET-050b protocol v1 minor-1 corpus', () => {
   it('lists every minor-1 fixture exactly once with a known expectation', () => {
     const files = readdirSync(m1Dir).filter(file => file.endsWith('.json')).sort();
     expect(m1Entries.map(([file]) => file).sort()).toEqual(files);
-    expect(files).toHaveLength(46);
+    expect(files).toHaveLength(48);
     for (const entry of m1Entries) { expect(entry).toHaveLength(2); expect(['valid', 'invalid', 'valid-client', 'invalid-client']).toContain(entry[1]); }
   });
   for (const [filename, result] of m1Entries) it(`${result} at maxMinor 1: ${filename}`, () => {

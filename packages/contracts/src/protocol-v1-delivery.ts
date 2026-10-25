@@ -1,7 +1,7 @@
 // Protocol v1 delivery rules: stream ordering and event coverage on the client, the storage-commit ACK cursor,
 // the producer-side ACK validator and clock mapping. No I/O, storage, Electron or Node APIs; see docs/protocol/v1.md.
 import {
-  ProtocolError, V1_MAX_MINOR, validateClientMessage, validateServerMessage,
+  ProtocolError, validateClientMessage, validateServerMessage,
   type ClientMessage, type Continuity, type EventType, type LossCounts, type ServerMessage, type SourceStatus, type Uint64, type V1Minor
 } from './protocol-v1';
 import {isUint64} from './protocol-v0';
@@ -202,7 +202,8 @@ export class DurableAckCursor {
 /**
  * Producer-side ACK validation for one connection, created when the welcome is written. It rejects every ACK from a
  * live-only client, any ACK before the checkpoint, a foreign plugin session, an ACK beyond the highest eventSeq sent on
- * this connection and a regressing ACK, and closes on the first violation. An equal ACK is a no-op.
+ * this connection, a regressing ACK and an ACK or clock probe at another minor than the connection's, and closes on the
+ * first violation. An equal ACK is a no-op.
  *
  * An ACK never splits a retained entry (docs/protocol/v1.md §9-10). The producer accepts any T within its rule and
  * releases exactly the retained entries whose last eventSeq is ≤ T. A gap record with first ≤ T < last stays whole,
@@ -250,6 +251,20 @@ export class AckValidator {
       this.acked = through; return through.toString();
     } catch (error) { this.closed = true; throw error; }
   }
+  /**
+   * Producer-side check of a `clock.probe` on this connection: it must follow the checkpoint and carry the connection's
+   * minor (ET-050b B1). Returns its probeId. Probe order and the one-outstanding rule (OD-5 S6) stay the producer's. A
+   * violation closes the validator, as for an ACK.
+   */
+  probe(input: unknown): Uint64 {
+    try {
+      if (this.closed) fail('ACK validator is closed');
+      const m = validateClientMessage(input, {maxMinor: this.minor}); if (m.kind !== 'clock.probe') fail('Clock probe expected');
+      if (m.version.minor !== this.minor) fail('Clock probe protocol minor differs from the connection');
+      if (this.acked === undefined) fail('Clock probe before checkpoint');
+      return m.data.probeId;
+    } catch (error) { this.closed = true; throw error; }
+  }
 }
 
 /** Local-only mapping from the source monotonic clock to a client monotonic clock. Never a wire field. */
@@ -261,10 +276,10 @@ export const CLOCK_REPLY_DEADLINE_NS = 1_000_000_000n;
  * The offset is rounded down and the uncertainty rounded up, so the true offset lies within ±uncertaintyNs (≥ RTT/2).
  * A reply received more than 1 s after its probe is late: the consumer still accepts it, which ends the outstanding
  * probe, but the measurement is discarded and this returns undefined. A negative round trip is rejected first.
+ * `maxMinor` (default 0) is the highest reply minor accepted, normally the connection's `V1Consumer.minor`.
  */
-export function computeClockMapping(input: {reply: ServerMessage; probeId: Uint64; clientClockId: string; probeSentNs: Uint64; replyReceivedNs: Uint64}): ClockMapping | undefined {
-  // The consumer already accepted the reply at its connection's minor; the mapping reads only minor-independent fields.
-  const reply = validateServerMessage(input.reply, {maxMinor: V1_MAX_MINOR});
+export function computeClockMapping(input: {reply: ServerMessage; probeId: Uint64; clientClockId: string; probeSentNs: Uint64; replyReceivedNs: Uint64; maxMinor?: number}): ClockMapping | undefined {
+  const reply = validateServerMessage(input.reply, {maxMinor: input.maxMinor ?? 0});
   if (reply.kind !== 'clock.reply' || reply.data.probeId !== input.probeId || !UUID.test(input.clientClockId)) fail('Clock reply mismatch');
   const t0 = uint(input.probeSentNs), t3 = uint(input.replyReceivedNs), t1 = BigInt(reply.data.receivedMonotonicNs), t2 = BigInt(reply.data.sentMonotonicNs);
   if (t3 < t0) fail('Clock reply received before its probe was sent');

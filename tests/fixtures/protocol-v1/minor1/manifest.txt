@@ -10,6 +10,7 @@ snapshot-gearbox-not-supported.json valid
 snapshot-zero-selectors.json valid
 snapshot-all-neutral-slots.json valid
 clock-reply.json valid
+gap.json valid
 end.json valid
 welcome-minor-0.json valid
 checkpoint-minor-0.json valid
@@ -19,6 +20,7 @@ hello.json valid-client
 ack-1.json valid-client
 clock-probe.json valid-client
 ack-1-minor-0.json valid-client
+clock-probe-minor-0.json valid-client
 welcome-minor-2.json invalid
 checkpoint-minor-0-with-gearbox.json invalid
 checkpoint-without-gearbox.json invalid
