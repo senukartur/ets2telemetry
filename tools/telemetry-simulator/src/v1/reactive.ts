@@ -12,7 +12,7 @@
 // (ReactiveSoakOptions, soak.ts); without it nothing here changes.
 import net from 'node:net';
 import {randomUUID} from 'node:crypto';
-import {FrameDecoder, GAP_RECORD_BYTES, ProtocolError, V1_LIMITS, type ProtocolMessage, type ServerMessage} from '../../../../packages/contracts/src/protocol-v1';
+import {FrameDecoder, GAP_RECORD_BYTES, ProtocolError, V1_LIMITS, V1_MAX_MINOR, type ProtocolMessage, type ServerMessage} from '../../../../packages/contracts/src/protocol-v1';
 import {type DurableAckCursor} from '../../../../packages/contracts/src/protocol-v1-delivery';
 import {CommitLedger, ScriptedClient, type ClientPolicy} from './client';
 import {Cancelled, Link, PipeHost, REPLY_DEADLINE_MS, TEST_PIPE_PATTERN_V1, bounded} from './pipe-host';
@@ -251,7 +251,7 @@ class Reactive extends PipeHost {
     while (!this.live?.helloDone) {
       if (!await this.wait(() => this.pending.length > 0, Math.max(0, deadline - performance.now()))) throw new Error(`No client completed a hello for connection ${connection}`);
       const link = this.pending.shift()!; if (link.gone) continue;
-      const l = this.live = {link, record, policy, recorder: new FrameDecoder('client'), helloDone: false, endWritten: false};
+      const l = this.live = {link, record, policy, recorder: new FrameDecoder('client', {maxMinor: V1_MAX_MINOR}), helloDone: false, endWritten: false};
       this.producer.open();
       const buffered = link.inbound; link.inbound = Buffer.alloc(0); link.onData = chunk => { if (this.live?.link === link) this.receive(chunk); };
       if (buffered.length) this.receive(buffered);

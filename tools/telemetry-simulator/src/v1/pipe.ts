@@ -8,7 +8,7 @@
 // telemetry service, uses the reactive mode in reactive.ts.
 import {type Socket} from 'node:net';
 import net from 'node:net';
-import {V1_LIMITS, encodeFrame, type ServerMessage} from '../../../../packages/contracts/src/protocol-v1';
+import {V1_LIMITS, V1_MAX_MINOR, encodeFrame, type ServerMessage} from '../../../../packages/contracts/src/protocol-v1';
 import {type DurableAckCursor} from '../../../../packages/contracts/src/protocol-v1-delivery';
 import {CommitLedger, ScriptedClient, type AfterMessage, type ClientPolicy, type MappingResult} from './client';
 import {helloFaultBytes, hex, liveFaultBytes, type HelloFault} from './faults';
@@ -342,7 +342,7 @@ export function pipeDifferences(replay: ReplayResult, served: ReplayResult, clie
   if (client.connections.length !== replay.connections.length) out.push('connection count differs');
   for (const c of client.connections) {
     const lines = orderedLines(replay).filter(l => l.connection === c.connection);
-    const sent = lines.filter(l => l.direction === 'client').map(l => 'message' in l ? Buffer.from(encodeFrame(l.message)).toString('hex') : l.bytesHex).join('');
+    const sent = lines.filter(l => l.direction === 'client').map(l => 'message' in l ? Buffer.from(encodeFrame(l.message, {maxMinor: V1_MAX_MINOR})).toString('hex') : l.bytesHex).join('');
     if (c.sentHex.join('') !== sent) out.push(`connection ${c.connection}: client bytes differ`);
     const server = lines.flatMap(l => l.direction === 'server' && 'message' in l ? [JSON.stringify(l.message)] : []), got = c.received.map(m => JSON.stringify(m));
     // A rejecting client may also have applied a valid message inside the injected bytes (frameAfterEnd); a stalled

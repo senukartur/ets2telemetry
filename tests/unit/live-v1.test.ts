@@ -3,13 +3,25 @@
 import {readFileSync} from 'node:fs';
 import {describe, expect, it} from 'vitest';
 import type {LiveTelemetry, LiveTelemetryV1} from '../../packages/contracts/src';
-import {ProtocolError, validateLiveObservationV1, validateServerMessage} from '../../packages/contracts/src/protocol-v1';
+import {decodePayload, ProtocolError, validateLiveObservationV1, validateServerMessage, type GearboxState, type ServerMessage} from '../../packages/contracts/src/protocol-v1';
 import {initialLive} from '../../apps/desktop/src/live-state';
 import {liveV1Key, liveV1Projection, parseLiveV1, withV1} from '../../apps/desktop/src/live-v1';
 import {v1Projection, v1SourceState} from '../shared/live-v1-fixtures';
 
 const STATE_KEYS = ['simulation', 'speed', 'fuel', 'fuelCapacity', 'engineRpm', 'gear', 'odometer', 'averageConsumption', 'estimatedRange',
-  'navigationDistance', 'gameTime', 'captureUtcUnixMs', 'boundaryOrder', 'worldPlacement', 'configuration'];
+  'navigationDistance', 'gameTime', 'captureUtcUnixMs', 'boundaryOrder', 'worldPlacement', 'configuration', 'gearbox'];
+/** ET-050b B7: a minor-0 state carries no gearbox, so the projection reports every part not-supported. */
+const NOT_SUPPORTED = {forwardGears: {available: false, reason: 'not-supported'}, reverseGears: {available: false, reason: 'not-supported'}, hshifter: {available: false, reason: 'not-supported'}};
+const minor1 = (name: string) => {
+  const m = decodePayload(new Uint8Array(readFileSync(`tests/fixtures/protocol-v1/minor1/${name}.json`)), 'server', {maxMinor: 1}) as ServerMessage;
+  if (m.kind !== 'checkpoint' && m.kind !== 'snapshot') throw new Error(`${name} is not a state message`);
+  return m;
+};
+/** A service source state of a minor-1 fixture, as v1SourceState builds one of a minor-0 fixture. */
+function minor1SourceState(name: string) {
+  const m = minor1(name), base = v1SourceState();
+  return {...base, observation: {...base.observation!, kind: m.kind, source: m.source, seq: m.seq, capture: m.capture, state: m.data.state, status: m.data.status, continuity: m.data.continuity}};
+}
 
 describe('liveV1Projection', () => {
   const projection = liveV1Projection(v1SourceState());
@@ -25,6 +37,18 @@ describe('liveV1Projection', () => {
     const json = JSON.stringify(projection);
     for (const text of ['handle', '65538', '"window"', 'displayMode', 'clockMapping', 'offsetNs', '"delivery"', 'ackedThroughEventSeq', 'continuity', 'coalescedSnapshots',
       'durable', 'WORKER_FAILED', 'lastEnd', 'plugin-shutdown', '"kind"']) expect(json).not.toContain(text);
+  });
+  it('carries the minor-1 gearbox exactly and reports a minor-0 one as not-supported in every part (ET-050b B7)', () => {
+    expect(projection.observation!.state.gearbox).toEqual(NOT_SUPPORTED);
+    const mack = liveV1Projection(minor1SourceState('checkpoint-ats-mack')), wire = minor1('checkpoint-ats-mack').data.state.gearbox!;
+    expect(mack.observation!.state.gearbox).toEqual(wire);
+    expect(Object.keys(mack.observation!.state)).toEqual(STATE_KEYS);
+    if (!wire.hshifter.available) throw new Error('fixture');
+    // The 18-speed CAP-01 layout: 22 nonzero slots, two selector bits, 18 forward and 4 reverse gears.
+    expect([wire.forwardGears, wire.reverseGears, wire.hshifter.value.selectorCount, wire.hshifter.value.slots.length])
+      .toEqual([{available: true, value: 18}, {available: true, value: 4}, 2, 22]);
+    expect(parseLiveV1(mack, 'synthetic')).toBe(mack);
+    expect(parseLiveV1(structuredClone(liveV1Projection(minor1SourceState('snapshot-counts-not-observed'))), 'synthetic')).toBeDefined();
   });
   it('omits the observation before the first one', () => {
     expect(liveV1Projection(v1SourceState('snapshot-live', {status: 'waiting', reason: 'Awaiting selected source', fresh: false, observation: undefined})))
@@ -58,6 +82,14 @@ describe('parseLiveV1', () => {
     ['an extra observation key', mutate(value => {observation(value).delivery = {};})],
     ['an extra state key', mutate(value => {observation(value).state.extra = 1;})],
     ['a missing state key', mutate(value => {delete observation(value).state.boundaryOrder;})],
+    // ET-050b B7: main and the dashboard preload strip a projection whose gearbox is missing or invalid.
+    ['a missing gearbox', mutate(value => {delete observation(value).state.gearbox;})],
+    ['a null gearbox', mutate(value => {observation(value).state.gearbox = null;})],
+    ['a gearbox with an extra key', mutate(value => {(observation(value).state.gearbox as Record<string, unknown>).shifterType = 'name-1';})],
+    ['a gear count above 100', mutate(value => {(observation(value).state.gearbox as GearboxState).forwardGears = {available: true, value: 101};})],
+    ['a duplicate h-shifter slot pair', mutate(value => {(observation(value).state.gearbox as GearboxState).hshifter = {available: true, value: {selectorCount: 1, slots: [{gear: 1, handlePosition: 1, selectors: 0}, {gear: 2, handlePosition: 1, selectors: 0}]}};})],
+    ['h-shifter selectors out of range', mutate(value => {(observation(value).state.gearbox as GearboxState).hshifter = {available: true, value: {selectorCount: 1, slots: [{gear: 1, handlePosition: 1, selectors: 2}]}};})],
+    ['a neutral h-shifter slot', mutate(value => {(observation(value).state.gearbox as GearboxState).hshifter = {available: true, value: {selectorCount: 0, slots: [{gear: 0, handlePosition: 1, selectors: 0}]}};})],
     ['fresh data without an observation', mutate(value => {delete value.observation;})],
     ['fresh stale data', mutate(value => {value.status = 'stale';})],
     ['a service status', mutate(value => {value.status = 'service-failed'; value.fresh = false;})],

@@ -359,7 +359,8 @@ it('connects V1Ingestion live-only through the v1 broker: a durableEvents false 
   expect(spawn).toHaveBeenCalledExactlyOnceWith(v1Configuration.executable, ['--game', 'ets2', '--discovery-dir', v1Configuration.discoveryDirectory, '--protocol', 'v1'], {windowsHide: true, stdio: 'pipe'});
   const child = children[0]; child.output(relay(v1Authority()));
   expect(child.writes).toHaveLength(2); expect(child.writes[1]).toEqual(Buffer.from([1]));
-  expect(decodePayload(child.writes[0].subarray(4), 'client')).toEqual({version: PROTOCOL_V1, kind: 'hello', data: {clientInstanceId: service.clientInstanceId, minMinor: 0, maxMinor: 0, durableEvents: false}});
+  // ET-050b B1: the hello offers minor 1; this broker relays a minor-0 plugin, so the probe below is {1,0}.
+  expect(decodePayload(child.writes[0].subarray(4), 'client')).toEqual({version: PROTOCOL_V1, kind: 'hello', data: {clientInstanceId: service.clientInstanceId, minMinor: 0, maxMinor: 1, durableEvents: false}});
   child.output(asGame('welcome-live')); child.output(asGame('checkpoint-live')); child.output(asGame('snapshot-live'));
   // The welcome's credit; the checkpoint's probe goes out tagged before that frame's credit; the snapshot's credit.
   expect(child.writes.slice(1).map(bytes => bytes[0])).toEqual([1, 1, 2, 1, 1]);
@@ -369,6 +370,21 @@ it('connects V1Ingestion live-only through the v1 broker: a durableEvents false 
   expect(service.current).toMatchObject({status: 'connected', fresh: true, durable: {state: 'off'}});
   // Every observation publishes; the status only ever went from waiting to connected.
   expect([...new Set(states)]).toEqual(['waiting', 'connected']);
+});
+it('relays a minor-1 plugin through the v1 broker: the tagged clock probe carries {1,1} and the observation its gearbox (ET-050b)', () => {
+  const minor1 = (name: string) => decodePayload(new Uint8Array(readFileSync(`tests/fixtures/protocol-v1/minor1/${name}.json`)), 'server', {maxMinor: 1}) as ServerMessage;
+  const welcome = minor1('welcome'), checkpoint = minor1('checkpoint'), source = {...welcome.source, origin: 'game' as const};
+  if (welcome.kind !== 'welcome' || checkpoint.kind !== 'checkpoint') throw new Error('fixture');
+  const service = new V1({now: () => 0, nowNs: () => 1_000_000_000n, connectGame: (configuration, game) => new Client(configuration, game, undefined, 'v1'), broker: v1Configuration});
+  v1Ingestions.push(service); service.select('ets2');
+  const child = children[0]; child.output(relay({...v1Authority(), source}));
+  // The fixtures grant durable delivery, which a live-only hello never accepts: the plugin answers this one live-only.
+  welcome.data.durableEvents = false; checkpoint.data.status.delivery.durable = false;
+  for (const message of [welcome, checkpoint]) child.output(Buffer.from(encodeV1Frame({...message, source}, {maxMinor: 1})));
+  const probe = child.writes.find(bytes => bytes[0] === 2)!;
+  expect(decodePayload(probe.subarray(5), 'client', {maxMinor: 1})).toEqual({version: {major: 1, minor: 1}, kind: 'clock.probe', data: {probeId: '1'}});
+  expect(service.current).toMatchObject({status: 'connected', fresh: true});
+  expect(service.current.observation?.state.gearbox).toEqual(checkpoint.data.state.gearbox);
 });
 
 it('identifies crash exit codes correctly', async () => {

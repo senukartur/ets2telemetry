@@ -55,6 +55,16 @@ export interface GameModeView {
   mode: 'single-player' | 'truckersmp' | 'unknown'; method: 'module-scan' | 'process-scan' | 'none';
   confidence: 'strong' | 'weak' | 'none'; module: Reading<string>;
 }
+/** One H-shifter slot of the SDK layout: a nonzero gear index (reverse negative), its handle position and selector bits. */
+export interface LiveHShifterSlot {gear: number; handlePosition: number; selectors: number}
+/**
+ * The protocol v1 minor-1 gearbox (ET-050b B2): the truck's gear counts and the latest SDK H-shifter layout, each with its
+ * own availability. It carries no derived labels; a minor-0 source reports every part `not-supported`.
+ */
+export interface LiveGearbox {
+  forwardGears: Reading<number>; reverseGears: Reading<number>;
+  hshifter: Reading<{selectorCount: number; slots: readonly LiveHShifterSlot[]}>;
+}
 export const EVENT_LOSS_CAUSES = ['offline', 'noDurableConsumer', 'queueCount', 'queueBytes', 'retentionExpired', 'encodingFailed'] as const;
 export type EventLossCause = (typeof EVENT_LOSS_CAUSES)[number];
 export type EventLossView = Readonly<Record<EventLossCause, bigint>>;
@@ -84,5 +94,7 @@ export interface NormalizedLiveState {
   trailers: Reading<Reading<LiveTrailer>[]>;
   gameMode: Reading<GameModeView>;
   eventLoss: Reading<EventLossView>;
+  /** v1: the minor-1 gearbox, `not-supported` in every part under minor 0 (ET-050b). v0: not carried. */
+  gearbox: Reading<LiveGearbox>;
   configurationRevision: string;
 }

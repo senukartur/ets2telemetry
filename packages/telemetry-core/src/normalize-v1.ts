@@ -1,9 +1,9 @@
 // Protocol v1 adapter. Gameplay-event records are normalized for later journal use (ET-016) and never shown live.
 import type {
-  Available, CurrentState, EventRecord, JobConfiguration, Money, SourceStatus, TrailerConfiguration, TruckConfiguration
+  Available, CurrentState, EventRecord, GearboxState, JobConfiguration, Money, SourceStatus, TrailerConfiguration, TruckConfiguration
 } from '../../contracts/src/protocol-v1';
 import {
-  fromAvailable, mapReading, missing, valueOf, EVENT_LOSS_CAUSES, type Distance, type EventLossCause, type EventLossView, type LiveJob, type LiveTrailer, type LiveTruck,
+  fromAvailable, mapReading, missing, valueOf, EVENT_LOSS_CAUSES, type Distance, type EventLossCause, type EventLossView, type LiveGearbox, type LiveJob, type LiveTrailer, type LiveTruck,
   type MoneyKind, type MoneyValue, type NamedEntity, type NormalizedLiveState, type Reading
 } from './readings';
 
@@ -47,6 +47,23 @@ export function normalizeV1Trailer(trailer: TrailerConfiguration): LiveTrailer {
 }
 
 /**
+ * The minor-1 gearbox reading (ET-050b B2, B7). A state without `gearbox`, as every minor-0 state is, reports each part
+ * `not-supported`: minor 0 never transports it. The layout is copied slot by slot in SDK slot order; nothing is derived.
+ */
+export function normalizeV1Gearbox(gearbox: GearboxState | undefined): Reading<LiveGearbox> {
+  if (!gearbox) {
+    const none = missing<never>('not-supported');
+    return valueOf({forwardGears: none, reverseGears: none, hshifter: none});
+  }
+  return valueOf({
+    forwardGears: fromAvailable(gearbox.forwardGears), reverseGears: fromAvailable(gearbox.reverseGears),
+    hshifter: mapReading(fromAvailable(gearbox.hshifter), layout => ({
+      selectorCount: layout.selectorCount, slots: layout.slots.map(slot => ({gear: slot.gear, handlePosition: slot.handlePosition, selectors: slot.selectors}))
+    }))
+  });
+}
+
+/**
  * Normalizes v1 current state. Without the status block (game mode and event loss), those readings are
  * `not-observed`. Hydrated checkpoint configuration is current state only and never implies a gameplay effect.
  * It reads neither the game window nor the delivery cursor, so the live projection without them (ET-010c) is accepted.
@@ -73,6 +90,7 @@ export function normalizeV1State(state: Omit<CurrentState, 'window'>, status?: P
       ? valueOf({mode: status.gameMode.mode, method: status.gameMode.method, confidence: status.gameMode.confidence, module: fromAvailable(status.gameMode.module)})
       : missing('not-observed'),
     eventLoss,
+    gearbox: normalizeV1Gearbox(state.gearbox),
     configurationRevision: configuration.revision
   };
 }

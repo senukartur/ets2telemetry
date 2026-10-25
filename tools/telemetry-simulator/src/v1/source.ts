@@ -3,8 +3,8 @@
 // docs/native-transport-v1.md) and the §6 mapping of docs/protocol/v1.md. It calls no SDK and performs no I/O.
 import {createHash} from 'node:crypto';
 import {
-  EVENT_TYPES, GAMEPLAY_EVENT_TYPES, fraction, kmToMetersFloat, kmToMetersU32, sdkMoney, sdkText,
-  type Available, type CurrentState, type Currency, type EventOccurrence, type EventRecord, type EventType, type GameMode,
+  EVENT_TYPES, GAMEPLAY_EVENT_TYPES, V1_GEARBOX, fraction, kmToMetersFloat, kmToMetersU32, sdkMoney, sdkText,
+  type Available, type CurrentState, type Currency, type EventOccurrence, type EventRecord, type EventType, type GameMode, type GearboxState, type HShifterLayout,
   type GameTimeStamp, type JobConfiguration, type Measure, type TrailerConfiguration, type TruckConfiguration, type UnavailableReason
 } from '../../../../packages/contracts/src/protocol-v1';
 import {MAX_SEQ} from './store';
@@ -46,8 +46,11 @@ export class ScenarioClock {
 }
 
 export type SdkType = 'string' | 'bool' | 's32' | 'u32' | 's64' | 'u64' | 'float' | 'double';
-/** One SDK named value. A string value of null models a null string pointer. */
-export interface SdkAttribute {name: string; sdkType: SdkType; value: string | number | boolean | null; unavailable?: UnavailableReason; indexed?: boolean}
+/**
+ * One SDK named value. A string value of null models a null string pointer. `index` is the SDK array index of an indexed
+ * attribute, such as an `hshifter` slot attribute; it implies `indexed`.
+ */
+export interface SdkAttribute {name: string; sdkType: SdkType; value: string | number | boolean | null; unavailable?: UnavailableReason; indexed?: boolean; index?: number}
 /** `terminated` is a normal list; `null` a null attribute pointer; `unterminated` a list cut at the scan bound. */
 export type AttributeList = 'terminated' | 'null' | 'unterminated';
 export interface Placement {x: number; y: number; z: number; heading: number; pitch: number; roll: number}
@@ -128,6 +131,51 @@ class Attributes {
   }
 }
 
+/** One copied `hshifter` slot: the attributes seen at its SDK index. */
+interface SlotCopy {gear?: number; handlePosition?: number; selectors?: number}
+/**
+ * The minor-1 H-shifter layout of one `hshifter` callback (ET-050b B2), as the native adapter copies it and its encoder
+ * bounds it (docs/native-transport-v1.md, Gearbox capture). An empty list is not-observed. A null or unterminated list, a
+ * type mismatch, an unavailable value, a slot attribute without an index or at index 64 or more, a repeated slot
+ * attribute, disagreeing or missing selector counts are invalid. So is a layout whose selector count exceeds 6, a slot
+ * that lacks one of its three attributes, a gear outside -100..100, a handle position above 255, selectors not below
+ * 2^selectorCount, or a (handle position, selectors) pair that repeats an earlier copied slot's, neutral or not. The
+ * layout lists every copied slot whose gear is not 0 in SDK slot order and is never truncated. Other attributes, such as
+ * shifter.type, are not copied.
+ */
+export function hshifterLayout(attributes: readonly SdkAttribute[], list: AttributeList): Available<HShifterLayout> {
+  if (list !== 'terminated') return invalid;
+  if (!attributes.length) return notObserved;
+  let count: number | undefined;
+  const slots = new Map<number, SlotCopy>();
+  for (const a of attributes) {
+    if (a.name === 'selector.count') {
+      if (a.unavailable || a.sdkType !== 'u32' || typeof a.value !== 'number' || (count !== undefined && a.value !== count)) return invalid;
+      count = a.value; continue;
+    }
+    const key = a.name === 'slot.gear' ? 'gear' : a.name === 'slot.handle.position' ? 'handlePosition' : a.name === 'slot.selectors' ? 'selectors' : undefined;
+    if (!key) continue;
+    if (a.index === undefined || a.index >= V1_GEARBOX.maxSlots || a.unavailable || typeof a.value !== 'number' || a.sdkType !== (key === 'gear' ? 's32' : 'u32')) return invalid;
+    const slot = slots.get(a.index) ?? {};
+    if (slot[key] !== undefined) return invalid;
+    slot[key] = a.value; slots.set(a.index, slot);
+  }
+  if (count === undefined || count > V1_GEARBOX.maxSelectorCount) return invalid;
+  const pairs = new Set<number>(), out: HShifterLayout['slots'] = [];
+  for (const [, s] of [...slots].sort(([a], [b]) => a - b)) {
+    if (s.gear === undefined || s.handlePosition === undefined || s.selectors === undefined || Math.abs(s.gear) > V1_GEARBOX.maxGears ||
+        s.handlePosition > V1_GEARBOX.maxHandlePosition || s.selectors >= 2 ** count) return invalid;
+    // Every copied slot takes part in the uniqueness rule, neutral ones included (fail-closed, as the native encoder).
+    const pair = s.handlePosition * 2 ** V1_GEARBOX.maxSelectorCount + s.selectors;
+    if (pairs.has(pair)) return invalid;
+    pairs.add(pair);
+    if (s.gear !== 0) out.push({gear: s.gear, handlePosition: s.handlePosition, selectors: s.selectors});
+  }
+  return {available: true, value: {selectorCount: count, slots: out}};
+}
+/** A truck configuration's u32 gear count; above 100 it is invalid (B2). */
+function gearCount(a: Available<number>): Available<number> { return a.available && a.value > V1_GEARBOX.maxGears ? invalid : a; }
+
 /** The SDK-thread side of the event channel: eventSeq assignment, the capture gate and open loss runs (OD-4, OD-5 S4). */
 export type Gate = 'none' | 'live' | 'durable';
 export interface LossRun {first: bigint; last: bigint; counts: {offline: bigint; noDurableConsumer: bigint; queueCount: bigint}; firstNs?: bigint; lastNs?: bigint}
@@ -158,7 +206,8 @@ export class EventChannel {
   drain(): ChannelSlot[] { const s = this.slots; this.slots = []; return s; }
 }
 
-interface Published {state: Omit<CurrentState, 'window'>; offlineTransitions: bigint}
+/** `state` never carries the gearbox; `gearbox` is the minor-1 block, which the producer adds only on minor-1 connections. */
+interface Published {state: Omit<CurrentState, 'window' | 'gearbox'>; gearbox: GearboxState; offlineTransitions: bigint}
 
 /** The adapter: SDK callbacks in, records and the published v1 state slot out. */
 export class AdapterModel {
@@ -174,6 +223,8 @@ export class AdapterModel {
   private job: Available<JobConfiguration> = notObserved;
   private truck: Available<TruckConfiguration> = notObserved;
   private trailers: Available<TrailerConfiguration>[] = Array.from({length: 10}, () => notObserved);
+  /** Minor-1 gearbox (B2): counts from the latest truck callback, the layout from the latest `hshifter` callback. */
+  private gearbox: GearboxState = {forwardGears: notObserved, reverseGears: notObserved, hshifter: notObserved};
   private publishedSlot: Published;
   private captureContext?: CaptureStep['data'];
   private captureGameClock?: string;
@@ -221,6 +272,9 @@ export class AdapterModel {
       this.placement = notObserved;
       this.fuelCapacity = list === 'unterminated' ? invalid : a.float('fuel.capacity');
     }
+    // B2: the layout sits outside `configuration`: no revision, record or eventSeq. It is kept across truck changes
+    // until the next `hshifter` callback (the SDK sends it before the truck in a burst, CAP-01 run2 and run4).
+    if (id === 'hshifter') { this.gearbox = {...this.gearbox, hshifter: hshifterLayout(attributes, list)}; return; }
     // bus_job, car_job, the legacy `trailer` id and other configurations have no record and no eventSeq (TD-002).
     if (id !== 'job' && id !== 'truck' && slot < 0) return;
     // D13: an empty trailer slot emits only when it was non-empty before.
@@ -239,11 +293,13 @@ export class AdapterModel {
         record = {type: 'job.configured', ...body}; this.job = {available: true, value: body};
       }
     } else if (id === 'truck') {
-      if (cleared) { record = {type: 'truck.cleared'}; this.truck = notObserved; }
+      // B2: a truck clear makes the gear counts not-observed and a truck configuration copies them; the layout stays.
+      if (cleared) { record = {type: 'truck.cleared'}; this.truck = notObserved; this.gearbox = {...this.gearbox, forwardGears: notObserved, reverseGears: notObserved}; }
       else {
         const body = Object.fromEntries(Object.entries(TRUCK_TEXT).map(([name, [key, kind]]) => [key, a.text(name, kind)])) as unknown as TruckConfiguration;
         body.fuelCapacity = scaled(a.float('fuel.capacity'), 1, 0, 1e6, 'L');
         record = {type: 'truck.configured', ...body}; this.truck = {available: true, value: body};
+        this.gearbox = {...this.gearbox, forwardGears: gearCount(a.number('gears.forward', 'u32')), reverseGears: gearCount(a.number('gears.reverse', 'u32'))};
       }
     } else if (cleared) { record = {type: 'trailer.cleared', index: slot}; this.trailers[slot] = notObserved; }
     else {
@@ -296,7 +352,7 @@ export class AdapterModel {
       const scalar = ['string', 'bool', 's32', 'u32', 's64', 'u64', 'float', 'double'].includes(o.sdkType);
       return [{name: o.name.value, sdkType: scalar ? o.sdkType as SdkType : 'string',
         value: scalar && o.value.available ? o.value.value as SdkAttribute['value'] : null,
-        indexed: o.arrayIndex.available,
+        indexed: o.arrayIndex.available, ...(o.arrayIndex.available ? {index: o.arrayIndex.value} : {}),
         ...(!o.value.available ? {unavailable: o.value.reason} : {})}];
     });
     const list: AttributeList = !d.attributes.present ? 'null' : d.attributes.terminated ? 'terminated' : 'unterminated';
@@ -353,7 +409,7 @@ export class AdapterModel {
   private reading(c: ChannelName): Reading { return this.readings.get(c) ?? notObserved; }
   private copyState(atMs: number): Published {
     const gear = this.reading('displayed.gear');
-    const state: Omit<CurrentState, 'window'> = {
+    const state: Omit<CurrentState, 'window' | 'gearbox'> = {
       simulation: this.simulation, speed: scaled(this.reading('speed'), 1, -1000, 1000, 'm/s'), fuel: scaled(this.reading('fuel.amount'), 1, 0, 1e6, 'L'),
       fuelCapacity: scaled(this.fuelCapacity, 1, 0, 1e6, 'L'), engineRpm: scaled(this.reading('engine.rpm'), 1, 0, 100_000, 'rpm'),
       gear: gear.available && (gear.value < -100 || gear.value > 100) ? {available: false, reason: 'invalid', unit: 'index'} : withUnit(gear, 'index'),
@@ -365,6 +421,6 @@ export class AdapterModel {
         orientation: {heading: this.placement.value.heading, pitch: this.placement.value.pitch, roll: this.placement.value.roll}}} : this.placement,
       configuration: {revision: this.revision.toString(), job: this.job, truck: this.truck, trailers: [...this.trailers]}
     };
-    return {state: structuredClone(state), offlineTransitions: this.offlineTransitions};
+    return {state: structuredClone(state), gearbox: structuredClone(this.gearbox), offlineTransitions: this.offlineTransitions};
   }
 }

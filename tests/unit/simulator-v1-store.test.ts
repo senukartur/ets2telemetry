@@ -233,4 +233,47 @@ describe('simulator v1 producer caller sequence (docs/native-transport-v1.md ste
     const live = producer(); live.p.open(); live.p.receive(hello(false), 1n);
     expect(() => live.p.receive(ack('0'), 1n)).toThrow(ProtocolError);
   });
+
+  // ET-050b B1: the producer selects min(hello maxMinor, 1); minor-0 bytes stay the original ones.
+  const helloOffering = (maxMinor: number, durable = true) => encodeFrame({version: PROTOCOL_V1, kind: 'hello', data: {clientInstanceId: '50000000-0000-4000-8000-000000000001', minMinor: 0, maxMinor, durableEvents: durable}});
+  const M1 = {major: 1, minor: 1} as const;
+  it('serves minor 0 without a gearbox to a client that offers only minor 0, and minor 1 with it otherwise', () => {
+    for (const [offered, selected] of [[0, 0], [1, 1], [3, 1]] as const) {
+      const {adapter, p} = producer();
+      adapter.configuration('truck', [{name: 'gears.forward', sdkType: 'u32', value: 12}, {name: 'gears.reverse', sdkType: 'u32', value: 4}], 'terminated', 0); adapter.frame(false, {}, 1);
+      p.open(); const [welcome, checkpoint] = p.receive(helloOffering(offered), 1_000_002_000_000n);
+      expect([welcome.message.version, welcome.message.kind === 'welcome' && welcome.message.data.minor, checkpoint.message.version], `offer ${offered}`).toEqual([{major: 1, minor: selected}, selected, {major: 1, minor: selected}]);
+      const state = checkpoint.message.kind === 'checkpoint' ? checkpoint.message.data.state : undefined;
+      if (selected === 0) expect(Object.hasOwn(state!, 'gearbox')).toBe(false);
+      else expect(state!.gearbox).toEqual({forwardGears: {available: true, value: 12}, reverseGears: {available: true, value: 4}, hshifter: {available: false, reason: 'not-observed'}});
+      // Every later message of the connection, here a snapshot, keeps the selected minor.
+      adapter.frame(false, {speed: 1}, 100);
+      const snapshot = p.publication(1_000_100_000_000n)!;
+      expect(snapshot.message.version).toEqual({major: 1, minor: selected});
+    }
+  });
+  it('accepts ACKs and clock probes only at the connection minor, probes through AckValidator.probe', () => {
+    const {adapter, p} = producer();
+    p.open(); p.receive(helloOffering(1), 1n);
+    adapter.lifecycle('simulation.started', 0); p.drain(1n); p.pump(1_000_000_000_000n);
+    p.receive(encodeFrame({version: M1, kind: 'ack', data: {pluginSessionId: P, throughEventSeq: '1'}}, {maxMinor: 1}), 1_000_000_000_000n);
+    expect(p.store.releasePoint).toBe(1n);
+    const [reply] = p.receive(encodeFrame({version: M1, kind: 'clock.probe', data: {probeId: '1'}}, {maxMinor: 1}), 1_000_000_000_001n);
+    expect([reply.message.kind, reply.message.version]).toEqual(['clock.reply', M1]);
+    // A {1,0} ACK or probe on a minor-1 connection is refused.
+    for (const message of [{version: PROTOCOL_V1, kind: 'ack', data: {pluginSessionId: P, throughEventSeq: '1'}}, {version: PROTOCOL_V1, kind: 'clock.probe', data: {probeId: '2'}}] as const) {
+      const fresh = producer(); fresh.p.open(); fresh.p.receive(helloOffering(1), 1n);
+      expect(() => fresh.p.receive(encodeFrame(message), 1n)).toThrow(ProtocolError);
+    }
+    // A {1,1} probe on a minor-0 connection is refused by its decoder.
+    const old = producer(); old.p.open(); old.p.receive(helloOffering(0), 1n);
+    expect(() => old.p.receive(encodeFrame({version: M1, kind: 'clock.probe', data: {probeId: '1'}}, {maxMinor: 1}), 1n)).toThrow(ProtocolError);
+    // The validator's probe check runs: a probe at the connection minor is still subject to the S6 order rule.
+    const validator = vi.spyOn(AckValidator.prototype, 'probe');
+    const order = producer(); order.p.open(); order.p.receive(helloOffering(1), 1n);
+    order.p.receive(encodeFrame({version: M1, kind: 'clock.probe', data: {probeId: '1'}}, {maxMinor: 1}), 2n);
+    expect(validator).toHaveBeenCalledOnce();
+    expect(() => order.p.receive(encodeFrame({version: M1, kind: 'clock.probe', data: {probeId: '1'}}, {maxMinor: 1}), 3n)).toThrow(/Clock probe order/);
+    validator.mockRestore();
+  });
 });

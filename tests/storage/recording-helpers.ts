@@ -192,7 +192,7 @@ export class ClientSocket extends EventEmitter {
       const frame = bytes.subarray(0, 4 + bytes.readUInt32LE(0)); bytes = bytes.subarray(frame.length);
       let message: ReturnType<typeof decodePayload> | undefined;
       // An invalid frame is the ingestion's own decoder's to report.
-      try { message = decodePayload(frame.subarray(4), 'server'); } catch { message = undefined; }
+      try { message = decodePayload(frame.subarray(4), 'server', {maxMinor: 1}); } catch { message = undefined; }
       const gate = this.gate, before = 'beforeEventSeq' in gate, eventSeq = before ? gate.beforeEventSeq : gate.afterEventSeq;
       const matches = message?.kind === 'event' && message.data.eventSeq === eventSeq && (gate.redelivered === undefined || message.data.redelivered === gate.redelivered);
       // Before the gate event the frame waits behind the gate; after it, the frame passes and the rest waits.
@@ -242,7 +242,8 @@ export async function runRecording(input: Json, database: {path: string; backups
     const gated = gate; if (!gated?.redelivered) gate = undefined;
     const socket = new ClientSocket(net.connect(endpoint), gated && {afterEventSeq: gated.afterEventSeq, redelivered: gated.redelivered,
       until: () => { gate = undefined; return gated.until(services.at(-1)!); }}, error => fail(error));
-    const write = socket.write.bind(socket), decoder = new FrameDecoder('server');
+    // ET-050b: the ingestion offers minor 1 and the simulator serves it, so both directions may carry {1,1}.
+    const write = socket.write.bind(socket), decoder = new FrameDecoder('server', {maxMinor: 1});
     let index: number | undefined, sent = 0;
     // Registered before the ingestion's listeners: a welcome is numbered before the ingestion applies it.
     socket.on('data', (chunk: Buffer) => {
@@ -266,7 +267,7 @@ export async function runRecording(input: Json, database: {path: string; backups
       } catch { /* the ingestion's own decoder reports the violation */ }
     });
     socket.write = ((bytes: Uint8Array, ...rest: unknown[]) => {
-      const m = decodePayload(bytes.subarray(4), 'client') as ClientMessage;
+      const m = decodePayload(bytes.subarray(4), 'client', {maxMinor: 1}) as ClientMessage;
       if (m.kind === 'ack' && index !== undefined) {
         acks.push({connection: index, through: BigInt(m.data.throughEventSeq), coverage: tally.coverage}); timeline.push(`ack ${index} ${m.data.throughEventSeq}`);
         if (acksLost(policies[index], sent++)) return true;
@@ -444,7 +445,7 @@ export function tracedConnect(timeline: string[]) {
     sockets++;
     const socket = net.connect(endpoint), write = socket.write.bind(socket) as (...args: unknown[]) => boolean;
     socket.write = (bytes: Uint8Array, ...rest: unknown[]) => {
-      const m = decodePayload(bytes.subarray(4), 'client') as ClientMessage;
+      const m = decodePayload(bytes.subarray(4), 'client', {maxMinor: 1}) as ClientMessage;
       if (m.kind === 'ack') timeline.push(`ack ${m.data.throughEventSeq}`);
       return write(bytes, ...rest);
     };

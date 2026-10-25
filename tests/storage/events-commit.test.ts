@@ -187,6 +187,28 @@ describe('trips belong to one game', () => {
   });
 });
 
+// ET-050b B1: storage validates welcomes, events and gaps of either minor; the envelope minor is stored as before.
+describe('ET-050b protocol v1 minor 1 in storage', () => {
+  const minor1 = (name: string) => decodePayload(new Uint8Array(readFileSync(path.join(PROTOCOL_V1, 'minor1', `${name}.json`))), 'server', {maxMinor: 1}) as ServerMessage;
+  it('stores a minor-1 session, event and gap with protocol minor 1', async () => {
+    const storage = await session(minor1('welcome'));
+    expect(ok(storage.commitEvent({message: minor1('event-job-configured')}))).toMatchObject({status: 'committed', committedThroughEventSeq: '1'});
+    expect(ok(storage.commitGap({message: minor1('gap')})).status).toBe('committed');
+    expect(ok(storage.getEvent(P1, '1'))).toMatchObject({type: 'job.configured', protocolMinor: 1});
+    storage.close();
+    expect(readOnly(ws.database, db => ({
+      session: db.prepare('SELECT protocol_major AS major, protocol_minor AS minor FROM plugin_sessions').get(),
+      events: db.prepare('SELECT protocol_minor AS minor FROM events').all()
+    }))).toEqual({session: {major: 1, minor: 1}, events: [{minor: 1}]});
+  });
+  it('treats a later minor-0 welcome of the same plugin session as a changed session', async () => {
+    // The session's minor is part of its stored identity, as its versions and capabilities are.
+    const storage = await session(minor1('welcome'));
+    failed(storage.upsertSession({message: minor1('welcome-minor-0')}), 'SESSION_CONFLICT');
+    storage.close();
+  });
+});
+
 describe('REG-006 committed coverage', () => {
   it('advances coverage over events and gap markers in any order', async () => {
     const storage = await session();

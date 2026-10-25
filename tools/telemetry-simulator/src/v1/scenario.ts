@@ -58,7 +58,9 @@ const S64 = /^-?(0|[1-9][0-9]{0,18})$/;
 
 const SDK_TYPES: readonly SdkType[] = ['string', 'bool', 's32', 'u32', 's64', 'u64', 'float', 'double'];
 function attribute(v: unknown, path: string): SdkAttribute {
-  const a = obj(v, path, ['name', 'sdkType', 'value']), name = str(a.name, `${path}.name`), sdkType = oneOf(a.sdkType, `${path}.sdkType`, SDK_TYPES), raw = a.value;
+  const a = obj(v, path, ['name', 'sdkType', 'value'], ['index']), name = str(a.name, `${path}.name`), sdkType = oneOf(a.sdkType, `${path}.sdkType`, SDK_TYPES), raw = a.value;
+  // An SDK array index (ET-050b): `hshifter` slot attributes carry one; SCS_U32_NIL (2^32 - 1) is the absent index.
+  const index = Object.hasOwn(a, 'index') ? int(a.index, `${path}.index`, 0, 4_294_967_294) : undefined;
   let value: SdkAttribute['value'];
   switch (sdkType) {
     case 'string': if (raw !== null && (typeof raw !== 'string' || raw.length > 1_024)) fail(`${path}.value`, 'string or null expected'); value = raw; break;
@@ -70,7 +72,7 @@ function attribute(v: unknown, path: string): SdkAttribute {
     case 'float': value = float32(raw, `${path}.value`); break;
     case 'double': value = finite(raw, `${path}.value`); break;
   }
-  return {name, sdkType, value};
+  return index === undefined ? {name, sdkType, value} : {name, sdkType, value, indexed: true, index};
 }
 const CONFIGURATION_IDS = ['job', 'truck', 'trailer', ...Array.from({length: 10}, (_, i) => `trailer.${i}`), 'bus_job', 'car_job', 'controls', 'hshifter', 'substances'];
 function channels(v: unknown, path: string): FrameChannels {
@@ -102,7 +104,7 @@ function gameMode(v: unknown, path: string): GameMode {
   return mode;
 }
 function policy(v: unknown, path: string, connectAt: number): ClientPolicy & {probes: number[]} {
-  const o = obj(v, path, ['durable'], ['commit', 'ack', 'probes']), durable = bool(o.durable, `${path}.durable`);
+  const o = obj(v, path, ['durable'], ['commit', 'ack', 'probes', 'maxMinor']), durable = bool(o.durable, `${path}.durable`);
   if (!durable && (Object.hasOwn(o, 'commit') || Object.hasOwn(o, 'ack'))) fail(path, 'a live-only client never commits or acknowledges');
   const commit = opt<CommitPolicy>(o, 'commit', raw => {
     const s = str(raw, `${path}.commit`), m = /^(failAt|crashAfterCommit):([1-9][0-9]*)$/.exec(s);
@@ -121,7 +123,9 @@ function policy(v: unknown, path: string, connectAt: number): ClientPolicy & {pr
   const probes = opt(o, 'probes', raw => arr(raw, `${path}.probes`, 100).map((t, i) => {
     const at = int(t, `${path}.probes[${i}]`, connectAt + 1, MAX_AT_MS); if (at < last + 1_000) fail(`${path}.probes[${i}]`, 'probes must be at least 1,000 ms apart'); last = at; return at;
   }), []);
-  return {durable, commit, ack, probes};
+  // ET-050b B1: the hello's offer; omitted, the client offers the contract's highest minor.
+  const maxMinor = Object.hasOwn(o, 'maxMinor') ? int(o.maxMinor, `${path}.maxMinor`, 0, 1) as 0 | 1 : undefined;
+  return {durable, commit, ack, probes, ...(maxMinor === undefined ? {} : {maxMinor})};
 }
 
 /** Validates one source step and rebuilds it from validated fields; the generated soak timeline (soak.ts) uses it too. */

@@ -52,12 +52,14 @@ export async function startLiveSmokeSourceV1(checkout) {
     const accept = value => {
       if (!started) {
         assert.equal(value.kind, 'hello'); assert.deepEqual(value.version, {major: 1, minor: 0});
-        assert.deepEqual({minMinor: value.data.minMinor, maxMinor: value.data.maxMinor, durableEvents: value.data.durableEvents}, {minMinor: 0, maxMinor: 0, durableEvents: false});
+        // ET-050b B1: the service offers minor 1; these minor-0 fixtures answer as a plugin from before ET-050b would.
+        assert.deepEqual({minMinor: value.data.minMinor, maxMinor: value.data.maxMinor, durableEvents: value.data.durableEvents}, {minMinor: 0, maxMinor: 1, durableEvents: false});
         started = true; clearTimeout(deadline);
         send(welcome, () => send(checkpoint, loop));
       } else {
         // The live-only client measures the source clock; no reply is required, so a probe stays outstanding.
-        assert.equal(value.kind, 'clock.probe'); probes++;
+        // Its probes carry the minor the welcome selected, 0.
+        assert.equal(value.kind, 'clock.probe'); assert.deepEqual(value.version, {major: 1, minor: 0}); probes++;
       }
     };
     socket.on('data', bytes => {

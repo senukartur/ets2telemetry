@@ -50,6 +50,8 @@ export interface V1Options {
 export function v1Projection(name = 'snapshot-live', options: V1Options = {}): LiveTelemetryV1 {
   const message = structuredClone(v1Message(name));
   const state = Object.fromEntries(Object.entries(message.data.state).filter(([key]) => key !== 'window')) as LiveStateV1;
+  // ET-050b B7: the projection always carries the gearbox; a minor-0 fixture has none, so every part is not-supported.
+  state.gearbox ??= {forwardGears: {available: false, reason: 'not-supported'}, reverseGears: {available: false, reason: 'not-supported'}, hshifter: {available: false, reason: 'not-supported'}};
   const job = state.configuration.job;
   if ((options.ids ?? 'v0') === 'v0' && job.available) {
     job.value.cargoId = {available: true, value: 'cargo.logs'};

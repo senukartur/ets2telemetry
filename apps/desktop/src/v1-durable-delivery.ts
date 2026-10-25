@@ -5,7 +5,7 @@
 // current. Receipt, parsing or validation is never grounds for an ACK (docs/protocol/v1.md §10). The sink's pending
 // one-second samples are written by a low-priority `samples` op in the same FIFO, which never produces an ACK.
 // Node-safe: no storage, Electron or I/O beyond the link the ingestion supplies. See docs/telemetry-service-v1.md.
-import {encodeFrame, type Uint64} from '../../../packages/contracts/src/protocol-v1';
+import {encodeFrame, type Uint64, type V1Minor} from '../../../packages/contracts/src/protocol-v1';
 import {DurableAckCursor} from '../../../packages/contracts/src/protocol-v1-delivery';
 import {isUint64} from '../../../packages/contracts/src/protocol-v0';
 import type {CommitResult} from '../../../packages/storage/src/api';
@@ -106,12 +106,19 @@ function reachesPowerOfTwo(before: number, after: number): boolean {
   return after >= next;
 }
 
-/** One durable connection's handle: its plugin session, its cursor once storage opened it, and its ordered work. */
+/**
+ * One durable connection's handle: its plugin session, its protocol minor, its cursor once storage opened it, and its
+ * ordered work.
+ */
 export class DurableConnection {
   /** Set once the connection's remaining work must not run: it failed, overflowed or the pipeline stopped. */
   dropped = false;
   cursor?: DurableAckCursor;
-  constructor(private readonly delivery: DurableDelivery, readonly pluginSessionId: string, readonly link: DurableLink) {}
+  /**
+   * `minor` is the minor the welcome selected (ET-050b B1), the same value the consumer adopted from it: the cursor
+   * begins the connection at it and every ACK is encoded at it.
+   */
+  constructor(private readonly delivery: DurableDelivery, readonly pluginSessionId: string, readonly link: DurableLink, readonly minor: V1Minor = 0) {}
   /**
    * Queues the connection's checkpoint with the consumer's UTC label at its receipt (H13). Its `ackedThroughEventSeq` A
    * starts the cursor for this connection (E6); then the sink observes it as hydration and as the connection's first
@@ -215,7 +222,7 @@ export class DurableDelivery {
   }
   /** Starts a durable connection at its welcome. Its session opens in FIFO order after earlier queued work. */
   connect(welcome: WelcomeMessage, link: DurableLink): DurableConnection {
-    const connection = this.latest = new DurableConnection(this, welcome.source.pluginSessionId, link);
+    const connection = this.latest = new DurableConnection(this, welcome.source.pluginSessionId, link, welcome.version.minor);
     if (this.failedCode !== undefined || this.stopped) { connection.dropped = true; link.close('unavailable', this.failedCode ?? 'INTERNAL'); return connection; }
     this.setStatus({state: 'pending'});
     this.push({connection, kind: 'open', welcome});
@@ -323,7 +330,7 @@ export class DurableDelivery {
     if (!cursor) { this.failure(connection, internal()); return; }
     if (op.kind === 'checkpoint') {
       const acked = op.message.data.status.delivery.ackedThroughEventSeq, stored = cursor.throughEventSeq;
-      try { cursor.beginConnection(acked); } catch {
+      try { cursor.beginConnection(acked, connection.minor); } catch {
         // E6: the producer released events that storage does not hold (for example a restored database). This plugin
         // session continues live-only; R9: the sink first records the released range as a restore-loss interval.
         this.drop(connection);
@@ -365,7 +372,7 @@ export class DurableDelivery {
     if (!connection.link.current()) return;
     connection.link.committed?.();
     const ack = cursor.ack();
-    if (ack) connection.link.write(encodeFrame(ack));
+    if (ack) connection.link.write(encodeFrame(ack, {maxMinor: connection.minor}));
   }
   /**
    * R5: one reading at its place in the FIFO, with its receipt label (H13). A failure result stops durable delivery like

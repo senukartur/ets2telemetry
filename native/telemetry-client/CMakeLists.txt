@@ -15,6 +15,7 @@ set(CLIENT_TEST_CASES
   capture capture-v0-hello capture-bad-arguments
   v1-valid v1-policy v1-major-mismatch v1-name-mismatch v1-collision v1-v0-hello v1-cap0-hello
   v1-client-kind v1-client-oversize v1-bad-tag v1-partial-length v1-partial-payload v1-zero-length v1-ack-while-quiet v1-write-deadline v1-capture-conflict
+  v1-minor1-valid v1-minor-above-offer v1-minor-changed
   policy-prune policy-cap policy-duplicate policy-case-duplicate policy-junction
   policy-lock-busy policy-lock-pending policy-publish-busy image-busy policy-readonly)
 # These cases wait out the broker's fixed 5 s frame or client-write deadline or the fixture's 5.5 s

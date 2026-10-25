@@ -6,7 +6,7 @@ import {describe, expect, it} from 'vitest';
 import * as v0 from '../../packages/contracts/src/protocol-v0';
 import * as v1 from '../../packages/contracts/src/protocol-v1';
 import {
-  normalizeCancelledRecord, normalizeDeliveredRecord, normalizeV0State, normalizeV1Job, normalizeV1State, normalizeV1Trailer,
+  normalizeCancelledRecord, normalizeDeliveredRecord, normalizeV0State, normalizeV1Gearbox, normalizeV1Job, normalizeV1State, normalizeV1Trailer,
   type MoneyValue, type Reading
 } from '../../packages/telemetry-core/src';
 
@@ -63,7 +63,7 @@ describe('REG-009 protocol v0 normalization', () => {
   });
   it('marks every field that v0 does not transport as not-carried, never not-supported', () => {
     const state = normalizeV0State(v0State('snapshot'));
-    for (const reading of [state.navigationDistance, state.worldPlacement, state.trailers, state.gameMode, state.eventLoss]) expect(reading).toEqual(notCarried);
+    for (const reading of [state.navigationDistance, state.worldPlacement, state.trailers, state.gameMode, state.eventLoss, state.gearbox]) expect(reading).toEqual(notCarried);
   });
   it('keeps each unavailable reason from the unavailable fixture', () => {
     const state = normalizeV0State(v0State('unavailable'));
@@ -206,6 +206,37 @@ describe('REG-009 protocol v1 normalization', () => {
     expect(trailer.bodyType).toEqual(value('dryvan'));
     const empty = normalizeV1Trailer({...record, name: {available: true, value: ''}});
     expect(empty.model.name).toEqual(value(''));
+  });
+});
+
+// ET-050b B2, B7: the minor-1 gearbox reading. Inputs are the minor-1 fixtures; expected values are written by hand.
+describe('ET-050b gearbox normalization', () => {
+  const minor1 = (name: string) => {
+    const m = v1.decodePayload(bytes('protocol-v1/minor1', name), 'server', {maxMinor: 1}) as v1.ServerMessage;
+    if (m.kind !== 'checkpoint' && m.kind !== 'snapshot') throw new Error(`${name} is not a state message`);
+    return m.data;
+  };
+  it('copies the 12-speed counts and layout slot by slot, deriving nothing', () => {
+    const {state, status} = minor1('checkpoint');
+    expect(normalizeV1State(state, status).gearbox).toEqual(value({
+      forwardGears: value(12), reverseGears: value(4),
+      hshifter: value({selectorCount: 2, slots: [
+        {gear: -1, handlePosition: 1, selectors: 0}, {gear: -3, handlePosition: 1, selectors: 1}, {gear: -2, handlePosition: 1, selectors: 2}, {gear: -4, handlePosition: 1, selectors: 3},
+        {gear: 1, handlePosition: 2, selectors: 0}, {gear: 7, handlePosition: 2, selectors: 1}, {gear: 2, handlePosition: 2, selectors: 2}, {gear: 8, handlePosition: 2, selectors: 3},
+        {gear: 3, handlePosition: 3, selectors: 0}, {gear: 9, handlePosition: 3, selectors: 1}, {gear: 4, handlePosition: 3, selectors: 2}, {gear: 10, handlePosition: 3, selectors: 3},
+        {gear: 5, handlePosition: 4, selectors: 0}, {gear: 11, handlePosition: 4, selectors: 1}, {gear: 6, handlePosition: 4, selectors: 2}, {gear: 12, handlePosition: 4, selectors: 3}]})
+    }));
+  });
+  it('keeps the availability of each part', () => {
+    expect(normalizeV1State(minor1('snapshot-counts-not-observed').state).gearbox).toMatchObject(value({forwardGears: missing('not-observed'), reverseGears: missing('not-observed')}));
+    expect(normalizeV1State(minor1('snapshot-hshifter-invalid').state).gearbox).toMatchObject(value({hshifter: missing('invalid')}));
+    expect(normalizeV1State(minor1('snapshot-gearbox-not-supported').state).gearbox)
+      .toEqual(value({forwardGears: missing('not-supported'), reverseGears: missing('not-supported'), hshifter: missing('not-supported')}));
+  });
+  it('reports every part not-supported for a minor-0 state, which carries no gearbox', () => {
+    const none = value({forwardGears: missing('not-supported'), reverseGears: missing('not-supported'), hshifter: missing('not-supported')});
+    expect(normalizeV1State(v1Checkpoint('snapshot').state).gearbox).toEqual(none);
+    expect(normalizeV1Gearbox(undefined)).toEqual(none);
   });
 });
 

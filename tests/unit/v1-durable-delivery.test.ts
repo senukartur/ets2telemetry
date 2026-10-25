@@ -19,6 +19,11 @@ const dir = resolve('tests/fixtures/protocol-v1');
 const server = (name: string) => decodePayload(new Uint8Array(readFileSync(resolve(dir, `${name}.json`))), 'server') as ServerMessage;
 const client = (name: string) => validateClientMessage(decodePayload(new Uint8Array(readFileSync(resolve(dir, `${name}.json`))), 'client'));
 const streams = readFileSync(resolve(dir, 'streams.txt'), 'utf8').trim().split(/\r?\n/).map(line => line.trim().split(/\s+/));
+/** ET-050b: the minor-1 corpus, read at maxMinor 1 (tests/fixtures/protocol-v1/minor1). */
+const dir1 = resolve(dir, 'minor1');
+const server1 = (name: string) => decodePayload(new Uint8Array(readFileSync(resolve(dir1, `${name}.json`))), 'server', {maxMinor: 1}) as ServerMessage;
+const client1 = (name: string) => validateClientMessage(decodePayload(new Uint8Array(readFileSync(resolve(dir1, `${name}.json`))), 'client', {maxMinor: 1}), {maxMinor: 1});
+const streams1 = readFileSync(resolve(dir1, 'streams.txt'), 'utf8').trim().split(/\r?\n/).map(line => line.trim().split(/\s+/));
 const P1 = '10000000-0000-4000-8000-000000000001', P2 = '10000000-0000-4000-8000-000000000002';
 const welcome = (name = 'welcome') => server(name) as WelcomeMessage;
 /** An event of session P1 with the given eventSeq, cloned from a shared fixture (the payload differs per `variant`). */
@@ -104,15 +109,16 @@ class MemorySink implements DurableSink {
 
 /** A connection as the pipeline sees it; every written frame is decoded and logged into the shared sink log. */
 class Link implements DurableLink {
-  open = true; readonly acks: string[] = []; readonly closes: [DurableCloseKind, string][] = [];
+  open = true; readonly acks: string[] = []; readonly minors: number[] = []; readonly closes: [DurableCloseKind, string][] = [];
   constructor(private readonly log: string[], private readonly validator?: AckValidator) {}
   current() { return this.open; }
   write(bytes: Uint8Array) {
-    const m = decodePayload(bytes.subarray(4), 'client') as ClientMessage;
+    // Either minor decodes here; the producer-side validator holds the connection to its own minor.
+    const m = decodePayload(bytes.subarray(4), 'client', {maxMinor: 1}) as ClientMessage;
     if (m.kind !== 'ack') throw new Error('ACK expected');
     // The producer-side validator proves that every ACK the pipeline writes satisfies the producer rule (§10).
     this.validator?.accept(m);
-    this.acks.push(m.data.throughEventSeq); this.log.push(`ack ${m.data.throughEventSeq}`);
+    this.acks.push(m.data.throughEventSeq); this.minors.push(m.version.minor); this.log.push(`ack ${m.data.throughEventSeq}`);
   }
   close(kind: DurableCloseKind, code: string) { if (this.open) { this.open = false; this.closes.push([kind, code]); } }
 }
@@ -122,12 +128,13 @@ class Link implements DurableLink {
  * them; the stream's scripted `C:` ACKs belong to another client, so the pipeline's own ACKs replace them and pass the
  * producer-side AckValidator. `A:<n>` requires the pipeline's last ACK since the previous `A:` or `R` to be n, `A:-` none.
  */
-async function replay(steps: string[]) {
-  const sink = new MemorySink(), delivery = new DurableDelivery(sink), finals: string[] = [];
-  let consumer = new V1Consumer(true), validator: AckValidator | undefined, link: Link | undefined, connection: ReturnType<DurableDelivery['connect']> | undefined, mark = 0;
+async function replay(steps: string[], minor1 = false) {
+  const sink = new MemorySink(), delivery = new DurableDelivery(sink), finals: string[] = [], offer = {maxMinor: minor1 ? 1 : 0};
+  const read = minor1 ? server1 : server, readClient = minor1 ? client1 : client;
+  let consumer = new V1Consumer(true, offer), validator: AckValidator | undefined, link: Link | undefined, connection: ReturnType<DurableDelivery['connect']> | undefined, mark = 0;
   const acks = () => link?.acks ?? [];
   for (const step of steps) {
-    if (step === 'R') { await delivery.idle(); link!.open = false; consumer = new V1Consumer(true); validator = undefined; mark = 0; continue; }
+    if (step === 'R') { await delivery.idle(); link!.open = false; consumer = new V1Consumer(true, offer); validator = undefined; mark = 0; continue; }
     if (step.startsWith('A:')) {
       await delivery.idle();
       const since = acks().slice(mark); mark = acks().length;
@@ -136,14 +143,15 @@ async function replay(steps: string[]) {
     }
     const [side, name] = step.split(':');
     if (side === 'C') {
-      const m = client(name);
+      const m = readClient(name);
       if (m.kind === 'hello') expect(negotiateV1(m).durableEvents).toBe(true);
       else if (m.kind === 'clock.probe') consumer.expectClockReply(m.data.probeId);
       continue;
     }
-    const m = server(name), applied = consumer.accept(m);
+    const m = read(name), applied = consumer.accept(m);
     if (m.kind === 'welcome') {
-      validator = new AckValidator(m.source.pluginSessionId, m.data.durableEvents);
+      // The producer-side validator takes the minor the welcome selected (ET-050b B1).
+      validator = new AckValidator(m.source.pluginSessionId, m.data.durableEvents, m.version.minor);
       link = new Link(sink.log, validator); connection = delivery.connect(m, link); finals.push(m.source.pluginSessionId);
     } else if (m.kind === 'checkpoint') { validator!.checkpoint(m.data.status.delivery.ackedThroughEventSeq); connection!.checkpoint(m, RECEIVED); }
     else if (applied.coverage && (m.kind === 'event' || m.kind === 'gap')) { validator!.sent(applied.coverage.lastEventSeq); expect(connection!.enqueue(applied.coverage, m, RECEIVED)).toBe(true); }
@@ -180,6 +188,19 @@ describe('ET-006b storage-commit ACK pipeline', () => {
     // plugin-restart: a new plugin session starts its own cursor from its own storage coverage.
     expect((await replay(streams.find(([n]) => n === 'plugin-restart')![2].split(','))).sink.log)
       .toEqual([`open ${P1}`, 'committed 1', 'ack 1', 'committed 2', 'ack 2', `open ${P2}`, 'committed 1', 'ack 1']);
+  });
+
+  // ET-050b B1: a minor-1 connection begins its cursor at minor 1 and writes every ACK at minor 1, which the minor-1
+  // AckValidator accepts; a minor-0 welcome (an older plugin) keeps minor-0 ACKs.
+  for (const [name, durable, steps, outcome, expected] of streams1) if (durable === '1' && outcome === 'accept') it(`replays the minor-1 stream ${name} with ACKs at the welcome minor`, async () => {
+    const {finalAck, link} = await replay(steps.split(','), true);
+    expect(finalAck).toBe(expected);
+    const welcomeMinor = server1(steps.split(',').find(step => step.startsWith('S:'))!.slice(2)).version.minor;
+    // A stream without coverage writes no ACK; every ACK written carries the welcome's minor.
+    expect(new Set(link.minors)).toEqual(new Set(expected === '0' ? [] : [welcomeMinor]));
+  });
+  it('covers the durable accepted minor-1 streams', () => {
+    expect(streams1.filter(([, durable, , outcome]) => durable === '1' && outcome === 'accept').map(([name]) => name)).toEqual(['normal', 'gearbox-availability', 'old-plugin-minor-0']);
   });
 
   function started(sink: MemorySink, options: {maxPendingCommits?: number} = {}) {

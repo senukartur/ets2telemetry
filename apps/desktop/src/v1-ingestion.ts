@@ -6,7 +6,7 @@
 // production it records nothing and sends no ACK. See docs/telemetry-service-v1.md.
 import {randomUUID} from 'node:crypto';
 import net from 'node:net';
-import {FrameDecoder, PROTOCOL_V1, encodeFrame, type CaptureTime, type Continuity, type CurrentState, type EndData, type ServerMessage, type SourceIdentity, type SourceStatus, type Uint64} from '../../../packages/contracts/src/protocol-v1';
+import {FrameDecoder, PROTOCOL_V1, V1_MAX_MINOR, encodeFrame, type CaptureTime, type Continuity, type CurrentState, type EndData, type ServerMessage, type SourceIdentity, type SourceStatus, type Uint64, type V1Minor} from '../../../packages/contracts/src/protocol-v1';
 import {V1Consumer, computeClockMapping, isClockMappingCurrent, type ClockMapping} from '../../../packages/contracts/src/protocol-v1-delivery';
 import type {LiveTelemetry, SourceSelection} from '../../../packages/contracts/src';
 import type {DiagnosticFacts} from './diagnostics';
@@ -22,6 +22,12 @@ export const V1_BACKOFF_MS = [250, 500, 1000, 2000, 4000] as const;
 export const V1_STALE_MS = 500;
 export const V1_HANDSHAKE_MS = 5000;
 export const V1_PROBE_INTERVAL_MS = 1000;
+/**
+ * ET-050b B1: the highest minor this service offers. The hello's `maxMinor`, the server-frame decoder and the consumer's
+ * accepted maximum all use it; the plugin then selects min(offer, its own maximum), so a plugin from before ET-050b
+ * selects 0 and a current one 1.
+ */
+export const V1_CLIENT_MAX_MINOR: V1Minor = V1_MAX_MINOR;
 const FRESHNESS_TICK_MS = 50;
 
 export type V1Status = Exclude<LiveTelemetry['status'], 'service-failed' | 'restarting'>;
@@ -220,7 +226,7 @@ export class V1Ingestion {
     this.state = {...this.state, status, reason, fresh}; this.publish();
   }
   private open(): void {
-    const generation = ++this.generation, decoder = new FrameDecoder('server');
+    const generation = ++this.generation, decoder = new FrameDecoder('server', {maxMinor: V1_CLIENT_MAX_MINOR});
     let closed = false, ended = false, hydrated = false, probeId = 0n, probeSentNs = 0n;
     let durable: DurableConnection | undefined;
     const selection = this.state.selection, game = selection === 'ets2' || selection === 'ats';
@@ -230,6 +236,9 @@ export class V1Ingestion {
     // Fixed at 'connect', when the hello is written: the native client sets its authority receipt, which names the plugin
     // session, just before it emits 'connect'; a fixture socket has no authority.
     let requested = false, consumer: V1Consumer | undefined, liveOnly: V1Ingestion['liveOnly'];
+    // ET-050b B1: the one negotiated minor of this connection, set from the welcome. The probe envelopes and their
+    // encoding, the clock mapping and, through the welcome, the durable cursor and its ACKs all take this value.
+    let minor: V1Minor | undefined;
     const close = (status: V1Status, reason: string, retry: boolean) => {
       if (!active()) return; closed = true;
       if (this.liveOnly === liveOnly) this.liveOnly = undefined;
@@ -253,10 +262,10 @@ export class V1Ingestion {
       close: (kind: DurableCloseKind, code: string) => close('disconnected', kind === 'retryable' ? `Durable commit not completed (${code}); retrying` : `Durable delivery stopped (${code}); reconnecting live-only`, true)
     };
     const sendProbe = () => {
-      if (!active() || ended || !consumer || consumer.clockProbeOutstanding) return;
+      if (!active() || ended || !consumer || minor === undefined || consumer.clockProbeOutstanding) return;
       // At most one outstanding probe; a late reply still ends it, and no new probe is sent before it arrives (§11).
       probeId++; consumer.expectClockReply(probeId.toString()); probeSentNs = this.nowNs();
-      socket.write(encodeFrame({version: PROTOCOL_V1, kind: 'clock.probe', data: {probeId: probeId.toString()}}));
+      socket.write(encodeFrame({version: {major: 1, minor}, kind: 'clock.probe', data: {probeId: probeId.toString()}}, {maxMinor: minor}));
     };
     const observe = (message: Extract<ServerMessage, {kind: 'checkpoint' | 'snapshot'}>) => {
       let receipt: number;
@@ -283,13 +292,14 @@ export class V1Ingestion {
     this.handshake = setTimeout(() => close('disconnected', 'Hello/checkpoint deadline exceeded', true), this.options.handshakeMs ?? V1_HANDSHAKE_MS);
     socket.once('connect', () => {
       if (!active()) return;
-      requested = this.durableWanted(socket.authority?.pluginSessionId); consumer = new V1Consumer(requested);
+      requested = this.durableWanted(socket.authority?.pluginSessionId); consumer = new V1Consumer(requested, {maxMinor: V1_CLIENT_MAX_MINOR});
       if (this.delivery && requested !== this.requestedDurable) { this.requestedDurable = requested; this.publish(); }
       if (!requested && this.delivery) {
         liveOnly = this.liveOnly = {pluginSessionId: socket.authority?.pluginSessionId,
           reconnect: () => close('disconnected', 'Durable delivery available; reconnecting durable', true)};
       }
-      socket.write(encodeFrame({version: PROTOCOL_V1, kind: 'hello', data: {clientInstanceId: this.clientInstanceId, minMinor: 0, maxMinor: 0, durableEvents: requested}}));
+      // A hello is always version 1.0; its `maxMinor` is the offer (ET-050b B1).
+      socket.write(encodeFrame({version: PROTOCOL_V1, kind: 'hello', data: {clientInstanceId: this.clientInstanceId, minMinor: 0, maxMinor: V1_CLIENT_MAX_MINOR, durableEvents: requested}}));
     });
     socket.on('data', (bytes: unknown) => {
       if (!active()) return;
@@ -309,6 +319,8 @@ export class V1Ingestion {
           switch (message.kind) {
             case 'welcome': {
               const session = message.source.pluginSessionId;
+              // The consumer accepted the welcome at or below the offer; its minor is the connection's from here on.
+              minor = consumer.minor;
               if (liveOnly) liveOnly.pluginSessionId = session;
               if (this.state.clockMapping && !isClockMappingCurrent(this.state.clockMapping, message.capture.clockId, this.clientClockId)) this.state = {...this.state, clockMapping: undefined, clockBoundary: undefined};
               if (message.data.durableEvents && this.delivery) durable = this.delivery.connect(message, link);
@@ -334,7 +346,8 @@ export class V1Ingestion {
               durable.enqueue(applied.coverage, message, this.utcNow());
               return;
             case 'clock.reply': {
-              const mapping = computeClockMapping({reply: message, probeId: probeId.toString(), clientClockId: this.clientClockId, probeSentNs: probeSentNs.toString(), replyReceivedNs: this.nowNs().toString()});
+              const mapping = computeClockMapping({reply: message, probeId: probeId.toString(), clientClockId: this.clientClockId, probeSentNs: probeSentNs.toString(),
+                replyReceivedNs: this.nowNs().toString(), maxMinor: minor});
               // A late reply is accepted but gives no mapping (§11).
               if (mapping) { this.state = {...this.state, clockMapping: mapping, clockBoundary: {clockId: message.capture.clockId, probeSentClientNs: probeSentNs.toString(), receivedSourceNs: message.data.receivedMonotonicNs}}; this.publish(); }
               return;

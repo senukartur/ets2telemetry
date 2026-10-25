@@ -7,7 +7,11 @@ import {builtinModules} from 'node:module';
 import net from 'node:net';
 import {randomUUID} from 'node:crypto';
 import {describe, expect, it} from 'vitest';
-import {FrameDecoder, PROTOCOL_V1, encodeFrame, type ServerMessage} from '../../packages/contracts/src/protocol-v1';
+import {FrameDecoder, PROTOCOL_V1, V1_MAX_MINOR, encodeFrame as encodeAnyMinor, type ProtocolMessage, type ServerMessage} from '../../packages/contracts/src/protocol-v1';
+// ET-050b: these raw clients offer the contract's highest minor, as the scripted client does, so their connections are
+// minor 1 and every frame after the hello carries {1,1}.
+const M1 = {major: 1, minor: 1} as const;
+const encodeFrame = (message: ProtocolMessage) => encodeAnyMinor(message, {maxMinor: V1_MAX_MINOR});
 import {V1Consumer} from '../../packages/contracts/src/protocol-v1-delivery';
 import {readFixtureFile} from '../../tools/telemetry-simulator/src/fixture-file';
 import {checkStateRate, checkV1Cadence} from '../../tools/telemetry-simulator/src/v1/cadence';
@@ -25,11 +29,11 @@ const SOURCE = {versions: {telemetryApi: {major: 1, minor: 1}, gameTelemetry: {m
 const inline = (steps: Json[], transport: Json[]): Json => ({format: 'ets2telemetry-simulator-v1', schemaVersion: 1, id: 'pipe-test', purpose: 'Pipe test', reg: ['REG-011'], origin: 'synthetic',
   game: 'ets2', seed: 'pipe-test', provenance: null, source: SOURCE, steps, transport});
 /** The hello of the inline scenario's first client instance, as its script sends it. */
-const hello = (durableEvents = true) => encodeFrame({version: PROTOCOL_V1, kind: 'hello', data: {clientInstanceId: seededId('pipe-test', 'client-instance-1'), minMinor: 0, maxMinor: 0, durableEvents}});
+const hello = (durableEvents = true) => encodeFrame({version: PROTOCOL_V1, kind: 'hello', data: {clientInstanceId: seededId('pipe-test', 'client-instance-1'), minMinor: 0, maxMinor: V1_MAX_MINOR, durableEvents}});
 
 /** A raw test client: connects, sends `first`, decodes server frames and records how the connection ended. */
 function rawClient(endpoint: string, first?: Uint8Array) {
-  const socket = net.connect(endpoint), decoder = new FrameDecoder('server'), messages: ServerMessage[] = [];
+  const socket = net.connect(endpoint), decoder = new FrameDecoder('server', {maxMinor: V1_MAX_MINOR}), messages: ServerMessage[] = [];
   let bytes = 0;
   const closed = new Promise<{bytes: number; messages: ServerMessage[]}>((resolve, reject) => {
     socket.on('data', chunk => { bytes += chunk.length; decoder.push(chunk, m => messages.push(m as ServerMessage)); });
@@ -124,7 +128,7 @@ describe('simulator v1 over an actual Windows named pipe', () => {
       // The second client sends a valid hello, yet is closed without a byte; the first keeps receiving.
       const second = rawClient(server.endpoint, hello(false));
       expect(await second.closed).toEqual({bytes: 0, messages: []});
-      const {messages} = await first.closed, consumer = new V1Consumer(false);
+      const {messages} = await first.closed, consumer = new V1Consumer(false, {maxMinor: V1_MAX_MINOR});
       for (const m of messages) consumer.accept(m);
       expect(messages.map(m => m.kind === 'snapshot' && m.data.state.speed.available ? m.data.state.speed.value : m.kind)).toEqual(['welcome', 'checkpoint', 1, 2]);
       const report = await server.done;
@@ -153,7 +157,7 @@ describe('simulator v1 over an actual Windows named pipe', () => {
       const client = rawClient(server.endpoint, hello());
       await until(() => client.messages.length === 2);
       controller.abort();
-      const {messages} = await client.closed, consumer = new V1Consumer(true);
+      const {messages} = await client.closed, consumer = new V1Consumer(true, {maxMinor: V1_MAX_MINOR});
       for (const m of messages) consumer.accept(m);
       expect(messages.map(m => m.kind)).toEqual(['welcome', 'checkpoint', 'end']);
       expect(messages[2].data).toEqual({reason: 'plugin-shutdown', nextEventSeq: '1', ackedThroughEventSeq: '0', retainedUnacked: '0'});
@@ -187,7 +191,7 @@ describe('simulator v1 over an actual Windows named pipe', () => {
     const server = await serveV1(load('normal-delivery'), {scale: 0});
     try {
       // A hello from another client instance where the script has its own.
-      const client = rawClient(server.endpoint, encodeFrame({version: PROTOCOL_V1, kind: 'hello', data: {clientInstanceId: randomUUID(), minMinor: 0, maxMinor: 0, durableEvents: true}}));
+      const client = rawClient(server.endpoint, encodeFrame({version: PROTOCOL_V1, kind: 'hello', data: {clientInstanceId: randomUUID(), minMinor: 0, maxMinor: V1_MAX_MINOR, durableEvents: true}}));
       await expect(server.done).rejects.toThrow(/differ from its script/);
       await client.closed;
     } finally { await server.stop(); }
@@ -280,7 +284,7 @@ describe('simulator v1 pipe CLI', () => {
       await until(() => first.messages.some(m => m.kind === 'event'));
       // 1,500 ms after the event arrived, so at least 500 ms after the 1,000 ms bound would have ended the wait.
       await new Promise(r => setTimeout(r, 1500));
-      first.socket.write(encodeFrame({version: PROTOCOL_V1, kind: 'ack', data: {pluginSessionId: first.messages[0].source.pluginSessionId, throughEventSeq: '1'}}));
+      first.socket.write(encodeFrame({version: M1, kind: 'ack', data: {pluginSessionId: first.messages[0].source.pluginSessionId, throughEventSeq: '1'}}));
       expect((await first.closed).messages.map(m => m.kind)).toEqual(['welcome', 'checkpoint', 'event']);
       const second = await rawClient(endpoint, hello(true)).closed, checkpoint = second.messages.find(m => m.kind === 'checkpoint');
       expect(checkpoint?.kind === 'checkpoint' && checkpoint.data.status.delivery.ackedThroughEventSeq).toBe('1');
