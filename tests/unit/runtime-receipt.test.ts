@@ -5,7 +5,8 @@ import {temporaryResources} from '../shared/resources';
 import {receiptBatchTimeout, validateRuntimeReceipts} from '../shared/runtime-receipt-validator';
 
 // The index that appends a row to run A's lifecycle main events; ET-011b added three settings rows after the original four.
-const MAIN_EVENTS_APPEND = 8;
+// ET-050: run A's settings rows gained the gear display save, so the rows after them start one index later.
+const MAIN_EVENTS_APPEND = 9;
 // ET-015a recording receipts: run A has the terminated service (pid 4100) and its replacement (4200), run B one service
 // (4300). The index of run A's recording-flush step, and the index that appends a row to run A's service events.
 const RECORDING_FLUSH_A = 11;
@@ -46,7 +47,8 @@ function lifecycleReceipt(path: (string | number)[] = [], replacement?: Json): s
     mainEvents: [...orderlyMain(), {event: 'SECOND_INSTANCE', facts: {action: 'created'}}, {event: 'APP_EXIT_REQUESTED', facts: {reason: 'renderer'}},
       // ET-011b settings diagnostics of run A; MAIN_EVENTS_APPEND below is the index after them.
       {event: 'SETTINGS_FALLBACK', facts: {state: 'invalid-file'}}, {event: 'SETTINGS_QUARANTINED', facts: {state: 'invalid-file'}},
-      {event: 'SETTINGS_SAVED', facts: {game: 'ets2', profile: 'us-customary'}}, {event: 'SETTINGS_SAVED', facts: {overlayEnabled: false}}],
+      {event: 'SETTINGS_SAVED', facts: {game: 'ets2', profile: 'us-customary'}}, {event: 'SETTINGS_SAVED', facts: {game: 'ets2', gearDisplay: 'manual'}},
+      {event: 'SETTINGS_SAVED', facts: {overlayEnabled: false}}],
     serviceEvents: orderlyService(),
     lifecycle: {dashboardClosedServiceAlive: true, overlayAliveAfterClose: true, trayPresentAfterClose: true, overlayCurrentAfterClose: true,
       sourceConnectionPreserved: true, secondInstanceRestoredDashboard: true, trayOpenRestoredDashboard: true, explicitExitOrderly: true,
@@ -55,9 +57,9 @@ function lifecycleReceipt(path: (string | number)[] = [], replacement?: Json): s
       overlayChanged: reading('72', '71.0'), overlayRestored: reading('90', '73.0'),
       secondInstance: {pid: 4200, exitCode: 0, signal: null, exitMilliseconds: 164, wroteLog: false, primaryActions: ['created']},
       explicitExit: {launcherExit: 0, signal: null, exitMilliseconds: 179, requests: ['renderer']},
-      restart: {overlayEnabled: false, servicePid: 4300, settingsState: 'loaded', dashboardUnits: {speed: 'Speed: 56 mph', fuel: 'Fuel: 19.3 US gal', gauge: {number: '56', unit: 'mph', accessibleName: 'Speed: 56 mph; Engine RPM: 600 rpm', visible: true}}}, restartLauncherExit: 0,
+      restart: {overlayEnabled: false, gearDisplay: {ets2: 'manual', ats: 'automatic'}, servicePid: 4300, settingsState: 'loaded', dashboardUnits: {speed: 'Speed: 56 mph', fuel: 'Fuel: 19.3 US gal', gauge: {number: '56', unit: 'mph', accessibleName: 'Speed: 56 mph; Engine RPM: 600 rpm', visible: true}}}, restartLauncherExit: 0,
       settingsSeededInvalidFile: true, settingsStartupUnchanged: true, settingsQuarantinePreserved: true, settingsSavedExact: true, unitsApplied: true,
-      overlayVisibilitySaved: true, overlayVisibilityRestarted: true, syntheticOverlayHiddenAfterOff: true, settingsRestartLoaded: true, settingsQuarantined: 1, dashboardUnits: {speed: 'Speed: 56 mph', fuel: 'Fuel: 19.3 US gal', gauge: {number: '56', unit: 'mph', accessibleName: 'Speed: 56 mph; Engine RPM: 600 rpm', visible: true}},
+      overlayVisibilitySaved: true, overlayVisibilityRestarted: true, syntheticOverlayHiddenAfterOff: true, gearDisplaySaved: true, gearDisplayRestarted: true, settingsRestartLoaded: true, settingsQuarantined: 1, dashboardUnits: {speed: 'Speed: 56 mph', fuel: 'Fuel: 19.3 US gal', gauge: {number: '56', unit: 'mph', accessibleName: 'Speed: 56 mph; Engine RPM: 600 rpm', visible: true}},
       overlayUnits: {...reading('56', '19.3'), speedUnit: 'mph', fuelUnit: 'US gal'},
       restartMainEvents: [...orderlyMain(), {event: 'APP_EXIT_REQUESTED', facts: {reason: 'app-quit'}}, {event: 'SETTINGS_LOADED', facts: {state: 'loaded'}}],
       restartServiceEvents: orderlyService()}};
@@ -186,10 +188,26 @@ function lifecycleCases() {
     invalid('restart visibility missing', ['lifecycle', 'restart', 'overlayEnabled']),
     invalid('restart visibility enabled', ['lifecycle', 'restart', 'overlayEnabled'], true),
     invalid('restart visibility nonboolean', ['lifecycle', 'restart', 'overlayEnabled'], 'false'),
-    invalid('required visibility save missing', ['mainEvents', 7]),
+    // ET-050: the visibility save moved from index 7 to 8 behind the new gear display save at index 7.
+    invalid('required visibility save missing', ['mainEvents', 8]),
     invalid('visibility save cannot precede units', ['mainEvents', 6, 'facts'], {overlayEnabled: false}),
-    invalid('visibility save carries extra facts', ['mainEvents', 7, 'facts'], {overlayEnabled: false, extra: 'invented'}),
-    invalid('off-save did not save false', ['mainEvents', 7, 'facts', 'overlayEnabled'], true),
+    invalid('visibility save carries extra facts', ['mainEvents', 8, 'facts'], {overlayEnabled: false, extra: 'invented'}),
+    invalid('off-save did not save false', ['mainEvents', 8, 'facts', 'overlayEnabled'], true),
+    // ET-050 gear display evidence.
+    invalid('required gear display save missing', ['mainEvents', 7]),
+    invalid('gear display saved for another game', ['mainEvents', 7, 'facts', 'game'], 'ats'),
+    invalid('gear display saved automatic', ['mainEvents', 7, 'facts', 'gearDisplay'], 'automatic'),
+    invalid('gear display save carries extra facts', ['mainEvents', 7, 'facts'], {game: 'ets2', gearDisplay: 'manual', extra: 'invented'}),
+    invalid('gear display save cannot replace visibility', ['mainEvents', 8, 'facts'], {game: 'ets2', gearDisplay: 'manual'}),
+    ...['gearDisplaySaved', 'gearDisplayRestarted'].flatMap(flag => [
+      invalid(`missing gear ${flag}`, ['lifecycle', flag]),
+      invalid(`false gear ${flag}`, ['lifecycle', flag], false),
+      invalid(`nonboolean gear ${flag}`, ['lifecycle', flag], 'true')
+    ]),
+    invalid('restart gear display missing', ['lifecycle', 'restart', 'gearDisplay']),
+    invalid('restart gear display not restored', ['lifecycle', 'restart', 'gearDisplay', 'ets2'], 'automatic'),
+    invalid('restart gear display wrong for ATS', ['lifecycle', 'restart', 'gearDisplay', 'ats'], 'manual'),
+    invalid('restart gear display extra game', ['lifecycle', 'restart', 'gearDisplay', 'other'], 'manual'),
     // ET-011b settings evidence.
     invalid('settings seed flag missing', ['lifecycle', 'settingsSeededInvalidFile']),
     invalid('startup changed the settings file', ['lifecycle', 'settingsStartupUnchanged'], false),
@@ -213,7 +231,7 @@ function lifecycleCases() {
     invalid('restart settings not loaded', ['lifecycle', 'restart', 'settingsState'], 'defaults'),
     invalid('fallback row missing', ['mainEvents', 4], {event: 'SETTINGS_LOADED', facts: {state: 'defaults'}}),
     invalid('fallback for another state', ['mainEvents', 4, 'facts', 'state'], 'loaded-with-fallbacks'),
-    invalid('unexpected third save', ['mainEvents', MAIN_EVENTS_APPEND], {event: 'SETTINGS_SAVED', facts: {game: 'ats', profile: 'metric'}}),
+    invalid('unexpected fourth save', ['mainEvents', MAIN_EVENTS_APPEND], {event: 'SETTINGS_SAVED', facts: {game: 'ats', profile: 'metric'}}),
     invalid('restart loaded another state', ['lifecycle', 'restartMainEvents', 3, 'facts', 'state'], 'defaults'),
     invalid('restart wrote settings', ['lifecycle', 'restartMainEvents', 4], {event: 'SETTINGS_SAVED', facts: {game: 'ets2', profile: 'us-customary'}}),
     // Clean late read: one leading pending row per run is accepted; anything else about it is not.

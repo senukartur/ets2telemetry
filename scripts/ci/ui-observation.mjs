@@ -115,12 +115,13 @@ const STRIP_FRAMES = [{zoom: 0.7, width: 1280, height: 80}, {zoom: 0.35, width: 
 const CLUSTER_FRAMES = [{zoom: 0.35, width: 160, height: 100}, {zoom: 0.7, width: 308, height: 188}, {zoom: 2.1, width: 924, height: 561}];
 function stripSteps(speedUnit, rpmUnit) {
   return [{speed: '0', speedUnit, gear: 'N', rpm: '0', rpmUnit}, ...['9', '10', '99', '100', '-5', '—'].map(speed => ({speed})),
-    ...['1', '9', '10', '12', 'R1'].map(gear => ({gear})), ...['999', '1000', '2528', '9999', '—'].map(rpm => ({rpm}))];
+    // ET-050: the manual range-splitter forms share the gear's mode-independent reserve.
+    ...['1', '9', '10', '12', 'R1', '1L', '1H', '9H'].map(gear => ({gear})), ...['999', '1000', '2528', '9999', '—'].map(rpm => ({rpm}))];
 }
 function clusterSteps(parts, speedUnit, rpmUnit) {
   const base = {...(parts.includes('speed') ? {speedUnit} : {}), ...(parts.includes('rpm') ? {rpmUnit} : {})}, steps = [];
   if (parts.includes('rpm')) steps.push(...['999', '1000', '2528', '9999'].map(rpm => ({...base, rpm})));
-  if (parts.includes('gear')) steps.push(...['N', '12', 'R1'].map(gear => ({...base, gear})));
+  if (parts.includes('gear')) steps.push(...['N', '12', 'R1', '1L', '1H', '9H'].map(gear => ({...base, gear})));
   if (parts.includes('speed')) steps.push(...['100', '-5', '—'].map(speed => ({...base, speed})));
   if (parts.length === 3) steps.push({...base, speed: '100', gear: '12', rpm: '9999'});
   return steps;
@@ -212,6 +213,39 @@ async function observeStripNumbers({application, overlay, source, language, reco
   });
   await overlay.waitForFunction(numberTexts, {speed: '90', gear: 'R1', rpm: '600'}, {timeout: 5000});
   record.flags.stableNumbers = true;
+}
+/**
+ * ET-050: ETS2's manual gear display chosen by keyboard on Settings > Units, then real source gears on the overlay and the
+ * dashboard's Live instrument (3 is 2L, 16 is 8H, reverse R1 and neutral N), and automatic again (3 is 3). The source's
+ * gear and the automatic mode are restored afterwards.
+ */
+async function observeGearDisplay({dashboard, overlay, source, language, record}) {
+  record.gearDisplay ??= [];
+  const gearIs = async text => {
+    await overlay.waitForFunction(numberTexts, {gear: text}, {timeout: 5000});
+    await dashboard.waitForFunction(text => globalThis.document.querySelector('[data-testid="live.instrument.gear"] strong')?.textContent === text, text, {timeout: 5000});
+  };
+  const choose = async mode => {
+    await settingsPanel(dashboard, 'units');
+    await dashboard.locator(`#gear-display-ets2-${mode}`).focus(); await dashboard.keyboard.press('Space');
+    await until(() => dashboard.evaluate(() => globalThis.desktop.getAppState()), state => state.settings.gearDisplay.ets2 === mode && state.settings.saveError === null,
+      `UI_GEAR_DISPLAY_${mode.toUpperCase()}_SAVED`);
+    assert.equal(await dashboard.locator(`#gear-display-ets2-${mode}`).getAttribute('aria-checked'), 'true');
+  };
+  await withRestore(async () => {
+    await choose('manual');
+    for (const [gear, text] of [[3, '2L'], [16, '8H'], [-1, 'R1'], [0, 'N']]) {
+      source.setEngine(600, gear); await gearIs(text); record.gearDisplay.push({language, mode: 'manual', gear, text});
+    }
+    await choose('automatic');
+    source.setEngine(600, 3); await gearIs('3'); record.gearDisplay.push({language, mode: 'automatic', gear: 3, text: '3'});
+  }, async () => {
+    source.setEngine(600, -1);
+    if ((await dashboard.evaluate(() => globalThis.desktop.getAppState())).settings.gearDisplay.ets2 !== 'automatic')
+      await dashboard.evaluate(() => globalThis.desktop.setGearDisplay('ets2', 'automatic'));
+  });
+  await overlay.waitForFunction(numberTexts, {gear: 'R1'}, {timeout: 5000});
+  record.flags.gearDisplayManual = true;
 }
 /**
  * The Cluster at the zooms of 50%, 100% and 300% (0.35, 0.7, 2.1) with speed, gear and RPM, then at 100% with RPM alone
@@ -737,7 +771,16 @@ export async function runUiSmoke({application, dashboard, overlay, source, confi
           assert.match(await dashboard.getByTestId('overlay-opacity-saved').innerText(), /80%/);
           assert.equal(await opacity.evaluate(node => node === globalThis.document.activeElement), true, 'UI_OPACITY_FAILED_SAVE_FOCUS_LOST');
           record.flags.opacityFailedSave = true;
+          // ET-050: a refused gear display save keeps the committed mode selected and reports in its own card.
           await settingsPanel(dashboard, 'units');
+          const gearBefore = (await dashboard.evaluate(() => globalThis.desktop.getAppState())).settings.gearDisplay.ets2;
+          const gearWanted = gearBefore === 'automatic' ? 'manual' : 'automatic';
+          await dashboard.locator(`#gear-display-ets2-${gearWanted}`).focus(); await dashboard.keyboard.press('Space');
+          await dashboard.getByTestId('gear-display-error').waitFor({state: 'visible', timeout: 5000});
+          assert.equal((await dashboard.evaluate(() => globalThis.desktop.getAppState())).settings.gearDisplay.ets2, gearBefore);
+          assert.equal(await dashboard.locator(`#gear-display-ets2-${gearBefore}`).getAttribute('aria-checked'), 'true');
+          assert.equal(await dashboard.locator(`#gear-display-ets2-${gearWanted}`).getAttribute('aria-checked'), 'false');
+          record.flags.gearDisplayFailedSave = true;
         } finally {await rmdir(settingsFile); await rename(backup, settingsFile);}
         assert.deepEqual(await readFile(settingsFile), bytes);
         await dashboard.locator(`#units-ets2-${wanted}`).click();
@@ -745,6 +788,14 @@ export async function runUiSmoke({application, dashboard, overlay, source, confi
         await dashboard.locator(`#units-ets2-${before}`).click();
         await until(() => dashboard.evaluate(() => globalThis.desktop.getAppState()), state => state.settings.units.ets2 === before && state.settings.saveError === null, 'UI_PROFILE_RESTORED');
         record.flags.refusedSave = true;
+        // ET-050: committed manual, then automatic again, through the Units control; each shows checked only once saved.
+        for (const mode of ['manual', 'automatic']) {
+          await dashboard.locator(`#gear-display-ets2-${mode}`).click();
+          await until(() => dashboard.evaluate(() => globalThis.desktop.getAppState()), state => state.settings.gearDisplay.ets2 === mode && state.settings.saveError === null, `UI_GEAR_DISPLAY_${mode.toUpperCase()}_COMMITTED`);
+          await until(() => dashboard.locator(`#gear-display-ets2-${mode}`).getAttribute('aria-checked'), checked => checked === 'true', `UI_GEAR_DISPLAY_${mode.toUpperCase()}_CHECKED`);
+          assert.equal(await dashboard.getByTestId('gear-display-error').count(), 0);
+        }
+        record.flags.gearDisplay = true;
         await settingsPanel(dashboard, 'about'); await dashboard.getByTestId('uninstall-button').click(); await dashboard.getByTestId('uninstall-result').waitFor({state: 'visible'});
         assert.ok((await dashboard.getByTestId('uninstall-result').innerText()).includes(language === 'en' ? 'installed copy' : 'установленной копии'));
         Object.assign(record.flags, {allPanels: true, allSections: true, committedSave: true, sourceSelector: true, uninstallRefusal: true});
@@ -766,6 +817,7 @@ export async function runUiSmoke({application, dashboard, overlay, source, confi
           await save(layout, language, size, overlay);
           // ET-045d: stable strip numbers and the Cluster centre, at the first size; screenshots stay as before.
           if (layout === 'strip' && size === sizes[0]) await observeStripNumbers({application, overlay, source, language, record});
+          if (layout === 'strip' && size === sizes[0]) await observeGearDisplay({dashboard, overlay, source, language, record});
           if (layout === 'cluster' && size === sizes[0]) await observeClusterCentre({application, dashboard, overlay, language, record});
           // ET-045f: the Cluster speed arc in both profiles, at 0, in reverse, at full scale and under reduced motion.
           if (layout === 'cluster' && size === sizes[0]) await observeClusterSpeedArc({dashboard, overlay, source, language, record});
@@ -943,6 +995,8 @@ export async function runUiReadOnly({application, dashboard, config, record, set
     assert.equal(await dashboard.locator('#language-ru').isDisabled(), true);
     await settingsPanel(dashboard, 'units');
     for (const game of ['ets2', 'ats']) for (const profile of ['metric', 'us-customary']) assert.equal(await dashboard.locator(`#units-${game}-${profile}`).isDisabled(), true);
+    // ET-050: all four gear display radios are disabled while the settings are read-only.
+    for (const game of ['ets2', 'ats']) for (const mode of ['automatic', 'manual']) assert.equal(await dashboard.locator(`#gear-display-${game}-${mode}`).isDisabled(), true);
     await capture({page: dashboard, application, config, record, name: 'read-only', language: 'en', size});
     await settingsPanel(dashboard, 'overlay');
     const opacity = dashboard.getByRole('slider');
