@@ -28,7 +28,6 @@ import {StorageClient} from '../../packages/storage/src/client';
 import {parseJournalReply, refusal, type JournalQuery} from '../../apps/desktop/src/journal-contract';
 import {JournalExporter} from '../../apps/desktop/src/journal-export-writer';
 import {JournalService, type JournalHistory} from '../../apps/desktop/src/journal-service';
-import {GAME_HISTORY_RECORDING} from '../../apps/desktop/src/recording-policy';
 import {checkHistoryInvariants, formatViolations, type HistoryAck} from '../../scripts/ci/history-invariants.mjs';
 import {readFixtureFile} from '../../tools/telemetry-simulator/src/fixture-file';
 import {reactiveDifferences} from '../../tools/telemetry-simulator/src/v1/reactive';
@@ -133,9 +132,8 @@ const JOURNAL = JSON.parse(readFileSync(path.join(RECORDING_FIXTURES, 'replay-jo
 const currency = (name: string) => JOURNAL.currencies[name];
 const expandMoney = (value: Json): Json => JSON.parse(JSON.stringify(value), (key, v: unknown) => key === 'currency' && typeof v === 'string' ? currency(v) : v) as Json;
 
-/** No game history: the gate is off and the workspace (a temporary LOCALAPPDATA) holds no history database. */
+/** No game history: the case records to a synthetic target and the workspace (a temporary LOCALAPPDATA) holds no history database. */
 function expectNoGameHistory() {
-  expect(GAME_HISTORY_RECORDING).toBe(false);
   expect(existsSync(path.join(ws.directory, 'ETS2Telemetry', 'data', 'telemetry.sqlite'))).toBe(false);
 }
 /** Replaces seeded identifiers (plugin session, clocks, trip UUIDs) by their labels, as storedRows does. */

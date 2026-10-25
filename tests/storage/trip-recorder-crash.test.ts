@@ -13,7 +13,6 @@ import {once} from 'node:events';
 import {existsSync, readFileSync, writeFileSync} from 'node:fs';
 import path from 'node:path';
 import {afterEach, beforeEach, describe, expect, it} from 'vitest';
-import {GAME_HISTORY_RECORDING} from '../../apps/desktop/src/recording-policy';
 import {checkHistoryInvariants, formatViolations, type HistoryAck} from '../../scripts/ci/history-invariants.mjs';
 import {readFixtureFile} from '../../tools/telemetry-simulator/src/fixture-file';
 import {reactiveDifferences, serveV1Reactive, type ReactiveServeOptions} from '../../tools/telemetry-simulator/src/v1/reactive';
@@ -40,11 +39,10 @@ interface ChildConfig {barrier: Barrier; mode?: 'worker' | 'in-process'; maxConn
 /** The children's LOCALAPPDATA: a directory of the test's workspace, never the user's. */
 const localAppData = () => path.join(ws.directory, 'localappdata');
 /**
- * ET-019: game sources record no history yet (R3), and no process of the case created a history database under the
+ * ET-019: a synthetic recording target replaces history (R3), and no process of the case created a history database under the
  * children's LOCALAPPDATA; every case calls it before it starts processes and after they ended.
  */
 function expectNoGameHistory() {
-  expect(GAME_HISTORY_RECORDING).toBe(false);
   expect(existsSync(path.join(localAppData(), 'ETS2Telemetry', 'data', 'telemetry.sqlite'))).toBe(false);
 }
 /** One service process. `until` resolves at the first stdout line that matches; stderr must stay empty. */

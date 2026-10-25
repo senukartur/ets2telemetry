@@ -354,9 +354,17 @@ export function clusterSpeedArcProbe() {
   return {ok: true, layout, track, arc, rpmArc};
 }
 
-/** ET-015c PR-4: the recording texts of a service that records nothing (production, GAME_HISTORY_RECORDING false). */
-export const RECORDING_DISABLED_TEXT = Object.freeze({headline: 'Off: this version does not record game history', detail: null, losses: null, alert: null,
-  notice: 'Prototype live display. No trip recording or durable history.'});
+/** ET-015c PR-4, amended by the game recording enablement of October 25, 2026: the recording texts of a service over the history database whose selected source is not recorded (a synthetic source, or none yet). */
+export const RECORDING_NOT_RECORDED_TEXT = Object.freeze({headline: 'Not recording the selected source', detail: null, losses: null, alert: null,
+  notice: 'Prototype live display. Game history recording is new; check the recording status below.'});
+
+/**
+ * ET-019 PR-7, amended by the game recording enablement of October 25, 2026: the recording texts of a service over the
+ * history database whose open was refused with SCHEMA_NEWER.
+ */
+export const RECORDING_STOPPED_SCHEMA_NEWER_TEXT = Object.freeze({headline: 'Stopped: the database was written by a newer version. Restart Yukon Union Telemetry after fixing it',
+  detail: null, losses: null, alert: 'Recording stopped until the telemetry service starts again. Live telemetry and the overlay keep working.',
+  notice: 'Prototype live display. Game history recording is new; check the recording status below.'});
 
 // ET-015c PR-4: the dashboard's recording status (dashboard-renderer.tsx). Self-contained browser callback: the
 // headline and the alert as text, the detail and losses as their lines, and the prototype notice. An absent element

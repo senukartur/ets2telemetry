@@ -152,8 +152,10 @@ export async function runJournalEmpty({dashboard, record}) {
   record.liveHiddenInJournal = await dashboard.getByTestId('live-speed-number').isHidden() && await dashboard.getByTestId('overlay-settings').isHidden();
   assert.equal(record.liveHiddenInJournal, true, 'The Live panel is shown while the Journal tab is open');
   assert.deepEqual({error: empty.error, empty: empty.empty, emptyNote: empty.emptyNote, banner: empty.banner, next: empty.next, previous: empty.previous},
-    {error: null, empty: 'No trips recorded', emptyNote: 'Game history recording is off in this version, so no game trips are recorded yet.', banner: null, next: false, previous: false});
-  record.emptyHistoryShown = true; record.recordingOffNoteShown = true;
+    {error: null, empty: 'No trips recorded', emptyNote: null, banner: null, next: false, previous: false});
+  // Since the game recording enablement (October 25, 2026) the recording state is never `disabled`, so the empty Journal carries no
+  // "recording is off in this version" note.
+  record.emptyHistoryShown = true; record.recordingOffNoteAbsent = true;
   await clickTestId(dashboard, 'tab-live');
   await dashboard.getByTestId('live-speed-number').waitFor({state: 'visible', timeout: 5000});
   // The closed Journal tab is unmounted and holds no page.

@@ -10,10 +10,10 @@ const plan = (value: string | undefined, gameHistory = false) => {
 };
 
 describe('recording gate (R3)', () => {
-  it('tripwire: production does not record game history', () => {
-    // Changing this value is the enablement PR's decision alone (after the v0 retirement, real-game v1 evidence,
-    // ET-015b, ET-015c and the S-1/S-2 decision); this test must change with it, never on its own.
-    expect(GAME_HISTORY_RECORDING).toBe(false);
+  it('tripwire: production records game history since the owner authorization of October 25, 2026', () => {
+    // Changing this value is an owner decision (AGENTS.md, "Game history recording enablement"); this test must change
+    // with it, never on its own.
+    expect(GAME_HISTORY_RECORDING).toBe(true);
   });
 
   it('opens history with no durable selection when the variable is unset or empty', () => {

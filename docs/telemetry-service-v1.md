@@ -225,13 +225,13 @@ host scheduling stalls are not bounded by a hard wall-clock guarantee.
 
 ## Recording gate (ET-015a)
 
-PR-3 (R3, R10, R14) decides in [recording-policy.ts](../apps/desktop/src/recording-policy.ts) whether the service records, and where. Production records no real game history: `GAME_HISTORY_RECORDING` is `false` (a unit test is a tripwire on it), and only the separate enablement PR may change it, after the v0 retirement (D2), real-game v1 evidence, ET-015b, ET-015c and the S-1/S-2 decision in ET-016. Both are done: ET-016 PR-6 persists trip fuel used (S-1, [trips](trips.md#readings-accounting-t16-t17)) and ET-016 PR-7 opens late-attach trips (S-2, [trips](trips.md#late-attach-trips-j9)), so the enablement PR no longer waits for them.
+PR-3 (R3, R10, R14) decides in [recording-policy.ts](../apps/desktop/src/recording-policy.ts) whether the service records, and where. Since the owner's authorization of October 25, 2026 ([AGENTS.md](../AGENTS.md#game-history-recording-enablement--october-25-2026)) production records real game history: `GAME_HISTORY_RECORDING` is `true` (a unit test is a tripwire on it), so the `ets2` and `ats` selections request durable delivery. The enablement did not wait for the v0 retirement (D2): recording is protocol v1 only, and v0 stays the live path of the dashboard and overlay. The S-1/S-2 decision is done: ET-016 PR-6 persists trip fuel used (S-1, [trips](trips.md#readings-accounting-t16-t17)) and ET-016 PR-7 opens late-attach trips (S-2, [trips](trips.md#late-attach-trips-j9)), so the enablement did not wait for them.
 
 `recordingPlan(env, {gameHistory})` returns the database and the durable selections:
 
 | `ETS2TELEMETRY_RECORDING` | Database | Durable selections | Sink |
 | --- | --- | --- | --- |
-| Unset or empty | History, `%LOCALAPPDATA%\ETS2Telemetry\data\telemetry.sqlite` | None (`ets2` and `ats` only once `GAME_HISTORY_RECORDING` is true) | None: every hello is live-only, as before |
+| Unset or empty | History, `%LOCALAPPDATA%\ETS2Telemetry\data\telemetry.sqlite` | `ets2` and `ats` (`GAME_HISTORY_RECORDING` is true since October 25, 2026) | `TripRecorderSink`; a synthetic, replay or not yet chosen source stays live-only |
 | `synthetic:<name>` or `replay:<name>`, name `[a-z0-9-]{1,64}` | `%LOCALAPPDATA%\ETS2Telemetry\synthetic\<name>.sqlite` with that purpose, **instead of** history; backups in `synthetic\backups` | Only the matching selection (`synthetic` or `replay`) | `TripRecorderSink` |
 | Any other value | As unset; `RECORDING_TARGET_REJECTED` is logged once | As unset | As unset |
 
@@ -250,7 +250,7 @@ PR-3 (G2–G7, G9, G10, G12) makes the service report what its recording is doin
 
 | # | Condition | State | Code |
 | --- | --- | --- | --- |
-| 1 | No trip recorder: production while `GAME_HISTORY_RECORDING` is `false`, and any service without a recording target | `disabled` | — |
+| 1 | No trip recorder: a plan with no durable selection. Production no longer has this state since October 25, 2026, because the history plan makes `ets2` and `ats` durable | `disabled` | — |
 | 2 | The database is `idle` or `opening` | `opening` | null |
 | 3 | The database is unavailable (a refused open, a worker failure) or closed | `stopped` | The database's failure code, `STORAGE_CLOSED` without one |
 | 4 | Durable delivery failed with `ACK_AHEAD_OF_STORAGE` | `live-only`: this plugin session continues live-only; a new plugin session ends it | `ACK_AHEAD_OF_STORAGE` |

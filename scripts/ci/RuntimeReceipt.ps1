@@ -441,13 +441,13 @@ function Test-JournalReceipt {
     param([object]$Driver)
     $journal = $Driver.journal
     if ($null -eq $journal) { return $false }
-    foreach ($field in @('liveLinesInViewport','liveHiddenInJournal','emptyHistoryShown','recordingOffNoteShown','liveRestored','seeded','syntheticBannerShown',
+    foreach ($field in @('liveLinesInViewport','liveHiddenInJournal','emptyHistoryShown','recordingOffNoteAbsent','liveRestored','seeded','syntheticBannerShown',
         'pagesWalked','anchorRowsMatch','anchorDetailsMatch','backKeptPage','sampleGapShown','timelinePaged','intervalsPaged','samplesPaged','filtersApplied','shutdownClean')) {
         if ($journal.$field -isnot [bool] -or $journal.$field -ne $true) { return $false }
     }
     $empty = $journal.emptyHistory
     if ($null -eq $empty -or $empty.empty -cne 'No trips recorded' -or
-        $empty.emptyNote -cne 'Game history recording is off in this version, so no game trips are recorded yet.' -or
+        $null -ne $empty.emptyNote -or
         $null -ne $empty.banner -or $null -ne $empty.error -or @($empty.rows).Count -ne 0) { return $false }
     $seed = $journal.seed
     if ($null -eq $seed -or !(Test-ReceiptInteger -Value $seed.trips -Minimum 119 -Maximum 119) -or !(Test-ReceiptInteger -Value $seed.fillers -Minimum 110 -Maximum 110) -or
@@ -517,12 +517,13 @@ function Test-JournalReceipt {
 
 # ET-019 PR-7 newer-database refusal (scenario `refusal`): a copy of the immutable schema-newer-999 fixture at the isolated
 # history path is refused with SCHEMA_NEWER and keeps its bytes; the journal reads answer the refusal, the Journal tab shows
-# its J11 sentence, the recording stays disabled and main's health ready. The hash is the fixture's manifest entry.
+# its J11 sentence, the recording is stopped with SCHEMA_NEWER (since the game recording enablement of October 25, 2026
+# the history database has a trip recorder) and main's health ready. The hash is the fixture's manifest entry.
 function Test-RefusalReceipt {
     param([object]$Driver)
     $refusal = $Driver.refusal
     if ($null -eq $refusal) { return $false }
-    foreach ($field in @('fixtureUnchanged','placedAtHistoryPath','bridgeRefused','healthConsistent','recordingDisabledShown','journalRefusalShown',
+    foreach ($field in @('fixtureUnchanged','placedAtHistoryPath','bridgeRefused','healthConsistent','recordingStoppedShown','journalRefusalShown',
         'fileUnchanged','shutdownClean')) {
         if ($refusal.$field -isnot [bool] -or $refusal.$field -ne $true) { return $false }
     }
@@ -542,20 +543,39 @@ function Test-RefusalReceipt {
         if ($null -eq $answer -or $answer.ok -isnot [bool] -or $answer.ok -or $answer.code -cne 'DATABASE_UNAVAILABLE' -or $answer.storageCode -cne 'SCHEMA_NEWER') { return $false }
     }
     $health = $refusal.health
-    if ($null -eq $health -or $health.service -cne 'ready' -or $health.storage -cne 'verified' -or $health.recording.state -cne 'disabled' -or
-        @($health.recording.PSObject.Properties).Count -ne 1 -or $null -ne $health.lastError) { return $false }
+    if ($null -eq $health -or $health.service -cne 'ready' -or $health.storage -cne 'verified' -or $health.recording.state -cne 'stopped' -or
+        $health.recording.target -cne 'history' -or $health.recording.code -cne 'SCHEMA_NEWER' -or $null -ne $health.recording.trip -or
+        @($health.recording.PSObject.Properties).Count -ne 5 -or $null -ne $health.lastError) { return $false }
+    $losses = $health.recording.losses
+    if ($null -eq $losses -or @($losses.PSObject.Properties).Count -ne 6) { return $false }
+    foreach ($key in @('lostEvents','eventLoss','notConnected','sampleLoss','restoreLoss','droppedSamples')) {
+        if (!(Test-ReceiptInteger -Value $losses.$key -Minimum 0 -Maximum 0)) { return $false }
+    }
     $text = $refusal.recordingText
-    if ($null -eq $text -or $text.headline -cne 'Off: this version does not record game history' -or $null -ne $text.detail -or $null -ne $text.losses -or
-        $null -ne $text.alert -or $text.notice -cne 'Prototype live display. No trip recording or durable history.') { return $false }
+    if ($null -eq $text -or $text.headline -cne 'Stopped: the database was written by a newer version. Restart Yukon Union Telemetry after fixing it' -or
+        $null -ne $text.detail -or $null -ne $text.losses -or
+        $text.alert -cne 'Recording stopped until the telemetry service starts again. Live telemetry and the overlay keep working.' -or
+        $text.notice -cne 'Prototype live display. Game history recording is new; check the recording status below.') { return $false }
     $journal = $refusal.journal
     if ($null -eq $journal -or $journal.error -cne 'The database is unavailable: the database was written by a newer version.' -or
         $null -ne $journal.empty -or $null -ne $journal.emptyNote -or $null -ne $journal.banner -or !(Test-ReceiptInteger -Value $journal.rows -Minimum 0 -Maximum 0) -or
         $journal.next -isnot [bool] -or $journal.next -or $journal.previous -isnot [bool] -or $journal.previous) { return $false }
-    # The logs themselves, not the driver's summaries: main's one RECORDING_STATUS row and its app-quit exit request, and the
-    # service's one refusal row, one clean history-storage step and no open, close or target row; the run exited orderly.
+    # The logs themselves, not the driver's summaries: main's two RECORDING_STATUS rows (opening, then stopped) and its
+    # app-quit exit request, and the service's one refusal row, one clean history-storage step and no open, close or target
+    # row; the run exited orderly.
     $serviceEvents = @($Driver.serviceEvents); $mainEvents = @($Driver.mainEvents)
     $statusRows = @($mainEvents | Where-Object { $_.event -ceq 'RECORDING_STATUS' })
-    if ($statusRows.Count -ne 1 -or $statusRows[0].facts.state -cne 'disabled' -or @($statusRows[0].facts.PSObject.Properties).Count -ne 1) { return $false }
+    if ($statusRows.Count -ne 2 -or $statusRows[0].facts.state -cne 'opening' -or $null -ne $statusRows[0].facts.code -or
+        $statusRows[1].facts.state -cne 'stopped' -or $statusRows[1].facts.code -cne 'SCHEMA_NEWER') { return $false }
+    # Each row carries the state, target, code, the six committed loss counts (all zero) and the null trip facts.
+    foreach ($row in $statusRows) {
+        $facts = $row.facts
+        if ($null -eq $facts -or @($facts.PSObject.Properties).Count -ne 12 -or $facts.target -cne 'history' -or $null -ne $facts.tripPhase -or
+            $null -ne $facts.tripCompleteness -or $null -ne $facts.untrackedJob) { return $false }
+        foreach ($key in @('lostEvents','eventLoss','notConnected','sampleLoss','restoreLoss','droppedSamples')) {
+            if (!(Test-ReceiptInteger -Value $facts.$key -Minimum 0 -Maximum 0)) { return $false }
+        }
+    }
     $exitRequests = @($mainEvents | Where-Object { $_.event -ceq 'APP_EXIT_REQUESTED' })
     if ($exitRequests.Count -ne 1 -or $exitRequests[0].facts.reason -cne 'app-quit') { return $false }
     $unavailable = @($serviceEvents | Where-Object { $_.event -ceq 'HISTORY_STORAGE_UNAVAILABLE' })

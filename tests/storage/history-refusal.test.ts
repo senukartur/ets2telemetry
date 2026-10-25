@@ -121,7 +121,6 @@ const QUERIES: JournalQuery[] = [{kind: 'trips', query: {}}, {kind: 'trips', que
  * both directions cloned, and main forwards only a reply that its check accepts.
  */
 function service(env: Record<string, string>, controls: {now?: () => number; timeline?: string[]; wrapWorker?: (handle: StorageWorkerHandle, ordinal: number) => StorageWorkerHandle} = {}) {
-  expect(GAME_HISTORY_RECORDING).toBe(false);
   const logs: [string, unknown][] = [], states: V1SourceState[] = [], received: (RecordingHealth | 'rejected')[] = [], brokerLogs: [string, unknown][] = [];
   const workerList: ReturnType<typeof storageWorker>[] = [];
   let workers = 0, stopping = false, health: AppHealth = initialHealth();
@@ -256,13 +255,16 @@ async function controlledRecoverySource(timeline: string[]) {
 const ZERO = {lostEvents: 0, eventLoss: 0, notConnected: 0, sampleLoss: 0, restoreLoss: 0, droppedSamples: 0};
 /** A recording status of the synthetic target before any v1 observation, written by hand from G2 and G3. */
 const synthetic = (state: string, code: string | null = null) => ({state, target: 'synthetic', code, losses: ZERO, trip: null});
+/** The same for the history database, whose recorder game recording enablement (October 25, 2026) builds in production. */
+const history = (state: string, code: string | null = null) => ({state, target: 'history', code, losses: ZERO, trip: null});
 
 describe('ET-019 PR-6: refused history databases through the production service wiring (default plan)', () => {
   // docs/storage.md, open sequence step 2-3: a newer schema or a foreign header is refused from the 100-byte header
   // without opening SQLite; a file without this application's schema but with user tables, and a file that is no
   // database, are DATABASE_UNRECOGNIZED; a database stamped for another purpose is PURPOSE_MISMATCH. Each is a refused
   // open whose file is unchanged (error code table), and history mode creates no backup (backups are taken only before a
-  // migration). The default plan builds no trip recorder, so the status is `disabled` (G3 rule 1) whatever the database.
+  // migration). Since game recording was enabled the default plan builds the trip recorder over the history database, so
+  // the status is `opening` (G3 rule 2) and then `stopped` with the refusal's code (G3 rule 3), and nothing is recorded.
   const cases: [string, string, () => string][] = [
     ['a newer schema (user_version 999)', 'SCHEMA_NEWER', () => place('schema-newer-999.sqlite', historyFile())],
     ['a database of another application (application_id FORN)', 'DATABASE_UNRECOGNIZED', () => place('foreign-application.sqlite', historyFile())],
@@ -270,7 +272,7 @@ describe('ET-019 PR-6: refused history databases through the production service 
     ['a file that is no SQLite database', 'DATABASE_UNRECOGNIZED', () => placeText(historyFile())],
     ['a synthetic-purpose database at the history path', 'PURPOSE_MISMATCH', () => place('schema-v2-representative.sqlite', historyFile())]
   ];
-  it.each(cases)('refuses %s with %s: history unavailable, recording disabled, the journal unavailable, nothing written', async (_name, code, setup) => {
+  it.each(cases)('refuses %s with %s: history unavailable, recording stopped with the code, the journal unavailable, nothing written', async (_name, code, setup) => {
     setup();
     const before = tree(root());
     expect(Object.keys(before)).toEqual(['data', 'data/telemetry.sqlite']);
@@ -278,8 +280,8 @@ describe('ET-019 PR-6: refused history databases through the production service 
     await s.startRefused();
     expect(s.logs).toEqual([['HISTORY_STORAGE_UNAVAILABLE', {code}]]);
     await expectUnavailable(s, code);
-    expect(s.received).toEqual([{state: 'disabled'}]);
-    expect(s.health().recording).toEqual({state: 'disabled'});
+    expect(s.received).toEqual([history('opening'), history('stopped', code)]);
+    expect(s.health().recording).toEqual(history('stopped', code));
     // Byte-identical, no sidecar, no backup directory, no other file under the data root.
     expect(tree(root())).toEqual(before);
     await expectCleanStop(s);
@@ -297,7 +299,7 @@ describe('ET-019 PR-6: refused history databases through the production service 
     await s.startRefused();
     expect(s.logs).toEqual([['HISTORY_STORAGE_UNAVAILABLE', {code: 'DATABASE_LOCKED'}]]);
     await expectUnavailable(s, 'DATABASE_LOCKED');
-    expect(s.received).toEqual([{state: 'disabled'}]);
+    expect(s.received).toEqual([history('opening'), history('stopped', 'DATABASE_LOCKED')]);
     expect(tree(root())).toEqual(before);
 
     // Release the lock. HistoryStorage detects recovery on backoff and re-opens the database.

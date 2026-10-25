@@ -96,10 +96,9 @@ function attributions(list: unknown[]): unknown[] {
 }
 const rowsOf = (e: LossExpected) => ({trips: e.trips, attributions: attributions(e.attributions), intervals: e.intervals});
 
-/** No game history: the gate is off and the workspace (a temporary LOCALAPPDATA) holds no history database. */
+/** No game history: the case records to a synthetic target and the workspace (a temporary LOCALAPPDATA) holds no history database. */
 const historyFile = () => path.join(ws.directory, 'ETS2Telemetry', 'data', 'telemetry.sqlite');
 function expectNoGameHistory() {
-  expect(GAME_HISTORY_RECORDING).toBe(false);
   expect(existsSync(historyFile())).toBe(false);
 }
 /** I1-I5 over the rows of a closed database and every ACK written to a pipe. */

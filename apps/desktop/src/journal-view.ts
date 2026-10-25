@@ -167,7 +167,7 @@ function tripRow(trip: JournalTripListItem, options: JournalTextOptions): Journa
 
 /**
  * One page of the trip list. An empty first page without filters is `No trips recorded`; with the recording state
- * `disabled` (GAME_HISTORY_RECORDING false) it adds that game recording is off in this version. An empty later page
+ * `disabled` (no trip recorder, which production no longer has) it adds that game recording is off in this version. An empty later page
  * only says that no more trips follow.
  */
 function journalListText(page: JournalTripPage, options: JournalTextOptions & {filtered: boolean; recording?: RecordingHealth['state']}): JournalListText {
