@@ -2,6 +2,7 @@
 // negative zero is shown as positive zero. Labels and reason texts belong to the application (apps/desktop/src/strings.ts).
 import {bearingDegrees} from './derived';
 import type {GearDisplayMode} from './display-profile';
+import type {GearLabels} from './gear-labels';
 import type {MoneyValue} from './readings';
 import {
   convertConsumption, convertDistance, convertMass, convertSpeed, convertVolume, type ConsumptionUnit, type DistanceUnit, type MassUnit,
@@ -42,13 +43,18 @@ export function formatRpm(rpm: number): string {
   return `${fixed(rpm, 0)} rpm`;
 }
 /**
- * Displayed gear: N for neutral and R1..Rn reverse in both modes. Forward gears are 1..n in `automatic` mode and
- * range-splitter pairs in `manual` mode: gear g is `ceil(g / 2)` followed by L for odd g and H for even g, so 1 is 1L,
- * 2 is 1H and 16 is 8H. This is a uniform simplification; it does not know the actual gearbox layout. A forward
- * value that is not a safe integer is shown as its plain number.
+ * Displayed gear: N for neutral and R1..Rn reverse in both modes. Forward gears are 1..n in `automatic` mode. In
+ * `manual` mode a gear covered by `labels` (from deriveGearLabels, ET-050b B3) shows its gearbox-aware label; any
+ * other gear uses the ET-050 GD2 formula of range-splitter pairs: gear g is `ceil(g / 2)` followed by L for odd g and
+ * H for even g, so 1 is 1L, 2 is 1H and 16 is 8H. The formula is a uniform simplification that does not know the
+ * actual gearbox layout. A forward value that is not a safe integer is shown as its plain number.
  */
-export function formatGear(index: number, mode: GearDisplayMode = 'automatic'): string {
+export function formatGear(index: number, mode: GearDisplayMode = 'automatic', labels?: GearLabels): string {
   if (index === 0) return 'N';
+  if (mode === 'manual' && labels !== undefined) {
+    const label = index > 0 ? labels.forward.get(index) : labels.reverse.get(-index);
+    if (label !== undefined) return label;
+  }
   if (index < 0) return `R${-index}`;
   if (mode === 'manual' && Number.isSafeInteger(index)) return `${Math.ceil(index / 2)}${index % 2 === 1 ? 'L' : 'H'}`;
   return String(index);
