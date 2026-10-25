@@ -20,20 +20,28 @@ bool less(const Wide& a, const Wide& b) { return a.high != b.high ? a.high < b.h
 Wide subtract(const Wide& a, const Wide& b) { return {a.high - b.high - (a.low < b.low ? 1U : 0U), a.low - b.low}; }
 // floor(d / 2) fits in uint64 because d <= 2^65 - 2.
 std::uint64_t half(const Wide& d) { return (d.high << 63) | (d.low >> 1); }
+// A minor this contract implements; anything else is a caller error.
+unsigned minor_of(unsigned minor) { if (minor > highest_minor) fail("Unsupported protocol v1 minor"); return minor; }
 }
 
+Consumer::Consumer(bool durable_requested, unsigned max_minor) : durable_requested_(durable_requested), max_minor_(minor_of(max_minor)) {}
 Applied Consumer::accept(const Message& input) {
   try {
     if (phase_ == Phase::closed) fail("Consumer is closed");
-    const auto m = validate(input.wire, Sender::server); const auto seq = m.seq, capture = m.capture.monotonic_ns; const auto& s = *m.source;
+    // Before the welcome any offered minor validates; afterwards only the selected one, so a minor-0 connection rejects a
+    // minor-1 frame exactly as a minor-0 decoder does.
+    const auto m = validate(input.wire, Sender::server, selected_ ? *selected_ : max_minor_);
+    const auto seq = m.seq, capture = m.capture.monotonic_ns; const auto& s = *m.source;
     // Identity comparison does not depend on JSON member order.
     const auto identity = s.game + '|' + s.plugin_session_id + '|' + s.process_instance_id + '|' + std::to_string(s.process_id) + '|' + std::to_string(s.windows_session_id) + '|' + s.origin;
     if (phase_ == Phase::welcome) {
       if (m.kind != "welcome" || (m.welcome->durable_events && !durable_requested_)) fail("Welcome expected");
-      identity_ = identity; clock_ = m.capture.clock_id; durable_ = m.welcome->durable_events; plugin_session_id_ = s.plugin_session_id;
+      selected_ = m.minor; identity_ = identity; clock_ = m.capture.clock_id; durable_ = m.welcome->durable_events; plugin_session_id_ = s.plugin_session_id;
       event_types_ = std::set<std::string>(m.welcome->event_types.begin(), m.welcome->event_types.end());
       last_seq_ = seq; last_capture_ = capture; phase_ = Phase::checkpoint; return {};
     }
+    // The minor never changes within a connection (ET-050b B1); the state schema follows it.
+    if (m.minor != *selected_) fail("Protocol minor changed within the connection");
     if (identity != identity_ || m.capture.clock_id != clock_ || seq <= last_seq_ || capture < last_capture_) fail("Source identity, clock or order violation");
     if (m.kind == "welcome" || (phase_ == Phase::checkpoint ? m.kind != "checkpoint" && m.kind != "end" : m.kind == "checkpoint")) fail("Unexpected message for phase");
     Applied result{m.kind == "checkpoint", seq - last_seq_ - 1, std::nullopt};
@@ -93,9 +101,10 @@ DurableAckCursor::DurableAckCursor(std::string plugin_session_id, std::uint64_t 
   : plugin_session_id_(std::move(plugin_session_id)), through_(committed_through_event_seq), received_through_(committed_through_event_seq) {
   if (!uuid(plugin_session_id_)) fail("Invalid plugin session");
 }
-void DurableAckCursor::begin_connection(std::uint64_t acked) {
+void DurableAckCursor::begin_connection(std::uint64_t acked, unsigned minor) {
+  const auto selected = minor_of(minor);
   if (acked > through_) fail("Producer acknowledged beyond local commits");
-  connection_ = Connection{acked, acked};
+  connection_ = Connection{acked, acked, selected};
 }
 void DurableAckCursor::received(std::uint64_t first, std::uint64_t last) {
   if (first < 1 || last < 1) fail("Invalid uint64 value");
@@ -129,12 +138,13 @@ std::optional<Message> DurableAckCursor::ack() {
   if (through <= connection_->last_ack) return std::nullopt;
   connection_->last_ack = through;
   const Json wire{Json::Object{
-    {"version", Json{Json::Object{{"major", Json{1.0}}, {"minor", Json{0.0}}}}}, {"kind", Json{std::string("ack")}},
+    {"version", Json{Json::Object{{"major", Json{1.0}}, {"minor", Json{static_cast<double>(connection_->minor)}}}}}, {"kind", Json{std::string("ack")}},
     {"data", Json{Json::Object{{"pluginSessionId", Json{plugin_session_id_}}, {"throughEventSeq", Json{std::to_string(through)}}}}}}};
-  return validate(wire, Sender::client);
+  return validate(wire, Sender::client, connection_->minor);
 }
 
-AckValidator::AckValidator(std::string plugin_session_id, bool durable_events) : plugin_session_id_(std::move(plugin_session_id)), durable_events_(durable_events) {
+AckValidator::AckValidator(std::string plugin_session_id, bool durable_events, unsigned minor)
+  : plugin_session_id_(std::move(plugin_session_id)), durable_events_(durable_events), minor_(minor_of(minor)) {
   if (!uuid(plugin_session_id_)) fail("Invalid plugin session");
 }
 void AckValidator::checkpoint(std::uint64_t acked) {
@@ -149,7 +159,9 @@ void AckValidator::sent(std::uint64_t last_event_seq) {
 std::optional<std::uint64_t> AckValidator::accept(const Message& input) {
   try {
     if (closed_) fail("ACK validator is closed");
-    const auto m = validate(input.wire, Sender::client); if (m.kind != "ack") fail("ACK expected");
+    const auto m = validate(input.wire, Sender::client, minor_); if (m.kind != "ack") fail("ACK expected");
+    // Every client message after the hello carries the connection's minor (ET-050b B1).
+    if (m.minor != minor_) fail("ACK protocol minor differs from the connection");
     const auto through = m.ack->through_event_seq;
     if (!durable_events_) fail("ACK from a live-only client");
     if (!acked_) fail("ACK before checkpoint");
@@ -160,10 +172,19 @@ std::optional<std::uint64_t> AckValidator::accept(const Message& input) {
     acked_ = through; return through;
   } catch (...) { closed_ = true; throw; }
 }
+std::uint64_t AckValidator::probe(const Message& input) {
+  try {
+    if (closed_) fail("ACK validator is closed");
+    const auto m = validate(input.wire, Sender::client, minor_); if (m.kind != "clock.probe") fail("Clock probe expected");
+    if (m.minor != minor_) fail("Clock probe protocol minor differs from the connection");
+    if (!acked_) fail("Clock probe before checkpoint");
+    return m.clock_probe->probe_id;
+  } catch (...) { closed_ = true; throw; }
+}
 
 std::optional<ClockMapping> compute_clock_mapping(const Message& input, std::uint64_t probe_id, const std::string& client_clock_id,
-  std::uint64_t t0, std::uint64_t t3) {
-  const auto reply = validate(input.wire, Sender::server);
+  std::uint64_t t0, std::uint64_t t3, unsigned max_minor) {
+  const auto reply = validate(input.wire, Sender::server, max_minor);
   if (reply.kind != "clock.reply" || reply.clock_reply->probe_id != probe_id || !uuid(client_clock_id)) fail("Clock reply mismatch");
   const auto t1 = reply.clock_reply->received_monotonic_ns, t2 = reply.clock_reply->sent_monotonic_ns;
   if (t3 < t0) fail("Clock reply received before its probe was sent");

@@ -199,7 +199,8 @@ void Server::Connection::handle(const Message& m, std::uint64_t received_ns) {
     return;
   }
   if (m.kind == "clock.probe") {
-    const auto id = m.clock_probe->probe_id;
+    // The producer-side probe check: after the checkpoint and at the connection minor (ET-050b B1).
+    const auto id = validator.probe(m);
     // OD-5 S6: probe IDs strictly increase, and no probe may arrive while the reply to the previous one is unsent.
     if (id <= last_probe || probe) throw ProtocolError("v1-clock-probe");
     last_probe = id; probe = std::make_pair(id, received_ns); return;
