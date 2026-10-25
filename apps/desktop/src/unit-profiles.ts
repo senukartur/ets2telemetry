@@ -57,10 +57,6 @@ export function profileFor(units: UnitProfiles, game: UnitGame | undefined): Uni
 export function gearDisplayFor(modes: GearDisplayModes | undefined, game: UnitGame | undefined): GearDisplayMode {
   return game && modes ? modes[game] : 'automatic';
 }
-/** The gear display mode for a live update, chosen by the same displayed-game rule as its unit profile. */
-export function displayGearMode(live: LiveTelemetry | undefined, modes: GearDisplayModes | undefined): GearDisplayMode {
-  return gearDisplayFor(modes, live ? displayGame(live) : undefined);
-}
 /**
  * The profile for displaying a live update: the displayed game's persisted profile, or its ET-000 default before the
  * settings arrive (so an ATS dashboard shows mph and US gallons by default). Metric without an update or a game.
