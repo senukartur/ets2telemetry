@@ -163,9 +163,34 @@ bool window_state(const Json& w) {
   num(at(w, "width"), 0, 100000, true); num(at(w, "height"), 0, 100000, true); num(at(w, "dpi"), 1, 1000, true);
   boolean(at(w, "foreground")); boolean(at(w, "minimized")); choice(at(w, "displayMode"), {"windowed", "borderless", "exclusive", "unknown"}); return true;
 }
-std::uint64_t state(const Json& o) {
-  record(o, {"simulation", "speed", "fuel", "fuelCapacity", "engineRpm", "gear", "odometer", "averageConsumption", "estimatedRange",
-    "navigationDistance", "gameTime", "captureUtcUnixMs", "boundaryOrder", "worldPlacement", "configuration", "window"});
+unsigned gear_count(const Json& v) { return static_cast<unsigned>(num(v, 0, gearbox_limits.max_gears, true)); }
+Gearbox gearbox(const Json& g) {
+  record(g, {"forwardGears", "reverseGears", "hshifter"}); Gearbox r;
+  r.forward_gears = available<unsigned>(at(g, "forwardGears"), gear_count); r.reverse_gears = available<unsigned>(at(g, "reverseGears"), gear_count);
+  r.hshifter = available<HShifterLayout>(at(g, "hshifter"), [](const Json& value) {
+    record(value, {"selectorCount", "slots"}); HShifterLayout h;
+    h.selector_count = static_cast<unsigned>(num(at(value, "selectorCount"), 0, gearbox_limits.max_selector_count, true));
+    const auto slots = std::get_if<Json::Array>(&at(value, "slots").value); if (!slots || slots->size() > gearbox_limits.max_slots) fail();
+    const double max_gear = gearbox_limits.max_gears; std::set<unsigned> pairs;
+    for (const auto& slot : *slots) {
+      record(slot, {"gear", "handlePosition", "selectors"}); HShifterSlot s;
+      // Neutral slots are omitted, so a slot gear is never 0.
+      const auto gear = num(at(slot, "gear"), -max_gear, max_gear, true); if (gear == 0) fail(); s.gear = static_cast<int>(gear);
+      s.handle_position = static_cast<unsigned>(num(at(slot, "handlePosition"), 0, gearbox_limits.max_handle_position, true));
+      s.selectors = static_cast<unsigned>(num(at(slot, "selectors"), 0, (1U << h.selector_count) - 1, true));
+      // Each (handlePosition, selectors) pair selects exactly one slot.
+      if (!pairs.insert((s.handle_position << gearbox_limits.max_selector_count) | s.selectors).second) fail();
+      h.slots.push_back(s);
+    }
+    return h;
+  });
+  return r;
+}
+constexpr const char* state_keys[] = {"simulation", "speed", "fuel", "fuelCapacity", "engineRpm", "gear", "odometer", "averageConsumption", "estimatedRange",
+  "navigationDistance", "gameTime", "captureUtcUnixMs", "boundaryOrder", "worldPlacement", "configuration", "window"};
+// The minor-0 state, plus `gearbox` exactly when the envelope minor is 1; returns the boundary order.
+std::uint64_t state(const Json& o, unsigned minor, std::optional<Gearbox>& box) {
+  if (minor == 1) exact(o, state_keys, {"gearbox"}); else exact(o, state_keys, {});
   choice(at(o, "simulation"), {"running", "paused", "unavailable"});
   measure(at(o, "speed"), "m/s", -1000, 1000); measure(at(o, "fuel"), "L", 0, 1e6); measure(at(o, "fuelCapacity"), "L", 0, 1e6);
   measure(at(o, "engineRpm"), "rpm", 0, 100000); measure(at(o, "gear"), "index", -100, 100, true); measure(at(o, "odometer"), "m", 0, 1e12);
@@ -187,6 +212,7 @@ std::uint64_t state(const Json& o) {
   for (std::size_t index = 0; index < trailers->size(); ++index)
     available<bool>((*trailers)[index], [index](const Json& v) { exact(v, trailer_keys, {}); if (trailer(v) != static_cast<double>(index)) fail(); return true; });
   available<bool>(at(o, "window"), window_state);
+  if (minor == 1) box = gearbox(at(o, "gearbox"));
   return boundary_order;
 }
 SourceStatus status(const Json& o, std::uint64_t capture_ns) {
@@ -253,9 +279,11 @@ std::string event_record(const Json& o, const Occurrence& occurred) {
   } else if (type == "source.gameMode") game_mode(o);
   return type;
 }
-WelcomeView welcome(const Json& d) {
+WelcomeView welcome(const Json& d, unsigned envelope_minor) {
   record(d, {"minor", "durableEvents", "limits", "capabilities", "versions", "gameMode"}); WelcomeView w;
-  const auto minor = std::get_if<double>(&at(d, "minor").value); if (!minor || *minor != 0) fail(); w.durable_events = boolean(at(d, "durableEvents"));
+  // The welcome is the first message at the selected minor, so its envelope minor equals the minor it announces.
+  const auto minor = std::get_if<double>(&at(d, "minor").value); if (!minor || *minor != envelope_minor) fail(); w.minor = envelope_minor;
+  w.durable_events = boolean(at(d, "durableEvents"));
   const std::pair<const char*, double> expected[] = {{"serverFrameBytes", static_cast<double>(limits.server_frame_bytes)}, {"clientFrameBytes", static_cast<double>(limits.client_frame_bytes)},
     {"eventBytes", static_cast<double>(limits.event_bytes)}, {"retainedEntries", static_cast<double>(limits.retained_entries)}, {"retainedBytes", static_cast<double>(limits.retained_bytes)},
     {"disconnectRetentionMs", limits.disconnect_retention_ms}, {"helloTimeoutMs", limits.hello_timeout_ms}, {"writeDeadlineMs", limits.write_deadline_ms},
@@ -283,24 +311,27 @@ SourceIdentity source(const Json& s) {
   r.process_id = static_cast<std::uint32_t>(num(at(s, "processId"), 1, u32_max, true)); r.windows_session_id = static_cast<std::uint32_t>(num(at(s, "windowsSessionId"), 0, u32_max, true));
   r.origin = choice(at(s, "origin"), {"game", "synthetic", "replay"}); return r;
 }
-void version(const Json& v) {
+// The caller's highest accepted minor; a value this contract does not implement is a caller error.
+unsigned max_minor_of(unsigned max) { if (max > highest_minor) fail("Unsupported maximum protocol v1 minor"); return max; }
+unsigned version(const Json& v, unsigned max) {
   record(v, {"major", "minor"}); const auto major = std::get_if<double>(&at(v, "major").value), minor = std::get_if<double>(&at(v, "minor").value);
-  if (!major || !minor || *major != protocol_major || *minor != protocol_minor) fail("Unsupported protocol version");
+  if (!major || !minor || *major != protocol_major || !(*minor == 0 || (*minor == 1 && max == 1))) fail("Unsupported protocol version");
+  return static_cast<unsigned>(*minor);
 }
 constexpr const char* client_kinds[] = {"hello", "ack", "clock.probe"};
-Message server_message(const Json& o) {
-  record(o, {"version", "kind", "source", "seq", "capture", "data"}); version(at(o, "version")); Message m; m.sender = Sender::server;
+Message server_message(const Json& o, unsigned max) {
+  record(o, {"version", "kind", "source", "seq", "capture", "data"}); Message m; m.minor = version(at(o, "version"), max); m.sender = Sender::server;
   m.source = source(at(o, "source")); m.seq = u64(at(o, "seq")); const auto& cap = at(o, "capture"); record(cap, {"clockId", "monotonicNs"});
   m.capture.clock_id = uuid(at(cap, "clockId")); m.capture.monotonic_ns = u64(at(cap, "monotonicNs")); const auto capture_ns = m.capture.monotonic_ns;
   m.kind = choice(at(o, "kind"), {"welcome", "checkpoint", "snapshot", "event", "gap", "clock.reply", "end"}); const auto& d = at(o, "data");
-  if (m.kind == "welcome") m.welcome = welcome(d);
+  if (m.kind == "welcome") m.welcome = welcome(d, m.minor);
   else if (m.kind == "checkpoint" || m.kind == "snapshot") {
     StateView v;
     if (m.kind == "checkpoint") {
       record(d, {"boundarySeq", "state", "status", "continuity"});
       const auto boundary = std::get_if<std::string>(&at(d, "boundarySeq").value); if (!boundary || *boundary != str(at(o, "seq"))) fail(); v.boundary_seq = m.seq;
     } else record(d, {"state", "status", "continuity"});
-    v.boundary_order = state(at(d, "state")); v.status = status(at(d, "status"), capture_ns);
+    v.boundary_order = state(at(d, "state"), m.minor, v.gearbox); v.status = status(at(d, "status"), capture_ns);
     const auto& c = at(d, "continuity"); record(c, {"coalescedSnapshots", "offlineTransitions"});
     v.continuity = {u64(at(c, "coalescedSnapshots")), u64(at(c, "offlineTransitions"))}; m.state = std::move(v);
   } else if (m.kind == "event") {
@@ -330,10 +361,12 @@ Message server_message(const Json& o) {
   }
   return m;
 }
-Message client_message(const Json& o) {
-  record(o, {"version", "kind", "data"}); version(at(o, "version")); Message m; m.sender = Sender::client;
+Message client_message(const Json& o, unsigned max) {
+  record(o, {"version", "kind", "data"}); Message m; m.minor = version(at(o, "version"), max); m.sender = Sender::client;
   m.kind = choice(at(o, "kind"), client_kinds); const auto& d = at(o, "data");
   if (m.kind == "hello") {
+    // A hello is always version 1.0; `ack` and `clock.probe` carry the connection's selected minor.
+    if (m.minor != 0) fail("Unsupported protocol version");
     record(d, {"clientInstanceId", "minMinor", "maxMinor", "durableEvents"}); HelloView h; h.client_instance_id = uuid(at(d, "clientInstanceId"));
     const auto min_minor = std::get_if<double>(&at(d, "minMinor").value); if (!min_minor || *min_minor != 0) fail();
     h.max_minor = static_cast<std::uint16_t>(num(at(d, "maxMinor"), 0, 65535, true)); h.durable_events = boolean(at(d, "durableEvents")); m.hello = std::move(h);
@@ -346,35 +379,38 @@ std::size_t max_payload(Sender sender) { return sender == Sender::server ? limit
 // Converts any v0 JSON-layer error inside a public entry point into a v1 error.
 template<class F> auto guarded(F f) -> decltype(f()) { try { return f(); } catch (const v0::ProtocolError&) { fail(); } }
 // The views of a valid message, without `wire`.
-Message views(const Json& j, Sender sender) { return guarded([&] { return sender == Sender::server ? server_message(j) : client_message(j); }); }
+Message views(const Json& j, Sender sender, unsigned max) {
+  max_minor_of(max); return guarded([&] { return sender == Sender::server ? server_message(j, max) : client_message(j, max); });
+}
 }
 
-Message validate(const Json& j, Sender sender) { auto m = views(j, sender); m.wire = j; return m; }
-Message decode_payload(const std::string& bytes, Sender sender) {
+Message validate(const Json& j, Sender sender, unsigned max_minor) { auto m = views(j, sender, max_minor); m.wire = j; return m; }
+Message decode_payload(const std::string& bytes, Sender sender, unsigned max_minor) {
+  max_minor_of(max_minor);
   if (bytes.empty() || bytes.size() > max_payload(sender)) fail("Protocol v1 payload size rejected");
   // The strict parser rejects invalid UTF-8, a BOM, duplicate keys, malformed numbers, lone surrogates, trailing data and depth above 16.
   Json parsed; try { parsed = v0::detail::Parser(bytes).parse(); } catch (const v0::ProtocolError&) { fail("Malformed protocol v1 JSON"); }
-  auto m = views(parsed, sender);
+  auto m = views(parsed, sender, max_minor);
   if (m.kind == "event" && bytes.size() > limits.event_bytes) fail("Protocol v1 event size rejected");
   m.wire = std::move(parsed); return m;
 }
-std::vector<std::uint8_t> encode_frame(const Message& m) {
+std::vector<std::uint8_t> encode_frame(const Message& m, unsigned max_minor) {
   auto sender = Sender::server;
   if (const auto o = std::get_if<Json::Object>(&m.wire.value)) {
     const auto kind = o->find("kind"); const auto s = kind == o->end() ? nullptr : std::get_if<std::string>(&kind->second.value);
     if (s && std::any_of(std::begin(client_kinds), std::end(client_kinds), [&](const char* k) { return *s == k; })) sender = Sender::client;
   }
   // Validate first so an invalid caller-owned tree is never copied or serialized; then validate the serialized bytes.
-  views(m.wire, sender); std::string bytes;
+  views(m.wire, sender, max_minor); std::string bytes;
   try { bytes = v0::detail::serialize(m.wire); } catch (const v0::ProtocolError&) { fail("Protocol v1 payload size rejected"); }
-  decode_payload(bytes, sender);
+  decode_payload(bytes, sender, max_minor);
   const auto length = static_cast<std::uint32_t>(bytes.size()); std::vector<std::uint8_t> result(4 + bytes.size());
   for (unsigned i = 0; i < 4; ++i) result[i] = static_cast<std::uint8_t>((length >> (8 * i)) & 255);
   std::copy(bytes.begin(), bytes.end(), result.begin() + 4); return result;
 }
-Negotiated negotiate(const Message& input, bool allow_durable) {
-  const auto hello = validate(input.wire, Sender::client); if (hello.kind != "hello") fail();
-  return {protocol_major, protocol_minor, hello.hello->durable_events && allow_durable};
+Negotiated negotiate(const Message& input, bool allow_durable, unsigned max_minor) {
+  const auto own = max_minor_of(max_minor); const auto hello = validate(input.wire, Sender::client); if (hello.kind != "hello") fail();
+  return {protocol_major, hello.hello->max_minor < own ? 0U : own, hello.hello->durable_events && allow_durable};
 }
 Available<std::uint64_t> read_uint64(const Json& j) { return guarded([&] { return available<std::uint64_t>(j, [](const Json& v) { return u64(v); }); }); }
 Measure read_measure(const Json& j, const char* unit) { return guarded([&] { return measure(j, unit, -max_double, max_double); }); }
@@ -383,6 +419,9 @@ Available<std::string> read_text(const Json& j, TextKind kind) {
 }
 Available<Money> read_money(const Json& j, SdkType type) { return guarded([&] { return money(j, type); }); }
 GameMode read_game_mode(const Json& j) { return guarded([&] { exact(j, game_mode_keys, {}); return game_mode(j); }); }
+Gearbox read_gearbox(const Json& j) { return guarded([&] { return gearbox(j); }); }
+
+FrameDecoder::FrameDecoder(Sender peer, unsigned max_minor) : peer_(peer), max_minor_(max_minor_of(max_minor)) {}
 
 void FrameDecoder::push(const std::uint8_t* data, std::size_t size, const std::function<void(Message)>& emit) {
   if (failed_) fail("Decoder is closed");
@@ -400,7 +439,7 @@ void FrameDecoder::push(const std::uint8_t* data, std::size_t size, const std::f
       }
       const auto n = std::min(expected_ - payload_.size(), size - offset); payload_.append(reinterpret_cast<const char*>(data + offset), n); offset += n;
       if (payload_.size() == expected_) {
-        auto m = decode_payload(payload_, peer_); payload_.clear(); expected_ = 0; header_used_ = 0; emit(std::move(m));
+        auto m = decode_payload(payload_, peer_, max_minor_); payload_.clear(); expected_ = 0; header_used_ = 0; emit(std::move(m));
         if (failed_) break;
       }
     }

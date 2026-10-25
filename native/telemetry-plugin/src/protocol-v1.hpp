@@ -9,12 +9,21 @@
 #include <variant>
 #include <vector>
 
-// Durable telemetry protocol 1.0 (ET-002b): the C++17 counterpart of packages/contracts/src/protocol-v1.ts. It is a
-// separate major from the frozen v0 live protocol and from CAP0, and reuses only the bounded strict JSON layer
-// (v0::Json, the parser and the serializer). The wire format is specified in docs/protocol/v1.md.
+// Durable telemetry protocol 1.0 and 1.1 (ET-002b; minor 1, the gearbox state, is ET-050b): the C++17 counterpart of
+// packages/contracts/src/protocol-v1.ts. It is a separate major from the frozen v0 live protocol and from CAP0, and
+// reuses only the bounded strict JSON layer (v0::Json, the parser and the serializer). The wire format is specified in
+// docs/protocol/v1.md.
 namespace ets2telemetry::v1 {
 using Json = v0::Json;
+// Version 1.0: every hello, and every message of a connection that selected minor 0.
 constexpr unsigned protocol_major = 1, protocol_minor = 0;
+// The highest minor this contract implements. Minor 1 adds `state.gearbox` to checkpoints and snapshots (§7). Every
+// stateless entry point below takes a `max_minor` that defaults to 0, so a caller accepts or writes a minor-1 message
+// only when it opts in; a maximum other than 0 or 1 is a caller error and throws ProtocolError.
+constexpr unsigned highest_minor = 1;
+// Gearbox bounds of minor 1 (ET-050b B2). A producer marks a reading outside them `invalid`, never truncated.
+struct GearboxLimits { unsigned max_gears, max_selector_count, max_slots, max_handle_position; };
+constexpr GearboxLimits gearbox_limits{100, 6, 64, 255};
 struct Limits {
   std::size_t server_frame_bytes, client_frame_bytes, event_bytes, retained_entries, retained_bytes;
   std::uint32_t disconnect_retention_ms, hello_timeout_ms, write_deadline_ms, snapshot_interval_ms, trailer_slots;
@@ -61,9 +70,17 @@ struct DeliveryStatus {
 struct SourceStatus { GameMode game_mode; DeliveryStatus delivery; LossCounts event_loss; };
 struct Continuity { std::uint64_t coalesced_snapshots = 0, offline_transitions = 0; };
 struct GameTimeStamp { Available<std::uint64_t> minutes; std::string clock_id; };
+// One H-shifter slot with a nonzero gear: reverse negative. `selectors` is a bit set below 2^selector_count.
+struct HShifterSlot { int gear = 0; unsigned handle_position = 0, selectors = 0; };
+// The latest SDK `hshifter` configuration: every slot whose gear is not neutral, in SDK slot order.
+struct HShifterLayout { unsigned selector_count = 0; std::vector<HShifterSlot> slots; };
+// Minor 1 only (ET-050b B1, B2): the truck's gear counts and the H-shifter layout.
+struct Gearbox { Available<unsigned> forward_gears, reverse_gears; Available<HShifterLayout> hshifter; };
 // Read views per kind. State, configuration and record bodies stay in `wire` and are read through read_* below.
-struct WelcomeView { bool durable_events = false, gameplay_events_registered = false; std::vector<std::string> event_types; GameMode game_mode; };
-struct StateView { std::optional<std::uint64_t> boundary_seq; std::uint64_t boundary_order = 0; SourceStatus status; Continuity continuity; };
+// `minor` is the selected minor the welcome announces; it equals the welcome's envelope minor.
+struct WelcomeView { unsigned minor = 0; bool durable_events = false, gameplay_events_registered = false; std::vector<std::string> event_types; GameMode game_mode; };
+// `gearbox` is set exactly for a minor-1 state.
+struct StateView { std::optional<std::uint64_t> boundary_seq; std::uint64_t boundary_order = 0; SourceStatus status; Continuity continuity; std::optional<Gearbox> gearbox; };
 struct Occurrence {
   Available<std::uint64_t> monotonic_ns; GameTimeStamp game_time; Available<std::uint64_t> utc_unix_ms;
   std::string simulation; std::uint64_t configuration_revision = 0, boundary_order = 0;
@@ -79,7 +96,8 @@ struct HelloView { std::string client_instance_id; std::uint16_t max_minor = 0; 
 struct AckView { std::string plugin_session_id; std::uint64_t through_event_seq = 0; };
 struct ClockProbeView { std::uint64_t probe_id = 0; };
 struct Message {
-  Sender sender = Sender::server; std::string kind;
+  // `minor` is the envelope minor, which selects the state schema.
+  Sender sender = Sender::server; std::string kind; unsigned minor = 0;
   // Server envelopes only.
   std::optional<SourceIdentity> source; std::uint64_t seq = 0; CaptureTime capture;
   // Exactly the view of `kind` is set.
@@ -92,15 +110,19 @@ struct Message {
 };
 
 // Strict validation of one message from `sender`: exact keys, bounds, units and exact integer strings, in the order of
-// validateServerMessage/validateClientMessage.
-Message validate(const Json&, Sender);
+// validateServerMessage/validateClientMessage. The envelope minor selects the state schema; minors above `max_minor`
+// (default 0) are rejected, and a hello is always version 1.0.
+Message validate(const Json&, Sender, unsigned max_minor = 0);
 // Size, UTF-8, strict JSON, schema, then the event size bound.
-Message decode_payload(const std::string& bytes, Sender);
-// Validates first (the sender follows from `wire.kind`), serializes, re-decodes and adds the length prefix.
-std::vector<std::uint8_t> encode_frame(const Message&);
+Message decode_payload(const std::string& bytes, Sender, unsigned max_minor = 0);
+// Validates first (the sender follows from `wire.kind`), serializes, re-decodes and adds the length prefix. Minors
+// above `max_minor` (default 0) are refused.
+std::vector<std::uint8_t> encode_frame(const Message&, unsigned max_minor = 0);
 struct Negotiated { unsigned major = protocol_major, minor = protocol_minor; bool durable_events = false; };
-// Server-side hello negotiation. Only minor 0 exists; durable delivery never exceeds the client's request.
-Negotiated negotiate(const Message& hello, bool allow_durable = true);
+// Server-side hello negotiation. The server selects min(hello `maxMinor`, its own `max_minor`), which defaults to 0;
+// the welcome and every later message in both directions then carry that minor. Durable delivery never exceeds the
+// client's request.
+Negotiated negotiate(const Message& hello, bool allow_durable = true, unsigned max_minor = 0);
 
 // Readers for validated wire nodes inside state, configuration and records.
 Available<std::uint64_t> read_uint64(const Json&);
@@ -108,16 +130,19 @@ Measure read_measure(const Json&, const char* unit);
 Available<std::string> read_text(const Json&, TextKind);
 Available<Money> read_money(const Json&, SdkType);
 GameMode read_game_mode(const Json&);
+// A validated minor-1 `state.gearbox` node.
+Gearbox read_gearbox(const Json&);
 
 // Length-prefixed v1 framing for one direction. Fails closed; never rescans for a later prefix after an error.
 class FrameDecoder {
  public:
-  // `peer` is the sender whose frames this decoder reads: server on the client, client on the server.
-  explicit FrameDecoder(Sender peer) : peer_(peer) {}
+  // `peer` is the sender whose frames this decoder reads: server on the client, client on the server. Frames above
+  // `max_minor` (default 0) are rejected.
+  explicit FrameDecoder(Sender peer, unsigned max_minor = 0);
   void push(const std::uint8_t* data, std::size_t size, const std::function<void(Message)>& emit);
   void end();
  private:
-  Sender peer_; std::uint8_t header_[4]{}; std::size_t header_used_ = 0, expected_ = 0;
+  Sender peer_; unsigned max_minor_; std::uint8_t header_[4]{}; std::size_t header_used_ = 0, expected_ = 0;
   std::string payload_; bool failed_ = false, pushing_ = false;
 };
 
