@@ -82,6 +82,20 @@ describe('labels for gear, engine and level', () => {
     expect(formatGear(2.5, 'automatic')).toBe('2.5');
     expect(formatGear(Number.MAX_SAFE_INTEGER + 1, 'manual')).toBe(String(Number.MAX_SAFE_INTEGER + 1));
   });
+  // ET-050b B3: manual mode uses derived labels for the gears they cover and the GD2 formula for any other gear.
+  it('uses gearbox labels only in manual mode and only for covered gears', () => {
+    const labels = {forward: new Map([[1, 'LL'], [2, 'LH'], [3, '1L']]), reverse: new Map([[1, 'R1'], [2, 'RX']])};
+    expect(formatGear(1, 'manual', labels)).toBe('LL');
+    expect(formatGear(2, 'manual', labels)).toBe('LH');
+    expect(formatGear(3, 'manual', labels)).toBe('1L');
+    expect(formatGear(4, 'manual', labels)).toBe('2H');
+    expect(formatGear(-2, 'manual', labels)).toBe('RX');
+    expect(formatGear(-3, 'manual', labels)).toBe('R3');
+    expect(formatGear(0, 'manual', labels)).toBe('N');
+    expect(formatGear(1, 'automatic', labels)).toBe('1');
+    expect(formatGear(-2, 'automatic', labels)).toBe('R2');
+    expect(formatGear(1, 'manual', undefined)).toBe('1L');
+  });
   it('accepts only the exact gear display mode strings', () => {
     expect(GEAR_DISPLAY_MODES).toEqual(['automatic', 'manual']);
     for (const mode of GEAR_DISPLAY_MODES) expect(isGearDisplayMode(mode)).toBe(true);
