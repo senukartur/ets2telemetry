@@ -626,6 +626,7 @@ void corpus_minor1(const Fixtures& f1, const Fixtures& f0, std::size_t& worst_ch
   // D17 for the minor-1 worst case under the C++ encoder: the frozen worst case plus the largest gearbox.
   check(f1.bytes("checkpoint-worst").size() == 55394, "minor-1 worst checkpoint fixture size");
   check(worst_checkpoint > 0 && worst_checkpoint <= limits.server_frame_bytes, "minor-1 worst checkpoint fits under the C++ encoder");
+  check(worst_checkpoint == 55394, "minor-1 worst checkpoint encodes to 55,394 bytes under the C++ encoder");
   const auto worst = f1.server("checkpoint-worst"); const auto box = gearbox_of(worst);
   check(!box.forward_gears.value && box.forward_gears.reason == Reason::not_supported && !box.reverse_gears.value && box.reverse_gears.reason == Reason::not_supported, "worst-case counts");
   check(box.hshifter.value && box.hshifter.value->selector_count == 6 && box.hshifter.value->slots.size() == 64, "worst-case layout");
