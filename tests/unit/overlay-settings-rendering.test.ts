@@ -26,7 +26,7 @@ it.each(['en', 'ru'] as const)('renders every overlay control together with uniq
   const html = render(settings(language)), strings = getStrings(language);
   expect(html).not.toMatch(/<[^>]*\shidden(?:="[^"]*")?[\s>]/);
   expect(html).not.toContain('data-testid="overlay-requirement-');
-  for (const id of ['overlay-settings', 'overlay-enabled', 'overlay-layout', 'overlay-placement', 'overlay-presets',
+  for (const id of ['overlay-settings', 'overlay-enabled', 'overlay-layout', 'overlay-opacity-value', 'overlay-placement', 'overlay-presets',
     ...['everything', 'job-focus', 'driving-only'].map(id => `overlay-preset-${id}`), ...OVERLAY_SECTION_IDS.map(id => `overlay-switch-${id}`)])
     expect(html.match(new RegExp('data-testid="' + id + '"', 'g')), id).toHaveLength(1);
   const ids = [...html.matchAll(/\sid="([^"]+)"/g)].map(match => match[1]);

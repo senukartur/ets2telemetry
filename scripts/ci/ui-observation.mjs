@@ -13,6 +13,7 @@ import {pluginActionResult} from './plugin-fixture.mjs';
 // ET-049: genuine keyboard and held-pointer gestures; the overlay still uses committed settings.
 async function observeOpacityControl({dashboard, config, language, record}) {
   const slider = dashboard.getByRole('slider', {name: language === 'en' ? 'Background opacity' : 'Непрозрачность фона', exact: true});
+  const displayed = dashboard.getByTestId('overlay-opacity-value');
   const value = () => dashboard.evaluate(() => globalThis.desktop.getAppState());
   const wait = expected => until(value, state => state.settings.overlay.backgroundOpacity === expected && !state.settings.saveError, 'UI_OPACITY_COMMITTED');
   await slider.focus();
@@ -20,6 +21,7 @@ async function observeOpacityControl({dashboard, config, language, record}) {
     await dashboard.keyboard.press(key); await wait(expected);
     await until(() => slider.getAttribute('aria-valuenow'), v => v === String(expected), 'UI_OPACITY_THUMB');
     assert.equal(await slider.getAttribute('aria-valuetext'), `${expected}%`);
+    assert.equal(await displayed.innerText(), `${expected}%`);
     await until(() => slider.getAttribute('aria-disabled'), value => value === 'false', 'UI_OPACITY_KEYBOARD_COMMIT_SETTLED');
     assert.equal(await slider.evaluate(node => node === globalThis.document.activeElement), true, 'UI_OPACITY_KEYBOARD_FOCUS_LOST');
   }
@@ -29,9 +31,11 @@ async function observeOpacityControl({dashboard, config, language, record}) {
   try {
     await dashboard.mouse.move(track.x + track.width * 0.3, thumb.y + thumb.height / 2, {steps: 8});
     const candidate = Number(await slider.getAttribute('aria-valuenow')); assert.ok(candidate < 80 && candidate >= 40);
+    assert.equal(await displayed.isVisible(), true, 'UI_OPACITY_DRAFT_VALUE_VISIBLE');
+    assert.equal(await displayed.innerText(), `${candidate}%`, 'UI_OPACITY_DRAFT_VALUE');
     assert.equal((await value()).settings.overlay.backgroundOpacity, 80, 'Held drag must not write');
-    assert.match(await dashboard.getByTestId('overlay-opacity-saved').innerText(), /80%/);
     await dashboard.mouse.up(); await wait(candidate);
+    assert.equal(await displayed.innerText(), `${candidate}%`);
     assert.equal(JSON.parse(await readFile(path.join(config.localappdata, 'ETS2Telemetry/settings/settings.json'), 'utf8')).overlay.backgroundOpacity, candidate);
   } finally {await dashboard.mouse.up();}
   await dashboard.evaluate(() => globalThis.desktop.setOverlayBackgroundOpacity(80)); await wait(80);
@@ -768,7 +772,7 @@ export async function runUiSmoke({application, dashboard, overlay, source, confi
           await until(() => dashboard.getByRole('slider').getAttribute('aria-valuenow'), value => value === '80', 'UI_OPACITY_FAILED_THUMB');
           await dashboard.getByTestId('overlay-settings-error').waitFor({state: 'visible'});
           assert.equal((await dashboard.evaluate(() => globalThis.desktop.getAppState())).settings.overlay.backgroundOpacity, 80);
-          assert.match(await dashboard.getByTestId('overlay-opacity-saved').innerText(), /80%/);
+          assert.equal(await dashboard.getByTestId('overlay-opacity-value').innerText(), '80%');
           assert.equal(await opacity.evaluate(node => node === globalThis.document.activeElement), true, 'UI_OPACITY_FAILED_SAVE_FOCUS_LOST');
           record.flags.opacityFailedSave = true;
           // ET-050: a refused gear display save keeps the committed mode selected and reports in its own card.
