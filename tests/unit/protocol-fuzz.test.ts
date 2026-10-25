@@ -45,6 +45,11 @@ const ITERATION_HANG_GUARD_MS = 10_000;
 const GUARD_BATCH_ITERATIONS = 25;
 /** Bounds the CPU work of one campaign of ITERATIONS inputs. It grows with the count and asserts no timing. */
 const CAMPAIGN_CPU_BUDGET_MS = 30_000 + ITERATIONS * 25;
+/**
+ * The default (minor-0) v1 readers get half a campaign: the minor-1 readers already fuzz every minor-0 seed, and this
+ * keeps the default entry points and the minor-swap defect under test without doubling the v1 cost (ET-050b).
+ */
+const DEFAULT_READER_ITERATIONS = Math.ceil(ITERATIONS / 2);
 /** A campaign of at least this many inputs must reach both acceptance and rejection, or its mutations are too weak. */
 const OUTCOME_COVERAGE_MIN_ITERATIONS = 100;
 
@@ -90,13 +95,13 @@ const guardScript = new vm.Script('iteration()');
 const guardContext = vm.createContext({iteration: undefined as unknown});
 /** Runs under the hang guard. Errors keep their identity; a timeout surfaces as ERR_SCRIPT_EXECUTION_TIMEOUT. */
 function guarded(run: () => void): void { guardContext.iteration = run; guardScript.runInContext(guardContext, {timeout: ITERATION_HANG_GUARD_MS}); }
-function campaign(name: string, index: number, body: (iteration: Iteration, outcomes: Outcomes) => void): Outcomes {
+function campaign(name: string, index: number, body: (iteration: Iteration, outcomes: Outcomes) => void, iterations = ITERATIONS): Outcomes {
   const outcomes: Outcomes = {accepted: 0, rejected: 0};
-  for (let first = 0; first < ITERATIONS; first += GUARD_BATCH_ITERATIONS) {
+  for (let first = 0; first < iterations; first += GUARD_BATCH_ITERATIONS) {
     let i = first, iteration: Iteration = {random: iterationRandom(index, i), steps: [], input: new Uint8Array()};
     try {
       guarded(() => {
-        for (; i < Math.min(ITERATIONS, first + GUARD_BATCH_ITERATIONS); i++) {
+        for (; i < Math.min(iterations, first + GUARD_BATCH_ITERATIONS); i++) {
           iteration = {random: iterationRandom(index, i), steps: [], input: new Uint8Array()};
           body(iteration, outcomes);
         }
@@ -114,8 +119,8 @@ function campaign(name: string, index: number, body: (iteration: Iteration, outc
   }
   return outcomes;
 }
-function expectBothOutcomes(outcomes: Outcomes): void {
-  if (ITERATIONS < OUTCOME_COVERAGE_MIN_ITERATIONS) return;
+function expectBothOutcomes(outcomes: Outcomes, iterations = ITERATIONS): void {
+  if (iterations < OUTCOME_COVERAGE_MIN_ITERATIONS) return;
   expect(outcomes.accepted, 'inputs accepted').toBeGreaterThan(0); expect(outcomes.rejected, 'inputs rejected').toBeGreaterThan(0);
 }
 
@@ -135,7 +140,27 @@ const isUuid = (v: unknown) => typeof v === 'string' && UUID.test(v);
 /** Canonical decimal uint64: `0` or digits without a leading zero, at most 18446744073709551615 (v0.md, v1.md §5). */
 const isU64 = (v: unknown): v is string => typeof v === 'string' && /^(0|[1-9][0-9]{0,19})$/.test(v) && BigInt(v) <= 18_446_744_073_709_551_615n;
 const isInt = (v: unknown, min: number, max: number) => typeof v === 'number' && Number.isInteger(v) && v >= min && v <= max;
-const isVersion = (v: unknown, major: number) => hasKeys(v, ['major', 'minor']) && v.major === major && v.minor === 0;
+const isVersion = (v: unknown, major: number, minors: readonly number[] = [0]) => hasKeys(v, ['major', 'minor']) && v.major === major && minors.includes(v.minor as number);
+/** The documented v1 minors (v1.md §2): 0 and, from ET-050b, 1. */
+const V1_MINORS_DOC = [0, 1];
+/** Kinds whose schema or rules name the minor: the hello is always 1.0, the welcome repeats it, and state carries the gearbox only in minor 1 (v1.md §2, §4, §7). */
+const V1_MINOR_DEPENDENT_KINDS = ['hello', 'welcome', 'checkpoint', 'snapshot'];
+/** Minor-1 gearbox bounds (v1.md §7, ET-050b B2). */
+const V1_GEARBOX_DOC = {maxGears: 100, maxSelectorCount: 6, maxSlots: 64, maxHandlePosition: 255};
+const isAvailability = (v: unknown, value: (x: unknown) => boolean) => hasKeys(v, ['available', 'value']) ? v.available === true && value(v.value) :
+  hasKeys(v, ['available', 'reason']) && v.available === false && ['not-supported', 'not-observed', 'invalid'].includes(v.reason as string);
+function gearboxProblem(g: unknown): string | undefined {
+  if (!hasKeys(g, ['forwardGears', 'reverseGears', 'hshifter'])) return 'gearbox keys';
+  const count = (x: unknown) => isInt(x, 0, V1_GEARBOX_DOC.maxGears);
+  if (!isAvailability(g.forwardGears, count) || !isAvailability(g.reverseGears, count)) return 'gear counts';
+  const layout = (x: unknown) => {
+    if (!hasKeys(x, ['selectorCount', 'slots']) || !isInt(x.selectorCount, 0, V1_GEARBOX_DOC.maxSelectorCount) || !Array.isArray(x.slots) || x.slots.length > V1_GEARBOX_DOC.maxSlots) return false;
+    const pairs = x.slots.map(s => hasKeys(s, ['gear', 'handlePosition', 'selectors']) && isInt(s.gear, -V1_GEARBOX_DOC.maxGears, V1_GEARBOX_DOC.maxGears) && s.gear !== 0 &&
+      isInt(s.handlePosition, 0, V1_GEARBOX_DOC.maxHandlePosition) && isInt(s.selectors, 0, 2 ** (x.selectorCount as number) - 1) ? `${s.handlePosition as number}/${s.selectors as number}` : undefined);
+    return pairs.every(p => p !== undefined) && new Set(pairs).size === pairs.length;
+  };
+  return isAvailability(g.hshifter, layout) ? undefined : 'hshifter layout';
+}
 /** JSON value equality: member order is immaterial and numbers compare by value (v0.md "Encoding and bounds"). */
 function jsonEqual(a: unknown, b: unknown): boolean {
   if (a === b) return true;
@@ -151,9 +176,9 @@ function sourceProblem(s: unknown): string | undefined {
   return undefined;
 }
 /** The envelope of every server message (v0.md "Source, ordering and time"; v1.md §5). */
-function serverEnvelopeProblem(m: Json, major: number): string | undefined {
+function serverEnvelopeProblem(m: Json, major: number, minors: readonly number[] = [0]): string | undefined {
   if (!hasKeys(m, ['version', 'kind', 'source', 'seq', 'capture', 'data'])) return 'server envelope keys';
-  if (!isVersion(m.version, major)) return `version ${JSON.stringify(m.version)}`;
+  if (!isVersion(m.version, major, minors)) return `version ${JSON.stringify(m.version)}`;
   const source = sourceProblem(m.source); if (source) return source;
   if (!isU64(m.seq)) return 'seq is not a canonical uint64';
   if (!hasKeys(m.capture, ['clockId', 'monotonicNs']) || !isUuid(m.capture.clockId) || !isU64(m.capture.monotonicNs)) return 'capture time';
@@ -180,12 +205,19 @@ function v0Problem(m: unknown): string | undefined {
   }
   return undefined;
 }
-function v1ServerProblem(m: unknown, size: number): string | undefined {
+function v1ServerProblem(m: unknown, size: number, minors: readonly number[]): string | undefined {
   if (!isRecord(m)) return 'not an object';
   if (!['welcome', 'checkpoint', 'snapshot', 'event', 'gap', 'clock.reply', 'end'].includes(m.kind as string)) return `server kind ${String(m.kind)}`;
-  const envelope = serverEnvelopeProblem(m, 1); if (envelope) return envelope;
-  const data = m.data as Json;
-  if (m.kind === 'welcome' && (data.minor !== 0 || !jsonEqual(data.limits, V1_LIMITS_DOC))) return 'welcome minor or limits';
+  const envelope = serverEnvelopeProblem(m, 1, minors); if (envelope) return envelope;
+  const data = m.data as Json, minor = (m.version as Json).minor;
+  // The welcome's envelope minor equals the minor it selects (v1.md §2, §4).
+  if (m.kind === 'welcome' && (data.minor !== minor || !jsonEqual(data.limits, V1_LIMITS_DOC))) return 'welcome minor or limits';
+  // State carries `gearbox` exactly in minor 1, within the documented bounds (v1.md §7).
+  if (m.kind === 'checkpoint' || m.kind === 'snapshot') {
+    const state = isRecord(data) ? data.state : undefined;
+    if (!isRecord(state) || Object.hasOwn(state, 'gearbox') !== (minor === 1)) return 'gearbox presence differs from the envelope minor';
+    if (minor === 1) { const problem = gearboxProblem(state.gearbox); if (problem) return problem; }
+  }
   if (m.kind === 'event') {
     if (size > V1_EVENT_BYTES) return `event of ${size} bytes`;
     if (!isU64(data.eventSeq) || BigInt(data.eventSeq) < 1n || BigInt(data.eventSeq) > V1_MAX_EVENT_SEQ_DOC) return 'eventSeq range';
@@ -200,10 +232,10 @@ function v1ServerProblem(m: unknown, size: number): string | undefined {
   if (m.kind === 'end' && (!isU64(data.nextEventSeq) || !isU64(data.ackedThroughEventSeq) || BigInt(data.ackedThroughEventSeq) >= BigInt(data.nextEventSeq))) return 'end cursor';
   return undefined;
 }
-function v1ClientProblem(m: unknown): string | undefined {
+function v1ClientProblem(m: unknown, minors: readonly number[]): string | undefined {
   if (!isRecord(m)) return 'not an object';
   if (m.kind === 'hello') return helloProblem(m, 1, 'durableEvents');
-  if (!hasKeys(m, ['version', 'kind', 'data']) || !isVersion(m.version, 1)) return 'client envelope';
+  if (!hasKeys(m, ['version', 'kind', 'data']) || !isVersion(m.version, 1, minors)) return 'client envelope';
   if (m.kind === 'ack') return hasKeys(m.data, ['pluginSessionId', 'throughEventSeq']) && isUuid(m.data.pluginSessionId) && isU64(m.data.throughEventSeq) ? undefined : 'ack data';
   if (m.kind === 'clock.probe') return hasKeys(m.data, ['probeId']) && isU64(m.data.probeId) && m.data.probeId !== '0' ? undefined : 'probe data';
   return `client kind ${String(m.kind)}`;
@@ -227,6 +259,8 @@ function cap0Problem(m: unknown): string | undefined {
 // `Cap0Error`) and re-encodes an accepted message to an equal one where the documents define an encoder.
 interface PayloadDecoder {
   name: string; limit: number;
+  /** Decoders of one protocol and direction (the two v1 readers of a sender) share it; isolation is between protocols. */
+  protocol: string;
   decode(bytes: Uint8Array): unknown;
   isRejection(error: unknown): boolean;
   /** Doc-derived checks of an accepted message, or undefined. */
@@ -247,7 +281,7 @@ function encodedOrSizeRefusal(encode: () => Uint8Array, isRejection: (error: unk
 }
 const jsonBytes = (message: unknown) => utf8.encode(JSON.stringify(message)).length;
 const v0Decoder: PayloadDecoder = {
-  name: 'protocol v0 decodePayload', limit: V0_PAYLOAD_BYTES,
+  name: 'protocol v0 decodePayload', limit: V0_PAYLOAD_BYTES, protocol: 'v0',
   decode: bytes => v0.decodePayload(bytes), isRejection: error => error instanceof v0.ProtocolError,
   problem: message => {
     const problem = v0Problem(message); if (problem) return problem;
@@ -262,37 +296,50 @@ const v0Decoder: PayloadDecoder = {
   },
   reencode: message => encodedOrSizeRefusal(() => v0.encodeFrame(message as v0.ProtocolMessage), error => error instanceof v0.ProtocolError, jsonBytes(message) > V0_PAYLOAD_BYTES)
 };
-const v1Decoder = (sender: v1.Sender): PayloadDecoder => ({
-  name: `protocol v1 decodePayload (${sender})`, limit: sender === 'server' ? V1_SERVER_PAYLOAD_BYTES : V1_CLIENT_PAYLOAD_BYTES,
-  decode: bytes => v1.decodePayload(bytes, sender), isRejection: error => error instanceof v1.ProtocolError,
+/**
+ * A v1 reader: `maxMinor: 1` accepts every documented minor, so minor-1 seeds and minor swaps are in scope; the
+ * default reader accepts minor 0 only, as every current caller does (v1.md §2, ET-050b).
+ */
+const v1Decoder = (sender: v1.Sender, maxMinor: 0 | 1): PayloadDecoder => {
+  const reader = maxMinor === 1 ? {maxMinor} : {}, minors = V1_MINORS_DOC.slice(0, maxMinor + 1);
+  return {
+  name: `protocol v1 decodePayload (${sender}, ${maxMinor === 1 ? 'maxMinor 1' : 'default minor-0'} reader)`, limit: sender === 'server' ? V1_SERVER_PAYLOAD_BYTES : V1_CLIENT_PAYLOAD_BYTES,
+  protocol: `v1-${sender}`,
+  decode: bytes => v1.decodePayload(bytes, sender, reader), isRejection: error => error instanceof v1.ProtocolError,
   problem: (message, bytes) => {
-    if (sender === 'server') return v1ServerProblem(message, bytes.length);
-    const problem = v1ClientProblem(message); if (problem) return problem;
+    if (sender === 'server') return v1ServerProblem(message, bytes.length, minors);
+    const problem = v1ClientProblem(message, minors); if (problem) return problem;
     const m = message as v1.ClientMessage;
-    // The server selects minor 0, and durable delivery is never granted beyond the request, nor by a server that does not
-    // offer it (v1.md §4; the endpoint stays live-only without its service policy, ET-004b OD-2).
-    if (m.kind === 'hello') for (const allowDurable of [true, false]) {
-      const n = v1.negotiateV1(m, {allowDurable});
-      if (!isVersion(n.version, 1) || n.minor !== 0 || typeof n.durableEvents !== 'boolean' || (n.durableEvents && !(m.data.durableEvents && allowDurable))) return 'negotiation';
+    // The server selects min(hello maxMinor, its own maxMinor), 0 by default, and durable delivery is never granted beyond
+    // the request, nor by a server that does not offer it (v1.md §4; the endpoint stays live-only without its service
+    // policy, ET-004b OD-2).
+    if (m.kind === 'hello') for (const allowDurable of [true, false]) for (const own of [undefined, 0, 1]) {
+      const n = v1.negotiateV1(m, own === undefined ? {allowDurable} : {allowDurable, maxMinor: own}), selected = Math.min(m.data.maxMinor, own ?? 0);
+      if (!hasKeys(n.version, ['major', 'minor']) || n.version.major !== 1 || n.version.minor !== selected || n.minor !== selected ||
+        typeof n.durableEvents !== 'boolean' || (n.durableEvents && !(m.data.durableEvents && allowDurable))) return 'negotiation';
     }
     return undefined;
   },
   reencode: message => {
     const size = jsonBytes(message), kind = (message as {kind?: unknown}).kind;
     const tooLarge = size > (sender === 'server' ? V1_SERVER_PAYLOAD_BYTES : V1_CLIENT_PAYLOAD_BYTES) || (kind === 'event' && size > V1_EVENT_BYTES);
-    return encodedOrSizeRefusal(() => v1.encodeFrame(message as v1.ProtocolMessage), error => error instanceof v1.ProtocolError, tooLarge);
+    return encodedOrSizeRefusal(() => v1.encodeFrame(message as v1.ProtocolMessage, reader), error => error instanceof v1.ProtocolError, tooLarge);
   }
-});
+  };
+};
 const cap0Decoder: PayloadDecoder = {
-  name: 'CAP0 decodeCap0Payload', limit: CAP0_PACKET_BYTES,
+  name: 'CAP0 decodeCap0Payload', limit: CAP0_PACKET_BYTES, protocol: 'cap0',
   decode: bytes => cap0.decodeCap0Payload(bytes), isRejection: error => error instanceof cap0.Cap0Error,
   problem: message => cap0Problem(message),
   // CAP0 defines no TypeScript packet encoder; the exporter re-serializes packets as JSON (cap0.md "Export and
   // sanitization"), so a re-serialized accepted packet must decode to an equal packet.
   reencode: message => { const bytes = utf8.encode(JSON.stringify(message)); return bytes.length > CAP0_PACKET_BYTES ? undefined : bytes; }
 };
-const v1Server = v1Decoder('server'), v1Client = v1Decoder('client');
-const PAYLOAD_DECODERS = [v0Decoder, v1Server, v1Client, cap0Decoder];
+const v1Server = v1Decoder('server', 1), v1Client = v1Decoder('client', 1);
+const v1ServerDefault = v1Decoder('server', 0), v1ClientDefault = v1Decoder('client', 0);
+const PAYLOAD_DECODERS = [v0Decoder, v1Server, v1Client, cap0Decoder, v1ServerDefault, v1ClientDefault];
+/** The maxMinor-1 reader of the same sender, which must accept whatever the default reader accepts. */
+const WIDER_READER = new Map<PayloadDecoder, PayloadDecoder>([[v1ServerDefault, v1Server], [v1ClientDefault, v1Client]]);
 type Outcome = {accepted: true; message: unknown} | {accepted: false};
 function decodeWith(decoder: PayloadDecoder, bytes: Uint8Array): Outcome {
   try { return {accepted: true, message: decoder.decode(bytes)}; } catch (error) {
@@ -317,8 +364,11 @@ function checkAccepted(decoder: PayloadDecoder, bytes: Uint8Array, message: unkn
 const manifest = (dir: string) => readFileSync(resolve(dir, 'manifest.txt'), 'utf8').trim().split(/\r?\n/).map(line => line.trim().split(/\s+/));
 const fixtures = (dir: string, result: string) => manifest(dir).filter(([, r]) => r === result).map(([file]) => new Uint8Array(readFileSync(resolve(dir, file))));
 const V0_SEEDS = fixtures(resolve('tests/fixtures/protocol-v0'), 'valid');
-const V1_SERVER_SEEDS = fixtures(resolve('tests/fixtures/protocol-v1'), 'valid');
-const V1_CLIENT_SEEDS = fixtures(resolve('tests/fixtures/protocol-v1'), 'valid-client');
+// The frozen minor-0 corpus and the ET-050b minor-1 corpus.
+const V1_DIRS = [resolve('tests/fixtures/protocol-v1'), resolve('tests/fixtures/protocol-v1/minor1')];
+const V1_SERVER_SEEDS = V1_DIRS.flatMap(dir => fixtures(dir, 'valid'));
+const V1_CLIENT_SEEDS = V1_DIRS.flatMap(dir => fixtures(dir, 'valid-client'));
+const V1_MINOR0_SERVER_SEEDS = fixtures(V1_DIRS[0], 'valid'), V1_MINOR0_CLIENT_SEEDS = fixtures(V1_DIRS[0], 'valid-client');
 const CAP0_SEEDS = [header(0), header(0, 'game'), envelope(1, 1, {observations: delivered()}), envelope(2, 2, {group: 'lifecycle', id: 'simulation.paused'}),
   envelope(3, 4, {droppedBefore: 1, group: 'configuration', id: 'job', observations: [observation(0, 'cargo', 'string', 'Caf\u00e9 \u0001\t\u{1f69a}'),
     observation(1, 'cargo.mass', 'float', 1.5e4), observation(2, 'planned_distance.km', 'u32', 4_294_967_295)], total: 5, final: false}),
@@ -392,7 +442,7 @@ const asciiBoundaries = (bytes: Uint8Array) => { const out: number[] = []; for (
 type Step = (bytes: Uint8Array) => Uint8Array | undefined;
 interface Mutator {preserve: Record<string, Step>; defect: Record<string, Step>; havoc: Record<string, Step>}
 /** The mutation sets for one generator; `sizes` are the documented bounds that padding aims at, `schema` adds the v0/v1-only defects. */
-function mutator(r: Random, sizes: number[], schema: boolean): Mutator {
+function mutator(r: Random, sizes: number[], schema: boolean, minorSwapsValid = false): Mutator {
   const preserve: Record<string, Step> = {
     // JSON whitespace between tokens, including before and after the value (v0.md, v1.md §3).
     whitespace: textStep((text, s) => { const at = pick(r, s.gaps); return splice(text, at, at, Array.from({length: between(r, 1, 4)}, () => pick(r, WHITESPACE)).join('')); }),
@@ -445,7 +495,11 @@ function mutator(r: Random, sizes: number[], schema: boolean): Mutator {
     version: treeStep(root => {
       const version = isRecord(root) ? root.version : undefined;
       if (!isRecord(root) || !hasKeys(version, ['major', 'minor'])) return undefined;
-      const options = [[0, 0], [1, 0], [0, 1], [1, 1], [2, 0], [255, 0], [0, 65_535], [-1, 0]].filter(([major, minor]) => major !== version.major || minor !== version.minor);
+      // For a reader that accepts both minors, a v1 message whose kind does not depend on the minor stays valid at the
+      // other documented minor (v1.md §2), so that swap is no defect for it. The default reader still refuses it.
+      const sameSchema = minorSwapsValid && version.major === 1 && V1_MINORS_DOC.includes(version.minor as number) && !V1_MINOR_DEPENDENT_KINDS.includes(root.kind as string);
+      const options = [[0, 0], [1, 0], [0, 1], [1, 1], [2, 0], [255, 0], [0, 65_535], [-1, 0]]
+        .filter(([major, minor]) => (major !== version.major || minor !== version.minor) && !(sameSchema && major === 1 && V1_MINORS_DOC.includes(minor)));
       const [major, minor] = pick(r, options); root.version = {major, minor}; return root;
     })
   };
@@ -507,28 +561,36 @@ function mutatePayload(it: Iteration, m: Mutator, seed: Uint8Array, mode: Mode):
 const chooseMode = (r: Random): Mode => { const x = r(); return x < 0.25 ? 'preserve' : x < 0.5 ? 'defect' : 'havoc'; };
 
 // ---------------------------------------------------------------------------------------------------------------------
-// Payload campaigns: every input goes to all four payload decoders.
-interface PayloadFamily {decoder: PayloadDecoder; seeds: Uint8Array[]; sizes: number[]; schema: boolean}
+// Payload campaigns: every input goes to every payload decoder, including both v1 readers of each direction.
+interface PayloadFamily {decoder: PayloadDecoder; seeds: Uint8Array[]; sizes: number[]; schema: boolean; minorSwapsValid: boolean; iterations: number}
 const PAYLOAD_FAMILIES: PayloadFamily[] = [
-  {decoder: v0Decoder, seeds: V0_SEEDS, sizes: [V0_PAYLOAD_BYTES], schema: true},
-  {decoder: v1Server, seeds: V1_SERVER_SEEDS, sizes: [V1_SERVER_PAYLOAD_BYTES, V1_EVENT_BYTES], schema: true},
-  {decoder: v1Client, seeds: V1_CLIENT_SEEDS, sizes: [V1_CLIENT_PAYLOAD_BYTES], schema: true},
-  {decoder: cap0Decoder, seeds: CAP0_SEEDS, sizes: [CAP0_PACKET_BYTES], schema: false}
+  {decoder: v0Decoder, seeds: V0_SEEDS, sizes: [V0_PAYLOAD_BYTES], schema: true, minorSwapsValid: false, iterations: ITERATIONS},
+  {decoder: v1Server, seeds: V1_SERVER_SEEDS, sizes: [V1_SERVER_PAYLOAD_BYTES, V1_EVENT_BYTES], schema: true, minorSwapsValid: true, iterations: ITERATIONS},
+  {decoder: v1Client, seeds: V1_CLIENT_SEEDS, sizes: [V1_CLIENT_PAYLOAD_BYTES], schema: true, minorSwapsValid: true, iterations: ITERATIONS},
+  {decoder: cap0Decoder, seeds: CAP0_SEEDS, sizes: [CAP0_PACKET_BYTES], schema: false, minorSwapsValid: false, iterations: ITERATIONS},
+  // The default readers start from the frozen minor-0 corpus, with every version swap a defect, as before ET-050b.
+  {decoder: v1ServerDefault, seeds: V1_MINOR0_SERVER_SEEDS, sizes: [V1_SERVER_PAYLOAD_BYTES, V1_EVENT_BYTES], schema: true, minorSwapsValid: false, iterations: DEFAULT_READER_ITERATIONS},
+  {decoder: v1ClientDefault, seeds: V1_MINOR0_CLIENT_SEEDS, sizes: [V1_CLIENT_PAYLOAD_BYTES], schema: true, minorSwapsValid: false, iterations: DEFAULT_READER_ITERATIONS}
 ];
 /** Whether a meaning-preserving variant of a valid payload stays within the documented byte bounds. */
-const withinBounds = (decoder: PayloadDecoder, bytes: Uint8Array, kind: unknown) => bytes.length <= decoder.limit && !(decoder === v1Server && kind === 'event' && bytes.length > V1_EVENT_BYTES);
+const withinBounds = (decoder: PayloadDecoder, bytes: Uint8Array, kind: unknown) => bytes.length <= decoder.limit && !(decoder.protocol === 'v1-server' && kind === 'event' && bytes.length > V1_EVENT_BYTES);
 function payloadIteration(family: PayloadFamily, it: Iteration, outcomes: Outcomes): void {
   const foreign = it.random() < 0.15, mode: Mode = foreign ? 'havoc' : chooseMode(it.random);
   const pool = foreign ? pick(it.random, PAYLOAD_FAMILIES.filter(f => f !== family)).seeds : family.seeds;
   const seed = pick(it.random, pool);
   it.steps.push(`${foreign ? 'foreign ' : ''}${mode}`);
-  const input = mutatePayload(it, mutator(it.random, family.sizes, family.schema), seed, mode);
+  const input = mutatePayload(it, mutator(it.random, family.sizes, family.schema, family.minorSwapsValid), seed, mode);
   it.input = input;
   const results = PAYLOAD_DECODERS.map(decoder => decodeWith(decoder, input));
   results.forEach((result, i) => { if (result.accepted) checkAccepted(PAYLOAD_DECODERS[i], input, result.message); });
   // Each decoder rejects the other protocols' payloads (v1.md §2, cap0.md "Isolation from protocol v0").
-  const accepting = PAYLOAD_DECODERS.filter((_, i) => results[i].accepted).map(d => d.name);
-  check(accepting.length <= 1, () => `one payload accepted by ${accepting.join(' and ')}`);
+  const accepting = PAYLOAD_DECODERS.filter((_, i) => results[i].accepted);
+  check(new Set(accepting.map(d => d.protocol)).size <= 1, () => `one payload accepted by ${accepting.map(d => d.name).join(' and ')}`);
+  // A default reader is a restriction of the maxMinor-1 reader: whatever it accepts, the wider one accepts identically.
+  for (const [narrow, wide] of WIDER_READER) {
+    const a = results[PAYLOAD_DECODERS.indexOf(narrow)], b = results[PAYLOAD_DECODERS.indexOf(wide)];
+    if (a.accepted) check(b.accepted && jsonEqual(a.message, b.message), () => `${narrow.name} accepted a payload that ${wide.name} rejected or decoded differently`);
+  }
   const own = results[PAYLOAD_DECODERS.indexOf(family.decoder)];
   if (mode === 'preserve') {
     const expected = family.decoder.decode(seed) as {kind?: unknown};
@@ -559,11 +621,11 @@ const v0Framing = (): Framing => {
   return {name: 'protocol v0 FrameDecoder', max: V0_PAYLOAD_BYTES, family: PAYLOAD_FAMILIES[0], push: (chunk, emit) => d.push(chunk, emit),
     finish: () => { d.end(); return true; }, isRejection: e => e instanceof v0.ProtocolError, item: payload => v0.decodePayload(payload), same: jsonEqual};
 };
-const v1Framing = (sender: v1.Sender) => (): Framing => {
-  const d = new v1.FrameDecoder(sender);
-  return {name: `protocol v1 FrameDecoder (${sender})`, max: sender === 'server' ? V1_SERVER_PAYLOAD_BYTES : V1_CLIENT_PAYLOAD_BYTES,
-    family: PAYLOAD_FAMILIES[sender === 'server' ? 1 : 2], push: (chunk, emit) => d.push(chunk, emit), finish: () => { d.end(); return true; },
-    isRejection: e => e instanceof v1.ProtocolError, item: payload => v1.decodePayload(payload, sender), same: jsonEqual};
+const v1Framing = (sender: v1.Sender, maxMinor: 0 | 1) => (): Framing => {
+  const reader = maxMinor === 1 ? {maxMinor} : {}, d = maxMinor === 1 ? new v1.FrameDecoder(sender, reader) : new v1.FrameDecoder(sender);
+  return {name: `protocol v1 FrameDecoder (${sender}, ${maxMinor === 1 ? 'maxMinor 1' : 'default minor-0'} reader)`, max: sender === 'server' ? V1_SERVER_PAYLOAD_BYTES : V1_CLIENT_PAYLOAD_BYTES,
+    family: PAYLOAD_FAMILIES[maxMinor === 1 ? (sender === 'server' ? 1 : 2) : (sender === 'server' ? 4 : 5)], push: (chunk, emit) => d.push(chunk, emit), finish: () => { d.end(); return true; },
+    isRejection: e => e instanceof v1.ProtocolError, item: payload => v1.decodePayload(payload, sender, reader), same: jsonEqual};
 };
 const cap0Framing = (): Framing => {
   const d = new cap0.Cap0FrameDecoder();
@@ -638,7 +700,7 @@ function sameResult(framing: Framing, a: StreamResult, b: StreamResult): boolean
 }
 const summary = (result: StreamResult) => `${result.items.length} items, ${result.end}`;
 function frameIteration(create: () => Framing, it: Iteration, outcomes: Outcomes): void {
-  const probe = create(), r = it.random, family = probe.family, m = mutator(r, family.sizes, family.schema);
+  const probe = create(), r = it.random, family = probe.family, m = mutator(r, family.sizes, family.schema, family.minorSwapsValid);
   const frames: Uint8Array[] = [];
   for (let n = between(r, 1, 4); n > 0; n--) {
     const seed = pick(r, family.seeds);
@@ -868,12 +930,12 @@ describe('REG-010 seeded mutation fuzzing of the TypeScript frame parsers', () =
     expect(problems).toEqual([]);
   });
   PAYLOAD_FAMILIES.forEach((family, index) => it(`${family.decoder.name}: rejects only with its protocol error, accepts only documented messages and round-trips them`, () => {
-    expectBothOutcomes(campaign(family.decoder.name, index, (it, outcomes) => payloadIteration(family, it, outcomes)));
+    expectBothOutcomes(campaign(family.decoder.name, index, (it, outcomes) => payloadIteration(family, it, outcomes), family.iterations), family.iterations);
   }, CAMPAIGN_CPU_BUDGET_MS));
-  [v0Framing, v1Framing('server'), v1Framing('client'), cap0Framing].forEach((create, index) => {
-    const name = create().name;
+  [v0Framing, v1Framing('server', 1), v1Framing('client', 1), cap0Framing, v1Framing('server', 0), v1Framing('client', 0)].forEach((create, index) => {
+    const probe = create(), name = probe.name, iterations = probe.family.iterations;
     it(`${name}: follows the documented framing for any byte split and never allocates beyond the bound`, () => {
-      expectBothOutcomes(campaign(name, 10 + index, (it, outcomes) => frameIteration(create, it, outcomes)));
+      expectBothOutcomes(campaign(name, 10 + index, (it, outcomes) => frameIteration(create, it, outcomes), iterations), iterations);
     }, CAMPAIGN_CPU_BUDGET_MS);
   });
   [pipeMode('v0'), pipeMode('v1'), cap0Mode].forEach((mode, index) => it(`${mode.name}: grants authority and relays frames only as documented`, () => {

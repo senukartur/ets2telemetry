@@ -1,8 +1,8 @@
 // Protocol v1 delivery rules: stream ordering and event coverage on the client, the storage-commit ACK cursor,
 // the producer-side ACK validator and clock mapping. No I/O, storage, Electron or Node APIs; see docs/protocol/v1.md.
 import {
-  PROTOCOL_V1, ProtocolError, validateClientMessage, validateServerMessage,
-  type ClientMessage, type Continuity, type EventType, type LossCounts, type ServerMessage, type SourceStatus, type Uint64
+  ProtocolError, validateClientMessage, validateServerMessage,
+  type ClientMessage, type Continuity, type EventType, type LossCounts, type ServerMessage, type SourceStatus, type Uint64, type V1Minor
 } from './protocol-v1';
 import {isUint64} from './protocol-v0';
 
@@ -10,6 +10,8 @@ function fail(reason = 'Protocol v1 delivery violation'): never { throw new Prot
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 /** Exact BigInt of a canonical uint64 decimal string; callers never pass JavaScript numbers. */
 function uint(v: Uint64, minimum = 0n): bigint { if (!isUint64(v) || BigInt(v) < minimum) fail('Invalid uint64 value'); return BigInt(v); }
+/** A minor this contract implements; anything else is a caller error. */
+function minorOf(v: number): V1Minor { if (v !== 0 && v !== 1) fail('Unsupported protocol v1 minor'); return v; }
 
 export interface V1Applied {
   message: ServerMessage;
@@ -24,16 +26,25 @@ const LOSS_KEYS: (keyof LossCounts)[] = ['offline', 'noDurableConsumer', 'queueC
 
 /**
  * Client-side ordering for one connection: welcome, exactly one checkpoint, then live messages until `end`.
- * It enforces source identity, clock and sequence order, contiguous eventSeq coverage, durable opt-in and a
- * terminal `end`. Any violation closes the consumer; a reconnection needs a new consumer.
+ * It enforces source identity, clock and sequence order, contiguous eventSeq coverage, durable opt-in, one protocol
+ * minor per connection and a terminal `end`. Any violation closes the consumer; a reconnection needs a new consumer.
  */
 export class V1Consumer {
   private phase: 'welcome' | 'checkpoint' | 'live' | 'closed' = 'welcome';
+  private readonly maxMinor: V1Minor; private selected?: V1Minor;
   private identity?: string; private clock?: string; private lastSeq = 0n; private lastCapture = 0n;
   private durable = false; private eventTypes = new Set<EventType>();
   private nextEvent = 1n; private liveFrom = 1n; private eventBoundary = 0n; private eventRevision = 0n; private stateBoundary = 0n;
   private status?: SourceStatus; private continuity?: Continuity; private probe?: bigint; private lastProbe = 0n;
-  constructor(private readonly durableRequested: boolean) {}
+  /**
+   * `maxMinor` is the highest minor this client's hello offered (default 0). A welcome above it is rejected, and every
+   * later message must carry the welcome's minor, which also selects its state schema.
+   */
+  constructor(private readonly durableRequested: boolean, options: {maxMinor?: number} = {}) {
+    this.maxMinor = minorOf(options.maxMinor ?? 0);
+  }
+  /** The minor the welcome selected, known after welcome. Client messages on this connection carry it. */
+  get minor(): V1Minor | undefined { return this.selected; }
   /** The connection's plugin session, known after welcome. */
   get pluginSessionId(): string | undefined { return this.identity?.split('|')[1]; }
   /** Durable delivery granted by welcome. */
@@ -57,15 +68,19 @@ export class V1Consumer {
   accept(input: unknown): V1Applied {
     try {
       if (this.phase === 'closed') fail('Consumer is closed');
-      const m = validateServerMessage(input), seq = BigInt(m.seq), capture = BigInt(m.capture.monotonicNs);
+      // Before the welcome any offered minor validates; afterwards only the selected one, so a minor-0 connection
+      // rejects a minor-1 frame exactly as a minor-0 decoder does.
+      const m = validateServerMessage(input, {maxMinor: this.selected ?? this.maxMinor}), seq = BigInt(m.seq), capture = BigInt(m.capture.monotonicNs);
       // Identity comparison does not depend on JSON property order.
       const identity = [m.source.game, m.source.pluginSessionId, m.source.processInstanceId, m.source.processId, m.source.windowsSessionId, m.source.origin].join('|');
       if (this.phase === 'welcome') {
         if (m.kind !== 'welcome' || (m.data.durableEvents && !this.durableRequested)) fail('Welcome expected');
-        this.identity = identity; this.clock = m.capture.clockId; this.durable = m.data.durableEvents;
+        this.selected = m.version.minor; this.identity = identity; this.clock = m.capture.clockId; this.durable = m.data.durableEvents;
         this.eventTypes = new Set(m.data.capabilities.eventTypes); this.lastSeq = seq; this.lastCapture = capture; this.phase = 'checkpoint';
         return {message: m, hydration: false, skippedSequences: '0'};
       }
+      // The minor never changes within a connection (ET-050b B1); the state schema follows it.
+      if (m.version.minor !== this.selected) fail('Protocol minor changed within the connection');
       if (identity !== this.identity || m.capture.clockId !== this.clock || seq <= this.lastSeq || capture < this.lastCapture) fail('Source identity, clock or order violation');
       if (m.kind === 'welcome' || (this.phase === 'checkpoint' ? m.kind !== 'checkpoint' && m.kind !== 'end' : m.kind === 'checkpoint')) fail('Unexpected message for phase');
       const result: V1Applied = {message: m, hydration: m.kind === 'checkpoint', skippedSequences: (seq - this.lastSeq - 1n).toString()};
@@ -123,8 +138,11 @@ export class V1Consumer {
 export class DurableAckCursor {
   private through: bigint; private receivedThrough: bigint;
   private pending: [bigint, bigint][] = [];
-  /** Per-connection marks: the highest eventSeq covered by an event or gap received on it, and the last ACK sent on it. */
-  private connection?: {receivedThrough: bigint; lastAck: bigint};
+  /**
+   * Per-connection marks: the highest eventSeq covered by an event or gap received on it, the last ACK sent on it, and
+   * the connection's protocol minor, which its ACKs carry.
+   */
+  private connection?: {receivedThrough: bigint; lastAck: bigint; minor: V1Minor};
   /** `committedThroughEventSeq` is the contiguous commit point already in storage for this plugin session. */
   constructor(readonly pluginSessionId: string, committedThroughEventSeq: Uint64 = '0') {
     if (!UUID.test(pluginSessionId)) fail('Invalid plugin session');
@@ -133,12 +151,13 @@ export class DurableAckCursor {
   get throughEventSeq(): Uint64 { return this.through.toString(); }
   /**
    * Starts a connection from its checkpoint's `ackedThroughEventSeq` A. Both per-connection marks restart at A, so an
-   * ACK lost on an earlier connection is repeated only after its range has been received again on this one.
+   * ACK lost on an earlier connection is repeated only after its range has been received again on this one. `minor` is
+   * the connection's selected minor (default 0).
    */
-  beginConnection(ackedThroughEventSeq: Uint64): void {
-    const acked = uint(ackedThroughEventSeq);
+  beginConnection(ackedThroughEventSeq: Uint64, minor = 0): void {
+    const acked = uint(ackedThroughEventSeq), selected = minorOf(minor);
     if (acked > this.through) fail('Producer acknowledged beyond local commits');
-    this.connection = {receivedThrough: acked, lastAck: acked};
+    this.connection = {receivedThrough: acked, lastAck: acked, minor: selected};
   }
   /** Records coverage delivered on the current connection; commits are allowed only inside received coverage. */
   received(first: Uint64, last: Uint64): void {
@@ -176,14 +195,15 @@ export class DurableAckCursor {
     const through = this.through < this.connection.receivedThrough ? this.through : this.connection.receivedThrough;
     if (through <= this.connection.lastAck) return undefined;
     this.connection.lastAck = through;
-    return {version: PROTOCOL_V1, kind: 'ack', data: {pluginSessionId: this.pluginSessionId, throughEventSeq: through.toString()}};
+    return {version: {major: 1, minor: this.connection.minor}, kind: 'ack', data: {pluginSessionId: this.pluginSessionId, throughEventSeq: through.toString()}};
   }
 }
 
 /**
  * Producer-side ACK validation for one connection, created when the welcome is written. It rejects every ACK from a
  * live-only client, any ACK before the checkpoint, a foreign plugin session, an ACK beyond the highest eventSeq sent on
- * this connection and a regressing ACK, and closes on the first violation. An equal ACK is a no-op.
+ * this connection, a regressing ACK and an ACK or clock probe at another minor than the connection's, and closes on the
+ * first violation. An equal ACK is a no-op.
  *
  * An ACK never splits a retained entry (docs/protocol/v1.md §9-10). The producer accepts any T within its rule and
  * releases exactly the retained entries whose last eventSeq is ≤ T. A gap record with first ≤ T < last stays whole,
@@ -192,10 +212,11 @@ export class DurableAckCursor {
  * minus one. This validator tracks the accepted T; the release bookkeeping belongs to the producer (ET-004b).
  */
 export class AckValidator {
-  private acked?: bigint; private sentThrough = 0n; private closed = false;
-  /** `durableEvents` is the grant written in this connection's welcome. */
-  constructor(private readonly pluginSessionId: string, private readonly durableEvents: boolean) {
+  private acked?: bigint; private sentThrough = 0n; private closed = false; private readonly minor: V1Minor;
+  /** `durableEvents` is the grant written in this connection's welcome; `minor` is the minor it selected (default 0). */
+  constructor(private readonly pluginSessionId: string, private readonly durableEvents: boolean, minor = 0) {
     if (!UUID.test(pluginSessionId)) fail('Invalid plugin session');
+    this.minor = minorOf(minor);
   }
   get ackedThroughEventSeq(): Uint64 | undefined { return this.acked?.toString(); }
   /** Records the checkpoint written on this connection, with its `ackedThroughEventSeq`. */
@@ -217,7 +238,9 @@ export class AckValidator {
   accept(input: unknown): Uint64 | undefined {
     try {
       if (this.closed) fail('ACK validator is closed');
-      const m = validateClientMessage(input); if (m.kind !== 'ack') fail('ACK expected');
+      const m = validateClientMessage(input, {maxMinor: this.minor}); if (m.kind !== 'ack') fail('ACK expected');
+      // Every client message after the hello carries the connection's minor (ET-050b B1).
+      if (m.version.minor !== this.minor) fail('ACK protocol minor differs from the connection');
       const through = BigInt(m.data.throughEventSeq);
       if (!this.durableEvents) fail('ACK from a live-only client');
       if (this.acked === undefined) fail('ACK before checkpoint');
@@ -226,6 +249,20 @@ export class AckValidator {
       if (through < this.acked) fail('ACK regressed');
       if (through === this.acked) return undefined;
       this.acked = through; return through.toString();
+    } catch (error) { this.closed = true; throw error; }
+  }
+  /**
+   * Producer-side check of a `clock.probe` on this connection: it must follow the checkpoint and carry the connection's
+   * minor (ET-050b B1). Returns its probeId. Probe order and the one-outstanding rule (OD-5 S6) stay the producer's. A
+   * violation closes the validator, as for an ACK.
+   */
+  probe(input: unknown): Uint64 {
+    try {
+      if (this.closed) fail('ACK validator is closed');
+      const m = validateClientMessage(input, {maxMinor: this.minor}); if (m.kind !== 'clock.probe') fail('Clock probe expected');
+      if (m.version.minor !== this.minor) fail('Clock probe protocol minor differs from the connection');
+      if (this.acked === undefined) fail('Clock probe before checkpoint');
+      return m.data.probeId;
     } catch (error) { this.closed = true; throw error; }
   }
 }
@@ -239,9 +276,10 @@ export const CLOCK_REPLY_DEADLINE_NS = 1_000_000_000n;
  * The offset is rounded down and the uncertainty rounded up, so the true offset lies within ±uncertaintyNs (≥ RTT/2).
  * A reply received more than 1 s after its probe is late: the consumer still accepts it, which ends the outstanding
  * probe, but the measurement is discarded and this returns undefined. A negative round trip is rejected first.
+ * `maxMinor` (default 0) is the highest reply minor accepted, normally the connection's `V1Consumer.minor`.
  */
-export function computeClockMapping(input: {reply: ServerMessage; probeId: Uint64; clientClockId: string; probeSentNs: Uint64; replyReceivedNs: Uint64}): ClockMapping | undefined {
-  const reply = validateServerMessage(input.reply);
+export function computeClockMapping(input: {reply: ServerMessage; probeId: Uint64; clientClockId: string; probeSentNs: Uint64; replyReceivedNs: Uint64; maxMinor?: number}): ClockMapping | undefined {
+  const reply = validateServerMessage(input.reply, {maxMinor: input.maxMinor ?? 0});
   if (reply.kind !== 'clock.reply' || reply.data.probeId !== input.probeId || !UUID.test(input.clientClockId)) fail('Clock reply mismatch');
   const t0 = uint(input.probeSentNs), t3 = uint(input.replyReceivedNs), t1 = BigInt(reply.data.receivedMonotonicNs), t2 = BigInt(reply.data.sentMonotonicNs);
   if (t3 < t0) fail('Clock reply received before its probe was sent');
