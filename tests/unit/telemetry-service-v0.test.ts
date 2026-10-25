@@ -89,7 +89,8 @@ it('boots transport only after the parent selection and retains it across render
     stop() {this.dependencies.report({type: 'stopped'}); return Promise.resolve();}
   }}));
   // The history database is opened by its own worker; never touch the real LOCALAPPDATA from a Node unit test.
-  vi.doMock('../../apps/desktop/src/history-storage', () => ({HISTORY_STORAGE_STEP_NAME: 'history-storage', HISTORY_CLOSE_BUDGET_MS: 1000, HISTORY_CLOSE_GRACE_MS: 800, CLOSE_TERMINATE_RESERVE_MS: 200, historyWorker: vi.fn(), HistoryStorage: class {start() {} close() {return Promise.resolve();}}}));
+  // The recorder game recording builds in production (October 25, 2026) needs the real recorderClient, so the module is kept.
+  vi.doMock('../../apps/desktop/src/history-storage', async importOriginal => ({...await importOriginal<typeof import('../../apps/desktop/src/history-storage')>(), HISTORY_STORAGE_STEP_NAME: 'history-storage', HISTORY_CLOSE_BUDGET_MS: 1000, HISTORY_CLOSE_GRACE_MS: 800, CLOSE_TERMINATE_RESERVE_MS: 200, historyWorker: vi.fn(), HistoryStorage: class {start() {} close() {return Promise.resolve();}}}));
   const command = (type: string, ports: TestPort[] = []) => parent.emit('message', {data: {type, source: 'synthetic'}, ports});
   try {
     await loadService();
@@ -404,15 +405,17 @@ it('writes its log in the service subdirectory of the root main passed, also wit
     } finally {f.restore();}
   } finally {vi.unstubAllEnvs();}
 });
-it('runs protocol v1 beside v0 without a durable sink, following each selection with the v1 fixture endpoint and the derived broker directory', async () => {
+it('runs protocol v1 beside v0 with the history recorder, following each selection with the v1 fixture endpoint and the derived broker directory', async () => {
   const v1Endpoint = '\\\\.\\pipe\\ETS2Telemetry-SYNTHETIC-TEST-v1-123-' + randomUUID();
   vi.stubEnv('ETS2TELEMETRY_SOURCE_PIPE_V1', v1Endpoint);
   const f = await stoppedService(report => {report({type: 'stopped'}); return Promise.resolve();});
   const select = (source: string, broker?: BrokerConfiguration) => f.parent.emit('message', {data: {type: 'select', source, broker}, ports: []});
   try {
-    // E2: live-only. No sink means a durableEvents false hello, no ACK and no history row.
+    // E2, amended by the game recording enablement of October 25, 2026: the default plan gives the ETS2 and ATS selections
+    // the history recorder, so their hello asks for durable delivery; the synthetic and replay selections stay live-only.
     expect(f.v1.options).toHaveLength(1);
-    expect(Object.keys(f.v1.options[0]).sort()).toEqual(['connectGame', 'diagnose', 'onState']);
+    expect(Object.keys(f.v1.options[0]).sort()).toEqual(['connectGame', 'diagnose', 'durableReady', 'durableSelections', 'onState', 'sink']);
+    expect(f.v1.options[0].durableSelections).toEqual(['ets2', 'ats']);
     expect(f.v1.select).not.toHaveBeenCalled();
     const executable = 'C:\\fixed\\telemetry-pipe-client.exe';
     select('synthetic', {executable, discoveryDirectory: 'C:\\Users\\owner\\AppData\\Local\\ETS2Telemetry\\transport\\v0'});
@@ -492,13 +495,21 @@ it('bounds the v1 ingestion stop by its 1,000 ms intake budget and reports a lat
 describe('ET-015a recording gate in the service (R3, R10, R14)', () => {
   const stopProbe = (report: ProbeDependencies['report']) => {report({type: 'stopped'}); return Promise.resolve();};
   const v1Endpoint = '\\\\.\\pipe\\ETS2Telemetry-SYNTHETIC-TEST-v1-123-' + randomUUID();
-  it('keeps the default plan: the history database, no sink and a live-only v1 ingestion (E2)', async () => {
+  it('builds the default plan: the history database with a trip recorder for ETS2 and ATS only, once the database is open (E2)', async () => {
     const f = await stoppedService(stopProbe);
     try {
-      expect(Object.keys(f.v1.options[0]).sort()).toEqual(['connectGame', 'diagnose', 'onState']);
+      const options = f.v1.options[0];
+      expect(Object.keys(options).sort()).toEqual(['connectGame', 'diagnose', 'durableReady', 'durableSelections', 'onState', 'sink']);
+      expect(options.durableSelections).toEqual(['ets2', 'ats']);
+      expect(options.sink?.constructor.name).toBe('TripRecorderSink');
       expect(f.history.options).toHaveLength(1);
       expect(f.history.options[0].target).toEqual({purpose: 'history'});
-      expect(f.history.options[0].onOpened).toBeUndefined();
+      // R10: durable only while the database is open; its open lets a live-only connection reconnect durable.
+      for (const [state, ready] of [['idle', false], ['opening', false], ['open', true], ['unavailable', false], ['closed', false]] as const) {
+        f.history.state = state; expect(options.durableReady!()).toBe(ready);
+      }
+      f.history.options[0].onOpened!();
+      expect(f.v1.durableAvailabilityChanged).toHaveBeenCalledOnce();
       expect(f.log.mock.calls.map(call => call[0])).not.toContain('RECORDING_TARGET_REJECTED');
     } finally {f.stop(); await vi.advanceTimersByTimeAsync(0); f.restore();}
   });
@@ -527,9 +538,10 @@ describe('ET-015a recording gate in the service (R3, R10, R14)', () => {
     const f = await stoppedService(stopProbe);
     try {
       expect(f.log.mock.calls.filter(call => call[0] === 'RECORDING_TARGET_REJECTED')).toEqual([['RECORDING_TARGET_REJECTED']]);
-      expect(Object.keys(f.v1.options[0]).sort()).toEqual(['connectGame', 'diagnose', 'onState']);
+      expect(Object.keys(f.v1.options[0]).sort()).toEqual(['connectGame', 'diagnose', 'durableReady', 'durableSelections', 'onState', 'sink']);
+      expect(f.v1.options[0].durableSelections).toEqual(['ets2', 'ats']);
       expect(f.history.options[0].target).toEqual({purpose: 'history'});
-      expect(f.history.options[0].onOpened).toBeUndefined();
+      expect(f.history.options[0].onOpened).toBeTypeOf('function');
     } finally {f.stop(); await vi.advanceTimersByTimeAsync(0); f.restore(); vi.unstubAllEnvs();}
   });
   it('bounds the stop by 1,000 (intake) + 500 (flush) + 1,000 (storage) = 2,500 ms when every step hangs', async () => {
@@ -764,15 +776,19 @@ describe('ET-015c recording status on the parent port', () => {
   const recordingPosts = (parent: {postMessage: ReturnType<typeof vi.fn>}) => parent.postMessage.mock.calls.map(call => call[0] as {type: string; status?: unknown})
     .filter(message => message.type === 'recording');
 
-  it('reports disabled once in production, whatever the source does, and nothing after the stop begins', async () => {
+  it('reports the history database opening once in production while it stays closed, whatever the source does, and nothing after the stop begins', async () => {
     const f = await stoppedService(stopProbe);
     try {
-      expect(recordingPosts(f.parent)).toEqual([{type: 'recording', status: {state: 'disabled'}}]);
+      // Since the game recording enablement of October 25, 2026 production builds the recorder over the history database,
+      // so the status is `opening` (G3 rule 2) until the database opens; `disabled` is no longer reported.
+      const opening = {type: 'recording', status: {state: 'opening', target: 'history', code: null,
+        losses: {lostEvents: 0, eventLoss: 0, notConnected: 0, sampleLoss: 0, restoreLoss: 0, droppedSamples: 0}, trip: null}};
+      expect(recordingPosts(f.parent)).toEqual([opening]);
       f.parent.emit('message', {data: {type: 'select', source: 'synthetic'}, ports: []});
       const state = (status: V1SourceState['status']): V1SourceState => ({selection: 'synthetic', status, reason: 'fixed', fresh: status === 'connected', durable: {state: 'off'}});
       for (const status of ['waiting', 'connected', 'disconnected'] as const) f.v1.options[0].onState!(state(status));
       await vi.advanceTimersByTimeAsync(1000);
-      expect(recordingPosts(f.parent)).toEqual([{type: 'recording', status: {state: 'disabled'}}]);
+      expect(recordingPosts(f.parent)).toEqual([opening]);
       f.stop(); await vi.advanceTimersByTimeAsync(1000);
       expect(recordingPosts(f.parent)).toHaveLength(1);
       expect([f.exit.mock.calls, vi.getTimerCount()]).toEqual([[[0]], 0]);

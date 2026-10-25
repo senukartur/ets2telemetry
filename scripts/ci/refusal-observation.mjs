@@ -4,7 +4,7 @@ import {existsSync} from 'node:fs';
 import {constants, copyFile, mkdir, open, readdir, readFile, realpath, stat} from 'node:fs/promises';
 import path from 'node:path';
 import {listState, untilPage} from './journal-observation.mjs';
-import {RECORDING_DISABLED_TEXT, waitForRecordingText} from './renderer-observation.mjs';
+import {RECORDING_STOPPED_SCHEMA_NEWER_TEXT, waitForRecordingText} from './renderer-observation.mjs';
 
 // ET-019 PR-7: the newer-database refusal in the running application (REG-013, REG-014, REG-017). Before the launch the
 // driver copies the immutable storage fixture `schema-newer-999.sqlite` (this application's id, schema version 999) to
@@ -91,10 +91,13 @@ export async function runRefusalSmoke({dashboard, config, record}) {
   assert.deepEqual(record.bridge, {list: REFUSED_ANSWER, detail: REFUSED_ANSWER, events: REFUSED_ANSWER}, 'The journal reads were not refused with SCHEMA_NEWER');
   record.bridgeRefused = true;
   record.health = (await dashboard.evaluate(() => globalThis.desktop.getAppState())).health;
-  assert.deepEqual(record.health, {service: 'ready', storage: 'verified', recording: {state: 'disabled'}, lastError: null}, 'Main\'s health is not ready and disabled');
+  // Since the game recording enablement (October 25, 2026) the history database has a trip recorder, so a refused open
+  // is `stopped` with the refusal's code (G3 rule 3), not `disabled`.
+  assert.deepEqual(record.health, {service: 'ready', storage: 'verified', recording: {state: 'stopped', target: 'history', code: 'SCHEMA_NEWER',
+    losses: {lostEvents: 0, eventLoss: 0, notConnected: 0, sampleLoss: 0, restoreLoss: 0, droppedSamples: 0}, trip: null}, lastError: null}, 'Main\'s health is not ready and stopped with SCHEMA_NEWER');
   record.healthConsistent = true;
-  record.recordingText = await waitForRecordingText(dashboard, RECORDING_DISABLED_TEXT, 'RECORDING_DISABLED_TEXT_NOT_SHOWN');
-  record.recordingDisabledShown = true;
+  record.recordingText = await waitForRecordingText(dashboard, RECORDING_STOPPED_SCHEMA_NEWER_TEXT, 'RECORDING_STOPPED_TEXT_NOT_SHOWN');
+  record.recordingStoppedShown = true;
   await dashboard.getByTestId('tab-journal').click({timeout: 5000});
   // listState answers as soon as an error is shown; an empty or filled list must have no row to pass the wait instead.
   const shown = await untilPage(dashboard, listState, {page: 1, count: 0});
@@ -128,8 +131,10 @@ export async function verifyRefusalRun({config, record, mainEvents, serviceEvent
   record.fileUnchanged = true;
   assert.deepEqual(record.historyEvents, {unavailable: [{code: 'SCHEMA_NEWER'}], opened: 0, closed: 0, targets: 0, historyStep: ['ok']},
     'The service did not refuse the history database exactly once');
-  // Rule 1 comes before the database rules, so the service reports `disabled` from its start: no `opening` or `stopped`.
-  assert.deepEqual(record.recordingStatusRows, [{state: 'disabled'}], 'Main reported a recording state other than disabled');
+  // The recorder exists, so the service reports `opening` (G3 rule 2) from its start and `stopped` (rule 3) once the open is refused.
+  const statusFacts = (state, code) => ({state, target: 'history', code, lostEvents: 0, eventLoss: 0, notConnected: 0, sampleLoss: 0, restoreLoss: 0, droppedSamples: 0,
+    tripPhase: null, tripCompleteness: null, untrackedJob: null});
+  assert.deepEqual(record.recordingStatusRows, [statusFacts('opening', null), statusFacts('stopped', 'SCHEMA_NEWER')], 'Main did not report opening and then stopped with SCHEMA_NEWER');
   assert.deepEqual(mainEvents.filter(row => row.event === 'APP_EXIT_REQUESTED').map(row => row.facts?.reason), ['app-quit']);
   assert.deepEqual(serviceEvents.filter(row => row.event === 'SERVICE_REPORT' && row.detail?.type === 'stopped').map(row => row.detail), [{type: 'stopped', clean: true}]);
   assert.ok(![...mainEvents, ...serviceEvents].some(row => FAILURE_EVENTS.test(row.event)), 'A failure event was logged');

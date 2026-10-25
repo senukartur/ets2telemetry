@@ -5,7 +5,7 @@ import {spawn} from 'node:child_process';
 import {mkdir, readFile, readdir, writeFile} from 'node:fs/promises';
 import path from 'node:path';
 import {performance} from 'node:perf_hooks';
-import {RECORDING_DISABLED_TEXT, waitForCurrentTelemetry, waitForRecordingText} from './renderer-observation.mjs';
+import {RECORDING_NOT_RECORDED_TEXT, waitForCurrentTelemetry, waitForRecordingText} from './renderer-observation.mjs';
 import {waitForOverlay} from './overlay-observation.mjs';
 import {observeExit} from './exit-observation.mjs';
 
@@ -87,11 +87,15 @@ export async function newDashboardPage(application, retired) {
     pages => pages.length === 1, 'EXPECTED_ONE_NEW_DASHBOARD').then(pages => pages[0]);
 }
 
-/** ET-015c PR-4: main's `disabled` recording status and the dashboard's fixed text for it. */
-async function disabledRecording(application, page) {
-  const state = await until(() => lifecycleState(application), value => value.health.recording.state === 'disabled', 'RECORDING_NOT_DISABLED');
-  assert.deepEqual(state.health.recording, {state: 'disabled'});
-  return {health: state.health.recording, dashboard: await waitForRecordingText(page, RECORDING_DISABLED_TEXT, 'RECORDING_DISABLED_TEXT_NOT_SHOWN')};
+/**
+ * ET-015c PR-4, amended by the game recording enablement of October 25, 2026: main's `not-recorded-source` recording
+ * status over the history database (the journey's source is not a recorded one) and the dashboard's fixed text for it.
+ */
+async function notRecordedRecording(application, page) {
+  const state = await until(() => lifecycleState(application), value => value.health.recording.state === 'not-recorded-source', 'RECORDING_STATE_NOT_REACHED');
+  assert.deepEqual(state.health.recording, {state: 'not-recorded-source', target: 'history', code: null,
+    losses: {lostEvents: 0, eventLoss: 0, notConnected: 0, sampleLoss: 0, restoreLoss: 0, droppedSamples: 0}, trip: null});
+  return {health: state.health.recording, dashboard: await waitForRecordingText(page, RECORDING_NOT_RECORDED_TEXT, 'RECORDING_NOT_RECORDED_TEXT_NOT_SHOWN')};
 }
 
 async function readyDashboard(page) {
@@ -139,7 +143,7 @@ export async function runLifecycleSmoke({application, launcher, dashboard, overl
   assert.ok(Number.isSafeInteger(initial.servicePid) && initial.servicePid > 0, 'Service PID unavailable');
   record.servicePid = initial.servicePid;
   // ET-015c PR-4: the service records nothing, so main reports `disabled` and the dashboard shows its fixed text.
-  record.recordingStatus = {initial: await disabledRecording(application, dashboard)};
+  record.recordingStatus = {initial: await notRecordedRecording(application, dashboard)};
   // 0. The seeded invalid settings file yields defaults and is neither changed nor joined by any file on startup.
   // A CPU-starved start (hosted run 38755116140) may open the windows while the read is still pending (`loading`,
   // read-only defaults); main applies the same read when it settles, so wait for that before the exact checks.
@@ -196,7 +200,7 @@ export async function runLifecycleSmoke({application, launcher, dashboard, overl
   const trayDashboard = await newDashboardPage(application, retired);
   record.afterTrayOpen = await readyDashboard(trayDashboard);
   // A dashboard reopened from the tray gets the same status when it subscribes.
-  record.recordingStatus.afterTrayOpen = await disabledRecording(application, trayDashboard);
+  record.recordingStatus.afterTrayOpen = await notRecordedRecording(application, trayDashboard);
   const beforeExit = await lifecycleState(application);
   assert.equal(beforeExit.servicePid, initial.servicePid); assert.equal(beforeExit.dashboard, true); assert.equal(await serviceExits(), 0);
   assert.equal(source.statistics().connections, 1);
@@ -239,7 +243,7 @@ export async function runLifecycleSmoke({application, launcher, dashboard, overl
     return Boolean(window && !window.isVisible());
   });
   assert.equal(record.syntheticOverlayHiddenAfterOff, true);
-  await disabledRecording(application, trayDashboard);
+  await notRecordedRecording(application, trayDashboard);
 
   // 4. Explicit exit from the renderer: one orderly sequence, normal service stop, exit 0.
   await trayDashboard.screenshot({path: path.join(config.output, 'ready.png')});
@@ -267,8 +271,8 @@ export async function verifyLifecycleRestart({application, record, rendererPages
   assert.equal(state.started, true); assert.equal(state.tray, true);
   record.restart.servicePid = state.servicePid;
   assert.notEqual(state.servicePid, record.servicePid);
-  record.recordingStatus.restart = await disabledRecording(application, dashboard);
-  record.recordingDisabledShown = true;
+  record.recordingStatus.restart = await notRecordedRecording(application, dashboard);
+  record.recordingNotRecordedShown = true;
   record.restartRecovered = true;
   record.restart.settingsState = state.settings.state;
   assert.deepEqual(state.settings, {language: 'en', autostart: false, units: {ets2: 'us-customary', ats: 'us-customary'}, gearDisplay: SAVED_GEARS, overlay: {...DEFAULT_OVERLAY, enabled: false}, state: 'loaded', writable: true, saveError: null});

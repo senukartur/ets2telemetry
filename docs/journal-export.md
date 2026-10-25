@@ -2,7 +2,7 @@
 
 ET-016 PR-5 exports one recorded trip as a JSON file, `ets2telemetry.trip-export` format version 1, through a Save dialog that main owns. The export is a copy for the user's own records. The application never imports or restores it. Decisions J15–J18 are in [concept.md](../concept.md#et-016-authorization--october-16-2026); the reads it is made from are the [journal reads](journal.md).
 
-Status (October 17, 2026): the format, the save flow and the Export button are implemented and tested with synthetic databases only. `GAME_HISTORY_RECORDING` stays `false`, so no real game trip can be exported yet. The Windows Save dialog itself (overwrite prompt, cancel by Esc and by the close box, OneDrive Documents, long paths, a read-only folder) remains a pending manual check.
+Status (October 17, 2026): the format, the save flow and the Export button are implemented and tested with synthetic databases only. `GAME_HISTORY_RECORDING` has been `true` since October 25, 2026, but no real game trip has been recorded or exported yet. The Windows Save dialog itself (overwrite prompt, cancel by Esc and by the close box, OneDrive Documents, long paths, a read-only folder) remains a pending manual check.
 
 Current exports use [format 2](#hard-mode-format-2-et-026), adding the Hard Mode boolean/audit; the format-1 specification and example below remain historical coverage.
 

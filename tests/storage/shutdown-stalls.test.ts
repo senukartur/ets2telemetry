@@ -68,11 +68,10 @@ const reader = (name: string) => ({database: target(name), open: () => ws.open({
 /** The lines of `timeline` that are in `lines`, in timeline order. */
 const ordered = (timeline: string[], lines: string[]) => timeline.filter(line => lines.includes(line));
 /**
- * Game sources record no history (R3), and nothing created the history database under `localAppData`; each case calls it
+ * A synthetic recording target replaces history (R3), and nothing created the history database under `localAppData`; each case calls it
  * before it starts and after everything ended.
  */
 function expectNoGameHistory(localAppData: string) {
-  expect(GAME_HISTORY_RECORDING).toBe(false);
   expect(existsSync(path.join(localAppData, 'ETS2Telemetry', 'data', 'telemetry.sqlite'))).toBe(false);
 }
 /** The invariants I1–I5 of scripts/ci/history-invariants.mjs over a closed database and every ACK written for `session`. */
