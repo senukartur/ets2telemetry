@@ -201,6 +201,52 @@ void v1_truck(v1::records::TruckConfigured& r, const scs_named_value_t* attribut
   });
   if (!terminated) v1_unseen_all(r.brand_id, r.brand, r.id, r.name, r.fuel_capacity_l, r.license_plate, r.plate_country_id, r.plate_country);
 }
+// Minor-1 gear counts (ET-050b B2): the truck configuration's u32 `gears.forward` and `gears.reverse`, for the undamaged
+// truck. They stay outside the truck record, so truck.configured events and minor-0 bytes are unchanged.
+void v1_gear_counts(v1::GearboxPod& g, const scs_named_value_t* attributes) noexcept {
+  g.forward_gears = {}; g.reverse_gears = {};
+  const bool terminated = v1_scan(attributes, [&](const char* name, const scs_value_t& value) {
+    if (equal(name, SCS_TELEMETRY_CONFIG_ATTRIBUTE_forward_gear_count)) v1_value(g.forward_gears, value);
+    else if (equal(name, SCS_TELEMETRY_CONFIG_ATTRIBUTE_reverse_gear_count)) v1_value(g.reverse_gears, value);
+  });
+  if (!terminated) v1_unseen_all(g.forward_gears, g.reverse_gears);
+}
+// One bounded pass over an `hshifter` configuration (ET-050b B2): `selector.count` (the CAP-01 captures send it twice,
+// without and with index 0, and every copy must agree) and the indexed slot.gear (s32), slot.handle.position and
+// slot.selectors (u32), copied by SDK slot index. Returns the layout's availability: an empty list is not-observed; a
+// null or unterminated list, a type mismatch, a slot attribute without an index or at index 64 or more, a repeated slot
+// attribute, disagreeing selector counts or a missing selector count are invalid. Range, completeness and duplicate
+// pairs are checked by the encoder; nothing is ever truncated. Other attributes, such as shifter.type, are not copied.
+v1::FieldState v1_hshifter(v1::HShifterPod& h, const scs_named_value_t* attributes) noexcept {
+  h = {};
+  if (!attributes) return v1::FieldState::invalid;
+  bool counted = false;
+  for (std::size_t i = 0; i < max_attributes; ++i) {
+    const auto& attribute = attributes[i];
+    if (!attribute.name) return i == 0 ? v1::FieldState::not_observed : counted ? v1::FieldState::available : v1::FieldState::invalid;
+    const auto& value = attribute.value;
+    if (equal(attribute.name, SCS_TELEMETRY_CONFIG_ATTRIBUTE_selector_count)) {
+      if (value.type != SCS_VALUE_TYPE_u32 || (counted && value.value_u32.value != h.selector_count)) return v1::FieldState::invalid;
+      h.selector_count = value.value_u32.value; counted = true; continue;
+    }
+    const std::uint8_t bit = equal(attribute.name, SCS_TELEMETRY_CONFIG_ATTRIBUTE_slot_gear) ? v1::slot_gear_seen
+      : equal(attribute.name, SCS_TELEMETRY_CONFIG_ATTRIBUTE_slot_handle_position) ? v1::slot_handle_seen
+      : equal(attribute.name, SCS_TELEMETRY_CONFIG_ATTRIBUTE_slot_selectors) ? v1::slot_selectors_seen : 0;
+    if (!bit) continue;
+    if (attribute.index == SCS_U32_NIL || attribute.index >= h.slots.size()) return v1::FieldState::invalid;
+    auto& slot = h.slots[attribute.index];
+    if (slot.seen & bit) return v1::FieldState::invalid;
+    slot.seen = static_cast<std::uint8_t>(slot.seen | bit);
+    if (bit == v1::slot_gear_seen) {
+      if (value.type != SCS_VALUE_TYPE_s32) return v1::FieldState::invalid;
+      slot.gear = value.value_s32.value;
+    } else {
+      if (value.type != SCS_VALUE_TYPE_u32) return v1::FieldState::invalid;
+      (bit == v1::slot_handle_seen ? slot.handle_position : slot.selectors) = value.value_u32.value;
+    }
+  }
+  return v1::FieldState::invalid;
+}
 void v1_trailer(v1::records::TrailerConfigured& r, const scs_named_value_t* attributes) noexcept {
   const bool terminated = v1_scan(attributes, [&](const char* name, const scs_value_t& value) {
     if (equal(name, SCS_TELEMETRY_CONFIG_ATTRIBUTE_id)) v1_value(r.id, value);
@@ -305,7 +351,7 @@ scs_result_t Adapter::initialize(scs_u32_t version, const scs_telemetry_init_par
       // a channel and attaches it again.
       v1_published_ = {}; events_.store(nullptr, std::memory_order_release);
     }
-    v1_configuration_ = {}; v1_continuity_ = {}; v1_configuration_dirty_ = true;
+    v1_configuration_ = {}; v1_continuity_ = {}; v1_configuration_dirty_ = true; v1_gearbox_ = {}; v1_gearbox_dirty_ = true;
     clock_epoch_ = 0; observed_in_frame_.fill(false); in_frame_ = false;
     producer_.identity.game_id.assign(input.common.game_id); producer_.identity.game.assign(ets2 ? "ets2" : "ats");
     producer_.identity.api_version = version; producer_.identity.game_telemetry_version = input.common.game_version;
@@ -645,7 +691,7 @@ bool Adapter::read_current(Snapshot& output) noexcept {
 void Adapter::attach_events(v1::EventChannel* channel) noexcept {
   events_.store(channel, std::memory_order_release);
   // The first v1 slot of the session, so that a worker started after attachment can build its checkpoint at once.
-  if (channel && initialized_) { v1_configuration_dirty_ = true; publish_v1(); }
+  if (channel && initialized_) { v1_configuration_dirty_ = true; v1_gearbox_dirty_ = true; publish_v1(); }
 }
 bool Adapter::read_v1_current(V1Current& output) noexcept {
   try {
@@ -678,6 +724,13 @@ void Adapter::v1_emit(bool boundary) noexcept {
 }
 void Adapter::v1_configuration(const scs_telemetry_configuration_t& config) noexcept {
   if (!events_.load(std::memory_order_acquire) || !config.id) return;
+  if (equal(config.id, SCS_TELEMETRY_CONFIG_hshifter)) {
+    // B2: the layout sits outside `configuration`. It changes no revision, assigns no eventSeq and emits no event; the
+    // copy is bounded and allocation-free, and only the next publication carries it.
+    auto& layout = v1_gearbox_.hshifter;
+    layout.state = v1_hshifter(layout.value, config.attributes);
+    v1_gearbox_dirty_ = true; return;
+  }
   const bool job = equal(config.id, SCS_TELEMETRY_CONFIG_job), truck = equal(config.id, SCS_TELEMETRY_CONFIG_truck);
   const int trailer = trailer_slot(config.id);
   // bus_job and car_job have no v1 type (TD-002) and the legacy `trailer` id repeats trailer.0: no record, no eventSeq.
@@ -692,8 +745,15 @@ void Adapter::v1_configuration(const scs_telemetry_configuration_t& config) noex
   auto& body = v1_record_.record;
   if (job && cleared) { body.emplace<v1::records::JobCleared>(); current.job = {}; }
   else if (job) { auto& r = body.emplace<v1::records::JobConfigured>(); v1_job(r, config.attributes); current.job.value = r; current.job.state = v1::FieldState::available; }
-  else if (truck && cleared) { body.emplace<v1::records::TruckCleared>(); current.truck = {}; }
-  else if (truck) { auto& r = body.emplace<v1::records::TruckConfigured>(); v1_truck(r, config.attributes); current.truck.value = r; current.truck.state = v1::FieldState::available; }
+  // A truck clear makes the gear counts not-observed and a truck configuration copies them (B2); the layout is unchanged.
+  else if (truck && cleared) {
+    body.emplace<v1::records::TruckCleared>(); current.truck = {};
+    v1_gearbox_.forward_gears = {}; v1_gearbox_.reverse_gears = {}; v1_gearbox_dirty_ = true;
+  }
+  else if (truck) {
+    auto& r = body.emplace<v1::records::TruckConfigured>(); v1_truck(r, config.attributes); current.truck.value = r; current.truck.state = v1::FieldState::available;
+    v1_gear_counts(v1_gearbox_, config.attributes); v1_gearbox_dirty_ = true;
+  }
   else {
     auto& slot = current.trailers[static_cast<std::size_t>(trailer)];
     if (cleared) { body.emplace<v1::records::TrailerCleared>().index = static_cast<std::uint8_t>(trailer); slot = {}; }
@@ -744,6 +804,7 @@ void Adapter::publish_v1() noexcept {
     } else s.world_placement = v1::Field<v1::PlacementPod>{v1::PlacementPod{}, v1_state(placement.status)};
     // The configuration is copied only after a configuration boundary, not on every frame.
     if (v1_configuration_dirty_) { s.configuration = v1_configuration_; v1_configuration_dirty_ = false; }
+    if (v1_gearbox_dirty_) { s.gearbox = v1_gearbox_; v1_gearbox_dirty_ = false; }
   } catch (...) { increment(v1_continuity_.coalesced_snapshots); }
 }
 } // namespace ets2telemetry::sdk

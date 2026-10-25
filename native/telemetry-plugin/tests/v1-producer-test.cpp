@@ -561,6 +561,7 @@ void same_message(const Json& built, const Json& expected, const std::string& na
   check(canonical(decode(encode(built)).wire) == canonical(expected), name + " encodes");
 }
 
+GearboxPod worst_gearbox();
 void messages_case(const Fixtures& f) {
   const Encoder encoder(identity());
   WelcomeInfo w; w.durable_events = true; w.gameplay_events_registered = true; w.game_mode_events = true; w.telemetry_api = {1, 1}; w.game_telemetry = {1, 19}; w.game_mode = single_player_weak();
@@ -656,6 +657,128 @@ void messages_case(const Fixtures& f) {
   const auto heavy_frame = encode(worst_encoder.checkpoint(u64_max, u64_max, heavy, StatusInfo{single_player_weak(), true, worst_delivery, {u64_max, u64_max}}));
   check(heavy_frame.size() - 4 <= limits.server_frame_bytes, "worst state fits 64 KiB");
   std::cout << "worst checkpoint built " << heavy_frame.size() - 4 << " bytes; ";
+  // ET-050b: with the worst-case gearbox the minor-1 checkpoint still fits (D17), and the minor-0 bytes do not change.
+  heavy.gearbox = worst_gearbox();
+  const auto heavy_status = StatusInfo{single_player_weak(), true, worst_delivery, {u64_max, u64_max}};
+  check(encode(worst_encoder.checkpoint(u64_max, u64_max, heavy, heavy_status)) == heavy_frame, "a gearbox never reaches the minor-0 worst checkpoint");
+  const auto heavy_minor1 = encode(worst_encoder.checkpoint(u64_max, u64_max, heavy, heavy_status, 1), 1);
+  check(heavy_minor1.size() - 4 <= limits.server_frame_bytes, "worst minor-1 state fits 64 KiB");
+  std::cout << "worst minor-1 checkpoint built " << heavy_minor1.size() - 4 << " bytes; ";
+}
+
+// ET-050b PR-4: the minor-1 gearbox from the raw adapter copies. The slot tables are the hand-written CAP-01 tables of the
+// accepted plan; the SDK sends 32 slots, handle positions 0-7 times selector states 0-3, and an unmatched slot is gear 0.
+struct LayoutRow { std::int32_t gear; std::uint32_t handle, selectors; };
+constexpr std::uint8_t slot_complete = slot_gear_seen | slot_handle_seen | slot_selectors_seen;
+Field<HShifterPod> sdk_layout(std::initializer_list<LayoutRow> gears) {
+  HShifterPod h; h.selector_count = 2;
+  for (std::uint32_t i = 0; i < 32; ++i) { auto& s = h.slots[i]; s.handle_position = i / 4; s.selectors = i % 4; s.seen = slot_complete; }
+  for (const auto& row : gears) h.slots[row.handle * 4 + row.selectors].gear = row.gear;
+  return available_field(h);
+}
+Field<HShifterPod> daf_12() {
+  return sdk_layout({{-1, 1, 0}, {-3, 1, 1}, {-2, 1, 2}, {-4, 1, 3}, {1, 2, 0}, {7, 2, 1}, {2, 2, 2}, {8, 2, 3}, {3, 3, 0}, {9, 3, 1}, {4, 3, 2}, {10, 3, 3},
+    {5, 4, 0}, {11, 4, 1}, {6, 4, 2}, {12, 4, 3}});
+}
+Field<HShifterPod> mack_18() {
+  return sdk_layout({{-1, 2, 0}, {-3, 2, 1}, {-2, 2, 2}, {-4, 2, 3}, {1, 3, 0}, {2, 3, 2}, {3, 4, 0}, {11, 4, 1}, {4, 4, 2}, {12, 4, 3}, {5, 5, 0}, {13, 5, 1},
+    {6, 5, 2}, {14, 5, 3}, {7, 6, 0}, {15, 6, 1}, {8, 6, 2}, {16, 6, 3}, {9, 7, 0}, {17, 7, 1}, {10, 7, 2}, {18, 7, 3}});
+}
+GearboxPod gearbox_of(std::uint32_t forward, std::uint32_t reverse, Field<HShifterPod> layout) {
+  GearboxPod g; g.forward_gears = available_field(forward); g.reverse_gears = available_field(reverse); g.hshifter = layout; return g;
+}
+// The worst-case gearbox of minor1/checkpoint-worst.json: not-supported counts and 64 slots of maximal width.
+GearboxPod worst_gearbox() {
+  GearboxPod g; g.forward_gears.state = g.reverse_gears.state = FieldState::not_supported;
+  HShifterPod h; h.selector_count = 6; std::size_t i = 0;
+  for (std::uint32_t s = 10; s <= 63; ++s) h.slots[i++] = HShifterSlotRaw{-100, 255, s, slot_complete};
+  for (std::uint32_t s = 10; s <= 19; ++s) h.slots[i++] = HShifterSlotRaw{-100, 254, s, slot_complete};
+  g.hshifter = available_field(h); return g;
+}
+Message minor1(const Fixtures& f, const std::string& name) { return decode_payload(read(f.dir / "minor1" / (name + ".json")), Sender::server, 1); }
+const Json& gearbox_node(const Json& message) { return field(field(field(message, "data"), "state"), "gearbox"); }
+// Encodes and decodes one server message at minor 1.
+Message roundtrip1(const Json& wire) { const auto frame = encode(wire, 1); return decode_payload(std::string(frame.begin() + 4, frame.end()), Sender::server, 1); }
+Json encoded_gearbox(const GearboxPod& g) {
+  auto s = minimal_state(); s.gearbox = g;
+  return gearbox_node(roundtrip1(Encoder(identity()).snapshot(1, 1, s, {}, 1)).wire);
+}
+bool gearbox_reason(const GearboxPod& g, const char* part, const char* reason) {
+  const auto node = encoded_gearbox(g); const auto& p = field(node, part);
+  return !field(p, "available").boolean() && field(p, "reason").string() == reason;
+}
+void gearbox_case(const Fixtures& f) {
+  const Encoder encoder(identity());
+  StoreStatus delivery; StatusInfo status{single_player_weak(), true, delivery, {}};
+  // The CAP-01 ETS2 DAF 12-speed and ATS Mack 18-speed layouts equal the hand-written minor-1 checkpoints.
+  auto daf = fixture_state(100, 7, true); daf.gearbox = gearbox_of(12, 4, daf_12());
+  const auto daf_built = encoder.checkpoint(2, 1000100000000ULL, daf, status, 1);
+  check(canonical(daf_built) == canonical(with_ten_trailers(minor1(f, "checkpoint").wire)), "DAF 12-speed checkpoint matches minor1/checkpoint");
+  check(canonical(roundtrip1(daf_built).wire) == canonical(with_ten_trailers(minor1(f, "checkpoint").wire)), "DAF checkpoint encodes at minor 1");
+  auto ats = identity(); ats.source.game = GameId::ats; const Encoder ats_encoder(ats);
+  auto mack = fixture_state(100, 7, true); mack.gearbox = gearbox_of(18, 4, mack_18());
+  check(canonical(ats_encoder.checkpoint(2, 1000100000000ULL, mack, status, 1)) == canonical(with_ten_trailers(minor1(f, "checkpoint-ats-mack").wire)),
+    "Mack 18-speed checkpoint matches minor1/checkpoint-ats-mack");
+  // Minor 0 never carries the gearbox: the bytes equal the frozen fixture and the state without a gearbox.
+  const auto frozen = canonical(with_ten_trailers(f.server("checkpoint").wire));
+  check(canonical(encoder.checkpoint(2, 1000100000000ULL, daf, status)) == frozen && canonical(encoder.checkpoint(2, 1000100000000ULL, daf, status, 0)) == frozen,
+    "minor-0 checkpoint unchanged by a populated gearbox");
+  check(encode(encoder.checkpoint(2, 1000100000000ULL, daf, status)) == encode(encoder.checkpoint(2, 1000100000000ULL, fixture_state(100, 7, true), status)),
+    "minor-0 checkpoint bytes identical with and without a gearbox");
+  StoreStatus snap; snap.next_event_seq = 2; snap.retained_entries = 1; snap.retained_bytes = 1500; snap.oldest_retained_ns = 1000149000000ULL;
+  const StatusInfo snap_status{single_player_weak(), true, snap, {1, 0}};
+  auto snapshot_state = fixture_state(102, 8, false); snapshot_state.gearbox.forward_gears = available_field<std::uint32_t>(12); snapshot_state.gearbox.reverse_gears = available_field<std::uint32_t>(4);
+  check(canonical(encoder.snapshot(5, 1000250000000ULL, snapshot_state, snap_status, 1)) == canonical(with_ten_trailers(minor1(f, "snapshot").wire)), "snapshot with counts and no layout");
+  check(encode(encoder.snapshot(5, 1000250000000ULL, snapshot_state, snap_status)) == encode(encoder.snapshot(5, 1000250000000ULL, fixture_state(102, 8, false), snap_status)) &&
+    canonical(encoder.snapshot(5, 1000250000000ULL, snapshot_state, snap_status)) == canonical(with_ten_trailers(f.server("snapshot").wire)), "minor-0 snapshot bytes unchanged");
+  rejects([&] { encode(daf_built); }, "the default encoder refuses a minor-1 checkpoint");
+  // Every other message of a minor-1 connection differs only by its minor.
+  WelcomeInfo w; w.durable_events = true; w.gameplay_events_registered = true; w.game_mode_events = true; w.telemetry_api = {1, 1}; w.game_telemetry = {1, 19}; w.game_mode = single_player_weak();
+  check(canonical(encoder.welcome(1, 1000050000000ULL, w, 1)) == canonical(minor1(f, "welcome").wire), "minor-1 welcome");
+  check(canonical(roundtrip1(encoder.welcome(1, 1000050000000ULL, w, 1)).wire) == canonical(minor1(f, "welcome").wire), "minor-1 welcome encodes");
+  check(canonical(encoder.event(3, 1000150000000ULL, make_event(1, synthetic_job(), 1000149000000ULL), false, 1)) == canonical(minor1(f, "event-job-configured").wire), "minor-1 event");
+  check(canonical(encoder.gap(7, 1000350000000ULL, GapRange{3, 4, counts(0, 0, 1, 1, 0, 0), 1000330000000ULL, 1000340000000ULL}, false, 1)) == canonical(minor1(f, "gap").wire), "minor-1 gap");
+  check(canonical(encoder.clock_reply(9, 1000450000000ULL, 1, 1000449700000ULL, 1000449900000ULL, 1)) == canonical(minor1(f, "clock-reply").wire), "minor-1 clock reply");
+  check(canonical(encoder.end(10, 1000500000000ULL, EndReason::plugin_shutdown, EndCursor{2, 1, 0}, 1)) == canonical(minor1(f, "end").wire), "minor-1 end");
+  // Availability parts against the hand-written minor-1 snapshots.
+  auto counts_unseen = gearbox_of(0, 0, daf_12()); counts_unseen.forward_gears = {}; counts_unseen.reverse_gears = {};
+  check(canonical(encoded_gearbox(counts_unseen)) == canonical(gearbox_node(minor1(f, "snapshot-counts-not-observed").wire)), "counts not observed, layout available");
+  auto invalid_layout = gearbox_of(12, 4, {}); invalid_layout.hshifter.state = FieldState::invalid;
+  check(canonical(encoded_gearbox(invalid_layout)) == canonical(gearbox_node(minor1(f, "snapshot-hshifter-invalid").wire)), "invalid layout");
+  GearboxPod unsupported; unsupported.forward_gears.state = unsupported.reverse_gears.state = unsupported.hshifter.state = FieldState::not_supported;
+  check(canonical(encoded_gearbox(unsupported)) == canonical(gearbox_node(minor1(f, "snapshot-gearbox-not-supported").wire)), "every part not supported");
+  HShifterPod zero; zero.selector_count = 0;
+  for (std::uint32_t i = 0; i < 8; ++i) zero.slots[i] = HShifterSlotRaw{i == 0 ? 0 : i == 1 ? -1 : static_cast<std::int32_t>(i - 1), i, 0, slot_complete};
+  check(canonical(encoded_gearbox(gearbox_of(6, 1, available_field(zero)))) == canonical(gearbox_node(minor1(f, "snapshot-zero-selectors").wire)), "zero-selector layout");
+  check(canonical(encoded_gearbox(gearbox_of(12, 4, sdk_layout({})))) == canonical(gearbox_node(minor1(f, "snapshot-all-neutral-slots").wire)), "every slot neutral: an empty available layout");
+  check(gearbox_reason(GearboxPod{}, "forwardGears", "not-observed") && gearbox_reason(GearboxPod{}, "hshifter", "not-observed"), "a default gearbox is not observed");
+  // B2 bounds: invalid as a whole, never truncated.
+  const auto layout_with = [](const std::function<void(HShifterPod&)>& change) { auto l = daf_12(); change(l.value); return gearbox_of(12, 4, l); };
+  const auto slots_of = [](const GearboxPod& g) { return std::get<Json::Array>(field(field(field(encoded_gearbox(g), "hshifter"), "value"), "slots").value).size(); };
+  check(field(field(encoded_gearbox(gearbox_of(100, 100, daf_12())), "forwardGears"), "value").number() == 100 && gearbox_reason(gearbox_of(101, 4, daf_12()), "forwardGears", "invalid") &&
+    gearbox_reason(gearbox_of(12, 101, daf_12()), "reverseGears", "invalid"), "gear counts 100 and 101");
+  check(slots_of(layout_with([](HShifterPod& h) { h.slots[8].gear = 100; h.slots[4].gear = -100; })) == 16, "gears -100 and 100 are kept");
+  check(gearbox_reason(layout_with([](HShifterPod& h) { h.slots[8].gear = 101; }), "hshifter", "invalid") && gearbox_reason(layout_with([](HShifterPod& h) { h.slots[8].gear = -101; }), "hshifter", "invalid"), "gear 101 and -101");
+  check(gearbox_reason(layout_with([](HShifterPod& h) { h.slots[0].gear = 101; }), "hshifter", "invalid"), "an out-of-range neutral-position slot is not hidden by omission");
+  check(slots_of(layout_with([](HShifterPod& h) { h.slots[31].handle_position = 255; })) == 16 && gearbox_reason(layout_with([](HShifterPod& h) { h.slots[31].handle_position = 256; }), "hshifter", "invalid"), "handle position 255 and 256");
+  check(gearbox_reason(layout_with([](HShifterPod& h) { h.slots[8].selectors = 4; }), "hshifter", "invalid") && gearbox_reason(layout_with([](HShifterPod& h) { h.selector_count = 7; }), "hshifter", "invalid"), "selectors below 2^count; at most 6 selectors");
+  check(slots_of(layout_with([](HShifterPod& h) { h.selector_count = 6; h.slots[8].selectors = 63; })) == 16 && gearbox_reason(layout_with([](HShifterPod& h) { h.selector_count = 6; h.slots[8].selectors = 64; }), "hshifter", "invalid"), "selectors 63 and 64 under 6 selectors");
+  check(gearbox_reason(layout_with([](HShifterPod& h) { h.slots[9].seen = slot_gear_seen | slot_handle_seen; }), "hshifter", "invalid") && gearbox_reason(layout_with([](HShifterPod& h) { h.slots[40].seen = slot_gear_seen; h.slots[40].gear = 5; }), "hshifter", "invalid"), "an incomplete slot triple");
+  check(gearbox_reason(layout_with([](HShifterPod& h) { h.slots[9].selectors = 0; }), "hshifter", "invalid") && gearbox_reason(layout_with([](HShifterPod& h) { h.slots[0].handle_position = 1; }), "hshifter", "invalid"), "a duplicate pair, also against a neutral slot");
+  check(slots_of(layout_with([](HShifterPod& h) { h.slots[9].gear = 1; })) == 16, "a repeated gear is allowed; the wire does not check the layout against the counts");
+  check(slots_of(layout_with([](HShifterPod& h) { h.slots[20] = {}; h.slots[40] = HShifterSlotRaw{20, 9, 0, slot_complete}; })) == 17, "an uncopied slot is skipped and slot order is SDK order");
+  HShifterPod full; full.selector_count = 6; for (std::uint32_t i = 0; i < 64; ++i) full.slots[i] = HShifterSlotRaw{1, i / 64, i, slot_complete};
+  check(slots_of(gearbox_of(1, 0, available_field(full))) == 64, "64 slots");
+  const auto order = field(field(encoded_gearbox(layout_with([](HShifterPod& h) { h.slots[40] = HShifterSlotRaw{20, 9, 0, slot_complete}; })), "hshifter"), "value");
+  check(std::get<Json::Array>(field(order, "slots").value).back().at("gear").number() == 20 && std::get<Json::Array>(field(order, "slots").value).front().at("gear").number() == -1, "SDK slot order");
+  check(canonical(encoded_gearbox(worst_gearbox())) == canonical(gearbox_node(minor1(f, "checkpoint-worst").wire)), "worst-case gearbox matches minor1/checkpoint-worst");
+  // The ET-002b Consumer at minor 1 accepts the encoder's minor-1 stream and rejects a minor-0 frame within it.
+  Consumer consumer(true, 1); std::uint64_t seq = 0;
+  const auto accept = [&](const Json& wire) { return consumer.accept(roundtrip1(wire)); };
+  accept(encoder.welcome(++seq, 10, w, 1));
+  const auto hydrated = accept(encoder.checkpoint(++seq, 20, daf, StatusInfo{single_player_weak(), true, StoreStatus{}, {}}, 1));
+  check(hydrated.hydration && consumer.minor() == 1u, "a minor-1 checkpoint hydrates a minor-1 consumer");
+  rejects([&] { consumer.accept(decode(encode(encoder.snapshot(++seq, 30, daf, StatusInfo{single_player_weak(), true, StoreStatus{}, {}})))); }, "a minor-0 snapshot on a minor-1 connection");
 }
 
 void streams_case() {
@@ -964,6 +1087,7 @@ int main(int argc, char** argv) {
     else if (name == "streams") streams_case();
     else if (name == "randomized") randomized_case();
     else if (name == "fuzz") fuzz_case(f);
+    else if (name == "gearbox") gearbox_case(f);
     else throw std::runtime_error("unknown case " + name);
     std::cout << "v1-producer " << name << " passed\n";
     return 0;

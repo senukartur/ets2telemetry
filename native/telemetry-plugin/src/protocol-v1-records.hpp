@@ -124,13 +124,24 @@ struct WindowPod {
   std::uint64_t handle = 0; std::int32_t x = 0, y = 0; std::uint32_t width = 0, height = 0, dpi = 0;
   bool foreground = false, minimized = false; DisplayMode display_mode = DisplayMode::unknown;
 };
+// Minor-1 gearbox (ET-050b B2): raw copies of one SDK `hshifter` configuration callback, indexed by SDK slot. `seen`
+// holds one bit per slot attribute copied (slot_gear_seen, slot_handle_seen, slot_selectors_seen). The SDK callback only
+// copies; the encoder omits neutral (gear 0) slots and marks an incomplete slot, an out-of-range value or a duplicate
+// (handle position, selectors) pair `invalid`, so a layout is never truncated.
+constexpr std::uint8_t slot_gear_seen = 1, slot_handle_seen = 2, slot_selectors_seen = 4;
+struct HShifterSlotRaw { std::int32_t gear = 0; std::uint32_t handle_position = 0, selectors = 0; std::uint8_t seen = 0; };
+struct HShifterPod { std::uint32_t selector_count = 0; std::array<HShifterSlotRaw, gearbox_limits.max_slots> slots{}; };
+// Gear counts in SDK u32 from the latest truck callback (`gears.forward`, `gears.reverse`) and the latest h-shifter
+// layout. It is outside ConfigurationPod: the hshifter callback changes no revision and emits no event (B2).
+struct GearboxPod { Field<std::uint32_t> forward_gears, reverse_gears; Field<HShifterPod> hshifter; };
 // Current state in SDK units: speed m/s, fuel L, odometer and range km, consumption L/km, navigation distance m.
+// `gearbox` is encoded only on a minor-1 connection; a minor-0 state ignores it.
 struct StatePod {
   SimulationState simulation = SimulationState::unavailable;
   Field<double> speed_mps, fuel_l, fuel_capacity_l, engine_rpm; Field<std::int32_t> gear;
   Field<double> odometer_km, average_consumption_l_per_km, estimated_range_km, navigation_distance_m;
   GameTimePod game_time; Field<std::uint64_t> capture_utc_unix_ms; std::uint64_t boundary_order = 0;
-  Field<PlacementPod> world_placement; ConfigurationPod configuration; Field<WindowPod> window;
+  Field<PlacementPod> world_placement; ConfigurationPod configuration; Field<WindowPod> window; GearboxPod gearbox;
 };
 enum class GameId : std::uint8_t { ets2 = 0, ats = 1 };
 enum class Origin : std::uint8_t { game = 0, synthetic = 1, replay = 2 };
@@ -138,5 +149,5 @@ enum class Origin : std::uint8_t { game = 0, synthetic = 1, replay = 2 };
 struct SourcePod { GameId game = GameId::ets2; Uuid plugin_session_id, process_instance_id; std::uint32_t process_id = 0, windows_session_id = 0; Origin origin = Origin::game; };
 
 static_assert(std::is_trivially_copyable_v<EventRecord> && std::is_trivially_copyable_v<StatePod> && std::is_trivially_copyable_v<SourcePod> &&
-  std::is_trivially_copyable_v<GameModePod> && std::is_trivially_copyable_v<ConfigurationPod>, "SDK-thread copies are plain memcpy");
+  std::is_trivially_copyable_v<GameModePod> && std::is_trivially_copyable_v<ConfigurationPod> && std::is_trivially_copyable_v<GearboxPod>, "SDK-thread copies are plain memcpy");
 } // namespace ets2telemetry::v1
