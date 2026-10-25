@@ -162,7 +162,7 @@ Each iteration, at most 10 ms apart:
 
 1. drain the ring into the store and call `expire(now)` (Caller sequence steps 3–4). A drain takes at most one ring's worth and, after its first slot, yields as soon as a stop is requested, because each record is measured by a full encode;
 2. track the one write in flight; a write still pending after 1 s closes the connection;
-3. read the client: an `ack` passes through `AckValidator::accept` and then `release()`; a `clock.probe` must have a strictly increasing `probeId` and arrive while no reply is unsent. Its receipt time is taken when the read completion is observed. Anything else, and any decoding error, closes the connection;
+3. read the client: an `ack` passes through `AckValidator::accept` and then `release()`; a `clock.probe` passes through `AckValidator::probe`, which requires the checkpoint and the connection's minor (0 until ET-050b PR-4), and must have a strictly increasing `probeId` and arrive while no reply is unsent. Its receipt time is taken when the read completion is observed. Anything else, and any decoding error, closes the connection;
 4. write, while writes complete at once and at most 32 per iteration: an unsent clock reply first (its send time is the encode time, so received ≤ sent ≤ capture), then the replaceable snapshot at most every 50 ms, then on durable connections the next store item with `AckValidator::sent`.
 
 The snapshot slot holds the latest v1 slot copy that differs from the last one sent (boundary order, window revision or window availability). A newer publication replaces an unsent one and is counted in `coalescedSnapshots`, together with the adapter's slot contention. Window availability follows the v0 identity and 250 ms freshness rules.
