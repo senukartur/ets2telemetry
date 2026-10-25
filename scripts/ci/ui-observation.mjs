@@ -234,7 +234,9 @@ async function observeGearDisplay({dashboard, overlay, source, language, record}
     await dashboard.locator(`#gear-display-ets2-${mode}`).focus(); await dashboard.keyboard.press('Space');
     await until(() => dashboard.evaluate(() => globalThis.desktop.getAppState()), state => state.settings.gearDisplay.ets2 === mode && state.settings.saveError === null,
       `UI_GEAR_DISPLAY_${mode.toUpperCase()}_SAVED`);
-    assert.equal(await dashboard.locator(`#gear-display-ets2-${mode}`).getAttribute('aria-checked'), 'true');
+    // Main's AppState reports the save before React re-renders the committed radio, so wait for the attribute.
+    await dashboard.waitForFunction(id => globalThis.document.getElementById(id)?.getAttribute('aria-checked') === 'true',
+      `gear-display-ets2-${mode}`, {timeout: 5000});
   };
   await withRestore(async () => {
     await choose('manual');
