@@ -96,6 +96,44 @@ describe('synthetic layouts', () => {
   });
 });
 
+// The observed SDK shape always declares two selector bits, so a gearbox that uses fewer leaves a bit whose slots are
+// neutral (omitted) or repeat the gear. Such a bit is unused and ignored (PR-2 review amendment to step 2).
+describe('unused selector bits', () => {
+  const tenSpeed: [number, number, number][] = [
+    [-1, 1, 0], [-2, 1, 1], [1, 2, 0], [6, 2, 1], [2, 3, 0], [7, 3, 1], [3, 4, 0], [8, 4, 1], [4, 5, 0], [9, 5, 1], [5, 6, 0], [10, 6, 1]
+  ];
+  const TEN_LABELS = {1: '1', 2: '2', 3: '3', 4: '4', 5: '5', 6: '6', 7: '7', 8: '8', 9: '9', 10: '10'};
+  it('derives a 10-speed range-only gearbox with neutral splitter slots as 1–10', () => {
+    const labels = deriveGearLabels(gearbox(10, 2, 2, tenSpeed));
+    expect(forwardOf(labels)).toEqual(TEN_LABELS);
+    expect(reverseOf(labels)).toEqual({1: 'R1', 2: 'R2'});
+    expect(formatGear(5, 'manual', labels)).toBe('5');
+  });
+  it('derives a 10-speed range-only gearbox with splitter slots that repeat the gear as 1–10', () => {
+    const repeated = [...tenSpeed, ...tenSpeed.map(([gear, handle, selectors]): [number, number, number] => [gear, handle, selectors | 2])];
+    expect(forwardOf(deriveGearLabels(gearbox(10, 2, 2, repeated)))).toEqual(TEN_LABELS);
+  });
+  it('derives a 6-speed whose four selector states all repeat each gear as 1–6', () => {
+    const slots: [number, number, number][] = [];
+    for (const [gear, handle] of [[-1, 1], [1, 2], [2, 3], [3, 4], [4, 5], [5, 6], [6, 7]]) {
+      for (const selectors of [0, 1, 2, 3]) slots.push([gear, handle, selectors]);
+    }
+    const labels = deriveGearLabels(gearbox(6, 1, 2, slots));
+    expect(forwardOf(labels)).toEqual({1: '1', 2: '2', 3: '3', 4: '4', 5: '5', 6: '6'});
+    expect(reverseOf(labels)).toEqual({1: 'R1'});
+    expect(formatGear(6, 'manual', labels)).toBe('6');
+  });
+  it('shows plain numbers for a bit without pairs', () => {
+    expect(forwardOf(deriveGearLabels(gearbox(3, 0, 1, [[1, 1, 0], [2, 2, 0], [3, 3, 0]])))).toEqual({1: '1', 2: '2', 3: '3'});
+  });
+  it('shows plain numbers for a bit whose pairs all repeat the gear', () => {
+    expect(forwardOf(deriveGearLabels(gearbox(2, 0, 1, [[1, 1, 0], [1, 1, 1], [2, 2, 0], [2, 2, 1]])))).toEqual({1: '1', 2: '2'});
+  });
+  it('shows plain numbers for a bit used only on separate positions', () => {
+    expect(forwardOf(deriveGearLabels(gearbox(3, 0, 2, [[1, 1, 0], [2, 2, 1], [3, 3, 2]])))).toEqual({1: '1', 2: '2', 3: '3'});
+  });
+});
+
 describe('unrecognized layouts fall back to the formula', () => {
   it.each([
     ['more forward gears than the slots hold', gearbox(18, 2, 2, THIRTEEN)],
@@ -109,8 +147,7 @@ describe('unrecognized layouts fall back to the formula', () => {
     ['a low-only position above other low-range gears', gearbox(13, 2, 2, THIRTEEN.map(([gear, handle, selectors]): [number, number, number] =>
       [gear === 1 ? 5 : gear === 5 ? 1 : gear, handle, selectors]))],
     ['a bit whose pairs differ by 1 and by more', gearbox(6, 0, 1, [[1, 1, 0], [2, 1, 1], [3, 2, 0], [5, 2, 1], [4, 3, 0], [6, 3, 1]])],
-    ['a bit without pairs', gearbox(3, 0, 1, [[1, 1, 0], [2, 2, 0], [3, 3, 0]])],
-    ['a bit whose pairs all repeat the gear', gearbox(2, 0, 1, [[1, 1, 0], [1, 1, 1], [2, 2, 0], [2, 2, 1]])],
+    ['two ignored bits that map different gears into one cell', gearbox(2, 0, 2, [[1, 1, 0], [2, 1, 3]])],
     ['two range bits', gearbox(8, 0, 2, [[1, 1, 0], [3, 1, 1], [5, 1, 2], [7, 1, 3], [2, 2, 0], [4, 2, 1], [6, 2, 2], [8, 2, 3]])],
     ['a range direction that differs between positions', gearbox(4, 0, 1, [[1, 2, 0], [3, 2, 1], [4, 3, 0], [2, 3, 1]])],
     ['a gear in two cells with different labels', gearbox(2, 0, 0, [[1, 1, 0], [2, 2, 0], [1, 3, 0]])],

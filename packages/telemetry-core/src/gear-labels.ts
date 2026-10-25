@@ -17,8 +17,11 @@ export const CRAWLER_LABELS = {single: 'L', low: 'LL', high: 'LH'} as const;
 interface Cell {low: boolean; split: Map<number, number>}
 interface SlotLabel {label: string; crawler: boolean; number: number; higher: boolean}
 
-/** A selector bit's class from its same-position forward pairs (step 2), or undefined when it has none or is mixed. */
-function classifyBit(forward: readonly HShifterSlot[], bySelectors: ReadonlyMap<number, number>, bit: number): 'splitter' | 'range' | undefined {
+/**
+ * A selector bit's class from its same-position forward pairs (step 2): `unused` when no pair holds two different
+ * gears, and undefined when its pairs differ both by 1 and by more.
+ */
+function classifyBit(forward: readonly HShifterSlot[], bySelectors: ReadonlyMap<number, number>, bit: number): 'splitter' | 'range' | 'unused' | undefined {
   let splitter = 0, range = 0;
   for (const slot of forward) {
     if ((slot.selectors & bit) !== 0) continue;
@@ -31,7 +34,7 @@ function classifyBit(forward: readonly HShifterSlot[], bySelectors: ReadonlyMap<
   }
   if (splitter > 0 && range === 0) return 'splitter';
   if (range > 0 && splitter === 0) return 'range';
-  return undefined;
+  return splitter === 0 && range === 0 ? 'unused' : undefined;
 }
 
 function derive(forwardGears: number, reverseGears: number, layout: HShifterLayout): GearLabels | undefined {
@@ -54,11 +57,13 @@ function derive(forwardGears: number, reverseGears: number, layout: HShifterLayo
   }
   if (forwardSeen.size !== forwardGears || reverseSeen.size !== reverseGears) return undefined;
   const forward = slots.filter(slot => slot.gear > 0);
-  // Step 2: classify each selector bit from the forward gears; reverse gears are always R1..Rn (B4).
+  // Step 2: classify each selector bit from the forward gears; reverse gears are always R1..Rn (B4). A bit that never
+  // changes a forward gear, because its slots are neutral or repeat the gear, is unused and ignored (review amendment).
   let rangeBit: number | undefined, splitterBit: number | undefined;
   for (let index = 0; index < selectorCount; index++) {
     const bit = 1 << index, kind = classifyBit(forward, bySelectors, bit);
     if (kind === undefined) return undefined;
+    if (kind === 'unused') continue;
     if (kind === 'range') { if (rangeBit !== undefined) return undefined; rangeBit = bit; }
     else { if (splitterBit !== undefined) return undefined; splitterBit = bit; }
   }
@@ -77,7 +82,11 @@ function derive(forwardGears: number, reverseGears: number, layout: HShifterLayo
     cells.set(slot.handlePosition, position);
     const cell = (low ? position.low : position.high) ?? {low, split: new Map<number, number>()};
     if (low) position.low = cell; else position.high = cell;
-    cell.split.set(splitterBit !== undefined && (slot.selectors & splitterBit) !== 0 ? 1 : 0, slot.gear);
+    const state = splitterBit !== undefined && (slot.selectors & splitterBit) !== 0 ? 1 : 0;
+    // Ignored bits may fold several slots into one cell state; they must agree on the gear.
+    const held = cell.split.get(state);
+    if (held !== undefined && held !== slot.gear) return undefined;
+    cell.split.set(state, slot.gear);
   }
   const minGear = (cell: Cell) => Math.min(...cell.split.values());
   // Step 4: with a range bit, a position without high-range gears is the crawler, which needs gears below every other
@@ -152,14 +161,17 @@ const cache = new WeakMap<HShifterLayout, CacheEntry>();
  * H-shifter layout are unavailable or the layout is not recognized:
  * 1. the slot gears are exactly forward 1..F and reverse −1..−R, with one slot per (handle position, selectors) pair;
  * 2. each selector bit is a splitter when its same-position forward pairs differ by 1 and a range when they differ
- *    by more; a bit without such pairs, with both kinds, or a second bit of the same kind is unrecognized;
+ *    by more; a bit without a pair of different gears is unused and ignored, while a bit with both kinds or a second
+ *    bit of the same kind is unrecognized, and so is a cell whose ignored bits map different gears to one state;
  * 3. the low range is the range state that holds gear 1;
  * 4. with a range bit, the one handle position without high-range gears is the crawler, whose gears lie below every
  *    other position's low-range gears; two such positions are unrecognized;
  * 5. the other positions are numbered 1..n in the low range by ascending gear and n+1..2n in the high range;
  * 6. a cell whose two splitter states map to distinct gears gets L (lower) and H (higher);
  * 7. the crawler is `L` without a splitter pair and `LL`/`LH` with one; reverse is R1..Rn; neutral stays N.
- * The result is memoized per layout object and shared, so callers must not change it.
+ * The result is memoized in a WeakMap keyed by the layout object's identity and shared, so callers must not change
+ * the result, and a layout must not be mutated in place after it is passed here. A new layout object per update
+ * simply misses the cache and is derived again, which is cheap.
  */
 export function deriveGearLabels(gearbox: GearboxState): GearLabels | undefined {
   const {forwardGears, reverseGears, hshifter} = gearbox;
