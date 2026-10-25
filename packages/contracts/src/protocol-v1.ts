@@ -1,10 +1,22 @@
-// Durable telemetry protocol 1.0 (ET-002b). It is a separate major from the frozen v0 live protocol and from
-// CAP0 evidence capture: each decoder rejects the others' frames. Protocol logic is independent of Electron,
-// Node APIs, SDK callbacks and storage. The wire format is specified in docs/protocol/v1.md.
+// Durable telemetry protocol 1.0 and 1.1 (ET-002b; minor 1, the gearbox state, is ET-050b). It is a separate major from
+// the frozen v0 live protocol and from CAP0 evidence capture: each decoder rejects the others' frames. Protocol logic is
+// independent of Electron, Node APIs, SDK callbacks and storage. The wire format is specified in docs/protocol/v1.md.
 import {isUint64, strictJson, type Uint64} from './protocol-v0';
 
 export type {Uint64};
+/** Version 1.0: every hello, and every message of a connection that selected minor 0. */
 export const PROTOCOL_V1 = {major: 1, minor: 0} as const;
+/** The highest minor this contract implements. Minor 1 adds `state.gearbox` to checkpoints and snapshots (§7). */
+export const V1_MAX_MINOR = 1;
+export type V1Minor = 0 | 1;
+export interface V1Version {major: 1; minor: V1Minor}
+/**
+ * Minor selection for the stateless entry points. Every entry point defaults to 0, so a caller accepts or writes a
+ * minor-1 message only when it opts in; the per-connection minor is enforced by V1Consumer and AckValidator.
+ */
+export interface V1MinorOptions {maxMinor?: number}
+/** Gearbox bounds of minor 1 (ET-050b B2). A producer marks a reading outside them `invalid`, never truncated. */
+export const V1_GEARBOX = {maxGears: 100, maxSelectorCount: 6, maxSlots: 64, maxHandlePosition: 255} as const;
 /** Fixed producer and transport bounds. Every welcome repeats them exactly; a mismatch is rejected. */
 export const V1_LIMITS = {
   serverFrameBytes: 65_536, clientFrameBytes: 4_096, eventBytes: 16_384, retainedEntries: 256, retainedBytes: 1_048_576,
@@ -62,6 +74,12 @@ export interface WindowState {
   handle: Uint64; x: number; y: number; width: number; height: number; dpi: number;
   foreground: boolean; minimized: boolean; displayMode: 'windowed' | 'borderless' | 'exclusive' | 'unknown';
 }
+/** One H-shifter slot with a nonzero gear: reverse negative. `selectors` is a bit set below 2^selectorCount. */
+export interface HShifterSlot {gear: number; handlePosition: number; selectors: number}
+/** The latest SDK `hshifter` configuration: every slot whose gear is not neutral, in SDK slot order. */
+export interface HShifterLayout {selectorCount: number; slots: HShifterSlot[]}
+/** Minor 1 only (ET-050b B1, B2): the truck's gear counts and the H-shifter layout. */
+export interface GearboxState {forwardGears: Available<number>; reverseGears: Available<number>; hshifter: Available<HShifterLayout>}
 export interface CurrentState {
   simulation: 'running' | 'paused' | 'unavailable';
   speed: Measure<'m/s'>; fuel: Measure<'L'>; fuelCapacity: Measure<'L'>; engineRpm: Measure<'rpm'>; gear: Measure<'index'>;
@@ -70,6 +88,8 @@ export interface CurrentState {
   boundaryOrder: Uint64; worldPlacement: Available<WorldPlacement>;
   configuration: {revision: Uint64; job: Available<JobConfiguration>; truck: Available<TruckConfiguration>; trailers: Available<TrailerConfiguration>[]};
   window: Available<WindowState>;
+  /** Present exactly when the message's envelope minor is 1. */
+  gearbox?: GearboxState;
 }
 /** Cumulative counts of lost eventSeqs by cause; gap messages use the same keys for one range. */
 export interface LossCounts {offline: Uint64; noDurableConsumer: Uint64; queueCount: Uint64; queueBytes: Uint64; retentionExpired: Uint64; encodingFailed: Uint64}
@@ -106,7 +126,8 @@ export const EVENT_TYPES: readonly EventType[] = [
 /** Record types that come from SDK gameplay-event callbacks, absent when that registration is unsupported. */
 export const GAMEPLAY_EVENT_TYPES: readonly EventType[] = ['job.delivered', 'job.cancelled', 'player.fined', 'player.tollgate.paid', 'player.use.ferry', 'player.use.train'];
 export interface WelcomeData {
-  minor: 0; durableEvents: boolean; limits: typeof V1_LIMITS;
+  /** The selected minor; it equals the welcome's envelope minor. */
+  minor: V1Minor; durableEvents: boolean; limits: typeof V1_LIMITS;
   capabilities: {gameplayEvents: 'registered' | 'not-supported'; eventTypes: EventType[]};
   versions: {telemetryApi: {major: number; minor: number}; gameTelemetry: {major: number; minor: number}; sdkArchive: string};
   gameMode: GameMode;
@@ -117,7 +138,7 @@ export interface GapData {
   firstLostMonotonicNs: Available<Uint64>; lastLostMonotonicNs: Available<Uint64>; redelivered: boolean;
 }
 export interface EndData {reason: 'plugin-shutdown' | 'sequence-exhausted' | 'source-retired'; nextEventSeq: Uint64; ackedThroughEventSeq: Uint64; retainedUnacked: Uint64}
-interface ServerBase {version: typeof PROTOCOL_V1; source: SourceIdentity; seq: Uint64; capture: CaptureTime}
+interface ServerBase {version: V1Version; source: SourceIdentity; seq: Uint64; capture: CaptureTime}
 export type ServerMessage = ServerBase & (
   {kind: 'welcome'; data: WelcomeData} |
   {kind: 'checkpoint'; data: {boundarySeq: Uint64; state: CurrentState; status: SourceStatus; continuity: Continuity}} |
@@ -127,11 +148,11 @@ export type ServerMessage = ServerBase & (
   {kind: 'clock.reply'; data: {probeId: Uint64; receivedMonotonicNs: Uint64; sentMonotonicNs: Uint64}} |
   {kind: 'end'; data: EndData}
 );
-export type ClientMessage = {version: typeof PROTOCOL_V1} & (
-  {kind: 'hello'; data: {clientInstanceId: string; minMinor: 0; maxMinor: number; durableEvents: boolean}} |
-  {kind: 'ack'; data: {pluginSessionId: string; throughEventSeq: Uint64}} |
-  {kind: 'clock.probe'; data: {probeId: Uint64}}
-);
+/** A hello is always version 1.0; `ack` and `clock.probe` carry the connection's selected minor. */
+export type ClientMessage =
+  {version: typeof PROTOCOL_V1; kind: 'hello'; data: {clientInstanceId: string; minMinor: 0; maxMinor: number; durableEvents: boolean}} |
+  {version: V1Version; kind: 'ack'; data: {pluginSessionId: string; throughEventSeq: Uint64}} |
+  {version: V1Version; kind: 'clock.probe'; data: {probeId: Uint64}};
 export type ProtocolMessage = ServerMessage | ClientMessage;
 const CLIENT_KINDS = ['hello', 'ack', 'clock.probe'];
 
@@ -239,9 +260,30 @@ function windowState(v: unknown) {
   num(w.width, 0, 100_000, true); num(w.height, 0, 100_000, true); num(w.dpi, 1, 1_000, true);
   bool(w.foreground); bool(w.minimized); choice(w.displayMode, ['windowed', 'borderless', 'exclusive', 'unknown']);
 }
-function state(v: unknown) {
-  const o = record(v, ['simulation', 'speed', 'fuel', 'fuelCapacity', 'engineRpm', 'gear', 'odometer', 'averageConsumption', 'estimatedRange',
-    'navigationDistance', 'gameTime', 'captureUtcUnixMs', 'boundaryOrder', 'worldPlacement', 'configuration', 'window']);
+const STATE_KEYS = ['simulation', 'speed', 'fuel', 'fuelCapacity', 'engineRpm', 'gear', 'odometer', 'averageConsumption', 'estimatedRange',
+  'navigationDistance', 'gameTime', 'captureUtcUnixMs', 'boundaryOrder', 'worldPlacement', 'configuration', 'window'];
+const gearCount = (value: unknown) => num(value, 0, V1_GEARBOX.maxGears, true);
+function gearbox(v: unknown) {
+  const g = record(v, ['forwardGears', 'reverseGears', 'hshifter']);
+  available(g.forwardGears, gearCount); available(g.reverseGears, gearCount);
+  available(g.hshifter, value => {
+    const h = record(value, ['selectorCount', 'slots']), count = num(h.selectorCount, 0, V1_GEARBOX.maxSelectorCount, true);
+    if (!Array.isArray(h.slots) || h.slots.length > V1_GEARBOX.maxSlots) fail();
+    const pairs = new Set<number>();
+    for (const slot of h.slots) {
+      const s = record(slot, ['gear', 'handlePosition', 'selectors']);
+      // Neutral slots are omitted, so a slot gear is never 0.
+      if (num(s.gear, -V1_GEARBOX.maxGears, V1_GEARBOX.maxGears, true) === 0) fail();
+      const pair = num(s.handlePosition, 0, V1_GEARBOX.maxHandlePosition, true) * 2 ** V1_GEARBOX.maxSelectorCount + num(s.selectors, 0, 2 ** count - 1, true);
+      // Each (handlePosition, selectors) pair selects exactly one slot.
+      if (pairs.has(pair)) fail();
+      pairs.add(pair);
+    }
+  });
+}
+/** The minor-0 state, plus `gearbox` exactly when the envelope minor is 1. */
+function state(v: unknown, minor: V1Minor) {
+  const o = record(v, minor === 0 ? STATE_KEYS : [...STATE_KEYS, 'gearbox']);
   choice(o.simulation, ['running', 'paused', 'unavailable']);
   measure(o.speed, 'm/s', -1_000, 1_000); measure(o.fuel, 'L', 0, 1_000_000); measure(o.fuelCapacity, 'L', 0, 1_000_000);
   measure(o.engineRpm, 'rpm', 0, 100_000); measure(o.gear, 'index', -100, 100, true); measure(o.odometer, 'm', 0, 1e12);
@@ -258,6 +300,7 @@ function state(v: unknown) {
   if (!Array.isArray(c.trailers) || c.trailers.length > V1_LIMITS.trailerSlots) fail();
   c.trailers.forEach((slot, index) => available(slot, value => { if (trailer(record(value, TRAILER_KEYS)) !== index) fail(); }));
   available(o.window, windowState);
+  if (minor === 1) gearbox(o.gearbox);
 }
 function status(v: unknown, captureNs: bigint) {
   const o = record(v, ['gameMode', 'delivery', 'eventLoss']); gameMode(record(o.gameMode, GAME_MODE_KEYS)); lossCounts(o.eventLoss);
@@ -314,9 +357,10 @@ function eventRecord(v: unknown, occurred: Record<string, unknown>) {
     default: break;
   }
 }
-function welcome(v: unknown) {
+function welcome(v: unknown, minor: V1Minor) {
   const d = record(v, ['minor', 'durableEvents', 'limits', 'capabilities', 'versions', 'gameMode']);
-  if (d.minor !== 0) fail(); bool(d.durableEvents);
+  // The welcome is the first message at the selected minor, so its envelope minor equals the minor it announces.
+  if (d.minor !== minor) fail(); bool(d.durableEvents);
   const limits = record(d.limits, Object.keys(V1_LIMITS));
   for (const [key, value] of Object.entries(V1_LIMITS)) if (limits[key] !== value) fail('Unsupported protocol v1 limits');
   const c = record(d.capabilities, ['gameplayEvents', 'eventTypes']), gameplay = choice(c.gameplayEvents, ['registered', 'not-supported']);
@@ -332,20 +376,30 @@ function source(v: unknown) {
   choice(s.game, ['ets2', 'ats']); uuid(s.pluginSessionId); uuid(s.processInstanceId);
   num(s.processId, 1, U32_MAX, true); num(s.windowsSessionId, 0, U32_MAX, true); choice(s.origin, ['game', 'synthetic', 'replay']);
 }
-function version(v: unknown) {
-  const ver = record(v, ['major', 'minor']);
-  if (ver.major !== PROTOCOL_V1.major || ver.minor !== PROTOCOL_V1.minor) fail('Unsupported protocol version');
+/** The caller's highest accepted minor; a value this contract does not implement is a caller error. */
+function maxMinorOf(options: V1MinorOptions): V1Minor {
+  const max = options.maxMinor ?? 0;
+  if (max !== 0 && max !== 1) fail('Unsupported maximum protocol v1 minor');
+  return max;
 }
-/** Strict validation of one server-to-client message: exact keys, bounds, units and exact integer strings. */
-export function validateServerMessage(v: unknown): ServerMessage {
-  const o = record(v, ['version', 'kind', 'source', 'seq', 'capture', 'data']); version(o.version);
+function version(v: unknown, maxMinor: V1Minor): V1Minor {
+  const ver = record(v, ['major', 'minor']);
+  if (ver.major !== PROTOCOL_V1.major || (ver.minor !== 0 && !(ver.minor === 1 && maxMinor === 1))) fail('Unsupported protocol version');
+  return ver.minor;
+}
+/**
+ * Strict validation of one server-to-client message: exact keys, bounds, units and exact integer strings. The envelope
+ * minor selects the state schema; minors above `maxMinor` (default 0) are rejected.
+ */
+export function validateServerMessage(v: unknown, options: V1MinorOptions = {}): ServerMessage {
+  const o = record(v, ['version', 'kind', 'source', 'seq', 'capture', 'data']); const minor = version(o.version, maxMinorOf(options));
   source(o.source); u64(o.seq); const cap = record(o.capture, ['clockId', 'monotonicNs']); uuid(cap.clockId); const captureNs = u64(cap.monotonicNs);
   switch (choice(o.kind, ['welcome', 'checkpoint', 'snapshot', 'event', 'gap', 'clock.reply', 'end'])) {
-    case 'welcome': welcome(o.data); break;
+    case 'welcome': welcome(o.data, minor); break;
     case 'checkpoint': case 'snapshot': {
       const d = record(o.data, o.kind === 'checkpoint' ? ['boundarySeq', 'state', 'status', 'continuity'] : ['state', 'status', 'continuity']);
       if (o.kind === 'checkpoint' && d.boundarySeq !== o.seq) fail();
-      state(d.state); status(d.status, captureNs); const c = record(d.continuity, ['coalescedSnapshots', 'offlineTransitions']); u64(c.coalescedSnapshots); u64(c.offlineTransitions);
+      state(d.state, minor); status(d.status, captureNs); const c = record(d.continuity, ['coalescedSnapshots', 'offlineTransitions']); u64(c.coalescedSnapshots); u64(c.offlineTransitions);
       break;
     }
     case 'event': {
@@ -375,8 +429,8 @@ export function validateServerMessage(v: unknown): ServerMessage {
   }
   return v as ServerMessage;
 }
-/** v1 current state without the game window, as the live display receives it (ET-010c). */
-export type LiveStateV1 = Omit<CurrentState, 'window'>;
+/** v1 current state without the game window, as the live display receives it (ET-010c). The gearbox is not projected yet. */
+export type LiveStateV1 = Omit<CurrentState, 'window' | 'gearbox'>;
 /**
  * The whitelisted v1 observation the telemetry service projects for live display (ET-010c, decision F2). It is not a
  * wire message: it omits the game window and its handle, the message kind, the delivery cursor, continuity, the clock
@@ -401,16 +455,17 @@ export function validateLiveObservationV1(v: unknown): LiveObservationV1 {
   const s = o.state;
   if (s === null || typeof s !== 'object' || Array.isArray(s) || Object.hasOwn(s, 'window')) fail();
   // The wire state validator with a not-observed placeholder in place of the omitted window.
-  state({...(s as Record<string, unknown>), window: NOT_OBSERVED_WINDOW});
+  state({...(s as Record<string, unknown>), window: NOT_OBSERVED_WINDOW}, 0);
   const status = record(o.sourceStatus, ['gameMode', 'eventLoss']); gameMode(record(status.gameMode, GAME_MODE_KEYS)); lossCounts(status.eventLoss);
   num(o.receivedMonotonicMs, 0, Number.MAX_VALUE); bool(o.hydration);
   return v as LiveObservationV1;
 }
-/** Strict validation of one client-to-server message. */
-export function validateClientMessage(v: unknown): ClientMessage {
-  const o = record(v, ['version', 'kind', 'data']); version(o.version);
+/** Strict validation of one client-to-server message. A hello is always version 1.0; minors above `maxMinor` (default 0) are rejected. */
+export function validateClientMessage(v: unknown, options: V1MinorOptions = {}): ClientMessage {
+  const o = record(v, ['version', 'kind', 'data']); const minor = version(o.version, maxMinorOf(options));
   switch (choice(o.kind, CLIENT_KINDS)) {
     case 'hello': {
+      if (minor !== 0) fail('Unsupported protocol version');
       const d = record(o.data, ['clientInstanceId', 'minMinor', 'maxMinor', 'durableEvents']);
       uuid(d.clientInstanceId); if (d.minMinor !== 0) fail(); num(d.maxMinor, 0, 65_535, true); bool(d.durableEvents); break;
     }
@@ -419,33 +474,36 @@ export function validateClientMessage(v: unknown): ClientMessage {
   }
   return v as ClientMessage;
 }
-export function validateMessage(v: unknown, sender: Sender): ProtocolMessage { return sender === 'server' ? validateServerMessage(v) : validateClientMessage(v); }
+export function validateMessage(v: unknown, sender: Sender, options: V1MinorOptions = {}): ProtocolMessage {
+  return sender === 'server' ? validateServerMessage(v, options) : validateClientMessage(v, options);
+}
 const maxPayload = (sender: Sender) => sender === 'server' ? V1_LIMITS.serverFrameBytes : V1_LIMITS.clientFrameBytes;
 const fatal = new TextDecoder('utf-8', {fatal: true, ignoreBOM: true});
 /** Decodes one payload from the given sender. Size, UTF-8, strict JSON, schema and the event size bound all apply. */
-export function decodePayload(bytes: Uint8Array, sender: Sender): ProtocolMessage {
+export function decodePayload(bytes: Uint8Array, sender: Sender, options: V1MinorOptions = {}): ProtocolMessage {
   if (!bytes.length || bytes.length > maxPayload(sender)) fail('Protocol v1 payload size rejected');
   let parsed: unknown;
   // strictJson rejects duplicate keys, malformed numbers, lone surrogates, trailing data and depth above 16.
   try { parsed = strictJson(fatal.decode(bytes)); } catch { fail('Malformed protocol v1 JSON'); }
-  const message = validateMessage(parsed, sender);
+  const message = validateMessage(parsed, sender, options);
   if (message.kind === 'event' && bytes.length > V1_LIMITS.eventBytes) fail('Protocol v1 event size rejected');
   return message;
 }
-/** Validates first, then encodes and enforces the sender's payload bound and the event bound. */
-export function encodeFrame(message: ProtocolMessage): Uint8Array {
+/** Validates first, then encodes and enforces the sender's payload bound and the event bound. Minors above `maxMinor` (default 0) are refused. */
+export function encodeFrame(message: ProtocolMessage, options: V1MinorOptions = {}): Uint8Array {
   const sender: Sender = CLIENT_KINDS.includes((message as {kind?: unknown}).kind as string) ? 'client' : 'server';
-  validateMessage(message, sender); const bytes = encoder.encode(JSON.stringify(message));
+  validateMessage(message, sender, options); const bytes = encoder.encode(JSON.stringify(message));
   // Validate serialized bytes as well: this catches invalid string scalars and the size limits.
-  decodePayload(bytes, sender); const frame = new Uint8Array(4 + bytes.length);
+  decodePayload(bytes, sender, options); const frame = new Uint8Array(4 + bytes.length);
   new DataView(frame.buffer).setUint32(0, bytes.length, true); frame.set(bytes, 4); return frame;
 }
 /** Length-prefixed v1 framing for one direction. Fails closed; never rescans for a later prefix after an error. */
 export class FrameDecoder {
   private header = new Uint8Array(4); private headerUsed = 0;
   private payload: Uint8Array | undefined; private payloadUsed = 0; private failed = false; private pushing = false;
+  private readonly options: V1MinorOptions;
   /** `sender` is the peer whose frames this decoder reads: `server` on the client, `client` on the server. */
-  constructor(private readonly sender: Sender) {}
+  constructor(private readonly sender: Sender, options: V1MinorOptions = {}) { this.options = {maxMinor: maxMinorOf(options)}; }
   // Emit immediately; the decoder never accumulates an unbounded result list for a large chunk.
   push(chunk: Uint8Array, emit: (message: ProtocolMessage) => void): void {
     if (this.failed) fail('Decoder is closed');
@@ -465,7 +523,7 @@ export class FrameDecoder {
         const n = Math.min(this.payload.length - this.payloadUsed, chunk.length - offset);
         this.payload.set(chunk.subarray(offset, offset + n), this.payloadUsed); this.payloadUsed += n; offset += n;
         if (this.payloadUsed === this.payload.length) {
-          const message = decodePayload(this.payload, this.sender); this.payload = undefined; this.headerUsed = 0; emit(message);
+          const message = decodePayload(this.payload, this.sender, this.options); this.payload = undefined; this.headerUsed = 0; emit(message);
           if (this.failed) return;
         }
       }
@@ -478,10 +536,15 @@ export class FrameDecoder {
   }
 }
 
-/** Server-side hello negotiation. Only minor 0 exists; durable delivery never exceeds the client's request. */
-export function negotiateV1(input: unknown, options: {allowDurable: boolean} = {allowDurable: true}): {version: typeof PROTOCOL_V1; minor: 0; durableEvents: boolean} {
-  const hello = validateClientMessage(input); if (hello.kind !== 'hello') fail();
-  return {version: PROTOCOL_V1, minor: 0, durableEvents: hello.data.durableEvents && options.allowDurable};
+/**
+ * Server-side hello negotiation. The server selects min(hello `maxMinor`, its own `maxMinor`), which defaults to 0;
+ * the welcome and every later message in both directions then carry that minor. Durable delivery never exceeds the
+ * client's request.
+ */
+export function negotiateV1(input: unknown, options: {allowDurable: boolean; maxMinor?: number} = {allowDurable: true}): {version: V1Version; minor: V1Minor; durableEvents: boolean} {
+  const own = maxMinorOf(options), hello = validateClientMessage(input); if (hello.kind !== 'hello') fail();
+  const minor: V1Minor = hello.data.maxMinor < own ? 0 : own;
+  return {version: {major: 1, minor}, minor, durableEvents: hello.data.durableEvents && options.allowDurable};
 }
 
 // SDK-independent normalization helpers. The SDK adapter (ET-004b) decides availability before calling them.

@@ -1,0 +1,9 @@
+normal 1 C:hello,S:welcome,S:checkpoint,S:event-job-configured,A:1,S:snapshot,C:clock-probe,S:clock-reply,C:ack-1,S:end accept 1
+gearbox-availability 1 S:welcome,S:checkpoint,S:snapshot,S:snapshot-counts-not-observed,S:snapshot-hshifter-invalid accept 0
+minor-change-snapshot 1 S:welcome,S:checkpoint,S:snapshot-minor-0 reject@2
+minor-change-event 1 S:welcome,S:checkpoint,S:event-job-configured-minor-0 reject@2
+minor-change-checkpoint 1 S:welcome,S:checkpoint-minor-0 reject@1
+ack-minor-0 1 S:welcome,S:checkpoint,S:event-job-configured,C:ack-1-minor-0 reject@3
+old-plugin-minor-0 1 S:welcome-minor-0,S:checkpoint-minor-0,S:event-job-configured-minor-0,A:1,S:snapshot-minor-0,C:ack-1-minor-0 accept 1
+old-plugin-minor-change 1 S:welcome-minor-0,S:checkpoint reject@1
+old-plugin-ack-minor-1 1 S:welcome-minor-0,S:checkpoint-minor-0,S:event-job-configured-minor-0,C:ack-1 reject@3

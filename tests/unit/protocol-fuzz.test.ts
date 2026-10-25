@@ -135,7 +135,27 @@ const isUuid = (v: unknown) => typeof v === 'string' && UUID.test(v);
 /** Canonical decimal uint64: `0` or digits without a leading zero, at most 18446744073709551615 (v0.md, v1.md §5). */
 const isU64 = (v: unknown): v is string => typeof v === 'string' && /^(0|[1-9][0-9]{0,19})$/.test(v) && BigInt(v) <= 18_446_744_073_709_551_615n;
 const isInt = (v: unknown, min: number, max: number) => typeof v === 'number' && Number.isInteger(v) && v >= min && v <= max;
-const isVersion = (v: unknown, major: number) => hasKeys(v, ['major', 'minor']) && v.major === major && v.minor === 0;
+const isVersion = (v: unknown, major: number, minors: readonly number[] = [0]) => hasKeys(v, ['major', 'minor']) && v.major === major && minors.includes(v.minor as number);
+/** The documented v1 minors (v1.md §2): 0 and, from ET-050b, 1. */
+const V1_MINORS_DOC = [0, 1];
+/** Kinds whose schema or rules name the minor: the hello is always 1.0, the welcome repeats it, and state carries the gearbox only in minor 1 (v1.md §2, §4, §7). */
+const V1_MINOR_DEPENDENT_KINDS = ['hello', 'welcome', 'checkpoint', 'snapshot'];
+/** Minor-1 gearbox bounds (v1.md §7, ET-050b B2). */
+const V1_GEARBOX_DOC = {maxGears: 100, maxSelectorCount: 6, maxSlots: 64, maxHandlePosition: 255};
+const isAvailability = (v: unknown, value: (x: unknown) => boolean) => hasKeys(v, ['available', 'value']) ? v.available === true && value(v.value) :
+  hasKeys(v, ['available', 'reason']) && v.available === false && ['not-supported', 'not-observed', 'invalid'].includes(v.reason as string);
+function gearboxProblem(g: unknown): string | undefined {
+  if (!hasKeys(g, ['forwardGears', 'reverseGears', 'hshifter'])) return 'gearbox keys';
+  const count = (x: unknown) => isInt(x, 0, V1_GEARBOX_DOC.maxGears);
+  if (!isAvailability(g.forwardGears, count) || !isAvailability(g.reverseGears, count)) return 'gear counts';
+  const layout = (x: unknown) => {
+    if (!hasKeys(x, ['selectorCount', 'slots']) || !isInt(x.selectorCount, 0, V1_GEARBOX_DOC.maxSelectorCount) || !Array.isArray(x.slots) || x.slots.length > V1_GEARBOX_DOC.maxSlots) return false;
+    const pairs = x.slots.map(s => hasKeys(s, ['gear', 'handlePosition', 'selectors']) && isInt(s.gear, -V1_GEARBOX_DOC.maxGears, V1_GEARBOX_DOC.maxGears) && s.gear !== 0 &&
+      isInt(s.handlePosition, 0, V1_GEARBOX_DOC.maxHandlePosition) && isInt(s.selectors, 0, 2 ** (x.selectorCount as number) - 1) ? `${s.handlePosition as number}/${s.selectors as number}` : undefined);
+    return pairs.every(p => p !== undefined) && new Set(pairs).size === pairs.length;
+  };
+  return isAvailability(g.hshifter, layout) ? undefined : 'hshifter layout';
+}
 /** JSON value equality: member order is immaterial and numbers compare by value (v0.md "Encoding and bounds"). */
 function jsonEqual(a: unknown, b: unknown): boolean {
   if (a === b) return true;
@@ -151,9 +171,9 @@ function sourceProblem(s: unknown): string | undefined {
   return undefined;
 }
 /** The envelope of every server message (v0.md "Source, ordering and time"; v1.md §5). */
-function serverEnvelopeProblem(m: Json, major: number): string | undefined {
+function serverEnvelopeProblem(m: Json, major: number, minors: readonly number[] = [0]): string | undefined {
   if (!hasKeys(m, ['version', 'kind', 'source', 'seq', 'capture', 'data'])) return 'server envelope keys';
-  if (!isVersion(m.version, major)) return `version ${JSON.stringify(m.version)}`;
+  if (!isVersion(m.version, major, minors)) return `version ${JSON.stringify(m.version)}`;
   const source = sourceProblem(m.source); if (source) return source;
   if (!isU64(m.seq)) return 'seq is not a canonical uint64';
   if (!hasKeys(m.capture, ['clockId', 'monotonicNs']) || !isUuid(m.capture.clockId) || !isU64(m.capture.monotonicNs)) return 'capture time';
@@ -183,9 +203,16 @@ function v0Problem(m: unknown): string | undefined {
 function v1ServerProblem(m: unknown, size: number): string | undefined {
   if (!isRecord(m)) return 'not an object';
   if (!['welcome', 'checkpoint', 'snapshot', 'event', 'gap', 'clock.reply', 'end'].includes(m.kind as string)) return `server kind ${String(m.kind)}`;
-  const envelope = serverEnvelopeProblem(m, 1); if (envelope) return envelope;
-  const data = m.data as Json;
-  if (m.kind === 'welcome' && (data.minor !== 0 || !jsonEqual(data.limits, V1_LIMITS_DOC))) return 'welcome minor or limits';
+  const envelope = serverEnvelopeProblem(m, 1, V1_MINORS_DOC); if (envelope) return envelope;
+  const data = m.data as Json, minor = (m.version as Json).minor;
+  // The welcome's envelope minor equals the minor it selects (v1.md §2, §4).
+  if (m.kind === 'welcome' && (data.minor !== minor || !jsonEqual(data.limits, V1_LIMITS_DOC))) return 'welcome minor or limits';
+  // State carries `gearbox` exactly in minor 1, within the documented bounds (v1.md §7).
+  if (m.kind === 'checkpoint' || m.kind === 'snapshot') {
+    const state = isRecord(data) ? data.state : undefined;
+    if (!isRecord(state) || Object.hasOwn(state, 'gearbox') !== (minor === 1)) return 'gearbox presence differs from the envelope minor';
+    if (minor === 1) { const problem = gearboxProblem(state.gearbox); if (problem) return problem; }
+  }
   if (m.kind === 'event') {
     if (size > V1_EVENT_BYTES) return `event of ${size} bytes`;
     if (!isU64(data.eventSeq) || BigInt(data.eventSeq) < 1n || BigInt(data.eventSeq) > V1_MAX_EVENT_SEQ_DOC) return 'eventSeq range';
@@ -203,7 +230,7 @@ function v1ServerProblem(m: unknown, size: number): string | undefined {
 function v1ClientProblem(m: unknown): string | undefined {
   if (!isRecord(m)) return 'not an object';
   if (m.kind === 'hello') return helloProblem(m, 1, 'durableEvents');
-  if (!hasKeys(m, ['version', 'kind', 'data']) || !isVersion(m.version, 1)) return 'client envelope';
+  if (!hasKeys(m, ['version', 'kind', 'data']) || !isVersion(m.version, 1, V1_MINORS_DOC)) return 'client envelope';
   if (m.kind === 'ack') return hasKeys(m.data, ['pluginSessionId', 'throughEventSeq']) && isUuid(m.data.pluginSessionId) && isU64(m.data.throughEventSeq) ? undefined : 'ack data';
   if (m.kind === 'clock.probe') return hasKeys(m.data, ['probeId']) && isU64(m.data.probeId) && m.data.probeId !== '0' ? undefined : 'probe data';
   return `client kind ${String(m.kind)}`;
@@ -262,25 +289,29 @@ const v0Decoder: PayloadDecoder = {
   },
   reencode: message => encodedOrSizeRefusal(() => v0.encodeFrame(message as v0.ProtocolMessage), error => error instanceof v0.ProtocolError, jsonBytes(message) > V0_PAYLOAD_BYTES)
 };
+const V1_READER = {maxMinor: 1};
 const v1Decoder = (sender: v1.Sender): PayloadDecoder => ({
   name: `protocol v1 decodePayload (${sender})`, limit: sender === 'server' ? V1_SERVER_PAYLOAD_BYTES : V1_CLIENT_PAYLOAD_BYTES,
-  decode: bytes => v1.decodePayload(bytes, sender), isRejection: error => error instanceof v1.ProtocolError,
+  // The fuzzed readers accept every documented minor, so minor-1 seeds and minor swaps are in scope (ET-050b).
+  decode: bytes => v1.decodePayload(bytes, sender, V1_READER), isRejection: error => error instanceof v1.ProtocolError,
   problem: (message, bytes) => {
     if (sender === 'server') return v1ServerProblem(message, bytes.length);
     const problem = v1ClientProblem(message); if (problem) return problem;
     const m = message as v1.ClientMessage;
-    // The server selects minor 0, and durable delivery is never granted beyond the request, nor by a server that does not
-    // offer it (v1.md §4; the endpoint stays live-only without its service policy, ET-004b OD-2).
-    if (m.kind === 'hello') for (const allowDurable of [true, false]) {
-      const n = v1.negotiateV1(m, {allowDurable});
-      if (!isVersion(n.version, 1) || n.minor !== 0 || typeof n.durableEvents !== 'boolean' || (n.durableEvents && !(m.data.durableEvents && allowDurable))) return 'negotiation';
+    // The server selects min(hello maxMinor, its own maxMinor), 0 by default, and durable delivery is never granted beyond
+    // the request, nor by a server that does not offer it (v1.md §4; the endpoint stays live-only without its service
+    // policy, ET-004b OD-2).
+    if (m.kind === 'hello') for (const allowDurable of [true, false]) for (const own of [undefined, 0, 1]) {
+      const n = v1.negotiateV1(m, own === undefined ? {allowDurable} : {allowDurable, maxMinor: own}), selected = Math.min(m.data.maxMinor, own ?? 0);
+      if (!hasKeys(n.version, ['major', 'minor']) || n.version.major !== 1 || n.version.minor !== selected || n.minor !== selected ||
+        typeof n.durableEvents !== 'boolean' || (n.durableEvents && !(m.data.durableEvents && allowDurable))) return 'negotiation';
     }
     return undefined;
   },
   reencode: message => {
     const size = jsonBytes(message), kind = (message as {kind?: unknown}).kind;
     const tooLarge = size > (sender === 'server' ? V1_SERVER_PAYLOAD_BYTES : V1_CLIENT_PAYLOAD_BYTES) || (kind === 'event' && size > V1_EVENT_BYTES);
-    return encodedOrSizeRefusal(() => v1.encodeFrame(message as v1.ProtocolMessage), error => error instanceof v1.ProtocolError, tooLarge);
+    return encodedOrSizeRefusal(() => v1.encodeFrame(message as v1.ProtocolMessage, V1_READER), error => error instanceof v1.ProtocolError, tooLarge);
   }
 });
 const cap0Decoder: PayloadDecoder = {
@@ -317,8 +348,10 @@ function checkAccepted(decoder: PayloadDecoder, bytes: Uint8Array, message: unkn
 const manifest = (dir: string) => readFileSync(resolve(dir, 'manifest.txt'), 'utf8').trim().split(/\r?\n/).map(line => line.trim().split(/\s+/));
 const fixtures = (dir: string, result: string) => manifest(dir).filter(([, r]) => r === result).map(([file]) => new Uint8Array(readFileSync(resolve(dir, file))));
 const V0_SEEDS = fixtures(resolve('tests/fixtures/protocol-v0'), 'valid');
-const V1_SERVER_SEEDS = fixtures(resolve('tests/fixtures/protocol-v1'), 'valid');
-const V1_CLIENT_SEEDS = fixtures(resolve('tests/fixtures/protocol-v1'), 'valid-client');
+// The frozen minor-0 corpus and the ET-050b minor-1 corpus.
+const V1_DIRS = [resolve('tests/fixtures/protocol-v1'), resolve('tests/fixtures/protocol-v1/minor1')];
+const V1_SERVER_SEEDS = V1_DIRS.flatMap(dir => fixtures(dir, 'valid'));
+const V1_CLIENT_SEEDS = V1_DIRS.flatMap(dir => fixtures(dir, 'valid-client'));
 const CAP0_SEEDS = [header(0), header(0, 'game'), envelope(1, 1, {observations: delivered()}), envelope(2, 2, {group: 'lifecycle', id: 'simulation.paused'}),
   envelope(3, 4, {droppedBefore: 1, group: 'configuration', id: 'job', observations: [observation(0, 'cargo', 'string', 'Caf\u00e9 \u0001\t\u{1f69a}'),
     observation(1, 'cargo.mass', 'float', 1.5e4), observation(2, 'planned_distance.km', 'u32', 4_294_967_295)], total: 5, final: false}),
@@ -445,7 +478,11 @@ function mutator(r: Random, sizes: number[], schema: boolean): Mutator {
     version: treeStep(root => {
       const version = isRecord(root) ? root.version : undefined;
       if (!isRecord(root) || !hasKeys(version, ['major', 'minor'])) return undefined;
-      const options = [[0, 0], [1, 0], [0, 1], [1, 1], [2, 0], [255, 0], [0, 65_535], [-1, 0]].filter(([major, minor]) => major !== version.major || minor !== version.minor);
+      // A v1 message whose kind does not depend on the minor stays valid at the other documented minor (v1.md §2), so
+      // that swap is no defect for it.
+      const sameSchema = version.major === 1 && V1_MINORS_DOC.includes(version.minor as number) && !V1_MINOR_DEPENDENT_KINDS.includes(root.kind as string);
+      const options = [[0, 0], [1, 0], [0, 1], [1, 1], [2, 0], [255, 0], [0, 65_535], [-1, 0]]
+        .filter(([major, minor]) => (major !== version.major || minor !== version.minor) && !(sameSchema && major === 1 && V1_MINORS_DOC.includes(minor)));
       const [major, minor] = pick(r, options); root.version = {major, minor}; return root;
     })
   };
@@ -560,10 +597,10 @@ const v0Framing = (): Framing => {
     finish: () => { d.end(); return true; }, isRejection: e => e instanceof v0.ProtocolError, item: payload => v0.decodePayload(payload), same: jsonEqual};
 };
 const v1Framing = (sender: v1.Sender) => (): Framing => {
-  const d = new v1.FrameDecoder(sender);
+  const d = new v1.FrameDecoder(sender, V1_READER);
   return {name: `protocol v1 FrameDecoder (${sender})`, max: sender === 'server' ? V1_SERVER_PAYLOAD_BYTES : V1_CLIENT_PAYLOAD_BYTES,
     family: PAYLOAD_FAMILIES[sender === 'server' ? 1 : 2], push: (chunk, emit) => d.push(chunk, emit), finish: () => { d.end(); return true; },
-    isRejection: e => e instanceof v1.ProtocolError, item: payload => v1.decodePayload(payload, sender), same: jsonEqual};
+    isRejection: e => e instanceof v1.ProtocolError, item: payload => v1.decodePayload(payload, sender, V1_READER), same: jsonEqual};
 };
 const cap0Framing = (): Framing => {
   const d = new cap0.Cap0FrameDecoder();

@@ -3,7 +3,7 @@ import {resolve} from 'node:path';
 import {describe, expect, it} from 'vitest';
 import {
   decodePayload, encodeFrame, EVENT_TYPES, FrameDecoder, fraction, GAP_RECORD_BYTES, kmToMetersFloat, kmToMetersU32, MAX_EVENT_SEQ, negotiateV1, PROTOCOL_V1,
-  ProtocolError, sdkMoney, sdkText, V1_LIMITS, type ProtocolMessage, type Sender, type ServerMessage
+  ProtocolError, sdkMoney, sdkText, V1_GEARBOX, V1_LIMITS, V1_MAX_MINOR, validateLiveObservationV1, type GearboxState, type ProtocolMessage, type Sender, type ServerMessage
 } from '../../packages/contracts/src/protocol-v1';
 import * as v0 from '../../packages/contracts/src/protocol-v0';
 import {Cap0Error, decodeCap0Payload, encodeCap0Hello} from '../../packages/contracts/src/capture-cap0';
@@ -296,5 +296,150 @@ describe('SDK normalization helpers', () => {
     expect(sdkText('é'.repeat(128), 'name')).toEqual({available: true, value: 'é'.repeat(128)});
     expect(sdkText('é'.repeat(129), 'name')).toEqual({available: false, reason: 'invalid'});
     expect(sdkText('a\u007f', 'name')).toEqual({available: false, reason: 'invalid'});
+  });
+});
+
+// ET-050b PR-1: protocol v1 minor 1, the gearbox state. The minor-1 corpus has its own directory, manifest and streams,
+// so the frozen minor-0 corpus above, and its C++ reader, are unchanged. Expected values below are written by hand from
+// docs/protocol/v1.md and the CAP-01 run4/run9 hshifter captures.
+const m1Dir = resolve(dir, 'minor1');
+const M1 = {maxMinor: 1} as const;
+const m1Bytes = (name: string) => new Uint8Array(readFileSync(resolve(m1Dir, `${name}.json`)));
+const m1Server = (name: string) => decodePayload(m1Bytes(name), 'server', M1) as ServerMessage;
+const m1Entries = rows(readFileSync(resolve(m1Dir, 'manifest.txt'), 'utf8'));
+const m1Streams = rows(readFileSync(resolve(m1Dir, 'streams.txt'), 'utf8'));
+const gearboxOf = (name: string): GearboxState => {
+  const m = m1Server(name); if ((m.kind !== 'checkpoint' && m.kind !== 'snapshot') || !m.data.state.gearbox) throw new Error('fixture');
+  return m.data.state.gearbox;
+};
+const table = (box: GearboxState) => {
+  if (!box.hshifter.available) throw new Error('fixture');
+  return box.hshifter.value.slots.map(s => `${s.gear}=h${s.handlePosition}/s${s.selectors}`).join(' ');
+};
+
+describe('ET-050b protocol v1 minor-1 corpus', () => {
+  it('reads its manifest and streams identically with Windows CRLF or LF', () => {
+    for (const [name, parsed] of [['manifest.txt', m1Entries], ['streams.txt', m1Streams]] as const) {
+      expect(rows(readFileSync(resolve(m1Dir, name), 'utf8').replace(/\r?\n/g, '\r\n'))).toEqual(parsed);
+    }
+  });
+  it('lists every minor-1 fixture exactly once with a known expectation', () => {
+    const files = readdirSync(m1Dir).filter(file => file.endsWith('.json')).sort();
+    expect(m1Entries.map(([file]) => file).sort()).toEqual(files);
+    expect(files).toHaveLength(46);
+    for (const entry of m1Entries) { expect(entry).toHaveLength(2); expect(['valid', 'invalid', 'valid-client', 'invalid-client']).toContain(entry[1]); }
+  });
+  for (const [filename, result] of m1Entries) it(`${result} at maxMinor 1: ${filename}`, () => {
+    const body = new Uint8Array(readFileSync(resolve(m1Dir, filename))), sender = senderOf(result);
+    if (result.startsWith('invalid')) { expect(() => decodePayload(body, sender, M1)).toThrow(ProtocolError); return; }
+    const parsed = decodePayload(body, sender, M1), encoded = encodeFrame(parsed, M1);
+    expect(new DataView(encoded.buffer).getUint32(0, true)).toBe(encoded.length - 4);
+    expect(decodePayload(encoded.subarray(4), sender, M1)).toEqual(parsed);
+    expect(() => decodePayload(body, sender === 'server' ? 'client' : 'server', M1)).toThrow(ProtocolError);
+    // Without the opt-in every entry point stays at minor 0: a minor-1 envelope is refused, a minor-0 one unchanged.
+    if (parsed.version.minor === 1) {
+      expect(() => decodePayload(body, sender)).toThrow(/Unsupported protocol version/); expect(() => encodeFrame(parsed)).toThrow(/Unsupported protocol version/);
+    } else expect(decodePayload(body, sender)).toEqual(parsed);
+  });
+  it('gives every frozen minor-0 fixture the same result for a reader that accepts minor 1', () => {
+    for (const [filename, result] of entries) {
+      const body = new Uint8Array(readFileSync(resolve(dir, filename))), sender = senderOf(result);
+      if (result.startsWith('invalid')) expect(() => decodePayload(body, sender, M1), filename).toThrow(ProtocolError);
+      else expect(decodePayload(body, sender, M1), filename).toEqual(decodePayload(body, sender));
+    }
+  });
+  it('carries the CAP-01 ETS2 12-speed and ATS Mack 18-speed layouts exactly', () => {
+    const daf = gearboxOf('checkpoint'), mack = gearboxOf('checkpoint-ats-mack');
+    expect(daf.forwardGears).toEqual({available: true, value: 12}); expect(daf.reverseGears).toEqual({available: true, value: 4});
+    expect(daf.hshifter.available && daf.hshifter.value.selectorCount).toBe(2);
+    expect(table(daf)).toBe('-1=h1/s0 -3=h1/s1 -2=h1/s2 -4=h1/s3 1=h2/s0 7=h2/s1 2=h2/s2 8=h2/s3 3=h3/s0 9=h3/s1 4=h3/s2 10=h3/s3 5=h4/s0 11=h4/s1 6=h4/s2 12=h4/s3');
+    expect(mack.forwardGears).toEqual({available: true, value: 18}); expect(mack.reverseGears).toEqual({available: true, value: 4});
+    // Handle position 3 holds the crawler gears 1 and 2; its two other selector states are neutral and omitted.
+    expect(table(mack)).toBe('-1=h2/s0 -3=h2/s1 -2=h2/s2 -4=h2/s3 1=h3/s0 2=h3/s2 3=h4/s0 11=h4/s1 4=h4/s2 12=h4/s3 5=h5/s0 13=h5/s1 6=h5/s2 14=h5/s3 ' +
+      '7=h6/s0 15=h6/s1 8=h6/s2 16=h6/s3 9=h7/s0 17=h7/s1 10=h7/s2 18=h7/s3');
+  });
+  it('keeps unavailable counts and layouts distinct from an available empty or zero-selector layout', () => {
+    expect(gearboxOf('snapshot').hshifter).toEqual({available: false, reason: 'not-observed'});
+    expect(gearboxOf('snapshot-hshifter-invalid').hshifter).toEqual({available: false, reason: 'invalid'});
+    const counts = gearboxOf('snapshot-counts-not-observed');
+    expect(counts.forwardGears).toEqual({available: false, reason: 'not-observed'}); expect(counts.reverseGears).toEqual({available: false, reason: 'not-observed'});
+    expect(counts.hshifter.available).toBe(true);
+    expect(gearboxOf('snapshot-gearbox-not-supported')).toEqual({forwardGears: {available: false, reason: 'not-supported'},
+      reverseGears: {available: false, reason: 'not-supported'}, hshifter: {available: false, reason: 'not-supported'}});
+    expect(gearboxOf('snapshot-all-neutral-slots').hshifter).toEqual({available: true, value: {selectorCount: 2, slots: []}});
+    const zero = gearboxOf('snapshot-zero-selectors');
+    expect(zero.hshifter.available && zero.hshifter.value.selectorCount).toBe(0); expect(table(zero)).toBe('-1=h1/s0 1=h2/s0 2=h3/s0 3=h4/s0 4=h5/s0 5=h6/s0 6=h7/s0');
+  });
+  it('fits the worst-case minor-1 checkpoint within the server frame (D17) and decodes it byte at a time', () => {
+    const worst = m1Bytes('checkpoint-worst'), box = gearboxOf('checkpoint-worst');
+    expect(worst.length).toBe(55_394); expect(worst.length).toBeLessThanOrEqual(V1_LIMITS.serverFrameBytes);
+    // The frozen minor-0 worst case plus the largest gearbox: two not-supported counts and 64 slots of maximal width.
+    expect(worst.length - bytes('checkpoint-worst').length).toBe(3_400);
+    expect(box.forwardGears).toEqual({available: false, reason: 'not-supported'});
+    expect(box.hshifter.available && box.hshifter.value.selectorCount).toBe(6); expect(box.hshifter.available && box.hshifter.value.slots).toHaveLength(64);
+    expect(encodeFrame(m1Server('checkpoint-worst'), M1).length - 4).toBe(worst.length);
+    const decoder = new FrameDecoder('server', M1), found: ProtocolMessage[] = [];
+    for (const b of encodeFrame(m1Server('checkpoint-worst'), M1)) decoder.push(Uint8Array.of(b), m => found.push(m));
+    decoder.end(); expect(found).toEqual([m1Server('checkpoint-worst')]);
+  });
+  it('declares the approved gearbox bounds and the highest implemented minor', () => {
+    expect(V1_MAX_MINOR).toBe(1); expect(PROTOCOL_V1).toEqual({major: 1, minor: 0});
+    expect(V1_GEARBOX).toEqual({maxGears: 100, maxSelectorCount: 6, maxSlots: 64, maxHandlePosition: 255});
+  });
+  it('rejects each gearbox bound one step past its limit and accepts the limit itself', () => {
+    const base = structuredClone(m1Server('snapshot-zero-selectors')) as Extract<ServerMessage, {kind: 'snapshot'}>;
+    const encode = (edit: (box: GearboxState) => void) => { const m = structuredClone(base); edit(m.data.state.gearbox!); return () => encodeFrame(m, M1); };
+    const slots = (box: GearboxState) => { if (!box.hshifter.available) throw new Error('fixture'); return box.hshifter.value; };
+    expect(encode(box => { box.forwardGears = {available: true, value: 100}; box.reverseGears = {available: true, value: 0}; })).not.toThrow();
+    expect(encode(box => { box.reverseGears = {available: true, value: 101}; })).toThrow(ProtocolError);
+    expect(encode(box => { slots(box).slots[0] = {gear: -100, handlePosition: 255, selectors: 0}; })).not.toThrow();
+    expect(encode(box => { slots(box).slots[0] = {gear: -101, handlePosition: 1, selectors: 0}; })).toThrow(ProtocolError);
+    expect(encode(box => { slots(box).slots[0].handlePosition = -1; })).toThrow(ProtocolError);
+    expect(encode(box => { slots(box).selectorCount = 6; slots(box).slots[0].selectors = 63; })).not.toThrow();
+    expect(encode(box => { slots(box).selectorCount = 6; slots(box).slots[0].selectors = 64; })).toThrow(ProtocolError);
+    expect(encode(box => { slots(box).selectorCount = 1; slots(box).slots[0].selectors = 2; })).toThrow(ProtocolError);
+    expect(encode(box => { slots(box).selectorCount = -1; })).toThrow(ProtocolError);
+    // A slot gear never repeats a neutral slot, and the gear values themselves may repeat in different slots.
+    expect(encode(box => { slots(box).slots[1].gear = -1; })).not.toThrow();
+    expect(encode(box => { slots(box).slots[1].gear = -0; })).toThrow(ProtocolError);
+    expect(encode(box => { slots(box).slots = Array.from({length: 64}, (_, i) => ({gear: 1, handlePosition: i, selectors: 0})); })).not.toThrow();
+    expect(encode(box => { slots(box).slots = Array.from({length: 65}, (_, i) => ({gear: 1, handlePosition: i, selectors: 0})); })).toThrow(ProtocolError);
+  });
+  it('requires the welcome envelope minor to equal the minor it announces, and a hello at version 1.0', () => {
+    const welcome = structuredClone(m1Server('welcome')) as Extract<ServerMessage, {kind: 'welcome'}>;
+    expect(welcome.version).toEqual({major: 1, minor: 1}); expect(welcome.data.minor).toBe(1);
+    welcome.data.minor = 0; expect(() => encodeFrame(welcome, M1)).toThrow(ProtocolError);
+    expect(() => decodePayload(bytes('welcome-minor-1'), 'server', M1)).toThrow(ProtocolError);
+    expect(() => decodePayload(bytes('unsupported-minor'), 'server', M1)).toThrow(ProtocolError);
+    expect(() => decodePayload(m1Bytes('hello-envelope-minor-1'), 'client', M1)).toThrow(/Unsupported protocol version/);
+  });
+  it('rejects a caller maximum minor this contract does not implement', () => {
+    for (const maxMinor of [2, -1, 0.5]) {
+      expect(() => decodePayload(bytes('welcome'), 'server', {maxMinor})).toThrow(ProtocolError);
+      expect(() => new FrameDecoder('server', {maxMinor})).toThrow(ProtocolError);
+      expect(() => negotiateV1(client('hello'), {allowDurable: true, maxMinor})).toThrow(ProtocolError);
+    }
+  });
+  it('does not project the gearbox into the live observation yet', () => {
+    const m = m1Server('checkpoint'); if (m.kind !== 'checkpoint') throw new Error('fixture');
+    const withGearbox: Partial<typeof m.data.state> = {...m.data.state}; delete withGearbox.window;
+    const withoutGearbox = {...withGearbox}; delete withoutGearbox.gearbox;
+    const live = (state: unknown) => ({source: m.source, seq: m.seq, capture: m.capture, state, sourceStatus: {gameMode: m.data.status.gameMode, eventLoss: m.data.status.eventLoss},
+      receivedMonotonicMs: 0, hydration: true});
+    expect(validateLiveObservationV1(live(withoutGearbox)).state).toEqual(withoutGearbox);
+    expect(() => validateLiveObservationV1(live(withGearbox))).toThrow(ProtocolError);
+  });
+});
+
+describe('ET-050b minor negotiation', () => {
+  const hello = (maxMinor: number) => { const m = structuredClone(client('hello')); if (m.kind !== 'hello') throw new Error('fixture'); m.data.maxMinor = maxMinor; return m; };
+  it('selects min(hello maxMinor, server maxMinor), keeping minor 0 by default', () => {
+    // [hello maxMinor, server maxMinor, selected]
+    for (const [offered, own, selected] of [[0, 0, 0], [0, 1, 0], [1, 0, 0], [1, 1, 1], [3, 0, 0], [3, 1, 1]]) {
+      expect(negotiateV1(hello(offered), {allowDurable: true, maxMinor: own}), `${offered}/${own}`).toEqual({version: {major: 1, minor: selected}, minor: selected, durableEvents: true});
+    }
+    expect(negotiateV1(client('hello-wider-minor'))).toEqual({version: {major: 1, minor: 0}, minor: 0, durableEvents: true});
+    expect(negotiateV1(client('hello-wider-minor'), {allowDurable: true, maxMinor: 1})).toEqual({version: {major: 1, minor: 1}, minor: 1, durableEvents: true});
+    expect(negotiateV1(decodePayload(m1Bytes('hello'), 'client'), {allowDurable: false, maxMinor: 1})).toEqual({version: {major: 1, minor: 1}, minor: 1, durableEvents: false});
   });
 });
