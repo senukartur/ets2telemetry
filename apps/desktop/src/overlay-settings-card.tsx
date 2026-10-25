@@ -22,8 +22,8 @@ import {
 const percent = (scale: number) => `${Math.round(scale * 100)}%`;
 
 /**
- * The main window's overlay settings (ET-012a decision L13). Like the units card it shows only saved values: a choice
- * appears selected after main saved it, and a refused save leaves the previous one. Every change is one narrow bridge
+ * The main window's overlay settings (ET-012a decision L13). Choices use saved values, while the opacity slider also
+ * shows its current draft percentage during a gesture. A refused save restores the previous value. Each save is one narrow bridge
  * call; a preset sends a complete section record. The last enabled section cannot be switched off.
  *
  * Position and size (ET-012b decision M12): "Edit position" enters main's edit mode, in which the overlay is outlined
@@ -97,7 +97,7 @@ export function OverlaySettingsCard({settings, edit, onSaved, onRequest, showSav
             labelId="overlay-opacity-label" descriptionId="overlay-opacity-help" min={OVERLAY_OPACITY_MIN} max={OVERLAY_OPACITY_MAX} step={1}
             value={[opacityDraft ?? overlay.backgroundOpacity]} disabled={!settings?.writable} pending={busy}
             onPointerCancel={() => setOpacityDraft(undefined)} onValueChange={([value]) => setOpacityDraft(value)} onValueCommit={commitOpacity} />
-          <span className="text-sm tabular-nums" data-testid="overlay-opacity-saved">{strings.overlayOpacitySaved}: {overlay.backgroundOpacity}%</span>
+          <span className="min-w-[4ch] text-sm font-medium tabular-nums" data-testid="overlay-opacity-value">{opacityDraft ?? overlay.backgroundOpacity}%</span>
         </div>
         <p id="overlay-opacity-help" className="text-xs text-muted-foreground">{strings.overlayOpacityHelp}</p>
       </section>
