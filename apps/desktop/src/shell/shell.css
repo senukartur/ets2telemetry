@@ -5,6 +5,8 @@ button:not([role="radio"]):not([role="switch"]), [role="combobox"] { min-height:
 button:not([role="radio"]):not([role="switch"]), select, input, [role="tab"] { border-radius: var(--yu-radius-control); }
 button:not(:disabled), select:not(:disabled) { cursor: pointer; }
 :focus-visible { outline: 2px solid var(--yu-accent-light); outline-offset: 2px; }
+/* The screen heading takes programmatic focus on each route change for screen readers; it is not a control, so no ring. */
+h1[tabindex="-1"]:focus { outline: none; }
 [hidden] { display: none !important; }
 [data-slot="card"] { border-radius: 12px; gap: 0; padding: 0; overflow-wrap: anywhere; box-shadow: none; }
 [data-slot="card-header"] { padding: 14px 16px; border-bottom: 1px solid var(--yu-divider); }
