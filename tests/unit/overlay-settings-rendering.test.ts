@@ -15,7 +15,7 @@ vi.mock('@/components/ui/slider', () => ({Slider: 'input'}));
 vi.mock('@/components/ui/switch', () => ({Switch: ({checked, ...props}: {checked: boolean}) =>
   React.createElement('button', {...props, role: 'switch', 'aria-checked': checked})}));
 
-const settings = (language: AppLanguage): SettingsView => ({language, autostart: false, units: {ets2: 'metric', ats: 'us-customary'},
+const settings = (language: AppLanguage): SettingsView => ({language, autostart: false, units: {ets2: 'metric', ats: 'us-customary'}, gearDisplay: {ets2: 'automatic', ats: 'automatic'},
   overlay: DEFAULT_OVERLAY_SETTINGS, state: 'loaded', writable: true, saveError: null});
 const render = (view: SettingsView, edit: OverlayEditState = {active: false}) => renderToStaticMarkup(React.createElement(OverlaySettingsCard,
   {settings: view, edit, onSaved: vi.fn(), onRequest: vi.fn(), showSaveError: true}));

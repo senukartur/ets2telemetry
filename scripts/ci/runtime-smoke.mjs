@@ -187,7 +187,7 @@ try {
   result.actual = await window.evaluate(async () => ({require: typeof globalThis.require,
     process: typeof globalThis.process, keys: Object.keys(globalThis.desktop),
     frozen: Object.isFrozen(globalThis.desktop), status: await globalThis.desktop.getStatus()}));
-  assert.deepEqual(result.actual, {require: 'undefined', process: 'undefined', keys: ['getStatus', 'selectSource', 'subscribeLive', 'getAppState', 'subscribeAppState', 'exitApplication', 'setLanguage', 'setAutostart', 'setUnitProfile', 'setOverlayBackgroundOpacity', 'setOverlayEnabled', 'setOverlayLayout', 'setOverlaySections',
+  assert.deepEqual(result.actual, {require: 'undefined', process: 'undefined', keys: ['getStatus', 'selectSource', 'subscribeLive', 'getAppState', 'subscribeAppState', 'exitApplication', 'setLanguage', 'setAutostart', 'setUnitProfile', 'setGearDisplay', 'setOverlayBackgroundOpacity', 'setOverlayEnabled', 'setOverlayLayout', 'setOverlaySections',
     'beginOverlayEdit', 'setOverlayEditScale', 'resetOverlayEditPlacement', 'finishOverlayEdit',
     'listJournalTrips', 'getJournalTrip', 'listJournalEvents', 'listJournalIntervals', 'listJournalSamples', 'exportJournalTrip',
     'retryPluginSetup', 'choosePluginFolder', 'setPluginGameExcluded', 'showPluginFile', 'openPluginFolder', 'exportDiagnostics', 'uninstallApplication', 'getHardModeStatus', 'refreshHardMode'],
@@ -629,7 +629,8 @@ finally {
     else result.history = verifyHistoryEvents(result.serviceEvents, telemetrySource && restartRecord ? [true, false] : config.scenario === 'ui' && config.uiCase === 'journal' ? [false] : [true]);
     const deliberateUiErrors = config.scenario === 'ui' && config.uiCase === 'settings' ? result.mainEvents.filter(row => row.event === 'SETTINGS_WRITE_FAILED') : [];
     if (config.scenario === 'ui' && config.uiCase === 'settings') {
-      assert.deepEqual(deliberateUiErrors.map(row => row.facts), Array.from({length: 12}, () => ({step: 'target', code: null})));
+      // Units, visibility, opacity and (ET-050) gear display are each refused once per language and size: 4 × 2 × 2.
+      assert.deepEqual(deliberateUiErrors.map(row => row.facts), Array.from({length: 16}, () => ({step: 'target', code: null})));
       result.ui.saveFailureFacts = deliberateUiErrors.map(row => row.facts);
       result.ui.readOnly.mainEvents = await diagnosticEvents(config.diagnosticsRestart);
       result.ui.readOnly.serviceEvents = await diagnosticEvents(path.join(config.diagnosticsRestart, 'service'));
@@ -660,7 +661,7 @@ finally {
       assert.deepEqual(lifecycle.restartMainEvents.filter(row => row.event === 'APP_EXIT_REQUESTED').map(row => row.facts?.reason), ['app-quit']);
       // Run B reopens the history database that run A created.
       lifecycle.restartHistory = verifyHistoryEvents(lifecycle.restartServiceEvents, [false]);
-      // Settings diagnostics: run A falls back from the invalid file, quarantines it and saves units then visibility false; run B only loads.
+      // Settings diagnostics: run A falls back from the invalid file, quarantines it and saves units, then ETS2's manual gear display (ET-050), then visibility false; run B only loads.
       const settingsEvents = rows => rows.filter(row => row.event.startsWith('SETTINGS_')).map(row => ({event: row.event, facts: row.facts ?? null}));
       lifecycle.settingsEvents = {runA: settingsEvents(result.mainEvents), runB: settingsEvents(lifecycle.restartMainEvents)};
       // A read that outlasted its 1000 ms load budget under CPU starvation is preceded by exactly one pending row; the
@@ -670,7 +671,7 @@ finally {
       lifecycle.settingsLateRead = {runA: late(lifecycle.settingsEvents.runA).length === 1, runB: late(lifecycle.settingsEvents.runB).length === 1};
       assert.deepEqual(lifecycle.settingsEvents.runA, [...late(lifecycle.settingsEvents.runA), {event: 'SETTINGS_FALLBACK', facts: {state: 'invalid-file'}},
         {event: 'SETTINGS_QUARANTINED', facts: {state: 'invalid-file'}}, {event: 'SETTINGS_SAVED', facts: {game: 'ets2', profile: 'us-customary'}},
-        {event: 'SETTINGS_SAVED', facts: {overlayEnabled: false}}]);
+        {event: 'SETTINGS_SAVED', facts: {game: 'ets2', gearDisplay: 'manual'}}, {event: 'SETTINGS_SAVED', facts: {overlayEnabled: false}}]);
       assert.deepEqual(lifecycle.settingsEvents.runB, [...late(lifecycle.settingsEvents.runB), {event: 'SETTINGS_LOADED', facts: {state: 'loaded'}}]);
       lifecycle.restartLauncherExit = result.launcherExit;
       lifecycle.shutdownClean = true;

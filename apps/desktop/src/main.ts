@@ -8,9 +8,9 @@ import path from 'node:path';
 import type {EventEmitter} from 'node:events';
 import {version} from '../../../package.json';
 import type {AppHealth, AppLanguage, AppState, AutostartRegistrationStatus, AppUninstallResult, DiagnosticsExportResult, LiveTelemetry, OverlayEditState, OverlayPresentation, OverlaySettings, PluginFolderChoice, PluginGame, PluginShowFileResult, RecordingHealth, ScaffoldStatus, SettingsView,
-  SourceSelection, UnitProfiles} from '../../../packages/contracts/src';
+  SourceSelection, UnitProfiles, GearDisplayModes} from '../../../packages/contracts/src';
 import {SettingsBusyError, SettingsError, SettingsStore, settingsDirectory} from './settings-store';
-import {isUnitGame, isUnitProfile} from './unit-profiles';
+import {isGearDisplayMode, isUnitGame, isUnitProfile} from './unit-profiles';
 import {isAppLanguage} from './settings-schema';
 import {applyAutostartRegistration, queryAutostartStatus, removeAutostartLoginItem, resolveAutostartTarget, type AutostartTarget} from './autostart';
 import {processEntrypoint} from './entrypoints';
@@ -274,8 +274,9 @@ function runApplication(profileError: unknown): void {
     if (!service || !serviceReady || supervisor.stopping) throw new Error('Service unavailable');
     service.postMessage(request);
   }, (code, error) => log(code, error)) : undefined;
-  function publishOverlay(live: LiveTelemetry, units: UnitProfiles, settings: OverlaySettings, language: AppLanguage = settingsStore.view().language): void {
-    lastOverlay = {...overlayPresentation(live, units, settings, lastOverlay, overlayEdit.active, language),
+  function publishOverlay(live: LiveTelemetry, units: UnitProfiles, settings: OverlaySettings, language: AppLanguage = settingsStore.view().language,
+    gearDisplay: GearDisplayModes = settingsStore.view().gearDisplay): void {
+    lastOverlay = {...overlayPresentation(live, units, settings, lastOverlay, overlayEdit.active, language, gearDisplay),
       contentAnchorY: overlayController?.contentAnchorY ?? settings.placements[settings.layout].y};
     if (latency) lastOverlay = latency.project(lastOverlay, live, Boolean(overlay && !overlay.isDestroyed() && overlay.isVisible()));
     overlaySubscriptions.publish(lastOverlay);
@@ -287,7 +288,7 @@ function runApplication(profileError: unknown): void {
   }
   const freshness = new LiveFreshness(update => {
     const view = settingsStore.view();
-    dashboardSubscriptions.publish(update); publishOverlay(update, view.units, view.overlay, view.language); overlayController?.update(update);
+    dashboardSubscriptions.publish(update); publishOverlay(update, view.units, view.overlay, view.language, view.gearDisplay); overlayController?.update(update);
     lastLive = update; presentTray();
   });
   const rendererBudget = new RecoveryBudget();
@@ -407,7 +408,7 @@ function runApplication(profileError: unknown): void {
     pushAppState();
     if (lifecycle.exiting) return;
     presentTray(true);
-    publishOverlay(lastLive, view.units, view.overlay, view.language);
+    publishOverlay(lastLive, view.units, view.overlay, view.language, view.gearDisplay);
     overlayController?.setLayout(view.overlay.layout, view.overlay.placements[view.overlay.layout], view.overlay.sections);
     if (enabled) overlayController?.setEnabled(true);
   }
@@ -419,7 +420,7 @@ function runApplication(profileError: unknown): void {
     overlayEdit = state;
     if (!state.active) focusGate.stop();
     pushAppState();
-    if (toggled && !lifecycle.exiting) {const view = settingsStore.view(); publishOverlay(lastLive, view.units, view.overlay, view.language);}
+    if (toggled && !lifecycle.exiting) {const view = settingsStore.view(); publishOverlay(lastLive, view.units, view.overlay, view.language, view.gearDisplay);}
   }
   /** True while the dashboard or the overlay window has the keyboard focus. */
   function ownFocused(): boolean {
@@ -597,7 +598,7 @@ function runApplication(profileError: unknown): void {
     const changed = () => overlayController?.topologyChanged();
     screen.on('display-added', changed); screen.on('display-removed', changed); screen.on('display-metrics-changed', changed);
     // The first delivery to the new document already carries the saved layout and sections.
-    publishOverlay(lastLive, settings.units, settings.overlay);
+    publishOverlay(lastLive, settings.units, settings.overlay, settings.language, settings.gearDisplay);
     loadOverlay();
   }
   function loadOverlay(): void {
@@ -864,6 +865,13 @@ function runApplication(profileError: unknown): void {
     const [game, profile] = request;
     if (request.length !== 2 || !isUnitGame(game) || !isUnitProfile(profile)) throw new Error('Invalid unit profile request');
     return saveSettings(() => settingsStore.setUnitProfile(game, profile));
+  });
+  // ET-050: exactly a game and a gear display mode from the trusted dashboard frame; the shared durable queue applies it.
+  ipcMain.handle('settings:set-gear-display', async (event, ...request: unknown[]) => {
+    if (!trusted(event)) throw new Error('Untrusted settings request');
+    const [game, mode] = request;
+    if (request.length !== 2 || !isUnitGame(game) || !isGearDisplayMode(mode)) throw new Error('Invalid gear display request');
+    return saveSettings(() => settingsStore.setGearDisplay(game, mode));
   });
   ipcMain.handle('settings:set-overlay-background-opacity', async (event, ...request: unknown[]) => {
     if (!trusted(event)) throw new Error('Untrusted settings request');

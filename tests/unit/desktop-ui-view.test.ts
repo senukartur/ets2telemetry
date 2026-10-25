@@ -114,3 +114,21 @@ it('distinguishes unavailable tank level, known empty and positive level without
   live.observation!.state.fuel = {available: false, reason: 'not-observed', unit: 'L'};
   expect(desktopLiveView(live).fuelRatio).toBeNull();
 });
+
+// ET-050: live.instrument.gear reads the gear field through desktopLiveView with the displayed game's mode.
+describe('gear display mode on the Live instrument (ET-050)', () => {
+  const withGear = (value: number) => {const live = smokeV0(); live.observation!.state.gear = {available: true, value, unit: 'index'}; return live;};
+  const gear = (value: number, modes?: {ets2: 'automatic' | 'manual'; ats: 'automatic' | 'manual'}) => desktopLiveView(withGear(value), undefined, modes).sources.field('gear');
+  it('formats the instrument gear per mode and keeps reverse and neutral', () => {
+    expect(gear(3)).toMatchObject({state: 'value', text: '3'});
+    expect(gear(3, {ets2: 'automatic', ats: 'manual'})).toMatchObject({state: 'value', text: '3'});
+    expect(gear(3, {ets2: 'manual', ats: 'automatic'})).toMatchObject({state: 'value', text: '2L'});
+    expect(gear(16, {ets2: 'manual', ats: 'automatic'})).toMatchObject({state: 'value', text: '8H'});
+    for (const mode of ['automatic', 'manual'] as const) {
+      expect(gear(-1, {ets2: mode, ats: mode}).text).toBe('R1');
+      expect(gear(0, {ets2: mode, ats: mode}).text).toBe('N');
+    }
+    expect(desktopLiveView({...withGear(3), fresh: false, status: 'stale'}, undefined, {ets2: 'manual', ats: 'manual'}).sources.field('gear'))
+      .toMatchObject({state: 'missing', reason: 'not-current'});
+  });
+});

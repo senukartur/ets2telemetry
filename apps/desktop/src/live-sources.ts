@@ -1,5 +1,5 @@
 import type {LiveTelemetry} from '../../../packages/contracts/src';
-import type {DisplayUnits} from '../../../packages/telemetry-core/src/display-profile';
+import type {DisplayUnits, GearDisplayMode} from '../../../packages/telemetry-core/src/display-profile';
 import {buildLiveView, carriesField, type LiveDashboardView, type LiveField, type LiveFieldId} from '../../../packages/telemetry-core/src/live-view';
 import {normalizeV0State} from '../../../packages/telemetry-core/src/normalize-v0';
 import {normalizeV1State} from '../../../packages/telemetry-core/src/normalize-v1';
@@ -54,15 +54,16 @@ function fieldsOf(view: LiveDashboardView): Map<LiveFieldId, LiveField> {
 }
 const notCurrent = (field: LiveField): LiveField => ({id: field.id, state: 'missing', text: 'unavailable', reason: 'not-current', ...(field.notes ? {notes: field.notes} : {})});
 
-export function liveSources(live: LiveTelemetry, units: DisplayUnits): LiveSources {
+/** `gear` (ET-050) selects only how the gear row is formatted; every other field and every reading is unchanged. */
+export function liveSources(live: LiveTelemetry, units: DisplayUnits, gear: GearDisplayMode = 'automatic'): LiveSources {
   const v0State = live.observation ? normalizeV0State(live.observation.state) : undefined;
-  const v0View = buildLiveView(live, v0State, units);
+  const v0View = buildLiveView(live, v0State, units, gear);
   const v1 = live.v1, v1Observation = v1?.observation, v0Source = live.observation?.source;
   const carried = v1 && v1Observation && v1.selection === live.selection &&
     (!v0Source || (v1Observation.source.origin === v0Source.origin && v1Observation.source.game === v0Source.game)) ? {v1, observation: v1Observation} : undefined;
   const v1Carried = carried !== undefined;
   const v1State = carried ? normalizeV1State(carried.observation.state, carried.observation.sourceStatus) : undefined;
-  const v1View = carried ? buildLiveView(carried.v1, v1State, units) : undefined;
+  const v1View = carried ? buildLiveView(carried.v1, v1State, units, gear) : undefined;
   const v0Current = v0View.connection.current, v1Current = !!v1View?.connection.current;
   const job = jobIdentity(v0State?.job.state === 'value' ? v0State.job.value : undefined, v1State?.job);
   // ET-045a: v0 carries only the truck's model id; v1's SDK brand and name describe the same truck only for the same id.

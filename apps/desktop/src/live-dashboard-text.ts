@@ -1,4 +1,4 @@
-import type {AppLanguage, LiveTelemetry, UnitProfiles} from '../../../packages/contracts/src';
+import type {AppLanguage, GearDisplayModes, LiveTelemetry, UnitProfiles} from '../../../packages/contracts/src';
 import {resolveDisplayUnits} from '../../../packages/telemetry-core/src/display-profile';
 import type {LiveField, LiveFieldId, LiveSectionId} from '../../../packages/telemetry-core/src/live-view';
 import type {MissingReason} from '../../../packages/telemetry-core/src/readings';
@@ -6,7 +6,7 @@ import {liveSources} from './live-sources';
 import {initialLive} from './live-state';
 import * as BASE_COPY from './strings';
 import {appCopy, copyTable, localizedMeasurement} from './screens/app-copy';
-import {DEFAULT_UNIT_PROFILES, displayGame, profileFor} from './unit-profiles';
+import {DEFAULT_UNIT_PROFILES, displayGame, gearDisplayFor, profileFor} from './unit-profiles';
 
 // Text of the live telemetry card (ET-010b, protocol v1 fields ET-010c): telemetry-core's view model with the
 // application's labels, reasons and notes. Pure, safe for renderer bundles and plain Node tests; formatting and
@@ -70,10 +70,11 @@ function rowText(field: LiveField, extraNote?: string): LiveRowText {
  * not current; without v1 the card shows only the fields v0 carries, so the Position section never appears under v0.
  * The Protocol v1 source section appears once a v1 observation exists for the current selection.
  */
-function liveDashboardText(live: LiveTelemetry | undefined, units: UnitProfiles = DEFAULT_UNIT_PROFILES): LiveDashboardText {
+function liveDashboardText(live: LiveTelemetry | undefined, units: UnitProfiles = DEFAULT_UNIT_PROFILES, gearDisplay?: GearDisplayModes): LiveDashboardText {
   const telemetry = live ?? initialLive();
   const game = displayGame(telemetry);
-  const sources = liveSources(telemetry, resolveDisplayUnits(game, {profile: profileFor(units, game)}));
+  // ET-050: the gear row follows the displayed game's gear display mode, automatic without a game or settings.
+  const sources = liveSources(telemetry, resolveDisplayUnits(game, {profile: profileFor(units, game)}), gearDisplayFor(gearDisplay, game));
   const sections: LiveSectionText[] = [];
   for (const section of sources.v0View.sections) {
     const rows: LiveRowText[] = [];
@@ -104,4 +105,5 @@ function missingSubjectText(reason: MissingReason): string {
  return liveDashboardText;
 }
 const builders = {en: createLiveText('en'), ru: createLiveText('ru')};
-export const liveDashboardText = (live: LiveTelemetry | undefined, units: UnitProfiles = DEFAULT_UNIT_PROFILES, language: AppLanguage = 'en'): LiveDashboardText => builders[language](live, units);
+export const liveDashboardText = (live: LiveTelemetry | undefined, units: UnitProfiles = DEFAULT_UNIT_PROFILES, language: AppLanguage = 'en',
+  gearDisplay?: GearDisplayModes): LiveDashboardText => builders[language](live, units, gearDisplay);

@@ -1,11 +1,11 @@
-import type {AppLanguage, LiveTelemetry, OverlayPresentation, OverlaySectionId, OverlaySectionView, OverlaySettings, UnitProfiles} from '../../../packages/contracts/src';
+import type {AppLanguage, GearDisplayModes, LiveTelemetry, OverlayPresentation, OverlaySectionId, OverlaySectionView, OverlaySettings, UnitProfiles} from '../../../packages/contracts/src';
 import {resolveDisplayUnits} from '../../../packages/telemetry-core/src/display-profile';
 import {formatMoneyAmount} from '../../../packages/telemetry-core/src/format';
 import {carriesField, type LiveFieldId} from '../../../packages/telemetry-core/src/live-view';
 import {liveSources, V1_JOB_FIELDS} from './live-sources';
 import {DEFAULT_OVERLAY_SETTINGS, isGaugeFraction, OVERLAY_SECTION_IDS} from './overlay-sections';
 import {speedGaugeFraction} from './speed-gauge';
-import {DEFAULT_UNIT_PROFILES, displayGame, isExplicitFixture, profileFor, speedNumber, speedUnit, volumeNumber, volumeUnit} from './unit-profiles';
+import {DEFAULT_GEAR_DISPLAY, DEFAULT_UNIT_PROFILES, displayGame, gearDisplayFor, isExplicitFixture, profileFor, speedNumber, speedUnit, volumeNumber, volumeUnit} from './unit-profiles';
 import {localizeDeadlineString, localizeGameTimeString} from './i18n';
 
 /** Full scale of the engine RPM ring (ET-012a decision L12). Neither v0 nor v1 carries the SDK's `rpm.limit`. */
@@ -55,16 +55,19 @@ const BASELINE_SECTIONS: ReadonlySet<OverlaySectionId> = new Set<OverlaySectionI
  * never authorizes placement or visibility: main places the overlay from the v0 observation's window only.
  *
  * `editing` (ET-012b) only marks the overlay edit mode for the renderer; it changes no section or value.
+ *
+ * `gearDisplay` (ET-050) selects the displayed game's gear text (1, 2, 3 or 1L, 1H, 2L); the renderer still receives
+ * only that formatted text, and no other section, size or authority changes.
  */
 export function overlayPresentation(live: LiveTelemetry, units: UnitProfiles = DEFAULT_UNIT_PROFILES, overlay: OverlaySettings = DEFAULT_OVERLAY_SETTINGS,
-  previous?: OverlayPresentation, editing = false, language: AppLanguage = 'en'): OverlayPresentation {
+  previous?: OverlayPresentation, editing = false, language: AppLanguage = 'en', gearDisplay: GearDisplayModes = DEFAULT_GEAR_DISPLAY): OverlayPresentation {
   const observation = live.observation;
   const explicitFixture = isExplicitFixture(live);
   const game = displayGame(live), profile = profileFor(units, game);
   const current = live.fresh && (live.status === 'connected' || live.status === 'paused') &&
     (explicitFixture || (observation?.source.origin === 'game' && observation.source.game === live.selection));
   const state = observation?.state;
-  const sources = liveSources(live, resolveDisplayUnits(game, {profile}));
+  const sources = liveSources(live, resolveDisplayUnits(game, {profile}), gearDisplayFor(gearDisplay, game));
   const valueOf = (id: LiveFieldId) => {const field = sources.field(id); return field.state === 'value' ? field.text : undefined;};
   // A part protocol v0 does not carry needs a v1 observation of this selection and origin (decision F7).
   const carried = (part: LiveFieldId) => carriesField('v0', part) || sources.v1Carried;

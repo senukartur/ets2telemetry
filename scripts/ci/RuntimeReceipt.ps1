@@ -162,7 +162,8 @@ function Test-LifecycleSettingsReceipt {
     param([object]$Driver)
     $lifecycle = $Driver.lifecycle
     foreach ($field in @('settingsSeededInvalidFile','settingsStartupUnchanged','settingsQuarantinePreserved','settingsSavedExact',
-        'unitsApplied','settingsRestartLoaded','overlayVisibilitySaved','overlayVisibilityRestarted','syntheticOverlayHiddenAfterOff')) {
+        'unitsApplied','settingsRestartLoaded','overlayVisibilitySaved','overlayVisibilityRestarted','syntheticOverlayHiddenAfterOff',
+        'gearDisplaySaved','gearDisplayRestarted')) {
         if ($lifecycle.$field -isnot [bool] -or $lifecycle.$field -ne $true) { return $false }
     }
     if (!(Test-ReceiptInteger -Value $lifecycle.settingsQuarantined -Minimum 1 -Maximum 1) -or $lifecycle.restart.settingsState -cne 'loaded') { return $false }
@@ -173,7 +174,11 @@ function Test-LifecycleSettingsReceipt {
     foreach ($row in @($lifecycle.dashboardUnits, $lifecycle.restart.dashboardUnits)) {
         if (!(Test-LiveGaugeReceipt -Reading $row) -or $row.speed -cne 'Speed: 56 mph' -or $row.fuel -cne 'Fuel: 19.3 US gal') { return $false }
     }
-    # Diagnostics: run A falls back from the invalid file, quarantines it once and saves units then visibility false; run B only loads.
+    # ET-050: run B restores ETS2's saved manual gear display and keeps ATS automatic, with exactly those two games.
+    $gears = $lifecycle.restart.gearDisplay
+    if ($null -eq $gears -or $gears.ets2 -cne 'manual' -or $gears.ats -cne 'automatic' -or
+        ((@($gears.PSObject.Properties.Name) | Sort-Object) -join ',') -cne 'ats,ets2') { return $false }
+    # Diagnostics: run A falls back from the invalid file, quarantines it once and saves units, then gear display, then visibility false; run B only loads.
     # A read past the 1000 ms load budget adds one SETTINGS_LOAD_PENDING row before any other settings row of that run.
     foreach ($rows in @(@($Driver.mainEvents), @($lifecycle.restartMainEvents))) {
         $settingsRows = @($rows | Where-Object { $_.event -cmatch '^SETTINGS_' })
@@ -187,9 +192,11 @@ function Test-LifecycleSettingsReceipt {
     if ($fallback.Count -ne 1 -or $fallback[0].facts.state -cne 'invalid-file') { return $false }
     if ($lifecycle.restart.overlayEnabled -isnot [bool] -or $lifecycle.restart.overlayEnabled) { return $false }
     $visibilitySaves = @($Driver.mainEvents | Where-Object { $_.event -ceq 'SETTINGS_SAVED' })
-    if ($visibilitySaves.Count -ne 2 -or $visibilitySaves[0].facts.game -cne 'ets2' -or $visibilitySaves[0].facts.profile -cne 'us-customary' -or
-        $visibilitySaves[1].facts.overlayEnabled -isnot [bool] -or $visibilitySaves[1].facts.overlayEnabled -ne $false -or
-        (@($visibilitySaves[1].facts.PSObject.Properties.Name) -join ',') -cne 'overlayEnabled') { return $false }
+    if ($visibilitySaves.Count -ne 3 -or $visibilitySaves[0].facts.game -cne 'ets2' -or $visibilitySaves[0].facts.profile -cne 'us-customary' -or
+        $visibilitySaves[1].facts.game -cne 'ets2' -or $visibilitySaves[1].facts.gearDisplay -cne 'manual' -or
+        ((@($visibilitySaves[1].facts.PSObject.Properties.Name) | Sort-Object) -join ',') -cne 'game,gearDisplay' -or
+        $visibilitySaves[2].facts.overlayEnabled -isnot [bool] -or $visibilitySaves[2].facts.overlayEnabled -ne $false -or
+        (@($visibilitySaves[2].facts.PSObject.Properties.Name) -join ',') -cne 'overlayEnabled') { return $false }
     foreach ($eventName in @('SETTINGS_QUARANTINED')) {
         if (@($Driver.mainEvents | Where-Object { $_.event -ceq $eventName }).Count -ne 1) { return $false }
     }
@@ -794,8 +801,8 @@ function Test-UiReceipt {
         'shell' { $flags += @('navigation','headingFocus','hardModePage','journalUnmount','menuKeyboard','exitAvailable','laterAccount'); $screens = @('live','hardMode','journal','settings','account') }
         'live' { $flags += @('numericGauge','unavailableVsZero','paused','staleDashes','rawNames','unsupportedTrip','jobViewport','hmNamesReadable','fullWidthTelemetry','tankUnknownVsZero'); $screens = @('current','zero','missing','paused','stale') }
         'journal' { $flags += @('syntheticBanner','pageReturn','chartBounded','rawTabs','searchPlanned','tripRegions','tableReadable','signedChart'); $screens = @('list','trip','intervals','timeline','samples') }
-        'settings' { $flags += @('allPanels','allSections','committedSave','sourceSelector','uninstallRefusal','refusedSave','readOnly','controlsKeyboard','lastEnabled','fontLicense','overlayVisibility','visibilityFailedSave','actionResult','overlayOpacity','opacityFailedSave','opacityReadOnly','overlayUnified','overlayEditing','overlayScroll','scaleControl'); $screens = @('general','units','overlay','overlay-sections','plugin','data','about','save-error') }
-        'overlay' { $flags += @('fourLayouts','transparent','contained','independentFont','missing','paused','staleDashes','heroSubsets','formatterProfiles','stableNumbers','opacityKeyboardFocus','opacityGestures','backgroundOpacityOverlay','clusterRpmContained','scaleRange','clusterSpeedArc'); $screens = @('strip','card','cluster','hud') }
+        'settings' { $flags += @('allPanels','allSections','committedSave','sourceSelector','uninstallRefusal','refusedSave','readOnly','controlsKeyboard','lastEnabled','fontLicense','overlayVisibility','visibilityFailedSave','actionResult','overlayOpacity','opacityFailedSave','opacityReadOnly','overlayUnified','overlayEditing','overlayScroll','scaleControl','gearDisplay','gearDisplayFailedSave'); $screens = @('general','units','overlay','overlay-sections','plugin','data','about','save-error') }
+        'overlay' { $flags += @('fourLayouts','transparent','contained','independentFont','missing','paused','staleDashes','heroSubsets','formatterProfiles','stableNumbers','opacityKeyboardFocus','opacityGestures','backgroundOpacityOverlay','clusterRpmContained','scaleRange','clusterSpeedArc','gearDisplayManual'); $screens = @('strip','card','cluster','hud') }
     }
     foreach ($flag in $flags) { if ($ui.flags.$flag -isnot [bool] -or !$ui.flags.$flag) { return $false } }
     # ET-045e: the overlay shard adds six English 1280x800 scale reference screenshots to its 64 layout screenshots.
@@ -853,10 +860,11 @@ function Test-UiReceipt {
         $readOnly = $ui.readOnly
         if ($null -eq $readOnly -or $readOnly.state -cne 'newer-version' -or $readOnly.language -cne 'en' -or
             $readOnly.writable -isnot [bool] -or $readOnly.writable -or $readOnly.bytesUnchanged -isnot [bool] -or !$readOnly.bytesUnchanged -or
-            $ui.firstLauncherExit -ne 0 -or $readOnly.launcherExit -ne 0 -or @($ui.saveFailureFacts).Count -ne 12) { return $false }
+            $ui.firstLauncherExit -ne 0 -or $readOnly.launcherExit -ne 0 -or @($ui.saveFailureFacts).Count -ne 16) { return $false }
         foreach ($fact in $ui.saveFailureFacts) { if ($fact.step -cne 'target' -or $null -ne $fact.code) { return $false } }
         $expectedErrors = @($Driver.mainEvents | Where-Object { $_.event -ceq 'SETTINGS_WRITE_FAILED' })
-        if ($expectedErrors.Count -ne 12) { return $false }
+        # ET-050: units, visibility, opacity and gear display are each refused once per language and size.
+        if ($expectedErrors.Count -ne 16) { return $false }
         foreach ($row in $expectedErrors) { if ($row.facts.step -cne 'target' -or $null -ne $row.facts.code) { return $false } }
         if (!(Test-OrderlyRunEvent -MainEvents @($Driver.mainEvents | Where-Object { $_.event -cne 'SETTINGS_WRITE_FAILED' }) -ServiceEvents @($Driver.serviceEvents)) -or
             !(Test-OrderlyRunEvent -MainEvents @($readOnly.mainEvents) -ServiceEvents @($readOnly.serviceEvents)) -or

@@ -187,3 +187,20 @@ describe('currentness and origin (decisions F3, F4(d) and F4(e))', () => {
     expect(sources(simulation).paused).toBe(true);
   });
 });
+
+// ET-050: the gear display mode changes only the gear row's text, for v0 and v1 views alike.
+describe('gear display mode (ET-050)', () => {
+  const withGear = (value: number) => {const live = smokePair(); live.observation!.state.gear = {available: true, value, unit: 'index'}; return live;};
+  it.each([[3, '3', '2L'], [16, '16', '8H'], [1, '1', '1L'], [-1, 'R1', 'R1'], [-2, 'R2', 'R2'], [0, 'N', 'N']] as const)('gear %s is %s automatic and %s manual', (gear, automatic, manual) => {
+    expect(liveSources(withGear(gear), METRIC).field('gear')).toMatchObject({state: 'value', text: automatic});
+    expect(liveSources(withGear(gear), METRIC, 'automatic').field('gear')).toMatchObject({state: 'value', text: automatic});
+    expect(liveSources(withGear(gear), METRIC, 'manual').field('gear')).toMatchObject({state: 'value', text: manual});
+  });
+  it('keeps every other field and the not-current state unchanged', () => {
+    const automatic = liveSources(withGear(3), METRIC, 'automatic'), manual = liveSources(withGear(3), METRIC, 'manual');
+    for (const id of ['engine-rpm', 'odometer', 'route-remaining', 'deadline', 'cargo-mass', 'truck'] as const) expect(manual.field(id)).toEqual(automatic.field(id));
+    expect(manual.v1View!.sections.flatMap(section => section.fields).find(field => field.id === 'gear')).toMatchObject({state: 'value', text: '2L'});
+    expect(liveSources(smokePair({}, {status: 'stale', fresh: false}), METRIC, 'manual').field('gear')).toMatchObject(NOT_CURRENT);
+    expect(liveSources({...initialLive('synthetic'), v1: v1Projection()}, METRIC, 'manual').field('gear')).toMatchObject(NOT_CURRENT);
+  });
+});

@@ -1,4 +1,5 @@
 // Per-game display profiles. Profiles select display units only; canonical telemetry units never change.
+// The gear display mode (ET-050) selects only how a gear index is presented; the raw integer gear never changes.
 import type {ConsumptionUnit, DistanceUnit, MassUnit, SpeedUnit, VolumeUnit} from './units';
 
 export const DISPLAY_PROFILE_IDS = ['metric', 'us-customary'] as const;
@@ -6,6 +7,14 @@ export type DisplayProfileId = (typeof DISPLAY_PROFILE_IDS)[number];
 export type GameId = 'ets2' | 'ats';
 /** ET-000 defaults: ETS2 metric, ATS US customary. */
 export const DEFAULT_DISPLAY_PROFILE: Readonly<Record<GameId, DisplayProfileId>> = Object.freeze({ets2: 'metric', ats: 'us-customary'});
+
+/** Gear presentation: `automatic` shows 1, 2, 3...; `manual` shows range-splitter pairs 1L, 1H, 2L, 2H... */
+export const GEAR_DISPLAY_MODES = ['automatic', 'manual'] as const;
+export type GearDisplayMode = (typeof GEAR_DISPLAY_MODES)[number];
+/** Exact mode strings only; nothing is coerced. */
+export function isGearDisplayMode(value: unknown): value is GearDisplayMode {
+  return typeof value === 'string' && (GEAR_DISPLAY_MODES as readonly string[]).includes(value);
+}
 
 export interface DisplayUnitChoice {speed: SpeedUnit; distance: DistanceUnit; volume: VolumeUnit; consumption: ConsumptionUnit; mass: MassUnit}
 /** Resolved units plus the profile they started from; per-quantity overrides may differ from that profile. */

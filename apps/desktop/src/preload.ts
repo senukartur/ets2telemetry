@@ -7,7 +7,7 @@ import {RecoveryBudget} from './recovery-budget';
 import {isOverlayOpacity} from './overlay-opacity';
 import {isOverlayLayout, parseOverlaySections} from './overlay-sections';
 import {isOverlayEditOutcome, parseOverlayEditScale} from './overlay-placement';
-import {isUnitGame, isUnitProfile} from './unit-profiles';
+import {isGearDisplayMode, isUnitGame, isUnitProfile} from './unit-profiles';
 import {isAppLanguage} from './settings-schema';
 import {copyTripsQuery, isPageArgument, JOURNAL_CHANNELS, JOURNAL_EXPORT_CHANNEL} from './journal-contract';
 import {isJournalUuid} from '../../../packages/contracts/src/journal';
@@ -150,6 +150,10 @@ const bridge: DesktopBridge = {
   setUnitProfile: (game, profile) => isUnitGame(game) && isUnitProfile(profile)
     ? ipcRenderer.invoke('settings:set-unit-profile', game, profile)
     : Promise.reject(new Error('Invalid unit profile request')),
+  // ET-050: exactly a game and a gear display mode; main validates both again.
+  setGearDisplay: (...request: unknown[]) => request.length === 2 && isUnitGame(request[0]) && isGearDisplayMode(request[1])
+    ? ipcRenderer.invoke('settings:set-gear-display', request[0], request[1])
+    : Promise.reject(new Error('Invalid gear display request')),
   setOverlayBackgroundOpacity: (...request: unknown[]) => request.length === 1 && isOverlayOpacity(request[0])
     ? ipcRenderer.invoke('settings:set-overlay-background-opacity', request[0])
     : Promise.reject(new Error('Invalid overlay opacity request')),

@@ -1,5 +1,8 @@
-import type {LiveTelemetry, UnitGame, UnitProfile, UnitProfiles} from '../../../packages/contracts/src';
-import {DEFAULT_DISPLAY_PROFILE, DISPLAY_PROFILE_IDS, DISPLAY_PROFILES, isDisplayProfileId, type DisplayProfileId, type GameId} from '../../../packages/telemetry-core/src/display-profile';
+import type {GearDisplayMode, GearDisplayModes, LiveTelemetry, UnitGame, UnitProfile, UnitProfiles} from '../../../packages/contracts/src';
+import {
+  DEFAULT_DISPLAY_PROFILE, DISPLAY_PROFILE_IDS, DISPLAY_PROFILES, GEAR_DISPLAY_MODES, isDisplayProfileId, isGearDisplayMode as isCoreGearDisplayMode,
+  type DisplayProfileId, type GameId, type GearDisplayMode as CoreGearDisplayMode
+} from '../../../packages/telemetry-core/src/display-profile';
 import {fixed} from '../../../packages/telemetry-core/src/format';
 import {convertSpeed, convertVolume, type SpeedUnit, type VolumeUnit} from '../../../packages/telemetry-core/src/units';
 
@@ -11,18 +14,27 @@ type Same<A, B> = [A] extends [B] ? ([B] extends [A] ? true : false) : false;
 export const PROFILE_IDS_MATCH_TELEMETRY_CORE: Same<UnitProfile, DisplayProfileId> = true;
 /** Compile-time guard: the contract's games are exactly telemetry-core's `GameId`. */
 export const GAMES_MATCH_TELEMETRY_CORE: Same<UnitGame, GameId> = true;
+/** Compile-time guard: the contract's gear display modes are exactly telemetry-core's `GearDisplayMode` (ET-050). */
+export const GEAR_DISPLAY_MODES_MATCH_TELEMETRY_CORE: Same<GearDisplayMode, CoreGearDisplayMode> = true;
 
 export const UNIT_GAMES: readonly UnitGame[] = Object.freeze(['ets2', 'ats']);
 /** telemetry-core's profile ids, in its order. */
 export const UNIT_PROFILE_IDS: readonly UnitProfile[] = DISPLAY_PROFILE_IDS;
 /** ET-000 defaults from telemetry-core: ETS2 metric, ATS US customary. */
 export const DEFAULT_UNIT_PROFILES: UnitProfiles = DEFAULT_DISPLAY_PROFILE;
+/** telemetry-core's gear display modes, in its order (ET-050). */
+export const GEAR_DISPLAY_MODE_IDS: readonly GearDisplayMode[] = GEAR_DISPLAY_MODES;
+/** Both games show automatic gears 1, 2, 3... until the driver chooses otherwise (ET-050). */
+export const DEFAULT_GEAR_DISPLAY: GearDisplayModes = Object.freeze({ets2: 'automatic', ats: 'automatic'});
 
 export function isUnitGame(value: unknown): value is UnitGame {
   return value === 'ets2' || value === 'ats';
 }
 export function isUnitProfile(value: unknown): value is UnitProfile {
   return isDisplayProfileId(value);
+}
+export function isGearDisplayMode(value: unknown): value is GearDisplayMode {
+  return isCoreGearDisplayMode(value);
 }
 
 /**
@@ -40,6 +52,10 @@ export function isExplicitFixture(live: LiveTelemetry): boolean {
 /** Without a game the metric profile applies, as in telemetry-core's `resolveDisplayUnits`. */
 export function profileFor(units: UnitProfiles, game: UnitGame | undefined): UnitProfile {
   return game ? units[game] : 'metric';
+}
+/** The game's gear display mode (ET-050); automatic without a game or before the settings arrive. */
+export function gearDisplayFor(modes: GearDisplayModes | undefined, game: UnitGame | undefined): GearDisplayMode {
+  return game && modes ? modes[game] : 'automatic';
 }
 /**
  * The profile for displaying a live update: the displayed game's persisted profile, or its ET-000 default before the

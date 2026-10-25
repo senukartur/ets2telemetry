@@ -14,15 +14,19 @@ import {observeExit} from './exit-observation.mjs';
 const SETTINGS_SEED = '{"format":"ets2telemetry.settings","version":1,"units":{"ets2":"metric",';
 // ET-012a: every save writes the overlay block (strip layout and every section by default). ET-012b: the block also
 // holds the placements of all four layouts (the ET-012a anchors at scale 1 by default), so the format is v3. ET-045e:
-// the current format is v8 (ET-049 took v7 first), whose scale 1 renders at zoom 0.7.
+// the current format is v8 (ET-049 took v7 first), whose scale 1 renders at zoom 0.7. ET-050: the current format is v9,
+// which adds each game's gear display mode after the units; run A saves ETS2's manual mode after its unit profile.
 const placementLines = (layout, x, y, last = false) => [`      "${layout}": {`, `        "x": ${x},`, `        "y": ${y},`, '        "scale": 1', last ? '      }' : '      },'];
-const SETTINGS_SAVED = ['{', '  "format": "ets2telemetry.settings",', '  "version": 8,', '  "language": "en",', '  "autostart": false,', '  "units": {', '    "ets2": "us-customary",', '    "ats": "us-customary"', '  },',
+const SETTINGS_SAVED = ['{', '  "format": "ets2telemetry.settings",', '  "version": 9,', '  "language": "en",', '  "autostart": false,', '  "units": {', '    "ets2": "us-customary",', '    "ats": "us-customary"', '  },',
+  '  "gearDisplay": {', '    "ets2": "manual",', '    "ats": "automatic"', '  },',
   '  "overlay": {', '    "enabled": false,', '    "backgroundOpacity": 80,', '    "layout": "strip",', '    "sections": {', '      "speed": true,', '      "gear": true,', '      "rpm": true,', '      "fuel": true,',
   '      "range": true,', '      "sdk-consumption": true,', '      "cargo": true,', '      "origin": true,', '      "destination": true,', '      "distance-driven": true,',
   '      "distance-remaining": true,', '      "deadline": true,', '      "expected-income": true,', '      "game-time": true', '    },', '    "placements": {',
   ...placementLines('strip', 0.5, 0), ...placementLines('card', 1, 0), ...placementLines('cluster', 0, 1), ...placementLines('hud', 0, 0, true),
   '    }', '  }', '}', ''].join('\n');
-const SETTINGS_UNIT_SAVED = SETTINGS_SAVED.replace('"enabled": false', '"enabled": true');
+const SETTINGS_GEAR_SAVED = SETTINGS_SAVED.replace('"enabled": false', '"enabled": true');
+const SETTINGS_UNIT_SAVED = SETTINGS_GEAR_SAVED.replace('"ets2": "manual"', '"ets2": "automatic"');
+const AUTOMATIC_GEARS = {ets2: 'automatic', ats: 'automatic'}, SAVED_GEARS = {ets2: 'manual', ats: 'automatic'};
 const DEFAULT_OVERLAY = {enabled: true, backgroundOpacity: 80, layout: 'strip', sections: {'speed': true, 'gear': true, 'rpm': true, 'fuel': true, 'range': true, 'sdk-consumption': true, 'cargo': true,
   'origin': true, 'destination': true, 'distance-driven': true, 'distance-remaining': true, 'deadline': true, 'expected-income': true, 'game-time': true},
 placements: {strip: {x: 0.5, y: 0, scale: 1}, card: {x: 1, y: 0, scale: 1}, cluster: {x: 0, y: 1, scale: 1}, hud: {x: 0, y: 0, scale: 1}}};
@@ -144,7 +148,7 @@ export async function runLifecycleSmoke({application, launcher, dashboard, overl
   const stateText = await until(() => dashboard.getByTestId('settings-state').innerText(),
     text => !text.startsWith('Saved settings are still being read'), 'DASHBOARD_SETTINGS_STILL_PENDING');
   record.settingsInitial = {view: settled.settings, files: await settingsFiles(config), stateText};
-  assert.deepEqual(settled.settings, {language: 'en', autostart: false, units: {ets2: 'metric', ats: 'us-customary'}, overlay: DEFAULT_OVERLAY, state: 'invalid-file', writable: true, saveError: null});
+  assert.deepEqual(settled.settings, {language: 'en', autostart: false, units: {ets2: 'metric', ats: 'us-customary'}, gearDisplay: AUTOMATIC_GEARS, overlay: DEFAULT_OVERLAY, state: 'invalid-file', writable: true, saveError: null});
   record.settingsSeededInvalidFile = true;
   assert.deepEqual(record.settingsInitial.files, [{name: 'settings.json', content: SETTINGS_SEED}]);
   assert.match(record.settingsInitial.stateText, /^The settings file is invalid; defaults are in use\./);
@@ -201,7 +205,7 @@ export async function runLifecycleSmoke({application, launcher, dashboard, overl
   // 3b. Saving ETS2's US customary profile quarantines the seeded file unchanged, writes the exact v2 content and
   // switches both the dashboard and the overlay to mph and US gallons.
   record.settingsSaveView = await trayDashboard.evaluate(() => globalThis.desktop.setUnitProfile('ets2', 'us-customary'));
-  assert.deepEqual(record.settingsSaveView, {language: 'en', autostart: false, units: {ets2: 'us-customary', ats: 'us-customary'}, overlay: DEFAULT_OVERLAY, state: 'loaded', writable: true, saveError: null});
+  assert.deepEqual(record.settingsSaveView, {language: 'en', autostart: false, units: {ets2: 'us-customary', ats: 'us-customary'}, gearDisplay: AUTOMATIC_GEARS, overlay: DEFAULT_OVERLAY, state: 'loaded', writable: true, saveError: null});
   const saved = await settingsFiles(config);
   record.settingsAfterSave = saved.map(({name}) => name);
   const quarantined = saved.filter(file => QUARANTINE_NAME.test(file.name));
@@ -214,6 +218,14 @@ export async function runLifecycleSmoke({application, launcher, dashboard, overl
   record.overlayUnits = await waitForOverlay(overlay, {...expected, speed: '56', fuel: '19.3', speedUnit: 'mph', fuelUnit: 'US gal'});
   assert.equal((await lifecycleState(application)).settings.units.ets2, 'us-customary');
   record.unitsApplied = true;
+  // ET-050: persist ETS2's manual gear display through the tray-reopened dashboard without retiring telemetry or the service.
+  const gearView = await trayDashboard.evaluate(() => globalThis.desktop.setGearDisplay('ets2', 'manual'));
+  assert.deepEqual(gearView.gearDisplay, SAVED_GEARS); assert.equal(gearView.saveError, null);
+  const geared = await lifecycleState(application);
+  assert.deepEqual(geared.settings.gearDisplay, SAVED_GEARS); assert.equal(geared.servicePid, initial.servicePid);
+  assert.equal(source.statistics().connections, 1);
+  assert.equal((await settingsFiles(config)).find(file => file.name === 'settings.json').content, SETTINGS_GEAR_SAVED);
+  record.gearDisplaySaved = true;
   // ET-012e: persist off without retiring telemetry or the service; run B must load it without writing.
   await trayDashboard.evaluate(() => globalThis.desktop.setOverlayEnabled(false));
   const disabled = await lifecycleState(application);
@@ -259,7 +271,9 @@ export async function verifyLifecycleRestart({application, record, rendererPages
   record.recordingDisabledShown = true;
   record.restartRecovered = true;
   record.restart.settingsState = state.settings.state;
-  assert.deepEqual(state.settings, {language: 'en', autostart: false, units: {ets2: 'us-customary', ats: 'us-customary'}, overlay: {...DEFAULT_OVERLAY, enabled: false}, state: 'loaded', writable: true, saveError: null});
+  assert.deepEqual(state.settings, {language: 'en', autostart: false, units: {ets2: 'us-customary', ats: 'us-customary'}, gearDisplay: SAVED_GEARS, overlay: {...DEFAULT_OVERLAY, enabled: false}, state: 'loaded', writable: true, saveError: null});
+  record.restart.gearDisplay = state.settings.gearDisplay;
+  record.gearDisplayRestarted = true;
   record.restart.overlayEnabled = state.settings.overlay.enabled;
   assert.equal(record.restart.overlayEnabled, false);
   record.overlayVisibilityRestarted = true;
@@ -270,7 +284,7 @@ export async function verifyLifecycleRestart({application, record, rendererPages
   assert.equal(files.find(file => QUARANTINE_NAME.test(file.name)).content, SETTINGS_SEED);
   record.settingsRestartLoaded = true;
   // ET-012b: the restart restores the saved placements, starts in driving mode and gives the overlay document the zoom
-  // factor of its layout's saved scale (ET-045e: overlayZoom, 0.7 for the default 100%), without writing. Run A saves only units and visibility (the receipt requires exactly two
+  // factor of its layout's saved scale (ET-045e: overlayZoom, 0.7 for the default 100%), without writing. Run A saves only units, gear display and visibility (the receipt requires exactly three
   // SETTINGS_SAVED rows), so the saved placements are the defaults here; the overlay smoke saves an edited scale.
   record.restart.placements = state.settings.overlay.placements;
   record.restart.overlayEdit = (await dashboard.evaluate(() => globalThis.desktop.getAppState())).overlayEdit;

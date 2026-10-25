@@ -6,6 +6,33 @@ ET-012e added saved overlay visibility in historical format v6, defaulting to en
 
 ET-045e update, October 24, 2026 (decision Z5, owner decision D1 option b; ET-049 took v7 first, so ET-045e uses v8): the current format is **v8**. It has exactly the fields and canonical layout of ET-049's v7 document below with `"version": 8`. What changed is the meaning of each placement's `scale`: it is the user's setting, shown as a percentage, and the overlay document's zoom factor is now setting × 0.7 (`overlayZoom` in `apps/desktop/src/overlay-placement.ts`), so the new 100% looks like the earlier 70%. Its range is [0.5, 3] (50–300%) instead of [0.5, 2]. Saved numbers are kept and reinterpreted, never rewritten: a v7 file migrates to v8 by an identity step (`migratedFrom: 7`), and the owner's saved strip at 0.5 now renders at the earlier 35% (choose 70% for the earlier 50% look). See [ET-045e validation](validation/et-045e.md). The v7 and v6 headings below keep their ET-049 and ET-012e wording; read "current" there as the field layout that v8 retains.
 
+## Current format v9: gear display (ET-050)
+
+ET-050 update, October 25, 2026 (decisions GD1–GD8 in [concept.md](../concept.md#et-050-gear-display-mode--october-25-2026)): the current format is **v9**. It is the v8 document with `"version": 9` and one new block, `gearDisplay`, written right after `units`:
+
+```json
+  "units": {
+    "ets2": "metric",
+    "ats": "us-customary"
+  },
+  "gearDisplay": {
+    "ets2": "automatic",
+    "ats": "automatic"
+  },
+```
+
+Each game's value is exactly `automatic` (gears 1, 2, 3…) or `manual` (range-splitter pairs 1L, 1H, 2L, 2H…); neutral is N and reverse R1, R2… in both. The default is `automatic` for both games. Only the displayed text changes: the live protocols, the history database, the one-second samples, the journal and the JSON export keep the raw integer gear index.
+
+- **Load rules.** A missing block, a block that is not an object, or a block as an array falls back for both games (`gearDisplay.ets2` and `gearDisplay.ats`). Inside an object each game falls back alone when its value is missing or is not one of the two exact strings; `"Manual"`, numbers and booleans are never coerced. Unknown keys inside the block are ignored.
+- **Migration v8 to v9.** The pure step adds `{"ets2": "automatic", "ats": "automatic"}`. A stray `gearDisplay` key in a pre-v9 document is replaced, as ET-049 does for opacity, so an earlier hand edit never becomes a v9 preference. A v1 to v8 file is migrated in memory (`migratedFrom: 1` to `migratedFrom: 8`) and stays unchanged on disk; nothing is written at startup, and the first save of any setting writes the complete v9 document.
+- **Newer and older builds.** A version of 10 or later is newer-version (read-only defaults; the file is never modified). A build before ET-050 reads v9 as newer-version and refuses to save, so it can never drop the gear display mode by rewriting the file. Running an ET-050 build with an earlier build's profile therefore makes that earlier build read-only until a newer build runs again.
+- **Bridge.** `setGearDisplay(game, mode)` over `settings:set-gear-display`: exactly two arguments, `ets2`/`ats` and `automatic`/`manual`, from the trusted dashboard main frame only. The preload, main and the store each validate it. The save shares the queue and the four-request bound of every other setting, applies only after the durable rename and logs `SETTINGS_SAVED` with the facts `{game, gearDisplay}` only. Settings diagnostics and the diagnostic bundle carry `settings.gearDisplay`.
+- **Display.** Main republishes the overlay from its stored freshness output after the save, without renewing SDK or window freshness, exactly as for a unit profile. The overlay renderer still receives only formatted text. The dashboard's Live instrument and Live details row use the same mode, chosen by the same displayed-game rule as the unit profile (automatic without a game or before the settings arrive).
+- **Settings > Units.** A **Gear display** card below the units card has one labelled radio group per game, described by a note on the forms and on stored telemetry. It shows only the committed mode, is disabled while a save is in flight or the settings are read-only, and shows a refused save in its own card.
+- **Tests.** `settings-schema.test.ts` (v9 bytes, the v8-to-v9 step, each fallback, version 10 as newer-version), `settings-store.test.ts` (a v8 file byte-identical at startup, the first gear save writing exact v9 after the rename, failure and read-only refusal, the shared queue with unit saves, reload), `preload-recovery.test.ts`, `main-boundaries.test.ts`, `gear-display-card-rendering.test.ts`, `gear-display-choice.test.ts`, and the `lifecycle` and `ui` runtime smokes. See [ET-050 validation](validation/et-050.md).
+
+The v8, v7 and v6 sections below keep their wording; read "current" there as the field layout that v9 retains.
+
 ## Location
 
 The file is `%LOCALAPPDATA%\ETS2Telemetry\settings\settings.json`. Main resolves `%LOCALAPPDATA%` at runtime through `dataPaths(LOCALAPPDATA).settings` (`apps/desktop/src/paths.ts`), separately from the application binaries and from `telemetry.sqlite`, so an application update does not replace it. When `LOCALAPPDATA` is missing or not an absolute path, there is no settings location: defaults apply and nothing can be saved (`unavailable`). Preserving the file across a real installed update and an optional uninstall removal belong to ET-018. Since ET-018 PR-1 the installer lifecycle proves that install, repair and update keep the file byte-identical. An uninstall deletes it with the rest of the data folder, from Windows Settings or from the application; the [in-app uninstall](uninstall.md#in-app-uninstall) and the Journal tab's export note say so ([user guide](user-guide.md#uninstalling)).
@@ -83,9 +110,9 @@ The application writes exactly this shape: UTF-8 without a byte order mark, two-
 
 - a leading UTF-8 byte order mark is accepted and unknown keys are ignored;
 - a file larger than 64 KiB, bytes that are not UTF-8, anything other than a JSON object, a missing or different `format` marker, or a `version` that is not an integer makes the file **invalid**;
-- a version 1 to 7 file is migrated in memory ([below](#migration-from-v1-v2-v3-v4-and-v5)) and then read as v8 (ET-045e);
+- a version 1 to 7 file is migrated in memory ([below](#migration-from-v1-v2-v3-v4-and-v5)) and then read as v8 (ET-045e); since ET-050 a version 1 to 8 file is migrated on to v9;
 - a missing `version` or a version below 1 is **unsupported-older**: there is no migration path, so such a file uses defaults;
-- a version above 8 is **newer-version** (since ET-045e): written by a later application version;
+- a version above 8 is **newer-version** (since ET-045e): written by a later application version; since ET-050 a version above 9;
 - `language` must be exactly `en` or `ru` (default: `en`);
 - `autostart` must be a strict boolean (default: `false`), independently of overlay visibility;
 - each `units.ets2` and `units.ats` value must be exactly `metric` or `us-customary`;
@@ -187,7 +214,7 @@ Loading happens once at startup, in parallel with the service start. Loading nev
 | `loaded-with-fallbacks` | A v3 (or migrated v1 or v2) file with some invalid fields | Valid fields from the file, defaults for the others | Yes; the save rewrites the whole file |
 | `invalid-file` | Not a usable settings file | Defaults | Yes; the first save quarantines the file |
 | `unsupported-older` | An older format without a migration path | Defaults | Yes; the first save quarantines the file |
-| `newer-version` | Written by a newer version (version 9 or later since ET-045e) | Defaults | No (`SETTINGS_READ_ONLY`); the file is never modified |
+| `newer-version` | Written by a newer version (version 9 or later since ET-045e; version 10 or later since ET-050) | Defaults | No (`SETTINGS_READ_ONLY`); the file is never modified |
 | `unreadable` | The file or directory is a symbolic link or junction, not a plain file or directory, or could not be read, or the read had not settled within the read limit (about 30 s) | Defaults | No (`SETTINGS_WRITE_FAILED`) |
 | `unavailable` | No valid settings location | Defaults | No (`SETTINGS_WRITE_FAILED`) |
 

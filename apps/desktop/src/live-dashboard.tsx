@@ -1,6 +1,6 @@
 import React, {useMemo} from 'react';
 import {Clock, Flag, Gauge, MapPin, Package, Truck, WifiOff} from 'lucide-react';
-import type {AppLanguage, LiveTelemetry, UnitProfiles} from '../../../packages/contracts/src';
+import type {AppLanguage, GearDisplayModes, LiveTelemetry, UnitProfiles} from '../../../packages/contracts/src';
 import type {LiveFieldId} from '../../../packages/telemetry-core/src/live-view';
 import {Card, CardContent, CardHeader, CardTitle} from '@/components/ui/card';
 import {Badge} from '@/components/ui/badge';
@@ -11,9 +11,9 @@ import {displayProfile} from './unit-profiles';
 import {getStrings} from './strings';
 import {t, translateUnit} from './i18n';
 
-export function LiveDashboard({live, units, language = 'en'}: {live: LiveTelemetry | undefined; units: UnitProfiles | undefined; language?: AppLanguage}) {
-  const text = useMemo(() => liveDashboardText(live, units, language), [live, units, language]);
-  const view = useMemo(() => desktopLiveView(live, units), [live, units]);
+export function LiveDashboard({live, units, gearDisplay, language = 'en'}: {live: LiveTelemetry | undefined; units: UnitProfiles | undefined; gearDisplay?: GearDisplayModes; language?: AppLanguage}) {
+  const text = useMemo(() => liveDashboardText(live, units, language, gearDisplay), [live, units, language, gearDisplay]);
+  const view = useMemo(() => desktopLiveView(live, units, gearDisplay), [live, units, gearDisplay]);
   const strings = getStrings(language), profile = displayProfile(live, units);
   const value = (id: LiveFieldId) => {const f = view.sources.field(id); return f.state === 'value' || f.state === 'absent' ? liveFieldValue(f, language) : '—';};
   const speedText = dashboardSpeed(live, profile, language), fuelText = dashboardFuel(live, profile, language);

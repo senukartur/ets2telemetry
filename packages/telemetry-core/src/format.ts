@@ -1,6 +1,7 @@
 // Display formatting of canonical values. Rounding uses Number.prototype.toFixed on the converted value; a rounded
 // negative zero is shown as positive zero. Labels and reason texts belong to the application (apps/desktop/src/strings.ts).
 import {bearingDegrees} from './derived';
+import type {GearDisplayMode} from './display-profile';
 import type {MoneyValue} from './readings';
 import {
   convertConsumption, convertDistance, convertMass, convertSpeed, convertVolume, type ConsumptionUnit, type DistanceUnit, type MassUnit,
@@ -40,10 +41,17 @@ export function formatConsumption(litersPer100Km: number, unit: ConsumptionUnit)
 export function formatRpm(rpm: number): string {
   return `${fixed(rpm, 0)} rpm`;
 }
-/** Displayed gear: N for neutral, 1..n forward, R1..Rn reverse. */
-export function formatGear(index: number): string {
+/**
+ * Displayed gear: N for neutral and R1..Rn reverse in both modes. Forward gears are 1..n in `automatic` mode and
+ * range-splitter pairs in `manual` mode: gear g is `ceil(g / 2)` followed by L for odd g and H for even g, so 1 is 1L,
+ * 2 is 1H and 16 is 8H. This is a uniform simplification; it does not know the actual gearbox layout. A forward
+ * value that is not a safe integer is shown as its plain number.
+ */
+export function formatGear(index: number, mode: GearDisplayMode = 'automatic'): string {
   if (index === 0) return 'N';
-  return index < 0 ? `R${-index}` : String(index);
+  if (index < 0) return `R${-index}`;
+  if (mode === 'manual' && Number.isSafeInteger(index)) return `${Math.ceil(index / 2)}${index % 2 === 1 ? 'L' : 'H'}`;
+  return String(index);
 }
 /** An integer percentage of a fraction. */
 export function formatPercent(fraction: number): string {
