@@ -27,9 +27,9 @@ const escaped = (text: string) => renderToStaticMarkup(React.createElement(React
 const group = (html: string, game: string) => html.match(new RegExp('<div[^>]*data-testid="gear-display-' + game + '"[^>]*>'))?.[0] ?? '';
 
 const COPY = {
-  en: {title: 'Gear display', automatic: 'Automatic (1, 2, 3)', manual: 'Manual range-splitter (LL, 1L, 1H…)',
+  en: {title: 'Gear display', automatic: 'Automatic (1, 2, 3)', manual: 'Manual range-splitter (1L, 1H, 2L…)',
     failed: 'The gear display change was not saved; the previous setting stays in use.'},
-  ru: {title: 'Отображение передач', automatic: 'Автоматическая (1, 2, 3)', manual: 'Механическая с делителем (LL, 1L, 1H…)',
+  ru: {title: 'Отображение передач', automatic: 'Автоматическая (1, 2, 3)', manual: 'Механическая с делителем (1L, 1H, 2L…)',
     failed: 'Изменение отображения передач не сохранено; действует прежняя настройка.'}
 } as const;
 

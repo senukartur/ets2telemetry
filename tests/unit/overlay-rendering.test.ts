@@ -63,7 +63,7 @@ it.each(['en', 'ru'] as const)('renders reserves beside exact value texts and a 
 // ET-050: manual gear text reaches every layout unchanged in both languages, with the same mode-independent reserve.
 it.each(['en', 'ru'] as const)('renders manual gear labels exactly in every layout in %s', language => {
   // ET-050b: the gearbox-aware crawler labels reach every layout the same way.
-  for (const text of ['1L', '1H', '8H', '9H', 'R1', 'N', 'LL', 'LH', 'L']) {
+  for (const text of ['1L', '1H', '8H', '9H', 'R1', 'N', 'LL', 'LH', 'L', 'C1', 'C2', 'C']) {
     const sections: OverlayPresentation['sections'] = [{id: 'speed', state: 'value', text: '9 km/h'}, {id: 'gear', state: 'value', text}];
     for (const layout of ['strip', 'card', 'cluster', 'hud'] as const) {
       const html = renderToStaticMarkup(React.createElement(OverlayContent, {view: overlayView({...base, layout, language, speed: '9', sections})}));
