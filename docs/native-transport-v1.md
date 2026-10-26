@@ -133,7 +133,7 @@ The minor-2 `state.nextMandatoryBreak` ([§7](protocol/v1.md#7-current-state-che
 - **Freshness.** The existing rules apply unchanged: a value belongs to the current frame only if it was delivered after the frame start; a timer restart or a `game.time` regression clears a registered channel that the new frame has not delivered; a truck configuration clears it like the other dynamic channels, and `each_frame` delivery fills it again.
 - **No ordering and no events.** The callback assigns no `eventSeq`, copies no record, changes no revision and calls no SDK function. It also advances no boundary order, so the order counted by the other callbacks, and with it every v0 snapshot and CAP0 envelope, is the same whether or not the game provides the channel.
 - **v0 and CAP0.** The callback makes no v0 diagnostic observation, so v0 diagnostic batches and loss counts are unchanged, and the v0 wire reads only the channels it names. CAP0 records no channels.
-- **Minor.** Nothing is written below minor 2. The application offers at most minor 1 until its own PR (ET-052 PR-4), so a running application sees no change; see [ET-052 validation](validation/et-052.md).
+- **Minor.** Nothing is written below minor 2. Since ET-052 PR-4 the application offers minor 2 (`V1_CLIENT_MAX_MINOR`), so an application with that change receives the break from this plugin; an older application still offers at most minor 1 and gets the original minor-1 bytes. See [ET-052 validation](validation/et-052.md).
 
 ### v1 state slot
 
