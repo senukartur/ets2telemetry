@@ -25,7 +25,7 @@ function Value({item}: {item: OverlayItem}) {
 }
 /**
  * The next mandatory break's urgency marks (ET-052 MB10): `data-urgency` (the stylesheet colours soon orange and due red
- * and underlines due, so colour is never the only cue) and an accessible name made of the label, the value and the state
+ * and underlines due; a soon value has colour as its only visible cue) and an accessible name made of the label, the value and the state
  * word ("Break: 1 h 35 min, soon"). Nothing is set
  * for any other item, so their markup is unchanged.
  */

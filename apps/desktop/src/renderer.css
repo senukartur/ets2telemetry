@@ -48,8 +48,9 @@ html:has(.overlay-body) { background: transparent; }
 .overlay-strip .overlay-value[data-reserve]::after { content: attr(data-reserve); display: block; height: 0; overflow: hidden; visibility: hidden; white-space: pre; }
 
 /* Next mandatory break (ET-052): soon is orange and due is red and underlined, set on the item by the renderer from the
-   preload-validated urgency. The underline and the item's accessible name (overlay-renderer.tsx) keep the state readable
-   without colour; the underline changes no size, so the reserved rows and the strip's width are unaffected. */
+   preload-validated urgency. Soon has colour as its only visible cue (the accessible name in overlay-renderer.tsx serves
+   assistive technology); due adds the underline. That is partial against ET-045b and is an open point for the owner's
+   real-game check. The underline changes no size, so the reserved rows and the strip's width are unaffected. */
 .overlay [data-urgency="soon"] .overlay-value { color: var(--yu-ov-break-soon); }
 .overlay [data-urgency="due"] .overlay-value { color: var(--yu-ov-break-due); text-decoration: underline; }
 

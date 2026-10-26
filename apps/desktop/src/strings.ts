@@ -69,7 +69,7 @@ export const STRINGS = Object.freeze({
   overlayPaused: 'Paused',
   overlayNoSignal: 'No signal',
   overlayStale: 'Stale',
-  /** The state words of the overlay's next-mandatory-break item (ET-052): its accessible name, so colour is never the only cue. */
+  /** The state words of the overlay's next-mandatory-break item (ET-052): its accessible name, for assistive technology (the visible cues are the colour and the due underline). */
   overlayBreakSoon: 'soon',
   overlayBreakDue: 'due now',
   overlaySynthetic: 'Synthetic',

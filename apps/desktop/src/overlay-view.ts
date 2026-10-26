@@ -34,8 +34,8 @@ export interface OverlayItem {
   speedRing?: number;
   /**
    * The next mandatory break's urgency (ET-052): the renderer marks the item with it (a colour token, an underline when
-   * due, `data-urgency`) and `urgencyName` is the state word appended to the item's accessible name, so the colour is
-   * never the only cue. Set only on the `mandatory-break` item while it shows a value.
+   * due, `data-urgency`) and `urgencyName` is the state word appended to the item's accessible name (for assistive
+   * technology; the visible cues are the colour and, when due, the underline). Set only on the `mandatory-break` item while it shows a value.
    */
   urgency?: OverlayUrgency;
   urgencyName?: string;
