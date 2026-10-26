@@ -246,8 +246,8 @@ Recorded October 25, 2026 by the coordinator with ET-050b PR-6 ([validation](val
 ET-050b derives manual gear labels from the SDK H-shifter layout, because the SDK exposes no transmission names. The derivation cannot know:
 - the game's own gear names (`transmission_names` in the truck definitions), so a modded or unusual gearbox may differ from the in-game dashboard;
 - reverse names such as `RL`/`RH` or `RLL`, so reverse stays `R1`…`Rn` (B4);
-- the ETS2 crawler naming, which no capture has shown; the crawler constant is the ATS form (`L`, `LL`/`LH`, B5);
-- layouts with more than one crawler position, which fall back to the formula;
+- the crawler naming of each gearbox: since the amendment of October 26, 2026 the crawler is named by game (ETS2 `C1`/`C2`, ATS `LL`/`LH`, B5). Only `C1` on an ETS2 Scania GRSO925R was observed; `C2`, the unsplit ETS2 `C` and other ETS2 crawler gearboxes are unobserved;
+- layouts whose low range holds more than one extra cell (more than one crawler), which fall back to the formula; and any range layout whose low range holds exactly one more cell than its high range is labelled as having a crawler;
 - a truck change without a following `hshifter` callback: the previous layout stays with the new truck's counts until the counts disagree with the slots (then the formula) or a new callback arrives, so a window with the old layout's labels is possible when the counts happen to match.
 
 **Until then:** the formula is the fallback, and the owner's real-game checks decide whether any of these needs work. Reading game files or adding a model table is not authorized by this entry.

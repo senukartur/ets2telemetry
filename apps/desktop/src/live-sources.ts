@@ -1,7 +1,7 @@
 import type {LiveTelemetry} from '../../../packages/contracts/src';
 import type {GearboxState, HShifterLayout} from '../../../packages/contracts/src/protocol-v1';
 import type {DisplayUnits, GearDisplayMode} from '../../../packages/telemetry-core/src/display-profile';
-import {deriveGearLabels} from '../../../packages/telemetry-core/src/gear-labels';
+import {deriveGearLabels, type GearLabelGame} from '../../../packages/telemetry-core/src/gear-labels';
 import {buildLiveView, carriesField, isCurrent, type GearDisplay, type LiveDashboardView, type LiveField, type LiveFieldId} from '../../../packages/telemetry-core/src/live-view';
 import {normalizeV0State} from '../../../packages/telemetry-core/src/normalize-v0';
 import {normalizeV1State} from '../../../packages/telemetry-core/src/normalize-v1';
@@ -78,10 +78,11 @@ function stableLayout(layout: HShifterLayout): HShifterLayout {
  * ET-050b B6: manual mode uses the gearbox-aware labels only while the v1 projection is carried and current, its truck
  * has the same model id as v0's (the ET-045a rule) and its layout validates against the gear counts. Anything else,
  * including a minor-0 source whose gearbox is `not-supported`, keeps the GD2 formula; a stale layout is never held.
+ * The v1 source's game names the crawler (B5 as amended on October 26, 2026).
  */
-function gearDisplay(mode: GearDisplayMode, applies: boolean, gearbox: GearboxState | undefined): GearDisplay {
-  if (mode !== 'manual' || !applies || gearbox === undefined || !gearbox.hshifter.available) return {mode};
-  const labels = deriveGearLabels({...gearbox, hshifter: {available: true, value: stableLayout(gearbox.hshifter.value)}});
+function gearDisplay(mode: GearDisplayMode, applies: boolean, gearbox: GearboxState | undefined, game: GearLabelGame | undefined): GearDisplay {
+  if (mode !== 'manual' || !applies || gearbox === undefined || game === undefined || !gearbox.hshifter.available) return {mode};
+  const labels = deriveGearLabels({...gearbox, hshifter: {available: true, value: stableLayout(gearbox.hshifter.value)}}, game);
   return labels ? {mode, labels} : {mode};
 }
 
@@ -100,7 +101,7 @@ export function liveSources(live: LiveTelemetry, units: DisplayUnits, gear: Gear
   const v1Current = carried !== undefined && isCurrent(carried.v1);
   // ET-045a: v0 carries only the truck's model id; v1's SDK brand and name describe the same truck only for the same id.
   const sameTruck = v0State?.truck.state === 'value' && v1State?.truck.state === 'value' && sameValue(v0State.truck.value.model.id, v1State.truck.value.model.id);
-  const display = gearDisplay(gear, v1Current && sameTruck, carried?.observation.state.gearbox);
+  const display = gearDisplay(gear, v1Current && sameTruck, carried?.observation.state.gearbox, carried?.observation.source.game);
   const v0View = buildLiveView(live, v0State, units, display);
   const v1View = carried ? buildLiveView(carried.v1, v1State, units, display) : undefined;
   const v0Current = v0View.connection.current;
