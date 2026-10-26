@@ -1522,6 +1522,7 @@ it.each([
   expect(update.v1!.observation!.state.nextMandatoryBreak).toEqual(measure);
   const projection = overlayProjection(overlayChannel);
   expect(Object.keys(projection)).toEqual(OVERLAY_KEYS);
+  // Deliberate pin: the overlay carries no break until ET-052 PR-5 adds the Break section label; PR-5 flips this expectation.
   expect(JSON.stringify(projection)).not.toMatch(/Break|break/);
   expect(log.mock.calls.filter(call => call[0] === 'LIVE_V1_REJECTED')).toEqual([]);
 });

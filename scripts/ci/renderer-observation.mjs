@@ -36,7 +36,7 @@ export const SYNTHETIC_V0_VALUE_IDS = Object.freeze(SYNTHETIC_V0_LIVE_ROWS.map((
 export const SYNTHETIC_V0_HIDDEN_ROWS = Object.freeze([
   'live-speed', 'live-fuel', 'live-route-remaining', 'live-deadline', 'live-source-city', 'live-source-company', 'live-destination-company',
   'live-cargo-mass', 'live-market', 'live-special-job', 'live-cargo-loaded', 'live-truck-plate', 'live-trailers', 'live-position', 'live-bearing',
-  'live-game-mode', 'live-event-loss', 'live-paused', 'live-job-missing'
+  'live-game-mode', 'live-event-loss', 'live-mandatory-break', 'live-paused', 'live-job-missing'
 ]);
 
 // Self-contained browser callback. Every expected element exists exactly once, is visible with a non-empty box and has
