@@ -1,5 +1,12 @@
 # Testing and Regression Strategy
 
+ET-044 standalone native-event preparation (October 23, 2026): `scripts/build-event-probe.mjs` builds a bounded
+diagnostic consumer over the existing native broker and strict v1 contracts. It fsyncs separate ignored evidence
+before diagnostic ACKs and opens no application database; `GAME_HISTORY_RECORDING` remains false. The procedure,
+trust reprovisioning scope, controls, tests and unverified game assertions are in
+[ET-044 native validation](docs/validation/et-044-native.md). Native/wire/history behavior is unchanged. A no-game
+preflight or diagnostic ACK is not acceptance of game events, application storage ACKs or recorded trips.
+
 ET-012 closeout snapshot, October 22, 2026: independent round 9 passed 39/39 commands and 21/21 isolated journeys on
 722938c9, including 4,658 Node tests, 458 storage tests, 53 native client cases and 75 plugin cases, without retries. Both
 Hard Mode journeys retained 78 independently audited coherent phases and ten PNGs; the existing wrapper does not add
