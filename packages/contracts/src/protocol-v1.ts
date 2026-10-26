@@ -446,12 +446,14 @@ export function validateServerMessage(v: unknown, options: V1MinorOptions = {}):
 }
 /**
  * v1 current state without the game window, as the live display receives it (ET-010c). The gearbox is always present
- * (ET-050b B7): a minor-1 connection's own, and under minor 0, which carries none, every part `not-supported`.
+ * (ET-050b B7): a minor-1 or minor-2 connection's own, and under minor 0, which carries none, every part
+ * `not-supported`. The next mandatory break is always present too (ET-052 MB5): a minor-2 connection's own raw reading,
+ * and `NOT_SUPPORTED_BREAK` under minor 0 and 1, which transport none.
  */
-export type LiveStateV1 = Omit<CurrentState, 'window' | 'gearbox'> & {gearbox: GearboxState};
+export type LiveStateV1 = Omit<CurrentState, 'window' | 'gearbox' | 'nextMandatoryBreak'> & {gearbox: GearboxState; nextMandatoryBreak: Measure<'min'>};
 /**
  * The live next mandatory break of a connection below minor 2: those minors transport none, so it is `not-supported`
- * (ET-052 MB5). Nothing projects it yet; the live observation gains the field when the service negotiates minor 2.
+ * (ET-052 MB5). The live projection (apps/desktop/src/live-v1.ts) substitutes it for a minor-0 or minor-1 state.
  */
 export const NOT_SUPPORTED_BREAK: Readonly<Measure<'min'>> = Object.freeze({available: false, reason: 'not-supported', unit: 'min'});
 /** The live gearbox of a minor-0 connection: minor 0 transports no gearbox, so every part is `not-supported` (B7). */
@@ -474,17 +476,18 @@ export interface LiveObservationV1 {
 }
 const NOT_OBSERVED_WINDOW = Object.freeze({available: false, reason: 'not-observed'});
 /**
- * Strict validation of a live v1 observation with the same rules as the wire state, including the minor-1 gearbox,
- * which the projection always carries. A state that still carries a window, lacks the gearbox or has any key outside the
- * whitelist is rejected.
+ * Strict validation of a live v1 observation with the same rules as the wire state, including the minor-1 gearbox and
+ * the minor-2 next mandatory break, which the projection always carries (`NOT_SUPPORTED_GEARBOX` and
+ * `NOT_SUPPORTED_BREAK` are valid values of those fields). A state that still carries a window, lacks the gearbox or the
+ * break or has any key outside the whitelist is rejected.
  */
 export function validateLiveObservationV1(v: unknown): LiveObservationV1 {
   const o = record(v, ['source', 'seq', 'capture', 'state', 'sourceStatus', 'receivedMonotonicMs', 'hydration']);
   source(o.source); u64(o.seq); const cap = record(o.capture, ['clockId', 'monotonicNs']); uuid(cap.clockId); u64(cap.monotonicNs);
   const s = o.state;
   if (s === null || typeof s !== 'object' || Array.isArray(s) || Object.hasOwn(s, 'window')) fail();
-  // The minor-1 wire state validator with a not-observed placeholder in place of the omitted window.
-  state({...(s as Record<string, unknown>), window: NOT_OBSERVED_WINDOW}, 1);
+  // The minor-2 wire state validator (the superset shape) with a not-observed placeholder in place of the omitted window.
+  state({...(s as Record<string, unknown>), window: NOT_OBSERVED_WINDOW}, 2);
   const status = record(o.sourceStatus, ['gameMode', 'eventLoss']); gameMode(record(status.gameMode, GAME_MODE_KEYS)); lossCounts(status.eventLoss);
   num(o.receivedMonotonicMs, 0, Number.MAX_VALUE); bool(o.hydration);
   return v as LiveObservationV1;

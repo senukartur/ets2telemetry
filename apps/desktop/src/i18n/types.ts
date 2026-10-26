@@ -16,6 +16,7 @@ export type I18nKey =
   | "copy.route-remaining"
   | "copy.game-time"
   | "copy.delivery-deadline"
+  | "copy.next-mandatory-break"
   | "copy.cargo"
   | "copy.source-city"
   | "copy.source-company"
@@ -404,7 +405,7 @@ export type I18nKey =
   | 'live.title' | 'live.speed' | 'live.gear' | 'live.rpm' | 'live.fuel' | 'live.of' | 'live.range' | 'live.rangeNote'
   | 'live.cons' | 'live.consNote' | 'live.consNoteAts'
   | 'live.job' | 'live.market.freight' | 'live.market.cargo' | 'live.driven' | 'live.remaining' | 'live.planned' | 'live.plannedNote'
-  | 'live.deadline' | 'live.income' | 'live.trip' | 'live.realTime' | 'live.gameTime' | 'live.fuelUsed' | 'live.recording'
+  | 'live.deadline' | 'live.breakSoon' | 'live.breakDue' | 'live.breakBadge' | 'live.income' | 'live.trip' | 'live.realTime' | 'live.gameTime' | 'live.fuelUsed' | 'live.recording'
   | 'live.truck' | 'live.plate' | 'live.trailer' | 'live.odometer' | 'live.session' | 'live.clock' | 'live.mode' | 'live.protocol' | 'live.lostEvents'
   | 'live.waitTitle' | 'live.waitText'
   | 'complete.complete' | 'complete.partial' | 'complete.unknown'

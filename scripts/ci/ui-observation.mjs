@@ -596,6 +596,41 @@ async function observeExportResult({application, dashboard, language, size, reco
   }
   record.flags.actionResult = true;
 }
+/**
+ * ET-052 D3: the Live details row of the next mandatory break. The v1 smoke source serves 95 game minutes ("1 h 35 min", soon):
+ * the Coffee icon, the value and an orange "Soon" badge with its icon, word and accessible name. Zero reads "0 min" with the
+ * red "Break due" badge, 130 minutes has no badge, and an unavailable reading reads unavailable with its reason and no badge.
+ * The source's reading is restored afterwards.
+ */
+async function observeMandatoryBreak({dashboard, sourceV1, language, record}) {
+  record.mandatoryBreak ??= [];
+  const en = language === 'en', label = en ? 'Next mandatory break' : 'До обязательного перерыва';
+  const read = () => dashboard.evaluate(() => {
+    const query = id => globalThis.document.querySelector(`[data-testid="${id}"]`), badge = query('live-mandatory-break-badge');
+    return {value: query('live-mandatory-break')?.innerText ?? null, reason: query('live-mandatory-break-reason')?.innerText ?? null, icon: query('live-mandatory-break-icon') !== null,
+      badge: badge ? {text: badge.innerText, name: badge.getAttribute('aria-label'), urgency: badge.getAttribute('data-urgency'), variant: badge.getAttribute('data-variant'),
+        icon: badge.querySelector('svg') !== null} : null};
+  });
+  const expectRow = async (name, expected) => {
+    await until(read, value => JSON.stringify(value) === JSON.stringify(expected), `UI_MANDATORY_BREAK_${name.toUpperCase()}_${language}`);
+    record.mandatoryBreak.push({language, case: name, ...expected});
+  };
+  const badge = (urgency, word, variant) => ({text: word, name: `${label}: ${word}`, urgency, variant, icon: true});
+  await withRestore(async () => {
+    await expectRow('soon', {value: en ? '1 h 35 min' : '1 ч 35 мин', reason: null, icon: true, badge: badge('soon', en ? 'Soon' : 'Скоро', 'warn')});
+    sourceV1.setBreak({available: true, value: 0, unit: 'min'});
+    await expectRow('due', {value: en ? '0 min' : '0 мин', reason: null, icon: true, badge: badge('due', en ? 'Break due' : 'Пора', 'error')});
+    sourceV1.setBreak({available: true, value: -30, unit: 'min'});
+    await expectRow('overdue', {value: en ? '0 min' : '0 мин', reason: null, icon: true, badge: badge('due', en ? 'Break due' : 'Пора', 'error')});
+    sourceV1.setBreak({available: true, value: 130, unit: 'min'});
+    await expectRow('normal', {value: en ? '2 h 10 min' : '2 ч 10 мин', reason: null, icon: true, badge: null});
+    sourceV1.setBreak({available: false, reason: 'not-observed', unit: 'min'});
+    await expectRow('unavailable', {value: en ? 'unavailable' : 'недоступно', reason: en ? 'not yet observed' : 'ещё не наблюдалось', icon: true, badge: null});
+  }, async () => { sourceV1.setBreak(undefined); });
+  sourceV1.setBreak(undefined);
+  await expectRow('restored', {value: en ? '1 h 35 min' : '1 ч 35 мин', reason: null, icon: true, badge: badge('soon', en ? 'Soon' : 'Скоро', 'warn')});
+  record.flags.mandatoryBreak = true;
+}
 export async function runUiSmoke({application, dashboard, overlay, source, sourceV1, config, record}) {
   assert.ok(UI_CASES.includes(config.uiCase));
   Object.assign(record, {case: config.uiCase, screenshots: [], languages: [], sizes, flags: {}});
@@ -644,6 +679,7 @@ export async function runUiSmoke({application, dashboard, overlay, source, sourc
         for (const [id, text] of [['cargo', 'Synthetic Cargo'], ['source-city', 'Synthetic City A'], ['source-company', 'Synthetic Company A'], ['destination-city', 'Synthetic City B'], ['destination-company', 'Synthetic Company B'], ['truck', 'truck.volvo']]) {
           assert.equal(await dashboard.getByTestId(`live-${id}`).innerText(), text);
         }
+        await observeMandatoryBreak({dashboard, sourceV1, language, record});
         assert.equal(await dashboard.locator('[data-testid="live.trip"] dd').allTextContents().then(values => values.every(value => value === '—')), true);
         assert.ok(await dashboard.getByTestId('live.instrument.gauge').getByRole('img').getAttribute('aria-label'));
         const jobVisible = await dashboard.evaluate(() => {

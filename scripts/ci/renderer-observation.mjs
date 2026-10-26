@@ -78,11 +78,14 @@ export async function waitForNotCurrentLive(page, values, status, hidden = []) {
 // the job's cargo and destination city ids set to the v0 checkpoint's (cargo.logs, city.warszawa), as the v1 smoke source
 // serves it, in the ETS2 metric profile: 151000 m remaining, deadline minute 13000 at game minute 12345 (10 h 55 min),
 // 18000 kg, plate SYN 0001, an unnamed dryvan trailer, heading 0.25 (bearing 270°) and two events lost without a durable
-// consumer. live-dashboard-text.test.ts ties them to the card builder.
+// consumer. live-dashboard-text.test.ts ties them to the card builder. ET-052: the smoke source's protocol v1 minor 2 states
+// carry the next mandatory break, 95 game minutes ("1 h 35 min"), which is soon (an urgency badge, asserted by the UI case).
 export const SYNTHETIC_V1_LIVE_ROWS = Object.freeze([
   ['live-route-remaining', '151.0 km'],
   ['live-deadline', 'in 10 h 55 min'],
   ['live-deadline-note', 'game time'],
+  ['live-mandatory-break', '1 h 35 min'],
+  ['live-mandatory-break-note', 'game time'],
   ['live-source-city', 'Synthetic City A'],
   ['live-source-company', 'Synthetic Company A'],
   ['live-destination-company', 'Synthetic Company B'],
@@ -123,6 +126,8 @@ export const SYNTHETIC_V0V1_LIVE_ROWS = Object.freeze([
   ['live-game-time-note', 'game time'],
   ['live-deadline', 'in 10 h 55 min'],
   ['live-deadline-note', 'game time'],
+  ['live-mandatory-break', '1 h 35 min'],
+  ['live-mandatory-break-note', 'game time'],
   ['live-cargo', 'Synthetic Cargo'],
   ['live-source-city', 'Synthetic City A'],
   ['live-source-company', 'Synthetic Company A'],

@@ -1,11 +1,13 @@
 import type {AppLanguage, GearDisplayModes, LiveTelemetry, UnitProfiles} from '../../../packages/contracts/src';
 import {resolveDisplayUnits} from '../../../packages/telemetry-core/src/display-profile';
+import type {NotableBreakUrgency} from '../../../packages/telemetry-core/src/mandatory-break';
 import type {LiveField, LiveFieldId, LiveSectionId} from '../../../packages/telemetry-core/src/live-view';
 import type {MissingReason} from '../../../packages/telemetry-core/src/readings';
 import {liveSources} from './live-sources';
 import {initialLive} from './live-state';
 import * as BASE_COPY from './strings';
 import {appCopy, copyTable, localizedMeasurement} from './screens/app-copy';
+import {localizeDeadlineString, t} from './i18n';
 import {DEFAULT_UNIT_PROFILES, displayGame, gearDisplayFor, profileFor} from './unit-profiles';
 
 // Text of the live telemetry card (ET-010b, protocol v1 fields ET-010c): telemetry-core's view model with the
@@ -18,13 +20,6 @@ import {DEFAULT_UNIT_PROFILES, displayGame, gearDisplayFor, profileFor} from './
  */
 export const LEGACY_ROW_IDS: ReadonlySet<LiveFieldId> = new Set<LiveFieldId>(['speed', 'fuel']);
 
-/**
- * Rows the view model builds that the dashboard does not show yet. ET-052 PR-1 adds the next mandatory break to
- * telemetry-core before any source carries it (the live projection and its dashboard row follow in PR-4), so the card
- * skips it; removing it from this set is the whole dashboard change.
- */
-const NOT_YET_SHOWN_ROW_IDS: ReadonlySet<LiveFieldId> = new Set<LiveFieldId>(['mandatory-break']);
-
 export interface LiveRowText {
   id: LiveFieldId;
   testId: `live-${LiveFieldId}`;
@@ -35,6 +30,11 @@ export interface LiveRowText {
   reason?: string;
   /** Context for the label, such as "SDK mean, not a trip average". */
   note?: string;
+  /**
+   * The next mandatory break's urgency badge (ET-052 D3). The word and the accessible name always travel with it, so the
+   * badge never relies on colour alone.
+   */
+  badge?: {urgency: NotableBreakUrgency; text: string; name: string};
 }
 /** `source`: the protocol v1 source section (ET-010c decision F5). */
 export type LiveSectionTextId = LiveSectionId | 'source';
@@ -56,6 +56,8 @@ export interface LiveDashboardText {paused: boolean; sections: LiveSectionText[]
  */
 export function liveFieldValue(field: LiveField, language: AppLanguage): string {
   if (field.state === 'value' && field.id === 'market') return BASE_COPY.getJobMarketText(field.text, language);
+  // The break is a duration ("1 h 35 min"); the Russian units are the deadline's.
+  if (field.state === 'value' && field.id === 'mandatory-break') return localizeDeadlineString(field.text, language);
   return field.state === 'value' ? ((field.id === 'special-job' || field.id === 'cargo-loaded') ? field.text === 'yes' ? (language === 'ru' ? 'да' : 'yes') : (language === 'ru' ? 'нет' : 'no') : ['cargo', 'source-city', 'source-company', 'destination-city', 'destination-company', 'truck', 'truck-plate', 'trailers', 'game-mode'].includes(field.id) ? field.text : localizedMeasurement(field.text, language)) : appCopy(field.text, language);
 }
 
@@ -65,7 +67,11 @@ function rowText(field: LiveField, extraNote?: string): LiveRowText {
   const reason = (field.state === 'missing' || field.state === 'absent') && field.reason ? VIEW_REASON_TEXT[field.reason] : undefined;
   const notes = [...(field.notes ?? []).map(id => FIELD_NOTE_TEXT[id]), ...(extraNote ? [extraNote] : [])];
   const note = notes.length ? notes.join('; ') : undefined;
-  return {id: field.id, testId: `live-${field.id}`, label: LIVE_FIELD_TEXT[field.id], value: liveFieldValue(field, language), ...(reason ? {reason} : {}), ...(note ? {note} : {})};
+  const label = LIVE_FIELD_TEXT[field.id];
+  // Only a current value row carries an urgency; the word and the name are the badge's text, beside its icon and tone.
+  const badge = field.state === 'value' && field.urgency ? {urgency: field.urgency, text: t(field.urgency === 'due' ? 'live.breakDue' : 'live.breakSoon', undefined, language),
+    name: t('live.breakBadge', {label, word: t(field.urgency === 'due' ? 'live.breakDue' : 'live.breakSoon', undefined, language)}, language)} : undefined;
+  return {id: field.id, testId: `live-${field.id}`, label, value: liveFieldValue(field, language), ...(reason ? {reason} : {}), ...(note ? {note} : {}), ...(badge ? {badge} : {})};
 }
 
 /**
@@ -87,7 +93,7 @@ function liveDashboardText(live: LiveTelemetry | undefined, units: UnitProfiles 
     const rows: LiveRowText[] = [];
     for (const {id} of section.fields) {
       const field = sources.field(id);
-      if (field.state === 'hidden' || LEGACY_ROW_IDS.has(id) || NOT_YET_SHOWN_ROW_IDS.has(id)) continue;
+      if (field.state === 'hidden' || LEGACY_ROW_IDS.has(id)) continue;
       rows.push(rowText(field));
     }
     if (!rows.length && !section.missing) continue;
