@@ -4,17 +4,20 @@ import {describe, expect, it, vi} from 'vitest';
 import {decodePayload, negotiateV1, ProtocolError, validateClientMessage, type ServerMessage} from '../../packages/contracts/src/protocol-v1';
 import {AckValidator, computeClockMapping, DurableAckCursor, isClockMappingCurrent, V1Consumer, type V1Applied} from '../../packages/contracts/src/protocol-v1-delivery';
 
-const dir = resolve('tests/fixtures/protocol-v1'), m1Dir = resolve(dir, 'minor1');
+const dir = resolve('tests/fixtures/protocol-v1'), m1Dir = resolve(dir, 'minor1'), m2Dir = resolve(dir, 'minor2');
 const bytes = (name: string, from = dir) => new Uint8Array(readFileSync(resolve(from, `${name}.json`)));
 const server = (name: string) => decodePayload(bytes(name), 'server') as ServerMessage;
 /** A minor-1 corpus message, decoded by a reader that accepts minor 1. */
 const m1 = (name: string) => decodePayload(bytes(name, m1Dir), 'server', {maxMinor: 1}) as ServerMessage;
+/** A minor-2 corpus message, decoded by a reader that accepts minor 2. */
+const m2 = (name: string) => decodePayload(bytes(name, m2Dir), 'server', {maxMinor: 2}) as ServerMessage;
 const rows = (input: string) => input.trim().split(/\r?\n/).map(line => line.trim().split(/\s+/));
 const streams = rows(readFileSync(resolve(dir, 'streams.txt'), 'utf8'));
 const m1Streams = rows(readFileSync(resolve(m1Dir, 'streams.txt'), 'utf8'));
-/** The minor-0 corpus with the default (minor 0) client and server, or the minor-1 corpus with both offering minor 1. */
-interface Corpus {dir: string; maxMinor: 0 | 1}
-const MINOR_0: Corpus = {dir, maxMinor: 0}, MINOR_1: Corpus = {dir: m1Dir, maxMinor: 1};
+const m2Streams = rows(readFileSync(resolve(m2Dir, 'streams.txt'), 'utf8'));
+/** The minor-0 corpus with the default (minor 0) client and server, or the minor-1 or minor-2 corpus with both offering that minor. */
+interface Corpus {dir: string; maxMinor: 0 | 1 | 2}
+const MINOR_0: Corpus = {dir, maxMinor: 0}, MINOR_1: Corpus = {dir: m1Dir, maxMinor: 1}, MINOR_2: Corpus = {dir: m2Dir, maxMinor: 2};
 const P1 = '10000000-0000-4000-8000-000000000001', P2 = '10000000-0000-4000-8000-000000000002';
 const CLIENT_CLOCK = '60000000-0000-4000-8000-000000000001';
 
@@ -324,7 +327,8 @@ describe('ET-050b one minor per connection', () => {
     const offered = new V1Consumer(true, {maxMinor: 1}); expect(offered.minor).toBeUndefined();
     offered.accept(m1('welcome')); expect(offered.minor).toBe(1);
     const old = new V1Consumer(true, {maxMinor: 1}); old.accept(server('welcome')); expect(old.minor).toBe(0);
-    for (const maxMinor of [2, -1, 0.5]) expect(() => new V1Consumer(true, {maxMinor})).toThrow(ProtocolError);
+    // ET-052: minor 2 exists, so the first unsupported maximum is 3.
+    for (const maxMinor of [3, -1, 0.5]) expect(() => new V1Consumer(true, {maxMinor})).toThrow(ProtocolError);
   });
   it('closes the consumer when the minor changes within a connection, in either direction', () => {
     const up = new V1Consumer(true, {maxMinor: 1}); up.accept(server('welcome')); up.accept(server('checkpoint'));
@@ -350,7 +354,7 @@ describe('ET-050b one minor per connection', () => {
     expect(ack).toEqual({version: {major: 1, minor: 1}, kind: 'ack', data: {pluginSessionId: P1, throughEventSeq: '1'}});
     expect(validateClientMessage(ack, {maxMinor: 1})).toEqual(ack); expect(() => validateClientMessage(ack)).toThrow(ProtocolError);
     cursor.beginConnection('1'); cursor.received('2', '2'); cursor.commit('2'); expect(cursor.ack()?.version).toEqual({major: 1, minor: 0});
-    expect(() => cursor.beginConnection('2', 2)).toThrow(ProtocolError);
+    expect(() => cursor.beginConnection('2', 3)).toThrow(ProtocolError);
   });
   it('accepts producer-side ACKs only at the connection minor', () => {
     const ack = (minor: number, through: string) => ({version: {major: 1, minor}, kind: 'ack', data: {pluginSessionId: P1, throughEventSeq: through}});
@@ -359,7 +363,7 @@ describe('ET-050b one minor per connection', () => {
     expect(() => minor1.accept(ack(0, '2'))).toThrow(/minor differs/); expect(() => minor1.accept(ack(1, '2'))).toThrow(/closed/);
     const minor0 = new AckValidator(P1, true); minor0.checkpoint('0'); minor0.sent('1');
     expect(() => minor0.accept(ack(1, '1'))).toThrow(/Unsupported protocol version/);
-    expect(() => new AckValidator(P1, true, 2)).toThrow(ProtocolError);
+    expect(() => new AckValidator(P1, true, 3)).toThrow(ProtocolError);
   });
   it('accepts producer-side clock probes only after the checkpoint and at the connection minor', () => {
     const probe = (minor: number, probeId = '1') => ({version: {major: 1, minor}, kind: 'clock.probe', data: {probeId}});
@@ -377,6 +381,87 @@ describe('ET-050b one minor per connection', () => {
     expect(computeClockMapping({...input, maxMinor: 1}))
       .toEqual({sourceClockId: '30000000-0000-4000-8000-000000000001', clientClockId: CLIENT_CLOCK, offsetNs: '995449400000', uncertaintyNs: '300000', measuredAtClientNs: '5000800000'});
     expect(() => computeClockMapping(input)).toThrow(/Unsupported protocol version/);
-    expect(() => computeClockMapping({...input, maxMinor: 2})).toThrow(ProtocolError);
+    expect(() => computeClockMapping({...input, maxMinor: 3})).toThrow(ProtocolError);
+  });
+});
+
+describe('ET-052 shared minor-2 delivery streams', () => {
+  for (const [name, durable, steps, outcome, expected] of m2Streams) it(`shared minor-2 stream ${name}`, () => {
+    const result = runStream(durable === '1', steps.split(','), MINOR_2);
+    if (outcome.startsWith('reject@')) {
+      expect(result.error).toBeInstanceOf(ProtocolError);
+      expect(result.failedAt).toBe(Number(outcome.slice('reject@'.length)));
+    } else {
+      expect(outcome).toBe('accept'); expect(result.error).toBeUndefined();
+      expect(result.cursor?.throughEventSeq ?? '0').toBe(expected);
+    }
+  });
+  it('fails every minor-2 stream with a numeric A: step through the harness when the cursor never acknowledges', () => {
+    const numeric = m2Streams.filter(([, , steps]) => steps.split(',').some(step => /^A:[0-9]+$/.test(step)));
+    expect(numeric.map(([name]) => name)).toEqual(['normal', 'old-plugin-minor-1', 'old-plugin-minor-0']);
+    const never = vi.spyOn(DurableAckCursor.prototype, 'ack').mockReturnValue(undefined);
+    try {
+      for (const [name, durable, steps] of numeric) {
+        const result = runStream(durable === '1', steps.split(','), MINOR_2);
+        expect(String(result.error), name).toMatch(/^Error: Harness: cursor produced ACK -, expected [0-9]+$/);
+      }
+    } finally { never.mockRestore(); }
+  });
+  it('reports the selected minor of each connection and builds its ACKs at it', () => {
+    const minors = (name: string) => {
+      const result = runStream(true, m2Streams.find(([n]) => n === name)![2].split(','), MINOR_2);
+      expect(result.error, name).toBeUndefined(); return result.applied.map(a => a.message.version.minor);
+    };
+    expect(minors('normal')).toEqual([2, 2, 2, 2, 2, 2]);
+    expect(minors('old-plugin-minor-1')).toEqual([1, 1, 1, 1]);
+    expect(minors('old-plugin-minor-0')).toEqual([0, 0, 0, 0]);
+  });
+  it('lets the availability of the break change between snapshots of one connection', () => {
+    const result = runStream(true, m2Streams.find(([name]) => name === 'break-availability')![2].split(','), MINOR_2);
+    expect(result.error).toBeUndefined();
+    const breaks = result.applied.map(a => a.message.kind === 'snapshot' || a.message.kind === 'checkpoint' ? a.message.data.state.nextMandatoryBreak : undefined).slice(1);
+    expect(breaks).toEqual([
+      {available: true, value: 95, unit: 'min'}, {available: true, value: 95, unit: 'min'}, {available: true, value: 0, unit: 'min'}, {available: true, value: -30, unit: 'min'},
+      {available: true, value: 2_147_483_647, unit: 'min'}, {available: true, value: -2_147_483_648, unit: 'min'}, {available: false, reason: 'not-observed', unit: 'min'},
+      {available: false, reason: 'not-supported', unit: 'min'}, {available: false, reason: 'invalid', unit: 'min'}]);
+  });
+  it('hydrates a minor-2 checkpoint with the break and no event coverage', () => {
+    const consumer = new V1Consumer(true, {maxMinor: 2}); consumer.accept(m2('welcome')); expect(consumer.minor).toBe(2);
+    const applied = consumer.accept(m2('checkpoint'));
+    if (applied.message.kind !== 'checkpoint') throw new Error('fixture');
+    expect(applied.hydration).toBe(true); expect(applied.coverage).toBeUndefined();
+    expect(applied.message.data.state.nextMandatoryBreak).toEqual({available: true, value: 95, unit: 'min'});
+  });
+  it('rejects a minor-2 welcome above the consumer maximum and a minor change inside a minor-2 connection', () => {
+    for (const maxMinor of [undefined, 0, 1]) {
+      expect(() => new V1Consumer(true, maxMinor === undefined ? {} : {maxMinor}).accept(m2('welcome')), String(maxMinor)).toThrow(/Unsupported protocol version/);
+    }
+    const down = new V1Consumer(true, {maxMinor: 2}); down.accept(m2('welcome')); down.accept(m2('checkpoint'));
+    expect(() => down.accept(m1('event-job-configured'))).toThrow(/minor changed/); expect(() => down.accept(m2('event-job-configured'))).toThrow(/closed/);
+    for (const maxMinor of [3, -1, 0.5]) expect(() => new V1Consumer(true, {maxMinor})).toThrow(ProtocolError);
+  });
+  it('rejects a minor-2 state without the break and a minor-1 or minor-0 state with it, before any consumer sees them', () => {
+    for (const name of ['checkpoint-without-break', 'snapshot-without-break', 'snapshot-without-gearbox', 'checkpoint-minor-1-with-break', 'snapshot-minor-0-with-break']) {
+      expect(() => decodePayload(bytes(name, m2Dir), 'server', {maxMinor: 2}), name).toThrow(ProtocolError);
+    }
+  });
+  it('builds ACKs, validates ACKs and clock probes, and maps clock replies at minor 2', () => {
+    const cursor = new DurableAckCursor(P1); cursor.beginConnection('0', 2); cursor.received('1', '1'); cursor.commit('1');
+    const ack = cursor.ack();
+    expect(ack).toEqual({version: {major: 1, minor: 2}, kind: 'ack', data: {pluginSessionId: P1, throughEventSeq: '1'}});
+    expect(validateClientMessage(ack, {maxMinor: 2})).toEqual(ack); expect(() => validateClientMessage(ack, {maxMinor: 1})).toThrow(ProtocolError);
+    expect(() => cursor.beginConnection('1', 3)).toThrow(ProtocolError);
+    const ackAt = (minor: number, through: string) => ({version: {major: 1, minor}, kind: 'ack', data: {pluginSessionId: P1, throughEventSeq: through}});
+    const probeAt = (minor: number, probeId: string) => ({version: {major: 1, minor}, kind: 'clock.probe', data: {probeId}});
+    const validator = new AckValidator(P1, true, 2); validator.checkpoint('0'); validator.sent('2');
+    expect(validator.accept(ackAt(2, '1'))).toBe('1'); expect(validator.probe(probeAt(2, '1'))).toBe('1');
+    expect(() => validator.accept(ackAt(1, '2'))).toThrow(/minor differs/); expect(() => validator.probe(probeAt(2, '2'))).toThrow(/closed/);
+    const older = new AckValidator(P1, true, 1); older.checkpoint('0'); older.sent('1');
+    expect(() => older.accept(ackAt(2, '1'))).toThrow(/Unsupported protocol version/);
+    expect(() => new AckValidator(P1, true, 3)).toThrow(ProtocolError);
+    const input = {reply: m2('clock-reply'), probeId: '1', clientClockId: CLIENT_CLOCK, probeSentNs: '5000000000', replyReceivedNs: '5000800000'};
+    expect(computeClockMapping({...input, maxMinor: 2}))
+      .toEqual({sourceClockId: '30000000-0000-4000-8000-000000000001', clientClockId: CLIENT_CLOCK, offsetNs: '995449400000', uncertaintyNs: '300000', measuredAtClientNs: '5000800000'});
+    expect(() => computeClockMapping({...input, maxMinor: 1})).toThrow(/Unsupported protocol version/); expect(() => computeClockMapping({...input, maxMinor: 3})).toThrow(ProtocolError);
   });
 });

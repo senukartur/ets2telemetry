@@ -9,6 +9,7 @@ import {
   formatPercent, formatPosition, formatRpm, formatSpeed, formatVolume
 } from './format';
 import type {GearLabels} from './gear-labels';
+import {breakUrgency, formatMandatoryBreak, type NotableBreakUrgency} from './mandatory-break';
 import {missing, valueOf, type GameModeView, type LiveTrailer, type LiveTruck, type MissingReason, type NamedEntity, type NormalizedLiveState, type Reading} from './readings';
 
 export type ViewReason = MissingReason | 'not-current' | 'zero-consumption' | 'no-trailer';
@@ -17,7 +18,7 @@ export type FieldNote =
   'sdk-mean' | 'ats-mostly-static' | 'game-estimate' | 'job-offer-excludes-ferry' | 'game-time' | 'game-world-coordinates' | 'cargo-market-only';
 export type LiveFieldId =
   'speed' | 'gear' | 'engine-rpm' | 'fuel' | 'fuel-capacity' | 'fuel-level' | 'sdk-average-consumption' | 'estimated-range' | 'odometer' |
-  'route-remaining' | 'game-time' | 'deadline' | 'cargo' | 'source-city' | 'source-company' | 'destination-city' | 'destination-company' |
+  'route-remaining' | 'game-time' | 'deadline' | 'mandatory-break' | 'cargo' | 'source-city' | 'source-company' | 'destination-city' | 'destination-company' |
   'cargo-mass' | 'market' | 'special-job' | 'cargo-loaded' | 'planned-distance' | 'expected-income' | 'truck' | 'truck-plate' | 'trailers' |
   'position' | 'bearing' | 'game-mode' | 'event-loss';
 /**
@@ -25,7 +26,11 @@ export type LiveFieldId =
  * shown, because the protocol in use does not carry the field or the field does not apply (for example no job).
  * `absent`: the current source reports that the subject is not there (no trailer attached); the row shows `none`.
  */
-export interface LiveField {id: LiveFieldId; state: 'value' | 'missing' | 'hidden' | 'absent'; text: string; reason?: ViewReason; notes?: readonly FieldNote[]}
+export interface LiveField {
+  id: LiveFieldId; state: 'value' | 'missing' | 'hidden' | 'absent'; text: string; reason?: ViewReason; notes?: readonly FieldNote[];
+  /** Set only on a current `mandatory-break` value that is soon or due; a normal value carries none (ET-052). */
+  urgency?: NotableBreakUrgency;
+}
 export type LiveSectionId = 'motion' | 'fuel' | 'distance' | 'time' | 'job' | 'vehicle' | 'position';
 /** `missing` is set when the section's subject is absent while current, such as no job reported. */
 export interface LiveSection {id: LiveSectionId; fields: LiveField[]; missing?: MissingReason}
@@ -89,6 +94,13 @@ function field<T>(id: LiveFieldId, current: boolean, reading: Reading<T>, format
 }
 const hidden = (id: LiveFieldId, reason?: ViewReason, notes?: readonly FieldNote[]): LiveField => ({id, state: 'hidden', text: '', ...(reason ? {reason} : {}), ...(notes ? {notes} : {})});
 const text = (value: string) => value === '' ? '(empty)' : value;
+
+/** Marks a current value that is due or soon; every other row, and a normal value, is returned unchanged. */
+function withBreakUrgency(row: LiveField, reading: Reading<number>): LiveField {
+  if (row.state !== 'value' || reading.state !== 'value') return row;
+  const urgency = breakUrgency(reading.value);
+  return urgency === 'normal' ? row : {...row, urgency};
+}
 
 /** First non-empty value in order; then a provided empty value; otherwise the first meaningful missing reason. */
 function firstText(...readings: Reading<string>[]): Reading<string> {
@@ -193,7 +205,9 @@ export function buildLiveView(live: LiveViewSource, state: NormalizedLiveState |
     ]},
     {id: 'time', fields: [
       f('game-time', s.gameTime.minutes, formatGameTime, ['game-time']),
-      jobField('deadline', value => deadlineRemaining(value.deliveryDeadline, s.gameTime.minutes), formatDeadline, ['game-time'])
+      jobField('deadline', value => deadlineRemaining(value.deliveryDeadline, s.gameTime.minutes), formatDeadline, ['game-time']),
+      // v1 only (minor 2). The text is clamped at zero; the urgency follows the raw value (ET-052).
+      withBreakUrgency(f('mandatory-break', s.nextMandatoryBreak, value => Number.isInteger(value) ? formatMandatoryBreak(value) : {reason: 'invalid'}, ['game-time']), s.nextMandatoryBreak)
     ]},
     {id: 'job', ...(noJob ? {missing: noJob} : {}), fields: [
       jobField('cargo', value => entityText(value.cargo), text),
@@ -244,6 +258,6 @@ function unknownState(): NormalizedLiveState {
   return {
     protocol: 'v0', simulation: 'unavailable', speed: none, gear: none, engineRpm: none, fuel: none, fuelCapacity: none, averageConsumption: none,
     estimatedRange: none, odometer: none, navigationDistance: none, gameTime: {minutes: none, clockId: ''}, worldPlacement: none, job: none,
-    truck: none, trailers: none, gameMode: none, eventLoss: none, gearbox: none, configurationRevision: '0'
+    truck: none, trailers: none, gameMode: none, eventLoss: none, gearbox: none, nextMandatoryBreak: none, configurationRevision: '0'
   };
 }

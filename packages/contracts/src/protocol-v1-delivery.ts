@@ -11,7 +11,7 @@ const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 /** Exact BigInt of a canonical uint64 decimal string; callers never pass JavaScript numbers. */
 function uint(v: Uint64, minimum = 0n): bigint { if (!isUint64(v) || BigInt(v) < minimum) fail('Invalid uint64 value'); return BigInt(v); }
 /** A minor this contract implements; anything else is a caller error. */
-function minorOf(v: number): V1Minor { if (v !== 0 && v !== 1) fail('Unsupported protocol v1 minor'); return v; }
+function minorOf(v: number): V1Minor { if (v !== 0 && v !== 1 && v !== 2) fail('Unsupported protocol v1 minor'); return v; }
 
 export interface V1Applied {
   message: ServerMessage;

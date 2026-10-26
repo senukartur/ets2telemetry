@@ -8,8 +8,9 @@ import net from 'node:net';
 import {randomUUID} from 'node:crypto';
 import {describe, expect, it} from 'vitest';
 import {FrameDecoder, PROTOCOL_V1, V1_MAX_MINOR, encodeFrame as encodeAnyMinor, type ProtocolMessage, type ServerMessage} from '../../packages/contracts/src/protocol-v1';
-// ET-050b: these raw clients offer the contract's highest minor, as the scripted client does, so their connections are
-// minor 1 and every frame after the hello carries {1,1}.
+// ET-050b: these raw clients offer minor 1 where they model the scripted client (its default offer is pinned to 1 until
+// ET-052 PR-4) and the contract's highest minor otherwise; the producer selects minor 1 either way, so every frame after
+// the hello carries {1,1}.
 const M1 = {major: 1, minor: 1} as const;
 const encodeFrame = (message: ProtocolMessage) => encodeAnyMinor(message, {maxMinor: V1_MAX_MINOR});
 import {V1Consumer} from '../../packages/contracts/src/protocol-v1-delivery';
@@ -28,8 +29,11 @@ const HELLO_TIMEOUT_MS = 300;
 const SOURCE = {versions: {telemetryApi: {major: 1, minor: 1}, gameTelemetry: {major: 1, minor: 19}, sdkArchive: 'scs-sdk-1.15'}, gameplayEvents: 'registered', currency: 'unknown', gameMode: 'unknown'};
 const inline = (steps: Json[], transport: Json[]): Json => ({format: 'ets2telemetry-simulator-v1', schemaVersion: 1, id: 'pipe-test', purpose: 'Pipe test', reg: ['REG-011'], origin: 'synthetic',
   game: 'ets2', seed: 'pipe-test', provenance: null, source: SOURCE, steps, transport});
-/** The hello of the inline scenario's first client instance, as its script sends it. */
-const hello = (durableEvents = true) => encodeFrame({version: PROTOCOL_V1, kind: 'hello', data: {clientInstanceId: seededId('pipe-test', 'client-instance-1'), minMinor: 0, maxMinor: V1_MAX_MINOR, durableEvents}});
+/**
+ * The hello of the inline scenario's first client instance, as its script sends it. The lockstep server compares it with the
+ * scripted client's hello, whose default offer is pinned to minor 1 (ET-052 MB3) although the contract implements 2.
+ */
+const hello = (durableEvents = true) => encodeFrame({version: PROTOCOL_V1, kind: 'hello', data: {clientInstanceId: seededId('pipe-test', 'client-instance-1'), minMinor: 0, maxMinor: 1, durableEvents}});
 
 /** A raw test client: connects, sends `first`, decodes server frames and records how the connection ended. */
 function rawClient(endpoint: string, first?: Uint8Array) {

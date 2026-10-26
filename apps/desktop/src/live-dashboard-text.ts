@@ -18,6 +18,13 @@ import {DEFAULT_UNIT_PROFILES, displayGame, gearDisplayFor, profileFor} from './
  */
 export const LEGACY_ROW_IDS: ReadonlySet<LiveFieldId> = new Set<LiveFieldId>(['speed', 'fuel']);
 
+/**
+ * Rows the view model builds that the dashboard does not show yet. ET-052 PR-1 adds the next mandatory break to
+ * telemetry-core before any source carries it (the live projection and its dashboard row follow in PR-4), so the card
+ * skips it; removing it from this set is the whole dashboard change.
+ */
+const NOT_YET_SHOWN_ROW_IDS: ReadonlySet<LiveFieldId> = new Set<LiveFieldId>(['mandatory-break']);
+
 export interface LiveRowText {
   id: LiveFieldId;
   testId: `live-${LiveFieldId}`;
@@ -80,7 +87,7 @@ function liveDashboardText(live: LiveTelemetry | undefined, units: UnitProfiles 
     const rows: LiveRowText[] = [];
     for (const {id} of section.fields) {
       const field = sources.field(id);
-      if (field.state === 'hidden' || LEGACY_ROW_IDS.has(id)) continue;
+      if (field.state === 'hidden' || LEGACY_ROW_IDS.has(id) || NOT_YET_SHOWN_ROW_IDS.has(id)) continue;
       rows.push(rowText(field));
     }
     if (!rows.length && !section.missing) continue;

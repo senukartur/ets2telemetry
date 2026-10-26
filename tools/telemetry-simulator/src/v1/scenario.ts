@@ -123,7 +123,7 @@ function policy(v: unknown, path: string, connectAt: number): ClientPolicy & {pr
   const probes = opt(o, 'probes', raw => arr(raw, `${path}.probes`, 100).map((t, i) => {
     const at = int(t, `${path}.probes[${i}]`, connectAt + 1, MAX_AT_MS); if (at < last + 1_000) fail(`${path}.probes[${i}]`, 'probes must be at least 1,000 ms apart'); last = at; return at;
   }), []);
-  // ET-050b B1: the hello's offer; omitted, the client offers the contract's highest minor.
+  // ET-050b B1: the hello's offer; omitted, the client offers minor 1 (its default offer is pinned to 1 until ET-052 PR-4).
   const maxMinor = Object.hasOwn(o, 'maxMinor') ? int(o.maxMinor, `${path}.maxMinor`, 0, 1) as 0 | 1 : undefined;
   return {durable, commit, ack, probes, ...(maxMinor === undefined ? {} : {maxMinor})};
 }

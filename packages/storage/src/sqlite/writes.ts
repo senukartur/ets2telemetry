@@ -33,7 +33,7 @@ const ATTRIBUTIONS = ['trip', 'trip-before-loaded', 'free-driving', 'ambiguous']
 const INTERVAL_KINDS = ['event-loss', 'not-connected', 'storage-unavailable', 'sample-loss', 'discontinuity', 'restore-loss'];
 
 /**
- * A validated welcome, event or gap of either minor this contract implements (ET-050b B1). The envelope minor selects the
+ * A validated welcome, event or gap of any minor this contract implements, 0 to 2 (`V1_MAX_MINOR`; ET-050b B1, ET-052). The envelope minor selects the
  * schema; the per-connection minor rule is the consumer's, and the welcome's minor is stored with its session.
  */
 function serverMessage(input: unknown, kind: 'welcome' | 'event' | 'gap'): ServerMessage {

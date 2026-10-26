@@ -46,8 +46,9 @@ const GUARD_BATCH_ITERATIONS = 25;
 /** Bounds the CPU work of one campaign of ITERATIONS inputs. It grows with the count and asserts no timing. */
 const CAMPAIGN_CPU_BUDGET_MS = 30_000 + ITERATIONS * 25;
 /**
- * The default (minor-0) v1 readers get half a campaign: the minor-1 readers already fuzz every minor-0 seed, and this
- * keeps the default entry points and the minor-swap defect under test without doubling the v1 cost (ET-050b).
+ * The default (minor-0) and maxMinor-1 v1 readers get half a campaign each: the maxMinor-2 readers already fuzz every
+ * minor-0 and minor-1 seed, and this keeps the older entry points and the minor-swap defect under test without tripling
+ * the v1 cost (ET-050b, ET-052).
  */
 const DEFAULT_READER_ITERATIONS = Math.ceil(ITERATIONS / 2);
 /** A campaign of at least this many inputs must reach both acceptance and rejection, or its mutations are too weak. */
@@ -141,14 +142,21 @@ const isUuid = (v: unknown) => typeof v === 'string' && UUID.test(v);
 const isU64 = (v: unknown): v is string => typeof v === 'string' && /^(0|[1-9][0-9]{0,19})$/.test(v) && BigInt(v) <= 18_446_744_073_709_551_615n;
 const isInt = (v: unknown, min: number, max: number) => typeof v === 'number' && Number.isInteger(v) && v >= min && v <= max;
 const isVersion = (v: unknown, major: number, minors: readonly number[] = [0]) => hasKeys(v, ['major', 'minor']) && v.major === major && minors.includes(v.minor as number);
-/** The documented v1 minors (v1.md §2): 0 and, from ET-050b, 1. */
-const V1_MINORS_DOC = [0, 1];
-/** Kinds whose schema or rules name the minor: the hello is always 1.0, the welcome repeats it, and state carries the gearbox only in minor 1 (v1.md §2, §4, §7). */
+/** The documented v1 minors (v1.md §2): 0 and, from ET-050b, 1 and, from ET-052, 2. */
+const V1_MINORS_DOC = [0, 1, 2];
+/**
+ * Kinds whose schema or rules name the minor: the hello is always 1.0, the welcome repeats it, and state carries the
+ * gearbox from minor 1 and the next mandatory break only in minor 2 (v1.md §2, §4, §7).
+ */
 const V1_MINOR_DEPENDENT_KINDS = ['hello', 'welcome', 'checkpoint', 'snapshot'];
+/** Minor-2 `nextMandatoryBreak`: a signed s32 integer of game minutes, never a decimal string (v1.md §7, ET-052 MB1). */
+const V1_BREAK_DOC = {min: -2_147_483_648, max: 2_147_483_647, unit: 'min'};
 /** Minor-1 gearbox bounds (v1.md §7, ET-050b B2). */
 const V1_GEARBOX_DOC = {maxGears: 100, maxSelectorCount: 6, maxSlots: 64, maxHandlePosition: 255};
 const isAvailability = (v: unknown, value: (x: unknown) => boolean) => hasKeys(v, ['available', 'value']) ? v.available === true && value(v.value) :
   hasKeys(v, ['available', 'reason']) && v.available === false && ['not-supported', 'not-observed', 'invalid'].includes(v.reason as string);
+const isMeasure = (v: unknown, unit: string, value: (x: unknown) => boolean) => hasKeys(v, ['available', 'value', 'unit']) ? v.available === true && v.unit === unit && value(v.value) :
+  hasKeys(v, ['available', 'reason', 'unit']) && v.available === false && v.unit === unit && ['not-supported', 'not-observed', 'invalid'].includes(v.reason as string);
 function gearboxProblem(g: unknown): string | undefined {
   if (!hasKeys(g, ['forwardGears', 'reverseGears', 'hshifter'])) return 'gearbox keys';
   const count = (x: unknown) => isInt(x, 0, V1_GEARBOX_DOC.maxGears);
@@ -212,11 +220,13 @@ function v1ServerProblem(m: unknown, size: number, minors: readonly number[]): s
   const data = m.data as Json, minor = (m.version as Json).minor;
   // The welcome's envelope minor equals the minor it selects (v1.md §2, §4).
   if (m.kind === 'welcome' && (data.minor !== minor || !jsonEqual(data.limits, V1_LIMITS_DOC))) return 'welcome minor or limits';
-  // State carries `gearbox` exactly in minor 1, within the documented bounds (v1.md §7).
+  // State carries `gearbox` from minor 1 and `nextMandatoryBreak` exactly in minor 2, within the documented bounds (v1.md §7).
   if (m.kind === 'checkpoint' || m.kind === 'snapshot') {
     const state = isRecord(data) ? data.state : undefined;
-    if (!isRecord(state) || Object.hasOwn(state, 'gearbox') !== (minor === 1)) return 'gearbox presence differs from the envelope minor';
-    if (minor === 1) { const problem = gearboxProblem(state.gearbox); if (problem) return problem; }
+    if (!isRecord(state) || Object.hasOwn(state, 'gearbox') !== (minor !== 0)) return 'gearbox presence differs from the envelope minor';
+    if (minor !== 0) { const problem = gearboxProblem(state.gearbox); if (problem) return problem; }
+    if (Object.hasOwn(state, 'nextMandatoryBreak') !== (minor === 2)) return 'nextMandatoryBreak presence differs from the envelope minor';
+    if (minor === 2 && !isMeasure(state.nextMandatoryBreak, V1_BREAK_DOC.unit, x => isInt(x, V1_BREAK_DOC.min, V1_BREAK_DOC.max))) return 'nextMandatoryBreak';
   }
   if (m.kind === 'event') {
     if (size > V1_EVENT_BYTES) return `event of ${size} bytes`;
@@ -297,13 +307,14 @@ const v0Decoder: PayloadDecoder = {
   reencode: message => encodedOrSizeRefusal(() => v0.encodeFrame(message as v0.ProtocolMessage), error => error instanceof v0.ProtocolError, jsonBytes(message) > V0_PAYLOAD_BYTES)
 };
 /**
- * A v1 reader: `maxMinor: 1` accepts every documented minor, so minor-1 seeds and minor swaps are in scope; the
- * default reader accepts minor 0 only, as every current caller does (v1.md §2, ET-050b).
+ * A v1 reader: `maxMinor: 2` accepts every documented minor, so minor-1 and minor-2 seeds and minor swaps are in scope;
+ * `maxMinor: 1` accepts minors 0 and 1; the default reader accepts minor 0 only, as the oldest callers do (v1.md §2,
+ * ET-050b, ET-052).
  */
-const v1Decoder = (sender: v1.Sender, maxMinor: 0 | 1): PayloadDecoder => {
-  const reader = maxMinor === 1 ? {maxMinor} : {}, minors = V1_MINORS_DOC.slice(0, maxMinor + 1);
+const v1Decoder = (sender: v1.Sender, maxMinor: 0 | 1 | 2): PayloadDecoder => {
+  const reader = maxMinor === 0 ? {} : {maxMinor}, minors = V1_MINORS_DOC.slice(0, maxMinor + 1);
   return {
-  name: `protocol v1 decodePayload (${sender}, ${maxMinor === 1 ? 'maxMinor 1' : 'default minor-0'} reader)`, limit: sender === 'server' ? V1_SERVER_PAYLOAD_BYTES : V1_CLIENT_PAYLOAD_BYTES,
+  name: `protocol v1 decodePayload (${sender}, ${maxMinor === 0 ? 'default minor-0' : `maxMinor ${maxMinor}`} reader)`, limit: sender === 'server' ? V1_SERVER_PAYLOAD_BYTES : V1_CLIENT_PAYLOAD_BYTES,
   protocol: `v1-${sender}`,
   decode: bytes => v1.decodePayload(bytes, sender, reader), isRejection: error => error instanceof v1.ProtocolError,
   problem: (message, bytes) => {
@@ -313,7 +324,7 @@ const v1Decoder = (sender: v1.Sender, maxMinor: 0 | 1): PayloadDecoder => {
     // The server selects min(hello maxMinor, its own maxMinor), 0 by default, and durable delivery is never granted beyond
     // the request, nor by a server that does not offer it (v1.md §4; the endpoint stays live-only without its service
     // policy, ET-004b OD-2).
-    if (m.kind === 'hello') for (const allowDurable of [true, false]) for (const own of [undefined, 0, 1]) {
+    if (m.kind === 'hello') for (const allowDurable of [true, false]) for (const own of [undefined, 0, 1, 2]) {
       const n = v1.negotiateV1(m, own === undefined ? {allowDurable} : {allowDurable, maxMinor: own}), selected = Math.min(m.data.maxMinor, own ?? 0);
       if (!hasKeys(n.version, ['major', 'minor']) || n.version.major !== 1 || n.version.minor !== selected || n.minor !== selected ||
         typeof n.durableEvents !== 'boolean' || (n.durableEvents && !(m.data.durableEvents && allowDurable))) return 'negotiation';
@@ -335,11 +346,13 @@ const cap0Decoder: PayloadDecoder = {
   // sanitization"), so a re-serialized accepted packet must decode to an equal packet.
   reencode: message => { const bytes = utf8.encode(JSON.stringify(message)); return bytes.length > CAP0_PACKET_BYTES ? undefined : bytes; }
 };
-const v1Server = v1Decoder('server', 1), v1Client = v1Decoder('client', 1);
+const v1Server = v1Decoder('server', 2), v1Client = v1Decoder('client', 2);
 const v1ServerDefault = v1Decoder('server', 0), v1ClientDefault = v1Decoder('client', 0);
-const PAYLOAD_DECODERS = [v0Decoder, v1Server, v1Client, cap0Decoder, v1ServerDefault, v1ClientDefault];
-/** The maxMinor-1 reader of the same sender, which must accept whatever the default reader accepts. */
-const WIDER_READER = new Map<PayloadDecoder, PayloadDecoder>([[v1ServerDefault, v1Server], [v1ClientDefault, v1Client]]);
+const v1ServerMinor1 = v1Decoder('server', 1), v1ClientMinor1 = v1Decoder('client', 1);
+const PAYLOAD_DECODERS = [v0Decoder, v1Server, v1Client, cap0Decoder, v1ServerDefault, v1ClientDefault, v1ServerMinor1, v1ClientMinor1];
+/** Each narrower reader must accept only what the wider readers of the same sender accept, identically. */
+const WIDER_READERS = new Map<PayloadDecoder, PayloadDecoder[]>([
+  [v1ServerDefault, [v1ServerMinor1, v1Server]], [v1ClientDefault, [v1ClientMinor1, v1Client]], [v1ServerMinor1, [v1Server]], [v1ClientMinor1, [v1Client]]]);
 type Outcome = {accepted: true; message: unknown} | {accepted: false};
 function decodeWith(decoder: PayloadDecoder, bytes: Uint8Array): Outcome {
   try { return {accepted: true, message: decoder.decode(bytes)}; } catch (error) {
@@ -364,10 +377,11 @@ function checkAccepted(decoder: PayloadDecoder, bytes: Uint8Array, message: unkn
 const manifest = (dir: string) => readFileSync(resolve(dir, 'manifest.txt'), 'utf8').trim().split(/\r?\n/).map(line => line.trim().split(/\s+/));
 const fixtures = (dir: string, result: string) => manifest(dir).filter(([, r]) => r === result).map(([file]) => new Uint8Array(readFileSync(resolve(dir, file))));
 const V0_SEEDS = fixtures(resolve('tests/fixtures/protocol-v0'), 'valid');
-// The frozen minor-0 corpus and the ET-050b minor-1 corpus.
-const V1_DIRS = [resolve('tests/fixtures/protocol-v1'), resolve('tests/fixtures/protocol-v1/minor1')];
+// The frozen minor-0 corpus, the ET-050b minor-1 corpus and the ET-052 minor-2 corpus.
+const V1_DIRS = [resolve('tests/fixtures/protocol-v1'), resolve('tests/fixtures/protocol-v1/minor1'), resolve('tests/fixtures/protocol-v1/minor2')];
 const V1_SERVER_SEEDS = V1_DIRS.flatMap(dir => fixtures(dir, 'valid'));
 const V1_CLIENT_SEEDS = V1_DIRS.flatMap(dir => fixtures(dir, 'valid-client'));
+const V1_MINOR1_SERVER_SEEDS = V1_DIRS.slice(0, 2).flatMap(dir => fixtures(dir, 'valid')), V1_MINOR1_CLIENT_SEEDS = V1_DIRS.slice(0, 2).flatMap(dir => fixtures(dir, 'valid-client'));
 const V1_MINOR0_SERVER_SEEDS = fixtures(V1_DIRS[0], 'valid'), V1_MINOR0_CLIENT_SEEDS = fixtures(V1_DIRS[0], 'valid-client');
 const CAP0_SEEDS = [header(0), header(0, 'game'), envelope(1, 1, {observations: delivered()}), envelope(2, 2, {group: 'lifecycle', id: 'simulation.paused'}),
   envelope(3, 4, {droppedBefore: 1, group: 'configuration', id: 'job', observations: [observation(0, 'cargo', 'string', 'Caf\u00e9 \u0001\t\u{1f69a}'),
@@ -442,7 +456,7 @@ const asciiBoundaries = (bytes: Uint8Array) => { const out: number[] = []; for (
 type Step = (bytes: Uint8Array) => Uint8Array | undefined;
 interface Mutator {preserve: Record<string, Step>; defect: Record<string, Step>; havoc: Record<string, Step>}
 /** The mutation sets for one generator; `sizes` are the documented bounds that padding aims at, `schema` adds the v0/v1-only defects. */
-function mutator(r: Random, sizes: number[], schema: boolean, minorSwapsValid = false): Mutator {
+function mutator(r: Random, sizes: number[], schema: boolean, swapMinors: readonly number[] = []): Mutator {
   const preserve: Record<string, Step> = {
     // JSON whitespace between tokens, including before and after the value (v0.md, v1.md §3).
     whitespace: textStep((text, s) => { const at = pick(r, s.gaps); return splice(text, at, at, Array.from({length: between(r, 1, 4)}, () => pick(r, WHITESPACE)).join('')); }),
@@ -495,11 +509,11 @@ function mutator(r: Random, sizes: number[], schema: boolean, minorSwapsValid = 
     version: treeStep(root => {
       const version = isRecord(root) ? root.version : undefined;
       if (!isRecord(root) || !hasKeys(version, ['major', 'minor'])) return undefined;
-      // For a reader that accepts both minors, a v1 message whose kind does not depend on the minor stays valid at the
-      // other documented minor (v1.md §2), so that swap is no defect for it. The default reader still refuses it.
-      const sameSchema = minorSwapsValid && version.major === 1 && V1_MINORS_DOC.includes(version.minor as number) && !V1_MINOR_DEPENDENT_KINDS.includes(root.kind as string);
-      const options = [[0, 0], [1, 0], [0, 1], [1, 1], [2, 0], [255, 0], [0, 65_535], [-1, 0]]
-        .filter(([major, minor]) => (major !== version.major || minor !== version.minor) && !(sameSchema && major === 1 && V1_MINORS_DOC.includes(minor)));
+      // For a reader that accepts several minors (`swapMinors`), a v1 message whose kind does not depend on the minor stays
+      // valid at another minor it accepts (v1.md §2), so that swap is no defect for it. A narrower reader still refuses it.
+      const sameSchema = swapMinors.includes(version.minor as number) && version.major === 1 && !V1_MINOR_DEPENDENT_KINDS.includes(root.kind as string);
+      const options = [[0, 0], [1, 0], [0, 1], [1, 1], [1, 2], [1, 3], [2, 0], [255, 0], [0, 65_535], [-1, 0]]
+        .filter(([major, minor]) => (major !== version.major || minor !== version.minor) && !(sameSchema && major === 1 && swapMinors.includes(minor)));
       const [major, minor] = pick(r, options); root.version = {major, minor}; return root;
     })
   };
@@ -562,15 +576,18 @@ const chooseMode = (r: Random): Mode => { const x = r(); return x < 0.25 ? 'pres
 
 // ---------------------------------------------------------------------------------------------------------------------
 // Payload campaigns: every input goes to every payload decoder, including both v1 readers of each direction.
-interface PayloadFamily {decoder: PayloadDecoder; seeds: Uint8Array[]; sizes: number[]; schema: boolean; minorSwapsValid: boolean; iterations: number}
+interface PayloadFamily {decoder: PayloadDecoder; seeds: Uint8Array[]; sizes: number[]; schema: boolean; swapMinors: readonly number[]; iterations: number}
 const PAYLOAD_FAMILIES: PayloadFamily[] = [
-  {decoder: v0Decoder, seeds: V0_SEEDS, sizes: [V0_PAYLOAD_BYTES], schema: true, minorSwapsValid: false, iterations: ITERATIONS},
-  {decoder: v1Server, seeds: V1_SERVER_SEEDS, sizes: [V1_SERVER_PAYLOAD_BYTES, V1_EVENT_BYTES], schema: true, minorSwapsValid: true, iterations: ITERATIONS},
-  {decoder: v1Client, seeds: V1_CLIENT_SEEDS, sizes: [V1_CLIENT_PAYLOAD_BYTES], schema: true, minorSwapsValid: true, iterations: ITERATIONS},
-  {decoder: cap0Decoder, seeds: CAP0_SEEDS, sizes: [CAP0_PACKET_BYTES], schema: false, minorSwapsValid: false, iterations: ITERATIONS},
+  {decoder: v0Decoder, seeds: V0_SEEDS, sizes: [V0_PAYLOAD_BYTES], schema: true, swapMinors: [], iterations: ITERATIONS},
+  {decoder: v1Server, seeds: V1_SERVER_SEEDS, sizes: [V1_SERVER_PAYLOAD_BYTES, V1_EVENT_BYTES], schema: true, swapMinors: [0, 1, 2], iterations: ITERATIONS},
+  {decoder: v1Client, seeds: V1_CLIENT_SEEDS, sizes: [V1_CLIENT_PAYLOAD_BYTES], schema: true, swapMinors: [0, 1, 2], iterations: ITERATIONS},
+  {decoder: cap0Decoder, seeds: CAP0_SEEDS, sizes: [CAP0_PACKET_BYTES], schema: false, swapMinors: [], iterations: ITERATIONS},
   // The default readers start from the frozen minor-0 corpus, with every version swap a defect, as before ET-050b.
-  {decoder: v1ServerDefault, seeds: V1_MINOR0_SERVER_SEEDS, sizes: [V1_SERVER_PAYLOAD_BYTES, V1_EVENT_BYTES], schema: true, minorSwapsValid: false, iterations: DEFAULT_READER_ITERATIONS},
-  {decoder: v1ClientDefault, seeds: V1_MINOR0_CLIENT_SEEDS, sizes: [V1_CLIENT_PAYLOAD_BYTES], schema: true, minorSwapsValid: false, iterations: DEFAULT_READER_ITERATIONS}
+  {decoder: v1ServerDefault, seeds: V1_MINOR0_SERVER_SEEDS, sizes: [V1_SERVER_PAYLOAD_BYTES, V1_EVENT_BYTES], schema: true, swapMinors: [], iterations: DEFAULT_READER_ITERATIONS},
+  {decoder: v1ClientDefault, seeds: V1_MINOR0_CLIENT_SEEDS, sizes: [V1_CLIENT_PAYLOAD_BYTES], schema: true, swapMinors: [], iterations: DEFAULT_READER_ITERATIONS},
+  // The maxMinor-1 readers keep what they accepted before minor 2 existed: minors 0 and 1 only, so a minor-2 swap is a defect (ET-052).
+  {decoder: v1ServerMinor1, seeds: V1_MINOR1_SERVER_SEEDS, sizes: [V1_SERVER_PAYLOAD_BYTES, V1_EVENT_BYTES], schema: true, swapMinors: [0, 1], iterations: DEFAULT_READER_ITERATIONS},
+  {decoder: v1ClientMinor1, seeds: V1_MINOR1_CLIENT_SEEDS, sizes: [V1_CLIENT_PAYLOAD_BYTES], schema: true, swapMinors: [0, 1], iterations: DEFAULT_READER_ITERATIONS}
 ];
 /** Whether a meaning-preserving variant of a valid payload stays within the documented byte bounds. */
 const withinBounds = (decoder: PayloadDecoder, bytes: Uint8Array, kind: unknown) => bytes.length <= decoder.limit && !(decoder.protocol === 'v1-server' && kind === 'event' && bytes.length > V1_EVENT_BYTES);
@@ -579,15 +596,15 @@ function payloadIteration(family: PayloadFamily, it: Iteration, outcomes: Outcom
   const pool = foreign ? pick(it.random, PAYLOAD_FAMILIES.filter(f => f !== family)).seeds : family.seeds;
   const seed = pick(it.random, pool);
   it.steps.push(`${foreign ? 'foreign ' : ''}${mode}`);
-  const input = mutatePayload(it, mutator(it.random, family.sizes, family.schema, family.minorSwapsValid), seed, mode);
+  const input = mutatePayload(it, mutator(it.random, family.sizes, family.schema, family.swapMinors), seed, mode);
   it.input = input;
   const results = PAYLOAD_DECODERS.map(decoder => decodeWith(decoder, input));
   results.forEach((result, i) => { if (result.accepted) checkAccepted(PAYLOAD_DECODERS[i], input, result.message); });
   // Each decoder rejects the other protocols' payloads (v1.md §2, cap0.md "Isolation from protocol v0").
   const accepting = PAYLOAD_DECODERS.filter((_, i) => results[i].accepted);
   check(new Set(accepting.map(d => d.protocol)).size <= 1, () => `one payload accepted by ${accepting.map(d => d.name).join(' and ')}`);
-  // A default reader is a restriction of the maxMinor-1 reader: whatever it accepts, the wider one accepts identically.
-  for (const [narrow, wide] of WIDER_READER) {
+  // A narrower reader is a restriction of every wider one: whatever it accepts, the wider ones accept identically.
+  for (const [narrow, wides] of WIDER_READERS) for (const wide of wides) {
     const a = results[PAYLOAD_DECODERS.indexOf(narrow)], b = results[PAYLOAD_DECODERS.indexOf(wide)];
     if (a.accepted) check(b.accepted && jsonEqual(a.message, b.message), () => `${narrow.name} accepted a payload that ${wide.name} rejected or decoded differently`);
   }
@@ -621,10 +638,11 @@ const v0Framing = (): Framing => {
   return {name: 'protocol v0 FrameDecoder', max: V0_PAYLOAD_BYTES, family: PAYLOAD_FAMILIES[0], push: (chunk, emit) => d.push(chunk, emit),
     finish: () => { d.end(); return true; }, isRejection: e => e instanceof v0.ProtocolError, item: payload => v0.decodePayload(payload), same: jsonEqual};
 };
-const v1Framing = (sender: v1.Sender, maxMinor: 0 | 1) => (): Framing => {
-  const reader = maxMinor === 1 ? {maxMinor} : {}, d = maxMinor === 1 ? new v1.FrameDecoder(sender, reader) : new v1.FrameDecoder(sender);
-  return {name: `protocol v1 FrameDecoder (${sender}, ${maxMinor === 1 ? 'maxMinor 1' : 'default minor-0'} reader)`, max: sender === 'server' ? V1_SERVER_PAYLOAD_BYTES : V1_CLIENT_PAYLOAD_BYTES,
-    family: PAYLOAD_FAMILIES[maxMinor === 1 ? (sender === 'server' ? 1 : 2) : (sender === 'server' ? 4 : 5)], push: (chunk, emit) => d.push(chunk, emit), finish: () => { d.end(); return true; },
+const v1Framing = (sender: v1.Sender, maxMinor: 0 | 1 | 2) => (): Framing => {
+  const reader = maxMinor === 0 ? {} : {maxMinor}, d = maxMinor === 0 ? new v1.FrameDecoder(sender) : new v1.FrameDecoder(sender, reader);
+  const familyIndex = maxMinor === 2 ? (sender === 'server' ? 1 : 2) : maxMinor === 0 ? (sender === 'server' ? 4 : 5) : (sender === 'server' ? 6 : 7);
+  return {name: `protocol v1 FrameDecoder (${sender}, ${maxMinor === 0 ? 'default minor-0' : `maxMinor ${maxMinor}`} reader)`, max: sender === 'server' ? V1_SERVER_PAYLOAD_BYTES : V1_CLIENT_PAYLOAD_BYTES,
+    family: PAYLOAD_FAMILIES[familyIndex], push: (chunk, emit) => d.push(chunk, emit), finish: () => { d.end(); return true; },
     isRejection: e => e instanceof v1.ProtocolError, item: payload => v1.decodePayload(payload, sender, reader), same: jsonEqual};
 };
 const cap0Framing = (): Framing => {
@@ -700,7 +718,7 @@ function sameResult(framing: Framing, a: StreamResult, b: StreamResult): boolean
 }
 const summary = (result: StreamResult) => `${result.items.length} items, ${result.end}`;
 function frameIteration(create: () => Framing, it: Iteration, outcomes: Outcomes): void {
-  const probe = create(), r = it.random, family = probe.family, m = mutator(r, family.sizes, family.schema, family.minorSwapsValid);
+  const probe = create(), r = it.random, family = probe.family, m = mutator(r, family.sizes, family.schema, family.swapMinors);
   const frames: Uint8Array[] = [];
   for (let n = between(r, 1, 4); n > 0; n--) {
     const seed = pick(r, family.seeds);
@@ -932,7 +950,7 @@ describe('REG-010 seeded mutation fuzzing of the TypeScript frame parsers', () =
   PAYLOAD_FAMILIES.forEach((family, index) => it(`${family.decoder.name}: rejects only with its protocol error, accepts only documented messages and round-trips them`, () => {
     expectBothOutcomes(campaign(family.decoder.name, index, (it, outcomes) => payloadIteration(family, it, outcomes), family.iterations), family.iterations);
   }, CAMPAIGN_CPU_BUDGET_MS));
-  [v0Framing, v1Framing('server', 1), v1Framing('client', 1), cap0Framing, v1Framing('server', 0), v1Framing('client', 0)].forEach((create, index) => {
+  [v0Framing, v1Framing('server', 2), v1Framing('client', 2), cap0Framing, v1Framing('server', 0), v1Framing('client', 0), v1Framing('server', 1), v1Framing('client', 1)].forEach((create, index) => {
     const probe = create(), name = probe.name, iterations = probe.family.iterations;
     it(`${name}: follows the documented framing for any byte split and never allocates beyond the bound`, () => {
       expectBothOutcomes(campaign(name, 10 + index, (it, outcomes) => frameIteration(create, it, outcomes), iterations), iterations);

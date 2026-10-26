@@ -187,7 +187,7 @@ describe('trips belong to one game', () => {
   });
 });
 
-// ET-050b B1: storage validates welcomes, events and gaps of either minor; the envelope minor is stored as before.
+// ET-050b B1: storage validates welcomes, events and gaps of minor 0 and minor 1 (and since ET-052 minor 2); the envelope minor is stored as before.
 describe('ET-050b protocol v1 minor 1 in storage', () => {
   const minor1 = (name: string) => decodePayload(new Uint8Array(readFileSync(path.join(PROTOCOL_V1, 'minor1', `${name}.json`))), 'server', {maxMinor: 1}) as ServerMessage;
   it('stores a minor-1 session, event and gap with protocol minor 1', async () => {

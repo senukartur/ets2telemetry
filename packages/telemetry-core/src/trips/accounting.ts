@@ -58,7 +58,7 @@ function sampleOf(point: ReadingPoint): StepSample {
     protocol: 'v1', simulation: point.simulation, speed: NOT_CARRIED, gear: NOT_CARRIED, engineRpm: NOT_CARRIED, fuel: point.fuel, fuelCapacity: NOT_CARRIED,
     averageConsumption: NOT_CARRIED, estimatedRange: NOT_CARRIED, odometer: point.odometer, navigationDistance: NOT_CARRIED,
     gameTime: {minutes: point.gameTime.minutes === null ? NOT_CARRIED : {state: 'value', value: BigInt(point.gameTime.minutes)}, clockId: point.gameTime.clockId},
-    worldPlacement: NOT_CARRIED, job: NOT_CARRIED, truck: point.truck, trailers: NOT_CARRIED, gameMode: NOT_CARRIED, eventLoss: NOT_CARRIED, gearbox: NOT_CARRIED, configurationRevision: '0'
+    worldPlacement: NOT_CARRIED, job: NOT_CARRIED, truck: point.truck, trailers: NOT_CARRIED, gameMode: NOT_CARRIED, eventLoss: NOT_CARRIED, gearbox: NOT_CARRIED, nextMandatoryBreak: NOT_CARRIED, configurationRevision: '0'
   }};
 }
 
