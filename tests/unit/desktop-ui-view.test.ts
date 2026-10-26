@@ -4,7 +4,7 @@ import {clampRatio, connectionTone, desktopLiveView, gaugeArc, hardModeTone, plu
 import {liveDashboardText} from '../../apps/desktop/src/live-dashboard-text';
 import {unknownHardMode} from '../../packages/telemetry-core/src/hard-mode';
 import type {HardModeStatus} from '../../packages/contracts/src/hard-mode';
-import type {LiveTelemetry} from '../../packages/contracts/src';
+import type {GearDisplayModes, LiveTelemetry} from '../../packages/contracts/src';
 import {NOT_SUPPORTED_GEARBOX} from '../../packages/contracts/src/protocol-v1';
 import {gearboxPair, smokePair, smokeV0} from '../shared/live-v1-fixtures';
 describe('desktop numeric presentation (REG-002/003/009/014)', () => {
@@ -120,13 +120,16 @@ it('distinguishes unavailable tank level, known empty and positive level without
 // ET-050: live.instrument.gear reads the gear field through desktopLiveView with the displayed game's mode.
 describe('gear display mode on the Live instrument (ET-050)', () => {
   const withGear = (value: number) => {const live = smokeV0(); live.observation!.state.gear = {available: true, value, unit: 'index'}; return live;};
-  const gear = (value: number, modes?: {ets2: 'automatic' | 'manual'; ats: 'automatic' | 'manual'}) => desktopLiveView(withGear(value), undefined, modes).sources.field('gear');
+  const gear = (value: number, modes?: GearDisplayModes) => desktopLiveView(withGear(value), undefined, modes).sources.field('gear');
   it('formats the instrument gear per mode and keeps reverse and neutral', () => {
     expect(gear(3)).toMatchObject({state: 'value', text: '3'});
     expect(gear(3, {ets2: 'automatic', ats: 'manual'})).toMatchObject({state: 'value', text: '3'});
     expect(gear(3, {ets2: 'manual', ats: 'automatic'})).toMatchObject({state: 'value', text: '2L'});
     expect(gear(16, {ets2: 'manual', ats: 'automatic'})).toMatchObject({state: 'value', text: '8H'});
-    for (const mode of ['automatic', 'manual'] as const) {
+    // ET-050b owner option B: the crawler mode reads C, 1, 2… on the ETS2 instrument.
+    expect(gear(1, {ets2: 'crawler', ats: 'automatic'})).toMatchObject({state: 'value', text: 'C'});
+    expect(gear(3, {ets2: 'crawler', ats: 'automatic'})).toMatchObject({state: 'value', text: '2'});
+    for (const mode of ['automatic', 'manual', 'crawler'] as const) {
       expect(gear(-1, {ets2: mode, ats: mode}).text).toBe('R1');
       expect(gear(0, {ets2: mode, ats: mode}).text).toBe('N');
     }

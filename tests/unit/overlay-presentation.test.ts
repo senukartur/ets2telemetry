@@ -1,6 +1,6 @@
 import {readFileSync} from 'node:fs';
 import {expect, it} from 'vitest';
-import type {LiveTelemetry, OverlayPresentation, OverlaySectionView} from '../../packages/contracts/src';
+import type {GearDisplayModes, LiveTelemetry, OverlayPresentation, OverlaySectionView} from '../../packages/contracts/src';
 import {validateMessage} from '../../packages/contracts/src/protocol-v0';
 import {NOT_SUPPORTED_GEARBOX} from '../../packages/contracts/src/protocol-v1';
 import {initialLive} from '../../apps/desktop/src/live-state';
@@ -441,7 +441,7 @@ it('marks the edit mode without changing any section or value, and defaults to d
 // ET-050: each live update uses its own displayed game's gear display mode; unavailable and stale gear stay as before.
 it('formats the gear section in the displayed game\'s gear display mode only', () => {
   const modes = {ets2: 'manual', ats: 'automatic'} as const;
-  const gearOf = (current: LiveTelemetry, gearDisplay?: {ets2: 'automatic' | 'manual'; ats: 'automatic' | 'manual'}) =>
+  const gearOf = (current: LiveTelemetry, gearDisplay?: GearDisplayModes) =>
     overlayPresentation(current, undefined, undefined, undefined, false, 'en', gearDisplay).sections.find(section => section.id === 'gear');
   const ets2 = live(); ets2.observation!.state.gear = {available: true, value: 3, unit: 'index'};
   expect(gearOf(ets2, modes)).toEqual({id: 'gear', state: 'value', text: '2L'});
@@ -449,6 +449,14 @@ it('formats the gear section in the displayed game\'s gear display mode only', (
   const ats = live(); ats.selection = 'ats'; ats.observation!.source.game = 'ats'; ats.observation!.state.gear = {available: true, value: 3, unit: 'index'};
   expect(gearOf(ats, modes)).toEqual({id: 'gear', state: 'value', text: '3'});
   expect(gearOf(ats, {ets2: 'automatic', ats: 'manual'})).toEqual({id: 'gear', state: 'value', text: '2L'});
+  // ET-050b owner option B: the crawler mode shows g − 1 above gear 1, which is C in ETS2 and L in ATS.
+  expect(gearOf(ets2, {ets2: 'crawler', ats: 'automatic'})).toEqual({id: 'gear', state: 'value', text: '2'});
+  expect(gearOf(ats, {ets2: 'automatic', ats: 'crawler'})).toEqual({id: 'gear', state: 'value', text: '2'});
+  const first = live(); first.observation!.state.gear = {available: true, value: 1, unit: 'index'};
+  expect(gearOf(first, {ets2: 'crawler', ats: 'automatic'})).toEqual({id: 'gear', state: 'value', text: 'C'});
+  const atsFirst = live(); atsFirst.selection = 'ats'; atsFirst.observation!.source.game = 'ats'; atsFirst.observation!.state.gear = {available: true, value: 1, unit: 'index'};
+  expect(gearOf(atsFirst, {ets2: 'automatic', ats: 'crawler'})).toEqual({id: 'gear', state: 'value', text: 'L'});
+  expect(gearOf(live(), {ets2: 'crawler', ats: 'crawler'})).toEqual({id: 'gear', state: 'value', text: 'R1'});
   expect(gearOf(live(), modes)).toEqual({id: 'gear', state: 'value', text: 'R1'});
   const neutral = live(); neutral.observation!.state.gear = {available: true, value: 0, unit: 'index'};
   expect(gearOf(neutral, modes)).toEqual({id: 'gear', state: 'value', text: 'N'});
@@ -467,7 +475,7 @@ it('formats the gear section in the displayed game\'s gear display mode only', (
 it('formats the gear section with the current Mack layout labels in manual mode only', () => {
   // The Mack is an ATS truck: ATS sources name its crawler LL/LH (B5 as amended on October 26, 2026).
   const manual = {ets2: 'automatic', ats: 'manual'} as const, ATS = {game: 'ats'} as const;
-  const gearOf = (current: LiveTelemetry, gearDisplay?: {ets2: 'automatic' | 'manual'; ats: 'automatic' | 'manual'}) =>
+  const gearOf = (current: LiveTelemetry, gearDisplay?: GearDisplayModes) =>
     overlayPresentation(current, undefined, undefined, undefined, false, 'ru', gearDisplay).sections.find(section => section.id === 'gear');
   for (const [gear, text] of [[1, 'LL'], [2, 'LH'], [3, '1L'], [18, '8H'], [-1, 'R1'], [0, 'N']] as const)
     expect(gearOf(gearboxPair(gear, ATS), manual)).toEqual({id: 'gear', state: 'value', text});

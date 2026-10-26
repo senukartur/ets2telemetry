@@ -48,8 +48,9 @@ function derive(forwardGears: number, reverseGears: number, layout: HShifterLayo
   const {selectorCount, slots} = layout;
   if (!Number.isSafeInteger(forwardGears) || forwardGears < 0 || !Number.isSafeInteger(reverseGears) || reverseGears < 0) return undefined;
   if (!Number.isSafeInteger(selectorCount) || selectorCount < 0 || selectorCount > 6) return undefined;
-  // Step 1: every slot is well formed, each (position, selectors) pair is unique, and the slot gears are exactly
-  // 1..F and −1..−R.
+  // Step 1: every slot is well formed, each (position, selectors) pair is unique, the forward slot gears are exactly
+  // 1..F and the reverse slot gears lie in −1..−R. The H-shifter may reach fewer reverse gears than the truck reports
+  // (the ETS2 Scania G38CMR reports 8 and its slots hold 4); reverse is always R1..Rn (B4).
   const bySelectors = new Map<number, number>();
   const forwardSeen = new Set<number>(), reverseSeen = new Set<number>();
   for (const slot of slots) {
@@ -62,7 +63,7 @@ function derive(forwardGears: number, reverseGears: number, layout: HShifterLayo
     if (gear > forwardGears || -gear > reverseGears) return undefined;
     (gear > 0 ? forwardSeen : reverseSeen).add(Math.abs(gear));
   }
-  if (forwardSeen.size !== forwardGears || reverseSeen.size !== reverseGears) return undefined;
+  if (forwardSeen.size !== forwardGears) return undefined;
   const forward = slots.filter(slot => slot.gear > 0);
   // Step 2: classify each selector bit from the forward gears; reverse gears are always R1..Rn (B4). A bit that never
   // changes a forward gear, because its slots are neutral or repeat the gear, is unused and ignored (review amendment).
@@ -169,7 +170,8 @@ const cache = new WeakMap<HShifterLayout, CacheEntry>();
 /**
  * Derives display labels from a gearbox reading (ET-050b B3–B5), or returns `undefined` when the counts or the
  * H-shifter layout are unavailable or the layout is not recognized:
- * 1. the slot gears are exactly forward 1..F and reverse −1..−R, with one slot per (handle position, selectors) pair;
+ * 1. the forward slot gears are exactly 1..F and the reverse slot gears lie in −1..−R (the H-shifter may reach fewer
+ *    reverse gears than the truck has), with one slot per (handle position, selectors) pair;
  * 2. each selector bit is a splitter when its same-position forward pairs differ by 1 and a range when they differ
  *    by more; a bit without a pair of different gears is unused and ignored, while a bit with both kinds or a second
  *    bit of the same kind is unrecognized, and so is a cell whose ignored bits map different gears to one state;

@@ -436,6 +436,12 @@ describe('gear display mode (ET-050)', () => {
     for (const [gear, text] of [[1, '1L'], [2, '1H'], [16, '8H'], [-1, 'R1'], [-2, 'R2'], [0, 'N']] as const)
       expect(values(liveDashboardText(withGear(gear), UNITS, language, ets2Manual)).gear).toBe(text);
     for (const [gear, text] of [[-1, 'R1'], [0, 'N']] as const) expect(values(liveDashboardText(withGear(gear), UNITS, language, AUTO)).gear).toBe(text);
+    // ET-050b owner option B: the crawler mode names gear 1 by the displayed game (C in ETS2, L in ATS) in both languages.
+    const crawler = {ets2: 'crawler', ats: 'crawler'} as const;
+    for (const [gear, text] of [[1, 'C'], [2, '1'], [14, '13'], [-4, 'R4'], [0, 'N']] as const)
+      expect(values(liveDashboardText(withGear(gear), UNITS, language, crawler)).gear).toBe(text);
+    expect(values(liveDashboardText(withGear(1, 'ats'), UNITS, language, crawler)).gear).toBe('L');
+    expect(values(liveDashboardText(withGear(1, 'ats'), UNITS, language, {ets2: 'crawler', ats: 'automatic'})).gear).toBe('1');
   });
   it('keeps a not-current gear row unavailable in manual mode', () => {
     const stale = smokeCheckpoint({status: 'stale', fresh: false});
