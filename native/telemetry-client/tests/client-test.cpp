@@ -156,7 +156,7 @@ const char* const hostCases[] = {"valid", "creation", "dead", "stale-live", "dea
 const char* const captureCases[] = {"capture", "capture-v0-hello", "capture-bad-arguments"};
 const char* const v1Cases[] = {"v1-valid", "v1-policy", "v1-major-mismatch", "v1-name-mismatch", "v1-collision", "v1-v0-hello", "v1-cap0-hello",
   "v1-client-kind", "v1-client-oversize", "v1-bad-tag", "v1-partial-length", "v1-partial-payload", "v1-zero-length", "v1-ack-while-quiet", "v1-write-deadline", "v1-capture-conflict",
-  "v1-minor1-valid", "v1-minor-above-offer", "v1-minor-changed"};
+  "v1-minor1-valid", "v1-minor-above-offer", "v1-minor-changed", "v1-minor2-valid", "v1-minor2-above-offer"};
 const char* const policyCases[] = {"policy-prune", "policy-cap", "policy-duplicate", "policy-case-duplicate", "policy-junction"};
 const char* const contentionCases[] = {"policy-lock-busy", "policy-lock-pending", "policy-publish-busy", "image-busy"};
 std::string case_list() {
@@ -316,13 +316,15 @@ int v1_host(const fs::path& directory, const fs::path& fixtures, const std::stri
   require(allowed);
   // A rejected hello never reaches the endpoint.
   if (mode == "v1-v0-hello" || mode == "v1-cap0-hello") {WaitForSingleObject(client.value, 10000); return silent(pipe.value, client.value) ? 0 : 1;}
-  // ET-050b B1: the minor-1 cases offer minor 1 and are served the minor-1 fixtures, whose frames all carry {1,1}.
-  const bool minor1 = mode == "v1-minor1-valid" || mode == "v1-minor-changed";
-  const auto served = minor1 ? fixtures / "minor1" : fixtures;
+  // ET-050b B1: the minor-1 cases offer minor 1 and are served the minor-1 fixtures, whose frames all carry {1,1}. ET-052:
+  // v1-minor2-valid offers minor 2 and is served the minor-2 fixtures ({1,2}); v1-minor2-above-offer offers minor 1 (then
+  // sends a {1,2} ACK) and is served the minor-1 fixtures.
+  const bool minor1 = mode == "v1-minor1-valid" || mode == "v1-minor-changed" || mode == "v1-minor2-above-offer";
+  const auto served = mode == "v1-minor2-valid" ? fixtures / "minor2" : minor1 ? fixtures / "minor1" : fixtures;
   const auto hello = pipe_frame(pipe.value, client.value); require(hello == framed(file_bytes(served / "hello.json")));
   for (const auto* filename : {"welcome.json", "checkpoint.json"}) {auto frame = framed(file_bytes(served / filename)); pipe_io(pipe.value, client.value, frame.data(), static_cast<DWORD>(frame.size()), true);}
   if (mode == "v1-write-deadline") {WaitForSingleObject(client.value, hostHoldMs); return silent(pipe.value, client.value) ? 0 : 1;}
-  if (mode == "v1-valid" || mode == "v1-ack-while-quiet" || mode == "v1-minor1-valid") {
+  if (mode == "v1-valid" || mode == "v1-ack-while-quiet" || mode == "v1-minor1-valid" || mode == "v1-minor2-valid") {
     // The host stays quiet until the ACK arrives; the reply proves that the relay still runs after the client frames.
     require(pipe_frame(pipe.value, client.value) == framed(file_bytes(served / "ack-1.json")));
     if (mode != "v1-ack-while-quiet") require(pipe_frame(pipe.value, client.value) == framed(file_bytes(served / "clock-probe.json")));
@@ -720,13 +722,14 @@ int wmain(int argc, wchar_t** argv) {
         require(client.wait() == 1 && diagnosed(client, "hello", "[0-9]{1,10}")); server.eof(); require(server.wait() == 0); continue;
       }
       // ET-050b B1: the minor-1 cases offer minor 1 and use the minor-1 fixtures; the broker relays server frames opaquely.
-      const bool minor1 = scenario == "v1-minor1-valid" || scenario == "v1-minor-changed";
-      const auto served = minor1 ? v1Fixtures / "minor1" : v1Fixtures;
+      // ET-052: v1-minor2-valid offers minor 2 and uses the minor-2 fixtures; v1-minor2-above-offer offers minor 1.
+      const bool minor1 = scenario == "v1-minor1-valid" || scenario == "v1-minor-changed" || scenario == "v1-minor2-above-offer";
+      const auto served = scenario == "v1-minor2-valid" ? v1Fixtures / "minor2" : minor1 ? v1Fixtures / "minor1" : v1Fixtures;
       send(framed(file_bytes(served / "hello.json")));
       send(credit); require(v1::decode_payload(read_frame(client.output.value), v1::Sender::server, v1::highest_minor).kind == "welcome");
       Sleep(100); require(noOutput(client));
       send(credit); require(v1::decode_payload(read_frame(client.output.value), v1::Sender::server, v1::highest_minor).kind == "checkpoint");
-      if (scenario == "v1-valid" || scenario == "v1-ack-while-quiet" || scenario == "v1-minor1-valid") {
+      if (scenario == "v1-valid" || scenario == "v1-ack-while-quiet" || scenario == "v1-minor1-valid" || scenario == "v1-minor2-valid") {
         if (scenario != "v1-ack-while-quiet") send(clientFrame(file_bytes(served / "ack-1.json")) + clientFrame(file_bytes(served / "clock-probe.json")) + credit);
         // The credit first: the broker is then waiting on its pending pipe read when the ACK must still reach the quiet host.
         else {send(credit); Sleep(300); send(clientFrame(file_bytes(served / "ack-1.json")));}
@@ -751,6 +754,8 @@ int wmain(int argc, wchar_t** argv) {
       // ET-050b B1: a {1,1} ACK after a hello that offered only minor 0, and a {1,0} probe after a relayed {1,1} ACK.
       if (scenario == "v1-client-kind") send(clientFrame(file_bytes(v1Fixtures / "hello.json")));
       else if (scenario == "v1-minor-above-offer") send(clientFrame(file_bytes(v1Fixtures / "minor1" / "ack-1.json")));
+      // ET-052: a {1,2} ACK after a hello that offered only minor 1 is refused even though the contract implements minor 2.
+      else if (scenario == "v1-minor2-above-offer") send(clientFrame(file_bytes(v1Fixtures / "minor2" / "ack-1.json")));
       else if (scenario == "v1-minor-changed") send(clientFrame(file_bytes(served / "ack-1.json")) + clientFrame(file_bytes(served / "clock-probe-minor-0.json")));
       else if (scenario == "v1-client-oversize") send(std::string{'\x02', '\x01', '\x10', '\x00', '\x00'});
       else if (scenario == "v1-zero-length") send(std::string{'\x02', '\x00', '\x00', '\x00', '\x00'});

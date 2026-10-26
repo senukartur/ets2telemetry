@@ -439,6 +439,19 @@ void gearbox() {
   require(old->status_until(f.host, [](const v1::StateView& s) { return !s.gearbox; }), "minor-0 snapshots carry no gearbox");
   send(old->pipe.get(), framed(probe_payload(1, 1))); require(old->closed(), "a minor-1 probe on a minor-0 connection closes it");
   require(f.listening(), "endpoint relistens after the minor-0 client");
+  // ET-052 PR-2: the contract implements minor 2, but the endpoint is pinned to minor 1 (`endpoint_max_minor` in v1-server.cpp),
+  // so a hello offering 2 (or 3, which a minor-2 decoder never sees as an offer of its own) is served minor 1: a welcome and
+  // a checkpoint at minor 1 with the gearbox and without `nextMandatoryBreak`. PR-3 lifts the pin and flips this
+  // expectation to minor 2 with the break, together with the pin.
+  for (const unsigned offered : {2U, 3U}) {
+    auto wide = f.client(true, 2); wide->max_minor = offered; wide->handshake();
+    const auto label = "maxMinor " + std::to_string(offered) + " offer";
+    require(wide->messages[0].minor == 1 && wide->messages[0].welcome->minor == 1 && wide->messages[1].minor == 1 && wide->consumer.minor() == 1u, (label + " is served minor 1").c_str());
+    require(wide->messages[1].state->gearbox && wide->messages[1].state->gearbox->forward_gears.value == 8u && !wide->messages[1].state->next_mandatory_break, (label + ": a gearbox and no break").c_str());
+    require(!std::get<v0::Json::Object>(wide->messages[1].wire.at("data").at("state").value).count("nextMandatoryBreak"), (label + ": no nextMandatoryBreak key").c_str());
+    require(wide->status_until(f.host, [](const v1::StateView& s) { return s.gearbox && !s.next_mandatory_break; }), (label + ": snapshots stay at minor 1").c_str());
+    wide.reset(); require(f.listening(), "endpoint relistens after the wide offer");
+  }
   require(f.host.wrong_thread == 0, "the worker never calls the SDK");
 }
 

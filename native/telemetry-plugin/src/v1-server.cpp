@@ -18,7 +18,9 @@ constexpr ULONGLONG end_budget_ms = 250, end_items_ms = 150, end_reserve_ms = 10
 constexpr ULONGLONG exhaustion_flush_ms = 250;
 // The highest minor the endpoint serves (ET-050b B1): it selects min(hello maxMinor, 1). A minor-1 connection carries
 // `state.gearbox`; a hello offering only minor 0 gets the original minor-0 bytes.
-constexpr unsigned endpoint_max_minor = highest_minor;
+// ET-052: pinned to the literal 1 although the contract implements minor 2 (`highest_minor`). The plugin captures and
+// encodes no break yet, so nothing may select minor 2; the capture PR (PR-3) lifts this to `highest_minor`.
+constexpr unsigned endpoint_max_minor = 1;
 // The only game-log entry of the v1 endpoint, handed to the SDK thread (Caller sequence step 4).
 const sdk::DeferredLog invariant_log{SCS_LOG_TYPE_error, "ETS2Telemetry: protocol v1 endpoint retired: invariant violation"};
 

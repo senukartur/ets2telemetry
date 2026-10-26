@@ -28,8 +28,8 @@ Consumer::Consumer(bool durable_requested, unsigned max_minor) : durable_request
 Applied Consumer::accept(const Message& input) {
   try {
     if (phase_ == Phase::closed) fail("Consumer is closed");
-    // Before the welcome any offered minor validates; afterwards only the selected one, so a minor-0 connection rejects a
-    // minor-1 frame exactly as a minor-0 decoder does.
+    // Before the welcome any offered minor (0 to 2) validates; afterwards only the selected one, so a connection that
+    // selected a lower minor rejects a frame of a higher one exactly as a decoder at the lower maximum does.
     const auto m = validate(input.wire, Sender::server, selected_ ? *selected_ : max_minor_);
     const auto seq = m.seq, capture = m.capture.monotonic_ns; const auto& s = *m.source;
     // Identity comparison does not depend on JSON member order.

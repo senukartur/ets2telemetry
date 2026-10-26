@@ -9,18 +9,20 @@
 #include <variant>
 #include <vector>
 
-// Durable telemetry protocol 1.0 and 1.1 (ET-002b; minor 1, the gearbox state, is ET-050b): the C++17 counterpart of
-// packages/contracts/src/protocol-v1.ts. It is a separate major from the frozen v0 live protocol and from CAP0, and
-// reuses only the bounded strict JSON layer (v0::Json, the parser and the serializer). The wire format is specified in
-// docs/protocol/v1.md.
+// Durable telemetry protocol 1.0, 1.1 and 1.2 (ET-002b; minor 1, the gearbox state, is ET-050b; minor 2, the next
+// mandatory break, is ET-052): the C++17 counterpart of packages/contracts/src/protocol-v1.ts. It is a separate major
+// from the frozen v0 live protocol and from CAP0, and reuses only the bounded strict JSON layer (v0::Json, the parser
+// and the serializer). The wire format is specified in docs/protocol/v1.md.
 namespace ets2telemetry::v1 {
 using Json = v0::Json;
 // Version 1.0: every hello, and every message of a connection that selected minor 0.
 constexpr unsigned protocol_major = 1, protocol_minor = 0;
-// The highest minor this contract implements. Minor 1 adds `state.gearbox` to checkpoints and snapshots (§7). Every
-// stateless entry point below takes a `max_minor` that defaults to 0, so a caller accepts or writes a minor-1 message
-// only when it opts in; a maximum other than 0 or 1 is a caller error and throws ProtocolError.
-constexpr unsigned highest_minor = 1;
+// The highest minor this contract implements. Minor 1 adds `state.gearbox` to checkpoints and snapshots (§7); minor 2
+// adds `state.nextMandatoryBreak` on top of it (ET-052 MB1). Every stateless entry point below takes a `max_minor` that
+// defaults to 0, so a caller accepts or writes a minor-1 or minor-2 message only when it opts in; a maximum above
+// `highest_minor` is a caller error and throws ProtocolError. Raising this constant widens what the readers accept; it
+// does not make any runtime path offer or serve minor 2 (the plugin endpoint pins its own maximum).
+constexpr unsigned highest_minor = 2;
 // Gearbox bounds of minor 1 (ET-050b B2). A producer marks a reading outside them `invalid`, never truncated.
 struct GearboxLimits { unsigned max_gears, max_selector_count, max_slots, max_handle_position; };
 constexpr GearboxLimits gearbox_limits{100, 6, 64, 255};
@@ -79,8 +81,12 @@ struct Gearbox { Available<unsigned> forward_gears, reverse_gears; Available<HSh
 // Read views per kind. State, configuration and record bodies stay in `wire` and are read through read_* below.
 // `minor` is the selected minor the welcome announces; it equals the welcome's envelope minor.
 struct WelcomeView { unsigned minor = 0; bool durable_events = false, gameplay_events_registered = false; std::vector<std::string> event_types; GameMode game_mode; };
-// `gearbox` is set exactly for a minor-1 state.
-struct StateView { std::optional<std::uint64_t> boundary_seq; std::uint64_t boundary_order = 0; SourceStatus status; Continuity continuity; std::optional<Gearbox> gearbox; };
+// `gearbox` is set exactly for a state of minor 1 or 2; `next_mandatory_break` (ET-052 MB1) exactly for a minor-2 state.
+// The break is a `Measure` of unit "min" whose value is a plain signed s32 integer (negative means overdue, zero is a value).
+struct StateView {
+  std::optional<std::uint64_t> boundary_seq; std::uint64_t boundary_order = 0; SourceStatus status; Continuity continuity;
+  std::optional<Gearbox> gearbox; std::optional<Measure> next_mandatory_break;
+};
 struct Occurrence {
   Available<std::uint64_t> monotonic_ns; GameTimeStamp game_time; Available<std::uint64_t> utc_unix_ms;
   std::string simulation; std::uint64_t configuration_revision = 0, boundary_order = 0;
@@ -119,8 +125,8 @@ Message decode_payload(const std::string& bytes, Sender, unsigned max_minor = 0)
 // above `max_minor` (default 0) are refused.
 std::vector<std::uint8_t> encode_frame(const Message&, unsigned max_minor = 0);
 struct Negotiated { unsigned major = protocol_major, minor = protocol_minor; bool durable_events = false; };
-// Server-side hello negotiation. The server selects min(hello `maxMinor`, its own `max_minor`), which defaults to 0;
-// the welcome and every later message in both directions then carry that minor. Durable delivery never exceeds the
+// Server-side hello negotiation. The server selects min(hello `maxMinor`, its own `max_minor`), which defaults to 0, so a
+// client that offers less than the server's maximum gets exactly its offer and never minor 0 by default; the welcome and every later message in both directions then carry that minor. Durable delivery never exceeds the
 // client's request.
 Negotiated negotiate(const Message& hello, bool allow_durable = true, unsigned max_minor = 0);
 
