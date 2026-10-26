@@ -92,7 +92,7 @@ describe('names outside the runtime strings', () => {
       tripCompleteness: {unknown: true, partial: true, complete: true} satisfies Record<NonNullable<RecordingTrip['completeness']>, true>,
       language: {en: true, ru: true} satisfies Record<AppLanguage, true>,
       unitProfile: {metric: true, 'us-customary': true} satisfies Record<UnitProfile, true>,
-      gearDisplay: {automatic: true, manual: true} satisfies Record<GearDisplayMode, true>,
+      gearDisplay: {automatic: true, manual: true, crawler: true} satisfies Record<GearDisplayMode, true>,
       overlayLayout: {strip: true, card: true, cluster: true, hud: true} satisfies Record<OverlayLayout, true>,
       settingsState: {loading: true, defaults: true, loaded: true, 'loaded-with-fallbacks': true, 'invalid-file': true, 'unsupported-older': true, 'newer-version': true,
         unreadable: true, unavailable: true} satisfies Record<SettingsState, true>,

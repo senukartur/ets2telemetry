@@ -126,20 +126,21 @@ export function OverlaySettingsCard({settings, edit, onSaved, onRequest, showSav
         </div>}
         {editRequest === 'failed' ? <p role="status" data-testid="overlay-edit-error">{strings.overlayEditFailed}</p> : null}
       </section>
-      <section className="yu-overlay-block" aria-labelledby="overlay-presets-label">
-        <h3 id="overlay-presets-label" className="font-medium">{strings.overlayPresetsLabel}</h3>
-        <div className="flex flex-wrap gap-2" data-testid="overlay-presets">
-          {OVERLAY_PRESET_IDS.map(preset => {
-            const pressed = sameSections(overlay.sections, OVERLAY_PRESETS[preset]);
-            return <Button key={preset} size="sm" variant={pressed ? 'secondary' : 'outline'} aria-pressed={pressed} disabled={locked}
-              data-testid={`overlay-preset-${preset}`} onClick={() => save(() => window.desktop.setOverlaySections(OVERLAY_PRESETS[preset]))}>
-              {getOverlayPresetText(preset, language)}
-            </Button>;
-          })}
-        </div>
-      </section>
+      {/* Presets are a quick selection of the same section toggles, so they share one block. */}
       <section className="yu-overlay-block" aria-labelledby="overlay-sections-label" data-testid="overlay-sections">
         <h3 id="overlay-sections-label" className="font-medium">{strings.overlaySectionsLabel}</h3>
+        <div className="space-y-2" role="group" aria-labelledby="overlay-presets-label">
+          <h4 id="overlay-presets-label" className="text-sm text-muted-foreground">{strings.overlayPresetsLabel}</h4>
+          <div className="flex flex-wrap gap-2" data-testid="overlay-presets">
+            {OVERLAY_PRESET_IDS.map(preset => {
+              const pressed = sameSections(overlay.sections, OVERLAY_PRESETS[preset]);
+              return <Button key={preset} size="sm" variant={pressed ? 'secondary' : 'outline'} aria-pressed={pressed} disabled={locked}
+                data-testid={`overlay-preset-${preset}`} onClick={() => save(() => window.desktop.setOverlaySections(OVERLAY_PRESETS[preset]))}>
+                {getOverlayPresetText(preset, language)}
+              </Button>;
+            })}
+          </div>
+        </div>
         <div className="yu-overlay-section-groups">
         {OVERLAY_GROUPS.map(group => <section key={group.id} className="space-y-2" aria-labelledby={`overlay-group-${group.id}`}>
           <h4 id={`overlay-group-${group.id}`} className="text-sm text-muted-foreground">{getOverlayGroupText(group.id, language)}</h4>

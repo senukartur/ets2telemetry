@@ -71,9 +71,10 @@ const DASH = '—';
  * range-splitter forms on separate lines ("R0", "0H", "0L"), and the strip's CSS reserves the widest line, so switching
  * modes or shifting between 1L and 1H never resizes the section. Window sizes and the row model are unchanged.
  * ET-050b (B8) adds the gearbox-aware crawler labels "LH" and "LL" as two more lines, so a crawler gear never widens the
- * section either; the 90 px cap, row heights and window sizes stay the same.
+ * section either; the 90 px cap, row heights and window sizes stay the same. The ETS2 crawler labels "C1" and "C2"
+ * (B5 as amended on October 26, 2026) are two more lines.
  */
-const VALUE_RESERVES: Partial<Record<OverlaySectionId, string>> = {speed: '000', gear: 'R0\n0H\n0L\nLH\nLL', rpm: '0000'};
+const VALUE_RESERVES: Partial<Record<OverlaySectionId, string>> = {speed: '000', gear: 'R0\n0H\n0L\nLH\nLL\nC1\nC2', rpm: '0000'};
 /** telemetry-core's formatRpm always ends in this suffix; only that exact form is split into number and unit. */
 const RPM_SUFFIX = ' rpm';
 /** Old projections retain their layout anchor; malformed provided values never become CSS/native coordinates. */

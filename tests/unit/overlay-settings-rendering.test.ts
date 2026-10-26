@@ -33,6 +33,13 @@ it.each(['en', 'ru'] as const)('renders every overlay control together with uniq
   expect(new Set(ids).size).toBe(ids.length);
   for (const label of [strings.overlayEnabledLabel, strings.overlayLayoutLabel, strings.overlayPlacementLabel, strings.overlayPresetsLabel, strings.overlaySectionsLabel, strings.overlayHiddenNote])
     expect(html).toContain(escaped(label));
+  // ET-053: presets are a labelled group inside the Sections block, before its grouped switches.
+  const sectionsAt = html.indexOf('data-testid="overlay-sections"'), presetsAt = html.indexOf('data-testid="overlay-presets"');
+  expect(sectionsAt).toBeGreaterThan(-1);
+  expect(presetsAt).toBeGreaterThan(sectionsAt);
+  expect(presetsAt).toBeLessThan(html.indexOf('data-testid="overlay-switch-'));
+  expect(html).toContain('role="group" aria-labelledby="overlay-presets-label"');
+  for (const id of Object.keys(OVERLAY_PRESETS)) expect(control(html, `overlay-preset-${id}`), id).toMatch(/aria-pressed="(true|false)"/);
   for (const id of OVERLAY_SECTION_IDS) {
     expect(html).toContain(`for="overlay-section-${id}"`);
     expect(html).toContain(escaped(getOverlaySectionText(id, language)));

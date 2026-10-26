@@ -4,10 +4,10 @@ import {DEFAULT_OVERLAY_PLACEMENTS, normalizeFraction, normalizeScale, parseOver
 import {DEFAULT_OVERLAY_SECTIONS, DEFAULT_OVERLAY_SETTINGS, isOverlayLayout, OVERLAY_LAYOUTS, OVERLAY_SECTION_IDS} from './overlay-sections';
 import {DEFAULT_GEAR_DISPLAY, DEFAULT_UNIT_PROFILES, isGearDisplayMode, isUnitProfile, UNIT_GAMES} from './unit-profiles';
 
-// Settings file format v9 (docs/settings.md). Pure parsing and serialization; the store owns file access.
+// Settings file format v10 (docs/settings.md). Pure parsing and serialization; the store owns file access.
 
 export const SETTINGS_FORMAT = 'ets2telemetry.settings';
-export const SETTINGS_VERSION = 9;
+export const SETTINGS_VERSION = 10;
 /** Larger files are rejected as invalid without being parsed. */
 export const MAX_SETTINGS_BYTES = 64 * 1024;
 
@@ -38,7 +38,7 @@ export const DEFAULT_SETTINGS: Settings = Object.freeze({
 export type SettingsField = 'overlay.backgroundOpacity' | 'overlay.enabled' | 'language' | 'autostart' | `units.${UnitGame}` | `gearDisplay.${UnitGame}` | 'overlay.layout' | 'overlay.sections' | `overlay.sections.${OverlaySectionId}`
   | 'overlay.placements' | `overlay.placements.${OverlayLayout}`;
 /** Set when the file was upgraded in memory from an older format; the file itself stays unchanged until the next save. */
-type Migrated = {migratedFrom?: 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8};
+type Migrated = {migratedFrom?: 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9};
 export type ParsedSettings =
   | ({state: 'loaded'; settings: Settings} & Migrated)
   /** A valid file with some invalid or missing fields; they use defaults until the next save rewrites them. */
@@ -70,6 +70,9 @@ const isRecord = (value: unknown): value is Record<string, unknown> => typeof va
  * v8 -> v9 adds automatic gear display for both games (ET-050). A stray pre-v9 `gearDisplay` key is replaced, so an
  * older file never carries a hand-edited mode into v9; the bump makes an older build read a v9 file as newer-version
  * instead of dropping the mode on its next save.
+ * v9 -> v10 changes only the version (ET-050b, owner option B of October 26, 2026): v10 adds the `crawler` gear display
+ * mode, and the bump makes an older build read a v10 file as newer-version (read-only defaults) instead of replacing an
+ * unknown `crawler` mode with automatic on its next save. Every v9 mode is kept.
  * Version 0 and below have no path.
  */
 const MIGRATIONS: ReadonlyMap<number, (raw: Record<string, unknown>) => Record<string, unknown>> = new Map<number, (raw: Record<string, unknown>) => Record<string, unknown>>([
@@ -80,7 +83,8 @@ const MIGRATIONS: ReadonlyMap<number, (raw: Record<string, unknown>) => Record<s
   [5, (raw: Record<string, unknown>) => ({...raw, version: 6, overlay: isRecord(raw.overlay) ? {...raw.overlay, enabled: true} : raw.overlay})],
   [6, (raw: Record<string, unknown>) => ({...raw, version: 7, overlay: isRecord(raw.overlay) ? {...raw.overlay, backgroundOpacity: DEFAULT_OVERLAY_OPACITY} : raw.overlay})],
   [7, (raw: Record<string, unknown>) => ({...raw, version: 8})],
-  [8, (raw: Record<string, unknown>) => ({...raw, version: 9, gearDisplay: {ets2: DEFAULT_GEAR_DISPLAY.ets2, ats: DEFAULT_GEAR_DISPLAY.ats}})]
+  [8, (raw: Record<string, unknown>) => ({...raw, version: 9, gearDisplay: {ets2: DEFAULT_GEAR_DISPLAY.ets2, ats: DEFAULT_GEAR_DISPLAY.ats}})],
+  [9, (raw: Record<string, unknown>) => ({...raw, version: 10})]
 ]);
 
 /** Upgrades an older raw document to the current version through the migration chain, or undefined without a complete path. */
@@ -158,7 +162,7 @@ export function parseSettings(bytes: Uint8Array): ParsedSettings {
     document = migrateToCurrent(raw, version);
     if (!document) return {state: 'unsupported-older'};
   }
-  const migrated: Migrated = version === 1 || version === 2 || version === 3 || version === 4 || version === 5 || version === 6 || version === 7 || version === 8 ? {migratedFrom: version} : {};
+  const migrated: Migrated = version === 1 || version === 2 || version === 3 || version === 4 || version === 5 || version === 6 || version === 7 || version === 8 || version === 9 ? {migratedFrom: version} : {};
   const fallbackFields: SettingsField[] = [];
 
   let language: AppLanguage = DEFAULT_APP_LANGUAGE;
@@ -190,7 +194,7 @@ export function parseSettings(bytes: Uint8Array): ParsedSettings {
 }
 
 /**
- * The exact v9 file content: UTF-8 without a byte order mark, two-space indentation, a trailing newline, language,
+ * The exact v10 file content: UTF-8 without a byte order mark, two-space indentation, a trailing newline, language,
  * both games' unit profiles followed by their gear display modes,
  * all fourteen overlay sections in canonical order and the placements of all four layouts in canonical order, each with
  * x and y rounded to four decimals and the scale to two.
