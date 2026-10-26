@@ -166,6 +166,8 @@ h1[tabindex="-1"]:focus { outline: none; }
 [role="switch"][data-state="unchecked"] {background:var(--yu-border-input)}
 .yu-settings label {min-height:32px;align-items:center}
 .yu-segmented {display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:4px;background:var(--yu-bg-input);border:1px solid var(--yu-border-input);border-radius:8px;padding:4px}
+/* ET-050b: the gear display group has three options; a stacked column keeps every label on its own full-width row. */
+.yu-segmented.yu-segmented-stacked {grid-template-columns:minmax(0,1fr)}
 .yu-segment-option {position:relative;min-height:32px;border-radius:5px;border:1px solid transparent;text-align:center}
 .yu-segment-option:has([data-state="checked"]) {background:var(--yu-selected-bg);border-color:var(--yu-selected-border);color:var(--yu-selected-fg)}
 .yu-segment-option:has(:focus-visible) {outline:2px solid var(--yu-accent-light);outline-offset:2px}

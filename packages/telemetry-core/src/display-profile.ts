@@ -8,8 +8,11 @@ export type GameId = 'ets2' | 'ats';
 /** ET-000 defaults: ETS2 metric, ATS US customary. */
 export const DEFAULT_DISPLAY_PROFILE: Readonly<Record<GameId, DisplayProfileId>> = Object.freeze({ets2: 'metric', ats: 'us-customary'});
 
-/** Gear presentation: `automatic` shows 1, 2, 3...; `manual` shows range-splitter pairs 1L, 1H, 2L, 2H... */
-export const GEAR_DISPLAY_MODES = ['automatic', 'manual'] as const;
+/**
+ * Gear presentation: `automatic` shows 1, 2, 3...; `manual` shows range-splitter pairs 1L, 1H, 2L, 2H...; `crawler`
+ * (ET-050b, owner option B of October 26, 2026) names gear 1 the crawler and numbers the rest 1, 2, 3...
+ */
+export const GEAR_DISPLAY_MODES = ['automatic', 'manual', 'crawler'] as const;
 export type GearDisplayMode = (typeof GEAR_DISPLAY_MODES)[number];
 /** Exact mode strings only; nothing is coerced. */
 export function isGearDisplayMode(value: unknown): value is GearDisplayMode {

@@ -433,7 +433,7 @@ export type I18nKey =
   | 's.lang' | 's.langD' | 's.autostart' | 's.autostartD' | 's.autostart.active' | 's.autostart.disabled' | 's.autostart.notInstalled' | 's.autostart.notInstalledNote' | 's.autostart.failed' | 's.autostart.saveFailed'
   | 's.close' | 's.closeD' | 's.closeV'
   | 's.u.metric' | 's.u.us' | 's.u.d'
-  | 's.gear' | 's.gear.d' | 's.gear.automatic' | 's.gear.manual' | 's.gear.saveFailed'
+  | 's.gear' | 's.gear.d' | 's.gear.automatic' | 's.gear.manual' | 's.gear.crawler.ets2' | 's.gear.crawler.ats' | 's.gear.saveFailed'
   | 's.o.show' | 's.o.showD' | 's.o.layout' | 's.o.scale' | 's.o.opacity'
   | 's.o.position' | 's.o.edit' | 's.o.editD' | 's.o.sectionsD'
   | 'l.strip' | 'l.card' | 'l.cluster' | 'l.hud'

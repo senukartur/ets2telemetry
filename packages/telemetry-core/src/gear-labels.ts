@@ -8,11 +8,18 @@ import type {GearboxState, HShifterLayout, HShifterSlot} from '../../contracts/s
 /** Display labels by gear: forward gears 1..F and reverse gears 1..R (the absolute value of the negative index). */
 export interface GearLabels {forward: ReadonlyMap<number, string>; reverse: ReadonlyMap<number, string>}
 
+/** The game whose dashboard names the crawler gears. */
+export type GearLabelGame = 'ets2' | 'ats';
+
 /**
- * The crawler names (B5): one constant for both games, which an ETS2 crawler observation may change. `single` names a
- * crawler cell without a splitter pair; `low` and `high` name its lower and higher splitter gear.
+ * The crawler names by game (B5, amended by the owner on October 26, 2026 after the in-game dashboards were compared):
+ * ETS2 shows C1/C2 (Scania Opticruise GRSO925R 12+2), ATS shows LL/LH (Mack 18-speed). `single` names a crawler cell
+ * without a splitter pair; it was observed in neither game. `low` and `high` name its lower and higher splitter gear.
  */
-export const CRAWLER_LABELS = {single: 'L', low: 'LL', high: 'LH'} as const;
+export const CRAWLER_LABELS = {
+  ets2: {single: 'C', low: 'C1', high: 'C2'},
+  ats: {single: 'L', low: 'LL', high: 'LH'}
+} as const;
 
 interface Cell {split: Map<number, number>}
 interface SlotLabel {label: string; crawler: boolean; number: number; higher: boolean}
@@ -37,12 +44,13 @@ function classifyBit(forward: readonly HShifterSlot[], bySelectors: ReadonlyMap<
   return splitter === 0 && range === 0 ? 'unused' : undefined;
 }
 
-function derive(forwardGears: number, reverseGears: number, layout: HShifterLayout): GearLabels | undefined {
+function derive(forwardGears: number, reverseGears: number, layout: HShifterLayout, game: GearLabelGame): GearLabels | undefined {
   const {selectorCount, slots} = layout;
   if (!Number.isSafeInteger(forwardGears) || forwardGears < 0 || !Number.isSafeInteger(reverseGears) || reverseGears < 0) return undefined;
   if (!Number.isSafeInteger(selectorCount) || selectorCount < 0 || selectorCount > 6) return undefined;
-  // Step 1: every slot is well formed, each (position, selectors) pair is unique, and the slot gears are exactly
-  // 1..F and −1..−R.
+  // Step 1: every slot is well formed, each (position, selectors) pair is unique, the forward slot gears are exactly
+  // 1..F and the reverse slot gears lie in −1..−R. The H-shifter may reach fewer reverse gears than the truck reports
+  // (the ETS2 Scania G38CMR reports 8 and its slots hold 4); reverse is always R1..Rn (B4).
   const bySelectors = new Map<number, number>();
   const forwardSeen = new Set<number>(), reverseSeen = new Set<number>();
   for (const slot of slots) {
@@ -55,7 +63,7 @@ function derive(forwardGears: number, reverseGears: number, layout: HShifterLayo
     if (gear > forwardGears || -gear > reverseGears) return undefined;
     (gear > 0 ? forwardSeen : reverseSeen).add(Math.abs(gear));
   }
-  if (forwardSeen.size !== forwardGears || reverseSeen.size !== reverseGears) return undefined;
+  if (forwardSeen.size !== forwardGears) return undefined;
   const forward = slots.filter(slot => slot.gear > 0);
   // Step 2: classify each selector bit from the forward gears; reverse gears are always R1..Rn (B4). A bit that never
   // changes a forward gear, because its slots are neutral or repeat the gear, is unused and ignored (review amendment).
@@ -89,52 +97,55 @@ function derive(forwardGears: number, reverseGears: number, layout: HShifterLayo
     cell.split.set(state, slot.gear);
   }
   const minGear = (cell: Cell) => Math.min(...cell.split.values());
-  // Step 4: with a range bit, a position without high-range gears is the crawler, which needs gears below every other
-  // position's low-range gears. More than one such position is unrecognized (B5).
-  let crawler: number | undefined;
+  const byMinGear = (a: Cell, b: Cell) => minGear(a) - minGear(b);
+  const sameGears = (a: Cell, b: Cell) => {
+    const left = new Set(a.split.values()), right = new Set(b.split.values());
+    return left.size === right.size && [...left].every(gear => right.has(gear));
+  };
+  // Step 4: a range bit splits the cells into a low and a high range. A high-range cell that repeats its position's
+  // low-range gears carries no range and is dropped. The low range may hold one cell more than the high range: that
+  // cell is the crawler, the low-range cell with the lowest gears, which must lie below every other cell. Its handle
+  // position may also hold high-range gears (ETS2 Scania GRSO925R) or none (ATS Mack). More extra cells, or more
+  // high-range than low-range cells, are unrecognized (B5).
+  const low: Cell[] = [], high: Cell[] = [];
+  for (const position of cells.values()) {
+    if (position.low !== undefined) low.push(position.low);
+    if (position.high !== undefined && (position.low === undefined || !sameGears(position.low, position.high))) high.push(position.high);
+  }
+  low.sort(byMinGear);
+  high.sort(byMinGear);
+  let crawlerCell: Cell | undefined;
   if (rangeBit !== undefined) {
-    const lowOnly = [...cells].filter(([, position]) => position.high === undefined).map(([handle]) => handle);
-    if (lowOnly.length > 1) return undefined;
-    crawler = lowOnly[0];
+    const extra = low.length - high.length;
+    if (extra < 0 || extra > 1) return undefined;
+    if (extra === 1) crawlerCell = low.shift();
   }
-  const others = [...cells].filter(([handle]) => handle !== crawler);
-  // Step 5: every other position needs a low-range cell, and both ranges when a range bit exists.
-  const numbered: {handle: number; low: Cell; high?: Cell}[] = [];
-  for (const [handle, position] of others) {
-    if (position.low === undefined || (rangeBit !== undefined && position.high === undefined)) return undefined;
-    numbered.push({handle, low: position.low, high: position.high});
-  }
-  if (crawler !== undefined) {
-    const crawlerCell = cells.get(crawler)?.low;
-    if (crawlerCell === undefined) return undefined;
+  if (crawlerCell !== undefined) {
     const top = Math.max(...crawlerCell.split.values());
-    if (numbered.some(position => minGear(position.low) <= top)) return undefined;
+    if ([...low, ...high].some(cell => minGear(cell) <= top)) return undefined;
   }
-  numbered.sort((a, b) => minGear(a.low) - minGear(b.low));
-  const count = numbered.length;
   // Step 6: L/H only where both splitter states of a cell map to distinct gears.
+  const names = CRAWLER_LABELS[game];
   const labels = new Map<number, SlotLabel>();
-  const assign = (cell: Cell, crawlerCell: boolean, number: number): boolean => {
+  const assign = (cell: Cell, crawler: boolean, number: number): boolean => {
     const states = [...cell.split.values()];
     const split = states.length === 2 && states[0] !== states[1];
     for (const gear of states) {
       const higher = split && gear === Math.max(...states);
-      const label = crawlerCell
-        ? (split ? (higher ? CRAWLER_LABELS.high : CRAWLER_LABELS.low) : CRAWLER_LABELS.single)
+      const label = crawler
+        ? (split ? (higher ? names.high : names.low) : names.single)
         : `${number}${split ? (higher ? 'H' : 'L') : ''}`;
       const previous = labels.get(gear);
       // A gear in several slots must get one label.
       if (previous !== undefined && previous.label !== label) return false;
-      labels.set(gear, {label, crawler: crawlerCell, number, higher});
+      labels.set(gear, {label, crawler, number, higher});
     }
     return true;
   };
-  const crawlerCell = crawler === undefined ? undefined : cells.get(crawler)?.low;
   if (crawlerCell !== undefined && !assign(crawlerCell, true, 0)) return undefined;
-  for (const [rank, position] of numbered.entries()) {
-    if (!assign(position.low, false, rank + 1)) return undefined;
-    if (position.high !== undefined && !assign(position.high, false, count + rank + 1)) return undefined;
-  }
+  // Step 5: the other low-range cells are numbered 1..n by ascending gear, then the high-range cells n+1..2n.
+  for (const [rank, cell] of low.entries()) if (!assign(cell, false, rank + 1)) return undefined;
+  for (const [rank, cell] of high.entries()) if (!assign(cell, false, low.length + rank + 1)) return undefined;
   // Ascending gears must give strictly ascending labels: crawler first, then by number, L before H. This rejects a
   // range or splitter direction that differs between positions and two gears that share a label.
   const forwardLabels = new Map<number, string>();
@@ -153,33 +164,37 @@ function derive(forwardGears: number, reverseGears: number, layout: HShifterLayo
   return {forward: forwardLabels, reverse};
 }
 
-interface CacheEntry {forwardGears: number; reverseGears: number; labels: GearLabels | undefined}
+interface CacheEntry {forwardGears: number; reverseGears: number; game: GearLabelGame; labels: GearLabels | undefined}
 const cache = new WeakMap<HShifterLayout, CacheEntry>();
 
 /**
  * Derives display labels from a gearbox reading (ET-050b B3–B5), or returns `undefined` when the counts or the
  * H-shifter layout are unavailable or the layout is not recognized:
- * 1. the slot gears are exactly forward 1..F and reverse −1..−R, with one slot per (handle position, selectors) pair;
+ * 1. the forward slot gears are exactly 1..F and the reverse slot gears lie in −1..−R (the H-shifter may reach fewer
+ *    reverse gears than the truck has), with one slot per (handle position, selectors) pair;
  * 2. each selector bit is a splitter when its same-position forward pairs differ by 1 and a range when they differ
  *    by more; a bit without a pair of different gears is unused and ignored, while a bit with both kinds or a second
  *    bit of the same kind is unrecognized, and so is a cell whose ignored bits map different gears to one state;
  * 3. the low range is the range state that holds gear 1;
- * 4. with a range bit, the one handle position without high-range gears is the crawler, whose gears lie below every
- *    other position's low-range gears; two such positions are unrecognized;
- * 5. the other positions are numbered 1..n in the low range by ascending gear and n+1..2n in the high range;
+ * 4. with a range bit, a high-range cell that repeats its position's low-range gears is dropped, and when the low range
+ *    holds one cell more than the high range, its lowest cell is the crawler, whose gears lie below every other cell;
+ *    any other difference between the two ranges is unrecognized;
+ * 5. the other low-range cells are numbered 1..n by ascending gear and the high-range cells n+1..2n;
  * 6. a cell whose two splitter states map to distinct gears gets L (lower) and H (higher);
- * 7. the crawler is `L` without a splitter pair and `LL`/`LH` with one; reverse is R1..Rn; neutral stays N.
- * The result is memoized in a WeakMap keyed by the layout object's identity and shared, so callers must not change
- * the result, and a layout must not be mutated in place after it is passed here. A new layout object per update
- * simply misses the cache and is derived again, which is cheap.
+ * 7. `game` names the crawler (CRAWLER_LABELS): ETS2 `C` without a splitter pair and `C1`/`C2` with one, ATS `L` and
+ *    `LL`/`LH`; reverse is R1..Rn; neutral stays N.
+ * The result is memoized in a WeakMap keyed by the layout object's identity, with the counts and the game, and shared,
+ * so callers must not change the result, and a layout must not be mutated in place after it is passed here. A new
+ * layout object per update simply misses the cache and is derived again, which is cheap.
  */
-export function deriveGearLabels(gearbox: GearboxState): GearLabels | undefined {
+export function deriveGearLabels(gearbox: GearboxState, game: GearLabelGame): GearLabels | undefined {
   const {forwardGears, reverseGears, hshifter} = gearbox;
   if (!forwardGears.available || !reverseGears.available || !hshifter.available) return undefined;
   const layout = hshifter.value;
   const cached = cache.get(layout);
-  if (cached !== undefined && cached.forwardGears === forwardGears.value && cached.reverseGears === reverseGears.value) return cached.labels;
-  const labels = derive(forwardGears.value, reverseGears.value, layout);
-  cache.set(layout, {forwardGears: forwardGears.value, reverseGears: reverseGears.value, labels});
+  if (cached !== undefined && cached.forwardGears === forwardGears.value && cached.reverseGears === reverseGears.value &&
+    cached.game === game) return cached.labels;
+  const labels = derive(forwardGears.value, reverseGears.value, layout, game);
+  cache.set(layout, {forwardGears: forwardGears.value, reverseGears: reverseGears.value, game, labels});
   return labels;
 }

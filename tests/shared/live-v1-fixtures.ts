@@ -101,6 +101,8 @@ export interface GearboxPairOptions {
   gearbox?: GearboxState;
   /** The v1 truck model id; by default v0's `truck.volvo`, so both sources describe the same truck (ET-045a). */
   truckId?: string;
+  /** The game of both sources, which names the crawler; by default the smoke fixtures' ETS2. */
+  game?: 'ets2' | 'ats';
   v1?: V1Options;
   v0Patch?: Partial<LiveTelemetry>;
 }
@@ -112,5 +114,9 @@ export function gearboxPair(gear: number, options: GearboxPairOptions = {}): Liv
   state.gear = {available: true, value: gear, unit: 'index'};
   state.gearbox = structuredClone(options.gearbox ?? gearboxFixture('checkpoint-ats-mack'));
   if (truck.available) truck.value.id = {available: true, value: options.truckId ?? 'truck.volvo'};
+  if (options.game !== undefined) {
+    live.observation!.source.game = options.game;
+    live.v1!.observation!.source.game = options.game;
+  }
   return live;
 }

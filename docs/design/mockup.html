@@ -779,14 +779,14 @@ function settingsScreen() {
         return '<button class="secrow" data-sect="' + id + '" aria-pressed="' + on(id) + '"><span>' + t('sec.' + id) + '</span><span class="switch ' + (on(id) ? 'on' : '') + '"></span></button>';
       }).join('') + '</section>';
     }).join('');
-    var presets = '<section data-spec="settings.overlay.presets"><h3>' + t('s.o.presets') + '</h3><div class="row" style="flex-wrap:wrap">' + ['everything', 'job', 'driving'].map(function (id) {
+    var presets = '<div role="group" aria-labelledby="settings-overlay-presets" data-spec="settings.overlay.presets"><h4 id="settings-overlay-presets" class="label b6">' + t('s.o.presets') + '</h4><div class="row" style="flex-wrap:wrap">' + ['everything', 'job', 'driving'].map(function (id) {
       return '<button class="btn s sm" aria-pressed="' + (preset === id) + '" data-preset="' + id + '">' + t('p.' + id) + '</button>';
-    }).join('') + '</div></section>';
+    }).join('') + '</div></div>';
     c = card('settings.overlay', t('s.overlay'),
       row(t('s.o.show'), t('s.o.showD'), '<button class="switch on" aria-label="' + t('s.o.show') + '"></button>') +
       '<section data-spec="settings.overlay.layout"><h3>' + t('s.o.layout') + '</h3><div class="grid" style="grid-template-columns:repeat(2,minmax(0,1fr));gap:10px">' + lo + '</div></section>' +
       '<section data-spec="settings.overlay.edit"><h3>' + t('s.o.position') + ' / ' + t('s.o.scale') + '</h3><div class="row" style="flex-wrap:wrap"><button class="btn s sm">' + ic('move', 's') + t('s.o.edit') + '</button><span>' + t('s.o.scale') + ': 100%</span></div><p class="small muted">' + t('s.o.editD') + '</p></section>' +
-      presets + '<section data-spec="settings.overlay.sections"><h3>' + t('s.o.sections') + '</h3><div class="grid" style="grid-template-columns:repeat(2,minmax(0,1fr));gap:16px 28px" data-spec="settings.overlay.groups">' + groups + '</div><p class="small muted">' + t('sec.hint') + '</p></section>') +
+      '<section data-spec="settings.overlay.sections"><h3>' + t('s.o.sections') + '</h3>' + presets + '<div class="grid" style="grid-template-columns:repeat(2,minmax(0,1fr));gap:16px 28px" data-spec="settings.overlay.groups">' + groups + '</div><p class="small muted">' + t('sec.hint') + '</p></section>') +
       '<div class="card"><div class="cb small muted">' + t('s.o.opacity') + ' — ' + t('tag.planned') + '</div></div>';
   } else if (S.set === 'plugin') {
     var pr = function (game, path, status, btns) { return row(game, path, status + btns); };

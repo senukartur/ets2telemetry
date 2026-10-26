@@ -68,9 +68,10 @@ export type UnitProfiles = Readonly<Record<UnitGame, UnitProfile>>;
 /**
  * Gear presentation (ET-050). It must equal telemetry-core's `GearDisplayMode`; apps/desktop/src/unit-profiles.ts
  * asserts that at compile time. `automatic` shows 1, 2, 3...; `manual` shows range-splitter pairs 1L, 1H, 2L, 2H...;
- * neutral and reverse are N and R1, R2... in both. Only the displayed text changes; stored gear stays an integer.
+ * `crawler` (ET-050b, settings v10) shows the crawler C (ETS2) or L (ATS) for gear 1, then 1, 2, 3...; neutral and
+ * reverse are N and R1, R2... in all of them. Only the displayed text changes; stored gear stays an integer.
  */
-export type GearDisplayMode = 'automatic' | 'manual';
+export type GearDisplayMode = 'automatic' | 'manual' | 'crawler';
 export type GearDisplayModes = Readonly<Record<UnitGame, GearDisplayMode>>;
 /** Application user interface languages (ET-029). */
 export type AppLanguage = 'en' | 'ru';

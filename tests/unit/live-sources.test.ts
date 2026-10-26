@@ -2,7 +2,7 @@
 // the overlay. Expected texts are written by hand from tests/fixtures/protocol-v0/checkpoint.json and
 // tests/fixtures/protocol-v1/snapshot-live.json in the ETS2 metric profile.
 import {describe, expect, it} from 'vitest';
-import type {LiveTelemetry} from '../../packages/contracts/src';
+import type {GearDisplayMode, LiveTelemetry} from '../../packages/contracts/src';
 import type {GearboxState} from '../../packages/contracts/src/protocol-v1';
 import {resolveDisplayUnits} from '../../packages/telemetry-core/src/display-profile';
 import {initialLive} from '../../apps/desktop/src/live-state';
@@ -208,16 +208,52 @@ describe('gear display mode (ET-050)', () => {
 
 // ET-050b B6: manual mode shows the gearbox-aware labels only for the current v1 truck with v0's model id and a layout
 // that validates; everything else keeps the GD2 formula. The layouts are the minor-1 fixtures' CAP-01 tables (the ATS Mack
-// 18-speed and the ETS2 12-speed); the expected labels are written by hand from the owner's Mack HUD (LL, LH, 1L…8H).
+// 18-speed and the ETS2 12-speed) and the owner's ETS2 Scania GRSO925R capture; the expected labels are written by hand
+// from the owner's in-game dashboards (Mack LL, LH, 1L…8H; Scania C1, C2, 1L…6H). The source's game names the crawler.
 describe('gearbox-aware gear labels (ET-050b)', () => {
   const gearboxOf = gearboxFixture, pair = gearboxPair;
   const MACK = gearboxOf('checkpoint-ats-mack'), TWELVE = gearboxOf('checkpoint'), ZERO_SELECTORS = gearboxOf('snapshot-zero-selectors');
-  const gearText = (live: LiveTelemetry, mode: 'automatic' | 'manual' = 'manual') => liveSources(live, METRIC, mode).field('gear');
+  // The owner's ETS2 capture of October 26, 2026 (sanitized, kept local): 14 forward and 2 reverse gears, range bit 1,
+  // splitter bit 2, the crawler on handle 2 below 4L/4H, and handle 5 without high-range gears.
+  const GRSO925R: GearboxState = {forwardGears: {available: true, value: 14}, reverseGears: {available: true, value: 2}, hshifter: {available: true, value: {
+    selectorCount: 2, slots: ([[-1, 1, 0], [-2, 1, 1], [-1, 1, 2], [-2, 1, 3], [1, 2, 0], [9, 2, 1], [2, 2, 2], [10, 2, 3], [3, 3, 0], [11, 3, 1], [4, 3, 2],
+      [12, 3, 3], [5, 4, 0], [13, 4, 1], [6, 4, 2], [14, 4, 3], [7, 5, 0], [8, 5, 2]] as const).map(([gear, handlePosition, selectors]) => ({gear, handlePosition, selectors}))
+  }}};
+  const gearText = (live: LiveTelemetry, mode: GearDisplayMode = 'manual') => liveSources(live, METRIC, mode).field('gear');
   it.each([[1, 'LL'], [2, 'LH'], [3, '1L'], [4, '1H'], [10, '4H'], [11, '5L'], [12, '5H'], [18, '8H'], [0, 'N'], [-1, 'R1'], [-4, 'R4']] as const)(
-    'Mack gear %s is %s in manual mode', (gear, text) => {
-      expect(gearText(pair(gear))).toEqual({id: 'gear', state: 'value', text});
-      expect(liveSources(pair(gear), METRIC, 'manual').v1View!.sections.flatMap(section => section.fields).find(field => field.id === 'gear')?.text).toBe(text);
+    'Mack gear %s is %s in manual mode in ATS', (gear, text) => {
+      expect(gearText(pair(gear, {game: 'ats'}))).toEqual({id: 'gear', state: 'value', text});
+      expect(liveSources(pair(gear, {game: 'ats'}), METRIC, 'manual').v1View!.sections.flatMap(section => section.fields).find(field => field.id === 'gear')?.text).toBe(text);
     });
+  it.each([[1, 'C1'], [2, 'C2'], [3, '1L'], [8, '3H'], [9, '4L'], [14, '6H'], [-1, 'R1'], [-2, 'R2']] as const)(
+    'Scania GRSO925R gear %s is %s in manual mode in ETS2', (gear, text) => {
+      expect(gearText(pair(gear, {gearbox: GRSO925R}))).toEqual({id: 'gear', state: 'value', text});
+    });
+  // ET-050b owner option B (October 26, 2026): the owner's ETS2 Scania G38CMR 13+1 capture reports 8 reverse gears while its
+  // H-shifter reaches 4; its dashboard reads C, 1, 2, 3… and R1…R4. Hand-written from that dashboard.
+  const G38CMR: GearboxState = {...GRSO925R, reverseGears: {available: true, value: 8}, hshifter: {available: true, value: {
+    selectorCount: 2, slots: GRSO925R.hshifter.available ? GRSO925R.hshifter.value.slots.map(slot => slot.handlePosition !== 1 ? slot
+      : {...slot, gear: [-1, -3, -2, -4][slot.selectors]}) : []
+  }}};
+  it.each([[1, 'C'], [2, '1'], [3, '2'], [9, '8'], [14, '13'], [0, 'N'], [-1, 'R1'], [-4, 'R4'], [-8, 'R8']] as const)(
+    'Scania G38CMR gear %s is %s in crawler mode in ETS2', (gear, text) => {
+      expect(gearText(pair(gear, {gearbox: G38CMR}), 'crawler')).toEqual({id: 'gear', state: 'value', text});
+      expect(liveSources(pair(gear, {gearbox: G38CMR}), METRIC, 'crawler').v1View!.sections.flatMap(section => section.fields).find(field => field.id === 'gear')?.text).toBe(text);
+    });
+  it('recognizes the G38CMR layout in manual mode now that reverse gears beyond the H-shifter are allowed', () => {
+    expect(gearText(pair(1, {gearbox: G38CMR}))).toMatchObject({text: 'C1'});
+    expect(gearText(pair(-8, {gearbox: G38CMR}))).toMatchObject({text: 'R8'});
+  });
+  it('names the crawler-mode crawler by the source game and needs no current v1 layout', () => {
+    expect(gearText(pair(1, {game: 'ats'}), 'crawler')).toMatchObject({text: 'L'});
+    expect(gearText(pair(2, {game: 'ats'}), 'crawler')).toMatchObject({text: '1'});
+    for (const live of [pair(1, {truckId: 'vehicle.synthetic_truck'}), pair(1, {v1: {status: 'stale', fresh: false}}), pair(1, {v1: {selection: 'replay'}})])
+      expect(gearText(live, 'crawler')).toMatchObject({text: 'C'});
+  });
+  it('names the same crawler by the source game', () => {
+    expect(gearText(pair(1))).toMatchObject({text: 'C1'});
+    expect(gearText(pair(2, {gearbox: GRSO925R, game: 'ats'}))).toMatchObject({text: 'LH'});
+  });
   it('keeps the automatic mode unchanged', () => {
     for (const [gear, text] of [[1, '1'], [3, '3'], [18, '18'], [-1, 'R1'], [0, 'N']] as const) expect(gearText(pair(gear), 'automatic')).toMatchObject({state: 'value', text});
   });
@@ -249,10 +285,10 @@ describe('gearbox-aware gear labels (ET-050b)', () => {
     formula(gearboxOf('snapshot'));
   });
   it('follows a layout change in the same update object instead of a remembered one', () => {
-    const live = pair(1);
+    const live = pair(1, {game: 'ats'});
     expect(gearText(live)).toMatchObject({text: 'LL'});
     // Equal contents in a new object give the same labels.
-    expect(gearText(pair(1))).toMatchObject({text: 'LL'});
+    expect(gearText(pair(1, {game: 'ats'}))).toMatchObject({text: 'LL'});
     // The caller changes its own objects in place to the 12-speed layout: the labels follow, nothing stale is held.
     const gearbox = live.v1!.observation!.state.gearbox, twelve = structuredClone(TWELVE);
     gearbox.forwardGears = twelve.forwardGears;

@@ -120,12 +120,12 @@ const CLUSTER_FRAMES = [{zoom: 0.35, width: 160, height: 100}, {zoom: 0.7, width
 function stripSteps(speedUnit, rpmUnit) {
   return [{speed: '0', speedUnit, gear: 'N', rpm: '0', rpmUnit}, ...['9', '10', '99', '100', '-5', '—'].map(speed => ({speed})),
     // ET-050: the manual range-splitter forms share the gear's mode-independent reserve; ET-050b adds the crawler labels.
-    ...['1', '9', '10', '12', 'R1', '1L', '1H', '9H', 'LL', 'LH'].map(gear => ({gear})), ...['999', '1000', '2528', '9999', '—'].map(rpm => ({rpm}))];
+    ...['1', '9', '10', '12', 'R1', '1L', '1H', '9H', 'LL', 'LH', 'C1', 'C2'].map(gear => ({gear})), ...['999', '1000', '2528', '9999', '—'].map(rpm => ({rpm}))];
 }
 function clusterSteps(parts, speedUnit, rpmUnit) {
   const base = {...(parts.includes('speed') ? {speedUnit} : {}), ...(parts.includes('rpm') ? {rpmUnit} : {})}, steps = [];
   if (parts.includes('rpm')) steps.push(...['999', '1000', '2528', '9999'].map(rpm => ({...base, rpm})));
-  if (parts.includes('gear')) steps.push(...['N', '12', 'R1', '1L', '1H', '9H', 'LL', 'LH'].map(gear => ({...base, gear})));
+  if (parts.includes('gear')) steps.push(...['N', '12', 'R1', '1L', '1H', '9H', 'LL', 'LH', 'C1', 'C2'].map(gear => ({...base, gear})));
   if (parts.includes('speed')) steps.push(...['100', '-5', '—'].map(speed => ({...base, speed})));
   if (parts.length === 3) steps.push({...base, speed: '100', gear: '12', rpm: '9999'});
   return steps;
@@ -223,8 +223,10 @@ async function observeStripNumbers({application, overlay, source, language, reco
  * dashboard's Live instrument (3 is 2L, 16 is 8H, reverse R1 and neutral N), and automatic again (3 is 3). The source's
  * gear and the automatic mode are restored afterwards.
  * ET-050b: the v1 source serves the Mack 18F/4R layout with another truck model id, so the steps above prove the formula
- * for a mismatched truck. Then the v1 truck becomes v0's (B6): 1 is LL, 2 LH, 3 1L and 18 8H on the overlay, the Live
- * instrument and the Live details row; another model id again gives the formula (1 is 1L). The v1 truck id is restored.
+ * for a mismatched truck. Then the v1 truck becomes v0's (B6): 1 is C1, 2 C2, 3 1L and 18 8H on the overlay, the Live
+ * instrument and the Live details row, because the smoke source is ETS2, which names a crawler C1/C2 (B5 as amended on
+ * October 26, 2026); another model id again gives the formula (1 is 1L). The v1 truck id is restored.
+ * ET-050b owner option B: the crawler mode then shows 1 as C, 2 as 1 and 14 as 13 in the same three places.
  */
 async function observeGearDisplay({dashboard, overlay, source, sourceV1, language, record}) {
   record.gearDisplay ??= [];
@@ -251,11 +253,16 @@ async function observeGearDisplay({dashboard, overlay, source, sourceV1, languag
       source.setEngine(600, gear); await gearIs(text); record.gearDisplay.push({language, mode: 'manual', gear, text});
     }
     sourceV1.setTruckId('truck.volvo');
-    for (const [gear, text] of [[1, 'LL'], [2, 'LH'], [3, '1L'], [18, '8H'], [-1, 'R1']]) {
+    for (const [gear, text] of [[1, 'C1'], [2, 'C2'], [3, '1L'], [18, '8H'], [-1, 'R1']]) {
       source.setEngine(600, gear); await labelIs(text); record.gearDisplay.push({language, mode: 'manual', layout: 'mack', gear, text});
     }
     sourceV1.setTruckId(undefined);
     source.setEngine(600, 1); await labelIs('1L'); record.gearDisplay.push({language, mode: 'manual', layout: 'other-truck', gear: 1, text: '1L'});
+    // ET-050b owner option B: the crawler mode needs no layout; the ETS2 source names gear 1 C, as on the Scania G38CMR.
+    await choose('crawler');
+    for (const [gear, text] of [[1, 'C'], [2, '1'], [14, '13'], [-1, 'R1'], [0, 'N']]) {
+      source.setEngine(600, gear); await labelIs(text); record.gearDisplay.push({language, mode: 'crawler', gear, text});
+    }
     await choose('automatic');
     source.setEngine(600, 3); await gearIs('3'); record.gearDisplay.push({language, mode: 'automatic', gear: 3, text: '3'});
   }, async () => {
@@ -267,8 +274,8 @@ async function observeGearDisplay({dashboard, overlay, source, sourceV1, languag
   record.flags.gearDisplayManual = true;
 }
 /**
- * ET-050b: in each layout at the first size, ETS2's manual mode with the v1 truck equal to v0's shows the Mack crawler
- * label for gear 1 (LL) in the overlay's gear part (the Card hero, the Cluster badge, the strip and HUD sections), and the
+ * ET-050b: in each layout at the first size, ETS2's manual mode with the v1 truck equal to v0's shows the ETS2 crawler
+ * label for gear 1 of the Mack layout (C1) in the overlay's gear part (the Card hero, the Cluster badge, the strip and HUD sections), and the
  * shown sections still lie inside the window. The gear, the v1 truck id and the automatic mode are restored afterwards.
  */
 async function observeGearboxLabel({dashboard, overlay, source, sourceV1, layout, language, record}) {
@@ -278,9 +285,9 @@ async function observeGearboxLabel({dashboard, overlay, source, sourceV1, layout
     await until(() => dashboard.evaluate(() => globalThis.desktop.getAppState()), state => state.settings.gearDisplay.ets2 === 'manual' && state.settings.saveError === null,
       'UI_GEARBOX_MANUAL_SAVED');
     sourceV1.setTruckId('truck.volvo'); source.setEngine(600, 1);
-    await overlay.waitForFunction(numberTexts, {gear: 'LL'}, {timeout: 5000});
+    await overlay.waitForFunction(numberTexts, {gear: 'C1'}, {timeout: 5000});
     assert.deepEqual((await overlay.evaluate(overlayOverflow)).outside, [], `UI_GEARBOX_LABEL_OUTSIDE_${layout}_${language}`);
-    record.gearboxLabels.push({language, layout, gear: 1, text: 'LL'});
+    record.gearboxLabels.push({language, layout, gear: 1, text: 'C1'});
   }, async () => {
     source.setEngine(600, -1); sourceV1.setTruckId(undefined);
     if ((await dashboard.evaluate(() => globalThis.desktop.getAppState())).settings.gearDisplay.ets2 !== 'automatic')
@@ -868,7 +875,8 @@ export async function runUiSmoke({application, dashboard, overlay, source, sourc
         await until(() => dashboard.evaluate(() => globalThis.desktop.getAppState()), state => state.settings.units.ets2 === before && state.settings.saveError === null, 'UI_PROFILE_RESTORED');
         record.flags.refusedSave = true;
         // ET-050: committed manual, then automatic again, through the Units control; each shows checked only once saved.
-        for (const mode of ['manual', 'automatic']) {
+        // ET-050b (owner option B): the crawler mode is committed between them the same way.
+        for (const mode of ['manual', 'crawler', 'automatic']) {
           await dashboard.locator(`#gear-display-ets2-${mode}`).click();
           await until(() => dashboard.evaluate(() => globalThis.desktop.getAppState()), state => state.settings.gearDisplay.ets2 === mode && state.settings.saveError === null, `UI_GEAR_DISPLAY_${mode.toUpperCase()}_COMMITTED`);
           await until(() => dashboard.locator(`#gear-display-ets2-${mode}`).getAttribute('aria-checked'), checked => checked === 'true', `UI_GEAR_DISPLAY_${mode.toUpperCase()}_CHECKED`);
@@ -897,7 +905,7 @@ export async function runUiSmoke({application, dashboard, overlay, source, sourc
           // ET-045d: stable strip numbers and the Cluster centre, at the first size; screenshots stay as before.
           if (layout === 'strip' && size === sizes[0]) await observeStripNumbers({application, overlay, source, language, record});
           if (layout === 'strip' && size === sizes[0]) await observeGearDisplay({dashboard, overlay, source, sourceV1, language, record});
-          // ET-050b: the Mack crawler label LL in every layout.
+          // ET-050b: the ETS2 crawler label C1 of the Mack layout in every layout.
           if (size === sizes[0]) await observeGearboxLabel({dashboard, overlay, source, sourceV1, layout, language, record});
           if (layout === 'cluster' && size === sizes[0]) await observeClusterCentre({application, dashboard, overlay, language, record});
           // ET-045f: the Cluster speed arc in both profiles, at 0, in reverse, at full scale and under reduced motion.
@@ -1077,7 +1085,7 @@ export async function runUiReadOnly({application, dashboard, config, record, set
     await settingsPanel(dashboard, 'units');
     for (const game of ['ets2', 'ats']) for (const profile of ['metric', 'us-customary']) assert.equal(await dashboard.locator(`#units-${game}-${profile}`).isDisabled(), true);
     // ET-050: all four gear display radios are disabled while the settings are read-only.
-    for (const game of ['ets2', 'ats']) for (const mode of ['automatic', 'manual']) assert.equal(await dashboard.locator(`#gear-display-${game}-${mode}`).isDisabled(), true);
+    for (const game of ['ets2', 'ats']) for (const mode of ['automatic', 'manual', 'crawler']) assert.equal(await dashboard.locator(`#gear-display-${game}-${mode}`).isDisabled(), true);
     await capture({page: dashboard, application, config, record, name: 'read-only', language: 'en', size});
     await settingsPanel(dashboard, 'overlay');
     const opacity = dashboard.getByRole('slider');
