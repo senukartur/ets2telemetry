@@ -17,7 +17,10 @@ import {
 const only = (...ids: OverlaySectionId[]): OverlaySections =>
   Object.freeze(Object.fromEntries(OVERLAY_SECTION_IDS.map(id => [id, ids.includes(id)])) as Record<OverlaySectionId, boolean>);
 const ALL = DEFAULT_OVERLAY_SECTIONS;
-const WITHOUT_DRIVEN = {...ALL, 'distance-driven': false};
+// ET-052: the fifteenth section, the next mandatory break, adds one row to every layout. The historical rows below keep the
+// fourteen sections of ET-012d (no break), so their hand-written numbers still test the same sets.
+const WITHOUT_BREAK = {...ALL, 'mandatory-break': false};
+const WITHOUT_DRIVEN = {...WITHOUT_BREAK, 'distance-driven': false};
 const WITHOUT_RANGE_AND_DRIVEN = {...WITHOUT_DRIVEN, range: false};
 const ALSO_WITHOUT_GAME_TIME = {...WITHOUT_RANGE_AND_DRIVEN, 'game-time': false};
 
@@ -33,7 +36,10 @@ it('fixes the hand-written row constants of each layout', () => {
 });
 
 it.each([
-  {name: 'every section', sections: ALL, n: 14, m: 11, card: 384, cluster: 267, hud: 354},
+  // ET-052: 48 + 24 × 15 = 408, 36 + 21 × 12 = 288 (speed, gear and RPM are in the gauge) and 18 + 24 × 15 = 378.
+  {name: 'every section', sections: ALL, n: 15, m: 12, card: 408, cluster: 288, hud: 378},
+  {name: 'every section but the break', sections: WITHOUT_BREAK, n: 14, m: 11, card: 384, cluster: 267, hud: 354},
+  {name: 'the break alone', sections: only('mandatory-break'), n: 1, m: 1, card: 72, cluster: 57, hud: 42},
   {name: 'every section without distance driven', sections: WITHOUT_DRIVEN, n: 13, m: 10, card: 360, cluster: 246, hud: 330},
   {name: 'every section without range and distance driven', sections: WITHOUT_RANGE_AND_DRIVEN, n: 12, m: 9, card: 336, cluster: 225, hud: 306},
   {name: 'also without game time', sections: ALSO_WITHOUT_GAME_TIME, n: 11, m: 8, card: 312, cluster: 204, hud: 282},
@@ -51,10 +57,10 @@ it.each([
 });
 
 it('counts every enabled section in the cluster panel when no gauge section is enabled', () => {
-  // Fuel to game time are eleven panel sections: 36 + 21 × 11 = 267, as with every section.
+  // Fuel to the break are twelve panel sections: 36 + 21 × 12 = 288, as with every section (ET-052).
   const panelOnly = {...ALL, speed: false, gear: false, rpm: false};
-  expect(layoutRowCount('cluster', panelOnly)).toBe(11);
-  expect(layoutReservedCss('cluster', panelOnly)).toBe(267);
+  expect(layoutRowCount('cluster', panelOnly)).toBe(12);
+  expect(layoutReservedCss('cluster', panelOnly)).toBe(288);
   // Gear alone shows only the gauge: no panel row.
   expect(layoutReservedCss('cluster', only('gear'))).toBe(36);
   expect(layoutReservedCss('cluster', only('fuel'))).toBe(57);

@@ -208,3 +208,32 @@ it('reserves stable value widths for speed, gear and RPM only, in every layout, 
       ['fuel', undefined], ['range', undefined], ['sdk-consumption', undefined], ['game-time', undefined]]);
   }
 });
+
+// ET-052: the next mandatory break item. Its strip reserve is the width of the longest expected text in the viewer's language
+// ("00 h 00 min", "00 ч 00 мин"), so a value change never resizes the section; the validated urgency becomes the item's state
+// word for its accessible name, and only on a value of the break section.
+it.each([
+  ['en', '00 h 00 min', 'Break', 'Next mandatory break', 'soon', 'due now'],
+  ['ru', '00 ч 00 мин', 'Перерыв', 'До обязательного перерыва', 'скоро', 'пора']
+] as const)('builds the break item in %s with its reserve, labels and urgency words', (language, reserve, short, label, soonWord, dueWord) => {
+  const section = (patch: object) => overlayView({...base, language, sections: [{id: 'mandatory-break', state: 'value', text: '1 h 35 min', ...patch}] as OverlayPresentation['sections']}).items[0];
+  expect(section({urgency: 'soon'})).toMatchObject({id: 'mandatory-break', testId: 'overlay-mandatory-break', short, label, reserve, unavailable: false,
+    urgency: 'soon', urgencyName: soonWord});
+  expect(section({urgency: 'due'})).toMatchObject({urgency: 'due', urgencyName: dueWord});
+  // No urgency, and an invalid one that did not pass the preload, add no state word.
+  for (const item of [section({}), section({urgency: 'normal'})]) {
+    expect(item.urgency).toBeUndefined(); expect(item.urgencyName).toBeUndefined();
+  }
+  // A dash carries neither a value nor an urgency, but keeps the reserve.
+  const dash = overlayView({...base, language, sections: [{id: 'mandatory-break', state: 'unavailable'}]}).items[0];
+  expect(dash).toMatchObject({value: '—', reserve, unavailable: true}); expect(dash.urgency).toBeUndefined();
+  // The break sits in the time group after game time, in the strip and the cluster panel.
+  const both = overlayView({...base, language, sections: [{id: 'game-time', state: 'value', text: 'Day 1, 08:00'}, {id: 'mandatory-break', state: 'value', text: '0 min', urgency: 'due'}]});
+  expect(both.groups.map(group => [group.id, group.items.map(item => item.id)])).toEqual([['time', ['game-time', 'mandatory-break']]]);
+  expect(overlayView({...base, layout: 'cluster', language, sections: both.items.map(item => ({id: item.id, state: 'unavailable' as const}))}).panel.map(item => item.id)).toEqual(['game-time', 'mandatory-break']);
+});
+it('localizes the break text in Russian and ignores an urgency on any other section', () => {
+  const view = overlayView({...base, language: 'ru', sections: [{id: 'mandatory-break', state: 'value', text: '1 h 35 min', urgency: 'soon'},
+    {id: 'game-time', state: 'value', text: 'Day 1, 08:00', urgency: 'due'}] as OverlayPresentation['sections']});
+  expect(view.items.map(item => [item.id, item.value, item.urgency])).toEqual([['mandatory-break', '1 ч 35 мин', 'soon'], ['game-time', 'День 1, 08:00', undefined]]);
+});

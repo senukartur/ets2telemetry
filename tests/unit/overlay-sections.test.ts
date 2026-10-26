@@ -2,23 +2,23 @@ import {expect, it} from 'vitest';
 import type {OverlayPresentation} from '../../packages/contracts/src';
 import {
   CLUSTER_GAUGE_SECTIONS, DEFAULT_OVERLAY_SETTINGS, enabledSectionCount, isOverlayLayout, OVERLAY_GROUPS, OVERLAY_PRESETS, OVERLAY_SECTION_IDS, OVERLAY_SECTION_REQUIREMENTS,
-  isGaugeFraction, overlayGauges, parseOverlaySections, sameSections, staleOverlay
+  isGaugeFraction, overlayGauges, overlayUrgency, parseOverlaySections, sameSections, staleOverlay
 } from '../../apps/desktop/src/overlay-sections';
 
-// Hand-written expectations (ET-012a plan, design step 2).
+// Hand-written expectations (ET-012a plan, design step 2). ET-052 appends the fifteenth section last.
 const IDS = ['speed', 'gear', 'rpm', 'fuel', 'range', 'sdk-consumption', 'cargo', 'origin', 'destination', 'distance-driven', 'distance-remaining',
-  'deadline', 'expected-income', 'game-time'];
+  'deadline', 'expected-income', 'game-time', 'mandatory-break'];
 const only = (...enabled: string[]) => Object.fromEntries(IDS.map(id => [id, enabled.includes(id)]));
 const ALL_ON = only(...IDS);
 const without = (record: Record<string, boolean>, key: string) => Object.fromEntries(Object.entries(record).filter(([name]) => name !== key));
 
-it('lists fourteen sections in canonical order and groups each exactly once', () => {
+it('lists fifteen sections in canonical order and groups each exactly once', () => {
   expect(OVERLAY_SECTION_IDS).toEqual(IDS);
   expect(OVERLAY_GROUPS.map(group => [group.id, group.sections])).toEqual([
     ['driving', ['speed', 'gear', 'rpm']],
     ['fuel', ['fuel', 'range', 'sdk-consumption']],
     ['job', ['cargo', 'origin', 'destination', 'distance-driven', 'distance-remaining', 'deadline', 'expected-income']],
-    ['time', ['game-time']]
+    ['time', ['game-time', 'mandatory-break']]
   ]);
 });
 
@@ -30,6 +30,7 @@ it('defaults to the strip layout with every section and the default placements, 
   // ET-012b added the default placements: the ET-012a anchors at scale 1.
   expect(DEFAULT_OVERLAY_SETTINGS).toEqual({enabled: true, backgroundOpacity: 80, layout: 'strip', sections: ALL_ON, placements: {strip: {x: 0.5, y: 0, scale: 1}, card: {x: 1, y: 0, scale: 1},
     cluster: {x: 0, y: 1, scale: 1}, hud: {x: 0, y: 0, scale: 1}}});
+  // ET-052 (MB11): only `everything` includes the break; job-focus and driving-only are unchanged.
   expect(OVERLAY_PRESETS).toEqual({
     'everything': ALL_ON,
     'job-focus': only('speed', 'gear', 'fuel', 'cargo', 'destination', 'distance-remaining', 'deadline'),
@@ -37,13 +38,16 @@ it('defaults to the strip layout with every section and the default placements, 
   });
   expect(Object.isFrozen(OVERLAY_PRESETS['job-focus'])).toBe(true);
   expect(enabledSectionCount(OVERLAY_PRESETS['driving-only'])).toBe(5);
+  expect(enabledSectionCount(OVERLAY_PRESETS['everything'])).toBe(15);
+  expect(OVERLAY_PRESETS['job-focus']['mandatory-break']).toBe(false);
+  expect(OVERLAY_PRESETS['driving-only']['mandatory-break']).toBe(false);
   expect(sameSections(OVERLAY_PRESETS['everything'], {...ALL_ON} as never)).toBe(true);
   expect(sameSections(OVERLAY_PRESETS['everything'], OVERLAY_PRESETS['job-focus'])).toBe(false);
 });
 
 it('marks the sections that need protocol v1 or trip tracking', () => {
   expect(OVERLAY_SECTION_REQUIREMENTS).toEqual({'origin': 'protocol-v1', 'distance-remaining': 'protocol-v1', 'deadline': 'protocol-v1',
-    'distance-driven': 'trip-tracking', 'cargo': 'ids-until-v1', 'destination': 'ids-until-v1'});
+    'mandatory-break': 'protocol-v1', 'distance-driven': 'trip-tracking', 'cargo': 'ids-until-v1', 'destination': 'ids-until-v1'});
 });
 
 it('accepts exactly the four layout ids', () => {
@@ -61,6 +65,7 @@ it('parses a complete section record into a fresh frozen copy', () => {
 it.each([
   ['an extra key', {...ALL_ON, theme: true}],
   ['a missing key', without(ALL_ON, 'rpm')],
+  ['the fourteen keys of before ET-052', without(ALL_ON, 'mandatory-break')],
   ['a non-boolean value', {...ALL_ON, rpm: 1}],
   ['a string boolean', {...ALL_ON, gear: 'true'}],
   ['every section disabled', only()],
@@ -127,4 +132,50 @@ it('keeps valid gauge fractions on current speed and RPM values only, leaving ev
   // Sections that are not an array pass through to the existing delivery checks unchanged.
   const malformed = {...current, sections: 'x'} as unknown as OverlayPresentation;
   expect(overlayGauges(malformed)).toBe(malformed);
+});
+
+// ET-052 (MB7): the break's urgency is validated in the overlay preload with one rule.
+const BREAK_NOW: OverlayPresentation = {source: 'ETS2', origin: 'game', status: 'connected', speed: '90', speedUnit: 'km/h', fuel: '73.0', fuelUnit: 'L',
+  freshness: 'current', layout: 'strip', paused: false, editing: false, sections: [{id: 'speed', state: 'value', text: '90 km/h', speedRing: 9 / 13},
+    {id: 'mandatory-break', state: 'value', text: '1 h 35 min', urgency: 'soon'}]};
+it('keeps the break urgency soon or due on a current value of the break section and leaves everything else unchanged', () => {
+  expect(overlayUrgency(BREAK_NOW)).toBe(BREAK_NOW);
+  const due: OverlayPresentation = {...BREAK_NOW, sections: [{id: 'mandatory-break', state: 'value', text: '0 min', urgency: 'due'}]};
+  expect(overlayUrgency(due)).toBe(due);
+  const normal: OverlayPresentation = {...BREAK_NOW, sections: [{id: 'mandatory-break', state: 'value', text: '2 h'}]};
+  expect(overlayUrgency(normal)).toBe(normal);
+});
+it('strips an invalid or misplaced urgency without dropping the update or the text', () => {
+  const at = (index: number, section: object): OverlayPresentation => ({...BREAK_NOW, sections: BREAK_NOW.sections.map((old, position) => position === index ? section as typeof old : old)});
+  for (const [index, bad, good] of [
+    [1, {id: 'mandatory-break', state: 'value', text: '1 h 35 min', urgency: 'normal'}, {id: 'mandatory-break', state: 'value', text: '1 h 35 min'}],
+    [1, {id: 'mandatory-break', state: 'value', text: '1 h 35 min', urgency: 'SOON'}, {id: 'mandatory-break', state: 'value', text: '1 h 35 min'}],
+    [1, {id: 'mandatory-break', state: 'value', text: '1 h 35 min', urgency: true}, {id: 'mandatory-break', state: 'value', text: '1 h 35 min'}],
+    [1, {id: 'mandatory-break', state: 'value', text: '1 h 35 min', urgency: null}, {id: 'mandatory-break', state: 'value', text: '1 h 35 min'}],
+    // Another section never carries one, and the speed's own fraction is kept.
+    [0, {id: 'speed', state: 'value', text: '90 km/h', speedRing: 9 / 13, urgency: 'due'}, {id: 'speed', state: 'value', text: '90 km/h', speedRing: 9 / 13}],
+    // An unavailable section never carries one.
+    [1, {id: 'mandatory-break', state: 'unavailable', urgency: 'due'}, {id: 'mandatory-break', state: 'unavailable'}]
+  ] as const) {
+    const input = at(index, bad), output = overlayUrgency(input);
+    expect(output, JSON.stringify(bad)).toEqual(at(index, good));
+    expect(output.sections.filter((_section, position) => position !== index)).toEqual(BREAK_NOW.sections.filter((_section, position) => position !== index));
+    expect(input.sections[index]).toEqual(bad);
+  }
+});
+it('removes the urgency from a presentation that is not current, and from the preload expiry', () => {
+  for (const freshness of ['stale', 'unavailable'] as const)
+    expect(overlayUrgency({...BREAK_NOW, freshness})).toEqual({...BREAK_NOW, freshness, sections: [BREAK_NOW.sections[0], {id: 'mandatory-break', state: 'value', text: '1 h 35 min'}]});
+  const expired = staleOverlay(BREAK_NOW);
+  expect(expired.sections).toEqual([{id: 'speed', state: 'unavailable'}, {id: 'mandatory-break', state: 'unavailable'}]);
+  expect(expired.sections.some(section => 'urgency' in section)).toBe(false);
+  const malformed = {...BREAK_NOW, sections: 'x'} as unknown as OverlayPresentation;
+  expect(overlayUrgency(malformed)).toBe(malformed);
+});
+it('composes with the gauge rule in either order', () => {
+  const both: OverlayPresentation = {...BREAK_NOW, sections: [{id: 'speed', state: 'value', text: '90 km/h', speedRing: 2, urgency: 'due'},
+    {id: 'mandatory-break', state: 'value', text: '0 min', urgency: 'due', ring: 0.5}]};
+  const expected = {...BREAK_NOW, sections: [{id: 'speed', state: 'value', text: '90 km/h'}, {id: 'mandatory-break', state: 'value', text: '0 min', urgency: 'due'}]};
+  expect(overlayUrgency(overlayGauges(both))).toEqual(expected);
+  expect(overlayGauges(overlayUrgency(both))).toEqual(expected);
 });

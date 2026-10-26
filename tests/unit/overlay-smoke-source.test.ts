@@ -125,11 +125,11 @@ describe('ET-012c strip containment observation', () => {
   interface Layout {sections?: string[]; roots?: number; layout?: string; freshness?: string; viewport?: {innerWidth: number; innerHeight: number};
     root?: Box; row?: Box; item?: Record<string, Box>; maxWidth?: Record<string, string>; truncated?: string[]}
   const rect = ({left, top, width, height}: Box) => ({left, top, width, height, right: left + width, bottom: top + height});
-  // ET-045e: the product's 1280 x 56 DIP strip at zoom 0.7 has a 1828 x 80 CSS viewport. The root fills it, the strip row
-  // is 1808 wide and 80 high, and every item is 90 x 36 on the first row after a 96 px synthetic tag. `item` moves single
+  // ET-045e: the product's 1280 x 56 DIP strip at zoom 0.7 has a 1828 x 80 CSS viewport; ET-052's third row makes it 82 DIP,
+  // 1828 x 117 CSS px (117.14). The root fills it, the strip row is 1808 wide and 117 high, and every item is 90 x 36 on the first row after a 96 px synthetic tag. `item` moves single
   // sections; `maxWidth` overrides computed maximum widths.
-  function stripDocument({sections = EXPECTED, roots = 1, layout = 'strip', freshness = 'current', root = {left: 0, top: 0, width: 1828, height: 80},
-    row = {left: 10, top: 0, width: 1808, height: 80}, item = {}, truncated = []}: Layout = {}) {
+  function stripDocument({sections = EXPECTED, roots = 1, layout = 'strip', freshness = 'current', root = {left: 0, top: 0, width: 1828, height: 117},
+    row = {left: 10, top: 0, width: 1808, height: 117}, item = {}, truncated = []}: Layout = {}) {
     const node = (testId: string, box: Box, extra: Record<string, unknown> = {}) => ({testId, className: testId === 'overlay-tag-origin' ? 'overlay-tag' : 'overlay-item',
       getAttribute: (name: string) => name === 'data-testid' ? testId : null, getBoundingClientRect: () => rect(box), ...extra});
     const nodes = sections.map((id, index) => node(`overlay-section-${id}`, item[id] ?? {left: 120 + index * 100, top: 1, width: 90, height: 36},
@@ -142,7 +142,7 @@ describe('ET-012c strip containment observation', () => {
   }
   async function observeStrip(layout: Layout = {}, expected: string[] = EXPECTED) {
     const {stripLayoutObservation} = await import(observationModule);
-    const viewport = layout.viewport ?? {innerWidth: 1828, innerHeight: 80};
+    const viewport = layout.viewport ?? {innerWidth: 1828, innerHeight: 117};
     // The exact-state form also protects the callback from requiring module closures; the JSON round trip stands in for
     // Playwright's serialization, which returns plain objects of this realm.
     return JSON.parse(JSON.stringify(runInNewContext(`(${stripLayoutObservation.toString()})(expected)`, {expected: {sections: expected},
@@ -153,15 +153,16 @@ describe('ET-012c strip containment observation', () => {
     const {STRIP_SMOKE_SECTIONS, STRIP_SMOKE_WINDOW} = await import(observationModule);
     expect(STRIP_SMOKE_SECTIONS).toEqual(EXPECTED);
     // ET-045e: 56 / 0.7 = 80 CSS px within one DIP and one CSS px of rounding (verifier round 1); 1280 / 0.7 = 1828.57 at most.
-    expect(STRIP_SMOKE_WINDOW).toEqual({innerHeight: 80, heightTolerance: 1 / 0.7 + 0.5, minWidth: 480, maxWidth: 1829});
+    // ET-052: the fifteenth section needs a third row, so the window is 82 DIP and 82 / 0.7 = 117.14 CSS px.
+    expect(STRIP_SMOKE_WINDOW).toEqual({innerHeight: 117, heightTolerance: 1 / 0.7 + 0.5, minWidth: 480, maxWidth: 1829});
   });
   it('reports every shown section inside the window and the strip row, every item capped, and records truncation and rows', async () => {
-    expect(await observeStrip({truncated: ['cargo']})).toEqual({viewport: {innerWidth: 1828, innerHeight: 80}, sections: EXPECTED,
+    expect(await observeStrip({truncated: ['cargo']})).toEqual({viewport: {innerWidth: 1828, innerHeight: 117}, sections: EXPECTED,
       outside: [], uncapped: [], truncated: ['cargo'], rows: 1});
   });
   it.each([
     {name: 'below the window', item: {'game-time': {left: 120, top: 117, width: 90, height: 36}}},
-    {name: 'partly below the window', item: {'game-time': {left: 120, top: 60, width: 90, height: 36}}},
+    {name: 'partly below the window', item: {'game-time': {left: 120, top: 90, width: 90, height: 36}}},
     {name: 'past the right edge', item: {'game-time': {left: 1800, top: 1, width: 90, height: 36}}},
     {name: 'outside only the strip row', row: {left: 10, top: 0, width: 1260, height: 38}, item: {'game-time': {left: 120, top: 37, width: 90, height: 36}}},
     {name: 'with an empty box', item: {'game-time': {left: 120, top: 1, width: 0, height: 36}}}
@@ -195,16 +196,17 @@ describe('ET-012c strip containment observation', () => {
   });
   it('accepts a window the screen narrowed, but never another height or a width outside the strip limits', async () => {
     // Windows limits a window to the screen size: on a 1024-wide hosted runner screen the hidden overlay, created
-    // 1280 x 56 DIP at zoom 0.7 and never placed without a game window, is 1024 DIP wide, a 1462 x 80 CSS viewport
+    // 1280 x 82 DIP at zoom 0.7 and never placed without a game window, is 1024 DIP wide, a 1462 x 117 CSS viewport
     // (ET-045e; CI run 38878781715 saw the 1024 DIP width at zoom 1).
     const {verifyStripLayout} = await import(observationModule);
-    const narrow = await observeStrip({viewport: {innerWidth: 1462, innerHeight: 80}});
+    const narrow = await observeStrip({viewport: {innerWidth: 1462, innerHeight: 117}});
     expect(verifyStripLayout(narrow)).toBe(narrow);
-    for (const viewport of [{innerWidth: 480, innerHeight: 80}, {innerWidth: 1829, innerHeight: 80}, {innerWidth: 1462, innerHeight: 79}, {innerWidth: 1462, innerHeight: 81}])
+    // ET-052: the height is 117 within 1 / 0.7 + 0.5 = 1.93 CSS px: 116 and 118 pass; 114, 119, the earlier 80 and 56 fail.
+    for (const viewport of [{innerWidth: 480, innerHeight: 117}, {innerWidth: 1829, innerHeight: 117}, {innerWidth: 1462, innerHeight: 116}, {innerWidth: 1462, innerHeight: 118}])
       expect(verifyStripLayout({...narrow, viewport}), JSON.stringify(viewport)).toBeTruthy();
-    for (const viewport of [{innerWidth: 1462, innerHeight: 56}, {innerWidth: 1462, innerHeight: 78}, {innerWidth: 1462, innerHeight: 82}, {innerWidth: 1462, innerHeight: 116}])
+    for (const viewport of [{innerWidth: 1462, innerHeight: 56}, {innerWidth: 1462, innerHeight: 80}, {innerWidth: 1462, innerHeight: 114}, {innerWidth: 1462, innerHeight: 119}])
       expect(() => verifyStripLayout({...narrow, viewport}), JSON.stringify(viewport)).toThrow('The strip overlay window must have its reserved size');
-    for (const viewport of [{innerWidth: 479, innerHeight: 80}, {innerWidth: 1830, innerHeight: 80}])
+    for (const viewport of [{innerWidth: 479, innerHeight: 117}, {innerWidth: 1830, innerHeight: 117}])
       expect(() => verifyStripLayout({...narrow, viewport}), JSON.stringify(viewport)).toThrow('The strip overlay window width must lie between 480 and 1829');
     // Containment still applies to the narrowed window.
     expect(() => verifyStripLayout({...narrow, outside: ['game-time']})).toThrow('Enabled strip sections lie outside the overlay window');
@@ -212,19 +214,20 @@ describe('ET-012c strip containment observation', () => {
 });
 
 describe('ET-012d card, cluster and HUD containment observation', () => {
-  // Hand-derived from the shared v0 and v1 smoke fixtures (SYNTHETIC_V1_STRIP_SECTIONS): the twelve sections the
-  // telemetry smoke shows, in canonical order, which is also the cluster's DOM order (gauge, then panel).
+  // Hand-derived from the shared v0 and v1 smoke fixtures (SYNTHETIC_V1_STRIP_SECTIONS): the thirteen sections the
+  // telemetry smoke shows (twelve before ET-052 added the 95-minute break), in canonical order, which is also the cluster's DOM
+  // order (gauge, then panel).
   const EXPECTED = ['speed', 'gear', 'rpm', 'fuel', 'sdk-consumption', 'cargo', 'origin', 'destination', 'distance-remaining', 'deadline',
-    'expected-income', 'game-time'];
-  // The reserved CSS heights for those twelve sections: card 48 + 24 × 12 = 336, cluster 36 + 21 × 9 = 225 and HUD
-  // 18 + 24 × 12 = 306. ET-045e: the product windows at the scale setting 1 (zoom 0.7) are, in DIP, the card's nominal
-  // floor round(300 × 0.7) × round(360 × 0.7) = 210 × 252 (ceil(334 × 0.7 + 2) = 236 is lower), the cluster 308 wide and
-  // ceil(223 × 0.7 + 2) = 159 high, and the HUD's floor 224 × 224 (ceil(306 × 0.7) = 215 is lower). Their CSS viewports,
-  // which the fake documents below fill, are 300 × 360, 440 × 227 (159 / 0.7 = 227.14) and 320 × 320.
-  const WINDOWS = {card: {width: 210, height: 252}, cluster: {width: 308, height: 159}, hud: {width: 224, height: 224}};
+    'expected-income', 'game-time', 'mandatory-break'];
+  // The reserved CSS heights for those thirteen sections: card 48 + 24 × 13 = 360, cluster 36 + 21 × 10 = 246 and HUD
+  // 18 + 24 × 13 = 330. ET-045e: the product windows at the scale setting 1 (zoom 0.7) are, in DIP, ET-052 re-derived: the card
+  // ceil(358 × 0.7 + 2) = 253 high (above its nominal floor of 252) by round(300 × 0.7) = 210, the cluster 308 wide and
+  // ceil(244 × 0.7 + 2) = 173 high, and the HUD ceil(330 × 0.7) = 231 high (above its floor of 224) by 224. Their CSS viewports,
+  // which the fake documents below fill, are 300 × 361 (253 / 0.7 = 361.43), 440 × 247 (173 / 0.7 = 247.14) and 320 × 330.
+  const WINDOWS = {card: {width: 210, height: 253}, cluster: {width: 308, height: 173}, hud: {width: 224, height: 231}};
   const ZOOM = 0.7;
-  const VIEWPORTS = {card: {width: 300, height: 360}, cluster: {width: 440, height: 227}, hud: {width: 320, height: 320}};
-  const RESERVED = {card: 336, cluster: 225, hud: 306};
+  const VIEWPORTS = {card: {width: 300, height: 361}, cluster: {width: 440, height: 247}, hud: {width: 320, height: 330}};
+  const RESERVED = {card: 360, cluster: 246, hud: 330};
   type LayoutName = keyof typeof WINDOWS;
   type Box = {left: number; top: number; width: number; height: number};
   interface Containment {layout?: string; sections?: string[]; roots?: number; freshness?: string; viewport?: {innerWidth: number; innerHeight: number};
@@ -312,24 +315,26 @@ describe('ET-012d card, cluster and HUD containment observation', () => {
       expect(frame, layout).toEqual({width: product.width, height: layout === 'strip' ? Math.max(38, product.height) : product.height});
     }
   });
-  // The fake rows end at 28 + 21 × 11 + 18 = 277 in the card and HUD and at 28 + 21 × 8 + 18 = 214 in the cluster panel.
-  const BOTTOM = {card: 277, cluster: 214, hud: 277};
-  // Each surface fills the viewport's height: the card body and HUD lines from 0 to 360 and 320, the cluster panel to 227.
-  const SURFACE = {card: {className: 'overlay-surface overlay-card-body', top: 0, bottom: 360, inside: true},
-    cluster: {className: 'overlay-surface overlay-panel', top: 0, bottom: 227, inside: true}, hud: {className: 'overlay-hud-lines', top: 0, bottom: 320, inside: true}};
+  // The fake rows end at 28 + 21 × 12 + 18 = 298 in the card and HUD (277 with twelve sections) and at 28 + 21 × 9 + 18 = 235 in
+  // the cluster panel (214).
+  const BOTTOM = {card: 298, cluster: 235, hud: 298};
+  // Each surface fills the viewport's height: the card body and HUD lines from 0 to 361 and 330, the cluster panel to 247.
+  const SURFACE = {card: {className: 'overlay-surface overlay-card-body', top: 0, bottom: 361, inside: true},
+    cluster: {className: 'overlay-surface overlay-panel', top: 0, bottom: 247, inside: true}, hud: {className: 'overlay-hud-lines', top: 0, bottom: 330, inside: true}};
   it.each(['card', 'cluster', 'hud'] as const)('reports every shown %s section inside the window and records truncation', async layout => {
     expect(await observeLayout(layout, {truncated: ['origin']})).toEqual({layout, viewport: {innerWidth: VIEWPORTS[layout].width, innerHeight: VIEWPORTS[layout].height},
       sections: EXPECTED, outside: [], clipped: [], bottom: BOTTOM[layout], surfaces: [SURFACE[layout]], truncated: ['origin']});
   });
-  it.each([
+  it.each<{name: string; layout: 'card' | 'cluster' | 'hud'; options: Containment}>([
     {name: 'below the card window', layout: 'card' as const, options: {item: {'game-time': {left: 10, top: 384, width: 200, height: 18}}}},
-    {name: 'partly below the HUD window', layout: 'hud' as const, options: {item: {'game-time': {left: 10, top: 310, width: 200, height: 18}}}},
+    {name: 'partly below the HUD window', layout: 'hud' as const, options: {item: {'game-time': {left: 10, top: 320, width: 200, height: 18}}}},
     // ET-012a's cluster panel was capped at 200 px and clipped its last row inside a taller window.
     {name: 'outside only the clipping cluster panel', layout: 'cluster' as const,
-      options: {clip: {left: 210, top: 0, width: 230, height: 200}, item: {'game-time': {left: 220, top: 205, width: 200, height: 18}}}},
-    // Expected income's row ends at 28 + 21 × 10 + 18 = 256, inside the 260 px body.
+      // ET-052: the break's default row would lie outside the 200 px panel as well, so it is moved inside it.
+      options: {clip: {left: 210, top: 0, width: 230, height: 200}, item: {'game-time': {left: 220, top: 205, width: 200, height: 18}, 'mandatory-break': {left: 220, top: 100, width: 200, height: 18}}}},
+    // Expected income's row ends at 28 + 21 × 10 + 18 = 256, inside the 260 px body; the break is moved inside it too.
     {name: 'outside only the clipping card body', layout: 'card' as const,
-      options: {clip: {left: 0, top: 0, width: 300, height: 260}, item: {'game-time': {left: 10, top: 262, width: 200, height: 18}}}},
+      options: {clip: {left: 0, top: 0, width: 300, height: 260}, item: {'game-time': {left: 10, top: 262, width: 200, height: 18}, 'mandatory-break': {left: 10, top: 100, width: 200, height: 18}}}},
     {name: 'with an empty box', layout: 'hud' as const, options: {item: {'game-time': {left: 10, top: 259, width: 0, height: 18}}}}
   ])('lists a section $name as outside', async ({layout, options}) => {
     expect(await observeLayout(layout, options)).toMatchObject({outside: ['game-time'], clipped: []});
@@ -353,10 +358,11 @@ describe('ET-012d card, cluster and HUD containment observation', () => {
       value: {rpm: {left: 75, top: 205.7291717529297, width: 50, height: 15.59375}}})).toMatchObject({outside: [], clipped: []});
     expect(await observeLayout('card', {value: {cargo: {left: 110, top: 133, width: 60, height: 18.02}}})).toMatchObject({clipped: ['cargo']});
     // A HUD line flush with the bottom of its clipping container, with noise, is inside; 0.02 px past it is outside.
-    expect(await observeLayout('hud', {clip: {left: 0, top: 0, width: 320, height: 277}, item: {'game-time': {left: 10, top: 259, width: 200, height: 18.000004}}}))
+    // ET-052: the lowest default row is now the break's, ending at 298.
+    expect(await observeLayout('hud', {clip: {left: 0, top: 0, width: 320, height: 298}, item: {'mandatory-break': {left: 10, top: 280, width: 200, height: 18.000004}}}))
       .toMatchObject({outside: [], clipped: []});
-    expect(await observeLayout('hud', {clip: {left: 0, top: 0, width: 320, height: 277}, item: {'game-time': {left: 10, top: 259, width: 200, height: 18.02}}}))
-      .toMatchObject({outside: ['game-time']});
+    expect(await observeLayout('hud', {clip: {left: 0, top: 0, width: 320, height: 298}, item: {'mandatory-break': {left: 10, top: 280, width: 200, height: 18.02}}}))
+      .toMatchObject({outside: ['mandatory-break']});
   });
   it.each([
     {name: 'another layout', options: {layout: 'strip'}},
@@ -375,22 +381,23 @@ describe('ET-012d card, cluster and HUD containment observation', () => {
     expect(verifyLayoutContainment(valid, WINDOWS.cluster, RESERVED.cluster, ZOOM)).toBe(valid);
     expect(() => verifyLayoutContainment({...valid, outside: ['game-time']}, WINDOWS.cluster, RESERVED.cluster, ZOOM)).toThrow('Enabled overlay sections lie outside the overlay window');
     expect(() => verifyLayoutContainment({...valid, clipped: ['fuel']}, WINDOWS.cluster, RESERVED.cluster, ZOOM)).toThrow('Overlay section values are clipped by their rows');
-    // ET-045e verifier round 1 and review: at zoom 0.7 the 308 x 159 DIP window is 440 x 227.14 CSS px, and the viewport
-    // may differ by one DIP of rounding (1 / 0.7 CSS px) plus half a CSS px, 1.93 CSS px either way: 439 x 226 and
-    // 441 x 229 pass; 438, 442, 230 and the ET-045d cluster's 225 and 267 fail.
+    // ET-045e verifier round 1 and review: at zoom 0.7 the window is 440 CSS px wide and the viewport may differ by one DIP of
+    // rounding (1 / 0.7 CSS px) plus half a CSS px, 1.93 CSS px either way. ET-052 re-derived: the 308 x 173 DIP window is
+    // 440 x 247.14 CSS px, so 439 x 246 and 441 x 249 pass; 438, 442, 245, 250 and the earlier cluster's 227 and 267 fail.
     expect(zoomedViewportTolerance(ZOOM)).toBeCloseTo(1 / 0.7 + 0.5, 12);
-    for (const viewport of [{innerWidth: 439, innerHeight: 226}, {innerWidth: 441, innerHeight: 229}, {innerWidth: 440, innerHeight: 227}])
+    for (const viewport of [{innerWidth: 439, innerHeight: 246}, {innerWidth: 441, innerHeight: 249}, {innerWidth: 440, innerHeight: 247}])
       expect(verifyLayoutContainment({...valid, viewport}, WINDOWS.cluster, RESERVED.cluster, ZOOM), JSON.stringify(viewport)).toBeTruthy();
-    for (const viewport of [{innerWidth: 438, innerHeight: 227}, {innerWidth: 442, innerHeight: 227}, {innerWidth: 440, innerHeight: 225},
-      {innerWidth: 440, innerHeight: 230}, {innerWidth: 440, innerHeight: 267}])
+    for (const viewport of [{innerWidth: 438, innerHeight: 247}, {innerWidth: 442, innerHeight: 247}, {innerWidth: 440, innerHeight: 245},
+      {innerWidth: 440, innerHeight: 250}, {innerWidth: 440, innerHeight: 227}, {innerWidth: 440, innerHeight: 267}])
       expect(() => verifyLayoutContainment({...valid, viewport}, WINDOWS.cluster, RESERVED.cluster, ZOOM), JSON.stringify(viewport))
         .toThrow('The overlay window must have the reserved size');
-    // The verifier's 150% run: the cluster's content read back as 308 x 160 DIP (440 x 228.57 CSS) with a 440 x 229
-    // viewport, which passes against that actual size. A content size two DIP off the viewport (308 x 161, 230 CSS) fails.
-    const actual = verifyAppliedWindow(WINDOWS.cluster, {width: 308, height: 160});
-    for (const viewport of [{innerWidth: 440, innerHeight: 229}, {innerWidth: 440, innerHeight: 228}])
+    // The verifier's 150% run read the cluster's content back one DIP high; re-derived (ET-052): 308 x 174 DIP (440 x 248.57 CSS)
+    // with a 440 x 249 viewport passes against that actual size. A content size two DIP off the viewport (308 x 175, 250 CSS
+    // against 247) fails.
+    const actual = verifyAppliedWindow(WINDOWS.cluster, {width: 308, height: 174});
+    for (const viewport of [{innerWidth: 440, innerHeight: 249}, {innerWidth: 440, innerHeight: 248}])
       expect(verifyLayoutContainment({...valid, viewport}, actual, RESERVED.cluster, ZOOM), JSON.stringify(viewport)).toBeTruthy();
-    expect(() => verifyLayoutContainment({...valid, viewport: {innerWidth: 440, innerHeight: 227}}, verifyAppliedWindow(WINDOWS.cluster, {width: 308, height: 161}),
+    expect(() => verifyLayoutContainment({...valid, viewport: {innerWidth: 440, innerHeight: 247}}, verifyAppliedWindow(WINDOWS.cluster, {width: 308, height: 175}),
       RESERVED.cluster, ZOOM)).toThrow('The overlay window must have the reserved size');
     // At zoom 1 the CSS viewport is the DIP window, which getBounds can round up by one DIP: 300 x 360 and 301 x 361 pass
     // for a 300 x 360 window; one pixel short or two over fails.
@@ -403,51 +410,52 @@ describe('ET-012d card, cluster and HUD containment observation', () => {
   });
   it('accepts an applied window within one DIP below and two above the request and refuses any other', async () => {
     const {verifyAppliedWindow} = await import(observationModule);
-    for (const actual of [{width: 308, height: 159}, {width: 309, height: 160}, {width: 307, height: 161}, {width: 310, height: 158}])
+    for (const actual of [{width: 308, height: 173}, {width: 309, height: 174}, {width: 307, height: 175}, {width: 310, height: 172}])
       expect(verifyAppliedWindow(WINDOWS.cluster, actual), JSON.stringify(actual)).toBe(actual);
-    for (const actual of [{width: 306, height: 159}, {width: 311, height: 159}, {width: 308, height: 157}, {width: 308, height: 162},
-      {width: Number.NaN, height: 159}, undefined])
+    for (const actual of [{width: 306, height: 173}, {width: 311, height: 173}, {width: 308, height: 171}, {width: 308, height: 176},
+      {width: Number.NaN, height: 173}, undefined])
       expect(() => verifyAppliedWindow(WINDOWS.cluster, actual), JSON.stringify(actual)).toThrow('The overlay window was not applied at the requested size');
   });
   it('requires the lowest section to end within the reserved height of the shown sections', async () => {
     const {verifyLayoutContainment} = await import(observationModule);
-    // A card row below the reserve but inside the window and its body: 48 + 24 × 12 = 336 CSS px reserved, 360 window.
-    const low = await observeLayout('card', {item: {'game-time': {left: 10, top: 320, width: 200, height: 18}}});
-    expect(low).toMatchObject({outside: [], clipped: [], bottom: 338});
+    // A card row below the reserve but inside the window and its body: 48 + 24 × 13 = 360 CSS px reserved, 361 window.
+    const low = await observeLayout('card', {item: {'mandatory-break': {left: 10, top: 343, width: 200, height: 18}}});
+    expect(low).toMatchObject({outside: [], clipped: [], bottom: 361});
     expect(() => verifyLayoutContainment(low, WINDOWS.card, RESERVED.card, ZOOM)).toThrow('Overlay sections extend below the height the row model reserves');
     const valid = await observeLayout('card');
-    expect(verifyLayoutContainment({...valid, bottom: 336}, WINDOWS.card, RESERVED.card, ZOOM)).toBeTruthy();
-    expect(verifyLayoutContainment({...valid, bottom: 336.005}, WINDOWS.card, RESERVED.card, ZOOM)).toBeTruthy();
-    for (const bottom of [336.02, Number.NaN]) expect(() => verifyLayoutContainment({...valid, bottom}, WINDOWS.card, RESERVED.card, ZOOM), String(bottom))
+    expect(verifyLayoutContainment({...valid, bottom: 360}, WINDOWS.card, RESERVED.card, ZOOM)).toBeTruthy();
+    expect(verifyLayoutContainment({...valid, bottom: 360.005}, WINDOWS.card, RESERVED.card, ZOOM)).toBeTruthy();
+    for (const bottom of [360.02, Number.NaN]) expect(() => verifyLayoutContainment({...valid, bottom}, WINDOWS.card, RESERVED.card, ZOOM), String(bottom))
       .toThrow('Overlay sections extend below the height the row model reserves');
     expect(() => verifyLayoutContainment(valid, WINDOWS.card, undefined, ZOOM)).toThrow('Overlay sections extend below the height the row model reserves');
   });
-  // Review pass 2: the cluster's panel is bottom-aligned, so 2 px the model does not count above each of its nine rows
-  // grows it by 18 px upwards, to {210, −18, 230, 245} in the 227 px viewport, while its rows stay in the window. Measured
-  // from the root's top the lowest row would still end at 214; measured from the panel's top it ends at 214 + 18 = 232.
-  const GROWN_PANEL = {left: 210, top: -18, width: 230, height: 245};
+  // Review pass 2: the cluster's panel is bottom-aligned, so 2 px the model does not count above each of its ten rows
+  // grows it by 20 px upwards, to {210, −20, 230, 267} in the 247 px viewport, while its rows stay in the window. Measured
+  // from the root's top the lowest row would still end at 235; measured from the panel's top it ends at 235 + 20 = 255.
+  const GROWN_PANEL = {left: 210, top: -20, width: 230, height: 267};
   it('measures the lowest row from the top of its surface and records the surface', async () => {
     const grown = await observeLayout('cluster', {clip: GROWN_PANEL});
-    expect(grown).toMatchObject({outside: [], clipped: [], bottom: 232,
-      surfaces: [{className: 'overlay-surface overlay-panel', top: -18, bottom: 227, inside: false}]});
-    // The gauge sections have no surface and are measured from the root: a speed box ending at 224 is the lowest.
-    expect(await observeLayout('cluster', {item: {speed: {left: 50, top: 200, width: 100, height: 24}}})).toMatchObject({bottom: 224});
+    expect(grown).toMatchObject({outside: [], clipped: [], bottom: 255,
+      surfaces: [{className: 'overlay-surface overlay-panel', top: -20, bottom: 247, inside: false}]});
+    // The gauge sections have no surface and are measured from the root: a speed box ending at 224 is the lowest... unless a panel
+    // row lies lower; ET-052's break row ends at 235, so a speed box ending at 244 (top 220, height 24) is the lowest.
+    expect(await observeLayout('cluster', {item: {speed: {left: 50, top: 220, width: 100, height: 24}}})).toMatchObject({bottom: 244});
     // Review pass 3 changed the requirement: a top-aligned surface pushed down from the root's top (a card body that
-    // starts 10 px down) is measured from the root's top, the higher of the two, so the offset counts: 277, not 277 − 10.
-    expect(await observeLayout('card', {clip: {left: 0, top: 10, width: 300, height: 350}})).toMatchObject({bottom: 277,
-      surfaces: [{className: 'overlay-surface overlay-card-body', top: 10, bottom: 360, inside: true}]});
+    // starts 10 px down) is measured from the root's top, the higher of the two, so the offset counts: 298, not 298 − 10.
+    expect(await observeLayout('card', {clip: {left: 0, top: 10, width: 300, height: 351}})).toMatchObject({bottom: 298,
+      surfaces: [{className: 'overlay-surface overlay-card-body', top: 10, bottom: 361, inside: true}]});
   });
   it('rejects a surface outside the window and an unexpected number of surfaces', async () => {
     const {verifyLayoutContainment} = await import(observationModule);
     const grown = await observeLayout('cluster', {clip: GROWN_PANEL}) as {surfaces: Record<string, unknown>[]};
     expect(() => verifyLayoutContainment(grown, WINDOWS.cluster, RESERVED.cluster, ZOOM)).toThrow('The overlay surface lies outside the overlay window');
-    // Even with the surface inside, the lowest row 232 below the panel's top exceeds the 225 reserve.
+    // Even with the surface inside, the lowest row 255 below the panel's top exceeds the 246 reserve.
     const inside = {...grown, surfaces: [{...grown.surfaces[0], inside: true}]};
     expect(() => verifyLayoutContainment(inside, WINDOWS.cluster, RESERVED.cluster, ZOOM)).toThrow('Overlay sections extend below the height the row model reserves');
-    // The reviewer's pass-3 case: a 20 px margin above the card body moves its last row to {10, 320, 200, 18}. From the
-    // root's top it ends at 338, past the 336 reserve; from the body's top it would end at 318 and pass.
-    const pushed = await observeLayout('card', {clip: {left: 0, top: 20, width: 300, height: 340}, item: {'game-time': {left: 10, top: 320, width: 200, height: 18}}});
-    expect(pushed).toMatchObject({outside: [], clipped: [], bottom: 338, surfaces: [{top: 20, inside: true}]});
+    // The reviewer's pass-3 case: a 20 px margin above the card body moves its last row to {10, 343, 200, 18}. From the
+    // root's top it ends at 361, past the 360 reserve; from the body's top it would end at 341 and pass.
+    const pushed = await observeLayout('card', {clip: {left: 0, top: 20, width: 300, height: 341}, item: {'mandatory-break': {left: 10, top: 343, width: 200, height: 18}}});
+    expect(pushed).toMatchObject({outside: [], clipped: [], bottom: 361, surfaces: [{top: 20, inside: true}]});
     expect(() => verifyLayoutContainment(pushed, WINDOWS.card, RESERVED.card, ZOOM)).toThrow('Overlay sections extend below the height the row model reserves');
     const valid = await observeLayout('cluster') as {surfaces: Record<string, unknown>[]};
     for (const surfaces of [[], [valid.surfaces[0], valid.surfaces[0]], undefined])
