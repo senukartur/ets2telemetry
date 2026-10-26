@@ -125,6 +125,16 @@ Journal reads one cursor page at a time and updates only on Refresh. Its wide ta
 
 Open **Settings → Overlay** and change **Show overlay** (Russian: **Показывать оверлей**). The switch changes after saving succeeds and stays saved after restarting. Hiding the overlay keeps telemetry updating. It does not change whether recording is available. Turning it off during position editing discards unsaved position and size changes; editing is unavailable while it is off. Turning it on shows it when a supported game is in front and current telemetry/window information is available. If saving fails, the previous setting and edit draft stay in effect.
 
+## Next mandatory break on the overlay (ET-052)
+
+The overlay has an extra section, **Next mandatory break** (Russian: **До обязательного перерыва**), shown with a coffee-cup icon and, in the strip, cluster panel and HUD, the short name **Break** (**Перерыв**). It shows the in-game time left until the game requires a break, for example `1 h 35 min`. It appears when the game's plugin provides the value: with an older plugin still loaded in a running game, or when the game reports no value, it shows a dash (`—`) instead of a zero.
+
+- **Colours and words.** From 1 to 119 minutes the value is orange and the item is announced as "soon"; at zero or less it reads `0 min`, is red and underlined and is announced as "due now". From two hours it has the normal colour. The colour is never the only cue: the underline and the announced word carry the state too.
+- **Settings.** It is on by default, also after an update from an earlier version, and you can switch it off in **Settings → Overlay → Sections**. The **Everything** preset includes it; **Job focus** and **Driving only** do not.
+- **Bigger windows.** One more section makes the Card, the Cluster panel and the Minimal HUD one row taller, and the strip can take a third row. The extra space is transparent.
+- **Older versions.** After this version has saved your settings, an earlier version of the application treats the settings file as written by a newer version: it uses defaults and does not save until you run this version again.
+- **Not recorded.** The value is only shown live; it is not saved in the journal or the export.
+
 ## Overlay size (ET-045e)
 
 In **Settings → Overlay**, **Edit position** shows **Smaller** and **Larger** (Russian: **Меньше** and **Больше**), which change the overlay's size in 10% steps from 50% to 300%. Since this version 100% is the size that earlier versions showed at 70%, so a size you saved before now looks about 30% smaller; choose a larger percentage (for example 70% instead of 50%) to keep the earlier look. The strip keeps its full width inside the game window at 100% and below and only its text gets smaller. Once this version saves a setting, earlier versions show default settings and cannot save until this version runs again; keep a separate Windows user profile for older test builds.
