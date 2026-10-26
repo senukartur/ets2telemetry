@@ -448,12 +448,14 @@ const AUTO = {ets2: 'automatic', ats: 'automatic'} as const;
 // id, in both languages; L and H stay Latin in RU. Anything else keeps the GD2 formula.
 describe('gearbox-aware gear labels (ET-050b)', () => {
   const UNITS = {ets2: 'metric', ats: 'us-customary'} as const, MANUAL = {ets2: 'manual', ats: 'manual'} as const;
+  // The Mack is an ATS truck: ATS sources name its crawler LL/LH (B5 as amended on October 26, 2026).
+  const ATS = {game: 'ats'} as const;
   it.each(['en', 'ru'] as const)('shows the Mack layout labels in %s', language => {
     for (const [gear, text] of [[1, 'LL'], [2, 'LH'], [3, '1L'], [18, '8H'], [-2, 'R2'], [0, 'N']] as const)
-      expect(values(liveDashboardText(gearboxPair(gear), UNITS, language, MANUAL)).gear).toBe(text);
-    expect(values(liveDashboardText(gearboxPair(1), UNITS, language, AUTO)).gear).toBe('1');
-    expect(values(liveDashboardText(gearboxPair(1, {truckId: 'vehicle.synthetic_truck'}), UNITS, language, MANUAL)).gear).toBe('1L');
-    expect(values(liveDashboardText(gearboxPair(18, {v1: {status: 'stale', fresh: false}}), UNITS, language, MANUAL)).gear).toBe('9H');
-    expect(values(liveDashboardText(gearboxPair(1, {gearbox: NOT_SUPPORTED_GEARBOX}), UNITS, language, MANUAL)).gear).toBe('1L');
+      expect(values(liveDashboardText(gearboxPair(gear, ATS), UNITS, language, MANUAL)).gear).toBe(text);
+    expect(values(liveDashboardText(gearboxPair(1, ATS), UNITS, language, AUTO)).gear).toBe('1');
+    expect(values(liveDashboardText(gearboxPair(1, {...ATS, truckId: 'vehicle.synthetic_truck'}), UNITS, language, MANUAL)).gear).toBe('1L');
+    expect(values(liveDashboardText(gearboxPair(18, {...ATS, v1: {status: 'stale', fresh: false}}), UNITS, language, MANUAL)).gear).toBe('9H');
+    expect(values(liveDashboardText(gearboxPair(1, {...ATS, gearbox: NOT_SUPPORTED_GEARBOX}), UNITS, language, MANUAL)).gear).toBe('1L');
   });
 });

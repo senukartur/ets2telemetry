@@ -137,14 +137,15 @@ describe('gear display mode on the Live instrument (ET-050)', () => {
 
 // ET-050b B6: the Live instrument shows the current v1 truck's gearbox labels in manual mode through the same field.
 describe('gearbox-aware labels on the Live instrument (ET-050b)', () => {
-  const manual = {ets2: 'manual', ats: 'automatic'} as const;
+  // The Mack is an ATS truck: ATS sources name its crawler LL/LH (B5 as amended on October 26, 2026).
+  const manual = {ets2: 'automatic', ats: 'manual'} as const, ATS = {game: 'ats'} as const;
   const gear = (live: LiveTelemetry, modes?: {ets2: 'automatic' | 'manual'; ats: 'automatic' | 'manual'}) => desktopLiveView(live, undefined, modes).sources.field('gear');
   it('shows LL, 1L and 8H for the Mack layout and the formula otherwise', () => {
-    for (const [value, text] of [[1, 'LL'], [3, '1L'], [18, '8H']] as const) expect(gear(gearboxPair(value), manual)).toMatchObject({state: 'value', text});
-    expect(gear(gearboxPair(1))).toMatchObject({text: '1'});
-    expect(gear(gearboxPair(1, {truckId: 'vehicle.synthetic_truck'}), manual)).toMatchObject({text: '1L'});
-    expect(gear(gearboxPair(1, {v1: {status: 'stale', fresh: false}}), manual)).toMatchObject({text: '1L'});
+    for (const [value, text] of [[1, 'LL'], [3, '1L'], [18, '8H']] as const) expect(gear(gearboxPair(value, ATS), manual)).toMatchObject({state: 'value', text});
+    expect(gear(gearboxPair(1, ATS))).toMatchObject({text: '1'});
+    expect(gear(gearboxPair(1, {...ATS, truckId: 'vehicle.synthetic_truck'}), manual)).toMatchObject({text: '1L'});
+    expect(gear(gearboxPair(1, {...ATS, v1: {status: 'stale', fresh: false}}), manual)).toMatchObject({text: '1L'});
     // A minor-0 source: every gearbox part is not-supported (B7).
-    expect(gear(gearboxPair(1, {gearbox: NOT_SUPPORTED_GEARBOX}), manual)).toMatchObject({text: '1L'});
+    expect(gear(gearboxPair(1, {...ATS, gearbox: NOT_SUPPORTED_GEARBOX}), manual)).toMatchObject({text: '1L'});
   });
 });

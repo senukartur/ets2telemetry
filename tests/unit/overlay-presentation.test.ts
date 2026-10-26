@@ -465,14 +465,15 @@ it('formats the gear section in the displayed game\'s gear display mode only', (
 // ET-050b B6: the overlay's gear section uses the same labels as the dashboard, from the one liveSources point; every
 // layout renders that text (overlay-rendering.test.ts).
 it('formats the gear section with the current Mack layout labels in manual mode only', () => {
-  const manual = {ets2: 'manual', ats: 'automatic'} as const;
+  // The Mack is an ATS truck: ATS sources name its crawler LL/LH (B5 as amended on October 26, 2026).
+  const manual = {ets2: 'automatic', ats: 'manual'} as const, ATS = {game: 'ats'} as const;
   const gearOf = (current: LiveTelemetry, gearDisplay?: {ets2: 'automatic' | 'manual'; ats: 'automatic' | 'manual'}) =>
     overlayPresentation(current, undefined, undefined, undefined, false, 'ru', gearDisplay).sections.find(section => section.id === 'gear');
   for (const [gear, text] of [[1, 'LL'], [2, 'LH'], [3, '1L'], [18, '8H'], [-1, 'R1'], [0, 'N']] as const)
-    expect(gearOf(gearboxPair(gear), manual)).toEqual({id: 'gear', state: 'value', text});
-  expect(gearOf(gearboxPair(1))).toEqual({id: 'gear', state: 'value', text: '1'});
-  expect(gearOf(gearboxPair(1, {truckId: 'vehicle.synthetic_truck'}), manual)).toEqual({id: 'gear', state: 'value', text: '1L'});
-  expect(gearOf(gearboxPair(1, {v1: {status: 'stale', fresh: false}}), manual)).toEqual({id: 'gear', state: 'value', text: '1L'});
+    expect(gearOf(gearboxPair(gear, ATS), manual)).toEqual({id: 'gear', state: 'value', text});
+  expect(gearOf(gearboxPair(1, ATS))).toEqual({id: 'gear', state: 'value', text: '1'});
+  expect(gearOf(gearboxPair(1, {...ATS, truckId: 'vehicle.synthetic_truck'}), manual)).toEqual({id: 'gear', state: 'value', text: '1L'});
+  expect(gearOf(gearboxPair(1, {...ATS, v1: {status: 'stale', fresh: false}}), manual)).toEqual({id: 'gear', state: 'value', text: '1L'});
   // A minor-0 source: every gearbox part is not-supported (B7).
-  expect(gearOf(gearboxPair(1, {gearbox: NOT_SUPPORTED_GEARBOX}), manual)).toEqual({id: 'gear', state: 'value', text: '1L'});
+  expect(gearOf(gearboxPair(1, {...ATS, gearbox: NOT_SUPPORTED_GEARBOX}), manual)).toEqual({id: 'gear', state: 'value', text: '1L'});
 });
