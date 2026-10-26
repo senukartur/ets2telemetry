@@ -14,6 +14,7 @@ ET-010a adds pure live-telemetry normalization and per-game display profiles to 
 | [format.ts](../packages/telemetry-core/src/format.ts) | Display strings and rounding |
 | [derived.ts](../packages/telemetry-core/src/derived.ts) | Fuel level, deadline, bearing, odometer and fuel step primitives |
 | [live-view.ts](../packages/telemetry-core/src/live-view.ts) | `isCurrent` and `buildLiveView` |
+| [mandatory-break.ts](../packages/telemetry-core/src/mandatory-break.ts) | `BREAK_SOON_MINUTES`, `breakUrgency` and `formatMandatoryBreak` (ET-052) |
 
 The package is pure TypeScript. It imports only its own modules and type-only declarations from `packages/contracts/src`; [telemetry-core-boundaries.test.ts](../tests/unit/telemetry-core-boundaries.test.ts) enforces this instead of a lint-config rule. The renderer calls these functions on each bridge update, at most 20 Hz. Labels, reason texts and note texts belong to the application (`apps/desktop/src/strings.ts`); `buildLiveView` returns formatted values, reason codes and notes.
 
@@ -52,6 +53,7 @@ Exact constants: mile 1,609.344 m; US gallon 3.785411784 L; pound 0.45359237 kg;
 | Observed distance | m | odometer steps | — | Step primitive; ET-014 accumulates per trip |
 | Game time | game minutes | `game.time`, u32 | v0, v1 | `Day N, HH:MM`, N = ⌊minutes / 1,440⌋ + 1 (`game-time`) |
 | Deadline | game minutes | job `delivery.time` − `game.time` | v1 | `in 5 h 12 min` or `late by 5 h 12 min`; missing when either is missing |
+| Next mandatory break | game minutes, signed | `mandatory.break`, s32 | v1 minor 2 | `35 min` or `1 h 35 min`, clamped at `0 min`; urgency `soon` or `due` on the row. See [Next mandatory break](#next-mandatory-break-et-052) |
 | Cargo, origin, destination | text | job config | v0 ids; v1 ids and names | Localized name, else id; a provided empty name falls through to the id |
 | Cargo mass | kg | `cargo.mass` | v1 | t 1 dp or lb 0 dp |
 | Market, special job | text, boolean | `job.market`, `is.special.job` | v1 | telemetry-core keeps the raw market id; since ET-045a the dashboard and journal show a label for the five SDK 1.15 values (below), an unknown value verbatim; `yes`/`no` |
@@ -79,6 +81,17 @@ Job market labels (ET-045a). The dashboard's Job badge and market row and the jo
 | `freight_market` | Freight market | Грузоперевозки |
 | `external_contracts` | External contracts | Внешние контракты |
 | `external_market` | External market | Внешний рынок |
+
+## Next mandatory break (ET-052)
+
+Status (October 26, 2026): PR-1 of ET-052 adds the contract, the normalized reading and the pure rules in telemetry-core. No source carries the field yet and no screen shows it: the plugin, the telemetry service, the dashboard and the overlay follow in later PRs, so a user sees nothing new. The rules below are the ones those PRs implement.
+
+- **Source.** The SDK 1.15 channel `mandatory.break` is an s32 of in-game minutes until the next required mandatory break. When the game's mandatory break simulation is disabled, the SDK header says the behaviour is implementation dependent (a value or none); what each game reports is unobserved.
+- **Reading.** `NormalizedLiveState.nextMandatoryBreak` is a `Reading<number>` of the raw signed minutes. Zero is a value, not an unavailable reading, and a negative value (an overdue break) is kept as is. Protocol v1 minor 2 carries the field; a v1 source below minor 2 reports it `not-supported` (the protocol does not transport it) and v0 does not carry it. The live view therefore hides the row under v0.
+- **Urgency (D3).** `breakUrgency(minutes)`: zero or less is `due`, 1 to 119 is `soon`, 120 or more is `normal`. Exactly 120 minutes is still normal. A row carries `urgency` only for a current `soon` or `due` value.
+- **Text.** `formatMandatoryBreak(minutes)` clamps at zero, then formats game minutes as `H h M min` or `M min`, so an overdue break reads `0 min`. 95 minutes reads `1 h 35 min`, 119 reads `1 h 59 min`, 120 reads `2 h 0 min`. The clamp is presentation only: the reading, the wire and the projection keep the signed value.
+- **Row.** Field id `mandatory-break` in the `time` section after `deadline`, with the `game-time` note. A non-integer reading is shown as `invalid`.
+- **Live only (D4).** The value is never stored: it is not in samples, trips, the journal, the export or the schema.
 
 ## Money
 
