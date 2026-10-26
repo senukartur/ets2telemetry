@@ -63,7 +63,7 @@ describe('REG-009 protocol v0 normalization', () => {
   });
   it('marks every field that v0 does not transport as not-carried, never not-supported', () => {
     const state = normalizeV0State(v0State('snapshot'));
-    for (const reading of [state.navigationDistance, state.worldPlacement, state.trailers, state.gameMode, state.eventLoss, state.gearbox]) expect(reading).toEqual(notCarried);
+    for (const reading of [state.navigationDistance, state.worldPlacement, state.trailers, state.gameMode, state.eventLoss, state.gearbox, state.nextMandatoryBreak]) expect(reading).toEqual(notCarried);
   });
   it('keeps each unavailable reason from the unavailable fixture', () => {
     const state = normalizeV0State(v0State('unavailable'));
