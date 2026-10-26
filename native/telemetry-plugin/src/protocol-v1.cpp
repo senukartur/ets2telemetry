@@ -188,9 +188,10 @@ Gearbox gearbox(const Json& g) {
 }
 constexpr const char* state_keys[] = {"simulation", "speed", "fuel", "fuelCapacity", "engineRpm", "gear", "odometer", "averageConsumption", "estimatedRange",
   "navigationDistance", "gameTime", "captureUtcUnixMs", "boundaryOrder", "worldPlacement", "configuration", "window"};
-// The minor-0 state, plus `gearbox` exactly when the envelope minor is 1; returns the boundary order.
-std::uint64_t state(const Json& o, unsigned minor, std::optional<Gearbox>& box) {
-  if (minor == 1) exact(o, state_keys, {"gearbox"}); else exact(o, state_keys, {});
+// The minor-0 state, plus `gearbox` from minor 1 and `nextMandatoryBreak` from minor 2, exactly as the envelope minor says;
+// returns the boundary order.
+std::uint64_t state(const Json& o, unsigned minor, std::optional<Gearbox>& box, std::optional<Measure>& next_break) {
+  if (minor >= 2) exact(o, state_keys, {"gearbox", "nextMandatoryBreak"}); else if (minor == 1) exact(o, state_keys, {"gearbox"}); else exact(o, state_keys, {});
   choice(at(o, "simulation"), {"running", "paused", "unavailable"});
   measure(at(o, "speed"), "m/s", -1000, 1000); measure(at(o, "fuel"), "L", 0, 1e6); measure(at(o, "fuelCapacity"), "L", 0, 1e6);
   measure(at(o, "engineRpm"), "rpm", 0, 100000); measure(at(o, "gear"), "index", -100, 100, true); measure(at(o, "odometer"), "m", 0, 1e12);
@@ -212,7 +213,9 @@ std::uint64_t state(const Json& o, unsigned minor, std::optional<Gearbox>& box) 
   for (std::size_t index = 0; index < trailers->size(); ++index)
     available<bool>((*trailers)[index], [index](const Json& v) { exact(v, trailer_keys, {}); if (trailer(v) != static_cast<double>(index)) fail(); return true; });
   available<bool>(at(o, "window"), window_state);
-  if (minor == 1) box = gearbox(at(o, "gearbox"));
+  if (minor >= 1) box = gearbox(at(o, "gearbox"));
+  // A plain signed JSON integer of the s32 range, not a canonical u64 string: negative means overdue and zero is a value (MB1).
+  if (minor >= 2) next_break = measure(at(o, "nextMandatoryBreak"), "min", -2147483648.0, 2147483647.0, true);
   return boundary_order;
 }
 SourceStatus status(const Json& o, std::uint64_t capture_ns) {
@@ -315,7 +318,8 @@ SourceIdentity source(const Json& s) {
 unsigned max_minor_of(unsigned max) { if (max > highest_minor) fail("Unsupported maximum protocol v1 minor"); return max; }
 unsigned version(const Json& v, unsigned max) {
   record(v, {"major", "minor"}); const auto major = std::get_if<double>(&at(v, "major").value), minor = std::get_if<double>(&at(v, "minor").value);
-  if (!major || !minor || *major != protocol_major || !(*minor == 0 || (*minor == 1 && max == 1))) fail("Unsupported protocol version");
+  // Minors 0 to 2 are implemented; a minor above the caller's maximum is refused as an unsupported version.
+  if (!major || !minor || *major != protocol_major || !(*minor == 0 || *minor == 1 || *minor == 2) || *minor > max) fail("Unsupported protocol version");
   return static_cast<unsigned>(*minor);
 }
 constexpr const char* client_kinds[] = {"hello", "ack", "clock.probe"};
@@ -331,7 +335,7 @@ Message server_message(const Json& o, unsigned max) {
       record(d, {"boundarySeq", "state", "status", "continuity"});
       const auto boundary = std::get_if<std::string>(&at(d, "boundarySeq").value); if (!boundary || *boundary != str(at(o, "seq"))) fail(); v.boundary_seq = m.seq;
     } else record(d, {"state", "status", "continuity"});
-    v.boundary_order = state(at(d, "state"), m.minor, v.gearbox); v.status = status(at(d, "status"), capture_ns);
+    v.boundary_order = state(at(d, "state"), m.minor, v.gearbox, v.next_mandatory_break); v.status = status(at(d, "status"), capture_ns);
     const auto& c = at(d, "continuity"); record(c, {"coalescedSnapshots", "offlineTransitions"});
     v.continuity = {u64(at(c, "coalescedSnapshots")), u64(at(c, "offlineTransitions"))}; m.state = std::move(v);
   } else if (m.kind == "event") {
@@ -410,7 +414,8 @@ std::vector<std::uint8_t> encode_frame(const Message& m, unsigned max_minor) {
 }
 Negotiated negotiate(const Message& input, bool allow_durable, unsigned max_minor) {
   const auto own = max_minor_of(max_minor); const auto hello = validate(input.wire, Sender::client); if (hello.kind != "hello") fail();
-  return {protocol_major, hello.hello->max_minor < own ? 0U : own, hello.hello->durable_events && allow_durable};
+  // min(offer, own): a client that offers less than the server's maximum gets exactly its offer, never minor 0 by default.
+  return {protocol_major, std::min<unsigned>(hello.hello->max_minor, own), hello.hello->durable_events && allow_durable};
 }
 Available<std::uint64_t> read_uint64(const Json& j) { return guarded([&] { return available<std::uint64_t>(j, [](const Json& v) { return u64(v); }); }); }
 Measure read_measure(const Json& j, const char* unit) { return guarded([&] { return measure(j, unit, -max_double, max_double); }); }
