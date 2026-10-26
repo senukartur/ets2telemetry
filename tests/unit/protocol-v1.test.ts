@@ -509,7 +509,7 @@ describe('ET-052 protocol v1 minor-2 corpus', () => {
       else expect(decodePayload(body, sender, M2), filename).toEqual(decodePayload(body, sender, M1));
     }
   });
-  it('carries the break as a plain signed integer: available values, zero, overdue and the s32 extremes', () => {
+  it('carries the break as a plain signed integer: available values, zero, negative values and the s32 extremes', () => {
     expect(breakOf('checkpoint')).toEqual({available: true, value: 95, unit: 'min'});
     expect(breakOf('snapshot')).toEqual({available: true, value: 95, unit: 'min'});
     expect(breakOf('snapshot-break-zero')).toEqual({available: true, value: 0, unit: 'min'});

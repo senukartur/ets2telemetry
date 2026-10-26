@@ -8,8 +8,9 @@ import net from 'node:net';
 import {randomUUID} from 'node:crypto';
 import {describe, expect, it} from 'vitest';
 import {FrameDecoder, PROTOCOL_V1, V1_MAX_MINOR, encodeFrame as encodeAnyMinor, type ProtocolMessage, type ServerMessage} from '../../packages/contracts/src/protocol-v1';
-// ET-050b: these raw clients offer the contract's highest minor, as the scripted client does, so their connections are
-// minor 1 and every frame after the hello carries {1,1}.
+// ET-050b: these raw clients offer minor 1 where they model the scripted client (its default offer is pinned to 1 until
+// ET-052 PR-4) and the contract's highest minor otherwise; the producer selects minor 1 either way, so every frame after
+// the hello carries {1,1}.
 const M1 = {major: 1, minor: 1} as const;
 const encodeFrame = (message: ProtocolMessage) => encodeAnyMinor(message, {maxMinor: V1_MAX_MINOR});
 import {V1Consumer} from '../../packages/contracts/src/protocol-v1-delivery';

@@ -54,8 +54,18 @@ describe('ET-052 break text (D3: clamped at zero)', () => {
   });
 });
 
+describe('ET-052 break text precondition', () => {
+  it.each([1.5, -0.5, Number.NaN, Number.POSITIVE_INFINITY, Number.NEGATIVE_INFINITY])('throws a clear RangeError for %s instead of formatting it', minutes => {
+    expect(() => formatMandatoryBreak(minutes)).toThrow(RangeError);
+    expect(() => formatMandatoryBreak(minutes)).toThrow('The mandatory break must be a whole number of minutes');
+  });
+  it('leaves the urgency of every number unchanged', () => {
+    expect([breakUrgency(Number.NaN), breakUrgency(1.5), breakUrgency(-0.5)]).toEqual(['normal', 'soon', 'due']);
+  });
+});
+
 describe('ET-052 break normalization', () => {
-  it('keeps the signed raw value: zero and overdue are values, never clamped or unavailable', () => {
+  it('keeps the signed raw value: zero and negative values are values, never clamped or unavailable', () => {
     expect(v1Normalized('checkpoint').nextMandatoryBreak).toEqual({state: 'value', value: 95});
     expect(v1Normalized('snapshot-break-zero').nextMandatoryBreak).toEqual({state: 'value', value: 0});
     expect(v1Normalized('snapshot-break-negative').nextMandatoryBreak).toEqual({state: 'value', value: -30});

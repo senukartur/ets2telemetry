@@ -97,9 +97,9 @@ export interface NormalizedLiveState {
   /** v1: the minor-1 gearbox, `not-supported` in every part under minor 0 (ET-050b). v0: not carried. */
   gearbox: Reading<LiveGearbox>;
   /**
-   * Game minutes until the next mandatory break (ET-052). The raw signed SDK value: zero is a value, negative means
-   * overdue, and the clamp to zero is the presentation's (mandatory-break.ts). v1 minor 2 carries it; a source below
-   * minor 2 reports `not-supported`; v0 does not carry it.
+   * Game minutes until the next mandatory break (ET-052). The raw signed SDK value: zero is a value, a negative value
+   * (an overdue break, unobserved) is kept as is, and the clamp to zero is the presentation's (mandatory-break.ts). v1
+   * minor 2 carries it; a source below minor 2 reports `not-supported`; v0 does not carry it.
    */
   nextMandatoryBreak: Reading<number>;
   configurationRevision: string;

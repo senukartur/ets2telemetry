@@ -38,7 +38,7 @@ export function rawFrame(payload: string | Uint8Array): Uint8Array {
 export function prefixOnly(length: number): Uint8Array { const p = new Uint8Array(4); new DataView(p.buffer).setUint32(0, length, true); return p; }
 const concat = (...parts: Uint8Array[]) => { const out = new Uint8Array(parts.reduce((n, p) => n + p.length, 0)); let o = 0; for (const p of parts) { out.set(p, o); o += p.length; } return out; };
 const half = (frame: Uint8Array) => frame.slice(0, Math.max(1, Math.floor(frame.length / 2)));
-/** Valid frames of either minor; each fault message carries its connection's minor, or 1.0 for a hello (ET-050b B1). */
+/** Valid frames of any minor the contract implements (0 to 2); each fault message carries its connection's minor, or 1.0 for a hello (ET-050b B1). */
 const encodeFrame = (message: ProtocolMessage) => encodeV1Frame(message, {maxMinor: V1_MAX_MINOR});
 
 function hello(clientInstanceId: string, durableEvents: boolean): ClientMessage {

@@ -99,7 +99,8 @@ export interface CurrentState {
   /**
    * Present exactly when the message's envelope minor is 2 (ET-052 MB1): the SDK's `mandatory.break`, game minutes until
    * the next mandatory rest. Unlike `GameMinutes` it is a plain signed JSON integer in the s32 range, because the SDK
-   * value is s32 and goes negative when the break is overdue; zero is an available value, never unavailable.
+   * type is s32. A negative value (an overdue break) is possible but unobserved; zero is an available value, never
+   * unavailable.
    */
   nextMandatoryBreak?: Measure<'min'>;
 }
@@ -313,7 +314,7 @@ function state(v: unknown, minor: V1Minor) {
   c.trailers.forEach((slot, index) => available(slot, value => { if (trailer(record(value, TRAILER_KEYS)) !== index) fail(); }));
   available(o.window, windowState);
   if (minor >= 1) gearbox(o.gearbox);
-  // A signed integer of the s32 range; negative means overdue and zero is a value (ET-052 MB1).
+  // A signed integer of the s32 range, as the SDK type is; a negative value is accepted, and zero is a value (ET-052 MB1).
   if (minor >= 2) measure(o.nextMandatoryBreak, 'min', S32_MIN, S32_MAX, true);
 }
 function status(v: unknown, captureNs: bigint) {
