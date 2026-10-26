@@ -40,6 +40,15 @@ const GRSO925R = gearbox(14, 2, 2, [
   [5, 4, 0], [13, 4, 1], [6, 4, 2], [14, 4, 3],
   [7, 5, 0], [8, 5, 2]
 ]);
+// The owner's ETS2 Scania Opticruise G38CMR (13+1) capture of October 26, 2026 (sanitized, kept local): the truck reports
+// 14 forward and 8 reverse gears, its forward slots equal the GRSO925R's, and its H-shifter reaches only reverse 1–4.
+const G38CMR = gearbox(14, 8, 2, [
+  [-1, 1, 0], [-3, 1, 1], [-2, 1, 2], [-4, 1, 3],
+  [1, 2, 0], [9, 2, 1], [2, 2, 2], [10, 2, 3],
+  [3, 3, 0], [11, 3, 1], [4, 3, 2], [12, 3, 3],
+  [5, 4, 0], [13, 4, 1], [6, 4, 2], [14, 4, 3],
+  [7, 5, 0], [8, 5, 2]
+]);
 
 describe('CAP-01 layouts', () => {
   it('derives the ETS2 DAF 12-speed as 1L…6H, the same as the GD2 formula, with reverse R1…R4', () => {
@@ -73,6 +82,19 @@ describe('CAP-01 layouts', () => {
     expect(reverseOf(labels)).toEqual({1: 'R1', 2: 'R2'});
     expect(formatGear(1, 'manual', labels)).toBe('C1');
     expect(formatGear(3, 'manual', labels)).toBe('1L');
+  });
+  // ET-050b owner option B (October 26, 2026): the H-shifter may reach fewer reverse gears than the truck reports.
+  it('derives the ETS2 Scania G38CMR, whose H-shifter reaches 4 of its 8 reverse gears, with reverse R1…R8', () => {
+    const labels = deriveGearLabels(G38CMR, 'ets2');
+    // The forward slots equal the GRSO925R's, so manual mode names them the same; its dashboard's C, 1, 2, 3… is the
+    // crawler mode, which needs no layout.
+    expect(forwardOf(labels)).toEqual(forwardOf(deriveGearLabels(GRSO925R, 'ets2')));
+    expect(reverseOf(labels)).toEqual({1: 'R1', 2: 'R2', 3: 'R3', 4: 'R4', 5: 'R5', 6: 'R6', 7: 'R7', 8: 'R8'});
+    expect(formatGear(-8, 'manual', labels)).toBe('R8');
+    expect(formatGear(1, 'crawler', labels)).toBe('C');
+    expect(formatGear(2, 'crawler', labels)).toBe('1');
+    expect(formatGear(14, 'crawler', labels)).toBe('13');
+    expect(formatGear(-4, 'crawler', labels)).toBe('R4');
   });
   it('names the crawler by game: C in ETS2, L in ATS', () => {
     expect(CRAWLER_LABELS).toEqual({ets2: {single: 'C', low: 'C1', high: 'C2'}, ats: {single: 'L', low: 'LL', high: 'LH'}});
@@ -172,7 +194,7 @@ describe('unrecognized layouts fall back to the formula', () => {
   it.each([
     ['more forward gears than the slots hold', gearbox(18, 2, 2, THIRTEEN)],
     ['fewer forward gears than the slots hold', gearbox(12, 2, 2, THIRTEEN)],
-    ['more reverse gears than the slots hold', gearbox(13, 3, 2, THIRTEEN)],
+    // ET-050b owner option B: a reverse gear the slots do not reach is no longer a rejection; see the G38CMR case.
     ['fewer reverse gears than the slots hold', gearbox(13, 1, 2, THIRTEEN)],
     ['two crawler positions', gearbox(14, 1, 2, [
       [-1, 1, 0], [1, 2, 0], [2, 3, 0], [3, 4, 0], [7, 4, 1], [8, 4, 3], [4, 5, 0], [9, 5, 1], [10, 5, 3],

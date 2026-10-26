@@ -226,6 +226,7 @@ async function observeStripNumbers({application, overlay, source, language, reco
  * for a mismatched truck. Then the v1 truck becomes v0's (B6): 1 is C1, 2 C2, 3 1L and 18 8H on the overlay, the Live
  * instrument and the Live details row, because the smoke source is ETS2, which names a crawler C1/C2 (B5 as amended on
  * October 26, 2026); another model id again gives the formula (1 is 1L). The v1 truck id is restored.
+ * ET-050b owner option B: the crawler mode then shows 1 as C, 2 as 1 and 14 as 13 in the same three places.
  */
 async function observeGearDisplay({dashboard, overlay, source, sourceV1, language, record}) {
   record.gearDisplay ??= [];
@@ -257,6 +258,11 @@ async function observeGearDisplay({dashboard, overlay, source, sourceV1, languag
     }
     sourceV1.setTruckId(undefined);
     source.setEngine(600, 1); await labelIs('1L'); record.gearDisplay.push({language, mode: 'manual', layout: 'other-truck', gear: 1, text: '1L'});
+    // ET-050b owner option B: the crawler mode needs no layout; the ETS2 source names gear 1 C, as on the Scania G38CMR.
+    await choose('crawler');
+    for (const [gear, text] of [[1, 'C'], [2, '1'], [14, '13'], [-1, 'R1'], [0, 'N']]) {
+      source.setEngine(600, gear); await labelIs(text); record.gearDisplay.push({language, mode: 'crawler', gear, text});
+    }
     await choose('automatic');
     source.setEngine(600, 3); await gearIs('3'); record.gearDisplay.push({language, mode: 'automatic', gear: 3, text: '3'});
   }, async () => {
@@ -833,7 +839,8 @@ export async function runUiSmoke({application, dashboard, overlay, source, sourc
         await until(() => dashboard.evaluate(() => globalThis.desktop.getAppState()), state => state.settings.units.ets2 === before && state.settings.saveError === null, 'UI_PROFILE_RESTORED');
         record.flags.refusedSave = true;
         // ET-050: committed manual, then automatic again, through the Units control; each shows checked only once saved.
-        for (const mode of ['manual', 'automatic']) {
+        // ET-050b (owner option B): the crawler mode is committed between them the same way.
+        for (const mode of ['manual', 'crawler', 'automatic']) {
           await dashboard.locator(`#gear-display-ets2-${mode}`).click();
           await until(() => dashboard.evaluate(() => globalThis.desktop.getAppState()), state => state.settings.gearDisplay.ets2 === mode && state.settings.saveError === null, `UI_GEAR_DISPLAY_${mode.toUpperCase()}_COMMITTED`);
           await until(() => dashboard.locator(`#gear-display-ets2-${mode}`).getAttribute('aria-checked'), checked => checked === 'true', `UI_GEAR_DISPLAY_${mode.toUpperCase()}_CHECKED`);
@@ -1042,7 +1049,7 @@ export async function runUiReadOnly({application, dashboard, config, record, set
     await settingsPanel(dashboard, 'units');
     for (const game of ['ets2', 'ats']) for (const profile of ['metric', 'us-customary']) assert.equal(await dashboard.locator(`#units-${game}-${profile}`).isDisabled(), true);
     // ET-050: all four gear display radios are disabled while the settings are read-only.
-    for (const game of ['ets2', 'ats']) for (const mode of ['automatic', 'manual']) assert.equal(await dashboard.locator(`#gear-display-${game}-${mode}`).isDisabled(), true);
+    for (const game of ['ets2', 'ats']) for (const mode of ['automatic', 'manual', 'crawler']) assert.equal(await dashboard.locator(`#gear-display-${game}-${mode}`).isDisabled(), true);
     await capture({page: dashboard, application, config, record, name: 'read-only', language: 'en', size});
     await settingsPanel(dashboard, 'overlay');
     const opacity = dashboard.getByRole('slider');

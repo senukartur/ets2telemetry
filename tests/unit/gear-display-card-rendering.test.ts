@@ -28,8 +28,10 @@ const group = (html: string, game: string) => html.match(new RegExp('<div[^>]*da
 
 const COPY = {
   en: {title: 'Gear display', automatic: 'Automatic (1, 2, 3)', manual: 'Manual range-splitter (1L, 1H, 2L…)',
+    crawler: {ets2: 'Crawler first (C, 1, 2, 3…)', ats: 'Crawler first (L, 1, 2, 3…)'},
     failed: 'The gear display change was not saved; the previous setting stays in use.'},
   ru: {title: 'Отображение передач', automatic: 'Автоматическая (1, 2, 3)', manual: 'Механическая с делителем (1L, 1H, 2L…)',
+    crawler: {ets2: 'С ползучей (C, 1, 2, 3…)', ats: 'С ползучей (L, 1, 2, 3…)'},
     failed: 'Изменение отображения передач не сохранено; действует прежняя настройка.'}
 } as const;
 
@@ -48,6 +50,10 @@ it.each(['en', 'ru'] as const)('renders one labelled, described group per game w
       expect(html).toContain(`id="gear-display-${game}-${mode}"`);
       expect(html).toContain(`<label for="gear-display-${game}-${mode}">${escaped(COPY[language][mode])}</label>`);
     }
+    // ET-050b owner option B: the third option names the game's own crawler.
+    expect(html).toContain(`id="gear-display-${game}-crawler"`);
+    expect(html).toContain(`<label for="gear-display-${game}-crawler">${escaped(COPY[language].crawler[game])}</label>`);
+    expect(html.match(new RegExp(`<button[^>]*id="gear-display-${game}-`, 'g'))).toHaveLength(3);
   }
   const ids = [...html.matchAll(/\sid="([^"]+)"/g)].map(match => match[1]);
   expect(new Set(ids).size).toBe(ids.length);
@@ -57,6 +63,9 @@ it('shows only the committed mode of each game, and automatic before the setting
   const html = render(settings('en', {ets2: 'manual', ats: 'automatic'}));
   expect(group(html, 'ets2')).toContain('data-value="manual"');
   expect(group(html, 'ats')).toContain('data-value="automatic"');
+  const crawler = render(settings('en', {ets2: 'crawler', ats: 'manual'}));
+  expect(group(crawler, 'ets2')).toContain('data-value="crawler"');
+  expect(group(crawler, 'ats')).toContain('data-value="manual"');
   const none = render(undefined);
   expect(group(none, 'ets2')).toContain('data-value="automatic"');
   expect(group(none, 'ats')).toContain('data-value="automatic"');

@@ -140,9 +140,10 @@ function gameModeText(mode: GameModeView): string {
 
 /**
  * How the gear row is formatted (ET-050, ET-050b): the per-game display mode, and in `manual` mode the gearbox-aware
- * labels the caller derived for this truck (B6). Without labels manual mode uses the GD2 formula.
+ * labels the caller derived for this truck (B6). Without labels manual mode uses the GD2 formula. In `crawler` mode
+ * `crawler` is the displayed game's crawler name (C without it).
  */
-export interface GearDisplay {mode: GearDisplayMode; labels?: GearLabels}
+export interface GearDisplay {mode: GearDisplayMode; labels?: GearLabels; crawler?: string}
 
 export function buildLiveView(live: LiveViewSource, state: NormalizedLiveState | undefined, units: DisplayUnits, gear: GearDisplay = {mode: 'automatic'}): LiveDashboardView {
   const current = isCurrent(live) && state !== undefined;
@@ -173,7 +174,7 @@ export function buildLiveView(live: LiveViewSource, state: NormalizedLiveState |
   const sections: LiveSection[] = [
     {id: 'motion', fields: [
       f('speed', s.speed, value => formatSpeed(value, units.speed)),
-      f('gear', s.gear, value => formatGear(value, gear.mode, gear.labels)),
+      f('gear', s.gear, value => formatGear(value, gear.mode, gear.labels, gear.crawler)),
       f('engine-rpm', s.engineRpm, formatRpm)
     ]},
     {id: 'fuel', fields: [
