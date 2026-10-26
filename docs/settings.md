@@ -8,7 +8,19 @@ ET-012e added saved overlay visibility in historical format v6, defaulting to en
 
 ET-045e update, October 24, 2026 (decision Z5, owner decision D1 option b; ET-049 took v7 first, so ET-045e uses v8): the current format is **v8**. It has exactly the fields and canonical layout of ET-049's v7 document below with `"version": 8`. What changed is the meaning of each placement's `scale`: it is the user's setting, shown as a percentage, and the overlay document's zoom factor is now setting × 0.7 (`overlayZoom` in `apps/desktop/src/overlay-placement.ts`), so the new 100% looks like the earlier 70%. Its range is [0.5, 3] (50–300%) instead of [0.5, 2]. Saved numbers are kept and reinterpreted, never rewritten: a v7 file migrates to v8 by an identity step (`migratedFrom: 7`), and the owner's saved strip at 0.5 now renders at the earlier 35% (choose 70% for the earlier 50% look). See [ET-045e validation](validation/et-045e.md). The v7 and v6 headings below keep their ET-049 and ET-012e wording; read "current" there as the field layout that v8 retains.
 
-## Current format v9: gear display (ET-050)
+## Current format v10: the crawler gear mode (ET-050b)
+
+ET-050b update, October 26, 2026 (owner option B, [concept.md](../concept.md#ets2-crawler-gear-mode--october-26-2026)): the current format is **v10**. It is the v9 document below with `"version": 10`; no field is added, renamed or moved. What v10 adds is a third `gearDisplay` value, `crawler`: gear 1 is the displayed game's crawler (`C` in ETS2, `L` in ATS) and every higher gear g is shown as g − 1 (C, 1, 2, 3…, as on the ETS2 Scania Opticruise G38CMR 13+1 dashboard). Neutral stays N and reverse R1, R2…, and the mode uses no gearbox layout.
+
+- **Migration v9 to v10.** An identity step that changes only the version; every v9 mode is kept (`migratedFrom: 9`). A v1 to v9 file is migrated in memory and stays unchanged on disk until the first save of any setting writes the complete v10 document.
+- **Newer and older builds.** A version of 11 or later is newer-version. A build before this change reads v10 as newer-version (read-only defaults) and refuses to save, so it can never replace `crawler` with `automatic` by rewriting the file.
+- **Load rules and bridge.** As for v9, with `crawler` as the third exact string: `"Crawler"` and other spellings fall back alone, and `setGearDisplay(game, mode)` accepts `automatic`, `manual` or `crawler`. The diagnostic bundle accepts the same three values.
+- **Settings > Units.** Each game's group gains a third option named by that game's crawler: "Crawler first (C, 1, 2, 3…)" for ETS2 and "Crawler first (L, 1, 2, 3…)" for ATS (RU "С ползучей (…)").
+- **Tests.** `settings-schema.test.ts` (v10 bytes, the v9-to-v10 step, the crawler value and its fallbacks, version 11 as newer-version), `settings-store.test.ts` (a v9 file byte-identical at startup, the crawler save as exact v10 bytes and its restart), `gear-display-card-rendering.test.ts`, and the `lifecycle` and `ui` runtime smokes. See [ET-050b validation](validation/et-050b.md#ets2-crawler-gear-mode--october-26-2026).
+
+The v9 section below keeps its wording; read "current" there as the field layout that v10 retains, and its version 10 as newer-version as version 11.
+
+## Format v9: gear display (ET-050)
 
 ET-050 update, October 25, 2026 (decisions GD1–GD8 in [concept.md](../concept.md#et-050-gear-display-mode--october-25-2026)): the current format is **v9**. It is the v8 document with `"version": 9` and one new block, `gearDisplay`, written right after `units`:
 
@@ -23,7 +35,7 @@ ET-050 update, October 25, 2026 (decisions GD1–GD8 in [concept.md](../concept.
   },
 ```
 
-Each game's value is exactly `automatic` (gears 1, 2, 3…) or `manual` (range-splitter pairs 1L, 1H, 2L, 2H…); neutral is N and reverse R1, R2… in both. ET-050b (October 25, 2026, decisions B3 and B6) keeps format v9 and the two values and changes only what `manual` displays: labels derived from the truck's gearbox layout (for example LL, LH, 1L…8H) while protocol v1 reports a current, valid layout for the same truck, otherwise the 1L, 1H pattern. The default is `automatic` for both games. Only the displayed text changes: the live protocols, the history database, the one-second samples, the journal and the JSON export keep the raw integer gear index.
+Each game's value is exactly `automatic` (gears 1, 2, 3…) or `manual` (range-splitter pairs 1L, 1H, 2L, 2H…); neutral is N and reverse R1, R2… in both. ET-050b (October 25, 2026, decisions B3 and B6) keeps format v9 and the two values and changes only what `manual` displays: labels derived from the truck's gearbox layout (for example LL, LH, 1L…8H on an ATS Mack, or C1, C2, 1L…6H on an ETS2 Scania GRSO925R since the amendment of October 26, 2026) while protocol v1 reports a current, valid layout for the same truck, otherwise the 1L, 1H pattern. The default is `automatic` for both games. Only the displayed text changes: the live protocols, the history database, the one-second samples, the journal and the JSON export keep the raw integer gear index.
 
 - **Load rules.** A missing block, a block that is not an object, or a block as an array falls back for both games (`gearDisplay.ets2` and `gearDisplay.ats`). Inside an object each game falls back alone when its value is missing or is not one of the two exact strings; `"Manual"`, numbers and booleans are never coerced. Unknown keys inside the block are ignored.
 - **Migration v8 to v9.** The pure step adds `{"ets2": "automatic", "ats": "automatic"}`. A stray `gearDisplay` key in a pre-v9 document is replaced, as ET-049 does for opacity, so an earlier hand edit never becomes a v9 preference. A v1 to v8 file is migrated in memory (`migratedFrom: 1` to `migratedFrom: 8`) and stays unchanged on disk; nothing is written at startup, and the first save of any setting writes the complete v9 document.
@@ -216,7 +228,7 @@ Loading happens once at startup, in parallel with the service start. Loading nev
 | `loaded-with-fallbacks` | A v3 (or migrated v1 or v2) file with some invalid fields | Valid fields from the file, defaults for the others | Yes; the save rewrites the whole file |
 | `invalid-file` | Not a usable settings file | Defaults | Yes; the first save quarantines the file |
 | `unsupported-older` | An older format without a migration path | Defaults | Yes; the first save quarantines the file |
-| `newer-version` | Written by a newer version (version 9 or later since ET-045e; version 10 or later since ET-050) | Defaults | No (`SETTINGS_READ_ONLY`); the file is never modified |
+| `newer-version` | Written by a newer version (version 9 or later since ET-045e; version 10 or later since ET-050; version 11 or later since the ET-050b crawler mode) | Defaults | No (`SETTINGS_READ_ONLY`); the file is never modified |
 | `unreadable` | The file or directory is a symbolic link or junction, not a plain file or directory, or could not be read, or the read had not settled within the read limit (about 30 s) | Defaults | No (`SETTINGS_WRITE_FAILED`) |
 | `unavailable` | No valid settings location | Defaults | No (`SETTINGS_WRITE_FAILED`) |
 

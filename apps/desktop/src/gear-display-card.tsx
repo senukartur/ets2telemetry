@@ -18,7 +18,8 @@ export interface GearDisplayCardProps {
 }
 
 /**
- * ET-050: the per-game gear display mode on Settings > Units. Each game has one labelled radio group; it shows only the
+ * ET-050: the per-game gear display mode on Settings > Units. Each game has one labelled radio group, whose crawler
+ * option names that game's crawler (ET-050b: C in ETS2, L in ATS); it shows only the
  * mode main has committed, so a failed save leaves the previous choice selected. The groups are disabled while a save is
  * in flight and while the settings cannot be saved.
  */
@@ -37,9 +38,9 @@ export function GearDisplayCard({settings, onSaved, onRequest, showSaveError}: G
       {UNIT_GAMES.map(game => <div key={game} className="space-y-2">
         <p id={`gear-display-${game}-label`}>{getUnitGameText(game, language)}</p>
         <RadioGroup aria-labelledby={`gear-display-${game}-label`} aria-describedby="gear-display-description" data-testid={`gear-display-${game}`}
-          className="yu-segmented" value={settings?.gearDisplay[game] ?? DEFAULT_GEAR_DISPLAY[game]} disabled={locked} onValueChange={value => choose(game, value)}>
+          className="yu-segmented yu-segmented-stacked" value={settings?.gearDisplay[game] ?? DEFAULT_GEAR_DISPLAY[game]} disabled={locked} onValueChange={value => choose(game, value)}>
           {GEAR_DISPLAY_MODE_IDS.map(mode => <div key={mode} className="yu-segment-option">
-            <RadioGroupItem value={mode} id={`gear-display-${game}-${mode}`} /><Label htmlFor={`gear-display-${game}-${mode}`}>{t(`s.gear.${mode}`, undefined, language)}</Label>
+            <RadioGroupItem value={mode} id={`gear-display-${game}-${mode}`} /><Label htmlFor={`gear-display-${game}-${mode}`}>{t(mode === 'crawler' ? `s.gear.crawler.${game}` : `s.gear.${mode}`, undefined, language)}</Label>
           </div>)}
         </RadioGroup>
       </div>)}

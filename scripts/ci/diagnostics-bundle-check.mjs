@@ -53,7 +53,7 @@ export const ENUMS = Object.freeze({
   tripCompleteness: ['unknown', 'partial', 'complete'],
   language: ['en', 'ru'],
   unitProfile: ['metric', 'us-customary'],
-  gearDisplay: ['automatic', 'manual'],
+  gearDisplay: ['automatic', 'manual', 'crawler'],
   overlayLayout: ['strip', 'card', 'cluster', 'hud'],
   overlaySection: ['speed', 'gear', 'rpm', 'fuel', 'range', 'sdk-consumption', 'cargo', 'origin', 'destination', 'distance-driven', 'distance-remaining',
     'deadline', 'expected-income', 'game-time'],

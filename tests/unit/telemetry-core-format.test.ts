@@ -97,9 +97,22 @@ describe('labels for gear, engine and level', () => {
     expect(formatGear(1, 'manual', undefined)).toBe('1L');
   });
   it('accepts only the exact gear display mode strings', () => {
-    expect(GEAR_DISPLAY_MODES).toEqual(['automatic', 'manual']);
+    // ET-050b owner option B: the requirement changed; the crawler mode joins the two ET-050 modes.
+    expect(GEAR_DISPLAY_MODES).toEqual(['automatic', 'manual', 'crawler']);
     for (const mode of GEAR_DISPLAY_MODES) expect(isGearDisplayMode(mode)).toBe(true);
-    for (const value of ['Manual', 'AUTOMATIC', ' manual', 'manual ', '', 'auto', 0, 1, true, null, undefined, {}, ['manual']]) expect(isGearDisplayMode(value)).toBe(false);
+    for (const value of ['Manual', 'AUTOMATIC', ' manual', 'manual ', '', 'auto', 'Crawler', 'crawler ', 'C', 0, 1, true, null, undefined, {}, ['manual']]) expect(isGearDisplayMode(value)).toBe(false);
+  });
+  // ET-050b owner option B (October 26, 2026): the ETS2 Scania G38CMR 13+1 dashboard reads C, 1, 2, 3… and R1…R4.
+  it('formats crawler mode as the crawler for gear 1 and g − 1 above it, ignoring gearbox labels', () => {
+    expect([1, 2, 3, 4, 14].map(gear => formatGear(gear, 'crawler'))).toEqual(['C', '1', '2', '3', '13']);
+    expect([1, 2, 3].map(gear => formatGear(gear, 'crawler', undefined, 'L'))).toEqual(['L', '1', '2']);
+    expect(formatGear(0, 'crawler')).toBe('N');
+    expect(formatGear(-1, 'crawler')).toBe('R1');
+    expect(formatGear(-8, 'crawler', undefined, 'L')).toBe('R8');
+    const labels = {forward: new Map([[1, 'C1'], [2, 'C2']]), reverse: new Map([[1, 'RX']])};
+    expect(formatGear(1, 'crawler', labels)).toBe('C');
+    expect(formatGear(-1, 'crawler', labels)).toBe('R1');
+    expect(formatGear(1.5, 'crawler')).toBe('1.5');
   });
   it('rounds engine speed and percentages to integers', () => {
     expect(formatRpm(600)).toBe('600 rpm');

@@ -47,9 +47,11 @@ export function formatRpm(rpm: number): string {
  * `manual` mode a gear covered by `labels` (from deriveGearLabels, ET-050b B3) shows its gearbox-aware label; any
  * other gear uses the ET-050 GD2 formula of range-splitter pairs: gear g is `ceil(g / 2)` followed by L for odd g and
  * H for even g, so 1 is 1L, 2 is 1H and 16 is 8H. The formula is a uniform simplification that does not know the
- * actual gearbox layout. A forward value that is not a safe integer is shown as its plain number.
+ * actual gearbox layout. In `crawler` mode gear 1 is `crawler` (the game's single crawler name, C in ETS2 and L in ATS)
+ * and gear g above 1 is g − 1, as on the ETS2 Scania Opticruise G38CMR 13+1 dashboard (C, 1, 2, 3...). A forward value
+ * that is not a safe integer is shown as its plain number.
  */
-export function formatGear(index: number, mode: GearDisplayMode = 'automatic', labels?: GearLabels): string {
+export function formatGear(index: number, mode: GearDisplayMode = 'automatic', labels?: GearLabels, crawler = 'C'): string {
   if (index === 0) return 'N';
   if (mode === 'manual' && labels !== undefined) {
     const label = index > 0 ? labels.forward.get(index) : labels.reverse.get(-index);
@@ -57,6 +59,7 @@ export function formatGear(index: number, mode: GearDisplayMode = 'automatic', l
   }
   if (index < 0) return `R${-index}`;
   if (mode === 'manual' && Number.isSafeInteger(index)) return `${Math.ceil(index / 2)}${index % 2 === 1 ? 'L' : 'H'}`;
+  if (mode === 'crawler' && Number.isSafeInteger(index)) return index === 1 ? crawler : String(index - 1);
   return String(index);
 }
 /** An integer percentage of a fraction. */
