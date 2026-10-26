@@ -135,13 +135,14 @@ struct HShifterPod { std::uint32_t selector_count = 0; std::array<HShifterSlotRa
 // layout. It is outside ConfigurationPod: the hshifter callback changes no revision and emits no event (B2).
 struct GearboxPod { Field<std::uint32_t> forward_gears, reverse_gears; Field<HShifterPod> hshifter; };
 // Current state in SDK units: speed m/s, fuel L, odometer and range km, consumption L/km, navigation distance m.
-// `gearbox` is encoded only on a minor-1 connection; a minor-0 state ignores it.
+// `gearbox` is encoded on a minor-1 or minor-2 connection and `next_mandatory_break_min` (SDK s32 game minutes, negative is
+// overdue and zero is a value) only on a minor-2 connection; a lower minor ignores them.
 struct StatePod {
   SimulationState simulation = SimulationState::unavailable;
   Field<double> speed_mps, fuel_l, fuel_capacity_l, engine_rpm; Field<std::int32_t> gear;
   Field<double> odometer_km, average_consumption_l_per_km, estimated_range_km, navigation_distance_m;
   GameTimePod game_time; Field<std::uint64_t> capture_utc_unix_ms; std::uint64_t boundary_order = 0;
-  Field<PlacementPod> world_placement; ConfigurationPod configuration; Field<WindowPod> window; GearboxPod gearbox;
+  Field<PlacementPod> world_placement; ConfigurationPod configuration; Field<WindowPod> window; GearboxPod gearbox; Field<std::int32_t> next_mandatory_break_min;
 };
 enum class GameId : std::uint8_t { ets2 = 0, ats = 1 };
 enum class Origin : std::uint8_t { game = 0, synthetic = 1, replay = 2 };

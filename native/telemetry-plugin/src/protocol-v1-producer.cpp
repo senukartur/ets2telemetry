@@ -174,7 +174,12 @@ Json hshifter(const Field<HShifterPod>& f) {
 Json gearbox(const GearboxPod& g) {
   return Json{Object{{"forwardGears", gear_count(g.forward_gears)}, {"reverseGears", gear_count(g.reverse_gears)}, {"hshifter", hshifter(g.hshifter)}}};
 }
-// The state of `minor`: minor 1 adds `gearbox`; minor 0 never carries it, whatever the POD holds.
+// Minor 2 (ET-052): signed s32 game minutes as a plain JSON number with unit "min", not the decimal string of GameMinutes.
+Json mandatory_break(const Field<std::int32_t>& f) {
+  return with_unit(field(f, [](std::int32_t v) { return number(v); }), "min");
+}
+// The state of `minor`: minor 1 adds `gearbox` and minor 2 adds `nextMandatoryBreak` after it; minor 0 carries neither,
+// whatever the POD holds, so lower-minor bytes never change.
 Json state(const StatePod& s, const Currency& currency, unsigned minor) {
   Object o{{"simulation", text_value(simulation(s.simulation))},
     {"speed", measure(scaled(s.speed_mps, 1, -1000, 1000, "m/s"))}, {"fuel", measure(scaled(s.fuel_l, 1, 0, 1e6, "L"))},
@@ -186,9 +191,8 @@ Json state(const StatePod& s, const Currency& currency, unsigned minor) {
     {"gameTime", with(minutes(s.game_time.minutes), "clockId", uuid(s.game_time.clock_id))}, {"captureUtcUnixMs", field(s.capture_utc_unix_ms, decimal)},
     {"boundaryOrder", decimal(s.boundary_order)}, {"worldPlacement", placement(s.world_placement)}, {"configuration", configuration(s.configuration, currency)},
     {"window", window(s.window)}};
-  // ET-052: `minor == 1` is unreachable at minor 2 while v1-server.cpp pins the endpoint to minor 1; PR-3 must change it to
-  // `minor >= 1` (a minor-2 state carries the gearbox too) and add `nextMandatoryBreak` at minor 2.
-  if (minor == 1) o.emplace("gearbox", gearbox(s.gearbox));
+  if (minor >= 1) o.emplace("gearbox", gearbox(s.gearbox));
+  if (minor >= 2) o.emplace("nextMandatoryBreak", mandatory_break(s.next_mandatory_break_min));
   return Json{std::move(o)};
 }
 }

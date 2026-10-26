@@ -8,6 +8,7 @@
 #include <deque>
 #include <filesystem>
 #include <fstream>
+#include <functional>
 #include <future>
 #include <iostream>
 #include <map>
@@ -42,7 +43,8 @@ struct Host {
   std::map<std::string, Registration> channels;
   std::thread::id sdk_thread = std::this_thread::get_id();
   unsigned api_calls = 0, wrong_thread = 0, unregister_calls = 0;
-  std::string missing, erroneous;
+  std::string missing, erroneous, unsupported_type;
+  scs_result_t erroneous_result = SCS_RESULT_generic_error;
   scs_event_t fail_event = 0, throw_event = 0;
   bool throw_cleanup = false, throw_log = false;
   std::vector<std::pair<scs_log_type_t, std::string>> logs;
@@ -58,7 +60,8 @@ struct Host {
   static SCSAPI_RESULT register_channel(scs_string_t name, scs_u32_t index, scs_value_type_t type, scs_u32_t flags, scs_telemetry_channel_callback_t cb, scs_context_t ctx) {
     current->api_call(); require(index == SCS_U32_NIL && flags == (SCS_TELEMETRY_CHANNEL_FLAG_each_frame | SCS_TELEMETRY_CHANNEL_FLAG_no_value), "channel unavailable/every-frame registration flags");
     if (name == current->missing) return SCS_RESULT_not_found;
-    if (name == current->erroneous) return SCS_RESULT_generic_error;
+    if (name == current->unsupported_type) return SCS_RESULT_unsupported_type;
+    if (name == current->erroneous) return current->erroneous_result;
     current->channels[name] = {cb, ctx, type}; return SCS_RESULT_ok;
   }
   static SCSAPI_RESULT unregister_channel(scs_string_t name, scs_u32_t, scs_value_type_t) { current->api_call(); ++current->unregister_calls; current->channels.erase(name); if (current->throw_cleanup) throw std::runtime_error("fake cleanup failure"); return SCS_RESULT_ok; }
@@ -219,7 +222,7 @@ void failure_cleanup() {
     host.throw_event = 0; host.fail_event = 0;
     require(adapter->initialize(SCS_TELEMETRY_VERSION_1_01, &params) == SCS_RESULT_ok, "failed init allows retry");
     host.throw_cleanup = true; adapter->shutdown(); auto stopped = read(*adapter);
-    require(host.events.empty() && host.channels.empty() && stopped->continuity.callback_failures == 16, "throwing unregister isolates all cleanup operations");
+    require(host.events.empty() && host.channels.empty() && stopped->continuity.callback_failures == 17, "throwing unregister isolates all cleanup operations"); // 11 channels (ET-052 adds the break channel) and 6 events
   }
   auto adapter = std::make_unique<Adapter>(); Host host; auto params = host.params(); host.erroneous = "truck.engine.rpm";
   require(adapter->initialize(SCS_TELEMETRY_VERSION_1_01, &params) == SCS_RESULT_generic_error && host.channels.empty() && host.events.empty(), "unexpected channel registration errors fail closed");
@@ -576,8 +579,9 @@ void v1_nonblocking() {
 // Every v0 publication (state, continuity, revision, diagnostics) and every CAP0 envelope must be identical.
 namespace cap0 = ets2telemetry::cap0;
 struct IsolationFrame { std::unique_ptr<Snapshot> snapshot; std::vector<cap0::Envelope> evidence; };
-std::vector<IsolationFrame> isolation_run(bool attach) {
-  auto adapter = std::make_unique<Adapter>(); Host host; auto params = host.params();
+// break_mode 0: the host registers the break channel and never calls it; 1: the game does not provide it; 2: it is called in every frame.
+std::vector<IsolationFrame> isolation_run(bool attach, int break_mode = 0) {
+  auto adapter = std::make_unique<Adapter>(); Host host; if (break_mode == 1) host.missing = "mandatory.break"; auto params = host.params();
   require(adapter->initialize(SCS_TELEMETRY_VERSION_1_01, &params) == SCS_RESULT_ok, "isolation init"); read(*adapter);
   auto queue = std::make_unique<cap0::EvidenceQueue>(); require(queue->prepare(), "CAP0 queue prepared"); queue->open(); adapter->attach_evidence(queue.get());
   auto channel = std::make_unique<v1::EventChannel>(); require(channel->prepare(), "v1 channel prepared");
@@ -585,6 +589,7 @@ std::vector<IsolationFrame> isolation_run(bool attach) {
   adapter->set_consumer(true, true);
   std::vector<IsolationFrame> frames;
   const auto end_frame = [&] {
+    if (break_mode == 2) { auto left = s32(static_cast<std::int32_t>(frames.size()) * 7 - 3); host.channel(Field::mandatory_break, &left); }
     host.frame_end(); IsolationFrame output; output.snapshot = std::make_unique<Snapshot>(); require(adapter->read_latest(*output.snapshot), "v0 frame published");
     cap0::Envelope envelope; while (queue->pop(envelope)) output.evidence.push_back(envelope);
     while (channel->front()) channel->pop();
@@ -612,11 +617,11 @@ std::vector<IsolationFrame> isolation_run(bool attach) {
 }
 template<std::size_t N> bool same_text(const Text<N>& a, const Text<N>& b) { return a.status == b.status && a.bytes == b.bytes; }
 bool same_epoch(const ets2telemetry::sdk::Uuid& a, const ets2telemetry::sdk::Uuid& b) { return std::string(a.c_str()).substr(24) == std::string(b.c_str()).substr(24); }
-void same_v0(const Snapshot& a, const Snapshot& b) {
+void same_v0(const Snapshot& a, const Snapshot& b, std::size_t skip_channel = SIZE_MAX) {
   require(a.boundary_order == b.boundary_order && a.active == b.active && a.exhausted == b.exhausted && a.source_retired == b.source_retired, "v0 isolation: boundary order and lifecycle");
   const auto& x = a.state; const auto& y = b.state;
   require(x.configuration_revision == y.configuration_revision && x.simulation == y.simulation && x.frame_available == y.frame_available && same_epoch(x.game_clock_id, y.game_clock_id), "v0 isolation: revision, simulation and game clock epoch");
-  for (std::size_t i = 0; i < x.channels.size(); ++i) require(x.channels[i].status == y.channels[i].status && x.channels[i].value == y.channels[i].value, "v0 isolation: channel readings");
+  for (std::size_t i = 0; i < x.channels.size(); ++i) if (i != skip_channel) require(x.channels[i].status == y.channels[i].status && x.channels[i].value == y.channels[i].value, "v0 isolation: channel readings");
   require(x.game_time_minutes.status == y.game_time_minutes.status && x.game_time_minutes.value == y.game_time_minutes.value && x.fuel_capacity_l.status == y.fuel_capacity_l.status && x.fuel_capacity_l.value == y.fuel_capacity_l.value, "v0 isolation: game time and fuel capacity");
   require(x.world_placement.status == y.world_placement.status && std::memcmp(&x.world_placement.value, &y.world_placement.value, sizeof x.world_placement.value) == 0 && same_text(x.truck_id, y.truck_id), "v0 isolation: placement and truck");
   const auto& j = x.job; const auto& k = y.job;
@@ -1006,6 +1011,176 @@ void v1_gearbox(const std::filesystem::path& fixtures) {
   host.frame_end(); require(part_reason(*adapter, "hshifter") == "available", "the layout reaches the next publication");
   adapter->shutdown(); adapter->attach_events(nullptr);
 }
+
+// ET-052 PR-3: the optional `mandatory.break` channel (s32 in-game minutes). The wire expectations are the hand-written
+// minor-2 fixtures; the rest is written out by hand: zero is a value, NULL is not observed, a wrong type is invalid, a
+// refused registration is not-supported and never fails initialization, and the channel changes nothing in v0 or CAP0.
+std::string serialized(const v1::Json& node) { return ets2telemetry::v0::detail::serialize(node); }
+// The encoded minor-2 `state.nextMandatoryBreak` of the adapter's current v1 slot, through the minor-2 contract decoder.
+std::string break_wire(Adapter& adapter) {
+  const auto current = v1_read(adapter); const v1::Encoder encoder(v1_identity(*current)); v1::StatusInfo status; status.continuity = current->continuity;
+  const auto frame = v1::encode(encoder.checkpoint(1, UINT64_MAX, current->state, status, 2), 2);
+  return serialized(v1::decode_payload(std::string(frame.begin() + 4, frame.end()), v1::Sender::server, 2).wire.at("data").at("state").at("nextMandatoryBreak"));
+}
+std::string fixture_break(const std::filesystem::path& minor2, const char* name) {
+  return serialized(v1::decode_payload(read_file(minor2 / (std::string(name) + ".json")), v1::Sender::server, 2).wire.at("data").at("state").at("nextMandatoryBreak"));
+}
+// An adapter on the fake host with an attached v1 channel. Source frame timers increase strictly, so only a flagged restart
+// or a game-time regression rotates the clock.
+struct BreakRig {
+  std::unique_ptr<Adapter> adapter = std::make_unique<Adapter>(); Host host; std::unique_ptr<v1::EventChannel> channel = std::make_unique<v1::EventChannel>(); std::uint64_t frames = 0;
+  explicit BreakRig(const std::function<void(Host&)>& configure = {}, scs_result_t expected = SCS_RESULT_ok) {
+    if (configure) configure(host);
+    auto params = host.params();
+    require(adapter->initialize(SCS_TELEMETRY_VERSION_1_01, &params) == expected, "break rig initialization result");
+    if (expected != SCS_RESULT_ok) return;
+    read(*adapter); require(channel->prepare(), "v1 channel prepared"); adapter->attach_events(channel.get()); channel->set_gate(v1::Gate::durable);
+  }
+  ~BreakRig() { adapter->shutdown(); adapter->attach_events(nullptr); }
+  void start(std::uint32_t flags = 0) { scs_telemetry_frame_start_t frame{}; frame.render_time = frame.simulation_time = frame.paused_simulation_time = ++frames * 1000; frame.flags = flags; host.event(SCS_TELEMETRY_EVENT_frame_start, &frame); }
+  // One frame that delivers `value` (nothing when `deliver` is false) and publishes it.
+  std::unique_ptr<Snapshot> frame(const scs_value_t* value, bool deliver = true, std::uint32_t flags = 0) { start(flags); if (deliver) host.channel(Field::mandatory_break, value); host.frame_end(); return read(*adapter); }
+  std::unique_ptr<Snapshot> current() const { auto output = std::make_unique<Snapshot>(); require(adapter->read_current(*output), "current v0 slot"); return output; }
+  Reading<double> v0() const { return reading(*current(), Field::mandatory_break); }
+  v1::Field<std::int32_t> v1_break() const { return v1_read(*adapter)->state.next_mandatory_break_min; }
+};
+void mandatory_break(const std::filesystem::path& fixtures) {
+  const auto minor2 = fixtures / "protocol-v1" / "minor2";
+  const auto expect = [&](Adapter& adapter, const char* fixture, const char* what) { require(break_wire(adapter) == fixture_break(minor2, fixture), what); };
+  constexpr auto restart = SCS_TELEMETRY_FRAME_START_FLAG_timer_restart;
+  // Values: positive, zero, negative, both s32 extremes, and a value that changes from frame to frame.
+  {
+    BreakRig rig; V1Ring ring; rig.host.event(SCS_TELEMETRY_EVENT_started);
+    require(rig.host.channels.count("mandatory.break") == 1 && rig.host.channels.at("mandatory.break").type == SCS_VALUE_TYPE_s32, "registered once as the s32 channel mandatory.break");
+    rig.frame(nullptr, false); ring.drain(*rig.channel);
+    expect(*rig.adapter, "snapshot-break-not-observed", "before any callback the break is not observed");
+    require(rig.v0().status == Availability::not_observed && rig.v1_break().state == v1::FieldState::not_observed, "not observed in v0 and v1 before any callback");
+    const auto calls = rig.host.api_calls; const auto next = rig.channel->next_event_seq();
+    struct Row { std::int32_t minutes; const char* fixture; };
+    const Row rows[]{{95, "snapshot"}, {0, "snapshot-break-zero"}, {-30, "snapshot-break-negative"}, {INT32_MAX, "snapshot-break-int32-max"}, {INT32_MIN, "snapshot-break-int32-min"}};
+    for (const auto& row : rows) {
+      auto value = s32(row.minutes); const auto published = rig.frame(&value); const auto got = reading(*published, Field::mandatory_break);
+      require(got.status == Availability::available && got.value == static_cast<double>(row.minutes), "the v0 channel reading holds the exact s32");
+      require(rig.v1_break().available() && rig.v1_break().value == row.minutes, "the v1 copy holds the exact s32");
+      expect(*rig.adapter, row.fixture, "the encoded break equals its hand-written fixture");
+    }
+    auto zero = s32(0); rig.frame(&zero);
+    require(rig.v1_break().available() && rig.v1_break().value == 0 && break_wire(*rig.adapter) != fixture_break(minor2, "snapshot-break-not-observed"), "zero is available and distinct from unavailable");
+    for (std::int32_t minutes = 95; minutes >= 92; --minutes) { auto value = s32(minutes); rig.frame(&value); require(rig.v1_break().value == minutes && rig.v0().value == minutes, "a changing value follows each frame"); }
+    // The callback copies one value: no event, no eventSeq and no SDK call, and only the SDK thread ran.
+    require(!rig.channel->front() && rig.channel->next_event_seq() == next && rig.host.api_calls == calls && rig.host.wrong_thread == 0, "the break callback emits no event and calls no SDK function");
+  }
+  // NULL is not observed, a wrong type is invalid, and a later valid reading recovers.
+  {
+    BreakRig rig; rig.host.event(SCS_TELEMETRY_EVENT_started);
+    auto value = s32(40); rig.frame(&value);
+    rig.frame(nullptr);
+    require(rig.v0().status == Availability::not_observed && rig.v1_break().state == v1::FieldState::not_observed && !rig.v1_break().available(), "a NULL value is not observed, never zero");
+    expect(*rig.adapter, "snapshot-break-not-observed", "NULL encodes as not-observed");
+    const scs_value_t wrong_types[]{u32(5), floating(5), s64(5), boolean(true), text("5")};
+    for (const auto& wrong : wrong_types) {
+      rig.frame(&value);
+      rig.frame(&wrong);
+      require(rig.v0().status == Availability::invalid && rig.v1_break().state == v1::FieldState::invalid && !rig.v1_break().available(), "a wrong value type is invalid");
+      expect(*rig.adapter, "snapshot-break-invalid", "a wrong type encodes as invalid");
+    }
+    auto zero = s32(0); rig.frame(&zero);
+    require(rig.v0().status == Availability::available && rig.v1_break().available() && rig.v1_break().value == 0, "a valid reading recovers from invalid");
+  }
+  // Registration: any refusal of the optional channel is not-supported and initialization still succeeds.
+  struct Refusal { const char* label; std::function<void(Host&)> configure; scs_result_t result; };
+  const Refusal refusals[]{
+    {"not found", [](Host& h) { h.missing = "mandatory.break"; }, SCS_RESULT_not_found},
+    {"unsupported type", [](Host& h) { h.unsupported_type = "mandatory.break"; }, SCS_RESULT_unsupported_type},
+    {"generic error", [](Host& h) { h.erroneous = "mandatory.break"; }, SCS_RESULT_generic_error},
+    {"unsupported", [](Host& h) { h.erroneous = "mandatory.break"; h.erroneous_result = SCS_RESULT_unsupported; }, SCS_RESULT_unsupported},
+    {"not now", [](Host& h) { h.erroneous = "mandatory.break"; h.erroneous_result = SCS_RESULT_not_now; }, SCS_RESULT_not_now},
+    {"invalid parameter", [](Host& h) { h.erroneous = "mandatory.break"; h.erroneous_result = SCS_RESULT_invalid_parameter; }, SCS_RESULT_invalid_parameter}};
+  for (const auto& refusal : refusals) {
+    BreakRig rig(refusal.configure, SCS_RESULT_ok); const auto initial = rig.current();
+    require(initial->channel_results[static_cast<std::size_t>(Field::mandatory_break)] == refusal.result, refusal.label);
+    require(reading(*initial, Field::mandatory_break).status == Availability::not_supported, "a refused break registration is not-supported");
+    require(!rig.host.channels.count("mandatory.break") && rig.host.channels.count("truck.speed") && rig.host.channels.count("game.time") && rig.host.channels.count("truck.world.placement") && rig.host.events.size() == 6, "every other channel and event is registered");
+    rig.host.event(SCS_TELEMETRY_EVENT_started);
+    auto speed = floating(12.5F); auto minutes = u32(500); scs_value_t placement{}; placement.type = SCS_VALUE_TYPE_dplacement; placement.value_dplacement.position = {1, 2, 3};
+    rig.start(); rig.host.channel(Field::speed, &speed); rig.host.channel(Field::game_time, &minutes); rig.host.channel(Field::world_placement, &placement); rig.host.frame_end();
+    const auto published = read(*rig.adapter);
+    require(reading(*published, Field::speed).status == Availability::available && reading(*published, Field::speed).value == 12.5 && published->state.game_time_minutes.value == 500 && published->state.world_placement.status == Availability::available, "the other channels are intact");
+    expect(*rig.adapter, "snapshot-break-not-supported", "a refused registration encodes as not-supported");
+    rig.frame(nullptr, false, restart);
+    require(rig.v0().status == Availability::not_supported && rig.v1_break().state == v1::FieldState::not_supported, "a timer restart keeps the capability verdict");
+  }
+  // A core channel stays strict: the same refusals still fail initialization and clean up.
+  for (const char* core : {"truck.speed", "truck.world.placement"}) {
+    BreakRig rig([&](Host& h) { h.erroneous = core; }, SCS_RESULT_generic_error);
+    require(rig.host.channels.empty() && rig.host.events.empty(), "a refused core channel fails initialization and unregisters everything");
+  }
+  // Freshness: the previous frame's value does not survive a timer restart or a game-time regression unless the new frame
+  // delivered it, and a value delivered outside any frame is never adopted as fresh.
+  {
+    BreakRig rig; rig.host.event(SCS_TELEMETRY_EVENT_started);
+    auto value = s32(95); rig.frame(&value);
+    rig.frame(nullptr, false, restart);
+    require(rig.v0().status == Availability::not_observed && rig.v1_break().state == v1::FieldState::not_observed, "a timer restart without a new reading clears the break");
+    auto fresh = s32(7); rig.frame(&fresh, true, restart);
+    require(rig.v0().status == Availability::available && rig.v0().value == 7 && rig.v1_break().value == 7, "a break delivered in the restart frame stays");
+    rig.host.channel(Field::mandatory_break, &value);
+    rig.frame(nullptr, false, restart);
+    require(rig.v0().status == Availability::not_observed, "a value delivered outside a frame is not adopted as fresh");
+  }
+  for (const bool break_first : {true, false}) {
+    BreakRig rig; rig.host.event(SCS_TELEMETRY_EVENT_started);
+    auto minutes = u32(500); auto value = s32(95);
+    rig.start(); rig.host.channel(Field::game_time, &minutes); rig.host.channel(Field::mandatory_break, &value); rig.host.frame_end(); read(*rig.adapter);
+    minutes = u32(100); value = s32(30); rig.start();
+    if (break_first) { rig.host.channel(Field::mandatory_break, &value); rig.host.channel(Field::game_time, &minutes); } else { rig.host.channel(Field::game_time, &minutes); rig.host.channel(Field::mandatory_break, &value); }
+    rig.host.frame_end(); read(*rig.adapter);
+    require(rig.v0().status == Availability::available && rig.v0().value == 30 && rig.v1_break().value == 30, "the current frame's break survives a game-time regression in either order");
+    minutes = u32(50); rig.start(); rig.host.channel(Field::game_time, &minutes); rig.host.frame_end(); read(*rig.adapter);
+    require(rig.v0().status == Availability::not_observed && rig.v1_break().state == v1::FieldState::not_observed, "a regression frame without a break clears the previous frame's break");
+  }
+  // A truck configuration clears the dynamic channels like the others; each_frame delivery refills it.
+  {
+    BreakRig rig; rig.host.event(SCS_TELEMETRY_EVENT_started);
+    scs_named_value_t truck[]{attribute("id", text("truck.model.a")), {}};
+    auto value = s32(95); rig.frame(&value);
+    rig.host.config("truck", truck); rig.host.frame_end(); read(*rig.adapter);
+    require(rig.v0().status == Availability::not_observed && rig.v1_break().state == v1::FieldState::not_observed, "a truck configuration clears the break");
+    value = s32(33); rig.start(); rig.host.config("truck", truck); rig.host.channel(Field::mandatory_break, &value); rig.host.frame_end(); read(*rig.adapter);
+    require(rig.v0().value == 33 && rig.v1_break().value == 33, "a break delivered after the truck configuration stays");
+    value = s32(44); rig.start(); rig.host.channel(Field::mandatory_break, &value); rig.host.config("truck", truck); rig.host.frame_end(); read(*rig.adapter);
+    require(rig.v0().status == Availability::not_observed, "a break delivered before the truck configuration is cleared with the other dynamic channels");
+  }
+  // Lower minors never carry the break, whatever the slot holds.
+  {
+    BreakRig rig; rig.host.event(SCS_TELEMETRY_EVENT_started);
+    auto value = s32(95); rig.frame(&value);
+    const auto current = v1_read(*rig.adapter); const v1::Encoder encoder(v1_identity(*current)); v1::StatusInfo status; status.continuity = current->continuity;
+    auto without = current->state; without.next_mandatory_break_min = {};
+    for (const unsigned minor : {0U, 1U}) {
+      require(v1::encode(encoder.checkpoint(1, UINT64_MAX, current->state, status, minor), minor) == v1::encode(encoder.checkpoint(1, UINT64_MAX, without, status, minor), minor), "lower-minor bytes are identical with and without a break");
+      require(v1::encode(encoder.snapshot(1, UINT64_MAX, current->state, status, minor), minor) == v1::encode(encoder.snapshot(1, UINT64_MAX, without, status, minor), minor), "lower-minor snapshot bytes are identical with and without a break");
+    }
+    require(v1::encode(encoder.checkpoint(1, UINT64_MAX, current->state, status, 2), 2) != v1::encode(encoder.checkpoint(1, UINT64_MAX, without, status, 2), 2), "minor 2 carries the break");
+  }
+  // v0 and CAP0 isolation: a game that provides the channel and one that does not give the same v0 snapshots, ordering,
+  // continuity, diagnostic batches and CAP0 envelopes, apart from the break reading itself.
+  {
+    const auto absent = isolation_run(true, 1), present = isolation_run(true, 2);
+    require(absent.size() == present.size() && present.size() == 8, "break isolation frames");
+    bool delivered = false; std::size_t observations = 0;
+    for (std::size_t i = 0; i < absent.size(); ++i) {
+      same_v0(*absent[i].snapshot, *present[i].snapshot, static_cast<std::size_t>(Field::mandatory_break));
+      require(absent[i].evidence.size() == present[i].evidence.size(), "break isolation: CAP0 envelope count");
+      for (std::size_t e = 0; e < absent[i].evidence.size(); ++e) same_cap0(absent[i].evidence[e], present[i].evidence[e]);
+      require(absent[i].snapshot->state.channels[static_cast<std::size_t>(Field::mandatory_break)].status == Availability::not_supported, "the absent channel stays not-supported");
+      delivered = delivered || present[i].snapshot->state.channels[static_cast<std::size_t>(Field::mandatory_break)].status == Availability::available;
+      for (std::size_t o = 0; o < present[i].snapshot->observation_count; ++o) require(std::string(present[i].snapshot->observations[o].name.c_str()) != "mandatory.break", "no v0 diagnostic observation of the break");
+      observations += present[i].snapshot->observation_count;
+    }
+    require(delivered && observations > 20, "the break was delivered and the script exercised diagnostics");
+  }
+}
 }
 int main(int argc, char** argv) {
   try {
@@ -1019,6 +1194,8 @@ int main(int argc, char** argv) {
     else if (argc == 2 && std::string(argv[1]) == "v1-session") v1_session_boundary();
     // ET-050b: needs the repository's tests/fixtures directory for the CAP-01 replays and the minor-1 fixtures.
     else if (argc == 3 && std::string(argv[1]) == "v1-gearbox") v1_gearbox(argv[2]);
+    // ET-052: the optional break channel; needs tests/fixtures for the hand-written minor-2 corpus.
+    else if (argc == 3 && std::string(argv[1]) == "mandatory-break") mandatory_break(argv[2]);
     else {
       lifecycle(); config_terminal_and_bounds(); clocks_and_contention(); failure_cleanup(); deferred_log(); missing_game_time_reset(); game_time_reset_callback_orders(); game_time_reset_frame_delimitation();
       v1_capture_records(); v1_state_and_gate(); v1_nonblocking(); v1_isolation(); v1_drain_into_store(); v1_session_boundary();

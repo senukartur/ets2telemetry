@@ -26,9 +26,10 @@ int main(int argc, char** argv) {
     scs_telemetry_init_params_v100_t params{}; params.common.game_id = "eut2"; params.common.game_version = SCS_MAKE_VERSION(1,20);
     params.register_for_event = register_event; params.unregister_from_event = unregister_event; params.register_for_channel = register_channel; params.unregister_from_channel = unregister_channel;
     passed = passed && init(SCS_TELEMETRY_VERSION_1_01, &params) == SCS_RESULT_ok;
-    shutdown(); shutdown(); passed = passed && registrations == 16 && unregistrations == 6;
+    // Registrations: 11 channels (ET-052 adds mandatory.break) plus 6 events with API 1.01 (gameplay included), 11 plus 5 with API 1.00.
+    shutdown(); shutdown(); passed = passed && registrations == 17 && unregistrations == 6;
     passed = passed && init(SCS_TELEMETRY_VERSION_1_00, &params) == SCS_RESULT_ok; shutdown();
-    passed = passed && registrations == 31 && unregistrations == 11;
+    passed = passed && registrations == 33 && unregistrations == 11;
   }
   FreeLibrary(module);
   std::cout << "Exact official SDK ABI exports/lifecycle: " << (passed ? "passed" : "failed") << '\n'; return passed ? 0 : 1;
