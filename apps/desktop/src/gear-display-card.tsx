@@ -38,7 +38,7 @@ export function GearDisplayCard({settings, onSaved, onRequest, showSaveError}: G
       {UNIT_GAMES.map(game => <div key={game} className="space-y-2">
         <p id={`gear-display-${game}-label`}>{getUnitGameText(game, language)}</p>
         <RadioGroup aria-labelledby={`gear-display-${game}-label`} aria-describedby="gear-display-description" data-testid={`gear-display-${game}`}
-          className="yu-segmented" value={settings?.gearDisplay[game] ?? DEFAULT_GEAR_DISPLAY[game]} disabled={locked} onValueChange={value => choose(game, value)}>
+          className="yu-segmented yu-segmented-stacked" value={settings?.gearDisplay[game] ?? DEFAULT_GEAR_DISPLAY[game]} disabled={locked} onValueChange={value => choose(game, value)}>
           {GEAR_DISPLAY_MODE_IDS.map(mode => <div key={mode} className="yu-segment-option">
             <RadioGroupItem value={mode} id={`gear-display-${game}-${mode}`} /><Label htmlFor={`gear-display-${game}-${mode}`}>{t(mode === 'crawler' ? `s.gear.crawler.${game}` : `s.gear.${mode}`, undefined, language)}</Label>
           </div>)}

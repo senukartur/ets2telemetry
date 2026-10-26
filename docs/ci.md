@@ -775,3 +775,9 @@ ET-050 adds the per-game gear display mode ([settings](settings.md#format-v9-gea
 - **Diagnostic bundle.** `diagnostics-bundle-check.mjs` requires `settings.gearDisplay` with both games and only the two modes; the bundle format version is unchanged.
 
 The settings shard gains a few waited steps per language and size; its 120 s `RunExtended` deadline is unchanged. Hosted durations belong in the PR's CI record.
+
+ET-050b update (October 26, 2026). These smoke changes add no scenario, Job limit, deadline or retry ([settings](settings.md#current-format-v10-the-crawler-gear-mode-et-050b), [ET-050b validation](validation/et-050b.md#ets2-crawler-gear-mode--october-26-2026)):
+- **Lifecycle.** The expected `settings.json` bytes are v10.
+- **UI settings shard.** It commits manual, then crawler, then automatic through the Units control. The read-only check requires all three options of both games to be disabled.
+- **UI overlay shard.** Since the ETS2 crawler amendment, `observeGearDisplay` expects the Mack layout from the ETS2 smoke source as `C1`, `C2`, `1L`, `8H` and `R1`, no longer `LL`/`LH`. It then chooses crawler mode by keyboard. Gears 1, 2, 14, −1 and 0 must read `C`, `1`, `13`, `R1` and `N` on the overlay, the Live instrument and the Live details row, all recorded under `gearDisplayManual`.
+- **Diagnostic bundle.** `diagnostics-bundle-check.mjs` accepts `crawler` as a third mode.

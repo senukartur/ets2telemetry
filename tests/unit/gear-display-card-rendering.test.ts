@@ -54,6 +54,8 @@ it.each(['en', 'ru'] as const)('renders one labelled, described group per game w
     expect(html).toContain(`id="gear-display-${game}-crawler"`);
     expect(html).toContain(`<label for="gear-display-${game}-crawler">${escaped(COPY[language].crawler[game])}</label>`);
     expect(html.match(new RegExp(`<button[^>]*id="gear-display-${game}-`, 'g'))).toHaveLength(3);
+    // Review finding: three options stack in one column instead of wrapping into the two-column segmented grid.
+    expect(group(html, game)).toContain('class="yu-segmented yu-segmented-stacked"');
   }
   const ids = [...html.matchAll(/\sid="([^"]+)"/g)].map(match => match[1]);
   expect(new Set(ids).size).toBe(ids.length);
