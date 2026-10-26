@@ -47,8 +47,8 @@ class Run {
   constructor(private readonly policies: ClientPolicy[], private readonly onClosed: (index: number) => void) {}
   current(): Connection | undefined { return this.connections.at(-1); }
   connect = (endpoint: string) => {
-    // ET-050b: the ingestion offers minor 1 and the simulator serves it, so both directions may carry {1,1}.
-    const socket = net.connect(endpoint), write = socket.write.bind(socket), decoder = new FrameDecoder('server', {maxMinor: 1});
+    // ET-050b, ET-052: the ingestion offers minor 2 and the simulator serves it, so both directions may carry {1,2}.
+    const socket = net.connect(endpoint), write = socket.write.bind(socket), decoder = new FrameDecoder('server', {maxMinor: 2});
     let connection: Connection | undefined, index = -1;
     // Registered before the ingestion's listeners, so a welcome is numbered before the ingestion applies it.
     socket.on('data', (chunk: Buffer) => {
@@ -65,7 +65,7 @@ class Run {
       } catch { /* the ingestion's own decoder reports the violation */ }
     });
     socket.write = ((bytes: Uint8Array, ...rest: unknown[]) => {
-      const m = decodePayload(bytes.subarray(4), 'client', {maxMinor: 1}) as ClientMessage;
+      const m = decodePayload(bytes.subarray(4), 'client', {maxMinor: 2}) as ClientMessage;
       if (m.kind === 'ack' && connection) {
         const ack = connection.policy.ack;
         const lost = ack.kind === 'withhold' || (ack.kind === 'dropAfter' && connection.acksPassed >= ack.count);

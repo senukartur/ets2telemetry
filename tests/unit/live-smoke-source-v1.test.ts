@@ -29,7 +29,18 @@ it('serves validated live-only v1 data that goes stale while held on the same co
     expect(observation.capture.clockId).toBe(identity.clockId);
     const job = observation.state.configuration.job;
     expect(job.available && [job.value.cargoId, job.value.destinationCityId]).toEqual([{available: true, value: 'cargo.logs'}, {available: true, value: 'city.warszawa'}]);
-    // ET-050b: the source selects minor 1, so every state carries the Mack gearbox of the minor-1 fixture, and the v1
+    // ET-052: the source selects minor 2 (the service offers it), so every state also carries a next mandatory break of 95
+    // game minutes until setBreak names another reading; setBreak(undefined) restores 95.
+    expect(observation.state.nextMandatoryBreak).toEqual({available: true, value: 95, unit: 'min'});
+    expect(liveV1Projection(ingestion.current)?.observation?.state.nextMandatoryBreak).toEqual({available: true, value: 95, unit: 'min'});
+    const breakNow = () => ingestion.current.observation!.state.nextMandatoryBreak;
+    for (const reading of [{available: true, value: 0, unit: 'min'}, {available: true, value: -30, unit: 'min'}, {available: false, reason: 'not-observed', unit: 'min'}] as const) {
+      source.setBreak(structuredClone(reading));
+      await vi.waitFor(() => expect(breakNow()).toEqual(reading), {timeout: 2000, interval: 20});
+    }
+    source.setBreak(undefined);
+    await vi.waitFor(() => expect(breakNow()).toEqual({available: true, value: 95, unit: 'min'}), {timeout: 2000, interval: 20});
+    // ET-050b: the source also carries the Mack gearbox of the minor-1 fixture in every state, and the v1
     // truck keeps the fixture's model id until setTruckId names v0's.
     const mack = (JSON.parse(readFileSync('tests/fixtures/protocol-v1/minor1/checkpoint-ats-mack.json', 'utf8')) as {data: {state: {gearbox: unknown}}}).data.state.gearbox;
     expect(observation.state.gearbox).toEqual(mack);

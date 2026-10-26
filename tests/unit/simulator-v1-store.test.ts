@@ -234,11 +234,11 @@ describe('simulator v1 producer caller sequence (docs/native-transport-v1.md ste
     expect(() => live.p.receive(ack('0'), 1n)).toThrow(ProtocolError);
   });
 
-  // ET-050b B1: the producer selects min(hello maxMinor, 1); minor-0 bytes stay the original ones.
+  // ET-050b B1, ET-052: the producer selects min(hello maxMinor, 2); minor-0 and minor-1 bytes stay the original ones.
   const helloOffering = (maxMinor: number, durable = true) => encodeFrame({version: PROTOCOL_V1, kind: 'hello', data: {clientInstanceId: '50000000-0000-4000-8000-000000000001', minMinor: 0, maxMinor, durableEvents: durable}});
   const M1 = {major: 1, minor: 1} as const;
-  it('serves minor 0 without a gearbox to a client that offers only minor 0, and minor 1 with it otherwise', () => {
-    for (const [offered, selected] of [[0, 0], [1, 1], [3, 1]] as const) {
+  it('serves minor 0 without a gearbox or break to a client that offers only minor 0, minor 1 with the gearbox, and minor 2 with both', () => {
+    for (const [offered, selected] of [[0, 0], [1, 1], [2, 2], [3, 2]] as const) {
       const {adapter, p} = producer();
       adapter.configuration('truck', [{name: 'gears.forward', sdkType: 'u32', value: 12}, {name: 'gears.reverse', sdkType: 'u32', value: 4}], 'terminated', 0); adapter.frame(false, {}, 1);
       p.open(); const [welcome, checkpoint] = p.receive(helloOffering(offered), 1_000_002_000_000n);
@@ -246,10 +246,49 @@ describe('simulator v1 producer caller sequence (docs/native-transport-v1.md ste
       const state = checkpoint.message.kind === 'checkpoint' ? checkpoint.message.data.state : undefined;
       if (selected === 0) expect(Object.hasOwn(state!, 'gearbox')).toBe(false);
       else expect(state!.gearbox).toEqual({forwardGears: {available: true, value: 12}, reverseGears: {available: true, value: 4}, hshifter: {available: false, reason: 'not-observed'}});
+      // The break key exists exactly on a minor-2 connection; this adapter's channel was never called back, so it is not-observed.
+      expect(Object.hasOwn(state!, 'nextMandatoryBreak'), `offer ${offered}`).toBe(selected === 2);
+      if (selected === 2) expect(state!.nextMandatoryBreak).toEqual({available: false, reason: 'not-observed', unit: 'min'});
       // Every later message of the connection, here a snapshot, keeps the selected minor.
       adapter.frame(false, {speed: 1}, 100);
       const snapshot = p.publication(1_000_100_000_000n)!;
       expect(snapshot.message.version).toEqual({major: 1, minor: selected});
+    }
+  });
+  it('serves the break on a minor-2 connection exactly as the adapter holds it, and a lower minor never carries it (ET-052)', () => {
+    const M2 = {major: 1, minor: 2} as const;
+    for (const [value, expected] of [[95, {available: true, value: 95, unit: 'min'}], [0, {available: true, value: 0, unit: 'min'}], [-30, {available: true, value: -30, unit: 'min'}],
+      [2147483647, {available: true, value: 2147483647, unit: 'min'}], [-2147483648, {available: true, value: -2147483648, unit: 'min'}],
+      [null, {available: false, reason: 'not-observed', unit: 'min'}], ['invalid', {available: false, reason: 'invalid', unit: 'min'}]] as const) {
+      for (const offered of [1, 2]) {
+        const {adapter, p} = producer();
+        adapter.frame(false, {'mandatory.break': value}, 0);
+        p.open(); const [, checkpoint] = p.receive(helloOffering(offered), 1_000_002_000_000n);
+        const state = checkpoint.message.kind === 'checkpoint' ? checkpoint.message.data.state : undefined;
+        if (offered === 1) { expect(Object.hasOwn(state!, 'nextMandatoryBreak'), `value ${value}`).toBe(false); continue; }
+        expect(state!.nextMandatoryBreak, `value ${value}`).toEqual(expected);
+        // A snapshot of the same connection follows the next frame and keeps minor 2.
+        adapter.frame(false, {'mandatory.break': 7}, 100);
+        const snapshot = p.publication(1_000_100_000_000n)!;
+        expect(snapshot.message.version).toEqual(M2);
+        expect(snapshot.message.kind === 'snapshot' && snapshot.message.data.state.nextMandatoryBreak).toEqual({available: true, value: 7, unit: 'min'});
+      }
+    }
+  });
+  it('accepts ACKs and clock probes at the minor-2 connection minor only (ET-052)', () => {
+    const M2 = {major: 1, minor: 2} as const;
+    const {adapter, p} = producer();
+    p.open(); p.receive(helloOffering(2), 1n);
+    adapter.lifecycle('simulation.started', 0); p.drain(1n); p.pump(1_000_000_000_000n);
+    p.receive(encodeFrame({version: M2, kind: 'ack', data: {pluginSessionId: P, throughEventSeq: '1'}}, {maxMinor: 2}), 1_000_000_000_000n);
+    expect(p.store.releasePoint).toBe(1n);
+    const [reply] = p.receive(encodeFrame({version: M2, kind: 'clock.probe', data: {probeId: '1'}}, {maxMinor: 2}), 1_000_000_000_001n);
+    expect([reply.message.kind, reply.message.version]).toEqual(['clock.reply', M2]);
+    // A {1,1} or {1,0} ACK or probe on a minor-2 connection is refused.
+    for (const version of [{major: 1, minor: 1}, PROTOCOL_V1] as const) for (const kind of ['ack', 'clock.probe'] as const) {
+      const fresh = producer(); fresh.p.open(); fresh.p.receive(helloOffering(2), 1n);
+      const message = kind === 'ack' ? {version, kind, data: {pluginSessionId: P, throughEventSeq: '1'}} : {version, kind, data: {probeId: '2'}};
+      expect(() => fresh.p.receive(encodeFrame(message, {maxMinor: 1}), 1n), `${kind} at minor ${version.minor}`).toThrow(ProtocolError);
     }
   });
   it('accepts ACKs and clock probes only at the connection minor, probes through AckValidator.probe', () => {

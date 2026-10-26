@@ -2,9 +2,9 @@ import {randomUUID} from 'node:crypto';
 import net from 'node:net';
 import {describe, expect, it} from 'vitest';
 import {FrameDecoder, PROTOCOL_V1, V1_MAX_MINOR, encodeFrame as encodeAnyMinor, type ProtocolMessage, type ServerMessage} from '../../packages/contracts/src/protocol-v1';
-// ET-050b: these raw clients offer the contract's highest minor (2 since ET-052). The simulator producer is pinned to
-// minor 1 until ET-052 PR-4, so their connections are minor 1 and every frame after the hello carries {1,1}.
-const M1 = {major: 1, minor: 1} as const;
+// ET-050b, ET-052: these raw clients offer the contract's highest minor (2 since ET-052) and the simulator producer selects
+// it, so their connections are minor 2 and every frame after the hello carries {1,2}.
+const M2 = {major: 1, minor: 2} as const;
 const encodeFrame = (message: ProtocolMessage) => encodeAnyMinor(message, {maxMinor: V1_MAX_MINOR});
 import {V1Consumer} from '../../packages/contracts/src/protocol-v1-delivery';
 import {readFixtureFile} from '../../tools/telemetry-simulator/src/fixture-file';
@@ -72,7 +72,7 @@ describe('simulator v1 reactive serving for any contract consumer', () => {
     try {
       const client = rawClient(server.endpoint, hello(false));
       await until(() => client.messages.length === 2);
-      client.socket.write(encodeFrame({version: M1, kind: 'clock.probe', data: {probeId: '1'}}));
+      client.socket.write(encodeFrame({version: M2, kind: 'clock.probe', data: {probeId: '1'}}));
       await until(() => client.messages.some(m => m.kind === 'clock.reply'));
       await server.stop();
       const {messages} = await client.closed, consumer = new V1Consumer(false, {maxMinor: V1_MAX_MINOR});
@@ -166,7 +166,7 @@ describe('simulator v1 reactive serving for any contract consumer', () => {
   it('awaits a scripted ACK slower than the quiesce bound when asked to', async () => {
     const steps = [{atMs: 10, action: 'lifecycle', event: 'simulation.started'}];
     const s = inline(steps, [{atMs: 0, action: 'connect', client: {durable: true}}, {atMs: 100, action: 'disconnect'}]);
-    const ack = (welcome: ServerMessage) => encodeFrame({version: M1, kind: 'ack', data: {pluginSessionId: welcome.source.pluginSessionId, throughEventSeq: '1'}});
+    const ack = (welcome: ServerMessage) => encodeFrame({version: M2, kind: 'ack', data: {pluginSessionId: welcome.source.pluginSessionId, throughEventSeq: '1'}});
     const slow = await serveV1Reactive(s, {scale: 0, quiesceMs: 20, awaitScriptedAcks: true});
     try {
       const client = rawClient(slow.endpoint, hello(true));

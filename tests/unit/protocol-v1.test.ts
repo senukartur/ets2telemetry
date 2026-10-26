@@ -415,10 +415,11 @@ describe('ET-050b protocol v1 minor-1 corpus', () => {
     expect(() => decodePayload(m1Bytes('hello-envelope-minor-1'), 'client', M1)).toThrow(/Unsupported protocol version/);
   });
   // ET-050b B7 (PR-5): the live observation always carries the gearbox, validated with the minor-1 rules. This replaces
-  // the PR-1 expectation that the gearbox was not projected yet.
+  // the PR-1 expectation that the gearbox was not projected yet. Since ET-052 PR-4 it also always carries the next mandatory
+  // break (MB5), so these states are completed with the substitute `NOT_SUPPORTED_BREAK`, as the projection does for minor 1.
   it('requires the gearbox in the live observation and validates it with the minor-1 rules', () => {
     const m = m1Server('checkpoint'); if (m.kind !== 'checkpoint') throw new Error('fixture');
-    const withGearbox: Partial<typeof m.data.state> = {...m.data.state}; delete withGearbox.window;
+    const withGearbox: Partial<typeof m.data.state> = {...m.data.state, nextMandatoryBreak: NOT_SUPPORTED_BREAK}; delete withGearbox.window;
     const withoutGearbox = {...withGearbox}; delete withoutGearbox.gearbox;
     const live = (state: unknown) => ({source: m.source, seq: m.seq, capture: m.capture, state, sourceStatus: {gameMode: m.data.status.gameMode, eventLoss: m.data.status.eventLoss},
       receivedMonotonicMs: 0, hydration: true});
@@ -584,14 +585,22 @@ describe('ET-052 protocol v1 minor-2 corpus', () => {
     }
     for (const maxMinor of [0, 1, 2]) expect(() => new FrameDecoder('client', {maxMinor})).not.toThrow();
   });
-  // ET-052 MB5 (PR-4 changes this): nothing projects the break yet, so the live observation still has the minor-1 shape and
-  // a state that carries the key is not a live observation.
-  it('keeps the live observation at the minor-1 shape until the service projects the break', () => {
+  // ET-052 MB5 (PR-4): the service projects the break, so the live observation has the minor-2 shape: the gearbox and the
+  // break are both required, a minor-0 or minor-1 projection carries `NOT_SUPPORTED_BREAK`, and the wire rules apply to it.
+  it('requires the next mandatory break in the live observation and validates it with the minor-2 rules', () => {
     const m = m2Server('checkpoint'); if (m.kind !== 'checkpoint') throw new Error('fixture');
     const state: Partial<typeof m.data.state> = {...m.data.state}; delete state.window;
     const live = (s: unknown) => ({source: m.source, seq: m.seq, capture: m.capture, state: s, sourceStatus: {gameMode: m.data.status.gameMode, eventLoss: m.data.status.eventLoss}, receivedMonotonicMs: 0, hydration: true});
-    expect(() => validateLiveObservationV1(live(state))).toThrow(ProtocolError);
-    delete state.nextMandatoryBreak; expect(validateLiveObservationV1(live(state)).state).toEqual(state);
+    expect(validateLiveObservationV1(live(state)).state).toEqual(state);
+    // The break is required: a minor-1 shaped state is no longer a live observation.
+    const withoutBreak = {...state}; delete withoutBreak.nextMandatoryBreak;
+    expect(() => validateLiveObservationV1(live(withoutBreak))).toThrow(ProtocolError);
+    // The substitute for a source below minor 2 and each unavailable or edge reading are valid; the wire bounds apply.
+    for (const value of [NOT_SUPPORTED_BREAK, {available: true, value: 0, unit: 'min'}, {available: true, value: -30, unit: 'min'}, {available: true, value: 2147483647, unit: 'min'},
+      {available: true, value: -2147483648, unit: 'min'}, {available: false, reason: 'not-observed', unit: 'min'}, {available: false, reason: 'invalid', unit: 'min'}])
+      expect(validateLiveObservationV1(live({...state, nextMandatoryBreak: value})).state.nextMandatoryBreak, JSON.stringify(value)).toEqual(value);
+    for (const value of [null, {available: true, value: 2147483648, unit: 'min'}, {available: true, value: 45.5, unit: 'min'}, {available: true, value: '45', unit: 'min'}, {available: true, value: 5, unit: 'm'}])
+      expect(() => validateLiveObservationV1(live({...state, nextMandatoryBreak: value})), JSON.stringify(value)).toThrow(ProtocolError);
   });
 });
 

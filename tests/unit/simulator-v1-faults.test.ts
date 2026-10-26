@@ -119,7 +119,7 @@ describe('simulator v1 wire faults', () => {
   });
   it('accepts a skipped message seq as the legal control', () => {
     const r = replayV1(scenario([durable(0), {atMs: 15, action: 'wireFault', fault: 'seqSkip'}, {atMs: 200, action: 'disconnect'}], {faultInjection: true}));
-    const consumer = new V1Consumer(true, {maxMinor: 1}), skipped = r.transcript.filter(l => l.direction === 'server').map(l => consumer.accept(l.message).skippedSequences);
+    const consumer = new V1Consumer(true, {maxMinor: 2}), skipped = r.transcript.filter(l => l.direction === 'server').map(l => consumer.accept(l.message).skippedSequences);
     expect(skipped).toEqual(['0', '0', '0', '1', '0']);
     expect(r.connections[0].closedBy).toBe('disconnect');
   });
