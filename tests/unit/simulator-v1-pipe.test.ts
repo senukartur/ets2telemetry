@@ -28,8 +28,11 @@ const HELLO_TIMEOUT_MS = 300;
 const SOURCE = {versions: {telemetryApi: {major: 1, minor: 1}, gameTelemetry: {major: 1, minor: 19}, sdkArchive: 'scs-sdk-1.15'}, gameplayEvents: 'registered', currency: 'unknown', gameMode: 'unknown'};
 const inline = (steps: Json[], transport: Json[]): Json => ({format: 'ets2telemetry-simulator-v1', schemaVersion: 1, id: 'pipe-test', purpose: 'Pipe test', reg: ['REG-011'], origin: 'synthetic',
   game: 'ets2', seed: 'pipe-test', provenance: null, source: SOURCE, steps, transport});
-/** The hello of the inline scenario's first client instance, as its script sends it. */
-const hello = (durableEvents = true) => encodeFrame({version: PROTOCOL_V1, kind: 'hello', data: {clientInstanceId: seededId('pipe-test', 'client-instance-1'), minMinor: 0, maxMinor: V1_MAX_MINOR, durableEvents}});
+/**
+ * The hello of the inline scenario's first client instance, as its script sends it. The lockstep server compares it with the
+ * scripted client's hello, whose default offer is pinned to minor 1 (ET-052 MB3) although the contract implements 2.
+ */
+const hello = (durableEvents = true) => encodeFrame({version: PROTOCOL_V1, kind: 'hello', data: {clientInstanceId: seededId('pipe-test', 'client-instance-1'), minMinor: 0, maxMinor: 1, durableEvents}});
 
 /** A raw test client: connects, sends `first`, decodes server frames and records how the connection ended. */
 function rawClient(endpoint: string, first?: Uint8Array) {

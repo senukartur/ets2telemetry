@@ -6,7 +6,7 @@
 // production it records nothing and sends no ACK. See docs/telemetry-service-v1.md.
 import {randomUUID} from 'node:crypto';
 import net from 'node:net';
-import {FrameDecoder, PROTOCOL_V1, V1_MAX_MINOR, encodeFrame, type CaptureTime, type Continuity, type CurrentState, type EndData, type ServerMessage, type SourceIdentity, type SourceStatus, type Uint64, type V1Minor} from '../../../packages/contracts/src/protocol-v1';
+import {FrameDecoder, PROTOCOL_V1, encodeFrame, type CaptureTime, type Continuity, type CurrentState, type EndData, type ServerMessage, type SourceIdentity, type SourceStatus, type Uint64, type V1Minor} from '../../../packages/contracts/src/protocol-v1';
 import {V1Consumer, computeClockMapping, isClockMappingCurrent, type ClockMapping} from '../../../packages/contracts/src/protocol-v1-delivery';
 import type {LiveTelemetry, SourceSelection} from '../../../packages/contracts/src';
 import type {DiagnosticFacts} from './diagnostics';
@@ -26,8 +26,10 @@ export const V1_PROBE_INTERVAL_MS = 1000;
  * ET-050b B1: the highest minor this service offers. The hello's `maxMinor`, the server-frame decoder and the consumer's
  * accepted maximum all use it; the plugin then selects min(offer, its own maximum), so a plugin from before ET-050b
  * selects 0 and a current one 1.
+ * ET-052: pinned to the literal 1 while the contract implements minor 2 (V1_MAX_MINOR), so no running service offers
+ * minor 2 until the service-side PR (PR-4) flips this to 2 together with the live projection of the break.
  */
-export const V1_CLIENT_MAX_MINOR: V1Minor = V1_MAX_MINOR;
+export const V1_CLIENT_MAX_MINOR: V1Minor = 1;
 const FRESHNESS_TICK_MS = 50;
 
 export type V1Status = Exclude<LiveTelemetry['status'], 'service-failed' | 'restarting'>;

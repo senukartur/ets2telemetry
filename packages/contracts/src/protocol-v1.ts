@@ -1,14 +1,19 @@
-// Durable telemetry protocol 1.0 and 1.1 (ET-002b; minor 1, the gearbox state, is ET-050b). It is a separate major from
-// the frozen v0 live protocol and from CAP0 evidence capture: each decoder rejects the others' frames. Protocol logic is
-// independent of Electron, Node APIs, SDK callbacks and storage. The wire format is specified in docs/protocol/v1.md.
+// Durable telemetry protocol 1.0, 1.1 and 1.2 (ET-002b; minor 1, the gearbox state, is ET-050b; minor 2, the next
+// mandatory break, is ET-052). It is a separate major from the frozen v0 live protocol and from CAP0 evidence capture:
+// each decoder rejects the others' frames. Protocol logic is independent of Electron, Node APIs, SDK callbacks and
+// storage. The wire format is specified in docs/protocol/v1.md.
 import {isUint64, strictJson, type Uint64} from './protocol-v0';
 
 export type {Uint64};
 /** Version 1.0: every hello, and every message of a connection that selected minor 0. */
 export const PROTOCOL_V1 = {major: 1, minor: 0} as const;
-/** The highest minor this contract implements. Minor 1 adds `state.gearbox` to checkpoints and snapshots (§7). */
-export const V1_MAX_MINOR = 1;
-export type V1Minor = 0 | 1;
+/**
+ * The highest minor this contract implements. Minor 1 adds `state.gearbox` to checkpoints and snapshots (§7); minor 2
+ * adds `state.nextMandatoryBreak` on top of it (ET-052 MB1). Raising this constant widens what the decoders accept; it
+ * does not make any runtime path offer or serve the new minor (the offers are pinned where they are made).
+ */
+export const V1_MAX_MINOR = 2;
+export type V1Minor = 0 | 1 | 2;
 export interface V1Version {major: 1; minor: V1Minor}
 /**
  * Minor selection for the stateless entry points. Every entry point defaults to 0, so a caller accepts or writes a
@@ -33,6 +38,7 @@ export const GAP_RECORD_BYTES = 1_024;
 /** The last assignable eventSeq, so that `nextEventSeq` stays representable as a uint64 after it. */
 export const MAX_EVENT_SEQ = '18446744073709551614';
 const U32_MAX = 4_294_967_295;
+const S32_MIN = -2_147_483_648, S32_MAX = 2_147_483_647;
 
 export type Sender = 'server' | 'client';
 export type UnavailableReason = 'not-supported' | 'not-observed' | 'invalid';
@@ -88,8 +94,14 @@ export interface CurrentState {
   boundaryOrder: Uint64; worldPlacement: Available<WorldPlacement>;
   configuration: {revision: Uint64; job: Available<JobConfiguration>; truck: Available<TruckConfiguration>; trailers: Available<TrailerConfiguration>[]};
   window: Available<WindowState>;
-  /** Present exactly when the message's envelope minor is 1. */
+  /** Present exactly when the message's envelope minor is 1 or 2. */
   gearbox?: GearboxState;
+  /**
+   * Present exactly when the message's envelope minor is 2 (ET-052 MB1): the SDK's `mandatory.break`, game minutes until
+   * the next mandatory rest. Unlike `GameMinutes` it is a plain signed JSON integer in the s32 range, because the SDK
+   * value is s32 and goes negative when the break is overdue; zero is an available value, never unavailable.
+   */
+  nextMandatoryBreak?: Measure<'min'>;
 }
 /** Cumulative counts of lost eventSeqs by cause; gap messages use the same keys for one range. */
 export interface LossCounts {offline: Uint64; noDurableConsumer: Uint64; queueCount: Uint64; queueBytes: Uint64; retentionExpired: Uint64; encodingFailed: Uint64}
@@ -281,9 +293,9 @@ function gearbox(v: unknown) {
     }
   });
 }
-/** The minor-0 state, plus `gearbox` exactly when the envelope minor is 1. */
+/** The minor-0 state, plus `gearbox` from minor 1 and `nextMandatoryBreak` from minor 2, exactly as the envelope minor says. */
 function state(v: unknown, minor: V1Minor) {
-  const o = record(v, minor === 0 ? STATE_KEYS : [...STATE_KEYS, 'gearbox']);
+  const o = record(v, [...STATE_KEYS, ...(minor >= 1 ? ['gearbox'] : []), ...(minor >= 2 ? ['nextMandatoryBreak'] : [])]);
   choice(o.simulation, ['running', 'paused', 'unavailable']);
   measure(o.speed, 'm/s', -1_000, 1_000); measure(o.fuel, 'L', 0, 1_000_000); measure(o.fuelCapacity, 'L', 0, 1_000_000);
   measure(o.engineRpm, 'rpm', 0, 100_000); measure(o.gear, 'index', -100, 100, true); measure(o.odometer, 'm', 0, 1e12);
@@ -300,7 +312,9 @@ function state(v: unknown, minor: V1Minor) {
   if (!Array.isArray(c.trailers) || c.trailers.length > V1_LIMITS.trailerSlots) fail();
   c.trailers.forEach((slot, index) => available(slot, value => { if (trailer(record(value, TRAILER_KEYS)) !== index) fail(); }));
   available(o.window, windowState);
-  if (minor === 1) gearbox(o.gearbox);
+  if (minor >= 1) gearbox(o.gearbox);
+  // A signed integer of the s32 range; negative means overdue and zero is a value (ET-052 MB1).
+  if (minor >= 2) measure(o.nextMandatoryBreak, 'min', S32_MIN, S32_MAX, true);
 }
 function status(v: unknown, captureNs: bigint) {
   const o = record(v, ['gameMode', 'delivery', 'eventLoss']); gameMode(record(o.gameMode, GAME_MODE_KEYS)); lossCounts(o.eventLoss);
@@ -379,12 +393,12 @@ function source(v: unknown) {
 /** The caller's highest accepted minor; a value this contract does not implement is a caller error. */
 function maxMinorOf(options: V1MinorOptions): V1Minor {
   const max = options.maxMinor ?? 0;
-  if (max !== 0 && max !== 1) fail('Unsupported maximum protocol v1 minor');
+  if (max !== 0 && max !== 1 && max !== 2) fail('Unsupported maximum protocol v1 minor');
   return max;
 }
 function version(v: unknown, maxMinor: V1Minor): V1Minor {
   const ver = record(v, ['major', 'minor']);
-  if (ver.major !== PROTOCOL_V1.major || (ver.minor !== 0 && !(ver.minor === 1 && maxMinor === 1))) fail('Unsupported protocol version');
+  if (ver.major !== PROTOCOL_V1.major || (ver.minor !== 0 && ver.minor !== 1 && ver.minor !== 2) || ver.minor > maxMinor) fail('Unsupported protocol version');
   return ver.minor;
 }
 /**
@@ -434,6 +448,11 @@ export function validateServerMessage(v: unknown, options: V1MinorOptions = {}):
  * (ET-050b B7): a minor-1 connection's own, and under minor 0, which carries none, every part `not-supported`.
  */
 export type LiveStateV1 = Omit<CurrentState, 'window' | 'gearbox'> & {gearbox: GearboxState};
+/**
+ * The live next mandatory break of a connection below minor 2: those minors transport none, so it is `not-supported`
+ * (ET-052 MB5). Nothing projects it yet; the live observation gains the field when the service negotiates minor 2.
+ */
+export const NOT_SUPPORTED_BREAK: Readonly<Measure<'min'>> = Object.freeze({available: false, reason: 'not-supported', unit: 'min'});
 /** The live gearbox of a minor-0 connection: minor 0 transports no gearbox, so every part is `not-supported` (B7). */
 export const NOT_SUPPORTED_GEARBOX: Readonly<GearboxState> = Object.freeze({
   forwardGears: Object.freeze({available: false, reason: 'not-supported'}), reverseGears: Object.freeze({available: false, reason: 'not-supported'}),
@@ -552,7 +571,8 @@ export class FrameDecoder {
  */
 export function negotiateV1(input: unknown, options: {allowDurable: boolean; maxMinor?: number} = {allowDurable: true}): {version: V1Version; minor: V1Minor; durableEvents: boolean} {
   const own = maxMinorOf(options), hello = validateClientMessage(input); if (hello.kind !== 'hello') fail();
-  const minor: V1Minor = hello.data.maxMinor < own ? 0 : own;
+  // min(offer, own): a client that offers less than the server's maximum gets exactly its offer, never minor 0 by default.
+  const minor = Math.min(hello.data.maxMinor, own) as V1Minor;
   return {version: {major: 1, minor}, minor, durableEvents: hello.data.durableEvents && options.allowDurable};
 }
 

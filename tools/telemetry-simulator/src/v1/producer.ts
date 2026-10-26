@@ -3,7 +3,7 @@
 // docs/native-transport-v1.md#caller-sequence), answers one client at a time and builds every server message through the
 // unchanged ET-002b encoder, AckValidator and FrameDecoder. Every time is an explicit source-clock argument.
 import {
-  FrameDecoder, PROTOCOL_V1, V1_LIMITS, V1_MAX_MINOR, decodePayload, encodeFrame, negotiateV1, ProtocolError,
+  FrameDecoder, PROTOCOL_V1, V1_LIMITS, decodePayload, encodeFrame, negotiateV1, ProtocolError,
   type Available, type DeliveryStatus, type EndData, type GapData, type ServerMessage, type SourceIdentity, type SourceStatus, type Uint64, type V1Minor
 } from '../../../../packages/contracts/src/protocol-v1';
 import {AckValidator} from '../../../../packages/contracts/src/protocol-v1-delivery';
@@ -170,7 +170,8 @@ export class V1Producer {
     const m = decodePayload(buffer.subarray(4), 'client'); c.helloBytes = new Uint8Array(0);
     if (m.kind !== 'hello') throw new ProtocolError('Hello expected');
     // B1: the simulator selects min(hello maxMinor, 1); a hello offering only minor 0 gets the original minor-0 bytes.
-    const negotiated = negotiateV1(m, {allowDurable: true, maxMinor: V1_MAX_MINOR});
+    // ET-052: pinned to the literal 1 although the contract implements minor 2; PR-4 serves minor 2 and flips this to 2.
+    const negotiated = negotiateV1(m, {allowDurable: true, maxMinor: 1});
     c.durable = negotiated.durableEvents; c.minor = negotiated.minor; c.phase = 'live';
     // Client frames after the hello carry the connection's minor; the decoder and the validator refuse any other.
     c.decoder = new FrameDecoder('client', {maxMinor: c.minor});

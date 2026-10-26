@@ -1,7 +1,7 @@
 // Scripted protocol v1 contract client for the simulator (ET-005b). It is built only from the unchanged ET-002b helpers
 // (FrameDecoder, V1Consumer, DurableAckCursor, computeClockMapping) plus an in-memory CommitLedger that stands in for the
 // storage transaction (CD-6). It is a test client: it opens no database and writes no history.
-import {FrameDecoder, PROTOCOL_V1, V1_MAX_MINOR, encodeFrame, type ClientMessage, type ProtocolMessage, type ServerMessage, type V1Minor} from '../../../../packages/contracts/src/protocol-v1';
+import {FrameDecoder, PROTOCOL_V1, encodeFrame, type ClientMessage, type ProtocolMessage, type ServerMessage, type V1Minor} from '../../../../packages/contracts/src/protocol-v1';
 import {DurableAckCursor, V1Consumer, computeClockMapping, type ClockMapping} from '../../../../packages/contracts/src/protocol-v1-delivery';
 
 /**
@@ -11,7 +11,10 @@ import {DurableAckCursor, V1Consumer, computeClockMapping, type ClockMapping} fr
 export type CommitPolicy = {kind: 'each'} | {kind: 'none'} | {kind: 'failAt'; eventSeq: bigint} | {kind: 'crashAfterCommit'; eventSeq: bigint};
 /** `each` delivers every cursor ACK; `withhold` never asks the cursor; `dropAfter` delivers the first n ACKs and loses the rest. */
 export type AckPolicy = {kind: 'each'} | {kind: 'withhold'} | {kind: 'dropAfter'; count: number};
-/** `maxMinor` (ET-050b B1) is the hello's offer, the contract's highest (1) when omitted. */
+/**
+ * `maxMinor` (ET-050b B1) is the hello's offer, 1 when omitted. ET-052: pinned to the literal 1 although the contract
+ * implements minor 2, so no default scripted client offers minor 2 until PR-4 flips it to the contract's highest.
+ */
 export interface ClientPolicy {durable: boolean; commit: CommitPolicy; ack: AckPolicy; maxMinor?: V1Minor}
 
 /**
@@ -61,7 +64,7 @@ export class ScriptedClient {
   /** `origin` is the one source origin this client accepts; the simulator never accepts `game` (CD-4). */
   constructor(private readonly ledger: CommitLedger, private readonly policy: ClientPolicy, readonly clientInstanceId: string, private readonly clientClockId: string,
     private readonly cursors: Map<string, DurableAckCursor>, private readonly origin: 'synthetic' | 'replay' = 'synthetic') {
-    const maxMinor = this.maxMinor = policy.maxMinor ?? V1_MAX_MINOR;
+    const maxMinor = this.maxMinor = policy.maxMinor ?? 1;
     this.decoder = new FrameDecoder('server', {maxMinor}); this.consumer = new V1Consumer(policy.durable, {maxMinor});
   }
   /** The connection's minor once the welcome selected it; 0 before. Client messages after the hello carry it. */
