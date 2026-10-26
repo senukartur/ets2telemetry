@@ -117,7 +117,7 @@ it('eases only the speed arc over 150 ms, not under reduced motion, and colours 
 });
 
 // ET-052 (MB8, MB10): the next mandatory break in every layout. The icon is the lucide coffee cup, the strip item is capped at
-// 150 px and reserves the width of the longest text through data-reserve, and the urgency is never colour alone:
+// 150 px and reserves the width of the longest text through data-reserve, and the urgency has a cue beyond colour only in part (due is underlined; soon has the accessible name):
 // data-urgency and an accessible name with the state word on the item, in both languages. Colours and the underline are
 // stylesheet rules (overlay-strip.test.ts reads them).
 const breakSections = (patch: object): OverlayPresentation['sections'] => [{id: 'speed', state: 'value', text: '90 km/h'}, {id: 'mandatory-break', state: 'value', text: '1 h 35 min', ...patch}] as OverlayPresentation['sections'];
