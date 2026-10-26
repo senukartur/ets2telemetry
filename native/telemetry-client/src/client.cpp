@@ -328,7 +328,7 @@ struct Credits {
   // Protocol v1 only: `helloSent` orders client frames after the hello on the pipe, and `stop` ends a pending client write.
   Handle helloSent{CreateEventW(nullptr, TRUE, FALSE, nullptr)}, stop{CreateEventW(nullptr, TRUE, FALSE, nullptr)};
   std::atomic<bool> stopping{false}, rejected{false}; std::atomic<ClientFailure> client{ClientFailure::none}; std::atomic<DWORD> clientError{ERROR_SUCCESS};
-  // Protocol v1 only (ET-050b B1): the highest minor a client frame may carry, min(hello maxMinor, 1). The broker does not
+  // Protocol v1 only (ET-050b B1): the highest minor a client frame may carry, min(hello maxMinor, the contract's highest minor). The broker does not
   // parse the welcome, so it bounds client frames by the offer and requires one minor for every relayed frame; the
   // plugin then refuses any frame whose minor is not the connection's. Declared before the reader, which reads it.
   const unsigned maxMinor;
@@ -526,8 +526,8 @@ int wmain(int argc, wchar_t** argv) {
     stage = "hello"; unsigned char prefix[4]; stdio_io(GetStdHandle(STD_INPUT_HANDLE), prefix, 4, false); const auto helloLength = frame_length(prefix); if (!helloLength || helloLength > 4096) fail();
     std::vector<unsigned char> hello(helloLength + 4); std::copy(prefix, prefix + 4, hello.begin()); stdio_io(GetStdHandle(STD_INPUT_HANDLE), hello.data() + 4, helloLength, false);
     const std::string helloPayload(reinterpret_cast<char*>(hello.data() + 4), helloLength);
-    // ET-050b B1: the v1 hello is always version 1.0; its offer, capped at the contract's highest minor, bounds the client
-    // frames this broker relays.
+    // ET-050b B1: the v1 hello is always version 1.0; min(its offer, the contract's highest minor) bounds the client
+    // frames this broker relays (ET-052: the contract now implements minor 2, so an offer of 1 stays 1).
     unsigned clientMaxMinor = 0;
     if (capture) ets2telemetry::cap0::validate_hello(helloPayload);
     else if (protocolV1) clientMaxMinor = v1::negotiate(v1::decode_payload(helloPayload, v1::Sender::client), true, v1::highest_minor).minor;
