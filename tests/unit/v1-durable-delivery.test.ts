@@ -24,6 +24,11 @@ const dir1 = resolve(dir, 'minor1');
 const server1 = (name: string) => decodePayload(new Uint8Array(readFileSync(resolve(dir1, `${name}.json`))), 'server', {maxMinor: 1}) as ServerMessage;
 const client1 = (name: string) => validateClientMessage(decodePayload(new Uint8Array(readFileSync(resolve(dir1, `${name}.json`))), 'client', {maxMinor: 1}), {maxMinor: 1});
 const streams1 = readFileSync(resolve(dir1, 'streams.txt'), 'utf8').trim().split(/\r?\n/).map(line => line.trim().split(/\s+/));
+/** ET-052: the minor-2 corpus, read at maxMinor 2 (tests/fixtures/protocol-v1/minor2). */
+const dir2 = resolve(dir, 'minor2');
+const server2 = (name: string) => decodePayload(new Uint8Array(readFileSync(resolve(dir2, `${name}.json`))), 'server', {maxMinor: 2}) as ServerMessage;
+const client2 = (name: string) => validateClientMessage(decodePayload(new Uint8Array(readFileSync(resolve(dir2, `${name}.json`))), 'client', {maxMinor: 2}), {maxMinor: 2});
+const streams2 = readFileSync(resolve(dir2, 'streams.txt'), 'utf8').trim().split(/\r?\n/).map(line => line.trim().split(/\s+/));
 const P1 = '10000000-0000-4000-8000-000000000001', P2 = '10000000-0000-4000-8000-000000000002';
 const welcome = (name = 'welcome') => server(name) as WelcomeMessage;
 /** An event of session P1 with the given eventSeq, cloned from a shared fixture (the payload differs per `variant`). */
@@ -113,8 +118,8 @@ class Link implements DurableLink {
   constructor(private readonly log: string[], private readonly validator?: AckValidator) {}
   current() { return this.open; }
   write(bytes: Uint8Array) {
-    // Either minor decodes here; the producer-side validator holds the connection to its own minor.
-    const m = decodePayload(bytes.subarray(4), 'client', {maxMinor: 1}) as ClientMessage;
+    // Any minor decodes here; the producer-side validator holds the connection to its own minor.
+    const m = decodePayload(bytes.subarray(4), 'client', {maxMinor: 2}) as ClientMessage;
     if (m.kind !== 'ack') throw new Error('ACK expected');
     // The producer-side validator proves that every ACK the pipeline writes satisfies the producer rule (§10).
     this.validator?.accept(m);
@@ -128,9 +133,10 @@ class Link implements DurableLink {
  * them; the stream's scripted `C:` ACKs belong to another client, so the pipeline's own ACKs replace them and pass the
  * producer-side AckValidator. `A:<n>` requires the pipeline's last ACK since the previous `A:` or `R` to be n, `A:-` none.
  */
-async function replay(steps: string[], minor1 = false) {
-  const sink = new MemorySink(), delivery = new DurableDelivery(sink), finals: string[] = [], offer = {maxMinor: minor1 ? 1 : 0};
-  const read = minor1 ? server1 : server, readClient = minor1 ? client1 : client;
+async function replay(steps: string[], corpus: 0 | 1 | 2 | boolean = 0) {
+  const level = corpus === true ? 1 : corpus === false ? 0 : corpus;
+  const sink = new MemorySink(), delivery = new DurableDelivery(sink), finals: string[] = [], offer = {maxMinor: level};
+  const read = [server, server1, server2][level], readClient = [client, client1, client2][level];
   let consumer = new V1Consumer(true, offer), validator: AckValidator | undefined, link: Link | undefined, connection: ReturnType<DurableDelivery['connect']> | undefined, mark = 0;
   const acks = () => link?.acks ?? [];
   for (const step of steps) {
@@ -198,6 +204,18 @@ describe('ET-006b storage-commit ACK pipeline', () => {
     const welcomeMinor = server1(steps.split(',').find(step => step.startsWith('S:'))!.slice(2)).version.minor;
     // A stream without coverage writes no ACK; every ACK written carries the welcome's minor.
     expect(new Set(link.minors)).toEqual(new Set(expected === '0' ? [] : [welcomeMinor]));
+  });
+  // ET-052: a minor-2 connection begins its cursor at minor 2 and writes every ACK at minor 2, which the minor-2
+  // AckValidator accepts; the welcome of an older plugin (minor 1 or 0) keeps its own minor for every ACK, and the same
+  // service offer of 2 accepts all three.
+  for (const [name, durable, steps, outcome, expected] of streams2) if (durable === '1' && outcome === 'accept') it(`replays the minor-2 stream ${name} with ACKs at the welcome minor`, async () => {
+    const {finalAck, link} = await replay(steps.split(','), 2);
+    expect(finalAck).toBe(expected);
+    const welcomeMinor = server2(steps.split(',').find(step => step.startsWith('S:'))!.slice(2)).version.minor;
+    expect(new Set(link.minors)).toEqual(new Set(expected === '0' ? [] : [welcomeMinor]));
+  });
+  it('covers the durable accepted minor-2 streams, including the older plugins\' minors', () => {
+    expect(streams2.filter(([, durable, , outcome]) => durable === '1' && outcome === 'accept').map(([name]) => name)).toEqual(['normal', 'break-availability', 'old-plugin-minor-1', 'old-plugin-minor-0']);
   });
   it('covers the durable accepted minor-1 streams', () => {
     expect(streams1.filter(([, durable, , outcome]) => durable === '1' && outcome === 'accept').map(([name]) => name)).toEqual(['normal', 'gearbox-availability', 'old-plugin-minor-0']);

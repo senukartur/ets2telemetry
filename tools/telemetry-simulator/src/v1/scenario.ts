@@ -85,7 +85,7 @@ function channels(v: unknown, path: string): FrameChannels {
       const o = obj(raw, p, ['x', 'y', 'z', 'heading', 'pitch', 'roll']);
       out[name] = Object.fromEntries(['x', 'y', 'z', 'heading', 'pitch', 'roll'].map(k => [k, finite(o[k], `${p}.${k}`)]));
     } else if (name === 'game.time') out[name] = int(raw, p, 0, 4_294_967_295);
-    else if (name === 'displayed.gear') out[name] = int(raw, p, -2_147_483_648, 2_147_483_647);
+    else if (name === 'displayed.gear' || name === 'mandatory.break') out[name] = int(raw, p, -2_147_483_648, 2_147_483_647);
     else out[name] = float32(raw, p);
   }
   return out;
@@ -123,8 +123,8 @@ function policy(v: unknown, path: string, connectAt: number): ClientPolicy & {pr
   const probes = opt(o, 'probes', raw => arr(raw, `${path}.probes`, 100).map((t, i) => {
     const at = int(t, `${path}.probes[${i}]`, connectAt + 1, MAX_AT_MS); if (at < last + 1_000) fail(`${path}.probes[${i}]`, 'probes must be at least 1,000 ms apart'); last = at; return at;
   }), []);
-  // ET-050b B1: the hello's offer; omitted, the client offers minor 1 (its default offer is pinned to 1 until ET-052 PR-4).
-  const maxMinor = Object.hasOwn(o, 'maxMinor') ? int(o.maxMinor, `${path}.maxMinor`, 0, 1) as 0 | 1 : undefined;
+  // ET-050b B1, ET-052: the hello's offer, 0 to 2; omitted, the client offers minor 2.
+  const maxMinor = Object.hasOwn(o, 'maxMinor') ? int(o.maxMinor, `${path}.maxMinor`, 0, 2) as 0 | 1 | 2 : undefined;
   return {durable, commit, ack, probes, ...(maxMinor === undefined ? {} : {maxMinor})};
 }
 
@@ -151,7 +151,9 @@ export function sourceStep(v: unknown, path: string, source: Scenario['source'])
     case 'lifecycle': { const o = obj(v, path, ['atMs', 'action', 'event']); return {atMs: at(o), action, event: oneOf(o.event, `${path}.event`, ['simulation.started', 'simulation.paused'] as const)}; }
     case 'frame': {
       const o = obj(v, path, ['atMs', 'action'], ['timerRestart', 'channels']);
-      return {atMs: at(o), action, timerRestart: opt(o, 'timerRestart', raw => bool(raw, `${path}.timerRestart`), false), channels: opt(o, 'channels', raw => channels(raw, `${path}.channels`), {})};
+      const frame = opt(o, 'channels', raw => channels(raw, `${path}.channels`), {});
+      if (source.mandatoryBreak === 'not-supported' && Object.hasOwn(frame, 'mandatory.break')) fail(path, 'the mandatory.break callback is not registered in this session');
+      return {atMs: at(o), action, timerRestart: opt(o, 'timerRestart', raw => bool(raw, `${path}.timerRestart`), false), channels: frame};
     }
     case 'gameMode': {
       const o = obj(v, path, ['atMs', 'action', 'mode', 'method', 'confidence'], ['module']);
@@ -200,7 +202,7 @@ export function validateScenario(input: unknown): Scenario {
   if (origin === 'replay' && !provenance) fail('$.provenance', 'replay requires capture provenance');
   const reg = arr(o.reg, '$.reg', 18).map((r, i) => { const s = str(r, `$.reg[${i}]`); if (!/^REG-0(0[1-9]|1[0-8])$/.test(s)) fail(`$.reg[${i}]`); return s; });
   if (!reg.length || new Set(reg).size !== reg.length) fail('$.reg', 'unique REG identifiers expected');
-  const s = obj(o.source, '$.source', ['versions', 'gameplayEvents', 'currency', 'gameMode'], ['startEventSeq']);
+  const s = obj(o.source, '$.source', ['versions', 'gameplayEvents', 'currency', 'gameMode'], ['startEventSeq', 'mandatoryBreak', 'highestMinor']);
   const v = obj(s.versions, '$.source.versions', ['telemetryApi', 'gameTelemetry', 'sdkArchive']);
   const pair = (p: unknown, path: string) => { const x = obj(p, path, ['major', 'minor']); return {major: int(x.major, `${path}.major`, 0, 65_535), minor: int(x.minor, `${path}.minor`, 0, 65_535)}; };
   const sdkArchive = str(v.sdkArchive, '$.source.versions.sdkArchive');
@@ -210,7 +212,11 @@ export function validateScenario(input: unknown): Scenario {
     gameplayEvents: oneOf(s.gameplayEvents, '$.source.gameplayEvents', ['registered', 'not-supported'] as const),
     currency: oneOf(s.currency, '$.source.currency', ['unknown', 'sdk-documented'] as const),
     gameMode: oneOf(s.gameMode, '$.source.gameMode', ['unknown', 'synthetic-detection'] as const),
-    startEventSeq: opt(s, 'startEventSeq', raw => { if (!isUint64(raw) || BigInt(raw) < 1n || BigInt(raw) > BigInt(MAX_EVENT_SEQ)) fail('$.source.startEventSeq'); return BigInt(raw); }, 1n)
+    startEventSeq: opt(s, 'startEventSeq', raw => { if (!isUint64(raw) || BigInt(raw) < 1n || BigInt(raw) > BigInt(MAX_EVENT_SEQ)) fail('$.source.startEventSeq'); return BigInt(raw); }, 1n),
+    // ET-052: omitted, the channel is registered; an explicit value keeps a scenario's intent readable.
+    ...(Object.hasOwn(s, 'mandatoryBreak') ? {mandatoryBreak: oneOf(s.mandatoryBreak, '$.source.mandatoryBreak', ['registered', 'not-supported'] as const)} : {}),
+    // ET-052: a simulated older plugin; omitted, the plugin serves up to minor 2.
+    ...(Object.hasOwn(s, 'highestMinor') ? {highestMinor: int(s.highestMinor, '$.source.highestMinor', 0, 2) as 0 | 1 | 2} : {})
   };
   const steps = arr(o.steps, '$.steps', MAX_STEPS).map((x, i) => sourceStep(x, `$.steps[${i}]`, source));
   const faultInjection = opt(o, 'faultInjection', raw => bool(raw, '$.faultInjection'), false);

@@ -25,11 +25,10 @@ export const V1_PROBE_INTERVAL_MS = 1000;
 /**
  * ET-050b B1: the highest minor this service offers. The hello's `maxMinor`, the server-frame decoder and the consumer's
  * accepted maximum all use it; the plugin then selects min(offer, its own maximum), so a plugin from before ET-050b
- * selects 0 and a current one 1.
- * ET-052: pinned to the literal 1 while the contract implements minor 2 (V1_MAX_MINOR), so no running service offers
- * minor 2 until the service-side PR (PR-4) flips this to 2 together with the live projection of the break.
+ * selects 0, one from ET-050b 1 and a current one 2 (ET-052: the next mandatory break). It is a literal, not
+ * `V1_MAX_MINOR`, so a future contract minor is never offered before this service reads it.
  */
-export const V1_CLIENT_MAX_MINOR: V1Minor = 1;
+export const V1_CLIENT_MAX_MINOR: V1Minor = 2;
 const FRESHNESS_TICK_MS = 50;
 
 export type V1Status = Exclude<LiveTelemetry['status'], 'service-failed' | 'restarting'>;

@@ -1510,6 +1510,22 @@ async function v1Consumers() {
   consumeOverlay(dashboard); consumeOverlay(overlayChannel);
   return {dashboard, overlayChannel};
 }
+// ET-052: the raw break (95 minutes in snapshot-live's minor-2 stand-in below, zero and negative included) reaches the dashboard
+// unclamped; the overlay projection gains no field and no section yet.
+it.each([
+  [{available: true, value: 95, unit: 'min'}], [{available: true, value: 0, unit: 'min'}], [{available: true, value: -30, unit: 'min'}],
+  [{available: false, reason: 'not-observed', unit: 'min'}], [{available: false, reason: 'not-supported', unit: 'min'}]
+] as const)('carries the next mandatory break %j to the dashboard exactly and leaves the overlay projection unchanged', async measure => {
+  const {dashboard, overlayChannel} = await v1Consumers();
+  deliver(readingWithV1({nextMandatoryBreak: structuredClone(measure)})); await vi.advanceTimersByTimeAsync(50);
+  const update = dashboard.port1.postMessage.mock.lastCall![0].update as LiveTelemetry;
+  expect(update.v1!.observation!.state.nextMandatoryBreak).toEqual(measure);
+  const projection = overlayProjection(overlayChannel);
+  expect(Object.keys(projection)).toEqual(OVERLAY_KEYS);
+  // Deliberate pin: the overlay carries no break until ET-052 PR-5 adds the Break section label; PR-5 flips this expectation.
+  expect(JSON.stringify(projection)).not.toMatch(/Break|break/);
+  expect(log.mock.calls.filter(call => call[0] === 'LIVE_V1_REJECTED')).toEqual([]);
+});
 it('feeds a valid v1 projection to the dashboard and into the overlay sections, whose shape is unchanged', async () => {
   const {dashboard, overlayChannel} = await v1Consumers();
   deliver(readingWithV1()); await vi.advanceTimersByTimeAsync(50);
@@ -1528,7 +1544,10 @@ it.each([
       foreground: true, minimized: false, displayMode: 'borderless'}};
   }],
   ['a projection with an extra clock mapping', (update: LiveTelemetry) => {(update.v1 as unknown as Record<string, unknown>).clockMapping = {offsetNs: '1'};}],
-  ['a projection of another selection', (update: LiveTelemetry) => {update.v1!.selection = 'ats';}]
+  ['a projection of another selection', (update: LiveTelemetry) => {update.v1!.selection = 'ats';}],
+  // ET-052 MB5: the projection always carries the next mandatory break; a missing or out-of-range one is stripped.
+  ['a projection without the next mandatory break', (update: LiveTelemetry) => {delete (update.v1!.observation!.state as unknown as Record<string, unknown>).nextMandatoryBreak;}],
+  ['a projection whose next mandatory break leaves the s32 range', (update: LiveTelemetry) => {update.v1!.observation!.state.nextMandatoryBreak = {available: true, value: 2147483648, unit: 'min'};}]
 ])('strips %s, logs it at occurrences 1, 2 and 4 and keeps the v0 update and the channel', async (_name, corrupt) => {
   const {dashboard, overlayChannel} = await v1Consumers();
   for (let delivery = 1; delivery <= 5; delivery++) {

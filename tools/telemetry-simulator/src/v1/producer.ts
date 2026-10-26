@@ -114,8 +114,10 @@ export class V1Producer {
   private stateData(): {data: {state: Extract<ServerMessage, {kind: 'snapshot'}>['data']['state']; status: SourceStatus; continuity: {coalescedSnapshots: Uint64; offlineTransitions: Uint64}}; oldest?: bigint} {
     const s = this.store.status(), p = this.adapter.published;
     return {oldest: s.oldestRetainedNs, data: {
-      // B1: `state.gearbox` exactly on a minor-1 connection; minor 0 never carries it.
-      state: {...structuredClone(p.state), window: {available: false, reason: 'not-supported'}, ...(this.conn!.minor === 1 ? {gearbox: structuredClone(p.gearbox)} : {})},
+      // B1, ET-052: `state.gearbox` from minor 1 and `state.nextMandatoryBreak` exactly on a minor-2 connection; a lower
+      // minor never carries the extra key.
+      state: {...structuredClone(p.state), window: {available: false, reason: 'not-supported'}, ...(this.conn!.minor >= 1 ? {gearbox: structuredClone(p.gearbox)} : {}),
+        ...(this.conn!.minor >= 2 ? {nextMandatoryBreak: structuredClone(p.nextMandatoryBreak)} : {})},
       status: {gameMode: this.adapter.gameMode, eventLoss: wireCounts(s.eventLoss), delivery: deliveryStatus(s, this.conn!.durable)},
       continuity: {coalescedSnapshots: this.coalesced.toString(), offlineTransitions: p.offlineTransitions.toString()}
     }};
@@ -169,9 +171,10 @@ export class V1Producer {
     // Another major, another envelope minor or any other kind closes the connection without an error frame (§2).
     const m = decodePayload(buffer.subarray(4), 'client'); c.helloBytes = new Uint8Array(0);
     if (m.kind !== 'hello') throw new ProtocolError('Hello expected');
-    // B1: the simulator selects min(hello maxMinor, 1); a hello offering only minor 0 gets the original minor-0 bytes.
-    // ET-052: pinned to the literal 1 although the contract implements minor 2; PR-4 serves minor 2 and flips this to 2.
-    const negotiated = negotiateV1(m, {allowDurable: true, maxMinor: 1});
+    // B1, ET-052: the simulator selects min(hello maxMinor, its highest minor); a hello offering only minor 0 or 1, or a
+    // simulated older plugin (`highestMinor`), gets the original minor-0 or minor-1 bytes. The default highest minor is the
+    // literal 2, not V1_MAX_MINOR, so a future contract minor is never served before the simulator models it.
+    const negotiated = negotiateV1(m, {allowDurable: true, maxMinor: this.adapter.config.highestMinor ?? 2});
     c.durable = negotiated.durableEvents; c.minor = negotiated.minor; c.phase = 'live';
     // Client frames after the hello carry the connection's minor; the decoder and the validator refuse any other.
     c.decoder = new FrameDecoder('client', {maxMinor: c.minor});

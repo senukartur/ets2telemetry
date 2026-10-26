@@ -4,7 +4,7 @@
 import {readFileSync} from 'node:fs';
 import type {LiveTelemetry, LiveTelemetryV1, SourceSelection} from '../../packages/contracts/src';
 import * as v0 from '../../packages/contracts/src/protocol-v0';
-import {decodePayload, type GearboxState, type LiveStateV1, type ServerMessage} from '../../packages/contracts/src/protocol-v1';
+import {decodePayload, type GearboxState, type LiveStateV1, type Measure, type ServerMessage} from '../../packages/contracts/src/protocol-v1';
 import type {V1SourceState} from '../../apps/desktop/src/v1-ingestion';
 
 export type V0State = Extract<v0.ServerMessage, {kind: 'checkpoint' | 'snapshot'}>;
@@ -45,6 +45,8 @@ export interface V1Options {
   /** `v0`: the job's cargo and destination city ids of the v0 fixtures (cargo.logs, city.warszawa), as the smoke source sets them. */
   ids?: 'v0' | 'fixture'; origin?: 'game' | 'synthetic' | 'replay'; game?: 'ets2' | 'ats';
   receivedMonotonicMs?: number;
+  /** ET-052: the projection's next mandatory break; by default what the fixture carries, or not-supported below minor 2. */
+  nextMandatoryBreak?: Measure<'min'>;
 }
 /** The live v1 projection of a v1 fixture message, by hand: the state without its window and two status fields. */
 export function v1Projection(name = 'snapshot-live', options: V1Options = {}): LiveTelemetryV1 {
@@ -52,6 +54,8 @@ export function v1Projection(name = 'snapshot-live', options: V1Options = {}): L
   const state = Object.fromEntries(Object.entries(message.data.state).filter(([key]) => key !== 'window')) as LiveStateV1;
   // ET-050b B7: the projection always carries the gearbox; a minor-0 fixture has none, so every part is not-supported.
   state.gearbox ??= {forwardGears: {available: false, reason: 'not-supported'}, reverseGears: {available: false, reason: 'not-supported'}, hshifter: {available: false, reason: 'not-supported'}};
+  // ET-052 MB5: likewise the next mandatory break; a minor-0 or minor-1 fixture carries none, so it is not-supported.
+  state.nextMandatoryBreak = structuredClone(options.nextMandatoryBreak ?? state.nextMandatoryBreak ?? {available: false, reason: 'not-supported', unit: 'min'});
   const job = state.configuration.job;
   if ((options.ids ?? 'v0') === 'v0' && job.available) {
     job.value.cargoId = {available: true, value: 'cargo.logs'};
@@ -70,7 +74,8 @@ export function v1Projection(name = 'snapshot-live', options: V1Options = {}): L
 }
 /** The smoke pair: the v0 smoke checkpoint with the v1 projection of snapshot-live carrying the same job ids. */
 export function smokePair(v1: V1Options = {}, v0Patch: Partial<LiveTelemetry> = {}): LiveTelemetry {
-  return {...smokeV0(v0Patch), v1: v1Projection('snapshot-live', v1)};
+  // ET-052: the smoke source serves minor-2 states with a next mandatory break of 95 game minutes (scripts/ci/live-smoke-source-v1.mjs).
+  return {...smokeV0(v0Patch), v1: v1Projection('snapshot-live', {nextMandatoryBreak: {available: true, value: 95, unit: 'min'}, ...v1})};
 }
 /** A service-internal v1 source state of a fixture, with the service-only fields the projection must drop. */
 export function v1SourceState(name = 'snapshot-live', patch: Partial<V1SourceState> = {}): V1SourceState {

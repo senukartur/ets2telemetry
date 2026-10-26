@@ -96,6 +96,7 @@ Values are in [tokens.css](tokens.css). Summary:
 | Cargo, origin, destination | `Package`, `MapPin`, `Flag` |
 | Distance driven, range, consumption | `Route`, `Navigation`, `Droplet` |
 | Deadline, game time, income | `Clock`, `Calendar`, `Coins` |
+| Next mandatory break (ET-052) | `Coffee` beside the row label; its urgency badge pairs `Hourglass` (soon, warn tone) or `TriangleAlert` (due, error tone) with a word |
 | Connection lost, paused | `WifiOff`, `Pause` |
 | Folder, export, refresh, exit | `FolderOpen`, `Download`, `RefreshCw`, `Power` |
 
@@ -163,6 +164,7 @@ Owner-requested amendment, October 22, 2026 (ET-012e): the central speed number 
 | `live.trip` | This trip: real time, game time, fuel used, recording completeness badge | Open trip from `AppState.health.recording` and the trip recorder |
 | `live.truck` | Truck, plate, trailer(s), odometer | `truck`, `truck-plate`, `trailers`, `odometer` |
 | `live.session` | Game clock (`Day N, HH:MM`), mode, protocol, lost events | `game-time`, `game-mode`, protocol, `event-loss` |
+| `live.details` row `live-mandatory-break` (ET-052) | In the Time section after the delivery deadline: `Coffee` icon and the label "Next mandatory break" (RU "До обязательного перерыва") with the note "game time", the value `H h M min` (RU `H ч M мин`) clamped at `0 min`, and for a current soon (1 to 119 min) or due (0 or less) value a badge `live-mandatory-break-badge`: warn tone, `Hourglass` and "Soon" ("Скоро"), or error tone, `TriangleAlert` and "Break due" ("Пора"); a normal value (120 min or more) has no badge. The badge is `role="img"` named "<label>: <word>"; the icon is decorative and the colour never carries the meaning alone. Not observed, not supported or invalid reads "unavailable" with its reason; a stale v1 source reads "unavailable (not current)"; hidden without a carried v1 source. The overlay section follows in a later package | `mandatory-break` (v1 minor 2 `state.nextMandatoryBreak`), live only, never recorded (D4) |
 
 States: **Waiting**: banner and dashes. **Paused**: values stay current with a ◷ paused badge. **Stale or disconnected**: values greyed with a ✕ "stale 12 s" badge; never shown as current. **Incompatible**: error banner (see §6).
 

@@ -103,7 +103,7 @@ function gatedConnect(timeline: string[], afterEventSeq: string, release: () => 
     const socket = new ClientSocket(net.connect(endpoint), sockets++ === 0 ? {afterEventSeq, until: release} : undefined, fail);
     const write = socket.write.bind(socket);
     socket.write = (bytes: Uint8Array, ...rest: unknown[]) => {
-      const m = decodePayload(bytes.subarray(4), 'client', {maxMinor: 1}) as ClientMessage;
+      const m = decodePayload(bytes.subarray(4), 'client', {maxMinor: 2}) as ClientMessage;
       if (m.kind === 'ack') timeline.push(`ack ${m.data.throughEventSeq}`);
       return write(bytes, ...rest);
     };

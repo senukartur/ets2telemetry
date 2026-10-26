@@ -12,8 +12,7 @@ export type CommitPolicy = {kind: 'each'} | {kind: 'none'} | {kind: 'failAt'; ev
 /** `each` delivers every cursor ACK; `withhold` never asks the cursor; `dropAfter` delivers the first n ACKs and loses the rest. */
 export type AckPolicy = {kind: 'each'} | {kind: 'withhold'} | {kind: 'dropAfter'; count: number};
 /**
- * `maxMinor` (ET-050b B1) is the hello's offer, 1 when omitted. ET-052: pinned to the literal 1 although the contract
- * implements minor 2, so no default scripted client offers minor 2 until PR-4 flips it to the contract's highest.
+ * `maxMinor` (ET-050b B1, ET-052) is the hello's offer, 2 when omitted: the highest minor the simulator's client reads.
  */
 export interface ClientPolicy {durable: boolean; commit: CommitPolicy; ack: AckPolicy; maxMinor?: V1Minor}
 
@@ -64,7 +63,7 @@ export class ScriptedClient {
   /** `origin` is the one source origin this client accepts; the simulator never accepts `game` (CD-4). */
   constructor(private readonly ledger: CommitLedger, private readonly policy: ClientPolicy, readonly clientInstanceId: string, private readonly clientClockId: string,
     private readonly cursors: Map<string, DurableAckCursor>, private readonly origin: 'synthetic' | 'replay' = 'synthetic') {
-    const maxMinor = this.maxMinor = policy.maxMinor ?? 1;
+    const maxMinor = this.maxMinor = policy.maxMinor ?? 2;
     this.decoder = new FrameDecoder('server', {maxMinor}); this.consumer = new V1Consumer(policy.durable, {maxMinor});
   }
   /** The connection's minor once the welcome selected it; 0 before. Client messages after the hello carry it. */

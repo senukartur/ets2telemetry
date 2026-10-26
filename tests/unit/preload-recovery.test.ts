@@ -144,12 +144,26 @@ it('never passes an invalid or foreign v1 projection to the listener and keeps t
   (withWindow.v1!.observation!.state as unknown as Record<string, unknown>).window = {available: false, reason: 'not-observed'};
   const foreign = smokePair({selection: 'replay'});
   const extra = smokePair(); (extra.v1 as unknown as Record<string, unknown>).durable = {state: 'off'};
-  [withWindow, foreign, extra].forEach((update, index) => {
+  // ET-052 MB5: the projection always carries the next mandatory break, in the s32 range with unit min.
+  const noBreak = smokePair(); delete (noBreak.v1!.observation!.state as unknown as Record<string, unknown>).nextMandatoryBreak;
+  const hugeBreak = smokePair({nextMandatoryBreak: {available: true, value: 2147483648, unit: 'min'}});
+  const wrongUnit = smokePair(); (wrongUnit.v1!.observation!.state as unknown as Record<string, unknown>).nextMandatoryBreak = {available: true, value: 5, unit: 'm'};
+  [withWindow, foreign, extra, noBreak, hugeBreak, wrongUnit].forEach((update, index) => {
     port.deliver(update, index + 1);
     expect(consume.mock.lastCall?.[0]).not.toHaveProperty('v1');
     expect(consume.mock.lastCall?.[0]).toMatchObject({selection: 'synthetic', status: 'connected', fresh: true});
   });
   expect(port.closed).toBe(false);
+  stop();
+});
+it('passes the raw next mandatory break through and keeps it on an expired projection', async () => {
+  const consume = vi.fn(); const stop = bridge.subscribeLive(consume); const port = attach();
+  port.deliver(smokePair({nextMandatoryBreak: {available: true, value: -30, unit: 'min'}}));
+  expect(consume.mock.lastCall?.[0].v1.observation.state.nextMandatoryBreak).toEqual({available: true, value: -30, unit: 'min'});
+  await vi.advanceTimersByTimeAsync(500);
+  expect(consume.mock.lastCall?.[0].v1).toMatchObject({fresh: false, status: 'stale', observation: {state: {nextMandatoryBreak: {available: true, value: -30, unit: 'min'}}}});
+  port.deliver(smokePair({nextMandatoryBreak: {available: true, value: 0, unit: 'min'}, receivedMonotonicMs: 900}), 2);
+  expect(consume.mock.lastCall?.[0].v1.observation.state.nextMandatoryBreak).toEqual({available: true, value: 0, unit: 'min'});
   stop();
 });
 it('marks v1 data stale when the subscription closes or a replacement port awaits data', () => {

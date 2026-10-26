@@ -242,7 +242,7 @@ describe('ET-010c card with the v1 smoke projection', () => {
   it('lists the v1 rows of the smoke as the combined rows that v0 does not carry', () => {
     const v0Ids = new Set(SYNTHETIC_V0_LIVE_ROWS.map(([id]) => id));
     expect(SYNTHETIC_V0V1_LIVE_ROWS.filter(([id]) => !v0Ids.has(id))).toEqual(SYNTHETIC_V1_LIVE_ROWS);
-    expect(SYNTHETIC_V1_VALUE_IDS).toEqual(['live-route-remaining', 'live-deadline', 'live-source-city', 'live-source-company', 'live-destination-company',
+    expect(SYNTHETIC_V1_VALUE_IDS).toEqual(['live-route-remaining', 'live-deadline', 'live-mandatory-break', 'live-source-city', 'live-source-company', 'live-destination-company',
       'live-cargo-mass', 'live-market', 'live-special-job', 'live-truck-plate', 'live-trailers', 'live-position', 'live-bearing', 'live-game-mode', 'live-event-loss']);
   });
   it('labels the v1 rows', () => {
@@ -251,6 +251,68 @@ describe('ET-010c card with the v1 smoke projection', () => {
     expect(source.rows.map(entry => [entry.label, entry.value])).toEqual([['Game mode', 'single-player (weak evidence, module-scan)'], ['Lost events', '2']]);
     expect(row(text, 'route-remaining')!.label).toBe('Route remaining');
     expect(row(text, 'truck-plate')!.label).toBe('License plate');
+  });
+});
+
+// ET-052 D3: the next mandatory break row and its urgency badge. Expected texts are written by hand from the rules in
+// docs/live-telemetry-fields.md: the value clamps at zero, zero or less is due (red), 1 to 119 minutes soon (orange),
+// 120 or more normal (no badge); a word and an accessible name always travel with the badge.
+describe('ET-052 next mandatory break row', () => {
+  const withBreak = (measure: v1.Measure<'min'>, v1Options: Parameters<typeof smokePair>[0] = {}, v0Patch: Parameters<typeof smokePair>[1] = {}) =>
+    smokePair({nextMandatoryBreak: measure, ...v1Options}, v0Patch);
+  const available = (value: number): v1.Measure<'min'> => ({available: true, value, unit: 'min'});
+  const unavailable = (reason: 'not-observed' | 'not-supported' | 'invalid'): v1.Measure<'min'> => ({available: false, reason, unit: 'min'});
+
+  it('sits in the Time section after the deadline, with the game-time note, labelled in both languages', () => {
+    for (const [language, label, note] of [['en', 'Next mandatory break', 'game time'], ['ru', 'До обязательного перерыва', 'игровое время']] as const) {
+      const text = liveDashboardText(withBreak(available(95)), undefined, language);
+      expect(text.sections.find(section => section.id === 'time')!.rows.map(entry => entry.id)).toEqual(['game-time', 'deadline', 'mandatory-break']);
+      expect(row(text, 'mandatory-break')).toMatchObject({testId: 'live-mandatory-break', label, note});
+    }
+  });
+  it.each([
+    [95, '1 h 35 min', '1 ч 35 мин', 'soon', 'Soon', 'Скоро'], [119, '1 h 59 min', '1 ч 59 мин', 'soon', 'Soon', 'Скоро'], [1, '1 min', '1 мин', 'soon', 'Soon', 'Скоро'],
+    [120, '2 h 0 min', '2 ч 0 мин', undefined, undefined, undefined], [600, '10 h 0 min', '10 ч 0 мин', undefined, undefined, undefined],
+    [0, '0 min', '0 мин', 'due', 'Break due', 'Пора'], [-1, '0 min', '0 мин', 'due', 'Break due', 'Пора'], [-30, '0 min', '0 мин', 'due', 'Break due', 'Пора'],
+    [-2147483648, '0 min', '0 мин', 'due', 'Break due', 'Пора'], [2147483647, '35791394 h 7 min', '35791394 ч 7 мин', undefined, undefined, undefined]
+  ] as const)('shows %d minutes as %s with the %s urgency (zero is a value, never unavailable)', (minutes, en, ru, urgency, wordEn, wordRu) => {
+    const english = row(liveDashboardText(withBreak(available(minutes))), 'mandatory-break')!, russian = row(liveDashboardText(withBreak(available(minutes)), undefined, 'ru'), 'mandatory-break')!;
+    expect([english.value, russian.value]).toEqual([en, ru]);
+    expect(english).not.toHaveProperty('reason');
+    if (urgency === undefined) { expect(english).not.toHaveProperty('badge'); expect(russian).not.toHaveProperty('badge'); return; }
+    expect(english.badge).toEqual({urgency, text: wordEn, name: `Next mandatory break: ${wordEn}`});
+    expect(russian.badge).toEqual({urgency, text: wordRu, name: `До обязательного перерыва: ${wordRu}`});
+  });
+  it.each([
+    ['not-observed', 'not yet observed', 'ещё не наблюдалось'], ['not-supported', 'not provided by the game', 'не предоставлено игрой'], ['invalid', 'invalid reading', 'некорректное значение']
+  ] as const)('shows an unavailable break (%s) as unavailable with its reason and never as zero or with a badge', (reason, en, ru) => {
+    const english = row(liveDashboardText(withBreak(unavailable(reason))), 'mandatory-break')!, russian = row(liveDashboardText(withBreak(unavailable(reason)), undefined, 'ru'), 'mandatory-break')!;
+    expect([english.value, english.reason]).toEqual(['unavailable', en]);
+    expect([russian.value, russian.reason]).toEqual(['недоступно', ru]);
+    expect(english).not.toHaveProperty('badge');
+  });
+  it('is hidden without a v1 projection, for another origin and before the first v1 observation, as every v1-only row is', () => {
+    for (const v1Update of [undefined, v1Projection('snapshot-live', {origin: 'replay'}), {...v1Projection(), observation: undefined, fresh: false, status: 'waiting' as const, reason: 'Awaiting selected source'}])
+      expect(row(liveDashboardText({...smokeV0(), ...(v1Update ? {v1: v1Update} : {})}), 'mandatory-break')).toBeUndefined();
+  });
+  it('shows a stale or disconnected v1 break as not current, without a badge, even for a soon or due value', () => {
+    for (const value of [95, 0]) {
+      const text = liveDashboardText(withBreak(available(value), {status: 'stale', fresh: false, reason: 'Main has no recent v1 SDK capture'}));
+      expect(row(text, 'mandatory-break')).toMatchObject({value: 'unavailable', reason: 'not current'});
+      expect(row(text, 'mandatory-break')).not.toHaveProperty('badge');
+    }
+  });
+  it('is independent of the job: it shows with no v0 job and with another job, and stays current while v0 is stale', () => {
+    expect(row(liveDashboardText({...v0Live('unavailable', 'synthetic'), v1: v1Projection('snapshot-live', {nextMandatoryBreak: available(95)})}), 'mandatory-break')).toMatchObject({value: '1 h 35 min'});
+    expect(row(liveDashboardText(withBreak(available(95), {ids: 'fixture'})), 'mandatory-break')).toMatchObject({value: '1 h 35 min'});
+    expect(row(liveDashboardText(withBreak(available(95), {}, {status: 'stale', fresh: false})), 'mandatory-break')).toMatchObject({value: '1 h 35 min'});
+  });
+  it('is not shown by the v0-only card and does not change any other row', () => {
+    expect(row(liveDashboardText(smokeV0()), 'mandatory-break')).toBeUndefined();
+    const without = liveDashboardText(withBreak(unavailable('not-supported')));
+    const with95 = liveDashboardText(withBreak(available(95)));
+    const others = (t: LiveDashboardText) => t.sections.map(section => ({...section, rows: section.rows.filter(entry => entry.id !== 'mandatory-break')}));
+    expect(others(with95)).toEqual(others(without));
   });
 });
 
@@ -323,7 +385,8 @@ describe('ET-010c v1 rows under each source state', () => {
     const telemetry = {...v0Live('unavailable', 'synthetic'), v1: v1Projection()};
     const text = liveDashboardText(telemetry);
     expect(text.sections.find(section => section.id === 'job')).toEqual({id: 'job', testId: 'live-section-job', title: 'Job', missing: 'No job reported', rows: []});
-    expect(text.sections.find(section => section.id === 'time')!.rows.map(entry => entry.id)).toEqual(['game-time']);
+    // The next mandatory break (ET-052) is not job-bound: v1 alone supplies it. This v1 fixture is minor 0, so it is not-supported.
+    expect(text.sections.find(section => section.id === 'time')!.rows.map(entry => entry.id)).toEqual(['game-time', 'mandatory-break']);
     expect(row(text, 'route-remaining')).toMatchObject({value: '151.0 km'});
   });
   it('shows the v1 job rows of another job as not current', () => {

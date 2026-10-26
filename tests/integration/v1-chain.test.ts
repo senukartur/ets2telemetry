@@ -15,9 +15,11 @@ import {V1Consumer} from '../../packages/contracts/src/protocol-v1-delivery';
 // It proves that the plugin accepts the policy the broker provisions, that a client ACK relayed through the broker
 // releases retained entries, and that V1Ingestion with a game selection fails closed on the test DLL's fixed synthetic
 // origin under game authority. Production sends no ACK (E2); the ACK here comes from a test-level durable driver.
-// ET-050b: the driver offers minor 1 as the service does; the plugin selects it, the host's `gearbox` command sends the
-// CAP-01 12-speed hshifter layout and a 12F/4R truck, and the broker relays the driver's {1,1} ACKs and clock probe. A
-// second, live-only driver that offers only minor 0, as a service from before ET-050b, gets minor 0 without a gearbox.
+// ET-050b, ET-052: the driver offers minor 2 as the service does; the plugin selects it, the host's `gearbox` command sends
+// the CAP-01 12-speed hshifter layout and a 12F/4R truck, and the broker relays the driver's {1,2} ACKs and clock probe.
+// The host's frames never call the optional `mandatory.break` channel back, so the minor-2 state carries it not-observed.
+// Later live-only drivers that offer only minor 1 (a service from ET-050b) or minor 0 (before it) get the original minor-1
+// bytes (the gearbox, no break) and the original minor-0 bytes (neither).
 // Synthetic only: no game, game directory or user history is touched.
 const root = path.resolve(import.meta.dirname, '../..');
 const artifacts = {
@@ -86,10 +88,13 @@ it('relays a broker-provisioned v1 session and its ACK, and fails a synthetic or
   const welcome = messages[0];
   if (welcome.kind !== 'welcome') throw new Error('welcome expected first');
   expect(welcome.data.durableEvents).toBe(true);
-  // ET-050b B1: the plugin selected minor 1, and every message of the connection carries it.
-  expect(V1_CLIENT_MAX_MINOR).toBe(1);
-  expect({envelope: welcome.version, minor: welcome.data.minor, consumer: consumer.minor}).toEqual({envelope: {major: 1, minor: 1}, minor: 1, consumer: 1});
-  expect(messages.every(message => message.version.minor === 1)).toBe(true);
+  // ET-050b B1, ET-052: the plugin selected minor 2, and every message of the connection carries it.
+  expect(V1_CLIENT_MAX_MINOR).toBe(2);
+  expect({envelope: welcome.version, minor: welcome.data.minor, consumer: consumer.minor}).toEqual({envelope: {major: 1, minor: 2}, minor: 2, consumer: 2});
+  expect(messages.every(message => message.version.minor === 2)).toBe(true);
+  const breakOf = (message: ServerMessage) => message.kind === 'checkpoint' || message.kind === 'snapshot' ? message.data.state.nextMandatoryBreak : undefined;
+  // The registered channel was never called back: not-observed on the checkpoint and on every later state, never zero.
+  expect(breakOf(messages.find(message => message.kind === 'checkpoint')!)).toEqual({available: false, reason: 'not-observed', unit: 'min'});
   const gearboxOf = (message: ServerMessage): GearboxState | undefined => message.kind === 'checkpoint' || message.kind === 'snapshot' ? message.data.state.gearbox : undefined;
   // Before any truck or hshifter callback every part is not-observed.
   expect(gearboxOf(messages.find(message => message.kind === 'checkpoint')!)).toEqual({forwardGears: {available: false, reason: 'not-observed'},
@@ -111,10 +116,10 @@ it('relays a broker-provisioned v1 session and its ACK, and fails a synthetic or
   expect(diagnostics).toEqual([]);
 
   const ackAt = messages.length;
-  const M1 = {major: 1, minor: 1} as const;
-  driver.write(encodeFrame({version: M1, kind: 'ack', data: {pluginSessionId: welcome.source.pluginSessionId, throughEventSeq: through.toString()}}, {maxMinor: 1}));
+  const M2 = {major: 1, minor: 2} as const;
+  driver.write(encodeFrame({version: M2, kind: 'ack', data: {pluginSessionId: welcome.source.pluginSessionId, throughEventSeq: through.toString()}}, {maxMinor: 2}));
   const released = () => messages.slice(ackAt).map(delivery).find(status => status?.ackedThroughEventSeq === through.toString());
-  expect(await until(() => released() !== undefined || errors.length > 0, 10_000), 'a later snapshot reports the relayed {1,1} ACK').toBe(true);
+  expect(await until(() => released() !== undefined || errors.length > 0, 10_000), 'a later snapshot reports the relayed {1,2} ACK').toBe(true);
   expect(errors).toEqual([]);
   expect(released()).toMatchObject({durable: true, ackedThroughEventSeq: through.toString(), nextEventSeq: (through + 1n).toString(), retainedEvents: 0, retainedBytes: 0});
 
@@ -132,32 +137,39 @@ it('relays a broker-provisioned v1 session and its ACK, and fails a synthetic or
   expect(recorded()).toEqual(['simulation.paused', 'simulation.started', 'truck.configured']);
   const truckThrough = covered, probeAt = messages.length;
   consumer.expectClockReply('1');
-  driver.write(encodeFrame({version: M1, kind: 'clock.probe', data: {probeId: '1'}}, {maxMinor: 1}));
-  driver.write(encodeFrame({version: M1, kind: 'ack', data: {pluginSessionId: welcome.source.pluginSessionId, throughEventSeq: truckThrough.toString()}}, {maxMinor: 1}));
-  expect(await until(() => messages.slice(probeAt).some(message => message.kind === 'clock.reply') || errors.length > 0, 10_000), 'the relayed {1,1} clock probe is answered').toBe(true);
+  driver.write(encodeFrame({version: M2, kind: 'clock.probe', data: {probeId: '1'}}, {maxMinor: 2}));
+  driver.write(encodeFrame({version: M2, kind: 'ack', data: {pluginSessionId: welcome.source.pluginSessionId, throughEventSeq: truckThrough.toString()}}, {maxMinor: 2}));
+  expect(await until(() => messages.slice(probeAt).some(message => message.kind === 'clock.reply') || errors.length > 0, 10_000), 'the relayed {1,2} clock probe is answered').toBe(true);
   expect(await until(() => messages.slice(probeAt).some(message => delivery(message)?.ackedThroughEventSeq === truckThrough.toString()) || errors.length > 0, 10_000)).toBe(true);
   expect(errors).toEqual([]);
-  expect(messages.every(message => message.version.minor === 1)).toBe(true);
+  expect(messages.every(message => message.version.minor === 2)).toBe(true);
+  // The break stayed not-observed on every state of the connection, including those after the gearbox commands.
+  expect(messages.flatMap(message => { const b = breakOf(message); return b ? [b] : []; }).every(b => !b.available && b.reason === 'not-observed' && b.unit === 'min')).toBe(true);
   driver.destroy(); await driver.completion;
 
-  // A client that offers only minor 0 gets minor 0: the same session's state without a gearbox, as before ET-050b.
-  const old = new NativePipeClient({executable: artifacts.broker, discoveryDirectory: v1}, 'ets2', diagnostic => diagnostics.push(diagnostic), 'v1');
-  owned.push(old);
-  const oldDecoder = new FrameDecoder('server'), oldConsumer = new V1Consumer(false), oldMessages: ServerMessage[] = [];
-  old.on('connect', () => old.write(encodeFrame({version: PROTOCOL_V1, kind: 'hello', data: {clientInstanceId: randomUUID(), minMinor: 0, maxMinor: 0, durableEvents: false}})));
-  old.on('data', (bytes: Uint8Array) => {
-    try { oldDecoder.push(bytes, decoded => { const message = decoded as ServerMessage; oldConsumer.accept(message); oldMessages.push(message); }); }
-    catch (error) { errors.push(error); throw error; }
-  });
-  old.on('error', error => errors.push(error));
-  expect(await until(() => oldMessages.some(message => message.kind === 'checkpoint') || errors.length > 0, 15_000), 'a minor-0 welcome and checkpoint').toBe(true);
-  expect(errors).toEqual([]);
-  const oldWelcome = oldMessages[0];
-  if (oldWelcome.kind !== 'welcome') throw new Error('welcome expected first');
-  expect({envelope: oldWelcome.version, minor: oldWelcome.data.minor}).toEqual({envelope: {major: 1, minor: 0}, minor: 0});
-  const oldCheckpoint = oldMessages.find(message => message.kind === 'checkpoint');
-  expect(oldCheckpoint?.kind === 'checkpoint' && Object.hasOwn(oldCheckpoint.data.state, 'gearbox')).toBe(false);
-  old.destroy(); await old.completion;
+  // A live-only client that offers less gets the lower minor of the same session: minor 1 with the gearbox and without the
+  // break, minor 0 with neither (the bytes before ET-052 and before ET-050b), through the same broker.
+  for (const offered of [1, 0] as const) {
+    const old = new NativePipeClient({executable: artifacts.broker, discoveryDirectory: v1}, 'ets2', diagnostic => diagnostics.push(diagnostic), 'v1');
+    owned.push(old);
+    const oldMax = { maxMinor: offered }, oldDecoder = new FrameDecoder('server', oldMax), oldConsumer = new V1Consumer(false, oldMax), oldMessages: ServerMessage[] = [];
+    old.on('connect', () => old.write(encodeFrame({version: PROTOCOL_V1, kind: 'hello', data: {clientInstanceId: randomUUID(), minMinor: 0, maxMinor: offered, durableEvents: false}})));
+    old.on('data', (bytes: Uint8Array) => {
+      try { oldDecoder.push(bytes, decoded => { const message = decoded as ServerMessage; oldConsumer.accept(message); oldMessages.push(message); }); }
+      catch (error) { errors.push(error); throw error; }
+    });
+    old.on('error', error => errors.push(error));
+    expect(await until(() => oldMessages.some(message => message.kind === 'checkpoint') || errors.length > 0, 15_000), `a minor-${offered} welcome and checkpoint`).toBe(true);
+    expect(errors).toEqual([]);
+    const oldWelcome = oldMessages[0];
+    if (oldWelcome.kind !== 'welcome') throw new Error('welcome expected first');
+    expect({offered, envelope: oldWelcome.version, minor: oldWelcome.data.minor}).toEqual({offered, envelope: {major: 1, minor: offered}, minor: offered});
+    const oldCheckpoint = oldMessages.find(message => message.kind === 'checkpoint');
+    expect(oldCheckpoint?.kind === 'checkpoint' && Object.hasOwn(oldCheckpoint.data.state, 'gearbox')).toBe(offered === 1);
+    expect(oldCheckpoint?.kind === 'checkpoint' && Object.hasOwn(oldCheckpoint.data.state, 'nextMandatoryBreak')).toBe(false);
+    expect(oldMessages.every(message => message.version.minor === offered)).toBe(true);
+    old.destroy(); await old.completion;
+  }
 
   // The production ingestion, live-only through the same broker v1 mode: a synthetic origin under game authority is incompatible.
   const states: V1SourceState[] = [];

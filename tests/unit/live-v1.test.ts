@@ -9,7 +9,9 @@ import {liveV1Key, liveV1Projection, parseLiveV1, withV1} from '../../apps/deskt
 import {v1Projection, v1SourceState} from '../shared/live-v1-fixtures';
 
 const STATE_KEYS = ['simulation', 'speed', 'fuel', 'fuelCapacity', 'engineRpm', 'gear', 'odometer', 'averageConsumption', 'estimatedRange',
-  'navigationDistance', 'gameTime', 'captureUtcUnixMs', 'boundaryOrder', 'worldPlacement', 'configuration', 'gearbox'];
+  'navigationDistance', 'gameTime', 'captureUtcUnixMs', 'boundaryOrder', 'worldPlacement', 'configuration', 'gearbox', 'nextMandatoryBreak'];
+/** ET-052 MB5: a minor-0 or minor-1 state carries no break, so the projection reports it not-supported. */
+const NOT_SUPPORTED_BREAK = {available: false, reason: 'not-supported', unit: 'min'};
 /** ET-050b B7: a minor-0 state carries no gearbox, so the projection reports every part not-supported. */
 const NOT_SUPPORTED = {forwardGears: {available: false, reason: 'not-supported'}, reverseGears: {available: false, reason: 'not-supported'}, hshifter: {available: false, reason: 'not-supported'}};
 const minor1 = (name: string) => {
@@ -17,11 +19,18 @@ const minor1 = (name: string) => {
   if (m.kind !== 'checkpoint' && m.kind !== 'snapshot') throw new Error(`${name} is not a state message`);
   return m;
 };
-/** A service source state of a minor-1 fixture, as v1SourceState builds one of a minor-0 fixture. */
-function minor1SourceState(name: string) {
-  const m = minor1(name), base = v1SourceState();
-  return {...base, observation: {...base.observation!, kind: m.kind, source: m.source, seq: m.seq, capture: m.capture, state: m.data.state, status: m.data.status, continuity: m.data.continuity}};
+const minor2 = (name: string) => {
+  const m = decodePayload(new Uint8Array(readFileSync(`tests/fixtures/protocol-v1/minor2/${name}.json`)), 'server', {maxMinor: 2}) as ServerMessage;
+  if (m.kind !== 'checkpoint' && m.kind !== 'snapshot') throw new Error(`${name} is not a state message`);
+  return m;
+};
+/** A service source state of a fixture message, as v1SourceState builds one of a minor-0 fixture. */
+function sourceStateOf(m: ReturnType<typeof minor1>) {
+  const base = v1SourceState();
+  return {...base, observation: {...base.observation!, kind: m.kind, source: m.source, seq: m.seq, capture: m.capture, state: m.data.state, status: m.data.status, continuity: m.data.continuity, hydration: m.kind === 'checkpoint'}};
 }
+const minor1SourceState = (name: string) => sourceStateOf(minor1(name));
+const minor2SourceState = (name: string) => sourceStateOf(minor2(name));
 
 describe('liveV1Projection', () => {
   const projection = liveV1Projection(v1SourceState());
@@ -49,6 +58,34 @@ describe('liveV1Projection', () => {
       .toEqual([{available: true, value: 18}, {available: true, value: 4}, 2, 22]);
     expect(parseLiveV1(mack, 'synthetic')).toBe(mack);
     expect(parseLiveV1(structuredClone(liveV1Projection(minor1SourceState('snapshot-counts-not-observed'))), 'synthetic')).toBeDefined();
+  });
+  it('carries the minor-2 next mandatory break exactly, raw and unclamped, and reports a minor-0 or minor-1 state as not-supported (ET-052 MB5)', () => {
+    // The projection of the minor-0 snapshot-live fixture and of the minor-1 corpus carries the substitute.
+    expect(projection.observation!.state.nextMandatoryBreak).toEqual(NOT_SUPPORTED_BREAK);
+    expect(liveV1Projection(minor1SourceState('checkpoint')).observation!.state.nextMandatoryBreak).toEqual(NOT_SUPPORTED_BREAK);
+    expect(liveV1Projection(minor1SourceState('checkpoint-ats-mack')).observation!.state.nextMandatoryBreak).toEqual(NOT_SUPPORTED_BREAK);
+    // A minor-2 state carries what the wire carried: 95, zero, a negative value, both s32 limits and each unavailable reading.
+    for (const [name, expected] of [
+      ['checkpoint', {available: true, value: 95, unit: 'min'}], ['snapshot', {available: true, value: 95, unit: 'min'}],
+      ['snapshot-break-zero', {available: true, value: 0, unit: 'min'}], ['snapshot-break-negative', {available: true, value: -30, unit: 'min'}],
+      ['snapshot-break-int32-max', {available: true, value: 2147483647, unit: 'min'}], ['snapshot-break-int32-min', {available: true, value: -2147483648, unit: 'min'}],
+      ['snapshot-break-not-observed', {available: false, reason: 'not-observed', unit: 'min'}], ['snapshot-break-not-supported', {available: false, reason: 'not-supported', unit: 'min'}],
+      ['snapshot-break-invalid', {available: false, reason: 'invalid', unit: 'min'}]
+    ] as const) {
+      const live = liveV1Projection(minor2SourceState(name));
+      expect([name, live.observation!.state.nextMandatoryBreak]).toEqual([name, expected]);
+      expect(Object.keys(live.observation!.state)).toEqual(STATE_KEYS);
+      expect(parseLiveV1(structuredClone(live), 'synthetic')).toBeDefined();
+    }
+    // The gearbox rides along unchanged beside the break.
+    expect(liveV1Projection(minor2SourceState('checkpoint')).observation!.state.gearbox).toEqual(minor2('checkpoint').data.state.gearbox);
+  });
+  it('replaces the break with every new state, and an older plugin\'s state replaces it with not-supported', () => {
+    const hydrating = liveV1Projection(minor2SourceState('checkpoint')), later = liveV1Projection(minor2SourceState('snapshot-break-zero'));
+    expect([hydrating.observation!.hydration, hydrating.observation!.state.nextMandatoryBreak]).toEqual([true, {available: true, value: 95, unit: 'min'}]);
+    expect([later.observation!.hydration, later.observation!.state.nextMandatoryBreak]).toEqual([false, {available: true, value: 0, unit: 'min'}]);
+    expect(liveV1Projection(minor2SourceState('checkpoint-minor-1')).observation!.state.nextMandatoryBreak).toEqual(NOT_SUPPORTED_BREAK);
+    expect(liveV1Projection(minor2SourceState('checkpoint-minor-0')).observation!.state.nextMandatoryBreak).toEqual(NOT_SUPPORTED_BREAK);
   });
   it('omits the observation before the first one', () => {
     expect(liveV1Projection(v1SourceState('snapshot-live', {status: 'waiting', reason: 'Awaiting selected source', fresh: false, observation: undefined})))
@@ -90,6 +127,16 @@ describe('parseLiveV1', () => {
     ['a duplicate h-shifter slot pair', mutate(value => {(observation(value).state.gearbox as GearboxState).hshifter = {available: true, value: {selectorCount: 1, slots: [{gear: 1, handlePosition: 1, selectors: 0}, {gear: 2, handlePosition: 1, selectors: 0}]}};})],
     ['h-shifter selectors out of range', mutate(value => {(observation(value).state.gearbox as GearboxState).hshifter = {available: true, value: {selectorCount: 1, slots: [{gear: 1, handlePosition: 1, selectors: 2}]}};})],
     ['a neutral h-shifter slot', mutate(value => {(observation(value).state.gearbox as GearboxState).hshifter = {available: true, value: {selectorCount: 0, slots: [{gear: 0, handlePosition: 1, selectors: 0}]}};})],
+    // ET-052 MB5: the projection always carries the next mandatory break, a plain s32 integer with unit min.
+    ['a missing next mandatory break', mutate(value => {delete observation(value).state.nextMandatoryBreak;})],
+    ['a null next mandatory break', mutate(value => {observation(value).state.nextMandatoryBreak = null;})],
+    ['a next mandatory break beyond the s32 maximum', mutate(value => {observation(value).state.nextMandatoryBreak = {available: true, value: 2147483648, unit: 'min'};})],
+    ['a next mandatory break below the s32 minimum', mutate(value => {observation(value).state.nextMandatoryBreak = {available: true, value: -2147483649, unit: 'min'};})],
+    ['a fractional next mandatory break', mutate(value => {observation(value).state.nextMandatoryBreak = {available: true, value: 45.5, unit: 'min'};})],
+    ['a next mandatory break as a decimal string', mutate(value => {observation(value).state.nextMandatoryBreak = {available: true, value: '45', unit: 'min'};})],
+    ['a next mandatory break in metres', mutate(value => {observation(value).state.nextMandatoryBreak = {available: true, value: 45, unit: 'm'};})],
+    ['a next mandatory break with an extra key', mutate(value => {observation(value).state.nextMandatoryBreak = {available: true, value: 45, unit: 'min', extra: 1};})],
+    ['an unavailable next mandatory break with a value', mutate(value => {observation(value).state.nextMandatoryBreak = {available: false, reason: 'not-observed', unit: 'min', value: 1};})],
     ['fresh data without an observation', mutate(value => {delete value.observation;})],
     ['fresh stale data', mutate(value => {value.status = 'stale';})],
     ['a service status', mutate(value => {value.status = 'service-failed'; value.fresh = false;})],
@@ -108,6 +155,14 @@ describe('parseLiveV1', () => {
   });
   it('rejects a projection of another selection', () => {
     expect(parseLiveV1(valid(), 'replay')).toBeUndefined();
+  });
+  it.each([
+    [{available: true, value: 95, unit: 'min'}], [{available: true, value: 0, unit: 'min'}], [{available: true, value: -1, unit: 'min'}],
+    [{available: true, value: 2147483647, unit: 'min'}], [{available: true, value: -2147483648, unit: 'min'}],
+    [{available: false, reason: 'not-observed', unit: 'min'}], [{available: false, reason: 'not-supported', unit: 'min'}], [{available: false, reason: 'invalid', unit: 'min'}]
+  ])('accepts the next mandatory break %j', measure => {
+    const value = mutate(v => {observation(v).state.nextMandatoryBreak = structuredClone(measure);});
+    expect(parseLiveV1(value, 'synthetic')).toBe(value);
   });
   it('accepts a 256-character reason and a stale projection that keeps its observation', () => {
     expect(parseLiveV1({...valid(), reason: 'x'.repeat(256)}, 'synthetic')).toBeDefined();

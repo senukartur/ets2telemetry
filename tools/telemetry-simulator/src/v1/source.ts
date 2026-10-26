@@ -56,8 +56,11 @@ export type AttributeList = 'terminated' | 'null' | 'unterminated';
 export interface Placement {x: number; y: number; z: number; heading: number; pitch: number; roll: number}
 /** A channel callback value: a number in SDK units, null for a callback without a value, or a wrong-typed value. */
 export type ChannelValue = number | null | 'invalid';
-/** The registered channels in the native registration order, which is also the callback order within a frame. */
-export const CHANNELS = ['speed', 'fuel.amount', 'engine.rpm', 'displayed.gear', 'odometer', 'fuel.consumption.average', 'fuel.range', 'game.time', 'navigation.distance', 'world.placement'] as const;
+/**
+ * The registered channels in the native registration order, which is also the callback order within a frame.
+ * `mandatory.break` (ET-052) is the SDK's s32 game minutes until the next mandatory rest, registered before the placement.
+ */
+export const CHANNELS = ['speed', 'fuel.amount', 'engine.rpm', 'displayed.gear', 'odometer', 'fuel.consumption.average', 'fuel.range', 'game.time', 'navigation.distance', 'mandatory.break', 'world.placement'] as const;
 export type ChannelName = typeof CHANNELS[number];
 export type FrameChannels = Partial<Record<Exclude<ChannelName, 'world.placement'>, ChannelValue>> & {'world.placement'?: Placement | null | 'invalid'};
 export interface SourceConfig {
@@ -66,6 +69,16 @@ export interface SourceConfig {
   gameMode: 'unknown' | 'synthetic-detection';
   versions: {telemetryApi: {major: number; minor: number}; gameTelemetry: {major: number; minor: number}; sdkArchive: string};
   startEventSeq: bigint;
+  /**
+   * ET-052: `not-supported` models a game that refuses the optional `mandatory.break` registration; the minor-2 state then
+   * carries `not-supported` whatever a frame lists. Omitted, the channel is registered.
+   */
+  mandatoryBreak?: 'registered' | 'not-supported';
+  /**
+   * ET-052: the highest protocol v1 minor this simulated plugin serves, 0 to 2 (default 2). A lower value models a plugin
+   * from before ET-052 (1) or before ET-050b (0), which answers an application's minor-2 offer with its own highest minor.
+   */
+  highestMinor?: 0 | 1 | 2;
 }
 /** A record observed in an SDK callback, in wire shape, with its occurrence. */
 export interface Observed {occurred: EventOccurrence; record: EventRecord}
@@ -206,8 +219,11 @@ export class EventChannel {
   drain(): ChannelSlot[] { const s = this.slots; this.slots = []; return s; }
 }
 
-/** `state` never carries the gearbox; `gearbox` is the minor-1 block, which the producer adds only on minor-1 connections. */
-interface Published {state: Omit<CurrentState, 'window' | 'gearbox'>; gearbox: GearboxState; offlineTransitions: bigint}
+/**
+ * `state` never carries the gearbox or the break: `gearbox` is the minor-1 block, which the producer adds on minor-1 and
+ * minor-2 connections, and `nextMandatoryBreak` the minor-2 block, which it adds only on minor-2 connections.
+ */
+interface Published {state: Omit<CurrentState, 'window' | 'gearbox' | 'nextMandatoryBreak'>; gearbox: GearboxState; nextMandatoryBreak: Measure<'min'>; offlineTransitions: bigint}
 
 /** The adapter: SDK callbacks in, records and the published v1 state slot out. */
 export class AdapterModel {
@@ -376,14 +392,19 @@ export class AdapterModel {
     if (timerRestart) { this.restartClock(observed); this.emit({type: 'timers.restart'}, atMs, true); }
     for (const c of CHANNELS) {
       if (!Object.hasOwn(channels, c)) continue;
-      this.next(); observed.add(c);
+      // A game that refused the optional registration never calls the channel back (ET-052).
+      if (c === 'mandatory.break' && this.config.mandatoryBreak === 'not-supported') continue;
+      // Like the native callback, the break copy does not advance the shared boundary order, so a game that provides the
+      // channel gives the same boundary orders as one that does not.
+      if (c !== 'mandatory.break') this.next();
+      observed.add(c);
       if (c === 'world.placement') {
         const p = channels[c];
         const valid = p && p !== 'invalid' && [p.x, p.y, p.z].every(v => v >= -1e9 && v <= 1e9) && [p.heading, p.pitch, p.roll].every(v => v >= -1 && v <= 1);
         this.placement = p === null ? notObserved : valid ? {available: true, value: {...p}} : invalid;
         continue;
       }
-      const v = channels[c] as ChannelValue, isInt = c === 'game.time' || c === 'displayed.gear';
+      const v = channels[c] as ChannelValue, isInt = c === 'game.time' || c === 'displayed.gear' || c === 'mandatory.break';
       const reading: Reading = v === null ? notObserved : v === 'invalid' ? invalid : {available: true, value: isInt ? v : Math.fround(v)};
       if (c !== 'game.time') { this.readings.set(c, reading); continue; }
       if (reading.available && this.gameTime.available && reading.value < this.gameTime.value) {
@@ -409,7 +430,7 @@ export class AdapterModel {
   private reading(c: ChannelName): Reading { return this.readings.get(c) ?? notObserved; }
   private copyState(atMs: number): Published {
     const gear = this.reading('displayed.gear');
-    const state: Omit<CurrentState, 'window' | 'gearbox'> = {
+    const state: Omit<CurrentState, 'window' | 'gearbox' | 'nextMandatoryBreak'> = {
       simulation: this.simulation, speed: scaled(this.reading('speed'), 1, -1000, 1000, 'm/s'), fuel: scaled(this.reading('fuel.amount'), 1, 0, 1e6, 'L'),
       fuelCapacity: scaled(this.fuelCapacity, 1, 0, 1e6, 'L'), engineRpm: scaled(this.reading('engine.rpm'), 1, 0, 100_000, 'rpm'),
       gear: gear.available && (gear.value < -100 || gear.value > 100) ? {available: false, reason: 'invalid', unit: 'index'} : withUnit(gear, 'index'),
@@ -421,6 +442,8 @@ export class AdapterModel {
         orientation: {heading: this.placement.value.heading, pitch: this.placement.value.pitch, roll: this.placement.value.roll}}} : this.placement,
       configuration: {revision: this.revision.toString(), job: this.job, truck: this.truck, trailers: [...this.trailers]}
     };
-    return {state: structuredClone(state), gearbox: structuredClone(this.gearbox), offlineTransitions: this.offlineTransitions};
+    // A refused registration is not-supported; a registered channel reports its s32 reading, signed and unclamped.
+    const nextMandatoryBreak = this.config.mandatoryBreak === 'not-supported' ? withUnit(unavailable('not-supported'), 'min') : withUnit(this.reading('mandatory.break'), 'min');
+    return {state: structuredClone(state), gearbox: structuredClone(this.gearbox), nextMandatoryBreak: structuredClone(nextMandatoryBreak), offlineTransitions: this.offlineTransitions};
   }
 }

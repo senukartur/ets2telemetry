@@ -28,8 +28,8 @@ const CAPTURE_CLOCK = '30000000-0000-4000-8000-000000000001';
 
 class FakeSocket extends EventEmitter implements TelemetrySocket {
   readonly sent: ClientMessage[] = []; destroyed = false; authority?: SourceIdentity; completion?: Promise<void>;
-  // Either minor decodes here; the ET-050b cases check which minor each message carries.
-  write(bytes: Uint8Array) { this.sent.push(decodePayload(bytes.subarray(4), 'client', {maxMinor: 1}) as ClientMessage); }
+  // Any minor decodes here; the ET-050b and ET-052 cases check which minor each message carries.
+  write(bytes: Uint8Array) { this.sent.push(decodePayload(bytes.subarray(4), 'client', {maxMinor: 2}) as ClientMessage); }
   destroy() { this.destroyed = true; }
   feed(...parts: Uint8Array[]) { this.emit('data', concat(...parts)); }
   get hello() { const h = this.sent[0]; if (h?.kind !== 'hello') throw new Error('hello expected'); return h.data; }
@@ -88,8 +88,8 @@ function edited(name: string, edit: (m: ServerMessage & {data: Record<string, un
 describe('ET-006b protocol v1 ingestion', () => {
   it('sends one live-only hello without a sink and a durable hello with one', () => {
     start(); connectLatest();
-    // ET-050b B1: the hello is version 1.0 and offers minor 1 (it offered 0 before ET-050b PR-5).
-    expect(latest().sent).toEqual([{version: {major: 1, minor: 0}, kind: 'hello', data: {clientInstanceId: ingestion!.clientInstanceId, minMinor: 0, maxMinor: 1, durableEvents: false}}]);
+    // ET-050b B1, ET-052: the hello is version 1.0 and offers minor 2 (it offered 0 before ET-050b PR-5 and 1 before ET-052 PR-4).
+    expect(latest().sent).toEqual([{version: {major: 1, minor: 0}, kind: 'hello', data: {clientInstanceId: ingestion!.clientInstanceId, minMinor: 0, maxMinor: 2, durableEvents: false}}]);
     void ingestion!.stop();
     start({sink: new Sink()}); connectLatest();
     expect(latest().hello.durableEvents).toBe(true);
@@ -477,9 +477,14 @@ describe('ET-006b protocol v1 ingestion', () => {
 const M1 = resolve(V1, 'minor1');
 const frame1 = (name: string) => prefix(fileBytes(resolve(M1, `${name}.json`)));
 const server1 = (name: string) => decodePayload(fileBytes(resolve(M1, `${name}.json`)), 'server', {maxMinor: 1}) as ServerMessage;
+// ET-052: the minor-2 corpus (tests/fixtures/protocol-v1/minor2), hand-authored from the minor-1 bytes.
+const M2 = resolve(V1, 'minor2');
+const frame2 = (name: string) => prefix(fileBytes(resolve(M2, `${name}.json`)));
+const server2 = (name: string) => decodePayload(fileBytes(resolve(M2, `${name}.json`)), 'server', {maxMinor: 2}) as ServerMessage;
 describe('ET-050b protocol v1 minor negotiation', () => {
   it('derives the hello offer, the probe and ACK minors and the clock mapping from one negotiated minor', async () => {
-    expect(V1_CLIENT_MAX_MINOR).toBe(1);
+    // ET-052: the service offers minor 2, and a minor-1 plugin (ET-050b) still selects 1 for the whole connection.
+    expect(V1_CLIENT_MAX_MINOR).toBe(2);
     const sink = new Sink(); start({sink}); connectLatest();
     expect(latest().hello.maxMinor).toBe(V1_CLIENT_MAX_MINOR);
     latest().feed(frame1('welcome'), frame1('checkpoint'), frame1('event-job-configured'));
@@ -498,7 +503,7 @@ describe('ET-050b protocol v1 minor negotiation', () => {
 
   it('accepts a minor-0 welcome from an older plugin and then writes every probe and ACK at minor 0', async () => {
     const sink = new Sink(); start({sink}); connectLatest();
-    expect(latest().hello.maxMinor).toBe(1);
+    expect(latest().hello.maxMinor).toBe(2);
     latest().feed(frame1('welcome-minor-0'), frame1('checkpoint-minor-0'), frame1('event-job-configured-minor-0'));
     await settle();
     expect(state().status).toBe('connected');
@@ -514,7 +519,7 @@ describe('ET-050b protocol v1 minor negotiation', () => {
     ['a minor-0 frame after a minor-1 welcome', () => concat(frame1('welcome'), frame1('checkpoint-minor-0'))],
     ['a minor-0 state with a gearbox', () => concat(frame1('welcome-minor-0'), frame1('checkpoint-minor-0-with-gearbox'))],
     ['a minor-1 state without a gearbox', () => concat(frame1('welcome'), frame1('checkpoint-without-gearbox'))],
-    ['a welcome above the offer', () => frame1('welcome-minor-2')]
+    ['a welcome above the offer', () => frame2('welcome-minor-3')]
   ])('closes the connection as incompatible on %s', (_name, bytes) => {
     start({sink: new Sink()}); connectLatest(); latest().feed(bytes());
     expect([state().status, state().fresh, state().observation]).toEqual(['incompatible', false, undefined]);
@@ -534,5 +539,87 @@ describe('ET-050b protocol v1 minor negotiation', () => {
     latest().feed(frame1('welcome-minor-0'), frame1('checkpoint-minor-0'));
     expect(state().observation?.hydration).toBe(true);
     expect(Object.hasOwn(state().observation!.state, 'gearbox')).toBe(false);
+  });
+});
+
+// ET-052 MB3, MB4, MB5: the service offers minor 2 and the connection keeps the one minor its welcome selected. The
+// minor-2 fixtures carry the next mandatory break; the expected readings are written by hand from docs/protocol/v1.md.
+describe('ET-052 protocol v1 minor 2', () => {
+  it('offers minor 2 and writes every probe and ACK, and reads the clock reply, at the minor-2 welcome\'s minor', async () => {
+    const sink = new Sink(); start({sink}); connectLatest();
+    expect(latest().hello.maxMinor).toBe(2);
+    latest().feed(frame2('welcome'), frame2('checkpoint'), frame2('event-job-configured'));
+    await settle();
+    expect(state().status).toBe('connected');
+    expect(latest().sent.slice(1).map(m => [m.kind, m.version])).toEqual([['clock.probe', {major: 1, minor: 2}], ['ack', {major: 1, minor: 2}]]);
+    expect([sink.commits, latest().acks]).toEqual([['event 1'], ['1']]);
+    // The checkpoint hydrates the state with the break exactly as sent: 95 minutes.
+    expect(state().observation).toMatchObject({kind: 'checkpoint', hydration: true});
+    expect(state().observation!.state.nextMandatoryBreak).toEqual({available: true, value: 95, unit: 'min'});
+    clock.ns = 2_000_000_500_000n; latest().feed(frame2('snapshot'), frame2('clock-reply'));
+    expect(state().status).toBe('connected');
+    expect(state().clockMapping).toEqual({sourceClockId: CAPTURE_CLOCK, clientClockId: ingestion!.clientClockId, offsetNs: '-999550450000', uncertaintyNs: '150000', measuredAtClientNs: '2000000500000'});
+    await advance(1000);
+    expect(latest().sent.at(-1)).toEqual({version: {major: 1, minor: 2}, kind: 'clock.probe', data: {probeId: '2'}});
+  });
+
+  it('replaces the break with every new state, zero and negative included, and unavailable readings keep their reason', () => {
+    start({sink: new Sink()}); connectLatest();
+    latest().feed(frame2('welcome'), frame2('checkpoint'));
+    const breakOf = () => state().observation!.state.nextMandatoryBreak;
+    for (const [name, expected] of [
+      ['snapshot-break-zero', {available: true, value: 0, unit: 'min'}],
+      ['snapshot-break-negative', {available: true, value: -30, unit: 'min'}],
+      ['snapshot-break-int32-max', {available: true, value: 2147483647, unit: 'min'}],
+      ['snapshot-break-int32-min', {available: true, value: -2147483648, unit: 'min'}],
+      ['snapshot-break-not-observed', {available: false, reason: 'not-observed', unit: 'min'}],
+      ['snapshot-break-not-supported', {available: false, reason: 'not-supported', unit: 'min'}],
+      ['snapshot-break-invalid', {available: false, reason: 'invalid', unit: 'min'}]
+    ] as const) {
+      latest().feed(frame2(name));
+      expect([name, breakOf()]).toEqual([name, expected]);
+    }
+    expect(state().status).toBe('connected');
+  });
+
+  it('accepts a welcome at minor 0 and at minor 1 from an older plugin, whose states carry no break', async () => {
+    start({sink: new Sink()}); connectLatest();
+    latest().feed(frame2('welcome-minor-1'), frame2('checkpoint-minor-1'), frame2('event-job-configured-minor-1'));
+    await settle();
+    expect([state().status, latest().sent.slice(1).map(m => m.version.minor)]).toEqual(['connected', [1, 1]]);
+    expect(state().observation && Object.hasOwn(state().observation!.state, 'nextMandatoryBreak')).toBe(false);
+    latest().emit('close'); await advance(250); connectLatest();
+    latest().feed(frame2('welcome-minor-0'), frame2('checkpoint-minor-0'), frame2('event-job-configured-minor-0'));
+    await settle();
+    expect([state().status, latest().sent.slice(1).map(m => m.version.minor)]).toEqual(['connected', [0, 0]]);
+    expect(Object.hasOwn(state().observation!.state, 'nextMandatoryBreak')).toBe(false);
+  });
+
+  it.each([
+    ['a minor-1 frame after a minor-2 welcome', () => concat(frame2('welcome'), frame2('checkpoint-minor-1'))],
+    ['a minor-2 frame after a minor-1 welcome', () => concat(frame2('welcome-minor-1'), frame2('checkpoint'))],
+    ['a minor-2 frame after a minor-0 welcome', () => concat(frame2('welcome-minor-0'), frame2('checkpoint'))],
+    ['a minor-2 state without the break', () => concat(frame2('welcome'), frame2('checkpoint-without-break'))],
+    ['a minor-1 state with the break', () => concat(frame2('welcome-minor-1'), frame2('checkpoint-minor-1-with-break'))],
+    ['a welcome above the offer', () => frame2('welcome-minor-3')]
+  ])('closes the connection as incompatible on %s', (_name, bytes) => {
+    start({sink: new Sink()}); connectLatest(); latest().feed(bytes());
+    expect([state().status, state().fresh, state().observation]).toEqual(['incompatible', false, undefined]);
+  });
+
+  it.each([
+    ['snapshot-break-above-int32'], ['snapshot-break-below-int32'], ['snapshot-break-fraction'], ['snapshot-break-string'], ['snapshot-break-unit-m'],
+    ['snapshot-break-extra-key'], ['snapshot-without-break'], ['snapshot-minor-1']
+  ])('closes a minor-2 connection as incompatible on the later state %s', name => {
+    start({sink: new Sink()}); connectLatest(); latest().feed(frame2('welcome'), frame2('checkpoint'));
+    expect(state().status).toBe('connected');
+    latest().feed(frame2(name));
+    expect(state().status).toBe('incompatible');
+  });
+
+  it('keeps the minor-1 readings of server2 fixtures decoding at the service\'s own maximum', () => {
+    // The fixtures are the ones the contract tests read; a service pinned below minor 2 could not decode this welcome.
+    expect(server2('welcome').version).toEqual({major: 1, minor: 2});
+    expect(server2('welcome-minor-1').version).toEqual({major: 1, minor: 1});
   });
 });

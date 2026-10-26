@@ -1,5 +1,5 @@
 import type {LiveTelemetry, LiveTelemetryV1, LiveV1Status, SourceSelection} from '../../../packages/contracts/src';
-import {NOT_SUPPORTED_GEARBOX, validateLiveObservationV1, type CurrentState, type LiveStateV1} from '../../../packages/contracts/src/protocol-v1';
+import {NOT_SUPPORTED_BREAK, NOT_SUPPORTED_GEARBOX, validateLiveObservationV1, type CurrentState, type LiveStateV1} from '../../../packages/contracts/src/protocol-v1';
 import type {V1SourceState} from './v1-ingestion';
 
 // The protocol v1 live projection (ET-010c, decisions F1-F3). The telemetry service builds it from its service-internal
@@ -17,7 +17,10 @@ const CONTROL = /[\u0000-\u001f\u007f]/u;
 
 /**
  * The current state without the game window: an explicit whitelist, so a new wire field never leaks by default. The
- * gearbox (ET-050b B7) is a minor-1 connection's own; a minor-0 state carries none, so every part is `not-supported`.
+ * gearbox (ET-050b B7) is a minor-1 or minor-2 connection's own; a minor-0 state carries none, so every part is
+ * `not-supported`. The next mandatory break (ET-052 MB5) is a minor-2 connection's own raw reading, signed and unclamped
+ * (clamping and urgency are display rules in telemetry-core); a minor-0 or minor-1 state carries none, so it is
+ * `NOT_SUPPORTED_BREAK`.
  */
 function liveState(state: CurrentState): LiveStateV1 {
   return {
@@ -25,7 +28,8 @@ function liveState(state: CurrentState): LiveStateV1 {
     odometer: state.odometer, averageConsumption: state.averageConsumption, estimatedRange: state.estimatedRange, navigationDistance: state.navigationDistance,
     gameTime: state.gameTime, captureUtcUnixMs: state.captureUtcUnixMs, boundaryOrder: state.boundaryOrder, worldPlacement: state.worldPlacement,
     configuration: state.configuration,
-    gearbox: state.gearbox ? {forwardGears: state.gearbox.forwardGears, reverseGears: state.gearbox.reverseGears, hshifter: state.gearbox.hshifter} : NOT_SUPPORTED_GEARBOX
+    gearbox: state.gearbox ? {forwardGears: state.gearbox.forwardGears, reverseGears: state.gearbox.reverseGears, hshifter: state.gearbox.hshifter} : NOT_SUPPORTED_GEARBOX,
+    nextMandatoryBreak: state.nextMandatoryBreak ?? NOT_SUPPORTED_BREAK
   };
 }
 

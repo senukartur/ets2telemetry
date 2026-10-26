@@ -1,15 +1,24 @@
 import React, {useMemo} from 'react';
-import {Clock, Flag, Gauge, MapPin, Package, Truck, WifiOff} from 'lucide-react';
+import {Clock, Coffee, Flag, Gauge, Hourglass, MapPin, Package, TriangleAlert, Truck, WifiOff} from 'lucide-react';
 import type {AppLanguage, GearDisplayModes, LiveTelemetry, UnitProfiles} from '../../../packages/contracts/src';
 import type {LiveFieldId} from '../../../packages/telemetry-core/src/live-view';
 import {Card, CardContent, CardHeader, CardTitle} from '@/components/ui/card';
 import {Badge} from '@/components/ui/badge';
-import {liveDashboardText, liveFieldValue} from './live-dashboard-text';
+import {liveDashboardText, liveFieldValue, type LiveRowText} from './live-dashboard-text';
 import {desktopLiveView, gaugeArc} from './screens/desktop-ui-view';
 import {dashboardFuel, dashboardSpeed} from './speed-display';
 import {displayProfile} from './unit-profiles';
 import {getStrings} from './strings';
 import {t, translateUnit} from './i18n';
+
+/**
+ * The next mandatory break's urgency (ET-052 D3): an icon, a word and a tone together, never colour alone. The accessible
+ * name is the row label with the word; the icon is decorative.
+ */
+function BreakBadge({badge, testId}: {badge: NonNullable<LiveRowText['badge']>; testId: string}) {
+  const Icon = badge.urgency === 'due' ? TriangleAlert : Hourglass;
+  return <Badge variant={badge.urgency === 'due' ? 'error' : 'warn'} role="img" aria-label={badge.name} data-testid={testId} data-urgency={badge.urgency}><Icon aria-hidden="true" />{badge.text}</Badge>;
+}
 
 export function LiveDashboard({live, units, gearDisplay, language = 'en'}: {live: LiveTelemetry | undefined; units: UnitProfiles | undefined; gearDisplay?: GearDisplayModes; language?: AppLanguage}) {
   const text = useMemo(() => liveDashboardText(live, units, language, gearDisplay), [live, units, language, gearDisplay]);
@@ -54,7 +63,7 @@ export function LiveDashboard({live, units, gearDisplay, language = 'en'}: {live
     <Card size="sm" data-testid="live.details"><CardHeader><CardTitle><h2>{t('ui.details', undefined, language)}</h2></CardTitle></CardHeader><CardContent className="yu-live-fields">
       {text.sections.map(section => <section key={section.id} data-testid={section.testId} className="space-y-1"><h3 className="font-semibold">{section.title}</h3>
         {section.missing ? <p data-testid="live-job-missing">{section.missing}</p> : null}{section.status ? <p data-testid="live-v1-status">{section.status}</p> : null}
-        {section.rows.length ? <dl>{section.rows.map(row => <div key={row.id} className="yu-kv"><dt>{row.label}{row.note ? <small className="block yu-muted" data-testid={`${row.testId}-note`}>{row.note}</small> : null}</dt><dd><span data-testid={row.testId}>{row.value}</span>{row.reason ? <> (<span data-testid={`${row.testId}-reason`}>{row.reason}</span>)</> : null}</dd></div>)}</dl> : null}
+        {section.rows.length ? <dl>{section.rows.map(row => <div key={row.id} className="yu-kv"><dt>{row.id === 'mandatory-break' ? <Coffee className="inline size-3 mr-1" aria-hidden="true" data-testid="live-mandatory-break-icon" /> : null}{row.label}{row.note ? <small className="block yu-muted" data-testid={`${row.testId}-note`}>{row.note}</small> : null}</dt><dd><span data-testid={row.testId}>{row.value}</span>{row.reason ? <> (<span data-testid={`${row.testId}-reason`}>{row.reason}</span>)</> : null}{row.badge ? <> <BreakBadge badge={row.badge} testId={`${row.testId}-badge`} /></> : null}</dd></div>)}</dl> : null}
       </section>)}
     </CardContent></Card>
   </div>;
