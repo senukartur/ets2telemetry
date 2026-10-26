@@ -781,6 +781,90 @@ void gearbox_case(const Fixtures& f) {
   rejects([&] { consumer.accept(decode(encode(encoder.snapshot(++seq, 30, daf, StatusInfo{single_player_weak(), true, StoreStatus{}, {}})))); }, "a minor-0 snapshot on a minor-1 connection");
 }
 
+// ET-052 PR-3: the minor-2 `state.nextMandatoryBreak` from the SDK s32 copy. The hand-written minor-2 corpus is the oracle:
+// the encoder's output must equal its fixtures, the lower minors must keep their bytes, and the minor-2 Consumer must
+// accept the encoder's stream.
+Message minor2(const Fixtures& f, const std::string& name) { return decode_payload(read(f.dir / "minor2" / (name + ".json")), Sender::server, 2); }
+Message roundtrip2(const Json& wire) { const auto frame = encode(wire, 2); return decode_payload(std::string(frame.begin() + 4, frame.end()), Sender::server, 2); }
+const Json& break_node(const Json& message) { return field(field(field(message, "data"), "state"), "nextMandatoryBreak"); }
+bool has_break_key(const Json& message) { return std::get<Json::Object>(field(field(message, "data"), "state").value).count("nextMandatoryBreak") != 0; }
+Field<std::int32_t> break_of(std::int32_t minutes) { return available_field<std::int32_t>(minutes); }
+Field<std::int32_t> break_unavailable(FieldState state) { Field<std::int32_t> b; b.state = state; return b; }
+void mandatory_break_case(const Fixtures& f) {
+  const Encoder encoder(identity());
+  StoreStatus delivery; StatusInfo status{single_player_weak(), true, delivery, {}};
+  // The checkpoint of minor2/checkpoint.json: the DAF 12-speed gearbox and a break of 95 minutes.
+  auto checkpoint_state = fixture_state(100, 7, true); checkpoint_state.gearbox = gearbox_of(12, 4, daf_12()); checkpoint_state.next_mandatory_break_min = break_of(95);
+  const auto checkpoint = encoder.checkpoint(2, 1000100000000ULL, checkpoint_state, status, 2);
+  check(canonical(checkpoint) == canonical(with_ten_trailers(minor2(f, "checkpoint").wire)), "minor-2 checkpoint matches minor2/checkpoint");
+  check(canonical(roundtrip2(checkpoint).wire) == canonical(with_ten_trailers(minor2(f, "checkpoint").wire)), "minor-2 checkpoint encodes at minor 2");
+  // The snapshot of minor2/snapshot.json: counts without a layout, and 95 minutes.
+  StoreStatus snap; snap.next_event_seq = 2; snap.retained_entries = 1; snap.retained_bytes = 1500; snap.oldest_retained_ns = 1000149000000ULL;
+  const StatusInfo snap_status{single_player_weak(), true, snap, {1, 0}};
+  auto snapshot_state = fixture_state(102, 8, false); snapshot_state.gearbox.forward_gears = available_field<std::uint32_t>(12); snapshot_state.gearbox.reverse_gears = available_field<std::uint32_t>(4);
+  snapshot_state.next_mandatory_break_min = break_of(95);
+  check(canonical(encoder.snapshot(5, 1000250000000ULL, snapshot_state, snap_status, 2)) == canonical(with_ten_trailers(minor2(f, "snapshot").wire)), "minor-2 snapshot matches minor2/snapshot");
+  // Every value and reason against its hand-written fixture: zero is a value, negative is overdue, both s32 extremes, and
+  // each unavailable reason; the sequence numbers and times are the fixtures' own.
+  struct Case { const char* fixture; std::uint64_t seq, ns; Field<std::int32_t> value; };
+  const Case cases[]{
+    {"snapshot-break-zero", 6, 1000300000000ULL, break_of(0)}, {"snapshot-break-negative", 7, 1000350000000ULL, break_of(-30)},
+    {"snapshot-break-int32-max", 8, 1000400000000ULL, break_of(std::numeric_limits<std::int32_t>::max())},
+    {"snapshot-break-int32-min", 9, 1000450000000ULL, break_of(std::numeric_limits<std::int32_t>::min())},
+    {"snapshot-break-not-observed", 10, 1000500000000ULL, break_unavailable(FieldState::not_observed)},
+    {"snapshot-break-not-supported", 11, 1000550000000ULL, break_unavailable(FieldState::not_supported)},
+    {"snapshot-break-invalid", 12, 1000600000000ULL, break_unavailable(FieldState::invalid)}};
+  for (const auto& c : cases) {
+    auto state = snapshot_state; state.next_mandatory_break_min = c.value;
+    const auto built = encoder.snapshot(c.seq, c.ns, state, snap_status, 2);
+    check(canonical(built) == canonical(with_ten_trailers(minor2(f, c.fixture).wire)), std::string(c.fixture) + " matches the fixture");
+    check(canonical(roundtrip2(built).wire) == canonical(with_ten_trailers(minor2(f, c.fixture).wire)), std::string(c.fixture) + " encodes");
+  }
+  // A default (zero-initialized) copy is not-observed, never an available zero.
+  check(canonical(break_node(encoder.snapshot(1, 1, minimal_state(), {}, 2))) == canonical(break_node(minor2(f, "snapshot-break-not-observed").wire)), "a default copy is not-observed");
+  // The value is a plain JSON number, not a decimal string.
+  check(std::holds_alternative<double>(field(break_node(checkpoint), "value").value) && field(break_node(checkpoint), "value").number() == 95.0, "the break value is a JSON number");
+  // Minor 0 and minor 1 never carry the break, whatever the POD holds: the bytes equal the frozen fixtures, the minor-2
+  // corpus's lower-minor fixtures and the encoding of a state without a break.
+  auto without_break = checkpoint_state; without_break.next_mandatory_break_min = {};
+  check(canonical(encoder.checkpoint(2, 1000100000000ULL, checkpoint_state, status, 1)) == canonical(with_ten_trailers(minor2(f, "checkpoint-minor-1").wire)), "minor-1 checkpoint equals minor2/checkpoint-minor-1");
+  check(canonical(encoder.checkpoint(2, 1000100000000ULL, checkpoint_state, status, 1)) == canonical(with_ten_trailers(minor1(f, "checkpoint").wire)), "minor-1 checkpoint equals minor1/checkpoint");
+  check(encode(encoder.checkpoint(2, 1000100000000ULL, checkpoint_state, status, 1), 1) == encode(encoder.checkpoint(2, 1000100000000ULL, without_break, status, 1), 1), "minor-1 checkpoint bytes identical with and without a break");
+  check(!has_break_key(encoder.checkpoint(2, 1000100000000ULL, checkpoint_state, status, 1)) && !has_break_key(encoder.checkpoint(2, 1000100000000ULL, checkpoint_state, status)), "no break key below minor 2");
+  const auto frozen = canonical(with_ten_trailers(f.server("checkpoint").wire));
+  check(canonical(encoder.checkpoint(2, 1000100000000ULL, checkpoint_state, status)) == frozen && canonical(encoder.checkpoint(2, 1000100000000ULL, checkpoint_state, status, 0)) == frozen, "minor-0 checkpoint unchanged by a populated break");
+  check(canonical(encoder.checkpoint(2, 1000100000000ULL, checkpoint_state, status, 0)) == canonical(with_ten_trailers(minor2(f, "checkpoint-minor-0").wire)), "minor-0 checkpoint equals minor2/checkpoint-minor-0");
+  check(encode(encoder.checkpoint(2, 1000100000000ULL, checkpoint_state, status)) == encode(encoder.checkpoint(2, 1000100000000ULL, fixture_state(100, 7, true), status)), "minor-0 checkpoint bytes identical with and without a break and gearbox");
+  check(canonical(encoder.snapshot(5, 1000250000000ULL, snapshot_state, snap_status, 1)) == canonical(with_ten_trailers(minor2(f, "snapshot-minor-1").wire)), "minor-1 snapshot equals minor2/snapshot-minor-1");
+  check(canonical(encoder.snapshot(5, 1000250000000ULL, snapshot_state, snap_status, 0)) == canonical(with_ten_trailers(minor2(f, "snapshot-minor-0").wire)), "minor-0 snapshot equals minor2/snapshot-minor-0");
+  check(canonical(encoder.snapshot(5, 1000250000000ULL, snapshot_state, snap_status, 0)) == canonical(with_ten_trailers(f.server("snapshot").wire)), "minor-0 snapshot equals the frozen snapshot");
+  // The default encoder refuses a minor-2 checkpoint, as does a minor-1 encoder.
+  rejects([&] { encode(checkpoint); }, "the default encoder refuses a minor-2 checkpoint");
+  rejects([&] { encode(checkpoint, 1); }, "a minor-1 encoder refuses a minor-2 checkpoint");
+  // Every other message of a minor-2 connection differs from minor 1 only by its minor.
+  WelcomeInfo w; w.durable_events = true; w.gameplay_events_registered = true; w.game_mode_events = true; w.telemetry_api = {1, 1}; w.game_telemetry = {1, 19}; w.game_mode = single_player_weak();
+  check(canonical(encoder.welcome(1, 1000050000000ULL, w, 2)) == canonical(minor2(f, "welcome").wire), "minor-2 welcome");
+  check(canonical(roundtrip2(encoder.welcome(1, 1000050000000ULL, w, 2)).wire) == canonical(minor2(f, "welcome").wire), "minor-2 welcome encodes");
+  check(canonical(encoder.event(3, 1000150000000ULL, make_event(1, synthetic_job(), 1000149000000ULL), false, 2)) == canonical(minor2(f, "event-job-configured").wire), "minor-2 event");
+  check(canonical(encoder.gap(7, 1000350000000ULL, GapRange{3, 4, counts(0, 0, 1, 1, 0, 0), 1000330000000ULL, 1000340000000ULL}, false, 2)) == canonical(minor2(f, "gap").wire), "minor-2 gap");
+  check(canonical(encoder.clock_reply(9, 1000450000000ULL, 1, 1000449700000ULL, 1000449900000ULL, 2)) == canonical(minor2(f, "clock-reply").wire), "minor-2 clock reply");
+  check(canonical(encoder.end(10, 1000500000000ULL, EndReason::plugin_shutdown, EndCursor{2, 1, 0}, 2)) == canonical(minor2(f, "end").wire), "minor-2 end");
+  // The worst-case state (D17): every text at its limit, ten trailers, the worst gearbox and the widest break still fit.
+  const Encoder worst_encoder(identity()); StatePod heavy = fixture_state(u64_max, u64_max, true);
+  heavy.gearbox = worst_gearbox(); heavy.next_mandatory_break_min = break_unavailable(FieldState::not_supported);
+  const auto heavy_frame = encode(worst_encoder.checkpoint(u64_max, u64_max, heavy, StatusInfo{single_player_weak(), true, StoreStatus{}, {u64_max, u64_max}}, 2), 2);
+  check(heavy_frame.size() - 4 <= limits.server_frame_bytes, "worst minor-2 state fits 64 KiB");
+  // The ET-002b Consumer at minor 2 accepts the encoder's stream; a minor-1 frame within it is refused.
+  Consumer consumer(true, 2); std::uint64_t seq = 0;
+  const auto accept = [&](const Json& wire) { return consumer.accept(roundtrip2(wire)); };
+  accept(encoder.welcome(++seq, 10, w, 2));
+  const auto hydrated = accept(encoder.checkpoint(++seq, 20, checkpoint_state, StatusInfo{single_player_weak(), true, StoreStatus{}, {}}, 2));
+  check(hydrated.hydration && consumer.minor() == 2u, "a minor-2 checkpoint hydrates a minor-2 consumer");
+  accept(encoder.snapshot(++seq, 30, snapshot_state, StatusInfo{single_player_weak(), true, StoreStatus{}, {}}, 2));
+  rejects([&] { consumer.accept(roundtrip1(encoder.snapshot(++seq, 40, snapshot_state, StatusInfo{single_player_weak(), true, StoreStatus{}, {}}, 1))); }, "a minor-1 snapshot on a minor-2 connection");
+  std::cout << "worst minor-2 checkpoint built " << heavy_frame.size() - 4 << " bytes; ";
+}
+
 void streams_case() {
   // normal: events and a gap in order, ACK 5, end.
   {
@@ -1088,6 +1172,7 @@ int main(int argc, char** argv) {
     else if (name == "randomized") randomized_case();
     else if (name == "fuzz") fuzz_case(f);
     else if (name == "gearbox") gearbox_case(f);
+    else if (name == "mandatory-break") mandatory_break_case(f);
     else throw std::runtime_error("unknown case " + name);
     std::cout << "v1-producer " << name << " passed\n";
     return 0;

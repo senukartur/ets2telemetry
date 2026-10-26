@@ -19,6 +19,7 @@
 #include <iostream>
 #include <map>
 #include <memory>
+#include <optional>
 #include <set>
 #include <string>
 #include <thread>
@@ -55,12 +56,17 @@ struct Host {
   std::map<scs_event_t, std::pair<scs_telemetry_event_callback_t, scs_context_t>> events;
   struct Channel { scs_telemetry_channel_callback_t cb; scs_context_t ctx; };
   std::map<std::string, Channel> channels; std::uint64_t frames = 0;
+  // ET-052: the value `mandatory.break` delivers in every frame (nothing when unset; NULL when `break_null`), and a channel name the host refuses with not_found.
+  std::optional<std::int32_t> break_minutes; bool break_null = false; std::string refuse;
   Host() { active = this; }
   static void check() { if (active->caller != std::this_thread::get_id()) ++active->wrong_thread; }
   static SCSAPI_VOID log(scs_log_type_t type, scs_string_t message) { check(); active->log_types.push_back(type); active->logs.emplace_back(message); }
   static SCSAPI_RESULT reg_event(scs_event_t id, scs_telemetry_event_callback_t cb, scs_context_t ctx) { check(); active->events[id] = {cb, ctx}; return SCS_RESULT_ok; }
   static SCSAPI_RESULT unreg_event(scs_event_t id) { check(); active->events.erase(id); return SCS_RESULT_ok; }
-  static SCSAPI_RESULT reg_channel(scs_string_t name, scs_u32_t, scs_value_type_t, scs_u32_t, scs_telemetry_channel_callback_t cb, scs_context_t ctx) { check(); active->channels[name] = {cb, ctx}; return SCS_RESULT_ok; }
+  static SCSAPI_RESULT reg_channel(scs_string_t name, scs_u32_t, scs_value_type_t, scs_u32_t, scs_telemetry_channel_callback_t cb, scs_context_t ctx) {
+    check(); if (name == active->refuse) return SCS_RESULT_not_found;
+    active->channels[name] = {cb, ctx}; return SCS_RESULT_ok;
+  }
   static SCSAPI_RESULT unreg_channel(scs_string_t name, scs_u32_t, scs_value_type_t) { check(); active->channels.erase(name); return SCS_RESULT_ok; }
   scs_telemetry_init_params_v100_t params(const char* game = "eut2") {
     scs_telemetry_init_params_v100_t p{}; p.common.game_id = game; p.common.game_version = SCS_MAKE_VERSION(1, 20); p.common.log = log;
@@ -72,7 +78,12 @@ struct Host {
   void frame(float speed = 10) {
     scs_telemetry_frame_start_t f{}; f.render_time = f.simulation_time = f.paused_simulation_time = ++frames * 50000;
     event(SCS_TELEMETRY_EVENT_frame_start, &f);
-    scs_value_t v{}; v.type = SCS_VALUE_TYPE_float; v.value_float.value = speed; channel("truck.speed", v); event(SCS_TELEMETRY_EVENT_frame_end);
+    scs_value_t v{}; v.type = SCS_VALUE_TYPE_float; v.value_float.value = speed; channel("truck.speed", v);
+    if (channels.count("mandatory.break")) {
+      if (break_null) { const auto entry = channels.at("mandatory.break"); entry.cb("mandatory.break", SCS_U32_NIL, nullptr, entry.ctx); }
+      else if (break_minutes) { scs_value_t b{}; b.type = SCS_VALUE_TYPE_s32; b.value_s32.value = *break_minutes; channel("mandatory.break", b); }
+    }
+    event(SCS_TELEMETRY_EVENT_frame_end);
   }
   void config(const char* id, const scs_named_value_t* attributes) { scs_telemetry_configuration_t c{id, attributes}; event(SCS_TELEMETRY_EVENT_configuration, &c); }
   void gameplay(const char* id, const scs_named_value_t* attributes) { scs_telemetry_gameplay_event_t g{id, attributes}; event(SCS_TELEMETRY_EVENT_gameplay, &g); }
@@ -215,7 +226,8 @@ struct Fixture {
   transport::UserIdentity user = transport::current_user(); transport::OwnerSecurity security{user.sid}; transport::PeerIdentity self = transport::inspect_peer(GetCurrentProcessId());
   Host host; std::unique_ptr<sdk::Adapter> adapter = std::make_unique<sdk::Adapter>();
   std::unique_ptr<v1::Server> server; std::wstring directory, v0_directory;
-  explicit Fixture(bool policy = true) {
+  explicit Fixture(bool policy = true, const char* refuse = "") {
+    host.refuse = refuse;
     directory = temporary_directory(security, L"ET004b-v1-"); v0_directory = temporary_directory(security, L"ET004b-v0-");
     auto p = host.params(); require(adapter->initialize(SCS_TELEMETRY_VERSION_1_01, &p) == SCS_RESULT_ok, "SDK initialize");
     // The endpoint's lifecycle in sdk-exports.cpp: initialize, prepare, attach, then start.
@@ -439,20 +451,116 @@ void gearbox() {
   require(old->status_until(f.host, [](const v1::StateView& s) { return !s.gearbox; }), "minor-0 snapshots carry no gearbox");
   send(old->pipe.get(), framed(probe_payload(1, 1))); require(old->closed(), "a minor-1 probe on a minor-0 connection closes it");
   require(f.listening(), "endpoint relistens after the minor-0 client");
-  // ET-052 PR-2: the contract implements minor 2, but the endpoint is pinned to minor 1 (`endpoint_max_minor` in v1-server.cpp),
-  // so a hello offering 2 (or 3, which a minor-2 decoder never sees as an offer of its own) is served minor 1: a welcome and
-  // a checkpoint at minor 1 with the gearbox and without `nextMandatoryBreak`. PR-3 lifts the pin and flips this
-  // expectation to minor 2 with the break, together with the pin.
+  // ET-052: the endpoint serves minor 2. A hello offering 2, or 3 (valid, and clamped to the endpoint maximum), is served
+  // minor 2: a welcome and a checkpoint at minor 2 with the gearbox and `nextMandatoryBreak`, and snapshots stay at minor 2.
   for (const unsigned offered : {2U, 3U}) {
     auto wide = f.client(true, 2); wide->max_minor = offered; wide->handshake();
     const auto label = "maxMinor " + std::to_string(offered) + " offer";
-    require(wide->messages[0].minor == 1 && wide->messages[0].welcome->minor == 1 && wide->messages[1].minor == 1 && wide->consumer.minor() == 1u, (label + " is served minor 1").c_str());
-    require(wide->messages[1].state->gearbox && wide->messages[1].state->gearbox->forward_gears.value == 8u && !wide->messages[1].state->next_mandatory_break, (label + ": a gearbox and no break").c_str());
-    require(!std::get<v0::Json::Object>(wide->messages[1].wire.at("data").at("state").value).count("nextMandatoryBreak"), (label + ": no nextMandatoryBreak key").c_str());
-    require(wide->status_until(f.host, [](const v1::StateView& s) { return s.gearbox && !s.next_mandatory_break; }), (label + ": snapshots stay at minor 1").c_str());
+    require(wide->messages[0].minor == 2 && wide->messages[0].welcome->minor == 2 && wide->messages[1].minor == 2 && wide->consumer.minor() == 2u, (label + " is served minor 2").c_str());
+    require(wide->messages[1].state->gearbox && wide->messages[1].state->gearbox->forward_gears.value == 8u && wide->messages[1].state->next_mandatory_break, (label + ": a gearbox and a break").c_str());
+    require(std::get<v0::Json::Object>(wide->messages[1].wire.at("data").at("state").value).count("nextMandatoryBreak") == 1, (label + ": a nextMandatoryBreak key").c_str());
+    require(wide->status_until(f.host, [](const v1::StateView& s) { return s.gearbox && s.next_mandatory_break; }), (label + ": snapshots stay at minor 2").c_str());
     wide.reset(); require(f.listening(), "endpoint relistens after the wide offer");
   }
   require(f.host.wrong_thread == 0, "the worker never calls the SDK");
+}
+
+// ET-052 PR-3: minor 2 over an actual pipe. The hello's maxMinor selects min(offer, 2): 0 and 1 keep their original bytes
+// (no break), 2 and 3 get minor 2 with `state.nextMandatoryBreak`. The expected values are written by hand.
+std::set<std::string> state_keys(const v1::Message& message) {
+  std::set<std::string> keys; for (const auto& entry : std::get<v0::Json::Object>(message.wire.at("data").at("state").value)) keys.insert(entry.first); return keys;
+}
+void mandatory_break() {
+  Fixture f; f.host.break_minutes = 95;
+  scs_named_value_t truck[]{named("id", text("vehicle.synthetic_truck")), named("gears.forward", u32(8)), named("gears.reverse", u32(4)), scs_named_value_t{}};
+  f.host.event(SCS_TELEMETRY_EVENT_started); f.host.config("truck", truck); f.host.frame();
+  f.start();
+  std::set<std::string> keys[3];
+  for (const unsigned offered : {0U, 1U, 2U, 3U}) {
+    const unsigned minor = offered > 2 ? 2 : offered; const auto label = "maxMinor " + std::to_string(offered);
+    auto c = f.client(true, minor); c->max_minor = offered; c->handshake();
+    const auto welcome = c->messages[0], checkpoint = c->messages[1];
+    require(welcome.minor == minor && welcome.welcome->minor == minor && checkpoint.minor == minor && c->consumer.minor() == minor, (label + " selects min(offer, 2)").c_str());
+    require(static_cast<bool>(checkpoint.state->gearbox) == (minor >= 1) && static_cast<bool>(checkpoint.state->next_mandatory_break) == (minor >= 2), (label + ": gearbox from minor 1, break from minor 2").c_str());
+    keys[minor] = state_keys(checkpoint);
+    const std::pair<const char*, bool> expected_keys[]{{"gearbox", minor >= 1}, {"nextMandatoryBreak", minor >= 2}};
+    for (const auto& entry : expected_keys) require(keys[minor].count(entry.first) == (entry.second ? 1U : 0U), (label + ": the state key set").c_str());
+    if (minor == 2) {
+      const auto& b = *checkpoint.state->next_mandatory_break;
+      require(b.unit == "min" && b.reading.value && *b.reading.value == 95, "the checkpoint carries 95 minutes");
+      // The break changes from snapshot to snapshot: positive, zero (a value), negative.
+      for (const std::int32_t minutes : {94, 0, -15, 2147483647, -2147483647 - 1}) {
+        f.host.break_minutes = minutes;
+        require(c->status_until(f.host, [&](const v1::StateView& s) { return s.next_mandatory_break && s.next_mandatory_break->reading.value && *s.next_mandatory_break->reading.value == minutes; }), "a changed break reaches the next snapshot");
+      }
+      // NULL from the game is not-observed, never zero.
+      f.host.break_null = true;
+      require(c->status_until(f.host, [](const v1::StateView& s) { return s.next_mandatory_break && !s.next_mandatory_break->reading.value && s.next_mandatory_break->reading.reason == v1::Reason::not_observed; }), "a NULL break is not-observed on the next snapshot");
+      f.host.break_null = false; f.host.break_minutes = 95;
+      require(c->status_until(f.host, [](const v1::StateView& s) { return s.next_mandatory_break && s.next_mandatory_break->reading.value && *s.next_mandatory_break->reading.value == 95; }), "and recovers");
+      // Probe, events and ACK at minor 2; a minor-1 probe on a minor-2 connection closes it.
+      const auto events_before = c->count("event");
+      cancelled(f.host, 2); f.host.frame();
+      require(c->pump(f.host, [&] { return c->count("event") >= events_before + 2; }), "events delivered at minor 2");
+      c->consumer.expect_clock_reply(1); send(c->pipe.get(), framed(probe_payload(1, 2)));
+      require(c->read_until([&] { return c->count("clock.reply") == 1; }), "a minor-2 probe gets a clock reply");
+      // The offer-3 pass reconnects after the offer-2 pass acknowledged its events, so the cursor starts from the producer's cursor.
+      const auto acked = checkpoint.state->status.delivery.acked_through_event_seq; v1::DurableAckCursor cursor(c->session(), acked); cursor.begin_connection(acked, 2); std::size_t committed = 0;
+      const auto through = commit_and_ack(*c, cursor, committed);
+      require(through >= 2 && c->status_until(f.host, [&](const v1::StateView& s) { return s.status.delivery.acked_through_event_seq == through; }), "a minor-2 ACK releases the store");
+      for (const auto& m : c->messages) require(m.minor == 2, "every server message of the connection carries minor 2");
+      send(c->pipe.get(), framed(probe_payload(2, 1))); require(c->closed(), "a minor-1 probe on a minor-2 connection closes it");
+    } else {
+      // Lower minors keep serving snapshots without the break while the game delivers it.
+      require(c->status_until(f.host, [&](const v1::StateView& s) { return !s.next_mandatory_break && static_cast<bool>(s.gearbox) == (minor >= 1); }), (label + ": snapshots carry no break").c_str());
+      for (const auto& m : c->messages) require(m.minor == minor, "every server message of the connection carries its minor");
+    }
+    c.reset(); require(f.listening(), "endpoint relistens");
+  }
+  // The key sets differ exactly by the added key: minor 1 = minor 0 + gearbox, minor 2 = minor 1 + nextMandatoryBreak.
+  auto minor1_plus = keys[0]; minor1_plus.insert("gearbox"); auto minor2_plus = keys[1]; minor2_plus.insert("nextMandatoryBreak");
+  require(keys[1] == minor1_plus && keys[2] == minor2_plus, "the state key sets differ only by the minor's own key");
+  require(f.host.wrong_thread == 0, "the worker never calls the SDK");
+}
+// A game that does not provide the channel: the minor-2 break is not-supported, and the connection is otherwise whole.
+void mandatory_break_unsupported() {
+  Fixture f(true, "mandatory.break"); f.host.break_minutes = 95;
+  f.host.event(SCS_TELEMETRY_EVENT_started); f.host.frame();
+  require(f.host.channels.count("mandatory.break") == 0 && f.host.channels.count("truck.speed") == 1, "the refused channel is not registered; the others are");
+  f.start();
+  auto c = f.client(true, 2); c->handshake();
+  require(c->messages[1].minor == 2 && c->messages[1].state->next_mandatory_break && !c->messages[1].state->next_mandatory_break->reading.value && c->messages[1].state->next_mandatory_break->reading.reason == v1::Reason::not_supported, "the checkpoint carries a not-supported break");
+  require(c->status_until(f.host, [](const v1::StateView& s) { return s.next_mandatory_break && s.next_mandatory_break->reading.reason == v1::Reason::not_supported && s.status.delivery.durable; }), "snapshots carry a not-supported break");
+  require(f.host.wrong_thread == 0, "the worker never calls the SDK");
+}
+
+// ET-052: the v0 snapshot bytes of a game that provides `mandatory.break` and of one that refuses it are identical. The run
+// is scripted (a job, a truck, a timer restart, changing values), and only the random identities and the capture time are
+// normalized, because they differ between two plugin sessions by design.
+std::vector<std::vector<std::uint8_t>> v0_snapshot_bytes(bool provide) {
+  Fixture f(false, provide ? "" : "mandatory.break");
+  scs_named_value_t job[]{named("cargo.id", text("synthetic_cargo")), named("planned_distance.km", u32(700)), scs_named_value_t{}};
+  scs_named_value_t truck[]{named("id", text("vehicle.synthetic_truck")), named("fuel.capacity", value_of(SCS_VALUE_TYPE_float)), scs_named_value_t{}};
+  std::vector<std::vector<std::uint8_t>> frames;
+  f.host.event(SCS_TELEMETRY_EVENT_started); f.host.config("job", job);
+  for (unsigned i = 0; i < 8; ++i) {
+    f.host.break_minutes = 100 - static_cast<std::int32_t>(i) * 7;
+    if (i == 3) f.host.config("truck", truck);
+    f.host.frame(static_cast<float>(i) * 3);
+    sdk::Snapshot snapshot; require(f.adapter->read_latest(snapshot), "a v0 publication per frame");
+    snapshot.capture_monotonic_ns = (i + 1) * 1000000ULL;
+    snapshot.identity.plugin_session_id.assign("10000000-0000-4000-8000-000000000001"); snapshot.identity.capture_clock_id.assign("30000000-0000-4000-8000-000000000001");
+    snapshot.state.game_clock_id.assign("40000000-0000-4000-8000-000000000000");
+    const v0::Continuity continuity{snapshot.continuity.coalesced_snapshots, snapshot.continuity.lost_observations, snapshot.continuity.offline_transitions};
+    frames.push_back(v0::encode_frame(transport::current_message(snapshot, "snapshot", i + 1, continuity)));
+  }
+  const auto v1_break = f.current()->state.next_mandatory_break_min;
+  require(provide ? (v1_break.available() && v1_break.value == 100 - 7 * 7) : v1_break.state == v1::FieldState::not_supported, "the scripted game provided or refused the break channel");
+  return frames;
+}
+void mandatory_break_v0() {
+  const auto refused = v0_snapshot_bytes(false), provided = v0_snapshot_bytes(true);
+  require(refused.size() == 8 && refused == provided, "v0 snapshot bytes are identical with and without the break channel");
 }
 
 void live_only() {
@@ -1200,8 +1308,15 @@ void dll_lifecycle(const char* path) {
     std::unique_ptr<Client> client; Handle live;
     if (scenario == 0) { client = std::make_unique<Client>(open_pipe(name.data()), true); Sleep(50); } // The hello read stays pending.
     else {
-      client = std::make_unique<Client>(open_pipe(name.data()), true); client->handshake();
+      // ET-052: scenario 1 connects at minor 2 to the real DLL, whose captured break (61 minutes, delivered in one frame
+      // before the connection) is in the checkpoint; the other scenarios keep a minor-0 client.
+      if (scenario == 1) { host.break_minutes = 61; host.frame(); }
+      client = std::make_unique<Client>(open_pipe(name.data()), true, scenario == 1 ? 2U : 0U); client->handshake();
       require(sessions.insert(client->session()).second, "a new pluginSessionId per reload");
+      if (scenario == 1) {
+        const auto& break_reading = client->messages[1].state->next_mandatory_break;
+        require(client->messages[0].minor == 2 && client->messages[1].minor == 2 && client->messages[1].state->gearbox && break_reading && break_reading->reading.value && *break_reading->reading.value == 61, "the DLL serves minor 2 with the captured break");
+      }
       cancelled(host, 2); host.frame();
       require(client->read_until([&] { return client->covered() >= 2; }), "events from the DLL");
       require(coverage_messages(*client)[0]->event && coverage_messages(*client)[0]->event->event_seq == 1, "eventSeq starts at 1 in the new plugin session");
@@ -1263,7 +1378,7 @@ void dll_lifecycle(const char* path) {
 int main(int argc, char** argv) {
   try {
     const std::map<std::string, std::function<void()>> cases{
-      {"handshake", handshake}, {"gearbox", gearbox}, {"live-only", live_only}, {"durable", durable_delivery}, {"redelivery", redelivery}, {"stalled-reader", stalled_reader},
+      {"handshake", handshake}, {"gearbox", gearbox}, {"mandatory-break", mandatory_break}, {"mandatory-break-unsupported", mandatory_break_unsupported}, {"mandatory-break-v0", mandatory_break_v0}, {"live-only", live_only}, {"durable", durable_delivery}, {"redelivery", redelivery}, {"stalled-reader", stalled_reader},
       {"fuzz", fuzz}, {"rejection", rejection}, {"collision", collision}, {"policy", policy}, {"v0-isolation", v0_isolation}, {"cap0-isolation", cap0_isolation}, {"shutdown", shutdown}
 #ifdef ETS2TELEMETRY_TRANSPORT_TEST_HOOKS
       , {"retention", [] { retention(); Fixture clamp; clamp.start(); capture_clamp(clamp); }}, {"overflow", overflow}, {"ack-control", ack_control}, {"exhaustion", exhaustion}, {"invariant", [] { invariant(); invariant_at_shutdown(); invariant_end_failed(); invariant_stop_budget(); }}

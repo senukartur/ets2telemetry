@@ -22,7 +22,10 @@ using Identifier = Text<128>;
 using String = Text<1024>;
 using Uuid = Text<36>;
 template<class T> struct Reading { T value{}; Availability status = Availability::not_observed; };
-enum class Field : std::uint8_t { speed, fuel, rpm, gear, odometer, consumption, range, game_time, navigation_distance, world_placement, count };
+// The scalar channels come first, in State::channels order; world_placement has its own typed reading and ends the scalar
+// range. `mandatory_break` (ET-052) is the optional protocol v1 minor-2 channel `next_mandatory_break` (s32 game minutes):
+// its registration never fails initialization, and it takes no part in the v0 snapshot wire or the v0 diagnostics.
+enum class Field : std::uint8_t { speed, fuel, rpm, gear, odometer, consumption, range, game_time, navigation_distance, mandatory_break, world_placement, count };
 struct ChannelSpec { const char* name; scs_value_type_t type; const char* unit; double multiplier; double minimum; double maximum; };
 const std::array<ChannelSpec, static_cast<std::size_t>(Field::count)>& channel_specs() noexcept;
 struct Job {

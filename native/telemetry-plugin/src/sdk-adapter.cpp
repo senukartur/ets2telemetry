@@ -26,6 +26,9 @@ constexpr std::array<ChannelSpec, fields> specs{{
   {SCS_TELEMETRY_TRUCK_CHANNEL_fuel_range, SCS_VALUE_TYPE_float, "m", 1000, 0, 1e12},
   {SCS_TELEMETRY_CHANNEL_game_time, SCS_VALUE_TYPE_u32, "min", 1, 0, 4294967295.0},
   {SCS_TELEMETRY_TRUCK_CHANNEL_navigation_distance, SCS_VALUE_TYPE_float, "m", 1, 0, 1e12},
+  // ET-052: signed in-game minutes until the next mandatory break; negative is overdue and zero is a value. The bounds are
+  // the s32 range, which a double holds exactly.
+  {SCS_TELEMETRY_CHANNEL_next_mandatory_break, SCS_VALUE_TYPE_s32, "min", 1, -2147483648.0, 2147483647.0},
   {SCS_TELEMETRY_TRUCK_CHANNEL_world_placement, SCS_VALUE_TYPE_dplacement, "game-world", 1, 0, 0}
 }};
 void increment(std::uint64_t& value) noexcept { if (value != UINT64_MAX) ++value; }
@@ -124,6 +127,11 @@ v1::SimulationState v1_simulation(Simulation simulation) noexcept {
 // so the division restores the SDK value exactly; the v1 encoder applies the same factor again.
 v1::Field<double> v1_reading(const Reading<double>& reading, double multiplier) noexcept {
   return reading.status == Availability::available ? v1::Field<double>{reading.value / multiplier, v1::FieldState::available} : v1::Field<double>{0, v1_state(reading.status)};
+}
+// ET-052 minor 2: the break channel is an s32 held exactly in the double reading (multiplier 1, range checked against the
+// s32 bounds), so the v1 copy converts it back to the integer without the multiplier path.
+v1::Field<std::int32_t> v1_reading_s32(const Reading<double>& reading) noexcept {
+  return reading.status == Availability::available ? v1::Field<std::int32_t>{static_cast<std::int32_t>(reading.value), v1::FieldState::available} : v1::Field<std::int32_t>{0, v1_state(reading.status)};
 }
 // UTC label (OD-5 S8): unsigned Unix milliseconds from the system clock, which may jump.
 v1::Field<std::uint64_t> utc_unix_ms() noexcept {
@@ -394,7 +402,10 @@ scs_result_t Adapter::initialize(scs_u32_t version, const scs_telemetry_init_par
       const auto& spec = specs[i];
       const auto result = api_.register_for_channel(spec.name, SCS_U32_NIL, spec.type, SCS_TELEMETRY_CHANNEL_FLAG_each_frame | SCS_TELEMETRY_CHANNEL_FLAG_no_value, channel_callback, &contexts_[i]);
       producer_.channel_results[i] = result; registered_channels_[i] = result == SCS_RESULT_ok;
-      if (result == SCS_RESULT_not_found || result == SCS_RESULT_unsupported_type || result == SCS_RESULT_unsupported) {
+      // ET-052: the optional break channel never fails initialization. Any result other than ok means the game does not
+      // provide it (an older game, a refused flag or an unknown code), which is not-supported; core channels stay strict.
+      const bool optional = static_cast<Field>(i) == Field::mandatory_break;
+      if (result == SCS_RESULT_not_found || result == SCS_RESULT_unsupported_type || result == SCS_RESULT_unsupported || (optional && result != SCS_RESULT_ok)) {
         if (i == static_cast<std::size_t>(Field::world_placement)) producer_.state.world_placement.status = Availability::not_supported;
         else producer_.state.channels[i].status = Availability::not_supported;
       }
@@ -589,7 +600,9 @@ void Adapter::event(scs_event_t event_id, const void* info) {
   }
 }
 void Adapter::channel(Field field, const scs_value_t* value) {
-  if (!initialized_ || producer_.exhausted || !next_order()) return;
+  // The break channel (ET-052) is a v1-only extension: it advances no boundary order, so the v0 snapshot, the v0 ordering
+  // and the CAP0 envelopes of a game that provides it are identical to those of a game that does not.
+  if (!initialized_ || producer_.exhausted || (field != Field::mandatory_break && !next_order())) return;
   const auto i = static_cast<std::size_t>(field); const auto& spec = specs[i];
   if (field == Field::world_placement) {
     producer_.state.world_placement = {};
@@ -598,6 +611,8 @@ void Adapter::channel(Field field, const scs_value_t* value) {
     if (producer_.state.world_placement.status == Availability::available) producer_.state.world_placement.value = copied.placement;
   } else producer_.state.channels[i] = measurement(value, spec.type, spec.multiplier, spec.minimum, spec.maximum);
   if (in_frame_) observed_in_frame_[i] = true;
+  // No v0 diagnostic observation either: v0 diagnostic batches and loss counts stay as they were (CAP0 never records channels).
+  if (field == Field::mandatory_break) return;
   if (field == Field::game_time) {
     if (value && value->type == SCS_VALUE_TYPE_u32 && producer_.state.game_time_minutes.status == Availability::available && value->value_u32.value < producer_.state.game_time_minutes.value) {
       // v1 gameTime.regression: `from` is the reading and clock before the rotation, `to` the regressed reading after it.
@@ -794,6 +809,7 @@ void Adapter::publish_v1() noexcept {
     s.odometer_km = sdk_value(Field::odometer); s.average_consumption_l_per_km = sdk_value(Field::consumption);
     s.estimated_range_km = sdk_value(Field::range); s.navigation_distance_m = sdk_value(Field::navigation_distance);
     s.fuel_capacity_l = v1_reading(state.fuel_capacity_l, 1);
+    s.next_mandatory_break_min = v1_reading_s32(state.channels[static_cast<std::size_t>(Field::mandatory_break)]);
     const auto& gear = state.channels[static_cast<std::size_t>(Field::gear)];
     s.gear = gear.status == Availability::available ? v1::Field<std::int32_t>{static_cast<std::int32_t>(gear.value), v1::FieldState::available} : v1::Field<std::int32_t>{0, v1_state(gear.status)};
     v1_game_time(s.game_time); s.capture_utc_unix_ms = utc_unix_ms(); s.boundary_order = producer_.boundary_order;
