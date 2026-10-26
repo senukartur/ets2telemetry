@@ -514,7 +514,7 @@ async function observeUnifiedOverlay({application, dashboard, language, size, re
   const visible = await dashboard.getByTestId('overlay-settings').evaluate(card => {
     const ids = ['overlay-enabled', 'overlay-layout', 'overlay-placement', 'overlay-presets', 'overlay-sections'];
     return ids.every(id => card.querySelector(`[data-testid="${id}"]`)?.checkVisibility()) &&
-      card.querySelectorAll('[data-testid^="overlay-switch-"]').length === 14 &&
+      card.querySelectorAll('[data-testid^="overlay-switch-"]').length === 15 &&
       [...card.querySelectorAll('[data-testid^="overlay-switch-"]')].every(node => node.checkVisibility());
   });
   assert.equal(visible, true, 'UI_OVERLAY_UNIFIED_CONTROLS');
@@ -811,7 +811,7 @@ export async function runUiSmoke({application, dashboard, overlay, source, sourc
         if (language === 'en' && size.width === 1280) await observeOverlayEditing({dashboard, config, record});
         // ET-045e: after ET-048's editing check, which may have saved another scale.
         if (size === sizes[0]) await observeScaleControl({dashboard, config, language, record});
-        assert.equal(await dashboard.locator('[data-testid^="overlay-switch-"]').count(), 14);
+        assert.equal(await dashboard.locator('[data-testid^="overlay-switch-"]').count(), 15);
         await dashboard.getByTestId('overlay-preset-driving-only').focus(); await dashboard.keyboard.press('Enter');
         await until(() => dashboard.evaluate(() => globalThis.desktop.getAppState()), state => !state.settings.overlay.sections.cargo, 'UI_SECTIONS_SAVED');
         const navigationBytes = await readFile(path.join(config.localappdata, 'ETS2Telemetry', 'settings', 'settings.json'));
@@ -1094,7 +1094,7 @@ export async function runUiReadOnly({application, dashboard, config, record, set
     await waitOverlayVisibility(dashboard, {enabled: true, writable: false}, 'UI_OVERLAY_READ_ONLY_RENDERED');
     for (const layout of layouts) assert.equal(await dashboard.locator(`#overlay-layout-${layout}`).isDisabled(), true);
     assert.equal(await dashboard.getByTestId('overlay-edit-start').isDisabled(), true);
-    assert.equal(await dashboard.locator('[data-testid^="overlay-switch-"]:disabled').count(), 14);
+    assert.equal(await dashboard.locator('[data-testid^="overlay-switch-"]:disabled').count(), 15);
     assert.equal(await dashboard.locator('[data-testid^="overlay-preset-"]:disabled').count(), 3);
   }
   const file = path.join(config.localappdata, 'ETS2Telemetry', 'settings', 'settings.json');

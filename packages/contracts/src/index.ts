@@ -76,7 +76,7 @@ export interface DesktopBridge {
   /** Persists visibility; disabling discards an active placement draft only after the durable save. */
   setOverlayEnabled(enabled: boolean): Promise<SettingsView>;
   setOverlayBackgroundOpacity(opacity: number): Promise<SettingsView>;
-  /** Persists the complete overlay section set: exactly the fourteen ids, booleans only, at least one enabled. */
+  /** Persists the complete overlay section set: exactly the fifteen ids, booleans only, at least one enabled. */
   setOverlaySections(sections: OverlaySections): Promise<SettingsView>;
   /**
    * Enters the overlay edit mode for the saved layout (ET-012b): the overlay becomes draggable while this application is
@@ -177,17 +177,21 @@ export interface JournalSample {
 }
 /** One page of a trip's samples in id order, and the cursor of the next page when this one is full. */
 export interface JournalSamplePage {database: JournalDatabase; samples: JournalSample[]; nextCursor: string | null}
+/** The urgency of the next mandatory break (ET-052): `soon` is 1 to 119 minutes, `due` is zero or less; a normal value carries none. */
+export type OverlayUrgency = 'soon' | 'due';
 /**
  * One overlay section, formatted by main in the displayed game's unit profile. `value`: current text with an optional
  * secondary `detail` (such as the fuel level) and, for engine RPM, a `ring` fraction in [0, 1] of the fixed 0-3000 rpm
  * display scale. For speed (ET-045f), `speedRing` is the fraction in [0, 1] of the speed gauge scale of the displayed
  * game's unit profile (130 km/h or 80 mph), 0 while the displayed integer is 0 or the truck reverses; it is set only on a
- * current value. Both fractions are validated in main and in the overlay preload. `unavailable`: rendered as a dash, never
+ * current value. Both fractions are validated in main and in the overlay preload. For the next mandatory break (ET-052),
+ * `urgency` is the enum above, only on the `mandatory-break` section in the value state and only while the projection is
+ * current; the overlay preload strips it anywhere else. `unavailable`: rendered as a dash, never
  * as zero or a last-known value. A disabled section, one the protocol in use does not carry, (except speed and fuel) one
  * without data while current, or, while not current, one the previous projection did not show is left out of the list.
  */
 export type OverlaySectionView =
-  | {id: OverlaySectionId; state: 'value'; text: string; detail?: string; ring?: number; speedRing?: number}
+  | {id: OverlaySectionId; state: 'value'; text: string; detail?: string; ring?: number; speedRing?: number; urgency?: OverlayUrgency}
   | {id: OverlaySectionId; state: 'unavailable'};
 /** Read-only display projection: no source selection, HWND or native placement authority. */
 export interface OverlayPresentation {

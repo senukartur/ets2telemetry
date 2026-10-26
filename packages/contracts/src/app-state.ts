@@ -95,10 +95,10 @@ export type SettingsSaveError = 'SETTINGS_WRITE_FAILED' | 'SETTINGS_READ_ONLY';
  * of the game's client area.
  */
 export type OverlayLayout = 'strip' | 'card' | 'cluster' | 'hud';
-/** The fourteen overlay sections in canonical order; apps/desktop/src/overlay-sections.ts groups them. */
+/** The fifteen overlay sections in canonical order (ET-052 added the last); apps/desktop/src/overlay-sections.ts groups them. */
 export type OverlaySectionId = 'speed' | 'gear' | 'rpm' | 'fuel' | 'range' | 'sdk-consumption' | 'cargo' | 'origin' | 'destination'
-  | 'distance-driven' | 'distance-remaining' | 'deadline' | 'expected-income' | 'game-time';
-/** Which overlay sections are enabled: always all fourteen keys, at least one of them true. */
+  | 'distance-driven' | 'distance-remaining' | 'deadline' | 'expected-income' | 'game-time' | 'mandatory-break';
+/** Which overlay sections are enabled: always all fifteen keys, at least one of them true. */
 export type OverlaySections = Readonly<Record<OverlaySectionId, boolean>>;
 /**
  * One layout's saved position and size (ET-012b). `x` and `y` are fractions in [0, 1] of the free space left inside the

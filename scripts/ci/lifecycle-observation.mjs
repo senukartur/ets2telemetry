@@ -16,20 +16,22 @@ const SETTINGS_SEED = '{"format":"ets2telemetry.settings","version":1,"units":{"
 // holds the placements of all four layouts (the ET-012a anchors at scale 1 by default), so the format is v3. ET-045e:
 // the current format is v8 (ET-049 took v7 first), whose scale 1 renders at zoom 0.7. ET-050: the current format is v9,
 // which adds each game's gear display mode after the units; run A saves ETS2's manual mode after its unit profile.
-// ET-050b: the current format is v10, which changes only the version and adds the crawler gear mode.
+// ET-050b: the format became v10, which changes only the version and adds the crawler gear mode.
+// ET-052: the current format is v11, which adds the overlay section `mandatory-break` (on by default) as the last section key.
 const placementLines = (layout, x, y, last = false) => [`      "${layout}": {`, `        "x": ${x},`, `        "y": ${y},`, '        "scale": 1', last ? '      }' : '      },'];
-const SETTINGS_SAVED = ['{', '  "format": "ets2telemetry.settings",', '  "version": 10,', '  "language": "en",', '  "autostart": false,', '  "units": {', '    "ets2": "us-customary",', '    "ats": "us-customary"', '  },',
+const SETTINGS_SAVED = ['{', '  "format": "ets2telemetry.settings",', '  "version": 11,', '  "language": "en",', '  "autostart": false,', '  "units": {', '    "ets2": "us-customary",', '    "ats": "us-customary"', '  },',
   '  "gearDisplay": {', '    "ets2": "manual",', '    "ats": "automatic"', '  },',
   '  "overlay": {', '    "enabled": false,', '    "backgroundOpacity": 80,', '    "layout": "strip",', '    "sections": {', '      "speed": true,', '      "gear": true,', '      "rpm": true,', '      "fuel": true,',
   '      "range": true,', '      "sdk-consumption": true,', '      "cargo": true,', '      "origin": true,', '      "destination": true,', '      "distance-driven": true,',
-  '      "distance-remaining": true,', '      "deadline": true,', '      "expected-income": true,', '      "game-time": true', '    },', '    "placements": {',
+  '      "distance-remaining": true,', '      "deadline": true,', '      "expected-income": true,', '      "game-time": true,', '      "mandatory-break": true', '    },', '    "placements": {',
   ...placementLines('strip', 0.5, 0), ...placementLines('card', 1, 0), ...placementLines('cluster', 0, 1), ...placementLines('hud', 0, 0, true),
   '    }', '  }', '}', ''].join('\n');
 const SETTINGS_GEAR_SAVED = SETTINGS_SAVED.replace('"enabled": false', '"enabled": true');
 const SETTINGS_UNIT_SAVED = SETTINGS_GEAR_SAVED.replace('"ets2": "manual"', '"ets2": "automatic"');
 const AUTOMATIC_GEARS = {ets2: 'automatic', ats: 'automatic'}, SAVED_GEARS = {ets2: 'manual', ats: 'automatic'};
 const DEFAULT_OVERLAY = {enabled: true, backgroundOpacity: 80, layout: 'strip', sections: {'speed': true, 'gear': true, 'rpm': true, 'fuel': true, 'range': true, 'sdk-consumption': true, 'cargo': true,
-  'origin': true, 'destination': true, 'distance-driven': true, 'distance-remaining': true, 'deadline': true, 'expected-income': true, 'game-time': true},
+  'origin': true, 'destination': true, 'distance-driven': true, 'distance-remaining': true, 'deadline': true, 'expected-income': true, 'game-time': true,
+  'mandatory-break': true},
 placements: {strip: {x: 0.5, y: 0, scale: 1}, card: {x: 1, y: 0, scale: 1}, cluster: {x: 0, y: 1, scale: 1}, hud: {x: 0, y: 0, scale: 1}}};
 const QUARANTINE_NAME = /^settings\.rejected-\d{8}T\d{6}Z\.json$/;
 // 25 m/s and 73 L in the us-customary profile.

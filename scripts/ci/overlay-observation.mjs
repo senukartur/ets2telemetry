@@ -36,14 +36,14 @@ export async function waitForOverlay(page, expected) {
 // ET-012c strip containment. The synthetic checkpoint fixture (tests/fixtures/protocol-v0/checkpoint.json) carries
 // current values for these sections, in canonical order; range stays hidden because its estimate is not observed.
 export const STRIP_SMOKE_SECTIONS = Object.freeze(['speed', 'gear', 'rpm', 'fuel', 'sdk-consumption', 'cargo', 'destination', 'expected-income', 'game-time']);
-// The hidden overlay window is created at the strip's reserved size for every section at the scale setting 1, 1280 x 56
-// DIP at zoom 0.7 (overlay-geometry.ts, ET-045e), so its CSS viewport is 56 / 0.7 = 80 high, within one CSS px of
-// rounding, and up to 1280 / 0.7 = 1828.57 wide. Without a game window main never places it, and Windows limits a window
+// The hidden overlay window is created at the strip's reserved size for every section at the scale setting 1, 1280 x 82
+// DIP at zoom 0.7 (overlay-geometry.ts, ET-045e; ET-052's fifteenth section needs a third row, 56 DIP with two), so its
+// CSS viewport is 82 / 0.7 = 117.14 high, within one CSS px of rounding, and up to 1280 / 0.7 = 1828.57 wide. Without a game window main never places it, and Windows limits a window
 // to the screen size, so on a narrow screen it is narrower (1024 DIP, about 1462 CSS px, on the hosted runner of CI run
 // 38878781715). The height is not limited, and the CSS width must stay within the strip's own limits of 480 to 1829.
 // The height may differ by one DIP of physical rounding at a fractional display scale (1 / 0.7 CSS px) plus half a CSS
 // px of viewport rounding, the same rule as zoomedViewportTolerance below (ET-045e verifier round 1).
-export const STRIP_SMOKE_WINDOW = Object.freeze({innerHeight: 80, heightTolerance: 1 / 0.7 + 0.5, minWidth: 480, maxWidth: 1829});
+export const STRIP_SMOKE_WINDOW = Object.freeze({innerHeight: 117, heightTolerance: 1 / 0.7 + 0.5, minWidth: 480, maxWidth: 1829});
 
 // Self-contained browser callback: false until exactly one current strip root shows exactly the expected sections, then
 // one coherent read of where they lie. `outside` lists sections with an empty box or one not fully inside both the root
@@ -95,19 +95,22 @@ export async function waitForStripLayout(page, expected) {
 }
 
 // ET-012d containment of the card, cluster and HUD (decisions K10 and K11). The telemetry smoke first saves exactly the
-// twelve sections the v0 and v1 pair shows (SYNTHETIC_V1_STRIP_SECTIONS: every section but range and distance driven),
-// so the window reserves no row for a hidden section. Without a game window main never places the hidden overlay, so
+// thirteen sections the v0 and v1 pair shows (SYNTHETIC_V1_STRIP_SECTIONS: every section but range and distance driven;
+// twelve before ET-052 added the next mandatory break, which the pair's 95-minute break shows), so the window reserves no
+// row for a hidden section. Without a game window main never places the hidden overlay, so
 // the smoke sizes it to each layout's window for those sections at the scale setting 1 (overlayWindowSize in
-// overlay-geometry.ts) at that setting's zoom, overlayZoom(1) = 0.7 (ET-045e): the card and HUD at their nominal floor,
-// round(300 × 0.7) × round(360 × 0.7) = 210 × 252 and 224 × 224 DIP, the cluster 308 wide and ceil(223 × 0.7 + 2) = 159
-// high for its reserve of 36 + 21 × 9 = 225 CSS px. Their CSS viewports are 300 × 360, 440 × 227.14 and 320 × 320. The
-// reserved CSS heights are 48 + 24 × 12 = 336, 225 and 18 + 24 × 12 = 306 (layoutReservedCss in overlay-rows.ts). A unit
+// overlay-geometry.ts) at that setting's zoom, overlayZoom(1) = 0.7 (ET-045e). ET-052 re-derived: the card's content is
+// 46 + 24 × 13 = 358 CSS px, so ceil(358 × 0.7 + 2) = 253 DIP high (above its nominal floor of 252), 210 wide; the
+// cluster's panel holds 10 sections outside the gauge, a reserve of 36 + 21 × 10 = 246 CSS px (content 244), so
+// ceil(244 × 0.7 + 2) = 173 high, 308 wide; the HUD's content is 18 + 24 × 13 = 330, so ceil(330 × 0.7) = 231 high (above
+// its floor of 224), 224 wide. Their CSS viewports are 300 × 361.43, 440 × 247.14 and 320 × 330. The
+// reserved CSS heights are 48 + 24 × 13 = 360, 246 and 18 + 24 × 13 = 330 (layoutReservedCss in overlay-rows.ts). A unit
 // test ties these hand-written values to both functions and the zoom to overlayZoom. All three windows are smaller than
 // the hosted runner's 1024 x 768 screen, so Windows does not narrow them.
 export const LAYOUT_SMOKE_WINDOWS = Object.freeze({
-  card: Object.freeze({width: 210, height: 252}),
-  cluster: Object.freeze({width: 308, height: 159}),
-  hud: Object.freeze({width: 224, height: 224})
+  card: Object.freeze({width: 210, height: 253}),
+  cluster: Object.freeze({width: 308, height: 173}),
+  hud: Object.freeze({width: 224, height: 231})
 });
 export const LAYOUT_SMOKE_ZOOM = 0.7;
 /**
@@ -131,28 +134,30 @@ export function verifyAppliedWindow(requested, actual) {
     `The overlay window was not applied at the requested size: ${JSON.stringify(requested)} became ${JSON.stringify(actual)}`);
   return actual;
 }
-export const LAYOUT_SMOKE_RESERVED_CSS = Object.freeze({card: 336, cluster: 225, hud: 306});
+export const LAYOUT_SMOKE_RESERVED_CSS = Object.freeze({card: 360, cluster: 246, hud: 330});
 // ET-045e review frames for the UI overlay shard, at the zoom of a scale setting (overlayZoom in overlay-placement.ts).
 // SCALE_REFERENCE_FRAMES are the product windows with every section at the new 100% (overlayWindowSize(layout, 1)) and
 // the ET-045d strip at its 70% (896 × 82 at zoom 0.7) and 100% (1280 × 116 at zoom 1) for the owner's comparison.
-// SCALE_RANGE_FRAMES are the product windows at 50% (zoom 0.35: strip 1280 × 16, card 105 × 136, cluster 154 × 95, HUD
-// 112 × 124), the strip raised to the 38 DIP minimum height that the ET-045c probe measured at 150%. The ET-045e probe at
-// 150% showed Windows accepting the card, cluster and HUD within one DIP (106 × 136, 154 × 96, 112 × 124); if a hosted
-// runner refuses a size, the frame wait fails and the refusal is recorded.
+// SCALE_RANGE_FRAMES are the product windows at 50% (zoom 0.35: strip 1280 × 16, card 105 × 145, cluster 154 × 103, HUD
+// 112 × 133 with ET-052's fifteen sections; 136, 95 and 124 with fourteen), the strip raised to the 38 DIP minimum height
+// that the ET-045c probe measured at 150%. The ET-045e probe at 150% showed Windows accepting the card, cluster and HUD
+// within one DIP (106 × 136, 154 × 96, 112 × 124); if a hosted runner refuses a size, the frame wait fails and the
+// refusal is recorded. The 100% references are the ET-052 product windows: strip 1280 × 82 (three rows), card 210 × 287,
+// cluster 308 × 203 and HUD 224 × 265 (56, 270, 188 and 248 with fourteen sections).
 export const SCALE_REFERENCE_FRAMES = Object.freeze([
-  Object.freeze({name: 'scale-strip', layout: 'strip', zoom: 0.7, width: 1280, height: 56}),
-  Object.freeze({name: 'scale-card', layout: 'card', zoom: 0.7, width: 210, height: 270}),
-  Object.freeze({name: 'scale-cluster', layout: 'cluster', zoom: 0.7, width: 308, height: 188}),
-  Object.freeze({name: 'scale-hud', layout: 'hud', zoom: 0.7, width: 224, height: 248}),
+  Object.freeze({name: 'scale-strip', layout: 'strip', zoom: 0.7, width: 1280, height: 82}),
+  Object.freeze({name: 'scale-card', layout: 'card', zoom: 0.7, width: 210, height: 287}),
+  Object.freeze({name: 'scale-cluster', layout: 'cluster', zoom: 0.7, width: 308, height: 203}),
+  Object.freeze({name: 'scale-hud', layout: 'hud', zoom: 0.7, width: 224, height: 265}),
   Object.freeze({name: 'scale-strip-old70', layout: 'strip', zoom: 0.7, width: 896, height: 82}),
   Object.freeze({name: 'scale-strip-old100', layout: 'strip', zoom: 1, width: 1280, height: 116})
 ]);
 export const SCALE_RANGE_ZOOM = 0.35;
 export const SCALE_RANGE_FRAMES = Object.freeze({
   strip: Object.freeze({width: 1280, height: 38}),
-  card: Object.freeze({width: 105, height: 136}),
-  cluster: Object.freeze({width: 154, height: 95}),
-  hud: Object.freeze({width: 112, height: 124})
+  card: Object.freeze({width: 105, height: 145}),
+  cluster: Object.freeze({width: 154, height: 103}),
+  hud: Object.freeze({width: 112, height: 133})
 });
 
 // Self-contained browser callback: false until exactly one current root of the expected layout shows exactly the

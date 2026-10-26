@@ -168,25 +168,26 @@ export async function waitForV1NotCurrentLive(page, values, status, speed) {
 export const SYNTHETIC_V1_OVERLAY_CURRENT = Object.freeze({
   'overlay-origin': 'Synthetic City A, Synthetic Company A', 'overlay-distance-remaining': '151.0 km', 'overlay-deadline': 'in 10 h 55 min',
   'overlay-cargo': 'Synthetic Cargo', 'overlay-cargo-detail': '18.0 t', 'overlay-destination': 'Synthetic City B, Synthetic Company B',
-  'overlay-speed': '90', 'freshness': 'current'
+  // ET-052: the smoke source's minor-2 states carry a next mandatory break of 95 game minutes (1 h 35 min).
+  'overlay-mandatory-break': '1 h 35 min', 'overlay-speed': '90', 'freshness': 'current'
 });
 /** The strip sections the pair shows, in canonical order: range stays hidden (its estimate is not observed). */
 export const SYNTHETIC_V1_STRIP_SECTIONS = Object.freeze(['speed', 'gear', 'rpm', 'fuel', 'sdk-consumption', 'cargo', 'origin', 'destination',
-  'distance-remaining', 'deadline', 'expected-income', 'game-time']);
+  'distance-remaining', 'deadline', 'expected-income', 'game-time', 'mandatory-break']);
 /** v0 not current: every shown section is a dash and no detail remains. */
 export const SYNTHETIC_V1_OVERLAY_V0_STALE = Object.freeze({
   'overlay-origin': '—', 'overlay-distance-remaining': '—', 'overlay-deadline': '—', 'overlay-cargo': '—', 'overlay-cargo-detail': null,
-  'overlay-destination': '—', 'overlay-speed': '—', 'freshness': 'stale'
+  'overlay-destination': '—', 'overlay-mandatory-break': '—', 'overlay-speed': '—', 'freshness': 'stale'
 });
 /** v1 not current while v0 is: the v1 sections are dashes, the mixed sections keep their v0 part (game ids, no mass). */
 export const SYNTHETIC_V1_OVERLAY_V1_STALE = Object.freeze({
   'overlay-origin': '—', 'overlay-distance-remaining': '—', 'overlay-deadline': '—', 'overlay-cargo': 'cargo.logs', 'overlay-cargo-detail': null,
-  'overlay-destination': 'city.warszawa', 'overlay-speed': '90', 'freshness': 'current'
+  'overlay-destination': 'city.warszawa', 'overlay-mandatory-break': '—', 'overlay-speed': '90', 'freshness': 'current'
 });
 /** Both sources stopped: dashes only; the freshness depends on which status arrives first, so it is not compared. */
 export const SYNTHETIC_V1_OVERLAY_STOPPED = Object.freeze({
   'overlay-origin': '—', 'overlay-distance-remaining': '—', 'overlay-deadline': '—', 'overlay-cargo': '—', 'overlay-cargo-detail': null,
-  'overlay-destination': '—', 'overlay-speed': '—'
+  'overlay-destination': '—', 'overlay-mandatory-break': '—', 'overlay-speed': '—'
 });
 
 // Self-contained browser callback for the overlay document. Each listed element exists once with exactly the expected
@@ -209,6 +210,27 @@ export function overlayV1Observation(expected) {
 }
 export async function waitForOverlayV1(page, expected) {
   const handle = await page.waitForFunction(overlayV1Observation, expected, {timeout: 10000});
+  try {return await handle.jsonValue();} finally {await handle.dispose();}
+}
+
+// ET-052 (MB10): the next mandatory break's cues beside its text. 95 game minutes is "soon": the item carries
+// data-urgency="soon" and an accessible name with the state word, and its value is the orange token #FB923C
+// (--yu-ov-break-soon), not underlined (only due is). Hand-written from the 95-minute smoke value.
+export const SYNTHETIC_V1_BREAK_CUE = Object.freeze({
+  urgency: 'soon', label: 'Break: 1 h 35 min, soon', color: 'rgb(251, 146, 60)', textDecorationLine: 'none'
+});
+// Self-contained browser callback: false until the one break item and its value show exactly the expected cues.
+export function overlayBreakCueObservation(expected) {
+  const items = globalThis.document.querySelectorAll('[data-testid="overlay-section-mandatory-break"]');
+  const values = globalThis.document.querySelectorAll('[data-testid="overlay-mandatory-break"]');
+  if (items.length !== 1 || values.length !== 1) return false;
+  const style = globalThis.getComputedStyle(values[0]);
+  const observation = {urgency: items[0].getAttribute('data-urgency'), label: items[0].getAttribute('aria-label'), color: style.color,
+    textDecorationLine: style.textDecorationLine};
+  return Object.entries(expected).every(([key, value]) => observation[key] === value) ? observation : false;
+}
+export async function waitForOverlayBreakCue(page, expected) {
+  const handle = await page.waitForFunction(overlayBreakCueObservation, expected, {timeout: 10000});
   try {return await handle.jsonValue();} finally {await handle.dispose();}
 }
 
