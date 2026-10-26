@@ -186,6 +186,8 @@ Json state(const StatePod& s, const Currency& currency, unsigned minor) {
     {"gameTime", with(minutes(s.game_time.minutes), "clockId", uuid(s.game_time.clock_id))}, {"captureUtcUnixMs", field(s.capture_utc_unix_ms, decimal)},
     {"boundaryOrder", decimal(s.boundary_order)}, {"worldPlacement", placement(s.world_placement)}, {"configuration", configuration(s.configuration, currency)},
     {"window", window(s.window)}};
+  // ET-052: `minor == 1` is unreachable at minor 2 while v1-server.cpp pins the endpoint to minor 1; PR-3 must change it to
+  // `minor >= 1` (a minor-2 state carries the gearbox too) and add `nextMandatoryBreak` at minor 2.
   if (minor == 1) o.emplace("gearbox", gearbox(s.gearbox));
   return Json{std::move(o)};
 }

@@ -318,8 +318,8 @@ SourceIdentity source(const Json& s) {
 unsigned max_minor_of(unsigned max) { if (max > highest_minor) fail("Unsupported maximum protocol v1 minor"); return max; }
 unsigned version(const Json& v, unsigned max) {
   record(v, {"major", "minor"}); const auto major = std::get_if<double>(&at(v, "major").value), minor = std::get_if<double>(&at(v, "minor").value);
-  // Minors 0 to 2 are implemented; a minor above the caller's maximum is refused as an unsupported version.
-  if (!major || !minor || *major != protocol_major || !(*minor == 0 || *minor == 1 || *minor == 2) || *minor > max) fail("Unsupported protocol version");
+  // Integral minors up to `highest_minor` are implemented; a minor above the caller's maximum is refused as an unsupported version.
+  if (!major || !minor || *major != protocol_major || std::trunc(*minor) != *minor || *minor < 0 || *minor > highest_minor || *minor > max) fail("Unsupported protocol version");
   return static_cast<unsigned>(*minor);
 }
 constexpr const char* client_kinds[] = {"hello", "ack", "clock.probe"};
