@@ -633,6 +633,7 @@ export const RU_DICTIONARY: TranslationDictionary = Object.freeze({
   's.gear.box.saved': 'Коробки со своим режимом в {game}',
   's.gear.box.reset': 'Режим игры',
   's.gear.box.reset.named': 'Вернуть режим игры для {gearbox}',
+  's.gear.box.full': 'У этой игры уже {count} коробок со своим режимом. Верните одну из них к режиму игры, чтобы выбрать режим для этого грузовика.',
   's.close': 'Закрытие окна',
   's.closeD': 'Программа и запись продолжают работать в области уведомлений. Чтобы остановить, нажмите «Выход».',
   's.closeV': 'Свернуть в трей',

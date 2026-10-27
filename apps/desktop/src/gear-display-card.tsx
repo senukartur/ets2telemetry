@@ -5,7 +5,7 @@ import {Card, CardContent, CardHeader, CardTitle} from '@/components/ui/card';
 import {Label} from '@/components/ui/label';
 import {RadioGroup, RadioGroupItem} from '@/components/ui/radio-group';
 import {chooseGearboxGearDisplay, chooseGearDisplay, GAME_GEAR_DISPLAY, type GearDisplayRequest} from './gear-display-choice';
-import {DEFAULT_GEARBOX_GEAR_DISPLAY, findGearboxGearDisplay} from './gearbox-gear-display';
+import {DEFAULT_GEARBOX_GEAR_DISPLAY, findGearboxGearDisplay, MAX_GEARBOX_GEAR_DISPLAYS} from './gearbox-gear-display';
 import {liveGearbox} from './live-sources';
 import {DEFAULT_GEAR_DISPLAY, GEAR_DISPLAY_MODE_IDS, UNIT_GAMES} from './unit-profiles';
 import {getSettingsSaveErrorText, getUnitGameText} from './strings';
@@ -29,8 +29,9 @@ export interface GearDisplayCardProps {
  * in flight and while the settings cannot be saved.
  *
  * ET-050b settings v12: under its game, the current truck's gearbox (shown while the gearbox-aware rules apply) has its
- * own group, "as for the game" or one mode, and every gearbox with its own mode is listed with a button that returns it
- * to the game's mode.
+ * own group, "same as the game" or one mode, and every gearbox with its own mode is listed with a button that returns it
+ * to the game's mode. While the game already has the most gearboxes with their own mode and the current one is not among
+ * them, its group is disabled and a note says to return one first, because main would refuse the save.
  */
 export function GearDisplayCard({settings, live, onSaved, onRequest, showSaveError}: GearDisplayCardProps) {
   const [request, setRequest] = useState<GearDisplayRequest>('idle');
@@ -47,6 +48,8 @@ export function GearDisplayCard({settings, live, onSaved, onRequest, showSaveErr
     void chooseGearboxGearDisplay(window.desktop, game, {model: gearbox.model, forwardGears: gearbox.forwardGears, reverseGears: gearbox.reverseGears},
       gearbox.label, value, {onSaved, onState: setRequest});
   };
+  // A new gearbox beyond the limit would be refused by the store; a gearbox already listed can always change.
+  const full = (game: UnitGame) => current !== undefined && gearboxes[game].length >= MAX_GEARBOX_GEAR_DISPLAYS && !findGearboxGearDisplay(gearboxes[game], current);
   const modeText = (game: UnitGame, mode: GearDisplayMode) => t(mode === 'crawler' ? `s.gear.crawler.${game}` : `s.gear.${mode}`, undefined, language);
   const gearboxText = (gearbox: Pick<GearboxGearDisplay, 'forwardGears' | 'reverseGears' | 'label'>) =>
     t('s.gear.box.name', {label: gearbox.label, forward: gearbox.forwardGears, reverse: gearbox.reverseGears}, language);
@@ -65,13 +68,16 @@ export function GearDisplayCard({settings, live, onSaved, onRequest, showSaveErr
         {current?.game === game ? <div className="space-y-2" data-testid={`gear-display-${game}-gearbox`}>
           <p id={`gear-display-${game}-gearbox-label`}>{t('s.gear.box.current', {gearbox: gearboxText(current)}, language)}</p>
           <RadioGroup aria-labelledby={`gear-display-${game}-gearbox-label`} className="yu-segmented yu-segmented-stacked" data-testid={`gear-display-${game}-gearbox-mode`}
-            value={findGearboxGearDisplay(gearboxes[game], current)?.mode ?? GAME_GEAR_DISPLAY} disabled={locked} onValueChange={value => chooseGearbox(game, current, value)}>
+            {...(full(game) ? {'aria-describedby': `gear-display-${game}-gearbox-full`} : {})}
+            value={findGearboxGearDisplay(gearboxes[game], current)?.mode ?? GAME_GEAR_DISPLAY} disabled={locked || full(game)} onValueChange={value => chooseGearbox(game, current, value)}>
             {[GAME_GEAR_DISPLAY, ...GEAR_DISPLAY_MODE_IDS].map(value => <div key={value} className="yu-segment-option">
               <RadioGroupItem value={value} id={`gear-display-${game}-gearbox-${value}`} />
               <Label htmlFor={`gear-display-${game}-gearbox-${value}`}>{value === GAME_GEAR_DISPLAY
                 ? t('s.gear.box.game', {mode: modeText(game, settings?.gearDisplay[game] ?? DEFAULT_GEAR_DISPLAY[game])}, language) : modeText(game, value as GearDisplayMode)}</Label>
             </div>)}
           </RadioGroup>
+          {full(game) ? <p id={`gear-display-${game}-gearbox-full`} className="text-sm text-muted-foreground" data-testid={`gear-display-${game}-gearbox-full`}>
+            {t('s.gear.box.full', {count: MAX_GEARBOX_GEAR_DISPLAYS}, language)}</p> : null}
         </div> : <p className="text-sm text-muted-foreground" data-testid={`gear-display-${game}-gearbox-none`}>{t('s.gear.box.none', undefined, language)}</p>}
         {gearboxes[game].length > 0 ? <ul className="space-y-1" aria-label={t('s.gear.box.saved', {game: getUnitGameText(game, language)}, language)} data-testid={`gear-display-${game}-gearboxes`}>
           {gearboxes[game].map(entry => <li key={`${entry.model}/${entry.forwardGears}/${entry.reverseGears}`} className="flex items-center justify-between gap-2 text-sm">

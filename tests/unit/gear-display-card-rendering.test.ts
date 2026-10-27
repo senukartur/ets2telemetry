@@ -98,14 +98,16 @@ it.each(['en', 'ru'] as const)('shows main\'s save error only when this card mad
 // ET-050b per-gearbox modes (settings v12). The current gearbox is the fixture pair's ETS2 12-speed (12 forward, 4 reverse) on
 // 'truck.volvo', "Synthetic Brand Synthetic Truck"; the expected texts are the hand-written EN/RU copy.
 const GEARBOX_COPY = {
-  en: {current: 'Current truck: Synthetic Brand Synthetic Truck, 12 forward and 4 reverse gears', game: 'As for the game: Manual range-splitter (1L, 1H, 2L…)',
+  en: {current: 'Current truck: Synthetic Brand Synthetic Truck, gears: 12 forward, 4 reverse', game: 'Same as the game: Manual range-splitter (1L, 1H, 2L…)',
     none: "The current truck's gearbox is not known yet: it appears here while this game sends live data with this version's plugin.",
     saved: 'Gearboxes with their own mode in Euro Truck Simulator 2', reset: "Use the game's mode",
-    resetNamed: "Use the game's mode for Synthetic Brand Synthetic Truck, 12 forward and 4 reverse gears"},
+    resetNamed: "Use the game's mode for Synthetic Brand Synthetic Truck, gears: 12 forward, 4 reverse",
+    full: "This game already has 16 gearboxes with their own mode. Return one of them to the game's mode to choose a mode for this truck."},
   ru: {current: 'Текущий грузовик: Synthetic Brand Synthetic Truck, передач вперёд: 12, назад: 4', game: 'Как для игры: Механическая с делителем (1L, 1H, 2L…)',
     none: 'Коробка текущего грузовика пока не известна: она появится здесь, пока игра передаёт данные через плагин этой версии.',
     saved: 'Коробки со своим режимом в Euro Truck Simulator 2', reset: 'Режим игры',
-    resetNamed: 'Вернуть режим игры для Synthetic Brand Synthetic Truck, передач вперёд: 12, назад: 4'}
+    resetNamed: 'Вернуть режим игры для Synthetic Brand Synthetic Truck, передач вперёд: 12, назад: 4',
+    full: 'У этой игры уже 16 коробок со своим режимом. Верните одну из них к режиму игры, чтобы выбрать режим для этого грузовика.'}
 } as const;
 const live = () => gearboxPair(3, {gearbox: gearboxFixture('checkpoint')});
 const SAVED = {model: 'truck.volvo', forwardGears: 12, reverseGears: 4, label: 'Synthetic Brand Synthetic Truck', mode: 'crawler'} as const;
@@ -145,4 +147,18 @@ it('locks the gearbox group and the list buttons while the settings are read-onl
   const html = render(settings('en', undefined, {state: 'newer-version', writable: false, gearboxGearDisplay: {ets2: [SAVED], ats: []}}), undefined, live());
   expect(gearboxGroup(html, 'ets2')).toContain('aria-disabled="true"');
   expect(html).toMatch(/<button disabled=""[^>]*aria-label="Use the game&#x27;s mode for/);
+});
+// Review finding: a new gearbox beyond the sixteen of a game would be refused, so its group is disabled with a note; a gearbox
+// already listed can still change, and the other game is unaffected.
+it.each(['en', 'ru'] as const)('disables a new current gearbox with a note once its game has sixteen gearboxes in %s', language => {
+  const others = Array.from({length: 16}, (_, index) => ({...SAVED, forwardGears: index + 20}));
+  const full = render(settings(language, undefined, {gearboxGearDisplay: {ets2: others, ats: []}}), undefined, live());
+  expect(gearboxGroup(full, 'ets2')).toContain('aria-disabled="true"');
+  expect(gearboxGroup(full, 'ets2')).toContain('aria-describedby="gear-display-ets2-gearbox-full"');
+  expect(full).toContain(`<p id="gear-display-ets2-gearbox-full" class="text-sm text-muted-foreground" data-testid="gear-display-ets2-gearbox-full">${escaped(GEARBOX_COPY[language].full)}</p>`);
+  const listed = render(settings(language, undefined, {gearboxGearDisplay: {ets2: [...others.slice(1), SAVED], ats: []}}), undefined, live());
+  expect(gearboxGroup(listed, 'ets2')).not.toContain('aria-disabled');
+  expect(listed).not.toContain('gear-display-ets2-gearbox-full');
+  const otherGame = render(settings(language, undefined, {gearboxGearDisplay: {ets2: [], ats: others}}), undefined, live());
+  expect(otherGame).not.toContain('gear-display-ets2-gearbox-full');
 });

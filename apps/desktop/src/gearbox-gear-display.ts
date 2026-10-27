@@ -16,21 +16,29 @@ export const DEFAULT_GEARBOX_GEAR_DISPLAY: GearboxGearDisplays = Object.freeze({
 /** The mode for gear display: the game's mode, with the gearboxes that override it. */
 export interface GearDisplayChoice {game: UnitGame; mode: GearDisplayMode; gearboxes: readonly GearboxGearDisplay[]}
 
-/** A C0 control character or DEL, which a stored id or label never holds. */
+/**
+ * A C0 control character, DEL or a lone surrogate, which a stored id or label never holds: protocol v1's text rule, which
+ * no SDK value the projection carries can break.
+ */
 function hasControl(value: string): boolean {
   for (let index = 0; index < value.length; index++) {
     const code = value.charCodeAt(index);
     if (code < 0x20 || code === 0x7f) return true;
+    if (code >= 0xd800 && code <= 0xdbff) {
+      const next = value.charCodeAt(index + 1);
+      if (!(next >= 0xdc00 && next <= 0xdfff)) return true;
+      index++;
+    } else if (code >= 0xdc00 && code <= 0xdfff) return true;
   }
   return false;
 }
 const utf8Bytes = (value: string) => new TextEncoder().encode(value).byteLength;
 
-/** An SDK truck model id as protocol v1 carries it: 1 to 128 UTF-8 bytes, no control characters. */
+/** An SDK truck model id as protocol v1 carries it: 1 to 128 UTF-8 bytes, no control character or lone surrogate. */
 export function isGearboxModel(value: unknown): value is string {
   return typeof value === 'string' && value.length > 0 && !hasControl(value) && utf8Bytes(value) <= ID_BYTES;
 }
-/** A display label: 1 to 128 UTF-16 code units, no control characters. */
+/** A display label: 1 to 128 UTF-16 code units, no control character or lone surrogate. */
 export function isGearboxLabel(value: unknown): value is string {
   return typeof value === 'string' && value.length > 0 && value.length <= MAX_GEARBOX_LABEL_LENGTH && !hasControl(value);
 }

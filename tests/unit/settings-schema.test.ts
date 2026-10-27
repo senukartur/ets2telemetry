@@ -516,6 +516,7 @@ it.each([
   {name: 'a model above 128 UTF-8 bytes', block: {ets2: [{...GA867R, model: TOO_LONG_MODEL}, {...GA867R, model: MULTIBYTE_MODEL}], ats: []}, expected: NO_GEARBOXES, fields: ['gearboxGearDisplay.ets2']},
   {name: 'a label above 128 characters', block: {ets2: [{...GA867R, label: 'L'.repeat(129)}], ats: []}, expected: NO_GEARBOXES, fields: ['gearboxGearDisplay.ets2']},
   {name: 'a control character', block: {ets2: [{...GA867R, label: 'Scania\nR'}], ats: []}, expected: NO_GEARBOXES, fields: ['gearboxGearDisplay.ets2']},
+  {name: 'a lone surrogate', block: {ets2: [{...GA867R, label: 'Scania \ud800'}, {...GA867R, forwardGears: 7, model: '\udc00truck'}], ats: []}, expected: NO_GEARBOXES, fields: ['gearboxGearDisplay.ets2']},
   {name: 'no forward gear', block: {ets2: [{...GA867R, forwardGears: 0}], ats: []}, expected: NO_GEARBOXES, fields: ['gearboxGearDisplay.ets2']},
   {name: 'a negative reverse count', block: {ets2: [{...GA867R, reverseGears: -1}], ats: []}, expected: NO_GEARBOXES, fields: ['gearboxGearDisplay.ets2']},
   {name: 'more than 100 gears', block: {ets2: [{...GA867R, forwardGears: 101}], ats: []}, expected: NO_GEARBOXES, fields: ['gearboxGearDisplay.ets2']},
@@ -538,8 +539,9 @@ it('keeps the first sixteen gearboxes of a game and drops the rest alone', () =>
   // The file's first sixteen are kept (gears 17 down to 2), then put in canonical order.
   expect((parsed as unknown as {settings: {gearboxGearDisplay: {ets2: unknown[]}}}).settings.gearboxGearDisplay.ets2).toEqual(entries.slice(1));
 });
-it('writes a full set of thirty-two maximal gearboxes within the 64 KiB file cap', () => {
-  const entry = (index: number) => ({model: `${'ы'.repeat(60)}${String(index).padStart(2, '0')}`, forwardGears: 100, reverseGears: 100, label: '"'.repeat(128), mode: 'crawler' as const});
+// The largest entry: a model of 128 one-byte characters that JSON escapes to two bytes, a label of 128 three-byte characters.
+it('writes a full set of thirty-two largest gearboxes within the 64 KiB file cap', () => {
+  const entry = (index: number) => ({model: `${'"'.repeat(126)}${String(index).padStart(2, '0')}`, forwardGears: 100, reverseGears: 100, label: '€'.repeat(128), mode: 'crawler' as const});
   const text = serializeSettings({language: 'en', autostart: false, units: {ets2: 'metric', ats: 'metric'}, gearDisplay: AUTO,
     gearboxGearDisplay: {ets2: Array.from({length: 16}, (_, index) => entry(index)), ats: Array.from({length: 16}, (_, index) => entry(16 + index))},
     overlay: DEFAULT_OVERLAY as Parameters<typeof serializeSettings>[0]['overlay']});
