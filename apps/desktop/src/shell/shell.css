@@ -49,6 +49,8 @@ h1[tabindex="-1"]:focus { outline: none; }
 .yu-dot[data-motion="breathe"] { animation: yu-dot-breathe 2.4s ease-in-out infinite; }
 @keyframes yu-dot-ring { 0% { transform: scale(1); opacity: .6; } 100% { transform: scale(2.9); opacity: 0; } }
 @keyframes yu-dot-breathe { 50% { opacity: .35; } }
+/* Pulse only while the window has focus (useWindowFocused): an endless animation repaints every frame. */
+.yu-dot[data-window-focused="false"], .yu-dot[data-window-focused="false"]::after { animation: none; }
 /* The global reduced-motion rule shortens durations, which would make an infinite ring flicker; stop it instead. */
 @media (prefers-reduced-motion: reduce) { .yu-dot, .yu-dot::after { animation: none !important; } }
 .yu-column { min-width: 0; min-height: 0; display: flex; flex-direction: column; }

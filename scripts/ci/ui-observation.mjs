@@ -1027,6 +1027,9 @@ export async function runUiSmoke({application, dashboard, overlay, source, sourc
   assert.equal(await dashboard.getByTestId('shell.recording.indicator').getAttribute('data-tone'), tone);
   const motion = ['recording', 'waiting'].includes(recording) ? 'calm' : recording === 'opening' ? 'busy' : ['interrupted', 'retrying'].includes(recording) ? 'urgent' : recording === 'paused' ? 'breathe' : 'still';
   assert.equal(await dashboard.getByTestId('shell.recording.indicator').getAttribute('data-motion'), motion);
+  // The dot pulses only while the dashboard window has focus.
+  record.windowFocused = await dashboard.evaluate(() => globalThis.document.hasFocus());
+  assert.equal(await dashboard.getByTestId('shell.recording.indicator').getAttribute('data-window-focused'), String(record.windowFocused));
   // The sidebar indicator's tooltip opens on hover and on keyboard focus and leads with the status card's headline.
   const indicator = dashboard.getByTestId('shell.sidebar.recording'), hint = dashboard.getByTestId('shell.recording.hint');
   const hintHeadline = () => dashboard.evaluate(() => [globalThis.document.querySelector('[data-testid="shell.recording.hint"] p')?.textContent,

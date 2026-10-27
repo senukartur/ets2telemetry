@@ -14,6 +14,7 @@ import {Gauge, BookOpen, Settings2, Cloud, Globe, Power, ChevronDown, Flame, Plu
 import {useHardModeStatus} from './hard-mode/use-status';
 import {hardModeView} from './hard-mode/view';
 import {useLanguageController} from './shell/use-language';
+import {useWindowFocused} from './shell/use-window-focus';
 import logo from './assets/logo.png';
 import onestLicense from './assets/onest-OFL.txt?raw';
 import onestLicenseUrl from './assets/onest-OFL.txt?url';
@@ -69,6 +70,7 @@ export default function App() {
   const problem = health && (health.service === 'failed' || health.service === 'restarting') && health.lastError;
   // ET-015c PR-4 (G8): the recording status text; until main's first push the status is not known.
   const recording = recordingStatusText(health?.recording ?? {state: 'unknown'}, language);
+  const windowFocused = useWindowFocused();
   const recordingAlertVariant = health?.recording.state === 'retrying' ? 'default' : 'destructive';
   // Main pushes the saved settings; until the first push the ET-000 defaults apply.
   const saved = (view: SettingsView) => setApp(current => current && {...current, settings: view});
@@ -95,7 +97,7 @@ export default function App() {
       </React.Fragment>)}</nav>
       <div className="yu-sidebar-footer"><TooltipProvider delayDuration={150} skipDelayDuration={0}><Tooltip><TooltipTrigger asChild>
         <button type="button" className="yu-recording" data-testid="shell.sidebar.recording" aria-label={recording.testBadge ? `${recording.label}, ${recording.testBadge}` : recording.label}>
-          <span className="yu-dot" aria-hidden="true" data-tone={recordingTone(health?.recording.state)} data-motion={recordingMotion(health?.recording.state)} data-testid="shell.recording.indicator" />
+          <span className="yu-dot" aria-hidden="true" data-tone={recordingTone(health?.recording.state)} data-motion={recordingMotion(health?.recording.state)} data-window-focused={windowFocused} data-testid="shell.recording.indicator" />
           <span className="yu-recording-label" data-testid="shell.recording.label">{recording.label}</span>
           {recording.testBadge ? <span className="yu-recording-badge" data-testid="shell.recording.badge">{recording.testBadge}</span> : null}
           <Info className="yu-recording-info" aria-hidden="true" />
