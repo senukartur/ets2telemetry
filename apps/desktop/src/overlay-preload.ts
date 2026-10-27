@@ -1,6 +1,6 @@
 import {contextBridge, ipcRenderer} from 'electron';
 import type {OverlayBridge, OverlayPresentation} from '../../../packages/contracts/src';
-import {overlayGauges, staleOverlay} from './overlay-sections';
+import {overlayGauges, overlayUrgency, staleOverlay} from './overlay-sections';
 import {RecoveryBudget} from './recovery-budget';
 
 let listener: ((update: OverlayPresentation) => void) | undefined;
@@ -41,7 +41,8 @@ ipcRenderer.on('overlay:port', event => {
     const data = event.data;
     if (!listener || !data || data.type !== 'live' || !Number.isSafeInteger(data.delivery) || data.delivery! < 1 || !data.update) {lost(next); return;}
     // ET-045f: only valid gauge fractions reach the renderer; a malformed one is dropped without dropping the update.
-    clearTimeout(expiry); current = overlayGauges(data.update);
+    // ET-052: likewise the break urgency, allowed only on a current mandatory-break value.
+    clearTimeout(expiry); current = overlayUrgency(overlayGauges(data.update));
     // The read-only projection has no native coordinates or SDK state. Main owns both expiry gates.
     if (current.freshness === 'current') expiry = setTimeout(() => {expiry = undefined; invalidate();}, 500);
     try {listener(current);} finally {if (port === next) {try {next.postMessage({type: 'consumed', delivery: data.delivery});} catch {lost(next);}}}

@@ -192,3 +192,35 @@ it('delivers valid gauge fractions unchanged and drops malformed ones without dr
   expect(expired.sections).toEqual([{id: 'speed', state: 'unavailable'}, {id: 'rpm', state: 'unavailable'}, {id: 'fuel', state: 'unavailable'}]);
   stop();
 });
+
+// ET-052 (MB7): the preload delivers a break urgency only on a current mandatory-break value. A malformed or misplaced urgency
+// is dropped without dropping the update, the credit or the channel, and the quiet expiry carries none.
+it('delivers a valid break urgency unchanged and strips an invalid, misplaced or stale one without dropping the update or the channel', async () => {
+  const soon: OverlayPresentation = {...projected, layout: 'strip', sections: [{id: 'speed', state: 'value', text: '90 km/h'},
+    {id: 'mandatory-break', state: 'value', text: '1 h 35 min', urgency: 'soon'}]};
+  const receive = vi.fn(), stop = bridge.subscribeOverlay(receive), port = attach();
+  port.deliver(soon, 1); expect(receive.mock.lastCall?.[0]).toEqual(soon);
+  const at = (index: number, section: object, patch: Partial<OverlayPresentation> = {}): OverlayPresentation =>
+    ({...soon, ...patch, sections: soon.sections.map((old, position) => position === index ? section as typeof old : old)});
+  const text = {id: 'mandatory-break', state: 'value', text: '1 h 35 min'};
+  const cases: [OverlayPresentation, OverlayPresentation][] = [
+    [at(1, {...text, urgency: 'normal'}), at(1, text)],
+    [at(1, {...text, urgency: 'DUE'}), at(1, text)],
+    [at(1, {...text, urgency: 1}), at(1, text)],
+    [at(0, {id: 'speed', state: 'value', text: '90 km/h', urgency: 'due'}), at(0, {id: 'speed', state: 'value', text: '90 km/h'})],
+    [at(1, {id: 'mandatory-break', state: 'unavailable', urgency: 'due'}), at(1, {id: 'mandatory-break', state: 'unavailable'})],
+    [at(1, {...text, urgency: 'due'}, {freshness: 'stale'}), at(1, text, {freshness: 'stale'})]
+  ];
+  for (const [index, [input, output]] of cases.entries()) {
+    port.deliver(input, index + 2);
+    expect(receive.mock.lastCall?.[0], String(index)).toEqual(output);
+    expect(port.postMessage).toHaveBeenLastCalledWith({type: 'consumed', delivery: index + 2});
+  }
+  expect(port.closed).toBe(false); expect(subscriptions()).toBe(1);
+  port.deliver(soon, 20);
+  await vi.advanceTimersByTimeAsync(500);
+  const expired = receive.mock.lastCall?.[0] as OverlayPresentation;
+  expect(expired.freshness).toBe('stale');
+  expect(expired.sections).toEqual([{id: 'speed', state: 'unavailable'}, {id: 'mandatory-break', state: 'unavailable'}]);
+  stop();
+});

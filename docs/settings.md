@@ -8,9 +8,32 @@ ET-012e added saved overlay visibility in historical format v6, defaulting to en
 
 ET-045e update, October 24, 2026 (decision Z5, owner decision D1 option b; ET-049 took v7 first, so ET-045e uses v8): the current format is **v8**. It has exactly the fields and canonical layout of ET-049's v7 document below with `"version": 8`. What changed is the meaning of each placement's `scale`: it is the user's setting, shown as a percentage, and the overlay document's zoom factor is now setting × 0.7 (`overlayZoom` in `apps/desktop/src/overlay-placement.ts`), so the new 100% looks like the earlier 70%. Its range is [0.5, 3] (50–300%) instead of [0.5, 2]. Saved numbers are kept and reinterpreted, never rewritten: a v7 file migrates to v8 by an identity step (`migratedFrom: 7`), and the owner's saved strip at 0.5 now renders at the earlier 35% (choose 70% for the earlier 50% look). See [ET-045e validation](validation/et-045e.md). The v7 and v6 headings below keep their ET-049 and ET-012e wording; read "current" there as the field layout that v8 retains.
 
-## Current format v10: the crawler gear mode (ET-050b)
+## Current format v11: the mandatory-break overlay section (ET-052)
 
-ET-050b update, October 26, 2026 (owner option B, [concept.md](../concept.md#ets2-crawler-gear-mode--october-26-2026)): the current format is **v10**. It is the v9 document below with `"version": 10`; no field is added, renamed or moved. What v10 adds is a third `gearDisplay` value, `crawler`: gear 1 is the displayed game's crawler (`C` in ETS2, `L` in ATS) and every higher gear g is shown as g − 1 (C, 1, 2, 3…, as on the ETS2 Scania Opticruise G38CMR 13+1 dashboard). Neutral stays N and reverse R1, R2…, and the mode uses no gearbox layout.
+ET-052 update, October 26, 2026 (decisions MB8 and MB11 in [concept.md](../concept.md#et-052-mandatory-break-and-protocol-v1-minor-2--october-26-2026), owner decision D2; ET-050b took v10 first): the current format is **v11**. It is the v10 document with `"version": 11` and one more overlay section key, `overlay.sections.mandatory-break`, written **last** among the sections, after `game-time`:
+
+```json
+      "expected-income": true,
+      "game-time": true,
+      "mandatory-break": true
+    },
+```
+
+The section shows the game minutes until the next mandatory break (see [the minimal overlay](minimal-overlay.md#next-mandatory-break-et-052)). It is on by default, also for a user who upgrades from v10.
+
+- **Load rules.** The key is a boolean like every other section. A missing or non-boolean value falls back to `true` for that key alone (`overlay.sections.mandatory-break`); the other fourteen keys keep their stored values. The "at least one section on" rule counts all fifteen.
+- **Migration v10 to v11.** The pure in-memory step sets `mandatory-break: true` on a copy of `overlay.sections` when that value is an object. Every other saved choice survives: a user who switched other sections off keeps them off, and a stray `mandatory-break` key in a v10 file, which a v10 build ignored, is replaced by `true`. When `overlay` or `overlay.sections` is missing or not an object, the step adds nothing and the existing fallbacks apply. A v1 to v10 file is migrated in memory (`migratedFrom: 1` to `migratedFrom: 10`, through the identity v9-to-v10 step of ET-050b) and stays unchanged on disk; nothing is written at startup, and the first save of any setting writes the complete v11 document. Every gear display mode, the crawler mode included, is kept.
+- **Newer and older builds.** A version of 12 or later is newer-version (read-only defaults; the file is never modified). **A build from before ET-052 reads v11 as newer-version**: it uses defaults, refuses to save and leaves the file untouched, so it can never drop the new key by rewriting it. Running an ET-052 build with an earlier build's profile therefore makes that earlier build read-only until a newer build runs again (the same consequence as ET-045e, ET-049 and ET-050).
+- **Presets.** `everything` includes the section; `job-focus` and `driving-only` do not (decision MB11), so applying them switches it off. An upgrader who had applied **Job focus** or **Driving only** gets the break switched on by the migration (D2); their saved sections then match neither preset, so no preset button shows as pressed, and only **Everything** keeps matching.
+- **A hand-edited all-off file.** A v10 file whose fourteen sections are all `false` used to fail the "at least one section" rule and fall back to the defaults; after the step it loads with only the break on. Normal use cannot produce such a file (the last enabled section cannot be switched off).
+- **Bridge.** `setOverlaySections` now takes exactly the fifteen ids (`parseOverlaySections` rejects a record with fourteen or sixteen keys). No IPC channel or bridge method was added.
+- **Tests.** `settings-schema.test.ts` (v11 bytes with the break last, the v10-to-v11 step including a user who disabled other sections and a crawler gear mode, the v9 chain through v10, non-object `overlay` and `sections`, a stray key, the per-key fallbacks, version 12 as newer-version), `settings-store.test.ts` (a v10 file byte-identical at startup, the first save writing exact v11, version 12 read-only), `overlay-sections.test.ts`, `main-boundaries.test.ts`, `preload-recovery.test.ts` and the `lifecycle` and `ui` runtime smokes. See [ET-052 validation](validation/et-052.md).
+
+The v10, v9, v8, v7 and v6 sections below keep their wording; read "current" there as the field layout that v11 retains, and their "newer-version" versions shifted by one.
+
+## Format v10: the crawler gear mode (ET-050b)
+
+ET-050b update, October 26, 2026 (owner option B, [concept.md](../concept.md#ets2-crawler-gear-mode--october-26-2026)): the format became **v10** (ET-052 then made v11 current). It is the v9 document below with `"version": 10`; no field is added, renamed or moved. What v10 adds is a third `gearDisplay` value, `crawler`: gear 1 is the displayed game's crawler (`C` in ETS2, `L` in ATS) and every higher gear g is shown as g − 1 (C, 1, 2, 3…, as on the ETS2 Scania Opticruise G38CMR 13+1 dashboard). Neutral stays N and reverse R1, R2…, and the mode uses no gearbox layout.
 
 - **Migration v9 to v10.** An identity step that changes only the version; every v9 mode is kept (`migratedFrom: 9`). A v1 to v9 file is migrated in memory and stays unchanged on disk until the first save of any setting writes the complete v10 document.
 - **Newer and older builds.** A version of 11 or later is newer-version. A build before this change reads v10 as newer-version (read-only defaults) and refuses to save, so it can never replace `crawler` with `automatic` by rewriting the file.
@@ -92,7 +115,8 @@ The following describes the pre-ET-049 v6 format and its earlier migration steps
       "distance-remaining": true,
       "deadline": true,
       "expected-income": true,
-      "game-time": true
+      "game-time": true,
+      "mandatory-break": true
     },
     "placements": {
       "strip": {
@@ -120,11 +144,11 @@ The following describes the pre-ET-049 v6 format and its earlier migration steps
 }
 ```
 
-The application writes exactly this shape: UTF-8 without a byte order mark, two-space indentation, a trailing newline, all fourteen section keys in this canonical order and the placements of all four layouts in the canonical layout order (`strip`, `card`, `cluster`, `hud`), each with `x`, `y` and `scale` in this order. When reading it:
+The application writes exactly this shape: UTF-8 without a byte order mark, two-space indentation, a trailing newline, all fifteen section keys in this canonical order and the placements of all four layouts in the canonical layout order (`strip`, `card`, `cluster`, `hud`), each with `x`, `y` and `scale` in this order. When reading it:
 
 - a leading UTF-8 byte order mark is accepted and unknown keys are ignored;
 - a file larger than 64 KiB, bytes that are not UTF-8, anything other than a JSON object, a missing or different `format` marker, or a `version` that is not an integer makes the file **invalid**;
-- a version 1 to 7 file is migrated in memory ([below](#migration-from-v1-v2-v3-v4-and-v5)) and then read as v8 (ET-045e); since ET-050 a version 1 to 8 file is migrated on to v9;
+- a version 1 to 7 file is migrated in memory ([below](#migration-from-v1-v2-v3-v4-and-v5)) and then read as v8 (ET-045e); since ET-050 a version 1 to 8 file is migrated on to v9, since ET-050b a version 1 to 9 file on to v10, and since ET-052 on to v11;
 - a missing `version` or a version below 1 is **unsupported-older**: there is no migration path, so such a file uses defaults;
 - a version above 8 is **newer-version** (since ET-045e): written by a later application version; since ET-050 a version above 9;
 - `language` must be exactly `en` or `ru` (default: `en`);
@@ -177,10 +201,10 @@ A v1 file passes all seven steps. A migrated file loads as `loaded` (or `loaded-
 | --- | --- | --- |
 | `overlay.enabled` (ET-012e) | `true` or `false` | `true` |
 | `overlay.layout` | `strip` (one or more 38 px rows at the top centre, as many as the enabled sections need), `card` (top right), `cluster` (round speed gauge and side panel at the bottom left), `hud` (shadowed text at the top left) | `strip` |
-| `overlay.sections.<id>` | `true` or `false` for each of the fourteen sections; at least one `true` | all `true` |
+| `overlay.sections.<id>` | `true` or `false` for each of the fifteen sections; at least one `true` | all `true` |
 | `overlay.placements.<layout>` (ET-012b) | `x` and `y` in [0, 1], `scale` in [0.5, 3] (ET-045e; zoom = scale × 0.7); see [overlay placements](#overlay-placements-and-edit-mode-et-012b) | the ET-012a anchor of each layout at scale 1: strip `0.5, 0`, card `1, 0`, cluster `0, 1`, HUD `0, 0` |
 
-The settings card groups the sections as Driving (`speed`, `gear`, `rpm`), Fuel (`fuel`, `range`, `sdk-consumption`), Job (`cargo`, `origin`, `destination`, `distance-driven`, `distance-remaining`, `deadline`, `expected-income`) and Time (`game-time`). Which sections the live bridge can fill today, and how a section without data appears, is described in [live telemetry fields](live-telemetry-fields.md#overlay) and [the minimal overlay](minimal-overlay.md#layouts-and-sections-et-012a). Since ET-012c a sections save can change the strip's height: the strip reserves rows for every enabled section, whether or not it currently has data, and is re-placed after the durable save ([geometry](minimal-overlay.md#geometry-and-placements-et-012b)). The settings format is unchanged.
+The settings card groups the sections as Driving (`speed`, `gear`, `rpm`), Fuel (`fuel`, `range`, `sdk-consumption`), Job (`cargo`, `origin`, `destination`, `distance-driven`, `distance-remaining`, `deadline`, `expected-income`) and Time (`game-time`, and since ET-052 `mandatory-break`). Which sections the live bridge can fill today, and how a section without data appears, is described in [live telemetry fields](live-telemetry-fields.md#overlay) and [the minimal overlay](minimal-overlay.md#layouts-and-sections-et-012a). Since ET-012c a sections save can change the strip's height: the strip reserves rows for every enabled section, whether or not it currently has data, and is re-placed after the durable save ([geometry](minimal-overlay.md#geometry-and-placements-et-012b)). The settings format is unchanged.
 
 ### Overlay placements and edit mode (ET-012b)
 
@@ -228,7 +252,7 @@ Loading happens once at startup, in parallel with the service start. Loading nev
 | `loaded-with-fallbacks` | A v3 (or migrated v1 or v2) file with some invalid fields | Valid fields from the file, defaults for the others | Yes; the save rewrites the whole file |
 | `invalid-file` | Not a usable settings file | Defaults | Yes; the first save quarantines the file |
 | `unsupported-older` | An older format without a migration path | Defaults | Yes; the first save quarantines the file |
-| `newer-version` | Written by a newer version (version 9 or later since ET-045e; version 10 or later since ET-050; version 11 or later since the ET-050b crawler mode) | Defaults | No (`SETTINGS_READ_ONLY`); the file is never modified |
+| `newer-version` | Written by a newer version (version 9 or later since ET-045e; version 10 or later since ET-050; version 11 or later since the ET-050b crawler mode; version 12 or later since ET-052) | Defaults | No (`SETTINGS_READ_ONLY`); the file is never modified |
 | `unreadable` | The file or directory is a symbolic link or junction, not a plain file or directory, or could not be read, or the read had not settled within the read limit (about 30 s) | Defaults | No (`SETTINGS_WRITE_FAILED`) |
 | `unavailable` | No valid settings location | Defaults | No (`SETTINGS_WRITE_FAILED`) |
 
@@ -257,7 +281,7 @@ The preload bridge appends one method, `setUnitProfile(game, profile)`. The prel
 ET-012a adds the **Overlay** card after the units card and two more bridge methods (decision L3). There is no generic settings patch: each channel accepts one fixed shape.
 
 - `setOverlayLayout(layout)` over `settings:set-overlay-layout`: exactly one argument, one of the four layout ids.
-- `setOverlaySections(sections)` over `settings:set-overlay-sections`: exactly one argument, a complete record with exactly the fourteen section ids as own data properties, booleans only, at least one `true`, and a plain object prototype. The preload forwards a fresh copy of the validated record; main validates it again (`parseOverlaySections` in `apps/desktop/src/overlay-sections.ts`) and hands the store a frozen copy.
+- `setOverlaySections(sections)` over `settings:set-overlay-sections`: exactly one argument, a complete record with exactly the fifteen section ids as own data properties, booleans only, at least one `true`, and a plain object prototype. The preload forwards a fresh copy of the validated record; main validates it again (`parseOverlaySections` in `apps/desktop/src/overlay-sections.ts`) and hands the store a frozen copy.
 
 Both are refused for an untrusted sender or frame (including the overlay), for any other shape, and once the exit has started. They share the unit save's error mapping (fixed messages only) and its refusal reporting in `saveError`. After the durable save main pushes `AppState`, republishes the overlay projection with the new layout and sections from its stored freshness output, and moves the overlay window to the new layout's anchor (see [the minimal overlay](minimal-overlay.md#layouts-and-sections-et-012a)). As for units, this renews neither SDK nor window freshness. A late startup read that brings another layout is applied the same way. The card shows only saved values: the layout radio group, three presets (Everything, Job focus, Driving only, shown as pressed when the saved sections equal them) and one switch per section grouped Driving, Fuel, Job and Time, with a marker for sections that need protocol v1 or trip tracking. Since ET-010c the protocol v1 sections appear once the plugin's v1 data arrives, so the markers read "needs the plugin's protocol v1 data" (origin, distance remaining, deadline), "shows game ids without protocol v1" (cargo, destination) and "needs trip tracking; hidden for now" (distance driven). Controls are disabled while a save runs and when settings cannot be saved; the last enabled section cannot be switched off.
 
@@ -307,7 +331,7 @@ Startup queries actual registration while intent is unknown and never writes log
 
 ## Unified Overlay page (ET-048)
 
-Settings > Overlay contains one mounted card for visibility, layout, position/size, presets and the fourteen grouped section switches. The separate Overlay sections destination and Choose sections action are removed. ET-049 replaces the former Planned opacity text with the persisted slider described above. Ordinary page scrolling and wrapping keep the lower controls reachable, including keyboard focus at renderer zoom.
+Settings > Overlay contains one mounted card for visibility, layout, position/size, presets and the fifteen grouped section switches. The separate Overlay sections destination and Choose sections action are removed. ET-049 replaces the former Planned opacity text with the persisted slider described above. Ordinary page scrolling and wrapping keep the lower controls reachable, including keyboard focus at renderer zoom.
 
 Owner follow-up, October 24, 2026: individual section rows show their label, icon and switch without the parenthetical protocol-v1, game-ID or trip-tracking notes. This presentation change applies to EN/RU; availability rules and the general unavailable/stale explanation remain unchanged.
 

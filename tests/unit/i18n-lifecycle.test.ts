@@ -50,9 +50,8 @@ describe('i18n settings lifecycle and reflection', () => {
 
     // 3. Verify file on disk has format v4 and language: "ru"
     const diskContent = JSON.parse(await fs.readFile(path.join(tempDir, 'settings.json'), 'utf8'));
-    // ET-045e made the current settings format v8 (ET-049 took v7 first); ET-050 made it v9 (per-game gear display);
-    // ET-050b makes it v10 (the crawler gear mode).
-    expect(diskContent.version).toBe(10);
+    // ET-045e made the current settings format v8 (ET-049 took v7 first); ET-050 made it v9 (per-game gear display); ET-050b made it v10 (the crawler gear mode); ET-052 makes it v11.
+    expect(diskContent.version).toBe(11);
     expect(diskContent.language).toBe('ru');
 
     // 4. Verify Russian tray and overlay reflection

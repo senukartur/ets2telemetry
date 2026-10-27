@@ -115,3 +115,37 @@ it('eases only the speed arc over 150 ms, not under reduced motion, and colours 
   expect(tokens).toMatch(/--yu-ov-rpm: #2563EB;/);
   expect(tokens).toMatch(/--yu-ov-accent: #60A5FA;/);
 });
+
+// ET-052 (MB8, MB10): the next mandatory break in every layout. The icon is the lucide coffee cup, the strip item is capped at
+// 150 px and reserves the width of the longest text through data-reserve, and the urgency has a cue beyond colour only in part (due is underlined; soon has the accessible name):
+// data-urgency and an accessible name with the state word on the item, in both languages. Colours and the underline are
+// stylesheet rules (overlay-strip.test.ts reads them).
+const breakSections = (patch: object): OverlayPresentation['sections'] => [{id: 'speed', state: 'value', text: '90 km/h'}, {id: 'mandatory-break', state: 'value', text: '1 h 35 min', ...patch}] as OverlayPresentation['sections'];
+it.each([
+  ['en', 'soon', 'Break: 1 h 35 min, soon', 'Next mandatory break: 1 h 35 min, soon', '00 h 00 min'],
+  ['en', 'due', 'Break: 1 h 35 min, due now', 'Next mandatory break: 1 h 35 min, due now', '00 h 00 min'],
+  ['ru', 'soon', 'Перерыв: 1 ч 35 мин, скоро', 'До обязательного перерыва: 1 ч 35 мин, скоро', '00 ч 00 мин'],
+  ['ru', 'due', 'Перерыв: 1 ч 35 мин, пора', 'До обязательного перерыва: 1 ч 35 мин, пора', '00 ч 00 мин']
+] as const)('renders the break item with its icon, reserve, state word and urgency in %s (%s)', (language, urgency, shortName, fullName, reserve) => {
+  const render = (layout: 'strip' | 'card' | 'cluster' | 'hud') => renderToStaticMarkup(React.createElement(OverlayContent,
+    {view: overlayView({...base, layout, language, sections: breakSections({urgency})})}));
+  const strip = render('strip');
+  expect(strip).toContain(`data-testid="overlay-section-mandatory-break" aria-label="${shortName}" data-urgency="${urgency}" style="max-width:150px"`);
+  expect(strip).toContain(`<strong class="overlay-value" data-testid="overlay-mandatory-break" data-reserve="${reserve}">${language === 'en' ? '1 h 35 min' : '1 ч 35 мин'}</strong>`);
+  expect(strip.match(/lucide-coffee/g)).toHaveLength(1);
+  expect(render('card')).toContain(`class="overlay-row" data-testid="overlay-section-mandatory-break" data-urgency="${urgency}" aria-label="${fullName}"`);
+  expect(render('cluster')).toContain(`class="overlay-panel-row" data-testid="overlay-section-mandatory-break" data-urgency="${urgency}" aria-label="${shortName}"`);
+  expect(render('hud')).toContain(`class="overlay-hud-line" data-testid="overlay-section-mandatory-break" data-urgency="${urgency}" aria-label="${shortName}"`);
+});
+it('adds no urgency marks to a normal or unavailable break, nor to any other section', () => {
+  for (const layout of ['strip', 'card', 'cluster', 'hud'] as const) {
+    for (const sections of [breakSections({}), [{id: 'speed', state: 'value', text: '90 km/h'}, {id: 'mandatory-break', state: 'unavailable'}] as OverlayPresentation['sections']]) {
+      const html = renderToStaticMarkup(React.createElement(OverlayContent, {view: overlayView({...base, layout, sections})}));
+      expect(html, layout).not.toContain('data-urgency');
+      expect(html, layout).toContain('data-testid="overlay-mandatory-break"');
+    }
+  }
+  // A dash keeps the reserve and shows the dash text only.
+  const dash = renderToStaticMarkup(React.createElement(OverlayContent, {view: overlayView({...base, sections: [{id: 'mandatory-break', state: 'unavailable'}]})}));
+  expect(dash).toContain('<strong class="overlay-value" data-testid="overlay-mandatory-break" data-reserve="00 h 00 min">—</strong>');
+});

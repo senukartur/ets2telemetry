@@ -47,6 +47,13 @@ html:has(.overlay-body) { background: transparent; }
 /* ET-050: a multi-line reserve (the gear's "R0", "0H", "0L" and, since ET-050b, "LH", "LL", "C1", "C2") keeps its lines, so the widest one sets the width. */
 .overlay-strip .overlay-value[data-reserve]::after { content: attr(data-reserve); display: block; height: 0; overflow: hidden; visibility: hidden; white-space: pre; }
 
+/* Next mandatory break (ET-052): soon is orange and due is red and underlined, set on the item by the renderer from the
+   preload-validated urgency. Soon has colour as its only visible cue (the accessible name in overlay-renderer.tsx serves
+   assistive technology); due adds the underline. That is partial against ET-045b and is an open point for the owner's
+   real-game check. The underline changes no size, so the reserved rows and the strip's width are unaffected. */
+.overlay [data-urgency="soon"] .overlay-value { color: var(--yu-ov-break-soon); }
+.overlay [data-urgency="due"] .overlay-value { color: var(--yu-ov-break-due); text-decoration: underline; }
+
 /* Card, cluster panel and HUD (ET-012d): fixed-height rows, one per enabled section, in a window main sized for them
    (overlay-rows.ts, whose constants these rules must match). Each row centres its content and clips what does not fit,
    so a value never makes a row taller; a longer value ends in an ellipsis. Header and tag rows have a fixed height too,

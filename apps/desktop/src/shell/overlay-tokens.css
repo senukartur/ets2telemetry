@@ -11,6 +11,8 @@
   --yu-ov-low: #E8C58A;
   --yu-ov-bad: #F3B4A4;
   --yu-ov-edit: #60A5FA;                   /* dashed outline and handle in layout-edit mode */
+  --yu-ov-break-soon: #FB923C;             /* next mandatory break, 1 to 119 minutes (ET-052); for soon the colour is the only visible cue (the accessible name is the other) */
+  --yu-ov-break-due: #F87171;              /* next mandatory break due: zero or less (ET-052); red and also underlined */
   --yu-ov-radius: 10px;
   --yu-ov-strip-h: 38px;
 }

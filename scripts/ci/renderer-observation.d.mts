@@ -26,6 +26,11 @@ export const SYNTHETIC_V1_OVERLAY_V1_STALE: OverlayV1Expectation;
 export const SYNTHETIC_V1_OVERLAY_STOPPED: OverlayV1Expectation;
 export function overlayV1Observation(expected: OverlayV1Expectation): Record<string, string | null> | false;
 export function waitForOverlayV1(page: Page, expected: OverlayV1Expectation): Promise<Record<string, string | null>>;
+/** ET-052: the break item's data-urgency, accessible name, computed colour and text decoration. */
+export interface OverlayBreakCue {urgency: string | null; label: string | null; color: string; textDecorationLine: string}
+export const SYNTHETIC_V1_BREAK_CUE: OverlayBreakCue;
+export function overlayBreakCueObservation(expected: Partial<OverlayBreakCue>): OverlayBreakCue | false;
+export function waitForOverlayBreakCue(page: Page, expected: Partial<OverlayBreakCue>): Promise<OverlayBreakCue>;
 export interface OverlayOverflow {layout: string | null; root: {width: number; height: number} | null; sections: string[]; outside: string[]; truncated: string[]}
 export function overlayOverflow(): OverlayOverflow;
 /** ET-045d: the speed, gear and RPM value and unit texts one probe step writes into the rendered overlay. */

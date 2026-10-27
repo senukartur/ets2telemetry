@@ -1,4 +1,4 @@
-import type {OverlayLayout, OverlayPresentation, OverlaySectionId} from '../../../packages/contracts/src';
+import type {AppLanguage, OverlayLayout, OverlayPresentation, OverlaySectionId, OverlayUrgency} from '../../../packages/contracts/src';
 import {DEFAULT_OVERLAY_OPACITY, isOverlayOpacity} from './overlay-opacity';
 import {CARD_ROW_HEIGHT_CSS} from './overlay-rows';
 import {localizedMeasurement} from './screens/app-copy';
@@ -32,6 +32,13 @@ export interface OverlayItem {
   ring?: number;
   /** Speed arc fraction in [0, 1] on the speed gauge scale (ET-045f); set only on an available speed. */
   speedRing?: number;
+  /**
+   * The next mandatory break's urgency (ET-052): the renderer marks the item with it (a colour token, an underline when
+   * due, `data-urgency`) and `urgencyName` is the state word appended to the item's accessible name (for assistive
+   * technology; the visible cues are the colour and, when due, the underline). Set only on the `mandatory-break` item while it shows a value.
+   */
+  urgency?: OverlayUrgency;
+  urgencyName?: string;
   unavailable: boolean;
 }
 export type OverlayTagId = 'paused' | 'no-signal' | 'stale' | 'origin';
@@ -65,6 +72,14 @@ export const OVERLAY_PLACEHOLDER: OverlayPresentation = Object.freeze({source: '
   fuel: '—', fuelUnit: 'L', freshness: 'unavailable', layout: 'strip', paused: false, sections: Object.freeze([]), editing: false, language: 'en'});
 const DASH = '—';
 /**
+ * ET-052: the longest expected break text, "00 h 00 min" in the viewer's language, in the strip's CSS reserve like the other
+ * stable widths (ET-045d), so a value change such as "9 min" to "1 h 05 min" never resizes the section. It is built with
+ * the same localization as the value, so the Russian "ч" and "мин" are never under-reserved.
+ */
+const BREAK_RESERVE = '00 h 00 min';
+const reserveFor = (id: OverlaySectionId, language: AppLanguage): string | undefined =>
+  id === 'mandatory-break' ? localizeDeadlineString(BREAK_RESERVE, language) : VALUE_RESERVES[id];
+/**
  * Stable value widths of the strip (ET-045d W1): a three-digit speed, a reverse gear with one digit ("R0" is wider than
  * "00" in Onest's tabular figures) and a four-digit RPM. A wider value grows under the section's cap and ellipsis.
  * ET-050 (GD6): the gear reserve does not depend on the gear display mode. It lists the reverse form and both manual
@@ -94,7 +109,7 @@ export function overlayView(presentation: OverlayPresentation = OVERLAY_PLACEHOL
       label: getOverlaySectionText(section.id, language),
       short: getOverlaySectionShortText(section.id, language),
       unavailable: !available,
-      ...(VALUE_RESERVES[section.id] ? {reserve: VALUE_RESERVES[section.id]} : {})
+      ...(reserveFor(section.id, language) ? {reserve: reserveFor(section.id, language)} : {})
     };
     // Speed and fuel keep the separate number and unit of the ET-008 smoke contract; the unit stays visible beside a dash.
     if (section.id === 'speed') return {...base, value: available ? presentation.speed : DASH, unit: translateUnit(presentation.speedUnit, language),
@@ -113,14 +128,17 @@ export function overlayView(presentation: OverlayPresentation = OVERLAY_PLACEHOL
     if (available) {
       if (section.id === 'game-time') {
         value = localizeGameTimeString(value, language);
-      } else if (section.id === 'deadline') {
+      } else if (section.id === 'deadline' || section.id === 'mandatory-break') {
         value = localizeDeadlineString(value, language);
       } else if (['sdk-consumption', 'range', 'distance-driven', 'distance-remaining', 'expected-income'].includes(section.id)) {
         value = localizedMeasurement(value, language);
       }
     }
+    // ET-052: the validated urgency (the overlay preload strips any other) and the state word for the accessible name.
+    const urgency = available && section.id === 'mandatory-break' && (section.urgency === 'soon' || section.urgency === 'due') ? section.urgency : undefined;
     // Cargo detail is the numeric cargo-mass field (SECTION_FIELDS); name/company details retain SDK bytes.
     return {...base, value,
+      ...(urgency ? {urgency, urgencyName: urgency === 'due' ? strings.overlayBreakDue : strings.overlayBreakSoon} : {}),
       ...(available && section.detail ? {detail: section.id === 'cargo' ? localizedMeasurement(section.detail, language) : section.detail, detailTestId: `overlay-${section.id}-detail`} : {}),
       ...(available && section.ring !== undefined ? {ring: section.ring} : {})};
   });

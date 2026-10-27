@@ -12,9 +12,9 @@ import {_electron as electron} from '@playwright/test';
 import {startLiveSmokeSource} from './live-smoke-source.mjs';
 import {startLiveSmokeSourceV1} from './live-smoke-source-v1.mjs';
 import {
-  overlayOverflow, RECORDING_NOT_RECORDED_TEXT, SYNTHETIC_V0_VALUE_IDS, SYNTHETIC_V0V1_HIDDEN_ROWS, SYNTHETIC_V0V1_LIVE_ROWS, SYNTHETIC_V1_LIVE_ROWS, SYNTHETIC_V1_OVERLAY_CURRENT,
+  overlayOverflow, RECORDING_NOT_RECORDED_TEXT, SYNTHETIC_V0_VALUE_IDS, SYNTHETIC_V0V1_HIDDEN_ROWS, SYNTHETIC_V0V1_LIVE_ROWS, SYNTHETIC_V1_BREAK_CUE, SYNTHETIC_V1_LIVE_ROWS, SYNTHETIC_V1_OVERLAY_CURRENT,
   SYNTHETIC_V1_OVERLAY_STOPPED, SYNTHETIC_V1_OVERLAY_V0_STALE, SYNTHETIC_V1_OVERLAY_V1_STALE, SYNTHETIC_V1_STRIP_SECTIONS, SYNTHETIC_V1_VALUE_IDS,
-  waitForCompleteLive, waitForCurrentTelemetry, waitForNotCurrentLive, waitForOverlayV1, waitForRecordingText, waitForV1NotCurrentLive
+  waitForCompleteLive, waitForCurrentTelemetry, waitForNotCurrentLive, waitForOverlayBreakCue, waitForOverlayV1, waitForRecordingText, waitForV1NotCurrentLive
 } from './renderer-observation.mjs';
 import {
   captureHiddenOverlay, LAYOUT_SMOKE_RESERVED_CSS, LAYOUT_SMOKE_WINDOWS, LAYOUT_SMOKE_ZOOM, rendererPages, verifyAppliedWindow, zoomedViewportTolerance, runOverlaySmoke, verifyLayoutContainment, verifyStripLayout, waitForLayoutContainment, waitForStripLayout, windowSecurity,
@@ -264,7 +264,7 @@ try {
       await handle.dispose();
     };
     // ET-012d (decisions K10 and K11): the card, HUD and cluster with every v1 section the pair shows. The saved sections
-    // are first set to exactly those twelve, so each window reserves no row for a hidden section (range and distance
+    // are first set to exactly those thirteen, so each window reserves no row for a hidden section (range and distance
     // driven); without a game window the controller never places the overlay, so the hidden window is sized here
     // (LAYOUT_SMOKE_WINDOWS for those sections at the scale setting 1 and its zoom LAYOUT_SMOKE_ZOOM, tied to
     // overlayWindowSize and overlayZoom by a unit test). Each observation is stored before it is verified, so a failed
@@ -351,7 +351,9 @@ try {
     result.telemetry.liveFields = await waitForCompleteLive(window, SYNTHETIC_V0V1_LIVE_ROWS, SYNTHETIC_V0V1_HIDDEN_ROWS);
     result.telemetry.v1Fields = Object.fromEntries(SYNTHETIC_V1_LIVE_ROWS.map(([id]) => [id, result.telemetry.liveFields[id]]));
     result.telemetry.overlayV1 = {current: await waitForOverlayV1(overlay, SYNTHETIC_V1_OVERLAY_CURRENT)};
-    // ET-012c reserves strip rows for every enabled section: with the v1 sections all twelve shown must lie inside the
+    // ET-052: the 95-minute break is soon, so the strip item carries the urgency, the state word in its name and the orange token.
+    result.telemetry.overlayV1.breakCue = await waitForOverlayBreakCue(overlay, SYNTHETIC_V1_BREAK_CUE);
+    // ET-012c reserves strip rows for every enabled section: with the v1 sections all thirteen shown must lie inside the
     // overlay window. This is an assertion; the overflow record below stays for review.
     result.telemetry.stripLayout = verifyStripLayout(await waitForStripLayout(overlay, {sections: SYNTHETIC_V1_STRIP_SECTIONS}));
     result.telemetry.overlayOverflow = await overlay.evaluate(overlayOverflow);

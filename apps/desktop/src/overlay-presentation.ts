@@ -30,10 +30,17 @@ const SECTION_FIELDS: Readonly<Record<OverlaySectionId, {parts: readonly LiveFie
   'distance-remaining': {parts: ['route-remaining']},
   'deadline': {parts: ['deadline']},
   'expected-income': {parts: ['expected-income']},
-  'game-time': {parts: ['game-time']}
+  'game-time': {parts: ['game-time']},
+  'mandatory-break': {parts: ['mandatory-break']}
 });
 /** The ET-008 baseline sections keep a visible dash while current without data (REG-009: unavailable is not zero). */
 const BASELINE_SECTIONS: ReadonlySet<OverlaySectionId> = new Set<OverlaySectionId>(['speed', 'fuel']);
+/**
+ * Sections that show a dash, not nothing, while current when a carried v1 observation gives them no value (ET-052 MB9): the
+ * next mandatory break is "not supported" by an older plugin, "not observed" by the game, invalid, or its v1 data is stale.
+ * Without a v1 observation the section follows ET-012a's L5 rule like every other v1-only section.
+ */
+const DASH_WHEN_CARRIED: ReadonlySet<OverlaySectionId> = new Set<OverlaySectionId>(['mandatory-break']);
 
 /**
  * The overlay's read-only display projection, built in main. Canonical v0 m/s and liters remain unchanged; values are
@@ -53,6 +60,11 @@ const BASELINE_SECTIONS: ReadonlySet<OverlaySectionId> = new Set<OverlaySectionI
  * data is no longer eligible becomes `unavailable`, also when its v1 projection is lost while the same v0 source
  * continues; an update without a v0 observation clears it. One never shown stays out; a mixed section keeps its v0 part. v1
  * never authorizes placement or visibility: main places the overlay from the v0 observation's window only.
+ *
+ * The next mandatory break (ET-052) comes from the v1 projection like the deadline, but is not tied to the job. Its text is
+ * telemetry-core's, clamped at zero, and its `urgency` (`soon` for 1 to 119 minutes, `due` for zero or less) is the live
+ * view's, so the dashboard and the overlay cannot disagree. A shown section whose carried v1 observation has no value
+ * (older plugin, not observed, invalid, or stale v1 data) is a dash (DASH_WHEN_CARRIED).
  *
  * `editing` (ET-012b) only marks the overlay edit mode for the renderer; it changes no section or value.
  *
@@ -103,12 +115,13 @@ export function overlayPresentation(live: LiveTelemetry, units: UnitProfiles = D
     }
     if (id === 'game-time') {
       texts = texts.map(t => localizeGameTimeString(t, language));
-    } else if (id === 'deadline') {
+    } else if (id === 'deadline' || id === 'mandatory-break') {
       texts = texts.map(t => localizeDeadlineString(t, language));
     }
     if (!texts.length) {
-      // A section shown before keeps a dash while its v1 data is not current or describes another job.
-      if (BASELINE_SECTIONS.has(id) || (shown.has(id) && parts.some(ineligible))) sections.push({id, state: 'unavailable'});
+      // A section shown before keeps a dash while its v1 data is not current or describes another job; the break shows
+      // one whenever a v1 observation is carried (MB9).
+      if (BASELINE_SECTIONS.has(id) || DASH_WHEN_CARRIED.has(id) || (shown.has(id) && parts.some(ineligible))) sections.push({id, state: 'unavailable'});
       continue;
     }
     const detailText = detail ? valueOf(detail) : undefined;
@@ -116,8 +129,11 @@ export function overlayPresentation(live: LiveTelemetry, units: UnitProfiles = D
     const ring = id === 'rpm' && rpm?.state === 'value' && Number.isFinite(rpm.value) ? Math.min(1, Math.max(0, rpm.value / RPM_RING_FULL_SCALE)) : undefined;
     // ET-045f: the Cluster's speed arc on the gauge scale of the displayed profile, from the same canonical m/s as the text.
     const speedRing = id === 'speed' && state?.speed.available ? speedGaugeFraction(state.speed.value, profile) : undefined;
+    // ET-052: the break's urgency is the live view's (telemetry-core's breakUrgency), never recomputed from the text.
+    const breakField = id === 'mandatory-break' ? sources.field(id) : undefined;
+    const urgency = breakField?.state === 'value' ? breakField.urgency : undefined;
     sections.push({id, state: 'value', text: texts.join(', '), ...(detailText ? {detail: detailText} : {}), ...(isGaugeFraction(ring) ? {ring} : {}),
-      ...(isGaugeFraction(speedRing) ? {speedRing} : {})});
+      ...(isGaugeFraction(speedRing) ? {speedRing} : {}), ...(urgency ? {urgency} : {})});
   }
   return {
     source: game === 'ats' ? 'ATS' : game === 'ets2' ? 'ETS2' : 'No game', origin: observation?.source.origin ?? 'none', status: live.status,

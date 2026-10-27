@@ -6,9 +6,12 @@ import {DEFAULT_OVERLAY_PLACEMENTS} from './overlay-placement';
 // both preloads, both renderers and plain Node tests share one definition.
 
 export const OVERLAY_LAYOUTS: readonly OverlayLayout[] = Object.freeze(['strip', 'card', 'cluster', 'hud']);
-/** Canonical order: the settings file, the projection and every layout list sections in this order. */
+/**
+ * Canonical order: the settings file, the projection and every layout list sections in this order. A new section is
+ * appended last (ET-052's `mandatory-break`), so the settings file's earlier keys keep their positions.
+ */
 export const OVERLAY_SECTION_IDS: readonly OverlaySectionId[] = Object.freeze(['speed', 'gear', 'rpm', 'fuel', 'range', 'sdk-consumption', 'cargo',
-  'origin', 'destination', 'distance-driven', 'distance-remaining', 'deadline', 'expected-income', 'game-time']);
+  'origin', 'destination', 'distance-driven', 'distance-remaining', 'deadline', 'expected-income', 'game-time', 'mandatory-break']);
 
 export type OverlayGroupId = 'driving' | 'fuel' | 'job' | 'time';
 export interface OverlayGroup {id: OverlayGroupId; sections: readonly OverlaySectionId[]}
@@ -18,7 +21,7 @@ export const OVERLAY_GROUPS: readonly OverlayGroup[] = Object.freeze([
   group('driving', ['speed', 'gear', 'rpm']),
   group('fuel', ['fuel', 'range', 'sdk-consumption']),
   group('job', ['cargo', 'origin', 'destination', 'distance-driven', 'distance-remaining', 'deadline', 'expected-income']),
-  group('time', ['game-time'])
+  group('time', ['game-time', 'mandatory-break'])
 ]);
 /**
  * The sections the cluster's round gauge shows (ET-012a); every other enabled section goes to its side panel. The
@@ -53,7 +56,7 @@ export const OVERLAY_PRESET_IDS: readonly OverlayPresetId[] = Object.freeze(['ev
  */
 export type OverlayRequirement = 'protocol-v1' | 'trip-tracking' | 'ids-until-v1';
 export const OVERLAY_SECTION_REQUIREMENTS: Readonly<Partial<Record<OverlaySectionId, OverlayRequirement>>> = Object.freeze({
-  'origin': 'protocol-v1', 'distance-remaining': 'protocol-v1', 'deadline': 'protocol-v1', 'distance-driven': 'trip-tracking',
+  'origin': 'protocol-v1', 'distance-remaining': 'protocol-v1', 'deadline': 'protocol-v1', 'mandatory-break': 'protocol-v1', 'distance-driven': 'trip-tracking',
   'cargo': 'ids-until-v1', 'destination': 'ids-until-v1'
 });
 
@@ -62,7 +65,7 @@ export function isOverlayLayout(value: unknown): value is OverlayLayout {
 }
 
 /**
- * Strictly validates a complete section record from an untrusted caller: a plain object with exactly the fourteen own
+ * Strictly validates a complete section record from an untrusted caller: a plain object with exactly the fifteen own
  * data properties, booleans only, at least one true. Returns a fresh frozen copy, or undefined. Getters are never run.
  */
 export function parseOverlaySections(value: unknown): OverlaySections | undefined {
@@ -115,6 +118,27 @@ export function overlayGauges(presentation: OverlayPresentation): OverlayPresent
     }
     return section;
   });
+  return changed ? {...presentation, sections: cleaned} : presentation;
+}
+
+/**
+ * The projection with only a valid urgency (ET-052 MB7): `urgency` stays only on the `mandatory-break` section in the value
+ * state, on a current projection, and only as `soon` or `due`; every other copy is removed, and nothing else changes.
+ * Returns the same object when nothing is removed, so the overlay preload can apply it to every delivery. A malformed or
+ * misplaced urgency is dropped (no cue, no colour) without dropping the update; the text stays.
+ */
+export function overlayUrgency(presentation: OverlayPresentation): OverlayPresentation {
+  const sections: unknown = presentation.sections;
+  if (!Array.isArray(sections)) return presentation;
+  const current = presentation.freshness === 'current';
+  let changed = false;
+  const cleaned = (sections as readonly unknown[]).map(entry => {
+    if (typeof entry !== 'object' || entry === null || !('urgency' in entry)) return entry;
+    const section = entry as {id?: unknown; state?: unknown; urgency?: unknown};
+    if (current && section.id === 'mandatory-break' && section.state === 'value' && (section.urgency === 'soon' || section.urgency === 'due')) return entry;
+    changed = true;
+    return Object.fromEntries(Object.entries(entry).filter(([key]) => key !== 'urgency'));
+  }) as OverlayPresentation['sections'];
   return changed ? {...presentation, sections: cleaned} : presentation;
 }
 

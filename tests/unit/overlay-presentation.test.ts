@@ -278,7 +278,9 @@ const FULL: OverlaySectionView[] = [
   {id: 'distance-remaining', state: 'value', text: '151.0 km'},
   {id: 'deadline', state: 'value', text: 'in 10 h 55 min'},
   {id: 'expected-income', state: 'value', text: '9007199254740993.123456 (currency unknown)'},
-  {id: 'game-time', state: 'value', text: 'Day 8574, 09:18'}
+  {id: 'game-time', state: 'value', text: 'Day 8574, 09:18'},
+  // ET-052 (MB9): the minor-0 stand-in carries the break as not-supported, so the section is a dash, never a zero.
+  {id: 'mandatory-break', state: 'unavailable'}
 ];
 it('shows the v1 sections and names beside the v0 sections while both are current (ET-010c)', () => {
   const presentation = overlayPresentation(withV1());
@@ -307,13 +309,15 @@ it('keeps v1 sections as dashes when v1, then v0, stops being current, and drops
     {id: 'distance-remaining', state: 'unavailable'},
     {id: 'deadline', state: 'unavailable'},
     {id: 'expected-income', state: 'value', text: '9007199254740993.123456 (currency unknown)'},
-    {id: 'game-time', state: 'value', text: 'Day 8574, 09:18'}
+    {id: 'game-time', state: 'value', text: 'Day 8574, 09:18'},
+    // ET-052: stale v1 data is a carried observation without a value, so the break is a dash.
+    {id: 'mandatory-break', state: 'unavailable'}
   ]);
   expect(v1Stale.freshness).toBe('current');
   const v0Stale = overlayPresentation(withV1(V1_STALE, {...live(), fresh: false, status: 'stale'}), undefined, undefined, v1Stale);
   expect(v0Stale).toMatchObject({freshness: 'stale', speed: '—', fuel: '—', paused: false});
   expect(v0Stale.sections).toEqual(['speed', 'gear', 'rpm', 'fuel', 'sdk-consumption', 'cargo', 'origin', 'destination', 'distance-remaining', 'deadline',
-    'expected-income', 'game-time'].map(id => ({id, state: 'unavailable'})));
+    'expected-income', 'game-time', 'mandatory-break'].map(id => ({id, state: 'unavailable'})));
   // A new selection clears the v1 projection: v1 sections are no longer carried, even as placeholders.
   const cleared = overlayPresentation(initialLive('ats'), undefined, undefined, v0Stale);
   expect(cleared.sections).toEqual(['speed', 'gear', 'rpm', 'fuel', 'sdk-consumption', 'cargo', 'destination', 'expected-income', 'game-time']
@@ -328,7 +332,9 @@ it('shows no v1 value while v0 is not current, even with current v1 data', () =>
 });
 it('leaves out v1 job sections for another job unless they were shown, and keeps distance remaining', () => {
   const mismatch = overlayPresentation(withV1({ids: 'fixture'}));
-  expect(ids(mismatch.sections)).toEqual(['speed', 'gear', 'rpm', 'fuel', 'sdk-consumption', 'cargo', 'destination', 'distance-remaining', 'expected-income', 'game-time']);
+  // ET-052: the break is not tied to the job, so it stays (as a dash for the minor-0 stand-in) beside another job's sections.
+  expect(ids(mismatch.sections)).toEqual(['speed', 'gear', 'rpm', 'fuel', 'sdk-consumption', 'cargo', 'destination', 'distance-remaining', 'expected-income', 'game-time',
+    'mandatory-break']);
   expect(mismatch.sections.find(section => section.id === 'cargo')).toEqual({id: 'cargo', state: 'value', text: 'cargo.logs'});
   expect(mismatch.sections.find(section => section.id === 'distance-remaining')).toEqual({id: 'distance-remaining', state: 'value', text: '151.0 km'});
   const afterShown = overlayPresentation(withV1({ids: 'fixture'}), undefined, undefined, overlayPresentation(withV1()));
@@ -339,7 +345,7 @@ it('leaves the v1 job sections out once v0 reports no job, without keeping dashe
   const noJob = withV1();
   noJob.observation!.state.configuration = {...noJob.observation!.state.configuration, job: {available: false, reason: 'not-observed'}};
   const presentation = overlayPresentation(noJob, undefined, undefined, overlayPresentation(withV1()));
-  expect(ids(presentation.sections)).toEqual(['speed', 'gear', 'rpm', 'fuel', 'sdk-consumption', 'distance-remaining', 'game-time']);
+  expect(ids(presentation.sections)).toEqual(['speed', 'gear', 'rpm', 'fuel', 'sdk-consumption', 'distance-remaining', 'game-time', 'mandatory-break']);
 });
 it('keeps v1 sections that were never shown absent without v1 data (fix round 1)', () => {
   // Fix round 1 checked this with a previous projection that showed v1 sections; the PR #73 advisory review changed that
@@ -366,7 +372,9 @@ const LOST_V1: OverlaySectionView[] = [
   {id: 'distance-remaining', state: 'unavailable'},
   {id: 'deadline', state: 'unavailable'},
   {id: 'expected-income', state: 'value', text: '9007199254740993.123456 (currency unknown)'},
-  {id: 'game-time', state: 'value', text: 'Day 8574, 09:18'}
+  {id: 'game-time', state: 'value', text: 'Day 8574, 09:18'},
+  // ET-052: a break section that was shown keeps its dash when the v1 carriage is lost while v0 continues (ET-012a L5).
+  {id: 'mandatory-break', state: 'unavailable'}
 ];
 it.each([
   ['main strips the projection', () => live()],
@@ -484,4 +492,66 @@ it('formats the gear section with the current Mack layout labels in manual mode 
   expect(gearOf(gearboxPair(1, {...ATS, v1: {status: 'stale', fresh: false}}), manual)).toEqual({id: 'gear', state: 'value', text: '1L'});
   // A minor-0 source: every gearbox part is not-supported (B7).
   expect(gearOf(gearboxPair(1, {...ATS, gearbox: NOT_SUPPORTED_GEARBOX}), manual)).toEqual({id: 'gear', state: 'value', text: '1L'});
+});
+
+// ET-052 (MB6-MB9, REG-009): the next mandatory break section. Expected text and urgency are written by hand from the rules:
+// the text clamps at zero and reads "H h M min" (telemetry-core's formatGameDuration), 1 to 119 minutes are soon, zero or
+// less is due, 120 or more has no urgency. The smoke pair carries a 95-minute break unless a case replaces it.
+const breakOf = (presentation: OverlayPresentation) => presentation.sections.find(section => section.id === 'mandatory-break');
+const measure = (value: number) => ({available: true, value, unit: 'min'}) as const;
+it.each([
+  [95, '1 h 35 min', 'soon'], [1, '1 min', 'soon'], [59, '59 min', 'soon'], [60, '1 h 0 min', 'soon'], [119, '1 h 59 min', 'soon'],
+  [120, '2 h 0 min', undefined], [121, '2 h 1 min', undefined], [600, '10 h 0 min', undefined], [2147483647, '35791394 h 7 min', undefined],
+  [0, '0 min', 'due'], [-1, '0 min', 'due'], [-30, '0 min', 'due'], [-2147483648, '0 min', 'due']
+] as const)('shows %d break minutes as %s with urgency %s', (minutes, text, urgency) => {
+  const presentation = overlayPresentation(smokePair({nextMandatoryBreak: measure(minutes)}));
+  expect(breakOf(presentation)).toEqual({id: 'mandatory-break', state: 'value', text, ...(urgency ? {urgency} : {})});
+  // The break is the last section, after game time, and no raw number or other field travels to the renderer.
+  expect(ids(presentation.sections).slice(-2)).toEqual(['game-time', 'mandatory-break']);
+  expect(Object.keys(breakOf(presentation)!).sort()).toEqual(urgency ? ['id', 'state', 'text', 'urgency'] : ['id', 'state', 'text']);
+});
+it('localizes the break text in Russian and keeps the urgency enum untouched', () => {
+  const presentation = overlayPresentation(smokePair({nextMandatoryBreak: measure(95)}), undefined, undefined, undefined, false, 'ru');
+  expect(breakOf(presentation)).toEqual({id: 'mandatory-break', state: 'value', text: '1 ч 35 мин', urgency: 'soon'});
+  expect(breakOf(overlayPresentation(smokePair({nextMandatoryBreak: measure(0)}), undefined, undefined, undefined, false, 'ru')))
+    .toEqual({id: 'mandatory-break', state: 'value', text: '0 мин', urgency: 'due'});
+});
+it.each(['not-observed', 'not-supported', 'invalid'] as const)('shows a dash, never a zero or an urgency, for a carried v1 break that is %s, also when it was never shown', reason => {
+  const presentation = overlayPresentation(smokePair({nextMandatoryBreak: {available: false, reason, unit: 'min'}}));
+  expect(breakOf(presentation)).toEqual({id: 'mandatory-break', state: 'unavailable'});
+  expect(JSON.stringify(presentation)).not.toContain('urgency');
+});
+it('shows a dash while the v1 data is stale, and the value again once it is current', () => {
+  const shown = overlayPresentation(smokePair());
+  const stale = overlayPresentation(smokePair({status: 'stale', fresh: false, reason: 'Main has no recent v1 SDK capture'}), undefined, undefined, shown);
+  expect(breakOf(stale)).toEqual({id: 'mandatory-break', state: 'unavailable'});
+  expect(breakOf(overlayPresentation(smokePair(), undefined, undefined, stale))).toEqual({id: 'mandatory-break', state: 'value', text: '1 h 35 min', urgency: 'soon'});
+  // Even a break never shown before is a dash while v1 is carried but stale.
+  expect(breakOf(overlayPresentation(smokePair({status: 'stale', fresh: false, reason: 'Main has no recent v1 SDK capture'})))).toEqual({id: 'mandatory-break', state: 'unavailable'});
+});
+it('turns a shown break into a dash when v0 is not current, and leaves it out when it was not shown', () => {
+  const shown = overlayPresentation(smokePair());
+  const v0Stale = overlayPresentation(smokePair({}, {status: 'stale', fresh: false}), undefined, undefined, shown);
+  expect(breakOf(v0Stale)).toEqual({id: 'mandatory-break', state: 'unavailable'});
+  expect(breakOf(overlayPresentation(smokePair({}, {status: 'stale', fresh: false})))).toBeUndefined();
+});
+it('does not tie the break to the job: another job or no job changes nothing', () => {
+  expect(breakOf(overlayPresentation(smokePair({ids: 'fixture', nextMandatoryBreak: measure(95)})))).toEqual({id: 'mandatory-break', state: 'value', text: '1 h 35 min', urgency: 'soon'});
+  const noJob = smokePair({nextMandatoryBreak: measure(95)});
+  noJob.observation!.state.configuration = {...noJob.observation!.state.configuration, job: {available: false, reason: 'not-observed'}};
+  expect(breakOf(overlayPresentation(noJob))).toEqual({id: 'mandatory-break', state: 'value', text: '1 h 35 min', urgency: 'soon'});
+});
+it('keeps the break while the game is paused, and applies the L5 rule to a source without v1', () => {
+  expect(breakOf(overlayPresentation(smokePair({nextMandatoryBreak: measure(0)}, {status: 'paused'})))).toEqual({id: 'mandatory-break', state: 'value', text: '0 min', urgency: 'due'});
+  // A v0 source without a v1 observation: the section is left out unless it was shown before, and then it is a dash (ET-012a L5).
+  expect(breakOf(overlayPresentation(live()))).toBeUndefined();
+  const shown = overlayPresentation(smokePair());
+  expect(breakOf(overlayPresentation(live(), undefined, undefined, shown))).toEqual({id: 'mandatory-break', state: 'unavailable'});
+  expect(breakOf(overlayPresentation(initialLive('ets2'), undefined, undefined, shown))).toBeUndefined();
+});
+it('leaves the break out when it is switched off, and in the job-focus and driving-only presets', () => {
+  for (const sections of [{...ALL, 'mandatory-break': false}, OVERLAY_PRESETS['job-focus'], OVERLAY_PRESETS['driving-only']])
+    expect(breakOf(overlayPresentation(smokePair(), undefined, {enabled: true, backgroundOpacity: 80, layout: 'strip', sections, placements: PLACEMENTS}))).toBeUndefined();
+  expect(breakOf(overlayPresentation(smokePair(), undefined, {enabled: true, backgroundOpacity: 80, layout: 'strip', sections: OVERLAY_PRESETS['everything'], placements: PLACEMENTS})))
+    .toMatchObject({state: 'value'});
 });

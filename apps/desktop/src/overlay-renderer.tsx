@@ -23,6 +23,15 @@ function Value({item}: {item: OverlayItem}) {
     {item.detail ? <span className="overlay-detail" data-testid={item.detailTestId}>{item.detail}</span> : null}
   </span>;
 }
+/**
+ * The next mandatory break's urgency marks (ET-052 MB10): `data-urgency` (the stylesheet colours soon orange and due red
+ * and underlines due; a soon value has colour as its only visible cue) and an accessible name made of the label, the value and the state
+ * word ("Break: 1 h 35 min, soon"). Nothing is set
+ * for any other item, so their markup is unchanged.
+ */
+function urgencyMarks(item: OverlayItem, name: string): {'data-urgency'?: string; 'aria-label'?: string} {
+  return item.urgency ? {'data-urgency': item.urgency, 'aria-label': `${name}: ${item.value}, ${item.urgencyName}`} : {};
+}
 /** `maxWidth` (strip only) caps each tag at the width the strip reserves for it. */
 function Tags({tags, maxWidth}: {tags: OverlayTag[]; maxWidth?: number}) {
   return <>{tags.map(tag => <span key={tag.id} className={`overlay-tag overlay-tag-${tag.id}`} data-testid={tag.testId}
@@ -40,7 +49,7 @@ function Strip({view}: {view: OverlayView}) {
     <Tags tags={view.tags} maxWidth={STRIP_TAG_MAX_WIDTH_CSS} />
     {view.groups.map((group, index) => <Fragment key={group.id}>
       {group.items.map((item, position) => <span key={item.id} className={index > 0 && position === 0 ? 'overlay-item overlay-group-start' : 'overlay-item'}
-        data-testid={`overlay-section-${item.id}`} aria-label={item.short} style={{maxWidth: STRIP_ITEM_MAX_WIDTH_CSS[item.id]}}>
+        data-testid={`overlay-section-${item.id}`} aria-label={item.short} {...urgencyMarks(item, item.short)} style={{maxWidth: STRIP_ITEM_MAX_WIDTH_CSS[item.id]}}>
         <SectionIcon id={item.id} /><Value item={item} />
       </span>)}
     </Fragment>)}
@@ -60,7 +69,7 @@ function CardLayout({view}: {view: OverlayView}) {
       {parts.hero.map(item => <div className={`overlay-card-${item.id}`} key={item.id} data-testid={`overlay-section-${item.id}`} aria-label={item.label}><Value item={item} /></div>)}
     </div> : null}
     <dl className="overlay-rows">
-      {parts.rows.map(item => <div key={item.id} className="overlay-row" data-testid={`overlay-section-${item.id}`}>
+      {parts.rows.map(item => <div key={item.id} className="overlay-row" data-testid={`overlay-section-${item.id}`} {...urgencyMarks(item, item.label)}>
         <dt><SectionIcon id={item.id} size={14} />{item.label}</dt><dd><Value item={item} /></dd>
       </div>)}
     </dl>
@@ -97,7 +106,7 @@ function Cluster({view}: {view: OverlayView}) {
     </div> : null}
     <div className="overlay-surface overlay-panel">
       <div className="overlay-panel-tags"><span className="overlay-source">{view.source}</span><Tags tags={view.tags} /></div>
-      {view.panel.map(item => <div key={item.id} className="overlay-panel-row" data-testid={`overlay-section-${item.id}`}>
+      {view.panel.map(item => <div key={item.id} className="overlay-panel-row" data-testid={`overlay-section-${item.id}`} {...urgencyMarks(item, item.short)}>
         <span className="overlay-label"><SectionIcon id={item.id} size={14} />{item.short}</span><Value item={item} />
       </div>)}
     </div>
@@ -111,7 +120,7 @@ function Cluster({view}: {view: OverlayView}) {
 function Hud({view}: {view: OverlayView}) {
   return <div className="overlay-hud-lines">
     {view.tags.length ? <div className="overlay-hud-tags"><Tags tags={view.tags} /></div> : null}
-    {view.items.map(item => <div key={item.id} className="overlay-hud-line" data-testid={`overlay-section-${item.id}`}>
+    {view.items.map(item => <div key={item.id} className="overlay-hud-line" data-testid={`overlay-section-${item.id}`} {...urgencyMarks(item, item.short)}>
       <SectionIcon id={item.id} size={14} /><span className="overlay-label">{item.short}</span><Value item={item} />
     </div>)}
   </div>;

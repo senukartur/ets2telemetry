@@ -71,7 +71,9 @@ export const UI_CASES = ['shell', 'live', 'journal', 'settings', 'overlay'];
 const sizes = [{width: 1280, height: 800}, {width: 1100, height: 720}];
 const panels = ['general', 'units', 'overlay', 'plugin', 'data', 'about'];
 const layouts = ['strip', 'card', 'cluster', 'hud'];
-const dimensions = {strip: {width: 1280, height: 116}, card: {width: 300, height: 384}, cluster: {width: 440, height: 267}, hud: {width: 320, height: 354}};
+// ET-052: the reserved windows at zoom 1 for fifteen sections: the strip is still three rows at 1280 CSS px (116), the card 48 + 24 × 15 = 408,
+// the cluster's panel 36 + 21 × 12 = 288 and the HUD 18 + 24 × 15 = 378 (384, 267 and 354 with fourteen).
+const dimensions = {strip: {width: 1280, height: 116}, card: {width: 300, height: 408}, cluster: {width: 440, height: 288}, hud: {width: 320, height: 378}};
 const waitState = (page, state) => until(() => page.getByTestId('telemetry-status').innerText(), value => value.startsWith(`${state}:`), `UI_LIVE_${state}`, 5000);
 // A committed main-process value may precede React's rendered switch and pending-save controls.
 function waitOverlayVisibility(page, {enabled, writable = true, saveError = null, errorVisible}, message, timeoutMs) {
@@ -116,7 +118,8 @@ function cssDisplayGeometry() {
 // the 100% ones; the probes restore the layout loop's own frame (`dimensions` at zoom 1) afterwards.
 const SPEED_UNITS = {en: ['km/h', 'mph'], ru: ['км/ч', 'миль/ч']}, RPM_UNIT = {en: 'rpm', ru: 'об/мин'};
 const STRIP_FRAMES = [{zoom: 0.7, width: 1280, height: 80}, {zoom: 0.35, width: 640, height: 60}, {zoom: 2.1, width: 1000, height: 720}];
-const CLUSTER_FRAMES = [{zoom: 0.35, width: 160, height: 100}, {zoom: 0.7, width: 308, height: 188}, {zoom: 2.1, width: 924, height: 561}];
+// ET-052: the 100% and 300% frames are the product windows with fifteen sections (308 × 203 and 924 × 605; 188 and 561 with fourteen).
+const CLUSTER_FRAMES = [{zoom: 0.35, width: 160, height: 100}, {zoom: 0.7, width: 308, height: 203}, {zoom: 2.1, width: 924, height: 605}];
 function stripSteps(speedUnit, rpmUnit) {
   return [{speed: '0', speedUnit, gear: 'N', rpm: '0', rpmUnit}, ...['9', '10', '99', '100', '-5', '—'].map(speed => ({speed})),
     // ET-050: the manual range-splitter forms share the gear's mode-independent reserve; ET-050b adds the crawler labels.
@@ -514,7 +517,7 @@ async function observeUnifiedOverlay({application, dashboard, language, size, re
   const visible = await dashboard.getByTestId('overlay-settings').evaluate(card => {
     const ids = ['overlay-enabled', 'overlay-layout', 'overlay-placement', 'overlay-presets', 'overlay-sections'];
     return ids.every(id => card.querySelector(`[data-testid="${id}"]`)?.checkVisibility()) &&
-      card.querySelectorAll('[data-testid^="overlay-switch-"]').length === 14 &&
+      card.querySelectorAll('[data-testid^="overlay-switch-"]').length === 15 &&
       [...card.querySelectorAll('[data-testid^="overlay-switch-"]')].every(node => node.checkVisibility());
   });
   assert.equal(visible, true, 'UI_OVERLAY_UNIFIED_CONTROLS');
@@ -811,7 +814,7 @@ export async function runUiSmoke({application, dashboard, overlay, source, sourc
         if (language === 'en' && size.width === 1280) await observeOverlayEditing({dashboard, config, record});
         // ET-045e: after ET-048's editing check, which may have saved another scale.
         if (size === sizes[0]) await observeScaleControl({dashboard, config, language, record});
-        assert.equal(await dashboard.locator('[data-testid^="overlay-switch-"]').count(), 14);
+        assert.equal(await dashboard.locator('[data-testid^="overlay-switch-"]').count(), 15);
         await dashboard.getByTestId('overlay-preset-driving-only').focus(); await dashboard.keyboard.press('Enter');
         await until(() => dashboard.evaluate(() => globalThis.desktop.getAppState()), state => !state.settings.overlay.sections.cargo, 'UI_SECTIONS_SAVED');
         const navigationBytes = await readFile(path.join(config.localappdata, 'ETS2Telemetry', 'settings', 'settings.json'));
@@ -1094,7 +1097,7 @@ export async function runUiReadOnly({application, dashboard, config, record, set
     await waitOverlayVisibility(dashboard, {enabled: true, writable: false}, 'UI_OVERLAY_READ_ONLY_RENDERED');
     for (const layout of layouts) assert.equal(await dashboard.locator(`#overlay-layout-${layout}`).isDisabled(), true);
     assert.equal(await dashboard.getByTestId('overlay-edit-start').isDisabled(), true);
-    assert.equal(await dashboard.locator('[data-testid^="overlay-switch-"]:disabled').count(), 14);
+    assert.equal(await dashboard.locator('[data-testid^="overlay-switch-"]:disabled').count(), 15);
     assert.equal(await dashboard.locator('[data-testid^="overlay-preset-"]:disabled').count(), 3);
   }
   const file = path.join(config.localappdata, 'ETS2Telemetry', 'settings', 'settings.json');

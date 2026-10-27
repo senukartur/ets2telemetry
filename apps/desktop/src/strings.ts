@@ -69,6 +69,9 @@ export const STRINGS = Object.freeze({
   overlayPaused: 'Paused',
   overlayNoSignal: 'No signal',
   overlayStale: 'Stale',
+  /** The state words of the overlay's next-mandatory-break item (ET-052): its accessible name, for assistive technology (the visible cues are the colour and the due underline). */
+  overlayBreakSoon: 'soon',
+  overlayBreakDue: 'due now',
   overlaySynthetic: 'Synthetic',
   overlayReplay: 'Replay',
   overlaySaveFailed: 'The overlay change was not saved; the previous overlay settings stay in use.',
@@ -141,6 +144,8 @@ export const STRINGS_RU: Readonly<Record<StringKey, string>> = Object.freeze({
   overlayPaused: 'Пауза',
   overlayNoSignal: 'Нет сигнала',
   overlayStale: 'Устарело',
+  overlayBreakSoon: 'скоро',
+  overlayBreakDue: 'пора',
   overlaySynthetic: 'Синтетический',
   overlayReplay: 'Повтор',
   overlaySaveFailed: 'Изменение оверлея не удалось сохранить; остаются предыдущие настройки.',
@@ -582,12 +587,12 @@ export function getOverlayLayoutText(layout: OverlayLayout, language: AppLanguag
 export const OVERLAY_SECTION_TEXT: Readonly<Record<OverlaySectionId, string>> = Object.freeze({
   'speed': 'Speed', 'gear': 'Gear', 'rpm': 'Engine RPM', 'fuel': 'Fuel', 'range': 'Estimated range', 'sdk-consumption': 'Consumption',
   'cargo': 'Cargo', 'origin': 'Origin', 'destination': 'Destination', 'distance-driven': 'Distance driven', 'distance-remaining': 'Distance remaining',
-  'deadline': 'Delivery deadline', 'expected-income': 'Expected income', 'game-time': 'Game time'
+  'deadline': 'Delivery deadline', 'expected-income': 'Expected income', 'game-time': 'Game time', 'mandatory-break': 'Next mandatory break'
 });
 export const OVERLAY_SECTION_TEXT_RU: Readonly<Record<OverlaySectionId, string>> = Object.freeze({
   'speed': 'Скорость', 'gear': 'Передача', 'rpm': 'Обороты двигателя', 'fuel': 'Топливо', 'range': 'Запас хода', 'sdk-consumption': 'Расход',
   'cargo': 'Груз', 'origin': 'Отправление', 'destination': 'Назначение', 'distance-driven': 'Пройденное расстояние', 'distance-remaining': 'Оставшееся расстояние',
-  'deadline': 'Срок доставки', 'expected-income': 'Ожидаемый доход', 'game-time': 'Игровое время'
+  'deadline': 'Срок доставки', 'expected-income': 'Ожидаемый доход', 'game-time': 'Игровое время', 'mandatory-break': 'До обязательного перерыва'
 });
 export function getOverlaySectionText(section: OverlaySectionId, language: AppLanguage = 'en'): string {
   return language === 'ru' ? OVERLAY_SECTION_TEXT_RU[section] : OVERLAY_SECTION_TEXT[section];
@@ -597,12 +602,12 @@ export function getOverlaySectionText(section: OverlaySectionId, language: AppLa
 export const OVERLAY_SECTION_SHORT_TEXT: Readonly<Record<OverlaySectionId, string>> = Object.freeze({
   'speed': 'Speed', 'gear': 'Gear', 'rpm': 'RPM', 'fuel': 'Fuel', 'range': 'Range', 'sdk-consumption': 'Consumption',
   'cargo': 'Cargo', 'origin': 'From', 'destination': 'To', 'distance-driven': 'Driven', 'distance-remaining': 'Remaining',
-  'deadline': 'Due', 'expected-income': 'Expected', 'game-time': 'Time'
+  'deadline': 'Due', 'expected-income': 'Expected', 'game-time': 'Time', 'mandatory-break': 'Break'
 });
 export const OVERLAY_SECTION_SHORT_TEXT_RU: Readonly<Record<OverlaySectionId, string>> = Object.freeze({
   'speed': 'Скорость', 'gear': 'Передача', 'rpm': 'Обороты', 'fuel': 'Топливо', 'range': 'Запас хода', 'sdk-consumption': 'Расход',
   'cargo': 'Груз', 'origin': 'Откуда', 'destination': 'Куда', 'distance-driven': 'Пройдено', 'distance-remaining': 'Осталось',
-  'deadline': 'Срок', 'expected-income': 'Ожидается', 'game-time': 'Время'
+  'deadline': 'Срок', 'expected-income': 'Ожидается', 'game-time': 'Время', 'mandatory-break': 'Перерыв'
 });
 export function getOverlaySectionShortText(section: OverlaySectionId, language: AppLanguage = 'en'): string {
   return language === 'ru' ? OVERLAY_SECTION_SHORT_TEXT_RU[section] : OVERLAY_SECTION_SHORT_TEXT[section];
