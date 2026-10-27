@@ -31,6 +31,8 @@ const SETTINGS_SAVED = ['{', '  "format": "ets2telemetry.settings",', '  "versio
 const SETTINGS_GEAR_SAVED = SETTINGS_SAVED.replace('"enabled": false', '"enabled": true');
 const SETTINGS_UNIT_SAVED = SETTINGS_GEAR_SAVED.replace('"ets2": "manual"', '"ets2": "automatic"');
 const AUTOMATIC_GEARS = {ets2: 'automatic', ats: 'automatic'}, SAVED_GEARS = {ets2: 'manual', ats: 'automatic'};
+// ET-050b settings v12: no gearbox has its own gear display mode in this journey.
+const NO_GEARBOXES = {ets2: [], ats: []};
 const DEFAULT_OVERLAY = {enabled: true, backgroundOpacity: 80, layout: 'strip', sections: {'speed': true, 'gear': true, 'rpm': true, 'fuel': true, 'range': true, 'sdk-consumption': true, 'cargo': true,
   'origin': true, 'destination': true, 'distance-driven': true, 'distance-remaining': true, 'deadline': true, 'expected-income': true, 'game-time': true,
   'mandatory-break': true},
@@ -157,7 +159,7 @@ export async function runLifecycleSmoke({application, launcher, dashboard, overl
   const stateText = await until(() => dashboard.getByTestId('settings-state').innerText(),
     text => !text.startsWith('Saved settings are still being read'), 'DASHBOARD_SETTINGS_STILL_PENDING');
   record.settingsInitial = {view: settled.settings, files: await settingsFiles(config), stateText};
-  assert.deepEqual(settled.settings, {language: 'en', autostart: false, units: {ets2: 'metric', ats: 'us-customary'}, gearDisplay: AUTOMATIC_GEARS, overlay: DEFAULT_OVERLAY, state: 'invalid-file', writable: true, saveError: null});
+  assert.deepEqual(settled.settings, {language: 'en', autostart: false, units: {ets2: 'metric', ats: 'us-customary'}, gearDisplay: AUTOMATIC_GEARS, gearboxGearDisplay: NO_GEARBOXES, overlay: DEFAULT_OVERLAY, state: 'invalid-file', writable: true, saveError: null});
   record.settingsSeededInvalidFile = true;
   assert.deepEqual(record.settingsInitial.files, [{name: 'settings.json', content: SETTINGS_SEED}]);
   assert.match(record.settingsInitial.stateText, /^The settings file is invalid; defaults are in use\./);
@@ -214,7 +216,7 @@ export async function runLifecycleSmoke({application, launcher, dashboard, overl
   // 3b. Saving ETS2's US customary profile quarantines the seeded file unchanged, writes the exact v2 content and
   // switches both the dashboard and the overlay to mph and US gallons.
   record.settingsSaveView = await trayDashboard.evaluate(() => globalThis.desktop.setUnitProfile('ets2', 'us-customary'));
-  assert.deepEqual(record.settingsSaveView, {language: 'en', autostart: false, units: {ets2: 'us-customary', ats: 'us-customary'}, gearDisplay: AUTOMATIC_GEARS, overlay: DEFAULT_OVERLAY, state: 'loaded', writable: true, saveError: null});
+  assert.deepEqual(record.settingsSaveView, {language: 'en', autostart: false, units: {ets2: 'us-customary', ats: 'us-customary'}, gearDisplay: AUTOMATIC_GEARS, gearboxGearDisplay: NO_GEARBOXES, overlay: DEFAULT_OVERLAY, state: 'loaded', writable: true, saveError: null});
   const saved = await settingsFiles(config);
   record.settingsAfterSave = saved.map(({name}) => name);
   const quarantined = saved.filter(file => QUARANTINE_NAME.test(file.name));
@@ -280,7 +282,7 @@ export async function verifyLifecycleRestart({application, record, rendererPages
   record.recordingNotRecordedShown = true;
   record.restartRecovered = true;
   record.restart.settingsState = state.settings.state;
-  assert.deepEqual(state.settings, {language: 'en', autostart: false, units: {ets2: 'us-customary', ats: 'us-customary'}, gearDisplay: SAVED_GEARS, overlay: {...DEFAULT_OVERLAY, enabled: false}, state: 'loaded', writable: true, saveError: null});
+  assert.deepEqual(state.settings, {language: 'en', autostart: false, units: {ets2: 'us-customary', ats: 'us-customary'}, gearDisplay: SAVED_GEARS, gearboxGearDisplay: NO_GEARBOXES, overlay: {...DEFAULT_OVERLAY, enabled: false}, state: 'loaded', writable: true, saveError: null});
   record.restart.gearDisplay = state.settings.gearDisplay;
   record.gearDisplayRestarted = true;
   record.restart.overlayEnabled = state.settings.overlay.enabled;
