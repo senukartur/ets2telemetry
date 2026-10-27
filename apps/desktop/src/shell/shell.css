@@ -33,9 +33,26 @@ h1[tabindex="-1"]:focus { outline: none; }
 .yu-nav-item svg { width: 18px; height: 18px; flex: none; }
 .yu-nav-item[aria-current="page"] { color: var(--yu-selected-fg); background: var(--yu-selected-bg); border-color: var(--yu-selected-border); font-weight: 600; }
 .yu-sidebar-footer { margin-top: auto; padding-top: 18px; }
-.yu-recording { border: 1px solid var(--yu-border); background: var(--yu-bg-inset); border-radius: 10px; padding: 10px; margin-bottom: 12px; }
-.yu-recording p { color: var(--yu-text-muted); font-size: 12px; margin-top: 5px; }
-.yu-dot { display: inline-block; width: 7px; height: 7px; margin-right: 7px; border-radius: 50%; background: var(--yu-online); }
+.yu-recording { display: flex; align-items: center; gap: 10px; width: 100%; text-align: left; border: 1px solid var(--yu-border); background: var(--yu-bg-inset); border-radius: 10px; padding: 9px 10px; margin-bottom: 12px; cursor: help; transition: background-color .15s, border-color .15s; }
+.yu-recording:hover, .yu-recording:focus-visible, .yu-recording[data-state="delayed-open"], .yu-recording[data-state="instant-open"] { background: var(--yu-bg-card); border-color: var(--yu-border-input); }
+.yu-recording:focus-visible { outline: 2px solid var(--yu-accent-light); outline-offset: 2px; }
+.yu-recording-label { flex: 1; min-width: 0; font-size: 13px; font-weight: 600; line-height: 1.3; color: var(--yu-text); }
+.yu-recording-badge { flex: none; font-size: 11px; padding: 1px 6px; border-radius: 6px; border: 1px solid var(--yu-neutral-border); background: var(--yu-neutral-bg); color: var(--yu-neutral-fg); }
+.yu-recording-info { flex: none; width: 16px; height: 16px; color: var(--yu-text-muted); transition: color .15s; }
+.yu-recording:hover .yu-recording-info, .yu-recording:focus-visible .yu-recording-info, .yu-recording[data-state$="-open"] .yu-recording-info { color: var(--yu-text-secondary); }
+/* Recording dot: the colour follows recordingTone and the animation recordingMotion (desktop-ui-view.ts). */
+.yu-dot { position: relative; flex: none; width: 10px; height: 10px; border-radius: 50%; background: var(--yu-dot-ok); --yu-dot-color: var(--yu-dot-ok); }
+.yu-dot::after { content: ""; position: absolute; inset: 0; border-radius: 50%; background: var(--yu-dot-color); opacity: 0; }
+.yu-dot[data-motion="calm"]::after { animation: yu-dot-ring 2.4s cubic-bezier(.2, .6, .4, 1) infinite; }
+.yu-dot[data-motion="busy"]::after { animation: yu-dot-ring 1.6s cubic-bezier(.2, .6, .4, 1) infinite; }
+.yu-dot[data-motion="urgent"]::after { animation: yu-dot-ring 1.2s cubic-bezier(.2, .6, .4, 1) infinite; }
+.yu-dot[data-motion="breathe"] { animation: yu-dot-breathe 2.4s ease-in-out infinite; }
+@keyframes yu-dot-ring { 0% { transform: scale(1); opacity: .6; } 100% { transform: scale(2.9); opacity: 0; } }
+@keyframes yu-dot-breathe { 50% { opacity: .35; } }
+/* Pulse only while the window has focus (useWindowFocused): an endless animation repaints every frame. */
+.yu-dot[data-window-focused="false"], .yu-dot[data-window-focused="false"]::after { animation: none; }
+/* The global reduced-motion rule shortens durations, which would make an infinite ring flicker; stop it instead. */
+@media (prefers-reduced-motion: reduce) { .yu-dot, .yu-dot::after { animation: none !important; } }
 .yu-column { min-width: 0; min-height: 0; display: flex; flex-direction: column; }
 .yu-topbar { min-height: 52px; display: flex; flex-wrap: wrap; align-items: center; gap: 8px; padding: 10px 20px; border-bottom: 1px solid var(--yu-divider-chrome); background: var(--yu-bg-chrome); }
 .yu-topbar h1 { font-size: 18px; font-weight: 700; margin-right: auto; }
@@ -113,9 +130,9 @@ h1[tabindex="-1"]:focus { outline: none; }
 .yu-chart-line {stroke:var(--yu-accent-light);stroke-width:2}
 .yu-chart-point {fill:var(--yu-accent-light)}
 
-.yu-dot[data-tone="neutral"] {background:var(--yu-text-muted)}
-.yu-dot[data-tone="warn"] {background:var(--yu-warn-fg)}
-.yu-dot[data-tone="error"] {background:var(--yu-err-fg)}
+.yu-dot[data-tone="neutral"] {--yu-dot-color:var(--yu-dot-neutral);background:var(--yu-dot-neutral)}
+.yu-dot[data-tone="warn"] {--yu-dot-color:var(--yu-dot-warn);background:var(--yu-dot-warn)}
+.yu-dot[data-tone="error"] {--yu-dot-color:var(--yu-dot-err);background:var(--yu-dot-err)}
 
 /* Fixed primary column widths stay readable; the table scrolls inside its card at the minimum window size. */
 [data-testid="journal-table"] {min-width:1560px;table-layout:fixed}

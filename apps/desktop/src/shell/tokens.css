@@ -49,6 +49,8 @@
   --yu-err-fg: #F3B4A4;     --yu-err-bg: #2A1616;     --yu-err-border: #5B2A27;
   --yu-neutral-fg: #D1D5DB; --yu-neutral-bg: #182131; --yu-neutral-border: #4B5563;
   --yu-online: #34D399;            /* live dot */
+  /* Recording indicator dot: saturated so the colour reads at 10 px; its label carries the meaning */
+  --yu-dot-ok: #34D399; --yu-dot-warn: #F59E0B; --yu-dot-err: #F87171; --yu-dot-neutral: #6B7280;
   --yu-progress-pending: #E3A13F;  /* goal reached, waiting for confirmation; low fuel */
 
   /* Games */

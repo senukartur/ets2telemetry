@@ -1,4 +1,4 @@
-import {recordingTone, connectionTone, pluginTone, hardModeTone, pluginStatusText} from './screens/desktop-ui-view';
+import {recordingMotion, recordingTone, connectionTone, pluginTone, hardModeTone, pluginStatusText} from './screens/desktop-ui-view';
 import {HardModeCard} from './hard-mode/card';
 import React, {useEffect, useRef, useState} from 'react';
 import type {AppLanguage, AppState, LiveTelemetry, SettingsView, SourceSelection, UnitGame} from '../../../packages/contracts/src';
@@ -8,11 +8,13 @@ import {Button} from '@/components/ui/button';
 import {Label} from '@/components/ui/label';
 import {RadioGroup, RadioGroupItem} from '@/components/ui/radio-group';
 import {Badge} from '@/components/ui/badge';
+import {Tooltip, TooltipContent, TooltipProvider, TooltipTrigger} from '@/components/ui/tooltip';
 import {DropdownMenu, DropdownMenuContent, DropdownMenuRadioGroup, DropdownMenuRadioItem, DropdownMenuTrigger} from '@/components/ui/dropdown-menu';
-import {Gauge, BookOpen, Settings2, Cloud, Globe, Power, ChevronDown, Flame, Plug, CircleHelp} from 'lucide-react';
+import {Gauge, BookOpen, Settings2, Cloud, Globe, Power, ChevronDown, Flame, Plug, CircleHelp, Info} from 'lucide-react';
 import {useHardModeStatus} from './hard-mode/use-status';
 import {hardModeView} from './hard-mode/view';
 import {useLanguageController} from './shell/use-language';
+import {useWindowFocused} from './shell/use-window-focus';
 import logo from './assets/logo.png';
 import onestLicense from './assets/onest-OFL.txt?raw';
 import onestLicenseUrl from './assets/onest-OFL.txt?url';
@@ -68,6 +70,7 @@ export default function App() {
   const problem = health && (health.service === 'failed' || health.service === 'restarting') && health.lastError;
   // ET-015c PR-4 (G8): the recording status text; until main's first push the status is not known.
   const recording = recordingStatusText(health?.recording ?? {state: 'unknown'}, language);
+  const windowFocused = useWindowFocused();
   const recordingAlertVariant = health?.recording.state === 'retrying' ? 'default' : 'destructive';
   // Main pushes the saved settings; until the first push the ET-000 defaults apply.
   const saved = (view: SettingsView) => setApp(current => current && {...current, settings: view});
@@ -92,7 +95,18 @@ export default function App() {
         {id === 'live' || id === 'settings' || id === 'account' ? <p className="yu-nav-group">{t(id === 'live' ? 'nav.group.drive' : id === 'settings' ? 'nav.group.app' : 'nav.group.company', undefined, language)}{id === 'account' ? ` · ${t('tag.later', undefined, language)}` : ''}</p> : null}
         <button type="button" className="yu-nav-item" aria-current={route === id ? 'page' : undefined} onClick={() => setRoute(id)} data-testid={`tab-${id}`}><Icon aria-hidden="true" />{t(`nav.${id}`, undefined, language)}</button>
       </React.Fragment>)}</nav>
-      <div className="yu-sidebar-footer"><div className="yu-recording" data-testid="shell.sidebar.recording"><strong><span className="yu-dot" data-tone={recordingTone(health?.recording.state)} data-testid="shell.recording.indicator" />{recording.short}</strong><p>{recording.detail[0] ?? recording.notice}</p></div>
+      <div className="yu-sidebar-footer"><TooltipProvider delayDuration={150} skipDelayDuration={0}><Tooltip><TooltipTrigger asChild>
+        <button type="button" className="yu-recording" data-testid="shell.sidebar.recording" aria-label={recording.testBadge ? `${recording.label}, ${recording.testBadge}` : recording.label}>
+          <span className="yu-dot" aria-hidden="true" data-tone={recordingTone(health?.recording.state)} data-motion={recordingMotion(health?.recording.state)} data-window-focused={windowFocused} data-testid="shell.recording.indicator" />
+          <span className="yu-recording-label" data-testid="shell.recording.label">{recording.label}</span>
+          {recording.testBadge ? <span className="yu-recording-badge" data-testid="shell.recording.badge">{recording.testBadge}</span> : null}
+          <Info className="yu-recording-info" aria-hidden="true" />
+        </button></TooltipTrigger><TooltipContent side="right" align="end" data-testid="shell.recording.hint"><div className="space-y-1">
+          <p className="font-medium">{recording.headline}</p>
+          {recording.detail.map(line => <p key={line}>{line}</p>)}
+          {recording.alert ? <p>{recording.alert}</p> : null}
+          {recording.losses.map(line => <p key={line} className="text-muted-foreground">{line}</p>)}
+        </div></TooltipContent></Tooltip></TooltipProvider>
         <DropdownMenu><DropdownMenuTrigger asChild><Button variant="outline" className="w-full" data-testid="shell.language"><Globe aria-hidden="true" />{language.toUpperCase()}<ChevronDown aria-hidden="true" /></Button></DropdownMenuTrigger>
           <DropdownMenuContent><DropdownMenuRadioGroup value={language} onValueChange={languageController.choose}>{(['en', 'ru'] as const).map(lang => <DropdownMenuRadioItem key={lang} value={lang} disabled={!settings?.writable || languageController.saving} data-testid={`shell.language.${lang}`}>{t(`lang.${lang}`, undefined, language)}</DropdownMenuRadioItem>)}</DropdownMenuRadioGroup></DropdownMenuContent>
         </DropdownMenu>

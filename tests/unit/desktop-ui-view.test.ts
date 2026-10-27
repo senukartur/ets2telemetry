@@ -1,6 +1,6 @@
 import {dashboardFuel} from '../../apps/desktop/src/speed-display';
 import {describe, expect, it} from 'vitest';
-import {clampRatio, connectionTone, desktopLiveView, gaugeArc, hardModeTone, pluginTone, pluginStatusText, recordingTone} from '../../apps/desktop/src/screens/desktop-ui-view';
+import {clampRatio, connectionTone, desktopLiveView, gaugeArc, hardModeTone, pluginTone, pluginStatusText, recordingMotion, recordingTone} from '../../apps/desktop/src/screens/desktop-ui-view';
 import {liveDashboardText} from '../../apps/desktop/src/live-dashboard-text';
 import {unknownHardMode} from '../../packages/telemetry-core/src/hard-mode';
 import type {HardModeStatus} from '../../packages/contracts/src/hard-mode';
@@ -87,6 +87,11 @@ it.each([
   ['recording', 'ok'], ['paused', 'warn'], ['waiting', 'warn'], ['opening', 'warn'], ['interrupted', 'error'], ['retrying', 'error'], ['stopped', 'error'],
   ['disabled', 'neutral'], ['unknown', 'neutral'], ['live-only', 'neutral'], ['not-recorded-source', 'neutral'], [undefined, 'neutral']
 ] as const)('keeps recording %s indicator truthful', (state, tone) => expect(recordingTone(state)).toBe(tone));
+// A stopped, disabled or unknown recorder never animates, so motion cannot suggest work that is not happening.
+it.each([
+  ['recording', 'calm'], ['waiting', 'calm'], ['opening', 'busy'], ['interrupted', 'urgent'], ['retrying', 'urgent'], ['paused', 'breathe'],
+  ['stopped', 'still'], ['disabled', 'still'], ['unknown', 'still'], ['live-only', 'still'], ['not-recorded-source', 'still'], [undefined, 'still']
+] as const)('animates the recording %s dot as %s', (state, motion) => expect(recordingMotion(state)).toBe(motion));
 it('colors current settings independently of irreversible trip loss', () => {
   const status: HardModeStatus = {assessment: unknownHardMode(0), trip: null};
   expect(hardModeTone(status)).toBe('neutral');

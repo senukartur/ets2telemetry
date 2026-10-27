@@ -121,6 +121,28 @@ const environment = diagnostics => ({...(config.mode === 'installed' ? installed
   ...(soakSource ? {ETS2TELEMETRY_SOURCE_PIPE_V1: soakSource.endpoint, ETS2TELEMETRY_RECORDING: SOAK_TARGET} : {}),
   // ET-017 PR-5: the test-root mode, confined to the fake root inside this run's isolated output folder.
   ...(pluginFixture ? {ETS2TELEMETRY_PLUGIN_SETUP_ROOT: pluginFixture.root} : {})});
+// The sidebar recording dot pulses endlessly while the dashboard window has focus, which it has in these runs, and every
+// frame costs CPU under the Job's 25% cap: it timed out the packaged Hard Mode journey (PR #203). Only the UI shards check
+// motion, so every other scenario stops that one animation through a constructed stylesheet (CSSOM, which the renderer's
+// CSP does not restrict) on every document of every launch. Emulating prefers-reduced-motion would change the whole UI's
+// motion. See docs/ci.md#recording-dot-animation-in-runtime-smokes.
+const stillRecordingDot = config.scenario !== 'ui';
+function stopRecordingDot() {
+  const apply = () => {
+    const sheet = new globalThis.CSSStyleSheet(); sheet.replaceSync('.yu-dot, .yu-dot::after { animation: none !important; }');
+    globalThis.document.adoptedStyleSheets = [...globalThis.document.adoptedStyleSheets, sheet];
+  };
+  if (globalThis.document.readyState === 'loading') globalThis.document.addEventListener('DOMContentLoaded', apply, {once: true}); else apply();
+}
+async function launch(diagnostics) {
+  const launched = await electron.launch(launchOptions(diagnostics));
+  if (stillRecordingDot) {
+    await launched.context().addInitScript(stopRecordingDot);
+    const apply = page => page.evaluate(stopRecordingDot).catch(() => {});
+    launched.windows().forEach(apply); launched.on('window', apply);
+  }
+  return launched;
+}
 const launchOptions = diagnostics => ({timeout: 20000, cwd: config.cwd,
   ...(config.mode !== 'development' ? {executablePath: config.executable, args: config.forceRendererProcessReuse ? ['--renderer-process-limit=1'] : []} :
     {args: [config.checkout, ...(config.forceRendererProcessReuse ? ['--renderer-process-limit=1'] : [])]}),
@@ -145,7 +167,7 @@ try {
   if (config.scenario === 'refusal') await placeNewerHistory({config, record: result.refusal = {}});
   if (config.scenario === 'ui' && config.uiCase === 'journal') {await seedJournalDatabase({config, record: result.uiSeed = {}}); journalTarget = JOURNAL_TARGET;}
   phase('launch-requested');
-  application = await electron.launch(launchOptions(config.diagnostics));
+  application = await launch(config.diagnostics);
   launcher = application.process();
   phase('launch-returned');
   await application.context().tracing.start({screenshots: true, snapshots: true});
@@ -167,6 +189,13 @@ try {
       security: {sandbox: preferences.sandbox, isolation: preferences.contextIsolation, node: preferences.nodeIntegration}};
   });
   assert.equal(result.runtime.versions.electron, '44.7.0');
+  const dotAnimation = () => {
+    const dot = globalThis.document.querySelector('[data-testid="shell.recording.indicator"]');
+    return dot ? globalThis.getComputedStyle(dot, '::after').animationName === 'none' && globalThis.getComputedStyle(dot).animationName === 'none' : null;
+  };
+  if (stillRecordingDot) await window.waitForFunction(dotAnimation, undefined, {timeout: 5000}).catch(() => {throw new Error('RECORDING_DOT_NOT_STILL');});
+  result.recordingDotStill = await window.evaluate(dotAnimation);
+  if (stillRecordingDot) assert.equal(result.recordingDotStill, true, 'RECORDING_DOT_NOT_STILL');
   assert.equal(result.runtime.packaged, config.mode !== 'development');
   if (config.mode === 'installed') {
     // ET-018 PR-1 (U11): the installed executable itself runs, from an unrelated working directory, with the minimal PATH.
@@ -466,7 +495,7 @@ try {
       const settingsBytes = '{"format":"ets2telemetry.settings","version":999,"language":"ru","fixture":"future settings retained byte-identically"}';
       await writeFile(path.join(config.localappdata, 'ETS2Telemetry', 'settings', 'settings.json'), settingsBytes);
       phase('ui-readonly-launch-requested');
-      application = await electron.launch(launchOptions(config.diagnosticsRestart)); launcher = application.process();
+      application = await launch(config.diagnosticsRestart); launcher = application.process();
       await application.context().tracing.start({screenshots: true, snapshots: true}); tracing = true;
       ({dashboard: window, overlay} = await rendererPages(application)); await waitForStartup(window);
       await runUiReadOnly({application, dashboard: window, config, record: result.ui, settingsBytes});
@@ -482,7 +511,7 @@ try {
       stopTracing: async () => {tracing = false; await application.context().tracing.stop({path: path.join(config.output, 'trace.zip')}); phase('tracing-stopped');}});
     // Run A exited on its own; the shared close path below now owns run B.
     application = undefined; phase('explicit-exit-complete');
-    application = await electron.launch(launchOptions(config.diagnosticsRestart));
+    application = await launch(config.diagnosticsRestart);
     launcher = application.process(); phase('restart-launch-returned');
     await verifyLifecycleRestart({application, record: result.lifecycle, rendererPages, config});
     phase('restart-ready');
@@ -494,7 +523,7 @@ try {
     await runRecordingSmoke({application, launcher, dashboard: window, recording: recordingSource, config, events: diagnosticEvents, record: result.recording,
       stopTracing: async () => {tracing = false; await application.context().tracing.stop({path: path.join(config.output, 'trace.zip')}); phase('tracing-stopped');}});
     application = undefined; phase('tray-exit-complete');
-    application = await electron.launch(launchOptions(config.diagnosticsRestart));
+    application = await launch(config.diagnosticsRestart);
     launcher = application.process(); phase('restart-launch-returned');
     await verifyRecordingRestart({application, record: result.recording, rendererPages, recording: recordingSource, events: diagnosticEvents, config});
     phase('restart-recorded');
@@ -515,7 +544,7 @@ try {
     await seedJournalDatabase({config, record: result.journal});
     phase('journal-seeded');
     journalTarget = JOURNAL_TARGET;
-    application = await electron.launch(launchOptions(config.diagnosticsRestart));
+    application = await launch(config.diagnosticsRestart);
     launcher = application.process(); phase('restart-launch-returned');
     await application.context().tracing.start({screenshots: true, snapshots: true});
     tracing = true;
@@ -555,13 +584,13 @@ try {
     // Run B must write nothing: every fixture file keeps the bytes and modification time run A left.
     assertNoGameRunning();
     const afterRunA = await snapshotPluginFixture(pluginFixture);
-    application = await electron.launch(launchOptions(config.diagnosticsRestart));
+    application = await launch(config.diagnosticsRestart);
     launcher = application.process(); phase('restart-launch-returned');
     const {dashboard} = await rendererPages(application);
     await waitForStartup(dashboard);
     phase('restart-ready');
     await verifyPluginRestart({dashboard, fixture: pluginFixture, before: afterRunA, record: result.plugin, phase});
-    // ET-017 PR-6: "Export diagnostics…" after run B's states and files were verified; it writes only into this run's output.
+    // ET-017 PR-6: "Export diagnosticsвЂ¦" after run B's states and files were verified; it writes only into this run's output.
     await runDiagnosticsExport({application, dashboard, config, fixture: pluginFixture, record: result.plugin});
     phase('plugin-diagnostics-exported');
     await dashboard.screenshot({path: path.join(config.output, 'plugin.png')});
@@ -632,7 +661,7 @@ finally {
     else result.history = verifyHistoryEvents(result.serviceEvents, telemetrySource && restartRecord ? [true, false] : config.scenario === 'ui' && config.uiCase === 'journal' ? [false] : [true]);
     const deliberateUiErrors = config.scenario === 'ui' && config.uiCase === 'settings' ? result.mainEvents.filter(row => row.event === 'SETTINGS_WRITE_FAILED') : [];
     if (config.scenario === 'ui' && config.uiCase === 'settings') {
-      // Units, visibility, opacity and (ET-050) gear display are each refused once per language and size: 4 × 2 × 2.
+      // Units, visibility, opacity and (ET-050) gear display are each refused once per language and size: 4 Г— 2 Г— 2.
       assert.deepEqual(deliberateUiErrors.map(row => row.facts), Array.from({length: 16}, () => ({step: 'target', code: null})));
       result.ui.saveFailureFacts = deliberateUiErrors.map(row => row.facts);
       result.ui.readOnly.mainEvents = await diagnosticEvents(config.diagnosticsRestart);
