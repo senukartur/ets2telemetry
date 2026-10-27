@@ -183,6 +183,25 @@ Since ET-019 PR-11 (October 19, 2026) every runtime smoke records resource evide
 
 The wrapper copies these values to `wrapper-result.json` under `resourceFacts` and prints one line of numbers to the job log. They hold no path and no new host fact. `coldLaunch.observationMs` and `processMemory.observationMs` record what each read cost the smoke: locally 72–131 ms (mostly waiting for the first contentful paint) and 1–2 ms. The first local numbers are in [ET-019 validation](validation/et-019.md#pr-11-job-peak-memory-and-cold-launch-phases-october-19-2026); hosted numbers come from the first dispatch run.
 
+### Recording dot animation in runtime smokes
+
+The sidebar recording dot pulses endlessly while the dashboard window has focus ([application lifecycle](app-lifecycle.md#recording-on-the-dashboard-and-in-the-tray-et-015c-pr-4)). The window has focus in these runs, and every animated frame costs CPU under the Job's 25% cap. On PR #203 (run 40578063106) the pulse doubled the Hard Mode hint loops on a hosted runner (18–19 s instead of 8–9 s) and timed out the packaged Hard Mode journey at 60 s. Locally the same journey took 28.2 s with the pulse and 22.4 s without it.
+
+Every runtime smoke scenario except `ui` therefore stops that one animation. On every document of every launch (Playwright's `addInitScript`, plus the windows already open), the driver adopts a constructed stylesheet that sets `animation: none` on `.yu-dot` and its ring. CSSOM stylesheets are not restricted by the renderer's CSP. The driver then waits up to 5 s until the dashboard's dot and ring compute `animation-name: none`, fails with `RECORDING_DOT_NOT_STILL` otherwise, and records the result as `recordingDotStill` in `result.json`. Nothing else in the UI changes.
+
+Two broader approaches were tried and rejected on October 27, 2026:
+
+- Chromium's `--force-prefers-reduced-motion` switch: Electron ignores it, and `matchMedia('(prefers-reduced-motion: reduce)')` did not match.
+- Playwright's `emulateMedia({reducedMotion: 'reduce'})`: it changes the whole UI's motion through the global reduced-motion rule, more than the one animation that costs CPU, and on hosted runners it reached the overlay renderer late or not at all (PR #182).
+
+While testing these variants locally, the Hard Mode journey's parameter-tooltip loop sometimes failed: a hint did not open on hover, or its rendered text did not match in time. It failed with the emulation, with the dot-only stylesheet, without the window focus hook and without the indicator's tooltip, about 1 run in 6 overall, but not in 6 runs of `main`'s application code. The cause is unknown and the evidence does not tie it to this change; hosted runs are the judge.
+
+What this does and does not cover:
+
+- The `ui` shards run with normal motion. They are the only runtime checks of animation: the indicator's `data-motion` and focus gating, and the Cluster speed arc's transition.
+- The other scenarios check their journeys without the dot's animation cost. Their time and resource evidence is therefore no measure of the pulse.
+- The session-end audit (`session-end-smoke.mjs`) launches the application itself without the switch. It does not interact with the dashboard.
+
 ## Recorded acceptance and final-head gate
 
 [Run 38128847239](https://github.com/senukartur/ets2telemetry/actions/runs/38128847239) passed the complete clean hosted scaffold job. [Run 38129098029](https://github.com/senukartur/ets2telemetry/actions/runs/38129098029) deliberately failed one assertion (expected 1001, actual 1000; 122 other tests passed). The assertion was removed, and [run 38129283542](https://github.com/senukartur/ets2telemetry/actions/runs/38129283542) passed the restored tree. Earlier genuine 8.3-path and CMake failures remain recorded separately. See [validation](validation/et-022.md) for source/merge-checkout identities, measured timings, evidence limits and the owner-provided account usage snapshot. The coordinator owns final PR checks and review: verify the actual final head after documentation changes and record its association externally in the PR/ledger. Do not treat the historical successful run as a check of an untested later commit.
