@@ -1,4 +1,4 @@
-import type {GearboxIdentity, LiveTelemetry, UnitGame} from '../../../packages/contracts/src';
+import type {LiveTelemetry} from '../../../packages/contracts/src';
 import type {GearboxState, HShifterLayout} from '../../../packages/contracts/src/protocol-v1';
 import type {DisplayUnits, GearDisplayMode} from '../../../packages/telemetry-core/src/display-profile';
 import {CRAWLER_LABELS, deriveGearLabels, type GearLabelGame} from '../../../packages/telemetry-core/src/gear-labels';
@@ -6,7 +6,6 @@ import {buildLiveView, carriesField, isCurrent, type GearDisplay, type LiveDashb
 import {normalizeV0State} from '../../../packages/telemetry-core/src/normalize-v0';
 import {normalizeV1State} from '../../../packages/telemetry-core/src/normalize-v1';
 import type {LiveJob, NormalizedLiveState, Reading} from '../../../packages/telemetry-core/src/readings';
-import {findGearboxGearDisplay, isForwardGearCount, isGearboxLabel, isGearboxModel, isReverseGearCount, type GearDisplayChoice} from './gearbox-gear-display';
 
 // The one combiner of the v0 observation and the protocol v1 projection (ET-010c, decision F4). The dashboard card and
 // main's overlay projection both read every field through it, so they cannot disagree about which protocol a value
@@ -39,8 +38,6 @@ export interface LiveSources {
   job: JobIdentity;
   /** v0 decides while current; otherwise current v1 data may report a paused game (decision F4(d)). */
   paused: boolean;
-  /** The current truck's gearbox, set only while the gearbox-aware rules apply (ET-050b B6). */
-  gearbox?: CurrentGearbox;
   /** The field to display: v0 for what v0 carries, v1 for the rest, with the job guard applied. */
   field(id: LiveFieldId): LiveField;
 }
@@ -92,56 +89,22 @@ function gearDisplay(mode: GearDisplayMode, applies: boolean, gearbox: GearboxSt
   return labels ? {mode, labels} : {mode};
 }
 
-/** The current truck's gearbox (ET-050b per-gearbox modes) with a display label from its SDK brand and name. */
-export interface CurrentGearbox extends GearboxIdentity {game: UnitGame; label: string}
-const valueOf = (reading: Reading<string>) => reading.state === 'value' ? reading.value : undefined;
-/**
- * The gearbox is known only where the gearbox-aware labels may apply (B6): carried, current v1 data whose truck has v0's
- * model id, with both gear counts. The label is "<brand> <name>", else the name, else the model id, whichever fits.
- */
-function currentGearbox(applies: boolean, state: NormalizedLiveState | undefined, gearbox: GearboxState | undefined,
-  game: GearLabelGame | undefined): CurrentGearbox | undefined {
-  if (!applies || state?.truck.state !== 'value' || gearbox === undefined || game === undefined) return undefined;
-  const truck = state.truck.value, model = valueOf(truck.model.id);
-  const forwardGears = gearbox.forwardGears.available ? gearbox.forwardGears.value : undefined;
-  const reverseGears = gearbox.reverseGears.available ? gearbox.reverseGears.value : undefined;
-  if (!isGearboxModel(model) || !isForwardGearCount(forwardGears) || !isReverseGearCount(reverseGears)) return undefined;
-  const brand = valueOf(truck.brand.name), name = valueOf(truck.model.name);
-  const label = [brand !== undefined && name !== undefined ? `${brand} ${name}` : undefined, name, model].find(isGearboxLabel) ?? model;
-  return {game, model, forwardGears, reverseGears, label};
-}
-/** The mode for this update: the current gearbox's own mode when it has one, else the game's mode. */
-function resolveGearMode(gear: GearDisplayMode | GearDisplayChoice, gearbox: CurrentGearbox | undefined): GearDisplayMode {
-  if (typeof gear === 'string') return gear;
-  const own = gearbox !== undefined && gearbox.game === gear.game ? findGearboxGearDisplay(gear.gearboxes, gearbox) : undefined;
-  return own?.mode ?? gear.mode;
-}
-
 /**
  * `gear` (ET-050) selects only how the gear row is formatted; every other field and every reading is unchanged. In
  * manual mode the labels follow the current v1 truck's gearbox layout when it applies (ET-050b B6), else the formula.
- * A choice with per-gearbox modes (settings v12) uses the current gearbox's own mode while that gearbox is known and the
- * game's mode otherwise, so a stale or other truck's gearbox never selects a mode.
  */
-/** The normalized states, the carried v1 projection and the truck identity check that liveSources and liveGearbox share. */
-function combine(live: LiveTelemetry) {
+export function liveSources(live: LiveTelemetry, units: DisplayUnits, gear: GearDisplayMode = 'automatic'): LiveSources {
   const v0State = live.observation ? normalizeV0State(live.observation.state) : undefined;
   const v1 = live.v1, v1Observation = v1?.observation, v0Source = live.observation?.source;
   const carried = v1 && v1Observation && v1.selection === live.selection &&
     (!v0Source || (v1Observation.source.origin === v0Source.origin && v1Observation.source.game === v0Source.game)) ? {v1, observation: v1Observation} : undefined;
+  const v1Carried = carried !== undefined;
   const v1State = carried ? normalizeV1State(carried.observation.state, carried.observation.sourceStatus) : undefined;
   // The same currentness buildLiveView reports for the v1 view.
   const v1Current = carried !== undefined && isCurrent(carried.v1);
   // ET-045a: v0 carries only the truck's model id; v1's SDK brand and name describe the same truck only for the same id.
   const sameTruck = v0State?.truck.state === 'value' && v1State?.truck.state === 'value' && sameValue(v0State.truck.value.model.id, v1State.truck.value.model.id);
-  const gearbox = currentGearbox(v1Current && sameTruck, v1State, carried?.observation.state.gearbox, carried?.observation.source.game);
-  return {v0State, v0Source, carried, v1State, v1Current, sameTruck, gearbox};
-}
-
-export function liveSources(live: LiveTelemetry, units: DisplayUnits, gear: GearDisplayMode | GearDisplayChoice = 'automatic'): LiveSources {
-  const {v0State, v0Source, carried, v1State, v1Current, sameTruck, gearbox} = combine(live);
-  const v1Carried = carried !== undefined;
-  const display = gearDisplay(resolveGearMode(gear, gearbox), v1Current && sameTruck, carried?.observation.state.gearbox, carried?.observation.source.game,
+  const display = gearDisplay(gear, v1Current && sameTruck, carried?.observation.state.gearbox, carried?.observation.source.game,
     v0Source?.game ?? carried?.observation.source.game);
   const v0View = buildLiveView(live, v0State, units, display);
   const v1View = carried ? buildLiveView(carried.v1, v1State, units, display) : undefined;
@@ -168,15 +131,6 @@ export function liveSources(live: LiveTelemetry, units: DisplayUnits, gear: Gear
   return {
     v0View, ...(v0State ? {v0State} : {}), ...(v1View ? {v1View} : {}), v1Carried, v1Current, job,
     paused: v0Current ? v0View.connection.paused : v1Current && !!v1View?.connection.paused,
-    ...(gearbox ? {gearbox} : {}),
     field
   };
-}
-
-/**
- * The current truck's gearbox of a live update, under the same rules liveSources applies (Settings > Units). It builds no
- * dashboard view, so the Units card can call it on every update.
- */
-export function liveGearbox(live: LiveTelemetry): CurrentGearbox | undefined {
-  return combine(live).gearbox;
 }

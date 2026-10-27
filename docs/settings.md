@@ -8,44 +8,9 @@ ET-012e added saved overlay visibility in historical format v6, defaulting to en
 
 ET-045e update, October 24, 2026 (decision Z5, owner decision D1 option b; ET-049 took v7 first, so ET-045e uses v8): the current format is **v8**. It has exactly the fields and canonical layout of ET-049's v7 document below with `"version": 8`. What changed is the meaning of each placement's `scale`: it is the user's setting, shown as a percentage, and the overlay document's zoom factor is now setting × 0.7 (`overlayZoom` in `apps/desktop/src/overlay-placement.ts`), so the new 100% looks like the earlier 70%. Its range is [0.5, 3] (50–300%) instead of [0.5, 2]. Saved numbers are kept and reinterpreted, never rewritten: a v7 file migrates to v8 by an identity step (`migratedFrom: 7`), and the owner's saved strip at 0.5 now renders at the earlier 35% (choose 70% for the earlier 50% look). See [ET-045e validation](validation/et-045e.md). The v7 and v6 headings below keep their ET-049 and ET-012e wording; read "current" there as the field layout that v8 retains.
 
-## Current format v12: per-gearbox gear display modes (ET-050b)
+## Current format v11: the mandatory-break overlay section (ET-052)
 
-ET-050b update, October 27, 2026 (owner decision, [concept.md](../concept.md#per-gearbox-gear-display-modes--october-27-2026)): the current format is **v12**. It is the v11 document with `"version": 12` and one more top-level block, `gearboxGearDisplay`, written after `gearDisplay`:
-
-```json
-  "gearDisplay": {
-    "ets2": "crawler",
-    "ats": "automatic"
-  },
-  "gearboxGearDisplay": {
-    "ets2": [
-      {
-        "model": "vehicle.scania.r_2016",
-        "forwardGears": 6,
-        "reverseGears": 1,
-        "label": "Scania R",
-        "mode": "automatic"
-      }
-    ],
-    "ats": []
-  },
-```
-
-Each game has a list of gearboxes with their own gear display mode; every other gearbox uses the game's `gearDisplay` mode. A gearbox is the SDK truck model id with its forward and reverse gear counts, because the SDK names no transmission: two gearboxes of one model with the same counts are one gearbox. `label` is the truck's SDK brand and name at the time of the choice ("Scania R"), shown on Settings > Units only; it never selects anything.
-
-- **Entries.** Exactly the five keys `model` (1–128 UTF-8 bytes, the protocol v1 identifier bound, no control characters or lone surrogates), `forwardGears` (an integer 1–100), `reverseGears` (an integer 0–100), `label` (1–128 UTF-16 code units, no control characters or lone surrogates) and `mode` (`automatic`, `manual` or `crawler`). At most 16 entries per game, which keeps a full file of the largest entries (about 28 KB) below the 64 KiB cap.
-- **Load rules.** A list that is not an array becomes empty. An invalid entry, a repeated gearbox (the first one is kept) and every entry after the sixteenth valid one is dropped alone. Each case reports `gearboxGearDisplay.ets2` or `gearboxGearDisplay.ats` once, and the list is kept in canonical order: model id by UTF-16 code units, then forward and reverse gear counts. A missing or non-object block gives both games empty lists.
-- **Migration v11 to v12.** The pure in-memory step adds `gearboxGearDisplay: {"ets2": [], "ats": []}`, replacing a stray key an older build ignored; every v11 choice is kept (`migratedFrom: 11`). A v1 to v11 file is migrated in memory and stays unchanged on disk until the first save of any setting writes the complete v12 document.
-- **Newer and older builds.** A version of 13 or later is newer-version. A build from before this change reads v12 as newer-version (read-only defaults) and refuses to save, so it can never drop the lists by rewriting the file.
-- **Bridge.** One trusted setter, `setGearboxGearDisplay(game, {model, forwardGears, reverseGears}, label, mode)`, on the IPC channel `settings:set-gearbox-gear-display`. The preload sends exactly six validated primitives and main validates them again. `mode` `null` removes the gearbox's own mode. A new gearbox beyond the sixteen of a game is refused when its write starts, leaving the settings unchanged; replacing or removing a known one is always possible. The Units card disables a new current gearbox and says to return one first while its game already has sixteen. The diagnostic bundle carries the lists; their model ids and labels are game data, not schema tokens.
-- **Where the mode applies.** The dashboard and the overlay resolve the mode per update: the current gearbox's own mode while that gearbox is known, the game's mode otherwise. The gearbox is known only where the gearbox-aware labels may apply (ET-050b B6): the carried v1 projection is current, its truck has v0's model id and both gear counts are available. A stale v1 projection or another truck therefore shows the game's mode, never a remembered gearbox's.
-- **Tests.** `settings-schema.test.ts` (the v11-to-v12 step, v12 bytes with canonical entries, each entry fallback, the 16-entry bound, the size of a full file, version 13 as newer-version), `settings-store.test.ts` (a v11 file byte-identical at startup, saves of a choice, a replacement and a removal as exact v12, the seventeenth gearbox refused without writing, invalid and read-only requests), `live-sources.test.ts`, `overlay-presentation.test.ts`, `gear-display-card-rendering.test.ts`, `gear-display-choice.test.ts`, `preload-recovery.test.ts`, `main-boundaries.test.ts`, and the `lifecycle` and `ui` runtime smokes. See [ET-050b validation](validation/et-050b.md#per-gearbox-gear-display-modes--october-27-2026).
-
-The v11 section below keeps its wording; read "current" there as the field layout that v12 retains, and its version 12 as newer-version as version 13.
-
-## Format v11: the mandatory-break overlay section (ET-052)
-
-ET-052 update, October 26, 2026 (decisions MB8 and MB11 in [concept.md](../concept.md#et-052-mandatory-break-and-protocol-v1-minor-2--october-26-2026), owner decision D2; ET-050b took v10 first): the format became **v11** (the ET-050b per-gearbox modes then made v12 current). It is the v10 document with `"version": 11` and one more overlay section key, `overlay.sections.mandatory-break`, written **last** among the sections, after `game-time`:
+ET-052 update, October 26, 2026 (decisions MB8 and MB11 in [concept.md](../concept.md#et-052-mandatory-break-and-protocol-v1-minor-2--october-26-2026), owner decision D2; ET-050b took v10 first): the current format is **v11**. It is the v10 document with `"version": 11` and one more overlay section key, `overlay.sections.mandatory-break`, written **last** among the sections, after `game-time`:
 
 ```json
       "expected-income": true,
@@ -287,7 +252,7 @@ Loading happens once at startup, in parallel with the service start. Loading nev
 | `loaded-with-fallbacks` | A v3 (or migrated v1 or v2) file with some invalid fields | Valid fields from the file, defaults for the others | Yes; the save rewrites the whole file |
 | `invalid-file` | Not a usable settings file | Defaults | Yes; the first save quarantines the file |
 | `unsupported-older` | An older format without a migration path | Defaults | Yes; the first save quarantines the file |
-| `newer-version` | Written by a newer version (version 9 or later since ET-045e; version 10 or later since ET-050; version 11 or later since the ET-050b crawler mode; version 12 or later since ET-052; version 13 or later since the ET-050b per-gearbox modes) | Defaults | No (`SETTINGS_READ_ONLY`); the file is never modified |
+| `newer-version` | Written by a newer version (version 9 or later since ET-045e; version 10 or later since ET-050; version 11 or later since the ET-050b crawler mode; version 12 or later since ET-052) | Defaults | No (`SETTINGS_READ_ONLY`); the file is never modified |
 | `unreadable` | The file or directory is a symbolic link or junction, not a plain file or directory, or could not be read, or the read had not settled within the read limit (about 30 s) | Defaults | No (`SETTINGS_WRITE_FAILED`) |
 | `unavailable` | No valid settings location | Defaults | No (`SETTINGS_WRITE_FAILED`) |
 

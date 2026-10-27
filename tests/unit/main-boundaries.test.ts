@@ -91,8 +91,6 @@ type SettingsWrite = (game: string, profile: string) => Promise<unknown>;
 let settingsWrite: ReturnType<typeof vi.fn<SettingsWrite>>;
 // ET-050: the gear display setter of the fake store.
 let gearWrite: ReturnType<typeof vi.fn<SettingsWrite>>;
-// ET-050b settings v12: the per-gearbox setter of the fake store.
-let gearboxWrite: ReturnType<typeof vi.fn<(game: string, gearbox: unknown, label: string, mode: string | null) => Promise<unknown>>>;
 let autostartWrite: ReturnType<typeof vi.fn<(enabled: boolean) => Promise<typeof settingsView>>>;
 let settingsIdle: Promise<void> | undefined;
 let settingsDirectories: unknown[];
@@ -168,7 +166,7 @@ function installFixture() {
   vi.doMock('../../apps/desktop/src/broker-artifact', () => ({brokerConfiguration: resolveBroker, createBrokerResolver: () => resolveBroker}));
   vi.stubEnv('ETS2TELEMETRY_SOURCE_KIND', 'synthetic');
   settingsView = {autostart: false, units: {ets2: 'metric', ats: 'us-customary'}, overlay: DEFAULT_OVERLAY, state: 'defaults', writable: true, saveError: null};
-  settingsWrite = vi.fn<SettingsWrite>(); gearWrite = vi.fn<SettingsWrite>(); gearboxWrite = vi.fn(); overlayWrite = vi.fn<OverlayWrite>(); autostartWrite = vi.fn((enabled: boolean) => {settingsView = {...settingsView, autostart: enabled}; return Promise.resolve(settingsView);}); settingsIdle = undefined; settingsDirectories = []; settingsLoaded = true; settingsLoading = Promise.resolve();
+  settingsWrite = vi.fn<SettingsWrite>(); gearWrite = vi.fn<SettingsWrite>(); overlayWrite = vi.fn<OverlayWrite>(); autostartWrite = vi.fn((enabled: boolean) => {settingsView = {...settingsView, autostart: enabled}; return Promise.resolve(settingsView);}); settingsIdle = undefined; settingsDirectories = []; settingsLoaded = true; settingsLoading = Promise.resolve();
   settingsChanged = undefined; autostartKnown = true;
   vi.doMock('../../apps/desktop/src/settings-store', () => ({
     settingsDirectory: (localAppData: unknown) => typeof localAppData === 'string' ? `${localAppData}\\ETS2Telemetry\\settings` : undefined, SettingsError: FakeSettingsError, SettingsBusyError: FakeSettingsBusyError,
@@ -180,7 +178,6 @@ function installFixture() {
       load() {return settingsLoading.then(() => {settingsLoaded = true; return settingsView;});}
       setUnitProfile(game: string, profile: string) {return settingsWrite(game, profile);}
       setGearDisplay(game: string, mode: string) {return gearWrite(game, mode);}
-      setGearboxGearDisplay(game: string, gearbox: unknown, label: string, mode: string | null) {return gearboxWrite(game, gearbox, label, mode);}
       setOverlayBackgroundOpacity(opacity: number) {return overlayWrite('backgroundOpacity', opacity);}
       setOverlayEnabled(enabled: boolean) {return overlayWrite('enabled', enabled);}
       setAutostart(autostart: boolean) {return autostartWrite(autostart);}
@@ -1337,30 +1334,6 @@ it.each(['SETTINGS_WRITE_FAILED', 'SETTINGS_READ_ONLY'] as const)('keeps the gea
   expect(settingsView.gearDisplay).toBeUndefined();
   settingsIdle = undefined; void handlers.get('app:exit')!(trusted()); await settle();
   await expect(saveGear(trusted(), 'ats', 'manual')).rejects.toThrow('retired'); expect(gearWrite).toHaveBeenCalledOnce();
-});
-// ET-050b settings v12: the per-gearbox setter is trusted-frame only and validates exactly six primitives before the store.
-const saveGearbox = (event: unknown, ...request: unknown[]) => Promise.resolve().then(() => Reflect.apply(handlers.get('settings:set-gearbox-gear-display')!, undefined, [event, ...request]));
-const GA867R = ['ets2', 'vehicle.scania.r_2016', 6, 1, 'Scania R'] as const;
-it('rejects per-gearbox requests from untrusted senders, frames and the overlay, and invalid values', async () => {
-  trayAvailable = true; await ready();
-  for (const event of [{sender: {}, senderFrame: contents.mainFrame}, {sender: contents, senderFrame: {}}, overlayTrusted()])
-    await expect(saveGearbox(event, ...GA867R, 'automatic')).rejects.toThrow('Untrusted');
-  for (const request of [[...GA867R], [...GA867R, 'automatic', 'extra'], ['truck', ...GA867R.slice(1), 'automatic'], ['ets2', '', 6, 1, 'Scania R', 'automatic'],
-    ['ets2', 'x'.repeat(129), 6, 1, 'Scania R', 'automatic'], ['ets2', 'vehicle.scania.r_2016', 0, 1, 'Scania R', 'automatic'], ['ets2', 'vehicle.scania.r_2016', 6, -1, 'Scania R', 'automatic'],
-    ['ets2', 'vehicle.scania.r_2016', '6', 1, 'Scania R', 'automatic'], ['ets2', 'vehicle.scania.r_2016', 6, 1, '', 'automatic'], ['ets2', 'vehicle.scania.r_2016', 6, 1, 'L'.repeat(129), 'automatic'],
-    [...GA867R, 'game'], [...GA867R, undefined], ['ets2', {model: 'vehicle.scania.r_2016', forwardGears: 6, reverseGears: 1}, 'Scania R', 'automatic']])
-    await expect(saveGearbox(trusted(), ...request)).rejects.toThrow('Invalid gearbox gear display request');
-  expect(gearboxWrite).not.toHaveBeenCalled(); expect(contents.send).not.toHaveBeenCalledWith('app:state', expect.anything());
-});
-it('passes a valid per-gearbox choice or removal to the store and resolves with its saved view', async () => {
-  trayAvailable = true; await ready();
-  const view = {...settingsView, gearboxGearDisplay: {ets2: [{model: 'vehicle.scania.r_2016', forwardGears: 6, reverseGears: 1, label: 'Scania R', mode: 'automatic'}], ats: []}};
-  gearboxWrite.mockImplementation(() => {settingsView = view; return Promise.resolve(view);});
-  await expect(saveGearbox(trusted(), ...GA867R, 'automatic')).resolves.toEqual(view);
-  await saveGearbox(trusted(), ...GA867R, null);
-  expect(gearboxWrite.mock.calls).toEqual([['ets2', {model: 'vehicle.scania.r_2016', forwardGears: 6, reverseGears: 1}, 'Scania R', 'automatic'],
-    ['ets2', {model: 'vehicle.scania.r_2016', forwardGears: 6, reverseGears: 1}, 'Scania R', null]]);
-  expect(handlers.get('app:get-state')!(trusted())).toMatchObject({settings: {gearboxGearDisplay: view.gearboxGearDisplay}});
 });
 it('waits for an in-flight settings save before exiting and refuses new saves once exiting', async () => {
   trayAvailable = true; await ready();
