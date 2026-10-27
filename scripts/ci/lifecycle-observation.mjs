@@ -17,10 +17,12 @@ const SETTINGS_SEED = '{"format":"ets2telemetry.settings","version":1,"units":{"
 // the current format is v8 (ET-049 took v7 first), whose scale 1 renders at zoom 0.7. ET-050: the current format is v9,
 // which adds each game's gear display mode after the units; run A saves ETS2's manual mode after its unit profile.
 // ET-050b: the format became v10, which changes only the version and adds the crawler gear mode.
-// ET-052: the current format is v11, which adds the overlay section `mandatory-break` (on by default) as the last section key.
+// ET-052: the format became v11, which adds the overlay section `mandatory-break` (on by default) as the last section key.
+// ET-050b per-gearbox modes: the current format is v12, which adds empty per-game gearbox lists after the gear display modes.
 const placementLines = (layout, x, y, last = false) => [`      "${layout}": {`, `        "x": ${x},`, `        "y": ${y},`, '        "scale": 1', last ? '      }' : '      },'];
-const SETTINGS_SAVED = ['{', '  "format": "ets2telemetry.settings",', '  "version": 11,', '  "language": "en",', '  "autostart": false,', '  "units": {', '    "ets2": "us-customary",', '    "ats": "us-customary"', '  },',
+const SETTINGS_SAVED = ['{', '  "format": "ets2telemetry.settings",', '  "version": 12,', '  "language": "en",', '  "autostart": false,', '  "units": {', '    "ets2": "us-customary",', '    "ats": "us-customary"', '  },',
   '  "gearDisplay": {', '    "ets2": "manual",', '    "ats": "automatic"', '  },',
+  '  "gearboxGearDisplay": {', '    "ets2": [],', '    "ats": []', '  },',
   '  "overlay": {', '    "enabled": false,', '    "backgroundOpacity": 80,', '    "layout": "strip",', '    "sections": {', '      "speed": true,', '      "gear": true,', '      "rpm": true,', '      "fuel": true,',
   '      "range": true,', '      "sdk-consumption": true,', '      "cargo": true,', '      "origin": true,', '      "destination": true,', '      "distance-driven": true,',
   '      "distance-remaining": true,', '      "deadline": true,', '      "expected-income": true,', '      "game-time": true,', '      "mandatory-break": true', '    },', '    "placements": {',

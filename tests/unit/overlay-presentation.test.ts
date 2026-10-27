@@ -1,6 +1,6 @@
 import {readFileSync} from 'node:fs';
 import {expect, it} from 'vitest';
-import type {GearDisplayModes, LiveTelemetry, OverlayPresentation, OverlaySectionView} from '../../packages/contracts/src';
+import type {GearboxGearDisplays, GearDisplayModes, LiveTelemetry, OverlayPresentation, OverlaySectionView} from '../../packages/contracts/src';
 import {validateMessage} from '../../packages/contracts/src/protocol-v0';
 import {NOT_SUPPORTED_GEARBOX} from '../../packages/contracts/src/protocol-v1';
 import {initialLive} from '../../apps/desktop/src/live-state';
@@ -492,6 +492,19 @@ it('formats the gear section with the current Mack layout labels in manual mode 
   expect(gearOf(gearboxPair(1, {...ATS, v1: {status: 'stale', fresh: false}}), manual)).toEqual({id: 'gear', state: 'value', text: '1L'});
   // A minor-0 source: every gearbox part is not-supported (B7).
   expect(gearOf(gearboxPair(1, {...ATS, gearbox: NOT_SUPPORTED_GEARBOX}), manual)).toEqual({id: 'gear', state: 'value', text: '1L'});
+});
+// ET-050b settings v12: the overlay uses the current gearbox's own mode, the same resolution as the dashboard (live-sources).
+it('formats the gear section in the current gearbox\'s own mode and in the game\'s mode for any other gearbox', () => {
+  const manual = {ets2: 'automatic', ats: 'manual'} as const, ATS = {game: 'ats'} as const;
+  const own = (mode: 'automatic' | 'crawler'): GearboxGearDisplays => ({ets2: [], ats: [{model: 'truck.volvo', forwardGears: 18, reverseGears: 4, label: 'Synthetic Brand Synthetic Truck', mode}]});
+  const gearOf = (current: LiveTelemetry, gearboxes?: GearboxGearDisplays) =>
+    overlayPresentation(current, undefined, undefined, undefined, false, 'en', manual, gearboxes).sections.find(section => section.id === 'gear');
+  expect(gearOf(gearboxPair(1, ATS), own('automatic'))).toEqual({id: 'gear', state: 'value', text: '1'});
+  expect(gearOf(gearboxPair(18, ATS), own('automatic'))).toEqual({id: 'gear', state: 'value', text: '18'});
+  expect(gearOf(gearboxPair(2, ATS), own('crawler'))).toEqual({id: 'gear', state: 'value', text: '1'});
+  // Without its own mode, or while the gearbox is not known (another truck model), the game's manual mode applies.
+  expect(gearOf(gearboxPair(1, ATS), {ets2: [], ats: []})).toEqual({id: 'gear', state: 'value', text: 'LL'});
+  expect(gearOf(gearboxPair(1, {...ATS, truckId: 'vehicle.synthetic_truck'}), own('automatic'))).toEqual({id: 'gear', state: 'value', text: '1L'});
 });
 
 // ET-052 (MB6-MB9, REG-009): the next mandatory break section. Expected text and urgency are written by hand from the rules:

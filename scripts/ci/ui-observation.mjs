@@ -230,6 +230,9 @@ async function observeStripNumbers({application, overlay, source, language, reco
  * instrument and the Live details row, because the smoke source is ETS2, which names a crawler C1/C2 (B5 as amended on
  * October 26, 2026); another model id again gives the formula (1 is 1L). The v1 truck id is restored.
  * ET-050b owner option B: the crawler mode then shows 1 as C, 2 as 1 and 14 as 13 in the same three places.
+ * ET-050b settings v12: while the v1 truck is v0's, the current gearbox (the Mack 18F/4R) gets its own automatic mode by
+ * keyboard under ETS2 on Settings > Units, so 1 is 1 and 18 is 18 although the game's mode is manual; "as for the game"
+ * removes it again, and 1 is C1. Any gearbox left with its own mode is removed afterwards.
  */
 async function observeGearDisplay({dashboard, overlay, source, sourceV1, language, record}) {
   record.gearDisplay ??= [];
@@ -250,6 +253,16 @@ async function observeGearDisplay({dashboard, overlay, source, sourceV1, languag
     await gearIs(text);
     await dashboard.waitForFunction(text => globalThis.document.querySelector('[data-testid="live-gear"]')?.textContent === text, text, {timeout: 5000});
   };
+  const ownGearbox = state => state.settings.gearboxGearDisplay.ets2.find(entry => entry.model === 'truck.volvo' && entry.forwardGears === 18 && entry.reverseGears === 4);
+  const chooseGearbox = async value => {
+    await settingsPanel(dashboard, 'units');
+    const id = `gear-display-ets2-gearbox-${value}`;
+    await dashboard.locator(`#${id}`).waitFor({state: 'visible', timeout: 5000});
+    await dashboard.locator(`#${id}`).focus(); await dashboard.keyboard.press('Space');
+    await until(() => dashboard.evaluate(() => globalThis.desktop.getAppState()), state => (ownGearbox(state)?.mode ?? 'game') === value && state.settings.saveError === null,
+      `UI_GEARBOX_GEAR_DISPLAY_${value.toUpperCase()}_SAVED`);
+    await dashboard.waitForFunction(id => globalThis.document.getElementById(id)?.getAttribute('aria-checked') === 'true', id, {timeout: 5000});
+  };
   await withRestore(async () => {
     await choose('manual');
     for (const [gear, text] of [[3, '2L'], [16, '8H'], [-1, 'R1'], [0, 'N']]) {
@@ -259,6 +272,12 @@ async function observeGearDisplay({dashboard, overlay, source, sourceV1, languag
     for (const [gear, text] of [[1, 'C1'], [2, 'C2'], [3, '1L'], [18, '8H'], [-1, 'R1']]) {
       source.setEngine(600, gear); await labelIs(text); record.gearDisplay.push({language, mode: 'manual', layout: 'mack', gear, text});
     }
+    await chooseGearbox('automatic');
+    for (const [gear, text] of [[1, '1'], [18, '18']]) {
+      source.setEngine(600, gear); await labelIs(text); record.gearDisplay.push({language, mode: 'manual', gearbox: 'automatic', gear, text});
+    }
+    await chooseGearbox('game');
+    source.setEngine(600, 1); await labelIs('C1'); record.gearDisplay.push({language, mode: 'manual', gearbox: 'game', gear: 1, text: 'C1'});
     sourceV1.setTruckId(undefined);
     source.setEngine(600, 1); await labelIs('1L'); record.gearDisplay.push({language, mode: 'manual', layout: 'other-truck', gear: 1, text: '1L'});
     // ET-050b owner option B: the crawler mode needs no layout; the ETS2 source names gear 1 C, as on the Scania G38CMR.
@@ -272,6 +291,8 @@ async function observeGearDisplay({dashboard, overlay, source, sourceV1, languag
     source.setEngine(600, -1); sourceV1.setTruckId(undefined);
     if ((await dashboard.evaluate(() => globalThis.desktop.getAppState())).settings.gearDisplay.ets2 !== 'automatic')
       await dashboard.evaluate(() => globalThis.desktop.setGearDisplay('ets2', 'automatic'));
+    for (const entry of (await dashboard.evaluate(() => globalThis.desktop.getAppState())).settings.gearboxGearDisplay.ets2)
+      await dashboard.evaluate(({model, forwardGears, reverseGears, label}) => globalThis.desktop.setGearboxGearDisplay('ets2', {model, forwardGears, reverseGears}, label, null), entry);
   });
   await overlay.waitForFunction(numberTexts, {gear: 'R1'}, {timeout: 5000});
   record.flags.gearDisplayManual = true;

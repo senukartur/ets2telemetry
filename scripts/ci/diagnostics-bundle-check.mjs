@@ -102,6 +102,8 @@ const BUNDLE_SCHEMA = object({
     autostart: boolean,
     units: map(ENUMS.pluginGame, oneOf(ENUMS.unitProfile)),
     gearDisplay: map(ENUMS.pluginGame, oneOf(ENUMS.gearDisplay)),
+    // ET-050b settings v12: the SDK truck model id and its brand and name are game data, not schema tokens.
+    gearboxGearDisplay: map(ENUMS.pluginGame, array(object({model: runtime, forwardGears: number, reverseGears: number, label: runtime, mode: oneOf(ENUMS.gearDisplay)}))),
     overlay: object({enabled: boolean, backgroundOpacity: number, layout: oneOf(ENUMS.overlayLayout), sections: map(ENUMS.overlaySection, boolean),
       placements: map(ENUMS.overlayLayout, object({x: number, y: number, scale: number}))}),
     state: oneOf(ENUMS.settingsState), writable: boolean, saveError: nullable(pattern(CODE))
@@ -156,9 +158,10 @@ export function schemaTokens(bundle) {
   assert.equal(typeof bundle.settings?.overlay?.enabled, 'boolean', 'Bundle misses boolean bundle.settings.overlay.enabled');
   const opacity = bundle.settings?.overlay?.backgroundOpacity;
   assert.ok(Number.isInteger(opacity) && opacity >= 40 && opacity <= 100, 'Bundle misses valid background opacity');
-  // ET-050: current settings always carry both games' gear display modes.
+  // ET-050: current settings always carry both games' gear display modes and (settings v12) per-gearbox lists.
   for (const game of ENUMS.pluginGame) {
     assert.ok(ENUMS.gearDisplay.includes(bundle.settings?.gearDisplay?.[game]), `Bundle misses valid bundle.settings.gearDisplay.${game}`);
+    assert.ok(Array.isArray(bundle.settings?.gearboxGearDisplay?.[game]), `Bundle misses bundle.settings.gearboxGearDisplay.${game}`);
   }
   return [...tokens];
 }

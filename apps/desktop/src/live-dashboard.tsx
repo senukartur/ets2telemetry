@@ -1,6 +1,6 @@
 import React, {useMemo} from 'react';
 import {Clock, Coffee, Flag, Gauge, Hourglass, MapPin, Package, TriangleAlert, Truck, WifiOff} from 'lucide-react';
-import type {AppLanguage, GearDisplayModes, LiveTelemetry, UnitProfiles} from '../../../packages/contracts/src';
+import type {AppLanguage, GearboxGearDisplays, GearDisplayModes, LiveTelemetry, UnitProfiles} from '../../../packages/contracts/src';
 import type {LiveFieldId} from '../../../packages/telemetry-core/src/live-view';
 import {Card, CardContent, CardHeader, CardTitle} from '@/components/ui/card';
 import {Badge} from '@/components/ui/badge';
@@ -20,9 +20,10 @@ function BreakBadge({badge, testId}: {badge: NonNullable<LiveRowText['badge']>; 
   return <Badge variant={badge.urgency === 'due' ? 'error' : 'warn'} role="img" aria-label={badge.name} data-testid={testId} data-urgency={badge.urgency}><Icon aria-hidden="true" />{badge.text}</Badge>;
 }
 
-export function LiveDashboard({live, units, gearDisplay, language = 'en'}: {live: LiveTelemetry | undefined; units: UnitProfiles | undefined; gearDisplay?: GearDisplayModes; language?: AppLanguage}) {
-  const text = useMemo(() => liveDashboardText(live, units, language, gearDisplay), [live, units, language, gearDisplay]);
-  const view = useMemo(() => desktopLiveView(live, units, gearDisplay), [live, units, gearDisplay]);
+export function LiveDashboard({live, units, gearDisplay, gearboxes, language = 'en'}: {live: LiveTelemetry | undefined; units: UnitProfiles | undefined; gearDisplay?: GearDisplayModes;
+  gearboxes?: GearboxGearDisplays; language?: AppLanguage}) {
+  const text = useMemo(() => liveDashboardText(live, units, language, gearDisplay, gearboxes), [live, units, language, gearDisplay, gearboxes]);
+  const view = useMemo(() => desktopLiveView(live, units, gearDisplay, gearboxes), [live, units, gearDisplay, gearboxes]);
   const strings = getStrings(language), profile = displayProfile(live, units);
   const value = (id: LiveFieldId) => {const f = view.sources.field(id); return f.state === 'value' || f.state === 'absent' ? liveFieldValue(f, language) : '—';};
   const speedText = dashboardSpeed(live, profile, language), fuelText = dashboardFuel(live, profile, language);

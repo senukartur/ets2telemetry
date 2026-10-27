@@ -1,7 +1,7 @@
 // Scaffold status only. The telemetry wire protocol belongs to ET-002a.
 export interface ScaffoldStatus { service: 'ready'; storage: 'verified'; synthetic: true }
 import type {CurrentState, SourceIdentity, AppliedState, CaptureTime} from './protocol-v0';
-import type {AppLanguage, AppState, DiagnosticsExportResult, GearDisplayMode, OverlayEditState, OverlayLayout, OverlaySectionId, OverlaySections, PluginFolderChoice, PluginGame, PluginSetupView, PluginShowFileResult, RecordingCode, SettingsView,
+import type {AppLanguage, AppState, DiagnosticsExportResult, GearboxIdentity, GearDisplayMode, OverlayEditState, OverlayLayout, OverlaySectionId, OverlaySections, PluginFolderChoice, PluginGame, PluginSetupView, PluginShowFileResult, RecordingCode, SettingsView,
   UnitGame, UnitProfile} from './app-state';
 import type {Available, LiveObservationV1, Uint64} from './protocol-v1';
 import type {JournalDatabase, JournalEventPage, JournalIntervalPage, JournalTripDetail, JournalTripPage, JournalTripsQuery} from './journal';
@@ -71,6 +71,12 @@ export interface DesktopBridge {
    * main applies it only after the durable write and rejects read-only files, failed writes and invalid values.
    */
   setGearDisplay(game: UnitGame, mode: GearDisplayMode): Promise<SettingsView>;
+  /**
+   * Persists one gearbox's own gear display mode (ET-050b, settings v12), or with `null` removes it so that the gearbox
+   * uses the game's mode again. `label` is the truck's SDK brand and name, kept for display. Main applies it only after the
+   * durable write and rejects read-only files, failed writes, invalid values and a new gearbox once a game already has sixteen.
+   */
+  setGearboxGearDisplay(game: UnitGame, gearbox: GearboxIdentity, label: string, mode: GearDisplayMode | null): Promise<SettingsView>;
   /** Persists the overlay layout; like a unit profile, main applies it only after the durable write. */
   setOverlayLayout(layout: OverlayLayout): Promise<SettingsView>;
   /** Persists visibility; disabling discards an active placement draft only after the durable save. */

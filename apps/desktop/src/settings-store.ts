@@ -1,12 +1,13 @@
 import {randomUUID} from 'node:crypto';
 import * as nodeFs from 'node:fs/promises';
 import path from 'node:path';
-import type {AppLanguage, GearDisplayMode, OverlayLayout, OverlayPlacement, OverlaySections, SettingsSaveError, SettingsState, SettingsView, UnitGame, UnitProfile} from '../../../packages/contracts/src';
+import type {AppLanguage, GearboxIdentity, GearDisplayMode, OverlayLayout, OverlayPlacement, OverlaySections, SettingsSaveError, SettingsState, SettingsView, UnitGame, UnitProfile} from '../../../packages/contracts/src';
 import {isOverlayOpacity} from './overlay-opacity';
 import {withPlacement} from './overlay-placement';
 import {enabledSectionCount} from './overlay-sections';
 import type {DiagnosticFacts} from './diagnostics';
 import {dataPaths} from './paths';
+import {isGearboxIdentity, isGearboxLabel, withGearboxGearDisplay} from './gearbox-gear-display';
 import {isGearDisplayMode, isUnitGame} from './unit-profiles';
 import {DEFAULT_SETTINGS, MAX_SETTINGS_BYTES, parseSettings, serializeSettings, type Settings} from './settings-schema';
 
@@ -121,7 +122,7 @@ export class SettingsStore {
   get knownAutostartIntent(): boolean | undefined {return this.autostartKnown ? this.settings.autostart : undefined;}
 
   view(): SettingsView {
-    return {language: this.settings.language, autostart: this.settings.autostart, units: this.settings.units, gearDisplay: this.settings.gearDisplay, overlay: this.settings.overlay, state: this.state, writable: !READ_ONLY_STATES.includes(this.state), saveError: this.saveError};
+    return {language: this.settings.language, autostart: this.settings.autostart, units: this.settings.units, gearDisplay: this.settings.gearDisplay, gearboxGearDisplay: this.settings.gearboxGearDisplay, overlay: this.settings.overlay, state: this.state, writable: !READ_ONLY_STATES.includes(this.state), saveError: this.saveError};
   }
 
   /**
@@ -186,6 +187,22 @@ export class SettingsStore {
   setGearDisplay(game: UnitGame, mode: GearDisplayMode): Promise<SettingsView> {
     if (!isUnitGame(game) || !isGearDisplayMode(mode)) return Promise.reject(new Error('Invalid gear display request'));
     return this.enqueue(settings => ({next: {...settings, gearDisplay: Object.freeze({...settings.gearDisplay, [game]: mode})}, facts: {game, gearDisplay: mode}}));
+  }
+
+  /**
+   * Serialized save of one gearbox's own gear display mode, or with `null` its removal (ET-050b, settings v12), through the
+   * shared bounded durable queue. A new gearbox beyond the sixteen of a game is refused when its write starts, leaving the
+   * settings unchanged. The facts name the game and the mode, or `removed`, never the truck.
+   */
+  setGearboxGearDisplay(game: UnitGame, gearbox: GearboxIdentity, label: string, mode: GearDisplayMode | null): Promise<SettingsView> {
+    if (!isUnitGame(game) || !isGearboxIdentity(gearbox) || !isGearboxLabel(label) || (mode !== null && !isGearDisplayMode(mode))) {
+      return Promise.reject(new Error('Invalid gearbox gear display request'));
+    }
+    return this.enqueue(settings => {
+      const list = withGearboxGearDisplay(settings.gearboxGearDisplay[game], gearbox, label, mode);
+      if (list === undefined) throw new Error('Too many gearboxes with their own gear display mode');
+      return {next: {...settings, gearboxGearDisplay: Object.freeze({...settings.gearboxGearDisplay, [game]: list})}, facts: {game, gearboxGearDisplay: mode ?? 'removed'}};
+    });
   }
 
   /** One durable opacity commit per completed slider gesture, sharing the bounded queue. */

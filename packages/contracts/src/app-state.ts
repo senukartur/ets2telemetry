@@ -73,6 +73,15 @@ export type UnitProfiles = Readonly<Record<UnitGame, UnitProfile>>;
  */
 export type GearDisplayMode = 'automatic' | 'manual' | 'crawler';
 export type GearDisplayModes = Readonly<Record<UnitGame, GearDisplayMode>>;
+/**
+ * One gearbox as the SDK describes it (ET-050b per-gearbox modes, settings v12): the truck's model id and its forward and
+ * reverse gear counts. The SDK names no transmission, so two gearboxes of one model with the same counts are one gearbox.
+ */
+export interface GearboxIdentity {model: string; forwardGears: number; reverseGears: number}
+/** A gearbox whose gear display mode the user chose; `label` is the truck's SDK brand and name, for display only. */
+export interface GearboxGearDisplay extends GearboxIdentity {label: string; mode: GearDisplayMode}
+/** Per game, the gearboxes with their own gear display mode; any other gearbox uses the game's mode. */
+export type GearboxGearDisplays = Readonly<Record<UnitGame, readonly GearboxGearDisplay[]>>;
 /** Application user interface languages (ET-029). */
 export type AppLanguage = 'en' | 'ru';
 /** Windows login item registration state (ET-031). */
@@ -142,6 +151,8 @@ export interface SettingsView {
   units: UnitProfiles;
   /** The per-game gear display mode (ET-050). */
   gearDisplay: GearDisplayModes;
+  /** Gearboxes with their own gear display mode, which overrides the game's mode for that gearbox (settings v12). */
+  gearboxGearDisplay: GearboxGearDisplays;
   /** The saved overlay layout, sections and placements, or their defaults (strip, every section, the default anchors). */
   overlay: OverlaySettings;
   state: SettingsState;

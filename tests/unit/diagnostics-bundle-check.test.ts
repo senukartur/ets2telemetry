@@ -10,7 +10,8 @@ import {checkDiagnosticsBundle, ENUMS, runtimeStrings, schemaTokens} from '../..
 // smoke reads (`mode`, `root`). The names and paths are invented.
 
 const HEALTH: AppHealth = {service: 'ready', storage: 'verified', recording: {state: 'disabled'}, lastError: null};
-const SETTINGS: SettingsView = {language: 'en', autostart: false, units: {ets2: 'metric', ats: 'us-customary'}, gearDisplay: {ets2: 'automatic', ats: 'automatic'}, overlay: DEFAULT_OVERLAY_SETTINGS, state: 'defaults', writable: true, saveError: null};
+const SETTINGS: SettingsView = {language: 'en', autostart: false, units: {ets2: 'metric', ats: 'us-customary'}, gearDisplay: {ets2: 'automatic', ats: 'automatic'},
+  gearboxGearDisplay: {ets2: [{model: 'vehicle.scania.r_2016', forwardGears: 6, reverseGears: 1, label: 'Scania R', mode: 'automatic'}], ats: []}, overlay: DEFAULT_OVERLAY_SETTINGS, state: 'defaults', writable: true, saveError: null};
 const PLUGINS: PluginSetupView = {mode: 'test-root', bundled: {version: '0.2.0', sha256Prefix: '0123456789ab'}, running: false, games: {
   ets2: {excluded: false, discovery: 'found', manualFolder: 'set', unlistedFolders: 0, targets: []},
   ats: {excluded: true, discovery: 'found', manualFolder: 'none', unlistedFolders: 0, targets: []}}};

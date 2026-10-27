@@ -7,6 +7,7 @@ import {RecoveryBudget} from './recovery-budget';
 import {isOverlayOpacity} from './overlay-opacity';
 import {isOverlayLayout, parseOverlaySections} from './overlay-sections';
 import {isOverlayEditOutcome, parseOverlayEditScale} from './overlay-placement';
+import {isGearboxIdentity, isGearboxLabel} from './gearbox-gear-display';
 import {isGearDisplayMode, isUnitGame, isUnitProfile} from './unit-profiles';
 import {isAppLanguage} from './settings-schema';
 import {copyTripsQuery, isPageArgument, JOURNAL_CHANNELS, JOURNAL_EXPORT_CHANNEL} from './journal-contract';
@@ -154,6 +155,14 @@ const bridge: DesktopBridge = {
   setGearDisplay: (...request: unknown[]) => request.length === 2 && isUnitGame(request[0]) && isGearDisplayMode(request[1])
     ? ipcRenderer.invoke('settings:set-gear-display', request[0], request[1])
     : Promise.reject(new Error('Invalid gear display request')),
+  // ET-050b settings v12: exactly a game, a gearbox identity, its label and a mode or null; only the validated primitives
+  // reach main, which validates them again.
+  setGearboxGearDisplay: (...request: unknown[]) => {
+    const [game, gearbox, label, mode] = request;
+    return request.length === 4 && isUnitGame(game) && isGearboxIdentity(gearbox) && isGearboxLabel(label) && (mode === null || isGearDisplayMode(mode))
+      ? ipcRenderer.invoke('settings:set-gearbox-gear-display', game, gearbox.model, gearbox.forwardGears, gearbox.reverseGears, label, mode)
+      : Promise.reject(new Error('Invalid gearbox gear display request'));
+  },
   setOverlayBackgroundOpacity: (...request: unknown[]) => request.length === 1 && isOverlayOpacity(request[0])
     ? ipcRenderer.invoke('settings:set-overlay-background-opacity', request[0])
     : Promise.reject(new Error('Invalid overlay opacity request')),

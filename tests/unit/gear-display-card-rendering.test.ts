@@ -5,12 +5,16 @@ import {GearDisplayCard} from '../../apps/desktop/src/gear-display-card';
 import {DEFAULT_OVERLAY_SETTINGS} from '../../apps/desktop/src/overlay-sections';
 import {getSettingsSaveErrorText, getUnitGameText} from '../../apps/desktop/src/strings';
 import {t} from '../../apps/desktop/src/i18n';
-import type {AppLanguage, GearDisplayModes, SettingsView} from '../../packages/contracts/src';
+import type {AppLanguage, GearDisplayModes, LiveTelemetry, SettingsView} from '../../packages/contracts/src';
+import {gearboxFixture, gearboxPair} from '../shared/live-v1-fixtures';
 
 // ET-050: the gear display card on Settings > Units. Substitute only the shadcn primitives; the card's labels, ids,
 // committed state, locks and error rules remain real. Expected texts are the hand-written EN/RU copy.
 vi.mock('@/components/ui/card', () => ({Card: 'div', CardContent: 'div', CardHeader: 'div', CardTitle: 'div'}));
 vi.mock('@/components/ui/label', () => ({Label: 'label'}));
+// The variant and size props style the shadcn button; they are left out of the markup.
+vi.mock('@/components/ui/button', () => ({Button: (props: Record<string, unknown>) =>
+  React.createElement('button', Object.fromEntries(Object.entries(props).filter(([key]) => key !== 'variant' && key !== 'size')))}));
 vi.mock('@/components/ui/radio-group', () => ({
   // The change handler is not a DOM attribute; it is left out of the markup.
   RadioGroup: ({value, disabled, children, ...props}: {value: string; disabled?: boolean; children?: React.ReactNode; onValueChange?: unknown}) =>
@@ -20,9 +24,9 @@ vi.mock('@/components/ui/radio-group', () => ({
 }));
 
 const settings = (language: AppLanguage, gearDisplay: GearDisplayModes = {ets2: 'automatic', ats: 'automatic'}, patch: Partial<SettingsView> = {}): SettingsView => ({
-  language, autostart: false, units: {ets2: 'metric', ats: 'us-customary'}, gearDisplay, overlay: DEFAULT_OVERLAY_SETTINGS, state: 'loaded', writable: true, saveError: null, ...patch});
-const render = (view: SettingsView | undefined, showSaveError?: boolean) =>
-  renderToStaticMarkup(React.createElement(GearDisplayCard, {settings: view, onSaved: vi.fn(), onRequest: vi.fn(), showSaveError}));
+  language, autostart: false, units: {ets2: 'metric', ats: 'us-customary'}, gearDisplay, gearboxGearDisplay: {ets2: [], ats: []}, overlay: DEFAULT_OVERLAY_SETTINGS, state: 'loaded', writable: true, saveError: null, ...patch});
+const render = (view: SettingsView | undefined, showSaveError?: boolean, live?: LiveTelemetry) =>
+  renderToStaticMarkup(React.createElement(GearDisplayCard, {settings: view, live, onSaved: vi.fn(), onRequest: vi.fn(), showSaveError}));
 const escaped = (text: string) => renderToStaticMarkup(React.createElement(React.Fragment, null, text));
 const group = (html: string, game: string) => html.match(new RegExp('<div[^>]*data-testid="gear-display-' + game + '"[^>]*>'))?.[0] ?? '';
 
@@ -89,4 +93,56 @@ it.each(['en', 'ru'] as const)('shows main\'s save error only when this card mad
     expect(render(view)).not.toContain('data-testid="gear-display-error"');
   }
   expect(t('s.gear.saveFailed', undefined, language)).toBe(COPY[language].failed);
+});
+
+// ET-050b per-gearbox modes (settings v12). The current gearbox is the fixture pair's ETS2 12-speed (12 forward, 4 reverse) on
+// 'truck.volvo', "Synthetic Brand Synthetic Truck"; the expected texts are the hand-written EN/RU copy.
+const GEARBOX_COPY = {
+  en: {current: 'Current truck: Synthetic Brand Synthetic Truck, 12 forward and 4 reverse gears', game: 'As for the game: Manual range-splitter (1L, 1H, 2L…)',
+    none: "The current truck's gearbox is not known yet: it appears here while this game sends live data with this version's plugin.",
+    saved: 'Gearboxes with their own mode in Euro Truck Simulator 2', reset: "Use the game's mode",
+    resetNamed: "Use the game's mode for Synthetic Brand Synthetic Truck, 12 forward and 4 reverse gears"},
+  ru: {current: 'Текущий грузовик: Synthetic Brand Synthetic Truck, передач вперёд: 12, назад: 4', game: 'Как для игры: Механическая с делителем (1L, 1H, 2L…)',
+    none: 'Коробка текущего грузовика пока не известна: она появится здесь, пока игра передаёт данные через плагин этой версии.',
+    saved: 'Коробки со своим режимом в Euro Truck Simulator 2', reset: 'Режим игры',
+    resetNamed: 'Вернуть режим игры для Synthetic Brand Synthetic Truck, передач вперёд: 12, назад: 4'}
+} as const;
+const live = () => gearboxPair(3, {gearbox: gearboxFixture('checkpoint')});
+const SAVED = {model: 'truck.volvo', forwardGears: 12, reverseGears: 4, label: 'Synthetic Brand Synthetic Truck', mode: 'crawler'} as const;
+const gearboxGroup = (html: string, game: string) => html.match(new RegExp('<div[^>]*data-testid="gear-display-' + game + '-gearbox-mode"[^>]*>'))?.[0] ?? '';
+it.each(['en', 'ru'] as const)('explains per game that the current gearbox is not known yet in %s', language => {
+  const html = render(settings(language));
+  for (const game of ['ets2', 'ats']) {
+    expect(html).toContain(`data-testid="gear-display-${game}-gearbox-none">${escaped(GEARBOX_COPY[language].none)}</p>`);
+    expect(html).not.toContain(`data-testid="gear-display-${game}-gearbox"`);
+    expect(html).not.toContain(`data-testid="gear-display-${game}-gearboxes"`);
+  }
+});
+it.each(['en', 'ru'] as const)('offers the current gearbox "as for the game" or one of the modes under its game only in %s', language => {
+  const html = render(settings(language, {ets2: 'manual', ats: 'automatic'}), undefined, live());
+  expect(html).toContain(`<p id="gear-display-ets2-gearbox-label">${escaped(GEARBOX_COPY[language].current)}</p>`);
+  expect(gearboxGroup(html, 'ets2')).toContain('aria-labelledby="gear-display-ets2-gearbox-label"');
+  expect(gearboxGroup(html, 'ets2')).toContain('data-value="game"');
+  expect(html).toContain(`<label for="gear-display-ets2-gearbox-game">${escaped(GEARBOX_COPY[language].game)}</label>`);
+  for (const mode of ['automatic', 'manual'] as const) expect(html).toContain(`<label for="gear-display-ets2-gearbox-${mode}">${escaped(COPY[language][mode])}</label>`);
+  expect(html).toContain(`<label for="gear-display-ets2-gearbox-crawler">${escaped(COPY[language].crawler.ets2)}</label>`);
+  expect(html.match(/<button[^>]*id="gear-display-ets2-gearbox-/g)).toHaveLength(4);
+  expect(html).toContain('data-testid="gear-display-ats-gearbox-none"');
+  const ids = [...html.matchAll(/\sid="([^"]+)"/g)].map(match => match[1]);
+  expect(new Set(ids).size).toBe(ids.length);
+});
+it.each(['en', 'ru'] as const)('shows the own mode of a saved gearbox and lists it with a named button back to the game mode in %s', language => {
+  const view = settings(language, {ets2: 'manual', ats: 'automatic'}, {gearboxGearDisplay: {ets2: [SAVED], ats: []}});
+  const html = render(view, undefined, live());
+  expect(gearboxGroup(html, 'ets2')).toContain('data-value="crawler"');
+  expect(html).toContain(`aria-label="${escaped(GEARBOX_COPY[language].saved)}" data-testid="gear-display-ets2-gearboxes"`);
+  expect(html).toContain(`aria-label="${escaped(GEARBOX_COPY[language].resetNamed)}">${escaped(GEARBOX_COPY[language].reset)}</button>`);
+  expect(html).not.toContain('data-testid="gear-display-ats-gearboxes"');
+  // The list stays without a current truck.
+  expect(render(view)).toContain('data-testid="gear-display-ets2-gearboxes"');
+});
+it('locks the gearbox group and the list buttons while the settings are read-only', () => {
+  const html = render(settings('en', undefined, {state: 'newer-version', writable: false, gearboxGearDisplay: {ets2: [SAVED], ats: []}}), undefined, live());
+  expect(gearboxGroup(html, 'ets2')).toContain('aria-disabled="true"');
+  expect(html).toMatch(/<button disabled=""[^>]*aria-label="Use the game&#x27;s mode for/);
 });

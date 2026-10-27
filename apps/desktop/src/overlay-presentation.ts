@@ -1,4 +1,4 @@
-import type {AppLanguage, GearDisplayModes, LiveTelemetry, OverlayPresentation, OverlaySectionId, OverlaySectionView, OverlaySettings, UnitProfiles} from '../../../packages/contracts/src';
+import type {AppLanguage, GearboxGearDisplays, GearDisplayModes, LiveTelemetry, OverlayPresentation, OverlaySectionId, OverlaySectionView, OverlaySettings, UnitProfiles} from '../../../packages/contracts/src';
 import {resolveDisplayUnits} from '../../../packages/telemetry-core/src/display-profile';
 import {formatMoneyAmount} from '../../../packages/telemetry-core/src/format';
 import {carriesField, type LiveFieldId} from '../../../packages/telemetry-core/src/live-view';
@@ -68,18 +68,20 @@ const DASH_WHEN_CARRIED: ReadonlySet<OverlaySectionId> = new Set<OverlaySectionI
  *
  * `editing` (ET-012b) only marks the overlay edit mode for the renderer; it changes no section or value.
  *
- * `gearDisplay` (ET-050) selects the displayed game's gear text (1, 2, 3 or 1L, 1H, 2L); the renderer still receives
- * only that formatted text, and no other section, size or authority changes.
+ * `gearDisplay` (ET-050) selects the displayed game's gear text (1, 2, 3 or 1L, 1H, 2L), and `gearboxes` (ET-050b,
+ * settings v12) the current gearbox's own mode; the renderer still receives only that formatted text, and no other
+ * section, size or authority changes.
  */
 export function overlayPresentation(live: LiveTelemetry, units: UnitProfiles = DEFAULT_UNIT_PROFILES, overlay: OverlaySettings = DEFAULT_OVERLAY_SETTINGS,
-  previous?: OverlayPresentation, editing = false, language: AppLanguage = 'en', gearDisplay: GearDisplayModes = DEFAULT_GEAR_DISPLAY): OverlayPresentation {
+  previous?: OverlayPresentation, editing = false, language: AppLanguage = 'en', gearDisplay: GearDisplayModes = DEFAULT_GEAR_DISPLAY,
+  gearboxes?: GearboxGearDisplays): OverlayPresentation {
   const observation = live.observation;
   const explicitFixture = isExplicitFixture(live);
   const game = displayGame(live), profile = profileFor(units, game);
   const current = live.fresh && (live.status === 'connected' || live.status === 'paused') &&
     (explicitFixture || (observation?.source.origin === 'game' && observation.source.game === live.selection));
   const state = observation?.state;
-  const sources = liveSources(live, resolveDisplayUnits(game, {profile}), gearDisplayFor(gearDisplay, game));
+  const sources = liveSources(live, resolveDisplayUnits(game, {profile}), gearDisplayFor(gearDisplay, game, gearboxes));
   const valueOf = (id: LiveFieldId) => {const field = sources.field(id); return field.state === 'value' ? field.text : undefined;};
   // A part protocol v0 does not carry needs a v1 observation of this selection and origin (decision F7).
   const carried = (part: LiveFieldId) => carriesField('v0', part) || sources.v1Carried;

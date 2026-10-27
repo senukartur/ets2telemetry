@@ -1,4 +1,5 @@
-import type {GearDisplayMode, GearDisplayModes, LiveTelemetry, UnitGame, UnitProfile, UnitProfiles} from '../../../packages/contracts/src';
+import type {GearboxGearDisplays, GearDisplayMode, GearDisplayModes, LiveTelemetry, UnitGame, UnitProfile, UnitProfiles} from '../../../packages/contracts/src';
+import type {GearDisplayChoice} from './gearbox-gear-display';
 import {
   DEFAULT_DISPLAY_PROFILE, DISPLAY_PROFILE_IDS, DISPLAY_PROFILES, GEAR_DISPLAY_MODES, isDisplayProfileId, isGearDisplayMode as isCoreGearDisplayMode,
   type DisplayProfileId, type GameId, type GearDisplayMode as CoreGearDisplayMode
@@ -53,9 +54,13 @@ export function isExplicitFixture(live: LiveTelemetry): boolean {
 export function profileFor(units: UnitProfiles, game: UnitGame | undefined): UnitProfile {
   return game ? units[game] : 'metric';
 }
-/** The game's gear display mode (ET-050); automatic without a game or before the settings arrive. */
-export function gearDisplayFor(modes: GearDisplayModes | undefined, game: UnitGame | undefined): GearDisplayMode {
-  return game && modes ? modes[game] : 'automatic';
+/**
+ * The game's gear display mode (ET-050); automatic without a game or before the settings arrive. With the game's
+ * per-gearbox modes (ET-050b, settings v12) it is a choice that liveSources resolves against the current gearbox.
+ */
+export function gearDisplayFor(modes: GearDisplayModes | undefined, game: UnitGame | undefined, gearboxes?: GearboxGearDisplays): GearDisplayMode | GearDisplayChoice {
+  const mode = game && modes ? modes[game] : 'automatic';
+  return game && gearboxes && gearboxes[game].length > 0 ? {game, mode, gearboxes: gearboxes[game]} : mode;
 }
 /**
  * The profile for displaying a live update: the displayed game's persisted profile, or its ET-000 default before the

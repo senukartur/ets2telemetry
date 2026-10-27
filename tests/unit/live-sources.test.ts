@@ -2,11 +2,12 @@
 // the overlay. Expected texts are written by hand from tests/fixtures/protocol-v0/checkpoint.json and
 // tests/fixtures/protocol-v1/snapshot-live.json in the ETS2 metric profile.
 import {describe, expect, it} from 'vitest';
-import type {GearDisplayMode, LiveTelemetry} from '../../packages/contracts/src';
+import type {GearboxGearDisplay, GearDisplayMode, LiveTelemetry} from '../../packages/contracts/src';
+import type {GearDisplayChoice} from '../../apps/desktop/src/gearbox-gear-display';
 import type {GearboxState} from '../../packages/contracts/src/protocol-v1';
 import {resolveDisplayUnits} from '../../packages/telemetry-core/src/display-profile';
 import {initialLive} from '../../apps/desktop/src/live-state';
-import {liveSources} from '../../apps/desktop/src/live-sources';
+import {liveGearbox, liveSources} from '../../apps/desktop/src/live-sources';
 import {gearboxFixture, gearboxPair, smokePair, smokeV0, v1Projection} from '../shared/live-v1-fixtures';
 
 const METRIC = resolveDisplayUnits('ets2', {profile: 'metric'});
@@ -300,5 +301,75 @@ describe('gearbox-aware gear labels (ET-050b)', () => {
   });
   it('keeps the not-current state while v0 is stale', () => {
     expect(gearText({...pair(1), status: 'stale', fresh: false})).toMatchObject(NOT_CURRENT);
+  });
+});
+
+// ET-050b per-gearbox modes (owner decision of October 27, 2026, settings v12). The owner's ETS2 capture of the same day
+// (sanitized, kept local): the Scania GA867R 6-speed automatic, driven with the H-shifter setting, reports 6 forward and 1
+// reverse gear in the Scania pattern of the G38CMR and GRSO925R, so its layout reads as a crawler box. Its dashboard reads
+// 1…6; the expected texts are written by hand from it. The pair's v0 and v1 truck is 'truck.volvo', "Synthetic Brand
+// Synthetic Truck".
+describe('per-gearbox gear display modes (ET-050b, settings v12)', () => {
+  const pair = gearboxPair;
+  const GA867R: GearboxState = {forwardGears: {available: true, value: 6}, reverseGears: {available: true, value: 1}, hshifter: {available: true, value: {
+    selectorCount: 2, slots: ([[-1, 1, 0], [-1, 1, 1], [-1, 1, 2], [-1, 1, 3], [1, 2, 0], [5, 2, 1], [2, 2, 2], [6, 2, 3], [3, 3, 0], [4, 3, 2]] as const)
+      .map(([gear, handlePosition, selectors]) => ({gear, handlePosition, selectors}))
+  }}};
+  const LABEL = 'Synthetic Brand Synthetic Truck';
+  const own = (mode: GearDisplayMode, forwardGears = 6, reverseGears = 1, model = 'truck.volvo') => ({model, forwardGears, reverseGears, label: LABEL, mode});
+  const choice = (mode: GearDisplayMode, gearboxes: GearboxGearDisplay[], game: 'ets2' | 'ats' = 'ets2'): GearDisplayChoice => ({game, mode, gearboxes});
+  const gearText = (live: LiveTelemetry, gear: GearDisplayMode | GearDisplayChoice) => liveSources(live, METRIC, gear).field('gear').text;
+  it('reads the captured automatic gearbox as a crawler box without its own mode', () => {
+    expect([1, 2, 3, 4, 5, 6].map(gear => gearText(pair(gear, {gearbox: GA867R}), 'manual'))).toEqual(['C1', 'C2', '1L', '1H', '2L', '2H']);
+    expect([1, 2, 6].map(gear => gearText(pair(gear, {gearbox: GA867R}), 'crawler'))).toEqual(['C', '1', '5']);
+  });
+  it.each(['manual', 'crawler'] as const)('shows the GA867R as 1…6 with its own automatic mode while the game mode is %s', mode => {
+    const gear = choice(mode, [own('automatic')]);
+    expect([1, 2, 3, 4, 5, 6, 0, -1].map(value => gearText(pair(value, {gearbox: GA867R}), gear))).toEqual(['1', '2', '3', '4', '5', '6', 'N', 'R1']);
+    // The v1 view and the overlay read the same resolved mode.
+    expect(liveSources(pair(1, {gearbox: GA867R}), METRIC, gear).v1View!.sections.flatMap(section => section.fields).find(field => field.id === 'gear')?.text).toBe('1');
+  });
+  it('keeps the game mode for every other gearbox of the same truck model', () => {
+    const gear = choice('manual', [own('automatic')]);
+    // The Mack layout has 18 forward and 4 reverse gears: not the 6+1 gearbox, so its gear 3 keeps the manual 1L.
+    expect(gearText(pair(3), gear)).toBe('1L');
+    expect(gearText(pair(1, {gearbox: {...GA867R, reverseGears: {available: true, value: 2}}}), gear)).toBe('C1');
+  });
+  it('gives a crawler gearbox its own crawler mode while the game mode is manual', () => {
+    expect(gearText(pair(1, {gearbox: GA867R}), choice('manual', [own('crawler')]))).toBe('C');
+    expect(gearText(pair(2, {gearbox: GA867R}), choice('automatic', [own('manual')]))).toBe('C2');
+  });
+  it('uses the game mode while the gearbox is not known', () => {
+    const gear = choice('manual', [own('automatic')]);
+    // Another truck model in v0, a stale v1 projection or a missing gear count: the manual formula, as without a choice.
+    const formula = (live: LiveTelemetry) => expect(gearText(live, gear)).toBe('1L');
+    formula(pair(1, {gearbox: GA867R, truckId: 'vehicle.synthetic_truck'}));
+    formula(pair(1, {gearbox: GA867R, v1: {status: 'stale', fresh: false}}));
+    formula(pair(1, {gearbox: {...GA867R, reverseGears: {available: false, reason: 'not-observed'}}}));
+    // A gearbox saved for the other game never applies.
+    expect(gearText(pair(1, {gearbox: GA867R}), choice('manual', [own('automatic')], 'ats'))).toBe('C1');
+  });
+  it('reports the current gearbox with its label only while the gearbox-aware rules apply', () => {
+    expect(liveSources(pair(1, {gearbox: GA867R}), METRIC).gearbox).toEqual({game: 'ets2', model: 'truck.volvo', forwardGears: 6, reverseGears: 1, label: LABEL});
+    expect(liveGearbox(pair(1, {gearbox: GA867R, game: 'ats'}))).toMatchObject({game: 'ats', forwardGears: 6});
+    expect(liveGearbox(pair(1, {gearbox: GA867R, truckId: 'vehicle.synthetic_truck'}))).toBeUndefined();
+    expect(liveGearbox(pair(1, {gearbox: GA867R, v1: {status: 'stale', fresh: false}}))).toBeUndefined();
+    expect(liveGearbox(pair(1, {gearbox: {...GA867R, forwardGears: {available: true, value: 0}}}))).toBeUndefined();
+    expect(liveGearbox({...initialLive('synthetic'), v1: v1Projection()})).toBeUndefined();
+  });
+  it('labels a gearbox by its brand and name, else its name, else its model id', () => {
+    const named = (brand: string | undefined, name: string | undefined) => {
+      const live = pair(1, {gearbox: GA867R}), truck = live.v1!.observation!.state.configuration.truck;
+      if (truck.available) {
+        truck.value.brand = brand === undefined ? {available: false, reason: 'not-observed'} : {available: true, value: brand};
+        truck.value.name = name === undefined ? {available: false, reason: 'not-observed'} : {available: true, value: name};
+      }
+      return liveGearbox(live)?.label;
+    };
+    expect(named('Scania', 'R')).toBe('Scania R');
+    expect(named(undefined, 'R')).toBe('R');
+    expect(named('B'.repeat(100), 'N'.repeat(40))).toBe('N'.repeat(40));
+    expect(named(undefined, undefined)).toBe('truck.volvo');
+    expect(named('Scania', 'R\n2016')).toBe('truck.volvo');
   });
 });
