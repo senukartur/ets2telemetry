@@ -1025,6 +1025,19 @@ export async function runUiSmoke({application, dashboard, overlay, source, sourc
   const recording = (await dashboard.evaluate(() => globalThis.desktop.getAppState())).health.recording.state;
   const tone = recording === 'recording' ? 'ok' : ['opening', 'waiting', 'paused'].includes(recording) ? 'warn' : ['interrupted', 'retrying', 'stopped'].includes(recording) ? 'error' : 'neutral';
   assert.equal(await dashboard.getByTestId('shell.recording.indicator').getAttribute('data-tone'), tone);
+  const motion = ['recording', 'waiting'].includes(recording) ? 'calm' : recording === 'opening' ? 'busy' : ['interrupted', 'retrying'].includes(recording) ? 'urgent' : recording === 'paused' ? 'breathe' : 'still';
+  assert.equal(await dashboard.getByTestId('shell.recording.indicator').getAttribute('data-motion'), motion);
+  // The sidebar indicator's tooltip opens on hover and on keyboard focus and leads with the status card's headline.
+  const indicator = dashboard.getByTestId('shell.sidebar.recording'), hint = dashboard.getByTestId('shell.recording.hint');
+  const hintHeadline = () => dashboard.evaluate(() => [globalThis.document.querySelector('[data-testid="shell.recording.hint"] p')?.textContent,
+    globalThis.document.querySelector('[data-testid="health-recording"]')?.textContent]);
+  await indicator.hover(); await hint.waitFor({state: 'visible'});
+  const [hovered, headline] = await hintHeadline(); assert.ok(headline && headline !== '—'); assert.equal(hovered, headline);
+  await dashboard.keyboard.press('Escape'); await hint.waitFor({state: 'hidden'}); await dashboard.mouse.move(0, 0);
+  await indicator.focus(); await hint.waitFor({state: 'visible'});
+  assert.equal((await hintHeadline())[0], headline);
+  await dashboard.screenshot({path: path.join(config.output, `ui-${config.uiCase}-recording-hint.png`), timeout: 5000});
+  await dashboard.keyboard.press('Escape'); await hint.waitFor({state: 'hidden'});
   record.flags.recordingIndicator = true;
   record.flags.offlineFonts = await dashboard.evaluate(() => [...globalThis.document.fonts].some(font => font.family.includes('Onest')));
   assert.equal(record.flags.offlineFonts, true);

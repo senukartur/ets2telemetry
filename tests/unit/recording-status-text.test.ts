@@ -11,30 +11,43 @@ const HISTORY_NOTICE = 'Prototype live display. Game history recording is new; c
 const TEST_NOTICE = 'Prototype live display. Only a test database is recorded, never game history.';
 
 it('shows the fixed texts of the disabled and unknown states without detail, losses or alert', () => {
-  expect(recordingStatusText({state: 'disabled'})).toEqual({headline: 'Off: this version does not record game history', short: 'off in this version',
-    detail: [], losses: [], alert: null, notice: 'Prototype live display. No trip recording or durable history.'});
-  expect(recordingStatusText({state: 'unknown'})).toEqual({headline: 'Not known: the telemetry service is not running or has not reported a valid status', short: 'not known',
-    detail: [], losses: [], alert: null, notice: 'Prototype live display. The recording status is not known right now.'});
+  expect(recordingStatusText({state: 'disabled'})).toEqual({headline: 'Off: this version does not record game history', short: 'off in this version', label: 'Recording off',
+    testBadge: null, detail: [], losses: [], alert: null, notice: 'Prototype live display. No trip recording or durable history.'});
+  expect(recordingStatusText({state: 'unknown'})).toEqual({headline: 'Not known: the telemetry service is not running or has not reported a valid status', short: 'not known', label: 'Status unknown',
+    testBadge: null, detail: [], losses: [], alert: null, notice: 'Prototype live display. The recording status is not known right now.'});
 });
 
-it('gives every reported state its headline, short form and alert', () => {
-  const rows: [RecordingState, RecordingCode | null, string, string, string | null][] = [
-    ['opening', null, 'Opening the database', 'opening the database', null],
-    ['waiting', null, 'Waiting for the recorded source to connect', 'waiting for the source', null],
-    ['recording', null, 'Recording', 'on', null],
-    ['paused', null, 'Game paused; recording continues when it resumes', 'game paused', null],
-    ['interrupted', null, 'Connection lost; recording resumes on reconnection, and the missing time is recorded as a gap', 'connection lost', null],
+it('gives every reported state its headline, short form, sidebar label and alert', () => {
+  const rows: [RecordingState, RecordingCode | null, string, string, string, string | null][] = [
+    ['opening', null, 'Opening the database', 'opening the database', 'Starting', null],
+    ['waiting', null, 'Waiting for the recorded source to connect', 'waiting for the source', 'Waiting for the game', null],
+    ['recording', null, 'Recording', 'on', 'Recording', null],
+    ['paused', null, 'Game paused; recording continues when it resumes', 'game paused', 'Paused', null],
+    ['interrupted', null, 'Connection lost; recording resumes on reconnection, and the missing time is recorded as a gap', 'connection lost', 'Connection lost', null],
     ['retrying', 'DISK_FULL', 'Retrying: the disk is full. Nothing is acknowledged until storage commits; events while reconnecting are recorded as a gap',
-      'retrying, the disk is full', 'Yukon Union Telemetry retries automatically. Live telemetry and the overlay keep working.'],
+      'retrying, the disk is full', 'Error, retrying', 'Yukon Union Telemetry retries automatically. Live telemetry and the overlay keep working.'],
     ['stopped', 'PERMISSION_DENIED', 'Stopped: no permission to write the database. Restart Yukon Union Telemetry after fixing it', 'stopped, no permission to write the database',
-      'Recording stopped until the telemetry service starts again. Live telemetry and the overlay keep working.'],
+      'Recording stopped', 'Recording stopped until the telemetry service starts again. Live telemetry and the overlay keep working.'],
     ['live-only', 'ACK_AHEAD_OF_STORAGE', 'Not recording this game session: the database is behind the plugin (restored database); recording resumes with the next game session',
-      'not this game session', 'Live telemetry and the overlay keep working; this game session is not recorded.'],
-    ['not-recorded-source', null, 'Not recording the selected source', 'not this source', null]
+      'not this game session', 'Session not recorded', 'Live telemetry and the overlay keep working; this game session is not recorded.'],
+    ['not-recorded-source', null, 'Not recording the selected source', 'not this source', 'Source not recorded', null]
   ];
   expect(rows.map(row => row[0]).sort()).toEqual(['interrupted', 'live-only', 'not-recorded-source', 'opening', 'paused', 'recording', 'retrying', 'stopped', 'waiting']);
-  for (const [state, code, headline, short, alert] of rows)
-    expect(recordingStatusText(status(state, {code})), state).toEqual({headline, short, detail: [], losses: [], alert, notice: HISTORY_NOTICE});
+  for (const [state, code, headline, short, label, alert] of rows)
+    expect(recordingStatusText(status(state, {code})), state).toEqual({headline, short, label, testBadge: null, detail: [], losses: [], alert, notice: HISTORY_NOTICE});
+});
+
+it('gives every state a Russian sidebar label and a test badge', () => {
+  const labels: Record<RecordingHealth['state'], string> = {
+    'disabled': 'Запись выключена', 'unknown': 'Статус неизвестен', 'opening': 'Подготовка', 'waiting': 'Ждём игру', 'recording': 'Идёт запись',
+    'paused': 'Пауза', 'interrupted': 'Нет связи', 'retrying': 'Ошибка, повтор', 'stopped': 'Запись остановлена',
+    'live-only': 'Сессия не пишется', 'not-recorded-source': 'Источник не пишется'
+  };
+  for (const [state, label] of Object.entries(labels) as [RecordingHealth['state'], string][]) {
+    const text = recordingStatusText(state === 'disabled' || state === 'unknown' ? {state} : status(state), 'ru');
+    expect(text.label, state).toBe(label);
+  }
+  expect(recordingStatusText(status('paused', {target: 'replay'}), 'ru').testBadge).toBe('Тест');
 });
 
 it('names the cause of every recording code in the retrying and stopped headlines', () => {
@@ -64,11 +77,11 @@ it('names the cause of every recording code in the retrying and stopped headline
   expect(recordingStatusText(status('stopped')).headline).toBe('Stopped: an internal error occurred. Restart Yukon Union Telemetry after fixing it');
 });
 
-it('notes a synthetic or replay target in the detail, the short form and the prototype notice', () => {
-  expect(recordingStatusText(status('recording', {target: 'synthetic'}))).toEqual({headline: 'Recording', short: 'on · synthetic test database',
+it('notes a synthetic or replay target in the detail, the short form, the sidebar badge and the prototype notice', () => {
+  expect(recordingStatusText(status('recording', {target: 'synthetic'}))).toEqual({headline: 'Recording', short: 'on · synthetic test database', label: 'Recording', testBadge: 'Test',
     detail: ['Synthetic test database (never game history)'], losses: [], alert: null, notice: TEST_NOTICE});
   expect(recordingStatusText(status('waiting', {target: 'replay'}))).toEqual({headline: 'Waiting for the recorded source to connect',
-    short: 'waiting for the source · replay test database', detail: ['Replay test database (never game history)'], losses: [], alert: null, notice: TEST_NOTICE});
+    short: 'waiting for the source · replay test database', label: 'Waiting for the game', testBadge: 'Test', detail: ['Replay test database (never game history)'], losses: [], alert: null, notice: TEST_NOTICE});
   expect(recordingStatusText(status('retrying', {target: 'synthetic', code: 'BACKLOG_FULL'})).short).toBe('retrying, too much work is waiting for storage · synthetic test database');
 });
 

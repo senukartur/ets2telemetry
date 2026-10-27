@@ -4,7 +4,8 @@
 import type {AppLanguage, RecordingCode, RecordingHealth, RecordingLosses} from '../../../packages/contracts/src';
 import {
   getPrototypeNoticeText, getRecordingAlertText, getRecordingCodeText, getRecordingLossText,
-  getRecordingStateShortText, getRecordingStateText, getRecordingTargetShortText, getRecordingTargetText,
+  getRecordingStateLabelText, getRecordingStateShortText, getRecordingStateText, getRecordingTargetBadgeText,
+  getRecordingTargetShortText, getRecordingTargetText,
   getRecordingTripText, getStrings
 } from './strings';
 
@@ -13,6 +14,10 @@ export interface RecordingStatusText {
   headline: string;
   /** The tray's short form, after `Recording: `. */
   short: string;
+  /** The sidebar indicator's one- or two-word label; its tooltip shows the headline, detail, alert and losses. */
+  label: string;
+  /** The sidebar indicator's badge for a test database target; null for history and without a target. */
+  testBadge: string | null;
   /** Lines under the headline: the test database note and the current trip. */
   detail: string[];
   /** Committed losses since ETS2Telemetry started: a title line, one line per non-zero counter and the TD-004 note. Empty without losses. */
@@ -56,6 +61,8 @@ export function recordingStatusText(status: RecordingHealth, language: AppLangua
     return {
       headline: getRecordingStateText(status.state, language),
       short: getRecordingStateShortText(status.state, language),
+      label: getRecordingStateLabelText(status.state, language),
+      testBadge: null,
       detail: [],
       losses: [],
       alert: null,
@@ -73,6 +80,8 @@ export function recordingStatusText(status: RecordingHealth, language: AppLangua
   return {
     headline,
     short: targetShort ? `${shortState} · ${targetShort}` : shortState,
+    label: getRecordingStateLabelText(status.state, language),
+    testBadge: getRecordingTargetBadgeText(status.target, language),
     detail: [...(target ? [target] : []), ...tripLines(status.trip, language)],
     losses: lossLines(status.losses, language),
     alert,

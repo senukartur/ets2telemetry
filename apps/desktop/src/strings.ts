@@ -276,6 +276,37 @@ export function getRecordingStateShortText(state: RecordingHealth['state'], lang
   return language === 'ru' ? RECORDING_STATE_SHORT_TEXT_RU[state] : RECORDING_STATE_SHORT_TEXT[state];
 }
 
+/** The sidebar indicator's label: one or two words; its tooltip carries the full headline. */
+export const RECORDING_STATE_LABEL_TEXT: Readonly<Record<RecordingHealth['state'], string>> = Object.freeze({
+  'disabled': 'Recording off',
+  'unknown': 'Status unknown',
+  'opening': 'Starting',
+  'waiting': 'Waiting for the game',
+  'recording': 'Recording',
+  'paused': 'Paused',
+  'interrupted': 'Connection lost',
+  'retrying': 'Error, retrying',
+  'stopped': 'Recording stopped',
+  'live-only': 'Session not recorded',
+  'not-recorded-source': 'Source not recorded'
+});
+export const RECORDING_STATE_LABEL_TEXT_RU: Readonly<Record<RecordingHealth['state'], string>> = Object.freeze({
+  'disabled': 'Запись выключена',
+  'unknown': 'Статус неизвестен',
+  'opening': 'Подготовка',
+  'waiting': 'Ждём игру',
+  'recording': 'Идёт запись',
+  'paused': 'Пауза',
+  'interrupted': 'Нет связи',
+  'retrying': 'Ошибка, повтор',
+  'stopped': 'Запись остановлена',
+  'live-only': 'Сессия не пишется',
+  'not-recorded-source': 'Источник не пишется'
+});
+export function getRecordingStateLabelText(state: RecordingHealth['state'], language: AppLanguage = 'en'): string {
+  return language === 'ru' ? RECORDING_STATE_LABEL_TEXT_RU[state] : RECORDING_STATE_LABEL_TEXT[state];
+}
+
 /** What a recording code means, as a cause inside a sentence. Never a path or error text. */
 export const RECORDING_CODE_TEXT: Readonly<Record<RecordingCode, string>> = Object.freeze({
   DATABASE_LOCKED: 'the database is locked by another program',
@@ -356,6 +387,17 @@ export const RECORDING_TARGET_TEXT_RU: Readonly<Record<RecordingTarget, string |
 });
 export function getRecordingTargetText(target: RecordingTarget, language: AppLanguage = 'en'): string | null {
   return language === 'ru' ? RECORDING_TARGET_TEXT_RU[target] : RECORDING_TARGET_TEXT[target];
+}
+
+/** The sidebar indicator's badge for a test database target, after its label. */
+export const RECORDING_TARGET_BADGE_TEXT: Readonly<Record<RecordingTarget, string | null>> = Object.freeze({
+  history: null, synthetic: 'Test', replay: 'Test'
+});
+export const RECORDING_TARGET_BADGE_TEXT_RU: Readonly<Record<RecordingTarget, string | null>> = Object.freeze({
+  history: null, synthetic: 'Тест', replay: 'Тест'
+});
+export function getRecordingTargetBadgeText(target: RecordingTarget, language: AppLanguage = 'en'): string | null {
+  return language === 'ru' ? RECORDING_TARGET_BADGE_TEXT_RU[target] : RECORDING_TARGET_BADGE_TEXT[target];
 }
 
 /** The tray's form of a test database target, after the short state. */

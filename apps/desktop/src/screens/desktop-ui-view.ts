@@ -40,6 +40,19 @@ export function recordingTone(state: RecordingHealth['state'] | undefined): 'ok'
   return 'neutral';
 }
 
+/**
+ * The dot's animation: a ring spreads while the recorder is active (calm while recording or waiting, busier while
+ * opening, urgent while the connection or storage fails), a paused game breathes, and a state that changes only on the
+ * user's action or is not recording stays still, so a stopped or disabled recorder never looks busy.
+ */
+export function recordingMotion(state: RecordingHealth['state'] | undefined): 'calm' | 'busy' | 'urgent' | 'breathe' | 'still' {
+  if (state === 'recording' || state === 'waiting') return 'calm';
+  if (state === 'opening') return 'busy';
+  if (state === 'interrupted' || state === 'retrying') return 'urgent';
+  if (state === 'paused') return 'breathe';
+  return 'still';
+}
+
 export function connectionTone(status: LiveTelemetry['status'] | undefined): 'ok' | 'warn' | 'error' | 'neutral' {
   switch (status) {
     case 'connected': return 'ok';
