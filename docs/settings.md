@@ -287,7 +287,7 @@ Loading happens once at startup, in parallel with the service start. Loading nev
 | `loaded-with-fallbacks` | A v3 (or migrated v1 or v2) file with some invalid fields | Valid fields from the file, defaults for the others | Yes; the save rewrites the whole file |
 | `invalid-file` | Not a usable settings file | Defaults | Yes; the first save quarantines the file |
 | `unsupported-older` | An older format without a migration path | Defaults | Yes; the first save quarantines the file |
-| `newer-version` | Written by a newer version (version 9 or later since ET-045e; version 10 or later since ET-050; version 11 or later since the ET-050b crawler mode; version 12 or later since ET-052) | Defaults | No (`SETTINGS_READ_ONLY`); the file is never modified |
+| `newer-version` | Written by a newer version (version 9 or later since ET-045e; version 10 or later since ET-050; version 11 or later since the ET-050b crawler mode; version 12 or later since ET-052; version 13 or later since the ET-050b per-gearbox modes) | Defaults | No (`SETTINGS_READ_ONLY`); the file is never modified |
 | `unreadable` | The file or directory is a symbolic link or junction, not a plain file or directory, or could not be read, or the read had not settled within the read limit (about 30 s) | Defaults | No (`SETTINGS_WRITE_FAILED`) |
 | `unavailable` | No valid settings location | Defaults | No (`SETTINGS_WRITE_FAILED`) |
 
