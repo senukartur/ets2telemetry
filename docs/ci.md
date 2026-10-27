@@ -782,6 +782,11 @@ ET-050b update (October 26, 2026). These smoke changes add no scenario, Job limi
 - **UI overlay shard.** Since the ETS2 crawler amendment, `observeGearDisplay` expects the Mack layout from the ETS2 smoke source as `C1`, `C2`, `1L`, `8H` and `R1`, no longer `LL`/`LH`. It then chooses crawler mode by keyboard. Gears 1, 2, 14, −1 and 0 must read `C`, `1`, `13`, `R1` and `N` on the overlay, the Live instrument and the Live details row, all recorded under `gearDisplayManual`.
 - **Diagnostic bundle.** `diagnostics-bundle-check.mjs` accepts `crawler` as a third mode.
 
+ET-050b per-gearbox modes (October 27, 2026). These smoke changes add no scenario, Job limit, deadline or retry ([settings](settings.md#current-format-v12-per-gearbox-gear-display-modes-et-050b), [ET-050b validation](validation/et-050b.md#per-gearbox-gear-display-modes--october-27-2026)):
+- **Lifecycle.** The expected `settings.json` bytes are v12, with empty gearbox lists after the gear display block.
+- **UI overlay shard.** In `observeGearDisplay`, while the v1 truck is v0's (the Mack 18F/4R layout), Space on `#gear-display-ets2-gearbox-automatic` gives the current gearbox its own automatic mode under ETS2's manual mode: gears 1 and 18 must read `1` and `18` on the overlay, the Live instrument and the Live details row. Space on `#gear-display-ets2-gearbox-game` returns it to the game's mode, and gear 1 reads `C1` again; the steps are recorded under `gearDisplayManual`, and any gearbox left with its own mode is removed when the step ends.
+- **Diagnostic bundle.** `diagnostics-bundle-check.mjs` accepts the per-game gearbox lists, with the model id and label as runtime content.
+
 ## ET-052 PR-5: the overlay break section in the smokes (October 26, 2026)
 
 ET-052 adds the fifteenth overlay section, so the observation scripts changed (the checks are the same ones, with re-derived numbers; see [ET-052 validation](validation/et-052.md#pr-5-the-overlay-section-and-settings-v11-october-26-2026)).

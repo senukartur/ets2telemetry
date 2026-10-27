@@ -182,7 +182,7 @@ it('marks v1 data stale when the subscription closes or a replacement port await
 it('preserves the frozen narrow bridge and rejects privileged source values before IPC', async () => {
   expect(Object.isFrozen(bridge)).toBe(true); expect(Object.keys(bridge).sort()).toEqual(['beginOverlayEdit', 'choosePluginFolder', 'exitApplication', 'exportDiagnostics', 'exportJournalTrip', 'finishOverlayEdit', 'getAppState', 'getHardModeStatus', 'getJournalTrip', 'getStatus',
     'listJournalEvents', 'listJournalIntervals', 'listJournalSamples', 'listJournalTrips', 'openPluginFolder', 'refreshHardMode',
-    'resetOverlayEditPlacement', 'retryPluginSetup', 'selectSource', 'setAutostart', 'setGearDisplay', 'setLanguage', 'setOverlayBackgroundOpacity', 'setOverlayEditScale', 'setOverlayEnabled', 'setOverlayLayout', 'setOverlaySections', 'setPluginGameExcluded', 'setUnitProfile',
+    'resetOverlayEditPlacement', 'retryPluginSetup', 'selectSource', 'setAutostart', 'setGearDisplay', 'setGearboxGearDisplay', 'setLanguage', 'setOverlayBackgroundOpacity', 'setOverlayEditScale', 'setOverlayEnabled', 'setOverlayLayout', 'setOverlaySections', 'setPluginGameExcluded', 'setUnitProfile',
     'showPluginFile', 'subscribeAppState', 'subscribeLive', 'uninstallApplication']);
   await expect(bridge.selectSource('C:\\arbitrary.exe' as never)).rejects.toThrow('Invalid source selection');
   expect(ipc.invoke).not.toHaveBeenCalled();
@@ -223,7 +223,7 @@ it('appends the application state and exit methods after the original three brid
   // ET-016 PR-5 the trip export, ET-017 PR-4 the five plugin setup methods, ET-017 PR-6 the diagnostics export and ET-018
   // PR-4 the in-app uninstall. ET-050 adds the gear display setter right after the unit profile setter.
   expect(Object.keys(bridge)).toEqual(['getStatus', 'selectSource', 'subscribeLive', 'getAppState', 'subscribeAppState', 'exitApplication', 'setLanguage', 'setAutostart', 'setUnitProfile',
-    'setGearDisplay', 'setOverlayBackgroundOpacity', 'setOverlayEnabled', 'setOverlayLayout', 'setOverlaySections', 'beginOverlayEdit', 'setOverlayEditScale', 'resetOverlayEditPlacement', 'finishOverlayEdit',
+    'setGearDisplay', 'setGearboxGearDisplay', 'setOverlayBackgroundOpacity', 'setOverlayEnabled', 'setOverlayLayout', 'setOverlaySections', 'beginOverlayEdit', 'setOverlayEditScale', 'resetOverlayEditPlacement', 'finishOverlayEdit',
     'listJournalTrips', 'getJournalTrip', 'listJournalEvents', 'listJournalIntervals', 'listJournalSamples', 'exportJournalTrip',
     'retryPluginSetup', 'choosePluginFolder', 'setPluginGameExcluded', 'showPluginFile', 'openPluginFolder', 'exportDiagnostics', 'uninstallApplication', 'getHardModeStatus', 'refreshHardMode']);
 });
@@ -287,6 +287,26 @@ it('validates gear display requests before IPC and forwards exactly a game and a
   await expect(bridge.setGearDisplay('ets2', 'manual')).resolves.toEqual(view);
   await bridge.setGearDisplay('ats', 'automatic');
   expect(ipc.invoke.mock.calls).toEqual([['settings:set-gear-display', 'ets2', 'manual'], ['settings:set-gear-display', 'ats', 'automatic']]);
+});
+// ET-050b settings v12: the per-gearbox setter forwards exactly a game, the gearbox's three values, a label and a mode or null.
+it('validates per-gearbox gear display requests before IPC and forwards only the validated primitives', async () => {
+  const gearbox = {model: 'vehicle.scania.r_2016', forwardGears: 6, reverseGears: 1};
+  for (const [game, box, label, mode] of [['truck', gearbox, 'Scania R', 'automatic'], ['ets2', {...gearbox, path: 'C:\\x'}, 'Scania R', 'automatic'],
+    ['ets2', {...gearbox, model: ''}, 'Scania R', 'automatic'], ['ets2', {...gearbox, model: 'x'.repeat(129)}, 'Scania R', 'automatic'], ['ets2', {...gearbox, forwardGears: 0}, 'Scania R', 'automatic'],
+    ['ets2', {...gearbox, reverseGears: '1'}, 'Scania R', 'automatic'], ['ets2', [gearbox], 'Scania R', 'automatic'], ['ets2', gearbox, '', 'automatic'], ['ets2', gearbox, 'L'.repeat(129), 'automatic'],
+    ['ets2', gearbox, 'Scania\nR', 'automatic'], ['ets2', gearbox, 'Scania R', 'game'], ['ets2', gearbox, 'Scania R', undefined], ['ets2', gearbox, 7, 'manual']]) {
+    await expect(bridge.setGearboxGearDisplay(game as never, box as never, label as never, mode as never)).rejects.toThrow('Invalid gearbox gear display request');
+  }
+  for (const args of [[], ['ets2', gearbox, 'Scania R'], ['ets2', gearbox, 'Scania R', 'manual', {path: 'C:\\arbitrary'}]]) {
+    await expect(Reflect.apply(bridge.setGearboxGearDisplay, bridge, args)).rejects.toThrow('Invalid gearbox gear display request');
+  }
+  expect(ipc.invoke).not.toHaveBeenCalled();
+  const view = {gearboxGearDisplay: {ets2: [{...gearbox, label: 'Scania R', mode: 'automatic'}], ats: []}, state: 'loaded', writable: true, saveError: null};
+  ipc.invoke.mockResolvedValueOnce(view);
+  await expect(bridge.setGearboxGearDisplay('ets2', gearbox, 'Scania R', 'automatic')).resolves.toEqual(view);
+  await bridge.setGearboxGearDisplay('ats', {model: 'vehicle.mack.anthem', forwardGears: 18, reverseGears: 4}, 'Mack Anthem', null);
+  expect(ipc.invoke.mock.calls).toEqual([['settings:set-gearbox-gear-display', 'ets2', 'vehicle.scania.r_2016', 6, 1, 'Scania R', 'automatic'],
+    ['settings:set-gearbox-gear-display', 'ats', 'vehicle.mack.anthem', 18, 4, 'Mack Anthem', null]]);
 });
 // ET-012a: two appended overlay settings methods; each validates before IPC and forwards only the validated value.
 const ALL_ON = {'speed': true, 'gear': true, 'rpm': true, 'fuel': true, 'range': true, 'sdk-consumption': true, 'cargo': true, 'origin': true,

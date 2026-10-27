@@ -106,7 +106,7 @@ export default function App() {
         <Badge variant={hardModeTone(hardMode.status)} data-testid="shell.status.hardMode"><Flame aria-hidden="true" />{hmView.headline}</Badge>
       </header><main ref={content} className="yu-content" data-testid="shell.content">
         <div hidden={route !== 'live'} className="yu-stack" data-testid="live.screen">
-          <LiveDashboard live={live} units={settings?.units} gearDisplay={settings?.gearDisplay} language={language} />
+          <LiveDashboard live={live} units={settings?.units} gearDisplay={settings?.gearDisplay} gearboxes={settings?.gearboxGearDisplay} language={language} />
           <p data-testid="prototype-notice" className="yu-muted">{recording.notice}</p>
         </div>
         <div hidden={route !== 'hardMode'} className="yu-stack" data-testid="hardMode.screen"><HardModeCard language={language} controller={hardMode} /></div>
@@ -131,7 +131,7 @@ export default function App() {
     {settings?.saveError && lastCard === 'units' ? <p role="status" data-testid="settings-error">{getSettingsSaveErrorText(settings.saveError, language)}</p>
       : units === 'failed' ? <p role="status" data-testid="settings-error">{strings.unitsSaveFailed}</p> : null}
   </CardContent></Card>
-  <GearDisplayCard settings={settings} onSaved={saved} onRequest={() => setLastCard('gear')} showSaveError={lastCard === 'gear'} />
+  <GearDisplayCard settings={settings} live={live} onSaved={saved} onRequest={() => setLastCard('gear')} showSaveError={lastCard === 'gear'} />
 </div>
           <div hidden={panel !== 'overlay'} data-testid="settings.overlay"><OverlaySettingsCard settings={settings} edit={app?.overlayEdit} onSaved={saved} onRequest={() => setLastCard('overlay')} showSaveError={lastCard === 'overlay'} />
             </div>
