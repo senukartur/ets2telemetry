@@ -171,6 +171,9 @@ function parseKeyList(body, channel) {
  */
 export function parseUpdateKeysSource(text) {
   if (typeof text !== 'string' || Buffer.byteLength(text, 'utf8') > UPDATE_KEYS_MAX_BYTES) throw new Error(`${UPDATE_KEYS_MODULE} is not a text of at most 64 KiB`);
+  // JavaScript also ends a line at a lone CR, U+2028 and U+2029, so such a byte could end a line this parser takes for a
+  // comment and leave code after it. Only printable ASCII, tab and LF are accepted, a CR only before an LF.
+  if (!/^(?:\uFEFF)?(?:[\t\x20-\x7E\n]|\r\n)*$/.test(text)) throw new Error(`${UPDATE_KEYS_MODULE} holds a character other than printable ASCII, tab or a line break`);
   const lines = text.replace(/^\uFEFF/, '').split(/\r?\n/).map(line => line.trim()).filter(line => line !== '' && !isCommentLine(line));
   const code = lines.join('\n'), shape = `${UPDATE_KEYS_MODULE} does not have the shape of the shipped key list (it is read as data, never run)`;
   if (!code.startsWith(`${UPDATE_KEYS_HEAD}\n`) || !code.endsWith(`\n${UPDATE_KEYS_TAIL}`)) throw new Error(shape);

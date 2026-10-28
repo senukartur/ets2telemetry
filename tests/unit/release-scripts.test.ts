@@ -373,6 +373,18 @@ describe('the key list read as data', () => {
     expect(parseUpdateKeysSource(shippedText().replace(/\r?\n/g, '\r\n'))).toEqual({production: [PRODUCTION], staging: [STAGING]});
     expect(await compiledUpdateKeys('staging', keysFile(shippedText()))).toEqual([STAGING]);
   });
+  // Follow-up review: JavaScript ends a line at a lone CR, U+2028 and U+2029, so a "comment" line holding one could hide
+  // compiled lists from the parser. Every such file is refused before any line is read.
+  it('refuses a lone CR, U+2028, U+2029 or any other character outside printable ASCII', () => {
+    const hidden = (terminator: string) => `// x${terminator}production: Object.freeze([]), staging: Object.freeze([]) /*\n${shippedText()}// y${terminator}*/\n`;
+    for (const terminator of ['\r', '\u2028', '\u2029']) {
+      expect(() => parseUpdateKeysSource(hidden(terminator)), JSON.stringify(terminator)).toThrow('holds a character other than printable ASCII, tab or a line break');
+    }
+    for (const text of [shippedText().replace('// The compiled', '// Thé compiled'), shippedText().replace('// The compiled', '// The\u0000compiled'), `${shippedText()}\r`]) {
+      expect(() => parseUpdateKeysSource(text)).toThrow('holds a character other than printable ASCII, tab or a line break');
+    }
+    expect(parseUpdateKeysSource(`\uFEFF${shippedText().replace(/\n/g, '\r\n')}`)).toEqual({production: [PRODUCTION], staging: [STAGING]});
+  });
   it('reads empty lists and several keys in one list, as during a rotation', () => {
     const other = {keyId: 'production-0123456789abcdef', publicKey: generateUpdateKey('production').publicKey};
     const rotated = shippedText().replace(/production: Object\.freeze\(\[[^\]]*\]\)/, `production: Object.freeze([\n    ${updateKeyEntry(PRODUCTION)},\n    ${updateKeyEntry(other)}\n  ])`)
