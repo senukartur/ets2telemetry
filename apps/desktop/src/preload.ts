@@ -1,6 +1,6 @@
 import {isHardModeStatus, type HardModeStatus} from '../../../packages/contracts/src/hard-mode';
 import {contextBridge, ipcRenderer} from 'electron';
-import type {AppState, DesktopBridge, LiveTelemetry} from '../../../packages/contracts/src';
+import type {AppState, DesktopBridge, LiveTelemetry, UpdateView} from '../../../packages/contracts/src';
 import {initialLive, sourceSelection} from './live-state';
 import {expiredV1, liveV1Key, parseLiveV1, RENDERER_V1_EXPIRED_REASON, V1_LIVE_EXPIRY_MS} from './live-v1';
 import {RecoveryBudget} from './recovery-budget';
@@ -13,6 +13,7 @@ import {copyTripsQuery, isPageArgument, JOURNAL_CHANNELS, JOURNAL_EXPORT_CHANNEL
 import {isJournalUuid} from '../../../packages/contracts/src/journal';
 import {DIAGNOSTICS_EXPORT_CHANNEL, isPluginGame, isPluginTargetId, PLUGIN_CHANNELS} from './plugin-setup-contract';
 import {UNINSTALL_CHANNEL} from './uninstall-contract';
+import {applicationInfoOrFallback, parseUpdateView, UNSUPPORTED_UPDATE, UPDATE_CHANNELS} from './updater/update-view';
 let listener: ((update: LiveTelemetry) => void) | undefined;
 let port: MessagePort | undefined;
 let current: LiveTelemetry = initialLive();
@@ -112,8 +113,25 @@ ipcRenderer.on('telemetry:service-state', (_event, update: LiveTelemetry) => {
   if (listener && subscription === owner && (update.status === 'service-failed' || update.status === 'restarting')) ipcRenderer.send('telemetry:subscribe');
 });
 let appStateListener: ((state: AppState) => void) | undefined;
+/**
+ * ET-055 (UP9): the application info and the update view are validated again here, as main does before it sends them.
+ * An invalid update view becomes the fixed `unsupported` view (no action offered) and invalid application info the
+ * fixed fallback with version 0.0.0, so the rest of the state (health, settings, plugins) still reaches the renderer.
+ * Only a state that is not an object at all is dropped (push) or rejected (query).
+ */
+function checkedAppState(state: unknown): AppState | undefined {
+  if (typeof state !== 'object' || state === null || Array.isArray(state)) return undefined;
+  const record = state as Record<string, unknown>;
+  return {...(state as AppState), application: applicationInfoOrFallback(record.application).info, update: parseUpdateView(record.update) ?? UNSUPPORTED_UPDATE};
+}
+async function updateCall(channel: string): Promise<UpdateView> {
+  const reply: unknown = await ipcRenderer.invoke(channel);
+  const view = parseUpdateView(reply);
+  if (!view) throw new Error('Invalid update state');
+  return view;
+}
 // Main pushes fixed health codes only after this document subscribed through the trusted main frame.
-ipcRenderer.on('app:state', (_event, state: AppState) => {appStateListener?.(state);});
+ipcRenderer.on('app:state', (_event, state: unknown) => {const checked = checkedAppState(state); if (checked) appStateListener?.(checked);});
 async function hardModeCall(channel: 'hard-mode:status' | 'hard-mode:refresh'): Promise<HardModeStatus> {
   const reply: unknown = await ipcRenderer.invoke(channel);
   if (!isHardModeStatus(reply)) throw new Error('Invalid Hard Mode status');
@@ -131,7 +149,11 @@ const bridge: DesktopBridge = {
     let active = true;
     return () => {if (!active) return; active = false; subscription = Symbol(); listener = undefined; clearFreshness(); clearRecovery(); closePort(); ipcRenderer.send('telemetry:unsubscribe');};
   },
-  getAppState: () => ipcRenderer.invoke('app:get-state'),
+  getAppState: async () => {
+    const state = checkedAppState(await ipcRenderer.invoke('app:get-state'));
+    if (!state) throw new Error('Invalid application state');
+    return state;
+  },
   subscribeAppState: callback => {
     if (typeof callback !== 'function' || appStateListener) throw new Error('One application state subscription is allowed');
     appStateListener = callback; ipcRenderer.send('app:subscribe-state');
@@ -209,7 +231,10 @@ const bridge: DesktopBridge = {
   // target ids, never a path.
   uninstallApplication: (...args: unknown[]) => args.length === 0 ? ipcRenderer.invoke(UNINSTALL_CHANNEL) : Promise.reject(new Error('Invalid uninstall request')),
   getHardModeStatus: (...args: unknown[]) => args.length === 0 ? hardModeCall('hard-mode:status') : Promise.reject(new Error('Invalid Hard Mode request')),
-  refreshHardMode: (...args: unknown[]) => args.length === 0 ? hardModeCall('hard-mode:refresh') : Promise.reject(new Error('Invalid Hard Mode request'))
+  refreshHardMode: (...args: unknown[]) => args.length === 0 ? hardModeCall('hard-mode:refresh') : Promise.reject(new Error('Invalid Hard Mode request')),
+  // ET-055 (UP9): no argument may reach main, which checks again; the reply is validated as an update view.
+  updateApplication: (...args: unknown[]) => args.length === 0 ? updateCall(UPDATE_CHANNELS.apply) : Promise.reject(new Error('Invalid update request')),
+  checkForUpdates: (...args: unknown[]) => args.length === 0 ? updateCall(UPDATE_CHANNELS.check) : Promise.reject(new Error('Invalid update request'))
 };
 /** One page request of a trip: exactly the UUID and the cursor, or null for the first page. */
 function journalPage<T>(kind: 'events' | 'intervals' | 'samples', tripUuid: unknown, cursor: unknown): Promise<T> {

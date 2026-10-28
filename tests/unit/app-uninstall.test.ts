@@ -58,6 +58,34 @@ describe('before anything changes', () => {
     expect(test.uninstall.prepared).toBeUndefined();
   });
 
+  // ET-055 review round 1: the in-app uninstall and the in-app update exclude each other.
+  it('is refused with UPDATE_IN_PROGRESS while an update runs, before any dialog, and nothing changes', async () => {
+    const {fixture} = await scene();
+    const before = await listTree(guard.root);
+    const test = harness(fixture, {updating: () => true});
+    expect(await test.uninstall.run()).toEqual({outcome: 'failed', code: 'UPDATE_IN_PROGRESS'});
+    expect(test.confirm).not.toHaveBeenCalled(); expect(test.suspend).not.toHaveBeenCalled();
+    expect(test.uninstall.inProgress).toBe(false); expect(test.uninstall.prepared).toBeUndefined();
+    expect(await listTree(guard.root)).toEqual(before);
+  });
+  it('is refused after a confirmation during which an update started, and nothing changes', async () => {
+    const {fixture} = await scene();
+    const before = await listTree(guard.root);
+    let updating = false, dialogs = 0, inProgressDuringDialog = false;
+    // While the first dialog is open the uninstall counts as in progress, then an update's download starts.
+    const test: Harness = harness(fixture, {updating: () => updating, confirm: () => {
+      if (dialogs++ === 0) {inProgressDuringDialog = test.uninstall.inProgress; updating = true;}
+      return Promise.resolve(true);
+    }});
+    expect(await test.uninstall.run()).toEqual({outcome: 'failed', code: 'UPDATE_IN_PROGRESS'});
+    expect(inProgressDuringDialog).toBe(true);
+    expect(test.suspend).not.toHaveBeenCalled(); expect(test.uninstall.prepared).toBeUndefined();
+    expect(await listTree(guard.root)).toEqual(before);
+    // Once the update no longer runs, the uninstall may run again.
+    updating = false;
+    expect(await test.uninstall.run()).toEqual({outcome: 'started'});
+  });
+
   it('a declined confirmation changes nothing', async () => {
     const {fixture} = await scene();
     const before = await listTree(guard.root);

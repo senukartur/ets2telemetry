@@ -1,5 +1,5 @@
 import {HardModeServiceCache} from './hard-mode/service-status';
-import {app, BrowserWindow, dialog, ipcMain, Menu, MessageChannelMain, nativeImage, screen, shell, Tray, utilityProcess, type MessagePortMain, type UtilityProcess, type IpcMainEvent, type IpcMainInvokeEvent} from 'electron';
+import {app, BrowserWindow, dialog, ipcMain, Menu, MessageChannelMain, nativeImage, net, screen, shell, Tray, utilityProcess, type MessagePortMain, type UtilityProcess, type IpcMainEvent, type IpcMainInvokeEvent} from 'electron';
 import {spawn} from 'node:child_process';
 import {existsSync, mkdirSync} from 'node:fs';
 import * as nodeFsPromises from 'node:fs/promises';
@@ -8,7 +8,7 @@ import path from 'node:path';
 import type {EventEmitter} from 'node:events';
 import {APP_VERSION as version} from './app-version';
 import type {AppHealth, AppLanguage, AppState, AutostartRegistrationStatus, AppUninstallResult, DiagnosticsExportResult, LiveTelemetry, OverlayEditState, OverlayPresentation, OverlaySettings, PluginFolderChoice, PluginGame, PluginShowFileResult, RecordingHealth, ScaffoldStatus, SettingsView,
-  SourceSelection, UnitProfiles, GearDisplayModes} from '../../../packages/contracts/src';
+  SourceSelection, UnitProfiles, GearDisplayModes, ApplicationInfo, UpdateView} from '../../../packages/contracts/src';
 import {SettingsBusyError, SettingsError, SettingsStore, settingsDirectory} from './settings-store';
 import {isGearDisplayMode, isUnitGame, isUnitProfile} from './unit-profiles';
 import {isAppLanguage} from './settings-schema';
@@ -35,7 +35,7 @@ import {isOverlayEditOutcome, overlayZoom, parseOverlayEditScale, type OverlayEd
 import {OwnForegroundGate} from './overlay-edit';
 import {captureActivation, type CaptureGrant} from './capture-activation';
 import {monitorEventLoopLag} from './event-loop-lag';
-import {ExitCoordinator, isUninstallExitPayload, secondInstanceAction, type ExitReason} from './app-lifecycle';
+import {ExitCoordinator, isUninstallExitPayload, secondInstanceAction, startsUpdatedApplication, type ExitReason} from './app-lifecycle';
 import {failureCode, initialHealth, reduceHealth, sameHealth, type HealthEvent} from './app-health';
 import {addLosses, parseRecordingHealth, recordingFacts, sameRecording, ZERO_LOSSES} from './recording-status';
 import {TrayPresenter, type TrayMenuItem} from './tray-model';
@@ -58,7 +58,10 @@ import {resolveUninstallRoots} from './uninstall/roots';
 import {UNINSTALL_CHANNEL} from './uninstall-contract';
 import {finishedUninstallText, handoverFailedText} from './uninstall-text';
 import {UNINSTALL_STRINGS} from './strings';
-import {CHANNEL} from './channel';
+import {ACTIVE_CHANNEL, CHANNEL} from './channel';
+import {UpdateController} from './updater/update-controller';
+import {productionUpdatePorts, startUpdatedApplication} from './updater/update-ports';
+import {applicationInfoOrFallback, parseUpdateView, UNSUPPORTED_UPDATE, UPDATE_CHANNELS} from './updater/update-view';
 import {applyChannelAppName} from './channel-app-name';
 
 // ET-055 UP12: the channel's application name and userData, before anything reads userData or takes the single-instance
@@ -215,6 +218,8 @@ function runApplication(profileError: unknown): void {
       return answer.response === 1;
     },
     fs: uninstallFs,
+    // ET-055: the in-app uninstall and the in-app update exclude each other.
+    updating: () => updates.busy,
     checkRunning: signal => checkRunningGames({signal}),
     readKnown: async () => {
       const read = await readPluginBundle(pluginBundleDirectory(__dirname, process.resourcesPath, app.isPackaged));
@@ -268,6 +273,28 @@ function runApplication(profileError: unknown): void {
       app.exit(1);
     }, APP_UNINSTALL_FAILSAFE_MS);
     requestExit('uninstall');
+  }
+  // ET-055 (UP3, UP6–UP9): the in-app update. The controller checks the build channel's feed from 15 s after the first
+  // readiness and every 6 h, downloads and installs only after the dashboard's click, and requests the explicit exit with
+  // reason `update`; the final exit then starts the restart helper. The dashboard gets the validated view and this build's
+  // version, channel and packaging only: never a URL or path.
+  // A build version that fails validation (never expected: scripts/build-channel.mjs checks it) is replaced by the fixed
+  // fallback, so the preload never drops the application state for it.
+  const checkedApplication = applicationInfoOrFallback({version, channel: ACTIVE_CHANNEL, packaged: app.isPackaged});
+  const application: ApplicationInfo = checkedApplication.info;
+  if (!checkedApplication.valid) log('APPLICATION_INFO_INVALID');
+  const updates: UpdateController = new UpdateController({identity: CHANNEL, currentVersion: version,
+    ports: productionUpdatePorts({fetch: (url, init) => net.fetch(url, init), packaged: app.isPackaged, executable: process.execPath, env: process.env, identity: CHANNEL}),
+    log: (event, facts) => log(event, undefined, facts), changed: () => pushAppState(),
+    exiting: () => lifecycle.exiting, uninstalling: () => appUninstall.inProgress, requestExit: () => requestExit('update')});
+  let rejectedUpdateViews = 0;
+  /** The controller's view, validated before it reaches the dashboard; an invalid one is reported as unsupported. */
+  function updateView(): UpdateView {
+    const view = parseUpdateView(updates.view);
+    if (view) return view;
+    const count = ++rejectedUpdateViews;
+    if ((count & (count - 1)) === 0) log('UPDATE_VIEW_REJECTED', undefined, {count});
+    return UNSUPPORTED_UPDATE;
   }
   const upstreamBudget = new RecoveryBudget(), overlayBudget = new RecoveryBudget();
   const dashboardSubscriptions = new LiveSubscriptions(initialLive(), 1);
@@ -342,25 +369,32 @@ function runApplication(profileError: unknown): void {
       if (lastKnownRecordingStatus) updateHealth({type: 'recording', status: lastKnownRecordingStatus});
     }
   });
-  const lifecycle = new ExitCoordinator({
+  const lifecycle: ExitCoordinator = new ExitCoordinator({
     log,
     // A running trip export stops first, so a journal read that the retirement answers ends it as interrupted (J16).
     // ET-017: plugin setup stops after its current game folder; no new run, poll or trigger starts.
-    begin: () => {latency?.finish('exit'); exporter.abort(); diagnosticsExporter.abort(); pluginSetup.abort(); heartbeatMonitor.stop(); updateHealth({type: 'exit-requested'}, true); retireLive();},
+    begin: () => {latency?.finish('exit'); exporter.abort(); diagnosticsExporter.abort(); pluginSetup.abort(); updates.retire(); heartbeatMonitor.stop(); updateHealth({type: 'exit-requested'}, true); retireLive();},
     stopService: () => supervisor.stop(),
     // An in-flight settings save, the removal of an interrupted trip or diagnostics export's partial file and the plugin setup run in flight
     // (which ends with the removal of its temporary file) may delay the final exit by at most EXIT_IDLE_BUDGET_MS
     // (1000 ms) together.
     idle: () => {
-      const pending = [latency?.idle(), settingsStore.idle(), exporter.idle(), diagnosticsExporter.idle(), pluginSetup.idle()].filter((work): work is Promise<void> => work !== undefined);
+      const pending = [latency?.idle(), settingsStore.idle(), exporter.idle(), diagnosticsExporter.idle(), pluginSetup.idle(), updates.idle()].filter((work): work is Promise<void> => work !== undefined);
       return pending.length > 1 ? Promise.all(pending).then(() => undefined) : pending[0];
     },
     destroyTray,
     // The final rows (SERVICE_EXIT, APP_EXIT) are on disk before the process ends: the append in flight gets up to
     // MAIN_EXIT_FLUSH_MS, the queue is then written synchronously, and later rows are written at once.
-    exit: code => {void log.finalize(MAIN_EXIT_FLUSH_MS).then(() => appUninstall.prepared ? completeAppUninstall() : app.exit(code));}
+    // ET-055 (UP8): after an exit with reason `update`, the restart helper starts before the process exits; never after a
+    // fatal stop or another reason.
+    exit: code => {void log.finalize(MAIN_EXIT_FLUSH_MS).then(async () => {
+      if (appUninstall.prepared) return completeAppUninstall();
+      const restart = startsUpdatedApplication(lifecycle.reason) ? updates.restartTarget : undefined;
+      if (restart) log(await startUpdatedApplication(restart.installRoot, restart.executableName) ? 'UPDATE_RESTART_STARTED' : 'UPDATE_RESTART_FAILED');
+      app.exit(code);
+    });}
   });
-  const supervisor = new ServiceSupervisor(log, code => lifecycle.finish(code), {
+  const supervisor: ServiceSupervisor = new ServiceSupervisor(log, code => lifecycle.finish(code), {
     restart: () => startService(),
     state: state => {heartbeatMonitor.stop(); serviceReady = false; retireHardMode(); selectionPending = false; status = undefined; closeUpstream(); retireRecording(); journal.retire();
       if (state === 'service-failed') {updateHealth({type: 'service-exited', afterFailure: failureReported}); failureReported = false;}
@@ -371,14 +405,14 @@ function runApplication(profileError: unknown): void {
     // broker or settings) never created the windows; create them now, so the dashboard shows the exhausted state and
     // the tray and a second launch can open it (ET-016 PR-3 delta review).
     exhausted: () => {heartbeatMonitor.stop(); retireRecording(); journal.retire(); updateHealth({type: 'service-restart-exhausted'});
-      if (!started && !supervisor.stopping && !lifecycle.exiting) {started = true; createWindow(); createOverlay();}
+      if (!started && !supervisor.stopping && !lifecycle.exiting) {started = true; createWindow(); createOverlay(); updates.start();}
       const update: LiveTelemetry = {...initialLive(selection), status: 'service-failed', reason: 'Automatic service restart limit reached'};
       freshness.invalidate(update); window?.webContents.send('telemetry:service-state', update);},
     // Every stop that did not start as an exit request is fatal (renderer or overlay exhaustion, configuration or
     // load failure, recovery timeout, ...): mark the application exiting at once so nothing reopens a window, the
     // overlay may close and the tray shows the exiting state. Exit codes and bounds are unchanged.
     // A running trip export ends as interrupted before it opens a file (J16), also on a fatal stop.
-    stopping: () => {latency?.finish('service-stop'); heartbeatMonitor.stop(); exporter.abort(); diagnosticsExporter.abort(); pluginSetup.abort(); if (lifecycle.abort()) {updateHealth({type: 'exit-requested'}, true); retireLive();}},
+    stopping: () => {latency?.finish('service-stop'); heartbeatMonitor.stop(); exporter.abort(); diagnosticsExporter.abort(); pluginSetup.abort(); updates.retire(); if (lifecycle.abort()) {updateHealth({type: 'exit-requested'}, true); retireLive();}},
     // The failed service is being terminated: retire its readiness, status and live channels now rather than when
     // its exit arrives (up to 3000 ms later). The later state callback finds them already retired.
     // A new selection generation also retires a readiness still awaiting its broker or settings, so the failing service
@@ -388,7 +422,7 @@ function runApplication(profileError: unknown): void {
       const update: LiveTelemetry = {...initialLive(selection), status: 'restarting', reason: 'Telemetry service failed; current interval is unknown'};
       freshness.invalidate(update); dashboardSubscriptions.close(); dashboardPort = undefined; window?.webContents.send('telemetry:service-state', update);}
   });
-  function appState(): AppState {return {health: {...health}, settings: settingsStore.view(), overlayEdit, plugins: pluginSetup.view(), autostart: autostartStatus};}
+  function appState(): AppState {return {health: {...health}, settings: settingsStore.view(), overlayEdit, plugins: pluginSetup.view(), autostart: autostartStatus, application: {...application}, update: updateView()};}
   function pushAppState(): void {if (appStateSubscribed && window && !window.isDestroyed()) window.webContents.send('app:state', appState());}
   function updateHealth(event: HealthEvent, immediate = false): void {
     const next = reduceHealth(health, event);
@@ -720,7 +754,7 @@ function runApplication(profileError: unknown): void {
           serviceReady = true; selectionPending = false; status = {service: 'ready', storage: 'verified', synthetic: true};
           journal.attach(child);
           updateHealth({type: 'service-ready'});
-          if (!started) {started = true; if (!startHiddenOnLaunch) createWindow(); createOverlay();} else connectSubscription();
+          if (!started) {started = true; if (!startHiddenOnLaunch) createWindow(); createOverlay(); updates.start();} else connectSubscription();
           connectUpstream();
         })().catch(error => {if (!supervisor.stopping && service === child) fail('SERVICE_CONFIGURATION_FAILED', error);});
       } else if (type === 'failed') {
@@ -1030,10 +1064,23 @@ function runApplication(profileError: unknown): void {
     if (!trusted(event)) throw new Error('Untrusted uninstall request');
     if (request.length !== 0) throw new Error('Invalid uninstall request');
     if (lifecycle.exiting) throw new Error('Uninstall refused: the application is exiting');
+    // ET-055: refused while an update downloads, installs or restarts; the orchestrator checks again after its dialog.
+    if (updates.busy) {log('APP_UNINSTALL', undefined, {outcome: 'failed', code: 'UPDATE_IN_PROGRESS'}); return {outcome: 'failed', code: 'UPDATE_IN_PROGRESS'};}
     const result = await appUninstall.run();
     if (result.outcome === 'started') setImmediate(beginUninstallExit);
     return result;
   });
+  // ET-055 (UP7, UP9): the update click and the manual check take no argument, from the trusted dashboard main frame only
+  // (the overlay is rejected). A refused click answers with the view's fixed refusal code, never an error text; the
+  // controller refuses it once the exit has begun (EXITING).
+  for (const [channel, run] of [[UPDATE_CHANNELS.apply, () => updates.apply()], [UPDATE_CHANNELS.check, () => updates.check()]] as const) {
+    ipcMain.handle(channel, async (event, ...request: unknown[]): Promise<UpdateView> => {
+      if (!trusted(event)) throw new Error('Untrusted update request');
+      if (request.length !== 0) throw new Error('Invalid update request');
+      await run();
+      return updateView();
+    });
+  }
   ipcMain.handle('telemetry:select', async (event, source: unknown) => {
     if (!trusted(event) || !serviceReady) throw new Error('Untrusted source request');
     const next = sourceSelection(source);

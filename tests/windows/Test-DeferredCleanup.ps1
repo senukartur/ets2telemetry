@@ -128,6 +128,7 @@ function New-Scene([string]$Name, $Case, [int]$Attempts, [string]$Parent = $Work
     }
     $sentinel = Join-Path $root 'outside\sentinel.txt'
     $data = @{}; if ($Case.PSObject.Properties.Name -contains 'data') { foreach ($property in $Case.data.PSObject.Properties) { $data[$property.Name] = $property.Value } }
+    if ($data['updatesEntry']) { Write-Text (Join-Path $dataRoot 'updates\0.2.0\ETS2TelemetryDesktop-0.2.0-full.nupkg.partial') "synthetic partial download`n" }
     if ($data['unknownEntry']) { Write-Text (Join-Path $dataRoot 'notes\mine.txt') "the user's own file`n" }
     if ($data['readOnlyEntry']) { $locked = Join-Path $dataRoot 'logs\locked.jsonl'; Write-Text $locked "read-only log`n"; (Get-Item -LiteralPath $locked).IsReadOnly = $true }
     if ($data['logsJunction']) { Write-Text $sentinel "outside the data root`n"; New-Item -ItemType Junction -Path (Join-Path $dataRoot 'logs\linked') -Target (Split-Path $sentinel) | Out-Null }

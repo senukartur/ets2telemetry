@@ -1102,7 +1102,8 @@ export const UNINSTALL_FAILURE_TEXT: Readonly<Record<UninstallFailureCode, strin
   BUSY: 'an uninstall is already in progress.',
   DIALOG_FAILED: 'the confirmation could not be shown.',
   INTENT_FAILED: 'the uninstall record could not be written to the data folder.',
-  ENGINE_FAILED: 'an unexpected error stopped it. Nothing more was removed; run the uninstall again.'
+  ENGINE_FAILED: 'an unexpected error stopped it. Nothing more was removed; run the uninstall again.',
+  UPDATE_IN_PROGRESS: 'an update is being downloaded or installed. Try again after it finishes.'
 });
 /** How a game folder that is no longer a game folder was handled (the engine's notes); shown in the result. */
 export const UNINSTALL_NOTE_TEXT: Readonly<Record<FolderNote, string>> = channelCopyTable(Object.freeze({
@@ -1114,7 +1115,7 @@ export const UNINSTALL_NOTE_TEXT: Readonly<Record<FolderNote, string>> = channel
 /** A data entry that could not be deleted, by its allowlisted name. */
 export const UNINSTALL_DATA_ENTRY_TEXT: Readonly<Record<DataEntry, string>> = Object.freeze({
   data: 'trip history', backups: 'history backups', settings: 'settings', logs: 'logs', synthetic: 'synthetic recordings', plugins: 'plugin setup record',
-  captures: 'captures', transport: 'connection settings', uninstall: 'uninstall record'
+  captures: 'captures', transport: 'connection settings', uninstall: 'uninstall record', updates: 'downloaded updates'
 });
 
 export function getAutostartStatusBadgeText(status: AutostartRegistrationStatus | undefined, language: AppLanguage): string {
