@@ -1,4 +1,5 @@
 import path from 'node:path';
+import {BUILD_CHANNELS, BUILD_IDENTITIES} from '../build-channel.mjs';
 
 // ET-018 PR-1 (U12): the fail-closed guards of the installer lifecycle harness (docs/installer-testing.md). Every check is
 // a pure decision over facts the harness gathers: the real known folders (resolved by Windows, never from environment
@@ -6,6 +7,12 @@ import path from 'node:path';
 // each path's real location. Nothing here reads the registry, lists processes or touches the file system; the only
 // file-system access is the injected `realpath` of resolveRealLocation. A refusal throws InstallerGuardError with a
 // fixed code and never names a path, so a refusal message can be logged and uploaded.
+//
+// ET-055 PR-5 (UP12, UP19): every name that differs between the build channels (the install root and Uninstall key, the
+// data root, the executable, the display names, the AUMID, the plugin file, the RunOnce value and the receipts) comes
+// from lifecycleIdentity(channel), which derives it from scripts/build-channel.mjs. A run installs the channel of the
+// build that was made, or, in the side-by-side scenario, both channels into one run root; every check names the channel
+// it judges. The real roots of both channels are always protected.
 
 /** The run root's folder name: `installer-` and a 32-digit lower-case hexadecimal identifier. */
 export const RUN_ROOT_NAME = /^installer-[0-9a-f]{32}$/;
@@ -17,12 +24,12 @@ export const INSTALL_TEST_FORMAT = 'ets2telemetry.install-test';
 export const INSTALL_TEST_VERSION = 1;
 /** The per-run RunOnce key a later deferred cleanup may use (plan U7); PR-1 writes null. */
 export const RUN_ONCE_KEY = /^HKCU\\Software\\ETS2Telemetry-Test-[0-9a-f]{32}\\RunOnce$/;
-/** The Squirrel application name, the binary root's folder name and the uninstall registration key's name. */
-export const PRODUCT_ROOT = 'ETS2TelemetryDesktop';
-/** The application's data root under a LocalAppData folder. */
-export const DATA_ROOT = 'ETS2Telemetry';
-/** Electron's Roaming userData folder (the product name). */
-export const ROAMING_ROOT = 'ETS2Telemetry Desktop';
+/** The production Squirrel application name, binary root folder and uninstall registration key (lifecycleIdentity has both channels'). */
+export const PRODUCT_ROOT = BUILD_IDENTITIES.production.squirrelId;
+/** The production data root under a LocalAppData folder. */
+export const DATA_ROOT = BUILD_IDENTITIES.production.dataRootName;
+/** Electron's production Roaming userData folder (the productName). */
+export const ROAMING_ROOT = BUILD_IDENTITIES.production.productName;
 
 export class InstallerGuardError extends Error {
   /** @param {string} code @param {string} [detail] a relative name inside the run root, never a machine path */
@@ -33,6 +40,53 @@ export class InstallerGuardError extends Error {
   }
 }
 const refuse = (code, detail) => {throw new InstallerGuardError(code, detail);};
+
+/** The Installed apps Publisher of both channels since ET-045h (forge.config.cjs `authors`). */
+export const PRODUCT_PUBLISHER = 'Yukon Union Telemetry contributors';
+/**
+ * ET-055 PR-5: the names the lifecycle checks for one build channel, from BUILD_IDENTITIES (scripts/build-channel.mjs,
+ * which tests/unit/channel-identity.test.ts pins to apps/desktop/src/channel.ts). `productRoot` is the Squirrel id: the
+ * binary root's folder name and the HKCU Uninstall key's name. `roamingRoot` is Electron's productName folder under
+ * Roaming. `appUserModelId` is Squirrel's shortcut AUMID, which Electron also uses as the autostart Run value name.
+ * `executorReceiptPrefix` names the deferred-cleanup executor's receipt (resources/uninstall/Complete-ETS2TelemetryUninstall.ps1).
+ */
+export function lifecycleIdentity(channel) {
+  if (!BUILD_CHANNELS.includes(channel)) refuse('LIFECYCLE_CHANNEL_UNKNOWN');
+  const identity = BUILD_IDENTITIES[channel];
+  return Object.freeze({channel, productRoot: identity.squirrelId, dataRoot: identity.dataRootName, roamingRoot: identity.productName,
+    executable: `${identity.executableName}.exe`, displayName: identity.displayName, publisher: PRODUCT_PUBLISHER,
+    legacyDisplayNames: Object.freeze([...identity.legacyShortcutNames]), appUserModelId: `com.squirrel.${identity.squirrelId}.${identity.executableName}`,
+    pluginFile: identity.pluginFileName, runOnceValue: identity.runOnceValue, receiptPrefix: identity.receiptPrefix,
+    executorReceiptPrefix: `${identity.dataRootName}-deferred-cleanup-`});
+}
+/** Both channels' lifecycle identities, production first. */
+export const LIFECYCLE_IDENTITIES = Object.freeze(BUILD_CHANNELS.map(lifecycleIdentity));
+/** The channels one run installs: one channel, or both for the side-by-side scenario; each at most once. */
+export function checkRunChannels(channels) {
+  if (!Array.isArray(channels) || channels.length < 1 || channels.length > BUILD_CHANNELS.length || new Set(channels).size !== channels.length ||
+    channels.some(channel => !BUILD_CHANNELS.includes(channel))) refuse('RUN_CHANNELS_INVALID');
+  return channels;
+}
+
+const LIFECYCLE_VERSION = /^(\d{1,4})\.(\d{1,4})\.(\d{1,4})(-stg\.\d{6})?$/;
+/** electron-winstaller's convertVersion (scripts/release-identity.mjs nugetVersion): the prerelease label without dots. */
+const installedVersionOf = version => version.replace(/^(\d+\.\d+\.\d+)-(.*)$/, (_match, main, label) => `${main}-${label.replace(/\./g, '')}`);
+/**
+ * ET-055 PR-5: the versions of a lifecycle run from the application version of the build that was made (UP15): `0.1.0` in
+ * production, `0.1.0-stg.000000` in staging. Install A is that build; the upgrade fixture B raises its patch number and
+ * keeps its staging label (`0.1.1`, `0.1.1-stg.000000`), so B sorts above A in both channels. `package` is the version
+ * the installer package carries, `installed` its NuGet form, which Squirrel names `app-<version>` and writes as the
+ * registration's DisplayVersion. `appVersion` is what the application reports in both installs: the fixture repacks A's
+ * bytes, so B's application still reports A's version. A production build carries a plain version, a staging build one
+ * with its `-stg.<6 digits>` label.
+ */
+export function lifecycleVersions(channel, appVersion) {
+  const match = typeof appVersion === 'string' ? LIFECYCLE_VERSION.exec(appVersion) : null;
+  if (!BUILD_CHANNELS.includes(channel) || !match || (channel === 'production') !== (match[4] === undefined)) refuse('LIFECYCLE_VERSION_INVALID');
+  const fixture = `${match[1]}.${match[2]}.${Number(match[3]) + 1}${match[4] ?? ''}`;
+  return Object.freeze({channel, appVersion, a: Object.freeze({package: appVersion, installed: installedVersionOf(appVersion)}),
+    b: Object.freeze({package: fixture, installed: installedVersionOf(fixture)})});
+}
 
 /** A Windows drive path such as `C:\folder`; UNC, device, relative and drive-relative paths are not. */
 export function isDrivePath(value) {
@@ -59,15 +113,15 @@ export function checkRunSignal(env, {allowLocal = false} = {}) {
   if (env.GITHUB_ACTIONS !== 'true' || env.RUNNER_ENVIRONMENT !== 'github-hosted') refuse('LOCAL_RUN_REFUSED');
 }
 /**
- * ET-055 PR-4 (UP13): the build channel of the Setup the lifecycle may install. Outside a GitHub-hosted runner (an
+ * ET-055 PR-4 and PR-5 (UP13): the build channel of a Setup the lifecycle may install. Outside a GitHub-hosted runner (an
  * owner-requested -AllowLocal run) only a staging Setup may be installed, never the production identity of the owner's
- * installed application, so a production Setup runs on a hosted runner only. The staging lifecycle itself (its install root,
- * names and versions) arrives with ET-055 PR-5; until then a staging Setup is refused everywhere.
+ * installed application, so a production Setup runs on a hosted runner only, and with it the side-by-side scenario, which
+ * installs both. A staging Setup runs on a hosted runner, or locally under -AllowLocal and every fact-based guard below;
+ * checkRunSignal decides that part.
  */
 export function checkSetupChannel(channel, env) {
   if (channel !== 'production' && channel !== 'staging') refuse('SETUP_CHANNEL_UNKNOWN');
   if (channel === 'production' && (env.GITHUB_ACTIONS !== 'true' || env.RUNNER_ENVIRONMENT !== 'github-hosted')) refuse('LOCAL_PRODUCTION_REFUSED');
-  if (channel === 'staging') refuse('STAGING_LIFECYCLE_PENDING');
 }
 /**
  * The one top-level folder Windows may create under any LOCALAPPDATA a process runs with: the shell and Update.exe add
@@ -136,8 +190,8 @@ export function checkDataRootUnchanged(before, after) {
 /** The binary-root listing of the harness holds at most this many entries; a longer one refuses. */
 export const RESIDUE_MAX_ENTRIES = 256;
 const APP_FOLDER = /^app-\d{1,9}\.\d{1,9}\.\d{1,9}(-[0-9A-Za-z.-]{1,40})?$/;
-/** Names that are never Electron runtime files, whatever the distribution lists: this product's and Squirrel's executables. */
-const NEVER_RUNTIME = new Set(['electron.exe', 'ets2telemetrydesktop.exe', 'squirrel.exe', 'update.exe']);
+/** Names that are never Electron runtime files, whatever the distribution lists: both channels' and Squirrel's executables. */
+const NEVER_RUNTIME = new Set(['electron.exe', ...BUILD_CHANNELS.map(channel => `${BUILD_IDENTITIES[channel].executableName}.exe`.toLowerCase()), 'squirrel.exe', 'update.exe']);
 /**
  * The Electron runtime file names, from a listing of the installed `node_modules/electron/dist`: its top-level files
  * except `electron.exe` (renamed to the product's executable in a package), and the files of its `locales` folder.
@@ -198,14 +252,15 @@ export function checkUninstallResidue(listing, runtime) {
 export const isHostedRunner = env => env.GITHUB_ACTIONS === 'true' && env.RUNNER_ENVIRONMENT === 'github-hosted';
 
 /**
- * The registered UninstallString (ET-018 PR-3, U12): exactly the quoted `Update.exe` of the run root's binary root and
- * `--uninstall`, optionally followed by Squirrel's `-s`. Returns the program and its arguments; anything else refuses.
+ * The registered UninstallString (ET-018 PR-3, U12): exactly the quoted `Update.exe` of the channel's binary root in the
+ * run root and `--uninstall`, optionally followed by Squirrel's `-s`. Returns the program and its arguments; anything
+ * else, the other channel's Update.exe included, refuses.
  */
-export function parseUninstallString(value, runRoot) {
+export function parseUninstallString(value, runRoot, channel) {
   const match = typeof value === 'string' ? /^"([^"]+)"((?: +[^ "]+)*) *$/.exec(value) : null;
   if (!match) refuse('UNINSTALL_STRING_INVALID');
   const program = match[1], args = match[2].trim().split(/ +/).filter(Boolean);
-  if (normalizePath(program) !== normalizePath(path.win32.join(runLayout(runRoot).binaryRoot, 'Update.exe'))) refuse('UNINSTALL_STRING_OUTSIDE_RUN_ROOT');
+  if (normalizePath(program) !== normalizePath(path.win32.join(runLayout(runRoot, channel).binaryRoot, 'Update.exe'))) refuse('UNINSTALL_STRING_OUTSIDE_RUN_ROOT');
   if (!(args.length === 1 && args[0] === '--uninstall') && !(args.length === 2 && args[0] === '--uninstall' && args[1] === '-s')) refuse('UNINSTALL_STRING_INVALID');
   return {program, args};
 }
@@ -215,7 +270,7 @@ export function parseUninstallString(value, runRoot) {
  * SQUIRREL_TEMP = R\LocalAppData. The decoy must lie inside R and must not be the real LocalAppData.
  */
 export function uninstallEnvironment(base, {runRoot, real, decoy}) {
-  const layout = runLayout(runRoot);
+  const layout = runFolders(runRoot);
   if (!isDrivePath(decoy) || !isInside(decoy, runRoot) || normalizePath(decoy) === normalizePath(runRoot)) refuse('DECOY_OUTSIDE_RUN_ROOT');
   if (!isDrivePath(real?.localAppData) || isInside(decoy, real.localAppData) || isInside(real.localAppData, decoy)) refuse('DECOY_IS_REAL_ROOT');
   const env = installedEnvironment(base, {LOCALAPPDATA: decoy, APPDATA: layout.appData, TEMP: layout.temp, TMP: layout.temp, SQUIRREL_TEMP: layout.squirrelTemp});
@@ -224,26 +279,35 @@ export function uninstallEnvironment(base, {runRoot, real, decoy}) {
 }
 
 /**
- * The run layout under run root R (U12). B = R\LocalAppData is both SQUIRREL_TEMP (so Squirrel's binary root becomes
- * B\ETS2TelemetryDesktop) and the LOCALAPPDATA of every launch (so the data root is B\ETS2Telemetry).
+ * The folders of run root R that both channels share (U12): B = R\LocalAppData is both SQUIRREL_TEMP and the LOCALAPPDATA
+ * of every launch, and the profile is the installer test file's profileDir.
  */
-export function runLayout(runRoot) {
+export function runFolders(runRoot) {
   const base = path.win32.join(runRoot, 'LocalAppData');
   return {
-    runRoot, base, dataRoot: path.win32.join(base, DATA_ROOT), binaryRoot: path.win32.join(base, PRODUCT_ROOT),
-    squirrelTemp: base, temp: path.win32.join(runRoot, 'temp'), appData: path.win32.join(runRoot, 'AppData'),
+    runRoot, base, squirrelTemp: base, temp: path.win32.join(runRoot, 'temp'), appData: path.win32.join(runRoot, 'AppData'),
     profile: path.win32.join(runRoot, 'profile'), cwd: path.win32.join(runRoot, 'cwd'), diagnostics: path.win32.join(runRoot, 'diagnostics'),
     exports: path.win32.join(runRoot, 'exports'), fixture: path.win32.join(runRoot, 'fixture'),
     pluginMarker: path.win32.join(runRoot, PLUGIN_TEST_ROOT_MARKER), installTest: path.win32.join(runRoot, INSTALL_TEST_FILE)
   };
 }
+/**
+ * The run layout of one channel under run root R (U12): runFolders and the channel's own roots in B, so Squirrel's binary
+ * root becomes B\<Squirrel id> (B\ETS2TelemetryDesktop, B\ETS2TelemetryDesktopStaging) and the data root B\<data root>
+ * (B\ETS2Telemetry, B\ETS2TelemetryStaging).
+ */
+export function runLayout(runRoot, channel) {
+  const identity = lifecycleIdentity(channel), folders = runFolders(runRoot);
+  return {...folders, channel, dataRoot: path.win32.join(folders.base, identity.dataRoot), binaryRoot: path.win32.join(folders.base, identity.productRoot)};
+}
 
-/** The protected locations of the real user: data, binary and Roaming roots, and every Steam library. */
+/** The protected locations of the real user: both channels' data, binary and Roaming roots, and every Steam library. */
 export function protectedRoots(real, steamLibraries = []) {
   if (!isDrivePath(real?.localAppData) || !isDrivePath(real?.roamingAppData)) refuse('KNOWN_FOLDER_UNAVAILABLE');
   for (const library of steamLibraries) if (!isDrivePath(library)) refuse('STEAM_LIBRARY_INVALID');
   return {
-    real: [path.win32.join(real.localAppData, DATA_ROOT), path.win32.join(real.localAppData, PRODUCT_ROOT), path.win32.join(real.roamingAppData, ROAMING_ROOT)],
+    real: LIFECYCLE_IDENTITIES.flatMap(identity => [path.win32.join(real.localAppData, identity.dataRoot), path.win32.join(real.localAppData, identity.productRoot),
+      path.win32.join(real.roamingAppData, identity.roamingRoot)]),
     steam: [...steamLibraries]
   };
 }
@@ -273,10 +337,15 @@ export function steamLibraryPaths(vdf) {
   return [...vdf.matchAll(/"path"\s*"((?:[^"\\]|\\.)*)"/gi)].map(match => match[1].replace(/\\(.)/g, '$1'));
 }
 
-/** The product and game processes that refuse a run: the application, ETS2, ATS and any TruckersMP process. */
+/** The product executables of both channels, lower case and without `.exe`. */
+const PRODUCT_PROCESSES = new Set(LIFECYCLE_IDENTITIES.map(identity => identity.executable.toLowerCase().replace(/\.exe$/, '')));
+/**
+ * The product and game processes that refuse a run: the application of either channel, ETS2, ATS and any TruckersMP
+ * process. A staging run on the owner's machine therefore also waits until the installed production application has exited.
+ */
 export function isGuardedProcess(name) {
   const value = String(name).toLowerCase().replace(/\.exe$/, '');
-  return value === 'ets2telemetrydesktop' || value === 'eurotrucks2' || value === 'amtrucks' || value.startsWith('truckersmp');
+  return PRODUCT_PROCESSES.has(value) || value === 'eurotrucks2' || value === 'amtrucks' || value.startsWith('truckersmp');
 }
 
 /** Validates the parsed installer test file: fixed format and version, and every path inside the run root. */
@@ -298,7 +367,10 @@ export function checkInstallTest(document, runRoot) {
  * - `paths`: every other path the run uses (evidence, decoy, ...), checked like the layout's;
  * - `resolved`: the real location of each checked path by its normalized raw path (resolveRealLocation);
  * - `decoy`: optional; a LOCALAPPDATA decoy (ET-018 PR-3) that must not be the real LocalAppData;
- * - `realBinaryRootExists`, `registrationExists`: the real `%LOCALAPPDATA%\ETS2TelemetryDesktop` and the HKCU uninstall key;
+ * - `channels`: the build channels this run installs (checkRunChannels): the built one, or both side by side;
+ * - `realBinaryRootExists`, `registrationExists`: per channel, the real `%LOCALAPPDATA%\<Squirrel id>` and the HKCU
+ *   uninstall key of that name. Every channel the run installs must have neither: its test install writes that key. A
+ *   channel the run does not install is not judged, so a staging run may proceed beside an installed production copy;
  * - `processes`: the names of the running processes;
  * - `markers`: `{pluginMarker, installTest}` once R exists (`pluginMarker` a regular file, `installTest` the parsed file);
  *   `null` before R is created (phase `plan`).
@@ -309,6 +381,7 @@ export function checkRunPlan(facts) {
   const {runRoot} = facts;
   if (!isDrivePath(runRoot) || !path.win32.isAbsolute(runRoot) || /^[A-Za-z]:\\*$/.test(path.win32.normalize(runRoot)) ||
     !RUN_ROOT_NAME.test(path.win32.basename(path.win32.normalize(runRoot).replace(/\\+$/, '')))) refuse('RUN_ROOT_INVALID');
+  const channels = checkRunChannels(facts.channels);
   const roots = protectedRoots(facts.real, facts.steamLibraries ?? []);
   const checked = checkedPaths(facts);
   for (const candidate of checked) if (!isDrivePath(candidate)) refuse('PATH_INVALID');
@@ -326,8 +399,8 @@ export function checkRunPlan(facts) {
   }
   // A Steam library list that exists but could not be read could hide a library the run root lies in.
   if (facts.steamLibrariesUnreadable === true) refuse('STEAM_LIBRARIES_UNREADABLE');
-  if (facts.realBinaryRootExists !== false) refuse('REAL_INSTALL_PRESENT');
-  if (facts.registrationExists !== false) refuse('REGISTRATION_PRESENT');
+  for (const channel of channels) if (facts.realBinaryRootExists?.[channel] !== false) refuse('REAL_INSTALL_PRESENT', channel);
+  for (const channel of channels) if (facts.registrationExists?.[channel] !== false) refuse('REGISTRATION_PRESENT', channel);
   if (!Array.isArray(facts.processes)) refuse('PROCESS_LIST_UNAVAILABLE');
   if (facts.processes.some(isGuardedProcess)) refuse('PROCESS_RUNNING');
   if (facts.markers !== null) {
@@ -337,9 +410,15 @@ export function checkRunPlan(facts) {
   }
   return checked;
 }
-/** Every path checkRunPlan checks: the run layout, the extra paths and the decoy with its data and binary roots. */
+/**
+ * Every path checkRunPlan checks: the shared run folders, the data and binary roots of both channels, the extra paths and
+ * the decoy with both channels' data and binary roots in it. Both channels' roots are checked whatever the run installs,
+ * so the list does not depend on facts the guard is about to judge.
+ */
 export function checkedPaths({runRoot, paths = [], decoy}) {
-  return [...Object.values(runLayout(runRoot)), ...paths, ...(decoy ? [decoy, path.win32.join(decoy, DATA_ROOT), path.win32.join(decoy, PRODUCT_ROOT)] : [])];
+  const layouts = LIFECYCLE_IDENTITIES.map(identity => runLayout(runRoot, identity.channel));
+  return [...Object.values(runFolders(runRoot)), ...layouts.flatMap(layout => [layout.dataRoot, layout.binaryRoot]), ...paths,
+    ...(decoy ? [decoy, ...LIFECYCLE_IDENTITIES.flatMap(identity => [path.win32.join(decoy, identity.dataRoot), path.win32.join(decoy, identity.productRoot)])] : [])];
 }
 function locationOf(facts, candidate) {
   const resolved = facts.resolved?.[normalizePath(candidate)];
@@ -349,12 +428,12 @@ function locationOf(facts, candidate) {
 
 /**
  * After each install, repair and update (U12): the HKCU registration's InstallLocation and the binary root must be exactly
- * R\LocalAppData\ETS2TelemetryDesktop, by raw and real location, and the real binary root must still be absent.
- * Otherwise the run aborts at once and never uninstalls. `facts`: `{runRoot, installLocation, binaryRoot,
+ * the channel's R\LocalAppData\<Squirrel id>, by raw and real location, and that channel's real binary root must still be
+ * absent. Otherwise the run aborts at once and never uninstalls. `facts`: `{runRoot, channel, installLocation, binaryRoot,
  * resolvedInstallLocation, resolvedBinaryRoot, realBinaryRootExists}`.
  */
 export function checkInstalled(facts) {
-  const expected = runLayout(facts.runRoot).binaryRoot;
+  const expected = runLayout(facts.runRoot, facts.channel).binaryRoot;
   if (typeof facts.installLocation !== 'string' || facts.installLocation === '') refuse('REGISTRATION_MISSING');
   for (const location of [facts.installLocation, facts.binaryRoot, facts.resolvedInstallLocation, facts.resolvedBinaryRoot]) {
     if (!isDrivePath(location) || normalizePath(location) !== normalizePath(expected)) refuse('INSTALL_OUTSIDE_RUN_ROOT');
@@ -362,25 +441,27 @@ export function checkInstalled(facts) {
   if (facts.realBinaryRootExists !== false) refuse('REAL_INSTALL_PRESENT');
 }
 
-/** The product executable Squirrel installs in every `app-<version>` folder; it carries the product icon as resource 0. */
-export const PRODUCT_EXECUTABLE = 'ETS2TelemetryDesktop.exe';
+/** The production executable Squirrel installs in every `app-<version>` folder (lifecycleIdentity(channel).executable for either channel). */
+export const PRODUCT_EXECUTABLE = lifecycleIdentity('production').executable;
 /** Squirrel's own icon file in the binary root (`CreateUninstallerRegistryEntry` at the pinned Squirrel commit). */
 export const ROOT_ICON_FILE = 'app.ico';
 /**
  * ET-045g: the shape of the HKCU registration's DisplayIcon value, without recording it (it is a machine path).
- * `displayIcon` is the raw value the harness read, `binaryRoot` R's binary root and `version` the installed version.
- * Shapes: `root-app-ico` (Squirrel's `<binaryRoot>\app.ico`), `app-exe-index-0` (`<binaryRoot>\app-<v>\ETS2TelemetryDesktop.exe,0`),
+ * `displayIcon` is the raw value the harness read, `binaryRoot` the channel's binary root in R, `version` the installed
+ * version and `channel` the build channel, whose executable carries the product icon (ET-055 PR-5).
+ * Shapes: `root-app-ico` (Squirrel's `<binaryRoot>\app.ico`), `app-exe-index-0` (`<binaryRoot>\app-<v>\<executable>,0`),
  * `absent` (no value or an empty one) and `other` (anything else: quoted, relative, another folder, file or index).
  * `versionMatches` says whether `app-<v>` names `version`; it is null for every other shape.
  */
-export function classifyRegistrationIcon({displayIcon, binaryRoot, version}) {
+export function classifyRegistrationIcon({displayIcon, binaryRoot, version, channel}) {
+  const executable = lifecycleIdentity(channel).executable;
   const other = {shape: 'other', versionMatches: null};
   if (displayIcon === undefined || displayIcon === null || displayIcon === '') return {shape: 'absent', versionMatches: null};
   if (typeof displayIcon !== 'string' || !isDrivePath(displayIcon) || !isDrivePath(binaryRoot) || /["\r\n]/.test(displayIcon) ||
     displayIcon.split(/[\\/]/).some(part => part === '.' || part === '..')) return other;
   if (normalizePath(displayIcon) === normalizePath(path.win32.join(binaryRoot, ROOT_ICON_FILE))) return {shape: 'root-app-ico', versionMatches: null};
   const match = /^(.+)\\([^\\]+)\\([^\\]+),0$/.exec(displayIcon);
-  if (match && normalizePath(match[1]) === normalizePath(binaryRoot) && APP_FOLDER.test(match[2]) && match[3].toLowerCase() === PRODUCT_EXECUTABLE.toLowerCase()) {
+  if (match && normalizePath(match[1]) === normalizePath(binaryRoot) && APP_FOLDER.test(match[2]) && match[3].toLowerCase() === executable.toLowerCase()) {
     return {shape: 'app-exe-index-0', versionMatches: typeof version === 'string' && match[2] === `app-${version}`};
   }
   return other;
@@ -443,21 +524,30 @@ export function checkLaunchEnvironment(env, {runRoot, real}) {
  * its own environment as soon as it has read it, so no installer or application launch inherits it.
  */
 export const FACTS_VARIABLE = 'ETS2TELEMETRY_INSTALLER_FACTS';
+/** A registered DisplayVersion of fixed form: a plain version or one with a NuGet prerelease label such as `stg000000`. */
+const DISPLAY_VERSION = /^[0-9]{1,4}\.[0-9]{1,4}\.[0-9]{1,4}(-[0-9A-Za-z]{1,20})?$/;
+/** A registration's evidence: its DisplayVersion of fixed form and whether its InstallLocation lies inside the run root. */
+const registrationEvidence = (registration, runRoot) => registration ? {
+  displayVersion: typeof registration.displayVersion === 'string' && DISPLAY_VERSION.test(registration.displayVersion) ? registration.displayVersion : null,
+  installLocationInsideRunRoot: isDrivePath(registration.installLocation) && isDrivePath(runRoot) && isInside(registration.installLocation, runRoot)} : null;
 /**
  * What the evidence may keep of the machine facts: only booleans, counts, the matched product and game image names and a
  * registered version of fixed form. No path, Steam library list or process name of the machine is ever recorded.
- * `runRoot` decides whether the registration's InstallLocation lies inside the run root.
+ * `runRoot` decides whether the registration's InstallLocation lies inside the run root. `channel`, `registration`,
+ * `realBinaryRootExists` and `registrationExists` describe the channel of the driver command; ET-055 PR-5 adds
+ * `channels`, the same facts of both channels (`realBinaryRoots`, `registrations`) that the preflight judges.
  */
 export function factsEvidence(facts, runRoot) {
   const processes = Array.isArray(facts?.processes) ? facts.processes : null;
-  const registration = facts?.registration;
-  const version = typeof registration?.displayVersion === 'string' && /^[0-9]{1,4}\.[0-9]{1,4}\.[0-9]{1,4}$/.test(registration.displayVersion) ? registration.displayVersion : null;
+  const perChannel = read => Object.fromEntries(BUILD_CHANNELS.map(channel => [channel, read(channel)]));
   return {
     knownFoldersResolved: isDrivePath(facts?.real?.localAppData) && isDrivePath(facts?.real?.roamingAppData),
+    channel: BUILD_CHANNELS.includes(facts?.channel) ? facts.channel : null,
     realBinaryRootExists: facts?.realBinaryRootExists === true,
     registrationExists: facts?.registrationExists === true,
-    registration: registration ? {displayVersion: version, installLocationInsideRunRoot: isDrivePath(registration.installLocation) && isDrivePath(runRoot) &&
-      isInside(registration.installLocation, runRoot)} : null,
+    registration: registrationEvidence(facts?.registration, runRoot),
+    channels: {realBinaryRoots: perChannel(channel => facts?.realBinaryRoots?.[channel] === true),
+      registrations: perChannel(channel => registrationEvidence(facts?.registrations?.[channel], runRoot))},
     steamPathPresent: isDrivePath(facts?.steamPath),
     steamLibraries: (isDrivePath(facts?.steamPath) ? 1 : 0) + steamLibraryPaths(facts?.libraryFolders ?? '').length,
     steamLibrariesUnreadable: facts?.steamLibrariesUnreadable === true,
@@ -476,12 +566,10 @@ export function ownsRegistration(runRoot, installLocation) {
 
 // --- ET-045h: the product name, the shortcuts and the single Uninstall entry --------------------------------------------
 
-/** The Installed apps DisplayName and the shortcut name since ET-045h (forge.config.cjs `title`, `win32metadata.ProductName`). */
-export const PRODUCT_DISPLAY_NAME = 'Yukon Union Telemetry';
-/** The Installed apps Publisher since ET-045h (forge.config.cjs `authors`). */
-export const PRODUCT_PUBLISHER = 'Yukon Union Telemetry contributors';
-/** The shortcut name and DisplayName of every build before ET-045h. */
-export const LEGACY_DISPLAY_NAME = 'ETS2Telemetry Desktop';
+/** The production Installed apps DisplayName and shortcut name since ET-045h (forge.config.cjs `title`, `win32metadata.ProductName`). */
+export const PRODUCT_DISPLAY_NAME = lifecycleIdentity('production').displayName;
+/** The shortcut name and DisplayName of every production build before ET-045h; staging has no earlier name. */
+export const LEGACY_DISPLAY_NAME = lifecycleIdentity('production').legacyDisplayNames[0];
 /** The Start menu folder Squirrel puts the shortcut in (forge.config.cjs `win32metadata.CompanyName`). */
 export const SHORTCUT_COMPANY = 'Artur Sianiuk';
 export const SHORTCUT_LOCATIONS = Object.freeze(['desktop', 'start-menu']);
@@ -491,12 +579,14 @@ const relativeName = value => typeof value === 'string' && value.length <= 128 &
   && !value.split(/[\\/]/).some(part => part === '..' || part === '.' || (value !== '' && part === ''));
 
 /**
- * ET-045h: the harness's product shortcuts (links on the Desktop or in the Start menu whose target lies in R's binary
- * root), each `<location>|<folder>|<name>`: the location, the folder relative to it ('' for the location itself) and the
- * file name without `.lnk`. Names only, never a path. Returns, per location, how many carry the current name, the legacy
- * name or another name, and the folders of the current-name links. Throws on a malformed row.
+ * ET-045h: the harness's product shortcuts of one channel (links on the Desktop or in the Start menu whose target lies in
+ * that channel's binary root in R), each `<location>|<folder>|<name>`: the location, the folder relative to it ('' for the
+ * location itself) and the file name without `.lnk`. Names only, never a path. Returns, per location, how many carry the
+ * channel's current name, one of its legacy names (production: "ETS2Telemetry Desktop"; staging has none) or another
+ * name, and the folders of the current-name links. Throws on a malformed row.
  */
-export function classifyProductLinks(rows) {
+export function classifyProductLinks(rows, channel) {
+  const identity = lifecycleIdentity(channel);
   const result = {total: 0};
   for (const location of SHORTCUT_LOCATIONS) result[location] = {current: 0, legacy: 0, other: 0, currentFolders: []};
   for (const row of rows) {
@@ -505,8 +595,8 @@ export function classifyProductLinks(rows) {
     const [, location, folder, name] = match;
     const entry = result[location];
     result.total++;
-    if (name === PRODUCT_DISPLAY_NAME) {entry.current++; entry.currentFolders.push(folder);}
-    else if (name === LEGACY_DISPLAY_NAME) entry.legacy++;
+    if (name === identity.displayName) {entry.current++; entry.currentFolders.push(folder);}
+    else if (identity.legacyDisplayNames.includes(name)) entry.legacy++;
     else entry.other++;
   }
   return result;
@@ -533,22 +623,68 @@ export function checkProductLinks(classification, expectation) {
 }
 /**
  * ET-045h: one installation keeps one Installed apps entry. `rows` are the HKCU Uninstall subkeys the harness read, per
- * registry view, as `{view, name, installLocation}`. Among those whose InstallLocation lies in the run root, every view
- * holds at most one, at least one view holds one, and each is named PRODUCT_ROOT. Returns names only. Throws the first refusal.
+ * registry view, as `{view, name, installLocation}`. Among those whose InstallLocation lies in `channel`'s binary root in
+ * the run root, every view holds at most one, at least one view holds one, and each is named that channel's Squirrel id.
+ * ET-055 PR-5: any other row inside the run root must be the other channel's own entry (named its Squirrel id, in its
+ * binary root), as in the side-by-side scenario; anything else is foreign. Returns names only. Throws the first refusal.
  */
-export function checkUninstallEntries(rows, runRoot) {
+export function checkUninstallEntries(rows, runRoot, channel) {
   if (!Array.isArray(rows)) refuse('UNINSTALL_ENTRIES_INVALID');
+  const inRoot = (row, name) => isDrivePath(row?.installLocation) && isDrivePath(runRoot) && isInside(row.installLocation, runLayout(runRoot, name).binaryRoot);
   const inside = rows.filter(row => isDrivePath(row?.installLocation) && isDrivePath(runRoot) && isInside(row.installLocation, runRoot));
-  if (inside.length === 0) refuse('UNINSTALL_ENTRY_MISSING');
+  const own = inside.filter(row => inRoot(row, channel));
+  if (own.length === 0) refuse('UNINSTALL_ENTRY_MISSING');
   const perView = new Map();
-  for (const row of inside) perView.set(row.view, (perView.get(row.view) ?? 0) + 1);
+  for (const row of own) perView.set(row.view, (perView.get(row.view) ?? 0) + 1);
   if ([...perView.values()].some(count => count > 1)) refuse('UNINSTALL_ENTRY_DUPLICATE');
-  if (inside.some(row => row.name !== PRODUCT_ROOT)) refuse('UNINSTALL_ENTRY_FOREIGN_NAME');
-  return {views: perView.size, names: [...new Set(inside.map(row => row.name))]};
+  if (own.some(row => row.name !== lifecycleIdentity(channel).productRoot)) refuse('UNINSTALL_ENTRY_FOREIGN_NAME');
+  const others = inside.filter(row => !own.includes(row));
+  const otherChannel = row => BUILD_CHANNELS.find(name => name !== channel && inRoot(row, name) && row.name === lifecycleIdentity(name).productRoot);
+  if (others.some(row => otherChannel(row) === undefined)) refuse('UNINSTALL_ENTRY_FOREIGN_NAME');
+  return {views: perView.size, names: [...new Set(own.map(row => row.name))], otherChannels: [...new Set(others.map(otherChannel))].sort()};
 }
-/** ET-045h: the registration's DisplayName and Publisher are the product's (Squirrel writes both from the nuspec on every install and update). */
-export function checkRegistrationNames(registration) {
-  if (registration?.displayName !== PRODUCT_DISPLAY_NAME) refuse('DISPLAY_NAME_NOT_PRODUCT');
-  if (registration?.publisher !== PRODUCT_PUBLISHER) refuse('PUBLISHER_NOT_PRODUCT');
-  return {displayName: PRODUCT_DISPLAY_NAME, publisher: PRODUCT_PUBLISHER};
+/**
+ * ET-045h: the registration's DisplayName and Publisher are the channel's (Squirrel writes both from the nuspec on every
+ * install and update): "Yukon Union Telemetry" or "Yukon Union Telemetry Staging", with the one Publisher of both.
+ */
+export function checkRegistrationNames(registration, channel) {
+  const identity = lifecycleIdentity(channel);
+  if (registration?.displayName !== identity.displayName) refuse('DISPLAY_NAME_NOT_PRODUCT');
+  if (registration?.publisher !== identity.publisher) refuse('PUBLISHER_NOT_PRODUCT');
+  return {displayName: identity.displayName, publisher: identity.publisher};
+}
+
+// --- ET-055 PR-5: two channels side by side in one run root ----------------------------------------------------------
+
+/**
+ * The shortcuts' AUMIDs (System.AppUserModel.ID, which Squirrel sets to `com.squirrel.<id>.<exe>`): `rows` are
+ * `<location>|<name>|<aumid>` for the channel's current-name shortcuts the harness found. Every one must carry the
+ * channel's AUMID, which is never the other channel's. Names and AUMIDs only. Returns the count; throws the first refusal.
+ */
+export function checkShortcutIdentities(rows, channel) {
+  const identity = lifecycleIdentity(channel);
+  if (LIFECYCLE_IDENTITIES.some(other => other.channel !== channel && other.appUserModelId === identity.appUserModelId)) refuse('AUMID_SHARED');
+  if (!Array.isArray(rows) || rows.length === 0) refuse('SHORTCUT_IDENTITIES_MISSING');
+  for (const row of rows) {
+    const match = typeof row === 'string' ? /^(desktop|start-menu)\|([^|]+)\|([^|]*)$/.exec(row) : null;
+    if (!match || !relativeName(match[2])) refuse('SHORTCUT_IDENTITY_ROW_INVALID');
+    if (match[2] !== identity.displayName) refuse('SHORTCUT_IDENTITY_NAME', match[1]);
+    if (match[3] !== identity.appUserModelId) refuse('SHORTCUT_AUMID_DIFFERS', match[1]);
+  }
+  return rows.length;
+}
+/**
+ * The other channel's state recorded before and after one channel's install, uninstall or executor run: each value a
+ * JSON-ready record of names, hashes, sizes and times (no path). `after` must hold exactly the keys of `before`, each with
+ * the same value. Refuses with the first changed key's name; returns the key count.
+ */
+export function checkOtherChannelUnchanged(before, after) {
+  if (before === null || typeof before !== 'object' || Array.isArray(before) || after === null || typeof after !== 'object' || Array.isArray(after)) {
+    refuse('OTHER_CHANNEL_STATE_INVALID');
+  }
+  const keys = Object.keys(before).sort();
+  if (keys.length === 0) refuse('OTHER_CHANNEL_STATE_INVALID');
+  if (JSON.stringify(keys) !== JSON.stringify(Object.keys(after).sort())) refuse('OTHER_CHANNEL_STATE_KEYS_DIFFER');
+  for (const key of keys) if (JSON.stringify(before[key]) !== JSON.stringify(after[key])) refuse('OTHER_CHANNEL_CHANGED', key);
+  return keys.length;
 }

@@ -6,21 +6,22 @@ import {createRequire} from 'node:module';
 import {fileURLToPath} from 'node:url';
 import {createWindowsInstaller} from 'electron-winstaller';
 import {packageDirectoryName, readBuiltBuild} from '../build-channel.mjs';
-import {setupExeName} from '../release-identity.mjs';
+import {nugetVersion, setupExeName} from '../release-identity.mjs';
+import {lifecycleVersions} from './installer-guard.mjs';
 
 // ET-018 PR-1 (plan U10): builds installer version B, the local update feed of the installer lifecycle. It packs a
-// temporary copy of the packaged application folder with the pinned electron-winstaller as installer version 0.1.1; the
-// application bytes stay 0.1.0, as in ET-001. electron-winstaller writes into its input (it adds Squirrel.exe and the
+// temporary copy of the packaged application folder with the pinned electron-winstaller as installer version B (0.1.1 in
+// production, 0.1.1-stg.000000 in staging: lifecycleVersions, ET-055 PR-5); the application bytes stay version A's, as in
+// ET-001. electron-winstaller writes into its input (it adds Squirrel.exe and the
 // executable stub), so the packaged folder is copied first and never handed over itself. This builds files only; it runs
 // no installer. Usage: node scripts/installer/build-upgrade-fixture.mjs <run root fixture folder> <evidence file>
 
-export const FIXTURE_VERSION = '0.1.1';
 const checkout = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
-// ET-055 PR-4: the package, executable and NuGet id of the build that was made (its desktop build evidence), never of the
-// shell's variables. The lifecycle runs production installs only until ET-055 PR-5 adds the staging lifecycle and its
-// fixture version.
+// ET-055 PR-4 and PR-5: the package, executable, NuGet id and versions of the build that was made (its desktop build
+// evidence), never of the shell's variables. The harness sets ETS2TELEMETRY_BUILD_CHANNEL to that channel for this
+// command, so that forge.config.cjs below resolves the same one.
 const built = readBuiltBuild(checkout);
-assert.equal(built.channel, 'production', 'STAGING_LIFECYCLE_PENDING: the upgrade fixture is built for production installs only');
+export const FIXTURE_VERSION = lifecycleVersions(built.channel, built.version).b.package;
 const {identity} = built, executable = `${identity.executableName}.exe`;
 const packaged = path.join(checkout, packageDirectoryName(identity));
 const sha256 = bytes => createHash('sha256').update(bytes).digest('hex');
@@ -59,6 +60,8 @@ assert.equal(sha256(await readFile(path.join(packaged, executable))), executable
 const files = await listing(feed);
 const releases = (await readFile(path.join(feed, 'RELEASES'), 'utf8')).trim().split(/\r?\n/);
 assert.equal(releases.length, 1, 'Expected one RELEASES entry');
-assert.match(releases[0], new RegExp(`^[0-9A-Fa-f]{40} ${identity.squirrelId}-${FIXTURE_VERSION.replaceAll('.', '\\.')}-full\\.nupkg \\d+$`), 'Unexpected RELEASES entry');
-await writeFile(evidence, JSON.stringify({version: FIXTURE_VERSION, applicationVersion: built.version, feed: files, releases, seconds: (Date.now() - started) / 1000}, null, 2) + '\n');
+// The package name carries the NuGet form of the version (0.1.1-stg000000 in staging).
+assert.match(releases[0], new RegExp(`^[0-9A-Fa-f]{40} ${identity.squirrelId}-${nugetVersion(FIXTURE_VERSION).replaceAll('.', '\\.')}-full\\.nupkg \\d+$`), 'Unexpected RELEASES entry');
+await writeFile(evidence, JSON.stringify({channel: built.channel, version: FIXTURE_VERSION, applicationVersion: built.version, feed: files, releases,
+  seconds: (Date.now() - started) / 1000}, null, 2) + '\n');
 process.stdout.write(`Upgrade fixture ${FIXTURE_VERSION}: ${files.map(file => file.name).join(', ')}\n`);

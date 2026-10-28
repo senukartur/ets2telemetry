@@ -9,20 +9,30 @@ import {promisify} from 'node:util';
 import {_electron as electron} from '@playwright/test';
 import {rendererPages} from '../ci/overlay-observation.mjs';
 import {settingsPanel, waitForStartup} from '../ci/ui-navigation.mjs';
-import {BUILD_IDENTITIES} from '../build-channel.mjs';
+import {BUILD_CHANNELS, BUILD_IDENTITIES} from '../build-channel.mjs';
 import {assertVersionInfo, readVersionInfo} from '../release-identity.mjs';
+import {executorBytes} from '../uninstall-executor.mjs';
 import {checkedPaths, checkInstalled, checkLaunchEnvironment, checkRunPlan, checkRunSignal, checkSetupChannel, FACTS_VARIABLE, factsEvidence, InstallerGuardError, installedEnvironment, normalizePath,
   checkDataRootUnchanged, checkDecoyUnchanged, checkUninstallResidue, checkRegistrationIcon, classifyRegistrationIcon, electronRuntimeNames, ownsRegistration, parseUninstallString, resolveRealLocation, RUN_ONCE_KEY, RUN_ROOT_NAME,
-  checkProductLinks, checkRegistrationNames, checkUninstallEntries, classifyProductLinks, PRODUCT_EXECUTABLE, ROOT_ICON_FILE, runLayout, steamLibraryPaths,
-  uninstallEnvironment} from './installer-guard.mjs';
+  checkOtherChannelUnchanged, checkProductLinks, checkRegistrationNames, checkRunChannels, checkShortcutIdentities, checkUninstallEntries, classifyProductLinks, isInside, lifecycleIdentity,
+  LIFECYCLE_IDENTITIES, lifecycleVersions, ROOT_ICON_FILE, runLayout, steamLibraryPaths, uninstallEnvironment} from './installer-guard.mjs';
 
 // ET-018 PR-1, PR-3 and PR-4 (REG-013, REG-015, REG-017; plan U8, U10-U13): the Node driver of the installer lifecycle in a marked test root. The
 // PowerShell harness scripts/installer/Invoke-InstallerLifecycle.ps1 orchestrates the steps and runs every command below
 // that starts a process under a BoundedProcess Job; this file never runs an installer by itself except through `step`,
 // which the harness calls only after the guards passed. See docs/installer-testing.md.
 //
+// ET-055 PR-5 (REG-017, REG-019; UP12, UP19): every command works on the build channel its config file names
+// (config.channel, one of config.channels): its install root, data root, executable, plugin file, RunOnce value and
+// receipts come from lifecycleIdentity(channel). The lifecycle writes one config for the channel of the build that was
+// made; the side-by-side scenario writes one per channel (config-production.json, config-staging.json) into the same
+// evidence folder and run root, each naming the other as its peer (config.peers).
+//
 // Commands (all paths come from the harness's config file; evidence goes to config.evidence):
-//   signal --channel <c> [--allow-local]      the CI signal (checkRunSignal) and the Setup's channel (checkSetupChannel); first
+//   signal --channel <c> [--channel <c>] [--allow-local]
+//                                             the CI signal (checkRunSignal) and every Setup's channel (checkSetupChannel); first
+//   versions <channel> <application version>  ET-055 PR-5: the run's versions (lifecycleVersions) and both channels'
+//                                             identities (LIFECYCLE_IDENTITIES), on its output line as `plan`
 //   guard <config> <plan|ready>               the fail-closed preflight (checkRunPlan) on the harness's facts
 //   installed <config> <label> <version>      checkInstalled on the facts the harness read after an installer step; ET-045g
 //                                             also records icon-<label>.json (the DisplayIcon shape and the root and packaged
@@ -66,6 +76,14 @@ import {checkedPaths, checkInstalled, checkLaunchEnvironment, checkRunPlan, chec
 //                                             game host runs, which it must survive and register itself again; complete:
 //                                             the plugin and the data root are removed and no value is left)
 //   residue <config> <label>                  PR-3: checks the harness's residue-listing-<label>.json listing of the binary root
+//   side-by-side-launch <config> <label> <exe> <peer exe>
+//                                             ET-055 PR-5: both channels' installed applications run at once, each with its
+//                                             own profile; each one's plugin setup installs only its own DLL in the fake game
+//   channel-state <config> <label>            ET-055 PR-5: the channel's data root, plugin DLL (bytes and time) and RunOnce
+//                                             value, for channel-compare
+//   channel-compare <config> <before> <after> ET-055 PR-5: the other channel's action left this channel's state unchanged
+//   plant-run-once <config> <label> [remove]  ET-055 PR-5: writes this channel's RunOnce value into the run's test key, so the
+//                                             other channel's executor can be shown to leave it alone; `remove` deletes it
 //   cleanup <config> <location per view...>   deletes R (never following links) after the harness kept the evidence
 
 const here = path.dirname(fileURLToPath(import.meta.url));
@@ -88,8 +106,10 @@ export const SEED_REGISTRY = JSON.stringify({format: 'ets2telemetry.plugin-setup
 export const SEED_EXPORT = JSON.stringify({format: 'ets2telemetry.trip-export', note: 'Synthetic export of the ET-018 installer lifecycle; kept outside the data root.'}, null, 2) + '\n';
 
 // The upgraded database, written by hand from the frozen version-1 fixture and migrations 0002-journal/0003-hard-mode
-// (docs/storage.md); `backup` is filled from the one manifest the migration wrote.
-export function expectedDatabase(backup) {
+// (docs/storage.md); `backup` is filled from the one manifest the migration wrote, and `appVersion` is the version the
+// migrating application reports: `0.1.0` in production, `0.1.0-stg.000000` in staging (ET-055 PR-5). The fixture's own
+// rows (its creation and migration 0001) keep the `0.1.0` they were written with.
+export function expectedDatabase(backup, appVersion) {
   const counts = {plugin_sessions: 1, clocks: 2, events: 5, event_gaps: 1, job_configurations: 1, truck_configurations: 1, trailer_configurations: 1,
     event_amounts: 1, trips: 1, trip_trailers: 1, event_attributions: 4, completeness_intervals: 1, samples: 3};
   return {
@@ -97,8 +117,8 @@ export function expectedDatabase(backup) {
     info: [{database_uuid: 'f0000000-0000-4000-8000-000000000001', purpose: 'synthetic', accepted_origin: 'synthetic', created_utc_ms: 1791676800000, created_app_version: '0.1.0'}],
     counts,
     migrations: [{version: 1, name: '0001-initial', app_version: '0.1.0', backup_file_name: null, backup_sha256: null},
-      {version: 2, name: '0002-journal', app_version: '0.1.0', backup_file_name: backup.fileName, backup_sha256: backup.fileSha256},
-      {version: 3, name: '0003-hard-mode', app_version: '0.1.0', backup_file_name: backup.fileName, backup_sha256: backup.fileSha256}],
+      {version: 2, name: '0002-journal', app_version: appVersion, backup_file_name: backup.fileName, backup_sha256: backup.fileSha256},
+      {version: 3, name: '0003-hard-mode', app_version: appVersion, backup_file_name: backup.fileName, backup_sha256: backup.fileSha256}],
     sessions: [{plugin_session_uuid: '10000000-0000-4000-8000-000000000001', game: 'ets2', origin: 'synthetic', committed_through_event_seq: '00000000000000000006'}],
     events: [{id: 1, event_seq: '00000000000000000001', type: 'job.configured'}, {id: 2, event_seq: '00000000000000000002', type: 'truck.configured'},
       {id: 3, event_seq: '00000000000000000003', type: 'trailer.configured'}, {id: 4, event_seq: '00000000000000000006', type: 'job.cancelled'},
@@ -137,6 +157,45 @@ function machineFacts() {
 }
 const failure = error => ({name: error?.name, code: error?.code ?? null, message: String(error?.message ?? error)});
 
+/** ET-055 PR-5: the channel a config names, its layout and its identity. */
+const channelOf = config => config.channel;
+const layoutOf = config => runLayout(config.runRoot, channelOf(config));
+const identityOf = config => lifecycleIdentity(channelOf(config));
+/** The run's versions (lifecycleVersions) from the application version the config records. */
+const versionsOf = config => lifecycleVersions(channelOf(config), config.appVersion);
+/** A label of fixed form: lower-case letters, digits, dots and hyphens. */
+const LABEL = /^[a-z0-9.-]{1,40}$/;
+/** An installed (NuGet) version: `0.1.0`, `0.1.1-stg000000`. */
+const INSTALLED_VERSION = /^[0-9]{1,4}\.[0-9]{1,4}\.[0-9]{1,4}(-[0-9A-Za-z]{1,20})?$/;
+/**
+ * A config file's fixed shape: its run root, a channel among the run's channels, the application version the build
+ * reports and, for the side-by-side scenario, the peer config of the other channel inside the same evidence folder.
+ */
+function checkConfig(config) {
+  assert.ok(RUN_ROOT_NAME.test(path.win32.basename(config.runRoot)), 'CONFIG_RUN_ROOT_INVALID');
+  const channels = checkRunChannels(config.channels);
+  assert.ok(channels.includes(config.channel), 'CONFIG_CHANNEL_INVALID');
+  versionsOf(config);
+  for (const [channel, file] of Object.entries(config.peers ?? {})) {
+    assert.ok(channel !== config.channel && channels.includes(channel) && typeof file === 'string' &&
+      normalizePath(path.win32.dirname(file)) === normalizePath(config.evidence) && /^config-[a-z]+\.json$/.test(path.win32.basename(file)), 'CONFIG_PEER_INVALID');
+  }
+  if (config.profileDir !== undefined) assert.ok(typeof config.profileDir === 'string' && isInside(config.profileDir, config.runRoot) &&
+    normalizePath(config.profileDir) !== normalizePath(config.runRoot), 'CONFIG_PROFILE_INVALID');
+  return config;
+}
+/** The peer config of `config` (the other channel of a side-by-side run), checked like the own one and naming the same run. */
+async function peerConfig(config) {
+  const [file] = Object.values(config.peers ?? {});
+  assert.ok(typeof file === 'string', 'PEER_CONFIG_MISSING');
+  const peer = checkConfig(await readJson(file, 64 * 1024));
+  assert.ok(normalizePath(peer.runRoot) === normalizePath(config.runRoot) && normalizePath(peer.evidence) === normalizePath(config.evidence) &&
+    peer.channel !== config.channel, 'PEER_CONFIG_INVALID');
+  return peer;
+}
+/** The profile a launch of `config` uses: the side-by-side scenario gives each channel its own (the test file's stays free). */
+const profileOf = config => config.profileDir ?? layoutOf(config).profile;
+
 /** The real location of every checked path, keyed by normalized raw path. */
 async function resolvedMap(paths) {
   const map = {};
@@ -154,10 +213,15 @@ async function guard(config, phase) {
   const facts = machineFacts();
   const steamLibraries = [...(facts.steamPath ? [facts.steamPath] : []), ...steamLibraryPaths(facts.libraryFolders ?? '')];
   const base = {runRoot: config.runRoot, paths: [config.evidence], decoy: decoyOf(config.runRoot), real: facts.real, steamLibraries};
-  const plan = {...base, resolved: await resolvedMap(checkedPaths(base)), realBinaryRootExists: facts.realBinaryRootExists,
-    registrationExists: facts.registrationExists, processes: facts.processes, steamLibrariesUnreadable: facts.libraryFoldersState === 'unreadable', markers: null};
+  // ET-055 PR-5: per channel, whether the real binary root and the HKCU uninstall key of that name exist. A key the
+  // harness did not report (undefined) is not "absent", so the preflight refuses it.
+  const perChannel = read => Object.fromEntries(BUILD_CHANNELS.map(channel => [channel, read(channel)]));
+  const plan = {...base, channels: config.channels, resolved: await resolvedMap(checkedPaths(base)),
+    realBinaryRootExists: perChannel(channel => facts.realBinaryRoots?.[channel]),
+    registrationExists: perChannel(channel => facts.registrations?.[channel] === null ? false : facts.registrations?.[channel] === undefined ? undefined : true),
+    processes: facts.processes, steamLibrariesUnreadable: facts.libraryFoldersState === 'unreadable', markers: null};
   if (phase === 'ready') {
-    const layout = runLayout(config.runRoot);
+    const layout = layoutOf(config);
     plan.markers = {pluginMarker: await regularFile(layout.pluginMarker),
       installTest: await regularFile(layout.installTest) ? await readJson(layout.installTest, 16 * 1024) : null};
   } else assert.equal(phase, 'plan');
@@ -166,12 +230,12 @@ async function guard(config, phase) {
 }
 
 async function installed(config, label, version) {
-  assert.match(String(label), /^[a-z0-9.-]{1,40}$/, 'INSTALLED_LABEL_INVALID');
-  assert.match(String(version), /^[0-9]{1,4}\.[0-9]{1,4}\.[0-9]{1,4}$/, 'INSTALLED_VERSION_INVALID');
+  assert.match(String(label), LABEL, 'INSTALLED_LABEL_INVALID');
+  assert.match(String(version), INSTALLED_VERSION, 'INSTALLED_VERSION_INVALID');
   const facts = machineFacts();
-  const layout = runLayout(config.runRoot);
+  const layout = layoutOf(config);
   const registration = facts.registration ?? {};
-  checkInstalled({runRoot: config.runRoot, installLocation: registration.installLocation, binaryRoot: layout.binaryRoot,
+  checkInstalled({runRoot: config.runRoot, channel: channelOf(config), installLocation: registration.installLocation, binaryRoot: layout.binaryRoot,
     resolvedInstallLocation: typeof registration.installLocation === 'string' ? await resolveRealLocation(registration.installLocation, realpath) : null,
     resolvedBinaryRoot: await resolveRealLocation(layout.binaryRoot, realpath), realBinaryRootExists: facts.realBinaryRootExists});
   // The registered uninstall command runs the Update.exe inside R.
@@ -182,9 +246,10 @@ async function installed(config, label, version) {
   const icon = await iconObservation(layout, registration, label, version);
   await writeEvidence(config, `icon-${label}.json`, icon);
   checkRegistrationIcon(icon);
-  // ET-045h: the Installed apps names, and one entry for one installation. Names only reach the evidence.
-  const names = checkRegistrationNames(registration);
-  const uninstallEntries = checkUninstallEntries(facts.uninstallEntries, config.runRoot);
+  // ET-045h: the Installed apps names, and one entry for one installation. Names only reach the evidence. ET-055 PR-5:
+  // the other channel's own entry may sit beside it in a side-by-side run.
+  const names = checkRegistrationNames(registration, channelOf(config));
+  const uninstallEntries = checkUninstallEntries(facts.uninstallEntries, config.runRoot, channelOf(config));
   return {uninstallInsideRunRoot, iconChecked: true, names, uninstallEntries, facts: factsEvidence(facts, config.runRoot)};
 }
 
@@ -193,11 +258,11 @@ async function installed(config, label, version) {
  * menu folder after its CompanyName; one bounded Windows PowerShell call reads it (release-identity.mjs).
  */
 function versionInfo(config, label, version) {
-  assert.match(String(label), /^[a-z0-9.-]{1,40}$/, 'VERSION_INFO_LABEL_INVALID');
-  assert.match(String(version), /^[0-9]{1,4}\.[0-9]{1,4}\.[0-9]{1,4}$/, 'VERSION_INFO_VERSION_INVALID');
-  const info = readVersionInfo(path.win32.join(runLayout(config.runRoot).binaryRoot, `app-${version}`, PRODUCT_EXECUTABLE), process.env);
-  // The lifecycle installs production Setups only until ET-055 PR-5 (checkSetupChannel); never the shell's channel.
-  assertVersionInfo(info, BUILD_IDENTITIES.production);
+  assert.match(String(label), LABEL, 'VERSION_INFO_LABEL_INVALID');
+  assert.match(String(version), INSTALLED_VERSION, 'VERSION_INFO_VERSION_INVALID');
+  const info = readVersionInfo(path.win32.join(layoutOf(config).binaryRoot, `app-${version}`, identityOf(config).executable), process.env);
+  // The config's channel, never the shell's (ET-055 PR-5).
+  assertVersionInfo(info, BUILD_IDENTITIES[channelOf(config)]);
   return {versionInfo: info};
 }
 
@@ -208,21 +273,29 @@ function versionInfo(config, label, version) {
  */
 async function legacyNames(config, label, locations) {
   const facts = machineFacts();
-  const layout = runLayout(config.runRoot);
+  const layout = layoutOf(config);
   const registration = facts.registration ?? {};
-  checkInstalled({runRoot: config.runRoot, installLocation: registration.installLocation, binaryRoot: layout.binaryRoot,
+  // Only a channel with names before ET-045h (production) has old names to plant (ET-055 PR-5).
+  assert.ok(identityOf(config).legacyDisplayNames.length > 0, 'LEGACY_NAMES_CHANNEL_HAS_NONE');
+  checkInstalled({runRoot: config.runRoot, channel: channelOf(config), installLocation: registration.installLocation, binaryRoot: layout.binaryRoot,
     resolvedInstallLocation: typeof registration.installLocation === 'string' ? await resolveRealLocation(registration.installLocation, realpath) : null,
     resolvedBinaryRoot: await resolveRealLocation(layout.binaryRoot, realpath), realBinaryRootExists: facts.realBinaryRootExists});
   assert.match(String(label), /^[a-z0-9.-]{1,40}$/, 'LEGACY_NAMES_LABEL_INVALID');
   return {ownsRegistration: locations.map(location => location !== '-' && ownsRegistration(config.runRoot, location))};
 }
 
-/** ET-045h: the product shortcuts the harness found, as names only; `installed` or `none` (checkProductLinks). */
-function links(label, expectation, rows) {
-  assert.match(String(label), /^[a-z0-9.-]{1,40}$/, 'LINKS_LABEL_INVALID');
-  const classification = classifyProductLinks(rows);
+/**
+ * ET-045h: the channel's product shortcuts the harness found, as names only; `installed` or `none` (checkProductLinks).
+ * ET-055 PR-5: `identities` are the `<location>|<name>|<aumid>` rows of the current-name shortcuts, which must carry the
+ * channel's AUMID (checkShortcutIdentities); the harness passes them after `--aumid` on a hosted install.
+ */
+function links(config, label, expectation, args) {
+  assert.match(String(label), LABEL, 'LINKS_LABEL_INVALID');
+  const marker = args.indexOf('--aumid');
+  const rows = marker === -1 ? args : args.slice(0, marker), identities = marker === -1 ? null : args.slice(marker + 1);
+  const classification = classifyProductLinks(rows, channelOf(config));
   checkProductLinks(classification, expectation);
-  return {expectation, classification};
+  return {expectation, classification, aumids: identities === null ? null : checkShortcutIdentities(identities, channelOf(config))};
 }
 
 /** The tracked product icon (resources/icon/app.ico), which forge.config.cjs embeds in the executable and Setup.exe. */
@@ -252,7 +325,7 @@ async function iconFileState(file, trackedSha256) {
  */
 async function iconObservation(layout, registration, label, version) {
   const trackedSha256 = sha256(await readFile(TRACKED_ICON));
-  return {label, version, displayIcon: classifyRegistrationIcon({displayIcon: registration.displayIcon, binaryRoot: layout.binaryRoot, version}),
+  return {label, version, displayIcon: classifyRegistrationIcon({displayIcon: registration.displayIcon, binaryRoot: layout.binaryRoot, version, channel: layout.channel}),
     rootIcon: await iconFileState(path.win32.join(layout.binaryRoot, ROOT_ICON_FILE), trackedSha256),
     bundledIcon: await iconFileState(path.win32.join(layout.binaryRoot, `app-${version}`, 'resources', 'icon', ROOT_ICON_FILE), trackedSha256),
     trackedSha256};
@@ -277,9 +350,9 @@ function legacyIconBytes() {
  */
 async function legacyIcon(config, label, locations) {
   const facts = machineFacts();
-  const layout = runLayout(config.runRoot);
+  const layout = layoutOf(config);
   const registration = facts.registration ?? {};
-  checkInstalled({runRoot: config.runRoot, installLocation: registration.installLocation, binaryRoot: layout.binaryRoot,
+  checkInstalled({runRoot: config.runRoot, channel: channelOf(config), installLocation: registration.installLocation, binaryRoot: layout.binaryRoot,
     resolvedInstallLocation: typeof registration.installLocation === 'string' ? await resolveRealLocation(registration.installLocation, realpath) : null,
     resolvedBinaryRoot: await resolveRealLocation(layout.binaryRoot, realpath), realBinaryRootExists: facts.realBinaryRootExists});
   assert.match(String(label), /^[a-z0-9.-]{1,40}$/, 'LEGACY_ICON_LABEL_INVALID');
@@ -300,7 +373,7 @@ async function fixtureHash() {
   return row[0];
 }
 async function seed(config) {
-  const layout = runLayout(config.runRoot);
+  const layout = layoutOf(config);
   const fixture = path.join(checkout, 'tests', 'fixtures', 'storage', FIXTURE), expected = await fixtureHash();
   assert.equal(sha256(await readFile(fixture)), expected, 'FIXTURE_CHANGED');
   const files = {
@@ -344,7 +417,7 @@ async function tree(root) {
   return entries;
 }
 async function snapshot(config) {
-  const layout = runLayout(config.runRoot);
+  const layout = layoutOf(config);
   return {dataRoot: await tree(layout.dataRoot), exports: await tree(layout.exports)};
 }
 async function compare(config, before, after) {
@@ -367,7 +440,7 @@ async function processImages() {
  * exited 0 and everything under R drained within the budget.
  */
 async function step(config, label, executable, args) {
-  const layout = runLayout(config.runRoot);
+  const layout = layoutOf(config);
   // The only command that runs an installer repeats the CI signal, so a direct local call refuses as well.
   checkRunSignal(process.env, {allowLocal: config.allowLocal === true});
   // Only the reviewed Setup.exe of the make output or the installed Update.exe inside the run root may run here.
@@ -376,9 +449,13 @@ async function step(config, label, executable, args) {
   checkLaunchEnvironment(process.env, {runRoot: config.runRoot, real: machineFacts().real});
   return runAndDrain(config, label, executable, args, process.env);
 }
-/** Runs one program in R's working folder, keeps its bounded output, and waits until no process image under R is left. */
-async function runAndDrain(config, label, executable, args, env, budget = config.stepBudgetMs ?? 50000) {
-  const layout = runLayout(config.runRoot);
+/**
+ * Runs one program in R's working folder, keeps its bounded output, and waits until no process image under R is left.
+ * ET-055 PR-5: images under a folder of `keep` (the other channel's binary root while its application runs beside) are
+ * not waited for; whether that application survived is the caller's check.
+ */
+async function runAndDrain(config, label, executable, args, env, budget = config.stepBudgetMs ?? 50000, keep = []) {
+  const layout = layoutOf(config);
   const started = performance.now();
   const child = spawn(executable, args, {cwd: layout.cwd, env, stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true});
   const output = {stdout: [], stderr: []};
@@ -392,8 +469,9 @@ async function runAndDrain(config, label, executable, args, env, budget = config
   await writeFile(path.join(config.evidence, `step-${label}-stderr.log`), Buffer.concat(output.stderr).subarray(0, 1 << 20));
   const exitMilliseconds = Math.round(performance.now() - started);
   let remaining;
+  const kept = image => keep.some(folder => normalizePath(image).startsWith(`${normalizePath(folder)}\\`));
   for (;;) {
-    remaining = (await processImages()).filter(image => normalizePath(image).startsWith(`${normalizePath(config.runRoot)}\\`));
+    remaining = (await processImages()).filter(image => normalizePath(image).startsWith(`${normalizePath(config.runRoot)}\\`) && !kept(image));
     if (!remaining.length || performance.now() - started > budget) break;
     await new Promise(resolve => setTimeout(resolve, 250));
   }
@@ -427,11 +505,11 @@ async function until(read, accept, code, timeoutMs) {
  * reopens it. Waits for the history open and the plugin setup's first discovery, then closes orderly.
  */
 async function launch(config, label, executable, migratedFrom) {
-  const layout = runLayout(config.runRoot);
+  const layout = layoutOf(config);
   const diagnostics = path.join(layout.diagnostics, `launch-${label}`);
   await mkdir(diagnostics, {recursive: true});
   const env = installedEnvironment(process.env, {LOCALAPPDATA: layout.base, APPDATA: layout.appData, TEMP: layout.temp, TMP: layout.temp,
-    ETS2TELEMETRY_PROFILE_DIR: layout.profile, ETS2TELEMETRY_DIAGNOSTIC_DIR: diagnostics, ETS2TELEMETRY_PLUGIN_SETUP_ROOT: config.runRoot,
+    ETS2TELEMETRY_PROFILE_DIR: profileOf(config), ETS2TELEMETRY_DIAGNOSTIC_DIR: diagnostics, ETS2TELEMETRY_PLUGIN_SETUP_ROOT: config.runRoot,
     ETS2TELEMETRY_RECORDING: `synthetic:${RECORDING_NAME}`});
   checkLaunchEnvironment(env, {runRoot: config.runRoot, real: machineFacts().real});
   assert.ok(normalizePath(executable).startsWith(`${normalizePath(layout.binaryRoot)}\\app-`), 'LAUNCH_EXECUTABLE_NOT_INSTALLED');
@@ -493,7 +571,7 @@ async function launch(config, label, executable, migratedFrom) {
  * must not appear in the data root the next installer step is compared against.
  */
 async function verify(config, label, executable) {
-  const layout = runLayout(config.runRoot);
+  const layout = layoutOf(config), appVersion = versionsOf(config).appVersion;
   assert.ok(normalizePath(executable).startsWith(`${normalizePath(layout.binaryRoot)}\\app-`), 'VERIFY_EXECUTABLE_NOT_INSTALLED');
   const database = path.join(layout.dataRoot, 'synthetic', `${RECORDING_NAME}.sqlite`), backups = path.join(layout.dataRoot, 'synthetic', 'backups');
   // The application closed the database without sidecars, and created no production history database beside it.
@@ -527,13 +605,13 @@ async function verify(config, label, executable) {
   assert.match(manifest.fileName, BACKUP_NAME, 'BACKUP_NAME_UNEXPECTED');
   assert.deepEqual(facts.backups, [manifest.fileName.replace(/\.sqlite$/, '.json'), manifest.fileName].sort(), 'BACKUP_FILES_UNEXPECTED');
   assert.deepEqual({format: manifest.format, databaseUuid: manifest.databaseUuid, fromVersion: manifest.fromVersion, reason: manifest.reason, appVersion: manifest.appVersion},
-    {format: 'ets2telemetry-backup-1', databaseUuid: 'f0000000-0000-4000-8000-000000000001', fromVersion: 1, reason: 'pre-migration', appVersion: '0.1.0'}, 'BACKUP_MANIFEST_UNEXPECTED');
+    {format: 'ets2telemetry-backup-1', databaseUuid: 'f0000000-0000-4000-8000-000000000001', fromVersion: 1, reason: 'pre-migration', appVersion}, 'BACKUP_MANIFEST_UNEXPECTED');
   assert.deepEqual({sha256: file.sha256, size: file.size}, {sha256: manifest.fileSha256, size: manifest.size}, 'BACKUP_FILE_DIFFERS');
   assert.deepEqual(content, {userVersion: 1, applicationId: 1163154226, integrity: ['ok'], foreignKeyViolations: 0,
-    info: expectedDatabase(manifest).info, counts: EXPECTED_BACKUP_COUNTS}, 'BACKUP_CONTENT_UNEXPECTED');
+    info: expectedDatabase(manifest, appVersion).info, counts: EXPECTED_BACKUP_COUNTS}, 'BACKUP_CONTENT_UNEXPECTED');
   assert.deepEqual(Object.fromEntries(Object.entries(manifest.rowCounts).filter(([table]) => table in EXPECTED_BACKUP_COUNTS)), EXPECTED_BACKUP_COUNTS, 'BACKUP_ROW_COUNTS_UNEXPECTED');
   // The upgraded database itself.
-  assert.deepEqual(facts.database, expectedDatabase(manifest), 'HISTORY_CONTENT_UNEXPECTED');
+  assert.deepEqual(facts.database, expectedDatabase(manifest, appVersion), 'HISTORY_CONTENT_UNEXPECTED');
   // Settings, plugin registry and export keep the seeded bytes.
   const seeded = (await readJson(path.join(config.evidence, 'seed.json'))).result;
   const now = {};
@@ -549,17 +627,24 @@ async function verify(config, label, executable) {
 // with LOCALAPPDATA = R\decoy, which holds sentinel ETS2Telemetry files, and with no ETS2TELEMETRY_ variable: the hook
 // must take its roots from the install location inside R and leave the decoy byte-identical. Every record keeps fixed
 // labels, hashes and counts only, never a path.
-const PLUGIN_FILE = 'ets2telemetry-plugin.dll';
-const RECEIPT_NAME = /^ETS2Telemetry-uninstall-\d{8}T\d{9}Z\.json$/;
+/** A receipt file name of fixed form: the channel's prefix and a UTC stamp. */
+const receiptPattern = prefix => new RegExp(`^${prefix.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\d{8}T\\d{9}Z\\.json$`);
+/** The channel's Windows-initiated uninstall receipt (`ETS2Telemetry-uninstall-…`, `ETS2TelemetryStaging-uninstall-…`). */
+const receiptNameOf = config => receiptPattern(identityOf(config).receiptPrefix);
 const decoyOf = runRoot => path.win32.join(runRoot, 'decoy');
 /** The uninstall program and its drain get this long, so the whole command stays inside its 60 s Job with a launch before it. */
 const UNINSTALL_RUN_BUDGET_MS = 35000;
-/** The fake ETS2 folder in R's fake Steam library, and the files the uninstall must keep or remove there. */
-function gameLayout(runRoot) {
+/**
+ * The fake ETS2 folder in R's fake Steam library, and the files the uninstall must keep or remove there: `dll` is the
+ * channel's own plugin file, and `kept` holds the unrelated files and (ET-055 PR-5) every other channel's plugin file,
+ * which an action of this channel must leave byte-identical with its modification time, present or absent.
+ */
+function gameLayout(runRoot, channel) {
   const library = path.win32.join(runRoot, 'LibraryA'), root = path.win32.join(library, 'steamapps', 'common', 'Euro Truck Simulator 2');
   const win64 = path.win32.join(root, 'bin', 'win_x64'), plugins = path.win32.join(win64, 'plugins');
-  return {steam: path.win32.join(runRoot, 'Steam'), library, root, plugins, dll: path.win32.join(plugins, PLUGIN_FILE),
-    kept: {executable: path.win32.join(win64, 'eurotrucks2.exe'), unrelatedDll: path.win32.join(plugins, 'other-plugin.dll'), unrelatedText: path.win32.join(plugins, 'readme.txt')}};
+  const others = Object.fromEntries(BUILD_CHANNELS.filter(other => other !== channel).map(other => [`${other}Plugin`, path.win32.join(plugins, lifecycleIdentity(other).pluginFile)]));
+  return {steam: path.win32.join(runRoot, 'Steam'), library, root, plugins, dll: path.win32.join(plugins, lifecycleIdentity(channel).pluginFile),
+    kept: {executable: path.win32.join(win64, 'eurotrucks2.exe'), unrelatedDll: path.win32.join(plugins, 'other-plugin.dll'), unrelatedText: path.win32.join(plugins, 'readme.txt'), ...others}};
 }
 const vdfString = value => `"${value.replaceAll('\\', '\\\\').replaceAll('"', '\\"')}"`;
 async function fileState(file) {
@@ -573,8 +658,8 @@ async function fileState(file) {
     throw error;
   }
 }
-async function keptStates(runRoot) {
-  const {kept} = gameLayout(runRoot), layout = runLayout(runRoot), states = {};
+async function keptStates(runRoot, channel) {
+  const {kept} = gameLayout(runRoot, channel), layout = runLayout(runRoot, channel), states = {};
   for (const [label, file] of Object.entries(kept)) states[label] = await fileState(file);
   states.export = await fileState(path.join(layout.exports, 'trip-export.json'));
   return states;
@@ -587,12 +672,13 @@ async function bundledHash(executable) {
 
 /**
  * The fake Steam root `R\Steam` with a library list naming `R\LibraryA`, the fake ETS2 folder there with an unrelated DLL
- * and a text file in its plugins folder, a plugin registry that manages ETS2 and excludes ATS, and the decoy
- * LOCALAPPDATA with sentinel data and binary roots. Runs after the PR-1 upgrade checks, which need the seeded registry.
+ * and a text file in its plugins folder, a plugin registry per run channel that manages ETS2 and excludes ATS, and the
+ * decoy LOCALAPPDATA with sentinel data and binary roots of both channels. Runs after the PR-1 upgrade checks, which need
+ * the seeded registry.
  */
 async function games(config) {
   const runRoot = await realpath(config.runRoot);
-  const game = gameLayout(runRoot), layout = runLayout(runRoot);
+  const game = gameLayout(runRoot, channelOf(config));
   const write = async (file, content) => {await mkdir(path.dirname(file), {recursive: true}); await writeFile(file, content, {flag: 'wx'});};
   const entries = [game.steam, game.library].map((library, index) => `\t"${index}"\n\t{\n\t\t"path"\t\t${vdfString(library)}\n\t\t"label"\t\t""\n\t\t"apps"\n\t\t{\n\t\t}\n\t}\n`).join('');
   await mkdir(path.join(game.steam, 'steamapps', 'common'), {recursive: true});
@@ -602,29 +688,35 @@ async function games(config) {
   await write(game.kept.executable, 'fake executable of the installer lifecycle\n');
   await write(game.kept.unrelatedDll, 'MZ unrelated plugin of another tool; never changed by ETS2Telemetry\n');
   await write(game.kept.unrelatedText, 'Notes of the driver; never changed by ETS2Telemetry.\n');
-  // The seeded registry excluded both games for the upgrade checks; ETS2 is managed from now on.
-  await writeFile(path.join(layout.dataRoot, 'plugins', 'setup.json'), JSON.stringify({format: 'ets2telemetry.plugin-setup', version: 1,
-    games: {ets2: {excluded: false, manualRoot: null}, ats: {excluded: true, manualRoot: null}}, installs: [], pending: [], failures: []}, null, 2) + '\n');
+  // The seeded registry excluded both games for the upgrade checks; ETS2 is managed from now on, by every run channel.
+  for (const channel of config.channels) {
+    const registry = path.join(runLayout(runRoot, channel).dataRoot, 'plugins', 'setup.json');
+    await mkdir(path.dirname(registry), {recursive: true});
+    await writeFile(registry, JSON.stringify({format: 'ets2telemetry.plugin-setup', version: 1,
+      games: {ets2: {excluded: false, manualRoot: null}, ats: {excluded: true, manualRoot: null}}, installs: [], pending: [], failures: []}, null, 2) + '\n');
+  }
   const decoy = decoyOf(runRoot);
-  await write(path.join(decoy, 'ETS2Telemetry', 'data', 'telemetry.sqlite'), 'decoy history: an uninstall must never touch this file\n');
-  await write(path.join(decoy, 'ETS2Telemetry', 'settings', 'settings.json'), '{"decoy":true}\n');
-  await write(path.join(decoy, 'ETS2TelemetryDesktop', 'sentinel.txt'), 'decoy binary root\n');
-  return {kept: await keptStates(runRoot), decoyFiles: Object.keys(await tree(decoy)).length};
+  for (const identity of BUILD_CHANNELS.map(lifecycleIdentity)) {
+    await write(path.join(decoy, identity.dataRoot, 'data', 'telemetry.sqlite'), 'decoy history: an uninstall must never touch this file\n');
+    await write(path.join(decoy, identity.dataRoot, 'settings', 'settings.json'), '{"decoy":true}\n');
+    await write(path.join(decoy, identity.productRoot, 'sentinel.txt'), 'decoy binary root\n');
+  }
+  return {kept: await keptStates(runRoot, channelOf(config)), decoyFiles: Object.keys(await tree(decoy)).length};
 }
 
 /** The launch environment of PR-3's launches: as a data launch, without a recording target. */
 function pluginEnvironment(config, label, extra = {}) {
-  const layout = runLayout(config.runRoot);
+  const layout = layoutOf(config);
   const diagnostics = path.join(layout.diagnostics, `plugin-${label}`);
   const env = installedEnvironment(process.env, {LOCALAPPDATA: layout.base, APPDATA: layout.appData, TEMP: layout.temp, TMP: layout.temp,
-    ETS2TELEMETRY_PROFILE_DIR: layout.profile, ETS2TELEMETRY_DIAGNOSTIC_DIR: diagnostics, ETS2TELEMETRY_PLUGIN_SETUP_ROOT: config.runRoot, ...extra});
+    ETS2TELEMETRY_PROFILE_DIR: profileOf(config), ETS2TELEMETRY_DIAGNOSTIC_DIR: diagnostics, ETS2TELEMETRY_PLUGIN_SETUP_ROOT: config.runRoot, ...extra});
   checkLaunchEnvironment(env, {runRoot: config.runRoot, real: machineFacts().real});
   return {env, diagnostics};
 }
 /** Starts the installed application and waits until its test-root plugin setup recorded the ETS2 install with the bundled hash. */
 /** `left(cap)` cuts each wait to the caller's remaining budget (the default keeps the fixed waits). */
 async function startWithPlugin(config, label, executable, extra = {}, left = cap => cap) {
-  const layout = runLayout(config.runRoot), game = gameLayout(await realpath(config.runRoot));
+  const layout = layoutOf(config), game = gameLayout(await realpath(config.runRoot), channelOf(config));
   assert.ok(normalizePath(executable).startsWith(`${normalizePath(layout.binaryRoot)}\\app-`), 'LAUNCH_EXECUTABLE_NOT_INSTALLED');
   const {env, diagnostics} = pluginEnvironment(config, label, extra);
   await mkdir(diagnostics, {recursive: true});
@@ -661,7 +753,7 @@ async function closeOrderly(application) {
 async function pluginLaunch(config, label, executable, expectation) {
   assert.ok(expectation === 'installed' || expectation === 'adopted', 'PLUGIN_EXPECTATION_INVALID');
   const runRoot = await realpath(config.runRoot);
-  const layout = runLayout(runRoot), game = gameLayout(runRoot);
+  const layout = runLayout(runRoot, channelOf(config)), game = gameLayout(runRoot, channelOf(config));
   const record = {label, expectation};
   const before = await fileState(game.dll);
   if (expectation === 'adopted') {
@@ -670,10 +762,10 @@ async function pluginLaunch(config, label, executable, expectation) {
     assert.equal(await fileState(path.join(layout.dataRoot, 'uninstall', 'README.txt')), 'absent', 'DEFERRAL_NOT_CANCELLED');
     // PR-5: the reinstall's hook also removed the copied executor and its RunOnce value.
     assert.equal(await fileState(path.join(layout.dataRoot, 'uninstall', EXECUTOR_FILE)), 'absent', 'DEFERRAL_NOT_CANCELLED');
-    assert.equal(await readRunOnce(config), null, 'RUN_ONCE_NOT_CANCELLED');
+    assert.equal(await readRunOnce(config, identityOf(config).runOnceValue), null, 'RUN_ONCE_NOT_CANCELLED');
     record.deferralCancelled = true;
   }
-  const keptBefore = await keptStates(runRoot);
+  const keptBefore = await keptStates(runRoot, channelOf(config));
   const started = await startWithPlugin(config, label, executable);
   await closeOrderly(started.application);
   record.exit = {code: started.launcher.exitCode, signal: started.launcher.signalCode};
@@ -684,7 +776,7 @@ async function pluginLaunch(config, label, executable, expectation) {
     record.adoptedUnchanged = true;
   }
   record.pluginInstalled = typeof after === 'object' && after.sha256 === started.bundled;
-  assert.deepEqual(await keptStates(runRoot), keptBefore, 'UNRELATED_FILES_CHANGED');
+  assert.deepEqual(await keptStates(runRoot, channelOf(config)), keptBefore, 'UNRELATED_FILES_CHANGED');
   const main = await serviceEvents(started.diagnostics);
   record.failures = main.filter(row => FAILURE_EVENT.test(row.event)).map(row => row.event);
   record.pluginMode = main.filter(row => row.event === 'PLUGIN_SETUP_MODE').map(row => row.facts?.mode);
@@ -705,7 +797,7 @@ async function startFakeGame(config, readyMs = 15000) {
   // the folder above them must exist.
   const transport = path.join(config.runRoot, 'fake-game', 'transport', 'v0');
   await mkdir(path.dirname(path.dirname(transport)), {recursive: true});
-  const host = spawn(FAKE_HOST, ['host', TEST_PLUGIN, transport], {cwd: runLayout(config.runRoot).cwd, stdio: ['pipe', 'pipe', 'pipe'], windowsHide: true});
+  const host = spawn(FAKE_HOST, ['host', TEST_PLUGIN, transport], {cwd: layoutOf(config).cwd, stdio: ['pipe', 'pipe', 'pipe'], windowsHide: true});
   let output = '', errors = '';
   host.stdout.on('data', chunk => {output += chunk.toString('utf8');});
   host.stderr.on('data', chunk => {if (errors.length < 1024) errors += chunk.toString('utf8');});
@@ -719,14 +811,15 @@ async function stopFakeGame(host) {
   host.stdin.end('exit\n');
   await until(async () => host.exitCode !== null, Boolean, 'FAKE_GAME_NOT_STOPPED', 5000).catch(() => {host.kill();});
 }
-const receiptNames = async directory => (await readdir(directory).catch(() => [])).filter(name => RECEIPT_NAME.test(name));
+const receiptNames = async (config, directory) => (await readdir(directory).catch(() => [])).filter(name => receiptNameOf(config).test(name));
 
 // ET-018 PR-5 (U7): the deferred-cleanup executor and its registration. The run's test file names this run's own
-// HKCU\Software\ETS2Telemetry-Test-<id>\RunOnce key (config.runOnceKey); the driver reads and deletes only that key's one
-// value, through the fixed reg.exe, and never the real RunOnce key. The harness deletes the whole test key at the end.
-const RUN_ONCE_VALUE = 'ETS2TelemetryUninstall';
+// HKCU\Software\ETS2Telemetry-Test-<id>\RunOnce key (config.runOnceKey); the driver reads and deletes only the channel's
+// value there (ETS2TelemetryUninstall, ETS2TelemetryStagingUninstall; ET-055 PR-5), through the fixed reg.exe, and never
+// the real RunOnce key. The harness deletes the whole test key at the end.
 const EXECUTOR_FILE = 'Complete-ETS2TelemetryUninstall.ps1';
-const EXECUTOR_RECEIPT_NAME = /^ETS2Telemetry-deferred-cleanup-\d{8}T\d{9}Z\.json$/;
+/** The channel's deferred-cleanup receipt (`ETS2Telemetry-deferred-cleanup-…`, `ETS2TelemetryStaging-deferred-cleanup-…`). */
+const executorReceiptNameOf = config => receiptPattern(identityOf(config).executorReceiptPrefix);
 const reg = () => path.win32.join(process.env.SystemRoot ?? 'C:\\Windows', 'System32', 'reg.exe');
 function testRunOnceKey(config) {
   assert.ok(typeof config.runOnceKey === 'string' && RUN_ONCE_KEY.test(config.runOnceKey), 'RUN_ONCE_KEY_INVALID');
@@ -747,24 +840,38 @@ function executorCommand(dataRoot) {
   }
   return null;
 }
-/** The test key's value, or null when it is absent (reg.exe exits 1). */
-async function readRunOnce(config) {
+/** A RunOnce value name of one of the channels (lifecycleIdentity), never another. */
+const runOnceValueName = value => {
+  assert.ok(BUILD_CHANNELS.some(channel => lifecycleIdentity(channel).runOnceValue === value), 'RUN_ONCE_VALUE_UNKNOWN');
+  return value;
+};
+/** The test key's value `name`, or null when it is absent (reg.exe exits 1). */
+async function readRunOnce(config, name) {
   let stdout;
-  try {({stdout} = await promisify(execFile)(reg(), ['query', testRunOnceKey(config), '/v', RUN_ONCE_VALUE], {encoding: 'utf8', windowsHide: true, timeout: 10000}));}
+  try {({stdout} = await promisify(execFile)(reg(), ['query', testRunOnceKey(config), '/v', runOnceValueName(name)], {encoding: 'utf8', windowsHide: true, timeout: 10000}));}
   catch (error) {
     if (error?.code === 1) return null;
     throw error;
   }
   for (const line of stdout.split(/\r?\n/)) {
     const match = /^ {4}(.+?) {4}REG_SZ {4}(.*)$/.exec(line);
-    if (match && match[1] === RUN_ONCE_VALUE) return match[2];
+    if (match && match[1] === name) return match[2];
   }
   throw new Error('RUN_ONCE_QUERY_UNPARSED');
 }
-async function deleteRunOnce(config) {
-  await promisify(execFile)(reg(), ['delete', testRunOnceKey(config), '/v', RUN_ONCE_VALUE, '/f'], {windowsHide: true, timeout: 10000});
+async function deleteRunOnce(config, name) {
+  await promisify(execFile)(reg(), ['delete', testRunOnceKey(config), '/v', runOnceValueName(name), '/f'], {windowsHide: true, timeout: 10000});
 }
-const executorReceipts = async directory => (await readdir(directory).catch(() => [])).filter(name => EXECUTOR_RECEIPT_NAME.test(name));
+/** ET-055 PR-5: every other channel's value in the test key, hashed (absent: null), for checkOtherChannelUnchanged. */
+async function otherRunOnceStates(config) {
+  const states = {};
+  for (const channel of BUILD_CHANNELS.filter(other => other !== channelOf(config))) {
+    const value = await readRunOnce(config, lifecycleIdentity(channel).runOnceValue);
+    states[`${channel}RunOnce`] = value === null ? null : sha256(Buffer.from(value, 'utf8'));
+  }
+  return states;
+}
+const executorReceipts = async (config, directory) => (await readdir(directory).catch(() => [])).filter(name => executorReceiptNameOf(config).test(name));
 
 /**
  * Runs the exact registered UninstallString as Windows Settings would, with LOCALAPPDATA = R\decoy and no ETS2TELEMETRY_
@@ -773,56 +880,83 @@ const executorReceipts = async directory => (await readdir(directory).catch(() =
  * the fake ETS2 runs; the DLL stays, only `plugins` and `uninstall` (with the intent and README.txt) remain. The receipt
  * in R\temp must say the same. The harness checks the registration, the shortcuts and the vendor residue afterwards.
  * `rehearse` runs everything up to the UninstallString, which it parses but never starts, and returns the record.
+ *
+ * ET-055 PR-5: the uninstall is the config's channel's. `beside` is the other channel's installed executable in a
+ * side-by-side run: with `complete`, that application runs during the uninstall instead of this channel's (which is not
+ * started), and it must still run afterwards, its plugin and every other kept file unchanged; then it closes orderly. The
+ * other channel's plugin file is part of the kept files in every scenario, and its RunOnce value in the test key too.
  */
-async function windowsUninstall(config, label, executable, expectation, rehearse = false) {
+async function windowsUninstall(config, label, executable, expectation, {rehearse = false, beside = null} = {}) {
   assert.ok(expectation === 'complete' || expectation === 'deferred', 'UNINSTALL_EXPECTATION_INVALID');
+  assert.ok(beside === null || (expectation === 'complete' && !rehearse), 'UNINSTALL_BESIDE_INVALID');
   checkRunSignal(process.env, {allowLocal: config.allowLocal === true});
-  const runRoot = await realpath(config.runRoot);
-  const layout = runLayout(runRoot), game = gameLayout(runRoot), decoy = decoyOf(runRoot), facts = machineFacts();
-  const {program, args} = parseUninstallString(facts.registration?.uninstallString, runRoot);
+  const runRoot = await realpath(config.runRoot), channel = channelOf(config), identity = identityOf(config);
+  const layout = runLayout(runRoot, channel), game = gameLayout(runRoot, channel), decoy = decoyOf(runRoot), facts = machineFacts();
+  const {program, args} = parseUninstallString(facts.registration?.uninstallString, runRoot, channel);
   const env = uninstallEnvironment(process.env, {runRoot, real: facts.real, decoy});
-  const record = {label, expectation, args};
-  const decoyBefore = await tree(decoy), keptBefore = await keptStates(runRoot);
-  const receiptsBefore = new Set(await receiptNames(layout.temp));
-  let started, host, dllBefore;
+  const peer = beside === null ? null : await peerConfig(config);
+  const record = {label, channel, expectation, args, beside: peer ? peer.channel : null};
+  const decoyBefore = await tree(decoy), keptBefore = await keptStates(runRoot, channel), runOnceBefore = await otherRunOnceStates(config);
+  const receiptsBefore = new Set(await receiptNames(config, layout.temp));
+  let started, other, host, dllBefore;
   try {
     // In `complete` the launch itself installs the plugin (the registry has no install before it), so the plugin is
     // checked only once the application or the fake game runs, right before the UninstallString.
-    if (expectation === 'complete') started = await startWithPlugin(config, label, executable);
+    if (peer) other = await startWithPlugin(peer, `${label}-beside`, beside);
+    else if (expectation === 'complete') started = await startWithPlugin(config, label, executable);
     else host = await startFakeGame(config);
     dllBefore = await fileState(game.dll);
     assert.equal(typeof dllBefore, 'object', 'PLUGIN_NOT_INSTALLED_BEFORE_UNINSTALL');
     record.pluginInstalledBefore = true;
     if (rehearse) record.rehearsal = true;
-    else record.run = await runAndDrain(config, `uninstall-${label}`, program, args, env, UNINSTALL_RUN_BUDGET_MS).catch(error => ({failure: failure(error)}));
+    else {
+      const keep = peer ? [runLayout(runRoot, peer.channel).binaryRoot] : [];
+      record.run = await runAndDrain(config, `uninstall-${label}`, program, args, env, UNINSTALL_RUN_BUDGET_MS, keep).catch(error => ({failure: failure(error)}));
+    }
     if (started && !rehearse) {
       // The instance must be gone: Squirrel ends the processes under its root, or the hook's lock request makes it exit.
       await until(async () => started.launcher.exitCode !== null || started.launcher.signalCode !== null, Boolean, 'INSTANCE_DID_NOT_EXIT', 10000);
       record.instanceExit = {code: started.launcher.exitCode, signal: started.launcher.signalCode};
     }
+    if (other) {
+      // The other channel's application ran through this channel's uninstall; Squirrel ends only this channel's processes.
+      record.besideRunning = other.launcher.exitCode === null && other.launcher.signalCode === null;
+      if (record.besideRunning) {
+        await closeOrderly(other.application);
+        record.besideExit = {code: other.launcher.exitCode, signal: other.launcher.signalCode};
+      }
+    }
   } finally {
     if (started) await started.application.close().catch(() => undefined);
+    if (other) await other.application.close().catch(() => undefined);
     if (host) await stopFakeGame(host);
   }
   if (rehearse) return record;
   assert.equal(record.run.failure, undefined, `UNINSTALL_RUN_FAILED ${record.run.failure?.message ?? ''}`.trim());
-  const receipts = (await receiptNames(layout.temp)).filter(name => !receiptsBefore.has(name));
+  const receipts = (await receiptNames(config, layout.temp)).filter(name => !receiptsBefore.has(name));
   assert.equal(receipts.length, 1, 'UNINSTALL_RECEIPT_COUNT');
   const text = await readFile(path.join(layout.temp, receipts[0]), 'utf8');
   assert.doesNotMatch(text, /[A-Za-z]:\\|\\\\/, 'UNINSTALL_RECEIPT_HAS_PATH');
   record.receipt = JSON.parse(text);
   // What the uninstall left, recorded before any assertion so a failing run still shows the receipt and the state.
-  const decoyAfter = await tree(decoy), kept = await keptStates(runRoot), dllAfter = await fileState(game.dll);
+  const decoyAfter = await tree(decoy), kept = await keptStates(runRoot, channel), dllAfter = await fileState(game.dll);
   const dataEntries = await readdir(layout.dataRoot).catch(error => {if (error?.code === 'ENOENT') return null; throw error;});
-  const runOnce = await readRunOnce(config);
+  const runOnce = await readRunOnce(config, identity.runOnceValue), runOnceAfter = await otherRunOnceStates(config);
   record.after = {dataEntries, plugin: typeof dllAfter === 'string' ? dllAfter : 'present', unrelatedUnchanged: JSON.stringify(kept) === JSON.stringify(keptBefore),
-    runOnce: runOnce === null ? 'absent' : runOnce === executorCommand(layout.dataRoot) ? 'executor' : 'unexpected'};
+    runOnce: runOnce === null ? 'absent' : runOnce === executorCommand(layout.dataRoot) ? 'executor' : 'unexpected',
+    otherRunOnceUnchanged: JSON.stringify(runOnceAfter) === JSON.stringify(runOnceBefore)};
   await writeEvidence(config, `windows-uninstall-${label}-observed.json`, record).catch(() => undefined);
   // Windows may add its own Microsoft folder under the decoy (DECOY_OS_FOLDER); everything else must stay as it was.
   record.decoyOsEntries = checkDecoyUnchanged(decoyBefore, decoyAfter);
   record.decoyUnchanged = true;
   assert.deepEqual(kept, keptBefore, 'UNRELATED_FILES_CHANGED');
   record.unrelatedUnchanged = true;
+  assert.deepEqual(runOnceAfter, runOnceBefore, 'OTHER_RUN_ONCE_CHANGED');
+  if (peer) {
+    assert.equal(record.besideRunning, true, 'BESIDE_INSTANCE_ENDED');
+    assert.deepEqual(record.besideExit, {code: 0, signal: null}, 'BESIDE_EXIT_NONZERO');
+    assert.equal(record.receipt.instance, 'none', 'RECEIPT_INSTANCE_UNEXPECTED');
+  }
   if (expectation === 'complete') {
     assert.equal(dllAfter, 'absent', 'PLUGIN_NOT_REMOVED');
     assert.equal(dataEntries, null, 'DATA_ROOT_REMAINS');
@@ -841,9 +975,10 @@ async function windowsUninstall(config, label, executable, expectation, rehearse
     assert.deepEqual((await readdir(path.join(layout.dataRoot, 'uninstall'))).sort(), [EXECUTOR_FILE, 'README.txt', 'pending.json'], 'DEFERRED_UNINSTALL_FOLDER_UNEXPECTED');
     assert.deepEqual({outcome: record.receipt.outcome, code: record.receipt.code, readme: record.receipt.readme, executor: record.receipt.executor},
       {outcome: 'deferred', code: 'GAME_RUNNING', readme: true, executor: 'registered'}, 'RECEIPT_NOT_DEFERRED');
-    // PR-5: the packaged executor was copied byte-identically and registered under this run's test key.
+    // PR-5: the packaged executor was copied byte-identically and registered under this run's test key. ET-055: the
+    // packaged copy carries the channel stamped into its `$Channel` line (scripts/uninstall-executor.mjs).
     assert.deepEqual(await fileState(path.join(layout.dataRoot, 'uninstall', EXECUTOR_FILE)).then(state => typeof state === 'object' ? state.sha256 : state),
-      sha256(await readFile(path.join(checkout, 'resources', 'uninstall', EXECUTOR_FILE))), 'EXECUTOR_COPY_DIFFERS');
+      sha256(executorBytes(channel, checkout)), 'EXECUTOR_COPY_DIFFERS');
     assert.equal(record.after.runOnce, 'executor', 'RUN_ONCE_NOT_REGISTERED');
   }
   return record;
@@ -856,25 +991,27 @@ async function windowsUninstall(config, label, executable, expectation, rehearse
  * uninstall environment (LOCALAPPDATA = the decoy, TEMP inside R, no ETS2TELEMETRY_ variable). `blocked`: the fake game
  * host runs, so the executor must keep the DLL, count the attempt and register itself again. `complete`: the host is not
  * running, so the DLL, the data root and the registration must be gone. The unrelated files, the export and the decoy
- * stay unchanged either way, and the executor's receipt names no path.
+ * stay unchanged either way, and the executor's receipt names no path. ET-055 PR-5: the executor is the config's
+ * channel's; the other channel's plugin file (in the kept files) and its RunOnce value in the test key stay unchanged.
  */
 async function runOnce(config, label, expectation) {
   assert.ok(expectation === 'blocked' || expectation === 'complete', 'RUN_ONCE_EXPECTATION_INVALID');
   assert.match(label, /^[a-z0-9-]{1,40}$/, 'RUN_ONCE_LABEL_INVALID');
   checkRunSignal(process.env, {allowLocal: config.allowLocal === true});
-  const runRoot = await realpath(config.runRoot);
-  const layout = runLayout(runRoot), game = gameLayout(runRoot), decoy = decoyOf(runRoot), facts = machineFacts();
+  const runRoot = await realpath(config.runRoot), channel = channelOf(config), valueName = identityOf(config).runOnceValue;
+  const layout = runLayout(runRoot, channel), game = gameLayout(runRoot, channel), decoy = decoyOf(runRoot), facts = machineFacts();
   const env = uninstallEnvironment(process.env, {runRoot, real: facts.real, decoy});
-  const command = await readRunOnce(config);
+  const command = await readRunOnce(config, valueName);
   assert.equal(command, executorCommand(layout.dataRoot), 'RUN_ONCE_COMMAND_UNEXPECTED');
   // Either form of the program (the absolute, quoted System32 path or the PATH form); the driver starts System32's.
   const match = /^(?:"[A-Za-z]:\\[^"]+\\System32\\WindowsPowerShell\\v1\.0\\powershell\.exe"|powershell\.exe) (-NoProfile -NonInteractive -ExecutionPolicy Bypass -WindowStyle Hidden) -File "([^"]+)"$/
     .exec(command);
   assert.ok(match && normalizePath(match[2]).startsWith(`${normalizePath(layout.dataRoot)}\\`), 'RUN_ONCE_COMMAND_OUTSIDE_RUN_ROOT');
   const attemptsBefore = (await readJson(path.join(layout.dataRoot, 'uninstall', 'pending.json'), 128 * 1024)).attempts;
-  const record = {label, expectation, attemptsBefore, before: {kept: await keptStates(runRoot), plugin: await fileState(game.dll)}};
-  const decoyBefore = await tree(decoy), receiptsBefore = new Set(await executorReceipts(layout.temp));
-  await deleteRunOnce(config);
+  const record = {label, channel, expectation, attemptsBefore, before: {kept: await keptStates(runRoot, channel), plugin: await fileState(game.dll),
+    otherRunOnce: await otherRunOnceStates(config)}};
+  const decoyBefore = await tree(decoy), receiptsBefore = new Set(await executorReceipts(config, layout.temp));
+  await deleteRunOnce(config, valueName);
   let host;
   try {
     if (expectation === 'blocked') host = await startFakeGame(config);
@@ -890,18 +1027,19 @@ async function runOnce(config, label, expectation) {
   } finally {
     if (host) await stopFakeGame(host);
   }
-  const receipts = (await executorReceipts(layout.temp)).filter(name => !receiptsBefore.has(name));
+  const receipts = (await executorReceipts(config, layout.temp)).filter(name => !receiptsBefore.has(name));
   assert.equal(receipts.length, 1, 'EXECUTOR_RECEIPT_COUNT');
   const text = await readFile(path.join(layout.temp, receipts[0]), 'utf8');
   assert.doesNotMatch(text, /[A-Za-z]:\\|\\\\/, 'EXECUTOR_RECEIPT_HAS_PATH');
   record.receipt = JSON.parse(text);
-  const value = await readRunOnce(config), dllAfter = await fileState(game.dll);
+  const value = await readRunOnce(config, valueName), dllAfter = await fileState(game.dll);
   const dataEntries = await readdir(layout.dataRoot).catch(error => {if (error?.code === 'ENOENT') return null; throw error;});
   record.after = {dataEntries, plugin: typeof dllAfter === 'string' ? dllAfter : 'present', runOnce: value === null ? 'absent' : value === command ? 'executor' : 'unexpected',
-    kept: await keptStates(runRoot)};
+    kept: await keptStates(runRoot, channel), otherRunOnce: await otherRunOnceStates(config)};
   await writeEvidence(config, `run-once-${label}-observed.json`, record).catch(() => undefined);
   record.decoyOsEntries = checkDecoyUnchanged(decoyBefore, await tree(decoy));
   assert.deepEqual(record.after.kept, record.before.kept, 'UNRELATED_FILES_CHANGED');
+  assert.deepEqual(record.after.otherRunOnce, record.before.otherRunOnce, 'OTHER_RUN_ONCE_CHANGED');
   if (expectation === 'blocked') {
     assert.deepEqual({outcome: record.receipt.outcome, code: record.receipt.code, attempts: record.receipt.attempts, runOnce: record.receipt.runOnce, mode: record.receipt.mode},
       {outcome: 'deferred', code: 'GAME_RUNNING', attempts: attemptsBefore + 1, runOnce: 'registered', mode: 'test-root'}, 'EXECUTOR_NOT_DEFERRED');
@@ -966,8 +1104,8 @@ async function appUninstall(config, label, executable, expectation) {
   // At least 1 ms: Playwright and electron.launch read a timeout of 0 as no timeout at all.
   const left = (cap = budget) => Math.max(1, Math.min(cap, budget - (performance.now() - clockStarted)));
   const runRoot = await realpath(config.runRoot);
-  const layout = runLayout(runRoot), game = gameLayout(runRoot);
-  const record = {label, expectation, before: {kept: await keptStates(runRoot), receipts: await receiptNames(layout.temp)}};
+  const layout = runLayout(runRoot, channelOf(config)), game = gameLayout(runRoot, channelOf(config));
+  const record = {label, expectation, before: {kept: await keptStates(runRoot, channelOf(config)), receipts: await receiptNames(config, layout.temp)}};
   // The plugin is already installed, so this returns as soon as the dashboard is ready and the registry names it.
   record.before.plugin = await fileState(game.dll);
   assert.equal(typeof record.before.plugin, 'object', 'PLUGIN_NOT_INSTALLED_BEFORE_UNINSTALL');
@@ -1019,7 +1157,7 @@ async function appUninstall(config, label, executable, expectation) {
 async function appUninstallVerify(config, label) {
   assert.match(label, /^[a-z0-9-]{1,40}$/, 'APP_UNINSTALL_LABEL_INVALID');
   const runRoot = await realpath(config.runRoot);
-  const layout = runLayout(runRoot), game = gameLayout(runRoot);
+  const layout = runLayout(runRoot, channelOf(config)), game = gameLayout(runRoot, channelOf(config));
   const observed = await readJson(observedFile(config, label), 4 * 1024 * 1024);
   const {expectation, before} = observed;
   const main = await serviceEvents(path.join(runRoot, observed.diagnostics));
@@ -1029,8 +1167,8 @@ async function appUninstallVerify(config, label) {
     finished: main.filter(row => row.event === 'APP_UNINSTALL_FINISHED').map(row => ({removed: row.facts?.removed, rootRemoved: row.facts?.rootRemoved, failed: row.facts?.failed})),
     failures: main.filter(row => FAILURE_EVENT.test(row.event)).map(row => row.event)
   };
-  const kept = await keptStates(runRoot), dllAfter = await fileState(game.dll);
-  const receipts = (await receiptNames(layout.temp)).filter(name => !before.receipts.includes(name));
+  const kept = await keptStates(runRoot, channelOf(config)), dllAfter = await fileState(game.dll);
+  const receipts = (await receiptNames(config, layout.temp)).filter(name => !before.receipts.includes(name));
   const record = {label, expectation, events, plugin: typeof dllAfter === 'string' ? dllAfter : 'present', unrelatedUnchanged: JSON.stringify(kept) === JSON.stringify(before.kept),
     receipts: receipts.length};
   if (receipts.length === 1) {
@@ -1098,25 +1236,123 @@ async function cleanup(config, locations) {
   return {removed: true, ownsRegistration: locations.map(location => location !== '-' && ownsRegistration(config.runRoot, location))};
 }
 
+// --- ET-055 PR-5: both channels side by side in one run root (REG-017, REG-019; docs/installer-testing.md) ----------
+
+/**
+ * Both channels' installed applications run at once (`executable` this config's channel, `peerExecutable` the peer's),
+ * each with its own profile, so neither hands over to the other's single-instance lock. Each one's test-root plugin setup
+ * installs its own DLL into the fake ETS2 folder, and the first channel's DLL keeps its bytes and modification time while
+ * the second one's setup runs. Both are still running after both started; then both close orderly, the peer first.
+ */
+async function sideBySideLaunch(config, label, executable, peerExecutable) {
+  assert.match(label, /^[a-z0-9-]{1,40}$/, 'SIDE_BY_SIDE_LABEL_INVALID');
+  const peer = await peerConfig(config);
+  const runRoot = await realpath(config.runRoot);
+  const own = gameLayout(runRoot, channelOf(config)), other = gameLayout(runRoot, peer.channel);
+  assert.ok(normalizePath(profileOf(config)) !== normalizePath(profileOf(peer)), 'SIDE_BY_SIDE_PROFILE_SHARED');
+  const record = {label, channels: [channelOf(config), peer.channel]};
+  let first, second;
+  try {
+    first = await startWithPlugin(config, `${label}-${channelOf(config)}`, executable);
+    const firstPlugin = await fileState(own.dll);
+    second = await startWithPlugin(peer, `${label}-${peer.channel}`, peerExecutable);
+    record.bothRunning = [first, second].every(started => started.launcher.exitCode === null && started.launcher.signalCode === null);
+    record.plugins = {[channelOf(config)]: await fileState(own.dll), [peer.channel]: await fileState(other.dll)};
+    record.firstPluginUnchanged = JSON.stringify(record.plugins[channelOf(config)]) === JSON.stringify(firstPlugin);
+    record.bundled = {[channelOf(config)]: first.bundled, [peer.channel]: second.bundled};
+    await closeOrderly(second.application);
+    record.exits = {[peer.channel]: {code: second.launcher.exitCode, signal: second.launcher.signalCode}};
+    second = undefined;
+    await closeOrderly(first.application);
+    record.exits[channelOf(config)] = {code: first.launcher.exitCode, signal: first.launcher.signalCode};
+    first = undefined;
+  } finally {
+    if (second) await second.application.close().catch(() => undefined);
+    if (first) await first.application.close().catch(() => undefined);
+  }
+  for (const [channel, events] of [[channelOf(config), await serviceEvents(path.join(layoutOf(config).diagnostics, `plugin-${label}-${channelOf(config)}`))],
+    [peer.channel, await serviceEvents(path.join(layoutOf(config).diagnostics, `plugin-${label}-${peer.channel}`))]]) {
+    record[channel] = {failures: events.filter(row => FAILURE_EVENT.test(row.event)).map(row => row.event),
+      pluginMode: events.filter(row => row.event === 'PLUGIN_SETUP_MODE').map(row => row.facts?.mode)};
+  }
+  await writeEvidence(config, `side-by-side-launch-${label}-observed.json`, record).catch(() => undefined);
+  assert.equal(record.bothRunning, true, 'SIDE_BY_SIDE_NOT_BOTH_RUNNING');
+  for (const [channel, state] of Object.entries(record.plugins)) assert.ok(typeof state === 'object' && state.sha256 === record.bundled[channel], `SIDE_BY_SIDE_PLUGIN_MISSING ${channel}`);
+  assert.notEqual(record.bundled[channelOf(config)], record.bundled[peer.channel], 'SIDE_BY_SIDE_PLUGINS_IDENTICAL');
+  assert.equal(record.firstPluginUnchanged, true, 'SIDE_BY_SIDE_FIRST_PLUGIN_CHANGED');
+  for (const channel of record.channels) {
+    assert.deepEqual(record.exits[channel], {code: 0, signal: null}, `SIDE_BY_SIDE_EXIT_NONZERO ${channel}`);
+    assert.deepEqual(record[channel].failures, [], `FAILURE_EVENT_LOGGED ${channel}`);
+    assert.deepEqual(record[channel].pluginMode, ['test-root'], `PLUGIN_MODE_UNEXPECTED ${channel}`);
+  }
+  return record;
+}
+
+/**
+ * The config's channel's state that the other channel's actions must leave alone: every entry of its data root (relative
+ * name, size and hash, as tree()), its plugin file in the fake ETS2 folder (bytes and modification time, or absent) and
+ * its RunOnce value in the test key (hashed, or null). Written to `channel-state-<label>.json`; channel-compare compares two.
+ */
+async function channelState(config, label) {
+  assert.match(label, /^[a-z0-9-]{1,40}$/, 'CHANNEL_STATE_LABEL_INVALID');
+  const runRoot = await realpath(config.runRoot), layout = runLayout(runRoot, channelOf(config));
+  const value = await readRunOnce(config, identityOf(config).runOnceValue);
+  return {channel: channelOf(config), state: {dataRoot: await tree(layout.dataRoot), plugin: await fileState(gameLayout(runRoot, channelOf(config)).dll),
+    runOnce: value === null ? null : sha256(Buffer.from(value, 'utf8'))}};
+}
+/** The other channel's action left this channel's state unchanged (checkOtherChannelUnchanged on two channel-state records). */
+async function channelCompare(config, before, after) {
+  const read = async label => {
+    const record = (await readJson(path.join(config.evidence, `channel-state-${label}.json`), 16 * 1024 * 1024)).result;
+    assert.equal(record?.channel, channelOf(config), 'CHANNEL_STATE_OTHER_CHANNEL');
+    return record.state;
+  };
+  return {channel: channelOf(config), keys: checkOtherChannelUnchanged(await read(before), await read(after))};
+}
+/**
+ * Writes this channel's RunOnce value into the run's own test key, with fixed text that no executor command matches, so a
+ * run of the other channel's executor can be shown to leave it in place. Refuses when the value exists already.
+ * `remove` deletes the value planted under `label` again, and only while it still holds the planted text.
+ */
+async function plantRunOnce(config, label, mode) {
+  assert.match(label, /^[a-z0-9-]{1,40}$/, 'PLANT_RUN_ONCE_LABEL_INVALID');
+  assert.ok(mode === undefined || mode === 'remove', 'PLANT_RUN_ONCE_MODE_INVALID');
+  const name = identityOf(config).runOnceValue, data = `planted by the installer lifecycle (${label}); never run`;
+  if (mode === 'remove') {
+    assert.equal(await readRunOnce(config, name), data, 'PLANTED_RUN_ONCE_CHANGED');
+    await deleteRunOnce(config, name);
+    assert.equal(await readRunOnce(config, name), null, 'PLANTED_RUN_ONCE_NOT_REMOVED');
+    return {channel: channelOf(config), value: name, removed: true};
+  }
+  assert.equal(await readRunOnce(config, name), null, 'PLANT_RUN_ONCE_EXISTS');
+  await promisify(execFile)(reg(), ['add', testRunOnceKey(config), '/v', name, '/t', 'REG_SZ', '/d', data, '/f'], {windowsHide: true, timeout: 10000});
+  assert.equal(await readRunOnce(config, name), data, 'PLANT_RUN_ONCE_FAILED');
+  return {channel: channelOf(config), value: name, sha256: sha256(Buffer.from(data, 'utf8'))};
+}
+
 const [command, ...rest] = process.argv.slice(2);
 const result = {command, passed: false, startedUtc: new Date().toISOString()};
 let config;
 try {
   if (command === 'signal') {
     checkRunSignal(process.env, {allowLocal: rest.includes('--allow-local')});
-    const channelAt = rest.indexOf('--channel');
-    checkSetupChannel(channelAt === -1 ? undefined : rest[channelAt + 1], process.env);
+    // ET-055 PR-5: one --channel per Setup the run installs; the side-by-side scenario names both.
+    const channels = rest.flatMap((value, index) => value === '--channel' ? [rest[index + 1]] : []);
+    for (const channel of channels.length ? channels : [undefined]) checkSetupChannel(channel, process.env);
+    checkRunChannels(channels);
+    result.passed = true;
+  } else if (command === 'versions') {
+    result.result = {versions: lifecycleVersions(rest[0], rest[1]), identities: LIFECYCLE_IDENTITIES};
     result.passed = true;
   } else {
-    config = await readJson(rest[0], 64 * 1024);
-    assert.ok(RUN_ROOT_NAME.test(path.win32.basename(config.runRoot)), 'CONFIG_RUN_ROOT_INVALID');
+    config = checkConfig(await readJson(rest[0], 64 * 1024));
     const label = rest[1];
     switch (command) {
       case 'guard': result.result = await guard(config, label); break;
       case 'installed': result.result = await installed(config, label, rest[2]); break;
       case 'legacy-icon': result.result = await legacyIcon(config, label, rest.slice(2)); break;
       case 'legacy-names': result.result = await legacyNames(config, label, rest.slice(2)); break;
-      case 'links': result.result = links(label, rest[2], rest.slice(3)); break;
+      case 'links': result.result = links(config, label, rest[2], rest.slice(3)); break;
       case 'version-info': result.result = versionInfo(config, label, rest[2]); break;
       case 'seed': result.result = await seed(config); break;
       case 'snapshot': result.result = await snapshot(config); break;
@@ -1126,11 +1362,19 @@ try {
       case 'verify': result.result = await verify(config, label, rest[2]); break;
       case 'games': result.result = await games(config); break;
       case 'plugin-launch': result.result = await pluginLaunch(config, label, rest[2], rest[3]); break;
-      case 'windows-uninstall': result.result = await windowsUninstall(config, label, rest[2], rest[3], rest[4] === '--rehearse'); break;
+      case 'windows-uninstall': {
+        assert.ok(rest.length === 4 || (rest.length === 5 && rest[4] === '--rehearse') || (rest.length === 6 && rest[4] === '--beside'), 'UNINSTALL_ARGUMENTS_INVALID');
+        result.result = await windowsUninstall(config, label, rest[2], rest[3], {rehearse: rest[4] === '--rehearse', beside: rest[4] === '--beside' ? rest[5] : null});
+        break;
+      }
       case 'app-uninstall': result.result = await appUninstall(config, label, rest[2], rest[3]); break;
       case 'app-uninstall-verify': result.result = await appUninstallVerify(config, label); break;
       case 'run-once': result.result = await runOnce(config, label, rest[2]); break;
       case 'residue': result.result = await residue(config, label); break;
+      case 'side-by-side-launch': result.result = await sideBySideLaunch(config, label, rest[2], rest[3]); break;
+      case 'channel-state': result.result = await channelState(config, label); break;
+      case 'channel-compare': result.result = await channelCompare(config, rest[1], rest[2]); break;
+      case 'plant-run-once': result.result = await plantRunOnce(config, label, rest[2]); break;
       case 'cleanup': result.result = await cleanup(config, rest.slice(1)); break;
       default: throw new Error('UNKNOWN_COMMAND');
     }
@@ -1142,10 +1386,14 @@ try {
 result.finishedUtc = new Date().toISOString();
 if (config) {
   // Evidence file names use fixed labels only; the cleanup argument is a path and never becomes part of a name.
-  const name = command === 'seed' || command === 'cleanup' || command === 'games' ? `${command}.json` : command === 'compare' ? `compare-${rest[1]}-${rest[2]}.json` : `${command}-${rest[1]}.json`;
+  const name = command === 'seed' || command === 'cleanup' || command === 'games' ? `${command}.json`
+    : command === 'compare' || command === 'channel-compare' ? `${command}-${rest[1]}-${rest[2]}.json`
+    : command === 'plant-run-once' && rest[2] === 'remove' ? `${command}-${rest[1]}-remove.json` : `${command}-${rest[1]}.json`;
   try {await writeEvidence(config, name, result);} catch (error) {result.evidenceFailure = failure(error);}
 }
-// One JSON line for the harness; `cleanup` also reports whether the uninstall key may be deleted.
+// One JSON line for the harness; `cleanup` also reports whether the uninstall key may be deleted, and `versions` the run's
+// versions (ET-055 PR-5).
 process.stdout.write(`${JSON.stringify({command, passed: result.passed, failure: result.failure ?? null,
-  ...(command === 'cleanup' ? {ownsRegistration: Array.isArray(result.result?.ownsRegistration) ? result.result.ownsRegistration : []} : {})})}\n`);
+  ...(command === 'cleanup' ? {ownsRegistration: Array.isArray(result.result?.ownsRegistration) ? result.result.ownsRegistration : []} : {}),
+  ...(command === 'versions' && result.passed ? {plan: result.result} : {})})}\n`);
 process.exitCode = result.passed ? 0 : 1;
