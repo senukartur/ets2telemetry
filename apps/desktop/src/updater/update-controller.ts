@@ -37,7 +37,8 @@ export const APPLY_TIMEOUT_MS = 180_000;
  * INCOMPLETE_REMOVAL_DEADLINE_MS have passed since the first. Each attempt lists the processes (about 1 s, at most 15 s:
  * PROCESS_IMAGES_TIMEOUT_MS), and an attempt in flight is never cut short, so the whole cleanup ends within the deadline
  * plus one attempt: at most about 35 s plus the removal itself. After that the folder stays with the last reason and the
- * failure is reported.
+ * failure is reported. An exit that begins during the cleanup ends its waiting: one more attempt starts at once (or the
+ * attempt in flight is the last), and the exit waits for it within its idle budget (idle()).
  */
 export const INCOMPLETE_REMOVAL_ATTEMPTS = 10;
 export const INCOMPLETE_REMOVAL_RETRY_MS = 500;
@@ -151,6 +152,9 @@ export class UpdateController {
   private checkStartedAt = -Infinity;
   private clicking = false;
   private operation: Promise<void> | undefined;
+  /** The R1 removal is running (removeIncomplete); wakeCleanup ends its wait between attempts at retire. */
+  private cleaning = false;
+  private wakeCleanup: (() => void) | undefined;
   private downloadAbort: AbortController | undefined;
   constructor(private readonly options: UpdateControllerOptions) {}
 
@@ -228,11 +232,15 @@ export class UpdateController {
     this.timer = undefined;
     this.checkAbort?.abort();
     this.downloadAbort?.abort();
+    this.wakeCleanup?.();
   }
 
-  /** The download's cleanup in flight after retire, which the exit waits for within its idle budget; undefined when idle. */
+  /**
+   * The download's cleanup or the R1 removal in flight after retire, which the exit waits for within its idle budget;
+   * undefined when idle.
+   */
   idle(): Promise<void> | undefined {
-    return this.downloadAbort ? this.operation : undefined;
+    return this.downloadAbort || this.cleaning ? this.operation : undefined;
   }
 
   private dispatch(event: UpdateEvent): void {
@@ -330,15 +338,30 @@ export class UpdateController {
     this.restart();
   }
 
-  /** removeIncompleteVersion, asked again while its answer can change, within the attempt and time bounds above. */
+  /**
+   * removeIncompleteVersion, asked again while its answer can change, within the attempt and time bounds above. Once the
+   * exit began, the next attempt starts without waiting and is the last.
+   */
   private async removeIncomplete(context: UpdateContext, nugetVersion: string, packageName: string): Promise<IncompleteRemoval> {
     const ports: IncompleteVersionPorts = {fs: this.options.ports.fs, ...this.options.ports.install};
     const clock = this.options.ports.clock, started = clock.now();
-    for (let attempt = 1; ; attempt++) {
-      const result = await removeIncompleteVersion(ports, context.installRoot, nugetVersion, packageName, context.runningDirectory).catch((): IncompleteRemoval => 'failed');
-      if (!RETRYABLE_REMOVALS.has(result) || attempt >= INCOMPLETE_REMOVAL_ATTEMPTS) return result;
-      if (clock.now() - started + INCOMPLETE_REMOVAL_RETRY_MS >= INCOMPLETE_REMOVAL_DEADLINE_MS) return result;
-      await new Promise<void>(resolve => {this.options.ports.clock.setTimeout(resolve, INCOMPLETE_REMOVAL_RETRY_MS);});
+    const exiting = () => this.retired || this.options.exiting();
+    this.cleaning = true;
+    try {
+      for (let attempt = 1; ; attempt++) {
+        const last = exiting();
+        const result = await removeIncompleteVersion(ports, context.installRoot, nugetVersion, packageName, context.runningDirectory).catch((): IncompleteRemoval => 'failed');
+        if (last || !RETRYABLE_REMOVALS.has(result) || attempt >= INCOMPLETE_REMOVAL_ATTEMPTS) return result;
+        if (clock.now() - started + INCOMPLETE_REMOVAL_RETRY_MS >= INCOMPLETE_REMOVAL_DEADLINE_MS) return result;
+        if (exiting()) continue;
+        await new Promise<void>(resolve => {
+          const timer = clock.setTimeout(() => {this.wakeCleanup = undefined; resolve();}, INCOMPLETE_REMOVAL_RETRY_MS);
+          this.wakeCleanup = () => {this.wakeCleanup = undefined; clock.clearTimeout(timer); resolve();};
+        });
+      }
+    } finally {
+      this.cleaning = false;
+      this.wakeCleanup = undefined;
     }
   }
 

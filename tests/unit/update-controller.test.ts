@@ -4,7 +4,7 @@ import {afterEach, beforeEach, describe, expect, it, vi} from 'vitest';
 import type {UpdateView} from '../../packages/contracts/src/app-state';
 import {CHANNEL_IDENTITIES, type ReleaseChannel} from '../../apps/desktop/src/channel';
 import type {FixedProgramResult} from '../../apps/desktop/src/plugin-setup/fixed-program';
-import {CHECK_INTERVAL_MS, FIRST_CHECK_DELAY_MS, MANUAL_CHECK_MIN_INTERVAL_MS, reduceUpdate, UpdateController, type RunningCheck, type UpdatePorts} from '../../apps/desktop/src/updater/update-controller';
+import {CHECK_INTERVAL_MS, FIRST_CHECK_DELAY_MS, INCOMPLETE_REMOVAL_DEADLINE_MS, MANUAL_CHECK_MIN_INTERVAL_MS, reduceUpdate, UpdateController, type RunningCheck, type UpdatePorts} from '../../apps/desktop/src/updater/update-controller';
 import type {UpdateContextResult} from '../../apps/desktop/src/updater/update-context';
 import {DOWNLOAD_STALL_MS, type UpdateFileSystem} from '../../apps/desktop/src/updater/update-download';
 import {GITHUB_ORIGINS} from '../../apps/desktop/src/updater/update-feed';
@@ -448,6 +448,38 @@ describe('click, download and apply', () => {
     expect(h.controller.view.failure).toBe('APPLY_TIMEOUT');
     expect((await readdir(installRoot)).sort()).toEqual(['app-0.1.1', 'app-0.2.0']);
     expect(h.log).toHaveBeenCalledWith('UPDATE_INCOMPLETE_VERSION_KEPT', {result: 'updater-running'});
+  });
+  // PR #216 review: an exit during the retries must not abandon the cleanup. It ends the wait, one more attempt starts at
+  // once and is the last, and the exit's idle work includes it.
+  it.each([
+    ['removes the folder when the updater has ended by then', [] as string[], 'removed'],
+    ['keeps the folder when the updater still runs', ['Update.exe'], 'updater-running']
+  ] as const)('an exit during the cleanup retries makes one immediate last attempt that the exit waits for: %s', async (_name, second, result) => {
+    await mkdir(path.win32.join(installRoot, 'app-0.1.1'), {recursive: true});
+    const target = path.win32.join(installRoot, 'app-0.2.0');
+    let listings = 0;
+    const processImages = () => {
+      listings++;
+      return Promise.resolve(listings === 1 ? [path.win32.join(installRoot, 'Update.exe')] : second.map(name => path.win32.join(installRoot, name)));
+    };
+    const h = harness({routes: productionRoutes(PKG), processImages, apply: async () => {
+      await mkdir(target, {recursive: true});
+      return {ok: false, failure: 'timeout'};
+    }});
+    await startAndCheck(h);
+    await h.controller.apply();
+    await until(() => listings === 1);
+    expect(h.controller.idle()).toBeInstanceOf(Promise);
+    h.state.exiting = true; h.controller.retire();
+    // No timer advance: the 500 ms wait ends at retire.
+    await h.controller.idle();
+    expect(listings).toBe(2);
+    expect(h.controller.idle()).toBeUndefined();
+    expect(h.controller.view).toMatchObject({state: 'failed', failure: 'APPLY_TIMEOUT'});
+    expect((await readdir(installRoot)).sort()).toEqual(result === 'removed' ? ['app-0.1.1'] : ['app-0.1.1', 'app-0.2.0']);
+    expect(h.log).toHaveBeenCalledWith(result === 'removed' ? 'UPDATE_INCOMPLETE_VERSION_REMOVED' : 'UPDATE_INCOMPLETE_VERSION_KEPT', {result});
+    await vi.advanceTimersByTimeAsync(INCOMPLETE_REMOVAL_DEADLINE_MS);
+    expect(listings).toBe(2);
   });
   it('keeps the folder of a release Squirrel has already recorded, without asking again', async () => {
     await mkdir(path.win32.join(installRoot, 'app-0.1.1'), {recursive: true});
