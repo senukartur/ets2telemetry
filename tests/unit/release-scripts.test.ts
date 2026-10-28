@@ -342,6 +342,33 @@ describe('GitHub answers', () => {
       [{status: 'in_progress', conclusion: null}, /did not complete successfully/], [{id: 1}, /is not run 41000000001/]
     ] as const) expect(() => checkReleaseRun(run(overrides), options()), String(reason)).toThrow(reason);
   });
+  // Owner decision of October 28, 2026 (concept.md, "UP15 and UP16 amended"): staging takes a push or a
+  // dispatch run of this repository on any branch; production still takes main only.
+  it('accepts a staging run dispatched on a feature branch and still refuses it for production', () => {
+    const branch = run({head_branch: 'feat/staging-check', event: 'workflow_dispatch'});
+    expect(checkReleaseRun(branch, options('staging'))).toEqual({commit: COMMIT, attempt: 2, artifact: `windows-installer-staging-${RUN}-2`});
+    expect(checkReleaseRun(run({head_branch: 'feat/staging-check'}), options('staging'))).toEqual({commit: COMMIT, attempt: 2, artifact: `windows-installer-staging-${RUN}-2`});
+    expect(() => checkReleaseRun(branch, options('production'))).toThrow('Release refused: run 41000000001 did not build main');
+    // A run whose branch name is main still passes this check for production; the workflow then refuses a tag named main
+    // and requires the commit to be on the main branch (checkMainAncestry, tests/unit/release-workflow.test.ts).
+    expect(checkReleaseRun(run({event: 'workflow_dispatch'}), options('production'))).toEqual({commit: COMMIT, attempt: 2, artifact: `windows-installer-${RUN}-2`});
+  });
+  it('refuses a staging run from a pull request, a fork, another workflow or without a branch name', () => {
+    for (const [overrides, reason] of [
+      [{head_branch: 'feat/x', event: 'pull_request'}, 'Release refused: run 41000000001 was started by "pull_request", not a push or a dispatch'],
+      [{head_branch: 'feat/x', event: 'pull_request_target'}, 'Release refused: run 41000000001 was started by "pull_request_target", not a push or a dispatch'],
+      [{head_branch: 'feat/x', event: 'workflow_run'}, 'Release refused: run 41000000001 was started by "workflow_run", not a push or a dispatch'],
+      [{head_branch: 'feat/x', event: 'workflow_dispatch', head_repository: {full_name: 'fork/ets2telemetry'}}, 'Release refused: run 41000000001 did not build senukartur/ets2telemetry itself'],
+      [{head_branch: 'main', event: 'pull_request', head_repository: {full_name: 'fork/ets2telemetry'}}, 'Release refused: run 41000000001 did not build senukartur/ets2telemetry itself'],
+      [{head_branch: 'feat/x', event: 'workflow_dispatch', repository: {full_name: 'fork/ets2telemetry'}}, 'Release refused: run 41000000001 did not build senukartur/ets2telemetry itself'],
+      [{head_branch: 'feat/x', path: '.github/workflows/release.yml'}, 'Release refused: run 41000000001 is not a .github/workflows/windows-ci.yml run'],
+      [{head_branch: 'feat/x', conclusion: 'cancelled'}, 'Release refused: run 41000000001 did not complete successfully'],
+      [{head_branch: null}, 'Release refused: run 41000000001 names no branch'],
+      [{head_branch: ''}, 'Release refused: run 41000000001 names no branch'],
+      [{head_branch: 'feat/x', head_sha: 'feat/x'}, 'Release refused: run 41000000001 names no head commit']
+    ] as const) expect(() => checkReleaseRun(run(overrides), options('staging')), JSON.stringify(overrides)).toThrow(reason);
+    expect(() => checkReleaseRun(run({event: 'pull_request'}), options('production'))).toThrow('Release refused: run 41000000001 was started by "pull_request", not a push or a dispatch on main');
+  });
   it('checks a release\'s tag, commit, flags and exact assets', () => {
     const names = ['a.exe', 'b.nupkg', 'RELEASES'];
     const release = (overrides: Record<string, unknown> = {}) => ({id: 7, tag_name: 'v0.2.0', target_commitish: COMMIT, draft: true, prerelease: false,

@@ -1,8 +1,11 @@
 name: Release
 # ET-055 PR-9 (docs/release.md#release-workflow-et-055): the only way a release is published. It never runs on pull requests
-# or pushes; a dispatch names a successful Windows CI run on main and a channel. The verify job checks that run, proves its
-# commit is on the main branch, checks its installer artifact and writes the unsigned update manifest; only the publish
-# jobs, each in its GitHub environment whose required reviewer is the owner, get contents: write.
+# or pushes, and is itself dispatched on main only; a dispatch names a successful Windows CI run of this repository and a
+# channel. Production takes a run on main; staging takes a push or dispatch run on any branch (owner decision of October 28,
+# 2026; concept.md, "UP15 and UP16 amended"), never a pull request or a fork. The verify job checks that
+# run, proves for production that its commit is on the main branch, checks its installer artifact and writes the unsigned
+# update manifest; only the publish jobs, each in its GitHub environment whose required reviewer is the owner, get
+# contents: write.
 #
 # - staging, mode release: sign with the release-staging environment's key and publish a pre-release. Approving that
 #   environment is the owner's authorization of this staging release (UP16).
@@ -20,7 +23,7 @@ on:
   workflow_dispatch:
     inputs:
       run_id:
-        description: The id of a successful Windows CI run on main (a push or a dispatch on main) whose installer artifact is released
+        description: The id of a successful Windows CI run whose installer artifact is released - production needs a run on main, staging a push or dispatch run on any branch
         type: string
         required: true
       channel:
@@ -101,8 +104,10 @@ jobs:
           bash scripts/release/gh-get.sh "repos/$GITHUB_REPOSITORY/actions/runs/$RUN_ID" "$RUNNER_TEMP/run.json"
           node scripts/release/check-github-release.mjs run --json "$RUNNER_TEMP/run.json" --run-id "$RUN_ID" --repository "$GITHUB_REPOSITORY" --channel "$CHANNEL" >> "$GITHUB_OUTPUT"
       # A run's head_branch is only a name. Refuse a tag called main, which would make "main" ambiguous, read the main
-      # branch's commit from the unambiguous refs/heads/main, then require the run's commit to be in its history.
-      - name: Prove that the run's commit is on the main branch
+      # branch's commit from the unambiguous refs/heads/main, then require the run's commit to be in its history. Production
+      # only: a staging release may come from any branch's run (owner decision of October 28, 2026).
+      - name: Prove that a production run's commit is on the main branch
+        if: inputs.channel == 'production'
         env:
           COMMIT: ${{ steps.run.outputs.commit }}
         run: |

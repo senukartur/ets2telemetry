@@ -50,6 +50,15 @@ jobs:
       - name: Build production on main
         if: github.ref == 'refs/heads/main'
         run: Add-Content -LiteralPath $env:GITHUB_ENV -Value 'ETS2TELEMETRY_BUILD_CHANNEL=production'
+      # Owner decision of October 28, 2026 (concept.md, "UP15 and UP16 amended"): a dispatch on a branch
+      # other than main builds a releasable staging artifact, so its version is <base>-stg.<6-digit run number> (UP15), as
+      # windows-staging-build sets it on main. Pull requests and dispatches on a tag keep the local 000000, which release.yml
+      # refuses. Every job that resolves the build sets the same number, as it sets the same channel.
+      - name: Staging run number on a branch dispatch
+        if: github.event_name == 'workflow_dispatch' && startsWith(github.ref, 'refs/heads/') && github.ref != 'refs/heads/main'
+        run: |
+          if ($env:GITHUB_RUN_NUMBER -cnotmatch '^[1-9][0-9]{0,5}$') { throw 'GITHUB_RUN_NUMBER must be 1 to 6 digits for the staging version.' }
+          Add-Content -LiteralPath $env:GITHUB_ENV -Value ('ETS2TELEMETRY_STAGING_RUN_NUMBER=' + $env:GITHUB_RUN_NUMBER.PadLeft(6, '0'))
       - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5
         with:
           node-version: '24.19.0'
@@ -146,10 +155,14 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw 'Build evidence unavailable.' }
           $built = ($builtText -join "`n") | ConvertFrom-Json
           if ($built.channel -cnotin @('production', 'staging')) { throw 'Build evidence names no known channel.' }
+          # A branch dispatch's staging build is a release artifact; it must carry this run's staging number.
+          if ($env:ETS2TELEMETRY_STAGING_RUN_NUMBER -and ($built.channel -cne 'staging' -or $built.version -cnotmatch ('-stg\.' + $env:ETS2TELEMETRY_STAGING_RUN_NUMBER + '$'))) { throw 'The branch dispatch did not build staging with this run''s staging number.' }
           Add-Content -LiteralPath $env:GITHUB_OUTPUT -Value ('channel=' + $built.channel)
           Add-Content -LiteralPath $env:GITHUB_OUTPUT -Value ('setup=' + $built.setup)
       # ET-055 PR-4: the Setup of the channel actually built. A staging build (a dispatch on a branch other than main) uploads
       # windows-installer-staging-<run>-<attempt>, never the production name; only main's run produces the production artifact.
+      # Since the owner decision of October 28, 2026 that staging artifact carries this run's staging number and
+      # release-identity.json, so release.yml can release it as staging; production stays main-only.
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         if: github.event_name != 'pull_request'
         with:
@@ -213,6 +226,15 @@ jobs:
       - name: Build production on main
         if: github.ref == 'refs/heads/main'
         run: Add-Content -LiteralPath $env:GITHUB_ENV -Value 'ETS2TELEMETRY_BUILD_CHANNEL=production'
+      # Owner decision of October 28, 2026 (concept.md, "UP15 and UP16 amended"): a dispatch on a branch
+      # other than main builds a releasable staging artifact, so its version is <base>-stg.<6-digit run number> (UP15), as
+      # windows-staging-build sets it on main. Pull requests and dispatches on a tag keep the local 000000, which release.yml
+      # refuses. Every job that resolves the build sets the same number, as it sets the same channel.
+      - name: Staging run number on a branch dispatch
+        if: github.event_name == 'workflow_dispatch' && startsWith(github.ref, 'refs/heads/') && github.ref != 'refs/heads/main'
+        run: |
+          if ($env:GITHUB_RUN_NUMBER -cnotmatch '^[1-9][0-9]{0,5}$') { throw 'GITHUB_RUN_NUMBER must be 1 to 6 digits for the staging version.' }
+          Add-Content -LiteralPath $env:GITHUB_ENV -Value ('ETS2TELEMETRY_STAGING_RUN_NUMBER=' + $env:GITHUB_RUN_NUMBER.PadLeft(6, '0'))
       - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5
         with:
           node-version: '24.19.0'
@@ -364,6 +386,15 @@ jobs:
       - name: Build production on main
         if: github.ref == 'refs/heads/main'
         run: Add-Content -LiteralPath $env:GITHUB_ENV -Value 'ETS2TELEMETRY_BUILD_CHANNEL=production'
+      # Owner decision of October 28, 2026 (concept.md, "UP15 and UP16 amended"): a dispatch on a branch
+      # other than main builds a releasable staging artifact, so its version is <base>-stg.<6-digit run number> (UP15), as
+      # windows-staging-build sets it on main. Pull requests and dispatches on a tag keep the local 000000, which release.yml
+      # refuses. Every job that resolves the build sets the same number, as it sets the same channel.
+      - name: Staging run number on a branch dispatch
+        if: github.event_name == 'workflow_dispatch' && startsWith(github.ref, 'refs/heads/') && github.ref != 'refs/heads/main'
+        run: |
+          if ($env:GITHUB_RUN_NUMBER -cnotmatch '^[1-9][0-9]{0,5}$') { throw 'GITHUB_RUN_NUMBER must be 1 to 6 digits for the staging version.' }
+          Add-Content -LiteralPath $env:GITHUB_ENV -Value ('ETS2TELEMETRY_STAGING_RUN_NUMBER=' + $env:GITHUB_RUN_NUMBER.PadLeft(6, '0'))
       - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5
         with:
           node-version: '24.19.0'
@@ -608,7 +639,8 @@ jobs:
     # ET-055 PR-5 (docs/ci.md#side-by-side-installer-lifecycle-et-055-pr-5): on main, where windows-build makes the production
     # release artifact, this job builds the staging channel in parallel, runs the hosted installer lifecycle with the staging
     # Setup and hands that Setup to windows-installer for the side-by-side scenario. A branch dispatch builds staging in
-    # windows-build already, and pull requests skip every installer (E1), so it runs on main only. Not a required check.
+    # windows-build already (since October 28, 2026 with its run number, as that run's staging release artifact), and pull
+    # requests skip every installer (E1), so it runs on main only. Not a required check.
     # ET-055 PR-9 (docs/ci.md#et-055-release-workflow-dispatch-only): this build is also the staging release artifact. It
     # carries the version <base>-stg.<6-digit run number> and uploads windows-installer-staging-<run>-<attempt> with
     # release-identity.json, which release.yml downloads and verifies.

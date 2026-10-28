@@ -96,9 +96,18 @@ it('reads releases/latest and other 404-meaningful answers only through gh-get.s
   expect(text).not.toContain('gh release view');
 });
 
-it('proves the run\'s commit is on the main branch and refuses a tag named main', async () => {
+// Owner decision of October 28, 2026 (concept.md, "UP15 and UP16 amended"): the main-ancestry proof and
+// the refusal of a tag named main are production-only, so a staging release may come from any branch's CI run. The
+// workflow itself is still dispatched on main only, for both channels.
+it('proves a production run\'s commit is on the main branch and refuses a tag named main, for production only', async () => {
   const verify = job(await workflow(), 'verify');
-  const proof = verify.indexOf("- name: Prove that the run's commit is on the main branch");
+  expect(verify).toContain("- name: Prove that a production run's commit is on the main branch\n        if: inputs.channel == 'production'\n        env:\n");
+  expect(verify.match(/git\/ref\/tags\/main/g)).toHaveLength(1);
+  expect(verify.match(/check-github-release\.mjs ancestry/g)).toHaveLength(1);
+  // The run check itself is unconditional and applies the channel's branch rule (checkReleaseRun).
+  expect(verify).toContain('      - name: Check the Windows CI run\n        id: run\n        run: |\n');
+  expect(verify).toContain('--repository "$GITHUB_REPOSITORY" --channel "$CHANNEL" >> "$GITHUB_OUTPUT"\n');
+  const proof = verify.indexOf("- name: Prove that a production run's commit is on the main branch");
   expect(proof).toBeGreaterThan(verify.indexOf('- name: Check the Windows CI run'));
   expect(proof).toBeLessThan(verify.indexOf('- name: Download the installer artifact'));
   expect(verify).toContain('bash scripts/release/gh-get.sh "repos/$GITHUB_REPOSITORY/git/ref/tags/main" "$RUNNER_TEMP/tag-main.json" || status=$?\n' +

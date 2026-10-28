@@ -216,7 +216,7 @@ describe('PE images', () => {
       expect(() => identityOf(tree)).toThrow(name.endsWith('.node') ? 'Not an executable image' : 'Not a PE image');
     });
 
-  // ET-055 UP13: the identity records who built the artifacts, so the release workflow accepts only a main run's artifacts.
+  // ET-055 UP13: the identity records who built the artifacts, so the release workflow accepts only the artifacts of the CI run it releases.
   it('records the channel and who built it: a GitHub Actions run with its id, or a local build', async () => {
     const tree = await fakeTree();
     await buildMake(tree);

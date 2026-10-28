@@ -6,11 +6,14 @@ import {compareNugetVersions, isReleaseChannel, nugetVersionOf, releaseVersionPr
 
 // The release workflow's checks of GitHub API answers (ET-055 PR-9, decisions UP13 and UP16; docs/release.md, "Release
 // workflow"). `run` checks `GET /repos/{repo}/actions/runs/{id}`: only a completed, successful Windows CI run of this
-// repository on `main`, from a push or a dispatch, is released, and it names the installer artifact of its latest attempt
-// for the channel. A run's `head_branch` is only a name (a tag called `main` has it too), so `ancestry` checks
+// repository itself (never a fork), from a push or a dispatch (never a pull request), is released, and it names the
+// installer artifact of its latest attempt for the channel. Production takes only a run on `main`; staging takes a run on
+// any branch (owner decision of October 28, 2026; concept.md, "UP15 and UP16 amended"). A run's
+// `head_branch` is only a name (a tag called `main` has it too), so for production `ancestry` checks
 // `GET /repos/{repo}/compare/{head}...main`, made after the workflow proved that no tag `main` exists: the run's commit
-// must be on the main branch. `release` checks `GET /repos/{repo}/releases/{id}` or `/releases/tags/{tag}`: the tag, the
-// target commit, the draft and pre-release flags and exactly the expected asset names, each fully uploaded. `newer` checks
+// must be on the main branch. Staging has no ancestry check; its gate is the owner's approval of release-staging (UP16).
+// `release` checks `GET /repos/{repo}/releases/{id}` or `/releases/tags/{tag}`: the tag, the target commit, the draft and
+// pre-release flags and exactly the expected asset names, each fully uploaded. `newer` checks
 // that a production version is higher than the tag of the current latest release, by the application's NuGet SemVer
 // order, so no release is published that installed builds would refuse as a downgrade or that would not become latest.
 // Each prints `key=value` lines for $GITHUB_OUTPUT and fails with a fixed reason otherwise.
@@ -24,15 +27,21 @@ const refuse = message => {throw new Error(`Release refused: ${message}`);};
 /** The installer artifact a Windows CI run uploads for `channel` (scripts/ci and windows-ci.yml, ET-055 PR-4). */
 export const installerArtifactName = (channel, runId, attempt) => `${channel === 'production' ? 'windows-installer' : 'windows-installer-staging'}-${runId}-${attempt}`;
 
-/** Checks a workflow run object; returns its head commit, latest attempt and the channel's installer artifact name. */
+/**
+ * Checks a workflow run object for `channel`; returns its head commit, latest attempt and the channel's installer artifact
+ * name. Production: a run on `main`. Staging: a run on any branch of this repository. Both: a push or a dispatch.
+ */
 export function checkReleaseRun(run, {runId, repository, channel}) {
   if (!isReleaseChannel(channel)) refuse(`unknown channel ${JSON.stringify(channel)}`);
   if (typeof runId !== 'string' || !RUN_ID.test(runId)) refuse('the run id must be a positive integer');
   if (!plainObject(run) || String(run.id) !== runId) refuse(`the API answer is not run ${runId}`);
   if (run.path !== CI_WORKFLOW) refuse(`run ${runId} is not a ${CI_WORKFLOW} run`);
   if (run.repository?.full_name !== repository || run.head_repository?.full_name !== repository) refuse(`run ${runId} did not build ${repository} itself`);
-  if (run.head_branch !== 'main') refuse(`run ${runId} did not build main`);
-  if (run.event !== 'push' && run.event !== 'workflow_dispatch') refuse(`run ${runId} was started by ${JSON.stringify(run.event)}, not a push to or a dispatch on main`);
+  if (channel === 'production' && run.head_branch !== 'main') refuse(`run ${runId} did not build main`);
+  if (typeof run.head_branch !== 'string' || run.head_branch === '') refuse(`run ${runId} names no branch`);
+  if (run.event !== 'push' && run.event !== 'workflow_dispatch') {
+    refuse(`run ${runId} was started by ${JSON.stringify(run.event)}, not a push or a dispatch${channel === 'production' ? ' on main' : ''}`);
+  }
   if (run.status !== 'completed' || run.conclusion !== 'success') refuse(`run ${runId} did not complete successfully`);
   if (typeof run.head_sha !== 'string' || !COMMIT.test(run.head_sha)) refuse(`run ${runId} names no head commit`);
   if (!Number.isSafeInteger(run.run_attempt) || run.run_attempt < 1) refuse(`run ${runId} names no attempt`);
