@@ -52,7 +52,7 @@ Which channel each trigger builds ([build channels](setup.md#build-channels-et-0
 Consequences:
 
 - A packaging regression that affects only production names shows first on the `main` push or a dispatch; the golden tests in `tests/unit/channel-identity.test.ts` pin the production values on every PR (plan risk R2). Dispatch a branch to check its production path before merging.
-- `main` builds production only. Building staging there as well, for the side-by-side installer lifecycle, is part of ET-055 PR-5; the hosted installer lifecycle keeps installing production, and the uploaded `windows-installer-<run>-<attempt>` holds the production Setup.
+- Since ET-055 PR-5, `main` builds staging as well, in the separate job `windows-staging-build`, for the staging and side-by-side installer lifecycles ([below](#side-by-side-installer-lifecycle-et-055-pr-5)); the uploaded `windows-installer-<run>-<attempt>` still holds the production Setup only.
 - `release-identity.json` records `builtBy` with the run id (`GITHUB_RUN_ID`) of the run that built it.
 
 ## Job layout
@@ -63,7 +63,8 @@ ET-028 splits the measured critical path into a compiled-artifact producer and t
 | --- | --- | --- | --- |
 | `windows-build`, Windows x64 compiled artifacts | All previous native builds/CTest, CAP0/v1 chains, plugin lock, CLI smokes, Forge package or maker, inspection and release identity; seals the compiled payload | `windows-evidence-<run>-<attempt>`, installer identity output and same-run/same-attempt `windows-compiled-<run>-<attempt>` | 20 min |
 | `windows-runtime`, Windows x64 runtime and UI | All previous development/packaged runtime smokes, ten Yukon UI shards and unchanged extended regressions/event selection; no desktop/native/package rebuild | `windows-runtime-evidence-<run>-<attempt>` | 20 min |
-| `windows-installer`, Windows x64 hosted installer | Non-PR only: the unchanged guarded hosted lifecycle, including its existing test upgrade-fixture packaging | `windows-installer-evidence-<run>-<attempt>` | 20 min (existing lifecycle step remains 8 min) |
+| `windows-installer`, Windows x64 hosted installer | Non-PR only: the guarded hosted lifecycle of the build that was made, including its test upgrade-fixture packaging; on `main` also the side-by-side lifecycle with the staging Setup of `windows-staging-build` (ET-055 PR-5) | `windows-installer-evidence-<run>-<attempt>` | 20 min (each lifecycle step 8 min) |
+| `windows-staging-build`, Windows x64 staging installer | `main` only (ET-055 PR-5): a staging build, `make`, `inspect:package -- --installer`, the fake SDK host and test plugin, the sealed staging Setup and the whole hosted lifecycle with it; not a required check | `windows-staging-evidence-<run>-<attempt>` and `windows-staging-input-<run>-<attempt>` | 30 min (lifecycle step 8 min) |
 | `windows`, **Windows x64 scaffold** | Requires build/runtime/tests/ASan success, plus installer success on non-PR events; the only allowed nonparticipation is installer `skipped` on PR | Aggregate exit status | 20 min |
 | `windows-asan`, **Windows x64 native AddressSanitizer** | Unchanged pinned CMake, plugin/client ASan commands and evidence | `windows-asan-evidence-<run>-<attempt>` | 20 min |
 | `windows-tests`, **Windows x64 tests** | Unchanged clean install, ESLint, PSScriptAnalyzer, typecheck, complete Node suite and Electron storage suite | `windows-tests-evidence-<run>-<attempt>` | 20 min (storage step remains 5 min) |
@@ -721,6 +722,22 @@ ET-018 PR-1 (October 18, 2026) originally added **Installer lifecycle in a test 
 - **Duration.** The plan estimated 3–4 minutes more for the scaffold job on `main` and dispatch, about 12.7 minutes in all. The first dispatch run, [39087647383](https://github.com/senukartur/ets2telemetry/actions/runs/39087647383) at `fbdd34c` on October 18, 2026, passed: the step took 2 min 10 s (01:53:11–01:55:21 UTC), the maker step 1 min 28 s and the whole scaffold job 11 min 2 s. That was the pre-ET-028 heavy-worker measurement. ET-028 later split the work while preserving the required names through the aggregate ([current layout](#job-layout)); the 15-minute split guidance remains. The PR-3 uninstall scenarios add an estimated two to three minutes; their first hosted duration is recorded in [ET-018 validation](validation/et-018.md).
 
 At the original ET-018 introduction, no job, check name, trigger or upload path changed. The current ET-028 owners/artifacts are listed above. The original hosted result and durations are recorded in [ET-018 validation](validation/et-018.md#hosted-run).
+
+## Side-by-side installer lifecycle (ET-055 PR-5)
+
+ET-055 PR-5 (REG-017, REG-019 part 1) runs the installer lifecycle with either channel and adds the side-by-side scenario ([installer testing](installer-testing.md#side-by-side-scenario)). Pull requests still skip every installer job and step (E1). The build channel per run follows the [build channels](#build-channels-et-055-pr-4) rule: production only on `main`.
+
+| Run | `windows-build` | `windows-staging-build` | `windows-installer` |
+| --- | --- | --- | --- |
+| Push to `main` | Production | Runs: staging build, the staging lifecycle, the sealed staging Setup | The production lifecycle, then the side-by-side lifecycle with the downloaded staging Setup |
+| Branch dispatch | Staging | Skipped (no production to put beside it) | The staging lifecycle; no side-by-side step |
+| Pull request | Staging | Skipped | Skipped |
+
+- **Why a separate job.** A staging build needs its own desktop bundles, native trees, package and build evidence, which would replace the production ones in `windows-build`'s checkout. `windows-staging-build` runs beside `windows-build` and `windows-runtime`, so the wall time of a `main` push grows only by the side-by-side step (8-minute limit) in `windows-installer`. It configures the plugin tree with `npm run native:configure`, runs `npm run make` and builds only the two tests-only native targets the lifecycle loads (`capture-cap0-game-host`, `snapshot-transport-test-plugin`); `windows-build` keeps running every native test.
+- **Hand-off.** `node scripts/installer/side-by-side-input.mjs create` copies the staging Setup and writes `side-by-side-input.json` (the build's names, the Setup's SHA-256 and size, `ETS2TELEMETRY_SOURCE_COMMIT` and the checkout commit) into `.local/staging-input`, uploaded as `windows-staging-input-<run>-<attempt>` for two days. The harness's `verify` accepts it only for a staging build of the same checkout with the recorded bytes, before anything is installed.
+- **Gate.** `windows-installer` needs both jobs. On `main` it runs only when `windows-staging-build` succeeded; elsewhere a skipped staging job is accepted. `Windows x64 scaffold` keeps its dependencies and required names: a failed staging job on `main` skips `windows-installer`, which fails the aggregate there.
+- **Evidence.** The staging lifecycle's evidence is in `windows-staging-evidence-<run>-<attempt>` (`.local/ci/installer-<id>-evidence`), the side-by-side scenario's in `windows-installer-evidence-<run>-<attempt>` beside the production lifecycle's.
+- **First hosted run.** Not yet run when PR-5 was written; a branch dispatch exercises the staging lifecycle only, so the side-by-side step first runs on the `main` push after the merge.
 
 ## ET-018 release artifact identity
 

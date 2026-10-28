@@ -947,3 +947,10 @@ ET-055 PR-4 implementation update (October 28, 2026): agent and feature-test bui
 - **Tests.** Every Vitest suite removes the build variables first (`tests/shared/build-channel-environment.ts`), and tests name the channel they check, so the shell's channel never changes a result.
 
 No product behaviour, protocol, schema, settings format or `GAME_HISTORY_RECORDING` change follows. Both channels on a real machine and every real-game, TruckersMP, display and performance check remain pending.
+
+ET-055 PR-5 implementation update (October 28, 2026): the installer lifecycle is channel-aware and has a hosted side-by-side scenario.
+
+- **Lifecycle.** Its install root, Uninstall key, names, versions, plugin file, RunOnce value and receipts come from the built channel (`scripts/installer/installer-guard.mjs`), so `STAGING_LIFECYCLE_PENDING` is gone. A staging Setup runs on a GitHub-hosted runner, or locally only with the owner's explicit `-AllowLocal` request under the test-root rules; agents never run the lifecycle locally (ET-018). A production Setup, and so the side-by-side scenario, runs on a hosted runner only.
+- **Side by side.** On `main`, `windows-staging-build` builds staging, runs the staging lifecycle and seals its Setup; `windows-installer` installs that Setup beside the production build in one test root and checks separate install roots, Uninstall entries, shortcuts and AUMIDs, Run values and data roots, both applications running at once, both plugins in one fake game folder, and each channel's uninstall and deferred cleanup leaving the other's untouched (REG-019 part 1). A branch dispatch builds staging only, so it runs the staging lifecycle without the side-by-side step. Pull requests skip the installer (E1). See [installer testing](docs/installer-testing.md#side-by-side-scenario) and [CI](docs/ci.md#side-by-side-installer-lifecycle-et-055-pr-5).
+
+No product code changes. The first hosted side-by-side run, both channels on a real machine and two plugins in a real game remain pending.
