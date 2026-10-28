@@ -845,7 +845,7 @@ export const RU_DICTIONARY: TranslationDictionary = channelCopyTable(Object.free
   'lang.saveFailed': 'Изменение языка не удалось сохранить; остаётся предыдущий язык.',
   // ET-055 UP10, UP11: the sidebar update control, the version line and the About check.
   'upd.available': 'Обновить до {version}',
-  'upd.availableA': 'Доступно обновление: версия {version}. Скачать и установить',
+  'upd.availableA': 'Обновить до {version}: скачать и установить доступное обновление',
   'upd.downloading': 'Загрузка… {percent}%',
   'upd.downloadingA': 'Загрузка обновления…',
   'upd.progressA': 'Загрузка обновления',

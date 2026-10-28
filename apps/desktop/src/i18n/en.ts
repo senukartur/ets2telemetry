@@ -845,7 +845,7 @@ export const EN_DICTIONARY: TranslationDictionary = channelCopyTable(Object.free
   'lang.saveFailed': 'The language change was not saved; the previous language stays in use.',
   // ET-055 UP10, UP11: the sidebar update control, the version line and the About check.
   'upd.available': 'Update to {version}',
-  'upd.availableA': 'Update available: version {version}. Download and install',
+  'upd.availableA': 'Update to {version}: download and install the available update',
   'upd.downloading': 'Downloading… {percent}%',
   'upd.downloadingA': 'Downloading the update…',
   'upd.progressA': 'Update download',
