@@ -5,6 +5,7 @@
 #include "protocol-json.hpp"
 #include "protocol-v1.hpp"
 #include "capture-hello.hpp"
+#include "channel-identity.hpp"
 #include <algorithm>
 #include <filesystem>
 #include <memory>
@@ -16,6 +17,7 @@
 
 namespace v0 = ets2telemetry::v0;
 namespace v1 = ets2telemetry::v1;
+namespace channel = ets2telemetry::channel;
 using v0::Json;
 namespace fs = std::filesystem;
 #ifdef ETS2TELEMETRY_CLIENT_DISCOVERY_TEST
@@ -481,7 +483,9 @@ int wmain(int argc, wchar_t** argv) {
       if (recordGame != "ets2" && recordGame != "ats") fail();
       const auto pid = integer(record.at("processId")); if (!pid) fail();
       const auto expectedCreation = v0::parse_uint64(record.at("processCreationTime"));
-      const auto endpoint = "\\\\.\\pipe\\ETS2Telemetry-" + recordGame + segment + self.userTag + "-" + std::to_string(self.session) + "-" + stem;
+      // Only names under this build channel's prefix (ET-055) are accepted: a record naming another prefix, such as the
+      // other channel's, fails closed like any inconsistent derived name.
+      const auto endpoint = channel::active.pipe_prefix + recordGame + segment + self.userTag + "-" + std::to_string(self.session) + "-" + stem;
       if (record.at("pipeName").string() != endpoint) fail();
       stage = "server-process";
       const auto raw = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION | SYNCHRONIZE, FALSE, pid);
@@ -506,10 +510,10 @@ int wmain(int argc, wchar_t** argv) {
     if (!selected) {receipt(Json{Json::Object{{"type", Json{std::string("waiting")}}, {"schemaVersion", Json{1.0}}}}); return finish(2, stage);}
     const auto& record = *selected; const auto pid = integer(record.at("processId")); if (!pid) fail();
     const auto expectedCreation = v0::parse_uint64(record.at("processCreationTime"));
-    const auto endpoint = "\\\\.\\pipe\\ETS2Telemetry-" + game + segment + self.userTag + "-" + std::to_string(self.session) + "-" + record.at("processInstanceId").string();
+    const auto endpoint = channel::active.pipe_prefix + game + segment + self.userTag + "-" + std::to_string(self.session) + "-" + record.at("processInstanceId").string();
     if (record.at("pipeName").string() != endpoint) fail();
     // The capture endpoint is keyed to the same verified process instance and its plugin session.
-    const auto connectTo = capture ? "\\\\.\\pipe\\ETS2Telemetry-" + game + "-cap0-" + self.userTag + "-" + std::to_string(self.session) + "-" + record.at("processInstanceId").string() + "-" + record.at("pluginSessionId").string() : endpoint;
+    const auto connectTo = capture ? channel::active.pipe_prefix + game + "-cap0-" + self.userTag + "-" + std::to_string(self.session) + "-" + record.at("processInstanceId").string() + "-" + record.at("pluginSessionId").string() : endpoint;
     auto& process = *selectedProcess;
     stage = "connected-peer"; if (!WaitNamedPipeW(wide(connectTo).c_str(), 250)) {const auto error = GetLastError(); if (error == ERROR_FILE_NOT_FOUND || error == ERROR_SEM_TIMEOUT) throw Disconnected(); pipe_failed(error);}
     const auto rawPipe = CreateFileW(wide(connectTo).c_str(), GENERIC_READ | GENERIC_WRITE, 0, nullptr, OPEN_EXISTING, FILE_FLAG_OVERLAPPED, nullptr);

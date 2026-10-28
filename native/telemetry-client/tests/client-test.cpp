@@ -190,7 +190,7 @@ void discovery_before_open(const fs::path& filename) {
 int host(const fs::path& directory, const fs::path& fixtures, const std::string& mode) {
   Identity self(GetCurrentProcess()); OwnerSecurity security(self);
   const std::string instance = "00112233-4455-6677-8899-aabbccddeeff", plugin = "11112233-4455-6677-8899-aabbccddeeff";
-  const auto endpoint = "\\\\.\\pipe\\ETS2Telemetry-ets2-v0-" + self.userTag + "-" + std::to_string(self.session) + "-" + instance;
+  const auto endpoint = std::string(channel::active.pipe_prefix) + "ets2-v0-" + self.userTag + "-" + std::to_string(self.session) + "-" + instance;
   Handle pipe(CreateNamedPipeW(wide(endpoint).c_str(), PIPE_ACCESS_DUPLEX | FILE_FLAG_FIRST_PIPE_INSTANCE | FILE_FLAG_OVERLAPPED, PIPE_TYPE_BYTE | PIPE_READMODE_BYTE | PIPE_WAIT | PIPE_REJECT_REMOTE_CLIENTS, 1, 65540, 65540, 0, &security.attributes));
   Json source{Json::Object{{"game", Json{std::string("ets2")}}, {"processId", Json{static_cast<double>(GetCurrentProcessId())}}, {"windowsSessionId", Json{static_cast<double>(self.session)}}, {"processInstanceId", Json{instance}}, {"pluginSessionId", Json{plugin}}, {"origin", Json{std::string("game")}}}};
   auto record = Json{Json::Object{{"schemaVersion", Json{1.0}}, {"protocolMajor", Json{0.0}}, {"game", Json{std::string("ets2")}}, {"userTag", Json{self.userTag}}, {"windowsSessionId", Json{static_cast<double>(self.session)}}, {"processId", Json{static_cast<double>(GetCurrentProcessId())}}, {"processCreationTime", Json{std::to_string(creation(GetCurrentProcess()) + (mode == "creation" ? 1 : 0))}}, {"processInstanceId", Json{instance}}, {"pluginSessionId", Json{plugin}}, {"pipeName", Json{endpoint}}}};
@@ -249,8 +249,8 @@ int host(const fs::path& directory, const fs::path& fixtures, const std::string&
 int capture_host(const fs::path& directory, const std::string& mode) {
   Identity self(GetCurrentProcess()); OwnerSecurity security(self);
   const std::string instance = "00112233-4455-6677-8899-aabbccddeeff", plugin = "11112233-4455-6677-8899-aabbccddeeff";
-  const auto endpoint = "\\\\.\\pipe\\ETS2Telemetry-ets2-v0-" + self.userTag + "-" + std::to_string(self.session) + "-" + instance;
-  const auto capture = "\\\\.\\pipe\\ETS2Telemetry-ets2-cap0-" + self.userTag + "-" + std::to_string(self.session) + "-" + instance + "-" + plugin;
+  const auto endpoint = std::string(channel::active.pipe_prefix) + "ets2-v0-" + self.userTag + "-" + std::to_string(self.session) + "-" + instance;
+  const auto capture = std::string(channel::active.pipe_prefix) + "ets2-cap0-" + self.userTag + "-" + std::to_string(self.session) + "-" + instance + "-" + plugin;
   Handle pipe(CreateNamedPipeW(wide(capture).c_str(), PIPE_ACCESS_DUPLEX | FILE_FLAG_FIRST_PIPE_INSTANCE | FILE_FLAG_OVERLAPPED, PIPE_TYPE_BYTE | PIPE_READMODE_BYTE | PIPE_WAIT | PIPE_REJECT_REMOTE_CLIENTS, 1, 65540, 65540, 0, &security.attributes));
   write_file(directory / (instance + ".json"), Json{Json::Object{{"schemaVersion", Json{1.0}}, {"protocolMajor", Json{0.0}}, {"game", Json{std::string("ets2")}}, {"userTag", Json{self.userTag}}, {"windowsSessionId", Json{static_cast<double>(self.session)}}, {"processId", Json{static_cast<double>(GetCurrentProcessId())}}, {"processCreationTime", Json{std::to_string(creation(GetCurrentProcess()))}}, {"processInstanceId", Json{instance}}, {"pluginSessionId", Json{plugin}}, {"pipeName", Json{endpoint}}}}, self);
   receipt(Json{Json::Object{{"type", Json{std::string("ready")}}}});
@@ -290,7 +290,7 @@ bool silent(HANDLE pipe, HANDLE client) {
 int v1_host(const fs::path& directory, const fs::path& fixtures, const std::string& mode) {
   Identity self(GetCurrentProcess()); OwnerSecurity security(self);
   const std::string instance = "00112233-4455-6677-8899-aabbccddeeff", plugin = "11112233-4455-6677-8899-aabbccddeeff";
-  const auto name = [&](const char* segment, const std::string& id) {return "\\\\.\\pipe\\ETS2Telemetry-ets2-" + std::string(segment) + "-" + self.userTag + "-" + std::to_string(self.session) + "-" + id;};
+  const auto name = [&](const char* segment, const std::string& id) {return std::string(channel::active.pipe_prefix) + "ets2-" + std::string(segment) + "-" + self.userTag + "-" + std::to_string(self.session) + "-" + id;};
   const auto endpoint = name("v1", instance);
   // Without inbound quota a client write stays pending until the host reads it, which the deadline case never does.
   const DWORD inbound = mode == "v1-write-deadline" ? 0 : 65540;
@@ -340,7 +340,7 @@ std::string indexed_uuid(unsigned prefix, unsigned index) {
   return std::string(buffer);
 }
 void write_discovery_record(const fs::path& directory, const Identity& identity, const std::string& recordGame, const std::string& instanceId, DWORD pid, std::uint64_t created) {
-  const auto endpoint = "\\\\.\\pipe\\ETS2Telemetry-" + recordGame + "-v0-" + identity.userTag + "-" + std::to_string(identity.session) + "-" + instanceId;
+  const auto endpoint = channel::active.pipe_prefix + recordGame + "-v0-" + identity.userTag + "-" + std::to_string(identity.session) + "-" + instanceId;
   const auto record = Json{Json::Object{
     {"schemaVersion", Json{1.0}},
     {"protocolMajor", Json{0.0}},
@@ -556,7 +556,7 @@ int wmain(int argc, wchar_t** argv) {
       if (scenario == "directory-record") require(CreateDirectoryW(record.c_str(), &security.attributes));
       else if (scenario == "reparse-record") {const auto target = directory / "junction-target"; require(CreateDirectoryW(target.c_str(), &security.attributes)); junction.path = record; create_junction(record, target, identity);}
       else {
-        const auto endpoint = "\\\\.\\pipe\\ETS2Telemetry-ets2-v0-" + identity.userTag + "-" + std::to_string(identity.session) + "-" + instance;
+        const auto endpoint = std::string(channel::active.pipe_prefix) + "ets2-v0-" + identity.userTag + "-" + std::to_string(identity.session) + "-" + instance;
         write_file(record, Json{Json::Object{{"schemaVersion", Json{1.0}}, {"protocolMajor", Json{0.0}}, {"game", Json{std::string("ets2")}}, {"userTag", Json{identity.userTag}}, {"windowsSessionId", Json{static_cast<double>(identity.session)}}, {"processId", Json{static_cast<double>(GetCurrentProcessId())}}, {"processCreationTime", Json{std::to_string(creation(GetCurrentProcess()))}}, {"processInstanceId", Json{instance}}, {"pluginSessionId", Json{std::string("11112233-4455-6677-8899-aabbccddeeff")}}, {"pipeName", Json{endpoint}}}}, identity);
         if (scenario == "zero-record" || scenario == "short-record") {Handle file(CreateFileW(record.c_str(), GENERIC_WRITE, 0, nullptr, TRUNCATE_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr)); if (scenario == "short-record") {DWORD written = 0; require(WriteFile(file.value, "{", 1, &written, nullptr) && written == 1);}}
         if (scenario == "denied-record") {

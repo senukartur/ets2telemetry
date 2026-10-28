@@ -37,6 +37,8 @@ The plugin always publishes a passive CAP0 endpoint after v0 startup succeeds or
 \\.\pipe\ETS2Telemetry-{game}-cap0-{userTag}-{windowsSessionId}-{processInstanceId}-{pluginSessionId}
 ```
 
+This is the production name. The pipe prefix and the transport directory that holds the v0 discovery record and `service-policy.json` are selected per build channel (ET-055, [native transport boundary](../native-transport-boundary-v0.md#discovery-and-service-policy)): a staging build uses `\\.\pipe\ETS2TelemetryStaging-…` and `%LOCALAPPDATA%\ETS2TelemetryStaging\transport\v0`. The rest of the name and the CAP0 contract are unchanged.
+
 It uses the v0 security model: explicit protected current-user DACL, `PIPE_REJECT_REMOTE_CLIENTS`, `FILE_FLAG_FIRST_PIPE_INSTANCE`, one instance and one client, and no adoption of a pre-existing endpoint. The connected client's PID, token user, Windows session, final image path and image SHA-256 must match the protected `service-policy.json`, exactly as for v0. The native broker (`telemetry-pipe-client.exe --game ets2|ats --discovery-dir <dir> --capture cap0`) performs the unchanged discovery and connected-server authority checks against the v0 discovery record, derives the CAP0 name from that verified record and connects only there. Its authority receipt has the six v0 receipt fields plus `"evidence":"cap0"`; the service rejects a receipt without that marker. The broker accepts only a CAP0 hello on stdin and relays one packet per stdio credit.
 
 The client sends one hello within five seconds, at most 4,096 payload bytes; the prefix bound is enforced before payload accumulation and any additional client byte closes the connection:
