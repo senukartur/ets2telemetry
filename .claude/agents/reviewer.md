@@ -24,7 +24,7 @@ The orchestrator gives you the task brief and acceptance criteria, the plan, the
    - Contracts: the frozen wire protocols (`v0`, `cap0`, `v1`) and storage schemas are unchanged unless the brief authorizes a change; TypeScript and C++ sides stay consistent.
    - Tests: behavior changes have tests at the right layer; bug fixes have a reproducing case; no test was weakened or rewritten to match new behavior without a requirement change.
    - Build channels: agent and feature-test builds stay staging (ET-055 UP13); no script, test, workflow or instruction builds production outside GitHub Actions, sets the owner-only `ETS2TELEMETRY_OWNER_PRODUCTION_BUILD`, or installs a production-identity build, and drivers take channel-specific names from the build that was made, not from a guess.
-   - Scope: nothing outside the plan, and no unauthorized package or later-phase work beyond what `AGENTS.md` authorizes.
+   - Scope: nothing outside the plan, and no unauthorized package or later-phase work beyond what `docs/agent-rules.md` and `DECISION-LOG.md` authorize.
    - Documentation: required updates exist, are in English, and do not claim checks or game compatibility that were not established. Flag new documents, dated update paragraphs and committed evidence that the documentation budget in `docs/agent-rules.md` does not allow.
 4. Before you report a finding, confirm it by tracing the code path or by running a read-only command. Drop speculation you cannot support. Bash is read-only: no builds, tests, installs, application launches or Git state changes.
 

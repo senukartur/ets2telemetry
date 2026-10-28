@@ -34,8 +34,8 @@ Snapshot as of October 28, 2026 (`main` at `ae5ab6a7`). Inspect the actual files
 
 - **Application.** Yukon Union Telemetry (technical name ETS2Telemetry Desktop): Electron, React and TypeScript npm workspaces pinned to Node 24.19.0 and npm 11.17.0 ([setup](setup.md)). It has the Yukon UI ([design](design/README.md)), a tray lifecycle, a live dashboard, Hard Mode, a trip journal with JSON export format 2, and a transparent overlay with four layouts. The settings file is format v11 ([settings](settings.md)).
 - **Game integration.** A C++17 SCS SDK plugin serves protocol v0 to the live dashboard and overlay, protocol v1 minors 0–2 for durable events and v1-only live fields, and the evidence-only CAP0 endpoint. A native broker relays the pipes to the telemetry utilityProcess. Silent plugin setup installs the plugin into discovered ETS2 and ATS folders.
-- **Recording.** Real ETS2 and ATS sources record into the history database (SQLite schema version 3) since October 25, 2026: protocol v1 events, gaps, trips and one-second samples, acknowledged only after the commit.
-- **Distribution.** A Squirrel installer with an explicit uninstall that removes local data, production and staging channels that install side by side, and in-app updates from Ed25519-signed manifests, with the owner's public keys compiled in (#218). `release.yml` is dispatch-only. No release has been published.
+- **Recording.** Since October 25, 2026 real ETS2 and ATS sources are configured to record into the history database (SQLite schema version 3): protocol v1 events, gaps, trips and one-second samples, acknowledged only after the commit. The first real recorded trip remains unverified ([enablement validation](validation/game-history-enablement.md)).
+- **Distribution.** A Squirrel installer with an explicit uninstall that removes local data, production and staging channels that install side by side, and in-app updates from Ed25519-signed manifests, with the owner's public keys compiled in (#218). `release.yml` is dispatch-only. No release has been published, so a real update from a published release remains unobserved ([releases](release.md)).
 - **CI.** Windows CI with three required jobs, plus the non-required extended workflow and the dispatch-only soak ([CI](ci.md)).
 - **Real-game evidence.** Partial. The ET-009 prototype gate is accepted with recorded limits. Many real-game, TruckersMP, display, DPI, Narrator and performance checks remain unverified, several of them transferred to ET-042, ET-043 and ET-044. Check the card's record in `docs/validation/` before claiming anything.
 
@@ -238,11 +238,11 @@ Evidence and claims:
 Scope and authority:
 
 - Work on a package needs an authorization recorded in the decision log or given by the owner in the conversation. An authorization covers only the package it names; it authorizes no release, later phase or server work. Since October 15, 2026 a standing delegation lets the coordinator start packages and adopt architect decisions until a task needs a real-game test ([delegation](../DECISION-LOG.md#et-005b-authorization--october-15-2026)).
-- Merge authority is granted per package and recorded with it. Without such a grant, the owner merges.
+- Merge authority is granted per package and recorded with it, or comes from that standing delegation, under which the coordinator has merged packages (for example ET-010c). A PR that neither covers is merged by the owner.
 
 Recording and data:
 
-- `GAME_HISTORY_RECORDING` is `true` since October 25, 2026: real ETS2 and ATS sources record over protocol v1 into history. Synthetic, replay and fixture sources are never durable in history, and `ETS2TELEMETRY_RECORDING` selects only a synthetic or replay database. Changing the flag is an owner decision ([enablement](../DECISION-LOG.md#game-history-recording-enablement--october-25-2026)).
+- `GAME_HISTORY_RECORDING` is `true` since October 25, 2026: real ETS2 and ATS sources are configured to record over protocol v1 into history; the first real recorded trip remains unverified. Synthetic, replay and fixture sources are never durable in history, and `ETS2TELEMETRY_RECORDING` selects only a synthetic or replay database. Changing the flag is an owner decision ([enablement](../DECISION-LOG.md#game-history-recording-enablement--october-25-2026)).
 - CAP0 is evidence-only and default-off. Original captures and sanitized exports stay local; only minimized, anonymized CAP-01-derived fixtures may be committed ([CAP0](../DECISION-LOG.md#cap-01a-evidence-capture-transport--october-12-2026), [replay](../DECISION-LOG.md#et-005b-cap-01-replay-authorization--october-21-2026)).
 - Hard Mode qualification is conservative: an observed failure or any required unknown loses the trip's qualification irreversibly, and no grace period is adopted ([Hard Mode](../DECISION-LOG.md#et-026-persisted-setting-decision-and-implementation--october-21-2026)).
 - Uninstall removes all local data; see [Uninstall removes local data](#uninstall-removes-local-data--october-16-2026). The public repository must never receive secrets or personal data; see [Repository visibility and license](#repository-visibility-and-license--october-16-2026).
@@ -251,7 +251,7 @@ Builds, installers and releases:
 
 - Agent and feature-test builds are staging. Leave `ETS2TELEMETRY_BUILD_CHANNEL` unset, never set it to `production`, and never set `ETS2TELEMETRY_OWNER_PRODUCTION_BUILD`. Never install or run a production-identity build on the owner's machine; install a feature-test build only as staging (`YukonUnionTelemetry-Staging-Setup-<version>.exe`, data root `%LOCALAPPDATA%\ETS2TelemetryStaging`). Production artifacts come only from Windows CI on `main`, and the native plugin trees' `build/other-channel/` DLL is a test artifact that must never be copied into a game ([ET-055](../DECISION-LOG.md#et-055-in-app-updates-and-staging-channel--october-28-2026)).
 - Never launch the application unpackaged with `ETS2TELEMETRY_PLUGIN_SETUP=real`: it writes into real game folders. Validation uses only temporary fake Steam and game folders ([ET-017 PR-4](../DECISION-LOG.md#et-017-pr-4-implementation-update--october-17-2026)).
-- The installer lifecycle, the update-from-feed scenario, `Update.exe` and `--squirrel-*` commands run only on GitHub-hosted runners. Agents never run them on the owner's machine and never write the real RunOnce key; a local staging lifecycle with `-AllowLocal` runs only on the owner's explicit request ([ET-018](../DECISION-LOG.md#et-018-authorization--october-18-2026)).
+- The installer lifecycle runs in a marked test root on GitHub-hosted runners; it runs locally with `-AllowLocal`, for a staging Setup only, only on the owner's explicit request. The update-from-feed and side-by-side scenarios run on hosted runners only, never under `-AllowLocal`. Agents never run a lifecycle against a real root and never write the production RunOnce value. Installing a staging feature-test build, as the rule above allows, is not a lifecycle run ([ET-018](../DECISION-LOG.md#et-018-authorization--october-18-2026), [ET-055](../DECISION-LOG.md#et-055-in-app-updates-and-staging-channel--october-28-2026)).
 - Every release publication needs the owner's explicit authorization; approving a staging `release.yml` environment is the authorization of that staging release. Agents never generate, hold or use a signing key, never create release environments or secrets, and never dispatch `release.yml`.
 - The plugin's protocol v1 minor-2 serving and the application's minor-2 offer must ship in the same release ([ET-052](../DECISION-LOG.md#et-052-authorization--october-26-2026)).
 
@@ -275,7 +275,7 @@ Open authorizations as of October 28, 2026. Check the Trello board and the decis
 
 ## Documentation Budget
 
-The owner decided on October 28, 2026 to limit the documentation that agents write. Documentation describes how the system works now; the PR and Git history record how it got there.
+The owner decided on October 28, 2026 to limit the documentation that agents write ([decision](../DECISION-LOG.md#agentsmd-cut-and-documentation-budget--october-28-2026)). Documentation describes how the system works now; the PR and Git history record how it got there.
 
 - **Evidence goes in the PR description.** Commands run, results, measurements, review outcomes, failed attempts and remaining checks belong in the PR description, not in committed files.
 - **No new documents** unless the owner asks for one, or a new interface, setup step or user-facing workflow has no place in an existing document. Never commit plans, summaries, handoffs, reports or per-PR notes.
@@ -289,4 +289,4 @@ The owner decided on October 28, 2026 to limit the documentation that agents wri
 
 - Do not add dated authorization, acceptance or implementation-update sections here. Record each new owner decision at the end of [DECISION-LOG.md](../DECISION-LOG.md).
 - Change this file only when a rule that applies to all work changes: update [Standing Owner Rules](#standing-owner-rules), [Active Authorizations](#active-authorizations) or [Current Project State](#current-project-state) in place, with a link to the log entry. Keep [AGENTS.md](../AGENTS.md) at about 1,000 characters: it holds only the basics every session needs.
-- Keep this file under about 40 KB.
+- Keep this file under about 45 KB; move a rule that applies only to one area into that area's document instead of growing this file.

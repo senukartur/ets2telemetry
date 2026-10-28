@@ -6,7 +6,7 @@ Date: October 25, 2026 (Europe/Warsaw). Authorization: the owner's instruction o
 
 - `GAME_HISTORY_RECORDING` is `true` in [recording-policy.ts](../../apps/desktop/src/recording-policy.ts). The default plan now makes the `ets2` and `ats` selections durable over the history database, so the service builds a `TripRecorderSink` in production and `deriveRecordingStatus` no longer reports `disabled` there.
 - Nothing else in the product changed: no wire, schema, migration, IPC, preload, renderer or native code. The dashboard and tray already had texts for every recording state and for the `history` target (ET-015c PR-4).
-- The decisions that came with it (v0 retirement not awaited, the unverified boundaries, TD-021) are in the AGENTS.md section and in [technical debt](../technical-debt.md).
+- The decisions that came with it (v0 retirement not awaited, the unverified boundaries, TD-021) are in the [decision log](../../DECISION-LOG.md#game-history-recording-enablement--october-25-2026) and in [technical debt](../technical-debt.md).
 
 ## What the dashboard shows now
 
@@ -79,4 +79,4 @@ What to do and what to look at, for the owner. Nothing here is an instruction to
 4. Open the Journal: the trip should be there with its outcome and completeness. Open its details, and export the JSON.
 5. Report what the dashboard said at each step, any `Recording problem` alert with its text, and the exported file. A gap is recorded as a gap and is not an error by itself.
 
-An uninstall removes this history ([AGENTS.md](../agent-rules.md#uninstall-removes-local-data--october-16-2026)); export a trip you want to keep.
+An uninstall removes this history ([agent rules](../agent-rules.md#uninstall-removes-local-data--october-16-2026)); export a trip you want to keep.

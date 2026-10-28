@@ -2,7 +2,7 @@
 
 [Claude code review](../.github/workflows/claude-review.yml) runs [anthropics/claude-code-action](https://github.com/anthropics/claude-code-action) on pull requests. Its comments are advisory input for the owner. They never approve, request changes, satisfy a required check, or replace the owner review, the [Windows CI](ci.md) checks, independent review, or real-game evidence defined in [TESTING.md](../TESTING.md). Do not cite an AI review as proof that a change is correct.
 
-AI review comments follow the same handling as human review: the agent that addresses them replies to each line thread with the fixing commit SHA or a reasoned disagreement and then resolves it, and answers the summary comment with one PR comment; see [AGENTS.md](agent-rules.md#review-threads).
+AI review comments follow the same handling as human review: the agent that addresses them replies to each line thread with the fixing commit SHA or a reasoned disagreement and then resolves it, and answers the summary comment with one PR comment; see [the agent rules](agent-rules.md#review-threads).
 
 ## Triggers
 

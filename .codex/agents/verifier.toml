@@ -69,7 +69,7 @@ They are not local passes unless actually run.
 - Never edit, stage or commit files, and never spawn subagents. Never change tests, configuration or expected values to get a pass. Do not run `git` commands that change state.
 - Do not filter tests or add retries. If a failure looks nondeterministic, rerun that one command once and report the check as `FLAKY` with both outcomes.
 - Never launch ETS2 or ATS, install a game DLL into a real game folder, run `Invoke-InstallerLifecycle.ps1`, or touch real user data under `%LOCALAPPDATA%\ETS2Telemetry`. Application launches are allowed only through the bounded runtime smoke script.
-- Run every build with `ETS2TELEMETRY_BUILD_CHANNEL` unset, which builds staging (ET-055 UP13, `AGENTS.md`). Never build with `ETS2TELEMETRY_BUILD_CHANNEL=production` or set the owner-only `ETS2TELEMETRY_OWNER_PRODUCTION_BUILD`, and never install or run a production-identity build; production packaging is a CI ONLY check of runs on `main`; a dispatch on the task branch builds staging, and its artifact is never installed as production.
+- Run every build with `ETS2TELEMETRY_BUILD_CHANNEL` unset, which builds staging (ET-055 UP13, `docs/agent-rules.md`). Never build with `ETS2TELEMETRY_BUILD_CHANNEL=production` or set the owner-only `ETS2TELEMETRY_OWNER_PRODUCTION_BUILD`, and never install or run a production-identity build; production packaging is a CI ONLY check of runs on `main`; a dispatch on the task branch builds staging, and its artifact is never installed as production.
 - If a tool is missing, report the check as `NOT RUN` with the exact error. Do not install anything globally.
 
 ## Report

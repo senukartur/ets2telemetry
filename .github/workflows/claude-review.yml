@@ -46,7 +46,8 @@ jobs:
             PR NUMBER: ${{ github.event.pull_request.number }}
 
             You are an advisory reviewer for this pull request. Read AGENTS.md first,
-            then the parts of concept.md, TESTING.md and docs/ that the diff touches.
+            then the parts of docs/agent-rules.md, concept.md, TESTING.md and docs/
+            that apply to the diff.
             Use `gh pr view` and `gh pr diff` to inspect the change.
 
             Report only issues you can justify from the diff and repository rules,
