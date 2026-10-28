@@ -1498,6 +1498,29 @@ async function launchRows(diagnostics) {
   const order = rows => [...new Set(rows.map(row => row.pid))];
   return {main, service, mainPids: order(main), servicePids: order(service)};
 }
+/**
+ * Copies the main and service logs of one diagnostic folder (and their rotated `.1` files, at most 4 MiB each) into the
+ * evidence as `<name>\main.jsonl` and `<name>\service.jsonl`, so a failed command can be diagnosed from the uploaded
+ * artifact even when the harness's own copy of R\diagnostics does not happen. Every instance of the command (A, the
+ * restarted B, a stub-started one) writes there, each row with its pid. Never throws.
+ */
+async function keepLogs(config, diagnostics, name) {
+  const target = path.join(config.evidence, name);
+  const copies = [['startup.jsonl', 'main.jsonl'], ['startup.jsonl.1', 'main.jsonl.1'], [path.join('service', 'startup.jsonl'), 'service.jsonl'],
+    [path.join('service', 'startup.jsonl.1'), 'service.jsonl.1']];
+  const kept = [];
+  for (const [from, to] of copies) {
+    try {
+      const item = await lstat(path.join(diagnostics, from));
+      if (!item.isFile() || item.size > 4 * 1024 * 1024) continue;
+      await mkdir(target, {recursive: true});
+      await copyFile(path.join(diagnostics, from), path.join(target, to));
+      kept.push(to);
+    } catch {/* absent or unreadable: the list says what was kept */}
+  }
+  return kept;
+}
+
 /** One process's rows, as the verify step judges them: the events in order, with their facts or detail. */
 const rowsOf = (rows, pids) => rows.filter(row => pids.includes(row.pid));
 
@@ -1547,7 +1570,10 @@ async function updateFeed(config, label, executable, mode) {
     feed.setPhase('offer');
     application = await electron.launch({executablePath: executable, cwd: layout.cwd, env, timeout: left(20000)});
     launcher = application.process();
-    record.mainPid = launcher.pid;
+    // The pid that writes the main log is the main process's own, asked from it: hosted run 40705674218 showed Playwright's
+    // child pid (5668) differ from the logged one (1144), so every row of A looked like another process's.
+    record.launcherPid = launcher.pid;
+    record.mainPid = await application.evaluate(() => process.pid);
     const {dashboard} = await rendererPages(application);
     await waitForStartup(dashboard, left, 15000);
     const view = () => dashboard.evaluate(() => globalThis.desktop.getAppState().then(state => state.update));
@@ -1604,8 +1630,12 @@ async function updateFeed(config, label, executable, mode) {
           return mainPid !== undefined && opened ? {mainPid} : null;
         }, Boolean, 'RESTARTED_INSTANCE_NOT_STARTED', left(45000));
         record.restartedPid = restarted.mainPid;
-        const image = (await processList()).find(row => row.pid === restarted.mainPid);
+        const processes = await processList();
+        const image = processes.find(row => row.pid === restarted.mainPid);
         record.restartedImage = image ? path.relative(runRoot, image.path) : null;
+        // Without a match, what ran under the binary root then (relative images, at most 32), for the diagnosis.
+        if (!image) record.restartedCandidates = processes.filter(row => isInside(row.path, layout.binaryRoot)).slice(0, 32)
+          .map(row => ({pid: row.pid, image: path.relative(runRoot, row.path)}));
         record.requester = await requestInstanceExit(config, left);
       }
     } else {
@@ -1669,6 +1699,11 @@ async function updateFeed(config, label, executable, mode) {
     if (application && launcher && !exited()) await application.close().catch(() => undefined);
     if (host) await stopFakeGame(host);
     if (feed) await feed.close();
+    // The logs of A and of any instance it restarted, into the evidence, also when the command failed.
+    record.logs = await keepLogs(config, diagnostics, `update-feed-${label}-logs`);
+    // What was seen so far, also when a wait failed; a completed command overwrites it with the full record below.
+    await writeEvidence(config, `update-feed-${label}-observed.json`, {...record, partial: true, requests: feed?.requests ?? [], requestsDropped: feed?.dropped ?? null,
+      diagnostics: path.relative(runRoot, diagnostics)}).catch(() => undefined);
   }
   record.updates = await updatesState(layout.dataRoot);
   record.requests = feed.requests;
@@ -1734,6 +1769,8 @@ async function updateFeedVerify(config, label) {
     ['UPDATE_CHECK', row => row.facts?.outcome === 'available'], ['UPDATE_REFUSED', row => row.facts?.code === 'GAME_RUNNING'], ['UPDATE_DOWNLOAD_STARTED'],
     ['UPDATE_APPLY_STARTED'], ['UPDATE_APPLIED', row => row.facts?.version === observed.offered.package], ['UPDATE_RESTART_REQUESTED'],
     ['APP_EXIT_REQUESTED', row => row.facts?.reason === 'update'], ['UPDATE_RESTART_STARTED']];
+  // A's own rows must exist under the recorded pid before their order means anything (hosted run 40705674218).
+  assert.ok(aMain.length > 0, `UPDATE_A_ROWS_MISSING: no main-log row has pid ${observed.mainPid}; the log's pids are ${JSON.stringify(rows.mainPids)}`);
   const indices = order.map(([event, accept]) => firstIndex(aMain, event, accept));
   assert.ok(indices.every((index, position) => index >= 0 && (position === 0 || index > indices[position - 1])), `UPDATE_EVENTS_OUT_OF_ORDER ${JSON.stringify(indices)}`);
   assert.equal(aMain.filter(row => row.event === 'UPDATE_DOWNLOAD_STARTED').length, 1, 'UPDATE_DOWNLOADED_TWICE');
@@ -1805,6 +1842,7 @@ async function stubLaunch(config, label) {
     record.requester = await requestInstanceExit(config, left);
   }
   record.drain = await drainRunRoot(config, left());
+  record.logs = await keepLogs(config, diagnostics, `stub-launch-${label}-logs`);
   const rows = await launchRows(diagnostics);
   record.events = {
     opened: rows.service.filter(row => row.event === 'HISTORY_STORAGE_OPENED').map(row => row.facts),

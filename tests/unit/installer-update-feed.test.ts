@@ -125,6 +125,9 @@ describe('update-from-feed driver commands', () => {
       expect(await failure(value => {(value.observed.requests as unknown[]).push(request('offer', routes.latestManifest, 404));})).toMatch(/^UPDATE_FEED_REQUESTS_UNEXPECTED/);
       expect(await failure(value => {(value.observed.requests as unknown[]).push(request('restart', routes.package, 200, 10));})).toMatch(/^RESTART_FEED_REQUESTS_UNEXPECTED/);
       expect(await failure(value => {value.main = value.main.filter(row => row.event !== 'UPDATE_REFUSED');})).toMatch(/^UPDATE_EVENTS_OUT_OF_ORDER/);
+      // Hosted run 40705674218: A's rows were keyed by Playwright's child pid, which is not the logged one; the verify now
+      // names that instead of reporting every event missing.
+      expect(await failure(value => {value.observed.mainPid = 5668;})).toBe(`UPDATE_A_ROWS_MISSING: no main-log row has pid 5668; the log's pids are [${A},${B}]`);
       expect(await failure(value => {value.main = value.main.map(row => row.event === 'APP_EXIT_REQUESTED' && row.pid === A ? {...row, facts: {reason: 'tray'}} : row);}))
         .toMatch(/^UPDATE_EVENTS_OUT_OF_ORDER/);
       expect(await failure(value => {value.service = value.service.filter(row => row.facts?.name !== 'recording-flush');})).toMatch(/^RECORDING_FLUSH_NOT_RUN/);
