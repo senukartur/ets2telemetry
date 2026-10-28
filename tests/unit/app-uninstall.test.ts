@@ -19,7 +19,7 @@ import {CURRENT, exists, FOREIGN, gameFolder, installFixture, installRecord, KNO
 // per case (libuv promise and callback requests and handle closes, counted for every case on October 28, 2026), rounded
 // up to 600. Without the flush, single stalled requests still made a case take seconds in a full npm test. This
 // named budget bounds that file work at FS_OPERATION_ALLOWANCE_MS per request (TESTING.md section 6), not behaviour
-// timing: the cases run on injected clocks and assert no real time, and a case with its own timeout keeps it.
+// timing: the cases run on injected clocks and assert no real time.
 const CASE_FS_OPERATIONS = 600;
 vi.setConfig({testTimeout: fileWorkBudget(CASE_FS_OPERATIONS)});
 let guard: GuardedRoot;

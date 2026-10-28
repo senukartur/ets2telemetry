@@ -9,11 +9,13 @@ import type {AppHealth, OverlayPresentation} from '../../packages/contracts/src'
 import {unflushed} from '../shared/file-work';
 
 // Each store reads and writes real temporary files, without the flush to disk (unflushed, tests/shared/file-work.ts),
-// and with timers that never fire. No step observes durability across a power loss, and the case asserts what each load read,
+// and with timers that never fire. Its rename retry waits through an immediate `delay`, because the store's default
+// delay runs on those timers and would never resolve. No step observes durability across a power loss, and the case asserts what each load read,
 // so no load may race the real 1000 ms load budget, which settings-store.test.ts covers with controlled timers. On October
 // 28, 2026 this case, about 20 ms idle, took up to 2,050 ms under load, with two real syncs (ET-019,
 // docs/validation/et-019.md).
-const STORE_OPTIONS: SettingsStoreOptions = {fs: unflushed(fs as unknown as SettingsFileSystem), timers: {setTimeout: () => undefined, clearTimeout: () => undefined}};
+const STORE_OPTIONS: SettingsStoreOptions = {fs: unflushed(fs as unknown as SettingsFileSystem), timers: {setTimeout: () => undefined, clearTimeout: () => undefined},
+  delay: () => Promise.resolve()};
 
 describe('i18n settings lifecycle and reflection', () => {
   let tempDir: string;
