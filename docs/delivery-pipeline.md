@@ -71,6 +71,8 @@ A card or package ID makes the orchestrator read that Trello card read-only. Fre
    - The orchestrator opens a draft PR from the template.
    - For code changes, it dispatches Windows CI once and records the matching run link, without waiting for the result.
 
+Every build in the pipeline is a staging build (ET-055 UP13; [build channels](setup.md#build-channels-et-055)). The agents leave `ETS2TELEMETRY_BUILD_CHANNEL` unset, never build with `production` or set the owner-only `ETS2TELEMETRY_OWNER_PRODUCTION_BUILD`, and never install or run a production-identity build; a feature-test build for the owner is a staging Setup, which installs beside production. Production artifacts come only from a Windows CI run on `main`; the pipeline's dispatch on the task branch builds staging, and its artifact is never installed as production.
+
 The run has a budget of 2 fix rounds in total, shared by verifier failures and review fixes, and at most 2 review passes. Starting `deliver` again with the same task resumes from `state.md`. The recorded branch, HEAD and PR are first re-verified against Git and GitHub, and fresh agents are started. The run stops for the owner when a limit is reached or a step would need a game launch, real user data, credentials or a destructive Git operation.
 
 ## What it does not establish

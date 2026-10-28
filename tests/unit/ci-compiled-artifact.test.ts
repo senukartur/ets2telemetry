@@ -4,17 +4,19 @@ import {expect, it} from 'vitest';
 import {mkdir, readFile, writeFile, rm, symlink, readdir, lstat} from 'node:fs/promises';
 import path from 'node:path';
 import {temporaryResources} from '../shared/resources';
-import {COMPILED_ROOTS, createCompiledArtifact, restoreCompiledArtifact} from '../../scripts/ci/compiled-artifact.mjs';
+import {compiledRoots, createCompiledArtifact, restoreCompiledArtifact} from '../../scripts/ci/compiled-artifact.mjs';
 import {scaffoldGate} from '../../scripts/ci/scaffold-gate.mjs';
 const source = 'a'.repeat(40), checkout = 'b'.repeat(40);
+// The fixtures are production builds unless a case names staging (ET-055 PR-4: the package folder is the channel's).
+const COMPILED_ROOTS = compiledRoots('production');
 const HOST_ROOT = 'native/telemetry-plugin/build/cap0-host/Release';
 const HOST = 'native/telemetry-plugin/build/cap0-host/Release/eurotrucks2.exe';
 const BINDING = 'node_modules/better-sqlite3/prebuilds/win32-x64.node';
 const MAKER = 'out/make/squirrel.windows/x64';
 const HOST_BYTES = Buffer.from('compiled nested CAP0 host fixture');
 const HOST_HASH = 'fea6030bb5e81d9f665e74cf9db624325d03f05073506e9dd0b19a3bf590e130';
-async function writeFixture(root: string, installer = false, omit?: string) {
-  for (const base of [...COMPILED_ROOTS, ...(installer ? [MAKER] : [])]) {
+async function writeFixture(root: string, installer = false, omit?: string, roots = COMPILED_ROOTS) {
+  for (const base of [...roots, ...(installer ? [MAKER] : [])]) {
     if (base === omit || base === HOST_ROOT) continue;
     const file = base === BINDING ? base : `${base}/fixture.exe`;
     await mkdir(path.dirname(path.join(root, file)), {recursive: true}); await writeFile(path.join(root, file), `compiled ${base}`);
@@ -40,7 +42,7 @@ it('restores exactly verified producer bytes and rejects wrong identity, missing
   const root = path.join(temp.directory, 'producer'), input = path.join(temp.directory, 'sealed'), target = path.join(temp.directory, 'consumer');
   try {
     await writeFixture(root);
-    await createCompiledArtifact(root, input, source, checkout, false);
+    await createCompiledArtifact(root, input, source, checkout, false, 'production');
     await mkdir(path.dirname(path.join(target, BINDING)), {recursive: true}); await writeFile(path.join(target, BINDING), 'different consumer binding');
     const restored = await restoreCompiledArtifact(input, target, source, checkout, false);
     expect(restored.files).toBe(COMPILED_ROOTS.length);
@@ -108,7 +110,7 @@ it.each([false, true])('requires the literal nested helper at create and restore
     for (const variant of ['missing', 'renamed']) {
       const root = path.join(temp.directory, variant, 'producer'), input = path.join(temp.directory, variant, 'sealed');
       const output = path.join(temp.directory, variant, 'refused-publication'), target = path.join(temp.directory, variant, 'consumer');
-      await writeFixture(root, installer); await createCompiledArtifact(root, input, source, checkout, installer);
+      await writeFixture(root, installer); await createCompiledArtifact(root, input, source, checkout, installer, 'production');
       const manifestFile = path.join(input, 'manifest.json');
       const manifest = JSON.parse(await readFile(manifestFile, 'utf8')) as {files: {path: string; bytes: number; sha256: string}[]};
       expect(manifest.files.find(entry => entry.path === 'native/telemetry-plugin/build/cap0-host/Release/eurotrucks2.exe')).toEqual({path: HOST, bytes: HOST_BYTES.length, sha256: HOST_HASH});
@@ -118,7 +120,7 @@ it.each([false, true])('requires the literal nested helper at create and restore
       expect(exactHost).toEqual(HOST_BYTES); expect(createHash('sha256').update(exactHost).digest('hex')).toBe(HOST_HASH);
       await rm(path.join(root, HOST)); await writeFile(path.join(root, HOST_ROOT, 'decoy.exe'), 'decoy');
       if (variant === 'renamed') await writeFile(path.join(root, HOST_ROOT, 'renamed.exe'), HOST_BYTES);
-      await expect(createCompiledArtifact(root, output, source, checkout, installer)).rejects.toThrow();
+      await expect(createCompiledArtifact(root, output, source, checkout, installer, 'production')).rejects.toThrow();
       expect(await lstat(output).catch(error => {if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;})).toBeUndefined();
       await rm(path.join(input, 'payload', HOST));
       const decoy = {path: `${HOST_ROOT}/decoy.exe`, bytes: 5, sha256: createHash('sha256').update('decoy').digest('hex')};
@@ -138,12 +140,12 @@ it.each([false, true])('refuses every missing required root, including installer
   const temp = await temporaryResources(), roots = [...COMPILED_ROOTS, ...(installer ? ['out/make/squirrel.windows/x64'] : [])];
   try {
     const root = path.join(temp.directory, 'producer'), input = path.join(temp.directory, 'sealed'), target = path.join(temp.directory, 'consumer');
-    await writeFixture(root, installer); await createCompiledArtifact(root, input, source, checkout, installer);
+    await writeFixture(root, installer); await createCompiledArtifact(root, input, source, checkout, installer, 'production');
     await mkdir(target); await writeFile(path.join(target, 'sentinel.txt'), 'untouched');
     for (const [index, omitted] of roots.entries()) {
       const incomplete = path.join(temp.directory, `producer-${index}`), output = path.join(temp.directory, `publication-${index}`);
       await writeFixture(incomplete, installer, omitted);
-      await expect(createCompiledArtifact(incomplete, output, source, checkout, installer), omitted).rejects.toThrow();
+      await expect(createCompiledArtifact(incomplete, output, source, checkout, installer, 'production'), omitted).rejects.toThrow();
       expect(await lstat(output).catch(error => {if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;})).toBeUndefined();
       const manifestFile = path.join(input, 'manifest.json'), manifest = JSON.parse(await readFile(manifestFile, 'utf8')) as {files: {path: string}[]};
       manifest.files = manifest.files.filter(entry => entry.path !== omitted && !entry.path.startsWith(`${omitted}/`));
@@ -152,7 +154,34 @@ it.each([false, true])('refuses every missing required root, including installer
       await rm(removed, {recursive: true, force: true}); await writeFile(manifestFile, JSON.stringify(manifest));
       await expect(restoreCompiledArtifact(input, target, source, checkout, installer), omitted).rejects.toThrow('COMPILED_ARTIFACT_INVALID');
       expect(await readdir(target)).toEqual(['sentinel.txt']); expect(await readFile(path.join(target, 'sentinel.txt'), 'utf8')).toBe('untouched');
-      await createCompiledArtifact(root, input, source, checkout, installer);
+      await createCompiledArtifact(root, input, source, checkout, installer, 'production');
     }
+  } finally {await temp.dispose();}
+});
+
+// ET-055 PR-4: a staging build seals its own package folder, the manifest records the channel, and a restore accepts the
+// roots of that channel only: a production package folder never passes in a staging artifact, and an unknown channel fails.
+it('seals and restores the package folder of the build channel only', async () => {
+  const temp = await temporaryResources();
+  const root = path.join(temp.directory, 'producer'), input = path.join(temp.directory, 'sealed'), target = path.join(temp.directory, 'consumer');
+  const staging = compiledRoots('staging');
+  try {
+    expect(staging).toContain('out/ETS2Telemetry Desktop Staging-win32-x64');
+    expect(COMPILED_ROOTS).toContain('out/ETS2Telemetry Desktop-win32-x64');
+    expect(staging.filter(base => !COMPILED_ROOTS.includes(base))).toEqual(['out/ETS2Telemetry Desktop Staging-win32-x64']);
+    expect(() => compiledRoots('beta' as 'staging')).toThrow('COMPILED_ARTIFACT_INVALID');
+    await writeFixture(root, false, undefined, staging);
+    // A staging producer has no production package folder: sealing it as production fails before publication.
+    await expect(createCompiledArtifact(root, path.join(temp.directory, 'as-production'), source, checkout, false, 'production')).rejects.toThrow();
+    await createCompiledArtifact(root, input, source, checkout, false, 'staging');
+    const manifestFile = path.join(input, 'manifest.json'), original = await readFile(manifestFile, 'utf8');
+    expect((JSON.parse(original) as {channel: string}).channel).toBe('staging');
+    for (const channel of ['production', 'beta', undefined]) {
+      await writeFile(manifestFile, JSON.stringify({...JSON.parse(original) as object, channel}));
+      await expect(restoreCompiledArtifact(input, target, source, checkout, false), String(channel)).rejects.toThrow('COMPILED_ARTIFACT_INVALID');
+    }
+    await writeFile(manifestFile, original);
+    expect((await restoreCompiledArtifact(input, target, source, checkout, false)).channel).toBe('staging');
+    expect(await readFile(path.join(target, 'out/ETS2Telemetry Desktop Staging-win32-x64/fixture.exe'), 'utf8')).toBe('compiled out/ETS2Telemetry Desktop Staging-win32-x64');
   } finally {await temp.dispose();}
 });

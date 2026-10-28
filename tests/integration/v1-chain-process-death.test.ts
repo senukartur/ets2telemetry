@@ -9,6 +9,7 @@ import {NativeClientError, NativePipeClient, type BrokerDiagnostic} from '../../
 import {V1Ingestion, type V1SourceState} from '../../apps/desktop/src/v1-ingestion';
 import {FrameDecoder, PROTOCOL_V1, encodeFrame, type ServerMessage, type SourceIdentity} from '../../packages/contracts/src/protocol-v1';
 import {V1Consumer} from '../../packages/contracts/src/protocol-v1-delivery';
+import {nativeTreeIdentity} from '../shared/native-tree-channel';
 
 // ET-019 PR-8: processes of the E14 controlled chain end mid-session (REG-003, REG-011). The tests-only fake SDK host
 // (named eurotrucks2.exe) loads the test plugin DLL with its v1 directory seam, the real broker runs in its v1 mode, and
@@ -104,7 +105,7 @@ async function startHost(v0: string, v1: string): Promise<Host> {
   child.once('exit', (code, signal) => { host.exit = {code, signal}; });
   expect(await until(() => host.output.includes('"ready":true') || host.exit !== undefined, HOST_READY_GUARD_MS), 'fake SDK host ready').toBe(true);
   const ready = JSON.parse(host.output.split('\n')[0]) as {processId: number; v1Endpoint: string};
-  expect(ready.v1Endpoint).toContain('\\\\.\\pipe\\ETS2Telemetry-ets2-v1-');
+  expect(ready.v1Endpoint).toContain(`${nativeTreeIdentity().pipePrefix}ets2-v1-`);
   host.processId = ready.processId;
   expect(await until(() => records(v1).length > before.length, HOST_READY_GUARD_MS), 'v1 discovery record').toBe(true);
   return host;

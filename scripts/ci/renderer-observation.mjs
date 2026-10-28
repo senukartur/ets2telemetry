@@ -387,9 +387,9 @@ export const RECORDING_NOT_RECORDED_TEXT = Object.freeze({headline: 'Not recordi
 
 /**
  * ET-019 PR-7, amended by the game recording enablement of October 25, 2026: the recording texts of a service over the
- * history database whose open was refused with SCHEMA_NEWER.
+ * history database whose open was refused with SCHEMA_NEWER. `displayName` is the build channel's (ET-055, scripts/ci/smoke-build.mjs).
  */
-export const RECORDING_STOPPED_SCHEMA_NEWER_TEXT = Object.freeze({headline: 'Stopped: the database was written by a newer version. Restart Yukon Union Telemetry after fixing it',
+export const recordingStoppedSchemaNewerText = displayName => Object.freeze({headline: `Stopped: the database was written by a newer version. Restart ${displayName} after fixing it`,
   detail: null, losses: null, alert: 'Recording stopped until the telemetry service starts again. Live telemetry and the overlay keep working.',
   notice: 'Prototype live display. Game history recording is new; check the recording status below.'});
 

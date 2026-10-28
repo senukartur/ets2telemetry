@@ -71,8 +71,11 @@ foreach ($case in @($config.cases)) {
         $mode = if ($case.mode) { [string]$case.mode } else { 'packaged' }
         # ET-019 PR-11: a case may name a job-result.json, as the wrapper always does; earlier cases name none.
         $jobResult = if ($case.jobResult) { [string]$case.jobResult } else { '' }
+        # ET-055 PR-4: a case may name the build channel's display name; every earlier case expects production's default.
+        $names = @{}
+        if ($case.displayName) { $names.ExpectedDisplayName = [string]$case.displayName }
         $output = @(Test-RuntimeReceipt -DriverResultPath $case.receipt -ExpectedCommit 'candidate' -ExpectedMode $mode `
-            -ExpectedScenario $case.scenario -ExpectedUiCase $case.uiCase -JobExitCode $case.code -JobResultPath $jobResult)
+            -ExpectedScenario $case.scenario -ExpectedUiCase $case.uiCase -JobExitCode $case.code -JobResultPath $jobResult @names)
         # Exactly one result object per case, as when each case ran in its own process.
         if ($output.Count -ne 1) { $results.Add([ordered]@{error = "Expected one result, got $($output.Count)."}) }
         else { $results.Add($output[0]) }

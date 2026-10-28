@@ -29,7 +29,8 @@ The desktop production build uses Vite to compile five separate CommonJS entrypo
 The existing Electron smoke entrypoint targets a packaged executable from a temporary working directory and packages first. The sequence below is authorized on native Windows following the owner revocation of the application hold; it does not itself provide process containment. The coordinator also ran the existing packaged Playwright test on native Windows through the unchanged Job Object, without rebuilding the frozen artifact. The [packaged guest harness](../tests/vm/README.md) retains historical evidence and its guest identity guards. No desktop-launch environment opt-in is required for these native commands:
 
 ```powershell
-$env:ETS2TELEMETRY_TEST_EXE = (Resolve-Path 'out/ETS2Telemetry Desktop-win32-x64/ETS2TelemetryDesktop.exe').Path
+# The default build is staging (ET-055 PR-4); `node scripts/build-channel.mjs --built` names the package and executable.
+$env:ETS2TELEMETRY_TEST_EXE = (Resolve-Path 'out/ETS2Telemetry Desktop Staging-win32-x64/ETS2TelemetryDesktopStaging.exe').Path
 npm run test:electron
 Remove-Item Env:ETS2TELEMETRY_TEST_EXE
 ```
@@ -116,21 +117,31 @@ Findings fixed instead of excepted: a function that assigned the automatic `$arg
 
 Every build belongs to one release channel, `production` or `staging` ([concept.md](../concept.md#et-055-in-app-updates-and-staging-channel--october-28-2026), UP12). The staging build installs and runs beside production: it has its own Squirrel id and executable `ETS2TelemetryDesktopStaging`, productName `ETS2Telemetry Desktop Staging` (userData and the single-instance lock), display name `Yukon Union Telemetry Staging`, Setup `YukonUnionTelemetry-Staging-Setup-<version>.exe`, data root `%LOCALAPPDATA%\ETS2TelemetryStaging`, plugin `ets2telemetry-plugin-staging.dll`, pipe prefix `\\.\pipe\ETS2TelemetryStaging-` and game-log prefix `ETS2TelemetryStaging:`. Paths below name the production values.
 
-`scripts/build-channel.mjs` is the only place that decides the channel, from `ETS2TELEMETRY_BUILD_CHANNEL`: exactly `production` or `staging`; any other value, the empty string included, stops the build. **Until ET-055 PR-4, an unset variable still builds production**; PR-4 makes staging the default for agent and feature-test builds. A staging build carries the version `<package.json version>-stg.<run>`, where `<run>` is `ETS2TELEMETRY_STAGING_RUN_NUMBER` zero-padded to six digits, `000000` when unset; production carries the package.json version. `node scripts/build-channel.mjs` prints the resolved channel, version and names.
+`scripts/build-channel.mjs` is the only place that decides the channel, from `ETS2TELEMETRY_BUILD_CHANNEL`. **Agent and feature-test builds are staging (UP13, ET-055 PR-4)**:
+
+- Unset, the variable builds staging, so `npm run dev`, `build`, `package`, `make`, `native:configure` and the native builds produce staging locally.
+- Exactly `staging` is always accepted.
+- Exactly `production` is accepted only on a GitHub-hosted Actions runner (`GITHUB_ACTIONS=true` and `RUNNER_ENVIRONMENT=github-hosted`) or with the owner-only override `ETS2TELEMETRY_OWNER_PRODUCTION_BUILD=1`; otherwise the build stops with a message that names both. Windows CI builds production only on `main`, a push or a dispatch on `main`; a dispatch on any other branch builds staging ([CI](ci.md#build-channels-et-055-pr-4)).
+- Any other value, the empty string included, stops the build.
+
+Agents never build with `production` or set the override, never install or run a production-identity build, and install a feature-test build only as staging. Its Setup is `YukonUnionTelemetry-Staging-Setup-<version>.exe`, and it installs beside the owner's production application.
+
+A staging build carries the version `<package.json version>-stg.<run>`, where `<run>` is `ETS2TELEMETRY_STAGING_RUN_NUMBER` zero-padded to six digits, `000000` when unset; production carries the package.json version. `node scripts/build-channel.mjs` prints the channel, version and names this environment resolves; `node scripts/build-channel.mjs --built` prints those of the build the desktop bundles were made for, from `apps/desktop/dist/build-evidence.json`, which the smoke, session-end, compiled-artifact and installer drivers read.
 
 ```powershell
-$env:ETS2TELEMETRY_BUILD_CHANNEL = 'staging'
 npm run package
 npm run inspect:package
-Remove-Item Env:ETS2TELEMETRY_BUILD_CHANNEL
+node scripts/build-channel.mjs --built
 ```
 
 Run `inspect:package`, `make` and `node scripts/release-identity.mjs` with the same variables as the build: they check the channel's names. The channel reaches every artifact from that one value:
 
 - `scripts/build.mjs` replaces `__ETS2TELEMETRY_BUILD_CHANNEL__` (`apps/desktop/src/channel.ts`) and `__ETS2TELEMETRY_APP_VERSION__` (`apps/desktop/src/app-version.ts`) in every bundle, names the page title, stages the deferred-cleanup executor with its `$Channel` line stamped (`scripts/uninstall-executor.mjs`) and records `channel` and `version` in `apps/desktop/dist/build-evidence.json`. Code that no build bundles, such as Vitest, is production.
-- `scripts/build-native-client.mjs` and `scripts/stage-native-plugin.mjs` configure the broker and the plugin tree with `-DETS2TELEMETRY_CHANNEL=<channel>`, check the value in each `CMakeCache.txt` and record it in the broker's build evidence; the broker resolver refuses a broker whose evidence names another channel than the desktop bundle. `npm run native:configure` passes no channel, so a tree keeps the value of its last configuration; configure it with `-DETS2TELEMETRY_CHANNEL=production` before running `native:test` for production after a staging build.
+- `scripts/build-native-client.mjs` and `scripts/stage-native-plugin.mjs` configure the broker and the plugin tree with `-DETS2TELEMETRY_CHANNEL=<channel>`, check the value in each `CMakeCache.txt` and record it in the broker's build evidence; the broker resolver refuses a broker whose evidence names another channel than the desktop bundle. `npm run native:configure` (`scripts/configure-native-plugin.mjs`) passes the resolved channel too and checks the cache afterwards, so a reconfigured tree never keeps an earlier channel by accident; further arguments go to CMake, for example `npm run native:configure -- -G "Visual Studio 17 2022"`. It refuses extra arguments that could set, load or remove the channel (`-DETS2TELEMETRY_CHANNEL…` in any form, `-C`, `-U`, `--preset`), because CMake applies the last definition it sees. CMake's own default is staging in both trees, so a tree configured with `cmake` directly and no value is staging too; CI's AddressSanitizer and extended trees pass `-DETS2TELEMETRY_CHANNEL=production`. Every native plugin tree also builds the other channel's plugin DLL under `build/other-channel/` for `channel-identity-contract` and `two-plugin-host-contract`; that DLL is a test artifact and must never be copied into a game.
 - `forge.config.cjs` takes the Squirrel id, executable, appBundleId, display name, Setup name, productName and version from the resolver, and writes the channel's productName and version into the packaged package.json, which names userData and the version Electron and the nuspec report. The output folder is `out/<productName>-win32-x64`.
 - The plugin bundle uses the channel's DLL name and released list (`native/telemetry-plugin/released-plugins.json` or the empty `released-plugins-staging.json`).
+
+**Development uses staging (ET-055 PR-4).** `npm run dev` now runs a staging build: its data root is `%LOCALAPPDATA%\ETS2TelemetryStaging` (history, settings, logs, captures and synthetic databases), its Electron name is `ETS2Telemetry Desktop Staging`, so it no longer shares the single-instance lock or `userData` with an installed production copy, and its broker connects only to the staging pipes `\\.\pipe\ETS2TelemetryStaging-`. A game therefore needs `ets2telemetry-plugin-staging.dll` in its plugins folder for `npm run dev` to receive telemetry, including a CAP0 capture; the production plugin serves only production builds. Paths elsewhere on this page name the production values.
 
 ## Runtime paths and diagnostics
 
@@ -156,7 +167,7 @@ npm run dev
 Remove-Item Env:ETS2TELEMETRY_CAPTURE, Env:ETS2TELEMETRY_CAPTURE_MINUTES, Env:ETS2TELEMETRY_CAPTURE_LABEL
 ```
 
-The grant applies to the first verified ETS2/ATS selection of that launch only. Unit tests and the controlled chain below cover this activation path. The owner first used it through `npm run dev` in ETS2 single-player sessions on October 12, 2026; see [CAP-01a validation](validation/cap-01a.md#owner-game-sessions-october-12-2026). Packaged builds and the rest of the CAP-01 matrix have not exercised it. Raw output goes to `%LOCALAPPDATA%\ETS2Telemetry\captures\<captureSessionId>\` (`packets.ndjson` and `manifest.json`), never to `telemetry.sqlite`. Raw captures contain local identifiers and paths: never commit or upload them. Export a sanitized copy for review with `npm run capture:export -- <raw-capture-directory> <new-export-directory>`; the command builds `tools/capture-export` with Vite first.
+The grant applies to the first verified ETS2/ATS selection of that launch only. Unit tests and the controlled chain below cover this activation path. The owner first used it through `npm run dev` in ETS2 single-player sessions on October 12, 2026; see [CAP-01a validation](validation/cap-01a.md#owner-game-sessions-october-12-2026). Packaged builds and the rest of the CAP-01 matrix have not exercised it. Since ET-055 PR-4 `npm run dev` is a staging build, so a capture needs the staging plugin `ets2telemetry-plugin-staging.dll` in the game and goes to the staging data root ([build channels](#build-channels-et-055)). Raw output goes to `%LOCALAPPDATA%\ETS2Telemetry\captures\<captureSessionId>\` (`%LOCALAPPDATA%\ETS2TelemetryStaging\captures\…` for a staging build) (`packets.ndjson` and `manifest.json`), never to `telemetry.sqlite`. Raw captures contain local identifiers and paths: never commit or upload them. Export a sanitized copy for review with `npm run capture:export -- <raw-capture-directory> <new-export-directory>`; the command builds `tools/capture-export` with Vite first.
 
 Native checks run in `npm run native:test` as `capture-cap0-*` (CTest) and in the native client test's `capture*` cases. The optional cross-package chain needs the native plugin and client Release builds and runs the tests-only fake-SDK host (`native/telemetry-plugin/build/cap0-host/Release/eurotrucks2.exe`), the test plugin DLL, the native broker and the TypeScript writer in isolated temporary directories:
 
@@ -291,7 +302,7 @@ npm run measure:storage
 
 It runs `tests/measurement/storage-size.measure.ts` under the same Electron runtime in a temporary database, takes about half a minute on a desktop and prints one `STORAGE_MEASUREMENT` JSON line; set `ETS2TELEMETRY_MEASURE_REPORT` to an absolute file path outside the checkout to keep a copy. The recorded result is in [storage](storage.md#measured-size-et-013-pr-2).
 
-Since ET-013 PR-2 the telemetry service opens `%LOCALAPPDATA%\ETS2Telemetry\data\telemetry.sqlite` at every start, so `npm run dev` and an installed copy create or open it under your real profile. Give a development launch an isolated `LOCALAPPDATA` (as the runtime smokes and Playwright tests do) to keep it away from your history. Synthetic and replay databases belong in `%LOCALAPPDATA%\ETS2Telemetry\synthetic\`. The database is held with an exclusive lock while the application runs; read it with external SQLite tools only while the application is closed.
+Since ET-013 PR-2 the telemetry service opens `%LOCALAPPDATA%\ETS2Telemetry\data\telemetry.sqlite` at every start, so an installed copy creates or opens it under your real profile; since ET-055 PR-4 `npm run dev` is a staging build and opens `%LOCALAPPDATA%\ETS2TelemetryStaging\data\telemetry.sqlite` instead. Give a development launch an isolated `LOCALAPPDATA` (as the runtime smokes and Playwright tests do) to keep it away from your history. Synthetic and replay databases belong in `%LOCALAPPDATA%\ETS2Telemetry\synthetic\`. The database is held with an exclusive lock while the application runs; read it with external SQLite tools only while the application is closed.
 
 ## Node test scheduling (ET-026)
 

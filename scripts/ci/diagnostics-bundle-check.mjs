@@ -31,8 +31,11 @@ export function runtimeStrings(bundle) {
 }
 
 const FORMAT = 'ets2telemetry.diagnostics';
-/** An application, Electron, Node or plugin version, with at most an alpha, beta or rc pre-release. */
-const VERSION = /^\d{1,9}\.\d{1,9}\.\d{1,9}(?:-(?:alpha|beta|rc)(?:\.\d{1,9})?)?$/;
+/**
+ * An application, Electron, Node or plugin version, with at most an alpha, beta or rc pre-release, or the staging suffix
+ * `-stg.<6 digits>` of a staging build (ET-055 UP15), which pull-request smokes run since ET-055 PR-4.
+ */
+const VERSION = /^\d{1,9}\.\d{1,9}\.\d{1,9}(?:-(?:(?:alpha|beta|rc)(?:\.\d{1,9})?|stg\.\d{6}))?$/;
 /** A fixed upper-case code at a code location (an error, block reason, diagnosis code or note). */
 const CODE = /^[A-Z][A-Z0-9_]{0,63}$/;
 const EVENT = /^[A-Z0-9_]{1,64}$/;

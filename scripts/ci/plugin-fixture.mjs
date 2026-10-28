@@ -16,7 +16,6 @@ import {checkDiagnosticsBundle} from './diagnostics-bundle-check.mjs';
 
 /** The marker file the test-root mode requires (apps/desktop/src/plugin-setup/mode.ts). */
 export const PLUGIN_TEST_ROOT_MARKER = 'ets2telemetry-plugin-test-root.marker';
-const PLUGIN_FILE = 'ets2telemetry-plugin.dll';
 const GAMES = {
   ets2: {appId: '227300', folder: 'Euro Truck Simulator 2', executable: 'eurotrucks2.exe'},
   ats: {appId: '270880', folder: 'American Truck Simulator', executable: 'amtrucks.exe'}
@@ -61,7 +60,9 @@ async function steamGame(library, game, plugins) {
  * an unrelated DLL and a text file) and LibraryB (ATS, without a plugins folder), and a manual ETS2 folder holding an
  * unrecognized file with the plugin's name, chosen in a seeded install registry (the smoke cannot click the folder dialog).
  */
-async function buildFixture(output) {
+async function buildFixture(output, identity) {
+  // ET-055: the plugin file and the registry's data root are the build channel's (scripts/ci/smoke-build.mjs).
+  const PLUGIN_FILE = identity.pluginFileName;
   const root = path.join(output, 'plugin-root');
   await mkdir(root, {recursive: true});
   const canonical = await realpath(root);
@@ -79,7 +80,7 @@ async function buildFixture(output) {
   const manualRoot = path.join(canonical, 'Manual ETS2');
   const manual = await gameFolder(manualRoot, 'ets2', true);
   await writeFile(path.join(manual, 'plugins', PLUGIN_FILE), UNRECOGNIZED);
-  const registry = path.join(canonical, 'LocalAppData', 'ETS2Telemetry', 'plugins', 'setup.json');
+  const registry = path.join(canonical, 'LocalAppData', identity.dataRootName, 'plugins', 'setup.json');
   await write(registry, JSON.stringify({format: 'ets2telemetry.plugin-setup', version: 1,
     games: {ets2: {excluded: false, manualRoot: path.win32.normalize(manualRoot)}, ats: {excluded: false, manualRoot: null}}, installs: [], pending: [], failures: []}, null, 2) + '\n');
   return {
@@ -130,7 +131,7 @@ async function fixtureStep(step, work) {
   }
 }
 /** Builds the fake root (see buildFixture). */
-export const buildPluginFixture = output => fixtureStep('BUILD', () => buildFixture(output));
+export const buildPluginFixture = (output, identity) => fixtureStep('BUILD', () => buildFixture(output, identity));
 /** The SHA-256 of the bundled plugin the application installs: the packaged resources' or the development stage's. */
 export const bundledPluginHash = config => fixtureStep('BUNDLE', () => readBundledHash(config));
 /** Each fixture file by label: its hash, size and modification time, or `absent`. No path is recorded. */

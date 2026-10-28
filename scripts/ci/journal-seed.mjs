@@ -4,8 +4,9 @@
 // loads with the same runtime and ABI as the telemetry service. The working directory must be the checkout, because the
 // shared message scripts read the protocol v1 fixtures from there.
 //
-// It writes only `<LOCALAPPDATA>\ETS2Telemetry\synthetic\journal.sqlite`, a synthetic-purpose database that does not
-// exist yet, in the LOCALAPPDATA the driver isolated for this run; it refuses any other path. The history database is
+// It writes only `<LOCALAPPDATA>\<data root>\synthetic\journal.sqlite`, a synthetic-purpose database that does not
+// exist yet, in the LOCALAPPDATA the driver isolated for this run; the data root is `ETS2Telemetry` or, for a staging
+// build (ET-055), `ETS2TelemetryStaging`. It refuses any other path. The history database is
 // never opened. Contents: the eight hand-written anchors and 110 filler trips of tests/shared/journal-seed.ts, then one
 // open ETS2 paging trip with 104 tolls, 104 annotations and 3,600 one-second samples, so the timeline, completeness and
 // sample tables each have more than one page. Prints one JSON line with the counts and the elapsed time.
@@ -13,6 +14,7 @@
 import {existsSync} from 'node:fs';
 import path from 'node:path';
 import {performance} from 'node:perf_hooks';
+import {BUILD_CHANNELS, BUILD_IDENTITIES} from '../build-channel.mjs';
 import {openStorage} from '../../packages/storage/src/index';
 import {EUR, seedJournalAnchors, seedJournalFillers, seedSample} from '../../tests/shared/journal-seed';
 import {BASE_UTC, job, money, r, Script} from '../../tests/shared/trip-messages';
@@ -30,8 +32,8 @@ async function main() {
   if (variant !== undefined && variant !== '--ui-signed') throw new Error('JOURNAL_SEED_VARIANT_INVALID');
   const localAppData = process.env.LOCALAPPDATA;
   if (!database || !localAppData) { console.error('Usage: journal-seed <database path> (with LOCALAPPDATA set)'); process.exit(2); }
-  const expected = path.join(localAppData, 'ETS2Telemetry', 'synthetic', 'journal.sqlite');
-  if (path.resolve(database).toLowerCase() !== expected.toLowerCase() || existsSync(database)) {
+  const expected = BUILD_CHANNELS.map(channel => path.join(localAppData, BUILD_IDENTITIES[channel].dataRootName, 'synthetic', 'journal.sqlite').toLowerCase());
+  if (!expected.includes(path.resolve(database).toLowerCase()) || existsSync(database)) {
     console.error('JOURNAL_SEED_REFUSED: only a new synthetic journal.sqlite in the isolated LOCALAPPDATA is seeded');
     process.exit(2);
   }

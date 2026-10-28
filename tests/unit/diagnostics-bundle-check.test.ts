@@ -41,6 +41,15 @@ describe('valid bundles for names that collide with the schema or the smoke fact
   it('accepts an ordinary bundle', () => {
     expect(() => check(bundle(['Jane.Doe', 'TRUCKER-PC7'], {owner: 'Jane.Doe'}), ['Jane.Doe', 'TRUCKER-PC7'])).not.toThrow();
   });
+  // ET-055 UP15: a staging build carries `<base>-stg.<6-digit run>` in its application and bundled plugin versions.
+  it('accepts the version of a staging build, and only its exact suffix', () => {
+    const staging = (version: string) => bundle(['MY_PC'], {}, {app: {version, electron: '44.7.0', node: '24.19.0', packaged: true, osRelease: '10.0.26200'},
+      plugins: {...PLUGINS, bundled: {version, sha256Prefix: '0123456789ab'}}});
+    expect(() => check(staging('0.2.0-stg.000042'), ['MY_PC'])).not.toThrow();
+    for (const version of ['0.2.0-stg.42', '0.2.0-stg000042', '0.2.0-stg.0000042', '0.2.0-staging.000042']) {
+      expect(() => check(staging(version), ['MY_PC']), version).toThrow(/unexpected value at bundle\.app\.version$/);
+    }
+  });
 });
 
 // PR #111 delta review: the second layer scans the whole text for every name that is not a whole word of a schema token.

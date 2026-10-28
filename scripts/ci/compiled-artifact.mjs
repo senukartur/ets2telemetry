@@ -4,9 +4,17 @@ import {lstat, readdir, readFile, writeFile, mkdir, copyFile} from 'node:fs/prom
 import path from 'node:path';
 import {fileURLToPath} from 'node:url';
 import {execFileSync} from 'node:child_process';
-export const COMPILED_ROOTS = ['apps/desktop/dist', '.local/package-native/telemetry-plugin', 'tools/telemetry-simulator/dist',
-  'native/telemetry-client/build/Release', 'native/telemetry-plugin/build/Release', 'out/ETS2Telemetry Desktop-win32-x64',
-  'node_modules/better-sqlite3/prebuilds/win32-x64.node', 'native/telemetry-plugin/build/cap0-host/Release'];
+import {BUILD_CHANNELS, BUILD_IDENTITIES, packageDirectoryName, readBuiltBuild} from '../build-channel.mjs';
+/**
+ * The compiled roots of a `channel` build. ET-055 PR-4: the Forge package folder is the channel's (pull requests build
+ * staging, main pushes production); the manifest records the channel, and a restore accepts only that channel's roots.
+ */
+export const compiledRoots = channel => {
+  if (!BUILD_CHANNELS.includes(channel)) refuse();
+  return ['apps/desktop/dist', '.local/package-native/telemetry-plugin', 'tools/telemetry-simulator/dist',
+    'native/telemetry-client/build/Release', 'native/telemetry-plugin/build/Release', packageDirectoryName(BUILD_IDENTITIES[channel]),
+    'node_modules/better-sqlite3/prebuilds/win32-x64.node', 'native/telemetry-plugin/build/cap0-host/Release'];
+};
 const CAP0_HOST = 'native/telemetry-plugin/build/cap0-host/Release/eurotrucks2.exe';
 const MAKER = 'out/make/squirrel.windows/x64';
 const sha = bytes => createHash('sha256').update(bytes).digest('hex');
@@ -42,13 +50,14 @@ async function files(root, relative) {
   return out;
 }
 function validIdentity(source, checkout) {if (!/^[a-f0-9]{40}$/.test(source) || !/^[a-f0-9]{40}$/.test(checkout)) refuse();}
-function allowed(name, installer) {return [...COMPILED_ROOTS, ...(installer ? [MAKER] : [])].some(root => name === root || name.startsWith(`${root}/`));}
-export async function createCompiledArtifact(root, output, source, checkout, installer) {
+function allowed(name, installer, channel) {return [...compiledRoots(channel), ...(installer ? [MAKER] : [])].some(root => name === root || name.startsWith(`${root}/`));}
+export async function createCompiledArtifact(root, output, source, checkout, installer, channel) {
   validIdentity(source, checkout);
+  const roots = compiledRoots(channel);
   await plainRoot(root); await plainRoot(output, true);
   // Preflight the complete inventory before publishing anything, including separately built nested helpers.
   const inventory = [];
-  for (const base of [...COMPILED_ROOTS, ...(installer ? [MAKER] : [])]) {
+  for (const base of [...roots, ...(installer ? [MAKER] : [])]) {
     await plain(root, base, !(await lstat(path.join(root, base))).isFile());
     // Build libraries/debug outputs are not runtime inputs. Keep native executables, DLLs and build evidence only.
     const selected = (await files(root, base)).filter(name => !name.startsWith('native/') || /\.(exe|dll|json)$/.test(name));
@@ -63,7 +72,7 @@ export async function createCompiledArtifact(root, output, source, checkout, ins
     entries.push({path: name, bytes: bytes.length, sha256: sha(bytes)});
     const target = path.join(output, 'payload', name); await mkdir(path.dirname(target), {recursive: true}); await writeFile(target, bytes);
   }
-  await writeFile(path.join(output, 'manifest.json'), JSON.stringify({version: 1, source, checkout, installer, files: entries}));
+  await writeFile(path.join(output, 'manifest.json'), JSON.stringify({version: 1, source, checkout, installer, channel, files: entries}));
 }
 export async function restoreCompiledArtifact(input, root, source, checkout, installer) {
   validIdentity(source, checkout);
@@ -71,16 +80,16 @@ export async function restoreCompiledArtifact(input, root, source, checkout, ins
   await plain(input, 'manifest.json');
   if ((await lstat(path.join(input, 'manifest.json'))).size > 8 * 1024 * 1024) refuse();
   const manifest = JSON.parse(await readFile(path.join(input, 'manifest.json'), 'utf8'));
-  if (manifest.version !== 1 || manifest.source !== source || manifest.checkout !== checkout || manifest.installer !== installer || !Array.isArray(manifest.files) || !manifest.files.length || manifest.files.length > 30000) refuse();
+  if (manifest.version !== 1 || manifest.source !== source || manifest.checkout !== checkout || manifest.installer !== installer || !BUILD_CHANNELS.includes(manifest.channel) || !Array.isArray(manifest.files) || !manifest.files.length || manifest.files.length > 30000) refuse();
   const names = new Set(); let total = 0;
   for (const entry of manifest.files) {
-    if (!safe(entry.path) || !allowed(entry.path, installer) || names.has(entry.path.toLowerCase()) || !/^[a-f0-9]{64}$/.test(entry.sha256) || !Number.isSafeInteger(entry.bytes) || entry.bytes < 0) refuse();
+    if (!safe(entry.path) || !allowed(entry.path, installer, manifest.channel) || names.has(entry.path.toLowerCase()) || !/^[a-f0-9]{64}$/.test(entry.sha256) || !Number.isSafeInteger(entry.bytes) || entry.bytes < 0) refuse();
     names.add(entry.path.toLowerCase()); total += entry.bytes; if (total > 4 * 1024 ** 3) refuse();
     await plain(input, `payload/${entry.path}`);
     const bytes = await readFile(path.join(input, 'payload', entry.path));
     if (bytes.length !== entry.bytes || sha(bytes) !== entry.sha256) refuse();
   }
-  for (const base of [...COMPILED_ROOTS, ...(installer ? [MAKER] : [])]) if (!manifest.files.some(entry => entry.path === base || entry.path.startsWith(`${base}/`))) refuse();
+  for (const base of [...compiledRoots(manifest.channel), ...(installer ? [MAKER] : [])]) if (!manifest.files.some(entry => entry.path === base || entry.path.startsWith(`${base}/`))) refuse();
   if (!manifest.files.some(entry => entry.path === CAP0_HOST)) refuse();
   const actual = await files(input, 'payload');
   if (actual.length !== names.size || actual.some(name => !names.has(name.slice(8).toLowerCase()))) refuse();
@@ -94,13 +103,14 @@ export async function restoreCompiledArtifact(input, root, source, checkout, ins
     }
   }
   for (const entry of manifest.files) {const destination = path.join(root, entry.path); await mkdir(path.dirname(destination), {recursive: true}); await copyFile(path.join(input, 'payload', entry.path), destination);}
-  return {files: names.size, bytes: total, source, checkout};
+  return {files: names.size, bytes: total, source, checkout, channel: manifest.channel};
 }
 if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
   const [mode, directory, kind, destination] = process.argv.slice(2), root = process.cwd(), source = process.env.ETS2TELEMETRY_SOURCE_COMMIT;
   const checkout = execFileSync('git', ['rev-parse', 'HEAD'], {encoding: 'utf8'}).trim();
   if (!['create', 'restore'].includes(mode) || !directory || !['installer', 'portable'].includes(kind)) refuse();
-  if (mode === 'create') await createCompiledArtifact(root, path.resolve(directory), source, checkout, kind === 'installer');
+  // The producer seals the build that was made: the desktop build evidence names its channel.
+  if (mode === 'create') await createCompiledArtifact(root, path.resolve(directory), source, checkout, kind === 'installer', readBuiltBuild(root).channel);
   else {
     if (destination !== undefined && !safe(destination)) refuse();
     console.log(JSON.stringify(await restoreCompiledArtifact(path.resolve(directory), destination ? path.resolve(root, destination) : root, source, checkout, kind === 'installer')));

@@ -38,8 +38,6 @@ param(
 # GitHub-hosted runner, or locally only with -AllowLocal on the owner's explicit request (docs/installer-testing.md).
 $ErrorActionPreference = 'Stop'
 $checkout = (Resolve-Path -LiteralPath (Join-Path $PSScriptRoot '../..')).Path
-# The versioned Setup name of forge.config.cjs (ET-018 PR-6); release-identity.test.ts checks that the two agree.
-$setup = Join-Path $checkout 'out/make/squirrel.windows/x64/YukonUnionTelemetry-Setup-0.1.0.exe'
 $planSteps = @('signal','facts','guard-plan','create-run-root','guard-ready','build-fixture-0.1.1','seed','install-0.1.0','icon-identity-install-0.1.0','installed-smokes-0.1.0',
     'data-launch-0.1.0','verify-0.1.0','repair-0.1.0',
     'legacy-icon-before-update-0.1.1','legacy-display-icon-before-update-0.1.1','legacy-names-before-update-0.1.1','update-0.1.1','icon-identity-update-0.1.1',
@@ -50,7 +48,8 @@ $planSteps = @('signal','facts','guard-plan','create-run-root','guard-ready','bu
     'install-0.1.0-for-app','plugin-launch-for-app','app-uninstall-blocked-game','app-uninstall-verify-blocked-game',
     'app-uninstall-complete','app-uninstall-verify-complete','cleanup')
 if ($Plan) {
-    [ordered]@{run=$false; steps=$planSteps; scenariosA=$ScenariosA; scenariosB=$ScenariosB; setup=$setup; uninstall='windows-initiated and in-app, in R only';
+    [ordered]@{run=$false; steps=$planSteps; scenariosA=$ScenariosA; scenariosB=$ScenariosB; setup='the Setup of the build named by apps/desktop/dist/build-evidence.json';
+        setupChannels='production on a GitHub-hosted runner only; staging (local runs) arrives with ET-055 PR-5'; uninstall='windows-initiated and in-app, in R only';
         localRuns='only with -AllowLocal on an explicit owner request'; applicationLaunched=$false} | ConvertTo-Json
     return
 }
@@ -61,6 +60,19 @@ if (!$hosted -and !$AllowLocal) {
 }
 $node = (Get-Command node -ErrorAction Stop).Source
 $driver = Join-Path $PSScriptRoot 'installer-lifecycle.mjs'
+# ET-055 PR-4 (UP13): the Setup is the one of the build that was made (scripts/build-channel.mjs --built), with the versioned
+# name of forge.config.cjs (ET-018 PR-6). Outside a GitHub-hosted runner only a staging Setup may be installed, never the
+# production identity of the owner's installed application; a production Setup runs on a hosted runner only. The staging
+# lifecycle (its install root, names and versions) arrives with ET-055 PR-5, so a staging Setup is refused until then.
+# installer-guard.mjs (checkSetupChannel) repeats the rule.
+$builtText = & $node (Join-Path $checkout 'scripts/build-channel.mjs') --built
+if ($LASTEXITCODE -ne 0) { throw 'Build evidence unavailable: run npm run make first.' }
+$built = ($builtText -join "`n") | ConvertFrom-Json
+if ($built.channel -ceq 'production' -and !$hosted) {
+    throw 'LOCAL_PRODUCTION_REFUSED: a local run installs only a staging Setup; production runs on a GitHub-hosted runner (docs/installer-testing.md).'
+}
+if ($built.channel -cne 'production') { throw 'STAGING_LIFECYCLE_PENDING: the staging installer lifecycle arrives with ET-055 PR-5 (docs/installer-testing.md).' }
+$setup = Join-Path $checkout ('out/make/squirrel.windows/x64/' + $built.setup)
 if (!(Test-Path -LiteralPath $setup -PathType Leaf)) { throw 'Squirrel Setup.exe missing: run npm run make first.' }
 # Compiled before the environment changes below: Windows PowerShell's Add-Type needs the real TEMP.
 if (-not ('ETS2Telemetry.Diagnostics.BoundedProcess' -as [type])) { Add-Type -Path (Join-Path $checkout 'scripts/watchdog/BoundedProcess.cs') }
@@ -505,8 +517,8 @@ $env:LOCALAPPDATA = $base; $env:SQUIRREL_TEMP = $base
 $env:TEMP = Join-Path $runRoot 'temp'; $env:TMP = $env:TEMP; $env:APPDATA = Join-Path $runRoot 'AppData'
 $env:ETS2TELEMETRY_PROFILE_DIR = Join-Path $runRoot 'profile'; $env:ETS2TELEMETRY_PLUGIN_SETUP_ROOT = $runRoot
 try {
-    & $node $driver signal @(if ($AllowLocal) { '--allow-local' })
-    if ($LASTEXITCODE -ne 0) { throw 'LOCAL_RUN_REFUSED: the guard module refused the run signal.' }
+    & $node $driver signal --channel $built.channel @(if ($AllowLocal) { '--allow-local' })
+    if ($LASTEXITCODE -ne 0) { throw 'LOCAL_RUN_REFUSED: the guard module refused the run signal or the Setup channel.' }
     Invoke-Driver 'guard' @('plan') 30000
     $guarded = $true
     foreach ($folder in @($runRoot, $base, (Join-Path $runRoot 'temp'), (Join-Path $runRoot 'AppData'), (Join-Path $runRoot 'profile'), (Join-Path $runRoot 'cwd'),

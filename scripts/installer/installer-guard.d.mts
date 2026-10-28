@@ -89,6 +89,7 @@ export interface FactsEvidence {
 }
 export function factsEvidence(facts: unknown, runRoot: string): FactsEvidence;
 export function ownsRegistration(runRoot: string, installLocation: string): boolean;
+export function checkSetupChannel(channel: string | undefined, env: Readonly<Record<string, string | undefined>>): void;
 export const PRODUCT_DISPLAY_NAME: 'Yukon Union Telemetry';
 export const PRODUCT_PUBLISHER: 'Yukon Union Telemetry contributors';
 export const LEGACY_DISPLAY_NAME: 'ETS2Telemetry Desktop';
