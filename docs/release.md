@@ -11,6 +11,8 @@ ET-018 PR-6 (October 18, 2026) records what a release build is made of and wheth
 
 ## Release artifacts
 
+Names below are the production channel's. A staging build (ET-055, [build channels](setup.md#build-channels-et-055)) writes `YukonUnionTelemetry-Staging-Setup-<version>.exe` and `ETS2TelemetryDesktopStaging-<NuGet version>-full.nupkg` from `out/ETS2Telemetry Desktop Staging-win32-x64`, with the version `<package.json version>-stg.<6-digit run>`; `inspect-package` and `release-identity.mjs` check the names of the channel that `ETS2TELEMETRY_BUILD_CHANNEL` selects, so run them with the build's variables. The release workflow of ET-055 PR-9 replaces the publication steps below.
+
 `npm run make` writes the Squirrel distributable to `out/make/squirrel.windows/x64/`:
 
 | File | What it is |
@@ -76,8 +78,9 @@ Only the artifact built by Windows CI on a push to `main` or a dispatch is ever 
 
 | Field | Content |
 | --- | --- |
+| `channel` | The build channel, `production` or `staging` (ET-055, `scripts/build-channel.mjs`); every name the identity checks is that channel's. |
 | `source` | `commit` (`git rev-parse HEAD`), `sourceCommit` (`ETS2TELEMETRY_SOURCE_COMMIT` on CI) and `treeClean` (no tracked change). |
-| `versions` | `app` (`package.json`), `nuget`, `electron` (the packaged runtime's `version` file, which must equal the `package.json` pin) and `plugin` (the bundle manifest's `appVersion`, which must equal `app`). |
+| `versions` | `app` (the build version: `package.json`, with `-stg.<run>` in staging), `nuget`, `electron` (the packaged runtime's `version` file, which must equal the `package.json` pin) and `plugin` (the bundle manifest's `appVersion`, which must equal `app`). |
 | `artifacts` | Name, size and SHA-256 of Setup, the full package and RELEASES. |
 | `package` | The portable package fingerprint of `scripts/package-integrity.mjs`, the number of files the NuGet package carries, the package files it leaves out and Squirrel's additions. |
 | `plugin` | The plugin DLL's SHA-256 and size. The bundle is verified first (`verifyPluginBundle`): the DLL bytes must equal the manifest's hash and size. |

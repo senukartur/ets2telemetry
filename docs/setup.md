@@ -112,6 +112,26 @@ Script-level suppressions cover the whole file, including future uses of the sam
 
 Findings fixed instead of excepted: a function that assigned the automatic `$args` and a loop that assigned the automatic `$matches` (renamed in `tests/vm/Assert-InstallerHelperProvenance.ps1`), unused `param($root)` in empty uninstall-residue setups, and a missing `OutputType` on `Assert-UninstallResidue`.
 
+## Build channels (ET-055)
+
+Every build belongs to one release channel, `production` or `staging` ([concept.md](../concept.md#et-055-in-app-updates-and-staging-channel--october-28-2026), UP12). The staging build installs and runs beside production: it has its own Squirrel id and executable `ETS2TelemetryDesktopStaging`, productName `ETS2Telemetry Desktop Staging` (userData and the single-instance lock), display name `Yukon Union Telemetry Staging`, Setup `YukonUnionTelemetry-Staging-Setup-<version>.exe`, data root `%LOCALAPPDATA%\ETS2TelemetryStaging`, plugin `ets2telemetry-plugin-staging.dll`, pipe prefix `\\.\pipe\ETS2TelemetryStaging-` and game-log prefix `ETS2TelemetryStaging:`. Paths below name the production values.
+
+`scripts/build-channel.mjs` is the only place that decides the channel, from `ETS2TELEMETRY_BUILD_CHANNEL`: exactly `production` or `staging`; any other value, the empty string included, stops the build. **Until ET-055 PR-4, an unset variable still builds production**; PR-4 makes staging the default for agent and feature-test builds. A staging build carries the version `<package.json version>-stg.<run>`, where `<run>` is `ETS2TELEMETRY_STAGING_RUN_NUMBER` zero-padded to six digits, `000000` when unset; production carries the package.json version. `node scripts/build-channel.mjs` prints the resolved channel, version and names.
+
+```powershell
+$env:ETS2TELEMETRY_BUILD_CHANNEL = 'staging'
+npm run package
+npm run inspect:package
+Remove-Item Env:ETS2TELEMETRY_BUILD_CHANNEL
+```
+
+Run `inspect:package`, `make` and `node scripts/release-identity.mjs` with the same variables as the build: they check the channel's names. The channel reaches every artifact from that one value:
+
+- `scripts/build.mjs` replaces `__ETS2TELEMETRY_BUILD_CHANNEL__` (`apps/desktop/src/channel.ts`) and `__ETS2TELEMETRY_APP_VERSION__` (`apps/desktop/src/app-version.ts`) in every bundle, names the page title, stages the deferred-cleanup executor with its `$Channel` line stamped (`scripts/uninstall-executor.mjs`) and records `channel` and `version` in `apps/desktop/dist/build-evidence.json`. Code that no build bundles, such as Vitest, is production.
+- `scripts/build-native-client.mjs` and `scripts/stage-native-plugin.mjs` configure the broker and the plugin tree with `-DETS2TELEMETRY_CHANNEL=<channel>`, check the value in each `CMakeCache.txt` and record it in the broker's build evidence; the broker resolver refuses a broker whose evidence names another channel than the desktop bundle. `npm run native:configure` passes no channel, so a tree keeps the value of its last configuration; configure it with `-DETS2TELEMETRY_CHANNEL=production` before running `native:test` for production after a staging build.
+- `forge.config.cjs` takes the Squirrel id, executable, appBundleId, display name, Setup name, productName and version from the resolver, and writes the channel's productName and version into the packaged package.json, which names userData and the version Electron and the nuspec report. The output folder is `out/<productName>-win32-x64`.
+- The plugin bundle uses the channel's DLL name and released list (`native/telemetry-plugin/released-plugins.json` or the empty `released-plugins-staging.json`).
+
 ## Runtime paths and diagnostics
 
 Resolve `%LOCALAPPDATA%` at runtime. The application root is `%LOCALAPPDATA%\ETS2Telemetry`; planned locations are `data\telemetry.sqlite`, `settings\`, `logs\`, `backups\`, and `plugins\` for project-owned plugin metadata. Opt-in CAP0 evidence captures use the separate `captures\` directory. Binary installation has an independent Squirrel identity/root. The scaffold creates startup logs only, with a separate temporary SQLite probe. No production history, updater, migration, production backup, or uninstall deletion is implemented.

@@ -34,6 +34,8 @@ The pipe name is exactly:
 \\.\pipe\ETS2Telemetry-{game}-v0-{userTag}-{windowsSessionId}-{processInstanceId}
 ```
 
+That is the production build channel's prefix; a staging plugin uses `\\.\pipe\ETS2TelemetryStaging-` and `%LOCALAPPDATA%\ETS2TelemetryStaging\transport` (ET-055 UP12, `channel-identity.hpp`).
+
 The server uses `FILE_FLAG_FIRST_PIPE_INSTANCE`, `PIPE_REJECT_REMOTE_CLIENTS`, non-inheritable handles and an explicit protected current-user DACL. It fails closed on a pre-existing pipe; it does not adopt that endpoint. It does not overwrite a foreign discovery file or generate an unverified alternative source identity.
 
 The dedicated directories `%LOCALAPPDATA%\ETS2Telemetry\transport` and its `v0` child have protected owner/current-user-only DACLs. Existing reparse points and broad/inherited ACLs are rejected. The application root can retain its earlier scaffold ACL; the protected transport subtree is the authorization boundary. A discovery record is UTF-8 JSON, at most 4,096 bytes, named `{processInstanceId}.json` in `v0`, with exactly these fields:
