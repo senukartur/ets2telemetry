@@ -16,7 +16,8 @@ export interface ReleaseFacts {
 export const IDENTITY_FILE: 'release-identity.json';
 export const IDENTITY_FORMAT: 'ets2telemetry.release-identity';
 export const RELEASES_FILE: 'RELEASES';
-export function verifyReleaseArtifacts(folder: string, options: {channel: string; runId: string; commit?: string}): ReleaseFacts;
+export function verifyReleaseArtifacts(folder: string, options: {channel: string; runId: string; commit?: string; runNumber?: string}): ReleaseFacts;
+export function cliRunNumber(channel: string, runNumber: string | undefined): string | undefined;
 export function buildUpdateManifest(facts: ReleaseFacts, options: {keyId: string; now?: Date}): UpdateManifestV1;
 export function manifestBytesOf(manifest: unknown): Buffer;
 export function releaseNotesOf(facts: ReleaseFacts, repository: string): string;
