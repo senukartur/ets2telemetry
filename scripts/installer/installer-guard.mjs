@@ -81,11 +81,17 @@ const installedVersionOf = version => version.replace(/^(\d+\.\d+\.\d+)-(.*)$/, 
  * with its `-stg.<6 digits>` label.
  */
 export function lifecycleVersions(channel, appVersion) {
+  return Object.freeze({channel, appVersion, a: lifecycleFixtureVersion(channel, appVersion, 0), b: lifecycleFixtureVersion(channel, appVersion, 1)});
+}
+/**
+ * ET-055 PR-8: the version of an upgrade fixture `step` patch numbers above the build's (0: the build itself, 1: B, 2:
+ * the update-from-feed scenario's C, `0.1.2` or `0.1.2-stg.000000`), as lifecycleVersions derives B; the same refusals.
+ */
+export function lifecycleFixtureVersion(channel, appVersion, step) {
   const match = typeof appVersion === 'string' ? LIFECYCLE_VERSION.exec(appVersion) : null;
-  if (!BUILD_CHANNELS.includes(channel) || !match || (channel === 'production') !== (match[4] === undefined)) refuse('LIFECYCLE_VERSION_INVALID');
-  const fixture = `${match[1]}.${match[2]}.${Number(match[3]) + 1}${match[4] ?? ''}`;
-  return Object.freeze({channel, appVersion, a: Object.freeze({package: appVersion, installed: installedVersionOf(appVersion)}),
-    b: Object.freeze({package: fixture, installed: installedVersionOf(fixture)})});
+  if (!BUILD_CHANNELS.includes(channel) || !match || (channel === 'production') !== (match[4] === undefined) || ![0, 1, 2].includes(step)) refuse('LIFECYCLE_VERSION_INVALID');
+  const version = `${match[1]}.${match[2]}.${Number(match[3]) + step}${match[4] ?? ''}`;
+  return Object.freeze({package: version, installed: installedVersionOf(version)});
 }
 
 /** A Windows drive path such as `C:\folder`; UNC, device, relative and drive-relative paths are not. */

@@ -10,7 +10,9 @@ param(
     [ValidateSet('scaffold','telemetry','overlay','lifecycle','plugin')][string[]]$ScenariosB = @('scaffold','plugin','telemetry'),
     # ET-055 PR-5: `lifecycle` installs the channel of the build that was made; `side-by-side` installs that production
     # build and a staging Setup into the same run root (GitHub-hosted runners only, since it installs production).
-    [ValidateSet('lifecycle','side-by-side')][string]$Scenario = 'lifecycle',
+    # ET-055 PR-8: `update-from-feed` installs the build's channel and updates it in the application from a loopback feed
+    # (GitHub-hosted runners only).
+    [ValidateSet('lifecycle','side-by-side','update-from-feed')][string]$Scenario = 'lifecycle',
     # The side-by-side scenario's staging input: the folder scripts/installer/side-by-side-input.mjs created in Windows CI.
     [string]$StagingInput
 )
@@ -65,8 +67,13 @@ $sideBySideSteps = @('signal','facts','verify-staging-input','guard-plan','creat
     'staging-after-production-uninstall','reinstall-production',
     'plugin-launch-production-again','run-once-planted-production','channel-state-before-staging-uninstall','windows-uninstall-staging-deferred','run-once-staging-complete',
     'channel-compare-production','production-after-staging-uninstall','windows-uninstall-production-final','cleanup')
+$updateFromFeedSteps = @('signal','facts','guard-plan','create-run-root','guard-ready','build-fixture-b','build-fixture-c','seed','install-a','data-launch-a','verify-a',
+    'update-feed-b','update-feed-verify-b','installed-b','verify-b','update-feed-c-interrupted','update-feed-verify-c','stub-launch-after-r1','verify-after-r1',
+    'games','windows-uninstall-feed-final','cleanup')
 if ($Plan) {
-    [ordered]@{run=$false; scenario=$Scenario; steps=$(if ($Scenario -eq 'side-by-side') { $sideBySideSteps } else { $planSteps }); scenariosA=$ScenariosA; scenariosB=$ScenariosB;
+    [ordered]@{run=$false; scenario=$Scenario; steps=$(switch ($Scenario) { 'side-by-side' { $sideBySideSteps } 'update-from-feed' { $updateFromFeedSteps } default { $planSteps } });
+        scenariosA=$ScenariosA; scenariosB=$ScenariosB;
+        updateFeed='update-from-feed: a loopback feed on 127.0.0.1 signed with an Ed25519 key generated per run and never stored; GitHub-hosted runners only';
         setup='the Setup of the build named by apps/desktop/dist/build-evidence.json'; sideBySideStaging='the staging Setup of -StagingInput (side-by-side-input.mjs)';
         setupChannels='production on a GitHub-hosted runner only; staging on a hosted runner or under -AllowLocal'; uninstall='windows-initiated and in-app, in R only';
         localRuns='only with -AllowLocal on an explicit owner request, and only with a staging Setup'; applicationLaunched=$false} | ConvertTo-Json
@@ -93,6 +100,11 @@ if ($built.channel -ceq 'production' -and !$hosted) {
     throw 'LOCAL_PRODUCTION_REFUSED: a local run installs only a staging Setup; production runs on a GitHub-hosted runner (docs/installer-testing.md).'
 }
 if ($built.channel -cnotin @('production', 'staging')) { throw 'Build evidence names no known channel.' }
+# ET-055 PR-8: the update-from-feed scenario runs the application's own updater against a loopback feed; it runs on a
+# GitHub-hosted runner only, for either channel, and never under -AllowLocal.
+if ($Scenario -eq 'update-from-feed' -and (!$hosted -or $AllowLocal)) {
+    throw 'UPDATE_FROM_FEED_HOSTED_ONLY: the update-from-feed scenario runs on a GitHub-hosted runner only (docs/installer-testing.md).'
+}
 $setup = Join-Path $checkout ('out/make/squirrel.windows/x64/' + $built.setup)
 if (!(Test-Path -LiteralPath $setup -PathType Leaf)) { throw 'Squirrel Setup.exe missing: run npm run make first.' }
 # The channels this run installs, each with its Setup and application version: the build's own, and for the side-by-side
@@ -115,6 +127,8 @@ foreach ($name in @($channelBuilds.Keys)) {
     $planLine = $line | ConvertFrom-Json
     if ($LASTEXITCODE -ne 0 -or $planLine.passed -ne $true) { throw ('LIFECYCLE_VERSIONS_REFUSED for ' + $name) }
     $channelBuilds[$name].versions = $planLine.plan.versions
+    # ET-055 PR-8: the update-from-feed scenario's third version C (fixture step 2).
+    $channelBuilds[$name].fixtureC = $planLine.plan.fixtureC
     foreach ($identity in @($planLine.plan.identities)) { $identities[[string]$identity.channel] = $identity }
 }
 $runChannels = @($channelBuilds.Keys)
@@ -325,6 +339,20 @@ function Invoke-Driver([string]$Command, [string[]]$Arguments, [int]$TimeoutMs) 
     try {
         $code = [ETS2Telemetry.Diagnostics.BoundedProcess]::Run($node, [string[]](@($driver, $Command, $configFile) + $Arguments),
             $evidence, (Join-Path $evidence ('job-' + $label)), $TimeoutMs)
+    } finally { Remove-Item Env:ETS2TELEMETRY_INSTALLER_FACTS -ErrorAction SilentlyContinue }
+    $script:report.steps += ,[ordered]@{step=$label; exitCode=$code; seconds=[math]::Round($clock.Elapsed.TotalSeconds - $started, 1)}
+    if ($code -ne 0) { throw ('Installer lifecycle step failed: ' + $label + ', Job exit ' + $code + '; evidence: ' + $evidence) }
+}
+function Invoke-DriverExtended([string]$Command, [string[]]$Arguments, [int]$TimeoutMs) {
+    # ET-055 PR-8: a driver command that runs the application through a whole update, which needs more than Run's 60 s:
+    # the same Job limits (16 processes, 2 GiB, 25% CPU, kill on close) under RunExtended, at most 300 s here.
+    if ($TimeoutMs -le 60000 -or $TimeoutMs -gt 300000) { throw ('EXTENDED_TIMEOUT_INVALID: ' + $Command) }
+    $label = $Command + $(if ($Arguments.Count) { '-' + $Arguments[0] } else { '' })
+    $started = $clock.Elapsed.TotalSeconds
+    $env:ETS2TELEMETRY_INSTALLER_FACTS = Get-FactJson
+    try {
+        $code = [ETS2Telemetry.Diagnostics.BoundedProcess]::RunExtended($node, [string[]](@($driver, $Command, $configFile) + $Arguments),
+            $evidence, (Join-Path $evidence ('job-' + $label)), $TimeoutMs, $false)
     } finally { Remove-Item Env:ETS2TELEMETRY_INSTALLER_FACTS -ErrorAction SilentlyContinue }
     $script:report.steps += ,[ordered]@{step=$label; exitCode=$code; seconds=[math]::Round($clock.Elapsed.TotalSeconds - $started, 1)}
     if ($code -ne 0) { throw ('Installer lifecycle step failed: ' + $label + ', Job exit ' + $code + '; evidence: ' + $evidence) }
@@ -795,6 +823,71 @@ function Invoke-SideBySide {
     Assert-Uninstalled 'production-final' $helper
 }
 
+# --- ET-055 PR-8: the in-app update from a loopback feed (docs/installer-testing.md, "Update-from-feed scenario") -------
+
+function Build-UpgradeFixture([string]$Folder, [int]$FixtureStep, [string]$Label) {
+    # Installer version B (step 1) or C (step 2) from a temporary copy of the packaged folder; a build step that runs no
+    # installer. forge.config.cjs, which the fixture reads, resolves the channel of the build that was made.
+    $started = $clock.Elapsed.TotalSeconds
+    $savedChannel = $env:ETS2TELEMETRY_BUILD_CHANNEL
+    $env:ETS2TELEMETRY_BUILD_CHANNEL = $built.channel
+    try { & $node (Join-Path $PSScriptRoot 'build-upgrade-fixture.mjs') $Folder (Join-Path $evidence ('upgrade-fixture-' + $Label + '.json')) ([string]$FixtureStep) }
+    finally { $env:ETS2TELEMETRY_BUILD_CHANNEL = $savedChannel }
+    if ($LASTEXITCODE -ne 0) { throw ('Upgrade fixture build failed: ' + $Label) }
+    $script:report.steps += ,[ordered]@{step=('build-fixture-' + $Label); exitCode=0; seconds=[math]::Round($clock.Elapsed.TotalSeconds - $started, 1)}
+}
+function Invoke-UpdateFromFeed {
+    # REG-019 (UP3, UP7, UP8, UP18, UP19; risk R1): install A, migrate the seeded database, then the application's own
+    # update to B from a loopback feed: the offer, a refused click while the fake game runs, the download, the apply, the
+    # update exit with recording-flush and the restart into app-<B>; installed checks and the history read on B. Then R1:
+    # B is offered C, the apply is killed as soon as Update.exe creates app-<C>, Retry runs it again and the application
+    # exits while it runs; Squirrel's stub must still start an instance that opens the history, and the data must be intact.
+    # The end is a Windows-initiated uninstall, so no shortcut or registration is left.
+    $versionA = [string]$channelBuilds[$activeChannel].versions.a.installed
+    $versionB = [string]$channelBuilds[$activeChannel].versions.b.installed
+    $versionC = [string]$channelBuilds[$activeChannel].fixtureC.installed
+    if (!$versionC) { throw 'UPDATE_FROM_FEED_VERSION_C_MISSING' }
+    $script:report.setupSha256 = (Get-FileHash -LiteralPath $setup -Algorithm SHA256).Hash
+    Build-UpgradeFixture (Join-Path $runRoot 'fixture') 1 'b'
+    Build-UpgradeFixture (Join-Path $runRoot 'fixture-c') 2 'c'
+    Invoke-Driver 'seed' @() 30000
+    Invoke-Driver 'snapshot' @('seed') 30000
+
+    $env:ETS2TELEMETRY_DIAGNOSTIC_DIR = Join-Path $runRoot 'diagnostics\feed-install-a'
+    Invoke-Driver 'step' @('feed-install-a', $setup, '--silent') 60000
+    $executableA = Assert-Installed 'feed-install-a' $versionA
+    Assert-ProductLinks 'feed-install-a' $true
+    $env:ETS2TELEMETRY_DIAGNOSTIC_DIR = $null
+    Invoke-Driver 'launch' @('feed-a', $executableA, '1') 60000
+    Invoke-Driver 'verify' @('feed-a', $executableA) 30000
+
+    # The update A -> B from the application, and B's installed state and data.
+    Invoke-DriverExtended 'update-feed' @('feed-b', $executableA, 'complete') 240000
+    Invoke-Driver 'update-feed-verify' @('feed-b') 30000
+    $executableB = Assert-Installed 'feed-update-b' $versionB
+    Assert-IconIdentity 'feed-update-b' $versionB
+    Assert-ProductLinks 'feed-update-b' $true
+    Invoke-Driver 'verify' @('feed-b', $executableB) 30000
+
+    # R1, an observation: what an interrupted apply leaves. Only data loss or an unlaunchable install fails the run.
+    Invoke-DriverExtended 'update-feed' @('feed-c', $executableB, 'interrupted') 300000
+    Invoke-Driver 'update-feed-verify' @('feed-c') 30000
+    $script:report.r1 = [ordered]@{registeredVersion=[string](Read-Registration).displayVersion; versionB=$versionB; versionC=$versionC}
+    Invoke-Driver 'stub-launch' @('after-r1') 60000
+    $launched = [string](Get-Content -LiteralPath (Join-Path $evidence 'stub-launch-after-r1.json') -Raw | ConvertFrom-Json).result.launchedVersion
+    $script:report.r1.launchedVersion = $launched
+    if ($launched -cnotin @($versionB, $versionC)) { throw ('R1_LAUNCHED_VERSION_UNEXPECTED: Squirrel''s stub started app-' + $launched) }
+    $executableLatest = Join-Path $binaryRoot ('app-' + $launched + '\' + $product.executable)
+    Invoke-Driver 'verify' @('feed-after-r1', $executableLatest) 30000
+
+    # The end: the Windows-initiated uninstall while the application runs, as the lifecycle's first uninstall.
+    Invoke-Driver 'games' @() 30000
+    $helper = Get-VendorHelper $launched
+    $script:report.uninstallRun = $true
+    Invoke-Driver 'windows-uninstall' @('feed-final', $executableLatest, 'complete') 60000
+    Assert-Uninstalled 'feed-final' $helper
+}
+
 $saved = @{}
 $guarded = $false
 # Before the first child process starts, the environment names only R (its folders are created after the preflight), so
@@ -818,6 +911,8 @@ try {
     $guarded = $true
     foreach ($folder in @($runRoot, $base, (Join-Path $runRoot 'temp'), (Join-Path $runRoot 'AppData'), (Join-Path $runRoot 'profile'), (Join-Path $runRoot 'cwd'),
         (Join-Path $runRoot 'diagnostics'), (Join-Path $runRoot 'exports'), (Join-Path $runRoot 'fixture'))) { New-Item -ItemType Directory -Path $folder | Out-Null }
+    # ET-055 PR-8: the update-from-feed scenario's fixture C.
+    if ($Scenario -eq 'update-from-feed') { New-Item -ItemType Directory -Path (Join-Path $runRoot 'fixture-c') | Out-Null }
     $utf8 = [Text.UTF8Encoding]::new($false)
     [IO.File]::WriteAllText((Join-Path $runRoot 'ets2telemetry-plugin-test-root.marker'), "Test root of the ETS2Telemetry installer lifecycle.`n", $utf8)
     [IO.File]::WriteAllText((Join-Path $runRoot 'ets2telemetry-install-test.json'), (([ordered]@{format='ets2telemetry.install-test'; version=1;
@@ -937,6 +1032,8 @@ try {
         Invoke-Driver 'app-uninstall' @('complete-app', $executableA, 'complete') 60000
         Invoke-Driver 'app-uninstall-verify' @('complete-app') 30000
         Assert-Uninstalled 'complete-app' $helper
+    } elseif ($Scenario -eq 'update-from-feed') {
+        Invoke-UpdateFromFeed
     } else {
         Invoke-SideBySide
     }

@@ -10,7 +10,7 @@ import {checkedPaths, checkInstalled, checkInstallTest, checkLaunchEnvironment, 
   checkDataRootUnchanged, checkDecoyUnchanged, checkRegistrationIcon, checkUninstallResidue, classifyRegistrationIcon, DATA_ROOT_REQUIRED, electronRuntimeNames, PRODUCT_EXECUTABLE, InstallerGuardError, RESIDUE_MAX_ENTRIES, isGuardedProcess, isHostedRunner, minimalPath, normalizePath, ownsRegistration, parseUninstallString, resolveRealLocation, runLayout,
   steamLibraryPaths, uninstallEnvironment, type RunPlanFacts} from '../../scripts/installer/installer-guard.mjs';
 import {checkOtherChannelUnchanged, checkProductLinks, checkRegistrationNames, checkRunChannels, checkShortcutIdentities, checkUninstallEntries, classifyProductLinks, LIFECYCLE_IDENTITIES,
-  lifecycleIdentity, lifecycleVersions, protectedRoots} from '../../scripts/installer/installer-guard.mjs';
+  lifecycleFixtureVersion, lifecycleIdentity, lifecycleVersions, protectedRoots} from '../../scripts/installer/installer-guard.mjs';
 import {temporaryResources} from '../shared/resources';
 
 // ET-018 PR-1 (REG-017, U12): the installer lifecycle's fail-closed guards. Pure decisions over hand-written facts; no
@@ -727,6 +727,15 @@ describe('channel identities and versions of a lifecycle run (ET-055 PR-5)', () 
       installed: '0.1.0-stg000042'}, b: {package: '0.1.1-stg.000042', installed: '0.1.1-stg000042'}});
     expect(lifecycleVersions('production', '1.2.9').b.installed).toBe('1.2.10');
   });
+  // ET-055 PR-8: the update-from-feed scenario's C, two patch numbers above A, and B and A from the same rule.
+  it('derives fixture C two patch numbers above the build and refuses another step', () => {
+    expect(lifecycleFixtureVersion('production', '0.1.0', 2)).toEqual({package: '0.1.2', installed: '0.1.2'});
+    expect(lifecycleFixtureVersion('staging', '0.1.0-stg.000042', 2)).toEqual({package: '0.1.2-stg.000042', installed: '0.1.2-stg000042'});
+    expect(lifecycleFixtureVersion('staging', '0.1.0-stg.000042', 1)).toEqual(lifecycleVersions('staging', '0.1.0-stg.000042').b);
+    expect(lifecycleFixtureVersion('production', '0.1.0', 0)).toEqual(lifecycleVersions('production', '0.1.0').a);
+    for (const step of [3, -1, 1.5]) expect(refusal(() => lifecycleFixtureVersion('production', '0.1.0', step))).toBe('LIFECYCLE_VERSION_INVALID');
+    expect(refusal(() => lifecycleFixtureVersion('production', '0.1.0-stg.000000', 2))).toBe('LIFECYCLE_VERSION_INVALID');
+  });
   it.each([['production', '0.1.0-stg.000000'], ['staging', '0.1.0'], ['staging', '0.1.0-stg.42'], ['production', '0.1.0-alpha.1'], ['beta', '0.1.0'], ['production', undefined]])(
     'refuses the version of channel %s: %s', (channel, version) => expect(refusal(() => lifecycleVersions(channel, version as string))).toBe('LIFECYCLE_VERSION_INVALID'));
   it('refuses the product executable of either channel in the residue', () => {
@@ -904,6 +913,29 @@ describe('harness Job bounds', () => {
     expect(body.indexOf("Invoke-Driver 'legacy-icon'")).toBeLessThan(body.indexOf('.SetValue('));
     expect(body).toContain('if ($owned[$index] -ne $true) { continue }');
     expect(harness).toContain("Set-LegacyIcon 'before-update-0.1.1'");
+  });
+  // ET-055 PR-8: the update-from-feed commands run the application through a whole update under RunExtended (same Job
+  // limits); each call gives a literal deadline above Run's cap and at most 300 s, and the driver's own budget for that
+  // mode ends at least 30 s before it, so the command records its evidence before the Job ends it.
+  it('passes every Invoke-DriverExtended call a literal RunExtended deadline above the driver\'s own budget', async () => {
+    const cap = await jobCap();
+    const harness = await read('scripts/installer/Invoke-InstallerLifecycle.ps1');
+    expect(/if \(timeoutMs<60001 \|\| timeoutMs>6000000\) throw/.test(await read('scripts/watchdog/BoundedProcess.cs'))).toBe(true);
+    const calls = harness.split(/\r?\n/).filter(line => /\bInvoke-DriverExtended\s+'/.test(line) && !/^\s*function\s/.test(line))
+      .map(line => /Invoke-DriverExtended 'update-feed' @\('[a-z0-9.-]+', \$[A-Za-z]+, '(complete|interrupted)'\) (\d+)\s*$/.exec(line.trim()));
+    expect(calls.map(call => call && [call[1], Number(call[2])])).toEqual([['complete', 240000], ['interrupted', 300000]]);
+    const driver = await read('scripts/installer/installer-lifecycle.mjs');
+    const budgets = /UPDATE_FEED_BUDGET_MS = Object\.freeze\(\{complete: (\d+), interrupted: (\d+)\}\)/.exec(driver);
+    expect(budgets).not.toBeNull();
+    for (const call of calls) {
+      expect(Number(call![2])).toBeGreaterThan(cap);
+      expect(Number(call![2])).toBeLessThanOrEqual(300000);
+      expect(Number(call![2]) - Number(budgets![call![1] === 'complete' ? 1 : 2])).toBeGreaterThanOrEqual(30000);
+    }
+    expect(harness).toContain("if ($TimeoutMs -le 60000 -or $TimeoutMs -gt 300000) { throw ('EXTENDED_TIMEOUT_INVALID: ' + $Command) }");
+    // The scenario refuses every run that is not on a GitHub-hosted runner, before any install.
+    expect(harness.indexOf("throw 'UPDATE_FROM_FEED_HOSTED_ONLY:")).toBeGreaterThan(-1);
+    expect(harness.indexOf("throw 'UPDATE_FROM_FEED_HOSTED_ONLY:")).toBeLessThan(harness.indexOf('function Invoke-Driver('));
   });
   it('keeps the in-app uninstall run\'s own budget below the cap', async () => {
     const cap = await jobCap();
