@@ -7,13 +7,12 @@ import path from 'node:path';
 import Database from 'better-sqlite3';
 import {ACCEPTED_ORIGIN, type Durability, type OpenSummary, type Purpose} from '../api';
 import {classifyError, fail, StorageFailure} from '../errors';
+import {isHistoryFile} from '../history-file';
 import {backupBeforeMigration, pruneBackups, sweepStalePartials, type BackupHooks} from './backup';
 import {applySteps, APPLICATION_ID, checkIntegrity, MIGRATIONS, supportedVersion, type Migration} from './migrations';
 
 export const BUSY_TIMEOUT_MS = 2_000;
 const SQLITE_MAGIC = Buffer.from('SQLite format 3\0', 'latin1');
-/** The production history file. Synthetic and replay databases may never use it. */
-const PRODUCTION_HISTORY = /[\\/]ETS2Telemetry[\\/]data[\\/]telemetry\.sqlite$/i;
 
 export interface OpenOptions {
   /** Absolute path of the database file; its directory is created when missing. */
@@ -54,7 +53,8 @@ export class StorageConnection {
 /** Checks a database path for a purpose without touching the filesystem. */
 export function checkPath(file: string, purpose: Purpose): void {
   if (typeof file !== 'string' || !file || file.includes('\0') || !path.isAbsolute(file) || path.resolve(file) !== path.normalize(file) || file.startsWith('file:')) fail('DATA_PATH_INVALID');
-  if (purpose !== 'history' && PRODUCTION_HISTORY.test(path.normalize(file))) fail('DATA_PATH_INVALID');
+  // Synthetic and replay databases may never use the history file of either build channel.
+  if (purpose !== 'history' && isHistoryFile(path.normalize(file))) fail('DATA_PATH_INVALID');
 }
 function validatePath(file: string, purpose: Purpose): void {
   checkPath(file, purpose);

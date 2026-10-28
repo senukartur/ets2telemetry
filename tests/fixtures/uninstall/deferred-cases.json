@@ -1,7 +1,7 @@
 {
   "format": "ets2telemetry.deferred-cleanup-cases",
   "version": 1,
-  "about": "ET-018 PR-5: one table, two implementations. tests/unit/uninstall-deferred-cases.test.ts runs the TypeScript engine (apps/desktop/src/uninstall/) and tests/windows/Test-DeferredCleanup.ps1 runs the deferred-cleanup executor (resources/uninstall/Complete-ETS2TelemetryUninstall.ps1) on the same scene. Each scene is a later run after a deferred uninstall: the data root holds data, settings and logs, the install registry plugins/setup.json with one install record for the folder (sha256 of 'owned', createdPluginsDirectory from 'created'), and the intent uninstall/pending.json (attempts 1) naming the folder with the hash of 'owned', its temporary file when 'temp' is set, and the hash of 'known' in known. Both must agree on the outcome, the code and what is kept or removed. See docs/uninstall.md, 'Deferred cleanup at the next sign-in'.",
+  "about": "ET-018 PR-5: one table, two implementations. tests/unit/uninstall-deferred-cases.test.ts runs the TypeScript engine (apps/desktop/src/uninstall/) and tests/windows/Test-DeferredCleanup.ps1 runs the deferred-cleanup executor (resources/uninstall/Complete-ETS2TelemetryUninstall.ps1) on the same scene. Each scene is a later run after a deferred uninstall: the data root holds data, settings and logs, the install registry plugins/setup.json with one install record for the folder (sha256 of 'owned', createdPluginsDirectory from 'created'), and the intent uninstall/pending.json (attempts 1) naming the folder with the hash of 'owned', its temporary file when 'temp' is set, and the hash of 'known' in known. Both must agree on the outcome, the code and what is kept or removed. ET-055: the executor's run plays the table in both build channels, each with its own names; folder.otherChannel adds the other channel's plugin file with the 'owned' bytes, which this channel never removes. See docs/uninstall.md, 'Deferred cleanup at the next sign-in'.",
   "contents": {
     "owned": "ETS2Telemetry deferred-cleanup case: the plugin file this application installed.\n",
     "known": "ETS2Telemetry deferred-cleanup case: a released plugin file of this application.\n",
@@ -40,6 +40,8 @@
       "expect": {"outcome": "deferred", "code": "DATA_ENTRY_BLOCKED", "dll": "absent", "dataRoot": ["logs", "plugins", "uninstall"]}},
     {"id": "junction-in-data-not-followed", "folder": {"game": "ets2", "layout": "game", "dll": "owned"}, "running": [], "data": {"logsJunction": true},
       "expect": {"outcome": "complete", "code": null, "dll": "absent", "sentinel": "present", "dataRoot": null}},
+    {"id": "other-channel-plugin-kept", "folder": {"game": "ets2", "layout": "game", "dll": "owned", "otherChannel": true}, "running": [],
+      "expect": {"outcome": "complete", "code": null, "dll": "absent", "otherChannelDll": "present", "pluginsDirectory": "present", "dataRoot": null}},
     {"id": "allowlisted-entry-at-the-last-step", "folder": {"game": "ets2", "layout": "game", "dll": "owned"}, "running": [], "data": {"lateEntry": "logs"},
       "expect": {"outcome": "complete", "code": null, "dll": "absent", "dataRoot": null}}
   ]

@@ -10,13 +10,13 @@ import type {UninstallBlockCode, UninstallFailureCode} from '../../../packages/c
 import type {FolderNote} from './uninstall/plugin-cleanup';
 import type {DataEntry} from './uninstall/data-wipe';
 import {t} from './i18n';
-import {CHANNEL} from './channel';
+import {CHANNEL, channelCopyTable} from './channel';
 
 /**
  * Legacy fixed application copy for the dashboard and tray. Renderer adapters select the typed EN/RU dictionaries
  * before interpolation; raw SDK values never enter those lookups. Pure data, safe for renderer bundles.
  */
-export const STRINGS = Object.freeze({
+export const STRINGS = channelCopyTable(Object.freeze({
   appName: CHANNEL.displayName,
   startupPending: 'Starting',
   startupReady: 'Telemetry service ready; isolated storage probe verified',
@@ -88,10 +88,10 @@ export const STRINGS = Object.freeze({
   overlayEditCancel: 'Cancel',
   overlayEditHelp: 'Drag the outlined overlay over the game to move it. Enter on the overlay saves, Esc cancels. The layout cannot change while you edit.',
   overlayEditFailed: 'The overlay edit request failed; the saved position and size stay in use.'
-});
+}));
 export type StringKey = keyof typeof STRINGS;
 
-export const STRINGS_RU: Readonly<Record<StringKey, string>> = Object.freeze({
+export const STRINGS_RU: Readonly<Record<StringKey, string>> = channelCopyTable(Object.freeze({
   appName: CHANNEL.displayName,
   startupPending: 'Запуск',
   startupReady: 'Служба телеметрии готова; изолированное хранилище проверено',
@@ -162,7 +162,7 @@ export const STRINGS_RU: Readonly<Record<StringKey, string>> = Object.freeze({
   overlayEditCancel: 'Отмена',
   overlayEditHelp: 'Перетащите оверлей по экрану игры. Enter сохраняет, Esc отменяет. Вид нельзя менять во время перемещения.',
   overlayEditFailed: 'Не удалось сохранить настройки положения оверлея; остаются сохранённые значения.'
-});
+}));
 
 export function getStrings(language: AppLanguage = 'en'): Readonly<Record<StringKey, string>> {
   return language === 'ru' ? STRINGS_RU : STRINGS;
@@ -198,25 +198,25 @@ export function getStorageHealthText(health: StorageHealth, language: AppLanguag
   return language === 'ru' ? STORAGE_HEALTH_TEXT_RU[health] : STORAGE_HEALTH_TEXT[health];
 }
 
-export const APP_ERROR_TEXT: Readonly<Record<AppErrorCode, string>> = Object.freeze({
+export const APP_ERROR_TEXT: Readonly<Record<AppErrorCode, string>> = channelCopyTable(Object.freeze({
   SERVICE_EXITED: 'The telemetry service stopped unexpectedly.',
   SERVICE_RESTART_EXHAUSTED: 'Automatic service restart limit reached. Exit and start Yukon Union Telemetry again.',
   STORAGE_FAILED: 'The isolated storage self-test failed.',
   SERVICE_START_TIMEOUT: 'The telemetry service did not start in time.'
-});
-export const APP_ERROR_TEXT_RU: Readonly<Record<AppErrorCode, string>> = Object.freeze({
+}));
+export const APP_ERROR_TEXT_RU: Readonly<Record<AppErrorCode, string>> = channelCopyTable(Object.freeze({
   SERVICE_EXITED: 'Служба телеметрии неожиданно завершила работу.',
   SERVICE_RESTART_EXHAUSTED: 'Достигнут предел автоматических перезапусков службы. Закройте и снова запустите Yukon Union Telemetry.',
   STORAGE_FAILED: 'Сбой самотестирования изолированного хранилища.',
   SERVICE_START_TIMEOUT: 'Служба телеметрии не запустилась вовремя.'
-});
+}));
 export function getAppErrorText(code: AppErrorCode, language: AppLanguage = 'en'): string {
   return language === 'ru' ? APP_ERROR_TEXT_RU[code] : APP_ERROR_TEXT[code];
 }
 // Recording status text (ET-015c PR-4, G8). apps/desktop/src/recording-status-text.ts composes these; each map covers
 // every state, code, target, trip phase and loss counter, so a new value fails to compile until it has a text.
 /** The headline of each recording state; retrying and stopped add their cause. */
-export const RECORDING_STATE_TEXT: Readonly<Record<RecordingHealth['state'], string>> = Object.freeze({
+export const RECORDING_STATE_TEXT: Readonly<Record<RecordingHealth['state'], string>> = channelCopyTable(Object.freeze({
   'disabled': 'Off: this version does not record game history',
   'unknown': 'Not known: the telemetry service is not running or has not reported a valid status',
   'opening': 'Opening the database',
@@ -228,8 +228,8 @@ export const RECORDING_STATE_TEXT: Readonly<Record<RecordingHealth['state'], str
   'stopped': 'Stopped: {cause}. Restart Yukon Union Telemetry after fixing it',
   'live-only': 'Not recording this game session: the database is behind the plugin (restored database); recording resumes with the next game session',
   'not-recorded-source': 'Not recording the selected source'
-});
-export const RECORDING_STATE_TEXT_RU: Readonly<Record<RecordingHealth['state'], string>> = Object.freeze({
+}));
+export const RECORDING_STATE_TEXT_RU: Readonly<Record<RecordingHealth['state'], string>> = channelCopyTable(Object.freeze({
   'disabled': 'Отключено: эта версия не записывает историю игры',
   'unknown': 'Неизвестно: служба телеметрии не запущена или не передала корректный статус',
   'opening': 'Открытие базы данных',
@@ -241,7 +241,7 @@ export const RECORDING_STATE_TEXT_RU: Readonly<Record<RecordingHealth['state'], 
   'stopped': 'Остановлено: {cause}. Перезапустите Yukon Union Telemetry после устранения причины',
   'live-only': 'Эта игровая сессия не записывается: база данных отстаёт от плагина (восстановленная база данных); запись возобновится со следующей игровой сессии',
   'not-recorded-source': 'Выбранный источник не записывается'
-});
+}));
 export function getRecordingStateText(state: RecordingHealth['state'], language: AppLanguage = 'en'): string {
   return language === 'ru' ? RECORDING_STATE_TEXT_RU[state] : RECORDING_STATE_TEXT[state];
 }
@@ -309,7 +309,7 @@ export function getRecordingStateLabelText(state: RecordingHealth['state'], lang
 }
 
 /** What a recording code means, as a cause inside a sentence. Never a path or error text. */
-export const RECORDING_CODE_TEXT: Readonly<Record<RecordingCode, string>> = Object.freeze({
+export const RECORDING_CODE_TEXT: Readonly<Record<RecordingCode, string>> = channelCopyTable(Object.freeze({
   DATABASE_LOCKED: 'the database is locked by another program',
   PERMISSION_DENIED: 'no permission to write the database',
   DISK_FULL: 'the disk is full',
@@ -339,8 +339,8 @@ export const RECORDING_CODE_TEXT: Readonly<Record<RecordingCode, string>> = Obje
   BACKLOG_FULL: 'too much work is waiting for storage',
   COVERAGE_MISMATCH: 'the plugin and the database disagree about what was stored',
   ACK_AHEAD_OF_STORAGE: 'the database is behind the plugin'
-});
-export const RECORDING_CODE_TEXT_RU: Readonly<Record<RecordingCode, string>> = Object.freeze({
+}));
+export const RECORDING_CODE_TEXT_RU: Readonly<Record<RecordingCode, string>> = channelCopyTable(Object.freeze({
   DATABASE_LOCKED: 'база данных заблокирована другой программой',
   PERMISSION_DENIED: 'нет прав на запись в базу данных',
   DISK_FULL: 'диск заполнен',
@@ -370,7 +370,7 @@ export const RECORDING_CODE_TEXT_RU: Readonly<Record<RecordingCode, string>> = O
   BACKLOG_FULL: 'очередь операций хранилища переполнена',
   COVERAGE_MISMATCH: 'плагин и база данных расходятся в том, что сохранено',
   ACK_AHEAD_OF_STORAGE: 'база данных отстаёт от плагина'
-});
+}));
 export function getRecordingCodeText(code: RecordingCode, language: AppLanguage = 'en'): string {
   return language === 'ru' ? RECORDING_CODE_TEXT_RU[code] : RECORDING_CODE_TEXT[code];
 }
@@ -485,16 +485,16 @@ export function getPrototypeNoticeText(key: 'disabled' | 'unknown' | 'test' | 'h
 }
 
 /** The Alert below the recording row while recording is retrying, stopped or live-only. */
-export const RECORDING_ALERT_TEXT = Object.freeze({
+export const RECORDING_ALERT_TEXT = channelCopyTable(Object.freeze({
   retrying: 'Yukon Union Telemetry retries automatically. Live telemetry and the overlay keep working.',
   stopped: 'Recording stopped until the telemetry service starts again. Live telemetry and the overlay keep working.',
   liveOnly: 'Live telemetry and the overlay keep working; this game session is not recorded.'
-});
-export const RECORDING_ALERT_TEXT_RU = Object.freeze({
+}));
+export const RECORDING_ALERT_TEXT_RU = channelCopyTable(Object.freeze({
   retrying: 'Yukon Union Telemetry выполняет повторные попытки автоматически. Живая телеметрия и оверлей продолжают работать.',
   stopped: 'Запись остановлена до перезапуска службы телеметрии. Живая телеметрия и оверлей продолжают работать.',
   liveOnly: 'Живая телеметрия и оверлей продолжают работать; эта игровая сессия не записывается.'
-});
+}));
 export function getRecordingAlertText(key: 'retrying' | 'stopped' | 'liveOnly', language: AppLanguage = 'en'): string {
   return language === 'ru' ? RECORDING_ALERT_TEXT_RU[key] : RECORDING_ALERT_TEXT[key];
 }
@@ -791,21 +791,21 @@ export const JOURNAL_ERROR_TEXT: Readonly<Record<JournalCallCode, string>> = Obj
  * The trip export (ET-016 PR-5, J16, J18). The note next to Export states the owner's uninstall rule of October 16, 2026
  * and that the export is a copy that cannot be imported. Results never name a path.
  */
-export const JOURNAL_EXPORT_STRINGS = Object.freeze({
+export const JOURNAL_EXPORT_STRINGS = channelCopyTable(Object.freeze({
   button: 'Export JSON',
   exporting: 'Exporting…',
   note: 'Uninstalling Yukon Union Telemetry removes its local trip history and settings. The JSON export is a copy for your own records; it cannot be imported back.',
   saved: 'Saved the trip as JSON: {events} events, {intervals} completeness intervals and {samples} one-second samples.',
   cancelled: 'Export cancelled. Nothing was written.',
   refused: 'The export request was refused.'
-});
+}));
 /** The export's own refusal codes as fixed text; the journal codes use JOURNAL_ERROR_TEXT. */
-export const JOURNAL_EXPORT_ERROR_TEXT: Readonly<Record<JournalExportCode, string>> = Object.freeze({
+export const JOURNAL_EXPORT_ERROR_TEXT: Readonly<Record<JournalExportCode, string>> = channelCopyTable(Object.freeze({
   EXPORT_TARGET_REFUSED: 'That location cannot be used. Choose a folder outside the Yukon Union Telemetry data folder, %LOCALAPPDATA%\\ETS2Telemetry.',
   EXPORT_WRITE_FAILED: 'The file could not be written. A file that already had this name is unchanged.',
   EXPORT_IN_PROGRESS: 'Another export is still running. Try again when it has finished.',
   EXPORT_INTERRUPTED: 'The export stopped because Yukon Union Telemetry is exiting. Nothing was written.'
-});
+}));
 export const JOURNAL_GAME_TEXT: Readonly<Record<UnitGame, string>> = Object.freeze({ets2: 'ETS2', ats: 'ATS'});
 /** Outcome and recording completeness are separate (J13); neither is inferred from the other. */
 export const JOURNAL_OUTCOME_TEXT: Readonly<Record<JournalOutcome, string>> = Object.freeze({
@@ -957,7 +957,7 @@ export const PLUGIN_STATE_TEXT: Readonly<Record<PluginTargetState, string>> = Ob
   'blocked': 'Blocked',
   'working': 'Setting up…'
 });
-export const PLUGIN_REASON_TEXT: Readonly<Record<PluginBlockReason, string>> = Object.freeze({
+export const PLUGIN_REASON_TEXT: Readonly<Record<PluginBlockReason, string>> = channelCopyTable(Object.freeze({
   GAME_RUNNING: 'The game is running; the plugin is changed after you close it.',
   CLIENT_RUNNING: 'TruckersMP is running; the plugin is changed after you close it.',
   TARGET_LOCKED: 'Another program is using the plugin file; it is tried again later.',
@@ -971,8 +971,8 @@ export const PLUGIN_REASON_TEXT: Readonly<Record<PluginBlockReason, string>> = O
   RUNNING_CHECK_FAILED: 'Running games could not be checked; it is tried again shortly.',
   REGISTRY_UNAVAILABLE: 'The plugin setup record could not be saved or is from a newer version.',
   BUNDLE_UNAVAILABLE: 'The bundled plugin is missing or damaged; reinstall Yukon Union Telemetry.'
-});
-export const PLUGIN_FOLDER_REFUSAL_TEXT: Readonly<Record<PluginFolderRefusal, string>> = Object.freeze({
+}));
+export const PLUGIN_FOLDER_REFUSAL_TEXT: Readonly<Record<PluginFolderRefusal, string>> = channelCopyTable(Object.freeze({
   FOLDER_UNSUPPORTED_PATH: 'This folder cannot be used: choose a local game folder outside the Yukon Union Telemetry folders: %LOCALAPPDATA%\\ETS2Telemetry and the program folder.',
   FOLDER_NOT_GAME: 'This folder is not a game folder of this game.',
   FOLDER_WRONG_GAME: 'This folder holds the other game.',
@@ -981,9 +981,9 @@ export const PLUGIN_FOLDER_REFUSAL_TEXT: Readonly<Record<PluginFolderRefusal, st
   SETUP_DISABLED: 'Plugin setup is off in this launch.',
   REGISTRY_UNAVAILABLE: 'The plugin setup record could not be saved.',
   BUSY: 'A folder dialog is already open.'
-});
+}));
 /** The Game plugin card's connection diagnosis (ET-017 P17), one fixed text per code. */
-export const CONNECTION_DIAGNOSIS_TEXT: Readonly<Record<ConnectionDiagnosisCode, string>> = Object.freeze({
+export const CONNECTION_DIAGNOSIS_TEXT: Readonly<Record<ConnectionDiagnosisCode, string>> = channelCopyTable(Object.freeze({
   SERVICE_UNAVAILABLE: 'The telemetry service is not running; see Application status.',
   CONNECTED: 'Receiving telemetry from the selected source.',
   NO_GAME_SELECTED: 'No game is selected as the source. Choose Euro Truck Simulator 2 or American Truck Simulator in Settings > Data.',
@@ -998,8 +998,8 @@ export const CONNECTION_DIAGNOSIS_TEXT: Readonly<Record<ConnectionDiagnosisCode,
   PLUGIN_MISSING: 'The plugin is not installed in a game folder. Turn on "Manage the plugin for this game" or press Retry.',
   TRANSPORT_FAILED: 'The game\'s plugin could not be connected, or it is incompatible, and the connection is not tried again by itself. After the plugin is fixed, choose another source and then the game again in Settings > Data, or exit Yukon Union Telemetry from the tray and start it again.',
   NO_RUNNING_SOURCE: 'The plugin is in place. Start the game to connect.'
-});
-export const CONNECTION_DIAGNOSIS_NOTE_TEXT: Readonly<Record<ConnectionDiagnosisNote, string>> = Object.freeze({
+}));
+export const CONNECTION_DIAGNOSIS_NOTE_TEXT: Readonly<Record<ConnectionDiagnosisNote, string>> = channelCopyTable(Object.freeze({
   PLUGIN_OUTDATED_ON_DISK: 'A game folder still holds an older plugin. If its folder line says it waits for the game, TruckersMP or another program, it is updated once that closes; otherwise resolve the problem shown there, then press Retry.',
   OTHER_FOLDER_BLOCKED_PERMISSION: 'Another folder of this game could not be changed because Windows denied access; see its line below.',
   OTHER_FOLDER_UNRECOGNIZED: 'Another folder of this game holds a file that this application did not install; see its line below.',
@@ -1007,7 +1007,7 @@ export const CONNECTION_DIAGNOSIS_NOTE_TEXT: Readonly<Record<ConnectionDiagnosis
   OTHER_FOLDER_BUNDLE_UNAVAILABLE: 'The bundled plugin is missing or damaged, so another folder of this game was not set up. Reinstall Yukon Union Telemetry.',
   OTHER_FOLDER_NOT_CHECKED: 'The plugin could not be checked in another folder of this game; see its line below.',
   OTHER_FOLDER_MISSING: 'Another folder of this game does not hold the plugin; see its line below.'
-});
+}));
 /** "Export diagnostics…" (ET-017 P17): the button, the note beside it and each answer as fixed text, never a path. */
 export const DIAGNOSTICS_EXPORT_STRINGS = Object.freeze({
   button: 'Export diagnostics…',
@@ -1016,20 +1016,20 @@ export const DIAGNOSTICS_EXPORT_STRINGS = Object.freeze({
   cancelled: 'Export cancelled. Nothing was written.',
   failed: 'The diagnostics export request failed.'
 });
-export const DIAGNOSTICS_EXPORT_ERROR_TEXT: Readonly<Record<DiagnosticsExportRefusal | DiagnosticsExportFailure, string>> = Object.freeze({
+export const DIAGNOSTICS_EXPORT_ERROR_TEXT: Readonly<Record<DiagnosticsExportRefusal | DiagnosticsExportFailure, string>> = channelCopyTable(Object.freeze({
   EXPORT_IN_PROGRESS: 'Another diagnostics export is still running.',
   EXPORT_INTERRUPTED: 'The export stopped because Yukon Union Telemetry is exiting. Nothing was written.',
   EXPORT_TARGET_REFUSED: 'That location cannot be used. Choose a folder outside the Yukon Union Telemetry data folder, %LOCALAPPDATA%\\ETS2Telemetry.',
   BUNDLE_FAILED: 'The diagnostics could not be collected. Nothing was written.',
   DIALOG_FAILED: 'The Save dialog could not be opened. Nothing was written.',
   EXPORT_WRITE_FAILED: 'The file could not be written. A file that already had this name is unchanged.'
-});
+}));
 /**
  * The in-app uninstall (ET-018 PR-4, plan U8 and U9). The warning states what the owner's uninstall rule of October 16,
  * 2026 removes, what stays and when the game plugin goes. No text names a path; the data folder is described by its
  * location only. uninstall-text.ts builds every message from these.
  */
-export const UNINSTALL_STRINGS = Object.freeze({
+export const UNINSTALL_STRINGS = channelCopyTable(Object.freeze({
   title: 'Uninstall Yukon Union Telemetry',
   warningTitle: 'Uninstalling deletes your local data',
   warning: [
@@ -1066,14 +1066,14 @@ export const UNINSTALL_STRINGS = Object.freeze({
   spawnFailed: 'Yukon Union Telemetry removed its plugin and data, but the Windows uninstall could not be started. Uninstall Yukon Union Telemetry from Windows Settings, Apps.',
   /** The handover failed after a wipe that did not finish: the intent stays, and the Windows-initiated hook reads it. */
   spawnFailedPartial: 'Yukon Union Telemetry removed its plugin, but some of its local data remains, and the Windows uninstall could not be started. Uninstall Yukon Union Telemetry from Windows Settings, Apps: that removes the program files and finishes removing the remaining data where it can.'
-});
+}));
 export const UNINSTALL_TARGET_TEXT = Object.freeze({
   steam: '{game} (Steam folder {number})',
   manual: '{game} (chosen folder)',
   other: '{game} (a folder that is no longer listed)'
 });
 /** Why the in-app uninstall stopped at a game folder or the install registry; every code has a fixed text. */
-export const UNINSTALL_REASON_TEXT: Readonly<Record<UninstallBlockCode, string>> = Object.freeze({
+export const UNINSTALL_REASON_TEXT: Readonly<Record<UninstallBlockCode, string>> = channelCopyTable(Object.freeze({
   GAME_RUNNING: 'the game is running. Close it, then try again.',
   CLIENT_RUNNING: 'TruckersMP is running. Close it, then try again.',
   TARGET_LOCKED: 'another program is using the plugin file. Close it, then try again.',
@@ -1092,7 +1092,7 @@ export const UNINSTALL_REASON_TEXT: Readonly<Record<UninstallBlockCode, string>>
   REGISTRY_INVALID: 'the plugin setup record is damaged, so the game folders are not known.',
   REGISTRY_NEWER: 'the plugin setup record was written by a newer version of Yukon Union Telemetry.',
   REGISTRY_UNREADABLE: 'the plugin setup record could not be read. Try again.'
-});
+}));
 /** Why the in-app uninstall failed before it changed anything. */
 export const UNINSTALL_FAILURE_TEXT: Readonly<Record<UninstallFailureCode, string>> = Object.freeze({
   ROOT_MISMATCH: 'the install folder does not match this Windows user\'s local application data folder.',
@@ -1105,12 +1105,12 @@ export const UNINSTALL_FAILURE_TEXT: Readonly<Record<UninstallFailureCode, strin
   ENGINE_FAILED: 'an unexpected error stopped it. Nothing more was removed; run the uninstall again.'
 });
 /** How a game folder that is no longer a game folder was handled (the engine's notes); shown in the result. */
-export const UNINSTALL_NOTE_TEXT: Readonly<Record<FolderNote, string>> = Object.freeze({
+export const UNINSTALL_NOTE_TEXT: Readonly<Record<FolderNote, string>> = channelCopyTable(Object.freeze({
   GAME_FOLDER_GONE: '{game}: the game folder no longer exists; nothing was left there.',
   GAME_EXECUTABLE_MISSING: '{game}: the game is no longer installed in a recorded folder; the plugin was removed from it by its checksum.',
   LAYOUT_NOT_PLAIN: '{game}: a recorded folder is no longer a plain game folder, so it was not checked. Look in its bin\\win_x64\\plugins folder for ets2telemetry-plugin.dll.',
   PLUGINS_FOLDER_ABSENT: '{game}: a recorded folder has no plugins folder; nothing was left there.'
-});
+}));
 /** A data entry that could not be deleted, by its allowlisted name. */
 export const UNINSTALL_DATA_ENTRY_TEXT: Readonly<Record<DataEntry, string>> = Object.freeze({
   data: 'trip history', backups: 'history backups', settings: 'settings', logs: 'logs', synthetic: 'synthetic recordings', plugins: 'plugin setup record',

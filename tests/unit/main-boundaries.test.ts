@@ -109,7 +109,7 @@ function installFixture() {
   const started = Date.now(); vi.spyOn(performance, 'now').mockImplementation(() => Date.now() - started);
   originals = new Map(processEvents.map(name => [name, processEmitter.listeners(name)]));
   lockGranted = true; trayAvailable = false; trays = []; extraContents = [];
-  app = Object.assign(new EventEmitter(), {exit: vi.fn(), quit: vi.fn(), getPath: () => 'C:\\isolated', setPath: vi.fn(), whenReady: () => Promise.resolve(), isPackaged: false,
+  app = Object.assign(new EventEmitter(), {exit: vi.fn(), quit: vi.fn(), name: 'ETS2Telemetry Desktop', setName: vi.fn(), getPath: () => 'C:\\isolated', setPath: vi.fn(), whenReady: () => Promise.resolve(), isPackaged: false,
     requestSingleInstanceLock: vi.fn(() => lockGranted), disableHardwareAcceleration: vi.fn(), commandLine: {appendSwitch: vi.fn()}});
   child = Object.assign(new EventEmitter(), {postMessage: vi.fn(), kill: vi.fn(() => true)});
   children = [child]; let forks = 0;

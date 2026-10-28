@@ -1,7 +1,7 @@
 import {existsSync} from 'node:fs';
 import path from 'node:path';
 import {Worker} from 'node:worker_threads';
-import {version} from '../../../package.json';
+import {APP_VERSION as version} from './app-version';
 import type {JournalDatabase} from '../../../packages/contracts/src';
 import type {StorageError, StorageErrorCode} from '../../../packages/storage/src/api';
 import {StorageClient, workerHandle, type ClientTimers, type StorageWorkerHandle} from '../../../packages/storage/src/client';

@@ -9,22 +9,26 @@ import {runUninstall} from '../../apps/desktop/src/uninstall/engine';
 import {serializePendingRecord} from '../../apps/desktop/src/uninstall/pending-record';
 import type {UninstallRoots} from '../../apps/desktop/src/uninstall/roots';
 import {guardedTempRoot, type GuardedRoot} from '../shared/guarded-fs';
+import {CHANNEL, CHANNEL_IDENTITIES} from '../../apps/desktop/src/channel';
 
 // REG-017 (ET-018 PR-5, U7): the shared deferred-cleanup case table, run through the TypeScript engine. The same table
 // runs through the PowerShell executor in tests/windows/Test-DeferredCleanup.ps1, so the two implementations of the
 // uninstall contract agree on what is kept and what is removed. Each scene is a later run after a deferred uninstall,
-// built under the guarded temporary root; nothing touches a real folder or the registry.
+// built under the guarded temporary root; nothing touches a real folder or the registry. The engine runs in this build's
+// channel (production under Vitest); the PowerShell harness runs the table in both channels (ET-055 UP12).
 
 interface CaseFolder {game: 'ets2' | 'ats'; layout: 'game' | 'gone' | 'no-executable' | 'plugins-link'; dll: 'owned' | 'known' | 'foreign' | 'none';
-  readOnly?: boolean; temp?: boolean; created?: boolean; unrelated?: boolean}
+  readOnly?: boolean; temp?: boolean; created?: boolean; unrelated?: boolean; otherChannel?: boolean}
 interface CaseExpect {outcome: 'complete' | 'deferred'; code: string | null; dll: 'absent' | 'present'; dataRoot: string[] | null; temp?: 'absent' | 'present';
-  pluginsDirectory?: 'absent' | 'present'; unrelated?: 'absent' | 'present'; sentinel?: 'present'}
+  pluginsDirectory?: 'absent' | 'present'; unrelated?: 'absent' | 'present'; sentinel?: 'present'; otherChannelDll?: 'absent' | 'present'}
 interface DeferredCase {id: string; folder: CaseFolder; running: string[]; data?: {unknownEntry?: boolean; readOnlyEntry?: boolean; logsJunction?: boolean; lateEntry?: string}; expect: CaseExpect}
 const TABLE = JSON.parse(readFileSync(path.join(import.meta.dirname, '..', 'fixtures', 'uninstall', 'deferred-cases.json'), 'utf8')) as {
   format: string; version: number; contents: Record<'owned' | 'known' | 'foreign', string>; cases: DeferredCase[]};
 const sha = (text: string) => createHash('sha256').update(text, 'utf8').digest('hex');
 const EXECUTABLE = {ets2: 'eurotrucks2.exe', ats: 'amtrucks.exe'} as const;
-const TEMP_NAME = 'ets2telemetry-plugin.dll.00112233445566aa.tmp';
+const TEMP_NAME = `${CHANNEL.pluginFileName}.00112233445566aa.tmp`;
+/** The other channel's plugin file, which this channel's cleanup never removes. */
+const OTHER_PLUGIN = CHANNEL_IDENTITIES[CHANNEL.channel === 'production' ? 'staging' : 'production'].pluginFileName;
 const UTC = '2026-10-18T09:00:00.000Z';
 
 let guard: GuardedRoot;
@@ -41,7 +45,7 @@ const state = (target: string) => fsp.lstat(target).then(() => 'present' as cons
 /** Builds the case's scene: `R` with the test-root marker, the data root under `R\LocalAppData` and the game folder under `R\Games`. */
 async function scene(entry: DeferredCase) {
   const testRoot = path.win32.join(guard.root, 'R');
-  const base = path.win32.join(testRoot, 'LocalAppData'), dataRoot = path.win32.join(base, 'ETS2Telemetry');
+  const base = path.win32.join(testRoot, 'LocalAppData'), dataRoot = path.win32.join(base, CHANNEL.dataRootName);
   await fsp.mkdir(dataRoot, {recursive: true});
   await fsp.writeFile(path.win32.join(testRoot, 'ets2telemetry-plugin-test-root.marker'), 'deferred-cleanup cases\n');
   const {folder} = entry;
@@ -49,8 +53,8 @@ async function scene(entry: DeferredCase) {
   const root = path.win32.join(games, folder.game === 'ets2' ? 'Euro Truck Simulator 2' : 'American Truck Simulator');
   const win64 = path.win32.join(root, 'bin', 'win_x64'), plugins = path.win32.join(win64, 'plugins');
   const dllDirectory = folder.layout === 'plugins-link' ? path.win32.join(games, 'elsewhere') : plugins;
-  const dll = path.win32.join(dllDirectory, 'ets2telemetry-plugin.dll'), temp = path.win32.join(plugins, TEMP_NAME);
-  const unrelated = path.win32.join(plugins, 'other-plugin.dll');
+  const dll = path.win32.join(dllDirectory, CHANNEL.pluginFileName), temp = path.win32.join(plugins, TEMP_NAME);
+  const unrelated = path.win32.join(plugins, 'other-plugin.dll'), otherDll = path.win32.join(plugins, OTHER_PLUGIN);
   await fsp.mkdir(games, {recursive: true});
   if (folder.layout !== 'gone') {
     await fsp.mkdir(win64, {recursive: true});
@@ -63,6 +67,8 @@ async function scene(entry: DeferredCase) {
     if (folder.readOnly) {await fsp.chmod(dll, 0o444); readOnly.push(dll);}
     if (folder.temp) await fsp.writeFile(temp, 'an interrupted install\n');
     if (folder.unrelated) await fsp.writeFile(unrelated, 'another tool\n');
+    // The other channel's plugin with a hash this channel installed: still not this channel's file.
+    if (folder.otherChannel) await fsp.writeFile(otherDll, TABLE.contents.owned);
   }
   // The registry and the intent a deferred uninstall left.
   await fsp.mkdir(path.win32.join(dataRoot, 'plugins'), {recursive: true});
@@ -94,9 +100,9 @@ async function scene(entry: DeferredCase) {
     await fsp.writeFile(sentinel, 'outside the data root\n');
     await guard.fs.symlink(path.dirname(sentinel), path.win32.join(dataRoot, 'logs', 'linked'), 'junction');
   }
-  const roots: UninstallRoots = {ok: true, mode: 'test-root', appDirectory: path.win32.join(base, 'ETS2TelemetryDesktop', 'app-0.1.0'),
-    installRoot: path.win32.join(base, 'ETS2TelemetryDesktop'), base, dataRoot, testRoot, testFile: {profileDir: path.win32.join(testRoot, 'profile'), runOnceKey: null, shortcuts: false}};
-  return {roots, dataRoot, dll, temp, plugins, unrelated, sentinel};
+  const roots: UninstallRoots = {ok: true, mode: 'test-root', appDirectory: path.win32.join(base, CHANNEL.squirrelId, 'app-0.1.0'),
+    installRoot: path.win32.join(base, CHANNEL.squirrelId), base, dataRoot, testRoot, testFile: {profileDir: path.win32.join(testRoot, 'profile'), runOnceKey: null, shortcuts: false}};
+  return {roots, dataRoot, dll, temp, plugins, unrelated, sentinel, otherDll};
 }
 
 describe('the shared deferred-cleanup case table', () => {
@@ -129,7 +135,9 @@ describe('the shared deferred-cleanup case table', () => {
     if (entry.expect.pluginsDirectory) observed.pluginsDirectory = await state(built.plugins);
     if (entry.expect.unrelated) observed.unrelated = await state(built.unrelated);
     if (entry.expect.sentinel) observed.sentinel = await state(built.sentinel);
+    if (entry.expect.otherChannelDll) observed.otherChannelDll = await state(built.otherDll);
     expect(observed).toEqual(entry.expect);
+    if (entry.folder.otherChannel) expect(await fsp.readFile(built.otherDll, 'utf8')).toBe(TABLE.contents.owned);
     // A file that stays keeps its bytes.
     if (entry.expect.dll === 'present' && entry.folder.dll !== 'none') expect(await fsp.readFile(built.dll, 'utf8')).toBe(TABLE.contents[entry.folder.dll]);
   });

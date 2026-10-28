@@ -9,12 +9,14 @@ param(
 # so the executor never reads the real known folders and never writes the real RunOnce key. The run:
 #
 # - plays every case of tests/fixtures/uninstall/deferred-cases.json, which tests/unit/uninstall-deferred-cases.test.ts
-#   plays through the TypeScript engine, and asserts the same outcome, code and kept or removed files;
+#   plays through the TypeScript engine, and asserts the same outcome, code and kept or removed files, once in each build
+#   channel (ET-055 UP12): every scene uses its channel's names, with the executor stamped for that channel as the build
+#   stamps it (scripts/uninstall-executor.mjs), and the other channel's plugin file is never touched;
 # - runs each case as Windows runs a RunOnce entry: the registered value is read, checked, deleted, then started; a
 #   deferred case must register itself again with the same command and count attempt 2;
 # - adds the executor's own cases: a complete run removes a value that is still there, the 10th attempt stops with
 #   README.txt and no registration, and no intent, an installed application, an invalid intent or a folder outside a
-#   test root change nothing.
+#   test root change nothing, and neither does an executor of the other channel or the other channel's installation.
 #
 # It removes its scenes and its test key at the end. No installer, game or application process is started.
 $ErrorActionPreference = 'Stop'
@@ -25,10 +27,17 @@ $shell = Join-Path $env:SystemRoot 'System32\WindowsPowerShell\v1.0\powershell.e
 $runId = [guid]::NewGuid().ToString('N')
 $testKeyRoot = 'Software\ETS2Telemetry-Test-' + $runId
 $runOnceKey = 'HKCU\' + $testKeyRoot + '\RunOnce'
-$valueName = 'ETS2TelemetryUninstall'
+# Each channel's names (apps/desktop/src/channel.ts and the executor's own table); New-Scene selects the RunOnce value of
+# the executor it copies.
+$names = @{
+    production = @{dataRoot = 'ETS2Telemetry'; valueName = 'ETS2TelemetryUninstall'; pluginFile = 'ets2telemetry-plugin.dll'; installRoot = 'ETS2TelemetryDesktop'
+        executable = 'ETS2TelemetryDesktop.exe'; receiptPrefix = 'ETS2Telemetry-deferred-cleanup-'; other = 'staging'}
+    staging = @{dataRoot = 'ETS2TelemetryStaging'; valueName = 'ETS2TelemetryStagingUninstall'; pluginFile = 'ets2telemetry-plugin-staging.dll'; installRoot = 'ETS2TelemetryDesktopStaging'
+        executable = 'ETS2TelemetryDesktopStaging.exe'; receiptPrefix = 'ETS2TelemetryStaging-deferred-cleanup-'; other = 'production'}
+}
+$valueName = $names.production.valueName
 $utf8 = New-Object Text.UTF8Encoding($false)
 $utc = '2026-10-18T09:00:00.000Z'
-$tempName = 'ets2telemetry-plugin.dll.00112233445566aa.tmp'
 if (![IO.Path]::IsPathRooted($WorkDirectory) -or (Test-Path -LiteralPath $WorkDirectory)) { throw 'A fresh absolute work directory is required.' }
 $known = [Environment]::GetFolderPath('LocalApplicationData')
 if ($WorkDirectory.StartsWith((Join-Path $known 'ETS2Telemetry'), [StringComparison]::OrdinalIgnoreCase)) { throw 'The work directory may not lie in the real data root.' }
@@ -56,11 +65,26 @@ function Remove-Value {
     if ($null -ne $key) { try { $key.DeleteValue($valueName, $false) } finally { $key.Dispose() } }
 }
 function ConvertTo-Json1($Value) { return ConvertTo-Json -InputObject $Value -Depth 6 -Compress }
+function Get-ExecutorCopy([string]$Channel) {
+    # The executor as the build packages it for $Channel: the tracked script with its single $Channel line stamped.
+    $file = Join-Path $WorkDirectory ('executor-' + $Channel + '.ps1')
+    if (!(Test-Path -LiteralPath $file)) {
+        $text = [IO.File]::ReadAllText($executor)
+        $pattern = '(?m)^\$Channel = ''production''(?=\r?$)'
+        if ([regex]::Matches($text, $pattern).Count -ne 1) { throw 'The executor has no single $Channel line.' }
+        [IO.File]::WriteAllText($file, [regex]::Replace($text, $pattern, ('$$Channel = ''' + $Channel + '''')), $utf8)
+    }
+    return $file
+}
 
-function New-Scene([string]$Name, $Case, [int]$Attempts, [string]$Parent = $WorkDirectory) {
+function New-Scene([string]$Name, $Case, [int]$Attempts, [string]$Parent = $WorkDirectory, [string]$Channel = 'production', [string]$ExecutorChannel = $Channel) {
     # The same scene as uninstall-deferred-cases.test.ts: R with the marker and the test file, the data root, the game folder.
+    # $Channel names the data root and the plugin; $ExecutorChannel the executor copied into it and its RunOnce value.
+    $n = $names[$Channel]
+    $script:valueName = $names[$ExecutorChannel].valueName
+    $tempName = $n.pluginFile + '.00112233445566aa.tmp'
     $root = Join-Path $Parent $Name
-    $base = Join-Path $root 'LocalAppData'; $dataRoot = Join-Path $base 'ETS2Telemetry'
+    $base = Join-Path $root 'LocalAppData'; $dataRoot = Join-Path $base $n.dataRoot
     New-Item -ItemType Directory -Path $dataRoot -Force | Out-Null
     Write-Text (Join-Path $root 'ets2telemetry-plugin-test-root.marker') "deferred-cleanup cases`n"
     Write-Text (Join-Path $root 'ets2telemetry-install-test.json') (ConvertTo-Json1 ([ordered]@{format = 'ets2telemetry.install-test'; version = 1
@@ -71,7 +95,8 @@ function New-Scene([string]$Name, $Case, [int]$Attempts, [string]$Parent = $Work
     $gameRoot = Join-Path $games $(if ($folder.game -eq 'ets2') { 'Euro Truck Simulator 2' } else { 'American Truck Simulator' })
     $win64 = Join-Path $gameRoot 'bin\win_x64'; $plugins = Join-Path $win64 'plugins'
     $dllDirectory = if ($folder.layout -eq 'plugins-link') { Join-Path $games 'elsewhere' } else { $plugins }
-    $dll = Join-Path $dllDirectory 'ets2telemetry-plugin.dll'; $temp = Join-Path $plugins $tempName; $unrelated = Join-Path $plugins 'other-plugin.dll'
+    $dll = Join-Path $dllDirectory $n.pluginFile; $temp = Join-Path $plugins $tempName; $unrelated = Join-Path $plugins 'other-plugin.dll'
+    $otherDll = Join-Path $plugins $names[$n.other].pluginFile
     $flags = @{}; foreach ($property in $folder.PSObject.Properties) { $flags[$property.Name] = $property.Value }
     New-Item -ItemType Directory -Path $games -Force | Out-Null
     if ($folder.layout -ne 'gone') {
@@ -85,6 +110,8 @@ function New-Scene([string]$Name, $Case, [int]$Attempts, [string]$Parent = $Work
         if ($flags['readOnly']) { (Get-Item -LiteralPath $dll).IsReadOnly = $true }
         if ($flags['temp']) { Write-Text $temp "an interrupted install`n" }
         if ($flags['unrelated']) { Write-Text $unrelated "another tool`n" }
+        # The other channel's plugin, with a hash this channel installed: still never this channel's file to remove.
+        if ($flags['otherChannel']) { Write-Text $otherDll $table.contents.owned }
     }
     $created = [bool]$flags['created']
     Write-Text (Join-Path $dataRoot 'plugins\setup.json') ((ConvertTo-Json1 ([ordered]@{format = 'ets2telemetry.plugin-setup'; version = 1
@@ -104,9 +131,9 @@ function New-Scene([string]$Name, $Case, [int]$Attempts, [string]$Parent = $Work
     if ($data['unknownEntry']) { Write-Text (Join-Path $dataRoot 'notes\mine.txt') "the user's own file`n" }
     if ($data['readOnlyEntry']) { $locked = Join-Path $dataRoot 'logs\locked.jsonl'; Write-Text $locked "read-only log`n"; (Get-Item -LiteralPath $locked).IsReadOnly = $true }
     if ($data['logsJunction']) { Write-Text $sentinel "outside the data root`n"; New-Item -ItemType Junction -Path (Join-Path $dataRoot 'logs\linked') -Target (Split-Path $sentinel) | Out-Null }
-    Copy-Item -LiteralPath $executor -Destination (Join-Path $dataRoot 'uninstall\Complete-ETS2TelemetryUninstall.ps1')
+    Copy-Item -LiteralPath (Get-ExecutorCopy $ExecutorChannel) -Destination (Join-Path $dataRoot 'uninstall\Complete-ETS2TelemetryUninstall.ps1')
     return @{root = $root; base = $base; dataRoot = $dataRoot; dll = $dll; temp = $temp; plugins = $plugins; unrelated = $unrelated; sentinel = $sentinel
-        command = (Get-ExpectedCommand $dataRoot)}
+        otherDll = $otherDll; receiptPrefix = $names[$ExecutorChannel].receiptPrefix; channel = $Channel; command = (Get-ExpectedCommand $dataRoot)}
 }
 function Get-ExpectedCommand([string]$DataRoot) {
     # executorCommand in executor.ts, written out by hand: the absolute, quoted powershell.exe while the command fits 260
@@ -131,7 +158,7 @@ function Invoke-Executor($Scene, [string]$Running, [bool]$AsRunOnce, [string]$Ex
     $start.EnvironmentVariables['TEMP'] = Join-Path $Scene.root 'temp'; $start.EnvironmentVariables['TMP'] = Join-Path $Scene.root 'temp'
     $process = [Diagnostics.Process]::Start($start)
     try { if (!$process.WaitForExit(60000)) { $process.Kill(); throw 'EXECUTOR_TIMEOUT' } ; $code = $process.ExitCode } finally { $process.Dispose() }
-    $receipts = @(Get-ChildItem -LiteralPath (Join-Path $Scene.root 'temp') -Filter 'ETS2Telemetry-deferred-cleanup-*.json')
+    $receipts = @(Get-ChildItem -LiteralPath (Join-Path $Scene.root 'temp') -Filter ($Scene.receiptPrefix + '*.json'))
     if ($receipts.Count -ne 1) { throw ('Expected one receipt, found ' + $receipts.Count) }
     $text = [IO.File]::ReadAllText($receipts[0].FullName)
     if ($text -match '[A-Za-z]:\\\\' -or $text -match '\\\\\\\\') { throw 'The receipt names a path.' }
@@ -159,15 +186,18 @@ $shortRoot = $null
 New-Item -ItemType Directory -Path $WorkDirectory | Out-Null
 # The real Roaming userData of this user is only looked at, never changed: a test root must not touch it (O7, review of
 # PR #123). Its existence and modification time are compared at the end.
-$realRoaming = Join-Path ([Environment]::GetFolderPath('ApplicationData')) 'ETS2Telemetry Desktop'
-function Get-RealRoamingState { if (Test-Path -LiteralPath $realRoaming) { return 'present ' + (Get-Item -LiteralPath $realRoaming -Force).LastWriteTimeUtc.Ticks } else { return 'absent' } }
+$realRoaming = @('ETS2Telemetry Desktop', 'ETS2Telemetry Desktop Staging' | ForEach-Object { Join-Path ([Environment]::GetFolderPath('ApplicationData')) $_ })
+function Get-RealRoamingState {
+    return (@($realRoaming | ForEach-Object { if (Test-Path -LiteralPath $_) { 'present ' + (Get-Item -LiteralPath $_ -Force).LastWriteTimeUtc.Ticks } else { 'absent' } }) -join '; ')
+}
 $realRoamingBefore = Get-RealRoamingState
 try {
-    # The shared table, each case started as RunOnce starts it.
+    # The shared table, each case started as RunOnce starts it, in each channel.
+    foreach ($channel in @('production', 'staging')) {
     $index = 0
     foreach ($case in $table.cases) {
         $index++
-        $scene = New-Scene ('c' + $index) $case 1
+        $scene = New-Scene ($channel.Substring(0, 1) + $index) $case 1 $WorkDirectory $channel
         Set-Value $scene.command
         $running = if (@($case.running).Count) { @($case.running) -join ',' } else { 'none' }
         # `lateEntry`: the script creates that allowlisted entry after the registry step (test root only), as the TypeScript
@@ -177,13 +207,14 @@ try {
         $expect = $case.expect
         $observed = [ordered]@{outcome = $run.receipt.outcome; code = $run.receipt.code; dll = (Get-State $scene.dll); dataRoot = (Get-DataRootEntries $scene.dataRoot)}
         $wanted = [ordered]@{outcome = $expect.outcome; code = $expect.code; dll = $expect.dll; dataRoot = $expect.dataRoot}
-        foreach ($optional in @('temp', 'pluginsDirectory', 'unrelated', 'sentinel')) {
+        foreach ($optional in @('temp', 'pluginsDirectory', 'unrelated', 'sentinel', 'otherChannelDll')) {
             if ($expect.PSObject.Properties.Name -contains $optional) {
                 $wanted[$optional] = $expect.$optional
-                $observed[$optional] = Get-State $(switch ($optional) { 'temp' { $scene.temp } 'pluginsDirectory' { $scene.plugins } 'unrelated' { $scene.unrelated } 'sentinel' { $scene.sentinel } })
+                $observed[$optional] = Get-State $(switch ($optional) { 'temp' { $scene.temp } 'pluginsDirectory' { $scene.plugins } 'unrelated' { $scene.unrelated } 'sentinel' { $scene.sentinel } 'otherChannelDll' { $scene.otherDll } })
             }
         }
-        Assert-Equal $wanted $observed ('Case ' + $case.id)
+        Assert-Equal $wanted $observed ('Case ' + $channel + ' ' + $case.id)
+        if ($case.folder.PSObject.Properties.Name -contains 'otherChannel' -and [IO.File]::ReadAllText($scene.otherDll) -cne $table.contents.owned) { throw ('Case ' + $case.id + ': the other channel''s plugin changed') }
         if ($expect.dll -eq 'present' -and $case.folder.dll -ne 'none' -and [IO.File]::ReadAllText($scene.dll) -cne $table.contents.($case.folder.dll)) { throw ('Case ' + $case.id + ': the kept file changed') }
         if ($expect.outcome -eq 'deferred') {
             # Blocked: the executor registered itself again with the same command and counted attempt 2.
@@ -198,8 +229,10 @@ try {
             Assert-Equal @('removed', 0, 'not-applicable') @($run.receipt.runOnce, $run.exitCode, $run.receipt.roaming) ('Case ' + $case.id + ' receipt')
         }
         Remove-Value
-        $rows.Add([ordered]@{case = $case.id; outcome = $run.receipt.outcome; code = $run.receipt.code; passed = $true})
+        $rows.Add([ordered]@{case = $case.id; channel = $channel; outcome = $run.receipt.outcome; code = $run.receipt.code; passed = $true})
     }
+    }
+    $script:valueName = $names.production.valueName
 
     $owned = $table.cases | Where-Object { $_.id -eq 'owned-removed' } | Select-Object -First 1
     $blockedCase = $table.cases | Where-Object { $_.id -eq 'game-running' } | Select-Object -First 1
@@ -238,15 +271,39 @@ try {
     Assert-Equal $before (Get-DataRootEntries $scene.dataRoot) 'no-intent data root'
     $rows.Add([ordered]@{case = 'no-intent'; passed = $true})
 
-    # The application was installed again: nothing is removed.
-    $scene = New-Scene 'installed' $owned 1
-    Write-Text (Join-Path $scene.base 'ETS2TelemetryDesktop\app-0.1.0\ETS2TelemetryDesktop.exe') 'placeholder executable, never run'
-    $before = Get-DataRootEntries $scene.dataRoot
-    Set-Value $scene.command
-    $run = Invoke-Executor $scene 'none' $true
-    Assert-Equal @('not-needed', 'APP_INSTALLED', 'present') @($run.receipt.outcome, $run.receipt.code, (Get-State $scene.dll)) 'application-installed'
-    Assert-Equal $before (Get-DataRootEntries $scene.dataRoot) 'application-installed data root'
-    $rows.Add([ordered]@{case = 'application-installed'; passed = $true})
+    # The application was installed again: nothing is removed. In each channel only its own installation counts: the other
+    # channel's install root beside it does not stop the cleanup (ET-055 UP14).
+    foreach ($channel in @('production', 'staging')) {
+        $n = $names[$channel]; $other = $names[$n.other]
+        $scene = New-Scene ('installed-' + $channel) $owned 1 $WorkDirectory $channel
+        Write-Text (Join-Path $scene.base ($n.installRoot + '\app-0.1.0\' + $n.executable)) 'placeholder executable, never run'
+        $before = Get-DataRootEntries $scene.dataRoot
+        Set-Value $scene.command
+        $run = Invoke-Executor $scene 'none' $true
+        Assert-Equal @('not-needed', 'APP_INSTALLED', 'present') @($run.receipt.outcome, $run.receipt.code, (Get-State $scene.dll)) ('application-installed ' + $channel)
+        Assert-Equal $before (Get-DataRootEntries $scene.dataRoot) ('application-installed data root ' + $channel)
+        $rows.Add([ordered]@{case = 'application-installed'; channel = $channel; passed = $true})
+
+        $scene = New-Scene ('other-installed-' + $channel) $owned 1 $WorkDirectory $channel
+        $otherExecutable = Join-Path $scene.base ($other.installRoot + '\app-0.1.0\' + $other.executable)
+        Write-Text $otherExecutable 'placeholder executable, never run'
+        Set-Value $scene.command
+        $run = Invoke-Executor $scene 'none' $true
+        Assert-Equal @('complete', $null, 'absent', 'present') @($run.receipt.outcome, $run.receipt.code, (Get-State $scene.dll), (Get-State $otherExecutable)) ('other-channel-installed ' + $channel)
+        $rows.Add([ordered]@{case = 'other-channel-installed'; channel = $channel; passed = $true})
+
+        # An executor of the other channel in this channel's data root refuses (its own data root name differs): nothing
+        # is removed and the registration it was started from stays for its owner to replace.
+        $scene = New-Scene ('foreign-executor-' + $channel) $owned 1 $WorkDirectory $channel $n.other
+        $before = Get-DataRootEntries $scene.dataRoot
+        Set-Value $scene.command
+        $run = Invoke-Executor $scene 'none' $false
+        Assert-Equal @('refused', 'LAYOUT_INVALID', 4, $scene.command, 'present') @($run.receipt.outcome, $run.receipt.code, $run.exitCode, (Get-Value), (Get-State $scene.dll)) ('other-channel-executor ' + $channel)
+        Assert-Equal $before (Get-DataRootEntries $scene.dataRoot) ('other-channel-executor data root ' + $channel)
+        Remove-Value
+        $rows.Add([ordered]@{case = 'other-channel-executor'; channel = $channel; passed = $true})
+    }
+    $script:valueName = $names.production.valueName
 
     # An invalid intent is never trusted: nothing is removed and the script does not register again.
     $scene = New-Scene 'invalid' $owned 1

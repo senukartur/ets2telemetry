@@ -8,6 +8,7 @@ import {tmpdir} from 'node:os';
 import path from 'node:path';
 import {MAX_MANIFEST_BYTES, MAX_PLUGIN_BYTES, pluginSourceHashes, readReleasedPlugins, verifyPluginBundle,
   verifyPluginBundleAgainstTree, writePluginBundle} from '../../scripts/plugin-bundle.mjs';
+import {BUILD_IDENTITIES} from '../../scripts/build-channel.mjs';
 
 const temporary: string[] = [];
 afterEach(() => {for (const directory of temporary.splice(0)) rmSync(directory, {recursive: true, force: true});});
@@ -161,6 +162,26 @@ it('rejects known hashes that differ from the tracked released list', () => {
   expect(() => verifyPluginBundleAgainstTree(f.stage, f.root)).toThrow(/Plugin bundle known hashes differ from the released plugin list/);
   write(f.root, 'native/telemetry-plugin/released-plugins.json', JSON.stringify({format: 'ets2telemetry.released-plugins', version: 1, known: []}));
   expect(() => verifyPluginBundleAgainstTree(f.stage, f.root)).toThrow(/known hashes differ/);
+});
+
+// ET-055 UP12 and UP15: a staging build stages its own DLL name, its own released list and the staging version, and a
+// bundle of one channel never passes as the other's.
+it('stages a staging bundle under the staging names and version, and keeps the channels apart', () => {
+  const f = fixture();
+  write(f.root, 'native/telemetry-plugin/released-plugins-staging.json', JSON.stringify({format: 'ets2telemetry.released-plugins', version: 1, known: []}));
+  write(f.root, 'native/telemetry-plugin/build/Release/ets2telemetry-plugin-staging.dll', pe({fill: 7}));
+  const stage = path.join(f.root, 'staging-stage');
+  const manifest = writePluginBundle(stage, {dll: pe({fill: 7}), appVersion: '0.2.0-stg.000042', pluginSources: pluginSourceHashes(f.root),
+    known: readReleasedPlugins(path.join(f.root, 'native/telemetry-plugin/released-plugins-staging.json')), channel: 'staging'});
+  expect(manifest.file).toBe('ets2telemetry-plugin-staging.dll');
+  expect(readFileSync(path.join(stage, 'ets2telemetry-plugin-staging.dll')).equals(pe({fill: 7}))).toBe(true);
+  expect(verifyPluginBundle(stage, 'staging').appVersion).toBe('0.2.0-stg.000042');
+  expect(() => verifyPluginBundle(stage, 'production')).toThrow(/exactly the DLL and its manifest/);
+  const build = {channel: 'staging' as const, identity: BUILD_IDENTITIES.staging, baseVersion: '0.2.0', version: '0.2.0-stg.000042'};
+  expect(verifyPluginBundleAgainstTree(stage, f.root, build).sha256).toBe(sha256(pe({fill: 7})));
+  expect(() => verifyPluginBundleAgainstTree(stage, f.root, {...build, version: '0.2.0-stg.000043'})).toThrow(/appVersion differs/);
+  f.stageBundle();
+  expect(() => verifyPluginBundle(f.stage, 'staging')).toThrow(/exactly the DLL and its manifest/);
 });
 
 it('rejects an appVersion that differs from package.json', () => {

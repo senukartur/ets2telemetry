@@ -1,7 +1,7 @@
 import {readdirSync, readFileSync} from 'node:fs';
 import path from 'node:path';
 import {pathToFileURL} from 'node:url';
-import {describe, expect, it} from 'vitest';
+import {afterEach, describe, expect, it, vi} from 'vitest';
 import {EN_DICTIONARY} from '../../apps/desktop/src/i18n/en';
 import {RU_DICTIONARY} from '../../apps/desktop/src/i18n/ru';
 import {tripExportHeader} from '../../apps/desktop/src/journal-export';
@@ -199,5 +199,55 @@ describe('Russian copy for the renamed texts', () => {
         expect(russian, `${name}.${key}`).not.toBe(text);
       }
     }
+  });
+});
+
+// ET-055 UP12 and item 6 of PR-3: a staging build names its own product, data folder, install folder, Roaming folder and
+// plugin file in every user-facing text, while production copy stays byte-identical (the tests above). The build defines
+// the channel in every bundle; here the define is stubbed and the copy modules are loaded again.
+describe('the user-facing copy of a staging build', () => {
+  afterEach(() => {vi.unstubAllGlobals(); vi.resetModules();});
+  const PRODUCTION_NAMES = [/Yukon Union Telemetry(?! Staging)(?![A-Za-z0-9])/, /%LOCALAPPDATA%\\ETS2Telemetry(?![A-Za-z0-9])/, /%LOCALAPPDATA%\\ETS2TelemetryDesktop(?![A-Za-z0-9])/,
+    /%APPDATA%\\ETS2Telemetry Desktop(?! Staging)/, /ets2telemetry-plugin\.dll/];
+
+  async function stagingCopy() {
+    vi.stubGlobal('__ETS2TELEMETRY_BUILD_CHANNEL__', 'staging');
+    vi.resetModules();
+    const strings = await import('../../apps/desktop/src/strings');
+    const {EN_DICTIONARY: en} = await import('../../apps/desktop/src/i18n/en');
+    const {RU_DICTIONARY: ru} = await import('../../apps/desktop/src/i18n/ru');
+    const {APP_COPY_KEYS: keys, appCopy} = await import('../../apps/desktop/src/screens/app-copy');
+    const {deferralReadme: readme} = await import('../../apps/desktop/src/uninstall/deferral');
+    const texts: {source: string; text: string}[] = [];
+    const add = (source: string, values: readonly string[]) => {for (const text of values) texts.push({source, text});};
+    add('i18n/en.ts', Object.values(en));
+    add('i18n/ru.ts', Object.values(ru));
+    for (const [name, table] of Object.entries(strings)) if (typeof table === 'object') add(`strings.ts ${name}`, strings_(table));
+    add('APP_COPY_KEYS source texts', Object.keys(keys));
+    add('deferralReadme', [readme('%LOCALAPPDATA%\\ETS2TelemetryStaging', [{game: 'ETS2', root: 'D:\\Games\\Euro Truck Simulator 2', hashes: ['a'.repeat(64)]}], [], 'GAME_RUNNING', true)]);
+    return {strings, en, ru, keys, appCopy, texts};
+  }
+  const strings_ = (value: unknown): string[] => typeof value === 'string' ? [value] : Array.isArray(value) ? value.flatMap(strings_)
+    : value !== null && typeof value === 'object' ? Object.values(value).flatMap(strings_) : [];
+
+  it('names no production identity anywhere', async () => {
+    const {texts} = await stagingCopy();
+    expect(texts.length).toBeGreaterThan(500);
+    const offending = texts.filter(({text}) => PRODUCTION_NAMES.some(pattern => pattern.test(text))).map(({source, text}) => `${source}: ${text}`);
+    expect(offending).toEqual([]);
+  });
+
+  it('names the staging product and folders, and still translates them', async () => {
+    const {strings, ru, appCopy} = await stagingCopy();
+    expect(strings.STRINGS.appName).toBe('Yukon Union Telemetry Staging');
+    expect(strings.STRINGS.trayExit).toBe('Exit Yukon Union Telemetry Staging');
+    expect(strings.UNINSTALL_STRINGS.finishedFailed).toContain('%LOCALAPPDATA%\\ETS2TelemetryStaging by hand');
+    expect(strings.UNINSTALL_NOTE_TEXT.LAYOUT_NOT_PLAIN).toContain('ets2telemetry-plugin-staging.dll');
+    const refused = strings.JOURNAL_EXPORT_ERROR_TEXT.EXPORT_TARGET_REFUSED;
+    expect(refused).toBe('That location cannot be used. Choose a folder outside the Yukon Union Telemetry Staging data folder, %LOCALAPPDATA%\\ETS2TelemetryStaging.');
+    // The English text is still the lookup key of its Russian translation, which names the staging folder too.
+    expect(appCopy(refused, 'ru')).toBe(ru['copy.that-location-cannot-be-used-choose-a-folder-outside-the-ets2telemet']);
+    expect(appCopy(refused, 'ru')).toContain('Yukon Union Telemetry Staging, %LOCALAPPDATA%\\ETS2TelemetryStaging');
+    expect(Object.isFrozen(strings.STRINGS) && Object.isFrozen(ru)).toBe(true);
   });
 });

@@ -1,8 +1,16 @@
 import type {AppLanguage} from '../../../../packages/contracts/src';
 import {t, translateUnit, localizeDeadlineString, type I18nKey} from '../i18n';
+import {channelCopy, CHANNEL} from '../channel';
+
+/**
+ * ET-055: the lookup texts are the English copy of strings.ts, which a staging build shows with its own product, folder
+ * and plugin names (channelCopyTable), so the keys go through the same channelCopy. Production keys are unchanged.
+ */
+const channelKeys = (table: Record<string, I18nKey>): Record<string, I18nKey> => CHANNEL.channel === 'production' ? table
+  : Object.fromEntries(Object.entries(table).map(([text, key]) => [channelCopy(text), key]));
 
 /** Only fixed application copy is indexed. Never apply this lookup to SDK names or persisted/raw protocol values. */
-export const APP_COPY_KEYS: Readonly<Record<string, I18nKey>> = Object.freeze({
+export const APP_COPY_KEYS: Readonly<Record<string, I18nKey>> = Object.freeze(channelKeys({
   "Speed": "copy.speed",
   "Gear": "copy.gear",
   "Engine RPM": "copy.engine-rpm",
@@ -391,7 +399,7 @@ export const APP_COPY_KEYS: Readonly<Record<string, I18nKey>> = Object.freeze({
   "{game} (Steam folder {number})": "copy.game-steam-folder-number",
   "{game} (chosen folder)": "copy.game-chosen-folder",
   "{game} (a folder that is no longer listed)": "copy.game-a-folder-that-is-no-longer-listed",
- });
+ }));
 export function appCopy(text: string, language: AppLanguage = 'en'): string {
   const key = APP_COPY_KEYS[text];
   return key ? t(key, undefined, language) : text;

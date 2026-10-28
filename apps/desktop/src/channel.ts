@@ -6,9 +6,10 @@
 // both channels can be installed and run side by side. Production values are byte-identical to the builds before ET-055,
 // and tests/unit/channel-identity.test.ts pins them.
 //
-// The active channel is fixed when the build is made; nothing at runtime switches it. Until the build-time selection
-// lands (ET-055 PR-3), every build is production. This module is pure data with no Node.js import, so main, the service,
-// preloads and renderers may all import it; callers join the names into paths themselves.
+// The active channel is fixed when the build is made; nothing at runtime switches it. scripts/build-channel.mjs resolves
+// it and scripts/build.mjs replaces __ETS2TELEMETRY_BUILD_CHANNEL__ below in every bundle (main, the service, the storage
+// worker, both preloads and the renderers). This module is pure data with no Node.js import, so all of them may import it;
+// callers join the names into paths themselves.
 
 export type ReleaseChannel = 'production' | 'staging';
 export const RELEASE_CHANNELS: readonly ReleaseChannel[] = Object.freeze(['production', 'staging'] as const);
@@ -96,11 +97,19 @@ export const CHANNEL_IDENTITIES: Readonly<Record<ReleaseChannel, ChannelIdentity
   })
 });
 
-/**
- * The channel this build belongs to. ET-055 PR-3 replaces the initializer with the build-time selection; until then
- * every build is production.
- */
-export const ACTIVE_CHANNEL = 'production' as ReleaseChannel;
+/** Replaced by scripts/build.mjs with the resolved build channel; undefined where no build defines it. */
+declare const __ETS2TELEMETRY_BUILD_CHANNEL__: string | undefined;
+
+/** The build-time channel name, checked against the table: an unknown value fails the bundle at load, never silently. */
+function buildChannel(value: string | undefined): ReleaseChannel {
+  // Unbundled code (Vitest, the storage test bundles, type checks) has no build define and is production.
+  if (value === undefined) return 'production';
+  if (!(RELEASE_CHANNELS as readonly string[]).includes(value)) throw new Error(`Unknown build channel: ${value}`);
+  return value as ReleaseChannel;
+}
+
+/** The channel this build belongs to, from the build-time define (scripts/build-channel.mjs). */
+export const ACTIVE_CHANNEL: ReleaseChannel = buildChannel(typeof __ETS2TELEMETRY_BUILD_CHANNEL__ === 'undefined' ? undefined : __ETS2TELEMETRY_BUILD_CHANNEL__);
 
 /** The identities of this build's channel. */
 export const CHANNEL: ChannelIdentity = CHANNEL_IDENTITIES[ACTIVE_CHANNEL];
@@ -116,4 +125,38 @@ const escapeRegExp = (text: string) => text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&
 /** The installer's temporary file beside the plugin: `<plugin file>.<16 hex>.tmp` (ET-017 PR-3). */
 export function pluginTempFilePattern(channel: ChannelIdentity = CHANNEL): RegExp {
   return new RegExp(`^${escapeRegExp(channel.pluginFileName)}\\.[0-9a-f]{16}\\.tmp$`);
+}
+
+/**
+ * User-facing copy in the channel `channel`: the copy is written with the production names, and a staging build shows its
+ * own display name, data and install roots, Roaming folder and plugin file instead. Production text is returned
+ * unchanged, so production copy stays byte-identical. Only whole names are replaced; game data never passes through this.
+ */
+export function channelCopy(text: string, channel: ChannelIdentity = CHANNEL): string {
+  if (channel.channel === 'production') return text;
+  const production = CHANNEL_IDENTITIES.production;
+  // [from, to] in this order: the install root before the data root it starts with. A name followed by a letter or digit
+  // is another name and stays; the staging display name is never extended twice.
+  const names: [string, string, string][] = [
+    ['%LOCALAPPDATA%\\' + production.squirrelId, '%LOCALAPPDATA%\\' + channel.squirrelId, ''],
+    ['%LOCALAPPDATA%\\' + production.dataRootName, '%LOCALAPPDATA%\\' + channel.dataRootName, ''],
+    ['%APPDATA%\\' + production.productName, '%APPDATA%\\' + channel.productName, ''],
+    [production.pluginFileName, channel.pluginFileName, ''],
+    [production.displayName, channel.displayName, '(?! Staging)']
+  ];
+  return names.reduce((rest, [from, to, guard]) => rest.replace(new RegExp(`${escapeRegExp(from)}${guard}(?![A-Za-z0-9])`, 'g'), () => to), text);
+}
+
+/**
+ * A copy table in the channel `channel`: every string value, also inside arrays and plain objects, through channelCopy;
+ * keys and other values are kept, and a frozen object or array stays frozen. Production returns `table` itself.
+ */
+export function channelCopyTable<T>(table: T, channel: ChannelIdentity = CHANNEL): T {
+  if (channel.channel === 'production') return table;
+  const keepFrozen = <V extends object>(source: object, copy: V): V => Object.isFrozen(source) ? Object.freeze(copy) : copy;
+  const translate = (value: unknown): unknown => typeof value === 'string' ? channelCopy(value, channel)
+    : Array.isArray(value) ? keepFrozen(value, value.map(translate))
+    : value !== null && typeof value === 'object' && Object.getPrototypeOf(value) === Object.prototype
+      ? keepFrozen(value, Object.fromEntries(Object.entries(value).map(([key, entry]) => [key, translate(entry)]))) : value;
+  return translate(table) as T;
 }

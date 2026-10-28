@@ -138,3 +138,12 @@ it('rejects oversized image metadata and bounded receipt bytes before hashing', 
   const opens = vi.mocked(open).mock.calls.length;
   expect(await f.resolve()).toBeUndefined(); expect(open).toHaveBeenCalledTimes(opens);
 });
+// ET-055 UP12: the broker connects only to the pipes of the channel it was built for, so its build evidence must name the
+// desktop build's channel; a broker of the other channel is refused like any other provenance mismatch.
+it('rejects a broker built for another channel than the desktop bundle', async () => {
+  const f = fixture();
+  writeFileSync(f.native, JSON.stringify({...f.receipt, channel: 'staging'})); writeFileSync(f.desktop, JSON.stringify({...f.receipt, channel: 'production'}));
+  expect(await f.resolve()).toBeUndefined(); expect(f.rejected).toHaveBeenCalledOnce();
+  writeFileSync(f.native, JSON.stringify({...f.receipt, channel: 'production'}));
+  expect((await f.resolve())?.executable).toBe(f.executable);
+});

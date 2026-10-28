@@ -6,7 +6,7 @@ import * as nodeFsPromises from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import type {EventEmitter} from 'node:events';
-import {version} from '../../../package.json';
+import {APP_VERSION as version} from './app-version';
 import type {AppHealth, AppLanguage, AppState, AutostartRegistrationStatus, AppUninstallResult, DiagnosticsExportResult, LiveTelemetry, OverlayEditState, OverlayPresentation, OverlaySettings, PluginFolderChoice, PluginGame, PluginShowFileResult, RecordingHealth, ScaffoldStatus, SettingsView,
   SourceSelection, UnitProfiles, GearDisplayModes} from '../../../packages/contracts/src';
 import {SettingsBusyError, SettingsError, SettingsStore, settingsDirectory} from './settings-store';
@@ -59,6 +59,11 @@ import {UNINSTALL_CHANNEL} from './uninstall-contract';
 import {finishedUninstallText, handoverFailedText} from './uninstall-text';
 import {UNINSTALL_STRINGS} from './strings';
 import {CHANNEL} from './channel';
+import {applyChannelAppName} from './channel-app-name';
+
+// ET-055 UP12: the channel's application name and userData, before anything reads userData or takes the single-instance
+// lock. Packaged builds already carry the name, so this changes something only in an unpackaged staging run.
+applyChannelAppName(app, CHANNEL);
 
 // ET-018 (U2): a Squirrel event runs first and alone, before the profile override, logs, settings, plugin setup and the
 // service. Unpackaged, the first argument after the executable is the application path.

@@ -3,6 +3,7 @@ import path from 'node:path';
 import {spawn, type ChildProcessWithoutNullStreams} from 'node:child_process';
 import type {SourceIdentity} from '../../../packages/contracts/src/protocol-v0';
 import {isUint64} from '../../../packages/contracts/src/protocol-v0';
+import {TRANSPORT_DIRECTORY} from './channel';
 
 export interface TelemetrySocket extends Pick<EventEmitter, 'on' | 'once'> {
   authority?: SourceIdentity;
@@ -24,7 +25,7 @@ export type BrokerProtocol = 'v0' | 'v1';
 export function v1BrokerConfiguration(configuration: BrokerConfiguration | undefined): BrokerConfiguration | undefined {
   if (!configuration) return undefined;
   const directory = configuration.discoveryDirectory, parent = path.win32.dirname(directory);
-  if (!path.win32.isAbsolute(directory) || path.win32.basename(directory) !== 'v0' || path.win32.basename(parent) !== 'transport') return undefined;
+  if (!path.win32.isAbsolute(directory) || path.win32.basename(directory) !== 'v0' || path.win32.basename(parent) !== TRANSPORT_DIRECTORY) return undefined;
   return {executable: configuration.executable, discoveryDirectory: path.win32.join(parent, 'v1')};
 }
 /** Fixed broker stage names. Any other diagnostic text is reported only as unrecognized. */
