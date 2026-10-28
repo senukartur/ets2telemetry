@@ -5,7 +5,7 @@ param([ValidateSet('development','packaged','installed')][string]$Mode,
     [switch]$ForceRendererReuse,
     [string]$OutputRoot = (Join-Path $PSScriptRoot '../../.local/ci'),
     # ET-018 PR-1 (U11): the installed mode runs `<binary root>\app-<version>\<executable>` of a Squirrel install of the
-    # build's channel (ET-055 PR-5: ETS2TelemetryDesktop or ETS2TelemetryDesktopStaging).
+    # build's channel (ET-055 PR-5: ETS2TelemetryDesktop or ETS2TelemetryStagingDesktop).
     [string]$Executable,
     # ET-019 PR-12b: the soak's length in whole minutes, 1 to 90; given only with -Scenario soak.
     [ValidateRange(0, 90)][int]$SoakMinutes = 0)

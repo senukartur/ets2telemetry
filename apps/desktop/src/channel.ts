@@ -18,7 +18,11 @@ export interface ChannelIdentity {
   readonly channel: ReleaseChannel;
   /**
    * The Squirrel id (forge.config.cjs `squirrel.name`): the install root `%LOCALAPPDATA%\<id>`, the HKCU Uninstall key,
-   * the nupkg name and the AUMID's first part. The staging id starts with the production id, so compare it exactly.
+   * the nupkg name and the AUMID's first part. Compare it exactly. Neither channel's id may be a case-insensitive string
+   * prefix of the other's: Squirrel.Windows takes every process whose path merely starts with its install root, without a
+   * separator, as its own (UpdateManager.InstallHelpers.cs, KillAllProcessesBelongingToPackage), so with the earlier
+   * staging id ETS2TelemetryDesktopStaging a production uninstall ended a running staging application (ET-055,
+   * BESIDE_INSTANCE_ENDED). tests/unit/channel-identity.test.ts guards this.
    */
   readonly squirrelId: string;
   /** The executable's file name without `.exe` (forge.config.cjs `executableName`, OriginalFilename). */
@@ -35,7 +39,12 @@ export interface ChannelIdentity {
   readonly setupFileTemplate: string;
   /** Shortcut names of earlier builds of this channel that the install and update hooks migrate (ET-045h). */
   readonly legacyShortcutNames: readonly string[];
-  /** The data root's folder name under %LOCALAPPDATA%: `<base>\<squirrelId>` derives `<base>\<dataRootName>` (ET-018 U3). */
+  /**
+   * The data root's folder name under %LOCALAPPDATA%: `<base>\<squirrelId>` derives `<base>\<dataRootName>` (ET-018 U3).
+   * Data root names are string prefixes of other roots (ETS2Telemetry of ETS2TelemetryStaging and of both install roots,
+   * ETS2TelemetryStaging of the staging install root), so every comparison of a data root is exact or separator-aware.
+   * Squirrel never sees a data root, and no install root is a string prefix of one.
+   */
   readonly dataRootName: string;
   /** The game plugin's DLL name in the plugins folder and in the bundle. */
   readonly pluginFileName: string;
@@ -80,7 +89,7 @@ export const CHANNEL_IDENTITIES: Readonly<Record<ReleaseChannel, ChannelIdentity
   }),
   staging: identity({
     channel: 'staging',
-    squirrelId: 'ETS2TelemetryDesktopStaging',
+    squirrelId: 'ETS2TelemetryStagingDesktop',
     executableName: 'ETS2TelemetryDesktopStaging',
     productName: 'ETS2Telemetry Desktop Staging',
     appBundleId: 'com.ets2telemetry.desktop.staging',

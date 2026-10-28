@@ -729,8 +729,9 @@ function Test-InstalledReceipt {
     foreach ($field in @('executableMatches','cwdOutsideInstall','minimalPath','developmentVariablesAbsent','packaged')) {
         if ($installed.$field -isnot [bool] -or $installed.$field -ne $true) { return $false }
     }
-    # ET-055 PR-5: either channel's binary root, with an optional NuGet prerelease label (app-0.1.0-stg000000 in staging).
-    if ($installed.layout -isnot [string] -or $installed.layout -cnotmatch '^ETS2TelemetryDesktop(Staging)?\\app-[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z]+)?$') { return $false }
+    # ET-055 PR-5: either channel's binary root (its Squirrel id), with an optional NuGet prerelease label
+    # (app-0.1.0-stg000000 in staging).
+    if ($installed.layout -isnot [string] -or $installed.layout -cnotmatch '^(ETS2TelemetryDesktop|ETS2TelemetryStagingDesktop)\\app-[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z]+)?$') { return $false }
     if ($Driver.runtime.packaged -isnot [bool] -or $Driver.runtime.packaged -ne $true) { return $false }
     return $true
 }

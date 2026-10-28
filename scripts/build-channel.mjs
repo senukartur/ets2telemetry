@@ -42,7 +42,7 @@ export const BUILD_IDENTITIES = Object.freeze({
     setupFileTemplate: 'YukonUnionTelemetry-Setup-{version}.exe', pluginFileName: 'ets2telemetry-plugin.dll',
     releasedPluginsFile: 'released-plugins.json', dataRootName: 'ETS2Telemetry', pipePrefix: '\\\\.\\pipe\\ETS2Telemetry-',
     runOnceValue: 'ETS2TelemetryUninstall', receiptPrefix: 'ETS2Telemetry-uninstall-', legacyShortcutNames: Object.freeze(['ETS2Telemetry Desktop'])}),
-  staging: Object.freeze({channel: 'staging', squirrelId: 'ETS2TelemetryDesktopStaging', executableName: 'ETS2TelemetryDesktopStaging',
+  staging: Object.freeze({channel: 'staging', squirrelId: 'ETS2TelemetryStagingDesktop', executableName: 'ETS2TelemetryDesktopStaging',
     productName: 'ETS2Telemetry Desktop Staging', appBundleId: 'com.ets2telemetry.desktop.staging', displayName: 'Yukon Union Telemetry Staging',
     setupFileTemplate: 'YukonUnionTelemetry-Staging-Setup-{version}.exe', pluginFileName: 'ets2telemetry-plugin-staging.dll',
     releasedPluginsFile: 'released-plugins-staging.json', dataRootName: 'ETS2TelemetryStaging', pipePrefix: '\\\\.\\pipe\\ETS2TelemetryStaging-',

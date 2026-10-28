@@ -144,7 +144,7 @@ describe('the build a checkout was made for', () => {
     expect(packageDirectoryName(BUILD_IDENTITIES.production)).toBe('out/ETS2Telemetry Desktop-win32-x64');
     expect(buildNames({channel: 'staging', identity: BUILD_IDENTITIES.staging, version: '0.3.0-stg.000042'})).toEqual({channel: 'staging', version: '0.3.0-stg.000042',
       packageDirectory: 'out/ETS2Telemetry Desktop Staging-win32-x64', executable: 'ETS2TelemetryDesktopStaging.exe', setup: 'YukonUnionTelemetry-Staging-Setup-0.3.0-stg.000042.exe',
-      plugin: 'ets2telemetry-plugin-staging.dll', squirrelId: 'ETS2TelemetryDesktopStaging', productName: 'ETS2Telemetry Desktop Staging', displayName: 'Yukon Union Telemetry Staging',
+      plugin: 'ets2telemetry-plugin-staging.dll', squirrelId: 'ETS2TelemetryStagingDesktop', productName: 'ETS2Telemetry Desktop Staging', displayName: 'Yukon Union Telemetry Staging',
       dataRootName: 'ETS2TelemetryStaging', pipePrefix: '\\\\.\\pipe\\ETS2TelemetryStaging-', runOnceValue: 'ETS2TelemetryStagingUninstall',
       receiptPrefix: 'ETS2TelemetryStaging-uninstall-', legacyShortcutNames: []});
     expect(buildNames({channel: 'production', identity: BUILD_IDENTITIES.production, version: '0.1.1'})).toMatchObject({packageDirectory: 'out/ETS2Telemetry Desktop-win32-x64',

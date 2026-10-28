@@ -1064,7 +1064,7 @@ describe('countOtherProcesses', () => {
     {name: 'ETS2TelemetryDesktopStaging.exe', pid: 10, session: 1}, {name: 'ETS2TelemetryDesktopStaging.exe', pid: 11, session: 1},
     {name: 'etS2telemetrydesktopstaging.EXE', pid: 12, session: 1}, {name: 'ETS2TelemetryDesktopStaging.exe', pid: 13, session: 2},
     {name: 'ETS2TelemetryDesktop.exe', pid: 20, session: 1}, {name: 'ETS2TelemetryDesktop.exe', pid: 21, session: 1}];
-  const staging = 'C:/Users/driver/AppData/Local/ETS2TelemetryDesktopStaging/app-0.2.0-stg000042/ETS2TelemetryDesktopStaging.exe';
+  const staging = 'C:/Users/driver/AppData/Local/ETS2TelemetryStagingDesktop/app-0.2.0-stg000042/ETS2TelemetryDesktopStaging.exe';
   const production = 'C:/Users/driver/AppData/Local/ETS2TelemetryDesktop/app-0.1.1/ETS2TelemetryDesktop.exe';
 
   it('counts only its own image in its own session, without itself and its children', () => {

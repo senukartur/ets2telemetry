@@ -51,7 +51,7 @@ $Channel = 'production'
 $Channels = @{
     production = @{dataRoot = 'ETS2Telemetry'; installRoot = 'ETS2TelemetryDesktop'; executable = 'ETS2TelemetryDesktop.exe'; runOnceValue = 'ETS2TelemetryUninstall'
         pluginFile = 'ets2telemetry-plugin.dll'; roamingFolder = 'ETS2Telemetry Desktop'; displayName = 'Yukon Union Telemetry'; receiptPrefix = 'ETS2Telemetry-deferred-cleanup-'}
-    staging = @{dataRoot = 'ETS2TelemetryStaging'; installRoot = 'ETS2TelemetryDesktopStaging'; executable = 'ETS2TelemetryDesktopStaging.exe'; runOnceValue = 'ETS2TelemetryStagingUninstall'
+    staging = @{dataRoot = 'ETS2TelemetryStaging'; installRoot = 'ETS2TelemetryStagingDesktop'; executable = 'ETS2TelemetryDesktopStaging.exe'; runOnceValue = 'ETS2TelemetryStagingUninstall'
         pluginFile = 'ets2telemetry-plugin-staging.dll'; roamingFolder = 'ETS2Telemetry Desktop Staging'; displayName = 'Yukon Union Telemetry Staging'; receiptPrefix = 'ETS2TelemetryStaging-deferred-cleanup-'}
 }
 if (!$Channels.ContainsKey($Channel)) { throw 'CHANNEL_UNKNOWN' }

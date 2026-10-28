@@ -128,7 +128,7 @@ describe('the build channels', () => {
   }
   afterEach(() => {vi.resetModules();});
   async function stagingLayout(fixture: InstallFixture) {
-    const installRoot = path.win32.join(fixture.base, 'ETS2TelemetryDesktopStaging'), app = path.win32.join(installRoot, 'app-0.2.0-stg000042');
+    const installRoot = path.win32.join(fixture.base, 'ETS2TelemetryStagingDesktop'), app = path.win32.join(installRoot, 'app-0.2.0-stg000042');
     await fsp.mkdir(app, {recursive: true});
     const executable = path.win32.join(app, 'ETS2TelemetryDesktopStaging.exe');
     await fsp.writeFile(executable, 'placeholder executable, never run');
@@ -140,7 +140,7 @@ describe('the build channels', () => {
     const fixture = await installFixture(guard);
     const staging = await stagingLayout(fixture);
     const roots = await stagingRoots();
-    expect(roots.PRODUCT_ROOT_NAME).toBe('ETS2TelemetryDesktopStaging');
+    expect(roots.PRODUCT_ROOT_NAME).toBe('ETS2TelemetryStagingDesktop');
     expect(await roots.resolveUninstallRoots({executable: staging.executable, env: {}, fs: fs()})).toMatchObject({ok: true, mode: 'test-root',
       installRoot: staging.installRoot, base: fixture.base, dataRoot: path.win32.join(fixture.base, 'ETS2TelemetryStaging')});
   });

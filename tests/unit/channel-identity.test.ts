@@ -51,11 +51,11 @@ const PRODUCTION = {
 
 const STAGING = {
   channel: 'staging',
-  squirrelId: 'ETS2TelemetryDesktopStaging',
+  squirrelId: 'ETS2TelemetryStagingDesktop',
   executableName: 'ETS2TelemetryDesktopStaging',
   productName: 'ETS2Telemetry Desktop Staging',
   appBundleId: 'com.ets2telemetry.desktop.staging',
-  appUserModelId: 'com.squirrel.ETS2TelemetryDesktopStaging.ETS2TelemetryDesktopStaging',
+  appUserModelId: 'com.squirrel.ETS2TelemetryStagingDesktop.ETS2TelemetryDesktopStaging',
   displayName: 'Yukon Union Telemetry Staging',
   setupFileTemplate: 'YukonUnionTelemetry-Staging-Setup-{version}.exe',
   legacyShortcutNames: [],
@@ -96,14 +96,43 @@ describe('the channel identity table', () => {
     for (const identity of [CHANNEL_IDENTITIES.production, CHANNEL_IDENTITIES.staging]) expect(new Set(identity.exportRefusalDataRootNames).has(identity.dataRootName)).toBe(true);
   });
 
-  it('needs exact comparison: the staging Squirrel id and data root start with the production ones', () => {
-    // A prefix check would take a staging install root or package for a production one; every comparison is exact.
-    expect(STAGING.squirrelId.startsWith(PRODUCTION.squirrelId)).toBe(true);
-    expect(STAGING.squirrelId).not.toBe(PRODUCTION.squirrelId);
+  it('needs exact or separator-aware comparison: the staging data root starts with the production one', () => {
+    // A plain prefix check would take the staging data root for the production one. Our own code compares data roots
+    // exactly or with a separator (uninstall/roots.ts isInside, the executor's Test-Inside, installer-guard.mjs), and no
+    // external tool matches data roots: Squirrel.Windows knows only the install root (the next test).
     expect(STAGING.dataRootName.startsWith(PRODUCTION.dataRootName)).toBe(true);
+    expect(STAGING.squirrelId).not.toBe(PRODUCTION.squirrelId);
     // Pipe names do not nest: neither channel's endpoints match the other's prefix.
     expect(STAGING.pipePrefix.startsWith(PRODUCTION.pipePrefix)).toBe(false);
     expect(PRODUCTION.pipePrefix.startsWith(STAGING.pipePrefix)).toBe(false);
+  });
+
+  // Squirrel.Windows takes a process or executable as the package's own when its path starts with the install root
+  // %LOCALAPPDATA%\<Squirrel id>, compared OrdinalIgnoreCase and with no separator: `path.StartsWith(rootAppDirectory,
+  // StringComparison.OrdinalIgnoreCase)` in KillAllProcessesBelongingToPackage (src/Squirrel/UpdateManager.InstallHelpers.cs),
+  // and the same test in CurrentlyInstalledVersion and IsInstalledApp (src/Squirrel/UpdateManager.cs). With the earlier
+  // staging id ETS2TelemetryDesktopStaging, production's root was a string prefix of staging's, and production's
+  // Windows-initiated uninstall ended a running staging application (ET-055, hosted run 40705814648 on a441bd0b,
+  // BESIDE_INSTANCE_ENDED). Checked with Squirrel's own semantics, in both tables that name the id.
+  it("keeps every channel's Squirrel id and install root out of the other channel's string prefix", () => {
+    const local = 'C:\\Users\\driver\\AppData\\Local';
+    const squirrelPrefix = (candidate: string, root: string) => candidate.toLowerCase().startsWith(root.toLowerCase());
+    for (const table of [CHANNEL_IDENTITIES, BUILD_IDENTITIES] as const) {
+      for (const one of RELEASE_CHANNELS) for (const other of RELEASE_CHANNELS) {
+        if (one === other) continue;
+        const own = table[one], peer = table[other];
+        const ownRoot = path.win32.join(local, own.squirrelId), peerRoot = path.win32.join(local, peer.squirrelId);
+        const peerProcess = path.win32.join(peerRoot, 'app-0.2.0', `${peer.executableName}.exe`);
+        expect(squirrelPrefix(peer.squirrelId, own.squirrelId), `${one} id ${own.squirrelId} prefixes ${peer.squirrelId}`).toBe(false);
+        expect([squirrelPrefix(peerRoot, ownRoot), squirrelPrefix(peerProcess, ownRoot)], `${one} root ${ownRoot} prefixes ${peerRoot}`).toEqual([false, false]);
+        // No process lives in a data root, but no install root may claim one either.
+        for (const dataRootName of [own.dataRootName, peer.dataRootName])
+          expect(squirrelPrefix(path.win32.join(local, dataRootName, 'uninstall'), ownRoot), `${one} root ${ownRoot} prefixes ${dataRootName}`).toBe(false);
+      }
+    }
+    // The guard catches the failure it was written for.
+    expect(squirrelPrefix(path.win32.join(local, 'ETS2TelemetryDesktopStaging', 'app-0.2.0', 'ETS2TelemetryDesktopStaging.exe'),
+      path.win32.join(local, PRODUCTION.squirrelId))).toBe(true);
   });
 
   it("keeps each channel's plugin temporary files apart", () => {
@@ -272,7 +301,7 @@ describe('user copy in each channel', () => {
   it('names the staging product, folders and plugin in staging', () => {
     // The refusal's single data folder becomes the list of both roots a staging export refuses (UP12).
     expect(channelCopy(copy, CHANNEL_IDENTITIES.staging)).toBe('Choose a folder outside the Yukon Union Telemetry Staging data folders, %LOCALAPPDATA%\\ETS2TelemetryStaging and %LOCALAPPDATA%\\ETS2Telemetry. ' +
-      'Install root %LOCALAPPDATA%\\ETS2TelemetryDesktopStaging, Roaming %APPDATA%\\ETS2Telemetry Desktop Staging, plugin ets2telemetry-plugin-staging.dll.');
+      'Install root %LOCALAPPDATA%\\ETS2TelemetryStagingDesktop, Roaming %APPDATA%\\ETS2Telemetry Desktop Staging, plugin ets2telemetry-plugin-staging.dll.');
     // Names that only start with a production name stay, and the staging display name is never extended twice.
     for (const text of ['%LOCALAPPDATA%\\ETS2TelemetryStaging', 'ets2telemetry-plugin.dll2', 'Yukon Union Telemetry Staging', 'Yukon Union Telemetryx'])
       expect(channelCopy(text, CHANNEL_IDENTITIES.staging)).toBe(text);

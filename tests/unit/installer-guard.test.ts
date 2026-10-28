@@ -153,7 +153,7 @@ describe('Windows-initiated uninstall (ET-018 PR-3)', () => {
     ['a new top-level file', {...decoy, 'Microsoft.txt': {size: 1, sha256: 'e'.repeat(64)}}, 'DECOY_ENTRY_ADDED']
   ])('refuses %s', (_name, after, code) => expect(refusal(() => checkDecoyUnchanged(decoy, after))).toBe(code));
   const update = `${RUN_ROOT}\\LocalAppData\\ETS2TelemetryDesktop\\Update.exe`;
-  const stagingUpdate = `${RUN_ROOT}\\LocalAppData\\ETS2TelemetryDesktopStaging\\Update.exe`;
+  const stagingUpdate = `${RUN_ROOT}\\LocalAppData\\ETS2TelemetryStagingDesktop\\Update.exe`;
   it.each([[`"${update}" --uninstall`, ['--uninstall']], [`"${update}" --uninstall -s`, ['--uninstall', '-s']]] as const)('runs the registered %s', (value, args) => {
     expect(parseUninstallString(value, RUN_ROOT, 'production')).toEqual({program: update, args});
   });
@@ -204,7 +204,7 @@ describe('preflight of the run root', () => {
   // ET-055 PR-5: the staging channel's roots sit beside production's in the same R\LocalAppData; the shared folders are one.
   it('derives the staging binary and data roots beside production\'s, and refuses an unknown channel', () => {
     const staging = runLayout(RUN_ROOT, 'staging'), production = runLayout(RUN_ROOT, 'production');
-    expect({binaryRoot: staging.binaryRoot, dataRoot: staging.dataRoot, channel: staging.channel}).toEqual({binaryRoot: `${RUN_ROOT}\\LocalAppData\\ETS2TelemetryDesktopStaging`,
+    expect({binaryRoot: staging.binaryRoot, dataRoot: staging.dataRoot, channel: staging.channel}).toEqual({binaryRoot: `${RUN_ROOT}\\LocalAppData\\ETS2TelemetryStagingDesktop`,
       dataRoot: `${RUN_ROOT}\\LocalAppData\\ETS2TelemetryStaging`, channel: 'staging'});
     expect({...staging, binaryRoot: '', dataRoot: '', channel: ''}).toEqual({...production, binaryRoot: '', dataRoot: '', channel: ''});
     expect(refusal(() => runLayout(RUN_ROOT, 'Staging'))).toBe('LIFECYCLE_CHANNEL_UNKNOWN');
@@ -217,7 +217,7 @@ describe('preflight of the run root', () => {
     ['the real data root in other case', `c:\\users\\FIXTURE\\appdata\\local\\ets2telemetry\\installer-${ID}`],
     // ET-055 PR-5: both channels' real roots are protected, whatever the run installs.
     ['the real staging data root', `${REAL.localAppData}\\ETS2TelemetryStaging\\installer-${ID}`],
-    ['the real staging binary root', `${REAL.localAppData}\\ETS2TelemetryDesktopStaging\\installer-${ID}`],
+    ['the real staging binary root', `${REAL.localAppData}\\ETS2TelemetryStagingDesktop\\installer-${ID}`],
     ['the real staging Roaming userData', `${REAL.roamingAppData}\\ETS2Telemetry Desktop Staging\\installer-${ID}`]
   ])('refuses a run root inside %s', (_name, runRoot) => {
     expect(refusal(() => checkRunPlan(facts({runRoot})))).toBe('PATH_IN_REAL_ROOT');
@@ -225,7 +225,7 @@ describe('preflight of the run root', () => {
   });
   it('protects the data, binary and Roaming roots of both channels', () => {
     expect(protectedRoots(REAL).real).toEqual([`${REAL.localAppData}\\ETS2Telemetry`, `${REAL.localAppData}\\ETS2TelemetryDesktop`, `${REAL.roamingAppData}\\ETS2Telemetry Desktop`,
-      `${REAL.localAppData}\\ETS2TelemetryStaging`, `${REAL.localAppData}\\ETS2TelemetryDesktopStaging`, `${REAL.roamingAppData}\\ETS2Telemetry Desktop Staging`]);
+      `${REAL.localAppData}\\ETS2TelemetryStaging`, `${REAL.localAppData}\\ETS2TelemetryStagingDesktop`, `${REAL.roamingAppData}\\ETS2Telemetry Desktop Staging`]);
   });
   it.each([
     ['the default Steam library', `${STEAM[0]}\\steamapps\\installer-${ID}`],
@@ -379,7 +379,7 @@ describe('product shortcuts, the Uninstall entry and the display names (ET-045h)
   it('accepts each channel\'s own AUMID on its shortcuts and never the other channel\'s', () => {
     const production = lifecycleIdentity('production'), staging = lifecycleIdentity('staging');
     expect([production.appUserModelId, staging.appUserModelId]).toEqual(['com.squirrel.ETS2TelemetryDesktop.ETS2TelemetryDesktop',
-      'com.squirrel.ETS2TelemetryDesktopStaging.ETS2TelemetryDesktopStaging']);
+      'com.squirrel.ETS2TelemetryStagingDesktop.ETS2TelemetryDesktopStaging']);
     expect(checkShortcutIdentities([`desktop|${NEW}|${production.appUserModelId}`, `start-menu|${NEW}|${production.appUserModelId}`], 'production')).toBe(2);
     expect(checkShortcutIdentities([`desktop|${staging.displayName}|${staging.appUserModelId}`], 'staging')).toBe(1);
     expect(refusal(() => checkShortcutIdentities([`desktop|${staging.displayName}|${production.appUserModelId}`], 'staging'))).toBe('SHORTCUT_AUMID_DIFFERS');
@@ -411,13 +411,13 @@ describe('product shortcuts, the Uninstall entry and the display names (ET-045h)
   });
   // ET-055 PR-5: side by side, each channel keeps one entry of its own, and the other channel's own entry may sit beside it.
   it('accepts the other channel\'s own entry beside this channel\'s, and nothing else in R', () => {
-    const staging = (view: string, name = 'ETS2TelemetryDesktopStaging', location: string | null = stagingRoot) => entry(view, name, location);
+    const staging = (view: string, name = 'ETS2TelemetryStagingDesktop', location: string | null = stagingRoot) => entry(view, name, location);
     const both = [entry('Registry64'), staging('Registry64')];
     expect(checkUninstallEntries(both, RUN_ROOT, 'production')).toEqual({views: 1, names: ['ETS2TelemetryDesktop'], otherChannels: ['staging']});
-    expect(checkUninstallEntries(both, RUN_ROOT, 'staging')).toEqual({views: 1, names: ['ETS2TelemetryDesktopStaging'], otherChannels: ['production']});
+    expect(checkUninstallEntries(both, RUN_ROOT, 'staging')).toEqual({views: 1, names: ['ETS2TelemetryStagingDesktop'], otherChannels: ['production']});
     expect(refusal(() => checkUninstallEntries([staging('Registry64')], RUN_ROOT, 'production'))).toBe('UNINSTALL_ENTRY_MISSING');
     expect(refusal(() => checkUninstallEntries([entry('Registry64'), staging('Registry64', 'ETS2TelemetryDesktop')], RUN_ROOT, 'production'))).toBe('UNINSTALL_ENTRY_FOREIGN_NAME');
-    expect(refusal(() => checkUninstallEntries([staging('Registry64'), staging('Registry64', 'ETS2TelemetryDesktopStaging2')], RUN_ROOT, 'staging')))
+    expect(refusal(() => checkUninstallEntries([staging('Registry64'), staging('Registry64', 'ETS2TelemetryStagingDesktop2')], RUN_ROOT, 'staging')))
       .toBe('UNINSTALL_ENTRY_DUPLICATE');
     expect(refusal(() => checkUninstallEntries([entry('Registry64'), entry('Registry64', 'Other', `${RUN_ROOT}\\Other`)], RUN_ROOT, 'production'))).toBe('UNINSTALL_ENTRY_FOREIGN_NAME');
   });
@@ -710,9 +710,9 @@ describe('channel identities and versions of a lifecycle run (ET-055 PR-5)', () 
       executable: 'ETS2TelemetryDesktop.exe', displayName: 'Yukon Union Telemetry', publisher: 'Yukon Union Telemetry contributors', legacyDisplayNames: ['ETS2Telemetry Desktop'],
       appUserModelId: 'com.squirrel.ETS2TelemetryDesktop.ETS2TelemetryDesktop', pluginFile: 'ets2telemetry-plugin.dll', runOnceValue: 'ETS2TelemetryUninstall',
       receiptPrefix: 'ETS2Telemetry-uninstall-', executorReceiptPrefix: 'ETS2Telemetry-deferred-cleanup-'});
-    expect(lifecycleIdentity('staging')).toEqual({channel: 'staging', productRoot: 'ETS2TelemetryDesktopStaging', dataRoot: 'ETS2TelemetryStaging',
+    expect(lifecycleIdentity('staging')).toEqual({channel: 'staging', productRoot: 'ETS2TelemetryStagingDesktop', dataRoot: 'ETS2TelemetryStaging',
       roamingRoot: 'ETS2Telemetry Desktop Staging', executable: 'ETS2TelemetryDesktopStaging.exe', displayName: 'Yukon Union Telemetry Staging',
-      publisher: 'Yukon Union Telemetry contributors', legacyDisplayNames: [], appUserModelId: 'com.squirrel.ETS2TelemetryDesktopStaging.ETS2TelemetryDesktopStaging',
+      publisher: 'Yukon Union Telemetry contributors', legacyDisplayNames: [], appUserModelId: 'com.squirrel.ETS2TelemetryStagingDesktop.ETS2TelemetryDesktopStaging',
       pluginFile: 'ets2telemetry-plugin-staging.dll', runOnceValue: 'ETS2TelemetryStagingUninstall', receiptPrefix: 'ETS2TelemetryStaging-uninstall-',
       executorReceiptPrefix: 'ETS2TelemetryStaging-deferred-cleanup-'});
     const [production, staging] = LIFECYCLE_IDENTITIES;
