@@ -11,8 +11,9 @@ param(
 # menu folders inside $Root. Invoke-Driver is replaced by a recorder; no installer, registry write or real folder is used.
 # Read-UninstallEntries only reads HKCU, and with a run root inside $Root it finds nothing.
 $ErrorActionPreference = 'Stop'
-$Root = [IO.Path]::GetFullPath($Root)
-if (!(Test-Path -LiteralPath $Root -PathType Container) -or (Get-ChildItem -LiteralPath $Root -Force | Select-Object -First 1)) { throw 'ROOT_NOT_EMPTY' }
+# A local, not the [string] parameter itself (tests/windows/Test-HarnessVariables.ps1).
+$rootFolder = [IO.Path]::GetFullPath($Root)
+if (!(Test-Path -LiteralPath $rootFolder -PathType Container) -or (Get-ChildItem -LiteralPath $rootFolder -Force | Select-Object -First 1)) { throw 'ROOT_NOT_EMPTY' }
 
 $tokens = $null; $errors = $null
 $ast = [Management.Automation.Language.Parser]::ParseFile($Harness, [ref]$tokens, [ref]$errors)
@@ -24,10 +25,10 @@ if ($definitions.Count -ne $wanted.Count) { throw 'HARNESS_FUNCTIONS_MISSING' }
 foreach ($definition in $definitions) { . ([scriptblock]::Create($definition.Extent.Text)) }
 
 # The script state the helpers read, as the harness sets it.
-$runRoot = Join-Path $Root 'installer-run'
+$runRoot = Join-Path $rootFolder 'installer-run'
 $binaryRoot = Join-Path $runRoot 'LocalAppData\ETS2TelemetryDesktop'
-$desktopFolder = Join-Path $Root 'Desktop'
-$programsFolder = Join-Path $Root 'Programs'
+$desktopFolder = Join-Path $rootFolder 'Desktop'
+$programsFolder = Join-Path $rootFolder 'Programs'
 $companyFolder = Join-Path $programsFolder 'Artur Sianiuk'
 foreach ($folder in @($binaryRoot, $desktopFolder, $companyFolder)) { New-Item -ItemType Directory -Path $folder | Out-Null }
 $script:shortcutFolders = [ordered]@{desktop = $desktopFolder; 'start-menu' = $programsFolder}
@@ -51,7 +52,7 @@ New-PlantedLink (Join-Path $desktopFolder 'Yukon Union Telemetry.lnk') $stub (Jo
 New-PlantedLink (Join-Path $companyFolder 'Yukon Union Telemetry.lnk') $stub (Join-Path $binaryRoot 'app-0.1.0') 'owned' 'squirrel'
 $plantedLinks.Clear()
 # A link that points elsewhere is no product link.
-New-PlantedLink (Join-Path $desktopFolder 'Other.lnk') (Join-Path $Root 'other\other.exe') $Root 'decoy' 'other'
+New-PlantedLink (Join-Path $desktopFolder 'Other.lnk') (Join-Path $rootFolder 'other\other.exe') $rootFolder 'decoy' 'other'
 $plantedLinks.Clear()
 
 $result.rowsInstalled = Get-ProductLinks

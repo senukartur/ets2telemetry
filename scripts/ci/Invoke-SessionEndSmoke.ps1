@@ -17,13 +17,14 @@ $checkout = (Resolve-Path -LiteralPath (Join-Path $PSScriptRoot '../..')).Path
 $builtText = & (Get-Command node -ErrorAction Stop).Source (Join-Path $checkout 'scripts/build-channel.mjs') --built
 if ($LASTEXITCODE -ne 0) { throw 'Build evidence unavailable: run npm run package first.' }
 $built = ($builtText -join "`n") | ConvertFrom-Json
-if (!$PackageDirectory) { $PackageDirectory = Join-Path $checkout $built.packageDirectory }
-$PackageDirectory = (Resolve-Path -LiteralPath $PackageDirectory).Path
+# Locals, not the [string] parameter itself (tests/windows/Test-HarnessVariables.ps1).
+$packageSource = if ($PackageDirectory) { $PackageDirectory } else { Join-Path $checkout $built.packageDirectory }
+$resolvedPackage = (Resolve-Path -LiteralPath $packageSource).Path
 if (!$ExpectedPackageSha256 -or $ExpectedPackageSha256 -cnotmatch '^[0-9a-f]{64}$') { throw 'An expected frozen package SHA-256 is required.' }
 $output = Join-Path ([IO.Path]::GetFullPath($OutputRoot)) ('session-end-' + [guid]::NewGuid().ToString('N'))
 New-Item -ItemType Directory -Path $output | Out-Null
-$config = @{ checkout = $checkout; output = $output; packageDirectory = $PackageDirectory; expectedPackageSha256 = $ExpectedPackageSha256;
-    executable = (Join-Path $PackageDirectory $built.executable); baselineMissingAudit = [bool]$BaselineMissingAudit }
+$config = @{ checkout = $checkout; output = $output; packageDirectory = $resolvedPackage; expectedPackageSha256 = $ExpectedPackageSha256;
+    executable = (Join-Path $resolvedPackage $built.executable); baselineMissingAudit = [bool]$BaselineMissingAudit }
 foreach ($name in @('temp', 'appdata', 'localappdata', 'profile', 'diagnostics')) {
     $config[$name] = Join-Path $output $name
     New-Item -ItemType Directory -Path $config[$name] | Out-Null
