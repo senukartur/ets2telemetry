@@ -62,7 +62,7 @@ The scaffold pins Node/npm and application dependencies. Electron main supervise
 - [Implementation coordinator](COORDINATOR.md): Trello execution, subagent assignments, worktree ownership, independent review, and recovery handoffs.
 - [Coordinator launch prompt](docs/prompts/coordinator-start.md): copy into a separate local Codex chat to coordinate the prototype and prepare PRs for owner review.
 
-Read `concept.md` before planning or implementing changes. Internal documentation and explanatory code comments must be written in English. Temporary Trello planning manifests stay local and must not be committed.
+Read the applicable sections of `concept.md` before planning or implementing changes. Internal documentation and explanatory code comments must be written in English. Temporary Trello planning manifests stay local and must not be committed.
 
 ## Git workflow
 

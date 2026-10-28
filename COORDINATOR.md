@@ -8,7 +8,7 @@ This document is runtime-neutral: the coordinator may be Codex or Claude Code. T
 
 Act as the accountable coordinator: select eligible cards, delegate bounded implementation, integrate results, verify acceptance evidence, maintain execution status, and prepare PRs for owner review. Use subagents for implementation and independent review. Routine decisions within the approved scope do not require repeated confirmation.
 
-Read [AGENTS.md](AGENTS.md), [concept.md](concept.md), and [TESTING.md](TESTING.md) before planning. Product requirements and architecture remain in those documents. Discuss requirement or major architecture changes with the owner. Speak Russian with the owner; write internal documentation, handoffs, commit messages, and PR text in English.
+Follow [AGENTS.md](AGENTS.md). Before planning, read the sections of [concept.md](concept.md), [TESTING.md](TESTING.md) and [DECISION-LOG.md](DECISION-LOG.md) that the work needs, as the Start Here section of `AGENTS.md` describes, rather than whole files. Product requirements and architecture remain in those documents. Discuss requirement or major architecture changes with the owner. Speak Russian with the owner; write internal documentation, handoffs, commit messages, and PR text in English.
 
 ## Sources and access
 
@@ -110,7 +110,8 @@ Relevant REG scenarios and required checks:
 Local commit responsibility; no push, PR, or Trello write unless assigned:
 Return: changed paths, commit/diff, criterion-by-criterion results,
 actual commands and outcomes, remaining checks, blockers, and next action.
-Read applicable AGENTS.md, concept.md, TESTING.md, and the card brief.
+Read the card brief and the applicable sections of AGENTS.md, concept.md,
+TESTING.md and DECISION-LOG.md, never whole files.
 Report scope conflicts promptly; do not overwrite another agent's work.
 ```
 
@@ -124,7 +125,7 @@ Use a separate reviewer subagent for each implementation PR. Give it the card br
 
 Resolve relevant findings, inspect the fixes, and rerun affected checks. For findings posted on the PR, reply to and resolve each thread with the fixing commit SHA or a reasoned disagreement, as [AGENTS.md](AGENTS.md#review-threads) requires. Record reviewer identity and reviewed commit. New changes invalidate relevant earlier review/check evidence; verify the final PR commit. Report flaky results and unavailable checks explicitly. If subagent tools are unavailable, disclose the missing independent review, perform useful work, and preserve that gap in the PR and ledger.
 
-Builds made by the coordinator, workers, verifiers and reviewers are staging builds (ET-055 UP13, [AGENTS.md](AGENTS.md#et-055-in-app-updates-and-staging-channel--october-28-2026)). Leave `ETS2TELEMETRY_BUILD_CHANNEL` unset: never build with `production` or set the owner-only `ETS2TELEMETRY_OWNER_PRODUCTION_BUILD`, never assign a production build or a production install to an agent, and give the owner a feature-test build only as a staging Setup (`YukonUnionTelemetry-Staging-Setup-<version>.exe`), which installs beside the owner's production application and uses `%LOCALAPPDATA%\ETS2TelemetryStaging`. A production artifact comes only from a Windows CI run on `main`, a push or a dispatch on `main`; a dispatch on a task branch builds staging, and its artifact is never installed as production ([docs/ci.md](docs/ci.md#build-channels-et-055-pr-4)).
+Builds made by the coordinator, workers, verifiers and reviewers are staging builds (ET-055 UP13, [the decision log](DECISION-LOG.md#et-055-in-app-updates-and-staging-channel--october-28-2026)). Leave `ETS2TELEMETRY_BUILD_CHANNEL` unset: never build with `production` or set the owner-only `ETS2TELEMETRY_OWNER_PRODUCTION_BUILD`, never assign a production build or a production install to an agent, and give the owner a feature-test build only as a staging Setup (`YukonUnionTelemetry-Staging-Setup-<version>.exe`), which installs beside the owner's production application and uses `%LOCALAPPDATA%\ETS2TelemetryStaging`. A production artifact comes only from a Windows CI run on `main`, a push or a dispatch on `main`; a dispatch on a task branch builds staging, and its artifact is never installed as production ([docs/ci.md](docs/ci.md#build-channels-et-055-pr-4)).
 
 Use real pipes and isolated storage for their integration boundaries, deterministic fixtures for domain logic, and actual games for SDK/window/input compatibility as TESTING.md requires. Never substitute simulator results for ETS2, ATS, Convoy, TruckersMP, latency, or frame-time evidence. Do not install or replace a DLL while the game is running or touch unrelated plugins. Coordinate required manual sessions with the owner using a concrete checklist and candidate identity.
 

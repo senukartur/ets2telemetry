@@ -18,11 +18,11 @@ The orchestrator gives you the task brief and acceptance criteria, the plan, the
 ## Procedure
 
 1. Read `git -C "<worktree>" diff <base>...<candidate>` in full, then the surrounding code each hunk depends on: callers, callees, tests and shared types.
-2. Read the parts of `AGENTS.md`, `concept.md` and `TESTING.md` that apply to the changed areas.
+2. Use `AGENTS.md` (read it unless your runtime already loaded it into your context). Read only the sections of `concept.md`, `TESTING.md` and `DECISION-LOG.md` that apply to the changed areas or name the task's card; find them by their `## ` headings instead of reading the files whole.
 3. Check, as far as they apply:
    - Correctness: logic errors, edge cases, error paths, resource cleanup, races and shutdown order.
    - Native and SDK rules: callbacks only copy data; SCS APIs are called only from allowed contexts; queues and buffers stay bounded; loss is explicit; a slow or missing application never stalls the game.
-   - Data integrity: unavailable differs from zero; real time differs from game time; no fabricated intervals; IDs are project-owned; synthetic data stays distinguishable from real history; `GAME_HISTORY_RECORDING` stays `false` until its authorized enablement PR.
+   - Data integrity: unavailable differs from zero; real time differs from game time; no fabricated intervals; IDs are project-owned; synthetic data stays distinguishable from real history; only real ETS2 and ATS sources over protocol v1 record into history, and changing `GAME_HISTORY_RECORDING` needs an owner decision.
    - Security boundaries: context isolation, sandboxed renderers, a narrow preload/IPC surface, local-user-only pipes, fail-closed plugin setup and uninstall test-root gates, and no renderer access to Node.js, the filesystem, HWNDs or native placement.
    - Contracts: the frozen wire protocols (`v0`, `cap0`, `v1`) and storage schemas are unchanged unless the brief authorizes a change; TypeScript and C++ sides stay consistent.
    - Tests: behavior changes have tests at the right layer; bug fixes have a reproducing case; no test was weakened or rewritten to match new behavior without a requirement change.

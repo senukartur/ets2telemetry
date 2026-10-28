@@ -11,8 +11,8 @@ const plan = (value: string | undefined, gameHistory = false) => {
 
 describe('recording gate (R3)', () => {
   it('tripwire: production records game history since the owner authorization of October 25, 2026', () => {
-    // Changing this value is an owner decision (AGENTS.md, "Game history recording enablement"); this test must change
-    // with it, never on its own.
+    // Changing this value is an owner decision (DECISION-LOG.md, "Game history recording enablement"); this test must
+    // change with it, never on its own.
     expect(GAME_HISTORY_RECORDING).toBe(true);
   });
 

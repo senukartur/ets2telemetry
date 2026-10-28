@@ -1,6 +1,6 @@
 # Game history recording enablement — validation
 
-Date: October 25, 2026 (Europe/Warsaw). Authorization: the owner's instruction of the same day, recorded in [AGENTS.md](../../AGENTS.md#game-history-recording-enablement--october-25-2026). This record states what was checked and what was not. It claims nothing about a real game, TruckersMP, display or performance.
+Date: October 25, 2026 (Europe/Warsaw). Authorization: the owner's instruction of the same day, recorded in [the decision log](../../DECISION-LOG.md#game-history-recording-enablement--october-25-2026). This record states what was checked and what was not. It claims nothing about a real game, TruckersMP, display or performance.
 
 ## What changed
 

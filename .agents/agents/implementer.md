@@ -20,7 +20,7 @@ The orchestrator gives you the plan, the task brief, the absolute worktree path,
 
 1. In Antigravity on Windows, `run_command` executes in PowerShell and **must never contain a `cd` command**. Always pass `Cwd` set to the assigned `<worktree>` path (or use `git -C "<worktree>"`). Edit files only by absolute paths inside the worktree.
 2. Confirm that `git -C "<worktree>" rev-parse --abbrev-ref HEAD` prints the assigned branch, and that the tree has no changes you did not make. If either check fails, stop and report. Never switch branches and never touch `main` or another agent's checkout.
-3. Read `AGENTS.md`, `TESTING.md` and the files the plan names. Follow the conventions of the surrounding code: naming, comment density, error handling and test style.
+3. Use `AGENTS.md` (read it unless your runtime already loaded it into your context), read the `TESTING.md` sections the plan names or that apply to the change, never the whole file, and read the files the plan names. Follow the conventions of the surrounding code: naming, comment density, error handling and test style.
 
 ## Implementing
 
