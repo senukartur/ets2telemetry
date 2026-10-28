@@ -1467,7 +1467,8 @@ async function binaryRootListing(layout, executable) {
   for (const name of names.filter(entry => /^app-/.test(entry))) {
     const folder = path.win32.join(layout.binaryRoot, name);
     const entries = await readdir(folder).catch(() => null);
-    apps[name] = {entries: entries?.length ?? null, executable: await regularFile(path.win32.join(folder, executable)), deadMarker: await regularFile(path.win32.join(folder, '.dead'))};
+    // The first 32 entry names too: whether Squirrel left a marker such as .not-finished is read from them (ET-055 R1).
+    apps[name] = {entries: entries?.length ?? null, names: entries?.sort().slice(0, 32) ?? null, executable: await regularFile(path.win32.join(folder, executable)), deadMarker: await regularFile(path.win32.join(folder, '.dead'))};
   }
   const packages = (await readdir(path.win32.join(layout.binaryRoot, 'packages')).catch(() => [])).sort();
   return {names, apps, packages};
@@ -1673,9 +1674,17 @@ async function updateFeed(config, label, executable, mode) {
       if (!exited() && record.afterKill.view?.state === 'failed') {
         // Retry, then an exit while Update.exe applies: the exit leaves it running, and nothing restarts.
         feed.setPhase('retry');
+        // The view still says `failed` from the kill, so the retry's own start is a new UPDATE_APPLY_STARTED row (hosted run
+        // 40710991951 took the stale `failed` for the retry's end and exited before the click had any effect).
+        const appliesOf = async () => (await launchRows(diagnostics)).main.filter(row => row.pid === record.mainPid && row.event === 'UPDATE_APPLY_STARTED').length;
+        const appliesBefore = await appliesOf();
         await button().click({timeout: left(10000)});
-        const retried = await until(viewOrNull, current => current?.state === 'installing' || current?.state === 'failed', 'R1_RETRY_NOT_INSTALLING', left(120000)).catch(() => null);
-        record.retry = {view: retried};
+        const started = await until(async () => {
+          if (await appliesOf() > appliesBefore) return 'apply-started';
+          const current = await viewOrNull();
+          return current && current.state !== 'failed' && current.state !== 'downloading' && current.state !== 'installing' ? `view-${current.state}` : null;
+        }, Boolean, 'R1_RETRY_NOT_STARTED', left(120000)).catch(() => 'timeout');
+        record.retry = {started, view: await viewOrNull()};
       } else if (!exited()) {
         // The kill came too late: the controller moves on to its restart, or stays ready; give a restart time to begin.
         await until(async () => exited(), Boolean, 'R1_NOT_RESTARTED', left(15000)).catch(() => undefined);
@@ -1740,8 +1749,21 @@ async function updateFeedVerify(config, label) {
     record.observation = {kill: observed.kill, afterKill: observed.afterKill, retry: observed.retry ?? null, updaterWait: observed.updaterWait ?? null,
       restarted: observed.restarted ?? null, closeError: observed.closeError ?? null, after: observed.after, updates: observed.updates,
       applyFailed: aMain.filter(row => row.event === 'UPDATE_APPLY_FAILED').map(row => row.facts)};
+    // The R1 mitigation, when the apply was interrupted: the application removed the half-written app-<target> before it
+    // showed APPLY_FAILED, and Retry started a new apply (hosted run 40710991951 left that folder, which Squirrel's stub
+    // then started and failed). When the kill came too late, the record says so and nothing more is asserted here.
+    const target = `app-${observed.offered.installed}`;
+    record.interrupted = observed.kill?.reason === 'app-folder' && observed.kill?.killed > 0;
+    record.observation.incompleteRemoval = aMain.filter(row => row.event.startsWith('UPDATE_INCOMPLETE_VERSION_')).map(row => ({event: row.event, facts: row.facts ?? null}));
     await writeEvidence(config, `update-feed-${label}-verified.json`, record).catch(() => undefined);
     assert.deepEqual(observed.exit, {code: 0, signal: null}, 'UPDATE_APP_EXIT_NONZERO');
+    if (record.interrupted) {
+      assert.deepEqual({state: observed.afterKill?.view?.state, failure: observed.afterKill?.view?.failure}, {state: 'failed', failure: 'APPLY_FAILED'}, 'R1_KILL_NOT_FAILED');
+      assert.deepEqual(record.observation.incompleteRemoval, [{event: 'UPDATE_INCOMPLETE_VERSION_REMOVED', facts: {result: 'removed'}}],
+        `R1_INCOMPLETE_VERSION_NOT_REMOVED ${JSON.stringify(record.observation.incompleteRemoval)}`);
+      assert.ok(!Object.hasOwn(observed.afterKill?.listing?.apps ?? {}, target), `R1_INCOMPLETE_VERSION_LEFT: ${target} is still in the binary root after the failed apply`);
+      assert.equal(observed.retry?.started, 'apply-started', `R1_RETRY_NOT_STARTED ${JSON.stringify(observed.retry ?? null)}`);
+    }
     return record;
   }
   const bMainPids = rows.mainPids.filter(pid => pid !== observed.mainPid), bServicePids = rows.servicePids.filter(pid => !aServicePids.includes(pid));

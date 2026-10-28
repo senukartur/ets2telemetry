@@ -5,7 +5,7 @@ import type {DiagnosticFacts} from '../diagnostics';
 import type {FixedProgramResult} from '../plugin-setup/fixed-program';
 import type {RunningGames} from '../plugin-setup/game-processes';
 import type {UpdateContext, UpdateContextResult} from './update-context';
-import {clearUpdates, downloadPackage, type UpdateFileSystem} from './update-download';
+import {clearUpdates, downloadPackage, removeIncompleteVersion, type IncompleteRemoval, type UpdateFileSystem} from './update-download';
 import {checkFeed, type FeedResult, type FeedTimers, type FetchPort} from './update-feed';
 import type {UpdateManifest} from './update-manifest';
 import {UNSUPPORTED_UPDATE} from './update-view';
@@ -29,6 +29,9 @@ export const CHECK_INTERVAL_MS = 6 * 60 * 60_000;
 export const MANUAL_CHECK_MIN_INTERVAL_MS = 10_000;
 /** The apply's deadline (UP3). */
 export const APPLY_TIMEOUT_MS = 180_000;
+/** R1: a killed Update.exe or its hook can still hold files for a moment; the incomplete folder is tried this often, this far apart. */
+export const INCOMPLETE_REMOVAL_ATTEMPTS = 3;
+export const INCOMPLETE_REMOVAL_RETRY_MS = 500;
 
 export type UpdateEvent =
   | {readonly type: 'supported'}
@@ -295,6 +298,10 @@ export class UpdateController {
     if (!applied.ok) {
       const failure: UpdateFailure = applied.failure === 'timeout' ? 'APPLY_TIMEOUT' : 'APPLY_FAILED';
       this.options.log('UPDATE_APPLY_FAILED', {code: failure, reason: applied.failure});
+      // R1: the half-written app-<version> would be what the stub and Update.exe --processStart start next; it goes
+      // before the failure is reported, so neither a shortcut nor a Retry meets it (removeIncompleteVersion).
+      const removal = await this.removeIncomplete(context, offer.manifest.nugetVersion);
+      this.options.log(removal === 'removed' || removal === 'absent' ? 'UPDATE_INCOMPLETE_VERSION_REMOVED' : 'UPDATE_INCOMPLETE_VERSION_KEPT', {result: removal});
       this.dispatch({type: 'failed', failure});
       return;
     }
@@ -309,6 +316,15 @@ export class UpdateController {
       return;
     }
     this.restart();
+  }
+
+  /** removeIncompleteVersion, tried again while it fails (a file still held), at most INCOMPLETE_REMOVAL_ATTEMPTS times. */
+  private async removeIncomplete(context: UpdateContext, nugetVersion: string): Promise<IncompleteRemoval> {
+    for (let attempt = 1; ; attempt++) {
+      const result = await removeIncompleteVersion(this.options.ports.fs, context.installRoot, nugetVersion, context.runningDirectory).catch((): IncompleteRemoval => 'failed');
+      if (result !== 'failed' || attempt >= INCOMPLETE_REMOVAL_ATTEMPTS) return result;
+      await new Promise<void>(resolve => {this.options.ports.clock.setTimeout(resolve, INCOMPLETE_REMOVAL_RETRY_MS);});
+    }
   }
 
   private restart(): void {

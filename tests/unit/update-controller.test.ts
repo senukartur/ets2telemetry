@@ -1,4 +1,4 @@
-import {readdir, readFile} from 'node:fs/promises';
+import {mkdir, readdir, readFile, writeFile} from 'node:fs/promises';
 import path from 'node:path';
 import {afterEach, beforeEach, describe, expect, it, vi} from 'vitest';
 import type {UpdateView} from '../../packages/contracts/src/app-state';
@@ -74,7 +74,7 @@ function harness(options: Options = {}): Harness {
   }));
   const checkRunning = vi.fn(() => Promise.resolve(NONE));
   const ports: UpdatePorts = {
-    resolveContext: () => Promise.resolve(options.context ?? {ok: true, context: {installRoot, dataRoot, executableName: 'ETS2TelemetryDesktop.exe', origins: GITHUB_ORIGINS, keys: [KEY.publicKey], mode: 'production'}}),
+    resolveContext: () => Promise.resolve(options.context ?? {ok: true, context: {installRoot, dataRoot, executableName: 'ETS2TelemetryDesktop.exe', runningDirectory: path.win32.join(installRoot, 'app-0.1.1'), origins: GITHUB_ORIGINS, keys: [KEY.publicKey], mode: 'production'}}),
     fetch, fs, runUpdate, checkRunning,
     clock: {now: () => Date.now() - EPOCH, utcNow: () => Date.now(), setTimeout: (callback, milliseconds) => setTimeout(callback, milliseconds), clearTimeout: handle => clearTimeout(handle as ReturnType<typeof setTimeout>)}
   };
@@ -341,6 +341,58 @@ describe('click, download and apply', () => {
     expect(h.controller.view).toMatchObject({state: 'failed', failure: code});
     expect(await readdir(dataRoot)).toEqual([]);
     expect(h.requestExit).not.toHaveBeenCalled();
+  });
+  // ET-055 risk R1 (hosted run 40710991951): a killed apply left app-<target> half written, and Squirrel's stub then
+  // started it and failed. The still-running application removes that folder before it reports the failure.
+  it.each([['failed', 'APPLY_FAILED'], ['timeout', 'APPLY_TIMEOUT']] as const)('removes the half-written app-<target> after an apply that ends %s, before %s is shown', async (failure, code) => {
+    const target = path.win32.join(installRoot, 'app-0.2.0'), current = path.win32.join(installRoot, 'app-0.1.1');
+    await mkdir(path.win32.join(current, 'resources'), {recursive: true});
+    const h = harness({routes: productionRoutes(PKG), apply: async () => {
+      await mkdir(path.win32.join(target, 'resources'), {recursive: true});
+      await writeFile(path.win32.join(target, 'ETS2TelemetryDesktop.exe'), 'MZ, cut short');
+      return {ok: false, failure};
+    }});
+    await startAndCheck(h);
+    await h.controller.apply();
+    await until(() => h.controller.view.state === 'failed');
+    expect(h.controller.view.failure).toBe(code);
+    expect((await readdir(installRoot)).sort()).toEqual(['app-0.1.1']);
+    expect(h.log).toHaveBeenCalledWith('UPDATE_INCOMPLETE_VERSION_REMOVED', {result: 'removed'});
+  });
+  it('keeps the new folder after an apply that succeeded', async () => {
+    const target = path.win32.join(installRoot, 'app-0.2.0');
+    const h = harness({routes: productionRoutes(PKG), apply: async () => {
+      await mkdir(target, {recursive: true});
+      return {ok: true, stdout: Buffer.alloc(0)};
+    }});
+    await startAndCheck(h);
+    await h.controller.apply();
+    await until(() => h.requestExit.mock.calls.length === 1);
+    expect(await readdir(installRoot)).toEqual(['app-0.2.0']);
+    expect(h.log).not.toHaveBeenCalledWith('UPDATE_INCOMPLETE_VERSION_REMOVED', expect.anything());
+  });
+  it('tries a held folder three times, 500 ms apart, then reports the failure and logs it as kept', async () => {
+    const target = path.win32.join(installRoot, 'app-0.2.0');
+    let unlinks = 0;
+    const real = guard.fs as unknown as UpdateFileSystem;
+    const held: UpdateFileSystem = {...real, unlink: target_ => {
+      if (String(target_).toLowerCase().startsWith(target.toLowerCase())) {unlinks++; return Promise.reject(Object.assign(new Error('busy'), {code: 'EBUSY'}));}
+      return real.unlink(target_);
+    }};
+    const h = harness({routes: productionRoutes(PKG), fs: held, apply: async () => {
+      await mkdir(target, {recursive: true});
+      await writeFile(path.win32.join(target, 'ETS2TelemetryDesktop.exe'), 'MZ');
+      return {ok: false, failure: 'failed'};
+    }});
+    await startAndCheck(h);
+    await h.controller.apply();
+    await until(() => unlinks === 1);
+    await vi.advanceTimersByTimeAsync(500);
+    await until(() => unlinks === 2);
+    await vi.advanceTimersByTimeAsync(500);
+    await until(() => h.controller.view.state === 'failed');
+    expect(unlinks).toBe(3);
+    expect(h.log).toHaveBeenCalledWith('UPDATE_INCOMPLETE_VERSION_KEPT', {result: 'failed'});
   });
   it('reports a full disk while writing as DISK_FULL and leaves no partial file', async () => {
     const real = guard.fs as unknown as UpdateFileSystem;

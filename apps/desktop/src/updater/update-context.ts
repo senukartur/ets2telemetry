@@ -35,6 +35,8 @@ export interface UpdateContext {
   readonly dataRoot: string;
   /** The running executable's file name, for `Update.exe --processStartAndWait`. */
   readonly executableName: string;
+  /** The folder the running executable lies in (Squirrel's app-<version>), which the R1 cleanup never removes. */
+  readonly runningDirectory: string;
   readonly origins: FeedOrigins;
   readonly keys: readonly UpdatePublicKey[];
   readonly mode: 'production' | 'test-root';
@@ -58,7 +60,8 @@ export function resolveUpdateContext(input: UpdateContextInput): UpdateContextRe
   if (!input.packaged) return {ok: false, reason: 'unpackaged'};
   const {roots, env} = input;
   if (!roots.ok) return {ok: false, reason: 'not-installed'};
-  const common = {installRoot: roots.installRoot, dataRoot: roots.dataRoot, executableName: path.win32.basename(input.executable)};
+  const common = {installRoot: roots.installRoot, dataRoot: roots.dataRoot, executableName: path.win32.basename(input.executable),
+    runningDirectory: path.win32.dirname(input.executable)};
   if (roots.mode === 'production') {
     if (ISOLATION_VARIABLES.some(name => set(env[name]))) return {ok: false, reason: 'isolated'};
     return {ok: true, context: {...common, origins: GITHUB_ORIGINS, keys: UPDATE_PUBLIC_KEYS[input.identity.channel], mode: 'production'}};
