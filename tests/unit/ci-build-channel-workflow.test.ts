@@ -68,13 +68,13 @@ it('runs the hosted installer lifecycle for the built channel, and the side-by-s
 // all three step timeouts.
 it('runs the update-from-feed scenario for the built channel after the lifecycle', async () => {
   const installer = job(await workflow(), 'windows-installer');
-  expect(installer).toContain("- name: Update-from-feed installer lifecycle in a test root\n        if: github.event_name != 'pull_request'\n        timeout-minutes: 15\n" +
+  expect(installer).toContain("- name: Update-from-feed installer lifecycle in a test root\n        if: github.event_name != 'pull_request'\n        timeout-minutes: 30\n" +
     '        run: ./scripts/installer/Invoke-InstallerLifecycle.ps1 -Scenario update-from-feed\n');
   expect(installer.indexOf('- name: Installer lifecycle in a test root')).toBeLessThan(installer.indexOf('- name: Update-from-feed installer lifecycle'));
   expect(installer.indexOf('- name: Update-from-feed installer lifecycle')).toBeLessThan(installer.indexOf('- name: Side-by-side installer lifecycle'));
   const steps = [...installer.matchAll(/\n {8}timeout-minutes: (\d+)\n/g)].map(match => Number(match[1]));
   const jobTimeout = Number(/\n {4}timeout-minutes: (\d+)\n/.exec(installer)?.[1]);
-  expect(steps).toEqual([8, 15, 8]);
+  expect(steps).toEqual([8, 30, 8]);
   expect(jobTimeout).toBeGreaterThanOrEqual(steps.reduce((sum, minutes) => sum + minutes, 0) + 5);
 });
 

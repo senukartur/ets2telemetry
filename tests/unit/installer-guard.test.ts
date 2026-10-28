@@ -937,6 +937,33 @@ describe('harness Job bounds', () => {
     expect(harness.indexOf("throw 'UPDATE_FROM_FEED_HOSTED_ONLY:")).toBeGreaterThan(-1);
     expect(harness.indexOf("throw 'UPDATE_FROM_FEED_HOSTED_ONLY:")).toBeLessThan(harness.indexOf('function Invoke-Driver('));
   });
+  // ET-055 PR-8 review round 1: the CI step's limit holds the summed Job deadlines of every driver command the scenario
+  // runs, directly or through the harness's helpers, plus the two guards and an allowance for the two fixture builds,
+  // which run outside a Job.
+  it('gives the update-from-feed step a limit above the summed driver deadlines of its scenario', async () => {
+    const harness = (await read('scripts/installer/Invoke-InstallerLifecycle.ps1')).replaceAll('\r\n', '\n');
+    const body = (name: string) => {
+      const start = harness.indexOf(`\nfunction ${name}`);
+      expect(start, name).toBeGreaterThan(-1);
+      return harness.slice(start + 1, harness.indexOf('\n}\n', start) + 2);
+    };
+    const helpers = ['Assert-Installed', 'Assert-ProductLinks', 'Assert-Uninstalled', 'Assert-IconIdentity', 'Build-UpgradeFixture'];
+    const bound = (name: string): number => {
+      // Code lines only: a comment that names a helper is not a call.
+      const text = body(name).split('\n').slice(1).filter(line => !/^\s*#/.test(line)).map(line => line.replace(/\s#\s.*$/, '')).join('\n');
+      const direct = [...text.matchAll(/\bInvoke-Driver(?:Extended)?\s+'[a-z-]+'.*\s(\d+)\s*$/gm)].reduce((sum, match) => sum + Number(match[1]), 0);
+      return direct + helpers.filter(helper => helper !== name).reduce((sum, helper) => {
+        const calls = [...text.matchAll(new RegExp(`(?:^|=|\\s)${helper}\\s`, 'gm'))].length;
+        return sum + (calls ? calls * bound(helper) : 0);
+      }, 0);
+    };
+    const scenario = bound('Invoke-UpdateFromFeed');
+    expect(scenario).toBe(1260000);
+    const guards = 2 * 30000, fixtureAllowance = 6 * 60000;
+    const workflow = (await read('.github/workflows/windows-ci.yml')).replaceAll('\r\n', '\n');
+    const minutes = Number(/- name: Update-from-feed installer lifecycle in a test root\n {8}if: .+\n {8}timeout-minutes: (\d+)\n/.exec(workflow)?.[1]);
+    expect(minutes * 60000).toBeGreaterThanOrEqual(scenario + guards + fixtureAllowance);
+  });
   it('keeps the in-app uninstall run\'s own budget below the cap', async () => {
     const cap = await jobCap();
     const budget = Number(/const APP_UNINSTALL_RUN_BUDGET_MS = (\d+);/.exec(await read('scripts/installer/installer-lifecycle.mjs'))?.[1]);

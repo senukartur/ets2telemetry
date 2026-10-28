@@ -11,8 +11,9 @@ param(
 # variable.
 # ET-055 PR-8 (PR-5 review) widens what counts as a write and what is reported:
 # - the writes are an assignment (also `[type]$x = ...` and the elements of `$a, $b = ...`), a foreach variable, a
-#   `[ref]$x` argument, the name given to -OutVariable/-ov or -PipelineVariable/-pv (a leading `+` removed), and the
-#   -Name (or first positional) argument of Set-Variable/sv;
+#   `[ref]$x` argument, the name given to -OutVariable, -ErrorVariable, -WarningVariable, -InformationVariable or
+#   -PipelineVariable (also their aliases and accepted abbreviations; a leading `+` removed), the -Name (or first
+#   positional) argument of Set-Variable/sv and New-Variable/nv, and `$local:`/`$private:` writes under the bare name;
 # - a write in the parameter's own spelling is reported too when the parameter has a type constraint (other than
 #   [object]) or a Validate* attribute, because that write is converted or validated as the parameter, not stored as is.
 # Prints one JSON line: {files, violations: ["<file>:<line> <scope> $<name> -> $<param>[ (constrained)]"]}.
@@ -39,8 +40,21 @@ function Get-WrittenNames($Node) {
     }
     $fromVariable = {
         param($Variable)
-        if (!$Variable -or $Variable.VariablePath.IsScript -or $Variable.VariablePath.IsGlobal -or $Variable.VariablePath.UserPath -match ':') { return }
-        [pscustomobject]@{Name = $Variable.VariablePath.UserPath; Line = $Variable.Extent.StartLineNumber}
+        if (!$Variable -or $Variable.VariablePath.IsScript -or $Variable.VariablePath.IsGlobal) { return }
+        # $local:x and $private:x write the scope's own variable, so they count under the bare name; any other drive stays out.
+        $name = $Variable.VariablePath.UserPath -replace '^(?i:local|private):', ''
+        if ($name -match ':') { return }
+        [pscustomobject]@{Name = $name; Line = $Variable.Extent.StartLineNumber}
+    }
+    # The common parameters that name a variable to write, with the shortest prefix PowerShell accepts for each and their aliases.
+    $variableParameters = @(@('OutVariable', 4, 'ov'), @('ErrorVariable', 6, 'ev'), @('WarningVariable', 8, 'wv'), @('InformationVariable', 12, 'iv'),
+        @('PipelineVariable', 9, 'pv'))
+    $namesVariable = {
+        param([string]$ParameterName)
+        foreach ($row in $variableParameters) {
+            if ($ParameterName -ieq $row[2] -or ($ParameterName.Length -ge $row[1] -and $row[0].StartsWith($ParameterName, [StringComparison]::OrdinalIgnoreCase))) { return $true }
+        }
+        return $false
     }
     if ($Node -is [Management.Automation.Language.AssignmentStatementAst]) {
         $targets = if ($Node.Left -is [Management.Automation.Language.ArrayLiteralAst]) { @($Node.Left.Elements) } else { @($Node.Left) }
@@ -56,14 +70,14 @@ function Get-WrittenNames($Node) {
         for ($index = 1; $index -lt $elements.Count; $index++) {
             $element = $elements[$index]
             if ($element -isnot [Management.Automation.Language.CommandParameterAst]) { continue }
-            $setsVariable = $element.ParameterName -match '^(OutVariable|ov|PipelineVariable|pv)$' -or ($command -match '^(Set-Variable|sv)$' -and $element.ParameterName -ieq 'Name')
+            $setsVariable = (& $namesVariable $element.ParameterName) -or ($command -match '^(Set-Variable|sv|New-Variable|nv)$' -and $element.ParameterName -ieq 'Name')
             if (!$setsVariable) { continue }
             $argument = if ($element.Argument) { $element.Argument } elseif ($index + 1 -lt $elements.Count) { $elements[$index + 1] } else { $null }
             if ($argument -is [Management.Automation.Language.StringConstantExpressionAst]) {
                 $rows += [pscustomobject]@{Name = $argument.Value.TrimStart('+'); Line = $argument.Extent.StartLineNumber}
             }
         }
-        if ($command -match '^(Set-Variable|sv)$' -and !@($elements | Where-Object { $_ -is [Management.Automation.Language.CommandParameterAst] -and $_.ParameterName -ieq 'Name' }).Count -and
+        if ($command -match '^(Set-Variable|sv|New-Variable|nv)$' -and !@($elements | Where-Object { $_ -is [Management.Automation.Language.CommandParameterAst] -and $_.ParameterName -ieq 'Name' }).Count -and
             $elements.Count -gt 1 -and $elements[1] -is [Management.Automation.Language.StringConstantExpressionAst]) {
             $rows += [pscustomobject]@{Name = $elements[1].Value; Line = $elements[1].Extent.StartLineNumber}
         }

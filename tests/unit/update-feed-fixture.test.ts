@@ -56,19 +56,21 @@ it('serves the paths the product builds for both feeds', () => {
 describe.each([['production', '0.1.0', '0.1.1'], ['staging', '0.1.0-stg.000042', '0.1.1-stg.000042']] as const)('the %s feed', (channel, current, offered) => {
   it('offers the signed release to the product\'s check, and the product downloads exactly the package bytes', async () => {
     const resources = await temporaryResources();
-    const {bytes, pkg, key, release} = await fixtureFeed(resources.directory, channel, offered);
-    const feed = await startUpdateFeed({channel, release, packageFile: pkg.file});
+    let feed: Awaited<ReturnType<typeof startUpdateFeed>> | undefined;
     try {
-      const origins = {web: feed.origin, api: feed.origin}, port = ports(channel);
-      feed.setPhase('offer');
+      const {bytes, pkg, key, release} = await fixtureFeed(resources.directory, channel, offered);
+      const live = await startUpdateFeed({channel, release, packageFile: pkg.file});
+      feed = live;
+      const origins = {web: live.origin, api: live.origin}, port = ports(channel);
+      live.setPhase('offer');
       const result = await checkFeed({fetch: port.fetch, origins, identity: CHANNEL_IDENTITIES[channel], keys: [{keyId: TEST_KEY_ID, publicKey: key.publicKey}],
         currentVersion: current, timers});
-      expect(result).toMatchObject({outcome: 'available', packageUrl: `${feed.origin}${feed.routes.package}`, manifest: {appVersion: offered, channel}});
+      expect(result).toMatchObject({outcome: 'available', packageUrl: `${live.origin}${live.routes.package}`, manifest: {appVersion: offered, channel}});
       if (result.outcome !== 'available') throw new Error('not available');
       // Another key does not verify the same bytes: the generated key is the only one that signs.
       expect(await checkFeed({fetch: port.fetch, origins, identity: CHANNEL_IDENTITIES[channel], keys: [{keyId: TEST_KEY_ID, publicKey: createTestSigningKey().publicKey}],
         currentVersion: current, timers})).toMatchObject({outcome: 'failed', failure: 'SIGNATURE_INVALID'});
-      feed.setPhase('update');
+      live.setPhase('update');
       const dataRoot = path.join(resources.directory, 'data-root');
       await mkdir(dataRoot);
       const download = await downloadPackage({fetch: port.fetch, fs: fsPromises, timers, dataRoot, manifest: result.manifest,
@@ -77,18 +79,18 @@ describe.each([['production', '0.1.0', '0.1.1'], ['staging', '0.1.0-stg.000042',
       if (!download.ok) throw new Error('download failed');
       expect(await readFile(path.join(download.folder, release.name))).toEqual(bytes);
       // The first offer check, the refused-key check and the download; production follows the two redirects.
-      const failures = checkFeedRequests(feed.requests, {channel, routes: feed.routes, size: pkg.size, downloadPhase: 'update', before: ['offer']});
+      const failures = checkFeedRequests(live.requests, {channel, routes: live.routes, size: pkg.size, downloadPhase: 'update', before: ['offer']});
       expect(failures).toEqual([]);
-      expect(feed.requests.every(row => row.userAgent === FEED_USER_AGENT && !row.cookie && !row.authorization)).toBe(true);
+      expect(live.requests.every(row => row.userAgent === FEED_USER_AGENT && !row.cookie && !row.authorization)).toBe(true);
       if (channel === 'production') {
-        expect(feed.requests.filter(row => row.path === feed.routes.latestManifest).map(row => row.status)).toEqual([302, 302]);
-        expect(feed.requests.some(row => row.path === feed.routes.list)).toBe(false);
+        expect(live.requests.filter(row => row.path === live.routes.latestManifest).map(row => row.status)).toEqual([302, 302]);
+        expect(live.requests.some(row => row.path === live.routes.list)).toBe(false);
       } else {
-        expect(feed.requests.filter(row => row.path === feed.routes.list).map(row => row.status)).toEqual([200, 200]);
-        expect(feed.requests.some(row => row.path === feed.routes.latestManifest)).toBe(false);
+        expect(live.requests.filter(row => row.path === live.routes.list).map(row => row.status)).toEqual([200, 200]);
+        expect(live.requests.some(row => row.path === live.routes.latestManifest)).toBe(false);
       }
     } finally {
-      await feed.close();
+      await feed?.close();
       await resources.dispose();
     }
   }, 30000);

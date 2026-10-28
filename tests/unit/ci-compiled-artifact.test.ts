@@ -101,10 +101,10 @@ it('retains every runtime scenario, fixed required names, timeout ceilings and e
   const consumer = workflow.split('  windows-runtime:')[1].split('  windows:')[0];
   expect(consumer.match(/compiled-artifact.mjs restore/g)).toHaveLength(2);
   expect(consumer).not.toMatch(/npm run (?:build|package|make)|cmake --build/);
-  // ET-055 PR-8 raised windows-installer's ceiling from 20 to 40 minutes for its third scenario (update-from-feed); every
+  // ET-055 PR-8 raised windows-installer's ceiling from 20 to 55 minutes for its third scenario (update-from-feed); every
   // other job keeps 20.
   expect(workflow.match(/timeout-minutes: 20/g)).toHaveLength(5);
-  expect(workflow.split('  windows-installer:')[1].split(/\n {2}[a-z-]+:\n/)[0]).toContain('\n    timeout-minutes: 40\n');
+  expect(workflow.split('  windows-installer:')[1].split(/\n {2}[a-z-]+:\n/)[0]).toContain('\n    timeout-minutes: 55\n');
 });
 
 it.each([false, true])('requires the literal nested helper at create and restore despite valid decoy files (installer=%s)', async installer => {

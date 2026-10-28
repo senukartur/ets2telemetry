@@ -160,13 +160,23 @@ describe('driver channels (ET-055 PR-5)', () => {
       await put('plugins\\setup.json', '{"rewritten":true}');
       expect(await sentinel('after-a', 'check', 'before-a')).toMatchObject({passed: true});
       expect((await result('after-a')).samples.plugins).toEqual({file: 'plugins\\setup.json', kind: 'rewritable', rewritten: true});
-      // Same time, other bytes: changed. A whole second, so the time written back is exactly the planted one.
-      const manifest = path.join(dataRoot, 'data', 'backups', 'telemetry-x.json'), time = new Date('2026-10-01T00:00:00.000Z');
-      await utimes(manifest, time, time);
+      // A file the application leaves alone keeps its bytes even with a new time (review round 1).
       expect(await sentinel('before-b', 'plant')).toMatchObject({passed: true});
-      await writeFile(manifest, 'MANIFEST');
-      await utimes(manifest, time, time);
+      await new Promise(resolve => setTimeout(resolve, 20));
+      await put('data\\backups\\telemetry-x.json', 'MANIFEST');
       expect((await sentinel('after-b', 'check', 'before-b')).failure?.message).toMatch(/^OTHER_CHANNEL_DATA_CHANGED \(file bytes changed: data\\backups\\telemetry-x\.json\)/);
+      await rm(path.join(dataRoot, 'captures'), {recursive: true});
+      await put('data\\backups\\telemetry-x.json', 'manifest');
+      // A rewritable file with the same time and other bytes: changed. A whole second, so the time written back is exactly
+      // the planted one.
+      await rm(path.join(dataRoot, 'data', 'backups'), {recursive: true});
+      const setup = path.join(dataRoot, 'plugins', 'setup.json'), time = new Date('2026-10-01T00:00:00.000Z');
+      await utimes(setup, time, time);
+      expect(await sentinel('before-b2', 'plant')).toMatchObject({passed: true});
+      expect((await result('before-b2')).samples.data).toEqual(expect.objectContaining({file: 'data\\telemetry.sqlite', kind: 'rewritable'}));
+      await writeFile(setup, '{"other":true}');
+      await utimes(setup, time, time);
+      expect((await sentinel('after-b2', 'check', 'before-b2')).failure?.message).toMatch(/^OTHER_CHANNEL_DATA_CHANGED \(file bytes changed: plugins\\setup\.json\)/);
       // An emptied entry whose folder stays: removed.
       await rm(path.join(dataRoot, 'captures'), {recursive: true});
       expect(await sentinel('before-c', 'plant')).toMatchObject({passed: true});

@@ -872,7 +872,13 @@ function Invoke-UpdateFromFeed {
     # R1, an observation: what an interrupted apply leaves. Only data loss or an unlaunchable install fails the run.
     Invoke-DriverExtended 'update-feed' @('feed-c', $executableB, 'interrupted') 300000
     Invoke-Driver 'update-feed-verify' @('feed-c') 30000
-    $script:report.r1 = [ordered]@{registeredVersion=[string](Read-Registration).displayVersion; versionB=$versionB; versionC=$versionC}
+    # The kill's outcome in lifecycle-result.json and, when the apply was not interrupted, one fixed line in the job log.
+    $r1 = Get-Content -LiteralPath (Join-Path $evidence 'update-feed-feed-c-observed.json') -Raw | ConvertFrom-Json
+    $script:report.r1 = [ordered]@{registeredVersion=[string](Read-Registration).displayVersion; versionB=$versionB; versionC=$versionC;
+        killReason=[string]$r1.kill.reason; killed=[int]$r1.kill.killed; afterKillState=$(if ($r1.afterKill.view) { [string]$r1.afterKill.view.state } else { $null })}
+    if ($script:report.r1.killReason -cne 'app-folder' -or $script:report.r1.killed -eq 0) {
+        Write-Output ('R1 not interrupted: reason ' + $script:report.r1.killReason + ', killed ' + $script:report.r1.killed)
+    }
     Invoke-Driver 'stub-launch' @('after-r1') 60000
     $launched = [string](Get-Content -LiteralPath (Join-Path $evidence 'stub-launch-after-r1.json') -Raw | ConvertFrom-Json).result.launchedVersion
     $script:report.r1.launchedVersion = $launched
