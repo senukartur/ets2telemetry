@@ -366,3 +366,68 @@ describe('click, download and apply', () => {
     }
   });
 });
+
+// ET-055 review round 1: the update and the in-app uninstall exclude each other. `busy` is what main hands the uninstall;
+// `uninstalling` is re-checked after every await of the click before anything is downloaded or applied.
+describe('mutual exclusion with the in-app uninstall', () => {
+  it('is busy exactly while downloading, installing and restarting', async () => {
+    let finish!: (result: FixedProgramResult) => void;
+    const h = harness({routes: productionRoutes(PKG), apply: () => new Promise(resolve => {finish = resolve;})});
+    expect(h.controller.busy).toBe(false);
+    await startAndCheck(h);
+    expect(h.controller.view.state).toBe('available'); expect(h.controller.busy).toBe(false);
+    await h.controller.apply();
+    expect(h.controller.view.state).toBe('downloading'); expect(h.controller.busy).toBe(true);
+    await until(() => h.controller.view.state === 'installing');
+    expect(h.controller.busy).toBe(true);
+    finish({ok: true, stdout: Buffer.alloc(0)});
+    await until(() => h.controller.view.state === 'restarting');
+    expect(h.controller.busy).toBe(true);
+  });
+  it('is not busy once an apply failed, so the uninstall may run', async () => {
+    const h = harness({routes: productionRoutes(PKG), apply: () => Promise.resolve({ok: false, failure: 'failed'})});
+    await startAndCheck(h); await h.controller.apply();
+    await until(() => h.controller.view.state === 'failed');
+    expect(h.controller.busy).toBe(false);
+  });
+  it('refuses a click whose game check straddles the start of an uninstall, and downloads nothing', async () => {
+    const h = harness({routes: productionRoutes(PKG)});
+    await startAndCheck(h);
+    let release!: (value: RunningCheck) => void;
+    h.checkRunning.mockImplementationOnce(() => new Promise(resolve => {release = resolve;}));
+    const click = h.controller.apply();
+    // The uninstall starts while the games are listed; the controller is not busy yet, so the uninstall may go on.
+    expect(h.controller.busy).toBe(false);
+    h.state.uninstalling = true; release(NONE);
+    expect(await click).toEqual({state: 'refused', available: '0.2.0', progress: null, refusal: 'BUSY', failure: null, lastCheck: AVAILABLE_CHECK});
+    await flush();
+    expect(h.fetch.requests.some(entry => entry.url === PACKAGE_URL)).toBe(false);
+    expect(h.controller.busy).toBe(false);
+  });
+  it('never runs Update.exe when an uninstall started during the download, and removes the download', async () => {
+    const h: Harness = harness({routes: productionRoutes(PKG, {[PACKAGE_URL]: {stream: () => new ReadableStream<Uint8Array>({start(controller) {
+      controller.enqueue(PKG.bytes);
+      h.state.uninstalling = true;
+      controller.close();
+    }})}})});
+    await startAndCheck(h);
+    await h.controller.apply();
+    await until(() => h.controller.view.state === 'refused');
+    expect(h.controller.view).toMatchObject({state: 'refused', refusal: 'BUSY', available: '0.2.0'});
+    expect(h.runUpdate).not.toHaveBeenCalled(); expect(h.requestExit).not.toHaveBeenCalled();
+    expect(h.log).toHaveBeenCalledWith('UPDATE_DOWNLOAD_ABORTED', {code: 'UNINSTALLING'});
+    expect(await readdir(dataRoot)).toEqual([]);
+  });
+  it('refuses a restart from ready while an uninstall runs', async () => {
+    const h = harness({routes: productionRoutes(PKG)});
+    await startAndCheck(h);
+    h.checkRunning.mockResolvedValueOnce(NONE).mockResolvedValueOnce({ok: false});
+    await h.controller.apply();
+    await until(() => h.controller.view.state === 'ready');
+    // Ready is not busy: the uninstall may run, and the restart then waits.
+    expect(h.controller.busy).toBe(false);
+    h.state.uninstalling = true;
+    expect(await h.controller.apply()).toMatchObject({state: 'ready', refusal: 'BUSY'});
+    expect(h.requestExit).not.toHaveBeenCalled();
+  });
+});

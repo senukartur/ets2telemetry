@@ -58,6 +58,19 @@ export function parseUpdateView(value: unknown): UpdateView | undefined {
     failure: failure as UpdateFailure | null, lastCheck};
 }
 
+/** The version main reports when the build's own version fails validation; it never names a real build. */
+export const UNKNOWN_APP_VERSION = '0.0.0';
+/**
+ * Main's application info: `candidate` when it is valid, otherwise the same channel and packaged flag with
+ * UNKNOWN_APP_VERSION (and production for an unknown channel), so the preload never drops the application state for it.
+ */
+export function applicationInfoOrFallback(candidate: unknown): {readonly info: ApplicationInfo; readonly valid: boolean} {
+  const parsed = parseApplicationInfo(candidate);
+  if (parsed) return {info: parsed, valid: true};
+  const record = plainObject(candidate) ? candidate : {};
+  return {info: {version: UNKNOWN_APP_VERSION, channel: record.channel === 'staging' ? 'staging' : 'production', packaged: record.packaged === true}, valid: false};
+}
+
 /** A fresh copy of valid application info, or undefined: exactly a build version, a channel and the packaged flag. */
 export function parseApplicationInfo(value: unknown): ApplicationInfo | undefined {
   if (!plainObject(value) || !exactKeys(value, ['version', 'channel', 'packaged'])) return undefined;

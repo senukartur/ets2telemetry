@@ -61,7 +61,7 @@ import {UNINSTALL_STRINGS} from './strings';
 import {ACTIVE_CHANNEL, CHANNEL} from './channel';
 import {UpdateController} from './updater/update-controller';
 import {productionUpdatePorts, startUpdatedApplication} from './updater/update-ports';
-import {parseApplicationInfo, parseUpdateView, UNSUPPORTED_UPDATE, UPDATE_CHANNELS} from './updater/update-view';
+import {applicationInfoOrFallback, parseUpdateView, UNSUPPORTED_UPDATE, UPDATE_CHANNELS} from './updater/update-view';
 import {applyChannelAppName} from './channel-app-name';
 
 // ET-055 UP12: the channel's application name and userData, before anything reads userData or takes the single-instance
@@ -218,6 +218,8 @@ function runApplication(profileError: unknown): void {
       return answer.response === 1;
     },
     fs: uninstallFs,
+    // ET-055: the in-app uninstall and the in-app update exclude each other.
+    updating: () => updates.busy,
     checkRunning: signal => checkRunningGames({signal}),
     readKnown: async () => {
       const read = await readPluginBundle(pluginBundleDirectory(__dirname, process.resourcesPath, app.isPackaged));
@@ -276,8 +278,11 @@ function runApplication(profileError: unknown): void {
   // readiness and every 6 h, downloads and installs only after the dashboard's click, and requests the explicit exit with
   // reason `update`; the final exit then starts the restart helper. The dashboard gets the validated view and this build's
   // version, channel and packaging only: never a URL or path.
-  const application: ApplicationInfo = {version, channel: ACTIVE_CHANNEL, packaged: app.isPackaged};
-  if (!parseApplicationInfo(application)) log('APPLICATION_INFO_INVALID');
+  // A build version that fails validation (never expected: scripts/build-channel.mjs checks it) is replaced by the fixed
+  // fallback, so the preload never drops the application state for it.
+  const checkedApplication = applicationInfoOrFallback({version, channel: ACTIVE_CHANNEL, packaged: app.isPackaged});
+  const application: ApplicationInfo = checkedApplication.info;
+  if (!checkedApplication.valid) log('APPLICATION_INFO_INVALID');
   const updates: UpdateController = new UpdateController({identity: CHANNEL, currentVersion: version,
     ports: productionUpdatePorts({fetch: (url, init) => net.fetch(url, init), packaged: app.isPackaged, executable: process.execPath, env: process.env, identity: CHANNEL}),
     log: (event, facts) => log(event, undefined, facts), changed: () => pushAppState(),
@@ -1059,6 +1064,8 @@ function runApplication(profileError: unknown): void {
     if (!trusted(event)) throw new Error('Untrusted uninstall request');
     if (request.length !== 0) throw new Error('Invalid uninstall request');
     if (lifecycle.exiting) throw new Error('Uninstall refused: the application is exiting');
+    // ET-055: refused while an update downloads, installs or restarts; the orchestrator checks again after its dialog.
+    if (updates.busy) {log('APP_UNINSTALL', undefined, {outcome: 'failed', code: 'UPDATE_IN_PROGRESS'}); return {outcome: 'failed', code: 'UPDATE_IN_PROGRESS'};}
     const result = await appUninstall.run();
     if (result.outcome === 'started') setImmediate(beginUninstallExit);
     return result;

@@ -2681,6 +2681,8 @@ interface FakeAppUninstall {
   run: ReturnType<typeof vi.fn<() => Promise<AppUninstallResult>>>; prepared: unknown; finishAfterExit: ReturnType<typeof vi.fn<(budgetMs?: number) => Promise<unknown>>>;
   handOver: ReturnType<typeof vi.fn<() => Promise<boolean>>>;
   ports: AppUninstallPorts;
+  /** ET-055: what main hands the update controller as `uninstalling`. */
+  inProgress: boolean;
 }
 let appUninstallFake: FakeAppUninstall;
 const PREPARED = {dataRoot: 'C:\\isolated\\LocalAppData\\ETS2Telemetry', installRoot: 'C:\\isolated\\LocalAppData\\ETS2TelemetryDesktop', notes: [], removed: 1, unrecognized: 0};
@@ -2688,7 +2690,7 @@ function mockAppUninstall(result: AppUninstallResult) {
   vi.doMock('../../apps/desktop/src/uninstall/app-uninstall', async importOriginal => ({...await importOriginal<typeof import('../../apps/desktop/src/uninstall/app-uninstall')>(),
     AppUninstall: class {
       constructor(ports: AppUninstallPorts) {
-        const fake: FakeAppUninstall = appUninstallFake = {ports, prepared: undefined, handOver: vi.fn(() => Promise.resolve(true)),
+        const fake: FakeAppUninstall = appUninstallFake = {ports, prepared: undefined, inProgress: false, handOver: vi.fn(() => Promise.resolve(true)),
           run: vi.fn(() => {if (result.outcome === 'started') fake.prepared = PREPARED; return Promise.resolve(result);}),
           finishAfterExit: vi.fn(() => Promise.resolve({data: {removed: 7, kept: 0, failed: [], rootRemoved: true}, notes: [{game: 'ats', note: 'GAME_EXECUTABLE_MISSING'}], removed: 1, unrecognized: 0}))};
         return fake;
@@ -3090,7 +3092,7 @@ it('publishes opacity only after commit, without changing the edit draft or sour
 // validate the view, run the explicit exit and start the restart helper only after it, never after a fatal stop.
 interface FakeUpdates {
   options: {requestExit(): void; exiting(): boolean; uninstalling(): boolean; changed(): void};
-  view: unknown; restartTarget: unknown;
+  view: unknown; restartTarget: unknown; busy: boolean;
   start: ReturnType<typeof vi.fn>; apply: ReturnType<typeof vi.fn>; check: ReturnType<typeof vi.fn>; retire: ReturnType<typeof vi.fn>; idle: ReturnType<typeof vi.fn>;
 }
 let updatesFake: FakeUpdates;
@@ -3101,7 +3103,7 @@ function mockUpdates() {
   vi.doMock('../../apps/desktop/src/updater/update-controller', async importOriginal => ({...await importOriginal<typeof import('../../apps/desktop/src/updater/update-controller')>(),
     UpdateController: class {
       constructor(options: FakeUpdates['options']) {
-        const fake: FakeUpdates = updatesFake = {options, view: UPDATE_UNSUPPORTED, restartTarget: undefined, start: vi.fn(), retire: vi.fn(), idle: vi.fn(() => undefined),
+        const fake: FakeUpdates = updatesFake = {options, view: UPDATE_UNSUPPORTED, restartTarget: undefined, busy: false, start: vi.fn(), retire: vi.fn(), idle: vi.fn(() => undefined),
           apply: vi.fn(() => Promise.resolve(fake.view)), check: vi.fn(() => fake.view)};
         return fake;
       }
@@ -3176,5 +3178,26 @@ it.each(['tray', 'fatal'] as const)('a %s exit never starts the restart helper, 
     child.emit('exit', 0); await settle(); await vi.advanceTimersByTimeAsync(0);
     expect(app.exit).toHaveBeenCalledOnce();
     expect(restartHelper).not.toHaveBeenCalled();
+  } finally {unmockUpdates();}
+});
+// ET-055 review round 1: the in-app uninstall and the in-app update exclude each other in both directions. The orchestrator's
+// own checks before and after its dialog are tests/unit/app-uninstall.test.ts; the controller's are update-controller.test.ts.
+it('refuses the in-app uninstall while the update is busy, before the orchestrator runs, and wires both directions', async () => {
+  mockAppUninstall({outcome: 'started'}); mockUpdates();
+  try {
+    trayAvailable = true; await ready();
+    // The orchestrator asks main whether an update runs, before and after its confirmation.
+    expect(appUninstallFake.ports.updating?.()).toBe(false);
+    updatesFake.busy = true;
+    expect(appUninstallFake.ports.updating?.()).toBe(true);
+    await expect(uninstallCall(trusted())).resolves.toEqual({outcome: 'failed', code: 'UPDATE_IN_PROGRESS'});
+    expect(appUninstallFake.run).not.toHaveBeenCalled();
+    expect(log).toHaveBeenCalledWith('APP_UNINSTALL', undefined, {outcome: 'failed', code: 'UPDATE_IN_PROGRESS'});
+    await vi.advanceTimersByTimeAsync(0); expect(exitRequests()).toEqual([]);
+    // The controller asks main whether an uninstall runs; the orchestrator's own flag answers.
+    updatesFake.busy = false;
+    expect(updatesFake.options.uninstalling()).toBe(false);
+    appUninstallFake.inProgress = true;
+    expect(updatesFake.options.uninstalling()).toBe(true);
   } finally {unmockUpdates();}
 });

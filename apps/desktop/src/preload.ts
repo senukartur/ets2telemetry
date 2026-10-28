@@ -13,7 +13,7 @@ import {copyTripsQuery, isPageArgument, JOURNAL_CHANNELS, JOURNAL_EXPORT_CHANNEL
 import {isJournalUuid} from '../../../packages/contracts/src/journal';
 import {DIAGNOSTICS_EXPORT_CHANNEL, isPluginGame, isPluginTargetId, PLUGIN_CHANNELS} from './plugin-setup-contract';
 import {UNINSTALL_CHANNEL} from './uninstall-contract';
-import {parseApplicationInfo, parseUpdateView, UPDATE_CHANNELS} from './updater/update-view';
+import {applicationInfoOrFallback, parseUpdateView, UNSUPPORTED_UPDATE, UPDATE_CHANNELS} from './updater/update-view';
 let listener: ((update: LiveTelemetry) => void) | undefined;
 let port: MessagePort | undefined;
 let current: LiveTelemetry = initialLive();
@@ -114,15 +114,15 @@ ipcRenderer.on('telemetry:service-state', (_event, update: LiveTelemetry) => {
 });
 let appStateListener: ((state: AppState) => void) | undefined;
 /**
- * ET-055 (UP9): the application info and the update view are validated again here. A state whose `application` or
- * `update` is not valid never reaches the renderer: a push is dropped and a query rejects. Main validates both before it
- * sends them, so this only guards the boundary.
+ * ET-055 (UP9): the application info and the update view are validated again here, as main does before it sends them.
+ * An invalid update view becomes the fixed `unsupported` view (no action offered) and invalid application info the
+ * fixed fallback with version 0.0.0, so the rest of the state (health, settings, plugins) still reaches the renderer.
+ * Only a state that is not an object at all is dropped (push) or rejected (query).
  */
 function checkedAppState(state: unknown): AppState | undefined {
-  if (typeof state !== 'object' || state === null) return undefined;
+  if (typeof state !== 'object' || state === null || Array.isArray(state)) return undefined;
   const record = state as Record<string, unknown>;
-  const application = parseApplicationInfo(record.application), update = parseUpdateView(record.update);
-  return application && update ? {...(state as AppState), application, update} : undefined;
+  return {...(state as AppState), application: applicationInfoOrFallback(record.application).info, update: parseUpdateView(record.update) ?? UNSUPPORTED_UPDATE};
 }
 async function updateCall(channel: string): Promise<UpdateView> {
   const reply: unknown = await ipcRenderer.invoke(channel);

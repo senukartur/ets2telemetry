@@ -140,6 +140,14 @@ export class UpdateController {
   constructor(private readonly options: UpdateControllerOptions) {}
 
   get view(): UpdateView {return this.current;}
+  /**
+   * True while the update downloads, installs or restarts. The in-app uninstall is refused meanwhile, and this controller
+   * refuses a click while the uninstall runs (`uninstalling`), so the two exclude each other in both directions.
+   */
+  get busy(): boolean {
+    const state = this.current.state;
+    return state === 'downloading' || state === 'installing' || state === 'restarting';
+  }
   /** The restart helper's target, only while the controller has requested its exit (`restarting`). */
   get restartTarget(): {readonly installRoot: string; readonly executableName: string} | undefined {
     return this.current.state === 'restarting' && this.context ? {installRoot: this.context.installRoot, executableName: this.context.executableName} : undefined;
@@ -178,6 +186,8 @@ export class UpdateController {
     let running: RunningCheck;
     try {running = await this.options.ports.checkRunning().catch((): RunningCheck => ({ok: false}));} finally {this.clicking = false;}
     if (this.retired || this.options.exiting()) {this.dispatch({type: 'refused', code: 'EXITING'}); return this.current;}
+    // An uninstall that started while the games were listed wins: nothing downloads.
+    if (this.options.uninstalling()) {this.dispatch({type: 'refused', code: 'BUSY'}); return this.current;}
     const refusal = runningRefusal(running);
     if (refusal) {this.options.log('UPDATE_REFUSED', {code: refusal}); this.dispatch({type: 'refused', code: refusal}); return this.current;}
     if (state === 'ready') {this.restart(); return this.current;}
@@ -269,6 +279,13 @@ export class UpdateController {
       await clearUpdates(ports.fs, context.dataRoot);
       this.options.log('UPDATE_DOWNLOAD_ABORTED', {code: 'EXITING'});
       this.dispatch({type: 'aborted'});
+      return;
+    }
+    // The last check before Update.exe: an uninstall that runs now keeps the installed version untouched.
+    if (this.options.uninstalling()) {
+      await clearUpdates(ports.fs, context.dataRoot);
+      this.options.log('UPDATE_DOWNLOAD_ABORTED', {code: 'UNINSTALLING'});
+      this.dispatch({type: 'aborted'}); this.dispatch({type: 'refused', code: 'BUSY'});
       return;
     }
     this.dispatch({type: 'installing'});

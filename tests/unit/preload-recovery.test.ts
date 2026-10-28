@@ -433,15 +433,32 @@ it.each([
   ipc.invoke.mockResolvedValueOnce(reply);
   await expect(bridge.updateApplication()).rejects.toThrow('Invalid update state');
 });
-it('drops a pushed state and rejects a queried one whose application info or update view is invalid', async () => {
+// Review round 1: an invalid application info or update view is replaced by a fixed fallback, so the rest of the state
+// (health, settings, plugins) still reaches the renderer; only a state that is not an object is dropped or rejected.
+it('replaces an invalid application info or update view with fixed fallbacks and keeps the rest of the state', async () => {
   const listener = vi.fn(); bridge.subscribeAppState(listener);
-  const valid = {health: {}, application: APPLICATION, update: UPDATE_IDLE};
-  for (const state of [{...valid, update: {...UPDATE_IDLE, state: 'installed'}}, {...valid, application: {...APPLICATION, channel: 'beta'}},
-    {...valid, application: {...APPLICATION, version: '..\\..\\Update.exe'}}, {...valid, application: {...APPLICATION, path: 'C:\\x'}}, {health: {}}, null]) {
+  const health = {service: 'ready'};
+  const UNSUPPORTED = {state: 'unsupported', available: null, progress: null, refusal: null, failure: null, lastCheck: null};
+  const cases: [unknown, unknown, unknown][] = [
+    [{...UPDATE_IDLE, state: 'installed'}, APPLICATION, {application: APPLICATION, update: UNSUPPORTED}],
+    [{...UPDATE_IDLE, url: 'https://github.com/x'}, APPLICATION, {application: APPLICATION, update: UNSUPPORTED}],
+    [UPDATE_IDLE, {...APPLICATION, channel: 'beta'}, {application: {version: '0.0.0', channel: 'production', packaged: true}, update: UPDATE_IDLE}],
+    [UPDATE_IDLE, {...APPLICATION, version: '..\\..\\Update.exe'}, {application: {version: '0.0.0', channel: 'staging', packaged: true}, update: UPDATE_IDLE}],
+    [UPDATE_IDLE, {...APPLICATION, path: 'C:\\x'}, {application: {version: '0.0.0', channel: 'staging', packaged: true}, update: UPDATE_IDLE}],
+    [undefined, undefined, {application: {version: '0.0.0', channel: 'production', packaged: false}, update: UNSUPPORTED}]
+  ];
+  for (const [update, application, expected] of cases) {
+    const state = {health, application, update};
+    ipc.emit('app:state', {}, state);
+    expect(listener).toHaveBeenLastCalledWith({health, ...expected as object});
+    ipc.invoke.mockResolvedValueOnce(state);
+    await expect(bridge.getAppState()).resolves.toEqual({health, ...expected as object});
+  }
+  listener.mockClear();
+  for (const state of [null, 'state', []]) {
     ipc.emit('app:state', {}, state);
     ipc.invoke.mockResolvedValueOnce(state);
     await expect(bridge.getAppState()).rejects.toThrow('Invalid application state');
   }
   expect(listener).not.toHaveBeenCalled();
-  ipc.emit('app:state', {}, valid); expect(listener).toHaveBeenCalledExactlyOnceWith(valid);
 });

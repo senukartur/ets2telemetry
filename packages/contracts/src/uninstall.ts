@@ -10,9 +10,10 @@ export type UninstallBlockCode = UninstallBlockReason | 'REGISTRY_INVALID' | 'RE
 /**
  * Why the in-app uninstall failed before it changed anything: the install location could not be confirmed (the roots
  * refusals), another uninstall runs, the dialog could not open, the intent could not be written, or the cleanup threw.
+ * `UPDATE_IN_PROGRESS` (ET-055): an in-app update downloads, installs or restarts; the two exclude each other.
  */
 export type UninstallFailureCode = 'ROOT_MISMATCH' | 'LAYOUT_INVALID' | 'DATA_ROOT_LINKED' | 'TEST_ROOT_INVALID' | 'BUSY' | 'DIALOG_FAILED' | 'INTENT_FAILED'
-  | 'ENGINE_FAILED';
+  | 'ENGINE_FAILED' | 'UPDATE_IN_PROGRESS';
 /** A blocked game folder: its listed target id (`<game>:<source>:<ordinal>`), or `<game>:other` when it is not listed. */
 export interface UninstallBlockedFolder {targetId: string; reason: UninstallBlockReason}
 /**

@@ -389,6 +389,7 @@ export const RU_DICTIONARY: TranslationDictionary = channelCopyTable(Object.free
   "copy.the-data-folder-is-a-link-to-another-location-so-it-is-not-deleted-r": "папка данных — ссылка на другое расположение, поэтому она не удалена. Удалите её вручную.",
   "copy.this-test-installation-is-not-marked-correctly": "тестовая установка помечена некорректно.",
   "copy.an-uninstall-is-already-in-progress": "удаление уже выполняется.",
+  "copy.an-update-is-being-downloaded-or-installed": "обновление загружается или устанавливается. Повторите попытку после его завершения.",
   "copy.the-confirmation-could-not-be-shown": "не удалось показать подтверждение.",
   "copy.the-uninstall-record-could-not-be-written-to-the-data-folder": "не удалось записать сведения об удалении в папку данных.",
   "copy.an-unexpected-error-stopped-it-nothing-more-was-removed-run-the-unin": "операцию остановила неожиданная ошибка. Дальнейшего удаления не было; запустите удаление снова.",

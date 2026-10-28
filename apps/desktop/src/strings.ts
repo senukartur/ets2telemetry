@@ -1102,7 +1102,8 @@ export const UNINSTALL_FAILURE_TEXT: Readonly<Record<UninstallFailureCode, strin
   BUSY: 'an uninstall is already in progress.',
   DIALOG_FAILED: 'the confirmation could not be shown.',
   INTENT_FAILED: 'the uninstall record could not be written to the data folder.',
-  ENGINE_FAILED: 'an unexpected error stopped it. Nothing more was removed; run the uninstall again.'
+  ENGINE_FAILED: 'an unexpected error stopped it. Nothing more was removed; run the uninstall again.',
+  UPDATE_IN_PROGRESS: 'an update is being downloaded or installed. Try again after it finishes.'
 });
 /** How a game folder that is no longer a game folder was handled (the engine's notes); shown in the result. */
 export const UNINSTALL_NOTE_TEXT: Readonly<Record<FolderNote, string>> = channelCopyTable(Object.freeze({
