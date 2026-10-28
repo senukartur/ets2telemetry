@@ -8,6 +8,7 @@ import {performance} from 'node:perf_hooks';
 import {RECORDING_NOT_RECORDED_TEXT, waitForCurrentTelemetry, waitForRecordingText} from './renderer-observation.mjs';
 import {waitForOverlay} from './overlay-observation.mjs';
 import {observeExit} from './exit-observation.mjs';
+import {smokeDataRoot} from './smoke-build.mjs';
 
 // ET-011b settings evidence. Run A starts with a deliberately truncated settings file, which must stay byte-identical
 // until the first save quarantines it; run B must load the saved file without writing.
@@ -36,7 +37,7 @@ placements: {strip: {x: 0.5, y: 0, scale: 1}, card: {x: 1, y: 0, scale: 1}, clus
 const QUARANTINE_NAME = /^settings\.rejected-\d{8}T\d{6}Z\.json$/;
 // 25 m/s and 73 L in the us-customary profile.
 const US_DASHBOARD = {speed: 'Speed: 56 mph', fuel: 'Fuel: 19.3 US gal'};
-const settingsDirectory = config => path.join(config.localappdata, 'ETS2Telemetry', 'settings');
+const settingsDirectory = config => path.join(smokeDataRoot(config), 'settings');
 
 /** Seeds the isolated LOCALAPPDATA before run A launches. */
 export async function seedLifecycleSettings(config) {

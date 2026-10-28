@@ -9,8 +9,9 @@ import {promisify} from 'node:util';
 import {_electron as electron} from '@playwright/test';
 import {rendererPages} from '../ci/overlay-observation.mjs';
 import {settingsPanel, waitForStartup} from '../ci/ui-navigation.mjs';
+import {BUILD_IDENTITIES} from '../build-channel.mjs';
 import {assertVersionInfo, readVersionInfo} from '../release-identity.mjs';
-import {checkedPaths, checkInstalled, checkLaunchEnvironment, checkRunPlan, checkRunSignal, FACTS_VARIABLE, factsEvidence, InstallerGuardError, installedEnvironment, normalizePath,
+import {checkedPaths, checkInstalled, checkLaunchEnvironment, checkRunPlan, checkRunSignal, checkSetupChannel, FACTS_VARIABLE, factsEvidence, InstallerGuardError, installedEnvironment, normalizePath,
   checkDataRootUnchanged, checkDecoyUnchanged, checkUninstallResidue, checkRegistrationIcon, classifyRegistrationIcon, electronRuntimeNames, ownsRegistration, parseUninstallString, resolveRealLocation, RUN_ONCE_KEY, RUN_ROOT_NAME,
   checkProductLinks, checkRegistrationNames, checkUninstallEntries, classifyProductLinks, PRODUCT_EXECUTABLE, ROOT_ICON_FILE, runLayout, steamLibraryPaths,
   uninstallEnvironment} from './installer-guard.mjs';
@@ -21,7 +22,7 @@ import {checkedPaths, checkInstalled, checkLaunchEnvironment, checkRunPlan, chec
 // which the harness calls only after the guards passed. See docs/installer-testing.md.
 //
 // Commands (all paths come from the harness's config file; evidence goes to config.evidence):
-//   signal [--allow-local]                    the CI signal (checkRunSignal); first, before anything is read
+//   signal --channel <c> [--allow-local]      the CI signal (checkRunSignal) and the Setup's channel (checkSetupChannel); first
 //   guard <config> <plan|ready>               the fail-closed preflight (checkRunPlan) on the harness's facts
 //   installed <config> <label> <version>      checkInstalled on the facts the harness read after an installer step; ET-045g
 //                                             also records icon-<label>.json (the DisplayIcon shape and the root and packaged
@@ -195,7 +196,8 @@ function versionInfo(config, label, version) {
   assert.match(String(label), /^[a-z0-9.-]{1,40}$/, 'VERSION_INFO_LABEL_INVALID');
   assert.match(String(version), /^[0-9]{1,4}\.[0-9]{1,4}\.[0-9]{1,4}$/, 'VERSION_INFO_VERSION_INVALID');
   const info = readVersionInfo(path.win32.join(runLayout(config.runRoot).binaryRoot, `app-${version}`, PRODUCT_EXECUTABLE), process.env);
-  assertVersionInfo(info);
+  // The lifecycle installs production Setups only until ET-055 PR-5 (checkSetupChannel); never the shell's channel.
+  assertVersionInfo(info, BUILD_IDENTITIES.production);
   return {versionInfo: info};
 }
 
@@ -1102,6 +1104,8 @@ let config;
 try {
   if (command === 'signal') {
     checkRunSignal(process.env, {allowLocal: rest.includes('--allow-local')});
+    const channelAt = rest.indexOf('--channel');
+    checkSetupChannel(channelAt === -1 ? undefined : rest[channelAt + 1], process.env);
     result.passed = true;
   } else {
     config = await readJson(rest[0], 64 * 1024);

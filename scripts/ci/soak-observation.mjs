@@ -13,10 +13,11 @@ import {
   checkTail, compactSoakLogs, databaseGrowth, journalPageSizes, listDifferences, logBudget, seriesSummary, SOAK_FAILURE_EVENTS, SOAK_RECORDING_FAILURES, soakExpectation, soakSessionId,
   summarizeSoakMetrics, tripUuidOf
 } from './soak-evidence.mjs';
+import {smokeDataRoot} from './smoke-build.mjs';
 
 // ET-019 PR-12b: the packaged application soak (scenario `soak`, docs/ci.md#et-019-recording-soak-workflow-dispatch-only).
 // The application records the protocol v1 simulator's soak source (`serve-v1-soak --minutes <M>`, docs/simulator-v1.md)
-// into `<isolated LOCALAPPDATA>\ETS2Telemetry\synthetic\soak.sqlite` (ETS2TELEMETRY_RECORDING=synthetic:soak) for M
+// into `<isolated LOCALAPPDATA>\<data root>\synthetic\soak.sqlite` (ETS2TELEMETRY_RECORDING=synthetic:soak) for M
 // minutes of cycles, beside the v0 live smoke source of the other journeys. The driver spawns the source itself with a
 // stdin pipe: BoundedProcess gives the Job's root process a NUL stdin, and only a `stop` line ends the source with its
 // summary. The service connects to the source directly; the source refuses and counts live-only hellos while storage
@@ -55,7 +56,7 @@ async function bounded(promise, message) {
   finally {clearTimeout(timer);}
 }
 const sizeOf = async file => {try {return (await stat(file)).size;} catch {return 0;}};
-export const soakDatabasePath = config => path.join(config.localappdata, 'ETS2Telemetry', 'synthetic', 'soak.sqlite');
+export const soakDatabasePath = config => path.join(smokeDataRoot(config), 'synthetic', 'soak.sqlite');
 
 /**
  * Starts `serve-v1-soak --minutes <M>` (the built simulator CLI) with a stdin pipe and the run's isolated TEMP, APPDATA
@@ -296,7 +297,7 @@ export async function verifySoakRun({config, record, mainEvents, serviceEvents})
   record.sourceMatch = true;
 
   // Files: the synthetic database only, closed cleanly; no history database.
-  const root = path.join(config.localappdata, 'ETS2Telemetry'), database = soakDatabasePath(config);
+  const root = smokeDataRoot(config), database = soakDatabasePath(config);
   const header = Buffer.alloc(100), file = await open(database, 'r');
   try {await file.read(header, 0, 100, 0);} finally {await file.close();}
   const files = record.files = {magic: header.subarray(0, 15).toString('latin1'), applicationId: header.readInt32BE(68), userVersion: header.readUInt32BE(60),

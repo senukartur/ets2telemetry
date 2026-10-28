@@ -1,14 +1,19 @@
 [CmdletBinding()]
 param(
-    [string]$PackageDirectory = (Join-Path $PSScriptRoot '../out/ETS2Telemetry Desktop-win32-x64'),
+    # The package of the build that was made (scripts/build-channel.mjs --built, ET-055 PR-4) unless one is given.
+    [string]$PackageDirectory,
     [ValidateRange(5, 60)][int]$TimeoutSeconds = 30,
     [string]$ExpectedAsarSha256,
     [string]$ExpectedPackageSha256,
     [switch]$Launch
 )
 $ErrorActionPreference = 'Stop'
+$builtText = & (Get-Command node -ErrorAction Stop).Source (Join-Path $PSScriptRoot 'build-channel.mjs') --built
+if ($LASTEXITCODE -ne 0) { throw 'Build evidence unavailable: run npm run package first.' }
+$built = ($builtText -join "`n") | ConvertFrom-Json
+if (!$PackageDirectory) { $PackageDirectory = Join-Path $PSScriptRoot ('../' + $built.packageDirectory) }
 $package = (Resolve-Path -LiteralPath $PackageDirectory).Path
-$executable = Join-Path $package 'ETS2TelemetryDesktop.exe'
+$executable = Join-Path $package $built.executable
 $archive = Join-Path $package 'resources/app.asar'
 $hash = (Get-FileHash -LiteralPath $archive -Algorithm SHA256).Hash
 if (!(Test-Path -LiteralPath $executable -PathType Leaf)) { throw 'Packaged executable is missing.' }
@@ -18,7 +23,7 @@ $plan = [ordered]@{ executable=$executable; asarSha256=$hash; packageSha256=$int
 if (!$Launch) { $plan | ConvertTo-Json; return }
 if (!$ExpectedAsarSha256 -or $ExpectedAsarSha256 -ne $hash) { throw 'Launch requires the reviewed package ASAR SHA256. Run without -Launch to inspect it.' }
 if (!$ExpectedPackageSha256 -or $ExpectedPackageSha256 -ne $integrity.packageSha256) { throw 'Launch requires the reviewed full package SHA256, including all executable and unpacked bytes.' }
-if (Get-Process -Name ETS2TelemetryDesktop -ErrorAction SilentlyContinue) { throw 'A desktop instance already exists. No launch performed.' }
+if (Get-Process -Name ([IO.Path]::GetFileNameWithoutExtension($built.executable)) -ErrorAction SilentlyContinue) { throw 'A desktop instance already exists. No launch performed.' }
 Add-Type -Path (Join-Path $PSScriptRoot 'watchdog/BoundedProcess.cs')
 $runDirectory = Join-Path $PSScriptRoot ('../.local/diagnostics/watchdog-' + [guid]::NewGuid().ToString('N'))
 New-Item -ItemType Directory -Path $runDirectory | Out-Null

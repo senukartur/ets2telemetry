@@ -12,9 +12,10 @@ import {closeDashboard, lifecycleState, newDashboardPage, until} from './lifecyc
 import {observeExit} from './exit-observation.mjs';
 import {startRecordingProxy} from './recording-proxy.mjs';
 import {clickTestId, dialogCalls, exportTrip, exportValidator, listState, openDetail, openTable, stubSaveDialog, untilPage} from './journal-observation.mjs';
+import {smokeBuild, smokeDataRoot, smokeDisplayName} from './smoke-build.mjs';
 
 // ET-015a PR-4: the recording runtime journey. The service records the synthetic protocol v1 source into
-// `<isolated LOCALAPPDATA>\ETS2Telemetry\synthetic\smoke.sqlite` (ETS2TELEMETRY_RECORDING=synthetic:smoke) while the
+// `<isolated LOCALAPPDATA>\<data root>\synthetic\smoke.sqlite` (ETS2TELEMETRY_RECORDING=synthetic:smoke) while the
 // reactive simulator serves normal-delivery with a journey transport (JOURNEY_TRANSPORT). A recording proxy between the
 // service and the simulator (recording-proxy.mjs) forwards only durable hellos, one admitted connection at a time and
 // none held longer than 2 s, and applies the scripted ACK policy: connection 1 delivers four ACKs and loses the fifth,
@@ -107,7 +108,7 @@ const RECORDING_TEXT_INTERRUPTED = Object.freeze({headline: 'Connection lost; re
  * the redelivered eventSeq 5 is a duplicate, not a loss, so no event is lost.
  */
 const RECORDING_LOSSES_AFTER_REDELIVERY = Object.freeze({...NO_LOSSES, notConnected: 1});
-const RECORDING_TEXT_LOSSES_AFTER_REDELIVERY = Object.freeze(['Gaps recorded since Yukon Union Telemetry started', 'Intervals without a connection: 1']);
+const recordingTextLossesAfterRedelivery = config => Object.freeze([`Gaps recorded since ${smokeDisplayName(config)} started`, 'Intervals without a connection: 1']);
 /** The states in which the durable cursor is active with fresh v1 data: recording, or recording a paused game. */
 const RECORDED_STATES = Object.freeze(['recording', 'paused']);
 const RECORDED_HEADLINES = Object.freeze(['Recording', 'Game paused; recording continues when it resumes']);
@@ -322,7 +323,7 @@ export async function runRecordingSmoke({application, launcher, dashboard, recor
   // The dashboard reopened from the tray gets the current status with the totals since ETS2Telemetry started.
   assert.equal(await application.evaluate(({app}) => app.emit('ets2telemetry:diagnostic-tray-action', 'open')), true, 'Diagnostic tray action unavailable');
   const reopened = await newDashboardPage(application, [dashboard]);
-  record.status.reopened = await waitForRecordingText(reopened, {losses: RECORDING_TEXT_LOSSES_AFTER_REDELIVERY, notice: TEST_NOTICE, alert: null},
+  record.status.reopened = await waitForRecordingText(reopened, {losses: recordingTextLossesAfterRedelivery(config), notice: TEST_NOTICE, alert: null},
     'RECORDING_LOSSES_NOT_SHOWN_AFTER_REOPEN');
   assert.equal(record.status.reopened.detail?.[0], SYNTHETIC_NOTE);
   record.statusReopenedLosses = true;
@@ -564,7 +565,7 @@ async function reconcileExport({config, record, raw, session, restartMainEvents}
   // Hand-written sections.
   assert.deepEqual({format: document.format, formatVersion: document.formatVersion, application: document.header.application, purpose: document.header.database.purpose,
     schemaVersion: document.header.database.schemaVersion, sessionOrigin: document.header.sessionOrigin},
-  {format: 'ets2telemetry.trip-export', formatVersion: 2, application: {name: 'ETS2Telemetry', version: '0.1.0'}, purpose: 'synthetic', schemaVersion: 3, sessionOrigin: 'synthetic'});
+  {format: 'ets2telemetry.trip-export', formatVersion: 2, application: {name: 'ETS2Telemetry', version: smokeBuild(config).version}, purpose: 'synthetic', schemaVersion: 3, sessionOrigin: 'synthetic'});
   assert.deepEqual(document.trip, exportTripSection(session, trip, recordingHardModeAudit(document, record)), 'The exported trip differs from the hand-written row');
   assert.deepEqual(document.window, {known: true, pluginSessionId: session, fromEventSeq: '3', throughEventSeq: '8', end: 'close-event'});
   assert.deepEqual({source: document.job.source, eventSeq: document.job.eventSeq, checkpointNextEventSeq: document.job.checkpointNextEventSeq, values: document.job.values},
@@ -735,7 +736,7 @@ export async function verifyRecordingRun({config, record, recording, mainEvents,
   assert.ok(record.proxy.connections.every(c => !c.decodeFailure && c.gaps === 0 && c.end === null));
 
   // Files: the synthetic database only, closed cleanly; no history database.
-  const root = path.join(config.localappdata, 'ETS2Telemetry'), database = path.join(root, 'synthetic', 'smoke.sqlite');
+  const root = smokeDataRoot(config), database = path.join(root, 'synthetic', 'smoke.sqlite');
   const header = Buffer.alloc(100), file = await open(database, 'r');
   try {await file.read(header, 0, 100, 0);} finally {await file.close();}
   const files = record.files = {magic: header.subarray(0, 15).toString('latin1'), applicationId: header.readInt32BE(68), userVersion: header.readUInt32BE(60),

@@ -59,6 +59,17 @@ export function checkRunSignal(env, {allowLocal = false} = {}) {
   if (env.GITHUB_ACTIONS !== 'true' || env.RUNNER_ENVIRONMENT !== 'github-hosted') refuse('LOCAL_RUN_REFUSED');
 }
 /**
+ * ET-055 PR-4 (UP13): the build channel of the Setup the lifecycle may install. Outside a GitHub-hosted runner (an
+ * owner-requested -AllowLocal run) only a staging Setup may be installed, never the production identity of the owner's
+ * installed application, so a production Setup runs on a hosted runner only. The staging lifecycle itself (its install root,
+ * names and versions) arrives with ET-055 PR-5; until then a staging Setup is refused everywhere.
+ */
+export function checkSetupChannel(channel, env) {
+  if (channel !== 'production' && channel !== 'staging') refuse('SETUP_CHANNEL_UNKNOWN');
+  if (channel === 'production' && (env.GITHUB_ACTIONS !== 'true' || env.RUNNER_ENVIRONMENT !== 'github-hosted')) refuse('LOCAL_PRODUCTION_REFUSED');
+  if (channel === 'staging') refuse('STAGING_LIFECYCLE_PENDING');
+}
+/**
  * The one top-level folder Windows may create under any LOCALAPPDATA a process runs with: the shell and Update.exe add
  * `Microsoft\Windows\Caches` (and possibly more below `Microsoft`) beside the decoy's sentinels. Nothing else is allowed.
  */

@@ -139,7 +139,7 @@ export function channelCopy(text: string, channel: ChannelIdentity = CHANNEL): s
   // The export refusal names every data root the channel refuses (UP12: a staging export refuses both). Its folder list
   // goes in as a placeholder, so the root renaming below never turns the production root of that list into staging's.
   const roots = channel.exportRefusalDataRootNames.map(name => '%LOCALAPPDATA%\\' + name);
-  const LIST = '', refusals: [string, string][] = roots.length < 2 ? [] : [
+  const LIST = '\uE000', refusals: [string, string][] = roots.length < 2 ? [] : [
     [`data folder, ${productionRoot}.`, `data folders, ${LIST}en${LIST}.`],
     [`вне папки данных ${production.displayName}, ${productionRoot}.`, `вне папок данных ${production.displayName}: ${LIST}ru${LIST}.`]
   ];
@@ -154,7 +154,7 @@ export function channelCopy(text: string, channel: ChannelIdentity = CHANNEL): s
   ];
   const listed = refusals.reduce((rest, [from, to]) => rest.split(from).join(to), text);
   const renamed = names.reduce((rest, [from, to, guard]) => rest.replace(new RegExp(`${escapeRegExp(from)}${guard}(?![A-Za-z0-9])`, 'g'), () => to), listed);
-  return renamed.replace(/(en|ru)/g, (_match, language: string) => roots.join(language === 'ru' ? ' и ' : ' and '));
+  return renamed.replace(/\uE000(en|ru)\uE000/g, (_match, language: string) => roots.join(language === 'ru' ? ' и ' : ' and '));
 }
 
 /**

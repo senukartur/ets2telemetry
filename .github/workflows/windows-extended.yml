@@ -85,7 +85,8 @@ jobs:
       - name: Build the native seeded fuzz cases
         id: native
         run: |
-          cmake -S native/telemetry-plugin -B native/telemetry-plugin/build -G 'Visual Studio 17 2022' -A x64
+          # ET-055 PR-4: CMake's default channel is staging; the native fuzz cases keep running on the production names.
+          cmake -S native/telemetry-plugin -B native/telemetry-plugin/build -G 'Visual Studio 17 2022' -A x64 -DETS2TELEMETRY_CHANNEL=production
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           cmake --build native/telemetry-plugin/build --config Release --target v1-producer-test snapshot-transport-test v1-transport-test --parallel
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }

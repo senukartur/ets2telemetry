@@ -4,7 +4,8 @@ import {existsSync} from 'node:fs';
 import {constants, copyFile, mkdir, open, readdir, readFile, realpath, stat} from 'node:fs/promises';
 import path from 'node:path';
 import {listState, untilPage} from './journal-observation.mjs';
-import {RECORDING_STOPPED_SCHEMA_NEWER_TEXT, waitForRecordingText} from './renderer-observation.mjs';
+import {recordingStoppedSchemaNewerText, waitForRecordingText} from './renderer-observation.mjs';
+import {smokeDataRoot, smokeDisplayName} from './smoke-build.mjs';
 
 // ET-019 PR-7: the newer-database refusal in the running application (REG-013, REG-014, REG-017). Before the launch the
 // driver copies the immutable storage fixture `schema-newer-999.sqlite` (this application's id, schema version 999) to
@@ -27,7 +28,7 @@ const REFUSED_ANSWER = Object.freeze({ok: false, code: 'DATABASE_UNAVAILABLE', s
 const ANY_TRIP = '7a000000-0000-4000-8000-000000000001';
 
 const sha256 = async file => createHash('sha256').update(await readFile(file)).digest('hex');
-const historyFile = config => path.join(config.localappdata, 'ETS2Telemetry', 'data', 'telemetry.sqlite');
+const historyFile = config => path.join(smokeDataRoot(config), 'data', 'telemetry.sqlite');
 async function header(file) {
   const bytes = Buffer.alloc(100), handle = await open(file, 'r');
   try {await handle.read(bytes, 0, 100, 0);} finally {await handle.close();}
@@ -96,7 +97,7 @@ export async function runRefusalSmoke({dashboard, config, record}) {
   assert.deepEqual(record.health, {service: 'ready', storage: 'verified', recording: {state: 'stopped', target: 'history', code: 'SCHEMA_NEWER',
     losses: {lostEvents: 0, eventLoss: 0, notConnected: 0, sampleLoss: 0, restoreLoss: 0, droppedSamples: 0}, trip: null}, lastError: null}, 'Main\'s health is not ready and stopped with SCHEMA_NEWER');
   record.healthConsistent = true;
-  record.recordingText = await waitForRecordingText(dashboard, RECORDING_STOPPED_SCHEMA_NEWER_TEXT, 'RECORDING_STOPPED_TEXT_NOT_SHOWN');
+  record.recordingText = await waitForRecordingText(dashboard, recordingStoppedSchemaNewerText(smokeDisplayName(config)), 'RECORDING_STOPPED_TEXT_NOT_SHOWN');
   record.recordingStoppedShown = true;
   await dashboard.getByTestId('tab-journal').click({timeout: 5000});
   // listState answers as soon as an error is shown; an empty or filled list must have no row to pass the wait instead.

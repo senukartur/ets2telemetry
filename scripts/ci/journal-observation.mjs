@@ -6,10 +6,11 @@ import {builtinModules, createRequire} from 'node:module';
 import path from 'node:path';
 import {performance} from 'node:perf_hooks';
 import {pathToFileURL} from 'node:url';
+import {smokeBuild, smokeDataRoot, smokeDisplayName} from './smoke-build.mjs';
 
 // ET-016 PR-4: the journal runtime journey (J12-J14). Run 1 opens the new, empty history database of the isolated
 // LOCALAPPDATA and shows the Journal tab's empty state. Between the runs, journal-seed.mjs writes the hand-written anchors,
-// fillers and a paging trip into `<isolated LOCALAPPDATA>\ETS2Telemetry\synthetic\journal.sqlite` through the real storage
+// fillers and a paging trip into `<isolated LOCALAPPDATA>\<data root>\synthetic\journal.sqlite` through the real storage
 // code. Run 2 starts with ETS2TELEMETRY_RECORDING=synthetic:journal, so its telemetry service opens that database
 // instead of history; the journey walks the list pages and filters, opens every anchor's detail and pages the timeline,
 // completeness intervals and samples, all through the dashboard's UI. Every expected text below is written by hand
@@ -166,7 +167,7 @@ export async function runJournalEmpty({dashboard, record}) {
 /** Bundles journal-seed.mjs and runs it under the checkout's Electron in Node mode against the isolated LOCALAPPDATA. */
 export async function seedJournalDatabase({config, record}) {
   const started = performance.now();
-  const database = path.join(config.localappdata, 'ETS2Telemetry', 'synthetic', 'journal.sqlite');
+  const database = path.join(smokeDataRoot(config), 'synthetic', 'journal.sqlite');
   const directory = path.join(config.output, 'journal-seed');
   const require = createRequire(path.join(config.checkout, 'package.json'));
   // Loaded here, so the other scenarios never load Vite.
@@ -188,7 +189,7 @@ export async function seedJournalDatabase({config, record}) {
   if (exit !== 0) {child.kill(); throw new Error(`JOURNAL_SEED_FAILED ${exit}: ${Buffer.concat(stderr).toString().slice(0, 512)}`);}
   const seed = record.seed = {...JSON.parse(Buffer.concat(stdout).toString()), bundleMs: Math.round(bundled - started), totalMs: Math.round(performance.now() - started)};
   assert.deepEqual({trips: seed.trips, fillers: seed.fillers, pagingTolls: seed.pagingTolls, pagingSamples: seed.pagingSamples}, {trips: 119, fillers: 110, pagingTolls: 104, pagingSamples: 3600});
-  assert.ok(existsSync(database) && !existsSync(path.join(config.localappdata, 'ETS2Telemetry', 'synthetic', 'backups')));
+  assert.ok(existsSync(database) && !existsSync(path.join(smokeDataRoot(config), 'synthetic', 'backups')));
   record.seeded = true;
 }
 
@@ -331,7 +332,15 @@ export async function runJournalSeeded({dashboard, record}) {
 // evaluate (TESTING.md §2); the product has no test seam. The replacement answers with a fixed target inside this run's
 // output folder, records only the default file name and the filters it was offered, and is set anew for each case.
 // ET-018 PR-4 extended the J18 note to settings.
-const EXPORT_NOTE = 'Uninstalling Yukon Union Telemetry removes its local trip history and settings. The JSON export is a copy for your own records; it cannot be imported back.';
+const exportNote = config => `Uninstalling ${smokeDisplayName(config)} removes its local trip history and settings. The JSON export is a copy for your own records; it cannot be imported back.`;
+/**
+ * The refusal of an export target in the data folder, hand-written per channel (ET-055 UP12): a staging build refuses both
+ * data roots and names both.
+ */
+const EXPORT_TARGET_REFUSED_TEXT = Object.freeze({
+  production: 'That location cannot be used. Choose a folder outside the Yukon Union Telemetry data folder, %LOCALAPPDATA%\\ETS2Telemetry.',
+  staging: 'That location cannot be used. Choose a folder outside the Yukon Union Telemetry Staging data folders, %LOCALAPPDATA%\\ETS2TelemetryStaging and %LOCALAPPDATA%\\ETS2Telemetry.'
+});
 const ETS2_A = '10000000-0000-4000-8000-0000000000a1';
 const EUR = {status: 'sdk-documented', code: 'EUR', source: 'scs-sdk-1.15/include/eurotrucks2/scssdk_telemetry_eut2.h#game-specific-units'};
 /** The delivered anchor's export, written by hand from tests/shared/journal-seed.ts: its row, bounds, timeline, samples and money. */
@@ -401,7 +410,7 @@ export async function runJournalExport({application, dashboard, config, record})
   await openDetail(dashboard, T.paging);
   const paging = await exportTrip(dashboard, T.paging, 'Saved the trip as JSON: 105 events, 104 completeness intervals and 3600 one-second samples.');
   assert.deepEqual({button: paging.button, disabled: paging.disabled, failed: paging.failed, note: paging.note},
-    {button: 'Export JSON', disabled: false, failed: 'false', note: EXPORT_NOTE});
+    {button: 'Export JSON', disabled: false, failed: 'false', note: exportNote(config)});
   record.exportNoteShown = true;
   const pagingDialog = await dialogCalls(application);
   await back(dashboard);
@@ -423,7 +432,7 @@ export async function runJournalExport({application, dashboard, config, record})
     assert.deepEqual(problemsOf(document), [], `The ${name} export is not a valid format version 2 document`);
     assert.deepEqual({format: document.format, formatVersion: document.formatVersion, application: document.header.application, purpose: document.header.database.purpose,
       schemaVersion: document.header.database.schemaVersion, sessionOrigin: document.header.sessionOrigin},
-    {format: 'ets2telemetry.trip-export', formatVersion: 2, application: {name: 'ETS2Telemetry', version: '0.1.0'}, purpose: 'synthetic', schemaVersion: 3, sessionOrigin: 'synthetic'});
+    {format: 'ets2telemetry.trip-export', formatVersion: 2, application: {name: 'ETS2Telemetry', version: smokeBuild(config).version}, purpose: 'synthetic', schemaVersion: 3, sessionOrigin: 'synthetic'});
   }
   assert.equal(documents.paging.header.database.uuid, documents.delivered.header.database.uuid);
   // Historical seeds never supplied observation metadata; current settings cannot create retrospective proof.
@@ -446,10 +455,10 @@ export async function runJournalExport({application, dashboard, config, record})
   // The cancel must come from the Save dialog main offered again, not from a reply that skipped it.
   assert.deepEqual(await dialogCalls(application), [deliveredDialog[0]], 'The cancelled export did not offer the Save dialog');
   // (3) A target in the data folder, named in upper case: refused before any file is opened.
-  const dataFolder = path.join(config.localappdata, 'ETS2Telemetry', 'synthetic');
+  const dataFolder = path.join(smokeDataRoot(config), 'synthetic');
   const before = (await readdir(dataFolder)).sort();
-  await stubSaveDialog(application, {canceled: false, filePath: path.join(config.localappdata.toUpperCase(), 'ETS2TELEMETRY', 'SYNTHETIC', 'trip.json')});
-  const refused = await exportTrip(dashboard, T.delivered, 'That location cannot be used. Choose a folder outside the Yukon Union Telemetry data folder, %LOCALAPPDATA%\\ETS2Telemetry.');
+  await stubSaveDialog(application, {canceled: false, filePath: path.join(config.localappdata.toUpperCase(), smokeBuild(config).identity.dataRootName.toUpperCase(), 'SYNTHETIC', 'trip.json')});
+  const refused = await exportTrip(dashboard, T.delivered, EXPORT_TARGET_REFUSED_TEXT[smokeBuild(config).channel]);
   assert.equal(refused.failed, 'true');
   record.exportFolder = (await readdir(folder)).sort();
   record.dataFolderUnchanged = JSON.stringify((await readdir(dataFolder)).sort()) === JSON.stringify(before);
@@ -465,7 +474,7 @@ const EXPORT_EVENTS = [{event: 'JOURNAL_EXPORT_SAVED', facts: {events: 105, samp
   {event: 'JOURNAL_EXPORT_CANCELLED', facts: null}, {event: 'JOURNAL_EXPORT_FAILED', facts: {code: 'EXPORT_TARGET_REFUSED'}}];
 const expectedRefusal = row => row.event === 'JOURNAL_EXPORT_FAILED' && row.facts?.code === 'EXPORT_TARGET_REFUSED';
 
-const journalDatabase = config => path.join(config.localappdata, 'ETS2Telemetry', 'synthetic', 'journal.sqlite');
+const journalDatabase = config => path.join(smokeDataRoot(config), 'synthetic', 'journal.sqlite');
 /**
  * After both runs: run 2 opened only the seeded synthetic database (never history), read it without a failure, closed it
  * cleanly and exited orderly; the file is closed without WAL, shared-memory or journal files.

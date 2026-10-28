@@ -355,6 +355,11 @@ function recordingCases() {
       reason: path.length ? 'RECORDING_RESULT_INCOMPLETE_OR_INVALID' : null});
   return [
     {name: 'intact recording receipt', body: recordingReceipt(), scenario: 'recording', code: 0, available: true, reason: null},
+    // ET-055 PR-4: the reopened losses name the staging display name in a staging run, and only there.
+    {name: 'intact staging recording receipt', body: recordingReceipt(['recording', 'status', 'reopened', 'losses'], ['Gaps recorded since Yukon Union Telemetry Staging started', 'Intervals without a connection: 1']),
+      scenario: 'recording', displayName: 'Yukon Union Telemetry Staging', code: 0, available: true, reason: null},
+    {name: 'production recording losses in a staging run', body: recordingReceipt(), scenario: 'recording', displayName: 'Yukon Union Telemetry Staging', code: 0, available: true,
+      reason: 'RECORDING_RESULT_INCOMPLETE_OR_INVALID'},
     int64('intact receipt'),
     int64('tray exit 1', ['recording', 'trayExit', 'launcherExit'], 1),
     int64('reused service', ['recording', 'restart', 'servicePid'], 4200),
@@ -654,6 +659,11 @@ function refusalCases() {
     ({name: `refusal ${name}`, body: refusalReceipt(path, replacement), scenario: 'refusal', code: 0, available: true, reason: 'REFUSAL_RESULT_INCOMPLETE_OR_INVALID'});
   return [
     {name: 'intact refusal receipt', body: refusalReceipt(), scenario: 'refusal', code: 0, available: true, reason: null},
+    // ET-055 PR-4: a staging build's texts name its own display name; the wrapper passes the built one.
+    {name: 'intact staging refusal receipt', body: refusalReceipt(['refusal', 'recordingText', 'headline'], 'Stopped: the database was written by a newer version. Restart Yukon Union Telemetry Staging after fixing it'),
+      scenario: 'refusal', displayName: 'Yukon Union Telemetry Staging', code: 0, available: true, reason: null},
+    {name: 'production refusal text in a staging run', body: refusalReceipt(), scenario: 'refusal', displayName: 'Yukon Union Telemetry Staging', code: 0, available: true,
+      reason: 'REFUSAL_RESULT_INCOMPLETE_OR_INVALID'},
     {name: 'intact refusal receipt with PowerShell 7 Int64 integers', body: refusalReceipt(), scenario: 'refusal', numbers: 'int64' as const, code: 0, available: true, reason: null},
     {name: 'refusal file grown with Int64 integers', body: refusalReceipt(['refusal', 'file', 'bytesAfter'], 12288), scenario: 'refusal', numbers: 'int64' as const, code: 0,
       available: true, reason: 'REFUSAL_RESULT_INCOMPLETE_OR_INVALID'},
@@ -867,7 +877,7 @@ it('requires an intact current driver receipt and normal Job exit without overwr
     const results = await validateRuntimeReceipts(resources.directory, cases.map((scenario, index) =>
       ({receipt: receipts[index], code: scenario.code, ...('scenario' in scenario ? {scenario: scenario.scenario} : {}),
         ...('numbers' in scenario ? {numbers: scenario.numbers} : {}), ...('mode' in scenario ? {mode: String(scenario.mode)} : {}),
-        ...('jobResult' in scenario ? {jobResult: jobResults[index]} : {})})));
+        ...('jobResult' in scenario ? {jobResult: jobResults[index]} : {}), ...('displayName' in scenario ? {displayName: String(scenario.displayName)} : {})})));
     for (const [index, scenario] of cases.entries()) {
       expect(results[index], scenario.name).toMatchObject({passed: scenario.reason === null,
         driverResultAvailable: scenario.available, reason: scenario.reason});

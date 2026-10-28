@@ -237,7 +237,7 @@ function Test-RecordingServiceEvent {
 # dashboard, which is closed again before the tray exit, an entry of each dashboard text log the driver records, and
 # run B recording again with fresh totals.
 function Test-RecordingStatusReceipt {
-    param([object]$Recording)
+    param([object]$Recording, [string]$DisplayName = 'Yukon Union Telemetry')
     foreach ($field in @('statusWaitingShown','statusRecordingShown','statusUnknownAfterServiceExit','statusReloadKept','statusRecordedWhileClosed',
         'statusNoEventLoss','statusReopenedLosses','statusRunBFresh','dashboardClosedBeforeTrayExit')) {
         if ($Recording.$field -isnot [bool] -or $Recording.$field -ne $true) { return $false }
@@ -264,7 +264,7 @@ function Test-RecordingStatusReceipt {
     if ($null -eq $closed -or $closed.target -cne 'synthetic' -or $null -ne $closed.code -or $closed.state -cnotin @('recording','paused','interrupted') -or
         !(Test-ReceiptInteger -Value $closed.losses.lostEvents -Minimum 0 -Maximum 0) -or
         !(Test-ReceiptInteger -Value $closed.losses.notConnected -Minimum 1 -Maximum 1)) { return $false }
-    if ((@($status.reopened.losses) -join '|') -cne 'Gaps recorded since Yukon Union Telemetry started|Intervals without a connection: 1') { return $false }
+    if ((@($status.reopened.losses) -join '|') -cne ('Gaps recorded since ' + $DisplayName + ' started|Intervals without a connection: 1')) { return $false }
     # The reopened dashboard is closed again, so the tray exit runs with the main window closed.
     if ($status.closedAgain.dashboard -isnot [bool] -or $status.closedAgain.dashboard) { return $false }
     # Each dashboard text log the driver records holds the text it was waited for.
@@ -343,7 +343,7 @@ function Test-RecordingJournalReceipt {
 # ET-015a PR-4 recording journey: commits through a killed and restarted service, close-to-tray, a tray exit and an
 # application restart into one synthetic database, which holds the hand-written rows; no history database exists.
 function Test-RecordingReceipt {
-    param([object]$Driver)
+    param([object]$Driver, [string]$DisplayName = 'Yukon Union Telemetry')
     $recording = $Driver.recording
     if ($null -eq $recording) { return $false }
     foreach ($field in @('commitsActive','serviceRestartRecovered','dashboardClosedRecordingContinued','trayExitOrderly','restartRecovered',
@@ -427,7 +427,7 @@ function Test-RecordingReceipt {
     if ($restartRequests.Count -ne 1 -or $restartRequests[0].facts.reason -cne 'app-quit') { return $false }
     # Only the terminated service's probe remains, as crash evidence.
     if (@($Driver.probesAfterExit).Count -ne 1 -or (@($Driver.probesAfterExit) -join ',') -cne (@($recording.retainedCrashProbe) -join ',')) { return $false }
-    if (!(Test-RecordingStatusReceipt -Recording $recording)) { return $false }
+    if (!(Test-RecordingStatusReceipt -Recording $recording -DisplayName $DisplayName)) { return $false }
     # ET-016 PR-8: the journal and export of the recorded trip.
     if (!(Test-RecordingJournalReceipt -Recording $recording)) { return $false }
     return $true
@@ -520,7 +520,7 @@ function Test-JournalReceipt {
 # its J11 sentence, the recording is stopped with SCHEMA_NEWER (since the game recording enablement of October 25, 2026
 # the history database has a trip recorder) and main's health ready. The hash is the fixture's manifest entry.
 function Test-RefusalReceipt {
-    param([object]$Driver)
+    param([object]$Driver, [string]$DisplayName = 'Yukon Union Telemetry')
     $refusal = $Driver.refusal
     if ($null -eq $refusal) { return $false }
     foreach ($field in @('fixtureUnchanged','placedAtHistoryPath','bridgeRefused','healthConsistent','recordingStoppedShown','journalRefusalShown',
@@ -552,7 +552,7 @@ function Test-RefusalReceipt {
         if (!(Test-ReceiptInteger -Value $losses.$key -Minimum 0 -Maximum 0)) { return $false }
     }
     $text = $refusal.recordingText
-    if ($null -eq $text -or $text.headline -cne 'Stopped: the database was written by a newer version. Restart Yukon Union Telemetry after fixing it' -or
+    if ($null -eq $text -or $text.headline -cne ('Stopped: the database was written by a newer version. Restart ' + $DisplayName + ' after fixing it') -or
         $null -ne $text.detail -or $null -ne $text.losses -or
         $text.alert -cne 'Recording stopped until the telemetry service starts again. Live telemetry and the overlay keep working.' -or
         $text.notice -cne 'Prototype live display. Game history recording is new; check the recording status below.') { return $false }
@@ -914,8 +914,10 @@ function Test-UiReceipt {
 }
 
 function Test-RuntimeReceipt {
+    # ExpectedDisplayName: the build channel's display name inside the recording texts (ET-055; Invoke-RuntimeSmoke.ps1
+    # passes the built one). Production's is the default, the name of every build before ET-055.
     param([string]$DriverResultPath, [string]$ExpectedCommit, [string]$ExpectedMode, [int]$JobExitCode,
-        [string]$ExpectedScenario, [string]$JobResultPath, [string]$ExpectedUiCase)
+        [string]$ExpectedScenario, [string]$JobResultPath, [string]$ExpectedUiCase, [string]$ExpectedDisplayName = 'Yukon Union Telemetry')
     $validation = [ordered]@{passed=$false; driverResultAvailable=$false; reason=$null; driverPassed=$null}
     if (!(Test-Path -LiteralPath $DriverResultPath -PathType Leaf)) {
         $validation.reason = 'DRIVER_RESULT_MISSING'; return $validation
@@ -1071,7 +1073,7 @@ function Test-RuntimeReceipt {
         $validation.reason = 'LIFECYCLE_RESULT_INCOMPLETE_OR_INVALID'; return $validation
     }
     # Recording is additive too (ET-015a PR-4); it tightens no earlier scenario.
-    if ($ExpectedScenario -ceq 'recording' -and !(Test-RecordingReceipt -Driver $driver)) {
+    if ($ExpectedScenario -ceq 'recording' -and !(Test-RecordingReceipt -Driver $driver -DisplayName $ExpectedDisplayName)) {
         $validation.reason = 'RECORDING_RESULT_INCOMPLETE_OR_INVALID'; return $validation
     }
     # Journal is additive too (ET-016 PR-4); it tightens no earlier scenario.
@@ -1079,7 +1081,7 @@ function Test-RuntimeReceipt {
         $validation.reason = 'JOURNAL_RESULT_INCOMPLETE_OR_INVALID'; return $validation
     }
     # ET-019 PR-7: the newer-database refusal is its own scenario; it tightens no earlier scenario.
-    if ($ExpectedScenario -ceq 'refusal' -and !(Test-RefusalReceipt -Driver $driver)) {
+    if ($ExpectedScenario -ceq 'refusal' -and !(Test-RefusalReceipt -Driver $driver -DisplayName $ExpectedDisplayName)) {
         $validation.reason = 'REFUSAL_RESULT_INCOMPLETE_OR_INVALID'; return $validation
     }
     # ET-019 PR-12b: the application soak is its own scenario; it tightens no earlier scenario.

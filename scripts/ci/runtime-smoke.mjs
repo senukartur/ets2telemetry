@@ -29,6 +29,7 @@ import {coldLaunchPhases, observeColdLaunch, observeProcessMemory} from './launc
 import {observeExit} from './exit-observation.mjs';
 import {SOAK_TARGET, compactSoakEvents, runSoakSmoke, startSoakSource, verifySoakLogs, verifySoakRun} from './soak-observation.mjs';
 import {installedEnvironment, minimalPath, normalizePath} from '../installer/installer-guard.mjs';
+import {smokeBuild, smokeDataRoot} from './smoke-build.mjs';
 
 const [configFile] = process.argv.slice(2);
 const config = JSON.parse((await readFile(configFile, 'utf8')).replace(/^\uFEFF/, ''));
@@ -97,13 +98,13 @@ const verifyHistoryEvents = (service, created) => {
 // The database is in the isolated LOCALAPPDATA, checkpointed and closed: a SQLite file of this application at schema
 // version 2 (ET-016) without WAL, shared-memory or journal files, and no pre-migration backup for a new database.
 const verifyHistoryFile = async () => {
-  const database = path.join(config.localappdata, 'ETS2Telemetry', 'data', 'telemetry.sqlite');
+  const database = path.join(smokeDataRoot(config), 'data', 'telemetry.sqlite');
   const file = await open(database, 'r');
   const header = Buffer.alloc(100);
   try {await file.read(header, 0, 100, 0);} finally {await file.close();}
   const facts = {magic: header.subarray(0, 15).toString('latin1'), applicationId: header.readInt32BE(68), userVersion: header.readUInt32BE(60),
     sidecars: ['-wal', '-shm', '-journal'].filter(suffix => existsSync(database + suffix)),
-    backups: existsSync(path.join(config.localappdata, 'ETS2Telemetry', 'backups'))};
+    backups: existsSync(path.join(smokeDataRoot(config), 'backups'))};
   assert.deepEqual(facts, {magic: 'SQLite format 3', applicationId: 1163154226, userVersion: 3, sidecars: [], backups: false});
   return facts;
 };
@@ -162,7 +163,7 @@ try {
   // ET-011b: the lifecycle journey starts from a deliberately invalid settings file in the isolated LOCALAPPDATA.
   if (config.scenario === 'lifecycle') await seedLifecycleSettings(config);
   // ET-017 PR-5: the plugin journey never runs beside a real game, and only against its fake root.
-  if (config.scenario === 'plugin') {assertNoGameRunning(); pluginFixture = await buildPluginFixture(config.output); pluginBefore = await snapshotPluginFixture(pluginFixture);}
+  if (config.scenario === 'plugin') {assertNoGameRunning(); pluginFixture = await buildPluginFixture(config.output, smokeBuild(config).identity); pluginBefore = await snapshotPluginFixture(pluginFixture);}
   // ET-019 PR-7: the history path of the isolated LOCALAPPDATA holds a copy of the newer-schema fixture before the launch.
   if (config.scenario === 'refusal') await placeNewerHistory({config, record: result.refusal = {}});
   if (config.scenario === 'ui' && config.uiCase === 'journal') {await seedJournalDatabase({config, record: result.uiSeed = {}}); journalTarget = JOURNAL_TARGET;}
@@ -493,7 +494,7 @@ try {
         record: result.ui.exitObservation = {}, message: 'APP_CLOSE_TIMEOUT_8_SECONDS'});
       result.ui.firstLauncherExit = launcher.exitCode;
       const settingsBytes = '{"format":"ets2telemetry.settings","version":999,"language":"ru","fixture":"future settings retained byte-identically"}';
-      await writeFile(path.join(config.localappdata, 'ETS2Telemetry', 'settings', 'settings.json'), settingsBytes);
+      await writeFile(path.join(smokeDataRoot(config), 'settings', 'settings.json'), settingsBytes);
       phase('ui-readonly-launch-requested');
       application = await launch(config.diagnosticsRestart); launcher = application.process();
       await application.context().tracing.start({screenshots: true, snapshots: true}); tracing = true;

@@ -9,6 +9,7 @@ import {clusterCentreProbe, clusterSpeedArcProbe, overlayOverflow, stripNumberPr
 import {SCALE_RANGE_FRAMES, SCALE_RANGE_ZOOM, SCALE_REFERENCE_FRAMES} from './overlay-observation.mjs';
 import {stubSaveDialog} from './journal-observation.mjs';
 import {pluginActionResult} from './plugin-fixture.mjs';
+import {smokeDataRoot} from './smoke-build.mjs';
 
 // ET-049: genuine keyboard and held-pointer gestures; the overlay still uses committed settings.
 async function observeOpacityControl({dashboard, config, language, record}) {
@@ -36,7 +37,7 @@ async function observeOpacityControl({dashboard, config, language, record}) {
     assert.equal((await value()).settings.overlay.backgroundOpacity, 80, 'Held drag must not write');
     await dashboard.mouse.up(); await wait(candidate);
     assert.equal(await displayed.innerText(), `${candidate}%`);
-    assert.equal(JSON.parse(await readFile(path.join(config.localappdata, 'ETS2Telemetry/settings/settings.json'), 'utf8')).overlay.backgroundOpacity, candidate);
+    assert.equal(JSON.parse(await readFile(path.join(smokeDataRoot(config), 'settings', 'settings.json'), 'utf8')).overlay.backgroundOpacity, candidate);
   } finally {await dashboard.mouse.up();}
   await dashboard.evaluate(() => globalThis.desktop.setOverlayBackgroundOpacity(80)); await wait(80);
   record.flags.opacityKeyboardFocus = true;
@@ -545,7 +546,7 @@ async function observeUnifiedOverlay({application, dashboard, language, size, re
   record.flags.overlayScroll = true;
 }
 async function observeOverlayEditing({dashboard, config, record}) {
-  const file = path.join(config.localappdata, 'ETS2Telemetry', 'settings', 'settings.json');
+  const file = path.join(smokeDataRoot(config), 'settings', 'settings.json');
   const initial = (await dashboard.evaluate(() => globalThis.desktop.getAppState())).settings.overlay;
   const bytes = await readFile(file);
   const state = () => dashboard.evaluate(() => globalThis.desktop.getAppState());
@@ -825,10 +826,10 @@ export async function runUiSmoke({application, dashboard, overlay, source, sourc
         assert.equal(await dashboard.locator('[data-testid^="overlay-switch-"]').count(), 15);
         await dashboard.getByTestId('overlay-preset-driving-only').focus(); await dashboard.keyboard.press('Enter');
         await until(() => dashboard.evaluate(() => globalThis.desktop.getAppState()), state => !state.settings.overlay.sections.cargo, 'UI_SECTIONS_SAVED');
-        const navigationBytes = await readFile(path.join(config.localappdata, 'ETS2Telemetry', 'settings', 'settings.json'));
+        const navigationBytes = await readFile(path.join(smokeDataRoot(config), 'settings', 'settings.json'));
         await settingsPanel(dashboard, 'data'); assert.equal(await dashboard.getByTestId('source-select').isEnabled(), true);
         await settingsPanel(dashboard, 'overlay'); assert.equal(await dashboard.getByTestId('overlay-switch-cargo').getAttribute('data-state'), 'unchecked');
-        assert.deepEqual(await readFile(path.join(config.localappdata, 'ETS2Telemetry', 'settings', 'settings.json')), navigationBytes);
+        assert.deepEqual(await readFile(path.join(smokeDataRoot(config), 'settings', 'settings.json')), navigationBytes);
         await dashboard.getByTestId('overlay-switch-cargo').focus(); await dashboard.keyboard.press('Space');
         await until(() => dashboard.evaluate(() => globalThis.desktop.getAppState()), state => state.settings.overlay.sections.cargo, 'UI_SWITCH_KEYBOARD_SAVED');
         if (language === 'en' && size.width === 1280) {
@@ -841,7 +842,7 @@ export async function runUiSmoke({application, dashboard, overlay, source, sourc
         }
         await dashboard.getByTestId('overlay-preset-everything').click(); await until(() => dashboard.evaluate(() => globalThis.desktop.getAppState()), state => Object.values(state.settings.overlay.sections).every(Boolean), 'UI_ALL_SECTIONS_SAVED');
         // A plain directory at the isolated settings file path deliberately refuses a save; no real settings are touched.
-        const settingsFile = path.join(config.localappdata, 'ETS2Telemetry', 'settings', 'settings.json'), backup = `${settingsFile}.ui-original`;
+        const settingsFile = path.join(smokeDataRoot(config), 'settings', 'settings.json'), backup = `${settingsFile}.ui-original`;
         assert.ok(!path.relative(config.output, settingsFile).startsWith('..'));
         const bytes = await readFile(settingsFile), before = (await dashboard.evaluate(() => globalThis.desktop.getAppState())).settings.units.ets2;
         const wanted = before === 'metric' ? 'us-customary' : 'metric';
@@ -1111,7 +1112,7 @@ function scaleControls() {
  * enabled. Cancel discards the draft: the settings file keeps its bytes and the saved scale is unchanged.
  */
 async function observeScaleControl({dashboard, config, language, record}) {
-  const settingsFile = path.join(config.localappdata, 'ETS2Telemetry', 'settings', 'settings.json');
+  const settingsFile = path.join(smokeDataRoot(config), 'settings', 'settings.json');
   assert.ok(!path.relative(config.output, settingsFile).startsWith('..'));
   const bytes = await readFile(settingsFile), label = SCALE_CONTROL_TEXT[language];
   await settingsPanel(dashboard, 'overlay');
@@ -1167,7 +1168,7 @@ export async function runUiReadOnly({application, dashboard, config, record, set
     assert.equal(await dashboard.locator('[data-testid^="overlay-switch-"]:disabled').count(), 15);
     assert.equal(await dashboard.locator('[data-testid^="overlay-preset-"]:disabled').count(), 3);
   }
-  const file = path.join(config.localappdata, 'ETS2Telemetry', 'settings', 'settings.json');
+  const file = path.join(smokeDataRoot(config), 'settings', 'settings.json');
   assert.equal(await readFile(file, 'utf8'), settingsBytes);
   record.readOnly = {state: settings.state, writable: settings.writable, language: settings.language, bytesUnchanged: true};
   record.flags.readOnly = true;

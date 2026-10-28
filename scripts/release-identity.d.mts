@@ -11,11 +11,13 @@ export interface InstallerFacts {
   excludedPackageFiles: string[];
   additions: string[];
 }
+export type BuiltBy = {kind: 'github-actions'; runId: string} | {kind: 'local'; runId: null};
 export interface ReleaseIdentity {
   format: 'ets2telemetry.release-identity';
   version: 1;
   createdUtc: string;
   channel: BuildChannel;
+  builtBy: BuiltBy;
   source: {commit: string | null; sourceCommit: string | null; treeClean: boolean | null};
   versions: {app: string; nuget: string; electron: string; plugin: string};
   artifacts: Record<'setup' | 'nupkg' | 'releases', {name: string; size: number; sha256: string}>;
@@ -72,6 +74,7 @@ export function readAuthenticode(files: string[], env?: Readonly<Record<string, 
 export function parseVersionInfoOutput(stdout: string): VersionInfo;
 export function readVersionInfo(file: string, env?: Readonly<Record<string, string | undefined>>): VersionInfo;
 export function assertVersionInfo(info: VersionInfo, identity?: BuildIdentity): void;
+export function builtByOf(env?: Readonly<Record<string, string | undefined>>): BuiltBy;
 export function releaseIdentity(options: {
   checkout?: string;
   build?: ResolvedBuild;
@@ -80,5 +83,6 @@ export function releaseIdentity(options: {
   vendorDirectory?: string;
   signatures?: (files: string[]) => AuthenticodeResult[];
   source?: {commit: string | null; sourceCommit: string | null; treeClean: boolean | null};
+  environment?: Readonly<Record<string, string | undefined>>;
   now?: () => Date;
 }): ReleaseIdentity;

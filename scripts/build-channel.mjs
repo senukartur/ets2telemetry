@@ -8,17 +8,28 @@ import {fileURLToPath, pathToFileURL} from 'node:url';
 // application version), the native build scripts (`-DETS2TELEMETRY_CHANNEL` of the plugin and the broker tree),
 // scripts/stage-native-plugin.mjs and scripts/plugin-bundle.mjs (the DLL and released-list names), forge.config.cjs (the
 // Squirrel id, executable, productName, display name and Setup name), scripts/inspect-package.mjs and
-// scripts/release-identity.mjs (the expected names and the recorded channel).
+// scripts/release-identity.mjs (the expected names and the recorded channel), and scripts/configure-native-plugin.mjs
+// (`npm run native:configure`). The CI, smoke and installer drivers read the channel of the build that was made instead
+// (readBuiltBuild, `node scripts/build-channel.mjs --built`).
 //
-// ETS2TELEMETRY_BUILD_CHANNEL must be exactly `production` or `staging`; anything else, the empty string included, fails.
-// Unset, it is DEFAULT_BUILD_CHANNEL. Nothing at run time switches the channel of a built application.
+// Agent and feature-test builds are staging (UP13, ET-055 PR-4). Unset, ETS2TELEMETRY_BUILD_CHANNEL is
+// DEFAULT_BUILD_CHANNEL, staging. Exactly `staging` is always accepted. Exactly `production` is accepted only on a
+// GitHub-hosted Actions runner (GITHUB_ACTIONS=true and RUNNER_ENVIRONMENT=github-hosted) or with the owner-only override
+// ETS2TELEMETRY_OWNER_PRODUCTION_BUILD=1, so that no local build silently carries the production identities of the
+// owner's installed application; otherwise it fails. Any other
+// value, the empty string included, fails. Agents never set the production channel or the override. Nothing at run time
+// switches the channel of a built application.
 
 export const BUILD_CHANNEL_VARIABLE = 'ETS2TELEMETRY_BUILD_CHANNEL';
+/** The owner-only opt-in to a production build outside GitHub Actions; exactly `1`. Agents never set it. */
+export const OWNER_PRODUCTION_BUILD_VARIABLE = 'ETS2TELEMETRY_OWNER_PRODUCTION_BUILD';
 /** The staging run number (UP15): 1 to 6 digits, zero-padded to 6; read only for staging builds. */
 export const STAGING_RUN_NUMBER_VARIABLE = 'ETS2TELEMETRY_STAGING_RUN_NUMBER';
 export const BUILD_CHANNELS = Object.freeze(['production', 'staging']);
-/** The channel of a build without ETS2TELEMETRY_BUILD_CHANNEL. ET-055 PR-4 makes it staging and adds its guard. */
-export const DEFAULT_BUILD_CHANNEL = 'production';
+/** The channel of a build without ETS2TELEMETRY_BUILD_CHANNEL (UP13): agent and feature-test builds are staging. */
+export const DEFAULT_BUILD_CHANNEL = 'staging';
+/** The build evidence of the desktop bundles, which records the channel and version they were built for (scripts/build.mjs). */
+export const DESKTOP_BUILD_EVIDENCE = 'apps/desktop/dist/build-evidence.json';
 
 /**
  * The build identities of both channels: the subset of apps/desktop/src/channel.ts that packaging needs. Node scripts do
@@ -29,11 +40,13 @@ export const BUILD_IDENTITIES = Object.freeze({
   production: Object.freeze({channel: 'production', squirrelId: 'ETS2TelemetryDesktop', executableName: 'ETS2TelemetryDesktop',
     productName: 'ETS2Telemetry Desktop', appBundleId: 'com.ets2telemetry.desktop', displayName: 'Yukon Union Telemetry',
     setupFileTemplate: 'YukonUnionTelemetry-Setup-{version}.exe', pluginFileName: 'ets2telemetry-plugin.dll',
-    releasedPluginsFile: 'released-plugins.json'}),
+    releasedPluginsFile: 'released-plugins.json', dataRootName: 'ETS2Telemetry', pipePrefix: '\\\\.\\pipe\\ETS2Telemetry-',
+    runOnceValue: 'ETS2TelemetryUninstall', receiptPrefix: 'ETS2Telemetry-uninstall-', legacyShortcutNames: Object.freeze(['ETS2Telemetry Desktop'])}),
   staging: Object.freeze({channel: 'staging', squirrelId: 'ETS2TelemetryDesktopStaging', executableName: 'ETS2TelemetryDesktopStaging',
     productName: 'ETS2Telemetry Desktop Staging', appBundleId: 'com.ets2telemetry.desktop.staging', displayName: 'Yukon Union Telemetry Staging',
     setupFileTemplate: 'YukonUnionTelemetry-Staging-Setup-{version}.exe', pluginFileName: 'ets2telemetry-plugin-staging.dll',
-    releasedPluginsFile: 'released-plugins-staging.json'})
+    releasedPluginsFile: 'released-plugins-staging.json', dataRootName: 'ETS2TelemetryStaging', pipePrefix: '\\\\.\\pipe\\ETS2TelemetryStaging-',
+    runOnceValue: 'ETS2TelemetryStagingUninstall', receiptPrefix: 'ETS2TelemetryStaging-uninstall-', legacyShortcutNames: Object.freeze([])})
 });
 
 /** The package.json version a production build carries as is (the plugin bundle and the Squirrel helpers accept it). */
@@ -42,11 +55,27 @@ const PRODUCTION_VERSION = /^\d{1,9}\.\d{1,9}\.\d{1,9}(-[0-9A-Za-z.-]{1,40})?$/;
 const STAGING_BASE = /^\d{1,9}\.\d{1,9}\.\d{1,9}$/;
 const RUN_NUMBER = /^\d{1,6}$/;
 
-/** The build channel of `env`; throws for any value other than exactly `production` or `staging`. */
+/**
+ * Whether `env` may build production (UP13): a GitHub-hosted Actions runner (GITHUB_ACTIONS=true and
+ * RUNNER_ENVIRONMENT=github-hosted, the signal the installer guard also requires), or the owner-only override. Every value
+ * is exact.
+ */
+export function productionBuildAllowed(env = process.env) {
+  return (env.GITHUB_ACTIONS === 'true' && env.RUNNER_ENVIRONMENT === 'github-hosted') || env[OWNER_PRODUCTION_BUILD_VARIABLE] === '1';
+}
+
+/**
+ * The build channel of `env`: staging when ETS2TELEMETRY_BUILD_CHANNEL is unset or exactly `staging`, production when it
+ * is exactly `production` and productionBuildAllowed(env); throws for anything else.
+ */
 export function resolveBuildChannel(env = process.env) {
   const value = env[BUILD_CHANNEL_VARIABLE];
   if (value === undefined) return DEFAULT_BUILD_CHANNEL;
   if (!BUILD_CHANNELS.includes(value)) throw new Error(`${BUILD_CHANNEL_VARIABLE} must be exactly production or staging, not ${JSON.stringify(value)}`);
+  if (value === 'production' && !productionBuildAllowed(env)) {
+    throw new Error(`A production build runs only on a GitHub-hosted Actions runner or with the owner-only ${OWNER_PRODUCTION_BUILD_VARIABLE}=1. ` +
+      `Agent and feature-test builds are staging: unset ${BUILD_CHANNEL_VARIABLE} (docs/setup.md, "Build channels").`);
+  }
   return value;
 }
 
@@ -95,9 +124,38 @@ export function readCmakeCacheChannel(buildDirectory) {
   return /^ETS2TELEMETRY_CHANNEL:STRING=(.*?)\r?$/m.exec(cache)?.[1] ?? null;
 }
 
-// CLI: node scripts/build-channel.mjs — prints the resolved build of this checkout as JSON.
+/** Forge's package folder of a build identity, relative to the checkout: `out/<productName>-win32-x64`. */
+export function packageDirectoryName(identity) {
+  return `out/${identity.productName}-win32-x64`;
+}
+
+/**
+ * The build the desktop bundles of `root` were made for, from their build evidence (DESKTOP_BUILD_EVIDENCE):
+ * `{channel, identity, version}`. The smoke and installer drivers name the package, executable, data root and plugin from
+ * it, so they follow the build that was actually made and never the variables of the shell that runs them. Throws when the
+ * evidence is missing or names no known channel.
+ */
+export function readBuiltBuild(root = '.') {
+  const evidence = JSON.parse(readFileSync(path.join(root, DESKTOP_BUILD_EVIDENCE), 'utf8'));
+  if (!BUILD_CHANNELS.includes(evidence?.channel)) throw new Error(`${DESKTOP_BUILD_EVIDENCE} names no known build channel: ${JSON.stringify(evidence?.channel)}`);
+  if (typeof evidence.version !== 'string' || !PRODUCTION_VERSION.test(evidence.version)) throw new Error(`${DESKTOP_BUILD_EVIDENCE} names no build version`);
+  return Object.freeze({channel: evidence.channel, identity: BUILD_IDENTITIES[evidence.channel], version: evidence.version});
+}
+
+/** The names a driver needs of a build (`{channel, identity, version}`), as plain JSON-ready values. */
+export function buildNames({channel, identity, version}) {
+  return {channel, version, packageDirectory: packageDirectoryName(identity), executable: `${identity.executableName}.exe`,
+    setup: buildSetupFileName(identity, version), plugin: identity.pluginFileName, squirrelId: identity.squirrelId, productName: identity.productName,
+    displayName: identity.displayName, dataRootName: identity.dataRootName, pipePrefix: identity.pipePrefix, runOnceValue: identity.runOnceValue,
+    receiptPrefix: identity.receiptPrefix, legacyShortcutNames: [...identity.legacyShortcutNames]};
+}
+
+// CLI: `node scripts/build-channel.mjs` prints the build this environment resolves; `--built` prints the build the desktop
+// bundles were made for (readBuiltBuild), which the PowerShell smoke and installer drivers read.
 if (process.argv[1] && import.meta.url === pathToFileURL(path.resolve(process.argv[1])).href) {
-  const build = resolveBuild({root: path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')});
-  console.log(JSON.stringify({channel: build.channel, version: build.version, baseVersion: build.baseVersion, executable: `${build.identity.executableName}.exe`,
-    setup: buildSetupFileName(build.identity, build.version), plugin: build.identity.pluginFileName}, null, 2));
+  const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
+  const args = process.argv.slice(2);
+  if (args.length > 1 || (args.length === 1 && args[0] !== '--built')) throw new Error('Usage: node scripts/build-channel.mjs [--built]');
+  const build = args[0] === '--built' ? readBuiltBuild(root) : resolveBuild({root});
+  console.log(JSON.stringify({...buildNames(build), ...(args[0] === '--built' ? {} : {baseVersion: build.baseVersion})}, null, 2));
 }

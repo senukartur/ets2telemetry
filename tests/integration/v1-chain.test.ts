@@ -9,6 +9,7 @@ import {NativePipeClient, type BrokerDiagnostic} from '../../apps/desktop/src/na
 import {V1_CLIENT_MAX_MINOR, V1Ingestion, type V1SourceState} from '../../apps/desktop/src/v1-ingestion';
 import {FrameDecoder, PROTOCOL_V1, encodeFrame, type GearboxState, type ServerMessage} from '../../packages/contracts/src/protocol-v1';
 import {V1Consumer} from '../../packages/contracts/src/protocol-v1-delivery';
+import {nativeTreeIdentity} from '../shared/native-tree-channel';
 
 // ET-006b E14 controlled chain: the tests-only fake SDK host (named eurotrucks2.exe) loads the isolated test plugin DLL
 // with its v1 directory seam -> the plugin's protocol v1 endpoint -> the fixed native broker in its v1 mode -> TypeScript.
@@ -50,7 +51,7 @@ it('relays a broker-provisioned v1 session and its ACK, and fails a synthetic or
   let output = ''; host.stdout.on('data', (chunk: Buffer) => { output += chunk.toString('utf8'); }); host.stderr.on('data', () => {});
   expect(await until(() => output.includes('"ready":true'), 10_000), 'fake SDK host ready').toBe(true);
   const ready = JSON.parse(output.split('\n')[0]) as {processId: number; v1Endpoint: string};
-  expect(ready.v1Endpoint).toContain('\\\\.\\pipe\\ETS2Telemetry-ets2-v1-');
+  expect(ready.v1Endpoint).toContain(`${nativeTreeIdentity().pipePrefix}ets2-v1-`);
   expect(await until(() => existsSync(v1) && readdirSync(v1).some(name => DISCOVERY_RECORD.test(name)), 10_000), 'v1 discovery record').toBe(true);
   // The plugin creates transport\v1 but never a service policy: until a broker provisions it, no client is authorized.
   const policyFile = path.join(v1, 'service-policy.json');

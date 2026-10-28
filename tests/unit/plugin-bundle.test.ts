@@ -47,15 +47,15 @@ async function rewriteManifest(change: (manifest: Record<string, unknown>) => vo
 }
 /** Writes a consistent bundle around `dll`, as the packaging writer would, without its x64 check. */
 async function consistentBundle(dll: Buffer) {
-  writePluginBundle(stage, {dll: DLL, appVersion: '0.2.0', pluginSources: SOURCES, known: KNOWN});
+  writePluginBundle(stage, {dll: DLL, appVersion: '0.2.0', pluginSources: SOURCES, known: KNOWN, channel: 'production'});
   await fsp.writeFile(dllFile(), dll);
   await rewriteManifest(manifest => {manifest.size = dll.length; manifest.sha256 = sha256(dll);});
 }
 
 describe('a valid bundle', () => {
   it('returns the verified bytes, hash, version and known list that the packaging verifier also accepts', async () => {
-    writePluginBundle(stage, {dll: DLL, appVersion: '0.2.0', pluginSources: SOURCES, known: KNOWN});
-    expect(verifyPluginBundle(stage).sha256).toBe(sha256(DLL));
+    writePluginBundle(stage, {dll: DLL, appVersion: '0.2.0', pluginSources: SOURCES, known: KNOWN, channel: 'production'});
+    expect(verifyPluginBundle(stage, 'production').sha256).toBe(sha256(DLL));
     const result = await read();
     if (!result.ok) throw new Error(`unexpected ${result.failure}`);
     expect(result.bundle.sha256).toBe(sha256(DLL));
@@ -70,7 +70,7 @@ describe('a valid bundle', () => {
   });
 
   it('accepts an empty known list and a pre-release version', async () => {
-    writePluginBundle(stage, {dll: DLL, appVersion: '0.2.0-beta.1', pluginSources: SOURCES, known: []});
+    writePluginBundle(stage, {dll: DLL, appVersion: '0.2.0-beta.1', pluginSources: SOURCES, known: [], channel: 'production'});
     expect(await read()).toMatchObject({ok: true, bundle: {appVersion: '0.2.0-beta.1', known: []}});
   });
 });
@@ -84,7 +84,7 @@ describe('refusals', () => {
     expect(await read()).toEqual(refused('directory'));
     await fsp.rm(stage);
     const elsewhere = path.join(guard.root, 'elsewhere');
-    writePluginBundle(elsewhere, {dll: DLL, appVersion: '0.2.0', pluginSources: SOURCES, known: KNOWN});
+    writePluginBundle(elsewhere, {dll: DLL, appVersion: '0.2.0', pluginSources: SOURCES, known: KNOWN, channel: 'production'});
     await fsp.symlink(elsewhere, stage, 'junction');
     expect(await read()).toEqual(refused('directory'));
   });
@@ -92,11 +92,11 @@ describe('refusals', () => {
   // Review round 1 (October 17, 2026): at runtime other entries in the folder are ignored; only the packaging inspection
   // (plugin-bundle-stage.test.ts) requires exactly the two files. A missing DLL or manifest is still refused.
   it('ignores other entries in the folder, and refuses a missing DLL or manifest', async () => {
-    writePluginBundle(stage, {dll: DLL, appVersion: '0.2.0', pluginSources: SOURCES, known: KNOWN});
+    writePluginBundle(stage, {dll: DLL, appVersion: '0.2.0', pluginSources: SOURCES, known: KNOWN, channel: 'production'});
     await fsp.writeFile(path.join(stage, 'notes.txt'), 'extra');
     await fsp.mkdir(path.join(stage, 'folder'));
     expect(await read()).toMatchObject({ok: true, bundle: {sha256: sha256(DLL)}});
-    expect(() => verifyPluginBundle(stage)).toThrow(/exactly the DLL and its manifest/);
+    expect(() => verifyPluginBundle(stage, 'production')).toThrow(/exactly the DLL and its manifest/);
     await fsp.rm(dllFile());
     expect(await read()).toEqual(refused('plugin-unreadable'));
     await fsp.writeFile(dllFile(), DLL);
@@ -105,7 +105,7 @@ describe('refusals', () => {
   });
 
   it('refuses a DLL whose bytes differ from the manifest hash or size', async () => {
-    writePluginBundle(stage, {dll: DLL, appVersion: '0.2.0', pluginSources: SOURCES, known: KNOWN});
+    writePluginBundle(stage, {dll: DLL, appVersion: '0.2.0', pluginSources: SOURCES, known: KNOWN, channel: 'production'});
     await fsp.writeFile(dllFile(), pe({fill: 8}));
     expect(await read()).toEqual(refused('plugin-hash'));
     await fsp.writeFile(dllFile(), DLL);
@@ -122,7 +122,7 @@ describe('refusals', () => {
   });
 
   it('refuses a linked or oversized DLL without hashing it', async () => {
-    writePluginBundle(stage, {dll: DLL, appVersion: '0.2.0', pluginSources: SOURCES, known: KNOWN});
+    writePluginBundle(stage, {dll: DLL, appVersion: '0.2.0', pluginSources: SOURCES, known: KNOWN, channel: 'production'});
     const elsewhere = path.join(guard.root, 'elsewhere');
     await fsp.mkdir(elsewhere);
     await fsp.writeFile(path.join(elsewhere, 'ets2telemetry-plugin.dll'), DLL);
@@ -156,14 +156,14 @@ describe('refusals', () => {
     ];
     for (const change of changes) {
       await fsp.rm(stage, {recursive: true, force: true});
-      writePluginBundle(stage, {dll: DLL, appVersion: '0.2.0', pluginSources: SOURCES, known: KNOWN});
+      writePluginBundle(stage, {dll: DLL, appVersion: '0.2.0', pluginSources: SOURCES, known: KNOWN, channel: 'production'});
       await rewriteManifest(change);
       expect(await read(), change.toString()).toEqual(refused('manifest-invalid'));
     }
   });
 
   it('refuses a manifest that is not UTF-8 JSON or exceeds 64 KiB', async () => {
-    writePluginBundle(stage, {dll: DLL, appVersion: '0.2.0', pluginSources: SOURCES, known: KNOWN});
+    writePluginBundle(stage, {dll: DLL, appVersion: '0.2.0', pluginSources: SOURCES, known: KNOWN, channel: 'production'});
     await fsp.writeFile(manifestFile(), Buffer.from([0x7b, 0xff, 0x7d]));
     expect(await read()).toEqual(refused('manifest-invalid'));
     await fsp.writeFile(manifestFile(), '{"format":');
@@ -173,7 +173,7 @@ describe('refusals', () => {
   });
 
   it('stops reading once the run is aborted', async () => {
-    writePluginBundle(stage, {dll: DLL, appVersion: '0.2.0', pluginSources: SOURCES, known: KNOWN});
+    writePluginBundle(stage, {dll: DLL, appVersion: '0.2.0', pluginSources: SOURCES, known: KNOWN, channel: 'production'});
     const controller = new AbortController();
     controller.abort();
     expect(await readPluginBundle(stage, {fs: guard.fs as unknown as BundleFileSystem, signal: controller.signal})).toEqual(refused('aborted'));

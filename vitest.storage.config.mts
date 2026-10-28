@@ -34,7 +34,7 @@ class LongFirstSequencer extends BaseSequencer {
   }
 }
 
-const runtime = {setupFiles: ['tests/storage/setup.ts'], pool: 'forks' as const, testTimeout: 30_000, hookTimeout: 30_000};
+const runtime = {setupFiles: ['tests/shared/build-channel-environment.ts', 'tests/storage/setup.ts'], pool: 'forks' as const, testTimeout: 30_000, hookTimeout: 30_000};
 export default defineConfig({test: {sequence: {sequencer: LongFirstSequencer}, projects: [
   {test: {...runtime, name: 'storage', include: ['tests/storage/**/*.test.ts'],
     exclude: [...configDefaults.exclude, 'tests/storage/shutdown-stalls.test.ts'], sequence: {groupOrder: 0}}},

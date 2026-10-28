@@ -416,11 +416,6 @@ async function writeReceipt(ports: SquirrelPorts, settled: Settled, state: HookS
 }
 
 /**
- * The production deadline signal. `AbortSignal.timeout` accepts only a whole number of milliseconds, while the hook's
- * clock (`performance.now()`) is fractional: a fractional delay threw RangeError ERR_OUT_OF_RANGE after the engine had
- * finished (the final-head hosted run of PR-3). The delay is rounded up, never down, so the signal never fires early.
- */
-/**
  * The other processes of `executable`'s image in this process's Windows session, without `own` (this process and its
  * children); null when this process is not listed. The image name is compared exactly, without case, so the other build
  * channel's executable (ETS2TelemetryDesktop.exe beside ETS2TelemetryDesktopStaging.exe, ET-055) never counts.
@@ -432,6 +427,11 @@ export function countOtherProcesses(rows: readonly SessionProcessRow[], executab
   return rows.filter(row => row.name.toLowerCase() === name && row.session === session && !own.has(row.pid)).length;
 }
 
+/**
+ * The production deadline signal. `AbortSignal.timeout` accepts only a whole number of milliseconds, while the hook's
+ * clock (`performance.now()`) is fractional: a fractional delay threw RangeError ERR_OUT_OF_RANGE after the engine had
+ * finished (the final-head hosted run of PR-3). The delay is rounded up, never down, so the signal never fires early.
+ */
 export function deadlineSignal(milliseconds: number): AbortSignal {
   return AbortSignal.timeout(Math.min(0x7fffffff, Math.max(0, Math.ceil(milliseconds))));
 }

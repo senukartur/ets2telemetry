@@ -3,13 +3,14 @@ import {readFileSync} from 'node:fs';
 import {mkdir, mkdtemp, readdir, readFile, rm, writeFile} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
 import path from 'node:path';
-import {pathToFileURL} from 'node:url';
 import {crc32, deflateRawSync} from 'node:zlib';
 import {createPackageWithOptions} from '@electron/asar';
 import {afterEach, beforeEach, describe, expect, it} from 'vitest';
+import {BUILD_IDENTITIES, buildNames} from '../../scripts/build-channel.mjs';
 import {writePluginBundle} from '../../scripts/plugin-bundle.mjs';
 import {AUTHENTICODE_STATUSES, SIGNING_FAILURES, VERSION_INFO_SCRIPT, assertVersionInfo, inspectInstaller, packedNativeEntries, nugetVersion, parseAuthenticodeOutput, parseVersionInfoOutput,
-  readAuthenticode, readVersionInfo, readZip, releaseIdentity, setupExeName, windowsPowerShell, type AuthenticodeResult} from '../../scripts/release-identity.mjs';
+  readAuthenticode, readVersionInfo, readZip, releaseIdentity, setupExeName, builtByOf, windowsPowerShell, type AuthenticodeResult} from '../../scripts/release-identity.mjs';
+import {forgeConfig, squirrelConfig} from '../shared/forge-config';
 
 // ET-018 PR-6 (plan U14, U16; docs/release.md): the release identity and `inspect-package --installer` on a fake package
 // tree, a fake Squirrel make output and a fake vendor folder in a temporary checkout. Every PE image is an inert synthetic
@@ -17,6 +18,9 @@ import {AUTHENTICODE_STATUSES, SIGNING_FAILURES, VERSION_INFO_SCRIPT, assertVers
 // fixed Windows PowerShell script on a synthetic file and a Windows system file, read only.
 
 const VERSION = '0.2.0';
+// The fake tree is a production build; every helper gets its identity explicitly, so the shell's channel never decides it.
+const PRODUCTION = BUILD_IDENTITIES.production;
+const BUILD = {channel: 'production' as const, identity: PRODUCTION, baseVersion: VERSION, version: VERSION};
 const ELECTRON = '44.7.0';
 let root: string;
 beforeEach(async () => {root = await mkdtemp(path.join(tmpdir(), 'ets2telemetry-release-identity-test-'));});
@@ -81,7 +85,7 @@ async function fakeTree({packed = []}: {packed?: [string, Buffer][]} = {}): Prom
     if (bytes.readUInt16LE(0) === 0x5a4d) peFiles.push(relative); else if (name.endsWith('.node')) foreign.push(relative);
   }
   writePluginBundle(path.join(packageDirectory, 'resources', 'telemetry-plugin'), {dll: pe({characteristics: 0x2022}), appVersion: VERSION,
-    pluginSources: {'native/telemetry-plugin/CMakeLists.txt': 'b'.repeat(64)}, known: []});
+    pluginSources: {'native/telemetry-plugin/CMakeLists.txt': 'b'.repeat(64)}, known: [], channel: 'production'});
   peFiles.push('resources/telemetry-plugin/ets2telemetry-plugin.dll');
   const broker = pe();
   await addPe('resources/telemetry-client/telemetry-pipe-client.exe', broker);
@@ -139,7 +143,7 @@ async function buildMake(tree: Tree, {change, nuspecVersion = nugetVersion(VERSI
   const nupkg = zip([['lib/', Buffer.alloc(0)], ['lib/net45/', Buffer.alloc(0)], ...entries]);
   await rm(tree.makeDirectory, {recursive: true, force: true});
   await put(path.join(tree.makeDirectory, `ETS2TelemetryDesktop-${VERSION}-full.nupkg`), nupkg);
-  await put(path.join(tree.makeDirectory, setupExeName(VERSION)), pe({machine: 0x014c}));
+  await put(path.join(tree.makeDirectory, setupExeName(VERSION, PRODUCTION)), pe({machine: 0x014c}));
   await put(path.join(tree.makeDirectory, 'RELEASES'), releases?.(nupkg)
     ?? `\uFEFF${createHash('sha1').update(nupkg).digest('hex').toUpperCase()} ETS2TelemetryDesktop-${VERSION}-full.nupkg ${nupkg.length}`);
 }
@@ -166,9 +170,10 @@ function fakeSignatures() {
   return {reader, calls};
 }
 const SOURCE = {commit: 'c'.repeat(40), sourceCommit: null, treeClean: true};
-const identityOf = (tree: Tree, signatures = fakeSignatures().reader) => releaseIdentity({checkout: tree.checkout, packageDirectory: tree.packageDirectory,
-  makeDirectory: tree.makeDirectory, vendorDirectory: tree.vendorDirectory, signatures, source: SOURCE, now: () => new Date('2026-10-18T12:00:00Z')});
-const inspect = (tree: Tree) => inspectInstaller({packageDirectory: tree.packageDirectory, makeDirectory: tree.makeDirectory, version: VERSION});
+const identityOf = (tree: Tree, signatures = fakeSignatures().reader, environment: Record<string, string> = {}) => releaseIdentity({checkout: tree.checkout, build: BUILD,
+  packageDirectory: tree.packageDirectory, makeDirectory: tree.makeDirectory, vendorDirectory: tree.vendorDirectory, signatures, source: SOURCE, environment,
+  now: () => new Date('2026-10-18T12:00:00Z')});
+const inspect = (tree: Tree) => inspectInstaller({packageDirectory: tree.packageDirectory, makeDirectory: tree.makeDirectory, version: VERSION, identity: PRODUCTION});
 
 describe('PE images', () => {
   it('lists every PE image found by walking the package, the NuGet additions and Setup, each with its Authenticode result', async () => {
@@ -178,7 +183,7 @@ describe('PE images', () => {
     const identity = identityOf(tree, reader);
     expect(identity.peImages.filter(image => image.location === 'package').map(image => image.path).sort()).toEqual(tree.pe);
     expect(identity.peImages.filter(image => image.location !== 'package').map(image => `${image.location}:${image.path}`)).toEqual([
-      'nupkg:lib/net45/ETS2TelemetryDesktop_ExecutionStub.exe', 'nupkg:lib/net45/squirrel.exe', `installer:${setupExeName(VERSION)}`]);
+      'nupkg:lib/net45/ETS2TelemetryDesktop_ExecutionStub.exe', 'nupkg:lib/net45/squirrel.exe', `installer:${setupExeName(VERSION, PRODUCTION)}`]);
     // The Windows .node addons are PE images with Authenticode results; the foreign prebuilds are listed with their format.
     expect(identity.peImages.find(image => image.path.endsWith('win32-arm64.node'))).toMatchObject({machine: 'arm64', authenticode: {status: 'NotSigned'}});
     expect(identity.peImages.find(image => image.path.endsWith('/addon.node'))).toMatchObject({machine: 'x64', authenticode: {status: 'NotSigned'}});
@@ -210,6 +215,25 @@ describe('PE images', () => {
       await buildMake(tree);
       expect(() => identityOf(tree)).toThrow(name.endsWith('.node') ? 'Not an executable image' : 'Not a PE image');
     });
+
+  // ET-055 UP13: the identity records who built the artifacts, so the release workflow accepts only a main run's artifacts.
+  it('records the channel and who built it: a GitHub Actions run with its id, or a local build', async () => {
+    const tree = await fakeTree();
+    await buildMake(tree);
+    expect(identityOf(tree)).toMatchObject({channel: 'production', builtBy: {kind: 'local', runId: null}});
+    expect(identityOf(tree, undefined, {GITHUB_ACTIONS: 'true', GITHUB_RUN_ID: '39153876794'}).builtBy).toEqual({kind: 'github-actions', runId: '39153876794'});
+    expect(() => identityOf(tree, undefined, {GITHUB_ACTIONS: 'true'})).toThrow(/GITHUB_RUN_ID must name the GitHub Actions run/);
+  });
+
+  it('reads the builder only from the exact GitHub Actions signal and a plain run id', () => {
+    expect(builtByOf({})).toEqual({kind: 'local', runId: null});
+    expect(builtByOf({GITHUB_RUN_ID: '42'})).toEqual({kind: 'local', runId: null});
+    expect(builtByOf({GITHUB_ACTIONS: 'TRUE', GITHUB_RUN_ID: '42'})).toEqual({kind: 'local', runId: null});
+    expect(builtByOf({GITHUB_ACTIONS: 'true', GITHUB_RUN_ID: '42'})).toEqual({kind: 'github-actions', runId: '42'});
+    for (const runId of ['', '0', '042', '4.2', '42 ', 'abc', '1'.repeat(21)]) {
+      expect(() => builtByOf({GITHUB_ACTIONS: 'true', GITHUB_RUN_ID: runId})).toThrow(/GITHUB_RUN_ID/);
+    }
+  });
 
   it('writes relative names only', async () => {
     const tree = await fakeTree();
@@ -315,7 +339,7 @@ describe('the NuGet projection (inspect-package --installer)', () => {
   it('refuses a stale Setup of another version and a corrupt payload entry', async () => {
     const tree = await fakeTree();
     await buildMake(tree);
-    await writeFile(path.join(tree.makeDirectory, setupExeName('0.1.0')), pe());
+    await writeFile(path.join(tree.makeDirectory, setupExeName('0.1.0', PRODUCTION)), pe());
     expect(() => inspect(tree)).toThrow('Unexpected Squirrel make output');
     await buildMake(tree);
     const nupkg = path.join(tree.makeDirectory, `ETS2TelemetryDesktop-${VERSION}-full.nupkg`);
@@ -488,11 +512,11 @@ describe('executable version information (ET-045h)', () => {
   for (const [label, stdout, message] of invalid) it(`refuses ${label}`, () => {expect(() => parseVersionInfoOutput(stdout)).toThrow(message);});
 
   it('accepts only the product name, the pinned company and the technical executable name', () => {
-    expect(() => assertVersionInfo(parseVersionInfoOutput(output(product)))).not.toThrow();
-    expect(() => assertVersionInfo(parseVersionInfoOutput(output(['ETS2Telemetry Desktop', ...product.slice(1)])))).toThrow('ProductName');
-    expect(() => assertVersionInfo(parseVersionInfoOutput(output([product[0], 'ETS2Telemetry Desktop', ...product.slice(2)])))).toThrow('FileDescription');
-    expect(() => assertVersionInfo(parseVersionInfoOutput(output([product[0], product[1], null, product[3]])))).toThrow('CompanyName');
-    expect(() => assertVersionInfo(parseVersionInfoOutput(output([...product.slice(0, 3), 'Yukon Union Telemetry.exe'])))).toThrow('OriginalFilename');
+    expect(() => assertVersionInfo(parseVersionInfoOutput(output(product)), PRODUCTION)).not.toThrow();
+    expect(() => assertVersionInfo(parseVersionInfoOutput(output(['ETS2Telemetry Desktop', ...product.slice(1)])), PRODUCTION)).toThrow('ProductName');
+    expect(() => assertVersionInfo(parseVersionInfoOutput(output([product[0], 'ETS2Telemetry Desktop', ...product.slice(2)])), PRODUCTION)).toThrow('FileDescription');
+    expect(() => assertVersionInfo(parseVersionInfoOutput(output([product[0], product[1], null, product[3]])), PRODUCTION)).toThrow('CompanyName');
+    expect(() => assertVersionInfo(parseVersionInfoOutput(output([...product.slice(0, 3), 'Yukon Union Telemetry.exe'])), PRODUCTION)).toThrow('OriginalFilename');
   });
 
   it('reads a real version resource through the fixed Windows PowerShell script, read only', () => {
@@ -507,21 +531,24 @@ describe('executable version information (ET-045h)', () => {
 
 describe('maker metadata', () => {
   it('names Setup with the package version and sets the NuGet title, authors and description', async () => {
-    const forge = (await import(pathToFileURL(path.resolve('forge.config.cjs')).href) as {default: {makers: {name: string; config: Record<string, string>}[]}}).default;
     const {version} = JSON.parse(await readFile(path.resolve('package.json'), 'utf8')) as {version: string};
-    const squirrel = forge.makers.find(maker => maker.name === '@electron-forge/maker-squirrel')?.config;
+    const squirrel = squirrelConfig(forgeConfig('production'));
     // ET-045h (owner decision D2): the display names change; the Squirrel id keeps the install root and the Uninstall key.
     expect(squirrel).toMatchObject({name: 'ETS2TelemetryDesktop', title: 'Yukon Union Telemetry', authors: 'Yukon Union Telemetry contributors',
-      setupExe: setupExeName(version)});
-    expect(setupExeName(version)).toBe(`YukonUnionTelemetry-Setup-${version}.exe`);
-    // The installer lifecycle finds Setup by this name.
-    expect(await readFile(path.resolve('scripts/installer/Invoke-InstallerLifecycle.ps1'), 'utf8')).toContain(`'out/make/squirrel.windows/x64/${setupExeName(version)}'`);
+      setupExe: setupExeName(version, PRODUCTION)});
+    expect(setupExeName(version, PRODUCTION)).toBe(`YukonUnionTelemetry-Setup-${version}.exe`);
+    // The installer lifecycle finds Setup by the name the build evidence gives (scripts/build-channel.mjs --built, ET-055 PR-4),
+    // the same buildSetupFileName that forge.config.cjs uses.
+    const harness = await readFile(path.resolve('scripts/installer/Invoke-InstallerLifecycle.ps1'), 'utf8');
+    expect(harness).toContain("& $node (Join-Path $checkout 'scripts/build-channel.mjs') --built");
+    expect(harness).toContain("$setup = Join-Path $checkout ('out/make/squirrel.windows/x64/' + $built.setup)");
+    expect(buildNames({channel: 'production', identity: PRODUCTION, version}).setup).toBe(squirrel?.setupExe);
     expect(squirrel?.authors).toMatch(/\S/);
     expect(squirrel?.description).toMatch(/\S/);
   });
 
   it('sets the executable version resource to the product name, keeping the Start menu company and the executable name', async () => {
-    const forge = (await import(pathToFileURL(path.resolve('forge.config.cjs')).href) as {default: {packagerConfig: Record<string, unknown>}}).default;
+    const forge = forgeConfig('production');
     expect(forge.packagerConfig).toMatchObject({executableName: 'ETS2TelemetryDesktop', appBundleId: 'com.ets2telemetry.desktop',
       win32metadata: {CompanyName: 'Artur Sianiuk', FileDescription: 'Yukon Union Telemetry', ProductName: 'Yukon Union Telemetry'}});
     // package.json productName keeps userData, the single-instance lock and the out/ folder.

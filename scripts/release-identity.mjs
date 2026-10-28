@@ -465,16 +465,30 @@ export function assertNoPackedNativeCode(archive) {
   assert.deepEqual(found, [], `Native code packed inside app.asar: ${found.join(', ')}`);
 }
 
+/**
+ * Who built the artifacts (ET-055 UP13): `{kind: 'github-actions', runId}` in GitHub Actions, with the run id the release
+ * workflow later checks against the run it downloads from, or `{kind: 'local', runId: null}`. A GitHub Actions build without
+ * a valid GITHUB_RUN_ID fails instead of recording an unverifiable origin.
+ */
+export function builtByOf(env = process.env) {
+  if (env.GITHUB_ACTIONS !== 'true') return {kind: 'local', runId: null};
+  const runId = env.GITHUB_RUN_ID;
+  assert.ok(typeof runId === 'string' && /^[1-9][0-9]{0,19}$/.test(runId), 'GITHUB_RUN_ID must name the GitHub Actions run that built the artifacts');
+  return {kind: 'github-actions', runId};
+}
+
 const signingSummary = images => Object.fromEntries(AUTHENTICODE_STATUSES.map(status => [status, images.filter(image => image.authenticode.status === status).length])
   .filter(([, count]) => count > 0));
 
 /**
  * Builds the release identity. `build` is the resolved build channel and version (scripts/build-channel.mjs, from the
  * checkout's package.json by default); `signatures` maps absolute paths to Authenticode results (readAuthenticode by
- * default); `source` gives the commit facts (git by default). The result holds relative names only.
+ * default); `source` gives the commit facts (git by default); `environment` tells who built it (builtByOf, the process
+ * environment by default). The result holds relative names only.
  */
 export function releaseIdentity({checkout = '.', build = resolveBuild({root: checkout}), packageDirectory = path.join(checkout, packageDirectoryOf(build.identity)),
-  makeDirectory = path.join(checkout, MAKE_DIRECTORY), vendorDirectory = path.join(checkout, VENDOR_DIRECTORY), signatures = readAuthenticode, source, now = () => new Date()}) {
+  makeDirectory = path.join(checkout, MAKE_DIRECTORY), vendorDirectory = path.join(checkout, VENDOR_DIRECTORY), signatures = readAuthenticode, source, environment = process.env, now = () => new Date()}) {
+  const builtBy = builtByOf(environment);
   const manifest = readJsonFile(path.join(checkout, 'package.json'));
   const {version, identity} = build, electronPin = manifest.devDependencies?.electron;
   assert.ok(typeof version === 'string' && typeof electronPin === 'string', 'package.json lacks the version or the Electron pin');
@@ -525,7 +539,7 @@ export function releaseIdentity({checkout = '.', build = resolveBuild({root: che
   const treeClean = source ? source.treeClean : status === null ? null : status === '';
   const artifact = name => ({name, ...hashFile(path.join(makeDirectory, name))});
   return {
-    format: IDENTITY_FORMAT, version: 1, createdUtc: now().toISOString(), channel: build.channel,
+    format: IDENTITY_FORMAT, version: 1, createdUtc: now().toISOString(), channel: build.channel, builtBy,
     source: {commit, sourceCommit: source?.sourceCommit ?? process.env.ETS2TELEMETRY_SOURCE_COMMIT ?? null, treeClean},
     versions: {app: version, nuget: nugetVersion(version), electron, plugin: plugin.appVersion},
     artifacts: {setup: artifact(installer.setup), nupkg: artifact(installer.nupkg), releases: artifact(RELEASES)},
@@ -548,7 +562,7 @@ if (process.argv[1] && import.meta.url === pathToFileURL(path.resolve(process.ar
   const identity = releaseIdentity({checkout});
   const target = path.join(checkout, MAKE_DIRECTORY, IDENTITY_FILE);
   writeFileSync(target, JSON.stringify(identity, null, 2) + '\n');
-  console.log(JSON.stringify({file: `${MAKE_DIRECTORY}/${IDENTITY_FILE}`, channel: identity.channel, source: identity.source, versions: identity.versions,
+  console.log(JSON.stringify({file: `${MAKE_DIRECTORY}/${IDENTITY_FILE}`, channel: identity.channel, builtBy: identity.builtBy, source: identity.source, versions: identity.versions,
     setupSha256: identity.artifacts.setup.sha256, nupkgSha256: identity.artifacts.nupkg.sha256, peImages: identity.peImages.length,
     signing: identity.signing.summary}, null, 2));
 }

@@ -9,6 +9,7 @@ import {until} from './lifecycle-observation.mjs';
 import {clickTestId, openDetail, stubSaveDialog, exportValidator} from './journal-observation.mjs';
 import {waitForHardModeProof} from './hard-mode-proof-observation.mjs';
 import {hardModeFixtureSnapshot, waitForHardModeFixture} from './hard-mode-fixture-observation.mjs';
+import {smokeDataRoot} from './smoke-build.mjs';
 export const HARD_MODE_TARGET = 'synthetic:hard-mode';
 const CONFIG = `uset g_fuel_simulation "1"
 uset g_hardcore_simulation "1"
@@ -24,7 +25,7 @@ uset g_road_events "0.30"
 uset g_brake_intensity "0.75"
 uset g_traffic "1.0"`;
 export async function startHardModeSource(config) {
-  const directory = path.join(config.localappdata, 'ETS2Telemetry', 'synthetic', 'hard-mode-fixture', 'Documents', 'Euro Truck Simulator 2');
+  const directory = path.join(smokeDataRoot(config), 'synthetic', 'hard-mode-fixture', 'Documents', 'Euro Truck Simulator 2');
   const id = Buffer.from('Synthetic Hard Mode').toString('hex').toUpperCase(), profile = path.join(directory, 'profiles', id);
   await mkdir(profile, {recursive: true});
   await writeFile(path.join(directory, 'game.log.txt'), `************ : log created on : Tuesday October 20 2026 @ 12:00:00\n00:00:01.000 : New profile selected: 'Synthetic Hard Mode'\n00:00:02.000 : Loading save. Type: 0, path: <MEMFILE><UFS>/home/profiles/${id}/save/autosave/game.sii\n`);
@@ -229,7 +230,7 @@ export async function runHardModeSmoke({application, dashboard, source, config, 
   assert.equal(await overlay.evaluate(() => typeof globalThis.overlay.getHardModeStatus), 'undefined'); record.overlayExcluded = true;
 }
 export async function verifyHardModeRun({config, record}) {
-  const filename = path.join(config.localappdata, 'ETS2Telemetry', 'synthetic', 'hard-mode.sqlite');
+  const filename = path.join(smokeDataRoot(config), 'synthetic', 'hard-mode.sqlite');
   const file = await open(filename, 'r'), bytes = Buffer.alloc(100);
   try {await file.read(bytes, 0, 100, 0);} finally {await file.close();}
   assert.equal(bytes.readUInt32BE(60), 3); record.schemaVersion = 3;

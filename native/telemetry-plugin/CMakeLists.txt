@@ -8,9 +8,12 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 include(CTest)
 # Build channel (ET-055 UP12). It selects the native identities compiled into the plugin: the pipe prefix of the v0, v1
 # and CAP0 endpoints, the data-root folder of the default transport directories and the plugin DLL name, from
-# src/channel-identity.hpp. The default keeps every production name of earlier releases. The other channel's product and
-# test DLLs are built too, so channel-identity-contract and two-plugin-host-contract cover both channels in every tree.
-set(ETS2TELEMETRY_CHANNEL "production" CACHE STRING "Build channel of the native identities: production or staging")
+# src/channel-identity.hpp. The default is staging (ET-055 PR-4, UP13): a tree configured without the value never carries
+# the production names of the owner's installed application; production trees pass -DETS2TELEMETRY_CHANNEL=production
+# (Windows CI only). The other channel's product DLL (under build/other-channel/) and test DLL
+# (other-channel-test-plugin.dll) are built too, so channel-identity-contract and two-plugin-host-contract cover both
+# channels in every tree; they are test artifacts, never copied into a game.
+set(ETS2TELEMETRY_CHANNEL "staging" CACHE STRING "Build channel of the native identities: production or staging")
 set_property(CACHE ETS2TELEMETRY_CHANNEL PROPERTY STRINGS production staging)
 if(ETS2TELEMETRY_CHANNEL STREQUAL "production")
   set(ETS2TELEMETRY_OTHER_CHANNEL "staging")

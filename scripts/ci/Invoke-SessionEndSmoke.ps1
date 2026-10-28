@@ -12,13 +12,18 @@ function Write-NewJsonReceipt {
     try { $stream.Write($bytes, 0, $bytes.Length); $stream.Flush($true) } finally { $stream.Dispose() }
 }
 $checkout = (Resolve-Path -LiteralPath (Join-Path $PSScriptRoot '../..')).Path
-if (!$PackageDirectory) { $PackageDirectory = Join-Path $checkout 'out/ETS2Telemetry Desktop-win32-x64' }
+# ET-055 PR-4: the package folder and executable of the build that was made (scripts/build-channel.mjs --built), staging on
+# pull requests and production on main pushes.
+$builtText = & (Get-Command node -ErrorAction Stop).Source (Join-Path $checkout 'scripts/build-channel.mjs') --built
+if ($LASTEXITCODE -ne 0) { throw 'Build evidence unavailable: run npm run package first.' }
+$built = ($builtText -join "`n") | ConvertFrom-Json
+if (!$PackageDirectory) { $PackageDirectory = Join-Path $checkout $built.packageDirectory }
 $PackageDirectory = (Resolve-Path -LiteralPath $PackageDirectory).Path
 if (!$ExpectedPackageSha256 -or $ExpectedPackageSha256 -cnotmatch '^[0-9a-f]{64}$') { throw 'An expected frozen package SHA-256 is required.' }
 $output = Join-Path ([IO.Path]::GetFullPath($OutputRoot)) ('session-end-' + [guid]::NewGuid().ToString('N'))
 New-Item -ItemType Directory -Path $output | Out-Null
 $config = @{ checkout = $checkout; output = $output; packageDirectory = $PackageDirectory; expectedPackageSha256 = $ExpectedPackageSha256;
-    executable = (Join-Path $PackageDirectory 'ETS2TelemetryDesktop.exe'); baselineMissingAudit = [bool]$BaselineMissingAudit }
+    executable = (Join-Path $PackageDirectory $built.executable); baselineMissingAudit = [bool]$BaselineMissingAudit }
 foreach ($name in @('temp', 'appdata', 'localappdata', 'profile', 'diagnostics')) {
     $config[$name] = Join-Path $output $name
     New-Item -ItemType Directory -Path $config[$name] | Out-Null
