@@ -59,6 +59,12 @@ it('runs the hosted installer lifecycle for the built channel, and the side-by-s
   expect(installer).toContain("    needs: [windows-build, windows-staging-build]\n    if: \"!cancelled() && github.event_name != 'pull_request' && " +
     "needs.windows-build.result == 'success'\"\n    runs-on: windows-2022\n");
   expect(installer).toContain("- name: Require the staging build on main\n        if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main' && " +
-    "needs.windows-staging-build.result != 'success'\n        run: throw ('STAGING_BUILD_NOT_SUCCESSFUL: ");
+    "needs.windows-staging-build.result != 'success'\n        run: |\n          throw ('STAGING_BUILD_NOT_SUCCESSFUL: ");
+  // A plain YAML scalar must not contain ': ' (GitHub rejected the whole workflow on that): every run line carrying one is
+  // a block scalar.
+  for (const line of text.split('\n')) {
+    const run = /^\s*run: (?!\|)(.*)$/.exec(line);
+    if (run) expect(run[1], line).not.toMatch(/: /);
+  }
   expect(installer.indexOf('- name: Side-by-side installer lifecycle')).toBeLessThan(installer.indexOf('- name: Require the staging build on main'));
 });

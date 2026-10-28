@@ -421,7 +421,8 @@ jobs:
       # production lifecycle above has run and left its evidence, so the scaffold aggregate stays red.
       - name: Require the staging build on main
         if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main' && needs.windows-staging-build.result != 'success'
-        run: throw ('STAGING_BUILD_NOT_SUCCESSFUL: windows-staging-build ended ${{ needs.windows-staging-build.result }}, so the side-by-side installer lifecycle did not run.')
+        run: |
+          throw ('STAGING_BUILD_NOT_SUCCESSFUL: windows-staging-build ended ${{ needs.windows-staging-build.result }}, so the side-by-side installer lifecycle did not run.')
       - name: Record final versions and duration
         if: always()
         run: node scripts/ci/versions.mjs
