@@ -1,4 +1,5 @@
 #include "pipe-security.hpp"
+#include "channel-identity.hpp"
 #include <sddl.h>
 #include <aclapi.h>
 #include <bcrypt.h>
@@ -151,11 +152,12 @@ void OwnerSecurity::verify_handle(HANDLE file, HANDLE stop_event) const {
 void OwnerSecurity::ensure_directory(const std::wstring& path) const {
   if (!CreateDirectoryW(path.c_str(),const_cast<SECURITY_ATTRIBUTES*>(&attributes_)) && GetLastError() != ERROR_ALREADY_EXISTS) fail("owner-directory"); verify_owner_only(path);
 }
+std::wstring application_directory(const std::wstring& local_app_data) { return local_app_data + L"\\" + channel::active.data_root; }
 std::wstring local_transport_directory(const OwnerSecurity& security, const wchar_t* leaf) {
   PWSTR raw = nullptr; if (SHGetKnownFolderPath(FOLDERID_LocalAppData,KF_FLAG_DEFAULT,nullptr,&raw) != S_OK) fail("local-appdata");
-  std::wstring path(raw); CoTaskMemFree(raw);
+  std::wstring local_app_data(raw); CoTaskMemFree(raw);
   // Existing application root has historical default ACLs; only the dedicated transport subtree is authority.
-  path += L"\\ETS2Telemetry"; if (!CreateDirectoryW(path.c_str(),nullptr) && GetLastError() != ERROR_ALREADY_EXISTS) fail("application-directory");
+  auto path = application_directory(local_app_data); if (!CreateDirectoryW(path.c_str(),nullptr) && GetLastError() != ERROR_ALREADY_EXISTS) fail("application-directory");
   if (GetFileAttributesW(path.c_str()) & FILE_ATTRIBUTE_REPARSE_POINT) fail("application-reparse");
   path += L"\\transport"; security.ensure_directory(path); path += L"\\"; path += leaf; security.ensure_directory(path); return path;
 }
