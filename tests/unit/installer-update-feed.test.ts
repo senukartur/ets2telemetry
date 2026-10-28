@@ -20,7 +20,7 @@ const run = (args: string[]) => new Promise<{passed: boolean; failure: {code?: s
 
 const ID = '3'.repeat(32), A = 100, A_SERVICE = 101, B = 200, B_SERVICE = 201;
 const offered = {package: '0.1.1-stg.000000', installed: '0.1.1-stg000000'};
-const release = {tag: 'staging-v0.1.1-stg.000000', name: 'ETS2TelemetryDesktopStaging-0.1.1-stg000000-full.nupkg'};
+const release = {tag: 'staging-v0.1.1-stg.000000', name: 'ETS2TelemetryStagingDesktop-0.1.1-stg000000-full.nupkg'};
 const routes = feedRoutes(release);
 type Row = {time: string; pid: number; event: string; facts?: Record<string, unknown>; detail?: Record<string, unknown>};
 const at = (second: number) => new Date(Date.UTC(2026, 9, 28, 12, 0, second)).toISOString();
@@ -60,7 +60,7 @@ function evidence() {
   const observed: Record<string, unknown> = {label: 'feed-b', mode: 'complete', channel: 'staging', offered, package: {name: release.name, size: 10, sha256: 'a'.repeat(64)},
     tag: release.tag, mainPid: A, offer: {state: 'available', available: offered.package}, refusal: {view: {state: 'refused', refusal: 'GAME_RUNNING'}, packageRequests: 0, updates: 'absent'},
     outcome: 'exited', states: ['downloading', 'installing'], exit: {code: 0, signal: null}, aServicePids: [A_SERVICE], restartedPid: B, requestsDropped: 0,
-    restartedImage: `LocalAppData\\ETS2TelemetryDesktopStaging\\app-${offered.installed}\\ETS2TelemetryDesktopStaging.exe`, requester: {locked: true, requests: 2, elapsedMs: 400},
+    restartedImage: `LocalAppData\\ETS2TelemetryStagingDesktop\\app-${offered.installed}\\ETS2TelemetryDesktopStaging.exe`, requester: {locked: true, requests: 2, elapsedMs: 400},
     drain: {remaining: []}, updates: 'absent', routes, diagnostics: 'diagnostics\\update-feed-b',
     requests: [request('offer', routes.list), request('offer', routes.manifest), request('offer', routes.signature), request('refusal', routes.list),
       request('update', routes.package, 200, 10), request('restart', routes.list)]};
@@ -133,7 +133,7 @@ describe('update-from-feed driver commands', () => {
       expect(await failure(value => {value.service = value.service.filter(row => row.facts?.name !== 'recording-flush');})).toMatch(/^RECORDING_FLUSH_NOT_RUN/);
       expect(await failure(value => {value.main = value.main.map(row => row.pid === B && row.event === 'SETTINGS_LOADED' ? {...row, time: at(7)} : row);}))
         .toMatch(/^RESTART_BEFORE_RECORDING_FLUSH/);
-      expect(await failure(value => {value.observed.restartedImage = 'LocalAppData\\ETS2TelemetryDesktopStaging\\app-0.1.0-stg000000\\ETS2TelemetryDesktopStaging.exe';}))
+      expect(await failure(value => {value.observed.restartedImage = 'LocalAppData\\ETS2TelemetryStagingDesktop\\app-0.1.0-stg000000\\ETS2TelemetryDesktopStaging.exe';}))
         .toMatch(/^RESTARTED_IMAGE_NOT_B/);
       expect(await failure(value => {value.service = value.service.map(row => row.pid === B_SERVICE && row.event === 'HISTORY_STORAGE_OPENED' ? {...row, facts: {schemaVersion: 3, created: true, migratedFrom: null}} : row);}))
         .toMatch(/^RESTARTED_HISTORY_UNEXPECTED/);

@@ -13,19 +13,19 @@ import {guardedTempRoot, type GuardedRoot} from '../shared/guarded-fs';
 
 let guard: GuardedRoot;
 let installRoot: string;
-const PACKAGE = 'ETS2TelemetryDesktopStaging-0.1.2-stg000000-full.nupkg';
+const PACKAGE = 'ETS2TelemetryStagingDesktop-0.1.2-stg000000-full.nupkg';
 const ports = (changes: Partial<IncompleteVersionPorts> = {}): IncompleteVersionPorts => ({fs: guard.fs,
   realpath: target => guard.fs.realpath(target), readFile: target => guard.fs.readFile(target), processImages: () => Promise.resolve([]), ...changes});
 beforeEach(async () => {
   guard = await guardedTempRoot('ets2telemetry-incomplete-version-');
-  installRoot = path.win32.join(guard.root, 'LocalAppData', 'ETS2TelemetryDesktopStaging');
+  installRoot = path.win32.join(guard.root, 'LocalAppData', 'ETS2TelemetryStagingDesktop');
   for (const version of ['0.1.0-stg000000', '0.1.1-stg000000', '0.1.2-stg000000', '0.1.2-stg000000-extra']) {
     await mkdir(path.win32.join(installRoot, `app-${version}`, 'resources'), {recursive: true});
     await writeFile(path.win32.join(installRoot, `app-${version}`, 'ETS2TelemetryDesktopStaging.exe'), 'MZ');
   }
   // Squirrel's local release list of the installed versions; the target is not recorded in it.
   await mkdir(path.win32.join(installRoot, 'packages'));
-  await writeFile(path.win32.join(installRoot, 'packages', 'RELEASES'), `\uFEFF${'A'.repeat(40)} ETS2TelemetryDesktopStaging-0.1.1-stg000000-full.nupkg 166075665\r\n`);
+  await writeFile(path.win32.join(installRoot, 'packages', 'RELEASES'), `\uFEFF${'A'.repeat(40)} ETS2TelemetryStagingDesktop-0.1.1-stg000000-full.nupkg 166075665\r\n`);
 });
 afterEach(async () => {
   const violations = [...guard.violations];
@@ -45,7 +45,7 @@ it('removes exactly the target version folder, whatever it holds, and keeps ever
 });
 
 it('never removes the folder the application runs from or one that contains it, by path or by real path', async () => {
-  const own = (version: string, from: string) => remove({}, version, `ETS2TelemetryDesktopStaging-${version}-full.nupkg`, from);
+  const own = (version: string, from: string) => remove({}, version, `ETS2TelemetryStagingDesktop-${version}-full.nupkg`, from);
   expect(await own('0.1.1-stg000000', running())).toBe('refused');
   expect(await own('0.1.1-stg000000', `${running().toUpperCase()}\\`)).toBe('refused');
   expect(await own('0.1.1-stg000000', path.win32.join(running(), 'resources'))).toBe('refused');
@@ -58,9 +58,9 @@ it('never removes the folder the application runs from or one that contains it, 
 
 it('keeps a folder whose release Squirrel has recorded, as a full or a delta package (review a)', async () => {
   const releases = path.win32.join(installRoot, 'packages', 'RELEASES');
-  for (const line of [`${'B'.repeat(40)} ${PACKAGE} 166075665`, `${'C'.repeat(40)} ETS2TelemetryDesktopStaging-0.1.2-stg000000-delta.nupkg 4096`,
-    `${'D'.repeat(40)} etx2telemetrydesktopstaging-0.1.1-stg000000-full.nupkg 1\n${'E'.repeat(40)} ets2telemetrydesktopstaging-0.1.2-STG000000-full.nupkg 2`]) {
-    await writeFile(releases, `${'A'.repeat(40)} ETS2TelemetryDesktopStaging-0.1.1-stg000000-full.nupkg 166075665\n${line}\n`);
+  for (const line of [`${'B'.repeat(40)} ${PACKAGE} 166075665`, `${'C'.repeat(40)} ETS2TelemetryStagingDesktop-0.1.2-stg000000-delta.nupkg 4096`,
+    `${'D'.repeat(40)} etx2telemetrydesktopstaging-0.1.1-stg000000-full.nupkg 1\n${'E'.repeat(40)} ets2telemetrystagingdesktop-0.1.2-STG000000-full.nupkg 2`]) {
+    await writeFile(releases, `${'A'.repeat(40)} ETS2TelemetryStagingDesktop-0.1.1-stg000000-full.nupkg 166075665\n${line}\n`);
     expect(await remove(), line).toBe('recorded');
   }
   expect(await apps()).toContain('app-0.1.2-stg000000');
@@ -84,8 +84,8 @@ it('keeps the folder while Update.exe runs or a process runs from inside it, and
 
 it('refuses a version that is not one NuGet folder version, another package name and relative roots (review nit)', async () => {
   for (const version of ['..', '0.1.2\\..\\..', '0.1.2/x', '', 'v0.1.2', '0.1', '0.1.2-stg.000000', '0.1.2-stg000000.', '0.1.2-stg000000 ', '0.1.2--x', '0.1.2-'])
-    expect(await remove({}, version, `ETS2TelemetryDesktopStaging-${version}-full.nupkg`), JSON.stringify(version)).toBe('refused');
-  expect(await remove({}, '0.1.2-stg000000', 'ETS2TelemetryDesktopStaging-0.1.3-stg000000-full.nupkg')).toBe('refused');
+    expect(await remove({}, version, `ETS2TelemetryStagingDesktop-${version}-full.nupkg`), JSON.stringify(version)).toBe('refused');
+  expect(await remove({}, '0.1.2-stg000000', 'ETS2TelemetryStagingDesktop-0.1.3-stg000000-full.nupkg')).toBe('refused');
   expect(await remove({}, '0.1.2-stg000000', `..\\${PACKAGE}`)).toBe('refused');
   expect(await removeIncompleteVersion(ports(), 'LocalAppData\\ETS2TelemetryDesktopStaging', '0.1.2-stg000000', PACKAGE, running())).toBe('refused');
   expect(await remove({}, '0.1.2-stg000000', PACKAGE, 'app-0.1.1-stg000000')).toBe('refused');
@@ -97,7 +97,7 @@ it('unlinks a target that is a junction without entering it', async () => {
   await mkdir(outside);
   await writeFile(path.win32.join(outside, 'kept.txt'), 'kept');
   await symlink(outside, path.win32.join(installRoot, 'app-0.1.3-stg000000'), 'junction');
-  expect(await remove({}, '0.1.3-stg000000', 'ETS2TelemetryDesktopStaging-0.1.3-stg000000-full.nupkg')).toBe('removed');
+  expect(await remove({}, '0.1.3-stg000000', 'ETS2TelemetryStagingDesktop-0.1.3-stg000000-full.nupkg')).toBe('removed');
   expect(await readdir(outside)).toEqual(['kept.txt']);
   expect(await apps()).not.toContain('app-0.1.3-stg000000');
 });
@@ -128,15 +128,15 @@ it('reads a release entry by its last path segment without a query, and refuses 
   const releases = path.win32.join(installRoot, 'packages', 'RELEASES');
   const sha = 'F'.repeat(40);
   for (const entry of [`https://example.invalid/releases/download/staging-v0.1.2-stg.000000/${PACKAGE}?sv=1&sig=x`, `..\\packages\\${PACKAGE}`, `${PACKAGE}#fragment`]) {
-    await writeFile(releases, `${'A'.repeat(40)} ETS2TelemetryDesktopStaging-0.1.1-stg000000-full.nupkg 166075665\n${sha} ${entry} 166075665\n`);
+    await writeFile(releases, `${'A'.repeat(40)} ETS2TelemetryStagingDesktop-0.1.1-stg000000-full.nupkg 166075665\n${sha} ${entry} 166075665\n`);
     expect(await remove(), entry).toBe('recorded');
   }
   for (const line of [`${sha} ${PACKAGE}`, `${'G'.repeat(40)} ${PACKAGE} 1`, `${sha.slice(1)} ${PACKAGE} 1`, 'not a release line', `${sha} ${PACKAGE} size`]) {
-    await writeFile(releases, `${'A'.repeat(40)} ETS2TelemetryDesktopStaging-0.1.1-stg000000-full.nupkg 166075665\n${line}\n`);
+    await writeFile(releases, `${'A'.repeat(40)} ETS2TelemetryStagingDesktop-0.1.1-stg000000-full.nupkg 166075665\n${line}\n`);
     expect(await remove(), line).toBe('releases-unreadable');
   }
   // Blank lines and a BOM are fine; another release does not record this one.
-  await writeFile(releases, `\uFEFF\r\n${sha} https://example.invalid/x/ETS2TelemetryDesktopStaging-0.1.3-stg000000-full.nupkg?y=1 1\r\n\r\n`);
+  await writeFile(releases, `\uFEFF\r\n${sha} https://example.invalid/x/ETS2TelemetryStagingDesktop-0.1.3-stg000000-full.nupkg?y=1 1\r\n\r\n`);
   expect(await remove()).toBe('removed');
 });
 

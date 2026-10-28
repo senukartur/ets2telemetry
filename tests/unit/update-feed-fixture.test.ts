@@ -44,13 +44,13 @@ it('names the product\'s repository, key id and User-Agent', () => {
 
 it('serves the paths the product builds for both feeds', () => {
   const origin = 'http://127.0.0.1:4567', origins = {web: origin, api: origin};
-  const routes = feedRoutes({tag: 'staging-v0.1.1-stg.000042', name: 'ETS2TelemetryDesktopStaging-0.1.1-stg000042-full.nupkg'});
+  const routes = feedRoutes({tag: 'staging-v0.1.1-stg.000042', name: 'ETS2TelemetryStagingDesktop-0.1.1-stg000042-full.nupkg'});
   expect(`${origin}${routes.manifest}`).toBe(manifestUrls(origins, 'staging-v0.1.1-stg.000042').manifest);
   expect(`${origin}${routes.signature}`).toBe(manifestUrls(origins, 'staging-v0.1.1-stg.000042').signature);
   expect(`${origin}${routes.latestManifest}`).toBe(manifestUrls(origins).manifest);
   expect(`${origin}${routes.latestSignature}`).toBe(manifestUrls(origins).signature);
   expect(`${origin}${routes.list}`).toBe(releaseListUrl(origins));
-  expect(`${origin}${routes.package}`).toBe(packageUrl(origins, 'staging-v0.1.1-stg.000042', 'ETS2TelemetryDesktopStaging-0.1.1-stg000042-full.nupkg'));
+  expect(`${origin}${routes.package}`).toBe(packageUrl(origins, 'staging-v0.1.1-stg.000042', 'ETS2TelemetryStagingDesktop-0.1.1-stg000042-full.nupkg'));
 });
 
 describe.each([['production', '0.1.0', '0.1.1'], ['staging', '0.1.0-stg.000042', '0.1.1-stg.000042']] as const)('the %s feed', (channel, current, offered) => {
