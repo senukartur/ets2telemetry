@@ -1,5 +1,6 @@
 #include "capture-server.hpp"
 #include "capture-wire.hpp"
+#include "channel-identity.hpp"
 #include "pipe-discovery.hpp"
 #include <algorithm>
 #include <array>
@@ -32,8 +33,9 @@ void module_identity(HANDLE stop_event, std::string& path, std::string& digest) 
 }
 }
 std::wstring capture_endpoint_name(const sdk::Snapshot& s, const transport::UserIdentity& user) {
-  // A separate namespace keyed to the verified process instance and this plugin initialization.
-  return L"\\\\.\\pipe\\ETS2Telemetry-" + widen(s.identity.game.c_str()) + L"-cap0-" + widen(user.tag.c_str()) + L"-" + std::to_wstring(user.session) + L"-" +
+  // A separate namespace keyed to the verified process instance and this plugin initialization, under the build
+  // channel's prefix (ET-055).
+  return channel::active.pipe_prefix_wide + widen(s.identity.game.c_str()) + L"-cap0-" + widen(user.tag.c_str()) + L"-" + std::to_wstring(user.session) + L"-" +
     widen(s.identity.process_instance_id.c_str()) + L"-" + widen(s.identity.plugin_session_id.c_str());
 }
 CaptureServer::~CaptureServer() { stop(); }

@@ -3,6 +3,7 @@
 // is the ET-002b C++ Consumer and DurableAckCursor; expected values are written by hand from docs/protocol/v1.md and
 // docs/native-transport-v1.md.
 #include "v1-server.hpp"
+#include "channel-identity.hpp"
 #include "pipe-server.hpp"
 #include "capture-server.hpp"
 #include "capture-wire.hpp"
@@ -341,9 +342,9 @@ void window_mapping(Fixture& f) {
 void handshake() {
   Fixture f; window_mapping(f); f.start();
   const auto c = f.current(); sdk::Snapshot source; require(f.adapter->read_current(source), "v0 slot");
-  const auto expected = L"\\\\.\\pipe\\ETS2Telemetry-ets2-v1-" + wide(f.user.tag) + L"-" + std::to_wstring(f.user.session) + L"-" + wide(c->identity.process_instance_id.c_str());
+  const auto expected = std::wstring(channel::active.pipe_prefix_wide) + L"ets2-v1-" + wide(f.user.tag) + L"-" + std::to_wstring(f.user.session) + L"-" + wide(c->identity.process_instance_id.c_str());
   require(f.server->endpoint() == expected, "v1 pipe name: game, v1, userTag, Windows session, process instance");
-  require(transport::endpoint_name(source, f.user) == L"\\\\.\\pipe\\ETS2Telemetry-ets2-v0-" + wide(f.user.tag) + L"-" + std::to_wstring(f.user.session) + L"-" + wide(c->identity.process_instance_id.c_str()),
+  require(transport::endpoint_name(source, f.user) == std::wstring(channel::active.pipe_prefix_wide) + L"ets2-v0-" + wide(f.user.tag) + L"-" + std::to_wstring(f.user.session) + L"-" + wide(c->identity.process_instance_id.c_str()),
     "v0 pipe name unchanged by the defaulted protocol parameter");
   // The discovery record: exact v0 schema with protocolMajor 1, owner-only, in the v1 directory.
   const auto record = f.record(); f.security.verify_owner_only(record);

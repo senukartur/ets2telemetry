@@ -1,4 +1,5 @@
 #include "pipe-discovery.hpp"
+#include "channel-identity.hpp"
 #include "protocol-json.hpp"
 #include <set>
 #include <stdexcept>
@@ -29,7 +30,8 @@ std::string bounded_file(HANDLE f, std::size_t limit, HANDLE stop_event) {
 }
 }
 std::wstring endpoint_name(const sdk::Snapshot& s, const UserIdentity& user, unsigned protocol_major) {
-  return L"\\\\.\\pipe\\ETS2Telemetry-" + widen(s.identity.game.c_str()) + L"-v" + std::to_wstring(protocol_major) + L"-" + widen(user.tag) + L"-" + std::to_wstring(user.session) + L"-" + widen(s.identity.process_instance_id.c_str());
+  // The build channel's prefix (ET-055): a production and a staging plugin in one game never share an endpoint name.
+  return channel::active.pipe_prefix_wide + widen(s.identity.game.c_str()) + L"-v" + std::to_wstring(protocol_major) + L"-" + widen(user.tag) + L"-" + std::to_wstring(user.session) + L"-" + widen(s.identity.process_instance_id.c_str());
 }
 std::vector<AllowedPeer> read_service_policy(const std::wstring& directory, const OwnerSecurity& security, const UserIdentity& user, HANDLE stop_event) {
   inspection_running(stop_event); security.verify_owner_only(directory,stop_event);

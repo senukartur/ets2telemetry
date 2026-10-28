@@ -49,6 +49,9 @@ class OwnerSecurity final {
   std::wstring sid_; PSECURITY_DESCRIPTOR descriptor_ = nullptr; SECURITY_ATTRIBUTES attributes_{};
 };
 std::wstring final_path(HANDLE, HANDLE stop_event = nullptr);
+// The build channel's application root (ET-055): `local_app_data` joined with the channel's data-root folder name, so a
+// production and a staging plugin keep separate transport discovery and policy directories. Pure; touches no file.
+std::wstring application_directory(const std::wstring& local_app_data);
 // `leaf` names the protocol directory below the protected transport subtree: v0, or v1 for the protocol v1 endpoint.
 std::wstring local_transport_directory(const OwnerSecurity&, const wchar_t* leaf = L"v0");
 }
