@@ -105,8 +105,8 @@ if ($Scenario -eq 'side-by-side') {
     # Checked before anything else: a staging build of this checkout, its Setup with the recorded bytes.
     $inputText = & $node (Join-Path $PSScriptRoot 'side-by-side-input.mjs') verify ([IO.Path]::GetFullPath($StagingInput))
     if ($LASTEXITCODE -ne 0) { throw 'SIDE_BY_SIDE_INPUT_REFUSED: the staging input failed its check (side-by-side-input.mjs verify).' }
-    $stagingInput = ($inputText -join "`n") | ConvertFrom-Json
-    $channelBuilds['staging'] = [ordered]@{setup=[string]$stagingInput.setupPath; appVersion=[string]$stagingInput.build.version}
+    $stagingRecord = ($inputText -join "`n") | ConvertFrom-Json
+    $channelBuilds['staging'] = [ordered]@{setup=[string]$stagingRecord.setupPath; appVersion=[string]$stagingRecord.build.version}
 }
 # Each channel's identity and versions from installer-guard.mjs (lifecycleIdentity, lifecycleVersions).
 $identities = @{}
@@ -233,20 +233,27 @@ function Use-Channel([string]$Channel) {
 Use-Channel $runChannels[0]
 
 $registryViews = @([Microsoft.Win32.RegistryView]::Registry64, [Microsoft.Win32.RegistryView]::Registry32)
-function Read-RegistrationView([Microsoft.Win32.RegistryView]$View, [string]$Key = $script:uninstallKey) {
+function Close-Disposable($Resource) {
+    # Disposes only what implements IDisposable; anything else (null, or a value that is not the expected object) is left,
+    # so a finally block never throws a new error over the one that brought it there.
+    if ($Resource -is [IDisposable]) { $Resource.Dispose() }
+}
+function Read-RegistrationView([Microsoft.Win32.RegistryView]$View, [string]$SubKey = $script:uninstallKey) {
     # The HKCU uninstall key Squirrel writes, in one registry view; only read here. ET-045g adds DisplayIcon, which the
     # driver's installed command reduces to its shape (classifyRegistrationIcon); the value itself never reaches the evidence.
+    # The parameter is not named $Key: PowerShell names are case-insensitive, so `$key = ...` below would assign it and its
+    # [string] type would turn the RegistryKey into a string (hosted run 40689215872; Test-HarnessVariables.ps1 guards this).
     $hive = [Microsoft.Win32.RegistryKey]::OpenBaseKey([Microsoft.Win32.RegistryHive]::CurrentUser, $View)
     try {
-        $key = $hive.OpenSubKey($Key, $false)
+        $key = $hive.OpenSubKey($SubKey, $false)
         if (!$key) { return $null }
         try { return [ordered]@{installLocation=$key.GetValue('InstallLocation'); displayVersion=$key.GetValue('DisplayVersion'); uninstallString=$key.GetValue('UninstallString');
             displayIcon=$key.GetValue('DisplayIcon'); displayName=$key.GetValue('DisplayName'); publisher=$key.GetValue('Publisher')} }
-        finally { $key.Dispose() }
-    } finally { $hive.Dispose() }
+        finally { Close-Disposable $key }
+    } finally { Close-Disposable $hive }
 }
-function Read-Registration([string]$Key = $script:uninstallKey) {
-    foreach ($view in $registryViews) { $row = Read-RegistrationView $view $Key; if ($row) { return $row } }
+function Read-Registration([string]$SubKey = $script:uninstallKey) {
+    foreach ($view in $registryViews) { $row = Read-RegistrationView $view $SubKey; if ($row) { return $row } }
     return $null
 }
 function Read-UninstallEntries {
@@ -263,13 +270,13 @@ function Read-UninstallEntries {
                 foreach ($name in @($parent.GetSubKeyNames() | Select-Object -First 1024)) {
                     $key = $parent.OpenSubKey($name, $false)
                     if (!$key) { continue }
-                    try { $location = [string]$key.GetValue('InstallLocation') } finally { $key.Dispose() }
+                    try { $location = [string]$key.GetValue('InstallLocation') } finally { Close-Disposable $key }
                     if ($location -and $location.StartsWith($runRoot, [StringComparison]::OrdinalIgnoreCase)) {
                         $rows += ,[ordered]@{view=[string]$view; name=$name; installLocation=$location}
                     }
                 }
-            } finally { $parent.Dispose() }
-        } finally { $hive.Dispose() }
+            } finally { Close-Disposable $parent }
+        } finally { Close-Disposable $hive }
     }
     return ,$rows
 }
@@ -283,8 +290,8 @@ function Get-FactJson {
     try {
         # Read only: the Valve key is never written or enumerated beyond this value.
         $valve = $hive.OpenSubKey('Software\Valve\Steam', $false)
-        if ($valve) { try { $steamPath = [string]$valve.GetValue('SteamPath') } finally { $valve.Dispose() } }
-    } finally { $hive.Dispose() }
+        if ($valve) { try { $steamPath = [string]$valve.GetValue('SteamPath') } finally { Close-Disposable $valve } }
+    } finally { Close-Disposable $hive }
     if ($steamPath) {
         $steamPath = [IO.Path]::GetFullPath($steamPath.Replace('/', '\'))
         $vdf = Join-Path $steamPath 'steamapps\libraryfolders.vdf'
@@ -325,13 +332,13 @@ function Invoke-Driver([string]$Command, [string[]]$Arguments, [int]$TimeoutMs) 
 function Invoke-InstalledSmoke([string]$Executable, [string[]]$Scenarios, [string]$Version) {
     # A separate shell, so the smoke's own Job and Add-Type stay independent of this session.
     $shell = [Diagnostics.Process]::GetCurrentProcess().MainModule.FileName
-    foreach ($scenario in $Scenarios) {
+    foreach ($smokeScenario in $Scenarios) {
         $started = $clock.Elapsed.TotalSeconds
         & $shell -NoProfile -NonInteractive -ExecutionPolicy Bypass -File (Join-Path $checkout 'scripts/ci/Invoke-RuntimeSmoke.ps1') -Mode installed -Executable $Executable `
-            -Scenario $scenario -OutputRoot $evidence
+            -Scenario $smokeScenario -OutputRoot $evidence
         $code = $LASTEXITCODE
-        $script:report.steps += ,[ordered]@{step=('installed-smoke-' + $scenario + '-' + $Version); exitCode=$code; seconds=[math]::Round($clock.Elapsed.TotalSeconds - $started, 1)}
-        if ($code -ne 0) { throw ('Installed ' + $scenario + ' smoke failed on ' + $Version + '; evidence: ' + $evidence) }
+        $script:report.steps += ,[ordered]@{step=('installed-smoke-' + $smokeScenario + '-' + $Version); exitCode=$code; seconds=[math]::Round($clock.Elapsed.TotalSeconds - $started, 1)}
+        if ($code -ne 0) { throw ('Installed ' + $smokeScenario + ' smoke failed on ' + $Version + '; evidence: ' + $evidence) }
     }
 }
 function Assert-Installed([string]$Label, [string]$Version) {
@@ -354,7 +361,7 @@ function Get-IconDigest([string]$File) {
         return ,@([ETS2Telemetry.Diagnostics.ShellIconPixels]::Read($File) | ForEach-Object {
             [ordered]@{width=$_.Width; height=$_.Height; sha256=([BitConverter]::ToString($sha.ComputeHash([byte[]]$_.Pixels)).Replace('-', '').ToLowerInvariant())}
         })
-    } finally { $sha.Dispose() }
+    } finally { Close-Disposable $sha }
 }
 function Assert-IconIdentity([string]$Label, [string]$Version) {
     # ET-045g: what the shell draws for icon 0 of the installed executable (DisplayIcon) and of the binary root's app.ico
@@ -392,8 +399,8 @@ function Set-LegacyIcon([string]$Label) {
         $hive = [Microsoft.Win32.RegistryKey]::OpenBaseKey([Microsoft.Win32.RegistryHive]::CurrentUser, $registryViews[$index])
         try {
             $key = $hive.OpenSubKey($uninstallKey, $true)
-            if ($key) { try { $key.SetValue('DisplayIcon', $planted, [Microsoft.Win32.RegistryValueKind]::String); $set++ } finally { $key.Dispose() } }
-        } finally { $hive.Dispose() }
+            if ($key) { try { $key.SetValue('DisplayIcon', $planted, [Microsoft.Win32.RegistryValueKind]::String); $set++ } finally { Close-Disposable $key } }
+        } finally { Close-Disposable $hive }
     }
     $script:report.steps += ,[ordered]@{step=('legacy-display-icon-' + $Label); viewsSet=$set}
     if ($set -lt 1 -or (Read-Registration).displayIcon -cne $planted) { throw ('LEGACY_ICON_NOT_PLANTED before ' + $Label) }
@@ -524,9 +531,9 @@ function Set-LegacyNames([string]$Label, [string]$Mode, [string]$Version) {
                             $key.SetValue('DisplayName', $oldName, [Microsoft.Win32.RegistryValueKind]::String)
                             $key.SetValue('Publisher', 'ETS2Telemetry contributors', [Microsoft.Win32.RegistryValueKind]::String)
                             $registryViewsSet++
-                        } finally { $key.Dispose() }
+                        } finally { Close-Disposable $key }
                     }
-                } finally { $hive.Dispose() }
+                } finally { Close-Disposable $hive }
             }
             $registration = Read-Registration
             if ($registryViewsSet -lt 1 -or $registration.displayName -cne $oldName -or $registration.publisher -cne 'ETS2Telemetry contributors') {
@@ -587,7 +594,7 @@ function Get-BinaryRootListing($Helper) {
         if (!$reparse -and $item.Length -eq $Helper.bytes) { $isHelper = (Get-FileHash -LiteralPath $item.FullName -Algorithm SHA256).Hash -eq $Helper.sha256 }
         if (!$reparse -and $item.Length -eq 1) {
             $stream = [IO.File]::Open($item.FullName, [IO.FileMode]::Open, [IO.FileAccess]::Read, [IO.FileShare]::ReadWrite)
-            try { $isMarker = $stream.ReadByte() -eq 32 } finally { $stream.Dispose() }
+            try { $isMarker = $stream.ReadByte() -eq 32 } finally { Close-Disposable $stream }
         }
         $rows.Add([ordered]@{relative=$relative; kind='file'; bytes=$item.Length; reparse=$reparse; vendorHelper=$isHelper; deadMarker=$isMarker})
     }
@@ -620,7 +627,7 @@ function Get-RunValue([string]$Channel) {
     # The channel's HKCU Run value (named by its AUMID), or $null; read only.
     $key = [Microsoft.Win32.Registry]::CurrentUser.OpenSubKey($runKey, $false)
     if (!$key) { return $null }
-    try { return $key.GetValue([string]$identities[$Channel].appUserModelId) } finally { $key.Dispose() }
+    try { return $key.GetValue([string]$identities[$Channel].appUserModelId) } finally { Close-Disposable $key }
 }
 function Set-PlantedRunValue([string]$Channel) {
     # Hosted side-by-side runs only: plants the channel's autostart value under its own name (the AUMID) in the shape
@@ -633,7 +640,7 @@ function Set-PlantedRunValue([string]$Channel) {
     $data = '"' + (Join-Path (Join-Path $base $identity.productRoot) 'Update.exe') + '" --processStart "' + $identity.executable +
         '" --process-start-args "--hidden" --installer-lifecycle-planted'
     $key = [Microsoft.Win32.Registry]::CurrentUser.CreateSubKey($runKey)
-    try { $key.SetValue([string]$identity.appUserModelId, $data, [Microsoft.Win32.RegistryValueKind]::String) } finally { $key.Dispose() }
+    try { $key.SetValue([string]$identity.appUserModelId, $data, [Microsoft.Win32.RegistryValueKind]::String) } finally { Close-Disposable $key }
     $script:plantedRunValues.Add([ordered]@{name=[string]$identity.appUserModelId; data=$data})
     if ((Get-RunValue $Channel) -cne $data) { throw ('RUN_VALUE_NOT_PLANTED for ' + $Channel + ': the HKCU Run value ' + $identity.appUserModelId + ' does not read back as written') }
     $script:report.steps += ,[ordered]@{step=('run-value-planted-' + $Channel)}
@@ -645,7 +652,7 @@ function Assert-PlantedRunValuesKept([string]$Label) {
     foreach ($row in @($script:plantedRunValues)) {
         $key = [Microsoft.Win32.Registry]::CurrentUser.OpenSubKey($runKey, $false)
         $value = $null
-        if ($key) { try { $value = $key.GetValue($row.name) } finally { $key.Dispose() } }
+        if ($key) { try { $value = $key.GetValue($row.name) } finally { Close-Disposable $key } }
         if ($value -cne $row.data) {
             throw ('RUN_VALUE_MARKER_IGNORED after ' + $Label + ': the planted HKCU Run value ' + $row.name + ' is ' + $(if ($null -eq $value) { 'gone' } else { 'changed' }) +
                 ' although only applications ran; the application''s startup reconciliation (autostart off) treated the marked value as its own login item')
@@ -658,13 +665,13 @@ function Remove-PlantedRunValues {
     foreach ($row in @($script:plantedRunValues)) {
         try {
             $key = [Microsoft.Win32.Registry]::CurrentUser.OpenSubKey($runKey, $true)
-            if ($key) { try { if ($key.GetValue($row.name) -ceq $row.data) { $key.DeleteValue($row.name, $false) } } finally { $key.Dispose() } }
+            if ($key) { try { if ($key.GetValue($row.name) -ceq $row.data) { $key.DeleteValue($row.name, $false) } } finally { Close-Disposable $key } }
         } catch { $script:report.runValueCleanupFailure = $_.Exception.Message }
     }
 }
 function Get-TextDigest([string]$Text) {
     $sha = [Security.Cryptography.SHA256]::Create()
-    try { return [BitConverter]::ToString($sha.ComputeHash([Text.Encoding]::UTF8.GetBytes($Text))).Replace('-', '').ToLowerInvariant() } finally { $sha.Dispose() }
+    try { return [BitConverter]::ToString($sha.ComputeHash([Text.Encoding]::UTF8.GetBytes($Text))).Replace('-', '').ToLowerInvariant() } finally { Close-Disposable $sha }
 }
 function Get-ChannelRegistryState([string]$Channel) {
     # What the other channel's actions must leave alone of this channel beyond its files (the driver's channel-state): the
@@ -935,7 +942,13 @@ try {
     }
     $report.passed = $true
 } catch {
+    # The first error, with its fixed code when it starts with one and the harness line and function it came from (no path).
     $report.failure = $_.Exception.Message
+    $report.failureCode = if ($report.failure -cmatch '^([A-Z][A-Z0-9_]{2,})\b') { $Matches[1] } else { $null }
+    $report.failureAt = [ordered]@{line=$_.InvocationInfo.ScriptLineNumber; stack=@(([string]$_.ScriptStackTrace) -split "`r?`n" | Where-Object { $_ } |
+        ForEach-Object { $_ -replace ', [^,]*: line ', ': line ' } | Select-Object -First 8)}
+    Write-Output ('Installer lifecycle error: ' + $report.failure + ' (code ' + $(if ($report.failureCode) { $report.failureCode } else { 'none' }) + ', line ' +
+        $report.failureAt.line + ')')
 } finally {
     Remove-PlantedLinks
     if ($guarded) {
@@ -956,10 +969,13 @@ try {
         # driver deletes R without following links and decides for each entry whether its key points into R; only those
         # keys are deleted, only the run channels' keys are read, and only on a hosted runner or an owner-requested run.
         $keys = @($runChannels | ForEach-Object { $uninstallParent + '\' + $identities[$_].productRoot })
-        $locations = @(foreach ($key in $keys) {
+        # A registry read that fails here is recorded; the run root is still deleted ('-' keeps every key).
+        $locations = @(foreach ($uninstallSubKey in $keys) {
             foreach ($view in $registryViews) {
-                $row = Read-RegistrationView $view $key
-                if ($row -and $row.installLocation) { [string]$row.installLocation } else { '-' }
+                try {
+                    $row = Read-RegistrationView $view $uninstallSubKey
+                    if ($row -and $row.installLocation) { [string]$row.installLocation } else { '-' }
+                } catch { $report.cleanupReadFailure = $_.Exception.Message; '-' }
             }
         })
         $line = & $node $driver cleanup $configFile @locations | Select-Object -Last 1
@@ -973,7 +989,7 @@ try {
                 for ($index = 0; $index -lt $owned.Count; $index++) {
                     if ($owned[$index] -ne $true) { continue }
                     $hive = [Microsoft.Win32.RegistryKey]::OpenBaseKey([Microsoft.Win32.RegistryHive]::CurrentUser, $registryViews[$index % $registryViews.Count])
-                    try { $hive.DeleteSubKeyTree($keys[[math]::Floor($index / $registryViews.Count)], $false) } finally { $hive.Dispose() }
+                    try { $hive.DeleteSubKeyTree($keys[[math]::Floor($index / $registryViews.Count)], $false) } finally { Close-Disposable $hive }
                 }
             }
             $report.registrationRemoved = @($keys | Where-Object { $null -ne (Read-Registration $_) }).Count -eq 0

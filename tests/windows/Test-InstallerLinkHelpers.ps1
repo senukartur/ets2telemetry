@@ -17,7 +17,7 @@ if (!(Test-Path -LiteralPath $Root -PathType Container) -or (Get-ChildItem -Lite
 $tokens = $null; $errors = $null
 $ast = [Management.Automation.Language.Parser]::ParseFile($Harness, [ref]$tokens, [ref]$errors)
 if ($errors.Count) { throw 'HARNESS_PARSE_FAILED' }
-$wanted = @('Find-ProductLinkFiles', 'Get-ProductLinks', 'Assert-ProductLinks', 'New-PlantedLink', 'Set-LegacyNames', 'Assert-LegacyNames', 'Remove-PlantedLinks',
+$wanted = @('Find-ProductLinkFiles', 'Get-ProductLinks', 'Assert-ProductLinks', 'New-PlantedLink', 'Set-LegacyNames', 'Assert-LegacyNames', 'Remove-PlantedLinks', 'Close-Disposable',
     'Read-UninstallEntries')
 $definitions = @($ast.FindAll({ param($node) $node -is [Management.Automation.Language.FunctionDefinitionAst] -and $wanted -contains $node.Name }, $true))
 if ($definitions.Count -ne $wanted.Count) { throw 'HARNESS_FUNCTIONS_MISSING' }
