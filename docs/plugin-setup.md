@@ -19,10 +19,10 @@ Since PR-4 a packaged application in the `active` mode reads the bundle, discove
 
 Since ET-017 PR-1, `npm run build` stages the game plugin. `scripts/stage-native-plugin.mjs` runs right after the native broker build and does the following:
 
-1. It configures `native/telemetry-plugin/build` with `cmake -S native/telemetry-plugin -B native/telemetry-plugin/build -A x64`, but only when that tree has no `CMakeCache.txt`. An existing tree keeps its generator; Windows CI configures it first with `-G 'Visual Studio 17 2022'` ([ci](ci.md#et-017-plugin-bundle)).
+1. It resolves the build channel (`scripts/build-channel.mjs`, staging unless a production build is allowed; ET-055) and configures `native/telemetry-plugin/build` with `cmake -S native/telemetry-plugin -B native/telemetry-plugin/build -A x64 -DETS2TELEMETRY_CHANNEL=<channel>` when that tree has no `CMakeCache.txt`. An existing tree keeps its generator; Windows CI configures it first through `npm run native:configure -- -G 'Visual Studio 17 2022'` ([ci](ci.md#et-017-plugin-bundle)). An existing tree configured for another channel is configured again with only `-DETS2TELEMETRY_CHANNEL=<channel>`, which keeps its generator and every other cache entry. It then reads `ETS2TELEMETRY_CHANNEL` back from `CMakeCache.txt` and stops when it differs from the resolved channel.
 2. It builds only the DLL: `cmake --build native/telemetry-plugin/build --target ets2telemetry-plugin --config Release --parallel`.
 3. It fails if a plugin source changed during the build.
-4. It replaces `.local/package-native/telemetry-plugin` with a fresh directory holding exactly two files: the DLL bytes it read from `native/telemetry-plugin/build/Release/ets2telemetry-plugin.dll`, and `plugin-manifest.json`. It verifies the result before it exits.
+4. It replaces `.local/package-native/telemetry-plugin` with a fresh directory holding exactly two files: the DLL bytes it read from `native/telemetry-plugin/build/Release/<channel DLL>` (`ets2telemetry-plugin.dll` or `ets2telemetry-plugin-staging.dll`), and `plugin-manifest.json` with that channel's released list and build version. The other channel's DLL under `build/other-channel/` is never staged. It verifies the result before it exits.
 
 Forge copies that directory into the package as `resources\telemetry-plugin`, next to `resources\telemetry-client`. Neither directory is inside `app.asar`. Generated files are never committed: `native/telemetry-plugin/build` and `.local/` are ignored.
 

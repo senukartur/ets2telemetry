@@ -180,7 +180,7 @@ describe('the routed identities of this build', () => {
     // and an unknown channel stop the load.
     const run = (env: Record<string, string>) => {
       const base: Record<string, string | undefined> = {...process.env};
-      for (const name of ['ETS2TELEMETRY_BUILD_CHANNEL', 'ETS2TELEMETRY_OWNER_PRODUCTION_BUILD', 'ETS2TELEMETRY_STAGING_RUN_NUMBER', 'GITHUB_ACTIONS']) delete base[name];
+      for (const name of ['ETS2TELEMETRY_BUILD_CHANNEL', 'ETS2TELEMETRY_OWNER_PRODUCTION_BUILD', 'ETS2TELEMETRY_STAGING_RUN_NUMBER', 'GITHUB_ACTIONS', 'RUNNER_ENVIRONMENT']) delete base[name];
       return spawnSync(process.execPath, ['-e', "process.stdout.write(require('./forge.config.cjs').packagerConfig.executableName)"],
         {cwd: checkout, encoding: 'utf8', timeout: 30000, env: {...base, ...env}});
     };
@@ -189,7 +189,7 @@ describe('the routed identities of this build', () => {
     expect(unset.stdout).toBe(STAGING.executableName);
     const local = run({ETS2TELEMETRY_BUILD_CHANNEL: 'production'});
     expect(local.status).not.toBe(0);
-    expect(local.stderr).toMatch(/A production build runs only in GitHub Actions or with the owner-only ETS2TELEMETRY_OWNER_PRODUCTION_BUILD=1/);
+    expect(local.stderr).toMatch(/A production build runs only on a GitHub-hosted Actions runner or with the owner-only ETS2TELEMETRY_OWNER_PRODUCTION_BUILD=1/);
     const invalid = run({ETS2TELEMETRY_BUILD_CHANNEL: 'beta'});
     expect(invalid.status).not.toBe(0);
     expect(invalid.stderr).toMatch(/must be exactly production or staging/);

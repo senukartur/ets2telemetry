@@ -8,8 +8,9 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
 include(CTest)
 # Build channel (ET-055 UP12): selects the pipe prefix in ../telemetry-plugin/src/channel-identity.hpp that the broker
-# accepts and connects to. The default keeps the production prefix; configure the plugin tree with the same value.
-set(ETS2TELEMETRY_CHANNEL "production" CACHE STRING "Build channel of the native identities: production or staging")
+# accepts and connects to. The default is staging (ET-055 PR-4, UP13); production trees pass
+# -DETS2TELEMETRY_CHANNEL=production (Windows CI only). Configure the plugin tree with the same value.
+set(ETS2TELEMETRY_CHANNEL "staging" CACHE STRING "Build channel of the native identities: production or staging")
 set_property(CACHE ETS2TELEMETRY_CHANNEL PROPERTY STRINGS production staging)
 if(NOT ETS2TELEMETRY_CHANNEL STREQUAL "production" AND NOT ETS2TELEMETRY_CHANNEL STREQUAL "staging")
   message(FATAL_ERROR "ETS2TELEMETRY_CHANNEL must be production or staging, not '${ETS2TELEMETRY_CHANNEL}'")

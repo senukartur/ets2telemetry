@@ -441,7 +441,8 @@ jobs:
           if (-not (Test-Path -LiteralPath (Join-Path $sdkAsanBin 'clang_rt.asan_dynamic-x86_64.dll'))) { throw 'MSVC AddressSanitizer runtime not found.' }
           $env:PATH = "$sdkAsanBin;$env:PATH"
           Write-Output "ASan runtime: $sdkAsanBin"
-          cmake -S native/telemetry-plugin -B native/telemetry-plugin/build-asan -G 'Visual Studio 17 2022' -A x64 -DETS2TELEMETRY_ASAN_TESTS=ON
+          # ET-055 PR-4: CMake's default channel is staging; the AddressSanitizer trees keep testing the production names.
+          cmake -S native/telemetry-plugin -B native/telemetry-plugin/build-asan -G 'Visual Studio 17 2022' -A x64 -DETS2TELEMETRY_ASAN_TESTS=ON -DETS2TELEMETRY_CHANNEL=production
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           cmake --build native/telemetry-plugin/build-asan --config Release --target protocol-v0-asan-test protocol-v1-asan-test v1-producer-asan-test sdk-adapter-asan-test event-channel-asan-test snapshot-transport-asan-test snapshot-transport-test-plugin snapshot-transport-hooked-test-plugin game-window-monitor-asan-test snapshot-transport-game-host-asan capture-cap0-asan-test v1-transport-asan-test --parallel
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
@@ -456,7 +457,7 @@ jobs:
           if (-not (Test-Path -LiteralPath (Join-Path $clientAsanBin 'clang_rt.asan_dynamic-x86_64.dll'))) { throw 'MSVC AddressSanitizer runtime not found.' }
           $env:PATH = "$clientAsanBin;$env:PATH"
           Write-Output "Client ASan runtime: $clientAsanBin"
-          cmake -S native/telemetry-client -B native/telemetry-client/build-asan -G 'Visual Studio 17 2022' -A x64 -DETS2TELEMETRY_CLIENT_ASAN=ON
+          cmake -S native/telemetry-client -B native/telemetry-client/build-asan -G 'Visual Studio 17 2022' -A x64 -DETS2TELEMETRY_CLIENT_ASAN=ON -DETS2TELEMETRY_CHANNEL=production
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           cmake --build native/telemetry-client/build-asan --config Release --target telemetry-pipe-client-asan telemetry-client-test-asan --parallel
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }

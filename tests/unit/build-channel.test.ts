@@ -13,7 +13,7 @@ import {nugetVersion} from '../../scripts/release-identity.mjs';
 // version carries the 6-digit staging run number, which NuGet keeps in a sortable form.
 
 const env = (values: Record<string, string>) => values;
-const PRODUCTION_REFUSED = /A production build runs only in GitHub Actions or with the owner-only ETS2TELEMETRY_OWNER_PRODUCTION_BUILD=1/;
+const PRODUCTION_REFUSED = /A production build runs only on a GitHub-hosted Actions runner or with the owner-only ETS2TELEMETRY_OWNER_PRODUCTION_BUILD=1/;
 let root: string | undefined;
 afterEach(() => {if (root) rmSync(root, {recursive: true, force: true}); root = undefined;});
 function checkout(version: string) {
@@ -26,37 +26,39 @@ describe('the build channel', () => {
   it('builds staging while the variable is unset, also in GitHub Actions and with the owner override', () => {
     expect(DEFAULT_BUILD_CHANNEL).toBe('staging');
     expect(resolveBuildChannel(env({}))).toBe('staging');
-    expect(resolveBuildChannel(env({GITHUB_ACTIONS: 'true'}))).toBe('staging');
+    expect(resolveBuildChannel(env({GITHUB_ACTIONS: 'true', RUNNER_ENVIRONMENT: 'github-hosted'}))).toBe('staging');
     expect(resolveBuildChannel(env({[OWNER_PRODUCTION_BUILD_VARIABLE]: '1'}))).toBe('staging');
   });
 
   it('accepts exactly staging anywhere', () => {
     expect(resolveBuildChannel(env({[BUILD_CHANNEL_VARIABLE]: 'staging'}))).toBe('staging');
-    expect(resolveBuildChannel(env({[BUILD_CHANNEL_VARIABLE]: 'staging', GITHUB_ACTIONS: 'true'}))).toBe('staging');
+    expect(resolveBuildChannel(env({[BUILD_CHANNEL_VARIABLE]: 'staging', GITHUB_ACTIONS: 'true', RUNNER_ENVIRONMENT: 'github-hosted'}))).toBe('staging');
   });
 
-  it('refuses production outside GitHub Actions without the owner override', () => {
+  it('refuses production outside a GitHub-hosted runner without the owner override', () => {
     expect(OWNER_PRODUCTION_BUILD_VARIABLE).toBe('ETS2TELEMETRY_OWNER_PRODUCTION_BUILD');
     expect(() => resolveBuildChannel(env({[BUILD_CHANNEL_VARIABLE]: 'production'}))).toThrow(PRODUCTION_REFUSED);
     expect(() => resolveBuildChannel(env({[BUILD_CHANNEL_VARIABLE]: 'production'}))).toThrow(/Agent and feature-test builds are staging: unset ETS2TELEMETRY_BUILD_CHANNEL/);
-    // Only the exact values open production: GitHub sets GITHUB_ACTIONS to `true`, and the override is exactly `1`.
-    for (const near of [{GITHUB_ACTIONS: 'TRUE'}, {GITHUB_ACTIONS: '1'}, {GITHUB_ACTIONS: ''}, {[OWNER_PRODUCTION_BUILD_VARIABLE]: 'true'},
+    // Only the exact values open production: a GitHub-hosted runner sets GITHUB_ACTIONS to `true` and RUNNER_ENVIRONMENT to
+    // `github-hosted`, and the override is exactly `1`. GitHub Actions alone, such as a self-hosted runner, is not enough.
+    for (const near of [{GITHUB_ACTIONS: 'true'}, {GITHUB_ACTIONS: 'true', RUNNER_ENVIRONMENT: 'self-hosted'}, {RUNNER_ENVIRONMENT: 'github-hosted'},
+      {GITHUB_ACTIONS: 'TRUE', RUNNER_ENVIRONMENT: 'github-hosted'}, {GITHUB_ACTIONS: 'true', RUNNER_ENVIRONMENT: 'GitHub-hosted'}, {GITHUB_ACTIONS: '1'}, {GITHUB_ACTIONS: ''}, {[OWNER_PRODUCTION_BUILD_VARIABLE]: 'true'},
       {[OWNER_PRODUCTION_BUILD_VARIABLE]: ' 1'}, {[OWNER_PRODUCTION_BUILD_VARIABLE]: '0'}, {[OWNER_PRODUCTION_BUILD_VARIABLE]: ''}, {CI: 'true'}] as Record<string, string>[]) {
       expect(productionBuildAllowed(env(near))).toBe(false);
       expect(() => resolveBuildChannel(env({[BUILD_CHANNEL_VARIABLE]: 'production', ...near}))).toThrow(PRODUCTION_REFUSED);
     }
   });
 
-  it('accepts production in GitHub Actions and with the owner-only override', () => {
-    expect(productionBuildAllowed(env({GITHUB_ACTIONS: 'true'}))).toBe(true);
+  it('accepts production on a GitHub-hosted runner and with the owner-only override', () => {
+    expect(productionBuildAllowed(env({GITHUB_ACTIONS: 'true', RUNNER_ENVIRONMENT: 'github-hosted'}))).toBe(true);
     expect(productionBuildAllowed(env({[OWNER_PRODUCTION_BUILD_VARIABLE]: '1'}))).toBe(true);
-    expect(resolveBuildChannel(env({[BUILD_CHANNEL_VARIABLE]: 'production', GITHUB_ACTIONS: 'true'}))).toBe('production');
+    expect(resolveBuildChannel(env({[BUILD_CHANNEL_VARIABLE]: 'production', GITHUB_ACTIONS: 'true', RUNNER_ENVIRONMENT: 'github-hosted'}))).toBe('production');
     expect(resolveBuildChannel(env({[BUILD_CHANNEL_VARIABLE]: 'production', [OWNER_PRODUCTION_BUILD_VARIABLE]: '1'}))).toBe('production');
   });
 
   it.each(['', 'Staging', 'PRODUCTION', ' staging', 'staging ', 'stage', 'prod', 'test', 'production,staging'])('refuses %j, also in GitHub Actions', value => {
     expect(() => resolveBuildChannel(env({[BUILD_CHANNEL_VARIABLE]: value}))).toThrow(/must be exactly production or staging/);
-    expect(() => resolveBuildChannel(env({[BUILD_CHANNEL_VARIABLE]: value, GITHUB_ACTIONS: 'true', [OWNER_PRODUCTION_BUILD_VARIABLE]: '1'})))
+    expect(() => resolveBuildChannel(env({[BUILD_CHANNEL_VARIABLE]: value, GITHUB_ACTIONS: 'true', RUNNER_ENVIRONMENT: 'github-hosted', [OWNER_PRODUCTION_BUILD_VARIABLE]: '1'})))
       .toThrow(/must be exactly production or staging/);
   });
 });
@@ -95,7 +97,7 @@ describe('the resolved build', () => {
   it('reads the base version from the checkout and selects the channel identity', () => {
     const fixture = checkout('0.3.0');
     expect(resolveBuild({env: env({}), root: fixture})).toEqual({channel: 'staging', identity: BUILD_IDENTITIES.staging, baseVersion: '0.3.0', version: '0.3.0-stg.000000'});
-    expect(resolveBuild({env: env({[BUILD_CHANNEL_VARIABLE]: 'production', GITHUB_ACTIONS: 'true'}), root: fixture}))
+    expect(resolveBuild({env: env({[BUILD_CHANNEL_VARIABLE]: 'production', GITHUB_ACTIONS: 'true', RUNNER_ENVIRONMENT: 'github-hosted'}), root: fixture}))
       .toEqual({channel: 'production', identity: BUILD_IDENTITIES.production, baseVersion: '0.3.0', version: '0.3.0'});
     expect(resolveBuild({env: env({[BUILD_CHANNEL_VARIABLE]: 'staging', [STAGING_RUN_NUMBER_VARIABLE]: '7'}), root: fixture}))
       .toEqual({channel: 'staging', identity: BUILD_IDENTITIES.staging, baseVersion: '0.3.0', version: '0.3.0-stg.000007'});

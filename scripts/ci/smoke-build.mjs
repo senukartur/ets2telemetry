@@ -3,7 +3,8 @@ import {BUILD_CHANNELS, BUILD_IDENTITIES} from '../build-channel.mjs';
 
 // ET-055 PR-4: the build a runtime smoke runs. Invoke-RuntimeSmoke.ps1 records the channel and the application version in
 // the run's config from the build that was actually made (`node scripts/build-channel.mjs --built`, the desktop build
-// evidence) or, in the installed mode, from the installed executable's name. Pull requests run staging packages and main
+// evidence) in every mode. A packaged run also checks the package's broker evidence names that channel; an installed run
+// requires production, the only channel the installer lifecycle installs until ET-055 PR-5. Pull requests run staging packages and main
 // pushes production ones, so every name a smoke checks that differs between the channels comes from here: the isolated
 // data root, the plugin file, the display name inside user-facing copy and the version an export records.
 

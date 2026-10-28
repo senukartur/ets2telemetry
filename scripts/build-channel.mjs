@@ -13,9 +13,10 @@ import {fileURLToPath, pathToFileURL} from 'node:url';
 // (readBuiltBuild, `node scripts/build-channel.mjs --built`).
 //
 // Agent and feature-test builds are staging (UP13, ET-055 PR-4). Unset, ETS2TELEMETRY_BUILD_CHANNEL is
-// DEFAULT_BUILD_CHANNEL, staging. Exactly `staging` is always accepted. Exactly `production` is accepted only in GitHub
-// Actions (GITHUB_ACTIONS=true) or with the owner-only override ETS2TELEMETRY_OWNER_PRODUCTION_BUILD=1, so that no local
-// build silently carries the production identities of the owner's installed application; otherwise it fails. Any other
+// DEFAULT_BUILD_CHANNEL, staging. Exactly `staging` is always accepted. Exactly `production` is accepted only on a
+// GitHub-hosted Actions runner (GITHUB_ACTIONS=true and RUNNER_ENVIRONMENT=github-hosted) or with the owner-only override
+// ETS2TELEMETRY_OWNER_PRODUCTION_BUILD=1, so that no local build silently carries the production identities of the
+// owner's installed application; otherwise it fails. Any other
 // value, the empty string included, fails. Agents never set the production channel or the override. Nothing at run time
 // switches the channel of a built application.
 
@@ -54,9 +55,13 @@ const PRODUCTION_VERSION = /^\d{1,9}\.\d{1,9}\.\d{1,9}(-[0-9A-Za-z.-]{1,40})?$/;
 const STAGING_BASE = /^\d{1,9}\.\d{1,9}\.\d{1,9}$/;
 const RUN_NUMBER = /^\d{1,6}$/;
 
-/** Whether `env` may build production (UP13): GitHub Actions, or the owner-only override. Both values are exact. */
+/**
+ * Whether `env` may build production (UP13): a GitHub-hosted Actions runner (GITHUB_ACTIONS=true and
+ * RUNNER_ENVIRONMENT=github-hosted, the signal the installer guard also requires), or the owner-only override. Every value
+ * is exact.
+ */
 export function productionBuildAllowed(env = process.env) {
-  return env.GITHUB_ACTIONS === 'true' || env[OWNER_PRODUCTION_BUILD_VARIABLE] === '1';
+  return (env.GITHUB_ACTIONS === 'true' && env.RUNNER_ENVIRONMENT === 'github-hosted') || env[OWNER_PRODUCTION_BUILD_VARIABLE] === '1';
 }
 
 /**
@@ -68,7 +73,7 @@ export function resolveBuildChannel(env = process.env) {
   if (value === undefined) return DEFAULT_BUILD_CHANNEL;
   if (!BUILD_CHANNELS.includes(value)) throw new Error(`${BUILD_CHANNEL_VARIABLE} must be exactly production or staging, not ${JSON.stringify(value)}`);
   if (value === 'production' && !productionBuildAllowed(env)) {
-    throw new Error(`A production build runs only in GitHub Actions or with the owner-only ${OWNER_PRODUCTION_BUILD_VARIABLE}=1. ` +
+    throw new Error(`A production build runs only on a GitHub-hosted Actions runner or with the owner-only ${OWNER_PRODUCTION_BUILD_VARIABLE}=1. ` +
       `Agent and feature-test builds are staging: unset ${BUILD_CHANNEL_VARIABLE} (docs/setup.md, "Build channels").`);
   }
   return value;
