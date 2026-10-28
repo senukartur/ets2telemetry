@@ -167,6 +167,8 @@ The endpoint follows the v0 security model ([protocol v1 §12](protocol/v1.md#12
 %LOCALAPPDATA%\ETS2Telemetry\transport\v1\service-policy.json
 ```
 
+These are the production names. The pipe prefix and the LOCALAPPDATA folder are selected per build channel (ET-055, [native transport boundary](native-transport-boundary-v0.md#discovery-and-service-policy)): a staging build uses `\\.\pipe\ETS2TelemetryStaging-…` and `%LOCALAPPDATA%\ETS2TelemetryStaging\transport\v1\…`, and every other part of the names, the record and the policy is unchanged.
+
 - The pipe has one instance, `FILE_FLAG_FIRST_PIPE_INSTANCE`, `PIPE_REJECT_REMOTE_CLIENTS`, the protected current-user DACL of `OwnerSecurity` and a non-inheritable handle. The v0 helpers take a defaulted protocol major (`endpoint_name`, `Discovery`) or directory leaf (`local_transport_directory`), so every v0 name, path and record byte is unchanged.
 - A pre-existing pipe of that name, a foreign discovery record or a directory with a broad ACL or a reparse point stops the v1 worker before it serves anything: status `failed`, no endpoint, nothing adopted or overwritten. v0 and CAP0 are unaffected.
 - Each connection is authorized like v0: the connected peer's PID, a retained process handle, its creation time, token user and Windows session, and the SHA-256 of its held image, which must match the protected `transport\v1\service-policy.json`. A missing, malformed, broad-ACL or mismatching policy rejects the client and leaves the endpoint listening. The retained process is rechecked on every loop iteration; an exit or a reused PID ends the connection. ET-006b provisions this policy.
