@@ -3,6 +3,7 @@ import {readAtomicFile, type AtomicFileSystem} from '../plugin-setup/atomic-json
 import {TEST_ROOT_MARKER} from '../plugin-setup/mode';
 import type {InstallerFileSystem} from '../plugin-setup/plugin-installer';
 import {isDrivePath} from '../plugin-setup/steam-discovery';
+import {CHANNEL} from '../channel';
 
 // The uninstall roots (ET-018 U3; docs/uninstall.md, "Roots"). The central safety rule: the folders an uninstall may
 // delete come from the install location of the running executable, never from %LOCALAPPDATA% alone. The layout is
@@ -17,8 +18,10 @@ import {isDrivePath} from '../plugin-setup/steam-discovery';
 //
 // Every refusal is a fixed code; no path leaves this module except in a successful result, which only main uses.
 
-export const PRODUCT_ROOT_NAME = 'ETS2TelemetryDesktop';
-export const DATA_ROOT_NAME = 'ETS2Telemetry';
+/** The install root's folder name: the channel's Squirrel id (ET-055 UP12). */
+export const PRODUCT_ROOT_NAME = CHANNEL.squirrelId;
+/** The data root's folder name beside the install root: the channel's data root (ET-055 UP12). */
+export const DATA_ROOT_NAME = CHANNEL.dataRootName;
 export const TEST_BASE_NAME = 'LocalAppData';
 export const INSTALL_TEST_FILE = 'ets2telemetry-install-test.json';
 export const INSTALL_TEST_FORMAT = 'ets2telemetry.install-test';

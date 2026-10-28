@@ -1,4 +1,5 @@
 import path from 'node:path';
+import {CHANNEL} from './channel';
 
 // The old-name shortcuts (ET-045h, owner decision D2; docs/release.md, "Shortcut migration"). Squirrel names the
 // shortcuts after the executable's ProductName and puts the Start menu entry in `Programs\<CompanyName>` (pinned
@@ -18,13 +19,13 @@ import path from 'node:path';
 // Folders, taskbar pins and other files are never touched, and no link is followed.
 
 /** The shortcut name Squirrel derives now: forge.config.cjs `win32metadata.ProductName`. */
-export const SHORTCUT_NAME = 'Yukon Union Telemetry';
+export const SHORTCUT_NAME = CHANNEL.displayName;
 /** The Start menu folder: forge.config.cjs `win32metadata.CompanyName`, unchanged by ET-045h. */
 export const SHORTCUT_COMPANY = 'Artur Sianiuk';
 /** The ProductName of every build before ET-045h (package.json `productName`). */
-export const LEGACY_SHORTCUT_NAMES: readonly string[] = Object.freeze(['ETS2Telemetry Desktop']);
+export const LEGACY_SHORTCUT_NAMES: readonly string[] = CHANNEL.legacyShortcutNames;
 /** The Squirrel id: forge.config.cjs `squirrel.name`, the install root's folder name and the AUMID's first part. */
-export const SQUIRREL_APP_ID = 'ETS2TelemetryDesktop';
+export const SQUIRREL_APP_ID = CHANNEL.squirrelId;
 /** A shortcut Squirrel writes is a few KiB; a larger file at that name is not one of them. */
 export const MAX_SHORTCUT_BYTES = 64 * 1024;
 /**

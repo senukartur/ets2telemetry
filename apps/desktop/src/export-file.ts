@@ -3,7 +3,10 @@
 // data directory `<LOCALAPPDATA>\ETS2Telemetry` or a device path is refused by name, by its real path and by file
 // identity; the file is written as `<name>.<hex8>.partial` beside the target, synced, closed and renamed over it, and the
 // partial file is removed after any failure, so an existing target is never left half written. Main process only.
+// The refused data directories are the channel's `exportRefusalDataRootNames` (ET-055 UP12): in production only its own
+// `ETS2Telemetry`, so "the data directory" below means each of them.
 import path from 'node:path';
+import {CHANNEL} from './channel';
 
 /** Delays before each retry of the final rename, as for settings saves: five retries within 300 ms. */
 export const EXPORT_RENAME_RETRY_DELAYS_MS: readonly number[] = Object.freeze([20, 40, 60, 80, 100]);
@@ -77,7 +80,8 @@ export function exportTargetRefused(target: unknown, localAppData: string | unde
   const resolved = comparable(raw);
   if (resolved.split('\\').slice(1).some(part => DEVICE_NAME.test(part.trim()))) return true;
   if (!localAppData || !path.win32.isAbsolute(localAppData)) return true;
-  return inside(resolved, comparable(path.win32.join(localAppData, 'ETS2Telemetry')));
+  const base = localAppData;
+  return CHANNEL.exportRefusalDataRootNames.some(name => inside(resolved, comparable(path.win32.join(base, name))));
 }
 
 /**
@@ -88,12 +92,17 @@ export function exportTargetRefused(target: unknown, localAppData: string | unde
 async function insideByIdentity(fs: ExportFileSystem, folder: string, localAppData: string | undefined): Promise<boolean> {
   if (!localAppData) return true;
   const identity = (target: string) => fs.stat(target, {bigint: true}).then(stats => `${stats.dev}:${stats.ino}`, () => undefined);
-  const root = await identity(path.join(localAppData, 'ETS2Telemetry'));
-  // No identity to compare: a data directory that does not exist yet, or a file system without file indexes.
-  if (root === undefined || root.endsWith(':0')) return false;
+  const roots: string[] = [];
+  for (const name of CHANNEL.exportRefusalDataRootNames) {
+    const root = await identity(path.join(localAppData, name));
+    // No identity to compare: a data directory that does not exist yet, or a file system without file indexes.
+    if (root !== undefined && !root.endsWith(':0')) roots.push(root);
+  }
+  if (roots.length === 0) return false;
   let current = folder;
   for (let depth = 0; depth < EXPORT_ANCESTOR_LIMIT; depth++) {
-    if (await identity(current) === root) return true;
+    const found = await identity(current);
+    if (found !== undefined && roots.includes(found)) return true;
     const parent = path.dirname(current);
     if (parent === current) return false;
     current = parent;
@@ -107,9 +116,15 @@ async function insideByIdentity(fs: ExportFileSystem, folder: string, localAppDa
  */
 export async function targetInsideDataRoot(fs: ExportFileSystem, target: string, localAppData: string | undefined): Promise<boolean> {
   const real = await fs.realpath(path.dirname(target));
-  const root = localAppData ? await fs.realpath(path.join(localAppData, 'ETS2Telemetry')).catch(() => undefined) : undefined;
+  const roots: string[] = [];
+  if (localAppData) {
+    for (const name of CHANNEL.exportRefusalDataRootNames) {
+      const root = await fs.realpath(path.join(localAppData, name)).catch(() => undefined);
+      if (root !== undefined) roots.push(root);
+    }
+  }
   const resolved = path.join(real, path.basename(target));
-  if (exportTargetRefused(resolved, localAppData) || (root !== undefined && inside(comparable(resolved), comparable(root)))) return true;
+  if (exportTargetRefused(resolved, localAppData) || roots.some(root => inside(comparable(resolved), comparable(root)))) return true;
   // A UNC alias of a local folder (\\localhost\C$\..., \\127.0.0.1\c$\..., the computer's own name, a drive mapped to
   // such a share) passes both checks above, because realpath leaves a UNC path unchanged. The data directory is
   // therefore also compared by file identity (volume and file index) with the chosen folder and each of its ancestors.

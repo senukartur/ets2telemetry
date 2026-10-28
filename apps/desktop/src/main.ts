@@ -58,6 +58,7 @@ import {resolveUninstallRoots} from './uninstall/roots';
 import {UNINSTALL_CHANNEL} from './uninstall-contract';
 import {finishedUninstallText, handoverFailedText} from './uninstall-text';
 import {UNINSTALL_STRINGS} from './strings';
+import {CHANNEL} from './channel';
 
 // ET-018 (U2): a Squirrel event runs first and alone, before the profile override, logs, settings, plugin setup and the
 // service. Unpackaged, the first argument after the executable is the application path.
@@ -614,7 +615,7 @@ function runApplication(profileError: unknown): void {
     // A packaged window inherits the executable's icon (forge packagerConfig.icon). Development runs electron.exe, so it
     // points at the same generated .ico in the repository.
     const icon = app.isPackaged ? undefined : path.join(__dirname, '..', '..', '..', 'resources', 'icon', 'app.ico');
-    const created = window = new BrowserWindow({width: 1280, height: 800, minWidth: 1100, minHeight: 720, title: 'Yukon Union Telemetry', ...(icon && existsSync(icon) ? {icon} : {}),titleBarStyle: 'hidden', titleBarOverlay: {color: '#0B1120', symbolColor: '#D1D5DB', height: 32}, webPreferences: {preload: path.join(__dirname, 'preload.cjs'), contextIsolation: true, sandbox: true, nodeIntegration: false}});
+    const created = window = new BrowserWindow({width: 1280, height: 800, minWidth: 1100, minHeight: 720, title: CHANNEL.displayName, ...(icon && existsSync(icon) ? {icon} : {}),titleBarStyle: 'hidden', titleBarOverlay: {color: '#0B1120', symbolColor: '#D1D5DB', height: 32}, webPreferences: {preload: path.join(__dirname, 'preload.cjs'), contextIsolation: true, sandbox: true, nodeIntegration: false}});
     timeline?.('DASHBOARD_WINDOW_CREATED'); observeLoads(created.webContents, 'DASHBOARD');
     created.webContents.setWindowOpenHandler(() => ({action: 'deny'}));
     created.webContents.on('will-navigate', event => event.preventDefault());

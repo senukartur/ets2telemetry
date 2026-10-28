@@ -10,13 +10,14 @@ import type {UninstallBlockCode, UninstallFailureCode} from '../../../packages/c
 import type {FolderNote} from './uninstall/plugin-cleanup';
 import type {DataEntry} from './uninstall/data-wipe';
 import {t} from './i18n';
+import {CHANNEL} from './channel';
 
 /**
  * Legacy fixed application copy for the dashboard and tray. Renderer adapters select the typed EN/RU dictionaries
  * before interpolation; raw SDK values never enter those lookups. Pure data, safe for renderer bundles.
  */
 export const STRINGS = Object.freeze({
-  appName: 'Yukon Union Telemetry',
+  appName: CHANNEL.displayName,
   startupPending: 'Starting',
   startupReady: 'Telemetry service ready; isolated storage probe verified',
   startupFailed: 'Startup failed',
@@ -91,7 +92,7 @@ export const STRINGS = Object.freeze({
 export type StringKey = keyof typeof STRINGS;
 
 export const STRINGS_RU: Readonly<Record<StringKey, string>> = Object.freeze({
-  appName: 'Yukon Union Telemetry',
+  appName: CHANNEL.displayName,
   startupPending: 'Запуск',
   startupReady: 'Служба телеметрии готова; изолированное хранилище проверено',
   startupFailed: 'Ошибка запуска',

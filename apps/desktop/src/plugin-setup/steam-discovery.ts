@@ -2,6 +2,7 @@ import * as nodeFs from 'node:fs/promises';
 import path from 'node:path';
 import type {DiagnosticFacts} from '../diagnostics';
 import {isVdfObject, parseVdf, vdfEntry, VdfError, type VdfObject} from './vdf';
+import {CHANNEL} from '../channel';
 
 // Steam library discovery for ETS2 and ATS (ET-017 P2, P3; docs/plugin-setup.md, "Steam discovery"). The module only
 // reads: it never creates, changes or removes anything, and every file and directory access goes through an injected
@@ -15,7 +16,7 @@ export const GAME_IDENTITY: Readonly<Record<PluginGame, {appId: string; executab
   ats: Object.freeze({appId: '270880', executable: 'amtrucks.exe'})
 });
 /** The only file name this application manages in a game's plugins folder. */
-export const PLUGIN_FILE_NAME = 'ets2telemetry-plugin.dll';
+export const PLUGIN_FILE_NAME = CHANNEL.pluginFileName;
 /** Most libraries accepted from libraryfolders.vdf (P2). */
 export const MAX_STEAM_LIBRARIES = 64;
 /** Largest accepted appmanifest_<id>.acf (P3). */

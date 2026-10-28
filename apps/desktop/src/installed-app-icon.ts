@@ -4,7 +4,8 @@ import {ATOMIC_RENAME_RETRY_DELAYS_MS, errorCode, inspectEntry, temporaryPattern
 import {nodeExecFile, runFixedProgram, systemRoot, type ExecFilePort} from './plugin-setup/fixed-program';
 import type {InstallerFileSystem} from './plugin-setup/plugin-installer';
 import {REG_TIMEOUT_MS} from './uninstall/executor';
-import {PRODUCT_ROOT_NAME, type UninstallRoots} from './uninstall/roots';
+import type {UninstallRoots} from './uninstall/roots';
+import {CHANNEL} from './channel';
 
 // The Installed apps icon (ET-045g, owner decision D3; docs/release.md, "Installed apps icon"). Squirrel's
 // CreateUninstallerRegistryEntry (pinned commit eef37460ae) downloads `iconUrl` into `<install root>\app.ico` and sets the
@@ -21,11 +22,11 @@ export const INSTALLED_ICON_FILE = 'app.ico';
 /** The tracked icon is about 170 KiB; anything larger is not read. */
 export const MAX_ICON_BYTES = 1024 * 1024;
 /**
- * The HKCU uninstall entry Squirrel creates for this application (the Squirrel id, `PRODUCT_ROOT_NAME`). Built when
- * called rather than at module load, so loading this module never reads the roots module's exports.
+ * The HKCU uninstall entry Squirrel creates for this application: the channel's Squirrel id (ET-055 UP12), which is also
+ * the roots module's `PRODUCT_ROOT_NAME`.
  */
 export function uninstallEntryKey(): string {
-  return `HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\${PRODUCT_ROOT_NAME}`;
+  return `HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\${CHANNEL.squirrelId}`;
 }
 export const DISPLAY_ICON_VALUE = 'DisplayIcon';
 /** The longest DisplayIcon data the registry port accepts. */
