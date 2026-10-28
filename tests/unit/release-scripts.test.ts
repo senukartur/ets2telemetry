@@ -100,7 +100,7 @@ describe('round trip through the application verifier', () => {
   it('accepts a staging manifest bound to the release it came from', () => {
     const {bytes, signature, key} = writtenAndSigned('staging');
     expect(verifyUpdateManifest(bytes, signature, binding('staging', [key.entry], '0.2.0-stg.000041', 'staging-v0.2.0-stg.000042'))).toMatchObject({ok: true,
-      manifest: {appVersion: '0.2.0-stg.000042', nugetVersion: '0.2.0-stg000042', package: {tag: 'staging-v0.2.0-stg.000042', name: 'ETS2TelemetryDesktopStaging-0.2.0-stg000042-full.nupkg'}}});
+      manifest: {appVersion: '0.2.0-stg.000042', nugetVersion: '0.2.0-stg000042', package: {tag: 'staging-v0.2.0-stg.000042', name: 'ETS2TelemetryStagingDesktop-0.2.0-stg000042-full.nupkg'}}});
   });
   it('refuses the manifest after any single byte changes', () => {
     const {bytes, signature, key} = writtenAndSigned('production');
@@ -164,7 +164,8 @@ describe('manifest writer refusals', () => {
     refused({identity: identity => {identity.versions.nuget = '0.2.0.0';}}, /NuGet version "0.2.0.0" is not 0.2.0/);
   });
   it('refuses a nupkg that is not named exactly <Squirrel id>-<NuGet version>-full.nupkg', () => {
-    // The staging id starts with the production id, so only exact equality tells them apart.
+    // A name that only starts with the production id (the staging id before the October 28, 2026 amendment) must still be
+    // refused: only exact equality tells such names apart.
     const {folder, nupkgName} = artifactFolder();
     const wrong = 'ETS2TelemetryDesktopStaging-0.2.0-full.nupkg';
     renameSync(path.join(folder, nupkgName), path.join(folder, wrong));
