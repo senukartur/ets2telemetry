@@ -41,13 +41,15 @@ describe('versions and tags', () => {
 });
 
 describe('signature', () => {
-  // The owner's production public key (generated offline on October 28, 2026), written here by hand; no staging key yet.
-  it('ships only the production key of the owner, so a manifest signed by any other key is refused with SIGNATURE_INVALID', () => {
-    expect(UPDATE_PUBLIC_KEYS).toEqual({production: [{keyId: 'production-611eb870520f2b0f', publicKey: 'xNO3Nk8zVa8Cs4xTB7/leXn4THF9TS/7+1rJaFDR52U='}], staging: []});
+  // The owner's public keys (generated on October 28, 2026), written here by hand.
+  it('ships only the keys of the owner, so a manifest signed by any other key is refused with SIGNATURE_INVALID', () => {
+    expect(UPDATE_PUBLIC_KEYS).toEqual({production: [{keyId: 'production-611eb870520f2b0f', publicKey: 'xNO3Nk8zVa8Cs4xTB7/leXn4THF9TS/7+1rJaFDR52U='}],
+      staging: [{keyId: 'staging-9a83aca3ea8c5402', publicKey: '05JXyVluihJE37cRR891+feApSdZTpDiJN2hRJAQdRs='}]});
     expect(verified(manifestObject('production', '0.2.0', PKG, KEY.keyId), production([...UPDATE_PUBLIC_KEYS.production]))).toEqual({ok: false, code: 'SIGNATURE_INVALID'});
     // Another key cannot borrow the owner's keyId: the signature is checked against the owner's public key.
     expect(verified(manifestObject('production', '0.2.0', PKG, 'production-611eb870520f2b0f'), production([...UPDATE_PUBLIC_KEYS.production]))).toEqual({ok: false, code: 'SIGNATURE_INVALID'});
     expect(verified(manifestObject('staging', '0.2.0-stg.000042', PKG, KEY.keyId), staging('staging-v0.2.0-stg.000042', [...UPDATE_PUBLIC_KEYS.staging]))).toEqual({ok: false, code: 'SIGNATURE_INVALID'});
+    expect(verified(manifestObject('staging', '0.2.0-stg.000042', PKG, 'staging-9a83aca3ea8c5402'), staging('staging-v0.2.0-stg.000042', [...UPDATE_PUBLIC_KEYS.staging]))).toEqual({ok: false, code: 'SIGNATURE_INVALID'});
   });
   it('verifies a manifest signed by a compiled key of the channel, with or without a final line break', () => {
     const manifest = manifestObject('production', '0.2.0', PKG, KEY.keyId);

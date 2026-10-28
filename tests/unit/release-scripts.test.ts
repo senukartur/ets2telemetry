@@ -312,15 +312,14 @@ describe('workflow verification of a signed manifest', () => {
     const out = path.join(scratch, 'manifest.json'), notes = path.join(scratch, 'notes.md');
     const run = spawnSync(process.execPath, [path.join(REPOSITORY_ROOT, 'scripts/release/write-update-manifest.mjs'), '--artifacts', folder, '--channel', 'production',
       '--run-id', RUN, '--commit', COMMIT, '--out', out, '--notes', notes], {encoding: 'utf8', env: {...process.env, NODE_OPTIONS: '--disable-warning=MODULE_TYPELESS_PACKAGE_JSON'}});
-    // The owner's production key is compiled, so the unsigned production manifest names it; staging has no key yet, so no
-    // staging manifest can be written (release checklist step 0).
+    // The owner's keys are compiled, so each channel's unsigned manifest names its key.
     expect(run.status, run.stderr).toBe(0);
     expect(JSON.parse(readFileSync(out, 'utf8'))).toMatchObject({channel: 'production', keyId: 'production-611eb870520f2b0f'});
     const staging = spawnSync(process.execPath, [path.join(REPOSITORY_ROOT, 'scripts/release/write-update-manifest.mjs'), '--artifacts', artifactFolder({channel: 'staging'}).folder,
       '--channel', 'staging', '--run-id', RUN, '--commit', COMMIT, '--out', path.join(scratch, 'staging-manifest.json'), '--notes', path.join(scratch, 'staging-notes.md')],
       {encoding: 'utf8', env: {...process.env, NODE_OPTIONS: '--disable-warning=MODULE_TYPELESS_PACKAGE_JSON'}});
-    expect(staging.status).toBe(1);
-    expect(staging.stderr).toContain('No compiled staging update key in the released build: complete step 0 of the release checklist');
+    expect(staging.status, staging.stderr).toBe(0);
+    expect(JSON.parse(readFileSync(path.join(scratch, 'staging-manifest.json'), 'utf8'))).toMatchObject({channel: 'staging', keyId: 'staging-9a83aca3ea8c5402'});
     const verifyOnly = spawnSync(process.execPath, [path.join(REPOSITORY_ROOT, 'scripts/release/write-update-manifest.mjs'), '--artifacts', folder, '--channel', 'production',
       '--run-id', RUN, '--commit', COMMIT], {encoding: 'utf8'});
     expect(verifyOnly.status, verifyOnly.stderr).toBe(0);
@@ -359,11 +358,14 @@ describe('GitHub answers', () => {
 
 describe('the released commit\'s keys', () => {
   // The release workflow writes update-keys.ts of the CI run's commit to a temporary file (git show) and passes it with
-  // --keys-file; the dispatch checkout's keys are never used. This copy is the shipped file with its production list replaced by one test key.
+  // --keys-file; the dispatch checkout's keys are never used. This copy is the shipped file with its production list replaced by one test key and its staging list emptied, as a
+  // released build without a staging key.
   const releasedKeys = (entry: {keyId: string; publicKey: string}) => {
     const shipped = readFileSync(path.join(REPOSITORY_ROOT, 'apps/desktop/src/updater/update-keys.ts'), 'utf8');
-    const changed = shipped.replace(/production: Object\.freeze\(\[[^\]]*\]\)/, `production: Object.freeze([${updateKeyEntry(entry)}])`);
+    const changed = shipped.replace(/production: Object\.freeze\(\[[^\]]*\]\)/, `production: Object.freeze([${updateKeyEntry(entry)}])`)
+      .replace(/staging: Object\.freeze\(\[[^\]]*\]\)/, 'staging: Object.freeze([])');
     expect(changed).not.toBe(shipped);
+    expect(changed).toContain('staging: Object.freeze([])');
     const folder = path.join(scratch, 'released-keys');
     mkdirSync(folder);
     writeFileSync(path.join(folder, 'update-keys.ts'), changed);
@@ -394,7 +396,7 @@ describe('the released commit\'s keys', () => {
       '--key-id', 'production-ffffffffffffffff']);
     expect(other.status).toBe(1);
     expect(other.stderr).toContain('is not a production key compiled into the released build');
-    // The staging list of the same file is still empty.
+    // The staging list of the same file is empty.
     const staging = node('write-update-manifest.mjs', ['--artifacts', artifactFolder({channel: 'staging'}).folder, '--channel', 'staging', '--run-id', RUN, '--commit', COMMIT,
       '--out', path.join(scratch, 'm3.json'), '--notes', path.join(scratch, 'n3.md'), '--keys-file', keysFile]);
     expect(staging.status).toBe(1);
