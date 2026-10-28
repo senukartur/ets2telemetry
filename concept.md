@@ -1460,3 +1460,10 @@ No protocol, wire, SQLite schema, settings format or `GAME_HISTORY_RECORDING` ch
 - **No migration.** No staging build was released or installed outside CI test roots.
 
 Whether the hosted side-by-side scenario now passes is shown only by the next run on `main`.
+ET-055 PR-8 (the update from a loopback feed, October 28, 2026) covers UP19's hosted part of REG-019: the update with data kept, the refusal while a game runs and the restart after `recording-flush` ([installer testing](docs/installer-testing.md#update-from-feed-scenario)). The coordinator made these decisions under the owner's approval of October 28, 2026; the owner did not review them individually:
+
+- **No product change.** The driver clicks the existing About check and sidebar control, reads the existing `getAppState()`, and closes an instance that Update.exe or Squirrel's stub started with the uninstall hook's existing `uninstall-exit` lock request; the test-root feed and key variables of PR-6 are the only update inputs. No IPC, bridge method or test-only product switch is added.
+- **Per-run key.** The loopback feed's manifest is signed with an Ed25519 key generated inside the driver command; only its public half reaches the application, and nothing of it is written.
+- **R1 by a kill.** The apply of a third fixture version C is killed as soon as Update.exe creates `app-<C>` (the end `runFixedProgram`'s 180 s kill also produces), then retried with an exit during it. No shorter apply deadline is added to the product. What Squirrel leaves is recorded; only data loss or an install whose stub starts nothing that reaches the history fails the run. Whether the restart must wait for a complete apply is decided from the hosted evidence.
+- **TD-025 stays pending.** A Windows-initiated uninstall during an apply is not exercised.
+- **Harness rules from the PR-5 review.** The harness-variable check also reports own-spelling writes to typed or validated parameters and the wider write forms, over every tracked script except the retired ET-001 harness; the side-by-side sentinel samples one file per entry; the workflow guard covers `- run:`, `name:` and `if:` plain scalars.

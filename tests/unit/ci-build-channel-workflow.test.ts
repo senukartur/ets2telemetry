@@ -1,4 +1,4 @@
-import {readFile} from 'node:fs/promises';
+import {readdir, readFile} from 'node:fs/promises';
 import {expect, it} from 'vitest';
 
 // ET-055 PR-4 (UP13, REG-017): Windows CI builds production only on main, for the release artifact: a push to main or a
@@ -60,12 +60,6 @@ it('runs the hosted installer lifecycle for the built channel, and the side-by-s
     "needs.windows-build.result == 'success'\"\n    runs-on: windows-2022\n");
   expect(installer).toContain("- name: Require the staging build on main\n        if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main' && " +
     "needs.windows-staging-build.result != 'success'\n        run: |\n          throw ('STAGING_BUILD_NOT_SUCCESSFUL: ");
-  // A plain YAML scalar must not contain ': ' (GitHub rejected the whole workflow on that): every run line carrying one is
-  // a block scalar.
-  for (const line of text.split('\n')) {
-    const run = /^\s*run: (?!\|)(.*)$/.exec(line);
-    if (run) expect(run[1], line).not.toMatch(/: /);
-  }
   expect(installer.indexOf('- name: Side-by-side installer lifecycle')).toBeLessThan(installer.indexOf('- name: Require the staging build on main'));
 });
 
@@ -95,4 +89,42 @@ it('makes main\'s staging build the staging release artifact, with this run\'s s
   expect(staging.indexOf('node scripts/installer/side-by-side-input.mjs create')).toBeLessThan(staging.indexOf('run: ./scripts/installer/Invoke-InstallerLifecycle.ps1\n'));
   // The required job names are unchanged.
   for (const name of ['Windows x64 tests', 'Windows x64 scaffold', 'Windows x64 native AddressSanitizer']) expect(text).toContain(`    name: ${name}\n`);
+});
+
+// ET-055 PR-8 (REG-019): the update-from-feed scenario runs for the built channel on every non-PR event (staging on a branch
+// dispatch, production on main), after the lifecycle and before the side-by-side scenario, inside a job timeout that holds
+// all three step timeouts.
+it('runs the update-from-feed scenario for the built channel after the lifecycle', async () => {
+  const installer = job(await workflow(), 'windows-installer');
+  expect(installer).toContain("- name: Update-from-feed installer lifecycle in a test root\n        if: github.event_name != 'pull_request'\n        timeout-minutes: 15\n" +
+    '        run: ./scripts/installer/Invoke-InstallerLifecycle.ps1 -Scenario update-from-feed\n');
+  expect(installer.indexOf('- name: Installer lifecycle in a test root')).toBeLessThan(installer.indexOf('- name: Update-from-feed installer lifecycle'));
+  expect(installer.indexOf('- name: Update-from-feed installer lifecycle')).toBeLessThan(installer.indexOf('- name: Side-by-side installer lifecycle'));
+  const steps = [...installer.matchAll(/\n {8}timeout-minutes: (\d+)\n/g)].map(match => Number(match[1]));
+  const jobTimeout = Number(/\n {4}timeout-minutes: (\d+)\n/.exec(installer)?.[1]);
+  expect(steps).toEqual([8, 15, 8]);
+  expect(jobTimeout).toBeGreaterThanOrEqual(steps.reduce((sum, minutes) => sum + minutes, 0) + 5);
+});
+
+// A plain YAML scalar must not contain ': ' (GitHub rejected the whole workflow on that). No YAML parser is a dependency,
+// so this is a text guard. ET-055 PR-8 (PR-5 review) extends it from `run:` keys to `- run:` items and `name:` and `if:`
+// keys, in every workflow: such a value is a block scalar or quoted.
+const PLAIN_SCALAR = /^\s*(?:- )?(?:run|name|if): (?![|>'"])(.*)$/;
+it('writes every run, name and if value that contains ": " as a block or quoted scalar', async () => {
+  const folder = '.github/workflows';
+  const files = (await readdir(folder)).filter(name => /\.ya?ml$/.test(name));
+  expect(files).toContain('windows-ci.yml');
+  let checked = 0;
+  for (const name of files) {
+    for (const line of (await readFile(`${folder}/${name}`, 'utf8')).replaceAll('\r\n', '\n').split('\n')) {
+      const value = PLAIN_SCALAR.exec(line);
+      if (!value) continue;
+      checked++;
+      expect(value[1], `${name}: ${line}`).not.toMatch(/: /);
+    }
+  }
+  expect(checked).toBeGreaterThan(50);
+  // The guard reads a dash item, a name and an if, and leaves block and quoted scalars alone.
+  expect(['      - run: echo a: b', '      - name: Step: two', "        if: a == 'b: c'"].map(line => PLAIN_SCALAR.exec(line)?.[1])).toEqual(['echo a: b', 'Step: two', "a == 'b: c'"]);
+  expect(['        run: |', "      - name: 'Step: two'", '        if: "a: b"'].map(line => PLAIN_SCALAR.exec(line))).toEqual([null, null, null]);
 });

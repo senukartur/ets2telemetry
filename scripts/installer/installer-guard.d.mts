@@ -18,6 +18,7 @@ export const LIFECYCLE_IDENTITIES: readonly LifecycleIdentity[];
 export function checkRunChannels(channels: unknown): LifecycleChannel[];
 export interface LifecycleVersion {readonly package: string; readonly installed: string}
 export function lifecycleVersions(channel: string, appVersion: string): {readonly channel: LifecycleChannel; readonly appVersion: string; readonly a: LifecycleVersion; readonly b: LifecycleVersion};
+export function lifecycleFixtureVersion(channel: string, appVersion: string, step: number): LifecycleVersion;
 
 export class InstallerGuardError extends Error {
   constructor(code: string);

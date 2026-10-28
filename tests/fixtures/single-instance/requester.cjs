@@ -1,6 +1,8 @@
 // ET-018 U6 relock proof, the uninstall hook's side: requests the same lock with the uninstall-exit payload, then again
 // every 200 ms until it holds it or REQUEST_WAIT_MS passes, as squirrel-events.ts closeInstance does. It prints the result,
-// the number of requests and the elapsed milliseconds. Only tests/unit/single-instance-relock.test.ts runs it.
+// the number of requests and the elapsed milliseconds. tests/unit/single-instance-relock.test.ts runs it, and so does
+// the hosted update-from-feed lifecycle (scripts/installer/installer-lifecycle.mjs, ET-055 PR-8) to ask an instance that
+// Update.exe or Squirrel's stub started to run its explicit exit, as the uninstall hook does.
 const {app} = require('electron');
 
 app.setPath('userData', process.env.LOCK_DIR);

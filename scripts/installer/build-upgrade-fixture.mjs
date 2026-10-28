@@ -7,21 +7,25 @@ import {fileURLToPath} from 'node:url';
 import {createWindowsInstaller} from 'electron-winstaller';
 import {packageDirectoryName, readBuiltBuild} from '../build-channel.mjs';
 import {nugetVersion, setupExeName} from '../release-identity.mjs';
-import {lifecycleVersions} from './installer-guard.mjs';
+import {lifecycleFixtureVersion} from './installer-guard.mjs';
 
 // ET-018 PR-1 (plan U10): builds installer version B, the local update feed of the installer lifecycle. It packs a
 // temporary copy of the packaged application folder with the pinned electron-winstaller as installer version B (0.1.1 in
 // production, 0.1.1-stg.000000 in staging: lifecycleVersions, ET-055 PR-5); the application bytes stay version A's, as in
 // ET-001. electron-winstaller writes into its input (it adds Squirrel.exe and the
 // executable stub), so the packaged folder is copied first and never handed over itself. This builds files only; it runs
-// no installer. Usage: node scripts/installer/build-upgrade-fixture.mjs <run root fixture folder> <evidence file>
+// no installer. Usage: node scripts/installer/build-upgrade-fixture.mjs <run root fixture folder> <evidence file> [<step>]
+// ET-055 PR-8: the optional step (1, the default, or 2) raises the patch number by that much, so the update-from-feed
+// scenario also builds C (0.1.2, 0.1.2-stg.000000) above B for its interrupted apply (lifecycleFixtureVersion).
 
 const checkout = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
 // ET-055 PR-4 and PR-5: the package, executable, NuGet id and versions of the build that was made (its desktop build
 // evidence), never of the shell's variables. The harness sets ETS2TELEMETRY_BUILD_CHANNEL to that channel for this
 // command, so that forge.config.cjs below resolves the same one.
 const built = readBuiltBuild(checkout);
-export const FIXTURE_VERSION = lifecycleVersions(built.channel, built.version).b.package;
+const step = process.argv[4] === undefined ? 1 : Number(process.argv[4]);
+assert.ok(step === 1 || step === 2, 'Usage: the fixture step is 1 or 2');
+export const FIXTURE_VERSION = lifecycleFixtureVersion(built.channel, built.version, step).package;
 const {identity} = built, executable = `${identity.executableName}.exe`;
 const packaged = path.join(checkout, packageDirectoryName(identity));
 const sha256 = bytes => createHash('sha256').update(bytes).digest('hex');
