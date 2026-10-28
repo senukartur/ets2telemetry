@@ -5,7 +5,7 @@ import type {DiagnosticFacts} from '../diagnostics';
 import type {FixedProgramResult} from '../plugin-setup/fixed-program';
 import type {RunningGames} from '../plugin-setup/game-processes';
 import type {UpdateContext, UpdateContextResult} from './update-context';
-import {clearUpdates, downloadPackage, type UpdateFileSystem} from './update-download';
+import {clearUpdates, downloadPackage, removeIncompleteVersion, RETRYABLE_REMOVALS, type IncompleteRemoval, type IncompleteVersionPorts, type UpdateFileSystem} from './update-download';
 import {checkFeed, type FeedResult, type FeedTimers, type FetchPort} from './update-feed';
 import type {UpdateManifest} from './update-manifest';
 import {UNSUPPORTED_UPDATE} from './update-view';
@@ -29,6 +29,20 @@ export const CHECK_INTERVAL_MS = 6 * 60 * 60_000;
 export const MANUAL_CHECK_MIN_INTERVAL_MS = 10_000;
 /** The apply's deadline (UP3). */
 export const APPLY_TIMEOUT_MS = 180_000;
+/**
+ * R1: after a timeout or the output bound runFixedProgram answers at once, while the killed Update.exe, its children and
+ * the --squirrel-updated hook may still run or hold files. The removal is asked again while its answer can change
+ * (RETRYABLE_REMOVALS: Update.exe or a process in the folder still running, a failed listing, a held file), at most
+ * INCOMPLETE_REMOVAL_ATTEMPTS times, INCOMPLETE_REMOVAL_RETRY_MS apart, and no new attempt starts once
+ * INCOMPLETE_REMOVAL_DEADLINE_MS have passed since the first. Each attempt lists the processes (about 1 s, at most 15 s:
+ * PROCESS_IMAGES_TIMEOUT_MS), and an attempt in flight is never cut short, so the whole cleanup ends within the deadline
+ * plus one attempt: at most about 35 s plus the removal itself. After that the folder stays with the last reason and the
+ * failure is reported. An exit that begins during the cleanup ends its waiting: one more attempt starts at once (after
+ * the attempt in flight, if any) and is the last, and the exit waits for it within its idle budget (idle()).
+ */
+export const INCOMPLETE_REMOVAL_ATTEMPTS = 10;
+export const INCOMPLETE_REMOVAL_RETRY_MS = 500;
+export const INCOMPLETE_REMOVAL_DEADLINE_MS = 20_000;
 
 export type UpdateEvent =
   | {readonly type: 'supported'}
@@ -99,6 +113,8 @@ export interface UpdatePorts {
   resolveContext(): Promise<UpdateContextResult>;
   readonly fetch: FetchPort;
   readonly fs: UpdateFileSystem;
+  /** The reads of the R1 cleanup (removeIncompleteVersion): real paths, Squirrel's release list, the running images. */
+  readonly install: Omit<IncompleteVersionPorts, 'fs'>;
   /** Runs `Update.exe --update <folder>` with fixed arguments under the 180 s deadline; never aborted by the exit. */
   runUpdate(updateExe: string, folder: string): Promise<FixedProgramResult>;
   /** The running-game listing (ETS2, ATS, `truckersmp*`). */
@@ -136,6 +152,9 @@ export class UpdateController {
   private checkStartedAt = -Infinity;
   private clicking = false;
   private operation: Promise<void> | undefined;
+  /** The R1 removal is running (removeIncomplete); wakeCleanup ends its wait between attempts at retire. */
+  private cleaning = false;
+  private wakeCleanup: (() => void) | undefined;
   private downloadAbort: AbortController | undefined;
   constructor(private readonly options: UpdateControllerOptions) {}
 
@@ -213,11 +232,15 @@ export class UpdateController {
     this.timer = undefined;
     this.checkAbort?.abort();
     this.downloadAbort?.abort();
+    this.wakeCleanup?.();
   }
 
-  /** The download's cleanup in flight after retire, which the exit waits for within its idle budget; undefined when idle. */
+  /**
+   * The download's cleanup or the R1 removal in flight after retire, which the exit waits for within its idle budget;
+   * undefined when idle.
+   */
   idle(): Promise<void> | undefined {
-    return this.downloadAbort ? this.operation : undefined;
+    return this.downloadAbort || this.cleaning ? this.operation : undefined;
   }
 
   private dispatch(event: UpdateEvent): void {
@@ -295,6 +318,10 @@ export class UpdateController {
     if (!applied.ok) {
       const failure: UpdateFailure = applied.failure === 'timeout' ? 'APPLY_TIMEOUT' : 'APPLY_FAILED';
       this.options.log('UPDATE_APPLY_FAILED', {code: failure, reason: applied.failure});
+      // R1: the half-written app-<version> would be what the stub and Update.exe --processStart start next; it goes
+      // before the failure is reported, so neither a shortcut nor a Retry meets it (removeIncompleteVersion).
+      const removal = await this.removeIncomplete(context, offer.manifest.nugetVersion, offer.manifest.package.name);
+      this.options.log(removal === 'removed' || removal === 'absent' ? 'UPDATE_INCOMPLETE_VERSION_REMOVED' : 'UPDATE_INCOMPLETE_VERSION_KEPT', {result: removal});
       this.dispatch({type: 'failed', failure});
       return;
     }
@@ -309,6 +336,33 @@ export class UpdateController {
       return;
     }
     this.restart();
+  }
+
+  /**
+   * removeIncompleteVersion, asked again while its answer can change, within the attempt and time bounds above. Once the
+   * exit began, the next attempt starts without waiting and is the last.
+   */
+  private async removeIncomplete(context: UpdateContext, nugetVersion: string, packageName: string): Promise<IncompleteRemoval> {
+    const ports: IncompleteVersionPorts = {fs: this.options.ports.fs, ...this.options.ports.install};
+    const clock = this.options.ports.clock, started = clock.now();
+    const exiting = () => this.retired || this.options.exiting();
+    this.cleaning = true;
+    try {
+      for (let attempt = 1; ; attempt++) {
+        const last = exiting();
+        const result = await removeIncompleteVersion(ports, context.installRoot, nugetVersion, packageName, context.runningDirectory).catch((): IncompleteRemoval => 'failed');
+        if (last || !RETRYABLE_REMOVALS.has(result) || attempt >= INCOMPLETE_REMOVAL_ATTEMPTS) return result;
+        if (clock.now() - started + INCOMPLETE_REMOVAL_RETRY_MS >= INCOMPLETE_REMOVAL_DEADLINE_MS) return result;
+        if (exiting()) continue;
+        await new Promise<void>(resolve => {
+          const timer = clock.setTimeout(() => {this.wakeCleanup = undefined; resolve();}, INCOMPLETE_REMOVAL_RETRY_MS);
+          this.wakeCleanup = () => {this.wakeCleanup = undefined; clock.clearTimeout(timer); resolve();};
+        });
+      }
+    } finally {
+      this.cleaning = false;
+      this.wakeCleanup = undefined;
+    }
   }
 
   private restart(): void {

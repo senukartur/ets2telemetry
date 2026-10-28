@@ -11,8 +11,9 @@ $ErrorActionPreference = 'Stop'
 $builtText = & (Get-Command node -ErrorAction Stop).Source (Join-Path $PSScriptRoot 'build-channel.mjs') --built
 if ($LASTEXITCODE -ne 0) { throw 'Build evidence unavailable: run npm run package first.' }
 $built = ($builtText -join "`n") | ConvertFrom-Json
-if (!$PackageDirectory) { $PackageDirectory = Join-Path $PSScriptRoot ('../' + $built.packageDirectory) }
-$package = (Resolve-Path -LiteralPath $PackageDirectory).Path
+# A local, not the [string] parameter itself (tests/windows/Test-HarnessVariables.ps1).
+$packageSource = if ($PackageDirectory) { $PackageDirectory } else { Join-Path $PSScriptRoot ('../' + $built.packageDirectory) }
+$package = (Resolve-Path -LiteralPath $packageSource).Path
 $executable = Join-Path $package $built.executable
 $archive = Join-Path $package 'resources/app.asar'
 $hash = (Get-FileHash -LiteralPath $archive -Algorithm SHA256).Hash

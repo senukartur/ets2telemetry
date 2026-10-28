@@ -4,10 +4,11 @@ import path from 'node:path';
 import type {ChannelIdentity} from '../channel';
 import {nodeExecFile, runFixedProgram} from '../plugin-setup/fixed-program';
 import {checkRunningGames} from '../plugin-setup/game-processes';
+import {powershellPath, windowsPowerShellEnvironment} from '../plugin-setup/steam-registry';
 import {resolveUninstallRoots, type RootsFileSystem} from '../uninstall/roots';
 import {resolveUpdateContext} from './update-context';
 import {APPLY_TIMEOUT_MS, type UpdatePorts} from './update-controller';
-import type {UpdateFileSystem} from './update-download';
+import {UNREADABLE_UPDATER_IMAGE, type UpdateFileSystem} from './update-download';
 import type {FetchResponse} from './update-feed';
 
 // The production ports of the update controller (ET-055 UP3, UP4, UP8). Requests go through Electron's net.fetch, so the
@@ -42,6 +43,7 @@ export function productionUpdatePorts(input: ProductionUpdatePortsInput): Update
       headers: {'User-Agent': UPDATE_USER_AGENT, Accept: init.kind === 'json' ? 'application/vnd.github+json' : 'application/octet-stream'}}),
     fs,
     runUpdate: (updateExe, folder) => runFixedProgram(nodeExecFile, updateExe, ['--update', folder], {timeoutMs: APPLY_TIMEOUT_MS, maxOutputBytes: APPLY_MAX_OUTPUT_BYTES}),
+    install: {realpath: target => nodeFsPromises.realpath(target), readFile: target => nodeFsPromises.readFile(target), processImages: () => listProcessImages(input.env)},
     checkRunning: async () => {
       const listing = await checkRunningGames();
       return listing.ok ? {ok: true, running: listing.running} : {ok: false};
@@ -53,6 +55,30 @@ export function productionUpdatePorts(input: ProductionUpdatePortsInput): Update
       clearTimeout: handle => clearTimeout(handle as ReturnType<typeof setTimeout>)
     }
   };
+}
+
+/** The R1 cleanup's process listing: Windows PowerShell 5.1 from System32 with one fixed command, 15 s and 4 MiB at most. */
+export const PROCESS_IMAGES_TIMEOUT_MS = 15_000;
+const PROCESS_IMAGES_MAX_OUTPUT_BYTES = 4 * 1024 * 1024;
+/**
+ * One line per process: its image path, or UNREADABLE_UPDATER_IMAGE for a process named Update or Squirrel whose path
+ * this user cannot read (review of ebe3395b: an elevated updater must not disappear from the check). Other processes
+ * without a readable path write nothing.
+ */
+export const PROCESS_IMAGES_COMMAND = '[Console]::OutputEncoding = [Text.Encoding]::UTF8; Get-Process -ErrorAction SilentlyContinue | ForEach-Object { ' +
+  `if ($_.Path) { $_.Path } elseif (@('Update', 'Squirrel') -contains $_.ProcessName) { '${UNREADABLE_UPDATER_IMAGE}' } }`;
+/**
+ * The image paths of the running processes this user can read, one per line, plus UNREADABLE_UPDATER_IMAGE lines;
+ * undefined when the listing failed (a non-zero exit, the deadline or the output bound), so the cleanup keeps the folder.
+ * The program is `<SystemRoot>\System32\WindowsPowerShell\v1.0\powershell.exe` from the validated SystemRoot, and its
+ * PSModulePath is Windows PowerShell's own, as for the Steam registry read.
+ */
+export async function listProcessImages(env: Readonly<Record<string, string | undefined>>, run: typeof runFixedProgram = runFixedProgram): Promise<readonly string[] | undefined> {
+  const result = await run(nodeExecFile, powershellPath(env), ['-NoLogo', '-NoProfile', '-NonInteractive', '-Command', PROCESS_IMAGES_COMMAND],
+    {timeoutMs: PROCESS_IMAGES_TIMEOUT_MS, maxOutputBytes: PROCESS_IMAGES_MAX_OUTPUT_BYTES, env: windowsPowerShellEnvironment(env)}).catch(() => undefined);
+  if (!result?.ok) return undefined;
+  return result.stdout.toString('utf8').replace(/^\uFEFF/, '').split(/\r?\n/).map(line => line.trim())
+    .filter(line => line === UNREADABLE_UPDATER_IMAGE || path.win32.isAbsolute(line));
 }
 
 /** How long main waits for the restart helper to spawn before it exits anyway. */

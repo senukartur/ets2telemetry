@@ -35,6 +35,91 @@ export async function clearUpdates(fs: UpdateFileSystem, dataRoot: string): Prom
 }
 
 const errorCode = (error: unknown) => error && typeof error === 'object' && 'code' in error ? String(error.code) : '';
+
+/**
+ * What removeIncompleteVersion did. `removed` and `absent`: no target folder is left. Kept, each with its fixed reason:
+ * `refused` (a folder it may not touch, or an input of the wrong form), `recorded` (Squirrel already lists the release),
+ * `releases-unreadable`, `updater-running`, `in-use` (a process runs from the folder), `listing-failed` and `failed` (a
+ * removal that did not finish).
+ */
+export type IncompleteRemoval = 'removed' | 'absent' | 'refused' | 'recorded' | 'releases-unreadable' | 'updater-running' | 'in-use' | 'listing-failed' | 'failed';
+/** Kept outcomes that can change within seconds (a process ending, a file let go); the controller asks again for those. */
+export const RETRYABLE_REMOVALS: ReadonlySet<IncompleteRemoval> = new Set<IncompleteRemoval>(['updater-running', 'in-use', 'listing-failed', 'failed']);
+/**
+ * The line the process listing writes for a process named Update or Squirrel whose image path it cannot read (an
+ * elevated updater seen from a non-elevated application); removeIncompleteVersion counts it as a running updater.
+ */
+export const UNREADABLE_UPDATER_IMAGE = '?unreadable-updater';
+/** What removeIncompleteVersion reads beyond the file operations of the download. */
+export interface IncompleteVersionPorts {
+  readonly fs: UpdateFileSystem;
+  realpath(target: string): Promise<string>;
+  readFile(target: string): Promise<Uint8Array>;
+  /** The image paths of the running processes this user can read; undefined when the listing failed. */
+  processImages(): Promise<readonly string[] | undefined>;
+}
+const normalFolder = (value: string) => path.win32.normalize(value).replace(/\\+$/, '').toLowerCase();
+const within = (candidate: string, folder: string) => {const child = normalFolder(candidate), parent = normalFolder(folder); return child === parent || child.startsWith(`${parent}\\`);};
+/** The NuGet form Squirrel names folders with: no dot in the prerelease label, nothing after it. */
+const NUGET_FOLDER_VERSION = /^\d{1,9}\.\d{1,9}\.\d{1,9}(-[0-9A-Za-z][0-9A-Za-z-]{0,59})?$/;
+/** Squirrel's local release list is a few lines; a larger one is not read. */
+const RELEASES_MAX_BYTES = 1024 * 1024;
+
+/**
+ * ET-055 risk R1 (the hosted update-from-feed run 40710991951): `Update.exe --update` that ends early, killed by the
+ * 180 s deadline or by anything else, leaves the half-written `<install root>\app-<NuGet version>` folder behind. The
+ * pinned Squirrel writes no completion marker, and its stub (every shortcut) and `--processStart` start the highest
+ * `app-*` folder whatever it holds, so that folder makes the installation unlaunchable until an apply completes.
+ *
+ * After a failed apply the still-running application removes exactly that target folder (`packageName` is the signed
+ * manifest's nupkg name), and only when all of these hold (review of 33d60d2f):
+ * - it is a direct child of the install root, and neither the folder this application runs from nor one that contains
+ *   it, compared by path and by real path;
+ * - `<install root>\packages\RELEASES` does not list the release yet: Squirrel records it after it has written the folder,
+ *   and once recorded, a removed folder would make the next apply of that version a no-op that keeps restarting the old
+ *   version;
+ * - no `<install root>\Update.exe` runs (a second apply could still be writing the folder: Squirrel's update lock), and no
+ *   process runs from inside the folder (the `--squirrel-updated` hook of a killed apply, for example).
+ * Links are unlinked and never entered. A refused or failed check keeps the folder, with its fixed reason.
+ */
+export async function removeIncompleteVersion(ports: IncompleteVersionPorts, installRoot: string, nugetVersion: string, packageName: string, runningDirectory: string): Promise<IncompleteRemoval> {
+  if (!NUGET_FOLDER_VERSION.test(nugetVersion) || !packageName.endsWith(`-${nugetVersion}-full.nupkg`) || /[\\/]/.test(packageName) ||
+    !path.win32.isAbsolute(installRoot) || !path.win32.isAbsolute(runningDirectory)) return 'refused';
+  const folder = path.win32.join(installRoot, `app-${nugetVersion}`);
+  if (normalFolder(path.win32.dirname(folder)) !== normalFolder(installRoot) || within(runningDirectory, folder)) return 'refused';
+  try {await ports.fs.lstat(folder, {bigint: true});} catch (error) {return errorCode(error) === 'ENOENT' ? 'absent' : 'failed';}
+  // The same check by real path: a junction or a different spelling cannot make the running folder look like another.
+  let realFolder: string, realRunning: string;
+  try {[realFolder, realRunning] = await Promise.all([ports.realpath(folder), ports.realpath(runningDirectory)]);} catch {return 'refused';}
+  if (within(realRunning, realFolder) || within(realRunning, folder)) return 'refused';
+  // Recorded by Squirrel: the full or a delta package of this version in the local release list.
+  const releases = path.win32.join(installRoot, 'packages', 'RELEASES');
+  let text = '';
+  try {
+    const bytes = await ports.readFile(releases);
+    if (bytes.byteLength > RELEASES_MAX_BYTES) return 'releases-unreadable';
+    text = new TextDecoder('utf-8').decode(bytes);
+  } catch (error) {if (errorCode(error) !== 'ENOENT') return 'releases-unreadable';}
+  const names = new Set([packageName, packageName.replace(/-full\.nupkg$/, '-delta.nupkg')].map(name => name.toLowerCase()));
+  // Each non-empty line is `<SHA-1> <file name or URL> <size>`; the name is the URL's last path segment without its query
+  // or fragment. A line of another shape makes the list unreadable, so the folder stays (fail closed).
+  const listed: string[] = [];
+  for (const line of text.replace(/^\uFEFF/, '').split(/\r?\n/).map(entry => entry.trim()).filter(Boolean)) {
+    const match = /^[0-9A-Fa-f]{40}\s+(\S+)\s+\d+(?:\s|$)/.exec(line);
+    if (!match) return 'releases-unreadable';
+    listed.push((match[1].replace(/[?#].*$/, '').split(/[\\/]/).at(-1) ?? '').toLowerCase());
+  }
+  if (listed.some(name => names.has(name))) return 'recorded';
+  let realRoot: string;
+  try {realRoot = await ports.realpath(installRoot);} catch {return 'refused';}
+  const images = await ports.processImages().catch(() => undefined);
+  if (!images) return 'listing-failed';
+  // An Update.exe or Squirrel process whose image this user cannot read (an elevated one) counts as this updater.
+  const updaters = new Set([path.win32.join(installRoot, 'Update.exe'), path.win32.join(realRoot, 'Update.exe')].map(normalFolder));
+  if (images.some(image => image === UNREADABLE_UPDATER_IMAGE || updaters.has(normalFolder(image)))) return 'updater-running';
+  if (images.some(image => within(image, folder) || within(image, realFolder))) return 'in-use';
+  return await removeOwnedTree(ports.fs, folder).catch(() => 'IO_ERROR' as const) === null ? 'removed' : 'failed';
+}
 const writeFailure = (error: unknown): UpdateFailure => errorCode(error) === 'ENOSPC' ? 'DISK_FULL' : 'DOWNLOAD_FAILED';
 
 export type DownloadResult = {readonly ok: true; readonly folder: string}

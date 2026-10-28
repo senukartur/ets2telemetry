@@ -33,9 +33,10 @@ if ($Mode -eq 'installed') {
     # ET-055 PR-5: only an installed layout of the build's channel: <Squirrel id>\app-<version>\<executable> beside the binary
     # root's Update.exe, where the version may carry its NuGet prerelease label (app-0.1.0-stg000000 in staging).
     if (!$Executable -or ![IO.Path]::IsPathRooted($Executable) -or !(Test-Path -LiteralPath $Executable -PathType Leaf)) { throw 'Installed executable missing.' }
-    $Executable = (Get-Item -LiteralPath $Executable).FullName
-    $appDirectory = Split-Path -Parent $Executable; $binaryRoot = Split-Path -Parent $appDirectory
-    if ((Split-Path -Leaf $Executable) -cne $built.executable -or (Split-Path -Leaf $appDirectory) -cnotmatch '^app-[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z]+)?$' -or
+    # A local, not the [string] parameter itself (tests/windows/Test-HarnessVariables.ps1).
+    $installedExecutable = (Get-Item -LiteralPath $Executable).FullName
+    $appDirectory = Split-Path -Parent $installedExecutable; $binaryRoot = Split-Path -Parent $appDirectory
+    if ((Split-Path -Leaf $installedExecutable) -cne $built.executable -or (Split-Path -Leaf $appDirectory) -cnotmatch '^app-[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z]+)?$' -or
         (Split-Path -Leaf $binaryRoot) -cne $built.squirrelId -or !(Test-Path -LiteralPath (Join-Path $binaryRoot 'Update.exe') -PathType Leaf)) {
         throw ('Not an installed layout: ' + $built.squirrelId + '\app-<version>\' + $built.executable + ' with Update.exe.')
     }
@@ -62,7 +63,7 @@ if ($Scenario -eq 'soak') { $config.soakMinutes = $SoakMinutes }
 $config.commit = (& git -C $checkout rev-parse HEAD)
 if ($LASTEXITCODE -ne 0) { throw 'Commit identity unavailable.' }
 $config.channel = $built.channel; $config.appVersion = $built.version
-$config.executable = if ($Mode -eq 'installed') { $Executable } else { Join-Path $checkout ($built.packageDirectory + '/' + $built.executable) }
+$config.executable = if ($Mode -eq 'installed') { $installedExecutable } else { Join-Path $checkout ($built.packageDirectory + '/' + $built.executable) }
 if ($Mode -eq 'packaged' -and !(Test-Path -LiteralPath $config.executable -PathType Leaf)) { throw 'Forge package missing.' }
 if ($Mode -eq 'packaged') {
     # The package itself names its channel in the broker's build evidence; it must be the desktop bundles' channel.

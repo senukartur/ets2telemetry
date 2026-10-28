@@ -1,6 +1,6 @@
 import {execFile} from 'node:child_process';
 import {createHash} from 'node:crypto';
-import {mkdir, readdir, readFile, realpath, rm, writeFile} from 'node:fs/promises';
+import {mkdir, readdir, readFile, realpath, rm, utimes, writeFile} from 'node:fs/promises';
 import path from 'node:path';
 import {describe, expect, it} from 'vitest';
 import {BUILD_IDENTITIES, buildNames} from '../../scripts/build-channel.mjs';
@@ -67,9 +67,11 @@ describe('driver channels (ET-055 PR-5)', () => {
     expect(await run(['signal'], hosted)).toMatchObject({passed: false, failure: {code: 'SETUP_CHANNEL_UNKNOWN'}});
   }, 60000);
   it('prints the run\'s versions and both channels\' identities', async () => {
-    const result = await run(['versions', 'staging', '0.1.0-stg.000000'], local) as {passed: boolean; plan: {versions: {b: {installed: string}}; identities: {channel: string}[]}};
+    const result = await run(['versions', 'staging', '0.1.0-stg.000000'], local) as {passed: boolean; plan: {versions: {b: {installed: string}}; fixtureC: {installed: string}; identities: {channel: string}[]}};
     expect(result.passed).toBe(true);
     expect(result.plan.versions.b.installed).toBe('0.1.1-stg000000');
+    // ET-055 PR-8: the update-from-feed scenario's third version.
+    expect(result.plan.fixtureC.installed).toBe('0.1.2-stg000000');
     expect(result.plan.identities.map(identity => identity.channel)).toEqual(['production', 'staging']);
     expect(await run(['versions', 'production', '0.1.0-stg.000000'], local)).toMatchObject({passed: false, failure: {code: 'LIFECYCLE_VERSION_INVALID'}});
   }, 30000);
@@ -127,6 +129,59 @@ describe('driver channels (ET-055 PR-5)', () => {
       await rm(dataRoot, {recursive: true});
       expect((await sentinel('after-d', 'check', 'before-c')).failure?.message).toMatch(/^OTHER_CHANNEL_DATA_CHANGED \(data root removed\)/);
       expect((await sentinel('after-e', 'check', 'after-e')).failure?.message).toContain('SENTINEL_MODE_INVALID');
+    } finally {await resources.dispose();}
+  }, 60000);
+  // ET-055 PR-8 (PR-5 review): a wipe that empties an entry but keeps its folder; the plant samples one file per entry,
+  // preferring one the application leaves alone, and never a SQLite sidecar, a rotating log or the transport entry.
+  it('samples one file per entry of the other channel\'s data root and names a removed or changed one', async () => {
+    const resources = await temporaryResources();
+    try {
+      const base = await realpath(resources.directory), id = '2'.repeat(32);
+      const runRoot = path.join(base, `installer-${id}`), evidence = path.join(base, `installer-${id}-evidence`);
+      const dataRoot = path.join(runRoot, 'LocalAppData', 'ETS2TelemetryStaging');
+      const put = async (relative: string, text: string) => {await mkdir(path.dirname(path.join(dataRoot, relative)), {recursive: true}); await writeFile(path.join(dataRoot, relative), text);};
+      await put('data\\telemetry.sqlite', 'database');
+      await put('data\\telemetry.sqlite-wal', 'sidecar');
+      await put('data\\backups\\telemetry-x.json', 'manifest');
+      await put('plugins\\setup.json', '{}');
+      await put('logs\\startup.jsonl', 'log');
+      await put('transport\\v1\\service-policy.json', '{}');
+      await mkdir(evidence);
+      const config = path.join(evidence, 'config-staging.json');
+      await writeFile(config, JSON.stringify({runRoot, evidence, setup: path.join(base, 'Setup.exe'), stepBudgetMs: 1000, channel: 'staging', channels: ['production', 'staging'],
+        appVersion: '0.1.0-stg.000000', peers: {production: path.join(evidence, 'config-production.json')}, profileDir: path.join(runRoot, 'profile-staging')}));
+      const sentinel = (...args: string[]) => run(['sentinel', config, ...args], local);
+      const result = async (name: string) => JSON.parse(await readFile(path.join(evidence, `sentinel-${name}.json`), 'utf8')).result as {samples: Record<string, {file: string; kind: string; rewritten?: boolean} | null>};
+      expect(await sentinel('before-a', 'plant')).toMatchObject({passed: true});
+      expect(Object.fromEntries(Object.entries((await result('before-a')).samples).map(([entry, sample]) => [entry, sample && {file: sample.file, kind: sample.kind}]))).toEqual({
+        data: {file: 'data\\backups\\telemetry-x.json', kind: 'untouched'}, logs: null, plugins: {file: 'plugins\\setup.json', kind: 'rewritable'}, transport: null});
+      // The application beside rewrote a file: a new time and new bytes are accepted and reported.
+      await new Promise(resolve => setTimeout(resolve, 20));
+      await put('plugins\\setup.json', '{"rewritten":true}');
+      expect(await sentinel('after-a', 'check', 'before-a')).toMatchObject({passed: true});
+      expect((await result('after-a')).samples.plugins).toEqual({file: 'plugins\\setup.json', kind: 'rewritable', rewritten: true});
+      // A file the application leaves alone keeps its bytes even with a new time (review round 1).
+      expect(await sentinel('before-b', 'plant')).toMatchObject({passed: true});
+      await new Promise(resolve => setTimeout(resolve, 20));
+      await put('data\\backups\\telemetry-x.json', 'MANIFEST');
+      expect((await sentinel('after-b', 'check', 'before-b')).failure?.message).toMatch(/^OTHER_CHANNEL_DATA_CHANGED \(file bytes changed: data\\backups\\telemetry-x\.json\)/);
+      await rm(path.join(dataRoot, 'captures'), {recursive: true});
+      await put('data\\backups\\telemetry-x.json', 'manifest');
+      // A rewritable file with the same time and other bytes: changed. A whole second, so the time written back is exactly
+      // the planted one.
+      await rm(path.join(dataRoot, 'data', 'backups'), {recursive: true});
+      const setup = path.join(dataRoot, 'plugins', 'setup.json'), time = new Date('2026-10-01T00:00:00.000Z');
+      await utimes(setup, time, time);
+      expect(await sentinel('before-b2', 'plant')).toMatchObject({passed: true});
+      expect((await result('before-b2')).samples.data).toEqual(expect.objectContaining({file: 'data\\telemetry.sqlite', kind: 'rewritable'}));
+      await writeFile(setup, '{"other":true}');
+      await utimes(setup, time, time);
+      expect((await sentinel('after-b2', 'check', 'before-b2')).failure?.message).toMatch(/^OTHER_CHANNEL_DATA_CHANGED \(file bytes changed: plugins\\setup\.json\)/);
+      // An emptied entry whose folder stays: removed.
+      await rm(path.join(dataRoot, 'captures'), {recursive: true});
+      expect(await sentinel('before-c', 'plant')).toMatchObject({passed: true});
+      await rm(path.join(dataRoot, 'plugins', 'setup.json'));
+      expect((await sentinel('after-c', 'check', 'before-c')).failure?.message).toMatch(/^OTHER_CHANNEL_DATA_CHANGED \(file removed: plugins\\setup\.json\)/);
     } finally {await resources.dispose();}
   }, 60000);
 });

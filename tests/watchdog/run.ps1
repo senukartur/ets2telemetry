@@ -1,8 +1,9 @@
 [CmdletBinding()]
 param([string]$NodePath = (Get-Command node -ErrorAction Stop).Source)
 $ErrorActionPreference = 'Stop'
-$NodePath = (Resolve-Path -LiteralPath $NodePath).Path
-if ([IO.Path]::GetFileName($NodePath) -ne 'node.exe') { throw 'Tests require Node, never Electron or the packaged application.' }
+# A local, not the [string] parameter itself (tests/windows/Test-HarnessVariables.ps1).
+$nodeExecutable = (Resolve-Path -LiteralPath $NodePath).Path
+if ([IO.Path]::GetFileName($nodeExecutable) -ne 'node.exe') { throw 'Tests require Node, never Electron or the packaged application.' }
 Add-Type -Path (Join-Path $PSScriptRoot '../../scripts/watchdog/BoundedProcess.cs')
 $fixture = (Resolve-Path -LiteralPath (Join-Path $PSScriptRoot 'fixture.cjs')).Path
 $root = Join-Path ([IO.Path]::GetTempPath()) ('ets2-watchdog-tests-' + [guid]::NewGuid().ToString('N'))
@@ -11,7 +12,7 @@ function Assert($condition, $message) { if (!$condition) { throw $message } }
 function Run-Fixture($name, $mode, $timeoutMs, [string[]]$Extra = @()) {
     $directory = Join-Path $root $name
     New-Item -ItemType Directory -Path $directory | Out-Null
-    $code = [ETS2Telemetry.Diagnostics.BoundedProcess]::Run($NodePath, [string[]](@($fixture, $mode, $directory) + $Extra), $directory, $directory, $timeoutMs)
+    $code = [ETS2Telemetry.Diagnostics.BoundedProcess]::Run($nodeExecutable, [string[]](@($fixture, $mode, $directory) + $Extra), $directory, $directory, $timeoutMs)
     return @{ Code=$code; Directory=$directory }
 }
 function Assert-Stopped($directory) {
@@ -28,7 +29,7 @@ $sentinel = $null
 $owner = $null
 try {
     $sentinelArgs = [ETS2Telemetry.Diagnostics.BoundedProcess]::Quote($fixture) + ' leaf ' + [ETS2Telemetry.Diagnostics.BoundedProcess]::Quote($root)
-    $sentinel = Start-Process -FilePath $NodePath -ArgumentList $sentinelArgs -WindowStyle Hidden -PassThru
+    $sentinel = Start-Process -FilePath $nodeExecutable -ArgumentList $sentinelArgs -WindowStyle Hidden -PassThru
     $expected = [string[]]@('with spaces', 'quote"inside', 'trailing\', '')
     $normal = Run-Fixture 'normal' 'normal' 5000 $expected
     Assert ($normal.Code -eq 7) 'Child exit code was not preserved.'
@@ -48,7 +49,7 @@ try {
     Assert (!(Test-Path -LiteralPath (Join-Path $normal.Directory 'memory.json'))) 'Peak memory was written without being requested.'
     $sampledDirectory = Join-Path $root 'cpu-sampled'
     New-Item -ItemType Directory -Path $sampledDirectory | Out-Null
-    $sampledCode = [ETS2Telemetry.Diagnostics.BoundedProcess]::Run($NodePath, [string[]]@($fixture, 'spin', $sampledDirectory), $sampledDirectory, $sampledDirectory, 5000, $true)
+    $sampledCode = [ETS2Telemetry.Diagnostics.BoundedProcess]::Run($nodeExecutable, [string[]]@($fixture, 'spin', $sampledDirectory), $sampledDirectory, $sampledDirectory, 5000, $true)
     Assert ($sampledCode -eq 0) "Sampled fixture failed (code $sampledCode)."
     $lines = @(Get-Content -LiteralPath (Join-Path $sampledDirectory 'cpu.jsonl') | ForEach-Object { $_ | ConvertFrom-Json })
     Assert ($lines[0].type -eq 'start' -and $lines[0].logicalProcessors -eq [Environment]::ProcessorCount -and $lines[0].jobCpuRatePercent -eq 25) 'CPU sample header is wrong.'
@@ -72,14 +73,14 @@ try {
         $rejectedDirectory = Join-Path $root ("rejected-$($case.Method)-$($case.Ms)")
         $rejected = $false
         $method = $case.Method
-        try { [void][ETS2Telemetry.Diagnostics.BoundedProcess]::$method($NodePath, [string[]]@($fixture, 'normal', $rejectedDirectory), $root, $rejectedDirectory, $case.Ms, $true) }
+        try { [void][ETS2Telemetry.Diagnostics.BoundedProcess]::$method($nodeExecutable, [string[]]@($fixture, 'normal', $rejectedDirectory), $root, $rejectedDirectory, $case.Ms, $true) }
         catch { $rejected = $_.Exception.InnerException -is [ArgumentOutOfRangeException] }
         Assert $rejected "$($case.Method) accepted a $($case.Ms) ms deadline."
         Assert (!(Test-Path -LiteralPath $rejectedDirectory)) "$($case.Method) created output for a rejected $($case.Ms) ms deadline."
     }
     $extendedDirectory = Join-Path $root 'extended'
     New-Item -ItemType Directory -Path $extendedDirectory | Out-Null
-    $extendedCode = [ETS2Telemetry.Diagnostics.BoundedProcess]::RunExtended($NodePath, [string[]]@($fixture, 'output', $extendedDirectory), $extendedDirectory, $extendedDirectory, 61000, $true)
+    $extendedCode = [ETS2Telemetry.Diagnostics.BoundedProcess]::RunExtended($nodeExecutable, [string[]]@($fixture, 'output', $extendedDirectory), $extendedDirectory, $extendedDirectory, 61000, $true)
     Assert ($extendedCode -eq 0) "Extended fixture failed (code $extendedCode)."
     Assert ((Get-Item -LiteralPath (Join-Path $extendedDirectory 'stdout.log')).Length -eq 1048576) 'Extended output capture is not capped at 1 MiB.'
     $extendedHeader = Get-Content -LiteralPath (Join-Path $extendedDirectory 'cpu.jsonl') -TotalCount 1 | ConvertFrom-Json
@@ -91,7 +92,7 @@ try {
     New-Item -ItemType Directory -Path $ownerDirectory | Out-Null
     $shellPath = (Get-Process -Id $PID).Path
     $ownerScript = Join-Path $PSScriptRoot 'owner.ps1'
-    $ownerArgs = @('-NoProfile', '-File', $ownerScript, '-NodePath', $NodePath, '-OutputDirectory', $ownerDirectory) | ForEach-Object { [ETS2Telemetry.Diagnostics.BoundedProcess]::Quote($_) }
+    $ownerArgs = @('-NoProfile', '-File', $ownerScript, '-NodePath', $nodeExecutable, '-OutputDirectory', $ownerDirectory) | ForEach-Object { [ETS2Telemetry.Diagnostics.BoundedProcess]::Quote($_) }
     $owner = Start-Process -FilePath $shellPath -ArgumentList ($ownerArgs -join ' ') -WindowStyle Hidden -PassThru
     $deadline = [datetime]::UtcNow.AddSeconds(10)
     while (!(Test-Path -LiteralPath (Join-Path $ownerDirectory 'fixture-pids.json'))) {

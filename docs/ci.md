@@ -742,6 +742,21 @@ ET-055 PR-5 (REG-017, REG-019 part 1) runs the installer lifecycle with either c
 - **Evidence.** The staging lifecycle's evidence is in `windows-staging-evidence-<run>-<attempt>` (`.local/ci/installer-<id>-evidence`), the side-by-side scenario's in `windows-installer-evidence-<run>-<attempt>` beside the production lifecycle's.
 - **First hosted run.** Not yet run when PR-5 was written; a branch dispatch exercises the staging lifecycle only, so the side-by-side step first runs on the `main` push after the merge.
 
+## Update-from-feed installer lifecycle (ET-055 PR-8)
+
+ET-055 PR-8 (REG-019 part 2) adds the step **Update-from-feed installer lifecycle in a test root** to `windows-installer`, between the lifecycle and the side-by-side scenario: `./scripts/installer/Invoke-InstallerLifecycle.ps1 -Scenario update-from-feed`, limit 30 minutes, in a run root of its own ([installer testing](installer-testing.md#update-from-feed-scenario)). The installed build updates itself through its own update controller from a loopback feed that the driver serves on `127.0.0.1`, signed with an Ed25519 key generated for the run and never stored; then an interrupted apply of a third version (risk R1) is observed. No secret, repository variable or network access beyond the runner's loopback is used.
+
+| Event | Update-from-feed scenario |
+| --- | --- |
+| `pull_request` (ready) | skipped, like every installer step (E1) |
+| Branch dispatch | runs with the staging build, before the merge |
+| `push` to `main` or a dispatch on `main` | runs with the production build |
+
+- **Condition.** `if: github.event_name != 'pull_request'`, the lifecycle's condition: it needs `out/make`, the packaged folder (both upgrade fixtures are built from it) and the fake game host of the restored compiled inputs.
+- **Step and job limits.** The step's 30 minutes hold the summed Job deadlines of the scenario's driver commands (21 minutes, counted from the harness by `tests/unit/installer-guard.test.ts`), the two guards and 6 minutes for the two fixture builds; they will be tightened after the first hosted measurements. `windows-installer`'s `timeout-minutes` rises from 20 to 55 for the three steps (8 + 30 + 8 on `main`); `tests/unit/ci-build-channel-workflow.test.ts` requires the job limit to hold their sum plus 5 minutes. No job name, required check or trigger changed.
+- **Evidence.** In `windows-installer-evidence-<run>-<attempt>`, beside the lifecycle's: `.local/ci/installer-<id>-evidence` with the observed and verified records of both update commands, the stub launch and the recorded feed requests (paths, statuses, headers' presence; no bodies, no key).
+- **Duration.** Not measured as a whole: two fixture builds, an install, two update runs under `RunExtended` (240 s and 300 s Job deadlines) and an uninstall. In the first branch dispatch, [40705674218](https://github.com/senukartur/ets2telemetry/actions/runs/40705674218) at `f0aa7f1e`, the staging update command took 21.5 s and the step failed in its verify on a pid mismatch ([installer testing](installer-testing.md#update-from-feed-scenario)). When the R1 apply was not interrupted, the step's log shows `R1 not interrupted: reason <reason>, killed <n>`.
+
 ## ET-018 release artifact identity
 
 ET-018 PR-6 (October 18, 2026) originally changed the heavy scaffold worker on pushes to `main` and on dispatch only; `windows-build` now owns these unchanged release-identity steps ([releases](release.md#release-identity)):

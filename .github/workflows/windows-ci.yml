@@ -343,7 +343,8 @@ jobs:
     needs: [windows-build, windows-staging-build]
     if: "!cancelled() && github.event_name != 'pull_request' && needs.windows-build.result == 'success'"
     runs-on: windows-2022
-    timeout-minutes: 20
+    # ET-055 PR-8: the lifecycle (8 min), the update-from-feed scenario (30 min) and, on main, the side-by-side scenario (8 min).
+    timeout-minutes: 55
     defaults:
       run:
         shell: pwsh
@@ -406,6 +407,14 @@ jobs:
         if: github.event_name != 'pull_request'
         timeout-minutes: 8
         run: ./scripts/installer/Invoke-InstallerLifecycle.ps1
+      # ET-055 PR-8 (REG-019; docs/installer-testing.md#update-from-feed-scenario): in its own test root, the installed build
+      # updates itself from a loopback feed of the upgrade fixture, signed with an Ed25519 key generated for the run and never
+      # stored, after a refused click while the fake game runs; then an interrupted apply of a third version (risk R1) is
+      # observed. It runs for the channel of the build that was made: production on main, staging on a branch dispatch.
+      - name: Update-from-feed installer lifecycle in a test root
+        if: github.event_name != 'pull_request'
+        timeout-minutes: 30
+        run: ./scripts/installer/Invoke-InstallerLifecycle.ps1 -Scenario update-from-feed
       # ET-055 PR-5 (REG-017, REG-019): the production build of this run and the staging Setup of windows-staging-build
       # installed side by side in one test root; main only, where both channels are built.
       - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4, verified official actions/download-artifact tag

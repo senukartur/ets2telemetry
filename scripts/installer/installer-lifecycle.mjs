@@ -15,7 +15,8 @@ import {executorBytes} from '../uninstall-executor.mjs';
 import {checkedPaths, checkInstalled, checkLaunchEnvironment, checkRunPlan, checkRunSignal, checkSetupChannel, FACTS_VARIABLE, factsEvidence, InstallerGuardError, installedEnvironment, normalizePath,
   checkDataRootUnchanged, checkDecoyUnchanged, checkUninstallResidue, checkRegistrationIcon, classifyRegistrationIcon, electronRuntimeNames, ownsRegistration, parseUninstallString, resolveRealLocation, RUN_ONCE_KEY, RUN_ROOT_NAME,
   checkOtherChannelUnchanged, checkProductLinks, checkRegistrationNames, checkRunChannels, checkShortcutIdentities, checkUninstallEntries, classifyProductLinks, isInside, lifecycleIdentity,
-  LIFECYCLE_IDENTITIES, lifecycleVersions, ROOT_ICON_FILE, runLayout, steamLibraryPaths, uninstallEnvironment} from './installer-guard.mjs';
+  LIFECYCLE_IDENTITIES, lifecycleFixtureVersion, lifecycleVersions, ROOT_ICON_FILE, runLayout, steamLibraryPaths, uninstallEnvironment} from './installer-guard.mjs';
+import {checkFeedRequests, closedLoopbackOrigin, createTestSigningKey, feedRelease, fixturePackage, startUpdateFeed} from './update-feed-fixture.mjs';
 
 // ET-018 PR-1, PR-3 and PR-4 (REG-013, REG-015, REG-017; plan U8, U10-U13): the Node driver of the installer lifecycle in a marked test root. The
 // PowerShell harness scripts/installer/Invoke-InstallerLifecycle.ps1 orchestrates the steps and runs every command below
@@ -88,6 +89,15 @@ import {checkedPaths, checkInstalled, checkLaunchEnvironment, checkRunPlan, chec
 //   sentinel <config> <label> <plant|check <plant label>>
 //                                             ET-055 PR-5: a sentinel in this channel's data root that the other channel's
 //                                             uninstall must leave, with the root's top-level entries
+//   update-feed <config> <label> <exe> <complete|interrupted>
+//                                             ET-055 PR-8: the in-app update of the installed application from a loopback
+//                                             feed (update-feed-fixture.mjs) with a per-run test key: complete (offer, refusal
+//                                             while the fake game runs, download, apply, the update exit and the restart into
+//                                             B, which is asked to exit) or interrupted (R1: the apply of C killed, Retry,
+//                                             an exit during the apply); records only
+//   update-feed-verify <config> <label>       ET-055 PR-8: asserts what update-feed recorded and what the logs say
+//   stub-launch <config> <label>              ET-055 PR-8: Squirrel's stub starts the newest app-* folder; the instance must
+//                                             open the history and exit orderly (the launchability check after R1)
 //   cleanup <config> <location per view...>   deletes R (never following links) after the harness kept the evidence
 
 const here = path.dirname(fileURLToPath(import.meta.url));
@@ -1347,11 +1357,43 @@ async function plantRunOnce(config, label, mode, plantLabel) {
 const SENTINEL = path.win32.join('captures', 'installer-lifecycle-sentinel.txt');
 const SENTINEL_TEXT = 'Sentinel of the installer lifecycle: the other channel\'s uninstall must leave this file and its data root alone.\n';
 /**
+ * Names the running application rewrites (databases, settings, the plugin registry, the broker's policy): sampled only
+ * when an entry holds nothing else. Names that may vanish while it runs (SQLite sidecars, logs that rotate, temporary and
+ * partial files) and the broker-owned `transport` entry are never sampled.
+ */
+const APP_REWRITTEN = /(\.sqlite|settings\.json|setup\.json|service-policy\.json)$/i;
+const TRANSIENT = /(-wal|-shm|-journal|\.jsonl|\.jsonl\.1|\.tmp|\.partial)$/i;
+/** Per top-level entry, the first file (sorted, at most 512 looked at) that the application leaves alone, else a rewritten one, else null. */
+async function entrySamples(dataRoot, entries) {
+  const samples = {};
+  for (const entry of entries) {
+    if (entry === 'transport') {samples[entry] = null; continue;}
+    const files = [];
+    const walk = async (relative, depth) => {
+      if (files.length >= 512) return;
+      const full = path.win32.join(dataRoot, relative), item = await lstat(full);
+      if (item.isSymbolicLink()) return;
+      if (item.isFile()) {if (!TRANSIENT.test(relative) && relative !== SENTINEL) files.push(relative); return;}
+      if (!item.isDirectory() || depth > 4) return;
+      for (const name of (await readdir(full)).sort()) await walk(path.win32.join(relative, name), depth + 1);
+    };
+    await walk(entry, 0);
+    const chosen = files.find(file => !APP_REWRITTEN.test(file)) ?? files[0];
+    if (chosen === undefined) {samples[entry] = null; continue;}
+    const state = await fileState(path.win32.join(dataRoot, chosen));
+    samples[entry] = typeof state === 'object' ? {file: chosen, kind: APP_REWRITTEN.test(chosen) ? 'rewritable' : 'untouched', ...state} : null;
+  }
+  return samples;
+}
+/**
  * ET-055 PR-5: the config's channel's data root across the other channel's uninstall, whose data root name is a string
  * prefix of this one (`ETS2Telemetry`, `ETS2TelemetryStaging`). `plant` writes a sentinel file into `captures\` (refusing an
  * existing one) and records the data root's top-level entries. `check <plant label>` requires the data root, every recorded
  * top-level entry and the sentinel's bytes unchanged, then removes the sentinel (and `captures\` when the plant created it),
  * so the channel's own later uninstall sees its data root as before. A failure is OTHER_CHANNEL_DATA_CHANGED with the part.
+ * ET-055 PR-8 (PR-5 review): the plant also samples one file per recorded top-level entry (entrySamples), so a wipe that
+ * empties an entry but leaves its folder is seen too; the check requires each sampled file to exist, with its bytes
+ * unchanged unless the application beside rewrote it (a new modification time, recorded as `rewritten`).
  */
 async function sentinel(config, label, mode, plantLabel) {
   assert.match(label, /^[a-z0-9-]{1,40}$/, 'SENTINEL_LABEL_INVALID');
@@ -1363,7 +1405,7 @@ async function sentinel(config, label, mode, plantLabel) {
     const createdCaptures = !entries.includes('captures');
     await mkdir(path.win32.dirname(file), {recursive: true});
     await writeFile(file, SENTINEL_TEXT, {flag: 'wx'});
-    return {channel: channelOf(config), entries, createdCaptures, sha256: sha256(Buffer.from(SENTINEL_TEXT, 'utf8'))};
+    return {channel: channelOf(config), entries, createdCaptures, sha256: sha256(Buffer.from(SENTINEL_TEXT, 'utf8')), samples: await entrySamples(dataRoot, entries)};
   }
   assert.ok(mode === 'check' && /^[a-z0-9-]{1,40}$/.test(plantLabel ?? '') && plantLabel !== label, 'SENTINEL_MODE_INVALID');
   const planted = (await readJson(path.join(config.evidence, `sentinel-${plantLabel}.json`), 64 * 1024)).result;
@@ -1376,10 +1418,473 @@ async function sentinel(config, label, mode, plantLabel) {
   if (missing.length) throw changed(`entries removed: ${missing.join(', ')}`);
   const state = await fileState(file);
   if (typeof state !== 'object' || state.sha256 !== planted.sha256) throw changed(`sentinel ${typeof state === 'string' ? state : 'bytes changed'}`);
+  const samples = {};
+  for (const [entry, sample] of Object.entries(planted.samples ?? {})) {
+    if (!sample) {samples[entry] = null; continue;}
+    const now = await fileState(path.win32.join(dataRoot, sample.file));
+    if (typeof now !== 'object') throw changed(`file ${now === 'absent' ? 'removed' : now}: ${sample.file}`);
+    // Whole milliseconds: a time written back through a Date keeps only those.
+    const rewritten = Math.trunc(now.mtimeMs) !== Math.trunc(sample.mtimeMs);
+    // A file the application leaves alone keeps its bytes whatever its time (review round 1); a rewritable one only while
+    // its time is unchanged.
+    if ((sample.kind === 'untouched' || !rewritten) && (now.sha256 !== sample.sha256 || now.size !== sample.size)) throw changed(`file bytes changed: ${sample.file}`);
+    samples[entry] = {file: sample.file, kind: sample.kind, rewritten};
+  }
   await rm(file);
   // The folder goes only when the plant created it and nothing else came into it since.
   if (planted.createdCaptures && (await readdir(path.win32.dirname(file))).length === 0) await rmdir(path.win32.dirname(file));
-  return {channel: channelOf(config), entries, sentinelUnchanged: true, removed: true};
+  return {channel: channelOf(config), entries, sentinelUnchanged: true, samples, removed: true};
+}
+
+// --- ET-055 PR-8: the in-app update from a loopback feed (REG-019; docs/installer-testing.md, "Update-from-feed scenario") ---
+
+/** The installed application under `binaryRoot` that a fixture feed folder offers: the run's fixture step (1: B, 2: C). */
+const FEED_FIXTURES = Object.freeze({1: 'fixture', 2: 'fixture-c'});
+const feedFolderOf = (runRoot, step) => path.win32.join(runRoot, FEED_FIXTURES[step], 'feed');
+/** Everything `update-feed` does stays within these budgets, below the harness's RunExtended deadline for the command. */
+export const UPDATE_FEED_BUDGET_MS = Object.freeze({complete: 200000, interrupted: 260000});
+/** The R1 kill watches the new `app-<version>` folder this often while Update.exe applies. */
+const APPLY_WATCH_MS = 25;
+/** The requester of the instance exit: the uninstall hook's own request (tests/fixtures/single-instance/requester.cjs). */
+const ELECTRON_BINARY = path.join(checkout, 'node_modules', 'electron', 'dist', 'electron.exe');
+const INSTANCE_REQUESTER = path.join(checkout, 'tests', 'fixtures', 'single-instance', 'requester.cjs');
+const REQUESTER_WAIT_MS = 15000;
+
+/** Process ids and image paths of the running processes (System32 Windows PowerShell, outside the run root). */
+async function processList() {
+  const powershell = path.join(process.env.SystemRoot ?? 'C:\\Windows', 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe');
+  const {stdout} = await promisify(execFile)(powershell, ['-NoProfile', '-NonInteractive', '-Command',
+    'Get-Process | Where-Object { $_.Path } | ForEach-Object { [string]$_.Id + "`t" + $_.Path }'], {encoding: 'utf8', timeout: 15000, windowsHide: true, maxBuffer: 8 * 1024 * 1024});
+  return stdout.split(/\r?\n/).map(line => line.trim()).filter(Boolean).map(line => {
+    const tab = line.indexOf('\t');
+    return {pid: Number(line.slice(0, tab)), path: line.slice(tab + 1)};
+  }).filter(row => Number.isInteger(row.pid) && row.pid > 0);
+}
+/** The binary root's top-level names, and per `app-*` folder its entry count and whether the executable is there. Names only. */
+async function binaryRootListing(layout, executable) {
+  const names = (await readdir(layout.binaryRoot).catch(error => {if (error?.code === 'ENOENT') return []; throw error;})).sort();
+  const apps = {};
+  for (const name of names.filter(entry => /^app-/.test(entry))) {
+    const folder = path.win32.join(layout.binaryRoot, name);
+    const entries = await readdir(folder).catch(() => null);
+    // The first 32 entry names too: whether Squirrel left a marker such as .not-finished is read from them (ET-055 R1).
+    apps[name] = {entries: entries?.length ?? null, names: entries?.sort().slice(0, 32) ?? null, executable: await regularFile(path.win32.join(folder, executable)), deadMarker: await regularFile(path.win32.join(folder, '.dead'))};
+  }
+  const packages = (await readdir(path.win32.join(layout.binaryRoot, 'packages')).catch(() => [])).sort();
+  return {names, apps, packages};
+}
+/** The data root's `updates` folder (UP18): absent, or its entry names. */
+const updatesState = async dataRoot => (await readdir(path.win32.join(dataRoot, 'updates')).catch(error => {if (error?.code === 'ENOENT') return null; throw error;}))?.sort() ?? 'absent';
+
+/**
+ * Asks the application holding the profile's single-instance lock to run its explicit exit, as the Squirrel uninstall
+ * hook does (the `uninstall-exit` payload, ET-018 U6; main deletes nothing for it): the pinned Electron of this checkout
+ * runs the relock fixture with the same userData folder and reports when it holds the lock, that is when the instance has
+ * exited. Used for an instance that Update.exe or Squirrel's stub started, which Playwright does not control.
+ */
+async function requestInstanceExit(config, left) {
+  assert.ok(await regularFile(ELECTRON_BINARY) && await regularFile(INSTANCE_REQUESTER), 'INSTANCE_REQUESTER_MISSING');
+  const layout = layoutOf(config);
+  const env = installedEnvironment(process.env, {LOCALAPPDATA: layout.base, APPDATA: layout.appData, TEMP: layout.temp, TMP: layout.temp,
+    LOCK_DIR: profileOf(config), REQUEST_WAIT_MS: String(Math.min(REQUESTER_WAIT_MS, left(REQUESTER_WAIT_MS)))});
+  const {stdout} = await promisify(execFile)(ELECTRON_BINARY, [INSTANCE_REQUESTER], {cwd: layout.cwd, env, encoding: 'utf8', windowsHide: true,
+    timeout: left(REQUESTER_WAIT_MS + 5000)}).catch(error => ({stdout: String(error?.stdout ?? '')}));
+  const line = String(stdout).split(/\r?\n/).find(row => row.startsWith('REQUESTER '));
+  return line ? JSON.parse(line.slice('REQUESTER '.length)) : {locked: false, requests: null, elapsedMs: null};
+}
+
+/** Main and service rows of one diagnostic folder, and the process ids in their first appearance. */
+async function launchRows(diagnostics) {
+  const main = await serviceEvents(diagnostics), service = await serviceEvents(path.join(diagnostics, 'service'));
+  const order = rows => [...new Set(rows.map(row => row.pid))];
+  return {main, service, mainPids: order(main), servicePids: order(service)};
+}
+/**
+ * Copies the main and service logs of one diagnostic folder (and their rotated `.1` files, at most 4 MiB each) into the
+ * evidence as `<name>\main.jsonl` and `<name>\service.jsonl`, so a failed command can be diagnosed from the uploaded
+ * artifact even when the harness's own copy of R\diagnostics does not happen. Every instance of the command (A, the
+ * restarted B, a stub-started one) writes there, each row with its pid. Never throws.
+ */
+async function keepLogs(config, diagnostics, name) {
+  const target = path.join(config.evidence, name);
+  const copies = [['startup.jsonl', 'main.jsonl'], ['startup.jsonl.1', 'main.jsonl.1'], [path.join('service', 'startup.jsonl'), 'service.jsonl'],
+    [path.join('service', 'startup.jsonl.1'), 'service.jsonl.1']];
+  const kept = [];
+  for (const [from, to] of copies) {
+    try {
+      const item = await lstat(path.join(diagnostics, from));
+      if (!item.isFile() || item.size > 4 * 1024 * 1024) continue;
+      await mkdir(target, {recursive: true});
+      await copyFile(path.join(diagnostics, from), path.join(target, to));
+      kept.push(to);
+    } catch {/* absent or unreadable: the list says what was kept */}
+  }
+  return kept;
+}
+
+/** One process's rows, as the verify step judges them: the events in order, with their facts or detail. */
+const rowsOf = (rows, pids) => rows.filter(row => pids.includes(row.pid));
+
+/**
+ * The update-from-feed launch. `mode` `complete`: the installed application `executable` (version A) starts in the test
+ * root with the loopback feed of fixture B and the per-run test key, About's check offers B, a click while the fake game
+ * runs is refused with nothing downloaded, the game stops, a second click downloads, applies and restarts; the restarted
+ * instance (Update.exe --processStartAndWait, image in `app-<B>`) opens the same history and is asked to exit. `mode`
+ * `interrupted` (ET-055 risk R1): the application `executable` is offered C; its apply is killed as soon as Update.exe
+ * creates `app-<C>`, then Retry runs the apply again and the application exits while it runs, so Update.exe finishes
+ * alone. Records what it saw in `update-feed-<label>-observed.json`; `update-feed-verify` asserts it.
+ */
+async function updateFeed(config, label, executable, mode) {
+  assert.ok(mode === 'complete' || mode === 'interrupted', 'UPDATE_FEED_MODE_INVALID');
+  assert.match(label, /^[a-z0-9.-]{1,40}$/, 'UPDATE_FEED_LABEL_INVALID');
+  // Hosted only, whatever the config says: an owner-requested -AllowLocal run never reaches the updater (review round 1).
+  checkRunSignal(process.env, {allowLocal: false});
+  const clockStarted = performance.now(), budget = UPDATE_FEED_BUDGET_MS[mode];
+  const left = (cap = budget) => Math.max(1, Math.min(cap, budget - (performance.now() - clockStarted)));
+  const runRoot = await realpath(config.runRoot), channel = channelOf(config), identity = identityOf(config);
+  const layout = runLayout(runRoot, channel);
+  assert.ok(normalizePath(executable).startsWith(`${normalizePath(layout.binaryRoot)}\\app-`), 'LAUNCH_EXECUTABLE_NOT_INSTALLED');
+  const step = mode === 'complete' ? 1 : 2, target = lifecycleFixtureVersion(channel, config.appVersion, step);
+  const pkg = await fixturePackage(feedFolderOf(runRoot, step));
+  assert.equal(pkg.name, `${identity.productRoot}-${target.installed}-full.nupkg`, 'FIXTURE_PACKAGE_NAME_UNEXPECTED');
+  const key = createTestSigningKey();
+  const release = feedRelease({channel, appVersion: target.package, squirrelId: identity.productRoot, size: pkg.size, sha256: pkg.sha256, sha1: pkg.sha1,
+    publishedUtc: new Date().toISOString(), key});
+  const diagnostics = path.join(layout.diagnostics, `update-${label}`);
+  await mkdir(diagnostics, {recursive: true});
+  const record = {label, mode, channel, offered: target, package: {name: pkg.name, size: pkg.size, sha256: pkg.sha256}, tag: release.tag,
+    before: {listing: await binaryRootListing(layout, identity.executable), updates: await updatesState(layout.dataRoot)}};
+  // The launch environment's guards run before the feed listens (review round 1): a refusal ends the command with its own
+  // code at once, never with a listening server that keeps the process alive until the Job's deadline. The first check
+  // uses a placeholder origin; the real one is checked again once the feed listens, inside the try that closes it.
+  const real = machineFacts().real;
+  const guardEnvironment = origin => installedEnvironment(process.env, {LOCALAPPDATA: layout.base, APPDATA: layout.appData, TEMP: layout.temp, TMP: layout.temp,
+    ETS2TELEMETRY_PROFILE_DIR: profileOf(config), ETS2TELEMETRY_DIAGNOSTIC_DIR: diagnostics, ETS2TELEMETRY_PLUGIN_SETUP_ROOT: config.runRoot,
+    ETS2TELEMETRY_RECORDING: `synthetic:${RECORDING_NAME}`, ETS2TELEMETRY_UPDATE_TEST_FEED: origin, ETS2TELEMETRY_UPDATE_TEST_PUBLIC_KEY: key.publicKey});
+  checkLaunchEnvironment(guardEnvironment('http://127.0.0.1:1'), {runRoot: config.runRoot, real});
+  let application, launcher, host, feed;
+  const exited = () => launcher.exitCode !== null || launcher.signalCode !== null;
+  try {
+    feed = await startUpdateFeed({channel, release, packageFile: pkg.file});
+    const env = guardEnvironment(feed.origin);
+    checkLaunchEnvironment(env, {runRoot: config.runRoot, real});
+    feed.setPhase('offer');
+    application = await electron.launch({executablePath: executable, cwd: layout.cwd, env, timeout: left(20000)});
+    launcher = application.process();
+    // The pid that writes the main log is the main process's own, asked from it: hosted run 40705674218 showed Playwright's
+    // child pid (5668) differ from the logged one (1144), so every row of A looked like another process's.
+    record.launcherPid = launcher.pid;
+    record.mainPid = await application.evaluate(() => process.pid);
+    const {dashboard} = await rendererPages(application);
+    await waitForStartup(dashboard, left, 15000);
+    const view = () => dashboard.evaluate(() => globalThis.desktop.getAppState().then(state => state.update));
+    const viewOrNull = () => view().catch(() => null);
+    await until(viewOrNull, current => current !== null && current.state !== 'unsupported', 'UPDATE_NOT_SUPPORTED', left(15000));
+    // Settings > About's "Check for updates", as a user would; the 15 s scheduled check may answer first.
+    await settingsPanel(dashboard, 'about', left);
+    await dashboard.getByTestId('settings-about-update-check').click({timeout: left(10000)});
+    record.offer = await until(viewOrNull, current => current?.state === 'available' && current.available === target.package, 'UPDATE_NOT_OFFERED', left(30000));
+    const button = () => dashboard.getByTestId('shell.sidebar.update');
+    if (mode === 'complete') {
+      // UP7: a click while a game runs downloads nothing.
+      feed.setPhase('refusal');
+      host = await startFakeGame(config, left(15000));
+      await button().click({timeout: left(10000)});
+      const refused = await until(viewOrNull, current => current?.state === 'refused', 'UPDATE_NOT_REFUSED', left(20000));
+      record.refusal = {view: refused, label: await dashboard.getByTestId('shell.update.label').innerText({timeout: left(5000)}),
+        packageRequests: feed.requests.filter(row => row.path === feed.routes.package).length, updates: await updatesState(layout.dataRoot)};
+      await stopFakeGame(host);
+      host = undefined;
+      // A's service processes, read while A runs (review round 1), so the restarted instance's rows are told apart by pid.
+      const beforeClick = await launchRows(diagnostics);
+      record.aServicePids = beforeClick.servicePids;
+      const refusalsBefore = beforeClick.main.filter(row => row.pid === record.mainPid && row.event === 'UPDATE_REFUSED').length;
+      // The second click: download, apply, restart. A refusal now (a new UPDATE_REFUSED row) ends the wait at once.
+      feed.setPhase('update');
+      await button().click({timeout: left(10000)});
+      const seen = [];
+      const outcome = await until(async () => {
+        if (exited()) return 'exited';
+        const current = await viewOrNull();
+        if (current && seen.at(-1) !== current.state) seen.push(current.state);
+        if (current?.state === 'failed' || current?.state === 'ready') return current.state;
+        if (current?.state === 'refused' &&
+          (await launchRows(diagnostics)).main.filter(row => row.pid === record.mainPid && row.event === 'UPDATE_REFUSED').length > refusalsBefore) return 'refused';
+        return exited() ? 'exited' : null;
+      }, Boolean, 'UPDATE_APP_DID_NOT_EXIT', left(150000));
+      record.states = seen;
+      record.outcome = outcome;
+      if (outcome !== 'exited') {
+        record.failedView = await viewOrNull();
+        await closeOrderly(application);
+      }
+      await until(async () => exited(), Boolean, 'UPDATE_APP_DID_NOT_EXIT', left(10000));
+      record.exit = {code: launcher.exitCode, signal: launcher.signalCode};
+      application = undefined;
+      feed.setPhase('restart');
+      if (outcome === 'exited') {
+        // The restart helper waits for this process, then starts the newest app-* folder: its rows come with a new pid.
+        const restarted = await until(async () => {
+          const rows = await launchRows(diagnostics);
+          const mainPid = rows.mainPids.find(pid => pid !== record.mainPid);
+          const opened = rows.service.find(row => !record.aServicePids.includes(row.pid) && (row.event === 'HISTORY_STORAGE_OPENED' || row.event === 'HISTORY_STORAGE_UNAVAILABLE'));
+          return mainPid !== undefined && opened ? {mainPid} : null;
+        }, Boolean, 'RESTARTED_INSTANCE_NOT_STARTED', left(45000));
+        record.restartedPid = restarted.mainPid;
+        const processes = await processList();
+        const image = processes.find(row => row.pid === restarted.mainPid);
+        record.restartedImage = image ? path.relative(runRoot, image.path) : null;
+        // Without a match, what ran under the binary root then (relative images, at most 32), for the diagnosis.
+        if (!image) record.restartedCandidates = processes.filter(row => isInside(row.path, layout.binaryRoot)).slice(0, 32)
+          .map(row => ({pid: row.pid, image: path.relative(runRoot, row.path)}));
+        record.requester = await requestInstanceExit(config, left);
+      }
+    } else {
+      // R1: the apply is killed as soon as Update.exe creates the new version's folder.
+      feed.setPhase('interrupt');
+      await button().click({timeout: left(10000)});
+      await until(viewOrNull, current => current?.state === 'installing' || current?.state === 'failed', 'UPDATE_NOT_INSTALLING', left(120000));
+      const installingAt = performance.now();
+      const updateExe = normalizePath(path.win32.join(layout.binaryRoot, 'Update.exe'));
+      const folder = path.win32.join(layout.binaryRoot, `app-${target.installed}`);
+      const kill = {updaters: null, killed: 0, entriesAtKill: null, msAfterInstalling: null, reason: null};
+      for (let tick = 0; ; tick++) {
+        const entries = await readdir(folder).catch(() => null);
+        if (entries && entries.length > 0) {
+          // The Update.exe processes listed now, when the folder exists (review round 1), not an earlier snapshot.
+          const updaters = (await processList()).filter(row => normalizePath(row.path) === updateExe);
+          kill.updaters = updaters.length;
+          for (const row of updaters) {try {process.kill(row.pid); kill.killed++;} catch {/* already gone: recorded by the count */}}
+          kill.entriesAtKill = entries.length; kill.msAfterInstalling = Math.round(performance.now() - installingAt); kill.reason = 'app-folder';
+          break;
+        }
+        if (exited()) {kill.reason = 'application-exited'; break;}
+        if (tick % 20 === 0) {
+          const current = await viewOrNull();
+          if (current && current.state !== 'installing') {kill.reason = `view-${current.state}`; break;}
+        }
+        if (performance.now() - installingAt > left(150000)) {kill.reason = 'timeout'; break;}
+        await new Promise(resolve => setTimeout(resolve, APPLY_WATCH_MS));
+      }
+      record.kill = kill;
+      record.afterKill = {view: exited() ? null : await until(viewOrNull, current => current !== null && current.state !== 'installing', 'R1_VIEW_STILL_INSTALLING', left(30000))
+        .catch(() => null)};
+      record.afterKill.listing = await binaryRootListing(layout, identity.executable);
+      record.afterKill.updates = await updatesState(layout.dataRoot);
+      if (!exited() && record.afterKill.view?.state === 'failed') {
+        // Retry, then an exit while Update.exe applies: the exit leaves it running, and nothing restarts.
+        feed.setPhase('retry');
+        // The view still says `failed` from the kill, so the retry's own start is a new UPDATE_APPLY_STARTED row (hosted run
+        // 40710991951 took the stale `failed` for the retry's end and exited before the click had any effect).
+        const appliesOf = async () => (await launchRows(diagnostics)).main.filter(row => row.pid === record.mainPid && row.event === 'UPDATE_APPLY_STARTED').length;
+        const appliesBefore = await appliesOf();
+        await button().click({timeout: left(10000)});
+        const started = await until(async () => {
+          if (await appliesOf() > appliesBefore) return 'apply-started';
+          const current = await viewOrNull();
+          return current && current.state !== 'failed' && current.state !== 'downloading' && current.state !== 'installing' ? `view-${current.state}` : null;
+        }, Boolean, 'R1_RETRY_NOT_STARTED', left(120000)).catch(() => 'timeout');
+        record.retry = {started, view: await viewOrNull()};
+      } else if (!exited()) {
+        // The kill came too late: the controller moves on to its restart, or stays ready; give a restart time to begin.
+        await until(async () => exited(), Boolean, 'R1_NOT_RESTARTED', left(15000)).catch(() => undefined);
+      }
+      if (!exited()) await closeOrderly(application).catch(error => {record.closeError = String(error?.message ?? error).slice(0, 200);});
+      await until(async () => exited(), Boolean, 'UPDATE_APP_DID_NOT_EXIT', left(15000));
+      record.exit = {code: launcher.exitCode, signal: launcher.signalCode};
+      application = undefined;
+      feed.setPhase('after');
+      // Update.exe runs on alone after the exit; then any instance a restart started is asked to exit.
+      record.updaterWait = await until(async () => {
+        const updaters = (await processList()).filter(row => normalizePath(row.path) === normalizePath(path.win32.join(layout.binaryRoot, 'Update.exe')));
+        return updaters.length === 0 ? {remaining: 0} : null;
+      }, Boolean, 'R1_UPDATER_STILL_RUNNING', left(150000)).catch(() => ({remaining: 'timeout'}));
+      record.restarted = (await launchRows(diagnostics)).mainPids.filter(pid => pid !== record.mainPid).length;
+      record.requester = await requestInstanceExit(config, left);
+      record.after = {listing: await binaryRootListing(layout, identity.executable), updates: await updatesState(layout.dataRoot)};
+    }
+    record.drain = await drainRunRoot(config, left());
+  } finally {
+    if (application && launcher && !exited()) await application.close().catch(() => undefined);
+    if (host) await stopFakeGame(host);
+    if (feed) await feed.close();
+    // The logs of A and of any instance it restarted, into the evidence, also when the command failed.
+    record.logs = await keepLogs(config, diagnostics, `update-feed-${label}-logs`);
+    // What was seen so far, also when a wait failed; a completed command overwrites it with the full record below.
+    await writeEvidence(config, `update-feed-${label}-observed.json`, {...record, partial: true, requests: feed?.requests ?? [], requestsDropped: feed?.dropped ?? null,
+      diagnostics: path.relative(runRoot, diagnostics)}).catch(() => undefined);
+  }
+  record.updates = await updatesState(layout.dataRoot);
+  record.requests = feed.requests;
+  record.requestsDropped = feed.dropped;
+  record.routes = feed.routes;
+  record.diagnostics = path.relative(runRoot, diagnostics);
+  record.elapsedMs = Math.round(performance.now() - clockStarted);
+  await writeEvidence(config, `update-feed-${label}-observed.json`, record);
+  return {elapsedMs: record.elapsedMs, exit: record.exit ?? null, drain: record.drain};
+}
+
+/** The events of a set of rows in their order, each with its facts or its detail's code. */
+const eventList = rows => rows.map(row => ({event: row.event, facts: row.facts ?? null, code: row.detail?.code ?? null}));
+const firstIndex = (rows, event, accept = () => true) => rows.findIndex(row => row.event === event && accept(row));
+
+/**
+ * Asserts what `update-feed` recorded and what the logs say; see docs/installer-testing.md, "Update-from-feed scenario".
+ * `complete` asserts the whole update. `interrupted` (R1) records the kill, the retry and the exit during the apply,
+ * asserts that the application exited orderly and, when the apply was really interrupted, the R1 mitigation (the R1_*
+ * codes below); data and launchability are the following verify and stub-launch commands.
+ */
+async function updateFeedVerify(config, label) {
+  assert.match(label, /^[a-z0-9.-]{1,40}$/, 'UPDATE_FEED_LABEL_INVALID');
+  const runRoot = await realpath(config.runRoot), layout = runLayout(runRoot, channelOf(config)), identity = identityOf(config);
+  const observed = await readJson(path.join(config.evidence, `update-feed-${label}-observed.json`), 8 * 1024 * 1024);
+  const rows = await launchRows(path.join(runRoot, observed.diagnostics));
+  const aMain = rowsOf(rows.main, [observed.mainPid]);
+  // A's service processes as update-feed read them while A ran; the interrupted mode reads none and takes every service row.
+  const aServicePids = Array.isArray(observed.aServicePids) ? observed.aServicePids : rows.servicePids;
+  const aService = rowsOf(rows.service, aServicePids);
+  const record = {label, mode: observed.mode, channel: observed.channel, a: {main: eventList(aMain.filter(row => /^(UPDATE_|APP_EXIT|SERVICE_EXIT|SETTINGS_LOADED)/.test(row.event))),
+    shutdown: aService.filter(row => row.event === 'SHUTDOWN_STEP').map(row => row.facts)}};
+  if (observed.mode === 'interrupted') {
+    record.observation = {kill: observed.kill, afterKill: observed.afterKill, retry: observed.retry ?? null, updaterWait: observed.updaterWait ?? null,
+      restarted: observed.restarted ?? null, closeError: observed.closeError ?? null, after: observed.after, updates: observed.updates,
+      applyFailed: aMain.filter(row => row.event === 'UPDATE_APPLY_FAILED').map(row => row.facts)};
+    // The R1 mitigation, when the apply was interrupted: the application removed the half-written app-<target> before it
+    // showed APPLY_FAILED, and Retry started a new apply (hosted run 40710991951 left that folder, which Squirrel's stub
+    // then started and failed). When the kill came too late, the record says so and nothing more is asserted here.
+    const target = `app-${observed.offered.installed}`;
+    record.interrupted = observed.kill?.reason === 'app-folder' && observed.kill?.killed > 0;
+    record.observation.incompleteRemoval = aMain.filter(row => row.event.startsWith('UPDATE_INCOMPLETE_VERSION_')).map(row => ({event: row.event, facts: row.facts ?? null}));
+    await writeEvidence(config, `update-feed-${label}-verified.json`, record).catch(() => undefined);
+    assert.deepEqual(observed.exit, {code: 0, signal: null}, 'UPDATE_APP_EXIT_NONZERO');
+    if (record.interrupted) {
+      assert.deepEqual({state: observed.afterKill?.view?.state, failure: observed.afterKill?.view?.failure}, {state: 'failed', failure: 'APPLY_FAILED'}, 'R1_KILL_NOT_FAILED');
+      assert.deepEqual(record.observation.incompleteRemoval, [{event: 'UPDATE_INCOMPLETE_VERSION_REMOVED', facts: {result: 'removed'}}],
+        `R1_INCOMPLETE_VERSION_NOT_REMOVED ${JSON.stringify(record.observation.incompleteRemoval)}`);
+      assert.ok(!Object.hasOwn(observed.afterKill?.listing?.apps ?? {}, target), `R1_INCOMPLETE_VERSION_LEFT: ${target} is still in the binary root after the failed apply`);
+      assert.equal(observed.retry?.started, 'apply-started', `R1_RETRY_NOT_STARTED ${JSON.stringify(observed.retry ?? null)}`);
+    }
+    return record;
+  }
+  const bMainPids = rows.mainPids.filter(pid => pid !== observed.mainPid), bServicePids = rows.servicePids.filter(pid => !aServicePids.includes(pid));
+  const bMain = rowsOf(rows.main, bMainPids), bService = rowsOf(rows.service, bServicePids);
+  record.b = {pids: {main: bMainPids.length, service: bServicePids.length}, image: observed.restartedImage, main: eventList(bMain.filter(row => /^(UPDATE_|APP_EXIT|SERVICE_EXIT|SETTINGS_)/.test(row.event))),
+    opened: bService.filter(row => row.event === 'HISTORY_STORAGE_OPENED').map(row => row.facts), target: bService.filter(row => row.event === 'RECORDING_TARGET').map(row => row.facts)};
+  record.failures = [...aMain, ...aService, ...bMain, ...bService].filter(row => FAILURE_EVENT.test(row.event)).map(row => row.event);
+  record.feed = checkFeedRequests(observed.requests.filter(row => row.phase !== 'restart'), {channel: observed.channel, routes: observed.routes, size: observed.package.size,
+    downloadPhase: 'update', before: ['offer', 'refusal']});
+  record.restartRequests = checkFeedRequests(observed.requests.filter(row => row.phase === 'restart'), {channel: observed.channel, routes: observed.routes, size: observed.package.size,
+    downloadPhase: 'none', before: ['restart']}).filter(failure => !failure.startsWith('PACKAGE_DOWNLOADS') && !failure.startsWith('NOT_READ'));
+  await writeEvidence(config, `update-feed-${label}-verified.json`, record).catch(() => undefined);
+  // The offer, the refusal while the game ran, and nothing downloaded before the second click.
+  assert.equal(observed.offer?.available, observed.offered.package, 'UPDATE_NOT_OFFERED');
+  assert.deepEqual({state: observed.refusal?.view?.state, refusal: observed.refusal?.view?.refusal, packages: observed.refusal?.packageRequests, updates: observed.refusal?.updates},
+    {state: 'refused', refusal: 'GAME_RUNNING', packages: 0, updates: 'absent'}, 'UPDATE_NOT_REFUSED_WHILE_GAME_RUNS');
+  assert.equal(observed.requestsDropped, 0, 'UPDATE_FEED_REQUESTS_DROPPED');
+  assert.deepEqual(record.feed, [], 'UPDATE_FEED_REQUESTS_UNEXPECTED');
+  assert.deepEqual(record.restartRequests, [], 'RESTART_FEED_REQUESTS_UNEXPECTED');
+  // The download, the apply and the orderly `update` exit, in this order, then the restart helper.
+  assert.ok(observed.outcome !== 'refused', `UPDATE_REFUSED_AFTER_GAME_STOPPED ${JSON.stringify(observed.failedView ?? null)}`);
+  assert.equal(observed.outcome, 'exited', `UPDATE_DID_NOT_RESTART ${JSON.stringify(observed.failedView ?? null)}`);
+  assert.deepEqual(observed.exit, {code: 0, signal: null}, 'UPDATE_APP_EXIT_NONZERO');
+  const order = [['UPDATE_SUPPORTED', row => row.facts?.mode === 'test-root' && row.facts?.channel === observed.channel],
+    ['UPDATE_CHECK', row => row.facts?.outcome === 'available'], ['UPDATE_REFUSED', row => row.facts?.code === 'GAME_RUNNING'], ['UPDATE_DOWNLOAD_STARTED'],
+    ['UPDATE_APPLY_STARTED'], ['UPDATE_APPLIED', row => row.facts?.version === observed.offered.package], ['UPDATE_RESTART_REQUESTED'],
+    ['APP_EXIT_REQUESTED', row => row.facts?.reason === 'update'], ['UPDATE_RESTART_STARTED']];
+  // A's own rows must exist under the recorded pid before their order means anything (hosted run 40705674218).
+  assert.ok(aMain.length > 0, `UPDATE_A_ROWS_MISSING: no main-log row has pid ${observed.mainPid}; the log's pids are ${JSON.stringify(rows.mainPids)}`);
+  const indices = order.map(([event, accept]) => firstIndex(aMain, event, accept));
+  assert.ok(indices.every((index, position) => index >= 0 && (position === 0 || index > indices[position - 1])), `UPDATE_EVENTS_OUT_OF_ORDER ${JSON.stringify(indices)}`);
+  assert.equal(aMain.filter(row => row.event === 'UPDATE_DOWNLOAD_STARTED').length, 1, 'UPDATE_DOWNLOADED_TWICE');
+  assert.deepEqual({app: aMain.filter(row => row.event === 'APP_EXIT').map(row => row.detail?.code), service: aMain.filter(row => row.event === 'SERVICE_EXIT').map(row => row.detail?.code)},
+    {app: [0], service: [0]}, 'UPDATE_EXIT_EVENTS_UNEXPECTED');
+  // recording-flush and the history close ran in A's service stop, before the restarted instance logged anything.
+  const flush = aService.find(row => row.event === 'SHUTDOWN_STEP' && row.facts?.name === 'recording-flush');
+  assert.equal(flush?.facts?.outcome, 'ok', 'RECORDING_FLUSH_NOT_RUN');
+  assert.equal(aService.find(row => row.event === 'SHUTDOWN_STEP' && row.facts?.name === 'history-storage')?.facts?.outcome, 'ok', 'HISTORY_CLOSE_NOT_RUN');
+  assert.equal(aService.filter(row => row.event === 'HISTORY_STORAGE_CLOSED').length, 1, 'HISTORY_NOT_CLOSED');
+  assert.ok(bMain.length > 0 && Date.parse(bMain[0].time) >= Date.parse(flush.time), 'RESTART_BEFORE_RECORDING_FLUSH');
+  const appExit = aMain.find(row => row.event === 'APP_EXIT');
+  assert.ok(Date.parse(bMain[0].time) >= Date.parse(appExit.time), 'RESTART_BEFORE_EXIT');
+  // The restarted instance is B, from app-<B>, on the same data: settings loaded as before, the migrated history reopened.
+  assert.equal(normalizePath(observed.restartedImage ?? ''), normalizePath(path.relative(runRoot, path.win32.join(layout.binaryRoot, `app-${observed.offered.installed}`, identity.executable))),
+    'RESTARTED_IMAGE_NOT_B');
+  assert.deepEqual(record.b.pids, {main: 1, service: 1}, 'RESTARTED_PROCESSES_UNEXPECTED');
+  assert.deepEqual(bMain.filter(row => row.event === 'SETTINGS_LOADED').map(row => row.facts), [{state: 'loaded', migratedFrom: 2}], 'RESTARTED_SETTINGS_UNEXPECTED');
+  assert.deepEqual(record.b.opened, [{schemaVersion: 3, created: false, migratedFrom: null}], 'RESTARTED_HISTORY_UNEXPECTED');
+  assert.deepEqual(record.b.target, [{purpose: 'synthetic'}], 'RESTARTED_TARGET_UNEXPECTED');
+  // The restarted instance exited orderly on the uninstall hook's request, and nothing under R is left running.
+  assert.equal(observed.requester?.locked, true, 'RESTARTED_INSTANCE_DID_NOT_EXIT');
+  assert.deepEqual({app: bMain.filter(row => row.event === 'APP_EXIT').map(row => row.detail?.code), service: bMain.filter(row => row.event === 'SERVICE_EXIT').map(row => row.detail?.code)},
+    {app: [0], service: [0]}, 'RESTARTED_EXIT_EVENTS_UNEXPECTED');
+  assert.deepEqual(observed.drain?.remaining, [], 'UPDATE_PROCESSES_REMAIN');
+  assert.deepEqual(record.failures, [], 'FAILURE_EVENT_LOGGED');
+  // UP18: the download folder is gone after the apply.
+  assert.equal(observed.updates, 'absent', 'UPDATES_FOLDER_LEFT');
+  return record;
+}
+
+/**
+ * ET-055 R1, after the interrupted apply: Squirrel's stub `<binary root>\<executable>`, which every shortcut starts, runs
+ * the newest `app-*` folder. It is started with the test root's environment (and the loopback feed variables, with no
+ * feed listening, so that the instance's update controller runs and removes a stale `updates` folder, UP18); the launched
+ * instance must open the history and exit orderly on the uninstall hook's request. An install whose stub starts nothing,
+ * or an instance that does not reach the history, is the unlaunchable outcome the scenario fails on.
+ */
+async function stubLaunch(config, label) {
+  assert.match(label, /^[a-z0-9.-]{1,40}$/, 'STUB_LAUNCH_LABEL_INVALID');
+  // Hosted only, whatever the config says, as update-feed (review round 1).
+  checkRunSignal(process.env, {allowLocal: false});
+  const clockStarted = performance.now(), budget = 50000;
+  const left = (cap = budget) => Math.max(1, Math.min(cap, budget - (performance.now() - clockStarted)));
+  const runRoot = await realpath(config.runRoot), layout = runLayout(runRoot, channelOf(config)), identity = identityOf(config);
+  const stub = path.win32.join(layout.binaryRoot, identity.executable);
+  assert.ok(await regularFile(stub), 'STUB_MISSING');
+  const diagnostics = path.join(layout.diagnostics, `stub-${label}`);
+  await mkdir(diagnostics, {recursive: true});
+  const env = installedEnvironment(process.env, {LOCALAPPDATA: layout.base, APPDATA: layout.appData, TEMP: layout.temp, TMP: layout.temp,
+    ETS2TELEMETRY_PROFILE_DIR: profileOf(config), ETS2TELEMETRY_DIAGNOSTIC_DIR: diagnostics, ETS2TELEMETRY_PLUGIN_SETUP_ROOT: config.runRoot,
+    ETS2TELEMETRY_RECORDING: `synthetic:${RECORDING_NAME}`, ETS2TELEMETRY_UPDATE_TEST_FEED: await closedLoopbackOrigin(),
+    ETS2TELEMETRY_UPDATE_TEST_PUBLIC_KEY: createTestSigningKey().publicKey});
+  checkLaunchEnvironment(env, {runRoot: config.runRoot, real: machineFacts().real});
+  const record = {label, before: {listing: await binaryRootListing(layout, identity.executable), updates: await updatesState(layout.dataRoot)}};
+  const child = spawn(stub, [], {cwd: layout.cwd, env, stdio: 'ignore', windowsHide: true});
+  const stubExit = new Promise(resolve => {child.once('exit', code => resolve(code)); child.once('error', () => resolve('error'));});
+  const started = await until(async () => {
+    const rows = await launchRows(diagnostics);
+    const opened = rows.service.find(row => row.event === 'HISTORY_STORAGE_OPENED' || row.event === 'HISTORY_STORAGE_UNAVAILABLE');
+    return rows.mainPids.length > 0 && opened ? {mainPid: rows.mainPids[0]} : null;
+  }, Boolean, 'STUB_LAUNCH_NOT_STARTED', left(30000)).catch(() => null);
+  record.stubExit = await Promise.race([stubExit, new Promise(resolve => setTimeout(() => resolve('running'), 2000))]);
+  if (started) {
+    const image = (await processList()).find(row => row.pid === started.mainPid);
+    record.image = image ? path.relative(runRoot, image.path) : null;
+    const folder = image ? path.win32.basename(path.win32.dirname(image.path)) : null;
+    record.launchedVersion = folder && /^app-/.test(folder) ? folder.slice(4) : null;
+    record.requester = await requestInstanceExit(config, left);
+  }
+  record.drain = await drainRunRoot(config, left());
+  record.logs = await keepLogs(config, diagnostics, `stub-launch-${label}-logs`);
+  const rows = await launchRows(diagnostics);
+  record.events = {
+    opened: rows.service.filter(row => row.event === 'HISTORY_STORAGE_OPENED').map(row => row.facts),
+    update: rows.main.filter(row => row.event.startsWith('UPDATE_')).map(row => ({event: row.event, facts: row.facts ?? null})),
+    appExit: rows.main.filter(row => row.event === 'APP_EXIT').map(row => row.detail?.code),
+    serviceExit: rows.main.filter(row => row.event === 'SERVICE_EXIT').map(row => row.detail?.code),
+    failures: [...rows.main, ...rows.service].filter(row => FAILURE_EVENT.test(row.event)).map(row => row.event)
+  };
+  record.after = {listing: await binaryRootListing(layout, identity.executable), updates: await updatesState(layout.dataRoot)};
+  await writeEvidence(config, `stub-launch-${label}-observed.json`, record);
+  assert.ok(started, 'STUB_LAUNCH_NOT_STARTED: Squirrel\'s stub started no instance that reached the history (an unlaunchable install)');
+  assert.match(String(record.launchedVersion), /^[0-9]+\.[0-9]+\.[0-9]+/, 'STUB_LAUNCH_IMAGE_UNEXPECTED');
+  assert.deepEqual(record.events.opened, [{schemaVersion: 3, created: false, migratedFrom: null}], 'STUB_LAUNCH_HISTORY_UNEXPECTED');
+  assert.equal(record.requester?.locked, true, 'STUB_LAUNCH_DID_NOT_EXIT');
+  assert.deepEqual({app: record.events.appExit, service: record.events.serviceExit}, {app: [0], service: [0]}, 'STUB_LAUNCH_EXIT_UNEXPECTED');
+  assert.deepEqual(record.events.failures, [], 'FAILURE_EVENT_LOGGED');
+  assert.deepEqual(record.drain.remaining, [], 'STUB_LAUNCH_PROCESSES_REMAIN');
+  // UP18: the instance removed a download an interrupted update left behind.
+  assert.equal(record.after.updates, 'absent', 'UPDATES_FOLDER_LEFT');
+  return {launchedVersion: record.launchedVersion, image: record.image};
 }
 
 const [command, ...rest] = process.argv.slice(2);
@@ -1394,7 +1899,8 @@ try {
     checkRunChannels(channels);
     result.passed = true;
   } else if (command === 'versions') {
-    result.result = {versions: lifecycleVersions(rest[0], rest[1]), identities: LIFECYCLE_IDENTITIES};
+    // ET-055 PR-8: `fixtureC` is the update-from-feed scenario's third version (lifecycleFixtureVersion step 2).
+    result.result = {versions: lifecycleVersions(rest[0], rest[1]), fixtureC: lifecycleFixtureVersion(rest[0], rest[1], 2), identities: LIFECYCLE_IDENTITIES};
     result.passed = true;
   } else {
     config = checkConfig(await readJson(rest[0], 64 * 1024));
@@ -1428,6 +1934,9 @@ try {
       case 'channel-compare': result.result = await channelCompare(config, rest[1], rest[2]); break;
       case 'plant-run-once': result.result = await plantRunOnce(config, label, rest[2], rest[3]); break;
       case 'sentinel': result.result = await sentinel(config, label, rest[2], rest[3]); break;
+      case 'update-feed': result.result = await updateFeed(config, label, rest[2], rest[3]); break;
+      case 'update-feed-verify': result.result = await updateFeedVerify(config, label); break;
+      case 'stub-launch': result.result = await stubLaunch(config, label); break;
       case 'cleanup': result.result = await cleanup(config, rest.slice(1)); break;
       default: throw new Error('UNKNOWN_COMMAND');
     }
