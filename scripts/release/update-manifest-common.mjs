@@ -1,7 +1,7 @@
 import {createHash, createPublicKey, verify} from 'node:crypto';
-import {closeSync, existsSync, openSync, readSync, realpathSync} from 'node:fs';
+import {closeSync, existsSync, lstatSync, openSync, readFileSync, readSync, realpathSync} from 'node:fs';
 import path from 'node:path';
-import {fileURLToPath, pathToFileURL} from 'node:url';
+import {fileURLToPath} from 'node:url';
 
 // Shared rules of the release scripts (ET-055 PR-9, decisions UP4 and UP5; docs/release.md, "Release workflow"). The
 // application verifies a manifest in apps/desktop/src/updater/update-manifest.ts. These scripts run under plain Node in the
@@ -10,9 +10,11 @@ import {fileURLToPath, pathToFileURL} from 'node:url';
 // verifier, and that this module's parser, signature check and version conversion agree with the application's.
 //
 // The compiled public keys are read from a copy of apps/desktop/src/updater/update-keys.ts taken at the released CI run's
-// commit (`git show <commit>:<path>` in the release workflow), through Node's type stripping (that file holds only
-// erasable type syntax). The workflow therefore checks a signature against exactly the keys the released build compiled,
-// never the keys of the dispatch checkout. No private key is ever read here.
+// commit (`git show <commit>:<path>` in the release workflow). The workflow therefore checks a signature against exactly
+// the keys the released build compiled, never the keys of the dispatch checkout. That copy is read as data and never
+// executed (parseUpdateKeysSource): since October 28, 2026 a staging release may come from any branch, so the file can be
+// unreviewed branch code, and the publish job that reads it holds a token with contents: write. No private key is ever
+// read here.
 
 export const MANIFEST_FORMAT = 'ets2telemetry.update-manifest.v1';
 export const MANIFEST_FILE = 'update-manifest.json';
@@ -129,21 +131,69 @@ export function verifySignatureBytes(manifestBytes, signatureBytes, publicKey) {
   } catch {return false;}
 }
 
+/** The largest update-keys.ts the release scripts read; the shipped file is about 1.6 KiB. */
+export const UPDATE_KEYS_MAX_BYTES = 64 * 1024;
 /**
- * The compiled public keys of `channel` in the update-keys.ts file `keysFile`, each checked for its shape. The release
- * workflow passes the file of the released commit; without it, this checkout's file is read (tests, local checks).
+ * The code lines of update-keys.ts before and after its two key lists, once comment and blank lines are removed and each
+ * line is trimmed. They must match exactly; the list bodies are the only variable part.
+ */
+const UPDATE_KEYS_HEAD = [
+  "import type {ReleaseChannel} from '../channel';",
+  'export interface UpdatePublicKey {',
+  'readonly keyId: string;',
+  'readonly publicKey: string;',
+  '}',
+  'export const UPDATE_PUBLIC_KEYS: Readonly<Record<ReleaseChannel, readonly UpdatePublicKey[]>> = Object.freeze({'
+].join('\n');
+const UPDATE_KEYS_TAIL = '});';
+const UPDATE_KEYS_LISTS = /^production: Object\.freeze\(\[([^\]]*)\]\),\nstaging: Object\.freeze\(\[([^\]]*)\]\)$/;
+const KEY_ENTRY = /^\{keyId: '([A-Za-z0-9._-]{1,64})', publicKey: '([A-Za-z0-9+/]{43}=)'\}$/;
+/** A whole comment line: `// …`, or a one-line `/** … *\/` block that closes only at its end. */
+const isCommentLine = line => line.startsWith('//') || (line.startsWith('/**') && line.endsWith('*/') && line.indexOf('*/') === line.length - 2);
+
+/** The entries of one list body: empty, or literal `{keyId: '…', publicKey: '…'}` entries separated by commas. */
+function parseKeyList(body, channel) {
+  const text = body.replace(/\s+/g, ' ').trim();
+  if (text === '') return [];
+  return text.split(/\s*,\s*(?=\{)/).map(entry => {
+    const match = KEY_ENTRY.exec(entry);
+    if (!match || !isRawPublicKey(match[2])) throw new Error(`${UPDATE_KEYS_MODULE} holds a malformed ${channel} key`);
+    return {keyId: match[1], publicKey: match[2]};
+  });
+}
+
+/**
+ * Both key lists of the text of an update-keys.ts, read as data and never executed: the file must have exactly the shape
+ * of the shipped file (the import of the channel type, the key interface and the frozen `UPDATE_PUBLIC_KEYS` literal with
+ * a `production` and then a `staging` list of literal entries), with only whole comment lines and blank lines besides.
+ * Any other statement, a computed, spread or trailing-comma value, another order or shape, or a keyId listed twice is
+ * refused.
+ */
+export function parseUpdateKeysSource(text) {
+  if (typeof text !== 'string' || Buffer.byteLength(text, 'utf8') > UPDATE_KEYS_MAX_BYTES) throw new Error(`${UPDATE_KEYS_MODULE} is not a text of at most 64 KiB`);
+  const lines = text.replace(/^\uFEFF/, '').split(/\r?\n/).map(line => line.trim()).filter(line => line !== '' && !isCommentLine(line));
+  const code = lines.join('\n'), shape = `${UPDATE_KEYS_MODULE} does not have the shape of the shipped key list (it is read as data, never run)`;
+  if (!code.startsWith(`${UPDATE_KEYS_HEAD}\n`) || !code.endsWith(`\n${UPDATE_KEYS_TAIL}`)) throw new Error(shape);
+  const match = UPDATE_KEYS_LISTS.exec(code.slice(UPDATE_KEYS_HEAD.length + 1, code.length - UPDATE_KEYS_TAIL.length - 1));
+  if (!match) throw new Error(shape);
+  const lists = {production: parseKeyList(match[1], 'production'), staging: parseKeyList(match[2], 'staging')};
+  const ids = [...lists.production, ...lists.staging].map(key => key.keyId);
+  if (new Set(ids).size !== ids.length) throw new Error(`${UPDATE_KEYS_MODULE} lists a keyId twice`);
+  return lists;
+}
+
+/**
+ * The compiled public keys of `channel` in the update-keys.ts file `keysFile`, parsed as data (parseUpdateKeysSource),
+ * never imported. The release workflow passes the file of the released commit; without it, this checkout's file is read
+ * (tests, local checks).
  */
 export async function compiledUpdateKeys(channel, keysFile = path.join(REPOSITORY_ROOT, UPDATE_KEYS_MODULE)) {
   if (!isReleaseChannel(channel)) throw new Error(`Unknown release channel ${JSON.stringify(channel)}`);
-  const module = await import(pathToFileURL(path.resolve(keysFile)).href);
-  const keys = module.UPDATE_PUBLIC_KEYS?.[channel];
-  if (!Array.isArray(keys)) throw new Error(`${UPDATE_KEYS_MODULE} has no key list for ${channel}`);
-  for (const key of keys) {
-    if (!plainObject(key) || !exactKeys(key, ['keyId', 'publicKey']) || typeof key.keyId !== 'string' || !KEY_ID_PATTERN.test(key.keyId) || !isRawPublicKey(key.publicKey)) {
-      throw new Error(`${UPDATE_KEYS_MODULE} holds a malformed ${channel} key`);
-    }
-  }
-  return keys.map(key => ({keyId: key.keyId, publicKey: key.publicKey}));
+  const file = path.resolve(keysFile), stat = lstatSync(file);
+  if (!stat.isFile() || stat.size > UPDATE_KEYS_MAX_BYTES) throw new Error(`${UPDATE_KEYS_MODULE} is not a plain file of at most 64 KiB`);
+  let text;
+  try {text = new TextDecoder('utf-8', {fatal: true}).decode(readFileSync(file));} catch {throw new Error(`${UPDATE_KEYS_MODULE} is not UTF-8 text`);}
+  return parseUpdateKeysSource(text)[channel];
 }
 
 function compareIdentifier(a, b) {

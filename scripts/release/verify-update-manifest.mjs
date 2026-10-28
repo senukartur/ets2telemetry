@@ -3,7 +3,7 @@ import path from 'node:path';
 import {pathToFileURL} from 'node:url';
 import {parseArgs} from 'node:util';
 import {compiledUpdateKeys, MANIFEST_MAX_BYTES, parseManifestBytes, verifySignatureBytes} from './update-manifest-common.mjs';
-import {verifyReleaseArtifacts} from './write-update-manifest.mjs';
+import {cliRunNumber, verifyReleaseArtifacts} from './write-update-manifest.mjs';
 
 // The release workflow's check of a signed manifest before publication (ET-055 PR-9, decisions UP4, UP5 and UP16;
 // docs/release.md, "Release workflow"). The signature must verify against a public key of the channel in
@@ -34,13 +34,15 @@ const readBounded = (file, what) => {
   return readFileSync(file);
 };
 
-const USAGE = 'Usage: node scripts/release/verify-update-manifest.mjs --manifest <file> --signature <file> --artifacts <folder> --channel <production|staging> --run-id <id> [--commit <sha>] [--keys-file <update-keys.ts>]';
+const USAGE = 'Usage: node scripts/release/verify-update-manifest.mjs --manifest <file> --signature <file> --artifacts <folder> --channel <production|staging> --run-id <id> ' +
+  '[--run-number <6 digits>, required for staging] [--commit <sha>] [--keys-file <update-keys.ts>]';
 
 async function main(argv) {
   const {values} = parseArgs({args: argv, strict: true, options: {manifest: {type: 'string'}, signature: {type: 'string'}, artifacts: {type: 'string'},
-    channel: {type: 'string'}, 'run-id': {type: 'string'}, commit: {type: 'string'}, 'keys-file': {type: 'string'}}});
+    channel: {type: 'string'}, 'run-id': {type: 'string'}, 'run-number': {type: 'string'}, commit: {type: 'string'}, 'keys-file': {type: 'string'}}});
   if (!values.manifest || !values.signature || !values.artifacts || !values.channel || !values['run-id']) throw new Error(USAGE);
-  const facts = verifyReleaseArtifacts(path.resolve(values.artifacts), {channel: values.channel, runId: values['run-id'], commit: values.commit});
+  const facts = verifyReleaseArtifacts(path.resolve(values.artifacts), {channel: values.channel, runId: values['run-id'], commit: values.commit,
+    runNumber: cliRunNumber(values.channel, values['run-number'])});
   const manifest = verifySignedManifest({manifestBytes: readBounded(path.resolve(values.manifest), 'The manifest'),
     signatureBytes: readBounded(path.resolve(values.signature), 'The signature'), facts, keys: await compiledUpdateKeys(facts.channel, values['keys-file'])});
   console.log(JSON.stringify({verified: true, channel: manifest.channel, appVersion: manifest.appVersion, tag: manifest.package.tag, keyId: manifest.keyId}, null, 2));

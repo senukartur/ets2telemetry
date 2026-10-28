@@ -121,6 +121,39 @@ it('proves a production run\'s commit is on the main branch and refuses a tag na
     '          node scripts/release/check-github-release.mjs ancestry --json "$RUNNER_TEMP/compare.json" --commit "$COMMIT"\n');
 });
 
+// Review of October 28, 2026: a staging artifact must carry the released run's number, a staging base above main's
+// version is refused, and the owner sees what he approves in the verify job's summary before any publish job waits.
+it('binds a staging release to its run number, refuses a base above main\'s and summarizes the candidate before approval', async () => {
+  const text = await workflow();
+  const verify = job(text, 'verify');
+  expect(verify).toContain('      run_number: ${{ steps.run.outputs.run_number }}\n');
+  expect(verify).toContain('          RUN_NUMBER: ${{ steps.run.outputs.run_number }}\n        run: |\n          mkdir -p "$RUNNER_TEMP/candidate/release"\n' +
+    '          args=(--artifacts "$RUNNER_TEMP/candidate/artifacts" --channel "$CHANNEL" --run-id "$RUN_ID" --run-number "$RUN_NUMBER" --commit "$COMMIT"');
+  const base = "- name: Refuse a staging base version higher than main's\n        if: inputs.channel == 'staging'\n        env:\n" +
+    '          VERSION: ${{ steps.facts.outputs.version }}\n        run: |\n          main_version=$(jq -r .version package.json)\n' +
+    '          node scripts/release/check-github-release.mjs staging-base --version "$VERSION" --main-version "$main_version"\n';
+  expect(verify).toContain(base);
+  const summary = verify.indexOf('- name: Summarize the release candidate\n        env:\n');
+  expect(summary).toBeGreaterThan(verify.indexOf(base));
+  expect(verify.indexOf(base)).toBeGreaterThan(verify.indexOf('- name: Verify the release identity and write the unsigned manifest'));
+  expect(summary).toBeLessThan(verify.indexOf('actions/upload-artifact'));
+  const summaryStep = verify.slice(summary, verify.indexOf('actions/upload-artifact'));
+  for (const fact of ['$CHANNEL', '$VERSION', '$TAG', '$BRANCH', '$RUN_ID', '$RUN_NUMBER', '$COMMIT', '$MODE']) expect(summaryStep, fact).toContain(fact);
+  expect(summaryStep).toContain('          BRANCH: ${{ steps.run.outputs.branch }}\n');
+  expect(summaryStep).toContain('} >> "$GITHUB_STEP_SUMMARY"\n');
+  expect(summaryStep).not.toMatch(/\n {8}if: /);
+  const staging = job(text, 'publish-staging');
+  expect(staging).toContain('      RUN_NUMBER: ${{ needs.verify.outputs.run_number }}\n');
+  expect(staging).toContain('--channel staging --run-id "$RUN_ID" --run-number "$RUN_NUMBER" --commit "$COMMIT" --keys-file "$RUNNER_TEMP/keys/update-keys.ts"');
+});
+
+it('never runs the released commit\'s update-keys.ts: no type stripping, only the data reader', async () => {
+  const text = await workflow();
+  expect(text).not.toContain('MODULE_TYPELESS_PACKAGE_JSON');
+  expect(text).not.toMatch(/node [^\n]*update-keys\.ts/);
+  expect(text).not.toMatch(/--experimental-strip-types|--import|tsx /);
+});
+
 it('reads the compiled keys at the run\'s commit wherever a manifest is written or verified', async () => {
   const text = await workflow();
   const extract = 'git fetch --no-tags --depth=1 origin "$COMMIT"\n          mkdir -p "$RUNNER_TEMP/keys"\n' +
