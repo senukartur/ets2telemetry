@@ -16,6 +16,7 @@ import {CURRENT, exists, FOREIGN, gameFolder, installFixture, installRecord, KNO
 
 /**
  * The guard with the flush to disk of every opened file skipped; every other call, and the guard's checks, unchanged.
+ * It applies to the guarded file system of every case in this file, because none of them observes a sync.
  * Each intent and registry write syncs its temporary file before the rename (atomic-json-file.ts), and on Windows that
  * FlushFileBuffers waits for the disk itself: on October 28, 2026 single syncs in this file took 0.1 to 2.3 s on an idle
  * host, while no guarded call took over 100 ms. Several such waits in one case made the kill cases outlast the default
@@ -34,7 +35,12 @@ function withoutFlush(root: GuardedRoot): GuardedRoot {
   return {...root, fs: {...root.fs, open}};
 }
 
-/** The slowest single fs.promises operation measured on a loaded host (ET-019, load-sensitive unit tests; under 0.5 ms idle). */
+/**
+ * The per-operation allowance of a named file-work budget: the 67 ms upper end of the October 18, 2026 probe of single
+ * fs.promises operations on a loaded host (ET-019, load-sensitive unit tests; under 0.5 ms idle), used as an average
+ * across a case's counted operations. It does not bound one call: single requests of 365 to 1,798 ms were observed on
+ * October 28, 2026, and the aggregate absorbs them.
+ */
 const FS_OPERATION_ALLOWANCE_MS = 67;
 
 let guard: GuardedRoot;
@@ -254,8 +260,8 @@ describe('outcomes', () => {
   // so the count stays an upper bound). That
   // is about 0.3 s idle, but a loaded host slowed single operations to as much as 67 ms each (ET-019, load-sensitive
   // unit tests), and the case exceeded the default 5 s. The scene cannot be shared, because both runs change it. This
-  // budget bounds that irreducible file work with the worst measured operation time for every call; the case asserts no
-  // timing.
+  // budget bounds that irreducible file work with FS_OPERATION_ALLOWANCE_MS as the average allowance for every call; the
+  // case asserts no timing.
   const MAX_REGISTRY_FS_OPERATIONS = 1_500;
   const MAX_REGISTRY_FS_BUDGET_MS = MAX_REGISTRY_FS_OPERATIONS * FS_OPERATION_ALLOWANCE_MS;
   it('cleans the maximum registry merged with the maximum intent, and records what fits with the intent\'s own entries first', async () => {
@@ -367,8 +373,9 @@ describe('ordering and interruption', () => {
   // (promise requests and handle closes) per point, counted for all 22 points on October 28, 2026, rounded up to 500.
   // That is 70 to 130 ms idle, but with a full npm test beside it single guarded operations took up to 922 ms on the same host,
   // and one point took 5,088 ms on hosted CI before withoutFlush. The kill points cannot share a scene, because each run
-  // changes it. This budget bounds that irreducible file work with the stated allowance for every request; the cases
-  // assert no timing and wait on no real timer.
+  // changes it. This budget bounds that irreducible file work with FS_OPERATION_ALLOWANCE_MS as the average allowance for
+  // every request: 500 x 67 ms is 33.5 s, against measured worst cases of about 4.5 s locally and 5.1 s on hosted CI. The
+  // cases assert no timing and wait on no real timer.
   const KILL_CASE_FS_OPERATIONS = 500;
   const KILL_CASE_FS_BUDGET_MS = KILL_CASE_FS_OPERATIONS * FS_OPERATION_ALLOWANCE_MS;
   describe('finishes after a kill after any deletion: a fresh run completes with the same final state', () => {
