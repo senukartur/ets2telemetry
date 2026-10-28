@@ -3201,3 +3201,18 @@ it('refuses the in-app uninstall while the update is busy, before the orchestrat
     expect(updatesFake.options.uninstalling()).toBe(true);
   } finally {unmockUpdates();}
 });
+// ET-055 review round 2: main's application-info fallback. An invalid build version is reported once as
+// APPLICATION_INFO_INVALID and replaced by 0.0.0 with this build's channel, so the dashboard still gets its state.
+it('replaces an invalid build version with the 0.0.0 fallback and logs APPLICATION_INFO_INVALID', async () => {
+  vi.doMock('../../apps/desktop/src/app-version', () => ({APP_VERSION: 'not-a-version'}));
+  try {
+    await ready();
+    expect(log.mock.calls.filter(call => call[0] === 'APPLICATION_INFO_INVALID')).toHaveLength(1);
+    expect(handlers.get('app:get-state')!(trusted())).toMatchObject({application: {version: '0.0.0', channel: 'production', packaged: false}, update: UPDATE_UNSUPPORTED});
+  } finally {vi.doUnmock('../../apps/desktop/src/app-version');}
+});
+it('reports no APPLICATION_INFO_INVALID for a valid build version', async () => {
+  await ready();
+  expect(log.mock.calls.some(call => call[0] === 'APPLICATION_INFO_INVALID')).toBe(false);
+  expect(handlers.get('app:get-state')!(trusted())).toMatchObject({application: APPLICATION});
+});

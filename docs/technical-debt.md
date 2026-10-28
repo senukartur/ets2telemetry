@@ -279,3 +279,11 @@ The download's integrity rests on the Ed25519-signed manifest: its size, SHA-256
 Recorded October 28, 2026 by the coordinator with ET-055 PR-6, after the owner's UP6 decision of October 28, 2026 that checks run at launch and every 6 h with no setting to disable them.
 
 An installed build always checks its channel's feed: 15 s after its first readiness and every 6 h. It sends no identifier, but GitHub sees the IP address of every check, and a network that blocks GitHub turns every check into a silent `OFFLINE`. A user who does not want the check has no switch; an isolated or portable launch is the only launch that never checks. A future setting would need a settings format version, a narrow setter and the user guide; it needs the owner's decision first.
+
+## TD-025: A Windows-initiated uninstall during an in-app update's apply
+
+Recorded October 28, 2026 by the coordinator with ET-055 PR-6, from the second review round. **This entry is a coordinator decision under the owner's approval of ET-055; PR-6 makes no code change for it.**
+
+The in-app uninstall and the in-app update exclude each other, but the Windows-initiated uninstall (Windows Settings or Control Panel, which runs `Update.exe --uninstall` and our `--squirrel-uninstall` hook) does not ask the update controller. Its hook sends the running instance the `uninstall-exit` payload, and main runs `requestExit('uninstall')` directly. If that happens while the controller is `installing`, the exit leaves the running `Update.exe --update` alone, as it always does, so Squirrel's `--uninstall` can overlap our `--update` of the same installation. Whether Squirrel's own locking serializes the two is **unverified**.
+
+Refusing or delaying that exit in PR-6 would not help: the hook waits at most 6 s (`INSTANCE_EXIT_WAIT_MS`) for the instance to end, while an apply may run for up to 180 s, so the hook would defer the cleanup instead. The hosted update-from-feed lifecycle (ET-055 PR-8) must observe this case together with a killed apply (risk R1: a partial `app-<version>` folder, a broken registration or leftover data). If that observation shows harm, a follow-up blocks or orders the two, for example by holding the uninstall hook until the apply has finished.

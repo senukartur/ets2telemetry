@@ -1,8 +1,9 @@
 import type {ApplicationInfo, UpdateFailure, UpdateLastCheck, UpdateRefusal, UpdateState, UpdateView} from '../../../../packages/contracts/src/app-state';
+import {ACTIVE_CHANNEL, type ReleaseChannel} from '../channel';
 
 // The update view and the application info that cross into the dashboard (ET-055 UP9; docs/app-lifecycle.md, "In-app
 // updates"). Main validates what it sends with these parsers and the dashboard preload validates it again. This module is
-// pure, with no Node.js or Electron import, so the sandboxed preload may bundle it.
+// pure, with no Node.js or Electron import (channel.ts is pure data), so the sandboxed preload may bundle it.
 
 /** The two argument-free, trusted-dashboard-only IPC channels (UP9). */
 export const UPDATE_CHANNELS = Object.freeze({apply: 'update:apply', check: 'update:check'} as const);
@@ -62,13 +63,14 @@ export function parseUpdateView(value: unknown): UpdateView | undefined {
 export const UNKNOWN_APP_VERSION = '0.0.0';
 /**
  * Main's application info: `candidate` when it is valid, otherwise the same channel and packaged flag with
- * UNKNOWN_APP_VERSION (and production for an unknown channel), so the preload never drops the application state for it.
+ * UNKNOWN_APP_VERSION (and `fallbackChannel`, the build's own channel by default, for an unknown channel), so the preload
+ * never drops the application state for it.
  */
-export function applicationInfoOrFallback(candidate: unknown): {readonly info: ApplicationInfo; readonly valid: boolean} {
+export function applicationInfoOrFallback(candidate: unknown, fallbackChannel: ReleaseChannel = ACTIVE_CHANNEL): {readonly info: ApplicationInfo; readonly valid: boolean} {
   const parsed = parseApplicationInfo(candidate);
   if (parsed) return {info: parsed, valid: true};
   const record = plainObject(candidate) ? candidate : {};
-  return {info: {version: UNKNOWN_APP_VERSION, channel: record.channel === 'staging' ? 'staging' : 'production', packaged: record.packaged === true}, valid: false};
+  return {info: {version: UNKNOWN_APP_VERSION, channel: record.channel === 'staging' || record.channel === 'production' ? record.channel : fallbackChannel, packaged: record.packaged === true}, valid: false};
 }
 
 /** A fresh copy of valid application info, or undefined: exactly a build version, a channel and the packaged flag. */
