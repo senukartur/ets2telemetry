@@ -7,6 +7,7 @@ import {ACTIVE_CHANNEL, CHANNEL, CHANNEL_IDENTITIES, pluginTempFilePattern, RELE
 import {uninstallEntryKey} from '../../apps/desktop/src/installed-app-icon';
 import {LEGACY_SHORTCUT_NAMES, SHORTCUT_NAME, SQUIRREL_APP_ID} from '../../apps/desktop/src/legacy-shortcuts';
 import {mainLogLocation, serviceLogLocation} from '../../apps/desktop/src/log-location';
+import {v1BrokerConfiguration} from '../../apps/desktop/src/native-pipe-client';
 import {dataPaths} from '../../apps/desktop/src/paths';
 import {PLUGIN_BUNDLE_FILE} from '../../apps/desktop/src/plugin-setup/plugin-bundle';
 import {PLUGIN_TEMP_FILE} from '../../apps/desktop/src/plugin-setup/plugin-registry';
@@ -131,6 +132,10 @@ describe('the routed identities of this build', () => {
     expect(dataPaths(local).root).toBe(path.join(local, 'ETS2Telemetry'));
     expect(mainLogLocation({LOCALAPPDATA: local}, 'unused').directory).toBe(path.join(local, 'ETS2Telemetry', 'logs'));
     expect(serviceLogLocation({LOCALAPPDATA: local}, 'unused').directory).toBe(path.join(local, 'ETS2Telemetry', 'logs', 'service'));
+    // The broker's v0 discovery directory, as broker-artifact.ts builds it, and the v1 sibling the service derives from it.
+    const v0 = path.join(local, CHANNEL.dataRootName, TRANSPORT_DIRECTORY, 'v0');
+    expect(v0).toBe(path.join(local, 'ETS2Telemetry', 'transport', 'v0'));
+    expect(v1BrokerConfiguration({executable: 'broker.exe', discoveryDirectory: v0})?.discoveryDirectory).toBe(path.join(local, 'ETS2Telemetry', 'transport', 'v1'));
   });
 
   it('agrees with the packaging configuration that still names the production values (ET-055 PR-3 routes it)', async () => {

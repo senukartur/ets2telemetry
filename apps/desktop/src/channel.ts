@@ -107,7 +107,8 @@ export const CHANNEL: ChannelIdentity = CHANNEL_IDENTITIES[ACTIVE_CHANNEL];
 
 /** The Setup file name of `version` in `channel`. */
 export function setupFileName(version: string, channel: ChannelIdentity = CHANNEL): string {
-  return channel.setupFileTemplate.replace('{version}', version);
+  // A function replacement, so `$` sequences in the version are never read as replacement patterns.
+  return channel.setupFileTemplate.replace('{version}', () => version);
 }
 
 const escapeRegExp = (text: string) => text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
