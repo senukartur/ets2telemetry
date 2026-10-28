@@ -1,0 +1,321 @@
+name: Release
+# ET-055 PR-9 (docs/release.md#release-workflow-et-055): the only way a release is published. It never runs on pull requests
+# or pushes; a dispatch names a successful Windows CI run on main and a channel. The verify job checks that run and its
+# installer artifact and writes the unsigned update manifest; only the publish jobs, each in its GitHub environment whose
+# required reviewer is the owner, get contents: write.
+#
+# - staging, mode release: sign with the release-staging environment's key and publish a pre-release. Approving that
+#   environment is the owner's authorization of this staging release (UP16).
+# - production, mode release: create a draft release with the unsigned manifest and stop. The owner signs the manifest
+#   offline (the job summary prints the commands); agents never sign.
+# - production, mode publish_signed: verify the owner's signature against the compiled production key, upload it, publish
+#   the release with make_latest=true and confirm that releases/latest names it.
+#
+# Every input reaches a script through the environment, never through `${{ }}` inside a script. The runners are
+# GitHub-hosted; no step needs Windows, because the artifact is checked by its recorded hashes only.
+on:
+  workflow_dispatch:
+    inputs:
+      run_id:
+        description: The id of a successful Windows CI run on main (a push or a dispatch on main) whose installer artifact is released
+        type: string
+        required: true
+      channel:
+        description: The release channel of that run's installer artifact
+        type: choice
+        options:
+          - staging
+          - production
+        default: staging
+      mode:
+        description: release (staging publishes a pre-release; production creates a draft) or publish_signed (production only, after the owner signed)
+        type: choice
+        options:
+          - release
+          - publish_signed
+        default: release
+      signature:
+        description: publish_signed only - the contents of the owner's update-manifest.json.sig (one base64 line)
+        type: string
+        required: false
+        default: ''
+      key_id:
+        description: The keyId the manifest names; empty selects the channel's only compiled key
+        type: string
+        required: false
+        default: ''
+permissions:
+  contents: read
+concurrency:
+  # One release at a time; a second dispatch waits instead of cancelling a release in progress.
+  group: release
+  cancel-in-progress: false
+env:
+  # update-keys.ts is read through Node's type stripping, which warns once about the untyped package.json.
+  NODE_OPTIONS: --disable-warning=MODULE_TYPELESS_PACKAGE_JSON
+jobs:
+  verify:
+    name: Verify the CI run and its installer artifact
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      actions: read
+    defaults:
+      run:
+        shell: bash
+    env:
+      GH_TOKEN: ${{ github.token }}
+      RUN_ID: ${{ inputs.run_id }}
+      CHANNEL: ${{ inputs.channel }}
+      MODE: ${{ inputs.mode }}
+      KEY_ID: ${{ inputs.key_id }}
+    outputs:
+      commit: ${{ steps.run.outputs.commit }}
+      tag: ${{ steps.facts.outputs.tag }}
+      title: ${{ steps.facts.outputs.title }}
+      version: ${{ steps.facts.outputs.version }}
+      setup: ${{ steps.facts.outputs.setup }}
+      nupkg: ${{ steps.facts.outputs.nupkg }}
+    steps:
+      - name: Refuse a dispatch outside main or an invalid input
+        run: |
+          if [[ "$GITHUB_REF" != 'refs/heads/main' ]]; then echo '::error::Dispatch the release workflow on main only.'; exit 1; fi
+          if [[ ! "$RUN_ID" =~ ^[1-9][0-9]{0,19}$ ]]; then echo '::error::run_id must be the numeric id of a Windows CI run.'; exit 1; fi
+          if [[ "$CHANNEL" != 'production' && "$CHANNEL" != 'staging' ]]; then echo '::error::channel must be production or staging.'; exit 1; fi
+          if [[ "$MODE" == 'publish_signed' && "$CHANNEL" != 'production' ]]; then echo '::error::publish_signed is for production; staging is signed and published in mode release.'; exit 1; fi
+          if [[ -n "$KEY_ID" && ! "$KEY_ID" =~ ^[A-Za-z0-9._-]{1,64}$ ]]; then echo '::error::key_id must be 1 to 64 letters, digits, ".", "_" or "-".'; exit 1; fi
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5
+        with:
+          node-version: '24.19.0'
+          package-manager-cache: false
+      - name: Check the Windows CI run
+        id: run
+        run: |
+          gh api "repos/$GITHUB_REPOSITORY/actions/runs/$RUN_ID" > "$RUNNER_TEMP/run.json"
+          node scripts/release/check-github-release.mjs run --json "$RUNNER_TEMP/run.json" --run-id "$RUN_ID" --repository "$GITHUB_REPOSITORY" --channel "$CHANNEL" >> "$GITHUB_OUTPUT"
+      - name: Download the installer artifact
+        env:
+          ARTIFACT: ${{ steps.run.outputs.artifact }}
+        run: gh run download "$RUN_ID" --repo "$GITHUB_REPOSITORY" --name "$ARTIFACT" --dir "$RUNNER_TEMP/candidate/artifacts"
+      - name: Verify the release identity and write the unsigned manifest
+        id: facts
+        env:
+          COMMIT: ${{ steps.run.outputs.commit }}
+        run: |
+          mkdir -p "$RUNNER_TEMP/candidate/release"
+          args=(--artifacts "$RUNNER_TEMP/candidate/artifacts" --channel "$CHANNEL" --run-id "$RUN_ID" --commit "$COMMIT" --repository "$GITHUB_REPOSITORY" --facts "$RUNNER_TEMP/facts.json")
+          if [[ "$MODE" == 'release' ]]; then
+            args+=(--out "$RUNNER_TEMP/candidate/release/update-manifest.json" --notes "$RUNNER_TEMP/candidate/release/release-notes.md")
+            if [[ -n "$KEY_ID" ]]; then args+=(--key-id "$KEY_ID"); fi
+          fi
+          node scripts/release/write-update-manifest.mjs "${args[@]}"
+          {
+            echo "tag=$(jq -r .tag "$RUNNER_TEMP/facts.json")"
+            echo "title=$(jq -r .title "$RUNNER_TEMP/facts.json")"
+            echo "version=$(jq -r .appVersion "$RUNNER_TEMP/facts.json")"
+            echo "setup=$(jq -r .setup.name "$RUNNER_TEMP/facts.json")"
+            echo "nupkg=$(jq -r .nupkg.name "$RUNNER_TEMP/facts.json")"
+          } >> "$GITHUB_OUTPUT"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: release-candidate-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/candidate
+          retention-days: 1
+          if-no-files-found: error
+          compression-level: 0
+
+  publish-staging:
+    name: Sign and publish the staging pre-release
+    needs: verify
+    if: inputs.channel == 'staging' && inputs.mode == 'release'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    environment: release-staging
+    permissions:
+      contents: write
+    defaults:
+      run:
+        shell: bash
+    env:
+      GH_TOKEN: ${{ github.token }}
+      RUN_ID: ${{ inputs.run_id }}
+      COMMIT: ${{ needs.verify.outputs.commit }}
+      TAG: ${{ needs.verify.outputs.tag }}
+      TITLE: ${{ needs.verify.outputs.title }}
+      SETUP: ${{ needs.verify.outputs.setup }}
+      NUPKG: ${{ needs.verify.outputs.nupkg }}
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5
+        with:
+          node-version: '24.19.0'
+          package-manager-cache: false
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4, verified official actions/download-artifact tag
+        with:
+          name: release-candidate-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/candidate
+      - name: Sign the manifest with the release-staging key
+        env:
+          UPDATE_SIGNING_KEY_STAGING: ${{ secrets.UPDATE_SIGNING_KEY_STAGING }}
+        run: node scripts/release/sign-update-manifest.mjs --manifest "$RUNNER_TEMP/candidate/release/update-manifest.json" --key-env UPDATE_SIGNING_KEY_STAGING
+      - name: Verify the signature against the compiled staging key and the artifact
+        run: |
+          node scripts/release/verify-update-manifest.mjs --manifest "$RUNNER_TEMP/candidate/release/update-manifest.json" \
+            --signature "$RUNNER_TEMP/candidate/release/update-manifest.json.sig" --artifacts "$RUNNER_TEMP/candidate/artifacts" \
+            --channel staging --run-id "$RUN_ID" --commit "$COMMIT"
+      - name: Refuse an existing release or tag
+        run: |
+          if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" > /dev/null 2>&1; then echo "::error::A release $TAG already exists."; exit 1; fi
+          if gh api "repos/$GITHUB_REPOSITORY/git/ref/tags/$TAG" > /dev/null 2>&1; then echo "::error::The tag $TAG already exists."; exit 1; fi
+      - name: Publish the staging pre-release
+        run: |
+          gh api "repos/$GITHUB_REPOSITORY/releases/latest" --jq .tag_name > "$RUNNER_TEMP/latest-before" 2>/dev/null || echo none > "$RUNNER_TEMP/latest-before"
+          cd "$RUNNER_TEMP/candidate"
+          gh release create "$TAG" --repo "$GITHUB_REPOSITORY" --target "$COMMIT" --prerelease --latest=false --title "$TITLE" \
+            --notes-file release/release-notes.md "artifacts/$SETUP" "artifacts/$NUPKG" artifacts/RELEASES artifacts/release-identity.json \
+            release/update-manifest.json release/update-manifest.json.sig
+      - name: Confirm the pre-release and that latest is unchanged
+        run: |
+          gh api "repos/$GITHUB_REPOSITORY/releases/tags/$TAG" > "$RUNNER_TEMP/release.json"
+          node scripts/release/check-github-release.mjs release --json "$RUNNER_TEMP/release.json" --tag "$TAG" --commit "$COMMIT" --draft false --prerelease true \
+            --names "$SETUP,$NUPKG,RELEASES,release-identity.json,update-manifest.json,update-manifest.json.sig"
+          after=$(gh api "repos/$GITHUB_REPOSITORY/releases/latest" --jq .tag_name 2>/dev/null || echo none)
+          if [[ "$after" != "$(cat "$RUNNER_TEMP/latest-before")" ]]; then echo "::error::releases/latest changed to $after; a staging release must never become latest."; exit 1; fi
+          echo "Published staging pre-release $TAG; releases/latest is still $after." >> "$GITHUB_STEP_SUMMARY"
+
+  draft-production:
+    name: Create the production draft for the owner's signature
+    needs: verify
+    if: inputs.channel == 'production' && inputs.mode == 'release'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    environment: release-production
+    permissions:
+      contents: write
+    defaults:
+      run:
+        shell: bash
+    env:
+      GH_TOKEN: ${{ github.token }}
+      RUN_ID: ${{ inputs.run_id }}
+      COMMIT: ${{ needs.verify.outputs.commit }}
+      TAG: ${{ needs.verify.outputs.tag }}
+      TITLE: ${{ needs.verify.outputs.title }}
+      SETUP: ${{ needs.verify.outputs.setup }}
+      NUPKG: ${{ needs.verify.outputs.nupkg }}
+    steps:
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4, verified official actions/download-artifact tag
+        with:
+          name: release-candidate-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/candidate
+      - name: Refuse an existing release or tag
+        run: |
+          if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" > /dev/null 2>&1; then echo "::error::A release $TAG already exists (a draft included); delete it first or publish it with mode publish_signed."; exit 1; fi
+          if gh api "repos/$GITHUB_REPOSITORY/git/ref/tags/$TAG" > /dev/null 2>&1; then echo "::error::The tag $TAG already exists."; exit 1; fi
+      - name: Create the draft release with the unsigned manifest
+        run: |
+          cd "$RUNNER_TEMP/candidate"
+          gh release create "$TAG" --repo "$GITHUB_REPOSITORY" --target "$COMMIT" --draft --title "$TITLE" --notes-file release/release-notes.md \
+            "artifacts/$SETUP" "artifacts/$NUPKG" artifacts/RELEASES artifacts/release-identity.json release/update-manifest.json
+      - name: Print the owner's signing commands
+        run: |
+          {
+            echo "## Draft $TAG created; nothing is published"
+            echo
+            echo "On the offline machine that holds the production key (Windows PowerShell, in a checkout of main):"
+            echo
+            echo '```powershell'
+            echo "gh release download $TAG --repo $GITHUB_REPOSITORY --pattern update-manifest.json --dir <folder>"
+            echo "node scripts/release/sign-update-manifest.mjs --manifest <folder>\\update-manifest.json --key <path to the production private key>"
+            echo '```'
+            echo
+            echo "Compare the printed tag, package name, size and SHA-256 with the draft, then publish:"
+            echo
+            echo '```powershell'
+            echo "gh workflow run release.yml --repo $GITHUB_REPOSITORY --ref main -f run_id=$RUN_ID -f channel=production -f mode=publish_signed -f \"signature=\$((Get-Content -LiteralPath <folder>\\update-manifest.json.sig -Raw).Trim())\""
+            echo '```'
+          } | tee -a "$GITHUB_STEP_SUMMARY"
+
+  publish-production:
+    name: Publish the signed production release as latest
+    needs: verify
+    if: inputs.channel == 'production' && inputs.mode == 'publish_signed'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    environment: release-production
+    permissions:
+      contents: write
+    defaults:
+      run:
+        shell: bash
+    env:
+      GH_TOKEN: ${{ github.token }}
+      RUN_ID: ${{ inputs.run_id }}
+      COMMIT: ${{ needs.verify.outputs.commit }}
+      TAG: ${{ needs.verify.outputs.tag }}
+      SETUP: ${{ needs.verify.outputs.setup }}
+      NUPKG: ${{ needs.verify.outputs.nupkg }}
+      SIGNATURE: ${{ inputs.signature }}
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5
+        with:
+          node-version: '24.19.0'
+          package-manager-cache: false
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4, verified official actions/download-artifact tag
+        with:
+          name: release-candidate-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/candidate
+      - name: Find the draft release
+        id: draft
+        run: |
+          ids=$(gh api --paginate "repos/$GITHUB_REPOSITORY/releases?per_page=100" --jq ".[] | select(.draft == true and .tag_name == \"$TAG\") | .id")
+          if [[ $(grep -c . <<< "$ids") -ne 1 ]]; then echo "::error::Expected exactly one draft release $TAG; if an earlier attempt published it, check releases/latest by hand."; exit 1; fi
+          gh api "repos/$GITHUB_REPOSITORY/releases/$ids" > "$RUNNER_TEMP/draft.json"
+          names="$SETUP,$NUPKG,RELEASES,release-identity.json,update-manifest.json"
+          if jq -e '.assets[] | select(.name == "update-manifest.json.sig")' "$RUNNER_TEMP/draft.json" > /dev/null; then names="$names,update-manifest.json.sig"; fi
+          node scripts/release/check-github-release.mjs release --json "$RUNNER_TEMP/draft.json" --tag "$TAG" --commit "$COMMIT" --draft true --prerelease false --names "$names" >> "$GITHUB_OUTPUT"
+      - name: Compare the draft's files with the verified artifact
+        run: |
+          mkdir "$RUNNER_TEMP/draft"
+          gh release download "$TAG" --repo "$GITHUB_REPOSITORY" --dir "$RUNNER_TEMP/draft" --pattern "$SETUP" --pattern "$NUPKG" --pattern RELEASES \
+            --pattern release-identity.json --pattern update-manifest.json
+          for name in "$SETUP" "$NUPKG" RELEASES release-identity.json; do
+            cmp -s "$RUNNER_TEMP/draft/$name" "$RUNNER_TEMP/candidate/artifacts/$name" || { echo "::error::The draft's $name differs from the CI artifact."; exit 1; }
+          done
+      - name: Verify the owner's signature against the compiled production key
+        run: |
+          if [[ ! "$SIGNATURE" =~ ^[A-Za-z0-9+/]{86}==$ ]]; then echo '::error::signature must be the one base64 line of update-manifest.json.sig.'; exit 1; fi
+          printf '%s\n' "$SIGNATURE" > "$RUNNER_TEMP/draft/update-manifest.json.sig"
+          node scripts/release/verify-update-manifest.mjs --manifest "$RUNNER_TEMP/draft/update-manifest.json" --signature "$RUNNER_TEMP/draft/update-manifest.json.sig" \
+            --artifacts "$RUNNER_TEMP/candidate/artifacts" --channel production --run-id "$RUN_ID" --commit "$COMMIT"
+      - name: Upload the signature and publish as latest
+        env:
+          RELEASE_ID: ${{ steps.draft.outputs.id }}
+        run: |
+          gh release upload "$TAG" --repo "$GITHUB_REPOSITORY" --clobber "$RUNNER_TEMP/draft/update-manifest.json.sig"
+          gh api -X PATCH "repos/$GITHUB_REPOSITORY/releases/$RELEASE_ID" -F draft=false -F prerelease=false -f make_latest=true > /dev/null
+      - name: Confirm that releases/latest is the new release
+        env:
+          RELEASE_ID: ${{ steps.draft.outputs.id }}
+        run: |
+          gh api "repos/$GITHUB_REPOSITORY/releases/$RELEASE_ID" > "$RUNNER_TEMP/published.json"
+          node scripts/release/check-github-release.mjs release --json "$RUNNER_TEMP/published.json" --tag "$TAG" --commit "$COMMIT" --draft false --prerelease false \
+            --names "$SETUP,$NUPKG,RELEASES,release-identity.json,update-manifest.json,update-manifest.json.sig"
+          tagged=$(gh api "repos/$GITHUB_REPOSITORY/commits/$TAG" --jq .sha)
+          if [[ "$tagged" != "$COMMIT" ]]; then echo "::error::The tag $TAG names $tagged, not $COMMIT."; exit 1; fi
+          for attempt in 1 2 3 4 5 6; do
+            latest=$(gh api "repos/$GITHUB_REPOSITORY/releases/latest" --jq .tag_name 2>/dev/null || echo none)
+            if [[ "$latest" == "$TAG" ]]; then echo "Published $TAG; releases/latest names it." >> "$GITHUB_STEP_SUMMARY"; exit 0; fi
+            sleep 10
+          done
+          echo "::error::releases/latest names $latest, not $TAG. Installed builds will not see this release; fix it in the release settings (Set as the latest release) before announcing it."
+          exit 1
