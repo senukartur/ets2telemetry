@@ -1730,9 +1730,9 @@ const firstIndex = (rows, event, accept = () => true) => rows.findIndex(row => r
 
 /**
  * Asserts what `update-feed` recorded and what the logs say; see docs/installer-testing.md, "Update-from-feed scenario".
- * `complete` asserts the whole update; `interrupted` (R1) is an observation: it records the kill, the retry and the
- * exit during the apply and asserts only that the application exited orderly (data and launchability are the
- * following verify and stub-launch commands).
+ * `complete` asserts the whole update. `interrupted` (R1) records the kill, the retry and the exit during the apply,
+ * asserts that the application exited orderly and, when the apply was really interrupted, the R1 mitigation (the R1_*
+ * codes below); data and launchability are the following verify and stub-launch commands.
  */
 async function updateFeedVerify(config, label) {
   assert.match(label, /^[a-z0-9.-]{1,40}$/, 'UPDATE_FEED_LABEL_INVALID');

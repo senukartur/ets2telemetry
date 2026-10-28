@@ -60,6 +60,8 @@ interface Harness {
 interface Options {
   channel?: ReleaseChannel; currentVersion?: string; routes?: Record<string, Route>; context?: UpdateContextResult; fs?: UpdateFileSystem;
   apply?: (updateExe: string, folder: string) => Promise<FixedProgramResult>;
+  /** The running images the R1 cleanup sees; none by default. */
+  processImages?: () => Promise<readonly string[] | undefined>;
 }
 
 function harness(options: Options = {}): Harness {
@@ -76,6 +78,7 @@ function harness(options: Options = {}): Harness {
   const ports: UpdatePorts = {
     resolveContext: () => Promise.resolve(options.context ?? {ok: true, context: {installRoot, dataRoot, executableName: 'ETS2TelemetryDesktop.exe', runningDirectory: path.win32.join(installRoot, 'app-0.1.1'), origins: GITHUB_ORIGINS, keys: [KEY.publicKey], mode: 'production'}}),
     fetch, fs, runUpdate, checkRunning,
+    install: {realpath: target => guard.fs.realpath(target), readFile: target => guard.fs.readFile(target), processImages: options.processImages ?? (() => Promise.resolve([]))},
     clock: {now: () => Date.now() - EPOCH, utcNow: () => Date.now(), setTimeout: (callback, milliseconds) => setTimeout(callback, milliseconds), clearTimeout: handle => clearTimeout(handle as ReturnType<typeof setTimeout>)}
   };
   const log = vi.fn(), requestExit = vi.fn();
@@ -371,7 +374,8 @@ describe('click, download and apply', () => {
     expect(await readdir(installRoot)).toEqual(['app-0.2.0']);
     expect(h.log).not.toHaveBeenCalledWith('UPDATE_INCOMPLETE_VERSION_REMOVED', expect.anything());
   });
-  it('tries a held folder three times, 500 ms apart, then reports the failure and logs it as kept', async () => {
+  it('asks a held folder ten times, 500 ms apart, then reports the failure and logs it as kept', async () => {
+    await mkdir(path.win32.join(installRoot, 'app-0.1.1'), {recursive: true});
     const target = path.win32.join(installRoot, 'app-0.2.0');
     let unlinks = 0;
     const real = guard.fs as unknown as UpdateFileSystem;
@@ -386,13 +390,56 @@ describe('click, download and apply', () => {
     }});
     await startAndCheck(h);
     await h.controller.apply();
-    await until(() => unlinks === 1);
+    for (let attempt = 1; attempt < 10; attempt++) {
+      await until(() => unlinks === attempt);
+      await vi.advanceTimersByTimeAsync(500);
+    }
+    await until(() => h.controller.view.state === 'failed');
+    expect(unlinks).toBe(10);
+    expect(h.log).toHaveBeenCalledWith('UPDATE_INCOMPLETE_VERSION_KEPT', {result: 'failed'});
+  });
+  // Review of 33d60d2f: after a timeout runFixedProgram answers at once while the killed Update.exe or the hook from the
+  // folder may still run; the removal waits for them, bounded, and never removes a folder Squirrel has recorded.
+  it('waits until Update.exe and the processes in the folder have ended before it removes the folder', async () => {
+    await mkdir(path.win32.join(installRoot, 'app-0.1.1'), {recursive: true});
+    const target = path.win32.join(installRoot, 'app-0.2.0');
+    let listings = 0;
+    const processImages = () => {
+      listings++;
+      return Promise.resolve(listings === 1 ? [path.win32.join(installRoot, 'Update.exe')] : listings === 2 ? [path.win32.join(target, 'ETS2TelemetryDesktop.exe')] : []);
+    };
+    const h = harness({routes: productionRoutes(PKG), processImages, apply: async () => {
+      await mkdir(target, {recursive: true});
+      return {ok: false, failure: 'timeout'};
+    }});
+    await startAndCheck(h);
+    await h.controller.apply();
+    await until(() => listings === 1);
     await vi.advanceTimersByTimeAsync(500);
-    await until(() => unlinks === 2);
+    await until(() => listings === 2);
+    expect((await readdir(installRoot)).sort()).toEqual(['app-0.1.1', 'app-0.2.0']);
     await vi.advanceTimersByTimeAsync(500);
     await until(() => h.controller.view.state === 'failed');
-    expect(unlinks).toBe(3);
-    expect(h.log).toHaveBeenCalledWith('UPDATE_INCOMPLETE_VERSION_KEPT', {result: 'failed'});
+    expect(h.controller.view.failure).toBe('APPLY_TIMEOUT');
+    expect(await readdir(installRoot)).toEqual(['app-0.1.1']);
+    expect(h.log).toHaveBeenCalledWith('UPDATE_INCOMPLETE_VERSION_REMOVED', {result: 'removed'});
+  });
+  it('keeps the folder of a release Squirrel has already recorded, without asking again', async () => {
+    await mkdir(path.win32.join(installRoot, 'app-0.1.1'), {recursive: true});
+    const target = path.win32.join(installRoot, 'app-0.2.0');
+    const processImages = vi.fn(() => Promise.resolve([] as string[]));
+    const h = harness({routes: productionRoutes(PKG), processImages, apply: async () => {
+      await mkdir(target, {recursive: true});
+      await mkdir(path.win32.join(installRoot, 'packages'), {recursive: true});
+      await writeFile(path.win32.join(installRoot, 'packages', 'RELEASES'), `${'A'.repeat(40)} ETS2TelemetryDesktop-0.2.0-full.nupkg 200000\n`);
+      return {ok: false, failure: 'failed'};
+    }});
+    await startAndCheck(h);
+    await h.controller.apply();
+    await until(() => h.controller.view.state === 'failed');
+    expect((await readdir(installRoot)).sort()).toEqual(['app-0.1.1', 'app-0.2.0', 'packages']);
+    expect(h.log).toHaveBeenCalledWith('UPDATE_INCOMPLETE_VERSION_KEPT', {result: 'recorded'});
+    expect(processImages).not.toHaveBeenCalled();
   });
   it('reports a full disk while writing as DISK_FULL and leaves no partial file', async () => {
     const real = guard.fs as unknown as UpdateFileSystem;
