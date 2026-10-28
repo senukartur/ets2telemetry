@@ -20,7 +20,7 @@ interface CaseFolder {game: 'ets2' | 'ats'; layout: 'game' | 'gone' | 'no-execut
   readOnly?: boolean; temp?: boolean; created?: boolean; unrelated?: boolean; otherChannel?: boolean}
 interface CaseExpect {outcome: 'complete' | 'deferred'; code: string | null; dll: 'absent' | 'present'; dataRoot: string[] | null; temp?: 'absent' | 'present';
   pluginsDirectory?: 'absent' | 'present'; unrelated?: 'absent' | 'present'; sentinel?: 'present'; otherChannelDll?: 'absent' | 'present'}
-interface DeferredCase {id: string; folder: CaseFolder; running: string[]; data?: {unknownEntry?: boolean; readOnlyEntry?: boolean; logsJunction?: boolean; lateEntry?: string}; expect: CaseExpect}
+interface DeferredCase {id: string; folder: CaseFolder; running: string[]; data?: {unknownEntry?: boolean; readOnlyEntry?: boolean; logsJunction?: boolean; lateEntry?: string; updatesEntry?: boolean}; expect: CaseExpect}
 const TABLE = JSON.parse(readFileSync(path.join(import.meta.dirname, '..', 'fixtures', 'uninstall', 'deferred-cases.json'), 'utf8')) as {
   format: string; version: number; contents: Record<'owned' | 'known' | 'foreign', string>; cases: DeferredCase[]};
 const sha = (text: string) => createHash('sha256').update(text, 'utf8').digest('hex');
@@ -98,6 +98,11 @@ async function scene(m: ChannelModules, entry: DeferredCase) {
     await fsp.writeFile(path.win32.join(dataRoot, name, file), `synthetic ${name}\n`);
   }
   const sentinel = path.win32.join(testRoot, 'outside', 'sentinel.txt');
+  // ET-055 UP18: an interrupted in-app update's download in the allowlisted `updates` folder.
+  if (entry.data?.updatesEntry) {
+    await fsp.mkdir(path.win32.join(dataRoot, 'updates', '0.2.0'), {recursive: true});
+    await fsp.writeFile(path.win32.join(dataRoot, 'updates', '0.2.0', 'ETS2TelemetryDesktop-0.2.0-full.nupkg.partial'), 'synthetic partial download\n');
+  }
   if (entry.data?.unknownEntry) {
     await fsp.mkdir(path.win32.join(dataRoot, 'notes'), {recursive: true});
     await fsp.writeFile(path.win32.join(dataRoot, 'notes', 'mine.txt'), 'the user\'s own file\n');

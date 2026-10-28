@@ -393,6 +393,7 @@ export const APP_COPY_KEYS: Readonly<Record<string, I18nKey>> = Object.freeze(ch
   "the data folder is a link to another location, so it is not deleted. Remove it by hand.": "copy.the-data-folder-is-a-link-to-another-location-so-it-is-not-deleted-r",
   "this test installation is not marked correctly.": "copy.this-test-installation-is-not-marked-correctly",
   "an uninstall is already in progress.": "copy.an-uninstall-is-already-in-progress",
+  "an update is being downloaded or installed. Try again after it finishes.": "copy.an-update-is-being-downloaded-or-installed",
   "the confirmation could not be shown.": "copy.the-confirmation-could-not-be-shown",
   "the uninstall record could not be written to the data folder.": "copy.the-uninstall-record-could-not-be-written-to-the-data-folder",
   "an unexpected error stopped it. Nothing more was removed; run the uninstall again.": "copy.an-unexpected-error-stopped-it-nothing-more-was-removed-run-the-unin",

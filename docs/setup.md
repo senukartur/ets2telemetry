@@ -121,7 +121,7 @@ Every build belongs to one release channel, `production` or `staging` ([concept.
 
 - Unset, the variable builds staging, so `npm run dev`, `build`, `package`, `make`, `native:configure` and the native builds produce staging locally.
 - Exactly `staging` is always accepted.
-- Exactly `production` is accepted only on a GitHub-hosted Actions runner (`GITHUB_ACTIONS=true` and `RUNNER_ENVIRONMENT=github-hosted`) or with the owner-only override `ETS2TELEMETRY_OWNER_PRODUCTION_BUILD=1`; otherwise the build stops with a message that names both. Windows CI builds production on main pushes and dispatches ([CI](ci.md#build-channels-et-055-pr-4)).
+- Exactly `production` is accepted only on a GitHub-hosted Actions runner (`GITHUB_ACTIONS=true` and `RUNNER_ENVIRONMENT=github-hosted`) or with the owner-only override `ETS2TELEMETRY_OWNER_PRODUCTION_BUILD=1`; otherwise the build stops with a message that names both. Windows CI builds production only on `main`, a push or a dispatch on `main`; a dispatch on any other branch builds staging ([CI](ci.md#build-channels-et-055-pr-4)).
 - Any other value, the empty string included, stops the build.
 
 Agents never build with `production` or set the override, never install or run a production-identity build, and install a feature-test build only as staging. Its Setup is `YukonUnionTelemetry-Staging-Setup-<version>.exe`, and it installs beside the owner's production application.

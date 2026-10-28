@@ -450,7 +450,17 @@ function Assert-ProductLinks([string]$Label, [bool]$Installed, [switch]$WithAumi
     $script:report.steps += ,[ordered]@{step=('shortcuts-' + $Label); productLinks=$rows.Count; expectation=$expectation}
     $identityRows = @()
     if ($WithAumid -and $expectation -eq 'installed') {
-        foreach ($row in (Find-ProductLinkFiles)) { if ($row.name -ceq $product.displayName) { $identityRows += ,($row.location + '|' + $row.name + '|' + (Get-LinkAumid $row.file)) } }
+        foreach ($row in (Find-ProductLinkFiles)) {
+            if ($row.name -cne $product.displayName) { continue }
+            $aumid = Get-LinkAumid $row.file
+            # The AUMID is a fixed name, never a path; the evidence keeps it so that a mismatch can be read at once.
+            $script:report.steps += ,[ordered]@{step=('shortcut-aumid-' + $Label); channel=$activeChannel; location=$row.location; aumid=$aumid; expected=$product.appUserModelId}
+            if (!$aumid) {
+                throw ('SIDE_BY_SIDE_AUMID_UNREADABLE after ' + $Label + ': the shell returned no System.AppUserModel.ID for the ' + $activeChannel + ' ' + $row.location +
+                    ' shortcut (Shell.Application ExtendedProperty); expected ' + $product.appUserModelId)
+            }
+            $identityRows += ,($row.location + '|' + $row.name + '|' + $aumid)
+        }
         $identityRows = @('--aumid') + $identityRows
     }
     Invoke-Driver 'links' (@($Label, $expectation) + $rows + $identityRows) 30000
@@ -624,7 +634,23 @@ function Set-PlantedRunValue([string]$Channel) {
     $key = [Microsoft.Win32.Registry]::CurrentUser.CreateSubKey($runKey)
     try { $key.SetValue([string]$identity.appUserModelId, $data, [Microsoft.Win32.RegistryValueKind]::String) } finally { $key.Dispose() }
     $script:plantedRunValues.Add([ordered]@{name=[string]$identity.appUserModelId; data=$data})
+    if ((Get-RunValue $Channel) -cne $data) { throw ('RUN_VALUE_NOT_PLANTED for ' + $Channel + ': the HKCU Run value ' + $identity.appUserModelId + ' does not read back as written') }
     $script:report.steps += ,[ordered]@{step=('run-value-planted-' + $Channel)}
+}
+function Assert-PlantedRunValuesKept([string]$Label) {
+    # After a step in which only applications ran (no uninstall): every planted value still holds its planted data. If an
+    # application's own startup removed its value, the marker argument did not keep it apart from the application's login
+    # item: Electron's login-item query then does not compare the whole command, and the Run value checks need another plan.
+    foreach ($row in @($script:plantedRunValues)) {
+        $key = [Microsoft.Win32.Registry]::CurrentUser.OpenSubKey($runKey, $false)
+        $value = $null
+        if ($key) { try { $value = $key.GetValue($row.name) } finally { $key.Dispose() } }
+        if ($value -cne $row.data) {
+            throw ('RUN_VALUE_MARKER_IGNORED after ' + $Label + ': the planted HKCU Run value ' + $row.name + ' is ' + $(if ($null -eq $value) { 'gone' } else { 'changed' }) +
+                ' although only applications ran; the application''s startup reconciliation (autostart off) treated the marked value as its own login item')
+        }
+    }
+    $script:report.steps += ,[ordered]@{step=('run-values-kept-' + $Label); values=$script:plantedRunValues.Count}
 }
 function Remove-PlantedRunValues {
     # In the finally block: a planted autostart value that still holds its planted data is deleted; any other stays.
@@ -659,9 +685,19 @@ function Get-ChannelRegistryState([string]$Channel) {
         ConvertTo-Json -Compress -Depth 3)
 }
 function Assert-ChannelRegistryUnchanged([string]$Channel, [string]$Before, [string]$Label) {
+    # Compared part by part, so that the failure names what changed: the Uninstall key, the shortcuts or the Run value.
     $after = Get-ChannelRegistryState $Channel
-    $script:report.steps += ,[ordered]@{step=('registry-state-' + $Label); channel=$Channel; unchanged=($after -ceq $Before)}
-    if ($after -cne $Before) { throw ('OTHER_CHANNEL_REGISTRY_CHANGED after ' + $Label + ': ' + $Channel) }
+    $was = $Before | ConvertFrom-Json; $now = $after | ConvertFrom-Json
+    $changed = @(foreach ($part in @('uninstallViews', 'links', 'runValue')) {
+        if (($was.$part | ConvertTo-Json -Compress) -cne ($now.$part | ConvertTo-Json -Compress)) { $part }
+    })
+    $script:report.steps += ,[ordered]@{step=('registry-state-' + $Label); channel=$Channel; unchanged=($changed.Count -eq 0); changed=$changed; before=$was; after=$now}
+    if ($changed -contains 'uninstallViews') { throw ('OTHER_CHANNEL_UNINSTALL_ENTRY_CHANGED after ' + $Label + ': the ' + $Channel + ' HKCU Uninstall key changed') }
+    if ($changed -contains 'links') { throw ('OTHER_CHANNEL_SHORTCUTS_CHANGED after ' + $Label + ': a ' + $Channel + ' shortcut (bytes or AUMID) changed, appeared or vanished') }
+    if ($changed -contains 'runValue') {
+        throw ('OTHER_CHANNEL_RUN_VALUE_CHANGED after ' + $Label + ': the planted ' + $Channel + ' Run value is ' + $now.runValue + ' (was ' + $was.runValue + '); the other ' +
+            'channel''s uninstall removed or rewrote a login item that is not its own, or the ' + $Channel + ' application beside it removed its marked value at startup')
+    }
 }
 function Invoke-SideBySide {
     # Both channels in one run root R (REG-017, REG-019): production from this checkout's build, staging from the verified
@@ -697,6 +733,8 @@ function Invoke-SideBySide {
 
     # Both applications at once; each plugin setup installs only its own DLL into the fake ETS2 folder.
     Invoke-Driver 'side-by-side-launch' @('both-running', $executableProduction, $executableStaging) 60000
+    # Both applications ran their startup autostart reconciliation; the marked values must have survived it.
+    Assert-PlantedRunValuesKept 'both-running'
 
     # Production's Windows-initiated uninstall while the staging application runs: staging keeps running, and its
     # plugin, registration, shortcuts and Run value stay as they were.

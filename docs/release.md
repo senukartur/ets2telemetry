@@ -7,7 +7,36 @@ ET-018 PR-6 (October 18, 2026) records what a release build is made of and wheth
 - **Where.** A GitHub Releases **pre-release** on the public repository, labelled **"unsigned internal alpha"** in its title and notes.
 - **Who decides.** Every publication needs the owner's explicit authorization for that release. A merge, a passing CI run or an uploaded artifact is never a publication, and an agent never runs `gh release create` or edits a release without that authorization.
 - **What is not a channel.** The Windows CI artifact `windows-installer-<run>-<attempt>` is identity evidence, not a publication or a distribution channel: it comes zipped, carries no release notes or label and expires after 14 days. It is not private, though. On this public repository any signed-in GitHub user can download Actions artifacts, so every push to `main` and every dispatch makes the unsigned Setup effectively public for 14 days. The artifact must therefore follow the [public repository rule](../AGENTS.md#repository-visibility-and-license--october-16-2026): it never holds a secret, token, personal path, account, player or profile data, or a raw capture. Its four files are build outputs with relative names only.
-- **No auto-update.** The application has no update feed and checks for nothing. The installer lifecycle shows that a repair and an update through a local feed keep the data ([installer testing](installer-testing.md)); running a newer published Setup over an installed version is not yet observed.
+- **In-app updates (ET-055).** This bullet replaced "No auto-update" on October 28, 2026 (UP1). An installed build checks its channel's feed 15 s after its first readiness and then every 6 h, and downloads and installs only after the user's click; see [update feed](#update-feed-et-055) and [application lifecycle](app-lifecycle.md#in-app-updates-et-055). Until the owner adds a public key (step 0 of the [release checklist](#release-checklist)), every manifest is refused, so no build installs an update. The installer lifecycle shows that a repair and an update through a local feed keep the data ([installer testing](installer-testing.md)); a real update from a published release is not yet observed.
+
+## Update feed (ET-055)
+
+ET-055 PR-6 (October 28, 2026) implements the client side of decisions UP3 to UP7 ([concept.md](../concept.md#et-055-in-app-updates-and-staging-channel--october-28-2026)). The release workflow that writes and publishes these files is PR-9; **nothing has been published**.
+
+**Where each channel looks.** A build only ever reads its own channel's feed, fixed when it is built:
+
+| Channel | Requests |
+| --- | --- |
+| Production | `https://github.com/senukartur/ets2telemetry/releases/latest/download/update-manifest.json` and `update-manifest.json.sig`. `releases/latest` serves the newest ordinary release and never a pre-release, so a production release must be an ordinary release that GitHub marks latest (O2 as amended by UP4). |
+| Staging | `GET https://api.github.com/repos/senukartur/ets2telemetry/releases?per_page=30` (at most 1 MiB in 10 s); among entries that are a pre-release, not a draft, tagged `staging-v<x.y.z>-stg.<6 digits>` and carrying an `update-manifest.json` asset, the highest NuGet version wins, whatever order the list has. Then `releases/download/<tag>/update-manifest.json` and `.sig`. |
+
+The manifest and the signature are each at most 16 KiB and fetched within 10 s. 403 and 429 (GitHub's rate limits; the unauthenticated REST limit is 60 requests per hour per IP address) and network errors are a quiet `OFFLINE`. Requests go through Electron's `net.fetch`, so the system proxy applies, with a fixed User-Agent `YukonUnionTelemetry-Updater`, no cookies, no identifier and, apart from the list's `per_page`, no query string. GitHub still sees the IP address of every check.
+
+**Update manifest, format v1.** `update-manifest.json` is one JSON object with exactly these keys:
+
+| Key | Value |
+| --- | --- |
+| `format` | `ets2telemetry.update-manifest.v1` |
+| `channel` | `production` or `staging`; must equal the build's channel |
+| `appVersion` | The application version, for example `0.2.0` or `0.2.0-stg.000042` |
+| `nugetVersion` | Its NuGet form (`0.2.0`, `0.2.0-stg000042`); must equal electron-winstaller's conversion of `appVersion` |
+| `package` | `{tag, name, size, sha256, sha1}`: the release tag (`v<appVersion>` or `staging-v<appVersion>`), the nupkg name exactly `<Squirrel id>-<nugetVersion>-full.nupkg`, its size (1 byte to 400 MiB) and its lower-case hex SHA-256 and SHA-1 |
+| `publishedUtc` | UTC ISO time with `Z` |
+| `keyId` | The id of the key that signed it |
+
+`update-manifest.json.sig` holds the base64 Ed25519 signature over the manifest's exact bytes (an optional final line break is accepted). The application verifies it with `node:crypto` against the public keys compiled into `apps/desktop/src/updater/update-keys.ts` for its own channel, chosen by `keyId`; rotation lists the new key beside the old one until no supported release is signed with the old one. After the signature it refuses, with fixed codes, a manifest of the other channel, a tag that is not the release it came from (staging) or not `v<appVersion>` (production, whose `/latest` redirect hides the tag), a package name other than its own exact one (the staging Squirrel id starts with the production one, so the comparison is exact), and a version that is not newer. It never takes a URL from the manifest: the package URL is rebuilt as `releases/download/<tag>/<name>`, redirects are followed, and integrity comes from the size and both hashes, checked while the file is written. The release workflow (PR-9) must write `update-manifest.json`, `update-manifest.json.sig`, the nupkg and `RELEASES` as release assets of the same tag.
+
+**The test feed.** Only an installation in a marked test root with an isolated profile inside that root (the hosted update lifecycle of PR-8) may set `ETS2TELEMETRY_UPDATE_TEST_FEED` to a loopback origin `http://127.0.0.1:<port>`, which then serves both the web and the REST paths, and `ETS2TELEMETRY_UPDATE_TEST_PUBLIC_KEY` to a test key with key id `test`. A production or staging installation ignores both variables.
 
 ## Release artifacts
 
@@ -70,7 +99,7 @@ Squirrel names a shortcut after the executable's `ProductName` and puts the Star
 - **Not touched.** Taskbar and Start pins (the user made them; Squirrel retargets them, and they keep their old label until pinned again), the `Artur Sianiuk` folder, other files and the autostart Run value.
 - **Limitation.** The hook finds the Start menu as `<Roaming AppData known folder>\Microsoft\Windows\Start Menu\Programs`. A Start Menu redirected apart from Roaming AppData is not found, and its old shortcut stays.
 
-Only the artifact built by Windows CI on a push to `main` or a dispatch is ever shipped, never a local build: MSVC builds are not reproducible, and the [released plugin list](plugin-setup.md#released-plugin-list) must name the shipped DLL's hash.
+Only the artifact built by Windows CI on `main`, a push to `main` or a dispatch on `main`, is ever shipped, never a local build or a branch dispatch's staging artifact (ET-055 PR-4): MSVC builds are not reproducible, and the [released plugin list](plugin-setup.md#released-plugin-list) must name the shipped DLL's hash.
 
 ## Release identity
 
@@ -119,12 +148,13 @@ The projection follows the `<files>` rules of electron-winstaller 5.4.4's `templ
 
 The known Squirrel additions are `lib/net45/squirrel.exe`, an `<name>_ExecutionStub.exe` for each top-level executable, the nuspec, `[Content_Types].xml`, `_rels/.rels` and one `package/services/metadata/core-properties/<32 hex>.psmdcp`. Any other entry fails, and so does a missing projected file or a missing `squirrel.exe` or stub. The ZIP reader accepts stored and deflated entries only and checks each entry's CRC-32 and size.
 
-Windows CI runs both on pushes to `main` and on dispatch, after the maker, and uploads the four files as `windows-installer-<run>-<attempt>` for 14 days ([ci](ci.md#et-018-release-artifact-identity)).
+Windows CI runs both on pushes to `main` and on dispatch, after the maker, and uploads the four files as `windows-installer-<run>-<attempt>` for 14 days; since ET-055 PR-4 a dispatch on any other branch builds staging and uploads `windows-installer-staging-<run>-<attempt>`, which is never installed as production ([ci](ci.md#et-018-release-artifact-identity)).
 
 ## Release checklist
 
 Each item is required. Step 4 needs the owner's explicit authorization for this release; no other step publishes anything.
 
+0. **Update keys (once, owner only; ET-055 UP5).** Before the first release with the updater, the owner generates the production Ed25519 key pair **offline**, on a machine the private key never leaves, and keeps the private key offline. A PR adds the public half to `UPDATE_PUBLIC_KEYS.production` in `apps/desktop/src/updater/update-keys.ts` as `{keyId, publicKey}`, where `publicKey` is the base64 of the raw 32-byte Ed25519 public key; the staging public key is added the same way, and its private key becomes a secret of the `release-staging` environment. Until then every manifest is refused with `SIGNATURE_INVALID` and no installation updates. The owner signs every production manifest; agents never generate, hold or use a signing key. The signer script and the release workflow follow in ET-055 PR-9.
 1. **Version.** A PR sets `package.json` `version` to a version no earlier build has used: every alpha gets its own prerelease version, for example `0.1.0-alpha.1`, then `0.1.0-alpha.2`. Never ship two alphas with the same version: Squirrel would treat the second as a repair of the first instead of an update, and the released plugin list would get two entries with the same `appVersion`. NuGet drops the dots of the label (`0.1.0-alpha1`), so Setup is `YukonUnionTelemetry-Setup-0.1.0-alpha.1.exe`, the package `ETS2TelemetryDesktop-0.1.0-alpha1-full.nupkg` and the installed folder `app-0.1.0-alpha1`. NuGet's version 1 rules compare that label as text, so `alpha10` would sort before `alpha2`: after `alpha.9`, move to the next patch version instead.
    - **Toolchain check (October 18, 2026).** With `0.1.0-alpha.1` in a local working copy, `npm run make`, `npm run inspect:package -- --installer` and `node scripts/release-identity.mjs` all passed, with the names above, `versions.nuget` `0.1.0-alpha1`, the plugin bundle's `appVersion` `0.1.0-alpha.1` and the executable's file and product version `0.1.0-alpha.1`. Installing it and Squirrel's ordering of two alphas were not observed; the installer lifecycle of the version PR is the first check.
    - **Installer lifecycle.** It pins its installer versions (`0.1.0`, the `app-0.1.0` folder, the registered version, and the `0.1.1` fixture). Since ET-055 PR-4 it finds Setup by the name the build evidence gives (`node scripts/build-channel.mjs --built`), so a new version no longer needs a new Setup name in the harness; update the lifecycle's pinned versions in the same PR, and keep its fixture version above the new version.

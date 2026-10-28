@@ -56,6 +56,11 @@ export interface AppUninstallPorts {
   resolveRoots(): Promise<UninstallRoots>;
   /** The native confirmation; true only for an explicit "Uninstall". */
   confirm(): Promise<boolean>;
+  /**
+   * ET-055: true while the in-app update downloads, installs or restarts. The uninstall is refused with UPDATE_IN_PROGRESS
+   * before the confirmation and again after it closes, so the two never overlap. Absent means never.
+   */
+  readonly updating?: () => boolean;
   readonly fs: UninstallFileSystem & CancelFileSystem;
   readonly checkRunning: RunningCheck;
   /** The bundle's own and earlier released plugin hashes. */
@@ -100,10 +105,16 @@ export class AppUninstall {
 
   /** Set once the plugins are removed and the exit may wipe the data; undefined before and after a refused run. */
   get prepared(): PreparedUninstall | undefined {return this.preparedUninstall;}
+  /** True while a run is in progress or once one started the exit (ET-055: the in-app update is refused meanwhile). */
+  get inProgress(): boolean {return this.busy || this.preparedUninstall !== undefined;}
+  private updating(): boolean {
+    try {return this.ports.updating?.() === true;} catch {return true;}
+  }
 
   /** Runs steps 1 to 4; see the file comment. One run at a time; after `started` every further call is BUSY. */
   async run(): Promise<AppUninstallResult> {
     if (this.busy || this.preparedUninstall) return {outcome: 'failed', code: 'BUSY'};
+    if (this.updating()) {this.ports.log('APP_UNINSTALL', {outcome: 'failed', code: 'UPDATE_IN_PROGRESS'}); return {outcome: 'failed', code: 'UPDATE_IN_PROGRESS'};}
     this.busy = true;
     try {return await this.steps();} finally {this.busy = false;}
   }
@@ -118,6 +129,8 @@ export class AppUninstall {
     let confirmed: boolean;
     try {confirmed = await ports.confirm();} catch {return this.finish({outcome: 'failed', code: 'DIALOG_FAILED'});}
     if (!confirmed) return this.finish({outcome: 'cancelled'});
+    // An update click may have started while the dialog was open; nothing has changed yet.
+    if (this.updating()) return this.finish({outcome: 'failed', code: 'UPDATE_IN_PROGRESS'});
 
     const known = await ports.readKnown().catch((): readonly string[] => []);
     const engine = ports.runUninstall ?? runUninstall;

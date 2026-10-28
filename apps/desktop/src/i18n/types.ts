@@ -386,6 +386,7 @@ export type I18nKey =
   | "copy.the-data-folder-is-a-link-to-another-location-so-it-is-not-deleted-r"
   | "copy.this-test-installation-is-not-marked-correctly"
   | "copy.an-uninstall-is-already-in-progress"
+  | "copy.an-update-is-being-downloaded-or-installed"
   | "copy.the-confirmation-could-not-be-shown"
   | "copy.the-uninstall-record-could-not-be-written-to-the-data-folder"
   | "copy.an-unexpected-error-stopped-it-nothing-more-was-removed-run-the-unin"

@@ -181,7 +181,7 @@ Without `-AllowLocal` the harness refuses every local run. `-AllowLocal` (plan O
 The harness installs the Setup of the build that was made: it reads the channel, version and Setup name from the desktop build evidence (`node scripts/build-channel.mjs --built`) and never from the shell's variables. Since ET-055 PR-4 (UP13), after the run signal:
 
 - **Local runs.** An `-AllowLocal` run accepts only a staging Setup, so a local run never installs the production identity of the owner's installed application; a production Setup stops it with `LOCAL_PRODUCTION_REFUSED`.
-- **Hosted runs.** A production Setup runs only on a GitHub-hosted runner. Windows CI builds production on main pushes and dispatches ([CI](ci.md#build-channels-et-055-pr-4)), so the hosted lifecycle keeps installing production.
+- **Hosted runs.** A production Setup runs only on a GitHub-hosted runner. Windows CI builds production only on `main`, a push or a dispatch on `main` ([CI](ci.md#build-channels-et-055-pr-4)), so the hosted lifecycle keeps installing production there. A dispatch on any other branch builds staging; until PR-5 its installer job skipped the lifecycle with a notice, and since PR-5 it runs the staging lifecycle.
 - **Channel-aware scenarios (ET-055 PR-5).** Every scenario runs with the built channel's own names: the binary root and HKCU Uninstall key `<Squirrel id>` (`ETS2TelemetryDesktop`, `ETS2TelemetryDesktopStaging`), the data root, the executable, the display name, the shortcut AUMID, the plugin file, the RunOnce value and the receipts come from `lifecycleIdentity(channel)` in `installer-guard.mjs`, which derives them from `scripts/build-channel.mjs`. The versions come from `lifecycleVersions`: install A is the build's version and the update fixture B raises its patch number and keeps the staging label, so a staging run installs `app-0.1.0-stg000000` and updates to `app-0.1.1-stg000000` (the NuGet form Squirrel uses for the folder and DisplayVersion). The labels keep the production names `install-0.1.0`, `update-0.1.1` and so on. The ET-045h old-name plants run for production only, because staging never had another name.
 - **Staging runs.** A staging Setup runs on a GitHub-hosted runner, and locally only under the test-root rules above and only with the owner's explicit `-AllowLocal` request. Agents never run the lifecycle locally (ET-018): they dispatch Windows CI.
 - **What the preflight judges.** Both channels' real data, binary and Roaming roots are protected paths in every run. `REAL_INSTALL_PRESENT` and `REGISTRATION_PRESENT` judge the channels the run installs, and only those, so a staging run may proceed beside the owner's installed production copy but never beside an installed staging copy. A running application of either channel, a game or TruckersMP still refuses the run.
@@ -194,6 +194,8 @@ Agents run the lifecycle only through a dispatch:
 gh workflow run windows-ci.yml --ref <task-branch> -f extended=false
 gh run list --workflow windows-ci.yml --branch <task-branch> --limit 1
 ```
+
+Since ET-055 PR-4 such a branch dispatch builds staging, and since PR-5 its hosted installer job runs the staging lifecycle; the production lifecycle and the side-by-side scenario run on `main`. Never install an artifact of a branch dispatch as production: it is a staging build.
 
 ## Side-by-side scenario
 
@@ -210,6 +212,14 @@ The driver gets one config per channel (`config-production.json`, `config-stagin
 7. **Production uninstalled.** The planted RunOnce value is removed, then production's own uninstall completes while its application runs, so neither channel is left installed.
 
 In every Windows-initiated uninstall and executor run the other channel's plugin file is one of the kept files that must not change. The decoy LOCALAPPDATA holds both channels' sentinel data and binary roots.
+
+**Diagnosing a first failure.** A branch dispatch runs only the staging lifecycle, so the side-by-side step first runs on the `main` push after its merge (coordinator decision: fix forward). Its three unproven assumptions fail with their own codes, and `lifecycle-result.json` keeps the facts beside them (names, AUMIDs and digests only):
+
+- `SIDE_BY_SIDE_AUMID_UNREADABLE`: the shell returned no `System.AppUserModel.ID` for a shortcut through `Shell.Application`; the `shortcut-aumid-<label>` steps record what was read and what was expected. `SHORTCUT_AUMID_DIFFERS` from the driver means it read another value.
+- `RUN_VALUE_MARKER_IGNORED`: a planted Run value was gone or changed after only the two applications ran, so the marker argument does not keep it apart from the application's own login item; `OTHER_CHANNEL_RUN_VALUE_CHANGED` names the same value after the other channel's uninstall.
+- `BESIDE_INSTANCE_ENDED`: the staging application ended during production's uninstall, with its exit code and signal; the likely cause is that Squirrel's `KillAllExecutablesBelongingToPackage` matches the staging binary root by the production root's name prefix, which would also end a real staging copy. `windows-uninstall-production-beside-staging-observed.json` keeps the record.
+
+`OTHER_CHANNEL_UNINSTALL_ENTRY_CHANGED`, `OTHER_CHANNEL_SHORTCUTS_CHANGED` and `OTHER_CHANNEL_CHANGED (<key>)` name the other part that changed.
 
 ## CI
 

@@ -924,7 +924,7 @@ async function windowsUninstall(config, label, executable, expectation, {rehears
       if (record.besideRunning) {
         await closeOrderly(other.application);
         record.besideExit = {code: other.launcher.exitCode, signal: other.launcher.signalCode};
-      }
+      } else record.besideEndedDuringUninstall = {code: other.launcher.exitCode, signal: other.launcher.signalCode};
     }
   } finally {
     if (started) await started.application.close().catch(() => undefined);
@@ -953,9 +953,16 @@ async function windowsUninstall(config, label, executable, expectation, {rehears
   record.unrelatedUnchanged = true;
   assert.deepEqual(runOnceAfter, runOnceBefore, 'OTHER_RUN_ONCE_CHANGED');
   if (peer) {
-    assert.equal(record.besideRunning, true, 'BESIDE_INSTANCE_ENDED');
-    assert.deepEqual(record.besideExit, {code: 0, signal: null}, 'BESIDE_EXIT_NONZERO');
-    assert.equal(record.receipt.instance, 'none', 'RECEIPT_INSTANCE_UNEXPECTED');
+    // ET-055 PR-5: messages that name the likely cause, so that a first failure on main is quick to read.
+    const ended = record.besideEndedDuringUninstall;
+    assert.equal(record.besideRunning, true, `BESIDE_INSTANCE_ENDED: the ${peer.channel} application ended during the ${channel} uninstall ` +
+      `(exit code ${ended?.code ?? 'none'}, signal ${ended?.signal ?? 'none'}); Squirrel's KillAllExecutablesBelongingToPackage may match the ` +
+      `${peer.channel} binary root by a name prefix of the ${channel} one, or the ${channel} hook's single-instance lock reached it ` +
+      `(evidence: windows-uninstall-${label}-observed.json)`);
+    assert.deepEqual(record.besideExit, {code: 0, signal: null}, `BESIDE_EXIT_NONZERO: the ${peer.channel} application ran through the ${channel} ` +
+      `uninstall but did not close orderly (${JSON.stringify(record.besideExit)})`);
+    assert.equal(record.receipt.instance, 'none', `RECEIPT_INSTANCE_UNEXPECTED: the ${channel} hook found an instance (${record.receipt.instance}) ` +
+      `although only the ${peer.channel} application ran, under its own profile`);
   }
   if (expectation === 'complete') {
     assert.equal(dllAfter, 'absent', 'PLUGIN_NOT_REMOVED');

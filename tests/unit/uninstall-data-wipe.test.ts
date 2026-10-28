@@ -2,7 +2,7 @@ import * as fsp from 'node:fs/promises';
 import path from 'node:path';
 import {afterEach, beforeEach, describe, expect, it} from 'vitest';
 import {dataPaths} from '../../apps/desktop/src/paths';
-import {DATA_ALLOWLIST, KEPT_UNTIL_CLEAN, wipeDataRoot, type WipeFileSystem} from '../../apps/desktop/src/uninstall/data-wipe';
+import {DATA_ALLOWLIST, KEPT_UNTIL_CLEAN, removeOwnedTree, wipeDataRoot, type WipeFileSystem} from '../../apps/desktop/src/uninstall/data-wipe';
 import {wipeEverything} from '../../apps/desktop/src/uninstall/engine';
 import {guardedTempRoot, type GuardedRoot} from '../shared/guarded-fs';
 import {exists, listTree} from '../shared/uninstall-fixture';
@@ -123,29 +123,30 @@ describe('a spent budget', () => {
     await seedAll();
     const report = await wipeDataRoot(fs(), dataRoot, {removeRoot: true, expired: expiresAt(7)});
     expect(report).toEqual({removed: 2, kept: 0, rootRemoved: false,
-      failed: ['data', 'logs', 'plugins', 'settings', 'synthetic', 'transport', 'uninstall'].map(entry => ({entry, code: 'BUDGET_EXPIRED'}))});
-    expect(await remaining()).toEqual(['data', 'logs', 'plugins', 'settings', 'synthetic', 'transport', 'uninstall']);
+      failed: ['data', 'logs', 'plugins', 'settings', 'synthetic', 'transport', 'uninstall', 'updates'].map(entry => ({entry, code: 'BUDGET_EXPIRED'}))});
+    expect(await remaining()).toEqual(['data', 'logs', 'plugins', 'settings', 'synthetic', 'transport', 'uninstall', 'updates']);
   });
   it('stays spent within one call even if the check would answer false again', async () => {
     await seedAll();
     let calls = 0;
     const report = await wipeDataRoot(fs(), dataRoot, {removeRoot: true, expired: () => ++calls === 7});
     expect(report.removed).toBe(2);
-    expect(report.failed.map(entry => entry.entry)).toEqual(['data', 'logs', 'plugins', 'settings', 'synthetic', 'transport', 'uninstall']);
-    expect(await remaining()).toEqual(['data', 'logs', 'plugins', 'settings', 'synthetic', 'transport', 'uninstall']);
+    expect(report.failed.map(entry => entry.entry)).toEqual(['data', 'logs', 'plugins', 'settings', 'synthetic', 'transport', 'uninstall', 'updates']);
+    expect(await remaining()).toEqual(['data', 'logs', 'plugins', 'settings', 'synthetic', 'transport', 'uninstall', 'updates']);
   });
   it('in the first step of wipeEverything: lists plugins and uninstall too, and deletes neither', async () => {
     await seedAll();
     const report = await wipeEverything(fs() as never, dataRoot, expiresAt(7), true);
     expect(report.removed).toBe(2);
-    expect(report.failed).toEqual(['data', 'logs', 'settings', 'synthetic', 'transport', 'plugins', 'uninstall'].map(entry => ({entry, code: 'BUDGET_EXPIRED'})));
-    expect(await remaining()).toEqual(['data', 'logs', 'plugins', 'settings', 'synthetic', 'transport', 'uninstall']);
+    expect(report.failed).toEqual(['data', 'logs', 'settings', 'synthetic', 'transport', 'updates', 'plugins', 'uninstall'].map(entry => ({entry, code: 'BUDGET_EXPIRED'})));
+    expect(await remaining()).toEqual(['data', 'logs', 'plugins', 'settings', 'synthetic', 'transport', 'uninstall', 'updates']);
   });
   it('right after the first step of wipeEverything: reports plugins and uninstall instead of nothing', async () => {
     await seedAll();
-    // The first step removes seven entries with 21 checks; the registry step's first check finds the budget spent.
-    const report = await wipeEverything(fs() as never, dataRoot, expiresAt(22), true);
-    expect(report).toEqual({removed: 7, kept: 0, rootRemoved: false, failed: [{entry: 'plugins', code: 'BUDGET_EXPIRED'}, {entry: 'uninstall', code: 'BUDGET_EXPIRED'}]});
+    // The first step removes eight entries with 24 checks (ET-055 added `updates`); the registry step's first check
+    // finds the budget spent.
+    const report = await wipeEverything(fs() as never, dataRoot, expiresAt(25), true);
+    expect(report).toEqual({removed: 8, kept: 0, rootRemoved: false, failed: [{entry: 'plugins', code: 'BUDGET_EXPIRED'}, {entry: 'uninstall', code: 'BUDGET_EXPIRED'}]});
     expect(await remaining()).toEqual(['plugins', 'uninstall']);
   });
   it('a real failure still keeps plugins and uninstall for the deferral, unreported', async () => {
@@ -154,5 +155,25 @@ describe('a spent budget', () => {
     const report = await wipeEverything(failing as never, dataRoot, () => false, true);
     expect(report.failed).toEqual([{entry: 'logs', code: 'TARGET_LOCKED'}]);
     expect(await remaining()).toEqual(['logs', 'plugins', 'uninstall']);
+  });
+});
+
+// ET-055 UP18: the in-app update's download folder belongs to the data root's allowlist, and the updater removes its own
+// folder with the same no-follow rules.
+describe('updates folder', () => {
+  it('removes a downloaded update with its partial file as an allowlisted entry', async () => {
+    expect(DATA_ALLOWLIST).toContain('updates');
+    await write('updates\\0.2.0\\ETS2TelemetryDesktop-0.2.0-full.nupkg.partial'); await write('updates\\0.2.0\\RELEASES');
+    expect(await wipeDataRoot(fs(), dataRoot, {removeRoot: true})).toEqual({removed: 1, kept: 0, failed: [], rootRemoved: true});
+  });
+  it('removeOwnedTree unlinks a junction inside the folder without entering it', async () => {
+    const outside = path.win32.join(guard.root, 'outside-updates');
+    await fsp.mkdir(outside);
+    await fsp.writeFile(path.win32.join(outside, 'keep.nupkg'), 'not ours');
+    await write('updates\\0.2.0\\RELEASES');
+    await guard.fs.symlink(outside, path.win32.join(dataRoot, 'updates', 'linked'), 'junction');
+    expect(await removeOwnedTree(fs(), path.win32.join(dataRoot, 'updates'))).toBeNull();
+    expect(await exists(path.win32.join(dataRoot, 'updates'))).toBe(false);
+    expect(await listTree(outside)).toEqual(['keep.nupkg']);
   });
 });
