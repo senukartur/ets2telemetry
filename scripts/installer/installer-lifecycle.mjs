@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import {execFile, spawn} from 'node:child_process';
 import {createHash} from 'node:crypto';
-import {copyFile, lstat, mkdir, open, readdir, readFile, realpath, rm, writeFile} from 'node:fs/promises';
+import {copyFile, lstat, mkdir, open, readdir, readFile, realpath, rm, rmdir, writeFile} from 'node:fs/promises';
 import path from 'node:path';
 import {performance} from 'node:perf_hooks';
 import {fileURLToPath} from 'node:url';
@@ -82,8 +82,12 @@ import {checkedPaths, checkInstalled, checkLaunchEnvironment, checkRunPlan, chec
 //   channel-state <config> <label>            ET-055 PR-5: the channel's data root, plugin DLL (bytes and time) and RunOnce
 //                                             value, for channel-compare
 //   channel-compare <config> <before> <after> ET-055 PR-5: the other channel's action left this channel's state unchanged
-//   plant-run-once <config> <label> [remove]  ET-055 PR-5: writes this channel's RunOnce value into the run's test key, so the
+//   plant-run-once <config> <label> [remove <plant label>]
+//                                             ET-055 PR-5: writes this channel's RunOnce value into the run's test key, so the
 //                                             other channel's executor can be shown to leave it alone; `remove` deletes it
+//   sentinel <config> <label> <plant|check <plant label>>
+//                                             ET-055 PR-5: a sentinel in this channel's data root that the other channel's
+//                                             uninstall must leave, with the root's top-level entries
 //   cleanup <config> <location per view...>   deletes R (never following links) after the harness kept the evidence
 
 const here = path.dirname(fileURLToPath(import.meta.url));
@@ -1319,12 +1323,14 @@ async function channelCompare(config, before, after) {
 /**
  * Writes this channel's RunOnce value into the run's own test key, with fixed text that no executor command matches, so a
  * run of the other channel's executor can be shown to leave it in place. Refuses when the value exists already.
- * `remove` deletes the value planted under `label` again, and only while it still holds the planted text.
+ * `remove <plant label>` deletes the value planted under that label again, and only while it still holds the planted text;
+ * it runs under its own label, so its evidence and Job folder never replace the plant's.
  */
-async function plantRunOnce(config, label, mode) {
+async function plantRunOnce(config, label, mode, plantLabel) {
   assert.match(label, /^[a-z0-9-]{1,40}$/, 'PLANT_RUN_ONCE_LABEL_INVALID');
-  assert.ok(mode === undefined || mode === 'remove', 'PLANT_RUN_ONCE_MODE_INVALID');
-  const name = identityOf(config).runOnceValue, data = `planted by the installer lifecycle (${label}); never run`;
+  assert.ok((mode === undefined && plantLabel === undefined) || (mode === 'remove' && /^[a-z0-9-]{1,40}$/.test(plantLabel ?? '') && plantLabel !== label),
+    'PLANT_RUN_ONCE_MODE_INVALID');
+  const name = identityOf(config).runOnceValue, data = `planted by the installer lifecycle (${mode === 'remove' ? plantLabel : label}); never run`;
   if (mode === 'remove') {
     assert.equal(await readRunOnce(config, name), data, 'PLANTED_RUN_ONCE_CHANGED');
     await deleteRunOnce(config, name);
@@ -1335,6 +1341,45 @@ async function plantRunOnce(config, label, mode) {
   await promisify(execFile)(reg(), ['add', testRunOnceKey(config), '/v', name, '/t', 'REG_SZ', '/d', data, '/f'], {windowsHide: true, timeout: 10000});
   assert.equal(await readRunOnce(config, name), data, 'PLANT_RUN_ONCE_FAILED');
   return {channel: channelOf(config), value: name, sha256: sha256(Buffer.from(data, 'utf8'))};
+}
+
+/** The sentinel's place in the config's data root: an allowlisted folder that nothing of the application writes in a lifecycle run. */
+const SENTINEL = path.win32.join('captures', 'installer-lifecycle-sentinel.txt');
+const SENTINEL_TEXT = 'Sentinel of the installer lifecycle: the other channel\'s uninstall must leave this file and its data root alone.\n';
+/**
+ * ET-055 PR-5: the config's channel's data root across the other channel's uninstall, whose data root name is a string
+ * prefix of this one (`ETS2Telemetry`, `ETS2TelemetryStaging`). `plant` writes a sentinel file into `captures\` (refusing an
+ * existing one) and records the data root's top-level entries. `check <plant label>` requires the data root, every recorded
+ * top-level entry and the sentinel's bytes unchanged, then removes the sentinel (and `captures\` when the plant created it),
+ * so the channel's own later uninstall sees its data root as before. A failure is OTHER_CHANNEL_DATA_CHANGED with the part.
+ */
+async function sentinel(config, label, mode, plantLabel) {
+  assert.match(label, /^[a-z0-9-]{1,40}$/, 'SENTINEL_LABEL_INVALID');
+  const runRoot = await realpath(config.runRoot), dataRoot = runLayout(runRoot, channelOf(config)).dataRoot, file = path.win32.join(dataRoot, SENTINEL);
+  const topLevel = async () => (await readdir(dataRoot).catch(error => {if (error?.code === 'ENOENT') return null; throw error;}))?.sort() ?? null;
+  if (mode === 'plant') {
+    const entries = await topLevel();
+    assert.ok(Array.isArray(entries), 'SENTINEL_DATA_ROOT_MISSING');
+    const createdCaptures = !entries.includes('captures');
+    await mkdir(path.win32.dirname(file), {recursive: true});
+    await writeFile(file, SENTINEL_TEXT, {flag: 'wx'});
+    return {channel: channelOf(config), entries, createdCaptures, sha256: sha256(Buffer.from(SENTINEL_TEXT, 'utf8'))};
+  }
+  assert.ok(mode === 'check' && /^[a-z0-9-]{1,40}$/.test(plantLabel ?? '') && plantLabel !== label, 'SENTINEL_MODE_INVALID');
+  const planted = (await readJson(path.join(config.evidence, `sentinel-${plantLabel}.json`), 64 * 1024)).result;
+  assert.equal(planted?.channel, channelOf(config), 'SENTINEL_OTHER_CHANNEL');
+  const changed = part => new Error(`OTHER_CHANNEL_DATA_CHANGED (${part}): the other channel's uninstall changed the ${channelOf(config)} data root; ` +
+    'its data root name is a string prefix of this one, so a prefix match would wipe both');
+  const entries = await topLevel();
+  if (!Array.isArray(entries)) throw changed('data root removed');
+  const missing = planted.entries.filter(entry => !entries.includes(entry));
+  if (missing.length) throw changed(`entries removed: ${missing.join(', ')}`);
+  const state = await fileState(file);
+  if (typeof state !== 'object' || state.sha256 !== planted.sha256) throw changed(`sentinel ${typeof state === 'string' ? state : 'bytes changed'}`);
+  await rm(file);
+  // The folder goes only when the plant created it and nothing else came into it since.
+  if (planted.createdCaptures && (await readdir(path.win32.dirname(file))).length === 0) await rmdir(path.win32.dirname(file));
+  return {channel: channelOf(config), entries, sentinelUnchanged: true, removed: true};
 }
 
 const [command, ...rest] = process.argv.slice(2);
@@ -1381,7 +1426,8 @@ try {
       case 'side-by-side-launch': result.result = await sideBySideLaunch(config, label, rest[2], rest[3]); break;
       case 'channel-state': result.result = await channelState(config, label); break;
       case 'channel-compare': result.result = await channelCompare(config, rest[1], rest[2]); break;
-      case 'plant-run-once': result.result = await plantRunOnce(config, label, rest[2]); break;
+      case 'plant-run-once': result.result = await plantRunOnce(config, label, rest[2], rest[3]); break;
+      case 'sentinel': result.result = await sentinel(config, label, rest[2], rest[3]); break;
       case 'cleanup': result.result = await cleanup(config, rest.slice(1)); break;
       default: throw new Error('UNKNOWN_COMMAND');
     }
@@ -1394,8 +1440,7 @@ result.finishedUtc = new Date().toISOString();
 if (config) {
   // Evidence file names use fixed labels only; the cleanup argument is a path and never becomes part of a name.
   const name = command === 'seed' || command === 'cleanup' || command === 'games' ? `${command}.json`
-    : command === 'compare' || command === 'channel-compare' ? `${command}-${rest[1]}-${rest[2]}.json`
-    : command === 'plant-run-once' && rest[2] === 'remove' ? `${command}-${rest[1]}-remove.json` : `${command}-${rest[1]}.json`;
+    : command === 'compare' || command === 'channel-compare' ? `${command}-${rest[1]}-${rest[2]}.json` : `${command}-${rest[1]}.json`;
   try {await writeEvidence(config, name, result);} catch (error) {result.evidenceFailure = failure(error);}
 }
 // One JSON line for the harness; `cleanup` also reports whether the uninstall key may be deleted, and `versions` the run's

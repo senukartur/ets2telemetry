@@ -39,7 +39,8 @@ it('runs the hosted installer lifecycle for the built channel, and the side-by-s
   expect(installer).toContain("- name: Installer lifecycle in a test root\n        if: github.event_name != 'pull_request'\n        timeout-minutes: 8\n" +
     '        run: ./scripts/installer/Invoke-InstallerLifecycle.ps1\n');
   expect(installer).not.toContain('Installer lifecycle skipped');
-  const sideBySide = "if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main' && steps.built.outputs.channel == 'production'\n";
+  const sideBySide = "if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main' && steps.built.outputs.channel == 'production' && " +
+    "needs.windows-staging-build.result == 'success'\n";
   expect(installer.split(sideBySide)).toHaveLength(3);
   expect(installer).toContain('- name: Side-by-side installer lifecycle in a test root\n        ' + sideBySide +
     '        timeout-minutes: 8\n        run: ./scripts/installer/Invoke-InstallerLifecycle.ps1 -Scenario side-by-side -StagingInput "$PWD/.local/staging-input"\n');
@@ -52,5 +53,12 @@ it('runs the hosted installer lifecycle for the built channel, and the side-by-s
   expect(staging).toContain('node scripts/installer/side-by-side-input.mjs create "$PWD/.local/staging-input"');
   expect(staging).toContain('name: windows-staging-input-${{ github.run_id }}-${{ github.run_attempt }}');
   expect(staging).toContain('run: ./scripts/installer/Invoke-InstallerLifecycle.ps1\n');
-  expect(text).toContain('    needs: [windows-build, windows-staging-build]\n');
+  // The job runs whenever windows-build succeeded, so a failed staging build on main never skips the production lifecycle;
+  // a final step fails the job there instead, after the production evidence exists.
+  expect(text).toContain("  windows-installer:\n    name: Windows x64 hosted installer\n");
+  expect(installer).toContain("    needs: [windows-build, windows-staging-build]\n    if: \"!cancelled() && github.event_name != 'pull_request' && " +
+    "needs.windows-build.result == 'success'\"\n    runs-on: windows-2022\n");
+  expect(installer).toContain("- name: Require the staging build on main\n        if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main' && " +
+    "needs.windows-staging-build.result != 'success'\n        run: throw ('STAGING_BUILD_NOT_SUCCESSFUL: ");
+  expect(installer.indexOf('- name: Side-by-side installer lifecycle')).toBeLessThan(installer.indexOf('- name: Require the staging build on main'));
 });

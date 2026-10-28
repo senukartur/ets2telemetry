@@ -1,6 +1,6 @@
 import {execFile} from 'node:child_process';
 import {createHash} from 'node:crypto';
-import {mkdir, readFile, writeFile} from 'node:fs/promises';
+import {mkdir, readdir, readFile, realpath, rm, writeFile} from 'node:fs/promises';
 import path from 'node:path';
 import {describe, expect, it} from 'vitest';
 import {BUILD_IDENTITIES, buildNames} from '../../scripts/build-channel.mjs';
@@ -95,6 +95,38 @@ describe('driver channels (ET-055 PR-5)', () => {
         .toMatchObject({passed: false, failure: {message: expect.stringContaining('CONFIG_PEER_INVALID')}});
       expect(await check({profileDir: path.join(resources.directory, 'profile')})).toMatchObject({passed: false, failure: {message: expect.stringContaining('CONFIG_PROFILE_INVALID')}});
       expect(JSON.parse(await readFile(path.join(evidence, 'residue-missing.json'), 'utf8'))).toMatchObject({command: 'residue', passed: false});
+    } finally {await resources.dispose();}
+  }, 60000);
+  // The staging data root across production's uninstall: a sentinel and the top-level entries must stay, and the check
+  // removes the sentinel again so the channel's own later uninstall sees its data root as before.
+  it('plants and checks the sentinel of the other channel\'s data root, and names what changed', async () => {
+    const resources = await temporaryResources();
+    try {
+      const base = await realpath(resources.directory), id = '1'.repeat(32);
+      const runRoot = path.join(base, `installer-${id}`), evidence = path.join(base, `installer-${id}-evidence`);
+      const dataRoot = path.join(runRoot, 'LocalAppData', 'ETS2TelemetryStaging');
+      await mkdir(path.join(dataRoot, 'plugins'), {recursive: true});
+      await mkdir(path.join(dataRoot, 'logs'));
+      await mkdir(evidence);
+      const config = path.join(evidence, 'config-staging.json');
+      await writeFile(config, JSON.stringify({runRoot, evidence, setup: path.join(base, 'Setup.exe'), stepBudgetMs: 1000, channel: 'staging', channels: ['production', 'staging'],
+        appVersion: '0.1.0-stg.000000', peers: {production: path.join(evidence, 'config-production.json')}, profileDir: path.join(runRoot, 'profile-staging')}));
+      const sentinel = (...args: string[]) => run(['sentinel', config, ...args], local);
+      expect(await sentinel('before-a', 'plant')).toMatchObject({passed: true});
+      expect((await readdir(dataRoot)).sort()).toEqual(['captures', 'logs', 'plugins']);
+      expect(await sentinel('after-a', 'check', 'before-a')).toMatchObject({passed: true});
+      // The check removed the sentinel and the folder the plant created.
+      expect((await readdir(dataRoot)).sort()).toEqual(['logs', 'plugins']);
+      expect(await sentinel('before-b', 'plant')).toMatchObject({passed: true});
+      await writeFile(path.join(dataRoot, 'captures', 'installer-lifecycle-sentinel.txt'), 'changed');
+      expect((await sentinel('after-b', 'check', 'before-b')).failure?.message).toMatch(/^OTHER_CHANNEL_DATA_CHANGED \(sentinel bytes changed\)/);
+      await rm(path.join(dataRoot, 'captures'), {recursive: true});
+      expect(await sentinel('before-c', 'plant')).toMatchObject({passed: true});
+      await rm(path.join(dataRoot, 'plugins'), {recursive: true});
+      expect((await sentinel('after-c', 'check', 'before-c')).failure?.message).toMatch(/^OTHER_CHANNEL_DATA_CHANGED \(entries removed: plugins\)/);
+      await rm(dataRoot, {recursive: true});
+      expect((await sentinel('after-d', 'check', 'before-c')).failure?.message).toMatch(/^OTHER_CHANNEL_DATA_CHANGED \(data root removed\)/);
+      expect((await sentinel('after-e', 'check', 'after-e')).failure?.message).toContain('SENTINEL_MODE_INVALID');
     } finally {await resources.dispose();}
   }, 60000);
 });

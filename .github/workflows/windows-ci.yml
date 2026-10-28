@@ -336,13 +336,12 @@ jobs:
           retention-days: 14
   windows-installer:
     name: Windows x64 hosted installer
-    # ET-055 PR-5 (docs/ci.md#side-by-side-installer-lifecycle-et-055-pr-5): on main the staging build job supplies the
-    # staging Setup of the side-by-side scenario and must succeed; elsewhere (a branch dispatch builds staging only) it is
-    # skipped and only the lifecycle of the build that was made runs. Pull requests skip this job (E1).
+    # ET-055 PR-5 (docs/ci.md#side-by-side-installer-lifecycle-et-055-pr-5): it runs whenever windows-build succeeded on a
+    # non-PR event, so the lifecycle of the build that was made always leaves its evidence. On main the staging build job
+    # supplies the staging Setup of the side-by-side scenario; if it did not succeed there, the side-by-side steps are
+    # skipped and the step "Require the staging build on main" fails the job. Pull requests skip this job (E1).
     needs: [windows-build, windows-staging-build]
-    if: >-
-      !cancelled() && github.event_name != 'pull_request' && needs.windows-build.result == 'success' &&
-      (needs.windows-staging-build.result == 'success' || (github.ref != 'refs/heads/main' && needs.windows-staging-build.result == 'skipped'))
+    if: "!cancelled() && github.event_name != 'pull_request' && needs.windows-build.result == 'success'"
     runs-on: windows-2022
     timeout-minutes: 20
     defaults:
@@ -410,14 +409,19 @@ jobs:
       # ET-055 PR-5 (REG-017, REG-019): the production build of this run and the staging Setup of windows-staging-build
       # installed side by side in one test root; main only, where both channels are built.
       - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4, verified official actions/download-artifact tag
-        if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main' && steps.built.outputs.channel == 'production'
+        if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main' && steps.built.outputs.channel == 'production' && needs.windows-staging-build.result == 'success'
         with:
           name: windows-staging-input-${{ github.run_id }}-${{ github.run_attempt }}
           path: .local/staging-input
       - name: Side-by-side installer lifecycle in a test root
-        if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main' && steps.built.outputs.channel == 'production'
+        if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main' && steps.built.outputs.channel == 'production' && needs.windows-staging-build.result == 'success'
         timeout-minutes: 8
         run: ./scripts/installer/Invoke-InstallerLifecycle.ps1 -Scenario side-by-side -StagingInput "$PWD/.local/staging-input"
+      # On main both channels must have been installed side by side: a failed or skipped staging build fails this job after the
+      # production lifecycle above has run and left its evidence, so the scaffold aggregate stays red.
+      - name: Require the staging build on main
+        if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main' && needs.windows-staging-build.result != 'success'
+        run: throw ('STAGING_BUILD_NOT_SUCCESSFUL: windows-staging-build ended ${{ needs.windows-staging-build.result }}, so the side-by-side installer lifecycle did not run.')
       - name: Record final versions and duration
         if: always()
         run: node scripts/ci/versions.mjs

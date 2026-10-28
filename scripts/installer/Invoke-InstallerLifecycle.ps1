@@ -61,7 +61,8 @@ $planSteps = @('signal','facts','guard-plan','create-run-root','guard-ready','bu
     'install-0.1.0-for-app','plugin-launch-for-app','app-uninstall-blocked-game','app-uninstall-verify-blocked-game',
     'app-uninstall-complete','app-uninstall-verify-complete','cleanup')
 $sideBySideSteps = @('signal','facts','verify-staging-input','guard-plan','create-run-root','guard-ready','games','install-production','install-staging','production-beside-staging',
-    'run-values-planted','side-by-side-launch','windows-uninstall-production-beside-staging','staging-after-production-uninstall','reinstall-production',
+    'run-values-planted','side-by-side-launch','run-values-kept','sentinel-staging-data-root','windows-uninstall-production-beside-staging','sentinel-check-staging-data-root',
+    'staging-after-production-uninstall','reinstall-production',
     'plugin-launch-production-again','run-once-planted-production','channel-state-before-staging-uninstall','windows-uninstall-staging-deferred','run-once-staging-complete',
     'channel-compare-production','production-after-staging-uninstall','windows-uninstall-production-final','cleanup')
 if ($Plan) {
@@ -736,15 +737,20 @@ function Invoke-SideBySide {
     # Both applications ran their startup autostart reconciliation; the marked values must have survived it.
     Assert-PlantedRunValuesKept 'both-running'
 
-    # Production's Windows-initiated uninstall while the staging application runs: staging keeps running, and its
-    # plugin, registration, shortcuts and Run value stay as they were.
+    # Production's Windows-initiated uninstall while the staging application runs: staging keeps running, and its data
+    # root (a sentinel and its top-level entries: "ETS2Telemetry" is a string prefix of "ETS2TelemetryStaging"), plugin,
+    # registration, shortcuts and Run value stay as they were.
     $stagingBefore = Get-ChannelRegistryState 'staging'
+    Use-Channel 'staging'
+    Invoke-Driver 'sentinel' @('before-production-uninstall', 'plant') 30000
+    Use-Channel 'production'
     $helper = Get-VendorHelper $versionProduction
     $script:report.uninstallRun = $true
     Invoke-Driver 'windows-uninstall' @('production-beside-staging', '-', 'complete', '--beside', $executableStaging) 60000
     Assert-Uninstalled 'production-beside-staging' $helper
-    Assert-ChannelRegistryUnchanged 'staging' $stagingBefore 'production-beside-staging'
     Use-Channel 'staging'
+    Invoke-Driver 'sentinel' @('after-production-uninstall', 'check', 'before-production-uninstall') 30000
+    Assert-ChannelRegistryUnchanged 'staging' $stagingBefore 'production-beside-staging'
     $null = Assert-Installed 'sbs-staging-after-production-uninstall' $versionStaging
     Assert-ProductLinks 'sbs-staging-after-production-uninstall' $true -WithAumid
 
@@ -776,7 +782,7 @@ function Invoke-SideBySide {
     Assert-ProductLinks 'sbs-production-after-staging-uninstall' $true -WithAumid
 
     # The end: production's own uninstall, so nothing of either channel is left installed.
-    Invoke-Driver 'plant-run-once' @('before-staging-uninstall', 'remove') 30000
+    Invoke-Driver 'plant-run-once' @('before-production-final', 'remove', 'before-staging-uninstall') 30000
     $helper = Get-VendorHelper $versionProduction
     Invoke-Driver 'windows-uninstall' @('production-final', $executableProduction, 'complete') 60000
     Assert-Uninstalled 'production-final' $helper
