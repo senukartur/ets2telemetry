@@ -85,10 +85,11 @@ describe('the sidebar update control (UP10)', () => {
   });
 
   // WCAG 2.5.3 Label in Name: a speech user says what they see, so in every state and language the button's accessible
-  // name begins with its visible label.
+  // name begins with its visible label. Only the offer has a name of its own today; the other states guard against a
+  // later custom name.
   it.each(LANGUAGES)('names the button with its visible label first in every state (%s)', language => {
     const states: UpdateView[] = [offered('available'), offered('downloading', {progress: 42}), offered('installing'), offered('restarting'),
-      offered('ready'), offered('refused', {refusal: 'GAME_RUNNING'}), offered('failed', {failure: 'OFFLINE'})];
+      offered('ready'), offered('ready', {refusal: 'GAME_RUNNING'}), offered('refused', {refusal: 'GAME_RUNNING'}), offered('failed', {failure: 'OFFLINE'})];
     for (const update of states) {
       const text = updateControlText(update, language)!;
       expect(text.accessibleName.startsWith(text.label), `${update.state}: ${text.accessibleName}`).toBe(true);
