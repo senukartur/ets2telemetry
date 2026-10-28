@@ -148,18 +148,39 @@ describe('update-from-feed driver commands', () => {
     } finally {await resources.dispose();}
   }, 120000);
 
-  it('records the interrupted apply as an observation and asserts only the orderly exit', async () => {
+  // Hosted run 40710991951 changed this case: the mitigated outcome of an interrupted apply is now asserted (the
+  // half-written app-<target> removed before APPLY_FAILED, Retry starting a new apply); a kill that came too late is
+  // only recorded.
+  it('asserts the R1 mitigation of an interrupted apply, and only the orderly exit when the kill came too late', async () => {
     const resources = await temporaryResources();
     try {
       const {config, write} = await layout(resources.directory);
-      const value = evidence();
-      value.observed = {...value.observed, mode: 'interrupted', kill: {updaters: 1, killed: 1, entriesAtKill: 3, msAfterInstalling: 900, reason: 'app-folder'},
-        afterKill: {view: {state: 'failed', failure: 'APPLY_FAILED'}}, retry: {view: {state: 'installing'}}, after: {}, updaterWait: {remaining: 0}, restarted: 0};
-      await write(value);
-      expect(await run(['update-feed-verify', config, 'feed-b'])).toMatchObject({passed: true});
-      value.observed.exit = {code: 1, signal: null};
-      await write(value);
-      expect((await run(['update-feed-verify', config, 'feed-b'])).failure?.message).toMatch(/^UPDATE_APP_EXIT_NONZERO/);
+      const interrupted = () => {
+        const value = evidence();
+        value.main.splice(6, 0, {time: at(7), pid: A, event: 'UPDATE_APPLY_FAILED', facts: {code: 'APPLY_FAILED', reason: 'failed'}},
+          {time: at(7), pid: A, event: 'UPDATE_INCOMPLETE_VERSION_REMOVED', facts: {result: 'removed'}});
+        value.observed = {...value.observed, mode: 'interrupted', offered: {package: '0.1.2-stg.000000', installed: '0.1.2-stg000000'}, kill: {updaters: 1, killed: 1, entriesAtKill: 3, msAfterInstalling: 900, reason: 'app-folder'},
+          afterKill: {view: {state: 'failed', failure: 'APPLY_FAILED'}, listing: {apps: {'app-0.1.0-stg000000': {entries: 19}, 'app-0.1.1-stg000000': {entries: 19}}}},
+          retry: {started: 'apply-started', view: {state: 'installing'}}, after: {}, updaterWait: {remaining: 0}, restarted: 0};
+        return value;
+      };
+      const verify = async (change: (value: ReturnType<typeof evidence>) => void) => {
+        const value = interrupted();
+        change(value);
+        await write(value);
+        return run(['update-feed-verify', config, 'feed-b']);
+      };
+      expect(await verify(() => undefined)).toMatchObject({passed: true});
+      expect((await verify(value => {value.observed.exit = {code: 1, signal: null};})).failure?.message).toMatch(/^UPDATE_APP_EXIT_NONZERO/);
+      expect((await verify(value => {value.main = value.main.filter(row => row.event !== 'UPDATE_INCOMPLETE_VERSION_REMOVED');})).failure?.message)
+        .toMatch(/^R1_INCOMPLETE_VERSION_NOT_REMOVED/);
+      expect((await verify(value => {(value.observed.afterKill as {listing: {apps: Record<string, unknown>}}).listing.apps['app-0.1.2-stg000000'] = {entries: 6};})).failure?.message).toMatch(/^R1_INCOMPLETE_VERSION_LEFT/);
+      expect((await verify(value => {value.observed.retry = {started: 'timeout', view: {state: 'failed'}};})).failure?.message).toMatch(/^R1_RETRY_NOT_STARTED/);
+      expect((await verify(value => {value.observed.afterKill = {view: {state: 'failed', failure: 'APPLY_TIMEOUT'}, listing: {apps: {}}};})).failure?.message)
+        .toMatch(/^R1_KILL_NOT_FAILED/);
+      // The kill came after Update.exe had finished: recorded, not judged.
+      expect(await verify(value => {value.observed.kill = {updaters: 1, killed: 0, entriesAtKill: 19, msAfterInstalling: 30000, reason: 'view-restarting'};
+        value.observed.retry = undefined; value.main = value.main.filter(row => !row.event.startsWith('UPDATE_INCOMPLETE'));})).toMatchObject({passed: true});
     } finally {await resources.dispose();}
-  }, 60000);
+  }, 120000);
 });

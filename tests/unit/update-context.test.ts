@@ -24,7 +24,7 @@ const resolve = (roots: UninstallRoots, env: Record<string, string | undefined> 
 describe('resolveUpdateContext', () => {
   it('checks a production install against GitHub with the compiled keys of its channel', () => {
     expect(resolve(PRODUCTION_ROOTS)).toEqual({ok: true, context: {installRoot: PRODUCTION_ROOTS.ok && PRODUCTION_ROOTS.installRoot, dataRoot: 'C:\\Users\\owner\\AppData\\Local\\ETS2Telemetry',
-      executableName: 'ETS2TelemetryDesktop.exe', origins: GITHUB_ORIGINS, keys: UPDATE_PUBLIC_KEYS.production, mode: 'production'}});
+      executableName: 'ETS2TelemetryDesktop.exe', runningDirectory: 'C:\\Users\\owner\\AppData\\Local\\ETS2TelemetryDesktop\\app-0.2.0',origins: GITHUB_ORIGINS, keys: UPDATE_PUBLIC_KEYS.production, mode: 'production'}});
   });
   it('never checks an unpackaged, portable or isolated launch', () => {
     expect(resolve(PRODUCTION_ROOTS, {}, false)).toEqual({ok: false, reason: 'unpackaged'});
@@ -41,7 +41,7 @@ describe('resolveUpdateContext', () => {
   });
   it('uses the loopback feed and only the test key in a test-root install with a profile inside the root', () => {
     expect(resolve(TEST_ROOTS, TEST_ENV)).toEqual({ok: true, context: {installRoot: `${TEST_ROOT}\\LocalAppData\\ETS2TelemetryDesktop`, dataRoot: `${TEST_ROOT}\\LocalAppData\\ETS2Telemetry`,
-      executableName: 'ETS2TelemetryDesktop.exe', origins: {web: 'http://127.0.0.1:41234', api: 'http://127.0.0.1:41234'}, keys: [{keyId: 'test', publicKey: KEY}], mode: 'test-root'}});
+      executableName: 'ETS2TelemetryDesktop.exe', runningDirectory: 'C:\\Users\\owner\\AppData\\Local\\ETS2TelemetryDesktop\\app-0.2.0',origins: {web: 'http://127.0.0.1:41234', api: 'http://127.0.0.1:41234'}, keys: [{keyId: 'test', publicKey: KEY}], mode: 'test-root'}});
   });
   it.each([
     ['no profile', {...TEST_ENV, ETS2TELEMETRY_PROFILE_DIR: undefined}],

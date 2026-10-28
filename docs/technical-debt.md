@@ -289,3 +289,15 @@ The in-app uninstall and the in-app update exclude each other, but the Windows-i
 Refusing or delaying that exit in PR-6 would not help: the hook waits at most 6 s (`INSTANCE_EXIT_WAIT_MS`) for the instance to end, while an apply may run for up to 180 s, so the hook would defer the cleanup instead. The hosted update-from-feed lifecycle (ET-055 PR-8) must observe this case together with a killed apply (risk R1: a partial `app-<version>` folder, a broken registration or leftover data). If that observation shows harm, a follow-up blocks or orders the two, for example by holding the uninstall hook until the apply has finished.
 
 **ET-055 PR-8 status (October 28, 2026).** The hosted [update-from-feed scenario](installer-testing.md#update-from-feed-scenario) observes the killed apply (R1) but **does not exercise this case**. Starting the registered UninstallString in the middle of an apply needs a second Squirrel run timed against the first, inside the same bounded Job as the application and the running `Update.exe --update`, and the scenario has no reliable point at which to start it. TD-025 therefore stays **pending and unverified**; nothing about the overlap of `--update` and `--uninstall` is claimed.
+
+## TD-026: A half-written app folder that the application cannot remove
+
+Recorded October 28, 2026 by the coordinator with ET-055 PR-8, from the second branch dispatch, [40710991951](https://github.com/senukartur/ets2telemetry/actions/runs/40710991951) at `631afe7c`. **This entry is a coordinator decision under the owner's approval of ET-055.**
+
+The pinned Squirrel writes no completion marker into `<install root>\app-<version>`, and its stub and `Update.exe --processStart` start the highest-versioned `app-*` folder whatever it holds. A half-written folder therefore makes the installation unlaunchable from its shortcuts until an apply of that version completes or Setup is run again. ET-055 PR-8 removes that folder from the still-running application after an apply that fails or times out ([application lifecycle](app-lifecycle.md#in-app-updates-et-055)). These cases stay **uncovered and unverified**:
+
+- a power loss, a crash or a forced end of the application itself while `Update.exe --update` extracts: nothing runs the cleanup, and the next launch through a shortcut starts the broken folder, so the application cannot clean up at its start either;
+- an exit while the apply runs, followed by an end of `Update.exe` before it finishes (the exit leaves `Update.exe` running, which normally completes);
+- a folder that a process still holds after the three attempts (`UPDATE_INCOMPLETE_VERSION_KEPT`).
+
+The recovery for all of them is another run of Setup, which replaces the whole install root and keeps the data root, or an update to the same version, whose `Update.exe` replaces a "partially applied release folder". A future fix could add a project-owned marker or a launcher that skips a folder without one; neither is planned.

@@ -35,6 +35,28 @@ export async function clearUpdates(fs: UpdateFileSystem, dataRoot: string): Prom
 }
 
 const errorCode = (error: unknown) => error && typeof error === 'object' && 'code' in error ? String(error.code) : '';
+
+/** What removeIncompleteVersion did; `refused` names a folder it may not touch, `failed` one it could not remove fully. */
+export type IncompleteRemoval = 'removed' | 'absent' | 'refused' | 'failed';
+const normalFolder = (value: string) => path.win32.normalize(value).replace(/\\+$/, '').toLowerCase();
+
+/**
+ * ET-055 risk R1 (the hosted update-from-feed run 40710991951): `Update.exe --update` that ends early, killed by the
+ * 180 s deadline or by anything else, leaves the half-written `<install root>\app-<NuGet version>` folder behind. The
+ * pinned Squirrel writes no completion marker, and its stub (every shortcut) and `--processStart` start the highest
+ * `app-*` folder whatever it holds, so that folder makes the installation unlaunchable until an apply completes. After a
+ * failed apply the still-running application therefore removes exactly that target folder: a direct child of the install
+ * root, never the folder it runs from or one that contains it (compared by whole path segments), with links unlinked and
+ * never entered. A later apply of the same version starts from nothing.
+ */
+export async function removeIncompleteVersion(fs: UpdateFileSystem, installRoot: string, nugetVersion: string, runningDirectory: string): Promise<IncompleteRemoval> {
+  if (!/^\d{1,9}\.\d{1,9}\.\d{1,9}(-[0-9A-Za-z.-]{1,60})?$/.test(nugetVersion) || !path.win32.isAbsolute(installRoot) || !path.win32.isAbsolute(runningDirectory)) return 'refused';
+  const folder = path.win32.join(installRoot, `app-${nugetVersion}`);
+  const target = normalFolder(folder), running = normalFolder(runningDirectory);
+  if (normalFolder(path.win32.dirname(folder)) !== normalFolder(installRoot) || running === target || running.startsWith(`${target}\\`)) return 'refused';
+  try {await fs.lstat(folder, {bigint: true});} catch (error) {return errorCode(error) === 'ENOENT' ? 'absent' : 'failed';}
+  return await removeOwnedTree(fs, folder).catch(() => 'IO_ERROR' as const) === null ? 'removed' : 'failed';
+}
 const writeFailure = (error: unknown): UpdateFailure => errorCode(error) === 'ENOSPC' ? 'DISK_FULL' : 'DOWNLOAD_FAILED';
 
 export type DownloadResult = {readonly ok: true; readonly folder: string}
