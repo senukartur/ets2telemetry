@@ -1,6 +1,6 @@
 # Trip export format
 
-ET-016 PR-5 exports one recorded trip as a JSON file, `ets2telemetry.trip-export` format version 1, through a Save dialog that main owns. The export is a copy for the user's own records. The application never imports or restores it. Decisions J15–J18 are in [concept.md](../concept.md#et-016-authorization--october-16-2026); the reads it is made from are the [journal reads](journal.md).
+ET-016 PR-5 exports one recorded trip as a JSON file, `ets2telemetry.trip-export` format version 1, through a Save dialog that main owns. The export is a copy for the user's own records. The application never imports or restores it. Decisions J15–J18 are in [DESIGN-DECISIONS.md](../DESIGN-DECISIONS.md#et-016-authorization--october-16-2026); the reads it is made from are the [journal reads](journal.md).
 
 Status (October 17, 2026): the format, the save flow and the Export button are implemented and tested with synthetic databases only. `GAME_HISTORY_RECORDING` has been `true` since October 25, 2026, but no real game trip has been recorded or exported yet. The Windows Save dialog itself (overwrite prompt, cancel by Esc and by the close box, OneDrive Documents, long paths, a read-only folder) remains a pending manual check.
 
@@ -8,7 +8,7 @@ Current exports use [format 2](#hard-mode-format-2-et-026), adding the Hard Mode
 
 ## Saving a trip (J16, J17)
 
-The trip detail in the Journal tab has an **Export JSON** button. Next to it the tab states that an uninstall removes the local trip history and settings and that the JSON export is a copy that cannot be imported (J18, extended to settings by ET-018 PR-4; the owner's [uninstall rule](../concept.md#uninstall-removes-local-data--october-16-2026)).
+The trip detail in the Journal tab has an **Export JSON** button. Next to it the tab states that an uninstall removes the local trip history and settings and that the JSON export is a copy that cannot be imported (J18, extended to settings by ET-018 PR-4; the owner's [uninstall rule](../DESIGN-DECISIONS.md#uninstall-removes-local-data--october-16-2026)).
 
 The button calls the sixth bridge method, `exportJournalTrip(tripUuid)`, on the fixed channel `journal:export-trip`. The preload forwards only a valid lower-case trip UUID; main checks it again, accepts only the trusted dashboard main frame and runs one export at a time. Main then:
 

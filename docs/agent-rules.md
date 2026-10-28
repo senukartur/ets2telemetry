@@ -6,13 +6,14 @@ This file holds the rules that apply across tasks. [AGENTS.md](../AGENTS.md), wh
 
 The other project documents are large. Read only the parts a task needs, never a whole file by default:
 
-- [concept.md](../concept.md) holds the product requirements, architecture, implementation sequence, acceptance criteria and research sources in its numbered sections 1–12, followed by dated decision records for each card.
+- [concept.md](../concept.md) is short: the product idea, its principles and how each feature works. Read it whole when a task touches product behavior.
+- [DESIGN-DECISIONS.md](../DESIGN-DECISIONS.md) holds the earlier full concept and the dated design decision records of each card, with the decision IDs other documents cite (for example K1–K12).
 - [TESTING.md](../TESTING.md) holds the test layers, the CI and merge policy, the regression corpus and the real-game evidence rules in its numbered sections 1–9, followed by dated sections for each card. Read the numbered sections that apply before changing behavior or test infrastructure.
 - [DECISION-LOG.md](../DECISION-LOG.md) holds the dated owner decisions that used to be in this file.
 
-List the sections with `rg -n '^## ' concept.md TESTING.md DECISION-LOG.md`, find a card's records with `rg -n 'ET-015a' concept.md TESTING.md DECISION-LOG.md docs`, and read those sections with targeted reads.
+List the sections with `rg -n '^## ' TESTING.md DECISION-LOG.md DESIGN-DECISIONS.md`, find a card's records with `rg -n 'ET-015a' TESTING.md DECISION-LOG.md DESIGN-DECISIONS.md docs`, and read those sections with targeted reads.
 
-Keep the two documents consistent. Use `concept.md` for detailed product decisions and this file for instructions that apply across tasks. Explicit user instructions take precedence over this documentation.
+Keep the two documents consistent. Use `concept.md` for what the product does and this file for instructions that apply across tasks. Explicit user instructions take precedence over this documentation.
 
 Owner-approved deferred capabilities are tracked in [technical debt](technical-debt.md). An entry there records a future need; it does not expand the current milestone or authorize work outside the MVP scope.
 
@@ -78,7 +79,7 @@ The utilityProcess owns ingestion and source validation. A fixed project-owned n
 - Version the protocol and preserve session identity and message ordering. Validate incoming messages and document the wire format alongside implementation.
 - Coalesce live snapshots when appropriate. Preserve gameplay events separately, acknowledge them after persistence, and handle redelivery without duplicates.
 - Restrict pipes to the local user and reject remote access.
-- Install the DLL in each discovered, non-excluded game's `bin/win_x64/plugins` directory, silently where safe (see the October 12, 2026 silent plugin installation decision in `concept.md`). Change it only while the game is closed, copy atomically with SHA-256 verification against the bundled artifact, never overwrite an unrecognized file with the plugin's name, and manage only this project's plugin.
+- Install the DLL in each discovered, non-excluded game's `bin/win_x64/plugins` directory, silently where safe (see the October 12, 2026 silent plugin installation decision in `DESIGN-DECISIONS.md`). Change it only while the game is closed, copy atomically with SHA-256 verification against the bundled artifact, never overwrite an unrecognized file with the plugin's name, and manage only this project's plugin.
 - Use real game tests to establish TruckersMP support. Do not infer compatibility solely from successful single-player tests or documentation.
 
 ### Overlay and Electron
@@ -196,7 +197,7 @@ Windows CI does not run on PRs that change only `**.md` or `docs/**`, so their r
 
 Work on the milestone requested by the user. Routine implementation decisions within the agreed requirements do not require repeated confirmation. Discuss changes to product requirements or major architecture before committing to them.
 
-The first implementation milestone is a complete path from game telemetry to a working speed/fuel overlay in both games, including TruckersMP. Subsequent milestones add application behavior, reliable recording, and distribution. Follow the sequence and acceptance criteria in `concept.md`.
+The first implementation milestone is a complete path from game telemetry to a working speed/fuel overlay in both games, including TruckersMP. Subsequent milestones add application behavior, reliable recording, and distribution. The original sequence and acceptance criteria are in sections 9 and 10 of `DESIGN-DECISIONS.md`.
 
 Follow [TESTING.md](../TESTING.md) for regression scenarios, test layers, CI/merge policy, and real-game evidence. CI and the recovery suites do not replace the tests that each implementing card owns.
 
@@ -219,11 +220,11 @@ Follow [TESTING.md](../TESTING.md) for regression scenarios, test layers, CI/mer
 - If a required game or tool is unavailable, report exactly what was checked and what remains unverified.
 - Keep changes focused and preserve unrelated work. Update the relevant documentation when requirements, interfaces or setup change, within the [documentation budget](#documentation-budget).
 
-Consult the primary sources linked in `concept.md` when validating SDK or framework behavior. Examples of other telemetry utilities may help, but receiving them from the owner is not a prerequisite for implementation.
+Consult the primary sources listed in section 12 of `DESIGN-DECISIONS.md` when validating SDK or framework behavior. Examples of other telemetry utilities may help, but receiving them from the owner is not a prerequisite for implementation.
 
 ## Uninstall removes local data — October 16, 2026
 
-On October 16, 2026 the owner confirmed that uninstalling ETS2Telemetry removes all of its local data under `%LOCALAPPDATA%\ETS2Telemetry`: the history database and its backups, settings, logs and synthetic recordings. Unsynchronized history is lost until the later server phase can restore it. Only application-owned data and the plugin file this application installed are removed. ET-018 implements this, changing the ET-001 baseline that keeps the data root. The ET-016 journal states the rule next to its JSON export, which is a copy for the user's records and cannot be imported (J18). See [concept.md](../concept.md#uninstall-removes-local-data--october-16-2026).
+On October 16, 2026 the owner confirmed that uninstalling ETS2Telemetry removes all of its local data under `%LOCALAPPDATA%\ETS2Telemetry`: the history database and its backups, settings, logs and synthetic recordings. Unsynchronized history is lost until the later server phase can restore it. Only application-owned data and the plugin file this application installed are removed. ET-018 implements this, changing the ET-001 baseline that keeps the data root. The ET-016 journal states the rule next to its JSON export, which is a copy for the user's records and cannot be imported (J18). See [DESIGN-DECISIONS.md](../DESIGN-DECISIONS.md#uninstall-removes-local-data--october-16-2026).
 
 ## Standing Owner Rules
 
@@ -280,6 +281,7 @@ The owner decided on October 28, 2026 to limit the documentation that agents wri
 - **Evidence goes in the PR description.** Commands run, results, measurements, review outcomes, failed attempts and remaining checks belong in the PR description, not in committed files.
 - **No new documents** unless the owner asks for one, or a new interface, setup step or user-facing workflow has no place in an existing document. Never commit plans, summaries, handoffs, reports or per-PR notes.
 - **Edit in place.** When behavior changes, update the existing document that describes it and replace the outdated text. Do not append dated "update", "implementation update" or "follow-up" paragraphs, and do not add per-card or per-PR sections to `concept.md`, `TESTING.md` or other documents.
+- **`concept.md` describes features, not work.** Change it only when a feature is added or an existing feature's behavior changes, and then only by adding or editing that feature's short description in place: a few present-tense sentences, with no dates, task IDs, decisions or validation status. A bug fix, refactoring, test or internal change does not touch it.
 - **Owner decisions** get one short entry at the end of [DECISION-LOG.md](../DECISION-LOG.md), only when the owner decides something; architect or coordinator design decisions go in the PR description.
 - **Validation records** in `docs/validation/` are only for real-game or real-environment evidence that must outlive the PR, such as game versions, display modes, owner observations and checks still pending. Keep them short, one file per card.
 - **Required updates stay:** the regression registry rows that [TESTING.md](../TESTING.md) section 9 requires, the protocol and storage contract documents when a contract changes, and the user guide when user-visible behavior changes.

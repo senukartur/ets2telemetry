@@ -1,6 +1,7 @@
 // ET-015c PR-3 (G2-G6): the pure recording status rules, the strict parser main applies to every report, the saturating
-// loss totals and the coalescing publisher. Expected statuses are written by hand from G3's ordered rules (concept.md)
-// and docs/telemetry-service-v1.md#recording-status-et-015c; none is read back from the code under test.
+// loss totals and the coalescing publisher. Expected statuses are written by hand from G3's ordered rules
+// (DESIGN-DECISIONS.md) and docs/telemetry-service-v1.md#recording-status-et-015c; none is read back from the code
+// under test.
 import {afterEach, beforeEach, describe, expect, it, vi} from 'vitest';
 import type {RecordingHealth, RecordingLosses} from '../../packages/contracts/src';
 import {

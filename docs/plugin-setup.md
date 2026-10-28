@@ -1,6 +1,6 @@
 # Game plugin setup (ET-017)
 
-ET-017 implements the [silent plugin installation](../concept.md#silent-plugin-installation--october-12-2026) decided by the owner on October 12, 2026. The application finds ETS2 and ATS through the Steam libraries or a folder the driver chooses. It installs, updates or removes only its own `ets2telemetry-plugin.dll` in each game's `bin\win_x64\plugins` folder, and only while the game is closed. The coordinator adopted the architect's decisions P1–P20 for ET-017 on October 17, 2026.
+ET-017 implements the [silent plugin installation](../DESIGN-DECISIONS.md#silent-plugin-installation--october-12-2026) decided by the owner on October 12, 2026. The application finds ETS2 and ATS through the Steam libraries or a folder the driver chooses. It installs, updates or removes only its own `ets2telemetry-plugin.dll` in each game's `bin\win_x64\plugins` folder, and only while the game is closed. The coordinator adopted the architect's decisions P1–P20 for ET-017 on October 17, 2026.
 
 ET-017 is delivered as six PRs:
 

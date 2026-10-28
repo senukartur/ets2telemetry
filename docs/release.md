@@ -1,6 +1,6 @@
 # Releases
 
-ET-018 PR-6 (October 18, 2026) records what a release build is made of and whether it is signed. It implements plan decisions U14 to U16 and the owner's decisions O1 and O2 of October 18, 2026 ([concept.md](../concept.md#et-018-authorization--october-18-2026)). **Nothing has been published.** This document describes the channel and the checks; it authorizes no publication, certificate, paid service or auto-update.
+ET-018 PR-6 (October 18, 2026) records what a release build is made of and whether it is signed. It implements plan decisions U14 to U16 and the owner's decisions O1 and O2 of October 18, 2026 ([DESIGN-DECISIONS.md](../DESIGN-DECISIONS.md#et-018-authorization--october-18-2026)). **Nothing has been published.** This document describes the channel and the checks; it authorizes no publication, certificate, paid service or auto-update.
 
 ## Channel (O2)
 
@@ -11,7 +11,7 @@ ET-018 PR-6 (October 18, 2026) records what a release build is made of and wheth
 
 ## Update feed (ET-055)
 
-ET-055 PR-6 (October 28, 2026) implements the client side of decisions UP3 to UP7 ([concept.md](../concept.md#et-055-in-app-updates-and-staging-channel--october-28-2026)). The [release workflow](#release-workflow-et-055) of PR-9 writes and publishes these files; **nothing has been published**.
+ET-055 PR-6 (October 28, 2026) implements the client side of decisions UP3 to UP7 ([DESIGN-DECISIONS.md](../DESIGN-DECISIONS.md#et-055-in-app-updates-and-staging-channel--october-28-2026)). The [release workflow](#release-workflow-et-055) of PR-9 writes and publishes these files; **nothing has been published**.
 
 **Where each channel looks.** A build only ever reads its own channel's feed, fixed when it is built:
 
@@ -152,7 +152,7 @@ Windows CI runs both on pushes to `main` and on dispatch, after the maker, and u
 
 ## Release workflow (ET-055)
 
-ET-055 PR-9 (October 28, 2026) adds `.github/workflows/release.yml` and the scripts in `scripts/release/`. It implements UP4, UP5, UP13 and UP16 ([concept.md](../concept.md#et-055-in-app-updates-and-staging-channel--october-28-2026)). **The workflow has never been dispatched and nothing has been published.** The two environments, the staging secret and both public keys are the owner's one-time setup in step 0 below. On October 28, 2026 both public keys were added, and the owner created both environments and the staging secret. At that time `release-production` had the owner as required reviewer and a `main`-only deployment rule, while `release-staging` had its secret but no protection rule. The release workflow does not check those rules itself, so no staging release may be dispatched until `release-staging` has both (step 0, item 4); check them with `gh api repos/senukartur/ets2telemetry/environments/release-staging`. A released build without a channel's key would stop the workflow at its manifest step with `No compiled <channel> update key in the released build`.
+ET-055 PR-9 (October 28, 2026) adds `.github/workflows/release.yml` and the scripts in `scripts/release/`. It implements UP4, UP5, UP13 and UP16 ([DESIGN-DECISIONS.md](../DESIGN-DECISIONS.md#et-055-in-app-updates-and-staging-channel--october-28-2026)). **The workflow has never been dispatched and nothing has been published.** The two environments, the staging secret and both public keys are the owner's one-time setup in step 0 below. On October 28, 2026 both public keys were added, and the owner created both environments and the staging secret. At that time `release-production` had the owner as required reviewer and a `main`-only deployment rule, while `release-staging` had its secret but no protection rule. The release workflow does not check those rules itself, so no staging release may be dispatched until `release-staging` has both (step 0, item 4); check them with `gh api repos/senukartur/ets2telemetry/environments/release-staging`. A released build without a channel's key would stop the workflow at its manifest step with `No compiled <channel> update key in the released build`.
 
 **Dispatch only.** The workflow never runs on pushes or pull requests. A dispatch must be made on `main` and takes:
 

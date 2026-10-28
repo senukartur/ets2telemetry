@@ -1,4 +1,5 @@
-// The build channel's installation identities (ET-055 UP12; concept.md, "ET-055 in-app updates and staging channel").
+// The build channel's installation identities (ET-055 UP12; DESIGN-DECISIONS.md, "ET-055 in-app updates and staging
+// channel").
 //
 // A build belongs to one channel, `production` or `staging`. Every name two installations would otherwise share (the
 // Squirrel id and install root, the executable, userData, the shortcut AUMID and autostart value, the data root, the

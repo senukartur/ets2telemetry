@@ -1,6 +1,6 @@
 // A read-only view of one game's trip state for later journal and dashboard code (ET-014). Money stays exact raw
 // digits summed per currency and SDK type, never converted and never netted into one value; expected income is not
-// revenue, and planned distance is not observed or delivered distance (concept.md §7).
+// revenue, and planned distance is not observed or delivered distance (DESIGN-DECISIONS.md §7).
 import type {Available, Money} from '../../../contracts/src/protocol-v1';
 import {moneyReading} from '../normalize-v1';
 import {fromAvailable, mapReading, missing, valueOf, type Distance, type MoneyCurrency, type MoneyKind, type MoneyValue, type Reading} from '../readings';

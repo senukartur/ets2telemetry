@@ -243,7 +243,7 @@ function onJobConfigured(c: Carrier, record: Extract<EventRecord, {type: 'job.co
     // The same job while active: a re-send, such as the cargo-market pickup that changes only cargoLoaded (O3).
     if (trip.phase === 'active') { trip.cargoLoaded = loaded; return; }
     // After a clear, a re-send continues the trip only when every attribute, cargoLoaded included, is identical
-    // (concept.md, October 14, 2026); a reload check then decides (T8).
+    // (DESIGN-DECISIONS.md, October 14, 2026); a reload check then decides (T8).
     if (canonicalJson(loaded) === canonicalJson(trip.cargoLoaded)) {
       if (trip.phase === 'awaiting-outcome') { trip.phase = 'reload-check'; trip.reloadEventSeq = c.eventSeq; }
       return;
@@ -277,8 +277,8 @@ function onOutcome(c: Carrier, record: Extract<EventRecord, {type: 'job.delivere
 }
 function onGameplay(c: Carrier, record: Extract<EventRecord, {type: 'player.fined' | 'player.tollgate.paid' | 'player.use.ferry' | 'player.use.train'}>) {
   const trip = c.slot.trip;
-  // Free driving only outside any active job (concept.md, October 13, 2026): a job that is known or likely active but
-  // untracked makes the event ambiguous.
+  // Free driving only outside any active job (DESIGN-DECISIONS.md, October 13, 2026): a job that is known or likely
+  // active but untracked makes the event ambiguous.
   if (trip === null) { attribute(c, null, untrackedFor(c) !== null ? 'ambiguous' : 'free-driving'); return; }
   if (trip.phase === 'awaiting-outcome') { attribute(c, null, 'free-driving'); return; }
   if (trip.phase === 'reload-check') { resolveReload(c, 'other'); attribute(c, null, 'ambiguous'); return; }
@@ -393,7 +393,7 @@ function stepEvent(state: TripState, message: EventMessage, coveredThrough: Uint
     case 'source.gameMode': {
       session.gameMode = modeOf(record);
       const trip = c.slot.trip;
-      // concept.md, October 13, 2026: a contradicting mode is kept as evidence and marks the trip ambiguous.
+      // DESIGN-DECISIONS.md, October 13, 2026: a contradicting mode is kept as evidence and marks the trip ambiguous.
       if (trip !== null && !trip.gameModeAmbiguous && !sameMode(trip.gameMode, session.gameMode)) {
         c.own.push({kind: 'trip.update', tripUuid: trip.tripUuid, set: {gameModeAmbiguous: true}}); trip.gameModeAmbiguous = true;
       }

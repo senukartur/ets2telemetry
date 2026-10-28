@@ -64,7 +64,7 @@ function boundary(prev: StepSample, next: StepSample): StepDiscontinuity | undef
   if (a.game !== b.game || a.origin !== b.origin || a.pluginSessionId !== b.pluginSessionId || a.processInstanceId !== b.processInstanceId ||
     prev.capture.clockId !== next.capture.clockId) return 'source-changed';
   if (truckKey(prev.state) !== truckKey(next.state)) return 'truck-changed';
-  // The adapter rotates the game clock on a timer restart or a save load (concept.md, October 14, 2026).
+  // The adapter rotates the game clock on a timer restart or a save load (DESIGN-DECISIONS.md, October 14, 2026).
   if (prev.state.gameTime.clockId !== next.state.gameTime.clockId) return 'game-clock-rotated';
   return undefined;
 }

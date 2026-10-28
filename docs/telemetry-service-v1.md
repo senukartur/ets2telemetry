@@ -1,6 +1,6 @@
 # Protocol v1 ingestion in the telemetry service
 
-ET-006b connects the Electron telemetry service to [protocol v1](protocol/v1.md): it validates each v1 connection, keeps service-internal live state, measures the source clock and, when a durable sink is configured, commits events and gap markers before it acknowledges them. Decisions E1–E14 are recorded in [concept.md](../concept.md#et-006b-authorization--october-15-2026); they are coordinator decisions under the owner's delegation of October 15, 2026 and were not individually reviewed by the owner.
+ET-006b connects the Electron telemetry service to [protocol v1](protocol/v1.md): it validates each v1 connection, keeps service-internal live state, measures the source clock and, when a durable sink is configured, commits events and gap markers before it acknowledges them. Decisions E1–E14 are recorded in [DESIGN-DECISIONS.md](../DESIGN-DECISIONS.md#et-006b-authorization--october-15-2026); they are coordinator decisions under the owner's delegation of October 15, 2026 and were not individually reviewed by the owner.
 
 Status (October 15, 2026): PR-1 adds the ingestion, the ACK pipeline and the durable sink in `apps/desktop/src` with their tests. PR-2 adds the v1 mode of the native broker. PR-3 connects [telemetry-service.ts](../apps/desktop/src/telemetry-service.ts) to the plugin's v1 endpoint beside v0, **live-only and without a sink**: the service sends a v1 hello with `durableEvents: false`, writes no history and sends no ACK, and the dashboard and overlay stay on v0 ([service wiring](#service-wiring)). Recording and trip effects stay with ET-015a and ET-014. See [ET-006b validation](validation/et-006b.md) for the checks performed.
 
@@ -149,7 +149,7 @@ A job accepted before the recorder attached opens a partial trip from the connec
 
 ## One-second samples (ET-015b)
 
-ET-015b PR-3 records one-second history samples through the trip recorder, under decisions H2, H5, H7–H13, H15 and H17 ([concept.md](../concept.md#et-015b-authorization--october-16-2026)). The pure sampler is [history-samples.ts](../packages/telemetry-core/src/history-samples.ts) ([trips](trips.md#one-second-sampler-et-015b)); storage's one-row-per-second guard is the `uniqueSeconds` option of `appendSamples` ([storage](storage.md#storage-api)). DurableDelivery stays the only scheduler (R2): the recorder only holds the rows.
+ET-015b PR-3 records one-second history samples through the trip recorder, under decisions H2, H5, H7–H13, H15 and H17 ([DESIGN-DECISIONS.md](../DESIGN-DECISIONS.md#et-015b-authorization--october-16-2026)). The pure sampler is [history-samples.ts](../packages/telemetry-core/src/history-samples.ts) ([trips](trips.md#one-second-sampler-et-015b)); storage's one-row-per-second guard is the `uniqueSeconds` option of `appendSamples` ([storage](storage.md#storage-api)). DurableDelivery stays the only scheduler (R2): the recorder only holds the rows.
 
 ```text
 reading at the FIFO head -> TripRecorderSink.observe: step the reducer and adopt the reading

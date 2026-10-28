@@ -54,7 +54,8 @@ The scaffold pins Node/npm and application dependencies. Electron main supervise
 
 ## Documentation
 
-- [Project concept and requirements](concept.md): product requirements, architecture, recording rules, implementation sequence, acceptance criteria, and primary research sources.
+- [Product concept](concept.md): the product idea, its principles and how each feature works.
+- [Design decisions](DESIGN-DECISIONS.md): the earlier full concept and the dated design decisions of each card.
 - [Agent instructions](AGENTS.md): repository-wide working rules and the current handoff.
 - [Testing and regression strategy](TESTING.md): scaffold checks, permanent scenarios, CI/merge policy, and pending real-game acceptance evidence.
 - [Windows setup](docs/setup.md): pinned tools, build/test/package entrypoints, process boundaries, SDK acquisition, and remaining checks.
@@ -62,7 +63,7 @@ The scaffold pins Node/npm and application dependencies. Electron main supervise
 - [Implementation coordinator](COORDINATOR.md): Trello execution, subagent assignments, worktree ownership, independent review, and recovery handoffs.
 - [Coordinator launch prompt](docs/prompts/coordinator-start.md): copy into a separate local Codex chat to coordinate the prototype and prepare PRs for owner review.
 
-Read the applicable sections of `concept.md` before planning or implementing changes. Internal documentation and explanatory code comments must be written in English. Temporary Trello planning manifests stay local and must not be committed.
+Read `concept.md` before planning or implementing changes. Internal documentation and explanatory code comments must be written in English. Temporary Trello planning manifests stay local and must not be committed.
 
 ## Git workflow
 

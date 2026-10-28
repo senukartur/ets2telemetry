@@ -1,6 +1,6 @@
 # Application lifecycle (ET-011a)
 
-ET-011a makes ETS2Telemetry a notification-area (tray) application. Closing the main window no longer stops anything; only an explicit exit does. This page describes the desktop process lifecycle. The decisions behind it are C1–C17 in [concept.md](../concept.md#et-011-authorization--october-15-2026). Persistent settings and unit profiles are ET-011b; see [settings](settings.md).
+ET-011a makes ETS2Telemetry a notification-area (tray) application. Closing the main window no longer stops anything; only an explicit exit does. This page describes the desktop process lifecycle. The decisions behind it are C1–C17 in [DESIGN-DECISIONS.md](../DESIGN-DECISIONS.md#et-011-authorization--october-15-2026). Persistent settings and unit profiles are ET-011b; see [settings](settings.md).
 
 For readers new to desktop development: the *main process* is Electron's Node.js process that owns windows, the tray icon and the telemetry service. A *renderer* is the sandboxed Chromium page of a window; it reaches main only through the narrow preload bridge. The *notification area* is the icon area at the right of the Windows taskbar, including its overflow flyout.
 
@@ -132,7 +132,7 @@ After `started`, main runs the exit in this order:
 
 ## In-app updates (ET-055)
 
-ET-055 PR-6 (October 28, 2026) adds the update controller in main (`apps/desktop/src/updater/`), under decisions UP2, UP3 and UP6 to UP9 ([concept.md](../concept.md#et-055-in-app-updates-and-staging-channel--october-28-2026)). ET-055 PR-7 adds its user interface, described under "What the user sees" below. The feed and the signed manifest are in [releases](release.md#update-feed-et-055).
+ET-055 PR-6 (October 28, 2026) adds the update controller in main (`apps/desktop/src/updater/`), under decisions UP2, UP3 and UP6 to UP9 ([DESIGN-DECISIONS.md](../DESIGN-DECISIONS.md#et-055-in-app-updates-and-staging-channel--october-28-2026)). ET-055 PR-7 adds its user interface, described under "What the user sees" below. The feed and the signed manifest are in [releases](release.md#update-feed-et-055).
 
 **When it checks.** Only an installed Squirrel build checks: an unpackaged run, a portable package (no Squirrel install layout, [uninstall roots](uninstall.md)) and an isolated launch (`ETS2TELEMETRY_PROFILE_DIR`, `ETS2TELEMETRY_DIAGNOSTIC_DIR`, `ETS2TELEMETRY_LIVE_SMOKE` or `ETS2TELEMETRY_SOURCE_KIND`, as in the [plugin setup mode gate](plugin-setup.md)) report `unsupported` and never fetch. The first check runs 15 s after the first readiness, then every 6 h, on an unreferenced timer; a manual check (`checkForUpdates()`) runs at once unless a check or an update runs or a check started less than 10 s ago. A check that fails stays silent: the view stays or becomes `idle` and only `lastCheck` says `failed` with its code. A supported start removes everything left in `<data root>\updates`.
 

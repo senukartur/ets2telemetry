@@ -133,7 +133,7 @@ ET-010b adds the **Live telemetry** card ([live-dashboard.tsx](../apps/desktop/s
 - **Strings**: `LIVE_FIELD_TEXT`, `VIEW_REASON_TEXT`, `FIELD_NOTE_TEXT` and `LIVE_SECTION_TEXT` in [strings.ts](../apps/desktop/src/strings.ts) are exhaustive records over telemetry-core's ids, so a new id does not compile without a text. The consumption label is "SDK average consumption" with the note "SDK mean, not a trip average"; no label or note calls a value a trip value.
 - **Units** use the same rule as the speed and fuel lines: the displayed game's saved profile ([settings](settings.md)), or its ET-000 default before the settings arrive, and metric without a game. The ATS "mostly static" note follows the observation's source game instead. Under "Select a game" with an ATS source the card therefore shows metric units with the ATS note; this inconsistency is accepted and documented (decision B5).
 
-Decisions B1–B6 are coordinator decisions under the owner's delegation of October 15, 2026 ([concept.md](../concept.md#et-010-authorization--october-15-2026)). Final styling and localization are not part of ET-010b.
+Decisions B1–B6 are coordinator decisions under the owner's delegation of October 15, 2026 ([DESIGN-DECISIONS.md](../DESIGN-DECISIONS.md#et-010-authorization--october-15-2026)). Final styling and localization are not part of ET-010b.
 
 ## Protocol v1 rows (ET-010c)
 

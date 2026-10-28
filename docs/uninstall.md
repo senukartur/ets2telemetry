@@ -1,6 +1,6 @@
 # Uninstall cleanup engine
 
-ET-018 PR-2 (October 18, 2026) adds the engine that removes this application's own plugin files and local data on uninstall, in `apps/desktop/src/uninstall/`. It implements the owner's [uninstall rule of October 16, 2026](../concept.md#uninstall-removes-local-data--october-16-2026) and the ET-017 [contract with ET-018](plugin-setup.md#install-registry). Since ET-018 PR-3 the Squirrel uninstall hook runs it ([below](#squirrel-uninstall-hook)); PR-4 adds the [in-app uninstall](#in-app-uninstall), and PR-5 the [deferred cleanup at the next sign-in](#deferred-cleanup-at-the-next-sign-in). The [user guide](user-guide.md#uninstalling) explains both paths to users. Unit tests run it only on fake installs under guarded temporary folders.
+ET-018 PR-2 (October 18, 2026) adds the engine that removes this application's own plugin files and local data on uninstall, in `apps/desktop/src/uninstall/`. It implements the owner's [uninstall rule of October 16, 2026](../DESIGN-DECISIONS.md#uninstall-removes-local-data--october-16-2026) and the ET-017 [contract with ET-018](plugin-setup.md#install-registry). Since ET-018 PR-3 the Squirrel uninstall hook runs it ([below](#squirrel-uninstall-hook)); PR-4 adds the [in-app uninstall](#in-app-uninstall), and PR-5 the [deferred cleanup at the next sign-in](#deferred-cleanup-at-the-next-sign-in). The [user guide](user-guide.md#uninstalling) explains both paths to users. Unit tests run it only on fake installs under guarded temporary folders.
 
 | Module | Role |
 | --- | --- |

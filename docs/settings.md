@@ -2,7 +2,7 @@
 
 ET-049 UI follow-up, October 25, 2026: Background opacity shows one percentage to the right of the slider. It follows the draft immediately during a gesture, then the committed value after save or refusal recovery. The separate Saved label from the initial implementation is removed. Writes and overlay publication still occur only on commit through the existing durable-save path.
 
-ET-011b stores the user's settings in a small JSON file and uses them to choose the display units of each game. ET-012a adds the overlay layout and the overlay sections in format v2. ET-012b adds the saved position and scale of every overlay layout in format v3. The decisions behind the file are C10–C12 in [concept.md](../concept.md#et-011-authorization--october-15-2026) and, for the overlay settings, L2, L3 and L13 in [concept.md](../concept.md#et-012a-authorization--october-15-2026) and M2, M3, M10, M11 and M12 in [concept.md](../concept.md#et-012b-authorization--october-15-2026); numeric conversion follows ET-010 decision N2 (telemetry-core is the single numeric source). ET-029 adds the UI language (`language: 'en' | 'ru'`) in format v4, letting the user switch desktop app, tray and overlay live without restart. ET-031 adds Start with Windows (`autostart: boolean`) in format v5, allowing the application to launch minimized to the notification area upon user sign-in.
+ET-011b stores the user's settings in a small JSON file and uses them to choose the display units of each game. ET-012a adds the overlay layout and the overlay sections in format v2. ET-012b adds the saved position and scale of every overlay layout in format v3. The decisions behind the file are C10–C12 in [DESIGN-DECISIONS.md](../DESIGN-DECISIONS.md#et-011-authorization--october-15-2026) and, for the overlay settings, L2, L3 and L13 in [DESIGN-DECISIONS.md](../DESIGN-DECISIONS.md#et-012a-authorization--october-15-2026) and M2, M3, M10, M11 and M12 in [DESIGN-DECISIONS.md](../DESIGN-DECISIONS.md#et-012b-authorization--october-15-2026); numeric conversion follows ET-010 decision N2 (telemetry-core is the single numeric source). ET-029 adds the UI language (`language: 'en' | 'ru'`) in format v4, letting the user switch desktop app, tray and overlay live without restart. ET-031 adds Start with Windows (`autostart: boolean`) in format v5, allowing the application to launch minimized to the notification area upon user sign-in.
 
 ET-012e added saved overlay visibility in historical format v6, defaulting to enabled. ET-049 makes v7 the current format by adding background opacity. Accepted ET-031 v5 remains the autostart format; earlier ET-012 visibility-v5 records describe an unmerged prototype schema, not a second historical v5 contract.
 
@@ -10,7 +10,7 @@ ET-045e update, October 24, 2026 (decision Z5, owner decision D1 option b; ET-04
 
 ## Current format v11: the mandatory-break overlay section (ET-052)
 
-ET-052 update, October 26, 2026 (decisions MB8 and MB11 in [concept.md](../concept.md#et-052-mandatory-break-and-protocol-v1-minor-2--october-26-2026), owner decision D2; ET-050b took v10 first): the current format is **v11**. It is the v10 document with `"version": 11` and one more overlay section key, `overlay.sections.mandatory-break`, written **last** among the sections, after `game-time`:
+ET-052 update, October 26, 2026 (decisions MB8 and MB11 in [DESIGN-DECISIONS.md](../DESIGN-DECISIONS.md#et-052-mandatory-break-and-protocol-v1-minor-2--october-26-2026), owner decision D2; ET-050b took v10 first): the current format is **v11**. It is the v10 document with `"version": 11` and one more overlay section key, `overlay.sections.mandatory-break`, written **last** among the sections, after `game-time`:
 
 ```json
       "expected-income": true,
@@ -33,7 +33,7 @@ The v10, v9, v8, v7 and v6 sections below keep their wording; read "current" the
 
 ## Format v10: the crawler gear mode (ET-050b)
 
-ET-050b update, October 26, 2026 (owner option B, [concept.md](../concept.md#ets2-crawler-gear-mode--october-26-2026)): the format became **v10** (ET-052 then made v11 current). It is the v9 document below with `"version": 10`; no field is added, renamed or moved. What v10 adds is a third `gearDisplay` value, `crawler`: gear 1 is the displayed game's crawler (`C` in ETS2, `L` in ATS) and every higher gear g is shown as g − 1 (C, 1, 2, 3…, as on the ETS2 Scania Opticruise G38CMR 13+1 dashboard). Neutral stays N and reverse R1, R2…, and the mode uses no gearbox layout.
+ET-050b update, October 26, 2026 (owner option B, [DESIGN-DECISIONS.md](../DESIGN-DECISIONS.md#ets2-crawler-gear-mode--october-26-2026)): the format became **v10** (ET-052 then made v11 current). It is the v9 document below with `"version": 10`; no field is added, renamed or moved. What v10 adds is a third `gearDisplay` value, `crawler`: gear 1 is the displayed game's crawler (`C` in ETS2, `L` in ATS) and every higher gear g is shown as g − 1 (C, 1, 2, 3…, as on the ETS2 Scania Opticruise G38CMR 13+1 dashboard). Neutral stays N and reverse R1, R2…, and the mode uses no gearbox layout.
 
 - **Migration v9 to v10.** An identity step that changes only the version; every v9 mode is kept (`migratedFrom: 9`). A v1 to v9 file is migrated in memory and stays unchanged on disk until the first save of any setting writes the complete v10 document.
 - **Newer and older builds.** A version of 11 or later is newer-version. A build before this change reads v10 as newer-version (read-only defaults) and refuses to save, so it can never replace `crawler` with `automatic` by rewriting the file.
@@ -45,7 +45,7 @@ The v9 section below keeps its wording; read "current" there as the field layout
 
 ## Format v9: gear display (ET-050)
 
-ET-050 update, October 25, 2026 (decisions GD1–GD8 in [concept.md](../concept.md#et-050-gear-display-mode--october-25-2026)): the current format is **v9**. It is the v8 document with `"version": 9` and one new block, `gearDisplay`, written right after `units`:
+ET-050 update, October 25, 2026 (decisions GD1–GD8 in [DESIGN-DECISIONS.md](../DESIGN-DECISIONS.md#et-050-gear-display-mode--october-25-2026)): the current format is **v9**. It is the v8 document with `"version": 9` and one new block, `gearDisplay`, written right after `units`:
 
 ```json
   "units": {

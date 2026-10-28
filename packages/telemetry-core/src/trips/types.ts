@@ -131,10 +131,11 @@ export interface SessionState {
   /**
    * A job that is known or likely active but that no trip tracks: a checkpoint job seen while idle until its late-attach
    * trip opens (J9), or the job of a trip a gap closed before its clear or outcome. Gameplay events meanwhile are
-   * ambiguous, never free driving (concept.md, October 13, 2026). Cleared by `job.cleared`, an outcome or a new trip; a
-   * later checkpoint while idle replaces or clears it, and a new plugin session starts with none. A checkpoint job
-   * applies only from `attachedFromEventSeq` on, so a replayed clear or outcome below it does not end it, unless its
-   * configuration revision proves that the checkpoint's state lagged the replay (docs/trips.md, stale checkpoints).
+   * ambiguous, never free driving (DESIGN-DECISIONS.md, October 13, 2026). Cleared by `job.cleared`, an outcome or a
+   * new trip; a later checkpoint while idle replaces or clears it, and a new plugin session starts with none. A
+   * checkpoint job applies only from `attachedFromEventSeq` on, so a replayed clear or outcome below it does not end
+   * it, unless its configuration revision proves that the checkpoint's state lagged the replay (docs/trips.md, stale
+   * checkpoints).
    */
   untrackedJob: {key: string; source: 'checkpoint' | 'gap'} | null;
   /** The current connection's late-attach trip still to open (J9); null when none is pending. */
