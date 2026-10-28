@@ -1,7 +1,6 @@
 import {spawnSync} from 'node:child_process';
 import {readFileSync} from 'node:fs';
 import path from 'node:path';
-import {pathToFileURL} from 'node:url';
 import {afterEach, describe, expect, it, vi} from 'vitest';
 import {ACTIVE_CHANNEL, CHANNEL, CHANNEL_IDENTITIES, channelCopy, channelCopyTable, pluginTempFilePattern, RELEASE_CHANNELS, setupFileName, TRANSPORT_DIRECTORY,
   type ChannelIdentity} from '../../apps/desktop/src/channel';
@@ -22,6 +21,7 @@ import {HISTORY_DATA_ROOT_NAMES, isHistoryFile} from '../../packages/storage/src
 import {BUILD_IDENTITIES} from '../../scripts/build-channel.mjs';
 import {pluginBundleNames} from '../../scripts/plugin-bundle.mjs';
 import {stampExecutorChannel} from '../../scripts/uninstall-executor.mjs';
+import {forgeConfig, squirrelConfig} from '../shared/forge-config';
 
 // ET-055 UP12 (REG-015, REG-017): the installation identities of both build channels. Production values are pinned to the
 // literals every build before ET-055 used, so routing them through the channel table changes no file name, path, pipe,
@@ -148,12 +148,9 @@ describe('the routed identities of this build', () => {
     expect(v1BrokerConfiguration({executable: 'broker.exe', discoveryDirectory: v0})?.discoveryDirectory).toBe(path.join(local, 'ETS2Telemetry', 'transport', 'v1'));
   });
 
-  it('gives the packaging configuration of a production build the production values', async () => {
-    const forge = (await import(pathToFileURL(path.join(checkout, 'forge.config.cjs')).href) as {default: {
-      packagerConfig: {executableName: string; appBundleId: string; win32metadata: Record<string, string>};
-      makers: {name: string; config: Record<string, string>}[];
-    }}).default;
-    const squirrel = forge.makers.find(maker => maker.name === '@electron-forge/maker-squirrel')?.config ?? {};
+  it('gives the packaging configuration of a production build the production values', () => {
+    const forge = forgeConfig('production');
+    const squirrel = squirrelConfig(forge);
     const {productName, version} = JSON.parse(readFileSync(path.join(checkout, 'package.json'), 'utf8')) as {productName: string; version: string};
     expect({squirrelId: squirrel.name, executableName: forge.packagerConfig.executableName, appBundleId: forge.packagerConfig.appBundleId, productName,
       displayName: forge.packagerConfig.win32metadata.ProductName, title: squirrel.title, setupExe: squirrel.setupExe})
@@ -166,24 +163,33 @@ describe('the routed identities of this build', () => {
   });
 
   it('gives the packaging configuration of a staging build the staging values', () => {
-    // forge.config.cjs resolves the channel when Node loads it, so a separate Node process loads it with the variables a
-    // staging build sets.
-    const script = "const c = require('./forge.config.cjs'); const s = c.makers.find(m => m.name === '@electron-forge/maker-squirrel').config;" +
-      " console.log(JSON.stringify({name: c.packagerConfig.name, appVersion: c.packagerConfig.appVersion, executableName: c.packagerConfig.executableName," +
-      " appBundleId: c.packagerConfig.appBundleId, win32metadata: c.packagerConfig.win32metadata, squirrel: {name: s.name, title: s.title, setupExe: s.setupExe}}));";
-    const run = (env: Record<string, string>) => spawnSync(process.execPath, ['-e', script], {cwd: checkout, encoding: 'utf8', timeout: 30000,
-      env: {...process.env, ETS2TELEMETRY_BUILD_CHANNEL: undefined, ETS2TELEMETRY_STAGING_RUN_NUMBER: undefined, ...env}});
+    // forge.config.cjs resolves the channel when Node loads it, so a separate Node process loads it with the variables of
+    // each build (tests/shared/forge-config.ts).
+    const pick = (forge: ReturnType<typeof forgeConfig>) => ({name: forge.packagerConfig.name, appVersion: forge.packagerConfig.appVersion,
+      executableName: forge.packagerConfig.executableName, appBundleId: forge.packagerConfig.appBundleId, win32metadata: forge.packagerConfig.win32metadata,
+      squirrel: {name: squirrelConfig(forge).name, title: squirrelConfig(forge).title, setupExe: squirrelConfig(forge).setupExe}});
     const {version} = JSON.parse(readFileSync(path.join(checkout, 'package.json'), 'utf8')) as {version: string};
-    const staging = run({ETS2TELEMETRY_BUILD_CHANNEL: 'staging', ETS2TELEMETRY_STAGING_RUN_NUMBER: '42'});
-    expect(staging.status, staging.stderr).toBe(0);
-    expect(JSON.parse(staging.stdout)).toEqual({name: STAGING.productName, appVersion: `${version}-stg.000042`, executableName: STAGING.executableName,
-      appBundleId: STAGING.appBundleId, win32metadata: {CompanyName: 'Artur Sianiuk', FileDescription: STAGING.displayName, ProductName: STAGING.displayName},
+    expect(pick(forgeConfig('staging', {ETS2TELEMETRY_STAGING_RUN_NUMBER: '42'}))).toEqual({name: STAGING.productName, appVersion: `${version}-stg.000042`,
+      executableName: STAGING.executableName, appBundleId: STAGING.appBundleId,
+      win32metadata: {CompanyName: 'Artur Sianiuk', FileDescription: STAGING.displayName, ProductName: STAGING.displayName},
       squirrel: {name: STAGING.squirrelId, title: STAGING.displayName, setupExe: `YukonUnionTelemetry-Staging-Setup-${version}-stg.000042.exe`}});
-    const production = run({ETS2TELEMETRY_BUILD_CHANNEL: 'production'});
-    expect(production.status, production.stderr).toBe(0);
-    expect(JSON.parse(production.stdout)).toEqual({name: PRODUCTION.productName, appVersion: version, executableName: PRODUCTION.executableName,
+    expect(pick(forgeConfig('production'))).toEqual({name: PRODUCTION.productName, appVersion: version, executableName: PRODUCTION.executableName,
       appBundleId: PRODUCTION.appBundleId, win32metadata: {CompanyName: 'Artur Sianiuk', FileDescription: PRODUCTION.displayName, ProductName: PRODUCTION.displayName},
       squirrel: {name: PRODUCTION.squirrelId, title: PRODUCTION.displayName, setupExe: `YukonUnionTelemetry-Setup-${version}.exe`}});
+    // ET-055 PR-4 (UP13): without the variables, the configuration is the staging one; production outside GitHub Actions
+    // and an unknown channel stop the load.
+    const run = (env: Record<string, string>) => {
+      const base: Record<string, string | undefined> = {...process.env};
+      for (const name of ['ETS2TELEMETRY_BUILD_CHANNEL', 'ETS2TELEMETRY_OWNER_PRODUCTION_BUILD', 'ETS2TELEMETRY_STAGING_RUN_NUMBER', 'GITHUB_ACTIONS']) delete base[name];
+      return spawnSync(process.execPath, ['-e', "process.stdout.write(require('./forge.config.cjs').packagerConfig.executableName)"],
+        {cwd: checkout, encoding: 'utf8', timeout: 30000, env: {...base, ...env}});
+    };
+    const unset = run({});
+    expect(unset.status, unset.stderr).toBe(0);
+    expect(unset.stdout).toBe(STAGING.executableName);
+    const local = run({ETS2TELEMETRY_BUILD_CHANNEL: 'production'});
+    expect(local.status).not.toBe(0);
+    expect(local.stderr).toMatch(/A production build runs only in GitHub Actions or with the owner-only ETS2TELEMETRY_OWNER_PRODUCTION_BUILD=1/);
     const invalid = run({ETS2TELEMETRY_BUILD_CHANNEL: 'beta'});
     expect(invalid.status).not.toBe(0);
     expect(invalid.stderr).toMatch(/must be exactly production or staging/);
@@ -193,7 +199,8 @@ describe('the routed identities of this build', () => {
 describe('the mirrored channel tables', () => {
   const pick = (identity: ChannelIdentity) => ({channel: identity.channel, squirrelId: identity.squirrelId, executableName: identity.executableName,
     productName: identity.productName, appBundleId: identity.appBundleId, displayName: identity.displayName, setupFileTemplate: identity.setupFileTemplate,
-    pluginFileName: identity.pluginFileName, releasedPluginsFile: identity.releasedPluginsFile});
+    pluginFileName: identity.pluginFileName, releasedPluginsFile: identity.releasedPluginsFile, dataRootName: identity.dataRootName,
+    pipePrefix: identity.pipePrefix, runOnceValue: identity.runOnceValue, receiptPrefix: identity.receiptPrefix, legacyShortcutNames: identity.legacyShortcutNames});
 
   it('scripts/build-channel.mjs names what channel.ts names', () => {
     for (const channel of RELEASE_CHANNELS) expect(BUILD_IDENTITIES[channel]).toEqual(pick(CHANNEL_IDENTITIES[channel]));

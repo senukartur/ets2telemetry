@@ -1,6 +1,5 @@
 import {readdirSync, readFileSync} from 'node:fs';
 import path from 'node:path';
-import {pathToFileURL} from 'node:url';
 import {afterEach, describe, expect, it, vi} from 'vitest';
 import {EN_DICTIONARY} from '../../apps/desktop/src/i18n/en';
 import {RU_DICTIONARY} from '../../apps/desktop/src/i18n/ru';
@@ -13,6 +12,7 @@ import {deferralReadme} from '../../apps/desktop/src/uninstall/deferral';
 import {DATA_ROOT_NAME, PRODUCT_ROOT_NAME} from '../../apps/desktop/src/uninstall/roots';
 import {COMPANY_NAME, PRODUCT_NAME, PUBLISHER} from '../../scripts/release-identity.mjs';
 import {ROAMING_ROOT} from '../../scripts/installer/installer-guard.mjs';
+import {forgeConfig} from '../shared/forge-config';
 
 // ET-045h (owner decision D2): the product's user-facing name is "Yukon Union Telemetry". This guard collects every
 // user-facing text this repository ships (the EN/RU dictionaries, every exported copy table, the deferral README, the
@@ -95,11 +95,8 @@ describe('the user-facing product name', () => {
     expect(STRINGS_MODULE.UNINSTALL_STRINGS.finishedFailed).toContain('%LOCALAPPDATA%\\ETS2Telemetry by hand');
   });
 
-  it('gives the installer and the executable the product name', async () => {
-    const forge = (await import(pathToFileURL(path.join(checkout, 'forge.config.cjs')).href) as {default: {
-      packagerConfig: {win32metadata: Record<string, string>; executableName: string; appBundleId: string};
-      makers: {name: string; config: Record<string, string>}[];
-    }}).default;
+  it('gives the installer and the executable the product name', () => {
+    const forge = forgeConfig('production');
     const squirrel = forge.makers.find(maker => maker.name === '@electron-forge/maker-squirrel')?.config ?? {};
     const {version} = JSON.parse(read('package.json')) as {version: string};
     expect({title: squirrel.title, authors: squirrel.authors, setupExe: squirrel.setupExe}).toEqual({title: PRODUCT_NAME, authors: PUBLISHER,
@@ -154,10 +151,8 @@ describe('test and smoke expectations of the UI copy', () => {
 });
 
 describe('the technical identities stay', () => {
-  it('keeps productName, the Squirrel id, the executable, the bundle id, the data root and the export identity', async () => {
-    const forge = (await import(pathToFileURL(path.join(checkout, 'forge.config.cjs')).href) as {default: {
-      packagerConfig: {executableName: string; appBundleId: string}; makers: {name: string; config: Record<string, string>}[];
-    }}).default;
+  it('keeps productName, the Squirrel id, the executable, the bundle id, the data root and the export identity', () => {
+    const forge = forgeConfig('production');
     const squirrel = forge.makers.find(maker => maker.name === '@electron-forge/maker-squirrel')?.config ?? {};
     const {productName} = JSON.parse(read('package.json')) as {productName: string};
     // productName decides %APPDATA%\ETS2Telemetry Desktop (userData), the single-instance lock and the out/ folder.

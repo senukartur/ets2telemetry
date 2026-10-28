@@ -6,7 +6,7 @@ import path from 'node:path';
 import {fileURLToPath} from 'node:url';
 import {promisify} from 'node:util';
 import {describe, expect, it} from 'vitest';
-import {checkedPaths, checkInstalled, checkInstallTest, checkLaunchEnvironment, checkRunPlan, checkRunSignal, FACTS_VARIABLE, factsEvidence, installedEnvironment,
+import {checkedPaths, checkInstalled, checkInstallTest, checkLaunchEnvironment, checkRunPlan, checkRunSignal, checkSetupChannel, FACTS_VARIABLE, factsEvidence, installedEnvironment,
   checkDataRootUnchanged, checkDecoyUnchanged, checkRegistrationIcon, checkUninstallResidue, classifyRegistrationIcon, DATA_ROOT_REQUIRED, electronRuntimeNames, PRODUCT_EXECUTABLE, InstallerGuardError, RESIDUE_MAX_ENTRIES, isGuardedProcess, isHostedRunner, minimalPath, normalizePath, ownsRegistration, parseUninstallString, resolveRealLocation, runLayout,
   steamLibraryPaths, uninstallEnvironment, type RunPlanFacts} from '../../scripts/installer/installer-guard.mjs';
 import {checkProductLinks, checkRegistrationNames, checkUninstallEntries, classifyProductLinks} from '../../scripts/installer/installer-guard.mjs';
@@ -60,6 +60,18 @@ describe('CI signal (local runs refused)', () => {
     expect(refusal(() => checkRunSignal({}, {allowLocal: true}))).toBe('ACCEPTED');
     expect(refusal(() => checkRunSignal({}, {allowLocal: 'true' as unknown as boolean}))).toBe('LOCAL_RUN_REFUSED');
     expect(refusal(() => checkRunSignal({}, {allowLocal: false}))).toBe('LOCAL_RUN_REFUSED');
+  });
+  // ET-055 PR-4 (UP13): a local run never installs the production identity; the staging lifecycle arrives with PR-5.
+  it('installs a production Setup only on a GitHub-hosted runner, and refuses a staging Setup until its lifecycle exists', () => {
+    const hosted = {GITHUB_ACTIONS: 'true', RUNNER_ENVIRONMENT: 'github-hosted'};
+    expect(refusal(() => checkSetupChannel('production', hosted))).toBe('ACCEPTED');
+    for (const env of [{}, {GITHUB_ACTIONS: 'true', RUNNER_ENVIRONMENT: 'self-hosted'}, {RUNNER_ENVIRONMENT: 'github-hosted'}, {GITHUB_ACTIONS: 'TRUE', RUNNER_ENVIRONMENT: 'github-hosted'},
+      {ETS2TELEMETRY_OWNER_PRODUCTION_BUILD: '1'}]) {
+      expect(refusal(() => checkSetupChannel('production', env))).toBe('LOCAL_PRODUCTION_REFUSED');
+    }
+    expect(refusal(() => checkSetupChannel('staging', {}))).toBe('STAGING_LIFECYCLE_PENDING');
+    expect(refusal(() => checkSetupChannel('staging', hosted))).toBe('STAGING_LIFECYCLE_PENDING');
+    for (const channel of [undefined, '', 'Production', 'beta']) expect(refusal(() => checkSetupChannel(channel, hosted))).toBe('SETUP_CHANNEL_UNKNOWN');
   });
   it('creates real shortcuts only on a GitHub-hosted runner', () => {
     expect(isHostedRunner({GITHUB_ACTIONS: 'true', RUNNER_ENVIRONMENT: 'github-hosted'})).toBe(true);

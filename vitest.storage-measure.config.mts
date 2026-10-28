@@ -6,4 +6,4 @@ const PINNED_ELECTRON = '44.7.0';
 if (process.versions.electron !== PINNED_ELECTRON) {
   throw new Error(`Storage measurement requires Electron ${PINNED_ELECTRON} in Node mode; found ${process.versions.electron ?? 'plain Node'}. Run npm run measure:storage.`);
 }
-export default defineConfig({test: {include: ['tests/measurement/**/*.measure.ts'], setupFiles: ['tests/storage/setup.ts'], pool: 'forks', testTimeout: 1_800_000, hookTimeout: 60_000}});
+export default defineConfig({test: {include: ['tests/measurement/**/*.measure.ts'], setupFiles: ['tests/shared/build-channel-environment.ts', 'tests/storage/setup.ts'], pool: 'forks', testTimeout: 1_800_000, hookTimeout: 60_000}});

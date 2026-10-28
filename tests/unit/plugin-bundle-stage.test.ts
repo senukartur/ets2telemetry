@@ -14,6 +14,12 @@ const temporary: string[] = [];
 afterEach(() => {for (const directory of temporary.splice(0)) rmSync(directory, {recursive: true, force: true});});
 const sha256 = (bytes: Buffer | string) => createHash('sha256').update(bytes).digest('hex');
 const KNOWN_HASH = 'a'.repeat(64);
+// The fixture checkout is a production build of its own package.json version. The channel is always given, so the
+// resolver default (staging since ET-055 PR-4) never decides which names a case checks.
+const productionBuild = (root: string) => {
+  const version = (JSON.parse(readFileSync(path.join(root, 'package.json'), 'utf8')) as {version: string}).version;
+  return {channel: 'production' as const, identity: BUILD_IDENTITIES.production, baseVersion: version, version};
+};
 
 // Headers only: MZ, e_lfanew 0x80, "PE\0\0", the machine and the characteristics (0x2022 = executable, large-address, DLL).
 function pe({machine = 0x8664, characteristics = 0x2022, size = 512, fill = 0} = {}) {
@@ -48,7 +54,7 @@ function fixture({known = [{appVersion: '0.1.0', sha256: KNOWN_HASH}], dll = pe(
   write(root, 'native/telemetry-plugin/build/Release/ets2telemetry-plugin.dll', dll);
   const stage = path.join(root, '.local/package-native/telemetry-plugin');
   const stageBundle = () => writePluginBundle(stage, {dll: readFileSync(path.join(root, 'native/telemetry-plugin/build/Release/ets2telemetry-plugin.dll')),
-    appVersion: '0.2.0', pluginSources: pluginSourceHashes(root), known: readReleasedPlugins(path.join(root, 'native/telemetry-plugin/released-plugins.json'))});
+    appVersion: '0.2.0', pluginSources: pluginSourceHashes(root), known: readReleasedPlugins(path.join(root, 'native/telemetry-plugin/released-plugins.json')), channel: 'production'});
   const manifestFile = path.join(stage, 'plugin-manifest.json');
   const dllFile = path.join(stage, 'ets2telemetry-plugin.dll');
   const rewriteManifest = (change: (manifest: Record<string, unknown>) => void) => {
@@ -77,8 +83,8 @@ it('stages a good bundle that passes both the intrinsic and the checkout checks'
   expect(JSON.parse(readFileSync(f.manifestFile, 'utf8'))).toEqual(expected);
   expect(Object.keys(JSON.parse(readFileSync(f.manifestFile, 'utf8')) as object)).toEqual(['format', 'version', 'appVersion', 'file', 'size', 'sha256', 'pluginSources', 'known']);
   expect(readFileSync(f.dllFile).equals(dll)).toBe(true);
-  expect(verifyPluginBundle(f.stage)).toEqual(expected);
-  expect(verifyPluginBundleAgainstTree(f.stage, f.root)).toEqual(expected);
+  expect(verifyPluginBundle(f.stage, 'production')).toEqual(expected);
+  expect(verifyPluginBundleAgainstTree(f.stage, f.root, productionBuild(f.root))).toEqual(expected);
 });
 
 it('accepts the tracked empty released list of this checkout', () => {
@@ -91,25 +97,25 @@ it('rejects a DLL tampered after staging', () => {
   const bytes = readFileSync(f.dllFile);
   bytes[300] ^= 0xff;
   writeFileSync(f.dllFile, bytes);
-  expect(() => verifyPluginBundle(f.stage)).toThrow(/Plugin DLL hash differs from its manifest/);
-  expect(() => verifyPluginBundleAgainstTree(f.stage, f.root)).toThrow(/Plugin DLL hash differs from its manifest/);
+  expect(() => verifyPluginBundle(f.stage, 'production')).toThrow(/Plugin DLL hash differs from its manifest/);
+  expect(() => verifyPluginBundleAgainstTree(f.stage, f.root, productionBuild(f.root))).toThrow(/Plugin DLL hash differs from its manifest/);
 });
 
 it('rejects a manifest hash or size that differs from the bytes', () => {
   const f = fixture();
   f.stageBundle();
   f.rewriteManifest(manifest => {manifest.sha256 = 'b'.repeat(64);});
-  expect(() => verifyPluginBundle(f.stage)).toThrow(/Plugin DLL hash differs from its manifest/);
+  expect(() => verifyPluginBundle(f.stage, 'production')).toThrow(/Plugin DLL hash differs from its manifest/);
   f.rewriteManifest(manifest => {manifest.sha256 = sha256(pe()); manifest.size = 513;});
-  expect(() => verifyPluginBundle(f.stage)).toThrow(/Plugin DLL size differs from its manifest/);
+  expect(() => verifyPluginBundle(f.stage, 'production')).toThrow(/Plugin DLL size differs from its manifest/);
 });
 
 it('rejects a local Release build that differs from the bundled bytes', () => {
   const f = fixture();
   f.stageBundle();
   write(f.root, 'native/telemetry-plugin/build/Release/ets2telemetry-plugin.dll', pe({fill: 1}));
-  expect(verifyPluginBundle(f.stage).sha256).toBe(sha256(pe()));
-  expect(() => verifyPluginBundleAgainstTree(f.stage, f.root)).toThrow(/Packaged plugin differs from local build/);
+  expect(verifyPluginBundle(f.stage, 'production').sha256).toBe(sha256(pe()));
+  expect(() => verifyPluginBundleAgainstTree(f.stage, f.root, productionBuild(f.root))).toThrow(/Packaged plugin differs from local build/);
 });
 
 it('rejects a non-x64, non-DLL or non-PE image even with a consistent manifest', () => {
@@ -127,7 +133,7 @@ it('rejects a non-x64, non-DLL or non-PE image even with a consistent manifest',
     f.stageBundle();
     writeFileSync(f.dllFile, image);
     f.rewriteManifest(manifest => {manifest.sha256 = sha256(image); manifest.size = image.length;});
-    expect(() => verifyPluginBundle(f.stage)).toThrow(message);
+    expect(() => verifyPluginBundle(f.stage, 'production')).toThrow(message);
   }
 });
 
@@ -135,15 +141,15 @@ it('rejects stale plugin sources: a changed, added or removed input', () => {
   const f = fixture();
   f.stageBundle();
   write(f.root, 'native/telemetry-plugin/src/sdk-exports.cpp', '// changed\n');
-  expect(verifyPluginBundle(f.stage).appVersion).toBe('0.2.0');
-  expect(() => verifyPluginBundleAgainstTree(f.stage, f.root)).toThrow(/Plugin bundle built from stale plugin sources/);
+  expect(verifyPluginBundle(f.stage, 'production').appVersion).toBe('0.2.0');
+  expect(() => verifyPluginBundleAgainstTree(f.stage, f.root, productionBuild(f.root))).toThrow(/Plugin bundle built from stale plugin sources/);
   write(f.root, 'native/telemetry-plugin/src/sdk-exports.cpp', '// fixture\n');
-  expect(verifyPluginBundleAgainstTree(f.stage, f.root).sha256).toBe(sha256(pe()));
+  expect(verifyPluginBundleAgainstTree(f.stage, f.root, productionBuild(f.root)).sha256).toBe(sha256(pe()));
   write(f.root, 'native/telemetry-plugin/vendor/scs-sdk-1.15/include/new.h', '// added\n');
-  expect(() => verifyPluginBundleAgainstTree(f.stage, f.root)).toThrow(/stale plugin sources/);
+  expect(() => verifyPluginBundleAgainstTree(f.stage, f.root, productionBuild(f.root))).toThrow(/stale plugin sources/);
   unlinkSync(path.join(f.root, 'native/telemetry-plugin/vendor/scs-sdk-1.15/include/new.h'));
   unlinkSync(path.join(f.root, 'native/telemetry-plugin/src/sdk-exports.def'));
-  expect(() => verifyPluginBundleAgainstTree(f.stage, f.root)).toThrow(/stale plugin sources/);
+  expect(() => verifyPluginBundleAgainstTree(f.stage, f.root, productionBuild(f.root))).toThrow(/stale plugin sources/);
 });
 
 it('ignores files outside the plugin inputs', () => {
@@ -151,7 +157,7 @@ it('ignores files outside the plugin inputs', () => {
   f.stageBundle();
   write(f.root, 'native/telemetry-plugin/tests/test.cpp', '// changed\n');
   write(f.root, 'native/telemetry-plugin/vendor/scs-sdk-1.15/readme.txt', 'changed\n');
-  expect(verifyPluginBundleAgainstTree(f.stage, f.root).size).toBe(512);
+  expect(verifyPluginBundleAgainstTree(f.stage, f.root, productionBuild(f.root)).size).toBe(512);
 });
 
 it('rejects known hashes that differ from the tracked released list', () => {
@@ -159,9 +165,9 @@ it('rejects known hashes that differ from the tracked released list', () => {
   f.stageBundle();
   write(f.root, 'native/telemetry-plugin/released-plugins.json', JSON.stringify({format: 'ets2telemetry.released-plugins', version: 1,
     known: [{appVersion: '0.1.0', sha256: KNOWN_HASH}, {appVersion: '0.2.0', sha256: 'c'.repeat(64)}]}));
-  expect(() => verifyPluginBundleAgainstTree(f.stage, f.root)).toThrow(/Plugin bundle known hashes differ from the released plugin list/);
+  expect(() => verifyPluginBundleAgainstTree(f.stage, f.root, productionBuild(f.root))).toThrow(/Plugin bundle known hashes differ from the released plugin list/);
   write(f.root, 'native/telemetry-plugin/released-plugins.json', JSON.stringify({format: 'ets2telemetry.released-plugins', version: 1, known: []}));
-  expect(() => verifyPluginBundleAgainstTree(f.stage, f.root)).toThrow(/known hashes differ/);
+  expect(() => verifyPluginBundleAgainstTree(f.stage, f.root, productionBuild(f.root))).toThrow(/known hashes differ/);
 });
 
 // ET-055 UP12 and UP15: a staging build stages its own DLL name, its own released list and the staging version, and a
@@ -188,7 +194,7 @@ it('rejects an appVersion that differs from package.json', () => {
   const f = fixture();
   f.stageBundle();
   write(f.root, 'package.json', JSON.stringify({version: '0.3.0'}));
-  expect(() => verifyPluginBundleAgainstTree(f.stage, f.root)).toThrow(/appVersion differs from package.json/);
+  expect(() => verifyPluginBundleAgainstTree(f.stage, f.root, productionBuild(f.root))).toThrow(/appVersion differs from package.json/);
 });
 
 it('rejects a linked DLL and a linked bundle directory', () => {
@@ -204,13 +210,13 @@ it('rejects a linked DLL and a linked bundle directory', () => {
     if ((error as NodeJS.ErrnoException).code !== 'EPERM') throw error;
     symlinkSync(elsewhere, f.dllFile, 'junction');
   }
-  expect(() => verifyPluginBundle(f.stage)).toThrow(/Plugin DLL must not be a link/);
+  expect(() => verifyPluginBundle(f.stage, 'production')).toThrow(/Plugin DLL must not be a link/);
 
   const g = fixture();
   g.stageBundle();
   const linked = path.join(g.root, 'linked-bundle');
   symlinkSync(g.stage, linked, 'junction');
-  expect(() => verifyPluginBundle(linked)).toThrow(/Plugin bundle directory must not be a link/);
+  expect(() => verifyPluginBundle(linked, 'production')).toThrow(/Plugin bundle directory must not be a link/);
 });
 
 it('rejects a linked plugin source', () => {
@@ -223,7 +229,7 @@ it('requires exactly the DLL and the manifest with strict manifest keys and valu
   const f = fixture();
   f.stageBundle();
   writeFileSync(path.join(f.stage, 'extra.dll'), pe());
-  expect(() => verifyPluginBundle(f.stage)).toThrow(/exactly the DLL and its manifest/);
+  expect(() => verifyPluginBundle(f.stage, 'production')).toThrow(/exactly the DLL and its manifest/);
   unlinkSync(path.join(f.stage, 'extra.dll'));
   for (const [change, message] of [
     [(m: Record<string, unknown>) => {m.extra = true;}, /Plugin manifest has unexpected keys/],
@@ -241,7 +247,7 @@ it('requires exactly the DLL and the manifest with strict manifest keys and valu
     rmSync(f.stage, {recursive: true, force: true});
     f.stageBundle();
     f.rewriteManifest(change);
-    expect(() => verifyPluginBundle(f.stage)).toThrow(message);
+    expect(() => verifyPluginBundle(f.stage, 'production')).toThrow(message);
   }
 });
 
@@ -249,14 +255,14 @@ it('bounds the DLL and manifest sizes', () => {
   const f = fixture();
   f.stageBundle();
   writeFileSync(f.manifestFile, Buffer.alloc(MAX_MANIFEST_BYTES + 1, 0x20));
-  expect(() => verifyPluginBundle(f.stage)).toThrow(/Plugin manifest exceeds 65536 bytes/);
+  expect(() => verifyPluginBundle(f.stage, 'production')).toThrow(/Plugin manifest exceeds 65536 bytes/);
   rmSync(f.stage, {recursive: true, force: true});
   f.stageBundle();
   const oversized = pe({size: MAX_PLUGIN_BYTES + 1});
   writeFileSync(f.dllFile, oversized);
   f.rewriteManifest(manifest => {manifest.sha256 = sha256(oversized); manifest.size = oversized.length;});
-  expect(() => verifyPluginBundle(f.stage)).toThrow(/size is outside the bounds/);
-  expect(() => writePluginBundle(path.join(f.root, 'other-stage'), {dll: oversized, appVersion: '0.2.0', pluginSources: {}, known: []}))
+  expect(() => verifyPluginBundle(f.stage, 'production')).toThrow(/size is outside the bounds/);
+  expect(() => writePluginBundle(path.join(f.root, 'other-stage'), {dll: oversized, appVersion: '0.2.0', pluginSources: {}, known: [], channel: 'production'}))
     .toThrow(/Plugin DLL size is outside the bounds/);
 });
 

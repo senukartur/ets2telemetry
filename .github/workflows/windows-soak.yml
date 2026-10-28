@@ -71,7 +71,8 @@ jobs:
       - name: Configure the plugin build tree
         if: env.SOAK_TARGET == 'application'
         run: |
-          cmake -S native/telemetry-plugin -B native/telemetry-plugin/build -G 'Visual Studio 17 2022' -A x64
+          # ET-055 PR-4: the soak builds the default staging channel; native:configure passes it to the tree.
+          npm run native:configure -- -G 'Visual Studio 17 2022'
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
       - name: Forge package
         if: env.SOAK_TARGET == 'application'

@@ -43,6 +43,12 @@ jobs:
       ETS2TELEMETRY_SOURCE_COMMIT: ${{ github.event.pull_request.head.sha || github.sha }}
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+      # ET-055 PR-4 (UP13, docs/ci.md#build-channels-et-055-pr-4): pull requests build the default staging channel; main pushes and
+      # dispatches build the production release artifact, which the resolver accepts only in GitHub Actions. Later steps of
+      # this job resolve the same channel, and the smokes read the built one from the build evidence.
+      - name: Build production on main pushes and dispatches
+        if: github.event_name != 'pull_request'
+        run: Add-Content -LiteralPath $env:GITHUB_ENV -Value 'ETS2TELEMETRY_BUILD_CHANNEL=production'
       - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5
         with:
           node-version: '24.19.0'
@@ -70,7 +76,8 @@ jobs:
         run: |
           # Configure the plugin tree first: `npm run build` stages the plugin DLL (scripts/stage-native-plugin.mjs) and
           # reuses this tree and its generator instead of configuring one with the default generator (docs/ci.md).
-          cmake -S native/telemetry-plugin -B native/telemetry-plugin/build -G 'Visual Studio 17 2022' -A x64
+          # native:configure passes the resolved build channel (scripts/configure-native-plugin.mjs).
+          npm run native:configure -- -G 'Visual Studio 17 2022'
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           npm run build
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
@@ -105,7 +112,8 @@ jobs:
       - name: Isolated synthetic v1 CLI pipe smoke
         run: npm run smoke:v1 --workspace @ets2telemetry/telemetry-simulator
       # Owner decision E1 (October 17, 2026): pull requests package without the Squirrel maker. Nothing in a PR run reads
-      # out/make; inspect:package and the packaged smokes read out/ETS2Telemetry Desktop-win32-x64, which both commands write.
+      # out/make; inspect:package and the packaged smokes read out/<productName>-win32-x64, which both commands write: the
+      # staging package on pull requests and the production one on main pushes and dispatches (ET-055 PR-4).
       - name: Forge package and static native package inspection
         if: github.event_name == 'pull_request'
         run: |
@@ -184,6 +192,12 @@ jobs:
       ETS2TELEMETRY_SOURCE_COMMIT: ${{ github.event.pull_request.head.sha || github.sha }}
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+      # ET-055 PR-4 (UP13, docs/ci.md#build-channels-et-055-pr-4): pull requests build the default staging channel; main pushes and
+      # dispatches build the production release artifact, which the resolver accepts only in GitHub Actions. Later steps of
+      # this job resolve the same channel, and the smokes read the built one from the build evidence.
+      - name: Build production on main pushes and dispatches
+        if: github.event_name != 'pull_request'
+        run: Add-Content -LiteralPath $env:GITHUB_ENV -Value 'ETS2TELEMETRY_BUILD_CHANNEL=production'
       - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5
         with:
           node-version: '24.19.0'
@@ -260,7 +274,8 @@ jobs:
         run: ./scripts/ci/Invoke-RuntimeSmoke.ps1 -Mode packaged
       - name: Bounded packaged native Windows session-end audit
         run: |
-          $packageHash = node --input-type=module -e 'import {verifyPackage} from "./scripts/package-integrity.mjs"; console.log(verifyPackage("out/ETS2Telemetry Desktop-win32-x64").packageSha256)'
+          # The package folder of the build that was made: staging on pull requests, production on main (ET-055 PR-4).
+          $packageHash = node --input-type=module -e 'import {verifyPackage} from "./scripts/package-integrity.mjs"; import {packageDirectoryName, readBuiltBuild} from "./scripts/build-channel.mjs"; console.log(verifyPackage(packageDirectoryName(readBuiltBuild().identity)).packageSha256)'
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           ./scripts/ci/Invoke-SessionEndSmoke.ps1 -OutputRoot .local/ci -ExpectedPackageSha256 $packageHash
       - name: Bounded packaged telemetry source and recovery smoke
@@ -322,6 +337,12 @@ jobs:
       ETS2TELEMETRY_SOURCE_COMMIT: ${{ github.event.pull_request.head.sha || github.sha }}
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+      # ET-055 PR-4 (UP13, docs/ci.md#build-channels-et-055-pr-4): pull requests build the default staging channel; main pushes and
+      # dispatches build the production release artifact, which the resolver accepts only in GitHub Actions. Later steps of
+      # this job resolve the same channel, and the smokes read the built one from the build evidence.
+      - name: Build production on main pushes and dispatches
+        if: github.event_name != 'pull_request'
+        run: Add-Content -LiteralPath $env:GITHUB_ENV -Value 'ETS2TELEMETRY_BUILD_CHANNEL=production'
       - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5
         with:
           node-version: '24.19.0'

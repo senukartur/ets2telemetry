@@ -31,6 +31,15 @@ if ($Mode -eq 'installed') {
 }
 $checkout = (Resolve-Path -LiteralPath (Join-Path $PSScriptRoot '../..')).Path
 $node = (Get-Command node -ErrorAction Stop).Source
+# ET-055 PR-4: the build this run checks, from the desktop build evidence (scripts/build-channel.mjs --built), never from the
+# shell's variables: pull requests build staging and main pushes production. Its package folder, executable, data root,
+# plugin file and display name are the smokes' expectations (scripts/ci/smoke-build.mjs).
+$builtText = & $node (Join-Path $checkout 'scripts/build-channel.mjs') --built
+if ($LASTEXITCODE -ne 0) { throw 'Build evidence unavailable: run npm run build or npm run package first.' }
+$built = ($builtText -join "`n") | ConvertFrom-Json
+if ($built.channel -cnotin @('production', 'staging')) { throw 'Build evidence names no known channel.' }
+# The installed mode runs the installer lifecycle's production install; a staging install arrives with ET-055 PR-5.
+if ($Mode -eq 'installed' -and $built.channel -cne 'production') { throw 'STAGING_LIFECYCLE_PENDING: the installed mode runs production installs only.' }
 $output = Join-Path ([IO.Path]::GetFullPath($OutputRoot)) ($Mode + '-' + [guid]::NewGuid().ToString('N'))
 New-Item -ItemType Directory -Path $output | Out-Null
 $paths = @{}
@@ -52,8 +61,14 @@ $config.forceRendererProcessReuse = [bool]$ForceRendererReuse
 if ($Scenario -eq 'soak') { $config.soakMinutes = $SoakMinutes }
 $config.commit = (& git -C $checkout rev-parse HEAD)
 if ($LASTEXITCODE -ne 0) { throw 'Commit identity unavailable.' }
-$config.executable = if ($Mode -eq 'installed') { $Executable } else { Join-Path $checkout 'out/ETS2Telemetry Desktop-win32-x64/ETS2TelemetryDesktop.exe' }
+$config.channel = $built.channel; $config.appVersion = $built.version
+$config.executable = if ($Mode -eq 'installed') { $Executable } else { Join-Path $checkout ($built.packageDirectory + '/' + $built.executable) }
 if ($Mode -eq 'packaged' -and !(Test-Path -LiteralPath $config.executable -PathType Leaf)) { throw 'Forge package missing.' }
+if ($Mode -eq 'packaged') {
+    # The package itself names its channel in the broker's build evidence; it must be the desktop bundles' channel.
+    $packagedEvidence = Get-Content -LiteralPath (Join-Path (Split-Path -Parent $config.executable) 'resources/telemetry-client/build-evidence.json') -Raw | ConvertFrom-Json
+    if ($packagedEvidence.channel -cne $built.channel) { throw ('Forge package was built for ' + $packagedEvidence.channel + ', the bundles for ' + $built.channel + '.') }
+}
 $configFile = Join-Path $output 'config.json'
 $config | ConvertTo-Json | Set-Content -LiteralPath $configFile -Encoding utf8
 . (Join-Path $PSScriptRoot 'RuntimeReceipt.ps1')
@@ -109,6 +124,7 @@ if (Test-Path -LiteralPath $memoryFile -PathType Leaf) {
   limits=$limits;
   descendantsNaturallyDrained=($code -eq 0); cpu=$cpu; memory=$memory} | ConvertTo-Json -Depth 5 | Set-Content -LiteralPath (Join-Path $output 'job-result.json') -Encoding utf8
 $validation = Test-RuntimeReceipt -DriverResultPath (Join-Path $output 'result.json') -ExpectedCommit $config.commit -ExpectedMode $Mode -ExpectedScenario $Scenario -ExpectedUiCase $UiCase -JobExitCode $code `
+    -ExpectedDisplayName $built.displayName `
     -JobResultPath (Join-Path $output 'job-result.json')
 # ET-019 PR-11: the resource evidence beside the wrapper's own facts, copied only from a receipt that could be read.
 $resourceFacts = [ordered]@{jobMemory=$memory; coldLaunchOrigin=$null; coldLaunchMs=$null; processMemory=$null}
