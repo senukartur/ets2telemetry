@@ -20,7 +20,7 @@ npm run make
 npm run inspect:package
 ```
 
-`native:build` produces `native/telemetry-plugin/build/Release/ets2telemetry-plugin.dll`. `build` separately compiles the fixed x64 pipe-client broker and desktop/renderer; since ET-017 PR-1 it also builds the plugin DLL and stages it for packaging as `resources/telemetry-plugin` ([game plugin setup](plugin-setup.md#bundle-format)), but nothing installs that copy yet. The source-bound broker receipt must match the desktop receipt; rebuild after source changes. Forge produces `out/ETS2Telemetry Desktop-win32-x64` and the Squirrel maker files; creating them does not install the app. If the environment requires its installed system CA, use `NODE_OPTIONS=--use-system-ca` as explained in setup, without disabling TLS verification.
+Since ET-055 PR-4 these commands build the staging channel ([build channels](setup.md#build-channels-et-055)): `native:build` produces `native/telemetry-plugin/build/Release/ets2telemetry-plugin-staging.dll`, which serves only staging builds such as `npm run dev`, and the package is `out/ETS2Telemetry Desktop Staging-win32-x64`. A local production build is the owner's alone (`ETS2TELEMETRY_OWNER_PRODUCTION_BUILD=1`); agents never make one. The commands below copy the staging DLL; the production plugin `ets2telemetry-plugin.dll` is the one the installed production application manages. `build` separately compiles the fixed x64 pipe-client broker and desktop/renderer; since ET-017 PR-1 it also builds the plugin DLL and stages it for packaging as `resources/telemetry-plugin` ([game plugin setup](plugin-setup.md#bundle-format)), but nothing installs that copy yet. The source-bound broker receipt must match the desktop receipt; rebuild after source changes. Forge produces `out/ETS2Telemetry Desktop-win32-x64` and the Squirrel maker files; creating them does not install the app. If the environment requires its installed system CA, use `NODE_OPTIONS=--use-system-ca` as explained in setup, without disabling TLS verification.
 
 ## Install only the project DLL, with game/client closed
 
@@ -31,9 +31,9 @@ if (Get-Process -Name eurotrucks2,amtrucks,TruckersMP,TruckersMP-Launcher -Error
   throw 'Close the games and TruckersMP client before managing the project DLL.'
 }
 $gameRoot = (Resolve-Path -LiteralPath 'C:\Program Files (x86)\Steam\steamapps\common\Euro Truck Simulator 2').Path
-$pluginSource = (Resolve-Path -LiteralPath 'native/telemetry-plugin/build/Release/ets2telemetry-plugin.dll').Path
+$pluginSource = (Resolve-Path -LiteralPath 'native/telemetry-plugin/build/Release/ets2telemetry-plugin-staging.dll').Path
 $pluginsDirectory = Join-Path $gameRoot 'bin\win_x64\plugins'
-$pluginTarget = Join-Path $pluginsDirectory 'ets2telemetry-plugin.dll'
+$pluginTarget = Join-Path $pluginsDirectory 'ets2telemetry-plugin-staging.dll'
 if (-not (Test-Path -LiteralPath (Join-Path $gameRoot 'bin\win_x64') -PathType Container)) {throw 'Wrong game root.'}
 if (Test-Path -LiteralPath $pluginTarget) {throw 'Existing file: verify the retained project-owned hash before replacing it.'}
 New-Item -ItemType Directory -Path $pluginsDirectory -Force | Out-Null
@@ -53,10 +53,10 @@ For development, `npm run dev` rebuilds and starts Forge's desktop app. For the 
 ```powershell
 npm run dev
 # Or, after closing the development instance:
-Start-Process -FilePath (Resolve-Path -LiteralPath 'out/ETS2Telemetry Desktop-win32-x64/ETS2TelemetryDesktop.exe').Path -WindowStyle Normal
+Start-Process -FilePath (Resolve-Path -LiteralPath 'out/ETS2Telemetry Desktop Staging-win32-x64/ETS2TelemetryDesktopStaging.exe').Path -WindowStyle Normal
 ```
 
-These are manual launch instructions, not bounded acceptance harness commands. Use the repository's owned Windows Job wrappers for automated runtime evidence. Select **Euro Truck Simulator 2** or **American Truck Simulator** in the dashboard before the corresponding game launch. Selection resolves the fixed development/packaged broker; the broker provisions its exact-image policy in `%LOCALAPPDATA%\ETS2Telemetry\transport\v0\service-policy.json` with current-user ownership and bounded atomic updates. Do not hand-edit ACLs/policy, approve an arbitrary executable, or grant a general Electron path. Missing/invalid policy or source authority fails closed. If more than one matching live game source exists, close the extra instance; the app does not choose implicitly. Avoid mixed privilege levels; actual elevated-game behavior still requires testing.
+These are manual launch instructions, not bounded acceptance harness commands. Use the repository's owned Windows Job wrappers for automated runtime evidence. Select **Euro Truck Simulator 2** or **American Truck Simulator** in the dashboard before the corresponding game launch. Selection resolves the fixed development/packaged broker; the broker provisions its exact-image policy in `%LOCALAPPDATA%\ETS2TelemetryStaging\transport\v0\service-policy.json` (`ETS2Telemetry` for a production build) with current-user ownership and bounded atomic updates. Do not hand-edit ACLs/policy, approve an arbitrary executable, or grant a general Electron path. Missing/invalid policy or source authority fails closed. If more than one matching live game source exists, close the extra instance; the app does not choose implicitly. Avoid mixed privilege levels; actual elevated-game behavior still requires testing.
 
 Launch the selected game/client normally, choose windowed or borderless mode and enter active simulation. The overlay appears only with accepted game-origin window metadata while that game is foreground. It hides on minimize/foreground loss/expired metadata. Synthetic/replay choices are controlled fixtures and never make the native overlay visible. Do not infer success from a dashboard status alone: record actual source/game/client versions, mode, artifact hashes, input/focus/DPI behavior and performance using [TESTING.md](../TESTING.md).
 

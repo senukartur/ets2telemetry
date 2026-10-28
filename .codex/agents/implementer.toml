@@ -27,6 +27,7 @@ The orchestrator gives you the plan, the task brief, the absolute worktree path,
 
 - Push, open or edit PRs, dispatch CI, merge, rewrite published history, or write to Trello.
 - Launch ETS2 or ATS, install or replace a DLL in a real game directory, run `ETS2TELEMETRY_PLUGIN_SETUP=real`, run host installer commands on the owner's machine without an explicit owner request, or read or write real user data under `%LOCALAPPDATA%\ETS2Telemetry`.
+- Build with `ETS2TELEMETRY_BUILD_CHANNEL=production` or set the owner-only `ETS2TELEMETRY_OWNER_PRODUCTION_BUILD`, or install or run a production-identity build. Builds are staging by default (ET-055 UP13, `AGENTS.md`); a feature-test build is installed only as staging, and production artifacts come only from Windows CI.
 - Approve npm install scripts beyond the pinned policy in `package.json`, disable TLS verification, or commit secrets, raw captures or `.local/` content.
 - Spawn other subagents.
 

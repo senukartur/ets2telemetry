@@ -35,6 +35,26 @@ gh run list --workflow windows-ci.yml --branch <task-branch> --limit 1
 
 A dispatch run checks the branch head itself, not the PR merge result with current `main`. GitHub attaches it to the head commit (visible in the commit's checks and the Actions list), but the PR check list keeps showing the skipped pull-request job for that commit, so record the dispatch run link in the PR or ledger. The final-head gate is therefore the pull-request run triggered by **Ready for review** (or a later push while ready). If that run fails, fix the branch or return the PR to draft (`gh pr ready <number> --undo`).
 
+### Build channels (ET-055 PR-4)
+
+Which channel each trigger builds ([build channels](setup.md#build-channels-et-055), UP13):
+
+| Trigger | Channel | How |
+| --- | --- | --- |
+| Pull request (ready) | Staging, the default | `ETS2TELEMETRY_BUILD_CHANNEL` stays unset. The package is `out/ETS2Telemetry Desktop Staging-win32-x64` with the staging plugin, pipes and data root, and the version is `<package.json version>-stg.000000` |
+| Push to `main`, manual dispatch | Production, for the release artifact | The step **Build production on main pushes and dispatches** in `windows-build`, `windows-runtime` and `windows-installer` writes `ETS2TELEMETRY_BUILD_CHANNEL=production` to `GITHUB_ENV`; the resolver accepts it because `GITHUB_ACTIONS=true` |
+| `windows-tests` | Neither | Vitest removes the build variables first (`tests/shared/build-channel-environment.ts`), and the tests name the channel they check |
+| `windows-asan`, `windows-extended.yml` | CMake's default, production | They configure their own native test trees with `cmake` directly and package nothing |
+| `windows-soak.yml` (dispatch-only) | Staging, the default | `npm run native:configure` and `npm run package` with the variable unset |
+
+`npm run native:configure -- -G 'Visual Studio 17 2022'` configures the plugin tree for the resolved channel. The drivers never guess the channel: `Invoke-RuntimeSmoke.ps1`, `Invoke-SessionEndSmoke.ps1`, the session-end package hash, `compiled-artifact.mjs` and the installer lifecycle read it from the desktop build evidence (`node scripts/build-channel.mjs --built`), and the packaged smokes also check the package's own broker evidence. The smokes then expect that channel's package folder, executable, isolated data root (`<LOCALAPPDATA>\ETS2Telemetry` or `...\ETS2TelemetryStaging`), plugin file, display name in user-facing copy and application version (`scripts/ci/smoke-build.mjs`). The compiled-artifact manifest records the channel, and a restore accepts only that channel's package folder. The native chain tests take the pipe prefix from the channel of `native/telemetry-plugin/build`.
+
+Consequences:
+
+- A packaging regression that affects only production names shows first on the `main` push or a dispatch; the golden tests in `tests/unit/channel-identity.test.ts` pin the production values on every PR (plan risk R2). Dispatch a branch to check its production path before merging.
+- `main` builds production only. Building staging there as well, for the side-by-side installer lifecycle, is part of ET-055 PR-5; the hosted installer lifecycle keeps installing production, and the uploaded `windows-installer-<run>-<attempt>` holds the production Setup.
+- `release-identity.json` records `builtBy` with the run id (`GITHUB_RUN_ID`) of the run that built it.
+
 ## Job layout
 
 ET-028 splits the measured critical path into a compiled-artifact producer and two consumers on separate `windows-2022` runners. Tests and ASan still start independently. The three required check names remain unchanged; `Windows x64 scaffold` is an `always()` aggregate. The same triggers/path filters/concurrency group apply. Draft PRs skip execution. On PRs only the explicitly nonparticipating installer job may be skipped; every other missing, skipped, failed or cancelled participating dependency fails the aggregate.

@@ -175,6 +175,16 @@ The version string ties the vendored `Squirrel.exe` to that commit; the binary w
 
 Without `-AllowLocal` the harness refuses every local run. `-AllowLocal` (plan O6) is for an explicit owner request only; agents never pass it. Until PR-3 it refused as well (`LOCAL_RUN_UNAVAILABLE_UNTIL_PR3`), because electron-squirrel-startup's install and update hooks created real Desktop and Start menu shortcuts whatever the test root said. Since PR-3 the application's own handler skips them for a test install whose test file says `shortcuts: false`, which the harness writes off a hosted runner, and the uninstall scenarios remove the registration they create; the cleanup deletes a key that a failed scenario left, when it points into R. Every launch, hook and the uninstall get `APPDATA` inside R and the test file's profile as userData, so no hook writes the real Roaming `ETS2Telemetry Desktop` folder. A local run still needs the fake game host and the test plugin DLL from `npm run native:build`. `-Plan` is safe everywhere.
 
+### Build channels (ET-055)
+
+The harness installs the Setup of the build that was made: it reads the channel, version and Setup name from the desktop build evidence (`node scripts/build-channel.mjs --built`) and never from the shell's variables. Since ET-055 PR-4 (UP13), after the run signal:
+
+- **Local runs.** An `-AllowLocal` run accepts only a staging Setup, so a local run never installs the production identity of the owner's installed application; a production Setup stops it with `LOCAL_PRODUCTION_REFUSED`.
+- **Hosted runs.** A production Setup runs only on a GitHub-hosted runner. Windows CI builds production on main pushes and dispatches ([CI](ci.md#build-channels-et-055-pr-4)), so the hosted lifecycle keeps installing production.
+- **Staging lifecycle pending.** The scenarios still use the production install root, names and versions; the staging lifecycle arrives with ET-055 PR-5. Until then a staging Setup stops the run with `STAGING_LIFECYCLE_PENDING`, here and in `build-upgrade-fixture.mjs` and the installed runtime smoke mode. A local run is therefore not possible before PR-5.
+
+The guard module repeats the rule (`checkSetupChannel` in `scripts/installer/installer-guard.mjs`, through the driver's `signal --channel <channel>`), and `tests/unit/installer-guard.test.ts` covers it.
+
 Agents run the lifecycle only through a dispatch:
 
 ```powershell
