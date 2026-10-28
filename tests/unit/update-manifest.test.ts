@@ -100,13 +100,15 @@ describe('binding to this build and its source release', () => {
     const named = (channel: 'production' | 'staging', version: string, name: string) => {
       const manifest = manifestObject(channel, version, PKG, KEY.keyId); (manifest.package as Record<string, unknown>).name = name; return manifest;
     };
-    // The staging id starts with the production id: a prefix comparison would accept these.
+    // The comparison is exact: the other channel's id, and a name that only starts with this channel's id (such as the
+    // pre-fix staging id ETS2TelemetryDesktopStaging), are refused.
     expect(verified(named('staging', '0.2.0-stg.000042', 'ETS2TelemetryDesktop-0.2.0-stg000042-full.nupkg'), staging('staging-v0.2.0-stg.000042'))).toEqual({ok: false, code: 'NAME_MISMATCH'});
-    expect(verified(named('production', '0.2.0', 'ETS2TelemetryDesktopStaging-0.2.0-full.nupkg'), production())).toEqual({ok: false, code: 'NAME_MISMATCH'});
+    expect(verified(named('production', '0.2.0', 'ETS2TelemetryStagingDesktop-0.2.0-full.nupkg'), production())).toEqual({ok: false, code: 'NAME_MISMATCH'});
     for (const name of ['ets2telemetrydesktop-0.2.0-full.nupkg', 'ETS2TelemetryDesktop-0.2.0-delta.nupkg', 'ETS2TelemetryDesktop-0.2.0-full.nupkg.exe', '..\\ETS2TelemetryDesktop-0.2.0-full.nupkg',
-      'ETS2TelemetryDesktop-0.2.0.0-full.nupkg', 'https://example.invalid/ETS2TelemetryDesktop-0.2.0-full.nupkg'])
+      'ETS2TelemetryDesktop-0.2.0.0-full.nupkg', 'https://example.invalid/ETS2TelemetryDesktop-0.2.0-full.nupkg',
+      'ETS2TelemetryDesktopStaging-0.2.0-full.nupkg'])
       expect(verified(named('production', '0.2.0', name), production()), name).toEqual({ok: false, code: 'NAME_MISMATCH'});
-    expect(verified(manifestObject('staging', '0.2.0-stg.000042', PKG, KEY.keyId), staging('staging-v0.2.0-stg.000042'))).toMatchObject({ok: true, manifest: {package: {name: 'ETS2TelemetryDesktopStaging-0.2.0-stg000042-full.nupkg'}}});
+    expect(verified(manifestObject('staging', '0.2.0-stg.000042', PKG, KEY.keyId), staging('staging-v0.2.0-stg.000042'))).toMatchObject({ok: true, manifest: {package: {name: 'ETS2TelemetryStagingDesktop-0.2.0-stg000042-full.nupkg'}}});
   });
   it('refuses the same version and a downgrade', () => {
     expect(verified(manifestObject('production', '0.1.1', PKG, KEY.keyId), production())).toEqual({ok: false, code: 'NOT_NEWER'});

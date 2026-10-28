@@ -32,7 +32,7 @@ $runOnceKey = 'HKCU\' + $testKeyRoot + '\RunOnce'
 $names = @{
     production = @{dataRoot = 'ETS2Telemetry'; valueName = 'ETS2TelemetryUninstall'; pluginFile = 'ets2telemetry-plugin.dll'; installRoot = 'ETS2TelemetryDesktop'
         executable = 'ETS2TelemetryDesktop.exe'; receiptPrefix = 'ETS2Telemetry-deferred-cleanup-'; other = 'staging'}
-    staging = @{dataRoot = 'ETS2TelemetryStaging'; valueName = 'ETS2TelemetryStagingUninstall'; pluginFile = 'ets2telemetry-plugin-staging.dll'; installRoot = 'ETS2TelemetryDesktopStaging'
+    staging = @{dataRoot = 'ETS2TelemetryStaging'; valueName = 'ETS2TelemetryStagingUninstall'; pluginFile = 'ets2telemetry-plugin-staging.dll'; installRoot = 'ETS2TelemetryStagingDesktop'
         executable = 'ETS2TelemetryDesktopStaging.exe'; receiptPrefix = 'ETS2TelemetryStaging-deferred-cleanup-'; other = 'production'}
 }
 $valueName = $names.production.valueName

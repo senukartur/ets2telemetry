@@ -86,7 +86,7 @@ describe('staging', () => {
     const {fetch, input} = request('staging', {[API_LIST]: {body: JSON.stringify(LIST)},
       ...signedRoutes(tagged('staging-v0.2.0-stg.000043'), manifestObject('staging', '0.2.0-stg.000043', PKG, KEY.keyId))});
     expect(await checkFeed(input)).toMatchObject({outcome: 'available',
-      packageUrl: `${GITHUB}/releases/download/staging-v0.2.0-stg.000043/ETS2TelemetryDesktopStaging-0.2.0-stg000043-full.nupkg`});
+      packageUrl: `${GITHUB}/releases/download/staging-v0.2.0-stg.000043/ETS2TelemetryStagingDesktop-0.2.0-stg000043-full.nupkg`});
     expect(fetch.requests).toEqual([{url: API_LIST, kind: 'json'}, {url: `${tagged('staging-v0.2.0-stg.000043')}/update-manifest.json`, kind: 'binary'},
       {url: `${tagged('staging-v0.2.0-stg.000043')}/update-manifest.json.sig`, kind: 'binary'}]);
   });

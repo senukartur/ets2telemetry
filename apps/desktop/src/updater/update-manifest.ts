@@ -108,7 +108,7 @@ export function verifyUpdateManifest(manifestBytes: Uint8Array, signatureBytes: 
   if (manifest.channel !== channel) return {ok: false, code: 'CHANNEL_MISMATCH'};
   const tag = manifest.package.tag;
   if (!isChannelTag(channel, tag) || tag !== releaseTag(channel, manifest.appVersion) || (binding.sourceTag !== undefined && tag !== binding.sourceTag)) return {ok: false, code: 'TAG_MISMATCH'};
-  // Exact equality: the staging Squirrel id starts with the production id, so a prefix test would accept the other channel.
+  // Exact equality: a prefix test would accept a name that only starts with this channel's id, or another id that does.
   if (manifest.package.name !== `${binding.identity.squirrelId}-${manifest.nugetVersion}-full.nupkg`) return {ok: false, code: 'NAME_MISMATCH'};
   const order = compareNugetVersions(manifest.nugetVersion, nugetVersionOf(binding.currentVersion));
   if (order === 0) return {ok: false, code: 'NOT_NEWER'};

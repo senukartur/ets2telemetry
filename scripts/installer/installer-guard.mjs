@@ -293,7 +293,7 @@ export function runFolders(runRoot) {
 }
 /**
  * The run layout of one channel under run root R (U12): runFolders and the channel's own roots in B, so Squirrel's binary
- * root becomes B\<Squirrel id> (B\ETS2TelemetryDesktop, B\ETS2TelemetryDesktopStaging) and the data root B\<data root>
+ * root becomes B\<Squirrel id> (B\ETS2TelemetryDesktop, B\ETS2TelemetryStagingDesktop) and the data root B\<data root>
  * (B\ETS2Telemetry, B\ETS2TelemetryStaging).
  */
 export function runLayout(runRoot, channel) {
