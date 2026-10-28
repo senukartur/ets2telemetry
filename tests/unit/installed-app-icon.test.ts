@@ -9,6 +9,7 @@ import type {ExecFilePort} from '../../apps/desktop/src/plugin-setup/fixed-progr
 import type {InstallerHandle} from '../../apps/desktop/src/plugin-setup/plugin-installer';
 import {productionSquirrelPorts, type SquirrelApp} from '../../apps/desktop/src/squirrel-events';
 import {PRODUCT_ROOT_NAME, type UninstallRoots} from '../../apps/desktop/src/uninstall/roots';
+import {withoutFlush} from '../shared/file-work';
 import {guardedTempRoot, type GuardedRoot} from '../shared/guarded-fs';
 import {fakeUninstallEntry} from '../shared/uninstall-fixture';
 
@@ -26,9 +27,13 @@ function legacyIcon(): Buffer {
   return bytes;
 }
 
+// The guard skips the flush to disk of every file opened through it (withoutFlush, tests/shared/file-work.ts): no case in
+// this file observes durability across a power loss. Single syncs of the icon placement took up to 1,378 ms here under
+// load on October 28, 2026, nearly all of a slow case's time (ET-019, docs/validation/et-019.md). The failing-sync case
+// below still injects its own rejecting sync.
 let guard: GuardedRoot, installRoot: string, target: string;
 beforeEach(async () => {
-  guard = await guardedTempRoot('ets2telemetry-installed-icon-');
+  guard = withoutFlush(await guardedTempRoot('ets2telemetry-installed-icon-'));
   installRoot = path.win32.join(guard.root, 'LocalAppData', PRODUCT_ROOT_NAME);
   await fsp.mkdir(path.win32.join(installRoot, 'app-0.1.0'), {recursive: true});
   target = path.win32.join(installRoot, 'app.ico');

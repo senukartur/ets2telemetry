@@ -2,10 +2,20 @@ import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import {afterEach, beforeEach, describe, expect, it} from 'vitest';
-import {SettingsStore} from '../../apps/desktop/src/settings-store';
+import {SettingsStore, type SettingsFileSystem, type SettingsStoreOptions} from '../../apps/desktop/src/settings-store';
 import {trayModel, type TrayInput} from '../../apps/desktop/src/tray-model';
 import {overlayView} from '../../apps/desktop/src/overlay-view';
 import type {AppHealth, OverlayPresentation} from '../../packages/contracts/src';
+import {unflushed} from '../shared/file-work';
+
+// Each store reads and writes real temporary files, without the flush to disk (unflushed, tests/shared/file-work.ts),
+// and with timers that never fire. Its rename retry waits through an immediate `delay`, because the store's default
+// delay runs on those timers and would never resolve. No step observes durability across a power loss, and the case asserts what each load read,
+// so no load may race the real 1000 ms load budget, which settings-store.test.ts covers with controlled timers. On October
+// 28, 2026 this case, about 20 ms idle, took up to 2,050 ms under load, with two real syncs (ET-019,
+// docs/validation/et-019.md).
+const STORE_OPTIONS: SettingsStoreOptions = {fs: unflushed(fs as unknown as SettingsFileSystem), timers: {setTimeout: () => undefined, clearTimeout: () => undefined},
+  delay: () => Promise.resolve()};
 
 describe('i18n settings lifecycle and reflection', () => {
   let tempDir: string;
@@ -19,7 +29,7 @@ describe('i18n settings lifecycle and reflection', () => {
   });
 
   it('starts in English by default, persists language switch to Russian across reloads, and reflects in tray and overlay', async () => {
-    const store1 = new SettingsStore(tempDir);
+    const store1 = new SettingsStore(tempDir, STORE_OPTIONS);
     const initialView = await store1.load();
     expect(initialView.language).toBe('en');
 
@@ -73,7 +83,7 @@ describe('i18n settings lifecycle and reflection', () => {
     expect(overlayRu.items[1].unit).toBe('л');
 
     // 5. Simulate app restart: re-instantiate store from same directory
-    const store2 = new SettingsStore(tempDir);
+    const store2 = new SettingsStore(tempDir, STORE_OPTIONS);
     const reloadedView = await store2.load();
     expect(reloadedView.language).toBe('ru');
     expect(reloadedView.state).toBe('loaded');
@@ -82,7 +92,7 @@ describe('i18n settings lifecycle and reflection', () => {
     const switchedBackView = await store2.setLanguage('en');
     expect(switchedBackView.language).toBe('en');
 
-    const store3 = new SettingsStore(tempDir);
+    const store3 = new SettingsStore(tempDir, STORE_OPTIONS);
     const thirdView = await store3.load();
     expect(thirdView.language).toBe('en');
   });

@@ -3,6 +3,7 @@ import {spawnSync} from 'node:child_process';
 import {expect, it} from 'vitest';
 import {mkdir, readFile, writeFile, rm, symlink, readdir, lstat} from 'node:fs/promises';
 import path from 'node:path';
+import {fileWorkBudget} from '../shared/file-work';
 import {temporaryResources} from '../shared/resources';
 import {compiledRoots, createCompiledArtifact, restoreCompiledArtifact} from '../../scripts/ci/compiled-artifact.mjs';
 import {scaffoldGate} from '../../scripts/ci/scaffold-gate.mjs';
@@ -15,6 +16,28 @@ const BINDING = 'node_modules/better-sqlite3/prebuilds/win32-x64.node';
 const MAKER = 'out/make/squirrel.windows/x64';
 const HOST_BYTES = Buffer.from('compiled nested CAP0 host fixture');
 const HOST_HASH = 'fea6030bb5e81d9f665e74cf9db624325d03f05073506e9dd0b19a3bf590e130';
+// Named budgets of the cases below whose duration is irreducible real temporary-file work (TESTING.md section 6): the
+// most file requests one case issued (libuv promise and callback requests and handle closes, counted for every case on
+// October 28, 2026), rounded up, at FS_OPERATION_ALLOWANCE_MS each. They bound file work, not behaviour timing, and
+// the cases assert no timing. Each case takes 0.1 to 0.5 s idle, but in 13 full npm test runs the two sweeps these
+// cases replace timed out at the default 5 s five times, and the channel and restore cases took up to 3.0 and 1.2 s
+// (ET-019, docs/validation/et-019.md). Every case seals its own producer and changes its own sealed copy, so none can
+// share a fixture.
+/** 1,447 requests counted: one producer sealed and restored, then refused for each wrong identity, manifest, tamper, extra file and link. */
+const RESTORE_CASE_FS_BUDGET_MS = fileWorkBudget(1_500);
+/** 951 to 1,077 requests counted per installer value and variant. */
+const NESTED_HELPER_FS_BUDGET_MS = fileWorkBudget(1_100);
+/** 815 to 964 requests counted per omitted root. */
+const MISSING_ROOT_FS_BUDGET_MS = fileWorkBudget(1_000);
+/** 906 requests counted. */
+const CHANNEL_CASE_FS_BUDGET_MS = fileWorkBudget(1_000);
+/**
+ * A hang guard for each real Node child that the CLI case starts in sequence (spawnSync's timeout), not a timing
+ * assertion: a child that does not exit within it has a null status, so the case fails on that status. On a loaded host
+ * a Node child takes over a second to start (fixed-program.test.ts), and the case's six children took 1.1 to 3.8 s
+ * together on October 28, 2026. spawnSync blocks the event loop, so the case timeout is the guard for each child.
+ */
+const CLI_HANG_GUARD_MS = 10_000, CLI_CHILDREN = 6;
 async function writeFixture(root: string, installer = false, omit?: string, roots = COMPILED_ROOTS) {
   for (const base of [...roots, ...(installer ? [MAKER] : [])]) {
     if (base === omit || base === HOST_ROOT) continue;
@@ -77,16 +100,16 @@ it('restores exactly verified producer bytes and rejects wrong identity, missing
     expect(await readdir(outside)).toEqual([]);
 
   } finally {await temp.dispose();}
-});
+}, RESTORE_CASE_FS_BUDGET_MS);
 
 it('uses the actual aggregate CLI exit status for success, failed, cancelled, skipped and missing dependencies', () => {
   const needs = Object.fromEntries(['windows-build', 'windows-runtime', 'windows-installer', 'windows-tests', 'windows-asan'].map(name => [name, {result: 'success'}]));
-  const run = (value: unknown, event = 'push') => spawnSync(process.execPath, ['scripts/ci/scaffold-gate.mjs'], {encoding: 'utf8', windowsHide: true, env: {...process.env, GITHUB_EVENT_NAME: event, ETS2TELEMETRY_JOB_RESULTS: JSON.stringify(value)}}).status;
+  const run = (value: unknown, event = 'push') => spawnSync(process.execPath, ['scripts/ci/scaffold-gate.mjs'], {encoding: 'utf8', windowsHide: true, timeout: CLI_HANG_GUARD_MS, env: {...process.env, GITHUB_EVENT_NAME: event, ETS2TELEMETRY_JOB_RESULTS: JSON.stringify(value)}}).status;
   expect(run(needs)).toBe(0);
   for (const result of ['failure', 'cancelled', 'skipped']) expect(run({...needs, 'windows-runtime': {result}})).toBe(1);
   const missing = {...needs}; delete missing['windows-build']; expect(run(missing)).toBe(1);
   expect(run({...needs, 'windows-installer': {result: 'skipped'}}, 'pull_request')).toBe(0);
-});
+}, CLI_CHILDREN * CLI_HANG_GUARD_MS);
 
 it('retains every runtime scenario, fixed required names, timeout ceilings and exact-artifact consumer verification', async () => {
   const workflow = (await readFile('.github/workflows/windows-ci.yml', 'utf8')).replaceAll('\r\n', '\n');
@@ -107,60 +130,65 @@ it('retains every runtime scenario, fixed required names, timeout ceilings and e
   expect(workflow.split('  windows-installer:')[1].split(/\n {2}[a-z-]+:\n/)[0]).toContain('\n    timeout-minutes: 55\n');
 });
 
-it.each([false, true])('requires the literal nested helper at create and restore despite valid decoy files (installer=%s)', async installer => {
+// One case per installer value and helper variant (ET-019, October 28, 2026): the variants used to share one case, which
+// timed out under load; each builds its own producer, so the split changes no scene or assertion.
+it.each([false, true].flatMap(installer => (['missing', 'renamed'] as const).map(variant => [installer, variant] as const)))(
+  'requires the literal nested helper at create and restore despite valid decoy files (installer=%s, %s)', async (installer, variant) => {
   const temp = await temporaryResources();
   try {
-    for (const variant of ['missing', 'renamed']) {
-      const root = path.join(temp.directory, variant, 'producer'), input = path.join(temp.directory, variant, 'sealed');
-      const output = path.join(temp.directory, variant, 'refused-publication'), target = path.join(temp.directory, variant, 'consumer');
-      await writeFixture(root, installer); await createCompiledArtifact(root, input, source, checkout, installer, 'production');
-      const manifestFile = path.join(input, 'manifest.json');
-      const manifest = JSON.parse(await readFile(manifestFile, 'utf8')) as {files: {path: string; bytes: number; sha256: string}[]};
-      expect(manifest.files.find(entry => entry.path === 'native/telemetry-plugin/build/cap0-host/Release/eurotrucks2.exe')).toEqual({path: HOST, bytes: HOST_BYTES.length, sha256: HOST_HASH});
-      const baseline = path.join(temp.directory, variant, 'baseline-consumer');
-      await restoreCompiledArtifact(input, baseline, source, checkout, installer);
-      const exactHost = await readFile(path.join(baseline, 'native/telemetry-plugin/build/cap0-host/Release/eurotrucks2.exe'));
-      expect(exactHost).toEqual(HOST_BYTES); expect(createHash('sha256').update(exactHost).digest('hex')).toBe(HOST_HASH);
-      await rm(path.join(root, HOST)); await writeFile(path.join(root, HOST_ROOT, 'decoy.exe'), 'decoy');
-      if (variant === 'renamed') await writeFile(path.join(root, HOST_ROOT, 'renamed.exe'), HOST_BYTES);
-      await expect(createCompiledArtifact(root, output, source, checkout, installer, 'production')).rejects.toThrow();
-      expect(await lstat(output).catch(error => {if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;})).toBeUndefined();
-      await rm(path.join(input, 'payload', HOST));
-      const decoy = {path: `${HOST_ROOT}/decoy.exe`, bytes: 5, sha256: createHash('sha256').update('decoy').digest('hex')};
-      await writeFile(path.join(input, 'payload', decoy.path), 'decoy');
-      if (variant === 'renamed') {
-        manifest.files.find(entry => entry.path === HOST)!.path = `${HOST_ROOT}/renamed.exe`;
-        await writeFile(path.join(input, 'payload', HOST_ROOT, 'renamed.exe'), HOST_BYTES);
-      } else manifest.files = manifest.files.filter(entry => entry.path !== HOST);
-      manifest.files.push(decoy); await writeFile(manifestFile, JSON.stringify(manifest));
-      await mkdir(target); await writeFile(path.join(target, 'sentinel.txt'), 'untouched');
-      await expect(restoreCompiledArtifact(input, target, source, checkout, installer)).rejects.toThrow('COMPILED_ARTIFACT_INVALID');
-      expect(await readdir(target)).toEqual(['sentinel.txt']); expect(await readFile(path.join(target, 'sentinel.txt'), 'utf8')).toBe('untouched');
-    }
+    const root = path.join(temp.directory, variant, 'producer'), input = path.join(temp.directory, variant, 'sealed');
+    const output = path.join(temp.directory, variant, 'refused-publication'), target = path.join(temp.directory, variant, 'consumer');
+    await writeFixture(root, installer); await createCompiledArtifact(root, input, source, checkout, installer, 'production');
+    const manifestFile = path.join(input, 'manifest.json');
+    const manifest = JSON.parse(await readFile(manifestFile, 'utf8')) as {files: {path: string; bytes: number; sha256: string}[]};
+    expect(manifest.files.find(entry => entry.path === 'native/telemetry-plugin/build/cap0-host/Release/eurotrucks2.exe')).toEqual({path: HOST, bytes: HOST_BYTES.length, sha256: HOST_HASH});
+    const baseline = path.join(temp.directory, variant, 'baseline-consumer');
+    await restoreCompiledArtifact(input, baseline, source, checkout, installer);
+    const exactHost = await readFile(path.join(baseline, 'native/telemetry-plugin/build/cap0-host/Release/eurotrucks2.exe'));
+    expect(exactHost).toEqual(HOST_BYTES); expect(createHash('sha256').update(exactHost).digest('hex')).toBe(HOST_HASH);
+    await rm(path.join(root, HOST)); await writeFile(path.join(root, HOST_ROOT, 'decoy.exe'), 'decoy');
+    if (variant === 'renamed') await writeFile(path.join(root, HOST_ROOT, 'renamed.exe'), HOST_BYTES);
+    await expect(createCompiledArtifact(root, output, source, checkout, installer, 'production')).rejects.toThrow();
+    expect(await lstat(output).catch(error => {if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;})).toBeUndefined();
+    await rm(path.join(input, 'payload', HOST));
+    const decoy = {path: `${HOST_ROOT}/decoy.exe`, bytes: 5, sha256: createHash('sha256').update('decoy').digest('hex')};
+    await writeFile(path.join(input, 'payload', decoy.path), 'decoy');
+    if (variant === 'renamed') {
+      manifest.files.find(entry => entry.path === HOST)!.path = `${HOST_ROOT}/renamed.exe`;
+      await writeFile(path.join(input, 'payload', HOST_ROOT, 'renamed.exe'), HOST_BYTES);
+    } else manifest.files = manifest.files.filter(entry => entry.path !== HOST);
+    manifest.files.push(decoy); await writeFile(manifestFile, JSON.stringify(manifest));
+    await mkdir(target); await writeFile(path.join(target, 'sentinel.txt'), 'untouched');
+    await expect(restoreCompiledArtifact(input, target, source, checkout, installer)).rejects.toThrow('COMPILED_ARTIFACT_INVALID');
+    expect(await readdir(target)).toEqual(['sentinel.txt']); expect(await readFile(path.join(target, 'sentinel.txt'), 'utf8')).toBe('untouched');
   } finally {await temp.dispose();}
-});
-it.each([false, true])('refuses every missing required root, including installer maker, before publication or destination mutation (installer=%s)', async installer => {
-  const temp = await temporaryResources(), roots = [...COMPILED_ROOTS, ...(installer ? ['out/make/squirrel.windows/x64'] : [])];
+}, NESTED_HELPER_FS_BUDGET_MS);
+// One case per omitted root (ET-019, October 28, 2026): the sweep sealed and broke one producer per root in one case,
+// 4,665 file requests with the maker root, and timed out at the default 5 s in a full npm test under load. Each case
+// seals the complete producer, checks its one omitted root against it and seals again over the changed artifact, as each
+// round of the sweep did; the roots and every assertion are unchanged.
+const MISSING_ROOT_CASES = [false, true].flatMap(installer => [...COMPILED_ROOTS, ...(installer ? ['out/make/squirrel.windows/x64'] : [])]
+  .map(omitted => [installer, omitted] as const));
+it.each(MISSING_ROOT_CASES)('refuses a missing required root, including installer maker, before publication or destination mutation (installer=%s, %s)', async (installer, omitted) => {
+  const temp = await temporaryResources();
   try {
     const root = path.join(temp.directory, 'producer'), input = path.join(temp.directory, 'sealed'), target = path.join(temp.directory, 'consumer');
     await writeFixture(root, installer); await createCompiledArtifact(root, input, source, checkout, installer, 'production');
     await mkdir(target); await writeFile(path.join(target, 'sentinel.txt'), 'untouched');
-    for (const [index, omitted] of roots.entries()) {
-      const incomplete = path.join(temp.directory, `producer-${index}`), output = path.join(temp.directory, `publication-${index}`);
-      await writeFixture(incomplete, installer, omitted);
-      await expect(createCompiledArtifact(incomplete, output, source, checkout, installer, 'production'), omitted).rejects.toThrow();
-      expect(await lstat(output).catch(error => {if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;})).toBeUndefined();
-      const manifestFile = path.join(input, 'manifest.json'), manifest = JSON.parse(await readFile(manifestFile, 'utf8')) as {files: {path: string}[]};
-      manifest.files = manifest.files.filter(entry => entry.path !== omitted && !entry.path.startsWith(`${omitted}/`));
-      const removed = path.resolve(input, 'payload', omitted);
-      expect(removed.startsWith(path.resolve(temp.directory) + path.sep)).toBe(true);
-      await rm(removed, {recursive: true, force: true}); await writeFile(manifestFile, JSON.stringify(manifest));
-      await expect(restoreCompiledArtifact(input, target, source, checkout, installer), omitted).rejects.toThrow('COMPILED_ARTIFACT_INVALID');
-      expect(await readdir(target)).toEqual(['sentinel.txt']); expect(await readFile(path.join(target, 'sentinel.txt'), 'utf8')).toBe('untouched');
-      await createCompiledArtifact(root, input, source, checkout, installer, 'production');
-    }
+    const incomplete = path.join(temp.directory, 'producer-incomplete'), output = path.join(temp.directory, 'publication');
+    await writeFixture(incomplete, installer, omitted);
+    await expect(createCompiledArtifact(incomplete, output, source, checkout, installer, 'production'), omitted).rejects.toThrow();
+    expect(await lstat(output).catch(error => {if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;})).toBeUndefined();
+    const manifestFile = path.join(input, 'manifest.json'), manifest = JSON.parse(await readFile(manifestFile, 'utf8')) as {files: {path: string}[]};
+    manifest.files = manifest.files.filter(entry => entry.path !== omitted && !entry.path.startsWith(`${omitted}/`));
+    const removed = path.resolve(input, 'payload', omitted);
+    expect(removed.startsWith(path.resolve(temp.directory) + path.sep)).toBe(true);
+    await rm(removed, {recursive: true, force: true}); await writeFile(manifestFile, JSON.stringify(manifest));
+    await expect(restoreCompiledArtifact(input, target, source, checkout, installer), omitted).rejects.toThrow('COMPILED_ARTIFACT_INVALID');
+    expect(await readdir(target)).toEqual(['sentinel.txt']); expect(await readFile(path.join(target, 'sentinel.txt'), 'utf8')).toBe('untouched');
+    await createCompiledArtifact(root, input, source, checkout, installer, 'production');
   } finally {await temp.dispose();}
-});
+}, MISSING_ROOT_FS_BUDGET_MS);
 
 // ET-055 PR-4: a staging build seals its own package folder, the manifest records the channel, and a restore accepts the
 // roots of that channel only: a production package folder never passes in a staging artifact, and an unknown channel fails.
@@ -187,4 +215,4 @@ it('seals and restores the package folder of the build channel only', async () =
     expect((await restoreCompiledArtifact(input, target, source, checkout, false)).channel).toBe('staging');
     expect(await readFile(path.join(target, 'out/ETS2Telemetry Desktop Staging-win32-x64/fixture.exe'), 'utf8')).toBe('compiled out/ETS2Telemetry Desktop Staging-win32-x64');
   } finally {await temp.dispose();}
-});
+}, CHANNEL_CASE_FS_BUDGET_MS);
