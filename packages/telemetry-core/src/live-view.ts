@@ -119,7 +119,10 @@ export function truckText(truck: LiveTruck): Reading<string> {
   if (truck.model.name.state === 'value' && truck.model.name.value !== '' && brand.state === 'value' && brand.value !== '') return valueOf(`${brand.value} ${truck.model.name.value}`);
   return model;
 }
-/** Trailer name, else body type, else id: job trailers usually arrive without a name (concept.md, October 13, 2026). */
+/**
+ * Trailer name, else body type, else id: job trailers usually arrive without a name (DESIGN-DECISIONS.md, October 13,
+ * 2026).
+ */
 export const trailerText = (trailer: LiveTrailer): Reading<string> => firstText(trailer.model.name, trailer.bodyType, trailer.model.id);
 
 /**

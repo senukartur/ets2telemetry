@@ -8,7 +8,7 @@ import {compareNugetVersions, isReleaseChannel, nugetVersionOf, releaseVersionPr
 // workflow"). `run` checks `GET /repos/{repo}/actions/runs/{id}`: only a completed, successful Windows CI run of this
 // repository itself (never a fork), from a push or a dispatch (never a pull request), is released, and it names the
 // installer artifact of its latest attempt for the channel. Production takes only a run on `main`; staging takes a run on
-// any branch (owner decision of October 28, 2026; concept.md, "UP15 and UP16 amended"). A run's
+// any branch (owner decision of October 28, 2026; DESIGN-DECISIONS.md, "UP15 and UP16 amended"). A run's
 // `head_branch` is only a name (a tag called `main` has it too), so for production `ancestry` checks
 // `GET /repos/{repo}/compare/{head}...main`, made after the workflow proved that no tag `main` exists: the run's commit
 // must be on the main branch. Staging has no ancestry check; its gate is the owner's approval of release-staging (UP16).

@@ -53,7 +53,7 @@ ET-047 (owner decision, October 23, 2026) moves Hard Mode to a dedicated Drive p
 
 All Hard Mode app text uses the accepted ET-029 typed EN/RU dictionaries with explicit selected-language view/component inputs, including hot changes on the Hard Mode page. Only UI labels/status/explanations are translated: SDK cargo/city/company/truck names, raw numeric/cvar evidence and stored audit/protocol enums remain unchanged. Qualifying journal rows show `HM`; localized trip details show opening/latest audit, manual-delivery proof and first loss. The JSON export is [format 2](journal-export.md#hard-mode-format-2-et-026). A future server dispatch maps `is_hard_mode` to the same boolean; no server exists or is implemented here.
 
-`GAME_HISTORY_RECORDING` remains false. Real history enablement and all other cards' game/performance gates are unchanged. See [validation](validation/et-026.md) and [regression registry](regression-registry.md#et-026-hard-mode).
+`GAME_HISTORY_RECORDING` remains false. Real history enablement and all other cards' game/performance gates are unchanged. See [validation](validation/et-026.md) and [regression registry](regression-registry-history.md#et-026-hard-mode).
 
 ## Conservative loss and measurement limits
 

@@ -259,7 +259,7 @@ function applyEffects(c: EffectContext, effects: unknown): void {
         // of this session would record carrier (session, nextEventSeq), which the journal would read as the next live event.
         if (c.attachJobRef !== undefined && statement(c.db, 'SELECT plugin_session_ref FROM trips WHERE id = ?').pluck().get(trip.id) === c.session.id) fail('INVALID_INPUT');
         let outcomeEvent: bigint | null = null;
-        // Only the gameplay outcome event decides delivery or cancellation (concept.md §7).
+        // Only the gameplay outcome event decides delivery or cancellation (DESIGN-DECISIONS.md §7).
         if (outcome !== 'none') {
           if (effect.outcomeEvent === undefined) fail('INVALID_INPUT');
           const event = eventRefOf(c, effect.outcomeEvent);

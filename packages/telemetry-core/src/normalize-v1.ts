@@ -101,7 +101,7 @@ export interface DeliveredRecord {
   revenue: Reading<MoneyValue<'revenue'>>; earnedXp: Reading<number>; cargoDamage: Reading<number>;
   /** The game-reported job distance: not the planned distance and not the odometer. */
   distance: Reading<Distance<'game-delivered'>>;
-  /** Game minutes, including any sleep or crossing inside the job (concept.md, October 13, 2026). */
+  /** Game minutes, including any sleep or crossing inside the job (DESIGN-DECISIONS.md, October 13, 2026). */
   deliveryDuration: Reading<bigint>; autoParkUsed: Reading<boolean>; autoLoadUsed: Reading<boolean>;
 }
 export function normalizeDeliveredRecord(record: Extract<EventRecord, {type: 'job.delivered'}>): DeliveredRecord {

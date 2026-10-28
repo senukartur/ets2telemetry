@@ -20,7 +20,7 @@ Task: $ARGUMENTS
 
 You are the orchestrator. Run every agent sequentially, because each step depends on the previous one. You own the Git branch setup, pushes, the PR and CI dispatch. Subagents start cold. Pass them absolute paths and every fact they need. Within one session, continue an existing subagent rather than starting a new one when sending follow-up instructions for the same role.
 
-Read [docs/delivery-pipeline.md](../../../docs/delivery-pipeline.md) for the design. This pipeline does not replace the coordinator role in `COORDINATOR.md` and grants no authority beyond `AGENTS.md`. Never mark the PR ready, merge it, or write to Trello unless the owner asks for that in this conversation.
+Read [docs/delivery-pipeline.md](../../../docs/delivery-pipeline.md) for the design. This pipeline does not replace the coordinator role in `COORDINATOR.md` and grants no authority beyond `AGENTS.md` and `docs/agent-rules.md`. Never mark the PR ready, merge it, or write to Trello unless the owner asks for that in this conversation.
 
 Talk to the owner in Russian. Write plans, commits, PR text and repository files in English.
 
@@ -162,7 +162,7 @@ Record `step: done` in `state.md`. Leave the worktree in place. Marking the PR r
 
 Stop and ask the owner instead of continuing when:
 
-- the task conflicts with an owner decision in `AGENTS.md`;
+- the task conflicts with an owner decision in `docs/agent-rules.md` or `DECISION-LOG.md`;
 - the plan needs an owner decision;
 - the planned branch or PR already exists;
 - the verifier reports `INVALID`;

@@ -1,8 +1,9 @@
 // ET-015b PR-2: the pure one-second history sampler (H3–H5, H7, H13, H14). Readings are built from the shared protocol
 // v1 snapshot and checkpoint fixtures and checked by the contract validator; trip views come from the ET-014 reducer
 // over tests/shared/trip-messages.ts. Every expected decision, second and row is written by hand from docs/trips.md and
-// the decisions H3–H7, H13 and H14 (concept.md); none is read back from the code under test (REG-001, REG-002, REG-003,
-// REG-009). Source time starts at 1,000 s, so a reading `ms` after the origin lies in second 1000 + floor(ms / 1000).
+// the decisions H3–H7, H13 and H14 (DESIGN-DECISIONS.md); none is read back from the code under test (REG-001, REG-002,
+// REG-003, REG-009). Source time starts at 1,000 s, so a reading `ms` after the origin lies in second
+// 1000 + floor(ms / 1000).
 import {createHash} from 'node:crypto';
 import {readFileSync} from 'node:fs';
 import {describe, expect, it} from 'vitest';

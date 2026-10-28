@@ -1,6 +1,6 @@
 # Trip journal
 
-ET-016 adds the trip journal: a list of recorded trips, a detail view of one trip and a versioned JSON export. This document describes where the journal reads its data, the read commands and their bounds, and the timeline window of a trip. Decisions J1–J22 are in [concept.md](../concept.md#et-016-authorization--october-16-2026); the schema they read is [storage schema version 2](storage.md#schema-version-2-et-016).
+ET-016 adds the trip journal: a list of recorded trips, a detail view of one trip and a versioned JSON export. This document describes where the journal reads its data, the read commands and their bounds, and the timeline window of a trip. Decisions J1–J22 are in [DESIGN-DECISIONS.md](../DESIGN-DECISIONS.md#et-016-authorization--october-16-2026); the schema they read is [storage schema version 2](storage.md#schema-version-2-et-016).
 
 Status (October 16, 2026): ET-016a PR-2 implements the storage reads in the storage worker and their tests. PR-3 routes them from the dashboard through main to the telemetry service with five bridge methods ([IPC methods and codes](#ipc-methods-and-codes-j10-j11)). PR-4 adds the [Journal tab](#the-journal-tab-j12j14) to the main window, which reads through those methods. PR-5 (October 17, 2026) adds the sixth method and the [JSON export](#json-export-j15j18). The parts below marked **pending** belong to later PRs. `GAME_HISTORY_RECORDING` stays `false`, so no real game history exists to show.
 

@@ -93,7 +93,7 @@ it('makes main\'s staging build the staging release artifact, with this run\'s s
   for (const name of ['Windows x64 tests', 'Windows x64 scaffold', 'Windows x64 native AddressSanitizer']) expect(text).toContain(`    name: ${name}\n`);
 });
 
-// Owner decision of October 28, 2026 (concept.md, "UP15 and UP16 amended"): a dispatch on a branch
+// Owner decision of October 28, 2026 (DESIGN-DECISIONS.md, "UP15 and UP16 amended"): a dispatch on a branch
 // other than main is a releasable staging build. windows-build, windows-runtime and windows-installer set this run's
 // staging number there, as they set the production channel on main, so windows-build's staging artifact carries
 // <base>-stg.<6-digit run number> and release-identity.json in the shape release.yml downloads. Pull requests, dispatches on

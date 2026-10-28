@@ -1,8 +1,8 @@
 # Advisory AI code review
 
-[Claude code review](../.github/workflows/claude-review.yml) runs [anthropics/claude-code-action](https://github.com/anthropics/claude-code-action) on pull requests. Its comments are advisory input for the owner. They never approve, request changes, satisfy a required check, or replace the owner review, the [Windows CI](ci.md) checks, independent review, or real-game evidence defined in [TESTING.md](../TESTING.md). Do not cite an AI review as proof that a change is correct.
+[Claude code review](../.github/workflows/claude-review.yml) runs [anthropics/claude-code-action](https://github.com/anthropics/claude-code-action) on pull requests. Its comments are advisory input for the owner. They never approve, request changes, satisfy a required check, or replace the owner review, the [Windows CI](ci.md) checks, independent review, or real-game evidence defined in [TESTING.md](TESTING.md). Do not cite an AI review as proof that a change is correct.
 
-AI review comments follow the same handling as human review: the agent that addresses them replies to each line thread with the fixing commit SHA or a reasoned disagreement and then resolves it, and answers the summary comment with one PR comment; see [AGENTS.md](../AGENTS.md#review-threads).
+AI review comments follow the same handling as human review: the agent that addresses them replies to each line thread with the fixing commit SHA or a reasoned disagreement and then resolves it, and answers the summary comment with one PR comment; see [the agent rules](agent-rules.md#review-threads).
 
 ## Triggers
 
@@ -17,7 +17,7 @@ Concurrency is set per job. The automatic review cancels its own earlier run for
 
 Each job runs on `ubuntu-latest` with a 20-minute timeout and job permissions limited to `contents: read`, `pull-requests: write` and `issues: write`. Claude may read the repository and post PR comments through the job's `GITHUB_TOKEN`; it cannot push commits. Allowed tools are restricted to `Read`, `Grep`, `Glob`, `gh pr view`, `gh pr diff`, `gh pr comment` and inline review comments. Each run posts a new summary comment. Both jobs pin the model with `--model claude-sonnet-5-5` so an action update cannot change it silently; change both `claude_args` entries to switch models.
 
-The workflow asks Claude to read [AGENTS.md](../AGENTS.md), then the portions of `concept.md`, `TESTING.md` and `docs/` touched by the diff. Its prompt lists project-specific constraints to check; update it when AGENTS.md changes a review-relevant invariant.
+The workflow asks Claude to read [AGENTS.md](../AGENTS.md), then the parts of [docs/agent-rules.md](agent-rules.md), `docs/CONCEPT.md`, `docs/TESTING.md` and `docs/` that apply to the diff. Its prompt lists project-specific constraints to check; update it when `docs/agent-rules.md` changes a review-relevant invariant.
 
 ## Setup
 

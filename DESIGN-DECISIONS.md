@@ -1,4 +1,10 @@
-# ETS2Telemetry: Project Concept and Requirements
+# Design decisions and concept history
+
+This file holds the full text that `concept.md` contained until October 28, 2026, moved here verbatim: the original requirements in sections 1–12 and the dated design decision records of each card, with the decision IDs that other documents cite (for example K1–K12 or UP1–UP20). [CONCEPT.md](docs/CONCEPT.md) now describes only the product idea and its current features.
+
+- Search by card ID or decision ID, for example `rg -n "ET-015a|R14" DESIGN-DECISIONS.md`, and read only the matching sections.
+- In the moved text, "this concept" and "this document" mean the former `concept.md`. Where the text and the current [CONCEPT.md](docs/CONCEPT.md) disagree, the current concept and later dated decisions govern.
+- Do not add new records here. Owner decisions go to [DECISION-LOG.md](DECISION-LOG.md); other design decisions go in the PR description ([documentation budget](docs/agent-rules.md#documentation-budget)).
 
 Concept recorded on: October 10, 2026.
 
@@ -28,7 +34,7 @@ Status updated October 11, 2026: ET-001 scaffold implemented and its native Wind
 
 Repository setup update on October 10, 2026: local `main` tracks the existing history at `https://github.com/senukartur/ets2telemetry.git`. Git for Windows 2.55.0.windows.5 and GitHub CLI 2.102.0 are installed. GitHub CLI is authenticated as `senukartur` and provides Git's HTTPS credentials. Fetch, a fast-forward-only pull, and the initial documentation push succeeded. The published documentation includes this concept, `AGENTS.md`, and `README.md`. The temporary Trello planning manifest stays local and is excluded through `.gitignore`. Use Git for commits, branches, and synchronization, and GitHub CLI for GitHub operations. This setup does not establish an application build toolchain or game compatibility.
 
-Development uses lightweight GitHub Flow: short-lived task branches, PRs targeting `main`, relevant validation and owner review, and squash merging. Detailed working rules are in `AGENTS.md`. GitHub is configured for squash merging and automatic deletion of merged branches. The server-side `Protect main` ruleset and a local pre-push hook guard `main` ([branch protection](AGENTS.md#branch-protection--october-16-2026)). ET-022 now defines [Windows CI](docs/ci.md) after the scaffold; clean hosted and deliberate failure/restoration evidence is recorded in [ET-022 validation](docs/validation/et-022.md); final current-head checks, independent review and owner merge remain required.
+Development uses lightweight GitHub Flow: short-lived task branches, PRs targeting `main`, relevant validation and owner review, and squash merging. Detailed working rules are in `AGENTS.md`. GitHub is configured for squash merging and automatic deletion of merged branches. The server-side `Protect main` ruleset and a local pre-push hook guard `main` ([branch protection](docs/agent-rules.md#branch-protection--october-16-2026)). ET-022 now defines [Windows CI](docs/ci.md) after the scaffold; clean hosted and deliberate failure/restoration evidence is recorded in [ET-022 validation](docs/validation/et-022.md); final current-head checks, independent review and owner merge remain required.
 
 ## 1. Project Overview
 
@@ -53,7 +59,7 @@ Owner-approved deferred capabilities are tracked in [technical debt](docs/techni
 - Record both trip summaries and **one telemetry sample per second** for future charts and trip analysis.
 - The website, accounts, company-wide statistics, and server synchronization belong to a later phase.
 - Visual design will be discussed separately. Correct data acquisition and storage are the current priorities. Design target update on October 19, 2026: the owner-approved desktop and overlay design in the Yukon Union style is specified in [docs/design](docs/design/README.md); it changes no requirement in this concept.
-- New functionality must preserve existing behavior through regression tests added alongside each feature. Bug fixes should retain a reproducing test where feasible; the detailed policy is in [TESTING.md](TESTING.md).
+- New functionality must preserve existing behavior through regression tests added alongside each feature. Bug fixes should retain a reproducing test where feasible; the detailed policy is in [TESTING.md](docs/TESTING.md).
 - **All internal documentation that may be committed to Git must be written in English.** This includes this concept, agent instructions, technical specifications, and development guides. This does not determine the application's UI language.
 
 The technical choices below are the working implementation baseline. Changes to these user requirements should be discussed with the owner. Routine implementation details can be decided within this concept without repeatedly seeking approval.
@@ -259,7 +265,7 @@ The maintained v0 client uses a fixed project-owned native broker for documented
 
 ## 10. Acceptance Criteria and Validation
 
-[TESTING.md](TESTING.md) defines the test layers, permanent regression scenarios, CI/merge policy, historical migration checks, and real-game evidence. ET-001 adds scaffold checks; extend them in every feature PR. Most repeatable feature logic will use simulation, real local transport, and isolated storage; real-game compatibility and input/window behavior require separate evidence. The Windows CI workflow has recorded clean hosted and deliberate failure/restoration evidence; final current-head checks and review remain required, and broader feature suites remain pending.
+[TESTING.md](docs/TESTING.md) defines the test layers, permanent regression scenarios, CI/merge policy, historical migration checks, and real-game evidence. ET-001 adds scaffold checks; extend them in every feature PR. Most repeatable feature logic will use simulation, real local transport, and isolated storage; real-game compatibility and input/window behavior require separate evidence. The Windows CI workflow has recorded clean hosted and deliberate failure/restoration evidence; final current-head checks and review remain required, and broader feature suites remain pending.
 
 - Complete job lifecycle in both games: acceptance, driving, stopping, pausing, delivery, and cancellation.
 - A separate compatibility matrix for single-player and TruckersMP, recording tested versions. Convoy is deferred (see the October 12, 2026 owner decision). Documentation alone does not establish compatibility.
@@ -1322,7 +1328,7 @@ Per-gearbox gear display modes reverted (October 27, 2026): PR #204 (`ecb08e37`)
 
 ## Game history recording enablement — October 25, 2026
 
-On October 25, 2026 the owner authorized lifting the recording block and preparing the telemetry for recording a real trip (see [AGENTS.md](AGENTS.md#game-history-recording-enablement--october-25-2026)). `GAME_HISTORY_RECORDING` is now `true`, which supersedes the R3 value above and the "stays `false`" notes of the ET-015 to ET-018 sections; those dated sections are otherwise unchanged. Production game selections are durable over protocol v1 into the history database; the v0 retirement is not a prerequisite (the intent of D2, that recording never ships on v0, holds because recording is v1 only); TD-021 keeps the fail-closed `SESSION_CONFLICT`. No wire, schema, IPC or native change follows. The first real recorded trip and every real-game, TruckersMP and performance check remain pending in [the enablement validation](docs/validation/game-history-enablement.md).
+On October 25, 2026 the owner authorized lifting the recording block and preparing the telemetry for recording a real trip (see [DECISION-LOG.md](DECISION-LOG.md#game-history-recording-enablement--october-25-2026)). `GAME_HISTORY_RECORDING` is now `true`, which supersedes the R3 value above and the "stays `false`" notes of the ET-015 to ET-018 sections; those dated sections are otherwise unchanged. Production game selections are durable over protocol v1 into the history database; the v0 retirement is not a prerequisite (the intent of D2, that recording never ships on v0, holds because recording is v1 only); TD-021 keeps the fail-closed `SESSION_CONFLICT`. No wire, schema, IPC or native change follows. The first real recorded trip and every real-game, TruckersMP and performance check remain pending in [the enablement validation](docs/validation/game-history-enablement.md).
 
 ## ET-052 mandatory break and protocol v1 minor 2 — October 26, 2026
 

@@ -329,9 +329,9 @@ export async function runJournalSeeded({dashboard, record}) {
 }
 
 // ET-016 PR-5: the trip export journey (J15-J18). The Save dialog is replaced in main through Playwright's main-process
-// evaluate (TESTING.md §2); the product has no test seam. The replacement answers with a fixed target inside this run's
-// output folder, records only the default file name and the filters it was offered, and is set anew for each case.
-// ET-018 PR-4 extended the J18 note to settings.
+// evaluate (docs/TESTING.md §2); the product has no test seam. The replacement answers with a fixed target inside this
+// run's output folder, records only the default file name and the filters it was offered, and is set anew for each
+// case. ET-018 PR-4 extended the J18 note to settings.
 const exportNote = config => `Uninstalling ${smokeDisplayName(config)} removes its local trip history and settings. The JSON export is a copy for your own records; it cannot be imported back.`;
 /**
  * The refusal of an export target in the data folder, hand-written per channel (ET-055 UP12): a staging build refuses both

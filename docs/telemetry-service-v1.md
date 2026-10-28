@@ -1,6 +1,6 @@
 # Protocol v1 ingestion in the telemetry service
 
-ET-006b connects the Electron telemetry service to [protocol v1](protocol/v1.md): it validates each v1 connection, keeps service-internal live state, measures the source clock and, when a durable sink is configured, commits events and gap markers before it acknowledges them. Decisions E1–E14 are recorded in [concept.md](../concept.md#et-006b-authorization--october-15-2026); they are coordinator decisions under the owner's delegation of October 15, 2026 and were not individually reviewed by the owner.
+ET-006b connects the Electron telemetry service to [protocol v1](protocol/v1.md): it validates each v1 connection, keeps service-internal live state, measures the source clock and, when a durable sink is configured, commits events and gap markers before it acknowledges them. Decisions E1–E14 are recorded in [DESIGN-DECISIONS.md](../DESIGN-DECISIONS.md#et-006b-authorization--october-15-2026); they are coordinator decisions under the owner's delegation of October 15, 2026 and were not individually reviewed by the owner.
 
 Status (October 15, 2026): PR-1 adds the ingestion, the ACK pipeline and the durable sink in `apps/desktop/src` with their tests. PR-2 adds the v1 mode of the native broker. PR-3 connects [telemetry-service.ts](../apps/desktop/src/telemetry-service.ts) to the plugin's v1 endpoint beside v0, **live-only and without a sink**: the service sends a v1 hello with `durableEvents: false`, writes no history and sends no ACK, and the dashboard and overlay stay on v0 ([service wiring](#service-wiring)). Recording and trip effects stay with ET-015a and ET-014. See [ET-006b validation](validation/et-006b.md) for the checks performed.
 
@@ -149,7 +149,7 @@ A job accepted before the recorder attached opens a partial trip from the connec
 
 ## One-second samples (ET-015b)
 
-ET-015b PR-3 records one-second history samples through the trip recorder, under decisions H2, H5, H7–H13, H15 and H17 ([concept.md](../concept.md#et-015b-authorization--october-16-2026)). The pure sampler is [history-samples.ts](../packages/telemetry-core/src/history-samples.ts) ([trips](trips.md#one-second-sampler-et-015b)); storage's one-row-per-second guard is the `uniqueSeconds` option of `appendSamples` ([storage](storage.md#storage-api)). DurableDelivery stays the only scheduler (R2): the recorder only holds the rows.
+ET-015b PR-3 records one-second history samples through the trip recorder, under decisions H2, H5, H7–H13, H15 and H17 ([DESIGN-DECISIONS.md](../DESIGN-DECISIONS.md#et-015b-authorization--october-16-2026)). The pure sampler is [history-samples.ts](../packages/telemetry-core/src/history-samples.ts) ([trips](trips.md#one-second-sampler-et-015b)); storage's one-row-per-second guard is the `uniqueSeconds` option of `appendSamples` ([storage](storage.md#storage-api)). DurableDelivery stays the only scheduler (R2): the recorder only holds the rows.
 
 ```text
 reading at the FIFO head -> TripRecorderSink.observe: step the reducer and adopt the reading
@@ -225,7 +225,7 @@ host scheduling stalls are not bounded by a hard wall-clock guarantee.
 
 ## Recording gate (ET-015a)
 
-PR-3 (R3, R10, R14) decides in [recording-policy.ts](../apps/desktop/src/recording-policy.ts) whether the service records, and where. Since the owner's authorization of October 25, 2026 ([AGENTS.md](../AGENTS.md#game-history-recording-enablement--october-25-2026)) production records real game history: `GAME_HISTORY_RECORDING` is `true` (a unit test is a tripwire on it), so the `ets2` and `ats` selections request durable delivery. The enablement did not wait for the v0 retirement (D2): recording is protocol v1 only, and v0 stays the live path of the dashboard and overlay. The S-1/S-2 decision is done: ET-016 PR-6 persists trip fuel used (S-1, [trips](trips.md#readings-accounting-t16-t17)) and ET-016 PR-7 opens late-attach trips (S-2, [trips](trips.md#late-attach-trips-j9)), so the enablement did not wait for them.
+PR-3 (R3, R10, R14) decides in [recording-policy.ts](../apps/desktop/src/recording-policy.ts) whether the service records, and where. Since the owner's authorization of October 25, 2026 ([the decision log](../DECISION-LOG.md#game-history-recording-enablement--october-25-2026)) production records real game history: `GAME_HISTORY_RECORDING` is `true` (a unit test is a tripwire on it), so the `ets2` and `ats` selections request durable delivery. The enablement did not wait for the v0 retirement (D2): recording is protocol v1 only, and v0 stays the live path of the dashboard and overlay. The S-1/S-2 decision is done: ET-016 PR-6 persists trip fuel used (S-1, [trips](trips.md#readings-accounting-t16-t17)) and ET-016 PR-7 opens late-attach trips (S-2, [trips](trips.md#late-attach-trips-j9)), so the enablement did not wait for them.
 
 `recordingPlan(env, {gameHistory})` returns the database and the durable selections:
 

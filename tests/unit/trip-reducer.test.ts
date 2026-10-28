@@ -1,5 +1,5 @@
 // ET-014 PR-1: the trip lifecycle and completeness reducer, one table row at a time. Every expected effect is written
-// by hand from docs/trips.md, the T1–T20 decisions in concept.md and the CAP-01 observations O1–O11
+// by hand from docs/trips.md, the T1–T20 decisions in DESIGN-DECISIONS.md and the CAP-01 observations O1–O11
 // (docs/validation/cap-01a.md); none is copied from reducer output. Each case names its evidence basis: an O number for
 // a synthetic sequence shaped after that text observation, concept-2026-10-13/14 for an owner decision, or
 // synthetic-inference for a sequence never observed in a real game. Trip UUIDs come from an independent node:crypto
@@ -298,7 +298,7 @@ describe('hydration, gaps and connections', () => {
       // The consumer was then absent for eventSeq 1–20 (offline): the gap closes the trip (T10) at the session's last label,
       // which the attach set to its start label, and its job becomes untracked.
       [gap, [close(a, 'none', 'gap', 'partial', BASE_UTC), ...gapEffects(gap, a, '1', '20')]],
-      // A fine meanwhile is inside a job no trip tracks, so ambiguous, never free driving (concept.md, October 13, 2026).
+      // A fine meanwhile is inside a job no trip tracks, so ambiguous, never free driving (DESIGN-DECISIONS.md, October 13, 2026).
       [s.event(r.fined()), [attr(null, 'ambiguous')]], [s.event(r.paused(), paused)],
       // The identical job re-sent opens a not-merged gap continuation of the late-attach trip, not a second late attach.
       [s.event(r.jobConfigured(), paused), [open(t, at(4), {recordingCompleteness: 'partial'}), cause(t, 'discontinuity', {cause: 'gap', continuationOf: a, decision: 'not-merged', atEventSeq: '23'})]]

@@ -288,8 +288,8 @@ describe('the reg.exe port', () => {
   describe('a round trip through the real reg.exe under this run\'s own test key', () => {
     /**
      * Each operation's budget for its reg.exe processes (one to four): a hang guard for a loaded host, not a timing
-     * assertion. How fast Windows starts reg.exe is not what this case checks (TESTING.md section 6); the fake reg.exe
-     * cases above check how one budget is shared by an operation's calls.
+     * assertion. How fast Windows starts reg.exe is not what this case checks (docs/TESTING.md section 6); the fake
+     * reg.exe cases above check how one budget is shared by an operation's calls.
      */
     const REG_HANG_GUARD_MS = 30_000;
     /** The case runs seven operations one after another, each bounded by the guard. */

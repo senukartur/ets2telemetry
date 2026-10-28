@@ -1,7 +1,7 @@
 // The trip recorder's pending sample buffer (ET-015b, H8, H9): the 300-row bound with newest-drop, one session-level
 // `sample-loss` interval per contiguous dropped run, written once the run ended however often a write is retried,
 // batches of one plugin session, commits and discard. Expected values are written by hand from decisions H8 and H9
-// (concept.md) and docs/telemetry-service-v1.md (REG-007, REG-009).
+// (DESIGN-DECISIONS.md) and docs/telemetry-service-v1.md (REG-007, REG-009).
 import {describe, expect, it} from 'vitest';
 import type {SampleInput} from '../../packages/storage/src/api';
 import {MAX_LOSS_RUNS, MAX_PENDING_SAMPLES, SampleBuffer} from '../../apps/desktop/src/sample-buffer';

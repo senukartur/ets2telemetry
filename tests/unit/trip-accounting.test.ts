@@ -157,7 +157,7 @@ describe('resumed cleared trips (fix round 1)', () => {
       observedDistanceM: 500, awaitingOutcome: true};
     s.next = 3n;
     const state = play([[sessionInput(s.welcome(), '2', [seed])], [reading(s, {ms: 0, odometer: 1000})], [reading(s, {ms: 1000, odometer: 1100})],
-      // The delivery after the clear still attaches (concept.md, October 13, 2026); the free-driving 100 m are not the trip's.
+      // The delivery after the clear still attaches (DESIGN-DECISIONS.md, October 13, 2026); the free-driving 100 m are not the trip's.
       [s.event(r.delivered(), paused), [partial(trip), {kind: 'completeness.add', interval: {tripUuid: trip, kind: 'not-connected', detail: {cause: 'consumer-restart'}}},
         attr(trip, 'trip'), delivered(trip, 'partial', at(3))]]]);
     expect(tripView(state, 'ets2').lastClosed).toMatchObject({observedDistanceM: {state: 'value', value: 500}});

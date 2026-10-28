@@ -1,6 +1,6 @@
 // The recording gate of the telemetry service (ET-015a, R3). Expected plans are written by hand from the decision R3
-// (concept.md) and docs/telemetry-service-v1.md: production records no game history, and ETS2TELEMETRY_RECORDING can
-// only select a named synthetic or replay database, never the history path.
+// (DESIGN-DECISIONS.md) and docs/telemetry-service-v1.md: production records no game history, and
+// ETS2TELEMETRY_RECORDING can only select a named synthetic or replay database, never the history path.
 import {describe, expect, it, vi} from 'vitest';
 import {GAME_HISTORY_RECORDING, RECORDING_NAME_PATTERN, recordingPlan} from '../../apps/desktop/src/recording-policy';
 
@@ -11,8 +11,8 @@ const plan = (value: string | undefined, gameHistory = false) => {
 
 describe('recording gate (R3)', () => {
   it('tripwire: production records game history since the owner authorization of October 25, 2026', () => {
-    // Changing this value is an owner decision (AGENTS.md, "Game history recording enablement"); this test must change
-    // with it, never on its own.
+    // Changing this value is an owner decision (DECISION-LOG.md, "Game history recording enablement"); this test must
+    // change with it, never on its own.
     expect(GAME_HISTORY_RECORDING).toBe(true);
   });
 

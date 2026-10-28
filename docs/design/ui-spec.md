@@ -1,6 +1,6 @@
 # Desktop UI specification (Yukon Union style)
 
-Status: design target, October 19, 2026. This document and [the mockup](mockup.html) describe the final look of the desktop application and its overlay. They do not change product requirements, contracts or acceptance criteria, and they do not authorize implementation. Each implementing package needs its own card and follows [AGENTS.md](../../AGENTS.md).
+Status: design target, October 19, 2026. This document and [the mockup](mockup.html) describe the final look of the desktop application and its overlay. They do not change product requirements, contracts or acceptance criteria, and they do not authorize implementation. Each implementing package needs its own card and follows [the agent rules](../agent-rules.md).
 
 The owner asked for a final mockup that matches the Yukon Union community dashboard, adds the Hard Mode status from [ET-026](https://trello.com/c/Cl5oNGTw), and can be implemented by agents. The owner chose: files in the repository, English with a Russian variant, the "Yukon Union Telemetry" brand, and screens for account and sync, first run, and empty and error states besides Live, Journal, Trip details, Settings, Hard Mode and the overlay.
 
@@ -14,7 +14,7 @@ The owner asked for a final mockup that matches the Yukon Union community dashbo
 | [assets/logo.png](assets/logo.png) | The application logo (bear head), white line art on a transparent background, 1024 × 1024 PNG. Rules in [§3 Logo](#3-tokens-type-and-icons). |
 | [assets/app-icon.png](assets/app-icon.png) | A 256 px preview of the application icon (the "road merge" mark). Rules in [§3 Application icon](#3-tokens-type-and-icons). |
 
-Precedence: AGENTS.md and concept.md (product and data rules) → this spec → tokens.css → the mockup's pixels. If the mockup and this spec disagree, follow this spec and report the difference.
+Precedence: docs/agent-rules.md and docs/CONCEPT.md (product and data rules) → this spec → tokens.css → the mockup's pixels. If the mockup and this spec disagree, follow this spec and report the difference.
 
 **Spec ids.** Every region in the mockup carries `data-spec="<id>"`, for example `live.hardMode`. Reuse the id as the component's `data-testid` (or as its prefix), so that tests, reviews and this document point at the same thing. The tables below list every id.
 

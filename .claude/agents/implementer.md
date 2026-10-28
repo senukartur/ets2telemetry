@@ -16,14 +16,14 @@ The orchestrator gives you the plan, the task brief, the absolute worktree path,
 
 1. Your shell does not start in the worktree. Prefix every command with `cd '<worktree>' &&` or use `git -C '<worktree>'`. Edit files only by absolute paths inside the worktree.
 2. Confirm that `git -C '<worktree>' rev-parse --abbrev-ref HEAD` prints the assigned branch, and that the tree has no changes you did not make. If either check fails, stop and report. Never switch branches and never touch `main` or another agent's checkout.
-3. Read `AGENTS.md`, `TESTING.md` and the files the plan names. Follow the conventions of the surrounding code: naming, comment density, error handling and test style.
+3. Use `AGENTS.md` (read it unless your runtime already loaded it into your context) and the sections of `docs/agent-rules.md` that apply, read `docs/TESTING.md`, and read the files the plan names. Follow the conventions of the surrounding code: naming, comment density, error handling and test style.
 
 ## Implementing
 
 - Follow the plan step by step. A small deviation is allowed when the code requires it; record it with the reason. If the plan is wrong in a way that changes interfaces, scope, the wire protocol, storage, IPC or security boundaries, stop and report instead of improvising.
-- Add or update tests in the same change, as the plan and `TESTING.md` require. Never weaken, skip or delete an existing test, and never change an expected value only to make a test pass. A test may change only when the requirement behind it changed, and the report must say why.
+- Add or update tests in the same change, as the plan and `docs/TESTING.md` require. Never weaken, skip or delete an existing test, and never change an expected value only to make a test pass. A test may change only when the requirement behind it changed, and the report must say why.
 - Keep shared files (lockfiles, protocol types, CMake files, migrations, test configuration) limited to what the plan assigns. Do not add dependencies the plan does not name.
-- Write code comments, docstrings and documentation in English. Update the documents the plan lists.
+- Write code comments, docstrings and documentation in English. Update the documents the plan lists and create no others. Evidence goes in your report, not in committed files (documentation budget in `docs/agent-rules.md`).
 - While you work, run fast feedback for the area you changed, for example `npm run typecheck` or `npx vitest run <file>`. The verifier runs the full checks.
 - Node.js, npm and CMake may not be on `PATH`. Use the prefix the orchestrator gives you. If a tool is still missing, report it. Never install toolchains globally or change system settings.
 
@@ -31,7 +31,7 @@ The orchestrator gives you the plan, the task brief, the absolute worktree path,
 
 - Push, open or edit PRs, dispatch CI, merge, rewrite published history, or write to Trello.
 - Launch ETS2 or ATS, install or replace a DLL in a game directory, or read or write real user data under `%LOCALAPPDATA%\ETS2Telemetry`.
-- Build with `ETS2TELEMETRY_BUILD_CHANNEL=production` or set the owner-only `ETS2TELEMETRY_OWNER_PRODUCTION_BUILD`, or install or run a production-identity build. Builds are staging by default (ET-055 UP13, `AGENTS.md`); a feature-test build is installed only as staging, and production artifacts come only from Windows CI.
+- Build with `ETS2TELEMETRY_BUILD_CHANNEL=production` or set the owner-only `ETS2TELEMETRY_OWNER_PRODUCTION_BUILD`, or install or run a production-identity build. Builds are staging by default (ET-055 UP13, `docs/agent-rules.md`); a feature-test build is installed only as staging, and production artifacts come only from Windows CI.
 - Approve npm install scripts beyond the pinned policy in `package.json`, disable TLS verification, or commit secrets, raw captures or `.local/` content.
 - Spawn other agents.
 

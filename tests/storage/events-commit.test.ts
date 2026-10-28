@@ -31,7 +31,8 @@ describe('REG-005/REG-009 event commits', () => {
     expect(valid).toEqual(expect.arrayContaining(['money-int64-min', 'money-uint64-max', 'event-seq-last', 'event-seq-2pow53', 'event-worst', 'event-size-limit']));
   });
   // One case per fixture: each opens, migrates and closes its own database, which a slow hosted runner cannot fit
-  // into one case timeout for all of them (TESTING.md section 6; docs/validation/et-019.md, storage suite headroom).
+  // into one case timeout for all of them (docs/TESTING.md section 6; docs/validation/et-019.md, storage suite
+  // headroom).
   it.each(valid)('round-trips the canonical occurred and record payload of the valid event fixture %s exactly', async name => {
     const message = v1(name);
     if (message.kind !== 'event') throw new Error('fixture');
