@@ -23,6 +23,8 @@ export const RELEASES_FILE = 'RELEASES';
 const IDENTITY_MAX_BYTES = 16 * 1024 * 1024;
 const RELEASES_MAX_BYTES = 4 * 1024;
 const RUN_ID = /^[1-9][0-9]{0,19}$/;
+/** A run number zero-padded to 6 digits, never 000000. */
+const RUN_NUMBER = /^(?!000000)\d{6}$/;
 const COMMIT = /^[0-9a-f]{40}$/;
 
 const refuse = message => {throw new Error(`Release artifact refused: ${message}`);};
@@ -39,12 +41,15 @@ function parseReleases(text) {
 
 /**
  * Verifies the artifact folder of the CI run `runId` for `channel` and returns its facts: the channel, versions, tag,
- * title, commit and the name, size and hashes of every file. `commit`, when given, is the run's head commit.
+ * title, commit and the name, size and hashes of every file. `commit`, when given, is the run's head commit. `runNumber`,
+ * when given, is the run's number zero-padded to 6 digits (check-github-release.mjs run); a staging version must then
+ * carry exactly that number, so an artifact is released only under the number of the run that built it.
  */
-export function verifyReleaseArtifacts(folder, {channel, runId, commit}) {
+export function verifyReleaseArtifacts(folder, {channel, runId, commit, runNumber}) {
   if (!isReleaseChannel(channel)) refuse(`unknown channel ${JSON.stringify(channel)}`);
   if (typeof runId !== 'string' || !RUN_ID.test(runId)) refuse('the CI run id must be a positive integer');
   if (commit !== undefined && (typeof commit !== 'string' || !COMMIT.test(commit))) refuse('the expected commit must be 40 lower-case hex digits');
+  if (runNumber !== undefined && (typeof runNumber !== 'string' || !RUN_NUMBER.test(runNumber))) refuse('the CI run number must be 6 digits, from 000001');
 
   const identityFile = path.join(folder, IDENTITY_FILE);
   let identityStat;
@@ -67,6 +72,9 @@ export function verifyReleaseArtifacts(folder, {channel, runId, commit}) {
   if (!plainObject(versions)) refuse('the identity has no versions');
   const appVersion = versions.app, problem = releaseVersionProblem(channel, appVersion);
   if (problem) refuse(`version ${JSON.stringify(appVersion)} ${problem}`);
+  if (channel === 'staging' && runNumber !== undefined && !appVersion.endsWith(`-stg.${runNumber}`)) {
+    refuse(`staging version ${appVersion} does not carry the run number ${runNumber} of the CI run it is released from`);
+  }
   const nugetVersion = nugetVersionOf(appVersion);
   if (versions.nuget !== nugetVersion) refuse(`NuGet version ${JSON.stringify(versions.nuget)} is not ${nugetVersion}`);
 
@@ -147,15 +155,23 @@ export function selectKeyId(keys, channel, requested) {
   return keys[0].keyId;
 }
 
-const USAGE = 'Usage: node scripts/release/write-update-manifest.mjs --artifacts <folder> --channel <production|staging> --run-id <id> [--commit <sha>] ' +
-  '[--repository <owner/name>] [--facts <file>] [--out <manifest file> --notes <notes file> [--keys-file <update-keys.ts of the released commit>] [--key-id <id>]]';
+const USAGE = 'Usage: node scripts/release/write-update-manifest.mjs --artifacts <folder> --channel <production|staging> --run-id <id> ' +
+  '[--run-number <6 digits>, required for staging] [--commit <sha>] [--repository <owner/name>] [--facts <file>] ' +
+  '[--out <manifest file> --notes <notes file> [--keys-file <update-keys.ts of the released commit>] [--key-id <id>]]';
+
+/** The `--run-number` a staging release must give (the released run's number, check-github-release.mjs run). */
+export function cliRunNumber(channel, runNumber) {
+  if (channel === 'staging' && runNumber === undefined) throw new Error('A staging release needs --run-number: the run number of the CI run it is released from');
+  return runNumber;
+}
 
 async function main(argv) {
   const {values} = parseArgs({args: argv, strict: true, options: {
-    artifacts: {type: 'string'}, channel: {type: 'string'}, 'run-id': {type: 'string'}, commit: {type: 'string'}, repository: {type: 'string'},
-    'key-id': {type: 'string'}, 'keys-file': {type: 'string'}, facts: {type: 'string'}, out: {type: 'string'}, notes: {type: 'string'}}});
+    artifacts: {type: 'string'}, channel: {type: 'string'}, 'run-id': {type: 'string'}, 'run-number': {type: 'string'}, commit: {type: 'string'},
+    repository: {type: 'string'}, 'key-id': {type: 'string'}, 'keys-file': {type: 'string'}, facts: {type: 'string'}, out: {type: 'string'}, notes: {type: 'string'}}});
   if (!values.artifacts || !values.channel || !values['run-id'] || (values.out === undefined) !== (values.notes === undefined)) throw new Error(USAGE);
-  const facts = verifyReleaseArtifacts(path.resolve(values.artifacts), {channel: values.channel, runId: values['run-id'], commit: values.commit});
+  const facts = verifyReleaseArtifacts(path.resolve(values.artifacts), {channel: values.channel, runId: values['run-id'], commit: values.commit,
+    runNumber: cliRunNumber(values.channel, values['run-number'])});
   if (values.out) {
     // The keys the released build compiled (the release workflow passes update-keys.ts of the run's commit), so a build
     // that ships without a key of its channel is never given a manifest it could not verify.

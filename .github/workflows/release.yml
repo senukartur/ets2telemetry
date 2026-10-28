@@ -1,8 +1,11 @@
 name: Release
 # ET-055 PR-9 (docs/release.md#release-workflow-et-055): the only way a release is published. It never runs on pull requests
-# or pushes; a dispatch names a successful Windows CI run on main and a channel. The verify job checks that run, proves its
-# commit is on the main branch, checks its installer artifact and writes the unsigned update manifest; only the publish
-# jobs, each in its GitHub environment whose required reviewer is the owner, get contents: write.
+# or pushes, and is itself dispatched on main only; a dispatch names a successful Windows CI run of this repository and a
+# channel. Production takes a run on main; staging takes a push or dispatch run on any branch (owner decision of October 28,
+# 2026; concept.md, "UP15 and UP16 amended"), never a pull request or a fork. The verify job checks that
+# run, proves for production that its commit is on the main branch, checks its installer artifact and writes the unsigned
+# update manifest; only the publish jobs, each in its GitHub environment whose required reviewer is the owner, get
+# contents: write.
 #
 # - staging, mode release: sign with the release-staging environment's key and publish a pre-release. Approving that
 #   environment is the owner's authorization of this staging release (UP16).
@@ -12,7 +15,8 @@ name: Release
 #   upload it, publish the release with make_latest=true and confirm that releases/latest names it.
 #
 # The compiled public keys always come from apps/desktop/src/updater/update-keys.ts at the released CI run's commit, never
-# from the dispatch checkout. Every input reaches a script through the environment, never through `${{ }}` inside a
+# from the dispatch checkout, and the scripts read that file as data and never run it, because a staging branch's file
+# can be unreviewed code (scripts/release/update-manifest-common.mjs, parseUpdateKeysSource). Every input reaches a script through the environment, never through `${{ }}` inside a
 # script. Every GitHub GET whose 404 is an answer goes through scripts/release/gh-get.sh, so a missing resource is never
 # confused with a failed request. The runners are GitHub-hosted; no step needs Windows, because the artifact is checked by
 # its recorded hashes only.
@@ -20,7 +24,7 @@ on:
   workflow_dispatch:
     inputs:
       run_id:
-        description: The id of a successful Windows CI run on main (a push or a dispatch on main) whose installer artifact is released
+        description: The id of a successful Windows CI run whose installer artifact is released - production needs a run on main, staging a push or dispatch run on any branch
         type: string
         required: true
       channel:
@@ -53,9 +57,6 @@ concurrency:
   # One release runs and at most one more waits; a further dispatch cancels the waiting one, never the running one.
   group: release
   cancel-in-progress: false
-env:
-  # update-keys.ts is read through Node's type stripping, which warns once about the untyped package.json.
-  NODE_OPTIONS: --disable-warning=MODULE_TYPELESS_PACKAGE_JSON
 jobs:
   verify:
     name: Verify the CI run and its installer artifact
@@ -75,6 +76,7 @@ jobs:
       KEY_ID: ${{ inputs.key_id }}
     outputs:
       commit: ${{ steps.run.outputs.commit }}
+      run_number: ${{ steps.run.outputs.run_number }}
       tag: ${{ steps.facts.outputs.tag }}
       title: ${{ steps.facts.outputs.title }}
       version: ${{ steps.facts.outputs.version }}
@@ -101,8 +103,10 @@ jobs:
           bash scripts/release/gh-get.sh "repos/$GITHUB_REPOSITORY/actions/runs/$RUN_ID" "$RUNNER_TEMP/run.json"
           node scripts/release/check-github-release.mjs run --json "$RUNNER_TEMP/run.json" --run-id "$RUN_ID" --repository "$GITHUB_REPOSITORY" --channel "$CHANNEL" >> "$GITHUB_OUTPUT"
       # A run's head_branch is only a name. Refuse a tag called main, which would make "main" ambiguous, read the main
-      # branch's commit from the unambiguous refs/heads/main, then require the run's commit to be in its history.
-      - name: Prove that the run's commit is on the main branch
+      # branch's commit from the unambiguous refs/heads/main, then require the run's commit to be in its history. Production
+      # only: a staging release may come from any branch's run (owner decision of October 28, 2026).
+      - name: Prove that a production run's commit is on the main branch
+        if: inputs.channel == 'production'
         env:
           COMMIT: ${{ steps.run.outputs.commit }}
         run: |
@@ -126,13 +130,15 @@ jobs:
         env:
           ARTIFACT: ${{ steps.run.outputs.artifact }}
         run: gh run download "$RUN_ID" --repo "$GITHUB_REPOSITORY" --name "$ARTIFACT" --dir "$RUNNER_TEMP/candidate/artifacts"
+      # A staging version must carry the run number of the CI run it is released from.
       - name: Verify the release identity and write the unsigned manifest
         id: facts
         env:
           COMMIT: ${{ steps.run.outputs.commit }}
+          RUN_NUMBER: ${{ steps.run.outputs.run_number }}
         run: |
           mkdir -p "$RUNNER_TEMP/candidate/release"
-          args=(--artifacts "$RUNNER_TEMP/candidate/artifacts" --channel "$CHANNEL" --run-id "$RUN_ID" --commit "$COMMIT" --repository "$GITHUB_REPOSITORY" --facts "$RUNNER_TEMP/facts.json")
+          args=(--artifacts "$RUNNER_TEMP/candidate/artifacts" --channel "$CHANNEL" --run-id "$RUN_ID" --run-number "$RUN_NUMBER" --commit "$COMMIT" --repository "$GITHUB_REPOSITORY" --facts "$RUNNER_TEMP/facts.json")
           if [[ "$MODE" == 'release' ]]; then
             args+=(--out "$RUNNER_TEMP/candidate/release/update-manifest.json" --notes "$RUNNER_TEMP/candidate/release/release-notes.md" --keys-file "$RUNNER_TEMP/keys/update-keys.ts")
             if [[ -n "$KEY_ID" ]]; then args+=(--key-id "$KEY_ID"); fi
@@ -155,6 +161,36 @@ jobs:
           bash scripts/release/gh-get.sh "repos/$GITHUB_REPOSITORY/releases/latest" "$RUNNER_TEMP/latest.json" || status=$?
           if [[ $status -eq 0 ]]; then latest=$(jq -r .tag_name "$RUNNER_TEMP/latest.json"); elif [[ $status -eq 44 ]]; then latest=none; else exit 1; fi
           node scripts/release/check-github-release.mjs newer --latest "$latest" --version "$VERSION"
+      # Staging releases of every branch share one version order, and the base outranks the run number: a branch whose
+      # base is above main's version would stay above every later main build. Raise main's version first.
+      - name: Refuse a staging base version higher than main's
+        if: inputs.channel == 'staging'
+        env:
+          VERSION: ${{ steps.facts.outputs.version }}
+        run: |
+          main_version=$(jq -r .version package.json)
+          node scripts/release/check-github-release.mjs staging-base --version "$VERSION" --main-version "$main_version"
+      # What the owner approves: shown in the run's summary before any publish job waits for its environment.
+      - name: Summarize the release candidate
+        env:
+          VERSION: ${{ steps.facts.outputs.version }}
+          TAG: ${{ steps.facts.outputs.tag }}
+          BRANCH: ${{ steps.run.outputs.branch }}
+          RUN_NUMBER: ${{ steps.run.outputs.run_number }}
+          COMMIT: ${{ steps.run.outputs.commit }}
+        run: |
+          {
+            echo "## Release candidate: $CHANNEL $VERSION"
+            echo
+            echo "| Fact | Value |"
+            echo "| --- | --- |"
+            echo "| Channel | \`$CHANNEL\` |"
+            echo "| Version and tag | \`$VERSION\`, \`$TAG\` |"
+            echo "| Branch of the CI run | \`$BRANCH\` |"
+            echo "| CI run | $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$RUN_ID (number $RUN_NUMBER) |"
+            echo "| Commit | \`$COMMIT\` |"
+            echo "| Mode | \`$MODE\` |"
+          } >> "$GITHUB_STEP_SUMMARY"
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: release-candidate-${{ github.run_id }}-${{ github.run_attempt }}
@@ -180,6 +216,7 @@ jobs:
       GH_TOKEN: ${{ github.token }}
       RUN_ID: ${{ inputs.run_id }}
       COMMIT: ${{ needs.verify.outputs.commit }}
+      RUN_NUMBER: ${{ needs.verify.outputs.run_number }}
       TAG: ${{ needs.verify.outputs.tag }}
       TITLE: ${{ needs.verify.outputs.title }}
       SETUP: ${{ needs.verify.outputs.setup }}
@@ -209,7 +246,7 @@ jobs:
         run: |
           node scripts/release/verify-update-manifest.mjs --manifest "$RUNNER_TEMP/candidate/release/update-manifest.json" \
             --signature "$RUNNER_TEMP/candidate/release/update-manifest.json.sig" --artifacts "$RUNNER_TEMP/candidate/artifacts" \
-            --channel staging --run-id "$RUN_ID" --commit "$COMMIT" --keys-file "$RUNNER_TEMP/keys/update-keys.ts"
+            --channel staging --run-id "$RUN_ID" --run-number "$RUN_NUMBER" --commit "$COMMIT" --keys-file "$RUNNER_TEMP/keys/update-keys.ts"
       - name: Refuse an existing release or tag
         run: |
           releases=$(gh api --paginate "repos/$GITHUB_REPOSITORY/releases?per_page=100" --jq "[.[] | select(.tag_name == \"$TAG\")] | length" | awk '{total += $1} END {print total + 0}')

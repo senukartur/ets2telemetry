@@ -19,7 +19,7 @@ ET-052 update, October 26, 2026 (decisions MB8 and MB11 in [DESIGN-DECISIONS.md]
     },
 ```
 
-The section shows the game minutes until the next mandatory break (see [the minimal overlay](minimal-overlay.md#next-mandatory-break-et-052)). It is on by default, also for a user who upgrades from v10.
+The section shows the game minutes until the next mandatory break (see [the minimal overlay](minimal-overlay.md#next-mandatory-break-et-052-october-26-2026)). It is on by default, also for a user who upgrades from v10.
 
 - **Load rules.** The key is a boolean like every other section. A missing or non-boolean value falls back to `true` for that key alone (`overlay.sections.mandatory-break`); the other fourteen keys keep their stored values. The "at least one section on" rule counts all fifteen.
 - **Migration v10 to v11.** The pure in-memory step sets `mandatory-break: true` on a copy of `overlay.sections` when that value is an object. Every other saved choice survives: a user who switched other sections off keeps them off, and a stray `mandatory-break` key in a v10 file, which a v10 build ignored, is replaced by `true`. When `overlay` or `overlay.sections` is missing or not an object, the step adds nothing and the existing fallbacks apply. A v1 to v10 file is migrated in memory (`migratedFrom: 1` to `migratedFrom: 10`, through the identity v9-to-v10 step of ET-050b) and stays unchanged on disk; nothing is written at startup, and the first save of any setting writes the complete v11 document. Every gear display mode, the crawler mode included, is kept.
