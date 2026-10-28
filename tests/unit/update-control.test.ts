@@ -3,7 +3,7 @@ import {renderToStaticMarkup} from 'react-dom/server';
 import {describe, expect, it, vi} from 'vitest';
 import type {AppLanguage, ApplicationInfo, UpdateFailure, UpdateRefusal, UpdateView} from '../../packages/contracts/src';
 import {AboutUpdateCheck, SidebarUpdateControl, VersionLine} from '../../apps/desktop/src/update-control';
-import {ABOUT_CHECK_WAIT_MS, aboutCheckText, updateControlText, versionLineText} from '../../apps/desktop/src/update-control-text';
+import {ABOUT_CHECK_WAIT_MS, aboutCheckReplied, aboutCheckText, updateControlText, versionLineText} from '../../apps/desktop/src/update-control-text';
 import {EN_DICTIONARY, RU_DICTIONARY} from '../../apps/desktop/src/i18n';
 import {CHANNEL_IDENTITIES, channelCopy} from '../../apps/desktop/src/channel';
 
@@ -50,7 +50,7 @@ const COPY = {
     refusal: {GAME_RUNNING: 'Закройте игру, чтобы обновить', GAME_CHECK_FAILED: 'Не удалось проверить запущенные игры', BUSY: 'Выполняется другая задача – Повторить', EXITING: 'Программа закрывается'},
     failure: {OFFLINE: 'Не удалось связаться с сервером обновлений. Проверьте подключение к интернету.', MANIFEST_INVALID: 'Описание обновления недействительно.',
       SIGNATURE_INVALID: 'Не удалось проверить подпись обновления.', DOWNLOAD_FAILED: 'Загрузка не завершилась.',
-      HASH_MISMATCH: 'Скачанный файл не совпал со своей контрольной суммой.', DISK_FULL: 'Недостаточно места на диске для обновления.',
+      HASH_MISMATCH: 'Контрольная сумма скачанного файла не совпала.', DISK_FULL: 'Недостаточно места на диске для обновления.',
       APPLY_FAILED: 'Не удалось установить обновление.', APPLY_TIMEOUT: 'Установка обновления заняла слишком много времени и была остановлена.'},
     downloadingNote: 'Загрузка обновления…', progressName: 'Загрузка обновления',
     version: 'Версия 0.1.1', staging: 'Версия 0.2.0-stg.000042', stagingName: 'Версия 0.2.0-stg.000042, тестовая сборка (staging)', dev: 'Сборка для разработки',
@@ -240,9 +240,32 @@ describe('the About check', () => {
 describe('staging copy (PR-3 channelCopy)', () => {
   it('leaves every update and version text unchanged in a staging build, so no name is rewritten or extended', () => {
     const keys = Object.keys(EN_DICTIONARY).filter(key => key.startsWith('upd.') || key.startsWith('ver.')) as (keyof typeof EN_DICTIONARY)[];
-    expect(keys.length).toBe(32);
+    expect(keys.length).toBe(33);
     for (const dictionary of [EN_DICTIONARY, RU_DICTIONARY]) {
       for (const key of keys) expect(channelCopy(dictionary[key], CHANNEL_IDENTITIES.staging), key).toBe(dictionary[key]);
+    }
+  });
+});
+
+describe('the About check without a started check', () => {
+  const before = {outcome: 'up-to-date' as const, failure: null, atUtcMs: 1000};
+  it.each(LANGUAGES)('is busy in ready with a fixed note on finishing the installed update (%s)', language => {
+    const note = {en: 'An update is already installed. Use Restart to finish in the sidebar.',
+      ru: 'Обновление уже установлено. Завершите его кнопкой «Перезапустить для завершения» на боковой панели.'}[language];
+    expect(aboutCheckText(offered('ready', {lastCheck: before}), null, language)).toEqual({button: COPY[language].check, busy: true, unsupported: false, note, result: null});
+    expect(aboutCheckText(offered('ready', {lastCheck: before}), {phase: 'answered', before: 1000}, language).result).toBeNull();
+  });
+  it('keeps waiting only when the reply shows a running check', () => {
+    const pending = {phase: 'pending', before: 1000} as const;
+    expect(aboutCheckReplied(pending, view({state: 'checking', lastCheck: before}))).toBe(pending);
+    for (const reply of [view({lastCheck: before}), offered('available'), offered('refused', {refusal: 'BUSY'}), offered('failed', {failure: 'OFFLINE'}), offered('downloading', {progress: 1})]) {
+      expect(aboutCheckReplied(pending, reply), reply.state).toEqual({phase: 'answered', before: 1000});
+    }
+  });
+  it('answers a standing offer with its version at once, never pending', () => {
+    for (const state of ['available', 'refused', 'failed'] as const) {
+      const update = offered(state, {lastCheck: before, ...(state === 'refused' ? {refusal: 'GAME_RUNNING' as const} : state === 'failed' ? {failure: 'OFFLINE' as const} : {})});
+      expect(aboutCheckText(update, {phase: 'pending', before: 1000}, 'en'), state).toMatchObject({busy: false, result: {severity: 'info', message: COPY.en.availableCheck}});
     }
   });
 });

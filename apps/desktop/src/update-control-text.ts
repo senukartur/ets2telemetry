@@ -96,42 +96,54 @@ export function versionLineText(info: ApplicationInfo | undefined, language: App
 }
 
 /**
- * The About check's answer. `pending` from the click until the update view reports a newer finished check, or until
- * ABOUT_CHECK_WAIT_MS pass (a check started within 10 s of the previous one does not run again; the controller says so
- * only by not changing `lastCheck`). The answer then stays until the next click.
+ * The About check's request after a click. `pending` only while a check really runs: from the click until the bridge
+ * replies, and after a reply in `checking` until the update view reports a newer finished check or ABOUT_CHECK_WAIT_MS
+ * pass. A reply in any other state shows that no check started (the 10 s throttle, a click or an operation in flight),
+ * so the request is answered at once from it. The answer then stays until the next click.
  */
 export type AboutCheckRequest = {readonly phase: 'pending'; readonly before: number | null} | {readonly phase: 'answered'; readonly before: number | null};
 export const ABOUT_CHECK_WAIT_MS = 30_000;
 
+/** The request after the bridge's reply: still pending only when the reply shows a running check. */
+export const aboutCheckReplied = (request: AboutCheckRequest, reply: UpdateView): AboutCheckRequest =>
+  reply.state === 'checking' ? request : {phase: 'answered', before: request.before};
+
 export interface AboutCheckText {
   /** The button's words. */
   readonly button: string;
-  /** A click does nothing: a check or an update runs. The button keeps focus (`aria-disabled`). */
+  /** A click does nothing: a check, an update or its restart is under way. The button keeps focus (`aria-disabled`). */
   readonly busy: boolean;
   /** This launch never checks (unpackaged, portable, isolated or not a Squirrel install): the button is disabled with `note`. */
   readonly unsupported: boolean;
-  /** The fixed note beside a disabled button, or null. */
+  /** The fixed note beside the button, or null. */
   readonly note: string | null;
   /** The ET-045b action result next to the button, or null before the first click. */
   readonly result: ActionResultText | null;
 }
 
-const UPDATE_RUNNING: readonly UpdateView['state'][] = Object.freeze(['downloading', 'installing', 'restarting']);
+/** States in which the controller starts no check, so About does not offer one. */
+const NO_CHECK: readonly UpdateView['state'][] = Object.freeze(['checking', 'downloading', 'installing', 'restarting', 'ready']);
+/** States in which an offer stands; a check can only confirm or replace it, and the sidebar shows the result. */
+const OFFERED: readonly UpdateView['state'][] = Object.freeze(['available', 'refused', 'failed']);
 
 /** The About check of `view` after the user's `request` (null before the first click). */
 export function aboutCheckText(view: UpdateView | undefined, request: AboutCheckRequest | null, language: AppLanguage): AboutCheckText {
   const button = t('upd.check', undefined, language);
   if (!view || view.state === 'unsupported') return {button, busy: false, unsupported: true, note: t('upd.check.unsupported', undefined, language), result: null};
+  // An installed update waits for its restart: no check starts, and the note says how to finish it.
+  if (view.state === 'ready') return {button, busy: true, unsupported: false, note: t('upd.check.ready', undefined, language), result: null};
   const finished = view.lastCheck && view.lastCheck.atUtcMs !== request?.before ? view.lastCheck : null;
-  const pending = request?.phase === 'pending' && !finished;
-  const busy = pending || view.state === 'checking' || UPDATE_RUNNING.includes(view.state);
+  const offered = OFFERED.includes(view.state) && view.available !== null;
+  const pending = request?.phase === 'pending' && !finished && !offered;
+  const busy = pending || NO_CHECK.includes(view.state);
   const answer = (severity: ActionSeverity, message: string): ActionResultText => {
     const severityWord = t(`act.sev.${severity}`, undefined, language);
     return {severity, severityWord, title: t('act.title', {severity: severityWord, action: button}, language), message};
   };
   if (!request) return {button, busy, unsupported: false, note: null, result: null};
   if (pending) return {button, busy, unsupported: false, note: null, result: answer('info', t('upd.check.pending', undefined, language))};
-  // After the wait, the latest finished check answers, if there is one.
+  if (offered) return {button, busy, unsupported: false, note: null, result: answer('info', t('upd.check.available', {version: view.available ?? ''}, language))};
+  // Otherwise the latest finished check answers, if there is one.
   const last = finished ?? view.lastCheck;
   if (!last) return {button, busy, unsupported: false, note: null, result: null};
   const result = last.outcome === 'up-to-date' ? answer('success', t('upd.check.upToDate', undefined, language))

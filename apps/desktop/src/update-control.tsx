@@ -5,7 +5,7 @@ import {Tooltip, TooltipContent, TooltipProvider, TooltipTrigger} from '@/compon
 import type {AppLanguage, ApplicationInfo, UpdateView} from '../../../packages/contracts/src';
 import {t} from './i18n';
 import {ActionResultRegion} from './action-result';
-import {ABOUT_CHECK_WAIT_MS, aboutCheckText, updateControlText, versionLineText, type AboutCheckRequest} from './update-control-text';
+import {ABOUT_CHECK_WAIT_MS, aboutCheckReplied, aboutCheckText, updateControlText, versionLineText, type AboutCheckRequest} from './update-control-text';
 
 // ET-055 UP10 and UP11: the sidebar update control (`shell.sidebar.update`), the version line (`shell.sidebar.version`,
 // also on Settings > About) and the About check. Presentational: the words come from update-control-text.ts, the state
@@ -46,8 +46,11 @@ export function SidebarUpdateControl({view, language, windowFocused, apply}: Sid
   </button> : null;
   return <div className="yu-update-region" data-testid="shell.update.region">
     <div role="status" aria-live="polite" aria-atomic="true" className="sr-only" data-testid="shell.update.status">{control && !control.failure ? control.announcement : null}</div>
-    {control?.failure ? <TooltipProvider delayDuration={150} skipDelayDuration={0}><Tooltip><TooltipTrigger asChild>{button}</TooltipTrigger>
-      <TooltipContent side="right" align="end" data-testid="shell.update.hint">{control.failure}</TooltipContent></Tooltip></TooltipProvider> : button}
+    {/* The tooltip wrapper is always there while the button is, and only its content depends on a failure: a wrapper
+        mounted for `failed` alone would change the element type above the button, so React would remount it and the
+        focused button would lose keyboard focus whenever the view moves into or out of `failed`. */}
+    {button ? <TooltipProvider delayDuration={150} skipDelayDuration={0}><Tooltip><TooltipTrigger asChild>{button}</TooltipTrigger>
+      {control?.failure ? <TooltipContent side="right" align="end" data-testid="shell.update.hint">{control.failure}</TooltipContent> : null}</Tooltip></TooltipProvider> : null}
     {control && control.progress !== null ? <div role="progressbar" className="yu-update-progress" data-testid="shell.update.progress" aria-label={t('upd.progressA', undefined, language)}
       aria-valuemin={0} aria-valuemax={100} aria-valuenow={control.progress}><i style={{width: `${control.progress}%`}} /></div> : null}
     {control?.failure ? <>
@@ -75,17 +78,21 @@ export function VersionLine({info, language, testId}: {info: ApplicationInfo | u
 /** Settings > About: "Check for updates" and its fixed answer next to the button (ET-045b action result). */
 export function AboutUpdateCheck({view, language, check}: {view: UpdateView | undefined; language: AppLanguage; check?: () => Promise<UpdateView>}) {
   const [request, setRequest] = useState<AboutCheckRequest | null>(null);
+  // Waiting ends with a newer finished check; until then a bounded timer runs, because a running check that never
+  // reports would leave lastCheck unchanged.
+  const waiting = request?.phase === 'pending' && (view?.lastCheck?.atUtcMs ?? null) === request.before;
   useEffect(() => {
-    if (request?.phase !== 'pending') return;
-    // A check that does not run (one started within 10 s) never changes lastCheck; stop waiting after the bound.
+    if (!waiting) return;
     const timer = setTimeout(() => setRequest(current => current && {...current, phase: 'answered'}), ABOUT_CHECK_WAIT_MS);
     return () => clearTimeout(timer);
-  }, [request]);
+  }, [waiting]);
   const text = aboutCheckText(view, request, language);
   const run = () => {
     if (text.busy || text.unsupported) return;
     setRequest({phase: 'pending', before: view?.lastCheck?.atUtcMs ?? null});
-    void (check ?? (() => window.desktop.checkForUpdates()))().catch(() => setRequest(current => current && {...current, phase: 'answered'}));
+    // The synchronous reply says whether a check started; only then does About wait for its result.
+    void (check ?? (() => window.desktop.checkForUpdates()))().then(reply => setRequest(current => current && aboutCheckReplied(current, reply)),
+      () => setRequest(current => current && {...current, phase: 'answered'}));
   };
   const slot = 'settings-about-update-check';
   return <div className="space-y-2" data-testid="settings.about.update">
