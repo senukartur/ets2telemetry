@@ -1,4 +1,4 @@
-import type {GearboxGearDisplays, GearDisplayModes, LiveTelemetry, RecordingHealth, PluginTargetView, UnitProfiles} from '../../../../packages/contracts/src';
+import type {GearDisplayModes, LiveTelemetry, RecordingHealth, PluginTargetView, UnitProfiles} from '../../../../packages/contracts/src';
 import type {HardModeStatus} from '../../../../packages/contracts/src/hard-mode';
 import {resolveDisplayUnits} from '../../../../packages/telemetry-core/src/display-profile';
 import {fixed} from '../../../../packages/telemetry-core/src/format';
@@ -12,9 +12,9 @@ import {SPEED_GAUGE_FULL_SCALE, speedGaugeFraction} from '../speed-gauge';
 /** Geometry only clamps normalized numeric readings; formatted telemetry is never parsed or replaced by demo values. */
 export const clampRatio = (value: number | null) => value === null || !Number.isFinite(value) ? null : Math.max(0, Math.min(1, value));
 /** `gearDisplay` (ET-050): the per-game gear display mode for `live.instrument.gear`; automatic without settings. */
-export function desktopLiveView(live: LiveTelemetry | undefined, profiles: UnitProfiles = DEFAULT_UNIT_PROFILES, gearDisplay?: GearDisplayModes, gearboxes?: GearboxGearDisplays) {
+export function desktopLiveView(live: LiveTelemetry | undefined, profiles: UnitProfiles = DEFAULT_UNIT_PROFILES, gearDisplay?: GearDisplayModes) {
   const telemetry = live ?? initialLive(), game = displayGame(telemetry), profile = profileFor(profiles, game), units = resolveDisplayUnits(game, {profile});
-  const sources = liveSources(telemetry, units, gearDisplayFor(gearDisplay, game, gearboxes)), state = sources.v0State, current = sources.v0View.connection.current;
+  const sources = liveSources(telemetry, units, gearDisplayFor(gearDisplay, game)), state = sources.v0State, current = sources.v0View.connection.current;
   const metersPerSecond = current && state?.speed.state === 'value' ? state.speed.value : null;
   const speed = metersPerSecond === null ? null : convertSpeed(metersPerSecond, units.speed);
   const rpm = current && state?.engineRpm.state === 'value' ? state.engineRpm.value : null;

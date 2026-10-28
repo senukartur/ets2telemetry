@@ -434,7 +434,6 @@ export type I18nKey =
   | 's.close' | 's.closeD' | 's.closeV'
   | 's.u.metric' | 's.u.us' | 's.u.d'
   | 's.gear' | 's.gear.d' | 's.gear.automatic' | 's.gear.manual' | 's.gear.crawler.ets2' | 's.gear.crawler.ats' | 's.gear.saveFailed'
-  | 's.gear.box.name' | 's.gear.box.current' | 's.gear.box.game' | 's.gear.box.none' | 's.gear.box.saved' | 's.gear.box.reset' | 's.gear.box.reset.named' | 's.gear.box.full'
   | 's.o.show' | 's.o.showD' | 's.o.layout' | 's.o.scale' | 's.o.opacity'
   | 's.o.position' | 's.o.edit' | 's.o.editD' | 's.o.sectionsD'
   | 'l.strip' | 'l.card' | 'l.cluster' | 'l.hud'

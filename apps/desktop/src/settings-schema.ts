@@ -1,14 +1,13 @@
 import {DEFAULT_OVERLAY_OPACITY, isOverlayOpacity} from './overlay-opacity';
-import type {AppLanguage, GearboxGearDisplay, GearboxGearDisplays, GearDisplayMode, GearDisplayModes, OverlayLayout, OverlayPlacement, OverlaySectionId, OverlaySections, OverlaySettings, UnitGame, UnitProfiles} from '../../../packages/contracts/src';
+import type {AppLanguage, GearDisplayMode, GearDisplayModes, OverlayLayout, OverlayPlacement, OverlaySectionId, OverlaySections, OverlaySettings, UnitGame, UnitProfiles} from '../../../packages/contracts/src';
 import {DEFAULT_OVERLAY_PLACEMENTS, normalizeFraction, normalizeScale, parseOverlayPlacement} from './overlay-placement';
 import {DEFAULT_OVERLAY_SECTIONS, DEFAULT_OVERLAY_SETTINGS, isOverlayLayout, OVERLAY_LAYOUTS, OVERLAY_SECTION_IDS} from './overlay-sections';
-import {compareGearboxes, DEFAULT_GEARBOX_GEAR_DISPLAY, isGearboxGearDisplay, MAX_GEARBOX_GEAR_DISPLAYS, sameGearbox} from './gearbox-gear-display';
 import {DEFAULT_GEAR_DISPLAY, DEFAULT_UNIT_PROFILES, isGearDisplayMode, isUnitProfile, UNIT_GAMES} from './unit-profiles';
 
-// Settings file format v12 (docs/settings.md). Pure parsing and serialization; the store owns file access.
+// Settings file format v11 (docs/settings.md). Pure parsing and serialization; the store owns file access.
 
 export const SETTINGS_FORMAT = 'ets2telemetry.settings';
-export const SETTINGS_VERSION = 12;
+export const SETTINGS_VERSION = 11;
 /** Larger files are rejected as invalid without being parsed. */
 export const MAX_SETTINGS_BYTES = 64 * 1024;
 
@@ -25,8 +24,6 @@ export interface Settings {
   units: UnitProfiles;
   /** Per-game gear display mode (ET-050). */
   gearDisplay: GearDisplayModes;
-  /** Per-game gearboxes with their own gear display mode (ET-050b, v12). */
-  gearboxGearDisplay: GearboxGearDisplays;
   overlay: OverlaySettings;
 }
 export const DEFAULT_SETTINGS: Settings = Object.freeze({
@@ -34,15 +31,14 @@ export const DEFAULT_SETTINGS: Settings = Object.freeze({
   autostart: false,
   units: DEFAULT_UNIT_PROFILES,
   gearDisplay: DEFAULT_GEAR_DISPLAY,
-  gearboxGearDisplay: DEFAULT_GEARBOX_GEAR_DISPLAY,
   overlay: DEFAULT_OVERLAY_SETTINGS
 });
 
 /** Field paths that can fall back to their default independently. */
-export type SettingsField = 'overlay.backgroundOpacity' | 'overlay.enabled' | 'language' | 'autostart' | `units.${UnitGame}` | `gearDisplay.${UnitGame}` | `gearboxGearDisplay.${UnitGame}` | 'overlay.layout' | 'overlay.sections' | `overlay.sections.${OverlaySectionId}`
+export type SettingsField = 'overlay.backgroundOpacity' | 'overlay.enabled' | 'language' | 'autostart' | `units.${UnitGame}` | `gearDisplay.${UnitGame}` | 'overlay.layout' | 'overlay.sections' | `overlay.sections.${OverlaySectionId}`
   | 'overlay.placements' | `overlay.placements.${OverlayLayout}`;
 /** Set when the file was upgraded in memory from an older format; the file itself stays unchanged until the next save. */
-type Migrated = {migratedFrom?: 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9 | 10 | 11};
+type Migrated = {migratedFrom?: 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9 | 10};
 export type ParsedSettings =
   | ({state: 'loaded'; settings: Settings} & Migrated)
   /** A valid file with some invalid or missing fields; they use defaults until the next save rewrites them. */
@@ -82,9 +78,6 @@ const isRecord = (value: unknown): value is Record<string, unknown> => typeof va
  * preserved, including a user who switched other sections off; anything that is not a record is left to the existing
  * fallbacks. The bump makes an older build read a v11 file as newer-version (read-only defaults) instead of ignoring the new
  * key and dropping it on its next save.
- * v11 -> v12 adds empty per-gearbox gear display lists for both games (ET-050b, owner decision of October 27, 2026). A stray
- * pre-v12 `gearboxGearDisplay` key is replaced, so an older file never carries a hand-edited list into v12; the bump makes
- * an older build read a v12 file as newer-version instead of dropping the lists on its next save. Every v11 choice is kept.
  * Version 0 and below have no path.
  */
 const MIGRATIONS: ReadonlyMap<number, (raw: Record<string, unknown>) => Record<string, unknown>> = new Map<number, (raw: Record<string, unknown>) => Record<string, unknown>>([
@@ -98,8 +91,7 @@ const MIGRATIONS: ReadonlyMap<number, (raw: Record<string, unknown>) => Record<s
   [8, (raw: Record<string, unknown>) => ({...raw, version: 9, gearDisplay: {ets2: DEFAULT_GEAR_DISPLAY.ets2, ats: DEFAULT_GEAR_DISPLAY.ats}})],
   [9, (raw: Record<string, unknown>) => ({...raw, version: 10})],
   [10, (raw: Record<string, unknown>) => ({...raw, version: 11,
-    overlay: isRecord(raw.overlay) && isRecord(raw.overlay.sections) ? {...raw.overlay, sections: {...raw.overlay.sections, 'mandatory-break': true}} : raw.overlay})],
-  [11, (raw: Record<string, unknown>) => ({...raw, version: 12, gearboxGearDisplay: {ets2: [], ats: []}})]
+    overlay: isRecord(raw.overlay) && isRecord(raw.overlay.sections) ? {...raw.overlay, sections: {...raw.overlay.sections, 'mandatory-break': true}} : raw.overlay})]
 ]);
 
 /** Upgrades an older raw document to the current version through the migration chain, or undefined without a complete path. */
@@ -144,23 +136,6 @@ function parsePlacements(raw: unknown, fallbackFields: SettingsField[]): Overlay
   return Object.freeze(placements);
 }
 
-/**
- * One game's per-gearbox modes. A value that is not an array becomes an empty list; an invalid entry, a repeated gearbox
- * (the first one is kept) and every entry beyond MAX_GEARBOX_GEAR_DISPLAYS is dropped alone. Each case reports the game's
- * field once, and the list is kept in canonical order.
- */
-function parseGearboxGearDisplays(raw: unknown, game: UnitGame, fallbackFields: SettingsField[]): readonly GearboxGearDisplay[] {
-  if (!Array.isArray(raw)) {fallbackFields.push(`gearboxGearDisplay.${game}`); return DEFAULT_GEARBOX_GEAR_DISPLAY[game];}
-  const entries: GearboxGearDisplay[] = [];
-  let dropped = false;
-  for (const value of raw) {
-    if (!isGearboxGearDisplay(value) || entries.length >= MAX_GEARBOX_GEAR_DISPLAYS || entries.some(entry => sameGearbox(entry, value))) {dropped = true; continue;}
-    entries.push(Object.freeze({model: value.model, forwardGears: value.forwardGears, reverseGears: value.reverseGears, label: value.label, mode: value.mode}));
-  }
-  if (dropped) fallbackFields.push(`gearboxGearDisplay.${game}`);
-  return Object.freeze(entries.sort(compareGearboxes));
-}
-
 /** The overlay block with per-field fallbacks; a missing or non-object block falls back as a whole. */
 function parseOverlay(value: unknown, fallbackFields: SettingsField[]): OverlaySettings {
   const overlay = isRecord(value) ? value : {};
@@ -194,7 +169,7 @@ export function parseSettings(bytes: Uint8Array): ParsedSettings {
     document = migrateToCurrent(raw, version);
     if (!document) return {state: 'unsupported-older'};
   }
-  const migrated: Migrated = version === 1 || version === 2 || version === 3 || version === 4 || version === 5 || version === 6 || version === 7 || version === 8 || version === 9 || version === 10 || version === 11 ? {migratedFrom: version} : {};
+  const migrated: Migrated = version === 1 || version === 2 || version === 3 || version === 4 || version === 5 || version === 6 || version === 7 || version === 8 || version === 9 || version === 10 ? {migratedFrom: version} : {};
   const fallbackFields: SettingsField[] = [];
 
   let language: AppLanguage = DEFAULT_APP_LANGUAGE;
@@ -220,18 +195,14 @@ export function parseSettings(bytes: Uint8Array): ParsedSettings {
     if (isGearDisplayMode(value)) gears[game] = value;
     else {gears[game] = DEFAULT_GEAR_DISPLAY[game]; fallbackFields.push(`gearDisplay.${game}`);}
   }
-  // Each game's per-gearbox list falls back on its own; a missing or non-object block gives both games empty lists.
-  const gearboxBlock = isRecord(document.gearboxGearDisplay) ? document.gearboxGearDisplay : {};
-  const gearboxes = {} as Record<UnitGame, readonly GearboxGearDisplay[]>;
-  for (const game of UNIT_GAMES) gearboxes[game] = parseGearboxGearDisplays(gearboxBlock[game], game, fallbackFields);
   const overlay = parseOverlay(document.overlay, fallbackFields);
-  const settings: Settings = {language, autostart, units: Object.freeze(resolved), gearDisplay: Object.freeze(gears), gearboxGearDisplay: Object.freeze(gearboxes), overlay: Object.freeze(overlay)};
+  const settings: Settings = {language, autostart, units: Object.freeze(resolved), gearDisplay: Object.freeze(gears), overlay: Object.freeze(overlay)};
   return fallbackFields.length ? {state: 'loaded-with-fallbacks', settings, fallbackFields, ...migrated} : {state: 'loaded', settings, ...migrated};
 }
 
 /**
- * The exact v12 file content: UTF-8 without a byte order mark, two-space indentation, a trailing newline, language,
- * both games' unit profiles followed by their gear display modes and their per-gearbox modes in canonical order,
+ * The exact v11 file content: UTF-8 without a byte order mark, two-space indentation, a trailing newline, language,
+ * both games' unit profiles followed by their gear display modes,
  * all fifteen overlay sections in canonical order and the placements of all four layouts in canonical order, each with
  * x and y rounded to four decimals and the scale to two.
  */
@@ -248,8 +219,6 @@ export function serializeSettings(settings: Settings): string {
     autostart: settings.autostart,
     units: {ets2: settings.units.ets2, ats: settings.units.ats},
     gearDisplay: {ets2: settings.gearDisplay.ets2, ats: settings.gearDisplay.ats},
-    gearboxGearDisplay: Object.fromEntries(UNIT_GAMES.map(game => [game, [...settings.gearboxGearDisplay[game]].sort(compareGearboxes)
-      .map(({model, forwardGears, reverseGears, label, mode}) => ({model, forwardGears, reverseGears, label, mode}))])),
     overlay: {enabled: settings.overlay.enabled, backgroundOpacity: settings.overlay.backgroundOpacity, layout: settings.overlay.layout, sections, placements}
   }, null, 2) + '\n';
 }
