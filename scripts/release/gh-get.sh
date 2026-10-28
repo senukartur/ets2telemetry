@@ -14,7 +14,8 @@ if gh api "$api_path" > "$output" 2> "$errors"; then
   rm -f "$errors"
   exit 0
 fi
-if grep -q 'HTTP 404' "$errors"; then
+# gh ends its error line with the status, for example "gh: Not Found (HTTP 404)"; only that exact ending counts.
+if grep -qE '\(HTTP 404\)$' "$errors"; then
   : > "$output"
   rm -f "$errors"
   exit 44

@@ -100,8 +100,8 @@ jobs:
         run: |
           bash scripts/release/gh-get.sh "repos/$GITHUB_REPOSITORY/actions/runs/$RUN_ID" "$RUNNER_TEMP/run.json"
           node scripts/release/check-github-release.mjs run --json "$RUNNER_TEMP/run.json" --run-id "$RUN_ID" --repository "$GITHUB_REPOSITORY" --channel "$CHANNEL" >> "$GITHUB_OUTPUT"
-      # A run's head_branch is only a name. Refuse a tag called main, which would make "main" ambiguous, then require the
-      # run's commit to be in the main branch's history.
+      # A run's head_branch is only a name. Refuse a tag called main, which would make "main" ambiguous, read the main
+      # branch's commit from the unambiguous refs/heads/main, then require the run's commit to be in its history.
       - name: Prove that the run's commit is on the main branch
         env:
           COMMIT: ${{ steps.run.outputs.commit }}
@@ -110,7 +110,10 @@ jobs:
           bash scripts/release/gh-get.sh "repos/$GITHUB_REPOSITORY/git/ref/tags/main" "$RUNNER_TEMP/tag-main.json" || status=$?
           if [[ $status -eq 0 ]]; then echo '::error::A tag named main exists; delete it before releasing.'; exit 1; fi
           if [[ $status -ne 44 ]]; then echo '::error::Could not check for a tag named main.'; exit 1; fi
-          bash scripts/release/gh-get.sh "repos/$GITHUB_REPOSITORY/compare/$COMMIT...main" "$RUNNER_TEMP/compare.json"
+          bash scripts/release/gh-get.sh "repos/$GITHUB_REPOSITORY/git/ref/heads/main" "$RUNNER_TEMP/main.json"
+          main_sha=$(jq -r 'select(.ref == "refs/heads/main" and .object.type == "commit") | .object.sha' "$RUNNER_TEMP/main.json")
+          if [[ ! "$main_sha" =~ ^[0-9a-f]{40}$ ]]; then echo '::error::refs/heads/main did not name a commit.'; exit 1; fi
+          bash scripts/release/gh-get.sh "repos/$GITHUB_REPOSITORY/compare/$COMMIT...$main_sha" "$RUNNER_TEMP/compare.json"
           node scripts/release/check-github-release.mjs ancestry --json "$RUNNER_TEMP/compare.json" --commit "$COMMIT"
       - name: Read the compiled update keys at the run's commit
         env:
@@ -381,7 +384,8 @@ jobs:
           for attempt in 1 2 3 4 5 6; do
             status=0
             bash scripts/release/gh-get.sh "repos/$GITHUB_REPOSITORY/releases/latest" "$RUNNER_TEMP/latest.json" || status=$?
-            if [[ $status -eq 0 ]]; then latest=$(jq -r .tag_name "$RUNNER_TEMP/latest.json"); elif [[ $status -eq 44 ]]; then latest=none; else exit 1; fi
+            # A transient gh-get failure is retried like a stale answer; only the last try decides.
+            if [[ $status -eq 0 ]]; then latest=$(jq -r .tag_name "$RUNNER_TEMP/latest.json"); elif [[ $status -eq 44 ]]; then latest=none; else latest="unreadable (gh-get exit $status)"; fi
             if [[ "$latest" == "$TAG" ]]; then echo "Published $TAG; releases/latest names it (attempt $attempt)." >> "$GITHUB_STEP_SUMMARY"; exit 0; fi
             sleep 10
           done

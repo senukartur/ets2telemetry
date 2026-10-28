@@ -85,7 +85,13 @@ it('reads releases/latest and other 404-meaningful answers only through gh-get.s
   const latest = [...text.matchAll(/^.*repos\/\$GITHUB_REPOSITORY\/releases\/latest.*$/gm)].map(match => match[0]);
   expect(latest.length).toBe(5);
   for (const line of latest) expect(line).toMatch(/bash scripts\/release\/gh-get\.sh "repos\/\$GITHUB_REPOSITORY\/releases\/latest" "\$RUNNER_TEMP\/latest[a-z-]*\.json" \|\| status=\$\?$/);
-  expect(text.match(/elif \[\[ \$status -eq 44 \]\]; then (latest|after)=none; else exit 1; fi/g)).toHaveLength(4);
+  expect(text.match(/elif \[\[ \$status -eq 44 \]\]; then (latest|after)=none; else exit 1; fi/g)).toHaveLength(3);
+  // The final confirmation retries a transient failure and decides only after its last try.
+  const confirm = job(text, 'publish-production').split("- name: Confirm that releases/latest is the new release\n")[1];
+  expect(confirm).toContain('elif [[ $status -eq 44 ]]; then latest=none; else latest="unreadable (gh-get exit $status)"; fi\n');
+  expect(confirm.indexOf('sleep 10\n          done\n')).toBeLessThan(confirm.lastIndexOf('exit 1'));
+  const loop = confirm.slice(confirm.indexOf('for attempt in 1 2 3 4 5 6; do'), confirm.indexOf('done\n'));
+  expect(loop).not.toContain('exit 1');
   expect(text).not.toMatch(/gh api [^\n]*git\/ref\/tags/);
   expect(text).not.toContain('gh release view');
 });
@@ -98,7 +104,11 @@ it('proves the run\'s commit is on the main branch and refuses a tag named main'
   expect(verify).toContain('bash scripts/release/gh-get.sh "repos/$GITHUB_REPOSITORY/git/ref/tags/main" "$RUNNER_TEMP/tag-main.json" || status=$?\n' +
     "          if [[ $status -eq 0 ]]; then echo '::error::A tag named main exists; delete it before releasing.'; exit 1; fi\n" +
     "          if [[ $status -ne 44 ]]; then echo '::error::Could not check for a tag named main.'; exit 1; fi\n");
-  expect(verify).toContain('bash scripts/release/gh-get.sh "repos/$GITHUB_REPOSITORY/compare/$COMMIT...main" "$RUNNER_TEMP/compare.json"\n' +
+  // main's commit comes from the unambiguous refs/heads/main, never the bare name.
+  expect(verify).toContain('bash scripts/release/gh-get.sh "repos/$GITHUB_REPOSITORY/git/ref/heads/main" "$RUNNER_TEMP/main.json"\n' +
+    `          main_sha=$(jq -r 'select(.ref == "refs/heads/main" and .object.type == "commit") | .object.sha' "$RUNNER_TEMP/main.json")\n`);
+  expect(verify).not.toContain('...main"');
+  expect(verify).toContain('bash scripts/release/gh-get.sh "repos/$GITHUB_REPOSITORY/compare/$COMMIT...$main_sha" "$RUNNER_TEMP/compare.json"\n' +
     '          node scripts/release/check-github-release.mjs ancestry --json "$RUNNER_TEMP/compare.json" --commit "$COMMIT"\n');
 });
 
@@ -128,4 +138,12 @@ it('refuses a production version that is not higher than the latest release, bef
 
 it('keeps the release candidate for 7 days, the window to approve the publish job', async () => {
   expect(job(await workflow(), 'verify')).toContain('          retention-days: 7\n');
+});
+
+it('writes every run line that carries a colon and a space as a block scalar', async () => {
+  // GitHub rejects a workflow whose plain scalar contains ': ' (tests/unit/ci-build-channel-workflow.test.ts has the same rule).
+  for (const line of (await workflow()).split('\n')) {
+    const run = /^\s*run: (?!\|)(.*)$/.exec(line);
+    if (run) expect(run[1], line).not.toMatch(/: /);
+  }
 });
