@@ -37,8 +37,8 @@ export const APPLY_TIMEOUT_MS = 180_000;
  * INCOMPLETE_REMOVAL_DEADLINE_MS have passed since the first. Each attempt lists the processes (about 1 s, at most 15 s:
  * PROCESS_IMAGES_TIMEOUT_MS), and an attempt in flight is never cut short, so the whole cleanup ends within the deadline
  * plus one attempt: at most about 35 s plus the removal itself. After that the folder stays with the last reason and the
- * failure is reported. An exit that begins during the cleanup ends its waiting: one more attempt starts at once (or the
- * attempt in flight is the last), and the exit waits for it within its idle budget (idle()).
+ * failure is reported. An exit that begins during the cleanup ends its waiting: one more attempt starts at once (after
+ * the attempt in flight, if any) and is the last, and the exit waits for it within its idle budget (idle()).
  */
 export const INCOMPLETE_REMOVAL_ATTEMPTS = 10;
 export const INCOMPLETE_REMOVAL_RETRY_MS = 500;

@@ -481,6 +481,30 @@ describe('click, download and apply', () => {
     await vi.advanceTimersByTimeAsync(INCOMPLETE_REMOVAL_DEADLINE_MS);
     expect(listings).toBe(2);
   });
+  it('an exit during an attempt in flight makes exactly one more attempt, without waiting', async () => {
+    await mkdir(path.win32.join(installRoot, 'app-0.1.1'), {recursive: true});
+    const target = path.win32.join(installRoot, 'app-0.2.0');
+    let listings = 0, controller: UpdateController | undefined, state: {exiting: boolean} | undefined;
+    const processImages = () => {
+      listings++;
+      // The exit begins while the first attempt lists the processes.
+      if (listings === 1) {state!.exiting = true; controller!.retire();}
+      return Promise.resolve([path.win32.join(installRoot, 'Update.exe')]);
+    };
+    const h = harness({routes: productionRoutes(PKG), processImages, apply: async () => {
+      await mkdir(target, {recursive: true});
+      return {ok: false, failure: 'timeout'};
+    }});
+    controller = h.controller; state = h.state;
+    await startAndCheck(h);
+    await h.controller.apply();
+    await until(() => h.controller.view.state === 'failed');
+    expect(listings).toBe(2);
+    expect((await readdir(installRoot)).sort()).toEqual(['app-0.1.1', 'app-0.2.0']);
+    expect(h.log).toHaveBeenCalledWith('UPDATE_INCOMPLETE_VERSION_KEPT', {result: 'updater-running'});
+    await vi.advanceTimersByTimeAsync(INCOMPLETE_REMOVAL_DEADLINE_MS);
+    expect(listings).toBe(2);
+  });
   it('keeps the folder of a release Squirrel has already recorded, without asking again', async () => {
     await mkdir(path.win32.join(installRoot, 'app-0.1.1'), {recursive: true});
     const target = path.win32.join(installRoot, 'app-0.2.0');
