@@ -886,6 +886,20 @@ export async function runUiSmoke({application, dashboard, overlay, source, sourc
           assert.equal(await dashboard.getByTestId('gear-display-error').count(), 0);
         }
         record.flags.gearDisplay = true;
+        // Each gear display option opens its own hint on hover and on keyboard focus; neither changes the committed mode.
+        const gearHintName = id => dashboard.evaluate(id => globalThis.document.querySelector(`[data-testid="${id}-tooltip"] p`)?.textContent ?? null, id);
+        await dashboard.locator('#gear-display-ets2-manual').hover();
+        await dashboard.getByTestId('gear-display-ets2-manual-tooltip').waitFor({state: 'visible', timeout: 5000});
+        assert.equal(await gearHintName('gear-display-ets2-manual'), language === 'en' ? 'Manual range-splitter' : 'Механическая с делителем');
+        await dashboard.keyboard.press('Escape'); await dashboard.mouse.move(0, 0);
+        await dashboard.locator('#gear-display-ets2-crawler').focus();
+        await dashboard.getByTestId('gear-display-ets2-crawler-tooltip').waitFor({state: 'visible', timeout: 5000});
+        assert.equal(await gearHintName('gear-display-ets2-crawler'), language === 'en' ? 'Crawler first' : 'С ползучей');
+        await dashboard.screenshot({path: path.join(config.output, `ui-${config.uiCase}-gear-display-hint-${language}.png`), timeout: 5000});
+        assert.equal((await dashboard.evaluate(() => globalThis.desktop.getAppState())).settings.gearDisplay.ets2, 'automatic');
+        await dashboard.keyboard.press('Escape');
+        await dashboard.getByTestId('gear-display-ets2-crawler-tooltip').waitFor({state: 'hidden', timeout: 5000});
+        record.flags.gearDisplayHints = true;
         await settingsPanel(dashboard, 'about'); await dashboard.getByTestId('uninstall-button').click(); await dashboard.getByTestId('uninstall-result').waitFor({state: 'visible'});
         assert.ok((await dashboard.getByTestId('uninstall-result').innerText()).includes(language === 'en' ? 'installed copy' : 'установленной копии'));
         Object.assign(record.flags, {allPanels: true, allSections: true, committedSave: true, sourceSelector: true, uninstallRefusal: true});
