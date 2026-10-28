@@ -138,6 +138,7 @@ Use the same scenario identity across relevant domain, integration, and UI check
 | REG-016 | Foreground/minimize, window recreation, mixed DPI, removed monitor | Placement remains usable; the overlay hides appropriately and never steals driving controls | ET-007, ET-008, ET-012; real-game checks required |
 | REG-017 | Clean packaged startup and upgrade with existing history | Correct native assets load without development tools; settings and data are preserved | ET-018, ET-020 |
 | REG-018 | Sustained input and real one-hour recording | Cadence, resource bounds, database growth, latency, and frame-time impact have recorded measurements | ET-019, ET-020 |
+| REG-019 | In-app update and channel coexistence: an update with data kept, a refusal while a game runs, the restart after `recording-flush`, both channels side by side, two plugins in one game | Only a signed manifest of the build's own channel and a verified package install, only after a click and while no game runs; the restart follows the explicit exit; data and the other channel stay untouched | ET-055 |
 
 For REG-006, use controlled subprocess termination and reopen the real database at known commit/ACK boundaries; unit mocks alone are insufficient. For REG-013, keep small immutable databases from supported older schema versions and check semantic contents after migration. Also preserve an unsupported-newer-schema case: fail clearly without modifying that database. Do not replace historical fixtures with freshly generated current-schema files.
 
@@ -1332,6 +1333,20 @@ ET-055 PR-3 (the build-time channel, October 28, 2026) adds the build-channel te
 - Native: `channel-identity-contract` also pins the game-log prefix (`ETS2Telemetry:` in production, `ETS2TelemetryStaging:` in staging); the transport tests expect the configured channel's prefix.
 
 Review round 1 changed one expectation of the new staging copy test: a staging export refusal now names both data roots it refuses. No existing expected value of an earlier PR changed. Both channels' packages were built and inspected locally; the staging packaged scaffold smoke ran the application but failed its postcondition, which reads the production data root, until PR-4 makes the smoke drivers channel-aware.
+
+## ET-055 update controller — October 28, 2026
+
+ET-055 PR-6 adds REG-019 and covers its unit parts; the hosted update from a loopback feed is PR-8 and the side-by-side installer lifecycle PR-5. No test reaches GitHub: the feeds are routed fakes, the Ed25519 keys are generated inside each run and no private key is committed.
+
+- `tests/unit/update-manifest.test.ts` (REG-019): manifest v1 and its signature over the exact bytes, rotation by `keyId`, the shipped empty key lists refusing every manifest with `SIGNATURE_INVALID`, the other channel's key, a changed byte and malformed signatures refused, then the binding refusals (channel, tag, exact nupkg name, same version, downgrade) and the malformed shapes, all written by hand from the plan's refusal list.
+- `tests/unit/update-feed.test.ts` (REG-019): the production `/latest/download` URLs without a query string, the staging pick by NuGet version across every rotation and reversal of a list with drafts, production tags, malformed tags and releases without a manifest, the manifest bound to the chosen tag, the bounds, and 403, 429, network errors and the 10 s limit as a quiet `OFFLINE`.
+- `tests/unit/update-context.test.ts` (REG-019): which launches check, and that only a test-root install with a profile inside its root accepts the loopback feed and the test key.
+- `tests/unit/update-controller.test.ts` (REG-012, REG-019): the reducer, then the controller with fake ports, Vitest's fake timers for the 15 s, 6 h, 60 s and 10 s limits and a guarded temporary data root for the real download files; waits poll observable state, bounded by real time, never by advancing the fake clock.
+- `tests/unit/app-lifecycle.test.ts` and `tests/unit/main-boundaries.test.ts` (REG-012): the `update` exit through the unchanged sequence and the restart helper only at its final exit, after the service stopped, never after a fatal stop or another reason; the two argument-free channels from the trusted dashboard main frame only, with the controller and the restart helper replaced.
+- `tests/unit/preload-recovery.test.ts`: the two bridge methods forward no argument, and the application info and the update view are validated again (a pushed invalid state is dropped, a queried one rejects).
+- `tests/unit/uninstall-data-wipe.test.ts`, `tests/fixtures/uninstall/deferred-cases.json` (`updates-entry-removed`, played by `uninstall-deferred-cases.test.ts` and `tests/windows/Test-DeferredCleanup.ps1` in both channels) (REG-017): the `updates` allowlist entry.
+
+Expected values changed only where the requirement changed. The exact application-state expectations of `main-boundaries.test.ts` gain `application` and `update` (UP9); the bridge key lists of `preload-recovery.test.ts`, `tests/electron/startup.spec.ts`, `tests/windows/native-smoke.mjs` and `scripts/ci/runtime-smoke.mjs` gain `updateApplication` and `checkForUpdates`; the preload's forwarded-state fixture and the `getAppState` call now carry valid `application` and `update` values, because the preload validates them; and the data-wipe budget cases list `updates` among the allowlisted entries and count its three checks (UP18).
 
 ## ET-050 gear display mode — October 25, 2026
 

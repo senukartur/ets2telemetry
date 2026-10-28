@@ -69,7 +69,7 @@ The ET-017 contract, step by step:
 
 ## What is removed
 
-The data root's top-level allowlist is `data`, `backups`, `settings`, `logs`, `synthetic`, `plugins`, `captures`, `transport` and `uninstall`, compared case-insensitively. A unit test fails if `dataPaths()` names anything outside it.
+The data root's top-level allowlist is `data`, `backups`, `settings`, `logs`, `synthetic`, `plugins`, `captures`, `transport`, `uninstall` and, since ET-055 PR-6, `updates` (the in-app update's download, UP18), compared case-insensitively; the deferred-cleanup executor uses the same list. A unit test fails if `dataPaths()` names anything outside it.
 
 - **The walker** lstats every entry and never follows a link: a symbolic link or junction is unlinked itself, so its target is never entered. It never clears a read-only attribute; a read-only file stays and is reported (`READ_ONLY_FILE`), as does a locked or denied entry (`TARGET_LOCKED`, `PERMISSION_DENIED`).
 - **Unknown top-level entries** stay and are counted as `kept`; the data root is removed only when it is empty.

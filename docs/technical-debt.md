@@ -261,3 +261,21 @@ Recorded October 25, 2026 by the coordinator with ET-050b PR-6, from the PR-5 re
 **Before `GAME_HISTORY_RECORDING` is enabled,** the enablement PR decides whether `upsertSession` should stop comparing `protocol_minor`, keeping the first-seen minor in `plugin_sessions` and the per-event minor in `events.protocol_minor`. No schema or storage change is authorized by this entry.
 
 **Resolution (October 25, 2026):** the game history recording enablement ([AGENTS.md](../AGENTS.md#game-history-recording-enablement--october-25-2026)) keeps `upsertSession` comparing `protocol_minor`. A minor change inside one plugin session stays `SESSION_CONFLICT`, which the durable sink maps to `unavailable`: recording stops for the service lifetime and fails closed, and nothing committed is lost. Plugin setup never replaces the DLL while a game runs, so a supported update cannot cause it. This is a coordinator decision under the owner's enablement authorization; relaxing the comparison is a storage change for its own package if a real session ever needs it. The ET-052 release constraint in the entry above qualifies the claim that a supported update cannot cause it.
+
+## TD-022: Delta update packages
+
+Recorded October 28, 2026 by the coordinator with ET-055 PR-6. **This entry is a coordinator decision under the owner's approval of ET-055 (UP3); the plan lists delta packages as out of scope.**
+
+The in-app update downloads the full nupkg (`<Squirrel id>-<NuGet version>-full.nupkg`, at most 400 MiB) every time. Squirrel can apply delta packages, which would make an update smaller, but a delta needs the exact previous full package as its base, its own entry in RELEASES and its own hashes in the signed manifest. Supporting it means extending manifest v1 (a new format version), the release workflow and the RELEASES line the application writes, plus a full-package fallback when the base is missing. Until then every update is a full download.
+
+## TD-023: Authenticode check of a downloaded update
+
+Recorded October 28, 2026 by the coordinator with ET-055 PR-6. **This entry is a coordinator decision under the owner's approval of ET-055 (UP5).**
+
+The download's integrity rests on the Ed25519-signed manifest: its size, SHA-256 and SHA-1 must match before Squirrel applies the package. Builds are unsigned ([TD-014](#td-014-code-signing)), so the application does not check an Authenticode signature of the new executable. Once releases are code signed, the updater should also verify, before `Update.exe --update`, that the package's executables carry a valid signature of the project's certificate, as a second, independent check. That needs the package to be opened before the apply and a pinned signer identity; it waits for TD-014.
+
+## TD-024: No setting to turn update checks off
+
+Recorded October 28, 2026 by the coordinator with ET-055 PR-6, after the owner's UP6 decision of October 28, 2026 that checks run at launch and every 6 h with no setting to disable them.
+
+An installed build always checks its channel's feed: 15 s after its first readiness and every 6 h. It sends no identifier, but GitHub sees the IP address of every check, and a network that blocks GitHub turns every check into a silent `OFFLINE`. A user who does not want the check has no switch; an isolated or portable launch is the only launch that never checks. A future setting would need a settings format version, a narrow setter and the user guide; it needs the owner's decision first.
