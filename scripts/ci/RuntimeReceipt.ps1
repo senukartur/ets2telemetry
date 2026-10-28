@@ -815,7 +815,7 @@ function Test-UiReceipt {
     if ($Driver.mode -cnotin @('development','packaged') -or $ExpectedUiCase -cnotin $cases -or $null -eq $ui -or $ui.case -cne $ExpectedUiCase -or
         (@($ui.languages) -join ',') -cne 'en,ru' -or @($ui.sizes).Count -ne 2 -or
         $ui.sizes[0].width -ne 1280 -or $ui.sizes[0].height -ne 800 -or $ui.sizes[1].width -ne 1100 -or $ui.sizes[1].height -ne 720) { return $false }
-    $flags = @('bilingual','bothSizes','security','offlineFonts','recordingIndicator')
+    $flags = @('bilingual','bothSizes','security','offlineFonts','recordingIndicator','versionLine','updateHidden')
     $screens = @()
     switch -CaseSensitive ($ExpectedUiCase) {
         'shell' { $flags += @('navigation','headingFocus','hardModePage','journalUnmount','menuKeyboard','exitAvailable','laterAccount'); $screens = @('live','hardMode','journal','settings','account') }

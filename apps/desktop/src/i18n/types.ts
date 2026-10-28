@@ -470,6 +470,12 @@ export type I18nKey =
   | 'ov.edit' | 'ov.drag' | 'ov.hidden' | 'ov.hiddenT' | 'ov.noSignal' | 'ov.paused'
   | 'hm.status.pass' | 'hm.status.fail' | 'hm.status.unknown' | 'hm.status.lost' | 'hm.state.pass' | 'hm.state.fail' | 'hm.state.unknown' | 'hm.configuredCount' | 'hm.reading' | 'hm.checking' | 'hm.progress' | 'hm.unavailable' | 'hm.source.local' | 'hm.source.cloud' | 'hm.source.fixture' | 'hm.source.unknown' | 'hm.age' | 'hm.detected' | 'hm.required' | 'hm.reason' | 'hm.value.unknown' | 'hm.value.invalid' | 'hm.value.skilled' | 'hm.value.other' | 'hm.required.parking' | 'hm.notice' | 'hm.distinction' | 'hm.evidence' | 'hm.loss' | 'hm.audit' | 'hm.firstLoss' | 'hm.manual.pending' | 'hm.manual.yes' | 'hm.manual.no' | 'hm.snapshots' | 'hm.notEvaluated' | 'hm.reason.compliant' | 'hm.reason.outside-limit' | 'hm.reason.missing' | 'hm.reason.malformed' | 'hm.reason.conflicting' | 'hm.reason.source-unproven' | 'hm.reason.interrupted' | 'hm.reason.historical' | 'hm.reason.source-changed' | 'hm.reason.parking-unproven'
   | 'hm.shortNotice'
+  | 'upd.available' | 'upd.availableA' | 'upd.downloading' | 'upd.downloadingA' | 'upd.progressA' | 'upd.installing' | 'upd.restarting' | 'upd.ready'
+  | 'upd.refused.GAME_RUNNING' | 'upd.refused.GAME_CHECK_FAILED' | 'upd.refused.BUSY' | 'upd.refused.EXITING' | 'upd.failed'
+  | 'upd.failure.OFFLINE' | 'upd.failure.MANIFEST_INVALID' | 'upd.failure.SIGNATURE_INVALID' | 'upd.failure.DOWNLOAD_FAILED'
+  | 'upd.failure.HASH_MISMATCH' | 'upd.failure.DISK_FULL' | 'upd.failure.APPLY_FAILED' | 'upd.failure.APPLY_TIMEOUT'
+  | 'upd.check' | 'upd.check.pending' | 'upd.check.upToDate' | 'upd.check.available' | 'upd.check.failed' | 'upd.check.unsupported' | 'upd.check.ready' | 'upd.check.rejected'
+  | 'ver.line' | 'ver.unknown' | 'ver.dev' | 'ver.staging' | 'ver.stagingA'
   | 'lang.title' | 'lang.en' | 'lang.ru' | 'lang.saveFailed';
 
 export type TranslationDictionary = Readonly<Record<I18nKey, string>>;
