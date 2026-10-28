@@ -16,7 +16,14 @@ declare global {
 const view = (patch: Partial<UpdateView>): UpdateView => ({state: 'idle', available: null, progress: null, refusal: null, failure: null, lastCheck: null, ...patch});
 const offered = (state: UpdateView['state'], patch: Partial<UpdateView> = {}) => view({state, available: '0.2.0', ...patch});
 const realSetTimeout = window.setTimeout.bind(window), realClearTimeout = window.clearTimeout.bind(window);
-const settle = () => new Promise<void>(resolve => realSetTimeout(resolve, 30));
+/** Polls an observable condition every 5 ms until it holds; fails after 5 s instead of trusting a fixed delay. */
+async function until(condition: () => boolean, label: string): Promise<void> {
+  const deadline = performance.now() + 5000;
+  while (!condition()) {
+    if (performance.now() > deadline) throw new Error(`Timed out waiting for ${label}`);
+    await new Promise<void>(resolve => realSetTimeout(resolve, 5));
+  }
+}
 
 /** Fake timers for the About wait only: a timer of exactly ABOUT_CHECK_WAIT_MS is recorded, every other one is real. */
 const fakeTimers = new Map<number, () => void>();
@@ -34,13 +41,24 @@ window.clearTimeout = ((id?: number) => {
 const renderErrors: string[] = [];
 const fireFakeTimers = () => {const pending = [...fakeTimers.values()]; fakeTimers.clear(); for (const run of pending) run();};
 
-/** A root whose render resolves once React DOM has committed (its updates are scheduled, not synchronous). */
+/** Counts committed root renders: its passive effect runs after every effect of the element it wraps. */
+let commits = 0;
+function Committed({children}: {children: React.ReactNode}) {
+  React.useEffect(() => {commits++;});
+  return children;
+}
+
+/** A root whose render resolves once React DOM has committed it (its updates are scheduled, not synchronous). */
 function mount(): {root: Root; host: HTMLElement; render: (element: React.ReactElement) => Promise<void>} {
   const host = document.createElement('div');
   document.body.append(host);
   // A render error would otherwise only reach reportError and leave an empty root; it fails the page instead.
   const root = createRoot(host, {onUncaughtError: error => renderErrors.push(String(error)), onRecoverableError: error => renderErrors.push(String(error))});
-  return {root, host, render: async element => {root.render(element); await settle();}};
+  return {root, host, render: async element => {
+    const target = commits + 1;
+    root.render(React.createElement(Committed, null, element));
+    await until(() => commits >= target, 'a committed render');
+  }};
 }
 const text = (host: HTMLElement, testId: string) => host.querySelector(`[data-testid="${testId}"]`)?.textContent ?? null;
 
@@ -62,21 +80,33 @@ async function sidebarFocus(): Promise<Facts> {
   return {initial, steps};
 }
 
-interface AboutRun {host: HTMLElement; calls: () => number; set: (update: UpdateView) => Promise<void>; click: () => Promise<void>; facts: () => Facts; done: () => void}
+interface AboutRun {
+  calls: () => number;
+  set: (update: UpdateView) => Promise<void>;
+  /** Clicks the button, then waits until every bridge reply has settled and `ready(facts)` holds. */
+  click: (ready: (facts: Facts) => boolean) => Promise<void>;
+  facts: () => Facts;
+  done: () => void;
+}
 async function about(initial: UpdateView, reply: () => Promise<UpdateView>): Promise<AboutRun> {
   const {root, host, render} = mount();
-  let calls = 0;
-  const check = () => {calls++; return reply();};
+  let calls = 0, replied = 0;
+  // The counter's handlers are attached before the component's, so the component's handler runs right after the count.
+  const check = () => {calls++; const answer = reply(); answer.then(() => {replied++;}, () => {replied++;}); return answer;};
   const set = (update: UpdateView) => render(React.createElement(AboutUpdateCheck, {view: update, language: 'en', check}));
   await set(initial);
   const button = () => host.querySelector<HTMLButtonElement>('[data-testid="settings-about-update-check"]');
-  return {host, calls: () => calls, set,
-    click: async () => {button()?.click(); await settle();},
-    facts: () => ({busy: button()?.getAttribute('aria-disabled') === 'true', disabled: button()?.disabled ?? null, note: text(host, 'settings-about-update-check-note'),
+  const facts = (): Facts => ({busy: button()?.getAttribute('aria-disabled') === 'true', disabled: button()?.disabled ?? null, note: text(host, 'settings-about-update-check-note'),
       message: text(host, 'settings-about-update-check-result-message'), severity: host.querySelector('[data-testid="settings-about-update-check-result"]')?.getAttribute('data-severity') ?? null,
-      fakeTimers: fakeTimers.size}),
+      fakeTimers: fakeTimers.size});
+  return {calls: () => calls, set, facts,
+    click: async ready => {button()?.click(); await until(() => replied === calls && ready(facts()), 'the About answer');},
     done: () => {root.unmount(); host.remove(); fakeTimers.clear();}};
 }
+
+const LATEST = 'You have the latest version.', CHECKING = 'Checking for updates…';
+const OFFERED_TEXT = 'Version 0.2.0 is available. Use the button in the sidebar to install it.';
+const showing = (message: string) => (facts: Facts) => facts.message === message;
 
 async function scenarios(): Promise<Record<string, Facts>> {
   const before = {outcome: 'up-to-date' as const, failure: null, atUtcMs: 1000};
@@ -84,44 +114,45 @@ async function scenarios(): Promise<Record<string, Facts>> {
 
   // A check that does not start (the 10 s throttle): the reply is idle, so About answers at once from it.
   let run = await about(view({lastCheck: before}), () => Promise.resolve(view({lastCheck: before})));
-  await run.click();
+  await run.click(showing(LATEST));
   result.throttled = {...run.facts(), calls: run.calls()};
   run.done();
 
   // A started check: pending and busy, one 30 s fake timer, then the newer finished check answers.
   run = await about(view({lastCheck: before}), () => Promise.resolve(view({state: 'checking', lastCheck: before})));
-  await run.click();
+  await run.click(facts => facts.message === CHECKING && facts.fakeTimers === 1);
   const pending = run.facts();
   await run.set(view({state: 'checking', lastCheck: before}));
   await run.set(view({lastCheck: {outcome: 'failed', failure: 'OFFLINE', atUtcMs: 2000}}));
-  await settle();
   result.started = {pending, ...run.facts(), calls: run.calls()};
   run.done();
 
   // A started check that never reports: the 30 s fake timer ends the wait with the latest finished check.
   run = await about(view({lastCheck: before}), () => Promise.resolve(view({state: 'checking', lastCheck: before})));
-  await run.click();
+  await run.click(facts => facts.message === CHECKING && facts.fakeTimers === 1);
   await run.set(view({state: 'checking', lastCheck: before}));
   const waiting = run.facts();
-  fireFakeTimers(); await settle();
+  fireFakeTimers();
+  await until(() => run.facts().message === LATEST, 'the end of the 30 s wait');
   result.fallback = {waiting, ...run.facts()};
   run.done();
 
   // A rejected bridge call answers at once from the latest finished check.
   run = await about(view({lastCheck: before}), () => Promise.reject(new Error('rejected')));
-  await run.click();
+  await run.click(showing(LATEST));
   result.rejected = {...run.facts(), calls: run.calls()};
   run.done();
 
   // `ready`: About is busy with a fixed note and the click does nothing.
   run = await about(offered('ready', {lastCheck: before}), () => Promise.resolve(offered('ready', {lastCheck: before})));
-  await run.click();
+  // The click handler runs synchronously inside click(), so a call it made would already be counted.
+  await run.click(() => true);
   result.ready = {...run.facts(), calls: run.calls()};
   run.done();
 
   // An offer already stands: the check answers at once with the offered version.
   run = await about(offered('available', {lastCheck: {outcome: 'available', failure: null, atUtcMs: 1000}}), () => Promise.resolve(offered('available', {lastCheck: {outcome: 'available', failure: null, atUtcMs: 1000}})));
-  await run.click();
+  await run.click(showing(OFFERED_TEXT));
   result.offered = {...run.facts(), calls: run.calls()};
   run.done();
   return result;

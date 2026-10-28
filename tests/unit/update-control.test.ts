@@ -250,8 +250,8 @@ describe('staging copy (PR-3 channelCopy)', () => {
 describe('the About check without a started check', () => {
   const before = {outcome: 'up-to-date' as const, failure: null, atUtcMs: 1000};
   it.each(LANGUAGES)('is busy in ready with a fixed note on finishing the installed update (%s)', language => {
-    const note = {en: 'An update is already installed. Use Restart to finish in the sidebar.',
-      ru: 'Обновление уже установлено. Завершите его кнопкой «Перезапустить для завершения» на боковой панели.'}[language];
+    const note = {en: 'An update is already installed. Finish it with the button in the sidebar.',
+      ru: 'Обновление уже установлено. Завершите его кнопкой на боковой панели.'}[language];
     expect(aboutCheckText(offered('ready', {lastCheck: before}), null, language)).toEqual({button: COPY[language].check, busy: true, unsupported: false, note, result: null});
     expect(aboutCheckText(offered('ready', {lastCheck: before}), {phase: 'answered', before: 1000}, language).result).toBeNull();
   });

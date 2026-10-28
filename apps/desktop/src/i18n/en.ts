@@ -871,7 +871,7 @@ export const EN_DICTIONARY: TranslationDictionary = channelCopyTable(Object.free
   'upd.check.available': 'Version {version} is available. Use the button in the sidebar to install it.',
   'upd.check.failed': 'Could not check for updates.',
   'upd.check.unsupported': 'Updates are checked only in an installed copy of the app.',
-  'upd.check.ready': 'An update is already installed. Use Restart to finish in the sidebar.',
+  'upd.check.ready': 'An update is already installed. Finish it with the button in the sidebar.',
   'ver.line': 'Version {version}',
   'ver.unknown': 'Version unknown',
   'ver.dev': 'Development build',

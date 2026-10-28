@@ -1,4 +1,4 @@
-import {spawn} from 'node:child_process';
+import {spawn, type ChildProcess} from 'node:child_process';
 import {mkdtemp, rm, writeFile} from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
@@ -16,6 +16,9 @@ const electron = path.join(repository, 'node_modules', 'electron', 'dist', 'elec
 const fixtures = path.join(repository, 'tests', 'fixtures', 'update-control-dom');
 type Facts = Record<string, unknown>;
 let root: string | undefined;
+let child: ChildProcess | undefined;
+/** The test's own bound on the Electron child, below beforeAll's 90 s; main.cjs also exits itself after 30 s. */
+const CHILD_LIMIT_MS = 45_000;
 let scenarios: Record<string, Facts> = {};
 
 beforeAll(async () => {
@@ -28,11 +31,14 @@ beforeAll(async () => {
   const environment: NodeJS.ProcessEnv = {...process.env, DOM_PAGE: path.join(page, 'index.html'), DOM_USER_DATA: path.join(root, 'user-data')};
   delete environment.ELECTRON_RUN_AS_NODE;
   const output = await new Promise<string>((resolve, reject) => {
-    const child = spawn(electron, [path.join(fixtures, 'main.cjs')], {env: environment, stdio: ['ignore', 'pipe', 'ignore'], windowsHide: true});
+    const started = child = spawn(electron, [path.join(fixtures, 'main.cjs')], {env: environment, stdio: ['ignore', 'pipe', 'ignore'], windowsHide: true});
     let stdout = '';
-    child.stdout.on('data', (chunk: Buffer) => {stdout += chunk.toString('utf8');});
-    child.on('error', reject);
-    child.on('exit', code => code === 0 ? resolve(stdout) : reject(new Error(`Electron exited ${String(code)}: ${stdout}`)));
+    // One decoder for the whole stream, so a multi-byte character split across chunks stays intact.
+    started.stdout?.setEncoding('utf8');
+    started.stdout?.on('data', (chunk: string) => {stdout += chunk;});
+    const limit = setTimeout(() => {started.kill(); reject(new Error(`Electron did not exit within ${CHILD_LIMIT_MS} ms: ${stdout}`));}, CHILD_LIMIT_MS);
+    started.on('error', error => {clearTimeout(limit); reject(error);});
+    started.on('exit', code => {clearTimeout(limit); if (code === 0) resolve(stdout); else reject(new Error(`Electron exited ${String(code)}: ${stdout}`));});
   });
   const line = output.split(/\r?\n/).find(entry => entry.startsWith('DOM_RESULT '));
   if (!line) throw new Error(`No DOM result: ${output}`);
@@ -40,7 +46,10 @@ beforeAll(async () => {
   if (result.error) throw new Error(result.error);
   scenarios = result.scenarios;
 }, 90_000);
-afterAll(async () => {if (root) await rm(root, {recursive: true, force: true, maxRetries: 5, retryDelay: 200});});
+afterAll(async () => {
+  if (child && child.exitCode === null && child.signalCode === null) child.kill();
+  if (root) await rm(root, {recursive: true, force: true, maxRetries: 5, retryDelay: 200});
+});
 
 describe('the sidebar update control in a real DOM', () => {
   it('keeps the same focused button from failed through downloading, failed, refused and available', () => {
@@ -69,7 +78,7 @@ describe('the About check in a real DOM', () => {
     expect(scenarios.rejected).toEqual({busy: false, disabled: false, note: null, message: 'You have the latest version.', severity: 'success', fakeTimers: 0, calls: 1});
   });
   it('is busy with a fixed note and ignores the click while an installed update waits for its restart', () => {
-    expect(scenarios.ready).toEqual({busy: true, disabled: false, note: 'An update is already installed. Use Restart to finish in the sidebar.', message: null, severity: null, fakeTimers: 0, calls: 0});
+    expect(scenarios.ready).toEqual({busy: true, disabled: false, note: 'An update is already installed. Finish it with the button in the sidebar.', message: null, severity: null, fakeTimers: 0, calls: 0});
   });
   it('answers at once with the offered version when an offer already stands', () => {
     expect(scenarios.offered).toEqual({busy: false, disabled: false, note: null, message: 'Version 0.2.0 is available. Use the button in the sidebar to install it.', severity: 'info', fakeTimers: 0, calls: 1});
