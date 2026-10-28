@@ -1,0 +1,351 @@
+import {spawnSync} from 'node:child_process';
+import {createHash, generateKeyPairSync} from 'node:crypto';
+import {mkdirSync, mkdtempSync, readFileSync, renameSync, rmSync, writeFileSync} from 'node:fs';
+import {tmpdir} from 'node:os';
+import path from 'node:path';
+import {afterEach, beforeEach, describe, expect, it} from 'vitest';
+import {CHANNEL_IDENTITIES, type ReleaseChannel} from '../../apps/desktop/src/channel';
+import {UPDATE_PUBLIC_KEYS} from '../../apps/desktop/src/updater/update-keys';
+import {parseUpdateManifest, verifyManifestSignature, verifyUpdateManifest, type ManifestBinding} from '../../apps/desktop/src/updater/update-manifest';
+import {nugetVersionOf as appNugetVersionOf} from '../../apps/desktop/src/updater/update-version';
+import {BUILD_IDENTITIES, buildSetupFileName} from '../../scripts/build-channel.mjs';
+import {checkRelease, checkReleaseRun} from '../../scripts/release/check-github-release.mjs';
+import {generateUpdateKey, updateKeyEntry, writeUpdateKey} from '../../scripts/release/generate-update-key.mjs';
+import {loadSigningKey, privateKeyOf, signManifestBytes} from '../../scripts/release/sign-update-manifest.mjs';
+import {assertKeyPathOutsideRepository, compiledUpdateKeys, nugetVersionOf, parseManifestBytes, REPOSITORY_ROOT, verifySignatureBytes}
+  from '../../scripts/release/update-manifest-common.mjs';
+import {verifySignedManifest} from '../../scripts/release/verify-update-manifest.mjs';
+import {buildUpdateManifest, manifestBytesOf, releaseNotesOf, selectKeyId, verifyReleaseArtifacts, type ReleaseFacts}
+  from '../../scripts/release/write-update-manifest.mjs';
+
+// ET-055 PR-9 (UP4, UP5, UP13, UP16; REG-019, release part): the release scripts write, sign and check update manifests
+// that the application's own verifier (apps/desktop/src/updater/update-manifest.ts) accepts. Every key is generated inside
+// the run into a temporary folder outside the repository; no private key is committed and no test reaches GitHub. Artifact
+// folders are synthetic bytes with a hand-written release identity, never a real build. Expected outcomes are written by
+// hand from the plan's refusal list.
+
+const RUN = '41000000001';
+const COMMIT = 'a'.repeat(40);
+let scratch: string;
+beforeEach(() => {scratch = mkdtempSync(path.join(tmpdir(), 'ets2telemetry-release-scripts-'));});
+afterEach(() => {rmSync(scratch, {recursive: true, force: true});});
+
+const sha = (algorithm: 'sha256' | 'sha1', bytes: Uint8Array) => createHash(algorithm).update(bytes).digest('hex');
+
+interface IdentityFixture {
+  format: string; version: number; createdUtc: string; channel: string;
+  builtBy: {kind: string; runId: string | null};
+  source: {commit: string; sourceCommit: string; treeClean: boolean};
+  versions: {app: string; nuget: string; electron: string; plugin: string};
+  artifacts: Record<'setup' | 'nupkg' | 'releases', {name: string; size: number; sha256: string}>;
+}
+interface FixtureOptions {
+  channel?: ReleaseChannel;
+  version?: string;
+  identity?: (identity: IdentityFixture) => void;
+  releases?: (line: string) => string;
+}
+/** A synthetic CI installer artifact folder: Setup, the full nupkg, RELEASES and release-identity.json. */
+function artifactFolder(options: FixtureOptions = {}) {
+  const channel = options.channel ?? 'production', version = options.version ?? (channel === 'production' ? '0.2.0' : '0.2.0-stg.000042');
+  const build = BUILD_IDENTITIES[channel], nuget = nugetVersionOf(version);
+  const folder = path.join(scratch, `artifact-${channel}-${Math.random().toString(16).slice(2)}`);
+  mkdirSync(folder);
+  const setup = Buffer.from(`synthetic setup ${channel} ${version}`), nupkg = Buffer.alloc(4096, 7), setupName = buildSetupFileName(build, version);
+  const nupkgName = `${build.squirrelId}-${nuget}-full.nupkg`;
+  writeFileSync(path.join(folder, setupName), setup);
+  writeFileSync(path.join(folder, nupkgName), nupkg);
+  const line = `${sha('sha1', nupkg).toUpperCase()} ${nupkgName} ${nupkg.length}`;
+  const releases = Buffer.from(`\uFEFF${(options.releases ?? (text => text))(line)}`, 'utf8');
+  writeFileSync(path.join(folder, 'RELEASES'), releases);
+  const identity: IdentityFixture = {
+    format: 'ets2telemetry.release-identity', version: 1, createdUtc: '2026-10-28T10:00:00.000Z', channel, builtBy: {kind: 'github-actions', runId: RUN},
+    source: {commit: COMMIT, sourceCommit: COMMIT, treeClean: true}, versions: {app: version, nuget, electron: '44.7.0', plugin: version},
+    artifacts: {setup: {name: setupName, size: setup.length, sha256: sha('sha256', setup)}, nupkg: {name: nupkgName, size: nupkg.length, sha256: sha('sha256', nupkg)},
+      releases: {name: 'RELEASES', size: releases.length, sha256: sha('sha256', releases)}}
+  };
+  options.identity?.(identity);
+  writeFileSync(path.join(folder, 'release-identity.json'), `${JSON.stringify(identity, null, 2)}\n`);
+  return {folder, setupName, nupkgName, nupkg};
+}
+
+/** A generated key of `channel` whose private PEM lies in the scratch folder, as an owner would keep it outside the repository. */
+function ownerKey(channel: ReleaseChannel) {
+  const file = path.join(scratch, `${channel}-${Math.random().toString(16).slice(2)}.pem`);
+  const entry = writeUpdateKey(channel, file);
+  return {file, entry, privateKey: loadSigningKey({keyPath: file, channel})};
+}
+
+const binding = (channel: ReleaseChannel, keys: {keyId: string; publicKey: string}[], currentVersion: string, sourceTag?: string): ManifestBinding =>
+  ({identity: CHANNEL_IDENTITIES[channel], keys, currentVersion, sourceTag});
+
+function writtenAndSigned(channel: ReleaseChannel, options: FixtureOptions = {}) {
+  const artifact = artifactFolder({channel, ...options});
+  const key = ownerKey(channel);
+  const facts = verifyReleaseArtifacts(artifact.folder, {channel, runId: RUN, commit: COMMIT});
+  const bytes = manifestBytesOf(buildUpdateManifest(facts, {keyId: key.entry.keyId, now: new Date('2026-10-28T12:34:56.789Z')}));
+  const {signature} = signManifestBytes(bytes, key.privateKey);
+  return {artifact, key, facts, bytes, signature};
+}
+
+describe('round trip through the application verifier', () => {
+  it('accepts a production manifest written and signed by the scripts with the matching public key', () => {
+    const {bytes, signature, key, artifact} = writtenAndSigned('production');
+    const result = verifyUpdateManifest(bytes, signature, binding('production', [key.entry], '0.1.1'));
+    expect(result).toEqual({ok: true, manifest: {format: 'ets2telemetry.update-manifest.v1', channel: 'production', appVersion: '0.2.0', nugetVersion: '0.2.0',
+      package: {tag: 'v0.2.0', name: 'ETS2TelemetryDesktop-0.2.0-full.nupkg', size: 4096, sha256: sha('sha256', artifact.nupkg), sha1: sha('sha1', artifact.nupkg)},
+      publishedUtc: '2026-10-28T12:34:56Z', keyId: key.entry.keyId}});
+    expect(signature.toString('ascii')).toMatch(/^[A-Za-z0-9+/]{86}==\n$/);
+  });
+  it('accepts a staging manifest bound to the release it came from', () => {
+    const {bytes, signature, key} = writtenAndSigned('staging');
+    expect(verifyUpdateManifest(bytes, signature, binding('staging', [key.entry], '0.2.0-stg.000041', 'staging-v0.2.0-stg.000042'))).toMatchObject({ok: true,
+      manifest: {appVersion: '0.2.0-stg.000042', nugetVersion: '0.2.0-stg000042', package: {tag: 'staging-v0.2.0-stg.000042', name: 'ETS2TelemetryDesktopStaging-0.2.0-stg000042-full.nupkg'}}});
+  });
+  it('refuses the manifest after any single byte changes', () => {
+    const {bytes, signature, key} = writtenAndSigned('production');
+    const keys = [key.entry];
+    for (const index of [0, 10, Math.floor(bytes.length / 2), bytes.length - 2, bytes.length - 1]) {
+      const changed = Buffer.from(bytes);
+      changed[index] ^= 0x01;
+      const result = verifyUpdateManifest(changed, signature, binding('production', keys, '0.1.1'));
+      expect(result.ok, `byte ${index}`).toBe(false);
+      expect(['SIGNATURE_INVALID', 'MANIFEST_MALFORMED']).toContain(result.ok ? '' : result.code);
+    }
+    const signatureChanged = Buffer.from(signature);
+    signatureChanged[5] = signatureChanged[5] === 0x41 ? 0x42 : 0x41;
+    expect(verifyUpdateManifest(bytes, signatureChanged, binding('production', keys, '0.1.1'))).toEqual({ok: false, code: 'SIGNATURE_INVALID'});
+  });
+  it('refuses the manifest with a wrong key: another key under the same keyId, or the staging key for a production build', () => {
+    const {bytes, signature, key} = writtenAndSigned('production');
+    const other = generateUpdateKey('production');
+    expect(verifyUpdateManifest(bytes, signature, binding('production', [{keyId: key.entry.keyId, publicKey: other.publicKey}], '0.1.1'))).toEqual({ok: false, code: 'SIGNATURE_INVALID'});
+    const staging = ownerKey('staging');
+    expect(verifyUpdateManifest(bytes, signature, binding('production', [staging.entry], '0.1.1'))).toEqual({ok: false, code: 'SIGNATURE_INVALID'});
+  });
+  it('refuses the manifest in a build of the other channel, even with the signing key compiled in', () => {
+    const production = writtenAndSigned('production');
+    expect(verifyUpdateManifest(production.bytes, production.signature, binding('staging', [production.key.entry], '0.1.1-stg.000001', 'staging-v0.2.0-stg.000042')))
+      .toEqual({ok: false, code: 'CHANNEL_MISMATCH'});
+    const staging = writtenAndSigned('staging');
+    expect(verifyUpdateManifest(staging.bytes, staging.signature, binding('production', [staging.key.entry], '0.1.1'))).toEqual({ok: false, code: 'CHANNEL_MISMATCH'});
+  });
+  it('agrees with the application on parsing, signatures and NuGet versions', () => {
+    const {bytes, signature, key} = writtenAndSigned('production');
+    expect(parseManifestBytes(bytes)).toEqual(parseUpdateManifest(bytes));
+    expect(verifySignatureBytes(bytes, signature, key.entry.publicKey)).toBe(verifyManifestSignature(bytes, signature, key.entry.publicKey));
+    expect(verifySignatureBytes(Buffer.concat([bytes, Buffer.from(' ')]), signature, key.entry.publicKey)).toBe(false);
+    for (const version of ['0.2.0', '0.2.0-stg.000042', '1.0.0-alpha.1', '1.0.0-alpha.1+build.5']) expect(nugetVersionOf(version), version).toBe(appNugetVersionOf(version));
+  });
+});
+
+describe('manifest writer refusals', () => {
+  const refused = (options: FixtureOptions, pattern: RegExp, verify: {channel?: string; runId?: string; commit?: string} = {}) => {
+    const {folder} = artifactFolder(options);
+    expect(() => verifyReleaseArtifacts(folder, {channel: verify.channel ?? options.channel ?? 'production', runId: verify.runId ?? RUN, commit: verify.commit ?? COMMIT})).toThrow(pattern);
+  };
+  it('refuses an artifact of the other channel', () => {
+    refused({channel: 'staging'}, /is a "staging" build, not production/, {channel: 'production'});
+    refused({channel: 'production'}, /is a "production" build, not staging/, {channel: 'staging'});
+  });
+  it('refuses an artifact not built by GitHub Actions or built by another run', () => {
+    refused({identity: identity => {identity.builtBy = {kind: 'local', runId: null};}}, /not built by GitHub Actions/);
+    refused({}, /built by run "41000000001", not run 41000000002/, {runId: '41000000002'});
+    refused({}, /CI run id must be a positive integer/, {runId: '0'});
+  });
+  it('refuses another commit than the run head and a tree with tracked changes', () => {
+    refused({}, /identity commit differs from the CI run head/, {commit: 'b'.repeat(40)});
+    refused({identity: identity => {identity.source.treeClean = false;}}, /tree with tracked changes/);
+  });
+  it('refuses versions the channel cannot release and a NuGet version that is not the conversion', () => {
+    refused({channel: 'staging', version: '0.2.0-stg.000000'}, /local staging run number 000000/);
+    refused({channel: 'staging', version: '0.2.0'}, /is not a staging version/);
+    refused({channel: 'production', version: '0.2.0-stg.000042'}, /carries a staging label/);
+    refused({identity: identity => {identity.versions.nuget = '0.2.0.0';}}, /NuGet version "0.2.0.0" is not 0.2.0/);
+  });
+  it('refuses a nupkg that is not named exactly <Squirrel id>-<NuGet version>-full.nupkg', () => {
+    // The staging id starts with the production id, so only exact equality tells them apart.
+    const {folder, nupkgName} = artifactFolder();
+    const wrong = 'ETS2TelemetryDesktopStaging-0.2.0-full.nupkg';
+    renameSync(path.join(folder, nupkgName), path.join(folder, wrong));
+    const identityFile = path.join(folder, 'release-identity.json');
+    const identity = JSON.parse(readFileSync(identityFile, 'utf8')) as IdentityFixture;
+    identity.artifacts.nupkg.name = wrong;
+    writeFileSync(identityFile, JSON.stringify(identity));
+    expect(() => verifyReleaseArtifacts(folder, {channel: 'production', runId: RUN, commit: COMMIT})).toThrow(/nupkg is not exactly ETS2TelemetryDesktop-0.2.0-full.nupkg/);
+    refused({releases: line => line.replace('-full.nupkg', '-delta.nupkg')}, /RELEASES does not name the nupkg/);
+  });
+  it('refuses a file whose bytes differ from the identity or RELEASES, a missing file and an extra file', () => {
+    const changed = artifactFolder();
+    writeFileSync(path.join(changed.folder, changed.nupkgName), Buffer.alloc(4096, 8));
+    expect(() => verifyReleaseArtifacts(changed.folder, {channel: 'production', runId: RUN})).toThrow(/ETS2TelemetryDesktop-0.2.0-full.nupkg differs from its size or SHA-256/);
+    refused({releases: line => line.replace(/^[0-9A-F]{40}/, '0'.repeat(40))}, /differs from its size or SHA-256|RELEASES does not name the nupkg/);
+    const extra = artifactFolder();
+    writeFileSync(path.join(extra.folder, 'notes.txt'), 'x');
+    expect(() => verifyReleaseArtifacts(extra.folder, {channel: 'production', runId: RUN})).toThrow(/must hold exactly/);
+    const missing = artifactFolder();
+    rmSync(path.join(missing.folder, missing.setupName));
+    expect(() => verifyReleaseArtifacts(missing.folder, {channel: 'production', runId: RUN})).toThrow(/must hold exactly/);
+  });
+  it('names a compiled key: the requested one, or the only one, and fails without one', () => {
+    const keys = [{keyId: 'production-0123456789abcdef', publicKey: generateUpdateKey('production').publicKey}];
+    expect(selectKeyId(keys, 'production')).toBe('production-0123456789abcdef');
+    expect(selectKeyId(keys, 'production', 'production-0123456789abcdef')).toBe('production-0123456789abcdef');
+    expect(() => selectKeyId(keys, 'production', 'production-ffffffffffffffff')).toThrow(/is not a compiled production key/);
+    expect(() => selectKeyId([], 'production')).toThrow(/No compiled production update key/);
+    expect(() => selectKeyId([...keys, {...keys[0], keyId: 'production-1'}], 'production')).toThrow(/Several compiled production update keys/);
+  });
+  it('writes the release title and notes of the owner decision', () => {
+    const production = verifyReleaseArtifacts(artifactFolder().folder, {channel: 'production', runId: RUN});
+    const staging = verifyReleaseArtifacts(artifactFolder({channel: 'staging'}).folder, {channel: 'staging', runId: RUN});
+    expect(production.title).toBe('Yukon Union Telemetry 0.2.0 – unsigned internal alpha');
+    expect(staging.title).toBe('Staging 0.2.0-stg.000042 – unsigned, for testing');
+    expect(staging.tag).toBe('staging-v0.2.0-stg.000042');
+    const notes = releaseNotesOf(production, 'senukartur/ets2telemetry');
+    expect(notes).toContain(`\`${production.setup.name}\` SHA-256: \`${production.setup.sha256}\``);
+    expect(notes).toContain(`https://github.com/senukartur/ets2telemetry/actions/runs/${RUN}`);
+    expect(notes).toContain('not code-signed');
+  });
+});
+
+describe('signer', () => {
+  it('refuses a key other than the one the manifest names, before signing', () => {
+    const artifact = artifactFolder();
+    const facts = verifyReleaseArtifacts(artifact.folder, {channel: 'production', runId: RUN});
+    const named = ownerKey('production'), other = ownerKey('production');
+    const bytes = manifestBytesOf(buildUpdateManifest(facts, {keyId: named.entry.keyId}));
+    expect(() => signManifestBytes(bytes, other.privateKey)).toThrow(`The manifest names key ${named.entry.keyId}, but this production key is ${other.entry.keyId}`);
+    // The same key pair under the other channel has another keyId, so a staging key never signs as a production one.
+    const staging = ownerKey('staging');
+    expect(() => signManifestBytes(manifestBytesOf(buildUpdateManifest(facts, {keyId: staging.entry.keyId})), staging.privateKey)).toThrow(/but this production key is production-/);
+    expect(() => signManifestBytes(Buffer.from('{}'), named.privateKey)).toThrow('The manifest is not an update manifest v1');
+  });
+  it('reads a key from the environment only for a staging manifest in GitHub Actions', () => {
+    const pem = generateUpdateKey('staging').privatePem;
+    expect(loadSigningKey({keyEnv: 'UPDATE_SIGNING_KEY_STAGING', channel: 'staging', env: {GITHUB_ACTIONS: 'true', UPDATE_SIGNING_KEY_STAGING: pem}}).asymmetricKeyType).toBe('ed25519');
+    expect(() => loadSigningKey({keyEnv: 'UPDATE_SIGNING_KEY_STAGING', channel: 'production', env: {GITHUB_ACTIONS: 'true', UPDATE_SIGNING_KEY_STAGING: pem}})).toThrow(/signs only a staging manifest in GitHub Actions/);
+    expect(() => loadSigningKey({keyEnv: 'UPDATE_SIGNING_KEY_STAGING', channel: 'staging', env: {UPDATE_SIGNING_KEY_STAGING: pem}})).toThrow(/signs only a staging manifest in GitHub Actions/);
+    expect(() => loadSigningKey({keyEnv: 'UPDATE_SIGNING_KEY_STAGING', channel: 'staging', env: {GITHUB_ACTIONS: 'true'}})).toThrow(/is empty/);
+    expect(() => loadSigningKey({channel: 'staging'})).toThrow(/exactly one of/);
+  });
+  it('refuses a key that is not an unencrypted PKCS#8 Ed25519 PEM, without echoing it', () => {
+    const rsa = generateKeyPairSync('rsa', {modulusLength: 2048}).privateKey.export({format: 'pem', type: 'pkcs8'}).toString();
+    expect(() => privateKeyOf(rsa)).toThrow('The signing key is not an Ed25519 key');
+    const encrypted = generateKeyPairSync('ed25519').privateKey.export({format: 'pem', type: 'pkcs8', cipher: 'aes-256-cbc', passphrase: 'x'}).toString();
+    expect(() => privateKeyOf(encrypted)).toThrow('The signing key is not an unencrypted PKCS#8 PEM private key');
+    const garbage = '-----BEGIN PRIVATE KEY-----\nAAAA\n-----END PRIVATE KEY-----\n';
+    expect(() => privateKeyOf(garbage)).toThrow('The signing key could not be read as a PKCS#8 PEM private key');
+  });
+  it('signs from the command line, prints what it signed and never the key', () => {
+    const artifact = artifactFolder({channel: 'staging'});
+    const facts = verifyReleaseArtifacts(artifact.folder, {channel: 'staging', runId: RUN});
+    const key = ownerKey('staging'), pem = readFileSync(key.file, 'utf8');
+    const manifest = path.join(scratch, 'update-manifest.json');
+    writeFileSync(manifest, manifestBytesOf(buildUpdateManifest(facts, {keyId: key.entry.keyId})));
+    const run = spawnSync(process.execPath, [path.join(REPOSITORY_ROOT, 'scripts/release/sign-update-manifest.mjs'), '--manifest', manifest, '--key', key.file], {encoding: 'utf8'});
+    expect(run.status, run.stderr).toBe(0);
+    const body = pem.split(/\r?\n/).filter(line => line && !line.startsWith('-----'));
+    for (const output of [run.stdout, run.stderr]) {
+      expect(output).not.toContain('PRIVATE KEY');
+      for (const line of body) expect(output).not.toContain(line);
+    }
+    expect(JSON.parse(run.stdout)).toMatchObject({signature: 'update-manifest.json.sig', channel: 'staging', tag: 'staging-v0.2.0-stg.000042', keyId: key.entry.keyId});
+    const signature = readFileSync(path.join(scratch, 'update-manifest.json.sig'));
+    expect(verifyUpdateManifest(readFileSync(manifest), signature, binding('staging', [key.entry], '0.2.0-stg.000041', 'staging-v0.2.0-stg.000042')).ok).toBe(true);
+    // A second run never overwrites the signature.
+    expect(spawnSync(process.execPath, [path.join(REPOSITORY_ROOT, 'scripts/release/sign-update-manifest.mjs'), '--manifest', manifest, '--key', key.file], {encoding: 'utf8'}).status).toBe(1);
+  });
+});
+
+describe('key generator', () => {
+  it('prints only the public entry in the form update-keys.ts lists, and writes a usable private key once', () => {
+    const file = path.join(scratch, 'owner.pem');
+    const run = spawnSync(process.execPath, [path.join(REPOSITORY_ROOT, 'scripts/release/generate-update-key.mjs'), '--channel', 'production', '--out', file], {encoding: 'utf8'});
+    expect(run.status, run.stderr).toBe(0);
+    expect(run.stderr).toBe('');
+    const match = /^\{keyId: '(production-[0-9a-f]{16})', publicKey: '([A-Za-z0-9+/]{43}=)'\}\n$/.exec(run.stdout);
+    expect(match, run.stdout).not.toBeNull();
+    const pem = readFileSync(file, 'utf8');
+    expect(pem).toMatch(/^-----BEGIN PRIVATE KEY-----\n/);
+    expect(run.stdout).not.toContain(pem.split('\n')[1]);
+    const key = privateKeyOf(pem);
+    const entry = {keyId: match![1], publicKey: match![2]};
+    expect(updateKeyEntry(entry)).toBe(run.stdout.trim());
+    const facts = verifyReleaseArtifacts(artifactFolder().folder, {channel: 'production', runId: RUN});
+    const bytes = manifestBytesOf(buildUpdateManifest(facts, {keyId: entry.keyId}));
+    expect(verifyUpdateManifest(bytes, signManifestBytes(bytes, key).signature, binding('production', [entry], '0.1.1')).ok).toBe(true);
+    const again = spawnSync(process.execPath, [path.join(REPOSITORY_ROOT, 'scripts/release/generate-update-key.mjs'), '--channel', 'production', '--out', file], {encoding: 'utf8'});
+    expect(again.status).toBe(1);
+    expect(readFileSync(file, 'utf8')).toBe(pem);
+  });
+  it('refuses a key path inside the repository or inside any Git working tree', () => {
+    expect(() => writeUpdateKey('production', path.join(REPOSITORY_ROOT, 'owner.pem'))).toThrow('A private key must be kept outside the repository');
+    expect(() => writeUpdateKey('production', path.join(REPOSITORY_ROOT, 'scripts', 'owner.pem'))).toThrow(/outside the repository|outside every Git working tree/);
+    const tree = path.join(scratch, 'other-tree');
+    mkdirSync(path.join(tree, '.git'), {recursive: true});
+    mkdirSync(path.join(tree, 'keys'));
+    expect(() => assertKeyPathOutsideRepository(path.join(tree, 'keys', 'owner.pem'))).toThrow('A private key must be kept outside every Git working tree');
+    expect(() => loadSigningKey({keyPath: path.join(REPOSITORY_ROOT, 'owner.pem'), channel: 'production'})).toThrow('A private key must be kept outside the repository');
+    expect(() => assertKeyPathOutsideRepository(path.join(scratch, 'missing', 'owner.pem'))).toThrow('The key folder does not exist');
+  });
+});
+
+describe('workflow verification of a signed manifest', () => {
+  const signedFacts = (): {facts: ReleaseFacts; bytes: Buffer; signature: Buffer; keys: {keyId: string; publicKey: string}[]} => {
+    const {facts, bytes, signature, key} = writtenAndSigned('production');
+    return {facts, bytes, signature, keys: [key.entry]};
+  };
+  it('accepts the signed manifest of the same artifacts and refuses any other binding', () => {
+    const {facts, bytes, signature, keys} = signedFacts();
+    expect(verifySignedManifest({manifestBytes: bytes, signatureBytes: signature, facts, keys}).package.tag).toBe('v0.2.0');
+    expect(() => verifySignedManifest({manifestBytes: bytes, signatureBytes: signature, facts, keys: []})).toThrow(/is not a compiled production key/);
+    expect(() => verifySignedManifest({manifestBytes: bytes, signatureBytes: Buffer.from(`${'A'.repeat(86)}==\n`), facts, keys})).toThrow(/signature does not verify/);
+    const otherBytes = {...facts, nupkg: {...facts.nupkg, sha256: '0'.repeat(64)}};
+    expect(() => verifySignedManifest({manifestBytes: bytes, signatureBytes: signature, facts: otherBytes, keys})).toThrow(/package.sha256 differs from the artifact/);
+    expect(() => verifySignedManifest({manifestBytes: bytes, signatureBytes: signature, facts: {...facts, channel: 'staging'}, keys})).toThrow(/channel differs from the artifact/);
+  });
+  it('reads the compiled keys of update-keys.ts, which ship empty, under plain Node as the workflow does', async () => {
+    expect(await compiledUpdateKeys('production')).toEqual([...UPDATE_PUBLIC_KEYS.production]);
+    expect(await compiledUpdateKeys('staging')).toEqual([...UPDATE_PUBLIC_KEYS.staging]);
+    const {folder} = artifactFolder();
+    const out = path.join(scratch, 'manifest.json'), notes = path.join(scratch, 'notes.md');
+    const run = spawnSync(process.execPath, [path.join(REPOSITORY_ROOT, 'scripts/release/write-update-manifest.mjs'), '--artifacts', folder, '--channel', 'production',
+      '--run-id', RUN, '--commit', COMMIT, '--out', out, '--notes', notes], {encoding: 'utf8', env: {...process.env, NODE_OPTIONS: '--disable-warning=MODULE_TYPELESS_PACKAGE_JSON'}});
+    // Until the owner adds a public key (release checklist step 0) no manifest can be written.
+    expect(run.status).toBe(1);
+    expect(run.stderr).toContain('No compiled production update key: complete step 0 of the release checklist');
+    const verifyOnly = spawnSync(process.execPath, [path.join(REPOSITORY_ROOT, 'scripts/release/write-update-manifest.mjs'), '--artifacts', folder, '--channel', 'production',
+      '--run-id', RUN, '--commit', COMMIT], {encoding: 'utf8'});
+    expect(verifyOnly.status, verifyOnly.stderr).toBe(0);
+    expect(JSON.parse(verifyOnly.stdout)).toMatchObject({channel: 'production', tag: 'v0.2.0', manifest: null});
+  });
+});
+
+describe('GitHub answers', () => {
+  const run = (overrides: Record<string, unknown> = {}) => ({id: Number(RUN), path: '.github/workflows/windows-ci.yml', head_branch: 'main', event: 'push', status: 'completed',
+    conclusion: 'success', head_sha: COMMIT, run_attempt: 2, repository: {full_name: 'senukartur/ets2telemetry'}, head_repository: {full_name: 'senukartur/ets2telemetry'}, ...overrides});
+  const options = (channel = 'production') => ({runId: RUN, repository: 'senukartur/ets2telemetry', channel});
+  it('accepts a successful Windows CI run on main and names its latest attempt\'s artifact', () => {
+    expect(checkReleaseRun(run(), options())).toEqual({commit: COMMIT, attempt: 2, artifact: `windows-installer-${RUN}-2`});
+    expect(checkReleaseRun(run({event: 'workflow_dispatch'}), options('staging'))).toEqual({commit: COMMIT, attempt: 2, artifact: `windows-installer-staging-${RUN}-2`});
+  });
+  it('refuses another branch, event, workflow, repository, outcome or run', () => {
+    for (const [overrides, reason] of [
+      [{head_branch: 'feat/x'}, /did not build main/], [{event: 'pull_request'}, /started by "pull_request"/], [{path: '.github/workflows/windows-soak.yml'}, /is not a .github\/workflows\/windows-ci.yml run/],
+      [{head_repository: {full_name: 'fork/ets2telemetry'}}, /did not build senukartur\/ets2telemetry itself/], [{conclusion: 'failure'}, /did not complete successfully/],
+      [{status: 'in_progress', conclusion: null}, /did not complete successfully/], [{id: 1}, /is not run 41000000001/]
+    ] as const) expect(() => checkReleaseRun(run(overrides), options()), String(reason)).toThrow(reason);
+  });
+  it('checks a release\'s tag, commit, flags and exact assets', () => {
+    const names = ['a.exe', 'b.nupkg', 'RELEASES'];
+    const release = (overrides: Record<string, unknown> = {}) => ({id: 7, tag_name: 'v0.2.0', target_commitish: COMMIT, draft: true, prerelease: false,
+      assets: names.map(name => ({name, state: 'uploaded'})), ...overrides});
+    const expected = {tag: 'v0.2.0', commit: COMMIT, draft: true, prerelease: false, names};
+    expect(checkRelease(release(), expected)).toEqual({id: 7});
+    expect(() => checkRelease(release({draft: false}), expected)).toThrow(/is not a draft/);
+    expect(() => checkRelease(release({prerelease: true}), expected)).toThrow(/is a pre-release/);
+    expect(() => checkRelease(release({target_commitish: 'main'}), expected)).toThrow(/does not target commit/);
+    expect(() => checkRelease(release({assets: [...names, 'extra'].map(name => ({name, state: 'uploaded'}))}), expected)).toThrow(/must carry exactly/);
+    expect(() => checkRelease(release({assets: names.map(name => ({name, state: 'starter'}))}), expected)).toThrow(/not fully uploaded/);
+  });
+});
