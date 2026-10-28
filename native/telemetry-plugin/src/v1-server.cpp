@@ -1,4 +1,5 @@
 #include "v1-server.hpp"
+#include "channel-identity.hpp"
 #include <algorithm>
 #include <array>
 #include <stdexcept>
@@ -21,7 +22,7 @@ constexpr ULONGLONG exhaustion_flush_ms = 250;
 // original minor-0 bytes, and an offer above the maximum is clamped to it.
 constexpr unsigned endpoint_max_minor = highest_minor;
 // The only game-log entry of the v1 endpoint, handed to the SDK thread (Caller sequence step 4).
-const sdk::DeferredLog invariant_log{SCS_LOG_TYPE_error, "ETS2Telemetry: protocol v1 endpoint retired: invariant violation"};
+const sdk::DeferredLog invariant_log{SCS_LOG_TYPE_error, ETS2TELEMETRY_GAME_LOG_PREFIX " protocol v1 endpoint retired: invariant violation"};
 
 // The v1 session cannot continue: `end` with this reason where a connection can still carry it, then the endpoint retires.
 struct Retire : std::runtime_error {

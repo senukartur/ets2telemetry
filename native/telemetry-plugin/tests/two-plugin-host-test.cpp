@@ -238,7 +238,7 @@ void two_plugins(const std::wstring& first_path, const channel::Identity& first_
       PluginHost<2> host_c; Plugin c(copy.wstring(), first_identity, security, user, self, L"c", false);
       require(c.module != a.module, "control loads as a separate module");
       auto pc = host_c.params(); const auto result = c.init(SCS_TELEMETRY_VERSION_1_01, &pc); c.initialized = result == SCS_RESULT_ok;
-      const std::string expected = "ETS2Telemetry: transport startup failed: endpoint-creation";
+      const std::string expected = std::string(first_identity.game_log_prefix) + " transport startup failed: endpoint-creation";
       const auto reported = [&] { return std::find(host_c.logs.begin(), host_c.logs.end(), expected) != host_c.logs.end(); };
       if (result == SCS_RESULT_ok) require(until([&] { host_c.frame(1); return reported(); }, deferred_report_guard_ms), "same-prefix control reports its collision on a later callback");
       else require(result == SCS_RESULT_generic_error && reported(), "same-prefix control fails initialization with the collision");

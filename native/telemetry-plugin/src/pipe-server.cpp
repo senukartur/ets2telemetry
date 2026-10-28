@@ -1,4 +1,5 @@
 #include "pipe-server.hpp"
+#include "channel-identity.hpp"
 #include "snapshot-wire.hpp"
 #include <array>
 #include <stdexcept>
@@ -13,21 +14,21 @@ struct Operation { Handle event{CreateEventW(nullptr,TRUE,FALSE,nullptr)}; OVERL
 Server& server() noexcept { static Server value(sdk::adapter()); return value; }
 const char* startup_failure_message(StartupFailure failure) noexcept {
   switch (failure) {
-    case StartupFailure::identity_security: return "ETS2Telemetry: transport startup failed: identity-security";
-    case StartupFailure::source_identity: return "ETS2Telemetry: transport startup failed: source-identity";
-    case StartupFailure::endpoint_creation: return "ETS2Telemetry: transport startup failed: endpoint-creation";
-    case StartupFailure::discovery_publication: return "ETS2Telemetry: transport startup failed: discovery-publication";
-    case StartupFailure::timeout: return "ETS2Telemetry: transport startup failed: timeout";
-    default: return "ETS2Telemetry: transport startup failed: worker-creation";
+    case StartupFailure::identity_security: return ETS2TELEMETRY_GAME_LOG_PREFIX " transport startup failed: identity-security";
+    case StartupFailure::source_identity: return ETS2TELEMETRY_GAME_LOG_PREFIX " transport startup failed: source-identity";
+    case StartupFailure::endpoint_creation: return ETS2TELEMETRY_GAME_LOG_PREFIX " transport startup failed: endpoint-creation";
+    case StartupFailure::discovery_publication: return ETS2TELEMETRY_GAME_LOG_PREFIX " transport startup failed: discovery-publication";
+    case StartupFailure::timeout: return ETS2TELEMETRY_GAME_LOG_PREFIX " transport startup failed: timeout";
+    default: return ETS2TELEMETRY_GAME_LOG_PREFIX " transport startup failed: worker-creation";
   }
 }
-const char* startup_pending_message() noexcept { return "ETS2Telemetry: transport startup pending: timeout"; }
+const char* startup_pending_message() noexcept { return ETS2TELEMETRY_GAME_LOG_PREFIX " transport startup pending: timeout"; }
 namespace {
 // Fixed entries for a result that arrives after official initialization stopped waiting. A failure that
 // ends after stop() was requested may be a cancellation artifact, so it carries no stage reason.
 const sdk::DeferredLog* late_startup_log(StartupFailure failure, bool stopping) noexcept {
-  static const sdk::DeferredLog started{SCS_LOG_TYPE_message,"ETS2Telemetry: transport started after the startup wait"};
-  static const sdk::DeferredLog stopped{SCS_LOG_TYPE_warning,"ETS2Telemetry: transport startup ended by shutdown"};
+  static const sdk::DeferredLog started{SCS_LOG_TYPE_message,ETS2TELEMETRY_GAME_LOG_PREFIX " transport started after the startup wait"};
+  static const sdk::DeferredLog stopped{SCS_LOG_TYPE_warning,ETS2TELEMETRY_GAME_LOG_PREFIX " transport startup ended by shutdown"};
   if (failure != StartupFailure::none && stopping) return &stopped;
   static const auto failed = [] {
     std::array<sdk::DeferredLog,static_cast<std::size_t>(StartupFailure::timeout)+1> entries{};

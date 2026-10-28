@@ -33,6 +33,7 @@ void production_golden() {
   require(same(channel::production.pipe_prefix_wide, L"\\\\.\\pipe\\ETS2Telemetry-"), "production wide pipe prefix unchanged");
   require(same(channel::production.data_root, L"ETS2Telemetry"), "production data root unchanged");
   require(same(channel::production.plugin_file, "ets2telemetry-plugin.dll"), "production plugin DLL name unchanged");
+  require(same(channel::production.game_log_prefix, "ETS2Telemetry:"), "production game-log prefix unchanged");
 }
 void staging_values() {
   require(same(channel::staging.name, "staging"), "staging channel name");
@@ -40,6 +41,7 @@ void staging_values() {
   require(same(channel::staging.pipe_prefix_wide, L"\\\\.\\pipe\\ETS2TelemetryStaging-"), "staging wide pipe prefix");
   require(same(channel::staging.data_root, L"ETS2TelemetryStaging"), "staging data root");
   require(same(channel::staging.plugin_file, "ets2telemetry-plugin-staging.dll"), "staging plugin DLL name");
+  require(same(channel::staging.game_log_prefix, "ETS2TelemetryStaging:"), "staging game-log prefix");
 }
 // No identity is shared. Windows compares file and pipe names case-insensitively, so the checks do too, and neither pipe
 // prefix may start the other: a prefix match must never select the other channel's endpoint.
@@ -52,10 +54,13 @@ void nothing_shared() {
   require(_wcsnicmp(p.c_str(), s.c_str(), p.size()) != 0 && _wcsnicmp(s.c_str(), p.c_str(), s.size()) != 0, "neither pipe prefix starts the other");
   require(_wcsicmp(channel::production.data_root, channel::staging.data_root) != 0, "data roots differ");
   require(_stricmp(channel::production.plugin_file, channel::staging.plugin_file) != 0, "plugin DLL names differ");
+  require(_stricmp(channel::production.game_log_prefix, channel::staging.game_log_prefix) != 0, "game-log prefixes differ");
 }
 // The compiled plugin code uses the active channel for every endpoint and for its default transport directory.
 void active_channel(const std::string& configured) {
   require(configured == channel::active.name, "the compiled channel is the configured ETS2TELEMETRY_CHANNEL");
+  // The fixed game-log messages are built from the macro; it must be the active channel's prefix.
+  require(same(ETS2TELEMETRY_GAME_LOG_PREFIX, channel::active.game_log_prefix), "game-log macro is the active channel's prefix");
   auto source = std::make_unique<sdk::Snapshot>();
   require(source->identity.game.assign("ets2") && source->identity.process_instance_id.assign("00000000-0000-4000-8000-0000000000a1") &&
     source->identity.plugin_session_id.assign("00000000-0000-4000-8000-0000000000b2"), "synthetic source identity");

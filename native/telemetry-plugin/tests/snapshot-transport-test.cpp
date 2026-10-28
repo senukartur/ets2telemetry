@@ -1,4 +1,5 @@
 #include "pipe-server.hpp"
+#include "channel-identity.hpp"
 #include "snapshot-wire.hpp"
 #include "protocol-json.hpp"
 #include "native-fuzz-multiplier.hpp"
@@ -266,7 +267,7 @@ void hash_cancel_race() {
   require(hooks.synchronized.load()&&!fallback.load()&&hooks.late_read_error.load()==ERROR_OPERATION_ABORTED,"stop cancels real read scheduled after first cancellation");
   require(hooks.reads.load()==1&&hooks.blocks.load()==1&&f.server.status()==Status::stopped&&f.server.endpoint().empty(),"race worker completed joined without further image work");
 }
-const std::string late_started="ETS2Telemetry: transport started after the startup wait",late_stopped="ETS2Telemetry: transport startup ended by shutdown";
+const std::string late_started=ETS2TELEMETRY_GAME_LOG_PREFIX " transport started after the startup wait",late_stopped=ETS2TELEMETRY_GAME_LOG_PREFIX " transport startup ended by shutdown";
 // Holds the worker before endpoint creation until await_startup() has given up after its 1 s budget.
 void hold_past_wait(HookState& hooks,Fixture& f) {
   require(f.server.start(f.directory),"held worker start"); require(WaitForSingleObject(hooks.ready.get(),5000)==WAIT_OBJECT_0,"startup held before endpoint");
@@ -660,7 +661,7 @@ void dll_startup_reporting(const char* path) {
     Fixture f; sdk::Snapshot source; f.adapter->read_current(source); f.adapter->shutdown();
     const auto name=endpoint_name(source,f.user); const auto record=f.directory+L"\\"+std::wstring(source.identity.process_instance_id.bytes.begin(),source.identity.process_instance_id.bytes.begin()+36)+L".json";
     Handle foreign_pipe,foreign_record;
-    const char* expected=scenario==0?"ETS2Telemetry: transport startup failed: endpoint-creation":scenario==1?"ETS2Telemetry: transport startup failed: identity-security":"ETS2Telemetry: transport startup failed: discovery-publication";
+    const char* expected=scenario==0?ETS2TELEMETRY_GAME_LOG_PREFIX " transport startup failed: endpoint-creation":scenario==1?ETS2TELEMETRY_GAME_LOG_PREFIX " transport startup failed: identity-security":ETS2TELEMETRY_GAME_LOG_PREFIX " transport startup failed: discovery-publication";
     if(scenario==0) {foreign_pipe.reset(CreateNamedPipeW(name.c_str(),PIPE_ACCESS_DUPLEX|FILE_FLAG_OVERLAPPED|FILE_FLAG_FIRST_PIPE_INSTANCE,PIPE_TYPE_BYTE|PIPE_REJECT_REMOTE_CLIENTS,1,4096,4096,0,f.security.attributes()));require(static_cast<bool>(foreign_pipe),"actual foreign reporting endpoint");}
     if(scenario==1) {PSECURITY_DESCRIPTOR insecure=nullptr; require(ConvertStringSecurityDescriptorToSecurityDescriptorW(L"D:P(A;;GA;;;WD)",SDDL_REVISION_1,&insecure,nullptr)!=FALSE,"reporting broad ACL descriptor"); require(SetFileSecurityW(f.directory.c_str(),DACL_SECURITY_INFORMATION|PROTECTED_DACL_SECURITY_INFORMATION,insecure)!=FALSE,"reporting broad ACL directory"); LocalFree(insecure);}
     if(scenario==2) {foreign_record.reset(CreateFileW(record.c_str(),GENERIC_READ|GENERIC_WRITE|DELETE,FILE_SHARE_READ,f.security.attributes(),CREATE_NEW,0,nullptr)); require(static_cast<bool>(foreign_record),"actual foreign discovery record"); DWORD written=0; require(WriteFile(foreign_record.get(),"foreign",7,&written,nullptr)&&written==7,"foreign discovery sentinel");}

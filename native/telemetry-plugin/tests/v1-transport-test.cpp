@@ -2,8 +2,8 @@
 // pipes only; no game, game directory or user history is touched, and %LOCALAPPDATA% is never used. The controlled client
 // is the ET-002b C++ Consumer and DurableAckCursor; expected values are written by hand from docs/protocol/v1.md and
 // docs/native-transport-v1.md.
-#include "v1-server.hpp"
 #include "channel-identity.hpp"
+#include "v1-server.hpp"
 #include "pipe-server.hpp"
 #include "capture-server.hpp"
 #include "capture-wire.hpp"
@@ -1014,7 +1014,7 @@ void invariant() {
   require(until([&] { return f.server->status() == v1::ServerStatus::retired && f.server->endpoint().empty(); }), "v1 retires");
   require(f.host.logs.empty(), "the worker never logs");
   f.host.frame();
-  require(f.host.logs.size() == 1 && f.host.log_types[0] == SCS_LOG_TYPE_error && f.host.logs[0] == "ETS2Telemetry: protocol v1 endpoint retired: invariant violation" && f.host.wrong_thread == 0,
+  require(f.host.logs.size() == 1 && f.host.log_types[0] == SCS_LOG_TYPE_error && f.host.logs[0] == ETS2TELEMETRY_GAME_LOG_PREFIX " protocol v1 endpoint retired: invariant violation" && f.host.wrong_thread == 0,
     "one fixed log entry, written by the SDK thread at frame_end");
   for (int i = 0; i < 3; ++i) f.host.frame();
   require(f.host.logs.size() == 1, "logged once");
@@ -1028,7 +1028,7 @@ void invariant() {
 // A violation found by the shutdown drain itself: `end` carries source-retired, the endpoint retires, and its fixed entry
 // is logged beside a v0 transport entry that arrived in the same frame interval (separate deferred-log slots).
 void invariant_at_shutdown() {
-  static const sdk::DeferredLog v0_entry{SCS_LOG_TYPE_message, "ETS2Telemetry: transport started after the startup wait"};
+  static const sdk::DeferredLog v0_entry{SCS_LOG_TYPE_message, ETS2TELEMETRY_GAME_LOG_PREFIX " transport started after the startup wait"};
   Fixture f; Hold hold; hold.phase = "v1-finish";
   require(f.server->skip_store_for_test(5), "store at 5, channel at 1");
   f.start(); auto client = f.client(true); client->handshake();
@@ -1049,7 +1049,7 @@ void invariant_at_shutdown() {
   require(f.host.logs.empty(), "workers never log");
   f.host.frame();
   require(f.host.logs.size() == 2 && f.host.logs[0] == v0_entry.message && f.host.log_types[0] == SCS_LOG_TYPE_message &&
-    f.host.logs[1] == "ETS2Telemetry: protocol v1 endpoint retired: invariant violation" && f.host.log_types[1] == SCS_LOG_TYPE_error && f.host.wrong_thread == 0,
+    f.host.logs[1] == ETS2TELEMETRY_GAME_LOG_PREFIX " protocol v1 endpoint retired: invariant violation" && f.host.log_types[1] == SCS_LOG_TYPE_error && f.host.wrong_thread == 0,
     "both deferred entries logged once on the SDK thread, in slot order");
   f.host.frame(); require(f.host.logs.size() == 2, "logged once");
 }
@@ -1068,7 +1068,7 @@ void invariant_end_failed() {
   std::cout << "failedEndAttempts=" << f.server->end_attempts() << " ends=" << f.server->ends() << '\n';
   require(f.server->end_attempts() == 1 && f.server->ends() == 0, "one end attempt, which failed, and no second one");
   require(f.server->status() == v1::ServerStatus::retired && !hold.timed_out.load(), "retired");
-  f.host.frame(); require(f.host.logs.size() == 1 && f.host.logs[0] == "ETS2Telemetry: protocol v1 endpoint retired: invariant violation", "logged once");
+  f.host.frame(); require(f.host.logs.size() == 1 && f.host.logs[0] == ETS2TELEMETRY_GAME_LOG_PREFIX " protocol v1 endpoint retired: invariant violation", "logged once");
 }
 
 // A violation after a stop request keeps the 250 ms `end` budget: with the client's buffer full, the endpoint gives up the
@@ -1086,7 +1086,7 @@ void invariant_stop_budget() {
   f.server->stop(); std::cout << "retireAfterStopShutdownMs=" << f.server->shutdown_ms() << '\n';
   require(f.server->status() == v1::ServerStatus::retired && f.server->ends() == 0, "retired; no end after the stalled write");
   require(f.server->shutdown_ms() < 700, "the stop budget, not the 1 s write deadline, bounds the retirement's end");
-  f.host.frame(); require(f.host.logs.size() == 1 && f.host.logs[0] == "ETS2Telemetry: protocol v1 endpoint retired: invariant violation", "logged once");
+  f.host.frame(); require(f.host.logs.size() == 1 && f.host.logs[0] == ETS2TELEMETRY_GAME_LOG_PREFIX " protocol v1 endpoint retired: invariant violation", "logged once");
 }
 #endif
 
