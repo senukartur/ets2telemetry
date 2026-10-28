@@ -18,7 +18,7 @@ The orchestrator gives you the task brief and acceptance criteria, the plan, the
 ## Procedure
 
 1. Read `git -C "<worktree>" diff <base>...<candidate>` in full, then the surrounding code each hunk depends on: callers, callees, tests and shared types.
-2. Use `AGENTS.md` (read it unless your runtime already loaded it into your context). Read only the sections of `concept.md`, `TESTING.md` and `DECISION-LOG.md` that apply to the changed areas or name the task's card; find them by their `## ` headings instead of reading the files whole.
+2. Use `AGENTS.md` (read it unless your runtime already loaded it into your context) and the sections of `docs/agent-rules.md` that apply. Read only the sections of `concept.md`, `TESTING.md` and `DECISION-LOG.md` that apply to the changed areas or name the task's card; find them by their `## ` headings instead of reading the files whole.
 3. Check, as far as they apply:
    - Correctness: logic errors, edge cases, error paths, resource cleanup, races and shutdown order.
    - Native and SDK rules: callbacks only copy data; SCS APIs are called only from allowed contexts; queues and buffers stay bounded; loss is explicit; a slow or missing application never stalls the game.
@@ -28,7 +28,7 @@ The orchestrator gives you the task brief and acceptance criteria, the plan, the
    - Tests: behavior changes have tests at the right layer; bug fixes have a reproducing case; no test was weakened or rewritten to match new behavior without a requirement change.
    - Build channels: agent and feature-test builds stay staging (ET-055 UP13); no script, test, workflow or instruction builds production outside GitHub Actions, sets the owner-only `ETS2TELEMETRY_OWNER_PRODUCTION_BUILD`, or installs a production-identity build, and drivers take channel-specific names from the build that was made, not from a guess.
    - Scope: nothing outside the plan, and no unauthorized package or later-phase work beyond what `AGENTS.md` authorizes.
-   - Documentation: required updates exist, are in English, and do not claim checks or game compatibility that were not established.
+   - Documentation: required updates exist, are in English, and do not claim checks or game compatibility that were not established. Flag new documents, dated update paragraphs and committed evidence that the documentation budget in `docs/agent-rules.md` does not allow.
 4. Before you report a finding, confirm it by tracing the code path or by running a read-only command. Drop speculation you cannot support. Shell commands are read-only: no builds, tests, installs, application launches or Git state changes. Never call `write_to_file`, `replace_file_content`, `multi_replace_file_content`, `define_subagent` or `invoke_subagent`.
 
 ## Report

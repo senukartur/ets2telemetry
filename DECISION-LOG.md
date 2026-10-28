@@ -1,10 +1,10 @@
 # Owner decision log
 
-This file holds the dated owner decisions, authorizations and implementation updates that `AGENTS.md` recorded until October 28, 2026. They were moved here verbatim and in date order, so that `AGENTS.md`, which every session loads, keeps only the rules that apply to all work. The text is unchanged apart from links to sections that stayed in `AGENTS.md`.
+This file holds the dated owner decisions, authorizations and implementation updates that `AGENTS.md` recorded until October 28, 2026. They were moved here verbatim and in date order, so that the files agents load or read for every task stay short. The text is unchanged apart from links to the rule sections, which now live in `docs/agent-rules.md`.
 
 - Search by card or package ID, for example `rg -n "ET-015a" DECISION-LOG.md`, and read only the matching sections.
 - Where two dated decisions conflict, the later one governs. Earlier text stays unchanged as the record.
-- `AGENTS.md` summarizes the decisions that still bind work under [Standing Owner Rules](AGENTS.md#standing-owner-rules). If that summary and this log disagree, the latest dated decision here governs and `AGENTS.md` must be corrected.
+- `docs/agent-rules.md` summarizes the decisions that still bind work under [Standing Owner Rules](docs/agent-rules.md#standing-owner-rules). If that summary and this log disagree, the latest dated decision here governs and `docs/agent-rules.md` must be corrected.
 - Record each new dated owner decision at the end of this file, not in `AGENTS.md`.
 
 ## Current Project State
@@ -26,13 +26,13 @@ Git setup update on October 10, 2026:
 - The local directory is now a Git repository. Local `main` tracks the existing `origin/main` history, including its original README.
 - The `origin` remote is `https://github.com/senukartur/ets2telemetry.git`.
 - Git for Windows 2.55.0.windows.5 with Git Credential Manager 2.9.1 is installed at `C:\Program Files\Git\cmd\git.exe`. The Codex runtime also provides Git 2.53.0.windows.3. GitHub CLI 2.102.0 is installed at `C:\Program Files\GitHub CLI\gh.exe`.
-- GitHub CLI is authenticated as `senukartur` through the Windows credential store and configured as Git's HTTPS credential helper for GitHub. The authenticated account has admin permission on the repository; its visibility is recorded under [Repository visibility and license](AGENTS.md#repository-visibility-and-license--october-16-2026). The token lives in the Windows keyring. A sandboxed agent shell may be unable to reach the keyring, so `gh auth status` reports "not logged in" there. Run `gh` outside the sandbox instead of asking the owner to authenticate again.
+- GitHub CLI is authenticated as `senukartur` through the Windows credential store and configured as Git's HTTPS credential helper for GitHub. The authenticated account has admin permission on the repository; its visibility is recorded under [Repository visibility and license](docs/agent-rules.md#repository-visibility-and-license--october-16-2026). The token lives in the Windows keyring. A sandboxed agent shell may be unable to reach the keyring, so `gh auth status` reports "not logged in" there. Run `gh` outside the sandbox instead of asking the owner to authenticate again.
 - The repository-local commit identity is `Artur Sianiuk <15032912+senukartur@users.noreply.github.com>`. Pulls require a fast-forward (`pull.ff=only`), and pushes use `push.default=simple`.
 - Fetch, `git pull --ff-only`, and the initial documentation push succeeded. The published documentation includes `README.md`, `AGENTS.md`, and `concept.md`. The temporary Trello planning manifest stays local and is excluded through `.gitignore`; do not commit it.
 - Use Git for local history and synchronization, and GitHub CLI for pull requests and GitHub checks. A GitHub MCP server is not required for this workflow.
 - The application and native development toolchains remain unverified.
 - GitHub allows only squash merging and automatically deletes merged task branches. Squash commits use the PR title and body.
-- GitHub returned HTTP 403 for branch protection and rulesets while the repository was private on the Free plan. Since October 16, 2026 the public repository enforces the `Protect main` ruleset; see [Branch protection](AGENTS.md#branch-protection--october-16-2026).
+- GitHub returned HTTP 403 for branch protection and rulesets while the repository was private on the Free plan. Since October 16, 2026 the public repository enforces the `Protect main` ruleset; see [Branch protection](docs/agent-rules.md#branch-protection--october-16-2026).
 
 Coordinator documentation update on October 10, 2026:
 
@@ -448,7 +448,7 @@ The card stays in Review. Its prerequisites ET-009 and ET-011 are not accepted, 
 
 ## ET-018 authorization — October 18, 2026
 
-Under the owner's standing delegation of October 15, 2026 (quoted in the ET-015a authorization above), the coordinator started ET-018 on October 18, 2026: Windows packaging, safe upgrades and explicit uninstall. It implements the owner's [uninstall rule of October 16, 2026](AGENTS.md#uninstall-removes-local-data--october-16-2026) and the uninstall contract in [game plugin setup](docs/plugin-setup.md).
+Under the owner's standing delegation of October 15, 2026 (quoted in the ET-015a authorization above), the coordinator started ET-018 on October 18, 2026: Windows packaging, safe upgrades and explicit uninstall. It implements the owner's [uninstall rule of October 16, 2026](docs/agent-rules.md#uninstall-removes-local-data--october-16-2026) and the uninstall contract in [game plugin setup](docs/plugin-setup.md).
 
 The coordinator adopted the architect's decisions U1–U17 ([concept.md](concept.md#et-018-authorization--october-18-2026)). On October 18, 2026 the owner decided these questions explicitly:
 - **Signing (O1).** Builds are an unsigned internal alpha for now; nothing is bought. After the first alpha release the project applies to the SignPath Foundation.

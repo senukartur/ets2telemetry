@@ -88,4 +88,4 @@ The run has a budget of 2 fix rounds in total, shared by verifier failures and r
 - **OpenAI Codex:** Project custom agents in `.codex/agents/*.toml` use TOML validated against `https://developers.openai.com/codex/config-schema.json`, and skills in `.agents/skills/*/SKILL.md` use YAML frontmatter with optional `agents/openai.yaml` metadata; see the Codex [subagents](https://developers.openai.com/codex/multi-agent) and [skills](https://developers.openai.com/codex/skills) references.
 - **Claude Code:** Subagents in `.claude/agents/*.md` and skills in `.claude/skills/*/SKILL.md` use Markdown with YAML frontmatter; see the Claude Code [subagent](https://code.claude.com/docs/en/sub-agents) and [skill](https://code.claude.com/docs/en/slash-commands) references.
 
-Keep all three runtime definitions consistent with `AGENTS.md` and `.github/workflows/windows-ci.yml`, and update this page when the flow changes.
+Keep all three runtime definitions consistent with `AGENTS.md`, `docs/agent-rules.md` and `.github/workflows/windows-ci.yml`, and update this page when the flow changes.

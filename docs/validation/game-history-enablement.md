@@ -79,4 +79,4 @@ What to do and what to look at, for the owner. Nothing here is an instruction to
 4. Open the Journal: the trip should be there with its outcome and completeness. Open its details, and export the JSON.
 5. Report what the dashboard said at each step, any `Recording problem` alert with its text, and the exported file. A gap is recorded as a gap and is not an error by itself.
 
-An uninstall removes this history ([AGENTS.md](../../AGENTS.md#uninstall-removes-local-data--october-16-2026)); export a trip you want to keep.
+An uninstall removes this history ([AGENTS.md](../agent-rules.md#uninstall-removes-local-data--october-16-2026)); export a trip you want to keep.
