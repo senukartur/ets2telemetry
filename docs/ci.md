@@ -741,6 +741,23 @@ ET-018 PR-6 (October 18, 2026) originally changed the heavy scaffold worker on p
 
 The new steps run before **Installer lifecycle in a test root**, so the artifact exists even when the lifecycle fails, and an identity failure stops the job before the lifecycle runs. No job, check name or trigger changed, and `windows-evidence-<run>-<attempt>` keeps its paths; `.local/diagnostics/package-inspection.json` in it now also holds the `installer` facts. Locally the installer inspection took about 3.5 s and the identity about 5 s on the real make output; the hosted durations and statuses are recorded in [ET-018 validation](validation/et-018.md#pr-6-release-artifact-identity-and-signing-status-october-18-2026).
 
+## ET-055 release workflow (dispatch-only)
+
+ET-055 PR-9 (October 28, 2026) adds [release.yml](../.github/workflows/release.yml), the only workflow that publishes a release. Its jobs, inputs and refusals are described in [releases](release.md#release-workflow-et-055). It has never been dispatched, and the environments, the staging secret and the public keys it needs do not exist yet ([release checklist](release.md#release-checklist) step 0).
+
+| Property | Value |
+| --- | --- |
+| Trigger | `workflow_dispatch` only, never `pull_request` or `push`. GitHub runs it only once the file exists on the default branch, and the `verify` job refuses a dispatch on any ref other than `main` |
+| Input | `run_id` of a successful `Windows CI` run on `main` (a push or a dispatch on `main`), `channel`, `mode`, and for production `signature` and optionally `key_id`. Inputs reach scripts only through environment variables |
+| Artifact | The run's `windows-installer-<run>-<attempt>` (production) or `windows-installer-staging-<run>-<attempt>` (staging), of its latest attempt, downloaded with `gh run download`. A staging release therefore needs a `main` run that built staging, which `windows-ci.yml` does not do yet (ET-055 PR-5) |
+| Jobs | `verify` (`contents: read`, `actions: read`), then one of `publish-staging` (environment `release-staging`), `draft-production` or `publish-production` (environment `release-production`), the only jobs with `contents: write` |
+| Runners | GitHub-hosted `ubuntu-24.04`; no step needs Windows, because the artifact is checked by its recorded hashes. No `npm ci`: the release scripts use only `node:` modules |
+| Concurrency | One group, `release`, with `cancel-in-progress: false` |
+| Required checks | None. It is not part of `Windows CI`, and its job names differ from the three required jobs |
+| Actions | `actions/checkout`, `actions/setup-node`, `actions/upload-artifact` and `actions/download-artifact`, pinned to the same commit SHAs as in `windows-ci.yml` |
+
+The workflow text is guarded by `tests/unit/release-workflow.test.ts`: dispatch only, read-only default, `contents: write` only in the three publish jobs with their environments, the staging secret read only by the staging job, no `${{ }}` inside any script, actions pinned by commit and GitHub-hosted runners. A change to the workflow runs `Windows CI` as a code change, so this test runs in `Windows x64 tests`. `actionlint` is not part of the toolchain and has not been run on it.
+
 ## ET-026 Hard Mode journey
 
 The October 22 ET-011 harness correction arms a new passing publication immediately after the pass screenshot, then
