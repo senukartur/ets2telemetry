@@ -6,9 +6,9 @@ import {compiledUpdateKeys, MANIFEST_MAX_BYTES, parseManifestBytes, verifySignat
 import {verifyReleaseArtifacts} from './write-update-manifest.mjs';
 
 // The release workflow's check of a signed manifest before publication (ET-055 PR-9, decisions UP4, UP5 and UP16;
-// docs/release.md, "Release workflow"). The signature must verify against a public key compiled into
-// apps/desktop/src/updater/update-keys.ts for the channel, chosen by the manifest's keyId, exactly as an installed build of
-// this commit verifies it; and the manifest must name the verified artifacts of the same CI run: the channel, both versions,
+// docs/release.md, "Release workflow"). The signature must verify against a public key of the channel in
+// apps/desktop/src/updater/update-keys.ts of the released commit (`--keys-file`), chosen by the manifest's keyId, exactly as
+// the released build verifies it; and the manifest must name the verified artifacts of the same CI run: the channel, both versions,
 // the tag and the nupkg's exact name, size, SHA-256 and SHA-1. Any difference fails, so a manifest signed for other bytes, a
 // wrong channel or another release is never published.
 
@@ -34,15 +34,15 @@ const readBounded = (file, what) => {
   return readFileSync(file);
 };
 
-const USAGE = 'Usage: node scripts/release/verify-update-manifest.mjs --manifest <file> --signature <file> --artifacts <folder> --channel <production|staging> --run-id <id> [--commit <sha>]';
+const USAGE = 'Usage: node scripts/release/verify-update-manifest.mjs --manifest <file> --signature <file> --artifacts <folder> --channel <production|staging> --run-id <id> [--commit <sha>] [--keys-file <update-keys.ts>]';
 
 async function main(argv) {
   const {values} = parseArgs({args: argv, strict: true, options: {manifest: {type: 'string'}, signature: {type: 'string'}, artifacts: {type: 'string'},
-    channel: {type: 'string'}, 'run-id': {type: 'string'}, commit: {type: 'string'}}});
+    channel: {type: 'string'}, 'run-id': {type: 'string'}, commit: {type: 'string'}, 'keys-file': {type: 'string'}}});
   if (!values.manifest || !values.signature || !values.artifacts || !values.channel || !values['run-id']) throw new Error(USAGE);
   const facts = verifyReleaseArtifacts(path.resolve(values.artifacts), {channel: values.channel, runId: values['run-id'], commit: values.commit});
   const manifest = verifySignedManifest({manifestBytes: readBounded(path.resolve(values.manifest), 'The manifest'),
-    signatureBytes: readBounded(path.resolve(values.signature), 'The signature'), facts, keys: await compiledUpdateKeys(facts.channel)});
+    signatureBytes: readBounded(path.resolve(values.signature), 'The signature'), facts, keys: await compiledUpdateKeys(facts.channel, values['keys-file'])});
   console.log(JSON.stringify({verified: true, channel: manifest.channel, appVersion: manifest.appVersion, tag: manifest.package.tag, keyId: manifest.keyId}, null, 2));
 }
 

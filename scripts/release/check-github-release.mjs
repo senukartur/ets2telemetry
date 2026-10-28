@@ -2,14 +2,18 @@ import {readFileSync} from 'node:fs';
 import path from 'node:path';
 import {pathToFileURL} from 'node:url';
 import {parseArgs} from 'node:util';
-import {isReleaseChannel} from './update-manifest-common.mjs';
+import {compareNugetVersions, isReleaseChannel, nugetVersionOf, releaseVersionProblem} from './update-manifest-common.mjs';
 
 // The release workflow's checks of GitHub API answers (ET-055 PR-9, decisions UP13 and UP16; docs/release.md, "Release
 // workflow"). `run` checks `GET /repos/{repo}/actions/runs/{id}`: only a completed, successful Windows CI run of this
 // repository on `main`, from a push or a dispatch, is released, and it names the installer artifact of its latest attempt
-// for the channel. `release` checks `GET /repos/{repo}/releases/{id}` or `/releases/tags/{tag}`: the tag, the target
-// commit, the draft and pre-release flags and exactly the expected asset names, each fully uploaded. Both print
-// `key=value` lines for $GITHUB_OUTPUT and fail with a fixed reason otherwise.
+// for the channel. A run's `head_branch` is only a name (a tag called `main` has it too), so `ancestry` checks
+// `GET /repos/{repo}/compare/{head}...main`, made after the workflow proved that no tag `main` exists: the run's commit
+// must be on the main branch. `release` checks `GET /repos/{repo}/releases/{id}` or `/releases/tags/{tag}`: the tag, the
+// target commit, the draft and pre-release flags and exactly the expected asset names, each fully uploaded. `newer` checks
+// that a production version is higher than the tag of the current latest release, by the application's NuGet SemVer
+// order, so no release is published that installed builds would refuse as a downgrade or that would not become latest.
+// Each prints `key=value` lines for $GITHUB_OUTPUT and fails with a fixed reason otherwise.
 
 export const CI_WORKFLOW = '.github/workflows/windows-ci.yml';
 const RUN_ID = /^[1-9][0-9]{0,19}$/;
@@ -35,6 +39,32 @@ export function checkReleaseRun(run, {runId, repository, channel}) {
   return {commit: run.head_sha, attempt: run.run_attempt, artifact: installerArtifactName(channel, runId, run.run_attempt)};
 }
 
+/**
+ * Checks a compare object of `compare/{commit}...main`: main is identical to or ahead of `commit`, and their merge base
+ * is the commit itself, so the commit is in main's history.
+ */
+export function checkMainAncestry(compare, commit) {
+  if (typeof commit !== 'string' || !COMMIT.test(commit)) refuse('the commit must be 40 lower-case hex digits');
+  if (!plainObject(compare) || (compare.status !== 'identical' && compare.status !== 'ahead')) refuse(`commit ${commit} is not on the main branch`);
+  if (compare.base_commit?.sha !== commit || compare.merge_base_commit?.sha !== commit) refuse(`commit ${commit} is not on the main branch`);
+  return {status: compare.status};
+}
+
+const PRODUCTION_TAG = /^v(\d{1,9}\.\d{1,9}\.\d{1,9}(?:-[0-9A-Za-z.-]{1,40})?)$/;
+/**
+ * Checks that the production version `appVersion` is higher than the current latest release `latestTag` (`none` when the
+ * repository has no latest release yet), with the NuGet versions compared as the application compares them.
+ */
+export function checkNewerThanLatest(latestTag, appVersion) {
+  const problem = releaseVersionProblem('production', appVersion);
+  if (problem) refuse(`version ${JSON.stringify(appVersion)} ${problem}`);
+  if (latestTag === 'none') return {latest: null};
+  const match = typeof latestTag === 'string' ? PRODUCTION_TAG.exec(latestTag) : null;
+  if (!match || releaseVersionProblem('production', match[1])) refuse(`the latest release ${JSON.stringify(latestTag)} has no production tag v<version>`);
+  if (compareNugetVersions(nugetVersionOf(appVersion), nugetVersionOf(match[1])) <= 0) refuse(`version ${appVersion} is not higher than the latest release ${latestTag}`);
+  return {latest: latestTag};
+}
+
 /** Checks a release object against the expected tag, commit, flags and asset names. */
 export function checkRelease(release, {tag, commit, draft, prerelease, names}) {
   if (!plainObject(release) || release.tag_name !== tag) refuse(`the release is not ${tag}`);
@@ -49,6 +79,8 @@ export function checkRelease(release, {tag, commit, draft, prerelease, names}) {
 }
 
 const USAGE = 'Usage: node scripts/release/check-github-release.mjs run --json <file> --run-id <id> --repository <owner/name> --channel <channel>\n' +
+  '       node scripts/release/check-github-release.mjs ancestry --json <compare file> --commit <sha>\n' +
+  '       node scripts/release/check-github-release.mjs newer --latest <tag|none> --version <application version>\n' +
   '       node scripts/release/check-github-release.mjs release --json <file> --tag <tag> --commit <sha> --draft <true|false> --prerelease <true|false> --names <a,b,...>';
 const flag = value => {
   if (value !== 'true' && value !== 'false') throw new Error(USAGE);
@@ -58,10 +90,19 @@ const flag = value => {
 function main(argv) {
   const [command, ...rest] = argv;
   const {values} = parseArgs({args: rest, strict: true, options: {json: {type: 'string'}, 'run-id': {type: 'string'}, repository: {type: 'string'},
-    channel: {type: 'string'}, tag: {type: 'string'}, commit: {type: 'string'}, draft: {type: 'string'}, prerelease: {type: 'string'}, names: {type: 'string'}}});
+    channel: {type: 'string'}, tag: {type: 'string'}, commit: {type: 'string'}, draft: {type: 'string'}, prerelease: {type: 'string'}, names: {type: 'string'},
+    latest: {type: 'string'}, version: {type: 'string'}}});
+  if (command === 'newer') {
+    if (values.latest === undefined || values.version === undefined) throw new Error(USAGE);
+    console.log(`latest=${checkNewerThanLatest(values.latest, values.version).latest ?? 'none'}`);
+    return;
+  }
   if (!values.json) throw new Error(USAGE);
   const answer = JSON.parse(readFileSync(path.resolve(values.json), 'utf8'));
-  if (command === 'run') {
+  if (command === 'ancestry') {
+    if (!values.commit) throw new Error(USAGE);
+    console.log(`main=${checkMainAncestry(answer, values.commit).status}`);
+  } else if (command === 'run') {
     const result = checkReleaseRun(answer, {runId: values['run-id'], repository: values.repository, channel: values.channel});
     console.log(`commit=${result.commit}\nattempt=${result.attempt}\nartifact=${result.artifact}`);
   } else if (command === 'release') {

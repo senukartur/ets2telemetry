@@ -1,18 +1,21 @@
 name: Release
 # ET-055 PR-9 (docs/release.md#release-workflow-et-055): the only way a release is published. It never runs on pull requests
-# or pushes; a dispatch names a successful Windows CI run on main and a channel. The verify job checks that run and its
-# installer artifact and writes the unsigned update manifest; only the publish jobs, each in its GitHub environment whose
-# required reviewer is the owner, get contents: write.
+# or pushes; a dispatch names a successful Windows CI run on main and a channel. The verify job checks that run, proves its
+# commit is on the main branch, checks its installer artifact and writes the unsigned update manifest; only the publish
+# jobs, each in its GitHub environment whose required reviewer is the owner, get contents: write.
 #
 # - staging, mode release: sign with the release-staging environment's key and publish a pre-release. Approving that
 #   environment is the owner's authorization of this staging release (UP16).
 # - production, mode release: create a draft release with the unsigned manifest and stop. The owner signs the manifest
 #   offline (the job summary prints the commands); agents never sign.
-# - production, mode publish_signed: verify the owner's signature against the compiled production key, upload it, publish
-#   the release with make_latest=true and confirm that releases/latest names it.
+# - production, mode publish_signed: verify the owner's signature against the production key the released commit compiled,
+#   upload it, publish the release with make_latest=true and confirm that releases/latest names it.
 #
-# Every input reaches a script through the environment, never through `${{ }}` inside a script. The runners are
-# GitHub-hosted; no step needs Windows, because the artifact is checked by its recorded hashes only.
+# The compiled public keys always come from apps/desktop/src/updater/update-keys.ts at the released CI run's commit, never
+# from the dispatch checkout. Every input reaches a script through the environment, never through `${{ }}` inside a
+# script. Every GitHub GET whose 404 is an answer goes through scripts/release/gh-get.sh, so a missing resource is never
+# confused with a failed request. The runners are GitHub-hosted; no step needs Windows, because the artifact is checked by
+# its recorded hashes only.
 on:
   workflow_dispatch:
     inputs:
@@ -40,14 +43,14 @@ on:
         required: false
         default: ''
       key_id:
-        description: The keyId the manifest names; empty selects the channel's only compiled key
+        description: The keyId the manifest names; empty selects the channel's only key compiled at the run's commit
         type: string
         required: false
         default: ''
 permissions:
   contents: read
 concurrency:
-  # One release at a time; a second dispatch waits instead of cancelling a release in progress.
+  # One release runs and at most one more waits; a further dispatch cancels the waiting one, never the running one.
   group: release
   cancel-in-progress: false
 env:
@@ -95,8 +98,27 @@ jobs:
       - name: Check the Windows CI run
         id: run
         run: |
-          gh api "repos/$GITHUB_REPOSITORY/actions/runs/$RUN_ID" > "$RUNNER_TEMP/run.json"
+          bash scripts/release/gh-get.sh "repos/$GITHUB_REPOSITORY/actions/runs/$RUN_ID" "$RUNNER_TEMP/run.json"
           node scripts/release/check-github-release.mjs run --json "$RUNNER_TEMP/run.json" --run-id "$RUN_ID" --repository "$GITHUB_REPOSITORY" --channel "$CHANNEL" >> "$GITHUB_OUTPUT"
+      # A run's head_branch is only a name. Refuse a tag called main, which would make "main" ambiguous, then require the
+      # run's commit to be in the main branch's history.
+      - name: Prove that the run's commit is on the main branch
+        env:
+          COMMIT: ${{ steps.run.outputs.commit }}
+        run: |
+          status=0
+          bash scripts/release/gh-get.sh "repos/$GITHUB_REPOSITORY/git/ref/tags/main" "$RUNNER_TEMP/tag-main.json" || status=$?
+          if [[ $status -eq 0 ]]; then echo '::error::A tag named main exists; delete it before releasing.'; exit 1; fi
+          if [[ $status -ne 44 ]]; then echo '::error::Could not check for a tag named main.'; exit 1; fi
+          bash scripts/release/gh-get.sh "repos/$GITHUB_REPOSITORY/compare/$COMMIT...main" "$RUNNER_TEMP/compare.json"
+          node scripts/release/check-github-release.mjs ancestry --json "$RUNNER_TEMP/compare.json" --commit "$COMMIT"
+      - name: Read the compiled update keys at the run's commit
+        env:
+          COMMIT: ${{ steps.run.outputs.commit }}
+        run: |
+          git fetch --no-tags --depth=1 origin "$COMMIT"
+          mkdir -p "$RUNNER_TEMP/keys"
+          git show "$COMMIT:apps/desktop/src/updater/update-keys.ts" > "$RUNNER_TEMP/keys/update-keys.ts"
       - name: Download the installer artifact
         env:
           ARTIFACT: ${{ steps.run.outputs.artifact }}
@@ -109,7 +131,7 @@ jobs:
           mkdir -p "$RUNNER_TEMP/candidate/release"
           args=(--artifacts "$RUNNER_TEMP/candidate/artifacts" --channel "$CHANNEL" --run-id "$RUN_ID" --commit "$COMMIT" --repository "$GITHUB_REPOSITORY" --facts "$RUNNER_TEMP/facts.json")
           if [[ "$MODE" == 'release' ]]; then
-            args+=(--out "$RUNNER_TEMP/candidate/release/update-manifest.json" --notes "$RUNNER_TEMP/candidate/release/release-notes.md")
+            args+=(--out "$RUNNER_TEMP/candidate/release/update-manifest.json" --notes "$RUNNER_TEMP/candidate/release/release-notes.md" --keys-file "$RUNNER_TEMP/keys/update-keys.ts")
             if [[ -n "$KEY_ID" ]]; then args+=(--key-id "$KEY_ID"); fi
           fi
           node scripts/release/write-update-manifest.mjs "${args[@]}"
@@ -120,11 +142,22 @@ jobs:
             echo "setup=$(jq -r .setup.name "$RUNNER_TEMP/facts.json")"
             echo "nupkg=$(jq -r .nupkg.name "$RUNNER_TEMP/facts.json")"
           } >> "$GITHUB_OUTPUT"
+      # Installed builds refuse a version that is not newer, and an older version would not become latest (plan risk R4).
+      - name: Refuse a production version that is not higher than the latest release
+        if: inputs.channel == 'production'
+        env:
+          VERSION: ${{ steps.facts.outputs.version }}
+        run: |
+          status=0
+          bash scripts/release/gh-get.sh "repos/$GITHUB_REPOSITORY/releases/latest" "$RUNNER_TEMP/latest.json" || status=$?
+          if [[ $status -eq 0 ]]; then latest=$(jq -r .tag_name "$RUNNER_TEMP/latest.json"); elif [[ $status -eq 44 ]]; then latest=none; else exit 1; fi
+          node scripts/release/check-github-release.mjs newer --latest "$latest" --version "$VERSION"
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: release-candidate-${{ github.run_id }}-${{ github.run_attempt }}
           path: ${{ runner.temp }}/candidate
-          retention-days: 1
+          # The publish job must be approved within these 7 days, or the dispatch is repeated.
+          retention-days: 7
           if-no-files-found: error
           compression-level: 0
 
@@ -160,32 +193,45 @@ jobs:
         with:
           name: release-candidate-${{ github.run_id }}-${{ github.run_attempt }}
           path: ${{ runner.temp }}/candidate
+      - name: Read the compiled update keys at the run's commit
+        run: |
+          git fetch --no-tags --depth=1 origin "$COMMIT"
+          mkdir -p "$RUNNER_TEMP/keys"
+          git show "$COMMIT:apps/desktop/src/updater/update-keys.ts" > "$RUNNER_TEMP/keys/update-keys.ts"
       - name: Sign the manifest with the release-staging key
         env:
           UPDATE_SIGNING_KEY_STAGING: ${{ secrets.UPDATE_SIGNING_KEY_STAGING }}
         run: node scripts/release/sign-update-manifest.mjs --manifest "$RUNNER_TEMP/candidate/release/update-manifest.json" --key-env UPDATE_SIGNING_KEY_STAGING
-      - name: Verify the signature against the compiled staging key and the artifact
+      - name: Verify the signature against the staging key of the run's commit and the artifact
         run: |
           node scripts/release/verify-update-manifest.mjs --manifest "$RUNNER_TEMP/candidate/release/update-manifest.json" \
             --signature "$RUNNER_TEMP/candidate/release/update-manifest.json.sig" --artifacts "$RUNNER_TEMP/candidate/artifacts" \
-            --channel staging --run-id "$RUN_ID" --commit "$COMMIT"
+            --channel staging --run-id "$RUN_ID" --commit "$COMMIT" --keys-file "$RUNNER_TEMP/keys/update-keys.ts"
       - name: Refuse an existing release or tag
         run: |
-          if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" > /dev/null 2>&1; then echo "::error::A release $TAG already exists."; exit 1; fi
-          if gh api "repos/$GITHUB_REPOSITORY/git/ref/tags/$TAG" > /dev/null 2>&1; then echo "::error::The tag $TAG already exists."; exit 1; fi
+          releases=$(gh api --paginate "repos/$GITHUB_REPOSITORY/releases?per_page=100" --jq "[.[] | select(.tag_name == \"$TAG\")] | length" | awk '{total += $1} END {print total + 0}')
+          if [[ "$releases" -ne 0 ]]; then echo "::error::A release $TAG already exists (a draft included)."; exit 1; fi
+          status=0
+          bash scripts/release/gh-get.sh "repos/$GITHUB_REPOSITORY/git/ref/tags/$TAG" "$RUNNER_TEMP/tag.json" || status=$?
+          if [[ $status -eq 0 ]]; then echo "::error::The tag $TAG already exists."; exit 1; fi
+          if [[ $status -ne 44 ]]; then exit 1; fi
       - name: Publish the staging pre-release
         run: |
-          gh api "repos/$GITHUB_REPOSITORY/releases/latest" --jq .tag_name > "$RUNNER_TEMP/latest-before" 2>/dev/null || echo none > "$RUNNER_TEMP/latest-before"
+          status=0
+          bash scripts/release/gh-get.sh "repos/$GITHUB_REPOSITORY/releases/latest" "$RUNNER_TEMP/latest-before.json" || status=$?
+          if [[ $status -eq 0 ]]; then jq -r .tag_name "$RUNNER_TEMP/latest-before.json" > "$RUNNER_TEMP/latest-before"; elif [[ $status -eq 44 ]]; then echo none > "$RUNNER_TEMP/latest-before"; else exit 1; fi
           cd "$RUNNER_TEMP/candidate"
           gh release create "$TAG" --repo "$GITHUB_REPOSITORY" --target "$COMMIT" --prerelease --latest=false --title "$TITLE" \
             --notes-file release/release-notes.md "artifacts/$SETUP" "artifacts/$NUPKG" artifacts/RELEASES artifacts/release-identity.json \
             release/update-manifest.json release/update-manifest.json.sig
       - name: Confirm the pre-release and that latest is unchanged
         run: |
-          gh api "repos/$GITHUB_REPOSITORY/releases/tags/$TAG" > "$RUNNER_TEMP/release.json"
+          bash scripts/release/gh-get.sh "repos/$GITHUB_REPOSITORY/releases/tags/$TAG" "$RUNNER_TEMP/release.json"
           node scripts/release/check-github-release.mjs release --json "$RUNNER_TEMP/release.json" --tag "$TAG" --commit "$COMMIT" --draft false --prerelease true \
             --names "$SETUP,$NUPKG,RELEASES,release-identity.json,update-manifest.json,update-manifest.json.sig"
-          after=$(gh api "repos/$GITHUB_REPOSITORY/releases/latest" --jq .tag_name 2>/dev/null || echo none)
+          status=0
+          bash scripts/release/gh-get.sh "repos/$GITHUB_REPOSITORY/releases/latest" "$RUNNER_TEMP/latest-after.json" || status=$?
+          if [[ $status -eq 0 ]]; then after=$(jq -r .tag_name "$RUNNER_TEMP/latest-after.json"); elif [[ $status -eq 44 ]]; then after=none; else exit 1; fi
           if [[ "$after" != "$(cat "$RUNNER_TEMP/latest-before")" ]]; then echo "::error::releases/latest changed to $after; a staging release must never become latest."; exit 1; fi
           echo "Published staging pre-release $TAG; releases/latest is still $after." >> "$GITHUB_STEP_SUMMARY"
 
@@ -210,14 +256,21 @@ jobs:
       SETUP: ${{ needs.verify.outputs.setup }}
       NUPKG: ${{ needs.verify.outputs.nupkg }}
     steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          persist-credentials: false
       - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4, verified official actions/download-artifact tag
         with:
           name: release-candidate-${{ github.run_id }}-${{ github.run_attempt }}
           path: ${{ runner.temp }}/candidate
       - name: Refuse an existing release or tag
         run: |
-          if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" > /dev/null 2>&1; then echo "::error::A release $TAG already exists (a draft included); delete it first or publish it with mode publish_signed."; exit 1; fi
-          if gh api "repos/$GITHUB_REPOSITORY/git/ref/tags/$TAG" > /dev/null 2>&1; then echo "::error::The tag $TAG already exists."; exit 1; fi
+          releases=$(gh api --paginate "repos/$GITHUB_REPOSITORY/releases?per_page=100" --jq "[.[] | select(.tag_name == \"$TAG\")] | length" | awk '{total += $1} END {print total + 0}')
+          if [[ "$releases" -ne 0 ]]; then echo "::error::A release $TAG already exists (a draft included); delete it first or publish it with mode publish_signed."; exit 1; fi
+          status=0
+          bash scripts/release/gh-get.sh "repos/$GITHUB_REPOSITORY/git/ref/tags/$TAG" "$RUNNER_TEMP/tag.json" || status=$?
+          if [[ $status -eq 0 ]]; then echo "::error::The tag $TAG already exists."; exit 1; fi
+          if [[ $status -ne 44 ]]; then exit 1; fi
       - name: Create the draft release with the unsigned manifest
         run: |
           cd "$RUNNER_TEMP/candidate"
@@ -235,7 +288,7 @@ jobs:
             echo "node scripts/release/sign-update-manifest.mjs --manifest <folder>\\update-manifest.json --key <path to the production private key>"
             echo '```'
             echo
-            echo "Compare the printed tag, package name, size and SHA-256 with the draft, then publish:"
+            echo "Compare the printed tag, package name, size and SHA-256 with the draft, then publish within 14 days of the CI run (its artifact expires):"
             echo
             echo '```powershell'
             echo "gh workflow run release.yml --repo $GITHUB_REPOSITORY --ref main -f run_id=$RUN_ID -f channel=production -f mode=publish_signed -f \"signature=\$((Get-Content -LiteralPath <folder>\\update-manifest.json.sig -Raw).Trim())\""
@@ -259,6 +312,7 @@ jobs:
       RUN_ID: ${{ inputs.run_id }}
       COMMIT: ${{ needs.verify.outputs.commit }}
       TAG: ${{ needs.verify.outputs.tag }}
+      VERSION: ${{ needs.verify.outputs.version }}
       SETUP: ${{ needs.verify.outputs.setup }}
       NUPKG: ${{ needs.verify.outputs.nupkg }}
       SIGNATURE: ${{ inputs.signature }}
@@ -274,12 +328,17 @@ jobs:
         with:
           name: release-candidate-${{ github.run_id }}-${{ github.run_attempt }}
           path: ${{ runner.temp }}/candidate
+      - name: Read the compiled update keys at the run's commit
+        run: |
+          git fetch --no-tags --depth=1 origin "$COMMIT"
+          mkdir -p "$RUNNER_TEMP/keys"
+          git show "$COMMIT:apps/desktop/src/updater/update-keys.ts" > "$RUNNER_TEMP/keys/update-keys.ts"
       - name: Find the draft release
         id: draft
         run: |
           ids=$(gh api --paginate "repos/$GITHUB_REPOSITORY/releases?per_page=100" --jq ".[] | select(.draft == true and .tag_name == \"$TAG\") | .id")
           if [[ $(grep -c . <<< "$ids") -ne 1 ]]; then echo "::error::Expected exactly one draft release $TAG; if an earlier attempt published it, check releases/latest by hand."; exit 1; fi
-          gh api "repos/$GITHUB_REPOSITORY/releases/$ids" > "$RUNNER_TEMP/draft.json"
+          bash scripts/release/gh-get.sh "repos/$GITHUB_REPOSITORY/releases/$ids" "$RUNNER_TEMP/draft.json"
           names="$SETUP,$NUPKG,RELEASES,release-identity.json,update-manifest.json"
           if jq -e '.assets[] | select(.name == "update-manifest.json.sig")' "$RUNNER_TEMP/draft.json" > /dev/null; then names="$names,update-manifest.json.sig"; fi
           node scripts/release/check-github-release.mjs release --json "$RUNNER_TEMP/draft.json" --tag "$TAG" --commit "$COMMIT" --draft true --prerelease false --names "$names" >> "$GITHUB_OUTPUT"
@@ -291,12 +350,18 @@ jobs:
           for name in "$SETUP" "$NUPKG" RELEASES release-identity.json; do
             cmp -s "$RUNNER_TEMP/draft/$name" "$RUNNER_TEMP/candidate/artifacts/$name" || { echo "::error::The draft's $name differs from the CI artifact."; exit 1; }
           done
-      - name: Verify the owner's signature against the compiled production key
+      - name: Verify the owner's signature against the production key of the run's commit
         run: |
           if [[ ! "$SIGNATURE" =~ ^[A-Za-z0-9+/]{86}==$ ]]; then echo '::error::signature must be the one base64 line of update-manifest.json.sig.'; exit 1; fi
           printf '%s\n' "$SIGNATURE" > "$RUNNER_TEMP/draft/update-manifest.json.sig"
           node scripts/release/verify-update-manifest.mjs --manifest "$RUNNER_TEMP/draft/update-manifest.json" --signature "$RUNNER_TEMP/draft/update-manifest.json.sig" \
-            --artifacts "$RUNNER_TEMP/candidate/artifacts" --channel production --run-id "$RUN_ID" --commit "$COMMIT"
+            --artifacts "$RUNNER_TEMP/candidate/artifacts" --channel production --run-id "$RUN_ID" --commit "$COMMIT" --keys-file "$RUNNER_TEMP/keys/update-keys.ts"
+      - name: Refuse a version that is not higher than the latest release
+        run: |
+          status=0
+          bash scripts/release/gh-get.sh "repos/$GITHUB_REPOSITORY/releases/latest" "$RUNNER_TEMP/latest.json" || status=$?
+          if [[ $status -eq 0 ]]; then latest=$(jq -r .tag_name "$RUNNER_TEMP/latest.json"); elif [[ $status -eq 44 ]]; then latest=none; else exit 1; fi
+          node scripts/release/check-github-release.mjs newer --latest "$latest" --version "$VERSION"
       - name: Upload the signature and publish as latest
         env:
           RELEASE_ID: ${{ steps.draft.outputs.id }}
@@ -307,14 +372,17 @@ jobs:
         env:
           RELEASE_ID: ${{ steps.draft.outputs.id }}
         run: |
-          gh api "repos/$GITHUB_REPOSITORY/releases/$RELEASE_ID" > "$RUNNER_TEMP/published.json"
+          bash scripts/release/gh-get.sh "repos/$GITHUB_REPOSITORY/releases/$RELEASE_ID" "$RUNNER_TEMP/published.json"
           node scripts/release/check-github-release.mjs release --json "$RUNNER_TEMP/published.json" --tag "$TAG" --commit "$COMMIT" --draft false --prerelease false \
             --names "$SETUP,$NUPKG,RELEASES,release-identity.json,update-manifest.json,update-manifest.json.sig"
           tagged=$(gh api "repos/$GITHUB_REPOSITORY/commits/$TAG" --jq .sha)
           if [[ "$tagged" != "$COMMIT" ]]; then echo "::error::The tag $TAG names $tagged, not $COMMIT."; exit 1; fi
+          latest=none
           for attempt in 1 2 3 4 5 6; do
-            latest=$(gh api "repos/$GITHUB_REPOSITORY/releases/latest" --jq .tag_name 2>/dev/null || echo none)
-            if [[ "$latest" == "$TAG" ]]; then echo "Published $TAG; releases/latest names it." >> "$GITHUB_STEP_SUMMARY"; exit 0; fi
+            status=0
+            bash scripts/release/gh-get.sh "repos/$GITHUB_REPOSITORY/releases/latest" "$RUNNER_TEMP/latest.json" || status=$?
+            if [[ $status -eq 0 ]]; then latest=$(jq -r .tag_name "$RUNNER_TEMP/latest.json"); elif [[ $status -eq 44 ]]; then latest=none; else exit 1; fi
+            if [[ "$latest" == "$TAG" ]]; then echo "Published $TAG; releases/latest names it (attempt $attempt)." >> "$GITHUB_STEP_SUMMARY"; exit 0; fi
             sleep 10
           done
           echo "::error::releases/latest names $latest, not $TAG. Installed builds will not see this release; fix it in the release settings (Set as the latest release) before announcing it."

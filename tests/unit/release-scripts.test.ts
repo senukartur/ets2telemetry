@@ -1,5 +1,5 @@
 import {spawnSync} from 'node:child_process';
-import {createHash, generateKeyPairSync} from 'node:crypto';
+import {createHash, generateKeyPairSync, sign as cryptoSign} from 'node:crypto';
 import {mkdirSync, mkdtempSync, readFileSync, renameSync, rmSync, writeFileSync} from 'node:fs';
 import {tmpdir} from 'node:os';
 import path from 'node:path';
@@ -7,12 +7,12 @@ import {afterEach, beforeEach, describe, expect, it} from 'vitest';
 import {CHANNEL_IDENTITIES, type ReleaseChannel} from '../../apps/desktop/src/channel';
 import {UPDATE_PUBLIC_KEYS} from '../../apps/desktop/src/updater/update-keys';
 import {parseUpdateManifest, verifyManifestSignature, verifyUpdateManifest, type ManifestBinding} from '../../apps/desktop/src/updater/update-manifest';
-import {nugetVersionOf as appNugetVersionOf} from '../../apps/desktop/src/updater/update-version';
+import {compareNugetVersions as appCompareNugetVersions, nugetVersionOf as appNugetVersionOf} from '../../apps/desktop/src/updater/update-version';
 import {BUILD_IDENTITIES, buildSetupFileName} from '../../scripts/build-channel.mjs';
-import {checkRelease, checkReleaseRun} from '../../scripts/release/check-github-release.mjs';
+import {checkMainAncestry, checkNewerThanLatest, checkRelease, checkReleaseRun} from '../../scripts/release/check-github-release.mjs';
 import {generateUpdateKey, updateKeyEntry, writeUpdateKey} from '../../scripts/release/generate-update-key.mjs';
 import {loadSigningKey, privateKeyOf, signManifestBytes} from '../../scripts/release/sign-update-manifest.mjs';
-import {assertKeyPathOutsideRepository, compiledUpdateKeys, nugetVersionOf, parseManifestBytes, REPOSITORY_ROOT, verifySignatureBytes}
+import {assertKeyPathOutsideRepository, compareNugetVersions, compiledUpdateKeys, nugetVersionOf, parseManifestBytes, REPOSITORY_ROOT, verifySignatureBytes}
   from '../../scripts/release/update-manifest-common.mjs';
 import {verifySignedManifest} from '../../scripts/release/verify-update-manifest.mjs';
 import {buildUpdateManifest, manifestBytesOf, releaseNotesOf, selectKeyId, verifyReleaseArtifacts, type ReleaseFacts}
@@ -191,7 +191,7 @@ describe('manifest writer refusals', () => {
     const keys = [{keyId: 'production-0123456789abcdef', publicKey: generateUpdateKey('production').publicKey}];
     expect(selectKeyId(keys, 'production')).toBe('production-0123456789abcdef');
     expect(selectKeyId(keys, 'production', 'production-0123456789abcdef')).toBe('production-0123456789abcdef');
-    expect(() => selectKeyId(keys, 'production', 'production-ffffffffffffffff')).toThrow(/is not a compiled production key/);
+    expect(() => selectKeyId(keys, 'production', 'production-ffffffffffffffff')).toThrow(/is not a production key compiled into the released build/);
     expect(() => selectKeyId([], 'production')).toThrow(/No compiled production update key/);
     expect(() => selectKeyId([...keys, {...keys[0], keyId: 'production-1'}], 'production')).toThrow(/Several compiled production update keys/);
   });
@@ -313,7 +313,7 @@ describe('workflow verification of a signed manifest', () => {
       '--run-id', RUN, '--commit', COMMIT, '--out', out, '--notes', notes], {encoding: 'utf8', env: {...process.env, NODE_OPTIONS: '--disable-warning=MODULE_TYPELESS_PACKAGE_JSON'}});
     // Until the owner adds a public key (release checklist step 0) no manifest can be written.
     expect(run.status).toBe(1);
-    expect(run.stderr).toContain('No compiled production update key: complete step 0 of the release checklist');
+    expect(run.stderr).toContain('No compiled production update key in the released build: complete step 0 of the release checklist');
     const verifyOnly = spawnSync(process.execPath, [path.join(REPOSITORY_ROOT, 'scripts/release/write-update-manifest.mjs'), '--artifacts', folder, '--channel', 'production',
       '--run-id', RUN, '--commit', COMMIT], {encoding: 'utf8'});
     expect(verifyOnly.status, verifyOnly.stderr).toBe(0);
@@ -347,5 +347,140 @@ describe('GitHub answers', () => {
     expect(() => checkRelease(release({target_commitish: 'main'}), expected)).toThrow(/does not target commit/);
     expect(() => checkRelease(release({assets: [...names, 'extra'].map(name => ({name, state: 'uploaded'}))}), expected)).toThrow(/must carry exactly/);
     expect(() => checkRelease(release({assets: names.map(name => ({name, state: 'starter'}))}), expected)).toThrow(/not fully uploaded/);
+  });
+});
+
+describe('the released commit\'s keys', () => {
+  // The release workflow writes update-keys.ts of the CI run's commit to a temporary file (git show) and passes it with
+  // --keys-file; the dispatch checkout's keys are never used. This copy is the shipped file with one production key added.
+  const releasedKeys = (entry: {keyId: string; publicKey: string}) => {
+    const shipped = readFileSync(path.join(REPOSITORY_ROOT, 'apps/desktop/src/updater/update-keys.ts'), 'utf8');
+    const changed = shipped.replace('production: Object.freeze([])', `production: Object.freeze([${updateKeyEntry(entry)}])`);
+    expect(changed).not.toBe(shipped);
+    const folder = path.join(scratch, 'released-keys');
+    mkdirSync(folder);
+    writeFileSync(path.join(folder, 'update-keys.ts'), changed);
+    return path.join(folder, 'update-keys.ts');
+  };
+  const node = (script: string, args: string[]) => spawnSync(process.execPath, [path.join(REPOSITORY_ROOT, 'scripts/release', script), ...args],
+    {encoding: 'utf8', env: {...process.env, NODE_OPTIONS: '--disable-warning=MODULE_TYPELESS_PACKAGE_JSON'}});
+
+  it('writes and verifies with the keys of the released commit, and refuses keys the released build did not compile', () => {
+    const key = ownerKey('production'), keysFile = releasedKeys(key.entry);
+    const {folder} = artifactFolder();
+    const manifest = path.join(scratch, 'update-manifest.json'), notes = path.join(scratch, 'notes.md');
+    const common = ['--artifacts', folder, '--channel', 'production', '--run-id', RUN, '--commit', COMMIT];
+    const written = node('write-update-manifest.mjs', [...common, '--out', manifest, '--notes', notes, '--keys-file', keysFile]);
+    expect(written.status, written.stderr).toBe(0);
+    expect(JSON.parse(readFileSync(manifest, 'utf8'))).toMatchObject({keyId: key.entry.keyId});
+    const signature = path.join(scratch, 'update-manifest.json.sig');
+    writeFileSync(signature, signManifestBytes(readFileSync(manifest), key.privateKey).signature);
+    const verified = node('verify-update-manifest.mjs', ['--manifest', manifest, '--signature', signature, ...common, '--keys-file', keysFile]);
+    expect(verified.status, verified.stderr).toBe(0);
+    expect(JSON.parse(verified.stdout)).toMatchObject({verified: true, keyId: key.entry.keyId});
+    // This checkout ships no key, so the same signed manifest is refused against it.
+    const shipped = node('verify-update-manifest.mjs', ['--manifest', manifest, '--signature', signature, ...common]);
+    expect(shipped.status).toBe(1);
+    expect(shipped.stderr).toContain(`keyId ${key.entry.keyId} is not a compiled production key`);
+    // A requested keyId the released build did not compile is refused before anything is written.
+    const other = node('write-update-manifest.mjs', [...common, '--out', path.join(scratch, 'm2.json'), '--notes', path.join(scratch, 'n2.md'), '--keys-file', keysFile,
+      '--key-id', 'production-ffffffffffffffff']);
+    expect(other.status).toBe(1);
+    expect(other.stderr).toContain('is not a production key compiled into the released build');
+    // The staging list of the same file is still empty.
+    const staging = node('write-update-manifest.mjs', ['--artifacts', artifactFolder({channel: 'staging'}).folder, '--channel', 'staging', '--run-id', RUN, '--commit', COMMIT,
+      '--out', path.join(scratch, 'm3.json'), '--notes', path.join(scratch, 'n3.md'), '--keys-file', keysFile]);
+    expect(staging.status).toBe(1);
+    expect(staging.stderr).toContain('No compiled staging update key in the released build');
+  });
+});
+
+describe('main ancestry and the latest release', () => {
+  const compare = (status: string, sha = COMMIT) => ({status, base_commit: {sha}, merge_base_commit: {sha}});
+  it('accepts a commit that main contains and refuses one main does not', () => {
+    expect(checkMainAncestry(compare('identical'), COMMIT)).toEqual({status: 'identical'});
+    expect(checkMainAncestry(compare('ahead'), COMMIT)).toEqual({status: 'ahead'});
+    for (const status of ['behind', 'diverged']) expect(() => checkMainAncestry(compare(status), COMMIT), status).toThrow(`commit ${COMMIT} is not on the main branch`);
+    expect(() => checkMainAncestry({status: 'ahead', base_commit: {sha: COMMIT}, merge_base_commit: {sha: 'b'.repeat(40)}}, COMMIT)).toThrow(/is not on the main branch/);
+    expect(() => checkMainAncestry(compare('ahead', 'b'.repeat(40)), COMMIT)).toThrow(/is not on the main branch/);
+    expect(() => checkMainAncestry(compare('ahead'), 'main')).toThrow(/40 lower-case hex digits/);
+  });
+  it('requires a production version higher than the latest release by NuGet SemVer order', () => {
+    expect(checkNewerThanLatest('none', '0.1.1')).toEqual({latest: null});
+    expect(checkNewerThanLatest('v0.1.1', '0.2.0')).toEqual({latest: 'v0.1.1'});
+    // NuGet drops the label's dots, so alpha10 sorts below alpha9 as text, as the application compares it (docs/release.md, step 1).
+    expect(() => checkNewerThanLatest('v0.1.0-alpha.9', '0.1.0-alpha.10')).toThrow(/is not higher than the latest release v0.1.0-alpha.9/);
+    expect(checkNewerThanLatest('v0.1.0-alpha.9', '0.1.1-alpha.1')).toEqual({latest: 'v0.1.0-alpha.9'});
+    expect(checkNewerThanLatest('v0.1.0-alpha.2', '0.1.0')).toEqual({latest: 'v0.1.0-alpha.2'});
+    expect(() => checkNewerThanLatest('v0.2.0', '0.2.0')).toThrow('version 0.2.0 is not higher than the latest release v0.2.0');
+    expect(() => checkNewerThanLatest('v0.2.0', '0.1.9')).toThrow(/is not higher than the latest release v0.2.0/);
+    expect(() => checkNewerThanLatest('v0.2.0', '0.2.0-alpha.1')).toThrow(/is not higher/);
+    expect(() => checkNewerThanLatest('staging-v0.2.0-stg.000042', '0.3.0')).toThrow(/has no production tag/);
+    expect(() => checkNewerThanLatest('v0.2.0-stg.000042', '0.3.0')).toThrow(/has no production tag/);
+    expect(() => checkNewerThanLatest('v0.1.1', '0.2.0-stg.000042')).toThrow(/carries a staging label/);
+  });
+  it('orders NuGet versions exactly as the application does', () => {
+    const versions = ['0.1.1', '0.2.0', '0.10.0', '1.0.0', '1.0.0-alpha1', '1.0.0-alpha2', '1.0.0-alpha10', '1.0.0-ALPHA2', '1.0.0-alpha.1', '1.0.0-alpha.10',
+      '1.0.0-alpha.beta', '1.0.0-beta', '1.0.0-1', '1.0.0-01', '0.2.0-stg000041', '0.2.0-stg000042', '00.2.0', '999999999.0.0'];
+    for (const a of versions) for (const b of versions) expect(Math.sign(compareNugetVersions(a, b)), `${a} vs ${b}`).toBe(Math.sign(appCompareNugetVersions(a, b)));
+    expect(() => compareNugetVersions('0.2', '0.2.0')).toThrow('Not a NuGet version');
+  });
+});
+
+describe('malformed manifests and signatures', () => {
+  // One corpus through both the release scripts' parser and signature check and the application's: they must agree on
+  // every input, so the workflow never accepts what an installed build refuses, nor the reverse.
+  const pkg = {bytes: Buffer.alloc(64, 1), sha256: sha('sha256', Buffer.alloc(64, 1)), sha1: sha('sha1', Buffer.alloc(64, 1))};
+  interface ManifestFixture {package: Record<string, unknown>; [key: string]: unknown}
+  const base = (): ManifestFixture => ({format: 'ets2telemetry.update-manifest.v1', channel: 'production', appVersion: '0.2.0', nugetVersion: '0.2.0',
+    package: {tag: 'v0.2.0', name: 'ETS2TelemetryDesktop-0.2.0-full.nupkg', size: 64, sha256: pkg.sha256, sha1: pkg.sha1}, publishedUtc: '2026-10-28T12:00:00Z', keyId: 'production-0123456789abcdef'});
+  const json = (value: unknown) => Buffer.from(`${JSON.stringify(value, null, 2)}\n`);
+  const changed = (change: (manifest: ManifestFixture) => void) => {const manifest = base(); change(manifest); return json(manifest);};
+  const manifests: [string, Buffer][] = [
+    ['valid', json(base())],
+    ['valid staging', changed(m => {Object.assign(m, {channel: 'staging', appVersion: '0.2.0-stg.000042', nugetVersion: '0.2.0-stg000042'}); m.package.tag = 'staging-v0.2.0-stg.000042';})],
+    ['empty', Buffer.alloc(0)], ['null', Buffer.from('null')], ['array', Buffer.from('[]')], ['string', Buffer.from('"x"')], ['empty object', Buffer.from('{}')],
+    ['extra key', changed(m => {m.extra = 1;})], ['__proto__ key', Buffer.from(json(base()).toString().replace('{', '{"__proto__": {},'))],
+    ['missing keyId', changed(m => {delete m.keyId;})], ['wrong format', changed(m => {m.format = 'ets2telemetry.update-manifest.v2';})],
+    ['channel case', changed(m => {m.channel = 'Production';})], ['short version', changed(m => {m.appVersion = '0.2'; m.nugetVersion = '0.2';})],
+    ['nuget keeps dots', changed(m => {m.appVersion = '0.2.0-stg.000042'; m.nugetVersion = '0.2.0-stg.000042';})],
+    ['space in time', changed(m => {m.publishedUtc = '2026-10-28 12:00:00Z';})], ['impossible date', changed(m => {m.publishedUtc = '2026-13-40T12:00:00Z';})],
+    ['four-digit milliseconds', changed(m => {m.publishedUtc = '2026-10-28T12:00:00.1234Z';})], ['keyId space', changed(m => {m.keyId = 'a b';})],
+    ['keyId 65', changed(m => {m.keyId = 'k'.repeat(65);})], ['package extra', changed(m => {m.package.url = 'https://example.invalid';})],
+    ['size 0', changed(m => {m.package.size = 0;})], ['size fraction', changed(m => {m.package.size = 1.5;})], ['size string', changed(m => {m.package.size = '64';})],
+    ['size over 400 MiB', changed(m => {m.package.size = 400 * 1024 * 1024 + 1;})], ['sha256 upper case', changed(m => {m.package.sha256 = pkg.sha256.toUpperCase();})],
+    ['sha1 short', changed(m => {m.package.sha1 = pkg.sha1.slice(1);})], ['tag 81', changed(m => {m.package.tag = `v${'1'.repeat(80)}`;})],
+    ['name 161', changed(m => {m.package.name = 'n'.repeat(161);})], ['invalid UTF-8', Buffer.from([0x7b, 0xff, 0x7d])],
+    ['byte order mark', Buffer.concat([Buffer.from([0xef, 0xbb, 0xbf]), json(base())])],
+    ['over 16 KiB', Buffer.concat([json(base()), Buffer.alloc(16 * 1024, 0x20)])]
+  ];
+  it('parses every manifest of the corpus as the application does', () => {
+    for (const [name, bytes] of manifests) expect(parseManifestBytes(bytes), name).toEqual(parseUpdateManifest(bytes));
+    expect(parseManifestBytes(manifests[0][1])).toBeDefined();
+    expect(parseManifestBytes(manifests[1][1])).toBeDefined();
+  });
+  it('checks every signature of the corpus as the application does', () => {
+    const {privateKey} = generateKeyPairSync('ed25519');
+    const publicKey = Buffer.from(privateKey.export({format: 'jwk'}).x as string, 'base64url').toString('base64');
+    const bytes = manifests[0][1];
+    const signed = (text: string) => Buffer.from(text, 'latin1');
+    const good = cryptoSign(null, bytes, privateKey).toString('base64');
+    const other = Buffer.from(cryptoSign(null, manifests[1][1], privateKey).toString('base64'));
+    const signatures: [string, Buffer][] = [
+      ['valid', signed(good)], ['line break', signed(`${good}\n`)], ['CRLF', signed(`${good}\r\n`)], ['two line breaks', signed(`${good}\n\n`)], ['leading space', signed(` ${good}`)],
+      ['one padding', signed(good.slice(0, -1))], ['87 characters', signed(`A${good}`)], ['base64url', signed(good.replace(/\+/g, '-').replace(/\//g, '_'))],
+      ['non-ASCII', Buffer.concat([Buffer.from(good.slice(0, -2)), Buffer.from([0xc3, 0xa9])])], ['empty', Buffer.alloc(0)],
+      ['of another manifest', other], ['over 16 KiB', Buffer.alloc(16 * 1024 + 1, 0x41)]
+    ];
+    for (const [manifestName, manifestBytes] of manifests) {
+      for (const [signatureName, signatureBytes] of signatures) {
+        for (const key of [publicKey, publicKey.slice(0, -2), `${publicKey.slice(0, -1)}A`]) {
+          expect(verifySignatureBytes(manifestBytes, signatureBytes, key), `${manifestName} / ${signatureName}`)
+            .toBe(verifyManifestSignature(manifestBytes, signatureBytes, key));
+        }
+      }
+    }
+    expect(verifySignatureBytes(bytes, signed(`${good}\n`), publicKey)).toBe(true);
+    expect(verifySignatureBytes(bytes, signed(`${good}\n\n`), publicKey)).toBe(false);
   });
 });

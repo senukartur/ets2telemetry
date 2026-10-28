@@ -9,9 +9,10 @@ import {fileURLToPath, pathToFileURL} from 'node:url';
 // tests/unit/release-scripts.test.ts proves that every manifest they write and sign is accepted by the application's own
 // verifier, and that this module's parser, signature check and version conversion agree with the application's.
 //
-// The compiled public keys are read from apps/desktop/src/updater/update-keys.ts itself, through Node's type stripping
-// (that file holds only erasable type syntax), so the workflow checks a signature against exactly the keys a build of
-// the same commit compiles. No private key is ever read here.
+// The compiled public keys are read from a copy of apps/desktop/src/updater/update-keys.ts taken at the released CI run's
+// commit (`git show <commit>:<path>` in the release workflow), through Node's type stripping (that file holds only
+// erasable type syntax). The workflow therefore checks a signature against exactly the keys the released build compiled,
+// never the keys of the dispatch checkout. No private key is ever read here.
 
 export const MANIFEST_FORMAT = 'ets2telemetry.update-manifest.v1';
 export const MANIFEST_FILE = 'update-manifest.json';
@@ -128,10 +129,13 @@ export function verifySignatureBytes(manifestBytes, signatureBytes, publicKey) {
   } catch {return false;}
 }
 
-/** The compiled public keys of `channel` in update-keys.ts of this checkout, each checked for its shape. */
-export async function compiledUpdateKeys(channel, root = REPOSITORY_ROOT) {
+/**
+ * The compiled public keys of `channel` in the update-keys.ts file `keysFile`, each checked for its shape. The release
+ * workflow passes the file of the released commit; without it, this checkout's file is read (tests, local checks).
+ */
+export async function compiledUpdateKeys(channel, keysFile = path.join(REPOSITORY_ROOT, UPDATE_KEYS_MODULE)) {
   if (!isReleaseChannel(channel)) throw new Error(`Unknown release channel ${JSON.stringify(channel)}`);
-  const module = await import(pathToFileURL(path.join(root, UPDATE_KEYS_MODULE)).href);
+  const module = await import(pathToFileURL(path.resolve(keysFile)).href);
   const keys = module.UPDATE_PUBLIC_KEYS?.[channel];
   if (!Array.isArray(keys)) throw new Error(`${UPDATE_KEYS_MODULE} has no key list for ${channel}`);
   for (const key of keys) {
@@ -140,6 +144,35 @@ export async function compiledUpdateKeys(channel, root = REPOSITORY_ROOT) {
     }
   }
   return keys.map(key => ({keyId: key.keyId, publicKey: key.publicKey}));
+}
+
+function compareIdentifier(a, b) {
+  const numericA = /^\d+$/.test(a), numericB = /^\d+$/.test(b);
+  if (numericA && numericB) {const x = BigInt(a), y = BigInt(b); return x < y ? -1 : x > y ? 1 : 0;}
+  if (numericA !== numericB) return numericA ? -1 : 1;
+  const lowerA = a.toLowerCase(), lowerB = b.toLowerCase();
+  return lowerA < lowerB ? -1 : lowerA > lowerB ? 1 : 0;
+}
+const NUGET_PARTS = /^(\d{1,9})\.(\d{1,9})\.(\d{1,9})(?:-([0-9A-Za-z.-]{1,60}))?$/;
+/**
+ * Compares two NuGet versions by SemVer 2.0 precedence, prerelease labels case-insensitively, exactly as the application's
+ * update-version.ts compares them: negative, zero or positive. Throws for a value that is not a NuGet version.
+ */
+export function compareNugetVersions(a, b) {
+  const left = NUGET_PARTS.exec(a), right = NUGET_PARTS.exec(b);
+  if (!left || !right) throw new Error('Not a NuGet version');
+  for (let index = 1; index <= 3; index++) {
+    const difference = Number(left[index]) - Number(right[index]);
+    if (difference !== 0) return difference;
+  }
+  const [preA, preB] = [left[4], right[4]];
+  if (preA === undefined || preB === undefined) return preA === preB ? 0 : preA === undefined ? 1 : -1;
+  const partsA = preA.split('.'), partsB = preB.split('.');
+  for (let index = 0; index < Math.min(partsA.length, partsB.length); index++) {
+    const difference = compareIdentifier(partsA[index], partsB[index]);
+    if (difference !== 0) return difference;
+  }
+  return partsA.length - partsB.length;
 }
 
 const comparable = value => process.platform === 'win32' ? value.toLowerCase() : value;

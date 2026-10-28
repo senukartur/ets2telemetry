@@ -136,28 +136,30 @@ export function releaseNotesOf(facts, repository) {
   return `${lines.join('\n')}\n`;
 }
 
-/** The keyId the manifest names: the given one, which must be a compiled key of the channel, or the channel's only key. */
+/** The keyId the manifest names: the given one, which must be a key the released build compiled, or its channel's only key. */
 export function selectKeyId(keys, channel, requested) {
   if (requested) {
-    if (!keys.some(key => key.keyId === requested)) throw new Error(`keyId ${JSON.stringify(requested)} is not a compiled ${channel} key in apps/desktop/src/updater/update-keys.ts`);
+    if (!keys.some(key => key.keyId === requested)) throw new Error(`keyId ${JSON.stringify(requested)} is not a ${channel} key compiled into the released build (update-keys.ts)`);
     return requested;
   }
-  if (keys.length === 0) throw new Error(`No compiled ${channel} update key: complete step 0 of the release checklist (docs/release.md) first`);
+  if (keys.length === 0) throw new Error(`No compiled ${channel} update key in the released build: complete step 0 of the release checklist (docs/release.md) first`);
   if (keys.length > 1) throw new Error(`Several compiled ${channel} update keys: name the signing key with --key-id`);
   return keys[0].keyId;
 }
 
 const USAGE = 'Usage: node scripts/release/write-update-manifest.mjs --artifacts <folder> --channel <production|staging> --run-id <id> [--commit <sha>] ' +
-  '[--repository <owner/name>] [--key-id <id>] [--facts <file>] [--out <manifest file> --notes <notes file>]';
+  '[--repository <owner/name>] [--facts <file>] [--out <manifest file> --notes <notes file> [--keys-file <update-keys.ts of the released commit>] [--key-id <id>]]';
 
 async function main(argv) {
   const {values} = parseArgs({args: argv, strict: true, options: {
     artifacts: {type: 'string'}, channel: {type: 'string'}, 'run-id': {type: 'string'}, commit: {type: 'string'}, repository: {type: 'string'},
-    'key-id': {type: 'string'}, facts: {type: 'string'}, out: {type: 'string'}, notes: {type: 'string'}}});
+    'key-id': {type: 'string'}, 'keys-file': {type: 'string'}, facts: {type: 'string'}, out: {type: 'string'}, notes: {type: 'string'}}});
   if (!values.artifacts || !values.channel || !values['run-id'] || (values.out === undefined) !== (values.notes === undefined)) throw new Error(USAGE);
   const facts = verifyReleaseArtifacts(path.resolve(values.artifacts), {channel: values.channel, runId: values['run-id'], commit: values.commit});
   if (values.out) {
-    const keyId = selectKeyId(await compiledUpdateKeys(facts.channel), facts.channel, values['key-id']);
+    // The keys the released build compiled (the release workflow passes update-keys.ts of the run's commit), so a build
+    // that ships without a key of its channel is never given a manifest it could not verify.
+    const keyId = selectKeyId(await compiledUpdateKeys(facts.channel, values['keys-file']), facts.channel, values['key-id']);
     writeFileSync(values.out, manifestBytesOf(buildUpdateManifest(facts, {keyId})), {flag: 'wx'});
     writeFileSync(values.notes, releaseNotesOf(facts, values.repository ?? 'senukartur/ets2telemetry'), {flag: 'wx'});
   }

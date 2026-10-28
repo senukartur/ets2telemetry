@@ -14,7 +14,8 @@ it('runs only on dispatch, one release at a time, with read-only default permiss
   const text = await workflow();
   expect(text).toMatch(/\non:\n {2}workflow_dispatch:\n/);
   expect(text).not.toMatch(/\n {2}(push|pull_request|pull_request_target|schedule|workflow_run|release):/);
-  expect(text).toContain('\npermissions:\n  contents: read\nconcurrency:\n  # One release at a time; a second dispatch waits instead of cancelling a release in progress.\n  group: release\n  cancel-in-progress: false\n');
+  expect(text).toContain('\npermissions:\n  contents: read\nconcurrency:\n  # One release runs and at most one more waits; a further dispatch cancels the waiting one, never the running one.\n' +
+    '  group: release\n  cancel-in-progress: false\n');
   expect(jobIds(text)).toEqual(['verify', 'publish-staging', 'draft-production', 'publish-production']);
 });
 
@@ -56,7 +57,7 @@ it('publishes staging as a pre-release that never becomes latest, and production
     '            "artifacts/$SETUP" "artifacts/$NUPKG" artifacts/RELEASES artifacts/release-identity.json release/update-manifest.json\n');
   const production = job(text, 'publish-production');
   expect(production).toContain('-F draft=false -F prerelease=false -f make_latest=true');
-  expect(production).toContain('releases/latest" --jq .tag_name');
+  expect(production).toContain('if [[ "$latest" == "$TAG" ]]; then');
   expect(production.indexOf('verify-update-manifest.mjs')).toBeLessThan(production.indexOf('make_latest=true'));
 });
 
@@ -75,4 +76,56 @@ it('pins every action by commit and runs on GitHub-hosted runners only', async (
   const runners = [...text.matchAll(/runs-on: (.+)/g)].map(match => match[1]);
   expect(runners).toEqual(Array(4).fill('ubuntu-24.04'));
   expect(text).not.toContain('self-hosted');
+});
+
+it('reads releases/latest and other 404-meaningful answers only through gh-get.sh, never as "{…}none"', async () => {
+  // gh api writes the 404 error body to standard output, so `$(gh api … || echo none)` would read "{…}none" (review of PR-9).
+  const text = await workflow();
+  expect(text).not.toMatch(/\|\| *echo none/);
+  const latest = [...text.matchAll(/^.*repos\/\$GITHUB_REPOSITORY\/releases\/latest.*$/gm)].map(match => match[0]);
+  expect(latest.length).toBe(5);
+  for (const line of latest) expect(line).toMatch(/bash scripts\/release\/gh-get\.sh "repos\/\$GITHUB_REPOSITORY\/releases\/latest" "\$RUNNER_TEMP\/latest[a-z-]*\.json" \|\| status=\$\?$/);
+  expect(text.match(/elif \[\[ \$status -eq 44 \]\]; then (latest|after)=none; else exit 1; fi/g)).toHaveLength(4);
+  expect(text).not.toMatch(/gh api [^\n]*git\/ref\/tags/);
+  expect(text).not.toContain('gh release view');
+});
+
+it('proves the run\'s commit is on the main branch and refuses a tag named main', async () => {
+  const verify = job(await workflow(), 'verify');
+  const proof = verify.indexOf("- name: Prove that the run's commit is on the main branch");
+  expect(proof).toBeGreaterThan(verify.indexOf('- name: Check the Windows CI run'));
+  expect(proof).toBeLessThan(verify.indexOf('- name: Download the installer artifact'));
+  expect(verify).toContain('bash scripts/release/gh-get.sh "repos/$GITHUB_REPOSITORY/git/ref/tags/main" "$RUNNER_TEMP/tag-main.json" || status=$?\n' +
+    "          if [[ $status -eq 0 ]]; then echo '::error::A tag named main exists; delete it before releasing.'; exit 1; fi\n" +
+    "          if [[ $status -ne 44 ]]; then echo '::error::Could not check for a tag named main.'; exit 1; fi\n");
+  expect(verify).toContain('bash scripts/release/gh-get.sh "repos/$GITHUB_REPOSITORY/compare/$COMMIT...main" "$RUNNER_TEMP/compare.json"\n' +
+    '          node scripts/release/check-github-release.mjs ancestry --json "$RUNNER_TEMP/compare.json" --commit "$COMMIT"\n');
+});
+
+it('reads the compiled keys at the run\'s commit wherever a manifest is written or verified', async () => {
+  const text = await workflow();
+  const extract = 'git fetch --no-tags --depth=1 origin "$COMMIT"\n          mkdir -p "$RUNNER_TEMP/keys"\n' +
+    '          git show "$COMMIT:apps/desktop/src/updater/update-keys.ts" > "$RUNNER_TEMP/keys/update-keys.ts"\n';
+  for (const id of ['verify', 'publish-staging', 'publish-production']) {
+    const body = job(text, id);
+    expect(body, id).toContain(extract);
+    expect(body.indexOf(extract), id).toBeLessThan(body.search(/(write|verify)-update-manifest\.mjs/));
+  }
+  const scripts = [...text.matchAll(/node scripts\/release\/(write|verify)-update-manifest\.mjs/g)];
+  expect(scripts).toHaveLength(3);
+  expect(text.match(/--keys-file "\$RUNNER_TEMP\/keys\/update-keys\.ts"/g)).toHaveLength(3);
+});
+
+it('refuses a production version that is not higher than the latest release, before the draft and before publishing', async () => {
+  const text = await workflow();
+  const verify = job(text, 'verify');
+  expect(verify).toContain("- name: Refuse a production version that is not higher than the latest release\n        if: inputs.channel == 'production'\n");
+  expect(verify.indexOf('check-github-release.mjs newer')).toBeLessThan(verify.indexOf('actions/upload-artifact'));
+  const production = job(text, 'publish-production');
+  expect(production.indexOf('check-github-release.mjs newer --latest "$latest" --version "$VERSION"')).toBeGreaterThan(0);
+  expect(production.indexOf('check-github-release.mjs newer')).toBeLessThan(production.indexOf('make_latest=true'));
+});
+
+it('keeps the release candidate for 7 days, the window to approve the publish job', async () => {
+  expect(job(await workflow(), 'verify')).toContain('          retention-days: 7\n');
 });

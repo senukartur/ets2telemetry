@@ -35,5 +35,6 @@ export function isRawPublicKey(value: unknown): value is string;
 export function rawPublicKeyOf(key: KeyObject): Buffer;
 export function keyIdOf(channel: ReleaseChannel, rawPublicKey: Uint8Array): string;
 export function verifySignatureBytes(manifestBytes: Uint8Array, signatureBytes: Uint8Array, publicKey: string): boolean;
-export function compiledUpdateKeys(channel: ReleaseChannel, root?: string): Promise<CompiledUpdateKey[]>;
+export function compiledUpdateKeys(channel: ReleaseChannel, keysFile?: string): Promise<CompiledUpdateKey[]>;
+export function compareNugetVersions(a: string, b: string): number;
 export function assertKeyPathOutsideRepository(target: string, root?: string): string;
