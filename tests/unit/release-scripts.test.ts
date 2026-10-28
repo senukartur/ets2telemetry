@@ -305,16 +305,22 @@ describe('workflow verification of a signed manifest', () => {
     expect(() => verifySignedManifest({manifestBytes: bytes, signatureBytes: signature, facts: otherBytes, keys})).toThrow(/package.sha256 differs from the artifact/);
     expect(() => verifySignedManifest({manifestBytes: bytes, signatureBytes: signature, facts: {...facts, channel: 'staging'}, keys})).toThrow(/channel differs from the artifact/);
   });
-  it('reads the compiled keys of update-keys.ts, which ship empty, under plain Node as the workflow does', async () => {
+  it('reads the compiled keys of update-keys.ts under plain Node as the workflow does', async () => {
     expect(await compiledUpdateKeys('production')).toEqual([...UPDATE_PUBLIC_KEYS.production]);
     expect(await compiledUpdateKeys('staging')).toEqual([...UPDATE_PUBLIC_KEYS.staging]);
     const {folder} = artifactFolder();
     const out = path.join(scratch, 'manifest.json'), notes = path.join(scratch, 'notes.md');
     const run = spawnSync(process.execPath, [path.join(REPOSITORY_ROOT, 'scripts/release/write-update-manifest.mjs'), '--artifacts', folder, '--channel', 'production',
       '--run-id', RUN, '--commit', COMMIT, '--out', out, '--notes', notes], {encoding: 'utf8', env: {...process.env, NODE_OPTIONS: '--disable-warning=MODULE_TYPELESS_PACKAGE_JSON'}});
-    // Until the owner adds a public key (release checklist step 0) no manifest can be written.
-    expect(run.status).toBe(1);
-    expect(run.stderr).toContain('No compiled production update key in the released build: complete step 0 of the release checklist');
+    // The owner's production key is compiled, so the unsigned production manifest names it; staging has no key yet, so no
+    // staging manifest can be written (release checklist step 0).
+    expect(run.status, run.stderr).toBe(0);
+    expect(JSON.parse(readFileSync(out, 'utf8'))).toMatchObject({channel: 'production', keyId: 'production-611eb870520f2b0f'});
+    const staging = spawnSync(process.execPath, [path.join(REPOSITORY_ROOT, 'scripts/release/write-update-manifest.mjs'), '--artifacts', artifactFolder({channel: 'staging'}).folder,
+      '--channel', 'staging', '--run-id', RUN, '--commit', COMMIT, '--out', path.join(scratch, 'staging-manifest.json'), '--notes', path.join(scratch, 'staging-notes.md')],
+      {encoding: 'utf8', env: {...process.env, NODE_OPTIONS: '--disable-warning=MODULE_TYPELESS_PACKAGE_JSON'}});
+    expect(staging.status).toBe(1);
+    expect(staging.stderr).toContain('No compiled staging update key in the released build: complete step 0 of the release checklist');
     const verifyOnly = spawnSync(process.execPath, [path.join(REPOSITORY_ROOT, 'scripts/release/write-update-manifest.mjs'), '--artifacts', folder, '--channel', 'production',
       '--run-id', RUN, '--commit', COMMIT], {encoding: 'utf8'});
     expect(verifyOnly.status, verifyOnly.stderr).toBe(0);
@@ -353,10 +359,10 @@ describe('GitHub answers', () => {
 
 describe('the released commit\'s keys', () => {
   // The release workflow writes update-keys.ts of the CI run's commit to a temporary file (git show) and passes it with
-  // --keys-file; the dispatch checkout's keys are never used. This copy is the shipped file with one production key added.
+  // --keys-file; the dispatch checkout's keys are never used. This copy is the shipped file with its production list replaced by one test key.
   const releasedKeys = (entry: {keyId: string; publicKey: string}) => {
     const shipped = readFileSync(path.join(REPOSITORY_ROOT, 'apps/desktop/src/updater/update-keys.ts'), 'utf8');
-    const changed = shipped.replace('production: Object.freeze([])', `production: Object.freeze([${updateKeyEntry(entry)}])`);
+    const changed = shipped.replace(/production: Object\.freeze\(\[[^\]]*\]\)/, `production: Object.freeze([${updateKeyEntry(entry)}])`);
     expect(changed).not.toBe(shipped);
     const folder = path.join(scratch, 'released-keys');
     mkdirSync(folder);
@@ -379,7 +385,7 @@ describe('the released commit\'s keys', () => {
     const verified = node('verify-update-manifest.mjs', ['--manifest', manifest, '--signature', signature, ...common, '--keys-file', keysFile]);
     expect(verified.status, verified.stderr).toBe(0);
     expect(JSON.parse(verified.stdout)).toMatchObject({verified: true, keyId: key.entry.keyId});
-    // This checkout ships no key, so the same signed manifest is refused against it.
+    // This checkout ships only the owner's key, so the same signed manifest is refused against it.
     const shipped = node('verify-update-manifest.mjs', ['--manifest', manifest, '--signature', signature, ...common]);
     expect(shipped.status).toBe(1);
     expect(shipped.stderr).toContain(`keyId ${key.entry.keyId} is not a compiled production key`);
