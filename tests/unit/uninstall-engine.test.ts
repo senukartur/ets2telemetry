@@ -14,8 +14,31 @@ import {CURRENT, exists, FOREIGN, gameFolder, installFixture, installRecord, KNO
 // temporary root. A kill is simulated by a file system that stops answering after a given deletion; the run is then
 // abandoned, as a killed process would be, and a fresh run must finish the cleanup.
 
+/**
+ * The guard with the flush to disk of every opened file skipped; every other call, and the guard's checks, unchanged.
+ * Each intent and registry write syncs its temporary file before the rename (atomic-json-file.ts), and on Windows that
+ * FlushFileBuffers waits for the disk itself: on October 28, 2026 single syncs in this file took 0.1 to 2.3 s on an idle
+ * host, while no guarded call took over 100 ms. Several such waits in one case made the kill cases outlast the default
+ * 5 s timeout on hosted CI. A kill here is a process death, which loses nothing the operating system already accepted,
+ * so no case in this file can observe the flush; plugin-registry.test.ts covers a failing sync.
+ */
+function withoutFlush(root: GuardedRoot): GuardedRoot {
+  const open = (async (...args: Parameters<typeof fsp.open>) => {
+    const handle = await root.fs.open(...args);
+    return new Proxy(handle, {get(target, property) {
+      if (property === 'sync') return () => Promise.resolve();
+      const value: unknown = Reflect.get(target, property, target);
+      return typeof value === 'function' ? (value as (...values: unknown[]) => unknown).bind(target) : value;
+    }});
+  }) as typeof fsp.open;
+  return {...root, fs: {...root.fs, open}};
+}
+
+/** The slowest single fs.promises operation measured on a loaded host (ET-019, load-sensitive unit tests; under 0.5 ms idle). */
+const FS_OPERATION_ALLOWANCE_MS = 67;
+
 let guard: GuardedRoot;
-beforeEach(async () => {guard = await guardedTempRoot('ets2telemetry-uninstall-engine-');});
+beforeEach(async () => {guard = withoutFlush(await guardedTempRoot('ets2telemetry-uninstall-engine-'));});
 afterEach(async () => {
   const violations = [...guard.violations];
   await guard.dispose();
@@ -227,12 +250,13 @@ describe('outcomes', () => {
   // calls in temporary folders, counted on October 19, 2026 (389 engine operations through the guarded file system, 948
   // of the guard's own realpath and lstat checks, and 19 calls of the test's setup and reads). Counted at the libuv
   // request level, which includes the file-handle reads, writes, syncs and closes of the atomic JSON files, that is
-  // 1,421 promise requests and 36 handle closes, rounded up to 1,500 operations. That
+  // 1,421 promise requests and 36 handle closes, rounded up to 1,500 operations (withoutFlush no longer issues the syncs,
+  // so the count stays an upper bound). That
   // is about 0.3 s idle, but a loaded host slowed single operations to as much as 67 ms each (ET-019, load-sensitive
   // unit tests), and the case exceeded the default 5 s. The scene cannot be shared, because both runs change it. This
   // budget bounds that irreducible file work with the worst measured operation time for every call; the case asserts no
   // timing.
-  const MAX_REGISTRY_FS_OPERATIONS = 1_500, FS_OPERATION_ALLOWANCE_MS = 67;
+  const MAX_REGISTRY_FS_OPERATIONS = 1_500;
   const MAX_REGISTRY_FS_BUDGET_MS = MAX_REGISTRY_FS_OPERATIONS * FS_OPERATION_ALLOWANCE_MS;
   it('cleans the maximum registry merged with the maximum intent, and records what fits with the intent\'s own entries first', async () => {
     const fixture = await installFixture(guard);
@@ -339,6 +363,14 @@ describe('ordering and interruption', () => {
   });
   // One case per kill point and per expiry point (ET-019, October 18, 2026): each case builds one scene, so its file work
   // no longer grows with the number of points under the default case timeout. The points and assertions are unchanged.
+  // A kill case builds its scene, runs the engine until the kill and then runs it again: 401 to 443 libuv file requests
+  // (promise requests and handle closes) per point, counted for all 22 points on October 28, 2026, rounded up to 500.
+  // That is 70 to 130 ms idle, but with a full npm test beside it single guarded operations took up to 922 ms on the same host,
+  // and one point took 5,088 ms on hosted CI before withoutFlush. The kill points cannot share a scene, because each run
+  // changes it. This budget bounds that irreducible file work with the stated allowance for every request; the cases
+  // assert no timing and wait on no real timer.
+  const KILL_CASE_FS_OPERATIONS = 500;
+  const KILL_CASE_FS_BUDGET_MS = KILL_CASE_FS_OPERATIONS * FS_OPERATION_ALLOWANCE_MS;
   describe('finishes after a kill after any deletion: a fresh run completes with the same final state', () => {
     it(`a complete run of the scene makes exactly ${SCENE_DELETIONS} deletions, one kill point after each but the last`, async () => {
       const reference = await scene('reference');
@@ -355,7 +387,7 @@ describe('ordering and interruption', () => {
       const rerun = await run(current.fixture);
       expect(rerun.outcome, `kill after deletion ${kill}`).toBe('complete');
       await expectCleaned(current);
-    });
+    }, KILL_CASE_FS_BUDGET_MS);
   });
   describe('defers at an expired budget and never reports complete while something is left', () => {
     it('a budget already expired at the start touches no plugin and leaves the intent', async () => {
