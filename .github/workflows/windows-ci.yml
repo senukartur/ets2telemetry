@@ -600,6 +600,9 @@ jobs:
     # release artifact, this job builds the staging channel in parallel, runs the hosted installer lifecycle with the staging
     # Setup and hands that Setup to windows-installer for the side-by-side scenario. A branch dispatch builds staging in
     # windows-build already, and pull requests skip every installer (E1), so it runs on main only. Not a required check.
+    # ET-055 PR-9 (docs/ci.md#et-055-release-workflow-dispatch-only): this build is also the staging release artifact. It
+    # carries the version <base>-stg.<6-digit run number> and uploads windows-installer-staging-<run>-<attempt> with
+    # release-identity.json, which release.yml downloads and verifies.
     if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
     runs-on: windows-2022
     # A full staging build, the Squirrel maker and the lifecycle in one job; it runs beside windows-build and windows-runtime.
@@ -615,6 +618,13 @@ jobs:
       ETS2TELEMETRY_BUILD_CHANNEL: staging
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+      # ET-055 UP15: the staging version is <base>-stg.<6-digit run number>, so successive main runs sort upward and none
+      # carries the local 000000, which release.yml refuses. The resolver (scripts/build-channel.mjs) accepts 1 to 6 digits;
+      # a run number beyond 6 digits stops the job instead of wrapping.
+      - name: Staging run number for the release version
+        run: |
+          if ($env:GITHUB_RUN_NUMBER -cnotmatch '^[1-9][0-9]{0,5}$') { throw 'GITHUB_RUN_NUMBER must be 1 to 6 digits for the staging version.' }
+          Add-Content -LiteralPath $env:GITHUB_ENV -Value ('ETS2TELEMETRY_STAGING_RUN_NUMBER=' + $env:GITHUB_RUN_NUMBER.PadLeft(6, '0'))
       - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5
         with:
           node-version: '24.19.0'
@@ -647,6 +657,35 @@ jobs:
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           npm run inspect:package -- --installer
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      # ET-055 PR-9: release-identity.json beside the staging Setup, as windows-build writes it for production.
+      - name: Staging release artifact identity
+        run: |
+          node scripts/release-identity.mjs
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      # The channel, version and Setup name of the build that was made; it must be staging with this run's number.
+      - name: Name the built staging channel and Setup
+        id: built
+        run: |
+          $builtText = node scripts/build-channel.mjs --built
+          if ($LASTEXITCODE -ne 0) { throw 'Build evidence unavailable.' }
+          $built = ($builtText -join "`n") | ConvertFrom-Json
+          if ($built.channel -cne 'staging') { throw 'The staging job did not build the staging channel.' }
+          if ($built.version -cnotmatch ('-stg\.' + $env:ETS2TELEMETRY_STAGING_RUN_NUMBER + '$')) { throw 'The staging build does not carry this run''s staging number.' }
+          Add-Content -LiteralPath $env:GITHUB_OUTPUT -Value ('setup=' + $built.setup)
+      # The staging release artifact, in the shape of windows-build's production artifact: release.yml downloads
+      # windows-installer-staging-<run>-<attempt> and verifies its four files against release-identity.json.
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: windows-installer-staging-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            out/make/squirrel.windows/x64/${{ steps.built.outputs.setup }}
+            out/make/squirrel.windows/x64/*-full.nupkg
+            out/make/squirrel.windows/x64/RELEASES
+            out/make/squirrel.windows/x64/release-identity.json
+          retention-days: 14
+          if-no-files-found: error
+          # Setup and the NuGet package are already compressed.
+          compression-level: 0
       # The staging Setup and its record (build names, SHA-256, commits) for windows-installer, which verifies both first.
       - name: Seal the staging Setup for the side-by-side scenario
         run: node scripts/installer/side-by-side-input.mjs create "$PWD/.local/staging-input"

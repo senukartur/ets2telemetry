@@ -68,3 +68,31 @@ it('runs the hosted installer lifecycle for the built channel, and the side-by-s
   }
   expect(installer.indexOf('- name: Side-by-side installer lifecycle')).toBeLessThan(installer.indexOf('- name: Require the staging build on main'));
 });
+
+it('makes main\'s staging build the staging release artifact, with this run\'s staging number and release-identity.json', async () => {
+  // ET-055 PR-9 (UP15, UP16): release.yml downloads windows-installer-staging-<run>-<attempt> of a main run and refuses the
+  // local staging number 000000, so the main staging build sets the run number and uploads the four files it verifies.
+  const text = await workflow();
+  const staging = job(text, 'windows-staging-build');
+  const number = "- name: Staging run number for the release version\n        run: |\n" +
+    "          if ($env:GITHUB_RUN_NUMBER -cnotmatch '^[1-9][0-9]{0,5}$') { throw 'GITHUB_RUN_NUMBER must be 1 to 6 digits for the staging version.' }\n" +
+    "          Add-Content -LiteralPath $env:GITHUB_ENV -Value ('ETS2TELEMETRY_STAGING_RUN_NUMBER=' + $env:GITHUB_RUN_NUMBER.PadLeft(6, '0'))\n";
+  expect(staging).toContain(number);
+  expect(staging.indexOf(number)).toBeLessThan(staging.indexOf('npm run make'));
+  // Only this job sets the run number; a branch dispatch and every pull request keep the local 000000.
+  expect(text.match(/ETS2TELEMETRY_STAGING_RUN_NUMBER=/g)).toHaveLength(1);
+  const identity = staging.indexOf('- name: Staging release artifact identity\n        run: |\n          node scripts/release-identity.mjs\n');
+  expect(identity).toBeGreaterThan(staging.indexOf('npm run inspect:package -- --installer'));
+  expect(staging).toContain("if ($built.channel -cne 'staging') { throw");
+  expect(staging).toContain("if ($built.version -cnotmatch ('-stg\\.' + $env:ETS2TELEMETRY_STAGING_RUN_NUMBER + '$')) { throw");
+  const upload = staging.indexOf('          name: windows-installer-staging-${{ github.run_id }}-${{ github.run_attempt }}\n          path: |\n' +
+    '            out/make/squirrel.windows/x64/${{ steps.built.outputs.setup }}\n            out/make/squirrel.windows/x64/*-full.nupkg\n' +
+    '            out/make/squirrel.windows/x64/RELEASES\n            out/make/squirrel.windows/x64/release-identity.json\n          retention-days: 14\n' +
+    '          if-no-files-found: error\n');
+  expect(upload).toBeGreaterThan(identity);
+  // PR-5's hand-off and lifecycle still come from the same build, after the artifact exists.
+  expect(upload).toBeLessThan(staging.indexOf('node scripts/installer/side-by-side-input.mjs create'));
+  expect(staging.indexOf('node scripts/installer/side-by-side-input.mjs create')).toBeLessThan(staging.indexOf('run: ./scripts/installer/Invoke-InstallerLifecycle.ps1\n'));
+  // The required job names are unchanged.
+  for (const name of ['Windows x64 tests', 'Windows x64 scaffold', 'Windows x64 native AddressSanitizer']) expect(text).toContain(`    name: ${name}\n`);
+});
