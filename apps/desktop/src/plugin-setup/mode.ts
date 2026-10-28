@@ -26,7 +26,8 @@ export type PluginSetupRootRejection = 'no-profile' | 'relative-profile' | 'rela
 type Environment = Readonly<Record<string, string | undefined>>;
 const set = (value: string | undefined): value is string => typeof value === 'string' && value !== '';
 /** Variables that mark an isolated launch (P15 row 4). */
-const ISOLATED = ['ETS2TELEMETRY_PROFILE_DIR', 'ETS2TELEMETRY_DIAGNOSTIC_DIR', 'ETS2TELEMETRY_LIVE_SMOKE', 'ETS2TELEMETRY_SOURCE_KIND'] as const;
+export const ISOLATION_VARIABLES = Object.freeze(['ETS2TELEMETRY_PROFILE_DIR', 'ETS2TELEMETRY_DIAGNOSTIC_DIR', 'ETS2TELEMETRY_LIVE_SMOKE', 'ETS2TELEMETRY_SOURCE_KIND'] as const);
+const ISOLATED = ISOLATION_VARIABLES;
 
 /**
  * The first matching row of P15 wins:

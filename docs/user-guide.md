@@ -40,12 +40,21 @@ Everything Yukon Union Telemetry records or saves lives in `%LOCALAPPDATA%\ETS2T
 | `plugins` | The record of where the game plugin was installed |
 | `transport` | Connection settings shared with the game plugin |
 | `uninstall` | Only during an unfinished uninstall: its record, `README.txt` and the cleanup script that runs at your next sign-in |
+| `updates` | Only while an in-app update downloads or installs: the downloaded update, removed once it is installed |
 
 Your trip history is stored only on this computer. It is not synchronized anywhere yet: synchronization with a server is a later phase of the project. To keep a copy of a trip, open it on the **Journal** tab and select **Export JSON**; save the file anywhere outside `%LOCALAPPDATA%\ETS2Telemetry`. An export is a copy for your own records. It cannot be imported back into Yukon Union Telemetry.
 
 ## Updating
 
-There is no automatic update. To update, close the games, then run the newer version's `YukonUnionTelemetry-Setup-<version>.exe` (versions before the rename are named `ETS2Telemetry-Setup-<version>.exe`). It replaces the program and keeps your data: the trip history, its backups and your settings stay where they are. When a newer version needs a newer history database, it first writes a verified backup of the old one into `backups` ([storage](storage.md)). The application then updates the game plugin in every game folder while the game is closed.
+### In the application (ET-055)
+
+An installed Yukon Union Telemetry checks for a newer version of its own release channel by itself: 15 seconds after its background service is first ready (shortly after it starts) and then every 6 hours. It never downloads or installs anything on its own. When a newer version exists, the application offers it, and only your click downloads and installs it (the sidebar button that offers it arrives with a later version). Close the games first: while Euro Truck Simulator 2, American Truck Simulator or TruckersMP runs, the update is refused. After the click the application downloads the update, checks that it was signed by the project and that it is exactly the published file, installs it, and restarts through its normal exit, so a recording in progress is written first. If you start a game while it installs, it finishes at the next start. While an update downloads or installs, uninstalling from the application is refused until it has finished, and while an uninstall runs no update starts.
+
+The check asks GitHub, which hosts the releases, for the latest release. Nothing that identifies you or this computer is sent, but GitHub sees your IP address, as for any visit to a web page. A failed check, for example offline, changes nothing and is tried again later. Until the project publishes its first signed update, the application finds no update.
+
+### By hand
+
+To update by hand, close the games, then run the newer version's `YukonUnionTelemetry-Setup-<version>.exe` (versions before the rename are named `ETS2Telemetry-Setup-<version>.exe`). It replaces the program and keeps your data: the trip history, its backups and your settings stay where they are. When a newer version needs a newer history database, it first writes a verified backup of the old one into `backups` ([storage](storage.md)). The application then updates the game plugin in every game folder while the game is closed.
 
 Versions before the rename named the program and its shortcuts **ETS2Telemetry Desktop**. Updating replaces those shortcuts with **Yukon Union Telemetry** ones in the same places, and Installed apps shows the new name; the installation, its data and its settings stay the same. A shortcut of the old name is removed only when it belongs to this installation and the new one exists beside it. Taskbar and Start pins you made keep their old label: unpin them and pin **Yukon Union Telemetry** again.
 

@@ -1,8 +1,20 @@
 import type {DiagnosticFacts} from './diagnostics';
 
-/** Every path to an orderly exit. Closing the main window is deliberately not one of them. */
-export type ExitReason = 'tray' | 'renderer' | 'app-quit' | 'session-end' | 'uninstall';
-export const EXIT_REASONS: readonly ExitReason[] = Object.freeze(['tray', 'renderer', 'app-quit', 'session-end', 'uninstall']);
+/**
+ * Every path to an orderly exit. Closing the main window is deliberately not one of them. `update` (ET-055 UP8) is the
+ * in-app update's restart: the same sequence, after which main starts the restart helper.
+ */
+export type ExitReason = 'tray' | 'renderer' | 'app-quit' | 'session-end' | 'uninstall' | 'update';
+export const EXIT_REASONS: readonly ExitReason[] = Object.freeze(['tray', 'renderer', 'app-quit', 'session-end', 'uninstall', 'update']);
+
+/**
+ * Whether the final exit starts the updated application (ET-055 UP8): only after an exit requested with reason `update`,
+ * that is after the service's stop sequence (intake, `recording-flush`, storage) and the idle work ran. A fatal stop
+ * (ExitCoordinator.abort, no reason) or any other reason never restarts. `reason` is ExitCoordinator.reason at the final exit.
+ */
+export function startsUpdatedApplication(reason: ExitReason | undefined): boolean {
+  return reason === 'update';
+}
 /** An in-flight durable write (ET-011b settings) may delay the final exit by at most this long. */
 export const EXIT_IDLE_BUDGET_MS = 1000;
 

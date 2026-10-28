@@ -230,6 +230,46 @@ export type DiagnosticsExportFailure = 'DIALOG_FAILED' | 'BUNDLE_FAILED' | 'EXPO
 /** "Export diagnostics…": saved, cancelled (nothing written), refused or failed with a fixed code. Never a path. */
 export type DiagnosticsExportResult = {outcome: 'saved'} | {outcome: 'cancelled'} | {outcome: 'refused'; code: DiagnosticsExportRefusal}
   | {outcome: 'failed'; code: DiagnosticsExportFailure};
+/** The release channel this build belongs to (ET-055 UP12); fixed when the build is made. */
+export type ApplicationChannel = 'production' | 'staging';
+/** This build (ET-055 UP9): its version, its channel and whether it runs packaged. Never a path. */
+export interface ApplicationInfo {
+  /** The build version: `x.y.z`, with a staging suffix `-stg.<6 digits>` in a staging build (UP15). */
+  version: string;
+  channel: ApplicationChannel;
+  packaged: boolean;
+}
+/**
+ * The in-app update (ET-055 UP3, UP7, UP9). `unsupported`: this launch never checks (unpackaged, portable, isolated or not
+ * a Squirrel install). `idle`: nothing to install. `checking`: the first check of a known-nothing state runs. `available`:
+ * a verified newer version waits for the user's click. `downloading`, `installing` (Squirrel applies it) and `restarting`
+ * (the explicit exit with reason `update` runs). `ready`: applied while a game runs; the next start, or a click once the
+ * games are closed, finishes it. `refused`: the last click was refused. `failed`: the download or the apply failed.
+ */
+export type UpdateState = 'unsupported' | 'idle' | 'checking' | 'available' | 'downloading' | 'installing' | 'restarting' | 'ready' | 'refused' | 'failed';
+/** Why a click was refused (UP7): a game or TruckersMP runs, the running-game listing failed, other work runs, or the exit began. */
+export type UpdateRefusal = 'GAME_RUNNING' | 'GAME_CHECK_FAILED' | 'BUSY' | 'EXITING';
+/** Why a check, download or apply failed. Fixed codes only. */
+export type UpdateFailure = 'OFFLINE' | 'MANIFEST_INVALID' | 'SIGNATURE_INVALID' | 'DOWNLOAD_FAILED' | 'HASH_MISMATCH' | 'DISK_FULL' | 'APPLY_FAILED' | 'APPLY_TIMEOUT';
+/** The last finished check: its outcome, a failure code exactly when it failed, and when it finished (UTC epoch ms). */
+export interface UpdateLastCheck {
+  outcome: 'up-to-date' | 'available' | 'failed';
+  failure: UpdateFailure | null;
+  atUtcMs: number;
+}
+/**
+ * The update view main pushes (UP9). `available` is the offered version from `available` on, `progress` an integer
+ * 0–100 while downloading, `refusal` the reason of the last refused click (in `refused`, and in `ready` after a refused
+ * restart), `failure` the code of `failed`. No URL, path or file name ever appears here.
+ */
+export interface UpdateView {
+  state: UpdateState;
+  available: string | null;
+  progress: number | null;
+  refusal: UpdateRefusal | null;
+  failure: UpdateFailure | null;
+  lastCheck: UpdateLastCheck | null;
+}
 /** Main-owned application state pushed to the dashboard. */
 export interface AppState {
   health: AppHealth;
@@ -240,4 +280,8 @@ export interface AppState {
   plugins: PluginSetupView;
   /** ET-031: the live Windows login item registration state. */
   autostart: AutostartRegistrationStatus;
+  /** ET-055: this build's version, channel and packaging; validated in main and again in the dashboard preload. */
+  application: ApplicationInfo;
+  /** ET-055: the in-app update; validated in main and again in the dashboard preload. */
+  update: UpdateView;
 }

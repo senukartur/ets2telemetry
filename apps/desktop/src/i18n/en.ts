@@ -389,6 +389,7 @@ export const EN_DICTIONARY: TranslationDictionary = channelCopyTable(Object.free
   "copy.the-data-folder-is-a-link-to-another-location-so-it-is-not-deleted-r": "the data folder is a link to another location, so it is not deleted. Remove it by hand.",
   "copy.this-test-installation-is-not-marked-correctly": "this test installation is not marked correctly.",
   "copy.an-uninstall-is-already-in-progress": "an uninstall is already in progress.",
+  "copy.an-update-is-being-downloaded-or-installed": "an update is being downloaded or installed. Try again after it finishes.",
   "copy.the-confirmation-could-not-be-shown": "the confirmation could not be shown.",
   "copy.the-uninstall-record-could-not-be-written-to-the-data-folder": "the uninstall record could not be written to the data folder.",
   "copy.an-unexpected-error-stopped-it-nothing-more-was-removed-run-the-unin": "an unexpected error stopped it. Nothing more was removed; run the uninstall again.",

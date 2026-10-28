@@ -261,3 +261,29 @@ Recorded October 25, 2026 by the coordinator with ET-050b PR-6, from the PR-5 re
 **Before `GAME_HISTORY_RECORDING` is enabled,** the enablement PR decides whether `upsertSession` should stop comparing `protocol_minor`, keeping the first-seen minor in `plugin_sessions` and the per-event minor in `events.protocol_minor`. No schema or storage change is authorized by this entry.
 
 **Resolution (October 25, 2026):** the game history recording enablement ([AGENTS.md](../AGENTS.md#game-history-recording-enablement--october-25-2026)) keeps `upsertSession` comparing `protocol_minor`. A minor change inside one plugin session stays `SESSION_CONFLICT`, which the durable sink maps to `unavailable`: recording stops for the service lifetime and fails closed, and nothing committed is lost. Plugin setup never replaces the DLL while a game runs, so a supported update cannot cause it. This is a coordinator decision under the owner's enablement authorization; relaxing the comparison is a storage change for its own package if a real session ever needs it. The ET-052 release constraint in the entry above qualifies the claim that a supported update cannot cause it.
+
+## TD-022: Delta update packages
+
+Recorded October 28, 2026 by the coordinator with ET-055 PR-6. **This entry is a coordinator decision under the owner's approval of ET-055 (UP3); the plan lists delta packages as out of scope.**
+
+The in-app update downloads the full nupkg (`<Squirrel id>-<NuGet version>-full.nupkg`, at most 400 MiB) every time. Squirrel can apply delta packages, which would make an update smaller, but a delta needs the exact previous full package as its base, its own entry in RELEASES and its own hashes in the signed manifest. Supporting it means extending manifest v1 (a new format version), the release workflow and the RELEASES line the application writes, plus a full-package fallback when the base is missing. Until then every update is a full download.
+
+## TD-023: Authenticode check of a downloaded update
+
+Recorded October 28, 2026 by the coordinator with ET-055 PR-6. **This entry is a coordinator decision under the owner's approval of ET-055 (UP5).**
+
+The download's integrity rests on the Ed25519-signed manifest: its size, SHA-256 and SHA-1 must match before Squirrel applies the package. Builds are unsigned ([TD-014](#td-014-code-signing)), so the application does not check an Authenticode signature of the new executable. Once releases are code signed, the updater should also verify, before `Update.exe --update`, that the package's executables carry a valid signature of the project's certificate, as a second, independent check. That needs the package to be opened before the apply and a pinned signer identity; it waits for TD-014.
+
+## TD-024: No setting to turn update checks off
+
+Recorded October 28, 2026 by the coordinator with ET-055 PR-6, after the owner's UP6 decision of October 28, 2026 that checks run at launch and every 6 h with no setting to disable them.
+
+An installed build always checks its channel's feed: 15 s after its first readiness and every 6 h. It sends no identifier, but GitHub sees the IP address of every check, and a network that blocks GitHub turns every check into a silent `OFFLINE`. A user who does not want the check has no switch; an isolated or portable launch is the only launch that never checks. A future setting would need a settings format version, a narrow setter and the user guide; it needs the owner's decision first.
+
+## TD-025: A Windows-initiated uninstall during an in-app update's apply
+
+Recorded October 28, 2026 by the coordinator with ET-055 PR-6, from the second review round. **This entry is a coordinator decision under the owner's approval of ET-055; PR-6 makes no code change for it.**
+
+The in-app uninstall and the in-app update exclude each other, but the Windows-initiated uninstall (Windows Settings or Control Panel, which runs `Update.exe --uninstall` and our `--squirrel-uninstall` hook) does not ask the update controller. Its hook sends the running instance the `uninstall-exit` payload, and main runs `requestExit('uninstall')` directly. If that happens while the controller is `installing`, the exit leaves the running `Update.exe --update` alone, as it always does, so Squirrel's `--uninstall` can overlap our `--update` of the same installation. Whether Squirrel's own locking serializes the two is **unverified**.
+
+Refusing or delaying that exit in PR-6 would not help: the hook waits at most 6 s (`INSTANCE_EXIT_WAIT_MS`) for the instance to end, while an apply may run for up to 180 s, so the hook would defer the cleanup instead. The hosted update-from-feed lifecycle (ET-055 PR-8) must observe this case together with a killed apply (risk R1: a partial `app-<version>` folder, a broken registration or leftover data). If that observation shows harm, a follow-up blocks or orders the two, for example by holding the uninstall hook until the apply has finished.
