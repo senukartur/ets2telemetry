@@ -1,5 +1,5 @@
 import {afterEach, beforeEach, expect, it, vi} from 'vitest';
-import {EXIT_IDLE_BUDGET_MS, ExitCoordinator, secondInstanceAction} from '../../apps/desktop/src/app-lifecycle';
+import {EXIT_IDLE_BUDGET_MS, EXIT_REASONS, ExitCoordinator, secondInstanceAction, startsUpdatedApplication} from '../../apps/desktop/src/app-lifecycle';
 
 beforeEach(() => vi.useFakeTimers());
 afterEach(() => vi.useRealTimers());
@@ -75,4 +75,46 @@ it('marks a fatal stop as exiting at once without logging an exit request or run
   f.coordinator.finish(1); expect(f.order).toEqual(['tray', 'exit 1']);
   const requested = fixture(); requested.coordinator.request('renderer');
   expect(requested.coordinator.abort()).toBe(false);
+});
+
+// ET-055 (UP8; REG-012): the update exit is the same orderly sequence. The restart helper may start only at the final
+// exit of a request with reason `update`, after the service stop (intake, recording-flush, storage) finished and the idle
+// work settled; never on a fatal stop or another reason.
+function restartFixture(idle?: () => Promise<void> | undefined) {
+  const f = fixture(idle);
+  f.hooks.exit.mockImplementation((code: number) => {
+    if (startsUpdatedApplication(f.coordinator.reason)) f.order.push('restart helper');
+    return f.order.push(`exit ${code}`);
+  });
+  return f;
+}
+it('runs the update exit through the unchanged sequence and allows the restart only at its final exit', async () => {
+  expect(EXIT_REASONS).toContain('update');
+  let settle!: () => void;
+  const f = restartFixture(() => new Promise<void>(resolve => {settle = resolve;}));
+  expect(f.coordinator.request('update')).toBe(true);
+  expect(f.hooks.log).toHaveBeenCalledExactlyOnceWith('APP_EXIT_REQUESTED', undefined, {reason: 'update'});
+  for (const reason of ['tray', 'update', 'uninstall'] as const) expect(f.coordinator.request(reason)).toBe(false);
+  expect(f.order).toEqual(['begin', 'stop']);
+  // The service stop has not finished: nothing restarts yet.
+  await vi.advanceTimersByTimeAsync(EXIT_IDLE_BUDGET_MS * 2); expect(f.order).toEqual(['begin', 'stop']);
+  f.coordinator.finish(0);
+  expect(f.order).toEqual(['begin', 'stop', 'tray', 'restart helper', 'exit 0']);
+  settle();
+});
+it('waits for idle work before the restart and never restarts after a fatal stop or another reason', async () => {
+  let settle!: () => void;
+  const slow = restartFixture(() => new Promise<void>(resolve => {settle = resolve;}));
+  slow.coordinator.request('update'); slow.coordinator.finish(0);
+  expect(slow.order).toEqual(['begin', 'stop']);
+  settle(); await Promise.resolve(); await Promise.resolve();
+  expect(slow.order).toEqual(['begin', 'stop', 'tray', 'restart helper', 'exit 0']);
+  const fatal = restartFixture();
+  fatal.coordinator.abort(); expect(fatal.coordinator.request('update')).toBe(false); fatal.coordinator.finish(1);
+  expect(fatal.order).toEqual(['tray', 'exit 1']);
+  for (const reason of ['tray', 'renderer', 'app-quit', 'session-end', 'uninstall'] as const) {
+    const other = restartFixture(); other.coordinator.request(reason); other.coordinator.finish(0);
+    expect(other.order).toEqual(['begin', 'stop', 'tray', 'exit 0']);
+  }
+  expect(startsUpdatedApplication(undefined)).toBe(false);
 });

@@ -9,6 +9,7 @@ import type {AppUninstallResult, LiveTelemetry} from '../../packages/contracts/s
 import type {AppUninstallPorts} from '../../apps/desktop/src/uninstall/app-uninstall';
 import {validateMessage} from '../../packages/contracts/src/protocol-v0';
 import {MAIN_EXIT_FLUSH_MS} from '../../apps/desktop/src/diagnostics';
+import {APP_VERSION} from '../../apps/desktop/src/app-version';
 import {initialLive} from '../../apps/desktop/src/live-state';
 import {v1Projection, type V1Options} from '../shared/live-v1-fixtures';
 import {changed, DETAIL, LIST_ITEM, TRIP, TRIP_PAGE} from '../shared/journal-replies';
@@ -84,6 +85,10 @@ const DRIVING = {active: false};
 // unpackaged, so the mode gate disables plugin setup: nothing is read or written, and no game is ever discovered.
 const NO_PLUGIN_GAME = {excluded: false, discovery: 'pending', manualFolder: 'none', targets: [], unlistedFolders: 0};
 const PLUGINS_DISABLED = {mode: 'disabled', bundled: null, running: false, games: {ets2: NO_PLUGIN_GAME, ats: NO_PLUGIN_GAME}};
+// ET-055 (UP9): the application state carries this build's identity and the update view. These cases run unpackaged, so
+// the updater is unsupported: it never resolves install roots, fetches or schedules a check.
+const APPLICATION = {version: APP_VERSION, channel: 'production', packaged: false};
+const UPDATE_UNSUPPORTED = {state: 'unsupported', available: null, progress: null, refusal: null, failure: null, lastCheck: null};
 let settingsView: {autostart: boolean; units: {ets2: string; ats: string}; gearDisplay?: {ets2: string; ats: string}; overlay: {enabled: boolean; backgroundOpacity: number; layout: string; sections: Record<string, boolean>; placements: Record<string, {x: number; y: number; scale: number}>}; state: string; writable: boolean; saveError: string | null};
 type OverlayWrite = (kind: 'backgroundOpacity' | 'enabled' | 'layout' | 'sections' | 'placement', value: unknown) => Promise<unknown>;
 let overlayWrite: ReturnType<typeof vi.fn<OverlayWrite>>;
@@ -830,7 +835,7 @@ it('reopens a new dashboard from the tray that resubscribes without a second ups
   ipc.emit('telemetry:subscribe', reopenedSender);
   expect(reopened.postMessage).toHaveBeenCalledWith('telemetry:port', null, [channels.at(-1)!.port2]);
   expect(upstreamRequests()).toBe(1); expect(children).toHaveLength(1);
-  expect(handlers.get('app:get-state')!(reopenedSender)).toEqual({health: {service: 'ready', storage: 'verified', recording: {state: 'unknown'}, lastError: null}, settings: {autostart: false, units: {ets2: 'metric', ats: 'us-customary'}, overlay: DEFAULT_OVERLAY, state: 'defaults', writable: true, saveError: null}, overlayEdit: DRIVING, plugins: PLUGINS_DISABLED, autostart: 'not-installed'});
+  expect(handlers.get('app:get-state')!(reopenedSender)).toEqual({health: {service: 'ready', storage: 'verified', recording: {state: 'unknown'}, lastError: null}, settings: {autostart: false, units: {ets2: 'metric', ats: 'us-customary'}, overlay: DEFAULT_OVERLAY, state: 'defaults', writable: true, saveError: null}, overlayEdit: DRIVING, plugins: PLUGINS_DISABLED, autostart: 'not-installed', application: APPLICATION, update: UPDATE_UNSUPPORTED});
   // A second tray open focuses the existing window instead of creating another.
   trays[0].emit('click'); expect(windows).toHaveLength(3); expect(windows[2].show).toHaveBeenCalledOnce(); expect(windows[2].focus).toHaveBeenCalledOnce();
 });
@@ -1037,7 +1042,7 @@ it('shows restart exhaustion in health and the tray and stays running until an e
     children.at(-1)!.emit('exit', 1); await vi.advanceTimersByTimeAsync(1000);
     if (crash < 2) {children.at(-1)!.emit('message', {type: 'ready'}); await settle();}
   }
-  expect(handlers.get('app:get-state')!(trusted())).toEqual({health: {service: 'failed', storage: 'pending', recording: {state: 'unknown'}, lastError: 'SERVICE_RESTART_EXHAUSTED'}, settings: {autostart: false, units: {ets2: 'metric', ats: 'us-customary'}, overlay: DEFAULT_OVERLAY, state: 'defaults', writable: true, saveError: null}, overlayEdit: DRIVING, plugins: PLUGINS_DISABLED, autostart: 'not-installed'});
+  expect(handlers.get('app:get-state')!(trusted())).toEqual({health: {service: 'failed', storage: 'pending', recording: {state: 'unknown'}, lastError: 'SERVICE_RESTART_EXHAUSTED'}, settings: {autostart: false, units: {ets2: 'metric', ats: 'us-customary'}, overlay: DEFAULT_OVERLAY, state: 'defaults', writable: true, saveError: null}, overlayEdit: DRIVING, plugins: PLUGINS_DISABLED, autostart: 'not-installed', application: APPLICATION, update: UPDATE_UNSUPPORTED});
   await vi.advanceTimersByTimeAsync(500);
   expect(trays[0].setImage).toHaveBeenCalled(); expect(trays[0].setToolTip).toHaveBeenLastCalledWith('Yukon Union Telemetry\nService failed');
   expect(app.exit).not.toHaveBeenCalled();
@@ -1068,7 +1073,7 @@ it('answers a dashboard opened during a service restart with a not-ready status,
   expect(handlers.get('scaffold:status')!(sender)).toBeNull();
   expect(() => handlers.get('scaffold:status')!(trusted())).toThrow('Untrusted');
   ipc.emit('app:subscribe-state', sender);
-  expect(reopened.send).toHaveBeenLastCalledWith('app:state', {health: expect.objectContaining({service: 'restarting'}), settings: {autostart: false, units: {ets2: 'metric', ats: 'us-customary'}, overlay: DEFAULT_OVERLAY, state: 'defaults', writable: true, saveError: null}, overlayEdit: DRIVING, plugins: PLUGINS_DISABLED, autostart: 'not-installed'});
+  expect(reopened.send).toHaveBeenLastCalledWith('app:state', {health: expect.objectContaining({service: 'restarting'}), settings: {autostart: false, units: {ets2: 'metric', ats: 'us-customary'}, overlay: DEFAULT_OVERLAY, state: 'defaults', writable: true, saveError: null}, overlayEdit: DRIVING, plugins: PLUGINS_DISABLED, autostart: 'not-installed', application: APPLICATION, update: UPDATE_UNSUPPORTED});
   // When the pushed health reports ready, the status query already answers with the ready status.
   let statusAtReadyPush: unknown;
   reopened.send.mockImplementation((channel: string, state: {health: {service: string}}) => {
@@ -1207,7 +1212,7 @@ it('applies a settings read that settles after the load budget to the dashboard 
   // The store applies the late read (t = 200 ms) and reports it; main reads the new view from the store.
   settingsView = {autostart: false, units: {ets2: 'us-customary', ats: 'us-customary'}, overlay: DEFAULT_OVERLAY, state: 'loaded', writable: true, saveError: null};
   expect(settingsChanged).toBeTypeOf('function'); settingsChanged!();
-  expect(pushes().at(-1)).toEqual({health: {service: 'ready', storage: 'verified', recording: {state: 'unknown'}, lastError: null}, settings: settingsView, overlayEdit: DRIVING, plugins: PLUGINS_DISABLED, autostart: 'not-installed'});
+  expect(pushes().at(-1)).toEqual({health: {service: 'ready', storage: 'verified', recording: {state: 'unknown'}, lastError: null}, settings: settingsView, overlayEdit: DRIVING, plugins: PLUGINS_DISABLED, autostart: 'not-installed', application: APPLICATION, update: UPDATE_UNSUPPORTED});
   expect(handlers.get('app:get-state')!(trusted())).toMatchObject({settings: settingsView});
   await vi.advanceTimersByTimeAsync(50);
   expect(overlayProjection(overlayChannel)).toMatchObject({source: 'ETS2', speed: '56', speedUnit: 'mph', fuel: '19.3', fuelUnit: 'US gal', freshness: 'current'});
@@ -1243,7 +1248,7 @@ it('applies a unit profile only after the durable save and republishes the overl
   expect(pushes()).toHaveLength(before); expect(overlayProjection(overlayChannel)).toMatchObject({speedUnit: 'km/h'});
   settingsView = {autostart: false, units: {ets2: 'us-customary', ats: 'us-customary'}, overlay: DEFAULT_OVERLAY, state: 'loaded', writable: true, saveError: null}; saved.resolve(settingsView);
   await expect(request).resolves.toEqual(settingsView);
-  expect(pushes().at(-1)).toEqual({health: {service: 'ready', storage: 'verified', recording: {state: 'unknown'}, lastError: null}, settings: settingsView, overlayEdit: DRIVING, plugins: PLUGINS_DISABLED, autostart: 'not-installed'});
+  expect(pushes().at(-1)).toEqual({health: {service: 'ready', storage: 'verified', recording: {state: 'unknown'}, lastError: null}, settings: settingsView, overlayEdit: DRIVING, plugins: PLUGINS_DISABLED, autostart: 'not-installed', application: APPLICATION, update: UPDATE_UNSUPPORTED});
   await vi.advanceTimersByTimeAsync(50);
   expect(overlayProjection(overlayChannel)).toMatchObject({source: 'ETS2', speed: '56', speedUnit: 'mph', fuel: '19.3', fuelUnit: 'US gal', freshness: 'current'});
   consumeOverlay(overlayChannel);
@@ -1271,14 +1276,14 @@ it.each(['SETTINGS_WRITE_FAILED', 'SETTINGS_READ_ONLY'] as const)('keeps the uni
   // The store records the refusal in its view, as the real store does.
   settingsWrite.mockImplementation(() => {settingsView = {...settingsView, saveError: code}; return Promise.reject(new FakeSettingsError(code));});
   await expect(saveUnits(trusted(), 'ets2', 'us-customary')).rejects.toThrow(code === 'SETTINGS_READ_ONLY' ? 'Settings are read-only' : 'Settings could not be saved');
-  const refused = {health, settings: {autostart: false, units: {ets2: 'metric', ats: 'us-customary'}, overlay: DEFAULT_OVERLAY, state: 'defaults', writable: true, saveError: code}, overlayEdit: DRIVING, plugins: PLUGINS_DISABLED, autostart: 'not-installed'};
+  const refused = {health, settings: {autostart: false, units: {ets2: 'metric', ats: 'us-customary'}, overlay: DEFAULT_OVERLAY, state: 'defaults', writable: true, saveError: code}, overlayEdit: DRIVING, plugins: PLUGINS_DISABLED, autostart: 'not-installed', application: APPLICATION, update: UPDATE_UNSUPPORTED};
   expect(handlers.get('app:get-state')!(trusted())).toEqual(refused);
   expect(contents.send).toHaveBeenLastCalledWith('app:state', refused);
   await vi.advanceTimersByTimeAsync(50); expect(overlayChannel.port1.postMessage.mock.calls).toHaveLength(deliveries);
   // A later successful save clears the settings error and still leaves the service problem in place.
   settingsWrite.mockImplementation(() => {settingsView = {autostart: false, units: {ets2: 'metric', ats: 'us-customary'}, overlay: DEFAULT_OVERLAY, state: 'loaded', writable: true, saveError: null}; return Promise.resolve(settingsView);});
   await saveUnits(trusted(), 'ats', 'us-customary');
-  const saved = {health, settings: {autostart: false, units: {ets2: 'metric', ats: 'us-customary'}, overlay: DEFAULT_OVERLAY, state: 'loaded', writable: true, saveError: null}, overlayEdit: DRIVING, plugins: PLUGINS_DISABLED, autostart: 'not-installed'};
+  const saved = {health, settings: {autostart: false, units: {ets2: 'metric', ats: 'us-customary'}, overlay: DEFAULT_OVERLAY, state: 'loaded', writable: true, saveError: null}, overlayEdit: DRIVING, plugins: PLUGINS_DISABLED, autostart: 'not-installed', application: APPLICATION, update: UPDATE_UNSUPPORTED};
   expect(handlers.get('app:get-state')!(trusted())).toEqual(saved);
   expect(contents.send).toHaveBeenLastCalledWith('app:state', saved);
 });
@@ -3078,4 +3083,98 @@ it('publishes opacity only after commit, without changing the edit draft or sour
   expect(channel.port1.postMessage.mock.lastCall?.[0].update.backgroundOpacity).toBe(40);
   settingsIdle = undefined; void handlers.get('app:exit')!(trusted()); await settle();
   await expect(opacityRequest(trusted(), 65)).rejects.toThrow('retired');
+});
+
+// ET-055 (UP7–UP9; REG-012, REG-019 unit part): the update channels and the `update` exit. The controller and the restart
+// helper are replaced here; their own transitions are tests/unit/update-controller.test.ts. Main must check the sender,
+// validate the view, run the explicit exit and start the restart helper only after it, never after a fatal stop.
+interface FakeUpdates {
+  options: {requestExit(): void; exiting(): boolean; uninstalling(): boolean; changed(): void};
+  view: unknown; restartTarget: unknown;
+  start: ReturnType<typeof vi.fn>; apply: ReturnType<typeof vi.fn>; check: ReturnType<typeof vi.fn>; retire: ReturnType<typeof vi.fn>; idle: ReturnType<typeof vi.fn>;
+}
+let updatesFake: FakeUpdates;
+let restartHelper: ReturnType<typeof vi.fn<(installRoot: string, executableName: string) => Promise<boolean>>>;
+const RESTARTING = {state: 'restarting', available: '0.2.0', progress: null, refusal: null, failure: null, lastCheck: null};
+const RESTART_TARGET = {installRoot: 'C:\\isolated\\LocalAppData\\ETS2TelemetryDesktop', executableName: 'ETS2TelemetryDesktop.exe'};
+function mockUpdates() {
+  vi.doMock('../../apps/desktop/src/updater/update-controller', async importOriginal => ({...await importOriginal<typeof import('../../apps/desktop/src/updater/update-controller')>(),
+    UpdateController: class {
+      constructor(options: FakeUpdates['options']) {
+        const fake: FakeUpdates = updatesFake = {options, view: UPDATE_UNSUPPORTED, restartTarget: undefined, start: vi.fn(), retire: vi.fn(), idle: vi.fn(() => undefined),
+          apply: vi.fn(() => Promise.resolve(fake.view)), check: vi.fn(() => fake.view)};
+        return fake;
+      }
+    }}));
+  restartHelper = vi.fn(() => Promise.resolve(true));
+  vi.doMock('../../apps/desktop/src/updater/update-ports', async importOriginal => ({...await importOriginal<typeof import('../../apps/desktop/src/updater/update-ports')>(),
+    startUpdatedApplication: (installRoot: string, executableName: string) => restartHelper(installRoot, executableName)}));
+}
+const unmockUpdates = () => {vi.doUnmock('../../apps/desktop/src/updater/update-controller'); vi.doUnmock('../../apps/desktop/src/updater/update-ports');};
+const updateCall = (channel: string, event: unknown, ...request: unknown[]) => new Promise<unknown>(resolve => resolve(handlers.get(channel)!(event, ...request as [unknown])));
+it('rejects the update click and check from untrusted senders, frames and the overlay, and any argument, before the controller runs', async () => {
+  mockUpdates();
+  try {
+    trayAvailable = true; await ready();
+    for (const channel of ['update:apply', 'update:check']) {
+      for (const event of [{sender: {}, senderFrame: contents.mainFrame}, {sender: contents, senderFrame: {}}, overlayTrusted()])
+        await expect(updateCall(channel, event)).rejects.toThrow('Untrusted update request');
+      for (const request of [['https://github.com/senukartur/ets2telemetry'], [undefined], [{force: true}]]) await expect(updateCall(channel, trusted(), ...request)).rejects.toThrow('Invalid update request');
+    }
+    expect(updatesFake.apply).not.toHaveBeenCalled(); expect(updatesFake.check).not.toHaveBeenCalled();
+  } finally {unmockUpdates();}
+});
+it('starts the controller at the first readiness, answers with the validated view and reports an invalid view as unsupported', async () => {
+  mockUpdates();
+  try {
+    trayAvailable = true; await loadMain(); await Promise.resolve();
+    expect(updatesFake.start).not.toHaveBeenCalled();
+    child.emit('message', {type: 'ready'}); await settle();
+    expect(updatesFake.start).toHaveBeenCalledOnce();
+    const available = {state: 'available', available: '0.2.0', progress: null, refusal: null, failure: null, lastCheck: {outcome: 'available', failure: null, atUtcMs: 1_700_000_000_000}};
+    updatesFake.view = available;
+    await expect(updateCall('update:check', trusted())).resolves.toEqual(available);
+    await expect(updateCall('update:apply', trusted())).resolves.toEqual(available);
+    expect(handlers.get('app:get-state')!(trusted())).toMatchObject({application: APPLICATION, update: available});
+    // A view with a URL never reaches the dashboard.
+    updatesFake.view = {...available, url: 'https://github.com/senukartur/ets2telemetry/releases/download/v0.2.0/x.nupkg'};
+    await expect(updateCall('update:check', trusted())).resolves.toEqual(UPDATE_UNSUPPORTED);
+    expect(log).toHaveBeenCalledWith('UPDATE_VIEW_REJECTED', undefined, {count: 1});
+  } finally {unmockUpdates();}
+});
+it('an update exit runs the explicit exit, then the restart helper after the service stopped, then exits 0', async () => {
+  mockUpdates();
+  try {
+    trayAvailable = true; await ready();
+    expect(updatesFake.options.exiting()).toBe(false); expect(updatesFake.options.uninstalling()).toBe(false);
+    updatesFake.view = RESTARTING; updatesFake.restartTarget = RESTART_TARGET;
+    updatesFake.options.requestExit();
+    expect(exitRequests()).toEqual([{reason: 'update'}]);
+    // The exit begins and the supervisor stop both retire the controller (idempotent); the exit waits for its idle work.
+    expect(updatesFake.retire).toHaveBeenCalled(); expect(updatesFake.idle).toHaveBeenCalledOnce();
+    expect(updatesFake.options.exiting()).toBe(true);
+    expect(child.postMessage).toHaveBeenCalledWith({type: 'stop'});
+    await vi.advanceTimersByTimeAsync(0);
+    expect(restartHelper).not.toHaveBeenCalled(); expect(app.exit).not.toHaveBeenCalled();
+    child.emit('exit', 0); await settle(); await vi.advanceTimersByTimeAsync(0);
+    expect(restartHelper).toHaveBeenCalledExactlyOnceWith(RESTART_TARGET.installRoot, RESTART_TARGET.executableName);
+    expect(log.finalize.mock.invocationCallOrder[0]).toBeLessThan(restartHelper.mock.invocationCallOrder[0]);
+    expect(restartHelper.mock.invocationCallOrder[0]).toBeLessThan(app.exit.mock.invocationCallOrder[0]);
+    expect(log).toHaveBeenCalledWith('UPDATE_RESTART_STARTED');
+    expect(app.exit).toHaveBeenCalledExactlyOnceWith(0);
+  } finally {unmockUpdates();}
+});
+it.each(['tray', 'fatal'] as const)('a %s exit never starts the restart helper, even with a restart target', async kind => {
+  mockUpdates();
+  try {
+    trayAvailable = true; await ready();
+    updatesFake.view = RESTARTING; updatesFake.restartTarget = RESTART_TARGET;
+    if (kind === 'tray') void handlers.get('app:exit')!(trusted());
+    else processEmitter.emit('uncaughtException', new Error('synthetic fatal error'));
+    await settle();
+    expect(updatesFake.retire).toHaveBeenCalled();
+    child.emit('exit', 0); await settle(); await vi.advanceTimersByTimeAsync(0);
+    expect(app.exit).toHaveBeenCalledOnce();
+    expect(restartHelper).not.toHaveBeenCalled();
+  } finally {unmockUpdates();}
 });

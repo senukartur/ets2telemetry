@@ -100,6 +100,8 @@ export class AppUninstall {
 
   /** Set once the plugins are removed and the exit may wipe the data; undefined before and after a refused run. */
   get prepared(): PreparedUninstall | undefined {return this.preparedUninstall;}
+  /** True while a run is in progress or once one started the exit (ET-055: the in-app update is refused meanwhile). */
+  get inProgress(): boolean {return this.busy || this.preparedUninstall !== undefined;}
 
   /** Runs steps 1 to 4; see the file comment. One run at a time; after `started` every further call is BUSY. */
   async run(): Promise<AppUninstallResult> {

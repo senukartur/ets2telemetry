@@ -7,8 +7,9 @@ import path from 'node:path';
 // so do a locked or denied entry. The data root itself is removed only when it is empty. Failures carry the
 // allowlisted entry's name and a fixed code, never a path.
 
-/** The data root's top-level entries an uninstall removes; `dataPaths()` may not name anything outside them. */
-export const DATA_ALLOWLIST = Object.freeze(['data', 'backups', 'settings', 'logs', 'synthetic', 'plugins', 'captures', 'transport', 'uninstall'] as const);
+/** The data root's top-level entries an uninstall removes; `dataPaths()` may not name anything outside them. `updates`
+ * holds the in-app update's verified download (ET-055 UP18). */
+export const DATA_ALLOWLIST = Object.freeze(['data', 'backups', 'settings', 'logs', 'synthetic', 'plugins', 'captures', 'transport', 'uninstall', 'updates'] as const);
 export type DataEntry = typeof DATA_ALLOWLIST[number];
 /** Removed last, and only when the plugin cleanup finished: they hold the install registry and the uninstall intent. */
 export const KEPT_UNTIL_CLEAN: readonly DataEntry[] = Object.freeze(['plugins', 'uninstall']);
@@ -69,6 +70,14 @@ async function removeTree(fs: WipeFileSystem, target: string, expired: () => boo
   }
   if ((stats.mode & 0o200n) === 0n) return 'READ_ONLY_FILE';
   try {await fs.unlink(target); return null;} catch (error) {return missing(error) ? null : failureCode(errorCode(error));}
+}
+
+/**
+ * Removes `target` and everything below it with the same rules as the wipe: links are unlinked and never entered, and a
+ * read-only file stays. Returns the first failure, or null when it is gone (ET-055: the in-app update's own folder).
+ */
+export function removeOwnedTree(fs: WipeFileSystem, target: string): Promise<WipeFailureCode | null> {
+  return removeTree(fs, target, () => false);
 }
 
 export interface WipeOptions {

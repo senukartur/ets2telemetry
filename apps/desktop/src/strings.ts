@@ -1114,7 +1114,7 @@ export const UNINSTALL_NOTE_TEXT: Readonly<Record<FolderNote, string>> = channel
 /** A data entry that could not be deleted, by its allowlisted name. */
 export const UNINSTALL_DATA_ENTRY_TEXT: Readonly<Record<DataEntry, string>> = Object.freeze({
   data: 'trip history', backups: 'history backups', settings: 'settings', logs: 'logs', synthetic: 'synthetic recordings', plugins: 'plugin setup record',
-  captures: 'captures', transport: 'connection settings', uninstall: 'uninstall record'
+  captures: 'captures', transport: 'connection settings', uninstall: 'uninstall record', updates: 'downloaded updates'
 });
 
 export function getAutostartStatusBadgeText(status: AutostartRegistrationStatus | undefined, language: AppLanguage): string {

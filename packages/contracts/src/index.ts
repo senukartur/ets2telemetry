@@ -2,7 +2,7 @@
 export interface ScaffoldStatus { service: 'ready'; storage: 'verified'; synthetic: true }
 import type {CurrentState, SourceIdentity, AppliedState, CaptureTime} from './protocol-v0';
 import type {AppLanguage, AppState, DiagnosticsExportResult, GearDisplayMode, OverlayEditState, OverlayLayout, OverlaySectionId, OverlaySections, PluginFolderChoice, PluginGame, PluginSetupView, PluginShowFileResult, RecordingCode, SettingsView,
-  UnitGame, UnitProfile} from './app-state';
+  UnitGame, UnitProfile, UpdateView} from './app-state';
 import type {Available, LiveObservationV1, Uint64} from './protocol-v1';
 import type {JournalDatabase, JournalEventPage, JournalIntervalPage, JournalTripDetail, JournalTripPage, JournalTripsQuery} from './journal';
 import type {JournalExportResult} from './journal-export';
@@ -147,6 +147,15 @@ export interface DesktopBridge {
    * Refused once the application exits.
    */
   uninstallApplication(): Promise<AppUninstallResult>;
+  /**
+   * ET-055 (UP2, UP7, UP9): after the user's click, downloads, verifies and installs the offered update, then restarts
+   * through the explicit exit; in `ready` it only restarts, once no game runs. Takes no argument. Main refuses it while a
+   * game or TruckersMP runs, the running-game listing fails, other work runs or the exit began, and resolves with the
+   * update view after the click; progress arrives through the application state. Never a URL or path.
+   */
+  updateApplication(): Promise<UpdateView>;
+  /** ET-055 (UP6): checks the channel's feed now, unless a check or an update runs. Takes no argument; resolves with the update view. */
+  checkForUpdates(): Promise<UpdateView>;
 }
 /**
  * The fixed refusal codes of a journal call (ET-016, J11). `SERVICE_UNAVAILABLE`: no ready telemetry service, or it is

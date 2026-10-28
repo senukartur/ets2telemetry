@@ -28,6 +28,9 @@ beforeEach(async () => {
 });
 afterEach(() => {vi.useRealTimers(); vi.doUnmock('electron');});
 const connected = (): LiveTelemetry => ({...initialLive('synthetic'), status: 'connected', fresh: true});
+// ET-055 (UP9): a valid application info and update view, as main sends them.
+const APPLICATION = {version: '0.2.0-stg.000042', channel: 'staging', packaged: true};
+const UPDATE_IDLE = {state: 'idle', available: null, progress: null, refusal: null, failure: null, lastCheck: {outcome: 'up-to-date', failure: null, atUtcMs: 1_700_000_000_000}};
 it('rejects missing, invalid and extra visibility arguments before IPC', async () => {
   for (const value of [null, undefined, 0, 1, 'false', {}, []]) await expect(bridge.setOverlayEnabled(value as never)).rejects.toThrow('Invalid overlay visibility request');
   expect(ipc.invoke).not.toHaveBeenCalled();
@@ -180,10 +183,10 @@ it('marks v1 data stale when the subscription closes or a replacement port await
   stop(); expect(vi.getTimerCount()).toBe(0);
 });
 it('preserves the frozen narrow bridge and rejects privileged source values before IPC', async () => {
-  expect(Object.isFrozen(bridge)).toBe(true); expect(Object.keys(bridge).sort()).toEqual(['beginOverlayEdit', 'choosePluginFolder', 'exitApplication', 'exportDiagnostics', 'exportJournalTrip', 'finishOverlayEdit', 'getAppState', 'getHardModeStatus', 'getJournalTrip', 'getStatus',
+  expect(Object.isFrozen(bridge)).toBe(true); expect(Object.keys(bridge).sort()).toEqual(['beginOverlayEdit', 'checkForUpdates', 'choosePluginFolder', 'exitApplication', 'exportDiagnostics', 'exportJournalTrip', 'finishOverlayEdit', 'getAppState', 'getHardModeStatus', 'getJournalTrip', 'getStatus',
     'listJournalEvents', 'listJournalIntervals', 'listJournalSamples', 'listJournalTrips', 'openPluginFolder', 'refreshHardMode',
     'resetOverlayEditPlacement', 'retryPluginSetup', 'selectSource', 'setAutostart', 'setGearDisplay', 'setLanguage', 'setOverlayBackgroundOpacity', 'setOverlayEditScale', 'setOverlayEnabled', 'setOverlayLayout', 'setOverlaySections', 'setPluginGameExcluded', 'setUnitProfile',
-    'showPluginFile', 'subscribeAppState', 'subscribeLive', 'uninstallApplication']);
+    'showPluginFile', 'subscribeAppState', 'subscribeLive', 'uninstallApplication', 'updateApplication']);
   await expect(bridge.selectSource('C:\\arbitrary.exe' as never)).rejects.toThrow('Invalid source selection');
   expect(ipc.invoke).not.toHaveBeenCalled();
   await bridge.selectSource('ats'); expect(ipc.invoke).toHaveBeenCalledWith('telemetry:select', 'ats');
@@ -221,26 +224,32 @@ it('does not reassert service subscription after the callback unsubscribes its o
 it('appends the application state and exit methods after the original three bridge keys', () => {
   // ET-012a appends the two overlay settings methods, ET-012b the four overlay edit methods, ET-016 PR-3 the five journal reads,
   // ET-016 PR-5 the trip export, ET-017 PR-4 the five plugin setup methods, ET-017 PR-6 the diagnostics export and ET-018
-  // PR-4 the in-app uninstall. ET-050 adds the gear display setter right after the unit profile setter.
+  // PR-4 the in-app uninstall. ET-050 adds the gear display setter right after the unit profile setter. ET-055 appends the
+  // update click and the manual update check.
   expect(Object.keys(bridge)).toEqual(['getStatus', 'selectSource', 'subscribeLive', 'getAppState', 'subscribeAppState', 'exitApplication', 'setLanguage', 'setAutostart', 'setUnitProfile',
     'setGearDisplay', 'setOverlayBackgroundOpacity', 'setOverlayEnabled', 'setOverlayLayout', 'setOverlaySections', 'beginOverlayEdit', 'setOverlayEditScale', 'resetOverlayEditPlacement', 'finishOverlayEdit',
     'listJournalTrips', 'getJournalTrip', 'listJournalEvents', 'listJournalIntervals', 'listJournalSamples', 'exportJournalTrip',
-    'retryPluginSetup', 'choosePluginFolder', 'setPluginGameExcluded', 'showPluginFile', 'openPluginFolder', 'exportDiagnostics', 'uninstallApplication', 'getHardModeStatus', 'refreshHardMode']);
+    'retryPluginSetup', 'choosePluginFolder', 'setPluginGameExcluded', 'showPluginFile', 'openPluginFolder', 'exportDiagnostics', 'uninstallApplication', 'getHardModeStatus', 'refreshHardMode',
+    'updateApplication', 'checkForUpdates']);
 });
 it('allows one application state listener, forwards pushed state and unsubscribes once', () => {
   const listener = vi.fn(); const stop = bridge.subscribeAppState(listener);
   expect(ipc.send).toHaveBeenCalledExactlyOnceWith('app:subscribe-state');
   expect(() => bridge.subscribeAppState(vi.fn())).toThrow('One application state subscription');
   expect(() => bridge.subscribeAppState('not a function' as never)).toThrow();
-  // ET-015c: the wider recording status passes through unchanged; the preload forwards main's state as it is.
+  // ET-015c: the wider recording status passes through unchanged; the preload forwards main's state as it is once the
+  // ET-055 application info and update view validate.
   const state = {health: {service: 'ready', storage: 'verified', recording: {state: 'recording', target: 'synthetic', code: null,
-    losses: {lostEvents: 2, eventLoss: 0, notConnected: 1, sampleLoss: 0, restoreLoss: 0, droppedSamples: 0}, trip: {phase: 'active', completeness: 'partial', untrackedJob: false}}, lastError: null}};
+    losses: {lostEvents: 2, eventLoss: 0, notConnected: 1, sampleLoss: 0, restoreLoss: 0, droppedSamples: 0}, trip: {phase: 'active', completeness: 'partial', untrackedJob: false}}, lastError: null},
+    application: APPLICATION, update: UPDATE_IDLE};
   ipc.emit('app:state', {}, state); expect(listener).toHaveBeenCalledExactlyOnceWith(state);
   stop(); stop(); expect(ipc.send.mock.calls.filter(call => call[0] === 'app:unsubscribe-state')).toHaveLength(1);
   ipc.emit('app:state', {}, state); expect(listener).toHaveBeenCalledOnce();
   const next = vi.fn(); bridge.subscribeAppState(next); ipc.emit('app:state', {}, state); expect(next).toHaveBeenCalledOnce();
 });
 it('requests state and exit through fixed invoke channels without forwarding renderer arguments', async () => {
+  // ET-055: the preload validates the state's application info and update view, so the reply must carry valid ones.
+  ipc.invoke.mockResolvedValueOnce({application: APPLICATION, update: UPDATE_IDLE});
   await bridge.getAppState(); await Reflect.apply(bridge.exitApplication, bridge, ['C:\\arbitrary', {force: true}]);
   expect(ipc.invoke.mock.calls).toEqual([['app:get-state'], ['app:exit']]);
 });
@@ -394,4 +403,45 @@ it('validates opacity as exactly one whole percentage before IPC', async () => {
   for (const value of [40, 65, 80, 100]) await bridge.setOverlayBackgroundOpacity(value);
   expect(ipc.invoke.mock.calls.filter(call => call[0] === 'settings:set-overlay-background-opacity'))
     .toEqual([40, 65, 80, 100].map(value => ['settings:set-overlay-background-opacity', value]));
+});
+
+// ET-055 (UP9): the two update methods forward no argument and validate main's reply; the application state's
+// application info and update view are validated again, and an invalid state never reaches the renderer.
+it('invokes the update click and the manual check on their fixed channels only without arguments', async () => {
+  const downloading = {state: 'downloading', available: '0.2.0-stg.000043', progress: 42, refusal: null, failure: null, lastCheck: UPDATE_IDLE.lastCheck};
+  ipc.invoke.mockResolvedValueOnce(downloading).mockResolvedValueOnce(UPDATE_IDLE);
+  await expect(bridge.updateApplication()).resolves.toEqual(downloading);
+  await expect(bridge.checkForUpdates()).resolves.toEqual(UPDATE_IDLE);
+  for (const method of [bridge.updateApplication, bridge.checkForUpdates]) for (const args of [['https://github.com/x'], [{force: true}], [undefined]])
+    await expect(Reflect.apply(method, bridge, args)).rejects.toThrow('Invalid update request');
+  expect(ipc.invoke.mock.calls).toEqual([['update:apply'], ['update:check']]);
+  expect(ipc.send).not.toHaveBeenCalled();
+});
+it.each([
+  ['an unknown state', {...UPDATE_IDLE, state: 'installed'}],
+  ['a URL field', {...UPDATE_IDLE, url: 'https://github.com/senukartur/ets2telemetry/releases'}],
+  ['a fractional progress', {state: 'downloading', available: '0.2.0', progress: 42.5, refusal: null, failure: null, lastCheck: null}],
+  ['progress outside downloading', {...UPDATE_IDLE, progress: 10}],
+  ['an offered state without a version', {state: 'available', available: null, progress: null, refusal: null, failure: null, lastCheck: null}],
+  ['a version that is a path', {state: 'available', available: 'C:\\Users\\owner\\update.nupkg', progress: null, refusal: null, failure: null, lastCheck: null}],
+  ['a refusal outside refused and ready', {...UPDATE_IDLE, refusal: 'GAME_RUNNING'}],
+  ['a refused state without a code', {state: 'refused', available: '0.2.0', progress: null, refusal: null, failure: null, lastCheck: null}],
+  ['an unknown failure', {state: 'failed', available: '0.2.0', progress: null, refusal: null, failure: 'EACCES', lastCheck: null}],
+  ['a failed check without a code', {...UPDATE_IDLE, lastCheck: {outcome: 'failed', failure: null, atUtcMs: 1}}],
+  ['a last check while unsupported', {...UPDATE_IDLE, state: 'unsupported'}]
+])('rejects an update reply with %s', async (_name, reply) => {
+  ipc.invoke.mockResolvedValueOnce(reply);
+  await expect(bridge.updateApplication()).rejects.toThrow('Invalid update state');
+});
+it('drops a pushed state and rejects a queried one whose application info or update view is invalid', async () => {
+  const listener = vi.fn(); bridge.subscribeAppState(listener);
+  const valid = {health: {}, application: APPLICATION, update: UPDATE_IDLE};
+  for (const state of [{...valid, update: {...UPDATE_IDLE, state: 'installed'}}, {...valid, application: {...APPLICATION, channel: 'beta'}},
+    {...valid, application: {...APPLICATION, version: '..\\..\\Update.exe'}}, {...valid, application: {...APPLICATION, path: 'C:\\x'}}, {health: {}}, null]) {
+    ipc.emit('app:state', {}, state);
+    ipc.invoke.mockResolvedValueOnce(state);
+    await expect(bridge.getAppState()).rejects.toThrow('Invalid application state');
+  }
+  expect(listener).not.toHaveBeenCalled();
+  ipc.emit('app:state', {}, valid); expect(listener).toHaveBeenCalledExactlyOnceWith(valid);
 });
