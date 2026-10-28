@@ -99,7 +99,7 @@ Squirrel names a shortcut after the executable's `ProductName` and puts the Star
 - **Not touched.** Taskbar and Start pins (the user made them; Squirrel retargets them, and they keep their old label until pinned again), the `Artur Sianiuk` folder, other files and the autostart Run value.
 - **Limitation.** The hook finds the Start menu as `<Roaming AppData known folder>\Microsoft\Windows\Start Menu\Programs`. A Start Menu redirected apart from Roaming AppData is not found, and its old shortcut stays.
 
-Only the artifact built by Windows CI on a push to `main` or a dispatch is ever shipped, never a local build: MSVC builds are not reproducible, and the [released plugin list](plugin-setup.md#released-plugin-list) must name the shipped DLL's hash.
+Only the artifact built by Windows CI on `main`, a push to `main` or a dispatch on `main`, is ever shipped, never a local build or a branch dispatch's staging artifact (ET-055 PR-4): MSVC builds are not reproducible, and the [released plugin list](plugin-setup.md#released-plugin-list) must name the shipped DLL's hash.
 
 ## Release identity
 
@@ -148,7 +148,7 @@ The projection follows the `<files>` rules of electron-winstaller 5.4.4's `templ
 
 The known Squirrel additions are `lib/net45/squirrel.exe`, an `<name>_ExecutionStub.exe` for each top-level executable, the nuspec, `[Content_Types].xml`, `_rels/.rels` and one `package/services/metadata/core-properties/<32 hex>.psmdcp`. Any other entry fails, and so does a missing projected file or a missing `squirrel.exe` or stub. The ZIP reader accepts stored and deflated entries only and checks each entry's CRC-32 and size.
 
-Windows CI runs both on pushes to `main` and on dispatch, after the maker, and uploads the four files as `windows-installer-<run>-<attempt>` for 14 days ([ci](ci.md#et-018-release-artifact-identity)).
+Windows CI runs both on pushes to `main` and on dispatch, after the maker, and uploads the four files as `windows-installer-<run>-<attempt>` for 14 days; since ET-055 PR-4 a dispatch on any other branch builds staging and uploads `windows-installer-staging-<run>-<attempt>`, which is never installed as production ([ci](ci.md#et-018-release-artifact-identity)).
 
 ## Release checklist
 

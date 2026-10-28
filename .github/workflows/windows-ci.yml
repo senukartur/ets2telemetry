@@ -43,11 +43,12 @@ jobs:
       ETS2TELEMETRY_SOURCE_COMMIT: ${{ github.event.pull_request.head.sha || github.sha }}
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
-      # ET-055 PR-4 (UP13, docs/ci.md#build-channels-et-055-pr-4): pull requests build the default staging channel; main pushes and
-      # dispatches build the production release artifact, which the resolver accepts only in GitHub Actions. Later steps of
-      # this job resolve the same channel, and the smokes read the built one from the build evidence.
-      - name: Build production on main pushes and dispatches
-        if: github.event_name != 'pull_request'
+      # ET-055 PR-4 (UP13, docs/ci.md#build-channels-et-055-pr-4): only main builds production, for the release artifact: a push
+      # to main or a dispatch on main. Pull requests and dispatches on any other branch build the default staging channel, so
+      # an unreviewed branch never produces a production-identity Setup. The resolver also requires a GitHub-hosted runner.
+      # Later steps of this job resolve the same channel, and the smokes read the built one from the build evidence.
+      - name: Build production on main
+        if: github.ref == 'refs/heads/main'
         run: Add-Content -LiteralPath $env:GITHUB_ENV -Value 'ETS2TELEMETRY_BUILD_CHANNEL=production'
       - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5
         with:
@@ -136,12 +137,25 @@ jobs:
         run: |
           node scripts/release-identity.mjs
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      # The channel and Setup name of the build that was made (scripts/build-channel.mjs --built), for the steps below.
+      - name: Name the built channel and Setup
+        if: github.event_name != 'pull_request'
+        id: built
+        run: |
+          $builtText = node scripts/build-channel.mjs --built
+          if ($LASTEXITCODE -ne 0) { throw 'Build evidence unavailable.' }
+          $built = ($builtText -join "`n") | ConvertFrom-Json
+          if ($built.channel -cnotin @('production', 'staging')) { throw 'Build evidence names no known channel.' }
+          Add-Content -LiteralPath $env:GITHUB_OUTPUT -Value ('channel=' + $built.channel)
+          Add-Content -LiteralPath $env:GITHUB_OUTPUT -Value ('setup=' + $built.setup)
+      # ET-055 PR-4: the Setup of the channel actually built. A staging build (a dispatch on a branch other than main) uploads
+      # windows-installer-staging-<run>-<attempt>, never the production name; only main's run produces the production artifact.
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         if: github.event_name != 'pull_request'
         with:
-          name: windows-installer-${{ github.run_id }}-${{ github.run_attempt }}
+          name: ${{ steps.built.outputs.channel == 'production' && 'windows-installer' || 'windows-installer-staging' }}-${{ github.run_id }}-${{ github.run_attempt }}
           path: |
-            out/make/squirrel.windows/x64/YukonUnionTelemetry-Setup-*.exe
+            out/make/squirrel.windows/x64/${{ steps.built.outputs.setup }}
             out/make/squirrel.windows/x64/*-full.nupkg
             out/make/squirrel.windows/x64/RELEASES
             out/make/squirrel.windows/x64/release-identity.json
@@ -192,11 +206,12 @@ jobs:
       ETS2TELEMETRY_SOURCE_COMMIT: ${{ github.event.pull_request.head.sha || github.sha }}
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
-      # ET-055 PR-4 (UP13, docs/ci.md#build-channels-et-055-pr-4): pull requests build the default staging channel; main pushes and
-      # dispatches build the production release artifact, which the resolver accepts only in GitHub Actions. Later steps of
-      # this job resolve the same channel, and the smokes read the built one from the build evidence.
-      - name: Build production on main pushes and dispatches
-        if: github.event_name != 'pull_request'
+      # ET-055 PR-4 (UP13, docs/ci.md#build-channels-et-055-pr-4): only main builds production, for the release artifact: a push
+      # to main or a dispatch on main. Pull requests and dispatches on any other branch build the default staging channel, so
+      # an unreviewed branch never produces a production-identity Setup. The resolver also requires a GitHub-hosted runner.
+      # Later steps of this job resolve the same channel, and the smokes read the built one from the build evidence.
+      - name: Build production on main
+        if: github.ref == 'refs/heads/main'
         run: Add-Content -LiteralPath $env:GITHUB_ENV -Value 'ETS2TELEMETRY_BUILD_CHANNEL=production'
       - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5
         with:
@@ -337,11 +352,12 @@ jobs:
       ETS2TELEMETRY_SOURCE_COMMIT: ${{ github.event.pull_request.head.sha || github.sha }}
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
-      # ET-055 PR-4 (UP13, docs/ci.md#build-channels-et-055-pr-4): pull requests build the default staging channel; main pushes and
-      # dispatches build the production release artifact, which the resolver accepts only in GitHub Actions. Later steps of
-      # this job resolve the same channel, and the smokes read the built one from the build evidence.
-      - name: Build production on main pushes and dispatches
-        if: github.event_name != 'pull_request'
+      # ET-055 PR-4 (UP13, docs/ci.md#build-channels-et-055-pr-4): only main builds production, for the release artifact: a push
+      # to main or a dispatch on main. Pull requests and dispatches on any other branch build the default staging channel, so
+      # an unreviewed branch never produces a production-identity Setup. The resolver also requires a GitHub-hosted runner.
+      # Later steps of this job resolve the same channel, and the smokes read the built one from the build evidence.
+      - name: Build production on main
+        if: github.ref == 'refs/heads/main'
         run: Add-Content -LiteralPath $env:GITHUB_ENV -Value 'ETS2TELEMETRY_BUILD_CHANNEL=production'
       - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5
         with:
@@ -367,14 +383,29 @@ jobs:
           path: .local/downloaded-compiled
       - name: Verify and restore exact-source compiled inputs
         run: node scripts/ci/compiled-artifact.mjs restore .local/downloaded-compiled ${{ github.event_name == 'pull_request' && 'portable' || 'installer' }}
+      # The channel and Setup name of the build that was made (scripts/build-channel.mjs --built), for the steps below.
+      - name: Name the built channel and Setup
+        id: built
+        run: |
+          $builtText = node scripts/build-channel.mjs --built
+          if ($LASTEXITCODE -ne 0) { throw 'Build evidence unavailable.' }
+          $built = ($builtText -join "`n") | ConvertFrom-Json
+          if ($built.channel -cnotin @('production', 'staging')) { throw 'Build evidence names no known channel.' }
+          Add-Content -LiteralPath $env:GITHUB_OUTPUT -Value ('channel=' + $built.channel)
+          Add-Content -LiteralPath $env:GITHUB_OUTPUT -Value ('setup=' + $built.setup)
       # ET-018 PR-1 (docs/installer-testing.md): install, repair and update the Squirrel output inside a marked test root in
       # the runner's temporary folder, with installed smokes and the seeded upgrade of a version 1 database; it never
       # uninstalls. Non-PR events only, like the maker that builds its Setup.exe. Its evidence, .local/ci/installer-*-evidence,
       # lies inside the uploaded .local/ci; the run root itself is deleted and never uploaded.
       - name: Installer lifecycle in a test root
-        if: github.event_name != 'pull_request'
+        if: github.event_name != 'pull_request' && steps.built.outputs.channel == 'production'
         timeout-minutes: 8
         run: ./scripts/installer/Invoke-InstallerLifecycle.ps1
+      # ET-055 PR-4: a dispatch on a branch other than main builds staging, and the lifecycle installs production Setups only
+      # until ET-055 PR-5 adds the staging lifecycle, so it is skipped with a notice instead of failing.
+      - name: Installer lifecycle skipped for a staging build
+        if: github.event_name != 'pull_request' && steps.built.outputs.channel != 'production'
+        run: Write-Output '::notice title=Installer lifecycle skipped::This run built the staging channel (a dispatch on a branch other than main). The installer lifecycle installs production Setups only until ET-055 PR-5 (docs/installer-testing.md).'
       - name: Record final versions and duration
         if: always()
         run: node scripts/ci/versions.mjs

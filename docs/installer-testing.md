@@ -180,7 +180,7 @@ Without `-AllowLocal` the harness refuses every local run. `-AllowLocal` (plan O
 The harness installs the Setup of the build that was made: it reads the channel, version and Setup name from the desktop build evidence (`node scripts/build-channel.mjs --built`) and never from the shell's variables. Since ET-055 PR-4 (UP13), after the run signal:
 
 - **Local runs.** An `-AllowLocal` run accepts only a staging Setup, so a local run never installs the production identity of the owner's installed application; a production Setup stops it with `LOCAL_PRODUCTION_REFUSED`.
-- **Hosted runs.** A production Setup runs only on a GitHub-hosted runner. Windows CI builds production on main pushes and dispatches ([CI](ci.md#build-channels-et-055-pr-4)), so the hosted lifecycle keeps installing production.
+- **Hosted runs.** A production Setup runs only on a GitHub-hosted runner. Windows CI builds production only on `main`, a push or a dispatch on `main` ([CI](ci.md#build-channels-et-055-pr-4)), so the hosted lifecycle keeps installing production there. A dispatch on any other branch builds staging, and its installer job skips the lifecycle with a notice (**Installer lifecycle skipped for a staging build**) instead of failing, until PR-5.
 - **Staging lifecycle pending.** The scenarios still use the production install root, names and versions; the staging lifecycle arrives with ET-055 PR-5. Until then a staging Setup stops the run with `STAGING_LIFECYCLE_PENDING`, here and in `build-upgrade-fixture.mjs` and the installed runtime smoke mode. A local run is therefore not possible before PR-5.
 
 The guard module repeats the rule (`checkSetupChannel` in `scripts/installer/installer-guard.mjs`, through the driver's `signal --channel <channel>`), and `tests/unit/installer-guard.test.ts` covers it.
@@ -191,6 +191,8 @@ Agents run the lifecycle only through a dispatch:
 gh workflow run windows-ci.yml --ref <task-branch> -f extended=false
 gh run list --workflow windows-ci.yml --branch <task-branch> --limit 1
 ```
+
+Since ET-055 PR-4 such a branch dispatch builds staging, so its hosted installer job skips the lifecycle with a notice until PR-5; the production lifecycle runs on `main`. Never install an artifact of a branch dispatch as production: it is a staging build.
 
 ## CI
 
