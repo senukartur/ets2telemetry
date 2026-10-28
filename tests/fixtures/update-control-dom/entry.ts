@@ -105,7 +105,7 @@ async function about(initial: UpdateView, reply: () => Promise<UpdateView>): Pro
 }
 
 const LATEST = 'You have the latest version.', CHECKING = 'Checking for updates…';
-const OFFERED_TEXT = 'Version 0.2.0 is available. Use the button in the sidebar to install it.';
+const OFFERED_TEXT = 'Version 0.2.0 is available. Use the button in the sidebar to install it.', REJECTED = 'Could not start a check. Try again.';
 const showing = (message: string) => (facts: Facts) => facts.message === message;
 
 async function scenarios(): Promise<Record<string, Facts>> {
@@ -137,9 +137,9 @@ async function scenarios(): Promise<Record<string, Facts>> {
   result.fallback = {waiting, ...run.facts()};
   run.done();
 
-  // A rejected bridge call answers at once from the latest finished check.
+  // A rejected bridge call ran no known check: a fixed failure at once, never the earlier "latest version" outcome.
   run = await about(view({lastCheck: before}), () => Promise.reject(new Error('rejected')));
-  await run.click(showing(LATEST));
+  await run.click(showing(REJECTED));
   result.rejected = {...run.facts(), calls: run.calls()};
   run.done();
 

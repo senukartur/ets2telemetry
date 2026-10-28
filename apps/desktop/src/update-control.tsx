@@ -92,7 +92,7 @@ export function AboutUpdateCheck({view, language, check}: {view: UpdateView | un
     setRequest({phase: 'pending', before: view?.lastCheck?.atUtcMs ?? null});
     // The synchronous reply says whether a check started; only then does About wait for its result.
     void (check ?? (() => window.desktop.checkForUpdates()))().then(reply => setRequest(current => current && aboutCheckReplied(current, reply)),
-      () => setRequest(current => current && {...current, phase: 'answered'}));
+      () => setRequest(current => current && {...current, phase: 'rejected'}));
   };
   const slot = 'settings-about-update-check';
   return <div className="space-y-2" data-testid="settings.about.update">

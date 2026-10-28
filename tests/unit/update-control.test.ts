@@ -240,7 +240,7 @@ describe('the About check', () => {
 describe('staging copy (PR-3 channelCopy)', () => {
   it('leaves every update and version text unchanged in a staging build, so no name is rewritten or extended', () => {
     const keys = Object.keys(EN_DICTIONARY).filter(key => key.startsWith('upd.') || key.startsWith('ver.')) as (keyof typeof EN_DICTIONARY)[];
-    expect(keys.length).toBe(33);
+    expect(keys.length).toBe(34);
     for (const dictionary of [EN_DICTIONARY, RU_DICTIONARY]) {
       for (const key of keys) expect(channelCopy(dictionary[key], CHANNEL_IDENTITIES.staging), key).toBe(dictionary[key]);
     }
@@ -261,6 +261,13 @@ describe('the About check without a started check', () => {
     for (const reply of [view({lastCheck: before}), offered('available'), offered('refused', {refusal: 'BUSY'}), offered('failed', {failure: 'OFFLINE'}), offered('downloading', {progress: 1})]) {
       expect(aboutCheckReplied(pending, reply), reply.state).toEqual({phase: 'answered', before: 1000});
     }
+  });
+  it.each(LANGUAGES)('answers a rejected call with a fixed failure, not the earlier outcome, until a newer check reports (%s)', language => {
+    const rejected = {phase: 'rejected', before: 1000} as const, text = {en: 'Could not start a check. Try again.', ru: 'Не удалось начать проверку. Повторите попытку.'}[language];
+    for (const update of [view({lastCheck: before}), offered('available', {lastCheck: before})]) {
+      expect(aboutCheckText(update, rejected, language).result, update.state).toMatchObject({severity: 'failed', message: text});
+    }
+    expect(aboutCheckText(view({lastCheck: {outcome: 'up-to-date', failure: null, atUtcMs: 2000}}), rejected, language).result).toMatchObject({severity: 'success', message: COPY[language].upToDate});
   });
   it('answers a standing offer with its version at once, never pending', () => {
     for (const state of ['available', 'refused', 'failed'] as const) {

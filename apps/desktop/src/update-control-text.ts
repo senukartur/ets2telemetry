@@ -99,9 +99,10 @@ export function versionLineText(info: ApplicationInfo | undefined, language: App
  * The About check's request after a click. `pending` only while a check really runs: from the click until the bridge
  * replies, and after a reply in `checking` until the update view reports a newer finished check or ABOUT_CHECK_WAIT_MS
  * pass. A reply in any other state shows that no check started (the 10 s throttle, a click or an operation in flight),
- * so the request is answered at once from it. The answer then stays until the next click.
+ * so the request is answered at once from it. `rejected`: the bridge call failed, so no check is known to have run and
+ * the answer never borrows an earlier check's outcome. The answer then stays until the next click.
  */
-export type AboutCheckRequest = {readonly phase: 'pending'; readonly before: number | null} | {readonly phase: 'answered'; readonly before: number | null};
+export type AboutCheckRequest = {readonly phase: 'pending' | 'answered' | 'rejected'; readonly before: number | null};
 export const ABOUT_CHECK_WAIT_MS = 30_000;
 
 /** The request after the bridge's reply: still pending only when the reply shows a running check. */
@@ -142,6 +143,8 @@ export function aboutCheckText(view: UpdateView | undefined, request: AboutCheck
   };
   if (!request) return {button, busy, unsupported: false, note: null, result: null};
   if (pending) return {button, busy, unsupported: false, note: null, result: answer('info', t('upd.check.pending', undefined, language))};
+  // A failed bridge call ran no known check: a fixed failure, never an earlier outcome, unless a newer check reports.
+  if (request.phase === 'rejected' && !finished) return {button, busy, unsupported: false, note: null, result: answer('failed', t('upd.check.rejected', undefined, language))};
   if (offered) return {button, busy, unsupported: false, note: null, result: answer('info', t('upd.check.available', {version: view.available ?? ''}, language))};
   // Otherwise the latest finished check answers, if there is one.
   const last = finished ?? view.lastCheck;

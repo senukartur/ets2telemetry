@@ -74,8 +74,9 @@ describe('the About check in a real DOM', () => {
     expect(scenarios.fallback).toEqual({waiting: {busy: true, disabled: false, note: null, message: 'Checking for updates…', severity: 'info', fakeTimers: 1},
       busy: true, disabled: false, note: null, message: 'You have the latest version.', severity: 'success', fakeTimers: 0});
   });
-  it('answers at once from the latest finished check when the bridge call rejects', () => {
-    expect(scenarios.rejected).toEqual({busy: false, disabled: false, note: null, message: 'You have the latest version.', severity: 'success', fakeTimers: 0, calls: 1});
+  it('answers a rejected bridge call with a fixed failure, never the earlier check\'s success', () => {
+    expect(scenarios.rejected).toEqual({busy: false, disabled: false, note: null, message: 'Could not start a check. Try again.', severity: 'failed', fakeTimers: 0, calls: 1});
+    expect(scenarios.rejected.message).not.toBe('You have the latest version.');
   });
   it('is busy with a fixed note and ignores the click while an installed update waits for its restart', () => {
     expect(scenarios.ready).toEqual({busy: true, disabled: false, note: 'An update is already installed. Finish it with the button in the sidebar.', message: null, severity: null, fakeTimers: 0, calls: 0});

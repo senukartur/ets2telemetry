@@ -872,6 +872,7 @@ export const RU_DICTIONARY: TranslationDictionary = channelCopyTable(Object.free
   'upd.check.failed': 'Не удалось проверить обновления.',
   'upd.check.unsupported': 'Обновления проверяются только в установленной программе.',
   'upd.check.ready': 'Обновление уже установлено. Завершите его кнопкой на боковой панели.',
+  'upd.check.rejected': 'Не удалось начать проверку. Повторите попытку.',
   'ver.line': 'Версия {version}',
   'ver.unknown': 'Версия неизвестна',
   'ver.dev': 'Сборка для разработки',
