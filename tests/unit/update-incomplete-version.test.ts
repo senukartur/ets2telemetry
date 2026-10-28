@@ -1,8 +1,8 @@
 import {mkdir, readdir, symlink, writeFile} from 'node:fs/promises';
 import path from 'node:path';
 import {afterEach, beforeEach, expect, it} from 'vitest';
-import {removeIncompleteVersion, type IncompleteVersionPorts, type UpdateFileSystem} from '../../apps/desktop/src/updater/update-download';
-import {listProcessImages, PROCESS_IMAGES_TIMEOUT_MS} from '../../apps/desktop/src/updater/update-ports';
+import {removeIncompleteVersion, UNREADABLE_UPDATER_IMAGE, type IncompleteVersionPorts, type UpdateFileSystem} from '../../apps/desktop/src/updater/update-download';
+import {listProcessImages, PROCESS_IMAGES_COMMAND, PROCESS_IMAGES_TIMEOUT_MS} from '../../apps/desktop/src/updater/update-ports';
 import {guardedTempRoot, type GuardedRoot} from '../shared/guarded-fs';
 
 // ET-055 risk R1 (REG-019; hosted run 40710991951): after a killed apply the half-written app-<version> folder made the
@@ -108,16 +108,57 @@ it('reports a folder it could not remove completely as failed', async () => {
   expect(await apps()).toContain('app-0.1.2-stg000000');
 });
 
-it('lists the running images through Windows PowerShell from System32, and answers undefined when that fails', async () => {
-  const calls: {file: string; args: readonly string[]; timeoutMs: number}[] = [];
-  const run = ((_port: unknown, file: string, args: readonly string[], limits: {timeoutMs: number}) => {
-    calls.push({file, args, timeoutMs: limits.timeoutMs});
+// Review of ebe3395b: an updater whose image this user cannot read, the root's Update.exe by real path, and the release
+// list's entries by their last path segment, with a line of another shape failing closed.
+it('keeps the folder while an Update or Squirrel process with an unreadable image runs, and finds Update.exe by real path', async () => {
+  expect(await remove({processImages: () => Promise.resolve(['C:\\Windows\\explorer.exe', UNREADABLE_UPDATER_IMAGE])})).toBe('updater-running');
+  const alias = path.win32.join(guard.root, 'root-alias');
+  await symlink(installRoot, alias, 'junction');
+  const viaAlias = (images: readonly string[]) => removeIncompleteVersion(ports({processImages: () => Promise.resolve(images)}), alias, '0.1.2-stg000000', PACKAGE,
+    path.win32.join(alias, 'app-0.1.1-stg000000'));
+  expect(await viaAlias([path.win32.join(installRoot, 'Update.exe')])).toBe('updater-running');
+  expect(await removeIncompleteVersion(ports({realpath: target => normalTarget(target) === normalTarget(installRoot) ? Promise.reject(new Error('gone')) : guard.fs.realpath(target)}),
+    installRoot, '0.1.2-stg000000', PACKAGE, running())).toBe('refused');
+  expect(await apps()).toContain('app-0.1.2-stg000000');
+  expect(await viaAlias([])).toBe('removed');
+});
+const normalTarget = (value: string) => path.win32.normalize(value).replace(/\\+$/, '').toLowerCase();
+
+it('reads a release entry by its last path segment without a query, and refuses a line of another shape', async () => {
+  const releases = path.win32.join(installRoot, 'packages', 'RELEASES');
+  const sha = 'F'.repeat(40);
+  for (const entry of [`https://example.invalid/releases/download/staging-v0.1.2-stg.000000/${PACKAGE}?sv=1&sig=x`, `..\\packages\\${PACKAGE}`, `${PACKAGE}#fragment`]) {
+    await writeFile(releases, `${'A'.repeat(40)} ETS2TelemetryDesktopStaging-0.1.1-stg000000-full.nupkg 166075665\n${sha} ${entry} 166075665\n`);
+    expect(await remove(), entry).toBe('recorded');
+  }
+  for (const line of [`${sha} ${PACKAGE}`, `${'G'.repeat(40)} ${PACKAGE} 1`, `${sha.slice(1)} ${PACKAGE} 1`, 'not a release line', `${sha} ${PACKAGE} size`]) {
+    await writeFile(releases, `${'A'.repeat(40)} ETS2TelemetryDesktopStaging-0.1.1-stg000000-full.nupkg 166075665\n${line}\n`);
+    expect(await remove(), line).toBe('releases-unreadable');
+  }
+  // Blank lines and a BOM are fine; another release does not record this one.
+  await writeFile(releases, `\uFEFF\r\n${sha} https://example.invalid/x/ETS2TelemetryDesktopStaging-0.1.3-stg000000-full.nupkg?y=1 1\r\n\r\n`);
+  expect(await remove()).toBe('removed');
+});
+
+it('lists the running images through the validated System32 Windows PowerShell with its own module path', async () => {
+  const calls: {file: string; args: readonly string[]; timeoutMs: number; env: Readonly<Record<string, string | undefined>> | undefined}[] = [];
+  const run = ((_port: unknown, file: string, args: readonly string[], limits: {timeoutMs: number; env?: Readonly<Record<string, string | undefined>>}) => {
+    calls.push({file, args, timeoutMs: limits.timeoutMs, env: limits.env});
     const bom = Buffer.from([0xef, 0xbb, 0xbf]);
-    return Promise.resolve({ok: true, stdout: Buffer.concat([bom, Buffer.from('C:\\Windows\\explorer.exe\r\n\r\nrelative\\x.exe\r\nD:\\a\\_temp\\R\\Update.exe\r\n', 'utf8')])});
+    return Promise.resolve({ok: true, stdout: Buffer.concat([bom, Buffer.from(`C:\\Windows\\explorer.exe\r\n\r\nrelative\\x.exe\r\n${UNREADABLE_UPDATER_IMAGE}\r\nD:\\a\\_temp\\R\\Update.exe\r\n`, 'utf8')])});
   }) as unknown as Parameters<typeof listProcessImages>[1];
-  expect(await listProcessImages({SystemRoot: 'C:\\Windows'}, run)).toEqual(['C:\\Windows\\explorer.exe', 'D:\\a\\_temp\\R\\Update.exe']);
-  expect(calls).toEqual([{file: 'C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe', args: ['-NoLogo', '-NoProfile', '-NonInteractive', '-Command',
-    '[Console]::OutputEncoding = [Text.Encoding]::UTF8; Get-Process -ErrorAction SilentlyContinue | ForEach-Object { $_.Path } | Where-Object { $_ }'], timeoutMs: PROCESS_IMAGES_TIMEOUT_MS}]);
+  expect(await listProcessImages({SystemRoot: 'D:\\Win', psmodulepath: 'C:\\Users\\owner\\Documents\\PowerShell\\Modules', OTHER: 'kept'}, run))
+    .toEqual(['C:\\Windows\\explorer.exe', UNREADABLE_UPDATER_IMAGE, 'D:\\a\\_temp\\R\\Update.exe']);
+  expect(calls).toEqual([{file: 'D:\\Win\\System32\\WindowsPowerShell\\v1.0\\powershell.exe', args: ['-NoLogo', '-NoProfile', '-NonInteractive', '-Command', PROCESS_IMAGES_COMMAND],
+    timeoutMs: PROCESS_IMAGES_TIMEOUT_MS, env: {SystemRoot: 'D:\\Win', OTHER: 'kept', PSModulePath: 'D:\\Win\\System32\\WindowsPowerShell\\v1.0\\Modules'}}]);
+  // A SystemRoot that is not a plain drive folder falls back to C:\Windows.
+  calls.length = 0;
+  await listProcessImages({SystemRoot: '\\\\server\\share'}, run);
+  expect(calls[0].file).toBe('C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe');
+  // The command writes the placeholder for a nameless-path Update or Squirrel process, and nothing for any other.
+  expect(PROCESS_IMAGES_COMMAND).toBe("[Console]::OutputEncoding = [Text.Encoding]::UTF8; Get-Process -ErrorAction SilentlyContinue | ForEach-Object { " +
+    "if ($_.Path) { $_.Path } elseif (@('Update', 'Squirrel') -contains $_.ProcessName) { '?unreadable-updater' } }");
   for (const failure of ['timeout', 'failed', 'output-too-large'])
     expect(await listProcessImages({}, (() => Promise.resolve({ok: false, failure})) as unknown as Parameters<typeof listProcessImages>[1])).toBeUndefined();
 });
+

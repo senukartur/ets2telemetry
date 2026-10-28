@@ -424,6 +424,31 @@ describe('click, download and apply', () => {
     expect(await readdir(installRoot)).toEqual(['app-0.1.1']);
     expect(h.log).toHaveBeenCalledWith('UPDATE_INCOMPLETE_VERSION_REMOVED', {result: 'removed'});
   });
+  // Review of ebe3395b: each attempt's process listing takes time of its own; no new attempt starts once 20 s have passed.
+  it('stops asking once the 20 s deadline has passed, with slow listings, and keeps the folder with the last reason', async () => {
+    await mkdir(path.win32.join(installRoot, 'app-0.1.1'), {recursive: true});
+    const target = path.win32.join(installRoot, 'app-0.2.0');
+    let listings = 0;
+    // Every listing takes 6 s of the controlled clock and sees Update.exe still running.
+    const processImages = () => {listings++; vi.setSystemTime(Date.now() + 6000); return Promise.resolve([path.win32.join(installRoot, 'Update.exe')]);};
+    const h = harness({routes: productionRoutes(PKG), processImages, apply: async () => {
+      await mkdir(target, {recursive: true});
+      return {ok: false, failure: 'timeout'};
+    }});
+    await startAndCheck(h);
+    await h.controller.apply();
+    // Attempts start at 0, 6.5 and 13 s; after the third listing 19 s have passed, so a fourth would start at 19.5 s and
+    // end after the deadline: it still starts, because 19.5 s is inside it, and after it (25.5 s) nothing more does.
+    for (let attempt = 1; attempt <= 3; attempt++) {
+      await until(() => listings === attempt);
+      await vi.advanceTimersByTimeAsync(500);
+    }
+    await until(() => h.controller.view.state === 'failed');
+    expect(listings).toBe(4);
+    expect(h.controller.view.failure).toBe('APPLY_TIMEOUT');
+    expect((await readdir(installRoot)).sort()).toEqual(['app-0.1.1', 'app-0.2.0']);
+    expect(h.log).toHaveBeenCalledWith('UPDATE_INCOMPLETE_VERSION_KEPT', {result: 'updater-running'});
+  });
   it('keeps the folder of a release Squirrel has already recorded, without asking again', async () => {
     await mkdir(path.win32.join(installRoot, 'app-0.1.1'), {recursive: true});
     const target = path.win32.join(installRoot, 'app-0.2.0');

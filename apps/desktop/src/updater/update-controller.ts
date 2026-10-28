@@ -33,10 +33,15 @@ export const APPLY_TIMEOUT_MS = 180_000;
  * R1: after a timeout or the output bound runFixedProgram answers at once, while the killed Update.exe, its children and
  * the --squirrel-updated hook may still run or hold files. The removal is asked again while its answer can change
  * (RETRYABLE_REMOVALS: Update.exe or a process in the folder still running, a failed listing, a held file), at most
- * this often, this far apart: about 4.5 s in all. After that the folder stays and the failure is reported.
+ * INCOMPLETE_REMOVAL_ATTEMPTS times, INCOMPLETE_REMOVAL_RETRY_MS apart, and no new attempt starts once
+ * INCOMPLETE_REMOVAL_DEADLINE_MS have passed since the first. Each attempt lists the processes (about 1 s, at most 15 s:
+ * PROCESS_IMAGES_TIMEOUT_MS), and an attempt in flight is never cut short, so the whole cleanup ends within the deadline
+ * plus one attempt: at most about 35 s plus the removal itself. After that the folder stays with the last reason and the
+ * failure is reported.
  */
 export const INCOMPLETE_REMOVAL_ATTEMPTS = 10;
 export const INCOMPLETE_REMOVAL_RETRY_MS = 500;
+export const INCOMPLETE_REMOVAL_DEADLINE_MS = 20_000;
 
 export type UpdateEvent =
   | {readonly type: 'supported'}
@@ -325,12 +330,14 @@ export class UpdateController {
     this.restart();
   }
 
-  /** removeIncompleteVersion, asked again while its answer can change, at most INCOMPLETE_REMOVAL_ATTEMPTS times. */
+  /** removeIncompleteVersion, asked again while its answer can change, within the attempt and time bounds above. */
   private async removeIncomplete(context: UpdateContext, nugetVersion: string, packageName: string): Promise<IncompleteRemoval> {
     const ports: IncompleteVersionPorts = {fs: this.options.ports.fs, ...this.options.ports.install};
+    const clock = this.options.ports.clock, started = clock.now();
     for (let attempt = 1; ; attempt++) {
       const result = await removeIncompleteVersion(ports, context.installRoot, nugetVersion, packageName, context.runningDirectory).catch((): IncompleteRemoval => 'failed');
       if (!RETRYABLE_REMOVALS.has(result) || attempt >= INCOMPLETE_REMOVAL_ATTEMPTS) return result;
+      if (clock.now() - started + INCOMPLETE_REMOVAL_RETRY_MS >= INCOMPLETE_REMOVAL_DEADLINE_MS) return result;
       await new Promise<void>(resolve => {this.options.ports.clock.setTimeout(resolve, INCOMPLETE_REMOVAL_RETRY_MS);});
     }
   }
