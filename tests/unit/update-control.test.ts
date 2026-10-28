@@ -33,7 +33,7 @@ const buttonTag = (html: string) => html.match(/<button[^>]*data-testid="shell\.
 const statusRegion = (html: string) => html.match(/<div role="status" aria-live="polite" aria-atomic="true" class="sr-only" data-testid="shell\.update\.status">(.*?)<\/div>/)?.[1];
 
 const COPY = {
-  en: {available: 'Update to 0.2.0', availableName: 'Update available: version 0.2.0. Download and install', downloading: 'Downloading… 42%',
+  en: {available: 'Update to 0.2.0', availableName: 'Update to 0.2.0: download and install the available update', downloading: 'Downloading… 42%',
     installing: 'Installing…', restarting: 'Restarting…', ready: 'Restart to finish', failed: 'Update failed – Retry',
     refusal: {GAME_RUNNING: 'Close the game to update', GAME_CHECK_FAILED: 'Could not check running games', BUSY: 'Another task is running – Retry', EXITING: 'The app is closing'},
     failure: {OFFLINE: 'The update server could not be reached. Check the internet connection.', MANIFEST_INVALID: 'The update description was not valid.',
@@ -45,7 +45,7 @@ const COPY = {
     devStagingName: 'Development build, staging build', unknown: 'Version unknown',
     check: 'Check for updates', unsupported: 'Updates are checked only in an installed copy of the app.', pending: 'Checking for updates…',
     upToDate: 'You have the latest version.', availableCheck: 'Version 0.2.0 is available. Use the button in the sidebar to install it.', checkFailed: 'Could not check for updates.'},
-  ru: {available: 'Обновить до 0.2.0', availableName: 'Доступно обновление: версия 0.2.0. Скачать и установить', downloading: 'Загрузка… 42%',
+  ru: {available: 'Обновить до 0.2.0', availableName: 'Обновить до 0.2.0: скачать и установить доступное обновление', downloading: 'Загрузка… 42%',
     installing: 'Установка…', restarting: 'Перезапуск…', ready: 'Перезапустить для завершения', failed: 'Не удалось обновить – Повторить',
     refusal: {GAME_RUNNING: 'Закройте игру, чтобы обновить', GAME_CHECK_FAILED: 'Не удалось проверить запущенные игры', BUSY: 'Выполняется другая задача – Повторить', EXITING: 'Программа закрывается'},
     failure: {OFFLINE: 'Не удалось связаться с сервером обновлений. Проверьте подключение к интернету.', MANIFEST_INVALID: 'Описание обновления недействительно.',
@@ -82,6 +82,17 @@ describe('the sidebar update control (UP10)', () => {
     expect(statusRegion(html)).toBe(escape(COPY[language].availableName));
     expect(html).not.toContain('role="alert"');
     expect(html).not.toContain('role="progressbar"');
+  });
+
+  // WCAG 2.5.3 Label in Name: a speech user says what they see, so in every state and language the button's accessible
+  // name begins with its visible label.
+  it.each(LANGUAGES)('names the button with its visible label first in every state (%s)', language => {
+    const states: UpdateView[] = [offered('available'), offered('downloading', {progress: 42}), offered('installing'), offered('restarting'),
+      offered('ready'), offered('refused', {refusal: 'GAME_RUNNING'}), offered('failed', {failure: 'OFFLINE'})];
+    for (const update of states) {
+      const text = updateControlText(update, language)!;
+      expect(text.accessibleName.startsWith(text.label), `${update.state}: ${text.accessibleName}`).toBe(true);
+    }
   });
 
   it('stops the dot and the busy icon while the window has no focus', () => {
