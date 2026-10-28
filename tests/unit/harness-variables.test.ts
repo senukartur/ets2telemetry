@@ -68,6 +68,16 @@ it('also finds multi-assignments, [ref], -OutVariable, -PipelineVariable and Set
       '    $Plain = "own spelling of an unconstrained parameter: allowed"',
       '    Set-Variable -Name Other -Value 6',
       '}',
+      // Review round 1: the other variable-naming common parameters, an abbreviation, New-Variable and scope prefixes.
+      'function Read-More([string]$Errors, [string]$Warnings, [string]$Notes, $Made, $Scoped, $Hidden, $Kept) {',
+      '    Get-Item . -ErrorVariable errors -WarningVariable warnings | Out-Null',
+      '    Get-Item . -iv notes -OutVar made | Out-Null',
+      '    New-Variable -Name MADE -Value 1',
+      '    $local:scoped = 2',
+      '    $private:hidden = 3',
+      '    $env:Kept = "an environment variable is no parameter"',
+      '    Get-Item . -Out kept | Out-Null',
+      '}',
       ''].join('\r\n'));
     expect(await check([fixture])).toEqual({files: 1, violations: [
       'Fixture-Writes.ps1:4 <script> $Name -> $Name (constrained)', 'Fixture-Writes.ps1:5 <script> $Choice -> $Choice (constrained)',
@@ -75,7 +85,10 @@ it('also finds multi-assignments, [ref], -OutVariable, -PipelineVariable and Set
       'Fixture-Writes.ps1:8 Read-Many $items -> $Items',
       'Fixture-Writes.ps1:9 Read-Many $result -> $Result', 'Fixture-Writes.ps1:10 Read-Many $Result -> $Result (constrained)',
       'Fixture-Writes.ps1:11 Read-Many $plain -> $Plain', 'Fixture-Writes.ps1:12 Read-Many $first -> $First', 'Fixture-Writes.ps1:13 Read-Many $REST -> $Rest',
-      'Fixture-Writes.ps1:14 Read-Many $first -> $First']});
+      'Fixture-Writes.ps1:14 Read-Many $first -> $First',
+      'Fixture-Writes.ps1:19 Read-More $errors -> $Errors', 'Fixture-Writes.ps1:19 Read-More $warnings -> $Warnings',
+      'Fixture-Writes.ps1:20 Read-More $notes -> $Notes', 'Fixture-Writes.ps1:20 Read-More $made -> $Made', 'Fixture-Writes.ps1:21 Read-More $MADE -> $Made',
+      'Fixture-Writes.ps1:22 Read-More $scoped -> $Scoped', 'Fixture-Writes.ps1:23 Read-More $hidden -> $Hidden']});
   } finally {await resources.dispose();}
 }, 60000);
 

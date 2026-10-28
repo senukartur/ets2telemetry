@@ -59,7 +59,7 @@ function evidence() {
   ];
   const observed: Record<string, unknown> = {label: 'feed-b', mode: 'complete', channel: 'staging', offered, package: {name: release.name, size: 10, sha256: 'a'.repeat(64)},
     tag: release.tag, mainPid: A, offer: {state: 'available', available: offered.package}, refusal: {view: {state: 'refused', refusal: 'GAME_RUNNING'}, packageRequests: 0, updates: 'absent'},
-    outcome: 'exited', states: ['downloading', 'installing'], exit: {code: 0, signal: null}, servicePidsBefore: 1, restartedPid: B,
+    outcome: 'exited', states: ['downloading', 'installing'], exit: {code: 0, signal: null}, aServicePids: [A_SERVICE], restartedPid: B, requestsDropped: 0,
     restartedImage: `LocalAppData\\ETS2TelemetryDesktopStaging\\app-${offered.installed}\\ETS2TelemetryDesktopStaging.exe`, requester: {locked: true, requests: 2, elapsedMs: 400},
     drain: {remaining: []}, updates: 'absent', routes, diagnostics: 'diagnostics\\update-feed-b',
     requests: [request('offer', routes.list), request('offer', routes.manifest), request('offer', routes.signature), request('refusal', routes.list),
@@ -67,13 +67,13 @@ function evidence() {
   return {main, service, observed};
 }
 
-async function layout(directory: string) {
+async function layout(directory: string, allowLocal = false) {
   const base = await realpath(directory), runRoot = path.join(base, `installer-${ID}`), evidenceFolder = path.join(base, `installer-${ID}-evidence`);
   await mkdir(path.join(runRoot, 'diagnostics', 'update-feed-b', 'service'), {recursive: true});
   await mkdir(evidenceFolder);
   const config = path.join(evidenceFolder, 'config.json');
   await writeFile(config, JSON.stringify({runRoot, evidence: evidenceFolder, setup: path.join(base, 'Setup.exe'), stepBudgetMs: 1000, channel: 'staging', channels: ['staging'],
-    appVersion: '0.1.0-stg.000000'}));
+    appVersion: '0.1.0-stg.000000', ...(allowLocal ? {allowLocal: true} : {})}));
   const write = async (value: ReturnType<typeof evidence>) => {
     const lines = (rows: Row[]) => rows.map(row => JSON.stringify(row)).join('\n') + '\n';
     await writeFile(path.join(runRoot, 'diagnostics', 'update-feed-b', 'startup.jsonl'), lines(value.main));
@@ -93,6 +93,17 @@ describe('update-from-feed driver commands', () => {
       expect(await run(['update-feed', config, 'feed-c', executable, 'interrupted'])).toMatchObject({passed: false, failure: {code: 'LOCAL_RUN_REFUSED'}});
       expect(await run(['stub-launch', config, 'after-r1'])).toMatchObject({passed: false, failure: {code: 'LOCAL_RUN_REFUSED'}});
       expect((await run(['update-feed', config, 'feed-b', executable, 'other'])).failure?.message).toContain('UPDATE_FEED_MODE_INVALID');
+    } finally {await resources.dispose();}
+  }, 60000);
+
+  // Review round 1: an owner-requested -AllowLocal run (allowLocal in the config) still never reaches the updater or the stub.
+  it('refuses a local run also when the config allows local runs', async () => {
+    const resources = await temporaryResources();
+    try {
+      const {config} = await layout(resources.directory, true);
+      const executable = path.join(resources.directory, 'app.exe');
+      expect(await run(['update-feed', config, 'feed-b', executable, 'complete'])).toMatchObject({passed: false, failure: {code: 'LOCAL_RUN_REFUSED'}});
+      expect(await run(['stub-launch', config, 'after-r1'])).toMatchObject({passed: false, failure: {code: 'LOCAL_RUN_REFUSED'}});
     } finally {await resources.dispose();}
   }, 60000);
 
@@ -127,6 +138,10 @@ describe('update-from-feed driver commands', () => {
       expect(await failure(value => {value.main.push({time: at(17), pid: B, event: 'RENDER_PROCESS_GONE'});})).toMatch(/^FAILURE_EVENT_LOGGED/);
       expect(await failure(value => {value.observed.updates = ['0.1.1-stg000000'];})).toMatch(/^UPDATES_FOLDER_LEFT/);
       expect(await failure(value => {value.observed.outcome = 'failed';})).toMatch(/^UPDATE_DID_NOT_RESTART/);
+      // Review round 1: a refusal after the game stopped, dropped request records, and B's rows told apart by A's pids.
+      expect(await failure(value => {value.observed.outcome = 'refused';})).toMatch(/^UPDATE_REFUSED_AFTER_GAME_STOPPED/);
+      expect(await failure(value => {value.observed.requestsDropped = 3;})).toMatch(/^UPDATE_FEED_REQUESTS_DROPPED/);
+      expect(await failure(value => {value.observed.aServicePids = [];})).toMatch(/^RECORDING_FLUSH_NOT_RUN/);
     } finally {await resources.dispose();}
   }, 120000);
 

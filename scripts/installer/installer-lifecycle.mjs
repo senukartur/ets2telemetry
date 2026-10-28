@@ -1425,7 +1425,9 @@ async function sentinel(config, label, mode, plantLabel) {
     if (typeof now !== 'object') throw changed(`file ${now === 'absent' ? 'removed' : now}: ${sample.file}`);
     // Whole milliseconds: a time written back through a Date keeps only those.
     const rewritten = Math.trunc(now.mtimeMs) !== Math.trunc(sample.mtimeMs);
-    if (!rewritten && (now.sha256 !== sample.sha256 || now.size !== sample.size)) throw changed(`file bytes changed: ${sample.file}`);
+    // A file the application leaves alone keeps its bytes whatever its time (review round 1); a rewritable one only while
+    // its time is unchanged.
+    if ((sample.kind === 'untouched' || !rewritten) && (now.sha256 !== sample.sha256 || now.size !== sample.size)) throw changed(`file bytes changed: ${sample.file}`);
     samples[entry] = {file: sample.file, kind: sample.kind, rewritten};
   }
   await rm(file);
@@ -1511,7 +1513,8 @@ const rowsOf = (rows, pids) => rows.filter(row => pids.includes(row.pid));
 async function updateFeed(config, label, executable, mode) {
   assert.ok(mode === 'complete' || mode === 'interrupted', 'UPDATE_FEED_MODE_INVALID');
   assert.match(label, /^[a-z0-9.-]{1,40}$/, 'UPDATE_FEED_LABEL_INVALID');
-  checkRunSignal(process.env, {allowLocal: config.allowLocal === true});
+  // Hosted only, whatever the config says: an owner-requested -AllowLocal run never reaches the updater (review round 1).
+  checkRunSignal(process.env, {allowLocal: false});
   const clockStarted = performance.now(), budget = UPDATE_FEED_BUDGET_MS[mode];
   const left = (cap = budget) => Math.max(1, Math.min(cap, budget - (performance.now() - clockStarted)));
   const runRoot = await realpath(config.runRoot), channel = channelOf(config), identity = identityOf(config);
@@ -1527,14 +1530,20 @@ async function updateFeed(config, label, executable, mode) {
   await mkdir(diagnostics, {recursive: true});
   const record = {label, mode, channel, offered: target, package: {name: pkg.name, size: pkg.size, sha256: pkg.sha256}, tag: release.tag,
     before: {listing: await binaryRootListing(layout, identity.executable), updates: await updatesState(layout.dataRoot)}};
-  const feed = await startUpdateFeed({channel, release, packageFile: pkg.file});
-  const env = installedEnvironment(process.env, {LOCALAPPDATA: layout.base, APPDATA: layout.appData, TEMP: layout.temp, TMP: layout.temp,
+  // The launch environment's guards run before the feed listens (review round 1): a refusal ends the command with its own
+  // code at once, never with a listening server that keeps the process alive until the Job's deadline. The first check
+  // uses a placeholder origin; the real one is checked again once the feed listens, inside the try that closes it.
+  const real = machineFacts().real;
+  const guardEnvironment = origin => installedEnvironment(process.env, {LOCALAPPDATA: layout.base, APPDATA: layout.appData, TEMP: layout.temp, TMP: layout.temp,
     ETS2TELEMETRY_PROFILE_DIR: profileOf(config), ETS2TELEMETRY_DIAGNOSTIC_DIR: diagnostics, ETS2TELEMETRY_PLUGIN_SETUP_ROOT: config.runRoot,
-    ETS2TELEMETRY_RECORDING: `synthetic:${RECORDING_NAME}`, ETS2TELEMETRY_UPDATE_TEST_FEED: feed.origin, ETS2TELEMETRY_UPDATE_TEST_PUBLIC_KEY: key.publicKey});
-  checkLaunchEnvironment(env, {runRoot: config.runRoot, real: machineFacts().real});
-  let application, launcher, host;
+    ETS2TELEMETRY_RECORDING: `synthetic:${RECORDING_NAME}`, ETS2TELEMETRY_UPDATE_TEST_FEED: origin, ETS2TELEMETRY_UPDATE_TEST_PUBLIC_KEY: key.publicKey});
+  checkLaunchEnvironment(guardEnvironment('http://127.0.0.1:1'), {runRoot: config.runRoot, real});
+  let application, launcher, host, feed;
   const exited = () => launcher.exitCode !== null || launcher.signalCode !== null;
   try {
+    feed = await startUpdateFeed({channel, release, packageFile: pkg.file});
+    const env = guardEnvironment(feed.origin);
+    checkLaunchEnvironment(env, {runRoot: config.runRoot, real});
     feed.setPhase('offer');
     application = await electron.launch({executablePath: executable, cwd: layout.cwd, env, timeout: left(20000)});
     launcher = application.process();
@@ -1559,7 +1568,11 @@ async function updateFeed(config, label, executable, mode) {
         packageRequests: feed.requests.filter(row => row.path === feed.routes.package).length, updates: await updatesState(layout.dataRoot)};
       await stopFakeGame(host);
       host = undefined;
-      // The second click: download, apply, restart.
+      // A's service processes, read while A runs (review round 1), so the restarted instance's rows are told apart by pid.
+      const beforeClick = await launchRows(diagnostics);
+      record.aServicePids = beforeClick.servicePids;
+      const refusalsBefore = beforeClick.main.filter(row => row.pid === record.mainPid && row.event === 'UPDATE_REFUSED').length;
+      // The second click: download, apply, restart. A refusal now (a new UPDATE_REFUSED row) ends the wait at once.
       feed.setPhase('update');
       await button().click({timeout: left(10000)});
       const seen = [];
@@ -1568,6 +1581,8 @@ async function updateFeed(config, label, executable, mode) {
         const current = await viewOrNull();
         if (current && seen.at(-1) !== current.state) seen.push(current.state);
         if (current?.state === 'failed' || current?.state === 'ready') return current.state;
+        if (current?.state === 'refused' &&
+          (await launchRows(diagnostics)).main.filter(row => row.pid === record.mainPid && row.event === 'UPDATE_REFUSED').length > refusalsBefore) return 'refused';
         return exited() ? 'exited' : null;
       }, Boolean, 'UPDATE_APP_DID_NOT_EXIT', left(150000));
       record.states = seen;
@@ -1582,12 +1597,10 @@ async function updateFeed(config, label, executable, mode) {
       feed.setPhase('restart');
       if (outcome === 'exited') {
         // The restart helper waits for this process, then starts the newest app-* folder: its rows come with a new pid.
-        const servicePidsBefore = (await launchRows(diagnostics)).servicePids;
-        record.servicePidsBefore = servicePidsBefore.length;
         const restarted = await until(async () => {
           const rows = await launchRows(diagnostics);
           const mainPid = rows.mainPids.find(pid => pid !== record.mainPid);
-          const opened = rows.service.find(row => !servicePidsBefore.includes(row.pid) && (row.event === 'HISTORY_STORAGE_OPENED' || row.event === 'HISTORY_STORAGE_UNAVAILABLE'));
+          const opened = rows.service.find(row => !record.aServicePids.includes(row.pid) && (row.event === 'HISTORY_STORAGE_OPENED' || row.event === 'HISTORY_STORAGE_UNAVAILABLE'));
           return mainPid !== undefined && opened ? {mainPid} : null;
         }, Boolean, 'RESTARTED_INSTANCE_NOT_STARTED', left(45000));
         record.restartedPid = restarted.mainPid;
@@ -1601,12 +1614,15 @@ async function updateFeed(config, label, executable, mode) {
       await button().click({timeout: left(10000)});
       await until(viewOrNull, current => current?.state === 'installing' || current?.state === 'failed', 'UPDATE_NOT_INSTALLING', left(120000));
       const installingAt = performance.now();
-      const updaters = (await processList()).filter(row => normalizePath(row.path) === normalizePath(path.win32.join(layout.binaryRoot, 'Update.exe')));
+      const updateExe = normalizePath(path.win32.join(layout.binaryRoot, 'Update.exe'));
       const folder = path.win32.join(layout.binaryRoot, `app-${target.installed}`);
-      const kill = {updaters: updaters.length, killed: 0, entriesAtKill: null, msAfterInstalling: null, reason: null};
+      const kill = {updaters: null, killed: 0, entriesAtKill: null, msAfterInstalling: null, reason: null};
       for (let tick = 0; ; tick++) {
         const entries = await readdir(folder).catch(() => null);
         if (entries && entries.length > 0) {
+          // The Update.exe processes listed now, when the folder exists (review round 1), not an earlier snapshot.
+          const updaters = (await processList()).filter(row => normalizePath(row.path) === updateExe);
+          kill.updaters = updaters.length;
           for (const row of updaters) {try {process.kill(row.pid); kill.killed++;} catch {/* already gone: recorded by the count */}}
           kill.entriesAtKill = entries.length; kill.msAfterInstalling = Math.round(performance.now() - installingAt); kill.reason = 'app-folder';
           break;
@@ -1652,7 +1668,7 @@ async function updateFeed(config, label, executable, mode) {
   } finally {
     if (application && launcher && !exited()) await application.close().catch(() => undefined);
     if (host) await stopFakeGame(host);
-    await feed.close();
+    if (feed) await feed.close();
   }
   record.updates = await updatesState(layout.dataRoot);
   record.requests = feed.requests;
@@ -1680,7 +1696,8 @@ async function updateFeedVerify(config, label) {
   const observed = await readJson(path.join(config.evidence, `update-feed-${label}-observed.json`), 8 * 1024 * 1024);
   const rows = await launchRows(path.join(runRoot, observed.diagnostics));
   const aMain = rowsOf(rows.main, [observed.mainPid]);
-  const aServicePids = rows.servicePids.slice(0, observed.servicePidsBefore ?? rows.servicePids.length);
+  // A's service processes as update-feed read them while A ran; the interrupted mode reads none and takes every service row.
+  const aServicePids = Array.isArray(observed.aServicePids) ? observed.aServicePids : rows.servicePids;
   const aService = rowsOf(rows.service, aServicePids);
   const record = {label, mode: observed.mode, channel: observed.channel, a: {main: eventList(aMain.filter(row => /^(UPDATE_|APP_EXIT|SERVICE_EXIT|SETTINGS_LOADED)/.test(row.event))),
     shutdown: aService.filter(row => row.event === 'SHUTDOWN_STEP').map(row => row.facts)}};
@@ -1706,9 +1723,11 @@ async function updateFeedVerify(config, label) {
   assert.equal(observed.offer?.available, observed.offered.package, 'UPDATE_NOT_OFFERED');
   assert.deepEqual({state: observed.refusal?.view?.state, refusal: observed.refusal?.view?.refusal, packages: observed.refusal?.packageRequests, updates: observed.refusal?.updates},
     {state: 'refused', refusal: 'GAME_RUNNING', packages: 0, updates: 'absent'}, 'UPDATE_NOT_REFUSED_WHILE_GAME_RUNS');
+  assert.equal(observed.requestsDropped, 0, 'UPDATE_FEED_REQUESTS_DROPPED');
   assert.deepEqual(record.feed, [], 'UPDATE_FEED_REQUESTS_UNEXPECTED');
   assert.deepEqual(record.restartRequests, [], 'RESTART_FEED_REQUESTS_UNEXPECTED');
   // The download, the apply and the orderly `update` exit, in this order, then the restart helper.
+  assert.ok(observed.outcome !== 'refused', `UPDATE_REFUSED_AFTER_GAME_STOPPED ${JSON.stringify(observed.failedView ?? null)}`);
   assert.equal(observed.outcome, 'exited', `UPDATE_DID_NOT_RESTART ${JSON.stringify(observed.failedView ?? null)}`);
   assert.deepEqual(observed.exit, {code: 0, signal: null}, 'UPDATE_APP_EXIT_NONZERO');
   const order = [['UPDATE_SUPPORTED', row => row.facts?.mode === 'test-root' && row.facts?.channel === observed.channel],
@@ -1755,7 +1774,8 @@ async function updateFeedVerify(config, label) {
  */
 async function stubLaunch(config, label) {
   assert.match(label, /^[a-z0-9.-]{1,40}$/, 'STUB_LAUNCH_LABEL_INVALID');
-  checkRunSignal(process.env, {allowLocal: config.allowLocal === true});
+  // Hosted only, whatever the config says, as update-feed (review round 1).
+  checkRunSignal(process.env, {allowLocal: false});
   const clockStarted = performance.now(), budget = 50000;
   const left = (cap = budget) => Math.max(1, Math.min(cap, budget - (performance.now() - clockStarted)));
   const runRoot = await realpath(config.runRoot), layout = runLayout(runRoot, channelOf(config)), identity = identityOf(config);

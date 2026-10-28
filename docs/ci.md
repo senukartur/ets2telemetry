@@ -744,7 +744,7 @@ ET-055 PR-5 (REG-017, REG-019 part 1) runs the installer lifecycle with either c
 
 ## Update-from-feed installer lifecycle (ET-055 PR-8)
 
-ET-055 PR-8 (REG-019 part 2) adds the step **Update-from-feed installer lifecycle in a test root** to `windows-installer`, between the lifecycle and the side-by-side scenario: `./scripts/installer/Invoke-InstallerLifecycle.ps1 -Scenario update-from-feed`, limit 15 minutes, in a run root of its own ([installer testing](installer-testing.md#update-from-feed-scenario)). The installed build updates itself through its own update controller from a loopback feed that the driver serves on `127.0.0.1`, signed with an Ed25519 key generated for the run and never stored; then an interrupted apply of a third version (risk R1) is observed. No secret, repository variable or network access beyond the runner's loopback is used.
+ET-055 PR-8 (REG-019 part 2) adds the step **Update-from-feed installer lifecycle in a test root** to `windows-installer`, between the lifecycle and the side-by-side scenario: `./scripts/installer/Invoke-InstallerLifecycle.ps1 -Scenario update-from-feed`, limit 30 minutes, in a run root of its own ([installer testing](installer-testing.md#update-from-feed-scenario)). The installed build updates itself through its own update controller from a loopback feed that the driver serves on `127.0.0.1`, signed with an Ed25519 key generated for the run and never stored; then an interrupted apply of a third version (risk R1) is observed. No secret, repository variable or network access beyond the runner's loopback is used.
 
 | Event | Update-from-feed scenario |
 | --- | --- |
@@ -753,9 +753,9 @@ ET-055 PR-8 (REG-019 part 2) adds the step **Update-from-feed installer lifecycl
 | `push` to `main` or a dispatch on `main` | runs with the production build |
 
 - **Condition.** `if: github.event_name != 'pull_request'`, the lifecycle's condition: it needs `out/make`, the packaged folder (both upgrade fixtures are built from it) and the fake game host of the restored compiled inputs.
-- **Job limit.** `windows-installer`'s `timeout-minutes` rises from 20 to 40 for the three steps (8 + 15 + 8 on `main`); `tests/unit/ci-build-channel-workflow.test.ts` requires the job limit to hold their sum plus 5 minutes. No job name, required check or trigger changed.
+- **Step and job limits.** The step's 30 minutes hold the summed Job deadlines of the scenario's driver commands (21 minutes, counted from the harness by `tests/unit/installer-guard.test.ts`), the two guards and 6 minutes for the two fixture builds; they will be tightened after the first hosted measurements. `windows-installer`'s `timeout-minutes` rises from 20 to 55 for the three steps (8 + 30 + 8 on `main`); `tests/unit/ci-build-channel-workflow.test.ts` requires the job limit to hold their sum plus 5 minutes. No job name, required check or trigger changed.
 - **Evidence.** In `windows-installer-evidence-<run>-<attempt>`, beside the lifecycle's: `.local/ci/installer-<id>-evidence` with the observed and verified records of both update commands, the stub launch and the recorded feed requests (paths, statuses, headers' presence; no bodies, no key).
-- **Duration.** Not measured: two fixture builds, an install, two update runs under `RunExtended` (240 s and 300 s Job deadlines) and an uninstall; the first hosted run is the coordinator's dispatch.
+- **Duration.** Not measured: two fixture builds, an install, two update runs under `RunExtended` (240 s and 300 s Job deadlines) and an uninstall; the first hosted run is the coordinator's dispatch. When the R1 apply was not interrupted, the step's log shows `R1 not interrupted: reason <reason>, killed <n>`.
 
 ## ET-018 release artifact identity
 
