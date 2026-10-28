@@ -738,6 +738,11 @@ function installedCases() {
     ({name: `installed ${name}`, body: installedReceipt(path, replacement), scenario: 'scaffold', mode: 'installed', code: 0, available: true, reason: 'INSTALLED_RESULT_INCOMPLETE_OR_INVALID'});
   return [
     {name: 'intact installed scaffold receipt', body: installedReceipt(), scenario: 'scaffold', mode: 'installed', code: 0, available: true, reason: null},
+    // ET-055 PR-5: the staging lifecycle's installed smokes run the staging binary root, whose versions carry a NuGet label.
+    {name: 'intact installed staging scaffold receipt', body: installedReceipt(['installed', 'layout'], 'ETS2TelemetryDesktopStaging\\app-0.1.0-stg000000'), scenario: 'scaffold',
+      mode: 'installed', code: 0, available: true, reason: null},
+    invalid('another binary root', ['installed', 'layout'], 'ETS2TelemetryDesktopBeta\\app-0.1.1'),
+    invalid('a label with a dot', ['installed', 'layout'], 'ETS2TelemetryDesktopStaging\\app-0.1.0-stg.000000'),
     {name: 'packaged receipt cannot prove an installed run', body: scaffoldReceipt(), scenario: 'scaffold', mode: 'installed', code: 0, available: true, reason: 'DRIVER_RESULT_IDENTITY_MISMATCH'},
     {name: 'installed receipt cannot prove a packaged run', body: installedReceipt(), scenario: 'scaffold', code: 0, available: true, reason: 'DRIVER_RESULT_IDENTITY_MISMATCH'},
     {name: 'installed scaffold receipt still needs the plugin card', body: installedReceipt(['pluginCard', 'controlsDisabled'], false), scenario: 'scaffold', mode: 'installed', code: 0,

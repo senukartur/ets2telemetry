@@ -336,8 +336,12 @@ jobs:
           retention-days: 14
   windows-installer:
     name: Windows x64 hosted installer
-    needs: windows-build
-    if: github.event_name != 'pull_request'
+    # ET-055 PR-5 (docs/ci.md#side-by-side-installer-lifecycle-et-055-pr-5): it runs whenever windows-build succeeded on a
+    # non-PR event, so the lifecycle of the build that was made always leaves its evidence. On main the staging build job
+    # supplies the staging Setup of the side-by-side scenario; if it did not succeed there, the side-by-side steps are
+    # skipped and the step "Require the staging build on main" fails the job. Pull requests skip this job (E1).
+    needs: [windows-build, windows-staging-build]
+    if: "!cancelled() && github.event_name != 'pull_request' && needs.windows-build.result == 'success'"
     runs-on: windows-2022
     timeout-minutes: 20
     defaults:
@@ -394,18 +398,31 @@ jobs:
           Add-Content -LiteralPath $env:GITHUB_OUTPUT -Value ('channel=' + $built.channel)
           Add-Content -LiteralPath $env:GITHUB_OUTPUT -Value ('setup=' + $built.setup)
       # ET-018 PR-1 (docs/installer-testing.md): install, repair and update the Squirrel output inside a marked test root in
-      # the runner's temporary folder, with installed smokes and the seeded upgrade of a version 1 database; it never
-      # uninstalls. Non-PR events only, like the maker that builds its Setup.exe. Its evidence, .local/ci/installer-*-evidence,
-      # lies inside the uploaded .local/ci; the run root itself is deleted and never uploaded.
+      # the runner's temporary folder, with installed smokes and the seeded upgrade of a version 1 database, then the
+      # uninstall scenarios. Non-PR events only, like the maker that builds its Setup.exe. Its evidence,
+      # .local/ci/installer-*-evidence, lies inside the uploaded .local/ci; the run root itself is deleted and never uploaded.
+      # ET-055 PR-5: it installs the channel of the build that was made: production on main, staging on a branch dispatch.
       - name: Installer lifecycle in a test root
-        if: github.event_name != 'pull_request' && steps.built.outputs.channel == 'production'
+        if: github.event_name != 'pull_request'
         timeout-minutes: 8
         run: ./scripts/installer/Invoke-InstallerLifecycle.ps1
-      # ET-055 PR-4: a dispatch on a branch other than main builds staging, and the lifecycle installs production Setups only
-      # until ET-055 PR-5 adds the staging lifecycle, so it is skipped with a notice instead of failing.
-      - name: Installer lifecycle skipped for a staging build
-        if: github.event_name != 'pull_request' && steps.built.outputs.channel != 'production'
-        run: Write-Output '::notice title=Installer lifecycle skipped::This run built the staging channel (a dispatch on a branch other than main). The installer lifecycle installs production Setups only until ET-055 PR-5 (docs/installer-testing.md).'
+      # ET-055 PR-5 (REG-017, REG-019): the production build of this run and the staging Setup of windows-staging-build
+      # installed side by side in one test root; main only, where both channels are built.
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4, verified official actions/download-artifact tag
+        if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main' && steps.built.outputs.channel == 'production' && needs.windows-staging-build.result == 'success'
+        with:
+          name: windows-staging-input-${{ github.run_id }}-${{ github.run_attempt }}
+          path: .local/staging-input
+      - name: Side-by-side installer lifecycle in a test root
+        if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main' && steps.built.outputs.channel == 'production' && needs.windows-staging-build.result == 'success'
+        timeout-minutes: 8
+        run: ./scripts/installer/Invoke-InstallerLifecycle.ps1 -Scenario side-by-side -StagingInput "$PWD/.local/staging-input"
+      # On main both channels must have been installed side by side: a failed or skipped staging build fails this job after the
+      # production lifecycle above has run and left its evidence, so the scaffold aggregate stays red.
+      - name: Require the staging build on main
+        if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main' && needs.windows-staging-build.result != 'success'
+        run: |
+          throw ('STAGING_BUILD_NOT_SUCCESSFUL: windows-staging-build ended ${{ needs.windows-staging-build.result }}, so the side-by-side installer lifecycle did not run.')
       - name: Record final versions and duration
         if: always()
         run: node scripts/ci/versions.mjs
@@ -577,3 +594,81 @@ jobs:
           retention-days: 14
           if-no-files-found: error
           include-hidden-files: true
+  windows-staging-build:
+    name: Windows x64 staging installer
+    # ET-055 PR-5 (docs/ci.md#side-by-side-installer-lifecycle-et-055-pr-5): on main, where windows-build makes the production
+    # release artifact, this job builds the staging channel in parallel, runs the hosted installer lifecycle with the staging
+    # Setup and hands that Setup to windows-installer for the side-by-side scenario. A branch dispatch builds staging in
+    # windows-build already, and pull requests skip every installer (E1), so it runs on main only. Not a required check.
+    if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
+    runs-on: windows-2022
+    # A full staging build, the Squirrel maker and the lifecycle in one job; it runs beside windows-build and windows-runtime.
+    timeout-minutes: 30
+    defaults:
+      run:
+        shell: pwsh
+    env:
+      npm_config_cache: ${{ github.workspace }}\.local\cache\npm
+      electron_config_cache: ${{ github.workspace }}\.local\cache\electron
+      PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD: '1'
+      ETS2TELEMETRY_SOURCE_COMMIT: ${{ github.event.pull_request.head.sha || github.sha }}
+      ETS2TELEMETRY_BUILD_CHANNEL: staging
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5
+        with:
+          node-version: '24.19.0'
+          architecture: x64
+          package-manager-cache: false
+      - name: Acquire checksum-pinned CMake 4.3.1 x64
+        run: ./scripts/ci/Install-CMake.ps1
+      - name: Verify pinned npm and record host versions
+        run: |
+          if ((npm --version) -ne '11.17.0') { throw 'Expected npm 11.17.0 bundled with pinned Node.' }
+          node scripts/ci/versions.mjs
+          cmake --version
+      - uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        with:
+          path: |
+            .local/cache/npm
+            .local/cache/electron
+          key: download-${{ runner.os }}-x64-node24.19.0-abi137-electron44.7.0-abi149-${{ hashFiles('package-lock.json', 'tools/lint/package-lock.json') }}
+      - name: Clean lockfile installation
+        run: npm ci
+      # The staging package, Squirrel output and its inspection, and the tests-only fake SDK host and test plugin DLL that
+      # the lifecycle's uninstall scenarios load (no other native test is built or run here; windows-build runs them).
+      - name: Staging Forge maker and static native package inspection
+        run: |
+          npm run native:configure -- -G 'Visual Studio 17 2022'
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          npm run make
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          cmake --build native/telemetry-plugin/build --config Release --target capture-cap0-game-host snapshot-transport-test-plugin --parallel
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          npm run inspect:package -- --installer
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      # The staging Setup and its record (build names, SHA-256, commits) for windows-installer, which verifies both first.
+      - name: Seal the staging Setup for the side-by-side scenario
+        run: node scripts/installer/side-by-side-input.mjs create "$PWD/.local/staging-input"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: windows-staging-input-${{ github.run_id }}-${{ github.run_attempt }}
+          path: .local/staging-input
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 2
+      # The whole installer lifecycle with the staging Setup: its own install root, names, versions and data root.
+      - name: Staging installer lifecycle in a test root
+        timeout-minutes: 8
+        run: ./scripts/installer/Invoke-InstallerLifecycle.ps1
+      - name: Record final versions and duration
+        if: always()
+        run: node scripts/ci/versions.mjs
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        if: always()
+        with:
+          name: windows-staging-evidence-${{ github.run_id }}-${{ github.run_attempt }}
+          path: .local/ci
+          include-hidden-files: true
+          if-no-files-found: error
+          retention-days: 14

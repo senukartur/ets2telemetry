@@ -9,7 +9,8 @@ import {describe, expect, it} from 'vitest';
 import {checkedPaths, checkInstalled, checkInstallTest, checkLaunchEnvironment, checkRunPlan, checkRunSignal, checkSetupChannel, FACTS_VARIABLE, factsEvidence, installedEnvironment,
   checkDataRootUnchanged, checkDecoyUnchanged, checkRegistrationIcon, checkUninstallResidue, classifyRegistrationIcon, DATA_ROOT_REQUIRED, electronRuntimeNames, PRODUCT_EXECUTABLE, InstallerGuardError, RESIDUE_MAX_ENTRIES, isGuardedProcess, isHostedRunner, minimalPath, normalizePath, ownsRegistration, parseUninstallString, resolveRealLocation, runLayout,
   steamLibraryPaths, uninstallEnvironment, type RunPlanFacts} from '../../scripts/installer/installer-guard.mjs';
-import {checkProductLinks, checkRegistrationNames, checkUninstallEntries, classifyProductLinks} from '../../scripts/installer/installer-guard.mjs';
+import {checkOtherChannelUnchanged, checkProductLinks, checkRegistrationNames, checkRunChannels, checkShortcutIdentities, checkUninstallEntries, classifyProductLinks, LIFECYCLE_IDENTITIES,
+  lifecycleIdentity, lifecycleVersions, protectedRoots} from '../../scripts/installer/installer-guard.mjs';
 import {temporaryResources} from '../shared/resources';
 
 // ET-018 PR-1 (REG-017, U12): the installer lifecycle's fail-closed guards. Pure decisions over hand-written facts; no
@@ -33,7 +34,8 @@ function facts(changes: FactChanges = {}): RunPlanFacts {
     const prefix = Object.keys(redirect).find(raw => key === normalizePath(raw) || key.startsWith(`${normalizePath(raw)}\\`));
     resolved[key] = prefix ? path.win32.join(redirect[prefix], candidate.slice(prefix.length)) : candidate;
   }
-  return {real: REAL, steamLibraries: STEAM, resolved, realBinaryRootExists: false, registrationExists: false, processes: ['explorer.exe', 'node.exe', 'pwsh.exe'],
+  return {real: REAL, steamLibraries: STEAM, resolved, channels: ['production'], realBinaryRootExists: {production: false, staging: false},
+    registrationExists: {production: false, staging: false}, processes: ['explorer.exe', 'node.exe', 'pwsh.exe'],
     markers: {pluginMarker: true, installTest: installTest(runRoot)}, ...base, ...rest};
 }
 const refusal = (work: () => unknown) => {
@@ -61,16 +63,17 @@ describe('CI signal (local runs refused)', () => {
     expect(refusal(() => checkRunSignal({}, {allowLocal: 'true' as unknown as boolean}))).toBe('LOCAL_RUN_REFUSED');
     expect(refusal(() => checkRunSignal({}, {allowLocal: false}))).toBe('LOCAL_RUN_REFUSED');
   });
-  // ET-055 PR-4 (UP13): a local run never installs the production identity; the staging lifecycle arrives with PR-5.
-  it('installs a production Setup only on a GitHub-hosted runner, and refuses a staging Setup until its lifecycle exists', () => {
+  // ET-055 PR-4 (UP13): a local run never installs the production identity. ET-055 PR-5 lifted the staging refusal: a
+  // staging Setup runs on a hosted runner, or locally under -AllowLocal (checkRunSignal) and every fact-based guard.
+  it('installs a production Setup only on a GitHub-hosted runner, and a staging Setup anywhere the run signal allows', () => {
     const hosted = {GITHUB_ACTIONS: 'true', RUNNER_ENVIRONMENT: 'github-hosted'};
     expect(refusal(() => checkSetupChannel('production', hosted))).toBe('ACCEPTED');
     for (const env of [{}, {GITHUB_ACTIONS: 'true', RUNNER_ENVIRONMENT: 'self-hosted'}, {RUNNER_ENVIRONMENT: 'github-hosted'}, {GITHUB_ACTIONS: 'TRUE', RUNNER_ENVIRONMENT: 'github-hosted'},
       {ETS2TELEMETRY_OWNER_PRODUCTION_BUILD: '1'}]) {
       expect(refusal(() => checkSetupChannel('production', env))).toBe('LOCAL_PRODUCTION_REFUSED');
     }
-    expect(refusal(() => checkSetupChannel('staging', {}))).toBe('STAGING_LIFECYCLE_PENDING');
-    expect(refusal(() => checkSetupChannel('staging', hosted))).toBe('STAGING_LIFECYCLE_PENDING');
+    expect(refusal(() => checkSetupChannel('staging', {}))).toBe('ACCEPTED');
+    expect(refusal(() => checkSetupChannel('staging', hosted))).toBe('ACCEPTED');
     for (const channel of [undefined, '', 'Production', 'beta']) expect(refusal(() => checkSetupChannel(channel, hosted))).toBe('SETUP_CHANNEL_UNKNOWN');
   });
   it('creates real shortcuts only on a GitHub-hosted runner', () => {
@@ -150,8 +153,16 @@ describe('Windows-initiated uninstall (ET-018 PR-3)', () => {
     ['a new top-level file', {...decoy, 'Microsoft.txt': {size: 1, sha256: 'e'.repeat(64)}}, 'DECOY_ENTRY_ADDED']
   ])('refuses %s', (_name, after, code) => expect(refusal(() => checkDecoyUnchanged(decoy, after))).toBe(code));
   const update = `${RUN_ROOT}\\LocalAppData\\ETS2TelemetryDesktop\\Update.exe`;
+  const stagingUpdate = `${RUN_ROOT}\\LocalAppData\\ETS2TelemetryDesktopStaging\\Update.exe`;
   it.each([[`"${update}" --uninstall`, ['--uninstall']], [`"${update}" --uninstall -s`, ['--uninstall', '-s']]] as const)('runs the registered %s', (value, args) => {
-    expect(parseUninstallString(value, RUN_ROOT)).toEqual({program: update, args});
+    expect(parseUninstallString(value, RUN_ROOT, 'production')).toEqual({program: update, args});
+  });
+  // ET-055 PR-5: each channel runs only its own Update.exe, never the other channel's in the same run root.
+  it('runs only the channel\'s own Update.exe', () => {
+    expect(parseUninstallString(`"${stagingUpdate}" --uninstall`, RUN_ROOT, 'staging')).toEqual({program: stagingUpdate, args: ['--uninstall']});
+    expect(refusal(() => parseUninstallString(`"${stagingUpdate}" --uninstall`, RUN_ROOT, 'production'))).toBe('UNINSTALL_STRING_OUTSIDE_RUN_ROOT');
+    expect(refusal(() => parseUninstallString(`"${update}" --uninstall`, RUN_ROOT, 'staging'))).toBe('UNINSTALL_STRING_OUTSIDE_RUN_ROOT');
+    expect(refusal(() => parseUninstallString(`"${update}" --uninstall`, RUN_ROOT, 'beta'))).toBe('LIFECYCLE_CHANNEL_UNKNOWN');
   });
   it.each([
     ['another Update.exe', `"C:\\Users\\fixture\\AppData\\Local\\ETS2TelemetryDesktop\\Update.exe" --uninstall`, 'UNINSTALL_STRING_OUTSIDE_RUN_ROOT'],
@@ -159,7 +170,7 @@ describe('Windows-initiated uninstall (ET-018 PR-3)', () => {
     ['another command', `"${update}" --update C:\\feed`, 'UNINSTALL_STRING_INVALID'],
     ['an extra argument', `"${update}" --uninstall -s --extra`, 'UNINSTALL_STRING_INVALID'],
     ['no value', undefined, 'UNINSTALL_STRING_INVALID']
-  ])('refuses %s', (_name, value, code) => expect(refusal(() => parseUninstallString(value, RUN_ROOT))).toBe(code));
+  ])('refuses %s', (_name, value, code) => expect(refusal(() => parseUninstallString(value, RUN_ROOT, 'production'))).toBe(code));
   it('runs with the decoy LOCALAPPDATA, R folders, the minimal PATH and no ETS2TELEMETRY_ variable', () => {
     const decoy = `${RUN_ROOT}\\decoy`;
     const env = uninstallEnvironment({SystemRoot: 'C:\\Windows', PATH: 'C:\\tools', LOCALAPPDATA: REAL.localAppData, ETS2TELEMETRY_PROFILE_DIR: `${RUN_ROOT}\\profile`,
@@ -185,17 +196,37 @@ describe('preflight of the run root', () => {
     expect(refusal(() => checkRunPlan(facts({markers: null})))).toBe('ACCEPTED');
   });
   it('derives the binary root, data root and SQUIRREL_TEMP from R\\LocalAppData', () => {
-    const layout = runLayout(RUN_ROOT);
+    const layout = runLayout(RUN_ROOT, 'production');
     expect({base: layout.base, squirrelTemp: layout.squirrelTemp, binaryRoot: layout.binaryRoot, dataRoot: layout.dataRoot}).toEqual({
       base: `${RUN_ROOT}\\LocalAppData`, squirrelTemp: `${RUN_ROOT}\\LocalAppData`, binaryRoot: `${RUN_ROOT}\\LocalAppData\\ETS2TelemetryDesktop`,
       dataRoot: `${RUN_ROOT}\\LocalAppData\\ETS2Telemetry`});
+  });
+  // ET-055 PR-5: the staging channel's roots sit beside production's in the same R\LocalAppData; the shared folders are one.
+  it('derives the staging binary and data roots beside production\'s, and refuses an unknown channel', () => {
+    const staging = runLayout(RUN_ROOT, 'staging'), production = runLayout(RUN_ROOT, 'production');
+    expect({binaryRoot: staging.binaryRoot, dataRoot: staging.dataRoot, channel: staging.channel}).toEqual({binaryRoot: `${RUN_ROOT}\\LocalAppData\\ETS2TelemetryDesktopStaging`,
+      dataRoot: `${RUN_ROOT}\\LocalAppData\\ETS2TelemetryStaging`, channel: 'staging'});
+    expect({...staging, binaryRoot: '', dataRoot: '', channel: ''}).toEqual({...production, binaryRoot: '', dataRoot: '', channel: ''});
+    expect(refusal(() => runLayout(RUN_ROOT, 'Staging'))).toBe('LIFECYCLE_CHANNEL_UNKNOWN');
+    expect(refusal(() => runLayout(RUN_ROOT, undefined as unknown as string))).toBe('LIFECYCLE_CHANNEL_UNKNOWN');
   });
   it.each([
     ['the real data root', `${REAL.localAppData}\\ETS2Telemetry\\installer-${ID}`],
     ['the real binary root', `${REAL.localAppData}\\ETS2TelemetryDesktop\\installer-${ID}`],
     ['the real Roaming userData', `${REAL.roamingAppData}\\ETS2Telemetry Desktop\\installer-${ID}`],
-    ['the real data root in other case', `c:\\users\\FIXTURE\\appdata\\local\\ets2telemetry\\installer-${ID}`]
-  ])('refuses a run root inside %s', (_name, runRoot) => expect(refusal(() => checkRunPlan(facts({runRoot})))).toBe('PATH_IN_REAL_ROOT'));
+    ['the real data root in other case', `c:\\users\\FIXTURE\\appdata\\local\\ets2telemetry\\installer-${ID}`],
+    // ET-055 PR-5: both channels' real roots are protected, whatever the run installs.
+    ['the real staging data root', `${REAL.localAppData}\\ETS2TelemetryStaging\\installer-${ID}`],
+    ['the real staging binary root', `${REAL.localAppData}\\ETS2TelemetryDesktopStaging\\installer-${ID}`],
+    ['the real staging Roaming userData', `${REAL.roamingAppData}\\ETS2Telemetry Desktop Staging\\installer-${ID}`]
+  ])('refuses a run root inside %s', (_name, runRoot) => {
+    expect(refusal(() => checkRunPlan(facts({runRoot})))).toBe('PATH_IN_REAL_ROOT');
+    expect(refusal(() => checkRunPlan(facts({runRoot, channels: ['staging']})))).toBe('PATH_IN_REAL_ROOT');
+  });
+  it('protects the data, binary and Roaming roots of both channels', () => {
+    expect(protectedRoots(REAL).real).toEqual([`${REAL.localAppData}\\ETS2Telemetry`, `${REAL.localAppData}\\ETS2TelemetryDesktop`, `${REAL.roamingAppData}\\ETS2Telemetry Desktop`,
+      `${REAL.localAppData}\\ETS2TelemetryStaging`, `${REAL.localAppData}\\ETS2TelemetryDesktopStaging`, `${REAL.roamingAppData}\\ETS2Telemetry Desktop Staging`]);
+  });
   it.each([
     ['the default Steam library', `${STEAM[0]}\\steamapps\\installer-${ID}`],
     ['a second Steam library', `E:\\SteamLibrary\\installer-${ID}`]
@@ -222,12 +253,29 @@ describe('preflight of the run root', () => {
     expect(refusal(() => checkRunPlan(facts({decoy, redirect: {[decoy]: REAL.localAppData}})))).toBe('DECOY_IS_REAL_ROOT');
   });
   it('refuses an existing real install or registration, and unknown state', () => {
-    expect(refusal(() => checkRunPlan(facts({registrationExists: true})))).toBe('REGISTRATION_PRESENT');
-    expect(refusal(() => checkRunPlan(facts({realBinaryRootExists: true})))).toBe('REAL_INSTALL_PRESENT');
-    expect(refusal(() => checkRunPlan({...facts(), registrationExists: undefined as unknown as boolean}))).toBe('REGISTRATION_PRESENT');
-    expect(refusal(() => checkRunPlan({...facts(), realBinaryRootExists: undefined as unknown as boolean}))).toBe('REAL_INSTALL_PRESENT');
+    expect(refusal(() => checkRunPlan(facts({registrationExists: {production: true, staging: false}})))).toBe('REGISTRATION_PRESENT');
+    expect(refusal(() => checkRunPlan(facts({realBinaryRootExists: {production: true, staging: false}})))).toBe('REAL_INSTALL_PRESENT');
+    expect(refusal(() => checkRunPlan({...facts(), registrationExists: undefined as unknown as Record<string, boolean>}))).toBe('REGISTRATION_PRESENT');
+    expect(refusal(() => checkRunPlan({...facts(), realBinaryRootExists: undefined as unknown as Record<string, boolean>}))).toBe('REAL_INSTALL_PRESENT');
+    expect(refusal(() => checkRunPlan(facts({registrationExists: {production: false}})))).toBe('ACCEPTED');
   });
-  it.each(['ETS2TelemetryDesktop.exe', 'eurotrucks2.exe', 'AMTRUCKS.EXE', 'TruckersMP-Launcher.exe', 'truckersmp-cli.exe'])('refuses a running %s', name => {
+  // ET-055 PR-5: the preflight judges every channel the run installs, and only those: a local staging run may proceed beside
+  // the owner's installed production copy, but never beside an installed staging copy; the side-by-side run needs both absent.
+  it('judges the real install and registration of every channel the run installs, and only those', () => {
+    const production = {production: true, staging: false}, staging = {production: false, staging: true};
+    expect(refusal(() => checkRunPlan(facts({channels: ['staging'], realBinaryRootExists: production, registrationExists: production})))).toBe('ACCEPTED');
+    expect(refusal(() => checkRunPlan(facts({channels: ['staging'], realBinaryRootExists: staging})))).toBe('REAL_INSTALL_PRESENT');
+    expect(refusal(() => checkRunPlan(facts({channels: ['staging'], registrationExists: staging})))).toBe('REGISTRATION_PRESENT');
+    expect(refusal(() => checkRunPlan(facts({channels: ['staging'], registrationExists: {production: false}})))).toBe('REGISTRATION_PRESENT');
+    expect(refusal(() => checkRunPlan(facts({channels: ['production', 'staging']})))).toBe('ACCEPTED');
+    expect(refusal(() => checkRunPlan(facts({channels: ['production', 'staging'], realBinaryRootExists: staging})))).toBe('REAL_INSTALL_PRESENT');
+    expect(refusal(() => checkRunPlan(facts({channels: ['production', 'staging'], registrationExists: production})))).toBe('REGISTRATION_PRESENT');
+  });
+  it.each([[[]], [['production', 'production']], [['beta']], [['production', 'staging', 'production']], [undefined]])('refuses the run channels %j', channels => {
+    expect(refusal(() => checkRunPlan(facts({channels: channels as string[]})))).toBe('RUN_CHANNELS_INVALID');
+    expect(refusal(() => checkRunChannels(channels))).toBe('RUN_CHANNELS_INVALID');
+  });
+  it.each(['ETS2TelemetryDesktop.exe', 'ETS2TelemetryDesktopStaging.exe', 'eurotrucks2.exe', 'AMTRUCKS.EXE', 'TruckersMP-Launcher.exe', 'truckersmp-cli.exe'])('refuses a running %s', name => {
     expect(isGuardedProcess(name)).toBe(true);
     expect(refusal(() => checkRunPlan(facts({processes: ['explorer.exe', name]})))).toBe('PROCESS_RUNNING');
   });
@@ -270,10 +318,17 @@ describe('preflight of the run root', () => {
 });
 
 describe('after each install', () => {
-  const binaryRoot = runLayout(RUN_ROOT).binaryRoot;
-  const installed = (changes = {}) => ({runRoot: RUN_ROOT, installLocation: binaryRoot, binaryRoot, resolvedInstallLocation: binaryRoot, resolvedBinaryRoot: binaryRoot,
+  const binaryRoot = runLayout(RUN_ROOT, 'production').binaryRoot, stagingRoot = runLayout(RUN_ROOT, 'staging').binaryRoot;
+  const installed = (changes = {}) => ({runRoot: RUN_ROOT, channel: 'production', installLocation: binaryRoot, binaryRoot, resolvedInstallLocation: binaryRoot, resolvedBinaryRoot: binaryRoot,
     realBinaryRootExists: false, ...changes});
   it('accepts the binary root R\\LocalAppData\\ETS2TelemetryDesktop', () => expect(refusal(() => checkInstalled(installed()))).toBe('ACCEPTED'));
+  // ET-055 PR-5: each channel's registration must name its own binary root, never the other channel's beside it.
+  it('accepts the staging binary root for staging only', () => {
+    const staging = {channel: 'staging', installLocation: stagingRoot, binaryRoot: stagingRoot, resolvedInstallLocation: stagingRoot, resolvedBinaryRoot: stagingRoot};
+    expect(refusal(() => checkInstalled(installed(staging)))).toBe('ACCEPTED');
+    expect(refusal(() => checkInstalled(installed({...staging, channel: 'production'})))).toBe('INSTALL_OUTSIDE_RUN_ROOT');
+    expect(refusal(() => checkInstalled(installed({channel: 'staging'})))).toBe('INSTALL_OUTSIDE_RUN_ROOT');
+  });
   it.each([
     ['an InstallLocation in the real LocalAppData', {installLocation: `${REAL.localAppData}\\ETS2TelemetryDesktop`}],
     ['an InstallLocation elsewhere inside R', {installLocation: `${RUN_ROOT}\\ETS2TelemetryDesktop`}],
@@ -299,7 +354,7 @@ describe('product shortcuts, the Uninstall entry and the display names (ET-045h)
   const installedLinks = [`desktop||${NEW}`, `start-menu|Artur Sianiuk|${NEW}`];
 
   it('accepts one current-name shortcut per location after an install, in the Start menu company folder', () => {
-    const classification = classifyProductLinks(installedLinks);
+    const classification = classifyProductLinks(installedLinks, 'production');
     expect(classification).toEqual({total: 2, desktop: {current: 1, legacy: 0, other: 0, currentFolders: ['']},
       'start-menu': {current: 1, legacy: 0, other: 0, currentFolders: ['Artur Sianiuk']}});
     expect(refusal(() => checkProductLinks(classification, 'installed'))).toBe('ACCEPTED');
@@ -312,11 +367,31 @@ describe('product shortcuts, the Uninstall entry and the display names (ET-045h)
     ['two Desktop shortcuts', [...installedLinks, `desktop|Folder|${NEW}`], 'PRODUCT_SHORTCUT_DUPLICATE'],
     ['a Start menu shortcut in another folder', [installedLinks[0], `start-menu|Other|${NEW}`], 'PRODUCT_SHORTCUT_FOLDER'],
     ['a Desktop shortcut in a subfolder', [`desktop|Folder|${NEW}`, installedLinks[1]], 'PRODUCT_SHORTCUT_FOLDER']
-  ])('refuses %s after an install', (_name, rows, code) => expect(refusal(() => checkProductLinks(classifyProductLinks(rows), 'installed'))).toBe(code));
+  ])('refuses %s after an install', (_name, rows, code) => expect(refusal(() => checkProductLinks(classifyProductLinks(rows, 'production'), 'installed'))).toBe(code));
+  // ET-055 PR-5: the staging shortcuts carry the staging display name, and staging has no earlier name to migrate.
+  it('classifies staging shortcuts by the staging display name, without legacy names', () => {
+    const STAGING = 'Yukon Union Telemetry Staging', rows = [`desktop||${STAGING}`, `start-menu|Artur Sianiuk|${STAGING}`];
+    expect(refusal(() => checkProductLinks(classifyProductLinks(rows, 'staging'), 'installed'))).toBe('ACCEPTED');
+    expect(refusal(() => checkProductLinks(classifyProductLinks(installedLinks, 'staging'), 'installed'))).toBe('PRODUCT_SHORTCUT_OTHER_NAME');
+    expect(refusal(() => checkProductLinks(classifyProductLinks(rows, 'production'), 'installed'))).toBe('PRODUCT_SHORTCUT_OTHER_NAME');
+    expect(classifyProductLinks([...rows, `desktop||${OLD}`], 'staging').desktop).toEqual({current: 1, legacy: 0, other: 1, currentFolders: ['']});
+  });
+  it('accepts each channel\'s own AUMID on its shortcuts and never the other channel\'s', () => {
+    const production = lifecycleIdentity('production'), staging = lifecycleIdentity('staging');
+    expect([production.appUserModelId, staging.appUserModelId]).toEqual(['com.squirrel.ETS2TelemetryDesktop.ETS2TelemetryDesktop',
+      'com.squirrel.ETS2TelemetryDesktopStaging.ETS2TelemetryDesktopStaging']);
+    expect(checkShortcutIdentities([`desktop|${NEW}|${production.appUserModelId}`, `start-menu|${NEW}|${production.appUserModelId}`], 'production')).toBe(2);
+    expect(checkShortcutIdentities([`desktop|${staging.displayName}|${staging.appUserModelId}`], 'staging')).toBe(1);
+    expect(refusal(() => checkShortcutIdentities([`desktop|${staging.displayName}|${production.appUserModelId}`], 'staging'))).toBe('SHORTCUT_AUMID_DIFFERS');
+    expect(refusal(() => checkShortcutIdentities([`desktop|${NEW}|`], 'production'))).toBe('SHORTCUT_AUMID_DIFFERS');
+    expect(refusal(() => checkShortcutIdentities([`desktop|${staging.displayName}|${production.appUserModelId}`], 'production'))).toBe('SHORTCUT_IDENTITY_NAME');
+    expect(refusal(() => checkShortcutIdentities([], 'production'))).toBe('SHORTCUT_IDENTITIES_MISSING');
+    expect(refusal(() => checkShortcutIdentities([`taskbar|${NEW}|${production.appUserModelId}`], 'production'))).toBe('SHORTCUT_IDENTITY_ROW_INVALID');
+  });
   it('expects no product shortcut of any name after an uninstall', () => {
-    expect(refusal(() => checkProductLinks(classifyProductLinks([]), 'none'))).toBe('ACCEPTED');
-    expect(refusal(() => checkProductLinks(classifyProductLinks([`start-menu|Artur Sianiuk|${OLD}`]), 'none'))).toBe('PRODUCT_SHORTCUT_UNEXPECTED');
-    expect(refusal(() => checkProductLinks(classifyProductLinks(installedLinks), 'other' as 'none'))).toBe('PRODUCT_LINK_EXPECTATION_INVALID');
+    expect(refusal(() => checkProductLinks(classifyProductLinks([], 'production'), 'none'))).toBe('ACCEPTED');
+    expect(refusal(() => checkProductLinks(classifyProductLinks([`start-menu|Artur Sianiuk|${OLD}`], 'production'), 'none'))).toBe('PRODUCT_SHORTCUT_UNEXPECTED');
+    expect(refusal(() => checkProductLinks(classifyProductLinks(installedLinks, 'production'), 'other' as 'none'))).toBe('PRODUCT_LINK_EXPECTATION_INVALID');
   });
   it.each([
     ['a path for a name', [`desktop||C:\\Users\\x\\${NEW}`]],
@@ -325,13 +400,26 @@ describe('product shortcuts, the Uninstall entry and the display names (ET-045h)
     ['an unknown location', [`taskbar||${NEW}`]],
     ['a missing field', [`desktop|${NEW}`]],
     ['an empty name', ['desktop||']]
-  ])('refuses a link row with %s', (_name, rows) => expect(refusal(() => classifyProductLinks(rows))).toBe('PRODUCT_LINK_ROW_INVALID'));
+  ])('refuses a link row with %s', (_name, rows) => expect(refusal(() => classifyProductLinks(rows, 'production'))).toBe('PRODUCT_LINK_ROW_INVALID'));
 
-  const binaryRoot = runLayout(RUN_ROOT).binaryRoot;
+  const binaryRoot = runLayout(RUN_ROOT, 'production').binaryRoot, stagingRoot = runLayout(RUN_ROOT, 'staging').binaryRoot;
   const entry = (view: string, name = 'ETS2TelemetryDesktop', installLocation: string | null = binaryRoot) => ({view, name, installLocation});
   it('accepts the one ETS2TelemetryDesktop entry, seen in both registry views', () => {
-    expect(checkUninstallEntries([entry('Registry64'), entry('Registry32')], RUN_ROOT)).toEqual({views: 2, names: ['ETS2TelemetryDesktop']});
-    expect(checkUninstallEntries([entry('Registry64'), entry('Registry64', 'Other', 'D:\\Other')], RUN_ROOT)).toEqual({views: 1, names: ['ETS2TelemetryDesktop']});
+    expect(checkUninstallEntries([entry('Registry64'), entry('Registry32')], RUN_ROOT, 'production')).toEqual({views: 2, names: ['ETS2TelemetryDesktop'], otherChannels: []});
+    expect(checkUninstallEntries([entry('Registry64'), entry('Registry64', 'Other', 'D:\\Other')], RUN_ROOT, 'production'))
+      .toEqual({views: 1, names: ['ETS2TelemetryDesktop'], otherChannels: []});
+  });
+  // ET-055 PR-5: side by side, each channel keeps one entry of its own, and the other channel's own entry may sit beside it.
+  it('accepts the other channel\'s own entry beside this channel\'s, and nothing else in R', () => {
+    const staging = (view: string, name = 'ETS2TelemetryDesktopStaging', location: string | null = stagingRoot) => entry(view, name, location);
+    const both = [entry('Registry64'), staging('Registry64')];
+    expect(checkUninstallEntries(both, RUN_ROOT, 'production')).toEqual({views: 1, names: ['ETS2TelemetryDesktop'], otherChannels: ['staging']});
+    expect(checkUninstallEntries(both, RUN_ROOT, 'staging')).toEqual({views: 1, names: ['ETS2TelemetryDesktopStaging'], otherChannels: ['production']});
+    expect(refusal(() => checkUninstallEntries([staging('Registry64')], RUN_ROOT, 'production'))).toBe('UNINSTALL_ENTRY_MISSING');
+    expect(refusal(() => checkUninstallEntries([entry('Registry64'), staging('Registry64', 'ETS2TelemetryDesktop')], RUN_ROOT, 'production'))).toBe('UNINSTALL_ENTRY_FOREIGN_NAME');
+    expect(refusal(() => checkUninstallEntries([staging('Registry64'), staging('Registry64', 'ETS2TelemetryDesktopStaging2')], RUN_ROOT, 'staging')))
+      .toBe('UNINSTALL_ENTRY_DUPLICATE');
+    expect(refusal(() => checkUninstallEntries([entry('Registry64'), entry('Registry64', 'Other', `${RUN_ROOT}\\Other`)], RUN_ROOT, 'production'))).toBe('UNINSTALL_ENTRY_FOREIGN_NAME');
   });
   it.each([
     ['no entry', [], 'UNINSTALL_ENTRY_MISSING'],
@@ -339,23 +427,35 @@ describe('product shortcuts, the Uninstall entry and the display names (ET-045h)
     ['an entry without a location', [entry('Registry64', 'ETS2TelemetryDesktop', null)], 'UNINSTALL_ENTRY_MISSING'],
     ['two entries in one view', [entry('Registry64'), entry('Registry64', 'ETS2TelemetryDesktop2')], 'UNINSTALL_ENTRY_DUPLICATE'],
     ['a foreign key name inside R', [entry('Registry64', 'YukonUnionTelemetry')], 'UNINSTALL_ENTRY_FOREIGN_NAME']
-  ])('refuses %s', (_name, rows, code) => expect(refusal(() => checkUninstallEntries(rows, RUN_ROOT))).toBe(code));
-  it('refuses rows that are not a list', () => expect(refusal(() => checkUninstallEntries(null as never, RUN_ROOT))).toBe('UNINSTALL_ENTRIES_INVALID'));
+  ])('refuses %s', (_name, rows, code) => expect(refusal(() => checkUninstallEntries(rows, RUN_ROOT, 'production'))).toBe(code));
+  it('refuses rows that are not a list', () => expect(refusal(() => checkUninstallEntries(null as never, RUN_ROOT, 'production'))).toBe('UNINSTALL_ENTRIES_INVALID'));
 
   it('accepts only the product DisplayName and Publisher', () => {
-    expect(checkRegistrationNames({displayName: NEW, publisher: 'Yukon Union Telemetry contributors'})).toEqual({displayName: NEW,
+    expect(checkRegistrationNames({displayName: NEW, publisher: 'Yukon Union Telemetry contributors'}, 'production')).toEqual({displayName: NEW,
       publisher: 'Yukon Union Telemetry contributors'});
-    expect(refusal(() => checkRegistrationNames({displayName: OLD, publisher: 'Yukon Union Telemetry contributors'}))).toBe('DISPLAY_NAME_NOT_PRODUCT');
-    expect(refusal(() => checkRegistrationNames({displayName: NEW, publisher: 'ETS2Telemetry contributors'}))).toBe('PUBLISHER_NOT_PRODUCT');
-    expect(refusal(() => checkRegistrationNames(null))).toBe('DISPLAY_NAME_NOT_PRODUCT');
+    expect(refusal(() => checkRegistrationNames({displayName: OLD, publisher: 'Yukon Union Telemetry contributors'}, 'production'))).toBe('DISPLAY_NAME_NOT_PRODUCT');
+    expect(refusal(() => checkRegistrationNames({displayName: NEW, publisher: 'ETS2Telemetry contributors'}, 'production'))).toBe('PUBLISHER_NOT_PRODUCT');
+    expect(refusal(() => checkRegistrationNames(null, 'production'))).toBe('DISPLAY_NAME_NOT_PRODUCT');
+    // ET-055 PR-5: the staging entry shows the staging display name, with the same Publisher.
+    expect(checkRegistrationNames({displayName: 'Yukon Union Telemetry Staging', publisher: 'Yukon Union Telemetry contributors'}, 'staging').displayName)
+      .toBe('Yukon Union Telemetry Staging');
+    expect(refusal(() => checkRegistrationNames({displayName: NEW, publisher: 'Yukon Union Telemetry contributors'}, 'staging'))).toBe('DISPLAY_NAME_NOT_PRODUCT');
   });
 });
 
 // ET-045g (REG-017): the Installed apps icon. The harness reads the registration's DisplayIcon, and the driver records only
 // its shape and the hash of the binary root's app.ico; the value is a machine path and never reaches the evidence.
 describe('registration icon shape (ET-045g)', () => {
-  const binaryRoot = runLayout(RUN_ROOT).binaryRoot;
-  const shape = (displayIcon: unknown, version = '0.1.1') => classifyRegistrationIcon({displayIcon, binaryRoot, version});
+  const binaryRoot = runLayout(RUN_ROOT, 'production').binaryRoot;
+  const shape = (displayIcon: unknown, version = '0.1.1') => classifyRegistrationIcon({displayIcon, binaryRoot, version, channel: 'production'});
+  // ET-055 PR-5: the staging entry's icon is icon 0 of the staging executable in the staging binary root.
+  it('recognizes the staging executable in the staging binary root only for staging', () => {
+    const stagingRoot = runLayout(RUN_ROOT, 'staging').binaryRoot, value = `${stagingRoot}\\app-0.1.0-stg000000\\ETS2TelemetryDesktopStaging.exe,0`;
+    expect(classifyRegistrationIcon({displayIcon: value, binaryRoot: stagingRoot, version: '0.1.0-stg000000', channel: 'staging'})).toEqual({shape: 'app-exe-index-0', versionMatches: true});
+    expect(classifyRegistrationIcon({displayIcon: value, binaryRoot: stagingRoot, version: '0.1.0-stg000000', channel: 'production'})).toEqual({shape: 'other', versionMatches: null});
+    expect(classifyRegistrationIcon({displayIcon: `${stagingRoot}\\app-0.1.0-stg000000\\ETS2TelemetryDesktop.exe,0`, binaryRoot: stagingRoot, version: '0.1.0-stg000000',
+      channel: 'staging'})).toEqual({shape: 'other', versionMatches: null});
+  });
   it('recognizes Squirrel\'s root app.ico, case-insensitively', () => {
     expect(shape(`${binaryRoot}\\app.ico`)).toEqual({shape: 'root-app-ico', versionMatches: null});
     expect(shape(`${binaryRoot.toUpperCase()}\\APP.ICO`)).toEqual({shape: 'root-app-ico', versionMatches: null});
@@ -405,7 +505,7 @@ describe('registration icon shape (ET-045g)', () => {
 });
 
 describe('launch environment', () => {
-  const layout = runLayout(RUN_ROOT);
+  const layout = runLayout(RUN_ROOT, 'production');
   const overrides = {LOCALAPPDATA: layout.base, APPDATA: layout.appData, TEMP: layout.temp, TMP: layout.temp, ETS2TELEMETRY_PROFILE_DIR: layout.profile,
     ETS2TELEMETRY_DIAGNOSTIC_DIR: `${layout.diagnostics}\\launch-a`};
   it('uses the minimal PATH and drops development and ETS2Telemetry variables', () => {
@@ -437,8 +537,11 @@ describe('launch environment', () => {
 describe('machine facts never reach the evidence', () => {
   // Facts as the harness gathers them: real known folders, a Steam path, a library list, a registration and processes.
   const VDF = '"libraryfolders"\n{\n\t"0"\n\t{\n\t\t"path"\t\t"C:\\\\Program Files (x86)\\\\Steam"\n\t}\n\t"1"\n\t{\n\t\t"path"\t\t"E:\\\\SteamLibrary"\n\t}\n}\n';
-  const machine = {real: REAL, realBinaryRootExists: false, registrationExists: true, steamPath: STEAM[0], libraryFolders: VDF, libraryFoldersState: 'read',
-    registration: {installLocation: runLayout(RUN_ROOT).binaryRoot, displayVersion: '0.1.1', uninstallString: `"${RUN_ROOT}\\LocalAppData\\ETS2TelemetryDesktop\\Update.exe" --uninstall`},
+  const registration = {installLocation: runLayout(RUN_ROOT, 'production').binaryRoot, displayVersion: '0.1.1',
+    uninstallString: `"${RUN_ROOT}\\LocalAppData\\ETS2TelemetryDesktop\\Update.exe" --uninstall`};
+  // ET-055 PR-5: the harness reports both channels' real binary roots and registrations, and the active channel's as before.
+  const machine = {real: REAL, channel: 'production', realBinaryRootExists: false, registrationExists: true, steamPath: STEAM[0], libraryFolders: VDF, libraryFoldersState: 'read',
+    registration, realBinaryRoots: {production: false, staging: false}, registrations: {production: registration, staging: null},
     processes: ['explorer.exe', 'fixture-private-tool.exe', 'eurotrucks2.exe', 'TruckersMP-Launcher.exe']};
   const DRIVE_PATH = /[A-Za-z]:[\\/]/;
   const assertClean = (text: string) => {
@@ -447,13 +550,16 @@ describe('machine facts never reach the evidence', () => {
   };
   it('keeps only booleans, counts and the matched product and game image names', () => {
     const evidence = factsEvidence(machine, RUN_ROOT);
-    expect(evidence).toEqual({knownFoldersResolved: true, realBinaryRootExists: false, registrationExists: true,
-      registration: {displayVersion: '0.1.1', installLocationInsideRunRoot: true}, steamPathPresent: true, steamLibraries: 3, steamLibrariesUnreadable: false,
-      processesListed: 4, guardedProcesses: ['eurotrucks2.exe', 'truckersmp*']});
+    expect(evidence).toEqual({knownFoldersResolved: true, channel: 'production', realBinaryRootExists: false, registrationExists: true,
+      registration: {displayVersion: '0.1.1', installLocationInsideRunRoot: true},
+      channels: {realBinaryRoots: {production: false, staging: false}, registrations: {production: {displayVersion: '0.1.1', installLocationInsideRunRoot: true}, staging: null}},
+      steamPathPresent: true, steamLibraries: 3, steamLibrariesUnreadable: false, processesListed: 4, guardedProcesses: ['eurotrucks2.exe', 'truckersmp*']});
     assertClean(JSON.stringify(evidence));
   });
   it('drops a registered version that is not of fixed form', () => {
     expect(factsEvidence({...machine, registration: {...machine.registration, displayVersion: 'C:\\Users\\fixture'}}, RUN_ROOT).registration?.displayVersion).toBeNull();
+    // A staging DisplayVersion carries its NuGet prerelease label (ET-055 PR-5).
+    expect(factsEvidence({...machine, registration: {...machine.registration, displayVersion: '0.1.0-stg000000'}}, RUN_ROOT).registration?.displayVersion).toBe('0.1.0-stg000000');
   });
   it('refuses a Steam library list that exists but was unreadable', () => {
     expect(refusal(() => checkRunPlan(facts({steamLibrariesUnreadable: true})))).toBe('STEAM_LIBRARIES_UNREADABLE');
@@ -464,9 +570,11 @@ describe('machine facts never reach the evidence', () => {
       const runRoot = path.join(resources.directory, `installer-${ID}`), evidence = path.join(resources.directory, `installer-${ID}-evidence`);
       await mkdir(evidence);
       const config = path.join(evidence, 'config.json');
-      await writeFile(config, JSON.stringify({runRoot, evidence, setup: path.join(resources.directory, 'Setup.exe'), stepBudgetMs: 1000}));
+      await writeFile(config, JSON.stringify({runRoot, evidence, setup: path.join(resources.directory, 'Setup.exe'), stepBudgetMs: 1000, channel: 'production',
+        channels: ['production'], appVersion: '0.1.0'}));
       // A passing preflight: no registration and no running product or game; the private process name must still not appear.
-      const passing = {...machine, registrationExists: false, registration: null, processes: ['explorer.exe', 'fixture-private-tool.exe']};
+      const passing = {...machine, registrationExists: false, registration: null, registrations: {production: null, staging: null},
+        processes: ['explorer.exe', 'fixture-private-tool.exe']};
       const env = {...process.env, [FACTS_VARIABLE]: JSON.stringify(passing)};
       const {stdout} = await promisify(execFile)(process.execPath, [path.resolve('scripts/installer/installer-lifecycle.mjs'), 'guard', config, 'plan'],
         {env, encoding: 'utf8', timeout: 30000, windowsHide: true});
@@ -485,11 +593,12 @@ describe('machine facts never reach the evidence', () => {
     // The real location, so the driver's realpath checks of R's binary root agree with the raw path.
     const base = await realpath(resources.directory);
     const runRoot = path.join(base, `installer-${ID}`), evidence = path.join(base, `installer-${ID}-evidence`);
-    const binaryRoot = runLayout(runRoot).binaryRoot;
+    const binaryRoot = runLayout(runRoot, 'production').binaryRoot;
     await mkdir(binaryRoot, {recursive: true});
     await mkdir(evidence);
     const config = path.join(evidence, 'config.json');
-    await writeFile(config, JSON.stringify({runRoot, evidence, setup: path.join(base, 'Setup.exe'), stepBudgetMs: 1000}));
+    await writeFile(config, JSON.stringify({runRoot, evidence, setup: path.join(base, 'Setup.exe'), stepBudgetMs: 1000, channel: 'production', channels: ['production'],
+      appVersion: '0.1.0'}));
     /** Runs one driver command with this registration in the facts; resolves with its result line, also when it failed. */
     // ET-045h: the product DisplayName and Publisher and the one Uninstall entry in R, unless a case replaces them.
     const command = (args: string[], version: string, displayIcon: string | null, names: {displayName?: string; publisher?: string} = {},
@@ -590,6 +699,52 @@ describe('machine facts never reach the evidence', () => {
     expect(harness).toContain('$env:ETS2TELEMETRY_INSTALLER_FACTS = Get-FactJson');
     expect(harness).toContain('Remove-Item Env:ETS2TELEMETRY_INSTALLER_FACTS');
     expect(FACTS_VARIABLE).toBe('ETS2TELEMETRY_INSTALLER_FACTS');
+  });
+});
+
+// ET-055 PR-5 (REG-017, REG-019): the names and versions of a lifecycle run come from the build channel.
+describe('channel identities and versions of a lifecycle run (ET-055 PR-5)', () => {
+  it('derives both channels\' names from the build identities, with no name shared', () => {
+    expect(LIFECYCLE_IDENTITIES.map(identity => identity.channel)).toEqual(['production', 'staging']);
+    expect(lifecycleIdentity('production')).toEqual({channel: 'production', productRoot: 'ETS2TelemetryDesktop', dataRoot: 'ETS2Telemetry', roamingRoot: 'ETS2Telemetry Desktop',
+      executable: 'ETS2TelemetryDesktop.exe', displayName: 'Yukon Union Telemetry', publisher: 'Yukon Union Telemetry contributors', legacyDisplayNames: ['ETS2Telemetry Desktop'],
+      appUserModelId: 'com.squirrel.ETS2TelemetryDesktop.ETS2TelemetryDesktop', pluginFile: 'ets2telemetry-plugin.dll', runOnceValue: 'ETS2TelemetryUninstall',
+      receiptPrefix: 'ETS2Telemetry-uninstall-', executorReceiptPrefix: 'ETS2Telemetry-deferred-cleanup-'});
+    expect(lifecycleIdentity('staging')).toEqual({channel: 'staging', productRoot: 'ETS2TelemetryDesktopStaging', dataRoot: 'ETS2TelemetryStaging',
+      roamingRoot: 'ETS2Telemetry Desktop Staging', executable: 'ETS2TelemetryDesktopStaging.exe', displayName: 'Yukon Union Telemetry Staging',
+      publisher: 'Yukon Union Telemetry contributors', legacyDisplayNames: [], appUserModelId: 'com.squirrel.ETS2TelemetryDesktopStaging.ETS2TelemetryDesktopStaging',
+      pluginFile: 'ets2telemetry-plugin-staging.dll', runOnceValue: 'ETS2TelemetryStagingUninstall', receiptPrefix: 'ETS2TelemetryStaging-uninstall-',
+      executorReceiptPrefix: 'ETS2TelemetryStaging-deferred-cleanup-'});
+    const [production, staging] = LIFECYCLE_IDENTITIES;
+    for (const field of ['productRoot', 'dataRoot', 'roamingRoot', 'executable', 'displayName', 'appUserModelId', 'pluginFile', 'runOnceValue', 'receiptPrefix',
+      'executorReceiptPrefix'] as const) expect(staging[field], field).not.toBe(production[field]);
+    expect(refusal(() => lifecycleIdentity('Production'))).toBe('LIFECYCLE_CHANNEL_UNKNOWN');
+  });
+  it('raises B\'s patch number above A in both channels and names the installed NuGet versions', () => {
+    expect(lifecycleVersions('production', '0.1.0')).toEqual({channel: 'production', appVersion: '0.1.0', a: {package: '0.1.0', installed: '0.1.0'},
+      b: {package: '0.1.1', installed: '0.1.1'}});
+    expect(lifecycleVersions('staging', '0.1.0-stg.000042')).toEqual({channel: 'staging', appVersion: '0.1.0-stg.000042', a: {package: '0.1.0-stg.000042',
+      installed: '0.1.0-stg000042'}, b: {package: '0.1.1-stg.000042', installed: '0.1.1-stg000042'}});
+    expect(lifecycleVersions('production', '1.2.9').b.installed).toBe('1.2.10');
+  });
+  it.each([['production', '0.1.0-stg.000000'], ['staging', '0.1.0'], ['staging', '0.1.0-stg.42'], ['production', '0.1.0-alpha.1'], ['beta', '0.1.0'], ['production', undefined]])(
+    'refuses the version of channel %s: %s', (channel, version) => expect(refusal(() => lifecycleVersions(channel, version as string))).toBe('LIFECYCLE_VERSION_INVALID'));
+  it('refuses the product executable of either channel in the residue', () => {
+    const runtime = electronRuntimeNames([{name: 'ETS2TelemetryDesktopStaging.exe', directory: false}, {name: 'resources.pak', directory: false}], []);
+    expect([...runtime.files]).toEqual(['resources.pak']);
+    const base = [{relative: 'app-0.1.0-stg000000', kind: 'directory' as const, reparse: false}, {relative: '.dead', kind: 'file' as const, reparse: false, deadMarker: true}];
+    expect(refusal(() => checkUninstallResidue([...base, {relative: 'app-0.1.0-stg000000/ETS2TelemetryDesktopStaging.exe', kind: 'file', reparse: false}], runtime)))
+      .toBe('UNINSTALL_UNEXPECTED_FILE');
+  });
+  it('compares the other channel\'s state key by key and names the first change', () => {
+    const before = {dataRoot: {'data\\': {directory: true}}, plugin: {sha256: 'a'.repeat(64), size: 3, mtimeMs: 1}, runOnce: null};
+    expect(checkOtherChannelUnchanged(before, JSON.parse(JSON.stringify(before)))).toBe(3);
+    expect(refusal(() => checkOtherChannelUnchanged(before, {...before, plugin: {...before.plugin, mtimeMs: 2}}))).toBe('OTHER_CHANNEL_CHANGED');
+    expect(refusal(() => checkOtherChannelUnchanged(before, {...before, runOnce: 'b'.repeat(64)}))).toBe('OTHER_CHANNEL_CHANGED');
+    expect(refusal(() => checkOtherChannelUnchanged(before, {dataRoot: before.dataRoot, plugin: before.plugin}))).toBe('OTHER_CHANNEL_STATE_KEYS_DIFFER');
+    expect(refusal(() => checkOtherChannelUnchanged({}, {}))).toBe('OTHER_CHANNEL_STATE_INVALID');
+    expect(refusal(() => checkOtherChannelUnchanged(null, before))).toBe('OTHER_CHANNEL_STATE_INVALID');
+    try {checkOtherChannelUnchanged(before, {...before, runOnce: 'x'});} catch (error) {expect((error as Error).message).toBe('Installer lifecycle refused: OTHER_CHANNEL_CHANGED (runOnce)');}
   });
 });
 
@@ -728,10 +883,15 @@ describe('harness Job bounds', () => {
   });
   // ET-045g: the harness's registry value writes are the legacy DisplayIcon, after the driver's legacy-icon decision, and
   // (ET-045h) the old DisplayName and Publisher, after the driver's legacy-names decision.
-  it('writes a registry value only in Set-LegacyIcon and Set-LegacyNames, and only to views the driver says point into R', async () => {
+  // ET-055 PR-5: and the planted autostart values of the side-by-side scenario, on a hosted runner only.
+  it('writes a registry value only in Set-LegacyIcon, Set-LegacyNames and Set-PlantedRunValue, and only to views the driver says point into R', async () => {
     const harness = await read('scripts/installer/Invoke-InstallerLifecycle.ps1');
     const writes = [...harness.matchAll(/\.SetValue\(/g)];
-    expect(writes).toHaveLength(3);
+    expect(writes).toHaveLength(4);
+    const run = harness.slice(harness.indexOf('function Set-PlantedRunValue'), harness.indexOf('\n}', harness.indexOf('function Set-PlantedRunValue')));
+    expect([...run.matchAll(/\.SetValue\(/g)]).toHaveLength(1);
+    expect(run).toContain("if (!$hosted -or $Scenario -ne 'side-by-side') { throw ('RUN_VALUE_PLANT_HOSTED_ONLY for ' + $Channel) }");
+    expect(run).toContain("if ($null -ne (Get-RunValue $Channel)) { throw ('RUN_VALUE_EXISTS for ' + $Channel) }");
     const names = harness.slice(harness.indexOf('function Set-LegacyNames'), harness.indexOf('\n}', harness.indexOf('function Set-LegacyNames')));
     expect([...names.matchAll(/\.SetValue\(/g)]).toHaveLength(2);
     expect(names.indexOf("Invoke-Driver 'legacy-names'")).toBeGreaterThan(-1);

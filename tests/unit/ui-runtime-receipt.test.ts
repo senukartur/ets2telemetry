@@ -6,7 +6,7 @@ import {receiptBatchTimeout, validateRuntimeReceipts} from '../shared/runtime-re
 
 const screens = {shell: ['live', 'hardMode', 'journal', 'settings', 'account'], live: ['current', 'zero', 'missing', 'paused', 'stale'],
   journal: ['list', 'trip', 'intervals', 'timeline', 'samples'], settings: ['general', 'units', 'overlay', 'overlay-sections', 'plugin', 'data', 'about', 'save-error'], overlay: ['strip', 'card', 'cluster', 'hud']};
-const common = ['bilingual', 'bothSizes', 'security', 'offlineFonts', 'recordingIndicator'];
+const common = ['bilingual', 'bothSizes', 'security', 'offlineFonts', 'recordingIndicator', 'versionLine', 'updateHidden'];
 const flags = {shell: ['navigation', 'headingFocus','hardModePage', 'journalUnmount', 'menuKeyboard', 'exitAvailable', 'laterAccount'],
   live: ['numericGauge', 'unavailableVsZero', 'paused', 'staleDashes', 'rawNames', 'unsupportedTrip', 'jobViewport', 'hmNamesReadable','fullWidthTelemetry','tankUnknownVsZero','mandatoryBreak'],
   journal: ['syntheticBanner', 'pageReturn', 'chartBounded', 'rawTabs', 'searchPlanned', 'tripRegions', 'tableReadable','signedChart'], settings: ['allPanels', 'allSections', 'committedSave', 'sourceSelector', 'uninstallRefusal', 'refusedSave', 'readOnly', 'controlsKeyboard', 'lastEnabled', 'fontLicense', 'overlayVisibility', 'visibilityFailedSave', 'actionResult', 'overlayOpacity','opacityFailedSave','opacityReadOnly','overlayUnified', 'overlayEditing', 'overlayScroll', 'scaleControl', 'gearDisplay', 'gearDisplayFailedSave'],

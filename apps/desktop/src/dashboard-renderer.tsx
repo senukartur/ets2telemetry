@@ -27,6 +27,7 @@ import {OverlaySettingsCard} from './overlay-settings-card';
 import {GearDisplayCard} from './gear-display-card';
 import {PluginSetupCard} from './plugin-setup-card';
 import {UninstallCard} from './uninstall-card';
+import {AboutUpdateCheck, SidebarUpdateControl, VersionLine} from './update-control';
 import {connectionDiagnosis} from './connection-diagnosis';
 import {Journal, JournalBoundary} from './journal';
 import {DEFAULT_UNIT_PROFILES, isUnitProfile, UNIT_GAMES, UNIT_PROFILE_IDS} from './unit-profiles';
@@ -108,6 +109,8 @@ export default function App() {
           {recording.alert ? <p>{recording.alert}</p> : null}
           {recording.losses.map(line => <p key={line} className="text-muted-foreground">{line}</p>)}
         </div></TooltipContent></Tooltip></TooltipProvider>
+        <SidebarUpdateControl view={app?.update} language={language} windowFocused={windowFocused} />
+        <VersionLine info={app?.application} language={language} testId="shell.sidebar.version" />
         <DropdownMenu><DropdownMenuTrigger asChild><Button variant="outline" className="w-full" data-testid="shell.language"><Globe aria-hidden="true" />{language.toUpperCase()}<ChevronDown aria-hidden="true" /></Button></DropdownMenuTrigger>
           <DropdownMenuContent><DropdownMenuRadioGroup value={language} onValueChange={languageController.choose}>{(['en', 'ru'] as const).map(lang => <DropdownMenuRadioItem key={lang} value={lang} disabled={!settings?.writable || languageController.saving} data-testid={`shell.language.${lang}`}>{t(`lang.${lang}`, undefined, language)}</DropdownMenuRadioItem>)}</DropdownMenuRadioGroup></DropdownMenuContent>
         </DropdownMenu>
@@ -169,7 +172,7 @@ export default function App() {
       <AlertDescription data-testid="health-recording-alert">{recording.alert}</AlertDescription></Alert> : null}
     <Alert><AlertDescription data-testid="close-to-tray">{strings.closeToTray}</AlertDescription></Alert>
   </CardContent></Card></div>
-          <div hidden={panel !== 'about'} className="yu-stack" data-testid="settings.about"><Card><CardContent><div className="flex items-center gap-4 py-4" data-testid="settings.about.brand"><img src={logo} alt="" width={64} height={64} /><div><h2 className="text-lg font-bold">{CHANNEL.displayName}</h2><p>{t('app.sub', undefined, language)}</p></div></div><p>{t('s.a.version', undefined, language)} — {t('ui.unavailable', undefined, language)}</p><details className="yu-font-license" data-testid="settings.about.font-license"><summary>Onest · SIL Open Font License 1.1</summary><pre data-license-asset={onestLicenseUrl}>{onestLicense}</pre></details></CardContent></Card><UninstallCard language={language} /></div>
+          <div hidden={panel !== 'about'} className="yu-stack" data-testid="settings.about"><Card><CardContent><div className="flex items-center gap-4 py-4" data-testid="settings.about.brand"><img src={logo} alt="" width={64} height={64} /><div><h2 className="text-lg font-bold">{CHANNEL.displayName}</h2><p>{t('app.sub', undefined, language)}</p></div></div><div className="space-y-3 pb-4"><VersionLine info={app?.application} language={language} testId="settings.about.version" /><AboutUpdateCheck view={app?.update} language={language} /></div><details className="yu-font-license" data-testid="settings.about.font-license"><summary>Onest · SIL Open Font License 1.1</summary><pre data-license-asset={onestLicenseUrl}>{onestLicense}</pre></details></CardContent></Card><UninstallCard language={language} /></div>
           </div>
         </div>
         <div hidden={route !== 'account'} className="yu-placeholder" data-testid="account.screen"><Cloud aria-hidden="true" className="size-7" /><h2>{t('nav.account', undefined, language)}</h2><Badge variant="later">{t('a.later', undefined, language)}</Badge><p className="mt-3">{t('ui.accountNote', undefined, language)}</p><p className="mt-2">{t('a.note', undefined, language)}</p></div>

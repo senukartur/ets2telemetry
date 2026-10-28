@@ -782,6 +782,14 @@ export async function runUiSmoke({application, dashboard, overlay, source, sourc
             assert.equal(await dashboard.getByTestId('autostart-not-installed-note').isVisible(), true);
           }
           if (panel === 'plugin') await observeExportResult({application, dashboard, language, size, record});
+          if (panel === 'about') {
+            // ET-055 UP11: About repeats the sidebar version line; a launch that never checks disables Check for updates.
+            assert.equal(await dashboard.getByTestId('settings.about.version.name').textContent(), await dashboard.getByTestId('shell.sidebar.version.name').textContent());
+            const checkButton = dashboard.getByTestId('settings-about-update-check');
+            assert.equal(await checkButton.innerText(), language === 'en' ? 'Check for updates' : 'Проверить обновления');
+            assert.equal(await checkButton.isDisabled(), true);
+            assert.equal(await dashboard.getByTestId('settings-about-update-check-note').innerText(), language === 'en' ? 'Updates are checked only in an installed copy of the app.' : 'Обновления проверяются только в установленной программе.');
+          }
           await save(panel, language, size);
         }
         const license = dashboard.getByTestId('settings.about.font-license');
@@ -1057,9 +1065,38 @@ export async function runUiSmoke({application, dashboard, overlay, source, sourc
   await dashboard.screenshot({path: path.join(config.output, `ui-${config.uiCase}-recording-hint.png`), timeout: 5000});
   await dashboard.keyboard.press('Escape'); await hint.waitFor({state: 'hidden'});
   record.flags.recordingIndicator = true;
+  // ET-055 UP10, UP11: the version line names this build in both languages, a staging build adds its badge, and the
+  // update control is hidden while nothing is offered (a packaged run that is not a Squirrel install is unsupported).
+  // The shard's language is restored afterwards, so the steps below run as before.
+  const shown = (await dashboard.evaluate(() => globalThis.desktop.getAppState())).settings.language, other = shown === 'en' ? 'ru' : 'en';
+  await observeVersionAndUpdate(dashboard, config, shown);
+  await chooseLanguage(dashboard, other); await observeVersionAndUpdate(dashboard, config, other);
+  await chooseLanguage(dashboard, shown);
+  record.flags.versionLine = true; record.flags.updateHidden = true;
   record.flags.offlineFonts = await dashboard.evaluate(() => [...globalThis.document.fonts].some(font => font.family.includes('Onest')));
   assert.equal(record.flags.offlineFonts, true);
   await chooseLanguage(dashboard, 'en'); await screen(dashboard, 'live');
+}
+
+/** The sidebar version line and the hidden update control (ET-055 UP10, UP11) in `language`, the language shown now. */
+async function observeVersionAndUpdate(dashboard, config, language) {
+  const state = await dashboard.evaluate(() => globalThis.desktop.getAppState()), en = language === 'en';
+  assert.equal(state.settings.language, language);
+  assert.equal(state.application.packaged, config.mode !== 'development');
+  assert.match(state.application.version, /^\d+\.\d+\.\d+(-stg\.\d{6})?$/);
+  assert.ok(['unsupported', 'idle', 'checking'].includes(state.update.state), `UI_UPDATE_STATE_${state.update.state}`);
+  if (config.mode !== 'installed') assert.equal(state.update.state, 'unsupported');
+  assert.equal(await dashboard.getByTestId('shell.sidebar.update').count(), 0, 'UI_UPDATE_CONTROL_SHOWN');
+  assert.equal(await dashboard.getByTestId('shell.update.status').textContent(), '');
+  const text = !state.application.packaged ? (en ? 'Development build' : 'Сборка для разработки') : `${en ? 'Version' : 'Версия'} ${state.application.version}`;
+  const line = dashboard.getByTestId('shell.sidebar.version');
+  assert.equal(await line.isVisible(), true, 'UI_VERSION_LINE_HIDDEN');
+  assert.equal(await line.getAttribute('data-channel'), state.application.channel);
+  assert.equal(await dashboard.getByTestId('shell.sidebar.version.text').textContent(), text);
+  const badge = dashboard.getByTestId('shell.sidebar.version.badge'), staging = state.application.channel === 'staging';
+  assert.equal(await badge.count(), staging ? 1 : 0, 'UI_VERSION_BADGE');
+  if (staging) assert.equal(await badge.textContent(), 'Staging');
+  assert.equal(await dashboard.getByTestId('shell.sidebar.version.name').textContent(), staging ? `${text}, ${en ? 'staging build' : 'тестовая сборка (staging)'}` : text);
 }
 
 const SCALE_CONTROL_TEXT = {en: 'Scale', ru: 'Размер'};

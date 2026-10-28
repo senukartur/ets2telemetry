@@ -729,7 +729,8 @@ function Test-InstalledReceipt {
     foreach ($field in @('executableMatches','cwdOutsideInstall','minimalPath','developmentVariablesAbsent','packaged')) {
         if ($installed.$field -isnot [bool] -or $installed.$field -ne $true) { return $false }
     }
-    if ($installed.layout -isnot [string] -or $installed.layout -cnotmatch '^ETS2TelemetryDesktop\\app-[0-9]+\.[0-9]+\.[0-9]+$') { return $false }
+    # ET-055 PR-5: either channel's binary root, with an optional NuGet prerelease label (app-0.1.0-stg000000 in staging).
+    if ($installed.layout -isnot [string] -or $installed.layout -cnotmatch '^ETS2TelemetryDesktop(Staging)?\\app-[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z]+)?$') { return $false }
     if ($Driver.runtime.packaged -isnot [bool] -or $Driver.runtime.packaged -ne $true) { return $false }
     return $true
 }
@@ -815,7 +816,7 @@ function Test-UiReceipt {
     if ($Driver.mode -cnotin @('development','packaged') -or $ExpectedUiCase -cnotin $cases -or $null -eq $ui -or $ui.case -cne $ExpectedUiCase -or
         (@($ui.languages) -join ',') -cne 'en,ru' -or @($ui.sizes).Count -ne 2 -or
         $ui.sizes[0].width -ne 1280 -or $ui.sizes[0].height -ne 800 -or $ui.sizes[1].width -ne 1100 -or $ui.sizes[1].height -ne 720) { return $false }
-    $flags = @('bilingual','bothSizes','security','offlineFonts','recordingIndicator')
+    $flags = @('bilingual','bothSizes','security','offlineFonts','recordingIndicator','versionLine','updateHidden')
     $screens = @()
     switch -CaseSensitive ($ExpectedUiCase) {
         'shell' { $flags += @('navigation','headingFocus','hardModePage','journalUnmount','menuKeyboard','exitAvailable','laterAccount'); $screens = @('live','hardMode','journal','settings','account') }

@@ -4,7 +4,8 @@ param([ValidateSet('development','packaged','installed')][string]$Mode,
     [ValidateSet('shell','live','journal','settings','overlay')][string]$UiCase,
     [switch]$ForceRendererReuse,
     [string]$OutputRoot = (Join-Path $PSScriptRoot '../../.local/ci'),
-    # ET-018 PR-1 (U11): the installed mode runs `<binary root>\app-<version>\ETS2TelemetryDesktop.exe` of a Squirrel install.
+    # ET-018 PR-1 (U11): the installed mode runs `<binary root>\app-<version>\<executable>` of a Squirrel install of the
+    # build's channel (ET-055 PR-5: ETS2TelemetryDesktop or ETS2TelemetryDesktopStaging).
     [string]$Executable,
     # ET-019 PR-12b: the soak's length in whole minutes, 1 to 90; given only with -Scenario soak.
     [ValidateRange(0, 90)][int]$SoakMinutes = 0)
@@ -19,16 +20,6 @@ if ($Scenario -eq 'ui') {
     if ($Mode -eq 'installed' -or !$UiCase) { throw 'UI shards require development/packaged mode and -UiCase.' }
 } elseif ($UiCase) { throw 'UiCase is given only with -Scenario ui.' }
 if ($Mode -ne 'installed' -and $Executable) { throw 'An executable is given only in the installed mode.' }
-if ($Mode -eq 'installed') {
-    # Only an installed layout: ETS2TelemetryDesktop\app-<semver>\ETS2TelemetryDesktop.exe beside the binary root's Update.exe.
-    if (!$Executable -or ![IO.Path]::IsPathRooted($Executable) -or !(Test-Path -LiteralPath $Executable -PathType Leaf)) { throw 'Installed executable missing.' }
-    $Executable = (Get-Item -LiteralPath $Executable).FullName
-    $appDirectory = Split-Path -Parent $Executable; $binaryRoot = Split-Path -Parent $appDirectory
-    if ((Split-Path -Leaf $Executable) -cne 'ETS2TelemetryDesktop.exe' -or (Split-Path -Leaf $appDirectory) -cnotmatch '^app-[0-9]+\.[0-9]+\.[0-9]+$' -or
-        (Split-Path -Leaf $binaryRoot) -cne 'ETS2TelemetryDesktop' -or !(Test-Path -LiteralPath (Join-Path $binaryRoot 'Update.exe') -PathType Leaf)) {
-        throw 'Not an installed layout: ETS2TelemetryDesktop\app-<version>\ETS2TelemetryDesktop.exe with Update.exe.'
-    }
-}
 $checkout = (Resolve-Path -LiteralPath (Join-Path $PSScriptRoot '../..')).Path
 $node = (Get-Command node -ErrorAction Stop).Source
 # ET-055 PR-4: the build this run checks, from the desktop build evidence (scripts/build-channel.mjs --built), never from the
@@ -38,8 +29,17 @@ $builtText = & $node (Join-Path $checkout 'scripts/build-channel.mjs') --built
 if ($LASTEXITCODE -ne 0) { throw 'Build evidence unavailable: run npm run build or npm run package first.' }
 $built = ($builtText -join "`n") | ConvertFrom-Json
 if ($built.channel -cnotin @('production', 'staging')) { throw 'Build evidence names no known channel.' }
-# The installed mode runs the installer lifecycle's production install; a staging install arrives with ET-055 PR-5.
-if ($Mode -eq 'installed' -and $built.channel -cne 'production') { throw 'STAGING_LIFECYCLE_PENDING: the installed mode runs production installs only.' }
+if ($Mode -eq 'installed') {
+    # ET-055 PR-5: only an installed layout of the build's channel: <Squirrel id>\app-<version>\<executable> beside the binary
+    # root's Update.exe, where the version may carry its NuGet prerelease label (app-0.1.0-stg000000 in staging).
+    if (!$Executable -or ![IO.Path]::IsPathRooted($Executable) -or !(Test-Path -LiteralPath $Executable -PathType Leaf)) { throw 'Installed executable missing.' }
+    $Executable = (Get-Item -LiteralPath $Executable).FullName
+    $appDirectory = Split-Path -Parent $Executable; $binaryRoot = Split-Path -Parent $appDirectory
+    if ((Split-Path -Leaf $Executable) -cne $built.executable -or (Split-Path -Leaf $appDirectory) -cnotmatch '^app-[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z]+)?$' -or
+        (Split-Path -Leaf $binaryRoot) -cne $built.squirrelId -or !(Test-Path -LiteralPath (Join-Path $binaryRoot 'Update.exe') -PathType Leaf)) {
+        throw ('Not an installed layout: ' + $built.squirrelId + '\app-<version>\' + $built.executable + ' with Update.exe.')
+    }
+}
 $output = Join-Path ([IO.Path]::GetFullPath($OutputRoot)) ($Mode + '-' + [guid]::NewGuid().ToString('N'))
 New-Item -ItemType Directory -Path $output | Out-Null
 $paths = @{}
