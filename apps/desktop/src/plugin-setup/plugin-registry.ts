@@ -2,6 +2,7 @@ import path from 'node:path';
 import type {DiagnosticFacts} from '../diagnostics';
 import {AtomicFileError, nodeAtomicFs, readAtomicFile, writeAtomicFile, type AtomicFileSystem} from './atomic-json-file';
 import {isDrivePath, PLUGIN_FILE_NAME, PLUGIN_GAMES, type PluginGame} from './steam-discovery';
+import {pluginTempFilePattern} from '../channel';
 
 // The plugin install registry `%LOCALAPPDATA%\ETS2Telemetry\plugins\setup.json` (ET-017 P9; docs/plugin-setup.md,
 // "Install registry"). It holds the per-game exclusions and manual folders, one record per game folder this application
@@ -87,7 +88,7 @@ const APP_VERSION = /^\d{1,9}\.\d{1,9}\.\d{1,9}(-[0-9A-Za-z.-]{1,40})?$/;
 const UTC = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/;
 const STEP = /^[a-z][a-z-]{0,31}$/;
 /** The exact temporary file name an install or update writes beside the target (P8 step 3). */
-export const PLUGIN_TEMP_FILE = /^ets2telemetry-plugin\.dll\.[0-9a-f]{16}\.tmp$/;
+export const PLUGIN_TEMP_FILE = pluginTempFilePattern();
 
 function deepFreeze<T>(value: T): T {
   if (value && typeof value === 'object' && !Object.isFrozen(value)) {

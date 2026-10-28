@@ -2,6 +2,7 @@ import {createHash} from 'node:crypto';
 import * as nodeFs from 'node:fs/promises';
 import path from 'node:path';
 import type {VerifiedPluginBundle} from './plugin-installer';
+import {CHANNEL} from '../channel';
 
 // The runtime reader of the bundled plugin (ET-017 P5; docs/plugin-setup.md, "Runtime reading"). Main reads the bundle
 // once per application run: the manifest (at most 64 KiB, strict keys) and the DLL (at most 16 MiB, a regular file that
@@ -10,7 +11,7 @@ import type {VerifiedPluginBundle} from './plugin-installer';
 // packaging time.
 
 export const PLUGIN_BUNDLE_FORMAT = 'ets2telemetry.plugin-bundle';
-export const PLUGIN_BUNDLE_FILE = 'ets2telemetry-plugin.dll';
+export const PLUGIN_BUNDLE_FILE = CHANNEL.pluginFileName;
 export const PLUGIN_BUNDLE_MANIFEST = 'plugin-manifest.json';
 export const MAX_BUNDLE_MANIFEST_BYTES = 64 * 1024;
 export const MAX_BUNDLE_PLUGIN_BYTES = 16 * 1024 * 1024;

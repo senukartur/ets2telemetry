@@ -1,4 +1,5 @@
 import path from 'node:path';
+import {CHANNEL} from './channel';
 
 /**
  * Internal variable through which main hands the log root it resolved to the telemetry service it forks, so both
@@ -18,7 +19,7 @@ export interface LogLocation {readonly directory: string; readonly detailed: boo
  */
 export function mainLogLocation(env: Environment, userData: string): LogLocation {
   const diagnostic = env.ETS2TELEMETRY_DIAGNOSTIC_DIR;
-  return {directory: diagnostic || path.join(env.LOCALAPPDATA || userData, 'ETS2Telemetry', 'logs'), detailed: Boolean(diagnostic)};
+  return {directory: diagnostic || path.join(env.LOCALAPPDATA || userData, CHANNEL.dataRootName, 'logs'), detailed: Boolean(diagnostic)};
 }
 
 /** The telemetry service's environment: main's own plus the log root main resolved. */
@@ -34,6 +35,6 @@ export function serviceEnvironment(env: Environment, logRoot: string): Record<st
 export function serviceLogLocation(env: Environment, temporary: string): LogLocation {
   const diagnostic = env.ETS2TELEMETRY_DIAGNOSTIC_DIR;
   const passed = env[SERVICE_LOG_ROOT_VARIABLE];
-  const root = diagnostic || (passed && path.isAbsolute(passed) ? passed : path.join(env.LOCALAPPDATA || temporary, 'ETS2Telemetry', 'logs'));
+  const root = diagnostic || (passed && path.isAbsolute(passed) ? passed : path.join(env.LOCALAPPDATA || temporary, CHANNEL.dataRootName, 'logs'));
   return {directory: path.join(root, 'service'), detailed: Boolean(diagnostic)};
 }

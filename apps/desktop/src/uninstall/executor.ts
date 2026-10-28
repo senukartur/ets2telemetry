@@ -3,6 +3,7 @@ import {readAtomicFile, writeAtomicFile, type AtomicFileSystem} from '../plugin-
 import {nodeExecFile, runFixedProgram, systemRoot, type ExecFilePort} from '../plugin-setup/fixed-program';
 import {PENDING_DIRECTORY} from './pending-record';
 import type {UninstallRoots} from './roots';
+import {CHANNEL} from '../channel';
 
 // The deferred-cleanup executor of an uninstall (ET-018 U7, owner decision O3; docs/uninstall.md, "Deferred cleanup at
 // the next sign-in"). When a Windows-initiated uninstall cannot finish (a game runs, a file is locked), Squirrel still
@@ -19,7 +20,7 @@ import type {UninstallRoots} from './roots';
 export const EXECUTOR_FILE = 'Complete-ETS2TelemetryUninstall.ps1';
 /** The packaged executor: `resources\uninstall\<EXECUTOR_FILE>`. */
 export const EXECUTOR_RESOURCE_DIRECTORY = 'uninstall';
-export const RUN_ONCE_VALUE = 'ETS2TelemetryUninstall';
+export const RUN_ONCE_VALUE = CHANNEL.runOnceValue;
 export const PRODUCTION_RUN_ONCE_KEY = 'HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\RunOnce';
 /** The only test key a test install may name (plan U7, U12). */
 export const TEST_RUN_ONCE_KEY = /^HKCU\\Software\\ETS2Telemetry-Test-[0-9a-f]{32}\\RunOnce$/;

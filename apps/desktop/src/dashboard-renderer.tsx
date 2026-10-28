@@ -35,6 +35,7 @@ import {
   getStorageHealthText, getStrings, getUnitGameText, getUnitProfileText
 } from './strings';
 import {t} from './i18n';
+import {CHANNEL} from './channel';
 import './index.css';
 
 export default function App() {
@@ -89,7 +90,7 @@ export default function App() {
   const nav = [{id: 'live', Icon: Gauge}, {id: 'hardMode', Icon: Flame}, {id: 'journal', Icon: BookOpen}, {id: 'settings', Icon: Settings2}, {id: 'account', Icon: Cloud}] as const;
   const settingsPanels = ['general', 'units', 'overlay', 'plugin', 'data', 'about'] as const;
   return <div className="yu-app" data-testid="shell.root">
-    <div className="yu-titlebar" data-testid="shell.titlebar"><img src={logo} alt="" /><span>Yukon Union Telemetry</span></div>
+    <div className="yu-titlebar" data-testid="shell.titlebar"><img src={logo} alt="" /><span>{CHANNEL.displayName}</span></div>
     <div className="yu-body"><aside className="yu-sidebar" data-testid="shell.sidebar"><div className="yu-lockup" data-testid="shell.sidebar.lockup"><img src={logo} alt="" /><div><strong>Yukon Union</strong><small>{t('app.sub', undefined, language)}</small></div></div>
       <nav aria-label={t('app.window', undefined, language)}>{nav.map(({id, Icon}) => <React.Fragment key={id}>
         {id === 'live' || id === 'settings' || id === 'account' ? <p className="yu-nav-group">{t(id === 'live' ? 'nav.group.drive' : id === 'settings' ? 'nav.group.app' : 'nav.group.company', undefined, language)}{id === 'account' ? ` · ${t('tag.later', undefined, language)}` : ''}</p> : null}

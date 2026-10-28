@@ -13,6 +13,7 @@ import {RUNNING_CHECK_BUDGET_MS, runUninstall, type UninstallCode, type Uninstal
 import {armExecutor, disarmExecutor, EXECUTOR_FILE, EXECUTOR_RESOURCE_DIRECTORY, MAX_EXECUTOR_BYTES, REG_TIMEOUT_MS, regExeRunOnce, type ExecutorState,
   type RunOnceRegistry} from './uninstall/executor';
 import {resolveUninstallRoots, type UninstallRoots, type UninstallRootsRefusal} from './uninstall/roots';
+import {CHANNEL} from './channel';
 
 // The Squirrel.Windows event handler (ET-018 U2, U6; docs/app-lifecycle.md, "Squirrel events"; docs/uninstall.md). It
 // replaces electron-squirrel-startup and runs before anything else in main: before the diagnostic profile override, the
@@ -66,7 +67,7 @@ export const SHORTCUT_TIMEOUT_MS = 10_000;
 export const REMOVE_SHORTCUT_TIMEOUT_MS = 4000;
 /** The shortest time a registry call of the uninstall hook gets, even when the engine deadline is close or past. */
 export const REG_FLOOR_MS = 500;
-export const RECEIPT_PREFIX = 'ETS2Telemetry-uninstall-';
+export const RECEIPT_PREFIX = CHANNEL.receiptPrefix;
 export const RECEIPT_FORMAT = 'ets2telemetry.uninstall-receipt';
 export const EXIT_CODES: Readonly<Record<UninstallResult['outcome'], number>> = Object.freeze({complete: 0, deferred: 3, refused: 4});
 const EXECUTABLE_NAME = /^[A-Za-z0-9._ -]{1,64}\.exe$/i;
@@ -432,7 +433,7 @@ export interface SquirrelApp {
   getAppMetrics(): readonly {readonly pid: number}[];
   setLoginItemSettings?(settings: {openAtLogin: boolean; path?: string; args?: string[]}): void;
 }
-export const ROAMING_USER_DATA_NAME = 'ETS2Telemetry Desktop';
+export const ROAMING_USER_DATA_NAME = CHANNEL.productName;
 /** Electron's part of the shortcut reader (ET-045h): `shell.readShortcutLink`, synchronous, throwing on any error. */
 export interface SquirrelShell {
   readShortcutLink(shortcutPath: string): {target: string; args?: string; appUserModelId?: string};

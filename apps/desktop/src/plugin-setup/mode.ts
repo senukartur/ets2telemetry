@@ -3,6 +3,7 @@ import path from 'node:path';
 import type {AtomicFileSystem} from './atomic-json-file';
 import type {InstallerFileSystem} from './plugin-installer';
 import {isDrivePath} from './steam-discovery';
+import {CHANNEL} from '../channel';
 
 // The plugin setup mode gate (ET-017 P15; docs/plugin-setup.md, "Mode gate"). A pure decision from the launch
 // environment and the packaged flag, evaluated once at startup. It fails closed: every isolated or development launch
@@ -71,7 +72,7 @@ export const TEST_ROOT_MARKER = 'ets2telemetry-plugin-test-root.marker';
 /** The test-root mode's Steam folder: `<root>\Steam`. Nothing reads the Windows registry or runs PowerShell then. */
 export const testRootSteam = (root: string) => path.win32.join(root, 'Steam');
 /** The test-root mode's install registry folder, inside the root like every other path it touches. */
-export const testRootRegistryDirectory = (root: string) => path.win32.join(root, 'LocalAppData', 'ETS2Telemetry', 'plugins');
+export const testRootRegistryDirectory = (root: string) => path.win32.join(root, 'LocalAppData', CHANNEL.dataRootName, 'plugins');
 
 const normal = (value: string) => path.win32.normalize(value).replace(/\\+$/, '').toLowerCase();
 const within = (candidate: string, roots: readonly string[]) => {
