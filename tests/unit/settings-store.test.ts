@@ -3,8 +3,9 @@ import {existsSync} from 'node:fs';
 import path from 'node:path';
 import {afterEach, beforeEach, expect, it, vi} from 'vitest';
 import {
-  RENAME_RETRY_DELAYS_MS, SettingsBusyError, SettingsError, SettingsStore, settingsDirectory, type SettingsFileSystem, type SettingsStoreOptions
+  RENAME_RETRY_DELAYS_MS, SettingsBusyError, SettingsError, SettingsStore, settingsDirectory, type SettingsFileSystem, type SettingsStoreOptions, type SettingsTimers
 } from '../../apps/desktop/src/settings-store';
+import {unflushed} from '../shared/file-work';
 import {temporaryResources} from '../shared/resources';
 
 // Real temporary directories; failures are injected by wrapping the real file operations.
@@ -104,13 +105,27 @@ beforeEach(async () => {
 });
 afterEach(async () => {await resources.dispose();});
 
+/**
+ * The real file system with the flush to disk of every opened file skipped (unflushed, tests/shared/file-work.ts).
+ * No case observes durability across a power loss. On October 28, 2026 single syncs of a save took up to 1.0 s here
+ * with the host otherwise idle, and a case with four saves took 4.6 s in one of five runs. "writes the exact v3 content,
+ * synced before the rename" opens its handles through the real fs.open, so the sync it observes before the rename is
+ * the real one.
+ */
+const UNFLUSHED = unflushed(fs as unknown as SettingsFileSystem);
+/**
+ * Timers that never fire, for every store whose case passes no controlled timers of its own: such a case asserts the
+ * loaded result, which must not race the real 1000 ms load budget while the host is busy (ET-019). The budget's own
+ * cases pass controlledTimers().
+ */
+const HELD_TIMERS: SettingsTimers = {setTimeout: () => undefined, clearTimeout: () => undefined};
 function store(fileSystem?: SettingsFileSystem, options: SettingsStoreOptions = {}) {
   return new SettingsStore(directory, {log: (event, _detail, facts) => events.push({event, ...(facts ? {facts: {...facts}} : {})}),
-    delay: milliseconds => {delays.push(milliseconds); return Promise.resolve();}, now, ...(fileSystem ? {fs: fileSystem} : {}), ...options});
+    delay: milliseconds => {delays.push(milliseconds); return Promise.resolve();}, now, fs: fileSystem ?? UNFLUSHED, timers: HELD_TIMERS, ...options});
 }
-/** The real file system with selected operations replaced. */
+/** The real file system, without the flush, with selected operations replaced. */
 function wrapped(overrides: Partial<SettingsFileSystem>): SettingsFileSystem {
-  return {...(fs as unknown as SettingsFileSystem), ...overrides};
+  return {...UNFLUSHED, ...overrides};
 }
 async function seed(content: string | Uint8Array, name = 'settings.json') {
   await fs.mkdir(directory, {recursive: true});
@@ -404,16 +419,22 @@ function delayedRead(overrides: Partial<SettingsFileSystem> = {}) {
   };
   return {release, settled, fs: wrapped({lstat: async target => {await gate; return fs.lstat(target);}, ...overrides, open})};
 }
-/** Starts a load over a delayed read and lets its 1000 ms budget expire. */
+/**
+ * Starts a load over a delayed read and lets its 1000 ms budget expire. `lateApplied` resolves when the store calls its
+ * `changed` port, so a case waits for the late read to be applied instead of polling real file work under vi.waitFor's
+ * default 1 s real-time limit (ET-019, October 28, 2026).
+ */
 async function loadPastBudget(fileSystem: SettingsFileSystem) {
-  const {started, timers} = controlledTimers(), changed = vi.fn();
+  let applied: () => void = () => undefined;
+  const lateApplied = new Promise<void>(resolve => {applied = resolve;});
+  const {started, timers} = controlledTimers(), changed = vi.fn(() => {applied();});
   const settings = store(fileSystem, {timers, changed});
   const loading = settings.load();
   await new Promise(resolve => setImmediate(resolve));
   expect(started.map(timer => timer.milliseconds)).toEqual([1000]);
   started[0].callback();
   const pending = await loading;
-  return {settings, started, changed, pending};
+  return {settings, started, changed, pending, lateApplied};
 }
 const PENDING_VIEW = {language: 'en', autostart: false, units: {ets2: 'metric', ats: 'us-customary'}, gearDisplay: AUTO, overlay: DEFAULT_OVERLAY, state: 'loading', writable: false, saveError: null};
 const PENDING_EVENT = {event: 'SETTINGS_LOAD_PENDING', facts: {state: 'loading', reason: 'load-budget'}};
@@ -421,13 +442,13 @@ const PENDING_EVENT = {event: 'SETTINGS_LOAD_PENDING', facts: {state: 'loading',
 it('applies a corrupt file read that outlasts the load budget once it settles (hosted run 38755116140)', async () => {
   await seed(CORRUPT);
   const gated = delayedRead();
-  const {settings, started, changed, pending} = await loadPastBudget(gated.fs);
+  const {settings, started, changed, pending, lateApplied} = await loadPastBudget(gated.fs);
   expect(pending).toEqual(PENDING_VIEW);
   expect(events).toEqual([PENDING_EVENT]);
   // The pending read is bounded by the read limit, 30 s after the load started.
   expect(started.map(timer => timer.milliseconds)).toEqual([1000, 29000]);
   gated.release();
-  await vi.waitFor(() => expect(changed).toHaveBeenCalledOnce());
+  await lateApplied; expect(changed).toHaveBeenCalledOnce();
   expect(settings.view()).toEqual({language: 'en', autostart: false, units: {ets2: 'metric', ats: 'us-customary'}, gearDisplay: AUTO, overlay: DEFAULT_OVERLAY, state: 'invalid-file', writable: true, saveError: null});
   expect(started[1].cleared).toBe(true);
   expect(events).toEqual([PENDING_EVENT, {event: 'SETTINGS_FALLBACK', facts: {state: 'invalid-file'}}]);
@@ -451,10 +472,10 @@ it.each([
 ])('applies a late read of $name with its own state and writability, writing nothing', async ({content, view, event}) => {
   await seed(content);
   const gated = delayedRead();
-  const {settings, changed, pending} = await loadPastBudget(gated.fs);
+  const {settings, changed, pending, lateApplied} = await loadPastBudget(gated.fs);
   expect(pending).toEqual(PENDING_VIEW);
   gated.release();
-  await vi.waitFor(() => expect(changed).toHaveBeenCalledOnce());
+  await lateApplied; expect(changed).toHaveBeenCalledOnce();
   expect(settings.view()).toEqual({...view, saveError: null});
   expect(events).toEqual([PENDING_EVENT, event]);
   expect((await read()).toString('utf8')).toBe(content); expect(await list()).toEqual(['settings.json']);
@@ -467,7 +488,7 @@ it.each([
 it('refuses a save during the pending read at once and quarantines a late invalid file only after applying it', async () => {
   await seed(CORRUPT);
   const gated = delayedRead();
-  const {settings, changed} = await loadPastBudget(gated.fs);
+  const {settings, changed, lateApplied} = await loadPastBudget(gated.fs);
   const outcome = await Promise.race([settings.setUnitProfile('ets2', 'us-customary').then(() => 'resolved', (error: unknown) => error),
     new Promise(resolve => setTimeout(() => resolve('still pending after 100 ms'), 100))]);
   expect(outcome).toBeInstanceOf(SettingsError); expect((outcome as SettingsError).code).toBe('SETTINGS_WRITE_FAILED');
@@ -477,7 +498,7 @@ it('refuses a save during the pending read at once and quarantines a late invali
   // Refused requests are never queued toward the four-request bound.
   for (let attempt = 0; attempt < 5; attempt++) await expect(settings.setUnitProfile('ats', 'metric')).rejects.toBeInstanceOf(SettingsError);
   gated.release();
-  await vi.waitFor(() => expect(changed).toHaveBeenCalledOnce());
+  await lateApplied; expect(changed).toHaveBeenCalledOnce();
   // Nothing was written, renamed or quarantined while the read was pending.
   expect((await read()).toString('utf8')).toBe(CORRUPT); expect(await list()).toEqual(['settings.json']);
   expect(settings.view()).toEqual({language: 'en', autostart: false, units: {ets2: 'metric', ats: 'us-customary'}, gearDisplay: AUTO, overlay: DEFAULT_OVERLAY, state: 'invalid-file', writable: true, saveError: 'SETTINGS_WRITE_FAILED'});
@@ -488,9 +509,9 @@ it('refuses a save during the pending read at once and quarantines a late invali
 it('keeps a late read error read-only', async () => {
   await seed(VALID_METRIC);
   const gated = delayedRead({open: async (file, flags) => {if (flags === 'r') throw errno('EIO'); return fs.open(file, flags);}});
-  const {settings, started, changed} = await loadPastBudget(gated.fs);
+  const {settings, started, changed, lateApplied} = await loadPastBudget(gated.fs);
   gated.release();
-  await vi.waitFor(() => expect(changed).toHaveBeenCalledOnce());
+  await lateApplied; expect(changed).toHaveBeenCalledOnce();
   expect(started[1].cleared).toBe(true);
   expect(settings.view()).toEqual({language: 'en', autostart: false, units: {ets2: 'metric', ats: 'us-customary'}, gearDisplay: AUTO, overlay: DEFAULT_OVERLAY, state: 'unreadable', writable: false, saveError: null});
   expect(events).toEqual([PENDING_EVENT, {event: 'SETTINGS_FALLBACK', facts: {state: 'unreadable', reason: 'read'}}]);
@@ -677,7 +698,7 @@ it('keeps the previous placement when a placement save fails and refuses it whil
   const pending = await loadPastBudget(gated.fs);
   await expect(pending.settings.setOverlayPlacement('hud', {x: 0, y: 0, scale: 1})).rejects.toMatchObject({code: 'SETTINGS_WRITE_FAILED'});
   gated.release();
-  await vi.waitFor(() => expect(pending.changed).toHaveBeenCalledOnce());
+  await pending.lateApplied; expect(pending.changed).toHaveBeenCalledOnce();
 });
 
 it('serializes placement saves with unit and overlay saves in one queue and one four-request bound', async () => {
@@ -731,7 +752,7 @@ it('refuses overlay saves for a newer-version file and while the startup read is
   await expect(pending.settings.setOverlaySections(ALL_ON)).rejects.toMatchObject({code: 'SETTINGS_WRITE_FAILED'});
   expect(pending.settings.idle()).toBeUndefined();
   gated.release();
-  await vi.waitFor(() => expect(pending.changed).toHaveBeenCalledOnce());
+  await pending.lateApplied; expect(pending.changed).toHaveBeenCalledOnce();
 });
 
 it('serializes unit and overlay saves in one queue so that every change survives', async () => {
@@ -948,7 +969,7 @@ it('refuses gear display saves for a newer-version file and while the startup re
   await expect(pending.settings.setGearDisplay('ats', 'manual')).rejects.toMatchObject({code: 'SETTINGS_WRITE_FAILED'});
   expect(pending.settings.idle()).toBeUndefined();
   gated.release();
-  await vi.waitFor(() => expect(pending.changed).toHaveBeenCalledOnce());
+  await pending.lateApplied; expect(pending.changed).toHaveBeenCalledOnce();
 });
 it('shares the queue and four-request bound with unit saves so that both changes survive', async () => {
   let release!: () => void, entered!: () => void;

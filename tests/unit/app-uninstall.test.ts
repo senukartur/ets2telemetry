@@ -4,6 +4,7 @@ import {afterEach, beforeEach, describe, expect, it, vi} from 'vitest';
 import type {RunningCheck} from '../../apps/desktop/src/plugin-setup/plugin-installer';
 import {APP_UNINSTALL_FAILSAFE_MS, AppUninstall, uninstallWipeBudget, type AppUninstallPorts} from '../../apps/desktop/src/uninstall/app-uninstall';
 import {resolveUninstallRoots} from '../../apps/desktop/src/uninstall/roots';
+import {fileWorkBudget, withoutFlush} from '../shared/file-work';
 import {guardedTempRoot, type GuardedRoot} from '../shared/guarded-fs';
 import {CURRENT, exists, FOREIGN, gameFolder, installFixture, installRecord, KNOWN, listTree, notRunning, seedData, writeRegistry,
   type FakeGameFolder, type InstallFixture} from '../shared/uninstall-fixture';
@@ -11,8 +12,18 @@ import {CURRENT, exists, FOREIGN, gameFolder, installFixture, installRecord, KNO
 // REG-015, REG-017 (ET-018 PR-4, plan U8): the in-app uninstall's order on fake installs under the guarded temporary root.
 // Every port is injected: no dialog, no tasklist, no real install, data or game folder is touched.
 
+// The guard skips the flush to disk of every file opened through it (withoutFlush, tests/shared/file-work.ts): no case in
+// this file observes durability across a power loss. Single syncs of the intent and registry writes took up to 1,370 ms here under
+// load on October 28, 2026, nearly all of a slow case's time (ET-019, docs/validation/et-019.md).
+// The cases build scenes and run the code under test on real temporary files: at most 591 file requests
+// per case (libuv promise and callback requests and handle closes, counted for every case on October 28, 2026), rounded
+// up to 600. Without the flush, single stalled requests still made a case take seconds in a full npm test. This
+// named budget bounds that file work at FS_OPERATION_ALLOWANCE_MS per request (TESTING.md section 6), not behaviour
+// timing: the cases run on injected clocks and assert no real time, and a case with its own timeout keeps it.
+const CASE_FS_OPERATIONS = 600;
+vi.setConfig({testTimeout: fileWorkBudget(CASE_FS_OPERATIONS)});
 let guard: GuardedRoot;
-beforeEach(async () => {guard = await guardedTempRoot('ets2telemetry-app-uninstall-');});
+beforeEach(async () => {guard = withoutFlush(await guardedTempRoot('ets2telemetry-app-uninstall-'));});
 afterEach(async () => {
   const violations = [...guard.violations];
   await guard.dispose();

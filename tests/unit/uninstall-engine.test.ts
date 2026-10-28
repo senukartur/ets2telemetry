@@ -6,6 +6,7 @@ import {recordable, runUninstall, type UninstallFileSystem, type UninstallPorts,
 import {MAX_KNOWN_HASHES, MAX_PENDING_BYTES, parsePendingRecord, pendingRecordFits, serializePendingRecord, type PendingFolder, type PendingRecord}
   from '../../apps/desktop/src/uninstall/pending-record';
 import {resolveUninstallRoots, type UninstallRoots} from '../../apps/desktop/src/uninstall/roots';
+import {FS_OPERATION_ALLOWANCE_MS, withoutFlush} from '../shared/file-work';
 import {guardedTempRoot, type GuardedRoot} from '../shared/guarded-fs';
 import {CURRENT, exists, FOREIGN, gameFolder, installFixture, installRecord, KNOWN, listTree, LOCAL_BUILD, notRunning, pendingInstall, RELEASED, seedData, sha, UTC,
   writeRegistry, type FakeGameFolder, type InstallFixture} from '../shared/uninstall-fixture';
@@ -14,34 +15,12 @@ import {CURRENT, exists, FOREIGN, gameFolder, installFixture, installRecord, KNO
 // temporary root. A kill is simulated by a file system that stops answering after a given deletion; the run is then
 // abandoned, as a killed process would be, and a fresh run must finish the cleanup.
 
-/**
- * The guard with the flush to disk of every opened file skipped; every other call, and the guard's checks, unchanged.
- * It applies to the guarded file system of every case in this file, because none of them observes a sync.
- * Each intent and registry write syncs its temporary file before the rename (atomic-json-file.ts), and on Windows that
- * FlushFileBuffers waits for the disk itself: on October 28, 2026 single syncs in this file took 0.1 to 2.3 s on an idle
- * host, while no guarded call took over 100 ms. Several such waits in one case made the kill cases outlast the default
- * 5 s timeout on hosted CI. A kill here is a process death, which loses nothing the operating system already accepted,
- * so no case in this file can observe the flush; plugin-registry.test.ts covers a failing sync.
- */
-function withoutFlush(root: GuardedRoot): GuardedRoot {
-  const open = (async (...args: Parameters<typeof fsp.open>) => {
-    const handle = await root.fs.open(...args);
-    return new Proxy(handle, {get(target, property) {
-      if (property === 'sync') return () => Promise.resolve();
-      const value: unknown = Reflect.get(target, property, target);
-      return typeof value === 'function' ? (value as (...values: unknown[]) => unknown).bind(target) : value;
-    }});
-  }) as typeof fsp.open;
-  return {...root, fs: {...root.fs, open}};
-}
-
-/**
- * The per-operation allowance of a named file-work budget: the 67 ms upper end of the October 18, 2026 probe of single
- * fs.promises operations on a loaded host (ET-019, load-sensitive unit tests; under 0.5 ms idle), used as an average
- * across a case's counted operations. It does not bound one call: single requests of 365 to 1,798 ms were observed on
- * October 28, 2026, and the aggregate absorbs them.
- */
-const FS_OPERATION_ALLOWANCE_MS = 67;
+// Every case in this file uses the guard without the flush to disk (withoutFlush, tests/shared/file-work.ts), because
+// none of them observes a sync. Each intent and registry write syncs its temporary file before the rename
+// (atomic-json-file.ts): on October 28, 2026 single syncs in this file took 0.1 to 2.3 s on an idle host, while no
+// guarded call took over 100 ms, and several such waits in one case made the kill cases outlast the default 5 s timeout
+// on hosted CI. A kill here is a process death, which loses nothing the operating system already accepted;
+// plugin-registry.test.ts covers a failing sync.
 
 let guard: GuardedRoot;
 beforeEach(async () => {guard = withoutFlush(await guardedTempRoot('ets2telemetry-uninstall-engine-'));});

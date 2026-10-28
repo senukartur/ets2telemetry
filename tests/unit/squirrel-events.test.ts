@@ -9,6 +9,7 @@ import {cancelDeferralOnStart, countOtherProcesses, deadlineSignal, EXIT_CODES, 
 import type {UninstallPorts, UninstallResult} from '../../apps/desktop/src/uninstall/engine';
 import {EXECUTOR_FILE, executorCommand, RUN_ONCE_VALUE} from '../../apps/desktop/src/uninstall/executor';
 import {resolveUninstallRoots} from '../../apps/desktop/src/uninstall/roots';
+import {fileWorkBudget, withoutFlush} from '../shared/file-work';
 import {guardedTempRoot, type GuardedRoot} from '../shared/guarded-fs';
 import {CURRENT, exists, fakeRunOnce, fakeUninstallEntry, FOREIGN, gameFolder, installFixture, installRecord, KNOWN, listTree, notRunning, seedData, TEST_RUN_ONCE,
   useRunOnceKey, UTC, writeRegistry, type FakeGameFolder, type FakeRunOnce, type FakeUninstallEntry, type InstallFixture} from '../shared/uninstall-fixture';
@@ -17,8 +18,18 @@ import {CURRENT, exists, fakeRunOnce, fakeUninstallEntry, FOREIGN, gameFolder, i
 // port is injected: no Update.exe, no lock, no tasklist and no %TEMP% receipt is real, and the handler never sees the
 // real execPath layout.
 
+// The guard skips the flush to disk of every file opened through it (withoutFlush, tests/shared/file-work.ts): no case in
+// this file observes durability across a power loss. Single syncs of the atomic writes took up to 1,211 ms here under
+// load on October 28, 2026, nearly all of a slow case's time (ET-019, docs/validation/et-019.md).
+// The cases build scenes and run the code under test on real temporary files: at most 680 file requests
+// per case (libuv promise and callback requests and handle closes, counted for every case on October 28, 2026), rounded
+// up to 700. Without the flush, single stalled requests still made a case take seconds in a full npm test. This
+// named budget bounds that file work at FS_OPERATION_ALLOWANCE_MS per request (TESTING.md section 6), not behaviour
+// timing: the cases run on injected clocks and assert no real time, and a case with its own timeout keeps it.
+const CASE_FS_OPERATIONS = 700;
+vi.setConfig({testTimeout: fileWorkBudget(CASE_FS_OPERATIONS)});
 let guard: GuardedRoot;
-beforeEach(async () => {guard = await guardedTempRoot('ets2telemetry-squirrel-events-');});
+beforeEach(async () => {guard = withoutFlush(await guardedTempRoot('ets2telemetry-squirrel-events-'));});
 afterEach(async () => {
   const violations = [...guard.violations];
   await guard.dispose();
@@ -412,11 +423,20 @@ describe('the old-name shortcuts (ET-045h)', () => {
     const removalStarted = new Promise<void>(resolve => {started = resolve;});
     const held: FakeRunOnce = {...registry, remove: (key, value, timeoutMs) => {started(); return new Promise<void>(resolve => {release = resolve;}).then(() => registry.remove(key, value, timeoutMs));}};
     const {reads, ports} = shortcutPorts(fixture, shortcuts);
-    const test = harness(fixture, {...ports, runOnce: held});
+    // The unlink port opens a gate once the last old-name shortcut (the Start menu one, read last) is gone, so the case
+    // waits for the step to reach it instead of polling under vi.waitFor's default 1 s real-time limit (ET-019).
+    let lastRemoved: () => void = () => undefined;
+    const legacyRemoved = new Promise<void>(resolve => {lastRemoved = resolve;});
+    const unlink = async (target: string) => {
+      await fixture.fs.unlink(target);
+      if (target.toLowerCase() === shortcuts.legacy.startMenu.toLowerCase()) lastRemoved();
+    };
+    const test = harness(fixture, {...ports, runOnce: held, fs: {...fixture.fs, unlink}});
     let finished = false;
     const run = runSquirrelEvent(event('updated'), test.ports).then(code => {finished = true; return code;});
     await removalStarted;
-    await vi.waitFor(async () => {expect(await exists(shortcuts.legacy.startMenu)).toBe(false);});
+    await legacyRemoved;
+    expect(await exists(shortcuts.legacy.startMenu)).toBe(false);
     expect(await exists(shortcuts.legacy.desktop)).toBe(false);
     expect(finished).toBe(false);
     release();
@@ -678,7 +698,7 @@ describe('uninstall', () => {
     await runSquirrelEvent(event('uninstall'), harness(testRoot.fixture, {removeRoamingUserData: roamingTest}).ports);
     expect(roamingTest).not.toHaveBeenCalled();
     await guard.dispose().catch(() => undefined);
-    guard = await guardedTempRoot('ets2telemetry-squirrel-events-');
+    guard = withoutFlush(await guardedTempRoot('ets2telemetry-squirrel-events-'));
     const production = await scene({testRoot: false});
     // A folder that is no longer a game folder: the plugin goes by hash and the receipt carries the fixed note.
     await fsp.rm(path.win32.join(production.game.root, 'bin', 'win_x64', 'eurotrucks2.exe'));

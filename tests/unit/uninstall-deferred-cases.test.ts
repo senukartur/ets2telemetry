@@ -6,6 +6,7 @@ import {afterEach, beforeAll, beforeEach, describe, expect, it, vi} from 'vitest
 import type {ReleaseChannel} from '../../apps/desktop/src/channel';
 import type {RunningCheck} from '../../apps/desktop/src/plugin-setup/plugin-installer';
 import type {UninstallRoots} from '../../apps/desktop/src/uninstall/roots';
+import {fileWorkBudget, withoutFlush} from '../shared/file-work';
 import {guardedTempRoot, type GuardedRoot} from '../shared/guarded-fs';
 
 // REG-017 (ET-018 PR-5, U7): the shared deferred-cleanup case table, run through the TypeScript engine. The same table
@@ -43,9 +44,19 @@ async function channelModules(channel: ReleaseChannel) {
 }
 type ChannelModules = Awaited<ReturnType<typeof channelModules>>;
 
+// The guard skips the flush to disk of every file opened through it (withoutFlush, tests/shared/file-work.ts): no case in
+// this file observes durability across a power loss. Single syncs of the intent and registry writes took up to 1,273 ms here under
+// load on October 28, 2026, nearly all of a slow case's time (ET-019, docs/validation/et-019.md).
+// The cases build scenes and run the code under test on real temporary files: at most 239 file requests
+// per case (libuv promise and callback requests and handle closes, counted for every case on October 28, 2026), rounded
+// up to 250. Without the flush, single stalled requests still made a case take seconds in a full npm test. This
+// named budget bounds that file work at FS_OPERATION_ALLOWANCE_MS per request (TESTING.md section 6), not behaviour
+// timing: the cases run on injected clocks and assert no real time, and a case with its own timeout keeps it.
+const CASE_FS_OPERATIONS = 250;
+vi.setConfig({testTimeout: fileWorkBudget(CASE_FS_OPERATIONS)});
 let guard: GuardedRoot;
 const readOnly: string[] = [];
-beforeEach(async () => {guard = await guardedTempRoot('ets2telemetry-deferred-cases-');});
+beforeEach(async () => {guard = withoutFlush(await guardedTempRoot('ets2telemetry-deferred-cases-'));});
 afterEach(async () => {
   for (const file of readOnly.splice(0)) await fsp.chmod(file, 0o666).catch(() => undefined);
   const violations = [...guard.violations];

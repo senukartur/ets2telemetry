@@ -69,6 +69,16 @@ beforeAll(async () => {
   installFixture();
   try {await loadMain(); await settle();} finally {await removeFixture();}
 }, MODULE_GRAPH_LOAD_BUDGET_MS);
+// Re-evaluation allowance (ET-019, October 28, 2026). Every case still evaluates main.ts and its non-mocked graph once,
+// through loadMain(), and never more than once (counted in every case). In two full npm test runs beside an npm test
+// loop, temporary instrumentation measured that evaluation at 28 ms at the median and 197 ms at the 95th percentile, but
+// at up to 3,486 ms, nearly all of the slowest case's 3,595 ms (13 of 558 cases over 1 s); with the file run alone under
+// the same load it never took over 53 ms. Which part of it waits (module fetches from the shared Vitest process or CPU
+// contention) was not separated. So each case gets the default 5 s timeout plus one evaluation allowance of 10 s, about
+// three times the slowest evaluation measured. It bounds module evaluation, not behaviour timing: the cases run on fake
+// timers and assert no real time.
+const DEFAULT_CASE_TIMEOUT_MS = 5_000, MAIN_EVALUATION_ALLOWANCE_MS = 10_000;
+vi.setConfig({testTimeout: DEFAULT_CASE_TIMEOUT_MS + MAIN_EVALUATION_ALLOWANCE_MS});
 // ET-011b fixture addition: a settled in-memory settings store, so main never touches the real %LOCALAPPDATA% and
 // readiness timing is unchanged. `settingsWrite` controls each save; `settingsView` is what the store reports.
 class FakeSettingsError extends Error {constructor(readonly code: 'SETTINGS_WRITE_FAILED' | 'SETTINGS_READ_ONLY') {super(code === 'SETTINGS_READ_ONLY' ? 'Settings are read-only' : 'Settings could not be saved');}}
