@@ -42,6 +42,7 @@ export function productionUpdatePorts(input: ProductionUpdatePortsInput): Update
       headers: {'User-Agent': UPDATE_USER_AGENT, Accept: init.kind === 'json' ? 'application/vnd.github+json' : 'application/octet-stream'}}),
     fs,
     runUpdate: (updateExe, folder) => runFixedProgram(nodeExecFile, updateExe, ['--update', folder], {timeoutMs: APPLY_TIMEOUT_MS, maxOutputBytes: APPLY_MAX_OUTPUT_BYTES}),
+    install: {realpath: target => nodeFsPromises.realpath(target), readFile: target => nodeFsPromises.readFile(target), processImages: () => listProcessImages(input.env)},
     checkRunning: async () => {
       const listing = await checkRunningGames();
       return listing.ok ? {ok: true, running: listing.running} : {ok: false};
@@ -53,6 +54,22 @@ export function productionUpdatePorts(input: ProductionUpdatePortsInput): Update
       clearTimeout: handle => clearTimeout(handle as ReturnType<typeof setTimeout>)
     }
   };
+}
+
+/** The R1 cleanup's process listing: Windows PowerShell 5.1 from System32 with one fixed command, 15 s and 4 MiB at most. */
+export const PROCESS_IMAGES_TIMEOUT_MS = 15_000;
+const PROCESS_IMAGES_MAX_OUTPUT_BYTES = 4 * 1024 * 1024;
+const PROCESS_IMAGES_COMMAND = '[Console]::OutputEncoding = [Text.Encoding]::UTF8; Get-Process -ErrorAction SilentlyContinue | ForEach-Object { $_.Path } | Where-Object { $_ }';
+/**
+ * The image paths of the running processes this user can read, one per line; undefined when the listing failed (a
+ * non-zero exit, the deadline or the output bound), so the cleanup keeps the folder.
+ */
+export async function listProcessImages(env: Readonly<Record<string, string | undefined>>, run: typeof runFixedProgram = runFixedProgram): Promise<readonly string[] | undefined> {
+  const powershell = path.win32.join(env.SystemRoot ?? env.SYSTEMROOT ?? 'C:\\Windows', 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe');
+  const result = await run(nodeExecFile, powershell, ['-NoLogo', '-NoProfile', '-NonInteractive', '-Command', PROCESS_IMAGES_COMMAND],
+    {timeoutMs: PROCESS_IMAGES_TIMEOUT_MS, maxOutputBytes: PROCESS_IMAGES_MAX_OUTPUT_BYTES}).catch(() => undefined);
+  if (!result?.ok) return undefined;
+  return result.stdout.toString('utf8').replace(/^\uFEFF/, '').split(/\r?\n/).map(line => line.trim()).filter(line => path.win32.isAbsolute(line));
 }
 
 /** How long main waits for the restart helper to spawn before it exits anyway. */

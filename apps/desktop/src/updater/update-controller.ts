@@ -5,7 +5,7 @@ import type {DiagnosticFacts} from '../diagnostics';
 import type {FixedProgramResult} from '../plugin-setup/fixed-program';
 import type {RunningGames} from '../plugin-setup/game-processes';
 import type {UpdateContext, UpdateContextResult} from './update-context';
-import {clearUpdates, downloadPackage, removeIncompleteVersion, type IncompleteRemoval, type UpdateFileSystem} from './update-download';
+import {clearUpdates, downloadPackage, removeIncompleteVersion, RETRYABLE_REMOVALS, type IncompleteRemoval, type IncompleteVersionPorts, type UpdateFileSystem} from './update-download';
 import {checkFeed, type FeedResult, type FeedTimers, type FetchPort} from './update-feed';
 import type {UpdateManifest} from './update-manifest';
 import {UNSUPPORTED_UPDATE} from './update-view';
@@ -29,8 +29,13 @@ export const CHECK_INTERVAL_MS = 6 * 60 * 60_000;
 export const MANUAL_CHECK_MIN_INTERVAL_MS = 10_000;
 /** The apply's deadline (UP3). */
 export const APPLY_TIMEOUT_MS = 180_000;
-/** R1: a killed Update.exe or its hook can still hold files for a moment; the incomplete folder is tried this often, this far apart. */
-export const INCOMPLETE_REMOVAL_ATTEMPTS = 3;
+/**
+ * R1: after a timeout or the output bound runFixedProgram answers at once, while the killed Update.exe, its children and
+ * the --squirrel-updated hook may still run or hold files. The removal is asked again while its answer can change
+ * (RETRYABLE_REMOVALS: Update.exe or a process in the folder still running, a failed listing, a held file), at most
+ * this often, this far apart: about 4.5 s in all. After that the folder stays and the failure is reported.
+ */
+export const INCOMPLETE_REMOVAL_ATTEMPTS = 10;
 export const INCOMPLETE_REMOVAL_RETRY_MS = 500;
 
 export type UpdateEvent =
@@ -102,6 +107,8 @@ export interface UpdatePorts {
   resolveContext(): Promise<UpdateContextResult>;
   readonly fetch: FetchPort;
   readonly fs: UpdateFileSystem;
+  /** The reads of the R1 cleanup (removeIncompleteVersion): real paths, Squirrel's release list, the running images. */
+  readonly install: Omit<IncompleteVersionPorts, 'fs'>;
   /** Runs `Update.exe --update <folder>` with fixed arguments under the 180 s deadline; never aborted by the exit. */
   runUpdate(updateExe: string, folder: string): Promise<FixedProgramResult>;
   /** The running-game listing (ETS2, ATS, `truckersmp*`). */
@@ -300,7 +307,7 @@ export class UpdateController {
       this.options.log('UPDATE_APPLY_FAILED', {code: failure, reason: applied.failure});
       // R1: the half-written app-<version> would be what the stub and Update.exe --processStart start next; it goes
       // before the failure is reported, so neither a shortcut nor a Retry meets it (removeIncompleteVersion).
-      const removal = await this.removeIncomplete(context, offer.manifest.nugetVersion);
+      const removal = await this.removeIncomplete(context, offer.manifest.nugetVersion, offer.manifest.package.name);
       this.options.log(removal === 'removed' || removal === 'absent' ? 'UPDATE_INCOMPLETE_VERSION_REMOVED' : 'UPDATE_INCOMPLETE_VERSION_KEPT', {result: removal});
       this.dispatch({type: 'failed', failure});
       return;
@@ -318,11 +325,12 @@ export class UpdateController {
     this.restart();
   }
 
-  /** removeIncompleteVersion, tried again while it fails (a file still held), at most INCOMPLETE_REMOVAL_ATTEMPTS times. */
-  private async removeIncomplete(context: UpdateContext, nugetVersion: string): Promise<IncompleteRemoval> {
+  /** removeIncompleteVersion, asked again while its answer can change, at most INCOMPLETE_REMOVAL_ATTEMPTS times. */
+  private async removeIncomplete(context: UpdateContext, nugetVersion: string, packageName: string): Promise<IncompleteRemoval> {
+    const ports: IncompleteVersionPorts = {fs: this.options.ports.fs, ...this.options.ports.install};
     for (let attempt = 1; ; attempt++) {
-      const result = await removeIncompleteVersion(this.options.ports.fs, context.installRoot, nugetVersion, context.runningDirectory).catch((): IncompleteRemoval => 'failed');
-      if (result !== 'failed' || attempt >= INCOMPLETE_REMOVAL_ATTEMPTS) return result;
+      const result = await removeIncompleteVersion(ports, context.installRoot, nugetVersion, packageName, context.runningDirectory).catch((): IncompleteRemoval => 'failed');
+      if (!RETRYABLE_REMOVALS.has(result) || attempt >= INCOMPLETE_REMOVAL_ATTEMPTS) return result;
       await new Promise<void>(resolve => {this.options.ports.clock.setTimeout(resolve, INCOMPLETE_REMOVAL_RETRY_MS);});
     }
   }
