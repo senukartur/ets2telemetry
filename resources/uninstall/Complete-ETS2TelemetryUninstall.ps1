@@ -20,7 +20,8 @@ param(
 # contract again from uninstall\pending.json, with the same rules as the application's engine
 # (apps/desktop/src/uninstall/), which tests/fixtures/uninstall/deferred-cases.json checks for both:
 #
-# - The folders come from the script's own location: <base>\ETS2Telemetry\uninstall. A test root (the base is named
+# - The folders come from the script's own location: <base>\ETS2Telemetry\uninstall in production,
+#   <base>\ETS2TelemetryStaging\uninstall in staging ($Channel below). A test root (the base is named
 #   LocalAppData and its parent holds the ET-017 marker and a valid ets2telemetry-install-test.json) uses only the RunOnce
 #   key that test file names; production requires the base to be the known-folder LocalAppData. Anything else changes
 #   nothing.
@@ -36,22 +37,36 @@ param(
 #   read-only attribute; plugins\ and uninstall\ go last, and only when every folder is clean, then the empty root.
 # - A complete run removes the RunOnce value. A run still blocked after the 10th attempt stops, removes it and leaves
 #   README.txt with the manual steps. The intent it rewrites stays within 32 folders and 128 KiB.
-# - A complete production run also removes Electron's Roaming userData %APPDATA%\ETS2Telemetry Desktop, best effort (O7).
+# - A complete production run also removes Electron's Roaming userData %APPDATA%\ETS2Telemetry Desktop (the channel's
+#   productName folder), best effort (O7).
 # - One receipt with fixed codes and counts, never a path, goes to %TEMP%; a production run shows one summary message box.
 Set-StrictMode -Version 2.0
 $ErrorActionPreference = 'Stop'
 
+# The build channel of this copy (ET-055 UP12). The tracked script names production; the build stamps the channel the
+# application was built for into this one line of the packaged copy (scripts/uninstall-executor.mjs), so each channel's
+# executor works only in its own data root, with its own RunOnce value, plugin file and install root, and never touches
+# the other channel's. The table mirrors apps/desktop/src/channel.ts; tests/unit/channel-identity.test.ts compares them.
+$Channel = 'production'
+$Channels = @{
+    production = @{dataRoot = 'ETS2Telemetry'; installRoot = 'ETS2TelemetryDesktop'; executable = 'ETS2TelemetryDesktop.exe'; runOnceValue = 'ETS2TelemetryUninstall'
+        pluginFile = 'ets2telemetry-plugin.dll'; roamingFolder = 'ETS2Telemetry Desktop'; displayName = 'Yukon Union Telemetry'; receiptPrefix = 'ETS2Telemetry-deferred-cleanup-'}
+    staging = @{dataRoot = 'ETS2TelemetryStaging'; installRoot = 'ETS2TelemetryDesktopStaging'; executable = 'ETS2TelemetryDesktopStaging.exe'; runOnceValue = 'ETS2TelemetryStagingUninstall'
+        pluginFile = 'ets2telemetry-plugin-staging.dll'; roamingFolder = 'ETS2Telemetry Desktop Staging'; displayName = 'Yukon Union Telemetry Staging'; receiptPrefix = 'ETS2TelemetryStaging-deferred-cleanup-'}
+}
+if (!$Channels.ContainsKey($Channel)) { throw 'CHANNEL_UNKNOWN' }
+$Identity = $Channels[$Channel]
 $ExecutorName = 'Complete-ETS2TelemetryUninstall.ps1'
-$ValueName = 'ETS2TelemetryUninstall'
+$ValueName = $Identity.runOnceValue
 $ProductionSubKey = 'Software\Microsoft\Windows\CurrentVersion\RunOnce'
 $TestKeyPattern = '^HKCU\\Software\\ETS2Telemetry-Test-[0-9a-f]{32}\\RunOnce$'
 $MaxAttempts = 10
 $MaxCommand = 260
 $Allowlist = @('data', 'backups', 'settings', 'logs', 'synthetic', 'plugins', 'captures', 'transport', 'uninstall')
 $HashPattern = '^[0-9a-f]{64}$'
-$TempPattern = '^ets2telemetry-plugin\.dll\.[0-9a-f]{16}\.tmp$'
+$TempPattern = '^' + [regex]::Escape($Identity.pluginFile) + '\.[0-9a-f]{16}\.tmp$'
 $UtcPattern = '^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$'
-$PluginFile = 'ets2telemetry-plugin.dll'
+$PluginFile = $Identity.pluginFile
 $GameExecutables = @{ets2 = 'eurotrucks2.exe'; ats = 'amtrucks.exe'}
 $RetryDelays = @(20, 40, 60, 80, 100)
 $Utf8 = New-Object Text.UTF8Encoding($false)
@@ -178,10 +193,10 @@ function ConvertTo-JsonText($Value) {
 # --- Roots and mode -------------------------------------------------------------------------------------------------
 
 function Resolve-Roots {
-    # <base>\ETS2Telemetry\uninstall\<this script>; no link anywhere in base, data root or uninstall folder.
+    # <base>\<this channel's data root>\uninstall\<this script>; no link anywhere in base, data root or uninstall folder.
     $uninstall = [IO.Path]::GetFullPath($PSScriptRoot)
     $dataRoot = [IO.Path]::GetDirectoryName($uninstall)
-    if ($null -eq $dataRoot -or [IO.Path]::GetFileName($uninstall) -ne 'uninstall' -or [IO.Path]::GetFileName($dataRoot) -ne 'ETS2Telemetry') { return @{code = 'LAYOUT_INVALID'} }
+    if ($null -eq $dataRoot -or [IO.Path]::GetFileName($uninstall) -ne 'uninstall' -or [IO.Path]::GetFileName($dataRoot) -ne $Identity.dataRoot) { return @{code = 'LAYOUT_INVALID'} }
     $base = [IO.Path]::GetDirectoryName($dataRoot)
     if ($null -eq $base -or !(Test-DrivePath $base)) { return @{code = 'LAYOUT_INVALID'} }
     if ((Get-Kind $dataRoot) -eq 'link' -or (Get-Kind $uninstall) -eq 'link') { return @{code = 'DATA_ROOT_LINKED'} }
@@ -592,31 +607,37 @@ function Write-Readme([string]$Uninstall, [string]$DataRoot, $Folders, [string[]
     foreach ($hash in $Known) { [void]$hashes.Add($hash) }
     foreach ($folder in $Folders) { foreach ($hash in $folder.hashes) { [void]$hashes.Add([string]$hash) } }
     $lines = New-Object Collections.Generic.List[string]
-    $lines.Add('Yukon Union Telemetry was uninstalled, but its cleanup could not finish.'); $lines.Add('Reason: ' + $Code); $lines.Add('')
+    $lines.Add((Get-ChannelText 'Yukon Union Telemetry was uninstalled, but its cleanup could not finish.')); $lines.Add('Reason: ' + $Code); $lines.Add('')
     switch ($Mode) {
-        'stopped' { $lines.Add('Yukon Union Telemetry tried ' + $Attempts + ' times and stopped trying at sign-in. Finish the cleanup with the steps below.') }
+        'stopped' { $lines.Add((Get-ChannelText 'Yukon Union Telemetry tried ') + $Attempts + ' times and stopped trying at sign-in. Finish the cleanup with the steps below.') }
         'failed-retry' {
-            $lines.Add('An unexpected error stopped this cleanup attempt. Yukon Union Telemetry tries again at your next Windows sign-in (attempt ' + $Attempts + ' of ' + $MaxAttempts + ' was made).')
+            $lines.Add((Get-ChannelText 'An unexpected error stopped this cleanup attempt. Yukon Union Telemetry tries again at your next Windows sign-in (attempt ') + $Attempts + ' of ' + $MaxAttempts + ' was made).')
             $lines.Add('You only need the steps below if that does not happen.')
         }
         'failed-stopped' { $lines.Add('An unexpected error stopped the automatic cleanup, and it does not run again. Finish the cleanup with the steps below.') }
         default {
-            $lines.Add('Yukon Union Telemetry tries again at your next Windows sign-in, once the games are closed (attempt ' + $Attempts + ' of ' + $MaxAttempts + ' was made).')
+            $lines.Add((Get-ChannelText 'Yukon Union Telemetry tries again at your next Windows sign-in, once the games are closed (attempt ') + $Attempts + ' of ' + $MaxAttempts + ' was made).')
             $lines.Add('You only need the steps below if that does not happen.')
         }
     }
     $lines.Add(''); $lines.Add('Close Euro Truck Simulator 2, American Truck Simulator and TruckersMP first.'); $lines.Add('')
     if (@($Folders).Count) {
-        $lines.Add("Remove the Yukon Union Telemetry plugin from these game folders, but only when the file's SHA-256 is one of the hashes below:")
+        $lines.Add((Get-ChannelText "Remove the Yukon Union Telemetry plugin from these game folders, but only when the file's SHA-256 is one of the hashes below:"))
         foreach ($folder in $Folders) { $lines.Add('  ' + $folder.game + ': ' + (Join-Path (Get-PluginsDirectory $folder.root) $PluginFile)) }
         $lines.Add(''); $lines.Add('Check a file with: Get-FileHash -Algorithm SHA256 "<file>"'); $lines.Add(''); $lines.Add("Hashes of this application's plugin:")
         foreach ($hash in $hashes) { $lines.Add('  ' + $hash) }
         $lines.Add('')
     }
     $lines.Add('Then delete the folders "plugins" and "uninstall" in ' + $DataRoot + '.')
-    $lines.Add('If that folder holds anything else, it is not a file Yukon Union Telemetry knows: check it first, and delete the folder only when nothing you need is left.')
-    $lines.Add(''); $lines.Add('Reinstalling Yukon Union Telemetry instead cancels this cleanup and keeps the plugin in use.'); $lines.Add('')
+    $lines.Add((Get-ChannelText 'If that folder holds anything else, it is not a file Yukon Union Telemetry knows: check it first, and delete the folder only when nothing you need is left.'))
+    $lines.Add(''); $lines.Add((Get-ChannelText 'Reinstalling Yukon Union Telemetry instead cancels this cleanup and keeps the plugin in use.')); $lines.Add('')
     Write-AtomicText $Uninstall 'README.txt' ($lines -join "`r`n")
+}
+function Get-ChannelText([string]$Text) {
+    # channelCopy in apps/desktop/src/channel.ts: the texts name the production product; another channel shows its own name.
+    # Only fixed sentences pass through it, never a game folder, data root or uninstall path, as in deferral.ts.
+    if ($Channel -ceq 'production') { return $Text }
+    return [regex]::Replace($Text, 'Yukon Union Telemetry(?! Staging)(?![A-Za-z0-9])', $Identity.displayName.Replace('$', '$$'))
 }
 function Write-FailureReadme([string]$Uninstall, [string]$DataRoot, [string]$Code, [bool]$Retry, $Attempts) {
     # README.txt when a run ends without finishing: says whether the next sign-in tries again ($Retry: this attempt was
@@ -630,7 +651,7 @@ function Write-FailureReadme([string]$Uninstall, [string]$DataRoot, [string]$Cod
         Write-Readme $Uninstall $DataRoot $intent.folders $intent.known $Code $count $mode
         return
     }
-    $notice = 'Reason: ' + $Code + "`r`n" + 'The automatic cleanup of Yukon Union Telemetry stopped, and it does not run again. Finish the cleanup with the steps below.'
+    $notice = Get-ChannelText ('Reason: ' + $Code + "`r`n" + 'The automatic cleanup of Yukon Union Telemetry stopped, and it does not run again. Finish the cleanup with the steps below.')
     $readme = Join-Path $Uninstall 'README.txt'
     $earlier = ''
     if ((Get-Kind $readme) -eq 'file' -and (New-Object IO.FileInfo($readme)).Length -le 65536) { $earlier = [IO.File]::ReadAllText($readme, $Utf8) }
@@ -642,27 +663,28 @@ function Show-Summary($Roots) {
     # One message box, production only: a test run never shows a window that could block it.
     if ($Roots.mode -ne 'production') { $script:Result.messageBox = 'suppressed'; return }
     $text = switch ($script:Result.outcome) {
-        'complete' { 'Yukon Union Telemetry finished removing its game plugin and its local data.' }
-        'deferred' { 'Yukon Union Telemetry could not finish removing its game plugin yet: ' + (Get-ReasonText $script:Result.code) + '. It tries again at your next sign-in (attempt ' + $script:Result.attempts + ' of ' + $MaxAttempts + ').' }
-        'stopped' { 'Yukon Union Telemetry stopped trying to remove its game plugin after ' + $script:Result.attempts + ' attempts: ' + (Get-ReasonText $script:Result.code) + '. README.txt in ' + $Roots.uninstall + ' lists the steps to finish by hand.' }
-        'refused' { if ($script:Result.readme) { 'Yukon Union Telemetry could not finish removing its game plugin and its local data (' + $script:Result.code + '). README.txt in ' + $Roots.uninstall + ' says what happens next and how to finish by hand.' } else { $null } }
+        'complete' { (Get-ChannelText 'Yukon Union Telemetry finished removing its game plugin and its local data.') }
+        'deferred' { (Get-ChannelText 'Yukon Union Telemetry could not finish removing its game plugin yet: ') + (Get-ReasonText $script:Result.code) + '. It tries again at your next sign-in (attempt ' + $script:Result.attempts + ' of ' + $MaxAttempts + ').' }
+        'stopped' { (Get-ChannelText 'Yukon Union Telemetry stopped trying to remove its game plugin after ') + $script:Result.attempts + ' attempts: ' + (Get-ReasonText $script:Result.code) + '. README.txt in ' + $Roots.uninstall + ' lists the steps to finish by hand.' }
+        'refused' { if ($script:Result.readme) { (Get-ChannelText 'Yukon Union Telemetry could not finish removing its game plugin and its local data (') + $script:Result.code + '). README.txt in ' + $Roots.uninstall + ' says what happens next and how to finish by hand.' } else { $null } }
         default { $null }
     }
     if ($null -eq $text) { return }
     try {
         Add-Type -AssemblyName System.Windows.Forms
         $icon = if ($script:Result.outcome -eq 'complete') { [Windows.Forms.MessageBoxIcon]::Information } else { [Windows.Forms.MessageBoxIcon]::Warning }
-        [void][Windows.Forms.MessageBox]::Show($text, 'Yukon Union Telemetry uninstall', [Windows.Forms.MessageBoxButtons]::OK, $icon)
+        [void][Windows.Forms.MessageBox]::Show($text, (Get-ChannelText 'Yukon Union Telemetry uninstall'), [Windows.Forms.MessageBoxButtons]::OK, $icon)
         $script:Result.messageBox = 'shown'
     } catch { $script:Result.messageBox = 'failed' }
 }
 function Write-Receipt {
-    # %TEMP%\ETS2Telemetry-deferred-cleanup-<utc>.json, created new; fixed codes and counts only, never a path.
+    # %TEMP%\<receipt prefix><utc>.json (ETS2Telemetry-deferred-cleanup- in production), created new; fixed codes and
+    # counts only, never a path.
     try {
         $now = [DateTime]::UtcNow
         $script:Result.createdUtc = $now.ToString('yyyy-MM-ddTHH:mm:ss.fffZ', [Globalization.CultureInfo]::InvariantCulture)
         $script:Result.elapsedMs = [int]$Clock.ElapsedMilliseconds
-        $name = 'ETS2Telemetry-deferred-cleanup-' + $now.ToString('yyyyMMddTHHmmssfffZ', [Globalization.CultureInfo]::InvariantCulture) + '.json'
+        $name = $Identity.receiptPrefix + $now.ToString('yyyyMMddTHHmmssfffZ', [Globalization.CultureInfo]::InvariantCulture) + '.json'
         $bytes = $Utf8.GetBytes((ConvertTo-JsonText $script:Result) + "`n")
         $stream = New-Object IO.FileStream((Join-Path ([IO.Path]::GetTempPath()) $name), [IO.FileMode]::CreateNew, [IO.FileAccess]::Write, [IO.FileShare]::None)
         try { $stream.Write($bytes, 0, $bytes.Length) } finally { $stream.Dispose() }
@@ -687,7 +709,7 @@ function Remove-RoamingUserData($Roots) {
     if ($Roots.mode -eq 'production') {
         $appData = [Environment]::GetFolderPath('ApplicationData')
         if ([string]::IsNullOrEmpty($appData)) { return 'failed' }
-        $folder = Join-Path $appData 'ETS2Telemetry Desktop'
+        $folder = Join-Path $appData $Identity.roamingFolder
     } elseif ($null -ne $script:TestRoaming) { $folder = $script:TestRoaming } else { return 'not-applicable' }
     $kind = Get-Kind $folder
     if ($kind -eq 'missing') { return 'absent' }
@@ -730,10 +752,10 @@ function Invoke-Cleanup($Roots) {
     Invoke-TestFault 'registered'
 
     # The application was installed again: its own start or install hook cancels the deferral; nothing to do here.
-    $installRoot = Join-Path $Roots.base 'ETS2TelemetryDesktop'
+    $installRoot = Join-Path $Roots.base $Identity.installRoot
     $installed = @(if ((Get-Kind $installRoot) -eq 'directory') {
         Get-ChildItem -LiteralPath $installRoot -Directory -Filter 'app-*' -ErrorAction SilentlyContinue |
-            Where-Object { (Get-Kind (Join-Path $_.FullName 'ETS2TelemetryDesktop.exe')) -eq 'file' }
+            Where-Object { (Get-Kind (Join-Path $_.FullName $Identity.executable)) -eq 'file' }
     })
     if ($installed.Count) { $state.outcome = 'not-needed'; $state.code = 'APP_INSTALLED'; $state.runOnce = Remove-Registration $Roots; return }
 

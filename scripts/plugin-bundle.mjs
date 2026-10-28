@@ -2,17 +2,26 @@ import assert from 'node:assert/strict';
 import {createHash} from 'node:crypto';
 import {lstatSync, mkdirSync, readFileSync, readdirSync, writeFileSync} from 'node:fs';
 import path from 'node:path';
+import {BUILD_IDENTITIES, resolveBuild, resolveBuildChannel} from './build-channel.mjs';
 
 // Bundled game plugin (ET-017 PR-1, docs/plugin-setup.md#bundle-format). The build stages the Release SDK DLL with a
 // strict manifest; Forge copies the directory to resources/telemetry-plugin and inspect-package verifies it. Nothing in
-// the application reads the bundle yet.
+// the application reads the bundle yet. The DLL and released-list names belong to the build channel (ET-055 UP12): every
+// function takes the channel and defaults to this build's (scripts/build-channel.mjs).
 export const PLUGIN_BUNDLE_FORMAT = 'ets2telemetry.plugin-bundle';
 export const RELEASED_PLUGINS_FORMAT = 'ets2telemetry.released-plugins';
-export const PLUGIN_FILE = 'ets2telemetry-plugin.dll';
 export const PLUGIN_MANIFEST = 'plugin-manifest.json';
 export const PLUGIN_STAGE = '.local/package-native/telemetry-plugin';
-export const BUILT_PLUGIN = 'native/telemetry-plugin/build/Release/ets2telemetry-plugin.dll';
-export const RELEASED_PLUGINS = 'native/telemetry-plugin/released-plugins.json';
+/**
+ * The channel's plugin names: the DLL `file`, its Release build `built` (CMake names the DLL after the channel) and the
+ * tracked released-plugin list `released`, both relative to the checkout.
+ */
+export function pluginBundleNames(channel = resolveBuildChannel()) {
+  assert.ok(Object.hasOwn(BUILD_IDENTITIES, channel), `Unknown build channel ${channel}`);
+  const identity = BUILD_IDENTITIES[channel];
+  return Object.freeze({channel, file: identity.pluginFileName, built: `native/telemetry-plugin/build/Release/${identity.pluginFileName}`,
+    released: `native/telemetry-plugin/${identity.releasedPluginsFile}`});
+}
 export const MAX_PLUGIN_BYTES = 16 * 1024 * 1024;
 export const MAX_MANIFEST_BYTES = 64 * 1024;
 const MAX_KNOWN = 256;
@@ -81,7 +90,7 @@ function readJson(filename, limit, label) {
 }
 
 // The tracked list of every shipped plugin hash. MSVC builds are not reproducible, so a release appends its own hash.
-export function readReleasedPlugins(filename = RELEASED_PLUGINS) {
+export function readReleasedPlugins(filename = pluginBundleNames().released) {
   const value = readJson(filename, MAX_MANIFEST_BYTES, 'Released plugin list');
   exactKeys(value, RELEASED_KEYS, 'Released plugin list');
   assert.equal(value.format, RELEASED_PLUGINS_FORMAT, 'Released plugin list has an unexpected format');
@@ -100,12 +109,12 @@ export function assertX64Dll(bytes, label = 'Plugin') {
   assert.ok((bytes.readUInt16LE(pe + 22) & 0x2000) !== 0, `${label} must be a DLL`);
 }
 
-function parseManifest(value) {
+function parseManifest(value, file) {
   exactKeys(value, MANIFEST_KEYS, 'Plugin manifest');
   assert.equal(value.format, PLUGIN_BUNDLE_FORMAT, 'Plugin manifest has an unexpected format');
   assert.equal(value.version, 1, 'Plugin manifest has an unsupported version');
   assert.ok(typeof value.appVersion === 'string' && APP_VERSION.test(value.appVersion), 'Plugin manifest has an invalid appVersion');
-  assert.equal(value.file, PLUGIN_FILE, 'Plugin manifest names an unexpected file');
+  assert.equal(value.file, file, 'Plugin manifest names an unexpected file');
   assert.ok(Number.isSafeInteger(value.size) && value.size >= 64 && value.size <= MAX_PLUGIN_BYTES, 'Plugin manifest size is outside the bounds');
   assert.ok(typeof value.sha256 === 'string' && HASH.test(value.sha256), 'Plugin manifest has an invalid sha256');
   assert.ok(isRecord(value.pluginSources), 'Plugin manifest pluginSources must be an object');
@@ -120,13 +129,14 @@ function parseManifest(value) {
 }
 
 // Intrinsic checks of a staged or packaged bundle directory. Returns the parsed manifest; throws AssertionError otherwise.
-export function verifyPluginBundle(directory) {
+export function verifyPluginBundle(directory, channel = resolveBuildChannel()) {
+  const {file} = pluginBundleNames(channel);
   const root = lstatSync(directory);
   assert.ok(!root.isSymbolicLink(), 'Plugin bundle directory must not be a link');
   assert.ok(root.isDirectory(), 'Plugin bundle must be a directory');
-  assert.deepEqual(readdirSync(directory).sort(), [PLUGIN_FILE, PLUGIN_MANIFEST], 'Plugin bundle must hold exactly the DLL and its manifest');
-  const manifest = parseManifest(readJson(path.join(directory, PLUGIN_MANIFEST), MAX_MANIFEST_BYTES, 'Plugin manifest'));
-  const filename = path.join(directory, PLUGIN_FILE);
+  assert.deepEqual(readdirSync(directory).sort(), [file, PLUGIN_MANIFEST].sort(), 'Plugin bundle must hold exactly the DLL and its manifest');
+  const manifest = parseManifest(readJson(path.join(directory, PLUGIN_MANIFEST), MAX_MANIFEST_BYTES, 'Plugin manifest'), file);
+  const filename = path.join(directory, file);
   const item = lstatSync(filename);
   assert.ok(!item.isSymbolicLink(), 'Plugin DLL must not be a link');
   assert.ok(item.isFile(), 'Plugin DLL must be a regular file');
@@ -139,24 +149,27 @@ export function verifyPluginBundle(directory) {
   return manifest;
 }
 
-// Packaging check: the bundle also matches this checkout's Release build, plugin sources, released list and app version.
-export function verifyPluginBundleAgainstTree(directory, root = '.') {
-  const manifest = verifyPluginBundle(directory);
-  assert.equal(sha256(readFileSync(path.join(root, BUILT_PLUGIN))), manifest.sha256, 'Packaged plugin differs from local build');
+// Packaging check: the bundle also matches this checkout's Release build, plugin sources, released list and the build
+// version of this channel (the package.json version, with the staging suffix in staging).
+export function verifyPluginBundleAgainstTree(directory, root = '.', build = resolveBuild({root})) {
+  const names = pluginBundleNames(build.channel);
+  const manifest = verifyPluginBundle(directory, build.channel);
+  assert.equal(sha256(readFileSync(path.join(root, names.built))), manifest.sha256, 'Packaged plugin differs from local build');
   assert.deepEqual(manifest.pluginSources, pluginSourceHashes(root), 'Plugin bundle built from stale plugin sources');
-  assert.deepEqual(manifest.known, readReleasedPlugins(path.join(root, RELEASED_PLUGINS)), 'Plugin bundle known hashes differ from the released plugin list');
-  assert.equal(manifest.appVersion, JSON.parse(readFileSync(path.join(root, 'package.json'), 'utf8')).version, 'Plugin bundle appVersion differs from package.json');
+  assert.deepEqual(manifest.known, readReleasedPlugins(path.join(root, names.released)), 'Plugin bundle known hashes differ from the released plugin list');
+  assert.equal(manifest.appVersion, build.version, 'Plugin bundle appVersion differs from package.json and the build channel');
   return manifest;
 }
 
 // Writes the DLL bytes and manifest into a new or empty directory, then verifies the result.
-export function writePluginBundle(directory, {dll, appVersion, pluginSources, known}) {
+export function writePluginBundle(directory, {dll, appVersion, pluginSources, known, channel = resolveBuildChannel()}) {
+  const {file} = pluginBundleNames(channel);
   assertX64Dll(dll, 'Plugin DLL');
   mkdirSync(directory, {recursive: true});
   assert.equal(readdirSync(directory).length, 0, 'Plugin stage directory must be empty');
-  const manifest = {format: PLUGIN_BUNDLE_FORMAT, version: 1, appVersion, file: PLUGIN_FILE, size: dll.length,
+  const manifest = {format: PLUGIN_BUNDLE_FORMAT, version: 1, appVersion, file, size: dll.length,
     sha256: sha256(dll), pluginSources, known};
-  writeFileSync(path.join(directory, PLUGIN_FILE), dll, {flag: 'wx'});
+  writeFileSync(path.join(directory, file), dll, {flag: 'wx'});
   writeFileSync(path.join(directory, PLUGIN_MANIFEST), JSON.stringify(manifest, null, 2) + '\n', {flag: 'wx'});
-  return verifyPluginBundle(directory);
+  return verifyPluginBundle(directory, channel);
 }

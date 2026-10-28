@@ -4,7 +4,8 @@
 // identity; the file is written as `<name>.<hex8>.partial` beside the target, synced, closed and renamed over it, and the
 // partial file is removed after any failure, so an existing target is never left half written. Main process only.
 // The refused data directories are the channel's `exportRefusalDataRootNames` (ET-055 UP12): in production only its own
-// `ETS2Telemetry`, so "the data directory" below means each of them.
+// `ETS2Telemetry`, in staging `ETS2TelemetryStaging` and `ETS2Telemetry`, so "the data directory" below means each of them.
+// Every check takes the folder names as its last argument, this build's list by default, so tests cover both channels.
 import path from 'node:path';
 import {CHANNEL} from './channel';
 
@@ -67,7 +68,8 @@ const inside = (target: string, root: string) => target === root || target.start
  * or a path inside `<LOCALAPPDATA>\ETS2Telemetry` (normalized and case-insensitive). Without a usable LOCALAPPDATA the
  * data directory is unknown, so every target is refused.
  */
-export function exportTargetRefused(target: unknown, localAppData: string | undefined): boolean {
+export function exportTargetRefused(target: unknown, localAppData: string | undefined,
+  rootNames: readonly string[] = CHANNEL.exportRefusalDataRootNames): boolean {
   if (typeof target !== 'string' || target.length === 0 || target.includes('\0')) return true;
   const raw = target.replaceAll('/', '\\');
   if (raw.startsWith('\\\\.\\') || raw.startsWith('\\??\\')) return true;
@@ -81,7 +83,7 @@ export function exportTargetRefused(target: unknown, localAppData: string | unde
   if (resolved.split('\\').slice(1).some(part => DEVICE_NAME.test(part.trim()))) return true;
   if (!localAppData || !path.win32.isAbsolute(localAppData)) return true;
   const base = localAppData;
-  return CHANNEL.exportRefusalDataRootNames.some(name => inside(resolved, comparable(path.win32.join(base, name))));
+  return rootNames.some(name => inside(resolved, comparable(path.win32.join(base, name))));
 }
 
 /**
@@ -89,11 +91,11 @@ export function exportTargetRefused(target: unknown, localAppData: string | unde
  * same volume (`dev`) and file index (`ino`). A data directory that does not exist yet has no identity; the lexical
  * checks alone apply then. A folder deeper than the limit is refused, since it cannot be shown to lie outside.
  */
-async function insideByIdentity(fs: ExportFileSystem, folder: string, localAppData: string | undefined): Promise<boolean> {
+async function insideByIdentity(fs: ExportFileSystem, folder: string, localAppData: string | undefined, rootNames: readonly string[]): Promise<boolean> {
   if (!localAppData) return true;
   const identity = (target: string) => fs.stat(target, {bigint: true}).then(stats => `${stats.dev}:${stats.ino}`, () => undefined);
   const roots: string[] = [];
-  for (const name of CHANNEL.exportRefusalDataRootNames) {
+  for (const name of rootNames) {
     const root = await identity(path.join(localAppData, name));
     // No identity to compare: a data directory that does not exist yet, or a file system without file indexes.
     if (root !== undefined && !root.endsWith(':0')) roots.push(root);
@@ -114,21 +116,22 @@ async function insideByIdentity(fs: ExportFileSystem, folder: string, localAppDa
  * Whether a chosen target lies in the data directory once its folder is resolved as Windows resolves it (junctions,
  * short names), or by file identity. Rejects when the chosen folder cannot be resolved.
  */
-export async function targetInsideDataRoot(fs: ExportFileSystem, target: string, localAppData: string | undefined): Promise<boolean> {
+export async function targetInsideDataRoot(fs: ExportFileSystem, target: string, localAppData: string | undefined,
+  rootNames: readonly string[] = CHANNEL.exportRefusalDataRootNames): Promise<boolean> {
   const real = await fs.realpath(path.dirname(target));
   const roots: string[] = [];
   if (localAppData) {
-    for (const name of CHANNEL.exportRefusalDataRootNames) {
+    for (const name of rootNames) {
       const root = await fs.realpath(path.join(localAppData, name)).catch(() => undefined);
       if (root !== undefined) roots.push(root);
     }
   }
   const resolved = path.join(real, path.basename(target));
-  if (exportTargetRefused(resolved, localAppData) || roots.some(root => inside(comparable(resolved), comparable(root)))) return true;
+  if (exportTargetRefused(resolved, localAppData, rootNames) || roots.some(root => inside(comparable(resolved), comparable(root)))) return true;
   // A UNC alias of a local folder (\\localhost\C$\..., \\127.0.0.1\c$\..., the computer's own name, a drive mapped to
   // such a share) passes both checks above, because realpath leaves a UNC path unchanged. The data directory is
   // therefore also compared by file identity (volume and file index) with the chosen folder and each of its ancestors.
-  return insideByIdentity(fs, real, localAppData);
+  return insideByIdentity(fs, real, localAppData, rootNames);
 }
 
 export interface PartialWriteOptions {

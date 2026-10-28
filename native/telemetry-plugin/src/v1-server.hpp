@@ -34,7 +34,8 @@ class Server final {
   // SDK initialization context, after prepare(): starts the worker. Startup is asynchronous and never reported to the
   // game. A local failure (identity, directory, foreign pipe, foreign discovery record) leaves the status `failed` and the
   // endpoint closed; v0 and CAP0 are unaffected. `directory` is the protected discovery and policy directory; empty
-  // selects %LOCALAPPDATA%\ETS2Telemetry\transport\v1. The monitor stays alive until stop() returns.
+  // selects %LOCALAPPDATA%\ETS2Telemetry\transport\v1 (the build channel's data root, channel-identity.hpp, ET-055). The
+  // monitor stays alive until stop() returns.
   bool start(std::wstring directory = {}, const window::Monitor* monitor = nullptr) noexcept;
   // SDK shutdown context: asks the worker to end its connection, so `end` is written while the CAP0 endpoint stops.
   void signal_stop() noexcept;

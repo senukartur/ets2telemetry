@@ -1,6 +1,8 @@
 import type {TranslationDictionary} from './types';
+import {channelCopyTable} from '../channel';
 
-export const RU_DICTIONARY: TranslationDictionary = Object.freeze({
+// ET-055: a staging build shows its own product, folder and plugin names (channelCopyTable); production text is unchanged.
+export const RU_DICTIONARY: TranslationDictionary = channelCopyTable(Object.freeze({
   "ui.moneyBasisKnown": "Валюта подтверждена SDK",
   "ui.moneyBasisUnknown": "Валюта неизвестна",
   "ui.coverageUnknown": "Полнота интервалов неизвестна",
@@ -840,4 +842,4 @@ export const RU_DICTIONARY: TranslationDictionary = Object.freeze({
   "hm.reason.parking-unproven": "Не удалось подтвердить ручную парковку",
   'hm.shortNotice': 'Проверяются только сохранённые настройки.',
   'lang.saveFailed': 'Изменение языка не удалось сохранить; остаётся предыдущий язык.'
-});
+}));

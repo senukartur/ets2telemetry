@@ -3,6 +3,7 @@ import {writeAtomicFile, type AtomicFileSystem} from '../plugin-setup/atomic-jso
 import {pluginTargetOf} from '../plugin-setup/plugin-registry';
 import {EXECUTOR_FILE, MAX_ATTEMPTS} from './executor';
 import {PENDING_DIRECTORY, PENDING_FILE, readPendingRecord} from './pending-record';
+import {channelCopy} from '../channel';
 
 // The deferral of an uninstall (ET-018 U7; docs/uninstall.md, "Deferral"). A deferred run leaves `plugins\` and
 // `uninstall\` with the intent, the deferred-cleanup executor that the next sign-in runs (PR-5, executor.ts) and a
@@ -14,31 +15,32 @@ export const README_FILE = 'README.txt';
 
 /**
  * A plain-text README for the user: the remaining folders, the hashes that identify this application's plugin, the
- * steps. `automatic`: the executor is registered and tries again at the next sign-in.
+ * steps. `automatic`: the executor is registered and tries again at the next sign-in. The fixed sentences name this
+ * build channel's product (channelCopy, ET-055); the folders and hashes are written as they are.
  */
 export function deferralReadme(dataRoot: string, folders: readonly {game: string; root: string; hashes: readonly string[]}[], known: readonly string[],
   code: string | null, automatic = false): string {
   const hashes = [...new Set([...known, ...folders.flatMap(folder => folder.hashes)])].sort();
   const lines = [
-    'Yukon Union Telemetry was uninstalled, but its cleanup could not finish.',
+    channelCopy('Yukon Union Telemetry was uninstalled, but its cleanup could not finish.'),
     `Reason: ${code ?? 'unknown'}`,
     ''
   ];
   if (automatic) {
-    lines.push(`Yukon Union Telemetry finishes this cleanup by itself at your next Windows sign-in, once the games are closed (at most ${MAX_ATTEMPTS} attempts).`,
+    lines.push(channelCopy(`Yukon Union Telemetry finishes this cleanup by itself at your next Windows sign-in, once the games are closed (at most ${MAX_ATTEMPTS} attempts).`),
       'You only need the steps below if that does not happen.', '');
   }
   lines.push('Close Euro Truck Simulator 2, American Truck Simulator and TruckersMP first.', '');
   if (folders.length) {
-    lines.push('Remove the Yukon Union Telemetry plugin from these game folders, but only when the file\'s SHA-256 is one of the hashes below:');
+    lines.push(channelCopy('Remove the Yukon Union Telemetry plugin from these game folders, but only when the file\'s SHA-256 is one of the hashes below:'));
     for (const folder of folders) lines.push(`  ${folder.game}: ${pluginTargetOf(folder.root)}`);
     lines.push('', 'Check a file with: Get-FileHash -Algorithm SHA256 "<file>"', '', 'Hashes of this application\'s plugin:');
     for (const hash of hashes) lines.push(`  ${hash}`);
     lines.push('');
   }
   lines.push(`Then delete the folders "plugins" and "uninstall" in ${dataRoot}.`,
-    'If that folder holds anything else, it is not a file Yukon Union Telemetry knows: check it first, and delete the folder only when nothing you need is left.',
-    '', 'Reinstalling Yukon Union Telemetry instead cancels this cleanup and keeps the plugin in use.', '');
+    channelCopy('If that folder holds anything else, it is not a file Yukon Union Telemetry knows: check it first, and delete the folder only when nothing you need is left.'),
+    '', channelCopy('Reinstalling Yukon Union Telemetry instead cancels this cleanup and keeps the plugin in use.'), '');
   return lines.join('\r\n');
 }
 

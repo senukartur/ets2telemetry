@@ -1,6 +1,8 @@
 import type {TranslationDictionary} from './types';
+import {channelCopyTable} from '../channel';
 
-export const EN_DICTIONARY: TranslationDictionary = Object.freeze({
+// ET-055: a staging build shows its own product, folder and plugin names (channelCopyTable); production text is unchanged.
+export const EN_DICTIONARY: TranslationDictionary = channelCopyTable(Object.freeze({
   "ui.moneyBasisKnown": "Currency documented by the SDK",
   "ui.moneyBasisUnknown": "Currency unknown",
   "ui.coverageUnknown": "Interval coverage unknown",
@@ -840,4 +842,4 @@ export const EN_DICTIONARY: TranslationDictionary = Object.freeze({
   "hm.reason.parking-unproven": "Manual delivery could not be confirmed",
   'hm.shortNotice': 'Checks saved settings only.',
   'lang.saveFailed': 'The language change was not saved; the previous language stays in use.'
-});
+}));

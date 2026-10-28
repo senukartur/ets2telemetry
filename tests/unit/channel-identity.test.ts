@@ -1,9 +1,11 @@
+import {spawnSync} from 'node:child_process';
 import {readFileSync} from 'node:fs';
 import path from 'node:path';
 import {pathToFileURL} from 'node:url';
-import {describe, expect, it} from 'vitest';
-import {ACTIVE_CHANNEL, CHANNEL, CHANNEL_IDENTITIES, pluginTempFilePattern, RELEASE_CHANNELS, setupFileName, TRANSPORT_DIRECTORY,
+import {afterEach, describe, expect, it, vi} from 'vitest';
+import {ACTIVE_CHANNEL, CHANNEL, CHANNEL_IDENTITIES, channelCopy, channelCopyTable, pluginTempFilePattern, RELEASE_CHANNELS, setupFileName, TRANSPORT_DIRECTORY,
   type ChannelIdentity} from '../../apps/desktop/src/channel';
+import {brokerDiscoveryDirectory} from '../../apps/desktop/src/broker-artifact';
 import {uninstallEntryKey} from '../../apps/desktop/src/installed-app-icon';
 import {LEGACY_SHORTCUT_NAMES, SHORTCUT_NAME, SQUIRREL_APP_ID} from '../../apps/desktop/src/legacy-shortcuts';
 import {mainLogLocation, serviceLogLocation} from '../../apps/desktop/src/log-location';
@@ -16,7 +18,10 @@ import {RECEIPT_PREFIX, ROAMING_USER_DATA_NAME} from '../../apps/desktop/src/squ
 import {STRINGS, STRINGS_RU} from '../../apps/desktop/src/strings';
 import {RUN_ONCE_VALUE} from '../../apps/desktop/src/uninstall/executor';
 import {DATA_ROOT_NAME, PRODUCT_ROOT_NAME} from '../../apps/desktop/src/uninstall/roots';
-import {RELEASED_PLUGINS} from '../../scripts/plugin-bundle.mjs';
+import {HISTORY_DATA_ROOT_NAMES, isHistoryFile} from '../../packages/storage/src/history-file';
+import {BUILD_IDENTITIES} from '../../scripts/build-channel.mjs';
+import {pluginBundleNames} from '../../scripts/plugin-bundle.mjs';
+import {stampExecutorChannel} from '../../scripts/uninstall-executor.mjs';
 
 // ET-055 UP12 (REG-015, REG-017): the installation identities of both build channels. Production values are pinned to the
 // literals every build before ET-055 used, so routing them through the channel table changes no file name, path, pipe,
@@ -111,7 +116,9 @@ describe('the channel identity table', () => {
 });
 
 describe('the routed identities of this build', () => {
-  it('is production until the build-time selection lands (ET-055 PR-3)', () => {
+  // ET-055 PR-3 added the build-time selection: scripts/build.mjs defines the channel in every bundle. Unbundled code, as
+  // under Vitest, has no define and is production.
+  it('is production where no build defines the channel', () => {
     expect(ACTIVE_CHANNEL).toBe('production');
     expect(CHANNEL).toBe(CHANNEL_IDENTITIES.production);
   });
@@ -133,12 +140,15 @@ describe('the routed identities of this build', () => {
     expect(mainLogLocation({LOCALAPPDATA: local}, 'unused').directory).toBe(path.join(local, 'ETS2Telemetry', 'logs'));
     expect(serviceLogLocation({LOCALAPPDATA: local}, 'unused').directory).toBe(path.join(local, 'ETS2Telemetry', 'logs', 'service'));
     // The broker's v0 discovery directory, as broker-artifact.ts builds it, and the v1 sibling the service derives from it.
-    const v0 = path.join(local, CHANNEL.dataRootName, TRANSPORT_DIRECTORY, 'v0');
+    const v0 = brokerDiscoveryDirectory(local);
     expect(v0).toBe(path.join(local, 'ETS2Telemetry', 'transport', 'v0'));
+    expect(brokerDiscoveryDirectory(local, CHANNEL_IDENTITIES.staging)).toBe(path.join(local, 'ETS2TelemetryStaging', 'transport', 'v0'));
+    expect(v1BrokerConfiguration({executable: 'broker.exe', discoveryDirectory: brokerDiscoveryDirectory(local, CHANNEL_IDENTITIES.staging)})?.discoveryDirectory)
+      .toBe(path.join(local, 'ETS2TelemetryStaging', 'transport', 'v1'));
     expect(v1BrokerConfiguration({executable: 'broker.exe', discoveryDirectory: v0})?.discoveryDirectory).toBe(path.join(local, 'ETS2Telemetry', 'transport', 'v1'));
   });
 
-  it('agrees with the packaging configuration that still names the production values (ET-055 PR-3 routes it)', async () => {
+  it('gives the packaging configuration of a production build the production values', async () => {
     const forge = (await import(pathToFileURL(path.join(checkout, 'forge.config.cjs')).href) as {default: {
       packagerConfig: {executableName: string; appBundleId: string; win32metadata: Record<string, string>};
       makers: {name: string; config: Record<string, string>}[];
@@ -150,6 +160,119 @@ describe('the routed identities of this build', () => {
       .toEqual({squirrelId: PRODUCTION.squirrelId, executableName: PRODUCTION.executableName, appBundleId: PRODUCTION.appBundleId,
         productName: PRODUCTION.productName, displayName: PRODUCTION.displayName, title: PRODUCTION.displayName,
         setupExe: setupFileName(version, CHANNEL_IDENTITIES.production)});
-    expect(RELEASED_PLUGINS).toBe(`native/telemetry-plugin/${PRODUCTION.releasedPluginsFile}`);
+    expect(pluginBundleNames('production').released).toBe(`native/telemetry-plugin/${PRODUCTION.releasedPluginsFile}`);
+    expect(pluginBundleNames('staging')).toEqual({channel: 'staging', file: STAGING.pluginFileName, built: `native/telemetry-plugin/build/Release/${STAGING.pluginFileName}`,
+      released: `native/telemetry-plugin/${STAGING.releasedPluginsFile}`});
+  });
+
+  it('gives the packaging configuration of a staging build the staging values', () => {
+    // forge.config.cjs resolves the channel when Node loads it, so a separate Node process loads it with the variables a
+    // staging build sets.
+    const script = "const c = require('./forge.config.cjs'); const s = c.makers.find(m => m.name === '@electron-forge/maker-squirrel').config;" +
+      " console.log(JSON.stringify({name: c.packagerConfig.name, appVersion: c.packagerConfig.appVersion, executableName: c.packagerConfig.executableName," +
+      " appBundleId: c.packagerConfig.appBundleId, win32metadata: c.packagerConfig.win32metadata, squirrel: {name: s.name, title: s.title, setupExe: s.setupExe}}));";
+    const run = (env: Record<string, string>) => spawnSync(process.execPath, ['-e', script], {cwd: checkout, encoding: 'utf8', timeout: 30000,
+      env: {...process.env, ETS2TELEMETRY_BUILD_CHANNEL: undefined, ETS2TELEMETRY_STAGING_RUN_NUMBER: undefined, ...env}});
+    const {version} = JSON.parse(readFileSync(path.join(checkout, 'package.json'), 'utf8')) as {version: string};
+    const staging = run({ETS2TELEMETRY_BUILD_CHANNEL: 'staging', ETS2TELEMETRY_STAGING_RUN_NUMBER: '42'});
+    expect(staging.status, staging.stderr).toBe(0);
+    expect(JSON.parse(staging.stdout)).toEqual({name: STAGING.productName, appVersion: `${version}-stg.000042`, executableName: STAGING.executableName,
+      appBundleId: STAGING.appBundleId, win32metadata: {CompanyName: 'Artur Sianiuk', FileDescription: STAGING.displayName, ProductName: STAGING.displayName},
+      squirrel: {name: STAGING.squirrelId, title: STAGING.displayName, setupExe: `YukonUnionTelemetry-Staging-Setup-${version}-stg.000042.exe`}});
+    const production = run({ETS2TELEMETRY_BUILD_CHANNEL: 'production'});
+    expect(production.status, production.stderr).toBe(0);
+    expect(JSON.parse(production.stdout)).toEqual({name: PRODUCTION.productName, appVersion: version, executableName: PRODUCTION.executableName,
+      appBundleId: PRODUCTION.appBundleId, win32metadata: {CompanyName: 'Artur Sianiuk', FileDescription: PRODUCTION.displayName, ProductName: PRODUCTION.displayName},
+      squirrel: {name: PRODUCTION.squirrelId, title: PRODUCTION.displayName, setupExe: `YukonUnionTelemetry-Setup-${version}.exe`}});
+    const invalid = run({ETS2TELEMETRY_BUILD_CHANNEL: 'beta'});
+    expect(invalid.status).not.toBe(0);
+    expect(invalid.stderr).toMatch(/must be exactly production or staging/);
+  });
+});
+
+describe('the mirrored channel tables', () => {
+  const pick = (identity: ChannelIdentity) => ({channel: identity.channel, squirrelId: identity.squirrelId, executableName: identity.executableName,
+    productName: identity.productName, appBundleId: identity.appBundleId, displayName: identity.displayName, setupFileTemplate: identity.setupFileTemplate,
+    pluginFileName: identity.pluginFileName, releasedPluginsFile: identity.releasedPluginsFile});
+
+  it('scripts/build-channel.mjs names what channel.ts names', () => {
+    for (const channel of RELEASE_CHANNELS) expect(BUILD_IDENTITIES[channel]).toEqual(pick(CHANNEL_IDENTITIES[channel]));
+    expect(Object.keys(BUILD_IDENTITIES)).toEqual([...RELEASE_CHANNELS]);
+  });
+
+  it('the storage guard protects the history file of every channel', () => {
+    expect(HISTORY_DATA_ROOT_NAMES).toEqual(RELEASE_CHANNELS.map(channel => CHANNEL_IDENTITIES[channel].dataRootName));
+    for (const channel of RELEASE_CHANNELS) {
+      expect(isHistoryFile(`C:\\Users\\driver\\AppData\\Local\\${CHANNEL_IDENTITIES[channel].dataRootName}\\data\\telemetry.sqlite`)).toBe(true);
+    }
+    expect(isHistoryFile('C:\\Users\\driver\\AppData\\Local\\ETS2Telemetry\\synthetic\\smoke.sqlite')).toBe(false);
+    expect(isHistoryFile('C:\\Users\\driver\\AppData\\Local\\ETS2TelemetryOther\\data\\telemetry.sqlite')).toBe(false);
+  });
+
+  it("the deferred-cleanup executor's table names what channel.ts names", () => {
+    const script = readFileSync(path.join(checkout, 'resources/uninstall/Complete-ETS2TelemetryUninstall.ps1'), 'utf8');
+    for (const channel of RELEASE_CHANNELS) {
+      const identity = CHANNEL_IDENTITIES[channel];
+      const row = new RegExp(`^\\s*${channel} = @\\{([^}]*)\\}`, 'm').exec(script.replace(/\r?\n\s+(?=\w+ = ')/g, ' '))?.[1] ?? '';
+      const values = Object.fromEntries([...row.matchAll(/(\w+) = '([^']*)'/g)].map(match => [match[1], match[2]]));
+      expect(values).toEqual({dataRoot: identity.dataRootName, installRoot: identity.squirrelId, executable: `${identity.executableName}.exe`,
+        runOnceValue: identity.runOnceValue, pluginFile: identity.pluginFileName, roamingFolder: identity.productName, displayName: identity.displayName,
+        receiptPrefix: channel === 'production' ? 'ETS2Telemetry-deferred-cleanup-' : 'ETS2TelemetryStaging-deferred-cleanup-'});
+    }
+  });
+
+  it('stamps exactly the one $Channel line of the executor, and leaves production byte-identical', () => {
+    const script = readFileSync(path.join(checkout, 'resources/uninstall/Complete-ETS2TelemetryUninstall.ps1'), 'latin1');
+    expect(stampExecutorChannel(script, 'production')).toBe(script);
+    const staging = stampExecutorChannel(script, 'staging');
+    expect(staging.length).toBe(script.length + 'staging'.length - 'production'.length);
+    expect(staging).toMatch(/^\$Channel = 'staging'\r?$/m);
+    expect(staging).not.toMatch(/^\$Channel = 'production'/m);
+    expect(() => stampExecutorChannel(script.replace("$Channel = 'production'", "$Channel = 'x'"), 'staging')).toThrow(/exactly one/);
+    expect(() => stampExecutorChannel(`${script}\n$Channel = 'production'\n`, 'staging')).toThrow(/exactly one/);
+    expect(() => stampExecutorChannel(script, 'beta' as 'staging')).toThrow(/Unknown build channel/);
+  });
+});
+
+describe('the build-time channel define', () => {
+  afterEach(() => {vi.unstubAllGlobals(); vi.resetModules();});
+
+  it('selects the staging table when a build defines staging', async () => {
+    vi.stubGlobal('__ETS2TELEMETRY_BUILD_CHANNEL__', 'staging');
+    vi.resetModules();
+    const module = await import('../../apps/desktop/src/channel');
+    expect(module.ACTIVE_CHANNEL).toBe('staging');
+    expect(module.CHANNEL).toEqual(STAGING);
+  });
+
+  it('fails the bundle at load for an unknown channel', async () => {
+    vi.stubGlobal('__ETS2TELEMETRY_BUILD_CHANNEL__', 'beta');
+    vi.resetModules();
+    await expect(import('../../apps/desktop/src/channel')).rejects.toThrow(/Unknown build channel: beta/);
+  });
+});
+
+describe('user copy in each channel', () => {
+  const copy = 'Choose a folder outside the Yukon Union Telemetry data folder, %LOCALAPPDATA%\\ETS2Telemetry. Install root %LOCALAPPDATA%\\ETS2TelemetryDesktop, ' +
+    'Roaming %APPDATA%\\ETS2Telemetry Desktop, plugin ets2telemetry-plugin.dll.';
+
+  it('keeps production copy byte-identical', () => {
+    expect(channelCopy(copy, CHANNEL_IDENTITIES.production)).toBe(copy);
+    const table = Object.freeze({a: copy});
+    expect(channelCopyTable(table, CHANNEL_IDENTITIES.production)).toBe(table);
+  });
+
+  it('names the staging product, folders and plugin in staging', () => {
+    // The refusal's single data folder becomes the list of both roots a staging export refuses (UP12).
+    expect(channelCopy(copy, CHANNEL_IDENTITIES.staging)).toBe('Choose a folder outside the Yukon Union Telemetry Staging data folders, %LOCALAPPDATA%\\ETS2TelemetryStaging and %LOCALAPPDATA%\\ETS2Telemetry. ' +
+      'Install root %LOCALAPPDATA%\\ETS2TelemetryDesktopStaging, Roaming %APPDATA%\\ETS2Telemetry Desktop Staging, plugin ets2telemetry-plugin-staging.dll.');
+    // Names that only start with a production name stay, and the staging display name is never extended twice.
+    for (const text of ['%LOCALAPPDATA%\\ETS2TelemetryStaging', 'ets2telemetry-plugin.dll2', 'Yukon Union Telemetry Staging', 'Yukon Union Telemetryx'])
+      expect(channelCopy(text, CHANNEL_IDENTITIES.staging)).toBe(text);
+    const table = Object.freeze({a: copy, list: Object.freeze([copy]), count: 3, run: (value: string) => value});
+    const staged = channelCopyTable(table, CHANNEL_IDENTITIES.staging);
+    expect(staged.a).toBe(channelCopy(copy, CHANNEL_IDENTITIES.staging));
+    expect(staged.list).toEqual([channelCopy(copy, CHANNEL_IDENTITIES.staging)]);
+    expect([staged.count, staged.run, Object.isFrozen(staged), Object.isFrozen(staged.list)]).toEqual([3, table.run, true, true]);
   });
 });

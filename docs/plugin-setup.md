@@ -60,7 +60,7 @@ Forge copies that directory into the package as `resources\telemetry-plugin`, ne
 
 ### Released plugin list
 
-`native/telemetry-plugin/released-plugins.json` is tracked. It lists the SHA-256 of every plugin DLL that a released ETS2Telemetry version shipped:
+`native/telemetry-plugin/released-plugins.json` is tracked. It lists the SHA-256 of every plugin DLL that a released ETS2Telemetry version shipped. A staging build (ET-055) bundles `ets2telemetry-plugin-staging.dll` with the separate list `released-plugins-staging.json`, which may stay empty (UP17); this section describes the production list:
 
 ```json
 {

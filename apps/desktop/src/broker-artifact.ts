@@ -3,7 +3,12 @@ import {open, lstat} from 'node:fs/promises';
 import {createHash} from 'node:crypto';
 import path from 'node:path';
 import type {BrokerConfiguration} from './native-pipe-client';
-import {CHANNEL, TRANSPORT_DIRECTORY} from './channel';
+import {CHANNEL, TRANSPORT_DIRECTORY, type ChannelIdentity} from './channel';
+
+/** The plugin's v0 discovery directory of `channel`: `<LOCALAPPDATA>\<data root>\transport\v0`; v1 is its sibling. */
+export function brokerDiscoveryDirectory(localAppData: string, channel: ChannelIdentity = CHANNEL): string {
+  return path.join(localAppData, channel.dataRootName, TRANSPORT_DIRECTORY, 'v0');
+}
 function boundedJson(filename: string): Record<string, unknown> {
   if (lstatSync(filename).isSymbolicLink() || statSync(filename).size > 1024 * 1024) throw new Error('Native artifact metadata bound rejected');
   return JSON.parse(readFileSync(filename, 'utf8')) as Record<string, unknown>;
@@ -16,9 +21,9 @@ export function brokerConfiguration(directory: string, resources: string, packag
   if (!existsSync(executable)) return undefined;
   const receipt = boundedJson(path.join(root, 'build-evidence.json'));
   const desktop = boundedJson(path.join(directory, 'build-evidence.json'));
-  if (typeof receipt.executableSha256 !== 'string' || !/^[0-9a-f]{64}$/.test(receipt.executableSha256) || !receipt.sources || JSON.stringify(receipt.sources) !== JSON.stringify(desktop.sources) || lstatSync(executable).isSymbolicLink() || statSync(executable).size > 64 * 1024 * 1024) throw new Error('Native artifact build provenance rejected');
+  if (typeof receipt.executableSha256 !== 'string' || !/^[0-9a-f]{64}$/.test(receipt.executableSha256) || !receipt.sources || JSON.stringify(receipt.sources) !== JSON.stringify(desktop.sources) || receipt.channel !== desktop.channel || lstatSync(executable).isSymbolicLink() || statSync(executable).size > 64 * 1024 * 1024) throw new Error('Native artifact build provenance rejected');
   if (createHash('sha256').update(readFileSync(executable)).digest('hex') !== receipt.executableSha256) throw new Error('Native artifact byte hash rejected');
-  return {executable, discoveryDirectory: path.join(localAppData, CHANNEL.dataRootName, TRANSPORT_DIRECTORY, 'v0')};
+  return {executable, discoveryDirectory: brokerDiscoveryDirectory(localAppData)};
 }
 
 async function receiptBytes(filename: string, signal: AbortSignal): Promise<Buffer> {
@@ -71,7 +76,7 @@ export function createBrokerResolver(directory: string, resources: string, packa
         if (!stat.isFile() || stat.size > 64n * 1024n * 1024n || !sameImage(stat, pathBefore)) throw new Error('Native artifact image changed before verification');
         const rawNative = await receiptBytes(nativeReceipt, abort.signal), rawDesktop = await receiptBytes(desktopReceipt, abort.signal);
         const receipt = JSON.parse(rawNative.toString('utf8')) as Record<string, unknown>, desktop = JSON.parse(rawDesktop.toString('utf8')) as Record<string, unknown>;
-        if (typeof receipt.executableSha256 !== 'string' || !/^[0-9a-f]{64}$/.test(receipt.executableSha256) || !receipt.sources || JSON.stringify(receipt.sources) !== JSON.stringify(desktop.sources)) throw new Error('Native artifact build provenance rejected');
+        if (typeof receipt.executableSha256 !== 'string' || !/^[0-9a-f]{64}$/.test(receipt.executableSha256) || !receipt.sources || JSON.stringify(receipt.sources) !== JSON.stringify(desktop.sources) || receipt.channel !== desktop.channel) throw new Error('Native artifact build provenance rejected');
         const hash = createHash('sha256'), chunk = Buffer.alloc(64 * 1024); let length = 0;
         while (true) {
           abort.signal.throwIfAborted();
@@ -88,7 +93,7 @@ export function createBrokerResolver(directory: string, resources: string, packa
         const heldAfter = await image.stat({bigint: true}), pathAfter = await lstat(executable, {bigint: true});
         abort.signal.throwIfAborted();
         if (!pathAfter.isFile() || pathAfter.isSymbolicLink() || !sameImageSnapshot(stat, heldAfter) || !sameImageSnapshot(heldAfter, pathAfter)) throw new Error('Native artifact image changed during verification');
-        return {executable, discoveryDirectory: path.join(localAppData, CHANNEL.dataRootName, TRANSPORT_DIRECTORY, 'v0')};
+        return {executable, discoveryDirectory: brokerDiscoveryDirectory(localAppData)};
       } finally {await image.close();}
     })().catch(error => {report(error); return undefined;});
     const result = inFlight = Promise.race([work, timeout]);

@@ -17,9 +17,13 @@ BEGIN
     BLOCK "040904b0"
     BEGIN
       VALUE "FileDescription", "@PLUGIN_PRODUCT@ game plugin"
+      // .NET's FileVersionInfo, which scripts/inspect-package.mjs reads, reports a string table only when it has a
+      // FileVersion; the value repeats the zero FILEVERSION above.
+      VALUE "FileVersion", "0.0.0.0"
       VALUE "InternalName", "@PLUGIN_NAME@"
       VALUE "OriginalFilename", "@PLUGIN_NAME@.dll"
       VALUE "ProductName", "@PLUGIN_PRODUCT@"
+      VALUE "ProductVersion", "0.0.0.0"
     END
   END
   BLOCK "VarFileInfo"

@@ -72,6 +72,10 @@ describe('durability sequence on every writer open', () => {
     const production = path.join(ws.directory, 'ETS2Telemetry', 'data', 'telemetry.sqlite');
     for (const purpose of ['synthetic', 'replay'] as const) failed(await openStorage(ws.options({path: production, purpose})), 'DATA_PATH_INVALID');
     expect(existsSync(production)).toBe(false);
+    // ET-055: the staging channel's history file is protected in every build too.
+    const staging = path.join(ws.directory, 'ETS2TelemetryStaging', 'data', 'telemetry.sqlite');
+    for (const purpose of ['synthetic', 'replay'] as const) failed(await openStorage(ws.options({path: staging, purpose})), 'DATA_PATH_INVALID');
+    expect(existsSync(staging)).toBe(false);
   });
   it('allows one writer: a second open is DATABASE_LOCKED and the first keeps working', async () => {
     const first = await ws.open();

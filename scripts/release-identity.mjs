@@ -7,8 +7,9 @@ import path from 'node:path';
 import {fileURLToPath, pathToFileURL} from 'node:url';
 import {crc32, inflateRawSync} from 'node:zlib';
 import * as asar from '@electron/asar';
+import {BUILD_IDENTITIES, buildSetupFileName, resolveBuild, resolveBuildChannel} from './build-channel.mjs';
 import {verifyPackage} from './package-integrity.mjs';
-import {PLUGIN_FILE, verifyPluginBundle} from './plugin-bundle.mjs';
+import {verifyPluginBundle} from './plugin-bundle.mjs';
 
 // Release artifact identity (ET-018 PR-6, plan U14 and U16; docs/release.md). It reads the Forge package and the Squirrel
 // make output, checks that the full NuGet package carries exactly the portable package's files, and writes
@@ -16,16 +17,27 @@ import {PLUGIN_FILE, verifyPluginBundle} from './plugin-bundle.mjs';
 // Authenticode status and signer, the plugin and broker hashes against their bundle records and the Squirrel helper
 // hashes. It never runs Setup, Update.exe or any packaged executable; the only program it starts is Windows PowerShell
 // 5.1 for Get-AuthenticodeSignature. Every name it records is relative: no machine path enters the file.
+//
+// ET-055: every name depends on the build channel (scripts/build-channel.mjs). The functions take a build identity and
+// default to this build's; the identity records the channel and the channel's version.
 
 export const IDENTITY_FORMAT = 'ets2telemetry.release-identity';
 export const IDENTITY_FILE = 'release-identity.json';
-export const PACKAGE_DIRECTORY = 'out/ETS2Telemetry Desktop-win32-x64';
 export const MAKE_DIRECTORY = 'out/make/squirrel.windows/x64';
 export const VENDOR_DIRECTORY = 'node_modules/electron-winstaller/vendor';
-export const NUGET_ID = 'ETS2TelemetryDesktop';
-export const EXECUTABLE = 'ETS2TelemetryDesktop.exe';
 export const RELEASES = 'RELEASES';
-/** The product's display name (ET-045h, owner decision D2): the nuspec title and the executable's ProductName and FileDescription. */
+/** The build identity of this build's channel; the default of every name below. */
+export const activeBuildIdentity = () => BUILD_IDENTITIES[resolveBuildChannel()];
+/** Forge's package folder of a channel: `out/<productName>-win32-x64`. */
+export const packageDirectoryOf = (identity = activeBuildIdentity()) => `out/${identity.productName}-win32-x64`;
+/** The NuGet id of a channel, its Squirrel id. */
+export const nugetIdOf = (identity = activeBuildIdentity()) => identity.squirrelId;
+/** The executable file name of a channel. */
+export const executableOf = (identity = activeBuildIdentity()) => `${identity.executableName}.exe`;
+/**
+ * The production product's display name (ET-045h, owner decision D2): the nuspec title and the executable's ProductName
+ * and FileDescription. A staging build carries its own display name (BUILD_IDENTITIES.staging.displayName).
+ */
 export const PRODUCT_NAME = 'Yukon Union Telemetry';
 /** The nuspec authors, which Squirrel writes as the Installed apps Publisher (ET-045h H1). */
 export const PUBLISHER = 'Yukon Union Telemetry contributors';
@@ -54,13 +66,13 @@ const SIGNATURE_TIMEOUT_MS = 120000;
 const SIGNATURE_MAX_OUTPUT = 1024 * 1024;
 
 /** The versioned Setup name of forge.config.cjs. */
-export const setupExeName = version => `YukonUnionTelemetry-Setup-${version}.exe`;
+export const setupExeName = (version, identity = activeBuildIdentity()) => buildSetupFileName(identity, version);
 /** electron-winstaller's convertVersion: NuGet takes the prerelease label without dots and drops build metadata. */
 export function nugetVersion(version) {
   const [main, ...prerelease] = version.split('+')[0].split('-');
   return prerelease.length ? `${main}-${prerelease.join('-').replace(/\./g, '')}` : main;
 }
-export const nupkgName = version => `${NUGET_ID}-${nugetVersion(version)}-full.nupkg`;
+export const nupkgName = (version, identity = activeBuildIdentity()) => `${nugetIdOf(identity)}-${nugetVersion(version)}-full.nupkg`;
 
 const sha256 = bytes => createHash('sha256').update(bytes).digest('hex');
 /** SHA-256 and size of a file, read in 1 MiB blocks. */
@@ -205,7 +217,7 @@ export function readZip(bytes) {
  * `<files>` rules of electron-winstaller 5.4.4's template.nuspectemplate and its swiftshader additions; a change in
  * that template shows up here as a projection mismatch.
  */
-export function projectPackageFile(relative, executable = EXECUTABLE) {
+export function projectPackageFile(relative, executable = executableOf()) {
   const topLevel = !relative.includes('/');
   const included = /^(locales|resources|swiftshader)\//.test(relative)
     || (topLevel && (/\.(bin|dll|pak)$/.test(relative) || /\.exe\.(config|sig)$/.test(relative)
@@ -217,8 +229,8 @@ export function projectPackageFile(relative, executable = EXECUTABLE) {
  * The NuGet entries Squirrel adds beyond the projected package files: Update.exe as `squirrel.exe`, an execution stub
  * for each top-level executable, the nuspec and the Open Packaging Conventions metadata.
  */
-export function knownAddition(name, stubs) {
-  return name === `${PAYLOAD}squirrel.exe` || stubs.has(name) || name === `${NUGET_ID}.nuspec` || name === '[Content_Types].xml'
+export function knownAddition(name, stubs, nugetId = nugetIdOf()) {
+  return name === `${PAYLOAD}squirrel.exe` || stubs.has(name) || name === `${nugetId}.nuspec` || name === '[Content_Types].xml'
     || name === '_rels/.rels' || /^package\/services\/metadata\/core-properties\/[0-9a-f]{32}\.psmdcp$/.test(name);
 }
 
@@ -240,8 +252,8 @@ export function parseReleases(text) {
 export function inspectInstaller(options) {
   return checkInstaller(options).facts;
 }
-function checkInstaller({packageDirectory, makeDirectory, version, executable = EXECUTABLE}) {
-  const setup = setupExeName(version), nupkg = nupkgName(version);
+function checkInstaller({packageDirectory, makeDirectory, version, identity = activeBuildIdentity()}) {
+  const setup = setupExeName(version, identity), nupkg = nupkgName(version, identity), nugetId = nugetIdOf(identity), executable = executableOf(identity);
   const present = readdirSync(makeDirectory).sort();
   const expected = [setup, nupkg, RELEASES].sort();
   assert.deepEqual(present.filter(name => name !== IDENTITY_FILE), expected, 'Unexpected Squirrel make output');
@@ -256,11 +268,11 @@ function checkInstaller({packageDirectory, makeDirectory, version, executable = 
   assert.equal(releases.size, nupkgBytes.length, 'RELEASES size differs from the package');
   assert.equal(createHash('sha1').update(nupkgBytes).digest('hex'), releases.sha1, 'RELEASES SHA-1 differs from the package');
   const zip = readZip(nupkgBytes);
-  const nuspec = zip.extract(`${NUGET_ID}.nuspec`).toString('utf8');
-  assert.equal(/<id>([^<]*)<\/id>/.exec(nuspec)?.[1], NUGET_ID, 'Nuspec id differs');
+  const nuspec = zip.extract(`${nugetId}.nuspec`).toString('utf8');
+  assert.equal(/<id>([^<]*)<\/id>/.exec(nuspec)?.[1], nugetId, 'Nuspec id differs');
   assert.equal(/<version>([^<]*)<\/version>/.exec(nuspec)?.[1], nugetVersion(version), 'Nuspec version differs from package.json');
   // Squirrel writes the Installed apps DisplayName from the title and the Publisher from the authors (ET-045h).
-  assert.equal(/<title>([^<]*)<\/title>/.exec(nuspec)?.[1], PRODUCT_NAME, 'Nuspec title differs from the product name');
+  assert.equal(/<title>([^<]*)<\/title>/.exec(nuspec)?.[1], identity.displayName, 'Nuspec title differs from the product name');
   assert.equal(/<authors>([^<]*)<\/authors>/.exec(nuspec)?.[1], PUBLISHER, 'Nuspec authors differ from the publisher');
 
   const projection = new Map(), excluded = [];
@@ -277,7 +289,7 @@ function checkInstaller({packageDirectory, makeDirectory, version, executable = 
     .map(name => name.replace(/\.exe$/i, '_ExecutionStub.exe')));
   const files = zip.names.filter(name => !name.endsWith('/'));
   const missing = [...projection.keys()].filter(name => !files.includes(name));
-  const unexpected = files.filter(name => !projection.has(name) && !knownAddition(name, stubs));
+  const unexpected = files.filter(name => !projection.has(name) && !knownAddition(name, stubs, nugetId));
   assert.deepEqual(missing, [], 'Package files missing from the NuGet package');
   assert.deepEqual(unexpected, [], 'Unexpected NuGet package entries');
   for (const name of [`${PAYLOAD}squirrel.exe`, ...stubs]) assert.ok(files.includes(name), `Squirrel addition missing: ${name}`);
@@ -407,11 +419,11 @@ export function readVersionInfo(file, env = process.env) {
  * name, which Squirrel uses for the shortcut name; CompanyName names the Start menu folder; OriginalFilename keeps the
  * executable's technical name.
  */
-export function assertVersionInfo(info, executable = EXECUTABLE) {
-  assert.equal(info.ProductName, PRODUCT_NAME, 'Executable ProductName differs from the product name');
-  assert.equal(info.FileDescription, PRODUCT_NAME, 'Executable FileDescription differs from the product name');
+export function assertVersionInfo(info, identity = activeBuildIdentity()) {
+  assert.equal(info.ProductName, identity.displayName, 'Executable ProductName differs from the product name');
+  assert.equal(info.FileDescription, identity.displayName, 'Executable FileDescription differs from the product name');
   assert.equal(info.CompanyName, COMPANY_NAME, 'Executable CompanyName differs');
-  assert.equal(info.OriginalFilename, executable, 'Executable OriginalFilename differs');
+  assert.equal(info.OriginalFilename, executableOf(identity), 'Executable OriginalFilename differs');
 }
 
 // --- The identity --------------------------------------------------------------------------------------------------
@@ -457,22 +469,23 @@ const signingSummary = images => Object.fromEntries(AUTHENTICODE_STATUSES.map(st
   .filter(([, count]) => count > 0));
 
 /**
- * Builds the release identity. `signatures` maps absolute paths to Authenticode results (readAuthenticode by default);
- * `source` gives the commit facts (git by default). The result holds relative names only.
+ * Builds the release identity. `build` is the resolved build channel and version (scripts/build-channel.mjs, from the
+ * checkout's package.json by default); `signatures` maps absolute paths to Authenticode results (readAuthenticode by
+ * default); `source` gives the commit facts (git by default). The result holds relative names only.
  */
-export function releaseIdentity({checkout = '.', packageDirectory = path.join(checkout, PACKAGE_DIRECTORY), makeDirectory = path.join(checkout, MAKE_DIRECTORY),
-  vendorDirectory = path.join(checkout, VENDOR_DIRECTORY), signatures = readAuthenticode, source, now = () => new Date()}) {
+export function releaseIdentity({checkout = '.', build = resolveBuild({root: checkout}), packageDirectory = path.join(checkout, packageDirectoryOf(build.identity)),
+  makeDirectory = path.join(checkout, MAKE_DIRECTORY), vendorDirectory = path.join(checkout, VENDOR_DIRECTORY), signatures = readAuthenticode, source, now = () => new Date()}) {
   const manifest = readJsonFile(path.join(checkout, 'package.json'));
-  const version = manifest.version, electronPin = manifest.devDependencies?.electron;
+  const {version, identity} = build, electronPin = manifest.devDependencies?.electron;
   assert.ok(typeof version === 'string' && typeof electronPin === 'string', 'package.json lacks the version or the Electron pin');
   const electron = readFileSync(path.join(packageDirectory, 'version'), 'utf8').trim();
   assert.equal(electron, electronPin, 'Packaged Electron differs from the package.json pin');
-  const {facts: installer, zip} = checkInstaller({packageDirectory, makeDirectory, version});
+  const {facts: installer, zip} = checkInstaller({packageDirectory, makeDirectory, version, identity});
   const integrity = verifyPackage(packageDirectory);
   assertNoPackedNativeCode(path.join(packageDirectory, 'resources/app.asar'));
 
   // The plugin and the broker against their bundle records; the NuGet payload carries the same bytes (inspectInstaller).
-  const plugin = verifyPluginBundle(path.join(packageDirectory, 'resources/telemetry-plugin'));
+  const plugin = verifyPluginBundle(path.join(packageDirectory, 'resources/telemetry-plugin'), build.channel);
   assert.equal(plugin.appVersion, version, 'Plugin bundle appVersion differs from package.json');
   const brokerFile = path.join(packageDirectory, 'resources/telemetry-client/telemetry-pipe-client.exe');
   const broker = hashFile(brokerFile);
@@ -512,13 +525,13 @@ export function releaseIdentity({checkout = '.', packageDirectory = path.join(ch
   const treeClean = source ? source.treeClean : status === null ? null : status === '';
   const artifact = name => ({name, ...hashFile(path.join(makeDirectory, name))});
   return {
-    format: IDENTITY_FORMAT, version: 1, createdUtc: now().toISOString(),
+    format: IDENTITY_FORMAT, version: 1, createdUtc: now().toISOString(), channel: build.channel,
     source: {commit, sourceCommit: source?.sourceCommit ?? process.env.ETS2TELEMETRY_SOURCE_COMMIT ?? null, treeClean},
     versions: {app: version, nuget: nugetVersion(version), electron, plugin: plugin.appVersion},
     artifacts: {setup: artifact(installer.setup), nupkg: artifact(installer.nupkg), releases: artifact(RELEASES)},
     package: {sha256: integrity.packageSha256, files: integrity.packageFilesVerified, projectedFiles: installer.projectedFiles,
       excludedFromNupkg: installer.excludedPackageFiles, nupkgAdditions: installer.additions},
-    plugin: {file: `resources/telemetry-plugin/${PLUGIN_FILE}`, sha256: plugin.sha256, size: plugin.size, appVersion: plugin.appVersion, matchesManifest: true,
+    plugin: {file: `resources/telemetry-plugin/${identity.pluginFileName}`, sha256: plugin.sha256, size: plugin.size, appVersion: plugin.appVersion, matchesManifest: true,
       known: plugin.known.length},
     broker: {file: 'resources/telemetry-client/telemetry-pipe-client.exe', sha256: broker.sha256, size: broker.size, matchesBuildEvidence: true},
     squirrel: {updateExe: {path: update.path, sha256: update.sha256, matchesVendor: true}, executionStubs: stubs, vendor},
@@ -535,7 +548,7 @@ if (process.argv[1] && import.meta.url === pathToFileURL(path.resolve(process.ar
   const identity = releaseIdentity({checkout});
   const target = path.join(checkout, MAKE_DIRECTORY, IDENTITY_FILE);
   writeFileSync(target, JSON.stringify(identity, null, 2) + '\n');
-  console.log(JSON.stringify({file: `${MAKE_DIRECTORY}/${IDENTITY_FILE}`, source: identity.source, versions: identity.versions,
+  console.log(JSON.stringify({file: `${MAKE_DIRECTORY}/${IDENTITY_FILE}`, channel: identity.channel, source: identity.source, versions: identity.versions,
     setupSha256: identity.artifacts.setup.sha256, nupkgSha256: identity.artifacts.nupkg.sha256, peImages: identity.peImages.length,
     signing: identity.signing.summary}, null, 2));
 }
