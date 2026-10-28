@@ -45,6 +45,11 @@ const errorCode = (error: unknown) => error && typeof error === 'object' && 'cod
 export type IncompleteRemoval = 'removed' | 'absent' | 'refused' | 'recorded' | 'releases-unreadable' | 'updater-running' | 'in-use' | 'listing-failed' | 'failed';
 /** Kept outcomes that can change within seconds (a process ending, a file let go); the controller asks again for those. */
 export const RETRYABLE_REMOVALS: ReadonlySet<IncompleteRemoval> = new Set<IncompleteRemoval>(['updater-running', 'in-use', 'listing-failed', 'failed']);
+/**
+ * The line the process listing writes for a process named Update or Squirrel whose image path it cannot read (an
+ * elevated updater seen from a non-elevated application); removeIncompleteVersion counts it as a running updater.
+ */
+export const UNREADABLE_UPDATER_IMAGE = '?unreadable-updater';
 /** What removeIncompleteVersion reads beyond the file operations of the download. */
 export interface IncompleteVersionPorts {
   readonly fs: UpdateFileSystem;
@@ -96,11 +101,22 @@ export async function removeIncompleteVersion(ports: IncompleteVersionPorts, ins
     text = new TextDecoder('utf-8').decode(bytes);
   } catch (error) {if (errorCode(error) !== 'ENOENT') return 'releases-unreadable';}
   const names = new Set([packageName, packageName.replace(/-full\.nupkg$/, '-delta.nupkg')].map(name => name.toLowerCase()));
-  if (text.replace(/^\uFEFF/, '').split(/\r?\n/).some(line => names.has((line.trim().split(/\s+/)[1] ?? '').toLowerCase()))) return 'recorded';
+  // Each non-empty line is `<SHA-1> <file name or URL> <size>`; the name is the URL's last path segment without its query
+  // or fragment. A line of another shape makes the list unreadable, so the folder stays (fail closed).
+  const listed: string[] = [];
+  for (const line of text.replace(/^\uFEFF/, '').split(/\r?\n/).map(entry => entry.trim()).filter(Boolean)) {
+    const match = /^[0-9A-Fa-f]{40}\s+(\S+)\s+\d+(?:\s|$)/.exec(line);
+    if (!match) return 'releases-unreadable';
+    listed.push((match[1].replace(/[?#].*$/, '').split(/[\\/]/).at(-1) ?? '').toLowerCase());
+  }
+  if (listed.some(name => names.has(name))) return 'recorded';
+  let realRoot: string;
+  try {realRoot = await ports.realpath(installRoot);} catch {return 'refused';}
   const images = await ports.processImages().catch(() => undefined);
   if (!images) return 'listing-failed';
-  const updater = normalFolder(path.win32.join(installRoot, 'Update.exe'));
-  if (images.some(image => normalFolder(image) === updater)) return 'updater-running';
+  // An Update.exe or Squirrel process whose image this user cannot read (an elevated one) counts as this updater.
+  const updaters = new Set([path.win32.join(installRoot, 'Update.exe'), path.win32.join(realRoot, 'Update.exe')].map(normalFolder));
+  if (images.some(image => image === UNREADABLE_UPDATER_IMAGE || updaters.has(normalFolder(image)))) return 'updater-running';
   if (images.some(image => within(image, folder) || within(image, realFolder))) return 'in-use';
   return await removeOwnedTree(ports.fs, folder).catch(() => 'IO_ERROR' as const) === null ? 'removed' : 'failed';
 }
