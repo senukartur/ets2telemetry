@@ -135,16 +135,26 @@ export function pluginTempFilePattern(channel: ChannelIdentity = CHANNEL): RegEx
 export function channelCopy(text: string, channel: ChannelIdentity = CHANNEL): string {
   if (channel.channel === 'production') return text;
   const production = CHANNEL_IDENTITIES.production;
+  const productionRoot = '%LOCALAPPDATA%\\' + production.dataRootName;
+  // The export refusal names every data root the channel refuses (UP12: a staging export refuses both). Its folder list
+  // goes in as a placeholder, so the root renaming below never turns the production root of that list into staging's.
+  const roots = channel.exportRefusalDataRootNames.map(name => '%LOCALAPPDATA%\\' + name);
+  const LIST = '', refusals: [string, string][] = roots.length < 2 ? [] : [
+    [`data folder, ${productionRoot}.`, `data folders, ${LIST}en${LIST}.`],
+    [`вне папки данных ${production.displayName}, ${productionRoot}.`, `вне папок данных ${production.displayName}: ${LIST}ru${LIST}.`]
+  ];
   // [from, to] in this order: the install root before the data root it starts with. A name followed by a letter or digit
   // is another name and stays; the staging display name is never extended twice.
   const names: [string, string, string][] = [
     ['%LOCALAPPDATA%\\' + production.squirrelId, '%LOCALAPPDATA%\\' + channel.squirrelId, ''],
-    ['%LOCALAPPDATA%\\' + production.dataRootName, '%LOCALAPPDATA%\\' + channel.dataRootName, ''],
+    [productionRoot, '%LOCALAPPDATA%\\' + channel.dataRootName, ''],
     ['%APPDATA%\\' + production.productName, '%APPDATA%\\' + channel.productName, ''],
     [production.pluginFileName, channel.pluginFileName, ''],
     [production.displayName, channel.displayName, '(?! Staging)']
   ];
-  return names.reduce((rest, [from, to, guard]) => rest.replace(new RegExp(`${escapeRegExp(from)}${guard}(?![A-Za-z0-9])`, 'g'), () => to), text);
+  const listed = refusals.reduce((rest, [from, to]) => rest.split(from).join(to), text);
+  const renamed = names.reduce((rest, [from, to, guard]) => rest.replace(new RegExp(`${escapeRegExp(from)}${guard}(?![A-Za-z0-9])`, 'g'), () => to), listed);
+  return renamed.replace(/(en|ru)/g, (_match, language: string) => roots.join(language === 'ru' ? ' и ' : ' and '));
 }
 
 /**

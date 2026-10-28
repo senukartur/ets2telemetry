@@ -1,6 +1,6 @@
 import * as fsp from 'node:fs/promises';
 import path from 'node:path';
-import {afterEach, beforeEach, describe, expect, it} from 'vitest';
+import {afterEach, beforeEach, describe, expect, it, vi} from 'vitest';
 import {parseInstallTestFile, resolveUninstallRoots, type RootsFileSystem} from '../../apps/desktop/src/uninstall/roots';
 import {guardedTempRoot, type GuardedRoot} from '../shared/guarded-fs';
 import {installFixture, type InstallFixture} from '../shared/uninstall-fixture';
@@ -115,5 +115,43 @@ describe('refusals', () => {
     expect(await resolve(fixture.executable)).toEqual({ok: false, code: 'NOT_INSTALLED'});
     await fsp.mkdir(path.win32.join(fixture.installRoot, 'Update.exe'));
     expect(await resolve(fixture.executable)).toEqual({ok: false, code: 'NOT_INSTALLED'});
+  });
+});
+
+// ET-055 UP12: each build channel derives its roots only from its own install layout. A staging engine never takes a
+// production install (or the reverse) for its own, so an uninstall of one channel can never wipe the other's data root.
+describe('the build channels', () => {
+  async function stagingRoots() {
+    vi.resetModules();
+    vi.stubGlobal('__ETS2TELEMETRY_BUILD_CHANNEL__', 'staging');
+    try {return await import('../../apps/desktop/src/uninstall/roots');} finally {vi.unstubAllGlobals();}
+  }
+  afterEach(() => {vi.resetModules();});
+  async function stagingLayout(fixture: InstallFixture) {
+    const installRoot = path.win32.join(fixture.base, 'ETS2TelemetryDesktopStaging'), app = path.win32.join(installRoot, 'app-0.2.0-stg000042');
+    await fsp.mkdir(app, {recursive: true});
+    const executable = path.win32.join(app, 'ETS2TelemetryDesktopStaging.exe');
+    await fsp.writeFile(executable, 'placeholder executable, never run');
+    await fsp.writeFile(path.win32.join(installRoot, 'Update.exe'), 'placeholder updater, never run');
+    return {installRoot, executable};
+  }
+
+  it('a staging executable resolves to the data root ETS2TelemetryStaging in its base', async () => {
+    const fixture = await installFixture(guard);
+    const staging = await stagingLayout(fixture);
+    const roots = await stagingRoots();
+    expect(roots.PRODUCT_ROOT_NAME).toBe('ETS2TelemetryDesktopStaging');
+    expect(await roots.resolveUninstallRoots({executable: staging.executable, env: {}, fs: fs()})).toMatchObject({ok: true, mode: 'test-root',
+      installRoot: staging.installRoot, base: fixture.base, dataRoot: path.win32.join(fixture.base, 'ETS2TelemetryStaging')});
+  });
+
+  it('a staging engine refuses a production install, and a production engine a staging install', async () => {
+    const fixture = await installFixture(guard);
+    const staging = await stagingLayout(fixture);
+    const roots = await stagingRoots();
+    expect(await roots.resolveUninstallRoots({executable: fixture.executable, env: {LOCALAPPDATA: fixture.base}, fs: fs()})).toEqual({ok: false, code: 'NOT_INSTALLED'});
+    expect(await resolve(staging.executable, {LOCALAPPDATA: fixture.base})).toEqual({ok: false, code: 'NOT_INSTALLED'});
+    // Production still resolves its own install beside the staging one.
+    expect(await resolve(fixture.executable)).toMatchObject({ok: true, dataRoot: fixture.dataRoot});
   });
 });

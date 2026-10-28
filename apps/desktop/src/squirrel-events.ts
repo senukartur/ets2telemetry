@@ -5,7 +5,7 @@ import {ICON_RESOURCE_DIRECTORY, INSTALLED_ICON_FILE, MAX_ICON_BYTES, registerIn
   type UninstallEntryRegistry} from './installed-app-icon';
 import {LEGACY_SHORTCUT_BUDGET_MS, removeLegacyShortcuts, type LegacyShortcutResult, type ShortcutFolders, type ShortcutLink} from './legacy-shortcuts';
 import {nodeExecFile, runFixedProgram, systemRoot} from './plugin-setup/fixed-program';
-import {checkRunningGames, listProcessSessions} from './plugin-setup/game-processes';
+import {checkRunningGames, listProcessSessions, type SessionProcessRow} from './plugin-setup/game-processes';
 import {pluginBundleDirectory, readPluginBundle} from './plugin-setup/plugin-bundle';
 import type {RunningCheck} from './plugin-setup/plugin-installer';
 import {cancelDeferral, writeDeferralReadme, type CancelFileSystem, type CancelOutcome} from './uninstall/deferral';
@@ -420,6 +420,18 @@ async function writeReceipt(ports: SquirrelPorts, settled: Settled, state: HookS
  * clock (`performance.now()`) is fractional: a fractional delay threw RangeError ERR_OUT_OF_RANGE after the engine had
  * finished (the final-head hosted run of PR-3). The delay is rounded up, never down, so the signal never fires early.
  */
+/**
+ * The other processes of `executable`'s image in this process's Windows session, without `own` (this process and its
+ * children); null when this process is not listed. The image name is compared exactly, without case, so the other build
+ * channel's executable (ETS2TelemetryDesktop.exe beside ETS2TelemetryDesktopStaging.exe, ET-055) never counts.
+ */
+export function countOtherProcesses(rows: readonly SessionProcessRow[], executable: string, pid: number, own: ReadonlySet<number>): number | null {
+  const session = rows.find(row => row.pid === pid)?.session ?? null;
+  if (session === null) return null;
+  const name = path.win32.basename(executable).toLowerCase();
+  return rows.filter(row => row.name.toLowerCase() === name && row.session === session && !own.has(row.pid)).length;
+}
+
 export function deadlineSignal(milliseconds: number): AbortSignal {
   return AbortSignal.timeout(Math.min(0x7fffffff, Math.max(0, Math.ceil(milliseconds))));
 }
@@ -508,12 +520,9 @@ export function productionSquirrelPorts(options: {app: SquirrelApp; appVersion: 
     countOtherProcesses: async signal => {
       const listing = await listProcessSessions({signal});
       if (!listing.ok || signal.aborted) return null;
-      const session = listing.rows.find(row => row.pid === process.pid)?.session ?? null;
-      if (session === null) return null;
       let own: Set<number>;
       try {own = new Set([process.pid, ...app.getAppMetrics().map(metric => metric.pid)]);} catch {own = new Set([process.pid]);}
-      const name = path.win32.basename(options.executable).toLowerCase();
-      return listing.rows.filter(row => row.name.toLowerCase() === name && row.session === session && !own.has(row.pid)).length;
+      return countOtherProcesses(listing.rows, options.executable, process.pid, own);
     },
     deadlineSignal,
     readKnown: async () => {

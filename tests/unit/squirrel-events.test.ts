@@ -3,7 +3,7 @@ import * as fsp from 'node:fs/promises';
 import path from 'node:path';
 import {afterEach, beforeEach, describe, expect, it, vi} from 'vitest';
 import type {ShortcutLink} from '../../apps/desktop/src/legacy-shortcuts';
-import {cancelDeferralOnStart, deadlineSignal, EXIT_CODES, hookDeadlines, prepareSquirrelProcess, PROCESS_POLL_MS, INSTANCE_EXIT_WAIT_MS, parseSquirrelArgs, PROCESS_START_MARGIN_MS, RECEIPT_FORMAT, runSquirrelEvent, settle,
+import {cancelDeferralOnStart, countOtherProcesses, deadlineSignal, EXIT_CODES, hookDeadlines, prepareSquirrelProcess, PROCESS_POLL_MS, INSTANCE_EXIT_WAIT_MS, parseSquirrelArgs, PROCESS_START_MARGIN_MS, RECEIPT_FORMAT, runSquirrelEvent, settle,
   UNINSTALL_DEADLINE_MS, UNINSTALL_HARD_STOP_MS,
   type SquirrelArgs, type SquirrelPorts, type UninstallReceipt} from '../../apps/desktop/src/squirrel-events';
 import type {UninstallPorts, UninstallResult} from '../../apps/desktop/src/uninstall/engine';
@@ -1054,5 +1054,27 @@ describe('the deferred-cleanup executor (ET-018 PR-5, U7)', () => {
     const test = harness(fixture);
     expect(await runSquirrelEvent(event(name), test.ports)).toBe(0);
     expect(test.registry.calls).toEqual([]);
+  });
+});
+
+// ET-055 UP14: the uninstall hook waits only for processes of its own channel's executable. The other channel's
+// application, running beside it in the same session, is never counted, so a staging uninstall never waits on production.
+describe('countOtherProcesses', () => {
+  const rows = [
+    {name: 'ETS2TelemetryDesktopStaging.exe', pid: 10, session: 1}, {name: 'ETS2TelemetryDesktopStaging.exe', pid: 11, session: 1},
+    {name: 'etS2telemetrydesktopstaging.EXE', pid: 12, session: 1}, {name: 'ETS2TelemetryDesktopStaging.exe', pid: 13, session: 2},
+    {name: 'ETS2TelemetryDesktop.exe', pid: 20, session: 1}, {name: 'ETS2TelemetryDesktop.exe', pid: 21, session: 1}];
+  const staging = 'C:/Users/driver/AppData/Local/ETS2TelemetryDesktopStaging/app-0.2.0-stg000042/ETS2TelemetryDesktopStaging.exe';
+  const production = 'C:/Users/driver/AppData/Local/ETS2TelemetryDesktop/app-0.1.1/ETS2TelemetryDesktop.exe';
+
+  it('counts only its own image in its own session, without itself and its children', () => {
+    expect(countOtherProcesses(rows, staging, 10, new Set([10, 11]))).toBe(1);
+  });
+  it('never counts the other channel', () => {
+    expect(countOtherProcesses(rows, production, 20, new Set([20]))).toBe(1);
+    expect(countOtherProcesses([...rows, {name: 'ETS2TelemetryDesktopStaging.exe', pid: 30, session: 1}], production, 20, new Set([20]))).toBe(1);
+  });
+  it('gives null when this process is not listed', () => {
+    expect(countOtherProcesses(rows, staging, 99, new Set([99]))).toBeNull();
   });
 });

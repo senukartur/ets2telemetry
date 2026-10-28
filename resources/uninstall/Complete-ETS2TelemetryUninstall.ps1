@@ -607,34 +607,35 @@ function Write-Readme([string]$Uninstall, [string]$DataRoot, $Folders, [string[]
     foreach ($hash in $Known) { [void]$hashes.Add($hash) }
     foreach ($folder in $Folders) { foreach ($hash in $folder.hashes) { [void]$hashes.Add([string]$hash) } }
     $lines = New-Object Collections.Generic.List[string]
-    $lines.Add('Yukon Union Telemetry was uninstalled, but its cleanup could not finish.'); $lines.Add('Reason: ' + $Code); $lines.Add('')
+    $lines.Add((Get-ChannelText 'Yukon Union Telemetry was uninstalled, but its cleanup could not finish.')); $lines.Add('Reason: ' + $Code); $lines.Add('')
     switch ($Mode) {
-        'stopped' { $lines.Add('Yukon Union Telemetry tried ' + $Attempts + ' times and stopped trying at sign-in. Finish the cleanup with the steps below.') }
+        'stopped' { $lines.Add((Get-ChannelText 'Yukon Union Telemetry tried ') + $Attempts + ' times and stopped trying at sign-in. Finish the cleanup with the steps below.') }
         'failed-retry' {
-            $lines.Add('An unexpected error stopped this cleanup attempt. Yukon Union Telemetry tries again at your next Windows sign-in (attempt ' + $Attempts + ' of ' + $MaxAttempts + ' was made).')
+            $lines.Add((Get-ChannelText 'An unexpected error stopped this cleanup attempt. Yukon Union Telemetry tries again at your next Windows sign-in (attempt ') + $Attempts + ' of ' + $MaxAttempts + ' was made).')
             $lines.Add('You only need the steps below if that does not happen.')
         }
         'failed-stopped' { $lines.Add('An unexpected error stopped the automatic cleanup, and it does not run again. Finish the cleanup with the steps below.') }
         default {
-            $lines.Add('Yukon Union Telemetry tries again at your next Windows sign-in, once the games are closed (attempt ' + $Attempts + ' of ' + $MaxAttempts + ' was made).')
+            $lines.Add((Get-ChannelText 'Yukon Union Telemetry tries again at your next Windows sign-in, once the games are closed (attempt ') + $Attempts + ' of ' + $MaxAttempts + ' was made).')
             $lines.Add('You only need the steps below if that does not happen.')
         }
     }
     $lines.Add(''); $lines.Add('Close Euro Truck Simulator 2, American Truck Simulator and TruckersMP first.'); $lines.Add('')
     if (@($Folders).Count) {
-        $lines.Add("Remove the Yukon Union Telemetry plugin from these game folders, but only when the file's SHA-256 is one of the hashes below:")
+        $lines.Add((Get-ChannelText "Remove the Yukon Union Telemetry plugin from these game folders, but only when the file's SHA-256 is one of the hashes below:"))
         foreach ($folder in $Folders) { $lines.Add('  ' + $folder.game + ': ' + (Join-Path (Get-PluginsDirectory $folder.root) $PluginFile)) }
         $lines.Add(''); $lines.Add('Check a file with: Get-FileHash -Algorithm SHA256 "<file>"'); $lines.Add(''); $lines.Add("Hashes of this application's plugin:")
         foreach ($hash in $hashes) { $lines.Add('  ' + $hash) }
         $lines.Add('')
     }
     $lines.Add('Then delete the folders "plugins" and "uninstall" in ' + $DataRoot + '.')
-    $lines.Add('If that folder holds anything else, it is not a file Yukon Union Telemetry knows: check it first, and delete the folder only when nothing you need is left.')
-    $lines.Add(''); $lines.Add('Reinstalling Yukon Union Telemetry instead cancels this cleanup and keeps the plugin in use.'); $lines.Add('')
-    Write-AtomicText $Uninstall 'README.txt' (Get-ChannelText ($lines -join "`r`n"))
+    $lines.Add((Get-ChannelText 'If that folder holds anything else, it is not a file Yukon Union Telemetry knows: check it first, and delete the folder only when nothing you need is left.'))
+    $lines.Add(''); $lines.Add((Get-ChannelText 'Reinstalling Yukon Union Telemetry instead cancels this cleanup and keeps the plugin in use.')); $lines.Add('')
+    Write-AtomicText $Uninstall 'README.txt' ($lines -join "`r`n")
 }
 function Get-ChannelText([string]$Text) {
     # channelCopy in apps/desktop/src/channel.ts: the texts name the production product; another channel shows its own name.
+    # Only fixed sentences pass through it, never a game folder, data root or uninstall path, as in deferral.ts.
     if ($Channel -ceq 'production') { return $Text }
     return [regex]::Replace($Text, 'Yukon Union Telemetry(?! Staging)(?![A-Za-z0-9])', $Identity.displayName.Replace('$', '$$'))
 }
@@ -662,17 +663,17 @@ function Show-Summary($Roots) {
     # One message box, production only: a test run never shows a window that could block it.
     if ($Roots.mode -ne 'production') { $script:Result.messageBox = 'suppressed'; return }
     $text = switch ($script:Result.outcome) {
-        'complete' { 'Yukon Union Telemetry finished removing its game plugin and its local data.' }
-        'deferred' { 'Yukon Union Telemetry could not finish removing its game plugin yet: ' + (Get-ReasonText $script:Result.code) + '. It tries again at your next sign-in (attempt ' + $script:Result.attempts + ' of ' + $MaxAttempts + ').' }
-        'stopped' { 'Yukon Union Telemetry stopped trying to remove its game plugin after ' + $script:Result.attempts + ' attempts: ' + (Get-ReasonText $script:Result.code) + '. README.txt in ' + $Roots.uninstall + ' lists the steps to finish by hand.' }
-        'refused' { if ($script:Result.readme) { 'Yukon Union Telemetry could not finish removing its game plugin and its local data (' + $script:Result.code + '). README.txt in ' + $Roots.uninstall + ' says what happens next and how to finish by hand.' } else { $null } }
+        'complete' { (Get-ChannelText 'Yukon Union Telemetry finished removing its game plugin and its local data.') }
+        'deferred' { (Get-ChannelText 'Yukon Union Telemetry could not finish removing its game plugin yet: ') + (Get-ReasonText $script:Result.code) + '. It tries again at your next sign-in (attempt ' + $script:Result.attempts + ' of ' + $MaxAttempts + ').' }
+        'stopped' { (Get-ChannelText 'Yukon Union Telemetry stopped trying to remove its game plugin after ') + $script:Result.attempts + ' attempts: ' + (Get-ReasonText $script:Result.code) + '. README.txt in ' + $Roots.uninstall + ' lists the steps to finish by hand.' }
+        'refused' { if ($script:Result.readme) { (Get-ChannelText 'Yukon Union Telemetry could not finish removing its game plugin and its local data (') + $script:Result.code + '). README.txt in ' + $Roots.uninstall + ' says what happens next and how to finish by hand.' } else { $null } }
         default { $null }
     }
     if ($null -eq $text) { return }
     try {
         Add-Type -AssemblyName System.Windows.Forms
         $icon = if ($script:Result.outcome -eq 'complete') { [Windows.Forms.MessageBoxIcon]::Information } else { [Windows.Forms.MessageBoxIcon]::Warning }
-        [void][Windows.Forms.MessageBox]::Show((Get-ChannelText $text), (Get-ChannelText 'Yukon Union Telemetry uninstall'), [Windows.Forms.MessageBoxButtons]::OK, $icon)
+        [void][Windows.Forms.MessageBox]::Show($text, (Get-ChannelText 'Yukon Union Telemetry uninstall'), [Windows.Forms.MessageBoxButtons]::OK, $icon)
         $script:Result.messageBox = 'shown'
     } catch { $script:Result.messageBox = 'failed' }
 }

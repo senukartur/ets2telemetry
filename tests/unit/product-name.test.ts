@@ -233,7 +233,12 @@ describe('the user-facing copy of a staging build', () => {
   it('names no production identity anywhere', async () => {
     const {texts} = await stagingCopy();
     expect(texts.length).toBeGreaterThan(500);
-    const offending = texts.filter(({text}) => PRODUCTION_NAMES.some(pattern => pattern.test(text))).map(({source, text}) => `${source}: ${text}`);
+    // The export refusal names both data roots on purpose (UP12: a staging export refuses production's too).
+    const BOTH_ROOTS = /%LOCALAPPDATA%\\ETS2TelemetryStaging (?:and|и) %LOCALAPPDATA%\\ETS2Telemetry\./g;
+    const offending = texts.filter(({text}) => PRODUCTION_NAMES.some(pattern => pattern.test(text.replace(BOTH_ROOTS, ''))))
+      .map(({source, text}) => `${source}: ${text}`);
+    expect(texts.filter(({text}) => text.match(BOTH_ROOTS) !== null).map(({source}) => source).sort())
+      .toEqual(['APP_COPY_KEYS source texts', 'i18n/en.ts', 'i18n/ru.ts', 'strings.ts DIAGNOSTICS_EXPORT_ERROR_TEXT', 'strings.ts JOURNAL_EXPORT_ERROR_TEXT']);
     expect(offending).toEqual([]);
   });
 
@@ -244,10 +249,14 @@ describe('the user-facing copy of a staging build', () => {
     expect(strings.UNINSTALL_STRINGS.finishedFailed).toContain('%LOCALAPPDATA%\\ETS2TelemetryStaging by hand');
     expect(strings.UNINSTALL_NOTE_TEXT.LAYOUT_NOT_PLAIN).toContain('ets2telemetry-plugin-staging.dll');
     const refused = strings.JOURNAL_EXPORT_ERROR_TEXT.EXPORT_TARGET_REFUSED;
-    expect(refused).toBe('That location cannot be used. Choose a folder outside the Yukon Union Telemetry Staging data folder, %LOCALAPPDATA%\\ETS2TelemetryStaging.');
+    // A staging export refuses both data roots, so the copy names both (UP12).
+    expect(refused).toBe('That location cannot be used. Choose a folder outside the Yukon Union Telemetry Staging data folders, %LOCALAPPDATA%\\ETS2TelemetryStaging and %LOCALAPPDATA%\\ETS2Telemetry.');
+    expect(strings.DIAGNOSTICS_EXPORT_ERROR_TEXT.EXPORT_TARGET_REFUSED).toBe(refused);
     // The English text is still the lookup key of its Russian translation, which names the staging folder too.
     expect(appCopy(refused, 'ru')).toBe(ru['copy.that-location-cannot-be-used-choose-a-folder-outside-the-ets2telemet']);
-    expect(appCopy(refused, 'ru')).toContain('Yukon Union Telemetry Staging, %LOCALAPPDATA%\\ETS2TelemetryStaging');
+    expect(appCopy(refused, 'ru')).toBe('Это расположение недоступно. Выберите папку вне папок данных Yukon Union Telemetry Staging: %LOCALAPPDATA%\\ETS2TelemetryStaging и %LOCALAPPDATA%\\ETS2Telemetry.');
+    // The game-folder check refuses only the channel's own data root, and its copy says so.
+    expect(strings.PLUGIN_FOLDER_REFUSAL_TEXT.FOLDER_UNSUPPORTED_PATH).toContain('Yukon Union Telemetry Staging folders: %LOCALAPPDATA%\\ETS2TelemetryStaging and the program folder.');
     expect(Object.isFrozen(strings.STRINGS) && Object.isFrozen(ru)).toBe(true);
   });
 });

@@ -263,7 +263,8 @@ describe('user copy in each channel', () => {
   });
 
   it('names the staging product, folders and plugin in staging', () => {
-    expect(channelCopy(copy, CHANNEL_IDENTITIES.staging)).toBe('Choose a folder outside the Yukon Union Telemetry Staging data folder, %LOCALAPPDATA%\\ETS2TelemetryStaging. ' +
+    // The refusal's single data folder becomes the list of both roots a staging export refuses (UP12).
+    expect(channelCopy(copy, CHANNEL_IDENTITIES.staging)).toBe('Choose a folder outside the Yukon Union Telemetry Staging data folders, %LOCALAPPDATA%\\ETS2TelemetryStaging and %LOCALAPPDATA%\\ETS2Telemetry. ' +
       'Install root %LOCALAPPDATA%\\ETS2TelemetryDesktopStaging, Roaming %APPDATA%\\ETS2Telemetry Desktop Staging, plugin ets2telemetry-plugin-staging.dll.');
     // Names that only start with a production name stay, and the staging display name is never extended twice.
     for (const text of ['%LOCALAPPDATA%\\ETS2TelemetryStaging', 'ets2telemetry-plugin.dll2', 'Yukon Union Telemetry Staging', 'Yukon Union Telemetryx'])
