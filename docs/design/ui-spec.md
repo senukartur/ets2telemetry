@@ -1,6 +1,6 @@
 # Desktop UI specification (Yukon Union style)
 
-Status: design target, October 19, 2026. This document and [the mockup](mockup.html) describe the final look of the desktop application and its overlay. They do not change product requirements, contracts or acceptance criteria, and they do not authorize implementation. Each implementing package needs its own card and follows [AGENTS.md](../../AGENTS.md).
+Status: design target, October 19, 2026. This document and [the mockup](mockup.html) describe the final look of the desktop application and its overlay. They do not change product requirements, contracts or acceptance criteria, and they do not authorize implementation. Each implementing package needs its own card and follows [the agent rules](../agent-rules.md).
 
 The owner asked for a final mockup that matches the Yukon Union community dashboard, adds the Hard Mode status from [ET-026](https://trello.com/c/Cl5oNGTw), and can be implemented by agents. The owner chose: files in the repository, English with a Russian variant, the "Yukon Union Telemetry" brand, and screens for account and sync, first run, and empty and error states besides Live, Journal, Trip details, Settings, Hard Mode and the overlay.
 

@@ -272,7 +272,7 @@ Open authorizations as of October 28, 2026. Check the Trello board and the decis
 
 | Card | Authorized | Not authorized | Record |
 | --- | --- | --- | --- |
-| ET-055 | In-app updates and the staging channel, nine PRs; the agent may squash merge each after tests and independent review | Any release or signing by an agent | [ET-055](../DECISION-LOG.md#et-055-in-app-updates-and-staging-channel--october-28-2026) |
+| ET-055 | In-app updates and the staging channel. The nine planned PRs are merged (#207–#214 and #216), so the merge authority for them is spent; a later ET-055 PR needs its own owner instruction | Any release or signing by an agent | [ET-055](../DECISION-LOG.md#et-055-in-app-updates-and-staging-channel--october-28-2026) |
 | ET-042, ET-043, ET-044 | Hold transferred real-environment checks (multi-monitor and DPI; accessibility, unit profile and close-to-tray overlay; consolidated Review-card validation) | Treating them as passed | [ET-012 closeout](../DECISION-LOG.md#et-012-administrative-closeout-and-code-gates--october-22-2026), [ET-011 closeout](../DECISION-LOG.md#et-011-closeout-authorization--october-22-2026) |
 
 ## Documentation Budget
@@ -291,6 +291,6 @@ The owner decided on October 28, 2026 to limit the documentation that agents wri
 
 ## Maintaining This File
 
-- Do not add dated authorization, acceptance or implementation-update sections here. Record each new owner decision at the end of [DECISION-LOG.md](../DECISION-LOG.md).
+- Do not add dated authorization, acceptance or implementation-update sections here. The three dated sections Repository visibility and license, Branch protection and Uninstall removes local data are the only exception: they are standing rules that other documents link to by anchor. Record each new owner decision at the end of [DECISION-LOG.md](../DECISION-LOG.md).
 - Change this file only when a rule that applies to all work changes: update [Standing Owner Rules](#standing-owner-rules), [Active Authorizations](#active-authorizations) or [Current Project State](#current-project-state) in place, with a link to the log entry. Keep [AGENTS.md](../AGENTS.md) at about 1,000 characters: it holds only the basics every session needs.
 - Keep this file under about 45 KB; move a rule that applies only to one area into that area's document instead of growing this file.

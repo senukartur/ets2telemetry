@@ -17,7 +17,7 @@ Follow [AGENTS.md](AGENTS.md) and [the agent rules](docs/agent-rules.md). Before
 - Implementation evidence: Git commits, PR diffs, actual check results, and recorded manual acceptance evidence.
 - Recovery state: the coordinator's local execution ledger described below. Reconcile it with GitHub and Trello; it is not proof that a check passed or a card is complete.
 
-Discover available Trello tools or an already configured API integration. Read the board and target cards before changing them. Verify read and write access separately. A board URL or an old export does not establish current access or status. Use Git and GitHub CLI for repository operations as specified in AGENTS.md.
+Discover available Trello tools or an already configured API integration. Read the board and target cards before changing them. Verify read and write access separately. A board URL or an old export does not establish current access or status. Use Git and GitHub CLI for repository operations as specified in [the agent rules](docs/agent-rules.md#git-workflow).
 
 The launch prompt authorizes updates to the selected implementation cards: status moves, checklist results, and concise progress, blocker, and PR comments. Keep these writes with the coordinator. Preserve unrelated descriptions, comments, cards, and board structure. Do not create/delete cards, lists, or dependencies or change acceptance criteria without an owner instruction. Avoid duplicate comments: reread after an uncertain write before retrying.
 
@@ -30,7 +30,7 @@ Local `plan.md` and `plan-review.md`, if present, are review drafts rather than 
 1. Inspect Git status, branch, worktrees, existing PRs, and local state. Preserve unrelated changes. Reuse an existing assignment when continuing the same work; do not start a duplicate implementation or PR.
 2. Establish the owner's current scope and stop conditions. The supplied launch prompt selects the prototype through ET-009, including ET-022; later local MVP and server work require a new scope instruction.
 3. Read current card briefs and reconcile prerequisites against accepted results and merged PRs. A card in Done with missing required evidence, or a merged PR with incomplete acceptance, does not satisfy its dependency. Report discrepancies and keep dependent work ineligible.
-4. Before new implementation, update a clean local `main` with `git pull --ff-only`, following AGENTS.md. Do not switch a checkout used by another agent. Create each task branch from the verified updated base; enable `.githooks` in each checkout.
+4. Before new implementation, update a clean local `main` with `git pull --ff-only`, following [the agent rules](docs/agent-rules.md#git-workflow). Do not switch a checkout used by another agent. Create each task branch from the verified updated base; enable `.githooks` in each checkout.
 5. Assign one accountable worker per card. Record the assignment before spawning it. Start with one implementation worker and a separate reviewer for ET-001. After the scaffold is accepted, allow at most two implementation workers and one reviewer concurrently, always within the runtime's available slots.
 6. Continue eligible independent work in scope while other cards await review or a manual check. If all remaining work needs owner review, access, or game evidence, save a concrete handoff and yield. Resume on new owner input; this document does not schedule automatic wakeups or authorize recurring automation (no `/loop`, scheduled tasks, cron triggers, or polling of CI or Trello).
 

@@ -1,4 +1,4 @@
-<!-- Title: [ET-XXX] type: summary, using the work-package ID when one exists, or [NO-CARD] with the reason stated under Change. See AGENTS.md. -->
+<!-- Title: [ET-XXX] type: summary, using the work-package ID when one exists, or [NO-CARD] with the reason stated under Change. See docs/agent-rules.md#commits-and-pull-requests. -->
 
 ## Change
 

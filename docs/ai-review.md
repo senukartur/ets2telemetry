@@ -17,7 +17,7 @@ Concurrency is set per job. The automatic review cancels its own earlier run for
 
 Each job runs on `ubuntu-latest` with a 20-minute timeout and job permissions limited to `contents: read`, `pull-requests: write` and `issues: write`. Claude may read the repository and post PR comments through the job's `GITHUB_TOKEN`; it cannot push commits. Allowed tools are restricted to `Read`, `Grep`, `Glob`, `gh pr view`, `gh pr diff`, `gh pr comment` and inline review comments. Each run posts a new summary comment. Both jobs pin the model with `--model claude-sonnet-5-5` so an action update cannot change it silently; change both `claude_args` entries to switch models.
 
-The workflow asks Claude to read [AGENTS.md](../AGENTS.md), then the portions of `docs/CONCEPT.md`, `docs/TESTING.md` and `docs/` touched by the diff. Its prompt lists project-specific constraints to check; update it when AGENTS.md changes a review-relevant invariant.
+The workflow asks Claude to read [AGENTS.md](../AGENTS.md), then the parts of [docs/agent-rules.md](agent-rules.md), `docs/CONCEPT.md`, `docs/TESTING.md` and `docs/` that apply to the diff. Its prompt lists project-specific constraints to check; update it when `docs/agent-rules.md` changes a review-relevant invariant.
 
 ## Setup
 

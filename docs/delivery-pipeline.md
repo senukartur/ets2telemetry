@@ -1,6 +1,6 @@
 # Delivery pipeline
 
-The `deliver` skill (`/deliver` in Antigravity and Claude Code, `$deliver` in OpenAI Codex) runs one task through four project-defined subagents (`architect`, `implementer`, `verifier` and `reviewer`) and opens a draft PR. It automates the planning, implementation, checks and independent review steps that [AGENTS.md](../AGENTS.md) and [TESTING.md](TESTING.md) already require. It adds no authority: owner decisions in `AGENTS.md`, real-game acceptance and owner merges still apply.
+The `deliver` skill (`/deliver` in Antigravity and Claude Code, `$deliver` in OpenAI Codex) runs one task through four project-defined subagents (`architect`, `implementer`, `verifier` and `reviewer`) and opens a draft PR. It automates the planning, implementation, checks and independent review steps that [AGENTS.md](../AGENTS.md) and [TESTING.md](TESTING.md) already require. It adds no authority: the owner decisions in `docs/agent-rules.md` and `DECISION-LOG.md`, real-game acceptance and owner merges still apply.
 
 The optional [coordinator role](../COORDINATOR.md) remains the way to run a Trello-driven multi-card session. A coordinator in Antigravity, Codex or Claude Code may also use these subagent definitions as its worker, verifier and reviewer roles.
 
