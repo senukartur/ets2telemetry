@@ -8,7 +8,7 @@ This document is runtime-neutral: the coordinator may be Codex or Claude Code. T
 
 Act as the accountable coordinator: select eligible cards, delegate bounded implementation, integrate results, verify acceptance evidence, maintain execution status, and prepare PRs for owner review. Use subagents for implementation and independent review. Routine decisions within the approved scope do not require repeated confirmation.
 
-Follow [AGENTS.md](AGENTS.md) and [the agent rules](docs/agent-rules.md). Before planning, read [concept.md](concept.md) and [TESTING.md](TESTING.md), and the sections of [DECISION-LOG.md](DECISION-LOG.md) and [DESIGN-DECISIONS.md](DESIGN-DECISIONS.md) that the work needs, as [Start Here](docs/agent-rules.md#start-here) describes, rather than whole files. Discuss requirement or major architecture changes with the owner. Speak Russian with the owner; write internal documentation, handoffs, commit messages, and PR text in English.
+Follow [AGENTS.md](AGENTS.md) and [the agent rules](docs/agent-rules.md). Before planning, read [CONCEPT.md](docs/CONCEPT.md) and [TESTING.md](docs/TESTING.md), and the sections of [DECISION-LOG.md](DECISION-LOG.md) and [DESIGN-DECISIONS.md](DESIGN-DECISIONS.md) that the work needs, as [Start Here](docs/agent-rules.md#start-here) describes, rather than whole files. Discuss requirement or major architecture changes with the owner. Speak Russian with the owner; write internal documentation, handoffs, commit messages, and PR text in English.
 
 ## Sources and access
 
@@ -110,7 +110,7 @@ Relevant REG scenarios and required checks:
 Local commit responsibility; no push, PR, or Trello write unless assigned:
 Return: changed paths, commit/diff, criterion-by-criterion results,
 actual commands and outcomes, remaining checks, blockers, and next action.
-Read the card brief, concept.md, TESTING.md and the applicable sections of
+Read the card brief, docs/CONCEPT.md, docs/TESTING.md and the applicable sections of
 AGENTS.md, DECISION-LOG.md and DESIGN-DECISIONS.md, never whole files.
 Report scope conflicts promptly; do not overwrite another agent's work.
 ```
@@ -119,7 +119,7 @@ Steer a worker when new evidence changes its assignment. On reassignment or inte
 
 ## Verification and independent review
 
-The coordinator reads the final diff and checks that the assigned scope, shared interfaces, and card criteria are satisfied. Follow TESTING.md for existing baseline checks and additional boundary checks. Feature tests belong in their feature PR; ET-022 and ET-019 do not replace them. For documentation-only tasks, use document checks rather than application tests.
+The coordinator reads the final diff and checks that the assigned scope, shared interfaces, and card criteria are satisfied. Follow docs/TESTING.md for existing baseline checks and additional boundary checks. Feature tests belong in their feature PR; ET-022 and ET-019 do not replace them. For documentation-only tasks, use document checks rather than application tests.
 
 Use a separate reviewer subagent for each implementation PR. Give it the card brief, requirements, exact candidate commit, base commit, absolute worktree path, relevant REG scenarios, and reported checks. Request review of correctness, data integrity, security boundaries, contract compatibility, missing tests, and scope drift as applicable. Reviewers return actionable findings with file/line references and remaining acceptance gaps; they do not edit files, publish reviews, or merge.
 
@@ -127,7 +127,7 @@ Resolve relevant findings, inspect the fixes, and rerun affected checks. For fin
 
 Builds made by the coordinator, workers, verifiers and reviewers are staging builds (ET-055 UP13, [the decision log](DECISION-LOG.md#et-055-in-app-updates-and-staging-channel--october-28-2026)). Leave `ETS2TELEMETRY_BUILD_CHANNEL` unset: never build with `production` or set the owner-only `ETS2TELEMETRY_OWNER_PRODUCTION_BUILD`, never assign a production build or a production install to an agent, and give the owner a feature-test build only as a staging Setup (`YukonUnionTelemetry-Staging-Setup-<version>.exe`), which installs beside the owner's production application and uses `%LOCALAPPDATA%\ETS2TelemetryStaging`. A production artifact comes only from a Windows CI run on `main`, a push or a dispatch on `main`; a dispatch on a task branch builds staging, and its artifact is never installed as production ([docs/ci.md](docs/ci.md#build-channels-et-055-pr-4)).
 
-Use real pipes and isolated storage for their integration boundaries, deterministic fixtures for domain logic, and actual games for SDK/window/input compatibility as TESTING.md requires. Never substitute simulator results for ETS2, ATS, Convoy, TruckersMP, latency, or frame-time evidence. Do not install or replace a DLL while the game is running or touch unrelated plugins. Coordinate required manual sessions with the owner using a concrete checklist and candidate identity.
+Use real pipes and isolated storage for their integration boundaries, deterministic fixtures for domain logic, and actual games for SDK/window/input compatibility as docs/TESTING.md requires. Never substitute simulator results for ETS2, ATS, Convoy, TruckersMP, latency, or frame-time evidence. Do not install or replace a DLL while the game is running or touch unrelated plugins. Coordinate required manual sessions with the owner using a concrete checklist and candidate identity.
 
 ## PR and board lifecycle
 

@@ -14,7 +14,7 @@ The owner asked for a final mockup that matches the Yukon Union community dashbo
 | [assets/logo.png](assets/logo.png) | The application logo (bear head), white line art on a transparent background, 1024 × 1024 PNG. Rules in [§3 Logo](#3-tokens-type-and-icons). |
 | [assets/app-icon.png](assets/app-icon.png) | A 256 px preview of the application icon (the "road merge" mark). Rules in [§3 Application icon](#3-tokens-type-and-icons). |
 
-Precedence: docs/agent-rules.md and concept.md (product and data rules) → this spec → tokens.css → the mockup's pixels. If the mockup and this spec disagree, follow this spec and report the difference.
+Precedence: docs/agent-rules.md and docs/CONCEPT.md (product and data rules) → this spec → tokens.css → the mockup's pixels. If the mockup and this spec disagree, follow this spec and report the difference.
 
 **Spec ids.** Every region in the mockup carries `data-spec="<id>"`, for example `live.hardMode`. Reuse the id as the component's `data-testid` (or as its prefix), so that tests, reviews and this document point at the same thing. The tables below list every id.
 

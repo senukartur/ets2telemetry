@@ -12,7 +12,7 @@
 //
 // Every expectation is written by hand in tests/fixtures/recording/<id>.rows.expected.json from docs/trips.md (a gap
 // inside an open trip closes it as partial with an event-loss interval, T10 and trip-reducer case 8), docs/storage.md,
-// docs/protocol/v1.md §9 and docs/telemetry-service-v1.md (G6), never read back from the code under test (TESTING.md §4).
+// docs/protocol/v1.md §9 and docs/telemetry-service-v1.md (G6), never read back from the code under test (docs/TESTING.md §4).
 // Each case also checks that every ACK is within committed coverage, the history invariants I1-I5
 // (scripts/ci/history-invariants.mjs), the committed loss counts, and the journal list row and intervals through
 // JournalService with main's reply check. Waits count held commits, frames, coverage and ACKs; real-time bounds are named

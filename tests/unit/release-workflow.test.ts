@@ -96,7 +96,7 @@ it('reads releases/latest and other 404-meaningful answers only through gh-get.s
   expect(text).not.toContain('gh release view');
 });
 
-// Owner decision of October 28, 2026 (concept.md, "UP15 and UP16 amended"): the main-ancestry proof and
+// Owner decision of October 28, 2026 (DESIGN-DECISIONS.md, "UP15 and UP16 amended"): the main-ancestry proof and
 // the refusal of a tag named main are production-only, so a staging release may come from any branch's CI run. The
 // workflow itself is still dispatched on main only, for both channels.
 it('proves a production run\'s commit is on the main branch and refuses a tag named main, for production only', async () => {

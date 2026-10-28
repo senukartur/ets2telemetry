@@ -46,7 +46,7 @@ These dated notes stood inside the rule sections of `AGENTS.md`. They are listed
 
 ### From "Start Here"
 
-Read [concept.md](concept.md) before planning or implementing changes. It contains the product requirements, architecture baseline, implementation sequence, acceptance criteria, and research sources. Read [TESTING.md](TESTING.md) before changing behavior or test infrastructure. This file contains repository-wide working instructions and a compact handoff.
+Read [CONCEPT.md](docs/CONCEPT.md) before planning or implementing changes. It contains the product requirements, architecture baseline, implementation sequence, acceptance criteria, and research sources. Read [TESTING.md](docs/TESTING.md) before changing behavior or test infrastructure. This file contains repository-wide working instructions and a compact handoff.
 
 ### From "Product Requirements to Preserve"
 
@@ -74,13 +74,13 @@ ET-023b PowerShell analysis update on October 11, 2026: `npm run lint:ps` runs h
 
 ET-001 recovery update on October 11, 2026: packaged worker/native dependency paths, supervised shutdown, bounded structured logs, Job containment and static artifact inspection are implemented. The owner revoked the native launch hold and VM requirement. Native installed scaffold acceptance is recorded, including the original failed wrapper report and separate corrected postcondition/owned cleanup. Historical guest harnesses retain their guards; no further VM execution is planned. Preserve bounded owned launches, isolated test state and unrelated user data. [Validation](docs/validation/et-001.md) records artifact/review identities and the remaining unexplained startup flake. Longer stability, actual games and resolution of the original Windows-wide freezes remain unproven.
 
-ET-002a scheduling update on October 11, 2026: the owner explicitly authorized early protocol v0 implementation and a draft PR from updated `main`, deferring SP-01 real-game checks. SP-01 PR #8 remains draft and unaccepted: ETS2 single-player windowed appearance failed and needs a real retry; Convoy remains pending. Preserve those results. The exception does not authorize protocol v1 or waive other acceptance/merge prerequisites; see [COORDINATOR.md](COORDINATOR.md) and [concept.md](concept.md).
+ET-002a scheduling update on October 11, 2026: the owner explicitly authorized early protocol v0 implementation and a draft PR from updated `main`, deferring SP-01 real-game checks. SP-01 PR #8 remains draft and unaccepted: ETS2 single-player windowed appearance failed and needs a real retry; Convoy remains pending. Preserve those results. The exception does not authorize protocol v1 or waive other acceptance/merge prerequisites; see [COORDINATOR.md](COORDINATOR.md) and [CONCEPT.md](docs/CONCEPT.md).
 
 AI review update on October 11, 2026: an advisory Claude code review workflow and a root `CLAUDE.md` that imports this file were added. The workflow requires an owner-provided `CLAUDE_CODE_OAUTH_TOKEN` or `ANTHROPIC_API_KEY` secret; its comments never count as approval, a required check, or verification evidence. The workflow and setup guide were removed on October 17, 2026, then restored on October 18, 2026 (Europe/Warsaw) with `claude-sonnet-5-5` at the owner's request.
 
-Claude review restoration on October 18, 2026: the advisory workflow and setup guide are active again. They do not replace independent review, required Windows CI, or real-game criteria governed by this file and [TESTING.md](TESTING.md).
+Claude review restoration on October 18, 2026: the advisory workflow and setup guide are active again. They do not replace independent review, required Windows CI, or real-game criteria governed by this file and [TESTING.md](docs/TESTING.md).
 
-Follow [TESTING.md](TESTING.md) for regression scenarios, test layers, CI/merge policy, and real-game evidence. ET-001 establishes scaffold tests; ET-022 establishes CI, while ET-019 adds broader recovery coverage later. Neither task replaces tests owned by each implementing card. ET-022 provides a Windows x64 workflow and bounded scaffold runtime checks; clean hosted execution and deliberate failure/restoration are recorded in [ET-022 validation](docs/validation/et-022.md). Final current-head checks, independent review and owner merge remain required. Broader feature regression suites remain pending.
+Follow [TESTING.md](docs/TESTING.md) for regression scenarios, test layers, CI/merge policy, and real-game evidence. ET-001 establishes scaffold tests; ET-022 establishes CI, while ET-019 adds broader recovery coverage later. Neither task replaces tests owned by each implementing card. ET-022 provides a Windows x64 workflow and bounded scaffold runtime checks; clean hosted execution and deliberate failure/restoration are recorded in [ET-022 validation](docs/validation/et-022.md). Final current-head checks, independent review and owner merge remain required. Broader feature regression suites remain pending.
 
 ## ET-008 code-acceptance exception — October 12, 2026
 

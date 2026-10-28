@@ -2,9 +2,9 @@
 
 This file holds the current testing rules and the permanent regression scenarios. It is not a log.
 
-**Changing this file.** Change it only when a testing rule changes or a regression scenario is added. A PR describes the tests it adds in its description, and each new test entry point gets one row in the [test index](docs/regression-registry.md). The earlier full text, with the per-card test records, is in [TESTING-HISTORY.md](TESTING-HISTORY.md).
+**Changing this file.** Change it only when a testing rule changes or a regression scenario is added. A PR describes the tests it adds in its description, and each new test entry point gets one row in the [test index](regression-registry.md). The earlier full text, with the per-card test records, is in [TESTING-HISTORY.md](../TESTING-HISTORY.md).
 
-To find the tests for a feature or scenario, search the [test index](docs/regression-registry.md) for its REG ID or file, then read those tests and the area's document in `docs/`.
+To find the tests for a feature or scenario, search the [test index](regression-registry.md) for its REG ID or file, then read those tests and the area's document in `docs/`.
 
 ## 1. Delivery rule
 
@@ -24,7 +24,7 @@ Passing tests reduce regression risk; they do not prove compatibility with every
 | Packaged application | The Forge package and the installer lifecycle in a marked test root on hosted runners | Native assets, bundled plugin and worker, clean startup, upgrade, uninstall, history preservation |
 | Game acceptance | Real ETS2 and ATS sessions and recorded observations | SDK callbacks, TruckersMP, click-through, focus, DPI and monitors, latency, frame time |
 
-Native OS dialogs may be substituted in automated journeys; real dialogs, tray actions, input pass-through and focus still need desktop checks. Never weaken release security to make a test pass. Commands and their setup are in [docs/setup.md](docs/setup.md) and [docs/ci.md](docs/ci.md).
+Native OS dialogs may be substituted in automated journeys; real dialogs, tray actions, input pass-through and focus still need desktop checks. Never weaken release security to make a test pass. Commands and their setup are in [docs/setup.md](setup.md) and [docs/ci.md](ci.md).
 
 ## 3. Design for useful tests
 
@@ -38,7 +38,7 @@ Native OS dialogs may be substituted in automated journeys; real dialogs, tray a
 
 ## 4. Permanent regression scenario corpus
 
-Every scenario below keeps the same ID across domain, integration and UI tests, without repeating every assertion at every layer. The [test index](docs/regression-registry.md) maps each test entry point to the scenarios it protects. A scenario without protection stays visibly pending; never add a passing placeholder. Fixtures record their scenario, input, timing, expected outcome and origin (synthetic or sanitized capture); committed captures contain no player, profile or personal data.
+Every scenario below keeps the same ID across domain, integration and UI tests, without repeating every assertion at every layer. The [test index](regression-registry.md) maps each test entry point to the scenarios it protects. A scenario without protection stays visibly pending; never add a passing placeholder. Fixtures record their scenario, input, timing, expected outcome and origin (synthetic or sanitized capture); committed captures contain no player, profile or personal data.
 
 | ID | Scenario | Required result | Primary owners |
 | --- | --- | --- | --- |
@@ -76,7 +76,7 @@ Every scenario below keeps the same ID across domain, integration and UI tests, 
 | Push to `main` and manual dispatch | The broader replay, recovery, extended and packaged suites, including the installer lifecycle |
 | Before a release | The exact candidate artifact, a fresh install and an upgrade, the real-game matrix and a one-hour recording session |
 
-- CI does not run on draft PRs or on changes limited to `**.md` and `docs/**`. A skipped or absent run is not a pass: the merge gate is a successful run of the three required jobs (`Windows x64 tests`, `Windows x64 scaffold`, `Windows x64 native AddressSanitizer`) on the final head after Ready for review ([docs/ci.md](docs/ci.md#triggers-and-draft-checks)).
+- CI does not run on draft PRs or on changes limited to `**.md` and `docs/**`. A skipped or absent run is not a pass: the merge gate is a successful run of the three required jobs (`Windows x64 tests`, `Windows x64 scaffold`, `Windows x64 native AddressSanitizer`) on the final head after Ready for review ([docs/ci.md](ci.md#triggers-and-draft-checks)).
 - A failing baseline suite blocks the change. Check the current PR commit, not an earlier run, and run every consumer of a changed shared contract or migration.
 - Required checks prove only that the jobs passed. Review, real-game and other acceptance evidence remain owner and reviewer policy; the advisory Claude review is never a required check.
 - Dependency upgrades (Electron, Node, better-sqlite3, the SDK, protocol tooling) need the native, packaged and migration checks besides unit tests. SDK, window, input, game-client and native changes need real-game checks that simulation cannot replace. If a machine or game is unavailable, keep the evidence pending instead of claiming success.
@@ -108,4 +108,4 @@ When the server phase is specified, extend this strategy with API and schema com
 
 The PR description names the protected scenarios, the tests added or changed, the commands actually run on the current commit with their results, and the manual checks still needed. Explain a justified test omission instead of inventing coverage.
 
-In the same PR, update the fixtures, and add one row to the [test index](docs/regression-registry.md) for every new test entry point (a test file, CTest family, PowerShell suite, runtime-smoke scenario or CLI smoke) with its REG IDs, mapping source, owning card, where it runs and its protected categories. Do not add per-card sections to this file or the registry ([documentation budget](docs/agent-rules.md#documentation-budget)). A card moves to Review with evidence; Done requires accepted criteria, including regression protection for the behavior it implemented.
+In the same PR, update the fixtures, and add one row to the [test index](regression-registry.md) for every new test entry point (a test file, CTest family, PowerShell suite, runtime-smoke scenario or CLI smoke) with its REG IDs, mapping source, owning card, where it runs and its protected categories. Do not add per-card sections to this file or the registry ([documentation budget](agent-rules.md#documentation-budget)). A card moves to Review with evidence; Done requires accepted criteria, including regression protection for the behavior it implemented.

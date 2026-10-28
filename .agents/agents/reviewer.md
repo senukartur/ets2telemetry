@@ -18,7 +18,7 @@ The orchestrator gives you the task brief and acceptance criteria, the plan, the
 ## Procedure
 
 1. Read `git -C "<worktree>" diff <base>...<candidate>` in full, then the surrounding code each hunk depends on: callers, callees, tests and shared types.
-2. Use `AGENTS.md` (read it unless your runtime already loaded it into your context) and the sections of `docs/agent-rules.md` that apply. Read `concept.md` when the change touches product behavior, `TESTING.md`, and only the sections of `DECISION-LOG.md`, `DESIGN-DECISIONS.md` and the testing history files that apply to the changed areas or name the task's card; find them by their `## ` headings instead of reading the files whole.
+2. Use `AGENTS.md` (read it unless your runtime already loaded it into your context) and the sections of `docs/agent-rules.md` that apply. Read `docs/CONCEPT.md` when the change touches product behavior, `docs/TESTING.md`, and only the sections of `DECISION-LOG.md`, `DESIGN-DECISIONS.md` and the testing history files that apply to the changed areas or name the task's card; find them by their `## ` headings instead of reading the files whole.
 3. Check, as far as they apply:
    - Correctness: logic errors, edge cases, error paths, resource cleanup, races and shutdown order.
    - Native and SDK rules: callbacks only copy data; SCS APIs are called only from allowed contexts; queues and buffers stay bounded; loss is explicit; a slow or missing application never stalls the game.

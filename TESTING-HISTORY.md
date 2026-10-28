@@ -1,9 +1,9 @@
 # Testing history
 
-This file holds the full text that `TESTING.md` contained until October 28, 2026, moved here verbatim: the status notes, the original sections 1–9 and the per-card test records with their RED experiments, run evidence and pending checks. [TESTING.md](TESTING.md) now holds only the current testing rules and the regression scenarios.
+This file holds the full text that `TESTING.md` contained until October 28, 2026, moved here verbatim: the status notes, the original sections 1–9 and the per-card test records with their RED experiments, run evidence and pending checks. [TESTING.md](docs/TESTING.md) now holds only the current testing rules and the regression scenarios.
 
 - Search by card or scenario ID, for example `rg -n "ET-015a|REG-006" TESTING-HISTORY.md`, and read only the matching sections.
-- In the moved text, "this document" means the former `TESTING.md`. Where it and the current [TESTING.md](TESTING.md) disagree, the current file governs.
+- In the moved text, "this document" means the former `TESTING.md`. Where it and the current [TESTING.md](docs/TESTING.md) disagree, the current file governs.
 - Do not add new records here. A PR describes its tests in its description ([documentation budget](docs/agent-rules.md#documentation-budget)).
 
 ET-012 closeout snapshot, October 22, 2026: independent round 9 passed 39/39 commands and 21/21 isolated journeys on
@@ -76,7 +76,7 @@ Owner exception on October 11, 2026 permits early ET-002a protocol v0 implementa
 
 Recorded on October 10, 2026; updated October 11, 2026. **Status: scaffold checks implemented and verified; ET-022 CI workflow implemented with hosted clean/failure/restoration evidence recorded; feature suites pending.** ET-001 defines Node unit, Electron startup/worker, native CTest, bounded native Windows installer and historical disposable-guest entrypoints. Current native evidence covers six normally completed install/repair/smoke/update/upgraded-smoke/uninstall operations, actual packaged SQLite/security/orderly shutdown, separate corrected uninstall postconditions and exact owned cleanup. The original failed wrapper report and an unexplained standalone Playwright launch timeout remain recorded. Exact identities and independent review belong in [the acceptance record](docs/validation/et-001.md). No game compatibility or full production REG-017 coverage is established.
 
-Read [concept.md](concept.md) for product behavior and [AGENTS.md](AGENTS.md) for the development workflow.
+Read [CONCEPT.md](docs/CONCEPT.md) for product behavior and [AGENTS.md](AGENTS.md) for the development workflow.
 
 Owner decision on October 11, 2026: ET-002a was explicitly accepted after its exact-head checks and independent review; PR #9 was squash merged as `247c076cf803529c4650e125544faaf0bc3ccad7`. The owner expanded the sequencing exception to start ET-003 and ET-005a from that updated `main` while SP-01 remains unaccepted and PR #8 stays draft. The real ETS2 single-player windowed retry and Convoy checks remain mandatory pending evidence. This decision changes sequencing only; it does not establish game compatibility, authorize protocol v1, or waive the acceptance and merge criteria of subsequent packages.
 

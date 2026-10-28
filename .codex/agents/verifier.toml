@@ -27,7 +27,7 @@ Confirm that every relative Markdown link and anchor in the changed files resolv
 
 ### Every code change
 
-This sequence mirrors the Windows CI jobs in `.github/workflows/windows-ci.yml` and the local rule in `TESTING.md`:
+This sequence mirrors the Windows CI jobs in `.github/workflows/windows-ci.yml` and the local rule in `docs/TESTING.md`:
 
 1. `npm run lint:install`, `npm run lint`, `npm run lint:ps`
 2. `npm run typecheck`, `npm test`, `npm run test:storage`

@@ -468,7 +468,7 @@ describe('GitHub answers', () => {
       [{status: 'in_progress', conclusion: null}, /did not complete successfully/], [{id: 1}, /is not run 41000000001/]
     ] as const) expect(() => checkReleaseRun(run(overrides), options()), String(reason)).toThrow(reason);
   });
-  // Owner decision of October 28, 2026 (concept.md, "UP15 and UP16 amended"): staging takes a push or a
+  // Owner decision of October 28, 2026 (DESIGN-DECISIONS.md, "UP15 and UP16 amended"): staging takes a push or a
   // dispatch run of this repository on any branch; production still takes main only.
   it('accepts a staging run dispatched on a feature branch and still refuses it for production', () => {
     const branch = run({head_branch: 'feat/staging-check', event: 'workflow_dispatch'});

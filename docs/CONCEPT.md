@@ -2,7 +2,7 @@
 
 This file describes the product idea and how its features work. It is not a log.
 
-**Changing this file.** Change it only when a feature is added or an existing feature's behavior changes. Edit the feature's description in place, in a few present-tense sentences. Do not add dates, task IDs, decisions, validation status or history: they belong in the PR description, the area's document in `docs/`, [DECISION-LOG.md](DECISION-LOG.md) for owner decisions, and `docs/validation/` for real-game evidence. The earlier full concept and the dated design decisions are in [DESIGN-DECISIONS.md](DESIGN-DECISIONS.md).
+**Changing this file.** Change it only when a feature is added or an existing feature's behavior changes. Edit the feature's description in place, in a few present-tense sentences. Do not add dates, task IDs, decisions, validation status or history: they belong in the PR description, the area's document in `docs/`, [DECISION-LOG.md](../DECISION-LOG.md) for owner decisions, and `docs/validation/` for real-game evidence. The earlier full concept and the dated design decisions are in [DESIGN-DECISIONS.md](../DESIGN-DECISIONS.md).
 
 ## Idea
 
@@ -84,4 +84,4 @@ Electron main (windows, tray, supervision)  <--  telemetry service (utilityProce
     `-- overlay window (React, sandboxed)
 ```
 
-The plugin serves live snapshots and durable gameplay events over a versioned protocol. The telemetry service validates them, builds the live view and trips, and saves history through its storage worker. Electron main owns the windows and passes the renderers only validated, formatted data through a narrow preload API; the renderers have no Node.js or file access. Details are in `docs/`: protocols in [docs/protocol](docs/protocol), trips in [docs/trips.md](docs/trips.md), storage in [docs/storage.md](docs/storage.md), the overlay in [docs/minimal-overlay.md](docs/minimal-overlay.md), and installation in [docs/user-guide.md](docs/user-guide.md).
+The plugin serves live snapshots and durable gameplay events over a versioned protocol. The telemetry service validates them, builds the live view and trips, and saves history through its storage worker. Electron main owns the windows and passes the renderers only validated, formatted data through a narrow preload API; the renderers have no Node.js or file access. Details are in `docs/`: protocols in [docs/protocol](protocol), trips in [docs/trips.md](trips.md), storage in [docs/storage.md](storage.md), the overlay in [docs/minimal-overlay.md](minimal-overlay.md), and installation in [docs/user-guide.md](user-guide.md).

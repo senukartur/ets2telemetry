@@ -4,17 +4,17 @@
 
 This file holds the rules that apply across tasks. [AGENTS.md](../AGENTS.md), which every agent session loads, keeps only a short summary and points here. Read the sections of this file that a task needs. Dated owner decisions, authorizations and implementation updates go to the [decision log](../DECISION-LOG.md), not here (see [Maintaining this file](#maintaining-this-file)).
 
-The other project documents are large. Read only the parts a task needs, never a whole file by default:
+Read the short documents whole and the large ones only in the parts a task needs:
 
-- [concept.md](../concept.md) is short: the product idea, its principles and how each feature works. Read it whole when a task touches product behavior.
+- [CONCEPT.md](CONCEPT.md) is short: the product idea, its principles and how each feature works. Read it whole when a task touches product behavior.
 - [DESIGN-DECISIONS.md](../DESIGN-DECISIONS.md) holds the earlier full concept and the dated design decision records of each card, with the decision IDs other documents cite (for example K1–K12).
-- [TESTING.md](../TESTING.md) is short: the testing rules and the permanent regression scenarios. Read it whole before changing behavior or tests. The [test index](regression-registry.md) maps each test entry point to its scenarios.
+- [TESTING.md](TESTING.md) is short: the testing rules and the permanent regression scenarios. Read it whole before changing behavior or tests. The [test index](regression-registry.md) maps each test entry point to its scenarios.
 - [TESTING-HISTORY.md](../TESTING-HISTORY.md) and the [registry history](regression-registry-history.md) hold the earlier per-card test records.
 - [DECISION-LOG.md](../DECISION-LOG.md) holds the dated owner decisions that used to be in this file.
 
 List the sections with `rg -n '^## ' DECISION-LOG.md DESIGN-DECISIONS.md TESTING-HISTORY.md`, find a card's records with `rg -n 'ET-015a' DECISION-LOG.md DESIGN-DECISIONS.md TESTING-HISTORY.md docs`, and read those sections with targeted reads.
 
-Keep the two documents consistent. Use `concept.md` for what the product does and this file for instructions that apply across tasks. Explicit user instructions take precedence over this documentation.
+Keep the two documents consistent. Use `docs/CONCEPT.md` for what the product does and this file for instructions that apply across tasks. Explicit user instructions take precedence over this documentation.
 
 Owner-approved deferred capabilities are tracked in [technical debt](technical-debt.md). An entry there records a future need; it does not expand the current milestone or authorize work outside the MVP scope.
 
@@ -200,7 +200,7 @@ Work on the milestone requested by the user. Routine implementation decisions wi
 
 The first implementation milestone is a complete path from game telemetry to a working speed/fuel overlay in both games, including TruckersMP. Subsequent milestones add application behavior, reliable recording, and distribution. The original sequence and acceptance criteria are in sections 9 and 10 of `DESIGN-DECISIONS.md`.
 
-Follow [TESTING.md](../TESTING.md) for regression scenarios, test layers, CI/merge policy, and real-game evidence. CI and the recovery suites do not replace the tests that each implementing card owns.
+Follow [TESTING.md](TESTING.md) for regression scenarios, test layers, CI/merge policy, and real-game evidence. CI and the recovery suites do not replace the tests that each implementing card owns.
 
 - Lint and static analysis run locally and in Windows CI before the build, with zero allowed findings: `npm run lint:install` and `npm run lint` (ESLint with type-aware rules and renderer/preload import boundaries) and `npm run lint:ps` (PSScriptAnalyzer over every tracked PowerShell file). New or changed code and PowerShell scripts must pass them; exceptions and their reasons are in [docs/setup.md](setup.md#linting).
 - The advisory Claude review workflow never counts as approval, a required check or verification evidence.
@@ -281,12 +281,12 @@ The owner decided on October 28, 2026 to limit the documentation that agents wri
 
 - **Evidence goes in the PR description.** Commands run, results, measurements, review outcomes, failed attempts and remaining checks belong in the PR description, not in committed files.
 - **No new documents** unless the owner asks for one, or a new interface, setup step or user-facing workflow has no place in an existing document. Never commit plans, summaries, handoffs, reports or per-PR notes.
-- **Edit in place.** When behavior changes, update the existing document that describes it and replace the outdated text. Do not append dated "update", "implementation update" or "follow-up" paragraphs, and do not add per-card or per-PR sections to `concept.md`, `TESTING.md` or other documents.
-- **`concept.md` describes features, not work.** Change it only when a feature is added or an existing feature's behavior changes, and then only by adding or editing that feature's short description in place: a few present-tense sentences, with no dates, task IDs, decisions or validation status. A bug fix, refactoring, test or internal change does not touch it.
-- **`TESTING.md` holds rules, not results.** Change it only when a testing rule changes or a regression scenario is added. The tests a PR adds are described in its description, and each new test entry point gets one row in the [test index](regression-registry.md), nothing more.
+- **Edit in place.** When behavior changes, update the existing document that describes it and replace the outdated text. Do not append dated "update", "implementation update" or "follow-up" paragraphs, and do not add per-card or per-PR sections to `docs/CONCEPT.md`, `docs/TESTING.md` or other documents.
+- **`docs/CONCEPT.md` describes features, not work.** Change it only when a feature is added or an existing feature's behavior changes, and then only by adding or editing that feature's short description in place: a few present-tense sentences, with no dates, task IDs, decisions or validation status. A bug fix, refactoring, test or internal change does not touch it.
+- **`docs/TESTING.md` holds rules, not results.** Change it only when a testing rule changes or a regression scenario is added. The tests a PR adds are described in its description, and each new test entry point gets one row in the [test index](regression-registry.md), nothing more.
 - **Owner decisions** get one short entry at the end of [DECISION-LOG.md](../DECISION-LOG.md), only when the owner decides something; architect or coordinator design decisions go in the PR description.
 - **Validation records** in `docs/validation/` are only for real-game or real-environment evidence that must outlive the PR, such as game versions, display modes, owner observations and checks still pending. Keep them short, one file per card.
-- **Required updates stay:** the regression registry rows that [TESTING.md](../TESTING.md) section 9 requires, the protocol and storage contract documents when a contract changes, and the user guide when user-visible behavior changes.
+- **Required updates stay:** the regression registry rows that [TESTING.md](TESTING.md) section 9 requires, the protocol and storage contract documents when a contract changes, and the user guide when user-visible behavior changes.
 - **Size.** A documentation change should be much smaller than the code change it describes. If it is not, cut it.
 
 ## Maintaining This File

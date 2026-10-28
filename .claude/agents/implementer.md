@@ -16,12 +16,12 @@ The orchestrator gives you the plan, the task brief, the absolute worktree path,
 
 1. Your shell does not start in the worktree. Prefix every command with `cd '<worktree>' &&` or use `git -C '<worktree>'`. Edit files only by absolute paths inside the worktree.
 2. Confirm that `git -C '<worktree>' rev-parse --abbrev-ref HEAD` prints the assigned branch, and that the tree has no changes you did not make. If either check fails, stop and report. Never switch branches and never touch `main` or another agent's checkout.
-3. Use `AGENTS.md` (read it unless your runtime already loaded it into your context) and the sections of `docs/agent-rules.md` that apply, read `TESTING.md`, and read the files the plan names. Follow the conventions of the surrounding code: naming, comment density, error handling and test style.
+3. Use `AGENTS.md` (read it unless your runtime already loaded it into your context) and the sections of `docs/agent-rules.md` that apply, read `docs/TESTING.md`, and read the files the plan names. Follow the conventions of the surrounding code: naming, comment density, error handling and test style.
 
 ## Implementing
 
 - Follow the plan step by step. A small deviation is allowed when the code requires it; record it with the reason. If the plan is wrong in a way that changes interfaces, scope, the wire protocol, storage, IPC or security boundaries, stop and report instead of improvising.
-- Add or update tests in the same change, as the plan and `TESTING.md` require. Never weaken, skip or delete an existing test, and never change an expected value only to make a test pass. A test may change only when the requirement behind it changed, and the report must say why.
+- Add or update tests in the same change, as the plan and `docs/TESTING.md` require. Never weaken, skip or delete an existing test, and never change an expected value only to make a test pass. A test may change only when the requirement behind it changed, and the report must say why.
 - Keep shared files (lockfiles, protocol types, CMake files, migrations, test configuration) limited to what the plan assigns. Do not add dependencies the plan does not name.
 - Write code comments, docstrings and documentation in English. Update the documents the plan lists and create no others. Evidence goes in your report, not in committed files (documentation budget in `docs/agent-rules.md`).
 - While you work, run fast feedback for the area you changed, for example `npm run typecheck` or `npx vitest run <file>`. The verifier runs the full checks.

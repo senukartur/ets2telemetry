@@ -34,7 +34,7 @@ packaged `scripts/ci/Invoke-SessionEndSmoke.ps1` sends native session messages o
 dashboard close. It checks the truthful handoff marker without weakening normal orderly-exit predicates. This is
 controlled native-message evidence; actual Windows sign-out/restart and service/storage completion remain separate.
 
-Read the full requirements in [TESTING.md](../TESTING.md). Pending means the owning component has not implemented an executable scenario; there are no passing empty cases. Partial protection does not satisfy the complete REG requirement.
+Read the full requirements in [TESTING.md](TESTING.md). Pending means the owning component has not implemented an executable scenario; there are no passing empty cases. Partial protection does not satisfy the complete REG requirement.
 
 ET-011 closeout (October 21, 2026) adds `tests/unit/exit-observation.test.ts` (Node/Vitest,
 REG-012/REG-017, ET-011, PR `npm test`): controlled request/process/Playwright ordering, the unchanged
@@ -151,12 +151,12 @@ ET-038 (adaptive stop grace, October 20, 2026) resolves G18 and extends partial 
 
 ## Test index (ET-019t, October 17, 2026)
 
-This index lists every test entry point once, with the scenarios it protects. The narrative rows above stay the record of what each scenario's protection proves; the index only says where a requirement is tested and what must not be removed. Paths are repository paths, because file basenames repeat across layers. Each new test entry point is added here in the PR that adds it ([TESTING.md](../TESTING.md#9-handoff-for-every-behavior-change)).
+This index lists every test entry point once, with the scenarios it protects. The narrative rows above stay the record of what each scenario's protection proves; the index only says where a requirement is tested and what must not be removed. Paths are repository paths, because file basenames repeat across layers. Each new test entry point is added here in the PR that adds it ([TESTING.md](TESTING.md#9-handoff-for-every-behavior-change)).
 
 Columns:
 
 - **REG IDs.** The scenarios the entry point protects in part. "Smoke evidence" marks a harness-integrity test: it guards the evidence of the runtime smokes for those scenarios, not the product behavior itself. "Harness" marks a test of a test helper that the named scenarios depend on.
-- **Source.** How the mapping was confirmed. R: this registry, a scenario row or a dated paragraph. F: `REG-0nn` tags in the test file. T: [TESTING.md](../TESTING.md). V: the validation record of the PR that added the file, found with `git log --diff-filter=A`; the record is named in brackets.
+- **Source.** How the mapping was confirmed. R: this registry, a scenario row or a dated paragraph. F: `REG-0nn` tags in the test file. T: [TESTING.md](TESTING.md). V: the validation record of the PR that added the file, found with `git log --diff-filter=A`; the record is named in brackets.
 - **Owning card.** The card and PR that added the entry point.
 - **Runs in.** PR: every Windows CI run on a code PR, in the job named (`Windows x64 tests`, `Windows x64 scaffold` or `Windows x64 native AddressSanitizer`). Extended: pushes to `main` and manual dispatch with `extended=true`. Extended campaigns workflow: the separate `windows-extended.yml` workflow, on pushes to `main` and by dispatch, not a required check (ET-019 PR-10). Soak workflow: run only by a dispatch of the separate `windows-soak.yml` workflow, never on push or pull_request, not a required check (ET-019 PR-12a). Manual: not run by CI.
 - **Protected.** The categories that must not be removed or weakened: ACK, dedup, gap, trip completeness, security (DACL, peer, authority, sandbox, the renderer boundary), v0/CAP0 isolation, historical fixture, and regression (a test for a fixed bug). The categories were assigned by reading each file's case titles. A dash means none of these; such a test can still be the only protection of its REG.

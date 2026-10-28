@@ -1,7 +1,7 @@
 // ET-019 PR-9: seeded mutation fuzzing of the TypeScript frame parsers (REG-010). Valid shared fixtures are mutated by a
 // seeded generator and fed to every TypeScript payload decoder, streaming frame decoder and broker stdout reader. Every
 // expectation below comes from the protocol documents (docs/protocol/v0.md, v1.md, cap0.md and the broker control in
-// docs/telemetry-service-v0.md), never from the code under test (TESTING.md section 4). There is no coverage guidance and
+// docs/telemetry-service-v0.md), never from the code under test (docs/TESTING.md section 4). There is no coverage guidance and
 // no native target here; coverage-guided fuzzing is TD-017.
 import {EventEmitter} from 'node:events';
 import {readFileSync} from 'node:fs';

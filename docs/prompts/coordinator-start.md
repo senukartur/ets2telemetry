@@ -11,7 +11,7 @@ Before sending the prompt, select the coordinator's model and reasoning level in
 
 ```text
 Act as the implementation coordinator for ETS2Telemetry in this repository.
-Follow AGENTS.md and COORDINATOR.md. Read concept.md and TESTING.md, and only
+Follow AGENTS.md and COORDINATOR.md. Read docs/CONCEPT.md and docs/TESTING.md, and only
 the sections of DECISION-LOG.md and DESIGN-DECISIONS.md that each step needs.
 
 Coordinate the first game-to-overlay milestone: ET-001 through ET-009,

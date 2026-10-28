@@ -2,7 +2,7 @@ name: Release
 # ET-055 PR-9 (docs/release.md#release-workflow-et-055): the only way a release is published. It never runs on pull requests
 # or pushes, and is itself dispatched on main only; a dispatch names a successful Windows CI run of this repository and a
 # channel. Production takes a run on main; staging takes a push or dispatch run on any branch (owner decision of October 28,
-# 2026; concept.md, "UP15 and UP16 amended"), never a pull request or a fork. The verify job checks that
+# 2026; DESIGN-DECISIONS.md, "UP15 and UP16 amended"), never a pull request or a fork. The verify job checks that
 # run, proves for production that its commit is on the main branch, checks its installer artifact and writes the unsigned
 # update manifest; only the publish jobs, each in its GitHub environment whose required reviewer is the owner, get
 # contents: write.
