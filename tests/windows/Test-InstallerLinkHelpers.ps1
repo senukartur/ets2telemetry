@@ -17,7 +17,7 @@ if (!(Test-Path -LiteralPath $Root -PathType Container) -or (Get-ChildItem -Lite
 $tokens = $null; $errors = $null
 $ast = [Management.Automation.Language.Parser]::ParseFile($Harness, [ref]$tokens, [ref]$errors)
 if ($errors.Count) { throw 'HARNESS_PARSE_FAILED' }
-$wanted = @('Find-ProductLinkFiles', 'Get-ProductLinks', 'Assert-ProductLinks', 'New-PlantedLink', 'Set-LegacyNames', 'Assert-LegacyNames', 'Remove-PlantedLinks',
+$wanted = @('Find-ProductLinkFiles', 'Get-ProductLinks', 'Assert-ProductLinks', 'New-PlantedLink', 'Set-LegacyNames', 'Assert-LegacyNames', 'Remove-PlantedLinks', 'Close-Disposable',
     'Read-UninstallEntries')
 $definitions = @($ast.FindAll({ param($node) $node -is [Management.Automation.Language.FunctionDefinitionAst] -and $wanted -contains $node.Name }, $true))
 if ($definitions.Count -ne $wanted.Count) { throw 'HARNESS_FUNCTIONS_MISSING' }
@@ -32,6 +32,8 @@ $companyFolder = Join-Path $programsFolder 'Artur Sianiuk'
 foreach ($folder in @($binaryRoot, $desktopFolder, $companyFolder)) { New-Item -ItemType Directory -Path $folder | Out-Null }
 $script:shortcutFolders = [ordered]@{desktop = $desktopFolder; 'start-menu' = $programsFolder}
 $script:hosted = $true
+# ET-055 PR-5: the active channel's names, as Use-Channel sets them from installer-guard.mjs (production here).
+$script:product = [pscustomobject]@{displayName = 'Yukon Union Telemetry'; executable = 'ETS2TelemetryDesktop.exe'; legacyDisplayNames = @('ETS2Telemetry Desktop')}
 $linkFolders = $null
 $plantedLinks = [Collections.Generic.List[object]]::new()
 $report = [ordered]@{steps = @()}
