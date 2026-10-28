@@ -2,7 +2,7 @@
 // fake timers, DurableDelivery and TripRecorderSink, over an async adapter of the first-insert storage model in
 // tests/shared/trip-replay.ts, which throws on any storage-rule violation. Messages are built from the shared protocol
 // v1 fixtures by tests/shared/trip-messages.ts. Expected effects and rows are written by hand from docs/trips.md,
-// docs/storage.md and the decisions R1-R17 (concept.md); none is read back from the code under test (REG-001,
+// docs/storage.md and the decisions R1-R17 (DESIGN-DECISIONS.md); none is read back from the code under test (REG-001,
 // REG-003, REG-004, REG-006, REG-007, REG-011). Real commits through the storage worker are in tests/storage.
 import {createHash} from 'node:crypto';
 import {EventEmitter} from 'node:events';

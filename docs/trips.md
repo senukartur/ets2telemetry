@@ -1,6 +1,6 @@
 # Trip lifecycle and completeness
 
-ET-014 adds a pure, deterministic trip reducer in [packages/telemetry-core/src/trips](../packages/telemetry-core/src/trips). It turns committed protocol v1 events and gaps, session changes, checkpoint hydration and disconnections into the storage `TripEffect` lists that [storage](storage.md#storage-api) applies in the same transaction as the event or gap. The coordinator adopted decisions T1–T20 under the owner's standing delegation of October 15, 2026 ([concept.md](../concept.md#et-014-authorization--october-15-2026)).
+ET-014 adds a pure, deterministic trip reducer in [packages/telemetry-core/src/trips](../packages/telemetry-core/src/trips). It turns committed protocol v1 events and gaps, session changes, checkpoint hydration and disconnections into the storage `TripEffect` lists that [storage](storage.md#storage-api) applies in the same transaction as the event or gap. The coordinator adopted decisions T1–T20 under the owner's standing delegation of October 15, 2026 ([DESIGN-DECISIONS.md](../DESIGN-DECISIONS.md#et-014-authorization--october-15-2026)).
 
 Status (October 15, 2026):
 
@@ -149,7 +149,7 @@ A gap-sourced untracked job is unaffected: a gap is itself a stream item in orde
 | active | different-key `job.configured` | active (new) | close `{none, different-job, partial}`; open the new trip |
 | active | `job.cleared` | awaiting-outcome | none |
 | awaiting-outcome | same-key `job.configured` with the trip's last `cargoLoaded` | reload-check | none |
-| awaiting-outcome or reload-check | same-key `job.configured` with a different `cargoLoaded`, such as a save from before a cargo-market pickup | active (new) | close `{none, configuration-cleared, partial}`; open a new trip at this event with a `reload` continuation interval. The closed trip keeps its `cargoLoaded` (concept.md, October 14, 2026: continue only when every attribute is identical) |
+| awaiting-outcome or reload-check | same-key `job.configured` with a different `cargoLoaded`, such as a save from before a cargo-market pickup | active (new) | close `{none, configuration-cleared, partial}`; open a new trip at this event with a `reload` continuation interval. The closed trip keeps its `cargoLoaded` (DESIGN-DECISIONS.md, October 14, 2026: continue only when every attribute is identical) |
 | awaiting-outcome or reload-check | different-key `job.configured` | active (new) | close `{none, configuration-cleared, partial}`; open the new trip |
 | active or awaiting-outcome | `job.delivered` / `job.cancelled` | idle | attribute `trip`; close `{outcome, this-event}`, `complete` after a clean window, else `partial` |
 | active, in its load window before the start | `job.delivered` / `job.cancelled` | active | attribute `ambiguous`; the trip stays open (T14) |
@@ -207,7 +207,7 @@ Every `completeness.add` of the reducer carries a `detail` object (storage keeps
 
 ## Late-attach trips (J9)
 
-ET-016 PR-7 implements J9 ([concept.md](../concept.md#et-016-authorization--october-16-2026)), which supersedes T9: a job accepted before the recorder attached is recorded as a partial trip, as concept §3 and REG-003 require, instead of staying untracked until an identical `job.configured` arrives.
+ET-016 PR-7 implements J9 ([DESIGN-DECISIONS.md](../DESIGN-DECISIONS.md#et-016-authorization--october-16-2026)), which supersedes T9: a job accepted before the recorder attached is recorded as a partial trip, as concept §3 and REG-003 require, instead of staying untracked until an identical `job.configured` arrives.
 
 - **When.** A checkpoint while the game's slot is idle and its job is available sets the connection's pending late-attach trip. It is due once the session's processed point reaches the checkpoint's `nextEventSeq` − 1, so the retained events replayed after the checkpoint are stepped first. If a trip is open at that point (an identical replayed `job.configured` opened it with `opened-before-attach`, or a different replayed job), no late-attach trip opens. A disconnection, a new checkpoint or a new plugin session drops a pending one. A live item stepped before it opened (possible only while it waits behind queued lifecycle effects, below) drops it too when it contradicts the checkpoint's job: a live `job.cleared`, `job.delivered` or `job.cancelled`, or a gap over eventSeqs at or after `nextEventSeq`, which may hide such an event; any other live item leaves the job as the checkpoint showed it (PR-7 review round 1). A disconnection keeps the checkpoint's untracked job, which is still likely active; the next checkpoint replaces or clears it. A replayed event that shows the checkpoint stale and ends its job drops both the pending trip and the untracked checkpoint job ([stale checkpoints](#stale-checkpoints)).
 - **What.** The trip opens from the checkpoint's job, partial, with a `not-connected` interval `{cause: 'late-attach', source: 'checkpoint', nextEventSeq}` and, when the game's last trip closed without an outcome and had the same job key, a not-merged continuation interval. It starts at the checkpoint state's capture UTC label (else the session's last label, else the receipt label), capture time and clock, with the checkpoint status's game mode. It has no truck or trailer reference until a `truck.configured` or `trailer.configured` is committed again (J22, [TD-007](technical-debt.md)); the first one is a reference, not a `truck-change`. Opened outside a running simulation, it keeps a load window like a trip opened at an event (T12). The attach is the session's latest labelled point, so a following gap closes the trip at its start label.
@@ -252,7 +252,7 @@ Each gameplay event (`job.delivered`, `job.cancelled`, `player.fined`, `player.t
 | --- | --- |
 | `trip` | An active trip's window, including an outcome that attaches after the clear |
 | `trip-before-loaded` | An active `cargo_market` job whose `cargoLoaded` is available and false (O3) |
-| `free-driving` | No open trip and no untracked job, or a fine, toll or transfer after the clear: outside any active job (concept.md, October 13, 2026) |
+| `free-driving` | No open trip and no untracked job, or a fine, toll or transfer after the clear: outside any active job (DESIGN-DECISIONS.md, October 13, 2026) |
 | `ambiguous` | A gameplay event that resolves a reload check; a fine, toll or transfer while a job is untracked; the outcome of an untracked job or with no attachable trip; an outcome before the first start of a replaced or loaded configuration |
 
 Money is summed per trip as exact BigInt digits per currency and SDK type. Fines before loading are kept apart from other fines. Free-driving and ambiguous events change no trip totals.
@@ -289,7 +289,7 @@ A trip opens `unknown` and stays `unknown` while nothing is known to be missing.
 
 It is `complete` only when its gameplay outcome closes it after a clean window. Annotations (`truck-change`, `utc-label-jump`, and the readings annotations `odometer-regressed`, `odometer-jump`, `game-time-jump`, `position-jump` and `refuel`) are `discontinuity` intervals with `detail.annotation: true` and never downgrade.
 
-A delivered trip can be partial. Completion status and recording completeness stay separate (concept.md §7).
+A delivered trip can be partial. Completion status and recording completeness stay separate (DESIGN-DECISIONS.md §7).
 
 ## Readings accounting (T16, T17)
 
@@ -321,7 +321,7 @@ Readings without an open trip of their session change no trip and add no effect:
 
 ## One-second sampler (ET-015b)
 
-[`history-samples.ts`](../packages/telemetry-core/src/history-samples.ts) decides which protocol v1 readings (a connection's checkpoint and each snapshot) become one-second history samples, and builds their `SampleInput` rows for storage's `appendSamples` ([storage](storage.md#storage-api)). It is pure and deterministic. It reads no clock and runs no timer, and it never mutates its inputs. It imports `SampleInput` as a type only from `packages/storage/src/api.ts`, as T2 allows. The coordinator adopted decisions H1–H17 ([concept.md](../concept.md#et-015b-authorization--october-16-2026)). PR-3 calls `sampleReading` from the trip recorder at the head of the DurableDelivery FIFO (H2), after the reading has stepped the reducer.
+[`history-samples.ts`](../packages/telemetry-core/src/history-samples.ts) decides which protocol v1 readings (a connection's checkpoint and each snapshot) become one-second history samples, and builds their `SampleInput` rows for storage's `appendSamples` ([storage](storage.md#storage-api)). It is pure and deterministic. It reads no clock and runs no timer, and it never mutates its inputs. It imports `SampleInput` as a type only from `packages/storage/src/api.ts`, as T2 allows. The coordinator adopted decisions H1–H17 ([DESIGN-DECISIONS.md](../DESIGN-DECISIONS.md#et-015b-authorization--october-16-2026)). PR-3 calls `sampleReading` from the trip recorder at the head of the DurableDelivery FIFO (H2), after the reading has stepped the reducer.
 
 **Tick (H3).** The tick is the absolute source second `floor(capture.monotonicNs / 1e9)`, kept per plugin session and capture clock. The first qualifying reading in each second is sampled, and its `capture.monotonicNs` becomes the sample's time. Game time and UTC never set the cadence, so a sleep, a save load or a UTC change does not add or skip samples. A rule such as "at least 1 s since the last sample" would drift when readings jitter: at 20 Hz with ±10 ms jitter it gives about 3,500 rows per hour instead of 3,600.
 
@@ -375,13 +375,13 @@ A queued interval of an earlier session loses its monotonic bounds when a new se
 | Save load: clear, identical re-send, start, regression; continue the same trip | O9, O10 (1 sample) |
 | Ferry attributed to the trip | O11 (1 sample) |
 | A job in the start burst opens partial and survives the burst's timer restart | Inference from O1 |
-| Outcome after the clear attaches when nothing lies between | concept.md, October 13, 2026 (not observed; O6 does not exclude it) |
-| Game mode change marks the trip ambiguous | concept.md, October 13, 2026 |
-| Save load of a different job or no job; load window absorbing the regression | concept.md, October 14, 2026, and synthetic inference |
-| A save from before a cargo-market pickup is not continued (`cargoLoaded` differs) | concept.md, October 14, 2026, with O3 and O10; the sequence itself is synthetic |
-| Fines while a job is untracked are ambiguous | concept.md, October 13, 2026 |
+| Outcome after the clear attaches when nothing lies between | DESIGN-DECISIONS.md, October 13, 2026 (not observed; O6 does not exclude it) |
+| Game mode change marks the trip ambiguous | DESIGN-DECISIONS.md, October 13, 2026 |
+| Save load of a different job or no job; load window absorbing the regression | DESIGN-DECISIONS.md, October 14, 2026, and synthetic inference |
+| A save from before a cargo-market pickup is not continued (`cargoLoaded` differs) | DESIGN-DECISIONS.md, October 14, 2026, with O3 and O10; the sequence itself is synthetic |
+| Fines while a job is untracked are ambiguous | DESIGN-DECISIONS.md, October 13, 2026 |
 | Train crossing, profile switch, quick-job replacement, mid-trip timer restart, late attach after a job started, plugin restart, reconnection, UTC set back | Synthetic inference |
-| A sleep appears only as a forward game-time jump on the same clock | CAP-01 run 2 (concept.md, "Sleep and unannounced game-time jumps"); the T17 thresholds are inference |
+| A sleep appears only as a forward game-time jump on the same clock | CAP-01 run 2 (DESIGN-DECISIONS.md, "Sleep and unannounced game-time jumps"); the T17 thresholds are inference |
 | Odometer, fuel and refuels through readings; road-service teleport; reading holes; position jumps; crossings labelled from a transfer between readings | Synthetic inference (PR-2); no real trace of readings was reviewed for these rules |
 
 ## PR-1 interpretations of the plan
@@ -411,7 +411,7 @@ T16 and T17 leave these cases open. They are listed here for review:
 - **Refuel episodes.** Consecutive refuelled steps are one annotation with growing litres, and different episodes never merge, so the litres are never lost to merging. Fuel used is not clamped at zero: small increases larger than the consumption would make it negative and stay visible. Since ET-016 PR-6 such a total is stored as `invalid` (see Persistence).
 - **"Always before a close".** The close carries an observed-distance update whenever the value changed since the last one, so no close leaves a change unsent; an unchanged value is not written again. Since ET-016 PR-6 the same update carries fuel used.
 - **`odometerDeltaM`.** Only the reconnection's `disconnected` interval records it, always: null when queued, then from the first reading of the new connection while the interval still waits; gaps close the trip and carry none. It is null without an odometer or a known truck at either end, or after a truck change (brand, model or plate): no change between possibly different trucks is recorded (advisory review on PR #72).
-- **Crossings by time (fix round 1).** The crossing label follows the transfer's source time, not its place in the stream, so a replayed transfer counts by when it happened. concept.md asks for a jump "next to such an event"; 300 s is the provisional meaning of "next to". A transfer after the jump does not relabel it.
+- **Crossings by time (fix round 1).** The crossing label follows the transfer's source time, not its place in the stream, so a replayed transfer counts by when it happened. DESIGN-DECISIONS.md asks for a jump "next to such an event"; 300 s is the provisional meaning of "next to". A transfer after the jump does not relabel it.
 - **Resumed cleared trips (fix round 1).** `TripSeed.awaitingOutcome` resumes a cleared trip awaiting its outcome; without the flag a resumed trip is active, as before.
 - **Separate episodes (fix round 3).** Game-time jumps no longer merge: a later same-label sleep folded into a waiting one, and its growth then rewrote the earlier range. Waiting holes count towards the per-connection cap only on the current capture clock. A refuel episode continues only over counted steps, so a refuel after a disconnection, an opening or a clear starts a new episode.
 - **Jump growth and queue position (fix round 2).** Growth is judged over at least 1 s, because at 20 Hz one ordinary minute tick within half a second looked faster than the rate and repeated or extended a sleep. A continuation starts at the end of the sent annotation. A growing jump or refuel is found anywhere in the waiting annotations, because a position jump queued in the same step would otherwise hide it.

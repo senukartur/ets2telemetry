@@ -42,7 +42,7 @@ SDK 1.15 defines `bus_job` and `car_job` configurations and the `car_job.deliver
 
 ## TD-003: Live driving controls and navigation fields
 
-Recorded October 15, 2026 by the coordinator during ET-010 planning. **This entry is a coordinator decision under the owner's standing delegation of October 15, 2026, not an individually owner-approved deferral** (see the ET-010 authorization in [concept.md](../concept.md#et-010-authorization--october-15-2026)). The owner may revise it.
+Recorded October 15, 2026 by the coordinator during ET-010 planning. **This entry is a coordinator decision under the owner's standing delegation of October 15, 2026, not an individually owner-approved deferral** (see the ET-010 authorization in [DESIGN-DECISIONS.md](../DESIGN-DECISIONS.md#et-010-authorization--october-15-2026)). The owner may revise it.
 
 Protocol v1 minor 0 does not carry cruise control, throttle, brake and clutch inputs, navigation time, the navigation speed limit, the parking brake or lights. The ET-010 live dashboard therefore covers the MVP field set only: the concept §6 overlay metrics, the §7 sample fields, job, truck and trailer identity and source validity ([live telemetry fields](live-telemetry-fields.md)).
 
@@ -55,7 +55,7 @@ Protocol v1 minor 0 does not carry cruise control, throttle, brake and clutch in
 
 ## TD-004: Restore loss counted once in the live loss totals
 
-Recorded October 16, 2026 by the coordinator after the ET-015c PR-3 review. **This entry is a coordinator decision under the owner's standing delegation of October 15, 2026, not an individually owner-approved deferral** (see the ET-015c authorization in [concept.md](../concept.md#et-015c-authorization--october-16-2026)). The owner may revise it.
+Recorded October 16, 2026 by the coordinator after the ET-015c PR-3 review. **This entry is a coordinator decision under the owner's standing delegation of October 15, 2026, not an individually owner-approved deferral** (see the ET-015c authorization in [DESIGN-DECISIONS.md](../DESIGN-DECISIONS.md#et-015c-authorization--october-16-2026)). The owner may revise it.
 
 `recordCompleteness(…, {ifAbsent: true})` reports success both when it inserts the `restore-loss` interval and when an equal row already exists. A telemetry service that records the restore loss of a plugin session therefore cannot tell whether an earlier service in the same plugin session already recorded it, and counts it again. After a service restart in the same plugin session, main's totals since the application started show `restoreLoss` 2 and `lostEvents` twice A − C, while the database holds one row ([recording status](telemetry-service-v1.md#recording-status-et-015c)). The database is correct.
 
@@ -67,7 +67,7 @@ Recorded October 16, 2026 by the coordinator after the ET-015c PR-3 review. **Th
 
 ## TD-005: Loss totals hidden while the recording status is unknown
 
-Recorded October 16, 2026 by the coordinator after the advisory review of ET-015c PR-4 (PR #91). **This entry is a coordinator decision under the owner's standing delegation of October 15, 2026, not an individually owner-approved deferral** (see the ET-015c authorization in [concept.md](../concept.md#et-015c-authorization--october-16-2026)). The owner may revise it.
+Recorded October 16, 2026 by the coordinator after the advisory review of ET-015c PR-4 (PR #91). **This entry is a coordinator decision under the owner's standing delegation of October 15, 2026, not an individually owner-approved deferral** (see the ET-015c authorization in [DESIGN-DECISIONS.md](../DESIGN-DECISIONS.md#et-015c-authorization--october-16-2026)). The owner may revise it.
 
 Main keeps the loss totals of earlier service processes in its loss base, but `{state: 'unknown'}` carries no losses ([recording status](telemetry-service-v1.md#recording-status-et-015c)). The dashboard therefore hides the "Gaps recorded since Yukon Union Telemetry started" lines whenever the service fails, exits or restarts, until the next service reports a status; they then reappear with the earlier processes' counts added. After the supervisor's restarts are exhausted the status stays `unknown`, so the totals stay hidden until the application restarts, which starts new totals ([dashboard](app-lifecycle.md#recording-on-the-dashboard-and-in-the-tray-et-015c-pr-4)). The database is correct.
 
@@ -78,7 +78,7 @@ Main keeps the loss totals of earlier service processes in its loss base, but `{
 
 ## TD-006: Trip average consumption
 
-Recorded October 17, 2026 by the coordinator with ET-016 PR-5 (decision J21). **This entry is a coordinator decision under the owner's standing delegation of October 15, 2026, not an individually owner-approved deferral** (see the ET-016 authorization in [concept.md](../concept.md#et-016-authorization--october-16-2026)). The owner may revise it.
+Recorded October 17, 2026 by the coordinator with ET-016 PR-5 (decision J21). **This entry is a coordinator decision under the owner's standing delegation of October 15, 2026, not an individually owner-approved deferral** (see the ET-016 authorization in [DESIGN-DECISIONS.md](../DESIGN-DECISIONS.md#et-016-authorization--october-16-2026)). The owner may revise it.
 
 The SDK's average consumption is the truck computer's running mean, not a value of one trip, and the project has no defined calculation of a trip's own average consumption (for example fuel used over observed distance, with refuels, connection holes and reading gaps accounted for). The journal therefore shows and the [trip export](journal-export.md) writes the trip's fuel used and observed distance as separate stored values, and the SDK mean only per one-second sample, marked as the SDK mean ([journal display rules](journal.md#the-journal-tab-j12j14)).
 
@@ -89,7 +89,7 @@ The SDK's average consumption is the truck computer's running mean, not a value 
 
 ## TD-007: Truck and trailer identity of late-attach trips
 
-Recorded October 17, 2026 by the coordinator with ET-016b PR-7 (decision J22). **This entry is a coordinator decision under the owner's standing delegation of October 15, 2026, not an individually owner-approved deferral** (see the ET-016 authorization in [concept.md](../concept.md#et-016-authorization--october-16-2026)). The owner may revise it.
+Recorded October 17, 2026 by the coordinator with ET-016b PR-7 (decision J22). **This entry is a coordinator decision under the owner's standing delegation of October 15, 2026, not an individually owner-approved deferral** (see the ET-016 authorization in [DESIGN-DECISIONS.md](../DESIGN-DECISIONS.md#et-016-authorization--october-16-2026)). The owner may revise it.
 
 A [late-attach trip](trips.md#late-attach-trips-j9) opens from a protocol v1 checkpoint's job. The checkpoint also carries the current truck and trailer configuration, but storage keeps truck and trailer configurations only as rows of `truck.configured` and `trailer.configured` events, so `openAttachedTrip` stores no truck or trailer reference ([storage](storage.md#late-attach-trips-et-016b-pr-7)). The trip gets one only when the game sends `truck.configured` or `trailer.configured` again and that event is committed; until then the journal shows no truck or trailers for it. Configurations the session committed before the checkpoint are not referenced either.
 
@@ -100,7 +100,7 @@ A [late-attach trip](trips.md#late-attach-trips-j9) opens from a protocol v1 che
 
 ## TD-008: Full trailer configuration list in the trip export
 
-Recorded October 17, 2026 by the coordinator after the ET-016 PR-5 review (round 1). **This entry is a coordinator decision under the owner's standing delegation of October 15, 2026, not an individually owner-approved deferral** (see the ET-016 authorization in [concept.md](../concept.md#et-016-authorization--october-16-2026)). The owner may revise it.
+Recorded October 17, 2026 by the coordinator after the ET-016 PR-5 review (round 1). **This entry is a coordinator decision under the owner's standing delegation of October 15, 2026, not an individually owner-approved deferral** (see the ET-016 authorization in [DESIGN-DECISIONS.md](../DESIGN-DECISIONS.md#et-016-authorization--october-16-2026)). The owner may revise it.
 
 A trip keeps every trailer configuration it was given, but the journal detail carries only the latest 10 in commit order with the trip's `total` ([journal reads](journal.md#read-commands-and-bounds-j5)), and there is no paged trailer read. Trip export format version 1 writes that same `trailers` section ([trip export](journal-export.md#format-version-1)). A trip with more than 10 trailer configurations therefore exports only the latest 10 and `total`; an earlier configuration appears only as a `trailer.configured` event when that event lies inside the trip's J7 timeline window, and otherwise nowhere in the export.
 
@@ -111,7 +111,7 @@ A trip keeps every trailer configuration it was given, but the journal detail ca
 
 ## TD-009: Elevated copy helper for protected game folders
 
-Recorded October 17, 2026 by the coordinator with ET-017 PR-6. Decision P12 (no elevated helper for the MVP) is one the owner agreed to explicitly on October 17, 2026; this entry records the deferred helper (see the ET-017 authorization in [concept.md](../concept.md#et-017-authorization--october-17-2026)).
+Recorded October 17, 2026 by the coordinator with ET-017 PR-6. Decision P12 (no elevated helper for the MVP) is one the owner agreed to explicitly on October 17, 2026; this entry records the deferred helper (see the ET-017 authorization in [DESIGN-DECISIONS.md](../DESIGN-DECISIONS.md#et-017-authorization--october-17-2026)).
 
 Plugin setup runs with the user's rights only. When Windows denies access to a game's `bin\win_x64\plugins` folder or the plugin file is read-only, the folder shows `PERMISSION_DENIED` or `READ_ONLY_FILE`, the [Game plugin card](plugin-setup.md#the-game-plugin-card) offers "Show plugin file" and "Open game plugins folder", and the driver copies the verified bundled DLL by hand. A copy with the bundled hash is then adopted on the next run.
 
@@ -144,7 +144,7 @@ A file with the plugin's name whose hash this application does not recognize (no
 
 ## TD-012: In-place restore of the history database
 
-Recorded October 18, 2026 by the coordinator with ET-018 PR-6 (plan U17). **This entry is a coordinator decision under the owner's standing delegation of October 15, 2026, not an individually owner-approved deferral** (see the ET-018 authorization in [concept.md](../concept.md#et-018-authorization--october-18-2026)). The owner may revise it.
+Recorded October 18, 2026 by the coordinator with ET-018 PR-6 (plan U17). **This entry is a coordinator decision under the owner's standing delegation of October 15, 2026, not an individually owner-approved deferral** (see the ET-018 authorization in [DESIGN-DECISIONS.md](../DESIGN-DECISIONS.md#et-018-authorization--october-18-2026)). The owner may revise it.
 
 Storage can restore a verified backup only to a new path ([storage](storage.md)); an earlier version of that page deferred the in-place replacement of the live database to ET-018. ET-018's card covers packaging, upgrades and uninstall, not restore, so ET-018 does not implement it. A user who needs an older history today has no in-app way to put a backup in place of `data\telemetry.sqlite`.
 
@@ -166,7 +166,7 @@ After an uninstall, Squirrel (the version pinned by electron-winstaller 5.4.4) l
 
 ## TD-014: Code signing
 
-Recorded October 18, 2026 by the coordinator with ET-018 PR-6. Decision O1, an unsigned internal alpha now and an application to the SignPath Foundation after the first alpha release, is the owner's explicit decision of October 18, 2026 (see the ET-018 authorization in [concept.md](../concept.md#et-018-authorization--october-18-2026)); this entry records the deferred signing.
+Recorded October 18, 2026 by the coordinator with ET-018 PR-6. Decision O1, an unsigned internal alpha now and an application to the SignPath Foundation after the first alpha release, is the owner's explicit decision of October 18, 2026 (see the ET-018 authorization in [DESIGN-DECISIONS.md](../DESIGN-DECISIONS.md#et-018-authorization--october-18-2026)); this entry records the deferred signing.
 
 No file this project builds is signed. `release-identity.json` records each PE image's Authenticode status ([releases](release.md#signing)). Until the builds are signed, SmartScreen shows "Unknown publisher" for Setup, and Smart App Control, when it is on, blocks the application with no per-application override.
 
@@ -260,7 +260,7 @@ Recorded October 25, 2026 by the coordinator with ET-050b PR-6, from the PR-5 re
 
 **Before `GAME_HISTORY_RECORDING` is enabled,** the enablement PR decides whether `upsertSession` should stop comparing `protocol_minor`, keeping the first-seen minor in `plugin_sessions` and the per-event minor in `events.protocol_minor`. No schema or storage change is authorized by this entry.
 
-**Resolution (October 25, 2026):** the game history recording enablement ([AGENTS.md](../AGENTS.md#game-history-recording-enablement--october-25-2026)) keeps `upsertSession` comparing `protocol_minor`. A minor change inside one plugin session stays `SESSION_CONFLICT`, which the durable sink maps to `unavailable`: recording stops for the service lifetime and fails closed, and nothing committed is lost. Plugin setup never replaces the DLL while a game runs, so a supported update cannot cause it. This is a coordinator decision under the owner's enablement authorization; relaxing the comparison is a storage change for its own package if a real session ever needs it. The ET-052 release constraint in the entry above qualifies the claim that a supported update cannot cause it.
+**Resolution (October 25, 2026):** the game history recording enablement ([the decision log](../DECISION-LOG.md#game-history-recording-enablement--october-25-2026)) keeps `upsertSession` comparing `protocol_minor`. A minor change inside one plugin session stays `SESSION_CONFLICT`, which the durable sink maps to `unavailable`: recording stops for the service lifetime and fails closed, and nothing committed is lost. Plugin setup never replaces the DLL while a game runs, so a supported update cannot cause it. This is a coordinator decision under the owner's enablement authorization; relaxing the comparison is a storage change for its own package if a real session ever needs it. The ET-052 release constraint in the entry above qualifies the claim that a supported update cannot cause it.
 
 ## TD-022: Delta update packages
 

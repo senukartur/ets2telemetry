@@ -2,7 +2,7 @@ import {readFileSync} from 'node:fs';
 import path from 'node:path';
 import {fileURLToPath, pathToFileURL} from 'node:url';
 
-// The build channel resolver (ET-055 UP12, UP13 and UP15; concept.md, "ET-055 in-app updates and staging channel"). It is
+// The build channel resolver (ET-055 UP12, UP13 and UP15; DESIGN-DECISIONS.md, "ET-055 in-app updates and staging channel"). It is
 // the only place that decides which release channel a build belongs to, and the version that build carries. Every
 // consumer takes the result from here: scripts/build.mjs (the esbuild `define` of apps/desktop/src/channel.ts and the
 // application version), the native build scripts (`-DETS2TELEMETRY_CHANNEL` of the plugin and the broker tree),

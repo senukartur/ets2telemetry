@@ -26,7 +26,7 @@ afterEach(async () => {
 /**
  * A hang guard for each real child below that is expected to finish or be stopped by the case: not a timing assertion.
  * On a loaded host a Node child takes over a second to start, so a case that starts several of them gets the guard for
- * each (`childCase`) instead of the default 5 s (TESTING.md section 6).
+ * each (`childCase`) instead of the default 5 s (docs/TESTING.md section 6).
  */
 const CHILD_HANG_GUARD_MS = 10_000;
 const childCase = (children: number) => children * CHILD_HANG_GUARD_MS;

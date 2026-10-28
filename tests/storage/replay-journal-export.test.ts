@@ -17,9 +17,9 @@
 //
 // What only the journal and export show (event types, job summaries, close carriers, windows, outcome records, money
 // totals and samples) is hand-written in tests/fixtures/recording/replay-journal-export.expected.json, from docs/journal.md,
-// docs/journal-export.md, docs/storage.md and docs/trips.md, never read back from the code under test (TESTING.md §4).
-// Every case also checks I1-I5 (scripts/ci/history-invariants.mjs) over the stored rows and every ACK written, and that no
-// game history exists. Waits are the run's own completion; the only real-time values are named hang guards.
+// docs/journal-export.md, docs/storage.md and docs/trips.md, never read back from the code under test (docs/TESTING.md
+// §4). Every case also checks I1-I5 (scripts/ci/history-invariants.mjs) over the stored rows and every ACK written, and
+// that no game history exists. Waits are the run's own completion; the only real-time values are named hang guards.
 import {existsSync, mkdirSync, readFileSync} from 'node:fs';
 import path from 'node:path';
 import {afterEach, beforeEach, describe, expect, it} from 'vitest';

@@ -54,15 +54,16 @@ The scaffold pins Node/npm and application dependencies. Electron main supervise
 
 ## Documentation
 
-- [Project concept and requirements](concept.md): product requirements, architecture, recording rules, implementation sequence, acceptance criteria, and primary research sources.
-- [Agent instructions](AGENTS.md): repository-wide working rules and the current handoff.
-- [Testing and regression strategy](TESTING.md): scaffold checks, permanent scenarios, CI/merge policy, and pending real-game acceptance evidence.
+- [Product concept](docs/CONCEPT.md): the product idea, its principles and how each feature works.
+- [Design decisions](DESIGN-DECISIONS.md): the earlier full concept and the dated design decisions of each card.
+- [Agent instructions](AGENTS.md): the short summary every agent session loads; the full rules are in [docs/agent-rules.md](docs/agent-rules.md).
+- [Testing and regression strategy](docs/TESTING.md): the testing rules and the permanent regression scenarios; the [test index](docs/regression-registry.md) maps tests to scenarios.
 - [Windows setup](docs/setup.md): pinned tools, build/test/package entrypoints, process boundaries, SDK acquisition, and remaining checks.
 - [Releases](docs/release.md): the release channel, the release checklist, the artifact identity and the signing decision.
 - [Implementation coordinator](COORDINATOR.md): Trello execution, subagent assignments, worktree ownership, independent review, and recovery handoffs.
 - [Coordinator launch prompt](docs/prompts/coordinator-start.md): copy into a separate local Codex chat to coordinate the prototype and prepare PRs for owner review.
 
-Read `concept.md` before planning or implementing changes. Internal documentation and explanatory code comments must be written in English. Temporary Trello planning manifests stay local and must not be committed.
+Read `docs/CONCEPT.md` before planning or implementing changes. Internal documentation and explanatory code comments must be written in English. Temporary Trello planning manifests stay local and must not be committed.
 
 ## Git workflow
 
@@ -74,9 +75,9 @@ Enable the local guard in each checkout:
 git config --local core.hooksPath .githooks
 ```
 
-The hook blocks direct pushes to remote `main`. On GitHub, the `Protect main` ruleset requires squash-merged pull requests, resolved review threads, linear history and passing Windows CI jobs, and blocks force pushes and deletion of `main`; see [branch protection](AGENTS.md#branch-protection--october-16-2026). Windows CI is implemented with hosted clean/failure/restoration evidence; final current-head validation and owner review still gate merging.
+The hook blocks direct pushes to remote `main`. On GitHub, the `Protect main` ruleset requires squash-merged pull requests, resolved review threads, linear history and passing Windows CI jobs, and blocks force pushes and deletion of `main`; see [branch protection](docs/agent-rules.md#branch-protection--october-16-2026). Windows CI is implemented with hosted clean/failure/restoration evidence; final current-head validation and owner review still gate merging.
 
-See [Git workflow rules](AGENTS.md#git-workflow) for branch, PR, history, validation, and release policies.
+See [Git workflow rules](docs/agent-rules.md#git-workflow) for branch, PR, history, validation, and release policies.
 
 ## Development setup
 

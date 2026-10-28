@@ -26,7 +26,7 @@ import {forgeConfig, squirrelConfig} from '../shared/forge-config';
 // ET-055 UP12 (REG-015, REG-017): the installation identities of both build channels. Production values are pinned to the
 // literals every build before ET-055 used, so routing them through the channel table changes no file name, path, pipe,
 // registry value or display string. Staging values are the owner-approved names, with the staging Squirrel id amended on
-// October 28, 2026 so that no install root is a string prefix of another (concept.md, "UP12 amended"); no identity of one channel may equal
+// October 28, 2026 so that no install root is a string prefix of another (DESIGN-DECISIONS.md, "UP12 amended"); no identity of one channel may equal
 // one of the other, or the two installations would share an install root, data, plugin, pipe or registry value.
 
 const checkout = path.resolve(import.meta.dirname, '..', '..');

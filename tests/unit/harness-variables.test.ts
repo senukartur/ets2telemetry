@@ -94,7 +94,7 @@ it('also finds multi-assignments, [ref], -OutVariable, -PipelineVariable and Set
 
 // ET-055 PR-8 (PR-5 review): every tracked .ps1 and .psm1 file, no longer only the scripts, resources and Windows test
 // folders. The retired ET-001 host harness is the one exception: its body after the fixed RETIRED throw never runs and is
-// kept unchanged as the record of that procedure (AGENTS.md, ET-018 authorization).
+// kept unchanged as the record of that procedure (DECISION-LOG.md, ET-018 authorization).
 const RETIRED = [path.join('tests', 'windows', 'Invoke-NativeInstallerAcceptance.ps1')];
 it('keeps every tracked PowerShell script and module free of those writes', async () => {
   const files = execFileSync('git', ['-C', checkout, 'ls-files', '--', '*.ps1', '*.psm1'], {encoding: 'utf8', windowsHide: true})

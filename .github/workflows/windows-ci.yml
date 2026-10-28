@@ -50,7 +50,7 @@ jobs:
       - name: Build production on main
         if: github.ref == 'refs/heads/main'
         run: Add-Content -LiteralPath $env:GITHUB_ENV -Value 'ETS2TELEMETRY_BUILD_CHANNEL=production'
-      # Owner decision of October 28, 2026 (concept.md, "UP15 and UP16 amended"): a dispatch on a branch
+      # Owner decision of October 28, 2026 (DESIGN-DECISIONS.md, "UP15 and UP16 amended"): a dispatch on a branch
       # other than main builds a releasable staging artifact, so its version is <base>-stg.<6-digit run number> (UP15), as
       # windows-staging-build sets it on main. Pull requests and dispatches on a tag keep the local 000000, which release.yml
       # refuses. Every job that resolves the build sets the same number, as it sets the same channel.
@@ -226,7 +226,7 @@ jobs:
       - name: Build production on main
         if: github.ref == 'refs/heads/main'
         run: Add-Content -LiteralPath $env:GITHUB_ENV -Value 'ETS2TELEMETRY_BUILD_CHANNEL=production'
-      # Owner decision of October 28, 2026 (concept.md, "UP15 and UP16 amended"): a dispatch on a branch
+      # Owner decision of October 28, 2026 (DESIGN-DECISIONS.md, "UP15 and UP16 amended"): a dispatch on a branch
       # other than main builds a releasable staging artifact, so its version is <base>-stg.<6-digit run number> (UP15), as
       # windows-staging-build sets it on main. Pull requests and dispatches on a tag keep the local 000000, which release.yml
       # refuses. Every job that resolves the build sets the same number, as it sets the same channel.
@@ -386,7 +386,7 @@ jobs:
       - name: Build production on main
         if: github.ref == 'refs/heads/main'
         run: Add-Content -LiteralPath $env:GITHUB_ENV -Value 'ETS2TELEMETRY_BUILD_CHANNEL=production'
-      # Owner decision of October 28, 2026 (concept.md, "UP15 and UP16 amended"): a dispatch on a branch
+      # Owner decision of October 28, 2026 (DESIGN-DECISIONS.md, "UP15 and UP16 amended"): a dispatch on a branch
       # other than main builds a releasable staging artifact, so its version is <base>-stg.<6-digit run number> (UP15), as
       # windows-staging-build sets it on main. Pull requests and dispatches on a tag keep the local 000000, which release.yml
       # refuses. Every job that resolves the build sets the same number, as it sets the same channel.

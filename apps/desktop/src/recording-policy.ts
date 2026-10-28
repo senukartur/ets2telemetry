@@ -1,8 +1,8 @@
 // The recording gate of the telemetry service (ET-015a, R3). It decides which database the service opens and which
 // source selections may request durable protocol v1 delivery. Since the owner's explicit authorization of October 25,
-// 2026 (AGENTS.md, "Game history recording enablement") the ETS2 and ATS selections record real history over durable
-// protocol v1. ETS2TELEMETRY_RECORDING can only redirect the service to a synthetic or replay database in the synthetic
-// directory; it can never select the history path or make a game source durable.
+// 2026 (DECISION-LOG.md, "Game history recording enablement") the ETS2 and ATS selections record real history over
+// durable protocol v1. ETS2TELEMETRY_RECORDING can only redirect the service to a synthetic or replay database in the
+// synthetic directory; it can never select the history path or make a game source durable.
 // See docs/telemetry-service-v1.md#recording-gate.
 import type {SourceSelection} from '../../../packages/contracts/src';
 
