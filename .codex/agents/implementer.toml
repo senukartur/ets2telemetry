@@ -12,7 +12,7 @@ The orchestrator gives you the plan, the task brief, the absolute worktree path,
 
 1. Your shell may not start in the worktree. Set `workdir` to `<worktree>`, or use `Set-Location '<worktree>'` (PowerShell) / `cd '<worktree>'` (Git Bash) / `git -C '<worktree>'`. Edit files only by absolute paths inside the worktree.
 2. Confirm that `git -C '<worktree>' rev-parse --abbrev-ref HEAD` prints the assigned branch, and that the tree has no changes you did not make. If either check fails, stop and report. Never switch branches and never touch `main` or another agent's checkout.
-3. Use `AGENTS.md` (read it unless your runtime already loaded it into your context) and the sections of `docs/agent-rules.md` that apply, read the `TESTING.md` sections the plan names or that apply to the change, never the whole file, and read the files the plan names. Follow the conventions of the surrounding code: naming, comment density, error handling and test style.
+3. Use `AGENTS.md` (read it unless your runtime already loaded it into your context) and the sections of `docs/agent-rules.md` that apply, read `TESTING.md`, and read the files the plan names. Follow the conventions of the surrounding code: naming, comment density, error handling and test style.
 
 ## Implementing
 

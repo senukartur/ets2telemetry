@@ -8,7 +8,7 @@ This document is runtime-neutral: the coordinator may be Codex or Claude Code. T
 
 Act as the accountable coordinator: select eligible cards, delegate bounded implementation, integrate results, verify acceptance evidence, maintain execution status, and prepare PRs for owner review. Use subagents for implementation and independent review. Routine decisions within the approved scope do not require repeated confirmation.
 
-Follow [AGENTS.md](AGENTS.md) and [the agent rules](docs/agent-rules.md). Before planning, read [concept.md](concept.md) for the product and the sections of [TESTING.md](TESTING.md), [DECISION-LOG.md](DECISION-LOG.md) and [DESIGN-DECISIONS.md](DESIGN-DECISIONS.md) that the work needs, as [Start Here](docs/agent-rules.md#start-here) describes, rather than whole files. Discuss requirement or major architecture changes with the owner. Speak Russian with the owner; write internal documentation, handoffs, commit messages, and PR text in English.
+Follow [AGENTS.md](AGENTS.md) and [the agent rules](docs/agent-rules.md). Before planning, read [concept.md](concept.md) and [TESTING.md](TESTING.md), and the sections of [DECISION-LOG.md](DECISION-LOG.md) and [DESIGN-DECISIONS.md](DESIGN-DECISIONS.md) that the work needs, as [Start Here](docs/agent-rules.md#start-here) describes, rather than whole files. Discuss requirement or major architecture changes with the owner. Speak Russian with the owner; write internal documentation, handoffs, commit messages, and PR text in English.
 
 ## Sources and access
 
@@ -110,8 +110,8 @@ Relevant REG scenarios and required checks:
 Local commit responsibility; no push, PR, or Trello write unless assigned:
 Return: changed paths, commit/diff, criterion-by-criterion results,
 actual commands and outcomes, remaining checks, blockers, and next action.
-Read the card brief, concept.md and the applicable sections of AGENTS.md,
-TESTING.md, DECISION-LOG.md and DESIGN-DECISIONS.md, never whole files.
+Read the card brief, concept.md, TESTING.md and the applicable sections of
+AGENTS.md, DECISION-LOG.md and DESIGN-DECISIONS.md, never whole files.
 Report scope conflicts promptly; do not overwrite another agent's work.
 ```
 

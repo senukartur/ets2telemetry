@@ -8,10 +8,11 @@ The other project documents are large. Read only the parts a task needs, never a
 
 - [concept.md](../concept.md) is short: the product idea, its principles and how each feature works. Read it whole when a task touches product behavior.
 - [DESIGN-DECISIONS.md](../DESIGN-DECISIONS.md) holds the earlier full concept and the dated design decision records of each card, with the decision IDs other documents cite (for example K1–K12).
-- [TESTING.md](../TESTING.md) holds the test layers, the CI and merge policy, the regression corpus and the real-game evidence rules in its numbered sections 1–9, followed by dated sections for each card. Read the numbered sections that apply before changing behavior or test infrastructure.
+- [TESTING.md](../TESTING.md) is short: the testing rules and the permanent regression scenarios. Read it whole before changing behavior or tests. The [test index](regression-registry.md) maps each test entry point to its scenarios.
+- [TESTING-HISTORY.md](../TESTING-HISTORY.md) and the [registry history](regression-registry-history.md) hold the earlier per-card test records.
 - [DECISION-LOG.md](../DECISION-LOG.md) holds the dated owner decisions that used to be in this file.
 
-List the sections with `rg -n '^## ' TESTING.md DECISION-LOG.md DESIGN-DECISIONS.md`, find a card's records with `rg -n 'ET-015a' TESTING.md DECISION-LOG.md DESIGN-DECISIONS.md docs`, and read those sections with targeted reads.
+List the sections with `rg -n '^## ' DECISION-LOG.md DESIGN-DECISIONS.md TESTING-HISTORY.md`, find a card's records with `rg -n 'ET-015a' DECISION-LOG.md DESIGN-DECISIONS.md TESTING-HISTORY.md docs`, and read those sections with targeted reads.
 
 Keep the two documents consistent. Use `concept.md` for what the product does and this file for instructions that apply across tasks. Explicit user instructions take precedence over this documentation.
 
@@ -282,6 +283,7 @@ The owner decided on October 28, 2026 to limit the documentation that agents wri
 - **No new documents** unless the owner asks for one, or a new interface, setup step or user-facing workflow has no place in an existing document. Never commit plans, summaries, handoffs, reports or per-PR notes.
 - **Edit in place.** When behavior changes, update the existing document that describes it and replace the outdated text. Do not append dated "update", "implementation update" or "follow-up" paragraphs, and do not add per-card or per-PR sections to `concept.md`, `TESTING.md` or other documents.
 - **`concept.md` describes features, not work.** Change it only when a feature is added or an existing feature's behavior changes, and then only by adding or editing that feature's short description in place: a few present-tense sentences, with no dates, task IDs, decisions or validation status. A bug fix, refactoring, test or internal change does not touch it.
+- **`TESTING.md` holds rules, not results.** Change it only when a testing rule changes or a regression scenario is added. The tests a PR adds are described in its description, and each new test entry point gets one row in the [test index](regression-registry.md), nothing more.
 - **Owner decisions** get one short entry at the end of [DECISION-LOG.md](../DECISION-LOG.md), only when the owner decides something; architect or coordinator design decisions go in the PR description.
 - **Validation records** in `docs/validation/` are only for real-game or real-environment evidence that must outlive the PR, such as game versions, display modes, owner observations and checks still pending. Keep them short, one file per card.
 - **Required updates stay:** the regression registry rows that [TESTING.md](../TESTING.md) section 9 requires, the protocol and storage contract documents when a contract changes, and the user guide when user-visible behavior changes.
