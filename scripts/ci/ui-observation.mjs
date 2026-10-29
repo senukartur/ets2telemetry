@@ -76,6 +76,12 @@ const layouts = ['strip', 'card', 'cluster', 'hud'];
 // the cluster's panel 36 + 21 × 12 = 288 and the HUD 18 + 24 × 15 = 378 (384, 267 and 354 with fourteen).
 const dimensions = {strip: {width: 1280, height: 116}, card: {width: 300, height: 408}, cluster: {width: 440, height: 288}, hud: {width: 320, height: 378}};
 const waitState = (page, state) => until(() => page.getByTestId('telemetry-status').innerText(), value => value.startsWith(`${state}:`), `UI_LIVE_${state}`, 5000);
+/** Navigation and a source resume do not establish freshness. Capture all current instrument assertions in one DOM observation. */
+async function waitLiveInstrument(page, language) {
+  const handle = await page.waitForFunction(dashboardObservation, {speed: language === 'en' ? 'Speed: 90 km/h' : 'Скорость: 90 км/ч',
+    fuel: language === 'en' ? 'Fuel: 73.0 L' : 'Топливо: 73.0 л', tankHeight: '7.3%'}, {timeout: 5000});
+  try {assert.deepEqual((await handle.jsonValue()).tank, {state: 'value', height: '7.3%', unavailable: 0});} finally {await handle.dispose();}
+}
 // A committed main-process value may precede React's rendered switch and pending-save controls.
 function waitOverlayVisibility(page, {enabled, writable = true, saveError = null, errorVisible}, message, timeoutMs) {
   return until(() => page.evaluate(async () => {
@@ -686,7 +692,7 @@ export async function runUiSmoke({application, dashboard, overlay, source, sourc
         Object.assign(record.flags, {navigation: true, headingFocus: true, journalUnmount: true, menuKeyboard: true, exitAvailable: true, laterAccount: true});
       } else if (config.uiCase === 'live') {
         await screen(dashboard, 'live');
-        assert.ok(await dashboard.evaluate(dashboardObservation, {speed: language === 'en' ? 'Speed: 90 km/h' : 'Скорость: 90 км/ч', fuel: language === 'en' ? 'Fuel: 73.0 L' : 'Топливо: 73.0 л'}));
+        await waitLiveInstrument(dashboard, language);
         for (const [id, text] of [['cargo', 'Synthetic Cargo'], ['source-city', 'Synthetic City A'], ['source-company', 'Synthetic Company A'], ['destination-city', 'Synthetic City B'], ['destination-company', 'Synthetic Company B'], ['truck', 'truck.volvo']]) {
           assert.equal(await dashboard.getByTestId(`live-${id}`).innerText(), text);
         }
@@ -710,9 +716,7 @@ export async function runUiSmoke({application, dashboard, overlay, source, sourc
         assert.equal(await dashboard.locator('[data-testid^="hard-mode-detail-rule-"]').count(), 12);
         assert.equal(await dashboard.locator('[data-testid^="hard-mode-name-"]').evaluateAll(nodes => nodes.length === 12 && nodes.every(node => node.getBoundingClientRect().height >= 32 && node.scrollWidth <= node.clientWidth)), true, `UI_HM_NAMES_OVERFLOW_${language}_${size.width}`); record.flags.hmNamesReadable = true;
         await screen(dashboard, 'live');
-        assert.equal(await dashboard.getByTestId('live.instrument.tank').getAttribute('data-state'), 'value');
-        assert.equal(await dashboard.locator('.yu-tank i').evaluate(node => node.style.height), '7.3%');
-        assert.equal(await dashboard.locator('.yu-tank-unavailable').count(), 0);
+        await waitLiveInstrument(dashboard, language);
         await save('current', language, size);
         source.setReading(0, 0); await dashboard.waitForFunction(zeroLiveObservation, language, {timeout: 5000}); await save('zero', language, size);
         source.setReading(25, 73); source.setCapacity(null);
@@ -731,7 +735,7 @@ export async function runUiSmoke({application, dashboard, overlay, source, sourc
         await save('paused', language, size);
         source.setPaused(false); await waitState(dashboard, 'connected'); source.hold();
         try {await waitState(dashboard, 'stale'); assert.equal(await dashboard.locator('.yu-gauge-number').textContent(), '—'); await save('stale', language, size);} finally {source.resume();}
-        await waitState(dashboard, 'connected');
+        await waitLiveInstrument(dashboard, language);
         Object.assign(record.flags, {numericGauge: true, unavailableVsZero: true, paused: true, staleDashes: true, rawNames: true, unsupportedTrip: true});
       } else if (config.uiCase === 'journal') {
         await screen(dashboard, 'journal');
