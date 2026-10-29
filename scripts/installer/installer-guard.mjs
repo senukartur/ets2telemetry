@@ -477,7 +477,7 @@ const SHA256_HEX = /^[0-9a-f]{64}$/;
  * ET-045g, after each install, repair and update: the Installed apps entry shows the product icon. `observation` is the
  * driver's icon record: `displayIcon` from classifyRegistrationIcon, `rootIcon` the binary root's app.ico
  * `{regularFile, sha256}`, `bundledIcon` the installed version's `resources\icon\app.ico` `{regularFile, sha256}` and
- * `trackedSha256` the tracked resources/icon/app.ico. DisplayIcon must name icon 0 of the installed version's executable,
+ * `trackedSha256` the channel's tracked icon (resources/icon/app.ico or resources/staging/icon/app.ico). DisplayIcon must name icon 0 of the installed version's executable,
  * and both icon files must have the tracked bytes. Throws the first refusal.
  */
 export function checkRegistrationIcon(observation) {

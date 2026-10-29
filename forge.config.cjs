@@ -14,7 +14,7 @@ const {identity, version} = build;
 // value of each (ET-055 UP12), so that both channels install and run side by side.
 const PRODUCT_NAME = identity.displayName;
 // The channel's application icon folder (scripts/generate-app-icons.mjs). Both folders are named icon, so the packaged
-// resourcesiconapp.ico has one path in both channels; staging's carries an amber corner flag (ET-055).
+// resources\icon\app.ico has one path in both channels; staging's carries an amber corner flag (ET-055).
 const ICON_DIRECTORY = build.channel === 'staging' ? 'resources/staging/icon' : 'resources/icon';
 
 // Squirrel maker options (ET-018 PR-6, docs/release.md). `title` becomes the Installed apps DisplayName and `authors`
@@ -45,7 +45,7 @@ module.exports = {
   rebuildConfig: {ignoreModules:['better-sqlite3']},
   packagerConfig: {
     // resources/uninstall holds the deferred-cleanup executor that an uninstall copies and registers (ET-018 PR-5, U7);
-    // scripts/build.mjs stages it with this build's channel stamped in (ET-055). resources/icon ships app.ico, which the
+    // scripts/build.mjs stages it with this build's channel stamped in (ET-055). The channel's icon folder ships app.ico, which the
     // install and updated hooks place in Squirrel's install root and name as the Installed apps DisplayIcon (ET-045g,
     // docs/release.md). The Squirrel maker keeps electron-winstaller's default iconUrl, the Electron icon (HTTP(S) only);
     // with app.ico already in place Squirrel never downloads it.

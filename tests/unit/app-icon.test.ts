@@ -43,7 +43,7 @@ it('ships the application icon as an extra resource for the Installed apps entry
 });
 
 // ET-055: a staging build embeds and ships its own icon from resources/staging/icon, packaged under the same name, so
-// the install hooks find resourcesiconapp.ico in both channels; the two icons differ.
+// the install hooks find resources\icon\app.ico in both channels; the two icons differ.
 it('builds the staging channel with its own application icon, packaged as resources/icon', () => {
   const forge = forgeConfig('staging');
   expect(forge.packagerConfig.extraResource).toContain('resources/staging/icon');
