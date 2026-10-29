@@ -1,3 +1,8 @@
+import {overlayPresentation} from '../../apps/desktop/src/overlay-presentation';
+import {displayProfile} from '../../apps/desktop/src/unit-profiles';
+import {dashboardSpeed} from '../../apps/desktop/src/speed-display';
+import {initialLive} from '../../apps/desktop/src/live-state';
+import {v1Projection} from '../shared/live-v1-fixtures';
 import {dashboardFuel} from '../../apps/desktop/src/speed-display';
 import {describe, expect, it} from 'vitest';
 import {clampRatio, connectionTone, desktopLiveView, gaugeArc, hardModeTone, pluginTone, pluginStatusText, recordingMotion, recordingTone} from '../../apps/desktop/src/screens/desktop-ui-view';
@@ -156,4 +161,38 @@ describe('gearbox-aware labels on the Live instrument (ET-050b)', () => {
     // A minor-0 source: every gearbox part is not-supported (B7).
     expect(gear(gearboxPair(1, {...ATS, gearbox: NOT_SUPPORTED_GEARBOX}), manual)).toMatchObject({text: '1L'});
   });
+});
+
+it.each(['ets2', 'ats'] as const)('shares automatic %s units and per-game gear modes across the dashboard and overlay', game => {
+  const live = gearboxPair(1, {game}); live.selection = 'game'; live.observation!.source.origin = 'game';
+  live.v1!.selection = 'game'; live.v1!.observation!.source = {...live.observation!.source};
+  for (const [profiles, speed, fuel, unit] of [[undefined, game === 'ats' ? '56' : '90', game === 'ats' ? '19.3' : '73.0', game === 'ats' ? 'mph' : 'km/h'],
+    [{ets2: 'us-customary', ats: 'metric'} as const, game === 'ats' ? '90' : '56', game === 'ats' ? '73.0' : '19.3', game === 'ats' ? 'km/h' : 'mph']] as const) {
+    const dashboard = desktopLiveView(live, profiles), overlay = overlayPresentation(live, profiles);
+    expect(dashboard).toMatchObject({current: true, speedText: speed, units: {speed: unit}});
+    expect(dashboardSpeed(live, displayProfile(live, profiles))).toBe(`${speed} ${unit}`);
+    expect(dashboardFuel(live, displayProfile(live, profiles))).toBe(`${fuel} ${unit === 'mph' ? 'US gal' : 'L'}`);
+    expect(overlay).toMatchObject({source: game.toUpperCase(), freshness: 'current', speed, fuel, speedUnit: unit});
+  }
+  for (const mode of ['automatic', 'manual', 'crawler'] as const) {
+    const modes = {ets2: 'automatic', ats: 'automatic', [game]: mode} as GearDisplayModes;
+    const expected = mode === 'automatic' ? '1' : mode === 'manual' ? game === 'ats' ? 'LL' : 'C1' : game === 'ats' ? 'L' : 'C';
+    expect(desktopLiveView(live, undefined, modes).sources.field('gear')).toMatchObject({state: 'value', text: expected});
+    expect(liveDashboardText(live, undefined, 'en', modes).sections.flatMap(section => section.rows).find(row => row.id === 'gear')).toMatchObject({value: expected});
+    expect(overlayPresentation(live, undefined, undefined, undefined, false, 'en', modes).sections.find(section => section.id === 'gear')).toMatchObject({state: 'value', text: expected});
+  }
+  const stale = {...live, fresh: false, status: 'stale' as const, v1: {...live.v1!, fresh: false, status: 'stale' as const}};
+  expect(desktopLiveView(stale)).toMatchObject({current: false, speedText: '—'});
+  expect(overlayPresentation(stale)).toMatchObject({freshness: 'stale', speed: '—'});
+  for (const origin of ['synthetic', 'replay'] as const) {
+    const foreign = {...live, observation: {...live.observation!, source: {...live.observation!.source, origin}}};
+    expect(overlayPresentation(foreign)).toMatchObject({freshness: 'unavailable', speed: '—'});
+  }
+});
+it('uses the verified ATS v1-only attachment for display units without authorizing overlay values or placement', () => {
+  const partial = {...initialLive('game'), v1: v1Projection('snapshot-live', {selection: 'game', origin: 'game', game: 'ats'})};
+  const rows = (profiles?: {ets2: 'metric'; ats: 'metric'}) => liveDashboardText(partial, profiles).sections.flatMap(section => section.rows);
+  expect(rows().find(row => row.id === 'route-remaining')).toMatchObject({value: '93.8 mi'});
+  expect(rows({ets2: 'metric', ats: 'metric'}).find(row => row.id === 'route-remaining')).toMatchObject({value: '151.0 km'});
+  expect(overlayPresentation(partial)).toMatchObject({source: 'ATS', freshness: 'unavailable', speed: '—', speedUnit: 'mph'});
 });

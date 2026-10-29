@@ -1,3 +1,4 @@
+import {v1Projection} from '../shared/live-v1-fixtures';
 import {readFileSync} from 'node:fs';
 import {expect, it} from 'vitest';
 import {currentGameClientBounds, gameForeground, visibleGameClientBounds} from '../../apps/desktop/src/window-placement';
@@ -51,4 +52,27 @@ it.each(['synthetic', 'wrong-game', 'no-game-origin', 'expired', 'disconnected',
   if (fault === 'zero') window.value.height = 0;
   if (fault === 'unavailable') observation.state.window = {available: false, reason: 'not-observed'};
   expect(visibleGameClientBounds(live)).toBeUndefined();
+});
+
+it.each(['ets2', 'ats'] as const)('places automatic %s only from its current v0 game window', game => {
+  const live = gameLive(); live.selection = 'game'; live.observation!.source.game = game;
+  const bounds = {x: -1920, y: 0, width: 1920, height: 1080};
+  // SDK staleness does not expire a separately fresh window report.
+  expect(currentGameClientBounds(live)).toEqual(bounds);
+  const window = live.observation!.state.window; if (!window.available) throw new Error('Expected window');
+  window.value.foreground = false; expect(visibleGameClientBounds(live)).toEqual(bounds); expect(currentGameClientBounds(live)).toBeUndefined();
+  for (const fault of ['synthetic', 'replay', 'fixture', 'explicit-mismatch', 'expired', 'minimized', 'size', 'disconnected'] as const) {
+    const invalid = structuredClone(live), observation = invalid.observation!;
+    if (fault === 'synthetic' || fault === 'replay') observation.source.origin = fault;
+    if (fault === 'fixture') invalid.selection = 'synthetic';
+    if (fault === 'explicit-mismatch') invalid.selection = game === 'ets2' ? 'ats' : 'ets2';
+    if (fault === 'expired') observation.windowFresh = false;
+    if (fault === 'disconnected') invalid.status = 'disconnected';
+    if (!observation.state.window.available) throw new Error('Expected window');
+    if (fault === 'minimized') observation.state.window.value.minimized = true;
+    if (fault === 'size') observation.state.window.value.width = 0;
+    expect(visibleGameClientBounds(invalid), fault).toBeUndefined();
+  }
+  const partial = {...initialLive('game'), v1: v1Projection('snapshot-live', {selection: 'game', origin: 'game', game})};
+  expect(visibleGameClientBounds(partial)).toBeUndefined(); expect(currentGameClientBounds(partial)).toBeUndefined();
 });

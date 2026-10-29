@@ -7,6 +7,7 @@ import {DEFAULT_OVERLAY_SETTINGS, isGaugeFraction, OVERLAY_SECTION_IDS} from './
 import {speedGaugeFraction} from './speed-gauge';
 import {DEFAULT_GEAR_DISPLAY, DEFAULT_UNIT_PROFILES, displayGame, gearDisplayFor, isExplicitFixture, profileFor, speedNumber, speedUnit, volumeNumber, volumeUnit} from './unit-profiles';
 import {localizeDeadlineString, localizeGameTimeString} from './i18n';
+import {gameForSource} from './live-state';
 
 /** Full scale of the engine RPM ring (ET-012a decision L12). Neither v0 nor v1 carries the SDK's `rpm.limit`. */
 export const RPM_RING_FULL_SCALE = 3000;
@@ -77,7 +78,7 @@ export function overlayPresentation(live: LiveTelemetry, units: UnitProfiles = D
   const explicitFixture = isExplicitFixture(live);
   const game = displayGame(live), profile = profileFor(units, game);
   const current = live.fresh && (live.status === 'connected' || live.status === 'paused') &&
-    (explicitFixture || (observation?.source.origin === 'game' && observation.source.game === live.selection));
+    (explicitFixture || gameForSource(live.selection, observation?.source) !== undefined);
   const state = observation?.state;
   const sources = liveSources(live, resolveDisplayUnits(game, {profile}), gearDisplayFor(gearDisplay, game));
   const valueOf = (id: LiveFieldId) => {const field = sources.field(id); return field.state === 'value' ? field.text : undefined;};

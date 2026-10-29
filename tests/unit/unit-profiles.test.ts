@@ -1,3 +1,4 @@
+import {v1Projection, smokeV0} from '../shared/live-v1-fixtures';
 import {readFileSync} from 'node:fs';
 import {expect, it} from 'vitest';
 import type {LiveTelemetry} from '../../packages/contracts/src';
@@ -22,7 +23,7 @@ it('applies the metric profile without a game and the game profile otherwise', (
   expect(profileFor(units, 'ats')).toBe('metric');
 });
 
-it('takes the game from an explicit fixture source and otherwise only from an ETS2 or ATS selection', () => {
+it('retains explicit game defaults and resolves only matching fixture origins', () => {
   const observed = (selection: LiveTelemetry['selection'], origin: 'game' | 'synthetic' | 'replay', game: 'ets2' | 'ats'): LiveTelemetry =>
     ({...initialLive(selection), observation: {source: {origin, game}} as NonNullable<LiveTelemetry['observation']>});
   expect(displayGame(initialLive('ats'))).toBe('ats');
@@ -82,3 +83,21 @@ it.each([[1.25, '5'], [-1.25, '-5'], [0.001, '0'], [-0.001, '0'], [25, '90'], [2
     expect(volumeNumber(73, 'metric')).toBe('73.0'); expect(volumeNumber(73, 'us-customary')).toBe('19.3');
   }
 );
+
+it.each(['ets2', 'ats'] as const)('resolves automatic %s display settings from game observations, including a v1-only attachment', game => {
+  const live = smokeV0(); live.selection = 'game'; live.observation!.source = {...live.observation!.source, origin: 'game', game};
+  expect(displayGame(live)).toBe(game);
+  expect(displayProfile(live)).toBe(game === 'ats' ? 'us-customary' : 'metric');
+  expect(displayProfile({...live, fresh: false, status: 'stale'}, {ets2: 'us-customary', ats: 'metric'})).toBe(game === 'ats' ? 'metric' : 'us-customary');
+  const partial = {...initialLive('game'), v1: v1Projection('snapshot-live', {selection: 'game', origin: 'game', game})};
+  expect(displayGame(partial)).toBe(game); expect(displayProfile(partial)).toBe(game === 'ats' ? 'us-customary' : 'metric');
+  expect(displayProfile(partial, {ets2: 'us-customary', ats: 'metric'})).toBe(game === 'ats' ? 'metric' : 'us-customary');
+  for (const origin of ['synthetic', 'replay'] as const) {
+    expect(displayGame({...live, observation: {...live.observation!, source: {...live.observation!.source, origin}}})).toBeUndefined();
+    partial.v1.observation!.source.origin = origin; expect(displayGame(partial)).toBeUndefined();
+  }
+  partial.v1.observation!.source.origin = 'game'; partial.v1.selection = 'synthetic'; expect(displayGame(partial)).toBeUndefined();
+  // A v1 observation cannot replace a present but foreign v0 identity.
+  partial.v1.selection = 'game'; live.observation!.source.origin = 'synthetic';
+  expect(displayGame({...live, v1: partial.v1})).toBeUndefined();
+});
