@@ -13,6 +13,8 @@ import {actionResultId, createPluginActionController, PLUGIN_ACTION_ANSWERS as A
 import {connectionDiagnosisText, pluginSetupText} from './plugin-setup-text';
 import * as BASE_COPY from './strings';
 import {copyTable} from './screens/app-copy';
+import {InfoHint} from './info-hint';
+import {t} from './i18n';
 
 const PLUGIN_GAMES: readonly PluginGame[] = ['ets2', 'ats'];
 /** Pending controls stay focusable (aria-disabled) and look disabled; only the disabled setup mode uses native `disabled`. */
@@ -61,10 +63,12 @@ export function PluginSetupCardView({view, diagnosis, onView, language = 'en', p
     'aria-describedby': shown?.trigger === id && shown.text ? actionResultId(shown.slot) : undefined});
   return <Card size="sm" data-testid="plugin-card"><CardHeader><CardTitle><h2>{PLUGIN_STRINGS.title}</h2></CardTitle></CardHeader>
     <CardContent className="space-y-4">
-      {connection ? <div className="space-y-1"><p><span className="font-medium">{PLUGIN_STRINGS.diagnosisLabel}: </span><span data-testid="plugin-diagnosis">{connection.line}</span></p>
-        {connection.notes.map(note => <p key={note} className="text-sm text-muted-foreground" data-testid="plugin-diagnosis-note">{note}</p>)}</div> : null}
+      {connection ? <p className="flex flex-wrap items-center"><span className="font-medium">{PLUGIN_STRINGS.diagnosisLabel}:&nbsp;</span><span data-testid="plugin-diagnosis">{connection.line}</span>
+        <InfoHint label={t('ui.moreAbout', {v: PLUGIN_STRINGS.diagnosisLabel}, language)}>
+          {connection.notes.map(note => <span key={note} className="block" data-testid="plugin-diagnosis-note">{note}</span>)}
+          <span className="block text-xs text-muted-foreground" data-testid="plugin-bundled">{text.bundled}</span>
+        </InfoHint></p> : <p className="text-sm text-muted-foreground" data-testid="plugin-bundled">{text.bundled}</p>}
       {text.mode ? <Alert role="note"><AlertDescription data-testid="plugin-mode">{text.mode}</AlertDescription></Alert> : null}
-      <p data-testid="plugin-bundled">{text.bundled}</p>
       {text.running ? <p role="status" data-testid="plugin-running">{text.running}</p> : null}
       {PLUGIN_GAMES.map(game => {
         const entry = text.games[game];
@@ -101,7 +105,7 @@ export function PluginSetupCardView({view, diagnosis, onView, language = 'en', p
         <Button size="sm" variant="outline" className={PENDING_CLASS} {...trigger('plugin-export-diagnostics')}
           onClick={() => call({kind: 'export-diagnostics'}, () => window.desktop.exportDiagnostics(), ANSWERS.exportDiagnostics)}>{DIAGNOSTICS_EXPORT_STRINGS.button}</Button>
         {region('plugin-export-diagnostics')}
-        <p className="text-sm text-muted-foreground">{DIAGNOSTICS_EXPORT_STRINGS.note}</p>
+        <InfoHint label={t('ui.moreAbout', {v: DIAGNOSTICS_EXPORT_STRINGS.button}, language)}>{DIAGNOSTICS_EXPORT_STRINGS.note}</InfoHint>
       </div>
     </CardContent></Card>;
 }

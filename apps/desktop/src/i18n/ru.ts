@@ -610,7 +610,7 @@ export const RU_DICTIONARY: TranslationDictionary = channelCopyTable(Object.free
   's.units': 'Единицы',
   's.overlay': 'Оверлей',
   's.plugin': 'Плагин игры',
-  's.data': 'Данные',
+  's.data': 'Диагностика',
   's.about': 'О программе',
   's.lang': 'Язык интерфейса',
   's.langD': 'Названия грузов, городов и компаний показываются так, как их передаёт игра.',
@@ -877,5 +877,12 @@ export const RU_DICTIONARY: TranslationDictionary = channelCopyTable(Object.free
   'ver.unknown': 'Версия неизвестна',
   'ver.dev': 'Сборка для разработки',
   'ver.staging': 'Staging',
-  'ver.stagingA': 'тестовая сборка (staging)'
+  'ver.stagingA': 'тестовая сборка (staging)',
+  'ui.moreAbout': 'Подробнее: {v}',
+  's.interface': 'Интерфейс',
+  'live.time': 'Время',
+  'live.nextBreak': 'До обязательного перерыва',
+  'hm.howChecked': 'Как проверяется Hard Mode',
+  'j.incomeNote': 'Ожидаемый доход из заказа. Фактическая выплата или штраф — в карточке рейса.',
+  'tr.raw': 'Записанные данные: интервалы, события и сэмплы'
 }));

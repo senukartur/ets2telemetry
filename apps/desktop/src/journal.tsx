@@ -2,7 +2,7 @@ import {journalTileValues} from './screens/journal-tiles';
 import {SampleChart} from './screens/sample-chart';
 import {t} from './i18n';
 import {HardModeBadge, HardModeTrip} from './hard-mode/card';
-import {ArrowLeft, Check, Circle, X, Clock, Route, Fuel, Coins} from 'lucide-react';
+import {ArrowLeft, Check, ChevronRight, Circle, X, Route, Fuel, Coins} from 'lucide-react';
 import React, {useCallback, useEffect, useMemo, useRef, useState} from 'react';
 import type {
   AppLanguage, JournalCallResult, JournalCompleteness, JournalDatabase, JournalGame, JournalOutcome, JournalTripDetail, JournalTripPage, JournalTripsQuery, RecordingHealth, UnitProfiles
@@ -20,6 +20,7 @@ import {
 } from './journal-view';
 import {JOURNAL_COMPLETENESS_TEXT, JOURNAL_EXPORT_STRINGS, JOURNAL_GAME_TEXT, JOURNAL_LABEL_TEXT, JOURNAL_OUTCOME_TEXT, JOURNAL_STRINGS} from './strings';
 import {copyTable} from './screens/app-copy';
+import {InfoHint} from './info-hint';
 const JournalLanguage = React.createContext<AppLanguage>('en');
 const baseCopy = {JOURNAL_COMPLETENESS_TEXT, JOURNAL_EXPORT_STRINGS, JOURNAL_GAME_TEXT, JOURNAL_LABEL_TEXT, JOURNAL_OUTCOME_TEXT, JOURNAL_STRINGS};
 const journalCopy = {en: baseCopy, ru: copyTable(baseCopy, 'ru')};
@@ -130,8 +131,8 @@ function TripList({filters, options, recording, onDatabase, onOpen}: {
       {text.emptyNote ? <p className="text-muted-foreground" data-testid="journal-empty-note">{text.emptyNote}</p> : null}</div> : null}
     {text?.rows.length ? <Table data-testid="journal-table"><TableHeader><TableRow>
       <TableHead>{JOURNAL_LABEL_TEXT.started}</TableHead><TableHead>{JOURNAL_LABEL_TEXT.game}</TableHead><TableHead>{JOURNAL_LABEL_TEXT.cargo}</TableHead><TableHead>{JOURNAL_LABEL_TEXT.route}</TableHead>
-      <TableHead>{JOURNAL_LABEL_TEXT.observedDistance}</TableHead><TableHead>{JOURNAL_LABEL_TEXT.expectedIncome}</TableHead><TableHead>{JOURNAL_LABEL_TEXT.outcome}</TableHead><TableHead>{JOURNAL_LABEL_TEXT.completeness}</TableHead>
-      <TableHead>{t('col.sync', undefined, options.language)}</TableHead><TableHead>{JOURNAL_LABEL_TEXT.fuelUsed}</TableHead><TableHead />
+      <TableHead>{JOURNAL_LABEL_TEXT.observedDistance}</TableHead><TableHead><span className="yu-label-hint">{JOURNAL_LABEL_TEXT.expectedIncome}<InfoHint label={t('ui.moreAbout', {v: JOURNAL_LABEL_TEXT.expectedIncome}, options.language)}>{t('j.incomeNote', undefined, options.language)}</InfoHint></span></TableHead><TableHead>{JOURNAL_LABEL_TEXT.outcome}</TableHead><TableHead>{JOURNAL_LABEL_TEXT.completeness}</TableHead>
+      <TableHead>{JOURNAL_LABEL_TEXT.fuelUsed}</TableHead><TableHead />
     </TableRow></TableHeader><TableBody>
       {text.rows.map(row => {const outcome = paged.loaded.state === 'value' ? paged.loaded.value.trips.find(trip => trip.tripUuid === row.tripUuid)?.outcome : undefined;
         const OutcomeIcon = outcome === 'delivered' ? Check : outcome === 'cancelled' ? X : Circle;
@@ -140,10 +141,9 @@ function TripList({filters, options, recording, onDatabase, onOpen}: {
           <TableCell data-testid="journal-row-cargo">{row.cargo}{row.isHardMode ? <> <HardModeBadge short language={options.language} /></> : null}</TableCell>
           <TableCell data-testid="journal-row-route">{row.route}</TableCell>
           <TableCell><div data-testid="journal-row-observed">{row.observedDistance}</div><small className="yu-muted" data-testid="journal-row-planned">{row.plannedDistance}</small></TableCell>
-          <TableCell><div data-testid="journal-row-expected">{row.expectedIncome}</div><small className="block yu-muted">{t('ui.actualUnavailable', undefined, options.language)}</small></TableCell>
+          <TableCell><div data-testid="journal-row-expected">{row.expectedIncome}</div></TableCell>
           <TableCell data-testid="journal-row-outcome"><Badge variant={outcome === 'delivered' ? 'ok' : outcome === 'cancelled' ? 'error' : 'neutral'}><OutcomeIcon aria-hidden="true" className="size-3" />{row.outcome}</Badge></TableCell>
           <TableCell>{completenessBadge(row.completeness, 'journal-row-completeness')}</TableCell>
-          <TableCell><Badge variant="later">{t('tag.later', undefined, options.language)}</Badge></TableCell>
           <TableCell data-testid="journal-row-fuel">{row.fuelUsed}</TableCell>
           <TableCell><Button size="sm" variant="outline" data-testid="journal-row-open" onClick={() => onOpen({tripUuid: row.tripUuid, game: row.gameId})}>{JOURNAL_STRINGS.open}</Button></TableCell>
         </TableRow>;
@@ -154,7 +154,7 @@ function TripList({filters, options, recording, onDatabase, onOpen}: {
 
 function Summary({trip, options, detail, text, onDatabase}: {trip: Selected; options: JournalTextOptions; detail: JournalTripDetail; text: ReturnType<typeof journalDetailText>; onDatabase: (database: JournalDatabase) => void}) {
   return <div className="space-y-3 yu-trip-summary" data-testid="journal-summary">
-    <div className="yu-summary-chart"><Samples trip={trip} options={options} onDatabase={onDatabase} summary /></div>
+    <div className="yu-summary-chart"><Samples trip={trip} options={options} onDatabase={onDatabase} /></div>
     <div className="yu-trip-section" data-testid="trip.hardMode"><HardModeTrip qualified={detail.trip.isHardMode} details={detail.trip.hardModeDetails} language={options.language} /></div>
       {text.sections.map(section => <section key={section.id} className="space-y-1 yu-trip-section" data-testid={`journal-section-${section.id}`}>
         <h4 className="font-medium">{section.title}</h4>
@@ -205,7 +205,9 @@ function Timeline({trip, options, onDatabase}: {trip: Selected; options: Journal
   </div>;
 }
 
-function Samples({trip, options, onDatabase, summary = false}: {summary?: boolean; trip: Selected; options: JournalTextOptions; onDatabase: (database: JournalDatabase) => void}) {
+/** The chart of the current sample page, with that page's table in a collapsed section below it (ET-057). */
+function Samples({trip, options, onDatabase}: {trip: Selected; options: JournalTextOptions; onDatabase: (database: JournalDatabase) => void}) {
+  const {JOURNAL_STRINGS} = useJournalCopy();
   const {tripUuid, game} = trip;
   const read = useCallback((cursor: string | undefined) => window.desktop.listJournalSamples(tripUuid, cursor), [tripUuid]);
   const paged = usePagedRead(read, onDatabase);
@@ -214,14 +216,14 @@ function Samples({trip, options, onDatabase, summary = false}: {summary?: boolea
     <Pager paged={paged} testId="journal-samples" /><Status loaded={paged.loaded} testId="journal-samples" />
     {paged.loaded.state === 'value' ? <SampleChart samples={paged.loaded.value.samples} game={game} units={options.units} language={options.language} /> : null}
     {text?.empty ? <p data-testid="journal-samples-empty">{text.empty}</p> : null}
-    {!summary && text?.rows.length ? <Table><TableHeader><TableRow>{text.columns.map(column => <TableHead key={column.label}>{column.label}
+    {text?.rows.length ? <details className="yu-trip-raw" data-testid="trip.samples"><summary data-testid="trip.samples.toggle"><ChevronRight aria-hidden="true" />{JOURNAL_STRINGS.samplesTab}</summary><Table><TableHeader><TableRow>{text.columns.map(column => <TableHead key={column.label}>{column.label}
       {column.note ? <span className="block text-xs font-normal text-muted-foreground" data-testid="journal-samples-column-note">{column.note}</span> : null}</TableHead>)}</TableRow></TableHeader>
     <TableBody>{text.rows.map(row => row.kind === 'sample'
       ? <TableRow key={row.key} data-testid="journal-sample-row" data-kind="sample">
         {[row.time, row.speed, row.fuel, row.gear, row.rpm, row.odometer, row.range, row.consumption, row.gameTime, row.position].map((cell, index) => <TableCell key={index}>{cell}</TableCell>)}
       </TableRow>
       : <TableRow key={row.key} data-testid="journal-sample-row" data-kind={row.kind}><TableCell colSpan={text.columns.length} className="text-muted-foreground italic">{row.text}</TableCell></TableRow>)}
-    </TableBody></Table> : null}
+    </TableBody></Table></details> : null}
   </div>;
 }
 
@@ -245,10 +247,10 @@ function ExportTrip({tripUuid}: {tripUuid: string}) {
   return <div className="space-y-1" data-testid="journal-export">
     <div className="flex flex-wrap items-center gap-2">
       <Button size="sm" variant="outline" disabled={state.busy} onClick={run} data-testid="journal-export-button">{state.busy ? JOURNAL_EXPORT_STRINGS.exporting : JOURNAL_EXPORT_STRINGS.button}</Button>
+      <InfoHint label={t('ui.moreAbout', {v: JOURNAL_EXPORT_STRINGS.button}, language)} align="end" testId="journal-export-note">{JOURNAL_EXPORT_STRINGS.note}</InfoHint>
       {result ? <span role="status" className={result.failed ? 'text-destructive' : undefined} data-testid="journal-export-result" data-failed={result.failed ? 'true' : 'false'}>
         {result.text}</span> : null}
     </div>
-    <p className="text-xs text-muted-foreground" data-testid="journal-export-note">{JOURNAL_EXPORT_STRINGS.note}</p>
   </div>;
 }
 
@@ -275,22 +277,20 @@ function TripDetail({trip, options, onDatabase, onBack}: {trip: Selected; option
     {text && tiles ? <div className="yu-trip-tiles" data-testid="trip.tiles">
       <div className="yu-trip-tile yu-tile-distance"><span><Route aria-hidden="true" />{t('tr.distance', undefined, language)}</span><strong>{tiles.distance.value}</strong>{tiles.distance.note ? <small>{tiles.distance.note}</small> : null}<small>{t('tr.planned', {v: value('distance', 'plannedDistance')}, language)}</small><small>{t('tr.delivered', {v: value('distance', 'deliveredDistance')}, language)}</small></div>
       <div className="yu-trip-tile yu-tile-money"><span><Coins aria-hidden="true" />{detail?.trip.outcome === 'cancelled' ? t('tr.penalty', undefined, language) : t('tr.revenue', undefined, language)}</span><strong>{tiles.money.value}</strong><small>{tiles.money.note}</small><small>{t('tr.expected', {v: value('money', 'expectedIncome')}, language)}</small></div>
-      <div className="yu-trip-tile"><span><Clock aria-hidden="true" />{t('tr.time', undefined, language)}</span><strong>—</strong><small>{t('ui.unavailable', undefined, language)}</small></div>
-      <div className="yu-trip-tile"><span><Fuel aria-hidden="true" />{t('tr.fuel', undefined, language)}</span><strong>{tiles.fuel.value}</strong>{tiles.fuel.note ? <small>{tiles.fuel.note}</small> : null}<small>{t('tr.fuelNote', undefined, language)}</small></div>
+      <div className="yu-trip-tile"><span><Fuel aria-hidden="true" />{t('tr.fuel', undefined, language)}<InfoHint label={t('ui.moreAbout', {v: t('tr.fuel', undefined, language)}, language)}>{t('tr.fuelNote', undefined, language)}</InfoHint></span><strong>{tiles.fuel.value}</strong>{tiles.fuel.note ? <small>{tiles.fuel.note}</small> : null}</div>
     </div> : null}
-    {/* Each tab reads when it opens; an inactive tab is unmounted and holds no page. */}
-    <Tabs defaultValue="summary" data-testid="trip.detailTabs">
+    {text && detail ? <Summary trip={trip} options={options} detail={detail} text={text} onDatabase={onDatabase} /> : null}
+    {/* ET-057: the raw intervals, events and samples are a collapsed section, not the trip's first view. Each tab reads when
+        it opens; an inactive tab is unmounted and holds no page. */}
+    <details className="yu-trip-raw" data-testid="trip.raw"><summary data-testid="trip.raw.toggle"><ChevronRight aria-hidden="true" />{t('tr.raw', undefined, language)}</summary>
+    <Tabs defaultValue="intervals" data-testid="trip.detailTabs">
       <TabsList>
-        <TabsTrigger value="summary" data-testid="journal-detail-tab-summary">{JOURNAL_STRINGS.summaryTab}</TabsTrigger>
         <TabsTrigger value="intervals" data-testid="journal-detail-tab-intervals">{JOURNAL_STRINGS.intervalsTab}</TabsTrigger>
         <TabsTrigger value="timeline" data-testid="journal-detail-tab-timeline">{JOURNAL_STRINGS.timelineTab}</TabsTrigger>
-        <TabsTrigger value="samples" data-testid="journal-detail-tab-samples">{JOURNAL_STRINGS.samplesTab}</TabsTrigger>
       </TabsList>
-      <TabsContent value="summary">{text && detail ? <Summary trip={trip} options={options} detail={detail} text={text} onDatabase={onDatabase} /> : null}</TabsContent>
       <TabsContent value="intervals"><Intervals trip={trip} options={options} onDatabase={onDatabase} /></TabsContent>
       <TabsContent value="timeline"><Timeline trip={trip} options={options} onDatabase={onDatabase} /></TabsContent>
-      <TabsContent value="samples"><Samples trip={trip} options={options} onDatabase={onDatabase} /></TabsContent>
-    </Tabs>
+    </Tabs></details>
   </div>;
 }
 
@@ -326,7 +326,7 @@ export function Journal({units, recording, language}: {units: UnitProfiles | und
       {selected ? <TripDetail key={selected.tripUuid} trip={selected} options={options} onDatabase={setDatabase} onBack={() => setSelected(null)} /> : null}
       {/* The list stays mounted, hidden, while a trip is open, so Back returns to the same page without reading it again. */}
       <div className="space-y-3" hidden={selected !== null}>
-        <div className="flex flex-wrap gap-3 yu-journal-filters"><label className="yu-search-planned">{t('j.search', undefined, language)}<input disabled placeholder={t('ui.searchPlanned', undefined, language)} data-testid="journal-search-planned" /></label>
+        <div className="flex flex-wrap gap-3 yu-journal-filters">
           <FilterSelect label={JOURNAL_STRINGS.gameFilter} value={filters.game} options={GAMES} text={JOURNAL_GAME_TEXT} testId="journal-filter-game"
             onChange={game => setFilters(current => ({...current, game}))} />
           <FilterSelect label={JOURNAL_STRINGS.outcomeFilter} value={filters.outcome} options={OUTCOMES} text={JOURNAL_OUTCOME_TEXT} testId="journal-filter-outcome"

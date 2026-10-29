@@ -16,11 +16,11 @@ const expected: FixtureExpectation = {language: 'ru', hint: 'air', details: true
   id: id as FixtureExpectation['rules'][number]['id'], state: id === 'fatigue' ? 'fail' : 'pass', values: values[i], reason: id === 'fatigue' ? 'outside-limit' : 'compliant',
   label: id + ': ' + (id === 'fatigue' ? 'не выполнено' : 'выполнено'), name: id,
   tooltip: [id, 'Обнаружено: ' + values[i].join('/'), 'Требуется: fixture', 'Причина: fixture'],
-  details: [id, 'Обнаружено: ' + values[i].join('/'), 'Требуется: fixture', 'fixture']}))};
+  details: ['Обнаружено: ' + values[i].join('/'), 'Требуется: fixture']}))};
 function snapshot(status: HardModeStatus = {assessment: failing(), trip: null}): FixtureSnapshot {
   return {status, language: 'ru', rows: expected.rules.map(({id, state, label, name}) => ({id, state, label, name, buttonCount: 1})),
     hint: {count: 1, visible: true, lines: [...expected.rules[1].tooltip]},
-    details: {count: 1, visible: true, rows: expected.rules.map(rule => ({id: rule.id, lines: [...rule.details]}))}};
+    details: {count: 1, visible: true, rows: expected.rules.filter(rule => rule.state !== 'pass').map(rule => ({id: rule.id, lines: [...rule.details]}))}};
 }
 it('reacquires genuine fail evidence after real monitor selection loss and waits for backend plus rendered agreement', async () => {
   const source: SourceIdentity = {game: 'ets2', origin: 'synthetic', processId: 123, windowsSessionId: 1,
@@ -58,7 +58,7 @@ it.each(['persistent unknown','wrong air value','wrong RU label','missing criter
     if (fault === 'missing tooltip value') bad.hint!.lines.splice(1, 1);
     if (fault === 'wrong tooltip reason') bad.hint!.lines[3] = 'Причина: неверно';
     if (fault === 'hidden tooltip') bad.hint!.visible = false;
-    if (fault === 'wrong details value') bad.details!.rows[1].lines[1] = 'Обнаружено: Выкл. (0)';
+    if (fault === 'wrong details value') bad.details!.rows[0].lines[0] = 'Обнаружено: Выкл. (1)';
     const record: FixtureRecord = {}, refresh = vi.fn(() => Promise.resolve());
     const pending = waitForHardModeFixture({refresh, observe: () => Promise.resolve(bad), expected, record, message: 'FAIL_FIXTURE'});
     const rejected = expect(pending).rejects.toThrow('FAIL_FIXTURE within 5000 ms');
@@ -87,7 +87,7 @@ it('awaits backend status before one self-contained DOM snapshot, including exac
   const rules = expected.rules.map(rule => ({getAttribute: (key: string) => key === 'data-testid' ? 'hard-mode-rule-' + rule.id : rule.state}));
   const tooltip = {getClientRects: () => [{}], querySelectorAll: () => paragraphs(expected.rules[1].tooltip)};
   const details = {getClientRects: () => [{}]};
-  const detailsRows = expected.rules.map(rule => ({getAttribute: () => 'hard-mode-detail-rule-' + rule.id, querySelectorAll: () => paragraphs(rule.details)}));
+  const detailsRows = expected.rules.filter(rule => rule.state !== 'pass').map(rule => ({getAttribute: () => 'hard-mode-detail-rule-' + rule.id, querySelectorAll: () => paragraphs(rule.details)}));
   const document = {documentElement: {lang: 'ru'}, querySelectorAll: (selector: string) => {
     domReads++;
     if (selector === '[data-testid^="hard-mode-rule-"]') return rules;

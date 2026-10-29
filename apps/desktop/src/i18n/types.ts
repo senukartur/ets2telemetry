@@ -476,6 +476,7 @@ export type I18nKey =
   | 'upd.failure.HASH_MISMATCH' | 'upd.failure.DISK_FULL' | 'upd.failure.APPLY_FAILED' | 'upd.failure.APPLY_TIMEOUT'
   | 'upd.check' | 'upd.check.pending' | 'upd.check.upToDate' | 'upd.check.available' | 'upd.check.failed' | 'upd.check.unsupported' | 'upd.check.ready' | 'upd.check.rejected'
   | 'ver.line' | 'ver.unknown' | 'ver.dev' | 'ver.staging' | 'ver.stagingA'
-  | 'lang.title' | 'lang.en' | 'lang.ru' | 'lang.saveFailed';
+  | 'lang.title' | 'lang.en' | 'lang.ru' | 'lang.saveFailed'
+  | 'ui.moreAbout' | 's.interface' | 'live.time' | 'live.nextBreak' | 'hm.howChecked' | 'j.incomeNote' | 'tr.raw';
 
 export type TranslationDictionary = Readonly<Record<I18nKey, string>>;

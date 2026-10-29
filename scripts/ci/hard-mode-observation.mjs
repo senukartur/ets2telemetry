@@ -121,7 +121,7 @@ export async function runHardModeSmoke({application, dashboard, source, config, 
       const label = `${names[index]}: ${id === 'fatigue' ? fail : pass}`;
       return {id, state: id === 'fatigue' ? 'fail' : 'pass', values: values[index], reason: id === 'fatigue' ? 'outside-limit' : 'compliant',
         label, name: names[index], tooltip: [label, `${detectedLabel}: ${detected}`, `${requiredLabel}: ${required}`, `${reasonLabel}: ${reason}`],
-        details: [label, `${detectedLabel}: ${detected}`, `${requiredLabel}: ${required}`, reason]};
+        details: [`${detectedLabel}: ${detected}`, `${requiredLabel}: ${required}`]};
     });
     const renderedFixture = (message, options = {}) => {
       const observation = {message}; (record.fixtureWaits ??= []).push(observation);
@@ -149,7 +149,7 @@ export async function runHardModeSmoke({application, dashboard, source, config, 
       assert.equal(await trigger.evaluate(element => element === globalThis.document.activeElement), true, `Escape moved focus from ${lang}/${id}`);
     }
     const details = dashboard.getByTestId('hard-mode-details'); await details.waitFor({state: 'visible'});
-    assert.equal(await details.locator('[data-testid^="hard-mode-detail-rule-"]').count(), 12);
+    assert.equal(await details.locator('[data-testid^="hard-mode-detail-rule-"]').count(), 1);
     await renderedFixture('HARD_MODE_INLINE_' + lang, {details: true});
     const pageText = await dashboard.getByTestId('hard-mode-card').innerText();
     for (const caveat of (lang === 'en' ? ['Read-only checks observe persisted settings.', 'Unpersisted menu or console changes and transient changes between checks are not verified.', 'Manual delivery is required; actual Expert placement is not verified.', 'Current settings pass is separate from delivered-trip qualification.'] : ['Проверка только читает сохранённые настройки.', 'Несохранённые изменения в меню или консоли и временные изменения между проверками не проверяются.', 'Требуется ручная парковка; фактическое место уровня «Эксперт» не подтверждается.', 'Соответствие текущих настроек не означает, что завершённый рейс будет засчитан как Hard Mode.'])) assert.ok(pageText.includes(caveat), `Missing ${lang} page caveat: ${caveat}`);

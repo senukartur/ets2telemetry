@@ -610,7 +610,7 @@ export const EN_DICTIONARY: TranslationDictionary = channelCopyTable(Object.free
   's.units': 'Units',
   's.overlay': 'Overlay',
   's.plugin': 'Game plugin',
-  's.data': 'Data and storage',
+  's.data': 'Diagnostics',
   's.about': 'About',
   's.lang': 'Interface language',
   's.langD': 'Cargo, city and company names stay as the game sends them.',
@@ -877,5 +877,12 @@ export const EN_DICTIONARY: TranslationDictionary = channelCopyTable(Object.free
   'ver.unknown': 'Version unknown',
   'ver.dev': 'Development build',
   'ver.staging': 'Staging',
-  'ver.stagingA': 'staging build'
+  'ver.stagingA': 'staging build',
+  'ui.moreAbout': 'More about: {v}',
+  's.interface': 'Interface',
+  'live.time': 'Time',
+  'live.nextBreak': 'Next mandatory break',
+  'hm.howChecked': 'How Hard Mode is checked',
+  'j.incomeNote': 'Expected income from the job. The actual payment or penalty is in the trip details.',
+  'tr.raw': 'Recorded data: intervals, events and samples'
 }));

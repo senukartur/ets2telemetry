@@ -205,10 +205,15 @@ async function back(dashboard) {
 const table = {
   intervals: {tab: 'journal-detail-tab-intervals', root: 'journal-intervals', prefix: 'journal-intervals', row: 'journal-interval-row', header: 'journal-intervals-total'},
   timeline: {tab: 'journal-detail-tab-timeline', root: 'journal-timeline', prefix: 'journal-events', row: 'journal-event-row', header: 'journal-window'},
-  samples: {tab: 'journal-detail-tab-samples', root: 'journal-samples', prefix: 'journal-samples', row: 'journal-sample-row', header: null}
+  // ET-057: the sample table is under the trip's chart, not a tab; its rows are in the document while the section is closed.
+  samples: {tab: null, root: 'journal-samples', prefix: 'journal-samples', row: 'journal-sample-row', header: null}
 };
 async function openTable(dashboard, kind, count) {
-  await clickTestId(dashboard, table[kind].tab);
+  // ET-057: the raw tables are a collapsed section of the trip; open it once per trip.
+  if (table[kind].tab) {
+    if (!await dashboard.getByTestId('trip.raw').evaluate(node => node.open, undefined, {timeout: 5000})) await clickTestId(dashboard, 'trip.raw.toggle');
+    await clickTestId(dashboard, table[kind].tab);
+  }
   return until(dashboard, tableState, {...table[kind], page: 1, count});
 }
 async function nextTable(dashboard, kind, page, count, direction = 'next') {

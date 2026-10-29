@@ -66,7 +66,7 @@ it.each(['en', 'ru'] as const)('renders one labelled, described group per game w
   expect(html).toContain(escaped(COPY[language].title));
   expect(t('s.gear', undefined, language)).toBe(COPY[language].title);
   expect(html).toContain(`id="gear-display-description"`);
-  expect(html).toContain(`<p id="gear-display-description" class="text-sm text-muted-foreground">${escaped(COPY[language].description)}</p>`);
+  expect(html).toContain(`<p id="gear-display-description" class="sr-only">${escaped(COPY[language].description)}</p>`);
   for (const game of ['ets2', 'ats'] as const) {
     expect(html.match(new RegExp(`data-testid="gear-display-${game}"`, 'g'))).toHaveLength(1);
     expect(html).toContain(`<p id="gear-display-${game}-label">${escaped(getUnitGameText(game, language))}</p>`);

@@ -19,9 +19,15 @@ export async function chooseSource(page, value) {
   await page.getByTestId('source-select').selectOption(value);
   await screen(page, 'live');
 }
+/**
+ * ET-057: the language is chosen in Settings > General (the sidebar menu is gone). The route shown before the choice is
+ * shown again afterwards, so callers keep their screen.
+ */
 export async function chooseLanguage(page, value) {
-  await page.getByTestId('shell.language').click({timeout: 5000});
-  await page.getByTestId(`shell.language.${value}`).click({timeout: 5000});
+  const previous = await page.locator('.yu-sidebar .yu-nav-item[aria-current="page"]').getAttribute('data-testid', {timeout: 5000});
+  await settingsPanel(page, 'general');
+  const radio = page.locator(`#language-${value}`);
+  if (await radio.getAttribute('aria-checked') !== 'true') await radio.click({timeout: 5000});
   // Await IPC in the host and observe the rendered language under one condition deadline.
   const deadline = performance.now() + 5000, expired = () => new Error('UI_LANGUAGE_SAVED within 5000 ms');
   for (;;) {
@@ -30,18 +36,20 @@ export async function chooseLanguage(page, value) {
     let timer, observed;
     try {
       observed = await Promise.race([
-        page.evaluate(async () => {
+        page.evaluate(async language => {
           const state = await globalThis.desktop.getAppState();
-          const triggers = globalThis.document.querySelectorAll('[data-testid="shell.language"]');
           return {language: state.settings.language, documentLanguage: globalThis.document.documentElement.lang,
-            count: triggers.length, label: triggers[0]?.textContent?.trim()};
-        }),
+            checked: globalThis.document.getElementById(`language-${language}`)?.getAttribute('aria-checked')};
+        }, value),
         new Promise((_, reject) => {timer = setTimeout(() => reject(expired()), remaining);})
       ]);
     } finally {clearTimeout(timer);}
     const left = deadline - performance.now();
     if (left <= 0) throw expired();
-    if (observed.language === value && observed.documentLanguage === value && observed.count === 1 && observed.label === value.toUpperCase()) return;
+    if (observed.language === value && observed.documentLanguage === value && observed.checked === 'true') {
+      if (previous && previous !== 'tab-settings') await page.getByTestId(previous).click({timeout: Math.max(1, deadline - performance.now())});
+      return;
+    }
     await new Promise(resolve => setTimeout(resolve, Math.min(50, left)));
   }
 }
