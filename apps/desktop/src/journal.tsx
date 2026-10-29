@@ -205,9 +205,13 @@ function Timeline({trip, options, onDatabase}: {trip: Selected; options: Journal
   </div>;
 }
 
-/** The chart of the current sample page, with that page's table in a collapsed section below it (ET-057). */
+/**
+ * The chart of the current sample page, with that page's table in a collapsed section below it (ET-057). The table is
+ * rendered only while the section is open, so a trip's first view does not build up to 300 rows nobody looks at.
+ */
 function Samples({trip, options, onDatabase}: {trip: Selected; options: JournalTextOptions; onDatabase: (database: JournalDatabase) => void}) {
   const {JOURNAL_STRINGS} = useJournalCopy();
+  const [tableOpen, setTableOpen] = useState(false);
   const {tripUuid, game} = trip;
   const read = useCallback((cursor: string | undefined) => window.desktop.listJournalSamples(tripUuid, cursor), [tripUuid]);
   const paged = usePagedRead(read, onDatabase);
@@ -216,14 +220,14 @@ function Samples({trip, options, onDatabase}: {trip: Selected; options: JournalT
     <Pager paged={paged} testId="journal-samples" /><Status loaded={paged.loaded} testId="journal-samples" />
     {paged.loaded.state === 'value' ? <SampleChart samples={paged.loaded.value.samples} game={game} units={options.units} language={options.language} /> : null}
     {text?.empty ? <p data-testid="journal-samples-empty">{text.empty}</p> : null}
-    {text?.rows.length ? <details className="yu-trip-raw" data-testid="trip.samples"><summary data-testid="trip.samples.toggle"><ChevronRight aria-hidden="true" />{JOURNAL_STRINGS.samplesTab}</summary><Table><TableHeader><TableRow>{text.columns.map(column => <TableHead key={column.label}>{column.label}
+    {text?.rows.length ? <details className="yu-trip-raw" data-testid="trip.samples" onToggle={event => setTableOpen(event.currentTarget.open)}><summary data-testid="trip.samples.toggle"><ChevronRight aria-hidden="true" />{JOURNAL_STRINGS.samplesTab}</summary>{tableOpen ? <Table><TableHeader><TableRow>{text.columns.map(column => <TableHead key={column.label}>{column.label}
       {column.note ? <span className="block text-xs font-normal text-muted-foreground" data-testid="journal-samples-column-note">{column.note}</span> : null}</TableHead>)}</TableRow></TableHeader>
     <TableBody>{text.rows.map(row => row.kind === 'sample'
       ? <TableRow key={row.key} data-testid="journal-sample-row" data-kind="sample">
         {[row.time, row.speed, row.fuel, row.gear, row.rpm, row.odometer, row.range, row.consumption, row.gameTime, row.position].map((cell, index) => <TableCell key={index}>{cell}</TableCell>)}
       </TableRow>
       : <TableRow key={row.key} data-testid="journal-sample-row" data-kind={row.kind}><TableCell colSpan={text.columns.length} className="text-muted-foreground italic">{row.text}</TableCell></TableRow>)}
-    </TableBody></Table></details> : null}
+    </TableBody></Table> : null}</details> : null}
   </div>;
 }
 

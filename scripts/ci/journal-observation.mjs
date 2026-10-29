@@ -213,6 +213,11 @@ async function openTable(dashboard, kind, count) {
   if (table[kind].tab) {
     if (!await dashboard.getByTestId('trip.raw').evaluate(node => node.open, undefined, {timeout: 5000})) await clickTestId(dashboard, 'trip.raw.toggle');
     await clickTestId(dashboard, table[kind].tab);
+  } else {
+    // The sample table renders only while its section under the chart is open; a trip without samples has no section.
+    await dashboard.getByTestId('journal-samples-loading').waitFor({state: 'detached', timeout: 5000});
+    const section = dashboard.getByTestId('trip.samples');
+    if (await section.count() && !await section.evaluate(node => node.open)) await clickTestId(dashboard, 'trip.samples.toggle');
   }
   return until(dashboard, tableState, {...table[kind], page: 1, count});
 }

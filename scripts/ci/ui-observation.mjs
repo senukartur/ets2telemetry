@@ -769,6 +769,7 @@ export async function runUiSmoke({application, dashboard, overlay, source, sourc
         await dashboard.getByTestId('trip.raw.toggle').click();
         for (const tab of ['intervals', 'timeline']) {await dashboard.getByTestId(`journal-detail-tab-${tab}`).click(); await dashboard.getByTestId(`journal-${tab === 'timeline' ? 'events' : tab}-loading`).waitFor({state: 'detached'}); await save(tab, language, size);}
         await dashboard.getByTestId('journal-samples-loading').waitFor({state: 'detached'}); await dashboard.getByTestId('trip.samples.toggle').click();
+        await dashboard.getByTestId('journal-sample-row').first().waitFor({state: 'attached', timeout: 5000});
         assert.equal(await dashboard.getByTestId('journal-sample-row').count(), 300);
         assert.equal(await dashboard.getByTestId('trip.chart.segment').count(), 1);
         assert.equal(await dashboard.locator('[data-testid="trip.chart"] circle').count(), 300);
