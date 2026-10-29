@@ -1,3 +1,6 @@
+import {GameSourceCoordinator} from './game-source-coordinator';
+import {discoverGames} from './native-game-discovery';
+import {resolveSourceMode} from './source-mode';
 import {hardModeFixtureReader} from './hard-mode/fixture';
 import {HardModeReader} from './hard-mode/reader';
 import {HardModeMonitor} from './hard-mode/monitor';
@@ -76,12 +79,14 @@ function postFailure(message: {type: string; code?: unknown}): void {
 const subscriptions = new LiveSubscriptions(initialLive());
 // The live update is the latest v0 update with the whitelisted v1 projection of the same selection attached
 // (ET-010c decisions F1 and F2); the subscriptions coalesce both to at most 20 Hz.
+let requestedSelection: SourceSelection = 'game';
+let effectiveSelection: SourceSelection = 'game';
 let v0Live: LiveTelemetry = initialLive();
 let v1Live: LiveTelemetryV1 | undefined;
 function publishLive(): void {subscriptions.publish(withV1(v0Live, v1Live));}
 // Broker exits are logged as fixed outcome/stage codes and numbers only; routine waiting exits are omitted
 // and repeated identical failures are coalesced so a retry loop cannot fill the bounded log.
-const ingestion = new TelemetryIngestion(update => {v0Live = update; publishLive();}, {diagnose: coalesceBrokerDiagnostics(diagnostic => log('NATIVE_BROKER_EXIT', undefined, {...diagnostic}))});
+const ingestion = new TelemetryIngestion(update => {if (update.selection !== effectiveSelection) return; v0Live = {...update, selection: requestedSelection}; coordinator.observe('v0', update); publishLive();}, {diagnose: coalesceBrokerDiagnostics(diagnostic => log('NATIVE_BROKER_EXIT', undefined, {...diagnostic}))});
 const fixtureEndpoint = process.env.ETS2TELEMETRY_SOURCE_PIPE;
 // Protocol v1 (ET-006b, E2) runs beside v0 and follows every selection. Unless the recording gate below gives it a sink,
 // it is live-only: each hello asks for durableEvents false, nothing is acknowledged and no history row is written. Since
@@ -119,15 +124,16 @@ let hardModeReader: HardModeReader | undefined = hardModeFixtureReader(process.e
 let lastV1: V1SourceState | undefined;
 /** Republishes only for a change the projection shows: a clock mapping or durable status update alone is not one. */
 function onV1State(state: V1SourceState): void {
+  recordV1State(state);
+  if (state.selection !== effectiveSelection) return;
   const current = state.fresh && state.observation && (state.status === 'connected' || state.status === 'paused') ? state.observation : undefined;
   if (current?.source.origin === 'game' && !steamDiscoveryStarted) {steamDiscoveryStarted = true; void readSteamRoot({signal: hardModeLifetime.signal}).then(root => {if (root.kind === 'found') steamRoot = root.path;}, () => undefined);}
   hardMode.select(current ? {source: current.source, monotonicNs: current.capture.monotonicNs, clockId: current.capture.clockId, boundary: state.clockBoundary} : null);
   hardModeGame = current?.source.game ?? hardModeGame;
-  recordV1State(state);
   const previous = lastV1; lastV1 = state;
   if (previous && previous.selection === state.selection && previous.status === state.status && previous.reason === state.reason &&
     previous.fresh === state.fresh && previous.observation === state.observation) return;
-  v1Live = liveV1Projection(state); publishLive();
+  v1Live = {...liveV1Projection(state), selection: requestedSelection}; coordinator.observe('v1', state); publishLive();
 }
 // ET-015a recording gate (R3, R10): since the owner's authorization of October 25, 2026 GAME_HISTORY_RECORDING is true, so
 // the ets2 and ats selections are durable over the history database. ETS2TELEMETRY_RECORDING=synthetic:<name>|replay:<name>
@@ -141,7 +147,7 @@ function onV1State(state: V1SourceState): void {
 // orderly stop begins; a service whose plan has no durable selection builds no recorder and reports {state: 'disabled'} once,
 // which production no longer does.
 const runtime = createRecordingRuntime({env: process.env, gameHistory: GAME_HISTORY_RECORDING, localAppData: process.env.LOCALAPPDATA, log,
-  createWorker: () => historyWorker(__dirname), connectGame: (configuration, game) => new NativePipeClient(configuration, game, diagnoseV1Broker, 'v1'),
+  createWorker: () => historyWorker(__dirname), connectGame: (configuration, game, target) => new NativePipeClient(configuration, game, diagnoseV1Broker, 'v1', target),
   hardModeEvidence: () => hardMode.evidence(), onHardModeTrip: details => {port.postMessage({type: 'hard-mode', update: 'trip', trip: details});},
   onV1State, onRecordingStatus: status => port.postMessage({type: 'recording', status})});
 const v1 = runtime.v1;
@@ -153,6 +159,26 @@ function selectV1(selection: SourceSelection, broker: BrokerConfiguration | unde
   try {v1.configureBroker(v1BrokerConfiguration(broker)); v1.select(selection, v1FixtureEndpoint);}
   catch {log('V1_SELECT_REJECTED');}
 }
+const coordinator = new GameSourceCoordinator({
+  discover: discoverGames,
+  retire: async () => {
+    effectiveSelection = 'game'; v0Live = initialLive(requestedSelection); v1Live = undefined; lastV1 = undefined; publishLive();
+    hardMode.select(null); hardModeGame = undefined;
+    await Promise.all([ingestion.retire(), v1.retire()]);
+    ingestion.configureTarget(undefined); v1.configureTarget(undefined);
+  },
+  attach: (selection, target) => {
+    effectiveSelection = selection;
+    ingestion.configureTarget(target); v1.configureTarget(target);
+    ingestion.select(selection, fixtureEndpoint); selectV1(selection, activeBroker);
+  },
+  publish: (status, reason) => {
+    v0Live = {...initialLive(requestedSelection), status, reason};
+    v1Live = {selection: requestedSelection, status: status === 'service-failed' || status === 'restarting' ? 'unavailable' : status, reason, fresh: false};
+    publishLive();
+  }
+});
+let activeBroker: BrokerConfiguration | undefined;
 async function boundedSha256(filename: string, limit: number): Promise<string | null> {
   try {
     const file = await open(filename, 'r');
@@ -231,7 +257,7 @@ function exitAfterHistory(code: number): void {
   void Promise.race([runtime.history.close().catch(() => undefined), bound]).then(() => {clearTimeout(timer); return exitAfterLog(code);});
 }
 const shutdown = new ShutdownSequence(log);
-shutdown.register('intake', {name: 'ingestion', budgetMs: 1000, run: () => ingestion.stop()});
+shutdown.register('intake', {name: 'ingestion', budgetMs: 1000, run: async () => {await coordinator.stop(); await ingestion.stop();}});
 shutdown.register('intake', {name: 'capture', budgetMs: 1000, run: () => captures.stop()});
 shutdown.register('storage', {name: 'storage-probe', budgetMs: 1000, run: async () => {
   await probe.stop();
@@ -268,8 +294,11 @@ port.on('message', event => {
         if (typeof configuration.executable !== 'string' || typeof configuration.discoveryDirectory !== 'string') throw new Error('Invalid broker configuration');
         broker = {executable: configuration.executable, discoveryDirectory: configuration.discoveryDirectory};
       }
-      ingestion.configureBroker(broker); ingestion.select(selection, fixtureEndpoint);
-      selectV1(selection, broker);
+      const mode = resolveSourceMode(selection, process.env);
+      requestedSelection = mode.selection; activeBroker = mode.kind === 'game' ? broker : undefined;
+      ingestion.configureBroker(activeBroker);
+      v0Live = initialLive(requestedSelection); v1Live = undefined; publishLive();
+      coordinator.select(mode, activeBroker);
       // Evidence capture is independent of live ingestion: a rejected grant never fails selection.
       if (command.capture !== undefined) captures.offer(command.capture, selection, broker);
     }

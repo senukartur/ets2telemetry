@@ -1,3 +1,8 @@
+import {GameSourceCoordinator} from '../../apps/desktop/src/game-source-coordinator';
+import {resolveSourceMode} from '../../apps/desktop/src/source-mode';
+import type {GameDiscovery, GameTarget} from '../../apps/desktop/src/native-game-discovery';
+import {decodePayload, encodeFrame, type ClientMessage, type ServerMessage} from '../../packages/contracts/src/protocol-v1';
+import {Script, ETS2_A, ETS2_B, ATS_A, r} from '../shared/trip-messages';
 // ET-015c PR-1 (G13, G14, G20): the telemetry service's recording runtime (apps/desktop/src/recording-runtime.ts), the
 // production wiring of the recording plan, HistoryStorage, TripRecorderSink and V1Ingestion, driven in process under the
 // pinned Electron runtime with the real or the fault storage worker, the real ShutdownSequence (production timers except the explicit controlled-shutdown-clock regression)
@@ -5,7 +10,7 @@
 // LOCALAPPDATA and must never create its history database. Waits count held requests, commits and ACKs; real-time bounds
 // are named hang guards only. Expected values are written by hand from R10, R14, H11 and the simulator scenarios.
 import {existsSync, readFileSync} from 'node:fs';
-import {once} from 'node:events';
+import {EventEmitter, once} from 'node:events';
 import path from 'node:path';
 import {afterEach, beforeEach, describe, expect, it} from 'vitest';
 import type {StorageWorkerHandle} from '../../packages/storage/src/client';
@@ -326,3 +331,118 @@ describe('ET-015c recording runtime with the real storage worker and the real sh
   }, 90_000);
 });
 
+
+/** Verified relay stand-in: storage remains the real worker and SQLite; native peer validation has its own tests. */
+class CoordinatedSocket extends EventEmitter {
+  authority: GameTarget['source']; target: GameTarget; readonly sent: ClientMessage[] = []; destroyed = false;
+  constructor(target: GameTarget) {super(); this.target = target; this.authority = target.source;}
+  write(bytes: Uint8Array) {this.sent.push(decodePayload(bytes.subarray(4), 'client', {maxMinor: 2}) as ClientMessage);}
+  destroy() {this.destroyed = true;}
+  feed(message: ServerMessage) {this.emit('data', encodeFrame({...message, source: this.authority}));}
+  get acks() {return this.sent.flatMap(message => message.kind === 'ack' ? [message.data.throughEventSeq] : []);}
+}
+function coordinatedRuntime(worker: StorageWorkerHandle, env: Record<string, string> = {}) {
+  const sockets: CoordinatedSocket[] = [], publications: string[] = [];
+  let available: GameDiscovery = {ets2: {status: 'absent'}, ats: {status: 'absent'}}, discoveries = 0;
+  const runtime = createRecordingRuntime({env, log: () => undefined, gameHistory: GAME_HISTORY_RECORDING, localAppData: ws.directory, createWorker: () => worker,
+    connectGame: (_configuration, _game, target) => {const socket = new CoordinatedSocket(target!); sockets.push(socket); return socket;},
+    historyOverrides: {appVersion: '0.1.0-test', closeGraceMs: TEST_CLOSE_GRACE_MS}, ingestionOverrides: {sampleFlushMs: NO_FLUSH_TIMER_MS},
+    onV1State: state => coordinator.observe('v1', state)});
+  const coordinator = new GameSourceCoordinator({
+    discover: () => {discoveries++; return Promise.resolve(available);},
+    retire: () => runtime.v1.retire(),
+    attach: (selection, target) => {
+      runtime.v1.configureBroker({executable: 'isolated', discoveryDirectory: 'isolated'}); runtime.v1.configureTarget(target); runtime.v1.select(selection);
+    },
+    publish: (_status, reason) => publications.push(reason)
+  });
+  const select = () => coordinator.select(resolveSourceMode('game', env), {executable: 'C:\\isolated\\broker.exe', discoveryDirectory: 'C:\\isolated\\transport\\v0'});
+  const availableScript = (script: Script) => {
+    const source = {...script.welcome().source, origin: 'game' as const};
+    // welcome() advances the script, so callers create their own connection Script for the same session below.
+    const target: GameTarget = {source, processCreationTime: '123456789', userTag: 'a'.repeat(64)};
+    available = {ets2: {status: 'absent'}, ats: {status: 'absent'}, [script.game]: {status: 'unique', target}};
+  };
+  return {runtime, coordinator, sockets, publications, select, availableScript, discoveries: () => discoveries,
+    stop: async () => {await coordinator.stop(); await runtime.v1.stop(); await runtime.history.close();}};
+}
+
+describe('automatic selection across the real recording boundary (ET-056)', () => {
+  it('keeps successive ETS2/ATS/ETS2 sessions, trip boundaries, explicit gaps and sample holes separate', async () => {
+    const worker = storageWorker(), f = coordinatedRuntime(worker.handle);
+    try {
+      f.runtime.start(); await until(() => f.runtime.history.state === 'open', 'the history database', HANG_GUARD_MS);
+      const sessions = [[ETS2_A, 'ets2'], [ATS_A, 'ats'], [ETS2_B, 'ets2']] as const;
+      for (const [index, [session, game]] of sessions.entries()) {
+        f.availableScript(new Script(session, game));
+        if (index === 0) f.select();
+        else {f.coordinator.observe('v0', {status: 'disconnected', reason: 'Source closed'}); f.sockets[index - 1].emit('end');}
+        await until(() => f.sockets.length === index + 1, 'the next pinned game', HANG_GUARD_MS);
+        const socket = f.sockets[index], script = new Script(session, game); socket.emit('connect');
+        expect(socket.sent[0]).toMatchObject({kind: 'hello', data: {durableEvents: true}});
+        socket.feed(script.welcome()); socket.feed(script.checkpoint(null)); socket.feed(script.event(r.jobConfigured()));
+        await until(() => socket.acks.includes('1'), 'the committed job', HANG_GUARD_MS);
+        if (index === 0) {
+          socket.feed(script.gap(2)); await until(() => socket.acks.includes('3'), 'the committed gap', HANG_GUARD_MS);
+          socket.feed(script.snapshot({simulation: 'running'})); socket.feed(script.snapshot({simulation: 'running'}, 4000));
+        } else if (index === 1) {socket.feed(script.event(r.delivered())); await until(() => socket.acks.includes('2'), 'the ATS delivery', HANG_GUARD_MS);}
+      }
+      await f.stop(); expect(await worker.exit).toBe(0);
+      const rows = readOnly(historyFile(), db => ({
+        sessions: db.prepare('SELECT game, origin, plugin_session_uuid AS session FROM plugin_sessions ORDER BY id').all(),
+        trips: db.prepare('SELECT game, outcome, close_reason AS reason FROM trips ORDER BY id').all(),
+        gaps: db.prepare('SELECT first_event_seq AS first, last_event_seq AS last FROM event_gaps').all(),
+        samples: db.prepare('SELECT monotonic_ns AS ns FROM samples ORDER BY id').all() as {ns: number}[],
+        intervals: db.prepare("SELECT kind FROM completeness_intervals WHERE kind IN ('event-loss', 'not-connected')").all()
+      }));
+      expect(rows.sessions).toEqual([{game: 'ets2', origin: 'game', session: ETS2_A}, {game: 'ats', origin: 'game', session: ATS_A}, {game: 'ets2', origin: 'game', session: ETS2_B}]);
+      // The existing reducer closes the first trip at explicit event loss; switching never merges it.
+      expect(rows.trips).toEqual([{game: 'ets2', outcome: 'none', reason: 'gap'}, {game: 'ats', outcome: 'delivered', reason: 'outcome'}, {game: 'ets2', outcome: 'open', reason: null}]);
+      expect(rows.gaps).toEqual([{first: '00000000000000000002', last: '00000000000000000003'}]);
+      expect(rows.samples).toHaveLength(2); expect(rows.samples[1].ns - rows.samples[0].ns).toBe(4_000_000_000);
+      expect(rows.intervals).toContainEqual({kind: 'event-loss'}); expect(f.discoveries()).toBe(6);
+    } finally {await f.stop();}
+  }, 90_000);
+
+  it('never ACKs an old game connection when its held SQLite commit finishes after target retirement', async () => {
+    const worker = storageWorker(), timeline: string[] = [], traced = tracedHandle(worker.handle, timeline, 'commitEvent'), f = coordinatedRuntime(traced.handle);
+    try {
+      f.runtime.start(); await until(() => f.runtime.history.state === 'open', 'the history database', HANG_GUARD_MS);
+      f.availableScript(new Script(ETS2_A)); f.select(); await until(() => f.sockets.length === 1, 'ETS2 attachment', HANG_GUARD_MS);
+      const old = f.sockets[0], first = new Script(ETS2_A); old.emit('connect'); old.feed(first.welcome()); old.feed(first.checkpoint(null)); old.feed(first.event(r.jobConfigured()));
+      await guarded(traced.held, 'the SQLite commit barrier', HANG_GUARD_MS);
+      f.availableScript(new Script(ATS_A, 'ats')); f.coordinator.observe('v0', {status: 'disconnected', reason: 'Source closed'}); old.emit('end');
+      await until(() => f.sockets.length === 2, 'ATS attachment', HANG_GUARD_MS);
+      const next = f.sockets[1], second = new Script(ATS_A, 'ats'); next.emit('connect'); next.feed(second.welcome()); next.feed(second.checkpoint(null)); next.feed(second.event(r.jobConfigured()));
+      traced.release(); await until(() => next.acks.includes('1'), 'the new game commit', HANG_GUARD_MS);
+      expect(old.destroyed).toBe(true); expect(old.acks).toEqual([]);
+      await f.stop(); expect(await worker.exit).toBe(0);
+      expect(readOnly(historyFile(), db => db.prepare('SELECT count(*) AS count FROM events').get())).toEqual({count: 2});
+    } finally {traced.release(); await f.stop();}
+  }, 90_000);
+
+  it('rejects a same-game foreign plugin session before hello and leaves real history empty', async () => {
+    const worker = storageWorker(), f = coordinatedRuntime(worker.handle);
+    try {
+      f.runtime.start(); await until(() => f.runtime.history.state === 'open', 'the history database', HANG_GUARD_MS);
+      f.availableScript(new Script(ETS2_A)); f.select(); await until(() => f.sockets.length === 1, 'the pinned game', HANG_GUARD_MS);
+      const socket = f.sockets[0]; socket.target = {...socket.target, source: {...socket.authority, pluginSessionId: ETS2_B}}; socket.emit('connect');
+      const foreign = new Script(ETS2_B); socket.feed(foreign.welcome()); socket.feed(foreign.checkpoint(null)); socket.feed(foreign.event(r.jobConfigured()));
+      expect(f.runtime.v1.current.status).toBe('incompatible'); expect(socket.sent).toEqual([]); expect(f.runtime.v1.current.observation).toBeUndefined();
+      await f.stop(); expect(await worker.exit).toBe(0);
+      expect(readOnly(historyFile(), db => ['plugin_sessions', 'events', 'trips', 'samples'].map(table => db.prepare(`SELECT count(*) AS count FROM ${table}`).get())))
+        .toEqual([{count: 0}, {count: 0}, {count: 0}, {count: 0}]);
+    } finally {await f.stop();}
+  }, 90_000);
+
+  it.each(['synthetic', 'replay'] as const)('never discovers a real source or opens history for a missing %s recording fixture', async selection => {
+    const worker = storageWorker(), f = coordinatedRuntime(worker.handle, {ETS2TELEMETRY_RECORDING: `${selection}:isolated`});
+    try {
+      f.runtime.start(); await until(() => f.runtime.history.state === 'open', 'the isolated database', HANG_GUARD_MS);
+      f.availableScript(new Script(ETS2_A)); f.select(); await until(() => f.runtime.v1.current.status === 'unavailable', 'the missing fixture diagnostic', HANG_GUARD_MS);
+      expect(f.discoveries()).toBe(0); expect(f.sockets).toHaveLength(0);
+      await f.stop(); expect(await worker.exit).toBe(0); expect(existsSync(historyFile())).toBe(false);
+      expect(readOnly(target('isolated'), db => db.prepare('SELECT count(*) AS count FROM plugin_sessions').get())).toEqual({count: 0});
+    } finally {await f.stop();}
+  }, 90_000);
+});

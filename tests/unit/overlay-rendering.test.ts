@@ -8,6 +8,7 @@ import {LiveDashboard} from '../../apps/desktop/src/live-dashboard';
 import {smokeV0} from '../shared/live-v1-fixtures';
 import type {OverlayPresentation} from '../../packages/contracts/src';
 // Only the surrounding shadcn containers are substituted; the real SVG and text render unchanged.
+vi.mock('@/components/ui/button', () => ({Button: 'button'}));
 vi.mock('@/components/ui/card', () => ({Card: 'div', CardContent: 'div', CardHeader: 'div', CardTitle: 'div'}));
 vi.mock('@/components/ui/badge', () => ({Badge: 'span'}));
 const base: OverlayPresentation = {source: 'ETS2', origin: 'synthetic', status: 'connected', speed: '90', speedUnit: 'km/h', fuel: '73.0', fuelUnit: 'L',
@@ -148,4 +149,14 @@ it('adds no urgency marks to a normal or unavailable break, nor to any other sec
   // A dash keeps the reserve and shows the dash text only.
   const dash = renderToStaticMarkup(React.createElement(OverlayContent, {view: overlayView({...base, sections: [{id: 'mandatory-break', state: 'unavailable'}]})}));
   expect(dash).toContain('<strong class="overlay-value" data-testid="overlay-mandatory-break" data-reserve="00 h 00 min">—</strong>');
+});
+
+it.each(['en', 'ru'] as const)('renders explicit simultaneous game choices as semantic buttons in %s', language => {
+  const html = renderToStaticMarkup(React.createElement(LiveDashboard, {live: {selection: 'game', status: 'waiting', fresh: false, recording: false, coverage: 'unknown',
+    reason: 'Both games are available; choose ETS2 or ATS'}, units: undefined, language, onSelect: () => Promise.resolve()}));
+  expect(html).toContain('data-testid="live-game-choice"');
+  expect(html).toContain('<button type="button"');
+  expect(html).toContain('data-testid="live-choose-ets2"'); expect(html).toContain('Euro Truck Simulator 2</button>');
+  expect(html).toContain('data-testid="live-choose-ats"'); expect(html).toContain('American Truck Simulator</button>');
+  expect(html).toContain(language === 'ru' ? 'Доступны обе игры. Выберите игру для подключения.' : 'Both games are available. Choose which game to connect to.');
 });

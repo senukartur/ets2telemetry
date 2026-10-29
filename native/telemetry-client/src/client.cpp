@@ -449,20 +449,36 @@ void receipt(const Json& value) {
   unsigned char prefix[] = {static_cast<unsigned char>(n), static_cast<unsigned char>(n >> 8), static_cast<unsigned char>(n >> 16), static_cast<unsigned char>(n >> 24)};
   stdio_io(GetStdHandle(STD_OUTPUT_HANDLE), prefix, 4, true); stdio_io(GetStdHandle(STD_OUTPUT_HANDLE), text.data(), n, true);
 }
+Json source_identity(const Json& record) {
+  return Json{Json::Object{{"game", record.at("game")}, {"origin", Json{std::string("game")}}, {"processId", record.at("processId")},
+    {"windowsSessionId", record.at("windowsSessionId")}, {"processInstanceId", record.at("processInstanceId")}, {"pluginSessionId", record.at("pluginSessionId")}}};
+}
+Json discovery_result(const std::optional<Json>& record, unsigned count) {
+  Json::Object result{{"status", Json{std::string(count == 0 ? "absent" : count == 1 ? "unique" : "ambiguous")}}};
+  if (count == 1) result["target"] = Json{Json::Object{{"source", source_identity(*record)}, {"processCreationTime", record->at("processCreationTime")}, {"userTag", record->at("userTag")}}};
+  return Json{result};
+}
 int wmain(int argc, wchar_t** argv) {
   test_trace("entry");
   Stage stage;
   try {
+    const bool discover = (argc == 4 || argc == 6) && std::wstring(argv[1]) == L"--discover" && std::wstring(argv[2]) == L"--discovery-dir";
+    const bool discoverV1 = discover && argc == 6 && std::wstring(argv[4]) == L"--protocol" && std::wstring(argv[5]) == L"v1";
+    if (discover && argc == 6 && !discoverV1) fail();
     // CAP0 evidence capture is a separate explicit mode: distinct endpoint, receipt marker and hello.
     const bool capture = argc == 7 && std::wstring(argv[5]) == L"--capture" && std::wstring(argv[6]) == L"cap0";
     // Protocol v1 is another explicit mode, never combined with capture: v1 discovery records and endpoint, a marked
     // receipt, a v1 hello and a tagged control stream that also carries client frames.
-    const bool protocolV1 = argc == 7 && std::wstring(argv[5]) == L"--protocol" && std::wstring(argv[6]) == L"v1";
-    if ((argc != 5 && !capture && !protocolV1) || std::wstring(argv[1]) != L"--game" || std::wstring(argv[3]) != L"--discovery-dir") fail();
+    const bool protocolV1 = discoverV1 || (argc == 7 && std::wstring(argv[5]) == L"--protocol" && std::wstring(argv[6]) == L"v1");
+    if (!discover && ((argc != 5 && !capture && !protocolV1) || std::wstring(argv[1]) != L"--game" || std::wstring(argv[3]) != L"--discovery-dir")) fail();
     const DWORD protocolMajor = protocolV1 ? 1 : 0; const std::string segment = protocolV1 ? "-v1-" : "-v0-";
-    const auto game = utf8(argv[2]); if (game != "ets2" && game != "ats") fail();
+    const auto game = discover ? std::string() : utf8(argv[2]); if (!discover && game != "ets2" && game != "ats") fail();
     stage = "identity"; test_trace("current-identity-start"); Identity self(GetCurrentProcess()); test_trace("current-identity-done");
-    stage = "directory"; const fs::path directory(argv[4]); if (!directory.is_absolute()) fail();
+    stage = "directory"; const fs::path directory(argv[discover ? 3 : 4]); if (!directory.is_absolute()) fail();
+    std::optional<Json> ets2Record, atsRecord; unsigned ets2Count = 0, atsCount = 0;
+    auto discovered = [&] {receipt(Json{Json::Object{{"type", Json{std::string("discovery")}}, {"schemaVersion", Json{1.0}}, {"protocolMajor", Json{static_cast<double>(protocolMajor)}},
+      {"games", Json{Json::Object{{"ets2", discovery_result(ets2Record, ets2Count)}, {"ats", discovery_result(atsRecord, atsCount)}}}}}});};
+    if (!fs::exists(directory) && discover) {discovered(); return finish(0, stage);}
     if (!fs::exists(directory)) {receipt(Json{Json::Object{{"type", Json{std::string("waiting")}}, {"schemaVersion", Json{1.0}}}}); return finish(2, stage);}
     reject_reparse_ancestors(directory);
     // The two owned transport directories must both remain protected and free of reparses.
@@ -500,13 +516,20 @@ int wmain(int argc, wchar_t** argv) {
       file.reset();
       stage = "discovery";
       if (++visited > 256 || ++records > 128) fail();
-      if (recordGame != game) continue;
+      if (!discover && recordGame != game) continue;
       stage = "server-process";
       Identity server(candidate->value); if (server.sid != self.sid || server.session != self.session) fail();
-      stage = "server-image"; auto serverImage = image(candidate->value); const auto expectedName = game == "ets2" ? L"eurotrucks2.exe" : L"amtrucks.exe";
+      stage = "server-image"; auto serverImage = image(candidate->value); const auto expectedName = recordGame == "ets2" ? L"eurotrucks2.exe" : L"amtrucks.exe";
       if (_wcsicmp(fs::path(final_path(serverImage.value)).filename().c_str(), expectedName) != 0) fail();
+      if (discover) {
+        auto& count = recordGame == "ets2" ? ets2Count : atsCount;
+        auto& first = recordGame == "ets2" ? ets2Record : atsRecord;
+        if (++count == 1) first = record;
+        stage = "discovery"; continue;
+      }
       if (selected) fail(); selected = record; selectedProcess.emplace(std::move(*candidate)); stage = "discovery";
     }
+    if (discover) {discovered(); return finish(0, stage);}
     if (!selected) {receipt(Json{Json::Object{{"type", Json{std::string("waiting")}}, {"schemaVersion", Json{1.0}}}}); return finish(2, stage);}
     const auto& record = *selected; const auto pid = integer(record.at("processId")); if (!pid) fail();
     const auto expectedCreation = v0::parse_uint64(record.at("processCreationTime"));

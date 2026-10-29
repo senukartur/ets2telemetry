@@ -1,3 +1,4 @@
+import {sameGameSource} from './live-state';
 import type {LiveTelemetry} from '../../../packages/contracts/src';
 import type {GearboxState, HShifterLayout} from '../../../packages/contracts/src/protocol-v1';
 import type {DisplayUnits, GearDisplayMode} from '../../../packages/telemetry-core/src/display-profile';
@@ -97,7 +98,7 @@ export function liveSources(live: LiveTelemetry, units: DisplayUnits, gear: Gear
   const v0State = live.observation ? normalizeV0State(live.observation.state) : undefined;
   const v1 = live.v1, v1Observation = v1?.observation, v0Source = live.observation?.source;
   const carried = v1 && v1Observation && v1.selection === live.selection &&
-    (!v0Source || (v1Observation.source.origin === v0Source.origin && v1Observation.source.game === v0Source.game)) ? {v1, observation: v1Observation} : undefined;
+    (!v0Source || (v1Observation.source.origin === v0Source.origin && v1Observation.source.game === v0Source.game && (v0Source.origin !== 'game' || sameGameSource(v0Source, v1Observation.source)))) ? {v1, observation: v1Observation} : undefined;
   const v1Carried = carried !== undefined;
   const v1State = carried ? normalizeV1State(carried.observation.state, carried.observation.sourceStatus) : undefined;
   // The same currentness buildLiveView reports for the v1 view.

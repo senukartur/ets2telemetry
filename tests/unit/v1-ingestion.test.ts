@@ -11,6 +11,7 @@ import {decodePayload, encodeFrame, type ClientMessage, type ServerMessage, type
 import type {CommitResult, Result, StorageErrorCode} from '../../packages/storage/src/api';
 import {storageError} from '../../packages/storage/src/errors';
 import type {CoverageMessage, DurableSink} from '../../apps/desktop/src/durable-sink';
+import type {GameTarget} from '../../apps/desktop/src/native-game-discovery';
 import type {TelemetrySocket} from '../../apps/desktop/src/native-pipe-client';
 import {V1_CLIENT_MAX_MINOR, V1Ingestion, type V1IngestionOptions, type V1SourceState} from '../../apps/desktop/src/v1-ingestion';
 import {header, payload} from '../shared/cap0-fixtures';
@@ -27,7 +28,7 @@ const P1 = '10000000-0000-4000-8000-000000000001', P2 = '10000000-0000-4000-8000
 const CAPTURE_CLOCK = '30000000-0000-4000-8000-000000000001';
 
 class FakeSocket extends EventEmitter implements TelemetrySocket {
-  readonly sent: ClientMessage[] = []; destroyed = false; authority?: SourceIdentity; completion?: Promise<void>;
+  readonly sent: ClientMessage[] = []; destroyed = false; target?: GameTarget; authority?: SourceIdentity; completion?: Promise<void>;
   // Any minor decodes here; the ET-050b and ET-052 cases check which minor each message carries.
   write(bytes: Uint8Array) { this.sent.push(decodePayload(bytes.subarray(4), 'client', {maxMinor: 2}) as ClientMessage); }
   destroy() { this.destroyed = true; }
@@ -622,4 +623,27 @@ describe('ET-052 protocol v1 minor 2', () => {
     expect(server2('welcome').version).toEqual({major: 1, minor: 2});
     expect(server2('welcome-minor-1').version).toEqual({major: 1, minor: 1});
   });
+});
+
+it('rejects a pinned game mismatch before hello, observations, sink calls or ACKs', async () => {
+  const welcome = server('welcome'), sink = new ObservingSink(), source = {...welcome.source, origin: 'game' as const};
+  const target = {source, processCreationTime: '123', userTag: 'a'.repeat(64)};
+  start({sink, broker: {executable: 'isolated', discoveryDirectory: 'isolated'}, expectedTarget: target,
+    connectGame: () => {const socket = new FakeSocket(); socket.authority = source; socket.target = {...target, processCreationTime: '124'}; sockets.push(socket); return socket;}}, 'ets2');
+  connectLatest(); latest().feed(edited('welcome', m => {m.source = source;})); await settle();
+  expect(latest().sent).toEqual([]); expect(sink.trace).toEqual([]); expect(sink.commits).toEqual([]);
+  expect(state()).toMatchObject({status: 'incompatible', reason: 'Native game target mismatch', durable: {state: 'off'}});
+  expect(state().observation).toBeUndefined();
+});
+
+it('retires current observations and clock identity immediately before waiting for child completion', async () => {
+  let closed!: () => void, retiring: Promise<void> | undefined;
+  start({sink: new Sink(), connect: () => {const socket = new FakeSocket(); socket.completion = new Promise<void>(resolve => {closed = resolve;}); sockets.push(socket); return socket;}});
+  try {
+    connectLatest(); latest().feed(frame('welcome'), frame('checkpoint')); expect(state().observation).toBeDefined();
+    const completed = vi.fn(); retiring = ingestion!.retire().then(completed);
+    expect(state()).toMatchObject({selection: 'game', status: 'waiting', fresh: false, durable: {state: 'off'}});
+    expect(state().observation).toBeUndefined(); expect(state().clockMapping).toBeUndefined();
+    await settle(); expect(completed).not.toHaveBeenCalled(); closed(); await retiring;
+  } finally {closed(); await retiring;}
 });

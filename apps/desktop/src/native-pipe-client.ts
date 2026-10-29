@@ -3,10 +3,12 @@ import path from 'node:path';
 import {spawn, type ChildProcessWithoutNullStreams} from 'node:child_process';
 import type {SourceIdentity} from '../../../packages/contracts/src/protocol-v0';
 import {isUint64} from '../../../packages/contracts/src/protocol-v0';
+import {parseGameTarget, sameTarget, type GameTarget} from './native-game-discovery';
 import {TRANSPORT_DIRECTORY} from './channel';
 
 export interface TelemetrySocket extends Pick<EventEmitter, 'on' | 'once'> {
   authority?: SourceIdentity;
+  target?: GameTarget;
   completion?: Promise<void>;
   write(bytes: Uint8Array): unknown;
   destroy(): unknown;
@@ -79,6 +81,7 @@ export function coalesceBrokerDiagnostics(record: (diagnostic: BrokerDiagnostic 
 /** An owned fixed native artifact supplies OS authority; stdio credits bound its relay to one frame. */
 export class NativePipeClient extends EventEmitter implements TelemetrySocket {
   authority?: SourceIdentity;
+  target?: GameTarget;
   readonly completion: Promise<void>;
   private readonly child: ChildProcessWithoutNullStreams;
   private stopped = false;
@@ -89,7 +92,7 @@ export class NativePipeClient extends EventEmitter implements TelemetrySocket {
   private startup: ReturnType<typeof setTimeout>;
   private diagnosticTail = Buffer.alloc(0);
   private outcome?: BrokerOutcome;
-  constructor(configuration: BrokerConfiguration, game: 'ets2' | 'ats', diagnose?: (diagnostic: BrokerDiagnostic) => void, private readonly protocol: BrokerProtocol = 'v0') {
+  constructor(configuration: BrokerConfiguration, game: 'ets2' | 'ats', diagnose?: (diagnostic: BrokerDiagnostic) => void, private readonly protocol: BrokerProtocol = 'v0', expectedTarget?: GameTarget) {
     super();
     const spawned = performance.now();
     this.child = spawn(configuration.executable, ['--game', game, '--discovery-dir', configuration.discoveryDirectory, ...(protocol === 'v1' ? ['--protocol', 'v1'] : [])], {windowsHide: true, stdio: 'pipe'});
@@ -149,6 +152,9 @@ export class NativePipeClient extends EventEmitter implements TelemetrySocket {
             if (!record.source || typeof record.source !== 'object' || Array.isArray(record.source)) throw new Error('Native source authority rejected');
             const source = record.source as Record<string, unknown>;
             if (Object.keys(source).length !== 6 || source.game !== game || source.origin !== 'game' || typeof source.processId !== 'number' || !Number.isInteger(source.processId) || source.processId < 1 || source.processId > 0xffffffff || typeof source.windowsSessionId !== 'number' || !Number.isInteger(source.windowsSessionId) || source.windowsSessionId < 0 || source.windowsSessionId > 0xffffffff || typeof source.processInstanceId !== 'string' || !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(source.processInstanceId) || typeof source.pluginSessionId !== 'string' || !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(source.pluginSessionId)) throw new Error('Native source authority rejected');
+            const target = parseGameTarget({source: record.source, processCreationTime: record.processCreationTime, userTag: record.userTag}, game);
+            if (expectedTarget && !sameTarget(target, expectedTarget)) throw new Error('Native target mismatch');
+            this.target = target;
             // Bytes received before hello/credit cannot become authorized by the synchronous connect listener.
             if (this.buffer.length) throw new Error('Uncredited native receipt suffix');
             this.authority = Object.freeze({game, origin: source.origin, processId: source.processId, windowsSessionId: source.windowsSessionId, processInstanceId: source.processInstanceId, pluginSessionId: source.pluginSessionId}); clearTimeout(this.startup); this.emit('connect');

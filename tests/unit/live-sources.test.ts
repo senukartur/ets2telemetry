@@ -302,3 +302,15 @@ describe('gearbox-aware gear labels (ET-050b)', () => {
     expect(gearText({...pair(1), status: 'stale', fresh: false})).toMatchObject(NOT_CURRENT);
   });
 });
+
+it.each(['processId', 'windowsSessionId', 'processInstanceId', 'pluginSessionId'] as const)('never carries same-game real v1 fields from another %s', field => {
+  const live = smokePair(); live.selection = 'game'; live.v1!.selection = 'game';
+  live.observation!.source.origin = 'game'; live.v1!.observation!.source = {...live.observation!.source};
+  expect(sources(live).v1Current).toBe(true);
+  const foreign = live.v1!.observation!.source;
+  if (field === 'processId' || field === 'windowsSessionId') foreign[field]++;
+  else foreign[field] = '33333333-3333-4333-8333-333333333333';
+  expect(sources(live).v1Carried).toBe(false);
+  expect(sources(live).field('source-city').state).toBe('hidden');
+  expect(sources(live).field('mandatory-break').state).toBe('hidden');
+});

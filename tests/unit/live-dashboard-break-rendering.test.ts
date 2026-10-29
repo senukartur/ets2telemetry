@@ -9,6 +9,7 @@ import {smokePair} from '../shared/live-v1-fixtures';
 // ET-052 D3: the Live details row of the next mandatory break renders its Coffee icon, the value and an urgency badge that
 // never relies on colour alone: an icon, a word and an accessible name. The shadcn cards are substituted by plain
 // containers; the row, its icon and the badge are the real component. Expected markup is written by hand.
+vi.mock('@/components/ui/button', () => ({Button: 'button'}));
 vi.mock('@/components/ui/card', () => ({Card: 'div', CardContent: 'div', CardHeader: 'div', CardTitle: 'div'}));
 // The badge keeps its variant as an attribute; the real component maps it to the Yukon warn and error tones.
 vi.mock('@/components/ui/badge', () => ({

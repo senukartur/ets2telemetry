@@ -100,9 +100,9 @@ function liveDashboardText(live: LiveTelemetry | undefined, units: UnitProfiles 
     sections.push({id: section.id, testId: `live-section-${section.id}`, title: LIVE_SECTION_TEXT[section.id],
       ...(section.missing ? {missing: missingSubjectText(section.missing)} : {}), rows});
   }
-  if (sources.v1Carried && telemetry.v1) {
-    const rows = [rowText(sources.field('game-mode')), rowText(sources.field('event-loss'), STRINGS.liveEventLossNote)];
-    sections.push({id: 'source', testId: 'live-section-source', title: STRINGS.liveSourceTitle, status: `${telemetry.v1.status}: ${telemetry.v1.reason}`, rows});
+  if (telemetry.v1 && telemetry.v1.selection === telemetry.selection && (sources.v1Carried || !telemetry.v1.observation)) {
+    const rows = sources.v1Carried ? [rowText(sources.field('game-mode')), rowText(sources.field('event-loss'), STRINGS.liveEventLossNote)] : [];
+    sections.push({id: 'source', testId: 'live-section-source', title: STRINGS.liveSourceTitle, status: `${language === 'en' ? telemetry.v1.status : t(`ui.status.${telemetry.v1.status}`, undefined, language)}: ${connectionReasonText(telemetry.v1.reason, language)}`, rows});
   }
   return {paused: sources.paused, sections};
 }
@@ -120,3 +120,23 @@ function missingSubjectText(reason: MissingReason): string {
 const builders = {en: createLiveText('en'), ru: createLiveText('ru')};
 export const liveDashboardText = (live: LiveTelemetry | undefined, units: UnitProfiles = DEFAULT_UNIT_PROFILES, language: AppLanguage = 'en',
   gearDisplay?: GearDisplayModes): LiveDashboardText => builders[language](live, units, gearDisplay);
+
+/** Fixed coordinator messages are localized; fixture and protocol diagnostics keep their existing detail text. */
+export function connectionReasonText(reason: string, language: AppLanguage = 'en'): string {
+  const strings = BASE_COPY.getStrings(language);
+  if (reason === 'Waiting for game' || reason === 'Game discovery did not complete; retrying' || reason === 'Discovering selected game process' || reason === 'No selected game discovery record' || reason === 'Native authority check did not complete; retrying') return strings.sourceWaiting;
+  if (reason === 'Both games are available; choose ETS2 or ATS') return strings.sourceChoice;
+  if (reason === 'Game protocol targets changed; retrying discovery') return strings.sourcePairWaiting;
+  if (reason === 'Multiple game instances are ambiguous') return strings.sourceAmbiguous;
+  if (reason.includes('target mismatch')) return strings.sourceMismatch;
+  if (reason === 'Native source authority or transport failed' || reason === 'Verified native game pipe client is not configured') return strings.sourceRejected;
+  return reason;
+}
+export function gameConnectionText(live: LiveTelemetry | undefined, language: AppLanguage = 'en'): string {
+  const strings = BASE_COPY.getStrings(language);
+  if (!live) return strings.sourceWaiting;
+  if (live.v1?.status === 'incompatible') return connectionReasonText(live.v1.reason, language);
+  const current = (state: {status: string; fresh: boolean}) => state.fresh && ['connected', 'paused'].includes(state.status);
+  if (live.v1 && current(live) !== current(live.v1)) return strings.sourcePartial;
+  return connectionReasonText(live.reason === 'Awaiting selected source' ? 'Waiting for game' : live.reason, language);
+}

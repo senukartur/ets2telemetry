@@ -38,10 +38,10 @@ const TABLE: Row[] = [
   {name: 'connected synthetic fixture', status: 'connected', selection: 'synthetic', code: 'CONNECTED'},
   {name: 'connected in the disabled mode', status: 'connected', plugins: view(game([], {discovery: 'pending'}), 'disabled'), code: 'CONNECTED'},
   // 3. NO_GAME_SELECTED: the placeholder or a fixture that is not connected; it beats SETUP_DISABLED.
-  {name: 'the "Select a game" placeholder', selection: 'game', code: 'NO_GAME_SELECTED'},
+  {name: 'automatic mode waits for either game', selection: 'game', code: 'NO_RUNNING_SOURCE'},
   {name: 'a synthetic fixture waiting', selection: 'synthetic', code: 'NO_GAME_SELECTED'},
   {name: 'a replay fixture disconnected', selection: 'replay', status: 'disconnected', code: 'NO_GAME_SELECTED'},
-  {name: 'placeholder beats the disabled mode', selection: 'game', plugins: view(game([], {discovery: 'pending'}), 'disabled'), code: 'NO_GAME_SELECTED'},
+  {name: 'automatic mode respects disabled setup', selection: 'game', plugins: view(game([], {discovery: 'pending'}), 'disabled'), code: 'SETUP_DISABLED'},
   // 4. SETUP_DISABLED: no folder was checked in this launch; it beats GAME_NOT_FOUND.
   {name: 'disabled mode', plugins: view(game([], {discovery: 'pending'}), 'disabled'), code: 'SETUP_DISABLED'},
   {name: 'disabled beats not found', plugins: view(game([], {discovery: 'not-found'}), 'disabled'), status: 'unavailable', code: 'SETUP_DISABLED'},

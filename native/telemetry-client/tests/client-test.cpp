@@ -152,6 +152,7 @@ std::string file_bytes(const fs::path& filename) {std::ifstream input(filename, 
 // Every case in run order. CMakeLists.txt registers one CTest entry per name, selected through
 // ETS2TELEMETRY_CLIENT_TEST_CASE; its --verify-cases entry fails when the two lists diverge.
 const char* const discoveryCases[] = {"retired-record", "delete-pending-record", "denied-record", "zero-record", "short-record", "directory-record", "reparse-record"};
+const char* const oneShotCases[] = {"discover-none", "discover-ets2", "discover-ats", "discover-both", "discover-ambiguous", "discover-v1", "discover-stale", "discover-dead", "discover-malformed", "discover-channel", "discover-dacl", "discover-reparse", "discover-retired", "discover-delete-pending"};
 const char* const hostCases[] = {"valid", "creation", "dead", "stale-live", "dead-live", "collision", "session", "malformed", "dacl", "payload-break", "bad-length", "invalid-credit", "quiet", "quiet-exit", "partial-prefix", "partial-payload"};
 const char* const captureCases[] = {"capture", "capture-v0-hello", "capture-bad-arguments"};
 const char* const v1Cases[] = {"v1-valid", "v1-policy", "v1-major-mismatch", "v1-name-mismatch", "v1-collision", "v1-v0-hello", "v1-cap0-hello",
@@ -162,7 +163,7 @@ const char* const contentionCases[] = {"policy-lock-busy", "policy-lock-pending"
 std::string case_list() {
   std::string joined;
   auto add = [&](const auto& names) {for (const auto* name : names) joined += (joined.empty() ? "" : ",") + std::string(name);};
-  add(discoveryCases); add(hostCases); add(captureCases); add(v1Cases); add(policyCases); add(contentionCases);
+  add(discoveryCases); add(oneShotCases); add(hostCases); add(captureCases); add(v1Cases); add(policyCases); add(contentionCases);
   return joined + ",policy-readonly";
 }
 unsigned casesRun = 0;
@@ -524,6 +525,11 @@ int wmain(int argc, wchar_t** argv) {
       WaitForSingleObject(cancellation.cancelled.value, fixtureWaitMs);
       return 0;
     }
+    if (argc == 4 && std::wstring(argv[1]) == L"--discover-race") {
+      discoveryCase = std::wstring(argv[3]) == L"discover-retired" ? "retired-record" : "delete-pending-record";
+      wchar_t* arguments[] = {argv[0], const_cast<wchar_t*>(L"--discover"), const_cast<wchar_t*>(L"--discovery-dir"), argv[2]};
+      return broker_entrypoint(4, arguments);
+    }
     if (argc == 4 && std::wstring(argv[1]) == L"--discovery-case") {
       discoveryCase = utf8(argv[3]);
       wchar_t* arguments[] = {argv[0], const_cast<wchar_t*>(L"--game"), const_cast<wchar_t*>(L"ets2"), const_cast<wchar_t*>(L"--discovery-dir"), argv[2]};
@@ -574,6 +580,67 @@ int wmain(int argc, wchar_t** argv) {
       if (expected == 2) {const auto result = parse(read_frame(client.output.value)); exact(result, {"type", "schemaVersion"}); require(result.at("type").string() == "waiting" && integer(result.at("schemaVersion")) == 1);}
       DWORD available = 0; const auto peeked = PeekNamedPipe(client.output.value, nullptr, 0, nullptr, &available, nullptr); require((peeked || GetLastError() == ERROR_BROKEN_PIPE) && available == 0);
       if (permissionRestore) require(permissionRestore->restore());
+    }
+    for (const auto* mode : oneShotCases) {
+      if (!filter.empty() && filter != mode) continue;
+      CaseTimer timer(mode); const std::string scenario(mode);
+      const bool protocolV1 = scenario == "discover-v1";
+      const auto directory = base / wide(mode) / "transport" / (protocolV1 ? "v1" : "v0"); fs::create_directory(directory.parent_path().parent_path());
+      require(CreateDirectoryW(directory.parent_path().c_str(), &security.attributes)); require(CreateDirectoryW(directory.c_str(), &security.attributes));
+      std::optional<Child> ats;
+      if (scenario == "discover-ats" || scenario == "discover-both") {
+        const auto atsImage = fs::path(self).parent_path() / "amtrucks.exe";
+        ats.emplace(atsImage.wstring(), L"--hold"); require(parse(read_frame(ats->output.value)).at("type").string() == "ready");
+      }
+      auto recordFor = [&](const std::string& game, DWORD pid, HANDLE process, const std::string& instance) {
+        const auto endpoint = channel::active.pipe_prefix + game + (protocolV1 ? "-v1-" : "-v0-") + identity.userTag + "-" + std::to_string(identity.session) + "-" + instance;
+        return Json{Json::Object{{"schemaVersion", Json{1.0}}, {"protocolMajor", Json{protocolV1 ? 1.0 : 0.0}}, {"game", Json{game}}, {"userTag", Json{identity.userTag}},
+          {"windowsSessionId", Json{static_cast<double>(identity.session)}}, {"processId", Json{static_cast<double>(pid)}}, {"processCreationTime", Json{std::to_string(creation(process))}},
+          {"processInstanceId", Json{instance}}, {"pluginSessionId", Json{std::string("11112233-4455-6677-8899-aabbccddeeff")}}, {"pipeName", Json{endpoint}}}};
+      };
+      const std::string instance = "00112233-4455-6677-8899-aabbccddeeff", second = "22112233-4455-6677-8899-aabbccddeeff";
+      const auto recordPath = directory / (instance + ".json"); JunctionCleanup junction; std::optional<FixtureDaclRestore> restore;
+      if (scenario != "discover-none" && scenario != "discover-ats") {
+        auto record = recordFor("ets2", GetCurrentProcessId(), GetCurrentProcess(), instance); auto& fields = std::get<Json::Object>(record.value);
+        if (scenario == "discover-stale") fields["processCreationTime"] = Json{std::to_string(creation(GetCurrentProcess()) + 1)};
+        if (scenario == "discover-dead") fields["processId"] = Json{static_cast<double>(MAXDWORD)};
+        if (scenario == "discover-malformed") fields["extra"] = Json{true};
+        if (scenario == "discover-channel") fields["pipeName"] = Json{std::string("\\\\.\\pipe\\foreign-channel")};
+        write_file(recordPath, record, identity);
+        if (scenario == "discover-ambiguous") write_file(directory / (second + ".json"), recordFor("ets2", GetCurrentProcessId(), GetCurrentProcess(), second), identity);
+        if (scenario == "discover-reparse") {require(DeleteFileW(recordPath.c_str())); const auto target = directory / "linked"; require(CreateDirectoryW(target.c_str(), &security.attributes)); junction.path = recordPath; create_junction(recordPath, target, identity);}
+        if (scenario == "discover-dacl") {
+          restore.emplace(recordPath, identity); PSECURITY_DESCRIPTOR descriptor = nullptr;
+          require(ConvertStringSecurityDescriptorToSecurityDescriptorW(L"D:P(A;;GA;;;WD)", SDDL_REVISION_1, &descriptor, nullptr));
+          PACL dacl = nullptr; BOOL present = FALSE, defaulted = FALSE; require(GetSecurityDescriptorDacl(descriptor, &present, &dacl, &defaulted));
+          const auto changed = SetNamedSecurityInfoW(const_cast<wchar_t*>(recordPath.c_str()), SE_FILE_OBJECT, DACL_SECURITY_INFORMATION | PROTECTED_DACL_SECURITY_INFORMATION, nullptr, nullptr, dacl, nullptr); LocalFree(descriptor); require(changed == ERROR_SUCCESS);
+        }
+      }
+      if (ats) write_file(directory / (second + ".json"), recordFor("ats", ats->pid, ats->process.value, second), identity);
+      // No telemetry endpoint exists in any of these cases: discovery must not open or occupy it.
+      const bool race = scenario == "discover-retired" || scenario == "discover-delete-pending";
+      Child client(race ? self : broker, race ? L"--discover-race \"" + directory.wstring() + L"\" " + wide(mode) : L"--discover --discovery-dir \"" + directory.wstring() + L"\"" + (protocolV1 ? L" --protocol v1" : L""));
+      bool rejected = scenario == "discover-malformed" || scenario == "discover-channel" || scenario == "discover-dacl" || scenario == "discover-reparse";
+      if (scenario == "discover-delete-pending") {
+        const auto observed = parse(read_frame(client.output.value)); require(observed.at("type").string() == "pending-observation");
+        const auto error = integer(observed.at("error")); rejected = error != ERROR_FILE_NOT_FOUND && error != ERROR_DELETE_PENDING;
+      }
+      require(client.wait() == (rejected ? 1u : 0u));
+      if (!rejected) {
+        const auto result = parse(read_frame(client.output.value)); exact(result, {"type", "schemaVersion", "protocolMajor", "games"});
+        require(result.at("type").string() == "discovery" && integer(result.at("schemaVersion")) == 1 && integer(result.at("protocolMajor")) == (protocolV1 ? 1u : 0u));
+        const auto& games = result.at("games"); exact(games, {"ets2", "ats"});
+        const bool absent = race || scenario == "discover-none" || scenario == "discover-ats" || scenario == "discover-stale" || scenario == "discover-dead";
+        require(games.at("ets2").at("status").string() == (absent ? "absent" : scenario == "discover-ambiguous" ? "ambiguous" : "unique"));
+        require(games.at("ats").at("status").string() == (ats ? "unique" : "absent"));
+        if (!absent && scenario != "discover-ambiguous") {
+          const auto& target = games.at("ets2").at("target"); exact(target, {"source", "processCreationTime", "userTag"});
+          require(integer(target.at("source").at("processId")) == GetCurrentProcessId() && target.at("processCreationTime").string() == std::to_string(creation(GetCurrentProcess())) && target.at("userTag").string() == identity.userTag);
+        }
+        if (scenario == "discover-stale" || scenario == "discover-dead") require(!fs::exists(recordPath));
+      }
+      if (restore) require(restore->restore());
+      if (ats) {ats->eof(); require(ats->wait() == 0);}
     }
     for (const auto* mode : hostCases) {
       if (!filter.empty() && filter != mode) continue;

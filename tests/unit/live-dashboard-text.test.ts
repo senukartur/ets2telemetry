@@ -1,3 +1,4 @@
+import {gameConnectionText, connectionReasonText} from '../../apps/desktop/src/live-dashboard-text';
 // ET-010b live telemetry card text: REG-009, with partial REG-002 (paused banner) and REG-003 (hydrated checkpoint
 // shown live) protection for the live display only. Expected texts are written by hand from the shared v0 fixtures,
 // the exact unit definitions and docs/live-telemetry-fields.md, never produced by the code under test.
@@ -358,9 +359,13 @@ describe('ET-010c v1 rows under each source state', () => {
     ['before the first v1 observation', {...v1Projection(), observation: undefined, fresh: false, status: 'waiting' as const, reason: 'Awaiting selected source'}],
     ['with v1 data of another origin', v1Projection('snapshot-live', {origin: 'replay'})]
   ])('equals the ET-010b card %s', (_name, v1) => {
-    expect(liveDashboardText({...smokeV0(), ...(v1 ? {v1} : {})})).toEqual(liveDashboardText(smokeV0()));
+    const text = liveDashboardText({...smokeV0(), ...(v1 ? {v1} : {})});
+    if (v1 && !v1.observation) expect(text.sections.pop()).toEqual({id: 'source', testId: 'live-section-source', title: 'Protocol v1 source', status: 'waiting: Awaiting selected source', rows: []});
+    expect(text).toEqual(liveDashboardText(smokeV0()));
     const stale = smokeV0({status: 'stale', fresh: false});
-    expect(liveDashboardText({...stale, ...(v1 ? {v1} : {})})).toEqual(liveDashboardText(stale));
+    const staleText = liveDashboardText({...stale, ...(v1 ? {v1} : {})});
+    if (v1 && !v1.observation) expect(staleText.sections.pop()).toEqual({id: 'source', testId: 'live-section-source', title: 'Protocol v1 source', status: 'waiting: Awaiting selected source', rows: []});
+    expect(staleText).toEqual(liveDashboardText(stale));
   });
   it.each([
     ['stale', {status: 'stale' as const, fresh: false, reason: 'Main has no recent v1 SDK capture'}, 'stale: Main has no recent v1 SDK capture'],
@@ -527,4 +532,15 @@ describe('gearbox-aware gear labels (ET-050b)', () => {
     expect(values(liveDashboardText(gearboxPair(18, {...ATS, v1: {status: 'stale', fresh: false}}), UNITS, language, MANUAL)).gear).toBe('9H');
     expect(values(liveDashboardText(gearboxPair(1, {...ATS, gearbox: NOT_SUPPORTED_GEARBOX}), UNITS, language, MANUAL)).gear).toBe('1L');
   });
+});
+
+it('localizes automatic waiting, simultaneous choice, partial attachment and mismatch messages', () => {
+  expect(connectionReasonText('Waiting for game', 'en')).toBe('Waiting for game');
+  expect(connectionReasonText('Waiting for game', 'ru')).toBe('Ожидание игры');
+  expect(connectionReasonText('Both games are available; choose ETS2 or ATS', 'ru')).toBe('Доступны обе игры. Выберите игру для подключения.');
+  const partial = smokePair(); partial.v1 = {selection: 'synthetic', status: 'waiting', reason: 'Waiting for game', fresh: false};
+  expect(gameConnectionText(partial)).toBe('Game connection is incomplete. Waiting for the other telemetry stream.');
+  expect(liveDashboardText(partial, undefined, 'ru').sections.at(-1)).toMatchObject({rows: [], status: 'Ожидание игры: Ожидание игры'});
+  partial.v1.status = 'incompatible'; partial.v1.reason = 'Game protocol target mismatch';
+  expect(gameConnectionText(partial, 'ru')).toBe('Источники игры не совпадают. Переподключитесь или выберите источник в «Настройки > Данные».');
 });

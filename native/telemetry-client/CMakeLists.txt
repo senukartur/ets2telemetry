@@ -20,6 +20,7 @@ string(TOUPPER "${ETS2TELEMETRY_CHANNEL}" ETS2TELEMETRY_CHANNEL_UPPER)
 # the fixture's run order; the case-list entry fails if it differs from tests/client-test.cpp.
 set(CLIENT_TEST_CASES
   retired-record delete-pending-record denied-record zero-record short-record directory-record reparse-record
+  discover-none discover-ets2 discover-ats discover-both discover-ambiguous discover-v1 discover-stale discover-dead discover-malformed discover-channel discover-dacl discover-reparse discover-retired discover-delete-pending
   valid creation dead stale-live dead-live collision session malformed dacl payload-break bad-length invalid-credit quiet quiet-exit partial-prefix partial-payload
   capture capture-v0-hello capture-bad-arguments
   v1-valid v1-policy v1-major-mismatch v1-name-mismatch v1-collision v1-v0-hello v1-cap0-hello
@@ -62,6 +63,7 @@ if(ETS2TELEMETRY_CLIENT_ASAN)
     target_link_libraries(${target} PRIVATE advapi32 bcrypt)
   endforeach()
   set_target_properties(telemetry-client-test-asan PROPERTIES OUTPUT_NAME eurotrucks2 RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/asan-test-fixture")
+  add_custom_command(TARGET telemetry-client-test-asan POST_BUILD COMMAND ${CMAKE_COMMAND} -E copy_if_different $<TARGET_FILE:telemetry-client-test-asan> $<TARGET_FILE_DIR:telemetry-client-test-asan>/amtrucks.exe)
   add_client_test_cases(native-pipe-client-asan telemetry-client-test-asan telemetry-pipe-client-asan 2)
 endif()
 add_executable(telemetry-pipe-client src/client.cpp ../telemetry-plugin/src/protocol-v0.cpp ../telemetry-plugin/src/protocol-v1.cpp)
@@ -76,5 +78,6 @@ if(BUILD_TESTING)
   target_compile_options(telemetry-client-test PRIVATE /W4 /WX /EHsc)
   target_link_libraries(telemetry-client-test PRIVATE advapi32 bcrypt)
   set_target_properties(telemetry-client-test PROPERTIES OUTPUT_NAME eurotrucks2 RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/test-fixture")
+  add_custom_command(TARGET telemetry-client-test POST_BUILD COMMAND ${CMAKE_COMMAND} -E copy_if_different $<TARGET_FILE:telemetry-client-test> $<TARGET_FILE_DIR:telemetry-client-test>/amtrucks.exe)
   add_client_test_cases(native-pipe-client telemetry-client-test telemetry-pipe-client 1)
 endif()

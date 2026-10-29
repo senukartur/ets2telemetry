@@ -1,3 +1,4 @@
+import {initialSource, resolveSourceMode} from './source-mode';
 import {HardModeServiceCache} from './hard-mode/service-status';
 import {app, BrowserWindow, dialog, ipcMain, Menu, MessageChannelMain, nativeImage, net, screen, shell, Tray, utilityProcess, type MessagePortMain, type UtilityProcess, type IpcMainEvent, type IpcMainInvokeEvent} from 'electron';
 import {spawn} from 'node:child_process';
@@ -327,7 +328,7 @@ function runApplication(profileError: unknown): void {
   const rendererBudget = new RecoveryBudget();
   const resolveBroker = createBrokerResolver(__dirname, process.resourcesPath, app.isPackaged, process.env.LOCALAPPDATA, error => log('BROKER_UNAVAILABLE', String(error)));
   async function selectedBroker(source: SourceSelection) {
-    if (source !== 'ets2' && source !== 'ats') return undefined;
+    if (resolveSourceMode(source, process.env).kind !== 'game') return undefined;
     try {return await resolveBroker();}
     catch (error) {log('BROKER_UNAVAILABLE', String(error)); return undefined;}
   }
@@ -347,7 +348,7 @@ function runApplication(profileError: unknown): void {
   let selectionGeneration = 0;
   let selectionPending = false;
   let rendererEpoch = 0;
-  let selection: SourceSelection = sourceSelection(process.env.ETS2TELEMETRY_SOURCE_KIND || 'game');
+  let selection: SourceSelection = initialSource(process.env);
   let selectionDispatched = false;
   function commitSelection(next: SourceSelection, origin: 'startup' | 'user' | 'restore'): void {
     const previous = selection;
@@ -746,7 +747,7 @@ function runApplication(profileError: unknown): void {
         if (!supervisor.ready()) return;
         const requested = selection, generation = ++selectionGeneration;
         void (async () => {
-          const broker = requested === 'ets2' || requested === 'ats' ? await selectedBroker(requested) : undefined;
+          const broker = await selectedBroker(requested);
           if (!settingsStore.settled) await settingsLoad;
           if (supervisor.stopping || service !== child || generation !== selectionGeneration) return;
           child.postMessage(selectMessage(requested, broker));
@@ -1083,13 +1084,13 @@ function runApplication(profileError: unknown): void {
   }
   ipcMain.handle('telemetry:select', async (event, source: unknown) => {
     if (!trusted(event) || !serviceReady) throw new Error('Untrusted source request');
-    const next = sourceSelection(source);
+    const next = resolveSourceMode(sourceSelection(source), process.env).selection;
     if (performance.now() - lastSelectionRequest < 250) throw new Error('Source selection request limit exceeded');
     lastSelectionRequest = performance.now();
     const child = service!, generation = ++selectionGeneration, epoch = rendererEpoch;
     selectionPending = true; freshness.invalidate(initialLive(selection));
     try {
-      const broker = next === 'ets2' || next === 'ats' ? await selectedBroker(next) : undefined;
+      const broker = await selectedBroker(next);
       if (!trusted(event) || !serviceReady || supervisor.stopping || service !== child || generation !== selectionGeneration || epoch !== rendererEpoch) throw new Error('Source request was retired');
       child.postMessage(selectMessage(next, broker));
       commitSelection(next, 'user'); freshness.invalidate(initialLive(selection));

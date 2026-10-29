@@ -1,3 +1,4 @@
+import {sameTarget, type GameTarget} from './native-game-discovery';
 // Protocol v1 ingestion in the telemetry service (ET-006b, E2, E5, E9, E10). It validates each connection's hello,
 // welcome, checkpoint, snapshots, events, gaps, clock replies and `end` through the ET-002b V1Consumer, checks every
 // envelope against the selected source, keeps service-internal live state, measures the source clock and, when a
@@ -55,6 +56,7 @@ export interface V1SourceState {
   durable: DurableStatus;
 }
 export interface V1IngestionOptions {
+  expectedTarget?: GameTarget;
   /** Service receive clock in milliseconds; freshness and staleness use it. */
   now?: () => number;
   /** Client monotonic clock in nanoseconds for clock probes; defaults to process.hrtime.bigint. */
@@ -62,7 +64,7 @@ export interface V1IngestionOptions {
   /** Fixture sockets for explicitly selected synthetic or replay endpoints. */
   connect?: (endpoint: string) => TelemetrySocket;
   /** The native broker in v1 mode for game selections; without it a game selection stays unavailable. */
-  connectGame?: (configuration: BrokerConfiguration, game: 'ets2' | 'ats') => TelemetrySocket;
+  connectGame?: (configuration: BrokerConfiguration, game: 'ets2' | 'ats', target?: GameTarget) => TelemetrySocket;
   broker?: BrokerConfiguration;
   /** Durable storage. Without it every hello is live-only and nothing is acknowledged. */
   sink?: DurableSink;
@@ -145,6 +147,12 @@ export class V1Ingestion {
    * the next successful write; undefined without a sink. Each change is reported through `onState`.
    */
   get durableRetryCode(): string | undefined { return this.delivery?.retryCode; }
+  configureTarget(target: GameTarget | undefined): void {this.options.expectedTarget = target;}
+  async retire(): Promise<void> {
+    this.pendingSelection = undefined; this.cancel();
+    this.requestedDurable = undefined; this.state = initialState('game', this.durableStatus()); this.publish();
+    await Promise.all(this.completions); await this.transition;
+  }
   configureBroker(configuration: BrokerConfiguration | undefined): void { this.options.broker = configuration; }
   select(selection: SourceSelection, endpoint?: string): void {
     sourceSelection(selection); if (this.disposed) throw new Error('Ingestion stopped');
@@ -207,7 +215,7 @@ export class V1Ingestion {
   }
   private applySelection(selection: SourceSelection, endpoint?: string): void {
     this.endpoint = endpoint;
-    if (selection === 'game') { this.emit('waiting', 'Select ETS2 or ATS explicitly'); return; }
+    if (selection === 'game') { this.emit('waiting', 'Waiting for game'); return; }
     if (selection === 'ets2' || selection === 'ats') {
       if (!this.options.broker || !this.options.connectGame) { this.emit('unavailable', 'Verified native v1 game pipe client is not configured'); return; }
       this.emit('waiting', 'Discovering selected game process'); this.open(); return;
@@ -231,7 +239,7 @@ export class V1Ingestion {
     let closed = false, ended = false, hydrated = false, probeId = 0n, probeSentNs = 0n;
     let durable: DurableConnection | undefined;
     const selection = this.state.selection, game = selection === 'ets2' || selection === 'ats';
-    const socket = this.socket = game ? this.options.connectGame!(this.options.broker!, selection) : this.connect(this.endpoint!);
+    const socket = this.socket = game ? this.options.connectGame!(this.options.broker!, selection, this.options.expectedTarget) : this.connect(this.endpoint!);
     if (socket.completion) { const completion = socket.completion; this.completions.add(completion); void completion.finally(() => this.completions.delete(completion)); }
     const active = () => !closed && !this.disposed && generation === this.generation;
     // Fixed at 'connect', when the hello is written: the native client sets its authority receipt, which names the plugin
@@ -293,6 +301,7 @@ export class V1Ingestion {
     this.handshake = setTimeout(() => close('disconnected', 'Hello/checkpoint deadline exceeded', true), this.options.handshakeMs ?? V1_HANDSHAKE_MS);
     socket.once('connect', () => {
       if (!active()) return;
+      if (this.options.expectedTarget && (!socket.target || !sameTarget(socket.target, this.options.expectedTarget))) {close('incompatible', 'Native game target mismatch', false); return;}
       requested = this.durableWanted(socket.authority?.pluginSessionId); consumer = new V1Consumer(requested, {maxMinor: V1_CLIENT_MAX_MINOR});
       if (this.delivery && requested !== this.requestedDurable) { this.requestedDurable = requested; this.publish(); }
       if (!requested && this.delivery) {
