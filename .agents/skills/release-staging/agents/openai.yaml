@@ -1,0 +1,7 @@
+interface:
+  display_name: "Release Staging"
+  short_description: "Prepare a staging release of a branch (main by default) up to the owner's release-staging approval"
+  default_prompt: "Release staging from branch "
+
+policy:
+  allow_implicit_invocation: false

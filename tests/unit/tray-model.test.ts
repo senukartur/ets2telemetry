@@ -153,6 +153,23 @@ it('provides valid RGBA PNG representations for every notification-area scale', 
   }
   expect(() => trayIconPng(4 as TrayIconSize, 'ready')).toThrow(); expect(() => trayIconPng(16, 'unknown' as TrayTone)).toThrow();
 });
+// ET-055: the staging tray icon is the same tile with an amber flag in the upper right corner; the status dot in the
+// lower right corner is unchanged, so a tone reads the same in both channels.
+it('marks the staging tray icon with a corner flag that leaves the status dot unchanged', () => {
+  expect(trayIconPng(16, 'ready')).toEqual(trayIconPng(16, 'ready', 'production'));
+  for (const {size} of TRAY_ICON_REPRESENTATIONS) for (const tone of Object.keys(TRAY_TONE_RGB) as TrayTone[]) {
+    const production = pixels(trayIconPng(size, tone, 'production'), size), staging = pixels(trayIconPng(size, tone, 'staging'), size);
+    const dot = Math.floor(size * 0.79);
+    expect(staging(dot, dot)).toEqual(production(dot, dot));
+    let changed = 0;
+    for (let y = 0; y < size; y++) for (let x = 0; x < size; x++) if (staging(x, y).join() !== production(x, y).join()) {
+      changed++; expect(x).toBeGreaterThan(y);
+    }
+    expect(changed).toBeGreaterThan(0);
+    // The flag's amber, FFB300.
+    expect(staging(Math.floor(size * 0.86), Math.floor(size * 0.1))).toEqual([255, 179, 0, 255]);
+  }
+});
 it('uses visibly distinct colours for each health tone', () => {
   const tones = Object.values(TRAY_TONE_RGB);
   for (const [index, left] of tones.entries()) for (const right of tones.slice(index + 1))

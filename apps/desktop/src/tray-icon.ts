@@ -1,3 +1,4 @@
+import {ACTIVE_CHANNEL, type ReleaseChannel} from './channel';
 import {TRAY_ICON_PNG_BASE64} from './tray-icon-data';
 
 /** Health tone of the notification-area icon. */
@@ -17,10 +18,11 @@ export type TrayIconSize = (typeof TRAY_ICON_REPRESENTATIONS)[number]['size'];
 
 /**
  * The square RGBA PNG for one notification-area representation: the small "road merge" tile with a status dot in the
- * lower right corner. scripts/generate-app-icons.mjs renders it; see docs/design/ui-spec.md#3-tokens-type-and-icons.
+ * lower right corner, in this build's channel (staging adds an amber corner flag). scripts/generate-app-icons.mjs
+ * renders it; see docs/design/ui-spec.md#3-tokens-type-and-icons.
  */
-export function trayIconPng(size: TrayIconSize, tone: TrayTone): Buffer {
-  const encoded = TRAY_ICON_PNG_BASE64[tone]?.[size];
+export function trayIconPng(size: TrayIconSize, tone: TrayTone, channel: ReleaseChannel = ACTIVE_CHANNEL): Buffer {
+  const encoded = TRAY_ICON_PNG_BASE64[channel]?.[tone]?.[size];
   if (encoded === undefined) throw new Error('Invalid tray icon size or tone');
   return Buffer.from(encoded, 'base64');
 }
