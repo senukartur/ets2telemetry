@@ -37,6 +37,11 @@ export function dashboardObservation(expected = {}) {
     observation.fuel = read('fuel', true);
     if (observation.fuel !== (expected.fuel ?? (unavailable ? 'Fuel: unavailable' : 'Fuel: 73.0 L'))) return false;
   }
+  if (expected.tankHeight !== undefined) {
+    const tank = one('live.instrument.tank'), levels = tank?.querySelectorAll('i'), missing = tank?.querySelectorAll('.yu-tank-unavailable');
+    if (!visible(tank) || tank.getAttribute('data-state') !== 'value' || levels?.length !== 1 || missing?.length !== 0 || levels[0].style.height !== expected.tankHeight) return false;
+    observation.tank = {state: tank.getAttribute('data-state'), height: levels[0].style.height, unavailable: missing.length};
+  }
   for (const id of expected.values ?? []) {
     if (read(id) !== 'unavailable' || read(id + '-reason') !== 'not current') return false;
     observation[id] = 'unavailable';

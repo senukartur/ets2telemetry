@@ -510,3 +510,23 @@ it('transitions V1Ingestion to disconnected and reconnects on mid-session transi
   await vi.advanceTimersByTimeAsync(10000);
   expect(spawn).toHaveBeenCalledTimes(2);
 });
+
+it.each(['v0', 'v1'] as const)('pins every %s target component before connect/hello or a durable request', protocol => {
+  const expected = {source: {...source}, processCreationTime: '123456789', userTag: 'a'.repeat(64)};
+  for (const field of ['processId', 'windowsSessionId', 'processInstanceId', 'pluginSessionId', 'processCreationTime', 'userTag'] as const) {
+    const client = new Client(configuration, 'ets2', undefined, protocol, expected); clients.push(client);
+    const child = children.at(-1)!, connect = vi.fn(), error = vi.fn(); client.on('connect', connect).on('error', error);
+    const record = {...authority(), ...(protocol === 'v1' ? {protocolMajor: 1} : {})};
+    if (field === 'processCreationTime') record.processCreationTime = '123456790';
+    else if (field === 'userTag') record.userTag = 'b'.repeat(64);
+    else if (field === 'processId') record.source.processId++;
+    else if (field === 'windowsSessionId') record.source.windowsSessionId++;
+    else record.source[field] = '33333333-3333-4333-8333-333333333333';
+    child.output(relay(record));
+    expect(connect, field).not.toHaveBeenCalled(); expect(error, field).toHaveBeenCalledOnce(); expect(child.writes, field).toEqual([]);
+  }
+  const client = new Client(configuration, 'ets2', undefined, protocol, expected); clients.push(client);
+  const child = children.at(-1)!, connect = vi.fn(); client.on('connect', connect).on('error', () => undefined);
+  child.output(relay({...authority(), ...(protocol === 'v1' ? {protocolMajor: 1} : {})}));
+  expect(connect).toHaveBeenCalledOnce(); expect(client.target).toEqual(expected);
+});

@@ -263,7 +263,10 @@ it('keeps the income section shape as a dash while stale, and leaves it out whil
 // game origin: 151000 m remaining, deadline minute 13000 at game minute 12345 (10 h 55 min), 18000 kg of Synthetic
 // Cargo from Synthetic City A (Synthetic Company A) to Synthetic City B (Synthetic Company B).
 function withV1(options: V1Options = {}, v0 = live()): LiveTelemetry {
-  return {...v0, v1: v1Projection('snapshot-live', {selection: v0.selection, origin: 'game', ...options})};
+  const v1 = v1Projection('snapshot-live', {selection: v0.selection, origin: 'game', ...options});
+  // Real v0/v1 streams share the plugin producer identity; independent protocol fixtures do not.
+  v1.observation!.source = {...v0.observation!.source, origin: options.origin ?? 'game', ...(options.game ? {game: options.game} : {})};
+  return {...v0, v1};
 }
 const V1_STALE: V1Options = {status: 'stale', fresh: false, reason: 'Main has no recent v1 SDK capture'};
 const FULL: OverlaySectionView[] = [

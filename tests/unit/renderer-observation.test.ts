@@ -74,7 +74,7 @@ describe('coherent renderer acceptance', () => {
 });
 
 // ET-010b live card predicates. The fake document returns elements by exact data-testid.
-interface FakeElement {innerText: string; attributes?: Record<string, string>; visibility?: string; box?: {width: number; height: number; top: number}}
+interface FakeElement {innerText: string; attributes?: Record<string, string>; visibility?: string; box?: {width: number; height: number; top: number}; style?: {height: string}; children?: Record<string, FakeElement[]>}
 type Change = (elements: Record<string, FakeElement[]>) => void;
 function fakeGlobals(elements: Record<string, FakeElement[]>) {
   if (elements['telemetry-status'] && !elements['shell.status.connection']) elements = {...elements, 'shell.status.connection': elements['telemetry-status']};
@@ -92,6 +92,7 @@ function fakeGlobals(elements: Record<string, FakeElement[]>) {
     return (elements[id] ?? []).map(element => {
       const box = element.box ?? {width: 100, height: 20, top: 10};
       return {innerText: element.innerText, textContent: element.innerText, getAttribute: (name: string) => element.attributes?.[name] ?? null, visibility: element.visibility ?? 'visible',
+        querySelectorAll: (selector: string) => element.children?.[selector] ?? [],
         getBoundingClientRect: () => ({...box, left: 10, right: 10 + box.width, bottom: box.top + box.height})};
     });
   }}};
@@ -495,5 +496,27 @@ describe('ET-045f cluster speed arc probe', () => {
     expect(runArcProbe(fakeSpeedArc({svg: false}))).toMatchObject({ok: false, reason: 'no-gauge'});
     expect(runArcProbe(fakeSpeedArc({duplicate: true}))).toMatchObject({ok: false, reason: 'duplicate-arc'});
     expect(runArcProbe(fakeSpeedArc({track: false}))).toMatchObject({ok: false, reason: 'arc-without-track', track: false});
+  });
+});
+
+describe('current Live instrument snapshot after route navigation or source resume', () => {
+  function observe(fault?: string) {
+    const tank: FakeElement = {innerText: '', attributes: {'data-state': 'value'}, children: {i: [{innerText: '', style: {height: '7.3%'}}]}};
+    const elements = {'telemetry-status': one(current.status), speed: one(current.speed), fuel: one(current.fuel), 'live.instrument.tank': [tank]};
+    if (fault === 'stale') {elements['telemetry-status'] = one(stale.status); elements.speed = one(stale.speed); elements.fuel = one(stale.fuel);}
+    if (fault === 'capacity-missing' || fault === 'stale') {tank.attributes!['data-state'] = 'unavailable'; tank.children = {'.yu-tank-unavailable': one('—')};}
+    if (fault === 'wrong-fill') tank.children!.i[0].style!.height = '73%';
+    if (fault === 'zero') {tank.children!.i[0].style!.height = '0%'; elements.fuel = one('Fuel: 0.0 L');}
+    if (fault === 'sentinel') tank.children!['.yu-tank-unavailable'] = one('—');
+    if (fault === 'duplicate-fill') tank.children!.i.push(tank.children!.i[0]);
+    if (fault === 'hidden') tank.visibility = 'hidden';
+    if (fault === 'missing') delete (elements as Record<string, FakeElement[]>)['live.instrument.tank'];
+    return runInNewContext(`(${currentTelemetryObservation.toString()})(expected)`, {...fakeGlobals(elements), expected: {tankHeight: '7.3%'}}) as unknown;
+  }
+  it('captures connected status, exact metric readings and the rendered tank together', () => {
+    expect(observe()).toMatchObject({...current, tank: {state: 'value', height: '7.3%', unavailable: 0}});
+  });
+  it.each(['stale', 'capacity-missing', 'wrong-fill', 'zero', 'sentinel', 'duplicate-fill', 'hidden', 'missing'])('does not accept a %s instrument as the current fixture state', fault => {
+    expect(observe(fault)).toBe(false);
   });
 });

@@ -42,10 +42,18 @@ export const STRINGS = channelCopyTable(Object.freeze({
   trayExiting: 'Exiting',
   serviceFailedTitle: 'Telemetry service problem',
   sourceLabel: 'Source',
-  sourceSelectPrompt: 'Select a game',
+  sourceSelectPrompt: 'Automatic',
+  sourceWaiting: 'Waiting for game',
+  sourceChoice: 'Both games are available. Choose which game to connect to.',
+  sourcePairWaiting: 'Waiting for matching game sources after a session change.',
+  sourcePartial: 'Game connection is incomplete. Waiting for the other telemetry stream.',
+  sourceMismatch: 'The game sources do not match. Reconnect or choose a source in Settings > Data.',
+  sourceAmbiguous: 'Multiple instances of a game were found. Close the extra instance to connect.',
+  sourceRejected: 'The game connection could not be verified. Check Settings > Game plugin.',
+  sourceChoosing: 'Connecting…',
   sourceSyntheticFixture: 'Synthetic fixture',
   sourceReplayFixture: 'Replay fixture',
-  sourceNoGameSelected: 'no game selected',
+  sourceNoGameSelected: 'automatic game',
   speedLabel: 'Speed',
   fuelLabel: 'Fuel',
   unavailableText: 'unavailable',
@@ -117,10 +125,18 @@ export const STRINGS_RU: Readonly<Record<StringKey, string>> = channelCopyTable(
   trayExiting: 'Завершение работы',
   serviceFailedTitle: 'Проблема службы телеметрии',
   sourceLabel: 'Источник',
-  sourceSelectPrompt: 'Выберите игру',
+  sourceSelectPrompt: 'Автоматически',
+  sourceWaiting: 'Ожидание игры',
+  sourceChoice: 'Доступны обе игры. Выберите игру для подключения.',
+  sourcePairWaiting: 'Ожидание согласованных источников игры после смены сессии.',
+  sourcePartial: 'Подключение к игре неполное. Ожидание второго потока телеметрии.',
+  sourceMismatch: 'Источники игры не совпадают. Переподключитесь или выберите источник в «Настройки > Данные».',
+  sourceAmbiguous: 'Найдено несколько экземпляров игры. Закройте лишний экземпляр для подключения.',
+  sourceRejected: 'Не удалось проверить подключение к игре. Откройте «Настройки > Игровой плагин».',
+  sourceChoosing: 'Подключение…',
   sourceSyntheticFixture: 'Синтетический источник',
   sourceReplayFixture: 'Источник повтора',
-  sourceNoGameSelected: 'игра не выбрана',
+  sourceNoGameSelected: 'автоматический выбор игры',
   speedLabel: 'Скорость',
   fuelLabel: 'Топливо',
   unavailableText: 'недоступно',
@@ -176,10 +192,10 @@ export const SERVICE_HEALTH_TEXT_RU: Readonly<Record<ServiceHealth, string>> = O
 });
 
 export const SOURCE_SELECTION_TEXT: Readonly<Record<LiveTelemetry['selection'], string>> = Object.freeze({
-  game: 'no game selected', ets2: 'ETS2', ats: 'ATS', synthetic: 'synthetic fixture', replay: 'replay fixture'
+  game: 'automatic', ets2: 'ETS2', ats: 'ATS', synthetic: 'synthetic fixture', replay: 'replay fixture'
 });
 export const SOURCE_SELECTION_TEXT_RU: Readonly<Record<LiveTelemetry['selection'], string>> = Object.freeze({
-  game: 'игра не выбрана', ets2: 'ETS2', ats: 'ATS', synthetic: 'синтетический источник', replay: 'источник повтора'
+  game: 'автоматически', ets2: 'ETS2', ats: 'ATS', synthetic: 'синтетический источник', replay: 'источник повтора'
 });
 export function getSourceSelectionText(selection: LiveTelemetry['selection'], language: AppLanguage = 'en'): string {
   return (language === 'ru' ? SOURCE_SELECTION_TEXT_RU : SOURCE_SELECTION_TEXT)[selection];

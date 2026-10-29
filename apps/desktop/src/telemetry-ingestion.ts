@@ -1,3 +1,4 @@
+import {sameTarget, type GameTarget} from './native-game-discovery';
 import {randomUUID} from 'node:crypto';
 import net from 'node:net';
 import {NativeClientError, NativePipeClient, type TelemetrySocket, type BrokerConfiguration, type BrokerDiagnostic} from './native-pipe-client';
@@ -7,7 +8,7 @@ import {initialLive, sourceSelection} from './live-state';
 export {initialLive, sourceSelection} from './live-state';
 
 export const TEST_PIPE_PATTERN = /^\\\\\.\\pipe\\ETS2Telemetry-SYNTHETIC-TEST-v0-[1-9][0-9]*-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
-export interface IngestionOptions {now?: () => number; connect?: (endpoint: string) => TelemetrySocket; staleMs?: number; handshakeMs?: number; broker?: BrokerConfiguration; connectGame?: (configuration: BrokerConfiguration, game: 'ets2' | 'ats') => TelemetrySocket; diagnose?: (diagnostic: BrokerDiagnostic) => void}
+export interface IngestionOptions {now?: () => number; connect?: (endpoint: string) => TelemetrySocket; staleMs?: number; handshakeMs?: number; broker?: BrokerConfiguration; expectedTarget?: GameTarget; connectGame?: (configuration: BrokerConfiguration, game: 'ets2' | 'ats', target?: GameTarget) => TelemetrySocket; diagnose?: (diagnostic: BrokerDiagnostic) => void}
 /** Node pipe I/O is confined to explicitly selected isolated fixtures. Game authentication requires a native helper. */
 export class TelemetryIngestion {
   private readonly clientInstanceId = randomUUID();
@@ -29,6 +30,11 @@ export class TelemetryIngestion {
   constructor(private readonly publish: (state: LiveTelemetry) => void, private readonly options: IngestionOptions = {}) {
     this.now = options.now ?? (() => performance.now()); this.connect = options.connect ?? (endpoint => net.connect(endpoint));
   }
+  configureTarget(target: GameTarget | undefined): void {this.options.expectedTarget = target;}
+  async retire(): Promise<void> {
+    this.pendingSelection = undefined; this.cancel(); this.live = initialLive();
+    await Promise.all(this.completions); await this.transition;
+  }
   configureBroker(configuration: BrokerConfiguration | undefined): void {this.options.broker = configuration;}
   select(selection: SourceSelection, endpoint?: string): void {
     sourceSelection(selection); if (this.disposed) throw new Error('Ingestion stopped');
@@ -48,7 +54,7 @@ export class TelemetryIngestion {
   }
   private applySelection(selection: SourceSelection, endpoint?: string): void {
     this.endpoint = endpoint;
-    if (selection === 'game') {this.emit('waiting', 'Select ETS2 or ATS explicitly'); return;}
+    if (selection === 'game') {this.emit('waiting', 'Waiting for game'); return;}
     if (selection === 'ets2' || selection === 'ats') {
       if (!this.options.broker) {this.emit('unavailable', 'Verified native game pipe client is not configured'); return;}
       this.emit('waiting', 'Discovering selected game process'); this.open(); return;
@@ -70,7 +76,7 @@ export class TelemetryIngestion {
     const generation = ++this.generation, decoder = new FrameDecoder(), consumer = new V0Consumer(false);
     let closed = false, hydrated = false;
     const selection = this.live.selection;
-    const socket = this.socket = selection === 'ets2' || selection === 'ats' ? (this.options.connectGame ?? ((config, game) => new NativePipeClient(config, game, this.options.diagnose)))(this.options.broker!, selection) : this.connect(this.endpoint!);
+    const socket = this.socket = selection === 'ets2' || selection === 'ats' ? (this.options.connectGame ?? ((config, game, target) => new NativePipeClient(config, game, this.options.diagnose, 'v0', target)))(this.options.broker!, selection, this.options.expectedTarget) : this.connect(this.endpoint!);
     if (socket.completion) {const completion = socket.completion; this.completions.add(completion); void completion.finally(() => this.completions.delete(completion));}
     const active = () => !closed && !this.disposed && generation === this.generation;
     const close = (status: LiveTelemetry['status'], reason: string, retry: boolean) => {
@@ -89,7 +95,9 @@ export class TelemetryIngestion {
     };
     this.handshake = setTimeout(() => close('disconnected', 'Hello/checkpoint deadline exceeded', true), this.options.handshakeMs ?? 5000);
     socket.once('connect', () => {
-      if (active()) socket.write(encodeFrame({version: PROTOCOL_V0, kind: 'hello', data: {clientInstanceId: this.clientInstanceId, minMinor: 0, maxMinor: 0, diagnostics: false}}));
+      if (!active()) return;
+      if (this.options.expectedTarget && (!socket.target || !sameTarget(socket.target, this.options.expectedTarget))) {close('incompatible', 'Native game target mismatch', false); return;}
+      socket.write(encodeFrame({version: PROTOCOL_V0, kind: 'hello', data: {clientInstanceId: this.clientInstanceId, minMinor: 0, maxMinor: 0, diagnostics: false}}));
     });
     socket.on('data', (bytes: unknown) => {
       if (!active()) return;

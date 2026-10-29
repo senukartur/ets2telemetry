@@ -307,8 +307,9 @@ export async function runDiagnosticsExport({application, dashboard, config, fixt
   try {user = os.userInfo().username;} catch {user = undefined;}
   const bundle = checkDiagnosticsBundle(text, {identities: [user, os.hostname(), process.env.USERNAME, process.env.COMPUTERNAME],
     runPaths: [fixture.root, config.output, config.localappdata], mainEvents: ['PLUGIN_SETUP_MODE', 'PLUGIN_ACTION']});
+  // The isolated PROFILE_DIR makes this launch fixture-only, even without a telemetry fixture endpoint.
   assert.deepEqual([bundle.format, bundle.version, bundle.plugins.mode, bundle.diagnosis, bundle.live.selection],
-    ['ets2telemetry.diagnostics', 1, 'test-root', {code: 'NO_GAME_SELECTED', notes: []}, 'game']);
+    ['ets2telemetry.diagnostics', 1, 'test-root', {code: 'NO_GAME_SELECTED', notes: []}, 'synthetic']);
   assert.deepEqual(states(bundle.plugins), RUN_A_EXCLUDED);
   await dashboard.evaluate(() => globalThis.scrollTo(0, 0));
   record.diagnosticsBundle = {bytes: Buffer.byteLength(text), mainRows: bundle.logs.main.length, serviceRows: bundle.logs.service.length, omitted: bundle.omittedLogRows};

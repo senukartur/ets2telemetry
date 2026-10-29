@@ -11,6 +11,7 @@ import {decodePayload, encodeFrame, type ClientMessage, type ServerMessage, type
 import type {CommitResult, Result, StorageErrorCode} from '../../packages/storage/src/api';
 import {storageError} from '../../packages/storage/src/errors';
 import type {CoverageMessage, DurableSink} from '../../apps/desktop/src/durable-sink';
+import type {GameTarget} from '../../apps/desktop/src/native-game-discovery';
 import type {TelemetrySocket} from '../../apps/desktop/src/native-pipe-client';
 import {V1_CLIENT_MAX_MINOR, V1Ingestion, type V1IngestionOptions, type V1SourceState} from '../../apps/desktop/src/v1-ingestion';
 import {header, payload} from '../shared/cap0-fixtures';
@@ -27,7 +28,7 @@ const P1 = '10000000-0000-4000-8000-000000000001', P2 = '10000000-0000-4000-8000
 const CAPTURE_CLOCK = '30000000-0000-4000-8000-000000000001';
 
 class FakeSocket extends EventEmitter implements TelemetrySocket {
-  readonly sent: ClientMessage[] = []; destroyed = false; authority?: SourceIdentity; completion?: Promise<void>;
+  readonly sent: ClientMessage[] = []; destroyed = false; target?: GameTarget; authority?: SourceIdentity; completion?: Promise<void>;
   // Any minor decodes here; the ET-050b and ET-052 cases check which minor each message carries.
   write(bytes: Uint8Array) { this.sent.push(decodePayload(bytes.subarray(4), 'client', {maxMinor: 2}) as ClientMessage); }
   destroy() { this.destroyed = true; }
@@ -189,7 +190,7 @@ describe('ET-006b protocol v1 ingestion', () => {
     return waited;
   }
   it('reconnects after 250, 500, 1000, 2000, 4000 and 4000 ms and resets after the first commit of a durable connection (E9)', async () => {
-    start({sink: new Sink()});
+    const onHealthy = vi.fn(); start({sink: new Sink(), onHealthy});
     const delays: number[] = [];
     for (let i = 0; i < 6; i++) {
       latest().emit('close');
@@ -200,26 +201,29 @@ describe('ET-006b protocol v1 ingestion', () => {
     expect(delays).toEqual([250, 500, 1000, 2000, 4000, 4000]);
     // A durable checkpoint alone does not prove the connection healthy; the backoff keeps its step.
     connectLatest(); latest().feed(frame('welcome'), frame('checkpoint')); await settle();
+    expect(onHealthy).not.toHaveBeenCalled();
     latest().emit('end');
     expect(state().status).toBe('disconnected');
     expect(await nextDelay()).toBe(4000);
     // The first successful commit does: the next reconnection waits 250 ms again.
     connectLatest(); latest().feed(frame('welcome'), frame('checkpoint'), frame('event-job-configured')); await settle();
     expect(latest().acks).toEqual(['1']);
+    expect(onHealthy).toHaveBeenCalledExactlyOnceWith(undefined);
     latest().emit('end');
     expect(await nextDelay()).toBe(250);
   });
 
   it('resets the backoff at the checkpoint of a live-only connection (E9)', async () => {
-    start();
+    const onHealthy = vi.fn(); start({onHealthy});
     for (const expected of [250, 500]) { latest().emit('close'); expect(await nextDelay()).toBe(expected); }
     connectLatest(); latest().feed(frame('welcome-live'), frame('checkpoint-live'));
+    expect(onHealthy).toHaveBeenCalledExactlyOnceWith(undefined);
     latest().emit('end');
     expect(await nextDelay()).toBe(250);
   });
 
   it('keeps backing off while a retryable storage failure persists, instead of reconnecting every 250 ms (E7, E9)', async () => {
-    const sink = new Sink(); sink.fail = 'DISK_FULL'; start({sink});
+    const onHealthy = vi.fn(), sink = new Sink(); sink.fail = 'DISK_FULL'; start({sink, onHealthy});
     const delays: number[] = [];
     for (let i = 0; i < 6; i++) {
       connectLatest();
@@ -229,9 +233,11 @@ describe('ET-006b protocol v1 ingestion', () => {
     }
     // Hand-written from E9: each hydrated connection is closed by the failed commit before it proves healthy.
     expect(delays).toEqual([250, 500, 1000, 2000, 4000, 4000]);
+    expect(onHealthy).not.toHaveBeenCalled();
     sink.fail = undefined;
     connectLatest(); latest().feed(frame('welcome'), frame('checkpoint'), frame('event-job-configured')); await settle();
     expect(latest().acks).toEqual(['1']);
+    expect(onHealthy).toHaveBeenCalledExactlyOnceWith(undefined);
     latest().emit('close');
     expect(await nextDelay()).toBe(250);
   });
@@ -622,4 +628,46 @@ describe('ET-052 protocol v1 minor 2', () => {
     expect(server2('welcome').version).toEqual({major: 1, minor: 2});
     expect(server2('welcome-minor-1').version).toEqual({major: 1, minor: 1});
   });
+});
+
+it('rejects a pinned game mismatch before hello, observations, sink calls or ACKs', async () => {
+  const welcome = server('welcome'), sink = new ObservingSink(), source = {...welcome.source, origin: 'game' as const};
+  const target = {source, processCreationTime: '123', userTag: 'a'.repeat(64)};
+  start({sink, broker: {executable: 'isolated', discoveryDirectory: 'isolated'}, expectedTarget: target,
+    connectGame: () => {const socket = new FakeSocket(); socket.authority = source; socket.target = {...target, processCreationTime: '124'}; sockets.push(socket); return socket;}}, 'ets2');
+  connectLatest(); latest().feed(edited('welcome', m => {m.source = source;})); await settle();
+  expect(latest().sent).toEqual([]); expect(sink.trace).toEqual([]); expect(sink.commits).toEqual([]);
+  expect(state()).toMatchObject({status: 'incompatible', reason: 'Native game target mismatch', durable: {state: 'off'}});
+  expect(state().observation).toBeUndefined();
+});
+
+it('retires current observations and clock identity immediately before waiting for child completion', async () => {
+  let closed!: () => void, retiring: Promise<void> | undefined;
+  start({sink: new Sink(), connect: () => {const socket = new FakeSocket(); socket.completion = new Promise<void>(resolve => {closed = resolve;}); sockets.push(socket); return socket;}});
+  try {
+    connectLatest(); latest().feed(frame('welcome'), frame('checkpoint')); expect(state().observation).toBeDefined();
+    const completed = vi.fn(); retiring = ingestion!.retire().then(completed);
+    expect(state()).toMatchObject({selection: 'game', status: 'waiting', fresh: false, durable: {state: 'off'}});
+    expect(state().observation).toBeUndefined(); expect(state().clockMapping).toBeUndefined();
+    await settle(); expect(completed).not.toHaveBeenCalled(); closed(); await retiring;
+  } finally {closed(); await retiring;}
+});
+
+it('does not report health from an old successful commit after reconnecting to the same verified target', async () => {
+  const sink = new Sink(), onHealthy = vi.fn(), source = {...server('welcome').source, origin: 'game' as const};
+  const target = {source, processCreationTime: '123', userTag: 'a'.repeat(64)};
+  sink.hold = true;
+  start({sink, onHealthy, broker: {executable: 'isolated', discoveryDirectory: 'isolated'}, expectedTarget: target,
+    connectGame: () => {const socket = new FakeSocket(); socket.authority = source; socket.target = target; sockets.push(socket); return socket;}}, 'ets2');
+  const feed = (name: string) => latest().feed(edited(name, message => {message.source = source;}));
+  try {
+    connectLatest(); feed('welcome'); feed('checkpoint'); feed('event-job-configured'); await settle();
+    expect(sink.held).toHaveLength(1); const old = latest();
+    await ingestion!.retire(); ingestion!.select('ets2'); connectLatest(); feed('welcome'); feed('checkpoint'); await settle();
+    expect(onHealthy).not.toHaveBeenCalled();
+    sink.hold = false; sink.held.splice(0).forEach(release => release()); await settle();
+    expect(sink.commits).toEqual(['event 1']); expect(old.acks).toEqual([]); expect(onHealthy).not.toHaveBeenCalled();
+    feed('event-job-configured'); await settle();
+    expect(latest().acks).toEqual(['1']); expect(onHealthy).toHaveBeenCalledExactlyOnceWith(target);
+  } finally {sink.hold = false; sink.held.splice(0).forEach(release => release());}
 });

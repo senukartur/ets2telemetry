@@ -259,12 +259,12 @@ it.each(['game', 'ets2', 'ats', 'synthetic', 'replay'])('logs the first dispatch
   expect(sourceEvents()).toHaveLength(1);
 });
 it('logs successful user selections, retiring only a replaced committed selection, and distinguishes restore', async () => {
-  await ready(); const select = handlers.get('telemetry:select')!;
+  vi.stubEnv('ETS2TELEMETRY_SOURCE_KIND', 'game'); await ready(); const select = handlers.get('telemetry:select')!;
   await select(trusted(), 'ats'); await vi.advanceTimersByTimeAsync(250); await select(trusted(), 'ats');
   child.emit('exit', 1); await vi.advanceTimersByTimeAsync(250); children[1].emit('message', {type: 'ready'}); await settle();
   expect(sourceEvents()).toEqual([
-    ['SOURCE_SELECTED', undefined, {source: 'synthetic', origin: 'startup'}],
-    ['SOURCE_SELECTION_RETIRED', undefined, {source: 'synthetic', origin: 'user'}],
+    ['SOURCE_SELECTED', undefined, {source: 'game', origin: 'startup'}],
+    ['SOURCE_SELECTION_RETIRED', undefined, {source: 'game', origin: 'user'}],
     ['SOURCE_SELECTED', undefined, {source: 'ats', origin: 'user'}],
     ['SOURCE_SELECTED', undefined, {source: 'ats', origin: 'user'}],
     ['SOURCE_SELECTED', undefined, {source: 'ats', origin: 'restore'}]
@@ -306,19 +306,19 @@ it.each(['owned', 'retired'])('awaits game startup verification before window cr
   else {expect(loadFile).toHaveBeenCalledTimes(2); expect(child.postMessage).toHaveBeenCalledWith({type: 'select', source: 'ets2', broker: undefined});}
 });
 it('does not dispatch or commit an older game request after a newer source selection', async () => {
-  await ready(); const complete = pendingVerification(), select = handlers.get('telemetry:select')!;
+  vi.stubEnv('ETS2TELEMETRY_SOURCE_KIND', 'game'); await ready(); const complete = pendingVerification(), select = handlers.get('telemetry:select')!;
   const older = select(trusted(), 'ets2'); await vi.advanceTimersByTimeAsync(250);
   await select(trusted(), 'replay'); complete(); await expect(older).rejects.toThrow('retired');
   expect(child.postMessage).not.toHaveBeenCalledWith(expect.objectContaining({type: 'select', source: 'ets2'}));
   child.emit('exit', 1); expect(contents.send.mock.calls[0][1].selection).toBe('replay');
   expect(sourceEvents()).toEqual([
-    ['SOURCE_SELECTED', undefined, {source: 'synthetic', origin: 'startup'}],
-    ['SOURCE_SELECTION_RETIRED', undefined, {source: 'synthetic', origin: 'user'}],
+    ['SOURCE_SELECTED', undefined, {source: 'game', origin: 'startup'}],
+    ['SOURCE_SELECTION_RETIRED', undefined, {source: 'game', origin: 'user'}],
     ['SOURCE_SELECTED', undefined, {source: 'replay', origin: 'user'}]
   ]);
 });
 it.each(['service-exit', 'frame-replaced', 'reload', 'renderer-crash', 'stop'])('rechecks async dispatch ownership after %s', async reason => {
-  await ready(); const complete = pendingVerification(), event = trusted();
+  vi.stubEnv('ETS2TELEMETRY_SOURCE_KIND', 'game'); await ready(); const complete = pendingVerification(), event = trusted();
   const pending = handlers.get('telemetry:select')!(event, 'ats');
   if (reason === 'service-exit') child.emit('exit', 1);
   else if (reason === 'frame-replaced') contents.mainFrame = {};
@@ -327,7 +327,7 @@ it.each(['service-exit', 'frame-replaced', 'reload', 'renderer-crash', 'stop'])(
   else app.emit('before-quit', {preventDefault: vi.fn()});
   complete(); await expect(pending).rejects.toThrow('retired');
   expect(child.postMessage).not.toHaveBeenCalledWith(expect.objectContaining({type: 'select', source: 'ats'}));
-  expect(sourceEvents()).toEqual([['SOURCE_SELECTED', undefined, {source: 'synthetic', origin: 'startup'}]]);
+  expect(sourceEvents()).toEqual([['SOURCE_SELECTED', undefined, {source: 'game', origin: 'startup'}]]);
 });
 it('recovers separated renderer crashes while stopping clustered crash loops', async () => {
   await ready();
@@ -1522,7 +1522,10 @@ const OVERLAY_KEYS = ['source', 'origin', 'status', 'speed', 'speedUnit', 'fuel'
 const ORIGIN_VALUE = {id: 'origin', state: 'value', text: 'Synthetic City A, Synthetic Company A'};
 const sectionOf = (projection: Record<string, unknown>, id: string) => (projection.sections as {id: string}[]).find(section => section.id === id);
 function readingWithV1(options: V1Options = {}): LiveTelemetry {
-  return {...currentReading(), v1: v1Projection('snapshot-live', {selection: 'ets2', origin: 'game', ...options})};
+  const live = currentReading(), v1 = v1Projection('snapshot-live', {selection: 'ets2', origin: 'game', ...options});
+  // A real plugin shares the producer identity between v0 and v1; the independent fixtures do not.
+  v1.observation!.source = {...live.observation!.source, ...(options.game ? {game: options.game} : {}), ...(options.origin ? {origin: options.origin} : {})};
+  return {...live, v1};
 }
 async function v1Consumers() {
   vi.stubEnv('ETS2TELEMETRY_SOURCE_KIND', 'ets2'); await ready();
@@ -2676,7 +2679,7 @@ it('saves the redacted bundle of this application state and its startup logs, an
     expect(bundle).toMatchObject({format: 'ets2telemetry.diagnostics', version: 1, app: {version: expect.any(String) as string, packaged: false,
       node: process.versions.node}, health: {service: 'ready', storage: 'verified'}, plugins: PLUGINS_DISABLED, bundledPlugin: null,
     // No live update arrived yet: main's last live state is the initial one, as the dashboard would show it.
-    live: {status: 'waiting', selection: 'game'}, diagnosis: {code: 'NO_GAME_SELECTED', notes: []},
+    live: {status: 'waiting', selection: 'game'}, diagnosis: {code: 'SETUP_DISABLED', notes: []},
     logs: {main: [{time: '2026-10-17T08:30:00.000Z', event: 'PLUGIN_DISCOVERY', facts: {owner: '<redacted>', library: '<redacted>'}}],
       service: [{time: '2026-10-17T08:30:01.000Z', event: 'SERVICE_READY'}]}});
     expect(await readdir(path.dirname(target))).toEqual(['diagnostics.json']);
@@ -3225,4 +3228,11 @@ it('reports no APPLICATION_INFO_INVALID for a valid build version', async () => 
   await ready();
   expect(log.mock.calls.some(call => call[0] === 'APPLICATION_INFO_INVALID')).toBe(false);
   expect(handlers.get('app:get-state')!(trusted())).toMatchObject({application: APPLICATION});
+});
+
+it('keeps a missing fixture launch isolated when the renderer requests automatic or explicit games', async () => {
+  await ready(); const select = handlers.get('telemetry:select')!; resolveBroker.mockClear();
+  await select(trusted(), 'game'); await vi.advanceTimersByTimeAsync(250); await select(trusted(), 'ets2');
+  expect(resolveBroker).not.toHaveBeenCalled();
+  expect(child.postMessage).toHaveBeenLastCalledWith({type: 'select', source: 'synthetic', broker: undefined});
 });

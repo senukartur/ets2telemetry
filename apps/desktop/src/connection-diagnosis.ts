@@ -54,16 +54,16 @@ const FOLDER_ROWS: readonly {code: FolderCode; note: ConnectionDiagnosisNote; ap
   {code: 'PLUGIN_MISSING', note: 'OTHER_FOLDER_MISSING', applies: ({target}) => MISSING_STATES.includes(target.state)}
 ];
 
-/** The games a selection connects to; the "Select a game" placeholder and the fixtures connect to none. */
+/** Automatic mode considers both games; diagnostic fixtures connect to neither. */
 function selectedGames(selection: SourceSelection): readonly PluginGame[] {
-  return selection === 'ets2' || selection === 'ats' ? [selection] : [];
+  return selection === 'game' ? ['ets2', 'ats'] : selection === 'ets2' || selection === 'ats' ? [selection] : [];
 }
 
 /**
  * Classifies the connection (P17). Mapping onto the current types:
  * - SERVICE_UNAVAILABLE: the service health is not `ready`, or the live status is `service-failed` or `restarting`.
  * - CONNECTED: the live status is `connected` or `paused`, for any selection.
- * - NO_GAME_SELECTED: the selection is the `game` placeholder, `synthetic` or `replay`.
+ * - NO_GAME_SELECTED: the selection is `synthetic` or `replay`.
  * - SETUP_DISABLED: plugin setup is `disabled` in this launch, so no game folder was checked.
  * - GAME_NOT_FOUND: the selected game's discovery finished and listed no game folder.
  * - The folder rows look at the selected game's listed folders: PLUGIN_BLOCKED_PERMISSION (`PERMISSION_DENIED`,

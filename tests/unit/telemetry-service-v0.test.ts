@@ -1,3 +1,4 @@
+import type {GameDiscovery, GameTarget} from '../../apps/desktop/src/native-game-discovery';
 import {readFileSync} from 'node:fs';
 import {EventEmitter} from 'node:events';
 import net from 'node:net';
@@ -102,7 +103,7 @@ it('boots transport only after the parent selection and retains it across render
       expect(parent.postMessage).toHaveBeenLastCalledWith({type: 'failed', code: 'INVALID_SOURCE_COMMAND'});
       expect(connect).not.toHaveBeenCalled();
     }
-    command('select'); expect(connect).toHaveBeenCalledTimes(1);
+    command('select'); await vi.advanceTimersByTimeAsync(0); expect(connect).toHaveBeenCalledTimes(1);
     sockets[0].emit('connect'); sockets[0].emit('data', Buffer.concat([emissions[0].frame, emissions[1].frame]));
     for (let reload = 0; reload < 2; reload++) {
       const port = new TestPort(); command('subscribe', [port]);
@@ -110,7 +111,7 @@ it('boots transport only after the parent selection and retains it across render
       command('unsubscribe'); expect(port.closed).toBe(true);
     }
     expect(connect).toHaveBeenCalledTimes(1);
-    command('select'); expect(connect).toHaveBeenCalledTimes(2); expect(sockets[0].destroyed).toBe(true);
+    command('select'); await vi.advanceTimersByTimeAsync(0); expect(connect).toHaveBeenCalledTimes(2); expect(sockets[0].destroyed).toBe(true);
   } finally {
     command('stop'); await vi.advanceTimersByTimeAsync(0); expect(exit).toHaveBeenCalledWith(0);
     if (previousPort) Object.defineProperty(process, 'parentPort', previousPort); else Reflect.deleteProperty(process, 'parentPort');
@@ -292,7 +293,7 @@ it('closes malformed input over a real Windows pipe', async () => {
   try {ingestion.select('synthetic', pipe); await vi.waitFor(() => expect(states.at(-1)?.status).toBe('incompatible')); expect(states.at(-1)?.fresh).toBe(false);}
   finally {await ingestion.stop(); for (const socket of sockets) socket.destroy(); await new Promise<void>(resolve => server.close(() => resolve()));}
 });
-async function stoppedService(stopProbe: (report: ProbeDependencies['report']) => Promise<void>, closeHistory: () => Promise<void> = () => Promise.resolve(), options: {realV1?: boolean} = {}) {
+async function stoppedService(stopProbe: (report: ProbeDependencies['report']) => Promise<void>, closeHistory: () => Promise<void> = () => Promise.resolve(), options: {realV1?: boolean; discovery?: () => Promise<GameDiscovery>} = {}) {
   vi.useFakeTimers();
   const exit = vi.spyOn(process, 'exit').mockImplementation(() => undefined as never);
   const previousPort = Object.getOwnPropertyDescriptor(process, 'parentPort');
@@ -326,6 +327,8 @@ async function stoppedService(stopProbe: (report: ProbeDependencies['report']) =
   // A case that needs the real ingestion and trip recorder (the flush step) keeps the module.
   if (!options.realV1) vi.doMock('../../apps/desktop/src/v1-ingestion', () => ({V1Ingestion: class {
     constructor(options: V1IngestionOptions) {v1.options.push(options);}
+    configureTarget() {}
+    retire() {return Promise.resolve();}
     configureBroker(configuration: BrokerConfiguration | undefined) {v1.configureBroker(configuration);}
     select(selection: string, endpoint?: string) {v1.select(selection, endpoint);}
     stopSource() {return v1.stopSource();}
@@ -338,16 +341,18 @@ async function stoppedService(stopProbe: (report: ProbeDependencies['report']) =
   // The native client is replaced by a recorder so the production connectGame closures can be called without a broker.
   const pipeClients: unknown[][] = [];
   vi.doMock('../../apps/desktop/src/native-pipe-client', async importOriginal => ({...await importOriginal<typeof import('../../apps/desktop/src/native-pipe-client')>(),
-    NativePipeClient: class extends EventEmitter {readonly completion = Promise.resolve(); constructor(...args: unknown[]) {super(); pipeClients.push(args);}}}));
+    NativePipeClient: class extends EventEmitter {readonly completion = Promise.resolve(); constructor(...args: unknown[]) {super(); pipeClients.push(args);} destroy() {}}}));
+  const discovery = vi.fn(options.discovery ?? (() => Promise.resolve({ets2: {status: 'absent'}, ats: {status: 'absent'}} as GameDiscovery)));
+  vi.doMock('../../apps/desktop/src/native-game-discovery', async importOriginal => ({...await importOriginal<typeof import('../../apps/desktop/src/native-game-discovery')>(), discoverGames: discovery}));
   await loadService();
   const restore = () => {
     if (previousPort) Object.defineProperty(process, 'parentPort', previousPort); else Reflect.deleteProperty(process, 'parentPort');
     exit.mockRestore(); vi.doUnmock('../../apps/desktop/src/diagnostics'); vi.doUnmock('../../apps/desktop/src/service-probe'); vi.doUnmock('../../apps/desktop/src/history-storage');
-    vi.doUnmock('../../apps/desktop/src/v1-ingestion'); vi.doUnmock('../../apps/desktop/src/native-pipe-client'); vi.resetModules();
+    vi.doUnmock('../../apps/desktop/src/v1-ingestion'); vi.doUnmock('../../apps/desktop/src/native-pipe-client'); vi.doUnmock('../../apps/desktop/src/native-game-discovery'); vi.resetModules();
   };
   const stops = () => parent.postMessage.mock.calls.map(call => call[0] as {type: string}).filter(message => message.type === 'stopped');
   const steps = () => log.mock.calls.filter(call => call[0] === 'SHUTDOWN_STEP').map(call => call[2] as Record<string, unknown>);
-  return {exit, parent, log, diagnostics, history, v1, pipeClients, restore, stops, steps, probeReport: (message: Parameters<ProbeDependencies['report']>[0]) => probeReport(message),
+  return {exit, parent, log, diagnostics, history, v1, pipeClients, discovery, restore, stops, steps, probeReport: (message: Parameters<ProbeDependencies['report']>[0]) => probeReport(message),
     stop: () => parent.emit('message', {data: {type: 'stop'}, ports: []})};
 }
 it.each([false, true])('gates the latency parent command and uses the current service mapping (enabled=%s)', async enabled => {
@@ -409,28 +414,28 @@ it('runs protocol v1 beside v0 with the history recorder, following each selecti
   const v1Endpoint = '\\\\.\\pipe\\ETS2Telemetry-SYNTHETIC-TEST-v1-123-' + randomUUID();
   vi.stubEnv('ETS2TELEMETRY_SOURCE_PIPE_V1', v1Endpoint);
   const f = await stoppedService(report => {report({type: 'stopped'}); return Promise.resolve();});
-  const select = (source: string, broker?: BrokerConfiguration) => f.parent.emit('message', {data: {type: 'select', source, broker}, ports: []});
+  const select = async (source: string, broker?: BrokerConfiguration) => {f.parent.emit('message', {data: {type: 'select', source, broker}, ports: []}); await vi.advanceTimersByTimeAsync(0);};
   try {
     // E2, amended by the game recording enablement of October 25, 2026: the default plan gives the ETS2 and ATS selections
     // the history recorder, so their hello asks for durable delivery; the synthetic and replay selections stay live-only.
     expect(f.v1.options).toHaveLength(1);
-    expect(Object.keys(f.v1.options[0]).sort()).toEqual(['connectGame', 'diagnose', 'durableReady', 'durableSelections', 'onState', 'sink']);
+    expect(Object.keys(f.v1.options[0]).sort()).toEqual(['connectGame', 'diagnose', 'durableReady', 'durableSelections', 'onHealthy', 'onState', 'sink']);
     expect(f.v1.options[0].durableSelections).toEqual(['ets2', 'ats']);
     expect(f.v1.select).not.toHaveBeenCalled();
     const executable = 'C:\\fixed\\telemetry-pipe-client.exe';
-    select('synthetic', {executable, discoveryDirectory: 'C:\\Users\\owner\\AppData\\Local\\ETS2Telemetry\\transport\\v0'});
-    expect(f.v1.configureBroker).toHaveBeenLastCalledWith({executable, discoveryDirectory: 'C:\\Users\\owner\\AppData\\Local\\ETS2Telemetry\\transport\\v1'});
+    await select('synthetic', {executable, discoveryDirectory: 'C:\\Users\\owner\\AppData\\Local\\ETS2Telemetry\\transport\\v0'});
+    expect(f.v1.configureBroker).toHaveBeenLastCalledWith(undefined);
     expect(f.v1.select).toHaveBeenLastCalledWith('synthetic', v1Endpoint);
-    select('game'); expect(f.v1.configureBroker).toHaveBeenLastCalledWith(undefined); expect(f.v1.select).toHaveBeenLastCalledWith('game', v1Endpoint);
+    await select('game'); expect(f.v1.configureBroker).toHaveBeenLastCalledWith(undefined); expect(f.v1.select).toHaveBeenLastCalledWith('synthetic', v1Endpoint);
     // An unexpected v0 directory shape gives v1 no broker rather than a guessed directory (E12).
-    select('replay', {executable, discoveryDirectory: 'C:\\isolated\\transport'}); expect(f.v1.configureBroker).toHaveBeenLastCalledWith(undefined);
+    await select('replay', {executable, discoveryDirectory: 'C:\\isolated\\transport'}); expect(f.v1.configureBroker).toHaveBeenLastCalledWith(undefined);
     // A v1 failure never fails the selection the v0 ingestion accepted.
     f.v1.select.mockImplementationOnce(() => {throw new Error('v1 rejected');});
-    select('synthetic'); await vi.advanceTimersByTimeAsync(0);
+    await select('synthetic'); await vi.advanceTimersByTimeAsync(0);
     expect(f.parent.postMessage).not.toHaveBeenCalledWith({type: 'failed', code: 'INVALID_SOURCE_COMMAND'}); expect(f.log).toHaveBeenCalledWith('V1_SELECT_REJECTED');
     expect(f.v1.select).toHaveBeenCalledTimes(4);
     // An invalid selection is rejected before either ingestion sees it.
-    select('C:\\untrusted'); await vi.advanceTimersByTimeAsync(0); expect(f.parent.postMessage).toHaveBeenLastCalledWith({type: 'failed', code: 'INVALID_SOURCE_COMMAND'}); expect(f.v1.select).toHaveBeenCalledTimes(4);
+    await select('C:\\untrusted'); await vi.advanceTimersByTimeAsync(0); expect(f.parent.postMessage).toHaveBeenLastCalledWith({type: 'failed', code: 'INVALID_SOURCE_COMMAND'}); expect(f.v1.select).toHaveBeenCalledTimes(4);
     // Only fixed status codes are logged, on a change of status, at occurrences 1, 2, 4, 8, ... of each status.
     const state = (status: V1SourceState['status']): V1SourceState => ({selection: 'ets2', status, reason: 'fixed', fresh: false, durable: {state: 'off'}});
     for (const status of ['waiting', 'connected', 'connected', 'disconnected', 'waiting', 'disconnected', 'waiting', 'disconnected', 'waiting'] as const) f.v1.options[0].onState!(state(status));
@@ -474,9 +479,9 @@ it('publishes the v1 projection of the same selection with the live update and i
     onState({...state, clockMapping: {...state.clockMapping!, offsetNs: '99'}, durable: {state: 'off'}});
     await vi.advanceTimersByTimeAsync(100);
     expect(port.messages).toHaveLength(count);
-    // A state of another selection never rides on this selection's update.
+    // A callback of another selection cannot replace the last accepted publication.
     onState(v1SourceState('snapshot-live', {selection: 'ets2'})); await vi.advanceTimersByTimeAsync(50);
-    expect(port.messages.at(-1)!.update).not.toHaveProperty('v1');
+    expect(port.messages.at(-1)!.update).toEqual(update);
   } finally {f.stop(); await vi.advanceTimersByTimeAsync(0); f.restore();}
 });
 it('bounds the v1 ingestion stop by its 1,000 ms intake budget and reports a late stop as unclean', async () => {
@@ -499,7 +504,7 @@ describe('ET-015a recording gate in the service (R3, R10, R14)', () => {
     const f = await stoppedService(stopProbe);
     try {
       const options = f.v1.options[0];
-      expect(Object.keys(options).sort()).toEqual(['connectGame', 'diagnose', 'durableReady', 'durableSelections', 'onState', 'sink']);
+      expect(Object.keys(options).sort()).toEqual(['connectGame', 'diagnose', 'durableReady', 'durableSelections', 'onHealthy', 'onState', 'sink']);
       expect(options.durableSelections).toEqual(['ets2', 'ats']);
       expect(options.sink?.constructor.name).toBe('TripRecorderSink');
       expect(f.history.options).toHaveLength(1);
@@ -518,7 +523,7 @@ describe('ET-015a recording gate in the service (R3, R10, R14)', () => {
     const f = await stoppedService(stopProbe);
     try {
       const options = f.v1.options[0];
-      expect(Object.keys(options).sort()).toEqual(['connectGame', 'diagnose', 'durableReady', 'durableSelections', 'onState', 'sink']);
+      expect(Object.keys(options).sort()).toEqual(['connectGame', 'diagnose', 'durableReady', 'durableSelections', 'onHealthy', 'onState', 'sink']);
       expect(options.durableSelections).toEqual(['synthetic']);
       // A fresh module instance per case, so the recorder is identified by its class name rather than instanceof.
       expect(options.sink?.constructor.name).toBe('TripRecorderSink');
@@ -538,7 +543,7 @@ describe('ET-015a recording gate in the service (R3, R10, R14)', () => {
     const f = await stoppedService(stopProbe);
     try {
       expect(f.log.mock.calls.filter(call => call[0] === 'RECORDING_TARGET_REJECTED')).toEqual([['RECORDING_TARGET_REJECTED']]);
-      expect(Object.keys(f.v1.options[0]).sort()).toEqual(['connectGame', 'diagnose', 'durableReady', 'durableSelections', 'onState', 'sink']);
+      expect(Object.keys(f.v1.options[0]).sort()).toEqual(['connectGame', 'diagnose', 'durableReady', 'durableSelections', 'onHealthy', 'onState', 'sink']);
       expect(f.v1.options[0].durableSelections).toEqual(['ets2', 'ats']);
       expect(f.history.options[0].target).toEqual({purpose: 'history'});
       expect(f.history.options[0].onOpened).toBeTypeOf('function');
@@ -585,7 +590,7 @@ describe('ET-015a recording gate in the service (R3, R10, R14)', () => {
     try {
       f.history.state = 'open'; f.history.client = client;
       f.parent.emit('message', {data: {type: 'select', source: 'synthetic'}, ports: []});
-      expect(endpoints).toEqual([v1Endpoint]);
+      await vi.advanceTimersByTimeAsync(0); expect(endpoints).toEqual([v1Endpoint]);
       const socket = sockets[0], sent = () => socket.writes.map(bytes => decodePayloadV1(bytes.subarray(4), 'client') as ClientMessage);
       socket.emit('connect');
       expect(sent()).toMatchObject([{kind: 'hello', data: {durableEvents: true}}]);
@@ -626,7 +631,7 @@ describe('ET-015a recording gate in the service (R3, R10, R14)', () => {
     try {
       f.history.state = 'open'; f.history.client = client;
       f.parent.emit('message', {data: {type: 'select', source: 'synthetic'}, ports: []});
-      const socket = sockets[0];
+      await vi.advanceTimersByTimeAsync(0); const socket = sockets[0];
       socket.emit('connect');
       // The checkpoint is the baseline; two fresh, running snapshots in seconds 1001 and 1002 become pending rows.
       const s = new Script(ETS2_A);
@@ -954,4 +959,37 @@ describe('ET-036 telemetry service heartbeat and diagnostic freeze', () => {
       vi.unstubAllEnvs();
     }
   });
+});
+
+it('resolves automatic intent to one target for both service ingestors and republishes requested game mode', async () => {
+  for (const key of ['ETS2TELEMETRY_SOURCE_KIND', 'ETS2TELEMETRY_RECORDING', 'ETS2TELEMETRY_SOURCE_PIPE', 'ETS2TELEMETRY_SOURCE_PIPE_V1', 'ETS2TELEMETRY_PROFILE_DIR', 'ETS2TELEMETRY_LIVE_SMOKE']) vi.stubEnv(key, '');
+  const target: GameTarget = {source: {game: 'ats', origin: 'game', processId: 123, windowsSessionId: 1,
+    processInstanceId: '11111111-1111-4111-8111-111111111111', pluginSessionId: '22222222-2222-4222-8222-222222222222'}, processCreationTime: '123456789', userTag: 'a'.repeat(64)};
+  const f = await stoppedService(report => {report({type: 'stopped'}); return Promise.resolve();}, undefined, {
+    discovery: () => Promise.resolve({ets2: {status: 'absent'}, ats: {status: 'unique', target}})
+  });
+  const port = new TestPort(), broker = {executable: 'C:\\isolated\\broker.exe', discoveryDirectory: 'C:\\isolated\\transport\\v0'};
+  try {
+    f.parent.emit('message', {data: {type: 'subscribe'}, ports: [port]}); port.consume();
+    f.parent.emit('message', {data: {type: 'select', source: 'game', broker}, ports: []}); await vi.advanceTimersByTimeAsync(50);
+    expect(f.discovery).toHaveBeenCalledTimes(2);
+    expect(f.v1.select).toHaveBeenLastCalledWith('ats', '');
+    expect(f.pipeClients[0]).toEqual([broker, 'ats', expect.any(Function), 'v0', target]);
+    expect(port.messages.at(-1)!.update.selection).toBe('game');
+    const state = v1SourceState('snapshot-live', {selection: 'ats'}); state.observation!.source = target.source;
+    f.v1.options[0].onState!(state); port.consume(); await vi.advanceTimersByTimeAsync(50);
+    expect(port.messages.at(-1)!.update).toMatchObject({selection: 'game', v1: {selection: 'game', observation: {source: target.source}}});
+    const terminal: V1SourceState = {...state, status: 'disconnected', fresh: false, reason: 'Source ended (plugin-shutdown)'};
+    for (const delay of [250, 500]) {
+      const attached = f.v1.select.mock.calls.length;
+      f.v1.options[0].onState!(terminal); await vi.advanceTimersByTimeAsync(0);
+      await vi.advanceTimersByTimeAsync(delay - 1); expect(f.v1.select).toHaveBeenCalledTimes(attached);
+      await vi.advanceTimersByTimeAsync(1); expect(f.v1.select).toHaveBeenCalledTimes(attached + 1);
+      f.v1.options[0].onState!(state);
+    }
+    // The runtime must forward the ingestion's matching E9 health event, not infer health from the live projection.
+    f.v1.options[0].onHealthy!(target); f.v1.options[0].onState!(terminal); await vi.advanceTimersByTimeAsync(0);
+    await vi.advanceTimersByTimeAsync(249); expect(f.v1.select).toHaveBeenCalledTimes(3);
+    await vi.advanceTimersByTimeAsync(1); expect(f.v1.select).toHaveBeenCalledTimes(4);
+  } finally {f.stop(); await vi.advanceTimersByTimeAsync(0); f.restore(); vi.unstubAllEnvs();}
 });

@@ -815,3 +815,7 @@ The owner asked (translated from Russian) for a skill "release staging" that pre
 ## Staging icon — October 29, 2026
 
 Asked for a staging icon that differs from production, the owner chose variant 4 of five rendered proposals: the production road-merge mark with an amber flag across the upper right corner, clear of the tray's status dot ([UI specification](docs/design/ui-spec.md#3-tokens-type-and-icons)). Production icons stay byte-identical.
+
+## ET-056 automatic game discovery — October 29, 2026
+
+The owner authorized automatic ETS2/ATS connection and approved the bounded native broker one-shot discovery command/receipt and service-internal target-pinning extension: discovery hints never replace connected-peer verification, and both protocols must bind to the same verified process/plugin session before hello. Renderer authority, game wire protocols and storage schemas stay unchanged. Implementation and a draft PR are authorized; merge and release are not.

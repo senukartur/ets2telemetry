@@ -17,6 +17,12 @@ Run `YukonUnionTelemetry-Setup-<version>.exe`, for example `YukonUnionTelemetry-
 
 When the application starts, it finds Euro Truck Simulator 2 and American Truck Simulator through Steam and copies its game plugin into each game's `plugins` folder while the game is closed. The **Game plugin** panel in **Settings** shows the state of each game, lets you choose a game folder by hand and lets you exclude a game ([game plugin setup](plugin-setup.md)).
 
+### Connecting to a game
+
+Start ETS2 or ATS and open **Live**. **Automatic** is the default source: **Waiting for game** stays visible until a verified game plugin is available. Either launch order works. If both games are available before connection, choose **Euro Truck Simulator 2** or **American Truck Simulator** on Live. Another game appearing during an attached session does not switch away from it. After an automatic session ends, the application waits for the next game again.
+
+An incomplete connection means one telemetry stream is still waiting; the available stream stays attached. A source mismatch or a verification failure stays visible and requires reconnecting or choosing a source again. **Settings → Data** retains explicit ETS2/ATS selection and isolated synthetic/replay fixtures for diagnostics. An explicit game selection waits only for that game; choose **Automatic** to resume automatic selection. Fixture launches never fall back to a real game when a fixture is missing or disconnects.
+
 ### Windows SmartScreen
 
 This alpha is not code-signed. When you run `YukonUnionTelemetry-Setup-<version>.exe`, Microsoft Defender SmartScreen may show **Windows protected your PC**. To continue, select **More info**, check that the file is the one you downloaded from the project's GitHub Releases page, then select **Run anyway**. Only do this for a file from that page. A signed build is planned: after the first alpha release the project applies to the SignPath Foundation for free code signing.

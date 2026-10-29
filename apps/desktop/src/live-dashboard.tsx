@@ -1,10 +1,11 @@
-import React, {useMemo} from 'react';
+import React, {useMemo, useState} from 'react';
 import {Clock, Coffee, Flag, Gauge, Hourglass, MapPin, Package, TriangleAlert, Truck, WifiOff} from 'lucide-react';
 import type {AppLanguage, GearDisplayModes, LiveTelemetry, UnitProfiles} from '../../../packages/contracts/src';
 import type {LiveFieldId} from '../../../packages/telemetry-core/src/live-view';
 import {Card, CardContent, CardHeader, CardTitle} from '@/components/ui/card';
+import {Button} from '@/components/ui/button';
 import {Badge} from '@/components/ui/badge';
-import {liveDashboardText, liveFieldValue, type LiveRowText} from './live-dashboard-text';
+import {gameConnectionText, liveDashboardText, liveFieldValue, type LiveRowText} from './live-dashboard-text';
 import {desktopLiveView, gaugeArc} from './screens/desktop-ui-view';
 import {dashboardFuel, dashboardSpeed} from './speed-display';
 import {displayProfile} from './unit-profiles';
@@ -20,7 +21,8 @@ function BreakBadge({badge, testId}: {badge: NonNullable<LiveRowText['badge']>; 
   return <Badge variant={badge.urgency === 'due' ? 'error' : 'warn'} role="img" aria-label={badge.name} data-testid={testId} data-urgency={badge.urgency}><Icon aria-hidden="true" />{badge.text}</Badge>;
 }
 
-export function LiveDashboard({live, units, gearDisplay, language = 'en'}: {live: LiveTelemetry | undefined; units: UnitProfiles | undefined; gearDisplay?: GearDisplayModes; language?: AppLanguage}) {
+export function LiveDashboard({live, units, gearDisplay, language = 'en', onSelect}: {onSelect?: (game: 'ets2' | 'ats') => Promise<void>; live: LiveTelemetry | undefined; units: UnitProfiles | undefined; gearDisplay?: GearDisplayModes; language?: AppLanguage}) {
+  const [choosing, setChoosing] = useState(false), [choiceFailed, setChoiceFailed] = useState(false);
   const text = useMemo(() => liveDashboardText(live, units, language, gearDisplay), [live, units, language, gearDisplay]);
   const view = useMemo(() => desktopLiveView(live, units, gearDisplay), [live, units, gearDisplay]);
   const strings = getStrings(language), profile = displayProfile(live, units);
@@ -28,7 +30,13 @@ export function LiveDashboard({live, units, gearDisplay, language = 'en'}: {live
   const speedText = dashboardSpeed(live, profile, language), fuelText = dashboardFuel(live, profile, language);
   const details = (ids: [string, LiveFieldId][]) => <dl>{ids.map(([label, id]) => <div className="yu-kv" key={id}><dt>{label}</dt><dd>{value(id)}</dd></div>)}</dl>;
   return <div className="yu-stack" data-testid="live-telemetry">
-    {!view.current ? <div className="yu-connection" data-testid="live.waiting"><WifiOff aria-hidden="true" /><div><strong>{t(`ui.status.${live?.status ?? 'waiting'}`, undefined, language)}</strong><p>{live?.status === 'waiting' || !live ? t('st.waitT', undefined, language) : t('ui.notCurrent', undefined, language)}</p></div></div> : null}
+    {!view.current || live?.v1 && !live.v1.fresh ? <div className="yu-connection" data-testid="live.waiting"><WifiOff aria-hidden="true" /><div><strong>{t(`ui.status.${live?.status ?? 'waiting'}`, undefined, language)}</strong><p>{gameConnectionText(live, language)}</p></div></div> : null}
+    {live?.selection === 'game' && live.reason === 'Both games are available; choose ETS2 or ATS' && onSelect ? <div className="flex flex-wrap gap-2" data-testid="live-game-choice" aria-busy={choosing}>
+      {(['ets2', 'ats'] as const).map(game => <Button key={game} type="button" variant="outline" disabled={choosing} data-testid={`live-choose-${game}`} onClick={() => {
+        setChoosing(true); setChoiceFailed(false); void onSelect(game).catch(() => setChoiceFailed(true)).finally(() => setChoosing(false));
+      }}>{game === 'ets2' ? 'Euro Truck Simulator 2' : 'American Truck Simulator'}</Button>)}
+      {choosing ? <p role="status">{strings.sourceChoosing}</p> : null}{choiceFailed ? <p role="alert">{strings.sourceSelectionFailed}</p> : null}
+    </div> : null}
     <div className="yu-live-top">
       <Card className={`yu-instrument ${view.current ? '' : 'yu-not-current'}`} data-testid="live.instrument"><CardContent>
         <div className="yu-gauge" data-testid="live.instrument.gauge"><svg data-testid="live-speed-gauge" viewBox="0 0 260 238" role="img" aria-label={`${t('live.speed', undefined, language)}: ${speedText}; ${t('live.rpm', undefined, language)}: ${value('engine-rpm')}`}>

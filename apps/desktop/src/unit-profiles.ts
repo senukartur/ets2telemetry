@@ -5,6 +5,7 @@ import {
 } from '../../../packages/telemetry-core/src/display-profile';
 import {fixed} from '../../../packages/telemetry-core/src/format';
 import {convertSpeed, convertVolume, type SpeedUnit, type VolumeUnit} from '../../../packages/telemetry-core/src/units';
+import {gameForSource} from './live-state';
 
 // Maps persisted per-game settings to telemetry-core display profiles. Conversion constants, conversions and rounding
 // live only in packages/telemetry-core; this module never repeats them. Pure, safe for renderer and preload bundles.
@@ -39,9 +40,14 @@ export function isGearDisplayMode(value: unknown): value is GearDisplayMode {
 
 /**
  * The game whose profile applies to a live update. An explicit synthetic or replay fixture names its game in its own
- * source identity; otherwise only an ETS2 or ATS selection selects a game.
+ * source identity. Automatic mode uses a real v0 source, or a matching-selection real v1 source while v0 is absent.
+ * Explicit games retain their profile before attachment; an expired observation retains labels, never freshness.
  */
 export function displayGame(live: LiveTelemetry): UnitGame | undefined {
+  if (live.selection === 'game') {
+    const source = live.observation?.source ?? (live.v1?.selection === live.selection ? live.v1.observation?.source : undefined);
+    return gameForSource(live.selection, source);
+  }
   const game = isExplicitFixture(live) ? live.observation?.source.game : live.selection;
   return isUnitGame(game) ? game : undefined;
 }

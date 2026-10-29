@@ -6,7 +6,7 @@ import type {LiveTelemetry, LiveTelemetryV1} from '../../packages/contracts/src'
 import {decodePayload, ProtocolError, validateLiveObservationV1, validateServerMessage, type GearboxState, type ServerMessage} from '../../packages/contracts/src/protocol-v1';
 import {initialLive} from '../../apps/desktop/src/live-state';
 import {liveV1Key, liveV1Projection, parseLiveV1, withV1} from '../../apps/desktop/src/live-v1';
-import {v1Projection, v1SourceState} from '../shared/live-v1-fixtures';
+import {smokePair, v1Projection, v1SourceState} from '../shared/live-v1-fixtures';
 
 const STATE_KEYS = ['simulation', 'speed', 'fuel', 'fuelCapacity', 'engineRpm', 'gear', 'odometer', 'averageConsumption', 'estimatedRange',
   'navigationDistance', 'gameTime', 'captureUtcUnixMs', 'boundaryOrder', 'worldPlacement', 'configuration', 'gearbox', 'nextMandatoryBreak'];
@@ -205,4 +205,11 @@ describe('liveV1Key', () => {
     expect(liveV1Key({...base, observation: undefined})).toBeUndefined();
     expect(liveV1Key(undefined)).toBeUndefined();
   });
+});
+
+it('keeps real-game mismatches visible while stripping their foreign observation', () => {
+  const live = smokePair(); live.observation!.source.origin = 'game'; live.v1!.observation!.source = {...live.observation!.source};
+  expect(withV1(live, live.v1).v1!.observation).toBe(live.v1!.observation);
+  live.v1!.observation!.source.pluginSessionId = '33333333-3333-4333-8333-333333333333';
+  expect(withV1(live, live.v1).v1).toEqual({selection: 'synthetic', status: 'incompatible', reason: 'Game protocol target mismatch', fresh: false});
 });

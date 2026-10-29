@@ -1,3 +1,4 @@
+import {sameGameSource} from './live-state';
 import type {LiveTelemetry, LiveTelemetryV1, LiveV1Status, SourceSelection} from '../../../packages/contracts/src';
 import {NOT_SUPPORTED_BREAK, NOT_SUPPORTED_GEARBOX, validateLiveObservationV1, type CurrentState, type LiveStateV1} from '../../../packages/contracts/src/protocol-v1';
 import type {V1SourceState} from './v1-ingestion';
@@ -51,7 +52,12 @@ export function liveV1Projection(state: V1SourceState): LiveTelemetryV1 {
 
 /** Attaches the v1 projection to a v0 update only when both follow the same selection. */
 export function withV1(v0: LiveTelemetry, v1: LiveTelemetryV1 | undefined): LiveTelemetry {
-  return v1 && v1.selection === v0.selection ? {...v0, v1} : v0;
+  if (!v1 || v1.selection !== v0.selection) return v0;
+  const left = v0.observation?.source, right = v1.observation?.source;
+  if (left && right && (left.origin === 'game' || right.origin === 'game') && !sameGameSource(left, right)) {
+    return {...v0, v1: {selection: v1.selection, status: 'incompatible', reason: 'Game protocol target mismatch', fresh: false}};
+  }
+  return {...v0, v1};
 }
 
 /**

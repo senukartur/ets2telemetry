@@ -97,15 +97,19 @@ Columns:
 | `tests/unit/live-dashboard-break-rendering.test.ts` | Node unit (Vitest) | REG-009 | R, F | ET-052 PR-4 | PR (tests job, `npm test`) | — |
 | `tests/unit/live-dashboard-text.test.ts` | Node unit (Vitest) | REG-002, REG-003, REG-009 | R, F | ET-010b (#62) | PR (tests job, `npm test`) | — |
 | `tests/unit/live-smoke-source-v1.test.ts` | Node unit (Vitest) | REG-003, REG-010, REG-011 | R, F | ET-010c (#73) | PR (tests job, `npm test`) | — |
-| `tests/unit/live-sources.test.ts` | Node unit (Vitest) | REG-002, REG-009 | R | ET-010c (#73) | PR (tests job, `npm test`) | — |
+| `tests/unit/live-sources.test.ts` | Node unit (Vitest) | REG-002, REG-009, REG-010 | R | ET-010c (#73), ET-056 | PR (tests job, `npm test`) | — |
 | `tests/unit/live-v1.test.ts` | Node unit (Vitest) | REG-010 | R | ET-010c (#73) | PR (tests job, `npm test`) | security |
 | `tests/unit/main-boundaries.test.ts` | Node unit (Vitest) | REG-010, REG-011, REG-012, REG-014, REG-015, REG-016, REG-017 | R, F | ET-006a (#13) | PR (tests job, `npm test`) | security, regression |
+| `tests/unit/game-source-coordinator.test.ts` | Node unit (Vitest) | REG-003, REG-010, REG-011, REG-012 | R, F | ET-056 | PR (tests job, `npm test`) | security, recovery, fixture isolation |
+| `tests/unit/native-game-discovery.test.ts` | Node unit (Vitest) | REG-003, REG-010, REG-011 | R, T | ET-056 | PR (tests job, `npm test`) | security, bounded ownership |
+| `tests/unit/source-mode.test.ts` | Node unit (Vitest) | REG-010, REG-012 | R, F | ET-056 | PR (tests job, `npm test`) | fixture isolation |
 | `tests/unit/native-pipe-client.test.ts` | Node unit (Vitest) | REG-003, REG-005, REG-010, REG-011 | R, T | ET-006a (#13) | PR (tests job, `npm test`) | security |
 | `tests/unit/overlay-bounds.test.ts` | Node unit (Vitest) | REG-016 | R, F | ET-045c | PR (tests job, `npm test`) | regression |
 | `tests/unit/overlay-edit.test.ts` | Node unit (Vitest) | REG-016 | R | ET-012b (#74) | PR (tests job, `npm test`) | — |
 | `tests/unit/overlay-geometry.test.ts` | Node unit (Vitest) | REG-016 | R, F | ET-012a (#70) | PR (tests job, `npm test`) | — |
 | `tests/unit/overlay-placement.test.ts` | Node unit (Vitest) | REG-016 | T, V (et-012b) | ET-012b (#74) | PR (tests job, `npm test`) | — |
 | `tests/unit/overlay-preload.test.ts` | Node unit (Vitest) | REG-016 | R | ET-008 (#21) | PR (tests job, `npm test`) | security, regression |
+| `tests/unit/overlay-rendering.test.ts` | Node unit (Vitest) | REG-009, REG-010 | R, F | ET-056 (existing rendering entry extended) | PR (tests job, `npm test`) | localized explicit game choice |
 | `tests/unit/overlay-presentation.test.ts` | Node unit (Vitest) | REG-009 | R, F | ET-012a (#70) | PR (tests job, `npm test`) | — |
 | `tests/unit/overlay-latency.test.ts` | Node unit (Vitest) | REG-016, REG-018 | R, T, F | ET-009 | PR (tests job, `npm test`) | clock bounds, security, bounded diagnostics, before-load/reload regression |
 | `tests/diagnostics/overlay-latency-smoke.ts` | Electron compositor smoke | partial REG-016, REG-018 | T | ET-009 | Manual, Windows Job via `Run-OverlayLatencySmoke.ps1` | synthetic frame correlation, zoom, no game latency claim |
@@ -208,7 +212,7 @@ Columns:
 | `tests/storage/migrations.test.ts` | Storage (Vitest under Electron) | REG-013 | R, F | ET-013 (#51) | PR (tests job, `npm run test:storage`) | historical fixture |
 | `tests/storage/open-durability.test.ts` | Storage (Vitest under Electron) | REG-006, REG-007 | V (et-013) | ET-013 (#51) | PR (tests job, `npm run test:storage`) | ACK |
 | `tests/storage/producer-loss.test.ts` | Storage (Vitest under Electron) | REG-003, REG-005, REG-007, REG-011, REG-014 | R, F, T, V (et-019) | ET-019 (PR-3) | PR (tests job, `npm run test:storage`) | ACK, dedup, gap, trip completeness |
-| `tests/storage/recording-runtime.test.ts` | Storage (Vitest under Electron) | REG-003, REG-011, REG-012 | R, F | ET-015c (#89) | PR (tests job, `npm run test:storage`) | ACK, gap |
+| `tests/storage/recording-runtime.test.ts` | Storage (Vitest under Electron) | REG-003, REG-005, REG-006, REG-010, REG-011, REG-012 | R, F | ET-015c (#89), ET-056 | PR (tests job, `npm run test:storage`) | ACK, gap |
 | `tests/storage/recording-status.test.ts` | Storage (Vitest under Electron) | REG-002, REG-003, REG-006, REG-007, REG-011 | R, F | ET-015c (#90) | PR (tests job, `npm run test:storage`) | gap |
 | `tests/storage/recording-target.test.ts` | Storage (Vitest under Electron) | REG-007 | R, F | ET-015a (#79) | PR (tests job, `npm run test:storage`) | — |
 | `tests/storage/replay-journal-export.test.ts` | Storage (Vitest under Electron) | REG-003, REG-004, REG-005, REG-008, REG-014 | R, F, T, V (et-019) | ET-019 (PR-5) | PR (tests job, `npm run test:storage`) | ACK, gap, trip completeness |
@@ -254,9 +258,10 @@ From `ctest -N` on the four build trees at ET-019t: 75 cases in the plugin Relea
 | `v1-transport-contract-*` (17 cases) and `v1-transport-dll-contract` | Native CTest, plugin | REG-003, REG-004, REG-005, REG-006, REG-007, REG-010, REG-011 | R, T | ET-004b (#54) | PR (scaffold job); Extended campaigns workflow: the `fuzz` case at x50 | ACK, dedup, gap, security, v0/CAP0 isolation |
 | `channel-identity-contract` | Native CTest, plugin | REG-015, REG-017 (production native names unchanged; no name shared with staging) | F | ET-055 PR-2 | PR (scaffold job) | regression |
 | `two-plugin-host-contract` (prints per-callback time per plugin as an observation, no threshold) | Native CTest, plugin | REG-011, REG-015 (both channels' plugins serving in one process) | F | ET-055 PR-2 | PR (scaffold job) | security, v0/CAP0 isolation |
-| `native-pipe-client-*` (53 cases, including the CAP0 and protocol v1 broker modes) | Native CTest, client | REG-003, REG-005, REG-010, REG-011 | R, T | ET-006a (#13), extended by CAP-01a, ET-006b and ET-033 | PR (scaffold job) | security, v0/CAP0 isolation |
+| `native-pipe-client-discover-*`, `native-pipe-client-asan-discover-*` | Native CTest, client Release/ASan | REG-003, REG-010, REG-011 | R, T | ET-056 | PR (scaffold and AddressSanitizer jobs) | security, endpoint-free discovery, stale identity |
+| `native-pipe-client-*` (72 cases, including discovery, CAP0 and protocol v1 broker modes) | Native CTest, client | REG-003, REG-005, REG-010, REG-011 | R, T | ET-006a (#13), extended by CAP-01a, ET-006b and ET-033 | PR (scaffold job) | security, v0/CAP0 isolation |
 | `*-asan-contract*` (70 cases): the AddressSanitizer twins of the protocol v0 and v1, producer, adapter, event channel, snapshot transport, window, CAP0 and v1 transport cases | Native CTest, plugin ASan | as their Release twins | R, T | the twins' cards | PR (AddressSanitizer job) | as their Release twins |
-| `native-pipe-client-asan-*` (53 cases) | Native CTest, client ASan | as `native-pipe-client-*` | R | ET-006a (#13) and later | PR (AddressSanitizer job) | security, v0/CAP0 isolation |
+| `native-pipe-client-asan-*` (72 cases) | Native CTest, client ASan | as `native-pipe-client-*` | R | ET-006a (#13) and later | PR (AddressSanitizer job) | security, v0/CAP0 isolation |
 
 ### PowerShell suites
 

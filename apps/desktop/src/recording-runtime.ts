@@ -23,7 +23,7 @@ export const V1_INTAKE_BUDGET_MS = 1000;
 export const RECORDING_FLUSH_BUDGET_MS = 500;
 
 /** Ingestion options a test may set; the wiring (sources, sink, selections, readiness, diagnostics, state) stays the runtime's. */
-export type RecordingIngestionOverrides = Omit<V1IngestionOptions, 'connect' | 'connectGame' | 'broker' | 'sink' | 'durableSelections' | 'durableReady' | 'diagnose' | 'onState'>;
+export type RecordingIngestionOverrides = Omit<V1IngestionOptions, 'connect' | 'connectGame' | 'broker' | 'sink' | 'durableSelections' | 'durableReady' | 'diagnose' | 'onState' | 'onHealthy'>;
 
 export interface RecordingRuntimeOptions {
   /** The service environment; only ETS2TELEMETRY_RECORDING is read (recording-policy.ts). */
@@ -42,6 +42,8 @@ export interface RecordingRuntimeOptions {
   connect?: V1IngestionOptions['connect'];
   /** Every v1 source state change. */
   onV1State: (state: V1SourceState) => void;
+  /** The active v1 connection's E9 health boundary for coordinated game recovery. */
+  onV1Healthy?: V1IngestionOptions['onHealthy'];
   /** Tests only: bounds, timers and clocks of the ingestion and its pipeline. */
   ingestionOverrides?: RecordingIngestionOverrides;
   /** Tests only: the stamped application version, close grace, and reopen retry overrides of the database. */
@@ -92,6 +94,7 @@ export function createRecordingRuntime(options: RecordingRuntimeOptions): Record
     ...(options.connectGame ? {connectGame: options.connectGame} : {}),
     ...(options.connect ? {connect: options.connect} : {}),
     diagnose: (event, facts) => log(event, undefined, facts),
+    onHealthy: options.onV1Healthy,
     onState: state => {
       if (recorded !== state.selection) recorded = state.durable.state === 'active' && (state.status === 'connected' || state.status === 'paused') ? state.selection : undefined;
       options.onV1State(state); if (recorder) changed();

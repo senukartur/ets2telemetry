@@ -812,3 +812,18 @@ it.each(['off', 'document', 'cancel'] as const)('retires a held drag on %s and a
   t.overlay.update(t.current);
   expect(t.overlay.contentAnchorY).toBe(action === 'document' ? 0 : 1);
 });
+
+it.each(['ets2', 'ats'] as const)('keeps automatic %s driving and editing overlays visible across layouts under the existing window gates', game => {
+  for (const layout of ['strip', 'card', 'cluster', 'hud'] as const) {
+    const tracked = trackedController(layout); tracked.current.selection = 'game'; tracked.current.observation!.source.game = game;
+    tracked.overlay.loaded(true); tracked.overlay.update(tracked.current);
+    expect(tracked.state.visible, layout).toBe(true); assertInvariant(tracked, false);
+    tracked.metadata.foreground = false; tracked.overlay.update(tracked.current); expect(tracked.state.visible).toBe(false);
+    expect(tracked.overlay.beginEdit(true)).toMatchObject({active: true, placement: 'visible'}); assertInvariant(tracked, true);
+    tracked.overlay.setOwnForeground(false); expect(tracked.state.visible).toBe(false); assertInvariant(tracked, false);
+    tracked.overlay.setOwnForeground(true); expect(tracked.state.visible).toBe(true);
+    tracked.current.observation!.windowFresh = false; tracked.overlay.update(tracked.current);
+    expect(tracked.state.visible).toBe(false); assertInvariant(tracked, true);
+    expect(tracked.window.show).not.toHaveBeenCalled(); expect(tracked.window.focus).not.toHaveBeenCalled();
+  }
+});

@@ -27,7 +27,7 @@ The owner knows React and TypeScript and is new to desktop development, so most 
 
 On launch the application finds ETS2 and ATS in the Steam libraries and silently installs or updates its plugin in each game's `bin/win_x64/plugins` folder. It does this only while the game is closed, verifies the copied file, never replaces a file it does not recognize and leaves other plugins alone. A game can be excluded, which removes the plugin from it, or pointed to a manual folder. A protected folder gets instructions for a manual copy. A Game plugin card shows each game's state, a connection diagnosis and an opt-in diagnostic bundle that is saved locally and never uploaded.
 
-The plugin streams over local named pipes that only the current Windows user can open. The application works whether it starts before or after the game, and reconnects when the game restarts.
+The plugin streams over local named pipes that only the current Windows user can open. By default the application waits for a game and connects automatically to the available ETS2 or ATS plugin, whether the application or game starts first. If both games are available before attachment, Live asks which to use. An attached session stays selected when another game appears; after it ends, discovery resumes.
 
 ### Live dashboard
 

@@ -124,7 +124,7 @@ export default function App() {
         <Badge variant={hardModeTone(hardMode.status)} data-testid="shell.status.hardMode"><Flame aria-hidden="true" />{hmView.headline}</Badge>
       </header><main ref={content} className="yu-content" data-testid="shell.content">
         <div hidden={route !== 'live'} className="yu-stack" data-testid="live.screen">
-          <LiveDashboard live={live} units={settings?.units} gearDisplay={settings?.gearDisplay} language={language} />
+          <LiveDashboard onSelect={game => window.desktop.selectSource(game)} live={live} units={settings?.units} gearDisplay={settings?.gearDisplay} language={language} />
           <p data-testid="prototype-notice" className="yu-muted">{recording.notice}</p>
         </div>
         <div hidden={route !== 'hardMode'} className="yu-stack" data-testid="hardMode.screen"><HardModeCard language={language} controller={hardMode} /></div>
