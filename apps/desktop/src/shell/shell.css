@@ -24,7 +24,7 @@ h1[tabindex="-1"]:focus { outline: none; }
 .yu-titlebar { display: flex; align-items: center; gap: 8px; height: 32px; padding: 0 160px 0 10px; background: var(--yu-bg-chrome); color: var(--yu-text-muted); border-bottom: 1px solid var(--yu-divider-chrome); font-size: 12px; app-region: drag; -webkit-app-region: drag; user-select: none; }
 .yu-titlebar img { width: 20px; height: 20px; object-fit: contain; }
 .yu-body { display: grid; grid-template-columns: 220px minmax(0,1fr); min-height: 0; }
-.yu-sidebar { display: flex; flex-direction: column; min-height: 0; overflow-y: auto; padding: 18px 12px 12px; background: var(--yu-bg-chrome); border-right: 1px solid var(--yu-divider-chrome); }
+.yu-sidebar { position: relative; display: flex; flex-direction: column; min-height: 0; overflow-y: auto; padding: 18px 12px 12px; background: var(--yu-bg-chrome); border-right: 1px solid var(--yu-divider-chrome); }
 .yu-lockup { display: flex; gap: 12px; align-items: center; margin: 0 4px 24px; }
 .yu-lockup img { width: 40px; height: 40px; object-fit: contain; }
 .yu-lockup strong { display: block; font-size: 15px; } .yu-lockup small { font-size: 11px; color: var(--yu-text-muted); }
@@ -74,7 +74,8 @@ h1[tabindex="-1"]:focus { outline: none; }
 .yu-column { min-width: 0; min-height: 0; display: flex; flex-direction: column; }
 .yu-topbar { min-height: 52px; display: flex; flex-wrap: wrap; align-items: center; gap: 8px; padding: 10px 20px; border-bottom: 1px solid var(--yu-divider-chrome); background: var(--yu-bg-chrome); }
 .yu-topbar h1 { font-size: 18px; font-weight: 700; margin-right: auto; }
-.yu-content { flex: 1; min-height: 0; overflow: auto; padding: 18px 20px; }
+/* Relative: visually hidden (sr-only) descriptions stay inside the scroll area instead of growing the window (ET-057). */
+.yu-content { position: relative; flex: 1; min-height: 0; overflow: auto; scrollbar-gutter: stable; padding: 18px 20px; }
 .yu-content > div { min-width: 0; }
 .yu-stack { display: grid; gap: 14px; }
 .yu-settings { display: grid; grid-template-columns: 200px minmax(0,1fr); gap: 18px; align-items: start; }
@@ -290,11 +291,14 @@ button[aria-disabled="true"], [role="switch"][aria-disabled="true"] { cursor: no
 .yu-overlay-settings :is(button, [role="slider"]) { scroll-margin-block: 8px; }
 
 /* ET-057: explanations live behind an Info icon (info-hint.tsx); the icon keeps a 22 px target next to its label. */
-.yu-info-hint-wrap { display: inline-flex; align-items: center; vertical-align: middle; }
+/* Relative, so the hidden description stays inside its scroll container instead of extending the window. */
+.yu-info-hint-wrap { position: relative; display: inline-flex; align-items: center; vertical-align: middle; }
 .yu-info-hint { display: inline-flex; align-items: center; justify-content: center; width: 22px; height: 22px; margin-left: 2px; padding: 0; border: 0; border-radius: 50% !important; background: transparent; color: var(--yu-text-muted); cursor: help; }
 .yu-info-hint svg { width: 14px; height: 14px; }
 .yu-info-hint:hover, .yu-info-hint:focus-visible, .yu-info-hint[data-state$="-open"] { color: var(--yu-accent-light); background: var(--yu-selected-bg); }
-.yu-label-hint { display: inline-flex; align-items: center; gap: 2px; }
+.yu-label-hint { display: flex; align-items: center; gap: 2px; }
+.yu-job-metrics .yu-info-hint-wrap { display: inline-flex; }
+.yu-setting-row > .yu-segmented { flex: 0 1 440px; min-width: 260px; }
 .yu-setting-row { display: flex; align-items: center; justify-content: space-between; gap: 16px; flex-wrap: wrap; min-height: 44px; padding: 6px 0; border-bottom: 1px solid var(--yu-divider); }
 .yu-setting-row:last-child { border-bottom: 0; }
 .yu-setting-row > :first-child { display: inline-flex; align-items: center; font-weight: 500; }
@@ -305,7 +309,7 @@ button[aria-disabled="true"], [role="switch"][aria-disabled="true"] { cursor: no
 .yu-live-details[open] > summary { border-bottom: 1px solid var(--yu-divider); }
 .yu-live-details > .yu-live-fields { padding: 14px 16px; }
 .yu-live-bottom-2 { display: grid; grid-template-columns: repeat(2, minmax(0,1fr)); gap: 14px; }
-.yu-hard-mode-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(230px, 1fr)); gap: 8px; }
+.yu-hard-mode-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(230px, 1fr)); gap: 8px; align-items: start; padding: 0; margin: 0; list-style: none; }
 .yu-hard-mode-grid > li { display: flex; flex-direction: column; justify-content: center; gap: 2px; min-height: 44px; padding: 6px 10px; border: 1px solid var(--yu-divider); border-radius: 10px; background: var(--yu-bg-inset); }
 .yu-hard-mode-grid > li[data-state="fail"] { border-color: var(--yu-warn-border); background: var(--yu-warn-bg); }
 .yu-hard-mode-grid > li[data-state="unknown"] { border-color: var(--yu-neutral-border); }
@@ -320,3 +324,7 @@ button[aria-disabled="true"], [role="switch"][aria-disabled="true"] { cursor: no
 .yu-trip-raw > summary svg { width: 16px; height: 16px; transition: transform .15s; }
 .yu-trip-raw[open] > summary svg { transform: rotate(90deg); }
 .yu-trip-raw > [data-testid="trip.detailTabs"] { padding: 0 14px 14px; }
+/* The hint follows its button visually; the result region stays next to the button in the document (ET-045b). */
+.yu-action-row { display: flex; flex-wrap: wrap; align-items: center; row-gap: 4px; }
+.yu-action-row > .yu-info-hint-wrap { order: 1; }
+.yu-action-row > :not(button):not(.yu-info-hint-wrap) { order: 2; flex-basis: 100%; }

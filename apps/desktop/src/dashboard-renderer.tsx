@@ -115,7 +115,7 @@ export default function App() {
         <TooltipProvider delayDuration={150} skipDelayDuration={0}><Tooltip><TooltipTrigger asChild>
           <Button variant="ghost" className="w-full" disabled={exit === 'pending'} aria-describedby="shell-exit-hint" data-testid="exit-application" onClick={() => {setExit('pending'); void window.desktop.exitApplication().catch(() => setExit('failed'));}}><Power aria-hidden="true" />{exit === 'pending' ? strings.exitPending : t('side.exit', undefined, language)}</Button>
         </TooltipTrigger><TooltipContent side="right" align="end" data-testid="shell.exit.hint">{t('s.closeD', undefined, language)}</TooltipContent></Tooltip></TooltipProvider>
-        <span id="shell-exit-hint" className="sr-only">{t('s.closeD', undefined, language)}</span>
+        <span id="shell-exit-hint" className="sr-only" style={{position: 'fixed'}}>{t('s.closeD', undefined, language)}</span>
         {exit === 'failed' ? <p role="status">{strings.exitFailed}</p> : null}
       </div></aside>
       <div className="yu-column"><header className="yu-topbar" data-testid="shell.topbar"><h1 ref={heading} tabIndex={-1} data-testid="screen-title">{t(`nav.${route}`, undefined, language)}</h1>

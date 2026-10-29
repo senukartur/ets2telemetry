@@ -820,15 +820,15 @@ function Test-UiReceipt {
     $flags = @('bilingual','bothSizes','security','offlineFonts','recordingIndicator','versionLine','updateHidden')
     $screens = @()
     switch -CaseSensitive ($ExpectedUiCase) {
-        'shell' { $flags += @('navigation','headingFocus','hardModePage','journalUnmount','menuKeyboard','exitAvailable','laterAccount'); $screens = @('live','hardMode','journal','settings','account') }
-        'live' { $flags += @('numericGauge','unavailableVsZero','paused','staleDashes','rawNames','unsupportedTrip','jobViewport','hmNamesReadable','fullWidthTelemetry','tankUnknownVsZero','mandatoryBreak'); $screens = @('current','zero','missing','paused','stale') }
-        'journal' { $flags += @('syntheticBanner','pageReturn','chartBounded','rawTabs','searchPlanned','tripRegions','tableReadable','signedChart'); $screens = @('list','trip','intervals','timeline','samples') }
-        'settings' { $flags += @('allPanels','allSections','committedSave','sourceSelector','uninstallRefusal','refusedSave','readOnly','controlsKeyboard','lastEnabled','fontLicense','overlayVisibility','visibilityFailedSave','actionResult','overlayOpacity','opacityFailedSave','opacityReadOnly','overlayUnified','overlayEditing','overlayScroll','scaleControl','gearDisplay','gearDisplayFailedSave'); $screens = @('general','units','overlay','overlay-sections','plugin','data','about','save-error') }
+        'shell' { $flags += @('navigation','headingFocus','hardModePage','journalUnmount','exitHintKeyboard','exitAvailable','noAccountPlaceholder'); $screens = @('live','hardMode','journal','settings') }
+        'live' { $flags += @('numericGauge','unavailableVsZero','paused','staleDashes','rawNames','noTripPlaceholder','jobViewport','hmNamesReadable','fullWidthTelemetry','tankUnknownVsZero','mandatoryBreak'); $screens = @('current','zero','missing','paused','stale') }
+        'journal' { $flags += @('syntheticBanner','pageReturn','chartBounded','rawTabs','noPlannedSearch','tripRegions','tableReadable','signedChart'); $screens = @('list','trip','intervals','timeline','samples') }
+        'settings' { $flags += @('allPanels','allSections','committedSave','sourceSelector','uninstallRefusal','refusedSave','readOnly','controlsKeyboard','lastEnabled','fontLicense','overlayVisibility','visibilityFailedSave','actionResult','overlayOpacity','opacityFailedSave','opacityReadOnly','overlayUnified','overlayEditing','overlayScroll','scaleControl','gearDisplay','gearDisplayFailedSave'); $screens = @('general','overlay','overlay-sections','plugin','about','data','save-error') }
         'overlay' { $flags += @('fourLayouts','transparent','contained','independentFont','missing','paused','staleDashes','heroSubsets','formatterProfiles','stableNumbers','opacityKeyboardFocus','opacityGestures','backgroundOpacityOverlay','clusterRpmContained','scaleRange','clusterSpeedArc','gearDisplayManual','gearboxLabels'); $screens = @('strip','card','cluster','hud') }
     }
     foreach ($flag in $flags) { if ($ui.flags.$flag -isnot [bool] -or !$ui.flags.$flag) { return $false } }
     # ET-045e: the overlay shard adds six English 1280x800 scale reference screenshots to its 64 layout screenshots.
-    if (@($ui.screenshots).Count -ne $(if ($ExpectedUiCase -ceq 'overlay') { 70 } elseif ($ExpectedUiCase -ceq 'settings') { 34 } else { 4 * $screens.Count })) { return $false }
+    if (@($ui.screenshots).Count -ne $(if ($ExpectedUiCase -ceq 'overlay') { 70 } elseif ($ExpectedUiCase -ceq 'settings') { 30 } else { 4 * $screens.Count })) { return $false }
     foreach ($language in @('en','ru')) {
         foreach ($size in @(@{width=1280;height=800},@{width=1100;height=720})) {
             $pairScreens = $screens

@@ -101,7 +101,7 @@ export function PluginSetupCardView({view, diagnosis, onView, language = 'en', p
       })}
       <Button size="sm" className={PENDING_CLASS} disabled={disabled} {...trigger('plugin-retry')} onClick={() => call({kind: 'retry'}, () => window.desktop.retryPluginSetup(), withView(ANSWERS.retry))}>{PLUGIN_STRINGS.retry}</Button>
       {region('plugin-retry')}
-      <div className="space-y-1">
+      <div className="yu-action-row">
         <Button size="sm" variant="outline" className={PENDING_CLASS} {...trigger('plugin-export-diagnostics')}
           onClick={() => call({kind: 'export-diagnostics'}, () => window.desktop.exportDiagnostics(), ANSWERS.exportDiagnostics)}>{DIAGNOSTICS_EXPORT_STRINGS.button}</Button>
         {region('plugin-export-diagnostics')}

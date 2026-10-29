@@ -668,8 +668,9 @@ export async function runUiSmoke({application, dashboard, overlay, source, sourc
         await dashboard.waitForFunction(() => globalThis.document.activeElement?.getAttribute('data-testid') === 'screen-title');
         assert.equal(await dashboard.getByTestId('hardMode.screen').isVisible(), true);
         assert.equal(await dashboard.getByTestId('hard-mode-drawer').count(), 0);
+        // ET-057: the compact Hard Mode grid may fit without scrolling; when it scrolls, leaving the route resets it.
         await dashboard.getByTestId('shell.content').evaluate(node => {node.scrollTop = node.scrollHeight;});
-        assert.ok(await dashboard.getByTestId('shell.content').evaluate(node => node.scrollTop > 0));
+        assert.equal(await dashboard.getByTestId('shell.content').evaluate(node => node.scrollTop > 0 || node.scrollHeight <= node.clientHeight), true);
         await dashboard.getByTestId('tab-live').click();
         await dashboard.waitForFunction(() => globalThis.document.activeElement?.getAttribute('data-testid') === 'screen-title');
         assert.equal(await dashboard.getByTestId('shell.content').evaluate(node => node.scrollTop), 0, 'UI_ROUTE_RETAINS_HARD_MODE_SCROLL');
@@ -695,13 +696,17 @@ export async function runUiSmoke({application, dashboard, overlay, source, sourc
       } else if (config.uiCase === 'live') {
         await screen(dashboard, 'live');
         await waitLiveInstrument(dashboard, language);
+        // ET-057: the full field list starts collapsed; it is opened to read its rows and stays open on this screen.
+        const detailsOpen = await dashboard.getByTestId('live.details').evaluate(node => node.open);
+        if (!record.flags.detailsCollapsed) {assert.equal(detailsOpen, false, 'UI_LIVE_DETAILS_NOT_COLLAPSED'); record.flags.detailsCollapsed = true;}
+        // Opened in place: a click would scroll the page to the toggle, and the job card is checked at the top below.
+        if (!detailsOpen) await dashboard.getByTestId('live.details').evaluate(node => {node.open = true;});
         for (const [id, text] of [['cargo', 'Synthetic Cargo'], ['source-city', 'Synthetic City A'], ['source-company', 'Synthetic Company A'], ['destination-city', 'Synthetic City B'], ['destination-company', 'Synthetic Company B'], ['truck', 'truck.volvo']]) {
           assert.equal(await dashboard.getByTestId(`live-${id}`).innerText(), text);
         }
         await observeMandatoryBreak({dashboard, sourceV1, language, record});
         // ET-057: no "This trip" placeholder of dashes; the field list is collapsed until opened.
         assert.equal(await dashboard.getByTestId('live.trip').count(), 0);
-        assert.equal(await dashboard.getByTestId('live.details').evaluate(node => node.open), false);
         assert.ok(await dashboard.getByTestId('live.instrument.gauge').getByRole('img').getAttribute('aria-label'));
         const jobVisible = await dashboard.evaluate(() => {
           const content = globalThis.document.querySelector('[data-testid="shell.content"]'), outer = content.getBoundingClientRect();
