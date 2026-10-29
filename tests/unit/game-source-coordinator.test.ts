@@ -123,3 +123,40 @@ it('pins a single available protocol and keeps it attached while its missing sib
   f.coordinator.observe('v1', {status: 'waiting', reason: 'No selected game discovery record'});
   await vi.advanceTimersByTimeAsync(5000); expect(f.attach).toHaveBeenCalledExactlyOnceWith('ets2', target()); expect(f.retire).toHaveBeenCalledTimes(1);
 });
+
+it.each(['unique', 'absent', 'both'] as const)('rescans an ambiguous automatic source and recovers to %s availability', async result => {
+  const f = fixture({ets2: {status: 'ambiguous'}, ats: {status: 'absent'}});
+  f.coordinator.select({kind: 'game', selection: 'game'}, broker); await settle();
+  expect(f.publish).toHaveBeenLastCalledWith('incompatible', 'Multiple game instances are ambiguous'); expect(f.attach).not.toHaveBeenCalled();
+  f.available(result === 'absent' ? availability() : result === 'both' ? availability(target(), target('ats')) : availability(target()));
+  await vi.advanceTimersByTimeAsync(249); expect(f.discover).toHaveBeenCalledTimes(2);
+  await vi.advanceTimersByTimeAsync(1);
+  if (result === 'unique') expect(f.attach).toHaveBeenCalledExactlyOnceWith('ets2', target());
+  else {
+    expect(f.attach).not.toHaveBeenCalled();
+    expect(f.publish).toHaveBeenLastCalledWith('waiting', result === 'both' ? 'Both games are available; choose ETS2 or ATS' : 'Waiting for game');
+  }
+});
+it.each(['ets2', 'ats'] as const)('keeps explicit %s selection during ambiguity recovery', async game => {
+  const other = game === 'ets2' ? 'ats' : 'ets2', f = fixture({...availability(target(other)), [game]: {status: 'ambiguous'}});
+  f.coordinator.select({kind: 'game', selection: game}, broker); await settle(); expect(f.attach).not.toHaveBeenCalled();
+  f.available(availability(target(other))); await vi.advanceTimersByTimeAsync(250);
+  expect(f.publish).toHaveBeenLastCalledWith('waiting', 'Waiting for game'); expect(f.attach).not.toHaveBeenCalled();
+  f.available(availability(target(game), target(other))); await vi.advanceTimersByTimeAsync(500);
+  expect(f.attach).toHaveBeenCalledExactlyOnceWith(game, target(game));
+});
+it('keeps persistent ambiguity visible with bounded cadence and never attaches an ambiguous game', async () => {
+  const f = fixture({ets2: {status: 'ambiguous'}, ats: {status: 'absent'}});
+  f.coordinator.select({kind: 'game', selection: 'game'}, broker); await settle();
+  await vi.advanceTimersByTimeAsync(250 + 500 + 1000 + 2000 + 4000);
+  expect(f.discover).toHaveBeenCalledTimes(12); expect(f.attach).not.toHaveBeenCalled();
+  expect(f.publish).toHaveBeenLastCalledWith('incompatible', 'Multiple game instances are ambiguous');
+});
+it.each(['stop', 'fixture'] as const)('cancels an ambiguity rescan on %s without a late discovery callback', async action => {
+  const f = fixture({ets2: {status: 'ambiguous'}, ats: {status: 'absent'}});
+  f.coordinator.select({kind: 'game', selection: 'game'}, broker); await settle();
+  if (action === 'stop') await f.coordinator.stop(); else {f.coordinator.select({kind: 'fixture', selection: 'replay'}, broker); await settle();}
+  f.available(availability(target())); await vi.advanceTimersByTimeAsync(10000);
+  expect(f.discover).toHaveBeenCalledTimes(2);
+  if (action === 'stop') expect(f.attach).not.toHaveBeenCalled(); else expect(f.attach).toHaveBeenCalledExactlyOnceWith('replay');
+});

@@ -73,7 +73,9 @@ export class GameSourceCoordinator {
       };
       const games = this.mode!.selection === 'game' ? ['ets2', 'ats'] as const : [this.mode!.selection as Game];
       const available = games.map(game => merge(game)).filter(entry => entry.status !== 'absent');
-      if (available.some(entry => entry.status === 'ambiguous')) {this.ports.publish('incompatible', 'Multiple game instances are ambiguous'); return;}
+      if (available.some(entry => entry.status === 'ambiguous')) {
+        this.ports.publish('incompatible', 'Multiple game instances are ambiguous'); this.retry(generation); return;
+      }
       if (available.length === 1 && available[0].status === 'unique') {
         this.target = available[0].target; this.ports.attach(this.target.source.game, this.target); return;
       }
