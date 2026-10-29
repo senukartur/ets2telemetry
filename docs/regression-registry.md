@@ -94,6 +94,7 @@ Columns:
 | `tests/unit/journal-preload.test.ts` | Node unit (Vitest) | REG-011, REG-012, REG-014 | R, T | ET-016a (#97) | PR (tests job, `npm test`) | security |
 | `tests/unit/journal-service.test.ts` | Node unit (Vitest) | REG-011, REG-014 | R, F | ET-016a (#97) | PR (tests job, `npm test`) | — |
 | `tests/unit/journal-view.test.ts` | Node unit (Vitest) | REG-009, REG-014, REG-017 | R, F | ET-016a (#98) | PR (tests job, `npm test`) | gap, trip completeness |
+| `tests/unit/info-hint-rendering.test.ts` | Node unit (Vitest) | REG-009 | R | ET-057 (#225) | PR (tests job, `npm test`) | — |
 | `tests/unit/live-dashboard-break-rendering.test.ts` | Node unit (Vitest) | REG-009 | R, F | ET-052 PR-4 | PR (tests job, `npm test`) | — |
 | `tests/unit/live-dashboard-text.test.ts` | Node unit (Vitest) | REG-002, REG-003, REG-009 | R, F | ET-010b (#62) | PR (tests job, `npm test`) | — |
 | `tests/unit/live-smoke-source-v1.test.ts` | Node unit (Vitest) | REG-003, REG-010, REG-011 | R, F | ET-010c (#73) | PR (tests job, `npm test`) | — |

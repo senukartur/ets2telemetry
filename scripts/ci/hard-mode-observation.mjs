@@ -151,8 +151,17 @@ export async function runHardModeSmoke({application, dashboard, source, config, 
     const details = dashboard.getByTestId('hard-mode-details'); await details.waitFor({state: 'visible'});
     assert.equal(await details.locator('[data-testid^="hard-mode-detail-rule-"]').count(), 1);
     await renderedFixture('HARD_MODE_INLINE_' + lang, {details: true});
+    // ET-057: the caveats are the headline's hint. Open it by hover and by keyboard and read the tooltip a driver sees.
+    const caveatButton = dashboard.locator('[data-testid="hard-mode-card"] h2 .yu-info-hint'), caveatTip = dashboard.getByTestId('hard-mode-caveats-tooltip');
+    await caveatButton.hover(); await caveatTip.waitFor({state: 'visible'});
+    const hoverText = await caveatTip.innerText();
+    await dashboard.keyboard.press('Escape'); await caveatTip.waitFor({state: 'hidden'}); await dashboard.mouse.move(0, 0);
+    await caveatButton.focus(); await caveatTip.waitFor({state: 'visible'});
+    assert.equal(await caveatTip.innerText(), hoverText, `Hard Mode caveat tooltip differs between hover and focus (${lang})`);
+    await dashboard.keyboard.press('Escape'); await caveatTip.waitFor({state: 'hidden'});
+    assert.equal(await caveatButton.evaluate(element => element === globalThis.document.activeElement), true, `Escape moved focus from the ${lang} caveat hint`);
     const pageText = await dashboard.getByTestId('hard-mode-card').innerText();
-    for (const caveat of (lang === 'en' ? ['Read-only checks observe persisted settings.', 'Unpersisted menu or console changes and transient changes between checks are not verified.', 'Manual delivery is required; actual Expert placement is not verified.', 'Current settings pass is separate from delivered-trip qualification.'] : ['Проверка только читает сохранённые настройки.', 'Несохранённые изменения в меню или консоли и временные изменения между проверками не проверяются.', 'Требуется ручная парковка; фактическое место уровня «Эксперт» не подтверждается.', 'Соответствие текущих настроек не означает, что завершённый рейс будет засчитан как Hard Mode.'])) assert.ok(pageText.includes(caveat), `Missing ${lang} page caveat: ${caveat}`);
+    for (const caveat of (lang === 'en' ? ['Read-only checks observe persisted settings.', 'Unpersisted menu or console changes and transient changes between checks are not verified.', 'Manual delivery is required; actual Expert placement is not verified.', 'Current settings pass is separate from delivered-trip qualification.'] : ['Проверка только читает сохранённые настройки.', 'Несохранённые изменения в меню или консоли и временные изменения между проверками не проверяются.', 'Требуется ручная парковка; фактическое место уровня «Эксперт» не подтверждается.', 'Соответствие текущих настроек не означает, что завершённый рейс будет засчитан как Hard Mode.'])) assert.ok(hoverText.includes(caveat), `Missing ${lang} caveat in the tooltip: ${caveat}`);
     if (lang === 'ru') assert.doesNotMatch(pageText, /Detected:|Required:|Reason:|Check again|Current settings|Read-only/);
     await dashboard.getByTestId('shell.content').evaluate(node => {node.scrollTop = 0;});
     await dashboard.screenshot({path: path.join(config.output, `hard-mode-checklist-${lang}.png`)});

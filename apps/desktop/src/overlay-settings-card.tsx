@@ -76,9 +76,9 @@ export function OverlaySettingsCard({settings, edit, onSaved, onRequest, showSav
       <section className="yu-overlay-block" aria-labelledby="overlay-visibility-label">
         <div className="flex items-center gap-2">
           <Switch id="overlay-enabled" data-testid="overlay-enabled" checked={overlay.enabled} disabled={locked}
-            onCheckedChange={next => save(() => window.desktop.setOverlayEnabled(next))} />
+            aria-describedby="overlay-enabled-help" onCheckedChange={next => save(() => window.desktop.setOverlayEnabled(next))} />
           <Label id="overlay-visibility-label" htmlFor="overlay-enabled">{strings.overlayEnabledLabel}</Label>
-          <InfoHint label={t('ui.moreAbout', {v: strings.overlayEnabledLabel}, language)} testId="overlay-enabled-help">{strings.overlayEnabledHelp}</InfoHint>
+          <InfoHint label={t('ui.moreAbout', {v: strings.overlayEnabledLabel}, language)} testId="overlay-enabled-help" id="overlay-enabled-help">{strings.overlayEnabledHelp}</InfoHint>
         </div>
       </section>
       <section className="yu-overlay-block" aria-labelledby="overlay-layout-label">
@@ -94,10 +94,10 @@ export function OverlaySettingsCard({settings, edit, onSaved, onRequest, showSav
       </section>
       <section className="yu-overlay-block" aria-labelledby="overlay-opacity-label">
         <span className="yu-label-hint"><Label id="overlay-opacity-label" htmlFor="overlay-opacity-thumb">{strings.overlayOpacityLabel}</Label>
-          <InfoHint label={t('ui.moreAbout', {v: strings.overlayOpacityLabel}, language)} testId="overlay-opacity-help">{strings.overlayOpacityHelp}</InfoHint></span>
+          <InfoHint label={t('ui.moreAbout', {v: strings.overlayOpacityLabel}, language)} testId="overlay-opacity-help" id="overlay-opacity-help">{strings.overlayOpacityHelp}</InfoHint></span>
         <div className="flex flex-wrap items-center gap-4">
           <Slider className="max-w-sm min-w-32" data-testid="overlay-opacity" thumbId="overlay-opacity-thumb"
-            labelId="overlay-opacity-label" min={OVERLAY_OPACITY_MIN} max={OVERLAY_OPACITY_MAX} step={1}
+            labelId="overlay-opacity-label" descriptionId="overlay-opacity-help" min={OVERLAY_OPACITY_MIN} max={OVERLAY_OPACITY_MAX} step={1}
             value={[opacityDraft ?? overlay.backgroundOpacity]} disabled={!settings?.writable} pending={busy}
             onPointerCancel={() => setOpacityDraft(undefined)} onValueChange={([value]) => setOpacityDraft(value)} onValueCommit={commitOpacity} />
           <span className="min-w-[4ch] text-sm font-medium tabular-nums" data-testid="overlay-opacity-value">{opacityDraft ?? overlay.backgroundOpacity}%</span>

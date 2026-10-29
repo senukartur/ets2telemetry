@@ -9,7 +9,7 @@ import {Tooltip, TooltipContent, TooltipProvider, TooltipTrigger} from './compon
  * hidden element that stays in the document, so a screen reader hears it without opening the tooltip and observations can
  * still read it by `testId`.
  */
-export function InfoHint({label, children, side = 'top', align = 'center', testId}: {
+export function InfoHint({label, children, side = 'top', align = 'center', testId, id: descriptionId}: {
   /** The subject, read as "More about: <label>"-style accessible name by the caller's text. */
   label: string;
   children: React.ReactNode;
@@ -17,8 +17,10 @@ export function InfoHint({label, children, side = 'top', align = 'center', testI
   align?: 'start' | 'center' | 'end';
   /** The data-testid of the hidden description; its tooltip copy gets `<testId>-tooltip`. */
   testId?: string;
+  /** The hidden description's id, for a control that is described by the same text (aria-describedby). */
+  id?: string;
 }) {
-  const id = useId();
+  const generated = useId(), id = descriptionId ?? generated;
   return <span className="yu-info-hint-wrap">
     <TooltipProvider delayDuration={150} skipDelayDuration={0}><Tooltip><TooltipTrigger asChild>
       <button type="button" className="yu-info-hint" aria-label={label} aria-describedby={id}><Info aria-hidden="true" /></button>

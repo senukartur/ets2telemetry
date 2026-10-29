@@ -251,14 +251,16 @@ function ExportTrip({tripUuid}: {tripUuid: string}) {
   return <div className="space-y-1" data-testid="journal-export">
     <div className="flex flex-wrap items-center gap-2">
       <Button size="sm" variant="outline" disabled={state.busy} onClick={run} data-testid="journal-export-button">{state.busy ? JOURNAL_EXPORT_STRINGS.exporting : JOURNAL_EXPORT_STRINGS.button}</Button>
-      <InfoHint label={t('ui.moreAbout', {v: JOURNAL_EXPORT_STRINGS.button}, language)} align="end" testId="journal-export-note">{JOURNAL_EXPORT_STRINGS.note}</InfoHint>
       {result ? <span role="status" className={result.failed ? 'text-destructive' : undefined} data-testid="journal-export-result" data-failed={result.failed ? 'true' : 'false'}>
         {result.text}</span> : null}
     </div>
+    {/* Data loss on uninstall stays visible next to the only export action (ET-057 keeps such warnings inline). */}
+    <p className="text-xs text-muted-foreground" data-testid="journal-export-note">{JOURNAL_EXPORT_STRINGS.note}</p>
   </div>;
 }
 
 function TripDetail({trip, options, onDatabase, onBack}: {trip: Selected; options: JournalTextOptions; onDatabase: (database: JournalDatabase) => void; onBack: () => void}) {
+  const [rawOpen, setRawOpen] = useState(false);
   const {JOURNAL_STRINGS} = useJournalCopy();
   const read = useCallback<Read<JournalTripDetail & {nextCursor: null}>>(
     () => window.desktop.getJournalTrip(trip.tripUuid).then(result => result.ok ? {ok: true, value: {...result.value, nextCursor: null}} : result), [trip.tripUuid]);
@@ -286,15 +288,15 @@ function TripDetail({trip, options, onDatabase, onBack}: {trip: Selected; option
     {text && detail ? <Summary trip={trip} options={options} detail={detail} text={text} onDatabase={onDatabase} /> : null}
     {/* ET-057: the raw intervals, events and samples are a collapsed section, not the trip's first view. Each tab reads when
         it opens; an inactive tab is unmounted and holds no page. */}
-    <details className="yu-trip-raw" data-testid="trip.raw"><summary data-testid="trip.raw.toggle"><ChevronRight aria-hidden="true" />{t('tr.raw', undefined, language)}</summary>
-    <Tabs defaultValue="intervals" data-testid="trip.detailTabs">
+    <details className="yu-trip-raw" data-testid="trip.raw" onToggle={event => setRawOpen(event.currentTarget.open)}><summary data-testid="trip.raw.toggle"><ChevronRight aria-hidden="true" />{t('tr.raw', undefined, language)}</summary>
+    {rawOpen ? <Tabs defaultValue="intervals" data-testid="trip.detailTabs">
       <TabsList>
         <TabsTrigger value="intervals" data-testid="journal-detail-tab-intervals">{JOURNAL_STRINGS.intervalsTab}</TabsTrigger>
         <TabsTrigger value="timeline" data-testid="journal-detail-tab-timeline">{JOURNAL_STRINGS.timelineTab}</TabsTrigger>
       </TabsList>
       <TabsContent value="intervals"><Intervals trip={trip} options={options} onDatabase={onDatabase} /></TabsContent>
       <TabsContent value="timeline"><Timeline trip={trip} options={options} onDatabase={onDatabase} /></TabsContent>
-    </Tabs></details>
+    </Tabs> : null}</details>
   </div>;
 }
 

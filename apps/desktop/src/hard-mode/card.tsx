@@ -35,7 +35,7 @@ export function HardModeCard({language = 'en', controller}: {language?: AppLangu
   const view = hardModeView(status, now, language);
   const failing = view.rows.some(row => row.state !== 'pass');
   return <Card data-testid="hard-mode-card" data-state={status.trip?.firstLoss ? 'lost' : status.assessment.state}><CardHeader><CardTitle><h2 className="flex items-center gap-2"><Flame className="size-5" aria-hidden="true" />{view.headline}
-    <InfoHint label={t('hm.howChecked', undefined, language)} side="bottom" align="start">
+    <InfoHint label={t('hm.howChecked', undefined, language)} side="bottom" align="start" testId="hard-mode-caveats">
       <span className="block">{t('hm.rule', undefined, language)}</span>
       <span className="block">{t('hm.notice', undefined, language)}</span>
       <span className="block">{t('hm.distinction', undefined, language)}</span>
