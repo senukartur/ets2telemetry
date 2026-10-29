@@ -13,6 +13,9 @@ const {identity, version} = build;
 // `executableName` and `appBundleId` keep the install root, the Uninstall key and the shortcut AUMID. Staging has its own
 // value of each (ET-055 UP12), so that both channels install and run side by side.
 const PRODUCT_NAME = identity.displayName;
+// The channel's application icon folder (scripts/generate-app-icons.mjs). Both folders are named icon, so the packaged
+// resourcesiconapp.ico has one path in both channels; staging's carries an amber corner flag (ET-055).
+const ICON_DIRECTORY = build.channel === 'staging' ? 'resources/staging/icon' : 'resources/icon';
 
 // Squirrel maker options (ET-018 PR-6, docs/release.md). `title` becomes the Installed apps DisplayName and `authors`
 // the Publisher (Squirrel's CreateUninstallerRegistryEntry); Setup carries the version in its name.
@@ -21,7 +24,7 @@ const squirrel = {name: identity.squirrelId, title: PRODUCT_NAME, authors: 'Yuko
   description: 'Local telemetry utility for Euro Truck Simulator 2 and American Truck Simulator', setupExe: buildSetupFileName(identity, version),
   // The Setup executable's own icon; scripts/generate-app-icons.mjs renders it. skipUpdateIcon keeps
   // Update.exe byte-identical to the vendored Squirrel.exe, which release-identity.mjs asserts (docs/release.md).
-  setupIcon: 'resources/icon/app.ico', skipUpdateIcon: true};
+  setupIcon: `${ICON_DIRECTORY}/app.ico`, skipUpdateIcon: true};
 
 /**
  * ET-055: the packaged package.json carries the channel's productName and the build version. Electron names userData
@@ -46,7 +49,7 @@ module.exports = {
     // install and updated hooks place in Squirrel's install root and name as the Installed apps DisplayIcon (ET-045g,
     // docs/release.md). The Squirrel maker keeps electron-winstaller's default iconUrl, the Electron icon (HTTP(S) only);
     // with app.ico already in place Squirrel never downloads it.
-    extraResource: ['.local/package-native/telemetry-client', '.local/package-native/telemetry-plugin', '.local/package-native/uninstall', 'resources/icon'],
+    extraResource: ['.local/package-native/telemetry-client', '.local/package-native/telemetry-plugin', '.local/package-native/uninstall', ICON_DIRECTORY],
     // The physical Node worker must resolve SQLite's JavaScript loader without ASAR patches.
     asar: { unpack: '**/*.{node,cjs}', unpackDir: '**/better-sqlite3' }, executableName: identity.executableName,
     appBundleId: identity.appBundleId,
@@ -59,7 +62,7 @@ module.exports = {
     // OriginalFilename is the executable's file name, which @electron/packager derives from executableName.
     win32metadata: {CompanyName: 'Artur Sianiuk', FileDescription: PRODUCT_NAME, ProductName: PRODUCT_NAME},
     // Embedded in the executable, so the taskbar, shortcuts and windows show the application icon. Forge appends .ico on Windows.
-    icon: 'resources/icon/app',
+    icon: `${ICON_DIRECTORY}/app`,
     ignore: filename => {
       const normalized = filename.replaceAll('\\', '/');
       return !['', '/package.json', '/apps', '/apps/desktop', '/apps/desktop/dist', '/node_modules'].includes(normalized)

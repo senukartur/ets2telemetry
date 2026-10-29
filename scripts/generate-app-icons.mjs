@@ -1,8 +1,11 @@
 // Generates the application and notification-area icons (docs/design/ui-spec.md#3-tokens-type-and-icons).
 // Run `node scripts/generate-app-icons.mjs` after changing the icon design, then commit the outputs:
-// - resources/icon/app.ico: the executable, installer, taskbar and window icon (16-256 px);
-// - apps/desktop/src/tray-icon-data.ts: notification-area PNGs for each health tone and scale;
-// - docs/design/assets/app-icon.png: a 256 px preview for the design documentation.
+// - resources/icon/app.ico and resources/staging/icon/app.ico: the executable, installer, taskbar and window icon
+//   (16-256 px) of the production and the staging channel; forge.config.cjs packages the build channel's one;
+// - apps/desktop/src/tray-icon-data.ts: notification-area PNGs for each channel, health tone and scale;
+// - docs/design/assets/app-icon.png: a 256 px preview of the production icon for the design documentation.
+// The staging channel's icon is the same mark with an amber flag across the upper right corner, so the two installed
+// applications can be told apart on the taskbar, in the tray and in Installed apps (ET-055).
 // The mark is "road merge" (Yukon Union): two roads join into one and form a Y, with an amber centre line, on a
 // blue-to-night tile. From 48 px it is drawn as liquid glass: aurora light behind frosted roads, lit edges, a dashed
 // glowing centre line, a top gloss and a rim. Below 48 px, and in the tray, those details turn to noise, so the small
@@ -23,7 +26,7 @@ const TONES = {ready: '#34D399', busy: '#F59E0B', failed: '#EF4444'};
 const hex = value => [1, 3, 5].map(offset => parseInt(value.slice(offset, offset + 2), 16));
 const COLORS = {
   tileTop: hex('#2563EB'), tileBottom: hex('#0B1120'), road: hex('#F8FAFC'), line: hex('#FFB300'), lineCore: hex('#FFC233'),
-  shadow: hex('#020617'), white: [255, 255, 255]
+  shadow: hex('#020617'), white: [255, 255, 255], flag: hex('#FFB300'), flagEdge: hex('#111827')
 };
 
 // ---- PNG and ICO --------------------------------------------------------------------------------------------------
@@ -105,14 +108,20 @@ const AURORA = [[86, 18, 22, hex('#22D3EE'), 0.85], [12, 86, 24, hex('#7C3AED'),
 const REFRACTED = [[86, 18, 28, hex('#67E8F9'), 1], [12, 86, 30, hex('#A78BFA'), 1]];
 const glow = (base, discs, u, v) => discs.reduce((colour, [x, y, r, rgb, opacity]) => mix(colour, rgb, opacity * blurredEdge(Math.hypot(u - x, v - y) - r, 10)), base);
 
-// The colour of one sample point (u, v) of the tile, or null outside it.
-function shade(u, v, large) {
+// The staging channel's flag: an amber triangle across the upper right corner with a dark edge, clear of the tray's
+// status dot in the lower right corner.
+const FLAG = 66, FLAG_EDGE = 4;
+const staging = (u, v, colour) => u - v > FLAG ? COLORS.flag : u - v > FLAG - FLAG_EDGE ? COLORS.flagEdge : colour;
+
+// The colour of one sample point (u, v) of the tile in `channel`, or null outside it.
+function shade(u, v, large, channel) {
   if (!insideRoundedSquare(u, v, 0, 22)) return null;
   let colour = lerp(COLORS.tileTop, COLORS.tileBottom, Math.min(1, Math.max(0, (u * 0.6 + v) / 136)));
   const {d, along} = road(u, v);
   if (!large) {
     if (d <= 11) colour = COLORS.road;
     if (d <= 3.5) colour = COLORS.line;
+    if (channel === 'staging') colour = staging(u, v, colour);
     if (!insideRoundedSquare(u, v, 4, 18)) colour = mix(colour, COLORS.white, diagonal(u, v, [[0, 0.95], [0.45, 0.08], [1, 0.5]]));
     return colour;
   }
@@ -125,11 +134,12 @@ function shade(u, v, large) {
   if (d <= 1.7 && dash <= 0) colour = COLORS.lineCore;
   const glossBottom = 40 + 7.5 * (1 - ((u - 50) / 50) ** 2);
   if (v < glossBottom) colour = mix(colour, COLORS.white, 0.28 * (1 - v / 47.5));
+  if (channel === 'staging') colour = staging(u, v, colour);
   if (!insideRoundedSquare(u, v, 2.4, 19.6)) colour = mix(colour, COLORS.white, diagonal(u, v, [[0, 0.95], [0.45, 0.08], [1, 0.5]]));
   return colour;
 }
 
-function render(S, {tone} = {}) {
+function render(S, {tone, channel = 'production'} = {}) {
   const large = tone === undefined && S >= LARGE_FROM, samples = S <= 64 ? 8 : 4, rgba = Buffer.alloc(S * S * 4);
   // The tray's status dot sits in the lower right corner with a transparent gap around it.
   const dot = 0.19 * 100, centre = 100 - dot - 2, gap = dot + Math.max(1.2, S / 20) * 100 / S, toneRgb = tone && hex(TONES[tone]);
@@ -140,8 +150,8 @@ function render(S, {tone} = {}) {
       let colour = null;
       if (tone) {
         const r = Math.hypot(u - centre, v - centre);
-        if (r <= dot) colour = toneRgb; else if (r > gap) colour = shade(u, v, false);
-      } else colour = shade(u, v, large);
+        if (r <= dot) colour = toneRgb; else if (r > gap) colour = shade(u, v, false, channel);
+      } else colour = shade(u, v, large, channel);
       if (!colour) continue;
       sum[0] += colour[0]; sum[1] += colour[1]; sum[2] += colour[2]; sum[3]++;
     }
@@ -153,16 +163,24 @@ function render(S, {tone} = {}) {
 }
 
 // ---- Outputs ------------------------------------------------------------------------------------------------------
-mkdirSync(at('resources/icon'), {recursive: true});
-writeFileSync(at('resources/icon/app.ico'), encodeIco(APP_SIZES.map(size => ({size, png: render(size)}))));
+// Each channel's icon folder holds only app.ico and is packaged as resources/icon (forge.config.cjs).
+const ICON_FILES = {production: 'resources/icon/app.ico', staging: 'resources/staging/icon/app.ico'};
+for (const [channel, file] of Object.entries(ICON_FILES)) {
+  mkdirSync(path.dirname(at(file)), {recursive: true});
+  writeFileSync(at(file), encodeIco(APP_SIZES.map(size => ({size, png: render(size, {channel})}))));
+}
 writeFileSync(at('docs/design/assets/app-icon.png'), render(256));
-const tray = Object.keys(TONES).map(tone => `  ${tone}: {\n${TRAY_SIZES.map(size => `    ${size}: '${render(size, {tone}).toString('base64')}'`).join(',\n')}\n  }`).join(',\n');
+const tray = channel => Object.keys(TONES).map(tone => `    ${tone}: {\n${TRAY_SIZES.map(size => `      ${size}: '${render(size, {tone, channel}).toString('base64')}'`).join(',\n')}\n    }`).join(',\n');
 writeFileSync(at('apps/desktop/src/tray-icon-data.ts'), `// Generated by scripts/generate-app-icons.mjs. Do not edit by hand.
+import type {ReleaseChannel} from './channel';
 import type {TrayTone} from './tray-icon';
 
-/** Base64 RGBA PNGs of the notification-area icon: the small road-merge tile with a status dot, per health tone and pixel size. */
-export const TRAY_ICON_PNG_BASE64: Readonly<Record<TrayTone, Readonly<Record<16 | 20 | 24 | 32, string>>>> = Object.freeze({
-${tray}
+/**
+ * Base64 RGBA PNGs of the notification-area icon: the small road-merge tile with a status dot, per channel, health tone
+ * and pixel size. The staging tile carries the amber corner flag.
+ */
+export const TRAY_ICON_PNG_BASE64: Readonly<Record<ReleaseChannel, Readonly<Record<TrayTone, Readonly<Record<16 | 20 | 24 | 32, string>>>>>> = Object.freeze({
+${Object.keys(ICON_FILES).map(channel => `  ${channel}: {\n${tray(channel)}\n  }`).join(',\n')}
 });
 `);
-console.log('Wrote resources/icon/app.ico, docs/design/assets/app-icon.png and apps/desktop/src/tray-icon-data.ts');
+console.log(`Wrote ${Object.values(ICON_FILES).join(', ')}, docs/design/assets/app-icon.png and apps/desktop/src/tray-icon-data.ts`);

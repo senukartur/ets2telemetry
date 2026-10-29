@@ -312,8 +312,8 @@ function links(config, label, expectation, args) {
   return {expectation, classification, aumids: identities === null ? null : checkShortcutIdentities(identities, channelOf(config))};
 }
 
-/** The tracked product icon (resources/icon/app.ico), which forge.config.cjs embeds in the executable and Setup.exe. */
-const TRACKED_ICON = path.join(checkout, 'resources', 'icon', 'app.ico');
+/** The tracked product icon of `channel` (resources/icon/app.ico or resources/staging/icon/app.ico), which forge.config.cjs embeds in the executable and Setup.exe. */
+const trackedIcon = channel => path.join(checkout, 'resources', ...(channel === 'staging' ? ['staging'] : []), 'icon', 'app.ico');
 const ICON_READ_LIMIT = 4 * 1024 * 1024;
 /** The kind, size and SHA-256 of one icon file, compared with the tracked icon; never its path. */
 async function iconFileState(file, trackedSha256) {
@@ -338,7 +338,7 @@ async function iconFileState(file, trackedSha256) {
  * `app-<version>\resources\icon\app.ico`, each compared with the tracked icon. checkRegistrationIcon judges it.
  */
 async function iconObservation(layout, registration, label, version) {
-  const trackedSha256 = sha256(await readFile(TRACKED_ICON));
+  const trackedSha256 = sha256(await readFile(trackedIcon(layout.channel)));
   return {label, version, displayIcon: classifyRegistrationIcon({displayIcon: registration.displayIcon, binaryRoot: layout.binaryRoot, version, channel: layout.channel}),
     rootIcon: await iconFileState(path.win32.join(layout.binaryRoot, ROOT_ICON_FILE), trackedSha256),
     bundledIcon: await iconFileState(path.win32.join(layout.binaryRoot, `app-${version}`, 'resources', 'icon', ROOT_ICON_FILE), trackedSha256),

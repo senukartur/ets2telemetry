@@ -652,8 +652,8 @@ function runApplication(profileError: unknown): void {
   }
   function createWindow(): void {
     // A packaged window inherits the executable's icon (forge packagerConfig.icon). Development runs electron.exe, so it
-    // points at the same generated .ico in the repository.
-    const icon = app.isPackaged ? undefined : path.join(__dirname, '..', '..', '..', 'resources', 'icon', 'app.ico');
+    // points at the same generated .ico of its channel in the repository.
+    const icon = app.isPackaged ? undefined : path.join(__dirname, '..', '..', '..', 'resources', ...(ACTIVE_CHANNEL === 'staging' ? ['staging'] : []), 'icon', 'app.ico');
     const created = window = new BrowserWindow({width: 1280, height: 800, minWidth: 1100, minHeight: 720, title: CHANNEL.displayName, ...(icon && existsSync(icon) ? {icon} : {}),titleBarStyle: 'hidden', titleBarOverlay: {color: '#0B1120', symbolColor: '#D1D5DB', height: 32}, webPreferences: {preload: path.join(__dirname, 'preload.cjs'), contextIsolation: true, sandbox: true, nodeIntegration: false}});
     timeline?.('DASHBOARD_WINDOW_CREATED'); observeLoads(created.webContents, 'DASHBOARD');
     created.webContents.setWindowOpenHandler(() => ({action: 'deny'}));

@@ -107,12 +107,12 @@ assert.equal(sha256(packagedExecutor), sha256(executorBytes(build.channel)), 'Pa
 assert.ok(packagedExecutor.length > 0 && packagedExecutor.length <= 256 * 1024 && packagedExecutor.every(byte => byte === 9 || byte === 10 || byte === 13 || (byte >= 32 && byte < 127)),
   'Uninstall executor must be plain ASCII within 256 KiB');
 report.uninstallExecutor = {sha256: sha256(packagedExecutor), size: packagedExecutor.length};
-// The product icon (ET-045g): exactly the tracked resources/icon/app.ico, alone in its folder. The install and updated
+// The product icon (ET-045g): exactly the build channel's tracked app.ico (resources/icon or resources/staging/icon), alone in its folder. The install and updated
 // hooks place it in Squirrel's install root for the Installed apps entry; --installer checks the NuGet package carries it.
 const iconDirectory = path.join(directory, 'resources/icon');
 assert.deepEqual(readdirSync(iconDirectory).sort(), ['app.ico'], 'Unexpected files beside the packaged product icon');
 const iconBytes = readFileSync(path.join(iconDirectory, 'app.ico'));
-assert.equal(sha256(iconBytes), sha256(readFileSync('resources/icon/app.ico')), 'Packaged product icon differs from the tracked icon');
+assert.equal(sha256(iconBytes), sha256(readFileSync(build.channel === 'staging' ? 'resources/staging/icon/app.ico' : 'resources/icon/app.ico')), "Packaged product icon differs from the build channel's tracked icon");
 report.productIcon = {sha256: sha256(iconBytes), size: iconBytes.length};
 if (installerCheck) report.installer = inspectInstaller({packageDirectory: directory, makeDirectory: path.resolve(MAKE_DIRECTORY), version: build.version, identity});
 mkdirSync('.local/diagnostics', {recursive: true});
