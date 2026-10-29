@@ -86,6 +86,8 @@ export interface V1IngestionOptions {
   /** Fixed codes and numbers only. */
   diagnose?: (event: string, facts?: DiagnosticFacts) => void;
   onState?: (state: V1SourceState) => void;
+  /** Internal E9 health: live-only checkpoint or durable successful commit, from the still-active connection. */
+  onHealthy?: (target: GameTarget | undefined) => void;
 }
 
 /** The service receive clock went backwards or is not finite; not a protocol violation of the source. */
@@ -263,7 +265,7 @@ export class V1Ingestion {
     };
     // E9: a durable connection proves itself healthy with its first successful commit, a live-only one with its checkpoint;
     // only then does the reconnect backoff restart, so a persistent retryable storage failure keeps backing off.
-    const healthy = () => { if (active()) this.attempt = 0; };
+    const healthy = () => { if (active()) {this.attempt = 0; this.options.onHealthy?.(socket.target);} };
     const link = {
       committed: healthy,
       current: () => active() && !ended,

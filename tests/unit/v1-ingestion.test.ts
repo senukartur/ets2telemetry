@@ -190,7 +190,7 @@ describe('ET-006b protocol v1 ingestion', () => {
     return waited;
   }
   it('reconnects after 250, 500, 1000, 2000, 4000 and 4000 ms and resets after the first commit of a durable connection (E9)', async () => {
-    start({sink: new Sink()});
+    const onHealthy = vi.fn(); start({sink: new Sink(), onHealthy});
     const delays: number[] = [];
     for (let i = 0; i < 6; i++) {
       latest().emit('close');
@@ -201,26 +201,29 @@ describe('ET-006b protocol v1 ingestion', () => {
     expect(delays).toEqual([250, 500, 1000, 2000, 4000, 4000]);
     // A durable checkpoint alone does not prove the connection healthy; the backoff keeps its step.
     connectLatest(); latest().feed(frame('welcome'), frame('checkpoint')); await settle();
+    expect(onHealthy).not.toHaveBeenCalled();
     latest().emit('end');
     expect(state().status).toBe('disconnected');
     expect(await nextDelay()).toBe(4000);
     // The first successful commit does: the next reconnection waits 250 ms again.
     connectLatest(); latest().feed(frame('welcome'), frame('checkpoint'), frame('event-job-configured')); await settle();
     expect(latest().acks).toEqual(['1']);
+    expect(onHealthy).toHaveBeenCalledExactlyOnceWith(undefined);
     latest().emit('end');
     expect(await nextDelay()).toBe(250);
   });
 
   it('resets the backoff at the checkpoint of a live-only connection (E9)', async () => {
-    start();
+    const onHealthy = vi.fn(); start({onHealthy});
     for (const expected of [250, 500]) { latest().emit('close'); expect(await nextDelay()).toBe(expected); }
     connectLatest(); latest().feed(frame('welcome-live'), frame('checkpoint-live'));
+    expect(onHealthy).toHaveBeenCalledExactlyOnceWith(undefined);
     latest().emit('end');
     expect(await nextDelay()).toBe(250);
   });
 
   it('keeps backing off while a retryable storage failure persists, instead of reconnecting every 250 ms (E7, E9)', async () => {
-    const sink = new Sink(); sink.fail = 'DISK_FULL'; start({sink});
+    const onHealthy = vi.fn(), sink = new Sink(); sink.fail = 'DISK_FULL'; start({sink, onHealthy});
     const delays: number[] = [];
     for (let i = 0; i < 6; i++) {
       connectLatest();
@@ -230,9 +233,11 @@ describe('ET-006b protocol v1 ingestion', () => {
     }
     // Hand-written from E9: each hydrated connection is closed by the failed commit before it proves healthy.
     expect(delays).toEqual([250, 500, 1000, 2000, 4000, 4000]);
+    expect(onHealthy).not.toHaveBeenCalled();
     sink.fail = undefined;
     connectLatest(); latest().feed(frame('welcome'), frame('checkpoint'), frame('event-job-configured')); await settle();
     expect(latest().acks).toEqual(['1']);
+    expect(onHealthy).toHaveBeenCalledExactlyOnceWith(undefined);
     latest().emit('close');
     expect(await nextDelay()).toBe(250);
   });
@@ -646,4 +651,23 @@ it('retires current observations and clock identity immediately before waiting f
     expect(state().observation).toBeUndefined(); expect(state().clockMapping).toBeUndefined();
     await settle(); expect(completed).not.toHaveBeenCalled(); closed(); await retiring;
   } finally {closed(); await retiring;}
+});
+
+it('does not report health from an old successful commit after reconnecting to the same verified target', async () => {
+  const sink = new Sink(), onHealthy = vi.fn(), source = {...server('welcome').source, origin: 'game' as const};
+  const target = {source, processCreationTime: '123', userTag: 'a'.repeat(64)};
+  sink.hold = true;
+  start({sink, onHealthy, broker: {executable: 'isolated', discoveryDirectory: 'isolated'}, expectedTarget: target,
+    connectGame: () => {const socket = new FakeSocket(); socket.authority = source; socket.target = target; sockets.push(socket); return socket;}}, 'ets2');
+  const feed = (name: string) => latest().feed(edited(name, message => {message.source = source;}));
+  try {
+    connectLatest(); feed('welcome'); feed('checkpoint'); feed('event-job-configured'); await settle();
+    expect(sink.held).toHaveLength(1); const old = latest();
+    await ingestion!.retire(); ingestion!.select('ets2'); connectLatest(); feed('welcome'); feed('checkpoint'); await settle();
+    expect(onHealthy).not.toHaveBeenCalled();
+    sink.hold = false; sink.held.splice(0).forEach(release => release()); await settle();
+    expect(sink.commits).toEqual(['event 1']); expect(old.acks).toEqual([]); expect(onHealthy).not.toHaveBeenCalled();
+    feed('event-job-configured'); await settle();
+    expect(latest().acks).toEqual(['1']); expect(onHealthy).toHaveBeenCalledExactlyOnceWith(target);
+  } finally {sink.hold = false; sink.held.splice(0).forEach(release => release());}
 });

@@ -341,7 +341,7 @@ async function stoppedService(stopProbe: (report: ProbeDependencies['report']) =
   // The native client is replaced by a recorder so the production connectGame closures can be called without a broker.
   const pipeClients: unknown[][] = [];
   vi.doMock('../../apps/desktop/src/native-pipe-client', async importOriginal => ({...await importOriginal<typeof import('../../apps/desktop/src/native-pipe-client')>(),
-    NativePipeClient: class extends EventEmitter {readonly completion = Promise.resolve(); constructor(...args: unknown[]) {super(); pipeClients.push(args);}}}));
+    NativePipeClient: class extends EventEmitter {readonly completion = Promise.resolve(); constructor(...args: unknown[]) {super(); pipeClients.push(args);} destroy() {}}}));
   const discovery = vi.fn(options.discovery ?? (() => Promise.resolve({ets2: {status: 'absent'}, ats: {status: 'absent'}} as GameDiscovery)));
   vi.doMock('../../apps/desktop/src/native-game-discovery', async importOriginal => ({...await importOriginal<typeof import('../../apps/desktop/src/native-game-discovery')>(), discoverGames: discovery}));
   await loadService();
@@ -419,7 +419,7 @@ it('runs protocol v1 beside v0 with the history recorder, following each selecti
     // E2, amended by the game recording enablement of October 25, 2026: the default plan gives the ETS2 and ATS selections
     // the history recorder, so their hello asks for durable delivery; the synthetic and replay selections stay live-only.
     expect(f.v1.options).toHaveLength(1);
-    expect(Object.keys(f.v1.options[0]).sort()).toEqual(['connectGame', 'diagnose', 'durableReady', 'durableSelections', 'onState', 'sink']);
+    expect(Object.keys(f.v1.options[0]).sort()).toEqual(['connectGame', 'diagnose', 'durableReady', 'durableSelections', 'onHealthy', 'onState', 'sink']);
     expect(f.v1.options[0].durableSelections).toEqual(['ets2', 'ats']);
     expect(f.v1.select).not.toHaveBeenCalled();
     const executable = 'C:\\fixed\\telemetry-pipe-client.exe';
@@ -504,7 +504,7 @@ describe('ET-015a recording gate in the service (R3, R10, R14)', () => {
     const f = await stoppedService(stopProbe);
     try {
       const options = f.v1.options[0];
-      expect(Object.keys(options).sort()).toEqual(['connectGame', 'diagnose', 'durableReady', 'durableSelections', 'onState', 'sink']);
+      expect(Object.keys(options).sort()).toEqual(['connectGame', 'diagnose', 'durableReady', 'durableSelections', 'onHealthy', 'onState', 'sink']);
       expect(options.durableSelections).toEqual(['ets2', 'ats']);
       expect(options.sink?.constructor.name).toBe('TripRecorderSink');
       expect(f.history.options).toHaveLength(1);
@@ -523,7 +523,7 @@ describe('ET-015a recording gate in the service (R3, R10, R14)', () => {
     const f = await stoppedService(stopProbe);
     try {
       const options = f.v1.options[0];
-      expect(Object.keys(options).sort()).toEqual(['connectGame', 'diagnose', 'durableReady', 'durableSelections', 'onState', 'sink']);
+      expect(Object.keys(options).sort()).toEqual(['connectGame', 'diagnose', 'durableReady', 'durableSelections', 'onHealthy', 'onState', 'sink']);
       expect(options.durableSelections).toEqual(['synthetic']);
       // A fresh module instance per case, so the recorder is identified by its class name rather than instanceof.
       expect(options.sink?.constructor.name).toBe('TripRecorderSink');
@@ -543,7 +543,7 @@ describe('ET-015a recording gate in the service (R3, R10, R14)', () => {
     const f = await stoppedService(stopProbe);
     try {
       expect(f.log.mock.calls.filter(call => call[0] === 'RECORDING_TARGET_REJECTED')).toEqual([['RECORDING_TARGET_REJECTED']]);
-      expect(Object.keys(f.v1.options[0]).sort()).toEqual(['connectGame', 'diagnose', 'durableReady', 'durableSelections', 'onState', 'sink']);
+      expect(Object.keys(f.v1.options[0]).sort()).toEqual(['connectGame', 'diagnose', 'durableReady', 'durableSelections', 'onHealthy', 'onState', 'sink']);
       expect(f.v1.options[0].durableSelections).toEqual(['ets2', 'ats']);
       expect(f.history.options[0].target).toEqual({purpose: 'history'});
       expect(f.history.options[0].onOpened).toBeTypeOf('function');
@@ -979,5 +979,17 @@ it('resolves automatic intent to one target for both service ingestors and repub
     const state = v1SourceState('snapshot-live', {selection: 'ats'}); state.observation!.source = target.source;
     f.v1.options[0].onState!(state); port.consume(); await vi.advanceTimersByTimeAsync(50);
     expect(port.messages.at(-1)!.update).toMatchObject({selection: 'game', v1: {selection: 'game', observation: {source: target.source}}});
+    const terminal: V1SourceState = {...state, status: 'disconnected', fresh: false, reason: 'Source ended (plugin-shutdown)'};
+    for (const delay of [250, 500]) {
+      const attached = f.v1.select.mock.calls.length;
+      f.v1.options[0].onState!(terminal); await vi.advanceTimersByTimeAsync(0);
+      await vi.advanceTimersByTimeAsync(delay - 1); expect(f.v1.select).toHaveBeenCalledTimes(attached);
+      await vi.advanceTimersByTimeAsync(1); expect(f.v1.select).toHaveBeenCalledTimes(attached + 1);
+      f.v1.options[0].onState!(state);
+    }
+    // The runtime must forward the ingestion's matching E9 health event, not infer health from the live projection.
+    f.v1.options[0].onHealthy!(target); f.v1.options[0].onState!(terminal); await vi.advanceTimersByTimeAsync(0);
+    await vi.advanceTimersByTimeAsync(249); expect(f.v1.select).toHaveBeenCalledTimes(3);
+    await vi.advanceTimersByTimeAsync(1); expect(f.v1.select).toHaveBeenCalledTimes(4);
   } finally {f.stop(); await vi.advanceTimersByTimeAsync(0); f.restore(); vi.unstubAllEnvs();}
 });

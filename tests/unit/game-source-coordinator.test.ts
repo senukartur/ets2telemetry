@@ -42,12 +42,14 @@ it.each([['ets2', 'ats'], ['ats', 'ets2']] as const)('keeps %s stable then disco
   f.available(availability(target(first), target(next))); await vi.advanceTimersByTimeAsync(5000); expect(f.attach).toHaveBeenCalledTimes(1);
   f.coordinator.observe('v0', {status: 'disconnected', reason: 'Source closed'}); await settle(); expect(f.attach).toHaveBeenCalledTimes(1);
   f.available(availability(target(next))); f.coordinator.observe('v1', {status: 'disconnected', reason: 'Source closed'}); await settle();
+  expect(f.attach).toHaveBeenCalledTimes(1); await vi.advanceTimersByTimeAsync(250);
   expect(f.attach).toHaveBeenLastCalledWith(next, target(next)); expect(f.retire).toHaveBeenCalledTimes(2);
 });
 it('retires terminal sessions and binds a restarted game to its new plugin session', async () => {
   const f = fixture(availability(target())); f.coordinator.select({kind: 'game', selection: 'game'}, broker); await settle();
   const restarted = target('ets2', '33333333-3333-4333-8333-333333333333'); f.available(availability(restarted));
   f.coordinator.observe('v1', {status: 'disconnected', reason: 'Source ended (plugin-shutdown)'}); await settle();
+  expect(f.attach).toHaveBeenCalledTimes(1); await vi.advanceTimersByTimeAsync(250);
   expect(f.attach).toHaveBeenLastCalledWith('ets2', restarted);
 });
 it('retains explicit game mode and refuses ambiguous or mismatched candidates', async () => {
@@ -159,4 +161,59 @@ it.each(['stop', 'fixture'] as const)('cancels an ambiguity rescan on %s without
   f.available(availability(target())); await vi.advanceTimersByTimeAsync(10000);
   expect(f.discover).toHaveBeenCalledTimes(2);
   if (action === 'stop') expect(f.attach).not.toHaveBeenCalled(); else expect(f.attach).toHaveBeenCalledExactlyOnceWith('replay');
+});
+
+it.each([
+  ['both', 'game'], ['terminal', 'game'], ['both', 'ets2'], ['terminal', 'ets2']
+] as const)('paces repeated %s retirement cycles in %s mode until the connection proves healthy', async (loss, selection) => {
+  const f = fixture(availability(target())); f.coordinator.select({kind: 'game', selection}, broker); await settle();
+  for (const delay of [250, 500, 1000, 2000, 4000, 4000]) {
+    const attached = f.attach.mock.calls.length, scanned = f.discover.mock.calls.length;
+    // Hydration/connected status alone must not reset durable first-commit backoff.
+    f.coordinator.observe('v0', {status: 'connected', reason: 'Validated current observation'});
+    f.coordinator.observe('v1', {status: 'connected', reason: 'Validated current observation'});
+    if (loss === 'both') f.coordinator.observe('v0', {status: 'disconnected', reason: 'Source closed'});
+    f.coordinator.observe('v1', {status: 'disconnected', reason: loss === 'terminal' ? 'Source ended (plugin-shutdown)' : 'Source closed'});
+    await settle(); expect(f.retire).toHaveBeenCalledTimes(attached + 1);
+    await vi.advanceTimersByTimeAsync(delay - 1);
+    expect(f.discover).toHaveBeenCalledTimes(scanned); expect(f.attach).toHaveBeenCalledTimes(attached);
+    await vi.advanceTimersByTimeAsync(1); expect(f.attach).toHaveBeenCalledTimes(attached + 1);
+  }
+});
+it('restarts recovery backoff only for matching ingestion health or an explicit selection', async () => {
+  const f = fixture(availability(target())); f.coordinator.select({kind: 'game', selection: 'game'}, broker); await settle();
+  const drop = () => f.coordinator.observe('v1', {status: 'disconnected', reason: 'Source ended (plugin-shutdown)'});
+  drop(); await settle(); await vi.advanceTimersByTimeAsync(250);
+  f.coordinator.healthy(target('ats')); drop(); await settle();
+  await vi.advanceTimersByTimeAsync(499); expect(f.attach).toHaveBeenCalledTimes(2);
+  await vi.advanceTimersByTimeAsync(1); expect(f.attach).toHaveBeenCalledTimes(3);
+  f.coordinator.healthy(target()); drop(); await settle();
+  await vi.advanceTimersByTimeAsync(249); expect(f.attach).toHaveBeenCalledTimes(3);
+  await vi.advanceTimersByTimeAsync(1); expect(f.attach).toHaveBeenCalledTimes(4);
+  drop(); await settle(); f.coordinator.select({kind: 'game', selection: 'ets2'}, broker); await settle();
+  expect(f.attach).toHaveBeenCalledTimes(5); drop(); await settle();
+  await vi.advanceTimersByTimeAsync(250); expect(f.attach).toHaveBeenCalledTimes(6);
+});
+it('waits for retired children to close before starting recovery backoff', async () => {
+  const f = fixture(availability(target())); f.coordinator.select({kind: 'game', selection: 'game'}, broker); await settle();
+  let close!: () => void; f.retire.mockImplementationOnce(() => new Promise(resolve => {close = resolve;}));
+  f.coordinator.observe('v1', {status: 'disconnected', reason: 'Source ended (plugin-shutdown)'}); await settle();
+  try {
+    // Duplicate close notifications and a late predecessor health signal cannot replace the pending retirement.
+    f.coordinator.observe('v0', {status: 'disconnected', reason: 'Source closed'}); f.coordinator.healthy(target());
+    await vi.advanceTimersByTimeAsync(5000); expect(f.attach).toHaveBeenCalledTimes(1); expect(f.retire).toHaveBeenCalledTimes(2);
+  } finally {close();}
+  await settle(); await vi.advanceTimersByTimeAsync(249); expect(f.attach).toHaveBeenCalledTimes(1);
+  await vi.advanceTimersByTimeAsync(1); expect(f.attach).toHaveBeenCalledTimes(2);
+});
+it.each(['stop', 'fixture', 'explicit'] as const)('cancels automatic recovery on %s', async action => {
+  const f = fixture(availability(target())); f.coordinator.select({kind: 'game', selection: 'game'}, broker); await settle();
+  f.coordinator.observe('v1', {status: 'disconnected', reason: 'Source ended (plugin-shutdown)'}); await settle();
+  if (action === 'stop') await f.coordinator.stop();
+  else if (action === 'fixture') {f.coordinator.select({kind: 'fixture', selection: 'replay'}, broker); await settle();}
+  else {f.available(availability(target('ats'))); f.coordinator.select({kind: 'game', selection: 'ets2'}, broker); await settle();}
+  const scanned = f.discover.mock.calls.length;
+  await vi.advanceTimersByTimeAsync(249); expect(f.discover).toHaveBeenCalledTimes(scanned);
+  if (action !== 'explicit') {await vi.advanceTimersByTimeAsync(10000); expect(f.discover).toHaveBeenCalledTimes(scanned);}
+  expect(f.attach.mock.calls.map(call => call[0])).toEqual(action === 'fixture' ? ['ets2', 'replay'] : ['ets2']);
 });

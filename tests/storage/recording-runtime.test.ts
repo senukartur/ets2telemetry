@@ -342,12 +342,12 @@ class CoordinatedSocket extends EventEmitter {
   get acks() {return this.sent.flatMap(message => message.kind === 'ack' ? [message.data.throughEventSeq] : []);}
 }
 function coordinatedRuntime(worker: StorageWorkerHandle, env: Record<string, string> = {}) {
-  const sockets: CoordinatedSocket[] = [], publications: string[] = [];
+  const sockets: CoordinatedSocket[] = [], publications: string[] = [], healthy: GameTarget[] = [];
   let available: GameDiscovery = {ets2: {status: 'absent'}, ats: {status: 'absent'}}, discoveries = 0;
   const runtime = createRecordingRuntime({env, log: () => undefined, gameHistory: GAME_HISTORY_RECORDING, localAppData: ws.directory, createWorker: () => worker,
     connectGame: (_configuration, _game, target) => {const socket = new CoordinatedSocket(target!); sockets.push(socket); return socket;},
     historyOverrides: {appVersion: '0.1.0-test', closeGraceMs: TEST_CLOSE_GRACE_MS}, ingestionOverrides: {sampleFlushMs: NO_FLUSH_TIMER_MS},
-    onV1State: state => coordinator.observe('v1', state)});
+    onV1State: state => coordinator.observe('v1', state), onV1Healthy: target => {if (target) healthy.push(target); coordinator.healthy(target);}});
   const coordinator = new GameSourceCoordinator({
     discover: () => {discoveries++; return Promise.resolve(available);},
     retire: () => runtime.v1.retire(),
@@ -363,7 +363,7 @@ function coordinatedRuntime(worker: StorageWorkerHandle, env: Record<string, str
     const target: GameTarget = {source, processCreationTime: '123456789', userTag: 'a'.repeat(64)};
     available = {ets2: {status: 'absent'}, ats: {status: 'absent'}, [script.game]: {status: 'unique', target}};
   };
-  return {runtime, coordinator, sockets, publications, select, availableScript, discoveries: () => discoveries,
+  return {runtime, coordinator, sockets, publications, healthy, select, availableScript, discoveries: () => discoveries,
     stop: async () => {await coordinator.stop(); await runtime.v1.stop(); await runtime.history.close();}};
 }
 
@@ -416,6 +416,7 @@ describe('automatic selection across the real recording boundary (ET-056)', () =
       const next = f.sockets[1], second = new Script(ATS_A, 'ats'); next.emit('connect'); next.feed(second.welcome()); next.feed(second.checkpoint(null)); next.feed(second.event(r.jobConfigured()));
       traced.release(); await until(() => next.acks.includes('1'), 'the new game commit', HANG_GUARD_MS);
       expect(old.destroyed).toBe(true); expect(old.acks).toEqual([]);
+      expect(f.healthy).toEqual([next.target]);
       await f.stop(); expect(await worker.exit).toBe(0);
       expect(readOnly(historyFile(), db => db.prepare('SELECT count(*) AS count FROM events').get())).toEqual({count: 2});
     } finally {traced.release(); await f.stop();}

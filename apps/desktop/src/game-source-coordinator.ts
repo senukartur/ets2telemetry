@@ -46,7 +46,19 @@ export class GameSourceCoordinator {
     if (state.status === 'incompatible' || state.status === 'unavailable') {this.hardFailure = true; return;}
     this.lost[protocol] = state.status === 'disconnected' || state.reason === 'No selected game discovery record';
     const terminal = protocol === 'v1' && state.reason.startsWith('Source ended (');
-    if (!this.hardFailure && (terminal || this.lost.v0 && this.lost.v1)) this.select(this.mode!, this.broker);
+    if (!this.hardFailure && (terminal || this.lost.v0 && this.lost.v1)) {
+      this.invalidate();
+      const generation = this.generation;
+      this.work = this.work.then(async () => {
+        await this.ports.retire();
+        // Retirement clears old publications immediately; discovery waits for actual close and backoff.
+        if (this.current(generation)) this.retry(generation);
+      });
+    }
+  }
+  /** Only the current v1 connection's E9 health boundary may reset automatic recovery. */
+  healthy(target: GameTarget | undefined): void {
+    if (this.target && target && !this.hardFailure && sameTarget(this.target, target)) this.attempt = 0;
   }
   async stop(): Promise<void> {
     this.stopped = true; this.invalidate(); await this.work; await this.ports.retire();

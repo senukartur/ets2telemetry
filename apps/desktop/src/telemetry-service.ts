@@ -149,7 +149,7 @@ function onV1State(state: V1SourceState): void {
 const runtime = createRecordingRuntime({env: process.env, gameHistory: GAME_HISTORY_RECORDING, localAppData: process.env.LOCALAPPDATA, log,
   createWorker: () => historyWorker(__dirname), connectGame: (configuration, game, target) => new NativePipeClient(configuration, game, diagnoseV1Broker, 'v1', target),
   hardModeEvidence: () => hardMode.evidence(), onHardModeTrip: details => {port.postMessage({type: 'hard-mode', update: 'trip', trip: details});},
-  onV1State, onRecordingStatus: status => port.postMessage({type: 'recording', status})});
+  onV1State, onV1Healthy: target => coordinator.healthy(target), onRecordingStatus: status => port.postMessage({type: 'recording', status})});
 const v1 = runtime.v1;
 // ET-016 (J2, J4): journal reads from main, through the database the runtime opened, one at a time and only while it is
 // open. Main sends {type: 'journal', id, query}; the answer is {type: 'journal', id, result} with a fixed J11 code on refusal.
