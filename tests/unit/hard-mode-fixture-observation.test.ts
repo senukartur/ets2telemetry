@@ -20,7 +20,7 @@ const expected: FixtureExpectation = {language: 'ru', hint: 'air', details: true
 function snapshot(status: HardModeStatus = {assessment: failing(), trip: null}): FixtureSnapshot {
   return {status, language: 'ru', rows: expected.rules.map(({id, state, label, name}) => ({id, state, label, name, buttonCount: 1})),
     hint: {count: 1, visible: true, lines: [...expected.rules[1].tooltip]},
-    details: {count: 1, visible: true, rows: expected.rules.filter(rule => rule.state !== 'pass').map(rule => ({id: rule.id, lines: [...rule.details]}))}};
+    details: {count: 1, visible: true, rows: expected.rules.filter(rule => rule.state === 'fail').map(rule => ({id: rule.id, lines: [...rule.details]}))}};
 }
 it('reacquires genuine fail evidence after real monitor selection loss and waits for backend plus rendered agreement', async () => {
   const source: SourceIdentity = {game: 'ets2', origin: 'synthetic', processId: 123, windowsSessionId: 1,
@@ -87,7 +87,7 @@ it('awaits backend status before one self-contained DOM snapshot, including exac
   const rules = expected.rules.map(rule => ({getAttribute: (key: string) => key === 'data-testid' ? 'hard-mode-rule-' + rule.id : rule.state}));
   const tooltip = {getClientRects: () => [{}], querySelectorAll: () => paragraphs(expected.rules[1].tooltip)};
   const details = {getClientRects: () => [{}]};
-  const detailsRows = expected.rules.filter(rule => rule.state !== 'pass').map(rule => ({getAttribute: () => 'hard-mode-detail-rule-' + rule.id, querySelectorAll: () => paragraphs(rule.details)}));
+  const detailsRows = expected.rules.filter(rule => rule.state === 'fail').map(rule => ({getAttribute: () => 'hard-mode-detail-rule-' + rule.id, querySelectorAll: () => paragraphs(rule.details)}));
   const document = {documentElement: {lang: 'ru'}, querySelectorAll: (selector: string) => {
     domReads++;
     if (selector === '[data-testid^="hard-mode-rule-"]') return rules;
