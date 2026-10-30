@@ -516,7 +516,7 @@ export const RU_DICTIONARY: TranslationDictionary = channelCopyTable(Object.free
   'hm.col.setting': 'Настройка',
   'hm.col.required': 'Нужно',
   'hm.col.detected': 'В игре',
-  'hm.readonly': 'Только чтение: программа не меняет настройки игры. Измените их в игре: Опции → Геймплей; список обновится сам.',
+  'hm.fix': 'Измените в игре в разделе Опции → Геймплей: {settings}. Список обновится сам.',
   'hm.rule': 'Все 12 условий должны выполняться одновременно. Если ослабить любую настройку во время заказа, рейс теряет Hard Mode.',
   'hm.c.fuel': 'Реалистичный расход топлива',
   'hm.c.airbrake': 'Пневмотормоза',
@@ -802,7 +802,7 @@ export const RU_DICTIONARY: TranslationDictionary = channelCopyTable(Object.free
   "hm.state.pass": "выполнено",
   "hm.state.fail": "не выполнено",
   "hm.state.unknown": "неизвестно",
-  "hm.configuredCount": "Выполнено {n} из 12 условий настроек",
+  "hm.configuredCount": "{n} из 12",
   "hm.reading": "Чтение настроек…",
   "hm.checking": "Проверка…",
   "hm.progress": "Выполненные условия настроек Hard Mode",
@@ -883,6 +883,8 @@ export const RU_DICTIONARY: TranslationDictionary = channelCopyTable(Object.free
   'live.time': 'Время',
   'live.nextBreak': 'До обязательного перерыва',
   'hm.howChecked': 'Как проверяется Hard Mode',
+  'hm.now': 'Сейчас {detected} · нужно {required}',
+  'hm.required.parkingShort': 'Выкл. и умелая',
   'j.incomeNote': 'Ожидаемый доход из заказа. Фактическая выплата или штраф — в карточке рейса.',
   'tr.raw': 'Записанные данные: интервалы, события и сэмплы'
 }));

@@ -116,12 +116,13 @@ export async function runHardModeSmoke({application, dashboard, source, config, 
     const names = lang === 'en' ? ['Realistic fuel consumption', 'Air brake simulation', 'Police and fines', 'Fatigue simulation', 'Speed limiter', 'Truck stability', 'Trailer stability', 'Configured skilled parking', 'Rain probability', 'Random road events', 'Braking intensity', 'Traffic density'] : ['Реалистичный расход топлива', 'Пневмотормоза', 'Штрафы / полиция', 'Усталость', 'Ограничитель скорости', 'Стабилизация тягача', 'Стабилизация прицепа', 'Настроенная умелая парковка', 'Вероятность дождя', 'Случайные события', 'Интенсивность торможения', 'Плотность трафика'];
     const expected = localizedHints(lang), fail = lang === 'en' ? 'fail' : 'не выполнено', pass = lang === 'en' ? 'pass' : 'выполнено';
     const detectedLabel = lang === 'en' ? 'Detected' : 'Обнаружено', requiredLabel = lang === 'en' ? 'Required' : 'Требуется', reasonLabel = lang === 'en' ? 'Reason' : 'Причина';
-    const values = [[1],[1],[1],[0],[1],[0.5],[0.5],[0,2],[0.12],[0.3],[0.75],[1]];
+    const values = [[1],[1],[1],[0],[1],[0.5],[0.5],[0,2],[0.12],[0.3],[0.75],[1]], short = text => text.replace(/ \([^)]*\)/g, '');
     const fixtureRules = expected.map(([id, detected, required, reason], index) => {
       const label = `${names[index]}: ${id === 'fatigue' ? fail : pass}`;
       return {id, state: id === 'fatigue' ? 'fail' : 'pass', values: values[index], reason: id === 'fatigue' ? 'outside-limit' : 'compliant',
         label, name: names[index], tooltip: [label, `${detectedLabel}: ${detected}`, `${requiredLabel}: ${required}`, `${reasonLabel}: ${reason}`],
-        details: [`${detectedLabel}: ${detected}`, `${requiredLabel}: ${required}`]};
+        // The grid line drops the config values in parentheses; it is read only for the failing rule.
+        details: [lang === 'en' ? `Now ${short(detected)} · required ${short(required)}` : `Сейчас ${short(detected)} · нужно ${short(required)}`]};
     });
     const renderedFixture = (message, options = {}) => {
       const observation = {message}; (record.fixtureWaits ??= []).push(observation);
@@ -200,12 +201,13 @@ export async function runHardModeSmoke({application, dashboard, source, config, 
   assert.match(await dashboard.getByTestId('hard-mode-loss').innerText(), /Qualification cannot be restored/);
   record.lost = true; await dashboard.getByTestId('hard-mode-card').screenshot({path: path.join(config.output, 'hard-mode-lost.png')});
   await source.settings('pass'); await until(async () => (await current(dashboard)).assessment.state, value => value === 'pass', 'HARD_MODE_RESTORED_SETTINGS', 8000);
-  await until(() => dashboard.getByTestId('hard-mode-card').innerText(), text => text.includes('12 of 12 configured rules pass'), 'HARD_MODE_RENDERED_RESTORATION', 5000);
+  await until(() => dashboard.locator('[data-testid="hard-mode-card"] .yu-hard-mode-progress [role="status"]').innerText(), text => text === '12 of 12', 'HARD_MODE_RENDERED_RESTORATION', 5000);
   assert.equal(await dashboard.getByTestId('hard-mode-card').getAttribute('data-state'), 'lost');
   assert.match(await dashboard.getByTestId('hard-mode-card').innerText(), /Hard Mode lost for this trip/);
   record.restoredLost = true; await dashboard.getByTestId('hard-mode-card').screenshot({path: path.join(config.output, 'hard-mode-restored-lost.png')});
   await dashboard.evaluate(() => globalThis.desktop.setLanguage('ru'));
-  await until(() => dashboard.getByTestId('hard-mode-card').innerText(), text => text.includes('Выполнено 12 из 12') && text.includes('восстановить нельзя'), 'HARD_MODE_PAGE_HOT_LANGUAGE', 5000);
+  await until(() => dashboard.getByTestId('hard-mode-card').innerText(), text => text.includes('восстановить нельзя'), 'HARD_MODE_PAGE_HOT_LANGUAGE', 5000);
+  assert.equal(await dashboard.locator('[data-testid="hard-mode-card"] .yu-hard-mode-progress [role="status"]').innerText(), '12 из 12');
   assert.doesNotMatch(await dashboard.getByTestId('hard-mode-card').innerText(), /Detected:|Required:|Current settings|Qualification cannot/);
   await dashboard.screenshot({path: path.join(config.output, 'hard-mode-restored-lost-ru.png')});
   await screen(dashboard, 'live');

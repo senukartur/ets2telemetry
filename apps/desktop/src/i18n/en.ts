@@ -516,7 +516,7 @@ export const EN_DICTIONARY: TranslationDictionary = channelCopyTable(Object.free
   'hm.col.setting': 'Setting',
   'hm.col.required': 'Required',
   'hm.col.detected': 'In game',
-  'hm.readonly': 'Read-only: the app never changes game settings. Change them in the game under Options → Gameplay; this list updates on its own.',
+  'hm.fix': 'Change in the game under Options → Gameplay: {settings}. This list updates on its own.',
   'hm.rule': 'All 12 must pass at the same time. Relaxing any of them during a job removes Hard Mode from that trip.',
   'hm.c.fuel': 'Realistic fuel consumption',
   'hm.c.airbrake': 'Air brake simulation',
@@ -802,7 +802,7 @@ export const EN_DICTIONARY: TranslationDictionary = channelCopyTable(Object.free
   "hm.state.pass": "pass",
   "hm.state.fail": "fail",
   "hm.state.unknown": "unknown",
-  "hm.configuredCount": "{n} of 12 configured rules pass",
+  "hm.configuredCount": "{n} of 12",
   "hm.reading": "Reading settings…",
   "hm.checking": "Checking…",
   "hm.progress": "Configured Hard Mode rules passing",
@@ -883,6 +883,8 @@ export const EN_DICTIONARY: TranslationDictionary = channelCopyTable(Object.free
   'live.time': 'Time',
   'live.nextBreak': 'Next mandatory break',
   'hm.howChecked': 'How Hard Mode is checked',
+  'hm.now': 'Now {detected} · required {required}',
+  'hm.required.parkingShort': 'Off and skilled',
   'j.incomeNote': 'Expected income from the job. The actual payment or penalty is in the trip details.',
   'tr.raw': 'Recorded data: intervals, events and samples'
 }));

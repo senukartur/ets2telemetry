@@ -413,7 +413,7 @@ export type I18nKey =
   | 'hm.title' | 'hm.active' | 'hm.inactive' | 'hm.lost' | 'hm.count'
   | 'hm.lostText' | 'hm.tripYes' | 'hm.tripNo'
   | 'hm.profile' | 'hm.file' | 'hm.read' | 'hm.recheck'
-  | 'hm.col.setting' | 'hm.col.required' | 'hm.col.detected' | 'hm.readonly'
+  | 'hm.col.setting' | 'hm.col.required' | 'hm.col.detected' | 'hm.fix'
   | 'hm.rule'
   | 'hm.c.fuel' | 'hm.c.airbrake' | 'hm.c.police' | 'hm.c.fatigue' | 'hm.c.limiter'
   | 'hm.c.truckstab' | 'hm.c.trailerstab' | 'hm.c.parking' | 'hm.c.rain' | 'hm.c.events' | 'hm.c.brake' | 'hm.c.traffic'
@@ -477,6 +477,6 @@ export type I18nKey =
   | 'upd.check' | 'upd.check.pending' | 'upd.check.upToDate' | 'upd.check.available' | 'upd.check.failed' | 'upd.check.unsupported' | 'upd.check.ready' | 'upd.check.rejected'
   | 'ver.line' | 'ver.unknown' | 'ver.dev' | 'ver.staging' | 'ver.stagingA'
   | 'lang.title' | 'lang.en' | 'lang.ru' | 'lang.saveFailed'
-  | 'ui.moreAbout' | 's.interface' | 'live.time' | 'live.nextBreak' | 'hm.howChecked' | 'j.incomeNote' | 'tr.raw';
+  | 'ui.moreAbout' | 's.interface' | 'live.time' | 'live.nextBreak' | 'hm.howChecked' | 'hm.now' | 'hm.required.parkingShort' | 'j.incomeNote' | 'tr.raw';
 
 export type TranslationDictionary = Readonly<Record<I18nKey, string>>;

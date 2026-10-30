@@ -37,8 +37,8 @@ function matchesFixture(snapshot, expected) {
     if (!hint || hint.count !== 1 || !hint.visible || JSON.stringify(hint.lines.slice(0, 4)) !== JSON.stringify(rule.tooltip)) return false;
   }
   if (expected.details) {
-    // ET-057: only a rule that does not pass shows its detected and required values in the grid.
-    const details = snapshot.details, shown = expected.rules.filter(rule => rule.state !== 'pass');
+    // ET-057: only a failing rule shows its current and required values in the grid.
+    const details = snapshot.details, shown = expected.rules.filter(rule => rule.state === 'fail');
     if (!details || details.count !== 1 || !details.visible || details.rows?.length !== shown.length) return false;
     if (!shown.every((rule, index) => details.rows[index].id === rule.id && JSON.stringify(details.rows[index].lines) === JSON.stringify(rule.details))) return false;
   }

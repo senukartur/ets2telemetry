@@ -1,9 +1,9 @@
 import React from 'react';
-import {Flame} from 'lucide-react';
+import {Flame, TriangleAlert} from 'lucide-react';
 import type {HardModeDetails} from '../../../../packages/contracts/src/hard-mode';
 import {Button} from '../components/ui/button';
 import {Badge} from '../components/ui/badge';
-import {Card, CardContent, CardHeader, CardTitle} from '../components/ui/card';
+import {Card, CardContent, CardTitle} from '../components/ui/card';
 import {Tooltip, TooltipContent, TooltipProvider, TooltipTrigger} from '../components/ui/tooltip';
 import {t, type AppLanguage} from '../i18n';
 import {InfoHint} from '../info-hint';
@@ -26,36 +26,38 @@ export function HardModeTrip({qualified, details, language = 'en'}: {qualified: 
   </section>;
 }
 /**
- * The Hard Mode page (ET-057): the twelve rules as one grid. A passing rule shows its mark and name; a failing or unknown
- * rule also shows its detected and required values. Every rule's full detail (state, values, reason) is in its tooltip,
- * and the read-only caveats are behind one Info icon next to the headline.
+ * The Hard Mode page (ET-057): one card with the headline, source and recheck on one row, a full-width progress bar and
+ * the twelve rules as a grid. A passing or unknown rule shows its mark and name; a failing rule also shows its current and
+ * required values on one line, and the in-game fix names the failing settings. Every rule's full detail (state, values,
+ * reason) is in its tooltip, and the read-only caveats are behind one Info icon next to the headline.
  */
 export function HardModeCard({language = 'en', controller}: {language?: AppLanguage; controller: HardModeController}) {
   const {status, now, busy, error, loaded, check} = controller;
   const view = hardModeView(status, now, language);
-  const failing = view.rows.some(row => row.state !== 'pass');
-  return <Card data-testid="hard-mode-card" data-state={status.trip?.firstLoss ? 'lost' : status.assessment.state}><CardHeader><CardTitle><h2 className="flex items-center gap-2"><Flame className="size-5" aria-hidden="true" />{view.headline}
-    <InfoHint label={t('hm.howChecked', undefined, language)} side="bottom" align="start" testId="hard-mode-caveats">
-      <span className="block">{t('hm.rule', undefined, language)}</span>
-      <span className="block">{t('hm.notice', undefined, language)}</span>
-      <span className="block">{t('hm.distinction', undefined, language)}</span>
-    </InfoHint></h2></CardTitle></CardHeader>
-    <CardContent className="yu-hard-mode-summary"><div className="yu-hard-mode-overview"><div><p role="status">{!loaded ? t('hm.reading', undefined, language) : t('hm.configuredCount', {n: view.passed}, language)}</p>
-      <progress className="h-2 w-full" value={view.passed} max={12} aria-label={t('hm.progress', undefined, language)} />
-      <p data-testid="hard-mode-source" className="yu-muted">{view.source} · {view.age}</p></div>
-      <Button disabled={busy} onClick={check} data-testid="hard-mode-refresh">{t(busy ? 'hm.checking' : 'hm.recheck', undefined, language)}</Button></div>
-      {error ? <p role="status">{t('hm.unavailable', undefined, language)}</p> : null}
-      {view.loss ? <p role="status" data-testid="hard-mode-loss">{view.loss}</p> : null}
-      {loaded && failing ? <p className="yu-muted" data-testid="hard-mode-fix">{t('hm.readonly', undefined, language)}</p> : null}
-      <TooltipProvider disableHoverableContent delayDuration={100} skipDelayDuration={0}><ol className="yu-hard-mode-grid" data-testid="hard-mode-details">{view.rows.map(row => <li key={row.id} data-testid={`hard-mode-rule-${row.id}`} data-state={row.state}>
-        <Tooltip><TooltipTrigger asChild><button type="button" data-testid={`hard-mode-name-${row.id}`} aria-label={`${row.label}: ${row.stateText}`} className="rounded-sm text-left focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring">
-          <span aria-hidden="true">{row.state === 'pass' ? '✓' : row.state === 'fail' ? '✕' : '?'}</span> <span>{row.label}</span>
-        </button></TooltipTrigger><TooltipContent data-testid={`hard-mode-hint-${row.id}`}>
-          <p className="font-medium">{row.label}: {row.stateText}</p><p>{t('hm.detected', {value: row.detected}, language)}</p><p>{t('hm.required', {value: row.required}, language)}</p>
-          <p>{t('hm.reason', {value: row.reason}, language)}</p>
-        </TooltipContent></Tooltip>
-        {row.state === 'pass' ? null : <div className="yu-hard-mode-values" data-testid={`hard-mode-detail-rule-${row.id}`}>
-          <p>{t('hm.detected', {value: row.detected}, language)}</p><p>{t('hm.required', {value: row.required}, language)}</p></div>}
-      </li>)}</ol></TooltipProvider>
-    </CardContent></Card>;
+  const failing = view.rows.filter(row => row.state === 'fail');
+  return <Card data-testid="hard-mode-card" data-state={status.trip?.firstLoss ? 'lost' : status.assessment.state}><CardContent className="yu-hard-mode-summary">
+    <div className="yu-hard-mode-head"><CardTitle><h2 className="flex items-center gap-2"><Flame className="size-5" aria-hidden="true" />{view.headline}
+      <InfoHint label={t('hm.howChecked', undefined, language)} side="bottom" align="start" testId="hard-mode-caveats">
+        <span className="block">{t('hm.rule', undefined, language)}</span>
+        <span className="block">{t('hm.notice', undefined, language)}</span>
+        <span className="block">{t('hm.distinction', undefined, language)}</span>
+      </InfoHint></h2></CardTitle>
+      <p data-testid="hard-mode-source" className="yu-muted">{view.source} · {view.age}</p>
+      <Button variant="outline" disabled={busy} onClick={check} data-testid="hard-mode-refresh">{t(busy ? 'hm.checking' : 'hm.recheck', undefined, language)}</Button></div>
+    <div className="yu-hard-mode-progress"><progress value={view.passed} max={12} aria-label={t('hm.progress', undefined, language)} data-state={status.assessment.state} />
+      <p role="status">{!loaded ? t('hm.reading', undefined, language) : t('hm.configuredCount', {n: view.passed}, language)}</p></div>
+    {error ? <p role="status">{t('hm.unavailable', undefined, language)}</p> : null}
+    {view.loss ? <p role="status" data-testid="hard-mode-loss">{view.loss}</p> : null}
+    {loaded && failing.length ? <p className="yu-hard-mode-fix" data-testid="hard-mode-fix"><TriangleAlert aria-hidden="true" />{t('hm.fix', {settings: failing.map(row => row.label).join(', ')}, language)}</p> : null}
+    <TooltipProvider disableHoverableContent delayDuration={100} skipDelayDuration={0}><ol className="yu-hard-mode-grid" data-testid="hard-mode-details">{view.rows.map(row => <li key={row.id} data-testid={`hard-mode-rule-${row.id}`} data-state={row.state}>
+      <Tooltip><TooltipTrigger asChild><button type="button" data-testid={`hard-mode-name-${row.id}`} aria-label={`${row.label}: ${row.stateText}`} className="rounded-sm text-left focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring">
+        <span className="yu-hard-mode-mark" aria-hidden="true">{row.state === 'pass' ? '✓' : row.state === 'fail' ? '✕' : '?'}</span>
+        <span>{row.label}</span>
+      </button></TooltipTrigger><TooltipContent data-testid={`hard-mode-hint-${row.id}`}>
+        <p className="font-medium">{row.label}: {row.stateText}</p><p>{t('hm.detected', {value: row.detected}, language)}</p><p>{t('hm.required', {value: row.required}, language)}</p>
+        <p>{t('hm.reason', {value: row.reason}, language)}</p>
+      </TooltipContent></Tooltip>
+      {row.state === 'fail' ? <div className="yu-hard-mode-values" data-testid={`hard-mode-detail-rule-${row.id}`}><p>{row.inline}</p></div> : null}
+    </li>)}</ol></TooltipProvider>
+  </CardContent></Card>;
 }

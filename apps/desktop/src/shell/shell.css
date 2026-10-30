@@ -228,25 +228,21 @@ h1[tabindex="-1"]:focus { outline: none; }
 
 .yu-tank-unavailable { position: absolute; inset: 0; display: grid; place-items: center; color: var(--yu-text-muted); font-size: 20px; }
 
-/* Hard Mode is a full page: essential evidence is inline, with ordinary content scrolling. */
+/* Hard Mode is one card: headline row, full-width progress, the in-game fix and a grid of the twelve rules (ET-057). */
 [data-testid="hard-mode-card"] { min-width: 0; container-type: inline-size; }
-.yu-hard-mode-summary { display: grid; gap: 18px; }
-.yu-hard-mode-overview { display: flex; gap: 24px; align-items: start; justify-content: space-between; }
-.yu-hard-mode-overview > div { flex: 1; max-width: 540px; min-width: 0; }
-.yu-hard-mode-overview [role="status"] { font-size: 16px; font-weight: 600; margin-bottom: 8px; }
-.yu-hard-mode-overview progress { accent-color: var(--yu-accent-light); display: block; margin-bottom: 10px; }
-.yu-hard-mode-rules { display: grid; grid-template-columns: repeat(2,minmax(0,1fr)); gap: 14px; padding: 0; margin: 0; list-style: none; }
-.yu-hard-mode-rules li { min-width: 0; border: 1px solid var(--yu-border); border-radius: 10px; padding: 12px 14px; background: var(--yu-bg-inset); }
-.yu-hard-mode-rules button { display: flex; gap: 8px; align-items: center; width: 100%; min-height: 32px; text-align: left; font-weight: 600; line-height: 1.5; }
-.yu-hard-mode-rules button > span:first-child { flex: none; }
-.yu-hard-mode-values { display: grid; gap: 5px; margin-top: 8px; line-height: 1.5; }
-.yu-hard-mode-state { color: var(--yu-text-secondary); }
-.yu-hard-mode-rules [data-state="fail"] .yu-hard-mode-state { color: var(--yu-err-fg); }
-.yu-hard-mode-rules [data-state="pass"] .yu-hard-mode-state { color: var(--yu-ok-fg); }
-@container (max-width: 680px) {
-  .yu-hard-mode-rules { grid-template-columns: minmax(0,1fr); }
-  .yu-hard-mode-overview { flex-wrap: wrap; gap: 12px; }
-}
+.yu-hard-mode-summary { display: grid; gap: 14px; }
+.yu-hard-mode-head { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; }
+.yu-hard-mode-head > [data-slot="card-title"] { min-width: 0; }
+.yu-hard-mode-head > [data-testid="hard-mode-source"] { margin: 0 0 0 auto; }
+.yu-hard-mode-progress { display: flex; align-items: center; gap: 12px; }
+.yu-hard-mode-progress progress { flex: 1; min-width: 0; height: 8px; border: 0; border-radius: 999px; overflow: hidden; appearance: none; background: var(--yu-border); }
+.yu-hard-mode-progress progress::-webkit-progress-bar { background: var(--yu-border); border-radius: 999px; }
+.yu-hard-mode-progress progress::-webkit-progress-value { background: var(--yu-text-secondary); border-radius: 999px; }
+.yu-hard-mode-progress progress[data-state="pass"]::-webkit-progress-value { background: var(--yu-ok-fg); }
+.yu-hard-mode-progress progress[data-state="fail"]::-webkit-progress-value { background: var(--yu-warn-fg); }
+.yu-hard-mode-progress [role="status"] { flex: none; margin: 0; font-weight: 600; }
+.yu-hard-mode-fix { display: flex; align-items: center; gap: 8px; margin: 0; padding: 10px 12px; border: 1px solid var(--yu-warn-border); border-radius: 10px; background: var(--yu-warn-bg); color: var(--yu-warn-fg); }
+.yu-hard-mode-fix > svg { flex: none; width: 16px; height: 16px; }
 
 @container (max-width: 560px) {
   .yu-instrument > [data-slot="card-content"] { grid-template-columns: minmax(0,1fr) 64px; }
@@ -309,15 +305,17 @@ button[aria-disabled="true"], [role="switch"][aria-disabled="true"] { cursor: no
 .yu-live-details[open] > summary { border-bottom: 1px solid var(--yu-divider); }
 .yu-live-details > .yu-live-fields { padding: 14px 16px; }
 .yu-live-bottom-2 { display: grid; grid-template-columns: repeat(2, minmax(0,1fr)); gap: 14px; }
-.yu-hard-mode-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(230px, 1fr)); gap: 8px; align-items: start; padding: 0; margin: 0; list-style: none; }
-.yu-hard-mode-grid > li { display: flex; flex-direction: column; justify-content: center; gap: 2px; min-height: 44px; padding: 6px 10px; border: 1px solid var(--yu-divider); border-radius: 10px; background: var(--yu-bg-inset); }
+.yu-hard-mode-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; align-items: stretch; padding: 0; margin: 0; list-style: none; }
+.yu-hard-mode-grid > li { display: flex; flex-direction: column; justify-content: center; gap: 2px; min-height: 44px; padding: 4px 12px; border: 1px solid var(--yu-divider); border-radius: 10px; background: var(--yu-bg-inset); }
 .yu-hard-mode-grid > li[data-state="fail"] { border-color: var(--yu-warn-border); background: var(--yu-warn-bg); }
-.yu-hard-mode-grid > li[data-state="unknown"] { border-color: var(--yu-neutral-border); }
 .yu-hard-mode-grid > li > button { display: flex; align-items: center; gap: 8px; min-height: 32px; width: 100%; text-align: left; font-weight: 500; }
-.yu-hard-mode-grid > li[data-state="pass"] > button > span:first-child { color: var(--yu-ok-fg); }
-.yu-hard-mode-grid > li[data-state="fail"] > button > span:first-child { color: var(--yu-warn-fg); }
-.yu-hard-mode-grid .yu-hard-mode-values { font-size: 12px; color: var(--yu-warn-fg); padding-left: 22px; }
+.yu-hard-mode-mark { flex: none; width: 16px; text-align: center; color: var(--yu-text-secondary); }
+.yu-hard-mode-grid > li[data-state="pass"] .yu-hard-mode-mark { color: var(--yu-ok-fg); }
+.yu-hard-mode-grid > li[data-state="fail"] .yu-hard-mode-mark { color: var(--yu-warn-fg); }
+.yu-hard-mode-grid .yu-hard-mode-values { margin-top: -6px; padding: 0 0 6px 24px; font-size: 12px; color: var(--yu-warn-fg); }
 .yu-hard-mode-grid .yu-hard-mode-values p { margin: 0; }
+@container (max-width: 760px) { .yu-hard-mode-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+@container (max-width: 480px) { .yu-hard-mode-grid { grid-template-columns: minmax(0, 1fr); } }
 .yu-trip-raw { border: 1px solid var(--yu-border); border-radius: 10px; background: var(--yu-bg-inset); }
 .yu-trip-raw > summary { cursor: pointer; list-style: none; display: flex; align-items: center; gap: 8px; padding: 12px 14px; font-weight: 600; color: var(--yu-text-secondary); }
 .yu-trip-raw > summary::-webkit-details-marker { display: none; }
