@@ -24,7 +24,7 @@ h1[tabindex="-1"]:focus { outline: none; }
 .yu-titlebar { display: flex; align-items: center; gap: 8px; height: 32px; padding: 0 160px 0 10px; background: var(--yu-bg-chrome); color: var(--yu-text-muted); border-bottom: 1px solid var(--yu-divider-chrome); font-size: 12px; app-region: drag; -webkit-app-region: drag; user-select: none; }
 .yu-titlebar img { width: 20px; height: 20px; object-fit: contain; }
 .yu-body { display: grid; grid-template-columns: 220px minmax(0,1fr); min-height: 0; }
-.yu-sidebar { display: flex; flex-direction: column; min-height: 0; overflow-y: auto; padding: 18px 12px 12px; background: var(--yu-bg-chrome); border-right: 1px solid var(--yu-divider-chrome); }
+.yu-sidebar { position: relative; display: flex; flex-direction: column; min-height: 0; overflow-y: auto; padding: 18px 12px 12px; background: var(--yu-bg-chrome); border-right: 1px solid var(--yu-divider-chrome); }
 .yu-lockup { display: flex; gap: 12px; align-items: center; margin: 0 4px 24px; }
 .yu-lockup img { width: 40px; height: 40px; object-fit: contain; }
 .yu-lockup strong { display: block; font-size: 15px; } .yu-lockup small { font-size: 11px; color: var(--yu-text-muted); }
@@ -74,7 +74,8 @@ h1[tabindex="-1"]:focus { outline: none; }
 .yu-column { min-width: 0; min-height: 0; display: flex; flex-direction: column; }
 .yu-topbar { min-height: 52px; display: flex; flex-wrap: wrap; align-items: center; gap: 8px; padding: 10px 20px; border-bottom: 1px solid var(--yu-divider-chrome); background: var(--yu-bg-chrome); }
 .yu-topbar h1 { font-size: 18px; font-weight: 700; margin-right: auto; }
-.yu-content { flex: 1; min-height: 0; overflow: auto; padding: 18px 20px; }
+/* Relative: visually hidden (sr-only) descriptions stay inside the scroll area instead of growing the window (ET-057). */
+.yu-content { position: relative; flex: 1; min-height: 0; overflow: auto; scrollbar-gutter: stable; padding: 18px 20px; }
 .yu-content > div { min-width: 0; }
 .yu-stack { display: grid; gap: 14px; }
 .yu-settings { display: grid; grid-template-columns: 200px minmax(0,1fr); gap: 18px; align-items: start; }
@@ -124,8 +125,6 @@ h1[tabindex="-1"]:focus { outline: none; }
 
 /* Journal keeps every raw read and paged table; summary cards and chart are presentation only. */
 .yu-journal-filters {padding-bottom:14px;border-bottom:1px solid var(--yu-border);align-items:end}
-.yu-search-planned {display:grid;gap:5px;color:var(--yu-text-secondary);font-size:12px}
-.yu-search-planned input {height:32px;background:var(--yu-bg-input);border:1px solid var(--yu-border);border-radius:6px;padding:0 10px;width:220px;color:var(--yu-text-muted)}
 [data-testid="journal-table"] {font-size:12px;min-width:1050px}
 [data-testid="journal-table"] th {font-size:11px;color:var(--yu-text-muted);background:var(--yu-bg-inset);white-space:normal}
 [data-testid="journal-table"] td {padding:12px 8px;max-width:250px;white-space:normal;vertical-align:top}
@@ -154,7 +153,7 @@ h1[tabindex="-1"]:focus { outline: none; }
 .yu-dot[data-tone="accent"] {--yu-dot-color:var(--yu-accent-light);background:var(--yu-accent-light)}
 
 /* Fixed primary column widths stay readable; the table scrolls inside its card at the minimum window size. */
-[data-testid="journal-table"] {min-width:1560px;table-layout:fixed}
+[data-testid="journal-table"] {min-width:1400px;table-layout:fixed}
 [data-testid="journal-table"] th:nth-child(1) {width:150px}
 [data-testid="journal-table"] th:nth-child(2) {width:70px}
 [data-testid="journal-table"] th:nth-child(3) {width:180px}
@@ -163,9 +162,8 @@ h1[tabindex="-1"]:focus { outline: none; }
 [data-testid="journal-table"] th:nth-child(6) {width:210px}
 [data-testid="journal-table"] th:nth-child(7) {width:170px}
 [data-testid="journal-table"] th:nth-child(8) {width:115px}
-[data-testid="journal-table"] th:nth-child(9) {width:90px}
-[data-testid="journal-table"] th:nth-child(10) {width:140px}
-[data-testid="journal-table"] th:nth-child(11) {width:100px}
+[data-testid="journal-table"] th:nth-child(9) {width:140px}
+[data-testid="journal-table"] th:nth-child(10) {width:100px}
 [data-testid="journal-row-game"], [data-testid="journal-row-started"] {white-space:nowrap!important;overflow-wrap:normal}
 [data-testid="journal-row-outcome"] [data-slot="badge"] {white-space:normal;overflow-wrap:normal}
 [data-testid="journal-row-completeness"] {white-space:nowrap;overflow-wrap:normal}
@@ -175,7 +173,7 @@ h1[tabindex="-1"]:focus { outline: none; }
 .yu-trip-header [data-testid="journal-detail-title"] {font-size:15px;font-weight:600}
 .yu-trip-header [data-testid="journal-export"] {display:flex;gap:16px;align-items:start}
 .yu-trip-header [data-testid="journal-export-note"] {flex:1}
-.yu-trip-tiles {display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:12px}
+.yu-trip-tiles {display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:12px}
 .yu-trip-tile {padding:16px 14px;border:1px solid var(--yu-border);border-radius:12px;background:var(--yu-bg-inset);font-variant-numeric:tabular-nums}
 .yu-trip-tile span {display:flex;gap:7px;align-items:center;font-size:12px;color:var(--yu-text-secondary)}
 .yu-trip-tile svg {width:15px;height:15px;flex:none}
@@ -230,26 +228,21 @@ h1[tabindex="-1"]:focus { outline: none; }
 
 .yu-tank-unavailable { position: absolute; inset: 0; display: grid; place-items: center; color: var(--yu-text-muted); font-size: 20px; }
 
-/* Hard Mode is a full page: essential evidence is inline, with ordinary content scrolling. */
+/* Hard Mode is one card: headline row, full-width progress, the in-game fix and a grid of the twelve rules (ET-057). */
 [data-testid="hard-mode-card"] { min-width: 0; container-type: inline-size; }
-.yu-hard-mode-summary { display: grid; gap: 18px; }
-.yu-hard-mode-overview { display: flex; gap: 24px; align-items: start; justify-content: space-between; }
-.yu-hard-mode-overview > div { flex: 1; max-width: 540px; min-width: 0; }
-.yu-hard-mode-overview [role="status"] { font-size: 16px; font-weight: 600; margin-bottom: 8px; }
-.yu-hard-mode-overview progress { accent-color: var(--yu-accent-light); display: block; margin-bottom: 10px; }
-.yu-hard-mode-rules { display: grid; grid-template-columns: repeat(2,minmax(0,1fr)); gap: 14px; padding: 0; margin: 0; list-style: none; }
-.yu-hard-mode-rules li { min-width: 0; border: 1px solid var(--yu-border); border-radius: 10px; padding: 12px 14px; background: var(--yu-bg-inset); }
-.yu-hard-mode-rules button { display: flex; gap: 8px; align-items: center; width: 100%; min-height: 32px; text-align: left; font-weight: 600; line-height: 1.5; }
-.yu-hard-mode-rules button > span:first-child { flex: none; }
-.yu-hard-mode-values { display: grid; gap: 5px; margin-top: 8px; line-height: 1.5; }
-.yu-hard-mode-state { color: var(--yu-text-secondary); }
-.yu-hard-mode-rules [data-state="fail"] .yu-hard-mode-state { color: var(--yu-err-fg); }
-.yu-hard-mode-rules [data-state="pass"] .yu-hard-mode-state { color: var(--yu-ok-fg); }
-.yu-hard-mode-notice { display: grid; gap: 8px; padding: 14px 16px; background: var(--yu-bg-inset); border-left: 3px solid var(--yu-accent-light); border-radius: 6px; line-height: 1.6; color: var(--yu-text-secondary); }
-@container (max-width: 680px) {
-  .yu-hard-mode-rules { grid-template-columns: minmax(0,1fr); }
-  .yu-hard-mode-overview { flex-wrap: wrap; gap: 12px; }
-}
+.yu-hard-mode-summary { display: grid; gap: 14px; }
+.yu-hard-mode-head { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; }
+.yu-hard-mode-head > [data-slot="card-title"] { min-width: 0; }
+.yu-hard-mode-head > [data-testid="hard-mode-source"] { margin: 0 0 0 auto; }
+.yu-hard-mode-progress { display: flex; align-items: center; gap: 12px; }
+.yu-hard-mode-progress progress { flex: 1; min-width: 0; height: 8px; border: 0; border-radius: 999px; overflow: hidden; appearance: none; background: var(--yu-border); }
+.yu-hard-mode-progress progress::-webkit-progress-bar { background: var(--yu-border); border-radius: 999px; }
+.yu-hard-mode-progress progress::-webkit-progress-value { background: var(--yu-text-secondary); border-radius: 999px; }
+.yu-hard-mode-progress progress[data-state="pass"]::-webkit-progress-value { background: var(--yu-ok-fg); }
+.yu-hard-mode-progress progress[data-state="fail"]::-webkit-progress-value { background: var(--yu-warn-fg); }
+.yu-hard-mode-progress [role="status"] { flex: none; margin: 0; font-weight: 600; }
+.yu-hard-mode-fix { display: flex; align-items: center; gap: 8px; margin: 0; padding: 10px 12px; border: 1px solid var(--yu-warn-border); border-radius: 10px; background: var(--yu-warn-bg); color: var(--yu-warn-fg); }
+.yu-hard-mode-fix > svg { flex: none; width: 16px; height: 16px; }
 
 @container (max-width: 560px) {
   .yu-instrument > [data-slot="card-content"] { grid-template-columns: minmax(0,1fr) 64px; }
@@ -292,3 +285,44 @@ button[aria-disabled="true"], [role="switch"][aria-disabled="true"] { cursor: no
 
 /* Keep keyboard focus rings clear of the scroll viewport at fractional renderer zoom (ET-049). */
 .yu-overlay-settings :is(button, [role="slider"]) { scroll-margin-block: 8px; }
+
+/* ET-057: explanations live behind an Info icon (info-hint.tsx); the icon keeps a 22 px target next to its label. */
+/* Relative, so the hidden description stays inside its scroll container instead of extending the window. */
+.yu-info-hint-wrap { position: relative; display: inline-flex; align-items: center; vertical-align: middle; }
+.yu-info-hint { display: inline-flex; align-items: center; justify-content: center; width: 22px; height: 22px; margin-left: 2px; padding: 0; border: 0; border-radius: 50% !important; background: transparent; color: var(--yu-text-muted); cursor: help; }
+.yu-info-hint svg { width: 14px; height: 14px; }
+.yu-info-hint:hover, .yu-info-hint:focus-visible, .yu-info-hint[data-state$="-open"] { color: var(--yu-accent-light); background: var(--yu-selected-bg); }
+.yu-label-hint { display: flex; align-items: center; gap: 2px; }
+.yu-job-metrics .yu-info-hint-wrap { display: inline-flex; }
+.yu-setting-row > .yu-segmented { flex: 0 1 440px; min-width: 260px; }
+.yu-setting-row { display: flex; align-items: center; justify-content: space-between; gap: 16px; flex-wrap: wrap; min-height: 44px; padding: 6px 0; border-bottom: 1px solid var(--yu-divider); }
+.yu-setting-row:last-child { border-bottom: 0; }
+.yu-setting-row > :first-child { display: inline-flex; align-items: center; font-weight: 500; }
+.yu-live-details > summary { cursor: pointer; list-style: none; display: flex; align-items: center; gap: 8px; padding: 12px 16px; font-weight: 600; color: var(--yu-text-secondary); }
+.yu-live-details > summary::-webkit-details-marker { display: none; }
+.yu-live-details > summary svg { width: 16px; height: 16px; transition: transform .15s; }
+.yu-live-details[open] > summary svg { transform: rotate(90deg); }
+.yu-live-details[open] > summary { border-bottom: 1px solid var(--yu-divider); }
+.yu-live-details > .yu-live-fields { padding: 14px 16px; }
+.yu-live-bottom-2 { display: grid; grid-template-columns: repeat(2, minmax(0,1fr)); gap: 14px; }
+.yu-hard-mode-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; align-items: stretch; padding: 0; margin: 0; list-style: none; }
+.yu-hard-mode-grid > li { display: flex; flex-direction: column; justify-content: center; gap: 2px; min-height: 44px; padding: 4px 12px; border: 1px solid var(--yu-divider); border-radius: 10px; background: var(--yu-bg-inset); }
+.yu-hard-mode-grid > li[data-state="fail"] { border-color: var(--yu-warn-border); background: var(--yu-warn-bg); }
+.yu-hard-mode-grid > li > button { display: flex; align-items: center; gap: 8px; min-height: 32px; width: 100%; text-align: left; font-weight: 500; }
+.yu-hard-mode-mark { flex: none; width: 16px; text-align: center; color: var(--yu-text-secondary); }
+.yu-hard-mode-grid > li[data-state="pass"] .yu-hard-mode-mark { color: var(--yu-ok-fg); }
+.yu-hard-mode-grid > li[data-state="fail"] .yu-hard-mode-mark { color: var(--yu-warn-fg); }
+.yu-hard-mode-grid .yu-hard-mode-values { margin-top: -6px; padding: 0 0 6px 24px; font-size: 12px; color: var(--yu-warn-fg); }
+.yu-hard-mode-grid .yu-hard-mode-values p { margin: 0; }
+@container (max-width: 760px) { .yu-hard-mode-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+@container (max-width: 480px) { .yu-hard-mode-grid { grid-template-columns: minmax(0, 1fr); } }
+.yu-trip-raw { border: 1px solid var(--yu-border); border-radius: 10px; background: var(--yu-bg-inset); }
+.yu-trip-raw > summary { cursor: pointer; list-style: none; display: flex; align-items: center; gap: 8px; padding: 12px 14px; font-weight: 600; color: var(--yu-text-secondary); }
+.yu-trip-raw > summary::-webkit-details-marker { display: none; }
+.yu-trip-raw > summary svg { width: 16px; height: 16px; transition: transform .15s; }
+.yu-trip-raw[open] > summary svg { transform: rotate(90deg); }
+.yu-trip-raw > [data-testid="trip.detailTabs"] { padding: 0 14px 14px; }
+/* The hint follows its button visually; the result region stays next to the button in the document (ET-045b). */
+.yu-action-row { display: flex; flex-wrap: wrap; align-items: center; row-gap: 4px; }
+.yu-action-row > .yu-info-hint-wrap { order: 1; }
+.yu-action-row > :not(button):not(.yu-info-hint-wrap) { order: 2; flex-basis: 100%; }

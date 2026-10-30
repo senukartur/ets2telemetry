@@ -43,6 +43,8 @@ export const SYNTHETIC_V0_HIDDEN_ROWS = Object.freeze([
 // the exact text; card rows may lie below the fold, so they need no viewport intersection (decision B6). A value row
 // has no reason or note element unless one is expected, and no hidden element exists.
 export function completeLiveObservation({rows, hidden}) {
+  // ET-057: the Live field list is collapsed by default; the observation opens it (again after a reload) before reading.
+  for (const details of globalThis.document.querySelectorAll('[data-testid="live.details"]')) if (!details.open) details.open = true;
   const observation = {};
   const shown = element => {
     const bounds = element.getBoundingClientRect();

@@ -9,6 +9,7 @@ import {chooseGearDisplay, type GearDisplayRequest} from './gear-display-choice'
 import {DEFAULT_GEAR_DISPLAY, GEAR_DISPLAY_MODE_IDS, UNIT_GAMES} from './unit-profiles';
 import {getSettingsSaveErrorText, getUnitGameText} from './strings';
 import {t} from './i18n';
+import {InfoHint} from './info-hint';
 
 export interface GearDisplayCardProps {
   settings?: SettingsView;
@@ -44,9 +45,9 @@ export function GearDisplayCard({settings, onSaved, onRequest, showSaveError}: G
     void chooseGearDisplay(window.desktop, game, value, {onSaved, onState: setRequest});
   };
   return <Card size="sm" data-testid="gear-display-card">
-    <CardHeader><CardTitle><h2>{t('s.gear', undefined, language)}</h2></CardTitle></CardHeader>
+    <CardHeader><CardTitle><h2 className="yu-label-hint">{t('s.gear', undefined, language)}<InfoHint label={t('ui.moreAbout', {v: t('s.gear', undefined, language)}, language)}>{t('s.gear.d', undefined, language)}</InfoHint></h2></CardTitle></CardHeader>
     <CardContent className="space-y-3">
-      <p id="gear-display-description" className="text-sm text-muted-foreground">{t('s.gear.d', undefined, language)}</p>
+      <p id="gear-display-description" className="sr-only">{t('s.gear.d', undefined, language)}</p>
       <TooltipProvider disableHoverableContent delayDuration={150} skipDelayDuration={0}>{UNIT_GAMES.map(game => <div key={game} className="space-y-2">
         <p id={`gear-display-${game}-label`}>{getUnitGameText(game, language)}</p>
         <RadioGroup aria-labelledby={`gear-display-${game}-label`} aria-describedby="gear-display-description" data-testid={`gear-display-${game}`}

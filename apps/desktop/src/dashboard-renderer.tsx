@@ -9,8 +9,7 @@ import {Label} from '@/components/ui/label';
 import {RadioGroup, RadioGroupItem} from '@/components/ui/radio-group';
 import {Badge} from '@/components/ui/badge';
 import {Tooltip, TooltipContent, TooltipProvider, TooltipTrigger} from '@/components/ui/tooltip';
-import {DropdownMenu, DropdownMenuContent, DropdownMenuRadioGroup, DropdownMenuRadioItem, DropdownMenuTrigger} from '@/components/ui/dropdown-menu';
-import {Gauge, BookOpen, Settings2, Cloud, Globe, Power, ChevronDown, Flame, Plug, CircleHelp, Info} from 'lucide-react';
+import {Gauge, BookOpen, Settings2, Power, Flame, Plug, Info} from 'lucide-react';
 import {useHardModeStatus} from './hard-mode/use-status';
 import {hardModeView} from './hard-mode/view';
 import {useLanguageController} from './shell/use-language';
@@ -40,8 +39,8 @@ import {CHANNEL} from './channel';
 import './index.css';
 
 export default function App() {
-  const [route, setRoute] = useState<'live' | 'hardMode' | 'journal' | 'settings' | 'account'>('live');
-  const [panel, setPanel] = useState<'general' | 'units' | 'overlay' | 'plugin' | 'data' | 'about'>('general');
+  const [route, setRoute] = useState<'live' | 'hardMode' | 'journal' | 'settings'>('live');
+  const [panel, setPanel] = useState<'general' | 'overlay' | 'plugin' | 'about' | 'data'>('general');
   const heading = useRef<HTMLHeadingElement>(null);
   const content = useRef<HTMLElement>(null);
   const hardMode = useHardModeStatus();
@@ -79,7 +78,6 @@ export default function App() {
   const languageController = useLanguageController(settings, saved, () => setLastCard('language'));
   const hmView = hardModeView(hardMode.status, hardMode.now, language);
   const targets = app ? Object.values(app.plugins.games).flatMap(game => game.targets) : [];
-  const installed = targets.filter(target => target.state === 'installed').length;
   const choose = (game: UnitGame, value: string) => {
     if (!isUnitProfile(value)) return;
     setLastCard('units'); setUnits('saving');
@@ -88,13 +86,15 @@ export default function App() {
     }, () => setUnits('failed'));
   };
 
-  const nav = [{id: 'live', Icon: Gauge}, {id: 'hardMode', Icon: Flame}, {id: 'journal', Icon: BookOpen}, {id: 'settings', Icon: Settings2}, {id: 'account', Icon: Cloud}] as const;
-  const settingsPanels = ['general', 'units', 'overlay', 'plugin', 'data', 'about'] as const;
+  // ET-057: the Account placeholder returns with the server phase; Diagnostics comes last, apart from the driver's settings.
+  const nav = [{id: 'live', Icon: Gauge}, {id: 'hardMode', Icon: Flame}, {id: 'journal', Icon: BookOpen}, {id: 'settings', Icon: Settings2}] as const;
+  const settingsPanels = ['general', 'overlay', 'plugin', 'about', 'data'] as const;
+  const showSettingsState = settings && settings.state !== 'loaded' && settings.state !== 'defaults';
   return <div className="yu-app" data-testid="shell.root">
     <div className="yu-titlebar" data-testid="shell.titlebar"><img src={logo} alt="" /><span>{CHANNEL.displayName}</span></div>
     <div className="yu-body"><aside className="yu-sidebar" data-testid="shell.sidebar"><div className="yu-lockup" data-testid="shell.sidebar.lockup"><img src={logo} alt="" /><div><strong>Yukon Union</strong><small>{t('app.sub', undefined, language)}</small></div></div>
       <nav aria-label={t('app.window', undefined, language)}>{nav.map(({id, Icon}) => <React.Fragment key={id}>
-        {id === 'live' || id === 'settings' || id === 'account' ? <p className="yu-nav-group">{t(id === 'live' ? 'nav.group.drive' : id === 'settings' ? 'nav.group.app' : 'nav.group.company', undefined, language)}{id === 'account' ? ` · ${t('tag.later', undefined, language)}` : ''}</p> : null}
+        {id === 'live' || id === 'settings' ? <p className="yu-nav-group">{t(id === 'live' ? 'nav.group.drive' : 'nav.group.app', undefined, language)}</p> : null}
         <button type="button" className="yu-nav-item" aria-current={route === id ? 'page' : undefined} onClick={() => setRoute(id)} data-testid={`tab-${id}`}><Icon aria-hidden="true" />{t(`nav.${id}`, undefined, language)}</button>
       </React.Fragment>)}</nav>
       <div className="yu-sidebar-footer"><TooltipProvider delayDuration={150} skipDelayDuration={0}><Tooltip><TooltipTrigger asChild>
@@ -111,31 +111,34 @@ export default function App() {
         </div></TooltipContent></Tooltip></TooltipProvider>
         <SidebarUpdateControl view={app?.update} language={language} windowFocused={windowFocused} />
         <VersionLine info={app?.application} language={language} testId="shell.sidebar.version" />
-        <DropdownMenu><DropdownMenuTrigger asChild><Button variant="outline" className="w-full" data-testid="shell.language"><Globe aria-hidden="true" />{language.toUpperCase()}<ChevronDown aria-hidden="true" /></Button></DropdownMenuTrigger>
-          <DropdownMenuContent><DropdownMenuRadioGroup value={language} onValueChange={languageController.choose}>{(['en', 'ru'] as const).map(lang => <DropdownMenuRadioItem key={lang} value={lang} disabled={!settings?.writable || languageController.saving} data-testid={`shell.language.${lang}`}>{t(`lang.${lang}`, undefined, language)}</DropdownMenuRadioItem>)}</DropdownMenuRadioGroup></DropdownMenuContent>
-        </DropdownMenu>
-        {languageController.failed ? <p role="status">{t('lang.saveFailed', undefined, language)}</p> : null}
-        <Button variant="ghost" className="mt-2 w-full" disabled={exit === 'pending'} data-testid="exit-application" onClick={() => {setExit('pending'); void window.desktop.exitApplication().catch(() => setExit('failed'));}}><Power aria-hidden="true" />{exit === 'pending' ? strings.exitPending : t('side.exit', undefined, language)}</Button>
+        {/* ET-057: the language is chosen in Settings > General only; closing to the tray is explained on Exit. */}
+        <TooltipProvider delayDuration={150} skipDelayDuration={0}><Tooltip><TooltipTrigger asChild>
+          <Button variant="ghost" className="w-full" disabled={exit === 'pending'} aria-describedby="shell-exit-hint" data-testid="exit-application" onClick={() => {setExit('pending'); void window.desktop.exitApplication().catch(() => setExit('failed'));}}><Power aria-hidden="true" />{exit === 'pending' ? strings.exitPending : t('side.exit', undefined, language)}</Button>
+        </TooltipTrigger><TooltipContent side="right" align="end" data-testid="shell.exit.hint">{t('s.closeD', undefined, language)}</TooltipContent></Tooltip></TooltipProvider>
+        <span id="shell-exit-hint" className="sr-only" style={{position: 'fixed'}}>{t('s.closeD', undefined, language)}</span>
         {exit === 'failed' ? <p role="status">{strings.exitFailed}</p> : null}
       </div></aside>
       <div className="yu-column"><header className="yu-topbar" data-testid="shell.topbar"><h1 ref={heading} tabIndex={-1} data-testid="screen-title">{t(`nav.${route}`, undefined, language)}</h1>
         <Badge variant={connectionTone(live?.status)} data-testid="shell.status.connection"><Gauge aria-hidden="true" />{live?.observation?.source.game.toUpperCase() ?? ''} {t(`ui.status.${live?.status ?? 'waiting'}`, undefined, language)}</Badge>
-        <Badge variant={pluginTone(targets)} data-testid="shell.status.plugin"><Plug aria-hidden="true" />{t('ui.plugin', undefined, language)} {installed}/{targets.length} · {pluginStatusText(targets, language)}</Badge>
+        <Badge variant={pluginTone(targets)} data-testid="shell.status.plugin"><Plug aria-hidden="true" />{t('ui.plugin', undefined, language)} · {pluginStatusText(targets, language)}</Badge>
         <Badge variant={hardModeTone(hardMode.status)} data-testid="shell.status.hardMode"><Flame aria-hidden="true" />{hmView.headline}</Badge>
       </header><main ref={content} className="yu-content" data-testid="shell.content">
         <div hidden={route !== 'live'} className="yu-stack" data-testid="live.screen">
           <LiveDashboard onSelect={game => window.desktop.selectSource(game)} live={live} units={settings?.units} gearDisplay={settings?.gearDisplay} language={language} />
-          <p data-testid="prototype-notice" className="yu-muted">{recording.notice}</p>
         </div>
         <div hidden={route !== 'hardMode'} className="yu-stack" data-testid="hardMode.screen"><HardModeCard language={language} controller={hardMode} /></div>
         {route === 'journal' ? <JournalBoundary language={language}><Journal units={settings?.units} recording={health?.recording.state} language={language} /></JournalBoundary> : null}
         <div hidden={route !== 'settings'} className="yu-settings" data-testid="settings.screen"><nav className="yu-settings-nav" aria-label={t('nav.settings', undefined, language)} data-testid="settings.nav">{settingsPanels.map(id => <button key={id} type="button" aria-current={panel === id ? 'page' : undefined} data-testid={`settings.nav.${id}`} onClick={() => setPanel(id)}>{t(`s.${id}`, undefined, language)}</button>)}</nav>
-          <div className="yu-stack"><div hidden={panel !== 'general'} className="yu-stack" data-testid="settings.general"><LanguageCard settings={settings} onSaved={saved} controller={languageController} showSaveError={lastCard === 'language'} />
-            <AutostartCard settings={settings} status={app?.autostart} onSaved={saved} onRequest={() => setLastCard('autostart')} showSaveError={lastCard === 'autostart'} />
-            <Card><CardHeader><CardTitle><h2>{t('s.general', undefined, language)}</h2></CardTitle></CardHeader><CardContent className="space-y-3"><p>{t('s.closeD', undefined, language)}</p><p>{t('ui.helpNote', undefined, language)}</p><Button variant="outline" onClick={() => setPanel('plugin')}><CircleHelp aria-hidden="true" />{t('ob.s2', undefined, language)}</Button></CardContent></Card>
-          </div><div hidden={panel !== 'units'} className="yu-stack" data-testid="settings.units">  <Card size="sm"><CardHeader><CardTitle><h2>{strings.unitsTitle}</h2></CardTitle></CardHeader><CardContent className="space-y-3">
-    {UNIT_GAMES.map(game => <div key={game} className="space-y-2">
-      <p id={`units-${game}-label`}>{getUnitGameText(game, language)}</p>
+          <div className="yu-stack"><div hidden={panel !== 'general'} className="yu-stack" data-testid="settings.general">
+            {/* ET-057: how the saved settings were read is shown only when it matters (defaults kept, read-only or invalid file). */}
+            {showSettingsState ? <Alert><AlertDescription data-testid="settings-state">{getSettingsStateText(settings.state, language)}</AlertDescription></Alert> : null}
+            <Card size="sm"><CardHeader><CardTitle><h2>{t('s.interface', undefined, language)}</h2></CardTitle></CardHeader><CardContent>
+              <LanguageCard settings={settings} onSaved={saved} controller={languageController} showSaveError={lastCard === 'language'} />
+              <AutostartCard settings={settings} status={app?.autostart} onSaved={saved} onRequest={() => setLastCard('autostart')} showSaveError={lastCard === 'autostart'} />
+            </CardContent></Card>
+            <Card size="sm" data-testid="settings.units"><CardHeader><CardTitle><h2>{strings.unitsTitle}</h2></CardTitle></CardHeader><CardContent>
+    {UNIT_GAMES.map(game => <div key={game} className="yu-setting-row">
+      <span id={`units-${game}-label`}>{getUnitGameText(game, language)}</span>
       {/* A choice shows as selected only after main saved it; a failed save leaves the previous one. */}
       <RadioGroup aria-labelledby={`units-${game}-label`} data-testid={`units-${game}`} className="yu-segmented" value={settings?.units[game] ?? DEFAULT_UNIT_PROFILES[game]}
         disabled={!settings?.writable || units === 'saving'} onValueChange={value => choose(game, value)}>
@@ -144,20 +147,18 @@ export default function App() {
         </div>)}
       </RadioGroup>
     </div>)}
-    <p data-testid="settings-state">{settings ? getSettingsStateText(settings.state, language) : '—'}</p>
     {/* A refused save is reported by main in the settings view; other request failures only locally. */}
     {settings?.saveError && lastCard === 'units' ? <p role="status" data-testid="settings-error">{getSettingsSaveErrorText(settings.saveError, language)}</p>
       : units === 'failed' ? <p role="status" data-testid="settings-error">{strings.unitsSaveFailed}</p> : null}
-  </CardContent></Card>
-  <GearDisplayCard settings={settings} onSaved={saved} onRequest={() => setLastCard('gear')} showSaveError={lastCard === 'gear'} />
-</div>
+            </CardContent></Card>
+            <GearDisplayCard settings={settings} onSaved={saved} onRequest={() => setLastCard('gear')} showSaveError={lastCard === 'gear'} />
+          </div>
           <div hidden={panel !== 'overlay'} data-testid="settings.overlay"><OverlaySettingsCard settings={settings} edit={app?.overlayEdit} onSaved={saved} onRequest={() => setLastCard('overlay')} showSaveError={lastCard === 'overlay'} />
             </div>
           <div hidden={panel !== 'plugin'} data-testid="settings.plugin"><PluginSetupCard language={language} view={app?.plugins} diagnosis={app ? connectionDiagnosis(app.plugins, live?.status ?? 'waiting', live?.selection ?? 'game', app.health) : undefined} onView={plugins => setApp(current => current && {...current, plugins})} /></div>
-          <div hidden={panel !== 'data'} className="yu-stack" data-testid="settings.data"><Card><CardHeader><CardTitle><h2>{t('ui.diagnostics', undefined, language)}</h2></CardTitle></CardHeader><CardContent className="space-y-3"><p data-testid="startup-status">{startup}</p>
+          <div hidden={panel !== 'data'} className="yu-stack" data-testid="settings.data"><Card><CardHeader><CardTitle><h2>{t('ui.diagnostics', undefined, language)}</h2></CardTitle></CardHeader><CardContent className="space-y-3"><p data-testid="startup-status">{startup}</p><p data-testid="prototype-notice" className="yu-muted">{recording.notice}</p>
             <label>{strings.sourceLabel} <select data-testid="source-select" value={live?.selection ?? 'game'} onChange={event => {void window.desktop.selectSource(event.target.value as SourceSelection).catch(() => setStartup(strings.sourceSelectionFailed));}}><option value="game">{strings.sourceSelectPrompt}</option><option value="ets2">Euro Truck Simulator 2</option><option value="ats">American Truck Simulator</option><option value="synthetic">{strings.sourceSyntheticFixture}</option><option value="replay">{strings.sourceReplayFixture}</option></select></label>
             <p data-testid="telemetry-status">{live?.status ?? 'waiting'}: {live?.reason ?? strings.startupWaiting}</p><p>{t('ui.origin', undefined, language)}: {live?.observation?.source.origin ?? (live?.selection === 'synthetic' || live?.selection === 'replay' ? live.selection : 'game')}; {t(live?.fresh ? 'ui.current' : 'ui.notCurrent', undefined, language)}; {t('ui.coverageUnknown', undefined, language)}.</p>
-            <p>{t('s.d.location', undefined, language)} / {t('s.d.size', undefined, language)} — {t('ui.unavailable', undefined, language)}</p><p>{t('s.d.backupBtn', undefined, language)} — {t('ui.planned', undefined, language)}</p>
           </CardContent></Card>  <Card size="sm"><CardHeader><CardTitle><h2>{strings.healthTitle}</h2></CardTitle></CardHeader><CardContent className="space-y-2">
     {problem ? <Alert variant="destructive" data-testid="health-alert"><AlertTitle>{strings.serviceFailedTitle}</AlertTitle><AlertDescription>{getAppErrorText(problem, language)}</AlertDescription></Alert> : null}
     <dl className="grid grid-cols-[auto_1fr] gap-x-4 gap-y-1" data-testid="app-health">
@@ -175,7 +176,6 @@ export default function App() {
           <div hidden={panel !== 'about'} className="yu-stack" data-testid="settings.about"><Card><CardContent><div className="flex items-center gap-4 py-4" data-testid="settings.about.brand"><img src={logo} alt="" width={64} height={64} /><div><h2 className="text-lg font-bold">{CHANNEL.displayName}</h2><p>{t('app.sub', undefined, language)}</p></div></div><div className="space-y-3 pb-4"><VersionLine info={app?.application} language={language} testId="settings.about.version" /><AboutUpdateCheck view={app?.update} language={language} /></div><details className="yu-font-license" data-testid="settings.about.font-license"><summary>Onest · SIL Open Font License 1.1</summary><pre data-license-asset={onestLicenseUrl}>{onestLicense}</pre></details></CardContent></Card><UninstallCard language={language} /></div>
           </div>
         </div>
-        <div hidden={route !== 'account'} className="yu-placeholder" data-testid="account.screen"><Cloud aria-hidden="true" className="size-7" /><h2>{t('nav.account', undefined, language)}</h2><Badge variant="later">{t('a.later', undefined, language)}</Badge><p className="mt-3">{t('ui.accountNote', undefined, language)}</p><p className="mt-2">{t('a.note', undefined, language)}</p></div>
       </main></div>
     </div>
   </div>;

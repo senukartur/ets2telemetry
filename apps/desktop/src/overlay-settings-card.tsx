@@ -7,6 +7,8 @@ import {RadioGroup, RadioGroupItem} from '@/components/ui/radio-group';
 import {Slider} from '@/components/ui/slider';
 import {OVERLAY_OPACITY_MAX, OVERLAY_OPACITY_MIN} from './overlay-opacity';
 import {Switch} from '@/components/ui/switch';
+import {InfoHint} from './info-hint';
+import {t} from './i18n';
 import {OVERLAY_SECTION_ICONS} from './overlay-icons';
 import {OVERLAY_SCALE_MAX, OVERLAY_SCALE_MIN, stepOverlayScale} from './overlay-placement';
 import {
@@ -76,8 +78,8 @@ export function OverlaySettingsCard({settings, edit, onSaved, onRequest, showSav
           <Switch id="overlay-enabled" data-testid="overlay-enabled" checked={overlay.enabled} disabled={locked}
             aria-describedby="overlay-enabled-help" onCheckedChange={next => save(() => window.desktop.setOverlayEnabled(next))} />
           <Label id="overlay-visibility-label" htmlFor="overlay-enabled">{strings.overlayEnabledLabel}</Label>
+          <InfoHint label={t('ui.moreAbout', {v: strings.overlayEnabledLabel}, language)} testId="overlay-enabled-help" id="overlay-enabled-help">{strings.overlayEnabledHelp}</InfoHint>
         </div>
-        <p id="overlay-enabled-help" className="text-xs text-muted-foreground" data-testid="overlay-enabled-help">{strings.overlayEnabledHelp}</p>
       </section>
       <section className="yu-overlay-block" aria-labelledby="overlay-layout-label">
         <h3 id="overlay-layout-label" className="font-medium">{strings.overlayLayoutLabel}</h3>
@@ -91,7 +93,8 @@ export function OverlaySettingsCard({settings, edit, onSaved, onRequest, showSav
         </RadioGroup>
       </section>
       <section className="yu-overlay-block" aria-labelledby="overlay-opacity-label">
-        <Label id="overlay-opacity-label" htmlFor="overlay-opacity-thumb">{strings.overlayOpacityLabel}</Label>
+        <span className="yu-label-hint"><Label id="overlay-opacity-label" htmlFor="overlay-opacity-thumb">{strings.overlayOpacityLabel}</Label>
+          <InfoHint label={t('ui.moreAbout', {v: strings.overlayOpacityLabel}, language)} testId="overlay-opacity-help" id="overlay-opacity-help">{strings.overlayOpacityHelp}</InfoHint></span>
         <div className="flex flex-wrap items-center gap-4">
           <Slider className="max-w-sm min-w-32" data-testid="overlay-opacity" thumbId="overlay-opacity-thumb"
             labelId="overlay-opacity-label" descriptionId="overlay-opacity-help" min={OVERLAY_OPACITY_MIN} max={OVERLAY_OPACITY_MAX} step={1}
@@ -99,10 +102,9 @@ export function OverlaySettingsCard({settings, edit, onSaved, onRequest, showSav
             onPointerCancel={() => setOpacityDraft(undefined)} onValueChange={([value]) => setOpacityDraft(value)} onValueCommit={commitOpacity} />
           <span className="min-w-[4ch] text-sm font-medium tabular-nums" data-testid="overlay-opacity-value">{opacityDraft ?? overlay.backgroundOpacity}%</span>
         </div>
-        <p id="overlay-opacity-help" className="text-xs text-muted-foreground">{strings.overlayOpacityHelp}</p>
       </section>
       <section className="yu-overlay-block" aria-labelledby="overlay-placement-label" data-testid="overlay-placement">
-        <h3 id="overlay-placement-label" className="font-medium">{strings.overlayPlacementLabel}</h3>
+        <h3 id="overlay-placement-label" className="font-medium yu-label-hint">{strings.overlayPlacementLabel}<InfoHint label={t('ui.moreAbout', {v: strings.overlayPlacementLabel}, language)} testId="overlay-edit-help">{strings.overlayEditHelp}</InfoHint></h3>
         {edit?.active ? <>
           <p role="status" data-testid="overlay-edit-status">{getOverlayEditPlacementText(edit.placement, language)}</p>
           <div className="flex flex-wrap items-center gap-2">
@@ -118,7 +120,6 @@ export function OverlaySettingsCard({settings, edit, onSaved, onRequest, showSav
             <Button size="sm" disabled={busy} data-testid="overlay-edit-done" onClick={() => finish('save')}>{strings.overlayEditDone}</Button>
             <Button size="sm" variant="outline" disabled={busy} data-testid="overlay-edit-cancel" onClick={() => finish('cancel')}>{strings.overlayEditCancel}</Button>
           </div>
-          <p className="text-xs text-muted-foreground">{strings.overlayEditHelp}</p>
         </> : <div className="flex flex-wrap items-center gap-2">
           <Button size="sm" variant="outline" disabled={locked || busy || !overlay.enabled} data-testid="overlay-edit-start"
             onClick={() => editCall(() => window.desktop.beginOverlayEdit())}>{strings.overlayEditAction}</Button>
@@ -128,7 +129,7 @@ export function OverlaySettingsCard({settings, edit, onSaved, onRequest, showSav
       </section>
       {/* Presets are a quick selection of the same section toggles, so they share one block. */}
       <section className="yu-overlay-block" aria-labelledby="overlay-sections-label" data-testid="overlay-sections">
-        <h3 id="overlay-sections-label" className="font-medium">{strings.overlaySectionsLabel}</h3>
+        <h3 id="overlay-sections-label" className="font-medium yu-label-hint">{strings.overlaySectionsLabel}<InfoHint label={t('ui.moreAbout', {v: strings.overlaySectionsLabel}, language)} testId="overlay-hidden-note">{strings.overlayHiddenNote}</InfoHint></h3>
         <div className="space-y-2" role="group" aria-labelledby="overlay-presets-label">
           <h4 id="overlay-presets-label" className="text-sm text-muted-foreground">{strings.overlayPresetsLabel}</h4>
           <div className="flex flex-wrap gap-2" data-testid="overlay-presets">
@@ -155,7 +156,6 @@ export function OverlaySettingsCard({settings, edit, onSaved, onRequest, showSav
         </section>)}
         </div>
         {enabled === 1 ? <p className="text-xs text-muted-foreground" data-testid="overlay-last-section">{strings.overlayLastSection}</p> : null}
-        <p className="text-xs text-muted-foreground">{strings.overlayHiddenNote}</p>
       </section>
       {/* A refused save is reported by main in the settings view; other request failures only locally. */}
       {showSaveError && settings?.saveError ? <p role="status" data-testid="overlay-settings-error">{getSettingsSaveErrorText(settings.saveError, language)}</p>

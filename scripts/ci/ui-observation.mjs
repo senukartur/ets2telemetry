@@ -70,7 +70,7 @@ async function observeOpacitySurfaces({dashboard, overlay, layout, language, siz
 
 export const UI_CASES = ['shell', 'live', 'journal', 'settings', 'overlay'];
 const sizes = [{width: 1280, height: 800}, {width: 1100, height: 720}];
-const panels = ['general', 'units', 'overlay', 'plugin', 'data', 'about'];
+const panels = ['general', 'overlay', 'plugin', 'about', 'data'];
 const layouts = ['strip', 'card', 'cluster', 'hud'];
 // ET-052: the reserved windows at zoom 1 for fifteen sections: the strip is still three rows at 1280 CSS px (116), the card 48 + 24 × 15 = 408,
 // the cluster's panel 36 + 21 × 12 = 288 and the HUD 18 + 24 × 15 = 378 (384, 267 and 354 with fourteen).
@@ -245,7 +245,7 @@ async function observeGearDisplay({dashboard, overlay, source, sourceV1, languag
     await dashboard.waitForFunction(text => globalThis.document.querySelector('[data-testid="live.instrument.gear"] strong')?.textContent === text, text, {timeout: 5000});
   };
   const choose = async mode => {
-    await settingsPanel(dashboard, 'units');
+    await settingsPanel(dashboard, 'general');
     await dashboard.locator(`#gear-display-ets2-${mode}`).focus(); await dashboard.keyboard.press('Space');
     await until(() => dashboard.evaluate(() => globalThis.desktop.getAppState()), state => state.settings.gearDisplay.ets2 === mode && state.settings.saveError === null,
       `UI_GEAR_DISPLAY_${mode.toUpperCase()}_SAVED`);
@@ -660,16 +660,17 @@ export async function runUiSmoke({application, dashboard, overlay, source, sourc
     for (const size of sizes) {
       await resize(dashboard, size);
       if (config.uiCase === 'shell') {
-        for (const route of ['live', 'hardMode', 'journal', 'settings', 'account']) {
+        for (const route of ['live', 'hardMode', 'journal', 'settings']) {
           await focusRoute(dashboard, route); await save(route, language, size);
         }
-        assert.deepEqual(await dashboard.locator('.yu-sidebar nav button').evaluateAll(nodes => nodes.map(node => node.getAttribute('data-testid'))), ['tab-live', 'tab-hardMode', 'tab-journal', 'tab-settings', 'tab-account']);
+        assert.deepEqual(await dashboard.locator('.yu-sidebar nav button').evaluateAll(nodes => nodes.map(node => node.getAttribute('data-testid'))), ['tab-live', 'tab-hardMode', 'tab-journal', 'tab-settings']);
         await dashboard.getByTestId('tab-hardMode').focus(); await dashboard.keyboard.press('Enter');
         await dashboard.waitForFunction(() => globalThis.document.activeElement?.getAttribute('data-testid') === 'screen-title');
         assert.equal(await dashboard.getByTestId('hardMode.screen').isVisible(), true);
         assert.equal(await dashboard.getByTestId('hard-mode-drawer').count(), 0);
+        // ET-057: the compact Hard Mode grid may fit without scrolling; when it scrolls, leaving the route resets it.
         await dashboard.getByTestId('shell.content').evaluate(node => {node.scrollTop = node.scrollHeight;});
-        assert.ok(await dashboard.getByTestId('shell.content').evaluate(node => node.scrollTop > 0));
+        assert.equal(await dashboard.getByTestId('shell.content').evaluate(node => node.scrollTop > 0 || node.scrollHeight <= node.clientHeight), true);
         await dashboard.getByTestId('tab-live').click();
         await dashboard.waitForFunction(() => globalThis.document.activeElement?.getAttribute('data-testid') === 'screen-title');
         assert.equal(await dashboard.getByTestId('shell.content').evaluate(node => node.scrollTop), 0, 'UI_ROUTE_RETAINS_HARD_MODE_SCROLL');
@@ -684,20 +685,28 @@ export async function runUiSmoke({application, dashboard, overlay, source, sourc
         record.flags.hardModePage = true;
         await focusRoute(dashboard, 'live');
         assert.equal(await dashboard.getByTestId('journal').count(), 0);
-        const trigger = dashboard.getByTestId('shell.language'); await trigger.focus(); await dashboard.keyboard.press('Enter');
-        await dashboard.getByTestId(`shell.language.${language}`).waitFor({state: 'visible'});
-        await dashboard.keyboard.press('Escape');
-        assert.equal(await trigger.evaluate(node => node === globalThis.document.activeElement), true);
-        assert.equal(await dashboard.getByTestId('exit-application').isEnabled(), true);
-        Object.assign(record.flags, {navigation: true, headingFocus: true, journalUnmount: true, menuKeyboard: true, exitAvailable: true, laterAccount: true});
+        // ET-057: no sidebar language menu; Exit explains closing to the tray in a keyboard-reachable hint.
+        assert.equal(await dashboard.getByTestId('shell.language').count(), 0);
+        const exit = dashboard.getByTestId('exit-application'); await exit.focus();
+        await dashboard.getByTestId('shell.exit.hint').waitFor({state: 'visible'});
+        await dashboard.keyboard.press('Escape'); await dashboard.getByTestId('shell.exit.hint').waitFor({state: 'hidden'});
+        assert.equal(await exit.evaluate(node => node === globalThis.document.activeElement), true);
+        assert.equal(await exit.isEnabled(), true);
+        Object.assign(record.flags, {navigation: true, headingFocus: true, journalUnmount: true, exitHintKeyboard: true, exitAvailable: true, noAccountPlaceholder: true});
       } else if (config.uiCase === 'live') {
         await screen(dashboard, 'live');
         await waitLiveInstrument(dashboard, language);
+        // ET-057: the full field list starts collapsed; it is opened to read its rows and stays open on this screen.
+        const detailsOpen = await dashboard.getByTestId('live.details').evaluate(node => node.open);
+        if (!record.flags.detailsCollapsed) {assert.equal(detailsOpen, false, 'UI_LIVE_DETAILS_NOT_COLLAPSED'); record.flags.detailsCollapsed = true;}
+        // Opened in place: a click would scroll the page to the toggle, and the job card is checked at the top below.
+        if (!detailsOpen) await dashboard.getByTestId('live.details').evaluate(node => {node.open = true;});
         for (const [id, text] of [['cargo', 'Synthetic Cargo'], ['source-city', 'Synthetic City A'], ['source-company', 'Synthetic Company A'], ['destination-city', 'Synthetic City B'], ['destination-company', 'Synthetic Company B'], ['truck', 'truck.volvo']]) {
           assert.equal(await dashboard.getByTestId(`live-${id}`).innerText(), text);
         }
         await observeMandatoryBreak({dashboard, sourceV1, language, record});
-        assert.equal(await dashboard.locator('[data-testid="live.trip"] dd').allTextContents().then(values => values.every(value => value === '—')), true);
+        // ET-057: no "This trip" placeholder of dashes; the field list is collapsed until opened.
+        assert.equal(await dashboard.getByTestId('live.trip').count(), 0);
         assert.ok(await dashboard.getByTestId('live.instrument.gauge').getByRole('img').getAttribute('aria-label'));
         const jobVisible = await dashboard.evaluate(() => {
           const content = globalThis.document.querySelector('[data-testid="shell.content"]'), outer = content.getBoundingClientRect();
@@ -713,7 +722,9 @@ export async function runUiSmoke({application, dashboard, overlay, source, sourc
         await focusRoute(dashboard, 'hardMode');
         assert.equal(await dashboard.getByTestId('hard-mode-checklist').count(), 0);
         assert.equal(await dashboard.getByTestId('hard-mode-drawer').count(), 0);
-        assert.equal(await dashboard.locator('[data-testid^="hard-mode-detail-rule-"]').count(), 12);
+        // ET-057: twelve rules; only those that do not pass repeat their values in the grid.
+        assert.equal(await dashboard.locator('[data-testid^="hard-mode-rule-"]').count(), 12);
+        assert.equal(await dashboard.locator('[data-testid^="hard-mode-detail-rule-"]').count(), await dashboard.locator('[data-testid^="hard-mode-rule-"][data-state="fail"]').count());
         assert.equal(await dashboard.locator('[data-testid^="hard-mode-name-"]').evaluateAll(nodes => nodes.length === 12 && nodes.every(node => node.getBoundingClientRect().height >= 32 && node.scrollWidth <= node.clientWidth)), true, `UI_HM_NAMES_OVERFLOW_${language}_${size.width}`); record.flags.hmNamesReadable = true;
         await screen(dashboard, 'live');
         await waitLiveInstrument(dashboard, language);
@@ -736,26 +747,29 @@ export async function runUiSmoke({application, dashboard, overlay, source, sourc
         source.setPaused(false); await waitState(dashboard, 'connected'); source.hold();
         try {await waitState(dashboard, 'stale'); assert.equal(await dashboard.locator('.yu-gauge-number').textContent(), '—'); await save('stale', language, size);} finally {source.resume();}
         await waitLiveInstrument(dashboard, language);
-        Object.assign(record.flags, {numericGauge: true, unavailableVsZero: true, paused: true, staleDashes: true, rawNames: true, unsupportedTrip: true});
+        Object.assign(record.flags, {numericGauge: true, unavailableVsZero: true, paused: true, staleDashes: true, rawNames: true, noTripPlaceholder: true});
       } else if (config.uiCase === 'journal') {
         await screen(dashboard, 'journal');
         await until(() => dashboard.getByTestId('journal-row').count(), count => count === 50, 'UI_JOURNAL_FIRST_PAGE');
         assert.equal(await dashboard.getByTestId('journal-banner').innerText(), language === 'en' ? 'Synthetic test database — never game history' : 'Синтетическая тестовая база — не история игры');
-        assert.equal(await dashboard.getByTestId('journal-search-planned').isDisabled(), true);
+        assert.equal(await dashboard.getByTestId('journal-search-planned').count(), 0);
         assert.ok(await dashboard.getByTestId('journal-row-game').first().evaluate(node => globalThis.getComputedStyle(node).whiteSpace === 'nowrap' && node.getBoundingClientRect().width >= 64));
         await dashboard.locator('[data-testid="journal-table"]').evaluate(node => {node.parentElement.scrollLeft = 0;});
         await save('list', language, size);
         await dashboard.getByTestId('journal-list-next').click(); await until(() => dashboard.getByTestId('journal-list-page').innerText(), text => text.includes('2'), 'UI_JOURNAL_PAGE_TWO');
         const row = dashboard.getByTestId('journal-row').first(), trip = await row.getAttribute('data-trip'); await row.getByTestId('journal-row-open').click();
         await dashboard.getByTestId('journal-detail-title').waitFor({state: 'visible'});
-        assert.equal(await dashboard.getByTestId('trip.header').count(), 1); assert.equal(await dashboard.locator('[data-testid="trip.tiles"] > div').count(), 4);
+        assert.equal(await dashboard.getByTestId('trip.header').count(), 1); assert.equal(await dashboard.locator('[data-testid="trip.tiles"] > div').count(), 3);
         assert.equal(await dashboard.getByTestId('trip.header.cargo').innerText(), 'Synthetic Cargo');
         await save('trip', language, size);
         await dashboard.getByTestId('journal-back').click(); assert.equal(await dashboard.getByTestId('journal-row').first().getAttribute('data-trip'), trip);
         assert.match(await dashboard.getByTestId('journal-list-page').innerText(), /2/);
         await dashboard.getByTestId('journal-list-previous').click(); await until(() => dashboard.getByTestId('journal-row').first().getAttribute('data-trip'), id => id === '7b000000-0000-4000-8000-000000000001', 'UI_JOURNAL_PAGE_ONE');
         await dashboard.getByTestId('journal-row-open').first().click(); await dashboard.getByTestId('journal-detail-title').waitFor({state: 'visible'});
-        for (const tab of ['intervals', 'timeline', 'samples']) {await dashboard.getByTestId(`journal-detail-tab-${tab}`).click(); await dashboard.getByTestId(`journal-${tab === 'timeline' ? 'events' : tab}-loading`).waitFor({state: 'detached'}); if (tab !== 'samples') await save(tab, language, size);}
+        await dashboard.getByTestId('trip.raw.toggle').click();
+        for (const tab of ['intervals', 'timeline']) {await dashboard.getByTestId(`journal-detail-tab-${tab}`).click(); await dashboard.getByTestId(`journal-${tab === 'timeline' ? 'events' : tab}-loading`).waitFor({state: 'detached'}); await save(tab, language, size);}
+        await dashboard.getByTestId('journal-samples-loading').waitFor({state: 'detached'}); await dashboard.getByTestId('trip.samples.toggle').click();
+        await dashboard.getByTestId('journal-sample-row').first().waitFor({state: 'attached', timeout: 5000});
         assert.equal(await dashboard.getByTestId('journal-sample-row').count(), 300);
         assert.equal(await dashboard.getByTestId('trip.chart.segment').count(), 1);
         assert.equal(await dashboard.locator('[data-testid="trip.chart"] circle').count(), 300);
@@ -774,7 +788,7 @@ export async function runUiSmoke({application, dashboard, overlay, source, sourc
         await dashboard.getByTestId('journal-samples-next').click(); await until(() => dashboard.getByTestId('journal-samples-page').innerText(), text => text.includes('2'), 'UI_SAMPLE_PAGE_TWO');
         assert.equal(await dashboard.locator('[data-testid="trip.chart"] circle').count(), 300);
         await dashboard.getByTestId('journal-back').click();
-        Object.assign(record.flags, {syntheticBanner: true, pageReturn: true, chartBounded: true, rawTabs: true, searchPlanned: true, tripRegions: true, tableReadable: true});
+        Object.assign(record.flags, {syntheticBanner: true, pageReturn: true, chartBounded: true, rawTabs: true, noPlannedSearch: true, tripRegions: true, tableReadable: true});
       } else if (config.uiCase === 'settings') {
         for (const panel of panels) {
           await settingsPanel(dashboard, panel);
@@ -852,7 +866,7 @@ export async function runUiSmoke({application, dashboard, overlay, source, sourc
         const wanted = before === 'metric' ? 'us-customary' : 'metric';
         await rename(settingsFile, backup); await mkdir(settingsFile);
         try {
-          await settingsPanel(dashboard, 'units'); await dashboard.locator(`#units-ets2-${wanted}`).focus(); await dashboard.keyboard.press('Space');
+          await settingsPanel(dashboard, 'general'); await dashboard.locator(`#units-ets2-${wanted}`).focus(); await dashboard.keyboard.press('Space');
           record.flags.controlsKeyboard = true;
           await dashboard.getByTestId('settings-error').waitFor({state: 'visible', timeout: 5000});
           assert.equal((await dashboard.evaluate(() => globalThis.desktop.getAppState())).settings.units.ets2, before);
@@ -874,7 +888,7 @@ export async function runUiSmoke({application, dashboard, overlay, source, sourc
           assert.equal(await opacity.evaluate(node => node === globalThis.document.activeElement), true, 'UI_OPACITY_FAILED_SAVE_FOCUS_LOST');
           record.flags.opacityFailedSave = true;
           // ET-050: a refused gear display save keeps the committed mode selected and reports in its own card.
-          await settingsPanel(dashboard, 'units');
+          await settingsPanel(dashboard, 'general');
           const gearBefore = (await dashboard.evaluate(() => globalThis.desktop.getAppState())).settings.gearDisplay.ets2;
           const gearWanted = gearBefore === 'automatic' ? 'manual' : 'automatic';
           await dashboard.locator(`#gear-display-ets2-${gearWanted}`).focus(); await dashboard.keyboard.press('Space');
@@ -1157,7 +1171,7 @@ export async function runUiReadOnly({application, dashboard, config, record, set
     await resize(dashboard, size);
     await settingsPanel(dashboard, 'general');
     assert.equal(await dashboard.locator('#language-ru').isDisabled(), true);
-    await settingsPanel(dashboard, 'units');
+    await settingsPanel(dashboard, 'general');
     for (const game of ['ets2', 'ats']) for (const profile of ['metric', 'us-customary']) assert.equal(await dashboard.locator(`#units-${game}-${profile}`).isDisabled(), true);
     // ET-050: all four gear display radios are disabled while the settings are read-only.
     for (const game of ['ets2', 'ats']) for (const mode of ['automatic', 'manual', 'crawler']) assert.equal(await dashboard.locator(`#gear-display-${game}-${mode}`).isDisabled(), true);

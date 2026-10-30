@@ -79,7 +79,8 @@ describe('the Game plugin card before any action', () => {
     expect(html).not.toContain('data-severity');
     expect(html).not.toContain('plugin-result"');
     expect(html).not.toContain('aria-disabled="');
-    expect(html).not.toContain('aria-describedby');
+    // ET-057: only the Info hints are described (by their own text); no control is described by a result.
+    expect(html.match(/aria-describedby="plugin-[^"]*"/g)).toBeNull();
   });
   it('shows a stored rejected call as an alert in its own folder row, described by the button that started it', () => {
     const stored = renderToStaticMarkup(React.createElement(PluginSetupCardView, {view, diagnosis: undefined, onView: () => undefined, language: 'en', pending: false, run: () => null,
@@ -89,7 +90,7 @@ describe('the Game plugin card before any action', () => {
     expect(stored).toContain('<span data-testid="plugin-target-ets2-steam-0-result-severity">Failed</span> — Plugin file for Euro Truck Simulator 2 (Steam folder 1)');
     expect(stored).toContain('data-testid="plugin-target-ets2-steam-0-result-message">The request failed; nothing changed.</div>');
     expect(stored.match(/role="alert"/g)).toHaveLength(1);
-    expect(stored.match(/aria-describedby="[^"]*"/g)).toEqual(['aria-describedby="plugin-target-ets2-steam-0-result"']);
+    expect(stored.match(/aria-describedby="plugin-[^"]*"/g)).toEqual(['aria-describedby="plugin-target-ets2-steam-0-result"']);
     expect(stored).toMatch(/id="plugin-target-ets2-steam-0-show-file" data-testid="plugin-target-ets2-steam-0-show-file" aria-describedby="plugin-target-ets2-steam-0-result"/);
     expect(stored).not.toContain('aria-disabled="');
   });

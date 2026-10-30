@@ -1,6 +1,8 @@
 // Self-contained browser callback. All speed evidence comes from the visible SVG; never from backend state.
 export function dashboardObservation(expected = {}) {
   const one = id => {const nodes = globalThis.document.querySelectorAll('[data-testid="' + id + '"]'); return nodes.length === 1 ? nodes[0] : undefined;};
+  // ET-057: value rows and the v1 status live in the collapsed Live field list; open it (again after a reload) to read them.
+  if (expected.values !== undefined || expected.statusId) for (const details of globalThis.document.querySelectorAll('[data-testid="live.details"]')) if (!details.open) details.open = true;
   const visible = (node, viewport = true) => {
     if (!node) return false;
     const box = node.getBoundingClientRect();
