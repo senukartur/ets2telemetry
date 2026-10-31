@@ -120,7 +120,7 @@ h1[tabindex="-1"]:focus { outline: none; }
 .yu-job-metrics span, .yu-job-metrics small { color: var(--yu-text-muted); display: block; font-size: 12px; }
 .yu-job-metrics strong { display: block; margin: 3px 0; font-variant-numeric: tabular-nums; }
 .yu-live-fields { display: grid; grid-template-columns: repeat(2,minmax(0,1fr)); gap: 24px; }
-.yu-live-fields h3 { font-weight: 700; color: var(--yu-accent-light); padding-bottom: 6px; }
+.yu-live-fields h3 { color: var(--yu-accent-light); padding-bottom: 6px; }
 .yu-connection { display: flex; gap: 12px; align-items: center; padding: 14px 18px; border: 1px solid var(--yu-border); border-radius: 12px; background: var(--yu-bg-inset); }
 .yu-connection svg { width: 26px; height: 26px; color: var(--yu-text-muted); } .yu-connection p { color: var(--yu-text-muted); font-size: 12px; margin-top: 4px; }
 

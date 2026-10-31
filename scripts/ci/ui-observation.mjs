@@ -90,6 +90,7 @@ async function waitLiveInstrument(page, language) {
     assert.equal(metric.weight, '500', 'Dashboard values use Medium');
     assert.ok(metric.family.includes('M PLUS Rounded 1c'));
   }
+  assert.deepEqual(await page.locator('.yu-live-fields h3,[data-slot="card-title"]').evaluateAll(nodes => [...new Set(nodes.map(node => globalThis.getComputedStyle(node).fontWeight))]), ['700'], 'Dashboard headings use Bold explicitly');
 }
 // A committed main-process value may precede React's rendered switch and pending-save controls.
 function waitOverlayVisibility(page, {enabled, writable = true, saveError = null, errorVisible}, message, timeoutMs) {
@@ -138,8 +139,11 @@ const STRIP_FRAMES = [{zoom: 0.7, width: 1280, height: 80}, {zoom: 0.35, width: 
 const CLUSTER_FRAMES = [{zoom: 0.35, width: 160, height: 100}, {zoom: 0.7, width: 308, height: 203}, {zoom: 2.1, width: 924, height: 605}];
 function stripSteps(speedUnit, rpmUnit) {
   return [{speed: '0', speedUnit, gear: 'N', rpm: '0', rpmUnit}, ...['9', '10', '99', '100', '-5', '—'].map(speed => ({speed})),
+    // Exercise every digit at the reserve's full length with the actual bundled face, including 888 and 1111.
+    ...Array.from({length: 10}, (_, digit) => ({speed: String(digit).repeat(3)})),
     // ET-050: the manual range-splitter forms share the gear's mode-independent reserve; ET-050b adds the crawler labels.
-    ...['1', '9', '10', '12', 'R1', '1L', '1H', '9H', 'LL', 'LH', 'C1', 'C2'].map(gear => ({gear})), ...['999', '1000', '2528', '9999', '—'].map(rpm => ({rpm}))];
+    ...['1', '9', '10', '12', '99', 'R1', 'R9', '1L', '1H', '9H', 'LL', 'LH', 'C1', 'C2'].map(gear => ({gear})),
+    ...['999', '1000', '2528', '9999', '—'].map(rpm => ({rpm})), ...Array.from({length: 10}, (_, digit) => ({rpm: String(digit).repeat(4)}))];
 }
 function clusterSteps(parts, speedUnit, rpmUnit) {
   const base = {...(parts.includes('speed') ? {speedUnit} : {}), ...(parts.includes('rpm') ? {rpmUnit} : {})}, steps = [];
@@ -210,6 +214,10 @@ async function withRestore(body, restore) {
  */
 async function observeStripNumbers({application, overlay, source, language, record}) {
   record.stableNumbers ??= [];
+  assert.ok(await overlay.evaluate(async () => {
+    const faces = await globalThis.document.fonts.load('500 17px "M PLUS Rounded 1c"', '0123456789RHLNC');
+    return faces.length > 0 && faces.every(face => face.status === 'loaded' && face.weight === '500' && face.family.includes('M PLUS Rounded 1c'));
+  }), 'The bundled Medium face must load before measuring numeric reserves');
   await withRestore(async () => {
     for (const frame of STRIP_FRAMES) {
       await overlayFrame(application, overlay, frame);

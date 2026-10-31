@@ -646,7 +646,6 @@
 @custom-variant dark (&:is(.dark *));
 
 @theme inline {
-    --font-weight-semibold: 500;
     --font-heading: var(--font-sans);
     --font-sans: var(--yu-font);
     --color-sidebar-ring: var(--sidebar-ring);
