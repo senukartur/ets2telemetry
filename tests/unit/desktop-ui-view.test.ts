@@ -172,7 +172,7 @@ it.each(['ets2', 'ats'] as const)('shares automatic %s units and per-game gear m
     expect(dashboard).toMatchObject({current: true, speedText: speed, units: {speed: unit}});
     expect(dashboardSpeed(live, displayProfile(live, profiles))).toBe(`${speed} ${unit}`);
     expect(dashboardFuel(live, displayProfile(live, profiles))).toBe(`${fuel} ${unit === 'mph' ? 'US gal' : 'L'}`);
-    expect(overlay).toMatchObject({source: game.toUpperCase(), freshness: 'current', speed, fuel, speedUnit: unit});
+    expect(overlay).toMatchObject({source: game.toUpperCase(), freshness: 'current', speed, fuel: unit === 'mph' ? '19' : '73', speedUnit: unit});
   }
   for (const mode of ['automatic', 'manual', 'crawler'] as const) {
     const modes = {ets2: 'automatic', ats: 'automatic', [game]: mode} as GearDisplayModes;

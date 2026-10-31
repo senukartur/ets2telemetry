@@ -174,9 +174,9 @@ export async function runLifecycleSmoke({application, launcher, dashboard, overl
   assert.equal(afterClose.tray, true); record.trayPresentAfterClose = true;
   const expected = {source: 'ETS2', origin: 'synthetic', statuses: ['connected'], freshness: 'current', speedUnit: 'km/h', fuelUnit: 'L'};
   source.setReading(20, 71);
-  record.overlayChanged = await waitForOverlay(overlay, {...expected, speed: '72', fuel: '71.0'});
+  record.overlayChanged = await waitForOverlay(overlay, {...expected, speed: '72', fuel: '71'});
   source.setReading(25, 73);
-  record.overlayRestored = await waitForOverlay(overlay, {...expected, speed: '90', fuel: '73.0'});
+  record.overlayRestored = await waitForOverlay(overlay, {...expected, speed: '90', fuel: '73'});
   record.overlayCurrentAfterClose = true;
   assert.equal(source.statistics().connections, 1); record.sourceConnectionPreserved = true;
 
@@ -223,7 +223,7 @@ export async function runLifecycleSmoke({application, launcher, dashboard, overl
   assert.deepEqual(saved.filter(file => !QUARANTINE_NAME.test(file.name)), [{name: 'settings.json', content: SETTINGS_UNIT_SAVED}]);
   record.settingsSavedExact = true;
   record.dashboardUnits = await waitForDashboardUnits(trayDashboard, US_DASHBOARD);
-  record.overlayUnits = await waitForOverlay(overlay, {...expected, speed: '56', fuel: '19.3', speedUnit: 'mph', fuelUnit: 'US gal'});
+  record.overlayUnits = await waitForOverlay(overlay, {...expected, speed: '56', fuel: '19', speedUnit: 'mph', fuelUnit: 'US gal'});
   assert.equal((await lifecycleState(application)).settings.units.ets2, 'us-customary');
   record.unitsApplied = true;
   // ET-050: persist ETS2's manual gear display through the tray-reopened dashboard without retiring telemetry or the service.

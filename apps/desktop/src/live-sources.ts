@@ -27,6 +27,8 @@ export type JobIdentity = 'none' | 'no-v1' | 'match' | 'mismatch';
 export interface LiveSources {
   v0View: LiveDashboardView;
   v0State?: NormalizedLiveState;
+  /** Normalized v1 readings; consumers must still use `field` to enforce freshness and job identity. */
+  v1State?: NormalizedLiveState;
   /** Set while `v1Carried`. */
   v1View?: LiveDashboardView;
   /**
@@ -130,7 +132,7 @@ export function liveSources(live: LiveTelemetry, units: DisplayUnits, gear: Gear
     return v1Field.state === 'hidden' && v1State?.job.state === 'value' ? v1Field : notCurrent(v1Field);
   };
   return {
-    v0View, ...(v0State ? {v0State} : {}), ...(v1View ? {v1View} : {}), v1Carried, v1Current, job,
+    v0View, ...(v0State ? {v0State} : {}), ...(v1State ? {v1State} : {}), ...(v1View ? {v1View} : {}), v1Carried, v1Current, job,
     paused: v0Current ? v0View.connection.paused : v1Current && !!v1View?.connection.paused,
     field
   };

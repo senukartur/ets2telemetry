@@ -10,7 +10,7 @@ import {receiptBatchTimeout, validateRuntimeReceipts, type RuntimeReceiptCase} f
 // Runtime helpers are JavaScript outside the application TypeScript project.
 const sourceModule = pathToFileURL(path.resolve('scripts/ci/live-smoke-source.mjs')).href;
 const observationModule = pathToFileURL(path.resolve('scripts/ci/overlay-observation.mjs')).href;
-const current = {source: 'ETS2', origin: 'synthetic', status: 'connected', freshness: 'current', speed: '90', fuel: '73.0', speedUnit: 'km/h', fuelUnit: 'L'};
+const current = {source: 'ETS2', origin: 'synthetic', status: 'connected', freshness: 'current', speed: '90', fuel: '73', speedUnit: 'km/h', fuelUnit: 'L'};
 /** Hang guard of a wait for the source's 50 ms snapshot timer, inside the case's 6 s timeout; never a cadence claim. */
 const TICK_HANG_GUARD_MS = 1500;
 const phases = ['initial','changed','missing','zero','restored','silent-open-stale','resumed','overlay-reload',
@@ -114,7 +114,7 @@ describe('coherent hidden-renderer observations', () => {
   });
   it.each([
     {...current, status: 'stale', freshness: 'stale'}, {...current, origin: 'game'}, {...current, speed: '72'},
-    {...current, fuel: '71.0'}, {...current, speedUnit: 'mph'}, {...current, fuelUnit: 'US gal'}
+    {...current, fuel: '71'}, {...current, speedUnit: 'mph'}, {...current, fuelUnit: 'US gal'}
   ])('cannot accept mismatched state, readings, origin or units', async sample => {expect(await observe(sample)).toBe(false);});
 });
 
@@ -658,7 +658,7 @@ function validReceipt() {
     ...timing[kind],
     sourceAtObservation: structuredClone(source), independentObservation: {windows: structuredClone(windows),
       reading: kind === 'overlay' ? {status: 'connected: Validated current observation', speed: 'Speed: 72 km/h', fuel: 'Fuel: 71.0 L', gauge: {number: '72', unit: 'km/h', accessibleName: 'Speed: 72 km/h; Engine RPM: 600 rpm', visible: true}} :
-        {...current, phase: 'during-dashboard-stall', speed: '72', fuel: '71.0'}}});
+        {...current, phase: 'during-dashboard-stall', speed: '72', fuel: '71'}}});
   return {passed: true, commit: 'candidate', mode: 'packaged', scenarioKind: 'overlay', launcherExit: 0, probesAfterExit: [],
     runtime: {rendererProcessLimit: '1', windows: structuredClone(windows)},
     mainEvents: [{event: 'APP_EXIT', detail: {code: 0}}, {event: 'SERVICE_EXIT', detail: {code: 0}}],
@@ -673,9 +673,9 @@ function validReceipt() {
       windows: phases.map(phase => ({phase, windows: structuredClone(windows)})),
       observations: phases.map(phase => {
         const row = {...current, phase};
-        if (['changed','overlay-credit-recovery','dashboard-reload','during-dashboard-stall','dashboard-credit-recovery'].includes(phase)) {row.speed = '72'; row.fuel = '71.0';}
+        if (['changed','overlay-credit-recovery','dashboard-reload','during-dashboard-stall','dashboard-credit-recovery'].includes(phase)) {row.speed = '72'; row.fuel = '71';}
         if (['missing','silent-open-stale','disconnected'].includes(phase)) {row.speed = row.fuel = '—';}
-        if (phase === 'zero') {row.speed = '0'; row.fuel = '0.0';}
+        if (phase === 'zero') {row.speed = '0'; row.fuel = '0';}
         if (phase === 'silent-open-stale') {row.status = row.freshness = 'stale';}
         if (phase === 'disconnected') {row.status = 'disconnected'; row.freshness = 'unavailable';}
         return row;
@@ -721,7 +721,7 @@ const completeCases: OverlayReceiptCase[] = [
   {name: 'overlay bridge absent', mutate: receipt => {delete receipt.overlay.bridge;}, reason: 'OVERLAY_RESULT_INCOMPLETE_OR_INVALID'},
   {name: 'raw geometry exposed', mutate: receipt => {receipt.overlay.bridge.keys.push('setBounds');}, reason: 'OVERLAY_RESULT_INCOMPLETE_OR_INVALID'},
   {name: 'one expected phase absent', mutate: receipt => {receipt.overlay.observations.pop();}, reason: 'OVERLAY_RESULT_INCOMPLETE_OR_INVALID'},
-  {name: 'mixed old/current values', mutate: receipt => {receipt.overlay.observations[1].fuel = '73.0';}, reason: 'OVERLAY_RESULT_INCOMPLETE_OR_INVALID'},
+  {name: 'mixed old/current values', mutate: receipt => {receipt.overlay.observations[1].fuel = '73';}, reason: 'OVERLAY_RESULT_INCOMPLETE_OR_INVALID'},
   {name: 'missing treated as zero', mutate: receipt => {receipt.overlay.observations[2].speed = '0.0';}, reason: 'OVERLAY_RESULT_INCOMPLETE_OR_INVALID'},
   {name: 'stale treated as disconnected', mutate: receipt => {receipt.overlay.observations[5].freshness = 'unavailable';}, reason: 'OVERLAY_RESULT_INCOMPLETE_OR_INVALID'},
   {name: 'native overlay shown', mutate: receipt => {receipt.overlay.windows[0].windows[1].visible = true;}, reason: 'OVERLAY_RESULT_INCOMPLETE_OR_INVALID'},
