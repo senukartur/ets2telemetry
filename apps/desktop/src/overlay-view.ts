@@ -80,8 +80,7 @@ const BREAK_RESERVE = '00 h 00 min';
 const reserveFor = (id: OverlaySectionId, language: AppLanguage): string | undefined =>
   id === 'mandatory-break' ? localizeDeadlineString(BREAK_RESERVE, language) : VALUE_RESERVES[id];
 /**
- * Stable value widths of the strip (ET-045d W1): a three-digit speed, a reverse gear with one digit ("R0" is wider than
- * "00" in Onest's tabular figures) and a four-digit RPM. A wider value grows under the section's cap and ellipsis.
+ * Stable value widths of the strip (ET-045d W1): a three-digit speed, the widest reserved gear form in the active font and a four-digit RPM. A wider value grows under the section's cap and ellipsis.
  * ET-050 (GD6): the gear reserve does not depend on the gear display mode. It lists the reverse form and both manual
  * range-splitter forms on separate lines ("R0", "0H", "0L"), and the strip's CSS reserves the widest line, so switching
  * modes or shifting between 1L and 1H never resizes the section. Window sizes and the row model are unchanged.

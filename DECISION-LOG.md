@@ -819,3 +819,7 @@ Asked for a staging icon that differs from production, the owner chose variant 4
 ## ET-056 automatic game discovery — October 29, 2026
 
 The owner authorized automatic ETS2/ATS connection and approved the bounded native broker one-shot discovery command/receipt and service-internal target-pinning extension: discovery hints never replace connected-peer verification, and both protocols must bind to the same verified process/plugin session before hello. Renderer authority, game wire protocols and storage schemas stay unchanged. Implementation and a draft PR are authorized; merge and release are not.
+
+## M PLUS Rounded 1c typography — October 31, 2026
+
+The owner chose M PLUS Rounded 1c for the dashboard and overlay, bundled offline with its OFL notice. Body text uses 400, labels and telemetry/journal values use 500, and headings use 700. This supersedes the Onest family and previous value weights; existing sizes, numeric reserves and layout constraints remain.

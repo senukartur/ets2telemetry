@@ -32,5 +32,5 @@ tests/fixtures/storage/*.sql text eol=lf
 tests/fixtures/storage/*.json text eol=lf
 tests/fixtures/storage/manifest.txt text eol=lf
 
-# Preserve the unchanged upstream Onest copyright/OFL bytes in Windows checkouts.
-apps/desktop/src/assets/onest-OFL.txt -text
+# Preserve the unchanged upstream M PLUS Rounded 1c copyright/OFL bytes in Windows checkouts.
+apps/desktop/src/assets/m-plus-rounded-1c-OFL.txt -text

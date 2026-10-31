@@ -22,10 +22,10 @@ describe('renderer stylesheet isolation', () => {
         build: {outDir: outputDirectory, emptyOutDir: true, assetsInlineLimit: 0, manifest: true},
       });
       const manifest = JSON.parse(await readFile(path.join(outputDirectory, '.vite/manifest.json'), 'utf8')) as Manifest;
-      const license = manifest['src/assets/onest-OFL.txt'];
+      const license = manifest['src/assets/m-plus-rounded-1c-OFL.txt'];
       expect(license).toBeDefined();
-      expect(await readFile(path.join(outputDirectory, license.file))).toEqual(await readFile('node_modules/@fontsource-variable/onest/LICENSE'));
-      expect(await readFile('apps/desktop/src/assets/onest-OFL.txt')).toEqual(await readFile('node_modules/@fontsource-variable/onest/LICENSE'));
+      expect(await readFile(path.join(outputDirectory, license.file))).toEqual(await readFile('node_modules/@fontsource/m-plus-rounded-1c/LICENSE'));
+      expect(await readFile('apps/desktop/src/assets/m-plus-rounded-1c-OFL.txt')).toEqual(await readFile('node_modules/@fontsource/m-plus-rounded-1c/LICENSE'));
       const entry = manifest['index.html'];
       const overlay = manifest['src/overlay-renderer.tsx'];
       const dashboard = manifest['src/dashboard-renderer.tsx'];
@@ -52,7 +52,7 @@ describe('renderer stylesheet isolation', () => {
       expect(overlayCss).toMatch(/\.overlay-body\s*\{[^}]*background:\s*(?:transparent|0 0)[;}]/);
       expect(overlayCss).toMatch(/html:has\(\.overlay-body\)\s*\{[^}]*background:\s*(?:transparent|0 0)[;}]/);
       expect(overlayCss).toContain('@font-face');
-      expect(overlayCss).toMatch(/Onest Variable/);
+      expect(overlayCss).toMatch(/M PLUS Rounded 1c/);
       expect(overlayCss).toMatch(/url\([^)]*\.woff2/);
       expect(overlayCss).not.toMatch(/--background|--tw-|--radix-/);
       // ET-012a: the transparent overlay never blurs what is behind it (no backdrop-filter, decision L6/brief).
@@ -63,10 +63,28 @@ describe('renderer stylesheet isolation', () => {
       expect(overlayModules).toMatch(/\/lucide-react\//);
       const dashboardCss = (await Promise.all(dashboardStyles.map(style => readFile(path.join(outputDirectory, style), 'utf8')))).join('\n');
       expect(dashboardCss).toContain('@font-face');
-      expect(dashboardCss).toMatch(/Onest Variable/);
+      expect(dashboardCss).toMatch(/M PLUS Rounded 1c/);
       expect(dashboardCss).toMatch(/url\([^)]*\.woff2/);
       expect(dashboardCss).toContain('--background');
       expect(dashboardCss).toContain('.bg-card');
+      // Every face must be a real offline asset in both renderer closures, including Russian text.
+      for (const css of [overlayCss, dashboardCss]) {
+        const faces = [...css.matchAll(/@font-face\s*\{([^}]+)\}/g)].map(match => match[1]);
+        expect(faces).toHaveLength(12);
+        expect(css).not.toMatch(/url\(["']?(?:https?:|data:)/);
+        for (const weight of [400, 500, 700]) {
+          for (const subset of ['latin', 'latin-ext', 'cyrillic', 'cyrillic-ext']) {
+            const face = faces.find(face => face.includes(`m-plus-rounded-1c-${subset}-${weight}-normal`));
+            expect(face, `${subset} ${weight}`).toBeDefined();
+            expect(face).toMatch(new RegExp(`font-weight:\\s*${weight}[;}]`));
+            expect(face).toContain('unicode-range:');
+            const asset = /url\(["']?([^"')]+\.woff2)["']?\)/.exec(face!)?.[1];
+            expect(asset).toBeDefined();
+            expect(await readFile(path.join(outputDirectory, 'assets', asset!))).toEqual(
+              await readFile(`node_modules/@fontsource/m-plus-rounded-1c/files/m-plus-rounded-1c-${subset}-${weight}-normal.woff2`));
+          }
+        }
+      }
     } finally {
       await rm(outputDirectory, {recursive: true, force: true});
     }

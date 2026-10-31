@@ -81,6 +81,15 @@ async function waitLiveInstrument(page, language) {
   const handle = await page.waitForFunction(dashboardObservation, {speed: language === 'en' ? 'Speed: 90 km/h' : 'Скорость: 90 км/ч',
     fuel: language === 'en' ? 'Fuel: 73.0 L' : 'Топливо: 73.0 л', tankHeight: '7.3%'}, {timeout: 5000});
   try {assert.deepEqual((await handle.jsonValue()).tank, {state: 'value', height: '7.3%', unavailable: 0});} finally {await handle.dispose();}
+  const typography = await page.evaluate(() => {
+    const metrics = [...globalThis.document.querySelectorAll('.yu-gauge-number,.yu-gauge-caption,.yu-gear strong,.yu-fuel strong,.yu-job-metrics strong,.yu-kv dd')];
+    return metrics.map(node => ({weight: globalThis.getComputedStyle(node).fontWeight, family: globalThis.getComputedStyle(node).fontFamily}));
+  });
+  assert.ok(typography.length > 0);
+  for (const metric of typography) {
+    assert.equal(metric.weight, '500', 'Dashboard values use Medium');
+    assert.ok(metric.family.includes('M PLUS Rounded 1c'));
+  }
 }
 // A committed main-process value may precede React's rendered switch and pending-save controls.
 function waitOverlayVisibility(page, {enabled, writable = true, saveError = null, errorVisible}, message, timeoutMs) {
@@ -812,8 +821,8 @@ export async function runUiSmoke({application, dashboard, overlay, source, sourc
         }
         const license = dashboard.getByTestId('settings.about.font-license');
         await license.locator('summary').focus(); await dashboard.keyboard.press('Enter');
-        assert.equal(await license.locator('pre').innerText(), await readFile(path.join(config.checkout, 'apps/desktop/src/assets/onest-OFL.txt'), 'utf8'));
-        assert.match(await license.locator('pre').getAttribute('data-license-asset'), /onest-OFL[^/]*\.txt$/);
+        assert.equal(await license.locator('pre').innerText(), await readFile(path.join(config.checkout, 'apps/desktop/src/assets/m-plus-rounded-1c-OFL.txt'), 'utf8'));
+        assert.match(await license.locator('pre').getAttribute('data-license-asset'), /m-plus-rounded-1c-OFL[^/]*\.txt$/);
         await dashboard.keyboard.press('Enter'); record.flags.fontLicense = true;
         await settingsPanel(dashboard, 'overlay');
         const visibility = dashboard.getByRole('switch', {name: language === 'en' ? 'Show overlay' : 'Показывать оверлей', exact: true});
@@ -940,6 +949,7 @@ export async function runUiSmoke({application, dashboard, overlay, source, sourc
           // ET-045d value typography: slightly smaller values, never below the 12 px labels (units 12 px except the 11 px Cluster RPM unit).
           assert.equal(await overlay.getByTestId('overlay-fuel').evaluate(node => globalThis.getComputedStyle(node).fontSize), {strip: '17px', card: '12px', cluster: '12px', hud: '13px'}[layout]);
           assert.equal(await overlay.getByTestId('overlay-speed').evaluate(node => globalThis.getComputedStyle(node).fontSize), {strip: '19px', card: '34px', cluster: '34px', hud: '15px'}[layout]);
+          assert.deepEqual(await overlay.locator('.overlay-value').evaluateAll(nodes => [...new Set(nodes.map(node => globalThis.getComputedStyle(node).fontWeight))]), ['500'], 'Every overlay value uses Medium in every layout');
           assert.deepEqual(await overlay.evaluate(() => ({html: globalThis.getComputedStyle(globalThis.document.documentElement).backgroundColor, body: globalThis.getComputedStyle(globalThis.document.body).backgroundColor})), {html: 'rgba(0, 0, 0, 0)', body: 'rgba(0, 0, 0, 0)'});
           if (layout === 'card') {assert.equal(await overlay.getByTestId('overlay-card-hero').count(), 1); assert.equal(await overlay.getByTestId('overlay-card-hero').getAttribute('data-count'), '3');}
           if (layout === 'cluster') {assert.equal(await overlay.getByTestId('overlay-rpm-arc').getAttribute('stroke-dasharray'), '50.26548245743669 251.32741228718345');}
@@ -1091,7 +1101,7 @@ export async function runUiSmoke({application, dashboard, overlay, source, sourc
   await chooseLanguage(dashboard, other); await observeVersionAndUpdate(dashboard, config, other);
   await chooseLanguage(dashboard, shown);
   record.flags.versionLine = true; record.flags.updateHidden = true;
-  record.flags.offlineFonts = await dashboard.evaluate(() => [...globalThis.document.fonts].some(font => font.family.includes('Onest')));
+  record.flags.offlineFonts = await dashboard.evaluate(() => [...globalThis.document.fonts].some(font => font.family.includes('M PLUS Rounded 1c')));
   assert.equal(record.flags.offlineFonts, true);
   await chooseLanguage(dashboard, 'en'); await screen(dashboard, 'live');
 }

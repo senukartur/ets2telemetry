@@ -243,8 +243,12 @@ export async function waitForLayoutContainment(page, expected) {
 // A hidden DOM check protects style isolation; it does not establish real game visibility.
 export async function verifyRendererStyles(dashboard, overlay) {
   await overlay.getByTestId('overlay-root').waitFor({state: 'attached', timeout: 10000});
-  const read = () => {
+  const read = async () => {
     const document = globalThis.document;
+    const loadedFonts = await Promise.all([400, 500, 700].map(async weight => {
+      const faces = await document.fonts.load(`${weight} 16px "M PLUS Rounded 1c"`, 'Скорость Ёж 0123456789');
+      return {weight, loaded: faces.length >= 2 && faces.every(face => face.status === 'loaded')};
+    }));
     const style = node => globalThis.getComputedStyle(node);
     const card = document.querySelector('[data-slot="card"]:not(.yu-instrument)');
     // ET-012a: the overlay root is transparent; each layout's first visible surface paints the background.
@@ -252,7 +256,7 @@ export async function verifyRendererStyles(dashboard, overlay) {
     return {htmlBackground: style(document.documentElement).backgroundColor,
       bodyBackground: style(document.body).backgroundColor,
       themeBackground: style(document.documentElement).getPropertyValue('--background').trim(),
-      fontFaces: Array.from(document.fonts).map(font => font.family),
+      fontFaces: Array.from(document.fonts).map(font => font.family), loadedFonts,
       stylesheets: Array.from(document.styleSheets).map(sheet => sheet.href),
       cardBackground: card ? style(card).backgroundColor : null,
       widgetBackground: widget ? style(widget).backgroundColor : null,
@@ -261,11 +265,12 @@ export async function verifyRendererStyles(dashboard, overlay) {
   const mainStyles = await dashboard.evaluate(read);
   const overlayStyles = await overlay.evaluate(read);
   assert.ok(mainStyles.themeBackground && mainStyles.cardBackground && mainStyles.cardBackground !== 'rgba(0, 0, 0, 0)', 'Dashboard shadcn theme and Card must be styled');
-  assert.ok(mainStyles.fontFaces.some(family => family.includes('Onest')), 'Dashboard must retain the configured offline Onest font');
+  assert.ok(mainStyles.fontFaces.some(family => family.includes('M PLUS Rounded 1c')), 'Dashboard must retain the configured offline M PLUS Rounded 1c font');
+  for (const styles of [mainStyles, overlayStyles]) assert.deepEqual(styles.loadedFonts, [400, 500, 700].map(weight => ({weight, loaded: true})), 'Latin and Cyrillic faces load locally at every configured weight');
   assert.equal(overlayStyles.htmlBackground, 'rgba(0, 0, 0, 0)');
   assert.equal(overlayStyles.bodyBackground, 'rgba(0, 0, 0, 0)');
   assert.equal(overlayStyles.themeBackground, '', 'Overlay must not load the main theme');
-  assert.ok(overlayStyles.fontFaces.length > 0 && overlayStyles.fontFaces.every(family => family.includes('Onest')), 'Overlay must bundle its own offline Onest faces');
+  assert.ok(overlayStyles.fontFaces.length > 0 && overlayStyles.fontFaces.every(family => family.includes('M PLUS Rounded 1c')), 'Overlay must bundle its own offline M PLUS Rounded 1c faces');
   assert.equal(overlayStyles.widgetBackground, 'rgba(11, 17, 32, 0.8)');
   assert.equal(overlayStyles.widgetBackdropFilter, 'none', 'Overlay must not blur the game behind it');
   assert.ok(mainStyles.stylesheets.length > 0 && overlayStyles.stylesheets.length > 0);
