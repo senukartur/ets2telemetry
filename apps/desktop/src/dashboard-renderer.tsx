@@ -15,8 +15,8 @@ import {hardModeView} from './hard-mode/view';
 import {useLanguageController} from './shell/use-language';
 import {useWindowFocused} from './shell/use-window-focus';
 import logo from './assets/logo.png';
-import onestLicense from './assets/onest-OFL.txt?raw';
-import onestLicenseUrl from './assets/onest-OFL.txt?url';
+import roundedFontLicense from './assets/m-plus-rounded-1c-OFL.txt?raw';
+import roundedFontLicenseUrl from './assets/m-plus-rounded-1c-OFL.txt?url';
 import {createStartupLine} from './dashboard-startup';
 import {recordingStatusText} from './recording-status-text';
 import {LiveDashboard} from './live-dashboard';
@@ -173,7 +173,7 @@ export default function App() {
       <AlertDescription data-testid="health-recording-alert">{recording.alert}</AlertDescription></Alert> : null}
     <Alert><AlertDescription data-testid="close-to-tray">{strings.closeToTray}</AlertDescription></Alert>
   </CardContent></Card></div>
-          <div hidden={panel !== 'about'} className="yu-stack" data-testid="settings.about"><Card><CardContent><div className="flex items-center gap-4 py-4" data-testid="settings.about.brand"><img src={logo} alt="" width={64} height={64} /><div><h2 className="text-lg font-bold">{CHANNEL.displayName}</h2><p>{t('app.sub', undefined, language)}</p></div></div><div className="space-y-3 pb-4"><VersionLine info={app?.application} language={language} testId="settings.about.version" /><AboutUpdateCheck view={app?.update} language={language} /></div><details className="yu-font-license" data-testid="settings.about.font-license"><summary>Onest · SIL Open Font License 1.1</summary><pre data-license-asset={onestLicenseUrl}>{onestLicense}</pre></details></CardContent></Card><UninstallCard language={language} /></div>
+          <div hidden={panel !== 'about'} className="yu-stack" data-testid="settings.about"><Card><CardContent><div className="flex items-center gap-4 py-4" data-testid="settings.about.brand"><img src={logo} alt="" width={64} height={64} /><div><h2 className="text-lg font-bold">{CHANNEL.displayName}</h2><p>{t('app.sub', undefined, language)}</p></div></div><div className="space-y-3 pb-4"><VersionLine info={app?.application} language={language} testId="settings.about.version" /><AboutUpdateCheck view={app?.update} language={language} /></div><details className="yu-font-license" data-testid="settings.about.font-license"><summary>M PLUS Rounded 1c · SIL Open Font License 1.1</summary><pre data-license-asset={roundedFontLicenseUrl}>{roundedFontLicense}</pre></details></CardContent></Card><UninstallCard language={language} /></div>
           </div>
         </div>
       </main></div>

@@ -70,14 +70,14 @@
   --yu-radius-badge: 6px;
   --yu-title-bar: 3px solid var(--yu-accent);  /* left bar of every card title, 10px text indent */
 
-  /* Type: Onest, bundled with @fontsource-variable/onest (the app works offline; never load Google Fonts at runtime) */
-  --yu-font: 'Onest Variable', 'Onest', 'Segoe UI', system-ui, sans-serif;
+  /* Type: M PLUS Rounded 1c, bundled with @fontsource/m-plus-rounded-1c (the app works offline; never load Google Fonts at runtime) */
+  --yu-font: 'M PLUS Rounded 1c', 'Segoe UI', system-ui, sans-serif;
   --yu-text-screen: 24px;   /* screen title, 700 */
-  --yu-text-card: 15px;     /* card title, 600 */
+  --yu-text-card: 15px;     /* card title, 700 */
   --yu-text-body: 13px;     /* desktop body (one step denser than the web) */
   --yu-text-meta: 12px;     /* captions, table header */
-  --yu-text-nav-group: 11px;/* sidebar group label, 600, uppercase, 0.6px tracking */
-  --yu-text-metric: 28px;   /* metric tile value, 800 */
+  --yu-text-nav-group: 11px;/* sidebar group label, 500, uppercase, 0.6px tracking */
+  --yu-text-metric: 28px;   /* metric tile value, 500 */
 
   /* Size */
   --yu-control-h: 34px;     /* buttons, inputs, selects (32-36px) */

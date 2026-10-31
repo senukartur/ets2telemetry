@@ -4,8 +4,8 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>Yukon Union Telemetry UI</title>
-<!-- No web fonts: this page makes no network request. The application bundles Onest with
-     @fontsource-variable/onest and never loads Google Fonts (ui-spec.md §3). Here Onest is used only if it is
+<!-- No web fonts: this page makes no network request. The application bundles M PLUS Rounded 1c with
+     @fontsource/m-plus-rounded-1c and never loads Google Fonts (ui-spec.md §3). Here M PLUS Rounded 1c is used only if it is
      installed locally; otherwise the page falls back to Segoe UI. -->
 <style>
 /* Layout: a presentation page holding a scaled 1280x800 Electron window (or a 1920x1080 game scene for the overlay).
@@ -29,7 +29,7 @@
   --yu-tile-teal-gradient: linear-gradient(135deg, rgba(20,184,166,.28), rgba(31,41,55,.95) 70%); --yu-tile-teal-border: rgba(45,212,191,.45);
   --yu-ov-panel: rgba(11,17,32,.80); --yu-ov-border: rgba(55,65,81,.9); --yu-ov-text: #F3F4F6; --yu-ov-muted: rgba(209,213,219,.72);
   --yu-ov-icon: rgba(156,163,175,.9); --yu-ov-accent: #60A5FA; --yu-ov-fuel: #8FD3AE; --yu-ov-low: #E8C58A; --yu-ov-bad: #F3B4A4; --yu-ov-edit: #60A5FA;
-  --font: 'Onest', 'Segoe UI', system-ui, sans-serif;
+  --font: 'M PLUS Rounded 1c', 'Segoe UI', system-ui, sans-serif;
   --page: #080D19;
 }
 * { box-sizing: border-box; }
@@ -47,15 +47,15 @@ button:focus-visible, [tabindex]:focus-visible, input:focus-visible { outline: 2
 .phead p { margin: 2px 0 0; color: var(--yu-text-muted); font-size: 13px; max-width: 70ch; }
 .ctrls { display: flex; flex-wrap: wrap; gap: 10px 16px; align-items: center; padding: 12px 14px; background: var(--yu-bg-chrome); border: 1px solid var(--yu-divider-chrome); border-radius: 12px; }
 .ctl { display: flex; align-items: center; gap: 8px; }
-.ctl > span { font-size: 11px; font-weight: 600; letter-spacing: .6px; text-transform: uppercase; color: var(--yu-text-muted); }
+.ctl > span { font-size: 11px; font-weight:500; letter-spacing: .6px; text-transform: uppercase; color: var(--yu-text-muted); }
 .pseg { display: inline-flex; flex-wrap: wrap; background: var(--yu-bg-input); border: 1px solid var(--yu-border); border-radius: 10px; padding: 3px; gap: 2px; }
-.pseg button { border: 0; background: transparent; color: var(--yu-text-secondary); min-height: 30px; padding: 0 11px; border-radius: 7px; font-size: 13px; font-weight: 600; cursor: pointer; }
+.pseg button { border: 0; background: transparent; color: var(--yu-text-secondary); min-height: 30px; padding: 0 11px; border-radius: 7px; font-size: 13px; font-weight:500; cursor: pointer; }
 .pseg button[aria-pressed="true"] { background: var(--yu-accent); color: #fff; }
 .stage { position: relative; width: 100%; }
 .stage > .scaled { position: absolute; top: 0; left: 0; transform-origin: 0 0; }
 .notes { display: grid; grid-template-columns: minmax(0, 2fr) minmax(0, 1fr); gap: 14px; }
 .note { background: var(--yu-bg-card); border: 1px solid var(--yu-border); border-radius: 12px; padding: 14px 18px; min-width: 0; }
-.note h2 { margin: 0 0 8px; font-size: 15px; font-weight: 600; border-left: 3px solid var(--yu-accent); padding-left: 10px; }
+.note h2 { margin: 0 0 8px; font-size: 15px; font-weight:700; border-left: 3px solid var(--yu-accent); padding-left: 10px; }
 .note p, .note li { margin: 0; font-size: 13px; color: var(--yu-text-secondary); }
 .note ul { margin: 0; padding-left: 18px; display: flex; flex-direction: column; gap: 4px; }
 .note code { font-size: 12px; color: var(--yu-selected-fg); background: var(--yu-bg-inset); padding: 1px 5px; border-radius: 4px; }
@@ -78,14 +78,14 @@ button:focus-visible, [tabindex]:focus-visible, input:focus-visible { outline: 2
 .lockup b { display: block; font-size: 15px; font-weight: 700; line-height: 1.2; }
 .lockup span { display: block; font-size: 11px; color: var(--yu-text-muted); }
 .navg { display: flex; flex-direction: column; gap: 2px; }
-.navg > .gl { font-size: 11px; font-weight: 600; letter-spacing: .6px; text-transform: uppercase; color: var(--yu-text-muted); padding: 0 10px 6px; display: flex; align-items: center; gap: 6px; }
+.navg > .gl { font-size: 11px; font-weight:500; letter-spacing: .6px; text-transform: uppercase; color: var(--yu-text-muted); padding: 0 10px 6px; display: flex; align-items: center; gap: 6px; }
 .nav { display: flex; align-items: center; gap: 10px; min-height: 38px; padding: 0 10px; border-radius: 10px; border: 1px solid transparent; background: transparent; color: var(--yu-text-secondary); font-size: 13.5px; cursor: pointer; text-align: left; width: 100%; }
 .nav:hover { background: rgba(255,255,255,.03); }
-.nav[aria-current="page"] { background: var(--yu-selected-bg); border-color: var(--yu-selected-border); color: var(--yu-selected-fg); font-weight: 600; }
+.nav[aria-current="page"] { background: var(--yu-selected-bg); border-color: var(--yu-selected-border); color: var(--yu-selected-fg); font-weight:500; }
 .nav .grow { flex: 1; }
 .sfoot { margin-top: auto; display: flex; flex-direction: column; gap: 10px; }
 .recbox { background: var(--yu-bg-app); border: 1px solid var(--yu-divider-chrome); border-radius: 12px; padding: 10px 12px; display: flex; flex-direction: column; gap: 3px; }
-.recbox .l1 { display: flex; align-items: center; gap: 8px; font-weight: 600; font-size: 13px; }
+.recbox .l1 { display: flex; align-items: center; gap: 8px; font-weight:500; font-size: 13px; }
 .recbox .l2 { font-size: 12px; color: var(--yu-text-muted); }
 .sfoot .row2 { display: flex; gap: 8px; border-top: 1px solid var(--yu-divider-chrome); padding-top: 10px; }
 .main { flex: 1; min-width: 0; display: flex; flex-direction: column; position: relative; }
@@ -100,7 +100,7 @@ button:focus-visible, [tabindex]:focus-visible, input:focus-visible { outline: 2
 .card.hero { background: var(--yu-tile-gradient); border-color: var(--yu-tile-border); }
 .card.teal { background: var(--yu-tile-teal-gradient); border-color: var(--yu-tile-teal-border); }
 .ch { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 14px 16px 0; }
-.ct { font-size: 15px; font-weight: 600; border-left: 3px solid var(--yu-accent); padding-left: 10px; line-height: 1.25; margin: 0; }
+.ct { font-size: 15px; font-weight:700; border-left: 3px solid var(--yu-accent); padding-left: 10px; line-height: 1.25; margin: 0; }
 .cd { font-size: 12px; color: var(--yu-text-muted); }
 .cb { padding: 12px 16px 16px; }
 .grid { display: grid; gap: 14px; }
@@ -111,16 +111,16 @@ button:focus-visible, [tabindex]:focus-visible, input:focus-visible { outline: 2
 .t2 { color: var(--yu-text-secondary); }
 .small { font-size: 12px; }
 .num { font-variant-numeric: tabular-nums; }
-.b6 { font-weight: 600; }
+.b6 { font-weight:500; }
 .b7 { font-weight: 700; }
 .mono { font-variant-numeric: tabular-nums; letter-spacing: .01em; }
 .label { font-size: 12px; color: var(--yu-text-muted); }
-.metric { font-size: 28px; font-weight: 800; line-height: 1.1; font-variant-numeric: tabular-nums; letter-spacing: -.01em; }
-.metric small { font-size: 13px; font-weight: 600; color: var(--yu-text-muted); margin-left: 4px; letter-spacing: 0; }
+.metric { font-size: 28px; font-weight:500; line-height: 1.1; font-variant-numeric: tabular-nums; letter-spacing: -.01em; }
+.metric small { font-size: 13px; font-weight:500; color: var(--yu-text-muted); margin-left: 4px; letter-spacing: 0; }
 .sep { height: 1px; background: var(--yu-divider); }
 
 .chip { display: inline-flex; align-items: center; gap: 6px; min-height: 28px; padding: 3px 10px; border-radius: 8px; font-size: 12px; font-weight: 700; border: 1px solid; white-space: nowrap; }
-.badge { display: inline-flex; align-items: center; gap: 5px; min-height: 22px; padding: 2px 8px; border-radius: 6px; font-size: 12px; font-weight: 600; border: 1px solid; white-space: nowrap; }
+.badge { display: inline-flex; align-items: center; gap: 5px; min-height: 22px; padding: 2px 8px; border-radius: 6px; font-size: 12px; font-weight:500; border: 1px solid; white-space: nowrap; }
 .ok { color: var(--yu-ok-fg); background: var(--yu-ok-bg); border-color: var(--yu-ok-border); }
 .warn { color: var(--yu-warn-fg); background: var(--yu-warn-bg); border-color: var(--yu-warn-border); }
 .err { color: var(--yu-err-fg); background: var(--yu-err-bg); border-color: var(--yu-err-border); }
@@ -131,7 +131,7 @@ button:focus-visible, [tabindex]:focus-visible, input:focus-visible { outline: 2
 .dot { width: 8px; height: 8px; border-radius: 50%; background: currentColor; flex: none; }
 .dot.live { background: var(--yu-online); box-shadow: 0 0 0 3px rgba(52,211,153,.18); }
 
-.btn { display: inline-flex; align-items: center; justify-content: center; gap: 7px; min-height: 34px; padding: 0 14px; border-radius: 10px; font-size: 13px; font-weight: 600; cursor: pointer; white-space: nowrap; border: 1px solid transparent; }
+.btn { display: inline-flex; align-items: center; justify-content: center; gap: 7px; min-height: 34px; padding: 0 14px; border-radius: 10px; font-size: 13px; font-weight:500; cursor: pointer; white-space: nowrap; border: 1px solid transparent; }
 .btn.p { background: var(--yu-accent); color: #fff; }
 .btn.s { background: transparent; border-color: var(--yu-border-input); color: var(--yu-text); }
 .btn.d { background: transparent; border-color: var(--yu-err-fg); color: var(--yu-err-fg); }
@@ -139,9 +139,9 @@ button:focus-visible, [tabindex]:focus-visible, input:focus-visible { outline: 2
 .btn.sm { min-height: 30px; padding: 0 11px; font-size: 12.5px; }
 .btn.icon { width: 34px; padding: 0; }
 .input { display: flex; align-items: center; gap: 8px; min-height: 34px; padding: 0 11px; border-radius: 10px; background: var(--yu-bg-input); border: 1px solid var(--yu-border-input); color: var(--yu-text-muted); font-size: 13px; }
-.input.val { color: var(--yu-text); justify-content: space-between; }
+.input.val { font-weight:500; color: var(--yu-text); justify-content: space-between; }
 .seg { display: inline-flex; background: var(--yu-bg-input); border: 1px solid var(--yu-border); border-radius: 10px; padding: 3px; gap: 2px; }
-.seg button { border: 0; background: transparent; color: var(--yu-text-secondary); min-height: 28px; padding: 0 11px; border-radius: 7px; font-size: 12.5px; font-weight: 600; cursor: pointer; display: inline-flex; align-items: center; gap: 6px; }
+.seg button { border: 0; background: transparent; color: var(--yu-text-secondary); min-height: 28px; padding: 0 11px; border-radius: 7px; font-size: 12.5px; font-weight:500; cursor: pointer; display: inline-flex; align-items: center; gap: 6px; }
 .seg button.on { background: var(--yu-accent); color: #fff; }
 .bar { height: 8px; border-radius: 99px; background: var(--yu-border); overflow: hidden; }
 .bar > i { display: block; height: 100%; border-radius: 99px; background: var(--yu-accent-light); }
@@ -171,13 +171,13 @@ table.t tbody tr:hover td { background: rgba(255,255,255,.025); }
 .kv:first-child { border-top: 0; }
 .kv > span:first-child { color: var(--yu-text-muted); }
 .kv .note { display: block; font-size: 11px; color: var(--yu-text-muted); opacity: .8; }
-.kv b { font-weight: 600; text-align: right; font-variant-numeric: tabular-nums; }
+.kv b { font-weight:500; text-align: right; font-variant-numeric: tabular-nums; }
 
-.win[data-conn="lost"] .val, .ovl[data-conn="lost"] .val { opacity: .45; }
-.win[data-conn="waiting"] .val { color: var(--yu-text-muted); }
+.win[data-conn="lost"] .val, .ovl[data-conn="lost"] .val { font-weight:500; opacity: .45; }
+.win[data-conn="waiting"] .val { font-weight:500; color: var(--yu-text-muted); }
 
 /* Live */
-.gear { min-width: 64px; height: 64px; padding: 0 10px; border-radius: 12px; border: 1px solid var(--yu-tile-border); background: rgba(11,17,32,.5); display: grid; place-items: center; font-size: 36px; font-weight: 800; font-variant-numeric: tabular-nums; }
+.gear { min-width: 64px; height: 64px; padding: 0 10px; border-radius: 12px; border: 1px solid var(--yu-tile-border); background: rgba(11,17,32,.5); display: grid; place-items: center; font-size: 36px; font-weight:500; font-variant-numeric: tabular-nums; }
 .tank { width: 46px; height: 168px; border-radius: 10px; background: var(--yu-bg-inset); border: 1px solid var(--yu-border); position: relative; overflow: hidden; flex: none; }
 .tank > i { position: absolute; left: 0; right: 0; bottom: 0; }
 .tank > s { position: absolute; left: 0; right: 0; height: 1px; background: rgba(0,0,0,.35); }
@@ -214,9 +214,9 @@ table.t tbody tr:hover td { background: rgba(255,255,255,.025); }
 .snav { width: 200px; flex: none; display: flex; flex-direction: column; gap: 2px; }
 .srow { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 24px; align-items: center; padding: 12px 0; border-top: 1px solid var(--yu-divider); }
 .srow:first-child { border-top: 0; }
-.srow b { display: block; font-weight: 600; font-size: 13.5px; }
+.srow b { display: block; font-weight:500; font-size: 13.5px; }
 .srow .d { font-size: 12px; color: var(--yu-text-muted); }
-.lopt { border: 1px solid var(--yu-border); border-radius: 10px; padding: 8px; display: flex; flex-direction: column; gap: 6px; font-size: 12.5px; font-weight: 600; background: var(--yu-bg-inset); cursor: pointer; text-align: left; }
+.lopt { border: 1px solid var(--yu-border); border-radius: 10px; padding: 8px; display: flex; flex-direction: column; gap: 6px; font-size: 12.5px; font-weight:500; background: var(--yu-bg-inset); cursor: pointer; text-align: left; }
 .lopt.on { border-color: var(--yu-selected-border); background: var(--yu-selected-bg); color: var(--yu-selected-fg); }
 .lopt .th { height: 56px; border-radius: 6px; background: linear-gradient(180deg, #33415c, #2a3324); position: relative; }
 .lopt .th i { position: absolute; background: rgba(11,17,32,.85); border: 1px solid rgba(96,165,250,.5); border-radius: 3px; }
@@ -241,18 +241,18 @@ table.t tbody tr:hover td { background: rgba(255,255,255,.025); }
 .scene { width: 1920px; height: 1080px; position: relative; overflow: hidden; border-radius: 10px; border: 1px solid #1F2937; font-family: var(--font); background: #1b2230; }
 .scene svg.bg { position: absolute; inset: 0; }
 .ovl { position: absolute; color: var(--yu-ov-text); }
-.ovl .val { font-variant-numeric: tabular-nums; }
+.ovl .val { font-weight:500; font-variant-numeric: tabular-nums; }
 .ovl .panel { background: var(--yu-ov-panel); border: 1px solid var(--yu-ov-border); border-radius: 10px; }
-.ovl .lbl { font-size: 10.5px; letter-spacing: .07em; text-transform: uppercase; color: var(--yu-ov-muted); font-weight: 600; }
+.ovl .lbl { font-size: 10.5px; letter-spacing: .07em; text-transform: uppercase; color: var(--yu-ov-muted); font-weight:500; }
 .ovl .tag { display: inline-flex; align-items: center; gap: 5px; font-size: 10.5px; font-weight: 700; letter-spacing: .05em; text-transform: uppercase; padding: 2px 7px; border-radius: 5px; border: 1px solid; }
 .ovl .tag.w { color: var(--yu-warn-fg); background: rgba(42,34,19,.9); border-color: var(--yu-warn-border); }
 .ovl .tag.e { color: var(--yu-err-fg); background: rgba(42,22,22,.9); border-color: var(--yu-err-border); }
-.ovl .strip { display: flex; align-items: center; gap: 14px; height: 38px; padding: 0 14px 0 12px; white-space: nowrap; font-size: 14px; font-weight: 600; }
+.ovl .strip { display: flex; align-items: center; gap: 14px; height: 38px; padding: 0 14px 0 12px; white-space: nowrap; font-size: 14px; font-weight:500; }
 .ovl .sx { display: inline-flex; align-items: center; gap: 6px; font-variant-numeric: tabular-nums; }
 .ovl .sx .ico { color: var(--yu-ov-icon); stroke-width: 2; }
 .ovl .sx small { font-size: 11px; font-weight: 500; color: var(--yu-ov-muted); margin-left: -2px; }
-.ovl .sp .val { font-size: 22px; font-weight: 800; letter-spacing: -.02em; }
-.ovl .gearchip { min-width: 26px; height: 24px; padding: 0 6px; border-radius: 6px; border: 1.5px solid rgba(96,165,250,.6); display: inline-grid; place-items: center; font-size: 13.5px; font-weight: 800; }
+.ovl .sp .val { font-weight:500; font-size: 22px; font-weight:500; letter-spacing: -.02em; }
+.ovl .gearchip { min-width: 26px; height: 24px; padding: 0 6px; border-radius: 6px; border: 1.5px solid rgba(96,165,250,.6); display: inline-grid; place-items: center; font-size: 13.5px; font-weight:500; }
 .ovl .mini { width: 34px; height: 4px; border-radius: 99px; background: rgba(255,255,255,.14); overflow: hidden; display: inline-block; }
 .ovl .mini > i { display: block; height: 100%; background: var(--yu-ov-accent); }
 .ovl .mini.fuel > i { background: var(--yu-ov-fuel); } .ovl .mini.low > i { background: var(--yu-ov-low); }
@@ -626,16 +626,16 @@ function gauge(d) {
   for (var v = 0; v <= d.spMax; v += 10) {
     var a = a0 + (a1 - a0) * v / d.spMax, major = v % 20 === 0, p0 = pt(cx, cy, 112, a), p1 = pt(cx, cy, major ? 101 : 106, a);
     ticks += '<line x1="' + p0[0].toFixed(1) + '" y1="' + p0[1].toFixed(1) + '" x2="' + p1[0].toFixed(1) + '" y2="' + p1[1].toFixed(1) + '" stroke="' + (major ? '#9CA3AF' : '#4B5563') + '" stroke-width="2"/>';
-    if (major) { var pl = pt(cx, cy, 89, a); ticks += '<text x="' + pl[0].toFixed(1) + '" y="' + (pl[1] + 4).toFixed(1) + '" text-anchor="middle" font-size="11" fill="#9CA3AF" font-family="Onest, sans-serif">' + v + '</text>'; }
+    if (major) { var pl = pt(cx, cy, 89, a); ticks += '<text x="' + pl[0].toFixed(1) + '" y="' + (pl[1] + 4).toFixed(1) + '" text-anchor="middle" font-size="11" fill="#9CA3AF" font-family="&quot;M PLUS Rounded 1c&quot;, sans-serif">' + v + '</text>'; }
   }
   return '<svg viewBox="0 0 260 236" width="260" height="236" role="img" aria-label="' + t('live.speed') + '" data-spec="live.instrument.gauge">' +
     '<path d="' + arc(cx, cy, 122, a0, a1) + '" stroke="#374151" stroke-width="10" fill="none" stroke-linecap="round"/>' +
     (f > 0 ? '<path class="val" d="' + arc(cx, cy, 122, a0, a0 + (a1 - a0) * f) + '" stroke="#60A5FA" stroke-width="10" fill="none" stroke-linecap="round"/>' : '') + ticks +
     '<path d="' + arc(cx, cy, 66, -100, 100) + '" stroke="#374151" stroke-width="5" fill="none" stroke-linecap="round"/>' +
     (rf > 0 ? '<path class="val" d="' + arc(cx, cy, 66, -100, -100 + 200 * rf) + '" stroke="#2563EB" stroke-width="5" fill="none" stroke-linecap="round"/>' : '') +
-    '<text class="val" x="130" y="142" text-anchor="middle" font-size="54" font-weight="800" fill="#F3F4F6" font-family="Onest, sans-serif">' + V(d.speed.toFixed(0)) + '</text>' +
-    '<text x="130" y="166" text-anchor="middle" font-size="13" font-weight="600" fill="#9CA3AF" font-family="Onest, sans-serif">' + u(d.spU) + '</text>' +
-    '<text class="val" x="130" y="214" text-anchor="middle" font-size="13" fill="#D1D5DB" font-family="Onest, sans-serif">' + V(d.rpm) + ' ' + u('rpm') + '</text></svg>';
+    '<text class="val" x="130" y="142" text-anchor="middle" font-size="54" font-weight="500" fill="#F3F4F6" font-family="&quot;M PLUS Rounded 1c&quot;, sans-serif">' + V(d.speed.toFixed(0)) + '</text>' +
+    '<text x="130" y="166" text-anchor="middle" font-size="13" font-weight="500" fill="#9CA3AF" font-family="&quot;M PLUS Rounded 1c&quot;, sans-serif">' + u(d.spU) + '</text>' +
+    '<text class="val" x="130" y="214" text-anchor="middle" font-size="13" fill="#D1D5DB" font-family="&quot;M PLUS Rounded 1c&quot;, sans-serif">' + V(d.rpm) + ' ' + u('rpm') + '</text></svg>';
 }
 function liveScreen() {
   var d = D(), w = S.conn === 'waiting', fp = w ? 0 : d.fuelPct, prog = w ? 0 : d.progress;
@@ -723,12 +723,12 @@ function tripScreen() {
     tile('', t('tr.time'), dur(tr.real), t('tr.gameTime', { v: dur(tr.gt) })) + tile('', t('tr.fuel'), '<span style="font-size:22px">' + tr.fuel + '</span>', t('tr.fuelNote')) + '</div>';
   var smax = tr.game === 'ATS' ? 80 : 130, n = tr.rec === 'unknown' ? 36 : 90, sp = series(n, 3 + S.trip * 17, smax * 0.6, smax * 0.18, smax * 0.05, smax * 0.82);
   var W = 600, H = 140, grid = '';
-  for (var g = 0; g <= 4; g++) grid += '<line x1="36" x2="' + (W + 36) + '" y1="' + (8 + g * H / 4) + '" y2="' + (8 + g * H / 4) + '" stroke="#2B3544"/><text x="30" y="' + (12 + g * H / 4) + '" text-anchor="end" font-size="10" fill="#9CA3AF" font-family="Onest, sans-serif">' + Math.round(smax * (1 - g / 4)) + '</text>';
+  for (var g = 0; g <= 4; g++) grid += '<line x1="36" x2="' + (W + 36) + '" y1="' + (8 + g * H / 4) + '" y2="' + (8 + g * H / 4) + '" stroke="#2B3544"/><text x="30" y="' + (12 + g * H / 4) + '" text-anchor="end" font-size="10" fill="#9CA3AF" font-family="&quot;M PLUS Rounded 1c&quot;, sans-serif">' + Math.round(smax * (1 - g / 4)) + '</text>';
   var cw = tr.rec === 'unknown' ? W * 0.6 : W;
   var gaps = tr.rec === 'partial' ? '<rect x="' + (36 + W * 0.3) + '" y="8" width="10" height="' + H + '" fill="#E8C58A" fill-opacity=".18"/><rect x="' + (36 + W * 0.78) + '" y="8" width="8" height="' + H + '" fill="#E8C58A" fill-opacity=".18"/>' : '';
   var miss = tr.rec === 'unknown' ? '<rect x="' + (36 + cw) + '" y="8" width="' + (W - cw) + '" height="' + H + '" fill="url(#hatch)"/>' : '';
   var chart = '<svg viewBox="0 0 ' + (W + 44) + ' ' + (H + 28) + '" width="100%" style="display:block" data-spec="trip.speedChart"><defs><pattern id="hatch" width="6" height="6" patternUnits="userSpaceOnUse" patternTransform="rotate(45)"><line x1="0" y1="0" x2="0" y2="6" stroke="#374151" stroke-width="2"/></pattern></defs>' + grid + gaps +
-    '<g transform="translate(36 8)">' + spark(sp, cw, H, 0, smax, '#60A5FA') + '</g>' + miss + '<text x="36" y="' + (H + 26) + '" font-size="10" fill="#9CA3AF" font-family="Onest, sans-serif">' + tr.tm + '</text><text x="' + (W + 36) + '" y="' + (H + 26) + '" text-anchor="end" font-size="10" fill="#9CA3AF" font-family="Onest, sans-serif">+' + dur(tr.real) + '</text></svg>';
+    '<g transform="translate(36 8)">' + spark(sp, cw, H, 0, smax, '#60A5FA') + '</g>' + miss + '<text x="36" y="' + (H + 26) + '" font-size="10" fill="#9CA3AF" font-family="&quot;M PLUS Rounded 1c&quot;, sans-serif">' + tr.tm + '</text><text x="' + (W + 36) + '" y="' + (H + 26) + '" text-anchor="end" font-size="10" fill="#9CA3AF" font-family="&quot;M PLUS Rounded 1c&quot;, sans-serif">+' + dur(tr.real) + '</text></svg>';
   var tab = function (id) { return '<button class="' + (S.tripTab === id ? 'on' : '') + '" data-triptab="' + id + '">' + t('tr.tab.' + id) + '</button>'; };
   var body;
   if (S.tripTab === 'timeline') {
@@ -906,7 +906,7 @@ function overlayScene() {
     html = open('overlay.strip', 'left:50%;top:14px;transform:translateX(-50%)') + handle('top:auto;bottom:-36px;left:0') + '<div class="panel strip">' + (groups.map(function (g) { return g.join(''); }).join('<span class="vr"></span>') || '—') + tag + '</div></div>';
   } else if (S.ovl === 'card') {
     var parts = [];
-    if (on('speed') || on('gear') || on('rpm')) parts.push('<div style="display:flex;justify-content:space-between;align-items:end">' + (on('speed') ? '<div><span class="val" style="font-size:48px;font-weight:800;line-height:1">' + d.speed.toFixed(0) + '</span> <span class="lbl">' + u(d.spU) + '</span></div>' : '<span></span>') +
+    if (on('speed') || on('gear') || on('rpm')) parts.push('<div style="display:flex;justify-content:space-between;align-items:end">' + (on('speed') ? '<div><span class="val" style="font-size:48px;font-weight:500;line-height:1">' + d.speed.toFixed(0) + '</span> <span class="lbl">' + u(d.spU) + '</span></div>' : '<span></span>') +
       '<div style="text-align:right">' + (on('gear') ? '<span class="gearchip val" style="font-size:20px;height:34px;min-width:38px">' + d.gear + '</span>' : '') + (on('rpm') ? '<div class="lbl val" style="margin-top:4px">' + d.rpm + ' ' + u('rpm') + '</div>' : '') + '</div></div>');
     if (on('fuel') || on('range') || on('sdk-consumption')) parts.push('<div><div style="display:flex;justify-content:space-between;font-size:13px"><span>' + (on('fuel') ? t('live.fuel') + ' ' + v(d.fuel + ' ' + u(d.volU)) : '') + '</span>' + (on('range') ? '<span style="opacity:.75">' + v(d.range + ' ' + u(d.dU)) + '</span>' : '') + '</div>' +
       (on('fuel') ? '<div class="obar fuel ' + (fp < 30 ? 'low' : '') + '" style="margin-top:6px"><i class="val" style="width:' + fp + '%"></i></div>' : '') + (on('sdk-consumption') ? '<div style="font-size:11.5px;opacity:.65;margin-top:4px">' + v(d.avg + ' ' + u(d.avgU)) + ' · SDK</div>' : '') + '</div>');
@@ -924,16 +924,16 @@ function overlayScene() {
     var cx = 110, cy = 110, a0 = -130, a1 = 130, f = d.speed / d.spMax, rf = d.rpm / d.rpmMax;
     var g = (on('speed') || on('gear') || on('rpm')) ? '<svg viewBox="0 0 220 220" width="220" height="220" style="flex:none"><circle cx="110" cy="110" r="104" fill="rgba(11,17,32,.80)" stroke="rgba(55,65,81,.9)"/>' +
       (on('speed') ? '<path d="' + arc(cx, cy, 92, a0, a1) + '" stroke="rgba(255,255,255,.14)" stroke-width="8" fill="none" stroke-linecap="round"/><path class="val" d="' + arc(cx, cy, 92, a0, a0 + (a1 - a0) * f) + '" stroke="#60A5FA" stroke-width="8" fill="none" stroke-linecap="round"/>' +
-        '<text class="val" x="110" y="112" text-anchor="middle" font-size="50" font-weight="800" fill="#F3F4F6" font-family="Onest, sans-serif">' + d.speed.toFixed(0) + '</text><text x="110" y="134" text-anchor="middle" font-size="11" fill="rgba(209,213,219,.72)" font-family="Onest, sans-serif">' + u(d.spU) + '</text>' : '') +
-      (on('rpm') ? '<path d="' + arc(cx, cy, 78, a0, a1) + '" stroke="rgba(255,255,255,.08)" stroke-width="4" fill="none"/><path class="val" d="' + arc(cx, cy, 78, a0, a0 + (a1 - a0) * rf) + '" stroke="#2563EB" stroke-width="4" fill="none" stroke-linecap="round"/><text class="val" x="110" y="192" text-anchor="middle" font-size="10.5" fill="rgba(209,213,219,.72)" font-family="Onest, sans-serif">' + d.rpm + ' ' + u('rpm') + '</text>' : '') +
-      (on('gear') ? '<text class="val" x="110" y="' + (on('speed') ? 172 : 124) + '" text-anchor="middle" font-size="' + (on('speed') ? 20 : 44) + '" font-weight="800" fill="#60A5FA" font-family="Onest, sans-serif">' + d.gear + '</text>' : '') + '</svg>' : '';
+        '<text class="val" x="110" y="112" text-anchor="middle" font-size="50" font-weight="500" fill="#F3F4F6" font-family="&quot;M PLUS Rounded 1c&quot;, sans-serif">' + d.speed.toFixed(0) + '</text><text x="110" y="134" text-anchor="middle" font-size="11" fill="rgba(209,213,219,.72)" font-family="&quot;M PLUS Rounded 1c&quot;, sans-serif">' + u(d.spU) + '</text>' : '') +
+      (on('rpm') ? '<path d="' + arc(cx, cy, 78, a0, a1) + '" stroke="rgba(255,255,255,.08)" stroke-width="4" fill="none"/><path class="val" d="' + arc(cx, cy, 78, a0, a0 + (a1 - a0) * rf) + '" stroke="#2563EB" stroke-width="4" fill="none" stroke-linecap="round"/><text class="val" x="110" y="192" text-anchor="middle" font-size="10.5" fill="rgba(209,213,219,.72)" font-family="&quot;M PLUS Rounded 1c&quot;, sans-serif">' + d.rpm + ' ' + u('rpm') + '</text>' : '') +
+      (on('gear') ? '<text class="val" x="110" y="' + (on('speed') ? 172 : 124) + '" text-anchor="middle" font-size="' + (on('speed') ? 20 : 44) + '" font-weight="500" fill="#60A5FA" font-family="&quot;M PLUS Rounded 1c&quot;, sans-serif">' + d.gear + '</text>' : '') + '</svg>' : '';
     var txt = { fuel: fp + '% · ' + d.fuel + ' ' + u(d.volU), range: d.range + ' ' + u(d.dU), 'sdk-consumption': d.avg + ' ' + u(d.avgU), cargo: d.cargo + ' · ' + d.mass + ' ' + u(d.massU), origin: d.from, destination: d.to, 'distance-driven': d.done + ' ' + u(d.dU), 'distance-remaining': d.remaining + ' ' + u(d.dU), deadline: t('fmt.in', { h: d.dl[0], m: d.dl[1] }), 'expected-income': d.income, 'game-time': t('fmt.day', { d: d.day, t: d.clock }) };
     var rows = ['fuel', 'range', 'sdk-consumption', 'cargo', 'origin', 'destination', 'distance-driven', 'distance-remaining', 'deadline', 'expected-income', 'game-time'].filter(on).map(function (k) {
       return '<div><div class="lbl">' + t('sec.' + k) + '</div><div class="val" style="font-weight:700;font-size:13.5px">' + txt[k] + '</div>' + (k === 'fuel' ? '<div class="obar fuel ' + (fp < 30 ? 'low' : '') + '" style="margin-top:5px"><i class="val" style="width:' + fp + '%"></i></div>' : '') + '</div>';
     }).join('') + (on('hard-mode') ? hmIcon : '');
     html = open('overlay.cluster', 'left:28px;bottom:24px') + handle('top:-36px;left:0') + '<div style="display:flex;align-items:end;gap:10px">' + g + (rows || tag ? '<div class="panel" style="padding:10px 12px;width:230px;display:flex;flex-direction:column;gap:8px;margin-bottom:8px">' + tag + rows + '</div>' : '') + '</div></div>';
   } else {
-    var line = function (keys) { return keys.filter(on).map(function (k) { return k === 'speed' ? '<span><span class="val" style="font-size:30px;font-weight:800">' + d.speed.toFixed(0) + '</span> ' + u(d.spU) + '</span>' : k === 'hard-mode' ? hmIcon : '<span><span style="opacity:.7">' + t('sec.' + k).toLowerCase() + '</span> <b class="val">' + ({ gear: d.gear, rpm: d.rpm + ' ' + u('rpm'), fuel: fp + '%', range: d.range + ' ' + u(d.dU), 'sdk-consumption': d.avg + ' ' + u(d.avgU), cargo: d.cargo, origin: d.from, destination: d.to, 'distance-driven': d.done + ' ' + u(d.dU), 'distance-remaining': d.remaining + ' ' + u(d.dU), deadline: d.dl[0] + ':' + d.dl[1], 'expected-income': d.income, 'game-time': t('fmt.day', { d: d.day, t: d.clock }) })[k] + '</b></span>'; }).join(' · '); };
+    var line = function (keys) { return keys.filter(on).map(function (k) { return k === 'speed' ? '<span><span class="val" style="font-size:30px;font-weight:500">' + d.speed.toFixed(0) + '</span> ' + u(d.spU) + '</span>' : k === 'hard-mode' ? hmIcon : '<span><span style="opacity:.7">' + t('sec.' + k).toLowerCase() + '</span> <b class="val">' + ({ gear: d.gear, rpm: d.rpm + ' ' + u('rpm'), fuel: fp + '%', range: d.range + ' ' + u(d.dU), 'sdk-consumption': d.avg + ' ' + u(d.avgU), cargo: d.cargo, origin: d.from, destination: d.to, 'distance-driven': d.done + ' ' + u(d.dU), 'distance-remaining': d.remaining + ' ' + u(d.dU), deadline: d.dl[0] + ':' + d.dl[1], 'expected-income': d.income, 'game-time': t('fmt.day', { d: d.day, t: d.clock }) })[k] + '</b></span>'; }).join(' · '); };
     var l1 = line(['speed', 'gear', 'rpm']), rest = [line(['fuel', 'range', 'sdk-consumption']), line(['cargo', 'origin', 'destination']), line(['distance-driven', 'distance-remaining', 'deadline', 'expected-income']), line(['game-time', 'hard-mode'])].filter(Boolean);
     html = open('overlay.hud', 'left:30px;top:28px;text-shadow:0 1px 2px rgba(0,0,0,.9),0 0 8px rgba(0,0,0,.6)') + handle('top:-36px;left:0') + '<div style="display:flex;align-items:baseline;gap:14px;font-size:15px">' + l1 + tag + '</div>' +
       rest.map(function (l) { return '<div style="font-size:14px;margin-top:2px;opacity:.94">' + l + '</div>'; }).join('') + '</div>';

@@ -1,6 +1,6 @@
 @import "tailwindcss";
 @import "tw-animate-css";
-@import "@fontsource-variable/onest";
+@import "./fonts.css";
 @import "./shell/tokens.css";
 @import "./shell/shell.css";
 
