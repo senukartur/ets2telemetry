@@ -270,6 +270,8 @@ function withV1(options: V1Options = {}, v0 = live()): LiveTelemetry {
 }
 const V1_STALE: V1Options = {status: 'stale', fresh: false, reason: 'Main has no recent v1 SDK capture'};
 it.each([
+  {distance: 0, fuel: 0, consumption: 0, mass: 0, expected: ['0 km', '0 L', '0 L/100 km', '0 t']},
+  {distance: 400, fuel: 0.4, consumption: 0.4, mass: 400, expected: ['0 km', '0 L', '0 L/100 km', '0 t']},
   {distance: 200200, fuel: 200.2, consumption: 33.2, mass: 14200, expected: ['200 km', '200 L', '33 L/100 km', '14 t']},
   {distance: 200490, fuel: 200.49, consumption: 33.49, mass: 14490, expected: ['200 km', '200 L', '33 L/100 km', '14 t']},
   {distance: 200500, fuel: 200.5, consumption: 33.5, mass: 14500, expected: ['201 km', '201 L', '34 L/100 km', '15 t']}
@@ -287,6 +289,30 @@ it.each([
   };
   expect([text('distance-remaining')?.text, text('fuel')?.text, text('sdk-consumption')?.text, text('cargo')?.detail]).toEqual(expected);
   expect(presentation.fuel).toBe(expected[1].slice(0, -2));
+  expect(current).toStrictEqual(before);
+});
+
+it.each([
+  {quantity: 0.4, mpg: 0.4, expected: ['0 mi', '0 US gal', '0 US mpg', '0 lb']},
+  {quantity: 200.49, mpg: 9.49, expected: ['200 mi', '200 US gal', '9 US mpg', '200 lb']},
+  {quantity: 200.5, mpg: 9.5, expected: ['201 mi', '201 US gal', '10 US mpg', '201 lb']}
+])('rounds US customary measurements after conversion: $quantity units and $mpg mpg', ({quantity, mpg, expected}) => {
+  const current = withV1(), v0 = current.observation!.state, v1 = current.v1!.observation!.state;
+  // Independent canonical inputs from the exact international mile, US gallon and avoirdupois pound definitions.
+  v0.fuel = {available: true, value: quantity * 3.785411784, unit: 'L'};
+  v0.averageConsumption = {available: true, value: (100 * 3.785411784 / 1.609344) / mpg, unit: 'L/100km'};
+  v1.navigationDistance = {available: true, value: quantity * 1609.344, unit: 'm'};
+  if (!v1.configuration.job.available) throw new Error('Expected a job');
+  v1.configuration.job.value.cargoMass = {available: true, value: quantity * 0.45359237, unit: 'kg'};
+  const before = structuredClone(current);
+  const presentation = overlayPresentation(current, {ets2: 'us-customary', ats: 'us-customary'});
+  const value = (id: string) => {
+    const section = presentation.sections.find(section => section.id === id);
+    expect(section?.state).toBe('value');
+    return section?.state === 'value' ? id === 'cargo' ? section.detail : section.text : undefined;
+  };
+  expect(['distance-remaining', 'fuel', 'sdk-consumption', 'cargo'].map(value)).toEqual(expected);
+  expect(presentation.fuel).toBe(expected[1].slice(0, -7));
   expect(current).toStrictEqual(before);
 });
 

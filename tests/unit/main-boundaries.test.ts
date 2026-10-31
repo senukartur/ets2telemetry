@@ -1215,7 +1215,7 @@ it('applies a settings read that settles after the load budget to the dashboard 
   const pushes = () => contents.send.mock.calls.filter(call => call[0] === 'app:state').map(call => call[1] as {settings: unknown});
   expect(pushes().at(-1)!.settings).toEqual(pending);
   consumeOverlay(overlayChannel); deliver(currentReading()); await vi.advanceTimersByTimeAsync(50);
-  expect(overlayProjection(overlayChannel)).toMatchObject({source: 'ETS2', speed: '90', speedUnit: 'km/h', fuel: '73.0', fuelUnit: 'L', freshness: 'current'});
+  expect(overlayProjection(overlayChannel)).toMatchObject({source: 'ETS2', speed: '90', speedUnit: 'km/h', fuel: '73', fuelUnit: 'L', freshness: 'current'});
   // ET-012e keeps the overlay hidden while the pending view contains only defaults.
   expect(windows[1].showInactive).not.toHaveBeenCalled(); consumeOverlay(overlayChannel);
   await drainOverlay(overlayChannel, 150);
@@ -1225,7 +1225,7 @@ it('applies a settings read that settles after the load budget to the dashboard 
   expect(pushes().at(-1)).toEqual({health: {service: 'ready', storage: 'verified', recording: {state: 'unknown'}, lastError: null}, settings: settingsView, overlayEdit: DRIVING, plugins: PLUGINS_DISABLED, autostart: 'not-installed', application: APPLICATION, update: UPDATE_UNSUPPORTED});
   expect(handlers.get('app:get-state')!(trusted())).toMatchObject({settings: settingsView});
   await vi.advanceTimersByTimeAsync(50);
-  expect(overlayProjection(overlayChannel)).toMatchObject({source: 'ETS2', speed: '56', speedUnit: 'mph', fuel: '19.3', fuelUnit: 'US gal', freshness: 'current'});
+  expect(overlayProjection(overlayChannel)).toMatchObject({source: 'ETS2', speed: '56', speedUnit: 'mph', fuel: '19', fuelUnit: 'US gal', freshness: 'current'});
   consumeOverlay(overlayChannel);
   // Nothing was saved, and neither SDK nor window freshness was renewed: the reading still expires 500 ms after its
   // delivery, inside this window; a renewal when the read was applied would end after it.
@@ -1246,7 +1246,7 @@ it('applies a unit profile only after the durable save and republishes the overl
   trayAvailable = true; vi.stubEnv('ETS2TELEMETRY_SOURCE_KIND', 'ets2'); await ready();
   ipc.emit('app:subscribe-state', trusted()); ipc.emit('overlay:subscribe', overlayTrusted()); const overlayChannel = channels[1];
   consumeOverlay(overlayChannel); deliver(currentReading()); await vi.advanceTimersByTimeAsync(50);
-  expect(overlayProjection(overlayChannel)).toMatchObject({source: 'ETS2', speed: '90', speedUnit: 'km/h', fuel: '73.0', fuelUnit: 'L', freshness: 'current'});
+  expect(overlayProjection(overlayChannel)).toMatchObject({source: 'ETS2', speed: '90', speedUnit: 'km/h', fuel: '73', fuelUnit: 'L', freshness: 'current'});
   expect(windows[1].showInactive).toHaveBeenCalledOnce(); consumeOverlay(overlayChannel);
   const pushes = () => contents.send.mock.calls.filter(call => call[0] === 'app:state').map(call => call[1] as {settings: unknown; health: {lastError: unknown}});
   const before = pushes().length, saved = deferred<typeof settingsView>();
@@ -1260,7 +1260,7 @@ it('applies a unit profile only after the durable save and republishes the overl
   await expect(request).resolves.toEqual(settingsView);
   expect(pushes().at(-1)).toEqual({health: {service: 'ready', storage: 'verified', recording: {state: 'unknown'}, lastError: null}, settings: settingsView, overlayEdit: DRIVING, plugins: PLUGINS_DISABLED, autostart: 'not-installed', application: APPLICATION, update: UPDATE_UNSUPPORTED});
   await vi.advanceTimersByTimeAsync(50);
-  expect(overlayProjection(overlayChannel)).toMatchObject({source: 'ETS2', speed: '56', speedUnit: 'mph', fuel: '19.3', fuelUnit: 'US gal', freshness: 'current'});
+  expect(overlayProjection(overlayChannel)).toMatchObject({source: 'ETS2', speed: '56', speedUnit: 'mph', fuel: '19', fuelUnit: 'US gal', freshness: 'current'});
   consumeOverlay(overlayChannel);
   // The republication renewed neither SDK nor window receipts: both still expire from the original delivery.
   expect(windows[1].showInactive).toHaveBeenCalledOnce();
@@ -1519,7 +1519,7 @@ it('refuses overlay settings requests once exiting', async () => {
 // on its own clock and feeds it into the overlay projection. The v1 input is snapshot-live with the v0 job ids under the
 // ETS2 game origin; the overlay origin text is written by hand from it. Since ET-012b the projection also carries `editing`.
 const OVERLAY_KEYS = ['source', 'origin', 'status', 'speed', 'speedUnit', 'fuel', 'fuelUnit', 'freshness', 'layout', 'backgroundOpacity', 'paused', 'sections', 'editing', 'language', 'contentAnchorY'];
-const ORIGIN_VALUE = {id: 'origin', state: 'value', text: 'Synthetic City A, Synthetic Company A'};
+const ORIGIN_VALUE = {id: 'origin', state: 'value', text: 'Synthetic City A'};
 const sectionOf = (projection: Record<string, unknown>, id: string) => (projection.sections as {id: string}[]).find(section => section.id === id);
 function readingWithV1(options: V1Options = {}): LiveTelemetry {
   const live = currentReading(), v1 = v1Projection('snapshot-live', {selection: 'ets2', origin: 'game', ...options});
@@ -1579,7 +1579,7 @@ it('feeds a valid v1 projection to the dashboard and into the overlay sections, 
   const projection = overlayProjection(overlayChannel);
   expect(Object.keys(projection)).toEqual(OVERLAY_KEYS);
   expect(sectionOf(projection, 'origin')).toEqual(ORIGIN_VALUE);
-  expect(sectionOf(projection, 'cargo')).toEqual({id: 'cargo', state: 'value', text: 'Synthetic Cargo', detail: '18.0 t'});
+  expect(sectionOf(projection, 'cargo')).toEqual({id: 'cargo', state: 'value', text: 'Synthetic Cargo', detail: '18 t'});
   expect(JSON.stringify(projection)).not.toMatch(/pluginSessionId|boundaryOrder|handle|clockMapping|10000000-0000-4000-8000-000000000001/);
   expect(log.mock.calls.filter(call => call[0] === 'LIVE_V1_REJECTED')).toEqual([]);
 });

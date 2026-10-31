@@ -148,7 +148,7 @@ Every row has one source ([live-sources.ts](../apps/desktop/src/live-sources.ts)
 - **(c) Names.** Cargo and destination city keep v0's presence and currentness; while both sources are current and the job matches they show v1's localized name (else its id) instead of the game id. Since ET-045a the truck row does the same with its own guard: while both sources are current, both truck readings have a value and v1's model id equals v0's `truckId`, it shows v1's brand and name (else name, else id). Another model id keeps the v0 id. There is no id-to-model table, so an unrecognized id is never given an invented name.
 - **(d) Paused.** v0 decides while it is current; otherwise current v1 data may report a paused game.
 - **(e) Origin.** v1 data counts only when its origin and game equal the v0 observation's, whenever v0 has an observation.
-- **Units** (F9) are the card's: the displayed game's profile, so 18,000 kg reads `18.0 t` or `39683 lb`.
+- **Units** (F9) follow the displayed game's profile: 18,000 kg reads `18.0 t` or `39683 lb` in the dashboard card, and `18 t` or `39683 lb` in the overlay, which rounds measurements to whole units.
 
 The **Protocol v1 source** section (`live-section-source`, F5) appears last once a v1 observation exists for the current selection. Its status line `live-v1-status` reads `<status>: <reason>`, for example `connected: Validated current observation`; its rows are the game mode (`live-game-mode`, with method and confidence, or `unknown` until OD-3) and the total of lost events (`live-event-loss`, with the note "this version records no gameplay events": the live-only connection loses every event to the missing durable consumer).
 
