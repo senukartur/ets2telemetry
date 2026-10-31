@@ -72,7 +72,7 @@ Each layout appears at its own saved position and scale; the names describe the 
 
 ### Section states
 
-Main formats each enabled section that the protocol in use carries with telemetry-core in the displayed game's unit profile, exactly as the dashboard's Live telemetry card does ([live telemetry fields](live-telemetry-fields.md#overlay)). Decisions L5 and L6:
+Main formats each enabled section that the protocol in use carries with telemetry-core in the displayed game's unit profile ([live telemetry fields](live-telemetry-fields.md#overlay)). Overlay measurements round to whole units after conversion, with halves rounded away from zero; canonical telemetry and dashboard precision stay unchanged. Origin and destination show only cities. A future delivery deadline shows its duration without "in" (Russian "через"); overdue warnings remain explicit. The game clock shows only `HH:MM`, without the day number. Decisions L5 and L6:
 
 - A disabled section, or one whose fields the protocol in use does not carry, is left out.
 - While the projection is **current**, a section with a value shows it. A section without data is hidden, never shown as zero. Speed and fuel, the ET-008 baseline, keep a visible `—` instead (REG-009: unavailable differs from zero).
@@ -170,7 +170,7 @@ Native drag start freezes this anchor and native geometry, including deferred sc
 
 Release can move the painted surface by `(reservedHeight - paintedHeight) * deltaAnchorY`; this adjustment can be large for sparse content with large reserved capacity. Bottom y = 1 aligns the final bottom endpoint within border/rounding limits. Pointer-drop continuity and pixel-perfect placement are not claimed. Owner retesting must include sparse content, large capacity and a release near the bottom before usability acceptance.
 
-Only live dashboard and overlay speed text rounds to an integer, after unit conversion, with nearest ties away from zero and no negative zero. Numeric speed and gauge ratios retain their precision; fuel decimals, telemetry-core formatting, journal samples and exports are unchanged. The dashboard has one visible SVG number/unit and a localized accessible image name; the former duplicate speed paragraph is removed. Runtime evidence reads those actual visible SVG nodes, including opacity, viewport/SVG containment and ancestor clipping checks.
+Live dashboard speed text and overlay measurements round to integers after unit conversion, with nearest ties away from zero and no negative zero. Numeric speed and gauge ratios retain their precision; dashboard fuel decimals, telemetry-core formatting, journal samples and exports are unchanged. The dashboard has one visible SVG number/unit and a localized accessible image name; the former duplicate speed paragraph is removed. Runtime evidence reads those actual visible SVG nodes, including opacity, viewport/SVG containment and ancestor clipping checks.
 
 ### Stable numbers and value typography (ET-045d, October 24, 2026)
 

@@ -138,6 +138,8 @@ Journal reads one cursor page at a time and updates only on Refresh. Its wide ta
 
 ## Showing or hiding the overlay
 
+Overlay measurements use whole numbers rounded to the nearest unit (`200.2 km` → `200 km`, `200.5 km` → `201 km`). Route endpoints show only cities, and the delivery countdown omits "in" (Russian "через"); an overdue delivery still shows a warning. The game clock shows only `HH:MM`, without the day number.
+
 Open **Settings → Overlay** and change **Show overlay** (Russian: **Показывать оверлей**). The switch changes after saving succeeds and stays saved after restarting. Hiding the overlay keeps telemetry updating. It does not change whether recording is available. Turning it off during position editing discards unsaved position and size changes; editing is unavailable while it is off. Turning it on shows it when a supported game is in front and current telemetry/window information is available. If saving fails, the previous setting and edit draft stay in effect.
 
 ## Next mandatory break on the overlay (ET-052)

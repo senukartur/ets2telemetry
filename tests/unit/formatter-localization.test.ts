@@ -16,7 +16,7 @@ it.each(['ets2', 'ats'] as const)('binds every real formatter unit to EN/RU loca
     for (const language of ['en', 'ru'] as const) {
       const view = overlayView(overlayPresentation(live, {ets2: profile, ats: profile}, undefined, undefined, false, language));
       expect(view.items.find(item => item.id === 'speed')).toMatchObject({value: metric ? '90' : '56', unit: language === 'en' ? metric ? 'km/h' : 'mph' : metric ? 'км/ч' : 'миль/ч'});
-      expect(view.items.find(item => item.id === 'fuel')).toMatchObject({value: metric ? '73.0' : '19.3', unit: language === 'en' ? metric ? 'L' : 'US gal' : metric ? 'л' : 'гал'});
+      expect(view.items.find(item => item.id === 'fuel')).toMatchObject({value: metric ? '73' : '19', unit: language === 'en' ? metric ? 'L' : 'US gal' : metric ? 'л' : 'гал'});
     }
     const rows: [string, string, string][] = [
       [format.formatSpeed(25, u.speed), metric ? '90.0 km/h' : '55.9 mph', metric ? '90.0 км/ч' : '55.9 миль/ч'],

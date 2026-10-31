@@ -1031,7 +1031,7 @@ export async function runUiSmoke({application, dashboard, overlay, source, sourc
       await chooseLanguage(dashboard, language);
       for (const profile of ['metric', 'us-customary']) {
         await dashboard.evaluate(profile => globalThis.desktop.setUnitProfile('ets2', profile), profile);
-        const expected = profile === 'metric' ? {speed: '90', fuel: '73.0', speedUnit: language === 'en' ? 'km/h' : 'км/ч', fuelUnit: language === 'en' ? 'L' : 'л'} : {speed: '56', fuel: '19.3', speedUnit: language === 'en' ? 'mph' : 'миль/ч', fuelUnit: language === 'en' ? 'US gal' : 'гал'};
+        const expected = profile === 'metric' ? {speed: '90', fuel: '73', speedUnit: language === 'en' ? 'km/h' : 'км/ч', fuelUnit: language === 'en' ? 'L' : 'л'} : {speed: '56', fuel: '19', speedUnit: language === 'en' ? 'mph' : 'миль/ч', fuelUnit: language === 'en' ? 'US gal' : 'гал'};
         await overlay.waitForFunction(expected => ['speed', 'fuel'].every(id => globalThis.document.querySelector(`[data-testid="overlay-${id}"]`)?.textContent === expected[id] && globalThis.document.querySelector(`[data-testid="overlay-${id}-unit"]`)?.textContent === expected[`${id}Unit`]), expected, {timeout: 5000});
         assert.deepEqual((await overlay.evaluate(overlayOverflow)).outside, []);
       }

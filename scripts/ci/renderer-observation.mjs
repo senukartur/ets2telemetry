@@ -168,8 +168,8 @@ export async function waitForV1NotCurrentLive(page, values, status, speed) {
 // ET-010c overlay sections that need protocol v1, read from the hidden overlay document (the strip by default). Expected
 // texts are written by hand from the same pair; a dash is an unavailable section, never zero (REG-009).
 export const SYNTHETIC_V1_OVERLAY_CURRENT = Object.freeze({
-  'overlay-origin': 'Synthetic City A, Synthetic Company A', 'overlay-distance-remaining': '151.0 km', 'overlay-deadline': 'in 10 h 55 min',
-  'overlay-cargo': 'Synthetic Cargo', 'overlay-cargo-detail': '18.0 t', 'overlay-destination': 'Synthetic City B, Synthetic Company B',
+  'overlay-origin': 'Synthetic City A', 'overlay-distance-remaining': '151 km', 'overlay-deadline': '10 h 55 min',
+  'overlay-cargo': 'Synthetic Cargo', 'overlay-cargo-detail': '18 t', 'overlay-destination': 'Synthetic City B',
   // ET-052: the smoke source's minor-2 states carry a next mandatory break of 95 game minutes (1 h 35 min).
   'overlay-mandatory-break': '1 h 35 min', 'overlay-speed': '90', 'freshness': 'current'
 });

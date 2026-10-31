@@ -38,11 +38,11 @@ it('shows the v0 sections of the fixture in metric for ETS2, in canonical order,
     {id: 'rpm', state: 'value', text: '600 rpm', ring: 0.2},
     // Fuel is not observed: the baseline section stays as a dash, never 0.
     {id: 'fuel', state: 'unavailable'},
-    {id: 'sdk-consumption', state: 'value', text: '25.0 L/100 km'},
+    {id: 'sdk-consumption', state: 'value', text: '25 L/100 km'},
     {id: 'cargo', state: 'value', text: 'cargo.logs'},
     {id: 'destination', state: 'value', text: 'city.warszawa'},
     {id: 'expected-income', state: 'value', text: '9007199254740993.123456 (currency unknown)'},
-    {id: 'game-time', state: 'value', text: 'Day 8574, 09:18'}
+    {id: 'game-time', state: 'value', text: '09:18'}
   ]);
 });
 
@@ -53,14 +53,14 @@ it('formats every section in the US customary profile for ATS, leaving canonical
   state.speed = {available: true, value: 25, unit: 'm/s'};
   const before = structuredClone(current);
   const presentation = overlayPresentation(current, {ets2: 'metric', ats: 'us-customary'});
-  expect(presentation).toMatchObject({source: 'ATS', speed: '56', speedUnit: 'mph', fuel: '66.0', fuelUnit: 'US gal', freshness: 'current'});
+  expect(presentation).toMatchObject({source: 'ATS', speed: '56', speedUnit: 'mph', fuel: '66', fuelUnit: 'US gal', freshness: 'current'});
   expect(presentation.sections.slice(0, 6)).toEqual([
     {id: 'speed', state: 'value', text: '56 mph', speedRing: expect.closeTo(55.92340730136005 / 80, 12)},
     {id: 'gear', state: 'value', text: 'R1'},
     {id: 'rpm', state: 'value', text: '600 rpm', ring: 0.2},
-    {id: 'fuel', state: 'value', text: '66.0 US gal', detail: '25%'},
+    {id: 'fuel', state: 'value', text: '66 US gal', detail: '25%'},
     {id: 'range', state: 'value', text: '100 mi'},
-    {id: 'sdk-consumption', state: 'value', text: '9.4 US mpg'}
+    {id: 'sdk-consumption', state: 'value', text: '9 US mpg'}
   ]);
   expect(current).toStrictEqual(before);
 });
@@ -100,7 +100,7 @@ it('shows zero speed and zero fuel as values, distinct from an unavailable dash'
   const current = live(), state = current.observation!.state;
   state.fuel = {available: true, value: 0, unit: 'L'};
   expect(overlayPresentation(current).sections.filter(section => section.id === 'speed' || section.id === 'fuel')).toEqual([
-    {id: 'speed', state: 'value', text: '0 km/h', speedRing: 0}, {id: 'fuel', state: 'value', text: '0.0 L', detail: '0%'}]);
+    {id: 'speed', state: 'value', text: '0 km/h', speedRing: 0}, {id: 'fuel', state: 'value', text: '0 L', detail: '0%'}]);
   state.speed = {available: false, reason: 'not-observed', unit: 'm/s'};
   expect(overlayPresentation(current).sections[0]).toEqual({id: 'speed', state: 'unavailable'});
 });
@@ -108,7 +108,7 @@ it('shows zero speed and zero fuel as values, distinct from an unavailable dash'
 it('leaves the fuel level out while the capacity is unknown', () => {
   const current = live(), state = current.observation!.state;
   state.fuel = {available: true, value: 250, unit: 'L'}; state.fuelCapacity = {available: false, reason: 'not-supported', unit: 'L'};
-  expect(overlayPresentation(current).sections.find(section => section.id === 'fuel')).toEqual({id: 'fuel', state: 'value', text: '250.0 L'});
+  expect(overlayPresentation(current).sections.find(section => section.id === 'fuel')).toEqual({id: 'fuel', state: 'value', text: '250 L'});
 });
 
 it('hides current sections without data, except speed and fuel (decision L5)', () => {
@@ -269,19 +269,67 @@ function withV1(options: V1Options = {}, v0 = live()): LiveTelemetry {
   return {...v0, v1};
 }
 const V1_STALE: V1Options = {status: 'stale', fresh: false, reason: 'Main has no recent v1 SDK capture'};
+it.each([
+  {distance: 200200, fuel: 200.2, consumption: 33.2, mass: 14200, expected: ['200 km', '200 L', '33 L/100 km', '14 t']},
+  {distance: 200490, fuel: 200.49, consumption: 33.49, mass: 14490, expected: ['200 km', '200 L', '33 L/100 km', '14 t']},
+  {distance: 200500, fuel: 200.5, consumption: 33.5, mass: 14500, expected: ['201 km', '201 L', '34 L/100 km', '15 t']}
+])('rounds canonical overlay measurements once to whole units: $distance m', ({distance, fuel, consumption, mass, expected}) => {
+  const current = withV1(), v0 = current.observation!.state, v1 = current.v1!.observation!.state;
+  v0.fuel = {available: true, value: fuel, unit: 'L'};
+  v0.averageConsumption = {available: true, value: consumption, unit: 'L/100km'};
+  v1.navigationDistance = {available: true, value: distance, unit: 'm'};
+  if (!v1.configuration.job.available) throw new Error('Expected a job');
+  v1.configuration.job.value.cargoMass = {available: true, value: mass, unit: 'kg'};
+  const before = structuredClone(current), presentation = overlayPresentation(current);
+  const text = (id: string) => {
+    const section = presentation.sections.find(section => section.id === id);
+    return section?.state === 'value' ? section : undefined;
+  };
+  expect([text('distance-remaining')?.text, text('fuel')?.text, text('sdk-consumption')?.text, text('cargo')?.detail]).toEqual(expected);
+  expect(presentation.fuel).toBe(expected[1].slice(0, -2));
+  expect(current).toStrictEqual(before);
+});
+
+it.each(['en', 'ru'] as const)('shows city names intact and a compact deadline in %s, preserving overdue warnings', language => {
+  const current = withV1(), job = current.v1!.observation!.state.configuration.job;
+  if (!job.available) throw new Error('Expected a job');
+  job.value.sourceCity = {available: true, value: 'City, North'};
+  job.value.destinationCity = {available: true, value: 'City, South'};
+  const items = () => overlayView(overlayPresentation(current, undefined, undefined, undefined, false, language)).items;
+  expect(items().find(item => item.id === 'origin')?.value).toBe('City, North');
+  expect(items().find(item => item.id === 'destination')?.value).toBe('City, South');
+  expect(items().find(item => item.id === 'deadline')?.value).toBe(language === 'ru' ? '10 ч 55 мин' : '10 h 55 min');
+  job.value.deliveryDeadline = {available: true, value: '12345', unit: 'min'};
+  expect(items().find(item => item.id === 'deadline')?.value).toBe(language === 'ru' ? '0 мин' : '0 min');
+  job.value.deliveryDeadline.value = '12344';
+  expect(items().find(item => item.id === 'deadline')?.value).toBe(language === 'ru' ? 'опоздание на 1 мин' : 'late by 1 min');
+});
+
+it.each(['en', 'ru'] as const)('shows only HH:MM across midnight in %s for every overlay layout', language => {
+  const current = withV1();
+  for (const [minutes, expected] of [['1439', '23:59'], ['1440', '00:00'], ['1441', '00:01']] as const) {
+    current.observation!.state.gameTime = {...current.observation!.state.gameTime, available: true, value: minutes};
+    for (const layout of ['strip', 'card', 'cluster', 'hud'] as const) {
+      const settings = {...DEFAULT_OVERLAY_SETTINGS, layout};
+      const view = overlayView(overlayPresentation(current, undefined, settings, undefined, false, language));
+      expect(view.items.find(item => item.id === 'game-time')?.value).toBe(expected);
+    }
+  }
+});
+
 const FULL: OverlaySectionView[] = [
   {id: 'speed', state: 'value', text: '0 km/h', speedRing: 0},
   {id: 'gear', state: 'value', text: 'R1'},
   {id: 'rpm', state: 'value', text: '600 rpm', ring: 0.2},
   {id: 'fuel', state: 'unavailable'},
-  {id: 'sdk-consumption', state: 'value', text: '25.0 L/100 km'},
-  {id: 'cargo', state: 'value', text: 'Synthetic Cargo', detail: '18.0 t'},
-  {id: 'origin', state: 'value', text: 'Synthetic City A, Synthetic Company A'},
-  {id: 'destination', state: 'value', text: 'Synthetic City B, Synthetic Company B'},
-  {id: 'distance-remaining', state: 'value', text: '151.0 km'},
-  {id: 'deadline', state: 'value', text: 'in 10 h 55 min'},
+  {id: 'sdk-consumption', state: 'value', text: '25 L/100 km'},
+  {id: 'cargo', state: 'value', text: 'Synthetic Cargo', detail: '18 t'},
+  {id: 'origin', state: 'value', text: 'Synthetic City A'},
+  {id: 'destination', state: 'value', text: 'Synthetic City B'},
+  {id: 'distance-remaining', state: 'value', text: '151 km'},
+  {id: 'deadline', state: 'value', text: '10 h 55 min'},
   {id: 'expected-income', state: 'value', text: '9007199254740993.123456 (currency unknown)'},
-  {id: 'game-time', state: 'value', text: 'Day 8574, 09:18'},
+  {id: 'game-time', state: 'value', text: '09:18'},
   // ET-052 (MB9): the minor-0 stand-in carries the break as not-supported, so the section is a dash, never a zero.
   {id: 'mandatory-break', state: 'unavailable'}
 ];
@@ -294,7 +342,7 @@ it('formats the v1 sections in the ATS US customary profile: 18000 kg is 39683 l
   const current = live(); current.selection = 'ats'; current.observation!.source.game = 'ats';
   const sections = overlayPresentation(withV1({game: 'ats'}, current)).sections;
   expect(sections.find(section => section.id === 'cargo')).toEqual({id: 'cargo', state: 'value', text: 'Synthetic Cargo', detail: '39683 lb'});
-  expect(sections.find(section => section.id === 'distance-remaining')).toEqual({id: 'distance-remaining', state: 'value', text: '93.8 mi'});
+  expect(sections.find(section => section.id === 'distance-remaining')).toEqual({id: 'distance-remaining', state: 'value', text: '94 mi'});
 });
 it('keeps v1 sections as dashes when v1, then v0, stops being current, and drops them without v1 (ET-010c)', () => {
   const first = overlayPresentation(withV1());
@@ -304,7 +352,7 @@ it('keeps v1 sections as dashes when v1, then v0, stops being current, and drops
     {id: 'gear', state: 'value', text: 'R1'},
     {id: 'rpm', state: 'value', text: '600 rpm', ring: 0.2},
     {id: 'fuel', state: 'unavailable'},
-    {id: 'sdk-consumption', state: 'value', text: '25.0 L/100 km'},
+    {id: 'sdk-consumption', state: 'value', text: '25 L/100 km'},
     // Mixed sections keep their v0 part: the game ids, without the v1 mass and company.
     {id: 'cargo', state: 'value', text: 'cargo.logs'},
     {id: 'origin', state: 'unavailable'},
@@ -312,7 +360,7 @@ it('keeps v1 sections as dashes when v1, then v0, stops being current, and drops
     {id: 'distance-remaining', state: 'unavailable'},
     {id: 'deadline', state: 'unavailable'},
     {id: 'expected-income', state: 'value', text: '9007199254740993.123456 (currency unknown)'},
-    {id: 'game-time', state: 'value', text: 'Day 8574, 09:18'},
+    {id: 'game-time', state: 'value', text: '09:18'},
     // ET-052: stale v1 data is a carried observation without a value, so the break is a dash.
     {id: 'mandatory-break', state: 'unavailable'}
   ]);
@@ -339,7 +387,7 @@ it('leaves out v1 job sections for another job unless they were shown, and keeps
   expect(ids(mismatch.sections)).toEqual(['speed', 'gear', 'rpm', 'fuel', 'sdk-consumption', 'cargo', 'destination', 'distance-remaining', 'expected-income', 'game-time',
     'mandatory-break']);
   expect(mismatch.sections.find(section => section.id === 'cargo')).toEqual({id: 'cargo', state: 'value', text: 'cargo.logs'});
-  expect(mismatch.sections.find(section => section.id === 'distance-remaining')).toEqual({id: 'distance-remaining', state: 'value', text: '151.0 km'});
+  expect(mismatch.sections.find(section => section.id === 'distance-remaining')).toEqual({id: 'distance-remaining', state: 'value', text: '151 km'});
   const afterShown = overlayPresentation(withV1({ids: 'fixture'}), undefined, undefined, overlayPresentation(withV1()));
   expect(afterShown.sections.find(section => section.id === 'origin')).toEqual({id: 'origin', state: 'unavailable'});
   expect(afterShown.sections.find(section => section.id === 'deadline')).toEqual({id: 'deadline', state: 'unavailable'});
@@ -368,14 +416,14 @@ const LOST_V1: OverlaySectionView[] = [
   {id: 'gear', state: 'value', text: 'R1'},
   {id: 'rpm', state: 'value', text: '600 rpm', ring: 0.2},
   {id: 'fuel', state: 'unavailable'},
-  {id: 'sdk-consumption', state: 'value', text: '25.0 L/100 km'},
+  {id: 'sdk-consumption', state: 'value', text: '25 L/100 km'},
   {id: 'cargo', state: 'value', text: 'cargo.logs'},
   {id: 'origin', state: 'unavailable'},
   {id: 'destination', state: 'value', text: 'city.warszawa'},
   {id: 'distance-remaining', state: 'unavailable'},
   {id: 'deadline', state: 'unavailable'},
   {id: 'expected-income', state: 'value', text: '9007199254740993.123456 (currency unknown)'},
-  {id: 'game-time', state: 'value', text: 'Day 8574, 09:18'},
+  {id: 'game-time', state: 'value', text: '09:18'},
   // ET-052: a break section that was shown keeps its dash when the v1 carriage is lost while v0 continues (ET-012a L5).
   {id: 'mandatory-break', state: 'unavailable'}
 ];

@@ -1,12 +1,13 @@
 import type {AppLanguage, GearDisplayModes, LiveTelemetry, OverlayPresentation, OverlaySectionId, OverlaySectionView, OverlaySettings, UnitProfiles} from '../../../packages/contracts/src';
 import {resolveDisplayUnits} from '../../../packages/telemetry-core/src/display-profile';
-import {formatMoneyAmount} from '../../../packages/telemetry-core/src/format';
+import {fixed, formatDistance, formatMoneyAmount, formatVolume} from '../../../packages/telemetry-core/src/format';
+import {convertConsumption, convertMass, convertVolume} from '../../../packages/telemetry-core/src/units';
 import {carriesField, type LiveFieldId} from '../../../packages/telemetry-core/src/live-view';
 import {liveSources, V1_JOB_FIELDS} from './live-sources';
 import {DEFAULT_OVERLAY_SETTINGS, isGaugeFraction, OVERLAY_SECTION_IDS} from './overlay-sections';
 import {speedGaugeFraction} from './speed-gauge';
-import {DEFAULT_GEAR_DISPLAY, DEFAULT_UNIT_PROFILES, displayGame, gearDisplayFor, isExplicitFixture, profileFor, speedNumber, speedUnit, volumeNumber, volumeUnit} from './unit-profiles';
-import {localizeDeadlineString, localizeGameTimeString} from './i18n';
+import {DEFAULT_GEAR_DISPLAY, DEFAULT_UNIT_PROFILES, displayGame, gearDisplayFor, isExplicitFixture, profileFor, speedNumber, speedUnit, volumeUnit} from './unit-profiles';
+import {localizeDeadlineString} from './i18n';
 import {gameForSource} from './live-state';
 
 /** Full scale of the engine RPM ring (ET-012a decision L12). Neither v0 nor v1 carries the SDK's `rpm.limit`. */
@@ -25,8 +26,8 @@ const SECTION_FIELDS: Readonly<Record<OverlaySectionId, {parts: readonly LiveFie
   'range': {parts: ['estimated-range']},
   'sdk-consumption': {parts: ['sdk-average-consumption']},
   'cargo': {parts: ['cargo'], detail: 'cargo-mass'},
-  'origin': {parts: ['source-city', 'source-company']},
-  'destination': {parts: ['destination-city', 'destination-company']},
+  'origin': {parts: ['source-city']},
+  'destination': {parts: ['destination-city']},
   'distance-driven': {parts: []},
   'distance-remaining': {parts: ['route-remaining']},
   'deadline': {parts: ['deadline']},
@@ -46,7 +47,8 @@ const DASH_WHEN_CARRIED: ReadonlySet<OverlaySectionId> = new Set<OverlaySectionI
 /**
  * The overlay's read-only display projection, built in main. Canonical v0 m/s and liters remain unchanged; values are
  * formatted by telemetry-core in the persisted profile of the displayed game (ETS2 metric and ATS US customary by
- * default; metric without a game), exactly as the dashboard's live telemetry card formats them.
+ * default; metric without a game). Overlay measurements round to whole units after conversion; the dashboard retains
+ * its own precision. Route endpoints show only cities, a future deadline omits the "in" prefix, and the clock shows HH:MM.
  *
  * Section rules (ET-012a decisions L5 and L6): a disabled section, or one whose fields the protocol in use does not
  * carry, is left out. While current a section with a value shows it; one without data is left out, except speed and
@@ -80,8 +82,25 @@ export function overlayPresentation(live: LiveTelemetry, units: UnitProfiles = D
   const current = live.fresh && (live.status === 'connected' || live.status === 'paused') &&
     (explicitFixture || gameForSource(live.selection, observation?.source) !== undefined);
   const state = observation?.state;
-  const sources = liveSources(live, resolveDisplayUnits(game, {profile}), gearDisplayFor(gearDisplay, game));
-  const valueOf = (id: LiveFieldId) => {const field = sources.field(id); return field.state === 'value' ? field.text : undefined;};
+  const displayUnits = resolveDisplayUnits(game, {profile});
+  const sources = liveSources(live, displayUnits, gearDisplayFor(gearDisplay, game));
+  const valueOf = (id: LiveFieldId): string | undefined => {
+    const field = sources.field(id);
+    if (field.state !== 'value') return undefined;
+    // Reformat canonical readings only after the shared field's eligibility check; never round an already rounded string.
+    const v0 = sources.v0State, v1 = sources.v1State;
+    if (id === 'fuel' && v0?.fuel.state === 'value') return formatVolume(v0.fuel.value, displayUnits.volume, 0);
+    if (id === 'sdk-average-consumption' && v0?.averageConsumption.state === 'value') {
+      const converted = convertConsumption(v0.averageConsumption.value, displayUnits.consumption);
+      if (converted !== undefined) return `${fixed(converted, 0)} ${displayUnits.consumption}`;
+    }
+    if (id === 'route-remaining' && v1?.navigationDistance.state === 'value') return formatDistance(v1.navigationDistance.value.meters, displayUnits.distance, 0);
+    const job = v1?.job;
+    if (id === 'cargo-mass' && job?.state === 'value' && job.value.cargoMass.state === 'value') {
+      return `${fixed(convertMass(job.value.cargoMass.value, displayUnits.mass), 0)} ${displayUnits.mass}`;
+    }
+    return id === 'deadline' ? field.text.replace(/^in /, '') : field.text;
+  };
   // A part protocol v0 does not carry needs a v1 observation of this selection and origin (decision F7).
   const carried = (part: LiveFieldId) => carriesField('v0', part) || sources.v1Carried;
   // A v1 part that would have a value were v1 current and, for the job, the same job as v0's. Without a v0 job the job
@@ -115,7 +134,7 @@ export function overlayPresentation(live: LiveTelemetry, units: UnitProfiles = D
       if (income?.state === 'value') texts = [formatMoneyAmount(income.value)];
     }
     if (id === 'game-time') {
-      texts = texts.map(t => localizeGameTimeString(t, language));
+      texts = texts.map(t => t.replace(/^Day \d+, /, ''));
     } else if (id === 'deadline' || id === 'mandatory-break') {
       texts = texts.map(t => localizeDeadlineString(t, language));
     }
@@ -140,7 +159,7 @@ export function overlayPresentation(live: LiveTelemetry, units: UnitProfiles = D
     source: game === 'ats' ? 'ATS' : game === 'ets2' ? 'ETS2' : 'No game', origin: observation?.source.origin ?? 'none', status: live.status,
     speed: current && state?.speed.available ? speedNumber(state.speed.value, profile) : '—',
     speedUnit: speedUnit(profile),
-    fuel: current && state?.fuel.available ? volumeNumber(state.fuel.value, profile) : '—',
+    fuel: current && state?.fuel.available ? fixed(convertVolume(state.fuel.value, displayUnits.volume), 0) : '—',
     fuelUnit: volumeUnit(profile),
     freshness: current ? 'current' : live.status === 'stale' ? 'stale' : 'unavailable',
     layout: overlay.layout, backgroundOpacity: overlay.backgroundOpacity,

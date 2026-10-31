@@ -37,7 +37,7 @@ The Live screen shows the connection state and every live telemetry field: speed
 
 The overlay is a transparent window above the game in windowed or borderless fullscreen mode. It passes mouse clicks to the game, never takes focus, and hides when the game is minimized or another application is in front. It updates up to 20 times per second.
 
-The driver chooses one of four layouts (Strip, the default, plus Card, Cluster and Minimal HUD) and which sections it shows, such as speed, gear, RPM, fuel, consumption, cargo, destination, distance left, deadline, income, game time and the time left until the next mandatory break. In an explicit edit mode the driver moves and resizes it (50–300%). The background opacity and whether the overlay is shown at all are saved settings.
+The driver chooses one of four layouts (Strip, the default, plus Card, Cluster and Minimal HUD) and which sections it shows, such as speed, gear, RPM, fuel, consumption, cargo, destination, distance left, deadline, income, game time and the time left until the next mandatory break. Measurements round to whole units, route endpoints show only cities, the clock shows only hours and minutes, and the delivery countdown omits "in" while retaining overdue warnings. In an explicit edit mode the driver moves and resizes it (50–300%). The background opacity and whether the overlay is shown at all are saved settings.
 
 ### Trip recording
 

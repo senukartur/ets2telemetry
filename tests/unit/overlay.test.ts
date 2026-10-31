@@ -24,12 +24,12 @@ afterEach(() => vi.useRealTimers());
 it('converts ETS2 and ATS defaults without changing canonical quantities, including real zeros', () => {
   const current = live(), state = current.observation!.state;
   state.speed = {available: true, value: 10, unit: 'm/s'}; state.fuel = {available: true, value: 37.85411784, unit: 'L'};
-  expect(overlayPresentation(current)).toMatchObject({source: 'ETS2', speed: '36', speedUnit: 'km/h', fuel: '37.9', fuelUnit: 'L', freshness: 'current'});
+  expect(overlayPresentation(current)).toMatchObject({source: 'ETS2', speed: '36', speedUnit: 'km/h', fuel: '38', fuelUnit: 'L', freshness: 'current'});
   current.selection = 'ats'; current.observation!.source.game = 'ats';
-  expect(overlayPresentation(current)).toMatchObject({source: 'ATS', speed: '22', speedUnit: 'mph', fuel: '10.0', fuelUnit: 'US gal'});
+  expect(overlayPresentation(current)).toMatchObject({source: 'ATS', speed: '22', speedUnit: 'mph', fuel: '10', fuelUnit: 'US gal'});
   expect(state.speed.value).toBe(10); expect(state.fuel.value).toBe(37.85411784);
   state.speed.value = 0; state.fuel.value = 0;
-  expect(overlayPresentation(current)).toMatchObject({speed: '0', fuel: '0.0'});
+  expect(overlayPresentation(current)).toMatchObject({speed: '0', fuel: '0'});
 });
 it.each([
   {game: 'ets2' as const, unit: 'km/h', below: 0.136, above: 0.142, reverse: '-7'},
@@ -77,7 +77,7 @@ it.each(['synthetic', 'replay'] as const)('projects explicit %s fixtures for a h
   const current = live(); current.selection = origin; current.observation!.source.origin = origin;
   current.observation!.state.speed = {available: true, value: 25, unit: 'm/s'};
   current.observation!.state.fuel = {available: true, value: 73, unit: 'L'};
-  expect(overlayPresentation(current)).toMatchObject({source: 'ETS2', origin, speed: '90', fuel: '73.0', freshness: 'current'});
+  expect(overlayPresentation(current)).toMatchObject({source: 'ETS2', origin, speed: '90', fuel: '73', freshness: 'current'});
 });
 it('does not renew equal SDK captures, permits fresh windows with stale metrics, then hides on window expiry', async () => {
   const publish = vi.fn(), freshness = new LiveFreshness(publish), current = live();
@@ -264,9 +264,9 @@ it('recovers an unchanged rectangle after a transient conversion failure without
 });
 // ET-011b: the overlay follows the persisted profile of the displayed game.
 it.each([
-  {game: 'ets2' as const, units: {ets2: 'us-customary', ats: 'us-customary'} as const, speed: '56', speedUnit: 'mph', fuel: '19.3', fuelUnit: 'US gal'},
-  {game: 'ats' as const, units: {ets2: 'metric', ats: 'metric'} as const, speed: '90', speedUnit: 'km/h', fuel: '73.0', fuelUnit: 'L'},
-  {game: 'ets2' as const, units: {ets2: 'metric', ats: 'metric'} as const, speed: '90', speedUnit: 'km/h', fuel: '73.0', fuelUnit: 'L'}
+  {game: 'ets2' as const, units: {ets2: 'us-customary', ats: 'us-customary'} as const, speed: '56', speedUnit: 'mph', fuel: '19', fuelUnit: 'US gal'},
+  {game: 'ats' as const, units: {ets2: 'metric', ats: 'metric'} as const, speed: '90', speedUnit: 'km/h', fuel: '73', fuelUnit: 'L'},
+  {game: 'ets2' as const, units: {ets2: 'metric', ats: 'metric'} as const, speed: '90', speedUnit: 'km/h', fuel: '73', fuelUnit: 'L'}
 ])('projects $game in its persisted profile $units', ({game, units, speed, speedUnit, fuel, fuelUnit}) => {
   const current = live(), state = current.observation!.state;
   current.selection = game; current.observation!.source.game = game;
@@ -282,7 +282,7 @@ it('keeps metric without a game and the fixture game profile for synthetic sourc
   expect(overlayPresentation(initialLive('game'), units)).toMatchObject({source: 'No game', speedUnit: 'km/h', fuelUnit: 'L'});
   const current = live(); current.selection = 'synthetic'; current.observation!.source.origin = 'synthetic';
   current.observation!.state.speed = {available: true, value: 25, unit: 'm/s'}; current.observation!.state.fuel = {available: true, value: 73, unit: 'L'};
-  expect(overlayPresentation(current, units)).toMatchObject({source: 'ETS2', origin: 'synthetic', speed: '56', speedUnit: 'mph', fuel: '19.3', fuelUnit: 'US gal'});
+  expect(overlayPresentation(current, units)).toMatchObject({source: 'ETS2', origin: 'synthetic', speed: '56', speedUnit: 'mph', fuel: '19', fuelUnit: 'US gal'});
 });
 // ET-012a: each layout has its own anchor and size in the game's client area (DIP -960, 0, 960 x 540 here).
 // ET-012c reserves rows for the enabled sections and ET-012d does so for the card, cluster and HUD. ET-045e changed the
