@@ -452,6 +452,51 @@ describe('game-mode opening evidence', () => {
     const after = tripView(state, 'ets2').current;
     expect([after?.gameMode, after?.gameModeAmbiguous, after?.recordingCompleteness]).toEqual([before?.gameMode, before?.gameModeAmbiguous, before?.recordingCompleteness]);
     expect(tripView(state, 'ets2').current).toMatchObject({gameMode: {mode: 'truckersmp', method: 'module-scan', confidence: 'strong'}, gameModeAmbiguous: false, recordingCompleteness: 'unknown'});
+    state = play([[s.event(r.regression('12345', '12000')), [partial(trip),
+      cause(trip, 'discontinuity', {cause: 'save-load', fromClockId: GAME_CLOCK_1, toClockId: GAME_CLOCK_2, atEventSeq: '9'})]]], state);
+    expect(tripView(state, 'ets2')).toMatchObject({phase: 'active', lastClosed: null, current: {tripUuid: trip, recordingCompleteness: 'partial',
+      gameMode: {mode: 'truckersmp', method: 'module-scan', confidence: 'strong'}, gameModeAmbiguous: false}});
+    // The absorbed regression consumes the load window; a later regression still closes the original trip.
+    state = play([[s.event(r.regression('12000', '11000', GAME_CLOCK_2, '40000000-0000-4000-8000-000000000003')),
+      [close(trip, 'none', 'discontinuity', 'partial', at(10))]]], state);
+    expect(tripView(state, 'ets2')).toMatchObject({phase: 'idle', current: null, lastClosed: {tripUuid: trip}});
+  });
+
+  it('keeps the load window across differing and fresh repeated mode metadata without rewriting opening evidence', () => {
+    const s = new Script(ETS2_A), {rows, trip} = acceptedJob(s);
+    const record = r.gameMode({mode: 'truckersmp', method: 'module-scan', confidence: 'strong', module: 'synthetic-multiplayer-module.dll'});
+    const first = s.event(record), repeated = s.event(record);
+    const state = play([...rows, [first, [{kind: 'trip.update', tripUuid: trip, set: {gameModeAmbiguous: true}}]], [repeated],
+      [s.event(r.regression('12345', '12000')), [partial(trip),
+        cause(trip, 'discontinuity', {cause: 'save-load', fromClockId: GAME_CLOCK_1, toClockId: GAME_CLOCK_2, atEventSeq: '10'})]]]);
+    expect(tripView(state, 'ets2')).toMatchObject({phase: 'active', lastClosed: null,
+      current: {tripUuid: trip, gameMode: UNKNOWN_MODE, gameModeAmbiguous: true, recordingCompleteness: 'partial'}});
+  });
+  for (const control of [
+    {name: 'fine', record: r.fined(), effects: (trip: string): TripEffect[] => [attr(trip, 'trip')]},
+    {name: 'truck configuration', record: r.truckConfigured(truck({licensePlate: {available: true, value: 'SYN 0059'}})), effects: (trip: string): TripEffect[] => [
+      {kind: 'trip.update', tripUuid: trip, set: {truckConfiguration: 'this-event'}},
+      cause(trip, 'discontinuity', {annotation: true, cause: 'truck-change', atEventSeq: '9'})]}
+  ]) it(`a ${control.name} still consumes the load window after mode metadata`, () => {
+    const s = new Script(ETS2_A), {rows, trip} = acceptedJob(s);
+    const state = play([...rows,
+      [s.event(r.gameMode({mode: 'truckersmp', method: 'module-scan', confidence: 'strong', module: 'synthetic-multiplayer-module.dll'})),
+        [{kind: 'trip.update', tripUuid: trip, set: {gameModeAmbiguous: true}}]],
+      [s.event(control.record), control.effects(trip)],
+      [s.event(r.regression('12345', '12000')), [close(trip, 'none', 'discontinuity', 'partial', at(10))]]]);
+    expect(tripView(state, 'ets2')).toMatchObject({phase: 'idle', current: null, lastClosed: {tripUuid: trip, gameModeAmbiguous: true}});
+  });
+  it('resolves an identical-job reload check with interleaved mode metadata to the original partial trip', () => {
+    const s = new Script(ETS2_A), {rows, trip} = acceptedJob(s);
+    const mode = r.gameMode({mode: 'truckersmp', method: 'module-scan', confidence: 'strong', module: 'synthetic-multiplayer-module.dll'});
+    const state = play([...rows, [s.event(r.fined()), [attr(trip, 'trip')]], [s.event(r.paused(), paused)],
+      [s.event(r.jobCleared(), paused)], [s.event(r.jobConfigured(), paused)],
+      [s.event(mode, paused), [{kind: 'trip.update', tripUuid: trip, set: {gameModeAmbiguous: true}}]],
+      [s.event(r.started())], [s.event(mode)],
+      [s.event(r.regression('12345', '12000')), [partial(trip),
+        cause(trip, 'discontinuity', {cause: 'save-load', fromClockId: GAME_CLOCK_1, toClockId: GAME_CLOCK_2, atEventSeq: '15'})]]]);
+    expect(tripView(state, 'ets2')).toMatchObject({phase: 'active', lastClosed: null,
+      current: {tripUuid: trip, gameMode: UNKNOWN_MODE, gameModeAmbiguous: true, recordingCompleteness: 'partial'}});
   });
 
   it('keeps unknown opening evidence after a late positive and duplicate, then opens the next trip with current evidence', () => {

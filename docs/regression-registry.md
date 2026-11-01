@@ -190,7 +190,7 @@ Columns:
 | `tests/unit/trip-identity.test.ts` | Node unit (Vitest) | REG-005, REG-008 | T, V (et-014) | ET-014 (#71) | PR (tests job, `npm test`) | dedup |
 | `tests/unit/trip-recorder.test.ts` | Node unit (Vitest) | REG-001, REG-003, REG-004, REG-005, REG-006, REG-007, REG-009, REG-011 | R, F | ET-015a (#77) | PR (tests job, `npm test`) | ACK, dedup, gap, trip completeness |
 | `tests/unit/trip-reducer-replay.test.ts` | Node unit (Vitest) | REG-005 | R, F | ET-014 (#71) | PR (tests job, `npm test`) | dedup, trip completeness |
-| `tests/unit/trip-reducer.test.ts` | Node unit (Vitest) | REG-001, REG-002, REG-003, REG-004, REG-005, REG-006, REG-008, REG-012 | R, F | ET-014 (#71); ET-059 | PR (tests job, `npm test`) | dedup, gap, trip completeness, regression, mode evidence |
+| `tests/unit/trip-reducer.test.ts` | Node unit (Vitest) | REG-001, REG-002, REG-003, REG-004, REG-005, REG-006, REG-008, REG-012 | R, F | ET-014 (#71); ET-059 | PR (tests job, `npm test`) | dedup, gap, trip completeness, regression, mode evidence and load window |
 | `tests/unit/trip-seeds.test.ts` | Node unit (Vitest) | REG-006, REG-012 | R | ET-015a (#75) | PR (tests job, `npm test`) | trip completeness, regression |
 | `tests/unit/trip-simulator-replay.test.ts` | Node unit (Vitest) | REG-001, REG-003, REG-005, REG-006, REG-008 | R, F | ET-014 (#72) | PR (tests job, `npm test`) | gap, trip completeness |
 | `tests/unit/unit-profiles.test.ts` | Node unit (Vitest) | REG-009, REG-012, REG-017 | R, T | ET-011b (#56) | PR (tests job, `npm test`) | — |
@@ -206,7 +206,7 @@ Columns:
 | `tests/storage/events-commit.test.ts` | Storage (Vitest under Electron) | REG-005, REG-006, REG-009 | R, F | ET-013 (#51) | PR (tests job, `npm run test:storage`) | ACK, dedup, gap |
 | `tests/storage/failures.test.ts` | Storage (Vitest under Electron) | REG-007 | R, F | ET-013 (#51) | PR (tests job, `npm run test:storage`) | ACK |
 | `tests/storage/fixtures.test.ts` | Storage (Vitest under Electron) | REG-005, REG-013 | R, F | ET-013 (#51) | PR (tests job, `npm run test:storage`) | historical fixture |
-| `tests/storage/journal-export.test.ts` | Storage (Vitest under Electron) | REG-005, REG-013, REG-014 | R, F | ET-016a (#101); ET-059 | PR (tests job, `npm run test:storage`) | trip completeness, mode evidence |
+| `tests/storage/journal-export.test.ts` | Storage (Vitest under Electron) | REG-005, REG-008, REG-013, REG-014 | R, F | ET-016a (#101); ET-059 | PR (tests job, `npm run test:storage`) | trip completeness, mode evidence, load-window preservation |
 | `tests/storage/journal-reads.test.ts` | Storage (Vitest under Electron) | REG-003, REG-009, REG-014 | R, F | ET-016a (#96) | PR (tests job, `npm run test:storage`) | gap, trip completeness, historical fixture |
 | `tests/storage/journal-scale.test.ts` | Storage (Vitest under Electron) | REG-014 | R, F | ET-016a (#96) | PR (tests job, `npm run test:storage`) | — |
 | `tests/storage/journal-service.test.ts` | Storage (Vitest under Electron) | REG-011, REG-012, REG-014 | R, F | ET-016a (#97) | PR (tests job, `npm run test:storage`) | — |

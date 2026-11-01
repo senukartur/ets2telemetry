@@ -220,18 +220,30 @@ it('persists opening mode and ambiguity through worker reopen and JSON export, r
     let state = run(initialTripState(), [sessionInput(welcome)]).state;
     const ids: string[] = [];
     const observation = r.gameMode({mode: 'truckersmp', method: 'module-scan', confidence: 'strong', module: 'synthetic-multiplayer-module.dll'});
-    for (const record of [r.truckConfigured(), r.trailerConfigured(), r.timersRestart(), r.started(), r.paused(), r.jobConfigured(), r.started(), observation, observation, r.paused(), r.delivered(), r.jobCleared(), r.jobConfigured(otherJob()), r.started(), r.paused(), r.delivered()]) {
-      const message = script.event(record, record.type === 'simulation.started' ? {simulation: 'running'} : {simulation: 'paused'});
+    const regression = r.regression('12345', '12000');
+    let simulation: 'running' | 'paused' = 'paused';
+    for (const record of [r.truckConfigured(), r.trailerConfigured(), r.timersRestart(), r.started(), r.paused(), r.jobConfigured(), r.started(), observation, observation, regression, r.paused(), r.delivered(), r.jobCleared(), r.jobConfigured(otherJob()), r.started(), r.paused(), r.delivered()]) {
+      if (record.type === 'simulation.started') simulation = 'running';
+      else if (record.type === 'simulation.paused') simulation = 'paused';
+      const message = script.event(record, {simulation});
       const reduced = run(state, [message]); state = reduced.state;
       const effects = reduced.effects.flat();
       for (const effect of effects) if (effect.kind === 'trip.open') ids.push(effect.tripUuid);
       await ok(c.commitEvent({message, effects}), 'mode event');
+      if (record.type === 'gameTime.regression') {
+        expect(ids).toHaveLength(1);
+        const active = await ok(c.journalTrip(ids[0]), 'mode regression detail');
+        expect(active.trip).toMatchObject({tripUuid: ids[0], outcome: 'open', closeReason: null, recordingCompleteness: 'partial',
+          gameMode: {mode: 'unknown', method: 'none', confidence: 'none'}, gameModeAmbiguous: true});
+        expect(active.intervals.items).toContainEqual(expect.objectContaining({kind: 'discontinuity', cause: 'save-load'}));
+      }
     }
     expect(ids).toHaveLength(2);
     await own.close(); own = create(); own.start(); await until(() => own.state === 'open', 'mode database reopen', HANG_GUARD_MS);
     const first = await ok(own.client!.journalTrip(ids[0]), 'first detail');
     const second = await ok(own.client!.journalTrip(ids[1]), 'second detail');
-    expect(first.trip).toMatchObject({gameMode: {mode: 'unknown', method: 'none', confidence: 'none'}, gameModeAmbiguous: true});
+    expect(first.trip).toMatchObject({tripUuid: ids[0], outcome: 'delivered', closeReason: 'outcome', recordingCompleteness: 'partial',
+      gameMode: {mode: 'unknown', method: 'none', confidence: 'none'}, gameModeAmbiguous: true});
     expect(second.trip).toMatchObject({gameMode: {mode: 'truckersmp', method: 'module-scan', confidence: 'strong'}, gameModeAmbiguous: false});
     const service = new JournalService({history: own, stopping: () => false, log: () => {}});
     const instance = new JournalExporter({read: async query => parseJournalReply(query, await service.query(query)) ?? refusal('FAILED'), documents: () => local.directory,
@@ -239,7 +251,8 @@ it('persists opening mode and ambiguity through worker reopen and JSON export, r
     expect((await instance.export(ids[0])).ok).toBe(true);
     const exported = JSON.parse(readFileSync(output, 'utf8')) as {trip: unknown; events: {record: unknown}[]};
     expect(tripExportProblems(exported)).toEqual([]);
-    expect(exported.trip).toMatchObject({gameMode: first.trip.gameMode, gameModeAmbiguous: true});
+    expect(exported.trip).toMatchObject({tripUuid: ids[0], outcome: 'delivered', closeReason: 'outcome', recordingCompleteness: 'partial', gameMode: first.trip.gameMode, gameModeAmbiguous: true});
+    expect(exported.events.filter(event => (event.record as {type: string}).type === 'gameTime.regression').map(event => event.record)).toEqual([regression]);
     expect(exported.events.filter(event => (event.record as {type: string}).type === 'source.gameMode').map(event => event.record)).toEqual([observation, observation]);
   } finally {await own.close(); await local.dispose();}
 }, HANG_GUARD_MS);

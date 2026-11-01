@@ -129,7 +129,7 @@ Each game has one slot with at most one open trip. Without an open trip the slot
 - **awaiting-outcome**, after `job.cleared`;
 - **reload-check**, after an identical re-send following a clear.
 
-A newly opened trip also has a **load window**. If its job was configured outside a running simulation, the window lasts until the next `simulation.started` and for the one event right after it. A `timers.restart` or `gameTime.regression` inside the window is the load that restored this job (O1, O10), so it does not close the trip.
+A newly opened trip also has a **load window**. If its job was configured outside a running simulation, the window lasts until the next `simulation.started` and for the next event after it that is not `source.gameMode` metadata. Mode notifications preserve the window whether their evidence is identical, different or repeated; a differing result still independently marks the trip ambiguous. A `timers.restart` or `gameTime.regression` inside the window is the load that restored this job (O1, O10), so it does not close the trip.
 
 The session's **load state** is `loading` from a fresh session until its first `simulation.started`, and again after `timers.restart` until the next start (O1). A `gameTime.regression` never starts a load: it follows the start of the load it ends (O10), so it leaves the state unchanged, or sets `running` when it occurred while running. The state is `unknown` after a gap or when the reducer joins a session that already has committed events.
 
