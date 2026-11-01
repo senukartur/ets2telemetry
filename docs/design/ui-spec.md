@@ -60,7 +60,7 @@ Values are in [tokens.css](tokens.css). Summary:
 
 **Wiring.** Replace the neutral `:root` and `.dark` colour blocks in `apps/desktop/src/index.css` with the shadcn mapping block from tokens.css, and add the `--yu-*` block. Do not add a `.dark` class switch. The overlay's own stylesheet (`apps/desktop/src/renderer.css`) imports only the `--yu-ov-*` block; it never loads `index.css` or the shadcn base styles.
 
-**Type.** M PLUS Rounded 1c is bundled with pinned `@fontsource/m-plus-rounded-1c` 5.3.0. Both renderers load local Latin and Cyrillic faces at weights 400, 500 and 700 through `fonts.css`. Body text uses 400, labels and displayed values use 500, and headings use 700; controls previously using 600 use 500. Never load Google Fonts at runtime; the application must work offline. Use `font-variant-numeric: tabular-nums` for every number column, metric and live value. Scale: screen title 24 px/700 (top bar 18 px/700), card title 15 px/700, body 13 px, meta 12 px, sidebar group label 11 px/500 uppercase with 0.6 px tracking, metric 28 px/500.
+**Type.** Huninn is bundled with pinned `@fontsource/huninn` 5.3.1. Both renderers load local Latin, Latin Extended and Cyrillic subsets of the Regular (400) face through `fonts.css`. Existing CSS weights remain unchanged; the browser matches Medium (500) to Regular and synthesizes Bold (700), as in the approved preview. Body text uses 400, labels and displayed values use 500, and headings use 700; controls previously using 600 use 500. Text uses grayscale antialiasing across the application to avoid coloured subpixel fringes on Windows. Never load Google Fonts at runtime; the application must work offline. Use `font-variant-numeric: tabular-nums` for every number column, metric and live value. Scale: screen title 24 px/700 (top bar 18 px/700), card title 15 px/700, body 13 px, recording status label 13 px/500, meta 12 px, sidebar group label 11 px/500 uppercase with 0.6 px tracking, metric 28 px/500.
 
 **Signature detail.** Every card title has a 3 px `--yu-accent` bar on its left and a 10 px text indent (`border-left: 3px solid; padding-left: 10px`).
 
@@ -175,7 +175,7 @@ States: **Waiting**: banner and dashes. **Paused**: values stay current with a �
 
 Owner decision, October 23, 2026 (ET-047): Hard Mode is a dedicated Drive destination between Live and Journal. This supersedes the October 21 drawer requirement. The Live instrument spans the available content width. Keep the global top-bar Hard Mode status on every route.
 
-The full page shows a summary with status, N/12, progress, source/observation age and Check again, followed by twelve inline detected/required/state/reason/cvar entries and persisted/read-only/manual-delivery caveats. Retain first-loss value/time even after settings recover. No View checklist trigger or Hard Mode drawer remains. Use two columns when the card is wider than 680px, otherwise one, with normal page scrolling and wrapping. Reuse Yukon tokens, offline M PLUS Rounded 1c and lucide Flame; status includes text/icons as well as color.
+The full page shows a summary with status, N/12, progress, source/observation age and Check again, followed by twelve inline detected/required/state/reason/cvar entries and persisted/read-only/manual-delivery caveats. Retain first-loss value/time even after settings recover. No View checklist trigger or Hard Mode drawer remains. Use two columns when the card is wider than 680px, otherwise one, with normal page scrolling and wrapping. Reuse Yukon tokens, offline Huninn and lucide Flame; status includes text/icons as well as color.
 
 The existing parameter hints remain optional supplementary information: hover/focus, Escape dismissal, normal Tab order. Essential evidence and explanations are always inline. Changing language updates the page without changing evidence. The dashboard-lifetime controller remains shared with the shell; navigating or refreshing cannot restore trip qualification. Focus moves to the screen heading after route changes. Keep EN/RU parity, keyboard operation and visible focus. Validate minimum/wide desktop widths; renderer emulation does not establish native Windows DPI acceptance.
 
@@ -257,7 +257,7 @@ Each state is an icon in a 52 px rounded square (error and warning states tint i
 
 ## 7. Overlay (`overlay.*`)
 
-The overlay keeps its own minimal stylesheet with the `--yu-ov-*` tokens: panel `rgba(11,17,32,.80)` (background opacity sets alpha directly: 40–100%, default 80%), border `rgba(55,65,81,.9)`, text `#F3F4F6`, icons muted, accent `#60A5FA`, fuel `#8FD3AE`, low fuel `#E8C58A`, problems `#F3B4A4`. M PLUS Rounded 1c is bundled into the overlay as well. No backdrop blur. Values use tabular figures.
+The overlay keeps its own minimal stylesheet with the `--yu-ov-*` tokens: panel `rgba(11,17,32,.80)` (background opacity sets alpha directly: 40–100%, default 80%), border `rgba(55,65,81,.9)`, text `#F3F4F6`, icons muted, accent `#60A5FA`, fuel `#8FD3AE`, low fuel `#E8C58A`, problems `#F3B4A4`. Huninn is bundled into the overlay as well. No backdrop blur. Values use tabular figures.
 
 The October 22 ET-012e amendment applies integer speed to all four layouts. Ordinary values use 20 px in Strip, 13 px in Card, 12 px in the Cluster panel and 14 px in HUD; preserve the existing primary speed/gear hierarchy, label and unit sizes, fixed row heights and styles. In the implemented Strip and HUD, primary speed remains 22 px and 16 px respectively. The saved vertical placement also aligns painted content inside the stable reserved window: top at `y = 0`, centre at `0.5`, bottom at `1`. Dragging freezes that internal anchor until release; placement accuracy and possible release adjustment require the focused owner checks described in [the minimal overlay](../minimal-overlay.md#geometry-and-placements-et-012b).
 
@@ -301,7 +301,7 @@ English is the canonical UI language today (`apps/desktop/src/strings.ts`). The 
 
 These are suggestions for future cards; none is authorized by this document.
 
-1. **UI foundation**: tokens in index.css, M PLUS Rounded 1c, badge variants, title bar overlay, the shell (sidebar, top bar, recording box) and screen routing. Move the current cards into the new screens without changing behaviour.
+1. **UI foundation**: tokens in index.css, Huninn, badge variants, title bar overlay, the shell (sidebar, top bar, recording box) and screen routing. Move the current cards into the new screens without changing behaviour.
 2. **Live** restyle (variant B) on the existing live view.
 3. **Journal and Trip details** restyle on the existing ET-016 reads.
 4. **Settings** screen with sub-navigation (moves the existing units, overlay, plugin, uninstall and diagnostics cards).
@@ -322,7 +322,7 @@ These are suggestions for future cards; none is authorized by this document.
 
 ## ET-028 implementation mapping and accepted read-boundary limits — October 21, 2026
 
-The renderer implements the approved dark Yukon shell and local screen routing. Main window geometry is 1280×800, minimum 1100×720, with a 32px native title-bar overlay; only the title strip drags. The 220px sidebar, persistent status chips and 200px Settings navigation use the canonical tokens and unchanged bear. Both renderers bundle M PLUS Rounded 1c 5.3.0 independently. Existing package/shortcut/data identities and small Windows/tray icons remain unchanged.
+The renderer implements the approved dark Yukon shell and local screen routing. Main window geometry is 1280×800, minimum 1100×720, with a 32px native title-bar overlay; only the title strip drags. The 220px sidebar, persistent status chips and 200px Settings navigation use the canonical tokens and unchanged bear. Both renderers bundle Huninn 5.3.1 independently. Existing package/shortcut/data identities and small Windows/tray icons remain unchanged.
 
 | Reference region | Implemented binding / deliberate limit |
 | --- | --- |
@@ -333,7 +333,7 @@ The renderer implements the approved dark Yukon shell and local screen routing. 
 | Trip chart | Summary and Samples read only the currently mounted page (≤300). Independent source-monotonic elapsed axes per segment; UTC labels only. No line crosses unavailable speed, missing seconds, changed clock or non-increasing time. Raw paged tables remain. |
 | Settings | General/Units segmented controls; four Overlay thumbnail cards; existing read-only/committed-save authority, fifteen sections, last-enabled guard and position editing. Unsupported show/opacity/autostart/backup are Planned, version/statistics unavailable. Source selection/raw diagnostic details live in Data. |
 | Account / first run | Informational Later screen and General help only. No credential, sync, onboarding or autostart backend/control is invented. This owner-approved placeholder supersedes the reference's hidden-until-server-phase suggestion. |
-| Overlay | Independent transparent CSS with yu-ov tokens and M PLUS Rounded 1c. Card hierarchy shares the existing reserved 24px rows; speed/gear/RPM subsets never manufacture disabled fields. The cluster's validated numeric RPM fraction draws an inner arc. The existing renderer bridge has formatted speed only, so its outer track is decorative, with no invented speed progress or IPC extension. Superseded for the Cluster by ET-045f (October 24, 2026): a validated numeric `speedRing` payload field, without a new IPC channel or bridge method, draws the outer speed arc (§7). |
+| Overlay | Independent transparent CSS with yu-ov tokens and Huninn. Card hierarchy shares the existing reserved 24px rows; speed/gear/RPM subsets never manufacture disabled fields. The cluster's validated numeric RPM fraction draws an inner arc. The existing renderer bridge has formatted speed only, so its outer track is decorative, with no invented speed progress or IPC extension. Superseded for the Cluster by ET-045f (October 24, 2026): a validated numeric `speedRing` payload field, without a new IPC channel or bridge method, draws the outer speed arc (§7). |
 
 App-owned EN/RU labels and numeric unit labels are localized; raw SDK names, money digits/currency codes, protocol/audit enums and cvars remain unchanged. All twelve Hard Mode hints/drawer rows, observation boundaries and irreversible first loss remain governed by ET-026; this task changes presentation only.
 

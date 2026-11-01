@@ -109,6 +109,8 @@ function diagnosticIdentities(): (string | undefined)[] {
 }
 
 function runApplication(profileError: unknown): void {
+  // Use grayscale antialiasing throughout the UI to avoid coloured fringes on small Windows text.
+  app.commandLine.appendSwitch('disable-lcd-text');
   const diagnosticDirectory = process.env.ETS2TELEMETRY_DIAGNOSTIC_DIR;
   // Resolved once; the telemetry service gets this root at fork, so both logs share it, also without LOCALAPPDATA. The
   // diagnostic bundle (ET-017 P17) reads this directory's startup logs and its `service` subdirectory's.

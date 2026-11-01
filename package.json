@@ -48,7 +48,7 @@
     "@electron-forge/maker-squirrel": "8.0.1",
     "@electron-forge/plugin-auto-unpack-natives": "8.0.1",
     "@electron/asar": "4.3.1",
-    "@fontsource/m-plus-rounded-1c": "5.3.0",
+    "@fontsource/huninn": "5.3.1",
     "@playwright/test": "1.64.0",
     "@tailwindcss/vite": "4.3.3",
     "@types/better-sqlite3": "9.6.0",

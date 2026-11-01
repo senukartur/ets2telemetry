@@ -912,7 +912,8 @@ it('starts normally for --squirrel-firstrun', async () => {
     runSquirrelEvent: run}));
   await withArgv(['--squirrel-firstrun'], async () => {await ready();});
   expect(run).not.toHaveBeenCalled();
-  expect(app.disableHardwareAcceleration).not.toHaveBeenCalled(); expect(app.commandLine.appendSwitch).not.toHaveBeenCalled();
+  expect(app.disableHardwareAcceleration).not.toHaveBeenCalled();
+  expect(app.commandLine.appendSwitch.mock.calls).toEqual([['disable-lcd-text']]);
   expect(app.requestSingleInstanceLock).toHaveBeenCalledOnce();
   expect(app.listenerCount('second-instance')).toBe(1);
 });
