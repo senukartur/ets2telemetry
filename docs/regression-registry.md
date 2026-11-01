@@ -20,6 +20,7 @@ Columns:
 
 | Entry point | Layer | REG IDs | Source | Owning card (PR) | Runs in | Protected |
 | --- | --- | --- | --- | --- | --- | --- |
+| `tests/unit/hard-mode-smoke-source.test.ts` | Node unit (Vitest), deterministic socket write failures and controlled timers | Harness: REG-003, REG-010, REG-011 | F, T | NO-CARD (staging release CI repair) | PR (`Windows x64 tests`, `npm test`) | regression (peer-close diagnostics, per-connection frames/timers, reconnection ACK, unexpected errors retained) |
 | `tests/unit/action-result-rendering.test.ts` | Node unit (Vitest) | REG-015 | R, F, V (et-045b) | ET-045b | PR (tests job, `npm test`) | — |
 | `tests/unit/app-health.test.ts` | Node unit (Vitest) | REG-011, REG-012 | T, V (et-011) | ET-011a (#52) | PR (tests job, `npm test`) | — |
 | `tests/unit/app-lifecycle.test.ts` | Node unit (Vitest) | REG-012 | R | ET-011a (#52) | PR (tests job, `npm test`) | — |
