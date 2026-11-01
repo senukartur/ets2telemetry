@@ -276,7 +276,10 @@ class Reactive extends PipeHost {
     const settled = () => this.live !== l || l.link.gone || ((s => s === undefined || s.acked >= s.sent)(this.producer.ackState()));
     const prefix = l.policy.ack.kind === 'dropAfter' ? l.policy.ack.count : Infinity;
     if (!this.awaitScriptedAcks || !l.policy.durable || l.policy.ack.kind === 'withhold' || l.policy.commit.kind === 'none' || l.acknowledgements >= prefix) { await this.wait(settled, this.quiesceMs); return; }
-    if (!await this.wait(() => settled() || l.acknowledgements >= prefix, this.settleMs)) throw new Error(`Connection ${l.record.connection}: the client neither acknowledged everything written to it nor left within ${this.settleMs} ms`);
+    if (!await this.wait(() => settled() || l.acknowledgements >= prefix, this.settleMs)) {
+      const requirement = l.policy.ack.kind === 'dropAfter' ? 'acknowledged the required scripted ACK prefix' : 'acknowledged everything written to it';
+      throw new Error(`Connection ${l.record.connection}: the client neither ${requirement} nor left within ${this.settleMs} ms`);
+    }
     if (!settled()) await this.wait(settled, this.quiesceMs);
   }
   /** A scripted disconnect: wait (see quiesce) for the ACKs of everything written, then a graceful close. */

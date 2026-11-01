@@ -131,8 +131,8 @@ const shownText = (page, accept, message) => until(() => recordingTextLog(page),
  * action and then paces on to the scripted disconnect, so one commit slower than that bound (hosted run 39135729037: the
  * gate eventSeq 13 committed, its ACK never sent, the Job nearly idle) ended connection 3 before the gate's ACK and the
  * journey failed with THIRD_CONNECTION_DID_NOT_COMMIT. With it, the simulator waits until the service acknowledged
- * everything written to it or left (30 s liveness bound), as the ET-006b storage tests do. Connection 1 drops ACKs after
- * four (`dropAfter:4`), so it keeps the bounded wait.
+ * everything written to it or left (30 s liveness bound), as the ET-006b storage tests do. Connection 1 uses the same
+ * guard for its first four promised ACKs (`dropAfter:4`); only its intentionally dropped tail keeps the bounded wait.
  */
 export async function startRecordingSource(config) {
   const {checkout, output} = config;
