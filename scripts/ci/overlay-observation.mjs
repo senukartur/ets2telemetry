@@ -246,7 +246,7 @@ export async function verifyRendererStyles(dashboard, overlay) {
   const read = async () => {
     const document = globalThis.document;
     const loadedFonts = await Promise.all([400, 500, 700].map(async weight => {
-      const faces = await document.fonts.load(`${weight} 16px "M PLUS Rounded 1c"`, 'Скорость Ёж 0123456789');
+      const faces = await document.fonts.load(`${weight} 16px "Huninn"`, 'Скорость Ёж 0123456789');
       return {weight, loaded: faces.length >= 2 && faces.every(face => face.status === 'loaded')};
     }));
     const style = node => globalThis.getComputedStyle(node);
@@ -265,12 +265,12 @@ export async function verifyRendererStyles(dashboard, overlay) {
   const mainStyles = await dashboard.evaluate(read);
   const overlayStyles = await overlay.evaluate(read);
   assert.ok(mainStyles.themeBackground && mainStyles.cardBackground && mainStyles.cardBackground !== 'rgba(0, 0, 0, 0)', 'Dashboard shadcn theme and Card must be styled');
-  assert.ok(mainStyles.fontFaces.some(family => family.includes('M PLUS Rounded 1c')), 'Dashboard must retain the configured offline M PLUS Rounded 1c font');
+  assert.ok(mainStyles.fontFaces.some(family => family.includes('Huninn')), 'Dashboard must retain the configured offline Huninn font');
   for (const styles of [mainStyles, overlayStyles]) assert.deepEqual(styles.loadedFonts, [400, 500, 700].map(weight => ({weight, loaded: true})), 'Latin and Cyrillic faces load locally at every configured weight');
   assert.equal(overlayStyles.htmlBackground, 'rgba(0, 0, 0, 0)');
   assert.equal(overlayStyles.bodyBackground, 'rgba(0, 0, 0, 0)');
   assert.equal(overlayStyles.themeBackground, '', 'Overlay must not load the main theme');
-  assert.ok(overlayStyles.fontFaces.length > 0 && overlayStyles.fontFaces.every(family => family.includes('M PLUS Rounded 1c')), 'Overlay must bundle its own offline M PLUS Rounded 1c faces');
+  assert.ok(overlayStyles.fontFaces.length > 0 && overlayStyles.fontFaces.every(family => family.includes('Huninn')), 'Overlay must bundle its own offline Huninn faces');
   assert.equal(overlayStyles.widgetBackground, 'rgba(11, 17, 32, 0.8)');
   assert.equal(overlayStyles.widgetBackdropFilter, 'none', 'Overlay must not blur the game behind it');
   assert.ok(mainStyles.stylesheets.length > 0 && overlayStyles.stylesheets.length > 0);

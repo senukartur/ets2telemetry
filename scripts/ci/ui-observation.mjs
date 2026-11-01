@@ -88,7 +88,7 @@ async function waitLiveInstrument(page, language) {
   assert.ok(typography.length > 0);
   for (const metric of typography) {
     assert.equal(metric.weight, '500', 'Dashboard values use Medium');
-    assert.ok(metric.family.includes('M PLUS Rounded 1c'));
+    assert.ok(metric.family.includes('Huninn'));
   }
   assert.deepEqual(await page.locator('.yu-live-fields h3,[data-slot="card-title"]').evaluateAll(nodes => [...new Set(nodes.map(node => globalThis.getComputedStyle(node).fontWeight))]), ['700'], 'Dashboard headings use Bold explicitly');
 }
@@ -215,9 +215,9 @@ async function withRestore(body, restore) {
 async function observeStripNumbers({application, overlay, source, language, record}) {
   record.stableNumbers ??= [];
   assert.ok(await overlay.evaluate(async () => {
-    const faces = await globalThis.document.fonts.load('500 17px "M PLUS Rounded 1c"', '0123456789RHLNC');
-    return faces.length > 0 && faces.every(face => face.status === 'loaded' && face.weight === '500' && face.family.includes('M PLUS Rounded 1c'));
-  }), 'The bundled Medium face must load before measuring numeric reserves');
+    const faces = await globalThis.document.fonts.load('500 17px "Huninn"', '0123456789RHLNC');
+    return faces.length > 0 && faces.every(face => face.status === 'loaded' && face.weight === '400' && face.family.includes('Huninn'));
+  }), 'The bundled Regular face must load for the existing CSS weight before measuring numeric reserves');
   await withRestore(async () => {
     for (const frame of STRIP_FRAMES) {
       await overlayFrame(application, overlay, frame);
@@ -829,8 +829,8 @@ export async function runUiSmoke({application, dashboard, overlay, source, sourc
         }
         const license = dashboard.getByTestId('settings.about.font-license');
         await license.locator('summary').focus(); await dashboard.keyboard.press('Enter');
-        assert.equal(await license.locator('pre').innerText(), await readFile(path.join(config.checkout, 'apps/desktop/src/assets/m-plus-rounded-1c-OFL.txt'), 'utf8'));
-        assert.match(await license.locator('pre').getAttribute('data-license-asset'), /m-plus-rounded-1c-OFL[^/]*\.txt$/);
+        assert.equal(await license.locator('pre').innerText(), await readFile(path.join(config.checkout, 'apps/desktop/src/assets/huninn-OFL.txt'), 'utf8'));
+        assert.match(await license.locator('pre').getAttribute('data-license-asset'), /huninn-OFL[^/]*\.txt$/);
         await dashboard.keyboard.press('Enter'); record.flags.fontLicense = true;
         await settingsPanel(dashboard, 'overlay');
         const visibility = dashboard.getByRole('switch', {name: language === 'en' ? 'Show overlay' : 'Показывать оверлей', exact: true});
@@ -1109,7 +1109,7 @@ export async function runUiSmoke({application, dashboard, overlay, source, sourc
   await chooseLanguage(dashboard, other); await observeVersionAndUpdate(dashboard, config, other);
   await chooseLanguage(dashboard, shown);
   record.flags.versionLine = true; record.flags.updateHidden = true;
-  record.flags.offlineFonts = await dashboard.evaluate(() => [...globalThis.document.fonts].some(font => font.family.includes('M PLUS Rounded 1c')));
+  record.flags.offlineFonts = await dashboard.evaluate(() => [...globalThis.document.fonts].some(font => font.family.includes('Huninn')));
   assert.equal(record.flags.offlineFonts, true);
   await chooseLanguage(dashboard, 'en'); await screen(dashboard, 'live');
 }

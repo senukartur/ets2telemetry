@@ -70,8 +70,8 @@
   --yu-radius-badge: 6px;
   --yu-title-bar: 3px solid var(--yu-accent);  /* left bar of every card title, 10px text indent */
 
-  /* Type: M PLUS Rounded 1c, bundled with @fontsource/m-plus-rounded-1c (the app works offline; never load Google Fonts at runtime) */
-  --yu-font: 'M PLUS Rounded 1c', 'Segoe UI', system-ui, sans-serif;
+  /* Type: Huninn, bundled with @fontsource/huninn (the app works offline; never load Google Fonts at runtime) */
+  --yu-font: 'Huninn', 'Segoe UI', system-ui, sans-serif;
   --yu-text-screen: 24px;   /* screen title, 700 */
   --yu-text-card: 15px;     /* card title, 700 */
   --yu-text-body: 13px;     /* desktop body (one step denser than the web) */

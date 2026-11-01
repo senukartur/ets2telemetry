@@ -4,7 +4,7 @@
    the window stays transparent and only each layout's surface paints. */
 html:has(.overlay-body) { background: transparent; }
 .overlay-body { margin: 0; background: transparent; overflow: hidden; pointer-events: none; user-select: none; }
-.overlay { position: relative; box-sizing: border-box; width: 100vw; height: 100vh; display: flex; overflow: hidden; color: var(--yu-ov-text); background: transparent; font: 14px/1.3 'M PLUS Rounded 1c', system-ui, sans-serif; font-variant-numeric: tabular-nums; }
+.overlay { position: relative; box-sizing: border-box; width: 100vw; height: 100vh; display: flex; overflow: hidden; color: var(--yu-ov-text); background: transparent; font: 14px/1.3 'Huninn', system-ui, sans-serif; font-variant-numeric: tabular-nums; }
 .overlay-content { position: absolute; left: 0; width: 100%; display: flex; justify-content: inherit; align-items: inherit; max-height: 100%; }
 .overlay *, .overlay *::before, .overlay *::after { box-sizing: border-box; }
 .overlay-surface { background: var(--yu-ov-panel); border: 1px solid var(--yu-ov-border); border-radius: var(--yu-ov-radius); }
