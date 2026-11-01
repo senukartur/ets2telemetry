@@ -168,10 +168,10 @@ describe('job lifecycle', () => {
 });
 
 describe('loads, restarts and continuations', () => {
-  it('O1: a job in the start burst opens partial and survives the burst timers.restart (T12) [O1]', () => {
+  it('O1: a job in the start burst awaits coverage evidence and survives the burst timers.restart (T12) [O1]', () => {
     const s = new Script(ETS2_A), t = uuid(ETS2_A, '1');
     play([[sessionInput(s.welcome())],
-      [s.event(r.jobConfigured(), paused), [open(t, at(1), {recordingCompleteness: 'partial'}), cause(t, 'discontinuity', {cause: 'opened-at-load', atEventSeq: '1'})]],
+      [s.event(r.jobConfigured(), paused), [open(t, at(1)), cause(t, 'discontinuity', {cause: 'opened-at-load', annotation: true, atEventSeq: '1'})]],
       [s.event(r.truckConfigured(), paused), [{kind: 'trip.update', tripUuid: t, set: {truckConfiguration: 'this-event'}}]],
       [s.event(r.timersRestart(), paused)], [s.event(r.started())],
       [s.event(r.fined()), [attr(t, 'trip')]]]);
@@ -197,16 +197,16 @@ describe('loads, restarts and continuations', () => {
       [s.event(r.delivered(), paused), [attr(trip, 'trip'), close(trip, 'delivered', 'outcome', 'partial', at(19))]]]);
     expect(tripView(state, 'ets2').lastClosed).toMatchObject({tripUuid: trip, recordingCompleteness: 'partial', outcome: 'delivered'});
   });
-  it('11b. save load of a different job closes the old trip and keeps the loaded one, partial (T8, T12) [O10, synthetic-inference]', () => {
+  it('11b. save load of a different job closes the old trip and verifies the new job on its new clock (T8, T12) [O10, synthetic-inference]', () => {
     const s = new Script(ETS2_A), {rows, trip} = acceptedJob(s), b = uuid(ETS2_A, '12');
     const state = play([...rows, [s.event(r.paused(), paused)], [s.event(r.jobCleared(), paused)], [s.event(r.truckCleared(), paused)], [s.event(r.trailerCleared(0), paused)],
       [s.event(r.jobConfigured(otherJob()), paused), [close(trip, 'none', 'configuration-cleared', 'partial', at(12)), open(b, at(12))]],
       [s.event(r.truckConfigured(), paused), [{kind: 'trip.update', tripUuid: b, set: {truckConfiguration: 'this-event'}}]],
       [s.event(r.trailerConfigured(), paused), [{kind: 'trip.update', tripUuid: b, set: {trailerConfigurations: ['this-event']}}]],
       [s.event(r.started())],
-      [s.event(r.regression('12345', '12000')), [partial(b), cause(b, 'discontinuity', {cause: 'save-load', fromClockId: GAME_CLOCK_1, toClockId: GAME_CLOCK_2, atEventSeq: '16'})]],
+      [s.event(r.regression('12345', '12000')), [cause(b, 'discontinuity', {cause: 'save-load', annotation: true, fromClockId: GAME_CLOCK_1, toClockId: GAME_CLOCK_2, atEventSeq: '16'})]],
       [s.event(r.fined()), [attr(b, 'trip')]]]);
-    expect(tripView(state, 'ets2')).toMatchObject({phase: 'active', current: {tripUuid: b, recordingCompleteness: 'partial'}});
+    expect(tripView(state, 'ets2')).toMatchObject({phase: 'active', current: {tripUuid: b, recordingCompleteness: 'unknown'}});
   });
   it('11c. save load with no job closes the trip as a discontinuity [O10, synthetic-inference]', () => {
     const s = new Script(ETS2_A), {rows, trip} = acceptedJob(s);
@@ -215,12 +215,12 @@ describe('loads, restarts and continuations', () => {
       [s.event(r.regression('12345', '12000')), [close(trip, 'none', 'discontinuity', 'partial', at(15))]],
       [s.event(r.fined()), [attr(null, 'free-driving')]]]);
   });
-  it('14. profile switch: the other profile\'s job opens and its timer restart makes it partial [synthetic-inference]', () => {
+  it('14. profile switch: the other profile\'s job requires coverage evidence after its timer restart [synthetic-inference]', () => {
     const s = new Script(ETS2_A), {rows, trip} = acceptedJob(s), b = uuid(ETS2_A, '12');
     play([...rows, [s.event(r.paused(), paused)], [s.event(r.jobCleared(), paused)], [s.event(r.truckCleared(), paused)], [s.event(r.trailerCleared(0), paused)],
       [s.event(r.jobConfigured(otherJob()), paused), [close(trip, 'none', 'configuration-cleared', 'partial', at(12)), open(b, at(12))]],
       [s.event(r.truckConfigured(truck({licensePlate: {available: true, value: 'SYN 0009'}})), paused), [{kind: 'trip.update', tripUuid: b, set: {truckConfiguration: 'this-event'}}]],
-      [s.event(r.timersRestart(), paused), [partial(b), cause(b, 'discontinuity', {cause: 'opened-at-load', atEventSeq: '14'})]],
+      [s.event(r.timersRestart(), paused), [cause(b, 'discontinuity', {cause: 'opened-at-load', annotation: true, atEventSeq: '14'})]],
       [s.event(r.started())], [s.event(r.fined()), [attr(b, 'trip')]]]);
   });
   it('15. a mid-trip timers.restart closes the trip; the identical re-send opens a not-merged continuation [synthetic-inference]', () => {
@@ -452,9 +452,9 @@ describe('game-mode opening evidence', () => {
     const after = tripView(state, 'ets2').current;
     expect([after?.gameMode, after?.gameModeAmbiguous, after?.recordingCompleteness]).toEqual([before?.gameMode, before?.gameModeAmbiguous, before?.recordingCompleteness]);
     expect(tripView(state, 'ets2').current).toMatchObject({gameMode: {mode: 'truckersmp', method: 'module-scan', confidence: 'strong'}, gameModeAmbiguous: false, recordingCompleteness: 'unknown'});
-    state = play([[s.event(r.regression('12345', '12000')), [partial(trip),
-      cause(trip, 'discontinuity', {cause: 'save-load', fromClockId: GAME_CLOCK_1, toClockId: GAME_CLOCK_2, atEventSeq: '9'})]]], state);
-    expect(tripView(state, 'ets2')).toMatchObject({phase: 'active', lastClosed: null, current: {tripUuid: trip, recordingCompleteness: 'partial',
+    state = play([[s.event(r.regression('12345', '12000')), [
+      cause(trip, 'discontinuity', {annotation: true, cause: 'save-load', fromClockId: GAME_CLOCK_1, toClockId: GAME_CLOCK_2, atEventSeq: '9'})]]], state);
+    expect(tripView(state, 'ets2')).toMatchObject({phase: 'active', lastClosed: null, current: {tripUuid: trip, recordingCompleteness: 'unknown',
       gameMode: {mode: 'truckersmp', method: 'module-scan', confidence: 'strong'}, gameModeAmbiguous: false}});
     // The absorbed regression consumes the load window; a later regression still closes the original trip.
     state = play([[s.event(r.regression('12000', '11000', GAME_CLOCK_2, '40000000-0000-4000-8000-000000000003')),
@@ -467,10 +467,10 @@ describe('game-mode opening evidence', () => {
     const record = r.gameMode({mode: 'truckersmp', method: 'module-scan', confidence: 'strong', module: 'synthetic-multiplayer-module.dll'});
     const first = s.event(record), repeated = s.event(record);
     const state = play([...rows, [first, [{kind: 'trip.update', tripUuid: trip, set: {gameModeAmbiguous: true}}]], [repeated],
-      [s.event(r.regression('12345', '12000')), [partial(trip),
-        cause(trip, 'discontinuity', {cause: 'save-load', fromClockId: GAME_CLOCK_1, toClockId: GAME_CLOCK_2, atEventSeq: '10'})]]]);
+      [s.event(r.regression('12345', '12000')), [
+        cause(trip, 'discontinuity', {annotation: true, cause: 'save-load', fromClockId: GAME_CLOCK_1, toClockId: GAME_CLOCK_2, atEventSeq: '10'})]]]);
     expect(tripView(state, 'ets2')).toMatchObject({phase: 'active', lastClosed: null,
-      current: {tripUuid: trip, gameMode: UNKNOWN_MODE, gameModeAmbiguous: true, recordingCompleteness: 'partial'}});
+      current: {tripUuid: trip, gameMode: UNKNOWN_MODE, gameModeAmbiguous: true, recordingCompleteness: 'unknown'}});
   });
   for (const control of [
     {name: 'fine', record: r.fined(), effects: (trip: string): TripEffect[] => [attr(trip, 'trip')]},

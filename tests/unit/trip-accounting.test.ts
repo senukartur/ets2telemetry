@@ -80,6 +80,130 @@ describe('T17 thresholds', () => {
   });
 });
 
+describe('loaded-job coverage (REG-003, REG-008)', () => {
+  function deliveredLoadedJob(options: {distance?: number | null; duration?: string | null; observed?: number; gap?: boolean; hole?: boolean; cancel?: boolean; clock?: string; initialRegression?: boolean; modeMetadata?: boolean} = {}) {
+    const s = new Script(ETS2_A);
+    let state = run(initialTripState(), [sessionInput(s.welcome()), s.event(r.jobConfigured(), paused), s.event(r.started())]).state;
+    if (options.modeMetadata) state = run(state, [s.event(r.gameMode({mode: 'truckersmp', method: 'module-scan', confidence: 'strong', module: 'synthetic-multiplayer-module.dll'}))]).state;
+    if (options.initialRegression) state = run(state, [s.event(r.regression('13000', '12345'))]).state;
+    // Ten continuous 100 m steps. The SDK fixture's opening game time is 12345; the delivery is at 12347.
+    for (let second = 2; second <= 12; second++) {
+      state = run(state, [reading(s, {ms: second * 2000 + (options.hole && second >= 6 ? 6000 : 0), odometer: 10_000 + (second - 2) * (options.observed ?? 1000) / 10,
+        fuel: 100, minutes: 12345, clock: options.initialRegression ? GAME_CLOCK_2 : GAME_CLOCK_1, position: {x: 0, y: 0, z: 0}})]).state;
+    }
+    if (options.gap) state = run(state, [s.gap(1)]).state;
+    const delivery = r.delivered();
+    if (delivery.type !== 'job.delivered') throw new Error('delivery fixture');
+    delivery.distance = options.distance === null ? {available: false, reason: 'not-observed', unit: 'm'} : {available: true, value: options.distance ?? 1000, unit: 'm'};
+    delivery.deliveryDuration = options.duration === null ? {available: false, reason: 'not-observed', unit: 'min'} : {available: true, value: options.duration ?? '2', unit: 'min'};
+    const terminal = s.event(options.cancel ? r.cancelled() : delivery, {simulation: 'paused', advanceMs: 30_000});
+    terminal.data.occurred.gameTime = {minutes: {available: true, value: '12347'}, clockId: options.clock ?? (options.initialRegression ? GAME_CLOCK_2 : GAME_CLOCK_1)};
+    return run(state, [terminal]);
+  }
+  it('keeps a loaded job unknown until delivery corroborates distance AND elapsed game time', () => {
+    const result = deliveredLoadedJob();
+    expect(tripView(result.state, 'ets2').lastClosed).toMatchObject({outcome: 'delivered', recordingCompleteness: 'complete'});
+    expect(result.effects.flat()).toContainEqual(expect.objectContaining({kind: 'completeness.add', interval: expect.objectContaining({
+      kind: 'discontinuity', detail: expect.objectContaining({annotation: true, cause: 'loaded-job-coverage-confirmed'})})}));
+  });
+  it('uses the new clock when the initial load resets time before any observed progress', () => {
+    expect(tripView(deliveredLoadedJob({initialRegression: true}).state, 'ets2').lastClosed?.recordingCompleteness).toBe('complete');
+  });
+  it('can corroborate a loaded job completely after mode metadata and its initial regression', () => {
+    const result = deliveredLoadedJob({initialRegression: true, modeMetadata: true});
+    expect(tripView(result.state, 'ets2').lastClosed).toMatchObject({outcome: 'delivered', recordingCompleteness: 'complete', gameMode: UNKNOWN_MODE, gameModeAmbiguous: true});
+    expect(result.effects.flat()).toContainEqual(expect.objectContaining({kind: 'completeness.add', interval: expect.objectContaining({
+      detail: expect.objectContaining({annotation: true, cause: 'loaded-job-coverage-confirmed'})})}));
+  });
+  it.each([
+    {distance: 2000}, {duration: '3'}, {distance: null}, {duration: null}, {cancel: true}, {gap: true}, {hole: true}, {clock: GAME_CLOCK_2}, {observed: 0}, {distance: 0}
+  ])('retains partial recording with earlier progress, unavailable evidence, cancellation or real loss: %j', options => {
+    const result = deliveredLoadedJob(options);
+    const view = tripView(result.state, 'ets2');
+    expect((view.lastClosed ?? view.current)?.recordingCompleteness).toBe('partial');
+  });
+  it.each([[500, 'complete'], [499.9, 'partial'], [1500, 'complete'], [1500.1, 'partial']] as const)(
+    'bounds whole-kilometre corroboration at half a kilometre: observed %d', (observed, recordingCompleteness) => {
+      const result = deliveredLoadedJob({observed});
+      expect(tripView(result.state, 'ets2').lastClosed?.recordingCompleteness).toBe(recordingCompleteness);
+    });
+  it.each([[1000.5, 1001.5, 'complete'], [1000.5, 1001.6, 'partial']] as const)(
+    'uses only a one-metre allowance for fractional distance %d', (distance, observed, recordingCompleteness) => {
+      expect(tripView(deliveredLoadedJob({distance, observed}).state, 'ets2').lastClosed?.recordingCompleteness).toBe(recordingCompleteness);
+    });
+  it('does not use route or cargo names to merge two different job configurations', () => {
+    const s = new Script(ETS2_A);
+    const first = job(), second = job({deliveryDeadline: {available: true, value: '15000', unit: 'min'}});
+    expect(jobKey(first)).not.toBe(jobKey(second));
+    const result = run(initialTripState(), [sessionInput(s.welcome()), s.event(r.started()), s.event(r.jobConfigured(first)), s.event(r.jobConfigured(second))]);
+    const view = tripView(result.state, 'ets2');
+    expect(view.lastClosed).toMatchObject({closeReason: 'different-job', recordingCompleteness: 'partial'});
+    expect(view.current?.tripUuid).not.toBe(view.lastClosed?.tripUuid);
+  });
+});
+
+describe('pause-only reconnection (REG-002, REG-003, REG-005, REG-008)', () => {
+  const stationary = {odometer: 10_000, fuel: 100, minutes: 12345, simulation: 'paused' as const, position: {x: 1, y: 2, z: 3}};
+  function reconnect(options: {before?: Partial<At>; after?: Partial<At>; job?: ReturnType<typeof job> | null; replay?: 'paused' | 'running' | 'gap'; noReading?: boolean} = {}) {
+    const {s, rows} = opened();
+    let state = run(initialTripState(), [...rows.map(([step]) => step), s.event(r.paused(), paused), reading(s, {ms: 3000, ...stationary, ...options.before}), {kind: 'disconnected'}]).state;
+    // The checkpoint leads retained events; a resumed-and-paused episode must fail even when its final state matches.
+    const retained = options.replay === 'running' ? [s.event(r.started()), s.event(r.paused(), paused)] :
+      options.replay === 'paused' ? [s.event(r.fined(), paused)] : options.replay === 'gap' ? [s.gap(1)] : [];
+    state = run(state, [sessionInput(s.welcome(), '3'), {kind: 'checkpoint', message: s.checkpoint(options.job === undefined ? job() : options.job, retained.length, {simulation: 'paused'})}]).state;
+    if (!options.noReading) state = run(state, [reading(s, {ms: 6000, ...stationary, ...options.after})]).state;
+    const result = run(state, [...retained, s.event(r.started()), s.event(r.paused(), paused), s.event(r.delivered(), paused)]);
+    return {view: tripView(result.state, 'ets2'), effects: result.effects.flat()};
+  }
+  it('records a pause-only reconnection as an annotation and closes complete', () => {
+    const result = reconnect();
+    expect(result.view.lastClosed?.recordingCompleteness).toBe('complete');
+    expect(result.effects).toContainEqual(expect.objectContaining({kind: 'completeness.add', interval: expect.objectContaining({
+      kind: 'discontinuity', detail: expect.objectContaining({cause: 'paused-reconnect', annotation: true})})}));
+    expect(result.effects.some(effect => effect.kind === 'trip.update' && effect.set.recordingCompleteness === 'partial')).toBe(false);
+  });
+  it('waits for retained paused events to commit before accepting the pause', () => {
+    expect(reconnect({replay: 'paused'}).view.lastClosed?.recordingCompleteness).toBe('complete');
+  });
+  it('keeps the reconnect odometer delta unknown when no new connection reading exists', () => {
+    const result = reconnect({noReading: true});
+    expect(result.effects).toContainEqual(expect.objectContaining({kind: 'completeness.add', interval: expect.objectContaining({
+      kind: 'not-connected', detail: {cause: 'disconnected', odometerDeltaM: null}})}));
+  });
+  it('does not reuse the old odometer when a second disconnect precedes the new reading', () => {
+    const {s, rows} = opened();
+    const state = run(initialTripState(), [...rows.map(([step]) => step), s.event(r.paused(), paused), reading(s, {ms: 3000, ...stationary}),
+      {kind: 'disconnected'}, sessionInput(s.welcome(), '3'), {kind: 'checkpoint', message: s.checkpoint(job(), 0, {simulation: 'paused'})},
+      {kind: 'disconnected'}, sessionInput(s.welcome(), '3')]).state;
+    const result = run(state, [s.event(r.started())]);
+    const intervals = result.effects.flat().filter(effect => effect.kind === 'completeness.add' && effect.interval.detail?.cause === 'disconnected');
+    expect(intervals).toHaveLength(2);
+    for (const effect of intervals) expect(effect).toMatchObject({interval: {kind: 'not-connected', detail: {odometerDeltaM: null}}});
+  });
+  it('drops an unsent pause annotation\'s source-clock bounds when a new plugin session starts', () => {
+    const {s, rows} = opened(), second = new Script(ETS2_B);
+    const state = run(initialTripState(), [...rows.map(([step]) => step), s.event(r.paused(), paused), reading(s, {ms: 3000, ...stationary}),
+      {kind: 'disconnected'}, sessionInput(s.welcome(), '3'), {kind: 'checkpoint', message: s.checkpoint(job(), 0, {simulation: 'paused'})},
+      reading(s, {ms: 4000, ...stationary}), {kind: 'disconnected'}, sessionInput(second.welcome())]).state;
+    const result = run(state, [second.event(r.truckConfigured(), paused)]);
+    const interval = result.effects.flat().find(effect => effect.kind === 'completeness.add' && effect.interval.detail?.cause === 'paused-reconnect');
+    expect(interval).toMatchObject({kind: 'completeness.add', interval: {kind: 'discontinuity', detail: {annotation: true}}});
+    if (interval?.kind !== 'completeness.add') throw new Error('pause annotation missing');
+    expect(interval.interval).not.toHaveProperty('sourceClockId');
+    expect(interval.interval).not.toHaveProperty('startMonotonicNs');
+    expect(interval.interval).not.toHaveProperty('endMonotonicNs');
+  });
+  it.each([
+    {after: {odometer: 10_001}}, {after: {fuel: 99}}, {after: {minutes: 12346}}, {after: {clock: GAME_CLOCK_2}},
+    {after: {position: {x: 100, y: 2, z: 3}}}, {after: {noTruck: true}}, {after: {simulation: 'running' as const}}, {before: {simulation: 'running' as const}},
+    {after: {position: undefined}}, {after: {fuel: undefined}}, {after: {odometer: undefined}},
+    {job: null}, {job: job({cargoId: {available: true, value: 'other'}})}, {job: job({cargoLoaded: {available: true, value: false}})}, {noReading: true},
+    {replay: 'running' as const}, {replay: 'gap' as const}
+  ])('keeps an unproved pause or real discontinuity partial: %j', options => {
+    expect(reconnect(options).view.lastClosed?.recordingCompleteness).toBe('partial');
+  });
+});
+
 describe('observed distance (T16)', () => {
   it('a road stop is a continuous 0 m step, persisted once at the next carrier (REG-001) [synthetic-inference]', () => {
     const {s, trip, rows} = opened();

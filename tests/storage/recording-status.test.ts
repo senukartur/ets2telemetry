@@ -145,14 +145,14 @@ describe('ET-015c recording status through the production wiring', () => {
       await until(() => s.runtime.v1.current.status === 'disconnected' && report.connections.length === 2, 'the end of the live-only connection', HANG_GUARD_MS);
       expect(sequence(s.statuses)).toEqual([...STARTED, 'recording', 'stopped PERMISSION_DENIED']);
       // The trip opened by eventSeq 3 stays open: its delivery was never committed.
-      expect(s.statuses.at(-1)).toEqual(status('stopped', {}, {phase: 'active', completeness: 'partial', untrackedJob: false}, 'PERMISSION_DENIED'));
+      expect(s.statuses.at(-1)).toEqual(status('stopped', {}, {phase: 'active', completeness: 'unknown', untrackedJob: false}, 'PERMISSION_DENIED'));
       // H12: the unavailable failure discards the one pending sample row, second 1000 from the snapshot at 100 ms (the
       // checkpoint at 0 ms is the baseline; the snapshot at 200 ms is in the same second).
       expect(durableLogs(s.logs)).toEqual([['V1_DURABLE_UNAVAILABLE', {code: 'PERMISSION_DENIED'}], ['V1_SAMPLES_DISCARDED', {count: 1}]]);
       expect([report.connections.map(c => c.durable), servedAcks(report, 0), servedAcks(report, 1)]).toEqual([[true, false], ['1', '2', '3', '4', '5', '6', '7'], []]);
       await stopService(s, timeline, worker.exit);
       const storage = await reader('t').open();
-      expect([ok(storage.committedThrough(sessionOf(input))), ok(storage.listTrips()).trips.map(t => [t.outcome, t.recordingCompleteness])]).toEqual(['7', [['open', 'partial']]]);
+      expect([ok(storage.committedThrough(sessionOf(input))), ok(storage.listTrips()).trips.map(t => [t.outcome, t.recordingCompleteness])]).toEqual(['7', [['open', 'unknown']]]);
       storage.close();
       expect(existsSync(historyFile())).toBe(false);
     } finally { worker.control?.close(); await server.stop(); }

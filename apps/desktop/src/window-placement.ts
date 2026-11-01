@@ -26,7 +26,13 @@ export function gameForeground(live: LiveTelemetry): boolean {
   return Boolean(window?.available && window.value.foreground);
 }
 
-/** Driving mode: the visible client area, and only while the game is the foreground window. */
+/** True when the game simulation is paused or Live telemetry status reports paused. */
+export function gamePaused(live: LiveTelemetry): boolean {
+  return Boolean(live.status === 'paused' || live.observation?.state.simulation === 'paused');
+}
+
+/** Driving mode: the visible client area while the game is running (not paused) and is the foreground window. */
 export function currentGameClientBounds(live: LiveTelemetry): PhysicalClientBounds | undefined {
+  if (gamePaused(live)) return undefined;
   return gameForeground(live) ? visibleGameClientBounds(live) : undefined;
 }

@@ -233,9 +233,9 @@ it('persists opening mode and ambiguity through worker reopen and JSON export, r
       if (record.type === 'gameTime.regression') {
         expect(ids).toHaveLength(1);
         const active = await ok(c.journalTrip(ids[0]), 'mode regression detail');
-        expect(active.trip).toMatchObject({tripUuid: ids[0], outcome: 'open', closeReason: null, recordingCompleteness: 'partial',
+        expect(active.trip).toMatchObject({tripUuid: ids[0], outcome: 'open', closeReason: null, recordingCompleteness: 'unknown',
           gameMode: {mode: 'unknown', method: 'none', confidence: 'none'}, gameModeAmbiguous: true});
-        expect(active.intervals.items).toContainEqual(expect.objectContaining({kind: 'discontinuity', cause: 'save-load'}));
+        expect(active.intervals.items).toContainEqual(expect.objectContaining({kind: 'discontinuity', cause: 'save-load', annotation: true}));
       }
     }
     expect(ids).toHaveLength(2);

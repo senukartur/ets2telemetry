@@ -1,7 +1,7 @@
 import {v1Projection} from '../shared/live-v1-fixtures';
 import {readFileSync} from 'node:fs';
 import {expect, it} from 'vitest';
-import {currentGameClientBounds, gameForeground, visibleGameClientBounds} from '../../apps/desktop/src/window-placement';
+import {currentGameClientBounds, gameForeground, gamePaused, visibleGameClientBounds} from '../../apps/desktop/src/window-placement';
 import {initialLive} from '../../apps/desktop/src/live-state';
 import {validateMessage} from '../../packages/contracts/src/protocol-v0';
 import type {LiveTelemetry} from '../../packages/contracts/src';
@@ -75,4 +75,37 @@ it.each(['ets2', 'ats'] as const)('places automatic %s only from its current v0 
   }
   const partial = {...initialLive('game'), v1: v1Projection('snapshot-live', {selection: 'game', origin: 'game', game})};
   expect(visibleGameClientBounds(partial)).toBeUndefined(); expect(currentGameClientBounds(partial)).toBeUndefined();
+});
+
+it('detects game paused for status or simulation state', () => {
+  const live = gameLive();
+  expect(gamePaused(live)).toBe(false);
+
+  live.status = 'paused';
+  expect(gamePaused(live)).toBe(true);
+
+  live.status = 'connected';
+  live.observation!.state.simulation = 'paused';
+  expect(gamePaused(live)).toBe(true);
+
+  live.status = 'stale';
+  expect(gamePaused(live)).toBe(true);
+
+  live.observation!.state.simulation = 'running';
+  expect(gamePaused(live)).toBe(false);
+});
+
+it('hides driving placement when paused while visibleGameClientBounds keeps client area for edit mode', () => {
+  const live = gameLive();
+  expect(currentGameClientBounds(live)).toEqual({x: -1920, y: 0, width: 1920, height: 1080});
+  expect(visibleGameClientBounds(live)).toEqual({x: -1920, y: 0, width: 1920, height: 1080});
+
+  live.observation!.state.simulation = 'paused';
+  expect(currentGameClientBounds(live)).toBeUndefined();
+  expect(visibleGameClientBounds(live)).toEqual({x: -1920, y: 0, width: 1920, height: 1080});
+
+  live.observation!.state.simulation = 'running';
+  live.status = 'paused';
+  expect(currentGameClientBounds(live)).toBeUndefined();
+  expect(visibleGameClientBounds(live)).toEqual({x: -1920, y: 0, width: 1920, height: 1080});
 });

@@ -276,15 +276,15 @@ function recordingReceiptWith(edits: Edit[]): string {
     droppedSamples: 0, tripPhase: 'active', tripCompleteness: 'partial', untrackedJob: false});
   const status: Json = {beforeAdmission: waiting(),
     afterFirstConnection: {dashboard: {headline: 'Connection lost; recording resumes on reconnection, and the missing time is recorded as a gap',
-      detail: [note, 'Current trip is partial'], losses: null, alert: null, notice},
-    health: {state: 'interrupted', target: 'synthetic', code: null, losses: losses(), trip: {phase: 'active', completeness: 'partial', untrackedJob: false}}},
+      detail: [note, "The current trip's completeness is not known yet"], losses: null, alert: null, notice},
+    health: {state: 'interrupted', target: 'synthetic', code: null, losses: losses(), trip: {phase: 'active', completeness: 'unknown', untrackedJob: false}}},
     firstConnectionRows: [row('opening'), row('waiting'), row('recording'), row('interrupted')],
     afterRestart: waiting(), serviceRestartRows: [{state: 'unknown'}, row('opening'), row('waiting')], afterReload: waitingText(),
     whileClosedRows: [row('recording', 1), row('interrupted', 1)],
     whileClosed: {state: 'recording', target: 'synthetic', code: null, losses: losses(1), trip: {phase: 'idle', completeness: null, untrackedJob: false}},
     reopened: {headline: 'Recording', detail: [note], losses: ['Gaps recorded since Yukon Union Telemetry started', 'Intervals without a connection: 1'], alert: null, notice},
     closedAgain: lifecycleState,
-    firstConnectionTexts: [waitingText(), {headline: 'Recording', detail: [note, 'Current trip is partial'], losses: null, alert: null, notice}],
+    firstConnectionTexts: [waitingText(), {headline: 'Recording', detail: [note, "The current trip's completeness is not known yet"], losses: null, alert: null, notice}],
     serviceRestartTexts: [waitingText(), {headline: 'Not known: the telemetry service is not running or has not reported a valid status', detail: null, losses: null, alert: null,
       notice: 'Prototype live display. The recording status is not known right now.'}, waitingText()]};
   // ET-016 PR-8 journal and export facts of run B, shaped like a real development run without the optional sample.
@@ -297,7 +297,7 @@ function recordingReceiptWith(edits: Edit[]): string {
     detail: {error: null, title: `ETS2: ${route}`, outcome: 'Delivered', completeness: 'Partial', banner,
       fields: {'trip-openedBy': 'job event 3', 'trip-session': session, 'trip-tripId': tripUuid, 'samples-sampleCount': '0'}, notes: {}},
     sampleCount: 0,
-    intervals: {total: 'Completeness intervals recorded for this trip: 2.', rows: [['Discontinuity', 'opened while a save was loading', '—', '—', '—'],
+    intervals: {total: 'Completeness intervals recorded for this trip: 2.', rows: [['Discontinuity', 'opened while a save was loading (annotation; completeness unchanged)', '—', '—', '—'],
       ['Not connected', 'telemetry service restarted', '—', '—', '—']], error: null, next: false},
     timeline: {window: "Events of the trip's plugin session from eventSeq 3 through 8, the event that closed the trip.", rows: [], eventSeqs: windowSeqs, error: null, next: false},
     samples: {rows: [], error: null, next: false, empty: 'No one-second samples were recorded for this trip.'},
@@ -332,7 +332,7 @@ function recordingReceiptWith(edits: Edit[]): string {
         sessions: [{game: 'ets2', origin: 'synthetic', committedThrough: '13', endReason: null, simulatorSession: true}],
         // ET-016 PR-8: the schema version 2 columns of a trip opened at its job event.
         rows: {trips: [{trip: 'trip@3', jobSource: 'event', checkpointNextEventSeq: null, openedBy: 'event', outcome: 'delivered', recordingCompleteness: 'partial'}], attributions: [{eventSeq: '8', trip: 'trip@3', attribution: 'trip'}],
-          intervals: [{trip: 'trip@3', kind: 'discontinuity', detail: {cause: 'opened-at-load', atEventSeq: '3'}}, {trip: 'trip@3', kind: 'not-connected', detail: {cause: 'consumer-restart'}}],
+          intervals: [{trip: 'trip@3', kind: 'discontinuity', detail: {cause: 'opened-at-load', annotation: true, atEventSeq: '3'}}, {trip: 'trip@3', kind: 'not-connected', detail: {cause: 'consumer-restart'}}],
           events: Array.from({length: 13}, (_, index) => ({eventSeq: String(index + 1)})),
           // ET-015b PR-4: without the optional second-1000 row, which the terminated service stores only when its 5 s flush ran.
           sampleRows: [{second: '1001', trip: null}, {second: '1002', trip: null}]}},

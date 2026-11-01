@@ -2,7 +2,7 @@
 // the state survives structured cloning and JSON. Effects use the storage TripEffect contract, imported as types only
 // from packages/storage/src/api.ts (T2); see docs/trips.md.
 import type {Available, Currency, GameMode, JobConfiguration, Money, ServerMessage, Uint64} from '../../../contracts/src/protocol-v1';
-import type {RecordingCompleteness, TripEffect, TripOutcome, CloseReason} from '../../../storage/src/api';
+import type {RecordingCompleteness, TripEffect, TripOutcome, CloseReason, CompletenessInterval} from '../../../storage/src/api';
 import type {StepSample} from '../derived';
 import type {GameTimeWindow, ReadingPoint, RunClock, TransferMark, TripAccounting} from './accounting';
 
@@ -95,6 +95,8 @@ export interface OpenTrip {
    * an outcome before the start is ambiguous (T14).
    */
   loadCheck: 'before-start' | 'after-start' | null;
+  /** A loaded job needs terminal distance AND game-duration corroboration before a complete close. */
+  loadCoverage: {start: {minutes: string; clockId: string} | null} | null;
   completeness: RecordingCompleteness; gameMode: GameModeEvidence; gameModeAmbiguous: boolean;
   startedUtcMs: number; startedMonotonicNs: Uint64 | null; clockId: string | null;
   market: Available<string> | null; cargoLoaded: Available<boolean> | null;
@@ -171,6 +173,10 @@ export interface SessionState {
    * connection's first reading records the odometer change in the interval while the interval still waits to be sent.
    */
   bridge: {tripUuid: string; before: ReadingPoint | null} | null;
+  /** A pause-only reconnection is decided after its checkpoint reading and retained events have drained. */
+  reconnect: {tripUuid: string; before: ReadingPoint; interval: Omit<CompletenessInterval, 'tripUuid' | 'kind'>;
+    through: Uint64 | null; matches: boolean; read: boolean} | null;
+  simulation: 'running' | 'paused' | 'unavailable';
 }
 /** The last trip closed without an outcome, so an identical job opened next is marked as a continuation, never merged. */
 export interface ContinuationCandidate {tripUuid: string; jobKey: string | null; cause: string}

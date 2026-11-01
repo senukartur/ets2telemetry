@@ -129,7 +129,7 @@ Each game has one slot with at most one open trip. Without an open trip the slot
 - **awaiting-outcome**, after `job.cleared`;
 - **reload-check**, after an identical re-send following a clear.
 
-A newly opened trip also has a **load window**. If its job was configured outside a running simulation, the window lasts until the next `simulation.started` and for the next event after it that is not `source.gameMode` metadata. Mode notifications preserve the window whether their evidence is identical, different or repeated; a differing result still independently marks the trip ambiguous. A `timers.restart` or `gameTime.regression` inside the window is the load that restored this job (O1, O10), so it does not close the trip.
+A newly opened trip also has a **load window**. If its job was configured outside a running simulation, the window lasts until the next `simulation.started` and for the next event after it that is not `source.gameMode` metadata. Mode notifications preserve the window whether their evidence is identical, different or repeated; a differing result still independently marks the trip ambiguous. A clean new configuration stays unknown pending terminal coverage corroboration; reloads of existing jobs and genuine losses remain partial. A `timers.restart` or `gameTime.regression` inside the window is the load that restored this job (O1, O10), so it does not close the trip.
 
 The session's **load state** is `loading` from a fresh session until its first `simulation.started`, and again after `timers.restart` until the next start (O1). A `gameTime.regression` never starts a load: it follows the start of the load it ends (O10), so it leaves the state unchanged, or sets `running` when it occurred while running. The state is `unknown` after a gap or when the reducer joins a session that already has committed events.
 
@@ -153,8 +153,8 @@ A gap-sourced untracked job is unaffected: a gap is itself a stream item in orde
 | awaiting-outcome or reload-check | different-key `job.configured` | active (new) | close `{none, configuration-cleared, partial}`; open the new trip |
 | active or awaiting-outcome | `job.delivered` / `job.cancelled` | idle | attribute `trip`; close `{outcome, this-event}`, `complete` after a clean window, else `partial` |
 | active, in its load window before the start | `job.delivered` / `job.cancelled` | active | attribute `ambiguous`; the trip stays open (T14) |
-| active, in its load window | `timers.restart` | active | trip.update `partial` and an `opened-at-load` interval, once |
-| active, in its load window | `gameTime.regression` | active | trip.update `partial`; a `save-load` interval |
+| active, in its load window | `timers.restart` | active | require terminal coverage evidence and annotate `opened-at-load`, once, unless already partial |
+| active, in its load window | `gameTime.regression` | active | for a clean new configuration with no observed progress, annotate the initial load and start corroboration on the new clock; otherwise `partial` with `save-load` |
 | active or awaiting-outcome, outside the load window | `timers.restart` or `gameTime.regression` | idle | close `{none, discontinuity, partial}` |
 | reload-check | `gameTime.regression` | active (same trip) | trip.update `partial`; a `save-load` interval (O10) |
 | reload-check | `job.cleared` | awaiting-outcome | none |
@@ -167,7 +167,7 @@ A gap-sourced untracked job is unaffected: a gap is itself a stream item in orde
 | any open | `trailer.configured` with different values for its slot | unchanged | trip.update `trailerConfigurations: [this-event]` |
 | any open | `source.gameMode` that differs from the trip's mode | unchanged | trip.update `gameModeAmbiguous: true`, once |
 | open trip of an earlier session of the game | new session | idle | close `{none, restart, partial}` at the new session's first commit. A continuation candidate left by an earlier close is relabelled `restart` |
-| open trip of this session | reconnection after `disconnected` | unchanged | trip.update `partial`; a `not-connected` interval from the last item before the disconnection |
+| open trip of this session | reconnection after `disconnected` | unchanged | `partial` with `not-connected`, unless the checkpoint and retained events prove an unchanged pause; then an annotation only |
 | any | checkpoint | unchanged | none; the session keeps the checkpoint's `nextEventSeq`, and an idle slot records the checkpoint job as untracked from that point on and as the connection's pending late-attach trip (J9) |
 | any, a late-attach trip pending | replayed `job.cleared` or `job.configured` with a configuration revision above the checkpoint's, or replayed `job.delivered` / `job.cancelled` at the checkpoint's revision or above | as for the event | the event's own effects; the pending late-attach trip is dropped and the checkpoint job is no longer untracked ([stale checkpoints](#stale-checkpoints)) |
 | idle, a late-attach trip due (replayed events drained) | `attach` | active (new) | through `openAttachedTrip`: the slot's queued lifecycle effects, then `trip.open` from the checkpoint job with a `late-attach` cause and a continuation cause (J9) |
@@ -175,9 +175,9 @@ A gap-sourced untracked job is unaffected: a gap is itself a stream item in orde
 
 **Plugin exit (ET-015c, G16).** A plugin exit writes no interval of its own; T11 is the rule that keeps its uncertainty: the next plugin session of the game closes the open trip as `restart`, partial, at its first commit (`tests/storage/recording-status.test.ts` (g)).
 
-Cause intervals on `trip.open` make the new trip partial:
+Loss cause intervals on `trip.open` make the new trip partial:
 
-- `opened-at-load` (`discontinuity`): the session is loading (T12);
+- `opened-at-load` (`discontinuity`): the session is loading (T12). In an otherwise clean window this is an annotation: the trip opens `unknown` pending terminal coverage evidence, rather than assuming that a save-created job was already driven;
 - `late-attach` (`not-connected`): the trip opened from a checkpoint job (J9, `source: 'checkpoint'`); or, at an event, an identical job was untracked since a checkpoint and this configuration is not replayed (T9; since J9 only when the late-attach trip could not open because a trip was open when the replayed events drained);
 - `opened-before-attach` (`not-connected`): the configuration is replayed from before the connection's checkpoint;
 - `{cause, continuationOf, decision: 'not-merged'}` (`discontinuity`): the last trip of this game closed without an outcome and had the same job key. Its close reason is the cause: `restart` (T11), `gap`, `discontinuity` or `configuration-cleared`. A candidate that crosses a plugin restart is `restart`, and an outcome clears it. Identical jobs are never merged.
@@ -197,6 +197,9 @@ Every `completeness.add` of the reducer carries a `detail` object (storage keeps
 | `gap` (an interval of the gap itself) | `event-loss` or `not-connected` | `causes`: the record's six loss counters; `firstEventSeq`, `lastEventSeq`: the whole record's range (the interval's own range is the new suffix); `redelivered` |
 | `disconnected` | `not-connected` | `odometerDeltaM` (PR-2), always present: null when queued, then set by the first reading of the new connection while the interval still waits, to the metres from the last reading before the disconnection to it. It stays null without an odometer or a known truck at either end, after a truck change (brand, model or plate, as in `derived.ts`) or without a reading; a truck unavailable at both ends, even for the same reason, is not known. The interval carries `startUtcMs` and, on the same source clock, `startMonotonicNs`, `endMonotonicNs` and `sourceClockId` |
 | `consumer-restart` | `not-connected` | none |
+| `paused-reconnect` | `discontinuity`, annotation | the connection bounds, `odometerDeltaM: 0`, `recoveredThroughEventSeq`; no completeness downgrade |
+| `loaded-job-unverified` | `discontinuity` | `atEventSeq`: the outcome could not corroborate the loaded start |
+| `loaded-job-coverage-confirmed` | `discontinuity`, annotation | `atEventSeq`, `observedDistanceM`, `deliveredDistanceM`, `distanceToleranceM`, `durationMinutes` |
 | `reading-hole` (PR-2) | `sample-loss` | none for one hole. An interval extended by later holes carries `holes`, their number, and `includesReadings: true` when it was extended over readings (beyond four waiting holes). The interval carries `startMonotonicNs`, `endMonotonicNs` and `sourceClockId`, and the UTC labels when both are valid and the later one is not earlier |
 | `truck-change` (annotation) | `discontinuity` | `annotation: true`; `atEventSeq`; after merging also `count` and `lastAtEventSeq` |
 | `utc-label-jump` (annotation) | `discontinuity` | `annotation: true`; `labelUtcMs`: the label that preceded the start; `clampedToUtcMs`: the trip start; `atEventSeq`, null for a restart close |
@@ -279,17 +282,23 @@ Money is summed per trip as exact BigInt digits per currency and SDK type. Fines
 A trip opens `unknown` and stays `unknown` while nothing is known to be missing. It becomes `partial` on:
 
 - an event loss or not-connected interval;
-- a reconnection or consumer restart;
-- a save load;
+- an unverified reconnection or consumer restart;
+- a save load of an existing trip, or a regression after observed progress;
 - an ambiguous or not-merged continuation;
 - a late attach, or a configuration replayed from before the attach;
-- an opening during a load;
+- an opening during a load whose full coverage cannot be corroborated at delivery;
 - a close without an outcome;
 - a reading hole.
 
 It is `complete` only when its gameplay outcome closes it after a clean window. Annotations (`truck-change`, `utc-label-jump`, and the readings annotations `odometer-regressed`, `odometer-jump`, `game-time-jump`, `position-jump` and `refuel`) are `discontinuity` intervals with `detail.annotation: true` and never downgrade.
 
 A delivered trip can be partial. Completion status and recording completeness stay separate (DESIGN-DECISIONS.md §7).
+
+**Save-created jobs.** Cargo, source/destination cities and companies already participate in `jobKey`, along with mass, market, planned distance, income and deadline. These fields identify a configuration, not its progress: identical routes can be repeated. An otherwise clean job opened during loading stays `unknown` until delivery. A complete close requires both the SDK's elapsed job minutes to equal the observed game-clock span and its actual job distance to match the accumulated observed distance. Positive distances are required. A whole-kilometre distance report permits at most 500 m of rounding difference; a fractional report permits 1 m. This is corroboration within those resolutions, not proof of CargoMan provenance or detection of earlier progress below both resolutions. An initial regression in a new configuration's load window, before observed progress, starts corroboration on the new clock and is annotated. Missing counters, later clock changes, cancellation, late attachment, reloads of existing jobs and other losses remain partial. Cold starts retain the existing consumer-restart rule; old stored trips are not reclassified.
+
+**Verified paused reconnection.** The same plugin session must have been paused before disconnecting. Its checkpoint must still show the same full job key and cargo-loaded state, and its first reading must be paused with the same known truck, odometer, fuel, position, game clock and game minutes on an ordered capture clock. Every retained event through the checkpoint's coverage point must commit without gaps and stay paused; only repeated pause events, fines and tolls at the same game minute are accepted. The decision waits for that reading and replay. A resume, configuration change, outcome before verification, missing evidence or another disconnect fails conservatively. A verified pause is stored as a `paused-reconnect` annotation; distance and fuel are never bridged across it.
+
+The distance allowance is a conservative policy heuristic inferred from whether the value is a whole number of kilometres; SDK events carry no resolution metadata. An exact multiple can also be a coincidental fractional report. The fractional 1 m allowance is unverified against real delivery cadence and can reject an otherwise fully observed job when the last reading lags the outcome. In that case recording stays partial; matching route names never overrides it.
 
 ## Readings accounting (T16, T17)
 

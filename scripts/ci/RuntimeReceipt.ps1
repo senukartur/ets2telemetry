@@ -231,7 +231,7 @@ function Test-RecordingServiceEvent {
 }
 
 # ET-015c PR-4 recording status facts of the journey: waiting before each admission with no losses, recording shown with
-# the synthetic target note during connection 1, interrupted with the partial trip after it, unknown between the
+# the synthetic target note during connection 1, interrupted with the pending loaded trip after it, unknown between the
 # terminated and the restarted service, the status kept across a dashboard reload, recording while the dashboard was
 # closed with no lost event after the redelivery (one not-connected interval), the totals shown by the reopened
 # dashboard, which is closed again before the tray exit, an entry of each dashboard text log the driver records, and
@@ -253,8 +253,8 @@ function Test-RecordingStatusReceipt {
         foreach ($name in $lossNames) { if (!(Test-ReceiptInteger -Value $health.losses.$name -Minimum 0 -Maximum 0)) { return $false } }
     }
     $interrupted = $status.afterFirstConnection
-    if ($interrupted.health.state -cne 'interrupted' -or $interrupted.health.trip.completeness -cne 'partial' -or
-        (@($interrupted.dashboard.detail) -join '|') -cne ($note + '|Current trip is partial')) { return $false }
+    if ($interrupted.health.state -cne 'interrupted' -or $interrupted.health.trip.completeness -cne 'unknown' -or
+        (@($interrupted.dashboard.detail) -join '|') -cne ($note + '|The current trip''s completeness is not known yet')) { return $false }
     if (@($status.firstConnectionRows | Where-Object { $_.state -ceq 'recording' -and $_.target -ceq 'synthetic' }).Count -lt 1 -or
         @($status.serviceRestartRows | Where-Object { $_.state -ceq 'unknown' }).Count -lt 1 -or
         @($status.whileClosedRows | Where-Object { $_.state -ceq 'recording' -and $_.target -ceq 'synthetic' }).Count -lt 1) { return $false }

@@ -231,7 +231,7 @@ it('uses the API for signed physical bounds, stays bounded in client DIP bounds 
   expect(window.showInactive).toHaveBeenCalledOnce(); overlay.update(current);
   expect(window.showInactive).toHaveBeenCalledOnce(); expect(window.setBounds).toHaveBeenCalledOnce(); expect(screen.screenToDipRect).toHaveBeenCalledOnce();
 });
-it.each(['expired', 'minimized', 'background', 'source', 'failed', 'small', 'conversion-failed'])('hides the overlay on %s', fault => {
+it.each(['expired', 'minimized', 'background', 'source', 'failed', 'small', 'conversion-failed', 'paused-status', 'paused-simulation'])('hides the overlay on %s', fault => {
   const {window, screen, overlay} = controller(), current = live(); overlay.loaded(true); overlay.update(current);
   const metadata = current.observation!.state.window;
   if (!metadata.available) throw new Error('Expected metadata');
@@ -242,6 +242,8 @@ it.each(['expired', 'minimized', 'background', 'source', 'failed', 'small', 'con
   if (fault === 'failed') current.status = 'service-failed';
   if (fault === 'small') metadata.value.width = 10;
   if (fault === 'conversion-failed') {metadata.value.x--; screen.screenToDipRect.mockImplementation(() => {throw new Error('removed display');});}
+  if (fault === 'paused-status') current.status = 'paused';
+  if (fault === 'paused-simulation') current.observation!.state.simulation = 'paused';
   window.hide.mockClear(); overlay.update(current); expect(window.hide).toHaveBeenCalledOnce();
 });
 it('waits for a new window receipt after monitor changes, including repeated old SDK/window deliveries', () => {
@@ -826,4 +828,83 @@ it.each(['ets2', 'ats'] as const)('keeps automatic %s driving and editing overla
     expect(tracked.state.visible).toBe(false); assertInvariant(tracked, true);
     expect(tracked.window.show).not.toHaveBeenCalled(); expect(tracked.window.focus).not.toHaveBeenCalled();
   }
+});
+
+it('hides immediately when game is paused or in menu, remains hidden idempotently, and restores topmost smoothly upon resume', () => {
+  const {window, lost, overlay} = controller(), current = live(); overlay.loaded(true);
+  overlay.update(current);
+  expect(window.showInactive).toHaveBeenCalledOnce();
+  raisedAfterShow(window);
+  noActivation(window);
+
+  // Transition to pause/menu via simulation === 'paused'
+  window.hide.mockClear();
+  current.observation!.state.simulation = 'paused';
+  overlay.update(current);
+  expect(window.hide).toHaveBeenCalledOnce();
+
+  // Subsequent updates while paused do not trigger redundant hide() calls
+  for (let i = 0; i < 5; i++) {
+    overlay.update(current);
+  }
+  expect(window.hide).toHaveBeenCalledOnce();
+  expect(window.showInactive).toHaveBeenCalledOnce();
+
+  // Resume driving simulation: restores smoothly without stealing focus or flashing bounds
+  window.setAlwaysOnTop.mockClear();
+  window.moveTop.mockClear();
+  window.setBounds.mockClear();
+  current.observation!.state.simulation = 'running';
+  overlay.update(current);
+  expect(window.showInactive).toHaveBeenCalledTimes(2);
+  expect(window.setBounds).not.toHaveBeenCalled(); // Unchanged bounds: no redundant setBounds
+  raisedAfterShow(window);
+  noActivation(window);
+  expect(lost).not.toHaveBeenCalled();
+
+  // Topmost lost while hidden/paused is restored upon unpause and reported via topmostLost('show')
+  window.hide.mockClear();
+  current.status = 'paused';
+  overlay.update(current);
+  expect(window.hide).toHaveBeenCalledOnce();
+
+  // External window action clears WS_EX_TOPMOST while hidden
+  window.topmost = false;
+  current.status = 'connected';
+  overlay.update(current);
+  expect(window.showInactive).toHaveBeenCalledTimes(3);
+  raisedAfterShow(window);
+  expect(window.topmost).toBe(true);
+  expect(lost.mock.calls).toEqual([['show']]);
+  noActivation(window);
+});
+
+it('accommodates edit mode over a paused game in the background and returns to hidden when edit ends', () => {
+  const tracked = trackedController();
+  tracked.overlay.loaded(true);
+  // Game is paused in the background
+  tracked.metadata.foreground = false;
+  tracked.current.observation!.state.simulation = 'paused';
+  tracked.current.status = 'paused';
+  tracked.overlay.update(tracked.current);
+  expect(tracked.state.visible).toBe(false);
+
+  // Driver starts editing from dashboard
+  expect(tracked.overlay.beginEdit(true)).toEqual({active: true, layout: 'cluster', scale: 1, placement: 'visible'});
+  expect(tracked.state.visible).toBe(true);
+  assertInvariant(tracked, true);
+
+  // Edit scale / dragging works while paused
+  expect(tracked.overlay.setEditScale(1.5)).toMatchObject({active: true, scale: 1.5, placement: 'visible'});
+
+  // Done editing while game remains paused returns overlay to hidden state
+  tracked.overlay.endEdit();
+  expect(tracked.state.visible).toBe(false);
+  assertInvariant(tracked, true);
+
+  // Successive paused updates keep it hidden
+  for (let i = 0; i < 5; i++) {
+    tracked.overlay.update(tracked.current);
+  }
+  expect(tracked.state.visible).toBe(false);
 });

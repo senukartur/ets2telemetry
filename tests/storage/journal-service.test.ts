@@ -106,7 +106,7 @@ describe('ET-016 journal queries through the production recording wiring', () =>
       expect(ordered(timeline, ['release', 'done commitEvent 4', 'done journalTrips', 'journal answered'])).toEqual(['release', 'done commitEvent 4', 'done journalTrips', 'journal answered']);
       expect(timeline.filter(line => line.startsWith('done journal'))).toEqual(['done journalTrips']);
       // The page shows the open trip as committed through eventSeq 4, and main would forward it unchanged.
-      expect(answer).toMatchObject({ok: true, value: {database: SYNTHETIC_V3, nextCursor: null, trips: [{...TRIP_ROW, outcome: 'open', closeReason: null, endedUtcMs: null}]}});
+      expect(answer).toMatchObject({ok: true, value: {database: SYNTHETIC_V3, nextCursor: null, trips: [{...TRIP_ROW, recordingCompleteness: 'unknown', outcome: 'open', closeReason: null, endedUtcMs: null}]}});
       expect(forwarded(TRIPS, answer)).toEqual(answer);
       // The ACK order is unchanged and no command was refused for a full queue.
       expect(timeline.filter(line => line.startsWith('ack '))).toEqual(ACK_LINES);
