@@ -594,8 +594,16 @@ void Adapter::event(scs_event_t event_id, const void* info) {
         producer_.state.frame = frame; producer_.state.frame_available = true;
       } else failure(); break;
     case SCS_TELEMETRY_EVENT_frame_end:
-      // A trailing v1 loss run reaches the worker at least once per frame, even without a later copied record.
-      if (auto* channel = events_.load(std::memory_order_acquire)) channel->flush_loss();
+      if (auto* channel = events_.load(std::memory_order_acquire)) {
+        // Cached initialization evidence is notified only once a durable consumer can receive it. Its occurrence is
+        // this callback, after any earlier SDK records; a gate-close race or full ring keeps ordinary loss accounting.
+        if (!game_mode_emitted_ && game_mode_.mode != v1::GameModeKind::unknown && channel->gate() == v1::Gate::durable) {
+          v1_record_.record.emplace<v1::records::SourceGameMode>().mode = game_mode_;
+          game_mode_emitted_ = v1_emit(false) != 0;
+        }
+        // A trailing v1 loss run reaches the worker even without a later copied record.
+        channel->flush_loss();
+      }
       publish(); observed_in_frame_.fill(false); in_frame_ = false; flush_deferred_log(); break;
     default: failure(); break;
   }
@@ -708,11 +716,6 @@ void Adapter::attach_events(v1::EventChannel* channel) noexcept {
   events_.store(channel, std::memory_order_release);
   // The first v1 slot of the session, so that a worker started after attachment can build its checkpoint at once.
   if (channel && initialized_) {
-    if (!game_mode_emitted_ && game_mode_.mode != v1::GameModeKind::unknown && next_order()) {
-      game_mode_emitted_ = true;
-      v1_record_.record.emplace<v1::records::SourceGameMode>().mode = game_mode_;
-      v1_emit(false);
-    }
     v1_configuration_dirty_ = true; v1_gearbox_dirty_ = true; publish_v1();
   }
 }
@@ -729,9 +732,9 @@ void Adapter::v1_game_time(v1::GameTimePod& output) const noexcept {
   output.minutes = v1::Field<std::uint32_t>{minutes.status == Availability::available ? minutes.value : 0, v1_state(minutes.status)};
   std::memcpy(output.clock_id.text, producer_.state.game_clock_id.bytes.data(), sizeof output.clock_id.text);
 }
-void Adapter::v1_emit(bool boundary) noexcept {
+std::uint64_t Adapter::v1_emit(bool boundary) noexcept {
   auto* channel = events_.load(std::memory_order_acquire);
-  if (!channel) return;
+  if (!channel) return 0;
   // The callback moment (§8), after this callback updated the adapter state: the source clock, the game clock, a UTC
   // label, the simulation state, the v1 configuration revision and the shared callback order.
   auto& occurred = v1_record_.occurred;
@@ -743,7 +746,7 @@ void Adapter::v1_emit(bool boundary) noexcept {
   occurred.configuration_revision = v1_configuration_.revision; occurred.boundary_order = producer_.boundary_order;
   // OD-5 S10: a lifecycle or configuration boundary while no v1 client is connected. Gameplay events are counted as loss.
   if (boundary && channel->gate() == v1::Gate::none) increment(v1_continuity_.offline_transitions);
-  channel->observe(v1_record_);
+  return channel->observe(v1_record_);
 }
 void Adapter::v1_configuration(const scs_telemetry_configuration_t& config) noexcept {
   if (!events_.load(std::memory_order_acquire) || !config.id) return;

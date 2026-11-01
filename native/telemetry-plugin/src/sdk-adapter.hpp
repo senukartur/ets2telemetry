@@ -166,7 +166,8 @@ class Adapter final {
   void v1_configuration(const scs_telemetry_configuration_t&) noexcept;
   void v1_gameplay(const scs_telemetry_gameplay_event_t&) noexcept;
   void v1_game_time(v1::GameTimePod& output) const noexcept;
-  void v1_emit(bool boundary) noexcept;
+  // Assigned eventSeq, including ordinary loss; zero means no sequence was assigned.
+  std::uint64_t v1_emit(bool boundary) noexcept;
   Snapshot producer_{}, published_{};
   std::mutex publication_mutex_;
   std::mutex pending_mutex_;

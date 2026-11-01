@@ -110,12 +110,19 @@ it('relays a broker-provisioned v1 session and its ACK, and fails a synthetic or
 
   const delivery = (message: ServerMessage): Delivery | undefined => message.kind === 'checkpoint' || message.kind === 'snapshot' ? message.data.status.delivery : undefined;
   expect(delivery(messages.find(message => message.kind === 'checkpoint')!)?.ackedThroughEventSeq).toBe('0');
-  host.stdin.write('pause\nstart\n');
   const recorded = () => messages.flatMap(message => message.kind === 'event' ? [message.data.record.type] : []);
+  expect(await until(() => recorded().includes('source.gameMode'), 10_000), 'cached evidence published after durable attachment').toBe(true);
+  const source = messages.find(message => message.kind === 'event' && message.data.record.type === 'source.gameMode');
+  expect(source?.kind === 'event' && source.data.eventSeq).toBe('2');
+  expect(source?.kind === 'event' && source.data.record).toEqual({type: 'source.gameMode', ...mode});
+  expect(messages.flatMap(message => message.kind === 'gap' ? [message.data] : [])).toEqual([{firstEventSeq: '1', lastEventSeq: '1', causes: {offline: '1', noDurableConsumer: '0', queueCount: '0', queueBytes: '0', retentionExpired: '0', encodingFailed: '0'}, firstLostMonotonicNs: expect.any(Object), lastLostMonotonicNs: expect.any(Object), redelivered: false}]);
+  host.stdin.write('pause\nstart\n');
   expect(await until(() => recorded().includes('simulation.started'), 10_000), 'two lifecycle events delivered').toBe(true);
-  expect(recorded()).toEqual(['simulation.paused', 'simulation.started']);
+  expect(recorded()).toEqual(['source.gameMode', 'simulation.paused', 'simulation.started']);
+  expect(messages.flatMap(message => message.kind === 'event' ? [message.data.eventSeq] : [])).toEqual(['2', '3', '4']);
+  expect(messages.flatMap(message => message.kind === 'gap' ? [message.data] : [])).toEqual([{firstEventSeq: '1', lastEventSeq: '1', causes: {offline: '1', noDurableConsumer: '0', queueCount: '0', queueBytes: '0', retentionExpired: '0', encodingFailed: '0'}, firstLostMonotonicNs: expect.any(Object), lastLostMonotonicNs: expect.any(Object), redelivered: false}]);
   const through = covered;
-  expect(through).toBeGreaterThanOrEqual(2n);
+  expect(through).toBe(4n);
   // Nothing is released before an ACK: the latest status still retains the delivered entries.
   expect(await until(() => messages.some(message => Number(delivery(message)?.retainedEvents ?? 0) > 0), 5_000)).toBe(true);
   expect(diagnostics).toEqual([]);
@@ -124,7 +131,7 @@ it('relays a broker-provisioned v1 session and its ACK, and fails a synthetic or
   const M2 = {major: 1, minor: 2} as const;
   driver.write(encodeFrame({version: M2, kind: 'ack', data: {pluginSessionId: welcome.source.pluginSessionId, throughEventSeq: through.toString()}}, {maxMinor: 2}));
   const released = () => messages.slice(ackAt).map(delivery).find(status => status?.ackedThroughEventSeq === through.toString());
-  expect(await until(() => released() !== undefined || errors.length > 0, 10_000), 'a later snapshot reports the relayed {1,2} ACK').toBe(true);
+  expect(await until(() => released() !== undefined || errors.length > 0, 10_000), 'a later snapshot reports the cumulative ACK through source and lifecycle events').toBe(true);
   expect(errors).toEqual([]);
   expect(released()).toMatchObject({durable: true, ackedThroughEventSeq: through.toString(), nextEventSeq: (through + 1n).toString(), retainedEvents: 0, retainedBytes: 0});
 
@@ -140,7 +147,7 @@ it('relays a broker-provisioned v1 session and its ACK, and fails a synthetic or
     hshifter: {available: true, value: {selectorCount: 2, slots: slots.map(([gear, handlePosition, selectors]) => ({gear, handlePosition, selectors}))}}});
   // The truck callback is a durable event; the hshifter callback is none (B2).
   expect(await until(() => recorded().includes('truck.configured'), 10_000)).toBe(true);
-  expect(recorded()).toEqual(['simulation.paused', 'simulation.started', 'truck.configured']);
+  expect(recorded()).toEqual(['source.gameMode', 'simulation.paused', 'simulation.started', 'truck.configured']);
   const truckThrough = covered, probeAt = messages.length;
   consumer.expectClockReply('1');
   driver.write(encodeFrame({version: M2, kind: 'clock.probe', data: {probeId: '1'}}, {maxMinor: 2}));

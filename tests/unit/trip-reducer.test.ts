@@ -440,6 +440,20 @@ describe('time and game mode', () => {
 });
 
 describe('game-mode opening evidence', () => {
+  it('keeps opening mode, ambiguity and completeness when its cached evidence is notified later', () => {
+    const mode = {mode: 'truckersmp', method: 'module-scan', confidence: 'strong', module: {available: true, value: 'synthetic-multiplayer-module.dll'}} as const;
+    const s = new Script(ETS2_A), trip = uuid(ETS2_A, '6');
+    let state = play([[sessionInput(s.welcome(mode))], ...burst(s), [s.event(r.paused(), paused)],
+      [s.event(r.jobConfigured(), paused), [open(trip, at(6), {...BURST_REFS, gameMode: {mode: 'truckersmp', method: 'module-scan', confidence: 'strong'}})]], [s.event(r.started())]]);
+    const before = tripView(state, 'ets2').current;
+    const observed = s.event(r.gameMode({mode: 'truckersmp', method: 'module-scan', confidence: 'strong', module: 'synthetic-multiplayer-module.dll'}));
+    const result = run(state, [observed]); state = result.state;
+    expect(result.effects[0]).toEqual([]);
+    const after = tripView(state, 'ets2').current;
+    expect([after?.gameMode, after?.gameModeAmbiguous, after?.recordingCompleteness]).toEqual([before?.gameMode, before?.gameModeAmbiguous, before?.recordingCompleteness]);
+    expect(tripView(state, 'ets2').current).toMatchObject({gameMode: {mode: 'truckersmp', method: 'module-scan', confidence: 'strong'}, gameModeAmbiguous: false, recordingCompleteness: 'unknown'});
+  });
+
   it('keeps unknown opening evidence after a late positive and duplicate, then opens the next trip with current evidence', () => {
     const s = new Script(ETS2_A), {rows, trip} = acceptedJob(s);
     let state = play(rows);

@@ -157,7 +157,7 @@ export function sourceStep(v: unknown, path: string, source: Scenario['source'])
     }
     case 'gameMode': {
       const o = obj(v, path, ['atMs', 'action', 'mode', 'method', 'confidence'], ['module']);
-      if (source.gameMode !== 'synthetic-detection') fail(path, 'game-mode steps require synthetic detection (OD-3 reports unknown)');
+      if (source.gameMode !== 'synthetic-detection') fail(path, 'game-mode steps require synthetic detection; unknown source mode disables simulated detection');
       const mode = {mode: o.mode, method: o.method, confidence: o.confidence, ...(Object.hasOwn(o, 'module') ? {module: o.module} : {})};
       return {atMs: at(o), action, mode: gameMode(mode, path)};
     }

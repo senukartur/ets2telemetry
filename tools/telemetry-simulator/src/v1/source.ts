@@ -65,7 +65,7 @@ export type ChannelName = typeof CHANNELS[number];
 export type FrameChannels = Partial<Record<Exclude<ChannelName, 'world.placement'>, ChannelValue>> & {'world.placement'?: Placement | null | 'invalid'};
 export interface SourceConfig {
   game: 'ets2' | 'ats'; seed: string; gameplayEvents: 'registered' | 'not-supported'; currency: 'unknown' | 'sdk-documented';
-  /** `unknown` is OD-3: no detection and no `source.gameMode` type. `synthetic-detection` enables gameMode steps (D9). */
+  /** `unknown` intentionally disables simulated detection and the `source.gameMode` type. `synthetic-detection` enables gameMode steps (D9). */
   gameMode: 'unknown' | 'synthetic-detection';
   versions: {telemetryApi: {major: number; minor: number}; gameTelemetry: {major: number; minor: number}; sdkArchive: string};
   startEventSeq: bigint;
