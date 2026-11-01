@@ -439,6 +439,22 @@ describe('time and game mode', () => {
   });
 });
 
+describe('game-mode opening evidence', () => {
+  it('keeps unknown opening evidence after a late positive and duplicate, then opens the next trip with current evidence', () => {
+    const s = new Script(ETS2_A), {rows, trip} = acceptedJob(s);
+    let state = play(rows);
+    const observed = s.event(r.gameMode({mode: 'truckersmp', method: 'module-scan', confidence: 'strong', module: 'synthetic-multiplayer-module.dll'}));
+    const changed = run(state, [observed]); state = changed.state;
+    expect(changed.effects[0]).toEqual([{kind: 'trip.update', tripUuid: trip, set: {gameModeAmbiguous: true}}]);
+    expect(tripView(state, 'ets2').current).toMatchObject({gameMode: UNKNOWN_MODE, gameModeAmbiguous: true});
+    const repeated = stepTrip(state, carrier(state, observed));
+    expect(repeated).toEqual({ok: true, state, effects: []});
+    state = run(state, [s.event(r.paused(), paused), s.event(r.delivered(), paused), s.event(r.jobCleared(), paused)]).state;
+    const next = run(state, [s.event(r.jobConfigured(otherJob()), paused)]);
+    expect(next.effects.flat()).toContainEqual(expect.objectContaining({kind: 'trip.open', gameMode: {mode: 'truckersmp', method: 'module-scan', confidence: 'strong'}}));
+  });
+});
+
 describe('delivery semantics (T3, T5)', () => {
   it('6. duplicate and redelivered events and gaps change nothing (REG-005) [synthetic-inference]', () => {
     const s = new Script(ETS2_A), {rows, trip} = acceptedJob(s);

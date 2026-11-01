@@ -41,7 +41,9 @@ export interface JournalSection {id: string; title: string; fields: JournalField
 /** A badge's text and shadcn variant. */
 export interface JournalBadge {text: string; variant: 'secondary' | 'destructive' | 'outline'}
 
+export interface JournalModeBadge {text: string; evidence: string; tone: 'ok' | 'warn' | 'neutral'}
 export interface JournalTripRow {
+  mode: JournalModeBadge;
   tripUuid: string; isHardMode: boolean; gameId: JournalGame; started: string; game: string; route: string; cargo: string;
   /** `Delivered`, `Cancelled`, `In progress` or `No outcome — <why it closed>`. */
   outcome: string;
@@ -50,7 +52,7 @@ export interface JournalTripRow {
   plannedDistance: string; observedDistance: string; fuelUsed: string; expectedIncome: string;
 }
 export interface JournalListText {rows: JournalTripRow[]; empty: string | null; emptyNote: string | null; hasNext: boolean}
-export interface JournalDetailText {title: string; outcome: string; completeness: JournalBadge; sections: JournalSection[]}
+export interface JournalDetailText {mode: JournalModeBadge; title: string; outcome: string; completeness: JournalBadge; sections: JournalSection[]}
 export interface JournalIntervalRow {id: string; kind: string; cause: string; start: string; end: string; events: string}
 export interface JournalIntervalText {total: string; rows: JournalIntervalRow[]; empty: string | null; hasNext: boolean}
 export interface JournalEventRow {eventSeq: string; time: string; type: string; detail: string; attribution: string}
@@ -153,12 +155,17 @@ function gameModeText(mode: JournalGameMode, ambiguous: boolean): string {
   const evidence = mode.mode === 'unknown' ? '' : ` (${JOURNAL_GAME_MODE_EVIDENCE_TEXT.confidence[mode.confidence]}, ${JOURNAL_GAME_MODE_EVIDENCE_TEXT.method[mode.method]})`;
   return `${JOURNAL_GAME_MODE_TEXT[mode.mode]}${evidence}${ambiguous ? `; ${JOURNAL_STRINGS.gameModeChanged}` : ''}`;
 }
+function gameModeBadge(mode: JournalGameMode, ambiguous: boolean): JournalModeBadge {
+  const unconfirmed = mode.mode !== 'unknown' && mode.confidence !== 'strong';
+  const text = `${JOURNAL_GAME_MODE_TEXT[mode.mode]}${unconfirmed ? ` · ${JOURNAL_STRINGS.gameModeUnconfirmed}` : ''}${ambiguous ? ` · ${JOURNAL_STRINGS.gameModeChanged}` : ''}`;
+  return {text, evidence: gameModeText(mode, ambiguous), tone: ambiguous || unconfirmed ? 'warn' : mode.mode === 'truckersmp' ? 'ok' : 'neutral'};
+}
 const routeText = (job: JournalTripListItem['job']) => `${nameOf(job.sourceCity)} → ${nameOf(job.destinationCity)}`;
 
 function tripRow(trip: JournalTripListItem, options: JournalTextOptions): JournalTripRow {
   const units = unitsFor(trip.game, options);
   return {
-    tripUuid: trip.tripUuid, gameId: trip.game, started: localTime(trip.startedUtcMs, options.timeZone), game: JOURNAL_GAME_TEXT[trip.game], route: routeText(trip.job),
+    mode: gameModeBadge(trip.gameMode, trip.gameModeAmbiguous), tripUuid: trip.tripUuid, gameId: trip.game, started: localTime(trip.startedUtcMs, options.timeZone), game: JOURNAL_GAME_TEXT[trip.game], route: routeText(trip.job),
     isHardMode: trip.isHardMode, cargo: nameOf(trip.job.cargo), outcome: outcomeText(trip), completeness: completenessBadge(trip.recordingCompleteness),
     plannedDistance: show(trip.job.plannedDistance, distance(units)), observedDistance: show(trip.observedDistanceM, distance(units)),
     fuelUsed: show(trip.fuelUsedL, volume(units)), expectedIncome: show(trip.job.expectedIncome, moneyText)
@@ -262,7 +269,7 @@ function journalDetailText(detail: JournalTripDetail, options: JournalTextOption
     field('sampleCount', String(samples.count)),
     ...(samples.firstUtcMs !== null && samples.lastUtcMs !== null ? [field('firstSample', localTime(samples.firstUtcMs, zone)), field('lastSample', localTime(samples.lastUtcMs, zone))] : [])
   ]));
-  return {title: `${JOURNAL_GAME_TEXT[trip.game]}: ${routeText(trip.job)}`, outcome: outcomeText(trip), completeness: completenessBadge(trip.recordingCompleteness), sections};
+  return {mode: gameModeBadge(trip.gameMode, trip.gameModeAmbiguous), title: `${JOURNAL_GAME_TEXT[trip.game]}: ${routeText(trip.job)}`, outcome: outcomeText(trip), completeness: completenessBadge(trip.recordingCompleteness), sections};
 }
 
 /** An interval cause from the recorder's fixed list; anything else is `other`, never stored text. */

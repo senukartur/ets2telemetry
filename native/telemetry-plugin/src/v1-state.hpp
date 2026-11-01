@@ -21,7 +21,7 @@ namespace ets2telemetry::v1 {
 // per artifact: `game` in the production DLL, `synthetic` in test DLLs and console fixtures.
 SessionIdentity session_identity(const sdk::Identity&, Origin origin);
 // Welcome capabilities for one connection: the API and game telemetry versions from the SDK identity, the gameplay-event
-// registration result and the OD-3 game mode (unknown, method none, confidence none, no source.gameMode event).
+// registration result and the session game-mode evidence, with source.gameMode support.
 WelcomeInfo welcome_info(const sdk::V1Current&, bool durable_events);
 // The current game window, under the identity and freshness rules of the v0 transport::current_window: unavailable
 // (not-supported) without a monitor, not-observed for a stale, foreign, hidden or minimized window.

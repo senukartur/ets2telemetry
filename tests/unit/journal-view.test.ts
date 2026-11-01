@@ -91,19 +91,19 @@ describe('journal list (J13; REG-014, REG-009)', () => {
     const text = journalListText(page([OPEN, ZERO, GAP_CLOSED, CANCELLED, DELIVERED], '42'), {units: DEFAULT, timeZone: ZONE, filtered: false, recording: 'disabled'});
     expect(text.empty).toBeNull(); expect(text.emptyNote).toBeNull(); expect(text.hasNext).toBe(true);
     expect(text.rows).toEqual([
-      {isHardMode: false, tripUuid: T.open, gameId: 'ets2', started: '2026-10-11 02:01:41', game: 'ETS2', route: 'Synthetic City A → Synthetic City B', cargo: 'Synthetic Cargo', outcome: 'In progress',
+      {mode: {text: 'Single-player · unconfirmed', evidence: 'Single-player (weak evidence, not confirmed, module scan)', tone: 'warn'}, isHardMode: false, tripUuid: T.open, gameId: 'ets2', started: '2026-10-11 02:01:41', game: 'ETS2', route: 'Synthetic City A → Synthetic City B', cargo: 'Synthetic Cargo', outcome: 'In progress',
         completeness: {text: 'Unknown', variant: 'outline'}, plannedDistance: '152.0 km', observedDistance: 'unavailable (not observed)', fuelUsed: 'unavailable (not observed)',
         expectedIncome: '12345 (currency unknown)'},
-      {isHardMode: false, tripUuid: T.zeroValues, gameId: 'ats', started: '2026-10-11 02:03:23', game: 'ATS', route: '(empty) → unavailable (not provided by the game)', cargo: 'unavailable (not observed)',
+      {mode: {text: 'Single-player · unconfirmed', evidence: 'Single-player (weak evidence, not confirmed, module scan)', tone: 'warn'}, isHardMode: false, tripUuid: T.zeroValues, gameId: 'ats', started: '2026-10-11 02:03:23', game: 'ATS', route: '(empty) → unavailable (not provided by the game)', cargo: 'unavailable (not observed)',
         outcome: 'Delivered', completeness: {text: 'Complete', variant: 'secondary'}, plannedDistance: '0.0 mi', observedDistance: '0.0 mi', fuelUsed: '0.0 US gal',
         expectedIncome: '0 USD (SDK-documented)'},
-      {isHardMode: false, tripUuid: T.gapClosed, gameId: 'ets2', started: '2026-10-11 02:00:22', game: 'ETS2', route: 'Synthetic City A → Synthetic City B', cargo: 'Synthetic Cargo',
+      {mode: {text: 'Single-player · unconfirmed', evidence: 'Single-player (weak evidence, not confirmed, module scan)', tone: 'warn'}, isHardMode: false, tripUuid: T.gapClosed, gameId: 'ets2', started: '2026-10-11 02:00:22', game: 'ETS2', route: 'Synthetic City A → Synthetic City B', cargo: 'Synthetic Cargo',
         outcome: 'No outcome — events were lost', completeness: {text: 'Partial', variant: 'destructive'}, plannedDistance: '152.0 km', observedDistance: 'unavailable (not observed)',
         fuelUsed: 'unavailable (not observed)', expectedIncome: '12345 (currency unknown)'},
-      {isHardMode: false, tripUuid: T.cancelled, gameId: 'ets2', started: '2026-10-11 02:00:12', game: 'ETS2', route: 'Synthetic City A → Synthetic City B', cargo: 'Synthetic Cancel Cargo',
+      {mode: {text: 'Single-player · unconfirmed', evidence: 'Single-player (weak evidence, not confirmed, module scan)', tone: 'warn'}, isHardMode: false, tripUuid: T.cancelled, gameId: 'ets2', started: '2026-10-11 02:00:12', game: 'ETS2', route: 'Synthetic City A → Synthetic City B', cargo: 'Synthetic Cancel Cargo',
         outcome: 'Cancelled', completeness: {text: 'Complete', variant: 'secondary'}, plannedDistance: '152.0 km', observedDistance: 'unavailable (not observed)',
         fuelUsed: 'unavailable (not observed)', expectedIncome: '12345 (currency unknown)'},
-      {isHardMode: false, tripUuid: T.delivered, gameId: 'ets2', started: '2026-10-11 02:00:04', game: 'ETS2', route: 'Synthetic City A → Synthetic City B', cargo: 'Synthetic Cargo',
+      {mode: {text: 'Single-player · unconfirmed', evidence: 'Single-player (weak evidence, not confirmed, module scan)', tone: 'warn'}, isHardMode: false, tripUuid: T.delivered, gameId: 'ets2', started: '2026-10-11 02:00:04', game: 'ETS2', route: 'Synthetic City A → Synthetic City B', cargo: 'Synthetic Cargo',
         outcome: 'Delivered', completeness: {text: 'Complete', variant: 'secondary'}, plannedDistance: '152.0 km', observedDistance: '152.0 km', fuelUsed: 'unavailable (not observed)',
         expectedIncome: '12345 (currency unknown)'}
     ]);
@@ -252,7 +252,7 @@ describe('trip detail (J13, J21, J22; REG-014, REG-009)', () => {
       fields(journalDetailText({...DELIVERED_DETAIL, trip: {...DELIVERED_DETAIL.trip, gameMode, gameModeAmbiguous: ambiguous}}).sections, 'trip').gameMode;
     expect(mode({mode: 'truckersmp', method: 'process-scan', confidence: 'strong'})).toBe('TruckersMP (strong evidence, process scan)');
     expect(mode({mode: 'unknown', method: 'none', confidence: 'none'})).toBe('Unknown');
-    expect(mode(MODE, true)).toBe('Single-player (weak evidence, not confirmed, module scan); changed during the trip');
+    expect(mode(MODE, true)).toBe('Single-player (weak evidence, not confirmed, module scan); ambiguous evidence');
   });
   it('notes when only the latest trailers are shown', () => {
     const items = Array.from({length: 10}, (_, i) => ({eventSeq: String(i + 1), values: trailer(i % 2)}));
@@ -448,4 +448,24 @@ it.each([
   const failure = {ok: false as const, code: 'DATABASE_UNAVAILABLE' as const, storageCode};
   expect(journalErrorText(failure, 'ru')).toBe(`База данных недоступна: ${cause}.`);
   expect(failure.storageCode).toBe(storageCode);
+});
+
+describe('journal mode badges', () => {
+  it('shares visible uncertainty and ambiguity in EN/RU list and detail', () => {
+    const cases = [
+      [{mode: 'truckersmp', method: 'module-scan', confidence: 'strong'}, 'TruckersMP', 'TruckersMP'],
+      [{mode: 'single-player', method: 'module-scan', confidence: 'weak'}, 'Single-player · unconfirmed', 'Одиночная игра · не подтверждено'],
+      [{mode: 'truckersmp', method: 'process-scan', confidence: 'weak'}, 'TruckersMP · unconfirmed', 'TruckersMP · не подтверждено'],
+      [{mode: 'unknown', method: 'none', confidence: 'none'}, 'Unknown', 'Неизвестно']
+    ] as const;
+    for (const [mode, en, ru] of cases) for (const language of ['en', 'ru'] as const) for (const ambiguous of [false, true]) {
+      const trip = {...DELIVERED_DETAIL.trip, gameMode: mode, gameModeAmbiguous: ambiguous};
+      const list = journalListText({database: DATABASE, trips: [trip], nextCursor: null}, {filtered: false, language}).rows[0].mode;
+      const detail = journalDetailText({...DELIVERED_DETAIL, trip}, {language}).mode;
+      expect(list).toEqual(detail);
+      expect(list.text).toBe(`${language === 'en' ? en : ru}${ambiguous ? language === 'en' ? ' · ambiguous evidence' : ' · неоднозначные данные' : ''}`);
+      if (mode.confidence === 'weak') expect(list.tone).toBe('warn');
+      expect(fields(journalDetailText({...DELIVERED_DETAIL, trip}, {language}).sections, 'trip').gameMode).toBe(list.evidence);
+    }
+  });
 });

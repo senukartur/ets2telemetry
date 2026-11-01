@@ -1,4 +1,5 @@
 #include "sdk-adapter.hpp"
+#include "game-mode-detector.hpp"
 #include "protocol-v1-producer.hpp"
 #include "protocol-v1-delivery.hpp"
 #include <algorithm>
@@ -85,6 +86,30 @@ scs_named_value_t attribute(const char* name, scs_value_t value, scs_u32_t index
 std::unique_ptr<Snapshot> read(Adapter& adapter) { auto output = std::make_unique<Snapshot>(); require(adapter.read_latest(*output), "coherent publication available"); return output; }
 Reading<double> reading(const Snapshot& snapshot, Field field) { return snapshot.state.channels[static_cast<std::size_t>(field)]; }
 Reading<double> reading(const std::unique_ptr<Snapshot>& snapshot, Field field) { return reading(*snapshot, field); }
+void game_mode_evidence() {
+  auto adapter = std::make_unique<Adapter>(); Host host; auto params = host.params();
+  auto channel = std::make_unique<v1::EventChannel>();
+  require(adapter->initialize(SCS_TELEMETRY_VERSION_1_01, &params) == SCS_RESULT_ok && channel->prepare(), "mode initialization");
+  const auto mode = ets2telemetry::game_mode::detect(v1::GameId::ets2, [](const wchar_t*) noexcept { return ets2telemetry::game_mode::LookupResult::present; });
+  adapter->set_game_mode(mode); channel->set_gate(v1::Gate::durable); adapter->attach_events(channel.get());
+  const auto* slot = channel->front();
+  require(slot && slot->has_record && slot->record.event_seq == 1, "initial observation ordered first");
+  const auto& record = slot->record;
+  require(std::get<v1::records::SourceGameMode>(record.record).mode.module.view() == "core_ets2mp.dll", "initial module evidence");
+  require(record.occurred.monotonic_ns.available() && record.occurred.utc_unix_ms.available() && record.occurred.boundary_order > 0, "ordinary occurrence metadata");
+  channel->pop(); adapter->attach_events(nullptr); adapter->attach_events(channel.get());
+  require(channel->next_event_seq() == 2 && !channel->front(), "reattachment does not repeat mode observation");
+  auto current = std::make_unique<V1Current>(); require(adapter->read_v1_current(*current) && current->game_mode.module.view() == "core_ets2mp.dll", "POD slot evidence");
+  adapter->shutdown(); require(adapter->initialize(SCS_TELEMETRY_VERSION_1_01, &params) == SCS_RESULT_ok && channel->prepare(), "fresh session");
+  adapter->attach_events(channel.get());
+  require(adapter->read_v1_current(*current) && current->game_mode.mode == v1::GameModeKind::unknown && channel->next_event_seq() == 1, "fresh session clears evidence");
+  adapter->shutdown(); adapter->attach_events(nullptr);
+  // An initialization observation made offline is explicit ordinary event loss.
+  require(adapter->initialize(SCS_TELEMETRY_VERSION_1_01, &params) == SCS_RESULT_ok && channel->prepare(), "offline session");
+  adapter->set_game_mode(mode); adapter->attach_events(channel.get()); host.frame_end();
+  slot = channel->front(); require(slot && slot->has_loss && !slot->has_record && slot->loss_before.first_event_seq == 1 && slot->loss_before.causes.offline == 1, "initial offline loss counted");
+  adapter->shutdown(); adapter->attach_events(nullptr);
+}
 void lifecycle() {
   auto adapter = std::make_unique<Adapter>(); Host host; auto params = host.params();
   require(adapter->initialize(SCS_MAKE_VERSION(2,0), &params) == SCS_RESULT_unsupported && host.api_calls == 0, "negotiate unsupported API without SDK side effects");
@@ -1197,7 +1222,7 @@ int main(int argc, char** argv) {
     // ET-052: the optional break channel; needs tests/fixtures for the hand-written minor-2 corpus.
     else if (argc == 3 && std::string(argv[1]) == "mandatory-break") mandatory_break(argv[2]);
     else {
-      lifecycle(); config_terminal_and_bounds(); clocks_and_contention(); failure_cleanup(); deferred_log(); missing_game_time_reset(); game_time_reset_callback_orders(); game_time_reset_frame_delimitation();
+      game_mode_evidence(); lifecycle(); config_terminal_and_bounds(); clocks_and_contention(); failure_cleanup(); deferred_log(); missing_game_time_reset(); game_time_reset_callback_orders(); game_time_reset_frame_delimitation();
       v1_capture_records(); v1_state_and_gate(); v1_nonblocking(); v1_isolation(); v1_drain_into_store(); v1_session_boundary();
     }
     std::cout << "SDK adapter: " << assertions << " checks passed; snapshot bytes=" << sizeof(Snapshot) << ", adapter bytes=" << sizeof(Adapter) << "\n"; return 0;

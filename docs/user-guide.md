@@ -50,6 +50,10 @@ Everything Yukon Union Telemetry records or saves lives in `%LOCALAPPDATA%\ETS2T
 
 Your trip history is stored only on this computer. It is not synchronized anywhere yet: synchronization with a server is a later phase of the project. To keep a copy of a trip, open it on the **Journal** tab and select **Export JSON**; save the file anywhere outside `%LOCALAPPDATA%\ETS2Telemetry`. An export is a copy for your own records. It cannot be imported back into Yukon Union Telemetry.
 
+The Journal shows mode badges in each trip row and its detail header: **TruckersMP**, **Single-player · unconfirmed**, or **Unknown**. Weak evidence always says **unconfirmed**. The information icon explains method and confidence on hover or keyboard focus; Escape closes it. **Ambiguous evidence** means later evidence differed from the trip's opening evidence; it does not prove the game switched modes. Historical unknown trips stay unknown.
+
+Mode detection checks one known TruckersMP module inside the game process when the plugin initializes. It does not use a running launcher as evidence. A missing module is only weak evidence: if TruckersMP loads its module later, that session can remain labelled unconfirmed single-player. Real-game detection and initialization timing still require validation for the game/client versions in use.
+
 ## Updating
 
 ### In the application (ET-055)

@@ -18,7 +18,7 @@ struct WelcomeInfo {
   bool durable_events = false;
   // Whether the SDK gameplay-event callback was registered; without it the six gameplay types are not listed.
   bool gameplay_events_registered = false;
-  // Whether this session can emit source.gameMode events. OD-3: false until a separate detection package exists.
+  // Whether this source supports source.gameMode observations; set by the endpoint.
   bool game_mode_events = false;
   VersionPair telemetry_api, game_telemetry; std::string sdk_archive = "scs-sdk-1.15"; GameModePod game_mode;
 };

@@ -47,7 +47,7 @@ A trip's outcome (delivered, cancelled, unknown) is kept separate from how compl
 
 ### Journal and export
 
-The Journal lists the recorded trips page by page. A trip's details show its route, cargo, outcome, recording completeness, distances, fuel used, money, Hard Mode evidence, events and a chart of the current page of samples. A trip can be exported as versioned JSON; the export is a copy for the driver's records and cannot be imported back.
+The Journal lists the recorded trips page by page. A trip's details show its route, cargo, outcome, recording completeness, distances, fuel used, money, Hard Mode evidence, events and a chart of the current page of samples. Mode badges in the list and details preserve the trip's opening evidence: TruckersMP, unconfirmed single-player or unknown. Weak evidence is visibly unconfirmed, and differing later evidence marks the trip ambiguous without changing its opening mode or relabelling historical trips. A trip can be exported as versioned JSON; the export is a copy for the driver's records and cannot be imported back.
 
 ### Hard Mode
 

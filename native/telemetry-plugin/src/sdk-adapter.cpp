@@ -359,6 +359,7 @@ scs_result_t Adapter::initialize(scs_u32_t version, const scs_telemetry_init_par
       // a channel and attaches it again.
       v1_published_ = {}; events_.store(nullptr, std::memory_order_release);
     }
+    game_mode_ = {}; game_mode_emitted_ = false;
     v1_configuration_ = {}; v1_continuity_ = {}; v1_configuration_dirty_ = true; v1_gearbox_ = {}; v1_gearbox_dirty_ = true;
     clock_epoch_ = 0; observed_in_frame_.fill(false); in_frame_ = false;
     producer_.identity.game_id.assign(input.common.game_id); producer_.identity.game.assign(ets2 ? "ets2" : "ats");
@@ -706,7 +707,14 @@ bool Adapter::read_current(Snapshot& output) noexcept {
 void Adapter::attach_events(v1::EventChannel* channel) noexcept {
   events_.store(channel, std::memory_order_release);
   // The first v1 slot of the session, so that a worker started after attachment can build its checkpoint at once.
-  if (channel && initialized_) { v1_configuration_dirty_ = true; v1_gearbox_dirty_ = true; publish_v1(); }
+  if (channel && initialized_) {
+    if (!game_mode_emitted_ && game_mode_.mode != v1::GameModeKind::unknown && next_order()) {
+      game_mode_emitted_ = true;
+      v1_record_.record.emplace<v1::records::SourceGameMode>().mode = game_mode_;
+      v1_emit(false);
+    }
+    v1_configuration_dirty_ = true; v1_gearbox_dirty_ = true; publish_v1();
+  }
 }
 bool Adapter::read_v1_current(V1Current& output) noexcept {
   try {
@@ -800,7 +808,7 @@ void Adapter::publish_v1() noexcept {
     std::unique_lock<std::mutex> lock(v1_mutex_, std::try_to_lock);
     if (!lock.owns_lock()) { increment(v1_continuity_.coalesced_snapshots); return; }
     auto& output = v1_published_; const auto& state = producer_.state;
-    output.identity = producer_.identity; output.gameplay_result = producer_.gameplay_result;
+    output.identity = producer_.identity; output.gameplay_result = producer_.gameplay_result; output.game_mode = game_mode_;
     output.active = producer_.active; output.exhausted = producer_.exhausted; output.continuity = v1_continuity_;
     auto& s = output.state;
     const auto sdk_value = [&](Field field) { const auto i = static_cast<std::size_t>(field); return v1_reading(state.channels[i], specs[i].multiplier); };

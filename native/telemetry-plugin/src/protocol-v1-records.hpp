@@ -64,7 +64,7 @@ struct OccurrencePod {
 enum class GameModeKind : std::uint8_t { unknown = 0, single_player = 1, truckersmp = 2 };
 enum class DetectionMethod : std::uint8_t { none = 0, module_scan = 1, process_scan = 2 };
 enum class Confidence : std::uint8_t { none = 0, weak = 1, strong = 2 };
-// Game-mode evidence (D9). The default is the OD-3 value: unknown, method none, confidence none, no module.
+// Game-mode evidence (D9). Unavailable detection defaults to unknown/none/none with no module.
 struct GameModePod { GameModeKind mode = GameModeKind::unknown; DetectionMethod method = DetectionMethod::none; Confidence confidence = Confidence::none; IdText module; };
 
 namespace records {

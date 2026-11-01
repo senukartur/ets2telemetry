@@ -3,6 +3,7 @@
 #include "game-window-monitor.hpp"
 #include "capture-server.hpp"
 #include "v1-server.hpp"
+#include "game-mode-detector.hpp"
 
 namespace {
 // Explicit SDK shutdown owns joining; no static destructor joins under DLL unload.
@@ -76,6 +77,8 @@ SCSAPI_RESULT scs_telemetry_init(const scs_u32_t version, const scs_telemetry_in
     if (result != SCS_RESULT_ok) return result;
     ets2telemetry::sdk::Snapshot initial;
     if (!ets2telemetry::sdk::adapter().read_current(initial)) { retire(); return SCS_RESULT_generic_error; }
+    ets2telemetry::sdk::adapter().set_game_mode(ets2telemetry::game_mode::detect(
+      std::string_view(initial.identity.game.c_str()) == "ats" ? ets2telemetry::v1::GameId::ats : ets2telemetry::v1::GameId::ets2));
     // Protocol v1 (OD-2): the channel is prepared and attached right after initialize(), once per plugin session, so every
     // event of the session gets an eventSeq. Its endpoint starts asynchronously below; until a client is authorized the
     // callbacks keep only state and loss counters.

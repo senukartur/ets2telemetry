@@ -5,7 +5,7 @@ import {temporaryResources} from '../shared/resources';
 import {receiptBatchTimeout, validateRuntimeReceipts} from '../shared/runtime-receipt-validator';
 
 const screens = {shell: ['live', 'hardMode', 'journal', 'settings'], live: ['current', 'zero', 'missing', 'paused', 'stale'],
-  journal: ['list', 'trip', 'intervals', 'timeline', 'samples'], settings: ['general', 'overlay', 'overlay-sections', 'plugin', 'about', 'data', 'save-error'], overlay: ['strip', 'card', 'cluster', 'hud']};
+  journal: ['list', 'mode-trip', 'weak-mode-trip', 'trip', 'intervals', 'timeline', 'samples'], settings: ['general', 'overlay', 'overlay-sections', 'plugin', 'about', 'data', 'save-error'], overlay: ['strip', 'card', 'cluster', 'hud']};
 const common = ['bilingual', 'bothSizes', 'security', 'offlineFonts', 'recordingIndicator', 'versionLine', 'updateHidden'];
 const flags = {shell: ['navigation', 'headingFocus','hardModePage', 'journalUnmount', 'exitHintKeyboard', 'exitAvailable', 'noAccountPlaceholder'],
   live: ['numericGauge', 'unavailableVsZero', 'paused', 'staleDashes', 'rawNames', 'noTripPlaceholder', 'jobViewport', 'hmNamesReadable','fullWidthTelemetry','tankUnknownVsZero','mandatoryBreak'],
@@ -48,6 +48,7 @@ it('requires every UI language/size/screen, assertion and plain screenshot file 
     {name: 'wrong shard', uiCase: 'live', change: value => {value.ui.case = 'shell';}},
     {name: 'missing minimum-size stale overlay', uiCase: 'overlay', change: value => {value.ui.screenshots = value.ui.screenshots.filter(shot => !(shot.language === 'ru' && shot.width === 1100 && shot.screen === 'cluster-stale'));}},
     {name: 'missing screenshot', uiCase: 'live', change: value => {value.ui.screenshots.pop();}},
+    ...['mode-trip', 'weak-mode-trip'].map(screen => ({name: `missing RU minimum-size ${screen}`, uiCase: 'journal' as const, change: (value: Fixture) => {value.ui.screenshots = value.ui.screenshots.filter(shot => !(shot.screen === screen && shot.language === 'ru' && shot.width === 1100));}})),
     {name: 'duplicate replacing another screenshot', uiCase: 'live', change: value => {value.ui.screenshots[0] = {...value.ui.screenshots[1]};}},
     {name: 'file absent', uiCase: 'live', omitFile: true}, {name: 'invalid PNG signature', uiCase: 'live', badPng: true},
     {name: 'escaping filename', uiCase: 'live', change: value => {value.ui.screenshots[0].file = '../outside.png';}},

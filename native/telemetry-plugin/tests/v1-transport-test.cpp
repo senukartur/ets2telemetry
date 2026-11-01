@@ -4,6 +4,7 @@
 // docs/native-transport-v1.md.
 #include "channel-identity.hpp"
 #include "v1-server.hpp"
+#include "game-mode-detector.hpp"
 #include "pipe-server.hpp"
 #include "capture-server.hpp"
 #include "capture-wire.hpp"
@@ -227,10 +228,11 @@ struct Fixture {
   transport::UserIdentity user = transport::current_user(); transport::OwnerSecurity security{user.sid}; transport::PeerIdentity self = transport::inspect_peer(GetCurrentProcessId());
   Host host; std::unique_ptr<sdk::Adapter> adapter = std::make_unique<sdk::Adapter>();
   std::unique_ptr<v1::Server> server; std::wstring directory, v0_directory;
-  explicit Fixture(bool policy = true, const char* refuse = "") {
+  explicit Fixture(bool policy = true, const char* refuse = "", v1::GameModePod mode = {}) {
     host.refuse = refuse;
     directory = temporary_directory(security, L"ET004b-v1-"); v0_directory = temporary_directory(security, L"ET004b-v0-");
     auto p = host.params(); require(adapter->initialize(SCS_TELEMETRY_VERSION_1_01, &p) == SCS_RESULT_ok, "SDK initialize");
+    adapter->set_game_mode(mode);
     // The endpoint's lifecycle in sdk-exports.cpp: initialize, prepare, attach, then start.
     server = std::make_unique<v1::Server>(*adapter, v1::Origin::synthetic);
     auto* channel = server->prepare(); require(channel != nullptr, "v1 channel prepared"); adapter->attach_events(channel);
@@ -339,6 +341,25 @@ void window_mapping(Fixture& f) {
 }
 
 // Discovery, DACL, naming and the welcome capabilities on an actual pipe.
+void game_mode_evidence() {
+  for (auto result : {ets2telemetry::game_mode::LookupResult::present, ets2telemetry::game_mode::LookupResult::missing, ets2telemetry::game_mode::LookupResult::failed}) {
+    v1::GameModePod mode;
+    if (result != ets2telemetry::game_mode::LookupResult::failed) {
+      mode.mode = result == ets2telemetry::game_mode::LookupResult::present ? v1::GameModeKind::truckersmp : v1::GameModeKind::single_player;
+      mode.method = v1::DetectionMethod::module_scan; mode.confidence = result == ets2telemetry::game_mode::LookupResult::present ? v1::Confidence::strong : v1::Confidence::weak;
+      if (mode.mode == v1::GameModeKind::truckersmp) mode.module.assign("core_ets2mp.dll");
+    }
+    Fixture f(true, "", mode); f.start(); auto c = f.client(true); c->handshake();
+    const auto& welcome = c->messages.front().welcome->game_mode;
+    const auto& checkpoint = c->messages[1].state->status.game_mode;
+    require(welcome.method == (mode.method == v1::DetectionMethod::module_scan ? "module-scan" : "none") &&
+      welcome.confidence == (mode.confidence == v1::Confidence::strong ? "strong" : mode.confidence == v1::Confidence::weak ? "weak" : "none") &&
+      (mode.mode == v1::GameModeKind::truckersmp ? welcome.module.value && *welcome.module.value == "core_ets2mp.dll" : !welcome.module.value), "exact method/confidence/module evidence");
+    require(welcome.mode == checkpoint.mode && welcome.method == checkpoint.method && welcome.confidence == checkpoint.confidence && welcome.module.value == checkpoint.module.value, "welcome and checkpoint evidence agree");
+    require(c->status_until(f.host, [&](const v1::StateView& state) { const auto& a = state.status.game_mode; const auto& b = c->messages.front().welcome->game_mode; return a.mode == b.mode && a.method == b.method && a.confidence == b.confidence && a.module.value == b.module.value; }), "snapshot evidence agrees");
+    require(c->messages.front().welcome->game_mode.mode == (mode.mode == v1::GameModeKind::truckersmp ? "truckersmp" : mode.mode == v1::GameModeKind::single_player ? "single-player" : "unknown"), "synthetic evidence reaches actual pipe");
+  }
+}
 void handshake() {
   Fixture f; window_mapping(f); f.start();
   const auto c = f.current(); sdk::Snapshot source; require(f.adapter->read_current(source), "v0 slot");
@@ -380,7 +401,7 @@ void handshake() {
   require(welcome.source->origin == "synthetic" && welcome.source->game == "ets2" && welcome.source->plugin_session_id == c->identity.plugin_session_id.c_str() &&
     welcome.source->process_id == GetCurrentProcessId() && welcome.capture.clock_id == c->identity.capture_clock_id.c_str(), "welcome source identity and clock");
   std::set<std::string> types(w.event_types.begin(), w.event_types.end());
-  require(w.durable_events && w.gameplay_events_registered && types.size() == 16 && !types.count("source.gameMode") && types.count("job.delivered") && types.count("trailer.cleared"), "OD-3 event types: all but source.gameMode");
+  require(w.durable_events && w.gameplay_events_registered && types.size() == 17 && types.count("source.gameMode") && types.count("job.delivered") && types.count("trailer.cleared"), "event types include source.gameMode");
   require(w.game_mode.mode == "unknown" && w.game_mode.method == "none" && w.game_mode.confidence == "none" && !w.game_mode.module.value, "OD-3 game mode unknown/none/none");
   const auto& versions = welcome.wire.at("data").at("versions");
   require(versions.at("telemetryApi").at("major").number() == 1 && versions.at("telemetryApi").at("minor").number() == 1 && versions.at("gameTelemetry").at("major").number() == 1 &&
@@ -1319,12 +1340,14 @@ void dll_lifecycle(const char* path) {
         require(client->messages[0].minor == 2 && client->messages[1].minor == 2 && client->messages[1].state->gearbox && break_reading && break_reading->reading.value && *break_reading->reading.value == 61, "the DLL serves minor 2 with the captured break");
       }
       cancelled(host, 2); host.frame();
-      require(client->read_until([&] { return client->covered() >= 2; }), "events from the DLL");
-      require(coverage_messages(*client)[0]->event && coverage_messages(*client)[0]->event->event_seq == 1, "eventSeq starts at 1 in the new plugin session");
+      require(client->read_until([&] { return client->covered() >= 3; }), "events from the DLL");
+      const auto coverage = coverage_messages(*client);
+      require(coverage[0]->gap && coverage[0]->gap->first_event_seq == 1 && coverage[0]->gap->last_event_seq == 1 && coverage[0]->gap->causes.offline == 1 &&
+        coverage[1]->event && coverage[1]->event->event_seq == 2, "initial mode occupies seq1 as explicit offline loss, SDK events follow");
       if (scenario == 1) {
         // A second initialization of the same session fails in the adapter; the channel is neither re-prepared nor re-attached.
         require(init(SCS_TELEMETRY_VERSION_1_01, &params) == SCS_RESULT_already_registered && attached() == 1, "no second initialization in one session");
-        cancelled(host, 1); host.frame(); require(client->read_until([&] { return client->covered() >= 3; }) && coverage_messages(*client)[2]->event->event_seq == 3, "the session continues");
+        cancelled(host, 1); host.frame(); require(client->read_until([&] { return client->covered() >= 4; }) && coverage_messages(*client)[3]->event->event_seq == 4, "the session continues");
       }
       if (scenario == 3) {
         std::array<wchar_t, 512> v0_name{}; require(until([&] { return v0_endpoint(v0_name.data(), static_cast<unsigned>(v0_name.size())) != 0; }), "v0 endpoint ready");
@@ -1379,7 +1402,7 @@ void dll_lifecycle(const char* path) {
 int main(int argc, char** argv) {
   try {
     const std::map<std::string, std::function<void()>> cases{
-      {"handshake", handshake}, {"gearbox", gearbox}, {"mandatory-break", mandatory_break}, {"mandatory-break-unsupported", mandatory_break_unsupported}, {"mandatory-break-v0", mandatory_break_v0}, {"live-only", live_only}, {"durable", durable_delivery}, {"redelivery", redelivery}, {"stalled-reader", stalled_reader},
+      {"game-mode", game_mode_evidence}, {"handshake", handshake}, {"gearbox", gearbox}, {"mandatory-break", mandatory_break}, {"mandatory-break-unsupported", mandatory_break_unsupported}, {"mandatory-break-v0", mandatory_break_v0}, {"live-only", live_only}, {"durable", durable_delivery}, {"redelivery", redelivery}, {"stalled-reader", stalled_reader},
       {"fuzz", fuzz}, {"rejection", rejection}, {"collision", collision}, {"policy", policy}, {"v0-isolation", v0_isolation}, {"cap0-isolation", cap0_isolation}, {"shutdown", shutdown}
 #ifdef ETS2TELEMETRY_TRANSPORT_TEST_HOOKS
       , {"retention", [] { retention(); Fixture clamp; clamp.start(); capture_clamp(clamp); }}, {"overflow", overflow}, {"ack-control", ack_control}, {"exhaustion", exhaustion}, {"invariant", [] { invariant(); invariant_at_shutdown(); invariant_end_failed(); invariant_stop_budget(); }}

@@ -89,6 +89,10 @@ it('relays a broker-provisioned v1 session and its ACK, and fails a synthetic or
   const welcome = messages[0];
   if (welcome.kind !== 'welcome') throw new Error('welcome expected first');
   expect(welcome.data.durableEvents).toBe(true);
+  expect(welcome.data.capabilities.eventTypes).toContain('source.gameMode');
+  const mode = {mode: 'single-player', method: 'module-scan', confidence: 'weak', module: {available: false, reason: 'not-observed'}};
+  expect(welcome.data.gameMode).toEqual(mode);
+  for (const message of messages) if (message.kind === 'checkpoint' || message.kind === 'snapshot') expect(message.data.status.gameMode).toEqual(mode);
   // ET-050b B1, ET-052: the plugin selected minor 2, and every message of the connection carries it.
   expect(V1_CLIENT_MAX_MINOR).toBe(2);
   expect({envelope: welcome.version, minor: welcome.data.minor, consumer: consumer.minor}).toEqual({envelope: {major: 1, minor: 2}, minor: 2, consumer: 2});
@@ -131,6 +135,7 @@ it('relays a broker-provisioned v1 session and its ACK, and fails a synthetic or
   expect(errors).toEqual([]);
   const slots: [number, number, number][] = [[-1, 1, 0], [-3, 1, 1], [-2, 1, 2], [-4, 1, 3], [1, 2, 0], [7, 2, 1], [2, 2, 2], [8, 2, 3], [3, 3, 0], [9, 3, 1], [4, 3, 2], [10, 3, 3],
     [5, 4, 0], [11, 4, 1], [6, 4, 2], [12, 4, 3]];
+  for (const message of messages) if (message.kind === 'checkpoint' || message.kind === 'snapshot') expect(message.data.status.gameMode).toEqual(mode);
   expect(geared()).toEqual({forwardGears: {available: true, value: 12}, reverseGears: {available: true, value: 4},
     hshifter: {available: true, value: {selectorCount: 2, slots: slots.map(([gear, handlePosition, selectors]) => ({gear, handlePosition, selectors}))}}});
   // The truck callback is a durable event; the hshifter callback is none (B2).
