@@ -910,7 +910,7 @@ function hardModeCases() {
 }
 
 function nowPlayingCases() {
-  const fields = ['minimal','full','backgroundOnlyOpacity','pauseClearsArtwork','explicitSourceLoss','noSessionClears','editExclusion','cancel','resetSave','closeToTray','restartPreserved','disableRetires'];
+  const fields = ['minimal','full','backgroundOnlyOpacity','pauseClearsArtwork','explicitSourceLoss','noSessionClears','editExclusion','cancel','resetSave','closeToTray','restartPreserved','disableRetires','nativeSelectionRoundTrip','nativeTransitionRecovered'];
   const media = {...Object.fromEntries(fields.map(field => [field, true])), origin: 'synthetic', realMediaObserved: false, firstExit: 0, languages: ['en', 'ru'], artworkShapes: ['square','portrait','wide']};
   const body = (value: unknown) => JSON.stringify({passed: true, commit: 'candidate', mode: 'packaged', scenarioKind: 'now-playing', nowPlaying: value});
   const accepted = {scenario: 'now-playing', code: 0, available: true, reason: null};

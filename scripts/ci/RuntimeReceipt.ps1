@@ -943,7 +943,7 @@ function Test-RuntimeReceipt {
     if ($ExpectedScenario -ceq 'now-playing') {
         $media = $driver.nowPlaying
         $validMedia = $null -ne $media -and $media.origin -ceq 'synthetic' -and $media.realMediaObserved -is [bool] -and !$media.realMediaObserved -and $media.firstExit -eq 0
-        foreach ($flag in @('minimal','full','backgroundOnlyOpacity','pauseClearsArtwork','explicitSourceLoss','noSessionClears','editExclusion','cancel','resetSave','closeToTray','restartPreserved','disableRetires')) {
+        foreach ($flag in @('minimal','full','backgroundOnlyOpacity','pauseClearsArtwork','explicitSourceLoss','noSessionClears','editExclusion','cancel','resetSave','closeToTray','restartPreserved','disableRetires','nativeSelectionRoundTrip','nativeTransitionRecovered')) {
             if ($media.$flag -isnot [bool] -or !$media.$flag) { $validMedia = $false }
         }
         if ((@($media.languages) -join ',') -cne 'en,ru' -or (@($media.artworkShapes) -join ',') -cne 'square,portrait,wide') { $validMedia = $false }

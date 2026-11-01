@@ -1,5 +1,8 @@
 #include "protocol.hpp"
-#include "policy.hpp"
+#include "reader.hpp"
+#ifdef MEDIA_READER_PROVIDER_FIXTURE
+#include "../tests/fixture-provider.hpp"
+#endif
 #include <winrt/Windows.Foundation.h>
 #include <winrt/Windows.Foundation.Collections.h>
 #include <winrt/Windows.Media.Control.h>
@@ -53,18 +56,8 @@ IJsonValue artwork(GlobalSystemMediaTransportControlsSessionMediaProperties cons
     return result;
   } catch (...) {return JsonValue::CreateNullValue();}
 }
-struct Entry {GlobalSystemMediaTransportControlsSession session{nullptr}; std::wstring id;};
-class Reader {
+class WinRTProvider {
   GlobalSystemMediaTransportControlsSessionManager manager{nullptr};
-  std::vector<Entry> entries;
-  uint64_t next = 0, revision = 0;
-  std::wstring lifetime = [] {
-    auto id = std::wstring(to_hstring(Windows::Foundation::GuidHelper::CreateNewGuid()));
-    id.erase(std::remove_if(id.begin(), id.end(), [](wchar_t c) {return c == L'{' || c == L'}' || c == L'-';}), id.end());
-    return L"s" + id;
-  }();
-  std::wstring previous;
-  std::wstring metadata;
   GlobalSystemMediaTransportControlsSession watched{nullptr};
   event_token media_token{};
   std::shared_ptr<std::atomic_bool> dirty;
@@ -81,45 +74,27 @@ class Reader {
     media_token = watched.MediaPropertiesChanged([weak](auto const&, auto const&) {mark_dirty(weak);});
   }
 public:
-  ~Reader() {try {unwatch();} catch (...) {}}
-  JsonObject snapshot(Command const& command) {
-    auto result = response(command.request);
-    try {
-      if (!manager) manager = GlobalSystemMediaTransportControlsSessionManager::RequestAsync().get();
-      auto sessions = manager.GetSessions();
-      if (sessions.Size() > 32) {unwatch(); entries.clear(); previous.clear(); result.SetNamedValue(L"error", JsonValue::CreateStringValue(L"SESSION_LIMIT")); return result;}
-      std::vector<Entry> fresh;
-      for (auto const& session : sessions) {
-        auto found = std::find_if(entries.begin(), entries.end(), [&](auto const& e) {return e.session == session;});
-        fresh.push_back({session, found == entries.end() ? lifetime + L"-" + std::to_wstring(++next) : found->id});
-      }
-      entries = std::move(fresh);
-      auto current = manager.GetCurrentSession(); JsonArray descriptors; std::vector<Descriptor> policy;
-      Entry* selected = nullptr;
-      for (auto& entry : entries) {
-        JsonObject descriptor; descriptor.SetNamedValue(L"id", JsonValue::CreateStringValue(entry.id));
-        descriptor.SetNamedValue(L"sourceAppId", JsonValue::CreateStringValue(clean(entry.session.SourceAppUserModelId(), 512)));
-        descriptor.SetNamedValue(L"playback", JsonValue::CreateStringValue(playback(entry.session)));
-        descriptor.SetNamedValue(L"current", JsonValue::CreateBooleanValue(entry.session == current)); descriptors.Append(descriptor);
-        policy.push_back({entry.id, std::wstring(clean(entry.session.SourceAppUserModelId(), 512)), playback(entry.session), entry.session == current});
-      }
-      result.SetNamedValue(L"sessions", descriptors);
-      auto chosen = choose(policy, command.selected, previous);
-      for (auto& entry : entries) if (entry.id == chosen) selected = &entry;
-      if (!selected) {unwatch(); previous.clear(); metadata.clear(); return result;}
-      auto state = playback(selected->session);
-      if (state != L"playing" && state != L"paused") {unwatch(); previous.clear(); metadata.clear(); return result;}
-      watch(selected->session);
+  using Session = GlobalSystemMediaTransportControlsSession;
+  ~WinRTProvider() {try {unwatch();} catch (...) {}}
+  void clear() {unwatch();}
+  std::vector<Session> enumerate() {
+    if (!manager) manager = GlobalSystemMediaTransportControlsSessionManager::RequestAsync().get();
+    std::vector<Session> result;
+    for (auto const& session : manager.GetSessions()) {result.push_back(session); if (result.size() > 32) break;}
+    return result;
+  }
+  Session current() {return manager.GetCurrentSession();}
+  hstring source(Session const& session) {return session.SourceAppUserModelId();}
+  std::wstring playback(Session const& session) {return ::playback(session);}
+  std::optional<JsonObject> read(Session const& session) {
+      watch(session);
       // All asynchronous reads own their session/properties until completion. No event callbacks capture Reader state.
       const bool changed = dirty->exchange(false) || !cached;
-      if (changed) {cached = nullptr; cached_art = JsonValue::CreateNullValue(); cached = selected->session.TryGetMediaPropertiesAsync().get(); cached_art = artwork(cached);}
+      if (changed) {cached = nullptr; cached_art = JsonValue::CreateNullValue(); cached = session.TryGetMediaPropertiesAsync().get(); cached_art = artwork(cached);}
       auto properties = cached;
       JsonObject track; text(track, L"title", properties.Title()); text(track, L"artist", properties.Artist()); text(track, L"album", properties.AlbumTitle());
-      auto fingerprint = selected->id + std::wstring(track.Stringify());
-      if (fingerprint != metadata) {metadata = fingerprint; ++revision;}
-      track.SetNamedValue(L"id", JsonValue::CreateStringValue(selected->id)); number(track, L"revision", static_cast<double>(revision));
-      track.SetNamedValue(L"playback", JsonValue::CreateStringValue(state)); track.SetNamedValue(L"artwork", cached_art);
-      auto timeline = selected->session.GetTimelineProperties(); auto info = selected->session.GetPlaybackInfo();
+      track.SetNamedValue(L"artwork", cached_art);
+      auto timeline = session.GetTimelineProperties(); auto info = session.GetPlaybackInfo();
       auto start = timeline.StartTime().count() / 10000, end = timeline.EndTime().count() / 10000, position = timeline.Position().count() / 10000;
       track.SetNamedValue(L"timeline", JsonValue::CreateNullValue());
       auto updated = timeline.LastUpdatedTime().time_since_epoch().count() / 10000 - 11644473600000LL;
@@ -130,12 +105,11 @@ public:
       }
       // A session/track transition while artwork was read cannot attach the old thumbnail to new metadata.
       if (changed) {
-        auto after = selected->session.TryGetMediaPropertiesAsync().get();
+        auto after = session.TryGetMediaPropertiesAsync().get();
         if (after.Title() != properties.Title() || after.Artist() != properties.Artist() || after.AlbumTitle() != properties.AlbumTitle()) dirty->store(true);
       }
-      if (dirty->load() || playback(selected->session) != state) {metadata.clear(); return result;}
-      previous = selected->id; result.SetNamedValue(L"selected", track); return result;
-    } catch (...) {try {unwatch();} catch (...) {} entries.clear(); previous.clear(); metadata.clear(); result = response(command.request); result.SetNamedValue(L"error", JsonValue::CreateStringValue(L"API_ERROR")); return result;}
+      if (dirty->load()) return std::nullopt;
+      return track;
   }
 };
 }
@@ -156,8 +130,12 @@ int wmain(int argc, wchar_t** argv) {
     }
   }).detach();
   init_apartment(apartment_type::multi_threaded);
-#ifndef MEDIA_READER_FIXTURE
-  Reader reader;
+#ifdef MEDIA_READER_PROVIDER_FIXTURE
+  FixtureProvider provider;
+  SnapshotReader<FixtureProvider> reader(provider);
+#elif !defined(MEDIA_READER_FIXTURE)
+  WinRTProvider provider;
+  SnapshotReader<WinRTProvider> reader(provider);
 #endif
   for (;;) {
     std::string bytes; {std::unique_lock<std::mutex> lock(mutex); ready.wait(lock, [&] {return occupied;}); bytes = std::move(pending);}
@@ -168,6 +146,9 @@ int wmain(int argc, wchar_t** argv) {
       if (request.selected == L"s998") {uint32_t length = 2; const char invalid[] = {static_cast<char>(0xff), static_cast<char>(0xff)}; write_exact(GetStdHandle(STD_OUTPUT_HANDLE), &length, 4); write_exact(GetStdHandle(STD_OUTPUT_HANDLE), invalid, 2); continue;}
       auto result = response(request.request);
 #else
+#ifdef MEDIA_READER_PROVIDER_FIXTURE
+      provider.prepare(request.request);
+#endif
       auto result = reader.snapshot(request);
 #endif
       auto output = to_string(result.Stringify()); auto length = static_cast<uint32_t>(output.size());

@@ -275,10 +275,11 @@ From `ctest -N` on the four build trees at ET-019t: 75 cases in the plugin Relea
 | `*-asan-contract*` (70 cases): the AddressSanitizer twins of the protocol v0 and v1, producer, adapter, event channel, snapshot transport, window, CAP0 and v1 transport cases | Native CTest, plugin ASan | as their Release twins | R, T | the twins' cards | PR (AddressSanitizer job) | as their Release twins |
 | `native-pipe-client-asan-*` (72 cases) | Native CTest, client ASan | as `native-pipe-client-*` | R | ET-006a (#13) and later | PR (AddressSanitizer job) | security, v0/CAP0 isolation |
 | `media-session-reader-protocol` | CTest | REG-010, REG-020 | T | ET-061 | PR (build job) | security (command bounds and Unicode) |
+| `media-session-reader-snapshot` | CTest | REG-010, REG-011, REG-020 | T | ET-061 | PR (build job) | regression (production enumeration, ID/cache transitions, explicit-to-Automatic history and playback coherence) |
 | `media-session-reader-selection` | CTest | REG-020 | T | ET-061 | PR (build job) | regression (session policy) |
 | `media-session-reader-artwork` | CTest | REG-020 | T | ET-061 | PR (build job) | security (pixel bounds and proportions) |
 | `media-session-reader-lifetime` | CTest | REG-011, REG-020 | T | ET-061 | PR (build job) | security (late callbacks own no retired state) |
-| `media-session-reader-asan-{protocol,selection,artwork,lifetime}` | CTest ASan | REG-010, REG-011, REG-020 | T | ET-061 | PR (ASan job) | security (memory/lifetime bounds) |
+| `media-session-reader-asan-{protocol,snapshot,selection,artwork,lifetime}` | CTest ASan | REG-010, REG-011, REG-020 | T | ET-061 | PR (ASan job) | security (memory/lifetime bounds) |
 
 ### PowerShell suites
 

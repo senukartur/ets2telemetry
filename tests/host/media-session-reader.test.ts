@@ -43,3 +43,23 @@ it.each([Buffer.from([1, 4, 0, 0]), Buffer.from([2, 0, 0, 0, 0xff, 0xff]), Buffe
   const child = fixture(), closed = once(child, 'close'); child.stdin.on('error', () => undefined); child.stdin.write(bytes);
   expect((await closed)[0]).toBe(3);
 }, PROCESS_GUARD_MS);
+it('uses the production snapshot path for explicit-to-Automatic history and an intervening playback transition', async () => {
+  const child = spawn(path.resolve('native/media-session-reader/build/Release/media-session-reader-provider-fixture.exe'), ['--parent', String(process.pid)], {windowsHide: true, stdio: ['pipe', 'pipe', 'pipe']});
+  children.add(child); const frames = new MediaFrames();
+  let receive: ((value: unknown) => void) | undefined;
+  child.stdout.on('data', (chunk: Buffer) => frames.push(chunk, value => receive?.(value)));
+  const request = async (id: number, selected: string | null) => {
+    const response = new Promise<unknown>(resolve => {receive = resolve;}); child.stdin.write(snapshotCommand(id, selected));
+    const parsed = parseSnapshot(await response, id); expect(parsed).toBeDefined(); return parsed!;
+  };
+  const initial = await request(1, null), [a, b] = initial.sessions;
+  expect(initial.selected?.id).toBe(a.id); expect(a.current).toBe(true);
+  expect((await request(2, b.id)).selected?.id).toBe(b.id);
+  expect((await request(3, null)).selected?.id).toBe(b.id);
+  const changing = await request(4, b.id);
+  expect(changing).toMatchObject({selected: null, error: null}); expect(changing.sessions[1]).toEqual(b);
+  const paused = await request(5, b.id);
+  expect(paused.selected).toMatchObject({id: b.id, playback: 'paused'}); expect(paused.sessions[1]).toMatchObject({id: b.id, playback: 'paused'});
+  expect((await request(6, null)).selected?.id).toBe(a.id);
+  const closed = once(child, 'close'); child.stdin.end(); expect((await closed)[0]).toBe(0);
+}, PROCESS_GUARD_MS);

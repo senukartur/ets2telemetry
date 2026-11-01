@@ -1,3 +1,5 @@
+import {spawn} from 'node:child_process';
+import {once} from 'node:events';
 import assert from 'node:assert/strict';
 import {writeFile} from 'node:fs/promises';
 import path from 'node:path';
@@ -52,6 +54,9 @@ export async function runNowPlayingSmoke({application, dashboard, config}) {
   await widget.getByText('Paused', {exact: true}).waitFor(); assert.equal(await widget.locator('.np-artwork').count(), 0); result.pauseClearsArtwork = true;
   await dashboard.evaluate(() => globalThis.desktop.setLanguage('ru'));
   await widget.getByText('Пауза', {exact: true}).waitFor(); result.languages = ['en', 'ru'];
+  await runNativeSelectionJourney({application, dashboard, widget, config}); result.nativeSelectionRoundTrip = true; result.nativeTransitionRecovered = true;
+  await dashboard.evaluate(() => globalThis.desktop.selectNowPlayingSource({kind: 'automatic'}));
+  await inject(application, snapshot({...track, playback: 'paused'}, [{...source, playback: 'paused'}]));
   await dashboard.evaluate(() => globalThis.desktop.selectNowPlayingSource({kind: 'session', id: 's1'}));
   await inject(application, snapshot(null, [{id: 's2', sourceAppId: 'Synthetic other player', playback: 'playing', current: true}]));
   await dashboard.waitForFunction(async () => (await globalThis.desktop.getAppState()).nowPlaying.state === 'unavailable');
@@ -93,4 +98,48 @@ export async function nowPlayingRendererPages(application) {
     const widget = pages.filter(page => /renderer\/now-playing\.html$/.test(page.url()));
     return Promise.resolve(pages.length === 3 && dashboard.length === 1 && overlay.length === 1 && widget.length === 1 ? {dashboard: dashboard[0], overlay: overlay[0]} : null);
   }, Boolean, 'Expected exactly dashboard, overlay and current-track renderers');
+}
+
+// This nonshipping provider runs the same SnapshotReader as WinRT; the app still receives only validated synthetic data.
+async function runNativeSelectionJourney({application, dashboard, widget, config}) {
+  const child = spawn(path.join(config.checkout, 'native/media-session-reader/build/Release/media-session-reader-provider-fixture.exe'), ['--parent', String(process.pid)], {shell: false, windowsHide: true, stdio: ['pipe', 'pipe', 'pipe']});
+  let pending, buffer = Buffer.alloc(0), serial = 0;
+  const fail = error => {if (pending) {clearTimeout(pending.guard); pending.reject(error); pending = undefined;}};
+  child.on('error', fail); child.stdin.on('error', fail); child.on('exit', () => fail(new Error('Native provider exited before its response'))); child.stderr.resume();
+  child.stdout.on('data', chunk => {
+    try {
+      buffer = Buffer.concat([buffer, chunk]);
+      if (!pending || buffer.length > 1048580) throw new Error('Invalid native provider frame');
+      if (buffer.length < 4) return;
+      const length = buffer.readUInt32LE(); if (length < 2 || length > 1048576) throw new Error('Invalid native provider length');
+      if (buffer.length < length + 4) return;
+      assert.equal(buffer.length, length + 4); const value = JSON.parse(new TextDecoder('utf-8', {fatal: true}).decode(buffer.subarray(4)));
+      assert.equal(value.requestId, pending.id); assert.equal(value.version, 1); assert.equal(value.type, 'snapshot');
+      const completed = pending; pending = undefined; buffer = Buffer.alloc(0); clearTimeout(completed.guard); completed.resolve(value);
+    } catch (error) {fail(error);}
+  });
+  const request = selectedId => new Promise((resolve, reject) => {
+    const id = ++serial, bytes = Buffer.from(JSON.stringify({version: 1, type: 'snapshot', requestId: id, selectedId}));
+    const header = Buffer.alloc(4); header.writeUInt32LE(bytes.length);
+    // A real-process hang guard, independent of host speed; normal progress waits on actual framed responses.
+    pending = {id, resolve, reject, guard: setTimeout(() => fail(new Error('Native provider response exceeded 5 seconds')), 5000)};
+    child.stdin.write(Buffer.concat([header, bytes]));
+  });
+  const deliver = value => inject(application, {...value, requestId: 1});
+  try {
+    const initial = await request(null); const [a, b] = initial.sessions;
+    assert.equal(initial.selected.id, a.id); assert.equal(a.current, true); await deliver(initial);
+    await dashboard.evaluate(id => globalThis.desktop.selectNowPlayingSource({kind: 'session', id}), b.id);
+    const explicit = await request(b.id); assert.equal(explicit.selected.id, b.id); await deliver(explicit);
+    await dashboard.evaluate(() => globalThis.desktop.selectNowPlayingSource({kind: 'automatic'}));
+    const automatic = await request(null); assert.equal(automatic.selected.id, b.id); assert.equal(automatic.sessions[0].current, true); await deliver(automatic);
+    await dashboard.waitForFunction(async () => {const state = (await globalThis.desktop.getAppState()).nowPlaying; return state.state === 'playing' && state.error === null && state.sources.length === 2;});
+    await widget.waitForFunction(() => globalThis.document.querySelector('.np-title')?.textContent === 'Provider track B');
+    await dashboard.evaluate(id => globalThis.desktop.selectNowPlayingSource({kind: 'session', id}), b.id);
+    const changing = await request(b.id); assert.equal(changing.selected, null); assert.equal(changing.error, null); await deliver(changing);
+    const paused = await request(b.id); assert.equal(paused.selected.id, b.id); assert.equal(paused.selected.playback, 'paused'); await deliver(paused);
+    await dashboard.waitForFunction(async () => {const state = (await globalThis.desktop.getAppState()).nowPlaying; return state.state === 'paused' && state.error === null && state.sources.length === 2;});
+  } finally {
+    if (child.exitCode === null && child.signalCode === null) {const closed = once(child, 'close'); child.stdin.end(); const kill = setTimeout(() => child.kill(), 500); await closed; clearTimeout(kill);}
+  }
 }

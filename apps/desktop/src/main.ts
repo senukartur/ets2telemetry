@@ -1,5 +1,5 @@
 import {pathToFileURL} from 'node:url';
-import {selectSession} from './now-playing/selection';
+import {acceptsSelectedSession} from './now-playing/selection';
 import {NowPlayingController} from './now-playing/controller';
 import {MediaReader, verifiedMediaReader} from './now-playing/reader';
 import {parseSnapshot, MAX_MEDIA_FRAME} from './now-playing/protocol';
@@ -317,7 +317,6 @@ function runApplication(profileError: unknown): void {
   let nowWindow: BrowserWindow | undefined, nowController: NowPlayingController | undefined, nowPort: MessagePortMain | undefined;
   let nowTrack: MediaTrack | null = null, nowSource: string | null = null, nowGeneration = 0, nowDocument = 0, nowDashboardReady = false;
   const nowWindowBudget = new RecoveryBudget();
-  let nowAutomaticPrevious: string | null = null;
   let nowReaderIdle: Promise<void> | undefined;
   let nowPlayingView: NowPlayingView = {state: 'disabled', sources: [], selection: {kind: 'automatic'}, error: null, edit: {active: false, placement: 'unavailable'}};
   const nowSnapshot = (): NowPlayingDisplay => ({generation: nowGeneration, language: settingsStore.view().language, style: settingsStore.view().nowPlaying.style,
@@ -341,9 +340,7 @@ function runApplication(profileError: unknown): void {
       nowGeneration++;
       const selection = nowPlayingView.selection;
       const selected = snapshot.selected;
-      const expected = selectSession(snapshot.sessions, selection, nowAutomaticPrevious);
-      if (selected && expected?.id !== selected.id) {nowTrack = null; nowSource = null; nowPlayingView = {...nowPlayingView, state: 'error', error: 'INVALID_RESPONSE', sources: []}; publishNowPlaying(); return;}
-      nowAutomaticPrevious = selected?.id ?? null;
+      if (!acceptsSelectedSession(snapshot.sessions, selection, selected)) {nowTrack = null; nowSource = null; nowPlayingView = {...nowPlayingView, state: 'error', error: 'INVALID_RESPONSE', sources: []}; publishNowPlaying(); return;}
       if (selection.kind === 'session' && selected && selected.id !== selection.id) {nowTrack = null; nowSource = null; nowPlayingView = {...nowPlayingView, state: 'error', error: 'INVALID_RESPONSE', sources: []}; publishNowPlaying(); return;}
       if (selected?.artwork) {
         const image = nativeImage.createFromBuffer(Buffer.from(selected.artwork.png, 'base64'));
@@ -358,6 +355,7 @@ function runApplication(profileError: unknown): void {
   }
   function publishNowPlaying(): void {
     nowPlayingView = {...nowPlayingView, edit: nowController?.editState() ?? {active: false, placement: 'unavailable'}};
+    if (!nowPlayingView.edit.active) nowFocus.stop();
     nowSubscriptions.publish(nowSnapshot()); nowController?.update(nowTrack !== null); pushAppState();
   }
   function retireNowDocument(): void {
@@ -584,7 +582,8 @@ function runApplication(profileError: unknown): void {
   function ownFocused(): boolean {
     return Boolean((window && !window.isDestroyed() && window.isFocused()) || (overlay && !overlay.isDestroyed() && overlay.isFocused()));
   }
-  function focusChanged(): void {if (nowController?.editState().active) nowFocus.update(Boolean(window && !window.isDestroyed() && window.isFocused() || nowWindow && !nowWindow.isDestroyed() && nowWindow.isFocused())); if (overlayEdit.active) focusGate.update(ownFocused());}
+  function ownNowPlayingFocused(): boolean {return Boolean(window && !window.isDestroyed() && window.isFocused() || nowWindow && !nowWindow.isDestroyed() && nowWindow.isFocused());}
+  function focusChanged(): void {if (nowController?.editState().active) nowFocus.update(ownNowPlayingFocused()); if (overlayEdit.active) focusGate.update(ownFocused());}
   /** Leaves edit mode (hidden and click-through again first) and returns the draft; nothing is written here. */
   function endOverlayEdit(): ReturnType<OverlayController['endEdit']> {
     focusGate.stop();
@@ -979,14 +978,13 @@ function runApplication(profileError: unknown): void {
     if (!trustedNowDashboard(event) || args.length !== 1 || !isSelection(args[0]) || !settingsStore.view().nowPlaying.enabled) throw new Error('Invalid media source request');
     const selection = args[0];
     if (selection.kind === 'session' && !nowPlayingView.sources.some(source => source.id === selection.id)) throw new Error('Unavailable media source');
-    nowAutomaticPrevious = null;
     nowPlayingView = {...nowPlayingView, selection: {...selection}, state: 'waiting', error: null}; nowTrack = null; nowSource = null;
     nowReader.select(selection.kind === 'session' ? selection.id : null); publishNowPlaying(); return nowPlayingView;
   });
   ipcMain.handle('now-playing-edit:begin', (event, ...args: unknown[]) => {
     if (!trustedNowDashboard(event) || args.length || !settingsStore.view().writable || overlayEdit.active || !nowController) throw new Error('Current track edit unavailable');
-    const focused = Boolean(window && !window.isDestroyed() && window.isFocused());
-    const state = nowController.begin(focused); nowFocus.update(focused); return state;
+    nowFocus.start(ownNowPlayingFocused());
+    try {return nowController.begin(nowFocus.inFront);} catch (error) {nowFocus.stop(); throw error;}
   });
   ipcMain.handle('now-playing-edit:reset', (event, ...args: unknown[]) => {
     if (!trustedNowDashboard(event) || args.length || !nowController) throw new Error('Invalid current track edit'); return nowController.reset();

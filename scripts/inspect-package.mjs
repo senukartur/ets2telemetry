@@ -99,7 +99,7 @@ assert.equal(sha256(mediaBytes), mediaEvidence.executableSha256);
 assert.equal(sha256(mediaBytes), sha256(readFileSync('native/media-session-reader/build/Release/media-session-reader.exe')));
 assert.equal(mediaBytes.readUInt16LE(0), 0x5a4d);
 assert.equal(mediaBytes.readUInt16LE(mediaBytes.readUInt32LE(0x3c) + 4), 0x8664);
-assert.ok(!paths.some(filename => /media-session-reader-fixture/i.test(filename)));
+assert.ok(!paths.some(filename => /media-session-reader.*-fixture/i.test(filename)));
 
 report.mediaReader = {executableSha256: mediaEvidence.executableSha256, channel: mediaEvidence.channel, sourcesVerified: true, fixturesExcluded: true};
 // The bundled game plugin (ET-017): strict manifest, x64 DLL bytes equal to the local Release build, current plugin

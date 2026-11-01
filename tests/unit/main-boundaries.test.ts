@@ -1,3 +1,4 @@
+import type {MediaReaderOptions} from '../../apps/desktop/src/now-playing/reader';
 import {pathToFileURL} from 'node:url';
 import {DEFAULT_NOW_PLAYING} from '../../apps/desktop/src/now-playing/contract';
 import {EventEmitter} from 'node:events';
@@ -101,6 +102,8 @@ const PLUGINS_DISABLED = {mode: 'disabled', bundled: null, running: false, games
 // the updater is unsupported: it never resolves install roots, fetches or schedules a check.
 const APPLICATION = {version: APP_VERSION, channel: 'production', packaged: false};
 const UPDATE_UNSUPPORTED = {state: 'unsupported', available: null, progress: null, refusal: null, failure: null, lastCheck: null};
+let nowReaderOptions: MediaReaderOptions;
+let nowReaderSelection: ReturnType<typeof vi.fn<(id: string | null) => void>>;
 let settingsView: {nowPlaying: typeof DEFAULT_NOW_PLAYING; autostart: boolean; units: {ets2: string; ats: string}; gearDisplay?: {ets2: string; ats: string}; overlay: {enabled: boolean; backgroundOpacity: number; layout: string; sections: Record<string, boolean>; placements: Record<string, {x: number; y: number; scale: number}>}; state: string; writable: boolean; saveError: string | null};
 type OverlayWrite = (kind: 'backgroundOpacity' | 'enabled' | 'layout' | 'sections' | 'placement', value: unknown) => Promise<unknown>;
 let overlayWrite: ReturnType<typeof vi.fn<OverlayWrite>>;
@@ -147,7 +150,7 @@ function installFixture() {
     if (forks++ === 0) return child;
     const next = Object.assign(new EventEmitter(), {postMessage: vi.fn(), kill: vi.fn(() => true)}); children.push(next); return next;
   }},
-    screen: Object.assign(new EventEmitter(), {screenToDipRect: (_window: null, bounds: Electron.Rectangle) => bounds, getAllDisplays: () => [{bounds: {x: -1920, y: 0, width: 3840, height: 1080}}]}),
+    screen: Object.assign(new EventEmitter(), {screenToDipRect: (_window: null, bounds: Electron.Rectangle) => bounds, getAllDisplays: () => [{id: 1, bounds: {x: -1920, y: 0, width: 3840, height: 1080}, workArea: {x: 0, y: 0, width: 1920, height: 1040}}], getPrimaryDisplay: () => ({id: 1, workArea: {x: 0, y: 0, width: 1920, height: 1040}})}),
     BrowserWindow: class extends EventEmitter {
       webContents = windows.length === 0 ? contents : windows.length === 1 ? overlayContents : (() => {
         const next = Object.assign(new EventEmitter(), {mainFrame: {}, send: vi.fn(), postMessage: vi.fn(), setWindowOpenHandler: vi.fn(), setZoomFactor: vi.fn()}); extraContents.push(next); return next;
@@ -176,6 +179,8 @@ function installFixture() {
     dialog: {showSaveDialog: (window: unknown, options: unknown) => showSaveDialog(window, options), showOpenDialog: (window: unknown, options: unknown) => showOpenDialog(window, options),
       showMessageBox: (...args: unknown[]) => showMessageBox(...args)},
     shell: {showItemInFolder: (file: string) => shell.showItemInFolder(file), openPath: (folder: string) => shell.openPath(folder)}}));
+  nowReaderSelection = vi.fn<(id: string | null) => void>();
+  vi.doMock('../../apps/desktop/src/now-playing/reader', () => ({MediaReader: class {constructor(options: MediaReaderOptions) {nowReaderOptions = options;} setEnabled() {} select(id: string | null) {nowReaderSelection(id);} stop() {return undefined;}}, verifiedMediaReader: vi.fn()}));
   vi.doMock('../../apps/desktop/src/entrypoints', () => ({processEntrypoint: () => 'package.json'}));
   log = Object.assign(vi.fn(), {flush: vi.fn(() => Promise.resolve(true)), settle: vi.fn<(timeoutMs: number) => Promise<void>>(() => Promise.resolve()), finalize: vi.fn<(timeoutMs: number) => Promise<void>>(() => Promise.resolve()), drainSync: vi.fn(), enterTerminalMode: vi.fn()}); diagnosticsCalls = [];
   vi.doMock('../../apps/desktop/src/diagnostics', async importOriginal => ({...await importOriginal<typeof import('../../apps/desktop/src/diagnostics')>(),
@@ -213,7 +218,7 @@ async function removeFixture() {
   await Promise.allSettled(loadingMain); await new Promise(resolve => realSetImmediate(resolve));
   for (const name of processEvents) for (const listener of processEmitter.listeners(name)) if (!originals.get(name)!.includes(listener)) processEmitter.removeListener(name, listener as (...args: unknown[]) => void);
   vi.clearAllTimers(); vi.restoreAllMocks(); vi.useRealTimers(); vi.unstubAllEnvs();
-  for (const name of ['electron', '../../apps/desktop/src/entrypoints', '../../apps/desktop/src/diagnostics', '../../apps/desktop/src/broker-artifact',
+  for (const name of ['../../apps/desktop/src/now-playing/reader', 'electron', '../../apps/desktop/src/entrypoints', '../../apps/desktop/src/diagnostics', '../../apps/desktop/src/broker-artifact',
     '../../apps/desktop/src/settings-store', '../../apps/desktop/src/overlay-latency', '../../apps/desktop/src/latency-frames', '../../apps/desktop/src/uninstall/roots', '../../apps/desktop/src/plugin-setup/plugin-setup', '../../apps/desktop/src/squirrel-events',
     '../../apps/desktop/src/uninstall/app-uninstall']) vi.doUnmock(name);
 }
@@ -3262,4 +3267,63 @@ it('validates current-track arity, sender, main frame and document retirement be
   Object.assign(contents.mainFrame, {url: 'file:///other.html'});
   await expect(Promise.resolve().then(() => setStyle(trusted(), 'minimal'))).rejects.toThrow('Invalid current track request');
   const before = channels.length; ipc.emit('now-playing:subscribe', trusted(), 0); expect(channels).toHaveLength(before);
+});
+
+async function readyCurrentTrack() {
+  await ready();
+  Object.assign(contents.mainFrame, {url: pathToFileURL(loadFile.mock.calls[0][0]).href}); contents.emit('did-finish-load');
+  await handlers.get('settings:set-now-playing-enabled')!(trusted(), true);
+  const widget = windows[2];
+  Object.assign(widget.webContents.mainFrame, {url: pathToFileURL(loadFile.mock.lastCall![0]).href}); widget.webContents.emit('did-finish-load');
+  const generation = widget.webContents.postMessage.mock.lastCall![1].generation;
+  ipc.emit('now-playing:subscribe', {sender: widget.webContents, senderFrame: widget.webContents.mainFrame}, generation);
+  return widget;
+}
+it('starts the production current-track focus gate and restores click-through after the 150ms blur grace', async () => {
+  const widget = await readyCurrentTrack(), dashboard = windows[0];
+  dashboard.focused = true; dashboard.emit('focus');
+  expect(handlers.get('now-playing-edit:begin')!(trusted())).toMatchObject({active: true, placement: 'visible'});
+  expect(widget.visible).toBe(true); expect(widget.setIgnoreMouseEvents).toHaveBeenLastCalledWith(false);
+  dashboard.focused = false; dashboard.emit('blur');
+  await vi.advanceTimersByTimeAsync(149); expect(widget.visible).toBe(true); expect(widget.setFocusable).toHaveBeenLastCalledWith(true);
+  await vi.advanceTimersByTimeAsync(1); expect(widget.visible).toBe(false);
+  expect(widget.setIgnoreMouseEvents).toHaveBeenLastCalledWith(true); expect(widget.setFocusable).toHaveBeenLastCalledWith(false); expect(widget.setMovable).toHaveBeenLastCalledWith(false);
+  dashboard.focused = true; dashboard.emit('focus'); expect(widget.visible).toBe(true);
+  dashboard.focused = false; dashboard.emit('blur'); widget.focused = true; widget.emit('focus');
+  expect(handlers.get('now-playing-edit:begin')!(trusted())).toMatchObject({active: true, placement: 'visible'});
+  await vi.advanceTimersByTimeAsync(150); expect(widget.visible).toBe(true);
+  widget.focused = false; widget.emit('blur');
+  await handlers.get('now-playing-edit:finish')!(trusted(), 'cancel');
+  const shown = widget.showInactive.mock.calls.length;
+  await vi.advanceTimersByTimeAsync(150); dashboard.focused = true; dashboard.emit('focus');
+  expect(widget.showInactive).toHaveBeenCalledTimes(shown); expect(widget.visible).toBe(false);
+});
+it('accepts native retained B after explicit B returns to Automatic while Windows-current A also plays', async () => {
+  await readyCurrentTrack();
+  const a = {id: 's1', sourceAppId: 'Synthetic A', playback: 'playing' as const, current: true};
+  const b = {id: 's2', sourceAppId: 'Synthetic B', playback: 'playing' as const, current: false};
+  const track = {id: a.id, revision: 1, title: 'Provider A', artist: null, album: null, playback: 'playing' as const, timeline: null, artwork: null};
+  const snapshot = {version: 1 as const, type: 'snapshot' as const, requestId: 1, sessions: [a, b], selected: track, error: null};
+  nowReaderOptions.snapshot(snapshot, 1);
+  handlers.get('now-playing:select-source')!(trusted(), {kind: 'session', id: b.id});
+  nowReaderOptions.snapshot({...snapshot, selected: {...track, id: b.id, revision: 2}}, 1);
+  handlers.get('now-playing:select-source')!(trusted(), {kind: 'automatic'});
+  nowReaderOptions.snapshot({...snapshot, selected: {...track, id: b.id, revision: 2}}, 1);
+  expect(handlers.get('app:get-state')!(trusted())).toMatchObject({nowPlaying: {state: 'playing', error: null, selection: {kind: 'automatic'}, sources: [a, b]}});
+  expect(nowReaderSelection.mock.calls).toEqual([[b.id], [null]]);
+  nowReaderOptions.snapshot({...snapshot, sessions: [a, {...b, playback: 'paused'}], selected: {...track, id: b.id, playback: 'paused'}}, 1);
+  expect(handlers.get('app:get-state')!(trusted())).toMatchObject({nowPlaying: {state: 'error', error: 'INVALID_RESPONSE', sources: []}});
+});
+it.each(['widget-reload', 'port-close', 'disable', 'dashboard-retired', 'exit'])('retires the current-track focus grace on %s', async retirement => {
+  const widget = await readyCurrentTrack(), dashboard = windows[0];
+  dashboard.focused = true; handlers.get('now-playing-edit:begin')!(trusted());
+  dashboard.focused = false; dashboard.emit('blur');
+  if (retirement === 'widget-reload') widget.webContents.emit('did-start-loading');
+  else if (retirement === 'port-close') channels.at(-1)!.port1.close();
+  else if (retirement === 'disable') await handlers.get('settings:set-now-playing-enabled')!(trusted(), false);
+  else if (retirement === 'dashboard-retired') contents.emit('did-start-loading');
+  else app.emit('before-quit', {preventDefault: vi.fn()});
+  expect(widget.visible).toBe(false); expect(widget.setIgnoreMouseEvents).toHaveBeenLastCalledWith(true);
+  const writes = widget.setIgnoreMouseEvents.mock.calls.length;
+  await vi.advanceTimersByTimeAsync(150); expect(widget.setIgnoreMouseEvents).toHaveBeenCalledTimes(writes);
 });
