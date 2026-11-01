@@ -22,7 +22,7 @@ function containsName(text, name) {
 /** The runtime strings of a parsed bundle: every log row's fact keys and string fact values, and the OS release. */
 export function runtimeStrings(bundle) {
   const strings = [bundle.app?.osRelease];
-  for (const rows of [bundle.logs?.main, bundle.logs?.service]) {
+  for (const rows of [bundle.logs?.main, bundle.logs?.service, bundle.logs?.plugin]) {
     for (const row of rows ?? []) {
       for (const [key, value] of Object.entries(row.facts ?? {})) strings.push(key, ...(typeof value === 'string' ? [value] : []));
     }
@@ -120,8 +120,8 @@ const BUNDLE_SCHEMA = object({
   bundledPlugin: nullable(fileView),
   live: object({status: oneOf(ENUMS.liveStatus), selection: oneOf(ENUMS.selection)}),
   diagnosis: object({code: pattern(CODE), notes: array(pattern(CODE))}),
-  logs: object({main: array(logRow), service: array(logRow)}),
-  omittedLogRows: object({main: number, service: number})
+  logs: object({main: array(logRow), service: array(logRow), plugin: array(logRow)}),
+  omittedLogRows: object({main: number, service: number, plugin: number})
 });
 
 /**
@@ -179,7 +179,7 @@ export function checkDiagnosticsBundle(text, {identities, runPaths, mainEvents})
   assert.ok(Array.isArray(bundle.logs?.main) && Array.isArray(bundle.logs?.service), 'Bundle misses its logs');
   for (const event of mainEvents) assert.ok(bundle.logs.main.some(row => row.event === event), `Bundle misses the main log row ${event}`);
   assert.ok(bundle.logs.service.length > 0, 'Bundle misses the service log rows');
-  assert.ok([...bundle.logs.main, ...bundle.logs.service].every(row => !('detail' in row) && !('pid' in row)), 'Bundle keeps a log detail');
+  assert.ok([...bundle.logs.main, ...bundle.logs.service, ...(bundle.logs.plugin ?? [])].every(row => !('detail' in row) && !('pid' in row)), 'Bundle keeps a log detail');
   // A path's backslashes are doubled in JSON text, so each run folder is looked for as written and as JSON escapes it.
   for (const value of runPaths) {
     for (const form of [value, JSON.stringify(value).slice(1, -1)]) assert.ok(!text.toLowerCase().includes(form.toLowerCase()), 'Diagnostic bundle carries a run path');

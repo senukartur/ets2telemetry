@@ -5,6 +5,8 @@
 #include <stdexcept>
 #include <utility>
 #include <vector>
+#include <cstdio>
+#include <cstring>
 
 namespace ets2telemetry::v1 {
 namespace {
@@ -21,8 +23,9 @@ constexpr ULONGLONG exhaustion_flush_ms = 250;
 // carries `state.gearbox`, a minor-2 connection also `state.nextMandatoryBreak`; a hello offering only minor 0 gets the
 // original minor-0 bytes, and an offer above the maximum is clamped to it.
 constexpr unsigned endpoint_max_minor = highest_minor;
-// The only game-log entry of the v1 endpoint, handed to the SDK thread (Caller sequence step 4).
+// Static notices and bounded connection diagnostics are handed to the SDK thread.
 const sdk::DeferredLog invariant_log{SCS_LOG_TYPE_error, ETS2TELEMETRY_GAME_LOG_PREFIX " protocol v1 endpoint retired: invariant violation"};
+const sdk::DeferredLog close_overflow_log{SCS_LOG_TYPE_message, ETS2TELEMETRY_GAME_LOG_PREFIX " V1_CLOSE_DIAGNOSTICS_DROPPED"};
 
 // The v1 session cannot continue: `end` with this reason where a connection can still carry it, then the endpoint retires.
 struct Retire : std::runtime_error {
@@ -54,6 +57,7 @@ class Io final {
   HANDLE event() const noexcept { return event_.get(); }
   bool active() const noexcept { return active_; }
   ULONGLONG deadline() const noexcept { return deadline_; }
+  DWORD error() const noexcept { return error_; }
   bool read(std::uint8_t* buffer, DWORD size) noexcept { return begin(false, buffer, size, UINT64_MAX); }
   // The frame stays owned here until its completion has been observed.
   bool write(std::vector<std::uint8_t> frame, ULONGLONG deadline) noexcept {
@@ -62,9 +66,10 @@ class Io final {
   State poll(DWORD& transferred) noexcept {
     if (!active_) return State::idle;
     if (GetOverlappedResult(pipe_, &overlapped_, &transferred, FALSE)) { active_ = false; return State::done; }
-    if (GetLastError() == ERROR_IO_INCOMPLETE) return State::pending;
+    const auto error = GetLastError();
+    if (error == ERROR_IO_INCOMPLETE) return State::pending;
     // Completed with an error, such as a departed client.
-    active_ = false; return State::failed;
+    error_ = error; active_ = false; return State::failed;
   }
   bool whole(DWORD transferred) const noexcept { return transferred == frame_.size(); }
   void cancel() noexcept {
@@ -74,13 +79,14 @@ class Io final {
   }
  private:
   bool begin(bool write, std::uint8_t* buffer, DWORD size, ULONGLONG deadline) noexcept {
+    error_ = ERROR_SUCCESS;
     overlapped_ = OVERLAPPED{}; overlapped_.hEvent = event_.get();
     const auto ok = write ? WriteFile(pipe_, buffer, size, nullptr, &overlapped_) : ReadFile(pipe_, buffer, size, nullptr, &overlapped_);
     // An immediate completion still signals the event and is reported by poll().
-    if (!ok && GetLastError() != ERROR_IO_PENDING) return false;
+    if (!ok) { const auto error = GetLastError(); if (error != ERROR_IO_PENDING) { error_ = error; return false; } }
     active_ = true; deadline_ = deadline; return true;
   }
-  HANDLE pipe_; Handle event_; OVERLAPPED overlapped_{}; std::vector<std::uint8_t> frame_; bool active_ = false; ULONGLONG deadline_ = 0;
+  HANDLE pipe_; Handle event_; OVERLAPPED overlapped_{}; std::vector<std::uint8_t> frame_; bool active_ = false; ULONGLONG deadline_ = 0; DWORD error_ = ERROR_SUCCESS;
 };
 std::uint64_t saturating_increment(std::uint64_t value) noexcept { return value == UINT64_MAX ? value : value + 1; }
 } // namespace
@@ -112,7 +118,10 @@ struct Server::Connection {
   void handle(const Message&, std::uint64_t received_ns);
   bool send();
   void poll_state();
-  bool write(Json wire) { return outbound.write(encode(std::move(wire), minor), GetTickCount64() + write_deadline_ms); }
+  bool write(Json wire) {
+    if (outbound.write(encode(std::move(wire), minor), GetTickCount64() + write_deadline_ms)) { server.close_reason("CONNECTION_EXCEPTION"); return true; }
+    server.close_reason("WRITE_FAILED", outbound.error()); return false;
+  }
   bool complete_write(ULONGLONG deadline);
   Outcome finish(EndReason, ULONGLONG deadline, ULONGLONG items_until);
   const window::Snapshot* window_now(window::Snapshot& storage) const noexcept;
@@ -135,13 +144,18 @@ struct Server::Connection {
 
 Server::Outcome Server::Connection::run() {
   // OD-5 S6: the inbound read is posted at once, so a client byte sent before the checkpoint is observed.
-  if (!inbound.read(input.data(), static_cast<DWORD>(input.size()))) return Outcome::reset;
+  if (!inbound.read(input.data(), static_cast<DWORD>(input.size()))) { server.close_reason("READ_FAILED", inbound.error()); return Outcome::reset; }
   // Caller sequence step 2: connect the store before the gate opens, so every record copied for this consumer is
   // retained. A live-only client never connects the store; its events become noDurableConsumer coverage (OD-4).
   if (durable) server.store_->connect();
+  server.close_diagnostic_.durable = durable;
   server.channel_->set_gate(durable ? Gate::durable : Gate::live); gate_open = true;
   try { return loop(); }
   catch (const Retire& retire) {
+    const auto* reason = server.close_diagnostic_.reason;
+    if (std::strcmp(reason, "WRITE_FAILED") && std::strcmp(reason, "WRITE_PARTIAL") && std::strcmp(reason, "WRITE_TIMEOUT"))
+      server.close_reason(retire.reason == EndReason::sequence_exhausted ? "SEQUENCE_EXHAUSTED" : retire.log ? "INVARIANT_VIOLATION" : "SOURCE_RETIRED");
+    server.close_diagnostic_.end = retire.reason == EndReason::sequence_exhausted ? "sequence-exhausted" : "source-retired";
     // An invariant violation or sequence exhaustion: `end` where the connection can carry it, then the endpoint retires.
     // A stop already requested keeps its 250 ms `end` budget.
     const auto now = GetTickCount64();
@@ -159,6 +173,7 @@ Server::Outcome Server::Connection::run() {
 Server::Outcome Server::Connection::loop() {
   for (;;) {
     if (server.stopped()) {
+      server.close_reason("SHUTDOWN"); server.close_diagnostic_.end = "plugin-shutdown";
 #ifdef ETS2TELEMETRY_TRANSPORT_TEST_HOOKS
       // Console tests hold the worker here, after its last loop drain and before the shutdown drain in finish().
       transport::transport_test_hook("v1-finish", nullptr, server.stop_event_.get());
@@ -167,12 +182,15 @@ Server::Outcome Server::Connection::loop() {
       return finish(EndReason::plugin_shutdown, requested + end_budget_ms, requested + end_items_ms);
     }
     // The inspected peer process is rechecked while connected: an exit or a reused PID ends the connection.
-    if (WaitForSingleObject(peer.process.get(), 0) != WAIT_TIMEOUT || transport::creation_time(peer.process.get()) != peer.creation) return Outcome::reset;
+    const auto peer_state = WaitForSingleObject(peer.process.get(), 0);
+    if (peer_state != WAIT_TIMEOUT) { server.close_reason(peer_state == WAIT_OBJECT_0 ? "PEER_EXITED" : "PEER_CHECK_FAILED", peer_state == WAIT_FAILED ? GetLastError() : ERROR_SUCCESS); return Outcome::reset; }
+    if (transport::creation_time(peer.process.get()) != peer.creation) { server.close_reason("PEER_CHANGED"); return Outcome::reset; }
     server.tick();
     DWORD transferred = 0; const auto state = outbound.poll(transferred);
     // One write in flight with a 1 s deadline; the destructor cancels it and observes its completion.
-    if (state == Io::State::failed || (state == Io::State::done && !outbound.whole(transferred))) return Outcome::reset;
-    if (state == Io::State::pending && GetTickCount64() >= outbound.deadline()) return Outcome::reset;
+    if (state == Io::State::failed) { server.close_reason("WRITE_FAILED", outbound.error()); return Outcome::reset; }
+    if (state == Io::State::done && !outbound.whole(transferred)) { server.close_reason("WRITE_PARTIAL"); return Outcome::reset; }
+    if (state == Io::State::pending && GetTickCount64() >= outbound.deadline()) { server.close_reason("WRITE_TIMEOUT"); return Outcome::reset; }
     server.write_pending_.store(state == Io::State::pending);
     if (!receive()) return Outcome::reset;
     // Writes that complete at once (the kernel buffer has room) continue the burst, up to 32 per iteration, so delivery
@@ -181,7 +199,8 @@ Server::Outcome Server::Connection::loop() {
       if (!send()) return Outcome::reset;
       if (!outbound.active()) break;
       const auto written = outbound.poll(transferred);
-      if (written == Io::State::failed || (written == Io::State::done && !outbound.whole(transferred))) return Outcome::reset;
+      if (written == Io::State::failed) { server.close_reason("WRITE_FAILED", outbound.error()); return Outcome::reset; }
+      if (written == Io::State::done && !outbound.whole(transferred)) { server.close_reason("WRITE_PARTIAL"); return Outcome::reset; }
     }
     HANDLE waits[]{server.stop_event_.get(), inbound.event(), outbound.event()};
     WaitForMultipleObjects(outbound.active() ? 3 : 2, waits, FALSE, static_cast<DWORD>(poll_ms));
@@ -192,27 +211,34 @@ bool Server::Connection::receive() {
   DWORD bytes = 0; const auto state = inbound.poll(bytes);
   if (state == Io::State::pending) return true;
   // EOF, a failed read and (OD-5 S6) any client byte before the checkpoint end the connection.
-  if (state != Io::State::done || !bytes || phase != Phase::live) return false;
+  if (state != Io::State::done) { server.close_reason("READ_FAILED", inbound.error()); return false; }
+  if (!bytes) { server.close_reason("CLIENT_EOF"); return false; }
+  if (phase != Phase::live) { server.close_reason("EARLY_CLIENT_DATA"); return false; }
   // The receipt time of a clock probe is taken when its read completion is observed.
   const auto received_ns = server.now_ns();
+  server.close_reason("CLIENT_PROTOCOL");
   decoder.push(input.data(), bytes, [&](Message m) { handle(m, received_ns); });
-  return inbound.read(input.data(), static_cast<DWORD>(input.size()));
+  server.close_reason("CONNECTION_EXCEPTION");
+  if (inbound.read(input.data(), static_cast<DWORD>(input.size()))) return true;
+  server.close_reason("READ_FAILED", inbound.error()); return false;
 }
 
 void Server::Connection::handle(const Message& m, std::uint64_t received_ns) {
   if (m.kind == "ack") {
+    server.close_reason("INVALID_ACK");
     // AckValidator rejects every ACK of a live-only client, a foreign session, an ACK beyond the written coverage and a
     // regression; receipt is never an ACK. An accepted ACK releases whole entries only (decision (c)).
     if (const auto through = validator.accept(m))
       if (!server.store_->release(*through)) throw Retire(EndReason::source_retired, true);
-    return;
+    server.close_reason("CLIENT_PROTOCOL"); return;
   }
   if (m.kind == "clock.probe") {
+    server.close_reason("INVALID_PROBE");
     // The producer-side probe check: after the checkpoint and at the connection minor (ET-050b B1).
     const auto id = validator.probe(m);
     // OD-5 S6: probe IDs strictly increase, and no probe may arrive while the reply to the previous one is unsent.
     if (id <= last_probe || probe) throw ProtocolError("v1-clock-probe");
-    last_probe = id; probe = std::make_pair(id, received_ns); return;
+    last_probe = id; probe = std::make_pair(id, received_ns); server.close_reason("CLIENT_PROTOCOL"); return;
   }
   // After the checkpoint the client sends only ack and clock.probe (OD-5 S6).
   throw ProtocolError("v1-client-message");
@@ -241,13 +267,17 @@ void Server::Connection::poll_state() {
 bool Server::Connection::send() {
   auto& store = *server.store_; const auto& encoder = *server.encoder_;
   if (phase == Phase::welcome) {
+    server.close_reason("ENCODING_FAILED");
+    server.close_diagnostic_.phase = "welcome"; server.close_diagnostic_.write = "welcome";
     auto info = server.welcome_; info.durable_events = durable;
     if (!write(encoder.welcome(server.next_seq(), capture.stamp(server.now_ns()), info, minor))) return false;
-    phase = Phase::checkpoint; return true;
+    phase = Phase::checkpoint; server.close_diagnostic_.phase = "checkpoint"; return true;
   }
   if (phase == Phase::checkpoint) {
     // OD-5 S6: a client byte that arrived before the checkpoint is issued ends the connection.
-    if (WaitForSingleObject(inbound.event(), 0) == WAIT_OBJECT_0) return false;
+    if (WaitForSingleObject(inbound.event(), 0) == WAIT_OBJECT_0) { server.close_reason("EARLY_CLIENT_DATA"); return false; }
+    server.close_diagnostic_.write = "checkpoint";
+    server.close_reason("ENCODING_FAILED");
     // One coherent copy of the v1 slot, the monitor's latest window and the store's status (OD-5 S11).
     if (!server.adapter_.read_v1_current(*pending) || pending->source_retired || pending->exhausted || !pending->active)
       throw Retire(EndReason::source_retired, false);
@@ -257,11 +287,13 @@ bool Server::Connection::send() {
     if (!write(encoder.checkpoint(server.next_seq(), capture.stamp(server.now_ns(), info.delivery.oldest_retained_ns.value_or(0)), pending->state, info, minor))) return false;
     validator.checkpoint(info.delivery.acked_through_event_seq);
     sent_boundary = pending->state.boundary_order; sent_window_revision = w ? w->revision : 0; sent_window_available = pending->state.window.available();
-    next_poll = next_snapshot = now + snapshot_interval_ms; phase = Phase::live;
+    next_poll = next_snapshot = now + snapshot_interval_ms; phase = Phase::live; server.close_diagnostic_.phase = "live";
     server.hydrations_.fetch_add(1); server.status_.store(ServerStatus::connected);
     return true;
   }
   if (probe) {
+    server.close_reason("ENCODING_FAILED");
+    server.close_diagnostic_.write = "clock-reply";
     // received <= sent <= capture: the send time is the encode time, which is the capture time.
     const auto sent = capture.stamp(server.now_ns(), probe->second);
     if (!write(encoder.clock_reply(server.next_seq(), sent, probe->first, probe->second, sent, minor))) return false;
@@ -270,6 +302,8 @@ bool Server::Connection::send() {
   poll_state();
   const auto now = GetTickCount64();
   if (has_pending && now >= next_snapshot) {
+    server.close_reason("ENCODING_FAILED");
+    server.close_diagnostic_.write = "snapshot";
     window::Snapshot storage; const auto* w = window_now(storage);
     pending->state.window = window_field(*pending, w, server.process_creation_, now);
     StatusInfo info; info.durable = durable; info.delivery = store.status(); info.continuity = continuity(*pending, server.coalesced_);
@@ -282,12 +316,13 @@ bool Server::Connection::send() {
   if (!durable) return true;
   const auto item = store.next_outbound();
   if (!item) return true;
+  server.close_diagnostic_.write = "event";
   std::vector<std::uint8_t> frame;
   try { frame = encode(encoder.outbound(server.next_seq(), capture.stamp(server.now_ns(), carried_ns(*item)), *item, minor), minor); }
   catch (const SequenceSpent&) { throw; }
   // A retained item that cannot be encoded would leave a hole in this connection's coverage.
   catch (...) { throw Retire(EndReason::source_retired, true); }
-  if (!outbound.write(std::move(frame), now + write_deadline_ms)) return false;
+  if (!outbound.write(std::move(frame), now + write_deadline_ms)) { server.close_reason("WRITE_FAILED", outbound.error()); return false; }
   validator.sent(item->last_event_seq());
   return true;
 }
@@ -296,13 +331,13 @@ bool Server::Connection::complete_write(ULONGLONG deadline) {
   for (;;) {
     DWORD transferred = 0; const auto state = outbound.poll(transferred);
     if (state == Io::State::idle) return true;
-    if (state == Io::State::done) return outbound.whole(transferred);
-    if (state == Io::State::failed) return false;
+    if (state == Io::State::done) { if (outbound.whole(transferred)) return true; server.close_reason("WRITE_PARTIAL"); return false; }
+    if (state == Io::State::failed) { server.close_reason("WRITE_FAILED", outbound.error()); return false; }
     // Once a stop is requested, the 250 ms `end` budget bounds every wait, also one that started before the request.
     auto limit = deadline;
     if (const auto requested = server.stop_requested_.load()) limit = (std::min)(limit, requested + end_budget_ms);
     const auto now = GetTickCount64();
-    if (now >= limit) { outbound.cancel(); return false; }
+    if (now >= limit) { server.close_reason("WRITE_TIMEOUT"); outbound.cancel(); return false; }
     WaitForSingleObject(outbound.event(), static_cast<DWORD>((std::min)(limit - now, poll_ms)));
   }
 }
@@ -333,15 +368,17 @@ Server::Outcome Server::Connection::finish(EndReason reason, ULONGLONG deadline,
         if (!item) break;
         std::vector<std::uint8_t> frame;
         try { frame = encode(encoder.outbound(server.next_seq(), capture.stamp(server.now_ns(), carried_ns(*item)), *item, minor), minor); } catch (...) { break; }
-        if (!outbound.write(std::move(frame), deadline)) return Outcome::reset;
+        server.close_diagnostic_.write = "event";
+        if (!outbound.write(std::move(frame), deadline)) { server.close_reason("WRITE_FAILED", outbound.error()); return Outcome::reset; }
         validator.sent(item->last_event_seq());
         if (!complete_write(deadline)) return Outcome::reset;
       }
     }
     auto end = encode(encoder.end(server.next_seq(), capture.stamp(server.now_ns()), reason, store.end_cursor(), minor), minor);
+    server.close_diagnostic_.write = "end";
     server.end_attempts_.fetch_add(1);
-    if (!outbound.write(std::move(end), deadline) || !complete_write(deadline))
-      return Outcome::reset;
+    if (!outbound.write(std::move(end), deadline)) { server.close_reason("WRITE_FAILED", outbound.error()); return Outcome::reset; }
+    if (!complete_write(deadline)) return Outcome::reset;
     ended = true; server.ends_.fetch_add(1);
     return Outcome::ended;
   }();
@@ -372,7 +409,7 @@ EventChannel* Server::prepare() noexcept {
     // A fresh store per plugin session: its coverage restarts at eventSeq 1 with the channel (§9).
     store_ = std::make_unique<EventStore>(); encoder_.reset();
     if (!channel_->prepare()) return nullptr;
-    seq_ = 0; coalesced_ = 0; exhausted_since_ = 0;
+    seq_ = 0; coalesced_ = 0; exhausted_since_ = 0; connections_ = 0; close_logs_ = 0;
     return channel_.get();
   } catch (...) { return nullptr; }
 }
@@ -484,10 +521,12 @@ void Server::tick() {
   }
 }
 
-bool Server::wait_io(HANDLE pipe, OVERLAPPED& operation, DWORD& transferred, ULONGLONG deadline) {
+bool Server::wait_io(HANDLE pipe, OVERLAPPED& operation, DWORD& transferred, ULONGLONG deadline, DWORD* failure) {
+  if (failure) *failure = ERROR_SUCCESS;
   for (;;) {
     if (GetOverlappedResult(pipe, &operation, &transferred, FALSE)) return true;
-    if (GetLastError() != ERROR_IO_INCOMPLETE) return false;
+    const auto error = GetLastError();
+    if (error != ERROR_IO_INCOMPLETE) { if (failure) *failure = error; return false; }
     if (stopped() || GetTickCount64() >= deadline) {
       CancelIoEx(pipe, &operation);
       // ERROR_NOT_FOUND can race completion: completion is observed before the OVERLAPPED or its buffer is released.
@@ -504,28 +543,36 @@ bool Server::wait_io(HANDLE pipe, OVERLAPPED& operation, DWORD& transferred, ULO
 Server::Outcome Server::serve(HANDLE pipe, const std::wstring& directory, const transport::OwnerSecurity& security, const transport::UserIdentity& user) {
   const auto hello_deadline = GetTickCount64() + limits.hello_timeout_ms;
   ULONG pid = 0;
-  if (!GetNamedPipeClientProcessId(pipe, &pid)) return Outcome::reset;
+  if (!GetNamedPipeClientProcessId(pipe, &pid)) { close_reason("PEER_CHECK_FAILED", GetLastError()); return Outcome::reset; }
   // The v0 connected-peer authority (§12): token user, Windows session and the protected v1 service policy. These reads
   // are the worker's only synchronous I/O that stop() cancels.
   transport::PeerIdentity peer; std::vector<transport::AllowedPeer> policy;
+  close_reason("PEER_REJECTED");
   {
     transport::CancelWindow::Scope window(cancel_window_);
     peer = transport::inspect_peer(pid, stop_event_.get());
     if (peer.sid != user.sid || peer.session != user.session) return Outcome::reset;
+    close_reason("POLICY_REJECTED");
     policy = transport::read_service_policy(directory, security, user, stop_event_.get());
   }
   bool allowed = false;
   for (const auto& candidate : policy) if (!_wcsicmp(candidate.image.c_str(), peer.image.c_str()) && candidate.sha256 == peer.sha256) allowed = true;
-  if (!allowed || GetTickCount64() >= hello_deadline) return Outcome::reset;
+  if (!allowed) return Outcome::reset;
+  if (GetTickCount64() >= hello_deadline) { close_reason("HELLO_TIMEOUT"); return Outcome::reset; }
+  close_diagnostic_.phase = "hello"; close_reason("HELLO_PROTOCOL");
   // The 4,096-byte client bound is enforced at the prefix, before a larger payload is retained. A byte beyond the hello
   // in the same read is a violation (OD-5 S6).
   std::array<std::uint8_t, limits.client_frame_bytes + 4> hello{}; std::size_t received = 0; std::uint32_t length = 0;
   while (!length || received < static_cast<std::size_t>(length) + 4) {
     Operation read; DWORD bytes = 0;
     const auto ok = ReadFile(pipe, hello.data() + received, static_cast<DWORD>(hello.size() - received), &bytes, &read.overlapped);
-    if (!ok && GetLastError() != ERROR_IO_PENDING) return Outcome::reset;
-    if (!ok && !wait_io(pipe, read.overlapped, bytes, hello_deadline)) return Outcome::reset;
-    if (!bytes) return Outcome::reset;
+    if (!ok) { const auto error = GetLastError(); if (error != ERROR_IO_PENDING) { close_reason("READ_FAILED", error); return Outcome::reset; } }
+    DWORD failure = ERROR_SUCCESS;
+    if (!ok && !wait_io(pipe, read.overlapped, bytes, hello_deadline, &failure)) {
+      // Preserve an actual completion error; cancellation on timeout/stop has no underlying I/O error to report.
+      close_reason(failure ? "READ_FAILED" : stopped() ? "SHUTDOWN" : "HELLO_TIMEOUT", failure); return Outcome::reset;
+    }
+    if (!bytes) { close_reason("CLIENT_EOF"); return Outcome::reset; }
     received += bytes;
     if (received >= 4) {
       length = static_cast<std::uint32_t>(hello[0]) | (static_cast<std::uint32_t>(hello[1]) << 8) | (static_cast<std::uint32_t>(hello[2]) << 16) | (static_cast<std::uint32_t>(hello[3]) << 24);
@@ -536,8 +583,31 @@ Server::Outcome Server::serve(HANDLE pipe, const std::wstring& directory, const 
   // is always version 1.0; its maxMinor selects the connection minor (ET-050b B1).
   const auto message = decode_payload(std::string(reinterpret_cast<const char*>(hello.data()) + 4, length), Sender::client);
   if (message.kind != "hello") return Outcome::reset;
-  Connection connection(*this, pipe, negotiate(message, true, endpoint_max_minor), std::move(peer));
+  const auto negotiated = negotiate(message, true, endpoint_max_minor);
+  close_diagnostic_.negotiated = true; close_diagnostic_.durable = negotiated.durable_events;
+  close_reason("CONNECTION_EXCEPTION");
+  Connection connection(*this, pipe, negotiated, std::move(peer));
   return connection.run();
+}
+
+void Server::close_reason(const char* reason, DWORD error) noexcept {
+  close_diagnostic_.reason = reason; close_diagnostic_.error = error;
+}
+void Server::report_close() noexcept {
+  // Fixed codes and numbers only; at most 256 lines per plugin session (96 KiB), with an independent 16-line SDK queue.
+  if (close_logs_ >= 256) { adapter_.connection_log_dropped(&close_overflow_log); return; }
+  ++close_logs_;
+  FILETIME time{}; GetSystemTimePreciseAsFileTime(&time);
+  const auto ticks = (static_cast<std::uint64_t>(time.dwHighDateTime) << 32) | time.dwLowDateTime;
+  const auto utc_ms = ticks >= 116444736000000000ULL ? (ticks - 116444736000000000ULL) / 10000 : 0;
+  sdk::ConnectionLogLine line;
+  const auto& d = close_diagnostic_;
+  const auto written = std::snprintf(line.text.data(), line.text.size(), ETS2TELEMETRY_GAME_LOG_PREFIX
+    " V1_CONNECTION_CLOSED reason=%s phase=%s write=%s end=%s win32=%lu durable=%s connection=%llu utcMs=%llu durationMs=%llu",
+    d.reason, d.phase, d.write, d.end, static_cast<unsigned long>(d.error), d.negotiated ? d.durable ? "1" : "0" : "unknown",
+    static_cast<unsigned long long>(connections_), static_cast<unsigned long long>(utc_ms), static_cast<unsigned long long>(GetTickCount64() - d.started));
+  if (written < 0 || static_cast<std::size_t>(written) >= line.text.size()) { adapter_.connection_log_dropped(&close_overflow_log); return; }
+  adapter_.defer_connection_log(line, &close_overflow_log);
 }
 
 void Server::run(std::wstring directory) noexcept {
@@ -565,9 +635,7 @@ void Server::run(std::wstring directory) noexcept {
       auto connected = ConnectNamedPipe(pipe.get(), &connect.overlapped);
       auto error = connected ? ERROR_SUCCESS : GetLastError();
       if (!connected && error == ERROR_IO_PENDING) {
-        connected = wait_io(pipe.get(), connect.overlapped, transferred, UINT64_MAX);
-        // The completion failure is saved before anything else can change last-error.
-        error = connected ? ERROR_SUCCESS : GetLastError();
+        connected = wait_io(pipe.get(), connect.overlapped, transferred, UINT64_MAX, &error);
       } else if (error == ERROR_PIPE_CONNECTED) connected = TRUE;
       if (!connected) {
         if (stopped()) break;
@@ -577,11 +645,16 @@ void Server::run(std::wstring directory) noexcept {
         continue;
       }
       if (stopped()) break;
+      ++connections_; close_diagnostic_ = {}; close_diagnostic_.started = GetTickCount64();
       auto outcome = Outcome::reset;
       try { outcome = serve(pipe.get(), directory, security, user); }
-      catch (const Retire&) { throw; }
-      catch (const SequenceSpent&) { throw; }
-      catch (...) { /* A rejected, malformed or failed client retires only its connection. */ }
+      catch (const Retire&) { report_close(); throw; }
+      catch (const SequenceSpent&) { close_reason("SEQUENCE_EXHAUSTED"); report_close(); throw; }
+      catch (...) {
+        // Cancellation during peer/policy inspection belongs to shutdown, not a source rejection.
+        if (stopped()) close_reason("SHUTDOWN");
+      }
+      report_close();
       // After `end` the handle is closed instead: DisconnectNamedPipe would discard bytes the client has not read yet.
       if (outcome == Outcome::ended || stopped()) break;
       if (!DisconnectNamedPipe(pipe.get()) && GetLastError() != ERROR_PIPE_NOT_CONNECTED) throw std::runtime_error("v1-endpoint-reset");

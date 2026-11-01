@@ -40,7 +40,7 @@ export interface DiagnosticBundleInput {
   plugins: PluginSetupView;
   live: {status: LiveTelemetry['status']; selection: SourceSelection};
   diagnosis: ConnectionDiagnosis;
-  logs: {main: DiagnosticLogText; service: DiagnosticLogText};
+  logs: {main: DiagnosticLogText; service: DiagnosticLogText; plugin?: DiagnosticLogText};
   /** Names that never appear in the bundle: the Windows user name and computer name, as the main process sees them. */
   identities: readonly (string | undefined)[];
 }
@@ -55,9 +55,9 @@ export interface DiagnosticBundle {
   bundledPlugin: PluginFileView | null;
   live: DiagnosticBundleInput['live'];
   diagnosis: ConnectionDiagnosis;
-  logs: {main: DiagnosticLogRow[]; service: DiagnosticLogRow[]};
+  logs: {main: DiagnosticLogRow[]; service: DiagnosticLogRow[]; plugin?: DiagnosticLogRow[]};
   /** Log rows left out: unreadable or invalid lines, rows beyond the row limit and the oldest rows dropped for the size bound. */
-  omittedLogRows: {main: number; service: number};
+  omittedLogRows: {main: number; service: number; plugin?: number};
 }
 
 const pathLike = (value: string) => PATH_LIKE.test(value);
@@ -142,18 +142,20 @@ const serialize = (bundle: DiagnosticBundle) => `${JSON.stringify(bundle, null, 
 export function buildDiagnosticBundle(input: DiagnosticBundleInput): string {
   const redact = nameRedactor(input.identities);
   const main = logRows(input.logs.main, redact), service = logRows(input.logs.service, redact);
-  const logs = {main: main.rows, service: service.rows};
-  const omitted = {main: main.omitted, service: service.omitted};
-  // The trim works on these two local arrays and rebuilds the document each time, so it never depends on its keys.
+  const plugin = input.logs.plugin ? logRows(input.logs.plugin, redact) : undefined;
+  const logs: Record<'main' | 'service' | 'plugin', DiagnosticLogRow[]> = {main: main.rows, service: service.rows, plugin: plugin?.rows ?? []};
+  const omitted = {main: main.omitted, service: service.omitted, plugin: plugin?.omitted ?? 0};
+  // Work only on these local arrays; a schema-like Windows user name cannot change their keys.
   const document = (): DiagnosticBundle => ({
     format: DIAGNOSTIC_BUNDLE_FORMAT, version: DIAGNOSTIC_BUNDLE_VERSION, createdUtc: new Date(input.createdMs).toISOString(),
     app: {...input.app, osRelease: redact(input.app.osRelease)}, health: input.health, settings: input.settings, plugins: input.plugins,
     bundledPlugin: input.plugins.bundled, live: input.live, diagnosis: input.diagnosis,
-    logs: {main: logs.main, service: logs.service}, omittedLogRows: {main: omitted.main, service: omitted.service}
+    logs: {main: logs.main, service: logs.service, ...(plugin ? {plugin: logs.plugin} : {})},
+    omittedLogRows: {main: omitted.main, service: omitted.service, ...(plugin ? {plugin: omitted.plugin} : {})}
   });
   let text = serialize(document());
   while (Buffer.byteLength(text, 'utf8') > DIAGNOSTIC_BUNDLE_MAX_BYTES) {
-    const longer: 'main' | 'service' = logs.main.length >= logs.service.length ? 'main' : 'service';
+    const longer = (['main', 'service', 'plugin'] as const).reduce((a, b) => logs[a].length >= logs[b].length ? a : b);
     const rows = logs[longer];
     if (!rows.length) throw new Error('DIAGNOSTIC_BUNDLE_TOO_LARGE');
     const drop = Math.max(1, Math.ceil(rows.length / 8));
@@ -181,9 +183,38 @@ export const readFileTail: ReadTail = async (file, maxBytes) => {
  * The main and service startup logs and their rotated `.1` files under the main log directory: `startup.jsonl[.1]` and
  * `service\startup.jsonl[.1]`, the tail of each at most DIAGNOSTIC_LOG_READ_BYTES.
  */
-export async function readDiagnosticLogs(logDirectory: string, readTail: ReadTail): Promise<DiagnosticBundleInput['logs']> {
+export async function readDiagnosticLogs(logDirectory: string, readTail: ReadTail, plugin?: {documents: string; staging: boolean}): Promise<DiagnosticBundleInput['logs']> {
   const read = (directory: string) => Promise.all([readTail(path.join(directory, 'startup.jsonl'), DIAGNOSTIC_LOG_READ_BYTES),
     readTail(path.join(directory, 'startup.jsonl.1'), DIAGNOSTIC_LOG_READ_BYTES)]).then(([current, previous]) => ({current, previous}));
-  const [main, service] = await Promise.all([read(logDirectory), read(path.join(logDirectory, 'service'))]);
-  return {main, service};
+  const [main, service, gameRows] = await Promise.all([read(logDirectory), read(path.join(logDirectory, 'service')), plugin ? readPluginCloseLogs(plugin, readTail) : undefined]);
+  return {main, service, ...(gameRows ? {plugin: {current: gameRows}} : {})};
+}
+
+const CLOSE_REASONS = new Set(['CONNECTION_EXCEPTION', 'WRITE_FAILED', 'WRITE_PARTIAL', 'WRITE_TIMEOUT', 'READ_FAILED', 'CLIENT_EOF',
+  'EARLY_CLIENT_DATA', 'CLIENT_PROTOCOL', 'INVALID_ACK', 'INVALID_PROBE', 'PEER_EXITED', 'PEER_CHECK_FAILED', 'PEER_CHANGED', 'SHUTDOWN',
+  'INVARIANT_VIOLATION', 'SOURCE_RETIRED', 'SEQUENCE_EXHAUSTED', 'PEER_REJECTED', 'POLICY_REJECTED', 'HELLO_TIMEOUT', 'HELLO_PROTOCOL', 'ENCODING_FAILED']);
+/** The game log contains arbitrary private text. Only this exact fixed-code grammar may enter a diagnostic bundle. */
+export function pluginCloseLogRow(line: string, game: 'ets2' | 'ats', staging: boolean): DiagnosticLogRow | undefined {
+  if (line.length > 512) return undefined;
+  const prefix = staging ? 'ETS2TelemetryStaging:' : 'ETS2Telemetry:';
+  // SCS may prepend a relative game-log timestamp and severity; anchor the entire project message to the line end.
+  const start = line.indexOf(`${prefix} V1_CONNECTION_CLOSED `);
+  if (start < 0) return undefined;
+  const match = /^V1_CONNECTION_CLOSED reason=([A-Z_]+) phase=(accept|hello|welcome|checkpoint|live) write=(none|welcome|checkpoint|clock-reply|snapshot|event|end) end=(none|plugin-shutdown|source-retired|sequence-exhausted) win32=(\d{1,10}) durable=(unknown|[01]) connection=(\d{1,20}) utcMs=(\d{1,16}) durationMs=(\d{1,20})$/.exec(line.slice(start + prefix.length + 1));
+  if (!match || !CLOSE_REASONS.has(match[1])) return undefined;
+  const [win32, connection, utcMs, durationMs] = [match[5], match[7], match[8], match[9]].map(Number);
+  if (![win32, connection, utcMs, durationMs].every(n => Number.isSafeInteger(n) && n >= 0) || win32 > 0xffffffff || connection === 0 || utcMs > 8_640_000_000_000_000) return undefined;
+  return {time: new Date(utcMs).toISOString(), event: 'PLUGIN_V1_CONNECTION_CLOSED', facts: {
+    game, reason: match[1], phase: match[2], write: match[3], end: match[4], win32, durable: match[6] === 'unknown' ? null : match[6] === '1', connection, durationMs
+  }};
+}
+
+async function readPluginCloseLogs(plugin: {documents: string; staging: boolean}, readTail: ReadTail): Promise<string | undefined> {
+  const rows = await Promise.all((['ets2', 'ats'] as const).map(async game => {
+    const directory = game === 'ets2' ? 'Euro Truck Simulator 2' : 'American Truck Simulator';
+    const text = await readTail(path.join(plugin.documents, directory, 'game.log.txt'), DIAGNOSTIC_LOG_READ_BYTES);
+    return (text ?? '').split(/\r?\n/).map(line => pluginCloseLogRow(line, game, plugin.staging)).filter((row): row is DiagnosticLogRow => row !== undefined);
+  }));
+  const combined = rows.flat().sort((a, b) => a.time.localeCompare(b.time));
+  return combined.length ? combined.map(row => JSON.stringify(row)).join('\n') : undefined;
 }

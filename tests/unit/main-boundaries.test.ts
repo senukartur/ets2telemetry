@@ -2664,7 +2664,7 @@ it('answers EXPORT_INTERRUPTED once the exit has begun, also for a dialog open a
   child.emit('exit', 0); await settle();
   expect(app.exit).toHaveBeenCalledExactlyOnceWith(0);
 });
-it('saves the redacted bundle of this application state and its startup logs, and answers saved without a path', async () => {
+it.each(['fixture', 'game', 'blocked'] as const)('saves the redacted bundle while waiting in %s mode, reading game logs only for real sources', async mode => {
   const root = await mkdtemp(path.join(os.tmpdir(), 'ets2telemetry-diagnostics-main-'));
   try {
     const local = path.join(root, 'local'), logs = path.join(local, 'ETS2Telemetry', 'logs'), target = path.join(root, 'out', 'diagnostics.json');
@@ -2673,10 +2673,18 @@ it('saves the redacted bundle of this application state and its startup logs, an
     await writeFile(path.join(logs, 'startup.jsonl'), `${JSON.stringify({time: '2026-10-17T08:30:00.000Z', pid: 1, event: 'PLUGIN_DISCOVERY', facts: {owner: user, library: 'D:\\SteamLibrary'}, detail: 'C:\\Users'})}\n`);
     await writeFile(path.join(logs, 'service', 'startup.jsonl'), `${JSON.stringify({time: '2026-10-17T08:30:01.000Z', pid: 2, event: 'SERVICE_READY'})}\n`);
     vi.stubEnv('LOCALAPPDATA', local); await ready();
+    if (mode === 'game') vi.stubEnv('ETS2TELEMETRY_SOURCE_KIND', 'ets2');
+    if (mode === 'blocked') vi.stubEnv('ETS2TELEMETRY_RECORDING', 'invalid');
+    const diagnostic = await import('../../apps/desktop/src/diagnostic-bundle');
+    const originalTail = diagnostic.readFileTail;
+    const tail = vi.spyOn(diagnostic, 'readFileTail').mockImplementation((file, max) => file.endsWith('game.log.txt')
+      ? Promise.resolve('ETS2TelemetryStaging: V1_CONNECTION_CLOSED reason=READ_FAILED phase=live write=snapshot end=none win32=109 durable=1 connection=1 utcMs=1792225800000 durationMs=10')
+      : originalTail(file, max));
     showSaveDialog.mockResolvedValueOnce({canceled: false, filePath: target});
     const answer = await diagnosticsCall(trusted());
     expect(answer).toEqual({outcome: 'saved'});
     const bundle = JSON.parse(await readFile(target, 'utf8')) as Record<string, unknown>;
+    expect(tail.mock.calls.filter(([file]) => file.endsWith('game.log.txt'))).toHaveLength(mode === 'game' ? 2 : 0);
     expect(bundle).toMatchObject({format: 'ets2telemetry.diagnostics', version: 1, app: {version: expect.any(String) as string, packaged: false,
       node: process.versions.node}, health: {service: 'ready', storage: 'verified'}, plugins: PLUGINS_DISABLED, bundledPlugin: null,
     // No live update arrived yet: main's last live state is the initial one, as the dashboard would show it.

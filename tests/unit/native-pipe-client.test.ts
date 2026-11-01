@@ -452,6 +452,14 @@ it('keeps diagnosed exit 1 after authority receipt final and non-transient', () 
   expect(diagnose).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({outcome: 'rejected', exitCode: 1, stage: 'retained-authority'}));
 });
 
+it.each(['retained-process', 'retained-identity', 'retained-pipe'])('keeps the precise retained-authority stage %s in the service diagnostic', stage => {
+  const diagnose = vi.fn(), f = fixture(diagnose);
+  f.child.output(relay(authority()));
+  f.child.stderr.write(`diag1 ${stage} 233 40 relay 30\n`);
+  f.child.emit('close', 3);
+  expect(diagnose).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({outcome: 'ended', exitCode: 3, stage, win32Error: 233}));
+});
+
 it.each([
   ['unreported', ''],
   ['diagnosed', 'diag1 discovery 5 40 policy-write 30\n']

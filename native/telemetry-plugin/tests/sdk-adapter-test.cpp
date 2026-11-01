@@ -252,6 +252,20 @@ void deferred_log() {
   std::thread([&] { adapter->defer_log(&second, DeferredLogSlot::transport_v1); adapter->defer_log(&first); }).join();
   host.frame_end();
   require(host.logs.size() == 4 && host.logs[2].second == "first" && host.logs[3].second == "second" && host.wrong_thread == 0, "both slots logged once, in slot order");
+  // A paused SDK caller may have no frames. Keep a bounded FIFO without worker-side logger calls, then drain it
+  // in bounded frame batches; shutdown drains the remainder and reports diagnostic-only overflow once.
+  host.logs.clear(); ConnectionLogLine line; line.text[0] = 'c';
+  std::thread([&] { for (unsigned i = 0; i < 24; ++i) adapter->defer_connection_log(line, &first); }).join();
+  require(host.logs.empty() && host.wrong_thread == 0, "connection diagnostics wait for the SDK caller");
+  host.frame_end();
+  require(host.logs.size() == 5, "at most four connection lines and one overflow warning per frame");
+  adapter->shutdown();
+  require(host.logs.size() == ConnectionLogQueue::capacity + 1 && host.wrong_thread == 0, "shutdown drains the bounded queue on the SDK thread");
+  unsigned rows = 0, warnings = 0; for (const auto& log : host.logs) { if (log.second == "c") ++rows; if (log.second == "first") ++warnings; }
+  require(rows == 16 && warnings == 1, "overflow loses diagnostic lines only, with one explicit warning");
+  host.logs.clear(); adapter->defer_connection_log(line, &first);
+  require(adapter->initialize(SCS_TELEMETRY_VERSION_1_01, &params) == SCS_RESULT_ok, "connection-log reinit");
+  host.frame_end(); require(host.logs.empty(), "a new plugin session cannot log old queued close reasons");
   adapter->shutdown();
 }
 void missing_game_time_reset() {

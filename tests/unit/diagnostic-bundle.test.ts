@@ -3,7 +3,7 @@ import path from 'node:path';
 import {afterEach, beforeEach, describe, expect, it} from 'vitest';
 import type {AppHealth, PluginSetupView, SettingsView} from '../../packages/contracts/src';
 import {
-  buildDiagnosticBundle, DIAGNOSTIC_BUNDLE_MAX_BYTES, DIAGNOSTIC_LOG_ROW_LIMIT, diagnosticLogRow, readDiagnosticLogs, readFileTail, REDACTED, type DiagnosticBundleInput
+  buildDiagnosticBundle, DIAGNOSTIC_BUNDLE_MAX_BYTES, DIAGNOSTIC_LOG_ROW_LIMIT, diagnosticLogRow, pluginCloseLogRow, readDiagnosticLogs, readFileTail, REDACTED, type DiagnosticBundleInput
 } from '../../apps/desktop/src/diagnostic-bundle';
 import {temporaryResources} from '../shared/resources';
 
@@ -36,7 +36,29 @@ function input(overrides: Partial<DiagnosticBundleInput> = {}): DiagnosticBundle
     ...overrides
   };
 }
-const parse = (text: string) => JSON.parse(text) as Record<string, unknown> & {logs: {main: unknown[]; service: unknown[]}; omittedLogRows: {main: number; service: number}};
+const parse = (text: string) => JSON.parse(text) as Record<string, unknown> & {logs: {main: unknown[]; service: unknown[]; plugin?: unknown[]}; omittedLogRows: {main: number; service: number; plugin?: number}};
+
+const closeLine = (fields = '') => `00:01:00.000 : ETS2TelemetryStaging: V1_CONNECTION_CLOSED reason=WRITE_TIMEOUT phase=live write=snapshot end=none win32=0 durable=1 connection=2 utcMs=1792225800000 durationMs=60000${fields}`;
+describe('plugin close diagnostics (REG-010, REG-011)', () => {
+  it('accepts only fixed close facts and uses the worker-captured UTC, not the delayed SDK log timestamp', () => {
+    expect(pluginCloseLogRow(closeLine(), 'ets2', true)).toEqual({time: '2026-10-17T08:30:00.000Z', event: 'PLUGIN_V1_CONNECTION_CLOSED',
+      facts: {game: 'ets2', reason: 'WRITE_TIMEOUT', phase: 'live', write: 'snapshot', end: 'none', win32: 0, durable: true, connection: 2, durationMs: 60000}});
+    expect(pluginCloseLogRow(closeLine().replace('win32=0', 'win32=233').replace('WRITE_TIMEOUT', 'WRITE_FAILED'), 'ats', true)?.facts)
+      .toMatchObject({game: 'ats', reason: 'WRITE_FAILED', win32: 233});
+    expect(pluginCloseLogRow(closeLine().replace('durable=1', 'durable=unknown'), 'ets2', true)?.facts?.durable).toBeNull();
+  });
+  it.each([
+    closeLine(' payload=C:\\Users\\Private\\save.sii'), closeLine(' cargo=PRIVATE_CARGO'), closeLine().replace('WRITE_TIMEOUT', 'PRIVATE_REASON'),
+    closeLine().replace('connection=2', 'connection=18446744073709551615'), closeLine().replace('win32=0', 'win32=4294967296'),
+    closeLine().replace('utcMs=1792225800000', 'utcMs=8640000000000001'), closeLine().replace('phase=live', 'phase=private'), 'private chat or profile line'
+  ])('drops unrelated, malformed or payload-bearing game log content: %s', value => {
+    expect(pluginCloseLogRow(value, 'ets2', true)).toBeUndefined();
+  });
+  it('keeps the two build channels separate', () => {
+    expect(pluginCloseLogRow(closeLine(), 'ets2', false)).toBeUndefined();
+    expect(pluginCloseLogRow(closeLine().replace('ETS2TelemetryStaging:', 'ETS2Telemetry:'), 'ets2', true)).toBeUndefined();
+  });
+});
 
 describe('the format', () => {
   it('is one JSON document with the versions, the views, the live status, the diagnosis and the reduced log rows', () => {
@@ -140,13 +162,15 @@ describe('the 2 MiB bound', () => {
   it('leaves out the oldest rows of the longer log until the bundle fits, and counts them', () => {
     // About 1.1 KB per row: 4000 kept rows are about twice the bound.
     const big = (prefix: string, count: number) => Array.from({length: count}, (_, index) => line({time: '2026-10-17T08:30:00.000Z', event: 'ROW', facts: {n: index, a: `${prefix}${'x'.repeat(240)}`, b: 'y'.repeat(250), c: 'z'.repeat(250), d: 'w'.repeat(250)}})).join('\n');
-    const text = buildDiagnosticBundle(input({logs: {main: {previous: big('a', 2000), current: big('b', 2000)}, service: {previous: big('c', 2000), current: big('d', 2000)}}}));
+    const text = buildDiagnosticBundle(input({logs: {main: {previous: big('a', 2000), current: big('b', 2000)}, service: {previous: big('c', 2000), current: big('d', 2000)}, plugin: {current: big('e', 2000)}}}));
     expect(Buffer.byteLength(text, 'utf8')).toBeLessThanOrEqual(DIAGNOSTIC_BUNDLE_MAX_BYTES);
     const bundle = parse(text);
     // Each log first keeps its last 2000 rows (the current files), then the oldest of those go for the size bound.
     expect(bundle.omittedLogRows.main).toBeGreaterThan(2000);
     expect(bundle.omittedLogRows.main + bundle.logs.main.length).toBe(4000);
     expect(bundle.omittedLogRows.service + bundle.logs.service.length).toBe(4000);
+    expect(bundle.omittedLogRows.plugin! + bundle.logs.plugin!.length).toBe(2000);
+    expect(bundle.omittedLogRows.plugin).toBeGreaterThan(0);
     expect((bundle.logs.main.at(-1) as {facts: {n: number}}).facts.n).toBe(1999);
     expect((bundle.logs.service.at(-1) as {facts: {n: number}}).facts.n).toBe(1999);
   });
@@ -162,6 +186,18 @@ describe('reading the logs', () => {
   let resources: Awaited<ReturnType<typeof temporaryResources>>;
   beforeEach(async () => { resources = await temporaryResources(); });
   afterEach(async () => { await resources.dispose(); });
+  it('adds only sanitized plugin lines from the bounded fixed game-log tails, with optional bundle fields', async () => {
+    const reads: [string, number][] = [];
+    const logs = await readDiagnosticLogs('logs', (file, max) => {
+      reads.push([file, max]);
+      return Promise.resolve(file.includes('Euro Truck Simulator 2') ? `PRIVATE PROFILE\n${closeLine()}\nPRIVATE CARGO\n` : undefined);
+    }, {documents: 'documents', staging: true});
+    expect(reads).toContainEqual([path.join('documents', 'Euro Truck Simulator 2', 'game.log.txt'), 256 * 1024]);
+    expect(reads).toContainEqual([path.join('documents', 'American Truck Simulator', 'game.log.txt'), 256 * 1024]);
+    const result = JSON.parse(buildDiagnosticBundle(input({logs}))) as {logs: {plugin: unknown[]}};
+    expect(result.logs.plugin).toEqual([pluginCloseLogRow(closeLine(), 'ets2', true)]);
+    expect(JSON.stringify(result)).not.toMatch(/PRIVATE|PROFILE|CARGO/);
+  });
   it('reads startup.jsonl[.1] and service\\startup.jsonl[.1] of the log directory, and a missing file as absent', async () => {
     const logs = path.join(resources.directory, 'logs');
     await mkdir(path.join(logs, 'service'), {recursive: true});

@@ -192,9 +192,16 @@ function runApplication(profileError: unknown): void {
       : Promise.resolve({canceled: true}),
     build: async () => {
       const state = appState();
+      let pluginLogs: {documents: string; staging: boolean} | undefined;
+      // Fixture exports never read real game files; a missing Documents path must not fail the whole bundle.
+      // Use the selected mode so evidence is still available after a disconnect clears the live observation.
+      if (resolveSourceMode(lastLive.selection, process.env).kind === 'game') {
+        try { pluginLogs = {documents: app.getPath('documents'), staging: CHANNEL.channel === 'staging'}; } catch { /* Optional evidence. */ }
+      }
       return buildDiagnosticBundle({createdMs: Date.now(), app: {version, electron: process.versions.electron, node: process.versions.node, packaged: app.isPackaged, osRelease: os.release()},
         health: state.health, settings: state.settings, plugins: state.plugins, live: {status: lastLive.status, selection: lastLive.selection},
-        diagnosis: connectionDiagnosis(state.plugins, lastLive.status, lastLive.selection, state.health), logs: await log.flush(BUNDLE_FLUSH_MS).then(() => readDiagnosticLogs(logLocation.directory, readFileTail)),
+        diagnosis: connectionDiagnosis(state.plugins, lastLive.status, lastLive.selection, state.health), logs: await log.flush(BUNDLE_FLUSH_MS).then(() => readDiagnosticLogs(logLocation.directory, readFileTail,
+          pluginLogs)),
         identities: diagnosticIdentities()});
     }});
   // ET-017 (P13-P16): silent plugin setup. The mode gate is decided once from the launch environment (P15); the disabled

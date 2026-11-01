@@ -33,7 +33,7 @@ export function v1BrokerConfiguration(configuration: BrokerConfiguration | undef
 /** Fixed broker stage names. Any other diagnostic text is reported only as unrecognized. */
 const BROKER_STAGES = new Set(['arguments', 'identity', 'directory', 'own-image', 'policy-lock', 'policy-image', 'policy-existing', 'policy-json', 'policy-current', 'policy-write',
   'policy-publish', 'discovery', 'server-process', 'server-image', 'connected-peer', 'authority-receipt', 'hello', 'relay', 'retained-authority', 'wire-frame', 'wire-payload',
-  'client-frame', 'client-write']);
+  'client-frame', 'client-write', 'retained-process', 'retained-identity', 'retained-pipe']);
 const DIAGNOSTIC_TAIL_BYTES = 256;
 const DIAGNOSTIC_LINE = /diag1 ([a-z-]{1,24}) (\d{1,10}) (\d{1,10}) ([a-z-]{1,24}) (\d{1,10})\r?\n$/;
 /** Protocol v1 control-stream tags (docs/telemetry-service-v0.md, Protocol v1 mode). */
