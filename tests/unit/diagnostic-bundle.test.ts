@@ -199,6 +199,14 @@ describe('reading the logs', () => {
   let resources: Awaited<ReturnType<typeof temporaryResources>>;
   beforeEach(async () => { resources = await temporaryResources(); });
   afterEach(async () => { await resources.dispose(); });
+  it('keeps per-game read success independently of recognized lines without exporting private game text or reader metadata', async () => {
+    const logs = await readDiagnosticLogs('logs', file => Promise.resolve(file.includes('Euro Truck Simulator 2') ? 'PRIVATE ordinary game log\n' : undefined), {documents: 'documents', staging: true});
+    expect(logs.plugin).toBeUndefined(); expect(logs.pluginRead).toEqual({ets2: true, ats: false});
+    const text = buildDiagnosticBundle(input({logs}));
+    expect(text).not.toMatch(/PRIVATE|pluginRead/);
+    const empty = await readDiagnosticLogs('logs', file => Promise.resolve(file.includes('Euro Truck Simulator 2') ? '' : undefined), {documents: 'documents', staging: true});
+    expect(empty.pluginRead).toEqual({ets2: true, ats: false});
+  });
   it('adds only sanitized plugin lines from the bounded fixed game-log tails, with optional bundle fields', async () => {
     const reads: [string, number][] = [];
     const logs = await readDiagnosticLogs('logs', (file, max) => {

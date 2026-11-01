@@ -79,7 +79,7 @@ describe('trip-scoped connection diagnostics (REG-011, REG-014)', () => {
     const output = collectTripDiagnostics(history, now, {main: {}, plugin: {current: lines(plugin(), plugin(start - 1), plugin(now + 1), plugin(start + 1, foreign), plugin(start + 1, SESSION, 'ats'))},
       service: {previous: lines(broker(), broker(start - 1), broker(now + 1), broker(start + 1, foreign)), current: lines(broker())}});
     expect(output.status).toBe('records-found'); expect(output.records.map(row => row.event)).toEqual(['PLUGIN_V1_CONNECTION_CLOSED', 'NATIVE_BROKER_V1_EXIT']);
-    expect(output.records[1].facts).toEqual({game: 'ets2', pluginSessionId: SESSION, outcome: 'ended', exitCode: 3, serviceMs: 1100, stage: 'retained-pipe', win32Error: 233, elapsedMs: 1090, slowStage: 'relay', slowMs: 1000});
+    expect(output.records[1].facts).toEqual({game: 'ets2', pluginSessionId: SESSION, outcome: 'ended', exitCode: 3, serviceMs: 1100, stage: 'retained-pipe', win32Error: 233, elapsedMs: 1090, slowStage: 'relay', slowMs: 1000, repeats: null});
     expect(JSON.stringify(output)).not.toMatch(/PRIVATE|cargo|Users|detail/);
     const s = new TripExportSerializer(history, {...HEADER, exportedUtcMs: now, database: {...HEADER.database, purpose: 'history'}, sessionOrigin: 'game'}, output);
     expect(tripExportProblems(JSON.parse(s.begin() + s.rows('intervals', [INTERVAL as unknown as JournalInterval]) + s.rows('samples', [SAMPLE as unknown as JournalSample]) + s.end()))).toEqual([]);
@@ -89,6 +89,28 @@ describe('trip-scoped connection diagnostics (REG-011, REG-014)', () => {
       plugin: {current: lines(plugin(start + 1000, '10000000-0000-4000-8000-000000000099'))}});
     expect(output.records.map(row => row.event)).toEqual(['NATIVE_BROKER_V1_EXIT']);
     expect(output.notes).toContain('LOGS_MAY_BE_INCOMPLETE');
+  });
+  it('keeps the disconnect observed after a restart-closed trip lower-bound end, within a marked 60-second tail', () => {
+    const closed = {...history, trip: {...history.trip, outcome: 'none' as const, closeReason: 'restart' as const, endedUtcMs: start + 500}};
+    const output = collectTripDiagnostics(closed, start + 100_000, {main: {}, service: {current: lines(broker(start + 43_000))},
+      plugin: {current: lines(plugin(start + 1000), plugin(start + 60_500), plugin(start + 60_501), plugin(start + 1000, '10000000-0000-4000-8000-000000000099'))}});
+    expect(output.records.map(row => Date.parse(row.time))).toEqual([start + 1000, start + 43_000, start + 60_500]);
+    expect(output.notes).toContain('RESTART_CLOSE_CONTEXT'); expect(closed.trip.endedUtcMs).toBe(start + 500);
+    const beforeGraceEnd = collectTripDiagnostics(closed, start + 2000, {main: {}, service: {current: lines(broker(start + 2001))}, plugin: {current: lines(plugin(start + 1000))}});
+    expect(beforeGraceEnd.records.map(row => Date.parse(row.time))).toEqual([start + 1000]);
+  });
+  it('distinguishes a readable empty game log from unavailable evidence, using only the trip game availability', () => {
+    const readable = collectTripDiagnostics(history, now, {main: {}, service: {}, pluginRead: {ets2: true, ats: false}});
+    expect(readable.status).toBe('no-matching-records'); expect(readable.notes).not.toContain('GAME_LOG_UNAVAILABLE');
+    const missing = collectTripDiagnostics(history, now, {main: {}, service: {}, pluginRead: {ets2: false, ats: true}});
+    expect(missing.status).toBe('unavailable'); expect(missing.notes).toContain('GAME_LOG_UNAVAILABLE');
+  });
+  it('preserves cumulative coalescing counts, marks legacy counts unknown and rejects invalid counts', () => {
+    const output = collectTripDiagnostics(history, now, {main: {}, service: {current: lines(...[1, 2, 4, 8, 16, 32].map((repeats, i) => {
+      const row = broker(start + i); return {...row, facts: {...row.facts, repeats}};
+    }), ...[0, -1, 1.5, Number.MAX_SAFE_INTEGER + 1, 'PRIVATE'].map(repeats => ({...broker(), facts: {...broker().facts, repeats}})))}});
+    expect(output.records.map(row => row.facts.repeats)).toEqual([1, 2, 4, 8, 16, 32]);
+    expect(collectTripDiagnostics(history, now, {main: {}, service: {current: lines(broker())}}).records[0].facts.repeats).toBeNull();
   });
   it('uses the terminal trip time rather than export time and refuses unavailable identity or malformed diagnostics', () => {
     const legacy = {...plugin(), facts: {...plugin().facts}}; delete legacy.facts.pluginSessionId;

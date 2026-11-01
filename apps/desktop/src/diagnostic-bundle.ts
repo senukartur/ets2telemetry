@@ -40,7 +40,9 @@ export interface DiagnosticBundleInput {
   plugins: PluginSetupView;
   live: {status: LiveTelemetry['status']; selection: SourceSelection};
   diagnosis: ConnectionDiagnosis;
-  logs: {main: DiagnosticLogText; service: DiagnosticLogText; plugin?: DiagnosticLogText};
+  logs: {main: DiagnosticLogText; service: DiagnosticLogText; plugin?: DiagnosticLogText;
+    /** Reader-only availability, distinct from finding recognized rows; never serialized into the bundle. */
+    pluginRead?: Readonly<Record<'ets2' | 'ats', boolean>>};
   /** Names that never appear in the bundle: the Windows user name and computer name, as the main process sees them. */
   identities: readonly (string | undefined)[];
 }
@@ -187,7 +189,7 @@ export async function readDiagnosticLogs(logDirectory: string, readTail: ReadTai
   const read = (directory: string) => Promise.all([readTail(path.join(directory, 'startup.jsonl'), DIAGNOSTIC_LOG_READ_BYTES),
     readTail(path.join(directory, 'startup.jsonl.1'), DIAGNOSTIC_LOG_READ_BYTES)]).then(([current, previous]) => ({current, previous}));
   const [main, service, gameRows] = await Promise.all([read(logDirectory), read(path.join(logDirectory, 'service')), plugin ? readPluginCloseLogs(plugin, readTail) : undefined]);
-  return {main, service, ...(gameRows ? {plugin: {current: gameRows}} : {})};
+  return {main, service, ...(gameRows ? {pluginRead: gameRows.read, ...(gameRows.current ? {plugin: {current: gameRows.current}} : {})} : {})};
 }
 
 const CLOSE_REASONS = new Set(['CONNECTION_EXCEPTION', 'WRITE_FAILED', 'WRITE_PARTIAL', 'WRITE_TIMEOUT', 'READ_FAILED', 'CLIENT_EOF',
@@ -210,12 +212,13 @@ export function pluginCloseLogRow(line: string, game: 'ets2' | 'ats', staging: b
   }};
 }
 
-async function readPluginCloseLogs(plugin: {documents: string; staging: boolean}, readTail: ReadTail): Promise<string | undefined> {
+async function readPluginCloseLogs(plugin: {documents: string; staging: boolean}, readTail: ReadTail): Promise<{current: string; read: Record<'ets2' | 'ats', boolean>}> {
   const rows = await Promise.all((['ets2', 'ats'] as const).map(async game => {
     const directory = game === 'ets2' ? 'Euro Truck Simulator 2' : 'American Truck Simulator';
     const text = await readTail(path.join(plugin.documents, directory, 'game.log.txt'), DIAGNOSTIC_LOG_READ_BYTES);
-    return (text ?? '').split(/\r?\n/).map(line => pluginCloseLogRow(line, game, plugin.staging)).filter((row): row is DiagnosticLogRow => row !== undefined);
+    return {game, readable: text !== undefined,
+      rows: (text ?? '').split(/\r?\n/).map(line => pluginCloseLogRow(line, game, plugin.staging)).filter((row): row is DiagnosticLogRow => row !== undefined)};
   }));
-  const combined = rows.flat().sort((a, b) => a.time.localeCompare(b.time));
-  return combined.length ? combined.map(row => JSON.stringify(row)).join('\n') : undefined;
+  const combined = rows.flatMap(game => game.rows).sort((a, b) => a.time.localeCompare(b.time));
+  return {current: combined.map(row => JSON.stringify(row)).join('\n'), read: {ets2: rows[0].readable, ats: rows[1].readable}};
 }

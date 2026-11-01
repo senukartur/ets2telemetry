@@ -4,6 +4,9 @@ import type {JournalTripDetail, TripExportDiagnosticRecord, TripExportDiagnostic
 import {diagnosticLogRow, pluginCloseLogRow, type DiagnosticBundleInput, type DiagnosticLogRow} from './diagnostic-bundle';
 
 export const TRIP_DIAGNOSTIC_RECORD_LIMIT = 256;
+// A restart closes at the last observation, before the pipe failure is observed. Keep a bounded diagnostic tail only;
+// never extend the recorded trip itself or include the new plugin session. Long unobserved pauses remain a limitation.
+export const RESTART_CLOSE_DIAGNOSTIC_GRACE_MS = 60_000;
 export function emptyTripDiagnostics(detail: JournalTripDetail): TripExportDiagnostics {
   return {collection: 'retained-logs-at-export', matchedBy: 'plugin-session-and-utc-window',
     status: detail.database.purpose === 'history' ? 'unavailable' : 'not-applicable', notes: [], records: []};
@@ -20,8 +23,9 @@ function brokerRow(row: DiagnosticLogRow): DiagnosticLogRow | undefined {
   if (!(f.exitCode === null || (typeof f.exitCode === 'number' && Number.isInteger(f.exitCode) && f.exitCode >= -0x80000000 && f.exitCode <= 0xffffffff))) return undefined;
   for (const key of ['serviceMs', 'elapsedMs', 'slowMs', 'win32Error'] as const) if (!(f[key] === null || safeInteger(f[key]))) return undefined;
   if (!safeInteger(f.serviceMs) || (typeof f.win32Error === 'number' && f.win32Error > 0xffffffff)) return undefined;
+  if (f.repeats !== undefined && (!safeInteger(f.repeats) || f.repeats === 0)) return undefined;
   const facts: NonNullable<DiagnosticLogRow['facts']> = Object.fromEntries(['game', 'pluginSessionId', 'outcome', 'exitCode', 'serviceMs', 'stage', 'win32Error', 'elapsedMs', 'slowStage', 'slowMs'].map(key => [key, f[key]]));
-  return {time: row.time, event: row.event, facts};
+  return {time: row.time, event: row.event, facts: {...facts, repeats: f.repeats ?? null}};
 }
 
 /** Revalidates a normalized plugin row through the native grammar before copying its facts. */
@@ -36,11 +40,15 @@ function pluginRow(row: DiagnosticLogRow): DiagnosticLogRow | undefined {
 export function collectTripDiagnostics(detail: JournalTripDetail, exportedUtcMs: number, logs: DiagnosticBundleInput['logs']): TripExportDiagnostics {
   const result = emptyTripDiagnostics(detail);
   if (result.status === 'not-applicable') return result;
-  const start = detail.trip.startedUtcMs, end = Math.min(detail.trip.endedUtcMs ?? exportedUtcMs, exportedUtcMs);
+  const start = detail.trip.startedUtcMs, terminal = detail.trip.endedUtcMs ?? exportedUtcMs;
   result.notes.push('LOGS_MAY_BE_INCOMPLETE');
-  if (!safeInteger(start) || !safeInteger(end) || end < start) { result.notes.push('INVALID_TIME_WINDOW'); return result; }
-  if (!logs.plugin) result.notes.push('GAME_LOG_UNAVAILABLE');
-  if (logs.service.current === undefined && logs.service.previous === undefined) result.notes.push('SERVICE_LOG_UNAVAILABLE');
+  if (!safeInteger(start) || !safeInteger(terminal) || !safeInteger(exportedUtcMs) || terminal < start || exportedUtcMs < start) { result.notes.push('INVALID_TIME_WINDOW'); return result; }
+  const restart = detail.trip.closeReason === 'restart' && detail.trip.endedUtcMs !== null;
+  const end = Math.min(terminal + (restart ? RESTART_CLOSE_DIAGNOSTIC_GRACE_MS : 0), exportedUtcMs);
+  const gameReadable = logs.pluginRead?.[detail.trip.game] ?? Boolean(logs.plugin);
+  const serviceReadable = logs.service.current !== undefined || logs.service.previous !== undefined;
+  if (!gameReadable) result.notes.push('GAME_LOG_UNAVAILABLE');
+  if (!serviceReadable) result.notes.push('SERVICE_LOG_UNAVAILABLE');
   const records: TripExportDiagnosticRecord[] = [], seen = new Set<string>();
   // Files have already been bounded to 256 KiB each by readDiagnosticLogs. Only relevant sanitized records count.
   for (const [kind, text] of [['plugin', logs.plugin], ['broker', logs.service]] as const) {
@@ -61,6 +69,7 @@ export function collectTripDiagnostics(detail: JournalTripDetail, exportedUtcMs:
   records.sort((a, b) => a.time.localeCompare(b.time));
   if (records.length > TRIP_DIAGNOSTIC_RECORD_LIMIT) result.notes.push('RECORD_LIMIT');
   result.records = records.slice(-TRIP_DIAGNOSTIC_RECORD_LIMIT);
-  result.status = result.records.length ? 'records-found' : !logs.plugin && logs.service.current === undefined && logs.service.previous === undefined ? 'unavailable' : 'no-matching-records';
+  if (restart && result.records.some(row => Date.parse(row.time) > terminal)) result.notes.push('RESTART_CLOSE_CONTEXT');
+  result.status = result.records.length ? 'records-found' : !gameReadable && !serviceReadable ? 'unavailable' : 'no-matching-records';
   return result;
 }

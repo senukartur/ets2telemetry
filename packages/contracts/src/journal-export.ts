@@ -60,7 +60,7 @@ export interface TripExportDiagnostics {
   collection: 'retained-logs-at-export';
   matchedBy: 'plugin-session-and-utc-window';
   status: 'records-found' | 'no-matching-records' | 'unavailable' | 'not-applicable';
-  notes: ('LOGS_MAY_BE_INCOMPLETE' | 'GAME_LOG_UNAVAILABLE' | 'SERVICE_LOG_UNAVAILABLE' | 'RECORD_LIMIT' | 'COLLECTION_FAILED' | 'SOURCE_MODE_ISOLATED' | 'INVALID_TIME_WINDOW')[];
+  notes: ('LOGS_MAY_BE_INCOMPLETE' | 'GAME_LOG_UNAVAILABLE' | 'SERVICE_LOG_UNAVAILABLE' | 'RECORD_LIMIT' | 'COLLECTION_FAILED' | 'SOURCE_MODE_ISOLATED' | 'INVALID_TIME_WINDOW' | 'RESTART_CLOSE_CONTEXT')[];
   records: TripExportDiagnosticRecord[];
 }
 export interface TripExportDiagnosticRecord {

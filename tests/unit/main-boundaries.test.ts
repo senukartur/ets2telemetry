@@ -13,6 +13,7 @@ import {APP_VERSION} from '../../apps/desktop/src/app-version';
 import {initialLive} from '../../apps/desktop/src/live-state';
 import {v1Projection, type V1Options} from '../shared/live-v1-fixtures';
 import {changed, DETAIL, LIST_ITEM, TRIP, TRIP_PAGE} from '../shared/journal-replies';
+import type {JournalExporterOptions} from '../../apps/desktop/src/journal-export-writer';
 
 const processEvents = ['uncaughtException', 'unhandledRejection'] as const;
 const processEmitter: EventEmitter = process;
@@ -40,7 +41,7 @@ let showMessageBox: ReturnType<typeof vi.fn<(...args: unknown[]) => Promise<{res
 let shell: {showItemInFolder: ReturnType<typeof vi.fn<(file: string) => void>>; openPath: ReturnType<typeof vi.fn<(folder: string) => Promise<string>>>};
 let channels: {port1: EventEmitter & {postMessage: ReturnType<typeof vi.fn>; close: ReturnType<typeof vi.fn<() => void>>; start: ReturnType<typeof vi.fn<() => void>>}; port2: {close: ReturnType<typeof vi.fn<() => void>>}}[];
 let configurations: Electron.BrowserWindowConstructorOptions[];
-let log: ReturnType<typeof vi.fn> & {flush: ReturnType<typeof vi.fn>; finalize: ReturnType<typeof vi.fn>; enterTerminalMode: ReturnType<typeof vi.fn>};
+let log: ReturnType<typeof vi.fn> & {flush: ReturnType<typeof vi.fn<(timeoutMs: number) => Promise<boolean>>>; finalize: ReturnType<typeof vi.fn>; enterTerminalMode: ReturnType<typeof vi.fn>};
 // Log location fix: the arguments of every createDiagnostics call and of every service fork.
 let diagnosticsCalls: unknown[][], forkCalls: unknown[][];
 // ET-011a fixture additions. The tray is unavailable unless a test enables it, so earlier tests keep their
@@ -175,7 +176,7 @@ function installFixture() {
       showMessageBox: (...args: unknown[]) => showMessageBox(...args)},
     shell: {showItemInFolder: (file: string) => shell.showItemInFolder(file), openPath: (folder: string) => shell.openPath(folder)}}));
   vi.doMock('../../apps/desktop/src/entrypoints', () => ({processEntrypoint: () => 'package.json'}));
-  log = Object.assign(vi.fn(), {flush: vi.fn(() => Promise.resolve(true)), settle: vi.fn<(timeoutMs: number) => Promise<void>>(() => Promise.resolve()), finalize: vi.fn<(timeoutMs: number) => Promise<void>>(() => Promise.resolve()), drainSync: vi.fn(), enterTerminalMode: vi.fn()}); diagnosticsCalls = [];
+  log = Object.assign(vi.fn(), {flush: vi.fn<(timeoutMs: number) => Promise<boolean>>(() => Promise.resolve(true)), settle: vi.fn<(timeoutMs: number) => Promise<void>>(() => Promise.resolve()), finalize: vi.fn<(timeoutMs: number) => Promise<void>>(() => Promise.resolve()), drainSync: vi.fn(), enterTerminalMode: vi.fn()}); diagnosticsCalls = [];
   vi.doMock('../../apps/desktop/src/diagnostics', async importOriginal => ({...await importOriginal<typeof import('../../apps/desktop/src/diagnostics')>(),
     createDiagnostics: (...args: unknown[]) => {diagnosticsCalls.push(args); return log;}}));
   vi.doMock('../../apps/desktop/src/broker-artifact', () => ({brokerConfiguration: resolveBroker, createBrokerResolver: () => resolveBroker}));
@@ -210,7 +211,7 @@ async function removeFixture() {
   vi.clearAllTimers(); vi.restoreAllMocks(); vi.useRealTimers(); vi.unstubAllEnvs();
   for (const name of ['electron', '../../apps/desktop/src/entrypoints', '../../apps/desktop/src/diagnostics', '../../apps/desktop/src/broker-artifact',
     '../../apps/desktop/src/settings-store', '../../apps/desktop/src/overlay-latency', '../../apps/desktop/src/latency-frames', '../../apps/desktop/src/uninstall/roots', '../../apps/desktop/src/plugin-setup/plugin-setup', '../../apps/desktop/src/squirrel-events',
-    '../../apps/desktop/src/uninstall/app-uninstall']) vi.doUnmock(name);
+    '../../apps/desktop/src/uninstall/app-uninstall', '../../apps/desktop/src/journal-export-writer', '../../apps/desktop/src/channel']) vi.doUnmock(name);
 }
 async function settle() {await Promise.resolve(); await Promise.resolve();}
 async function ready() {await loadMain(); await Promise.resolve(); child.emit('message', {type: 'ready'}); await settle();}
@@ -2338,6 +2339,54 @@ it('answers TIMEOUT when the service does not reply within 15 s and sends the ne
 // values are written by hand from J16; these cases never reach a file (cancel, refusal and exit happen before any write).
 const exportCall = (event: unknown, ...request: unknown[]) => Promise.resolve().then(() => handlers.get('journal:export-trip')!(event, ...request as [unknown]));
 const DATABASE_INFO = {database: {purpose: 'synthetic', schemaVersion: 2}, databaseUuid: 'f0000000-0000-4000-8000-000000000001'};
+it.each([
+  {mode: 'game', channel: 'staging', documents: true}, {mode: 'game', channel: 'production', documents: true},
+  {mode: 'game', channel: 'staging', documents: false}, {mode: 'fixture', channel: 'staging', documents: true},
+  {mode: 'blocked', channel: 'staging', documents: true}
+] as const)('wires trip diagnostics in $mode mode / $channel with Documents=$documents, reading only after flush', async ({mode, channel, documents}) => {
+  let options!: JournalExporterOptions;
+  vi.doMock('../../apps/desktop/src/journal-export-writer', async importOriginal => {
+    const actual = await importOriginal<typeof import('../../apps/desktop/src/journal-export-writer')>();
+    return {...actual, JournalExporter: class extends actual.JournalExporter {
+      constructor(value: JournalExporterOptions) {super(value); options = value;}
+    }};
+  });
+  // Data-only channel selection; this test builds nothing and every file port below is replaced.
+  vi.doMock('../../apps/desktop/src/channel', async importOriginal => {
+    const actual = await importOriginal<typeof import('../../apps/desktop/src/channel')>();
+    return {...actual, ACTIVE_CHANNEL: channel, CHANNEL: actual.CHANNEL_IDENTITIES[channel]};
+  });
+  vi.stubEnv('ETS2TELEMETRY_DIAGNOSTIC_DIR', 'C:\\isolated\\trip-logs');
+  await ready();
+  if (mode === 'game') vi.stubEnv('ETS2TELEMETRY_SOURCE_KIND', 'ets2');
+  if (mode === 'blocked') vi.stubEnv('ETS2TELEMETRY_RECORDING', 'invalid');
+  const diagnostic = await import('../../apps/desktop/src/diagnostic-bundle');
+  const at = DETAIL.trip.startedUtcMs + 1000;
+  const read = vi.spyOn(diagnostic, 'readDiagnosticLogs').mockResolvedValue({main: {}, service: {current: JSON.stringify({time: new Date(at).toISOString(), event: 'NATIVE_BROKER_V1_EXIT', facts: {
+    game: 'ets2', pluginSessionId: DETAIL.trip.pluginSessionId, outcome: 'ended', exitCode: 3, serviceMs: 1100, stage: 'retained-pipe', win32Error: 233,
+    elapsedMs: 1090, slowStage: 'relay', slowMs: 1000, repeats: 32}})}});
+  const getPath = vi.spyOn(app as typeof app & {getPath(name: string): string}, 'getPath');
+  if (!documents) getPath.mockImplementationOnce(() => {throw new Error('Documents unavailable');});
+  const history = {...DETAIL, database: {...DETAIL.database, purpose: 'history'}} as unknown as import('../../packages/contracts/src').JournalTripDetail;
+  log.flush.mockClear();
+  let releaseFlush!: () => void;
+  if (mode === 'game') log.flush.mockImplementationOnce(() => new Promise<boolean>(resolve => {releaseFlush = () => resolve(true);}));
+  const pending = options.diagnostics!(history, at + 1);
+  if (mode !== 'game') {
+    expect(await pending).toMatchObject({status: 'unavailable', notes: ['SOURCE_MODE_ISOLATED'], records: []});
+    expect(read).not.toHaveBeenCalled(); expect(log.flush).not.toHaveBeenCalled(); expect(getPath).not.toHaveBeenCalled();
+    return;
+  }
+  const {BUNDLE_FLUSH_MS} = await import('../../apps/desktop/src/diagnostics');
+  expect(log.flush).toHaveBeenCalledExactlyOnceWith(BUNDLE_FLUSH_MS); expect(read).not.toHaveBeenCalled();
+  releaseFlush();
+  const result = await pending;
+  expect(getPath).toHaveBeenCalledExactlyOnceWith('documents');
+  expect(read).toHaveBeenCalledExactlyOnceWith('C:\\isolated\\trip-logs', diagnostic.readFileTail,
+    documents ? {documents: 'C:\\isolated', staging: channel === 'staging'} : undefined);
+  expect(result).toMatchObject({status: 'records-found', records: [{facts: {win32Error: 233, repeats: 32, pluginSessionId: DETAIL.trip.pluginSessionId}}]});
+  if (!documents) expect(result.notes).toContain('GAME_LOG_UNAVAILABLE');
+});
 /** Answers the export's detail and database reads in order. */
 async function answerExportReads(firstId = 1) {
   await settle();

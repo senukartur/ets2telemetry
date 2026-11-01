@@ -86,7 +86,7 @@ export function tripExportProblems(document: unknown): string[] {
     const d = document.diagnostics;
     if (!isObject(d) || !sameKeys(d, ['collection', 'matchedBy', 'status', 'notes', 'records']) || d.collection !== 'retained-logs-at-export'
       || d.matchedBy !== 'plugin-session-and-utc-window' || !['records-found', 'no-matching-records', 'unavailable', 'not-applicable'].includes(textOf(d.status))
-      || !Array.isArray(d.notes) || !d.notes.every(n => ['LOGS_MAY_BE_INCOMPLETE', 'GAME_LOG_UNAVAILABLE', 'SERVICE_LOG_UNAVAILABLE', 'RECORD_LIMIT', 'COLLECTION_FAILED', 'SOURCE_MODE_ISOLATED', 'INVALID_TIME_WINDOW'].includes(textOf(n)))
+      || !Array.isArray(d.notes) || !d.notes.every(n => ['LOGS_MAY_BE_INCOMPLETE', 'GAME_LOG_UNAVAILABLE', 'SERVICE_LOG_UNAVAILABLE', 'RECORD_LIMIT', 'COLLECTION_FAILED', 'SOURCE_MODE_ISOLATED', 'INVALID_TIME_WINDOW', 'RESTART_CLOSE_CONTEXT'].includes(textOf(n)))
       || !Array.isArray(d.records) || d.records.length > 256) problem('$.diagnostics', 'malformed');
     else for (const row of d.records) {
       if (!isObject(row) || !sameKeys(row, ['time', 'event', 'facts']) || !Number.isFinite(Date.parse(textOf(row.time)))
@@ -94,8 +94,9 @@ export function tripExportProblems(document: unknown): string[] {
         || row.facts.game !== trip.game || row.facts.pluginSessionId !== trip.pluginSessionId) { problem('$.diagnostics.records', 'malformed or unrelated'); continue; }
       const allowed = row.event === 'PLUGIN_V1_CONNECTION_CLOSED'
         ? ['game', 'pluginSessionId', 'reason', 'phase', 'write', 'end', 'win32', 'durable', 'connection', 'durationMs']
-        : ['game', 'pluginSessionId', 'outcome', 'exitCode', 'serviceMs', 'stage', 'win32Error', 'elapsedMs', 'slowStage', 'slowMs'];
+        : ['game', 'pluginSessionId', 'outcome', 'exitCode', 'serviceMs', 'stage', 'win32Error', 'elapsedMs', 'slowStage', 'slowMs', 'repeats'];
       if (Object.keys(row.facts).length !== allowed.length || !Object.keys(row.facts).every(k => allowed.includes(k))) problem('$.diagnostics.records.facts', 'unexpected facts');
+      if (row.event === 'NATIVE_BROKER_V1_EXIT' && row.facts.repeats !== null && !(Number.isSafeInteger(row.facts.repeats) && (row.facts.repeats as number) > 0)) problem('$.diagnostics.records.facts.repeats', 'not a positive safe integer or null');
     }
   }
   if (!isObject(window) || !isObject(trip) || window.pluginSessionId !== trip.pluginSessionId) problem('$.window', 'not the trip session');
