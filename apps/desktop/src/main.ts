@@ -390,7 +390,7 @@ function runApplication(profileError: unknown): void {
     const retire = () => {if (nowWindow === created) retireNowDocument();};
     created.webContents.on('did-start-loading', retire);
     created.webContents.on('did-navigate', retire);
-    created.webContents.on('did-finish-load', () => {if (nowWindow === created) created.webContents.send('now-playing:ready', nowDocument);});
+    created.webContents.on('did-finish-load', () => {if (nowWindow === created) created.webContents.postMessage('now-playing:port', {generation: nowDocument});});
     created.on('system-context-menu', event => event.preventDefault());
     created.webContents.on('render-process-gone', () => {if (nowWindow !== created) return; retire(); nowTrack = null; nowSource = null; nowPlayingView = {...nowPlayingView, state: 'error', error: 'READER_UNAVAILABLE'}; publishNowPlaying(); if (!lifecycle.exiting && nowWindowBudget.take() !== undefined) void created.loadFile(path.join(__dirname, 'renderer', 'now-playing.html')).catch(() => undefined);});
     created.on('focus', focusChanged); created.on('blur', focusChanged);

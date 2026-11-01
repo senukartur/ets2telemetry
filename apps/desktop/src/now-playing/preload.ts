@@ -8,13 +8,15 @@ let authorizedDocument = -1;
 let current: NowPlayingDisplay = {generation: 0, language: 'en', style: 'minimal', backgroundOpacity: 80, editing: false, source: null, track: null};
 function clear(): void {clearTimeout(expiry); expiry = undefined; const previous = port; port = undefined; previous?.close();}
 function invalidate(): void {current = {...current, source: null, track: null}; callback?.(current);}
-ipcRenderer.on('now-playing:ready', (_event, value: unknown) => {
-  if (!Number.isSafeInteger(value) || Number(value) < 0 || Number(value) < authorizedDocument) return;
-  if (Number(value) > authorizedDocument) {clear(); invalidate();}
-  authorizedDocument = Number(value);
-  if (callback && !port) ipcRenderer.send('now-playing:subscribe', authorizedDocument);
-});
 ipcRenderer.on('now-playing:port', (event, value: unknown) => {
+  // A zero-port message authorizes this committed document; its later subscription echoes the generation.
+  if (event.ports.length === 0) {
+    if (!record(value) || Object.keys(value).length !== 1 || !Number.isSafeInteger(value.generation) || Number(value.generation) < 0 || Number(value.generation) < authorizedDocument) return;
+    if (Number(value.generation) > authorizedDocument) {clear(); invalidate();}
+    authorizedDocument = Number(value.generation);
+    if (callback && !port) ipcRenderer.send('now-playing:subscribe', authorizedDocument);
+    return;
+  }
   if (!callback || event.ports.length !== 1 || !record(value) || Object.keys(value).length !== 1 || !Number.isSafeInteger(value.generation) || Number(value.generation) !== authorizedDocument || Number(value.generation) <= documentGeneration) {for (const incoming of event.ports) incoming.close(); return;}
   clear(); invalidate(); documentGeneration = Number(value.generation); generation = -1; delivery = 0;
   const next = port = event.ports[0];

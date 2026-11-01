@@ -21,7 +21,7 @@ it('exposes only a frozen readonly subscription and clears quiet/closed channels
   expect(Object.keys(bridge)).toEqual(['subscribeNowPlaying']); expect(Object.isFrozen(bridge)).toBe(true);
   const receive = vi.fn(); unsubscribe = bridge.subscribeNowPlaying(receive);
   expect(() => bridge.subscribeNowPlaying(vi.fn())).toThrow();
-  ipc.emit('now-playing:ready', {}, 1); const port = new Port(); ipc.emit('now-playing:port', {ports: [port]}, {generation: 1}); port.deliver(display, 1);
+  ipc.emit('now-playing:port', {ports: []}, {generation: 1}); const port = new Port(); ipc.emit('now-playing:port', {ports: [port]}, {generation: 1}); port.deliver(display, 1);
   expect(receive).toHaveBeenLastCalledWith(display); expect(port.postMessage).toHaveBeenLastCalledWith({type: 'consumed', delivery: 1});
   await vi.advanceTimersByTimeAsync(4999); expect(receive.mock.lastCall?.[0].track).not.toBeNull();
   await vi.advanceTimersByTimeAsync(1); expect(receive.mock.lastCall?.[0]).toMatchObject({source: null, track: null});
@@ -29,8 +29,8 @@ it('exposes only a frozen readonly subscription and clears quiet/closed channels
 });
 it('retires replaced documents, rejects backwards generations and never acknowledges malformed display data', async () => {
   await import('../../apps/desktop/src/now-playing/preload'); const receive = vi.fn(); unsubscribe = bridge.subscribeNowPlaying(receive);
-  ipc.emit('now-playing:ready', {}, 1); const first = new Port(); ipc.emit('now-playing:port', {ports: [first]}, {generation: 1}); first.deliver(display, 1);
-  ipc.emit('now-playing:ready', {}, 2); const next = new Port(); ipc.emit('now-playing:port', {ports: [next]}, {generation: 2}); expect(first.close).toHaveBeenCalled();
+  ipc.emit('now-playing:port', {ports: []}, {generation: 1}); const first = new Port(); ipc.emit('now-playing:port', {ports: [first]}, {generation: 1}); first.deliver(display, 1);
+  ipc.emit('now-playing:port', {ports: []}, {generation: 2}); const next = new Port(); ipc.emit('now-playing:port', {ports: [next]}, {generation: 2}); expect(first.close).toHaveBeenCalled();
   first.deliver(display, 2); expect(receive.mock.lastCall?.[0].track).toBeNull();
   next.deliver({...display, generation: 3}, 3); next.deliver({...display, generation: 2}, 4);
   expect(next.close).toHaveBeenCalled(); expect(receive.mock.lastCall?.[0].track).toBeNull(); expect(next.postMessage).toHaveBeenCalledTimes(1);
