@@ -8,7 +8,8 @@
 import {randomBytes} from 'node:crypto';
 import * as nodeFs from 'node:fs/promises';
 import path from 'node:path';
-import type {JournalCallResult, JournalEventPage, JournalExportCode, JournalExportResult, JournalIntervalPage, JournalSamplePage, JournalTripDetail} from '../../../packages/contracts/src';
+import type {JournalCallResult, JournalEventPage, JournalExportCode, JournalExportResult, JournalIntervalPage, JournalSamplePage, JournalTripDetail, TripExportDiagnostics} from '../../../packages/contracts/src';
+import {emptyTripDiagnostics} from './trip-export-diagnostics';
 import type {DiagnosticFacts} from './diagnostics';
 import {
   JOURNAL_EXPORT_EVENT_LIMIT, JOURNAL_EXPORT_INTERVAL_LIMIT, JOURNAL_EXPORT_SAMPLE_LIMIT, type JournalDatabaseInfo, type JournalQuery
@@ -29,6 +30,8 @@ export interface JournalExporterOptions {
   localAppData: string | undefined;
   /** The application version written into the header. */
   appVersion: string;
+  /** Optional bounded log evidence, collected only after Save and target checks, inside the export's idle work. */
+  diagnostics?(detail: JournalTripDetail, exportedUtcMs: number): Promise<TripExportDiagnostics>;
   /** Fixed codes and facts only. */
   log(event: string, detail?: unknown, facts?: DiagnosticFacts): void;
   fs?: ExportFileSystem;
@@ -103,7 +106,15 @@ export class JournalExporter {
     const target = choice.filePath;
     if (exportTargetRefused(target, this.options.localAppData)) throw stop('EXPORT_TARGET_REFUSED');
     const header = tripExportHeader({uuid: info.databaseUuid, purpose: info.database.purpose, schemaVersion: info.database.schemaVersion}, this.options.appVersion, this.#now());
-    const work = this.#write(target, detail, new TripExportSerializer(detail, header));
+    const work = (async () => {
+      let diagnostics = emptyTripDiagnostics(detail);
+      if (detail.database.purpose === 'history' && this.options.diagnostics) {
+        try { diagnostics = await this.options.diagnostics(detail, header.exportedUtcMs); }
+        catch { diagnostics.notes = ['COLLECTION_FAILED']; }
+      }
+      this.#check();
+      return this.#write(target, detail, new TripExportSerializer(detail, header, diagnostics));
+    })();
     this.#fileWork = work.then(() => undefined, () => undefined);
     try {
       const counts = await work;

@@ -333,8 +333,8 @@ it('recognizes the v1 broker stages client-frame and client-write in exit diagno
   const write = fixtureV1(diagnose); write.child.output(relay(v1Authority())); write.client.write(helloV1);
   write.child.stderr.write('diag1 client-write 232 900 policy-write 30\n'); write.child.emit('close', 3);
   expect(diagnose.mock.calls.map(call => call[0] as BrokerDiagnostic)).toEqual([
-    {outcome: 'rejected', exitCode: 1, serviceMs: 0, stage: 'client-frame', win32Error: 0, elapsedMs: 40, slowStage: 'hello', slowMs: 12},
-    {outcome: 'ended', exitCode: 3, serviceMs: 0, stage: 'client-write', win32Error: 232, elapsedMs: 900, slowStage: 'policy-write', slowMs: 30}
+    {outcome: 'rejected', exitCode: 1, serviceMs: 0, stage: 'client-frame', win32Error: 0, elapsedMs: 40, slowStage: 'hello', slowMs: 12, game: 'ets2', pluginSessionId: v1Source.pluginSessionId},
+    {outcome: 'ended', exitCode: 3, serviceMs: 0, stage: 'client-write', win32Error: 232, elapsedMs: 900, slowStage: 'policy-write', slowMs: 30, game: 'ets2', pluginSessionId: v1Source.pluginSessionId}
   ]);
 });
 it.each([
@@ -450,6 +450,24 @@ it('keeps diagnosed exit 1 after authority receipt final and non-transient', () 
   f.child.emit('close', 1);
   expect(failure(f.error)).toMatchObject({transient: false, outcome: 'rejected', message: 'Native authority or connection rejected'});
   expect(diagnose).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({outcome: 'rejected', exitCode: 1, stage: 'retained-authority'}));
+});
+
+it.each(['retained-process', 'retained-identity', 'retained-pipe'])('keeps the precise retained-authority stage %s in the service diagnostic', stage => {
+  const diagnose = vi.fn(), f = fixture(diagnose);
+  f.child.output(relay(authority()));
+  f.child.stderr.write(`diag1 ${stage} 233 40 relay 30\n`);
+  f.child.emit('close', 3);
+  expect(diagnose).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({outcome: 'ended', exitCode: 3, stage, win32Error: 233, game: 'ets2', pluginSessionId: source.pluginSessionId}));
+});
+
+it('starts a new diagnostic run for each verified plugin session', async () => {
+  const {coalesceBrokerDiagnostics} = await import('../../apps/desktop/src/native-pipe-client');
+  const record = vi.fn(), diagnose = coalesceBrokerDiagnostics(record);
+  const d: BrokerDiagnostic = {outcome: 'ended', exitCode: 3, serviceMs: 100, stage: 'retained-pipe', win32Error: 233, elapsedMs: 90, slowStage: 'relay', slowMs: 50,
+    game: 'ets2', pluginSessionId: source.pluginSessionId};
+  for (let i = 0; i < 3; ++i) diagnose(d);
+  diagnose({...d, pluginSessionId: '10000000-0000-4000-8000-000000000099'});
+  expect(record.mock.calls.map(call => call[0].repeats)).toEqual([1, 2, 1]);
 });
 
 it.each([

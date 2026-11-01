@@ -33,7 +33,7 @@ export function v1BrokerConfiguration(configuration: BrokerConfiguration | undef
 /** Fixed broker stage names. Any other diagnostic text is reported only as unrecognized. */
 const BROKER_STAGES = new Set(['arguments', 'identity', 'directory', 'own-image', 'policy-lock', 'policy-image', 'policy-existing', 'policy-json', 'policy-current', 'policy-write',
   'policy-publish', 'discovery', 'server-process', 'server-image', 'connected-peer', 'authority-receipt', 'hello', 'relay', 'retained-authority', 'wire-frame', 'wire-payload',
-  'client-frame', 'client-write']);
+  'client-frame', 'client-write', 'retained-process', 'retained-identity', 'retained-pipe']);
 const DIAGNOSTIC_TAIL_BYTES = 256;
 const DIAGNOSTIC_LINE = /diag1 ([a-z-]{1,24}) (\d{1,10}) (\d{1,10}) ([a-z-]{1,24}) (\d{1,10})\r?\n$/;
 /** Protocol v1 control-stream tags (docs/telemetry-service-v0.md, Protocol v1 mode). */
@@ -42,9 +42,10 @@ const CREDIT_TAG = 0x01, CLIENT_FRAME_TAG = 0x02;
 const MAX_CLIENT_FRAME_PAYLOAD = 4096;
 export type BrokerOutcome = 'ended' | 'busy' | 'rejected' | 'startup-deadline' | 'start-failed' | 'control-closed' | 'incomplete-frame' | 'relay-rejected' | 'hello-rejected' | 'duplicate-credit'
   | 'client-frame-rejected';
-/** Only fixed codes and numbers: never paths, identities, receipts or relayed bytes. */
+/** Fixed codes, numbers and the verified project session identifier; never personal identities, paths or relayed bytes. */
 /** serviceMs spans spawn to exit, so launch delay before the broker's own clock starts is visible as serviceMs - elapsedMs. */
-export interface BrokerDiagnostic {outcome: BrokerOutcome; exitCode: number | null; serviceMs: number; stage: string; win32Error: number | null; elapsedMs: number | null; slowStage: string; slowMs: number | null}
+export interface BrokerDiagnostic {outcome: BrokerOutcome; exitCode: number | null; serviceMs: number; stage: string; win32Error: number | null; elapsedMs: number | null; slowStage: string; slowMs: number | null;
+  game?: 'ets2' | 'ats'; pluginSessionId?: string}
 /**
  * Normal broker exit codes are {0, 1, 2, 3, 4}. Abnormal/crash exits include uncatchable kill signals (null),
  * signed Windows NTSTATUS error codes (< 0), unsigned 32-bit NTSTATUS codes (>= 0x80000000), or unexpected exit codes (> 4).
@@ -73,7 +74,7 @@ function brokerDiagnostic(outcome: BrokerOutcome, exitCode: number | null, servi
 export function coalesceBrokerDiagnostics(record: (diagnostic: BrokerDiagnostic & {repeats: number}) => void): (diagnostic: BrokerDiagnostic) => void {
   let key: string | undefined, repeats = 0;
   return diagnostic => {
-    const next = `${diagnostic.outcome}|${diagnostic.stage}|${String(diagnostic.win32Error)}`;
+    const next = `${diagnostic.game ?? ''}|${diagnostic.pluginSessionId ?? ''}|${diagnostic.outcome}|${diagnostic.stage}|${String(diagnostic.win32Error)}`;
     repeats = next === key ? repeats + 1 : 1; key = next;
     if ((repeats & (repeats - 1)) === 0) record({...diagnostic, repeats});
   };
@@ -123,7 +124,8 @@ export class NativePipeClient extends EventEmitter implements TelemetrySocket {
         this.stopped = true;
       }
       // Routine waiting exits and owner cancellation are not logged.
-      if (this.outcome) diagnose?.(brokerDiagnostic(this.outcome, code, Math.round(performance.now() - spawned), this.diagnosticTail));
+      if (this.outcome) diagnose?.({...brokerDiagnostic(this.outcome, code, Math.round(performance.now() - spawned), this.diagnosticTail),
+        ...(this.authority ? {game: this.authority.game, pluginSessionId: this.authority.pluginSessionId} : {})});
       this.emit('close');
     });
     this.child.stdout.on('data', (bytes: unknown) => {

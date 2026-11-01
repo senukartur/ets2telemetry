@@ -101,12 +101,35 @@ struct V1Current {
 };
 
 // SDK calls and mutable producer state belong exclusively to the SDK calling thread.
-// read_latest / read_current / set_consumer / defer_log / read_v1_current are the only methods for a transport thread.
+// read_latest / read_current / set_consumer / defer_log / read_v1_current and the connection-log handoff are worker-safe.
 // No SDK-owned pointers or C++ allocations cross the DLL boundary.
 // A fixed game-log entry with static storage duration; only the SDK thread passes it to the logger.
 struct DeferredLog { scs_log_type_t type; const char* message; };
 // One fixed slot per producer of deferred entries: the v0 transport's late startup result and the protocol v1 endpoint.
 enum class DeferredLogSlot : std::uint8_t { transport_v0 = 0, transport_v1 = 1, count = 2 };
+// One v1 worker produces already formatted, fixed-code lines; the SDK thread only copies and logs them.
+struct ConnectionLogLine { std::array<char, 384> text{}; };
+class ConnectionLogQueue final {
+ public:
+  static_assert(std::atomic<std::size_t>::is_always_lock_free, "Connection diagnostic handoff must stay lock-free");
+  static constexpr std::size_t capacity = 16;
+  void reset() noexcept { written_.store(0); read_.store(0); dropped_.store(nullptr); }
+  void push(const ConnectionLogLine& line, const DeferredLog* overflow) noexcept {
+    const auto written = written_.load(std::memory_order_relaxed);
+    if (written - read_.load(std::memory_order_acquire) >= capacity) { note_dropped(overflow); return; }
+    rows_[written % capacity] = line; rows_[written % capacity].text.back() = '\0'; written_.store(written + 1, std::memory_order_release);
+  }
+  bool pop(ConnectionLogLine& line) noexcept {
+    const auto read = read_.load(std::memory_order_relaxed);
+    if (read == written_.load(std::memory_order_acquire)) return false;
+    line = rows_[read % capacity]; read_.store(read + 1, std::memory_order_release); return true;
+  }
+  void note_dropped(const DeferredLog* overflow) noexcept { dropped_.store(overflow, std::memory_order_release); }
+  const DeferredLog* dropped() const noexcept { return dropped_.load(std::memory_order_acquire); }
+ private:
+  std::array<ConnectionLogLine, capacity> rows_{};
+  std::atomic<std::size_t> written_{0}, read_{0}; std::atomic<const DeferredLog*> dropped_{nullptr};
+};
 class Adapter final {
  public:
   scs_result_t initialize(scs_u32_t version, const scs_telemetry_init_params_t* params) noexcept;
@@ -136,6 +159,9 @@ class Adapter final {
   void defer_log(const DeferredLog* entry, DeferredLogSlot slot = DeferredLogSlot::transport_v0) noexcept {
     deferred_logs_[static_cast<std::size_t>(slot)].store(entry, std::memory_order_release);
   }
+  // The v1 worker only; bounded SPSC handoff, with no logger call or allocation on that worker.
+  void defer_connection_log(const ConnectionLogLine& line, const DeferredLog* overflow) noexcept { connection_logs_.push(line, overflow); }
+  void connection_log_dropped(const DeferredLog* overflow) noexcept { connection_logs_.note_dropped(overflow); }
   // Any thread: whether a protocol v1 event channel is attached, for diagnostics and tests only.
   bool events_attached() const noexcept { return events_.load(std::memory_order_acquire) != nullptr; }
  private:
@@ -156,7 +182,7 @@ class Adapter final {
   void gate_diagnostics() noexcept;
   bool diagnostics_enabled() const noexcept;
   void evidence(cap0::Kind, const char* id, const scs_named_value_t* attributes, bool attributes_expected) noexcept;
-  void flush_deferred_log() noexcept;
+  void flush_deferred_log(bool all = false) noexcept;
   void publish_v0() noexcept;
   // Protocol v1 capture (ET-004b): SDK thread only, inert without an attached channel, and never touches v0 state.
   void publish_v1() noexcept;
@@ -172,6 +198,7 @@ class Adapter final {
   std::atomic<bool> source_live_{false};
   std::atomic<cap0::EvidenceQueue*> evidence_{nullptr};
   std::array<std::atomic<const DeferredLog*>, static_cast<std::size_t>(DeferredLogSlot::count)> deferred_logs_{};
+  ConnectionLogQueue connection_logs_; bool connection_log_drop_reported_ = false;
   std::atomic<v1::EventChannel*> events_{nullptr};
   // v1 producer state: the record being built, the current configuration with its own revision, and v1 continuity.
   v1::EventRecord v1_record_{};

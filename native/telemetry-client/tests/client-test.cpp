@@ -650,7 +650,7 @@ int wmain(int argc, wchar_t** argv) {
       Child server(self, L"--host \"" + directory.wstring() + L"\" \"" + fixtures.wstring() + L"\" " + wide(mode));
       require(parse(read_frame(server.output.value)).at("type").string() == "ready");
       std::cerr << "host ready\n";
-      Child client(broker, L"--game ets2 --discovery-dir \"" + directory.wstring() + L"\"");
+      Child client(broker, L"--game ets2 --discovery-dir \"" + directory.wstring() + L"\"", std::string(mode) == "quiet");
       const std::string scenario(mode);
       if (scenario == "creation" || scenario == "dead") {require(parse(read_frame(client.output.value)).at("type").string() == "waiting"); require(client.wait() == 2); require(!fs::exists(directory / "00112233-4455-6677-8899-aabbccddeeff.json")); server.eof(); require(server.wait() == 0); continue;}
       if (scenario == "collision" || scenario == "session" || scenario == "malformed" || scenario == "dacl") {client.eof(); require(client.wait() == 1); server.eof(); require(server.wait() == 0); continue;}
@@ -675,7 +675,11 @@ int wmain(int argc, wchar_t** argv) {
       stdio_io(client.input.value, &credit, 1, true); auto checkpoint = v0::decode_payload(read_frame(client.output.value)); v0::Consumer consumer(false); consumer.accept(welcome); require(consumer.accept(checkpoint)->hydration);
       if (scenario == "quiet" || scenario == "quiet-exit") {
         stdio_io(client.input.value, &credit, 1, true);
-        if (scenario == "quiet") {require(WaitForSingleObject(client.process.value, 5500) == WAIT_TIMEOUT); const auto started = GetTickCount64(); client.eof(); require(client.wait() == 3 && GetTickCount64() - started < 4000);} // EOF cancels promptly: well below every 5 s broker deadline.
+        if (scenario == "quiet") {
+          require(WaitForSingleObject(client.process.value, 5500) == WAIT_TIMEOUT); const auto started = GetTickCount64(); client.eof(); require(client.wait() == 3 && GetTickCount64() - started < 4000);
+          const auto diagnostic = client.diagnostic(); std::cerr << "logical cancellation diagnostic " << diagnostic;
+          require(std::regex_search(diagnostic, std::regex("(^|\n)diag1 relay 0 [0-9]{1,10} [a-z-]{1,24} [0-9]{1,10}\n$")));
+        } // EOF cancels promptly, and its diagnostic carries no stale GetLastError from cancelled I/O.
         else require(client.wait() == 3);
         require(server.wait() == 0); continue;
       }

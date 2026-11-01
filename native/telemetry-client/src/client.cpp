@@ -33,7 +33,7 @@ void test_trace(const char* value) {
 }
 // Last Win32 error observed by the failing check; the exit diagnostic reports it only as a number.
 DWORD failureError = ERROR_SUCCESS;
-struct Disconnected : std::runtime_error {explicit Disconnected(DWORD error = GetLastError()) : std::runtime_error("Source disconnected") {failureError = error;}};
+struct Disconnected : std::runtime_error {explicit Disconnected(DWORD error = ERROR_SUCCESS) : std::runtime_error("Source disconnected") {failureError = error;}};
 // Contention on a project-owned file before any authority receipt. It grants nothing; a retry re-verifies everything.
 struct Busy : std::runtime_error {explicit Busy(DWORD error) : std::runtime_error("Owned local file busy") {failureError = error;}};
 [[noreturn]] void fail() {failureError = GetLastError(); throw std::runtime_error("Verified pipe client rejected source or transport");}
@@ -538,12 +538,19 @@ int wmain(int argc, wchar_t** argv) {
     // The capture endpoint is keyed to the same verified process instance and its plugin session.
     const auto connectTo = capture ? channel::active.pipe_prefix + game + "-cap0-" + self.userTag + "-" + std::to_string(self.session) + "-" + record.at("processInstanceId").string() + "-" + record.at("pluginSessionId").string() : endpoint;
     auto& process = *selectedProcess;
-    stage = "connected-peer"; if (!WaitNamedPipeW(wide(connectTo).c_str(), 250)) {const auto error = GetLastError(); if (error == ERROR_FILE_NOT_FOUND || error == ERROR_SEM_TIMEOUT) throw Disconnected(); pipe_failed(error);}
+    stage = "connected-peer"; if (!WaitNamedPipeW(wide(connectTo).c_str(), 250)) {const auto error = GetLastError(); if (error == ERROR_FILE_NOT_FOUND || error == ERROR_SEM_TIMEOUT) throw Disconnected(error); pipe_failed(error);}
     const auto rawPipe = CreateFileW(wide(connectTo).c_str(), GENERIC_READ | GENERIC_WRITE, 0, nullptr, OPEN_EXISTING, FILE_FLAG_OVERLAPPED, nullptr);
-    if (rawPipe == INVALID_HANDLE_VALUE) {const auto error = GetLastError(); if (error == ERROR_FILE_NOT_FOUND || error == ERROR_PIPE_BUSY) throw Disconnected(); pipe_failed(error);}
+    if (rawPipe == INVALID_HANDLE_VALUE) {const auto error = GetLastError(); if (error == ERROR_FILE_NOT_FOUND || error == ERROR_PIPE_BUSY) throw Disconnected(error); pipe_failed(error);}
     Handle pipe(rawPipe);
     ULONG actualPid = 0; if (!GetNamedPipeServerProcessId(pipe.value, &actualPid)) pipe_failed(GetLastError()); if (actualPid != pid) fail();
-    auto verify = [&] {const auto waited = WaitForSingleObject(process.value, 0); if (waited == WAIT_OBJECT_0) throw Disconnected(); if (waited != WAIT_TIMEOUT) fail(); Identity fresh(process.value); if (fresh.sid != self.sid || fresh.session != self.session || creation(process.value) != expectedCreation) fail(); ULONG current = 0; if (!GetNamedPipeServerProcessId(pipe.value, &current)) pipe_failed(GetLastError()); if (current != pid) fail();};
+    auto verify = [&] {
+      stage = "retained-process";
+      const auto waited = WaitForSingleObject(process.value, 0); if (waited == WAIT_OBJECT_0) throw Disconnected(); if (waited != WAIT_TIMEOUT) fail();
+      stage = "retained-identity";
+      Identity fresh(process.value); if (fresh.sid != self.sid || fresh.session != self.session || creation(process.value) != expectedCreation) fail();
+      stage = "retained-pipe";
+      ULONG current = 0; if (!GetNamedPipeServerProcessId(pipe.value, &current)) pipe_failed(GetLastError()); if (current != pid) fail();
+    };
     verify();
     Json source{Json::Object{{"game", Json{game}}, {"processId", Json{static_cast<double>(pid)}}, {"windowsSessionId", Json{static_cast<double>(self.session)}}, {"processInstanceId", record.at("processInstanceId")}, {"pluginSessionId", record.at("pluginSessionId")}, {"origin", Json{std::string("game")}}}};
     Json::Object authority{{"type", Json{std::string("authority")}}, {"schemaVersion", Json{1.0}}, {"source", source}, {"processCreationTime", record.at("processCreationTime")}, {"userTag", Json{self.userTag}}};
