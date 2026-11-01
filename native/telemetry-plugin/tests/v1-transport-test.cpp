@@ -902,6 +902,11 @@ void fuzz() {
 // Handshake rejection: sizes, versions, other contracts, a duplicate hello and the real 5 s hello deadline.
 void rejection() {
   Fixture f; f.start();
+  {
+    auto c = f.client(true); const auto t = GetTickCount64(); require(c->closed(7000) && c->messages.empty(), "no hello: closed"); const auto elapsed = GetTickCount64() - t;
+    std::cout << "helloTimeoutMs=" << elapsed << '\n'; require(elapsed >= 4900 && elapsed < 5900 * timing_scale, "real 5 s hello deadline");
+  }
+  require(f.listening(), "relisten after the deadline");
   auto rejected = [&](std::vector<std::uint8_t> bytes, const char* message) { auto c = f.client(true); send(c->pipe.get(), bytes); require(c->closed() && c->messages.empty(), message); c.reset(); require(f.listening(), "relisten after rejection"); };
   auto exact = hello_payload(true); exact.resize(4096, ' ');
   { auto c = f.client(true); send(c->pipe.get(), framed(exact)); require(c->read(2), "exact 4,096-byte hello accepted"); }
@@ -918,16 +923,16 @@ void rejection() {
   auto extra = hello_payload(true); extra.insert(extra.size() - 2, ",\"extra\":true"); rejected(framed(extra), "unknown field rejected");
   auto twice = framed(hello_payload(true)); const auto copy = twice; twice.insert(twice.end(), copy.begin(), copy.end()); rejected(twice, "a duplicate hello rejected (S6)");
   rejected(framed(ack_payload("50000000-0000-4000-8000-000000000001", 0)), "an ACK instead of the hello rejected");
-  {
-    auto c = f.client(true); const auto t = GetTickCount64(); require(c->closed(7000) && c->messages.empty(), "no hello: closed"); const auto elapsed = GetTickCount64() - t;
-    std::cout << "helloTimeoutMs=" << elapsed << '\n'; require(elapsed >= 4900 && elapsed < 5900 * timing_scale, "real 5 s hello deadline");
-  }
-  require(f.listening(), "relisten after the deadline");
+  // A local rejection loop must not spend the negotiated-connection diagnostic budget or fill the entire SDK queue.
+  for (unsigned i = 0; i < 32; ++i) rejected(framed("{"), "repeated invalid hello rejected");
+  auto valid = f.client(false); valid->handshake(); valid->ack(0); require(valid->closed() && f.listening(), "post-checkpoint ACK rejection");
   for (unsigned i = 0; i < 4; ++i) f.host.frame();
   require(std::any_of(f.host.logs.begin(), f.host.logs.end(), [](const std::string& row) {
     return row.find("reason=HELLO_TIMEOUT phase=hello write=none end=none win32=0 durable=unknown") != std::string::npos;
   }), "a hello timeout is distinguished from an I/O error before negotiation");
-  auto valid = f.client(true); valid->handshake();
+  require(std::any_of(f.host.logs.begin(), f.host.logs.end(), [](const std::string& row) {
+    return row.find("reason=INVALID_ACK phase=live") != std::string::npos && row.find(" session=") != std::string::npos;
+  }), "the real post-checkpoint failure survives many rejected connections and carries its session identity");
 }
 
 // A foreign pipe, a foreign record and a broad-ACL directory make v1 fail closed; v0 still serves.
@@ -971,6 +976,9 @@ void policy() {
   // The peer is rejected when it connects, before its hello is read, so the hello write itself may already fail.
   auto denied = [&](const char* message) { auto c = f.client(true); write_all(c->pipe.get(), framed(hello_payload(true))); require(c->closed() && c->messages.empty(), message); c.reset(); require(f.listening(), "endpoint stays listening"); };
   denied("missing policy rejects the client");
+  f.host.frame();
+  require(f.host.logs.size() == 1 && f.host.logs[0].find("reason=POLICY_READ_FAILED") != std::string::npos,
+    "a missing policy is an inspection failure, not evidence that the peer was forbidden");
   write_policy(f.directory, f.security, f.user, f.self, std::string(64, '0')); denied("digest mismatch rejected");
   write_file(f.directory + L"\\service-policy.json", f.security, "{\"schemaVersion\":1}"); denied("malformed policy rejected");
   write_policy(f.directory, f.security, f.user, f.self);

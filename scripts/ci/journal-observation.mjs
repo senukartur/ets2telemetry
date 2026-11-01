@@ -439,10 +439,10 @@ export async function runJournalExport({application, dashboard, config, record})
   const documents = {};
   for (const name of ['paging', 'delivered']) {
     const document = documents[name] = JSON.parse(await readFile(path.join(folder, `${name}.json`), 'utf8'));
-    assert.deepEqual(problemsOf(document), [], `The ${name} export is not a valid format version 2 document`);
+    assert.deepEqual(problemsOf(document), [], `The ${name} export is not a valid format version 3 document`);
     assert.deepEqual({format: document.format, formatVersion: document.formatVersion, application: document.header.application, purpose: document.header.database.purpose,
       schemaVersion: document.header.database.schemaVersion, sessionOrigin: document.header.sessionOrigin},
-    {format: 'ets2telemetry.trip-export', formatVersion: 2, application: {name: 'ETS2Telemetry', version: smokeBuild(config).version}, purpose: 'synthetic', schemaVersion: 3, sessionOrigin: 'synthetic'});
+    {format: 'ets2telemetry.trip-export', formatVersion: 3, application: {name: 'ETS2Telemetry', version: smokeBuild(config).version}, purpose: 'synthetic', schemaVersion: 3, sessionOrigin: 'synthetic'});
   }
   assert.equal(documents.paging.header.database.uuid, documents.delivered.header.database.uuid);
   // Historical seeds never supplied observation metadata; current settings cannot create retrospective proof.

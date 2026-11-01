@@ -1,4 +1,4 @@
-// The trip export document (ET-016 PR-5, J15-J17): pure serialization of `ets2telemetry.trip-export` format version 2.
+// The trip export document: pure serialization of `ets2telemetry.trip-export` format version 3.
 // The writer (journal-export-writer.ts) reads the trip detail once, then its completeness intervals, timeline events and
 // samples page by page, and appends this module's text for each page, so the whole document is never held in memory.
 // Every row is copied field by field in a fixed key order; values keep the protocol v1 availability and money shapes and
@@ -6,8 +6,9 @@
 // free of Electron. See docs/journal-export.md.
 import {
   TRIP_EXPORT_FORMAT, TRIP_EXPORT_FORMAT_VERSION, TRIP_EXPORT_SESSION_ORIGIN, TRIP_EXPORT_UNITS, type JournalEvent, type JournalInterval, type JournalPurpose, type JournalSample,
-  type JournalTripDetail, type TripExportBounds, type TripExportHeader, type TripExportSample, type TripExportTrip
+  type JournalTripDetail, type TripExportBounds, type TripExportDiagnostics, type TripExportHeader, type TripExportSample, type TripExportTrip
 } from '../../../packages/contracts/src';
+import {emptyTripDiagnostics} from './trip-export-diagnostics';
 
 /** The array sections of the document, in the order they are written. */
 export const TRIP_EXPORT_SECTIONS = ['intervals', 'events', 'samples'] as const;
@@ -61,14 +62,15 @@ export class TripExportSerializer {
   #rows = 0;
   #ended = false;
 
-  constructor(private readonly detail: JournalTripDetail, private readonly header: TripExportHeader) {}
+  constructor(private readonly detail: JournalTripDetail, private readonly header: TripExportHeader,
+    private readonly diagnostics: TripExportDiagnostics = emptyTripDiagnostics(detail)) {}
 
   begin(): string {
     if (this.#section !== -1) throw new Error('The export document has already begun');
     const d = this.detail;
     const fixed: [string, unknown][] = [['format', TRIP_EXPORT_FORMAT], ['formatVersion', TRIP_EXPORT_FORMAT_VERSION], ['header', this.header], ['units', TRIP_EXPORT_UNITS],
       ['bounds', tripExportBounds(d)], ['trip', trip(d.trip)], ['job', d.job], ['truck', d.truck], ['trailers', d.trailers], ['outcomeDetails', d.outcomeDetails],
-      ['money', d.money], ['window', d.window]];
+      ['money', d.money], ['window', d.window], ['diagnostics', this.diagnostics]];
     this.#section = 0; this.#rows = 0;
     return `{\n${fixed.map(([key, value]) => `${JSON.stringify(key)}: ${JSON.stringify(value)},\n`).join('')}"${TRIP_EXPORT_SECTIONS[0]}": [`;
   }

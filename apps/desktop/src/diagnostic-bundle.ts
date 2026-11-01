@@ -192,7 +192,7 @@ export async function readDiagnosticLogs(logDirectory: string, readTail: ReadTai
 
 const CLOSE_REASONS = new Set(['CONNECTION_EXCEPTION', 'WRITE_FAILED', 'WRITE_PARTIAL', 'WRITE_TIMEOUT', 'READ_FAILED', 'CLIENT_EOF',
   'EARLY_CLIENT_DATA', 'CLIENT_PROTOCOL', 'INVALID_ACK', 'INVALID_PROBE', 'PEER_EXITED', 'PEER_CHECK_FAILED', 'PEER_CHANGED', 'SHUTDOWN',
-  'INVARIANT_VIOLATION', 'SOURCE_RETIRED', 'SEQUENCE_EXHAUSTED', 'PEER_REJECTED', 'POLICY_REJECTED', 'HELLO_TIMEOUT', 'HELLO_PROTOCOL', 'ENCODING_FAILED']);
+  'INVARIANT_VIOLATION', 'SOURCE_RETIRED', 'SEQUENCE_EXHAUSTED', 'PEER_REJECTED', 'POLICY_REJECTED', 'PEER_INSPECTION_FAILED', 'POLICY_READ_FAILED', 'HELLO_TIMEOUT', 'HELLO_PROTOCOL', 'ENCODING_FAILED']);
 /** The game log contains arbitrary private text. Only this exact fixed-code grammar may enter a diagnostic bundle. */
 export function pluginCloseLogRow(line: string, game: 'ets2' | 'ats', staging: boolean): DiagnosticLogRow | undefined {
   if (line.length > 512) return undefined;
@@ -200,12 +200,13 @@ export function pluginCloseLogRow(line: string, game: 'ets2' | 'ats', staging: b
   // SCS may prepend a relative game-log timestamp and severity; anchor the entire project message to the line end.
   const start = line.indexOf(`${prefix} V1_CONNECTION_CLOSED `);
   if (start < 0) return undefined;
-  const match = /^V1_CONNECTION_CLOSED reason=([A-Z_]+) phase=(accept|hello|welcome|checkpoint|live) write=(none|welcome|checkpoint|clock-reply|snapshot|event|end) end=(none|plugin-shutdown|source-retired|sequence-exhausted) win32=(\d{1,10}) durable=(unknown|[01]) connection=(\d{1,20}) utcMs=(\d{1,16}) durationMs=(\d{1,20})$/.exec(line.slice(start + prefix.length + 1));
+  const match = /^V1_CONNECTION_CLOSED reason=([A-Z_]+) phase=(accept|hello|welcome|checkpoint|live) write=(none|welcome|checkpoint|clock-reply|snapshot|event|end) end=(none|plugin-shutdown|source-retired|sequence-exhausted) win32=(\d{1,10}) durable=(unknown|[01]) connection=(\d{1,20}) utcMs=(\d{1,16}) durationMs=(\d{1,20})(?: session=([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}))?$/.exec(line.slice(start + prefix.length + 1));
   if (!match || !CLOSE_REASONS.has(match[1])) return undefined;
   const [win32, connection, utcMs, durationMs] = [match[5], match[7], match[8], match[9]].map(Number);
-  if (![win32, connection, utcMs, durationMs].every(n => Number.isSafeInteger(n) && n >= 0) || win32 > 0xffffffff || connection === 0 || utcMs > 8_640_000_000_000_000) return undefined;
+  if (![win32, connection, utcMs, durationMs].every(n => Number.isSafeInteger(n) && n >= 0) || win32 > 0xffffffff || connection === 0 || utcMs === 0 || utcMs > 253_402_300_799_999) return undefined;
   return {time: new Date(utcMs).toISOString(), event: 'PLUGIN_V1_CONNECTION_CLOSED', facts: {
-    game, reason: match[1], phase: match[2], write: match[3], end: match[4], win32, durable: match[6] === 'unknown' ? null : match[6] === '1', connection, durationMs
+    game, reason: match[1], phase: match[2], write: match[3], end: match[4], win32, durable: match[6] === 'unknown' ? null : match[6] === '1', connection, durationMs,
+    ...(match[10] ? {pluginSessionId: match[10]} : {})
   }};
 }
 

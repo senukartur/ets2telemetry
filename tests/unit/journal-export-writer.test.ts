@@ -6,7 +6,7 @@ import {mkdir, readdir, readFile, symlink, unlink, writeFile} from 'node:fs/prom
 import * as realFs from 'node:fs/promises';
 import path from 'node:path';
 import {afterEach, beforeEach, describe, expect, it, vi} from 'vitest';
-import type {JournalCallResult, JournalTripDetail} from '../../packages/contracts/src';
+import type {JournalCallResult, JournalTripDetail, TripExportDiagnostics} from '../../packages/contracts/src';
 import {exportTargetRefused, JournalExporter, type ExportFileSystem, type JournalExporterOptions} from '../../apps/desktop/src/journal-export-writer';
 import {stripExtendedPrefix} from '../../apps/desktop/src/export-file';
 import type {JournalQuery} from '../../apps/desktop/src/journal-contract';
@@ -69,6 +69,49 @@ describe('a cancelled Save dialog (J16)', () => {
 });
 
 describe('a saved export (J16, J17)', () => {
+  const diagnosticInput = (): TripExportDiagnostics => ({collection: 'retained-logs-at-export', matchedBy: 'plugin-session-and-utc-window', status: 'unavailable', notes: ['LOGS_MAY_BE_INCOMPLETE'], records: []});
+  const historyRead = () => {
+    const j = journal();
+    return async (query: JournalQuery) => {
+      const answer = await j.read(query);
+      if (!answer.ok) return answer;
+      const value = answer.value as Record<string, unknown>;
+      return {ok: true as const, value: {...value, database: {purpose: 'history', schemaVersion: 2}}};
+    };
+  };
+  it('collects history diagnostics once after Save and includes them in format 3', async () => {
+    const diagnostics = vi.fn().mockResolvedValue(diagnosticInput());
+    const f = exporter({read: historyRead(), diagnostics});
+    expect((await f.instance.export(TRIP)).ok).toBe(true);
+    expect(diagnostics).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({trip: DETAIL.trip}), 1_800_000_000_000);
+    const value = JSON.parse(await readFile(path.join(out, 'trip.json'), 'utf8'));
+    expect(value.diagnostics).toEqual(diagnosticInput()); expect(value.formatVersion).toBe(3);
+  });
+  it.each(['cancelled', 'refused', 'synthetic'] as const)('does not collect game diagnostics for a %s export', async mode => {
+    const diagnostics = vi.fn().mockResolvedValue(diagnosticInput());
+    const f = exporter({diagnostics, ...(mode === 'synthetic' ? {} : {read: historyRead()}),
+      ...(mode === 'cancelled' ? {target: null} : mode === 'refused' ? {target: path.join(local, 'ETS2Telemetry', 'private.json')} : {})});
+    await f.instance.export(TRIP); expect(diagnostics).not.toHaveBeenCalled();
+  });
+  it('still saves trip data if optional log collection fails and explicitly marks the missing evidence', async () => {
+    const f = exporter({read: historyRead(), diagnostics: () => Promise.reject(new Error('PRIVATE PATH'))});
+    expect((await f.instance.export(TRIP)).ok).toBe(true);
+    const value = JSON.parse(await readFile(path.join(out, 'trip.json'), 'utf8'));
+    expect(value.diagnostics).toMatchObject({status: 'unavailable', notes: ['COLLECTION_FAILED'], records: []});
+    expect(JSON.stringify(value)).not.toContain('PRIVATE');
+  });
+  it('includes log collection in idle and aborts without creating a partial file when exit arrives during collection', async () => {
+    let complete!: (value: TripExportDiagnostics) => void;
+    let started!: () => void;
+    const collecting = new Promise<void>(resolve => {started = resolve;});
+    const diagnostics = vi.fn(() => new Promise<TripExportDiagnostics>(resolve => {complete = resolve; started();}));
+    const f = exporter({read: historyRead(), diagnostics});
+    const running = f.instance.export(TRIP);
+    await collecting;
+    expect(f.instance.idle()).toBeDefined(); f.instance.abort(); complete(diagnosticInput());
+    await expect(running).resolves.toEqual({ok: false, code: 'EXPORT_INTERRUPTED'});
+    await f.instance.idle(); expect(await listing()).toEqual([]);
+  });
   it('writes the trip through a partial file and leaves exactly the valid document', async () => {
     const f = exporter();
     await expect(f.instance.export(TRIP)).resolves.toEqual({ok: true, value: {outcome: 'saved', events: 2, intervals: 1, samples: 1}});

@@ -91,7 +91,7 @@ Columns:
 | `tests/unit/journal-broker.test.ts` | Node unit (Vitest) | REG-011, REG-014 | R, F | ET-016a (#97) | PR (tests job, `npm test`) | — |
 | `tests/unit/journal-contract.test.ts` | Node unit (Vitest) | REG-014 | R, F | ET-016a (#97) | PR (tests job, `npm test`) | security |
 | `tests/unit/journal-export-writer.test.ts` | Node unit (Vitest) | REG-014 | R, F | ET-016a (#101) | PR (tests job, `npm test`) | security |
-| `tests/unit/journal-export.test.ts` | Node unit (Vitest) | REG-014 | R, F | ET-016a (#101) | PR (tests job, `npm test`) | gap, trip completeness |
+| `tests/unit/journal-export.test.ts` | Node unit (Vitest) | REG-011, REG-014 | R, F | ET-016a (#101) | PR (tests job, `npm test`) | gap, trip completeness, security |
 | `tests/unit/journal-preload.test.ts` | Node unit (Vitest) | REG-011, REG-012, REG-014 | R, T | ET-016a (#97) | PR (tests job, `npm test`) | security |
 | `tests/unit/journal-service.test.ts` | Node unit (Vitest) | REG-011, REG-014 | R, F | ET-016a (#97) | PR (tests job, `npm test`) | — |
 | `tests/unit/journal-view.test.ts` | Node unit (Vitest) | REG-009, REG-014, REG-017 | R, F | ET-016a (#98) | PR (tests job, `npm test`) | gap, trip completeness |

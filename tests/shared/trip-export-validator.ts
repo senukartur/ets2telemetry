@@ -33,9 +33,10 @@ export function tripExportProblems(document: unknown): string[] {
   const problems: string[] = [];
   const problem = (where: string, what: string) => { problems.push(`${where}: ${what}`); };
   if (!isObject(document)) return ['$: not an object'];
-  if (!sameKeys(document, TOP_KEYS)) problem('$', `keys are not ${TOP_KEYS.join(', ')} in this order`);
+  const topKeys = document.formatVersion === 3 ? [...TOP_KEYS.slice(0, 12), 'diagnostics', ...TOP_KEYS.slice(12)] : TOP_KEYS;
+  if (!sameKeys(document, topKeys)) problem('$', `keys are not ${topKeys.join(', ')} in this order`);
   if (document.format !== 'ets2telemetry.trip-export') problem('$.format', 'not ets2telemetry.trip-export');
-  if (document.formatVersion !== 1 && document.formatVersion !== 2) problem('$.formatVersion', 'neither 1 nor 2');
+  if (document.formatVersion !== 1 && document.formatVersion !== 2 && document.formatVersion !== 3) problem('$.formatVersion', 'not 1, 2 or 3');
 
   const header = document.header;
   if (!isObject(header) || !isObject(header.application) || header.application.name !== 'ETS2Telemetry' || typeof header.application.version !== 'string'
@@ -66,12 +67,12 @@ export function tripExportProblems(document: unknown): string[] {
   walk(document, '$');
 
   const trip = document.trip, bounds = document.bounds;
-  if (!isObject(trip) || !sameKeys(trip, document.formatVersion === 2 ? ['is_hard_mode', 'hard_mode_details', ...TRIP_KEYS] : TRIP_KEYS) || !UUID.test(textOf(trip.tripUuid)) || !UUID.test(textOf(trip.pluginSessionId))) problem('$.trip', 'malformed');
+  if (!isObject(trip) || !sameKeys(trip, document.formatVersion !== 1 ? ['is_hard_mode', 'hard_mode_details', ...TRIP_KEYS] : TRIP_KEYS) || !UUID.test(textOf(trip.tripUuid)) || !UUID.test(textOf(trip.pluginSessionId))) problem('$.trip', 'malformed');
   else if ((trip.outcome === 'open') !== (trip.closeReason === null) || (trip.outcome === 'open') !== (trip.endedUtcMs === null)) problem('$.trip', 'outcome, close reason and end disagree');
   if (!isObject(bounds) || !sameKeys(bounds, ['committedThroughEventSeq', 'lastSampleId', 'lastIntervalId', 'snapshot']) || !U64.test(textOf(bounds.committedThroughEventSeq))
     || (bounds.lastSampleId !== null && !ROW_ID.test(textOf(bounds.lastSampleId))) || (bounds.lastIntervalId !== null && !ROW_ID.test(textOf(bounds.lastIntervalId)))
     || bounds.snapshot !== (isObject(trip) && trip.outcome === 'open')) { problem('$.bounds', 'malformed'); return problems; }
-  if (document.formatVersion === 2 && isObject(trip)) {
+  if (document.formatVersion !== 1 && isObject(trip)) {
     if (typeof trip.is_hard_mode !== 'boolean') problem('$.trip.is_hard_mode', 'not boolean');
     const audit = trip.hard_mode_details;
     const keys = ['version', 'binding', 'opening', 'latest', 'firstLoss', 'manualDelivery'];
@@ -81,6 +82,22 @@ export function tripExportProblems(document: unknown): string[] {
     if (trip.is_hard_mode && (trip.outcome !== 'delivered' || !isObject(audit) || audit.firstLoss !== null || audit.manualDelivery !== true)) problem('$.trip.is_hard_mode', 'qualification lacks delivery proof');
   }
   const window = document.window;
+  if (document.formatVersion === 3) {
+    const d = document.diagnostics;
+    if (!isObject(d) || !sameKeys(d, ['collection', 'matchedBy', 'status', 'notes', 'records']) || d.collection !== 'retained-logs-at-export'
+      || d.matchedBy !== 'plugin-session-and-utc-window' || !['records-found', 'no-matching-records', 'unavailable', 'not-applicable'].includes(textOf(d.status))
+      || !Array.isArray(d.notes) || !d.notes.every(n => ['LOGS_MAY_BE_INCOMPLETE', 'GAME_LOG_UNAVAILABLE', 'SERVICE_LOG_UNAVAILABLE', 'RECORD_LIMIT', 'COLLECTION_FAILED', 'SOURCE_MODE_ISOLATED', 'INVALID_TIME_WINDOW'].includes(textOf(n)))
+      || !Array.isArray(d.records) || d.records.length > 256) problem('$.diagnostics', 'malformed');
+    else for (const row of d.records) {
+      if (!isObject(row) || !sameKeys(row, ['time', 'event', 'facts']) || !Number.isFinite(Date.parse(textOf(row.time)))
+        || !['PLUGIN_V1_CONNECTION_CLOSED', 'NATIVE_BROKER_V1_EXIT'].includes(textOf(row.event)) || !isObject(row.facts) || !isObject(trip)
+        || row.facts.game !== trip.game || row.facts.pluginSessionId !== trip.pluginSessionId) { problem('$.diagnostics.records', 'malformed or unrelated'); continue; }
+      const allowed = row.event === 'PLUGIN_V1_CONNECTION_CLOSED'
+        ? ['game', 'pluginSessionId', 'reason', 'phase', 'write', 'end', 'win32', 'durable', 'connection', 'durationMs']
+        : ['game', 'pluginSessionId', 'outcome', 'exitCode', 'serviceMs', 'stage', 'win32Error', 'elapsedMs', 'slowStage', 'slowMs'];
+      if (Object.keys(row.facts).length !== allowed.length || !Object.keys(row.facts).every(k => allowed.includes(k))) problem('$.diagnostics.records.facts', 'unexpected facts');
+    }
+  }
   if (!isObject(window) || !isObject(trip) || window.pluginSessionId !== trip.pluginSessionId) problem('$.window', 'not the trip session');
 
   // Rows: their own keys, ascending ids and inside the bounds (J17). A null sample or interval bound means the trip had

@@ -51,6 +51,7 @@ import {DIAGNOSTICS_EXPORT_CHANNEL, isPluginGame, isPluginTargetId, PLUGIN_CHANN
 import {connectionDiagnosis} from './connection-diagnosis';
 import {buildDiagnosticBundle, readDiagnosticLogs, readFileTail} from './diagnostic-bundle';
 import {DiagnosticBundleExporter} from './diagnostic-bundle-writer';
+import {collectTripDiagnostics, emptyTripDiagnostics} from './trip-export-diagnostics';
 import {cancelDeferralOnStart, EXIT_CODES, parseSquirrelArgs, prepareSquirrelProcess, productionSquirrelPorts, runSquirrelEvent} from './squirrel-events';
 import {checkRunningGames} from './plugin-setup/game-processes';
 import {pluginBundleDirectory, readPluginBundle} from './plugin-setup/plugin-bundle';
@@ -179,6 +180,14 @@ function runApplication(profileError: unknown): void {
   // ET-016 PR-5 (J16): one trip export at a time. Main owns the Save dialog and the file writer; the renderer gets fixed
   // codes and row counts only. The dialog belongs to the dashboard window; without one the export is cancelled.
   const exporter = new JournalExporter({log, read: query => journal.request(query), localAppData: process.env.LOCALAPPDATA, appVersion: version,
+    diagnostics: async (detail, exportedUtcMs) => {
+      if (resolveSourceMode(lastLive.selection, process.env).kind !== 'game') return {...emptyTripDiagnostics(detail), notes: ['SOURCE_MODE_ISOLATED']};
+      let documents: string | undefined;
+      try { documents = app.getPath('documents'); } catch { /* Game-log evidence is optional. */ }
+      await log.flush(BUNDLE_FLUSH_MS);
+      const logs = await readDiagnosticLogs(logLocation.directory, readFileTail, documents ? {documents, staging: CHANNEL.channel === 'staging'} : undefined);
+      return collectTripDiagnostics(detail, exportedUtcMs, logs);
+    },
     documents: () => app.getPath('documents'),
     showSaveDialog: defaultPath => window && !window.isDestroyed()
       ? dialog.showSaveDialog(window, {defaultPath, filters: EXPORT_DIALOG_FILTERS.map(filter => ({name: filter.name, extensions: [...filter.extensions]}))})

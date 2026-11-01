@@ -1,5 +1,6 @@
 import {mkdir, writeFile} from 'node:fs/promises';
 import path from 'node:path';
+import {readFileSync} from 'node:fs';
 import {afterEach, beforeEach, describe, expect, it} from 'vitest';
 import type {AppHealth, PluginSetupView, SettingsView} from '../../packages/contracts/src';
 import {
@@ -40,6 +41,17 @@ const parse = (text: string) => JSON.parse(text) as Record<string, unknown> & {l
 
 const closeLine = (fields = '') => `00:01:00.000 : ETS2TelemetryStaging: V1_CONNECTION_CLOSED reason=WRITE_TIMEOUT phase=live write=snapshot end=none win32=0 durable=1 connection=2 utcMs=1792225800000 durationMs=60000${fields}`;
 describe('plugin close diagnostics (REG-010, REG-011)', () => {
+  it('accepts every fixed token declared by the native emitter, including future additions', () => {
+    const native = readFileSync('native/telemetry-plugin/src/v1-server.cpp', 'utf8');
+    const reasons = new Set([...native.matchAll(/"([A-Z][A-Z_]+)"/g)].map(m => m[1]));
+    expect(reasons.size).toBeGreaterThan(20);
+    for (const reason of reasons) expect(pluginCloseLogRow(closeLine().replace('WRITE_TIMEOUT', reason), 'ets2', true), reason).toBeDefined();
+    for (const [field, fallback] of [['phase', 'live'], ['write', 'snapshot'], ['end', 'none']] as const) {
+      for (const match of native.matchAll(new RegExp(`\\.${field} = [^;]+`, 'g'))) {
+        for (const token of match[0].matchAll(/"([a-z-]+)"/g)) expect(pluginCloseLogRow(closeLine().replace(`${field}=${fallback}`, `${field}=${token[1]}`), 'ets2', true), `${field}=${token[1]}`).toBeDefined();
+      }
+    }
+  });
   it('accepts only fixed close facts and uses the worker-captured UTC, not the delayed SDK log timestamp', () => {
     expect(pluginCloseLogRow(closeLine(), 'ets2', true)).toEqual({time: '2026-10-17T08:30:00.000Z', event: 'PLUGIN_V1_CONNECTION_CLOSED',
       facts: {game: 'ets2', reason: 'WRITE_TIMEOUT', phase: 'live', write: 'snapshot', end: 'none', win32: 0, durable: true, connection: 2, durationMs: 60000}});
@@ -50,7 +62,8 @@ describe('plugin close diagnostics (REG-010, REG-011)', () => {
   it.each([
     closeLine(' payload=C:\\Users\\Private\\save.sii'), closeLine(' cargo=PRIVATE_CARGO'), closeLine().replace('WRITE_TIMEOUT', 'PRIVATE_REASON'),
     closeLine().replace('connection=2', 'connection=18446744073709551615'), closeLine().replace('win32=0', 'win32=4294967296'),
-    closeLine().replace('utcMs=1792225800000', 'utcMs=8640000000000001'), closeLine().replace('phase=live', 'phase=private'), 'private chat or profile line'
+    closeLine().replace('utcMs=1792225800000', 'utcMs=8640000000000001'), closeLine().replace('phase=live', 'phase=private'), 'private chat or profile line',
+    closeLine().replace('utcMs=1792225800000', 'utcMs=0')
   ])('drops unrelated, malformed or payload-bearing game log content: %s', value => {
     expect(pluginCloseLogRow(value, 'ets2', true)).toBeUndefined();
   });

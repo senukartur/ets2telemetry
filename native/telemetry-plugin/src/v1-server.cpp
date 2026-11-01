@@ -119,7 +119,10 @@ struct Server::Connection {
   bool send();
   void poll_state();
   bool write(Json wire) {
-    if (outbound.write(encode(std::move(wire), minor), GetTickCount64() + write_deadline_ms)) { server.close_reason("CONNECTION_EXCEPTION"); return true; }
+    std::vector<std::uint8_t> frame;
+    try { frame = encode(std::move(wire), minor); }
+    catch (...) { server.close_reason("ENCODING_FAILED"); throw; }
+    if (outbound.write(std::move(frame), GetTickCount64() + write_deadline_ms)) { server.close_reason("CONNECTION_EXCEPTION"); return true; }
     server.close_reason("WRITE_FAILED", outbound.error()); return false;
   }
   bool complete_write(ULONGLONG deadline);
@@ -216,7 +219,7 @@ bool Server::Connection::receive() {
   if (phase != Phase::live) { server.close_reason("EARLY_CLIENT_DATA"); return false; }
   // The receipt time of a clock probe is taken when its read completion is observed.
   const auto received_ns = server.now_ns();
-  server.close_reason("CLIENT_PROTOCOL");
+  server.close_reason("CONNECTION_EXCEPTION");
   decoder.push(input.data(), bytes, [&](Message m) { handle(m, received_ns); });
   server.close_reason("CONNECTION_EXCEPTION");
   if (inbound.read(input.data(), static_cast<DWORD>(input.size()))) return true;
@@ -230,7 +233,7 @@ void Server::Connection::handle(const Message& m, std::uint64_t received_ns) {
     // regression; receipt is never an ACK. An accepted ACK releases whole entries only (decision (c)).
     if (const auto through = validator.accept(m))
       if (!server.store_->release(*through)) throw Retire(EndReason::source_retired, true);
-    server.close_reason("CLIENT_PROTOCOL"); return;
+    server.close_reason("CONNECTION_EXCEPTION"); return;
   }
   if (m.kind == "clock.probe") {
     server.close_reason("INVALID_PROBE");
@@ -238,7 +241,7 @@ void Server::Connection::handle(const Message& m, std::uint64_t received_ns) {
     const auto id = validator.probe(m);
     // OD-5 S6: probe IDs strictly increase, and no probe may arrive while the reply to the previous one is unsent.
     if (id <= last_probe || probe) throw ProtocolError("v1-clock-probe");
-    last_probe = id; probe = std::make_pair(id, received_ns); server.close_reason("CLIENT_PROTOCOL"); return;
+    last_probe = id; probe = std::make_pair(id, received_ns); server.close_reason("CONNECTION_EXCEPTION"); return;
   }
   // After the checkpoint the client sends only ack and clock.probe (OD-5 S6).
   throw ProtocolError("v1-client-message");
@@ -267,7 +270,7 @@ void Server::Connection::poll_state() {
 bool Server::Connection::send() {
   auto& store = *server.store_; const auto& encoder = *server.encoder_;
   if (phase == Phase::welcome) {
-    server.close_reason("ENCODING_FAILED");
+    server.close_reason("CONNECTION_EXCEPTION");
     server.close_diagnostic_.phase = "welcome"; server.close_diagnostic_.write = "welcome";
     auto info = server.welcome_; info.durable_events = durable;
     if (!write(encoder.welcome(server.next_seq(), capture.stamp(server.now_ns()), info, minor))) return false;
@@ -277,7 +280,7 @@ bool Server::Connection::send() {
     // OD-5 S6: a client byte that arrived before the checkpoint is issued ends the connection.
     if (WaitForSingleObject(inbound.event(), 0) == WAIT_OBJECT_0) { server.close_reason("EARLY_CLIENT_DATA"); return false; }
     server.close_diagnostic_.write = "checkpoint";
-    server.close_reason("ENCODING_FAILED");
+    server.close_reason("CONNECTION_EXCEPTION");
     // One coherent copy of the v1 slot, the monitor's latest window and the store's status (OD-5 S11).
     if (!server.adapter_.read_v1_current(*pending) || pending->source_retired || pending->exhausted || !pending->active)
       throw Retire(EndReason::source_retired, false);
@@ -292,7 +295,7 @@ bool Server::Connection::send() {
     return true;
   }
   if (probe) {
-    server.close_reason("ENCODING_FAILED");
+    server.close_reason("CONNECTION_EXCEPTION");
     server.close_diagnostic_.write = "clock-reply";
     // received <= sent <= capture: the send time is the encode time, which is the capture time.
     const auto sent = capture.stamp(server.now_ns(), probe->second);
@@ -302,7 +305,7 @@ bool Server::Connection::send() {
   poll_state();
   const auto now = GetTickCount64();
   if (has_pending && now >= next_snapshot) {
-    server.close_reason("ENCODING_FAILED");
+    server.close_reason("CONNECTION_EXCEPTION");
     server.close_diagnostic_.write = "snapshot";
     window::Snapshot storage; const auto* w = window_now(storage);
     pending->state.window = window_field(*pending, w, server.process_creation_, now);
@@ -409,7 +412,7 @@ EventChannel* Server::prepare() noexcept {
     // A fresh store per plugin session: its coverage restarts at eventSeq 1 with the channel (§9).
     store_ = std::make_unique<EventStore>(); encoder_.reset();
     if (!channel_->prepare()) return nullptr;
-    seq_ = 0; coalesced_ = 0; exhausted_since_ = 0; connections_ = 0; close_logs_ = 0;
+    seq_ = 0; coalesced_ = 0; exhausted_since_ = 0; connections_ = 0; close_logs_ = 0; rejected_close_logs_ = 0;
     return channel_.get();
   } catch (...) { return nullptr; }
 }
@@ -547,19 +550,19 @@ Server::Outcome Server::serve(HANDLE pipe, const std::wstring& directory, const 
   // The v0 connected-peer authority (§12): token user, Windows session and the protected v1 service policy. These reads
   // are the worker's only synchronous I/O that stop() cancels.
   transport::PeerIdentity peer; std::vector<transport::AllowedPeer> policy;
-  close_reason("PEER_REJECTED");
+  close_reason("PEER_INSPECTION_FAILED");
   {
     transport::CancelWindow::Scope window(cancel_window_);
     peer = transport::inspect_peer(pid, stop_event_.get());
-    if (peer.sid != user.sid || peer.session != user.session) return Outcome::reset;
-    close_reason("POLICY_REJECTED");
+    if (peer.sid != user.sid || peer.session != user.session) { close_reason("PEER_REJECTED"); return Outcome::reset; }
+    close_reason("POLICY_READ_FAILED");
     policy = transport::read_service_policy(directory, security, user, stop_event_.get());
   }
   bool allowed = false;
   for (const auto& candidate : policy) if (!_wcsicmp(candidate.image.c_str(), peer.image.c_str()) && candidate.sha256 == peer.sha256) allowed = true;
-  if (!allowed) return Outcome::reset;
+  if (!allowed) { close_reason("POLICY_REJECTED"); return Outcome::reset; }
   if (GetTickCount64() >= hello_deadline) { close_reason("HELLO_TIMEOUT"); return Outcome::reset; }
-  close_diagnostic_.phase = "hello"; close_reason("HELLO_PROTOCOL");
+  close_diagnostic_.phase = "hello"; close_reason("CONNECTION_EXCEPTION");
   // The 4,096-byte client bound is enforced at the prefix, before a larger payload is retained. A byte beyond the hello
   // in the same read is a violation (OD-5 S6).
   std::array<std::uint8_t, limits.client_frame_bytes + 4> hello{}; std::size_t received = 0; std::uint32_t length = 0;
@@ -576,13 +579,13 @@ Server::Outcome Server::serve(HANDLE pipe, const std::wstring& directory, const 
     received += bytes;
     if (received >= 4) {
       length = static_cast<std::uint32_t>(hello[0]) | (static_cast<std::uint32_t>(hello[1]) << 8) | (static_cast<std::uint32_t>(hello[2]) << 16) | (static_cast<std::uint32_t>(hello[3]) << 24);
-      if (!length || length > limits.client_frame_bytes || received > static_cast<std::size_t>(length) + 4) return Outcome::reset;
+      if (!length || length > limits.client_frame_bytes || received > static_cast<std::size_t>(length) + 4) { close_reason("HELLO_PROTOCOL"); return Outcome::reset; }
     }
   }
   // Another major, another envelope minor or any other kind closes the connection without an error frame (§2). A hello
   // is always version 1.0; its maxMinor selects the connection minor (ET-050b B1).
   const auto message = decode_payload(std::string(reinterpret_cast<const char*>(hello.data()) + 4, length), Sender::client);
-  if (message.kind != "hello") return Outcome::reset;
+  if (message.kind != "hello") { close_reason("HELLO_PROTOCOL"); return Outcome::reset; }
   const auto negotiated = negotiate(message, true, endpoint_max_minor);
   close_diagnostic_.negotiated = true; close_diagnostic_.durable = negotiated.durable_events;
   close_reason("CONNECTION_EXCEPTION");
@@ -594,18 +597,19 @@ void Server::close_reason(const char* reason, DWORD error) noexcept {
   close_diagnostic_.reason = reason; close_diagnostic_.error = error;
 }
 void Server::report_close() noexcept {
-  // Fixed codes and numbers only; at most 256 lines per plugin session (96 KiB), with an independent 16-line SDK queue.
-  if (close_logs_ >= 256) { adapter_.connection_log_dropped(&close_overflow_log); return; }
-  ++close_logs_;
+  // Reserve the main budget for negotiated connections. Rejected clients may fill at most half the SDK queue.
+  auto& count = close_diagnostic_.negotiated ? close_logs_ : rejected_close_logs_;
+  if (count >= (close_diagnostic_.negotiated ? 256u : 8u)) { adapter_.connection_log_dropped(&close_overflow_log); return; }
+  ++count;
   FILETIME time{}; GetSystemTimePreciseAsFileTime(&time);
   const auto ticks = (static_cast<std::uint64_t>(time.dwHighDateTime) << 32) | time.dwLowDateTime;
   const auto utc_ms = ticks >= 116444736000000000ULL ? (ticks - 116444736000000000ULL) / 10000 : 0;
   sdk::ConnectionLogLine line;
   const auto& d = close_diagnostic_;
   const auto written = std::snprintf(line.text.data(), line.text.size(), ETS2TELEMETRY_GAME_LOG_PREFIX
-    " V1_CONNECTION_CLOSED reason=%s phase=%s write=%s end=%s win32=%lu durable=%s connection=%llu utcMs=%llu durationMs=%llu",
+    " V1_CONNECTION_CLOSED reason=%s phase=%s write=%s end=%s win32=%lu durable=%s connection=%llu utcMs=%llu durationMs=%llu session=%s",
     d.reason, d.phase, d.write, d.end, static_cast<unsigned long>(d.error), d.negotiated ? d.durable ? "1" : "0" : "unknown",
-    static_cast<unsigned long long>(connections_), static_cast<unsigned long long>(utc_ms), static_cast<unsigned long long>(GetTickCount64() - d.started));
+    static_cast<unsigned long long>(connections_), static_cast<unsigned long long>(utc_ms), static_cast<unsigned long long>(GetTickCount64() - d.started), plugin_session_id_.c_str());
   if (written < 0 || static_cast<std::size_t>(written) >= line.text.size()) { adapter_.connection_log_dropped(&close_overflow_log); return; }
   adapter_.defer_connection_log(line, &close_overflow_log);
 }
@@ -650,6 +654,10 @@ void Server::run(std::wstring directory) noexcept {
       try { outcome = serve(pipe.get(), directory, security, user); }
       catch (const Retire&) { report_close(); throw; }
       catch (const SequenceSpent&) { close_reason("SEQUENCE_EXHAUSTED"); report_close(); throw; }
+      catch (const ProtocolError&) {
+        if (!std::strcmp(close_diagnostic_.reason, "CONNECTION_EXCEPTION"))
+          close_reason(!std::strcmp(close_diagnostic_.phase, "hello") ? "HELLO_PROTOCOL" : "CLIENT_PROTOCOL");
+      }
       catch (...) {
         // Cancellation during peer/policy inspection belongs to shutdown, not a source rejection.
         if (stopped()) close_reason("SHUTDOWN");

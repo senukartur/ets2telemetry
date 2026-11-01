@@ -4,7 +4,7 @@ ET-016 PR-5 exports one recorded trip as a JSON file, `ets2telemetry.trip-export
 
 Status (October 17, 2026): the format, the save flow and the Export button are implemented and tested with synthetic databases only. `GAME_HISTORY_RECORDING` has been `true` since October 25, 2026, but no real game trip has been recorded or exported yet. The Windows Save dialog itself (overwrite prompt, cancel by Esc and by the close box, OneDrive Documents, long paths, a read-only folder) remains a pending manual check.
 
-Current exports use [format 2](#hard-mode-format-2-et-026), adding the Hard Mode boolean/audit; the format-1 specification and example below remain historical coverage.
+Current exports use [format 3](#connection-diagnostics-format-3), adding trip-scoped connection evidence to the [format-2 Hard Mode fields](#hard-mode-format-2-et-026); the format-1 specification and example below remain historical coverage.
 
 ## Saving a trip (J16, J17)
 
@@ -136,6 +136,17 @@ Pending: the real Windows Save dialog (overwrite prompt, Esc and the close box, 
 
 ## Hard Mode: format 2 (ET-026)
 
-New exports use `formatVersion: 2`. The trip block adds `is_hard_mode: boolean` and `hard_mode_details: HardModeDetails | null` before its existing fields, with the typed, allowlisted, version-1 sanitized audit described in [Hard Mode](hard-mode.md#recording-and-durability). Historical trips export false/null. The boolean is true only for qualifying delivered trips with available manual completion; a current settings pass is insufficient. Opening/latest source categories, observation times, first-loss values and manual-delivery availability remain explicit. Names, account IDs, paths and raw configs are excluded.
+Format 2 adds `is_hard_mode: boolean` and `hard_mode_details: HardModeDetails | null` before the trip's existing fields, with the typed, allowlisted, version-1 sanitized audit described in [Hard Mode](hard-mode.md#recording-and-durability). Format 3 retains these fields. Historical trips export false/null. The boolean is true only for qualifying delivered trips with available manual completion; a current settings pass is insufficient. Opening/latest source categories, observation times, first-loss values and manual-delivery availability remain explicit. Names, account IDs, paths and raw configs are excluded.
 
-Canonical units, streaming/bounds, identifiers, save cancellation/refusal and money semantics are unchanged. The existing [format-1 example](#example) and its hand-written historical validation remain unchanged. The independent validator accepts historical format 1 and current format 2 with their different exact trip keys; current storage/export tests reconcile the flag with SQLite. Future server payloads map `is_hard_mode` to this boolean; no server implementation or export import is added.
+Canonical units, streaming/bounds, identifiers, save cancellation/refusal and money semantics are unchanged. The existing [format-1 example](#example) and its hand-written historical validation remain unchanged. The independent validator accepts formats 1, 2 and 3 with their different exact keys; current storage/export tests reconcile the flag with SQLite. Future server payloads map `is_hard_mode` to this boolean; no server implementation or export import is added.
+
+## Connection diagnostics: format 3
+
+`formatVersion: 3` inserts `diagnostics` after `window`, before the three streamed arrays. It is collected only after Save and target checks, within the export's abort/idle work. Optional log failures still produce the recorded trip, with `COLLECTION_FAILED`; cancellation and refused targets read no logs. Recording, ACKs, completeness and database schema are unchanged.
+
+- `collection: "retained-logs-at-export"`, `matchedBy: "plugin-session-and-utc-window"` describe the evidence's limits. This is not a persistent per-trip archive or a claim that all closures were observed.
+- `status`: `records-found`, `no-matching-records`, `unavailable` or `not-applicable` (synthetic/replay trips). An isolated/blocked source mode reads no game logs and reports `SOURCE_MODE_ISOLATED`.
+- `notes`: fixed codes identifying potentially incomplete logs, unavailable game/service evidence, the record limit, collection failure or invalid UTC bounds.
+- `records`: at most the latest 256 deduplicated records, ordered by UTC, each `{time, event, facts}`. Only `PLUGIN_V1_CONNECTION_CLOSED` and `NATIVE_BROKER_V1_EXIT` enter, with their strict fixed-code/numeric fields and verified project `pluginSessionId`/game. Paths, names, cargo, raw stderr and unrelated log facts are excluded.
+
+Both the plugin session and game must match the trip. UTC lies between `trip.startedUtcMs` and the earlier of `trip.endedUtcMs` (when closed) and `header.exportedUtcMs`. A reversed window yields no invented association. Legacy records without a session ID are excluded. The reader uses the [diagnostic bundle's bounded retained logs](plugin-setup.md#diagnostic-bundle); earlier service rows may survive in `startup.jsonl.1` after a restart, but a game restart, rotation, clock adjustment or queue/budget limits can remove evidence. Empty records never prove that no disconnect occurred. Export before restarting the game, and briefly resume first if paused SDK logging has not flushed.
