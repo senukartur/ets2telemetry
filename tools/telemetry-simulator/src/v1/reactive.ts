@@ -438,10 +438,10 @@ export async function runIndependentClient(endpoint: string, input: unknown, opt
         const socket = net.connect(endpoint), client = new ScriptedClient(ledger, step.client, instance, randomUUID(), cursors, s.origin);
         let settled = false, crashed = false, probed = false, writing = false; attempts++;
         // Writes leave strictly in order, one at a time, each after its own random delay, as a storage-paced consumer sends
-        // them. ACKs are cumulative: a new ACK replaces one still waiting behind it, so a burst costs one ACK, not one each.
+        // them. ACKs are cumulative, except dropAfter counts individual frames: keep its promised prefix intact.
         const pending: {ack: boolean; bytes: Uint8Array | (() => Uint8Array[])}[] = [], idle: (() => void)[] = [];
         const enqueue = (bytes: Uint8Array | (() => Uint8Array[]), ack = false) => {
-          if (ack && pending.at(-1)?.ack) pending[pending.length - 1] = {ack, bytes}; else pending.push({ack, bytes});
+          if (ack && step.client.ack.kind !== 'dropAfter' && pending.at(-1)?.ack) pending[pending.length - 1] = {ack, bytes}; else pending.push({ack, bytes});
           if (writing) return;
           writing = true;
           const next = () => {

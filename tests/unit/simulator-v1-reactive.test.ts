@@ -230,6 +230,22 @@ describe('simulator v1 reactive serving for any contract consumer', () => {
     } finally { await server.stop(); }
   });
 
+  it('keeps every promised dropAfter ACK when one action emits several events', async () => {
+    const scenario = inline([{atMs: 10, action: 'gameplay', id: 'player.tollgate.paid', attributes: [{name: 'pay.amount', sdkType: 's64', value: '1'}], repeat: 4}],
+      [{atMs: 0, action: 'connect', client: {durable: true, ack: 'dropAfter:3'}}, {atMs: 100, action: 'disconnect'}]);
+    const replay = replayV1(scenario);
+    const server = await serveV1Reactive(scenario, {scale: 0, quiesceMs: 0, awaitScriptedAcks: true, settleTimeoutMs: 1000});
+    try {
+      const [client, report] = await Promise.all([
+        runIndependentClient(server.endpoint, scenario, {seed: 1, maxDelayMs: 25}), server.done
+      ]);
+      expect(report.transcript.filter(l => l.message.kind === 'ack').map(l => l.message.kind === 'ack' && l.message.data.throughEventSeq)).toEqual(['1', '2', '3']);
+      expect(report.connections.map(c => c.closedBy)).toEqual(['disconnect']);
+      expect(client.ledger).toEqual(replay.ledger);
+      expect(reactiveDifferences(replay, report)).toEqual([]);
+    } finally { await server.stop(); }
+  });
+
   it('runs only scenarios whose client is not scripted', async () => {
     await expect(serveV1Reactive(load('wire-faults'))).rejects.toThrow(/lockstep/);
     await expect(serveV1Reactive(load('pipe-stalled-reader'))).rejects.toThrow(/lockstep/);
