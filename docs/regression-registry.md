@@ -146,6 +146,7 @@ Columns:
 | `tests/unit/renderer-entry.test.ts` | Node unit (Vitest) | REG-016, REG-017 | V (et-012a) | ET-008 (#21) | PR (tests job, `npm test`) | — |
 | `tests/unit/renderer-observation.test.ts` | Node unit (Vitest) | smoke evidence: REG-002, REG-003, REG-009, REG-011, REG-016 | T, V (et-006a) | ET-006a (#13) | PR (tests job, `npm test`) | — |
 | `tests/unit/runtime-receipt.test.ts` | Node unit (Vitest) | smoke evidence: REG-002, REG-006, REG-011, REG-012, REG-013, REG-014, REG-015, REG-016, REG-017 | T, V (et-022) | ET-022 (#7) | PR (tests job, `npm test`) | regression |
+| `tests/host/ui-runtime-receipt.test.ts` | Host-boundaries (Vitest, real filesystem and PowerShell) | Receipt validation: REG-009, REG-012, REG-014, REG-015, REG-016, REG-017 | T | ET-059 | PR (windows-tests job, `npm test`; serial host-boundaries project) | required UI receipt assertions and screenshot completeness; no real UI/game acceptance |
 | `tests/unit/sample-buffer.test.ts` | Node unit (Vitest) | REG-007, REG-009 | R, F | ET-015b (#86) | PR (tests job, `npm test`) | gap |
 | `tests/unit/scaffold.test.ts` | Node unit (Vitest) | REG-017 | R | ET-001 (#5) | PR (tests job, `npm test`) | — |
 | `tests/unit/service-heartbeat.test.ts` | Node unit (Vitest) | REG-011 | R, F | ET-036 | PR (tests job, `npm test`) | regression |
