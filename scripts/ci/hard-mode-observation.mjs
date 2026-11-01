@@ -36,65 +36,98 @@ export async function startHardModeSource(config) {
   const fixture = async name => JSON.parse(await readFile(path.join(config.checkout, 'tests', 'fixtures', 'protocol-v1', `${name}.json`), 'utf8'));
   const welcome = await fixture('welcome'), checkpoint = await fixture('checkpoint'), configured = await fixture('event-job-configured'), delivered = await fixture('event-job-delivered');
   const endpoint = `\\\\.\\pipe\\ETS2Telemetry-SYNTHETIC-TEST-v1-${process.pid}-${randomUUID()}`;
-  let socket, timer, seq = 0n, next = 1n, acked = 0n, revision = 1n, order = 1n, ns = 1000000000000n, durable = false;
-  const events = [], errors = [], state = structuredClone(checkpoint.data.state);
+  let connection, stopping, stopped = false, next = 1n, acked = 0n, revision = 1n, order = 1n, ns = 1000000000000n;
+  const events = [], errors = [], peerDisconnects = [], state = structuredClone(checkpoint.data.state);
   state.configuration.job = {available: false, reason: 'not-observed'}; state.configuration.revision = '1'; state.boundaryOrder = '1';
   const capture = () => ({clockId: welcome.capture.clockId, monotonicNs: (ns += 100000000n).toString()});
-  const status = () => ({...checkpoint.data.status, delivery: {durable, ackedThroughEventSeq: acked.toString(), nextEventSeq: next.toString(), retainedEvents: 0, retainedBytes: 0, oldestRetainedMonotonicNs: {available: false, reason: 'not-observed'}}});
-  const send = (kind, data) => {
-    const message = {...welcome, kind, seq: (++seq).toString(), capture: capture(), data};
+  const active = peer => !stopped && peer && connection === peer && !peer.closed && !peer.socket.destroyed;
+  const retire = (peer, error) => {
+    if (!peer || peer.closed) return;
+    peer.closed = true; clearInterval(peer.timer);
+    // This fixture does not redeliver events. Any disconnect before ACK is fatal, even when the failed frame is a
+    // snapshot or the peer closes cleanly; only an idle/fully acknowledged peer may report a benign EPIPE.
+    if (!stopped && peer.durable && acked + 1n < next) {
+      if (errors.length < 5) errors.push(error?.code ?? 'UNACKNOWLEDGED_EVENTS');
+    } else if (error?.code === 'EPIPE') {
+      if (peerDisconnects.length < 5) peerDisconnects.push({code: error.code, durable: peer.durable});
+    } else if (error && errors.length < 5) errors.push(error.code ?? 'SOCKET_ERROR');
+    if (connection === peer) connection = undefined;
+    peer.socket.destroy();
+  };
+  const status = peer => ({...checkpoint.data.status, delivery: {durable: peer.durable, ackedThroughEventSeq: acked.toString(), nextEventSeq: next.toString(), retainedEvents: 0, retainedBytes: 0, oldestRetainedMonotonicNs: {available: false, reason: 'not-observed'}}});
+  const send = (peer, kind, data) => {
+    if (!active(peer)) return;
+    const message = {...welcome, kind, seq: (++peer.seq).toString(), capture: capture(), data};
     if (kind === 'checkpoint') data.boundarySeq = message.seq;
-    if (socket && !socket.destroyed) {const bytes = Buffer.from(JSON.stringify(message)), header = Buffer.alloc(4); header.writeUInt32LE(bytes.length); socket.write(Buffer.concat([header, bytes]));}
+    const bytes = Buffer.from(JSON.stringify(message)), header = Buffer.alloc(4); header.writeUInt32LE(bytes.length);
+    peer.socket.write(Buffer.concat([header, bytes]), error => {if (error) retire(peer, error);});
     return message;
   };
-  const snapshot = () => {state.captureUtcUnixMs = {available: true, value: String(Date.now())}; state.boundaryOrder = (++order).toString(); send('snapshot', {state, status: status(), continuity: {coalescedSnapshots: '0', offlineTransitions: '0'}});};
+  const snapshot = peer => {
+    if (!active(peer)) return;
+    state.captureUtcUnixMs = {available: true, value: String(Date.now())}; state.boundaryOrder = (++order).toString();
+    send(peer, 'snapshot', {state, status: status(peer), continuity: {coalescedSnapshots: '0', offlineTransitions: '0'}});
+  };
   const server = createServer(incoming => {
-    socket?.destroy(); clearInterval(timer); socket = incoming; incoming.on('error', e => {if (errors.length < 5) errors.push(e.code ?? 'SOCKET_ERROR');});
+    if (stopped) {incoming.destroy(); return;}
+    retire(connection);
+    const peer = connection = {socket: incoming, seq: 0n, durable: false, closed: false, timer: undefined};
+    incoming.on('error', error => retire(peer, error));
     let bytes = Buffer.alloc(0), greeted = false;
     incoming.on('data', chunk => {
+      if (!active(peer)) return;
       bytes = Buffer.concat([bytes, chunk]); if (bytes.length > 8192) {incoming.destroy(); return;}
       while (bytes.length >= 4 && bytes.length >= 4 + bytes.readUInt32LE(0)) {
         const length = bytes.readUInt32LE(0); if (length > 4096) {incoming.destroy(); return;}
         const message = JSON.parse(bytes.subarray(4, 4 + length).toString('utf8')); bytes = bytes.subarray(4 + length);
         if (message.kind === 'hello' && !greeted) {
-          greeted = true; durable = message.data.durableEvents; seq = 0n;
-          send('welcome', {...welcome.data, durableEvents: durable});
-          send('checkpoint', {...checkpoint.data, state, status: status(), continuity: {coalescedSnapshots: '0', offlineTransitions: '0'}});
-          timer = setInterval(snapshot, 100);
-        } else if (message.kind === 'clock.probe') send('clock.reply', {probeId: message.data.probeId, receivedMonotonicNs: (ns + 1n).toString(), sentMonotonicNs: (ns + 2n).toString()});
+          greeted = true; peer.durable = message.data.durableEvents;
+          send(peer, 'welcome', {...welcome.data, durableEvents: peer.durable});
+          send(peer, 'checkpoint', {...checkpoint.data, state, status: status(peer), continuity: {coalescedSnapshots: '0', offlineTransitions: '0'}});
+          if (active(peer)) peer.timer = setInterval(() => snapshot(peer), 100);
+        } else if (message.kind === 'clock.probe') send(peer, 'clock.reply', {probeId: message.data.probeId, receivedMonotonicNs: (ns + 1n).toString(), sentMonotonicNs: (ns + 2n).toString()});
         else if (message.kind === 'ack') acked = BigInt(message.data.throughEventSeq);
       }
     });
-    incoming.on('close', () => {if (socket === incoming) {socket = undefined; durable = false; clearInterval(timer);}});
+    incoming.on('end', () => retire(peer));
+    incoming.on('close', () => retire(peer));
   });
   await new Promise((resolve, reject) => {server.once('error', reject); server.listen(endpoint, resolve);});
   const event = record => {
-    assert.equal(durable, true); state.boundaryOrder = (++order).toString();
+    const peer = connection;
+    assert.ok(active(peer) && peer.durable); state.boundaryOrder = (++order).toString();
     const data = {eventSeq: (next++).toString(), redelivered: false, occurred: {...configured.data.occurred, monotonicNs: {available: true, value: (ns + 100000000n).toString()},
       utcUnixMs: {available: true, value: String(Date.now())}, configurationRevision: revision.toString(), boundaryOrder: order.toString()}, record};
-    const m = send('event', data); events.push(m); snapshot(); return m.data.eventSeq;
+    const m = send(peer, 'event', data); events.push(m); snapshot(peer); return m.data.eventSeq;
   };
-  return {endpoint, errors, connected: () => durable, acked: () => acked.toString(),
+  return {endpoint, errors, peerDisconnects, connected: () => !!(active(connection) && connection.durable), acked: () => acked.toString(),
     settings: async kind => {if (kind === 'unknown') await rm(profileConfig, {force: true}); else await writeFile(profileConfig, kind === 'fail' ? CONFIG.replace('g_fatigue "1"', 'g_fatigue "0"') : CONFIG);},
     begin: label => {revision++; state.configuration.revision = revision.toString(); const job = {...configured.data.record, cargoId: {available: true, value: `synthetic_${label}`}, cargo: {available: true, value: `Synthetic ${label}`}}; const {type, ...value} = job; void type; state.configuration.job = {available: true, value}; return event(job);},
     deliver: () => event({...delivered.data.record, autoParkUsed: {available: true, value: false}}),
-    stop: async () => {clearInterval(timer); socket?.destroy(); await new Promise(resolve => server.close(resolve));}
+    stop: () => {
+      if (!stopping) {stopped = true; retire(connection); stopping = new Promise(resolve => server.close(resolve));}
+      return stopping;
+    }
   };
 }
 const current = page => page.evaluate(() => globalThis.desktop.getHardModeStatus());
 const trips = page => page.evaluate(async () => {const result = await globalThis.desktop.listJournalTrips(); return result.ok ? result.value.trips : [];});
 export async function runHardModeSmoke({application, dashboard, source, config, record}) {
+  record.errors = source.errors; record.peerDisconnects = source.peerDisconnects;
+  const healthy = () => assert.deepEqual(source.errors, [], 'HARD_MODE_SOURCE_ERROR');
+  const readStatus = () => {healthy(); return current(dashboard);};
+  const readTrips = () => {healthy(); return trips(dashboard);};
   const proof = (message, accept, timeoutMs = 8000) => {
     const observation = {message}; (record.proofWaits ??= []).push(observation);
-    return waitForHardModeProof({message, accept, timeoutMs, record: observation, read: () => current(dashboard),
+    return waitForHardModeProof({message, accept, timeoutMs, record: observation, read: () => readStatus(),
       refresh: () => dashboard.evaluate(() => globalThis.desktop.refreshHardMode())});
   };
   await chooseSource(dashboard, 'synthetic');
   await screen(dashboard, 'hardMode');
-  await until(source.connected, Boolean, 'HARD_MODE_DURABLE_SOURCE', 10000);
-  await until(async () => (await current(dashboard)).assessment.state, value => value === 'unknown', 'HARD_MODE_UNKNOWN', 5000); record.unknown = true; await until(() => dashboard.locator('[data-testid^="hard-mode-rule-"][data-state="unknown"]').count(), count => count === 12, 'HARD_MODE_UNKNOWN_NAMES', 5000); await dashboard.getByTestId('hard-mode-card').screenshot({path: path.join(config.output, 'hard-mode-unknown.png')});
+  await until(() => {healthy(); return source.connected();}, Boolean, 'HARD_MODE_DURABLE_SOURCE', 10000);
+  await until(async () => (await readStatus()).assessment.state, value => value === 'unknown', 'HARD_MODE_UNKNOWN', 5000); record.unknown = true; await until(() => dashboard.locator('[data-testid^="hard-mode-rule-"][data-state="unknown"]').count(), count => count === 12, 'HARD_MODE_UNKNOWN_NAMES', 5000); await dashboard.getByTestId('hard-mode-card').screenshot({path: path.join(config.output, 'hard-mode-unknown.png')});
   await source.settings('fail');
-  await until(async () => (await current(dashboard)).assessment.state, value => value === 'fail', 'HARD_MODE_FAIL', 8000); record.fail = true;
+  await until(async () => (await readStatus()).assessment.state, value => value === 'fail', 'HARD_MODE_FAIL', 8000); record.fail = true;
   const hints = [
     ['fuel', 'On (1)', 'On (1)', 'Meets the required setting'], ['air', 'On (1)', 'On (1)', 'Meets the required setting'],
     ['police', 'On (1)', 'On (1)', 'Meets the required setting'], ['fatigue', 'Off (0)', 'On (1)', 'Does not meet the required setting'],
@@ -173,34 +206,34 @@ export async function runHardModeSmoke({application, dashboard, source, config, 
   assert.match(await dashboard.getByTestId('hard-mode-source').innerText(), /Synthetic \/ replay settings.*s since observation/);
   await clickTestId(dashboard, 'hard-mode-refresh');
   record.hints = true; record.hover = true; record.inlineDetails = true; record.bilingual = true; record.keyboard = true; record.refresh = true;
-  await source.settings('pass'); await until(async () => (await current(dashboard)).assessment.state, value => value === 'pass', 'HARD_MODE_PASS', 8000); record.pass = true; await until(() => dashboard.getByTestId('hard-mode-card').getAttribute('data-state'), state => state === 'pass', 'HARD_MODE_RENDERED_PASS', 5000); await dashboard.getByTestId('hard-mode-card').screenshot({path: path.join(config.output, 'hard-mode-pass.png')});
+  await source.settings('pass'); await until(async () => (await readStatus()).assessment.state, value => value === 'pass', 'HARD_MODE_PASS', 8000); record.pass = true; await until(() => dashboard.getByTestId('hard-mode-card').getAttribute('data-state'), state => state === 'pass', 'HARD_MODE_RENDERED_PASS', 5000); await dashboard.getByTestId('hard-mode-card').screenshot({path: path.join(config.output, 'hard-mode-pass.png')});
   // Screenshots and the bilingual hint journey may outlive proof. Arm a new genuine publication immediately before
   // opening; subsequent waits drive the trusted refresh boundary instead of assuming a periodic tick was eligible.
-  const beforeOpening = (await current(dashboard)).assessment.observedUtcMs;
+  const beforeOpening = (await readStatus()).assessment.observedUtcMs;
   await proof('HARD_MODE_ARMED_PASS', value => value.assessment.state === 'pass' && value.assessment.observedUtcMs !== beforeOpening);
   source.begin('qualifying');
-  await proof('HARD_MODE_OPEN', async () => {const rows = await trips(dashboard); return rows.length === 1 && rows[0].outcome === 'open';}, 5000);
+  await proof('HARD_MODE_OPEN', async () => {const rows = await readTrips(); return rows.length === 1 && rows[0].outcome === 'open';}, 5000);
   // Require two distinct persisted passing publications while this trip is open, through the production adapter.
   let observed = (await proof('HARD_MODE_OPEN_AUDIT', value => value.trip?.latest.state === 'pass' && value.trip.firstLoss === null, 5000)).trip.latest.observedUtcMs;
   for (let refresh = 0; refresh < 2; refresh++) {
     const next = await proof('HARD_MODE_OPEN_PASSING_REFRESH', async value => {
       if (value.trip?.latest.state !== 'pass' || value.trip.firstLoss !== null || value.trip.latest.observedUtcMs === observed) return false;
-      assert.equal((await trips(dashboard))[0].outcome, 'open'); return true;
+      assert.equal((await readTrips())[0].outcome, 'open'); return true;
     });
     observed = next.trip.latest.observedUtcMs;
   }
   source.deliver();
   let positive;
-  await proof('HARD_MODE_QUALIFIED', async () => {positive = await trips(dashboard); return positive.length === 1 && positive[0].isHardMode === true;}, 5000);
+  await proof('HARD_MODE_QUALIFIED', async () => {positive = await readTrips(); return positive.length === 1 && positive[0].isHardMode === true;}, 5000);
   record.qualified = positive[0].tripUuid;
   source.begin('lost');
-  await until(async () => await trips(dashboard), rows => rows.length === 2 && rows[0].outcome === 'open', 'HARD_MODE_SECOND_OPEN', 5000);
+  await until(async () => await readTrips(), rows => rows.length === 2 && rows[0].outcome === 'open', 'HARD_MODE_SECOND_OPEN', 5000);
   await source.settings('unknown');
-  await until(async () => await current(dashboard), value => value.assessment.state === 'unknown' && Boolean(value.trip?.firstLoss), 'HARD_MODE_LOST', 8000);
+  await until(async () => await readStatus(), value => value.assessment.state === 'unknown' && Boolean(value.trip?.firstLoss), 'HARD_MODE_LOST', 8000);
   await until(() => dashboard.getByTestId('hard-mode-card').getAttribute('data-state'), state => state === 'lost', 'HARD_MODE_RENDERED_LOSS', 5000);
   assert.match(await dashboard.getByTestId('hard-mode-loss').innerText(), /Qualification cannot be restored/);
   record.lost = true; await dashboard.getByTestId('hard-mode-card').screenshot({path: path.join(config.output, 'hard-mode-lost.png')});
-  await source.settings('pass'); await until(async () => (await current(dashboard)).assessment.state, value => value === 'pass', 'HARD_MODE_RESTORED_SETTINGS', 8000);
+  await source.settings('pass'); await until(async () => (await readStatus()).assessment.state, value => value === 'pass', 'HARD_MODE_RESTORED_SETTINGS', 8000);
   await until(() => dashboard.locator('[data-testid="hard-mode-card"] .yu-hard-mode-progress [role="status"]').innerText(), text => text === '12 of 12', 'HARD_MODE_RENDERED_RESTORATION', 5000);
   assert.equal(await dashboard.getByTestId('hard-mode-card').getAttribute('data-state'), 'lost');
   assert.match(await dashboard.getByTestId('hard-mode-card').innerText(), /Hard Mode lost for this trip/);
@@ -216,7 +249,7 @@ export async function runHardModeSmoke({application, dashboard, source, config, 
   record.languageHotChange = true;
   await language('en');
   source.deliver();
-  const rows = await until(async () => await trips(dashboard), rows => rows.length === 2 && rows.every(row => row.outcome === 'delivered'), 'HARD_MODE_DELIVERIES', 5000);
+  const rows = await until(async () => await readTrips(), rows => rows.length === 2 && rows.every(row => row.outcome === 'delivered'), 'HARD_MODE_DELIVERIES', 5000);
   assert.deepEqual(rows.map(row => row.isHardMode), [false, true]); record.irreversible = true;
   await clickTestId(dashboard, 'tab-journal');
   await dashboard.getByTestId('journal-row').first().waitFor({state: 'visible'});
@@ -236,7 +269,7 @@ export async function runHardModeSmoke({application, dashboard, source, config, 
   const exported = JSON.parse(await readFile(file, 'utf8'));
   const validate = await exportValidator(config); assert.deepEqual(validate(exported), []);
   assert.equal(exported.formatVersion, 2); assert.equal(exported.trip.is_hard_mode, true); assert.equal(exported.trip.hard_mode_details.manualDelivery, true);
-  record.export = true; record.flags = rows.map(row => row.isHardMode); record.errors = source.errors; assert.deepEqual(source.errors, []);
+  record.export = true; record.flags = rows.map(row => row.isHardMode); healthy();
   const overlay = application.windows().find(page => page.url().endsWith('?view=overlay'));
   assert.equal(await overlay.evaluate(() => typeof globalThis.overlay.getHardModeStatus), 'undefined'); record.overlayExcluded = true;
 }
