@@ -10,7 +10,7 @@ param([ValidateSet('development','packaged','installed')][string]$Mode,
     # ET-019 PR-12b: the soak's length in whole minutes, 1 to 90; given only with -Scenario soak.
     [ValidateRange(0, 90)][int]$SoakMinutes = 0)
 $ErrorActionPreference = 'Stop'
-if (!$OutputRoot) { $OutputRoot = Join-Path $PSScriptRoot '../../.local/ci' }
+$runtimeOutputRoot = if ($OutputRoot) { $OutputRoot } else { Join-Path $PSScriptRoot '../../.local/ci' }
 # ET-019 PR-12b (docs/ci.md#et-019-recording-soak-workflow-dispatch-only): the soak runs the development or packaged
 # application only; the installed smokes of the installer lifecycle never soak.
 if ($Scenario -eq 'soak') {
@@ -42,7 +42,7 @@ if ($Mode -eq 'installed') {
         throw ('Not an installed layout: ' + $built.squirrelId + '\app-<version>\' + $built.executable + ' with Update.exe.')
     }
 }
-$output = Join-Path ([IO.Path]::GetFullPath($OutputRoot)) ($Mode + '-' + [guid]::NewGuid().ToString('N'))
+$output = Join-Path ([IO.Path]::GetFullPath($runtimeOutputRoot)) ($Mode + '-' + [guid]::NewGuid().ToString('N'))
 New-Item -ItemType Directory -Path $output | Out-Null
 $paths = @{}
 foreach ($name in @('cwd','temp','appdata','localappdata','profile','diagnostics')) {
