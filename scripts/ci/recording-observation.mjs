@@ -225,8 +225,8 @@ export async function runRecordingSmoke({application, launcher, dashboard, recor
   assert.deepEqual(record.status.beforeAdmission.health, RECORDING_STATUS_WAITING);
   record.statusWaitingShown = true;
   await startRecordingTextLog(dashboard);
-  // Connection 1 is admitted only now, with both windows up and current data shown, so the simulator's 1 s ACK waits
-  // (quiesce) do not overlap the application's own startup.
+  // Connection 1 is admitted only now, with both windows up and current data shown, so the simulator's scripted ACK waits
+  // (including the first connection's delivered ACK prefix) do not overlap the application's own startup.
   record.hardModeAdmissionUtcMs = Date.now();
   recording.admit();
 
