@@ -107,6 +107,34 @@ it('still reports unexpected active write errors once and retires the failed pee
   expect(source.connected()).toBe(false);
 });
 
+it.each(['event', 'snapshot'] as const)('fails an EPIPE on %s while a durable event is unacknowledged', async kind => {
+  const peer = new Peer(); accept(peer); peer.hello(true);
+  if (kind === 'event') peer.writeError = 'EPIPE';
+  source.begin('unacknowledged');
+  if (kind === 'snapshot') {peer.writeError = 'EPIPE'; await vi.advanceTimersByTimeAsync(100);}
+  else await vi.advanceTimersByTimeAsync(0);
+  expect(source.errors).toEqual(['EPIPE']);
+  expect(source.peerDisconnects).toEqual([]);
+  expect(source.acked()).toBe('0');
+  expect(source.connected()).toBe(false);
+});
+
+it('fails a clean disconnect with an unacknowledged event instead of silently resuming across a gap', () => {
+  const peer = new Peer(); accept(peer); peer.hello(true); source.begin('unacknowledged');
+  peer.destroy();
+  expect(source.errors).toEqual(['UNACKNOWLEDGED_EVENTS']);
+  expect(source.acked()).toBe('0');
+});
+
+it('tolerates EPIPE after the durable event was acknowledged', async () => {
+  const peer = new Peer(); accept(peer); peer.hello(true);
+  const eventSeq = source.begin('acknowledged'); peer.emit('data', frame('ack', {throughEventSeq: eventSeq}));
+  peer.writeError = 'EPIPE'; await vi.advanceTimersByTimeAsync(100);
+  expect(source.errors).toEqual([]);
+  expect(source.peerDisconnects).toEqual([{code: 'EPIPE', durable: true}]);
+  expect(source.acked()).toBe('1');
+});
+
 it('stops idempotently and ignores already queued callbacks from the stopped peer', async () => {
   const current = new Peer(); accept(current); current.hello(true);
   const before = current.frames.length;
