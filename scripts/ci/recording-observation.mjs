@@ -131,8 +131,8 @@ const shownText = (page, accept, message) => until(() => recordingTextLog(page),
  * action and then paces on to the scripted disconnect, so one commit slower than that bound (hosted run 39135729037: the
  * gate eventSeq 13 committed, its ACK never sent, the Job nearly idle) ended connection 3 before the gate's ACK and the
  * journey failed with THIRD_CONNECTION_DID_NOT_COMMIT. With it, the simulator waits until the service acknowledged
- * everything written to it or left (30 s liveness bound), as the ET-006b storage tests do. Connection 1 drops ACKs after
- * four (`dropAfter:4`), so it keeps the bounded wait.
+ * everything written to it or left (30 s liveness bound), as the ET-006b storage tests do. Connection 1 uses the same
+ * guard for its first four promised ACKs (`dropAfter:4`); only its intentionally dropped tail keeps the bounded wait.
  */
 export async function startRecordingSource(config) {
   const {checkout, output} = config;
@@ -225,8 +225,8 @@ export async function runRecordingSmoke({application, launcher, dashboard, recor
   assert.deepEqual(record.status.beforeAdmission.health, RECORDING_STATUS_WAITING);
   record.statusWaitingShown = true;
   await startRecordingTextLog(dashboard);
-  // Connection 1 is admitted only now, with both windows up and current data shown, so the simulator's 1 s ACK waits
-  // (quiesce) do not overlap the application's own startup.
+  // Connection 1 is admitted only now, with both windows up and current data shown, so the simulator's scripted ACK waits
+  // (including the first connection's delivered ACK prefix) do not overlap the application's own startup.
   record.hardModeAdmissionUtcMs = Date.now();
   recording.admit();
 

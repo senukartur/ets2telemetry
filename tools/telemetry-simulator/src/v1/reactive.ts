@@ -33,8 +33,9 @@ export interface ReactiveServeOptions {
   /**
    * For a consumer that follows the script (default false). A connection whose scripted client commits and acknowledges
    * every item (`ack: each`, any commit policy but `none`) is then waited for at each quiesce point until it has
-   * acknowledged everything written to it or has left, however long its commits take; other connections keep the
-   * `quiesceMs` bound. Missing that wait within `settleTimeoutMs` fails the run instead of pacing on.
+   * acknowledged everything written to it or has left. A `dropAfter:n` policy waits the same way until its first n
+   * ACKs arrive; its intentionally dropped tail and other connections keep the `quiesceMs` bound. Missing a promised
+   * ACK within `settleTimeoutMs` fails the run instead of pacing on.
    */
   awaitScriptedAcks?: boolean;
   /** Liveness bound of an `awaitScriptedAcks` wait: 1 to 600,000 ms, default 30,000. */
@@ -72,7 +73,7 @@ export interface ReactivePipeServer {endpoint: string; done: Promise<ReactiveRep
 class Reactive extends PipeHost {
   readonly scenario: Scenario; private readonly clock = new ScenarioClock(); private readonly producer: V1Producer;
   private readonly transcript: TranscriptLine[] = []; private readonly connections: ReactiveConnection[] = [];
-  private pending: Link[] = []; private live?: {link: Link; record: ReactiveConnection; policy: ClientPolicy; recorder: FrameDecoder; helloDone: boolean; endWritten: boolean};
+  private pending: Link[] = []; private live?: {link: Link; record: ReactiveConnection; policy: ClientPolicy; recorder: FrameDecoder; helloDone: boolean; endWritten: boolean; acknowledgements: number};
   // `unsettled`: an event or gap was written since the last quiesce, so a client reaction (ACK, crash) may be pending.
   private unsettled = false;
   private refused = 0; private atMs = 0; private target = 0; private segment?: {realMs: number; atMs: number};
@@ -172,7 +173,7 @@ class Reactive extends PipeHost {
       if (!l.helloDone) { l.record.rejectedAttempts++; this.live = undefined; l.link.socket.destroy(); return; }
       this.closeLive('serverRejected', false); return;
     }
-    l.recorder.push(chunk, m => this.line(at, 'client', m));
+    l.recorder.push(chunk, m => { if (m.kind === 'ack') l.acknowledgements++; this.line(at, 'client', m); });
     for (const out of outs) {
       if (out.message.kind === 'welcome') {
         // Soak mode: a live-only hello for a durable connection ends only that attempt, before anything is written; the
@@ -251,7 +252,7 @@ class Reactive extends PipeHost {
     while (!this.live?.helloDone) {
       if (!await this.wait(() => this.pending.length > 0, Math.max(0, deadline - performance.now()))) throw new Error(`No client completed a hello for connection ${connection}`);
       const link = this.pending.shift()!; if (link.gone) continue;
-      const l = this.live = {link, record, policy, recorder: new FrameDecoder('client', {maxMinor: V1_MAX_MINOR}), helloDone: false, endWritten: false};
+      const l = this.live = {link, record, policy, recorder: new FrameDecoder('client', {maxMinor: V1_MAX_MINOR}), helloDone: false, endWritten: false, acknowledgements: 0};
       this.producer.open();
       const buffered = link.inbound; link.inbound = Buffer.alloc(0); link.onData = chunk => { if (this.live?.link === link) this.receive(chunk); };
       if (buffered.length) this.receive(buffered);
@@ -266,15 +267,20 @@ class Reactive extends PipeHost {
   }
   /**
    * Waits up to the quiesce bound until the live client has acknowledged everything written to it, or has left. With
-   * `awaitScriptedAcks`, a client scripted to acknowledge every commit is waited for without that bound, so how long
-   * its commits take cannot change what the server writes or records; only a broken client reaches the liveness bound.
+   * `awaitScriptedAcks`, promised ACKs (including a dropAfter prefix) use the liveness bound instead. The intentionally
+   * dropped tail remains bounded, so a missing ACK in that tail never prevents the scripted disconnect.
    */
   private async quiesce(): Promise<void> {
     const l = this.live; if (!l || !this.unsettled) return;
     this.unsettled = false;
     const settled = () => this.live !== l || l.link.gone || ((s => s === undefined || s.acked >= s.sent)(this.producer.ackState()));
-    if (!this.awaitScriptedAcks || !l.policy.durable || l.policy.ack.kind !== 'each' || l.policy.commit.kind === 'none') { await this.wait(settled, this.quiesceMs); return; }
-    if (!await this.wait(settled, this.settleMs)) throw new Error(`Connection ${l.record.connection}: the client neither acknowledged everything written to it nor left within ${this.settleMs} ms`);
+    const prefix = l.policy.ack.kind === 'dropAfter' ? l.policy.ack.count : Infinity;
+    if (!this.awaitScriptedAcks || !l.policy.durable || l.policy.ack.kind === 'withhold' || l.policy.commit.kind === 'none' || l.acknowledgements >= prefix) { await this.wait(settled, this.quiesceMs); return; }
+    if (!await this.wait(() => settled() || l.acknowledgements >= prefix, this.settleMs)) {
+      const requirement = l.policy.ack.kind === 'dropAfter' ? 'acknowledged the required scripted ACK prefix' : 'acknowledged everything written to it';
+      throw new Error(`Connection ${l.record.connection}: the client neither ${requirement} nor left within ${this.settleMs} ms`);
+    }
+    if (!settled()) await this.wait(settled, this.quiesceMs);
   }
   /** A scripted disconnect: wait (see quiesce) for the ACKs of everything written, then a graceful close. */
   private async disconnect(): Promise<void> {
@@ -435,10 +441,10 @@ export async function runIndependentClient(endpoint: string, input: unknown, opt
         const socket = net.connect(endpoint), client = new ScriptedClient(ledger, step.client, instance, randomUUID(), cursors, s.origin);
         let settled = false, crashed = false, probed = false, writing = false; attempts++;
         // Writes leave strictly in order, one at a time, each after its own random delay, as a storage-paced consumer sends
-        // them. ACKs are cumulative: a new ACK replaces one still waiting behind it, so a burst costs one ACK, not one each.
+        // them. ACKs are cumulative, except dropAfter counts individual frames: keep its promised prefix intact.
         const pending: {ack: boolean; bytes: Uint8Array | (() => Uint8Array[])}[] = [], idle: (() => void)[] = [];
         const enqueue = (bytes: Uint8Array | (() => Uint8Array[]), ack = false) => {
-          if (ack && pending.at(-1)?.ack) pending[pending.length - 1] = {ack, bytes}; else pending.push({ack, bytes});
+          if (ack && step.client.ack.kind !== 'dropAfter' && pending.at(-1)?.ack) pending[pending.length - 1] = {ack, bytes}; else pending.push({ack, bytes});
           if (writing) return;
           writing = true;
           const next = () => {

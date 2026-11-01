@@ -193,6 +193,106 @@ describe('simulator v1 reactive serving for any contract consumer', () => {
     await expect(serveV1Reactive(s, {settleTimeoutMs: 0})).rejects.toThrow(/Invalid settle timeout/);
   }, 60_000);
 
+  it('awaits the delivered ACK prefix before applying a dropAfter policy', async () => {
+    const steps = [
+      {atMs: 10, action: 'lifecycle', event: 'simulation.started'},
+      {atMs: 20, action: 'lifecycle', event: 'simulation.paused'},
+      {atMs: 30, action: 'lifecycle', event: 'simulation.started'}
+    ];
+    const scenario = inline(steps, [{atMs: 0, action: 'connect', client: {durable: true, ack: 'dropAfter:2'}}, {atMs: 100, action: 'disconnect'}]);
+    // Zero bounded quiescence exercises the intentionally dropped tail without any timed sleep.
+    const server = await serveV1Reactive(scenario, {scale: 0, quiesceMs: 0, awaitScriptedAcks: true});
+    try {
+      const client = rawClient(server.endpoint, hello(true));
+      for (const throughEventSeq of ['1', '2']) {
+        await until(() => client.messages.some(m => m.kind === 'event' && m.data.eventSeq === throughEventSeq));
+        expect(client.messages.filter(m => m.kind === 'event').map(m => m.data.eventSeq)).toEqual(throughEventSeq === '1' ? ['1'] : ['1', '2']);
+        client.socket.write(encodeFrame({version: M2, kind: 'ack', data: {pluginSessionId: client.messages[0].source.pluginSessionId, throughEventSeq}}));
+      }
+      // The third ACK is deliberately absent: the server must still reach the scripted disconnect.
+      const report = await server.done;
+      await client.closed;
+      expect(client.messages.filter(m => m.kind === 'event').map(m => m.data.eventSeq)).toEqual(['1', '2', '3']);
+      expect(report.transcript.filter(l => l.message.kind === 'ack').map(l => l.message.kind === 'ack' && l.message.data.throughEventSeq)).toEqual(['1', '2']);
+      expect(report.connections.map(c => c.closedBy)).toEqual(['disconnect']);
+      expect(reactiveDifferences(replayV1(scenario), report)).toEqual([]);
+    } finally { await server.stop(); }
+  });
+
+  it('fails when an ACK promised by the dropAfter prefix never arrives', async () => {
+    const steps = [{atMs: 10, action: 'lifecycle', event: 'simulation.started'}];
+    const scenario = inline(steps, [{atMs: 0, action: 'connect', client: {durable: true, ack: 'dropAfter:1'}}, {atMs: 100, action: 'disconnect'}]);
+    // This is a liveness guard for an ACK the client never sends, not a measurement of host timing.
+    const server = await serveV1Reactive(scenario, {scale: 0, quiesceMs: 0, awaitScriptedAcks: true, settleTimeoutMs: 100});
+    try {
+      rawClient(server.endpoint, hello(true));
+      await expect(server.done).rejects.toThrow(/Connection 1: the client neither acknowledged the required scripted ACK prefix nor left within 100 ms/);
+    } finally { await server.stop(); }
+  });
+
+  it('keeps every promised dropAfter ACK when one action emits several events', async () => {
+    const scenario = inline([{atMs: 10, action: 'gameplay', id: 'player.tollgate.paid', attributes: [{name: 'pay.amount', sdkType: 's64', value: '1'}], repeat: 4}],
+      [{atMs: 0, action: 'connect', client: {durable: true, ack: 'dropAfter:3'}}, {atMs: 100, action: 'disconnect'}]);
+    const replay = replayV1(scenario);
+    const server = await serveV1Reactive(scenario, {scale: 0, quiesceMs: 0, awaitScriptedAcks: true, settleTimeoutMs: 1000});
+    try {
+      const [client, report] = await Promise.all([
+        runIndependentClient(server.endpoint, scenario, {seed: 1, maxDelayMs: 25}), server.done
+      ]);
+      expect(report.transcript.filter(l => l.message.kind === 'ack').map(l => l.message.kind === 'ack' && l.message.data.throughEventSeq)).toEqual(['1', '2', '3']);
+      expect(report.connections.map(c => c.closedBy)).toEqual(['disconnect']);
+      expect(client.ledger).toEqual(replay.ledger);
+      expect(reactiveDifferences(replay, report)).toEqual([]);
+    } finally { await server.stop(); }
+  });
+
+  it('counts valid repeated ACK frames toward a dropAfter prefix', async () => {
+    const steps = [{atMs: 10, action: 'lifecycle', event: 'simulation.started'}, {atMs: 20, action: 'lifecycle', event: 'simulation.paused'}];
+    const scenario = inline(steps, [{atMs: 0, action: 'connect', client: {durable: true, ack: 'dropAfter:2'}}, {atMs: 100, action: 'disconnect'}]);
+    const server = await serveV1Reactive(scenario, {scale: 0, quiesceMs: 0, awaitScriptedAcks: true, settleTimeoutMs: 1000});
+    try {
+      const client = rawClient(server.endpoint, hello(true));
+      await until(() => client.messages.some(m => m.kind === 'event'));
+      const ack = encodeFrame({version: M2, kind: 'ack', data: {pluginSessionId: client.messages[0].source.pluginSessionId, throughEventSeq: '1'}});
+      client.socket.write(ack); client.socket.write(ack);
+      const report = await server.done;
+      await client.closed;
+      expect(report.transcript.filter(l => l.message.kind === 'ack').map(l => l.message.kind === 'ack' && l.message.data.throughEventSeq)).toEqual(['1', '1']);
+      expect(report.connections.map(c => c.closedBy)).toEqual(['disconnect']);
+      expect(client.messages.filter(m => m.kind === 'event').map(m => m.data.eventSeq)).toEqual(['1', '2']);
+    } finally { await server.stop(); }
+  });
+
+  it('keeps a bounded dropped tail open for a late ACK after clock-probe round trips', async () => {
+    const steps = [{atMs: 10, action: 'lifecycle', event: 'simulation.started'}, {atMs: 20, action: 'lifecycle', event: 'simulation.paused'}];
+    const scenario = inline(steps, [{atMs: 0, action: 'connect', client: {durable: true, ack: 'dropAfter:1'}}, {atMs: 100, action: 'disconnect'}]);
+    const server = await serveV1Reactive(scenario, {scale: 0, quiesceMs: 1000, awaitScriptedAcks: true});
+    try {
+      const client = rawClient(server.endpoint, hello(true));
+      // Causal I/O gates distinguish waiting for a late ACK from closing immediately, without a timed sleep.
+      let probed = false, probedAgain = false, sentLateAck = false;
+      client.socket.on('data', () => {
+        if (!probed && client.messages.some(m => m.kind === 'event' && m.data.eventSeq === '2')) {
+          probed = true; client.socket.write(encodeFrame({version: M2, kind: 'clock.probe', data: {probeId: '1'}}));
+        }
+        if (!probedAgain && client.messages.some(m => m.kind === 'clock.reply' && m.data.probeId === '1')) {
+          probedAgain = true; client.socket.write(encodeFrame({version: M2, kind: 'clock.probe', data: {probeId: '2'}}));
+        }
+        if (!sentLateAck && client.messages.some(m => m.kind === 'clock.reply' && m.data.probeId === '2')) {
+          sentLateAck = true;
+          client.socket.write(encodeFrame({version: M2, kind: 'ack', data: {pluginSessionId: client.messages[0].source.pluginSessionId, throughEventSeq: '2'}}));
+        }
+      });
+      await until(() => client.messages.some(m => m.kind === 'event' && m.data.eventSeq === '1'));
+      client.socket.write(encodeFrame({version: M2, kind: 'ack', data: {pluginSessionId: client.messages[0].source.pluginSessionId, throughEventSeq: '1'}}));
+      const report = await server.done;
+      await client.closed;
+      expect(sentLateAck).toBe(true);
+      expect(report.transcript.filter(l => l.message.kind === 'ack').map(l => l.message.kind === 'ack' && l.message.data.throughEventSeq)).toEqual(['1', '2']);
+      expect(report.connections.map(c => c.closedBy)).toEqual(['disconnect']);
+    } finally { await server.stop(); }
+  });
+
   it('runs only scenarios whose client is not scripted', async () => {
     await expect(serveV1Reactive(load('wire-faults'))).rejects.toThrow(/lockstep/);
     await expect(serveV1Reactive(load('pipe-stalled-reader'))).rejects.toThrow(/lockstep/);
