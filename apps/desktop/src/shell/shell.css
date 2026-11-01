@@ -36,7 +36,7 @@ h1[tabindex="-1"]:focus { outline: none; }
 .yu-recording { display: flex; align-items: center; gap: 10px; width: 100%; text-align: left; border: 1px solid var(--yu-border); background: var(--yu-bg-inset); border-radius: 10px; padding: 9px 10px; margin-bottom: 12px; cursor: help; transition: background-color .15s, border-color .15s; }
 .yu-recording:hover, .yu-recording:focus-visible, .yu-recording[data-state="delayed-open"], .yu-recording[data-state="instant-open"] { background: var(--yu-bg-card); border-color: var(--yu-border-input); }
 .yu-recording:focus-visible { outline: 2px solid var(--yu-accent-light); outline-offset: 2px; }
-.yu-recording-label { flex: 1; min-width: 0; font-size: 13px; font-weight: 500; line-height: 1.3; color: var(--yu-text); }
+.yu-recording-label { flex: 1; min-width: 0; font-size: 14px; font-weight: 500; line-height: 1.3; color: var(--yu-text); }
 .yu-recording-badge { flex: none; font-size: 11px; padding: 1px 6px; border-radius: 6px; border: 1px solid var(--yu-neutral-border); background: var(--yu-neutral-bg); color: var(--yu-neutral-fg); }
 .yu-recording-info { flex: none; width: 16px; height: 16px; color: var(--yu-text-muted); transition: color .15s; }
 .yu-recording:hover .yu-recording-info, .yu-recording:focus-visible .yu-recording-info, .yu-recording[data-state$="-open"] .yu-recording-info { color: var(--yu-text-secondary); }
