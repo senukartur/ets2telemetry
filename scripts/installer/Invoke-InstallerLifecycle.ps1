@@ -1062,10 +1062,18 @@ try {
             $index = 0
             # Squirrel writes uninstall logs to TEMP so its open log does not block deleting the install root.
             # Keep that separate tree too, including on a residue failure, before cleanup deletes the test root.
-            foreach ($logRoot in @($base, (Join-Path $runRoot 'temp'))) {
-                if (Test-Path -LiteralPath $logRoot) {
-                    foreach ($log in @(Get-ChildItem -LiteralPath $logRoot -Recurse -File -Filter '*.log' -ErrorAction SilentlyContinue | Select-Object -First 32)) {
-                        if ($log.Length -le 4194304) { Copy-Item -LiteralPath $log.FullName -Destination (Join-Path $kept ('squirrel-' + $index + '-' + $log.Name)); $index++ }
+            $logSources = @(
+                @{LiteralPath=$base; Recurse=$true; Filter='*.log'},
+                @{LiteralPath=(Join-Path $runRoot 'temp'); Filter='Squirrel-Uninstall*.log'}
+            )
+            foreach ($logSource in $logSources) {
+                if (Test-Path -LiteralPath $logSource.LiteralPath) {
+                    foreach ($log in @(Get-ChildItem @logSource -File -ErrorAction SilentlyContinue | Sort-Object FullName | Select-Object -First 32)) {
+                        if ($log.Length -le 4194304) {
+                            try { Copy-Item -LiteralPath $log.FullName -Destination (Join-Path $kept ('squirrel-' + $index + '-' + $log.Name)) }
+                            catch { $report.evidenceFailure = $_.Exception.Message }
+                            $index++
+                        }
                     }
                 }
             }
