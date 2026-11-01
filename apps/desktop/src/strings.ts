@@ -858,6 +858,7 @@ export const JOURNAL_INTERVAL_KIND_TEXT: Readonly<Record<JournalIntervalKind, st
 /** The interval causes the recorder writes (docs/trips.md#interval-detail-keys); any other cause shows as JOURNAL_OTHER_CAUSE. */
 export const JOURNAL_INTERVAL_CAUSE_TEXT: Readonly<Record<string, string>> = Object.freeze({
   'opened-at-load': 'opened while a save was loading', 'late-attach': 'recording started during the job', 'opened-before-attach': 'job began before recording',
+  'loaded-job-unverified': 'the beginning of the loaded job could not be verified', 'loaded-job-coverage-confirmed': 'the full job was observed', 'paused-reconnect': 'reconnected during a verified pause',
   'restart': 'continues a trip closed by a restart', 'gap': 'lost events', 'discontinuity': 'continues a trip closed by a discontinuity',
   'configuration-cleared': 'continues a trip whose job was cleared', 'reload': 'save reloaded', 'save-load': 'save loaded', 'disconnected': 'source disconnected',
   'consumer-restart': 'telemetry service restarted', 'reading-hole': 'readings missing', 'truck-change': 'truck changed', 'utc-label-jump': 'clock label jumped back',

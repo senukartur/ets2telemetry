@@ -7,7 +7,7 @@ import {createHash} from 'node:crypto';
 import {afterEach, beforeEach, describe, expect, it} from 'vitest';
 import {normalizeV1State, initialTripState, stepTrip, type NormalizedLiveState, type TripInput, type TripState} from '../../packages/telemetry-core/src/index';
 import type {Storage} from '../../packages/storage/src/index';
-import {BASE_UTC, ETS2_A, RECEIVED_UTC, Script, r, sessionInput, type Step} from '../shared/trip-messages';
+import {BASE_UTC, ETS2_A, GAME_CLOCK_1, RECEIVED_UTC, Script, job, r, sessionInput, type Step} from '../shared/trip-messages';
 import {ok, readOnly, v1, workspace} from './helpers';
 
 let ws: Awaited<ReturnType<typeof workspace>>;
@@ -51,6 +51,39 @@ function drive(storage: Storage, steps: Step[], state: TripState = initialTripSt
 }
 
 describe('ET-014 PR-2 readings accounting effects through real commits', () => {
+  it('persists a complete save-created job with a verified paused reconnect, then reopens the database (REG-002, REG-003)', async () => {
+    const storage = await ws.open(), s = new Script(ETS2_A), t = uuid(ETS2_A, '1');
+    const point = (ms: number, odometer: number, paused = false): TripInput => {
+      const input = reading(s, ms, odometer, 100);
+      if (input.kind !== 'reading') throw new Error('reading fixture');
+      input.sample.state = {...input.sample.state, simulation: paused ? 'paused' : 'running',
+        gameTime: {minutes: {state: 'value', value: 12345n}, clockId: GAME_CLOCK_1},
+        worldPlacement: {state: 'value', value: {position: {x: 0, y: 0, z: 0}, orientation: {heading: 0, pitch: 0, roll: 0}}}};
+      return input;
+    };
+    let {state} = drive(storage, [sessionInput(s.welcome()), s.event(r.jobConfigured(), {simulation: 'paused'}), s.event(r.started())]);
+    expect(ok(storage.getTrip(t))?.recordingCompleteness).toBe('unknown');
+    const points = Array.from({length: 11}, (_, i) => point(2000 + i * 1000, 10_000 + i * 100));
+    state = drive(storage, [...points, s.event(r.paused(), {simulation: 'paused', advanceMs: 11_000}), point(13_000, 11_000, true), {kind: 'disconnected'},
+      sessionInput(s.welcome()), {kind: 'checkpoint', message: s.checkpoint(job(), 0, {simulation: 'paused'})}, point(14_000, 11_000, true),
+      s.event(r.started()), s.event(r.paused(), {simulation: 'paused'})], state).state;
+    const record = r.delivered();
+    if (record.type !== 'job.delivered') throw new Error('delivery fixture');
+    record.distance = {available: true, value: 1000, unit: 'm'};
+    record.deliveryDuration = {available: true, value: '2', unit: 'min'};
+    const delivery = s.event(record, {simulation: 'paused'});
+    delivery.data.occurred.gameTime = {minutes: {available: true, value: '12347'}, clockId: GAME_CLOCK_1};
+    drive(storage, [delivery], state);
+    storage.close();
+    const reopened = await ws.open();
+    expect(ok(reopened.getTrip(t))).toMatchObject({outcome: 'delivered', recordingCompleteness: 'complete', observedDistanceM: {available: true, value: 1000}});
+    reopened.close();
+    const intervals = readOnly(ws.database, db => (db.prepare('SELECT kind, detail_json FROM completeness_intervals ORDER BY id').all() as {kind: string; detail_json: string}[])
+      .map(row => ({kind: row.kind, detail: JSON.parse(row.detail_json) as Record<string, unknown>})));
+    expect(intervals.map(row => [row.kind, row.detail.cause, row.detail.annotation])).toEqual([
+      ['discontinuity', 'opened-at-load', true], ['discontinuity', 'paused-reconnect', true], ['discontinuity', 'loaded-job-coverage-confirmed', true]
+    ]);
+  });
   it('stores the observed distance, a reading-hole interval and reading annotations [synthetic-inference]', async () => {
     const storage = await ws.open(), s = new Script(ETS2_A), t = uuid(ETS2_A, '2');
     const {statuses} = drive(storage, [sessionInput(s.welcome()), s.event(r.started()), s.event(r.jobConfigured()),

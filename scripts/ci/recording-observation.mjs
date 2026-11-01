@@ -98,11 +98,11 @@ const TEST_NOTICE = 'Prototype live display. Only a test database is recorded, n
 /** A service whose connection has not recorded yet: before each admission, and after the service restart. */
 const RECORDING_STATUS_WAITING = Object.freeze({state: 'waiting', target: 'synthetic', code: null, losses: NO_LOSSES, trip: null});
 const RECORDING_TEXT_WAITING = Object.freeze({headline: 'Waiting for the recorded source to connect', detail: [SYNTHETIC_NOTE], losses: null, alert: null, notice: TEST_NOTICE});
-/** Connection 1 recorded events 1-5 (the trip opened at eventSeq 3 at load, so it is partial) and ended. */
+/** Connection 1 recorded events 1-5; the loaded trip awaits terminal coverage evidence when that connection ends. */
 const RECORDING_STATUS_INTERRUPTED = Object.freeze({state: 'interrupted', target: 'synthetic', code: null, losses: NO_LOSSES,
-  trip: {phase: 'active', completeness: 'partial', untrackedJob: false}});
+  trip: {phase: 'active', completeness: 'unknown', untrackedJob: false}});
 const RECORDING_TEXT_INTERRUPTED = Object.freeze({headline: 'Connection lost; recording resumes on reconnection, and the missing time is recorded as a gap',
-  detail: [SYNTHETIC_NOTE, 'Current trip is partial'], losses: null, alert: null, notice: TEST_NOTICE});
+  detail: [SYNTHETIC_NOTE, "The current trip's completeness is not known yet"], losses: null, alert: null, notice: TEST_NOTICE});
 /**
  * After connection 2: the restarted service committed the trip's consumer-restart interval (one not-connected interval);
  * the redelivered eventSeq 5 is a duplicate, not a loss, so no event is lost.
@@ -241,7 +241,7 @@ export async function runRecordingSmoke({application, launcher, dashboard, recor
   record.firstServiceDurable = await durableActiveRow(events, config.diagnostics, initial.servicePid);
   record.commitsActive = true;
   // ET-015c PR-4: connection 1 recorded, and the dashboard showed it with the synthetic target note; once it ended, the
-  // status reads interrupted with the partial trip. Recording lasts only as long as the scenario's frames stay fresh, so
+  // status reads interrupted with the pending loaded trip. Recording lasts only as long as the scenario's frames stay fresh, so
   // the dashboard's text log and main's timeline prove it rather than a poll.
   record.status.afterFirstConnection = {dashboard: await waitForRecordingText(dashboard, RECORDING_TEXT_INTERRUPTED, 'RECORDING_NOT_INTERRUPTED_AFTER_FIRST_CONNECTION'),
     health: await recordingHealth(application, status => status.state === 'interrupted', 'RECORDING_NOT_INTERRUPTED_AFTER_FIRST_CONNECTION')};
@@ -400,7 +400,7 @@ const localTime = utcMs => {
 };
 /** T4: the UUID of the trip that the job configuration eventSeq 3 of the simulator's plugin session opened. */
 const journeyTripUuid = session => uuidOf(createHash('sha256').update(`ets2telemetry-trip-v1:${session}:3`, 'utf8').digest('hex'));
-/** trip@3's list row: delivered and partial (opened at load), observed 0 m, no fuel channel, no city or cargo names. */
+/** trip@3's list row: delivered and partial after the service restart, observed 0 m, no fuel channel, no city or cargo names. */
 const journalRow = trip => ({trip, started: localTime(labelAt(30)), game: 'ETS2', route: JOURNEY_ROUTE, outcome: 'Delivered', completeness: 'Partial',
   observed: '0.0 km', fuel: NOT_OBSERVED, cargo: NOT_OBSERVED});
 /**
@@ -428,7 +428,7 @@ function journalDetail(session, trip, sampleCount) {
 }
 /** The two completeness intervals (kind, cause, start, end, events): neither carries a UTC label or an eventSeq range. */
 const JOURNAL_INTERVALS = {total: 'Completeness intervals recorded for this trip: 2.',
-  rows: [['Discontinuity', 'opened while a save was loading', '—', '—', '—'], ['Not connected', 'telemetry service restarted', '—', '—', '—']]};
+  rows: [['Discontinuity', 'opened while a save was loading (annotation; completeness unchanged)', '—', '—', '—'], ['Not connected', 'telemetry service restarted', '—', '—', '—']]};
 /** J7: from the job configuration (3) through job.delivered (8), which closed the trip; eventSeq 5 once despite its redelivery. */
 const JOB_DETAIL = `${NOT_OBSERVED}, ${JOURNEY_ROUTE}`;
 const journalTimeline = () => ({window: "Events of the trip's plugin session from eventSeq 3 through 8, the event that closed the trip.", rows: [

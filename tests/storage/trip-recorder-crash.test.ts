@@ -223,7 +223,7 @@ describe('S3 killed recording process (REG-006)', () => {
     }});
     expectInvariants(session, [one, two]);
     expect(one.lines.filter(l => l !== 'ready').slice(-3)).toEqual(['committed 7 7', 'ack 7', 'barrier inside 8']);
-    expect(between).toEqual({through: '7', events: ['1', '2', '3', '4', '5', '6', '7'], delivered: null, trips: [['open', 'partial']], attributions: 0});
+    expect(between).toEqual({through: '7', events: ['1', '2', '3', '4', '5', '6', '7'], delivered: null, trips: [['open', 'unknown']], attributions: 0});
     expect(two.lines.filter(l => l.startsWith('committed'))).toEqual(['committed 8 8', 'committed 9 9']);
     const expected = recordingExpected('normal-delivery-kill-in-commit');
     expect(await storedRows(ws, seed)).toEqual({trips: expected.trips, attributions: expected.attributions, intervals: expected.intervals});
@@ -266,11 +266,12 @@ describe('S3 killed recording process (REG-006)', () => {
   //   quick job (2) came before the first start (T12).
   // - ferry-train, killed after commit 2: no job, so no trip; each transfer and the toll is free-driving (T14), which the
   //   invariants check through the one attribution per gameplay event.
-  // - retention-expired: the job (1) opens at load, partial. Killed before commit 1, nothing is stored: the redelivered
+  // - retention-expired: the job (1) opens at load, unknown pending coverage. Killed before commit 1, nothing is stored: the redelivered
   //   retentionExpired gap 1–2 is a session-level interval, and the checkpoint job then opens a late-attach trip that
   //   stays open (J9). Killed after commit 1, the seed of trip@1 resumes; the gap's new suffix (2) closes it
   //   {none, gap, partial} (T10), and no late attach is pending because the slot was not idle at the checkpoint. Killed
-  //   after commit 2, the gap is wholly covered (storage `covered`), so the resumed trip stays open.
+  //   after commit 2, the gap is wholly covered (storage `covered`), so the resumed trip stays open. Its queued
+  //   consumer-restart downgrade has no new carrier, so the stored row retains unknown completeness.
   // - app-absent-hydration, killed after the attach op (the first connection attaches at 100 ms as in the scenario): the
   //   late-attach trip is stored; the second process resumes it from its seed, and the redelivered gap 4–4, newly
   //   covered, closes it {none, gap, partial} (T10).
@@ -289,7 +290,7 @@ describe('S3 killed recording process (REG-006)', () => {
     ['quick-job-profile-change', 5, 'after', [['2', 'none', 'discontinuity', 'partial']]],
     ['ferry-train', 2, 'after', []],
     ['retention-expired', 1, 'before', [[null, 'open', null, 'partial']]], ['retention-expired', 1, 'after', [['1', 'none', 'gap', 'partial']]],
-    ['retention-expired', 2, 'after', [['1', 'open', null, 'partial']]],
+    ['retention-expired', 2, 'after', [['1', 'open', null, 'unknown']]],
     ['app-absent-hydration', 'attach', 'after', [[null, 'none', 'gap', 'partial']]],
     ['two-jobs', 10, 'before', [[...D3], ['10', 'delivered', 'outcome', 'partial']]], ['two-jobs', 10, 'after', [[...D3], ['10', 'delivered', 'outcome', 'partial']]],
     ['two-jobs', 11, 'after', [[...D3], ['10', 'delivered', 'outcome', 'complete']]]];

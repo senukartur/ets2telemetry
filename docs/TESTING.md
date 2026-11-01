@@ -43,8 +43,8 @@ Every scenario below keeps the same ID across domain, integration and UI tests, 
 | ID | Scenario | Required result | Primary owners |
 | --- | --- | --- | --- |
 | REG-001 | Normal job acceptance, driving, road stop, delivery | One delivered trip; active road stops retain 1 Hz sampling | ET-014, ET-015 |
-| REG-002 | Pause and resume under controlled time | Pause events exist; no repeated paused samples; sampling resumes without invented catch-up data | ET-014, ET-015 |
-| REG-003 | App attaches mid-job or reconnects after a gap | Partial recording is visible; missing intervals are not fabricated | ET-006, ET-014, ET-015 |
+| REG-002 | Pause and resume under controlled time | Pause events exist; no repeated paused samples; sampling resumes without invented catch-up data; a verified unchanged pause across a gap-free reconnection preserves completeness | ET-014, ET-015 |
+| REG-003 | App attaches mid-job or reconnects after a gap; a save-created job opens before driving | Partial recording is visible for real or unverified losses; a clean loaded job needs distance and game-duration corroboration at delivery; missing intervals are not fabricated | ET-006, ET-014, ET-015 |
 | REG-004 | Cancellation, job disappearance, and configuration cleared before delivery event | Cancellation and delivery remain distinct; missing configuration alone never proves delivery; terminal payload is retained | ET-003, ET-014 |
 | REG-005 | Duplicate/redelivered events and ordering violations | No duplicate trip/accounting; unsupported ordering is rejected or represented as a gap under the protocol | ET-002, ET-004, ET-014, ET-015 |
 | REG-006 | Process terminates before commit or after commit but before ACK | Retry recovers uncommitted work or deduplicates committed work; no ACK for a failed transaction | ET-004, ET-013, ET-015 |
