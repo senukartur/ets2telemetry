@@ -3,7 +3,7 @@
   "basis": ["synthetic-inference", "O1 (opened-at-load inference)"],
   "authoredFrom": [
     "quick-job-profile-change.json and its expectation: truck (1), quick job (2) before the first start, start (3), pause (4), clear (5), truck clear (6), timers.restart (7), a different truck (8), start (9)",
-    "docs/trips.md T12: the quick job opens partial with opened-at-load; T7: the clear leaves it awaiting its outcome",
+    "docs/trips.md T12: the quick job opens unknown with an opened-at-load annotation pending terminal coverage evidence; T7: the clear leaves it awaiting its outcome",
     "docs/trips.md transitions: a timers.restart while awaiting the outcome closes the trip {none, discontinuity, partial} at the restart's UTC label; nothing reopens it (TESTING.md REG-004: a clear is not a delivery)",
     "docs/trips.md T16 (PR-2): no odometer or fuel channel, so nothing is observed"
   ],
@@ -13,7 +13,7 @@
       "recordingCompleteness": "partial", "startedUtcMs": 1800000000020, "endedUtcMs": 1800000000120, "observedDistanceM": {"available": false, "reason": "not-observed"}, "fuelUsedL": {"available": false, "reason": "not-observed"}}
   ],
   "attributions": [],
-  "intervals": [{"trip": "trip@2", "kind": "discontinuity", "detail": {"cause": "opened-at-load", "atEventSeq": "2"}}],
+  "intervals": [{"trip": "trip@2", "kind": "discontinuity", "detail": {"cause": "opened-at-load", "annotation": true, "atEventSeq": "2"}}],
   "coverage": {"committedThroughEventSeq": "9", "committed": 9, "duplicate": 0, "covered": 0},
   "view": {"phase": "idle", "untrackedJob": false, "current": null,
     "lastClosed": {"trip": "trip@2", "recordingCompleteness": "partial", "observedDistanceM": {"state": "missing", "reason": "not-observed"},

@@ -3,7 +3,7 @@
   "basis": ["synthetic-inference", "O1 (opened-at-load inference)"],
   "authoredFrom": [
     "reconnect-lost-ack.expected.json: connection 1 commits job.configured (1), start (2) and pause (3); connection 2 at atMs 100 receives 2 and 3 again as duplicates, then the new offline gap 4-4 (the toll)",
-    "docs/trips.md T12: the job opens partial with opened-at-load; caller contract: the reconnection queues a not-connected interval from the last item before the disconnection (eventSeq 3, source ns 1,000,030,000,000, UTC 1,800,000,000,030) to the welcome's capture (1,000,100,000,000)",
+    "docs/trips.md T12: the job opens unknown with an opened-at-load annotation pending terminal coverage evidence; caller contract: the reconnection queues a not-connected interval from the last item before the disconnection (eventSeq 3, source ns 1,000,030,000,000, UTC 1,800,000,000,030) to the welcome's capture (1,000,100,000,000)",
     "docs/trips.md T16 (PR-2): nothing is bridged across the hole; the first reading after the reconnection records odometerDeltaM, null because neither reading carries an odometer",
     "docs/trips.md T10: the new gap suffix closes the trip {none, gap, partial} at the session's last label (eventSeq 3) with a not-connected interval; the job stays untracked; the queued interval goes out first in that commit; the lost toll gets no attribution"
   ],
@@ -14,7 +14,7 @@
   ],
   "attributions": [],
   "intervals": [
-    {"trip": "trip@1", "kind": "discontinuity", "detail": {"cause": "opened-at-load", "atEventSeq": "1"}},
+    {"trip": "trip@1", "kind": "discontinuity", "detail": {"cause": "opened-at-load", "annotation": true, "atEventSeq": "1"}},
     {"trip": "trip@1", "kind": "not-connected", "startUtcMs": 1800000000030, "startMonotonicNs": "1000030000000", "endMonotonicNs": "1000100000000", "sourceClockId": "capture-clock",
       "detail": {"cause": "disconnected", "odometerDeltaM": null}},
     {"trip": "trip@1", "kind": "not-connected", "firstEventSeq": "4", "lastEventSeq": "4", "startMonotonicNs": "1000050000000", "endMonotonicNs": "1000050000000", "sourceClockId": "capture-clock",

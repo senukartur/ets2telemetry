@@ -169,14 +169,14 @@ describe('ET-015a trip recorder in the v1 ingestion pipeline', () => {
     await settle();
     // The commit is in flight: nothing is adopted or acknowledged yet (T3).
     expect([storage.holding, recorder.view('ets2').phase, latest().acks]).toEqual([1, 'idle', []]);
-    // The session starts at coverage 0, so it is loading (T12): the trip opens partial with an opened-at-load cause.
+    // The load alone is an annotation: terminal distance and duration must corroborate coverage before a complete close.
     expect(storage.attempts).toEqual([{eventSeq: '1', effects: [
-      {kind: 'trip.open', tripUuid: trip, game: 'ets2', gameMode: UNKNOWN_MODE, jobConfiguration: 'this-event', recordingCompleteness: 'partial', startedUtcMs: BASE_UTC + 1_000},
-      {kind: 'completeness.add', interval: {tripUuid: trip, kind: 'discontinuity', detail: {cause: 'opened-at-load', atEventSeq: '1'}}}]}]);
+      {kind: 'trip.open', tripUuid: trip, game: 'ets2', gameMode: UNKNOWN_MODE, jobConfiguration: 'this-event', recordingCompleteness: 'unknown', startedUtcMs: BASE_UTC + 1_000},
+      {kind: 'completeness.add', interval: {tripUuid: trip, kind: 'discontinuity', detail: {cause: 'opened-at-load', annotation: true, atEventSeq: '1'}}}]}]);
     storage.release(); await settle();
-    expect(recorder.view('ets2')).toMatchObject({phase: 'active', current: {tripUuid: trip, recordingCompleteness: 'partial', startedUtcMs: BASE_UTC + 1_000}});
+    expect(recorder.view('ets2')).toMatchObject({phase: 'active', current: {tripUuid: trip, recordingCompleteness: 'unknown', startedUtcMs: BASE_UTC + 1_000}});
     expect(latest().acks).toEqual(['1']);
-    expect(storage.model.trips.map(t => [t.tripUuid, t.outcome, t.openedEventSeq, t.recordingCompleteness])).toEqual([[trip, 'open', '1', 'partial']]);
+    expect(storage.model.trips.map(t => [t.tripUuid, t.outcome, t.openedEventSeq, t.recordingCompleteness])).toEqual([[trip, 'open', '1', 'unknown']]);
     expect(storage.violations).toEqual([]);
   });
 
@@ -200,7 +200,10 @@ describe('ET-015a trip recorder in the v1 ingestion pipeline', () => {
     // The same trip.open again, from the kept state. The redelivered configuration lies before the new checkpoint's
     // nextEventSeq (2), so it is replayed from the producer's retention and also gets an opened-before-attach cause
     // (docs/trips.md, "Replayed events"): the consumer has no readings from before it attached.
-    expect(storage.attempts).toEqual([{eventSeq: '1', effects: opened}, {eventSeq: '1', effects: [...opened,
+    const pendingLoad: TripEffect[] = [
+      {kind: 'trip.open', tripUuid: trip, game: 'ets2', gameMode: UNKNOWN_MODE, jobConfiguration: 'this-event', recordingCompleteness: 'unknown', startedUtcMs: BASE_UTC + 1_000},
+      {kind: 'completeness.add', interval: {tripUuid: trip, kind: 'discontinuity', detail: {cause: 'opened-at-load', annotation: true, atEventSeq: '1'}}}];
+    expect(storage.attempts).toEqual([{eventSeq: '1', effects: pendingLoad}, {eventSeq: '1', effects: [...opened,
       {kind: 'completeness.add', interval: {tripUuid: trip, kind: 'not-connected', detail: {cause: 'opened-before-attach', atEventSeq: '1'}}}]}]);
     expect([latest().acks, recorder.view('ets2').phase]).toEqual([['1'], 'active']);
 
@@ -236,6 +239,8 @@ describe('ET-015a trip recorder in the v1 ingestion pipeline', () => {
     // The opening step (1,000 -> 1,100) began before the trip opened, so only 1,100 -> 1,250 counts: 150 m. Both
     // snapshots keep the fixture's 410.5 L, so that step is an unchanged fuel step: fuel used is 0 L, a value (J8).
     expect(storage.attempts[1]).toEqual({eventSeq: '2', effects: [
+      {kind: 'trip.update', tripUuid: trip, set: {recordingCompleteness: 'partial'}},
+      {kind: 'completeness.add', interval: {tripUuid: trip, kind: 'discontinuity', detail: {cause: 'loaded-job-unverified', atEventSeq: '2'}}},
       {kind: 'event.attribute', tripUuid: trip, attribution: 'trip'},
       {kind: 'trip.update', tripUuid: trip, set: {observedDistanceM: {available: true, value: 150}, fuelUsedL: {available: true, value: 0}}},
       {kind: 'trip.close', tripUuid: trip, outcome: 'delivered', closeReason: 'outcome', outcomeEvent: 'this-event', recordingCompleteness: 'partial', endedUtcMs: BASE_UTC + 6_000}]});

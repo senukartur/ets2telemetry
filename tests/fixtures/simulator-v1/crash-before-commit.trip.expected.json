@@ -14,7 +14,7 @@
   ],
   "attributions": [],
   "intervals": [
-    {"trip": "trip@1", "kind": "discontinuity", "detail": {"cause": "opened-at-load", "atEventSeq": "1"}},
+    {"trip": "trip@1", "kind": "discontinuity", "detail": {"cause": "opened-at-load", "annotation": true, "atEventSeq": "1"}},
     {"trip": "trip@1", "kind": "not-connected", "detail": {"cause": "consumer-restart"}},
     {"trip": "trip@1", "kind": "not-connected", "firstEventSeq": "3", "lastEventSeq": "3", "startMonotonicNs": "1000030000000", "endMonotonicNs": "1000030000000", "sourceClockId": "capture-clock",
       "detail": {"cause": "gap", "causes": {"offline": "1", "noDurableConsumer": "0", "queueCount": "0", "queueBytes": "0", "retentionExpired": "0", "encodingFailed": "0"},

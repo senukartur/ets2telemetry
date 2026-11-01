@@ -2,8 +2,8 @@
   "scenario": "normal-delivery-retry",
   "authoredFrom": [
     "Why a separate expectation: normal-delivery.trip.expected.json describes one uninterrupted consumer. Here the transport of normal-delivery.json gets a second durable connection at 606 ms, and the first commit of job.delivered (eventSeq 8) fails once inside its transaction with SQLITE_FULL (DISK_FULL) or SQLITE_BUSY (DATABASE_LOCKED), both retryable (E7); the same service reconnects and the producer redelivers 8.",
-    "Events 1-7 commit as in normal-delivery: trip@3 opens partial with opened-at-load (T12) with truck 1 and trailer 2, and observed distance 0 m is persisted at eventSeq 5 (T16). The failed commit rolls back event 8 and its effects; the recorder keeps its state (T3).",
-    "The reconnection is stepped at the session open (R6): the not-connected interval runs from the last committed item (eventSeq 7: label 1,800,000,000,500, source time 1,000,500,000,000 ns) to the second welcome's capture (atMs 606: 1,000,606,000,000 ns) on the capture clock; the trip is already partial, so no trip.update. Both readings around the hole (the snapshot at 200 and the second checkpoint) report odometer 1,000,500 m for the same truck, so odometerDeltaM is 0 (T16).",
+    "Events 1-7 commit as in normal-delivery: trip@3 opens unknown with an opened-at-load annotation pending terminal coverage evidence (T12) with truck 1 and trailer 2, and observed distance 0 m is persisted at eventSeq 5 (T16). The failed commit rolls back event 8 and its effects; the recorder keeps its state (T3).",
+    "The reconnection is stepped at the session open (R6): the not-connected interval runs from the last committed item (eventSeq 7: label 1,800,000,000,500, source time 1,000,500,000,000 ns) to the second welcome's capture (atMs 606: 1,000,606,000,000 ns) on the capture clock; the pending loaded start becomes partial with a trip.update. Both readings around the hole (the snapshot at 200 and the second checkpoint) report odometer 1,000,500 m for the same truck, so odometerDeltaM is 0 (T16).",
     "The redelivered job.delivered carries the queued interval first, then attribution trip and the close {delivered, outcome, partial} at 1,800,000,000,600. The live job.cleared (9) adds nothing. Nine first commits, no duplicate."
   ],
   "trips": [
@@ -13,7 +13,7 @@
   ],
   "attributions": [{"eventSeq": "8", "trip": "trip@3", "attribution": "trip"}],
   "intervals": [
-    {"trip": "trip@3", "kind": "discontinuity", "detail": {"cause": "opened-at-load", "atEventSeq": "3"}},
+    {"trip": "trip@3", "kind": "discontinuity", "detail": {"cause": "opened-at-load", "annotation": true, "atEventSeq": "3"}},
     {"trip": "trip@3", "kind": "not-connected", "startUtcMs": 1800000000500, "startMonotonicNs": "1000500000000", "endMonotonicNs": "1000606000000", "sourceClockId": "capture-clock",
       "detail": {"cause": "disconnected", "odometerDeltaM": 0}}
   ],

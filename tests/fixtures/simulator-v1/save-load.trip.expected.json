@@ -3,7 +3,7 @@
   "basis": ["O9", "O10", "O1 (opened-at-load inference)"],
   "authoredFrom": [
     "save-load.json and save-load.expected.json: job.configured at eventSeq 3 (atMs 30) before the first start; clear (6), truck and trailer clears (7, 8), identical job re-send (9), identical truck and trailer (10, 11), start (12), gameTime.regression game-clock-0 -> game-clock-1 (13)",
-    "docs/trips.md T12: the job opens partial with opened-at-load; T8/O10: clear then identical re-send is a reload check, and the regression continues the same trip with a save-load interval",
+    "docs/trips.md T12: the job opens unknown with an opened-at-load annotation pending terminal coverage evidence; T8/O10: clear then identical re-send is a reload check, and the regression continues the same trip with a save-load interval",
     "docs/trips.md: identical truck and trailer re-sends change no reference",
     "docs/trips.md T16 (PR-2): no odometer channel; the snapshot at 240 follows a clear and a game-clock rotation, so no step is counted and observed distance stays not observed"
   ],
@@ -14,7 +14,7 @@
   ],
   "attributions": [],
   "intervals": [
-    {"trip": "trip@3", "kind": "discontinuity", "detail": {"cause": "opened-at-load", "atEventSeq": "3"}},
+    {"trip": "trip@3", "kind": "discontinuity", "detail": {"cause": "opened-at-load", "annotation": true, "atEventSeq": "3"}},
     {"trip": "trip@3", "kind": "discontinuity", "detail": {"cause": "save-load", "fromClockId": "game-clock-0", "toClockId": "game-clock-1", "atEventSeq": "13"}}
   ],
   "coverage": {"committedThroughEventSeq": "13", "committed": 13, "duplicate": 0, "covered": 0},

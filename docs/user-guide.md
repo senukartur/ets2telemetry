@@ -136,6 +136,8 @@ Live shows the instruments, the current job, the truck and the game time with th
 
 Journal reads one cursor page at a time and updates only on Refresh. Its wide table scrolls horizontally; the list shows expected income, and the actual payment or penalty is in the trip. Opening a trip shows its cargo/route, outcome and recording completeness, three metric tiles, retained Hard Mode evidence, exact money categories and raw detail sections. Back returns to the same list page. The chart covers **only the current sample page**, up to 300 samples; source-monotonic segments break at missing readings/seconds and clock discontinuities. It does not claim whole-trip duration or that a gap was a pause. The current page's sample table is in a collapsed section under the chart, and **Recorded data** at the bottom opens the completeness intervals and the event timeline. JSON export keeps its uninstall warning next to its button.
 
+A job created in a save (for example by CargoMan) can have a complete recording when the delivered distance and game duration corroborate that its execution was observed from the beginning. Matching cargo and route names alone is insufficient. An unchanged, verified pause across a reconnection adds an informational annotation without making the recording partial. Missing evidence or actual losses still make it partial; existing journal entries are not recalculated.
+
 ## Showing or hiding the overlay
 
 Overlay measurements use whole numbers rounded to the nearest unit (`200.2 km` → `200 km`, `200.5 km` → `201 km`). Route endpoints show only cities, and the delivery countdown omits "in" (Russian "через"); an overdue delivery still shows a warning. The game clock shows only `HH:MM`, without the day number.
