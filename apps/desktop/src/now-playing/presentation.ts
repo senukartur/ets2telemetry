@@ -1,4 +1,13 @@
 import type {MediaTrack} from '../../../../packages/contracts/src/now-playing';
+/** Display aliases only: keep the original Windows identity and session token for selection. */
+export function mediaSourceName(source: string): string {
+  const name = source.trim(), executable = name.split(/[\\/]/).at(-1)?.toLowerCase();
+  if (/^spotifyab\.spotifymusic_[a-z0-9]+!spotify$/i.test(name) || executable === 'spotify' || executable === 'spotify.exe') return 'Spotify';
+  if (executable === 'chrome' || executable === 'chrome.exe' || executable === 'google chrome') return 'Chrome';
+  if (executable === 'msedge' || executable === 'msedge.exe' || executable === 'microsoft edge') return 'Microsoft Edge';
+  if (executable === 'firefox' || executable === 'firefox.exe') return 'Firefox';
+  return name;
+}
 /** Only a recent credible Windows timeline anchor with a positive rate may advance. */
 export function progress(track: MediaTrack, now: number): {position: number; duration: number; fraction: number} | null {
   const t = track.timeline;

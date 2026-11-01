@@ -382,7 +382,7 @@ function runApplication(profileError: unknown): void {
     const created = nowWindow = new BrowserWindow({width: 300, height: 78, show: false, frame: false, transparent: true, skipTaskbar: true,
       focusable: false, movable: false, resizable: false, minimizable: false, maximizable: false, fullscreenable: false, hasShadow: false,
       webPreferences: {partition: 'ets2telemetry-now-playing', preload: path.join(__dirname, 'now-playing-preload.cjs'), contextIsolation: true, sandbox: true, nodeIntegration: false}});
-    nowController = new NowPlayingController(created, screen, publishNowPlaying); nowController.configure(settingsStore.view().nowPlaying);
+    nowController = new NowPlayingController(created, screen, publishNowPlaying); nowController.updateGame(lastLive); nowController.configure(settingsStore.view().nowPlaying);
     created.webContents.setWindowOpenHandler(() => ({action: 'deny'}));
     created.webContents.on('will-navigate', event => event.preventDefault());
     const retire = () => {if (nowWindow === created) retireNowDocument();};
@@ -437,7 +437,7 @@ function runApplication(profileError: unknown): void {
   const freshness = new LiveFreshness(update => {
     const view = settingsStore.view();
     dashboardSubscriptions.publish(update); publishOverlay(update, view.units, view.overlay, view.language, view.gearDisplay); overlayController?.update(update);
-    lastLive = update; presentTray();
+    lastLive = update; nowController?.updateGame(update); presentTray();
   });
   const rendererBudget = new RecoveryBudget();
   const resolveBroker = createBrokerResolver(__dirname, process.resourcesPath, app.isPackaged, process.env.LOCALAPPDATA, error => log('BROKER_UNAVAILABLE', String(error)));

@@ -30,12 +30,20 @@ export async function runNowPlayingSmoke({application, dashboard, config}) {
   assert.deepEqual(await widget.evaluate(() => ({keys: Object.keys(globalThis.nowPlaying), frozen: Object.isFrozen(globalThis.nowPlaying), node: typeof globalThis.require, desktop: typeof globalThis.desktop})), {keys: ['subscribeNowPlaying'], frozen: true, node: 'undefined', desktop: 'undefined'});
   await inject(application, snapshot());
   await widget.getByTestId('now-playing-panel').waitFor({state: 'visible'});
+  const native = await nativeWindow(application);
+  assert.deepEqual(native.security, {sandbox: true, isolation: true, node: false}); assert.equal(native.focusable, false); assert.equal(native.movable, false);
+  assert.equal(native.visible, false, 'Media without an active game must stay off the desktop'); result.desktopHidden = true;
+  await dashboard.bringToFront();
+  await dashboard.evaluate(() => globalThis.desktop.beginNowPlayingEdit());
+  await widget.locator('.np-editing').waitFor();
+  assert.equal((await nativeWindow(application)).visible, true); result.editPreview = true;
   assert.equal(await widget.locator('.np-title').innerText(), track.title);
   assert.equal(await widget.locator('.np-panel').evaluate(element => element.classList.contains('np-minimal')), true);
   result.minimal = true; await widget.screenshot({path: path.join(config.output, 'now-playing-minimal.png'), omitBackground: true});
-  const native = await nativeWindow(application);
-  assert.deepEqual(native.security, {sandbox: true, isolation: true, node: false}); assert.equal(native.focusable, false); assert.equal(native.movable, false); assert.equal(native.topmost, true);
+  assert.equal((await nativeWindow(application)).topmost, true);
+  await dashboard.evaluate(() => globalThis.desktop.finishNowPlayingEdit('cancel'));
   await dashboard.evaluate(() => globalThis.desktop.setNowPlayingStyle('full'));
+  await dashboard.evaluate(() => globalThis.desktop.beginNowPlayingEdit());
   await widget.locator('.np-full').waitFor();
   assert.equal(await widget.locator('.np-album').innerText(), 'Fixture album');
   assert.equal(await widget.locator('.np-times').innerText(), '1:00\n4:00');
@@ -47,6 +55,15 @@ export async function runNowPlayingSmoke({application, dashboard, config}) {
     await widget.waitForFunction(([width, height]) => {const image = globalThis.document.querySelector('.np-artwork'); return image?.naturalWidth === width && image.naturalHeight === height && globalThis.getComputedStyle(image).objectFit === 'contain';}, [width, height]);
   }
   result.artworkShapes = ['square', 'portrait', 'wide']; await widget.screenshot({path: path.join(config.output, 'now-playing-full.png'), omitBackground: true});
+  const spotify = {...source, sourceAppId: 'SpotifyAB.SpotifyMusic_zpdnekdrzrea0!Spotify'};
+  await inject(application, snapshot(track, [spotify]));
+  await dashboard.evaluate(() => globalThis.desktop.selectNowPlayingSource({kind: 'session', id: 's1'}));
+  await inject(application, snapshot(track, [spotify]));
+  await until(() => dashboard.locator('#now-playing-source').innerText(), text => text === 'Spotify', 'Source selector did not normalize Spotify');
+  await widget.getByText('Spotify', {exact: true}).waitFor();
+  assert.equal((await dashboard.evaluate(async () => (await globalThis.desktop.getAppState()).nowPlaying.sources[0])).sourceAppId, spotify.sourceAppId);
+  result.sourceNormalized = true;
+  await dashboard.evaluate(() => globalThis.desktop.selectNowPlayingSource({kind: 'automatic'}));
   await dashboard.evaluate(() => globalThis.desktop.setNowPlayingBackgroundOpacity(40));
   await widget.waitForFunction(() => globalThis.getComputedStyle(globalThis.document.querySelector('.np-panel')).backgroundColor.includes('0.4'));
   assert.equal(await widget.locator('.np-title').evaluate(element => globalThis.getComputedStyle(element).opacity), '1'); result.backgroundOnlyOpacity = true;
@@ -57,6 +74,7 @@ export async function runNowPlayingSmoke({application, dashboard, config}) {
   await runNativeSelectionJourney({application, dashboard, widget, config}); result.nativeSelectionRoundTrip = true; result.nativeTransitionRecovered = true;
   await dashboard.evaluate(() => globalThis.desktop.selectNowPlayingSource({kind: 'automatic'}));
   await inject(application, snapshot({...track, playback: 'paused'}, [{...source, playback: 'paused'}]));
+  await dashboard.evaluate(() => globalThis.desktop.finishNowPlayingEdit('cancel'));
   await dashboard.evaluate(() => globalThis.desktop.selectNowPlayingSource({kind: 'session', id: 's1'}));
   await inject(application, snapshot(null, [{id: 's2', sourceAppId: 'Synthetic other player', playback: 'playing', current: true}]));
   await dashboard.waitForFunction(async () => (await globalThis.desktop.getAppState()).nowPlaying.state === 'unavailable');
@@ -77,7 +95,7 @@ export async function runNowPlayingSmoke({application, dashboard, config}) {
   await inject(application, snapshot());
   await widget.getByTestId('now-playing-panel').waitFor({state: 'visible'});
   await dashboard.close();
-  assert.equal((await nativeWindow(application)).visible, true); result.closeToTray = true;
+  assert.equal((await nativeWindow(application)).visible, false); result.closeToTray = true;
   await application.evaluate(({app}) => app.emit('ets2telemetry:diagnostic-tray-action', 'open'));
   return result;
 }
@@ -86,6 +104,7 @@ export async function verifyNowPlayingRestart({application, dashboard, record}) 
   assert.deepEqual(settings, {enabled: true, style: 'full', backgroundOpacity: 40, position: {displayId: null, x: 1, y: 0.75}});
   const widget = await widgetOf(application); await inject(application, snapshot());
   await widget.getByTestId('now-playing-panel').waitFor({state: 'visible'}); record.restartPreserved = true;
+  assert.equal((await nativeWindow(application)).visible, false, 'Restarted media without a game must stay hidden');
   await dashboard.evaluate(() => globalThis.desktop.setNowPlayingEnabled(false));
   await until(() => nativeWindow(application), value => value === null, 'Disable did not destroy current track window'); record.disableRetires = true;
 }

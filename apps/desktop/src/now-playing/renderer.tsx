@@ -1,7 +1,7 @@
 import React, {useEffect, useRef, useState} from 'react';
 import {createRoot} from 'react-dom/client';
 import type {NowPlayingBridge, NowPlayingDisplay} from '../../../../packages/contracts/src/now-playing';
-import {mediaTime, progress} from './presentation';
+import {mediaSourceName, mediaTime, progress} from './presentation';
 import {t} from '../i18n';
 import './styles.css';
 declare global {interface Window {nowPlaying: NowPlayingBridge}}
@@ -22,7 +22,7 @@ export function CurrentTrack({display}: {display: NowPlayingDisplay}) {
       <div className="np-title">{track?.title || text('np.title')}</div>
       {track?.artist ? <div className="np-artist">{track.artist}</div> : null}
       {full && track?.album ? <div className="np-album">{track.album}</div> : null}
-      <div className="np-status">{track?.playback === 'paused' ? <span>{text('np.paused')}</span> : null}{full && display.source ? <span>{display.source}</span> : null}{display.editing ? <span>{text('np.drag')}</span> : null}</div>
+      <div className="np-status">{track?.playback === 'paused' ? <span>{text('np.paused')}</span> : null}{full && display.source ? <span>{mediaSourceName(display.source)}</span> : null}{display.editing ? <span>{text('np.drag')}</span> : null}</div>
       {full && timeline ? <div className="np-timeline"><div className="np-progress"><span style={{width: `${timeline.fraction * 100}%`}} /></div><div className="np-times"><span>{mediaTime(timeline.position)}</span><span>{mediaTime(timeline.duration)}</span></div></div> : null}
     </div>
   </section>;

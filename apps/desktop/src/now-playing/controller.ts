@@ -1,4 +1,6 @@
 import type {NowPlayingEditState, NowPlayingPosition, NowPlayingSettings} from '../../../../packages/contracts/src/now-playing';
+import type {LiveTelemetry} from '../../../../packages/contracts/src';
+import {currentGameClientBounds} from '../window-placement';
 import {DEFAULT_NOW_PLAYING} from './contract';
 import {positionFromBounds, widgetBounds, type Area, type MediaDisplay} from './placement';
 interface WidgetWindow {
@@ -6,13 +8,15 @@ interface WidgetWindow {
   setIgnoreMouseEvents(ignore: boolean): void; setFocusable(value: boolean): void; setSkipTaskbar(value: boolean): void; setMovable(value: boolean): void;
   setAlwaysOnTop(value: boolean, level: 'screen-saver'): void; isAlwaysOnTop(): boolean; moveTop(): void;
 }
-interface WidgetScreen {getAllDisplays(): MediaDisplay[]; getPrimaryDisplay(): MediaDisplay; getDisplayMatching(bounds: Area): MediaDisplay}
+interface WidgetScreen {getAllDisplays(): MediaDisplay[]; getPrimaryDisplay(): MediaDisplay; getDisplayMatching(bounds: Area): MediaDisplay; screenToDipRect(window: null, bounds: Area): Area}
 /** Main owns the edit draft; renderer snapshots grant no movement authority. */
 export class NowPlayingController {
   private settings: NowPlayingSettings = DEFAULT_NOW_PLAYING;
   private draft?: NowPlayingPosition;
   private ready = false;
   private available = false;
+  private game?: Area;
+  private live?: LiveTelemetry;
   private foreground = false;
   private visible = false;
   private interactive = false;
@@ -21,7 +25,19 @@ export class NowPlayingController {
   configure(settings: NowPlayingSettings): void {this.settings = settings; if (!settings.enabled && this.draft) this.end(); this.place();}
   loaded(ready: boolean): void {this.ready = ready; if (!ready && this.draft) this.end(); this.place();}
   update(available: boolean): void {this.available = available; this.place();}
-  topologyChanged(): void {this.moving = false; this.place();}
+  updateGame(live: LiveTelemetry): void {
+    this.live = live;
+    this.game = undefined;
+    const physical = currentGameClientBounds(live);
+    if (physical) {
+      try {
+        const bounds = this.screen.screenToDipRect(null, physical);
+        if (Object.values(bounds).every(Number.isFinite) && bounds.width > 0 && bounds.height > 0) this.game = bounds;
+      } catch {/* Unavailable display conversion cannot authorize visibility. */}
+    }
+    this.place();
+  }
+  topologyChanged(): void {this.moving = false; if (this.live) this.updateGame(this.live); else this.place();}
   setOwnForeground(value: boolean): void {this.foreground = value; this.place(); this.changed();}
   editState(): NowPlayingEditState {return {active: Boolean(this.draft), placement: !this.ready || (this.draft && this.foreground && !this.visible) ? 'unavailable' : this.foreground ? 'visible' : 'not-foreground'};}
   begin(foreground: boolean): NowPlayingEditState {
@@ -42,9 +58,14 @@ export class NowPlayingController {
   private hide(): void {this.window.hide(); this.visible = false; this.moving = false; this.passThrough();}
   private place(): void {
     if (this.window.isDestroyed()) return;
-    if (!this.settings.enabled || !this.ready || (this.draft ? !this.foreground : !this.available)) {this.hide(); return;}
+    if (!this.settings.enabled || !this.ready || (this.draft ? !this.foreground : !this.available || !this.game)) {this.hide(); return;}
     if (this.moving) return;
     const bounds = widgetBounds(this.draft ?? this.settings.position, this.settings.style, this.screen.getAllDisplays(), this.screen.getPrimaryDisplay());
+    if (!this.draft && this.game) {
+      if (bounds.width > this.game.width || bounds.height > this.game.height) {this.hide(); return;}
+      bounds.x = Math.max(this.game.x, Math.min(bounds.x, this.game.x + this.game.width - bounds.width));
+      bounds.y = Math.max(this.game.y, Math.min(bounds.y, this.game.y + this.game.height - bounds.height));
+    }
     const before = this.window.getBounds();
     const moved = Object.keys(bounds).some(key => bounds[key as keyof Area] !== before[key as keyof Area]);
     if (moved) this.window.setBounds(bounds);

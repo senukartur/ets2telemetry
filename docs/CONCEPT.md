@@ -41,7 +41,7 @@ The driver chooses one of four layouts (Strip, the default, plus Card, Cluster a
 
 ### Current track
 
-An optional independent window shows the current Windows media item. Minimal shows title and artist; Full adds proportional artwork, album and source when supplied, and a bounded timeline. Its own saved position, background opacity and style are controlled from General settings. It stays visible on the desktop and over windowed/borderless games while playing or paused; pause is labelled and progress freezes. Missing, stopped or failed media clears the panel. Automatic selection prefers playing sessions, while an explicit unavailable source never switches to another player. Media is read locally without accounts or listening-history storage.
+An optional independent window shows the current Windows media item over the active game in windowed/borderless mode. Minimal shows title and artist; Full adds proportional artwork, album and a readable source name when recognized, and a bounded timeline. Its own saved position, background opacity and style are controlled from General settings, with a desktop preview while editing the position. The normal panel hides outside the game, during Alt+Tab and game minimization; paused media is labelled and progress freezes. Missing, stopped or failed media clears the panel. Automatic selection prefers playing sessions, while an explicit unavailable source never switches to another player. Media is read locally without accounts or listening-history storage.
 
 ### Trip recording
 

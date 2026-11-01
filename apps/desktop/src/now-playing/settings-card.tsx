@@ -8,6 +8,7 @@ import {Label} from '../components/ui/label';
 import {Slider} from '../components/ui/slider';
 import {RadioGroup, RadioGroupItem} from '../components/ui/radio-group';
 import {DEFAULT_NOW_PLAYING} from './contract';
+import {mediaSourceName} from './presentation';
 import {t} from '../i18n';
 export function NowPlayingSettingsCard({settings, view, onSaved}: {settings: SettingsView | undefined; view: NowPlayingView | undefined; onSaved: (settings: SettingsView) => void}) {
   const [pending, setPending] = useState(false), [failed, setFailed] = useState(false), [opacity, setOpacity] = useState<number>();
@@ -24,7 +25,7 @@ export function NowPlayingSettingsCard({settings, view, onSaved}: {settings: Set
       <div className="yu-setting-row"><Label htmlFor="now-playing-source">{text('np.source')}</Label><Select value={view?.selection.kind === 'session' ? view.selection.id : 'automatic'} disabled={locked} onValueChange={value => {call(() => window.desktop.selectNowPlayingSource(value === 'automatic' ? {kind: 'automatic'} : {kind: 'session', id: value}));}}><SelectTrigger id="now-playing-source" data-testid="now-playing-source"><SelectValue /></SelectTrigger><SelectContent>
         <SelectItem value="automatic">{text('np.automatic')}</SelectItem>
         {view?.selection.kind === 'session' && !view.sources.some(source => view.selection.kind === 'session' && source.id === view.selection.id) ? <SelectItem value={view.selection.id}>{text('np.state.unavailable')}</SelectItem> : null}
-        {view?.sources.map(source => <SelectItem key={source.id} value={source.id}>{source.sourceAppId}</SelectItem>)}
+        {view?.sources.map(source => <SelectItem key={source.id} value={source.id}>{mediaSourceName(source.sourceAppId)}</SelectItem>)}
       </SelectContent></Select></div>
       <div><p id="now-playing-style-label">{text('np.style')}</p><RadioGroup aria-labelledby="now-playing-style-label" className="yu-segmented" value={saved.style} disabled={locked || editing} onValueChange={value => {if (value === 'minimal' || value === 'full') save(() => window.desktop.setNowPlayingStyle(value));}}>
         {(['minimal', 'full'] as const).map(style => <div key={style} className="yu-segment-option"><RadioGroupItem id={`np-${style}`} value={style} /><Label htmlFor={`np-${style}`}>{text(`np.${style}`)}</Label></div>)}

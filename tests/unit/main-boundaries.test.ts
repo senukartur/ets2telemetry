@@ -3269,9 +3269,10 @@ it('validates current-track arity, sender, main frame and document retirement be
   const before = channels.length; ipc.emit('now-playing:subscribe', trusted(), 0); expect(channels).toHaveLength(before);
 });
 
-async function readyCurrentTrack() {
+async function readyCurrentTrack(beforeEnable?: () => void) {
   await ready();
   Object.assign(contents.mainFrame, {url: pathToFileURL(loadFile.mock.calls[0][0]).href}); contents.emit('did-finish-load');
+  beforeEnable?.();
   await handlers.get('settings:set-now-playing-enabled')!(trusted(), true);
   const widget = windows[2];
   Object.assign(widget.webContents.mainFrame, {url: pathToFileURL(loadFile.mock.lastCall![0]).href}); widget.webContents.emit('did-finish-load');
@@ -3297,6 +3298,33 @@ it('starts the production current-track focus gate and restores click-through af
   const shown = widget.showInactive.mock.calls.length;
   await vi.advanceTimersByTimeAsync(150); dashboard.focused = true; dashboard.emit('focus');
   expect(widget.showInactive).toHaveBeenCalledTimes(shown); expect(widget.visible).toBe(false);
+});
+it('gates current-track visibility on live game-window freshness independently of media updates and overlay settings', async () => {
+  vi.stubEnv('ETS2TELEMETRY_SOURCE_KIND', 'ets2');
+  const widget = await readyCurrentTrack();
+  const source = {id: 's1', sourceAppId: 'SpotifyAB.SpotifyMusic_zpdnekdrzrea0!Spotify', playback: 'playing' as const, current: true};
+  const track = {id: source.id, revision: 1, title: 'Fixture track', artist: null, album: null, playback: 'playing' as const, timeline: null, artwork: null};
+  const snapshot = {version: 1 as const, type: 'snapshot' as const, requestId: 1, sessions: [source], selected: track, error: null};
+  nowReaderOptions.snapshot(snapshot, 1); expect(widget.visible).toBe(false);
+  settingsView = {...settingsView, overlay: {...settingsView.overlay, enabled: false}}; settingsChanged?.();
+  const live = currentGame(); deliver(live);
+  expect(widget.visible).toBe(true); expect(widget.setIgnoreMouseEvents).toHaveBeenLastCalledWith(true);
+  const background = structuredClone(live);
+  if (!background.observation!.state.window.available) throw new Error('Expected game window');
+  background.observation!.state.window.value.foreground = false; deliver(background, 2);
+  expect(widget.visible).toBe(false); nowReaderOptions.snapshot(snapshot, 1); expect(widget.visible).toBe(false);
+  deliver(currentGame(), 3); expect(widget.visible).toBe(true);
+  await vi.advanceTimersByTimeAsync(249); expect(widget.visible).toBe(true);
+  await vi.advanceTimersByTimeAsync(1); expect(widget.visible).toBe(false);
+  nowReaderOptions.snapshot(snapshot, 1); expect(widget.visible).toBe(false);
+});
+it('uses the existing fresh game report when current track is enabled after game attachment', async () => {
+  vi.stubEnv('ETS2TELEMETRY_SOURCE_KIND', 'ets2');
+  const widget = await readyCurrentTrack(() => deliver(currentGame()));
+  const source = {id: 's1', sourceAppId: 'Chrome', playback: 'playing' as const, current: true};
+  nowReaderOptions.snapshot({version: 1, type: 'snapshot', requestId: 1, sessions: [source], error: null,
+    selected: {id: source.id, revision: 1, title: 'Fixture track', artist: null, album: null, playback: 'playing', timeline: null, artwork: null}}, 1);
+  expect(widget.visible).toBe(true);
 });
 it('accepts native retained B after explicit B returns to Automatic while Windows-current A also plays', async () => {
   await readyCurrentTrack();

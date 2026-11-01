@@ -827,3 +827,7 @@ The owner chose M PLUS Rounded 1c for the dashboard and overlay, bundled offline
 ## ET-061 current-track window approval — November 1, 2026
 
 The owner approved the full architect plan with “да, реализуй план”, including the fixed supervised native helper, seven additive desktop IPC methods, readonly sandboxed widget and dedicated Blob-image CSP. Both styles are approved, Minimal by default, disabled initially, background opacity 40–100% (80% default), independent placement and desktop visibility while Playing or Paused; unavailable/stopped/error clears the normal panel. Settings migrate v11 to v12 without changing SQLite history.
+
+## ET-061 current-track game visibility — November 2, 2026
+
+The owner requested readable media source names and current-track visibility only in the game after testing staging. This supersedes the earlier desktop-visibility choice: the normal panel requires the active selected game's fresh window report and hides on the desktop, Alt+Tab and minimization. Position editing retains its explicit application-focused preview.

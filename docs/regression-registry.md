@@ -22,9 +22,9 @@ Columns:
 | --- | --- | --- | --- | --- | --- | --- |
 | `tests/unit/now-playing-contract.test.ts` | Node unit (Vitest) | REG-010, REG-020 | T | ET-061 | PR (tests job, `npm test`) | security (bounded metadata/artwork and response identity) |
 | `tests/unit/now-playing-selection.test.ts` | Node unit (Vitest) | REG-020 | T | ET-061 | PR (tests job, `npm test`) | regression (playing preference and explicit-source loss) |
-| `tests/unit/now-playing-presentation.test.ts` | Node unit (Vitest) | REG-020 | T | ET-061 | PR (tests job, `npm test`) | regression (paused/unknown anchors do not advance) |
+| `tests/unit/now-playing-presentation.test.ts` | Node unit (Vitest) | REG-020 | T | ET-061 | PR (tests job, `npm test`) | regression (readable source names; paused/unknown anchors do not advance) |
 | `tests/unit/now-playing-placement.test.ts` | Node unit (Vitest) | REG-016, REG-020 | T | ET-061 | PR (tests job, `npm test`) | regression (reachable placement and topology fallback) |
-| `tests/unit/now-playing-controller.test.ts` | Node unit (Vitest) | REG-012, REG-016, REG-020 | T | ET-061 | PR (tests job, `npm test`) | security (click-through and main-owned draft) |
+| `tests/unit/now-playing-controller.test.ts` | Node unit (Vitest) | REG-012, REG-016, REG-020 | T | ET-061 | PR (tests job, `npm test`) | security (game-only visibility, client bounds, click-through and main-owned draft) |
 | `tests/unit/now-playing-reader.test.ts` | Node unit (Vitest) | REG-010, REG-011, REG-020 | T | ET-061 | PR (tests job, `npm test`) | security (framing, deadlines, generations and bounded restarts) |
 | `tests/unit/now-playing-preload.test.ts` | Node unit (Vitest) | REG-010, REG-020 | T | ET-061 | PR (tests job, `npm test`) | security (readonly authority, IPC arity and subscription retirement) |
 | `tests/unit/now-playing-settings.test.ts` | Node unit (Vitest) | REG-012, REG-017, REG-020 | T | ET-061 | PR (tests job, `npm test`) | regression (migration, startup bytes and durable restart) |
