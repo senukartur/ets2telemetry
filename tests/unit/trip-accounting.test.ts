@@ -158,6 +158,21 @@ describe('pause-only reconnection (REG-002, REG-003, REG-005, REG-008)', () => {
   it('waits for retained paused events to commit before accepting the pause', () => {
     expect(reconnect({replay: 'paused'}).view.lastClosed?.recordingCompleteness).toBe('complete');
   });
+  it('keeps the reconnect odometer delta unknown when no new connection reading exists', () => {
+    const result = reconnect({noReading: true});
+    expect(result.effects).toContainEqual(expect.objectContaining({kind: 'completeness.add', interval: expect.objectContaining({
+      kind: 'not-connected', detail: {cause: 'disconnected', odometerDeltaM: null}})}));
+  });
+  it('does not reuse the old odometer when a second disconnect precedes the new reading', () => {
+    const {s, rows} = opened();
+    const state = run(initialTripState(), [...rows.map(([step]) => step), s.event(r.paused(), paused), reading(s, {ms: 3000, ...stationary}),
+      {kind: 'disconnected'}, sessionInput(s.welcome(), '3'), {kind: 'checkpoint', message: s.checkpoint(job(), 0, {simulation: 'paused'})},
+      {kind: 'disconnected'}, sessionInput(s.welcome(), '3')]).state;
+    const result = run(state, [s.event(r.started())]);
+    const intervals = result.effects.flat().filter(effect => effect.kind === 'completeness.add' && effect.interval.detail?.cause === 'disconnected');
+    expect(intervals).toHaveLength(2);
+    for (const effect of intervals) expect(effect).toMatchObject({interval: {kind: 'not-connected', detail: {odometerDeltaM: null}}});
+  });
   it('drops an unsent pause annotation\'s source-clock bounds when a new plugin session starts', () => {
     const {s, rows} = opened(), second = new Script(ETS2_B);
     const state = run(initialTripState(), [...rows.map(([step]) => step), s.event(r.paused(), paused), reading(s, {ms: 3000, ...stationary}),
