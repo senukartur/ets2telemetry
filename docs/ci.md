@@ -889,3 +889,9 @@ ET-052 adds the fifteenth overlay section, so the observation scripts changed (t
 - **UI settings and overlay shards.** The Settings > Overlay card has fifteen switches (`overlay-switch-mandatory-break` is the last).
 - **Lifecycle.** Run A saves exact v11 bytes with `"mandatory-break": true` after `"game-time": true` (the ET-050b line above says v10; the file is v11 since ET-052). It seeds a truncated v1 file, not a v10 file; the v10-to-v11 migration and the byte-identical startup are proved by `settings-store.test.ts` (a seeded v10 file) because the installed-update path is the owner's check.
 - **Diagnostic bundle.** `diagnostics-bundle-check.mjs` knows `mandatory-break` as an overlay section value.
+
+## Current-track checks
+
+Windows CI builds and tests the media helper in Release and runs its protocol, selection, artwork and callback-retirement AddressSanitizer twins. The tests job builds the nonshipping fixture before the host stdio suite. Package inspection verifies x64 helper bytes, channel/source provenance and fixture exclusion. Compiled-artifact transfer preserves the helper resource and Release inputs.
+
+`Invoke-RuntimeSmoke.ps1 -Mode development -Scenario now-playing` and its packaged counterpart exercise General controls, EN/RU, both styles, background-only opacity, three artwork shapes, pause/absence, explicit-source loss, edit exclusion/reset/cancel/save, close-to-tray, disable and persisted restart. The marked isolated synthetic seam uses production validators and cannot select an executable; it performs no live-media reads. The receipt requires every journey fact. Actual media clients, game input/focus, monitor/DPI behavior and performance require separate evidence.

@@ -39,6 +39,10 @@ The overlay is a transparent window above the game in windowed or borderless ful
 
 The driver chooses one of four layouts (Strip, the default, plus Card, Cluster and Minimal HUD) and which sections it shows, such as speed, gear, RPM, fuel, consumption, cargo, destination, distance left, deadline, income, game time and the time left until the next mandatory break. Measurements round to whole units, route endpoints show only cities, the clock shows only hours and minutes, and the delivery countdown omits "in" while retaining overdue warnings. In an explicit edit mode the driver moves and resizes it (50–300%). The background opacity and whether the overlay is shown at all are saved settings.
 
+### Current track
+
+An optional independent window shows the current Windows media item. Minimal shows title and artist; Full adds proportional artwork, album and source when supplied, and a bounded timeline. Its own saved position, background opacity and style are controlled from General settings. It stays visible on the desktop and over windowed/borderless games while playing or paused; pause is labelled and progress freezes. Missing, stopped or failed media clears the panel. Automatic selection prefers playing sessions, while an explicit unavailable source never switches to another player. Media is read locally without accounts or listening-history storage.
+
 ### Trip recording
 
 The application builds trips automatically from the game's job and delivery events and records them, with their events, gaps and one sample per real second of active driving, in a local SQLite database under `%LOCALAPPDATA%\ETS2Telemetry`. Pauses are recorded as events, not as repeated samples; free driving without a job is recorded too. Events are acknowledged to the plugin only after they are saved, so a crash or reconnection neither loses nor duplicates them.

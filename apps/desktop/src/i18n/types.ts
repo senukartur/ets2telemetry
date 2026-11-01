@@ -3,6 +3,30 @@ import type {AppLanguage} from '../../../../packages/contracts/src';
 export type {AppLanguage};
 
 export type I18nKey =
+ | 'np.title'
+ | 'np.enabled'
+ | 'np.source'
+ | 'np.automatic'
+ | 'np.style'
+ | 'np.minimal'
+ | 'np.full'
+ | 'np.opacity'
+ | 'np.edit'
+ | 'np.done'
+ | 'np.cancel'
+ | 'np.reset'
+ | 'np.drag'
+ | 'np.focus'
+ | 'np.paused'
+ | 'np.failed'
+ | 'np.state.disabled'
+ | 'np.state.waiting'
+ | 'np.state.playing'
+ | 'np.state.paused'
+ | 'np.state.no-session'
+ | 'np.state.unavailable'
+ | 'np.state.stopped'
+ | 'np.state.error'
  | 'ui.moneyBasisKnown' | 'ui.moneyBasisUnknown' | 'ui.coverageUnknown'
   | "copy.speed"
   | "copy.gear"

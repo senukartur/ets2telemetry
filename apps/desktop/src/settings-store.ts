@@ -1,3 +1,5 @@
+import {isStyle, isOpacity, isPosition} from './now-playing/contract';
+import type {NowPlayingPosition, NowPlayingStyle} from '../../../packages/contracts/src/now-playing';
 import {randomUUID} from 'node:crypto';
 import * as nodeFs from 'node:fs/promises';
 import path from 'node:path';
@@ -121,7 +123,7 @@ export class SettingsStore {
   get knownAutostartIntent(): boolean | undefined {return this.autostartKnown ? this.settings.autostart : undefined;}
 
   view(): SettingsView {
-    return {language: this.settings.language, autostart: this.settings.autostart, units: this.settings.units, gearDisplay: this.settings.gearDisplay, overlay: this.settings.overlay, state: this.state, writable: !READ_ONLY_STATES.includes(this.state), saveError: this.saveError};
+    return {nowPlaying: this.settings.nowPlaying, language: this.settings.language, autostart: this.settings.autostart, units: this.settings.units, gearDisplay: this.settings.gearDisplay, overlay: this.settings.overlay, state: this.state, writable: !READ_ONLY_STATES.includes(this.state), saveError: this.saveError};
   }
 
   /**
@@ -162,6 +164,24 @@ export class SettingsStore {
       returned(this.view());
     }, SETTINGS_LOAD_BUDGET_MS);
     return result;
+  }
+
+  setNowPlayingEnabled(enabled: boolean): Promise<SettingsView> {
+    if (typeof enabled !== 'boolean') return Promise.reject(new Error('Invalid media visibility'));
+    return this.enqueue(settings => ({next: {...settings, nowPlaying: {...settings.nowPlaying, enabled}}, facts: {nowPlayingEnabled: enabled}}));
+  }
+  setNowPlayingStyle(style: NowPlayingStyle): Promise<SettingsView> {
+    if (!isStyle(style)) return Promise.reject(new Error('Invalid media style'));
+    return this.enqueue(settings => ({next: {...settings, nowPlaying: {...settings.nowPlaying, style}}, facts: {nowPlayingStyle: style}}));
+  }
+  setNowPlayingBackgroundOpacity(backgroundOpacity: number): Promise<SettingsView> {
+    if (!isOpacity(backgroundOpacity)) return Promise.reject(new Error('Invalid media opacity'));
+    return this.enqueue(settings => ({next: {...settings, nowPlaying: {...settings.nowPlaying, backgroundOpacity}}, facts: {nowPlayingOpacity: backgroundOpacity}}));
+  }
+  setNowPlayingPosition(position: NowPlayingPosition): Promise<SettingsView> {
+    if (!isPosition(position)) return Promise.reject(new Error('Invalid media position'));
+    const copy = {...position};
+    return this.enqueue(settings => ({next: {...settings, nowPlaying: {...settings.nowPlaying, position: copy}}, facts: {nowPlayingPosition: true}}));
   }
 
   /** Serialized save of the user interface language (ET-029). */

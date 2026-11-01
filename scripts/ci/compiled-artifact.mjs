@@ -11,7 +11,7 @@ import {BUILD_CHANNELS, BUILD_IDENTITIES, packageDirectoryName, readBuiltBuild} 
  */
 export const compiledRoots = channel => {
   if (!BUILD_CHANNELS.includes(channel)) refuse();
-  return ['apps/desktop/dist', '.local/package-native/telemetry-plugin', 'tools/telemetry-simulator/dist',
+  return ['apps/desktop/dist', '.local/package-native/media-session-reader', 'native/media-session-reader/build/Release', '.local/package-native/telemetry-plugin', 'tools/telemetry-simulator/dist',
     'native/telemetry-client/build/Release', 'native/telemetry-plugin/build/Release', packageDirectoryName(BUILD_IDENTITIES[channel]),
     'node_modules/better-sqlite3/prebuilds/win32-x64.node', 'native/telemetry-plugin/build/cap0-host/Release'];
 };

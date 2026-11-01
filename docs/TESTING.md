@@ -61,6 +61,7 @@ Every scenario below keeps the same ID across domain, integration and UI tests, 
 | REG-017 | Clean packaged startup and upgrade with existing history | Correct native assets load without development tools; settings and data are preserved | ET-018, ET-020 |
 | REG-018 | Sustained input and real one-hour recording | Cadence, resource bounds, database growth, latency, and frame-time impact have recorded measurements | ET-019, ET-020 |
 | REG-019 | In-app update and channel coexistence: an update with data kept, a refusal while a game runs, the restart after `recording-flush`, both channels side by side, two plugins in one game | Only a signed manifest of the build's own channel and a verified package install, only after a click and while no game runs; the restart follows the explicit exit; data and the other channel stay untouched | ET-055 |
+| REG-020 | Current media sessions compete, pause, change and disappear; reader stalls or fails | Automatic prefers Playing; explicit loss never switches players; stale metadata/artwork clears; paused progress freezes; readonly window and independent preferences survive their lifecycle | ET-061 |
 
 - **REG-006:** terminate a real subprocess at known commit and ACK boundaries and reopen the real database; unit mocks alone are not enough.
 - **REG-013:** keep small immutable databases from every supported older schema and check their meaning after migration, plus a newer-schema case that fails clearly without modifying the file. Never replace historical fixtures with freshly generated ones.

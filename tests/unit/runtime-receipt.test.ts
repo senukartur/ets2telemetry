@@ -26,6 +26,7 @@ const cases = [
   {name: 'scaffold receipt cannot prove telemetry', body: JSON.stringify({passed: true, commit: 'candidate', mode: 'packaged', scenarioKind: 'scaffold'}), scenario: 'telemetry', code: 0, available: true, reason: 'DRIVER_RESULT_SCENARIO_MISMATCH'},
   {name: 'telemetry receipt missing scenario', body: JSON.stringify({passed: true, commit: 'candidate', mode: 'packaged'}), scenario: 'telemetry', code: 0, available: true, reason: 'DRIVER_RESULT_SCENARIO_MISMATCH'},
   {name: 'matching telemetry scenario', body: JSON.stringify({passed: true, commit: 'candidate', mode: 'packaged', scenarioKind: 'telemetry'}), scenario: 'telemetry', code: 0, available: true, reason: null},
+  ...nowPlayingCases(),
   ...hardModeCases(),
   ...lifecycleCases(),
   ...pluginCases(),
@@ -906,4 +907,17 @@ function hardModeCases() {
     {name: 'Hard Mode false delivered flag', body: body({...hardMode, flags: [false, false]}), ...rejected},
     {name: 'Hard Mode numeric flag', body: body({...hardMode, flags: [0, true]}), ...rejected},
     {name: 'Hard Mode old schema', body: body({...hardMode, schemaVersion: 2}), ...rejected}];
+}
+
+function nowPlayingCases() {
+  const fields = ['minimal','full','backgroundOnlyOpacity','pauseClearsArtwork','explicitSourceLoss','noSessionClears','editExclusion','cancel','resetSave','closeToTray','restartPreserved','disableRetires'];
+  const media = {...Object.fromEntries(fields.map(field => [field, true])), origin: 'synthetic', realMediaObserved: false, firstExit: 0, languages: ['en', 'ru'], artworkShapes: ['square','portrait','wide']};
+  const body = (value: unknown) => JSON.stringify({passed: true, commit: 'candidate', mode: 'packaged', scenarioKind: 'now-playing', nowPlaying: value});
+  const accepted = {scenario: 'now-playing', code: 0, available: true, reason: null};
+  const rejected = {...accepted, reason: 'NOW_PLAYING_RESULT_INCOMPLETE_OR_INVALID'};
+  return [{name: 'intact current-track receipt', body: body(media), ...accepted},
+    ...fields.flatMap(field => [{name: 'current-track missing ' + field, body: body({...media, [field]: undefined}), ...rejected}, {name: 'current-track false ' + field, body: body({...media, [field]: false}), ...rejected}]),
+    {name: 'current-track live metadata is not a fixture receipt', body: body({...media, realMediaObserved: true}), ...rejected},
+    {name: 'current-track missing Russian', body: body({...media, languages: ['en']}), ...rejected},
+    {name: 'current-track missing artwork shape', body: body({...media, artworkShapes: ['square','wide']}), ...rejected}];
 }

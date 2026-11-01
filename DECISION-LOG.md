@@ -823,3 +823,7 @@ The owner authorized automatic ETS2/ATS connection and approved the bounded nati
 ## M PLUS Rounded 1c typography — October 31, 2026
 
 The owner chose M PLUS Rounded 1c for the dashboard and overlay, bundled offline with its OFL notice. Body text uses 400, labels and telemetry/journal values use 500, and headings use 700. This supersedes the Onest family and previous value weights; existing sizes, numeric reserves and layout constraints remain.
+
+## ET-061 current-track window approval — November 1, 2026
+
+The owner approved the full architect plan with “да, реализуй план”, including the fixed supervised native helper, seven additive desktop IPC methods, readonly sandboxed widget and dedicated Blob-image CSP. Both styles are approved, Minimal by default, disabled initially, background opacity 40–100% (80% default), independent placement and desktop visibility while Playing or Paused; unavailable/stopped/error clears the normal panel. Settings migrate v11 to v12 without changing SQLite history.

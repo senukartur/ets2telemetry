@@ -23,6 +23,14 @@ Start ETS2 or ATS and open **Live**. **Automatic** is the default source: **Wait
 
 An incomplete connection means one telemetry stream is still waiting; the available stream stays attached. A source mismatch or a verification failure stays visible and requires reconnecting or choosing a source again. **Settings → Data** retains explicit ETS2/ATS selection and isolated synthetic/replay fixtures for diagnostics. An explicit game selection waits only for that game; choose **Automatic** to resume automatic selection. Fixture launches never fall back to a real game when a fixture is missing or disconnects.
 
+### Current track
+
+In **Settings → General**, enable **Show Now Playing** (off by default). Choose Automatic or an available Windows media source, Minimal or Full, and background opacity (40–100%, initially 80%). Source selection starts Automatic on each application run; the other choices are saved. Full preserves square, portrait and wide artwork and omits metadata Windows does not supply. A browser may be labelled Chrome rather than the service playing inside it.
+
+The independent panel stays on the desktop during Alt+Tab, game menus, game pause and game minimization. Paused media is labelled and its progress freezes. No session, stopped playback, an unavailable explicit source or a reader error clears and hides it; General shows the reason. Automatic prefers a playing source over a paused Windows-current source. An explicit missing source waits until it returns; choose Automatic to change this policy.
+
+**Edit position** makes the panel draggable while this application has focus, including a placeholder without media. **Done** saves, **Cancel** or Escape restores the saved position, and **Reset** changes the draft to the primary display's right side, approximately three quarters down its available work area. The normal panel passes mouse input through and does not take focus. Its position and visibility are independent of the telemetry overlay; edit one at a time. Disabling stops media observation and keeps your preferences. Closing the dashboard to the tray keeps observation running until explicit Exit.
+
 ### Windows SmartScreen
 
 This alpha is not code-signed. When you run `YukonUnionTelemetry-Setup-<version>.exe`, Microsoft Defender SmartScreen may show **Windows protected your PC**. To continue, select **More info**, check that the file is the one you downloaded from the project's GitHub Releases page, then select **Run anyway**. Only do this for a file from that page. A signed build is planned: after the first alpha release the project applies to the SignPath Foundation for free code signing.

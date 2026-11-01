@@ -1,15 +1,16 @@
 [CmdletBinding()]
 param([ValidateSet('development','packaged','installed')][string]$Mode,
-    [ValidateSet('scaffold','telemetry','overlay','lifecycle','recording','journal','hard-mode','plugin','refusal','soak','ui')][string]$Scenario = 'scaffold',
+    [ValidateSet('scaffold','telemetry','overlay','lifecycle','recording','journal','hard-mode','plugin','refusal','soak','ui','now-playing')][string]$Scenario = 'scaffold',
     [ValidateSet('shell','live','journal','settings','overlay')][string]$UiCase,
     [switch]$ForceRendererReuse,
-    [string]$OutputRoot = (Join-Path $PSScriptRoot '../../.local/ci'),
+    [string]$OutputRoot,
     # ET-018 PR-1 (U11): the installed mode runs `<binary root>\app-<version>\<executable>` of a Squirrel install of the
     # build's channel (ET-055 PR-5: ETS2TelemetryDesktop or ETS2TelemetryStagingDesktop).
     [string]$Executable,
     # ET-019 PR-12b: the soak's length in whole minutes, 1 to 90; given only with -Scenario soak.
     [ValidateRange(0, 90)][int]$SoakMinutes = 0)
 $ErrorActionPreference = 'Stop'
+if (!$OutputRoot) { $OutputRoot = Join-Path $PSScriptRoot '../../.local/ci' }
 # ET-019 PR-12b (docs/ci.md#et-019-recording-soak-workflow-dispatch-only): the soak runs the development or packaged
 # application only; the installed smokes of the installer lifecycle never soak.
 if ($Scenario -eq 'soak') {
@@ -49,7 +50,7 @@ foreach ($name in @('cwd','temp','appdata','localappdata','profile','diagnostics
     New-Item -ItemType Directory -Path $paths[$name] | Out-Null
 }
 # The lifecycle, recording, journal and plugin restart runs reuse the profile and LOCALAPPDATA but write their own diagnostics.
-if ($Scenario -eq 'lifecycle' -or $Scenario -eq 'recording' -or $Scenario -eq 'journal' -or $Scenario -eq 'plugin' -or ($Scenario -eq 'ui' -and $UiCase -eq 'settings')) {
+if ($Scenario -eq 'now-playing' -or $Scenario -eq 'lifecycle' -or $Scenario -eq 'recording' -or $Scenario -eq 'journal' -or $Scenario -eq 'plugin' -or ($Scenario -eq 'ui' -and $UiCase -eq 'settings')) {
     $paths.diagnosticsRestart = Join-Path $output 'diagnostics-restart'
     New-Item -ItemType Directory -Path $paths.diagnosticsRestart | Out-Null
 }

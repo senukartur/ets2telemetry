@@ -20,13 +20,13 @@ const SETTINGS_SEED = '{"format":"ets2telemetry.settings","version":1,"units":{"
 // ET-050b: the format became v10, which changes only the version and adds the crawler gear mode.
 // ET-052: the current format is v11, which adds the overlay section `mandatory-break` (on by default) as the last section key.
 const placementLines = (layout, x, y, last = false) => [`      "${layout}": {`, `        "x": ${x},`, `        "y": ${y},`, '        "scale": 1', last ? '      }' : '      },'];
-const SETTINGS_SAVED = ['{', '  "format": "ets2telemetry.settings",', '  "version": 11,', '  "language": "en",', '  "autostart": false,', '  "units": {', '    "ets2": "us-customary",', '    "ats": "us-customary"', '  },',
+const SETTINGS_SAVED = ['{', '  "format": "ets2telemetry.settings",', '  "version": 12,', '  "language": "en",', '  "autostart": false,', '  "units": {', '    "ets2": "us-customary",', '    "ats": "us-customary"', '  },',
   '  "gearDisplay": {', '    "ets2": "manual",', '    "ats": "automatic"', '  },',
   '  "overlay": {', '    "enabled": false,', '    "backgroundOpacity": 80,', '    "layout": "strip",', '    "sections": {', '      "speed": true,', '      "gear": true,', '      "rpm": true,', '      "fuel": true,',
   '      "range": true,', '      "sdk-consumption": true,', '      "cargo": true,', '      "origin": true,', '      "destination": true,', '      "distance-driven": true,',
   '      "distance-remaining": true,', '      "deadline": true,', '      "expected-income": true,', '      "game-time": true,', '      "mandatory-break": true', '    },', '    "placements": {',
   ...placementLines('strip', 0.5, 0), ...placementLines('card', 1, 0), ...placementLines('cluster', 0, 1), ...placementLines('hud', 0, 0, true),
-  '    }', '  }', '}', ''].join('\n');
+  '    }', '  },', '  "nowPlaying": {', '    "enabled": false,', '    "style": "minimal",', '    "backgroundOpacity": 80,', '    "position": {', '      "displayId": null,', '      "x": 1,', '      "y": 0.75', '    }', '  }', '}', ''].join('\n');
 const SETTINGS_GEAR_SAVED = SETTINGS_SAVED.replace('"enabled": false', '"enabled": true');
 const SETTINGS_UNIT_SAVED = SETTINGS_GEAR_SAVED.replace('"ets2": "manual"', '"ets2": "automatic"');
 const AUTOMATIC_GEARS = {ets2: 'automatic', ats: 'automatic'}, SAVED_GEARS = {ets2: 'manual', ats: 'automatic'};

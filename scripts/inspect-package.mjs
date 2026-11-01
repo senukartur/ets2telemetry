@@ -50,7 +50,7 @@ for (const filename of files) {
   const packaged = `apps/desktop/dist/${filename}`;
   assert.equal(sha256(read(packaged)), sha256(readFileSync(packaged)), `Stale bundled file: ${filename}`);
 }
-for (const name of ['main', 'preload', 'overlay-preload', 'telemetry-service', 'storage-worker']) {
+for (const name of ['main', 'preload', 'overlay-preload', 'now-playing-preload', 'telemetry-service', 'storage-worker']) {
   const filename = `apps/desktop/dist/${name}.cjs`;
   assert.equal(asar.statFile(archive, path.normalize(filename)).unpacked, true, `Entrypoint must be physically unpacked: ${name}`);
   assert.equal(sha256(readFileSync(path.join(`${archive}.unpacked`, filename))), sha256(read(filename)));
@@ -88,6 +88,20 @@ assert.equal(sha256(clientBytes), sha256(readFileSync('native/telemetry-client/b
 assert.equal(clientBytes.readUInt16LE(0), 0x5a4d, 'Native client must be a PE executable');
 assert.equal(clientBytes.readUInt16LE(clientBytes.readUInt32LE(0x3c) + 4), 0x8664, 'Native client must be x64');
 report.nativeClient = {executableSha256: clientMetadata.executableSha256, channel: clientMetadata.channel, sourcesVerified: true};
+
+const mediaDirectory = path.join(directory, 'resources/media-session-reader');
+assert.deepEqual(readdirSync(mediaDirectory).sort(), ['build-evidence.json', 'media-session-reader.exe']);
+const mediaEvidence = JSON.parse(readFileSync(path.join(mediaDirectory, 'build-evidence.json'), 'utf8'));
+assert.deepEqual(mediaEvidence.sources, sourceHashes(), 'Media reader sources are stale');
+assert.equal(mediaEvidence.channel, build.channel);
+const mediaBytes = readFileSync(path.join(mediaDirectory, 'media-session-reader.exe'));
+assert.equal(sha256(mediaBytes), mediaEvidence.executableSha256);
+assert.equal(sha256(mediaBytes), sha256(readFileSync('native/media-session-reader/build/Release/media-session-reader.exe')));
+assert.equal(mediaBytes.readUInt16LE(0), 0x5a4d);
+assert.equal(mediaBytes.readUInt16LE(mediaBytes.readUInt32LE(0x3c) + 4), 0x8664);
+assert.ok(!paths.some(filename => /media-session-reader-fixture/i.test(filename)));
+
+report.mediaReader = {executableSha256: mediaEvidence.executableSha256, channel: mediaEvidence.channel, sourcesVerified: true, fixturesExcluded: true};
 // The bundled game plugin (ET-017): strict manifest, x64 DLL bytes equal to the local Release build, current plugin
 // sources and the tracked released-plugin list. Nothing in the application reads the bundle yet.
 const pluginManifest = verifyPluginBundleAgainstTree(path.join(directory, 'resources/telemetry-plugin'), '.', build);

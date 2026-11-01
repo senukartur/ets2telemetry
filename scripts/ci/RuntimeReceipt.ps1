@@ -788,7 +788,7 @@ function Test-ProcessMemoryReceipt {
     param([object]$Driver)
     $memory = $Driver.processMemory
     if ($null -eq $memory -or $memory -is [array] -or $null -eq $memory.kinds -or $memory.kinds -is [array]) { return $false }
-    $run = if ($Driver.scenarioKind -cin @('lifecycle','recording','journal','plugin') -or ($Driver.scenarioKind -ceq 'ui' -and $Driver.ui.case -ceq 'settings')) { 'restart' } else { 'first' }
+    $run = if ($Driver.scenarioKind -cin @('now-playing','lifecycle','recording','journal','plugin') -or ($Driver.scenarioKind -ceq 'ui' -and $Driver.ui.case -ceq 'settings')) { 'restart' } else { 'first' }
     if ($memory.run -cne $run -or $memory.unavailable.storageWorker -cne 'WORKER_THREAD_OF_TELEMETRY_SERVICE') { return $false }
     $kinds = @($memory.kinds.PSObject.Properties | ForEach-Object { $_.Name })
     foreach ($kind in $kinds) {
@@ -940,6 +940,15 @@ function Test-RuntimeReceipt {
     }
     if ($JobExitCode -ne 0) { $validation.reason = 'JOB_FAILED'; return $validation }
     if ($driver.passed -ne $true) { $validation.reason = 'DRIVER_FAILED'; return $validation }
+    if ($ExpectedScenario -ceq 'now-playing') {
+        $media = $driver.nowPlaying
+        $validMedia = $null -ne $media -and $media.origin -ceq 'synthetic' -and $media.realMediaObserved -is [bool] -and !$media.realMediaObserved -and $media.firstExit -eq 0
+        foreach ($flag in @('minimal','full','backgroundOnlyOpacity','pauseClearsArtwork','explicitSourceLoss','noSessionClears','editExclusion','cancel','resetSave','closeToTray','restartPreserved','disableRetires')) {
+            if ($media.$flag -isnot [bool] -or !$media.$flag) { $validMedia = $false }
+        }
+        if ((@($media.languages) -join ',') -cne 'en,ru' -or (@($media.artworkShapes) -join ',') -cne 'square,portrait,wide') { $validMedia = $false }
+        if (!$validMedia) { $validation.reason = 'NOW_PLAYING_RESULT_INCOMPLETE_OR_INVALID'; return $validation }
+    }
     if ($ExpectedScenario -ceq 'overlay') {
         # Overlay is additive: do not tighten or reinterpret historical scaffold/telemetry schemas.
         $overlay = $driver.overlay
