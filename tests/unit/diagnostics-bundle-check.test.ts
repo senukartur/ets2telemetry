@@ -41,6 +41,17 @@ describe('valid bundles for names that collide with the schema or the smoke fact
   it('accepts an ordinary bundle', () => {
     expect(() => check(bundle(['Jane.Doe', 'TRUCKER-PC7'], {owner: 'Jane.Doe'}), ['Jane.Doe', 'TRUCKER-PC7'])).not.toThrow();
   });
+  it('validates optional plugin rows and includes their runtime facts in the privacy checks', () => {
+    const value = JSON.parse(bundle(['Jane.Doe']));
+    value.logs.plugin = [{time: '2026-10-17T08:30:00.000Z', event: 'PLUGIN_V1_CONNECTION_CLOSED', facts: {reason: 'WRITE_TIMEOUT', win32: 0}}];
+    value.omittedLogRows.plugin = 0;
+    expect(() => check(JSON.stringify(value), ['Jane.Doe'])).not.toThrow();
+    value.logs.plugin[0].facts.owner = 'Jane.Doe';
+    expect(() => check(JSON.stringify(value), ['Jane.Doe'])).toThrow(/user or computer name/);
+    delete value.logs.plugin[0].facts.owner;
+    value.logs.plugin[0].detail = 'private';
+    expect(() => check(JSON.stringify(value), [])).toThrow(/unexpected field/);
+  });
   // ET-055 UP15: a staging build carries `<base>-stg.<6-digit run>` in its application and bundled plugin versions.
   it('accepts the version of a staging build, and only its exact suffix', () => {
     const staging = (version: string) => bundle(['MY_PC'], {}, {app: {version, electron: '44.7.0', node: '24.19.0', packaged: true, osRelease: '10.0.26200'},

@@ -23,6 +23,10 @@ Start ETS2 or ATS and open **Live**. **Automatic** is the default source: **Wait
 
 An incomplete connection means one telemetry stream is still waiting; the available stream stays attached. A source mismatch or a verification failure stays visible and requires reconnecting or choosing a source again. **Settings → Data** retains explicit ETS2/ATS selection and isolated synthetic/replay fixtures for diagnostics. An explicit game selection waits only for that game; choose **Automatic** to resume automatic selection. Fixture launches never fall back to a real game when a fixture is missing or disconnects.
 
+After an unexpected disconnect, resume the game briefly and use **Game plugin → Export diagnostics…** before restarting the game. The plugin records v1 connection-close reasons in the game's `game.log.txt`; paused games may defer writing until the next callback. The export includes recognized records from the standard Documents game folders, with no other game-log text. If you use a custom `-homedir`, keep its game log separately. Diagnostics cannot reconstruct earlier breaks that happened before this logging was installed.
+
+The Journal's **Export JSON** also includes a `diagnostics` section in format 3, limited to that trip's game, plugin session and time window. It collects retained evidence when you export; restarting the game or rotating logs may remove it. Missing or incomplete evidence is stated explicitly, and an empty list does not mean the trip had no disconnects. Export before restarting the game, briefly resuming first if needed.
+
 ### Windows SmartScreen
 
 This alpha is not code-signed. When you run `YukonUnionTelemetry-Setup-<version>.exe`, Microsoft Defender SmartScreen may show **Windows protected your PC**. To continue, select **More info**, check that the file is the one you downloaded from the project's GitHub Releases page, then select **Run anyway**. Only do this for a file from that page. A signed build is planned: after the first alpha release the project applies to the SignPath Foundation for free code signing.

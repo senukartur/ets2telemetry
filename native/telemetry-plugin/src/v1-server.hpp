@@ -68,7 +68,7 @@ class Server final {
   enum class Outcome { reset, ended };
   void run(std::wstring directory) noexcept;
   Outcome serve(HANDLE pipe, const std::wstring& directory, const transport::OwnerSecurity&, const transport::UserIdentity&);
-  bool wait_io(HANDLE pipe, OVERLAPPED&, DWORD& transferred, ULONGLONG deadline);
+  bool wait_io(HANDLE pipe, OVERLAPPED&, DWORD& transferred, ULONGLONG deadline, DWORD* error = nullptr);
   // Drains the channel into the store in the documented caller sequence and expires retention. Throws Retire on an
   // invariant violation (`rejected`) or at sequence exhaustion.
   void tick();
@@ -78,6 +78,13 @@ class Server final {
   std::uint64_t now_ns() const;
   std::uint64_t next_seq();
   bool stopped() const noexcept;
+  void close_reason(const char* reason, DWORD error = ERROR_SUCCESS) noexcept;
+  void report_close() noexcept;
+  struct CloseDiagnostic {
+    const char* reason = "CONNECTION_EXCEPTION"; const char* phase = "accept"; const char* write = "none"; const char* end = "none";
+    DWORD error = ERROR_SUCCESS; bool durable = false, negotiated = false; ULONGLONG started = 0;
+  } close_diagnostic_;
+  std::uint64_t connections_ = 0; unsigned close_logs_ = 0, rejected_close_logs_ = 0;
   // stop() cancels the worker's synchronous I/O only inside an inspection window (peer image and policy reads, which can
   // be long). Elsewhere, above all in the exit path that deletes the discovery record, a cancelled synchronous call
   // would fail silently, so it is never cancelled. The mutex orders each cancellation with the window's open and close.

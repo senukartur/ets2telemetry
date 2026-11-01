@@ -789,6 +789,9 @@ void stalled_reader() {
   }
   require(full_at != 0, "actual kernel backpressure: 48 KiB wait unread in the client's pipe");
   require(f.listening(), "the write deadline closes the stalled connection");
+  f.host.frame();
+  require(!f.host.logs.empty() && f.host.logs.back().find("V1_CONNECTION_CLOSED reason=WRITE_TIMEOUT phase=live") != std::string::npos &&
+    f.host.logs.back().find(" win32=0 durable=1 connection=1 utcMs=") != std::string::npos, "a stalled write has a precise, payload-free SDK-thread diagnostic");
   const auto closed_after = GetTickCount64() - full_at;
   std::cout << "stalledCloseMs=" << closed_after << " peakBufferedBytes=" << peak << " pendingSampled=" << pending_seen << " slowestFrameMs=" << slowest << " frames=" << frames << '\n';
   require(closed_after <= 2000 * timing_scale, "closed about 1 s after the pipe filled");
@@ -907,6 +910,10 @@ void ack_control() {
     auto c = f.client(true); c->handshake(); send(c->pipe.get(), {1, 16, 0, 0}); require(c->closed(), "client frame over 4,096 bytes closes"); relisten();
   }
   auto valid = f.client(true); valid->handshake(); require(f.hydrated() && f.server->hydrations() >= 11, "every valid handshake hydrated");
+  for (int i = 0; i < 4; ++i) f.host.frame();
+  auto logged = [&](const char* reason) { for (const auto& log : f.host.logs) if (log.find(reason) != std::string::npos) return true; return false; };
+  require(logged("reason=INVALID_ACK") && logged("reason=INVALID_PROBE") && logged("reason=CLIENT_PROTOCOL"), "control rejections keep distinct close codes");
+  require(f.host.wrong_thread == 0, "control diagnostics only use the SDK logger from its caller thread");
 }
 #endif
 
@@ -945,6 +952,11 @@ void fuzz() {
 // Handshake rejection: sizes, versions, other contracts, a duplicate hello and the real 5 s hello deadline.
 void rejection() {
   Fixture f; f.start();
+  {
+    auto c = f.client(true); const auto t = GetTickCount64(); require(c->closed(7000) && c->messages.empty(), "no hello: closed"); const auto elapsed = GetTickCount64() - t;
+    std::cout << "helloTimeoutMs=" << elapsed << '\n'; require(elapsed >= 4900 && elapsed < 5900 * timing_scale, "real 5 s hello deadline");
+  }
+  require(f.listening(), "relisten after the deadline");
   auto rejected = [&](std::vector<std::uint8_t> bytes, const char* message) { auto c = f.client(true); send(c->pipe.get(), bytes); require(c->closed() && c->messages.empty(), message); c.reset(); require(f.listening(), "relisten after rejection"); };
   auto exact = hello_payload(true); exact.resize(4096, ' ');
   { auto c = f.client(true); send(c->pipe.get(), framed(exact)); require(c->read(2), "exact 4,096-byte hello accepted"); }
@@ -961,12 +973,16 @@ void rejection() {
   auto extra = hello_payload(true); extra.insert(extra.size() - 2, ",\"extra\":true"); rejected(framed(extra), "unknown field rejected");
   auto twice = framed(hello_payload(true)); const auto copy = twice; twice.insert(twice.end(), copy.begin(), copy.end()); rejected(twice, "a duplicate hello rejected (S6)");
   rejected(framed(ack_payload("50000000-0000-4000-8000-000000000001", 0)), "an ACK instead of the hello rejected");
-  {
-    auto c = f.client(true); const auto t = GetTickCount64(); require(c->closed(7000) && c->messages.empty(), "no hello: closed"); const auto elapsed = GetTickCount64() - t;
-    std::cout << "helloTimeoutMs=" << elapsed << '\n'; require(elapsed >= 4900 && elapsed < 5900 * timing_scale, "real 5 s hello deadline");
-  }
-  require(f.listening(), "relisten after the deadline");
-  auto valid = f.client(true); valid->handshake();
+  // A local rejection loop must not spend the negotiated-connection diagnostic budget or fill the entire SDK queue.
+  for (unsigned i = 0; i < 32; ++i) rejected(framed("{"), "repeated invalid hello rejected");
+  auto valid = f.client(false); valid->handshake(); valid->ack(0); require(valid->closed() && f.listening(), "post-checkpoint ACK rejection");
+  for (unsigned i = 0; i < 4; ++i) f.host.frame();
+  require(std::any_of(f.host.logs.begin(), f.host.logs.end(), [](const std::string& row) {
+    return row.find("reason=HELLO_TIMEOUT phase=hello write=none end=none win32=0 durable=unknown") != std::string::npos;
+  }), "a hello timeout is distinguished from an I/O error before negotiation");
+  require(std::any_of(f.host.logs.begin(), f.host.logs.end(), [](const std::string& row) {
+    return row.find("reason=INVALID_ACK phase=live") != std::string::npos && row.find(" session=") != std::string::npos;
+  }), "the real post-checkpoint failure survives many rejected connections and carries its session identity");
 }
 
 // A foreign pipe, a foreign record and a broad-ACL directory make v1 fail closed; v0 still serves.
@@ -1010,6 +1026,9 @@ void policy() {
   // The peer is rejected when it connects, before its hello is read, so the hello write itself may already fail.
   auto denied = [&](const char* message) { auto c = f.client(true); write_all(c->pipe.get(), framed(hello_payload(true))); require(c->closed() && c->messages.empty(), message); c.reset(); require(f.listening(), "endpoint stays listening"); };
   denied("missing policy rejects the client");
+  f.host.frame();
+  require(f.host.logs.size() == 1 && f.host.logs[0].find("reason=POLICY_READ_FAILED") != std::string::npos,
+    "a missing policy is an inspection failure, not evidence that the peer was forbidden");
   write_policy(f.directory, f.security, f.user, f.self, std::string(64, '0')); denied("digest mismatch rejected");
   write_file(f.directory + L"\\service-policy.json", f.security, "{\"schemaVersion\":1}"); denied("malformed policy rejected");
   write_policy(f.directory, f.security, f.user, f.self);
@@ -1046,7 +1065,7 @@ void exhaustion() {
   require(until([&] { return f.server->status() == v1::ServerStatus::retired && f.server->endpoint().empty(); }), "v1 retires");
   require(GetFileAttributesW(f.record().c_str()) == INVALID_FILE_ATTRIBUTES, "v1 discovery record retired");
   for (int i = 0; i < 3; ++i) f.host.frame();
-  require(f.host.logs.empty(), "exhaustion is not logged");
+  require(f.host.logs.size() == 1 && f.host.logs[0].find("V1_CONNECTION_CLOSED reason=SEQUENCE_EXHAUSTED") != std::string::npos, "exhaustion has one connection diagnostic");
   require(f.server->ends() == 1, "one end written");
 }
 
@@ -1064,10 +1083,10 @@ void invariant() {
   require(until([&] { return f.server->status() == v1::ServerStatus::retired && f.server->endpoint().empty(); }), "v1 retires");
   require(f.host.logs.empty(), "the worker never logs");
   f.host.frame();
-  require(f.host.logs.size() == 1 && f.host.log_types[0] == SCS_LOG_TYPE_error && f.host.logs[0] == ETS2TELEMETRY_GAME_LOG_PREFIX " protocol v1 endpoint retired: invariant violation" && f.host.wrong_thread == 0,
+  require(f.host.logs.size() == 2 && f.host.log_types[0] == SCS_LOG_TYPE_error && f.host.logs[0] == ETS2TELEMETRY_GAME_LOG_PREFIX " protocol v1 endpoint retired: invariant violation" && f.host.wrong_thread == 0,
     "one fixed log entry, written by the SDK thread at frame_end");
   for (int i = 0; i < 3; ++i) f.host.frame();
-  require(f.host.logs.size() == 1, "logged once");
+  require(f.host.logs.size() == 2, "invariant and close diagnostic each logged once");
   // v0 is unaffected.
   require(v0.start(f.v0_directory) && until([&] { return v0.status() == transport::Status::listening; }, 10000), "v0 listening after the v1 retirement");
   auto live = open_pipe(v0.endpoint()); send(live.get(), framed(v0_hello)); std::vector<std::uint8_t> bytes;
@@ -1098,10 +1117,10 @@ void invariant_at_shutdown() {
   require(client->closed() && client->count("end") == 1 && f.server->ends() == 1 && f.server->end_attempts() == 1, "exactly one end, then the pipe closes");
   require(f.host.logs.empty(), "workers never log");
   f.host.frame();
-  require(f.host.logs.size() == 2 && f.host.logs[0] == v0_entry.message && f.host.log_types[0] == SCS_LOG_TYPE_message &&
+  require(f.host.logs.size() == 3 && f.host.logs[0] == v0_entry.message && f.host.log_types[0] == SCS_LOG_TYPE_message &&
     f.host.logs[1] == ETS2TELEMETRY_GAME_LOG_PREFIX " protocol v1 endpoint retired: invariant violation" && f.host.log_types[1] == SCS_LOG_TYPE_error && f.host.wrong_thread == 0,
     "both deferred entries logged once on the SDK thread, in slot order");
-  f.host.frame(); require(f.host.logs.size() == 2, "logged once");
+  f.host.frame(); require(f.host.logs.size() == 3, "static and connection entries logged once");
 }
 
 // A shutdown-drain violation whose `end` write fails: the retirement's second finish() call writes nothing, so no `end`
@@ -1118,7 +1137,7 @@ void invariant_end_failed() {
   std::cout << "failedEndAttempts=" << f.server->end_attempts() << " ends=" << f.server->ends() << '\n';
   require(f.server->end_attempts() == 1 && f.server->ends() == 0, "one end attempt, which failed, and no second one");
   require(f.server->status() == v1::ServerStatus::retired && !hold.timed_out.load(), "retired");
-  f.host.frame(); require(f.host.logs.size() == 1 && f.host.logs[0] == ETS2TELEMETRY_GAME_LOG_PREFIX " protocol v1 endpoint retired: invariant violation", "logged once");
+  f.host.frame(); require(f.host.logs.size() == 2 && f.host.logs[0] == ETS2TELEMETRY_GAME_LOG_PREFIX " protocol v1 endpoint retired: invariant violation", "invariant and close diagnostic logged once");
 }
 
 // A violation after a stop request keeps the 250 ms `end` budget: with the client's buffer full, the endpoint gives up the
@@ -1136,7 +1155,7 @@ void invariant_stop_budget() {
   f.server->stop(); std::cout << "retireAfterStopShutdownMs=" << f.server->shutdown_ms() << '\n';
   require(f.server->status() == v1::ServerStatus::retired && f.server->ends() == 0, "retired; no end after the stalled write");
   require(f.server->shutdown_ms() < 700, "the stop budget, not the 1 s write deadline, bounds the retirement's end");
-  f.host.frame(); require(f.host.logs.size() == 1 && f.host.logs[0] == ETS2TELEMETRY_GAME_LOG_PREFIX " protocol v1 endpoint retired: invariant violation", "logged once");
+  f.host.frame(); require(f.host.logs.size() == 2 && f.host.logs[0] == ETS2TELEMETRY_GAME_LOG_PREFIX " protocol v1 endpoint retired: invariant violation", "invariant and close diagnostic logged once");
 }
 #endif
 
@@ -1231,6 +1250,9 @@ void shutdown() {
     require(end.reason == "plugin-shutdown" && end.next_event_seq >= 5 && end.next_event_seq <= 7 && end.acked_through_event_seq == 0 && end.retained_unacked == end.next_event_seq - 1 &&
       client->covered() >= 4 && client->covered() <= end.next_event_seq - 1, "end after the last written event, nothing waits for an ACK");
     require(client->closed(), "the handle closes after end");
+    f.host.frame();
+    require(f.host.logs.size() == 1 && f.host.logs[0].find("reason=SHUTDOWN phase=live write=end end=plugin-shutdown win32=0") != std::string::npos,
+      "a clean shutdown keeps its intentional reason after the final write");
     require(f.server->shutdown_ms() < 1000 && !f.server->shutdown_deadline_exceeded() && f.server->status() == v1::ServerStatus::stopped, "joined under the deadline");
     require(f.server->endpoint().empty() && GetFileAttributesW(f.record().c_str()) == INVALID_FILE_ATTRIBUTES, "endpoint and record retired");
   }

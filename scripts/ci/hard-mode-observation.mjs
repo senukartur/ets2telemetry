@@ -268,7 +268,7 @@ export async function runHardModeSmoke({application, dashboard, source, config, 
   await dashboard.getByTestId('journal-export-result').filter({hasText: 'Saved the trip as JSON'}).waitFor({state: 'visible', timeout: 10000});
   const exported = JSON.parse(await readFile(file, 'utf8'));
   const validate = await exportValidator(config); assert.deepEqual(validate(exported), []);
-  assert.equal(exported.formatVersion, 2); assert.equal(exported.trip.is_hard_mode, true); assert.equal(exported.trip.hard_mode_details.manualDelivery, true);
+  assert.equal(exported.formatVersion, 3); assert.equal(exported.trip.is_hard_mode, true); assert.equal(exported.trip.hard_mode_details.manualDelivery, true);
   record.export = true; record.flags = rows.map(row => row.isHardMode); healthy();
   const overlay = application.windows().find(page => page.url().endsWith('?view=overlay'));
   assert.equal(await overlay.evaluate(() => typeof globalThis.overlay.getHardModeStatus), 'undefined'); record.overlayExcluded = true;
