@@ -224,6 +224,10 @@ describe('trip detail (J13, J21, J22; REG-014, REG-009)', () => {
     expect(notes(text.sections, 'money')).toEqual(['Complete money totals are unavailable. No partial sum is shown as a total.',
       'Amounts are the exact game values. They are never converted, netted or added across currencies.']);
   });
+  it('presents the generic unavailable-money explanation in Russian through the Journal copy mapping', () => {
+    const text = journalDetailText({...CANCELLED_DETAIL, money: {incomplete: true, totals: [], unavailable: []}}, {timeZone: ZONE, language: 'ru'});
+    expect(notes(text.sections, 'money')).toContain('Полные денежные итоги недоступны. Частичная сумма не выдаётся за полную.');
+  });
   it('shows a partial trip closed by lost events with its own outcome', () => {
     const text = journalDetailText(GAP_DETAIL, {timeZone: ZONE});
     expect({outcome: text.outcome, completeness: text.completeness}).toEqual({outcome: 'No outcome — events were lost', completeness: {text: 'Partial', variant: 'destructive'}});

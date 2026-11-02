@@ -101,7 +101,7 @@ export const RU_DICTIONARY: TranslationDictionary = channelCopyTable(Object.free
   "copy.no-truck-was-recorded-for-this-trip-a-trip-whose-recording-started-d": "Грузовик для этого рейса не записан. Если запись началась во время заказа, данные грузовика появятся после повторной передачи игрой.",
   "copy.no-trailer-was-recorded-for-this-trip-a-trip-whose-recording-started": "Прицеп для этого рейса не записан. Если запись началась во время заказа, данные прицепа появятся после повторной передачи игрой.",
   "copy.amounts-are-the-exact-game-values-they-are-never-converted-netted-or": "Суммы точно соответствуют значениям игры. Они не конвертируются, не сальдируются и не суммируются между валютами.",
-  "copy.this-trip-has-more-than-5-000-amounts-no-totals-are-shown-so-a-parti": "В этом рейсе более 5000 сумм. Итоги не показаны, чтобы не выдать частичную сумму за полную.",
+  "copy.this-trip-has-more-than-5-000-amounts-no-totals-are-shown-so-a-parti": "Полные денежные итоги недоступны. Частичная сумма не выдаётся за полную.",
   "copy.none-recorded": "не записано",
   "copy.count-amounts": "сумм: {count}",
   "copy.1-amount": "1 сумма",
