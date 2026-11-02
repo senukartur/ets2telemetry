@@ -20,6 +20,25 @@ it('crosses real anonymous stdio with split commands, Unicode-safe JSON and EOF 
   expect(parseSnapshot(await received, 7)).toEqual({version: 1, type: 'snapshot', requestId: 7, sessions: [], selected: null, error: null});
   const closed = once(child, 'close'); child.stdin.end(); expect((await closed)[0]).toBe(0);
 }, PROCESS_GUARD_MS);
+it('waits for a fresh command after its invalid response and exits on EOF', async () => {
+  const child=fixture(),input=child.stdout[Symbol.asyncIterator]();let buffered=Buffer.alloc(0);
+  const frame=async()=>{
+    const fill=async(size:number)=>{
+      while(buffered.length<size){
+        const next=await input.next();if(next.done)throw new Error('Fixture closed before the next response');
+        buffered=Buffer.concat([buffered,next.value]);
+      }
+    };
+    await fill(4);const size=buffered.readUInt32LE();expect(size).toBeGreaterThan(0);expect(size).toBeLessThanOrEqual(1024*1024);
+    await fill(4+size);const value=buffered.subarray(4,4+size);buffered=buffered.subarray(4+size);return value;
+  };
+  child.stdin.on('error',()=>undefined);
+  child.stdin.write(snapshotCommand(1,'s998'));
+  expect(await frame()).toEqual(Buffer.from([0xff,0xff]));expect(child.stdin.writableEnded).toBe(false);
+  child.stdin.write(snapshotCommand(2,null));
+  expect(parseSnapshot(JSON.parse((await frame()).toString('utf8')),2)).toEqual({version:1,type:'snapshot',requestId:2,sessions:[],selected:null,error:null});
+  const closed=once(child,'close');child.stdin.end();expect((await closed)[0]).toBe(0);
+}, PROCESS_GUARD_MS);
 it.each([{id: 's999', error: 'READER_TIMEOUT'}, {id: 's998', error: 'INVALID_RESPONSE'}])('supervises a real $error fixture and retires its subprocess', async ({id, error}) => {
   let failed!: (value: string) => void;
   const failure = new Promise<string>(resolve => {failed = resolve;});
