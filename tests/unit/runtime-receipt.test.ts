@@ -1,4 +1,5 @@
-import {it, expect} from 'vitest';
+import {it, expect, vi} from 'vitest';
+import {pathToFileURL} from 'node:url';
 import {readFile, writeFile} from 'node:fs/promises';
 import path from 'node:path';
 import {temporaryResources} from '../shared/resources';
@@ -36,6 +37,42 @@ const cases = [
   ...installedCases(),
   ...resourceCases()
 ];
+it.each(['failed','pending'] as const)('retains partial edit milestones and the primary failure with bounded %s evidence',async mode=>{
+  const observer=await import(pathToFileURL(path.resolve('scripts/ci/now-playing-observation.mjs')).href) as {
+    observeNowPlayingEdit(input:{record:Record<string,unknown>;phase:string;begin:()=>Promise<unknown>;wait:()=>Promise<void>;collect:()=>Promise<unknown>}):Promise<void>
+  };
+  vi.useFakeTimers();
+  try{
+    const record:Record<string,unknown>={origin:'synthetic',desktopHidden:true},primary=new Error('Original edit wait failed');
+    const collect=vi.fn(()=>mode==='pending'?new Promise(()=>undefined):Promise.reject(new Error('Private collection failure'))),wait=vi.fn(()=>Promise.reject(primary));
+    const work=observer.observeNowPlayingEdit({record,phase:'empty-preview',begin:()=>Promise.resolve({active:true,placement:'visible',private:'PRIVATE REJECTED VALUE'}),wait,collect});
+    const rejected=expect(work).rejects.toBe(primary);
+    if(mode==='pending'){await vi.advanceTimersByTimeAsync(250);expect(wait).toHaveBeenCalledOnce();await vi.advanceTimersByTimeAsync(500);}
+    await rejected;
+    expect(record.desktopHidden).toBe(true);expect(record.editObservations).toEqual([{phase:'empty-preview',before:{available:false,reason:mode==='pending'?'collection-deadline':'collection-failed'},
+      begin:{active:true,placement:'visible'},afterBegin:{available:false,reason:mode==='pending'?'collection-deadline':'collection-failed'},afterFailure:{available:false,reason:mode==='pending'?'collection-deadline':'collection-failed'}}]);
+    expect(collect).toHaveBeenCalledTimes(3);expect(JSON.stringify(record)).not.toContain('PRIVATE');expect(vi.getTimerCount()).toBe(0);
+  }finally{vi.useRealTimers();}
+});
+it('retains actual journey milestones and begin response when the first edit DOM wait fails',async()=>{
+  const observer=await import(pathToFileURL(path.resolve('scripts/ci/now-playing-observation.mjs')).href) as {
+    runNowPlayingSmoke(input:Record<string,unknown>):Promise<unknown>
+  };
+  const primary=new Error('Original DOM wait failure'),record:Record<string,unknown>={origin:'synthetic',realMediaObserved:false};
+  const native={isDestroyed:()=>false,webContents:{isDestroyed:()=>false,getURL:()=>'/now-playing.html',getLastWebPreferences:()=>({sandbox:true,contextIsolation:true,nodeIntegration:false})},
+    isVisible:()=>false,isFocusable:()=>false,isMovable:()=>false,isAlwaysOnTop:()=>true,isFocused:()=>false,getBounds:()=>({x:1,y:2,width:300,height:78})};
+  const api={BrowserWindow:{getAllWindows:()=>[native]},app:{emit:(_name:string,receive:unknown)=>{if(typeof receive==='function')(receive as (state:unknown)=>void)({nowPlayingDiagnostics:{ready:true,portPresent:true}});return true;}}};
+  const widget={url:()=>'/now-playing.html',waitForFunction:()=>Promise.resolve(undefined),getByTestId:()=>({waitFor:()=>Promise.resolve(undefined)}),
+    evaluate:vi.fn().mockResolvedValue({rootPresent:true,rootChildren:0,editingPresent:false,editingVisible:false}).mockResolvedValueOnce({keys:['subscribeNowPlaying'],frozen:true,node:'undefined',desktop:'undefined'}),
+    locator:()=>({waitFor:()=>Promise.reject(primary)})};
+  const dashboard={getByTestId:()=>({click:()=>Promise.resolve(undefined)}),locator:()=>({count:()=>Promise.resolve(0),waitFor:()=>Promise.resolve(undefined),evaluate:()=>Promise.resolve(undefined)}),bringToFront:()=>Promise.resolve(undefined),
+    evaluate:(fn:()=>unknown)=>Promise.resolve(fn.toString().includes('beginNowPlayingEdit')?{active:true,placement:'visible'}:{state:'playing',edit:{active:false,placement:'not-foreground'}})};
+  const application={windows:()=>[widget],evaluate:(fn:(electronApi:typeof api,value:unknown)=>unknown,value:unknown)=>Promise.resolve(fn(api,value))};
+  await expect(observer.runNowPlayingSmoke({application,dashboard,config:{output:'unused'},record})).rejects.toBe(primary);
+  expect(record).toMatchObject({enabled:true,bridgeVerified:true,desktopHidden:true,editObservations:[{phase:'minimal-preview',begin:{active:true,placement:'visible'},
+    afterFailure:{available:true,value:{dom:{available:true,value:{rootChildren:0,editingPresent:false}},native:{available:true,value:{visible:false}}}}}]});
+  expect(record.editPreview).toBeUndefined();expect(JSON.stringify(record.editObservations)).not.toContain('bounds');
+});
 
 // ET-011a lifecycle receipts: one intact receipt, then single-field corruptions that must each fail.
 type Json = null | boolean | number | string | Json[] | {[key: string]: Json};
@@ -916,6 +953,8 @@ function nowPlayingCases() {
   const accepted = {scenario: 'now-playing', code: 0, available: true, reason: null};
   const rejected = {...accepted, reason: 'NOW_PLAYING_RESULT_INCOMPLETE_OR_INVALID'};
   return [{name: 'intact current-track receipt', body: body(media), ...accepted},
+    {name:'current-track diagnostic observations preserve success rules',body:body({...media,editObservations:[{phase:'empty-preview',begin:{active:true,placement:'visible'}}]}),...accepted},
+    {name:'current-track partial diagnostic observations cannot prove success',body:body({...media,full:undefined,editObservations:[{phase:'empty-preview',begin:{active:true,placement:'visible'}}]}),...rejected},
     ...fields.flatMap(field => [{name: 'current-track missing ' + field, body: body({...media, [field]: undefined}), ...rejected}, {name: 'current-track false ' + field, body: body({...media, [field]: false}), ...rejected}]),
     {name: 'current-track live metadata is not a fixture receipt', body: body({...media, realMediaObserved: true}), ...rejected},
     {name: 'current-track missing Russian', body: body({...media, languages: ['en']}), ...rejected},

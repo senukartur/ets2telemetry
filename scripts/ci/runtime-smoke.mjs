@@ -41,6 +41,7 @@ const result = {scenario: config.scenario === 'now-playing' ? 'SYNTHETIC-NOW-PLA
     status: {service: 'ready', storage: 'verified', synthetic: true}, exit: 0, probesAfterExit: []},
   // The Job's 25% hard CPU cap is relative to all logical processors; record them to size the actual budget.
   host: {logicalProcessors: os.availableParallelism()}, startedUtc: new Date().toISOString()};
+if(config.scenario==='now-playing')result.nowPlaying={origin:'synthetic',realMediaObserved:false};
 let application;
 let launcher;
 let tracing = false;
@@ -227,7 +228,7 @@ try {
     'retryPluginSetup', 'choosePluginFolder', 'setPluginGameExcluded', 'showPluginFile', 'openPluginFolder', 'exportDiagnostics', 'uninstallApplication', 'getHardModeStatus', 'refreshHardMode', 'updateApplication', 'checkForUpdates', 'setNowPlayingEnabled', 'setNowPlayingStyle', 'setNowPlayingBackgroundOpacity', 'selectNowPlayingSource', 'beginNowPlayingEdit', 'resetNowPlayingEditPlacement', 'finishNowPlayingEdit'],
     frozen: true, status: result.expected.status});
   if (config.scenario === 'now-playing') {
-    result.nowPlaying = await runNowPlayingSmoke({application, dashboard: window, config});
+    await runNowPlayingSmoke({application, dashboard: window, config,record:result.nowPlaying});
     await application.context().tracing.stop({path: path.join(config.output, 'trace-now-playing-first.zip')}); tracing = false;
     const firstExit = once(application.process(), 'exit');
     await application.evaluate(({app}) => app.emit('ets2telemetry:diagnostic-tray-action', 'exit'));

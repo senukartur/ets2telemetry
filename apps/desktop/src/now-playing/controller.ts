@@ -43,6 +43,10 @@ export class NowPlayingController {
   topologyChanged(): void {this.moving = false; if (this.live) this.updateGame(this.live); else this.place();}
   setOwnForeground(value: boolean): void {if (this.retired) return; this.foreground = value; this.place(); this.changed();}
   editState(): NowPlayingEditState {return {active: Boolean(this.draft), placement: !this.ready || (this.draft && this.foreground && !this.visible) ? 'unavailable' : this.foreground ? 'visible' : 'not-foreground'};}
+  /** Read-only internal facts; visibility/interactivity are controller intent, not proof that a document rendered. */
+  diagnosticSnapshot():Readonly<{ready:boolean;retired:boolean;draft:boolean;foreground:boolean;visible:boolean;interactive:boolean;moving:boolean;enabled:boolean;available:boolean;game:boolean;placement:NowPlayingEditState['placement']}> {
+    return {ready:this.ready,retired:this.retired,draft:!!this.draft,foreground:this.foreground,visible:this.visible,interactive:this.interactive,
+    moving:this.moving,enabled:this.settings.enabled,available:this.available,game:!!this.game,placement:this.editState().placement};}
   begin(foreground: boolean): NowPlayingEditState {
     if (!this.usable() || !this.settings.enabled || !this.ready) throw new Error('Current track edit unavailable');
     this.draft ??= {...this.settings.position}; this.foreground = foreground; this.place(); this.changed(); return this.editState();

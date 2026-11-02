@@ -30,7 +30,7 @@ import {ServiceHeartbeatMonitor} from './service-heartbeat';
 import {initialLive, sourceSelection} from './live-state';
 import {createBrokerResolver} from './broker-artifact';
 import {RecoveryBudget} from './recovery-budget';
-import {LiveSubscriptions} from './live-subscriptions';
+import {LiveSubscriptions, type LiveSubscriptionDiagnostic} from './live-subscriptions';
 import {LiveFreshness} from './live-freshness';
 import {parseLiveV1} from './live-v1';
 import {OVERLAY_TOPMOST_LEVEL, OverlayController} from './overlay-controller';
@@ -324,14 +324,16 @@ function runApplication(profileError: unknown): void {
     return UNSUPPORTED_UPDATE;
   }
   const upstreamBudget = new RecoveryBudget(), overlayBudget = new RecoveryBudget();
-  const dashboardSubscriptions = new LiveSubscriptions(initialLive(), 1);
+  const dashboardSubscriptions = new LiveSubscriptions(initialLive(), 1,5000,Number.MAX_SAFE_INTEGER,subscriptionDiagnostic('dashboard'));
   // The last projection main published: a non-current projection keeps its shape (ET-012a decision L5).
   let lastOverlay = overlayPresentation(initialLive());
-  const overlaySubscriptions = new LiveSubscriptions<OverlayPresentation>(lastOverlay, 1, 500);
+  const overlaySubscriptions = new LiveSubscriptions<OverlayPresentation>(lastOverlay, 1, 500,Number.MAX_SAFE_INTEGER,subscriptionDiagnostic('overlay'));
   // ET-012b: the overlay edit mode lives in main's memory only; every start is in driving mode (decision M5).
   let overlayEdit: OverlayEditState = {active: false};
   let nowWindow: BrowserWindow | undefined, nowController: NowPlayingController | undefined, nowPort: MessagePortMain | undefined;
   let nowTrack: MediaTrack | null = null, nowSource: string | null = null, nowGeneration = 0, nowDocument = 0, nowDashboardReady = false;
+  let nowSubscriptionDocument=0,nowEditEpoch=0,lastNowDiagnostic:string|undefined;
+  let nowEditDiagnostic:{epoch:number;minimum:number;seen:Set<string>}|undefined;
   let nowValidatedArtwork: MediaTrack['artwork'] = null;
   const nowWindowBudget = new RecoveryBudget();
   let nowReaderIdle: Promise<void> | undefined;
@@ -342,8 +344,42 @@ function runApplication(profileError: unknown): void {
       backgroundOpacity: settings.nowPlaying.backgroundOpacity, editing: nowController?.editState().active ?? false, source: nowSource,
       track: nowTrack && settings.nowPlaying.style === 'minimal' ? {...nowTrack, artwork: null} : nowTrack};
   };
-  const nowSubscriptions = new LiveSubscriptions<NowPlayingDisplay>(nowSnapshot(), 1, 5000);
+  const nowSubscriptions = new LiveSubscriptions<NowPlayingDisplay>(nowSnapshot(), 1, 5000,Number.MAX_SAFE_INTEGER,subscriptionDiagnostic('current-track'));
   const nowFocus = new OwnForegroundGate(foreground => nowController?.setOwnForeground(foreground));
+  function diagnosticEvent(event:string,facts:DiagnosticFacts):void {try{timeline?.(event,facts);}catch{/* Optional observation cannot change the window or channel lifecycle. */}}
+  function subscriptionDiagnostic(consumer:'dashboard'|'overlay'|'current-track') {
+    return timeline ? (event:LiveSubscriptionDiagnostic)=>{
+      if(event.stage==='removed')diagnosticEvent('LIVE_SUBSCRIPTION_REMOVED',{...event,origin:event.origin??'owner-retirement',consumer,
+        ...(consumer==='current-track'?{documentGeneration:nowDocument,subscriptionDocument:nowSubscriptionDocument}:{})});
+      if(consumer==='current-track')traceNowDelivery(event);
+    }:undefined;
+  }
+  function nowDiagnosticState():DiagnosticFacts {
+    const controller=nowController?.diagnosticSnapshot();
+    let nativeVisible:boolean|null=null,nativeFocused:boolean|null=null,nativeFocusable:boolean|null=null,nativeMovable:boolean|null=null,dashboardFocused:boolean|null=null;
+    try{if(window && !window.isDestroyed())dashboardFocused=window.isFocused();}catch{/* Optional own-window focus readback may be unavailable. */}
+    try{if(nowWindow && !nowWindow.isDestroyed() && !nowWindow.webContents.isDestroyed()){
+      nativeVisible=nowWindow.isVisible();nativeFocused=nowWindow.isFocused();nativeFocusable=nowWindow.isFocusable();nativeMovable=nowWindow.isMovable();
+    }}catch{/* Native readback is unavailable during retirement; it never changes controller authority. */}
+    return {documentGeneration:nowDocument,subscriptionDocument:nowSubscriptionDocument,displayGeneration:nowGeneration,editEpoch:nowEditEpoch,
+      windowPresent:!!nowWindow,portPresent:!!nowPort,controllerPresent:!!controller,ready:controller?.ready??false,retired:controller?.retired??true,
+      draft:controller?.draft??false,placement:controller?.placement??'unavailable',ownForeground:controller?.foreground??false,
+      visibleIntent:controller?.visible??false,interactiveIntent:controller?.interactive??false,nativeVisible,nativeFocused,nativeFocusable,nativeMovable,dashboardFocused,focusGate:nowFocus.inFront,
+      mediaState:nowPlayingView.state};
+  }
+  function traceNowState():void {
+    if(!timeline)return;
+    const facts=nowDiagnosticState(),transitions={...facts};delete transitions.displayGeneration;delete transitions.editEpoch;const key=JSON.stringify(transitions);
+    if(key===lastNowDiagnostic)return;lastNowDiagnostic=key;diagnosticEvent('NOW_PLAYING_STATE',facts);
+  }
+  function traceNowDelivery(event:LiveSubscriptionDiagnostic):void {
+    // Port credit proves preload consumption, not a React commit or visible DOM.
+    const edit=nowEditDiagnostic;if(!timeline || !edit || !nowController?.editState().active || event.stage==='removed' || edit.seen.has(event.stage))return;
+    const publication=event.stage==='queued'?event.pendingPublication:event.stage==='sent'?event.sentPublication:event.creditedPublication;
+    if(publication===null || publication<edit.minimum)return;
+    edit.seen.add(event.stage);diagnosticEvent('NOW_PLAYING_EDIT_DELIVERY',{...event,origin:'none',editEpoch:edit.epoch,documentGeneration:nowDocument,
+      subscriptionDocument:nowSubscriptionDocument,displayGeneration:nowGeneration});
+  }
   const requestedNowFixture = process.env.ETS2TELEMETRY_NOW_PLAYING_FIXTURE === '1';
   const nowFixture = (() => {
     if (!requestedNowFixture || process.env.ETS2TELEMETRY_LIVE_SMOKE !== '1' || process.env.ETS2TELEMETRY_SOURCE_KIND !== 'synthetic' || process.env.ETS2TELEMETRY_PLUGIN_SETUP !== 'disabled') return false;
@@ -386,10 +422,13 @@ function runApplication(profileError: unknown): void {
   function publishNowPlaying(): void {
     nowPlayingView = {...nowPlayingView, edit: nowController?.editState() ?? {active: false, placement: 'unavailable'}};
     if (!nowPlayingView.edit.active) nowFocus.stop();
-    nowSubscriptions.publish(nowSnapshot()); nowController?.update(nowTrack !== null); pushAppState();
+    nowSubscriptions.publish(nowSnapshot());traceNowDelivery({...nowSubscriptions.snapshot(nowPort),stage:'queued'});
+    nowController?.update(nowTrack !== null); pushAppState();traceNowState();
   }
   function retireNowDocument(): void {
+    if(timeline)diagnosticEvent('NOW_PLAYING_DOCUMENT_RETIRED',nowDiagnosticState());nowEditDiagnostic=undefined;
     nowValidatedArtwork = null; nowDocument++; nowPort = undefined; nowSubscriptions.close(); nowController?.loaded(false); nowFocus.stop();
+    traceNowState();
   }
   function retireNowPlaying(): void {
     const previous = nowWindow;
@@ -413,6 +452,7 @@ function runApplication(profileError: unknown): void {
   }
   async function finishNowPlayingEdit(outcome: 'save' | 'cancel'): Promise<SettingsView> {
     nowFocus.stop(); const draft = nowController?.end();
+    if(timeline)diagnosticEvent('NOW_PLAYING_EDIT_END',{...nowDiagnosticState(),outcome});nowEditDiagnostic=undefined;
     return outcome === 'save' && draft ? saveSettings(() => settingsStore.setNowPlayingPosition(draft)) : settingsStore.view();
   }
   function createNowPlaying(): void {
@@ -425,7 +465,9 @@ function runApplication(profileError: unknown): void {
     const retire = () => {if (nowWindow === created) retireNowDocument();};
     created.webContents.on('did-start-loading', retire);
     created.webContents.on('did-navigate', retire);
-    created.webContents.on('did-finish-load', () => {if (nowWindow === created) created.webContents.postMessage('now-playing:port', {generation: nowDocument});});
+    created.webContents.on('did-finish-load', () => {if (nowWindow === created) {if(timeline)diagnosticEvent('NOW_PLAYING_DOCUMENT_READY',nowDiagnosticState());created.webContents.postMessage('now-playing:port', {generation: nowDocument});}});
+    const observeVisibility=()=>{if(nowWindow===created)traceNowState();};
+    created.on('show',observeVisibility);created.on('hide',observeVisibility);created.on('focus',observeVisibility);created.on('blur',observeVisibility);
     created.on('system-context-menu', event => event.preventDefault());
     created.webContents.on('render-process-gone', () => {if (nowWindow !== created) return; retire(); nowTrack = null; nowSource = null; nowPlayingView = {...nowPlayingView, state: 'error', error: 'READER_UNAVAILABLE'}; publishNowPlaying(); if (!lifecycle.exiting && nowWindowBudget.take() !== undefined) void created.loadFile(path.join(__dirname, 'renderer', 'now-playing.html')).catch(() => undefined);});
     created.on('focus', focusChanged); created.on('blur', focusChanged);
@@ -449,14 +491,16 @@ function runApplication(profileError: unknown): void {
   ipcMain.on('now-playing:subscribe', (event, ...args: unknown[]) => {
     if (!trustedNowWidget(event) || args.length !== 1 || args[0] !== nowDocument || nowPort || lifecycle.exiting || !settingsStore.view().nowPlaying.enabled) return;
     const document = nowDocument, created = nowWindow!;
-    const {port1, port2} = new MessageChannelMain(); nowPort = port1;
-    port1.on('close', () => {if (nowPort === port1 && nowWindow === created && nowDocument === document) {nowPort = undefined; nowController?.loaded(false);}});
+    const {port1, port2} = new MessageChannelMain(); nowPort = port1;nowSubscriptionDocument=document;
+    if(timeline)diagnosticEvent('NOW_PLAYING_CHANNEL_ATTACH',nowDiagnosticState());
+    port1.on('close', () => {if (nowPort === port1 && nowWindow === created && nowDocument === document) {nowPort = undefined; nowController?.loaded(false);traceNowState();}});
     try {nowSubscriptions.attach(port1); created.webContents.postMessage('now-playing:port', {generation: document}, [port2]); nowController?.loaded(true); publishNowPlaying();}
     catch {port1.close(); port2.close(); retireNowDocument();}
   });
   ipcMain.on('now-playing:unsubscribe', (event, ...args: unknown[]) => {
     if (!trustedNowWidget(event) || args.length !== 1 || args[0] !== nowDocument) return;
     nowPort = undefined; nowSubscriptions.close(); nowController?.loaded(false); nowFocus.stop();
+    traceNowState();
   });
   const latency = latencyEnabled(process.env) ? new OverlayLatency(diagnosticDirectory!, request => {
     if (!service || !serviceReady || supervisor.stopping) throw new Error('Service unavailable');
@@ -623,7 +667,7 @@ function runApplication(profileError: unknown): void {
     return Boolean((window && !window.isDestroyed() && window.isFocused()) || (overlay && !overlay.isDestroyed() && overlay.isFocused()));
   }
   function ownNowPlayingFocused(): boolean {return Boolean(window && !window.isDestroyed() && window.isFocused() || nowWindow && !nowWindow.isDestroyed() && nowWindow.isFocused());}
-  function focusChanged(): void {if (nowController?.editState().active) nowFocus.update(ownNowPlayingFocused()); if (overlayEdit.active) focusGate.update(ownFocused());}
+  function focusChanged(): void {if (nowController?.editState().active) nowFocus.update(ownNowPlayingFocused()); if (overlayEdit.active) focusGate.update(ownFocused());traceNowState();}
   /** Leaves edit mode (hidden and click-through again first) and returns the draft; nothing is written here. */
   function endOverlayEdit(): ReturnType<OverlayController['endEdit']> {
     focusGate.stop();
@@ -997,7 +1041,7 @@ function runApplication(profileError: unknown): void {
       (receive as (state: unknown) => void)({started, exiting: lifecycle.exiting, serviceReady, servicePid: service?.pid ?? null,
         tray: Boolean(tray && !tray.isDestroyed()), trayUnavailable, dashboard: Boolean(window && !window.isDestroyed()),
         overlay: Boolean(overlay && !overlay.isDestroyed()), overlayChannel: Boolean(overlayPort), upstream: Boolean(upstream), health: {...health},
-        settings: settingsStore.view()});
+        settings: settingsStore.view(),nowPlayingDiagnostics:{...nowDiagnosticState(),...nowSubscriptions.snapshot(nowPort)}});
     });
   }
   if (profileError) fail('PROFILE_SETUP_FAILED', profileError);
@@ -1024,7 +1068,9 @@ function runApplication(profileError: unknown): void {
   ipcMain.handle('now-playing-edit:begin', (event, ...args: unknown[]) => {
     if (!trustedNowDashboard(event) || args.length || !settingsStore.view().writable || overlayEdit.active || !nowController) throw new Error('Current track edit unavailable');
     nowFocus.start(ownNowPlayingFocused());
-    try {return nowController.begin(nowFocus.inFront);} catch (error) {nowFocus.stop(); throw error;}
+    if(timeline){nowEditEpoch=Math.min(Number.MAX_SAFE_INTEGER,nowEditEpoch+1);nowEditDiagnostic={epoch:nowEditEpoch,minimum:Math.min(Number.MAX_SAFE_INTEGER,nowSubscriptions.snapshot(nowPort).publications+1),seen:new Set()};diagnosticEvent('NOW_PLAYING_EDIT_REQUEST',nowDiagnosticState());}
+    try {const result=nowController.begin(nowFocus.inFront);if(timeline)diagnosticEvent('NOW_PLAYING_EDIT_BEGIN',{...nowDiagnosticState(),active:result.active,placement:result.placement});return result;}
+    catch (error) {if(timeline)diagnosticEvent('NOW_PLAYING_EDIT_BEGIN_FAILED',nowDiagnosticState());nowEditDiagnostic=undefined;nowFocus.stop(); throw error;}
   });
   ipcMain.handle('now-playing-edit:reset', (event, ...args: unknown[]) => {
     if (!trustedNowDashboard(event) || args.length || !nowController) throw new Error('Invalid current track edit'); return nowController.reset();
