@@ -1,3 +1,4 @@
+import {isOpacity, isStyle, isSelection} from './now-playing/contract';
 import {isHardModeStatus, type HardModeStatus} from '../../../packages/contracts/src/hard-mode';
 import {contextBridge, ipcRenderer} from 'electron';
 import type {AppState, DesktopBridge, LiveTelemetry, UpdateView} from '../../../packages/contracts/src';
@@ -234,7 +235,14 @@ const bridge: DesktopBridge = {
   refreshHardMode: (...args: unknown[]) => args.length === 0 ? hardModeCall('hard-mode:refresh') : Promise.reject(new Error('Invalid Hard Mode request')),
   // ET-055 (UP9): no argument may reach main, which checks again; the reply is validated as an update view.
   updateApplication: (...args: unknown[]) => args.length === 0 ? updateCall(UPDATE_CHANNELS.apply) : Promise.reject(new Error('Invalid update request')),
-  checkForUpdates: (...args: unknown[]) => args.length === 0 ? updateCall(UPDATE_CHANNELS.check) : Promise.reject(new Error('Invalid update request'))
+  checkForUpdates: (...args: unknown[]) => args.length === 0 ? updateCall(UPDATE_CHANNELS.check) : Promise.reject(new Error('Invalid update request')),
+  setNowPlayingEnabled: (...args: unknown[]) => args.length === 1 && typeof args[0] === 'boolean' ? ipcRenderer.invoke('settings:set-now-playing-enabled', args[0]) : Promise.reject(new Error('Invalid current track request')),
+  setNowPlayingStyle: (...args: unknown[]) => args.length === 1 && isStyle(args[0]) ? ipcRenderer.invoke('settings:set-now-playing-style', args[0]) : Promise.reject(new Error('Invalid current track request')),
+  setNowPlayingBackgroundOpacity: (...args: unknown[]) => args.length === 1 && isOpacity(args[0]) ? ipcRenderer.invoke('settings:set-now-playing-background-opacity', args[0]) : Promise.reject(new Error('Invalid current track request')),
+  selectNowPlayingSource: (...args: unknown[]) => args.length === 1 && isSelection(args[0]) ? ipcRenderer.invoke('now-playing:select-source', {...args[0]}) : Promise.reject(new Error('Invalid current track request')),
+  beginNowPlayingEdit: (...args: unknown[]) => args.length === 0 ? ipcRenderer.invoke('now-playing-edit:begin') : Promise.reject(new Error('Invalid current track request')),
+  resetNowPlayingEditPlacement: (...args: unknown[]) => args.length === 0 ? ipcRenderer.invoke('now-playing-edit:reset') : Promise.reject(new Error('Invalid current track request')),
+  finishNowPlayingEdit: (...args: unknown[]) => args.length === 1 && (args[0] === 'save' || args[0] === 'cancel') ? ipcRenderer.invoke('now-playing-edit:finish', args[0]) : Promise.reject(new Error('Invalid current track request'))
 };
 /** One page request of a trip: exactly the UUID and the cursor, or null for the first page. */
 function journalPage<T>(kind: 'events' | 'intervals' | 'samples', tripUuid: unknown, cursor: unknown): Promise<T> {

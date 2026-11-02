@@ -1,3 +1,4 @@
+import {NowPlayingSettingsCard} from './now-playing/settings-card';
 import {recordingMotion, recordingTone, connectionTone, pluginTone, hardModeTone, pluginStatusText} from './screens/desktop-ui-view';
 import {HardModeCard} from './hard-mode/card';
 import React, {useEffect, useRef, useState} from 'react';
@@ -151,6 +152,7 @@ export default function App() {
     {settings?.saveError && lastCard === 'units' ? <p role="status" data-testid="settings-error">{getSettingsSaveErrorText(settings.saveError, language)}</p>
       : units === 'failed' ? <p role="status" data-testid="settings-error">{strings.unitsSaveFailed}</p> : null}
             </CardContent></Card>
+            <NowPlayingSettingsCard settings={settings} view={app?.nowPlaying} onSaved={saved} />
             <GearDisplayCard settings={settings} onSaved={saved} onRequest={() => setLastCard('gear')} showSaveError={lastCard === 'gear'} />
           </div>
           <div hidden={panel !== 'overlay'} data-testid="settings.overlay"><OverlaySettingsCard settings={settings} edit={app?.overlayEdit} onSaved={saved} onRequest={() => setLastCard('overlay')} showSaveError={lastCard === 'overlay'} />

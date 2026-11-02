@@ -1,3 +1,5 @@
+import {once} from 'node:events';
+import {prepareNowPlayingSmoke, runNowPlayingSmoke, verifyNowPlayingRestart, nowPlayingRendererPages} from './now-playing-observation.mjs';
 import {dashboardObservation} from './dashboard-observation.mjs';
 import {runUiSmoke, runUiReadOnly, UI_CASES} from './ui-observation.mjs';
 import {screen, settingsPanel, waitForStartup} from './ui-navigation.mjs';
@@ -33,7 +35,7 @@ import {smokeBuild, smokeDataRoot} from './smoke-build.mjs';
 
 const [configFile] = process.argv.slice(2);
 const config = JSON.parse((await readFile(configFile, 'utf8')).replace(/^\uFEFF/, ''));
-const result = {scenario: config.scenario === 'soak' ? 'V1 SYNTHETIC-RECORDING-SOAK / partial REG-011, REG-017, REG-018' : config.scenario === 'refusal' ? 'NEWER-HISTORY-REFUSAL / partial REG-013, REG-014, REG-017' : config.scenario === 'plugin' ? 'PLUGIN-SETUP-TEST-ROOT / partial REG-015, REG-017' : config.scenario === 'journal' ? 'SYNTHETIC-JOURNAL-UI / partial REG-009, REG-014, REG-017' : config.scenario === 'recording' ? 'V1 SYNTHETIC-RECORDING-JOURNEY / partial REG-006, REG-012, REG-017' : config.scenario === 'lifecycle' ? 'V0 TRAY-LIFECYCLE-SETTINGS / partial REG-009, REG-011, REG-012, REG-017' : config.scenario === 'overlay' ? 'V0 HIDDEN-OVERLAY-PROJECTION / partial REG-009, REG-011, REG-017' : config.scenario === 'telemetry' ? 'V0 SOURCE-RENDERER-RECOVERY / partial REG-003, REG-010, REG-011, REG-017' : 'SCAFFOLD-WORKER / partial REG-011, REG-017', passed: false,
+const result = {scenario: config.scenario === 'now-playing' ? 'SYNTHETIC-NOW-PLAYING / partial REG-012, REG-016, REG-017, REG-020' : config.scenario === 'soak' ? 'V1 SYNTHETIC-RECORDING-SOAK / partial REG-011, REG-017, REG-018' : config.scenario === 'refusal' ? 'NEWER-HISTORY-REFUSAL / partial REG-013, REG-014, REG-017' : config.scenario === 'plugin' ? 'PLUGIN-SETUP-TEST-ROOT / partial REG-015, REG-017' : config.scenario === 'journal' ? 'SYNTHETIC-JOURNAL-UI / partial REG-009, REG-014, REG-017' : config.scenario === 'recording' ? 'V1 SYNTHETIC-RECORDING-JOURNEY / partial REG-006, REG-012, REG-017' : config.scenario === 'lifecycle' ? 'V0 TRAY-LIFECYCLE-SETTINGS / partial REG-009, REG-011, REG-012, REG-017' : config.scenario === 'overlay' ? 'V0 HIDDEN-OVERLAY-PROJECTION / partial REG-009, REG-011, REG-017' : config.scenario === 'telemetry' ? 'V0 SOURCE-RENDERER-RECOVERY / partial REG-003, REG-010, REG-011, REG-017' : 'SCAFFOLD-WORKER / partial REG-011, REG-017', passed: false,
   scenarioKind: config.scenario ?? 'scaffold',
   commit: config.commit, mode: config.mode, node: process.versions, expected: {
     status: {service: 'ready', storage: 'verified', synthetic: true}, exit: 0, probesAfterExit: []},
@@ -114,6 +116,7 @@ const verifyHistoryFile = async () => {
 const environment = diagnostics => ({...(config.mode === 'installed' ? installedEnvironment(process.env, {}) : process.env), TEMP: config.temp, TMP: config.temp, APPDATA: config.appdata,
   LOCALAPPDATA: config.localappdata, ETS2TELEMETRY_PROFILE_DIR: config.profile,
   ETS2TELEMETRY_DIAGNOSTIC_DIR: diagnostics,
+  ...(config.scenario === 'now-playing' ? {ETS2TELEMETRY_NOW_PLAYING_FIXTURE: '1', ETS2TELEMETRY_PLUGIN_SETUP: 'disabled'} : {}),
   ...(telemetrySource ? {ETS2TELEMETRY_LIVE_SMOKE: '1', ETS2TELEMETRY_SOURCE_KIND: 'synthetic', ETS2TELEMETRY_SOURCE_PIPE: telemetrySource.endpoint} : {}),
   ...(telemetrySourceV1 ? {ETS2TELEMETRY_SOURCE_PIPE_V1: telemetrySourceV1.endpoint} : {}),
   ...(recordingSource ? {ETS2TELEMETRY_SOURCE_PIPE_V1: recordingSource.endpoint, ETS2TELEMETRY_RECORDING: RECORDING_TARGET} : {}),
@@ -155,7 +158,7 @@ try {
   result.playwright = JSON.parse(await readFile(new URL('../../node_modules/playwright-core/package.json', import.meta.url))).version;
   assert.equal(result.playwright, '1.64.0');
   if (config.scenario === 'ui' && (!UI_CASES.includes(config.uiCase) || config.mode === 'installed')) throw new Error('INVALID_UI_SHARD');
-  if (config.scenario === 'ui' && config.uiCase !== 'journal' || config.scenario === 'telemetry' || config.scenario === 'overlay' || config.scenario === 'lifecycle' || config.scenario === 'recording' || config.scenario === 'soak') telemetrySource = await startLiveSmokeSource(config.checkout);
+  if (config.scenario === 'ui' && config.uiCase !== 'journal' || config.scenario === 'now-playing' || config.scenario === 'telemetry' || config.scenario === 'overlay' || config.scenario === 'lifecycle' || config.scenario === 'recording' || config.scenario === 'soak') telemetrySource = await startLiveSmokeSource(config.checkout);
   if (config.scenario === 'telemetry' || config.scenario === 'ui' && ['live', 'overlay'].includes(config.uiCase)) telemetrySourceV1 = await startLiveSmokeSourceV1(config.checkout);
   if (config.scenario === 'hard-mode') hardModeSource = await startHardModeSource(config);
   if (config.scenario === 'recording') recordingSource = await startRecordingSource(config);
@@ -167,6 +170,7 @@ try {
   // ET-019 PR-7: the history path of the isolated LOCALAPPDATA holds a copy of the newer-schema fixture before the launch.
   if (config.scenario === 'refusal') await placeNewerHistory({config, record: result.refusal = {}});
   if (config.scenario === 'ui' && config.uiCase === 'journal') {await seedJournalDatabase({config, record: result.uiSeed = {}}); journalTarget = JOURNAL_TARGET;}
+  if (config.scenario === 'now-playing') await prepareNowPlayingSmoke(config);
   phase('launch-requested');
   application = await launch(config.diagnostics);
   launcher = application.process();
@@ -220,8 +224,19 @@ try {
   assert.deepEqual(result.actual, {require: 'undefined', process: 'undefined', keys: ['getStatus', 'selectSource', 'subscribeLive', 'getAppState', 'subscribeAppState', 'exitApplication', 'setLanguage', 'setAutostart', 'setUnitProfile', 'setGearDisplay', 'setOverlayBackgroundOpacity', 'setOverlayEnabled', 'setOverlayLayout', 'setOverlaySections',
     'beginOverlayEdit', 'setOverlayEditScale', 'resetOverlayEditPlacement', 'finishOverlayEdit',
     'listJournalTrips', 'getJournalTrip', 'listJournalEvents', 'listJournalIntervals', 'listJournalSamples', 'exportJournalTrip',
-    'retryPluginSetup', 'choosePluginFolder', 'setPluginGameExcluded', 'showPluginFile', 'openPluginFolder', 'exportDiagnostics', 'uninstallApplication', 'getHardModeStatus', 'refreshHardMode', 'updateApplication', 'checkForUpdates'],
+    'retryPluginSetup', 'choosePluginFolder', 'setPluginGameExcluded', 'showPluginFile', 'openPluginFolder', 'exportDiagnostics', 'uninstallApplication', 'getHardModeStatus', 'refreshHardMode', 'updateApplication', 'checkForUpdates', 'setNowPlayingEnabled', 'setNowPlayingStyle', 'setNowPlayingBackgroundOpacity', 'selectNowPlayingSource', 'beginNowPlayingEdit', 'resetNowPlayingEditPlacement', 'finishNowPlayingEdit'],
     frozen: true, status: result.expected.status});
+  if (config.scenario === 'now-playing') {
+    result.nowPlaying = await runNowPlayingSmoke({application, dashboard: window, config});
+    await application.context().tracing.stop({path: path.join(config.output, 'trace-now-playing-first.zip')}); tracing = false;
+    const firstExit = once(application.process(), 'exit');
+    await application.evaluate(({app}) => app.emit('ets2telemetry:diagnostic-tray-action', 'exit'));
+    result.nowPlaying.firstExit = (await firstExit)[0];
+    application = await launch(config.diagnosticsRestart); launcher = application.process();
+    await application.context().tracing.start({screenshots: true, snapshots: true}); tracing = true;
+    const pages = await nowPlayingRendererPages(application); window = pages.dashboard; overlay = pages.overlay; await waitForStartup(window);
+    await verifyNowPlayingRestart({application, dashboard: window, record: result.nowPlaying});
+  }
   if (config.scenario === 'scaffold') {
     // ET-016 PR-3: a journal read crosses the preload, main and the telemetry service to the new, empty history database
     // of the isolated LOCALAPPDATA; an invalid trip id is refused in the preload. DATABASE_OPENING is retried for up to 10 s.
@@ -598,7 +613,7 @@ try {
   }
   // ET-019 PR-11: Electron's per-process peak working sets of the application open now (the restart run of the two-run
   // scenarios); recorded, never asserted here.
-  result.processMemory = {run: ['lifecycle', 'recording', 'journal', 'plugin'].includes(config.scenario) || config.scenario === 'ui' && config.uiCase === 'settings' ? 'restart' : 'first',
+  result.processMemory = {run: ['now-playing', 'lifecycle', 'recording', 'journal', 'plugin'].includes(config.scenario) || config.scenario === 'ui' && config.uiCase === 'settings' ? 'restart' : 'first',
     ...await observeProcessMemory(application).catch(() => ({error: 'OBSERVATION_FAILED'}))};
   phase('journey-complete');
   if (config.scenario !== 'lifecycle' && config.scenario !== 'recording' && config.scenario !== 'journal' && config.scenario !== 'plugin' && config.scenario !== 'refusal' && config.scenario !== 'soak') await window.screenshot({path: path.join(config.output, 'ready.png')});

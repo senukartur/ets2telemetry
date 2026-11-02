@@ -1,3 +1,4 @@
+import type {NowPlayingSettings, NowPlayingView} from './now-playing';
 /**
  * Fixed service and storage error codes. They never carry paths, error text or other runtime details. Settings save
  * errors are separate (`SettingsSaveError`), so they never replace a service problem.
@@ -137,6 +138,7 @@ export type OverlayEditState =
   | {active: true; layout: OverlayLayout; scale: number; placement: OverlayEditPlacement};
 /** The settings that apply now. Never carries paths, file content or error text. */
 export interface SettingsView {
+  nowPlaying: NowPlayingSettings;
   language: AppLanguage;
   autostart: boolean;
   units: UnitProfiles;
@@ -272,6 +274,7 @@ export interface UpdateView {
 }
 /** Main-owned application state pushed to the dashboard. */
 export interface AppState {
+  nowPlaying: NowPlayingView;
   health: AppHealth;
   settings: SettingsView;
   /** The overlay edit mode; pushed whenever it changes. */

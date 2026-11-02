@@ -1,13 +1,15 @@
+import {DEFAULT_NOW_PLAYING, isOpacity, isStyle, isPosition} from './now-playing/contract';
+import type {NowPlayingSettings} from '../../../packages/contracts/src/now-playing';
 import {DEFAULT_OVERLAY_OPACITY, isOverlayOpacity} from './overlay-opacity';
 import type {AppLanguage, GearDisplayMode, GearDisplayModes, OverlayLayout, OverlayPlacement, OverlaySectionId, OverlaySections, OverlaySettings, UnitGame, UnitProfiles} from '../../../packages/contracts/src';
 import {DEFAULT_OVERLAY_PLACEMENTS, normalizeFraction, normalizeScale, parseOverlayPlacement} from './overlay-placement';
 import {DEFAULT_OVERLAY_SECTIONS, DEFAULT_OVERLAY_SETTINGS, isOverlayLayout, OVERLAY_LAYOUTS, OVERLAY_SECTION_IDS} from './overlay-sections';
 import {DEFAULT_GEAR_DISPLAY, DEFAULT_UNIT_PROFILES, isGearDisplayMode, isUnitProfile, UNIT_GAMES} from './unit-profiles';
 
-// Settings file format v11 (docs/settings.md). Pure parsing and serialization; the store owns file access.
+// Settings file format v12 (docs/settings.md). Pure parsing and serialization; the store owns file access.
 
 export const SETTINGS_FORMAT = 'ets2telemetry.settings';
-export const SETTINGS_VERSION = 11;
+export const SETTINGS_VERSION = 12;
 /** Larger files are rejected as invalid without being parsed. */
 export const MAX_SETTINGS_BYTES = 64 * 1024;
 
@@ -19,6 +21,7 @@ export function isAppLanguage(value: unknown): value is AppLanguage {
 }
 
 export interface Settings {
+  nowPlaying: NowPlayingSettings;
   language: AppLanguage;
   autostart: boolean;
   units: UnitProfiles;
@@ -31,14 +34,15 @@ export const DEFAULT_SETTINGS: Settings = Object.freeze({
   autostart: false,
   units: DEFAULT_UNIT_PROFILES,
   gearDisplay: DEFAULT_GEAR_DISPLAY,
+  nowPlaying: DEFAULT_NOW_PLAYING,
   overlay: DEFAULT_OVERLAY_SETTINGS
 });
 
 /** Field paths that can fall back to their default independently. */
-export type SettingsField = 'overlay.backgroundOpacity' | 'overlay.enabled' | 'language' | 'autostart' | `units.${UnitGame}` | `gearDisplay.${UnitGame}` | 'overlay.layout' | 'overlay.sections' | `overlay.sections.${OverlaySectionId}`
+export type SettingsField = 'nowPlaying.enabled' | 'nowPlaying.style' | 'nowPlaying.backgroundOpacity' | 'nowPlaying.position' | 'overlay.backgroundOpacity' | 'overlay.enabled' | 'language' | 'autostart' | `units.${UnitGame}` | `gearDisplay.${UnitGame}` | 'overlay.layout' | 'overlay.sections' | `overlay.sections.${OverlaySectionId}`
   | 'overlay.placements' | `overlay.placements.${OverlayLayout}`;
 /** Set when the file was upgraded in memory from an older format; the file itself stays unchanged until the next save. */
-type Migrated = {migratedFrom?: 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9 | 10};
+type Migrated = {migratedFrom?: 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9 | 10 | 11};
 export type ParsedSettings =
   | ({state: 'loaded'; settings: Settings} & Migrated)
   /** A valid file with some invalid or missing fields; they use defaults until the next save rewrites them. */
@@ -76,9 +80,10 @@ const isRecord = (value: unknown): value is Record<string, unknown> => typeof va
  * v10 -> v11 adds the overlay section `mandatory-break`, switched on (ET-052 MB11, owner decision D2: on by default, also for
  * upgraders; ET-050b took v10 first). It is set on a copy of an `overlay.sections` record, so every other saved choice is
  * preserved, including a user who switched other sections off; anything that is not a record is left to the existing
- * fallbacks. The bump makes an older build read a v11 file as newer-version (read-only defaults) instead of ignoring the new
+ * fallbacks. The bump makes an older build read a v12 file as newer-version (read-only defaults) instead of ignoring the new
  * key and dropping it on its next save.
  * Version 0 and below have no path.
+ * v11 -> v12 adds disabled current-track defaults without changing existing fields (ET-061).
  */
 const MIGRATIONS: ReadonlyMap<number, (raw: Record<string, unknown>) => Record<string, unknown>> = new Map<number, (raw: Record<string, unknown>) => Record<string, unknown>>([
   [1, (raw: Record<string, unknown>) => ({...raw, version: 2, overlay: defaultOverlayDocument()})],
@@ -91,7 +96,8 @@ const MIGRATIONS: ReadonlyMap<number, (raw: Record<string, unknown>) => Record<s
   [8, (raw: Record<string, unknown>) => ({...raw, version: 9, gearDisplay: {ets2: DEFAULT_GEAR_DISPLAY.ets2, ats: DEFAULT_GEAR_DISPLAY.ats}})],
   [9, (raw: Record<string, unknown>) => ({...raw, version: 10})],
   [10, (raw: Record<string, unknown>) => ({...raw, version: 11,
-    overlay: isRecord(raw.overlay) && isRecord(raw.overlay.sections) ? {...raw.overlay, sections: {...raw.overlay.sections, 'mandatory-break': true}} : raw.overlay})]
+    overlay: isRecord(raw.overlay) && isRecord(raw.overlay.sections) ? {...raw.overlay, sections: {...raw.overlay.sections, 'mandatory-break': true}} : raw.overlay})],
+  [11, (raw: Record<string, unknown>) => ({...raw, version: 12, nowPlaying: {...DEFAULT_NOW_PLAYING, position: {...DEFAULT_NOW_PLAYING.position}}})]
 ]);
 
 /** Upgrades an older raw document to the current version through the migration chain, or undefined without a complete path. */
@@ -169,7 +175,7 @@ export function parseSettings(bytes: Uint8Array): ParsedSettings {
     document = migrateToCurrent(raw, version);
     if (!document) return {state: 'unsupported-older'};
   }
-  const migrated: Migrated = version === 1 || version === 2 || version === 3 || version === 4 || version === 5 || version === 6 || version === 7 || version === 8 || version === 9 || version === 10 ? {migratedFrom: version} : {};
+  const migrated: Migrated = version === 1 || version === 2 || version === 3 || version === 4 || version === 5 || version === 6 || version === 7 || version === 8 || version === 9 || version === 10 || version === 11 ? {migratedFrom: version} : {};
   const fallbackFields: SettingsField[] = [];
 
   let language: AppLanguage = DEFAULT_APP_LANGUAGE;
@@ -196,12 +202,13 @@ export function parseSettings(bytes: Uint8Array): ParsedSettings {
     else {gears[game] = DEFAULT_GEAR_DISPLAY[game]; fallbackFields.push(`gearDisplay.${game}`);}
   }
   const overlay = parseOverlay(document.overlay, fallbackFields);
-  const settings: Settings = {language, autostart, units: Object.freeze(resolved), gearDisplay: Object.freeze(gears), overlay: Object.freeze(overlay)};
+  const nowPlaying = parseNowPlaying(document.nowPlaying, fallbackFields);
+  const settings: Settings = {nowPlaying, language, autostart, units: Object.freeze(resolved), gearDisplay: Object.freeze(gears), overlay: Object.freeze(overlay)};
   return fallbackFields.length ? {state: 'loaded-with-fallbacks', settings, fallbackFields, ...migrated} : {state: 'loaded', settings, ...migrated};
 }
 
 /**
- * The exact v11 file content: UTF-8 without a byte order mark, two-space indentation, a trailing newline, language,
+ * The exact v12 file content: UTF-8 without a byte order mark, two-space indentation, a trailing newline, language,
  * both games' unit profiles followed by their gear display modes,
  * all fifteen overlay sections in canonical order and the placements of all four layouts in canonical order, each with
  * x and y rounded to four decimals and the scale to two.
@@ -219,6 +226,17 @@ export function serializeSettings(settings: Settings): string {
     autostart: settings.autostart,
     units: {ets2: settings.units.ets2, ats: settings.units.ats},
     gearDisplay: {ets2: settings.gearDisplay.ets2, ats: settings.gearDisplay.ats},
-    overlay: {enabled: settings.overlay.enabled, backgroundOpacity: settings.overlay.backgroundOpacity, layout: settings.overlay.layout, sections, placements}
+    overlay: {enabled: settings.overlay.enabled, backgroundOpacity: settings.overlay.backgroundOpacity, layout: settings.overlay.layout, sections, placements},
+    nowPlaying: {...settings.nowPlaying, position: {...settings.nowPlaying.position, x: normalizeFraction(settings.nowPlaying.position.x), y: normalizeFraction(settings.nowPlaying.position.y)}}
   }, null, 2) + '\n';
+}
+
+function parseNowPlaying(raw: unknown, fields: SettingsField[]): NowPlayingSettings {
+  const value = isRecord(raw) ? raw : {};
+  const result = {...DEFAULT_NOW_PLAYING};
+  if (typeof value.enabled === 'boolean') result.enabled = value.enabled; else fields.push('nowPlaying.enabled');
+  if (isStyle(value.style)) result.style = value.style; else fields.push('nowPlaying.style');
+  if (isOpacity(value.backgroundOpacity)) result.backgroundOpacity = value.backgroundOpacity; else fields.push('nowPlaying.backgroundOpacity');
+  if (isPosition(value.position)) result.position = {...value.position}; else fields.push('nowPlaying.position');
+  return Object.freeze(result);
 }

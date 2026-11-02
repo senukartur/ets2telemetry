@@ -314,3 +314,7 @@ Since ET-013 PR-2 the telemetry service opens `%LOCALAPPDATA%\ETS2Telemetry\data
 The pinned package is `@fontsource/huninn` 5.3.1 (official npm registry verified before pinning). Main and overlay each import the offline font; no runtime font request is needed. Their Vite stylesheet closures remain separate: the overlay imports only its own CSS/font/yu-ov tokens, never shadcn base/Tailwind/Radix. Main uses the approved yu tokens and installed Radix menu/Tooltip primitives (ET-047 removed the unused checklist Sheet). The approved bear copy is byte-identical to `docs/design/assets/logo.png`; native small icons/package names are unchanged. Earlier Geist validation above is historical, superseded for the current renderer by the ET-028 checks.
 
 The unchanged Huninn copyright/OFL1.1 text is bundled at `apps/desktop/src/assets/huninn-OFL.txt`, readable offline in Settings → About and emitted as a separate renderer asset. The renderer-entry test verifies the source and emitted bytes against the pinned package license.
+
+## Windows media helper
+
+The desktop build also builds `native/media-session-reader` with MSVC x64, C++17, Windows SDK C++/WinRT headers and `windowsapp`; no additional npm dependency or global tool installation is needed. `node scripts/build-media-session-reader.mjs` builds Release targets and stages only the production helper and matching source/channel evidence. The fixture executable and tests stay outside packaged resources. Local builds use staging with channel variables unset.
