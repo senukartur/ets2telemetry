@@ -839,3 +839,7 @@ An owner-run raw channel capture showed that ETS2 itself sends 0.0 for `truck.fu
 ## ET-063 automatic trip continuation — November 2, 2026
 
 The owner approved schema v3→v4, logical Journal trips, existing DTO/cursor amendments and JSON v4. One verified profile/canonical job candidate continues across reconnects, restarts and next-day loads, accepting identical-unobserved-offer false matches without confirmation. Save restoration replaces abandoned progress (100→60→100 km); raw evidence stays intact and unsupported totals unavailable. Missing/conflicting evidence, multiple candidates, cancellation or replacement veto joining; different jobs interrupt without invented outcomes. Old history migrates as singletons, Hard Mode loss is irreversible, and membership/continuation/rollback diagnostics are JSON-only.
+
+## Single-player mode presentation — November 2, 2026
+
+The owner requested that absence of the TruckersMP module be displayed simply as **Single-player**, without a yellow warning or an **unconfirmed** qualifier. This presentation exception supersedes the earlier requirement to visibly qualify that result; stored method/confidence remain unchanged, and conflicting evidence still appears ambiguous.

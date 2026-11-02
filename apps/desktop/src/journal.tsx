@@ -2,7 +2,7 @@ import {journalTileValues} from './screens/journal-tiles';
 import {SampleChart} from './screens/sample-chart';
 import {t} from './i18n';
 import {HardModeBadge, HardModeTrip} from './hard-mode/card';
-import {ArrowLeft, Check, ChevronRight, Circle, X, Route, Fuel, Coins, UsersRound, CircleHelp, TriangleAlert} from 'lucide-react';
+import {ArrowLeft, Check, ChevronRight, Circle, X, Route, Fuel, Coins, UserRound, UsersRound, CircleHelp, TriangleAlert} from 'lucide-react';
 import React, {useCallback, useEffect, useMemo, useRef, useState} from 'react';
 import type {
   AppLanguage, JournalCallResult, JournalCompleteness, JournalDatabase, JournalGame, JournalOutcome, JournalTripDetail, JournalTripPage, JournalTripsQuery, RecordingHealth, UnitProfiles
@@ -92,7 +92,7 @@ function Pager({paged, testId}: {paged: ReturnType<typeof usePagedRead>; testId:
 }
 
 function ModeBadge({mode, testId}: {mode: JournalModeBadge; testId: string}) {
-  const Icon = mode.tone === 'ok' ? UsersRound : mode.tone === 'warn' ? TriangleAlert : CircleHelp;
+  const Icon = mode.tone === 'warn' ? TriangleAlert : mode.kind === 'single-player' ? UserRound : mode.kind === 'truckersmp' ? UsersRound : CircleHelp;
   return <Badge variant={mode.tone} className="max-w-full whitespace-normal text-left" data-testid={testId}><Icon aria-hidden="true" className="size-3.5 shrink-0" strokeWidth={1.8} /><span className="min-w-0 break-words">{mode.text}</span></Badge>;
 }
 interface Filters {game?: JournalGame; outcome?: JournalOutcome; completeness?: JournalCompleteness}
