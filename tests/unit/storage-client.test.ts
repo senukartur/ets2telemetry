@@ -51,6 +51,16 @@ const code = (result: Result<unknown> | undefined) => result && !result.ok ? res
 const error = (value: StorageErrorCode) => ({ok: false, error: storageError(value)});
 
 describe('StorageClient command flow', () => {
+  it('copies only the private sample mode/page fields without allowing extra worker authority', async () => {
+    const f = fixture(); const scope = {tripUuid: P1, injected: true}, page = {limit: 2, includeExcluded: true, injected: true};
+    const request = f.client.listSamples(scope, page);
+    page.includeExcluded = false;
+    expect(f.sent[0].command).toEqual({name: 'listSamples', scope: {tripUuid: P1}, page: {afterId: undefined, limit: 2, includeExcluded: true}});
+    f.ok(1, []); await request;
+    for (const includeExcluded of [true, false, undefined]) expect(parseRequest({type:'storage.request',id:1,command:{name:'listSamples',scope:{tripUuid:P1},page:{includeExcluded}}}).ok).toBe(true);
+    for (const page of [{includeExcluded: 'true'}, {includeExcluded: 1}, {includeExcluded: null}, {injected: true}])
+      expect(parseRequest({type:'storage.request',id:1,command:{name:'listSamples',scope:{tripUuid:P1},page}})).toEqual({ok:false,id:1});
+  });
   it('sends one command at a time with monotonic request ids and returns each result', async () => {
     const f = fixture();
     const first = f.client.committedThrough(P1), second = f.client.committedThrough(P1), third = f.client.storageInfo();

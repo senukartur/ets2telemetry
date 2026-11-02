@@ -115,17 +115,17 @@ let steamRoot: string | undefined;
 const hardModeLifetime = new AbortController();
 let steamDiscoveryStarted = false;
 const hardMode = new HardModeMonitor((source, ns, at, signal) => {
-  if (hardModeReader) return hardModeReader.read(source, ns, at, signal);
   const documents = process.env.ETS2TELEMETRY_DOCUMENTS;
-  if (!documents) return Promise.reject(new Error('Documents unavailable'));
-  const reader = hardModeReader ??= new HardModeReader({documents, get steamRoot() {return steamRoot;}, process: inspectGameProcess});
-  return reader.read(source, ns, at, signal);
+  if (!hardModeReader && !documents) return Promise.reject(new Error('Documents unavailable'));
+  const reader = hardModeReader ??= new HardModeReader({documents: documents!, get steamRoot() {return steamRoot;}, process: inspectGameProcess});
+  // The monitor owns the only scan cadence; independent consumers share this fresh physical operation.
+  return profileObserver.readSettings(reader, source, ns, at, signal);
 }, observation => {
   if (hardModeGame) runtime.observeHardMode(hardModeGame, observation);
   port.postMessage(hardMode.publication());
 });
 let hardModeReader: HardModeReader | undefined = hardModeFixtureReader(process.env) ?? undefined;
-const profileObserver = new ProfileObserver(() => hardModeReader);
+const profileObserver = new ProfileObserver(() => hardModeReader, undefined, false);
 let lastV1: V1SourceState | undefined;
 /** Republishes only for a change the projection shows: a clock mapping or durable status update alone is not one. */
 function onV1State(state: V1SourceState): void {
@@ -134,7 +134,7 @@ function onV1State(state: V1SourceState): void {
   const current = state.fresh && state.observation && (state.status === 'connected' || state.status === 'paused') ? state.observation : undefined;
   if (current?.source.origin === 'game' && !steamDiscoveryStarted) {steamDiscoveryStarted = true; void readSteamRoot({signal: hardModeLifetime.signal}).then(root => {if (root.kind === 'found') steamRoot = root.path;}, () => undefined);}
   profileObserver.select(current ? {gameClockId:current.state.gameTime.clockId,source: current.source, monotonicNs: current.capture.monotonicNs, clockId: current.capture.clockId, boundary: state.clockBoundary} : null);
-  hardMode.select(current ? {source: current.source, monotonicNs: current.capture.monotonicNs, clockId: current.capture.clockId, boundary: state.clockBoundary} : null);
+  hardMode.select(current ? {gameClockId:current.state.gameTime.clockId,source: current.source, monotonicNs: current.capture.monotonicNs, clockId: current.capture.clockId, boundary: state.clockBoundary} : null);
   hardModeGame = current?.source.game ?? hardModeGame;
   const previous = lastV1; lastV1 = state;
   if (previous && previous.selection === state.selection && previous.status === state.status && previous.reason === state.reason &&
@@ -324,4 +324,4 @@ port.on('message', event => {
 });
 void probe.start();
 runtime.start();
-hardMode.start(); profileObserver.start();
+hardMode.start();

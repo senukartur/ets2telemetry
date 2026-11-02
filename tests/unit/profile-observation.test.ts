@@ -14,7 +14,7 @@ const loaded=(namespace='home')=>`${log}Loading save. /${namespace}/profiles/${p
 let root:string,game:string;
 beforeEach(async()=>{root=await mkdtemp(path.join(os.tmpdir(),'et063-profile-'));game=path.join(root,'Euro Truck Simulator 2');await mkdir(path.join(game,'profiles',profile),{recursive:true});await writeFile(path.join(game,'game.log.txt'),loaded());});
 afterEach(async()=>{await rm(root,{recursive:true,force:true});});
-const reader=()=>new HardModeReader({documents:root,process:(s)=>Promise.resolve({pid:s.processId,createdUtcMs:created,executable:'C:/Synthetic/eurotrucks2.exe',commandLine:'eurotrucks2.exe'})});
+const reader=(nowNs?:()=>bigint)=>new HardModeReader({documents:root,nowNs,process:(s)=>Promise.resolve({pid:s.processId,createdUtcMs:created,executable:'C:/Synthetic/eurotrucks2.exe',commandLine:'eurotrucks2.exe'})});
 const resolve=(r=reader(),s=source)=>r.resolveProfile(s,created+10000,new AbortController().signal);
 describe('REG-003/008 independent verified profile identity',()=>{
   it('survives process/plugin/log lifetime changes without requiring any settings file or a passing assessment',async()=>{
@@ -41,7 +41,7 @@ describe('REG-003/008 independent verified profile identity',()=>{
   });
   it('does not admit proof until a later same-clock probe and expires it without fresh verification',async()=>{
     let now=100n;
-    const r=reader(),observer=new ProfileObserver(()=>r,()=>now);
+    const r=reader(()=>now),observer=new ProfileObserver(()=>r,()=>now);
     observer.select({source,clockId:'clock',monotonicNs:'100'});await observer.refresh();
     expect(observer.evidence()).toBeUndefined();
     observer.select({source,clockId:'clock',monotonicNs:'200',boundary:{clockId:'clock',probeSentClientNs:'101',receivedSourceNs:'200'}});
@@ -52,7 +52,7 @@ describe('REG-003/008 independent verified profile identity',()=>{
   it('keeps an unbound result across the next scan tick so the next probe response can bind it',async()=>{
     let now=0n,reads=0;
     const resolved=await resolve();
-    const fake={resolveProfile:()=>{reads++;now+=1_000_000n;return Promise.resolve(resolved);}} as unknown as HardModeReader;
+    const fake={resolveProfile:()=>{reads++;now+=1_000_000n;return Promise.resolve({...resolved,timing:{startedClientNs:now-1_000_000n,completedClientNs:now}});}} as unknown as HardModeReader;
     const observer=new ProfileObserver(()=>fake,()=>now);
     observer.select({source,clockId:'clock',monotonicNs:'1'});await observer.refresh();
     now=1_000_000_000n;await observer.refresh();expect(reads).toBe(1);
@@ -65,11 +65,27 @@ describe('REG-003/008 independent verified profile identity',()=>{
     const resolved=await resolve();
     const fake={resolveProfile:()=>{reads++;return new Promise<Awaited<ReturnType<HardModeReader['resolveProfile']>>>(r=>{finish=r;});}} as unknown as HardModeReader;
     const observer=new ProfileObserver(()=>fake,()=>now);
-    observer.select({source,clockId:'clock',monotonicNs:'1'});finish!(resolved);await observer.refresh();
+    observer.select({source,clockId:'clock',monotonicNs:'1'});finish!({...resolved,timing:{startedClientNs:now,completedClientNs:now}});await observer.refresh();
     now=3_000_000_001n;const expired=observer.refresh();expect(reads).toBe(2);
     observer.select({source,clockId:'changed',monotonicNs:'2'});finish!(resolved);await expired;
     expect(observer.evidence()).toBeUndefined();
     now=5_000_000_000n;const closing=observer.refresh();observer.close();finish!(resolved);await closing;
     observer.select(null);expect(observer.evidence()).toBeUndefined();
+  });
+  it.each(['game','origin','processId','windowsSessionId','processInstanceId','pluginSessionId','clockId','gameClockId'] as const)('retires an in-flight proof when %s changes',async field=>{
+    let now=0n,signal:AbortSignal|undefined,finish!: (value:Awaited<ReturnType<HardModeReader['resolveProfile']>>)=>void;
+    const resolved=await resolve(),fake={resolveProfile:(_s:SourceIdentity,_at:number,s:AbortSignal)=>{signal=s;return new Promise<Awaited<ReturnType<HardModeReader['resolveProfile']>>>(done=>{finish=done;});}} as unknown as HardModeReader;
+    const observer=new ProfileObserver(()=>fake,()=>now,false),initial={source,clockId:'clock',gameClockId:'game-clock',monotonicNs:'1'};
+    observer.select(initial);const work=observer.refresh();
+    const next=structuredClone(initial);
+    if(field==='clockId'||field==='gameClockId')next[field]='changed';
+    else if(field==='game')next.source.game='ats';
+    else if(field==='origin')next.source.origin='replay';
+    else if(field==='processId'||field==='windowsSessionId')next.source[field]++;
+    else next.source[field]='30000000-0000-4000-8000-000000000003';
+    observer.select(next);expect(signal!.aborted).toBe(true);
+    finish({...resolved,timing:{startedClientNs:0n,completedClientNs:now}});await work;
+    now=100n;observer.select({...next,boundary:{clockId:next.clockId,probeSentClientNs:'100',receivedSourceNs:'2'}});
+    expect(observer.evidence()).toBeUndefined();observer.close();
   });
 });

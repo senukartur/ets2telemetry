@@ -141,7 +141,8 @@ export class StorageClient {
     if (page === undefined) return this.#request({name: 'listTrips'});
     return this.#request({name: 'listTrips', page: isObject(page) ? {cursor: page.cursor, limit: page.limit, game: page.game, outcome: page.outcome} : page});
   }
-  listSamples(scope: {tripUuid: string} | {pluginSessionId: string}, page?: {afterId?: string; limit?: number}): Promise<Result<SampleRecord[]>> { return this.#request({name: 'listSamples', scope, page}); }
+  listSamples(scope: {tripUuid: string} | {pluginSessionId: string}, page?: {afterId?: string; limit?: number; includeExcluded?: boolean}): Promise<Result<SampleRecord[]>> { return this.#request({name: 'listSamples', scope: isObject(scope) ? ('tripUuid' in scope ? {tripUuid: scope.tripUuid} : {pluginSessionId: scope.pluginSessionId}) : scope,
+    ...(page === undefined ? {} : {page: isObject(page) ? {afterId: page.afterId, limit: page.limit, includeExcluded: page.includeExcluded} : page})}); }
   storageInfo(): Promise<Result<StorageInfo>> { return this.#request({name: 'storageInfo'}); }
   /**
    * Journal reads (ET-016, J5). Queries and pages are copied field by field, so only their listed fields cross the

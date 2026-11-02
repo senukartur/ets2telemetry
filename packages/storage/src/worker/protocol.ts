@@ -39,7 +39,7 @@ export interface StorageCommands {
   listEvents: {args: {pluginSessionId: string; page?: {afterEventSeq?: Uint64; limit?: number}}; value: EventRow[]};
   getTrip: {args: {tripUuid: string}; value: TripRecord | undefined};
   listTrips: {args: {page?: TripPage}; value: TripList};
-  listSamples: {args: {scope: {tripUuid: string} | {pluginSessionId: string}; page?: {afterId?: string; limit?: number}}; value: SampleRecord[]};
+  listSamples: {args: {scope: {tripUuid: string} | {pluginSessionId: string}; page?: {afterId?: string; limit?: number; includeExcluded?: boolean}}; value: SampleRecord[]};
   storageInfo: {args: Record<never, never>; value: StorageInfo};
   /** Journal reads (ET-016 PR-2, J5); arguments and answers are checked strictly on both sides of the boundary. */
   journalTrips: {args: {query?: JournalTripsQuery}; value: JournalTripPage};
@@ -142,6 +142,10 @@ export function parseRequest(message: unknown): {ok: true; id: number; command: 
   }
   if ((name === 'upsertSession' || name === 'commitEvent' || name === 'commitGap') && !isRecord(command.input)) return {ok: false, id};
   if ((name === 'commitEvent' || name === 'commitGap') && isRecord(command.input) && command.input.hardModeFresh !== undefined && typeof command.input.hardModeFresh !== 'boolean') return {ok: false, id};
+  if (name === 'listSamples' && (!Object.keys(command).every(key => ['name', 'scope', 'page'].includes(key))
+    || !isRecord(command.scope) || Object.keys(command.scope).length !== 1
+    || !(isText(command.scope.tripUuid) || isText(command.scope.pluginSessionId))
+    || !optionalArgs(command.page, {afterId: isText, limit: field => typeof field === 'number', includeExcluded: field => typeof field === 'boolean'}))) return {ok: false, id};
   if (name === 'listTrips' && !optionalArgs(command.page, TRIP_PAGE_ARGS)) return {ok: false, id};
   if (name === 'observeHardMode' && (Object.keys(command).sort().join(',') !== 'fresh,game,name,observation' || !['ets2', 'ats'].includes(command.game as string) || !isHardModeObservation(command.observation) || typeof command.fresh !== 'boolean')) return {ok: false, id};
   if (name === 'recordCompleteness' && !optionalArgs(command.options, COMPLETENESS_OPTIONS_ARGS)) return {ok: false, id};

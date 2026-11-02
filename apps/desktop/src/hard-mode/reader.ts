@@ -12,6 +12,9 @@ export interface HardModeReaderOptions {
   /** Isolated smoke/test roots only; a fixture reader never accepts a real game source. */
   fixtureOrigin?: 'synthetic' | 'replay';
   process: (source: SourceIdentity, signal: AbortSignal) => Promise<GameProcess | null>;
+  /** Controlled clocks/file gates for isolated tests only. */
+  nowNs?: () => bigint;
+  file?: typeof readStableFile;
 }
 export interface BoundProfile {profile: string; storage: 'local' | 'cloud'; generation: number}
 /** New selections invalidate preceding save markers; a later save namespace supersedes old profile-type markers. */
@@ -78,24 +81,82 @@ async function profileDirectory(parent: string, profile: string): Promise<string
   if (matching.length !== 1) throw new Error('Profile ambiguous');
   return path.join(parent, matching[0].name);
 }
+export interface ReadTiming {startedClientNs: bigint; completedClientNs: bigint}
+export interface TimedHardModeObservation {observation: HardModeObservation; timing: ReadTiming}
+/** Shared verification failure, distinct from an independently unavailable settings assessment. */
+export class ProfileVerificationError extends Error {
+  constructor(cause: unknown) {super(cause instanceof Error ? cause.message : 'Profile verification failed', {cause});}
+}
+interface ResolvedProfile {root: string; local: string; config: string; profile: BoundProfile; scope: string; binding: string; timing: ReadTiming}
+interface ProfileScan {profile: ResolvedProfile; settings: HardModeObservation | null; settingsError?: unknown}
+interface ScanOperation {
+  key: string; source: SourceIdentity; atUtcMs: number; startedClientNs: bigint; controller: AbortController;
+  promise: Promise<ProfileScan>; resolve: (value: ProfileScan) => void; reject: (error: unknown) => void;
+  consumers: Set<object>; timer: ReturnType<typeof setTimeout>; settled: boolean;
+}
+const readError = (cause: unknown): Error => cause instanceof Error ? cause : new Error('Profile read failed', {cause});
+/** One physical scan, at most one pending source epoch; completed evidence is never cached for a later read. */
 export class HardModeReader {
-  private boundProfile: {process:string; generation:number; profile:string; scope:string} | undefined;
+  private boundProfile: {process: string; generation: number; profile: string; scope: string} | undefined;
   private previous: {process: string; identity: string; text: string} | undefined;
+  private running: ScanOperation | undefined;
+  private queued: ScanOperation | undefined;
   constructor(private readonly options: HardModeReaderOptions) {}
-  async resolveProfile(source: SourceIdentity, atUtcMs: number, signal: AbortSignal) {
-    if (source.origin !== (this.options.fixtureOrigin ?? 'game')) throw new Error('Real evidence cannot qualify a fixture');
-    const process = await this.options.process(source, signal), expected = source.game === 'ets2' ? 'eurotrucks2.exe' : 'amtrucks.exe';
-    if (!process || process.pid !== source.processId || path.win32.basename(process.executable).toLowerCase() !== expected || !Number.isFinite(process.createdUtcMs) || process.createdUtcMs > atUtcMs) throw new Error('Process unproven');
-    const override = /(?:^|\s)-homedir\s+(?:"([^"]+)"|(\S+))/i.exec(process.commandLine);
-    const root = await realpath(override ? override[1] ?? override[2] : path.join(this.options.documents, source.game === 'ets2' ? 'Euro Truck Simulator 2' : 'American Truck Simulator'));
-    const log = await readStableFile(path.join(root, 'game.log.txt'), LOG_BYTES, signal);
-    if (!Number.isFinite(logCreation(log.text)) || Math.abs(logCreation(log.text) - process.createdUtcMs) > 5000) throw new Error('Stale log generation');
-    const processKey = `${source.processId}:${source.windowsSessionId}:${process.createdUtcMs}:${source.processInstanceId}:${source.pluginSessionId}`;
-    const previous = this.previous;
-    this.previous = {process: processKey, identity: log.identity, text: log.text};
-    if (previous?.process === processKey && (previous.identity !== log.identity || !log.text.startsWith(previous.text))) throw new Error('Log replaced or truncated');
-    const profile = profileFromLog(log.text);
-    if (!profile) throw new Error('Current profile unproven');
+  private nowNs(): bigint {return (this.options.nowNs ?? (() => process.hrtime.bigint()))();}
+  private file(filename: string, limit: number, signal: AbortSignal) {return (this.options.file ?? readStableFile)(filename, limit, signal);}
+  private request(source: SourceIdentity, atUtcMs: number, signal: AbortSignal): Promise<ProfileScan> {
+    signal.throwIfAborted();
+    const key = JSON.stringify([source.game, source.origin, source.processId, source.windowsSessionId, source.processInstanceId, source.pluginSessionId]);
+    let operation = this.running?.key === key && !this.running.settled && !this.running.controller.signal.aborted ? this.running
+      : this.queued?.key === key && !this.queued.controller.signal.aborted ? this.queued : undefined;
+    if (!operation) {
+      if (this.running) this.cancel(this.running);
+      if (this.queued) this.cancel(this.queued);
+      const controller = new AbortController();
+      let resolve!: ScanOperation['resolve'], reject!: ScanOperation['reject'];
+      const promise = new Promise<ProfileScan>((yes, no) => {resolve = yes; reject = no;});
+      void promise.catch(() => undefined);
+      operation = {key, source: {...source}, atUtcMs, startedClientNs: this.nowNs(), controller, promise, resolve, reject,
+        consumers: new Set(), timer: setTimeout(() => this.cancel(operation!), 2000), settled: false};
+      if (this.running) this.queued = operation; else this.run(operation);
+    }
+    const work = operation;
+    return new Promise<ProfileScan>((resolve, reject) => {
+      const consumer = {}; work.consumers.add(consumer);
+      let finished = false;
+      const finish = (action: () => void) => {
+        if (finished) return;
+        finished = true; signal.removeEventListener('abort', cancel); work.controller.signal.removeEventListener('abort', cancelled);
+        work.consumers.delete(consumer); action();
+        if (!work.settled && work.consumers.size === 0) this.cancel(work);
+      };
+      const cancel = () => finish(() => reject(readError(signal.reason)));
+      const cancelled = () => finish(() => reject(readError(work.controller.signal.reason)));
+      signal.addEventListener('abort', cancel, {once: true}); work.controller.signal.addEventListener('abort', cancelled, {once: true});
+      if (signal.aborted) cancel(); else if (work.controller.signal.aborted) cancelled();
+      work.promise.then(value => finish(() => resolve(value)), error => finish(() => reject(readError(error))));
+    });
+  }
+  private cancel(work: ScanOperation): void {
+    work.controller.abort();
+    if (this.queued === work) {
+      this.queued = undefined; clearTimeout(work.timer); work.settled = true; work.reject(work.controller.signal.reason);
+    }
+  }
+  private run(work: ScanOperation): void {
+    this.running = work;
+    void this.scan(work).then(value => {work.settled = true; work.resolve(value);}, error => {
+      work.settled = true; work.reject(work.controller.signal.aborted ? work.controller.signal.reason : new ProfileVerificationError(error));
+    }).finally(() => {
+      clearTimeout(work.timer); this.running = undefined;
+      const next = this.queued; this.queued = undefined;
+      if (next) {
+        if (next.controller.signal.aborted) {clearTimeout(next.timer); next.settled = true; next.reject(next.controller.signal.reason);}
+        else this.run(next);
+      }
+    });
+  }
+  private async location(source: SourceIdentity, root: string, profile: BoundProfile) {
     const local = await profileDirectory(path.join(root, profile.storage === 'local' ? 'profiles' : 'steam_profiles'), profile.profile);
     let config = path.join(local, 'config.cfg');
     if (profile.storage === 'cloud') {
@@ -116,28 +177,64 @@ export class HardModeReader {
       if (candidates.length !== 1) throw new Error('Cloud candidate ambiguous');
       config = candidates[0];
     }
-    const again = await readStableFile(path.join(root, 'game.log.txt'), LOG_BYTES, signal), latest = profileFromLog(again.text);
-    if (again.identity !== log.identity || !again.text.startsWith(log.text) || JSON.stringify(latest) !== JSON.stringify(profile)) throw new Error('Profile changed during read');
-    const current = await this.options.process(source, signal);
-    if (!current || current.pid !== process.pid || current.createdUtcMs !== process.createdUtcMs) throw new Error('Process changed');
     const directory = await realpath(path.dirname(config)), localDirectory=await realpath(local);
     if (path.resolve(directory).toLowerCase()!==path.resolve(path.dirname(config)).toLowerCase() || path.resolve(localDirectory).toLowerCase()!==path.resolve(local).toLowerCase()) throw new Error('Redirected profile');
     const identity = await stat(directory), localIdentity = await stat(local);
     if (!identity.isDirectory() || !localIdentity.isDirectory()) throw new Error('Profile directory unproven');
     const scope = createHash('sha256').update(JSON.stringify([1, source.game, root.toLowerCase(), profile.storage, directory.toLowerCase(),
       identity.dev, identity.ino, identity.birthtimeMs, localIdentity.dev, localIdentity.ino, localIdentity.birthtimeMs])).digest('hex');
-    const bound=this.boundProfile;
-    if (bound?.process===processKey && bound.generation===profile.generation && bound.profile===profile.profile && bound.scope!==scope) throw new Error('Profile directory replaced');
-    this.boundProfile={process:processKey,generation:profile.generation,profile:profile.profile,scope};
-    return {root, local, config, profile, scope, binding: createHash('sha256').update(`${processKey}:${log.identity}:${JSON.stringify(profile)}:${scope}`).digest('hex')};
+    return {root, local, config, profile, scope};
+  }
+  private async scan(work: ScanOperation): Promise<ProfileScan> {
+    const {source, atUtcMs, controller} = work, signal = controller.signal;
+    signal.throwIfAborted();
+    if (source.origin !== (this.options.fixtureOrigin ?? 'game')) throw new Error('Real evidence cannot qualify a fixture');
+    const process = await this.options.process(source, signal), expected = source.game === 'ets2' ? 'eurotrucks2.exe' : 'amtrucks.exe';
+    if (!process || process.pid !== source.processId || path.win32.basename(process.executable).toLowerCase() !== expected || !Number.isFinite(process.createdUtcMs) || process.createdUtcMs > atUtcMs) throw new Error('Process unproven');
+    const override = /(?:^|\s)-homedir\s+(?:"([^"]+)"|(\S+))/i.exec(process.commandLine);
+    const root = await realpath(override ? override[1] ?? override[2] : path.join(this.options.documents, source.game === 'ets2' ? 'Euro Truck Simulator 2' : 'American Truck Simulator'));
+    const log = await this.file(path.join(root, 'game.log.txt'), LOG_BYTES, signal);
+    if (!Number.isFinite(logCreation(log.text)) || Math.abs(logCreation(log.text) - process.createdUtcMs) > 5000) throw new Error('Stale log generation');
+    const processKey = `${source.processId}:${source.windowsSessionId}:${process.createdUtcMs}:${source.processInstanceId}:${source.pluginSessionId}`;
+    const previous = this.previous, bound = this.boundProfile;
+    if (previous?.process === processKey && (previous.identity !== log.identity || !log.text.startsWith(previous.text))) throw new Error('Log replaced or truncated');
+    const profile = profileFromLog(log.text);
+    if (!profile) throw new Error('Current profile unproven');
+    const resolved = await this.location(source, root, profile);
+    if (bound?.process === processKey && bound.generation === profile.generation && bound.profile === profile.profile && bound.scope !== resolved.scope) throw new Error('Profile directory replaced');
+    let settings: HardModeObservation | null = null, settingsError: unknown;
+    try {
+      const files = await Promise.allSettled([this.file(path.join(root, 'config.cfg'), CONFIG_BYTES, signal), this.file(path.join(resolved.local, 'config_local.cfg'), CONFIG_BYTES, signal), this.file(resolved.config, CONFIG_BYTES, signal)]);
+      const [global, localSettings, values] = files.map(file => {if (file.status === 'rejected') throw file.reason; return parseHardModeConfig(file.value.text);});
+      settings = {assessment: evaluateHardMode({...values, g_traffic: global.g_traffic, g_brake_intensity: localSettings.g_brake_intensity}, atUtcMs, this.options.fixtureOrigin ? 'fixture' : profile.storage),
+        binding: '', pluginSessionId: source.pluginSessionId, sourceMonotonicNs: null};
+    } catch (error) {settingsError = error;}
+    const again = await this.file(path.join(root, 'game.log.txt'), LOG_BYTES, signal), latest = profileFromLog(again.text);
+    if (again.identity !== log.identity || !again.text.startsWith(log.text) || JSON.stringify(latest) !== JSON.stringify(profile)) throw new Error('Profile changed during read');
+    const checked = await this.location(source, root, profile);
+    if (checked.scope !== resolved.scope || checked.config !== resolved.config) throw new Error('Profile directory changed during read');
+    const current = await this.options.process(source, signal);
+    if (!current || current.pid !== process.pid || current.createdUtcMs !== process.createdUtcMs || current.executable !== process.executable || current.commandLine !== process.commandLine) throw new Error('Process changed');
+    signal.throwIfAborted();
+    const timing = {startedClientNs: work.startedClientNs, completedClientNs: this.nowNs()};
+    if (timing.completedClientNs - timing.startedClientNs >= 2_000_000_000n) throw new Error('Read deadline');
+    const binding = createHash('sha256').update(processKey + ':' + log.identity + ':' + JSON.stringify(profile) + ':' + resolved.scope).digest('hex');
+    // Commit both baselines only after this ordered operation has passed every shared verification.
+    this.previous = {process: processKey, identity: again.identity, text: again.text};
+    this.boundProfile = {process: processKey, generation: profile.generation, profile: profile.profile, scope: resolved.scope};
+    if (settings) settings.binding = binding;
+    return {profile: {...resolved, binding, timing}, settings, settingsError};
+  }
+  async resolveProfile(source: SourceIdentity, atUtcMs: number, signal: AbortSignal): Promise<ResolvedProfile> {
+    return structuredClone((await this.request(source, atUtcMs, signal)).profile);
+  }
+  async readTimed(source: SourceIdentity, sourceMonotonicNs: string, atUtcMs: number, signal: AbortSignal, verified?: (binding: string) => void): Promise<TimedHardModeObservation> {
+    const result = await this.request(source, atUtcMs, signal);
+    verified?.(result.profile.binding);
+    if (!result.settings) throw result.settingsError;
+    return {observation: {...structuredClone(result.settings), sourceMonotonicNs}, timing: {...result.profile.timing}};
   }
   async read(source: SourceIdentity, sourceMonotonicNs: string, atUtcMs: number, signal: AbortSignal): Promise<HardModeObservation> {
-    const resolved = await this.resolveProfile(source, atUtcMs, signal), {root, local, config, profile} = resolved;
-    const files = await Promise.all([readStableFile(path.join(root, 'config.cfg'), CONFIG_BYTES, signal), readStableFile(path.join(local, 'config_local.cfg'), CONFIG_BYTES, signal), readStableFile(config, CONFIG_BYTES, signal)]);
-    const [global, localSettings, settings] = files.map(f => parseHardModeConfig(f.text));
-    const checked = await this.resolveProfile(source, atUtcMs, signal);
-    if (checked.binding !== resolved.binding) throw new Error('Profile changed during settings read');
-    return {assessment: evaluateHardMode({...settings, g_traffic: global.g_traffic, g_brake_intensity: localSettings.g_brake_intensity}, atUtcMs, this.options.fixtureOrigin ? 'fixture' : profile.storage),
-      binding: resolved.binding, pluginSessionId: source.pluginSessionId, sourceMonotonicNs};
+    return (await this.readTimed(source, sourceMonotonicNs, atUtcMs, signal)).observation;
   }
 }

@@ -16,6 +16,8 @@ import {TripRecorderSink} from '../../apps/desktop/src/trip-recorder';
 import {StorageClient} from '../../packages/storage/src/client';
 import {storageWorker} from './recording-helpers';
 import {seedSample} from '../shared/journal-seed';
+import {JournalService} from '../../apps/desktop/src/journal-service';
+import {JournalExporter} from '../../apps/desktop/src/journal-export-writer';
 
 let ws: Awaited<ReturnType<typeof workspace>>;
 beforeEach(async () => {ws = await workspace();});
@@ -111,7 +113,7 @@ describe('REG-003/005/008/012/014 durable logical trips', () => {
     accepted(await recorder.samples.write(3600,true));
     const detail=validateJournalTripDetail(ok(await client.journalTrip(uuid)));
     expect(detail.trip.observedDistanceM).toEqual({available:true,value:100});expect(detail.trip.fuelUsedL).toEqual({available:true,value:0});
-    expect(ok(await client.listSamples({tripUuid:uuid},{limit:3600}))).toHaveLength(4);
+    expect(ok(await client.listSamples({tripUuid:uuid},{limit:3600,includeExcluded:true}))).toHaveLength(4);
     expect(await client.close()).toEqual({clean:true});
   });
   it.each([
@@ -205,7 +207,7 @@ describe('REG-003/005/008/012/014 durable logical trips', () => {
     const checkpointRow=rows.find(row=>row.odometer.available && row.odometer.value===222000)!;
     expect(checkpointRow.tripUuid).toBeNull();
     const second=attachTripUuidFor(ETS2_A,'3');
-    for(const uuid of [first,second])expect(ok(await client.listSamples({tripUuid:uuid},{limit:3600})).some(row=>row.id===checkpointRow.id)).toBe(false);
+    for(const uuid of [first,second])expect(ok(await client.listSamples({tripUuid:uuid},{limit:3600,includeExcluded:true})).some(row=>row.id===checkpointRow.id)).toBe(false);
     expect(rows.find(row=>row.odometer.available && row.odometer.value===333000)?.tripUuid).toBe(second);
     expect(await client.close()).toEqual({clean:true});
   });
@@ -227,7 +229,7 @@ describe('REG-003/005/008/012/014 durable logical trips', () => {
     const detail=validateJournalTripDetail(ok(storage.journalTrip(uuid)));
     expect(detail.trip.observedDistanceM.available).toBe(false);expect(detail.trip.fuelUsedL.available).toBe(false);
     expect(detail.money).toEqual({incomplete:true,totals:[],unavailable:[]});
-    const retained=ok(storage.listSamples({tripUuid:uuid},{limit:3600}));expect(retained).toHaveLength(4);
+    const retained=ok(storage.listSamples({tripUuid:uuid},{limit:3600,includeExcluded:true}));expect(retained).toHaveLength(4);
     expect(retained.map(row=>row.accountingIncluded)).toEqual([false,false,true,true]);
     expect(ok(storage.listSamples({tripUuid:uuid},{limit:300}))).toHaveLength(2);
     ok(storage.close());readOnly(ws.database,db=>expect(db.prepare('SELECT observed_distance_m,fuel_used_l FROM trips').get()).toEqual({observed_distance_m:140,fuel_used_l:14}));
@@ -241,7 +243,7 @@ describe('REG-003/005/008/012/014 durable logical trips', () => {
     sample(storage,a,uuid,4,1000150,job(),{previous:boundary==='dropped-predecessor'?{tripUuid:uuid,sourceClockId:a.clockId,monotonicNs:'3000000000'}:undefined});
     const detail=validateJournalTripDetail(ok(storage.journalTrip(first)));
     expect(detail.trip.observedDistanceM.available).toBe(false);expect(detail.trip.fuelUsedL.available).toBe(false);
-    expect(ok(storage.listSamples({tripUuid:first},{limit:3600}))).toHaveLength(3);
+    expect(ok(storage.listSamples({tripUuid:first},{limit:3600,includeExcluded:true}))).toHaveLength(3);
   });
   it('includes later member trailers through bounded snapshot memberships and retains the earlier export detail',async()=>{
     const storage=await ws.open(),a=new Script(ETS2_A),first=open(storage,a);close(storage,a,first);
@@ -318,11 +320,70 @@ describe('REG-003/005/008/012/014 durable logical trips', () => {
     expect(after.money).toEqual({incomplete:true,totals:[],unavailable:[]});
     const current=ok(storage.listSamples({tripUuid:uuid},{afterId:after.exportBounds.snapshot!.samples,limit:300}));
     expect(current.map(s=>s.odometer.available?s.odometer.value:null)).toEqual([1000000,1000050,1000060,1000100]);
-    const raw=ok(storage.listSamples({tripUuid:uuid},{afterId:after.exportBounds.snapshot!.samples,limit:3600}));
+    expect(ok(storage.listSamples({tripUuid:uuid})).map(s=>s.id)).toEqual(current.map(s=>s.id));
+    expect(ok(storage.listSamples({tripUuid:uuid},{limit:3600})).map(s=>s.id)).toEqual(current.map(s=>s.id));
+    const raw=ok(storage.listSamples({tripUuid:uuid},{afterId:after.exportBounds.snapshot!.samples,limit:3600,includeExcluded:true}));
     expect(raw.map(s=>s.accountingIncluded)).toEqual([true,true,false,true,true]);
-    const old=ok(storage.listSamples({tripUuid:uuid},{afterId:before.exportBounds.snapshot!.samples,limit:3600}));
+    const old=ok(storage.listSamples({tripUuid:uuid},{afterId:before.exportBounds.snapshot!.samples,limit:3600,includeExcluded:true}));
     expect(old.map(s=>s.accountingIncluded)).toEqual([true,true,true]);
     expect(before.trip.observedDistanceM).toEqual({available:true,value:100});
+    for(const includeExcluded of [false,true]) {
+      let cursor=after.exportBounds.snapshot!.samples;
+      const ids:string[]=[];
+      for (;;) {
+        const page=ok(storage.listSamples({tripUuid:uuid},{afterId:cursor,limit:2,includeExcluded}));
+        ids.push(...page.map(row=>row.id));
+        if(page.length<2)break;
+        cursor=cursor.slice(0,cursor.lastIndexOf(':')+1)+page.at(-1)!.id;
+      }
+      expect(ids).toEqual((includeExcluded?raw:current).map(row=>row.id));
+      expect(new Set(ids).size).toBe(ids.length);
+    }
+    sample(storage,a,uuid,6,1000150);
+    expect(ok(storage.listSamples({tripUuid:uuid},{afterId:after.exportBounds.snapshot!.samples,limit:2,includeExcluded:true})).map(row=>row.id)).toEqual(raw.slice(0,2).map(row=>row.id));
+    expect(ok(storage.listSamples({tripUuid:uuid},{afterId:before.exportBounds.snapshot!.samples})).map(row=>row.id)).toEqual(old.map(row=>row.id));
+  });
+  it('keeps ordinary single-member exact-endpoint breaks supported and advanced gaps unavailable after later driving',async()=>{
+    const storage=await ws.open(),s=new Script(ETS2_A),uuid=open(storage,s);
+    sample(storage,s,uuid,1,1000000);sample(storage,s,uuid,2,1000100);
+    // A pause/reconnect with the exact observed truck, odometer and fuel endpoint can resume its supported prefix.
+    sample(storage,s,uuid,8,1000100,job(),{previous:undefined});sample(storage,s,uuid,9,1000150);
+    const supported=validateJournalTripDetail(ok(storage.journalTrip(uuid)));
+    expect(supported.trip.observedDistanceM).toEqual({available:true,value:150});
+    expect(supported.trip.fuelUsedL.available).toBe(true);
+    sample(storage,s,uuid,11,1000200,job(),{previous:undefined});sample(storage,s,uuid,12,1000250);
+    const unavailable=validateJournalTripDetail(ok(storage.journalTrip(uuid)));
+    expect(unavailable.trip.observedDistanceM.available).toBe(false);expect(unavailable.trip.fuelUsedL.available).toBe(false);
+    expect(ok(storage.listSamples({tripUuid:uuid},{includeExcluded:true}))).toHaveLength(6);
+    ok(storage.close());readOnly(ws.database,db=>{
+      expect(db.prepare('SELECT count(*) AS n FROM trips').get()).toEqual({n:1});
+      expect(db.prepare('SELECT count(*) AS n FROM logical_memberships').get()).toEqual({n:1});
+      expect(db.prepare('SELECT count(*) AS n FROM samples').get()).toEqual({n:6});
+    });
+  });
+  it('passes explicit raw mode through the real worker and Journal export independently of page size',async()=>{
+    const storage=await ws.open(),s=new Script(ETS2_A),uuid=open(storage,s);
+    for(const [second,odo] of [[1,1000000],[2,1000050],[3,1000100],[4,1000060],[5,1000100]])sample(storage,s,uuid,second,odo);
+    ok(storage.close());
+    const worker=storageWorker(),client=new StorageClient(worker.handle);
+    const summary=ok(await client.open({path:ws.database,backupsDirectory:ws.backups,purpose:'synthetic',appVersion:'test'}));
+    const database={purpose:'synthetic',schemaVersion:4} as const;
+    const service=new JournalService({history:{state:'open',failureCode:null,client,database,databaseUuid:summary.databaseUuid},stopping:()=>false,log:()=>undefined});
+    const selected=ok(await client.listSamples({tripUuid:uuid}));expect(selected.map(row=>row.id)).toEqual(['1','2','4','5']);
+    for(const limit of [300,3600]){
+      const query={kind:'samples',tripUuid:uuid,page:{limit},includeExcluded:true} as const;
+      const page=await service.query(query);expect(page.ok).toBe(true);
+      expect(parseJournalReply(query,page)).toEqual(page);
+      if(page.ok)expect((page.value as {samples:{id:string}[]}).samples.map(row=>row.id)).toEqual(['1','2','3','4','5']);
+    }
+    const file=path.join(ws.directory,'raw-trip.json');
+    const exporter=new JournalExporter({read:query=>service.query(query),showSaveDialog:()=>Promise.resolve({canceled:false,filePath:file}),
+      documents:()=>undefined,localAppData:ws.directory,appVersion:'test',log:()=>undefined});
+    const result=await exporter.export(uuid);expect(result).toMatchObject({ok:true,value:{outcome:'saved',samples:5}});
+    const exported=JSON.parse(readFileSync(file,'utf8')) as {samples:{id:string;accountingIncluded:boolean}[]};
+    expect(exported.samples.map(row=>row.accountingIncluded)).toEqual([true,true,false,true,true]);
+    expect(ok(await client.listSamples({tripUuid:uuid},{limit:1,includeExcluded:true}))).toHaveLength(1);
+    expect(await client.close()).toEqual({clean:true});await worker.handle.terminate();
   });
   it('pages recording provenance beyond the detail bound without exposing private profile proof',async()=>{
     const storage=await ws.open();let first='';

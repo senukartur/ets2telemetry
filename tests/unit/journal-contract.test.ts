@@ -50,7 +50,9 @@ describe('main parses each journal invoke with its exact argument count and fixe
     ['list-intervals with a cursor beyond 2^63 - 1', 'intervals', [TRIP, '9223372036854775808']],
     ['list-intervals with a leading zero', 'intervals', [TRIP, '07']],
     ['list-samples with an invalid UUID', 'samples', ['7a000000-0000-4000-8000-00000000000', null]],
-    ['list-samples with a numeric cursor', 'samples', [TRIP, 11]]
+    ['list-samples with a numeric cursor', 'samples', [TRIP, 11]],
+    ['list-samples with a private export flag', 'samples', [TRIP, null, {includeExcluded: true}]],
+    ['list-samples with a private export cursor object', 'samples', [TRIP, {includeExcluded: true}]]
   ])('refuses %s', (_name, kind, args) => {
     expect(journalRequest(kind, args)).toBeUndefined();
   });
@@ -67,6 +69,15 @@ describe('main parses each journal invoke with its exact argument count and fixe
 });
 
 describe('the service parses the query main sent (J4)', () => {
+  it('copies the explicit private sample mode and refuses it on other queries or in renderer arguments', () => {
+    const query = {kind: 'samples', tripUuid: TRIP, includeExcluded: true, page: {limit: 300}};
+    const parsed = parseJournalQuery(query); expect(parsed).toEqual(query); expect(parsed).not.toBe(query);
+    expect((parsed as {page: object}).page).not.toBe(query.page);
+    expect(parseJournalQuery({...query, includeExcluded: 'true'})).toBeUndefined();
+    expect(parseJournalQuery({...query, kind: 'events'})).toBeUndefined();
+    expect(parseJournalQuery({...query, page: {...query.page, includeExcluded: true}})).toBeUndefined();
+    expect(journalRequest('samples', [TRIP, null])).toEqual({kind: 'samples', tripUuid: TRIP, page: {limit: 300}});
+  });
   it('accepts the dashboard and export page sizes of each read', () => {
     for (const query of [{kind: 'events', tripUuid: TRIP, page: {limit: 500, cursor: '9'}}, {kind: 'intervals', tripUuid: TRIP, page: {limit: 500}},
       {kind: 'samples', tripUuid: TRIP, page: {limit: 3_600, cursor: '1'}}, {kind: 'trips', query: {completeness: 'partial'}}, {kind: 'trip', tripUuid: TRIP}]) {

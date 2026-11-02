@@ -1,5 +1,5 @@
 import {describe, expect, it} from 'vitest';
-import {compatibleContinuation, continuationFingerprint, learnContinuationConstraints, matchContinuation} from '../../packages/telemetry-core/src/trips/continuation';
+import {compatibleContinuation, continuationFingerprint, learnContinuationConstraints} from '../../packages/telemetry-core/src/trips/continuation';
 import {job, otherJob} from '../shared/trip-messages';
 import {ETS2_A,r,Script,run,sessionInput} from '../shared/trip-messages';
 import {initialTripState,normalizeV1State,dueAttach,stepTrip,type TripInput} from '../../packages/telemetry-core/src';
@@ -20,14 +20,6 @@ describe('REG-003/004/008 continuation evidence', () => {
     expect(continuationFingerprint(job({cargoId: {available: false, reason: 'not-observed'}}))).toBeNull();
     expect(compatibleContinuation(job(), otherJob())).toBe(false);
     expect(compatibleContinuation(job(), job({plannedDistance: {available: true, value: 123, unit: 'm'}}))).toBe(false);
-  });
-  it('vetoes absent/different profile, different game, ambiguity and observed terminal outcomes', () => {
-    const a = {profile: 'verified-profile-a', game: 'ets2', job: job(), eligible: true};
-    expect(matchContinuation([a], 'ets2', a.profile, job())).toBe(a);
-    for (const profile of [null, 'other']) expect(matchContinuation([a], 'ets2', profile, job())).toBeNull();
-    expect(matchContinuation([a], 'ats', a.profile, job())).toBeNull();
-    expect(matchContinuation([a, {...a}], 'ets2', a.profile, job())).toBeNull();
-    expect(matchContinuation([{...a, eligible: false}], 'ets2', a.profile, job())).toBeNull();
   });
   it('closes the old recording before attaching an identical job on a newly verified profile',()=>{
     const script=new Script(ETS2_A),initial=run(initialTripState(),[sessionInput(script.welcome()),script.event(r.jobConfigured())]);

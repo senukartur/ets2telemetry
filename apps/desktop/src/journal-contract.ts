@@ -35,7 +35,8 @@ export const JOURNAL_EXPORT_SAMPLE_LIMIT = JOURNAL_SAMPLE_LIMITS[1];
 export type JournalQuery =
   | {kind: 'trips'; query: JournalTripsQuery}
   | {kind: 'trip'; tripUuid: string}
-  | {kind: 'events' | 'intervals' | 'samples'; tripUuid: string; page: JournalPageQuery}
+  | {kind: 'events' | 'intervals'; tripUuid: string; page: JournalPageQuery}
+  | {kind: 'samples'; tripUuid: string; page: JournalPageQuery; includeExcluded?: boolean}
   | {kind: 'database'};
 export type JournalQueryKind = JournalQuery['kind'];
 /** The reads the dashboard may request, one per read channel. */
@@ -102,11 +103,12 @@ export function parseJournalQuery(value: unknown): JournalQuery | undefined {
   if (value.kind === 'trip') return hasExactly(value, ['kind', 'tripUuid']) && isJournalUuid(value.tripUuid) ? {kind: 'trip', tripUuid: value.tripUuid} : undefined;
   if (value.kind === 'database') return hasExactly(value, ['kind']) ? {kind: 'database'} : undefined;
   const kind = value.kind;
-  if ((kind !== 'events' && kind !== 'intervals' && kind !== 'samples') || !hasExactly(value, ['kind', 'tripUuid', 'page']) || !isJournalUuid(value.tripUuid)) return undefined;
+  if ((kind !== 'events' && kind !== 'intervals' && kind !== 'samples') || !(hasExactly(value, ['kind', 'tripUuid', 'page']) || kind === 'samples' && hasExactly(value, ['kind', 'tripUuid', 'page', 'includeExcluded']) && typeof value.includeExcluded === 'boolean') || !isJournalUuid(value.tripUuid)) return undefined;
   const page = value.page;
   if (!isRecord(page) || !(hasExactly(page, ['limit']) || hasExactly(page, ['cursor', 'limit'])) || !PAGE_LIMITS[kind].includes(page.limit as number)) return undefined;
   if (page.cursor !== undefined && !pageCursor(kind, page.cursor)) return undefined;
-  return {kind, tripUuid: value.tripUuid, page: page.cursor === undefined ? {limit: page.limit as number} : {cursor: page.cursor as string, limit: page.limit as number}};
+  return {kind, tripUuid: value.tripUuid, page: page.cursor === undefined ? {limit: page.limit as number} : {cursor: page.cursor as string, limit: page.limit as number},
+    ...(kind === 'samples' && value.includeExcluded !== undefined ? {includeExcluded: value.includeExcluded as boolean} : {})};
 }
 
 /** Compile-time equality of two types. */

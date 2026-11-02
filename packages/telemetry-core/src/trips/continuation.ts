@@ -40,10 +40,3 @@ export function compatibleContinuation(a: JobConfiguration, b: JobConfiguration)
     return !x.available || !y.available || canonicalJson(x.value) === canonicalJson(y.value);
   });
 }
-export function matchContinuation<T extends {game: string; profile: string; job: JobConfiguration; eligible: boolean}>(
-  candidates: readonly T[], game: string, profile: string | null, job: JobConfiguration
-): T | null {
-  if (!profile || continuationFingerprint(job) === null) return null;
-  const eligible = candidates.filter(c => c.eligible && c.game === game && c.profile === profile && compatibleContinuation(c.job, job));
-  return eligible.length === 1 ? eligible[0] : null;
-}

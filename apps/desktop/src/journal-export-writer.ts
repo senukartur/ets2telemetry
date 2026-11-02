@@ -192,7 +192,7 @@ export class JournalExporter {
           return {rows: value.events, next: value.nextCursor};
         });
         await section('samples', async cursor => {
-          const value = page(await this.#value<JournalSamplePage>({kind: 'samples', tripUuid: detail.trip.tripUuid, page: {...(cursor ? {cursor} : {}), limit: JOURNAL_EXPORT_SAMPLE_LIMIT}}));
+          const value = page(await this.#value<JournalSamplePage>({kind: 'samples', tripUuid: detail.trip.tripUuid, includeExcluded: true, page: {...(cursor ? {cursor} : {}), limit: JOURNAL_EXPORT_SAMPLE_LIMIT}}));
           return {rows: value.samples, next: value.nextCursor};
         });
         await write(serializer.end());

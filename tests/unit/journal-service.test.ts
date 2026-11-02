@@ -138,6 +138,11 @@ describe('each query reads through the service database (J2, J5)', () => {
     f.answer(2, {ok: true, value: [SAMPLE]});
     await expect(short).resolves.toEqual({ok: true, value: {database: {purpose: 'synthetic', schemaVersion: 2}, samples: [SAMPLE], nextCursor: null}});
   });
+  it.each([true,false])('forwards explicit private sample mode %s independently of the page size',async includeExcluded=>{
+    const f=fixture(),result=f.service.query({kind:'samples',tripUuid:TRIP,includeExcluded,page:{cursor:'10',limit:300}});
+    expect(f.calls).toEqual([['listSamples',{tripUuid:TRIP},{afterId:'10',limit:300,includeExcluded}]]);
+    f.answer(0,{ok:true,value:[]});expect((await result).ok).toBe(true);
+  });
 });
 
 describe('storage results map to fixed J11 codes (J11)', () => {

@@ -127,8 +127,9 @@ export function listTrips(conn: StorageConnection, page: TripPage = {}): TripLis
 }
 
 /** Samples of one trip or one session in insertion order, at most 3,600 per page. `afterId` is the last `id` read. */
-export function listSamples(conn: StorageConnection, scope: {tripUuid: string} | {pluginSessionId: string}, page: {afterId?: string; limit?: number} = {}): SampleRecord[] {
+export function listSamples(conn: StorageConnection, scope: {tripUuid: string} | {pluginSessionId: string}, page: {afterId?: string; limit?: number; includeExcluded?: boolean} = {}): SampleRecord[] {
   plainObject(scope); plainObject(page);
+  if (Object.keys(page).some(key => !['afterId', 'limit', 'includeExcluded'].includes(key)) || page.includeExcluded !== undefined && typeof page.includeExcluded !== 'boolean') fail('INVALID_INPUT');
   const db = conn.reader(), max = limit(page.limit, MAX_SAMPLE_BATCH);
   if (page.afterId !== undefined && !isJournalSnapshotCursor(page.afterId) && !/^(0|[1-9][0-9]{0,18})$/.test(page.afterId)) fail('INVALID_INPUT');
   const after = BigInt(page.afterId?.startsWith('v4:') ? page.afterId.split(':')[5] : page.afterId ?? '0');
@@ -143,7 +144,7 @@ export function listSamples(conn: StorageConnection, scope: {tripUuid: string} |
         FROM logical_snapshot_memberships x JOIN samples s ON s.trip_ref=x.trip_ref JOIN trips t ON t.id=x.trip_ref JOIN plugin_sessions ps ON ps.id=s.plugin_session_ref
         WHERE x.logical_ref=@logical AND x.trip_ref<=@members AND x.from_revision<@revision AND (x.through_revision IS NULL OR x.through_revision>=@revision)
         AND s.id>@after AND s.id<=@through AND (@all=1 OR @head IS NULL OR ${INCLUDED_SAMPLE}) ORDER BY s.id LIMIT @limit`).all({head:snap.head,logical:snap.logical,members:snap.members,revision:snap.revision,
-          after,through:snap.samples,all: max === 3600 ? 1:0,limit:max}) as Record<string,unknown>[];
+          after,through:snap.samples,all: page.includeExcluded === true ? 1 : 0,limit:max}) as Record<string,unknown>[];
     } else rows = statement(db, 'SELECT * FROM samples WHERE trip_ref = ? AND id > ? ORDER BY trip_ref, id LIMIT ?').all(trip, after, max) as Record<string, unknown>[];
   } else rows = statement(db, 'SELECT * FROM samples WHERE plugin_session_ref = ? AND id > ? ORDER BY plugin_session_ref, id LIMIT ?').all(sessionId(db, scope.pluginSessionId), after, max) as Record<string, unknown>[];
   const clock = (ref: unknown) => String(statement(db, 'SELECT clock_uuid FROM clocks WHERE id = ?').pluck().get(ref));
