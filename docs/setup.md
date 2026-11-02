@@ -200,6 +200,16 @@ Remove-Item Env:ETS2TELEMETRY_RECORDING
 
 The service then opens `%LOCALAPPDATA%\ETS2Telemetry\synthetic\<name>.sqlite` with that purpose **instead of** the history database, and only the matching `synthetic` or `replay` selection requests durable v1 delivery, once that database is open. Game selections stay live-only, the history database is neither opened nor created, and the dashboard and overlay are unchanged. Any other value (for example `history`, an upper-case name or a path) logs `RECORDING_TARGET_REJECTED` and keeps the default: history opened, nothing recorded. Real game history is not recorded in this version. See [the recording gate](telemetry-service-v1.md#recording-gate-et-015a).
 
+## Raw channel probe
+
+`npm run channel:probe` records the raw per-frame SDK values of `truck.fuel.consumption.average`, `truck.speed`, `truck.engine.rpm` and `truck.fuel.amount` through the plugin's opt-in v0 diagnostics mode ([v0 transport](native-transport-v0.md)). It changes no plugin, protocol or application behavior and writes nothing to history. The probe takes the plugin's only live connection, so close Yukon Union Telemetry first. Without `--broker` it runs the broker of the newest installed staging build, which serves the staging plugin:
+
+```powershell
+npm run channel:probe -- --game ets2 --output "$env:USERPROFILE\Desktop\probe-1" --seconds 600
+```
+
+It waits for the game, reconnects after a disconnect and stops at the deadline (at most 3,600 s) or on Ctrl+C. The new output directory holds `frames.ndjson`, with one line per frame that carried a diagnostic batch: the connection, the plugin capture clock, the simulation state and the four raw values, where `null` means no callback in that frame. It also holds `summary.json`, with the zero share by simulation state and by standing or moving, the zero-run lengths in frames, their durations and start intervals in milliseconds, the frame interval and the frames the plugin coalesced. The files contain no source identity, but they are local evidence: do not commit them.
+
 ## Official SDK acquisition
 
 Download the official [SCS Telemetry SDK 1.15 archive](https://download.eurotrucksimulator2.com/scs_sdk_1_15.zip) from the source linked in `DESIGN-DECISIONS.md`. Review and retain its license before use or redistribution. Do not assume archive 1.15 is a telemetry API or game version. ET-003 will pin archive checksum, included API versions, headers, and license treatment. ET-001 has no SDK dependency and does not vendor SDK files or expose SCS initialization exports.

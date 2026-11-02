@@ -38,7 +38,8 @@
     "native:configure": "node scripts/configure-native-plugin.mjs",
     "native:build": "cmake --build native/telemetry-plugin/build --config Release --parallel",
     "native:test": "ctest --test-dir native/telemetry-plugin/build -C Release --output-on-failure",
-    "capture:export": "node tools/capture-export/build.mjs && node tools/capture-export/dist/cli.cjs"
+    "capture:export": "node tools/capture-export/build.mjs && node tools/capture-export/dist/cli.cjs",
+    "channel:probe": "node tools/channel-probe/build.mjs && node tools/channel-probe/dist/cli.cjs"
   },
   "dependencies": {
     "better-sqlite3": "13.0.3"
