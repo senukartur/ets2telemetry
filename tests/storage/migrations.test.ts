@@ -1,5 +1,7 @@
 import {copyFileSync, existsSync, readFileSync, writeFileSync} from 'node:fs';
 import path from 'node:path';
+import {createRequire} from 'node:module';
+import {assertHistoryFacts} from '../../scripts/installer/history-contract.mjs';
 import Database from 'better-sqlite3';
 import {afterEach, beforeEach, describe, expect, it} from 'vitest';
 import {MIGRATIONS as CURRENT_MIGRATIONS, openStorage, type Migration} from '../../packages/storage/src/index';
@@ -8,6 +10,9 @@ import {SCHEMA_V2} from '../../packages/storage/src/sqlite/schema-v2';
 import {digestOf, expectMigratedFromVersion1, expectRepresentative, failed, files, ok, readOnly, readVersion1, REPRESENTATIVE, sha256, workspace} from './helpers';
 
 // These historical ET-016 cases freeze versions 1/2. ET-026 migration 3 is covered in hard-mode-migrations.test.ts.
+const {collectHistory} = createRequire(import.meta.url)('../../scripts/installer/read-upgraded-history.cjs') as {
+  collectHistory(DatabaseConstructor: typeof Database, database: string, backups: string): {database: Record<string, unknown>; manifests: {manifest: Record<string, unknown>}[]}
+};
 const MIGRATIONS = CURRENT_MIGRATIONS.slice(0, 2);
 let ws: Awaited<ReturnType<typeof workspace>>;
 beforeEach(async () => { ws = await workspace(); const options = ws.options; ws.options = overrides => options({migrations: MIGRATIONS, ...overrides}); });
@@ -170,5 +175,53 @@ describe('REG-013 schema migrations', () => {
   it('creates a new database in an existing empty file', async () => {
     writeFileSync(ws.database, '');
     expect((await ws.open()).summary).toMatchObject({created: true, schemaVersion: 2});
+  });
+});
+
+// Exercise the installed reader's actual read-only collector with the same contract the hosted driver uses.
+describe('REG-013/REG-017 installer history contract', () => {
+  it('accepts the actual version 1 to current migration and rejects corrupted upgrade evidence', async () => {
+    const copy = ws.copyFixture(REPRESENTATIVE), original = readVersion1(copy);
+    const storage = await ws.open({path: copy, migrations: CURRENT_MIGRATIONS});
+    expect(storage.summary).toMatchObject({schemaVersion: 4, created: false, migratedFrom: 1});
+    expectMigratedFromVersion1(storage, copy, original, path.join(ws.backups, storage.summary.backupFileName!));
+    const facts = collectHistory(Database, copy, ws.backups);
+    expect(() => assertHistoryFacts(facts, '0.1.0-test')).not.toThrow();
+    const reopened = await ws.open({path: copy, migrations: CURRENT_MIGRATIONS});
+    expect(reopened.summary).toMatchObject({schemaVersion: 4, created: false});
+    expect(reopened.summary.migratedFrom).toBeUndefined();
+    reopened.close();
+    expect(() => assertHistoryFacts(collectHistory(Database, copy, ws.backups), '0.1.0-test')).not.toThrow();
+    // Corrupt independent copies, then run the actual collector: counts alone cannot accept a bad singleton or summary.
+    const invalid = [
+      ['stale version', 'PRAGMA user_version = 3'],
+      ['migration name', "UPDATE schema_migrations SET name='0004-wrong' WHERE version=4"],
+      ['migration app version', "UPDATE schema_migrations SET app_version='other' WHERE version=4"],
+      ['migration backup', "UPDATE schema_migrations SET backup_sha256='aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa' WHERE version=4"],
+      ['missing membership', 'DELETE FROM logical_memberships'],
+      ['mislinked membership', 'UPDATE logical_memberships SET logical_ref=999'],
+      ['invented profile', "UPDATE logical_trips SET profile_scope='invented'"],
+      ['non-retired history', 'UPDATE logical_trips SET retired=0'],
+      ['revision bounds', 'UPDATE logical_revisions SET event_through=4'],
+      ['mislinked revision state', 'UPDATE logical_revisions SET state_ref=999'],
+      ['changed summary', "UPDATE logical_projection_states SET row_json=json_set(row_json,'$.observed_distance_m',999)"],
+      ['invented progress identity', "INSERT INTO logical_trucks VALUES(1,'invented')"]
+    ];
+    for (const [label, sql] of invalid) {
+      const broken = path.join(ws.directory, 'broken.sqlite');
+      copyFileSync(copy, broken);
+      edit(broken, db => db.exec(sql), false);
+      expect(() => assertHistoryFacts(collectHistory(Database, broken, ws.backups), '0.1.0-test'), label).toThrow('HISTORY_CONTENT_UNEXPECTED');
+    }
+    const manifestPath = path.join(ws.backups, storage.summary.backupFileName!.replace(/\.sqlite$/, '.json'));
+    const manifestBytes = readFileSync(manifestPath), manifest = JSON.parse(manifestBytes.toString());
+    for (const [key, value, error] of [
+      ['appVersion', 'other', 'BACKUP_MANIFEST_UNEXPECTED'], ['fromVersion', 3, 'BACKUP_MANIFEST_UNEXPECTED'],
+      ['fileSha256', 'wrong', 'BACKUP_FILE_DIFFERS'], ['size', 1, 'BACKUP_FILE_DIFFERS']
+    ] as const) {
+      writeFileSync(manifestPath, JSON.stringify({...manifest, [key]: value}));
+      expect(() => assertHistoryFacts(collectHistory(Database, copy, ws.backups), '0.1.0-test')).toThrow(error);
+    }
+    writeFileSync(manifestPath, manifestBytes);
   });
 });

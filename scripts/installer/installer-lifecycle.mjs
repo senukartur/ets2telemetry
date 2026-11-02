@@ -16,6 +16,7 @@ import {checkedPaths, checkInstalled, checkLaunchEnvironment, checkRunPlan, chec
   checkDataRootUnchanged, checkDecoyUnchanged, checkUninstallResidue, checkRegistrationIcon, classifyRegistrationIcon, electronRuntimeNames, ownsRegistration, parseUninstallString, resolveRealLocation, RUN_ONCE_KEY, RUN_ROOT_NAME,
   checkOtherChannelUnchanged, checkProductLinks, checkRegistrationNames, checkRunChannels, checkShortcutIdentities, checkUninstallEntries, classifyProductLinks, isInside, lifecycleIdentity,
   LIFECYCLE_IDENTITIES, lifecycleFixtureVersion, lifecycleVersions, ROOT_ICON_FILE, runLayout, steamLibraryPaths, uninstallEnvironment} from './installer-guard.mjs';
+import {assertHistoryFacts} from './history-contract.mjs';
 import {checkFeedRequests, closedLoopbackOrigin, createTestSigningKey, feedRelease, fixturePackage, startUpdateFeed} from './update-feed-fixture.mjs';
 
 // ET-018 PR-1, PR-3 and PR-4 (REG-013, REG-015, REG-017; plan U8, U10-U13): the Node driver of the installer lifecycle in a marked test root. The
@@ -118,34 +119,6 @@ export const SEED_REGISTRY = JSON.stringify({format: 'ets2telemetry.plugin-setup
   games: {ets2: {excluded: true, manualRoot: null}, ats: {excluded: true, manualRoot: null}}, installs: [], pending: [], failures: []}, null, 2) + '\n';
 // A trip export the user saved outside the data root; uninstall and upgrade must never touch it.
 export const SEED_EXPORT = JSON.stringify({format: 'ets2telemetry.trip-export', note: 'Synthetic export of the ET-018 installer lifecycle; kept outside the data root.'}, null, 2) + '\n';
-
-// The upgraded database, written by hand from the frozen version-1 fixture and migrations 0002-journal/0003-hard-mode
-// (docs/storage.md); `backup` is filled from the one manifest the migration wrote, and `appVersion` is the version the
-// migrating application reports: `0.1.0` in production, `0.1.0-stg.000000` in staging (ET-055 PR-5). The fixture's own
-// rows (its creation and migration 0001) keep the `0.1.0` they were written with.
-export function expectedDatabase(backup, appVersion) {
-  const counts = {plugin_sessions: 1, clocks: 2, events: 5, event_gaps: 1, job_configurations: 1, truck_configurations: 1, trailer_configurations: 1,
-    event_amounts: 1, trips: 1, trip_trailers: 1, event_attributions: 4, completeness_intervals: 1, samples: 3};
-  return {
-    userVersion: 3, applicationId: 1163154226, integrity: ['ok'], foreignKeyViolations: 0,
-    info: [{database_uuid: 'f0000000-0000-4000-8000-000000000001', purpose: 'synthetic', accepted_origin: 'synthetic', created_utc_ms: 1791676800000, created_app_version: '0.1.0'}],
-    counts,
-    migrations: [{version: 1, name: '0001-initial', app_version: '0.1.0', backup_file_name: null, backup_sha256: null},
-      {version: 2, name: '0002-journal', app_version: appVersion, backup_file_name: backup.fileName, backup_sha256: backup.fileSha256},
-      {version: 3, name: '0003-hard-mode', app_version: appVersion, backup_file_name: backup.fileName, backup_sha256: backup.fileSha256}],
-    sessions: [{plugin_session_uuid: '10000000-0000-4000-8000-000000000001', game: 'ets2', origin: 'synthetic', committed_through_event_seq: '00000000000000000006'}],
-    events: [{id: 1, event_seq: '00000000000000000001', type: 'job.configured'}, {id: 2, event_seq: '00000000000000000002', type: 'truck.configured'},
-      {id: 3, event_seq: '00000000000000000003', type: 'trailer.configured'}, {id: 4, event_seq: '00000000000000000006', type: 'job.cancelled'},
-      {id: 5, event_seq: '00009007199254740993', type: 'job.cleared'}],
-    trips: [{id: 1, trip_uuid: '70000000-0000-4000-8000-000000000001', outcome: 'cancelled', recording_completeness: 'partial', opened_event_ref: 1, opened_by: 'event',
-      observed_distance_m: 1500.5, fuel_used_l: null, fuel_used_l_state: 'not-observed', closed_by_session_ref: null, closed_by_event_seq: null}],
-    jobSources: [{id: 1, plugin_session_ref: 1, source: 'event', event_ref: 1}]
-  };
-}
-/** The pre-migration backup: the version 1 content, unchanged row counts and a manifest that matches its file. */
-export const EXPECTED_BACKUP_COUNTS = {plugin_sessions: 1, clocks: 2, events: 5, event_gaps: 1, job_configurations: 1, truck_configurations: 1, trailer_configurations: 1,
-  event_amounts: 1, trips: 1, trip_trailers: 1, event_attributions: 4, completeness_intervals: 1, samples: 3};
-const BACKUP_NAME = /^telemetry-f0000000-v1-\d{8}T\d{9}Z\.sqlite$/;
 
 async function readJson(file, maximum = 1024 * 1024) {
   const handle = await open(file, 'r');
@@ -566,7 +539,7 @@ async function launch(config, label, executable, migratedFrom) {
   assert.deepEqual(record.exit, {code: 0, signal: null}, 'LAUNCH_EXIT_NONZERO');
   assert.equal(record.runtime.executableMatches, true, 'LAUNCH_EXECUTABLE_DIFFERS');
   assert.equal(record.runtime.packaged, true);
-  assert.deepEqual(record.events.opened, [{schemaVersion: 3, created: false, migratedFrom: migratedFrom === 'none' ? null : Number(migratedFrom)}], 'HISTORY_OPEN_UNEXPECTED');
+  assert.deepEqual(record.events.opened, [{schemaVersion: 4, created: false, migratedFrom: migratedFrom === 'none' ? null : Number(migratedFrom)}], 'HISTORY_OPEN_UNEXPECTED');
   assert.deepEqual(record.events.target, [{purpose: 'synthetic'}], 'RECORDING_TARGET_UNEXPECTED');
   assert.equal(record.events.closed, 1, 'HISTORY_NOT_CLOSED');
   // The format 2 settings load as migrated in memory, and nothing saves or quarantines them.
@@ -613,19 +586,7 @@ async function verify(config, label, executable) {
     'VERIFY_NATIVE_BINDING_DIFFERS');
   assert.ok(await regularFile(path.join(path.dirname(executable), 'resources', 'app.asar.unpacked', 'node_modules', 'better-sqlite3', 'prebuilds', 'win32-x64.node')),
     'VERIFY_NATIVE_BINDING_MISSING');
-  // Exactly one verified pre-migration backup with its manifest, written last.
-  assert.equal(facts.manifests.length, 1, 'BACKUP_MANIFEST_COUNT');
-  const [{manifest, file, content}] = facts.manifests;
-  assert.match(manifest.fileName, BACKUP_NAME, 'BACKUP_NAME_UNEXPECTED');
-  assert.deepEqual(facts.backups, [manifest.fileName.replace(/\.sqlite$/, '.json'), manifest.fileName].sort(), 'BACKUP_FILES_UNEXPECTED');
-  assert.deepEqual({format: manifest.format, databaseUuid: manifest.databaseUuid, fromVersion: manifest.fromVersion, reason: manifest.reason, appVersion: manifest.appVersion},
-    {format: 'ets2telemetry-backup-1', databaseUuid: 'f0000000-0000-4000-8000-000000000001', fromVersion: 1, reason: 'pre-migration', appVersion}, 'BACKUP_MANIFEST_UNEXPECTED');
-  assert.deepEqual({sha256: file.sha256, size: file.size}, {sha256: manifest.fileSha256, size: manifest.size}, 'BACKUP_FILE_DIFFERS');
-  assert.deepEqual(content, {userVersion: 1, applicationId: 1163154226, integrity: ['ok'], foreignKeyViolations: 0,
-    info: expectedDatabase(manifest, appVersion).info, counts: EXPECTED_BACKUP_COUNTS}, 'BACKUP_CONTENT_UNEXPECTED');
-  assert.deepEqual(Object.fromEntries(Object.entries(manifest.rowCounts).filter(([table]) => table in EXPECTED_BACKUP_COUNTS)), EXPECTED_BACKUP_COUNTS, 'BACKUP_ROW_COUNTS_UNEXPECTED');
-  // The upgraded database itself.
-  assert.deepEqual(facts.database, expectedDatabase(manifest, appVersion), 'HISTORY_CONTENT_UNEXPECTED');
+  assertHistoryFacts(facts, appVersion);
   // Settings, plugin registry and export keep the seeded bytes.
   const seeded = (await readJson(path.join(config.evidence, 'seed.json'))).result;
   const now = {};
@@ -634,7 +595,7 @@ async function verify(config, label, executable) {
     const bytes = await readFile(file); now[labelName] = {sha256: sha256(bytes), size: bytes.length};
   }
   assert.deepEqual(now, {settings: seeded.settings, registry: seeded.registry, export: seeded.export}, 'SEEDED_FILES_CHANGED');
-  return {backup: manifest.fileName, preserved: Object.keys(now)};
+  return {backup: facts.manifests[0].manifest.fileName, preserved: Object.keys(now)};
 }
 
 // ET-018 PR-3 (REG-017; plan U6, U7, U12): the Windows-initiated uninstall scenarios. Squirrel's UninstallString runs
@@ -1811,7 +1772,7 @@ async function updateFeedVerify(config, label) {
     'RESTARTED_IMAGE_NOT_B');
   assert.deepEqual(record.b.pids, {main: 1, service: 1}, 'RESTARTED_PROCESSES_UNEXPECTED');
   assert.deepEqual(bMain.filter(row => row.event === 'SETTINGS_LOADED').map(row => row.facts), [{state: 'loaded', migratedFrom: 2}], 'RESTARTED_SETTINGS_UNEXPECTED');
-  assert.deepEqual(record.b.opened, [{schemaVersion: 3, created: false, migratedFrom: null}], 'RESTARTED_HISTORY_UNEXPECTED');
+  assert.deepEqual(record.b.opened, [{schemaVersion: 4, created: false, migratedFrom: null}], 'RESTARTED_HISTORY_UNEXPECTED');
   assert.deepEqual(record.b.target, [{purpose: 'synthetic'}], 'RESTARTED_TARGET_UNEXPECTED');
   // The restarted instance exited orderly on the uninstall hook's request, and nothing under R is left running.
   assert.equal(observed.requester?.locked, true, 'RESTARTED_INSTANCE_DID_NOT_EXIT');
@@ -1877,7 +1838,7 @@ async function stubLaunch(config, label) {
   await writeEvidence(config, `stub-launch-${label}-observed.json`, record);
   assert.ok(started, 'STUB_LAUNCH_NOT_STARTED: Squirrel\'s stub started no instance that reached the history (an unlaunchable install)');
   assert.match(String(record.launchedVersion), /^[0-9]+\.[0-9]+\.[0-9]+/, 'STUB_LAUNCH_IMAGE_UNEXPECTED');
-  assert.deepEqual(record.events.opened, [{schemaVersion: 3, created: false, migratedFrom: null}], 'STUB_LAUNCH_HISTORY_UNEXPECTED');
+  assert.deepEqual(record.events.opened, [{schemaVersion: 4, created: false, migratedFrom: null}], 'STUB_LAUNCH_HISTORY_UNEXPECTED');
   assert.equal(record.requester?.locked, true, 'STUB_LAUNCH_DID_NOT_EXIT');
   assert.deepEqual({app: record.events.appExit, service: record.events.serviceExit}, {app: [0], service: [0]}, 'STUB_LAUNCH_EXIT_UNEXPECTED');
   assert.deepEqual(record.events.failures, [], 'FAILURE_EVENT_LOGGED');
