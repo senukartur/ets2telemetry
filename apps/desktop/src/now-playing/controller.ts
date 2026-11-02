@@ -4,6 +4,7 @@ import {currentGameClientBounds} from '../window-placement';
 import {DEFAULT_NOW_PLAYING} from './contract';
 import {positionFromBounds, widgetBounds, type Area, type MediaDisplay} from './placement';
 interface WidgetWindow {
+  webContents: {isDestroyed(): boolean};
   isDestroyed(): boolean; hide(): void; showInactive(): void; setBounds(bounds: Area): void; getBounds(): Area;
   setIgnoreMouseEvents(ignore: boolean): void; setFocusable(value: boolean): void; setSkipTaskbar(value: boolean): void; setMovable(value: boolean): void;
   setAlwaysOnTop(value: boolean, level: 'screen-saver'): void; isAlwaysOnTop(): boolean; moveTop(): void;
@@ -21,11 +22,13 @@ export class NowPlayingController {
   private visible = false;
   private interactive = false;
   private moving = false;
+  private retired = false;
   constructor(private readonly window: WidgetWindow, private readonly screen: WidgetScreen, private readonly changed: () => void) {this.passThrough();}
-  configure(settings: NowPlayingSettings): void {this.settings = settings; if (!settings.enabled && this.draft) this.end(); this.place();}
-  loaded(ready: boolean): void {this.ready = ready; if (!ready && this.draft) this.end(); this.place();}
-  update(available: boolean): void {this.available = available; this.place();}
+  configure(settings: NowPlayingSettings): void {if (this.retired) return; this.settings = settings; if (!settings.enabled && this.draft) this.end(); this.place();}
+  loaded(ready: boolean): void {if (this.retired) return; this.ready = ready; if (!ready && this.draft) this.end(); this.place();}
+  update(available: boolean): void {if (this.retired) return; this.available = available; this.place();}
   updateGame(live: LiveTelemetry): void {
+    if (this.retired) return;
     this.live = live;
     this.game = undefined;
     const physical = currentGameClientBounds(live);
@@ -38,10 +41,10 @@ export class NowPlayingController {
     this.place();
   }
   topologyChanged(): void {this.moving = false; if (this.live) this.updateGame(this.live); else this.place();}
-  setOwnForeground(value: boolean): void {this.foreground = value; this.place(); this.changed();}
+  setOwnForeground(value: boolean): void {if (this.retired) return; this.foreground = value; this.place(); this.changed();}
   editState(): NowPlayingEditState {return {active: Boolean(this.draft), placement: !this.ready || (this.draft && this.foreground && !this.visible) ? 'unavailable' : this.foreground ? 'visible' : 'not-foreground'};}
   begin(foreground: boolean): NowPlayingEditState {
-    if (!this.settings.enabled || !this.ready) throw new Error('Current track edit unavailable');
+    if (!this.usable() || !this.settings.enabled || !this.ready) throw new Error('Current track edit unavailable');
     this.draft ??= {...this.settings.position}; this.foreground = foreground; this.place(); this.changed(); return this.editState();
   }
   reset(): NowPlayingEditState {if (!this.draft) throw new Error('Current track edit inactive'); this.draft = {...DEFAULT_NOW_PLAYING.position}; this.place(); this.changed(); return this.editState();}
@@ -51,13 +54,33 @@ export class NowPlayingController {
   }
   moveStarted(): void {if (this.draft && this.interactive) this.moving = true;}
   moved(): void {
-    if (!this.draft || !this.moving) return;
+    if (!this.usable() || !this.draft || !this.moving) return;
     const bounds = this.window.getBounds(); this.draft = positionFromBounds(bounds, this.screen.getDisplayMatching(bounds)); this.moving = false; this.place();
   }
-  private passThrough(): void {this.window.setIgnoreMouseEvents(true); this.window.setMovable(false); this.window.setFocusable(false); this.window.setSkipTaskbar(true); this.interactive = false;}
-  private hide(): void {this.window.hide(); this.visible = false; this.moving = false; this.passThrough();}
+  /** Release authority before native hide/close callbacks can publish another observation. */
+  retire(): void {
+    if (this.retired) return;
+    this.retired = true; this.ready = false; this.draft = undefined; this.hide(true);
+  }
+  private usable(retiring = false): boolean {return (retiring || !this.retired) && !this.window.isDestroyed() && !this.window.webContents.isDestroyed();}
+  private apply(action: () => void, retiring = false): boolean {
+    if (!this.usable(retiring)) return false;
+    action();
+    return this.usable(retiring);
+  }
+  private passThrough(retiring = false): void {
+    this.interactive = false;
+    if (!this.apply(() => this.window.setIgnoreMouseEvents(true), retiring)) return;
+    if (!this.apply(() => this.window.setMovable(false), retiring)) return;
+    if (!this.apply(() => this.window.setFocusable(false), retiring)) return;
+    this.apply(() => this.window.setSkipTaskbar(true), retiring);
+  }
+  private hide(retiring = false): void {
+    this.visible = false; this.moving = false;
+    if (this.apply(() => this.window.hide(), retiring)) this.passThrough(retiring);
+  }
   private place(): void {
-    if (this.window.isDestroyed()) return;
+    if (!this.usable()) return;
     if (!this.settings.enabled || !this.ready || (this.draft ? !this.foreground : !this.available || !this.game)) {this.hide(); return;}
     if (this.moving) return;
     const bounds = widgetBounds(this.draft ?? this.settings.position, this.settings.style, this.screen.getAllDisplays(), this.screen.getPrimaryDisplay());
@@ -68,12 +91,20 @@ export class NowPlayingController {
     }
     const before = this.window.getBounds();
     const moved = Object.keys(bounds).some(key => bounds[key as keyof Area] !== before[key as keyof Area]);
-    if (moved) this.window.setBounds(bounds);
+    if (moved && !this.apply(() => this.window.setBounds(bounds))) return;
     const actual = this.window.getBounds();
     if (Object.keys(bounds).some(key => Math.abs(actual[key as keyof Area] - bounds[key as keyof Area]) > 1)) {this.hide(); return;}
-    if (this.draft && !this.interactive) {this.window.setIgnoreMouseEvents(false); this.window.setFocusable(true); this.window.setSkipTaskbar(true); this.window.setMovable(true); this.interactive = true;}
+    if (this.draft && !this.interactive) {
+      if (!this.apply(() => this.window.setIgnoreMouseEvents(false))) return;
+      if (!this.apply(() => this.window.setFocusable(true))) return;
+      if (!this.apply(() => this.window.setSkipTaskbar(true))) return;
+      if (!this.apply(() => this.window.setMovable(true))) return;
+      this.interactive = true;
+    }
     const shown = !this.visible;
-    if (shown) {this.window.showInactive(); this.visible = true;}
-    if (shown || moved || !this.window.isAlwaysOnTop()) {this.window.setAlwaysOnTop(true, 'screen-saver'); this.window.moveTop();}
+    if (shown) {this.visible = true; if (!this.apply(() => this.window.showInactive())) return;}
+    if (shown || moved || !this.window.isAlwaysOnTop()) {
+      if (this.apply(() => this.window.setAlwaysOnTop(true, 'screen-saver'))) this.apply(() => this.window.moveTop());
+    }
   }
 }
