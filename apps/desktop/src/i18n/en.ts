@@ -95,6 +95,7 @@ export const EN_DICTIONARY: TranslationDictionary = channelCopyTable(Object.free
   "copy.delete-trip-warning": "This trip and its associated samples and intervals will be permanently deleted.",
   "copy.delete-permanently": "Delete permanently",
   "copy.deleting": "Deleting…",
+  "copy.delete-trip-cancel": "Cancel",
   "copy.game": "Game",
   "copy.outcome": "Outcome",
   "copy.recording": "Recording",

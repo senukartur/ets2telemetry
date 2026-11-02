@@ -634,48 +634,81 @@ export function recordCompleteness(conn: StorageConnection, pluginSessionId: str
 }
 
 /**
- * Deletes a recorded trip and cleans up its associated child records atomically (ET-065).
+ * Deletes a recorded trip (and its whole logical group if continued) and cleans up
+ * its associated child records atomically (ET-065).
  * Cascading cleanup order:
  * 1. Checks trip existence (UNKNOWN_TRIP if missing).
- * 2. Active recording guard: if `options.rejectIfOpen` and `outcome === 'open'`, aborts with STORAGE_BUSY.
- * 3. Schema v4 logical trip tables cleanup (if logicalEnabled(db)):
- *    - observation_closes
+ * 2. Checks schema v4 logical group membership to find all member trips.
+ * 3. Active recording guard: if `options.rejectIfOpen` and ANY member trip has `outcome === 'open'`, aborts with STORAGE_BUSY.
+ * 4. Schema v4 logical trip tables cleanup (if logicalEnabled(db)):
  *    - logical_trips progress_head
  *    - logical_revisions progress_head and rows
  *    - logical_progress prefix_ref / start_ref and rows
- *    - logical_memberships
+ *    - logical_memberships previous_logical_ref and rows
  *    - logical_trips
- * 4. samples
- * 5. completeness_intervals
- * 6. trip_trailers
- * 7. event_attributions (unlinked: trip_ref = NULL, attribution = 'free-driving')
- * 8. trips record
+ * 5. Child records for all member trips:
+ *    - observation_closes
+ *    - samples
+ *    - completeness_intervals
+ *    - trip_trailers
+ *    - event_attributions (unlinked: trip_ref = NULL, attribution = 'free-driving')
+ *    - trips records
  * Immutable tables (events, database_info) are never updated or deleted.
  */
 export function deleteTrip(conn: StorageConnection, tripUuid: string, options: DeleteTripOptions = {}): void {
   if (!isUuid(tripUuid)) fail('INVALID_INPUT');
   if (typeof options !== 'object' || options === null || Array.isArray(options) || (options.rejectIfOpen !== undefined && typeof options.rejectIfOpen !== 'boolean')) fail('INVALID_INPUT');
   transact(conn, db => {
-    const trip = statement(db, 'SELECT id, outcome FROM trips WHERE trip_uuid = ?').get(tripUuid) as {id: bigint; outcome: string} | undefined;
-    if (!trip) fail('UNKNOWN_TRIP');
-    if (options.rejectIfOpen && trip.outcome === 'open') fail('STORAGE_BUSY');
+    const target = statement(db, 'SELECT id, outcome FROM trips WHERE trip_uuid = ?').get(tripUuid) as {id: bigint; outcome: string} | undefined;
+    if (!target) fail('UNKNOWN_TRIP');
 
-    if (logicalEnabled(db)) {
-      statement(db, 'DELETE FROM observation_closes WHERE trip_ref = ?').run(trip.id);
-      statement(db, 'UPDATE logical_trips SET progress_head = NULL WHERE id = ? OR latest_trip_ref = ?').run(trip.id, trip.id);
-      statement(db, 'UPDATE logical_revisions SET progress_head = NULL WHERE logical_ref IN (SELECT logical_ref FROM logical_memberships WHERE trip_ref = ?) OR logical_ref = ?').run(trip.id, trip.id);
-      statement(db, 'UPDATE logical_progress SET prefix_ref = NULL, start_ref = NULL WHERE trip_ref = ? OR logical_ref = ?').run(trip.id, trip.id);
-      statement(db, 'DELETE FROM logical_progress WHERE trip_ref = ? OR logical_ref = ?').run(trip.id, trip.id);
-      statement(db, 'DELETE FROM logical_revisions WHERE logical_ref IN (SELECT logical_ref FROM logical_memberships WHERE trip_ref = ?) OR logical_ref = ?').run(trip.id, trip.id);
-      statement(db, 'DELETE FROM logical_memberships WHERE trip_ref = ? OR logical_ref = ?').run(trip.id, trip.id);
-      statement(db, 'DELETE FROM logical_trips WHERE id = ? OR latest_trip_ref = ?').run(trip.id, trip.id);
+    const hasV4 = statement(db, "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'logical_trips'").get() !== undefined;
+    let memberRows: {id: bigint; outcome: string}[] = [target];
+    let logicalIds: bigint[] = [];
+
+    if (hasV4) {
+      const membership = statement(db, 'SELECT logical_ref FROM logical_memberships WHERE trip_ref = ?').get(target.id) as {logical_ref: bigint} | undefined;
+      if (membership) {
+        const logicalId = membership.logical_ref;
+        memberRows = statement(db, 'SELECT t.id, t.outcome FROM logical_memberships m JOIN trips t ON t.id = m.trip_ref WHERE m.logical_ref = ?').all(logicalId) as {id: bigint; outcome: string}[];
+        if (memberRows.length === 0) memberRows = [target];
+        const allLogicalRows = statement(db, 'SELECT id FROM logical_trips WHERE id = ? OR latest_trip_ref = ? OR id IN (SELECT trip_ref FROM logical_memberships WHERE logical_ref = ?)').all(logicalId, logicalId, logicalId) as {id: bigint}[];
+        const set = new Set<bigint>([logicalId]);
+        for (const r of allLogicalRows) set.add(r.id);
+        logicalIds = Array.from(set);
+      }
     }
 
-    statement(db, 'DELETE FROM samples WHERE trip_ref = ?').run(trip.id);
-    statement(db, 'DELETE FROM completeness_intervals WHERE trip_ref = ?').run(trip.id);
-    statement(db, 'DELETE FROM trip_trailers WHERE trip_ref = ?').run(trip.id);
-    statement(db, "UPDATE event_attributions SET trip_ref = NULL, attribution = 'free-driving' WHERE trip_ref = ?").run(trip.id);
-    statement(db, 'DELETE FROM trips WHERE id = ?').run(trip.id);
+    if (options.rejectIfOpen && memberRows.some(m => m.outcome === 'open')) {
+      fail('STORAGE_BUSY');
+    }
+
+    if (hasV4 && logicalIds.length > 0) {
+      for (const lId of logicalIds) {
+        statement(db, 'UPDATE logical_trips SET progress_head = NULL WHERE id = ?').run(lId);
+        statement(db, 'UPDATE logical_revisions SET progress_head = NULL WHERE logical_ref = ?').run(lId);
+        statement(db, 'UPDATE logical_progress SET prefix_ref = NULL, start_ref = NULL WHERE logical_ref = ?').run(lId);
+        statement(db, 'DELETE FROM logical_progress WHERE logical_ref = ?').run(lId);
+        statement(db, 'DELETE FROM logical_revisions WHERE logical_ref = ?').run(lId);
+        statement(db, 'UPDATE logical_memberships SET previous_logical_ref = NULL WHERE previous_logical_ref = ?').run(lId);
+        statement(db, 'DELETE FROM logical_memberships WHERE logical_ref = ?').run(lId);
+        statement(db, 'DELETE FROM logical_trips WHERE id = ?').run(lId);
+      }
+    }
+
+    const memberIds = memberRows.map(m => m.id);
+    for (const mId of memberIds) {
+      if (hasV4) {
+        statement(db, 'DELETE FROM observation_closes WHERE trip_ref = ?').run(mId);
+        statement(db, 'DELETE FROM logical_memberships WHERE trip_ref = ?').run(mId);
+        statement(db, 'DELETE FROM logical_trips WHERE latest_trip_ref = ? OR id = ?').run(mId, mId);
+      }
+      statement(db, 'DELETE FROM samples WHERE trip_ref = ?').run(mId);
+      statement(db, 'DELETE FROM completeness_intervals WHERE trip_ref = ?').run(mId);
+      statement(db, 'DELETE FROM trip_trailers WHERE trip_ref = ?').run(mId);
+      statement(db, "UPDATE event_attributions SET trip_ref = NULL, attribution = 'free-driving' WHERE trip_ref = ?").run(mId);
+      statement(db, 'DELETE FROM trips WHERE id = ?').run(mId);
+    }
   });
 }
 

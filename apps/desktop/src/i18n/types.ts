@@ -92,6 +92,7 @@ export type I18nKey =
   | "copy.delete-trip-warning"
   | "copy.delete-permanently"
   | "copy.deleting"
+  | "copy.delete-trip-cancel"
   | "copy.game"
   | "copy.outcome"
   | "copy.recording"

@@ -75,6 +75,7 @@ export const APP_COPY_KEYS: Readonly<Record<string, I18nKey>> = Object.freeze(ch
   "This trip and its associated samples and intervals will be permanently deleted.": "copy.delete-trip-warning",
   "Delete permanently": "copy.delete-permanently",
   "Deleting…": "copy.deleting",
+  "Cancel": "copy.delete-trip-cancel",
   "Game": "copy.game",
   "Outcome": "copy.outcome",
   "Recording": "copy.recording",

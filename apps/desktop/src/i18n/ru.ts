@@ -95,6 +95,7 @@ export const RU_DICTIONARY: TranslationDictionary = channelCopyTable(Object.free
   "copy.delete-trip-warning": "Этот рейс и связанные с ним замеры и интервалы будут безвозвратно удалены.",
   "copy.delete-permanently": "Удалить навсегда",
   "copy.deleting": "Удаление…",
+  "copy.delete-trip-cancel": "Отмена",
   "copy.game": "Игра",
   "copy.outcome": "Результат",
   "copy.recording": "Запись",
