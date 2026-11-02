@@ -1,3 +1,4 @@
+import {ProfileObserver} from './profile-observation';
 import {GameSourceCoordinator} from './game-source-coordinator';
 import {discoverGames} from './native-game-discovery';
 import {resolveSourceMode} from './source-mode';
@@ -121,6 +122,7 @@ const hardMode = new HardModeMonitor((source, ns, at, signal) => {
   port.postMessage(hardMode.publication());
 });
 let hardModeReader: HardModeReader | undefined = hardModeFixtureReader(process.env) ?? undefined;
+const profileObserver = new ProfileObserver(() => hardModeReader);
 let lastV1: V1SourceState | undefined;
 /** Republishes only for a change the projection shows: a clock mapping or durable status update alone is not one. */
 function onV1State(state: V1SourceState): void {
@@ -128,6 +130,7 @@ function onV1State(state: V1SourceState): void {
   if (state.selection !== effectiveSelection) return;
   const current = state.fresh && state.observation && (state.status === 'connected' || state.status === 'paused') ? state.observation : undefined;
   if (current?.source.origin === 'game' && !steamDiscoveryStarted) {steamDiscoveryStarted = true; void readSteamRoot({signal: hardModeLifetime.signal}).then(root => {if (root.kind === 'found') steamRoot = root.path;}, () => undefined);}
+  profileObserver.select(current ? {gameClockId:current.state.gameTime.clockId,source: current.source, monotonicNs: current.capture.monotonicNs, clockId: current.capture.clockId, boundary: state.clockBoundary} : null);
   hardMode.select(current ? {source: current.source, monotonicNs: current.capture.monotonicNs, clockId: current.capture.clockId, boundary: state.clockBoundary} : null);
   hardModeGame = current?.source.game ?? hardModeGame;
   const previous = lastV1; lastV1 = state;
@@ -148,7 +151,7 @@ function onV1State(state: V1SourceState): void {
 // which production no longer does.
 const runtime = createRecordingRuntime({env: process.env, gameHistory: GAME_HISTORY_RECORDING, localAppData: process.env.LOCALAPPDATA, log,
   createWorker: () => historyWorker(__dirname), connectGame: (configuration, game, target) => new NativePipeClient(configuration, game, diagnoseV1Broker, 'v1', target),
-  hardModeEvidence: () => hardMode.evidence(), onHardModeTrip: details => {port.postMessage({type: 'hard-mode', update: 'trip', trip: details});},
+  profileEvidence: () => profileObserver.evidence(), hardModeEvidence: () => hardMode.evidence(), onHardModeTrip: details => {port.postMessage({type: 'hard-mode', update: 'trip', trip: details});},
   onV1State, onV1Healthy: target => coordinator.healthy(target), onRecordingStatus: status => port.postMessage({type: 'recording', status})});
 const v1 = runtime.v1;
 // ET-016 (J2, J4): journal reads from main, through the database the runtime opened, one at a time and only while it is
@@ -251,7 +254,7 @@ function exitAfterLog(code: number): Promise<void> {
 function exitAfterHistory(code: number): void {
   if (exiting) return;
   stopHeartbeat();
-  exiting = true; hardModeLifetime.abort(); hardMode.close(); runtime.stopStatus();
+  exiting = true; hardModeLifetime.abort(); hardMode.close(); profileObserver.close(); runtime.stopStatus();
   let timer: ReturnType<typeof setTimeout> | undefined;
   const bound = new Promise<void>(resolve => {timer = setTimeout(resolve, HISTORY_CLOSE_BUDGET_MS);});
   void Promise.race([runtime.history.close().catch(() => undefined), bound]).then(() => {clearTimeout(timer); return exitAfterLog(code);});
@@ -269,7 +272,7 @@ runtime.register(shutdown);
 function stop(): void {
   if (stopping) return;
   stopHeartbeat();
-  stopping = true; stopReceivedAt = performance.now(); subscriptions.close(); hardModeLifetime.abort(); hardMode.close(); runtime.stopStatus();
+  stopping = true; stopReceivedAt = performance.now(); subscriptions.close(); hardModeLifetime.abort(); hardMode.close(); profileObserver.close(); runtime.stopStatus();
   void shutdown.run().then(({clean}) => {
     const message = {type: 'stopped', clean};
     log('SERVICE_REPORT', message); port.postMessage(message);
@@ -318,4 +321,4 @@ port.on('message', event => {
 });
 void probe.start();
 runtime.start();
-hardMode.start();
+hardMode.start(); profileObserver.start();

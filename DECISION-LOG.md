@@ -823,3 +823,7 @@ The owner authorized automatic ETS2/ATS connection and approved the bounded nati
 ## M PLUS Rounded 1c typography — October 31, 2026
 
 The owner chose M PLUS Rounded 1c for the dashboard and overlay, bundled offline with its OFL notice. Body text uses 400, labels and telemetry/journal values use 500, and headings use 700. This supersedes the Onest family and previous value weights; existing sizes, numeric reserves and layout constraints remain.
+
+## ET-063 automatic trip continuation — November 2, 2026
+
+The owner approved schema v3→v4, durable logical Journal trips, existing Journal DTO/cursor amendments and JSON format v4. The same verified profile and canonical job characteristics continue automatically across reconnects, application/game restarts and next-day loads, accepting the false-match risk of an identical unobserved offer; no routine confirmation prompt is added. Restored-save progress replaces abandoned driving (100→60→100 km), raw evidence remains intact, and uncertain totals stay unavailable. Cancellation/replacement/conflicting or missing evidence veto joining, different jobs interrupt without an invented outcome, old history migrates as singletons, and Hard Mode loss is irreversible even for abandoned progress. Membership, continuation and rollback diagnostics belong only in JSON, with no new diagnostic UI.

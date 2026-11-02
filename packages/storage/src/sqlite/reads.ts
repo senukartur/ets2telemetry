@@ -1,3 +1,6 @@
+import {ACCOUNTING_PATH, INCLUDED_SAMPLE, logicalEnabled} from './logical-trips';
+import {needsSnapshot,readSnapshotToken} from './logical-snapshot';
+import {isJournalSnapshotCursor} from '../../../contracts/src/journal';
 // Read commands over the writer connection. Integers arrive as BigInt (safe integers) and become numbers only within a
 // proven bound; wire uint64 keys return to their canonical decimal form. Pages are bounded.
 import type Database from 'better-sqlite3';
@@ -83,8 +86,10 @@ function tripRecord(db: Database.Database, r: Record<string, unknown>): TripReco
   const openedBy = r.opened_by === 'checkpoint' ? 'checkpoint' : 'event';
   const trailers = statement(db, `SELECT e.event_seq FROM trip_trailers t JOIN trailer_configurations c ON c.id = t.trailer_configuration_ref JOIN events e ON e.id = c.event_ref
     WHERE t.trip_ref = ? ORDER BY e.event_seq`).pluck().all(r.id).map(fromU64Key);
+  const proof=logicalEnabled(db)?statement(db,'SELECT proof_json FROM logical_memberships WHERE trip_ref=?').pluck().get(r.id):null;
+  const profileScope=typeof proof==='string'?(JSON.parse(proof) as {scope:string}).scope:undefined;
   return {
-    isHardMode: r.is_hard_mode === 1n || r.is_hard_mode === 1, hardModeDetails: readHardModeDetails(r.hard_mode_details),
+    ...(profileScope?{profileScope}:{}),isHardMode: r.is_hard_mode === 1n || r.is_hard_mode === 1, hardModeDetails: readHardModeDetails(r.hard_mode_details),
     tripUuid: String(r.trip_uuid), pluginSessionId: String(statement(db, 'SELECT plugin_session_uuid FROM plugin_sessions WHERE id = ?').pluck().get(r.plugin_session_ref)),
     game: r.game as TripRecord['game'], gameMode: {mode: r.game_mode, method: r.game_mode_method, confidence: r.game_mode_confidence} as TripRecord['gameMode'],
     gameModeAmbiguous: toSafeNumber(r.game_mode_ambiguous, 1, 0) === 1, ...jobOf(db, r.job_configuration_ref),
@@ -125,13 +130,21 @@ export function listTrips(conn: StorageConnection, page: TripPage = {}): TripLis
 export function listSamples(conn: StorageConnection, scope: {tripUuid: string} | {pluginSessionId: string}, page: {afterId?: string; limit?: number} = {}): SampleRecord[] {
   plainObject(scope); plainObject(page);
   const db = conn.reader(), max = limit(page.limit, MAX_SAMPLE_BATCH);
-  if (page.afterId !== undefined && !/^(0|[1-9][0-9]{0,18})$/.test(page.afterId)) fail('INVALID_INPUT');
-  const after = BigInt(page.afterId ?? '0');
+  if (page.afterId !== undefined && !isJournalSnapshotCursor(page.afterId) && !/^(0|[1-9][0-9]{0,18})$/.test(page.afterId)) fail('INVALID_INPUT');
+  const after = BigInt(page.afterId?.startsWith('v4:') ? page.afterId.split(':')[5] : page.afterId ?? '0');
+  let logicalUuid: string | undefined;
   let rows: Record<string, unknown>[];
   if ('tripUuid' in scope) {
     if (!isUuid(scope.tripUuid)) fail('INVALID_INPUT');
     const trip = statement(db, 'SELECT id FROM trips WHERE trip_uuid = ?').pluck().get(scope.tripUuid); if (trip === undefined) fail('UNKNOWN_TRIP');
-    rows = statement(db, 'SELECT * FROM samples WHERE trip_ref = ? AND id > ? ORDER BY trip_ref, id LIMIT ?').all(trip, after, max) as Record<string, unknown>[];
+    if (logicalEnabled(db) && (page.afterId?.startsWith('v4:') || needsSnapshot(db,scope.tripUuid))) {
+      const {snap} = readSnapshotToken(db,scope.tripUuid,page.afterId,'s'); logicalUuid = scope.tripUuid;
+      rows = statement(db, `${ACCOUNTING_PATH} SELECT s.*,ps.plugin_session_uuid,t.trip_uuid AS raw_trip_uuid,(@head IS NULL OR ${INCLUDED_SAMPLE}) AS accounting_included
+        FROM logical_snapshot_memberships x JOIN samples s ON s.trip_ref=x.trip_ref JOIN trips t ON t.id=x.trip_ref JOIN plugin_sessions ps ON ps.id=s.plugin_session_ref
+        WHERE x.logical_ref=@logical AND x.trip_ref<=@members AND x.from_revision<@revision AND (x.through_revision IS NULL OR x.through_revision>=@revision)
+        AND s.id>@after AND s.id<=@through AND (@all=1 OR @head IS NULL OR ${INCLUDED_SAMPLE}) ORDER BY s.id LIMIT @limit`).all({head:snap.head,logical:snap.logical,members:snap.members,revision:snap.revision,
+          after,through:snap.samples,all: max === 3600 ? 1:0,limit:max}) as Record<string,unknown>[];
+    } else rows = statement(db, 'SELECT * FROM samples WHERE trip_ref = ? AND id > ? ORDER BY trip_ref, id LIMIT ?').all(trip, after, max) as Record<string, unknown>[];
   } else rows = statement(db, 'SELECT * FROM samples WHERE plugin_session_ref = ? AND id > ? ORDER BY plugin_session_ref, id LIMIT ?').all(sessionId(db, scope.pluginSessionId), after, max) as Record<string, unknown>[];
   const clock = (ref: unknown) => String(statement(db, 'SELECT clock_uuid FROM clocks WHERE id = ?').pluck().get(ref));
   const tripUuid = (ref: unknown) => ref === null ? null : String(statement(db, 'SELECT trip_uuid FROM trips WHERE id = ?').pluck().get(ref));
@@ -141,7 +154,8 @@ export function listSamples(conn: StorageConnection, scope: {tripUuid: string} |
     const position = fromMask(r.x === null ? null : {x: toReal(r.x), y: toReal(r.y), z: toReal(r.z)}, 128, notSupported, invalid);
     const minutes = fromMask(r.game_minutes === null ? null : toSafeNumber(r.game_minutes, U32, 0), 256, notSupported, invalid);
     return {
-      id: String(r.id), tripUuid: tripUuid(r.trip_ref), utcMs: toSafeNumber(r.utc_ms), sourceClockId: clock(r.source_clock_ref), monotonicNs: String(r.monotonic_ns),
+      ...(logicalUuid ? {pluginSessionId:String(r.plugin_session_uuid),rawTripUuid:String(r.raw_trip_uuid),accountingIncluded:r.accounting_included===1n} : {}),
+      id: String(r.id), tripUuid: logicalUuid ?? tripUuid(r.trip_ref), utcMs: toSafeNumber(r.utc_ms), sourceClockId: clock(r.source_clock_ref), monotonicNs: String(r.monotonic_ns),
       gameTime: r.game_clock_ref === null ? null : {minutes, clockId: clock(r.game_clock_ref)},
       speed: field('speed'), fuel: field('fuel'), averageConsumption: field('averageConsumption'), estimatedRange: field('estimatedRange'),
       engineRpm: field('engineRpm'), gear: field('gear'), odometer: field('odometer'), position

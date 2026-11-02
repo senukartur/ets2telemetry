@@ -1,3 +1,4 @@
+import type {ProfileObservation} from '../../../telemetry-core/src/trips/continuation';
 import {isHardModeObservation, type HardModeObservation} from '../../../contracts/src/hard-mode';
 // Messages between the StorageClient in the telemetry service and the storage worker host (ET-013). Node-safe: plain
 // data only, so the client and its tests never load native SQLite. Messages cross a worker port by structured clone.
@@ -25,8 +26,8 @@ export interface WorkerOpenOptions {path: string; purpose: Purpose; backupsDirec
 export interface StorageCommands {
   open: {args: {options: WorkerOpenOptions}; value: OpenSummary};
   upsertSession: {args: {input: {message: unknown}}; value: {created: boolean; committedThroughEventSeq: Uint64}};
-  commitEvent: {args: {input: {message: unknown; effects?: TripEffect[]; hardMode?: HardModeObservation; hardModeFresh?: boolean; hardModeLoss?: HardModeObservation}}; value: CommitResult};
-  commitGap: {args: {input: {message: unknown; effects?: TripEffect[]; hardMode?: HardModeObservation; hardModeFresh?: boolean; hardModeLoss?: HardModeObservation}}; value: CommitResult};
+  commitEvent: {args: {input: {message: unknown; effects?: TripEffect[]; hardMode?: HardModeObservation; hardModeFresh?: boolean; hardModeLoss?: HardModeObservation; profile?: ProfileObservation}}; value: CommitResult};
+  commitGap: {args: {input: {message: unknown; effects?: TripEffect[]; hardMode?: HardModeObservation; hardModeFresh?: boolean; hardModeLoss?: HardModeObservation; profile?: ProfileObservation}}; value: CommitResult};
   appendSamples: {args: {pluginSessionId: string; rows: SampleInput[]; options?: SampleAppendOptions}; value: SampleAppendResult};
   recordCompleteness: {args: {pluginSessionId: string; interval: CompletenessInterval; options?: CompletenessOptions}; value: undefined};
   /** ET-016 PR-7 (J9): a late-attach trip; never acknowledged and never a coverage change. */
@@ -87,7 +88,7 @@ const TRIP_PAGE_ARGS = {cursor: (field: unknown) => typeof field === 'string', l
 const COMPLETENESS_OPTIONS_ARGS = {ifAbsent: (field: unknown) => typeof field === 'boolean'};
 /** ET-015b: the `appendSamples` options, checked strictly like the completeness options. */
 const SAMPLE_OPTIONS_ARGS = {uniqueSeconds: (field: unknown) => typeof field === 'boolean'};
-const ATTACH_INPUT_KEYS: readonly string[] = ['pluginSessionId', 'nextEventSeq', 'job', 'effects'];
+const ATTACH_INPUT_KEYS: readonly string[] = ['pluginSessionId', 'nextEventSeq', 'job', 'effects', 'profile', 'sourceClockId', 'monotonicNs','profileChange'];
 const isCount = (value: unknown): value is number => typeof value === 'number' && Number.isSafeInteger(value) && value >= 0;
 export type JournalCommandName = 'journalTrips' | 'journalTrip' | 'journalEvents' | 'journalIntervals';
 const JOURNAL_COMMAND_KEYS: Readonly<Record<JournalCommandName, readonly string[]>> = {

@@ -1,3 +1,4 @@
+import {continuationExpected} from '../shared/trip-continuation-expected';
 // ET-014 PR-2: the ET-005b synthetic simulator scenarios replayed through the trip reducer and a first-insert storage
 // model (tests/shared/trip-replay.ts), compared with hand-written tests/fixtures/simulator-v1/<id>.trip.expected.json.
 // Each expectation is written from the scenario definition, its hand-written wire expectation, docs/trips.md and the
@@ -64,7 +65,7 @@ describe('trip replay of the simulator v1 corpus (T16, T17; REG-001 to REG-008)'
   it('has a hand-written trip expectation for each listed scenario, tagged with its evidence basis', () => {
     for (const id of SCENARIOS) {
       expect(existsSync(tripExpectedPath(id)), id).toBe(true);
-      const expected = JSON.parse(readFileSync(tripExpectedPath(id), 'utf8')) as TripExpected;
+      const expected = continuationExpected(id,JSON.parse(readFileSync(tripExpectedPath(id), 'utf8')) as TripExpected);
       expect(expected.scenario).toBe(id);
       expect(expected.basis.length, id).toBeGreaterThan(0);
       expect(expected.authoredFrom.length, id).toBeGreaterThan(0);
@@ -77,7 +78,7 @@ describe('trip replay of the simulator v1 corpus (T16, T17; REG-001 to REG-008)'
     expect(replay.storage.committedThrough(seededId(scenario.seed, 'plugin-session'))).toBe(result.ledger.committedThroughEventSeq);
     // The reducer state is plain data.
     expect(JSON.parse(JSON.stringify(replay.state))).toEqual(replay.state);
-    const expected = JSON.parse(readFileSync(tripExpectedPath(id), 'utf8')) as TripExpected;
+    const expected = continuationExpected(id,JSON.parse(readFileSync(tripExpectedPath(id), 'utf8')) as TripExpected);
     expect(summarize(replay, labels(scenario.seed), seededId(scenario.seed, 'plugin-session'), scenario.game)).toEqual({trips: expected.trips, attributions: expected.attributions, intervals: expected.intervals,
       coverage: expected.coverage, view: expected.view});
   });

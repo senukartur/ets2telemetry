@@ -109,7 +109,22 @@ export class JournalExporter {
     const work = (async () => {
       let diagnostics = emptyTripDiagnostics(detail);
       if (detail.database.purpose === 'history' && this.options.diagnostics) {
-        try { diagnostics = await this.options.diagnostics(detail, header.exportedUtcMs); }
+        try {
+          if((detail.exportBounds.sourceTotal ?? 0)<=256 || !detail.exportBounds.snapshot) diagnostics = await this.options.diagnostics(detail, header.exportedUtcMs);
+          else {
+            const notes=new Set<TripExportDiagnostics['notes'][number]>(),records=new Map<string,TripExportDiagnostics['records'][number]>();
+            let cursor:string|null=detail.exportBounds.snapshot.sources;
+            while(cursor!==null) {
+              const page:JournalIntervalPage=await this.#value<JournalIntervalPage>({kind:'intervals',tripUuid:detail.trip.tripUuid,page:{cursor,limit:JOURNAL_EXPORT_INTERVAL_LIMIT}});
+              if(!page.sources) throw stop('FAILED');
+              const value=await this.options.diagnostics({...detail,exportBounds:{...detail.exportBounds,sources:page.sources.map(s=>({pluginSessionId:s.pluginSessionId,committedThroughEventSeq:s.throughEventSeq}))}},header.exportedUtcMs);
+              for(const note of value.notes) notes.add(note);
+              for(const record of value.records) records.set(JSON.stringify(record),record);
+              if(records.size>256){notes.add('RECORD_LIMIT');const kept=[...records.entries()].sort((a,b)=>a[1].time.localeCompare(b[1].time)).slice(-256);records.clear();for(const [key,row] of kept)records.set(key,row);}
+              diagnostics={...value,status:records.size?'records-found':value.status,notes:[...notes],records:[...records.values()]};cursor=page.nextSourceCursor ?? null;
+            }
+          }
+        }
         catch { diagnostics.notes = ['COLLECTION_FAILED']; }
       }
       this.#check();
@@ -146,12 +161,12 @@ export class JournalExporter {
         const section = async <S extends TripExportSection>(name: S, read: (cursor: string | undefined) => Promise<{rows: TripExportRows[S][]; next: string | null}>) => {
           // A section whose bound is null has nothing to export, and none is read.
           if ((name === 'intervals' && bounds.lastIntervalId === null) || (name === 'samples' && bounds.lastSampleId === null)) return;
-          let cursor: string | undefined;
+          let cursor: string | undefined = bounds.projection?.[name];
           for (;;) {
             this.#check();
             const page = await read(cursor);
             const kept = page.rows.filter(row => withinTripExportBounds(name, row, bounds));
-            counts[name] += kept.length;
+            if(name==='events')counts.events+=kept.length;else if(name==='intervals')counts.intervals+=kept.length;else if(name==='samples')counts.samples+=kept.length;
             await write(serializer.rows(name, kept));
             // Pages stop at the bounds (J17): a row past them ends the section.
             if (page.next === null || kept.length < page.rows.length) return;
@@ -162,6 +177,10 @@ export class JournalExporter {
           if (value.database.purpose !== detail.database.purpose || value.database.schemaVersion !== detail.database.schemaVersion) throw stop('FAILED');
           return value;
         };
+        if(bounds.projection) await section('sources',async cursor=>{
+          const value=page(await this.#value<JournalIntervalPage>({kind:'intervals',tripUuid:detail.trip.tripUuid,page:{cursor,limit:JOURNAL_EXPORT_INTERVAL_LIMIT}}));
+          if(!value.sources) throw stop('FAILED');return {rows:value.sources,next:value.nextSourceCursor ?? null};
+        });
         await section('intervals', async cursor => {
           const value = page(await this.#value<JournalIntervalPage>({kind: 'intervals', tripUuid: detail.trip.tripUuid, page: {...(cursor ? {cursor} : {}), limit: JOURNAL_EXPORT_INTERVAL_LIMIT}}));
           return {rows: value.intervals, next: value.nextCursor};
@@ -169,7 +188,7 @@ export class JournalExporter {
         await section('events', async cursor => {
           const value = page(await this.#value<JournalEventPage>({kind: 'events', tripUuid: detail.trip.tripUuid, page: {...(cursor ? {cursor} : {}), limit: JOURNAL_EXPORT_EVENT_LIMIT}}));
           // The timeline is the trip's own plugin session's (J7).
-          if (value.window.pluginSessionId !== session) throw stop('FAILED');
+          if (!bounds.projection && value.window.pluginSessionId !== session) throw stop('FAILED');
           return {rows: value.events, next: value.nextCursor};
         });
         await section('samples', async cursor => {

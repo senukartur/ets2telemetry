@@ -21,6 +21,7 @@ const BASE_UTC = 1_791_676_800_000;
 const FAILURE_EVENTS = /FAILED|TIMEOUT|UNCAUGHT|UNHANDLED|INVALID|RENDER_PROCESS_GONE/;
 const ROUTE = 'Synthetic City A → Synthetic City B';
 const NOT_OBSERVED = 'unavailable (not observed)';
+const LOGICAL_TRIP='e0b2b199-8c09-3f07-bbe6-72999c77eb8e';
 const T = {delivered: '7a000000-0000-4000-8000-000000000001', cancelled: '7a000000-0000-4000-8000-000000000002', differentJob: '7a000000-0000-4000-8000-000000000003',
   gapClosed: '7a000000-0000-4000-8000-000000000004', restartClosed: '7a000000-0000-4000-8000-000000000005', open: '7a000000-0000-4000-8000-000000000006',
   zeroValues: '7a000000-0000-4000-8000-000000000007', manySamples: '7a000000-0000-4000-8000-000000000008', paging: '7b000000-0000-4000-8000-000000000001'};
@@ -188,7 +189,7 @@ export async function seedJournalDatabase({config, record}) {
   clearTimeout(timer);
   if (exit !== 0) {child.kill(); throw new Error(`JOURNAL_SEED_FAILED ${exit}: ${Buffer.concat(stderr).toString().slice(0, 512)}`);}
   const seed = record.seed = {...JSON.parse(Buffer.concat(stdout).toString()), bundleMs: Math.round(bundled - started), totalMs: Math.round(performance.now() - started)};
-  assert.deepEqual({trips: seed.trips, fillers: seed.fillers, pagingTolls: seed.pagingTolls, pagingSamples: seed.pagingSamples}, {trips: 119, fillers: 110, pagingTolls: 104, pagingSamples: 3600});
+  assert.deepEqual({trips: seed.trips, fillers: seed.fillers, pagingTolls: seed.pagingTolls, pagingSamples: seed.pagingSamples}, {trips: 120, fillers: 110, pagingTolls: 104, pagingSamples: 3600});
   assert.ok(existsSync(database) && !existsSync(path.join(smokeDataRoot(config), 'synthetic', 'backups')));
   record.seeded = true;
 }
@@ -244,16 +245,16 @@ export async function runJournalSeeded({dashboard, record}) {
   const page2 = await until(dashboard, listState, {page: 2, count: 50, first: filler(60)});
   pages.push({...rowSummary(page2.rows), next: page2.next, previous: page2.previous});
   await clickTestId(dashboard, 'journal-list-next');
-  const page3 = await until(dashboard, listState, {page: 3, count: 19, first: filler(10)});
+  const page3 = await until(dashboard, listState, {page: 3, count: 20, first: filler(10)});
   pages.push({...rowSummary(page3.rows), next: page3.next, previous: page3.previous});
   assert.deepEqual(pages, [{count: 50, first: T.paging, last: filler(61), next: true, previous: false}, {count: 50, first: filler(60), last: filler(11), next: true, previous: true},
-    {count: 19, first: filler(10), last: T.delivered, next: false, previous: true}]);
+    {count: 20, first: filler(10), last: LOGICAL_TRIP, next: false, previous: true}]);
   await clickTestId(dashboard, 'journal-list-previous');
   await until(dashboard, listState, {page: 2, count: 50, first: filler(60)});
   await clickTestId(dashboard, 'journal-list-next');
-  const anchors = await until(dashboard, listState, {page: 3, count: 19, first: filler(10)});
+  const anchors = await until(dashboard, listState, {page: 3, count: 20, first: filler(10)});
   record.pagesWalked = true;
-  record.anchorRows = anchors.rows.slice(11);
+  record.anchorRows = anchors.rows.slice(11,19);
   assert.deepEqual(record.anchorRows, ANCHOR_ROWS, 'Anchor rows differ from the hand-written texts');
   record.anchorRowsMatch = true;
 
@@ -286,14 +287,14 @@ export async function runJournalSeeded({dashboard, record}) {
         ['Missing one-second samples', 'readings missing'], ['Lost events', 'lost events']]});
     }
     await back(dashboard);
-    const kept = await until(dashboard, listState, {page: 3, count: 19, first: filler(10)});
-    assert.equal(kept.rows.length, 19);
+    const kept = await until(dashboard, listState, {page: 3, count: 20, first: filler(10)});
+    assert.equal(kept.rows.length, 20);
   }
   record.anchorDetailsMatch = true; record.backKeptPage = true;
 
   // The paging trip on page 1: timeline, completeness intervals and samples each page forward and back.
   await clickTestId(dashboard, 'journal-list-refresh');
-  await until(dashboard, listState, {page: 3, count: 19, first: filler(10)});
+  await until(dashboard, listState, {page: 3, count: 20, first: filler(10)});
   for (let page = 2; page >= 1; page--) {
     await clickTestId(dashboard, 'journal-list-previous');
     await until(dashboard, listState, {page, count: 50, first: page === 1 ? T.paging : filler(60)});
@@ -332,12 +333,22 @@ export async function runJournalSeeded({dashboard, record}) {
   const none = await until(dashboard, listState, {page: 1, count: 3, first: T.restartClosed});
   await chooseFilter(dashboard, 'journal-filter-outcome', 'All');
   await chooseFilter(dashboard, 'journal-filter-completeness', 'Partial');
-  const partial = await until(dashboard, listState, {page: 1, count: 39});
+  const partial = await until(dashboard, listState, {page: 1, count: 40});
   await chooseFilter(dashboard, 'journal-filter-completeness', 'All');
   await until(dashboard, listState, {page: 1, count: 50, first: T.paging});
   record.filters = {none: none.rows.map(row => row.trip), noneNext: none.next, partial: partial.rows.length, partialNext: partial.next};
-  assert.deepEqual(record.filters, {none: [T.restartClosed, T.gapClosed, T.differentJob], noneNext: false, partial: 39, partialNext: false});
+  assert.deepEqual(record.filters, {none: [T.restartClosed, T.gapClosed, T.differentJob], noneNext: false, partial: 40, partialNext: false});
   record.filtersApplied = true;
+  await clickTestId(dashboard,'journal-list-next');await until(dashboard,listState,{page:2,count:50,first:filler(60)});
+  await clickTestId(dashboard,'journal-list-next');const logicalList=await until(dashboard,listState,{page:3,count:20,first:filler(10)});
+  assert.equal(logicalList.rows.filter(row=>row.trip===LOGICAL_TRIP).length,1);
+  const logical=await openDetail(dashboard,LOGICAL_TRIP);assert.equal(logical.error,null);assert.equal(logical.fields['distance-observedDistance'],'0.1 km');
+  const logicalSamples=await openTable(dashboard,'samples',5);assert.equal(logicalSamples.rows.filter(row=>row.kind==='sample').length,4);
+  const controls=await dashboard.locator('[data-testid="journal-detail"]').getByRole('button').allTextContents();
+  assert.ok(!controls.some(text=>/segment|branch|rollback|continuation/i.test(text)));
+  record.logicalContinuationVerified=true;
+  await back(dashboard);await clickTestId(dashboard,'journal-list-previous');await until(dashboard,listState,{page:2,count:50,first:filler(60)});
+  await clickTestId(dashboard,'journal-list-previous');await until(dashboard,listState,{page:1,count:50,first:T.paging});
 }
 
 // ET-016 PR-5: the trip export journey (J15-J18). The Save dialog is replaced in main through Playwright's main-process
@@ -357,14 +368,14 @@ const ETS2_A = '10000000-0000-4000-8000-0000000000a1';
 const EUR = {status: 'sdk-documented', code: 'EUR', source: 'scs-sdk-1.15/include/eurotrucks2/scssdk_telemetry_eut2.h#game-specific-units'};
 /** The delivered anchor's export, written by hand from tests/shared/journal-seed.ts: its row, bounds, timeline, samples and money. */
 const DELIVERED_EXPORT = {
-  bounds: {committedThroughEventSeq: '29', lastSampleId: '4', lastIntervalId: null, snapshot: false},
+  bounds: {committedThroughEventSeq: '29', lastSampleId: '9', lastIntervalId: null, snapshot: false},
   trip: {is_hard_mode: false, hard_mode_details: null, tripUuid: T.delivered, pluginSessionId: ETS2_A, game: 'ets2', gameMode: {mode: 'single-player', method: 'module-scan', confidence: 'weak'}, gameModeAmbiguous: false,
     outcome: 'delivered', closeReason: 'outcome', recordingCompleteness: 'complete', startedUtcMs: BASE_UTC + 4_000, endedUtcMs: BASE_UTC + 9_000,
     observedDistanceM: {available: true, value: 152_000.5}, fuelUsedL: {available: false, reason: 'not-observed'}, openedBy: 'event', openedEventSeq: '4', outcomeEventSeq: '9',
     closedBy: {pluginSessionId: ETS2_A, eventSeq: '9'}},
   events: [['4', 'job.configured', null], ['5', 'player.fined', 'trip'], ['6', 'player.tollgate.paid', 'trip'], ['7', 'player.use.ferry', 'trip'], ['8', 'player.fined', 'trip'],
     ['9', 'job.delivered', 'trip']],
-  samples: [['2', {available: true, value: 22.25}], ['3', {available: true, value: 0}], ['4', {available: false, reason: 'invalid'}]],
+  samples: [['7', {available: true, value: 22.25}], ['8', {available: true, value: 0}], ['9', {available: false, reason: 'invalid'}]],
   money: {incomplete: false, totals: [{category: 'fine', sdkType: 's64', currency: EUR, raw: '401', count: 2}, {category: 'toll', sdkType: 's64', currency: EUR, raw: '35', count: 1},
     {category: 'ferry', sdkType: 's64', currency: EUR, raw: '677', count: 1}], unavailable: []},
   revenue: {raw: '15000', sdkType: 's64', currency: EUR}
@@ -441,10 +452,10 @@ export async function runJournalExport({application, dashboard, config, record})
   const documents = {};
   for (const name of ['paging', 'delivered']) {
     const document = documents[name] = JSON.parse(await readFile(path.join(folder, `${name}.json`), 'utf8'));
-    assert.deepEqual(problemsOf(document), [], `The ${name} export is not a valid format version 3 document`);
+    assert.deepEqual(problemsOf(document), [], `The ${name} export is not a valid format version 4 document`);
     assert.deepEqual({format: document.format, formatVersion: document.formatVersion, application: document.header.application, purpose: document.header.database.purpose,
       schemaVersion: document.header.database.schemaVersion, sessionOrigin: document.header.sessionOrigin},
-    {format: 'ets2telemetry.trip-export', formatVersion: 3, application: {name: 'ETS2Telemetry', version: smokeBuild(config).version}, purpose: 'synthetic', schemaVersion: 3, sessionOrigin: 'synthetic'});
+    {format: 'ets2telemetry.trip-export', formatVersion: 4, application: {name: 'ETS2Telemetry', version: smokeBuild(config).version}, purpose: 'synthetic', schemaVersion: 4, sessionOrigin: 'synthetic'});
   }
   assert.equal(documents.paging.header.database.uuid, documents.delivered.header.database.uuid);
   // Historical seeds never supplied observation metadata; current settings cannot create retrospective proof.
@@ -456,7 +467,7 @@ export async function runJournalExport({application, dashboard, config, record})
   assert.deepEqual(record.pagingExport, {events: 105, firstEvent: '1', lastEvent: '105', intervals: 104, samples: 3600, snapshot: true, outcome: 'open',
     tollTotal: [{category: 'toll', sdkType: 's64', currency: EUR, raw: '104', count: 104}]});
   const e = documents.delivered;
-  record.deliveredExport = {bounds: e.bounds, trip: e.trip, events: e.events.map(event => [event.eventSeq, event.type, event.attribution?.kind ?? null]),
+  record.deliveredExport = {bounds:{committedThroughEventSeq:e.bounds.committedThroughEventSeq,lastSampleId:e.bounds.lastSampleId,lastIntervalId:e.bounds.lastIntervalId,snapshot:e.bounds.snapshot}, trip: e.trip, events: e.events.map(event => [event.eventSeq, event.type, event.attribution?.kind ?? null]),
     samples: e.samples.map(sample => [sample.id, sample.speed]), money: e.money, revenue: e.outcomeDetails.record.revenue.value, intervals: e.intervals.length};
   assert.deepEqual(record.deliveredExport, {...DELIVERED_EXPORT, intervals: 0}, 'The delivered export differs from its hand-written rows');
   record.exportsSaved = true;
@@ -504,14 +515,14 @@ export async function verifyJournalRun({config, record, restartMainEvents, resta
   assert.deepEqual(record.exportEvents, EXPORT_EVENTS);
   assert.ok(![...restartMainEvents.filter(row => !expectedRefusal(row)), ...restartServiceEvents].some(row => FAILURE_EVENTS.test(row.event)));
   assert.deepEqual(restartServiceEvents.filter(row => row.event === 'RECORDING_TARGET').map(row => row.facts), [{purpose: 'synthetic'}]);
-  assert.deepEqual(restartServiceEvents.filter(row => row.event === 'HISTORY_STORAGE_OPENED').map(row => row.facts), [{schemaVersion: 3, created: false, migratedFrom: null}]);
+  assert.deepEqual(restartServiceEvents.filter(row => row.event === 'HISTORY_STORAGE_OPENED').map(row => row.facts), [{schemaVersion: 4, created: false, migratedFrom: null}]);
   assert.equal(restartServiceEvents.filter(row => row.event === 'HISTORY_STORAGE_CLOSED').length, 1);
   assert.deepEqual(restartMainEvents.filter(row => row.event === 'APP_EXIT_REQUESTED').map(row => row.facts?.reason), ['app-quit']);
   const database = journalDatabase(config), header = Buffer.alloc(100), file = await open(database, 'r');
   try {await file.read(header, 0, 100, 0);} finally {await file.close();}
   const files = record.files = {magic: header.subarray(0, 15).toString('latin1'), applicationId: header.readInt32BE(68), userVersion: header.readUInt32BE(60),
     sidecars: ['-wal', '-shm', '-journal'].filter(suffix => existsSync(database + suffix)), syntheticBackups: existsSync(path.join(path.dirname(database), 'backups'))};
-  assert.deepEqual(files, {magic: 'SQLite format 3', applicationId: 1163154226, userVersion: 3, sidecars: [], syntheticBackups: false});
+  assert.deepEqual(files, {magic: 'SQLite format 3', applicationId: 1163154226, userVersion: 4, sidecars: [], syntheticBackups: false});
   record.shutdownClean = true;
 }
 

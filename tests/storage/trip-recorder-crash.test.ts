@@ -20,6 +20,9 @@ import {replayV1, scenarioSource} from '../../tools/telemetry-simulator/src/v1/r
 import {between, campaignRandom, pick} from '../shared/seeded-random';
 import {scenarioPath} from '../shared/simulator-v1-expected';
 import {ok, readOnly, workspace} from './helpers';
+import {ETS2_A,ETS2_B,job,r,Script} from '../shared/trip-messages';
+import {tripUuidFor,type ProfileObservation} from '../../packages/telemetry-core/src';
+import type {SampleInput,TripEffect} from '../../packages/storage/src';
 import {readHistoryRows} from './history-rows';
 import {recordingExpected, storedRows, storedSamples, tripExpected, withTransport} from './recording-helpers';
 
@@ -179,7 +182,7 @@ const killInput = (id: string, name: string): Json => {
 describe('S3 killed recording process (REG-006)', () => {
   it('(a) terminated before committing eventSeq 2: the new process resumes the stored trip, as crash-before-commit expects', async () => {
     const input = readFixtureFile(scenarioPath('crash-before-commit')) as Json, replay = replayV1(input), session = scenarioSource(replay.scenario).pluginSessionId;
-    const {report, one, two} = await crash(input, {barrier: {kind: 'before', eventSeq: '2'}});
+    const {report, one, two} = await crash(input, {barrier: {kind: 'before', eventSeq: '2'},attach:true},{attach:true});
     expectInvariants(session, [one, two]);
     expect(reactiveDifferences(replay, report)).toEqual([]);
     expect(one.lines.filter(l => l !== 'ready')).toEqual(['committed 1 1', 'ack 1', 'barrier before 2']);
@@ -289,7 +292,7 @@ describe('S3 killed recording process (REG-006)', () => {
     ['timers-truck-refuel', 3, 'before', []], ['timers-truck-refuel', 3, 'after', []],
     ['quick-job-profile-change', 5, 'after', [['2', 'none', 'discontinuity', 'partial']]],
     ['ferry-train', 2, 'after', []],
-    ['retention-expired', 1, 'before', [[null, 'open', null, 'partial']]], ['retention-expired', 1, 'after', [['1', 'none', 'gap', 'partial']]],
+    ['retention-expired', 1, 'before', [[null, 'open', null, 'partial']]], ['retention-expired', 1, 'after', [['1', 'none', 'gap', 'partial'],[null,'open',null,'partial']]],
     ['retention-expired', 2, 'after', [['1', 'open', null, 'unknown']]],
     ['app-absent-hydration', 'attach', 'after', [[null, 'none', 'gap', 'partial']]],
     ['two-jobs', 10, 'before', [[...D3], ['10', 'delivered', 'outcome', 'partial']]], ['two-jobs', 10, 'after', [[...D3], ['10', 'delivered', 'outcome', 'partial']]],
@@ -397,4 +400,52 @@ describe(`ET-019 seeded kill campaign (${RECOVERY_SEEDS} seeds)`, () => {
       expectInvariants(session, [one, two], `seed ${seed}, scenario ${kill.id}, killed ${kill.label}\n`);
     }, 60_000);
   }
+});
+
+describe('REG-005/006 atomic continuation and rollback across process death',()=>{
+  for(const operation of ['open','rollback','terminal']) for(const kind of ['inside','after']) it(`${kind} ${operation} commit recovers one logical result`,async()=>{
+    const a=new Script(ETS2_A),b=new Script(ETS2_B),first=tripUuidFor(ETS2_A,'1'),second=tripUuidFor(ETS2_B,'1');
+    const proof=(s:Script):ProfileObservation=>({version:1,scope:'a'.repeat(64),binding:'b'.repeat(64),game:'ets2',pluginSessionId:s.session,
+      processInstanceId:s.welcome().source.processInstanceId,sourceClockId:s.clockId,afterMonotonicNs:'0',loadGeneration:1});
+    const opening=(uuid:string):TripEffect[]=>[{kind:'trip.open',tripUuid:uuid,game:'ets2',gameMode:{mode:'unknown',method:'none',confidence:'none'},
+      jobConfiguration:'this-event',recordingCompleteness:'complete',startedUtcMs:1000}];
+    const sample=(s:Script,uuid:string,second:number,odo:number):SampleInput=>{
+      const absent={available:false,reason:'not-observed'} as const;
+      return {tripUuid:uuid,utcMs:1000+second*1000,sourceClockId:s.clockId,monotonicNs:String(BigInt(second)*1_000_000_000n),gameTime:null,
+        speed:absent,fuel:absent,averageConsumption:absent,estimatedRange:absent,engineRpm:absent,gear:absent,position:absent,odometer:{available:true,value:odo},
+        recording:{profile:proof(s),job:job(),truck:'verified-truck',processInstanceId:s.welcome().source.processInstanceId}};
+    };
+    const storage=await ws.open();ok(storage.upsertSession({message:a.welcome()}));
+    ok(storage.commitEvent({message:a.event(r.jobConfigured()),profile:proof(a),effects:opening(first)}));
+    ok(storage.appendSamples(ETS2_A,[sample(a,first,1,1000000),sample(a,first,2,1000050),sample(a,first,3,1000100)],{uniqueSeconds:true}));
+    ok(storage.commitEvent({message:a.event(r.timersRestart()),effects:[{kind:'trip.close',tripUuid:first,outcome:'none',closeReason:'restart',recordingCompleteness:'partial',endedUtcMs:2000}]}));
+    ok(storage.close());
+    const operations=[{name:'open',kind:'event',input:{message:b.event(r.jobConfigured()),profile:proof(b),effects:opening(second)}},
+      {name:'rollback',kind:'samples',session:ETS2_B,rows:[sample(b,second,1,1000060),sample(b,second,2,1000100)]},
+      {name:'terminal',kind:'event',input:{message:b.event(r.delivered('12345')),effects:[{kind:'trip.close',tripUuid:second,outcome:'delivered',closeReason:'outcome',outcomeEvent:'this-event',recordingCompleteness:'partial',endedUtcMs:4000}]}}];
+    const run=async(barrier:unknown,label:string)=>{
+      const file=path.join(ws.directory,`${label}.json`);writeFileSync(file,JSON.stringify({open:ws.options(),logical:{sessions:[b.welcome()],operations,barrier}}));
+      const child=spawn(process.execPath,[CHILD,file],{env:{...process.env,ELECTRON_RUN_AS_NODE:'1',LOCALAPPDATA:ws.directory},stdio:['ignore','pipe','pipe'],windowsHide:true});
+      const closed=once(child,'close');let output='',errors='';
+      child.stdout.on('data',bytes=>{output+=String(bytes);});child.stderr.on('data',bytes=>{errors+=String(bytes);});
+      let timer:ReturnType<typeof setTimeout>|undefined;
+      try {
+        await new Promise<void>((resolve,reject)=>{
+          const wanted=barrier?`barrier ${kind} ${operation}`:'done';
+          timer=setTimeout(()=>reject(new Error(`Logical child hang: ${output} ${errors}`)),CHILD_LIVENESS_MS);
+          child.stdout.on('data',()=>{if(output.includes(wanted)) resolve();});
+          child.once('exit',code=>{if(code!==0 && !output.includes(wanted)) reject(new Error(`Logical child exited ${code}: ${errors}`));});
+        });
+      } finally {clearTimeout(timer);if(barrier) child.kill();await closed;}
+      expect(errors).toBe('');
+      for(const line of output.split(/\r?\n/).filter(line=>line.startsWith('ack '))) expect(BigInt(line.split(' ')[2])).toBeLessThanOrEqual(2n);
+    };
+    await run({kind,operation},'killed');
+    await run(null,'recovered');
+    const reader=await ws.open(),trips=ok(reader.journalTrips()).trips;
+    expect(trips).toHaveLength(1);expect(trips[0]).toMatchObject({tripUuid:first,outcome:'delivered',observedDistanceM:{available:true,value:100}});
+    const detail=ok(reader.journalTrip(first));expect(detail.outcomeDetails?.record).toMatchObject({type:'job.delivered',revenue:{available:true,value:{raw:'12345'}}});
+    expect(ok(reader.committedThrough(ETS2_A))).toBe('2');expect(ok(reader.committedThrough(ETS2_B))).toBe('2');
+    ok(reader.close());expect(checks()).toEqual({integrity:'ok',foreignKeys:[]});
+  },60_000);
 });

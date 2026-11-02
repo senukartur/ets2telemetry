@@ -203,7 +203,7 @@ function Timeline({trip, options, onDatabase}: {trip: Selected; options: Journal
     {text?.empty ? <p data-testid="journal-events-empty">{text.empty}</p> : null}
     {text?.rows.length ? <Table><TableHeader><TableRow><TableHead>{JOURNAL_LABEL_TEXT.eventSeq}</TableHead><TableHead>{JOURNAL_LABEL_TEXT.time}</TableHead>
       <TableHead>{JOURNAL_LABEL_TEXT.type}</TableHead><TableHead>{JOURNAL_LABEL_TEXT.detail}</TableHead><TableHead>{JOURNAL_LABEL_TEXT.attribution}</TableHead></TableRow></TableHeader>
-    <TableBody>{text.rows.map(row => <TableRow key={row.eventSeq} data-testid="journal-event-row" data-event-seq={row.eventSeq}>
+    <TableBody>{text.rows.map(row => <TableRow key={row.key} data-testid="journal-event-row" data-event-seq={row.eventSeq}>
       <TableCell>{row.eventSeq}</TableCell><TableCell>{row.time}</TableCell><TableCell>{row.type}</TableCell><TableCell>{row.detail}</TableCell><TableCell>{row.attribution}</TableCell>
     </TableRow>)}</TableBody></Table> : null}
   </div>;

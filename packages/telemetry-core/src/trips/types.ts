@@ -33,7 +33,7 @@ export type GameModeEvidence = Pick<GameMode, 'mode' | 'method' | 'confidence'>;
  * example for a reload trip) is a `job.cleared`. The trip then resumes awaiting its outcome and counts no distance.
  */
 export interface TripSeed {
-  tripUuid: string; pluginSessionId: string; game: TripGame; jobKey: string | null;
+  profileScope?:string; tripUuid: string; pluginSessionId: string; game: TripGame; jobKey: string | null;
   startedUtcMs: number; recordingCompleteness: RecordingCompleteness; lastObservedUtcMs?: number; observedDistanceM?: number; fuelUsedL?: number;
   awaitingOutcome?: boolean;
 }
@@ -57,7 +57,7 @@ export type TripInput =
   | {kind: 'attach'; receivedUtcMs: number}
   | {kind: 'event'; message: EventMessage; coveredThrough: Uint64; receivedUtcMs: number}
   | {kind: 'gap'; message: GapMessage; coveredThrough: Uint64; receivedUtcMs: number}
-  | {kind: 'reading'; sample: StepSample & {utcMs?: number}}
+  | {kind: 'reading'; sample: StepSample & {utcMs?: number}; currentJob?: JobConfiguration | null; profileScope?:string}
   | {kind: 'disconnected'};
 
 /**
@@ -84,6 +84,7 @@ export interface MoneyTally {currency: Currency; sdkType: Money['sdkType']; tota
 export interface MoneyTotals {byCurrency: MoneyTally[]; unavailable: number}
 
 export interface OpenTrip {
+  profileScope?:string;
   tripUuid: string; pluginSessionId: string; jobKey: string | null; jobEventSeq: Uint64 | null;
   phase: TripPhase;
   /** The identical job re-send that started a reload check (T8). */
@@ -126,8 +127,9 @@ export interface PendingAttach {
   gameMode: GameModeEvidence; simulation: 'running' | 'paused' | 'unavailable'; configurationRevision: Uint64;
 }
 /** What an `attach` input will store: openAttachedTrip's session, checkpoint key and job (docs/storage.md). */
-export interface AttachRequest {pluginSessionId: string; nextEventSeq: Uint64; job: JobConfiguration}
+export interface AttachRequest {pluginSessionId: string; nextEventSeq: Uint64; job: JobConfiguration; profileChange?:boolean}
 export interface SessionState {
+  profileScope?:string; profileChangePending?:boolean;
   pluginSessionId: string; game: TripGame; processedThrough: Uint64; load: LoadState; gameMode: GameModeEvidence;
   clockId: string | null; lastUtcMs: number | null; lastMonotonicNs: Uint64 | null;
   truck: ConfigurationRef | null; trailers: (ConfigurationRef | null)[];
@@ -140,9 +142,10 @@ export interface SessionState {
    * it, unless its configuration revision proves that the checkpoint's state lagged the replay (docs/trips.md, stale
    * checkpoints).
    */
-  untrackedJob: {key: string; source: 'checkpoint' | 'gap'} | null;
+  untrackedJob: {key: string; source: 'checkpoint' | 'gap' | 'recovery'} | null;
   /** The current connection's late-attach trip still to open (J9); null when none is pending. */
   pendingAttach: PendingAttach | null;
+  checkpointJob?: PendingAttach | null;
   /**
    * The current connection's checkpoint `nextEventSeq`. Events below it are replayed from the producer's retention: they
    * happened before the consumer attached (protocol v1 §7, §9). Null before the connection's checkpoint.

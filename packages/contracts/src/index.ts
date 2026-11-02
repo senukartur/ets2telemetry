@@ -178,6 +178,7 @@ export type JournalCallResult<T> =
  * label only. Not observed, not supported and invalid readings stay distinct from zero.
  */
 export interface JournalSample {
+  pluginSessionId?: string; rawTripUuid?: string; accountingIncluded?: boolean;
   id: string; tripUuid: string | null; utcMs: number; sourceClockId: string; monotonicNs: Uint64;
   gameTime: {minutes: Available<number>; clockId: string} | null;
   speed: Available<number>; fuel: Available<number>; averageConsumption: Available<number>; estimatedRange: Available<number>;

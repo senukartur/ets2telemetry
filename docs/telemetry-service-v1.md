@@ -123,7 +123,7 @@ The durable path is proven only against temporary synthetic-purpose databases in
 
 ## Trip recorder (ET-015a)
 
-`TripRecorderSink` (R2) implements `DurableSink` over the storage client and owns the reducer state. `DurableDelivery` stays the only FIFO and the only single-in-flight scheduler; the recorder adds no queue of its own. It follows the [caller contract](trips.md#caller-contract-for-et-015a):
+`TripRecorderSink` (R2) implements `DurableSink` over the storage client and owns the reducer state. A private `ProfileObserver` reuses bounded process/log/profile verification independently of Hard Mode settings, binds proof after a later source probe and expires stale proof. Canonical current-job evidence travels with ordered event/attach decisions and sampled anchors; replayed events cannot borrow later profile proof. Storage atomically persists logical membership and current-save accounting without changing source-scoped ACK coverage. After a gap or save discontinuity, valid checkpoint/current-snapshot evidence can re-establish raw tracking once replay has drained. `DurableDelivery` stays the only FIFO and the only single-in-flight scheduler; the recorder adds no queue of its own. It follows the [caller contract](trips.md#caller-contract-for-et-015a):
 
 | Sink member | What the recorder does |
 | --- | --- |

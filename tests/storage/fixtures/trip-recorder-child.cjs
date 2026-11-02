@@ -95,7 +95,23 @@ async function openStorage() {
   return client;
 }
 
+async function logicalCrash() {
+  const core = require(path.join(bundles,'storage-core.cjs'));
+  const must = result => {if (!result.ok) throw new Error(result.error.code);return result.value;};
+  const storage = must(await core.openStorage(config.open));
+  for (const session of config.logical.sessions) must(storage.upsertSession({message:session}));
+  for (const operation of config.logical.operations) {
+    const hold = config.logical.barrier && config.logical.barrier.operation===operation.name;
+    const options = hold && config.logical.barrier.kind==='inside' ? {testHooks:{beforeCommit:()=>holdInside(operation.name)}} : undefined;
+    const value = operation.kind==='samples' ? must(storage.appendSamples(operation.session,operation.rows,{uniqueSeconds:true},options))
+      : must(storage.commitEvent(operation.input,options));
+    if (hold && config.logical.barrier.kind==='after') {await write(`barrier after ${operation.name}`);await forever();}
+    if (operation.kind!=='samples') await write(`ack ${operation.session} ${value.committedThroughEventSeq}`);
+  }
+  must(storage.close());await write('done');
+}
 async function main() {
+  if (config.logical) return logicalCrash();
   const recorder = new TripRecorderSink(await openStorage());
   let commits = 0, frozen = false, firstEnded;
   const firstEnd = new Promise(resolve => { firstEnded = resolve; });

@@ -28,6 +28,7 @@ export function profileFromLog(log: string): BoundProfile | null {
       loaded = null; generation++;
     }
     if (line.includes('Loading save.')) {
+      generation++;
       const save = /\/(home|steam)\/profiles\/([0-9a-f]+)\/save\//i.exec(line);
       loaded = save && selected && save[2].toUpperCase() === selected ? {profile: selected, storage: save[1] === 'home' ? 'local' : 'cloud', generation} : null;
     }
@@ -78,9 +79,10 @@ async function profileDirectory(parent: string, profile: string): Promise<string
   return path.join(parent, matching[0].name);
 }
 export class HardModeReader {
+  private boundProfile: {process:string; generation:number; profile:string; scope:string} | undefined;
   private previous: {process: string; identity: string; text: string} | undefined;
   constructor(private readonly options: HardModeReaderOptions) {}
-  async read(source: SourceIdentity, sourceMonotonicNs: string, atUtcMs: number, signal: AbortSignal): Promise<HardModeObservation> {
+  async resolveProfile(source: SourceIdentity, atUtcMs: number, signal: AbortSignal) {
     if (source.origin !== (this.options.fixtureOrigin ?? 'game')) throw new Error('Real evidence cannot qualify a fixture');
     const process = await this.options.process(source, signal), expected = source.game === 'ets2' ? 'eurotrucks2.exe' : 'amtrucks.exe';
     if (!process || process.pid !== source.processId || path.win32.basename(process.executable).toLowerCase() !== expected || !Number.isFinite(process.createdUtcMs) || process.createdUtcMs > atUtcMs) throw new Error('Process unproven');
@@ -114,13 +116,28 @@ export class HardModeReader {
       if (candidates.length !== 1) throw new Error('Cloud candidate ambiguous');
       config = candidates[0];
     }
-    const files = await Promise.all([readStableFile(path.join(root, 'config.cfg'), CONFIG_BYTES, signal), readStableFile(path.join(local, 'config_local.cfg'), CONFIG_BYTES, signal), readStableFile(config, CONFIG_BYTES, signal)]);
-    const [global, localSettings, settings] = files.map(f => parseHardModeConfig(f.text));
     const again = await readStableFile(path.join(root, 'game.log.txt'), LOG_BYTES, signal), latest = profileFromLog(again.text);
     if (again.identity !== log.identity || !again.text.startsWith(log.text) || JSON.stringify(latest) !== JSON.stringify(profile)) throw new Error('Profile changed during read');
     const current = await this.options.process(source, signal);
     if (!current || current.pid !== process.pid || current.createdUtcMs !== process.createdUtcMs) throw new Error('Process changed');
+    const directory = await realpath(path.dirname(config)), localDirectory=await realpath(local);
+    if (path.resolve(directory).toLowerCase()!==path.resolve(path.dirname(config)).toLowerCase() || path.resolve(localDirectory).toLowerCase()!==path.resolve(local).toLowerCase()) throw new Error('Redirected profile');
+    const identity = await stat(directory), localIdentity = await stat(local);
+    if (!identity.isDirectory() || !localIdentity.isDirectory()) throw new Error('Profile directory unproven');
+    const scope = createHash('sha256').update(JSON.stringify([1, source.game, root.toLowerCase(), profile.storage, directory.toLowerCase(),
+      identity.dev, identity.ino, identity.birthtimeMs, localIdentity.dev, localIdentity.ino, localIdentity.birthtimeMs])).digest('hex');
+    const bound=this.boundProfile;
+    if (bound?.process===processKey && bound.generation===profile.generation && bound.profile===profile.profile && bound.scope!==scope) throw new Error('Profile directory replaced');
+    this.boundProfile={process:processKey,generation:profile.generation,profile:profile.profile,scope};
+    return {root, local, config, profile, scope, binding: createHash('sha256').update(`${processKey}:${log.identity}:${JSON.stringify(profile)}:${scope}`).digest('hex')};
+  }
+  async read(source: SourceIdentity, sourceMonotonicNs: string, atUtcMs: number, signal: AbortSignal): Promise<HardModeObservation> {
+    const resolved = await this.resolveProfile(source, atUtcMs, signal), {root, local, config, profile} = resolved;
+    const files = await Promise.all([readStableFile(path.join(root, 'config.cfg'), CONFIG_BYTES, signal), readStableFile(path.join(local, 'config_local.cfg'), CONFIG_BYTES, signal), readStableFile(config, CONFIG_BYTES, signal)]);
+    const [global, localSettings, settings] = files.map(f => parseHardModeConfig(f.text));
+    const checked = await this.resolveProfile(source, atUtcMs, signal);
+    if (checked.binding !== resolved.binding) throw new Error('Profile changed during settings read');
     return {assessment: evaluateHardMode({...settings, g_traffic: global.g_traffic, g_brake_intensity: localSettings.g_brake_intensity}, atUtcMs, this.options.fixtureOrigin ? 'fixture' : profile.storage),
-      binding: createHash('sha256').update(`${processKey}:${log.identity}:${JSON.stringify(profile)}`).digest('hex'), pluginSessionId: source.pluginSessionId, sourceMonotonicNs};
+      binding: resolved.binding, pluginSessionId: source.pluginSessionId, sourceMonotonicNs};
   }
 }

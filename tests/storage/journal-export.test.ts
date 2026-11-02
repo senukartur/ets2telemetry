@@ -128,7 +128,7 @@ describe('a trip export through the real worker, the service journal and main\'s
     await expect(f.instance.export(LARGE_TRIP)).resolves.toEqual({ok: true, value: {outcome: 'saved', events: 521, intervals: 520, samples: 3_601}});
     const document = JSON.parse(readFileSync(f.target(), 'utf8')) as Exported;
     expect(tripExportProblems(document)).toEqual([]);
-    expect(document.bounds).toEqual({committedThroughEventSeq: '521', lastSampleId: expect.stringMatching(/^[1-9][0-9]*$/) as string, lastIntervalId: expect.stringMatching(/^[1-9][0-9]*$/) as string,
+    expect(document.bounds).toEqual({projection:expect.objectContaining({events:expect.stringMatching(/^v4:/),intervals:expect.stringMatching(/^v4:/),samples:expect.stringMatching(/^v4:/)}),sourceTotal:1,accountingHead:null,sources:[{pluginSessionId:LARGE_SESSION,committedThroughEventSeq:'521'}],committedThroughEventSeq: '521', lastSampleId: expect.stringMatching(/^[1-9][0-9]*$/) as string, lastIntervalId: expect.stringMatching(/^[1-9][0-9]*$/) as string,
       snapshot: true});
     results.large = {file: f.target(), document};
   });

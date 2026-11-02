@@ -1,0 +1,37 @@
+import type {JobConfiguration} from '../../../contracts/src/protocol-v1';
+import {canonicalJson} from './identity';
+
+/** Persistent profile scope is private evidence, independent of settings qualification. */
+export interface ProfileObservation {
+  version: 1; scope: string; binding: string; game: 'ets2' | 'ats'; pluginSessionId: string;
+  processInstanceId: string; sourceClockId: string; afterMonotonicNs: string; loadGeneration: number;
+}
+export const CONTINUATION_FIELDS = ['cargoId', 'sourceCityId', 'sourceCompanyId', 'destinationCityId', 'destinationCompanyId',
+  'cargoMass', 'market', 'deliveryDeadline', 'expectedIncome'] as const;
+const EXTRA_FIELDS = ['cargoUnitMass', 'cargoUnitCount', 'isSpecialJob', 'plannedDistance'] as const;
+/** Exact canonical evidence only. Localized labels, cargoLoaded and currency descriptions are deliberately excluded. */
+export function continuationFingerprint(job: JobConfiguration): string | null {
+  const values: unknown[] = [];
+  for (const field of CONTINUATION_FIELDS) {
+    const reading = job[field];
+    if (!reading?.available) return null;
+    const value = reading.value;
+    if (typeof value === 'string' && !value.length || typeof value === 'number' && (!Number.isFinite(value) || value < 0)) return null;
+    values.push(field === 'expectedIncome' ? {raw: job.expectedIncome.available ? job.expectedIncome.value.raw : '', sdkType: job.expectedIncome.available ? job.expectedIncome.value.sdkType : ''} : value);
+  }
+  return `job-v1:${canonicalJson(values)}`;
+}
+export function compatibleContinuation(a: JobConfiguration, b: JobConfiguration): boolean {
+  const key = continuationFingerprint(a);
+  return key !== null && key === continuationFingerprint(b) && EXTRA_FIELDS.every(field => {
+    const x = a[field], y = b[field];
+    return !x.available || !y.available || canonicalJson(x.value) === canonicalJson(y.value);
+  });
+}
+export function matchContinuation<T extends {game: string; profile: string; job: JobConfiguration; eligible: boolean}>(
+  candidates: readonly T[], game: string, profile: string | null, job: JobConfiguration
+): T | null {
+  if (!profile || continuationFingerprint(job) === null) return null;
+  const eligible = candidates.filter(c => c.eligible && c.game === game && c.profile === profile && compatibleContinuation(c.job, job));
+  return eligible.length === 1 ? eligible[0] : null;
+}

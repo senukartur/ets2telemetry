@@ -1,3 +1,4 @@
+import {continuationExpected} from '../shared/trip-continuation-expected';
 // Shared harness of the ET-015a recording tests under the Electron runtime: the real storage worker (or the test-only
 // fault worker), StorageClient, TripRecorderSink and V1Ingestion against the reactive v1 simulator on actual Windows
 // pipes, into a temporary synthetic-purpose database, and the labelled rows read back from that database. Barriers and
@@ -14,7 +15,7 @@ import {StorageClient, workerHandle, type StorageWorkerHandle} from '../../packa
 import type {CommandName, StorageRequest} from '../../packages/storage/src/worker/protocol';
 import {ShutdownSequence, type ShutdownTimers} from '../../apps/desktop/src/shutdown-sequence';
 import {storageError} from '../../packages/storage/src/errors';
-import type {TripSummaryView, TripView} from '../../packages/telemetry-core/src/index';
+import type {ProfileObservation,TripSummaryView, TripView} from '../../packages/telemetry-core/src/index';
 import {TripRecorderSink, type TripRecorderClient} from '../../apps/desktop/src/trip-recorder';
 import {V1Ingestion, type V1SourceState} from '../../apps/desktop/src/v1-ingestion';
 import type {ClientPolicy} from '../../tools/telemetry-simulator/src/v1/client';
@@ -109,8 +110,8 @@ export function viewSummary(view: TripView, seed: string): unknown {
 
 /** A hand-written `<id>.trip.expected.json` of the simulator corpus, or a `tests/fixtures/recording/<id>.rows.expected.json`. */
 export interface RowsExpected {scenario: string; authoredFrom: string[]; trips: unknown[]; attributions: unknown[]; intervals: unknown[]; coverage: {committedThroughEventSeq: string} & Record<string, unknown>; view?: unknown}
-export const tripExpected = (id: string) => JSON.parse(readFileSync(path.join(SIMULATOR_V1_DIR, `${id}.trip.expected.json`), 'utf8')) as RowsExpected;
-export const recordingExpected = (id: string) => JSON.parse(readFileSync(path.join(RECORDING_FIXTURES, `${id}.rows.expected.json`), 'utf8')) as RowsExpected;
+export const tripExpected = (id: string) => continuationExpected(id,JSON.parse(readFileSync(path.join(SIMULATOR_V1_DIR, `${id}.trip.expected.json`), 'utf8')) as RowsExpected,true);
+export const recordingExpected = (id: string) => continuationExpected(id,JSON.parse(readFileSync(path.join(RECORDING_FIXTURES, `${id}.rows.expected.json`), 'utf8')) as RowsExpected,true);
 
 /** Commit statuses and coverage the recorder's storage reported, counted at the storage client. */
 export interface CommitTally {committed: number; duplicate: number; covered: number; conflict: number; coverage: bigint}
@@ -120,6 +121,7 @@ export interface Service {
   states: V1SourceState[]; logs: [string, unknown][]; control?: MessagePort;
 }
 export interface RecordingPlan {
+  profileEvidence?:()=>ProfileObservation|undefined;
   /** workerData for the fault worker of the first service (R13); without it the production worker entry runs. */
   fault?: Record<string, unknown>;
   /** The coverage-item bound of the first service only; a restarted service has the production bound (MAX_PENDING_COMMITS). */
@@ -301,7 +303,7 @@ export async function runRecording(input: Json, database: {path: string; backups
       listTrips: page => client.listTrips(page), getEvent: (session, eventSeq) => client.getEvent(session, eventSeq), listEvents: (session, page) => client.listEvents(session, page),
       appendSamples: (session, rows, options) => client.appendSamples(session, rows, options), openAttachedTrip: input => client.openAttachedTrip(input)
     };
-    const recorder = new TripRecorderSink(storage), states: V1SourceState[] = [], logs: [string, unknown][] = [];
+    const recorder = new TripRecorderSink(storage,{profileEvidence:plan.profileEvidence}), states: V1SourceState[] = [], logs: [string, unknown][] = [];
     const service: Service = {ingestion: undefined as unknown as V1Ingestion, recorder, client, worker, exit, states, logs, control: channel?.port1};
     service.ingestion = new V1Ingestion({connect, sink: recorder, maxPendingCommits: first ? plan.maxPendingCommits : undefined, sampleFlushMs: plan.sampleFlushMs,
       sampleBatchRows: plan.sampleBatchRows, diagnose: (event, facts) => logs.push([event, facts]),

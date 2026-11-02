@@ -12,10 +12,10 @@ export function journalChart(samples: readonly JournalSample[], game: JournalGam
   let previous: JournalSample | undefined, start = 0n;
   for (const sample of samples.slice(0, 300)) {
     const ns = BigInt(sample.monotonicNs);
-    if (!sample.speed.available || !Number.isFinite(sample.speed.value)) {previous = undefined; continue;}
+    if (sample.accountingIncluded === false || !sample.speed.available || !Number.isFinite(sample.speed.value)) {previous = undefined; continue;}
     const prior = previous ? BigInt(previous.monotonicNs) : null;
     // Sampling occupies source seconds. A missing second, a backwards/duplicate instant or a new clock starts a segment.
-    if (!previous || previous.sourceClockId !== sample.sourceClockId || prior === null || ns <= prior || ns / 1_000_000_000n - prior / 1_000_000_000n > 1n) {
+    if (!previous || previous.pluginSessionId !== sample.pluginSessionId || previous.sourceClockId !== sample.sourceClockId || prior === null || ns <= prior || ns / 1_000_000_000n - prior / 1_000_000_000n > 1n) {
       start = ns; segments.push({points: []});
     }
     segments[segments.length - 1].points.push({id: sample.id, elapsedSeconds: Number(ns - start) / 1e9,

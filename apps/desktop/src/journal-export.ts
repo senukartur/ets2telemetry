@@ -1,4 +1,5 @@
-// The trip export document: pure serialization of `ets2telemetry.trip-export` format version 3.
+import type {JournalRecordingSource} from '../../../packages/contracts/src/journal';
+// The trip export document: pure serialization of `ets2telemetry.trip-export` format version 4.
 // The writer (journal-export-writer.ts) reads the trip detail once, then its completeness intervals, timeline events and
 // samples page by page, and appends this module's text for each page, so the whole document is never held in memory.
 // Every row is copied field by field in a fixed key order; values keep the protocol v1 availability and money shapes and
@@ -11,10 +12,10 @@ import {
 import {emptyTripDiagnostics} from './trip-export-diagnostics';
 
 /** The array sections of the document, in the order they are written. */
-export const TRIP_EXPORT_SECTIONS = ['intervals', 'events', 'samples'] as const;
+export const TRIP_EXPORT_SECTIONS = ['sources', 'intervals', 'events', 'samples'] as const;
 export type TripExportSection = typeof TRIP_EXPORT_SECTIONS[number];
 /** One row of a section, as a journal page returns it. */
-export interface TripExportRows {intervals: JournalInterval; events: JournalEvent; samples: JournalSample}
+export interface TripExportRows {sources:JournalRecordingSource;intervals: JournalInterval; events: JournalEvent; samples: JournalSample}
 
 /** The header of an export of the database `database` (J3, J15). The session origin follows from the purpose. */
 export function tripExportHeader(database: {uuid: string; purpose: JournalPurpose; schemaVersion: number}, version: string, exportedUtcMs: number): TripExportHeader {
@@ -24,13 +25,18 @@ export function tripExportHeader(database: {uuid: string; purpose: JournalPurpos
 /** The bounds of the export (J17), fixed by the detail read at its start. An open trip's export is a snapshot. */
 export function tripExportBounds(detail: JournalTripDetail): TripExportBounds {
   const b = detail.exportBounds;
-  return {committedThroughEventSeq: b.committedThroughEventSeq, lastSampleId: b.lastSampleId, lastIntervalId: b.lastIntervalId, snapshot: detail.trip.outcome === 'open'};
+  return {...(b.snapshot ? {projection:b.snapshot,sources:b.sources,sourceTotal:b.sourceTotal,accountingHead:b.accountingHead} : {}), committedThroughEventSeq: b.committedThroughEventSeq, lastSampleId: b.lastSampleId, lastIntervalId: b.lastIntervalId, snapshot: detail.trip.outcome === 'open'};
 }
 /**
  * Whether a row lies inside the bounds (J17): an interval or sample id at most the largest one the detail read saw, an
  * event at most the trip session's committed coverage. A section whose bound is null has no rows to export.
  */
 export function withinTripExportBounds<S extends TripExportSection>(section: S, row: TripExportRows[S], bounds: TripExportBounds): boolean {
+  if (section === 'sources') return true;
+  if (section === 'events' && bounds.projection && (row as JournalEvent).pluginSessionId) {
+    const source = bounds.sources?.find(s=>s.pluginSessionId===(row as JournalEvent).pluginSessionId);
+    return !source || BigInt((row as JournalEvent).eventSeq)<=BigInt(source.committedThroughEventSeq);
+  }
   if (section === 'events') return BigInt((row as JournalEvent).eventSeq) <= BigInt(bounds.committedThroughEventSeq);
   const last = section === 'intervals' ? bounds.lastIntervalId : bounds.lastSampleId;
   return last !== null && BigInt((row as JournalInterval | JournalSample).id) <= BigInt(last);
@@ -43,14 +49,14 @@ function trip(t: JournalTripDetail['trip']): TripExportTrip {
     startedUtcMs: t.startedUtcMs, endedUtcMs: t.endedUtcMs, observedDistanceM: t.observedDistanceM, fuelUsedL: t.fuelUsedL,
     openedBy: t.openedBy, openedEventSeq: t.openedEventSeq, outcomeEventSeq: t.outcomeEventSeq, closedBy: t.closedBy};
 }
-const interval = (i: JournalInterval): JournalInterval => ({id: i.id, kind: i.kind, annotation: i.annotation, cause: i.cause, startUtcMs: i.startUtcMs, endUtcMs: i.endUtcMs,
+const interval = (i: JournalInterval): JournalInterval => ({...(i.pluginSessionId ? {pluginSessionId:i.pluginSessionId,rawTripUuid:i.rawTripUuid}:{}),id: i.id, kind: i.kind, annotation: i.annotation, cause: i.cause, startUtcMs: i.startUtcMs, endUtcMs: i.endUtcMs,
   startMonotonicNs: i.startMonotonicNs, endMonotonicNs: i.endMonotonicNs, sourceClockId: i.sourceClockId, firstEventSeq: i.firstEventSeq, lastEventSeq: i.lastEventSeq, detail: i.detail});
-const event = (e: JournalEvent): JournalEvent => ({eventSeq: e.eventSeq, type: e.type, occurred: e.occurred, record: e.record,
-  attribution: e.attribution === null ? null : {kind: e.attribution.kind, tripUuid: e.attribution.tripUuid}});
-const sample = (s: JournalSample): TripExportSample => ({id: s.id, utcMs: s.utcMs, sourceClockId: s.sourceClockId, monotonicNs: s.monotonicNs, gameTime: s.gameTime,
+const event = (e: JournalEvent): JournalEvent => ({...(e.pluginSessionId ? {id:e.id,pluginSessionId:e.pluginSessionId,rawTripUuid:e.rawTripUuid}:{}),eventSeq: e.eventSeq, type: e.type, occurred: e.occurred, record: e.record,
+  attribution: e.attribution === null ? null : {...(e.attribution.logicalTripUuid?{logicalTripUuid:e.attribution.logicalTripUuid}:{}),kind: e.attribution.kind, tripUuid: e.attribution.tripUuid}});
+const sample = (s: JournalSample): TripExportSample => ({...(s.pluginSessionId ? {pluginSessionId:s.pluginSessionId,rawTripUuid:s.rawTripUuid,accountingIncluded:s.accountingIncluded}:{}),id: s.id, utcMs: s.utcMs, sourceClockId: s.sourceClockId, monotonicNs: s.monotonicNs, gameTime: s.gameTime,
   speed: s.speed, fuel: s.fuel, averageConsumption: s.averageConsumption, estimatedRange: s.estimatedRange, engineRpm: s.engineRpm, gear: s.gear, odometer: s.odometer,
   position: s.position});
-const ROW: {[S in TripExportSection]: (row: TripExportRows[S]) => unknown} = {intervals: interval, events: event, samples: sample};
+const ROW: {[S in TripExportSection]: (row: TripExportRows[S]) => unknown} = {sources:source=>({...source}),intervals: interval, events: event, samples: sample};
 
 /**
  * Serializes one export document in parts: `begin` writes every fixed section and opens the intervals array, `rows`

@@ -6,7 +6,7 @@
 // it. See docs/journal.md#ipc-methods-and-codes-j10-j11.
 import type {JournalCallCode, JournalCallResult, JournalDatabase, JournalSample, JournalStorageCode, JournalTripsQuery} from '../../../packages/contracts/src';
 import {
-  isJournalEventCursor, isJournalRowCursor, isJournalTripsQuery, isJournalUuid, JOURNAL_EVENT_LIMITS, JOURNAL_INTERVAL_LIMITS, JOURNAL_SAMPLE_LIMITS,
+  isJournalListCursor, isJournalSnapshotCursor, journalCursorPosition, isJournalEventCursor, isJournalRowCursor, isJournalTripsQuery, isJournalUuid, JOURNAL_EVENT_LIMITS, JOURNAL_INTERVAL_LIMITS, JOURNAL_SAMPLE_LIMITS,
   validateJournalEventPage, validateJournalIntervalPage, validateJournalTripDetail, validateJournalTripPage, type JournalPageQuery, type JournalTripListItem
 } from '../../../packages/contracts/src/journal';
 import {NAME_BYTES} from '../../../packages/contracts/src/protocol-v1';
@@ -48,7 +48,7 @@ const isRecord = (value: unknown): value is Record<string, unknown> => typeof va
 const hasExactly = (value: Record<string, unknown>, keys: readonly string[]) => Object.keys(value).length === keys.length && keys.every(key => Object.hasOwn(value, key));
 const TRIP_FILTERS = ['cursor', 'game', 'outcome', 'completeness'] as const;
 const PAGE_LIMITS: Readonly<Record<PageKind, readonly number[]>> = {events: JOURNAL_EVENT_LIMITS, intervals: JOURNAL_INTERVAL_LIMITS, samples: JOURNAL_SAMPLE_LIMITS};
-const pageCursor = (kind: PageKind, value: unknown) => kind === 'events' ? isJournalEventCursor(value) : isJournalRowCursor(value);
+const pageCursor = (kind: PageKind, value: unknown) => isJournalSnapshotCursor(value) || (kind === 'events' ? isJournalEventCursor(value) : isJournalRowCursor(value));
 
 /**
  * A fresh copy of a `listJournalTrips` filter: only own listed fields are read, each once, and a field whose value is
@@ -154,7 +154,8 @@ const SAMPLE_KEYS = ['id', 'tripUuid', 'utcMs', 'sourceClockId', 'monotonicNs', 
 const SAMPLE_VALUES = ['speed', 'fuel', 'averageConsumption', 'estimatedRange', 'engineRpm', 'gear', 'odometer'];
 /** One stored sample of the requested trip, exactly the JournalSample shape. */
 function sample(value: unknown, tripUuid: string): void {
-  const o = exact(value, SAMPLE_KEYS);
+  const o = exact(value, [...SAMPLE_KEYS, ...(isRecord(value) && value.pluginSessionId !== undefined ? ['pluginSessionId', 'rawTripUuid', 'accountingIncluded'] : [])]);
+  if (o.pluginSessionId !== undefined) {uuid(o.pluginSessionId); uuid(o.rawTripUuid); if (typeof o.accountingIncluded !== 'boolean') bad();}
   if (!isJournalRowCursor(o.id) || o.tripUuid !== tripUuid) bad();
   count(o.utcMs); uuid(o.sourceClockId); uint64(o.monotonicNs);
   if (o.gameTime !== null) { const g = exact(o.gameTime, ['minutes', 'clockId']); available(g.minutes, count); uuid(g.clockId); }
@@ -163,12 +164,13 @@ function sample(value: unknown, tripUuid: string): void {
 }
 /** Ids (row ids or eventSeqs) strictly increasing and all after the requested cursor. */
 function ascending(ids: readonly string[], cursor: string | undefined): void {
-  let previous = cursor === undefined ? 0n : BigInt(cursor);
+  let previous = cursor === undefined ? 0n : BigInt(journalCursorPosition(cursor));
   for (const id of ids) { const next = BigInt(id); if (next <= previous) bad(); previous = next; }
 }
 /** A page's next cursor is exactly its last id when the page is full, and null otherwise. */
 function nextCursor(next: string | null, ids: readonly string[], limit: number): void {
-  if (next !== (ids.length === limit ? ids.at(-1) : null)) bad();
+  if ((next === null) !== (ids.length < limit)) bad();
+  if (next !== null && journalCursorPosition(next) !== ids.at(-1)) bad();
 }
 /** A list row's display texts within the protocol's name bound; the contract validator checked the rest. */
 function rowTexts(trip: JournalTripListItem): void {
@@ -196,7 +198,7 @@ function checkValue(query: JournalQuery, value: unknown): void {
       if ((game !== undefined && trip.game !== game) || (outcome !== undefined && trip.outcome !== outcome) || (completeness !== undefined && trip.recordingCompleteness !== completeness)) bad();
     }
     // Newest first: the next page starts below this one, which starts below the cursor.
-    if (cursor !== undefined && page.nextCursor !== null && BigInt(page.nextCursor) >= BigInt(cursor)) bad();
+    if (cursor !== undefined && page.nextCursor !== null && BigInt(isJournalListCursor(page.nextCursor) ? page.nextCursor.split(':')[3] : page.nextCursor) >= BigInt(isJournalListCursor(cursor) ? cursor.split(':')[3] : cursor)) bad();
     return;
   }
   case 'trip': {
@@ -206,7 +208,7 @@ function checkValue(query: JournalQuery, value: unknown): void {
     return;
   }
   case 'events': {
-    const page = validateJournalEventPage(value, query.page.limit), ids = page.events.map(event => event.eventSeq);
+    const page = validateJournalEventPage(value, query.page.limit), ids = page.events.map(event => event.id ?? event.eventSeq);
     ascending(ids, query.page.cursor); nextCursor(page.nextCursor, ids, query.page.limit);
     return;
   }
@@ -214,7 +216,8 @@ function checkValue(query: JournalQuery, value: unknown): void {
     // Each interval's `detail` is an open record checked only as an object whose annotation and cause agree with the
     // interval's flags; its cause-specific keys vary by writer and are forwarded as stored (docs/journal.md).
     const page = validateJournalIntervalPage(value, query.page.limit), ids = page.intervals.map(interval => interval.id);
-    ascending(ids, query.page.cursor); nextCursor(page.nextCursor, ids, query.page.limit);
+    if (page.sources) {const sourceIds=page.sources.map(s=>s.id);ascending(sourceIds,query.page.cursor);nextCursor(page.nextSourceCursor ?? null,sourceIds,query.page.limit);}
+    else {ascending(ids, query.page.cursor); nextCursor(page.nextCursor, ids, query.page.limit);}
     return;
   }
   case 'samples': {
@@ -224,7 +227,7 @@ function checkValue(query: JournalQuery, value: unknown): void {
     const samples = o.samples as unknown[];
     for (const item of samples) sample(item, query.tripUuid);
     const ids = samples.map(item => (item as {id: string}).id);
-    if (o.nextCursor !== null && !isJournalRowCursor(o.nextCursor)) bad();
+    if (o.nextCursor !== null && !pageCursor('samples', o.nextCursor)) bad();
     ascending(ids, query.page.cursor); nextCursor(o.nextCursor as string | null, ids, query.page.limit);
     return;
   }

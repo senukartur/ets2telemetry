@@ -559,13 +559,13 @@ async function reconcileExport({config, record, raw, session, restartMainEvents}
   const document = JSON.parse(await readFile(path.join(config.output, 'recording-export', 'trip.json'), 'utf8'));
   const problemsOf = await exportValidator(config);
   journal.exportProblems = problemsOf(document);
-  assert.deepEqual(journal.exportProblems, [], 'The export is not a valid format version 3 document');
+  assert.deepEqual(journal.exportProblems, [], 'The export is not a valid format version 4 document');
   journal.exportValidated = true;
 
   // Hand-written sections.
   assert.deepEqual({format: document.format, formatVersion: document.formatVersion, application: document.header.application, purpose: document.header.database.purpose,
     schemaVersion: document.header.database.schemaVersion, sessionOrigin: document.header.sessionOrigin},
-  {format: 'ets2telemetry.trip-export', formatVersion: 3, application: {name: 'ETS2Telemetry', version: smokeBuild(config).version}, purpose: 'synthetic', schemaVersion: 3, sessionOrigin: 'synthetic'});
+  {format: 'ets2telemetry.trip-export', formatVersion: 4, application: {name: 'ETS2Telemetry', version: smokeBuild(config).version}, purpose: 'synthetic', schemaVersion: 4, sessionOrigin: 'synthetic'});
   assert.deepEqual(document.trip, exportTripSection(session, trip, recordingHardModeAudit(document, record)), 'The exported trip differs from the hand-written row');
   assert.deepEqual(document.window, {known: true, pluginSessionId: session, fromEventSeq: '3', throughEventSeq: '8', end: 'close-event'});
   assert.deepEqual({source: document.job.source, eventSeq: document.job.eventSeq, checkpointNextEventSeq: document.job.checkpointNextEventSeq, values: document.job.values},
@@ -743,7 +743,7 @@ export async function verifyRecordingRun({config, record, recording, mainEvents,
     sidecars: ['-wal', '-shm', '-journal'].filter(suffix => existsSync(database + suffix)), syntheticBackups: existsSync(path.join(root, 'synthetic', 'backups')),
     historyDatabase: existsSync(path.join(root, 'data', 'telemetry.sqlite')), dataDirectory: existsSync(path.join(root, 'data'))};
   // Whether the empty `data` directory exists is recorded only; the history database file must not.
-  assert.deepEqual({...files, dataDirectory: null}, {magic: 'SQLite format 3', applicationId: 1163154226, userVersion: 3, sidecars: [], syntheticBackups: false,
+  assert.deepEqual({...files, dataDirectory: null}, {magic: 'SQLite format 3', applicationId: 1163154226, userVersion: 4, sidecars: [], syntheticBackups: false,
     historyDatabase: false, dataDirectory: null});
   record.historyDatabaseAbsent = true; record.sidecarsAbsent = true;
 
@@ -755,7 +755,7 @@ export async function verifyRecordingRun({config, record, recording, mainEvents,
       simulatorSession: s.session === session}))};
   assert.deepEqual(raw.integrity, ['ok']); assert.equal(raw.foreignKeyViolations, 0);
   assert.deepEqual({purpose: raw.purpose, acceptedOrigin: raw.acceptedOrigin, applicationId: raw.applicationId, userVersion: raw.userVersion},
-    {purpose: 'synthetic', acceptedOrigin: 'synthetic', applicationId: 1163154226, userVersion: 3});
+    {purpose: 'synthetic', acceptedOrigin: 'synthetic', applicationId: 1163154226, userVersion: 4});
   assert.deepEqual(record.database.sessions, [{game: 'ets2', origin: 'synthetic', committedThrough: '13', endReason: null, simulatorSession: true}]);
   assert.ok(raw.events.every(event => event.session === session) && raw.trips.every(trip => trip.session === session && trip.game === 'ets2'));
   assert.ok(raw.sampleRows.every(sample => sample.session === session), 'A sample belongs to another plugin session');

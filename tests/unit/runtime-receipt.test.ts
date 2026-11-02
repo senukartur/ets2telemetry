@@ -257,7 +257,7 @@ type Edit = [(string | number)[], Json | undefined];
 function recordingReceiptWith(edits: Edit[]): string {
   const step = (pid: number, name: string): Json => ({pid, event: 'SHUTDOWN_STEP', facts: {name, outcome: 'ok'}});
   const started = (pid: number, created: boolean): Json[] => [{pid, event: 'RECORDING_TARGET', facts: {purpose: 'synthetic'}}, {pid, event: 'STORAGE_VERIFIED'},
-    {pid, event: 'HISTORY_STORAGE_OPENED', facts: {schemaVersion: 3, created, migratedFrom: null}},
+    {pid, event: 'HISTORY_STORAGE_OPENED', facts: {schemaVersion: 4, created, migratedFrom: null}},
     {pid, event: 'V1_SOURCE_STATUS', facts: {status: 'stale', selection: 'synthetic', durable: 'active', count: 1}}];
   // Seven rows: the intake and flush steps, then the storage steps around the close.
   const stopped = (pid: number): Json[] => [...['ingestion', 'capture', 'v1-ingestion', 'recording-flush', 'storage-probe'].map(name => step(pid, name)),
@@ -327,7 +327,7 @@ function recordingReceiptWith(edits: Edit[]): string {
       trayExit: {launcherExit: 0, signal: null, exitMilliseconds: 88, requests: ['tray']}, restartLauncherExit: 0,
       simulator: {exit: {code: 0, signal: null}, report: {scenario: 'normal-delivery-runtime-journey', cancelled: false, matchesReplay: true, differences: [],
         connections: [1, 2, 3].map(index => ({connection: index, durable: true, closedBy: index === 1 ? 'disconnect' : 'client'}))}},
-      files: {magic: 'SQLite format 3', applicationId: 1163154226, userVersion: 3, sidecars: [], syntheticBackups: false, historyDatabase: false, dataDirectory: false},
+      files: {magic: 'SQLite format 3', applicationId: 1163154226, userVersion: 4, sidecars: [], syntheticBackups: false, historyDatabase: false, dataDirectory: false},
       database: {integrity: ['ok'], foreignKeyViolations: 0, purpose: 'synthetic', acceptedOrigin: 'synthetic', acknowledgedThrough: '13',
         sessions: [{game: 'ets2', origin: 'synthetic', committedThrough: '13', endReason: null, simulatorSession: true}],
         // ET-016 PR-8: the schema version 2 columns of a trip opened at its job event.
@@ -514,7 +514,7 @@ function withTripSample(): Edit[] {
 function journalReceipt(path: (string | number)[] = [], replacement?: Json): string {
   const main = (): Json[] => [{event: 'APP_START'}, {event: 'APP_EXIT_REQUESTED', facts: {reason: 'app-quit'}}, {event: 'SERVICE_EXIT', detail: {code: 0}}, {event: 'APP_EXIT', detail: {code: 0}}];
   const service = (created: boolean): Json[] => [...(created ? [] : [{event: 'RECORDING_TARGET', facts: {purpose: 'synthetic'}}]), {event: 'STORAGE_VERIFIED'},
-    {event: 'HISTORY_STORAGE_OPENED', facts: {schemaVersion: 3, created, migratedFrom: null}},
+    {event: 'HISTORY_STORAGE_OPENED', facts: {schemaVersion: 4, created, migratedFrom: null}},
     ...['ingestion', 'capture', 'v1-ingestion', 'recording-flush', 'storage-probe'].map(name => ({event: 'SHUTDOWN_STEP', facts: {name, outcome: 'ok'}})),
     {event: 'HISTORY_STORAGE_CLOSED'}, {event: 'SHUTDOWN_STEP', facts: {name: 'history-storage', outcome: 'ok'}}, {event: 'SERVICE_REPORT', detail: {type: 'stopped', clean: true}}];
   const trip = (n: number) => `7a000000-0000-4000-8000-00000000000${n}`;
@@ -528,18 +528,18 @@ function journalReceipt(path: (string | number)[] = [], replacement?: Json): str
       fuel: {top: 242, bottom: 262, visible: true}},
       liveLinesInViewport: true, liveHiddenInJournal: true, emptyHistoryShown: true, recordingOffNoteAbsent: true, liveRestored: true, seeded: true, syntheticBannerShown: true,
       pagesWalked: true, anchorRowsMatch: true, anchorDetailsMatch: true, backKeptPage: true, sampleGapShown: true, timelinePaged: true, intervalsPaged: true, samplesPaged: true,
-      filtersApplied: true, shutdownClean: true,
+      filtersApplied: true, logicalContinuationVerified:true, shutdownClean: true,
       emptyHistory: {page: 'Page 1. The journal does not update by itself; use Refresh.', error: null, empty: 'No trips recorded',
         emptyNote: null, banner: null, next: false, previous: false, rows: []},
       emptyRunExit: {launcherExit: 0, signal: null, closeMilliseconds: 98},
-      seed: {trips: 119, fillers: 110, pagingTolls: 104, pagingSamples: 3600, elapsedMs: 618, bundleMs: 128, totalMs: 805},
-      pages: [{count: 50, next: true, previous: false}, {count: 50, next: true, previous: true}, {count: 19, next: false, previous: true}],
+      seed: {trips: 120, fillers: 110, pagingTolls: 104, pagingSamples: 3600, elapsedMs: 618, bundleMs: 128, totalMs: 805},
+      pages: [{count: 50, next: true, previous: false}, {count: 50, next: true, previous: true}, {count: 20, next: false, previous: true}],
       anchorRows: [8, 7, 6, 5, 4, 3, 2, 1].map(n => ({trip: trip(n)})), anchorDetails: [1, 2, 3, 4, 5, 6, 7, 8].map(n => ({trip: trip(n)})),
       deliveredSamples: [{kind: 'sample', speed: '80.1 km/h'}, {kind: 'sample', speed: '0.0 km/h'}, {kind: 'gap', text: 'no samples for 1 s'}, {kind: 'sample', speed: 'unavailable (invalid reading)'}],
       pagingTimeline: {first: '1', pageTwo: ['101', '102', '103', '104', '105'], nextOnLast: false}, pagingIntervals: {pageTwo: 4, nextOnLast: false},
       pagingSamples: {kinds: ['sample'], firstSpeed: '72 km/h', nextOnSecond: true},
-      filters: {none: [trip(5), trip(4), trip(3)], noneNext: false, partial: 39, partialNext: false},
-      restartLauncherExit: 0, files: {magic: 'SQLite format 3', applicationId: 1163154226, userVersion: 3, sidecars: [], syntheticBackups: false},
+      filters: {none: [trip(5), trip(4), trip(3)], noneNext: false, partial: 40, partialNext: false},
+      restartLauncherExit: 0, files: {magic: 'SQLite format 3', applicationId: 1163154226, userVersion: 4, sidecars: [], syntheticBackups: false},
       exportNoteShown: true, exportsSaved: true, exportCancelledWritesNothing: true, exportTargetRefused: true, dataFolderUnchanged: true,
       exportFolder: ['delivered.json', 'paging.json'],
       pagingExport: {events: 105, firstEvent: '1', lastEvent: '105', intervals: 104, samples: 3600, snapshot: true, outcome: 'open'},
@@ -682,7 +682,7 @@ function refusalCases() {
     invalid('shared-memory file beside the database', ['refusal', 'file', 'dataEntries'], ['telemetry.sqlite', 'telemetry.sqlite-shm']),
     invalid('database removed', ['refusal', 'file', 'dataEntries'], []),
     invalid('backup taken', ['refusal', 'file', 'backups'], true),
-    invalid('journal list as an empty page', ['refusal', 'bridge', 'list'], {ok: true, value: {database: {purpose: 'history', schemaVersion: 3}, trips: [], nextCursor: null}}),
+    invalid('journal list as an empty page', ['refusal', 'bridge', 'list'], {ok: true, value: {database: {purpose: 'history', schemaVersion: 4}, trips: [], nextCursor: null}}),
     invalid('detail refused with another storage code', ['refusal', 'bridge', 'detail', 'storageCode'], 'DATABASE_UNRECOGNIZED'),
     invalid('events still opening', ['refusal', 'bridge', 'events', 'code'], 'DATABASE_OPENING'),
     invalid('Journal tab shows an empty list', ['refusal', 'journal'], {error: null, empty: 'No trips recorded',
@@ -717,7 +717,7 @@ function refusalCases() {
     invalid('history step logged twice', ['serviceEvents', 11], {event: 'SHUTDOWN_STEP', facts: {phase: 'storage', name: 'history-storage', outcome: 'ok', ms: 0}}),
     invalid('refusal logged twice', ['serviceEvents', 11], {event: 'HISTORY_STORAGE_UNAVAILABLE', facts: {code: 'SCHEMA_NEWER'}}),
     invalid('refused with another code', ['serviceEvents', 1, 'facts', 'code'], 'DATABASE_UNRECOGNIZED'),
-    invalid('history opened', ['serviceEvents', 11], {event: 'HISTORY_STORAGE_OPENED', facts: {schemaVersion: 3, created: false, migratedFrom: 999}}),
+    invalid('history opened', ['serviceEvents', 11], {event: 'HISTORY_STORAGE_OPENED', facts: {schemaVersion: 4, created: false, migratedFrom: 999}}),
     invalid('a recording target opened', ['serviceEvents', 0], {event: 'RECORDING_TARGET', facts: {purpose: 'synthetic'}}),
     invalid('history step failed', ['serviceEvents', 8, 'facts', 'outcome'], 'failed'),
     invalid('service stopped unclean', ['serviceEvents', 10, 'detail', 'clean'], false),
@@ -895,7 +895,7 @@ it('requires an intact current driver receipt and normal Job exit without overwr
 
 function hardModeCases() {
   const hardMode = {unknown: true, fail: true, pass: true, hints: true, hover: true, inlineDetails: true, bilingual: true, languageHotChange: true, keyboard: true, refresh: true, lost: true, restoredLost: true, irreversible: true, badge: true,
-    export: true, overlayExcluded: true, persisted: true, schemaVersion: 3, flags: [false, true], errors: []};
+    export: true, overlayExcluded: true, persisted: true, schemaVersion: 4, flags: [false, true], errors: []};
   const body = (value: unknown) => JSON.stringify({passed: true, commit: 'candidate', mode: 'packaged', scenarioKind: 'hard-mode', hardMode: value});
   const accepted = {scenario: 'hard-mode', code: 0, available: true, reason: null};
   const rejected = {...accepted, reason: 'HARD_MODE_RESULT_INVALID'};
