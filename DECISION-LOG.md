@@ -831,3 +831,7 @@ The owner approved the full architect plan with “да, реализуй пла
 ## ET-061 current-track game visibility — November 2, 2026
 
 The owner requested readable media source names and current-track visibility only in the game after testing staging. This supersedes the earlier desktop-visibility choice: the normal panel requires the active selected game's fresh window report and hides on the desktop, Alt+Tab and minimization. Position editing retains its explicit application-focused preview.
+
+## ET-051 average consumption zeros — November 2, 2026
+
+An owner-run raw channel capture showed that ETS2 itself sends 0.0 for `truck.fuel.consumption.average` for about a quarter of a second every two to three seconds while driving, and for longer while standing. Of the options on the card, the owner chose to hold the value on screen: the dashboard and the overlay keep the last non-zero value through a zero, for up to 10 s (the agent picked 10 s from the card's 10–15 s), and the database and exports keep what the SDK sent. Converting such zeros to unavailable at ingestion was not chosen.

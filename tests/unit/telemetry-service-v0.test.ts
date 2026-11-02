@@ -110,6 +110,22 @@ it('boots transport only after the parent selection and retains it across render
       expect(port.messages.at(-1)?.update).toMatchObject({selection: 'synthetic', fresh: true});
       command('unsubscribe'); expect(port.closed).toBe(true);
     }
+    // ET-051: the published update shows the last non-zero SDK mean through a zero for up to 10 s of capture time.
+    const port = new TestPort(); command('subscribe', [port]);
+    const checkpoint = port.messages.at(-1)!.update.observation!, snapshot = structuredClone(emissions[2].message);
+    if (snapshot.kind !== 'snapshot') throw new Error('Fixture must be a snapshot');
+    let seq = BigInt(checkpoint.seq);
+    const consumption = async (value: number, afterMs: number) => {
+      snapshot.seq = (++seq).toString(); snapshot.capture = {...checkpoint.capture, monotonicNs: (BigInt(checkpoint.capture.monotonicNs) + BigInt(afterMs) * 1_000_000n).toString()};
+      snapshot.data.state.averageConsumption = {available: true, value, unit: 'L/100km'};
+      port.consume(); sockets[0].emit('data', encodeFrame(snapshot)); await vi.advanceTimersByTimeAsync(50);
+      return port.messages.at(-1)!.update.observation!.state.averageConsumption;
+    };
+    expect(await consumption(35, 1000)).toEqual({available: true, value: 35, unit: 'L/100km'});
+    expect(await consumption(0, 2000)).toEqual({available: true, value: 35, unit: 'L/100km'});
+    expect(await consumption(0, 10_500)).toEqual({available: true, value: 35, unit: 'L/100km'});
+    expect(await consumption(0, 12_000)).toEqual({available: true, value: 0, unit: 'L/100km'});
+    command('unsubscribe');
     expect(connect).toHaveBeenCalledTimes(1);
     command('select'); await vi.advanceTimersByTimeAsync(0); expect(connect).toHaveBeenCalledTimes(2); expect(sockets[0].destroyed).toBe(true);
   } finally {
