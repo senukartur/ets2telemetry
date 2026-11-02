@@ -1,8 +1,16 @@
+import {pathToFileURL} from 'node:url';
+import {acceptsSelectedSession} from './now-playing/selection';
+import {NowPlayingController} from './now-playing/controller';
+import {MediaReader, verifiedMediaReader} from './now-playing/reader';
+import {parseSnapshot, MAX_MEDIA_FRAME} from './now-playing/protocol';
+import type {MediaSnapshot} from './now-playing/protocol';
+import {isOpacity, isStyle, isSelection} from './now-playing/contract';
+import type {MediaTrack, NowPlayingDisplay, NowPlayingView} from '../../../packages/contracts/src/now-playing';
 import {initialSource, resolveSourceMode} from './source-mode';
 import {HardModeServiceCache} from './hard-mode/service-status';
 import {app, BrowserWindow, dialog, ipcMain, Menu, MessageChannelMain, nativeImage, net, screen, shell, Tray, utilityProcess, type MessagePortMain, type UtilityProcess, type IpcMainEvent, type IpcMainInvokeEvent} from 'electron';
 import {spawn} from 'node:child_process';
-import {existsSync, mkdirSync} from 'node:fs';
+import {existsSync, mkdirSync, readFileSync, lstatSync} from 'node:fs';
 import * as nodeFsPromises from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
@@ -322,6 +330,124 @@ function runApplication(profileError: unknown): void {
   const overlaySubscriptions = new LiveSubscriptions<OverlayPresentation>(lastOverlay, 1, 500);
   // ET-012b: the overlay edit mode lives in main's memory only; every start is in driving mode (decision M5).
   let overlayEdit: OverlayEditState = {active: false};
+  let nowWindow: BrowserWindow | undefined, nowController: NowPlayingController | undefined, nowPort: MessagePortMain | undefined;
+  let nowTrack: MediaTrack | null = null, nowSource: string | null = null, nowGeneration = 0, nowDocument = 0, nowDashboardReady = false;
+  let nowValidatedArtwork: MediaTrack['artwork'] = null;
+  const nowWindowBudget = new RecoveryBudget();
+  let nowReaderIdle: Promise<void> | undefined;
+  let nowPlayingView: NowPlayingView = {state: 'disabled', sources: [], selection: {kind: 'automatic'}, error: null, edit: {active: false, placement: 'unavailable'}};
+  const nowSnapshot = (): NowPlayingDisplay => {
+    const settings = settingsStore.view();
+    return {generation: nowGeneration, language: settings.language, style: settings.nowPlaying.style,
+      backgroundOpacity: settings.nowPlaying.backgroundOpacity, editing: nowController?.editState().active ?? false, source: nowSource,
+      track: nowTrack && settings.nowPlaying.style === 'minimal' ? {...nowTrack, artwork: null} : nowTrack};
+  };
+  const nowSubscriptions = new LiveSubscriptions<NowPlayingDisplay>(nowSnapshot(), 1, 5000);
+  const nowFocus = new OwnForegroundGate(foreground => nowController?.setOwnForeground(foreground));
+  const requestedNowFixture = process.env.ETS2TELEMETRY_NOW_PLAYING_FIXTURE === '1';
+  const nowFixture = (() => {
+    if (!requestedNowFixture || process.env.ETS2TELEMETRY_LIVE_SMOKE !== '1' || process.env.ETS2TELEMETRY_SOURCE_KIND !== 'synthetic' || process.env.ETS2TELEMETRY_PLUGIN_SETUP !== 'disabled') return false;
+    const profile = process.env.ETS2TELEMETRY_PROFILE_DIR, local = process.env.LOCALAPPDATA;
+    if (!profile || !local || !path.isAbsolute(profile) || !path.isAbsolute(local) || path.dirname(profile) !== path.dirname(local) || path.basename(profile) !== 'profile' || path.basename(local) !== 'localappdata') return false;
+    try {
+      const marker = path.join(profile, '.ets2telemetry-now-playing-smoke');
+      return !lstatSync(profile).isSymbolicLink() && !lstatSync(local).isSymbolicLink() && lstatSync(marker).isFile() && !lstatSync(marker).isSymbolicLink() && lstatSync(marker).size === Buffer.byteLength('ets2telemetry.now-playing.synthetic-smoke.v1\n') && readFileSync(marker, 'utf8') === 'ets2telemetry.now-playing.synthetic-smoke.v1\n';
+    } catch {return false;}
+  })();
+  const nowReader = new MediaReader({resolve: () => verifiedMediaReader(app.isPackaged, process.resourcesPath, __dirname, ACTIVE_CHANNEL),
+    snapshot: acceptNowSnapshot, failed: error => {nowValidatedArtwork = null; nowTrack = null; nowSource = null; nowGeneration++; nowPlayingView = {...nowPlayingView, sources: [], state: 'error', error}; publishNowPlaying();}});
+  function validateNowArtwork(artwork: MediaTrack['artwork']): MediaTrack['artwork'] {
+    if (!artwork) return null;
+    if (nowValidatedArtwork?.png === artwork.png && nowValidatedArtwork.width === artwork.width && nowValidatedArtwork.height === artwork.height) return artwork;
+    nowValidatedArtwork = null;
+    try {
+      const image = nativeImage.createFromBuffer(Buffer.from(artwork.png, 'base64'));
+      const size = image.getSize();
+      if (!image.isEmpty() && size.width === artwork.width && size.height === artwork.height) {
+        nowValidatedArtwork = {...artwork}; return artwork;
+      }
+    } catch { /* Invalid image data never enters a display snapshot or the successful-validation cache. */ }
+    return null;
+  }
+  function acceptNowSnapshot(snapshot: MediaSnapshot): void {
+      if (!settingsStore.view().nowPlaying.enabled || lifecycle.exiting) return;
+      nowGeneration++;
+      const selection = nowPlayingView.selection;
+      const selected = snapshot.selected;
+      if (!acceptsSelectedSession(snapshot.sessions, selection, selected)) {nowValidatedArtwork = null; nowTrack = null; nowSource = null; nowPlayingView = {...nowPlayingView, state: 'error', error: 'INVALID_RESPONSE', sources: []}; publishNowPlaying(); return;}
+      if (selection.kind === 'session' && selected && selected.id !== selection.id) {nowValidatedArtwork = null; nowTrack = null; nowSource = null; nowPlayingView = {...nowPlayingView, state: 'error', error: 'INVALID_RESPONSE', sources: []}; publishNowPlaying(); return;}
+      if (snapshot.error) nowValidatedArtwork = null;
+      nowTrack = snapshot.error === null && selected && (selected.playback === 'playing' || selected.playback === 'paused') ? {...selected, artwork: validateNowArtwork(selected.artwork)} : null;
+      nowSource = nowTrack ? snapshot.sessions.find(source => source.id === nowTrack!.id)?.sourceAppId ?? null : null;
+      nowPlayingView = {...nowPlayingView, sources: snapshot.sessions, error: snapshot.error, state: snapshot.error ? 'error' : nowTrack ? nowTrack.playback as 'playing' | 'paused' :
+        selection.kind === 'session' && !snapshot.sessions.some(source => source.id === selection.id) ? 'unavailable' : snapshot.sessions.length ? 'stopped' : 'no-session'};
+      publishNowPlaying();
+  }
+  function publishNowPlaying(): void {
+    nowPlayingView = {...nowPlayingView, edit: nowController?.editState() ?? {active: false, placement: 'unavailable'}};
+    if (!nowPlayingView.edit.active) nowFocus.stop();
+    nowSubscriptions.publish(nowSnapshot()); nowController?.update(nowTrack !== null); pushAppState();
+  }
+  function retireNowDocument(): void {
+    nowValidatedArtwork = null; nowDocument++; nowPort = undefined; nowSubscriptions.close(); nowController?.loaded(false); nowFocus.stop();
+  }
+  function retireNowPlaying(): void {
+    nowTrack = null; nowSource = null; nowReaderIdle = nowReader.stop(); retireNowDocument();
+    const previous = nowWindow; nowWindow = undefined; nowController = undefined; previous?.destroy();
+  }
+  function syncNowPlaying(): void {
+    const settings = settingsStore.view();
+    if (lifecycle.exiting || settings.state === 'loading' || !settings.nowPlaying.enabled) {
+      retireNowPlaying(); nowPlayingView = {...nowPlayingView, sources: [], state: 'disabled', error: null, edit: {active: false, placement: 'unavailable'}}; return;
+    }
+    if (!nowWindow) {nowPlayingView = {...nowPlayingView, state: 'waiting'}; createNowPlaying();}
+    nowController?.configure(settings.nowPlaying); if (requestedNowFixture && !nowFixture) {nowPlayingView = {...nowPlayingView, state: 'error', error: 'READER_UNAVAILABLE'};} else nowReader.setEnabled(!nowFixture);
+    publishNowPlaying();
+  }
+  async function finishNowPlayingEdit(outcome: 'save' | 'cancel'): Promise<SettingsView> {
+    nowFocus.stop(); const draft = nowController?.end();
+    return outcome === 'save' && draft ? saveSettings(() => settingsStore.setNowPlayingPosition(draft)) : settingsStore.view();
+  }
+  function createNowPlaying(): void {
+    const created = nowWindow = new BrowserWindow({width: 300, height: 78, show: false, frame: false, transparent: true, skipTaskbar: true,
+      focusable: false, movable: false, resizable: false, minimizable: false, maximizable: false, fullscreenable: false, hasShadow: false,
+      webPreferences: {partition: 'ets2telemetry-now-playing', preload: path.join(__dirname, 'now-playing-preload.cjs'), contextIsolation: true, sandbox: true, nodeIntegration: false}});
+    nowController = new NowPlayingController(created, screen, publishNowPlaying); nowController.updateGame(lastLive); nowController.configure(settingsStore.view().nowPlaying);
+    created.webContents.setWindowOpenHandler(() => ({action: 'deny'}));
+    created.webContents.on('will-navigate', event => event.preventDefault());
+    const retire = () => {if (nowWindow === created) retireNowDocument();};
+    created.webContents.on('did-start-loading', retire);
+    created.webContents.on('did-navigate', retire);
+    created.webContents.on('did-finish-load', () => {if (nowWindow === created) created.webContents.postMessage('now-playing:port', {generation: nowDocument});});
+    created.on('system-context-menu', event => event.preventDefault());
+    created.webContents.on('render-process-gone', () => {if (nowWindow !== created) return; retire(); nowTrack = null; nowSource = null; nowPlayingView = {...nowPlayingView, state: 'error', error: 'READER_UNAVAILABLE'}; publishNowPlaying(); if (!lifecycle.exiting && nowWindowBudget.take() !== undefined) void created.loadFile(path.join(__dirname, 'renderer', 'now-playing.html')).catch(() => undefined);});
+    created.on('focus', focusChanged); created.on('blur', focusChanged);
+    created.on('will-move', () => nowController?.moveStarted()); created.on('moved', () => nowController?.moved());
+    created.webContents.on('before-input-event', (event, input) => {
+      if (!nowController?.editState().active || input.type !== 'keyDown' || !['Escape', 'Enter'].includes(input.key)) return;
+      event.preventDefault(); void finishNowPlayingEdit(input.key === 'Escape' ? 'cancel' : 'save').catch(() => undefined);
+    });
+    const topology = () => nowController?.topologyChanged();
+    screen.on('display-added', topology); screen.on('display-removed', topology); screen.on('display-metrics-changed', topology);
+    created.on('closed', () => {
+      screen.removeListener('display-added', topology); screen.removeListener('display-removed', topology); screen.removeListener('display-metrics-changed', topology);
+      if (nowWindow === created) {retireNowDocument(); nowWindow = undefined; nowController = undefined;}
+    });
+    void created.loadFile(path.join(__dirname, 'renderer', 'now-playing.html')).catch(() => {if (nowWindow === created) {nowPlayingView = {...nowPlayingView, state: 'error', error: 'READER_UNAVAILABLE'}; publishNowPlaying();}});
+  }
+  const trustedNowWidget = (event: IpcMainEvent) => Boolean(nowWindow && !nowWindow.isDestroyed() && event.sender === nowWindow.webContents && event.senderFrame === nowWindow.webContents.mainFrame && event.senderFrame?.url === pathToFileURL(path.join(__dirname, 'renderer', 'now-playing.html')).href);
+  ipcMain.on('now-playing:subscribe', (event, ...args: unknown[]) => {
+    if (!trustedNowWidget(event) || args.length !== 1 || args[0] !== nowDocument || nowPort || lifecycle.exiting || !settingsStore.view().nowPlaying.enabled) return;
+    const document = nowDocument, created = nowWindow!;
+    const {port1, port2} = new MessageChannelMain(); nowPort = port1;
+    port1.on('close', () => {if (nowPort === port1 && nowWindow === created && nowDocument === document) {nowPort = undefined; nowController?.loaded(false);}});
+    try {nowSubscriptions.attach(port1); created.webContents.postMessage('now-playing:port', {generation: document}, [port2]); nowController?.loaded(true); publishNowPlaying();}
+    catch {port1.close(); port2.close(); retireNowDocument();}
+  });
+  ipcMain.on('now-playing:unsubscribe', (event, ...args: unknown[]) => {
+    if (!trustedNowWidget(event) || args.length !== 1 || args[0] !== nowDocument) return;
+    nowPort = undefined; nowSubscriptions.close(); nowController?.loaded(false); nowFocus.stop();
+  });
   const latency = latencyEnabled(process.env) ? new OverlayLatency(diagnosticDirectory!, request => {
     if (!service || !serviceReady || supervisor.stopping) throw new Error('Service unavailable');
     service.postMessage(request);
@@ -341,7 +467,7 @@ function runApplication(profileError: unknown): void {
   const freshness = new LiveFreshness(update => {
     const view = settingsStore.view();
     dashboardSubscriptions.publish(update); publishOverlay(update, view.units, view.overlay, view.language, view.gearDisplay); overlayController?.update(update);
-    lastLive = update; presentTray();
+    lastLive = update; nowController?.updateGame(update); presentTray();
   });
   const rendererBudget = new RecoveryBudget();
   const resolveBroker = createBrokerResolver(__dirname, process.resourcesPath, app.isPackaged, process.env.LOCALAPPDATA, error => log('BROKER_UNAVAILABLE', String(error)));
@@ -398,7 +524,7 @@ function runApplication(profileError: unknown): void {
     // (which ends with the removal of its temporary file) may delay the final exit by at most EXIT_IDLE_BUDGET_MS
     // (1000 ms) together.
     idle: () => {
-      const pending = [latency?.idle(), settingsStore.idle(), exporter.idle(), diagnosticsExporter.idle(), pluginSetup.idle(), updates.idle()].filter((work): work is Promise<void> => work !== undefined);
+      const pending = [latency?.idle(), settingsStore.idle(), nowReaderIdle, exporter.idle(), diagnosticsExporter.idle(), pluginSetup.idle(), updates.idle()].filter((work): work is Promise<void> => work !== undefined);
       return pending.length > 1 ? Promise.all(pending).then(() => undefined) : pending[0];
     },
     destroyTray,
@@ -424,7 +550,7 @@ function runApplication(profileError: unknown): void {
     // broker or settings) never created the windows; create them now, so the dashboard shows the exhausted state and
     // the tray and a second launch can open it (ET-016 PR-3 delta review).
     exhausted: () => {heartbeatMonitor.stop(); retireRecording(); journal.retire(); updateHealth({type: 'service-restart-exhausted'});
-      if (!started && !supervisor.stopping && !lifecycle.exiting) {started = true; createWindow(); createOverlay(); updates.start();}
+      if (!started && !supervisor.stopping && !lifecycle.exiting) {started = true; createWindow(); createOverlay(); syncNowPlaying(); updates.start();}
       const update: LiveTelemetry = {...initialLive(selection), status: 'service-failed', reason: 'Automatic service restart limit reached'};
       freshness.invalidate(update); window?.webContents.send('telemetry:service-state', update);},
     // Every stop that did not start as an exit request is fatal (renderer or overlay exhaustion, configuration or
@@ -441,7 +567,7 @@ function runApplication(profileError: unknown): void {
       const update: LiveTelemetry = {...initialLive(selection), status: 'restarting', reason: 'Telemetry service failed; current interval is unknown'};
       freshness.invalidate(update); dashboardSubscriptions.close(); dashboardPort = undefined; window?.webContents.send('telemetry:service-state', update);}
   });
-  function appState(): AppState {return {health: {...health}, settings: settingsStore.view(), overlayEdit, plugins: pluginSetup.view(), autostart: autostartStatus, application: {...application}, update: updateView()};}
+  function appState(): AppState {return {nowPlaying: nowPlayingView,health: {...health}, settings: settingsStore.view(), overlayEdit, plugins: pluginSetup.view(), autostart: autostartStatus, application: {...application}, update: updateView()};}
   function pushAppState(): void {if (appStateSubscribed && window && !window.isDestroyed()) window.webContents.send('app:state', appState());}
   function updateHealth(event: HealthEvent, immediate = false): void {
     const next = reduceHealth(health, event);
@@ -460,6 +586,7 @@ function runApplication(profileError: unknown): void {
   function settingsChanged(): void {
     const view = settingsStore.view();
     // Pending defaults are not the saved visibility; wait for the read result or existing read-limit fallback.
+    syncNowPlaying();
     const enabled = view.state !== 'loading' && view.overlay.enabled;
     // Disable before edit cancellation; enable only after the final committed geometry is installed.
     if (!enabled && overlayEdit.active) timeline?.('OVERLAY_EDIT_CANCELLED', {reason: 'overlay-disabled'});
@@ -485,7 +612,8 @@ function runApplication(profileError: unknown): void {
   function ownFocused(): boolean {
     return Boolean((window && !window.isDestroyed() && window.isFocused()) || (overlay && !overlay.isDestroyed() && overlay.isFocused()));
   }
-  function focusChanged(): void {if (overlayEdit.active) focusGate.update(ownFocused());}
+  function ownNowPlayingFocused(): boolean {return Boolean(window && !window.isDestroyed() && window.isFocused() || nowWindow && !nowWindow.isDestroyed() && nowWindow.isFocused());}
+  function focusChanged(): void {if (nowController?.editState().active) nowFocus.update(ownNowPlayingFocused()); if (overlayEdit.active) focusGate.update(ownFocused());}
   /** Leaves edit mode (hidden and click-through again first) and returns the draft; nothing is written here. */
   function endOverlayEdit(): ReturnType<OverlayController['endEdit']> {
     focusGate.stop();
@@ -517,7 +645,7 @@ function runApplication(profileError: unknown): void {
   // a needless show on the retired document.
   function retireOverlay(): void {latency?.retire(); overlayPort = undefined; overlayController?.loaded(false); cancelOverlayEdit('overlay-retired'); overlaySubscriptions.close();}
   // Exits and fatal stops also retire the journal: pending journal requests resolve SERVICE_UNAVAILABLE (ET-016, J4).
-  function retireLive(): void {freshness.close(); closeUpstream(); retireOverlay(); dashboardSubscriptions.close(); dashboardPort = undefined; journal.retire();}
+  function retireLive(): void {retireNowPlaying(); freshness.close(); closeUpstream(); retireOverlay(); dashboardSubscriptions.close(); dashboardPort = undefined; journal.retire();}
   function stop(): void {retireLive(); supervisor.stop();}
   function fail(code: string, error?: unknown): void {retireLive(); supervisor.fail(code, error);}
   function requestExit(reason: ExitReason): void {lifecycle.request(reason);}
@@ -665,7 +793,7 @@ function runApplication(profileError: unknown): void {
   }
   // Retires only dashboard document state. Upstream, freshness, the overlay and the service are unaffected; an overlay
   // edit started from the retired document is cancelled without writing.
-  function retireDashboard(): void {
+  function retireDashboard(): void {nowDashboardReady = false; nowFocus.stop(); nowController?.end();
     cancelOverlayEdit('dashboard-retired');
     rendererEpoch++; subscribed = false; appStateSubscribed = false; dashboardSubscriptions.close(); dashboardPort = undefined;
   }
@@ -678,6 +806,8 @@ function runApplication(profileError: unknown): void {
     created.webContents.setWindowOpenHandler(() => ({action: 'deny'}));
     created.webContents.on('will-navigate', event => event.preventDefault());
     created.on('focus', focusChanged); created.on('blur', focusChanged);
+    created.webContents.on('did-finish-load', () => {if (window === created) nowDashboardReady = true;});
+    created.webContents.on('before-input-event', (event, input) => {if (nowController?.editState().active && input.type === 'keyDown' && input.key === 'Escape') {event.preventDefault(); void finishNowPlayingEdit('cancel').catch(() => undefined);}});
     // Minimizing the dashboard ends an edit without saving, as closing it to the tray does: edit mode suppresses the
     // driving overlay, which would otherwise stay hidden over the game until the dashboard came back (ET-012b M5).
     created.on('minimize', () => {if (window === created) cancelOverlayEdit('dashboard-minimized');});
@@ -773,7 +903,7 @@ function runApplication(profileError: unknown): void {
           serviceReady = true; selectionPending = false; status = {service: 'ready', storage: 'verified', synthetic: true};
           journal.attach(child);
           updateHealth({type: 'service-ready'});
-          if (!started) {started = true; if (!startHiddenOnLaunch) createWindow(); createOverlay(); updates.start();} else connectSubscription();
+          if (!started) {started = true; if (!startHiddenOnLaunch) createWindow(); createOverlay(); syncNowPlaying(); updates.start();} else connectSubscription();
           connectUpstream();
         })().catch(error => {if (!supervisor.stopping && service === child) fail('SERVICE_CONFIGURATION_FAILED', error);});
       } else if (type === 'failed') {
@@ -844,6 +974,13 @@ function runApplication(profileError: unknown): void {
       uninstallDialogs = {confirm: answer === 'uninstall'};
       timeline?.('DIAGNOSTIC_UNINSTALL_DIALOGS', {answer});
     });
+    if (nowFixture) (app as unknown as EventEmitter).on('ets2telemetry:diagnostic-now-playing', (value: unknown) => {
+      if (lifecycle.exiting || !settingsStore.view().nowPlaying.enabled) return;
+      try {
+        if (Buffer.byteLength(JSON.stringify(value), 'utf8') > MAX_MEDIA_FRAME) return;
+        const snapshot = parseSnapshot(value, 1); if (snapshot) acceptNowSnapshot(snapshot);
+      } catch {/* Synthetic malformed input grants no authority. */}
+    });
     // Read-only lifecycle facts for the isolated smoke; it changes no state.
     (app as unknown as EventEmitter).on('ets2telemetry:diagnostic-lifecycle-state', (receive: unknown) => {
       if (typeof receive !== 'function') return;
@@ -856,6 +993,36 @@ function runApplication(profileError: unknown): void {
   if (profileError) fail('PROFILE_SETUP_FAILED', profileError);
   // A dashboard opened while the service restarts or after restart exhaustion gets `null`, not an error; it queries
   // again when the pushed health reports readiness. Untrusted senders still fail.
+  // ET-061: fixed-shape current-track calls belong only to the current dashboard document.
+  const trustedNowDashboard = (event: IpcMainInvokeEvent) => trusted(event) && nowDashboardReady && event.senderFrame?.url === pathToFileURL(path.join(__dirname, 'renderer', 'index.html')).href && !lifecycle.exiting;
+  for (const [channel, validate, save] of [
+    ['settings:set-now-playing-enabled', (v: unknown) => typeof v === 'boolean', (v: unknown) => settingsStore.setNowPlayingEnabled(v as boolean)],
+    ['settings:set-now-playing-style', isStyle, (v: unknown) => settingsStore.setNowPlayingStyle(v as 'minimal' | 'full')],
+    ['settings:set-now-playing-background-opacity', isOpacity, (v: unknown) => settingsStore.setNowPlayingBackgroundOpacity(v as number)]
+  ] as const) ipcMain.handle(channel, (event, ...args: unknown[]) => {
+    if (!trustedNowDashboard(event) || args.length !== 1 || !validate(args[0])) throw new Error('Invalid current track request');
+    if (nowController?.editState().active && channel === 'settings:set-now-playing-style') throw new Error('Current track edit is active');
+    return saveSettings(() => save(args[0]));
+  });
+  ipcMain.handle('now-playing:select-source', (event, ...args: unknown[]) => {
+    if (!trustedNowDashboard(event) || args.length !== 1 || !isSelection(args[0]) || !settingsStore.view().nowPlaying.enabled) throw new Error('Invalid media source request');
+    const selection = args[0];
+    if (selection.kind === 'session' && !nowPlayingView.sources.some(source => source.id === selection.id)) throw new Error('Unavailable media source');
+    nowPlayingView = {...nowPlayingView, selection: {...selection}, state: 'waiting', error: null}; nowTrack = null; nowSource = null;
+    nowReader.select(selection.kind === 'session' ? selection.id : null); publishNowPlaying(); return nowPlayingView;
+  });
+  ipcMain.handle('now-playing-edit:begin', (event, ...args: unknown[]) => {
+    if (!trustedNowDashboard(event) || args.length || !settingsStore.view().writable || overlayEdit.active || !nowController) throw new Error('Current track edit unavailable');
+    nowFocus.start(ownNowPlayingFocused());
+    try {return nowController.begin(nowFocus.inFront);} catch (error) {nowFocus.stop(); throw error;}
+  });
+  ipcMain.handle('now-playing-edit:reset', (event, ...args: unknown[]) => {
+    if (!trustedNowDashboard(event) || args.length || !nowController) throw new Error('Invalid current track edit'); return nowController.reset();
+  });
+  ipcMain.handle('now-playing-edit:finish', (event, ...args: unknown[]) => {
+    if (!trustedNowDashboard(event) || args.length !== 1 || !isOverlayEditOutcome(args[0]) || !nowController?.editState().active) throw new Error('Invalid current track edit');
+    return finishNowPlayingEdit(args[0]);
+  });
   ipcMain.handle('scaffold:status', event => {if (!trusted(event)) throw new Error('Untrusted status request'); return status ?? null;});
   for (const channel of ['hard-mode:status', 'hard-mode:refresh']) ipcMain.handle(channel, (event, ...request: unknown[]) => {
     if (!trusted(event) || request.length !== 0) throw new Error('Untrusted Hard Mode request');
@@ -972,6 +1139,7 @@ function runApplication(profileError: unknown): void {
   }
   ipcMain.handle('overlay-edit:begin', (event, ...request: unknown[]) => {
     const controller = editRequest(event, request.length === 0);
+    if (nowController?.editState().active) throw new Error('Current track edit is active');
     if (!settingsStore.view().overlay.enabled) throw new Error('Overlay is disabled');
     if (overlayEdit.active) return overlayEdit;
     if (!settingsStore.view().writable) throw new Error('Overlay edit mode needs writable settings');

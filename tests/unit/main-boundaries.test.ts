@@ -1,3 +1,6 @@
+import type {MediaReaderOptions} from '../../apps/desktop/src/now-playing/reader';
+import {pathToFileURL} from 'node:url';
+import {DEFAULT_NOW_PLAYING} from '../../apps/desktop/src/now-playing/contract';
 import {EventEmitter} from 'node:events';
 import {readFileSync} from 'node:fs';
 import * as nodeFs from 'node:fs/promises';
@@ -100,7 +103,10 @@ const PLUGINS_DISABLED = {mode: 'disabled', bundled: null, running: false, games
 // the updater is unsupported: it never resolves install roots, fetches or schedules a check.
 const APPLICATION = {version: APP_VERSION, channel: 'production', packaged: false};
 const UPDATE_UNSUPPORTED = {state: 'unsupported', available: null, progress: null, refusal: null, failure: null, lastCheck: null};
-let settingsView: {autostart: boolean; units: {ets2: string; ats: string}; gearDisplay?: {ets2: string; ats: string}; overlay: {enabled: boolean; backgroundOpacity: number; layout: string; sections: Record<string, boolean>; placements: Record<string, {x: number; y: number; scale: number}>}; state: string; writable: boolean; saveError: string | null};
+let nowReaderOptions: MediaReaderOptions;
+let nowReaderSelection: ReturnType<typeof vi.fn<(id: string | null) => void>>;
+let decodeImage: ReturnType<typeof vi.fn<(buffer: Buffer) => {addRepresentation: ReturnType<typeof vi.fn>; getSize: () => {width: number; height: number}; isEmpty: () => boolean}>>;
+let settingsView: {nowPlaying: typeof DEFAULT_NOW_PLAYING; autostart: boolean; units: {ets2: string; ats: string}; gearDisplay?: {ets2: string; ats: string}; overlay: {enabled: boolean; backgroundOpacity: number; layout: string; sections: Record<string, boolean>; placements: Record<string, {x: number; y: number; scale: number}>}; state: string; writable: boolean; saveError: string | null};
 type OverlayWrite = (kind: 'backgroundOpacity' | 'enabled' | 'layout' | 'sections' | 'placement', value: unknown) => Promise<unknown>;
 let overlayWrite: ReturnType<typeof vi.fn<OverlayWrite>>;
 type SettingsWrite = (game: string, profile: string) => Promise<unknown>;
@@ -141,12 +147,13 @@ function installFixture() {
   showMessageBox = vi.fn(() => Promise.resolve({response: 0}));
   shell = {showItemInFolder: vi.fn(), openPath: vi.fn(() => Promise.resolve(''))};
   forkCalls = [];
+  decodeImage = vi.fn(() => ({addRepresentation: vi.fn(), getSize: () => ({width: 1, height: 1}), isEmpty: () => false}));
   vi.doMock('electron', () => ({app, ipcMain: ipc, utilityProcess: {fork: (...args: unknown[]) => {
     forkCalls.push(args);
     if (forks++ === 0) return child;
     const next = Object.assign(new EventEmitter(), {postMessage: vi.fn(), kill: vi.fn(() => true)}); children.push(next); return next;
   }},
-    screen: Object.assign(new EventEmitter(), {screenToDipRect: (_window: null, bounds: Electron.Rectangle) => bounds, getAllDisplays: () => [{bounds: {x: -1920, y: 0, width: 3840, height: 1080}}]}),
+    screen: Object.assign(new EventEmitter(), {screenToDipRect: (_window: null, bounds: Electron.Rectangle) => bounds, getAllDisplays: () => [{id: 1, bounds: {x: -1920, y: 0, width: 3840, height: 1080}, workArea: {x: 0, y: 0, width: 1920, height: 1040}}], getPrimaryDisplay: () => ({id: 1, workArea: {x: 0, y: 0, width: 1920, height: 1040}})}),
     BrowserWindow: class extends EventEmitter {
       webContents = windows.length === 0 ? contents : windows.length === 1 ? overlayContents : (() => {
         const next = Object.assign(new EventEmitter(), {mainFrame: {}, send: vi.fn(), postMessage: vi.fn(), setWindowOpenHandler: vi.fn(), setZoomFactor: vi.fn()}); extraContents.push(next); return next;
@@ -171,17 +178,19 @@ function installFixture() {
       isDestroyed() {return this.destroyed;}
     },
     Menu: {buildFromTemplate: (template: unknown[]) => ({template})},
-    nativeImage: {createFromBuffer: () => ({addRepresentation: vi.fn()})},
+    nativeImage: {createFromBuffer: (buffer: Buffer) => decodeImage(buffer)},
     dialog: {showSaveDialog: (window: unknown, options: unknown) => showSaveDialog(window, options), showOpenDialog: (window: unknown, options: unknown) => showOpenDialog(window, options),
       showMessageBox: (...args: unknown[]) => showMessageBox(...args)},
     shell: {showItemInFolder: (file: string) => shell.showItemInFolder(file), openPath: (folder: string) => shell.openPath(folder)}}));
+  nowReaderSelection = vi.fn<(id: string | null) => void>();
+  vi.doMock('../../apps/desktop/src/now-playing/reader', () => ({MediaReader: class {constructor(options: MediaReaderOptions) {nowReaderOptions = options;} setEnabled() {} select(id: string | null) {nowReaderSelection(id);} stop() {return undefined;}}, verifiedMediaReader: vi.fn()}));
   vi.doMock('../../apps/desktop/src/entrypoints', () => ({processEntrypoint: () => 'package.json'}));
   log = Object.assign(vi.fn(), {flush: vi.fn<(timeoutMs: number) => Promise<boolean>>(() => Promise.resolve(true)), settle: vi.fn<(timeoutMs: number) => Promise<void>>(() => Promise.resolve()), finalize: vi.fn<(timeoutMs: number) => Promise<void>>(() => Promise.resolve()), drainSync: vi.fn(), enterTerminalMode: vi.fn()}); diagnosticsCalls = [];
   vi.doMock('../../apps/desktop/src/diagnostics', async importOriginal => ({...await importOriginal<typeof import('../../apps/desktop/src/diagnostics')>(),
     createDiagnostics: (...args: unknown[]) => {diagnosticsCalls.push(args); return log;}}));
   vi.doMock('../../apps/desktop/src/broker-artifact', () => ({brokerConfiguration: resolveBroker, createBrokerResolver: () => resolveBroker}));
   vi.stubEnv('ETS2TELEMETRY_SOURCE_KIND', 'synthetic');
-  settingsView = {autostart: false, units: {ets2: 'metric', ats: 'us-customary'}, overlay: DEFAULT_OVERLAY, state: 'defaults', writable: true, saveError: null};
+  settingsView = {nowPlaying: DEFAULT_NOW_PLAYING, autostart: false, units: {ets2: 'metric', ats: 'us-customary'}, overlay: DEFAULT_OVERLAY, state: 'defaults', writable: true, saveError: null};
   settingsWrite = vi.fn<SettingsWrite>(); gearWrite = vi.fn<SettingsWrite>(); overlayWrite = vi.fn<OverlayWrite>(); autostartWrite = vi.fn((enabled: boolean) => {settingsView = {...settingsView, autostart: enabled}; return Promise.resolve(settingsView);}); settingsIdle = undefined; settingsDirectories = []; settingsLoaded = true; settingsLoading = Promise.resolve();
   settingsChanged = undefined; autostartKnown = true;
   vi.doMock('../../apps/desktop/src/settings-store', () => ({
@@ -192,6 +201,9 @@ function installFixture() {
       constructor(directory: unknown, options?: {changed?: () => void}) {settingsDirectories.push(directory); settingsChanged = options?.changed;}
       view() {return settingsView;}
       load() {return settingsLoading.then(() => {settingsLoaded = true; return settingsView;});}
+      setNowPlayingEnabled(enabled: boolean) {settingsView = {...settingsView, nowPlaying: {...settingsView.nowPlaying, enabled}}; return Promise.resolve(settingsView);}
+      setNowPlayingStyle(style: 'minimal' | 'full') {settingsView = {...settingsView, nowPlaying: {...settingsView.nowPlaying, style}}; return Promise.resolve(settingsView);}
+      setNowPlayingBackgroundOpacity(backgroundOpacity: number) {settingsView = {...settingsView, nowPlaying: {...settingsView.nowPlaying, backgroundOpacity}}; return Promise.resolve(settingsView);}
       setUnitProfile(game: string, profile: string) {return settingsWrite(game, profile);}
       setGearDisplay(game: string, mode: string) {return gearWrite(game, mode);}
       setOverlayBackgroundOpacity(opacity: number) {return overlayWrite('backgroundOpacity', opacity);}
@@ -209,7 +221,7 @@ async function removeFixture() {
   await Promise.allSettled(loadingMain); await new Promise(resolve => realSetImmediate(resolve));
   for (const name of processEvents) for (const listener of processEmitter.listeners(name)) if (!originals.get(name)!.includes(listener)) processEmitter.removeListener(name, listener as (...args: unknown[]) => void);
   vi.clearAllTimers(); vi.restoreAllMocks(); vi.useRealTimers(); vi.unstubAllEnvs();
-  for (const name of ['electron', '../../apps/desktop/src/entrypoints', '../../apps/desktop/src/diagnostics', '../../apps/desktop/src/broker-artifact',
+  for (const name of ['../../apps/desktop/src/now-playing/reader', 'electron', '../../apps/desktop/src/entrypoints', '../../apps/desktop/src/diagnostics', '../../apps/desktop/src/broker-artifact',
     '../../apps/desktop/src/settings-store', '../../apps/desktop/src/overlay-latency', '../../apps/desktop/src/latency-frames', '../../apps/desktop/src/uninstall/roots', '../../apps/desktop/src/plugin-setup/plugin-setup', '../../apps/desktop/src/squirrel-events',
     '../../apps/desktop/src/uninstall/app-uninstall', '../../apps/desktop/src/journal-export-writer', '../../apps/desktop/src/channel']) vi.doUnmock(name);
 }
@@ -846,7 +858,7 @@ it('reopens a new dashboard from the tray that resubscribes without a second ups
   ipc.emit('telemetry:subscribe', reopenedSender);
   expect(reopened.postMessage).toHaveBeenCalledWith('telemetry:port', null, [channels.at(-1)!.port2]);
   expect(upstreamRequests()).toBe(1); expect(children).toHaveLength(1);
-  expect(handlers.get('app:get-state')!(reopenedSender)).toEqual({health: {service: 'ready', storage: 'verified', recording: {state: 'unknown'}, lastError: null}, settings: {autostart: false, units: {ets2: 'metric', ats: 'us-customary'}, overlay: DEFAULT_OVERLAY, state: 'defaults', writable: true, saveError: null}, overlayEdit: DRIVING, plugins: PLUGINS_DISABLED, autostart: 'not-installed', application: APPLICATION, update: UPDATE_UNSUPPORTED});
+  expect(handlers.get('app:get-state')!(reopenedSender)).toEqual({nowPlaying: {state: 'disabled', sources: [], selection: {kind: 'automatic'}, error: null, edit: {active: false, placement: 'unavailable'}}, health: {service: 'ready', storage: 'verified', recording: {state: 'unknown'}, lastError: null}, settings: {nowPlaying: DEFAULT_NOW_PLAYING, autostart: false, units: {ets2: 'metric', ats: 'us-customary'}, overlay: DEFAULT_OVERLAY, state: 'defaults', writable: true, saveError: null}, overlayEdit: DRIVING, plugins: PLUGINS_DISABLED, autostart: 'not-installed', application: APPLICATION, update: UPDATE_UNSUPPORTED});
   // A second tray open focuses the existing window instead of creating another.
   trays[0].emit('click'); expect(windows).toHaveLength(3); expect(windows[2].show).toHaveBeenCalledOnce(); expect(windows[2].focus).toHaveBeenCalledOnce();
 });
@@ -1025,13 +1037,13 @@ it('keeps the overlay open against close requests until exit and ignores window-
 it('minimizes instead of closing the dashboard when the notification area is unavailable', async () => {
   await ready(); expect(log).toHaveBeenCalledWith('TRAY_UNAVAILABLE', expect.any(String));
   const event = closeDashboard(); expect(event.preventDefault).toHaveBeenCalledOnce(); expect(windows[0].minimize).toHaveBeenCalledOnce();
-  expect(handlers.get('app:get-state')!(trusted())).toMatchObject({health: {service: 'ready'}});
+  expect(handlers.get('app:get-state')!(trusted())).toMatchObject({nowPlaying: {state: 'disabled', sources: [], selection: {kind: 'automatic'}, error: null, edit: {active: false, placement: 'unavailable'}}, health: {service: 'ready'}});
   void handlers.get('app:exit')!(trusted()); const exitClose = {preventDefault: vi.fn()}; windows[0].emit('close', exitClose);
   expect(exitClose.preventDefault).not.toHaveBeenCalled();
 });
 it('recovers a post-readiness service failure report with a supervised restart and visible health', async () => {
   trayAvailable = true; await ready(); ipc.emit('app:subscribe-state', trusted());
-  const states = () => contents.send.mock.calls.filter(call => call[0] === 'app:state').map(call => (call[1] as {health: Record<string, unknown>}).health);
+  const states = () => contents.send.mock.calls.filter(call => call[0] === 'app:state').map(call => (call[1] as {nowPlaying: {state: 'disabled', sources: [], selection: {kind: 'automatic'}, error: null, edit: {active: false, placement: 'unavailable'}}, health: Record<string, unknown>}).health);
   expect(states().at(-1)).toEqual({service: 'ready', storage: 'verified', recording: {state: 'unknown'}, lastError: null});
   child.emit('message', {type: 'failed', code: 'STORAGE_WORKER_EXIT'});
   expect(child.kill).toHaveBeenCalledOnce(); expect(child.postMessage).not.toHaveBeenCalledWith({type: 'stop'}); expect(app.exit).not.toHaveBeenCalled();
@@ -1054,7 +1066,7 @@ it('shows restart exhaustion in health and the tray and stays running until an e
     children.at(-1)!.emit('exit', 1); await vi.advanceTimersByTimeAsync(1000);
     if (crash < 2) {children.at(-1)!.emit('message', {type: 'ready'}); await settle();}
   }
-  expect(handlers.get('app:get-state')!(trusted())).toEqual({health: {service: 'failed', storage: 'pending', recording: {state: 'unknown'}, lastError: 'SERVICE_RESTART_EXHAUSTED'}, settings: {autostart: false, units: {ets2: 'metric', ats: 'us-customary'}, overlay: DEFAULT_OVERLAY, state: 'defaults', writable: true, saveError: null}, overlayEdit: DRIVING, plugins: PLUGINS_DISABLED, autostart: 'not-installed', application: APPLICATION, update: UPDATE_UNSUPPORTED});
+  expect(handlers.get('app:get-state')!(trusted())).toEqual({nowPlaying: {state: 'disabled', sources: [], selection: {kind: 'automatic'}, error: null, edit: {active: false, placement: 'unavailable'}}, health: {service: 'failed', storage: 'pending', recording: {state: 'unknown'}, lastError: 'SERVICE_RESTART_EXHAUSTED'}, settings: {nowPlaying: DEFAULT_NOW_PLAYING, autostart: false, units: {ets2: 'metric', ats: 'us-customary'}, overlay: DEFAULT_OVERLAY, state: 'defaults', writable: true, saveError: null}, overlayEdit: DRIVING, plugins: PLUGINS_DISABLED, autostart: 'not-installed', application: APPLICATION, update: UPDATE_UNSUPPORTED});
   await vi.advanceTimersByTimeAsync(500);
   expect(trays[0].setImage).toHaveBeenCalled(); expect(trays[0].setToolTip).toHaveBeenLastCalledWith('Yukon Union Telemetry\nService failed');
   expect(app.exit).not.toHaveBeenCalled();
@@ -1085,10 +1097,10 @@ it('answers a dashboard opened during a service restart with a not-ready status,
   expect(handlers.get('scaffold:status')!(sender)).toBeNull();
   expect(() => handlers.get('scaffold:status')!(trusted())).toThrow('Untrusted');
   ipc.emit('app:subscribe-state', sender);
-  expect(reopened.send).toHaveBeenLastCalledWith('app:state', {health: expect.objectContaining({service: 'restarting'}), settings: {autostart: false, units: {ets2: 'metric', ats: 'us-customary'}, overlay: DEFAULT_OVERLAY, state: 'defaults', writable: true, saveError: null}, overlayEdit: DRIVING, plugins: PLUGINS_DISABLED, autostart: 'not-installed', application: APPLICATION, update: UPDATE_UNSUPPORTED});
+  expect(reopened.send).toHaveBeenLastCalledWith('app:state', {nowPlaying: {state: 'disabled', sources: [], selection: {kind: 'automatic'}, error: null, edit: {active: false, placement: 'unavailable'}}, health: expect.objectContaining({service: 'restarting'}), settings: {nowPlaying: DEFAULT_NOW_PLAYING, autostart: false, units: {ets2: 'metric', ats: 'us-customary'}, overlay: DEFAULT_OVERLAY, state: 'defaults', writable: true, saveError: null}, overlayEdit: DRIVING, plugins: PLUGINS_DISABLED, autostart: 'not-installed', application: APPLICATION, update: UPDATE_UNSUPPORTED});
   // When the pushed health reports ready, the status query already answers with the ready status.
   let statusAtReadyPush: unknown;
-  reopened.send.mockImplementation((channel: string, state: {health: {service: string}}) => {
+  reopened.send.mockImplementation((channel: string, state: {nowPlaying: {state: 'disabled', sources: [], selection: {kind: 'automatic'}, error: null, edit: {active: false, placement: 'unavailable'}}, health: {service: string}}) => {
     if (channel === 'app:state' && state.health.service === 'ready') statusAtReadyPush = handlers.get('scaffold:status')!(sender);
   });
   await vi.advanceTimersByTimeAsync(250); children[1].emit('message', {type: 'ready'}); await settle();
@@ -1210,7 +1222,7 @@ it('loads settings from LOCALAPPDATA and opens the first windows only after the 
 // state, and the late read's result reaches the dashboard and the overlay as a save's does.
 it('applies a settings read that settles after the load budget to the dashboard and the overlay without renewing authority', async () => {
   trayAvailable = true; vi.stubEnv('ETS2TELEMETRY_SOURCE_KIND', 'ets2');
-  const pending = {autostart: false, units: {ets2: 'metric', ats: 'us-customary'}, overlay: DEFAULT_OVERLAY, state: 'loading', writable: false, saveError: null};
+  const pending = {nowPlaying: DEFAULT_NOW_PLAYING, autostart: false, units: {ets2: 'metric', ats: 'us-customary'}, overlay: DEFAULT_OVERLAY, state: 'loading', writable: false, saveError: null};
   settingsView = pending; await ready();
   expect(windows).toHaveLength(2);
   ipc.emit('app:subscribe-state', trusted()); ipc.emit('overlay:subscribe', overlayTrusted()); const overlayChannel = channels[1];
@@ -1222,9 +1234,9 @@ it('applies a settings read that settles after the load budget to the dashboard 
   expect(windows[1].showInactive).not.toHaveBeenCalled(); consumeOverlay(overlayChannel);
   await drainOverlay(overlayChannel, 150);
   // The store applies the late read (t = 200 ms) and reports it; main reads the new view from the store.
-  settingsView = {autostart: false, units: {ets2: 'us-customary', ats: 'us-customary'}, overlay: DEFAULT_OVERLAY, state: 'loaded', writable: true, saveError: null};
+  settingsView = {nowPlaying: DEFAULT_NOW_PLAYING, autostart: false, units: {ets2: 'us-customary', ats: 'us-customary'}, overlay: DEFAULT_OVERLAY, state: 'loaded', writable: true, saveError: null};
   expect(settingsChanged).toBeTypeOf('function'); settingsChanged!();
-  expect(pushes().at(-1)).toEqual({health: {service: 'ready', storage: 'verified', recording: {state: 'unknown'}, lastError: null}, settings: settingsView, overlayEdit: DRIVING, plugins: PLUGINS_DISABLED, autostart: 'not-installed', application: APPLICATION, update: UPDATE_UNSUPPORTED});
+  expect(pushes().at(-1)).toEqual({nowPlaying: {state: 'disabled', sources: [], selection: {kind: 'automatic'}, error: null, edit: {active: false, placement: 'unavailable'}}, health: {service: 'ready', storage: 'verified', recording: {state: 'unknown'}, lastError: null}, settings: settingsView, overlayEdit: DRIVING, plugins: PLUGINS_DISABLED, autostart: 'not-installed', application: APPLICATION, update: UPDATE_UNSUPPORTED});
   expect(handlers.get('app:get-state')!(trusted())).toMatchObject({settings: settingsView});
   await vi.advanceTimersByTimeAsync(50);
   expect(overlayProjection(overlayChannel)).toMatchObject({source: 'ETS2', speed: '56', speedUnit: 'mph', fuel: '19', fuelUnit: 'US gal', freshness: 'current'});
@@ -1258,9 +1270,9 @@ it('applies a unit profile only after the durable save and republishes the overl
   // Not durable yet: nothing applied, pushed or republished.
   expect(settingsWrite).toHaveBeenCalledExactlyOnceWith('ets2', 'us-customary');
   expect(pushes()).toHaveLength(before); expect(overlayProjection(overlayChannel)).toMatchObject({speedUnit: 'km/h'});
-  settingsView = {autostart: false, units: {ets2: 'us-customary', ats: 'us-customary'}, overlay: DEFAULT_OVERLAY, state: 'loaded', writable: true, saveError: null}; saved.resolve(settingsView);
+  settingsView = {nowPlaying: DEFAULT_NOW_PLAYING, autostart: false, units: {ets2: 'us-customary', ats: 'us-customary'}, overlay: DEFAULT_OVERLAY, state: 'loaded', writable: true, saveError: null}; saved.resolve(settingsView);
   await expect(request).resolves.toEqual(settingsView);
-  expect(pushes().at(-1)).toEqual({health: {service: 'ready', storage: 'verified', recording: {state: 'unknown'}, lastError: null}, settings: settingsView, overlayEdit: DRIVING, plugins: PLUGINS_DISABLED, autostart: 'not-installed', application: APPLICATION, update: UPDATE_UNSUPPORTED});
+  expect(pushes().at(-1)).toEqual({nowPlaying: {state: 'disabled', sources: [], selection: {kind: 'automatic'}, error: null, edit: {active: false, placement: 'unavailable'}}, health: {service: 'ready', storage: 'verified', recording: {state: 'unknown'}, lastError: null}, settings: settingsView, overlayEdit: DRIVING, plugins: PLUGINS_DISABLED, autostart: 'not-installed', application: APPLICATION, update: UPDATE_UNSUPPORTED});
   await vi.advanceTimersByTimeAsync(50);
   expect(overlayProjection(overlayChannel)).toMatchObject({source: 'ETS2', speed: '56', speedUnit: 'mph', fuel: '19', fuelUnit: 'US gal', freshness: 'current'});
   consumeOverlay(overlayChannel);
@@ -1288,14 +1300,14 @@ it.each(['SETTINGS_WRITE_FAILED', 'SETTINGS_READ_ONLY'] as const)('keeps the uni
   // The store records the refusal in its view, as the real store does.
   settingsWrite.mockImplementation(() => {settingsView = {...settingsView, saveError: code}; return Promise.reject(new FakeSettingsError(code));});
   await expect(saveUnits(trusted(), 'ets2', 'us-customary')).rejects.toThrow(code === 'SETTINGS_READ_ONLY' ? 'Settings are read-only' : 'Settings could not be saved');
-  const refused = {health, settings: {autostart: false, units: {ets2: 'metric', ats: 'us-customary'}, overlay: DEFAULT_OVERLAY, state: 'defaults', writable: true, saveError: code}, overlayEdit: DRIVING, plugins: PLUGINS_DISABLED, autostart: 'not-installed', application: APPLICATION, update: UPDATE_UNSUPPORTED};
+  const refused = {nowPlaying: {state: 'disabled', sources: [], selection: {kind: 'automatic'}, error: null, edit: {active: false, placement: 'unavailable'}}, health, settings: {nowPlaying: DEFAULT_NOW_PLAYING, autostart: false, units: {ets2: 'metric', ats: 'us-customary'}, overlay: DEFAULT_OVERLAY, state: 'defaults', writable: true, saveError: code}, overlayEdit: DRIVING, plugins: PLUGINS_DISABLED, autostart: 'not-installed', application: APPLICATION, update: UPDATE_UNSUPPORTED};
   expect(handlers.get('app:get-state')!(trusted())).toEqual(refused);
   expect(contents.send).toHaveBeenLastCalledWith('app:state', refused);
   await vi.advanceTimersByTimeAsync(50); expect(overlayChannel.port1.postMessage.mock.calls).toHaveLength(deliveries);
   // A later successful save clears the settings error and still leaves the service problem in place.
-  settingsWrite.mockImplementation(() => {settingsView = {autostart: false, units: {ets2: 'metric', ats: 'us-customary'}, overlay: DEFAULT_OVERLAY, state: 'loaded', writable: true, saveError: null}; return Promise.resolve(settingsView);});
+  settingsWrite.mockImplementation(() => {settingsView = {nowPlaying: DEFAULT_NOW_PLAYING, autostart: false, units: {ets2: 'metric', ats: 'us-customary'}, overlay: DEFAULT_OVERLAY, state: 'loaded', writable: true, saveError: null}; return Promise.resolve(settingsView);});
   await saveUnits(trusted(), 'ats', 'us-customary');
-  const saved = {health, settings: {autostart: false, units: {ets2: 'metric', ats: 'us-customary'}, overlay: DEFAULT_OVERLAY, state: 'loaded', writable: true, saveError: null}, overlayEdit: DRIVING, plugins: PLUGINS_DISABLED, autostart: 'not-installed', application: APPLICATION, update: UPDATE_UNSUPPORTED};
+  const saved = {nowPlaying: {state: 'disabled', sources: [], selection: {kind: 'automatic'}, error: null, edit: {active: false, placement: 'unavailable'}}, health, settings: {nowPlaying: DEFAULT_NOW_PLAYING, autostart: false, units: {ets2: 'metric', ats: 'us-customary'}, overlay: DEFAULT_OVERLAY, state: 'loaded', writable: true, saveError: null}, overlayEdit: DRIVING, plugins: PLUGINS_DISABLED, autostart: 'not-installed', application: APPLICATION, update: UPDATE_UNSUPPORTED};
   expect(handlers.get('app:get-state')!(trusted())).toEqual(saved);
   expect(contents.send).toHaveBeenLastCalledWith('app:state', saved);
 });
@@ -1371,10 +1383,10 @@ it('exits after at most 1000 ms when an in-flight settings save does not settle'
 it('reports the settings view in the gated lifecycle facts', () => isolatedProfile(async profile => {
   vi.stubEnv('ETS2TELEMETRY_LIVE_SMOKE', '1'); vi.stubEnv('ETS2TELEMETRY_DIAGNOSTIC_DIR', 'C:\\isolated\\diagnostics');
   vi.stubEnv('ETS2TELEMETRY_PROFILE_DIR', profile); trayAvailable = true;
-  settingsView = {autostart: false, units: {ets2: 'metric', ats: 'us-customary'}, overlay: DEFAULT_OVERLAY, state: 'invalid-file', writable: true, saveError: null}; await ready();
+  settingsView = {nowPlaying: DEFAULT_NOW_PLAYING, autostart: false, units: {ets2: 'metric', ats: 'us-customary'}, overlay: DEFAULT_OVERLAY, state: 'invalid-file', writable: true, saveError: null}; await ready();
   let facts: Record<string, unknown> | undefined;
   app.emit('ets2telemetry:diagnostic-lifecycle-state', (state: Record<string, unknown>) => {facts = state;});
-  expect(facts).toMatchObject({settings: {autostart: false, units: {ets2: 'metric', ats: 'us-customary'}, overlay: DEFAULT_OVERLAY, state: 'invalid-file', writable: true, saveError: null}});
+  expect(facts).toMatchObject({settings: {nowPlaying: DEFAULT_NOW_PLAYING, autostart: false, units: {ets2: 'metric', ats: 'us-customary'}, overlay: DEFAULT_OVERLAY, state: 'invalid-file', writable: true, saveError: null}});
 }));
 // ET-012a: overlay layouts and sections. The snapshot's game client is 1920 x 1080 at (-1920, 0) and the fixture's
 // screen conversion is the identity. ET-045e changed the requirement for the scale: the default setting 1 renders at
@@ -1954,8 +1966,8 @@ const NO_LOSSES = {lostEvents: 0, eventLoss: 0, notConnected: 0, sampleLoss: 0, 
 const recordingStatus = (state: string, losses: Partial<typeof NO_LOSSES> = {}, code: string | null = null) =>
   ({state, target: 'synthetic', code, losses: {...NO_LOSSES, ...losses}, trip: {phase: 'active', completeness: 'partial', untrackedJob: false}});
 const report = (status: unknown, target = child) => target.emit('message', {type: 'recording', status});
-const healthOf = () => (handlers.get('app:get-state')!(trusted()) as {health: {recording: unknown}}).health.recording;
-const pushedRecordings = (target = contents) => target.send.mock.calls.filter(call => call[0] === 'app:state').map(call => (call[1] as {health: {recording: unknown}}).health.recording);
+const healthOf = () => (handlers.get('app:get-state')!(trusted()) as {nowPlaying: {state: 'disabled', sources: [], selection: {kind: 'automatic'}, error: null, edit: {active: false, placement: 'unavailable'}}, health: {recording: unknown}}).health.recording;
+const pushedRecordings = (target = contents) => target.send.mock.calls.filter(call => call[0] === 'app:state').map(call => (call[1] as {nowPlaying: {state: 'disabled', sources: [], selection: {kind: 'automatic'}, error: null, edit: {active: false, placement: 'unavailable'}}, health: {recording: unknown}}).health.recording);
 it('accepts a valid recording status before and after readiness and pushes it in the application state and to the tray presenter', async () => {
   const presented: unknown[] = [];
   vi.doMock('../../apps/desktop/src/tray-model', async importOriginal => {
@@ -2056,7 +2068,7 @@ it.each(['reload', 'renderer-crash', 'reopen'] as const)('gives a dashboard subs
   ipc.emit('app:subscribe-state', sender);
   expect(target.send.mock.calls.length).toBe(before + 1);
   expect(pushedRecordings(target).at(-1)).toEqual(recordingStatus('interrupted', {notConnected: 1}));
-  expect((handlers.get('app:get-state')!(sender) as {health: {recording: unknown}}).health.recording).toEqual(recordingStatus('interrupted', {notConnected: 1}));
+  expect((handlers.get('app:get-state')!(sender) as {nowPlaying: {state: 'disabled', sources: [], selection: {kind: 'automatic'}, error: null, edit: {active: false, placement: 'unavailable'}}, health: {recording: unknown}}).health.recording).toEqual(recordingStatus('interrupted', {notConnected: 1}));
 });
 it('keeps the recording status unchanged when the upstream live channel closes and recovers', async () => {
   await ready(); ipc.emit('app:subscribe-state', trusted());
@@ -2310,7 +2322,7 @@ it.each(['failure report', 'unexpected exit'] as const)('creates the dashboard a
   await vi.advanceTimersByTimeAsync(250); children[1].emit('exit', 1);
   await vi.advanceTimersByTimeAsync(1000); children[2].emit('exit', 1);
   expect(windows).toHaveLength(2); expect(loadFile).toHaveBeenCalledTimes(2);
-  expect((handlers.get('app:get-state')!(trusted()) as {health: unknown}).health).toEqual({service: 'failed', storage: ending === 'failure report' ? 'failed' : 'pending', recording: {state: 'unknown'}, lastError: 'SERVICE_RESTART_EXHAUSTED'});
+  expect((handlers.get('app:get-state')!(trusted()) as {nowPlaying: {state: 'disabled', sources: [], selection: {kind: 'automatic'}, error: null, edit: {active: false, placement: 'unavailable'}}, health: unknown}).health).toEqual({service: 'failed', storage: ending === 'failure report' ? 'failed' : 'pending', recording: {state: 'unknown'}, lastError: 'SERVICE_RESTART_EXHAUSTED'});
   // A second launch now focuses that dashboard instead of being ignored as starting.
   app.emit('second-instance');
   expect(log).toHaveBeenCalledWith('SECOND_INSTANCE', undefined, {action: 'focused'});
@@ -3010,12 +3022,12 @@ it.each([false, true])('retires held startup before an explicit request whose sa
   if (fail) {
     await expect(requested).rejects.toThrow('Settings could not be saved');
     expect(login.get).toHaveBeenCalledOnce(); expect(login.set).not.toHaveBeenCalled();
-    expect(handlers.get('app:get-state')!(trusted())).toMatchObject({autostart: 'registered', settings: {autostart: true}});
+    expect(handlers.get('app:get-state')!(trusted())).toMatchObject({autostart: 'registered', settings: {nowPlaying: DEFAULT_NOW_PLAYING, autostart: true}});
   } else await requested;
   held.resolve({ok: true, mode: 'test-root', installRoot: 'C:\\isolated'}); await settle(); settingsChanged!(); await settle();
   expect(login.set).toHaveBeenCalledTimes(fail ? 0 : 1);
   if (!fail) expect(login.set).toHaveBeenCalledWith(expect.objectContaining({openAtLogin: false}));
-  else expect(handlers.get('app:get-state')!(trusted())).toMatchObject({autostart: 'registered', settings: {autostart: true}});
+  else expect(handlers.get('app:get-state')!(trusted())).toMatchObject({autostart: 'registered', settings: {nowPlaying: DEFAULT_NOW_PLAYING, autostart: true}});
 });
 it('does not retire startup for rejected invalid or untrusted autostart requests', async () => {
   const login = installedLogin(), held = deferred<Awaited<ReturnType<typeof login.discover>>>();
@@ -3065,7 +3077,7 @@ it.each([{name: 'unregistered', registered: false, throws: false}, {name: 'faile
     login.get.mockImplementation(() => {if (throws) throw new Error('query refused'); return {openAtLogin: registered};});
     autostartWrite.mockRejectedValueOnce(new FakeSettingsError('SETTINGS_WRITE_FAILED'));
     await expect(Promise.resolve(handlers.get('settings:set-autostart')!(trusted(), false))).rejects.toThrow('Settings could not be saved');
-    expect(handlers.get('app:get-state')!(trusted())).toMatchObject({autostart: name, settings: {autostart: true}});
+    expect(handlers.get('app:get-state')!(trusted())).toMatchObject({autostart: name, settings: {nowPlaying: DEFAULT_NOW_PLAYING, autostart: true}});
     held.resolve({ok: true, mode: 'test-root', installRoot: 'C:\\isolated'}); await settle();
     expect(login.set).not.toHaveBeenCalled(); expect(login.get).toHaveBeenCalledOnce();
   }
@@ -3078,9 +3090,9 @@ it('does not restore stale registration status when an older held save fails aft
   const first = Promise.resolve(handlers.get('settings:set-autostart')!(trusted(), true));
   const rejected = expect(first).rejects.toThrow('Settings could not be saved'); await settle();
   await handlers.get('settings:set-autostart')!(trusted(), false);
-  expect(handlers.get('app:get-state')!(trusted())).toMatchObject({autostart: 'unregistered', settings: {autostart: false}});
+  expect(handlers.get('app:get-state')!(trusted())).toMatchObject({autostart: 'unregistered', settings: {nowPlaying: DEFAULT_NOW_PLAYING, autostart: false}});
   older.reject(new FakeSettingsError('SETTINGS_WRITE_FAILED')); await rejected;
-  expect(handlers.get('app:get-state')!(trusted())).toMatchObject({autostart: 'unregistered', settings: {autostart: false}});
+  expect(handlers.get('app:get-state')!(trusted())).toMatchObject({autostart: 'unregistered', settings: {nowPlaying: DEFAULT_NOW_PLAYING, autostart: false}});
   expect(login.set).toHaveBeenCalledOnce();
 });
 it('retains a verified target when an older concurrent discovery later returns no installed target', async () => {
@@ -3091,7 +3103,7 @@ it('retains a verified target when an older concurrent discovery later returns n
   autostartWrite.mockRejectedValueOnce(new FakeSettingsError('SETTINGS_WRITE_FAILED'));
   const rejected = expect(first).rejects.toThrow('Settings could not be saved');
   older.resolve({ok: false} as unknown as Awaited<ReturnType<typeof login.discover>>); await rejected;
-  expect(handlers.get('app:get-state')!(trusted())).toMatchObject({autostart: 'registered', settings: {autostart: true}});
+  expect(handlers.get('app:get-state')!(trusted())).toMatchObject({autostart: 'registered', settings: {nowPlaying: DEFAULT_NOW_PLAYING, autostart: true}});
   await handlers.get('settings:set-autostart')!(trusted(), true);
   expect(login.discover).toHaveBeenCalledTimes(3); expect(login.set).toHaveBeenCalledTimes(2);
   startup.resolve({ok: true, mode: 'test-root', installRoot: 'C:\\isolated'}); await settle(); expect(login.set).toHaveBeenCalledTimes(2);
@@ -3102,7 +3114,7 @@ it('observes actual status before a held durable save and mutates registration o
   autostartWrite.mockReturnValueOnce(saved.promise);
   const request = Promise.resolve(handlers.get('settings:set-autostart')!(trusted(), true)); await settle();
   expect(login.get).toHaveBeenCalledOnce(); expect(login.set).not.toHaveBeenCalled();
-  expect(handlers.get('app:get-state')!(trusted())).toMatchObject({autostart: 'registered', settings: {autostart: false}});
+  expect(handlers.get('app:get-state')!(trusted())).toMatchObject({autostart: 'registered', settings: {nowPlaying: DEFAULT_NOW_PLAYING, autostart: false}});
   settingsView = {...settingsView, autostart: true}; saved.resolve(settingsView); await request;
   expect(login.set).toHaveBeenCalledOnce(); expect(login.set).toHaveBeenCalledWith(expect.objectContaining({openAtLogin: true}));
 });
@@ -3293,4 +3305,180 @@ it('keeps a missing fixture launch isolated when the renderer requests automatic
   await select(trusted(), 'game'); await vi.advanceTimersByTimeAsync(250); await select(trusted(), 'ets2');
   expect(resolveBroker).not.toHaveBeenCalled();
   expect(child.postMessage).toHaveBeenLastCalledWith({type: 'select', source: 'synthetic', broker: undefined});
+});
+
+it('validates current-track arity, sender, main frame and document retirement before granting settings authority', async () => {
+  await ready();
+  Object.assign(contents.mainFrame, {url: pathToFileURL(loadFile.mock.calls[0][0]).href}); contents.emit('did-finish-load');
+  for (const [channel, args] of [
+    ['settings:set-now-playing-enabled', [true, 1]], ['settings:set-now-playing-enabled', ['true']],
+    ['settings:set-now-playing-style', ['other']], ['settings:set-now-playing-background-opacity', [39]],
+    ['now-playing:select-source', [{kind: 'session', id: 'cmd.exe'}]], ['now-playing-edit:begin', [1]],
+    ['now-playing-edit:reset', [1]], ['now-playing-edit:finish', ['delete']]
+  ] as [string, unknown[]][]) await expect(Promise.resolve().then(() => handlers.get(channel)!(trusted(), ...args))).rejects.toThrow();
+  const setStyle = handlers.get('settings:set-now-playing-style')!;
+  for (const event of [{sender: overlayContents, senderFrame: overlayContents.mainFrame}, {sender: contents, senderFrame: {}}, {sender: {}, senderFrame: contents.mainFrame}])
+    await expect(Promise.resolve().then(() => setStyle(event, 'full'))).rejects.toThrow('Invalid current track request');
+  expect((await setStyle(trusted(), 'full') as {nowPlaying: unknown}).nowPlaying).toMatchObject({style: 'full', enabled: false});
+  contents.emit('did-start-loading');
+  await expect(Promise.resolve().then(() => setStyle(trusted(), 'minimal'))).rejects.toThrow('Invalid current track request');
+  contents.emit('did-finish-load');
+  Object.assign(contents.mainFrame, {url: 'file:///other.html'});
+  await expect(Promise.resolve().then(() => setStyle(trusted(), 'minimal'))).rejects.toThrow('Invalid current track request');
+  const before = channels.length; ipc.emit('now-playing:subscribe', trusted(), 0); expect(channels).toHaveLength(before);
+});
+
+async function readyCurrentTrack(beforeEnable?: () => void) {
+  await ready();
+  Object.assign(contents.mainFrame, {url: pathToFileURL(loadFile.mock.calls[0][0]).href}); contents.emit('did-finish-load');
+  beforeEnable?.();
+  await handlers.get('settings:set-now-playing-enabled')!(trusted(), true);
+  const widget = windows[2];
+  Object.assign(widget.webContents.mainFrame, {url: pathToFileURL(loadFile.mock.lastCall![0]).href}); widget.webContents.emit('did-finish-load');
+  const generation = widget.webContents.postMessage.mock.lastCall![1].generation;
+  ipc.emit('now-playing:subscribe', {sender: widget.webContents, senderFrame: widget.webContents.mainFrame}, generation);
+  return widget;
+}
+async function latestCurrentTrack() {
+  const port = channels.at(-1)!.port1;
+  port.emit('message', {data: {type: 'consumed', delivery: port.postMessage.mock.lastCall![0].delivery}});
+  await vi.advanceTimersByTimeAsync(50);
+  return port.postMessage.mock.lastCall![0].update as import('../../packages/contracts/src').NowPlayingDisplay;
+}
+const CURRENT_TRACK_PNG = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jRZkAAAAASUVORK5CYII=';
+it('retains an explicit token through reader failure and requires reselecting a recreated same-app session', async () => {
+  await readyCurrentTrack();
+  const old = {id: 's1', sourceAppId: 'Chrome', playback: 'playing' as const, current: true};
+  const track = {id: old.id, revision: 1, title: 'Old session', artist: null, album: null, playback: 'playing' as const, timeline: null, artwork: null};
+  const snapshot = {version: 1 as const, type: 'snapshot' as const, requestId: 1, sessions: [old], selected: track, error: null};
+  nowReaderOptions.snapshot(snapshot, 1); handlers.get('now-playing:select-source')!(trusted(), {kind: 'session', id: old.id});
+  nowReaderOptions.snapshot({...snapshot, sessions: [], selected: null}, 1);
+  expect(handlers.get('app:get-state')!(trusted())).toMatchObject({nowPlaying: {state: 'unavailable'}});
+  nowReaderOptions.snapshot(snapshot, 1);
+  expect(handlers.get('app:get-state')!(trusted())).toMatchObject({nowPlaying: {state: 'playing', selection: {kind: 'session', id: old.id}}});
+  nowReaderOptions.failed('READER_TIMEOUT');
+  expect((await latestCurrentTrack()).track).toBeNull();
+  const fresh = {...old, id: 's2'}, other = {...old, id: 's3', current: false};
+  nowReaderOptions.snapshot({...snapshot, sessions: [fresh, other], selected: null}, 2);
+  expect(handlers.get('app:get-state')!(trusted())).toMatchObject({nowPlaying: {state: 'unavailable', selection: {kind: 'session', id: old.id}, sources: [fresh, other], error: null}});
+  expect((await latestCurrentTrack()).track).toBeNull(); expect(nowReaderSelection.mock.calls).toEqual([[old.id]]);
+  handlers.get('now-playing:select-source')!(trusted(), {kind: 'session', id: fresh.id});
+  nowReaderOptions.snapshot({...snapshot, sessions: [fresh, other], selected: {...track, id: fresh.id, title: 'Recreated session'}}, 2);
+  expect(handlers.get('app:get-state')!(trusted())).toMatchObject({nowPlaying: {state: 'playing', selection: {kind: 'session', id: fresh.id}, error: null}});
+  expect((await latestCurrentTrack()).track?.title).toBe('Recreated session'); expect(nowReaderSelection.mock.calls).toEqual([[old.id], [fresh.id]]);
+});
+it('caches exactly one successful PNG validation and projects artwork only in Full', async () => {
+  await readyCurrentTrack(); decodeImage.mockClear();
+  const source = {id: 's1', sourceAppId: 'Chrome', playback: 'playing' as const, current: true};
+  const artwork = {png: CURRENT_TRACK_PNG, width: 1, height: 1};
+  const track = {id: source.id, revision: 1, title: 'Fixture', artist: null, album: null, playback: 'playing' as const, timeline: null, artwork};
+  const snapshot = {version: 1 as const, type: 'snapshot' as const, requestId: 1, sessions: [source], selected: track, error: null};
+  nowReaderOptions.snapshot(snapshot, 1); nowReaderOptions.snapshot({...snapshot, selected: {...track, revision: 2}}, 1);
+  expect(decodeImage).toHaveBeenCalledTimes(1); expect((await latestCurrentTrack()).track?.artwork).toBeNull();
+  await handlers.get('settings:set-now-playing-style')!(trusted(), 'full');
+  expect((await latestCurrentTrack()).track?.artwork).toEqual(artwork); expect(decodeImage).toHaveBeenCalledTimes(1);
+  const changed = {...artwork, png: Buffer.concat([Buffer.from(CURRENT_TRACK_PNG, 'base64'), Buffer.from([0])]).toString('base64')};
+  nowReaderOptions.snapshot({...snapshot, selected: {...track, artwork: changed}}, 1);
+  expect(decodeImage).toHaveBeenCalledTimes(2); expect((await latestCurrentTrack()).track?.artwork).toEqual(changed);
+  nowReaderOptions.snapshot(snapshot, 1);
+  expect(decodeImage).toHaveBeenCalledTimes(3); expect((await latestCurrentTrack()).track?.artwork).toEqual(artwork);
+  const wide = Buffer.from(CURRENT_TRACK_PNG, 'base64'); wide.writeUInt32BE(2, 16);
+  const mismatch = {...artwork, png: wide.toString('base64'), width: 2};
+  nowReaderOptions.snapshot({...snapshot, selected: {...track, artwork: mismatch}}, 1);
+  expect(decodeImage).toHaveBeenCalledTimes(4); expect((await latestCurrentTrack()).track?.artwork).toBeNull();
+  decodeImage.mockReturnValueOnce({addRepresentation: vi.fn(), getSize: () => ({width: 1, height: 1}), isEmpty: () => true});
+  nowReaderOptions.snapshot(snapshot, 1); expect((await latestCurrentTrack()).track?.artwork).toBeNull();
+  nowReaderOptions.snapshot(snapshot, 1); expect(decodeImage).toHaveBeenCalledTimes(6); expect((await latestCurrentTrack()).track?.artwork).toEqual(artwork);
+  nowReaderOptions.snapshot({...snapshot, selected: {...track, artwork: {...artwork, width: 2}}}, 1);
+  expect(decodeImage).toHaveBeenCalledTimes(7); expect((await latestCurrentTrack()).track?.artwork).toBeNull();
+  decodeImage.mockImplementationOnce(() => {throw new Error('Invalid PNG');});
+  nowReaderOptions.snapshot(snapshot, 1); expect((await latestCurrentTrack()).track?.artwork).toBeNull();
+  nowReaderOptions.snapshot(snapshot, 1); expect(decodeImage).toHaveBeenCalledTimes(9); expect((await latestCurrentTrack()).track?.artwork).toEqual(artwork);
+  expect(snapshot.selected.artwork).toEqual(artwork);
+});
+it.each(['reader-failure', 'disable', 'document-retired'] as const)('retires successful PNG validation on %s', async retirement => {
+  const widget = await readyCurrentTrack(); decodeImage.mockClear();
+  const source = {id: 's1', sourceAppId: 'Chrome', playback: 'playing' as const, current: true};
+  const snapshot = {version: 1 as const, type: 'snapshot' as const, requestId: 1, sessions: [source], error: null,
+    selected: {id: source.id, revision: 1, title: null, artist: null, album: null, playback: 'playing' as const, timeline: null, artwork: {png: CURRENT_TRACK_PNG, width: 1, height: 1}}};
+  nowReaderOptions.snapshot(snapshot, 1); nowReaderOptions.snapshot(snapshot, 1); expect(decodeImage).toHaveBeenCalledTimes(1);
+  if (retirement === 'reader-failure') nowReaderOptions.failed('READER_TIMEOUT');
+  else if (retirement === 'document-retired') widget.webContents.emit('did-start-loading');
+  else {await handlers.get('settings:set-now-playing-enabled')!(trusted(), false); await handlers.get('settings:set-now-playing-enabled')!(trusted(), true);}
+  nowReaderOptions.snapshot(snapshot, 2); expect(decodeImage).toHaveBeenCalledTimes(2);
+});
+it('starts the production current-track focus gate and restores click-through after the 150ms blur grace', async () => {
+  const widget = await readyCurrentTrack(), dashboard = windows[0];
+  dashboard.focused = true; dashboard.emit('focus');
+  expect(handlers.get('now-playing-edit:begin')!(trusted())).toMatchObject({active: true, placement: 'visible'});
+  expect(widget.visible).toBe(true); expect(widget.setIgnoreMouseEvents).toHaveBeenLastCalledWith(false);
+  dashboard.focused = false; dashboard.emit('blur');
+  await vi.advanceTimersByTimeAsync(149); expect(widget.visible).toBe(true); expect(widget.setFocusable).toHaveBeenLastCalledWith(true);
+  await vi.advanceTimersByTimeAsync(1); expect(widget.visible).toBe(false);
+  expect(widget.setIgnoreMouseEvents).toHaveBeenLastCalledWith(true); expect(widget.setFocusable).toHaveBeenLastCalledWith(false); expect(widget.setMovable).toHaveBeenLastCalledWith(false);
+  dashboard.focused = true; dashboard.emit('focus'); expect(widget.visible).toBe(true);
+  dashboard.focused = false; dashboard.emit('blur'); widget.focused = true; widget.emit('focus');
+  expect(handlers.get('now-playing-edit:begin')!(trusted())).toMatchObject({active: true, placement: 'visible'});
+  await vi.advanceTimersByTimeAsync(150); expect(widget.visible).toBe(true);
+  widget.focused = false; widget.emit('blur');
+  await handlers.get('now-playing-edit:finish')!(trusted(), 'cancel');
+  const shown = widget.showInactive.mock.calls.length;
+  await vi.advanceTimersByTimeAsync(150); dashboard.focused = true; dashboard.emit('focus');
+  expect(widget.showInactive).toHaveBeenCalledTimes(shown); expect(widget.visible).toBe(false);
+});
+it('gates current-track visibility on live game-window freshness independently of media updates and overlay settings', async () => {
+  vi.stubEnv('ETS2TELEMETRY_SOURCE_KIND', 'ets2');
+  const widget = await readyCurrentTrack();
+  const source = {id: 's1', sourceAppId: 'SpotifyAB.SpotifyMusic_zpdnekdrzrea0!Spotify', playback: 'playing' as const, current: true};
+  const track = {id: source.id, revision: 1, title: 'Fixture track', artist: null, album: null, playback: 'playing' as const, timeline: null, artwork: null};
+  const snapshot = {version: 1 as const, type: 'snapshot' as const, requestId: 1, sessions: [source], selected: track, error: null};
+  nowReaderOptions.snapshot(snapshot, 1); expect(widget.visible).toBe(false);
+  settingsView = {...settingsView, overlay: {...settingsView.overlay, enabled: false}}; settingsChanged?.();
+  const live = currentGame(); deliver(live);
+  expect(widget.visible).toBe(true); expect(widget.setIgnoreMouseEvents).toHaveBeenLastCalledWith(true);
+  const background = structuredClone(live);
+  if (!background.observation!.state.window.available) throw new Error('Expected game window');
+  background.observation!.state.window.value.foreground = false; deliver(background, 2);
+  expect(widget.visible).toBe(false); nowReaderOptions.snapshot(snapshot, 1); expect(widget.visible).toBe(false);
+  deliver(currentGame(), 3); expect(widget.visible).toBe(true);
+  await vi.advanceTimersByTimeAsync(249); expect(widget.visible).toBe(true);
+  await vi.advanceTimersByTimeAsync(1); expect(widget.visible).toBe(false);
+  nowReaderOptions.snapshot(snapshot, 1); expect(widget.visible).toBe(false);
+});
+it('uses the existing fresh game report when current track is enabled after game attachment', async () => {
+  vi.stubEnv('ETS2TELEMETRY_SOURCE_KIND', 'ets2');
+  const widget = await readyCurrentTrack(() => deliver(currentGame()));
+  const source = {id: 's1', sourceAppId: 'Chrome', playback: 'playing' as const, current: true};
+  nowReaderOptions.snapshot({version: 1, type: 'snapshot', requestId: 1, sessions: [source], error: null,
+    selected: {id: source.id, revision: 1, title: 'Fixture track', artist: null, album: null, playback: 'playing', timeline: null, artwork: null}}, 1);
+  expect(widget.visible).toBe(true);
+});
+it('accepts native retained B after explicit B returns to Automatic while Windows-current A also plays', async () => {
+  await readyCurrentTrack();
+  const a = {id: 's1', sourceAppId: 'Synthetic A', playback: 'playing' as const, current: true};
+  const b = {id: 's2', sourceAppId: 'Synthetic B', playback: 'playing' as const, current: false};
+  const track = {id: a.id, revision: 1, title: 'Provider A', artist: null, album: null, playback: 'playing' as const, timeline: null, artwork: null};
+  const snapshot = {version: 1 as const, type: 'snapshot' as const, requestId: 1, sessions: [a, b], selected: track, error: null};
+  nowReaderOptions.snapshot(snapshot, 1);
+  handlers.get('now-playing:select-source')!(trusted(), {kind: 'session', id: b.id});
+  nowReaderOptions.snapshot({...snapshot, selected: {...track, id: b.id, revision: 2}}, 1);
+  handlers.get('now-playing:select-source')!(trusted(), {kind: 'automatic'});
+  nowReaderOptions.snapshot({...snapshot, selected: {...track, id: b.id, revision: 2}}, 1);
+  expect(handlers.get('app:get-state')!(trusted())).toMatchObject({nowPlaying: {state: 'playing', error: null, selection: {kind: 'automatic'}, sources: [a, b]}});
+  expect(nowReaderSelection.mock.calls).toEqual([[b.id], [null]]);
+  nowReaderOptions.snapshot({...snapshot, sessions: [a, {...b, playback: 'paused'}], selected: {...track, id: b.id, playback: 'paused'}}, 1);
+  expect(handlers.get('app:get-state')!(trusted())).toMatchObject({nowPlaying: {state: 'error', error: 'INVALID_RESPONSE', sources: []}});
+});
+it.each(['widget-reload', 'port-close', 'disable', 'dashboard-retired', 'exit'])('retires the current-track focus grace on %s', async retirement => {
+  const widget = await readyCurrentTrack(), dashboard = windows[0];
+  dashboard.focused = true; handlers.get('now-playing-edit:begin')!(trusted());
+  dashboard.focused = false; dashboard.emit('blur');
+  if (retirement === 'widget-reload') widget.webContents.emit('did-start-loading');
+  else if (retirement === 'port-close') channels.at(-1)!.port1.close();
+  else if (retirement === 'disable') await handlers.get('settings:set-now-playing-enabled')!(trusted(), false);
+  else if (retirement === 'dashboard-retired') contents.emit('did-start-loading');
+  else app.emit('before-quit', {preventDefault: vi.fn()});
+  expect(widget.visible).toBe(false); expect(widget.setIgnoreMouseEvents).toHaveBeenLastCalledWith(true);
+  const writes = widget.setIgnoreMouseEvents.mock.calls.length;
+  await vi.advanceTimersByTimeAsync(150); expect(widget.setIgnoreMouseEvents).toHaveBeenCalledTimes(writes);
 });

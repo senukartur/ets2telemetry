@@ -1,3 +1,4 @@
+import {DEFAULT_NOW_PLAYING} from '../../apps/desktop/src/now-playing/contract';
 import React from 'react';
 import {renderToStaticMarkup} from 'react-dom/server';
 import {expect, it, vi} from 'vitest';
@@ -28,7 +29,7 @@ vi.mock('@/components/ui/radio-group', () => ({
 }));
 
 const settings = (language: AppLanguage, gearDisplay: GearDisplayModes = {ets2: 'automatic', ats: 'automatic'}, patch: Partial<SettingsView> = {}): SettingsView => ({
-  language, autostart: false, units: {ets2: 'metric', ats: 'us-customary'}, gearDisplay, overlay: DEFAULT_OVERLAY_SETTINGS, state: 'loaded', writable: true, saveError: null, ...patch});
+  nowPlaying: DEFAULT_NOW_PLAYING, language, autostart: false, units: {ets2: 'metric', ats: 'us-customary'}, gearDisplay, overlay: DEFAULT_OVERLAY_SETTINGS, state: 'loaded', writable: true, saveError: null, ...patch});
 const render = (view: SettingsView | undefined, showSaveError?: boolean) =>
   renderToStaticMarkup(React.createElement(GearDisplayCard, {settings: view, onSaved: vi.fn(), onRequest: vi.fn(), showSaveError}));
 const escaped = (text: string) => renderToStaticMarkup(React.createElement(React.Fragment, null, text));

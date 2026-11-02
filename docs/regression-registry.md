@@ -20,6 +20,16 @@ Columns:
 
 | Entry point | Layer | REG IDs | Source | Owning card (PR) | Runs in | Protected |
 | --- | --- | --- | --- | --- | --- | --- |
+| `tests/unit/now-playing-contract.test.ts` | Node unit (Vitest) | REG-010, REG-020 | T | ET-061 | PR (tests job, `npm test`) | security (bounded metadata/artwork and response identity) |
+| `tests/unit/now-playing-selection.test.ts` | Node unit (Vitest) | REG-020 | T | ET-061 | PR (tests job, `npm test`) | security (native selection correlation, highest playback tier and explicit-token loss) |
+| `tests/unit/now-playing-presentation.test.ts` | Node unit (Vitest) | REG-020 | T | ET-061 | PR (tests job, `npm test`) | regression (readable source names; paused/unknown anchors do not advance) |
+| `tests/unit/now-playing-placement.test.ts` | Node unit (Vitest) | REG-016, REG-020 | T | ET-061 | PR (tests job, `npm test`) | regression (reachable placement and topology fallback) |
+| `tests/unit/now-playing-controller.test.ts` | Node unit (Vitest) | REG-012, REG-016, REG-020 | T | ET-061 | PR (tests job, `npm test`) | security (game-only visibility, client bounds, click-through and main-owned draft) |
+| `tests/unit/now-playing-reader.test.ts` | Node unit (Vitest) | REG-010, REG-011, REG-020 | T | ET-061 | PR (tests job, `npm test`) | security (framing, deadlines, generations and bounded restarts) |
+| `tests/unit/now-playing-preload.test.ts` | Node unit (Vitest) | REG-010, REG-020 | T | ET-061 | PR (tests job, `npm test`) | security (readonly authority, IPC arity and subscription retirement) |
+| `tests/unit/now-playing-settings.test.ts` | Node unit (Vitest) | REG-012, REG-017, REG-020 | T | ET-061 | PR (tests job, `npm test`) | regression (migration, startup bytes and durable restart) |
+| `tests/unit/now-playing-settings-rendering.test.ts` | Node unit (Vitest) | REG-020 | T | ET-061 | PR (tests job, `npm test`) | regression (conditional controls, missing-title rendering and localization) |
+| `tests/host/media-session-reader.test.ts` | Host subprocess (Vitest) | REG-010, REG-011, REG-012, REG-020 | T | ET-061 | PR (tests job, `npm test`) | security (real stdio, parent/EOF and supervision); no live observation |
 | `tests/unit/hard-mode-smoke-source.test.ts` | Node unit (Vitest), deterministic socket write failures and controlled timers | Harness: REG-003, REG-010, REG-011 | F, T | NO-CARD (staging release CI repair) | PR (`Windows x64 tests`, `npm test`) | regression (peer-close diagnostics, per-connection frames/timers, reconnection ACK, unexpected errors retained) |
 | `tests/unit/action-result-rendering.test.ts` | Node unit (Vitest) | REG-015 | R, F, V (et-045b) | ET-045b | PR (tests job, `npm test`) | — |
 | `tests/unit/app-health.test.ts` | Node unit (Vitest) | REG-011, REG-012 | T, V (et-011) | ET-011a (#52) | PR (tests job, `npm test`) | — |
@@ -267,6 +277,12 @@ From `ctest -N` on the four build trees at ET-019t: 75 cases in the plugin Relea
 | `native-pipe-client-*` (72 cases, including discovery, CAP0 and protocol v1 broker modes) | Native CTest, client | REG-003, REG-005, REG-010, REG-011 | R, T | ET-006a (#13), extended by CAP-01a, ET-006b and ET-033 | PR (scaffold job) | security, v0/CAP0 isolation |
 | `*-asan-contract*` (70 cases): the AddressSanitizer twins of the protocol v0 and v1, producer, adapter, event channel, snapshot transport, window, CAP0 and v1 transport cases | Native CTest, plugin ASan | as their Release twins | R, T | the twins' cards | PR (AddressSanitizer job) | as their Release twins |
 | `native-pipe-client-asan-*` (72 cases) | Native CTest, client ASan | as `native-pipe-client-*` | R | ET-006a (#13) and later | PR (AddressSanitizer job) | security, v0/CAP0 isolation |
+| `media-session-reader-protocol` | CTest | REG-010, REG-020 | T | ET-061 | PR (build job) | security (command bounds and Unicode) |
+| `media-session-reader-snapshot` | CTest | REG-010, REG-011, REG-020 | T | ET-061 | PR (build job) | regression (production enumeration, ID/cache transitions, explicit-to-Automatic history and playback coherence) |
+| `media-session-reader-selection` | CTest | REG-020 | T | ET-061 | PR (build job) | regression (session policy) |
+| `media-session-reader-artwork` | CTest | REG-020 | T | ET-061 | PR (build job) | security (pixel bounds and proportions) |
+| `media-session-reader-lifetime` | CTest | REG-011, REG-020 | T | ET-061 | PR (build job) | security (late callbacks own no retired state) |
+| `media-session-reader-asan-{protocol,snapshot,selection,artwork,lifetime}` | CTest ASan | REG-010, REG-011, REG-020 | T | ET-061 | PR (ASan job) | security (memory/lifetime bounds) |
 
 ### PowerShell suites
 
@@ -299,6 +315,7 @@ Each runtime smoke scenario runs once per mode through `./scripts/ci/Invoke-Runt
 | `npm run smoke:v1 --workspace @ets2telemetry/telemetry-simulator` (v1 CLI pipe smoke, lockstep and reactive) | Simulator CLI | REG-003, REG-005, REG-011 | R, T | ET-005b (#61) | PR (scaffold job) | — |
 | scenario `soak` (`-SoakMinutes <1-90>`), development and packaged, under `BoundedProcess.RunExtended` | Electron runtime smoke, real time | REG-001, REG-002, REG-003, REG-011, REG-012, REG-014, REG-018 | R, T, V (et-019) | ET-019 (PR-12b) | Soak workflow (`Windows x64 recording soak`, target `application`, packaged mode) | ACK, gap, trip completeness |
 | `scripts/ci/Invoke-SoakSource.ps1` (`smoke-soak-v1` under `BoundedProcess.RunExtended`) | Simulator CLI soak, real time | REG-011, REG-018 | R, T, V (et-019) | ET-019 (PR-12a) | Soak workflow (`Windows x64 recording soak`) | — |
+| `now-playing` | Runtime smoke | REG-012, REG-016, REG-017, REG-020 | T | ET-061 | PR packaged; dispatch/main development and packaged | security (isolated synthetic input, readonly renderer); regression (UI and restart) |
 
 ### Index findings
 

@@ -1,3 +1,4 @@
+import {DEFAULT_NOW_PLAYING} from '../../apps/desktop/src/now-playing/contract';
 import {mkdir, writeFile} from 'node:fs/promises';
 import path from 'node:path';
 import {readFileSync} from 'node:fs';
@@ -14,7 +15,7 @@ import {temporaryResources} from '../shared/resources';
 
 const USER = 'Jane.Doe', MACHINE = 'TRUCKER-PC7';
 const HEALTH: AppHealth = {service: 'ready', storage: 'verified', recording: {state: 'disabled'}, lastError: null};
-const SETTINGS: SettingsView = {language: 'en', autostart: false, units: {ets2: 'metric', ats: 'us-customary'}, gearDisplay: {ets2: 'manual', ats: 'automatic'}, overlay: {enabled: true, backgroundOpacity: 80, layout: 'strip', sections: {
+const SETTINGS: SettingsView = {nowPlaying: DEFAULT_NOW_PLAYING, language: 'en', autostart: false, units: {ets2: 'metric', ats: 'us-customary'}, gearDisplay: {ets2: 'manual', ats: 'automatic'}, overlay: {enabled: true, backgroundOpacity: 80, layout: 'strip', sections: {
   'speed': true, 'gear': true, 'rpm': true, 'fuel': true, 'range': true, 'sdk-consumption': true, 'cargo': true, 'origin': true, 'destination': true,
   'distance-driven': true, 'distance-remaining': true, 'deadline': true, 'expected-income': true, 'game-time': true, 'mandatory-break': true},
 placements: {strip: {x: 0.5, y: 0, scale: 1}, card: {x: 1, y: 0, scale: 1}, cluster: {x: 0, y: 1, scale: 1}, hud: {x: 0, y: 0, scale: 1}}},
@@ -74,6 +75,11 @@ describe('plugin close diagnostics (REG-010, REG-011)', () => {
 });
 
 describe('the format', () => {
+  it('excludes private current-track data outside the diagnostic input contract', () => {
+    const text = buildDiagnosticBundle({...input(), nowPlaying: {title: 'PRIVATE_SYNTHETIC_TRACK', artist: 'PRIVATE_SYNTHETIC_ARTIST', artwork: 'PRIVATE_SYNTHETIC_PNG'}} as DiagnosticBundleInput);
+    expect(text).not.toMatch(/PRIVATE_SYNTHETIC/);
+    expect(parse(text).settings).toMatchObject({nowPlaying: DEFAULT_NOW_PLAYING});
+  });
   it('is one JSON document with the versions, the views, the live status, the diagnosis and the reduced log rows', () => {
     const text = buildDiagnosticBundle(input());
     expect(text.endsWith('}\n')).toBe(true);

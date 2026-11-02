@@ -1,3 +1,4 @@
+import {DEFAULT_NOW_PLAYING} from '../../apps/desktop/src/now-playing/contract';
 import React from 'react';
 import {renderToStaticMarkup} from 'react-dom/server';
 import {expect, it, vi} from 'vitest';
@@ -15,7 +16,7 @@ vi.mock('@/components/ui/slider', () => ({Slider: 'input'}));
 vi.mock('@/components/ui/switch', () => ({Switch: ({checked, ...props}: {checked: boolean}) =>
   React.createElement('button', {...props, role: 'switch', 'aria-checked': checked})}));
 
-const settings = (language: AppLanguage): SettingsView => ({language, autostart: false, units: {ets2: 'metric', ats: 'us-customary'}, gearDisplay: {ets2: 'automatic', ats: 'automatic'},
+const settings = (language: AppLanguage): SettingsView => ({nowPlaying: DEFAULT_NOW_PLAYING, language, autostart: false, units: {ets2: 'metric', ats: 'us-customary'}, gearDisplay: {ets2: 'automatic', ats: 'automatic'},
   overlay: DEFAULT_OVERLAY_SETTINGS, state: 'loaded', writable: true, saveError: null});
 const render = (view: SettingsView, edit: OverlayEditState = {active: false}) => renderToStaticMarkup(React.createElement(OverlaySettingsCard,
   {settings: view, edit, onSaved: vi.fn(), onRequest: vi.fn(), showSaveError: true}));
