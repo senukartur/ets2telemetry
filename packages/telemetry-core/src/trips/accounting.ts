@@ -78,14 +78,18 @@ export interface ReadingStep {
   positionJump: {meters: number} | null;
 }
 /** Classifies one step between consecutive readings of one connection. */
-export function classifyStep(prev: ReadingPoint, next: ReadingPoint): ReadingStep {
-  const a = sampleOf(prev), b = sampleOf(next), primitive = odometerStep(a, b), fuel = fuelStep(a, b);
+export function classifyStep(prev: ReadingPoint, next: ReadingPoint, transfer: TransferMark | null = null): ReadingStep {
+  const a = sampleOf(prev), b = sampleOf(next), primitive = odometerStep(a, b);
   const sameClock = prev.capture.clockId === next.capture.clockId && prev.source.pluginSessionId === next.source.pluginSessionId;
   const ns = sameClock ? BigInt(next.capture.monotonicNs) - BigInt(prev.capture.monotonicNs) : null, elapsedNs = ns !== null && ns >= 0n ? ns : null;
   const boundary = primitive.kind === 'discontinuity' && BOUNDARY.has(primitive.cause);
+  const crossing = transfer !== null && sameClock && transfer.pluginSessionId === next.source.pluginSessionId
+    && transfer.processInstanceId === next.source.processInstanceId && transfer.clockId === next.capture.clockId
+    && BigInt(transfer.monotonicNs) > BigInt(prev.capture.monotonicNs) && BigInt(transfer.monotonicNs) <= BigInt(next.capture.monotonicNs);
+  const fuel: FuelStep = crossing ? {kind: 'unavailable'} : fuelStep(a, b);
   const point = (p: ReadingPoint) => ({odometerM: p.odometer.state === 'value' ? p.odometer.value.meters : null,
     speedMps: p.speedMps ?? null, position: p.position, gameMinutes: p.gameTime.minutes});
-  const odometer = boundary ? primitive : gameDistanceStep(point(prev), point(next), elapsedNs === null ? NaN : Number(elapsedNs) / 1e9);
+  const odometer: OdometerStep = crossing ? {kind: 'unavailable'} : boundary ? primitive : gameDistanceStep(point(prev), point(next), elapsedNs === null ? NaN : Number(elapsedNs) / 1e9);
   const step: ReadingStep = {odometer, fuel, elapsedNs, boundary, positionJump: null};
   if (elapsedNs === null || boundary) return step;
   if (prev.position !== null && next.position !== null) {
@@ -161,13 +165,13 @@ export function isFastAdvance(fromNs: string, fromMinutes: string, next: Reading
   return advance > 0n && span >= GROWTH_NS && advance * 60n * NS_PER_SECOND > BigInt(GAME_TIME_JUMP_RATE) * span;
 }
 /** The last ferry or train event of the session: its source time on its capture clock. */
-export interface TransferMark {clockId: string; monotonicNs: string}
+export interface TransferMark {pluginSessionId: string; processInstanceId: string; clockId: string; monotonicNs: string}
 /**
  * T17 label: a jump is a crossing when a ferry or train event lies at most CROSSING_WINDOW_SECONDS before the jump's
  * start, or between its start and `next`; otherwise `otherwise`, an inference.
  */
 export function jumpLabel(transfer: TransferMark | null, startNs: string, next: ReadingPoint, otherwise: 'possible-sleep' | 'possible-teleport'): JumpLabel {
-  if (transfer === null || transfer.clockId !== next.capture.clockId) return otherwise;
+  if (transfer === null || transfer.clockId !== next.capture.clockId || transfer.pluginSessionId !== next.source.pluginSessionId || transfer.processInstanceId !== next.source.processInstanceId) return otherwise;
   const at = BigInt(transfer.monotonicNs);
   return at >= BigInt(startNs) - CROSSING_NS && at <= BigInt(next.capture.monotonicNs) ? 'crossing' : otherwise;
 }

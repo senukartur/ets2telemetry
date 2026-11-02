@@ -585,7 +585,7 @@ export function openAttachedTrip(conn: StorageConnection, input: AttachInput, op
       if(decision?.observation_key===key)return {status:'duplicate'};
       if(row.outcome!=='open' || BigInt(input.nextEventSeq)!==BigInt(fromU64Key(session.committed_through_event_seq))+1n)fail('INVALID_INPUT');
       const id=associate(db,row,proof,input.job);
-      if (input.endpoint) projectEndpoint(db,id,row,{pluginSessionId:input.pluginSessionId},input.sourceClockId!,input.monotonicNs!,input.endpoint);
+      if (input.endpoint) projectEndpoint(db,id,row,{pluginSessionId:input.pluginSessionId},input.sourceClockId!,input.monotonicNs!,input.endpoint,proof);
       revise(db,id);
       statement(db,'UPDATE logical_memberships SET observation_key=? WHERE trip_ref=?').run(key,row.id);
       options.testHooks?.beforeCommit?.();
@@ -624,7 +624,7 @@ export function openAttachedTrip(conn: StorageConnection, input: AttachInput, op
     if (input.endpoint) {
       if (!proof || !input.sourceClockId || !input.monotonicNs) fail('INVALID_INPUT');
       const row = statement(db,'SELECT * FROM trips WHERE trip_uuid=?').get(attachTripUuid(input.pluginSessionId,input.nextEventSeq)) as Record<string,unknown>;
-      projectEndpoint(db,logicalFor(db,row.id),row,{pluginSessionId:input.pluginSessionId},input.sourceClockId,input.monotonicNs,input.endpoint);
+      projectEndpoint(db,logicalFor(db,row.id),row,{pluginSessionId:input.pluginSessionId},input.sourceClockId,input.monotonicNs,input.endpoint,proof);
     }
     options.testHooks?.beforeCommit?.();
     return {status: 'committed'};

@@ -4,7 +4,7 @@ import type Database from 'better-sqlite3';
 import type {JobConfiguration} from '../../../contracts/src/protocol-v1';
 import {compatibleContinuation, continuationFingerprint, learnContinuationConstraints, type ContinuationConstraints, type ProfileObservation} from '../../../telemetry-core/src/trips/continuation';
 import {advanceProgress, restoredProgress, type ProgressAnchor, type ProgressCheckpoint} from '../../../telemetry-core/src/trips/progress';
-import type {CapturedEndpoint, SampleInput, TripEffect} from '../api';
+import type {CapturedEndpoint, CapturedRunning, SampleInput, TripEffect} from '../api';
 import {fail} from '../errors';
 import {jobValues} from './journal';
 import {readHardModeDetails} from './hard-mode';
@@ -186,7 +186,8 @@ export function projectSample(db: Database.Database, session: {game: string; pro
   const linked=predecessor && (captured || head && head.trip_ref===row.id) && predecessor.tripUuid===sample.tripUuid && predecessor.sourceClockId===previous?.anchor.sourceClockId && predecessor.monotonicNs===previous?.anchor.monotonicNs;
   const distance = previous ? gameDistanceStep({...previous.anchor, speedMps: previous.anchor.speedMps ?? null, gameMinutes: previous.anchor.gameMinutes ?? null, position: previous.anchor.position ?? null},
     {...anchor, speedMps: anchor.speedMps ?? null, gameMinutes: anchor.gameMinutes ?? null, position: anchor.position ?? null}, elapsed) : null;
-  const continuous = elapsed > 0 && elapsed < 5 && !!linked && sameSource && previous?.anchor.gameClockId===anchor.gameClockId && distance?.kind === 'continuous';
+  const continuous = elapsed > 0 && elapsed < 5 && !!linked && sameSource && previous?.anchor.gameClockId===anchor.gameClockId && distance?.kind === 'continuous'
+    && !transferBoundary(db,row,previous.anchor,anchor);
   let value = advanceProgress(previous, anchor, continuous);
   let prefix: unknown = captured ? captured.head === null ? null : BigInt(captured.head) : head?.prefix_ref ?? null, start: unknown = captured ? null : head?.start_ref ?? head?.id ?? null;
   const bootstrap = !captured && previous && head?.prefix_ref === null && head.start_ref === null && previous.distanceM.available && previous.distanceM.value === 0 && previous.anchor.gameMinutes === null;
@@ -225,9 +226,27 @@ export function projectSample(db: Database.Database, session: {game: string; pro
   db.prepare('UPDATE logical_trips SET progress_head = ? WHERE id = ?').run(result.lastInsertRowid, id);
   if (coverage?.phase === 'pending' && coverage.member === String(row.id) && coverage.window?.session === String(row.plugin_session_ref) && coverage.endpoint && cleanLoadWindow(db, row)) {
     if (matchesEndpoint(coverage.endpoint.anchor, anchor)) revise(db, id, {...coverage, phase: 'resumed', window: null,
-      endpoint: {...coverage.endpoint, trip: String(row.id), anchor, head: String(result.lastInsertRowid)}});
+      endpoint: {...coverage.endpoint, trip: String(row.id), anchor, head: String(result.lastInsertRowid),running:undefined}});
     else if (completeEndpoint(coverage.endpoint.anchor) && completeEndpoint(anchor)) revise(db, id, {...coverage, losses: coverage.losses | COVERAGE_LOSS.unknown});
   }
+}
+
+/** The existing session/sequence index bounds every check. An overflowing or unordered window cannot prove continuity. */
+function transferBoundary(db: Database.Database, row: LogicalRow, a: ProgressAnchor, b: ProgressAnchor): boolean {
+  const opening = row.opened_event_ref === null ? get(db,'SELECT checkpoint_next_event_seq AS seq FROM job_configurations WHERE id=?',row.job_configuration_ref)
+    : get(db,'SELECT event_seq AS seq FROM events WHERE id=?',row.opened_event_ref);
+  const events = db.prepare(`SELECT e.type,e.occurred_monotonic_ns,c.clock_uuid FROM events e JOIN clocks c ON c.id=e.source_clock_ref
+    WHERE e.plugin_session_id=? AND e.event_seq>=? ORDER BY e.event_seq DESC LIMIT 65`).all(row.plugin_session_ref,opening?.seq ?? '00000000000000000000') as LogicalRow[];
+  const sameClock=events.filter(e=>e.clock_uuid===b.sourceClockId), start=BigInt(a.monotonicNs),end=BigInt(b.monotonicNs);
+  if(events.length===65 && !sameClock.some(e=>e.occurred_monotonic_ns!==null && BigInt(e.occurred_monotonic_ns as string)<=start))return true;
+  let later:bigint|undefined;
+  for(const event of sameClock){
+    const at=event.occurred_monotonic_ns===null?null:BigInt(event.occurred_monotonic_ns as string);
+    if(at!==null && later!==undefined && at>later)return true;
+    if(at!==null)later=at;
+    if((event.type==='player.use.ferry'||event.type==='player.use.train') && (at===null || at>start && at<=end))return true;
+  }
+  return false;
 }
 
 function completeEndpoint(a: ProgressAnchor): boolean {
@@ -271,7 +290,7 @@ function retainedEndpoint(db: Database.Database, id: bigint, head: unknown, curr
   return point ? {...progressCheckpoint(db, point), trip: String(point.trip_ref), head: String(point.id), prefixState: null} : null;
 }
 /** Captured pause/load observations share the membership transaction; they never insert a paused sample. */
-export function projectEndpoint(db: Database.Database, id: bigint, row: LogicalRow, source: {pluginSessionId: string}, clock: string, ns: string, input: CapturedEndpoint): void {
+export function projectEndpoint(db: Database.Database, id: bigint, row: LogicalRow, source: {pluginSessionId: string}, clock: string, ns: string, input: CapturedEndpoint, profile: ProfileObservation): void {
   if (!validCapturedEndpoint(input)) fail('INVALID_INPUT');
   const group = get(db, 'SELECT * FROM logical_trips WHERE id=?', id)!, prior = latestCoverage(db,id), coverage = prior.value;
   if (!coverage || group.latest_trip_ref !== row.id) return;
@@ -282,20 +301,37 @@ export function projectEndpoint(db: Database.Database, id: bigint, row: LogicalR
     const matched = retainedEndpoint(db,id,group.progress_head,coverage.endpoint,anchor);
     if (matched) {
       db.prepare('UPDATE logical_trips SET progress_head=?,accounting_rebased=1 WHERE id=?').run(matched.head === null ? null : BigInt(matched.head),id);
-      revise(db,id,{...coverage,phase:cleanLoadWindow(db,row)?'resumed':'pending',window:cleanLoadWindow(db,row)?null:coverage.window,endpoint:{...matched,trip:String(row.id),anchor,prefixState:prior.revision ? String(prior.revision.state_ref) : null}});
+      revise(db,id,{...coverage,phase:cleanLoadWindow(db,row)?'resumed':'pending',window:cleanLoadWindow(db,row)?null:coverage.window,endpoint:{...matched,trip:String(row.id),anchor,running:undefined,prefixState:prior.revision ? String(prior.revision.state_ref) : null}});
     } else if (coverage.endpoint && completeEndpoint(coverage.endpoint.anchor) && completeEndpoint(anchor)) revise(db,id,{...coverage,losses:coverage.losses|COVERAGE_LOSS.unknown});
     return;
   }
   if (input.simulation !== 'paused') return;
-  const head = group.progress_head === null ? null : get(db,'SELECT * FROM logical_progress WHERE id=?',group.progress_head)!, previous = head ? progressCheckpoint(db,head) : null;
-  const predecessor = input.previous, a = previous?.anchor;
+  const head = group.progress_head === null ? null : get(db,'SELECT * FROM logical_progress WHERE id=?',group.progress_head)!, predecessor=input.previous, endpoint=coverage.endpoint;
+  const captured=endpoint?.trip===String(row.id) && predecessor?.tripUuid===row.trip_uuid && predecessor?.sourceClockId===endpoint.anchor.sourceClockId
+    && predecessor?.monotonicNs===endpoint.anchor.monotonicNs && endpoint.anchor.pluginSessionId===source.pluginSessionId ? endpoint : null;
+  const previous=captured ?? (head ? progressCheckpoint(db,head) : null),a=previous?.anchor;
   const linked = predecessor && predecessor.tripUuid === row.trip_uuid && predecessor.sourceClockId === a?.sourceClockId && predecessor.monotonicNs === a.monotonicNs
-    && head?.trip_ref === row.id && a.pluginSessionId === source.pluginSessionId && a.sourceClockId === clock && a.gameClockId === anchor.gameClockId;
-  const elapsed = a && a.sourceClockId === clock && a.pluginSessionId === source.pluginSessionId ? Number(BigInt(ns)-BigInt(a.monotonicNs))/1e9 : NaN;
-  const step = a ? gameDistanceStep({...a,speedMps:a.speedMps??null,gameMinutes:a.gameMinutes??null,position:a.position??null},
-    {...anchor,speedMps:anchor.speedMps??null,gameMinutes:anchor.gameMinutes??null,position:anchor.position??null},elapsed) : null;
-  const totals = previous && matchesEndpoint(previous.anchor,anchor) ? {...previous,anchor} : advanceProgress(previous,anchor,!!linked && elapsed<5 && step?.kind==='continuous');
-  revise(db,id,{...coverage,endpoint:{...totals,trip:String(row.id),head:group.progress_head === null ? null : (group.progress_head as bigint).toString(),
+    && (captured || head?.trip_ref === row.id) && a.pluginSessionId === source.pluginSessionId && a.sourceClockId === clock && a.gameClockId === anchor.gameClockId;
+  const supported=(from:ProgressAnchor,to:ProgressAnchor)=>{
+    const elapsed=Number(BigInt(to.monotonicNs)-BigInt(from.monotonicNs))/1e9;
+    return from.pluginSessionId===to.pluginSessionId && from.sourceClockId===to.sourceClockId && from.gameClockId===to.gameClockId && from.truck===to.truck
+      && elapsed>0 && elapsed<5 && gameDistanceStep({...from,speedMps:from.speedMps??null,gameMinutes:from.gameMinutes??null,position:from.position??null},
+        {...to,speedMps:to.speedMps??null,gameMinutes:to.gameMinutes??null,position:to.position??null},elapsed).kind==='continuous' && !transferBoundary(db,row,from,to);
+  };
+  const running=input.running;
+  let midpoint:ProgressAnchor|undefined,qualifiedRunning:CapturedRunning|undefined;
+  if(running && linked && a && running.tripUuid===row.trip_uuid && running.pluginSessionId===source.pluginSessionId && running.sourceClockId===clock
+    && running.profile.scope===profile.scope && running.profile.binding===profile.binding && running.profile.loadGeneration===profile.loadGeneration
+    && admittedProfile(running.profile,{game:profile.game,processInstanceId:profile.processInstanceId,pluginSessionId:source.pluginSessionId},clock,running.monotonicNs)){
+    midpoint={pluginSessionId:source.pluginSessionId,sourceClockId:clock,monotonicNs:running.monotonicNs,truck:running.truck,odometerM:running.odometerM,
+      fuelL:running.fuelL,speedMps:running.speedMps,gameClockId:running.gameClockId,gameMinutes:running.gameMinutes,position:running.position};
+    if(supported(a,midpoint)&&supported(midpoint,anchor))qualifiedRunning=running;
+  }
+  const totals = previous && matchesEndpoint(previous.anchor,anchor) ? {...previous,anchor}
+    : qualifiedRunning && previous && midpoint ? advanceProgress(advanceProgress(previous,midpoint,true),anchor,true)
+      : advanceProgress(previous,anchor,!running && !!linked && !!a && supported(a,anchor));
+  revise(db,id,{...coverage,endpoint:{anchor:totals.anchor,distanceM:totals.distanceM,fuelUsedL:totals.fuelUsedL,trip:String(row.id),running:qualifiedRunning,
+    head:group.progress_head === null ? null : (group.progress_head as bigint).toString(),
     prefixState:prior.revision ? String(prior.revision.state_ref) : null}});
 }
 

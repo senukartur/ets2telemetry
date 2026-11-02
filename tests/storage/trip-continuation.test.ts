@@ -29,6 +29,7 @@ let ws: Awaited<ReturnType<typeof workspace>>;
 beforeEach(async () => {ws = await workspace();});
 afterEach(async () => {await terminateWorkers();await ws.dispose();});
 const mode = {mode: 'unknown', method: 'none', confidence: 'none'} as const;
+const succeeded=<T>(result:{ok:true;value:T}|{ok:false;error:{code:string}}):T=>{if(!result.ok)throw new Error(result.error.code);return result.value;};
 function proof(script: Script): ProfileObservation {
   const source = script.welcome().source;
   return {version: 1, scope: 'a'.repeat(64), binding: 'b'.repeat(64), game: source.game, pluginSessionId: source.pluginSessionId,
@@ -61,6 +62,118 @@ function close(storage: Storage, script: Script, uuid: string, terminal = false)
 }
 
 describe('REG-003/005/008/012/014 durable logical trips', () => {
+  it.each(['before','long-before','after','foreign-source','foreign-clock','unknown-time','overflow'] as const)('bounds and source-qualifies persisted transfer checks: %s',async variant=>{
+    const storage=await ws.open(),s=new Script(ETS2_A);ok(storage.upsertSession({message:s.welcome()}));ok(storage.commitEvent({message:s.event(r.started())}));const uuid=open(storage,s);
+    const commitTransfer=()=>{const event=s.event(r.ferry(),{advanceMs:500});
+      if(variant==='foreign-clock')event.capture.clockId='40000000-0000-4000-8000-000000000099';
+      if(variant==='unknown-time')event.data.occurred.monotonicNs={available:false,reason:'not-observed'};
+      ok(storage.commitEvent({message:event}));};
+    if(variant==='before')commitTransfer();
+    if(variant==='long-before')for(let n=0;n<70;n++)ok(storage.commitEvent({message:s.event(r.fined(),{advanceMs:1})}));
+    let previous:string|undefined;
+    const append=(message:ReturnType<Script['snapshot']>,odo:number,fuel:number,x:number)=>{
+      const row={...seedSample(s,uuid,0,1000,{odometer:{available:true,value:odo},fuel:{available:true,value:fuel},speed:{available:true,value:20},
+        position:{available:true,value:{x,y:0,z:0}},gameTime:{minutes:{available:true,value:500},clockId:s.clockId}}),monotonicNs:message.capture.monotonicNs,
+        recording:{profile:proof(s),job:job(),truck:'verified-truck',processInstanceId:s.welcome().source.processInstanceId,
+          ...(previous?{previous:{tripUuid:uuid,sourceClockId:s.clockId,monotonicNs:previous}}:{})}};
+      ok(storage.appendSamples(s.session,[row],{uniqueSeconds:true}));previous=message.capture.monotonicNs;
+    };
+    append(s.snapshot({},variant==='before'?500:variant==='long-before'?930:1000),1000000,100,0);append(s.snapshot({},1000),1000100,99,20);
+    if(variant==='foreign-source'){const other=new Script(ETS2_B);ok(storage.upsertSession({message:other.welcome()}));ok(storage.commitEvent({message:other.event(r.ferry())}));}
+    if(variant==='foreign-clock'||variant==='unknown-time')commitTransfer();
+    if(variant==='overflow')for(let n=0;n<70;n++)ok(storage.commitEvent({message:s.event(r.fined(),{advanceMs:1})}));
+    const message=s.snapshot({},variant==='foreign-clock'||variant==='unknown-time'?500:variant==='overflow'?930:1000);
+    if(variant==='after')commitTransfer(); // buffered reading predates an event already committed before its sample flush
+    append(message,1000443.75,98,40);
+    const trip=ok(storage.journalTrip(uuid)).trip;
+    if(variant==='unknown-time'||variant==='overflow'){expect(trip.observedDistanceM.available).toBe(false);expect(trip.fuelUsedL.available).toBe(false);}
+    else {expect(trip.observedDistanceM).toEqual({available:true,value:443.75});expect(trip.fuelUsedL).toEqual({available:true,value:2});}
+    expect(trip.recordingCompleteness).toBe('complete');storage.close();
+  });
+  it.each(['ferry-sampled','train-sampled','ferry-captured','train-captured'] as const)('does not bridge an explicit transfer through the recorder and real worker: %s',async variant=>{
+    const worker=storageWorker(),client=new StorageClient(worker.handle),s=new Script(ETS2_A),context={receivedUtcMs:1000};
+    succeeded(await client.open({path:ws.database,backupsDirectory:ws.backups,purpose:'synthetic',appVersion:'test'}));
+    const recorder=new TripRecorderSink(client,{profileEvidence:()=>proof(s)});
+    succeeded(await recorder.openSession(s.welcome()));succeeded(recorder.observe(s.checkpoint(null),context));succeeded(await recorder.commit(s.event(r.started()),context));
+    const configured=s.event(r.jobConfigured());succeeded(await recorder.commit(configured,context));const uuid=tripUuidFor(s.session,configured.data.eventSeq),configuration=s.checkpoint(job()).data.state.configuration;
+    const capture=async(odo:number,fuel:number,x:number,simulation:'running'|'paused',advanceMs:number)=>{
+      succeeded(recorder.observe(s.snapshot({configuration,simulation,odometer:{available:true,value:odo,unit:'m'},fuel:{available:true,value:fuel,unit:'L'},
+        speed:{available:true,value:simulation==='running'?20:0,unit:'m/s'},gameTime:{available:true,value:'500',unit:'min',clockId:s.clockId},
+        worldPlacement:{available:true,value:{position:{x,y:0,z:0},orientation:{heading:0,pitch:0,roll:0}}}},advanceMs),context));
+      if(recorder.attach.due())succeeded(await recorder.attach.open(context));
+    };
+    await capture(1000000,100,0,'running',1000);await capture(1000100,99,20,'running',1000);
+    succeeded(await recorder.commit(s.event(variant.startsWith('ferry')?r.ferry():r.train(),{advanceMs:500}),context));
+    if(variant.endsWith('captured'))succeeded(await recorder.commit(s.event(r.paused(),{simulation:'paused',advanceMs:250}),context));
+    await capture(1000443.75,98,40,variant.endsWith('captured')?'paused':'running',variant.endsWith('captured')?250:500);
+    succeeded(await recorder.samples.write(3600,true));succeeded(await recorder.commit(s.event(r.fined(),{simulation:variant.endsWith('captured')?'paused':'running'}),context));
+    const detail=succeeded(await client.journalTrip(uuid));expect(detail.trip.observedDistanceM.available).toBe(false);expect(detail.trip.fuelUsedL.available).toBe(false);
+    expect(detail.trip.recordingCompleteness).toBe('complete');
+    const raw=succeeded(await client.getTrip(uuid))!;expect(raw.observedDistanceM).toEqual({available:true,value:100});expect(raw.fuelUsedL).toEqual({available:true,value:1});
+    expect(succeeded(await client.listSamples({tripUuid:uuid},{includeExcluded:true}))).toHaveLength(variant.endsWith('captured')?2:3);
+    expect(await client.close()).toEqual({clean:true});
+  });
+  it.each(['clean','counter','unqualified','foreign-trip','foreign-plugin','foreign-clock','foreign-proof','foreign-process','foreign-scope','foreign-load','late-proof','stale','ahead','ferry-first','train-second','gap','profile-change','clock-change','intermediate-regression','intermediate-teleport','intermediate-refuel'] as const)('advances two captured pauses through an unsampled running reading only with owned continuous evidence: %s',async variant=>{
+    const worker=storageWorker(),client=new StorageClient(worker.handle),s=new Script(ETS2_A),context={receivedUtcMs:1000};
+    let currentProof:ProfileObservation|undefined=proof(s);succeeded(await client.open({path:ws.database,backupsDirectory:ws.backups,purpose:'synthetic',appVersion:'test'}));
+    const recorder=new TripRecorderSink(client,{profileEvidence:()=>currentProof});succeeded(await recorder.openSession(s.welcome()));succeeded(recorder.observe(s.checkpoint(null),context));
+    succeeded(await recorder.commit(s.event(r.started()),context));const event=s.event(r.jobConfigured());succeeded(await recorder.commit(event,context));
+    const uuid=tripUuidFor(s.session,event.data.eventSeq),configuration=s.checkpoint(job()).data.state.configuration;
+    const originalAttach=client.openAttachedTrip.bind(client);let alter=false,writes=0;
+    client.openAttachedTrip=input=>{
+      writes++;
+      if(alter && input.endpoint?.running){const endpoint=structuredClone(input.endpoint),witness=structuredClone(input.endpoint.running);endpoint.running=witness;input={...input,endpoint};
+        if(variant==='foreign-trip')witness.tripUuid='10000000-0000-4000-8000-000000000099';
+        if(variant==='foreign-plugin')witness.pluginSessionId='10000000-0000-4000-8000-000000000099';
+        if(variant==='foreign-clock')witness.sourceClockId='40000000-0000-4000-8000-000000000099';
+        if(variant==='foreign-proof')witness.profile.binding='9'.repeat(64);
+        if(variant==='foreign-process')witness.profile.processInstanceId='20000000-0000-4000-8000-000000000099';
+        if(variant==='foreign-scope')witness.profile.scope='8'.repeat(64);
+        if(variant==='foreign-load')witness.profile.loadGeneration=2;
+        if(variant==='late-proof')witness.profile.afterMonotonicNs=(BigInt(witness.monotonicNs)+1n).toString();
+        if(variant==='stale')witness.monotonicNs=endpoint.previous!.monotonicNs;
+        if(variant==='ahead')witness.monotonicNs=input.monotonicNs!;
+      }
+      return originalAttach(input);
+    };
+    const capture=async(odo:number,fuel:number,x:number,simulation:'running'|'paused',advanceMs:number)=>{
+      const message=s.snapshot({configuration,simulation,odometer:{available:true,value:odo,unit:'m'},fuel:{available:true,value:fuel,unit:'L'},speed:{available:true,value:simulation==='running'?20:0,unit:'m/s'},
+        gameTime:{available:true,value:'500',unit:'min',clockId:s.clockId},worldPlacement:{available:true,value:{position:{x,y:0,z:0},orientation:{heading:0,pitch:0,roll:0}}}},advanceMs);
+      if(variant==='clock-change' && odo===1000150 && message.data.state.gameTime.available)message.data.state.gameTime.clockId='40000000-0000-4000-8000-000000000099';
+      if(variant==='counter' && odo===1000150)message.data.continuity.coalescedSnapshots='1';
+      succeeded(recorder.observe(message,context));if(recorder.attach.due())succeeded(await recorder.attach.open(context));return message;
+    };
+    await capture(1000000,100,0,'running',1000);await capture(1000100,99,20,'running',1000);
+    succeeded(await recorder.commit(s.event(r.paused(),{simulation:'paused',advanceMs:250}),context));await capture(1000125,98.5,25,'paused',0);
+    const first=succeeded(await client.journalTrip(uuid));expect(first.trip.observedDistanceM).toEqual({available:true,value:125});
+    succeeded(await recorder.commit(s.event(r.started(),{advanceMs:50}),context));
+    if(variant==='ferry-first')succeeded(await recorder.commit(s.event(r.ferry(),{advanceMs:25}),context));
+    if(variant==='unqualified')currentProof=undefined;
+    if(variant==='intermediate-regression')await capture(1000060,99.4,12,'running',25);
+    if(variant==='intermediate-teleport')await capture(1000125,98.5,1000,'running',25);
+    if(variant==='intermediate-refuel')await capture(1000130,120,26,'running',25);
+    const running=await capture(1000140,98.2,28,'running',100);alter=true;
+    if(variant==='train-second')succeeded(await recorder.commit(s.event(r.train(),{advanceMs:25}),context));
+    if(variant==='gap')succeeded(await recorder.commit(s.gap(1,'queueCount',0),context));
+    // The next refresh advances its causal lower bound; the already-qualified running witness must remain usable.
+    currentProof={...proof(s),...(variant==='profile-change'?{binding:'8'.repeat(64)}:{}),afterMonotonicNs:(BigInt(running.capture.monotonicNs)+1n).toString()};
+    succeeded(await recorder.commit(s.event(r.paused(),{simulation:'paused',advanceMs:100}),context));await capture(1000150,98,30,'paused',0);
+    const second=succeeded(await client.journalTrip(uuid));
+    if(variant==='clean'){expect(second.trip.observedDistanceM).toEqual({available:true,value:150});expect(second.trip.fuelUsedL).toEqual({available:true,value:2});}
+    else {expect(second.trip.observedDistanceM.available).toBe(false);expect(second.trip.fuelUsedL.available).toBe(false);}
+    if(variant==='clean'){
+      const before=writes;for(let n=0;n<20;n++)await capture(1000150,98,30,'paused',10);
+      expect(writes).toBe(before); // no repeated pause commands or projection churn after the meaningful boundary
+    }
+    expect(succeeded(await client.listSamples({tripUuid:uuid}))).toHaveLength(2);expect(await client.close()).toEqual({clean:true});
+    const reopened=await ws.open();expect(succeeded(reopened.journalTrip(uuid)).trip.observedDistanceM).toEqual(second.trip.observedDistanceM);reopened.close();
+    readOnly(ws.database,db=>{db.defaultSafeIntegers(true);expect(logicalSnapshot(db,uuid,BigInt(first.exportBounds.snapshot!.samples.split(':')[3])).row.observed_distance_m).toBe(125);
+      if(variant==='clean'){
+        const stored=JSON.parse(db.prepare('SELECT row_json FROM logical_projection_states WHERE id=(SELECT state_ref FROM logical_revisions ORDER BY id DESC LIMIT 1)').pluck().get() as string)._coverage.endpoint.running;
+        expect(stored.monotonicNs).toBe(running.capture.monotonicNs);expect(stored.profile.afterMonotonicNs).toBe('0');
+      }
+    });
+  });
   it.each(['truck-change','odometer-jump','position-jump','game-time-jump'] as const)('separates an observed configuration annotation from unexplained recording discontinuity: %s',async cause=>{
     const storage=await ws.open(),script=new Script(ETS2_A);ok(storage.upsertSession({message:script.welcome()}));
     const message=script.event(r.jobConfigured()),uuid=tripUuidFor(script.session,message.data.eventSeq);
@@ -77,7 +190,10 @@ describe('REG-003/005/008/012/014 durable logical trips', () => {
       jobConfiguration:'this-event',startedUtcMs:1000,recordingCompleteness:'complete'}]}));
     const before=ok(await client.journalTrip(uuid));
     const endpoint={version:1,simulation:'paused',truck:'verified-truck',odometerM:1000000,fuelL:100,speedMps:0,gameClockId:script.clockId,gameMinutes:'500',position:{x:0,y:0,z:0}};
-    for(const invalid of [{...endpoint,version:2},{...endpoint,extra:true},{...endpoint,position:{x:NaN,y:0,z:0}},{...endpoint,fuelL:-1},
+    const running={truck:'verified-truck',odometerM:1000000,fuelL:100,speedMps:20,gameClockId:script.clockId,gameMinutes:'500',position:{x:0,y:0,z:0},
+      tripUuid:uuid,pluginSessionId:script.session,sourceClockId:script.clockId,monotonicNs:'2000000000',profile:proof(script)};
+    for(const invalid of [{...endpoint,running:{...running,extra:true}},{...endpoint,running:{...running,profile:{...running.profile,extra:true}}},
+      {...endpoint,running:{...running,monotonicNs:'18446744073709551616'}},{...endpoint,version:2},{...endpoint,extra:true},{...endpoint,position:{x:NaN,y:0,z:0}},{...endpoint,fuelL:-1},
       {...endpoint,gameMinutes:'18446744073709551616'},{...endpoint,previous:{tripUuid:uuid,sourceClockId:script.clockId,monotonicNs:'0',extra:true}},
       {...endpoint,previous:null}]){
       const result=await client.openAttachedTrip({pluginSessionId:script.session,nextEventSeq:'2',job:job(),effects:[],profile:proof(script),sourceClockId:script.clockId,

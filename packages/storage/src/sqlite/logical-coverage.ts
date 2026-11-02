@@ -1,9 +1,9 @@
 import type Database from 'better-sqlite3';
-import type {CapturedEndpoint} from '../api';
+import type {CapturedEndpoint, CapturedRunning} from '../api';
 import type {ProgressAnchor, ProgressCheckpoint} from '../../../telemetry-core/src/trips/progress';
 import {isUuid} from '../codec';
 
-export interface CoverageEndpoint extends ProgressCheckpoint {trip: string; head: string | null; prefixState: string | null}
+export interface CoverageEndpoint extends ProgressCheckpoint {trip: string; head: string | null; prefixState: string | null; running?: CapturedRunning}
 
 /** References change at coverage boundaries only; ordinary samples use logical_revisions' existing bounds/head. */
 export interface LogicalCoverage {
@@ -25,20 +25,34 @@ const point = (v: CapturedEndpoint | ProgressAnchor) => (v.truck === null || typ
   && nullableNumber(v.speedMps) && (v.gameClockId === null || isUuid(v.gameClockId)) && (v.gameMinutes === null || unsigned(v.gameMinutes)) && position(v.position);
 export function validCapturedEndpoint(v: unknown): v is CapturedEndpoint {
   if (!v || typeof v !== 'object') return false;
-  const c = v as CapturedEndpoint, fields = Object.keys(c).filter(k => k !== 'previous').sort().join(',');
+  const c = v as CapturedEndpoint, fields = Object.keys(c).filter(k => k !== 'previous' && k !== 'running').sort().join(',');
   return fields === 'fuelL,gameClockId,gameMinutes,odometerM,position,simulation,speedMps,truck,version' && c.version === 1
     && ['running', 'paused'].includes(c.simulation) && point(c) && (c.previous === undefined || typeof c.previous === 'object' && c.previous !== null
-      && keys(c.previous, 'monotonicNs,sourceClockId,tripUuid') && isUuid(c.previous.tripUuid) && isUuid(c.previous.sourceClockId) && unsigned(c.previous.monotonicNs));
+      && keys(c.previous, 'monotonicNs,sourceClockId,tripUuid') && isUuid(c.previous.tripUuid) && isUuid(c.previous.sourceClockId) && unsigned(c.previous.monotonicNs))
+    && (c.running === undefined || validCapturedRunning(c.running));
+}
+function validCapturedRunning(v: unknown): v is CapturedRunning {
+  if (!v || typeof v !== 'object' || !keys(v,'fuelL,gameClockId,gameMinutes,monotonicNs,odometerM,pluginSessionId,position,profile,sourceClockId,speedMps,tripUuid,truck')) return false;
+  const c=v as CapturedRunning,p=c.profile;
+  return point(c) && isUuid(c.tripUuid) && isUuid(c.pluginSessionId) && isUuid(c.sourceClockId) && unsigned(c.monotonicNs)
+    && !!p && typeof p==='object' && keys(p,'afterMonotonicNs,binding,game,loadGeneration,pluginSessionId,processInstanceId,scope,sourceClockId,version')
+    && p.version===1 && /^[0-9a-f]{64}$/.test(p.scope) && /^[0-9a-f]{64}$/.test(p.binding) && ['ets2','ats'].includes(p.game)
+    && isUuid(p.pluginSessionId) && isUuid(p.processInstanceId) && isUuid(p.sourceClockId) && unsigned(p.afterMonotonicNs)
+    && Number.isSafeInteger(p.loadGeneration) && p.loadGeneration>=0;
 }
 function validEndpoint(v: unknown): v is CoverageEndpoint {
-  if (!v || typeof v !== 'object' || !keys(v, 'anchor,distanceM,fuelUsedL,head,prefixState,trip')) return false;
+  if (!v || typeof v !== 'object' || Object.keys(v).filter(k=>k!=='running').sort().join(',') !== 'anchor,distanceM,fuelUsedL,head,prefixState,trip') return false;
   const c = v as CoverageEndpoint, a = c.anchor;
   const amount = (v: unknown) => !!v && typeof v === 'object' && ('available' in v && v.available === true ? keys(v, 'available,value')
     && 'value' in v && typeof v.value === 'number' && Number.isFinite(v.value) : keys(v, 'available,reason') && 'available' in v && v.available === false && 'reason' in v && v.reason === 'not-observed');
   return reference(c.trip) && nullableReference(c.head) && nullableReference(c.prefixState) && amount(c.distanceM) && amount(c.fuelUsedL)
     && (!c.distanceM.available || c.distanceM.value >= 0)
     && !!a && typeof a === 'object' && keys(a, 'fuelL,gameClockId,gameMinutes,monotonicNs,odometerM,pluginSessionId,position,sourceClockId,speedMps,truck')
-    && isUuid(a.pluginSessionId) && isUuid(a.sourceClockId) && unsigned(a.monotonicNs) && point(a);
+    && isUuid(a.pluginSessionId) && isUuid(a.sourceClockId) && unsigned(a.monotonicNs) && point(a) && (c.running===undefined || validCapturedRunning(c.running)
+      && c.running.pluginSessionId===a.pluginSessionId && c.running.sourceClockId===a.sourceClockId && c.running.gameClockId===a.gameClockId && c.running.truck===a.truck
+      && c.running.profile.pluginSessionId===a.pluginSessionId
+      && c.running.profile.sourceClockId===a.sourceClockId && BigInt(c.running.monotonicNs)<BigInt(a.monotonicNs)
+      && BigInt(c.running.profile.afterMonotonicNs)<=BigInt(c.running.monotonicNs));
 }
 export function validCoverage(v: unknown): v is LogicalCoverage {
   if (!v || typeof v !== 'object' || !keys(v, 'endpoint,losses,member,phase,start,version,window')) return false;

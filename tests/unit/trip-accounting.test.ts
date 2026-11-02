@@ -77,6 +77,23 @@ function opened(s = new Script(ETS2_A)): {s: Script; trip: string; rows: Row[]} 
 }
 
 describe('REG-008 SDK scaled game distance', () => {
+  it.each(['session','process','clock','before','after'] as const)('qualifies transfer barriers by source, clock and ordered interval: %s',field=>{
+    const s=new Script(ETS2_A),a=reading(s,{ms:1000,odometer:1000000,fuel:100,minutes:500}),b=reading(s,{ms:2000,odometer:1000343.75,fuel:99,minutes:500});
+    if(a.kind!=='reading'||b.kind!=='reading')throw new Error('Reading expected');
+    const mark={pluginSessionId:s.session,processInstanceId:a.sample.source.processInstanceId,clockId:s.clockId,monotonicNs:ns(1500)};
+    if(field==='session')mark.pluginSessionId=ETS2_B;if(field==='process')mark.processInstanceId='20000000-0000-4000-8000-000000000099';
+    if(field==='clock')mark.clockId='40000000-0000-4000-8000-000000000099';if(field==='before')mark.monotonicNs=ns(999);if(field==='after')mark.monotonicNs=ns(2001);
+    const step=classifyStep(readingPoint(a.sample),readingPoint(b.sample),mark);
+    expect(step.odometer).toEqual({kind:'continuous',meters:343.75});expect(step.fuel).toEqual({kind:'consumed',liters:1});
+  });
+  it.each(['ferry','train'] as const)('never counts a subthreshold %s transfer as driven distance or fuel',type=>{
+    const {s,rows}=opened();let state=play(rows);
+    state=run(state,[reading(s,{ms:3000,odometer:1000000,fuel:100,minutes:500}),reading(s,{ms:4000,odometer:1000100,fuel:99,minutes:500})]).state;
+    state=run(state,[s.event(r[type](),{advanceMs:2500}),reading(s,{ms:5000,odometer:1000443.75,fuel:98,minutes:500})]).state;
+    expect(tripView(state,'ets2').current).toMatchObject({observedDistanceM:{state:'value',value:100},fuelUsedL:{state:'value',value:1}});
+    state=run(state,[reading(s,{ms:6000,odometer:1000493.75,fuel:97.5,minutes:500})]).state;
+    expect(tripView(state,'ets2').current).toMatchObject({observedDistanceM:{state:'value',value:150},fuelUsedL:{state:'value',value:1.5}});
+  });
   it.each([[20,20],[-20,-20],[20,-20],[-20,20]])('uses physical speed magnitude for forward/reverse motion (%d -> %d)', (before,after) => {
     const script=new Script(ETS2_A),a=reading(script,{ms:1000,odometer:1000000,minutes:500,speed:before,position:{x:0,y:0,z:0}}),
       b=reading(script,{ms:2000,odometer:1000343.75,minutes:500,speed:after,position:{x:-19,y:0,z:0}});
