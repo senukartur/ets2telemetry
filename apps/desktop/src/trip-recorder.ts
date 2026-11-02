@@ -14,7 +14,7 @@ import type {HardModeDetails, HardModeObservation} from '../../../packages/contr
 import {unknownHardMode} from '../../../packages/telemetry-core/src/hard-mode';
 import type {RecordingLosses, RecordingTrip} from '../../../packages/contracts/src';
 import type {Uint64} from '../../../packages/contracts/src/protocol-v1';
-import type {AttachInput, CommitResult, CompletenessKind, SampleAppendResult, SampleInput, TripEffect} from '../../../packages/storage/src/api';
+import type {AttachInput, CapturedEndpoint, CommitResult, CompletenessKind, SampleAppendResult, SampleInput, TripEffect} from '../../../packages/storage/src/api';
 import type {StorageClient} from '../../../packages/storage/src/client';
 import {
   dueAttach, initialSamplerState, initialTripState, normalizeV1State, sampleReading, stepTrip, tripView, type SamplerState, type TripErrorCode, type TripGame, type TripInput,
@@ -181,6 +181,8 @@ export class TripRecorderSink implements DurableSink {
   private lastReadingProfile:ProfileObservation|undefined;
   private pendingProfile: {key:string;input:AttachInput}|undefined;
   private storedProfileKey:string|undefined;
+  private boundaryPrevious: NonNullable<SampleInput['recording']>['previous'];
+  private lastEndpoint: CapturedEndpoint | undefined;
   private previousSample: NonNullable<SampleInput['recording']>['previous'];
   private continuity: {pluginSessionId:string;processInstanceId:string;sourceClockId:string;coalescedSnapshots:string;offlineTransitions:string}|undefined;
   private state: TripState = initialTripState();
@@ -201,8 +203,14 @@ export class TripRecorderSink implements DurableSink {
   constructor(private readonly client: TripRecorderClient, private readonly options: TripRecorderOptions = {}) {}
 
   async openSession(welcome: WelcomeMessage): Promise<SinkResult<{committedThroughEventSeq: Uint64}>> {
+    // The FIFO has adopted every preceding reading. Persist its bounded buffer before a new source can decide
+    // membership against the previous source's endpoint; neither these sample writes nor the welcome produce ACKs.
+    while (this.buffer.rowCount + this.buffer.lossCount > 0) {
+      const flushed = await this.writeSamples(3600, true);
+      if (!flushed.ok) return flushed;
+    }
     this.lastReadingProfile=undefined;
-    this.pendingProfile=undefined;this.storedProfileKey=undefined;this.previousSample=undefined;this.continuity=undefined;
+    this.pendingProfile=undefined;this.storedProfileKey=undefined;this.previousSample=undefined;this.boundaryPrevious=undefined;this.lastEndpoint=undefined;this.continuity=undefined;
     if (this.options.hardModeEvidence && this.client.observeHardMode) {
       const lost = await this.client.observeHardMode(welcome.source.game, {assessment: unknownHardMode(Date.now(), 'interrupted'), binding: null, pluginSessionId: null, sourceMonotonicNs: null});
       if (!lost.ok) return lost;
@@ -256,7 +264,7 @@ export class TripRecorderSink implements DurableSink {
     // R7: the gap's effects describe only (coveredThrough, lastEventSeq]; another starting point means they were wrong.
     if (message.kind === 'gap' && result.value.previouslyCoveredThrough !== coveredThrough) return refused('TRIP_COVERAGE_MISMATCH');
     this.state = stepped.state;
-    if(message.kind==='gap'){this.previousSample=undefined;this.pendingProfile=undefined;}
+    if(message.kind==='gap'){this.previousSample=undefined;this.boundaryPrevious=undefined;this.lastEndpoint=undefined;this.pendingProfile=undefined;}
     this.capturedEvidence.delete(key);
     await this.readHardModeTrip(message.source.game);
     // G6: only a new row stored its effects; a gap covers (previouslyCoveredThrough, lastEventSeq] anew.
@@ -276,11 +284,11 @@ export class TripRecorderSink implements DurableSink {
       // Counters are cumulative. Update the baseline even when this reading occupies an already sampled second.
       if(before ? before.pluginSessionId!==current.pluginSessionId || before.processInstanceId!==current.processInstanceId || before.sourceClockId!==current.sourceClockId
         || before.coalescedSnapshots!==current.coalescedSnapshots || before.offlineTransitions!==current.offlineTransitions
-        : current.coalescedSnapshots!=='0' || current.offlineTransitions!=='0')this.previousSample=undefined;
+        : current.coalescedSnapshots!=='0' || current.offlineTransitions!=='0'){this.previousSample=undefined;this.boundaryPrevious=undefined;this.lastEndpoint=undefined;}
       this.continuity=current;
     }
     if (message.kind === 'checkpoint') {
-      this.previousSample=undefined;
+      this.previousSample=undefined;this.boundaryPrevious=undefined;
       // A running checkpoint may own a sampled endpoint; unchanged counters must preserve its next observed step.
       this.continuity={pluginSessionId:message.source.pluginSessionId,processInstanceId:message.source.processInstanceId,sourceClockId:message.capture.clockId,...message.data.continuity};
       const hydrated = stepTrip(next, {kind: 'checkpoint', message, receivedUtcMs: context.receivedUtcMs});
@@ -296,11 +304,19 @@ export class TripRecorderSink implements DurableSink {
     const replayDrained=session.attachedFromEventSeq!==null && BigInt(session.processedThrough)>=BigInt(session.attachedFromEventSeq)-1n;
     const view=tripView(this.state,message.source.game);
     this.pendingProfile=undefined;
+    const normalizedBoundary=normalizeV1State(message.data.state,message.data.status), boundaryTruck=normalizedBoundary.truck;
+    this.lastEndpoint=this.lastReadingProfile && normalizedBoundary.simulation==='paused' ? {version:1,simulation:'paused',
+      truck:boundaryTruck.state==='value' && boundaryTruck.value.brand.id.state==='value' && boundaryTruck.value.model.id.state==='value' && boundaryTruck.value.licensePlate.state==='value'?truckKey(normalizedBoundary):null,
+      odometerM:normalizedBoundary.odometer.state==='value'?normalizedBoundary.odometer.value.meters:null,fuelL:normalizedBoundary.fuel.state==='value'?normalizedBoundary.fuel.value:null,
+      speedMps:normalizedBoundary.speed.state==='value'?normalizedBoundary.speed.value:null,gameClockId:normalizedBoundary.gameTime.clockId,
+      gameMinutes:normalizedBoundary.gameTime.minutes.state==='value'?normalizedBoundary.gameTime.minutes.value.toString():null,
+      position:normalizedBoundary.worldPlacement.state==='value'?structuredClone(normalizedBoundary.worldPlacement.value.position):null,
+      ...(this.previousSample?{previous:this.previousSample}:this.boundaryPrevious?{previous:this.boundaryPrevious}:{})}:undefined;
     if(replayDrained && current.available && view.current && this.lastReadingProfile){
-      const key=JSON.stringify([view.current.tripUuid,this.lastReadingProfile.binding,current.value]);
+      const key=JSON.stringify([view.current.tripUuid,this.lastReadingProfile.binding,current.value,normalizedBoundary.simulation, this.lastEndpoint ? {...this.lastEndpoint,previous:undefined}:null]);
       if(key!==this.storedProfileKey)this.pendingProfile={key,input:{pluginSessionId:message.source.pluginSessionId,
         nextEventSeq:(BigInt(session.processedThrough)+1n).toString(),job:structuredClone(current.value),effects:[],
-        observeTripUuid:view.current.tripUuid,profile:this.lastReadingProfile,sourceClockId:message.capture.clockId,monotonicNs:message.capture.monotonicNs}};
+        observeTripUuid:view.current.tripUuid,...(this.lastEndpoint?{endpoint:this.lastEndpoint}:{}),profile:this.lastReadingProfile,sourceClockId:message.capture.clockId,monotonicNs:message.capture.monotonicNs}};
     }
     // H2, H7: the sample sees the trip state that the commits before it in the FIFO left, and this reading.
     const sampled = sampleReading(this.sampler, {message, receivedUtcMs: context.receivedUtcMs, view: tripView(this.state, message.source.game)});
@@ -311,9 +327,10 @@ export class TripRecorderSink implements DurableSink {
         const normalized = normalizeV1State(message.data.state, message.data.status), t = normalized.truck;
         sampled.row.recording = {job: structuredClone(current.value), processInstanceId: message.source.processInstanceId,
           truck: t.state === 'value' && t.value.brand.id.state === 'value' && t.value.model.id.state === 'value' && t.value.licensePlate.state === 'value' ? truckKey(normalized) : null,
-          profile: this.lastReadingProfile,...(this.previousSample?{previous:this.previousSample}:{})};
+          profile: this.lastReadingProfile,...(this.previousSample?{previous:this.previousSample}:this.boundaryPrevious?{previous:this.boundaryPrevious}:{})};
       }
       this.previousSample=sampled.row.recording && sampled.row.tripUuid ? {tripUuid:sampled.row.tripUuid,sourceClockId:sampled.row.sourceClockId,monotonicNs:sampled.row.monotonicNs}:undefined;
+      this.boundaryPrevious=undefined;
       this.buffer.push(message.source.pluginSessionId, sampled.row);
     }
     if(message.data.state.simulation!=='running')this.previousSample=undefined;
@@ -327,15 +344,18 @@ export class TripRecorderSink implements DurableSink {
     if (request === null) {
       const pending=this.pendingProfile;
       if(!pending)return {ok:true,value:{status:'none'}};
+      if (pending.input.endpoint) {
+        while(this.buffer.rowCount+this.buffer.lossCount>0){const flushed=await this.writeSamples(3600,true);if(!flushed.ok)return flushed;}
+      }
       const result=await this.client.openAttachedTrip(pending.input);
-      if(result.ok){this.storedProfileKey=pending.key;if(this.pendingProfile===pending)this.pendingProfile=undefined;}
+      if(result.ok){this.storedProfileKey=pending.key;if(pending.input.endpoint)this.boundaryPrevious={tripUuid:pending.input.observeTripUuid!,sourceClockId:pending.input.sourceClockId!,monotonicNs:pending.input.monotonicNs!};if(this.pendingProfile===pending)this.pendingProfile=undefined;}
       return result;
     }
     const stepped = stepTrip(this.state, {kind: 'attach', receivedUtcMs: context.receivedUtcMs});
     if (!stepped.ok) return refused(RECORDER_CODE[stepped.code]);
     const session = this.state.sessions[request.pluginSessionId];
     const profile = this.lastReadingProfile;
-    const result = await this.client.openAttachedTrip({...request, effects: stepped.effects, ...(profile ? {profile, sourceClockId: session.lastReading?.capture.clockId ?? session.clockId ?? undefined, monotonicNs: session.lastReading?.capture.monotonicNs ?? session.lastMonotonicNs ?? undefined} : {})});
+    const result = await this.client.openAttachedTrip({...request, effects: stepped.effects, ...(profile && this.lastEndpoint ? {endpoint:this.lastEndpoint}:{}), ...(profile ? {profile, sourceClockId: session.lastReading?.capture.clockId ?? session.clockId ?? undefined, monotonicNs: session.lastReading?.capture.monotonicNs ?? session.lastMonotonicNs ?? undefined} : {})});
     if (!result.ok) return result;
     this.state = stepped.state;
     this.pendingProfile=undefined;

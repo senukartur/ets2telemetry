@@ -22,13 +22,12 @@ const at = (seconds: number) => BASE_UTC + seconds * 1_000;
 const snapshot = v1('snapshot');
 if (snapshot.kind !== 'snapshot') throw new Error('Harness: snapshot fixture expected');
 const BASE: NormalizedLiveState = normalizeV1State(snapshot.data.state, snapshot.data.status);
-const NONE = {state: 'missing', reason: 'not-observed'} as const;
 /** A running reading of the script's session at `ms` (source ns 1,000,000,000,000 + ms × 1,000,000; UTC BASE_UTC + ms). */
 function reading(s: Script, ms: number, odometer: number, fuel: number): TripInput {
   return {kind: 'reading', sample: {source: {game: 'ets2', origin: 'synthetic', pluginSessionId: s.session, processInstanceId: `20000000${s.session.slice(8)}`},
     capture: {clockId: s.clockId, monotonicNs: (1_000_000_000_000n + BigInt(ms) * 1_000_000n).toString()},
-    state: {...BASE, simulation: 'running', odometer: {state: 'value', value: {kind: 'odometer', meters: odometer}}, fuel: {state: 'value', value: fuel},
-      gameTime: {minutes: NONE, clockId: BASE.gameTime.clockId}, worldPlacement: NONE}, utcMs: BASE_UTC + ms}};
+    state: {...BASE, simulation: 'running', speed:{state:'value',value:20}, odometer: {state: 'value', value: {kind: 'odometer', meters: odometer}}, fuel: {state: 'value', value: fuel},
+      gameTime: {minutes: {state:'value',value:500n}, clockId: BASE.gameTime.clockId}, worldPlacement: {state:'value',value:{position:{x:ms*0.02,y:0,z:0},orientation:{heading:0,pitch:0,roll:0}}}}, utcMs: BASE_UTC + ms}};
 }
 function drive(storage: Storage, steps: Step[], state: TripState = initialTripState()) {
   const statuses: string[] = [];
@@ -58,7 +57,7 @@ describe('ET-014 PR-2 readings accounting effects through real commits', () => {
       if (input.kind !== 'reading') throw new Error('reading fixture');
       input.sample.state = {...input.sample.state, simulation: paused ? 'paused' : 'running',
         gameTime: {minutes: {state: 'value', value: 12345n}, clockId: GAME_CLOCK_1},
-        worldPlacement: {state: 'value', value: {position: {x: 0, y: 0, z: 0}, orientation: {heading: 0, pitch: 0, roll: 0}}}};
+        worldPlacement: {state: 'value', value: {position: {x: odometer/5, y: 0, z: 0}, orientation: {heading: 0, pitch: 0, roll: 0}}}};
       return input;
     };
     let {state} = drive(storage, [sessionInput(s.welcome()), s.event(r.jobConfigured(), {simulation: 'paused'}), s.event(r.started())]);

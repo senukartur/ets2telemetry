@@ -1,3 +1,5 @@
+import {gameDistanceStep, GAME_TIME_JUMP_MINUTES, GAME_TIME_JUMP_RATE} from './game-distance';
+export {GAME_TIME_JUMP_MINUTES, GAME_TIME_JUMP_RATE} from './game-distance';
 // Readings accounting for trips (ET-014 PR-2, T16 and T17). Pure classification of one step between two readings, built
 // on the derived.ts step primitives, a sliding window of game-time advance, and the per-trip accumulation of observed
 // distance, fuel used and refuels. The reducer decides which trip a step belongs to and turns the findings into
@@ -11,8 +13,6 @@ import {NOT_CARRIED, type Distance, type LiveTruck, type Reading} from '../readi
  * minutes per real minute, measured from any reading at most GAME_TIME_WINDOW_SECONDS earlier: normal driving runs at
  * about 19 and a ferry at about 90, so both a single-step sleep and a ferry spread over many readings are found.
  */
-export const GAME_TIME_JUMP_MINUTES = 30;
-export const GAME_TIME_JUMP_RATE = 60;
 export const GAME_TIME_WINDOW_SECONDS = 60;
 /** A jump grows only by a fast advance measured over at least this much real time since its last growth. Provisional. */
 export const GAME_TIME_GROWTH_SECONDS = 1;
@@ -38,6 +38,7 @@ export interface ReadingPoint {
   odometer: Reading<Distance<'odometer'>>; fuel: Reading<number>; truck: Reading<LiveTruck>;
   gameTime: {minutes: string | null; clockId: string};
   position: {x: number; y: number; z: number} | null;
+  speedMps?: number | null;
   utcMs: number | null;
 }
 export function readingPoint(sample: StepSample & {utcMs?: number}): ReadingPoint {
@@ -45,6 +46,7 @@ export function readingPoint(sample: StepSample & {utcMs?: number}): ReadingPoin
   return {
     source: {game: sample.source.game, origin: sample.source.origin, pluginSessionId: sample.source.pluginSessionId, processInstanceId: sample.source.processInstanceId},
     capture: {clockId: sample.capture.clockId, monotonicNs: sample.capture.monotonicNs}, simulation: s.simulation,
+    speedMps: s.speed.state === 'value' ? s.speed.value : null,
     odometer: structuredClone(s.odometer), fuel: structuredClone(s.fuel), truck: structuredClone(s.truck),
     gameTime: {minutes: minutes.state === 'value' ? minutes.value.toString() : null, clockId: s.gameTime.clockId},
     position: placement.state === 'value' ? {...placement.value.position} : null,
@@ -77,10 +79,13 @@ export interface ReadingStep {
 }
 /** Classifies one step between consecutive readings of one connection. */
 export function classifyStep(prev: ReadingPoint, next: ReadingPoint): ReadingStep {
-  const a = sampleOf(prev), b = sampleOf(next), odometer = odometerStep(a, b), fuel = fuelStep(a, b);
+  const a = sampleOf(prev), b = sampleOf(next), primitive = odometerStep(a, b), fuel = fuelStep(a, b);
   const sameClock = prev.capture.clockId === next.capture.clockId && prev.source.pluginSessionId === next.source.pluginSessionId;
   const ns = sameClock ? BigInt(next.capture.monotonicNs) - BigInt(prev.capture.monotonicNs) : null, elapsedNs = ns !== null && ns >= 0n ? ns : null;
-  const boundary = odometer.kind === 'discontinuity' && BOUNDARY.has(odometer.cause);
+  const boundary = primitive.kind === 'discontinuity' && BOUNDARY.has(primitive.cause);
+  const point = (p: ReadingPoint) => ({odometerM: p.odometer.state === 'value' ? p.odometer.value.meters : null,
+    speedMps: p.speedMps ?? null, position: p.position, gameMinutes: p.gameTime.minutes});
+  const odometer = boundary ? primitive : gameDistanceStep(point(prev), point(next), elapsedNs === null ? NaN : Number(elapsedNs) / 1e9);
   const step: ReadingStep = {odometer, fuel, elapsedNs, boundary, positionJump: null};
   if (elapsedNs === null || boundary) return step;
   if (prev.position !== null && next.position !== null) {

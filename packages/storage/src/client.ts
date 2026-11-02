@@ -126,7 +126,7 @@ export class StorageClient {
   openAttachedTrip(input: AttachInput): Promise<Result<AttachResult>> {
     return this.#request({name: 'openAttachedTrip', input: isObject(input) ? {pluginSessionId: input.pluginSessionId, nextEventSeq: input.nextEventSeq, job: input.job, effects: input.effects,
       ...(input.profile?{profile:input.profile}:{}),...(input.sourceClockId?{sourceClockId:input.sourceClockId}:{}),...(input.monotonicNs?{monotonicNs:input.monotonicNs}:{}),
-      ...(input.profileChange!==undefined?{profileChange:input.profileChange}:{}),...(input.observeTripUuid!==undefined?{observeTripUuid:input.observeTripUuid}:{})} : input});
+      ...(input.profileChange!==undefined?{profileChange:input.profileChange}:{}),...(input.observeTripUuid!==undefined?{observeTripUuid:input.observeTripUuid}:{}),...(input.endpoint!==undefined?{endpoint:structuredClone(input.endpoint)}:{})} : input});
   }
   committedThrough(pluginSessionId: string): Promise<Result<Uint64>> { return this.#request({name: 'committedThrough', pluginSessionId}); }
   getSession(pluginSessionId: string): Promise<Result<SessionRecord>> { return this.#request({name: 'getSession', pluginSessionId}); }

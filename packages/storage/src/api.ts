@@ -141,7 +141,13 @@ export const MAX_TRIP_PAGE = 100;
  * must follow current coverage. Exact persisted retries are duplicate even after terminal closure; new decisions
  * never associate a closed trip. This operation does not depend on sampling or simulation running.
  */
-export interface AttachInput {pluginSessionId: string; nextEventSeq: Uint64; job: JobConfiguration; effects: TripEffect[]; profile?: ProfileObservation; sourceClockId?: string; monotonicNs?: Uint64;profileChange?:boolean;observeTripUuid?:string}
+/** Private captured pause/load boundary; never a fabricated paused sample or a renderer command. */
+export interface CapturedEndpoint {
+  version: 1; simulation: 'running' | 'paused'; truck: string | null; odometerM: number | null; fuelL: number | null;
+  speedMps: number | null; gameClockId: string | null; gameMinutes: string | null; position: {x: number; y: number; z: number} | null;
+  previous?: {tripUuid: string; sourceClockId: string; monotonicNs: Uint64};
+}
+export interface AttachInput {pluginSessionId: string; nextEventSeq: Uint64; job: JobConfiguration; effects: TripEffect[]; profile?: ProfileObservation; sourceClockId?: string; monotonicNs?: Uint64;profileChange?:boolean;observeTripUuid?:string;endpoint?:CapturedEndpoint}
 /**
  * `committed`: the job, trip and intervals were stored. `duplicate`: the session already holds a checkpoint job at this
  * nextEventSeq, such as the same attach retried after a lost answer; nothing is written and the effects are not applied

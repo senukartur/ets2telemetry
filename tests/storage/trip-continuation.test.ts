@@ -1,3 +1,9 @@
+import Database from 'better-sqlite3';
+import {snapshot as logicalSnapshot} from '../../packages/storage/src/sqlite/logical-snapshot';
+import net from 'node:net';
+import {decodePayload, type ClientMessage} from '../../packages/contracts/src/protocol-v1';
+import {V1Ingestion} from '../../apps/desktop/src/v1-ingestion';
+import {serveV1Reactive} from '../../tools/telemetry-simulator/src/v1/reactive';
 import {afterEach, beforeEach, describe, expect, it} from 'vitest';
 import {readFileSync} from 'node:fs';
 import path from 'node:path';
@@ -7,7 +13,7 @@ import {validateJournalTripDetail, validateJournalEventPage,validateJournalInter
 import {ETS2_A, ETS2_B, job, otherJob, r, Script, trailer} from '../shared/trip-messages';
 import {MIGRATIONS,openStorage} from '../../packages/storage/src';
 import {ok,failed,digestOf,readOnly,STORAGE_FIXTURES,workspace} from './helpers';
-import {runRecording,terminateWorkers} from './recording-helpers';
+import {ClientSocket,guarded,runRecording,terminateWorkers} from './recording-helpers';
 import {scenarioPath} from '../shared/simulator-v1-expected';
 import {seededId} from '../../tools/telemetry-simulator/src/v1/source';
 import {scenarioSource,replayV1} from '../../tools/telemetry-simulator/src/v1/replay';
@@ -39,12 +45,15 @@ function open(storage: Storage, script: Script, values = job(), verified = true)
 function sample(storage: Storage, script: Script, uuid: string, seconds: number, odometerM: number, values = job(), overrides: Partial<NonNullable<SampleInput['recording']>> = {}) {
   const absent = {available: false, reason: 'not-observed'} as const;
   const row: SampleInput = {tripUuid: uuid, utcMs: 1000 + seconds * 1000, sourceClockId: script.clockId, monotonicNs: String(BigInt(seconds) * 1_000_000_000n),
-    odometer: {available: true, value: odometerM}, fuel: {available: true, value: 500 - odometerM / 10000}, speed: absent, gameTime: null,
-    averageConsumption: absent, estimatedRange: absent, engineRpm: absent, gear: absent, position: absent,
+    odometer: {available: true, value: odometerM}, fuel: {available: true, value: 500 - odometerM / 10000}, speed: {available:true,value:20}, gameTime: {minutes:{available:true,value:500},clockId:'40000000-0000-4000-8000-000000000001'},
+    averageConsumption: absent, estimatedRange: absent, engineRpm: absent, gear: absent, position: {available:true,value:{x:odometerM/5,y:0,z:0}},
     recording: {profile: proof(script), job: values, truck: 'verified-truck', processInstanceId: script.welcome().source.processInstanceId,
       previous:{tripUuid:uuid,sourceClockId:script.clockId,monotonicNs:String(BigInt(seconds-1)*1_000_000_000n)},...overrides}};
   ok(storage.appendSamples(script.session, [row], {uniqueSeconds: true}));
 }
+// Independently authored ordinary-motion channels, rather than the immutable snapshot fixture's unavailable speed.
+const motion = (odo:number) => ({speed:{available:true as const,value:20,unit:'m/s' as const},gameTime:{available:true as const,value:'500',unit:'min' as const,clockId:'40000000-0000-4000-8000-000000000001'},
+  worldPlacement:{available:true as const,value:{position:{x:odo/5,y:0,z:0},orientation:{heading:0,pitch:0,roll:0}}}});
 function close(storage: Storage, script: Script, uuid: string, terminal = false) {
   const message = script.event(terminal ? r.cancelled() : r.timersRestart());
   ok(storage.commitEvent({message, effects: [{kind: 'trip.close', tripUuid: uuid, outcome: terminal ? 'cancelled' : 'none',
@@ -52,6 +61,200 @@ function close(storage: Storage, script: Script, uuid: string, terminal = false)
 }
 
 describe('REG-003/005/008/012/014 durable logical trips', () => {
+  it.each(['truck-change','odometer-jump','position-jump','game-time-jump'] as const)('separates an observed configuration annotation from unexplained recording discontinuity: %s',async cause=>{
+    const storage=await ws.open(),script=new Script(ETS2_A);ok(storage.upsertSession({message:script.welcome()}));
+    const message=script.event(r.jobConfigured()),uuid=tripUuidFor(script.session,message.data.eventSeq);
+    ok(storage.commitEvent({message,effects:[{kind:'trip.open',tripUuid:uuid,game:script.game,gameMode:mode,jobConfiguration:'this-event',recordingCompleteness:'unknown',startedUtcMs:1000}]}));
+    ok(storage.commitEvent({message:script.event(r.truckConfigured()),effects:[{kind:'completeness.add',interval:{tripUuid:uuid,kind:'discontinuity',detail:{cause,annotation:true}}}]}));
+    expect(ok(storage.journalTrip(uuid)).trip.recordingCompleteness).toBe(cause==='truck-change'?'unknown':'partial');storage.close();
+  });
+  it('rejects malformed captured boundaries at the real worker without changing coverage or samples',async()=>{
+    const worker=storageWorker(),client=new StorageClient(worker.handle),script=new Script(ETS2_A);
+    ok(await client.open({path:ws.database,backupsDirectory:ws.backups,purpose:'synthetic',appVersion:'test'}));
+    ok(await client.upsertSession({message:script.welcome()}));
+    const event=script.event(r.jobConfigured()),uuid=tripUuidFor(script.session,event.data.eventSeq);
+    ok(await client.commitEvent({message:event,profile:proof(script),effects:[{kind:'trip.open',tripUuid:uuid,game:script.game,gameMode:mode,
+      jobConfiguration:'this-event',startedUtcMs:1000,recordingCompleteness:'complete'}]}));
+    const before=ok(await client.journalTrip(uuid));
+    const endpoint={version:1,simulation:'paused',truck:'verified-truck',odometerM:1000000,fuelL:100,speedMps:0,gameClockId:script.clockId,gameMinutes:'500',position:{x:0,y:0,z:0}};
+    for(const invalid of [{...endpoint,version:2},{...endpoint,extra:true},{...endpoint,position:{x:NaN,y:0,z:0}},{...endpoint,fuelL:-1},
+      {...endpoint,gameMinutes:'18446744073709551616'},{...endpoint,previous:{tripUuid:uuid,sourceClockId:script.clockId,monotonicNs:'0',extra:true}},
+      {...endpoint,previous:null}]){
+      const result=await client.openAttachedTrip({pluginSessionId:script.session,nextEventSeq:'2',job:job(),effects:[],profile:proof(script),sourceClockId:script.clockId,
+        monotonicNs:'3000000000',observeTripUuid:uuid,endpoint:invalid as never});
+      expect(result).toMatchObject({ok:false,error:{code:'INVALID_INPUT'}});
+    }
+    expect(ok(await client.journalTrip(uuid))).toEqual(before);expect(ok(await client.listSamples({tripUuid:uuid}))).toEqual([]);
+    expect(await client.close()).toEqual({clean:true});
+  });
+  it.each(['trip','clock','time'] as const)('cannot add a pause tail from an unowned captured predecessor: %s',async field=>{
+    const storage=await ws.open(),script=new Script(ETS2_A);ok(storage.upsertSession({message:script.welcome()}));ok(storage.commitEvent({message:script.event(r.started())}));
+    const uuid=open(storage,script);sample(storage,script,uuid,3,1000000);sample(storage,script,uuid,4,1000100);
+    const previous={tripUuid:uuid,sourceClockId:script.clockId,monotonicNs:'4000000000'};
+    if(field==='trip')previous.tripUuid='10000000-0000-4000-8000-000000000099';
+    if(field==='clock')previous.sourceClockId='40000000-0000-4000-8000-000000000099';
+    if(field==='time')previous.monotonicNs='3000000000';
+    ok(storage.openAttachedTrip({pluginSessionId:script.session,nextEventSeq:'3',job:job(),effects:[],profile:proof(script),sourceClockId:script.clockId,
+      monotonicNs:'4500000000',observeTripUuid:uuid,endpoint:{version:1,simulation:'paused',truck:'verified-truck',odometerM:1000125,fuelL:399.9875,speedMps:0,
+        gameClockId:'40000000-0000-4000-8000-000000000001',gameMinutes:'500',position:{x:200025,y:0,z:0},previous}}));
+    expect(ok(storage.journalTrip(uuid)).trip.observedDistanceM.available).toBe(false);
+    expect(ok(storage.listSamples({tripUuid:uuid}))).toHaveLength(2);storage.close();
+  });
+  it.each(['absent','unsupported','malformed','extra'] as const)('distinguishes legacy absent coverage from present-invalid metadata: %s',async kind=>{
+    let storage=await ws.open();const script=new Script(ETS2_A),uuid=open(storage,script);ok(storage.close());
+    const db=new Database(ws.database);let row:{id:number;row_json:string};
+    try{row=db.prepare('SELECT s.id,s.row_json FROM logical_revisions r JOIN logical_projection_states s ON s.id=r.state_ref ORDER BY r.id DESC LIMIT 1').get() as {id:number;row_json:string};
+      const metadata=JSON.parse(row.row_json);if(kind==='absent')delete metadata._coverage;else metadata._coverage=kind==='unsupported'?{...metadata._coverage,version:99}:kind==='extra'?{...metadata._coverage,unknown:true}:{version:1};
+      row.row_json=JSON.stringify(metadata);db.prepare('UPDATE logical_projection_states SET row_json=? WHERE id=?').run(row.row_json,row.id);
+    }finally{db.close();}
+    storage=await ws.open();expect(ok(storage.journalTrip(uuid)).trip.recordingCompleteness).toBe(kind==='absent'?'complete':'partial');storage.close();
+    expect(readOnly(ws.database,db=>db.prepare('SELECT row_json FROM logical_projection_states WHERE id=?').pluck().get(row.id))).toBe(row.row_json);
+  });
+  it('deduplicates coverage metadata while ordinary samples advance existing immutable revision bounds',async()=>{
+    const script=new Script(ETS2_A);let storage=await ws.open();ok(storage.upsertSession({message:script.welcome()}));ok(storage.commitEvent({message:script.event(r.started())}));
+    const uuid=open(storage,script);storage.close();
+    const before=readOnly(ws.database,db=>({states:db.prepare('SELECT count(*) FROM logical_projection_states').pluck().get(),metadata:db.prepare('SELECT row_json FROM logical_projection_states ORDER BY id DESC LIMIT 1').pluck().get()}));
+    storage=await ws.open();for(let n=0;n<50;n++)sample(storage,script,uuid,n+3,1000000+n*10);
+    expect(ok(storage.journalTrip(uuid)).trip.observedDistanceM).toEqual({available:true,value:490});storage.close();
+    readOnly(ws.database,db=>{expect(db.prepare('SELECT count(*) FROM logical_projection_states').pluck().get()).toBe(before.states);
+      expect(db.prepare('SELECT row_json FROM logical_projection_states ORDER BY id DESC LIMIT 1').pluck().get()).toBe(before.metadata);
+      expect(Number(db.prepare('SELECT count(*) FROM logical_revisions').pluck().get())).toBeGreaterThan(50);});
+  });
+  it('keeps one complete delivered UUID through real pipes, a game-only restart, and a full service restart at the default flush',async()=>{
+    const base=JSON.parse(readFileSync(scenarioPath('normal-delivery'),'utf8'));
+    const configured={...base.steps[2],attributes:[...base.steps[2].attributes,
+      {name:'source.company.id',sdkType:'string',value:'synthetic_source'},{name:'destination.company.id',sdkType:'string',value:'synthetic_destination'},
+      {name:'cargo.mass',sdkType:'float',value:18000},{name:'job.market',sdkType:'string',value:'freight_market'},{name:'delivery.time',sdkType:'u32',value:13000}]};
+    const truck={...base.steps[0],attributes:[...base.steps[0].attributes,{name:'license.plate',sdkType:'string',value:'SYN COVERAGE'}]};
+    const frame=(atMs:number,distance:number,fuel:number,x:number,minutes:number,speed=20)=>({atMs,action:'frame',channels:{speed,odometer:1000+distance/1000,'fuel.amount':fuel,'game.time':minutes,
+      'world.placement':{x,y:0,z:0,heading:0,pitch:0,roll:0}}});
+    const pause=(atMs:number)=>({atMs,action:'lifecycle',event:'simulation.paused'}),start=(atMs:number)=>({atMs,action:'lifecycle',event:'simulation.started'});
+    const first={...base,id:'coverage-first',seed:'coverage-first',steps:[truck,base.steps[1],start(30),{...configured,atMs:40},frame(100,0,100,0,500),frame(1100,62.5,99,20,500),frame(2100,125,98,40,500),
+      pause(2200),frame(2250,156.25,97.5,45,501,0),{atMs:2280,action:'gameplay',id:'player.fined',attributes:[{name:'fine',sdkType:'s64',value:'1'}]}],
+      transport:[{atMs:0,action:'connect',client:{durable:true}},{atMs:2300,action:'disconnect'}]};
+    const second={...first,id:'coverage-second',seed:'coverage-second',steps:[pause(5),truck,base.steps[1],configured,frame(50,156.25,97.5,45,501,0),start(100),
+      frame(200,187.5,97,50,501),frame(1200,250,96,70,501),frame(2200,312.5,95,90,501),pause(2300),frame(2350,343.75,94.5,95,502,0),
+      {atMs:2380,action:'gameplay',id:'player.fined',attributes:[{name:'fine',sdkType:'s64',value:'1'}]}],transport:[{atMs:0,action:'connect',client:{durable:true}},{atMs:2400,action:'disconnect'}]};
+    const third={...second,id:'coverage-third',seed:'coverage-third',steps:[pause(5),truck,base.steps[1],configured,frame(50,343.75,94.5,95,502,0),start(100),
+      frame(200,375,94,100,502),frame(1200,437.5,93,120,502),frame(2200,500,92,140,502),{...base.steps[9],atMs:2300},{...base.steps[10],atMs:2310}],
+      transport:[{atMs:0,action:'connect',client:{durable:true}},{atMs:2400,action:'disconnect'}]};
+    let currentProof:ProfileObservation|undefined,worker=storageWorker(),client=new StorageClient(worker.handle),ingestion:V1Ingestion;
+    const acks:{through:string;stored:string}[]=[];let original='';let closed:()=>void=()=>undefined;const coverage=new Map<string,string>();
+    const create=()=>{
+      const event=client.commitEvent.bind(client),gap=client.commitGap.bind(client);
+      client.commitEvent=async input=>{const result=await event(input);if(result.ok)coverage.set((input.message as {source:{pluginSessionId:string}}).source.pluginSessionId,result.value.committedThroughEventSeq);return result;};
+      client.commitGap=async input=>{const result=await gap(input);if(result.ok)coverage.set((input.message as {source:{pluginSessionId:string}}).source.pluginSessionId,result.value.committedThroughEventSeq);return result;};
+      const sink=new TripRecorderSink(client,{profileEvidence:()=>currentProof});
+      ingestion=new V1Ingestion({sink,connect:endpoint=>{
+        const socket=new ClientSocket(net.connect(endpoint),undefined,error=>{throw error;});
+        const write=socket.write.bind(socket);
+        socket.write=(bytes,...rest)=>{const message=decodePayload(bytes.subarray(4),'client',{maxMinor:2}) as ClientMessage;
+          if(message.kind==='ack')acks.push({through:message.data.throughEventSeq,stored:coverage.get(message.data.pluginSessionId) ?? '0'});
+          return write(bytes,...rest);};
+        socket.once('close',()=>{ingestion.select('game');closed();});return socket;
+      }});
+    };
+    ok(await client.open({path:ws.database,backupsDirectory:ws.backups,purpose:'synthetic',appVersion:'test'}));create();
+    for(const [index,input] of [first,second,third].entries()){
+      if(index===2){await ingestion!.stop();expect(await client.close()).toEqual({clean:true});worker=storageWorker();client=new StorageClient(worker.handle);
+        ok(await client.open({path:ws.database,backupsDirectory:ws.backups,purpose:'synthetic',appVersion:'test'}));create();}
+      const source=scenarioSource(replayV1(input).scenario);
+      currentProof={version:1,scope:'e'.repeat(64),binding:'f'.repeat(64),game:'ets2',pluginSessionId:source.pluginSessionId,processInstanceId:source.processInstanceId,
+        sourceClockId:seededId(input.seed,'capture-clock'),afterMonotonicNs:'0',loadGeneration:1};
+      const server=await serveV1Reactive(input,{scale:0,awaitScriptedAcks:true}),gone=new Promise<void>(resolve=>{closed=resolve;});
+      try{ingestion!.select('synthetic',server.endpoint);await guarded(server.done,'three-session source ACK completion',30000);await guarded(gone,'three-session source close',30000);}
+      finally{await server.stop();}
+      if(index===2)await ingestion!.stop();
+      const list=ok(await client.journalTrips()).trips;expect(list).toHaveLength(1);original ||= list[0].tripUuid;expect(list[0].tripUuid).toBe(original);
+      const detail=ok(await client.journalTrip(original));
+      expect(detail.trip.recordingCompleteness,'pipe session '+index).toBe('complete');
+      expect(detail.trip.observedDistanceM).toEqual({available:true,value:index===0?156.25:index===1?343.75:500});
+    }
+    expect(ok(await client.journalTrip(original)).trip.outcome).toBe('delivered');expect(ok(await client.listTrips()).trips).toHaveLength(3);
+    for(const ack of acks)expect(BigInt(ack.through)).toBeLessThanOrEqual(BigInt(ack.stored));
+    expect(await client.close()).toEqual({clean:true});
+  },60_000);
+  it.each(['between-ticks','earlier-prefix'] as const)('resumes a captured PAUSED save before its first advancing running sample: %s',async variant=>{
+    const accepted=<T>(result:{ok:true;value:T}|{ok:false;error:{code:string}}):T=>{if(!result.ok)throw new Error(result.error.code);return result.value;};
+    const worker=storageWorker(),client=new StorageClient(worker.handle);let currentProof:ProfileObservation|undefined;
+    ok(await client.open({path:ws.database,backupsDirectory:ws.backups,purpose:'synthetic',appVersion:'test'}));
+    const recorder=new TripRecorderSink(client,{profileEvidence:()=>currentProof}),context={receivedUtcMs:1000},a=new Script(ETS2_A),b=new Script(ETS2_B);
+    const capture=async(s:Script,odo:number,fuel:number,minutes:string,x:number,simulation:'running'|'paused',advance=1000)=>{
+      const configuration=s.checkpoint(job()).data.state.configuration;
+      const message=s.snapshot({configuration,simulation,speed:{available:true,value:simulation==='running'?20:0,unit:'m/s'},odometer:{available:true,value:odo,unit:'m'},fuel:{available:true,value:fuel,unit:'L'},
+        gameTime:{available:true,value:minutes,unit:'min',clockId:s.clockId},worldPlacement:{available:true,value:{position:{x,y:0,z:0},orientation:{heading:0,pitch:0,roll:0}}}},advance);
+      accepted(recorder.observe(message,context));if(recorder.attach.due())accepted(await recorder.attach.open(context));return message;
+    };
+    currentProof=proof(a);accepted(await recorder.openSession(a.welcome()));accepted(recorder.observe(a.checkpoint(null),context));
+    accepted(await recorder.commit(a.event(r.started()),context));const configured=a.event(r.jobConfigured());accepted(await recorder.commit(configured,context));
+    const uuid=tripUuidFor(a.session,configured.data.eventSeq);
+    await capture(a,1000000,100,'500',0,'running');await capture(a,1000060,99.4,'500',12,'running');await capture(a,1000100,99,'500',20,'running');
+    accepted(await recorder.commit(a.event(r.paused(),{simulation:'paused',advanceMs:250}),context));
+    await capture(a,1000125,97.5,'501',25,'paused',0);
+    const paused=ok(await client.journalTrip(uuid));
+    expect(paused.trip.observedDistanceM).toEqual({available:true,value:125});
+    expect(ok(await client.listSamples({tripUuid:uuid}))).toHaveLength(3);
+    currentProof=proof(b);accepted(await recorder.openSession(b.welcome()));accepted(recorder.observe(b.checkpoint(null),context));accepted(await recorder.commit(b.gap(2),context));
+    accepted(await recorder.commit(b.event(r.jobConfigured(),{simulation:'paused'}),context));
+    const odo=variant==='earlier-prefix'?1000060:1000125,fuel=variant==='earlier-prefix'?99.4:97.5,minutes=variant==='earlier-prefix'?'500':'501',x=variant==='earlier-prefix'?12:25;
+    await capture(b,odo,fuel,minutes,x,'paused',10);
+    expect(ok(await client.journalTrip(uuid)).trip.recordingCompleteness).toBe('partial'); // ordered start is still outstanding
+    await capture(b,odo,fuel,minutes,x,'paused',10_000); // repeated unchanged pause does not create a sample or a new boundary
+    expect(ok(await client.listSamples({pluginSessionId:b.session}))).toHaveLength(0);
+    accepted(await recorder.commit(b.event(r.started()),context));
+    await capture(b,odo+25,fuel-0.5,minutes,x+5,'running');accepted(await recorder.samples.write(3600,true));
+    accepted(await recorder.commit(b.event(r.delivered(),{simulation:'paused'}),context));
+    const detail=ok(await client.journalTrip(uuid));expect(detail.trip).toMatchObject({outcome:'delivered',recordingCompleteness:'complete',observedDistanceM:{available:true,value:variant==='earlier-prefix'?85:150}});
+    expect(detail.trip.fuelUsedL.available && detail.trip.fuelUsedL.value).toBeCloseTo(variant==='earlier-prefix'?1.1:3,9);
+    expect(ok(await client.listTrips()).trips).toHaveLength(2);expect(ok(await client.listSamples({tripUuid:uuid},{includeExcluded:true}))).toHaveLength(4);
+    expect(ok(await client.listSamples({tripUuid:uuid}))).toHaveLength(variant==='earlier-prefix'?3:4);
+    const oldSamples=ok(await client.listSamples({tripUuid:uuid},{afterId:paused.exportBounds.snapshot!.samples,includeExcluded:true}));expect(oldSamples).toHaveLength(3);
+    expect(await client.close()).toEqual({clean:true});
+    readOnly(ws.database,db=>{db.defaultSafeIntegers(true);const old=logicalSnapshot(db,uuid,BigInt(paused.exportBounds.snapshot!.samples.split(':')[3]));
+      expect(old.row.recording_completeness).toBe('complete');expect(old.row.observed_distance_m).toBe(125);});
+  });
+  it.each(['clean', 'advanced', 'fuel', 'position', 'game-time', 'unobserved-start', 'ambiguous-bootstrap', 'late-event-loss', 'late-sample-loss', 'late-restore-loss', 'late-discontinuity'] as const)(
+    'keeps three-session completeness evidence-dependent across a persistent recorder and full restart: %s', async variant => {
+    const accepted = <T>(result: {ok:true;value:T}|{ok:false;error:{code:string}}):T => {if(!result.ok)throw new Error(result.error.code);return result.value;};
+    let currentProof: ProfileObservation | undefined;
+    let worker=storageWorker(), client=new StorageClient(worker.handle);
+    const createRecorder=()=>new TripRecorderSink(client,{profileEvidence:()=>currentProof});
+    ok(await client.open({path:ws.database,backupsDirectory:ws.backups,purpose:'synthetic',appVersion:'test'}));
+    let recorder=createRecorder(), original=''; const context={receivedUtcMs:1000};
+    const scripts=[new Script(ETS2_A),new Script(ETS2_B),new Script('10000000-0000-4000-8000-000000000009')];
+    for(const [index,script] of scripts.entries()) {
+      if(index===2){expect(await client.close()).toEqual({clean:true});worker=storageWorker();client=new StorageClient(worker.handle);
+        ok(await client.open({path:ws.database,backupsDirectory:ws.backups,purpose:'synthetic',appVersion:'test'}));recorder=createRecorder();}
+      currentProof=proof(script); accepted(await recorder.openSession(script.welcome()));accepted(recorder.observe(script.checkpoint(null),context));
+      if(index===0 && variant!=='unobserved-start')accepted(await recorder.commit(script.event(r.started()),context));
+      else if(index>0)accepted(await recorder.commit(script.gap(variant==='ambiguous-bootstrap'?3:2),context));
+      const configured=script.event(r.jobConfigured(),{simulation:index===0 && variant!=='unobserved-start'?'running':'paused'});
+      accepted(await recorder.commit(configured,context));original ||= tripUuidFor(script.session,configured.data.eventSeq);
+      if(index>0 || variant==='unobserved-start')accepted(await recorder.commit(script.event(r.started()),context));
+      const configuration=script.checkpoint(job()).data.state.configuration;
+      for(let n=0;n<3;n++){
+        const step=index*2+n;
+        const snapshot=script.snapshot({configuration,simulation:'running',speed:{available:true,value:20,unit:'m/s'},
+          odometer:{available:true,value:1000000+step*100+(index>0 && variant==='advanced'?50:0),unit:'m'},fuel:{available:true,value:100-step-(index===1 && n===0 && variant==='fuel'?1:0),unit:'L'},
+          gameTime:{available:true,value:index===1 && n===0 && variant==='game-time'?'501':'500',unit:'min',clockId:script.clockId},
+          worldPlacement:{available:true,value:{position:{x:step*20+(index===1 && n===0 && variant==='position'?1:0),y:0,z:0},orientation:{heading:0,pitch:0,roll:0}}}},1000);
+        accepted(recorder.observe(snapshot,context)); if(recorder.attach.due())accepted(await recorder.attach.open(context));
+      }
+      accepted(await recorder.samples.write(3600,true));
+      if(index<2)accepted(await recorder.commit(script.event(r.paused(),{simulation:'paused'}),context));
+      else accepted(await recorder.commit(script.event(r.delivered(),{simulation:'paused'}),context));
+      if(index===1 && variant.startsWith('late-'))ok(await client.recordCompleteness(scripts[0].session,{tripUuid:original,
+        kind:variant==='late-event-loss'?'event-loss':variant==='late-sample-loss'?'sample-loss':variant==='late-restore-loss'?'restore-loss':'discontinuity',
+        ...(variant==='late-event-loss'||variant==='late-restore-loss'?{firstEventSeq:'4',lastEventSeq:'5'}:{}),detail:{cause:'synthetic-retained-loss'}}));
+      const detail=ok(await client.journalTrip(original));
+      expect(ok(await client.journalTrips()).trips.map(row=>row.tripUuid)).toEqual([original]);
+      expect(detail.trip.recordingCompleteness, 'session '+index).toBe(index===0 && variant==='unobserved-start'?'unknown':variant==='clean' || index===0?'complete':'partial');
+      if(variant==='clean')expect(detail.trip.observedDistanceM).toEqual({available:true,value:(index+1)*200});
+    }
+    const detail=ok(await client.journalTrip(original));expect(detail.trip.outcome).toBe('delivered');expect(detail.exportBounds.sourceTotal).toBe(3);
+    expect(ok(await client.listTrips()).trips).toHaveLength(3);expect(await client.close()).toEqual({clean:true});
+    readOnly(ws.database,db=>{expect(db.prepare("SELECT count(*) FROM trips WHERE outcome='delivered'").pluck().get()).toBe(1);expect(db.pragma('integrity_check',{simple:true})).toBe('ok');});
+  });
   it.each([
     {name:'same-second stable snapshot',firstMs:100,advanced:false,missingEndpoint:false},
     {name:'later-second stable snapshot',firstMs:1000,advanced:false,missingEndpoint:false},
@@ -68,7 +271,7 @@ describe('REG-003/005/008/012/014 durable logical trips', () => {
     const configuration=s.checkpoint(job()).data.state.configuration;
     let order=100;
     const snapshot=async(odo:number,fuel:number,counter:string,ms=1000)=>{
-      const message=s.snapshot({configuration,simulation:'running',boundaryOrder:String(++order),odometer:{available:true,value:odo,unit:'m'},fuel:{available:true,value:fuel,unit:'L'}},ms);
+      const message=s.snapshot({...motion(odo),configuration,simulation:'running',boundaryOrder:String(++order),odometer:{available:true,value:odo,unit:'m'},fuel:{available:true,value:fuel,unit:'L'}},ms);
       message.data.continuity={coalescedSnapshots:counter,offlineTransitions:'7'};
       accepted(recorder.observe(message,context));
       if(recorder.attach.due())accepted(await recorder.attach.open(context));
@@ -78,7 +281,7 @@ describe('REG-003/005/008/012/014 durable logical trips', () => {
     // Advance into a fresh source second without claiming any observation during the disconnected interval.
     s.snapshot({},1000);accepted(await recorder.openSession(s.welcome()));
     const endpoint=missingEndpoint?1000125:1000100;
-    const checkpoint=s.checkpoint(job(),0,{configuration,simulation:'running',boundaryOrder:String(++order),odometer:{available:true,value:endpoint,unit:'m'},fuel:{available:true,value:90,unit:'L'}});
+    const checkpoint=s.checkpoint(job(),0,{...motion(endpoint),configuration,simulation:'running',boundaryOrder:String(++order),odometer:{available:true,value:endpoint,unit:'m'},fuel:{available:true,value:90,unit:'L'}});
     checkpoint.data.continuity={coalescedSnapshots:'5',offlineTransitions:'7'};
     accepted(recorder.observe(checkpoint,context));
     if(recorder.attach.due())accepted(await recorder.attach.open(context));
@@ -102,7 +305,7 @@ describe('REG-003/005/008/012/014 durable logical trips', () => {
     accepted(await recorder.commit(s.event(r.jobConfigured()),context));
     const configuration=s.checkpoint(job()).data.state.configuration;
     const observe=async(odo:number,counter:string,ms=1000)=>{
-      const message=s.snapshot({configuration,simulation:'running',odometer:{available:true,value:odo,unit:'m'},fuel:{available:true,value:100,unit:'L'}},ms);
+      const message=s.snapshot({...motion(odo),configuration,simulation:'running',odometer:{available:true,value:odo,unit:'m'},fuel:{available:true,value:100,unit:'L'}},ms);
       message.data.continuity={coalescedSnapshots:counter,offlineTransitions:'5'};
       accepted(recorder.observe(message,context));
       if(recorder.attach.due())accepted(await recorder.attach.open(context));
@@ -153,7 +356,7 @@ describe('REG-003/005/008/012/014 durable logical trips', () => {
   it('preserves net fuel noise on a continued accounting path',async()=>{
     const storage=await ws.open(),a=new Script(ETS2_A),first=open(storage,a);
     const rows=(s:Script,uuid:string,values:number[])=>values.map((fuel,index)=>({...seedSample(s,uuid,index+1,1000+(index+1)*1000,
-      {fuel:{available:true,value:fuel},odometer:{available:true,value:1000000+Math.max(0,index-1)}}),recording:{profile:proof(s),job:job(),truck:'verified-truck',processInstanceId:s.welcome().source.processInstanceId,
+      {speed:{available:true,value:20},gameTime:{minutes:{available:true,value:500},clockId:'40000000-0000-4000-8000-000000000001'},position:{available:true,value:{x:Math.max(0,index-1),y:0,z:0}},fuel:{available:true,value:fuel},odometer:{available:true,value:1000000+Math.max(0,index-1)}}),recording:{profile:proof(s),job:job(),truck:'verified-truck',processInstanceId:s.welcome().source.processInstanceId,
       previous:{tripUuid:uuid,sourceClockId:s.clockId,monotonicNs:seedSample(s,uuid,index,1000).monotonicNs}}}));
     ok(storage.appendSamples(ETS2_A,rows(a,first,[100,100]),{uniqueSeconds:true}));close(storage,a,first);
     const b=new Script(ETS2_B),second=open(storage,b);
@@ -170,7 +373,7 @@ describe('REG-003/005/008/012/014 durable logical trips', () => {
     accepted(await recorder.commit(s.event(r.jobConfigured()),context));
     const configuration=s.checkpoint(job()).data.state.configuration;
     for(const odo of [1000000,1000100]){
-      accepted(recorder.observe(s.snapshot({configuration,simulation:'running',odometer:{available:true,value:odo,unit:'m'}},1000),context));
+      accepted(recorder.observe(s.snapshot({...motion(odo),configuration,simulation:'running',odometer:{available:true,value:odo,unit:'m'}},1000),context));
       if(recorder.attach.due())accepted(await recorder.attach.open(context));
     }
     accepted(await recorder.samples.write(3600,true));const uuid=tripUuidFor(ETS2_A,'1');
@@ -410,13 +613,13 @@ describe('REG-003/005/008/012/014 durable logical trips', () => {
     const configured={...base.steps[2],attributes};
     const truck={...base.steps[0],attributes:[...base.steps[0].attributes,{name:'license.plate',sdkType:'string',value:'SYN 063'}]};
     const first={...base,id:'logical-before-restart',seed:'et063-before-restart',steps:[truck,base.steps[1],configured,base.steps[3],
-      {atMs:100,action:'frame',channels:{speed:20,odometer:1000,'game.time':601}},
-      {atMs:1100,action:'frame',channels:{speed:20,odometer:1000.0625,'game.time':602}},
-      {atMs:2100,action:'frame',channels:{speed:20,odometer:1000.125,'game.time':603}}],
+      {atMs:100,action:'frame',channels:{speed:20,odometer:1000,'game.time':601,'world.placement':{x:0,y:0,z:0,heading:0,pitch:0,roll:0}}},
+      {atMs:1100,action:'frame',channels:{speed:20,odometer:1000.0625,'game.time':602,'world.placement':{x:20,y:0,z:0,heading:0,pitch:0,roll:0}}},
+      {atMs:2100,action:'frame',channels:{speed:20,odometer:1000.125,'game.time':603,'world.placement':{x:40,y:0,z:0,heading:0,pitch:0,roll:0}}}],
       transport:[{atMs:0,action:'connect',client:{durable:true}},{atMs:2200,action:'disconnect'}]};
     const next={...first,id:'logical-next-day',seed:'et063-next-day',steps:[{atMs:0,action:'utcJump',deltaMs:86_400_000},truck,base.steps[1],configured,base.steps[3],
-      {atMs:100,action:'frame',channels:{speed:20,odometer:1000.0625,'game.time':602}},
-      {atMs:1100,action:'frame',channels:{speed:20,odometer:1000.125,'game.time':603}},
+      {atMs:100,action:'frame',channels:{speed:20,odometer:1000.0625,'game.time':602,'world.placement':{x:20,y:0,z:0,heading:0,pitch:0,roll:0}}},
+      {atMs:1100,action:'frame',channels:{speed:20,odometer:1000.125,'game.time':603,'world.placement':{x:40,y:0,z:0,heading:0,pitch:0,roll:0}}},
       {...base.steps[9],atMs:1500},{...base.steps[10],atMs:1510}],transport:[{atMs:0,action:'connect',client:{durable:true}},{atMs:1600,action:'disconnect'}]};
     if(driving==='paused')next.steps.splice(5,0,{atMs:50,action:'lifecycle',event:'simulation.paused'});
     let firstUuid='';
@@ -444,12 +647,15 @@ describe('REG-013 logical singleton migration',()=>{
     const storage=await ws.open({path:file});expect(storage.summary.schemaVersion).toBe(4);
     const list=ok(storage.journalTrips()).trips;
     expect(list.map(t=>t.tripUuid).sort()).toEqual(before.map(t=>t.trip_uuid).sort());
+    for(const trip of before)expect(ok(storage.journalTrip(String(trip.trip_uuid))).trip.recordingCompleteness).toBe(trip.recording_completeness);
+    if(version===3)expect(ok(storage.journalTrip('70000000-0000-4000-8000-000000000001')).trip.recordingCompleteness).toBe('complete');
     ok(storage.close());
     readOnly(file,db=>{
       const after=db.prepare('SELECT * FROM trips ORDER BY id').all() as Record<string,unknown>[];
       expect(after.map(row=>Object.fromEntries(Object.keys(before[0]).map(key=>[key,row[key]])))).toEqual(before);
       expect(db.prepare('SELECT trip_ref,logical_ref FROM logical_memberships ORDER BY trip_ref').all()).toEqual(before.map(row=>({trip_ref:row.id,logical_ref:row.id})));
       expect(db.prepare('SELECT count(*) FROM logical_trips WHERE profile_scope IS NOT NULL OR retired<>1').pluck().get()).toBe(0);
+      expect(db.prepare("SELECT count(*) FROM logical_projection_states WHERE json_type(row_json,'$._coverage') IS NOT NULL").pluck().get()).toBe(0);
       expect(db.pragma('integrity_check',{simple:true})).toBe('ok');expect(db.pragma('foreign_key_check')).toEqual([]);
     });
     if(version===3){

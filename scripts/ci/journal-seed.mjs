@@ -55,7 +55,8 @@ async function main() {
       check(storage.commitEvent({message,profile:proof(script),effects:[{kind:'trip.open',tripUuid:uuid,game:'ets2',gameMode:{mode:'unknown',method:'none',confidence:'none'},
         jobConfiguration:'this-event',recordingCompleteness:'complete',startedUtcMs:BASE_UTC}]}),'logical open');return uuid;
     };
-    const samples=(script,uuid,values)=>values.map((odo,index)=>({...seedSample(script,uuid,index+1,BASE_UTC+(index+1)*1000,{odometer:{available:true,value:odo},speed:{available:true,value:20}}),
+    const samples=(script,uuid,values)=>values.map((odo,index)=>({...seedSample(script,uuid,index+1,BASE_UTC+(index+1)*1000,{odometer:{available:true,value:odo},speed:{available:true,value:20},
+      gameTime:{minutes:{available:true,value:500},clockId:'40000000-0000-4000-8000-000000006300'},position:{available:true,value:{x:(odo-1000000)/5,y:0,z:0}}}),
       recording:{profile:proof(script),job:logicalJob,truck:'synthetic_verified_truck',processInstanceId:script.welcome().source.processInstanceId,
         previous:{tripUuid:uuid,sourceClockId:script.clockId,monotonicNs:seedSample(script,uuid,index,BASE_UTC).monotonicNs}}}));
     const before=new Script('10000000-0000-4000-8000-000000006301'),logicalUuid=logicalOpen(before);

@@ -1,4 +1,5 @@
-import {admittedProfile, associate, projectSessionBounds, retireObservedTerminal, projectEffects, projectSample, logicalEnabled, logicalFor, revise} from './logical-trips';
+import {validCapturedEndpoint} from './logical-coverage';
+import {admittedProfile, associate, projectEndpoint, projectSessionBounds, retireObservedTerminal, projectEffects, projectSample, logicalEnabled, logicalFor, revise} from './logical-trips';
 import type {ProfileObservation} from '../../../telemetry-core/src/trips/continuation';
 import type {HardModeObservation} from '../../../contracts/src/hard-mode';
 // Write commands. Each command is one BEGIN IMMEDIATE transaction on the verified writer connection; a commit result
@@ -565,6 +566,7 @@ function attachTripUuid(pluginSessionId: string, nextEventSeq: string): string {
  */
 export function openAttachedTrip(conn: StorageConnection, input: AttachInput, options:CommitOptions = {}): AttachResult {
   if (!plainRecord(input)) fail('INVALID_INPUT');
+  if (input.endpoint !== undefined && !validCapturedEndpoint(input.endpoint)) fail('INVALID_INPUT');
   const nextKey = u64Key(input.nextEventSeq);
   if (BigInt(input.nextEventSeq) < 1n) fail('INVALID_INPUT');
   const values = checkpointJobValues(input.job), effects: unknown = input.effects;
@@ -577,12 +579,14 @@ export function openAttachedTrip(conn: StorageConnection, input: AttachInput, op
       if(!row)fail('INVALID_INPUT');
       const proof=admittedProfile(input.profile,{game:session.game,processInstanceId:session.process_instance_uuid,pluginSessionId:input.pluginSessionId},input.sourceClockId!,input.monotonicNs!);
       if(!proof)fail('INVALID_INPUT');
-      const key=canonicalJson([input.observeTripUuid,input.nextEventSeq,input.job,proof,input.sourceClockId,input.monotonicNs]);
+      const key=canonicalJson([input.observeTripUuid,input.nextEventSeq,input.job,proof,input.sourceClockId,input.monotonicNs,...(input.endpoint===undefined?[]:[input.endpoint])]);
       const decision=statement(db,'SELECT observation_key FROM logical_memberships WHERE trip_ref=?').get(row.id) as {observation_key:string|null}|undefined;
       // Exact redelivery can acknowledge a prior decision after terminal closure; it never associates a closed row.
       if(decision?.observation_key===key)return {status:'duplicate'};
       if(row.outcome!=='open' || BigInt(input.nextEventSeq)!==BigInt(fromU64Key(session.committed_through_event_seq))+1n)fail('INVALID_INPUT');
-      const id=associate(db,row,proof,input.job);revise(db,id);
+      const id=associate(db,row,proof,input.job);
+      if (input.endpoint) projectEndpoint(db,id,row,{pluginSessionId:input.pluginSessionId},input.sourceClockId!,input.monotonicNs!,input.endpoint);
+      revise(db,id);
       statement(db,'UPDATE logical_memberships SET observation_key=? WHERE trip_ref=?').run(key,row.id);
       options.testHooks?.beforeCommit?.();
       return {status:'committed'};
@@ -617,6 +621,11 @@ export function openAttachedTrip(conn: StorageConnection, input: AttachInput, op
     }
     applyEffects({db, session, game: session.game, now: conn.now(), attachJobRef: BigInt(job), attachTripUuid: attachTripUuid(input.pluginSessionId, input.nextEventSeq), carrierEventSeq: nextKey,profileChange:input.profileChange}, effects);
     projectEffects(db, input.effects, proof);
+    if (input.endpoint) {
+      if (!proof || !input.sourceClockId || !input.monotonicNs) fail('INVALID_INPUT');
+      const row = statement(db,'SELECT * FROM trips WHERE trip_uuid=?').get(attachTripUuid(input.pluginSessionId,input.nextEventSeq)) as Record<string,unknown>;
+      projectEndpoint(db,logicalFor(db,row.id),row,{pluginSessionId:input.pluginSessionId},input.sourceClockId,input.monotonicNs,input.endpoint);
+    }
     options.testHooks?.beforeCommit?.();
     return {status: 'committed'};
   });
