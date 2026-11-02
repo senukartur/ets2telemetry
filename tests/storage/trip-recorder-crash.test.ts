@@ -92,10 +92,11 @@ function expectAcksAfterCommits(child: Child) {
 
 /**
  * The first process runs until its barrier and is terminated there; a second process then runs until its first
- * connection ends at the scripted disconnect, and is terminated before it reconnects. `between` runs while neither
- * process holds the database.
+ * connection ends at the scripted disconnect, and is terminated before it reconnects. Cases requiring a recovered
+ * late attach also wait for its durable commit signal: the last ACK can release the scripted disconnect while that
+ * non-ACK operation is still queued or in flight. `between` runs while neither process holds the database.
  */
-async function crash(input: Json, first: ChildConfig, options: {serve?: ReactiveServeOptions; between?: () => Promise<void>; attach?: boolean} = {}) {
+async function crash(input: Json, first: ChildConfig, options: {serve?: ReactiveServeOptions; between?: () => Promise<void>; attach?: boolean; awaitRecoveryAttach?:boolean} = {}) {
   expectNoGameHistory();
   const server = await serveV1Reactive(input, {scale: 0, awaitScriptedAcks: true, ...options.serve}), children: Child[] = [];
   try {
@@ -103,8 +104,9 @@ async function crash(input: Json, first: ChildConfig, options: {serve?: Reactive
     await one.until(line => line.startsWith('barrier '));
     await one.terminate();
     await options.between?.();
-    const two = service(server.endpoint, {barrier: null, attach: options.attach}, 'second'); children.push(two);
+    const two = service(server.endpoint, {barrier: null, attach: options.attach, maxConnections:1}, 'second'); children.push(two);
     await two.until(line => line === 'disconnected');
+    if(options.awaitRecoveryAttach)await two.until(line => line === 'attached committed');
     await two.terminate();
     const report = await server.done;
     for (const child of children) expectAcksAfterCommits(child);
@@ -182,11 +184,12 @@ const killInput = (id: string, name: string): Json => {
 describe('S3 killed recording process (REG-006)', () => {
   it('(a) terminated before committing eventSeq 2: the new process resumes the stored trip, as crash-before-commit expects', async () => {
     const input = readFixtureFile(scenarioPath('crash-before-commit')) as Json, replay = replayV1(input), session = scenarioSource(replay.scenario).pluginSessionId;
-    const {report, one, two} = await crash(input, {barrier: {kind: 'before', eventSeq: '2'},attach:true},{attach:true});
+    const {report, one, two} = await crash(input, {barrier: {kind: 'before', eventSeq: '2'},attach:true},{attach:true,awaitRecoveryAttach:true});
     expectInvariants(session, [one, two]);
     expect(reactiveDifferences(replay, report)).toEqual([]);
     expect(one.lines.filter(l => l !== 'ready')).toEqual(['committed 1 1', 'ack 1', 'barrier before 2']);
     expect(two.acks()).toEqual([2n, 3n]);
+    expect(two.lines.filter(line=>line.startsWith('attached '))).toEqual(['attached committed']);
     const expected = tripExpected('crash-before-commit');
     expect(await storedRows(ws, replay.scenario.seed)).toEqual({trips: expected.trips, attributions: expected.attributions, intervals: expected.intervals});
     const through = await committedThrough(session);
@@ -300,7 +303,8 @@ describe('S3 killed recording process (REG-006)', () => {
   for (const [id, commit, kind, final] of KILLS) it(`(d) ${id}: killed ${kind} ${commit === 'attach' ? 'the attach op' : `commit ${commit}`} keeps every invariant after redelivery`, async () => {
     const scenario = SCENARIOS[id], input = killInput(id, `${id}-kill-${kind}-${commit}`), session = scenarioSource(replayV1(input).scenario).pluginSessionId;
     const barrier: Barrier = commit === 'attach' ? {kind: 'after', attach: true} : {kind, commit};
-    const {one, two} = await crash(input, {barrier, commitAfterFirstEnd: true}, {serve: {quiesceMs: 0}, attach: true});
+    const {one, two} = await crash(input, {barrier, commitAfterFirstEnd: true}, {serve: {quiesceMs: 0}, attach: true,
+      awaitRecoveryAttach:final.some(([jobSeq,outcome])=>jobSeq===null && outcome==='open')});
     expectInvariants(session, [one, two]);
     expect(one.lines.at(-1)).toBe(`barrier ${kind} ${commit}`);
     const total = scenario.coverage;
