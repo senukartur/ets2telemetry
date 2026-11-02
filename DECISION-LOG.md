@@ -832,6 +832,10 @@ The owner approved the full architect plan with “да, реализуй пла
 
 The owner requested readable media source names and current-track visibility only in the game after testing staging. This supersedes the earlier desktop-visibility choice: the normal panel requires the active selected game's fresh window report and hides on the desktop, Alt+Tab and minimization. Position editing retains its explicit application-focused preview.
 
+## ET-051 average consumption zeros — November 2, 2026
+
+An owner-run raw channel capture showed that ETS2 itself sends 0.0 for `truck.fuel.consumption.average` for about a quarter of a second every two to three seconds while driving, and for longer while standing. Of the options on the card, the owner chose to hold the value on screen: the dashboard and the overlay keep the last non-zero value through a zero, for up to 10 s (the agent picked 10 s from the card's 10–15 s), and the database and exports keep what the SDK sent. Converting such zeros to unavailable at ingestion was not chosen.
+
 ## ET-063 automatic trip continuation — November 2, 2026
 
 The owner approved schema v3→v4, durable logical Journal trips, existing Journal DTO/cursor amendments and JSON format v4. The same verified profile and canonical job characteristics continue automatically across reconnects, application/game restarts and next-day loads, accepting the false-match risk of an identical unobserved offer; no routine confirmation prompt is added. Restored-save progress replaces abandoned driving (100→60→100 km), raw evidence remains intact, and uncertain totals stay unavailable. Cancellation/replacement/conflicting or missing evidence veto joining, different jobs interrupt without an invented outcome, old history migrates as singletons, and Hard Mode loss is irreversible even for abandoned progress. Membership, continuation and rollback diagnostics belong only in JSON, with no new diagnostic UI.
