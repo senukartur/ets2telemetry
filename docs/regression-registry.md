@@ -32,6 +32,7 @@ Columns:
 | `tests/unit/capture-export.test.ts` | Node unit (Vitest) | REG-004, REG-005, REG-007, REG-009, REG-010, REG-011 | R | CAP-01a (#26) | PR (tests job, `npm test`) | v0/CAP0 isolation |
 | `tests/unit/capture-session.test.ts` | Node unit (Vitest) | REG-004, REG-005, REG-007, REG-009, REG-010, REG-011 | R | CAP-01a (#26) | PR (tests job, `npm test`) | gap, v0/CAP0 isolation |
 | `tests/unit/capture-writer.test.ts` | Node unit (Vitest) | REG-004, REG-005, REG-007, REG-009, REG-010, REG-011 | R | CAP-01a (#26) | PR (tests job, `npm test`) | gap, v0/CAP0 isolation |
+| `tests/unit/channel-probe.test.ts` | Node unit (Vitest), real Windows named pipe from the simulator | REG-009, REG-010 | F | ET-051 | PR (tests job, `npm test`) | security (source authority) |
 | `tests/unit/connection-diagnosis.test.ts` | Node unit (Vitest) | REG-015, REG-017 | R, F, T, V (et-017) | ET-017 (PR-6) | PR (tests job, `npm test`) | — |
 | `tests/unit/dashboard-startup.test.ts` | Node unit (Vitest) | REG-011, REG-012 | T, V (et-011) | ET-011a (#52) | PR (tests job, `npm test`) | regression |
 | `tests/unit/diagnostics-bundle-check.test.ts` | Node unit (Vitest) | smoke evidence: REG-015, REG-017 | T, V (et-017) | ET-017 (PR-6, PR #111 review) | PR (tests job, `npm test`) | security |
