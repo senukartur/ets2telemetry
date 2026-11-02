@@ -1,3 +1,4 @@
+import {DEFAULT_NOW_PLAYING} from '../../apps/desktop/src/now-playing/contract';
 import {describe, expect, it} from 'vitest';
 import type {AppHealth, AppLanguage, GearDisplayMode, LiveTelemetry, OverlayLayout, OverlaySectionId, PluginDiscoveryOutcome, PluginGame, PluginManualFolderState, PluginSetupMode, PluginSetupView, PluginTargetState,
   PluginTargetView, RecordingHealth, RecordingTarget, RecordingTrip, ServiceHealth, SettingsState, SettingsView, SourceSelection, StorageHealth, UnitProfile} from '../../packages/contracts/src';
@@ -10,7 +11,7 @@ import {checkDiagnosticsBundle, ENUMS, runtimeStrings, schemaTokens} from '../..
 // smoke reads (`mode`, `root`). The names and paths are invented.
 
 const HEALTH: AppHealth = {service: 'ready', storage: 'verified', recording: {state: 'disabled'}, lastError: null};
-const SETTINGS: SettingsView = {language: 'en', autostart: false, units: {ets2: 'metric', ats: 'us-customary'}, gearDisplay: {ets2: 'automatic', ats: 'automatic'}, overlay: DEFAULT_OVERLAY_SETTINGS, state: 'defaults', writable: true, saveError: null};
+const SETTINGS: SettingsView = {nowPlaying: DEFAULT_NOW_PLAYING, language: 'en', autostart: false, units: {ets2: 'metric', ats: 'us-customary'}, gearDisplay: {ets2: 'automatic', ats: 'automatic'}, overlay: DEFAULT_OVERLAY_SETTINGS, state: 'defaults', writable: true, saveError: null};
 const PLUGINS: PluginSetupView = {mode: 'test-root', bundled: {version: '0.2.0', sha256Prefix: '0123456789ab'}, running: false, games: {
   ets2: {excluded: false, discovery: 'found', manualFolder: 'set', unlistedFolders: 0, targets: []},
   ats: {excluded: true, discovery: 'found', manualFolder: 'none', unlistedFolders: 0, targets: []}}};

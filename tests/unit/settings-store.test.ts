@@ -1,3 +1,4 @@
+import {DEFAULT_NOW_PLAYING} from '../../apps/desktop/src/now-playing/contract';
 import * as fs from 'node:fs/promises';
 import {existsSync} from 'node:fs';
 import path from 'node:path';
@@ -56,10 +57,10 @@ const v10Text = (ets2: string, ats: string, language = 'en', layout = 'strip', r
 // ET-052: the requirement for the current format changed to v11 (ET-050b took v10 first), which adds the fifteenth section key
 // after game time; every current write below is v11 (hand-written), while older seeds are derived from the v8 and v10 texts.
 /** The exact current file (ET-052: format v11, the v10 layout plus "mandatory-break" last among the sections). */
-const v11Text = (ets2: string, ats: string, language = 'en', layout = 'strip', rpm = true, placements: Placements = PLACEMENTS, autostart = false, gears: Gears = AUTO) =>
-  `{\n  "format": "ets2telemetry.settings",\n  "version": 11,\n  "language": "${language}",\n  "autostart": ${autostart},\n  "units": {\n    "ets2": "${ets2}",\n    "ats": "${ats}"\n  },\n` +
-  `  "gearDisplay": {\n    "ets2": "${gears.ets2}",\n    "ats": "${gears.ats}"\n  },\n` + overlayText(layout, rpm, placements, true);
-const EXPECTED_US_ETS2 = v11Text('us-customary', 'us-customary');
+const v12Text = (ets2: string, ats: string, language = 'en', layout = 'strip', rpm = true, placements: Placements = PLACEMENTS, autostart = false, gears: Gears = AUTO) =>
+  `{\n  "format": "ets2telemetry.settings",\n  "version": 12,\n  "language": "${language}",\n  "autostart": ${autostart},\n  "units": {\n    "ets2": "${ets2}",\n    "ats": "${ats}"\n  },\n` +
+  `  "gearDisplay": {\n    "ets2": "${gears.ets2}",\n    "ats": "${gears.ats}"\n  },\n` + overlayText(layout, rpm, placements, true).replace(/ {2}}\n}\n$/, '  },\n  "nowPlaying": {\n    "enabled": false,\n    "style": "minimal",\n    "backgroundOpacity": 80,\n    "position": {\n      "displayId": null,\n      "x": 1,\n      "y": 0.75\n    }\n  }\n}\n');
+const EXPECTED_US_ETS2 = v12Text('us-customary', 'us-customary');
 const VALID_METRIC = '{"format":"ets2telemetry.settings","version":1,"units":{"ets2":"metric","ats":"metric"}}';
 const VALID_V2 = '{"format":"ets2telemetry.settings","version":2,"units":{"ets2":"metric","ats":"metric"},"overlay":{"layout":"hud","sections":' +
   JSON.stringify({...OLD_ALL_ON, rpm: false}) + '}}';
@@ -74,7 +75,7 @@ it('loads v4 without writing, durably saves visibility false, and restarts witho
   await seed(old); const settings = store();
   expect((await settings.load()).overlay.enabled).toBe(true); expect((await read()).toString()).toBe(old);
   expect((await settings.setOverlayEnabled(false)).overlay.enabled).toBe(false);
-  const saved = await read(); expect(JSON.parse(saved.toString())).toMatchObject({version: 11, gearDisplay: AUTO, overlay: {enabled: false}});
+  const saved = await read(); expect(JSON.parse(saved.toString())).toMatchObject({version: 12, gearDisplay: AUTO, overlay: {enabled: false}});
   const restarted = store(); expect((await restarted.load()).overlay.enabled).toBe(false);
   expect(await read()).toEqual(saved); expect(await list()).toEqual(['settings.json']);
 });
@@ -84,7 +85,7 @@ it('keeps committed visibility on failure, recovers, and refuses read-only visib
   await expect(settings.setOverlayEnabled(false)).rejects.toMatchObject({code: 'SETTINGS_WRITE_FAILED'});
   expect(settings.view().overlay.enabled).toBe(true); fail = false;
   expect(await settings.setOverlayEnabled(false)).toMatchObject({overlay: {enabled: false}, saveError: null});
-  const newer = '{"format":"ets2telemetry.settings","version":12}'; await seed(newer); const readOnly = store(); await readOnly.load();
+  const newer = '{"format":"ets2telemetry.settings","version":13}'; await seed(newer); const readOnly = store(); await readOnly.load();
   await expect(readOnly.setOverlayEnabled(false)).rejects.toMatchObject({code: 'SETTINGS_READ_ONLY'}); expect((await read()).toString()).toBe(newer);
 });
 it('queues visibility with other settings without applying it early or exceeding the shared bound', async () => {
@@ -144,7 +145,7 @@ it('resolves the directory from LOCALAPPDATA and refuses a relative or missing l
 
 it('uses defaults without creating anything when no settings exist', async () => {
   const settings = store();
-  expect(await settings.load()).toEqual({language: 'en', autostart: false, units: {ets2: 'metric', ats: 'us-customary'}, gearDisplay: AUTO, overlay: DEFAULT_OVERLAY, state: 'defaults', writable: true, saveError: null});
+  expect(await settings.load()).toEqual({nowPlaying: DEFAULT_NOW_PLAYING, language: 'en', autostart: false, units: {ets2: 'metric', ats: 'us-customary'}, gearDisplay: AUTO, overlay: DEFAULT_OVERLAY, state: 'defaults', writable: true, saveError: null});
   expect(existsSync(path.join(resources.directory, 'ETS2Telemetry'))).toBe(false);
   await fs.mkdir(directory, {recursive: true});
   expect(await store().load()).toMatchObject({state: 'defaults'});
@@ -154,7 +155,7 @@ it('uses defaults without creating anything when no settings exist', async () =>
 
 it('loads a valid file without rewriting it', async () => {
   await seed(VALID_METRIC);
-  expect(await store().load()).toEqual({language: 'en', autostart: false, units: {ets2: 'metric', ats: 'metric'}, gearDisplay: AUTO, overlay: DEFAULT_OVERLAY, state: 'loaded', writable: true, saveError: null});
+  expect(await store().load()).toEqual({nowPlaying: DEFAULT_NOW_PLAYING, language: 'en', autostart: false, units: {ets2: 'metric', ats: 'metric'}, gearDisplay: AUTO, overlay: DEFAULT_OVERLAY, state: 'loaded', writable: true, saveError: null});
   expect((await read()).toString('utf8')).toBe(VALID_METRIC); expect(await list()).toEqual(['settings.json']);
 });
 
@@ -175,11 +176,11 @@ it('writes the exact v3 content, synced before the rename, and applies it only a
     }
   });
   settings = store(fileSystem); await settings.load();
-  expect(await settings.setUnitProfile('ets2', 'us-customary')).toEqual({language: 'en', autostart: false, units: {ets2: 'us-customary', ats: 'us-customary'}, gearDisplay: AUTO, overlay: DEFAULT_OVERLAY, state: 'loaded', writable: true, saveError: null});
+  expect(await settings.setUnitProfile('ets2', 'us-customary')).toEqual({nowPlaying: DEFAULT_NOW_PLAYING, language: 'en', autostart: false, units: {ets2: 'us-customary', ats: 'us-customary'}, gearDisplay: AUTO, overlay: DEFAULT_OVERLAY, state: 'loaded', writable: true, saveError: null});
   expect(order).toEqual(['open', 'write', 'sync', 'close', 'rename']);
   expect((await read()).toString('utf8')).toBe(EXPECTED_US_ETS2);
   expect(await list()).toEqual(['settings.json']);
-  expect(await store().load()).toEqual({language: 'en', autostart: false, units: {ets2: 'us-customary', ats: 'us-customary'}, gearDisplay: AUTO, overlay: DEFAULT_OVERLAY, state: 'loaded', writable: true, saveError: null});
+  expect(await store().load()).toEqual({nowPlaying: DEFAULT_NOW_PLAYING, language: 'en', autostart: false, units: {ets2: 'us-customary', ats: 'us-customary'}, gearDisplay: AUTO, overlay: DEFAULT_OVERLAY, state: 'loaded', writable: true, saveError: null});
   expect(events.map(row => row.event).filter(name => failurePattern.test(name))).toEqual([]);
 });
 
@@ -201,7 +202,7 @@ it('keeps the previous file and settings and removes its temporary after a persi
   expect((failure as Error).message).not.toContain(resources.directory);
   expect(attempts).toBe(6); expect(delays).toEqual([...RENAME_RETRY_DELAYS_MS]); expect(delays.reduce((sum, value) => sum + value, 0)).toBe(300);
   expect((await read()).toString('utf8')).toBe(VALID_METRIC); expect(await list()).toEqual(['settings.json']);
-  expect(settings.view()).toEqual({language: 'en', autostart: false, units: {ets2: 'metric', ats: 'metric'}, gearDisplay: AUTO, overlay: DEFAULT_OVERLAY, state: 'loaded', writable: true, saveError: 'SETTINGS_WRITE_FAILED'});
+  expect(settings.view()).toEqual({nowPlaying: DEFAULT_NOW_PLAYING, language: 'en', autostart: false, units: {ets2: 'metric', ats: 'metric'}, gearDisplay: AUTO, overlay: DEFAULT_OVERLAY, state: 'loaded', writable: true, saveError: 'SETTINGS_WRITE_FAILED'});
   expect(events.at(-1)).toEqual({event: 'SETTINGS_WRITE_FAILED', facts: {step: 'rename', code: 'EPERM'}});
 });
 
@@ -227,7 +228,7 @@ it.each(['write', 'sync', 'rename'] as const)('leaves the old file valid when th
 it('keeps a corrupt file byte-identical until the first save, then quarantines it unchanged', async () => {
   await seed(CORRUPT);
   const settings = store();
-  expect(await settings.load()).toEqual({language: 'en', autostart: false, units: {ets2: 'metric', ats: 'us-customary'}, gearDisplay: AUTO, overlay: DEFAULT_OVERLAY, state: 'invalid-file', writable: true, saveError: null});
+  expect(await settings.load()).toEqual({nowPlaying: DEFAULT_NOW_PLAYING, language: 'en', autostart: false, units: {ets2: 'metric', ats: 'us-customary'}, gearDisplay: AUTO, overlay: DEFAULT_OVERLAY, state: 'invalid-file', writable: true, saveError: null});
   expect((await read()).toString('utf8')).toBe(CORRUPT); expect(await list()).toEqual(['settings.json']);
   await settings.setUnitProfile('ets2', 'us-customary');
   expect(await list()).toEqual(['settings.json', 'settings.rejected-20261015T094107Z.json']);
@@ -267,10 +268,10 @@ it('keeps only the newest three quarantined files and leaves unrelated files alo
 });
 
 it('never modifies a newer-version file and refuses saves as read-only', async () => {
-  const newer = '{"format":"ets2telemetry.settings","version":12,"units":{"ets2":"us-customary","ats":"metric"},"layout":{}}';
+  const newer = '{"format":"ets2telemetry.settings","version":13,"units":{"ets2":"us-customary","ats":"metric"},"layout":{}}';
   await seed(newer);
   const settings = store();
-  expect(await settings.load()).toEqual({language: 'en', autostart: false, units: {ets2: 'metric', ats: 'us-customary'}, gearDisplay: AUTO, overlay: DEFAULT_OVERLAY, state: 'newer-version', writable: false, saveError: null});
+  expect(await settings.load()).toEqual({nowPlaying: DEFAULT_NOW_PLAYING, language: 'en', autostart: false, units: {ets2: 'metric', ats: 'us-customary'}, gearDisplay: AUTO, overlay: DEFAULT_OVERLAY, state: 'newer-version', writable: false, saveError: null});
   await expect(settings.setUnitProfile('ets2', 'us-customary')).rejects.toMatchObject({code: 'SETTINGS_READ_ONLY'});
   expect((await read()).toString('utf8')).toBe(newer); expect(await list()).toEqual(['settings.json']);
   expect(settings.view()).toMatchObject({state: 'newer-version', units: {ets2: 'metric'}, saveError: 'SETTINGS_READ_ONLY'});
@@ -280,11 +281,11 @@ it('never modifies a newer-version file and refuses saves as read-only', async (
 it('rewrites a file with fallbacks completely without quarantining it', async () => {
   await seed('{"format":"ets2telemetry.settings","version":1,"units":{"ets2":"imperial","ats":"metric"},"extra":true}');
   const settings = store();
-  expect(await settings.load()).toEqual({language: 'en', autostart: false, units: {ets2: 'metric', ats: 'metric'}, gearDisplay: AUTO, overlay: DEFAULT_OVERLAY, state: 'loaded-with-fallbacks', writable: true, saveError: null});
+  expect(await settings.load()).toEqual({nowPlaying: DEFAULT_NOW_PLAYING, language: 'en', autostart: false, units: {ets2: 'metric', ats: 'metric'}, gearDisplay: AUTO, overlay: DEFAULT_OVERLAY, state: 'loaded-with-fallbacks', writable: true, saveError: null});
   expect(events[0]).toEqual({event: 'SETTINGS_FALLBACK', facts: {state: 'loaded-with-fallbacks', fields: 'units.ets2', ...MIGRATED}});
   await settings.setUnitProfile('ats', 'us-customary');
   expect(await list()).toEqual(['settings.json']);
-  expect((await read()).toString('utf8')).toBe(v11Text('metric', 'us-customary', 'en'));
+  expect((await read()).toString('utf8')).toBe(v12Text('metric', 'us-customary', 'en'));
 });
 
 it('refuses a settings directory that is a junction, without reading or writing through it', async () => {
@@ -292,7 +293,7 @@ it('refuses a settings directory that is a junction, without reading or writing 
   await fs.mkdir(elsewhere); await fs.writeFile(path.join(elsewhere, 'settings.json'), VALID_METRIC);
   await fs.mkdir(path.dirname(directory), {recursive: true}); await fs.symlink(elsewhere, directory, 'junction');
   const settings = store();
-  expect(await settings.load()).toEqual({language: 'en', autostart: false, units: {ets2: 'metric', ats: 'us-customary'}, gearDisplay: AUTO, overlay: DEFAULT_OVERLAY, state: 'unreadable', writable: false, saveError: null});
+  expect(await settings.load()).toEqual({nowPlaying: DEFAULT_NOW_PLAYING, language: 'en', autostart: false, units: {ets2: 'metric', ats: 'us-customary'}, gearDisplay: AUTO, overlay: DEFAULT_OVERLAY, state: 'unreadable', writable: false, saveError: null});
   expect(events[0]).toEqual({event: 'SETTINGS_FALLBACK', facts: {state: 'unreadable', reason: 'reparse-point'}});
   await expect(settings.setUnitProfile('ets2', 'us-customary')).rejects.toMatchObject({code: 'SETTINGS_WRITE_FAILED'});
   expect(await fs.readdir(elsewhere)).toEqual(['settings.json']); expect((await fs.readFile(path.join(elsewhere, 'settings.json'), 'utf8')).toString()).toBe(VALID_METRIC);
@@ -331,7 +332,7 @@ it('serializes concurrent saves and applies them in request order', async () => 
   const results = await Promise.all([settings.setUnitProfile('ets2', 'us-customary'), settings.setUnitProfile('ats', 'metric'), settings.setUnitProfile('ets2', 'metric')]);
   expect(results.map(view => view.units)).toEqual([{ets2: 'us-customary', ats: 'us-customary'}, {ets2: 'us-customary', ats: 'metric'}, {ets2: 'metric', ats: 'metric'}]);
   expect(maximum).toBe(1);
-  expect(JSON.parse((await read()).toString('utf8'))).toEqual({format: 'ets2telemetry.settings', version: 11, language: 'en', autostart: false, units: {ets2: 'metric', ats: 'metric'}, gearDisplay: AUTO, overlay: DEFAULT_OVERLAY});
+  expect(JSON.parse((await read()).toString('utf8'))).toEqual({nowPlaying: DEFAULT_NOW_PLAYING, format: 'ets2telemetry.settings', version: 12, language: 'en', autostart: false, units: {ets2: 'metric', ats: 'metric'}, gearDisplay: AUTO, overlay: DEFAULT_OVERLAY});
 });
 
 it('bounds outstanding saves to four and reports idle work until they settle', async () => {
@@ -352,7 +353,7 @@ it('bounds outstanding saves to four and reports idle work until they settle', a
 
 it('is read-only with defaults when there is no valid settings location', async () => {
   const settings = new SettingsStore(undefined, {log: (event, _detail, facts) => events.push({event, ...(facts ? {facts: {...facts}} : {})})});
-  expect(await settings.load()).toEqual({language: 'en', autostart: false, units: {ets2: 'metric', ats: 'us-customary'}, gearDisplay: AUTO, overlay: DEFAULT_OVERLAY, state: 'unavailable', writable: false, saveError: null});
+  expect(await settings.load()).toEqual({nowPlaying: DEFAULT_NOW_PLAYING, language: 'en', autostart: false, units: {ets2: 'metric', ats: 'us-customary'}, gearDisplay: AUTO, overlay: DEFAULT_OVERLAY, state: 'unavailable', writable: false, saveError: null});
   await expect(settings.setUnitProfile('ets2', 'us-customary')).rejects.toMatchObject({code: 'SETTINGS_WRITE_FAILED'});
   expect(events[0]).toEqual({event: 'SETTINGS_FALLBACK', facts: {state: 'unavailable'}});
 });
@@ -367,7 +368,7 @@ it('returns a pending read-only state when loading exceeds its 1000 ms budget', 
   await new Promise(resolve => setImmediate(resolve));
   expect(timers.map(timer => timer.milliseconds)).toEqual([1000]);
   timers[0].callback();
-  expect(await loading).toEqual({language: 'en', autostart: false, units: {ets2: 'metric', ats: 'us-customary'}, gearDisplay: AUTO, overlay: DEFAULT_OVERLAY, state: 'loading', writable: false, saveError: null});
+  expect(await loading).toEqual({nowPlaying: DEFAULT_NOW_PLAYING, language: 'en', autostart: false, units: {ets2: 'metric', ats: 'us-customary'}, gearDisplay: AUTO, overlay: DEFAULT_OVERLAY, state: 'loading', writable: false, saveError: null});
   expect(events).toEqual([{event: 'SETTINGS_LOAD_PENDING', facts: {state: 'loading', reason: 'load-budget'}}]);
 });
 
@@ -384,7 +385,7 @@ it('refuses saves at once and stays idle after the load budget expired with a re
   expect(outcome).toBeInstanceOf(SettingsError); expect((outcome as SettingsError).code).toBe('SETTINGS_WRITE_FAILED');
   expect(settings.idle()).toBeUndefined();
   // `loading` since the clean late read (October 15, 2026); it was `unreadable` when the budget ended the read.
-  expect(settings.view()).toEqual({language: 'en', autostart: false, units: {ets2: 'metric', ats: 'us-customary'}, gearDisplay: AUTO, overlay: DEFAULT_OVERLAY, state: 'loading', writable: false, saveError: 'SETTINGS_WRITE_FAILED'});
+  expect(settings.view()).toEqual({nowPlaying: DEFAULT_NOW_PLAYING, language: 'en', autostart: false, units: {ets2: 'metric', ats: 'us-customary'}, gearDisplay: AUTO, overlay: DEFAULT_OVERLAY, state: 'loading', writable: false, saveError: 'SETTINGS_WRITE_FAILED'});
   // Further requests are refused too, never queued toward the four-request bound.
   for (let attempt = 0; attempt < 5; attempt++) await expect(settings.setUnitProfile('ats', 'metric')).rejects.toBeInstanceOf(SettingsError);
 });
@@ -436,7 +437,7 @@ async function loadPastBudget(fileSystem: SettingsFileSystem) {
   const pending = await loading;
   return {settings, started, changed, pending, lateApplied};
 }
-const PENDING_VIEW = {language: 'en', autostart: false, units: {ets2: 'metric', ats: 'us-customary'}, gearDisplay: AUTO, overlay: DEFAULT_OVERLAY, state: 'loading', writable: false, saveError: null};
+const PENDING_VIEW = {nowPlaying: DEFAULT_NOW_PLAYING, language: 'en', autostart: false, units: {ets2: 'metric', ats: 'us-customary'}, gearDisplay: AUTO, overlay: DEFAULT_OVERLAY, state: 'loading', writable: false, saveError: null};
 const PENDING_EVENT = {event: 'SETTINGS_LOAD_PENDING', facts: {state: 'loading', reason: 'load-budget'}};
 
 it('applies a corrupt file read that outlasts the load budget once it settles (hosted run 38755116140)', async () => {
@@ -449,12 +450,12 @@ it('applies a corrupt file read that outlasts the load budget once it settles (h
   expect(started.map(timer => timer.milliseconds)).toEqual([1000, 29000]);
   gated.release();
   await lateApplied; expect(changed).toHaveBeenCalledOnce();
-  expect(settings.view()).toEqual({language: 'en', autostart: false, units: {ets2: 'metric', ats: 'us-customary'}, gearDisplay: AUTO, overlay: DEFAULT_OVERLAY, state: 'invalid-file', writable: true, saveError: null});
+  expect(settings.view()).toEqual({nowPlaying: DEFAULT_NOW_PLAYING, language: 'en', autostart: false, units: {ets2: 'metric', ats: 'us-customary'}, gearDisplay: AUTO, overlay: DEFAULT_OVERLAY, state: 'invalid-file', writable: true, saveError: null});
   expect(started[1].cleared).toBe(true);
   expect(events).toEqual([PENDING_EVENT, {event: 'SETTINGS_FALLBACK', facts: {state: 'invalid-file'}}]);
   // Applying the late result wrote nothing; the first save then quarantines the file byte-identically.
   expect((await read()).toString('utf8')).toBe(CORRUPT); expect(await list()).toEqual(['settings.json']);
-  expect(await settings.setUnitProfile('ets2', 'us-customary')).toEqual({language: 'en', autostart: false, units: {ets2: 'us-customary', ats: 'us-customary'}, gearDisplay: AUTO, overlay: DEFAULT_OVERLAY, state: 'loaded', writable: true, saveError: null});
+  expect(await settings.setUnitProfile('ets2', 'us-customary')).toEqual({nowPlaying: DEFAULT_NOW_PLAYING, language: 'en', autostart: false, units: {ets2: 'us-customary', ats: 'us-customary'}, gearDisplay: AUTO, overlay: DEFAULT_OVERLAY, state: 'loaded', writable: true, saveError: null});
   expect(await list()).toEqual(['settings.json', 'settings.rejected-20261015T094107Z.json']);
   expect((await read('settings.rejected-20261015T094107Z.json')).toString('utf8')).toBe(CORRUPT);
   expect((await read()).toString('utf8')).toBe(EXPECTED_US_ETS2);
@@ -462,13 +463,13 @@ it('applies a corrupt file read that outlasts the load budget once it settles (h
 });
 
 it.each([
-  {name: 'a valid file', content: VALID_METRIC, view: {language: 'en', autostart: false, units: {ets2: 'metric', ats: 'metric'}, gearDisplay: AUTO, overlay: DEFAULT_OVERLAY, state: 'loaded', writable: true}, event: {event: 'SETTINGS_LOADED', facts: {state: 'loaded', ...MIGRATED}}},
+  {name: 'a valid file', content: VALID_METRIC, view: {nowPlaying: DEFAULT_NOW_PLAYING, language: 'en', autostart: false, units: {ets2: 'metric', ats: 'metric'}, gearDisplay: AUTO, overlay: DEFAULT_OVERLAY, state: 'loaded', writable: true}, event: {event: 'SETTINGS_LOADED', facts: {state: 'loaded', ...MIGRATED}}},
   {name: 'a file with fallbacks', content: '{"format":"ets2telemetry.settings","version":1,"units":{"ets2":"us-customary","ats":"imperial"}}',
-    view: {language: 'en', autostart: false, units: {ets2: 'us-customary', ats: 'us-customary'}, gearDisplay: AUTO, overlay: DEFAULT_OVERLAY, state: 'loaded-with-fallbacks', writable: true}, event: {event: 'SETTINGS_FALLBACK', facts: {state: 'loaded-with-fallbacks', fields: 'units.ats', ...MIGRATED}}},
+    view: {nowPlaying: DEFAULT_NOW_PLAYING, language: 'en', autostart: false, units: {ets2: 'us-customary', ats: 'us-customary'}, gearDisplay: AUTO, overlay: DEFAULT_OVERLAY, state: 'loaded-with-fallbacks', writable: true}, event: {event: 'SETTINGS_FALLBACK', facts: {state: 'loaded-with-fallbacks', fields: 'units.ats', ...MIGRATED}}},
   {name: 'an unsupported older file', content: '{"format":"ets2telemetry.settings","units":{"ets2":"us-customary","ats":"metric"}}',
-    view: {language: 'en', autostart: false, units: {ets2: 'metric', ats: 'us-customary'}, gearDisplay: AUTO, overlay: DEFAULT_OVERLAY, state: 'unsupported-older', writable: true}, event: {event: 'SETTINGS_FALLBACK', facts: {state: 'unsupported-older'}}},
-  {name: 'a newer-version file', content: '{"format":"ets2telemetry.settings","version":12,"units":{"ets2":"us-customary","ats":"metric"}}',
-    view: {language: 'en', autostart: false, units: {ets2: 'metric', ats: 'us-customary'}, gearDisplay: AUTO, overlay: DEFAULT_OVERLAY, state: 'newer-version', writable: false}, event: {event: 'SETTINGS_FALLBACK', facts: {state: 'newer-version'}}}
+    view: {nowPlaying: DEFAULT_NOW_PLAYING, language: 'en', autostart: false, units: {ets2: 'metric', ats: 'us-customary'}, gearDisplay: AUTO, overlay: DEFAULT_OVERLAY, state: 'unsupported-older', writable: true}, event: {event: 'SETTINGS_FALLBACK', facts: {state: 'unsupported-older'}}},
+  {name: 'a newer-version file', content: '{"format":"ets2telemetry.settings","version":13,"units":{"ets2":"us-customary","ats":"metric"}}',
+    view: {nowPlaying: DEFAULT_NOW_PLAYING, language: 'en', autostart: false, units: {ets2: 'metric', ats: 'us-customary'}, gearDisplay: AUTO, overlay: DEFAULT_OVERLAY, state: 'newer-version', writable: false}, event: {event: 'SETTINGS_FALLBACK', facts: {state: 'newer-version'}}}
 ])('applies a late read of $name with its own state and writability, writing nothing', async ({content, view, event}) => {
   await seed(content);
   const gated = delayedRead();
@@ -501,8 +502,8 @@ it('refuses a save during the pending read at once and quarantines a late invali
   await lateApplied; expect(changed).toHaveBeenCalledOnce();
   // Nothing was written, renamed or quarantined while the read was pending.
   expect((await read()).toString('utf8')).toBe(CORRUPT); expect(await list()).toEqual(['settings.json']);
-  expect(settings.view()).toEqual({language: 'en', autostart: false, units: {ets2: 'metric', ats: 'us-customary'}, gearDisplay: AUTO, overlay: DEFAULT_OVERLAY, state: 'invalid-file', writable: true, saveError: 'SETTINGS_WRITE_FAILED'});
-  expect(await settings.setUnitProfile('ats', 'metric')).toEqual({language: 'en', autostart: false, units: {ets2: 'metric', ats: 'metric'}, gearDisplay: AUTO, overlay: DEFAULT_OVERLAY, state: 'loaded', writable: true, saveError: null});
+  expect(settings.view()).toEqual({nowPlaying: DEFAULT_NOW_PLAYING, language: 'en', autostart: false, units: {ets2: 'metric', ats: 'us-customary'}, gearDisplay: AUTO, overlay: DEFAULT_OVERLAY, state: 'invalid-file', writable: true, saveError: 'SETTINGS_WRITE_FAILED'});
+  expect(await settings.setUnitProfile('ats', 'metric')).toEqual({nowPlaying: DEFAULT_NOW_PLAYING, language: 'en', autostart: false, units: {ets2: 'metric', ats: 'metric'}, gearDisplay: AUTO, overlay: DEFAULT_OVERLAY, state: 'loaded', writable: true, saveError: null});
   expect((await read('settings.rejected-20261015T094107Z.json')).toString('utf8')).toBe(CORRUPT);
 });
 
@@ -513,7 +514,7 @@ it('keeps a late read error read-only', async () => {
   gated.release();
   await lateApplied; expect(changed).toHaveBeenCalledOnce();
   expect(started[1].cleared).toBe(true);
-  expect(settings.view()).toEqual({language: 'en', autostart: false, units: {ets2: 'metric', ats: 'us-customary'}, gearDisplay: AUTO, overlay: DEFAULT_OVERLAY, state: 'unreadable', writable: false, saveError: null});
+  expect(settings.view()).toEqual({nowPlaying: DEFAULT_NOW_PLAYING, language: 'en', autostart: false, units: {ets2: 'metric', ats: 'us-customary'}, gearDisplay: AUTO, overlay: DEFAULT_OVERLAY, state: 'unreadable', writable: false, saveError: null});
   expect(events).toEqual([PENDING_EVENT, {event: 'SETTINGS_FALLBACK', facts: {state: 'unreadable', reason: 'read'}}]);
   await expect(settings.setUnitProfile('ets2', 'us-customary')).rejects.toMatchObject({code: 'SETTINGS_WRITE_FAILED'});
   expect((await read()).toString('utf8')).toBe(VALID_METRIC); expect(await list()).toEqual(['settings.json']);
@@ -526,7 +527,7 @@ it('declares a read hung at the 30 s limit, stays read-only and ignores its late
   expect(changed).not.toHaveBeenCalled();
   started[1].callback();
   expect(changed).toHaveBeenCalledOnce();
-  expect(settings.view()).toEqual({language: 'en', autostart: false, units: {ets2: 'metric', ats: 'us-customary'}, gearDisplay: AUTO, overlay: DEFAULT_OVERLAY, state: 'unreadable', writable: false, saveError: null});
+  expect(settings.view()).toEqual({nowPlaying: DEFAULT_NOW_PLAYING, language: 'en', autostart: false, units: {ets2: 'metric', ats: 'us-customary'}, gearDisplay: AUTO, overlay: DEFAULT_OVERLAY, state: 'unreadable', writable: false, saveError: null});
   expect(events).toEqual([PENDING_EVENT, {event: 'SETTINGS_FALLBACK', facts: {state: 'unreadable', reason: 'load-limit'}}]);
   await expect(settings.setUnitProfile('ets2', 'us-customary')).rejects.toMatchObject({code: 'SETTINGS_WRITE_FAILED'});
   // The read finishing after the limit changes nothing and is not reported again.
@@ -571,9 +572,9 @@ it('reports a failed save in the view and clears it with the next successful sav
   const settings = store(wrapped({rename: async (from, to) => {if (failing) throw errno('EIO'); await fs.rename(from, to);}}));
   await settings.load();
   await expect(settings.setUnitProfile('ets2', 'us-customary')).rejects.toMatchObject({code: 'SETTINGS_WRITE_FAILED'});
-  expect(settings.view()).toEqual({language: 'en', autostart: false, units: {ets2: 'metric', ats: 'us-customary'}, gearDisplay: AUTO, overlay: DEFAULT_OVERLAY, state: 'defaults', writable: true, saveError: 'SETTINGS_WRITE_FAILED'});
+  expect(settings.view()).toEqual({nowPlaying: DEFAULT_NOW_PLAYING, language: 'en', autostart: false, units: {ets2: 'metric', ats: 'us-customary'}, gearDisplay: AUTO, overlay: DEFAULT_OVERLAY, state: 'defaults', writable: true, saveError: 'SETTINGS_WRITE_FAILED'});
   failing = false;
-  expect(await settings.setUnitProfile('ets2', 'us-customary')).toEqual({language: 'en', autostart: false, units: {ets2: 'us-customary', ats: 'us-customary'}, gearDisplay: AUTO, overlay: DEFAULT_OVERLAY, state: 'loaded', writable: true, saveError: null});
+  expect(await settings.setUnitProfile('ets2', 'us-customary')).toEqual({nowPlaying: DEFAULT_NOW_PLAYING, language: 'en', autostart: false, units: {ets2: 'us-customary', ats: 'us-customary'}, gearDisplay: AUTO, overlay: DEFAULT_OVERLAY, state: 'loaded', writable: true, saveError: null});
 });
 
 // ET-012a: the overlay block (format v2, since ET-012b written as v3).
@@ -581,12 +582,12 @@ it('keeps a v1 file byte-identical at startup and writes v3 with its units on th
   const v1 = '{"format":"ets2telemetry.settings","version":1,"units":{"ets2":"us-customary","ats":"metric"}}';
   await seed(v1);
   const settings = store();
-  expect(await settings.load()).toEqual({language: 'en', autostart: false, units: {ets2: 'us-customary', ats: 'metric'}, gearDisplay: AUTO, overlay: DEFAULT_OVERLAY, state: 'loaded', writable: true, saveError: null});
+  expect(await settings.load()).toEqual({nowPlaying: DEFAULT_NOW_PLAYING, language: 'en', autostart: false, units: {ets2: 'us-customary', ats: 'metric'}, gearDisplay: AUTO, overlay: DEFAULT_OVERLAY, state: 'loaded', writable: true, saveError: null});
   expect(events).toEqual([{event: 'SETTINGS_LOADED', facts: {state: 'loaded', migratedFrom: 1}}]);
   expect((await read()).toString('utf8')).toBe(v1); expect(await list()).toEqual(['settings.json']);
-  expect(await settings.setOverlayLayout('card')).toEqual({language: 'en', autostart: false, units: {ets2: 'us-customary', ats: 'metric'}, gearDisplay: AUTO, overlay: {enabled: true, backgroundOpacity: 80, layout: 'card', sections: ALL_ON, placements: PLACEMENTS},
+  expect(await settings.setOverlayLayout('card')).toEqual({nowPlaying: DEFAULT_NOW_PLAYING, language: 'en', autostart: false, units: {ets2: 'us-customary', ats: 'metric'}, gearDisplay: AUTO, overlay: {enabled: true, backgroundOpacity: 80, layout: 'card', sections: ALL_ON, placements: PLACEMENTS},
     state: 'loaded', writable: true, saveError: null});
-  expect((await read()).toString('utf8')).toBe(v11Text('us-customary', 'metric', 'en', 'card'));
+  expect((await read()).toString('utf8')).toBe(v12Text('us-customary', 'metric', 'en', 'card'));
   // A migrated file is not quarantined: it was valid.
   expect(await list()).toEqual(['settings.json']);
   expect(events.at(-1)).toEqual({event: 'SETTINGS_SAVED', facts: {overlayLayout: 'card'}});
@@ -596,18 +597,18 @@ it('keeps a v1 file byte-identical at startup and writes v3 with its units on th
 it('keeps a v2 file byte-identical at startup with default placements, and rewrites it as v3 on the first save', async () => {
   await seed(VALID_V2);
   const settings = store();
-  expect(await settings.load()).toEqual({language: 'en', autostart: false, units: {ets2: 'metric', ats: 'metric'}, gearDisplay: AUTO, overlay: {enabled: true, backgroundOpacity: 80, layout: 'hud', sections: {...ALL_ON, rpm: false}, placements: PLACEMENTS},
+  expect(await settings.load()).toEqual({nowPlaying: DEFAULT_NOW_PLAYING, language: 'en', autostart: false, units: {ets2: 'metric', ats: 'metric'}, gearDisplay: AUTO, overlay: {enabled: true, backgroundOpacity: 80, layout: 'hud', sections: {...ALL_ON, rpm: false}, placements: PLACEMENTS},
     state: 'loaded', writable: true, saveError: null});
   expect(events).toEqual([{event: 'SETTINGS_LOADED', facts: {state: 'loaded', migratedFrom: 2}}]);
   expect((await read()).toString('utf8')).toBe(VALID_V2); expect(await list()).toEqual(['settings.json']);
   await settings.setUnitProfile('ets2', 'us-customary');
-  expect((await read()).toString('utf8')).toBe(v11Text('us-customary', 'metric', 'en', 'hud', false));
+  expect((await read()).toString('utf8')).toBe(v12Text('us-customary', 'metric', 'en', 'hud', false));
   expect(await list()).toEqual(['settings.json']);
 });
 
 it('loads a v3 file with its placements and reports migration to v4', async () => {
   await seed(VALID_V3);
-  expect(await store().load()).toEqual({language: 'en', autostart: false, units: {ets2: 'metric', ats: 'metric'}, gearDisplay: AUTO, overlay: {enabled: true, backgroundOpacity: 80, layout: 'hud', sections: {...ALL_ON, rpm: false}, placements: MOVED},
+  expect(await store().load()).toEqual({nowPlaying: DEFAULT_NOW_PLAYING, language: 'en', autostart: false, units: {ets2: 'metric', ats: 'metric'}, gearDisplay: AUTO, overlay: {enabled: true, backgroundOpacity: 80, layout: 'hud', sections: {...ALL_ON, rpm: false}, placements: MOVED},
     state: 'loaded', writable: true, saveError: null});
   expect(events).toEqual([{event: 'SETTINGS_LOADED', facts: {state: 'loaded', migratedFrom: 3}}]);
   expect((await read()).toString('utf8')).toBe(VALID_V3);
@@ -620,9 +621,9 @@ it('saves one layout placement as exact v3 bytes, applied only after the rename,
   await settings.load();
   const view = await settings.setOverlayPlacement('strip', {x: 0.123456, y: 1, scale: 1.25});
   const saved = {...MOVED, strip: {x: 0.1235, y: 1, scale: 1.25}};
-  expect(view).toEqual({language: 'en', autostart: false, units: {ets2: 'metric', ats: 'metric'}, gearDisplay: AUTO, overlay: {enabled: true, backgroundOpacity: 80, layout: 'hud', sections: {...ALL_ON, rpm: false}, placements: saved},
+  expect(view).toEqual({nowPlaying: DEFAULT_NOW_PLAYING, language: 'en', autostart: false, units: {ets2: 'metric', ats: 'metric'}, gearDisplay: AUTO, overlay: {enabled: true, backgroundOpacity: 80, layout: 'hud', sections: {...ALL_ON, rpm: false}, placements: saved},
     state: 'loaded', writable: true, saveError: null});
-  expect((await read()).toString('utf8')).toBe(v11Text('metric', 'metric', 'en', 'hud', false, saved));
+  expect((await read()).toString('utf8')).toBe(v12Text('metric', 'metric', 'en', 'hud', false, saved));
   expect(events.at(-1)).toEqual({event: 'SETTINGS_SAVED', facts: {overlayPlacement: 'strip', overlayScale: 1.25}});
   expect(await store().load()).toMatchObject({state: 'loaded', overlay: {placements: saved}});
 });
@@ -635,12 +636,12 @@ it('keeps a v7 file byte-identical at startup and writes v8 with the same placem
   const v7 = v8Text('metric', 'us-customary', 'ru', 'strip', true, OWNER_PLACEMENTS, true).replace('"version": 8', '"version": 7');
   await seed(v7);
   const settings = store();
-  expect(await settings.load()).toEqual({language: 'ru', autostart: true, units: {ets2: 'metric', ats: 'us-customary'}, gearDisplay: AUTO, overlay: {...DEFAULT_OVERLAY, placements: OWNER_PLACEMENTS},
+  expect(await settings.load()).toEqual({nowPlaying: DEFAULT_NOW_PLAYING, language: 'ru', autostart: true, units: {ets2: 'metric', ats: 'us-customary'}, gearDisplay: AUTO, overlay: {...DEFAULT_OVERLAY, placements: OWNER_PLACEMENTS},
     state: 'loaded', writable: true, saveError: null});
   expect(events).toEqual([{event: 'SETTINGS_LOADED', facts: {state: 'loaded', migratedFrom: 7}}]);
   expect((await read()).toString('utf8')).toBe(v7); expect(await list()).toEqual(['settings.json']);
   await settings.setUnitProfile('ats', 'metric');
-  expect((await read()).toString('utf8')).toBe(v11Text('metric', 'metric', 'ru', 'strip', true, OWNER_PLACEMENTS, true));
+  expect((await read()).toString('utf8')).toBe(v12Text('metric', 'metric', 'ru', 'strip', true, OWNER_PLACEMENTS, true));
   expect(await list()).toEqual(['settings.json']);
   expect(await store().load()).toMatchObject({state: 'loaded', overlay: {placements: OWNER_PLACEMENTS}});
 });
@@ -651,12 +652,12 @@ it('keeps a v10 file byte-identical at startup, loads it with the break on, and 
   const v10 = v10Text('metric', 'us-customary', 'ru', 'card', false, OWNER_PLACEMENTS, true, {ets2: 'manual', ats: 'automatic'});
   await seed(v10);
   const settings = store();
-  expect(await settings.load()).toEqual({language: 'ru', autostart: true, units: {ets2: 'metric', ats: 'us-customary'}, gearDisplay: {ets2: 'manual', ats: 'automatic'},
+  expect(await settings.load()).toEqual({nowPlaying: DEFAULT_NOW_PLAYING, language: 'ru', autostart: true, units: {ets2: 'metric', ats: 'us-customary'}, gearDisplay: {ets2: 'manual', ats: 'automatic'},
     overlay: {...DEFAULT_OVERLAY, layout: 'card', sections: {...ALL_ON, rpm: false}, placements: OWNER_PLACEMENTS}, state: 'loaded', writable: true, saveError: null});
   expect(events).toEqual([{event: 'SETTINGS_LOADED', facts: {state: 'loaded', migratedFrom: 10}}]);
   expect((await read()).toString('utf8')).toBe(v10); expect(await list()).toEqual(['settings.json']);
   await settings.setUnitProfile('ats', 'metric');
-  expect((await read()).toString('utf8')).toBe(v11Text('metric', 'metric', 'ru', 'card', false, OWNER_PLACEMENTS, true, {ets2: 'manual', ats: 'automatic'}));
+  expect((await read()).toString('utf8')).toBe(v12Text('metric', 'metric', 'ru', 'card', false, OWNER_PLACEMENTS, true, {ets2: 'manual', ats: 'automatic'}));
   expect(await list()).toEqual(['settings.json']);
   // The restart reads the written v11 without a migration and without writing.
   const written = await read(), restarted = store();
@@ -665,7 +666,7 @@ it('keeps a v10 file byte-identical at startup, loads it with the break on, and 
   expect(await read()).toEqual(written);
 });
 it('reads a version 12 file as read-only newer-version and never modifies it', async () => {
-  const newer = '{"format":"ets2telemetry.settings","version":12,"overlay":{"sections":{}}}';
+  const newer = '{"format":"ets2telemetry.settings","version":13,"overlay":{"sections":{}}}';
   await seed(newer); const settings = store(); await settings.load();
   expect(settings.view()).toMatchObject({state: 'newer-version', writable: false, overlay: DEFAULT_OVERLAY});
   await expect(settings.setOverlaySections(ALL_ON)).rejects.toMatchObject({code: 'SETTINGS_READ_ONLY'});
@@ -677,7 +678,7 @@ it('saves and reloads a placement at the 300% maximum', async () => {
   const settings = store(); await settings.load();
   const saved = {...MOVED, hud: {x: 0, y: 0, scale: 3}};
   expect(await settings.setOverlayPlacement('hud', {x: 0, y: 0, scale: 3})).toMatchObject({overlay: {placements: saved}, saveError: null});
-  expect((await read()).toString('utf8')).toBe(v11Text('metric', 'metric', 'en', 'hud', false, saved));
+  expect((await read()).toString('utf8')).toBe(v12Text('metric', 'metric', 'en', 'hud', false, saved));
   expect(events.at(-1)).toEqual({event: 'SETTINGS_SAVED', facts: {overlayPlacement: 'hud', overlayScale: 3}});
   expect(await store().load()).toMatchObject({state: 'loaded', overlay: {placements: saved}});
 });
@@ -689,7 +690,7 @@ it('keeps the previous placement when a placement save fails and refuses it whil
   await expect(settings.setOverlayPlacement('card', {x: 0, y: 0, scale: 2})).rejects.toMatchObject({code: 'SETTINGS_WRITE_FAILED'});
   expect(settings.view()).toMatchObject({overlay: {placements: MOVED}, saveError: 'SETTINGS_WRITE_FAILED'});
   expect((await read()).toString('utf8')).toBe(VALID_V3); expect(await list()).toEqual(['settings.json']);
-  const newer = '{"format":"ets2telemetry.settings","version":12,"overlay":{"placements":{}}}';
+  const newer = '{"format":"ets2telemetry.settings","version":13,"overlay":{"placements":{}}}';
   await seed(newer);
   const readOnly = store(); await readOnly.load();
   await expect(readOnly.setOverlayPlacement('card', {x: 0, y: 0, scale: 2})).rejects.toMatchObject({code: 'SETTINGS_READ_ONLY'});
@@ -712,7 +713,7 @@ it('serializes placement saves with unit and overlay saves in one queue and one 
   release(); await Promise.all(accepted);
   const saved = {...MOVED, strip: {x: 0, y: 0, scale: 0.5}};
   expect(settings.view()).toMatchObject({units: {ets2: 'us-customary', ats: 'us-customary'}, overlay: {enabled: true, backgroundOpacity: 80, layout: 'strip', sections: {...ALL_ON, rpm: false}, placements: saved}});
-  expect((await read()).toString('utf8')).toBe(v11Text('us-customary', 'us-customary', 'en', 'strip', false, saved));
+  expect((await read()).toString('utf8')).toBe(v12Text('us-customary', 'us-customary', 'en', 'strip', false, saved));
   expect(events.filter(row => row.event === 'SETTINGS_SAVED').map(row => row.facts)).toEqual([
     {overlayPlacement: 'card', overlayScale: 1.5}, {game: 'ets2', profile: 'us-customary'}, {overlaySections: 14}, {overlayPlacement: 'strip', overlayScale: 0.5}]);
 });
@@ -723,7 +724,7 @@ it('saves overlay sections as exact v3 bytes, applied only after the rename, wit
   await settings.load();
   const view = await settings.setOverlaySections({...ALL_ON, rpm: false});
   expect(view.overlay).toEqual({enabled: true, backgroundOpacity: 80, layout: 'strip', sections: {...ALL_ON, rpm: false}, placements: PLACEMENTS});
-  expect((await read()).toString('utf8')).toBe(v11Text('metric', 'us-customary', 'en', 'strip', false));
+  expect((await read()).toString('utf8')).toBe(v12Text('metric', 'us-customary', 'en', 'strip', false));
   expect(events.at(-1)).toEqual({event: 'SETTINGS_SAVED', facts: {overlaySections: 14}});
   expect(await store().load()).toMatchObject({state: 'loaded', overlay: {enabled: true, backgroundOpacity: 80, layout: 'strip', sections: {...ALL_ON, rpm: false}}});
 });
@@ -734,13 +735,13 @@ it('keeps the previous overlay settings in use when an overlay save fails', asyn
   await settings.load();
   await expect(settings.setOverlayLayout('cluster')).rejects.toMatchObject({code: 'SETTINGS_WRITE_FAILED'});
   await expect(settings.setOverlaySections(ALL_ON)).rejects.toMatchObject({code: 'SETTINGS_WRITE_FAILED'});
-  expect(settings.view()).toEqual({language: 'en', autostart: false, units: {ets2: 'metric', ats: 'metric'}, gearDisplay: AUTO, overlay: {enabled: true, backgroundOpacity: 80, layout: 'hud', sections: {...ALL_ON, rpm: false}, placements: PLACEMENTS},
+  expect(settings.view()).toEqual({nowPlaying: DEFAULT_NOW_PLAYING, language: 'en', autostart: false, units: {ets2: 'metric', ats: 'metric'}, gearDisplay: AUTO, overlay: {enabled: true, backgroundOpacity: 80, layout: 'hud', sections: {...ALL_ON, rpm: false}, placements: PLACEMENTS},
     state: 'loaded', writable: true, saveError: 'SETTINGS_WRITE_FAILED'});
   expect((await read()).toString('utf8')).toBe(VALID_V2); expect(await list()).toEqual(['settings.json']);
 });
 
 it('refuses overlay saves for a newer-version file and while the startup read is pending', async () => {
-  const newer = '{"format":"ets2telemetry.settings","version":12,"overlay":{"layout":"card"}}';
+  const newer = '{"format":"ets2telemetry.settings","version":13,"overlay":{"layout":"card"}}';
   await seed(newer);
   const settings = store(); await settings.load();
   await expect(settings.setOverlayLayout('card')).rejects.toMatchObject({code: 'SETTINGS_READ_ONLY'});
@@ -768,7 +769,7 @@ it('serializes unit and overlay saves in one queue so that every change survives
   expect(results.map(view => [view.units, view.overlay.layout, view.overlay.sections.rpm])).toEqual([
     [{ets2: 'us-customary', ats: 'us-customary'}, 'strip', true], [{ets2: 'us-customary', ats: 'us-customary'}, 'cluster', true],
     [{ets2: 'us-customary', ats: 'us-customary'}, 'cluster', false], [{ets2: 'us-customary', ats: 'metric'}, 'cluster', false]]);
-  expect((await read()).toString('utf8')).toBe(v11Text('us-customary', 'metric', 'en', 'cluster', false));
+  expect((await read()).toString('utf8')).toBe(v12Text('us-customary', 'metric', 'en', 'cluster', false));
   expect(events.filter(row => row.event === 'SETTINGS_SAVED').map(row => row.facts)).toEqual([
     {game: 'ets2', profile: 'us-customary'}, {overlayLayout: 'cluster'}, {overlaySections: 14}, {game: 'ats', profile: 'metric'}]);
 });
@@ -791,7 +792,7 @@ it('saves language as exact v4 bytes, applied only after the rename, with the la
   await settings.load();
   const view = await settings.setLanguage('ru');
   expect(view.language).toBe('ru');
-  expect((await read()).toString('utf8')).toBe(v11Text('metric', 'us-customary', 'ru'));
+  expect((await read()).toString('utf8')).toBe(v12Text('metric', 'us-customary', 'ru'));
   expect(events.at(-1)).toEqual({event: 'SETTINGS_SAVED', facts: {language: 'ru'}});
   expect(await store().load()).toMatchObject({state: 'loaded', language: 'ru'});
 });
@@ -801,7 +802,7 @@ it('keeps the previous language in use when a language save fails and refuses it
   await settings.load();
   await expect(settings.setLanguage('ru')).rejects.toMatchObject({code: 'SETTINGS_WRITE_FAILED'});
   expect(settings.view()).toMatchObject({language: 'en', saveError: 'SETTINGS_WRITE_FAILED'});
-  const newer = '{"format":"ets2telemetry.settings","version":12,"units":{"ets2":"us-customary","ats":"metric"}}';
+  const newer = '{"format":"ets2telemetry.settings","version":13,"units":{"ets2":"us-customary","ats":"metric"}}';
   await seed(newer);
   const readOnly = store(); await readOnly.load();
   await expect(readOnly.setLanguage('ru')).rejects.toMatchObject({code: 'SETTINGS_READ_ONLY'});
@@ -812,7 +813,7 @@ it('saves autostart as exact v8 bytes, applied only after the rename, with autos
   await settings.load();
   const view = await settings.setAutostart(true);
   expect(view.autostart).toBe(true);
-  expect((await read()).toString('utf8')).toBe(v11Text('metric', 'us-customary', 'en', 'strip', true, PLACEMENTS, true));
+  expect((await read()).toString('utf8')).toBe(v12Text('metric', 'us-customary', 'en', 'strip', true, PLACEMENTS, true));
   expect(events.at(-1)).toEqual({event: 'SETTINGS_SAVED', facts: {autostart: true}});
   expect(await store().load()).toMatchObject({state: 'loaded', autostart: true});
 });
@@ -823,7 +824,7 @@ it('keeps the previous autostart in use when an autostart save fails and refuses
   await expect(settings.setAutostart(true)).rejects.toMatchObject({code: 'SETTINGS_WRITE_FAILED'});
   expect(settings.view().autostart).toBe(false);
 
-  const newer = '{"format":"ets2telemetry.settings","version":12,"units":{"ets2":"us-customary","ats":"metric"}}';
+  const newer = '{"format":"ets2telemetry.settings","version":13,"units":{"ets2":"us-customary","ats":"metric"}}';
   await seed(newer);
   const readOnly = store();
   await readOnly.load();
@@ -834,12 +835,12 @@ it('loads accepted v5 bytes without writing and saves v6 visibility without losi
   const old = {format: 'ets2telemetry.settings', version: 5, language: 'ru', autostart: true,
     units: {ets2: 'us-customary', ats: 'metric'}, overlay: {layout: 'card', sections: {...ALL_ON, rpm: false}, placements: MOVED}};
   const bytes = JSON.stringify(old) + '\n'; await seed(bytes); const settings = store();
-  expect(await settings.load()).toEqual({language: 'ru', autostart: true, units: old.units, gearDisplay: AUTO,
+  expect(await settings.load()).toEqual({nowPlaying: DEFAULT_NOW_PLAYING, language: 'ru', autostart: true, units: old.units, gearDisplay: AUTO,
     overlay: {...old.overlay, enabled: true, backgroundOpacity: 80}, state: 'loaded', writable: true, saveError: null});
   expect((await read()).toString()).toBe(bytes); expect(await list()).toEqual(['settings.json']);
   expect(events).toEqual([{event: 'SETTINGS_LOADED', facts: {state: 'loaded', migratedFrom: 5}}]);
   await settings.setOverlayEnabled(false);
-  expect(JSON.parse((await read()).toString())).toEqual({...old, version: 11, gearDisplay: AUTO, overlay: {...old.overlay, enabled: false, backgroundOpacity: 80, sections: {...ALL_ON, rpm: false}}});
+  expect(JSON.parse((await read()).toString())).toEqual({...old, nowPlaying: DEFAULT_NOW_PLAYING, version: 12, gearDisplay: AUTO, overlay: {...old.overlay, enabled: false, backgroundOpacity: 80, sections: {...ALL_ON, rpm: false}}});
   await settings.setLanguage('en'); await settings.setOverlayLayout('hud'); await settings.setUnitProfile('ets2', 'metric');
   expect(settings.view()).toMatchObject({autostart: true, language: 'en', overlay: {enabled: false, backgroundOpacity: 80, layout: 'hud', sections: old.overlay.sections, placements: MOVED}});
   const saved = await read(); const restarted = store();
@@ -849,9 +850,9 @@ it('loads accepted v5 bytes without writing and saves v6 visibility without losi
 it.each([
   {name: 'missing file', bytes: undefined, intent: false},
   {name: 'accepted v5 true', bytes: v8Text('metric', 'metric', 'en', 'strip', true, PLACEMENTS, true).replace('"version": 8', '"version": 5'), intent: true},
-  {name: 'current false', bytes: v11Text('metric', 'metric'), intent: false},
-  {name: 'unrelated fallback', bytes: v11Text('invalid', 'metric', 'en', 'strip', true, PLACEMENTS, true), intent: true},
-  {name: 'invalid autostart', bytes: v11Text('metric', 'metric').replace('"autostart": false', '"autostart": "false"'), intent: undefined},
+  {name: 'current false', bytes: v12Text('metric', 'metric'), intent: false},
+  {name: 'unrelated fallback', bytes: v12Text('invalid', 'metric', 'en', 'strip', true, PLACEMENTS, true), intent: true},
+  {name: 'invalid autostart', bytes: v12Text('metric', 'metric').replace('"autostart": false', '"autostart": "false"'), intent: undefined},
   {name: 'invalid file', bytes: CORRUPT, intent: undefined},
   {name: 'unsupported older', bytes: '{"format":"ets2telemetry.settings","version":0}', intent: undefined},
   {name: 'newer version', bytes: '{"format":"ets2telemetry.settings","version":1299}', intent: undefined}
@@ -872,7 +873,7 @@ it('never promotes unavailable, read-error or reparse defaults to login intent',
   }
 });
 it('exposes only the committed known intent through a held and failed durable save', async () => {
-  await seed(v11Text('metric', 'metric', 'en', 'strip', true, PLACEMENTS, true));
+  await seed(v12Text('metric', 'metric', 'en', 'strip', true, PLACEMENTS, true));
   let release!: () => void; const gate = new Promise<void>(resolve => {release = resolve;});
   const settings = store(wrapped({rename: async () => {await gate; throw errno('EIO');}})); await settings.load();
   const pending = settings.setAutostart(false); expect(settings.knownAutostartIntent).toBe(true);
@@ -893,7 +894,7 @@ it('loads untouched v6, commits opacity only after rename, keeps queued changes 
   await expect(settings.setOverlayBackgroundOpacity(100)).rejects.toBeInstanceOf(SettingsBusyError); release();
   expect((await save).overlay.backgroundOpacity).toBe(40); await Promise.all(queue);
   expect(settings.view()).toMatchObject({autostart: true, language: 'en', overlay: {enabled: false, backgroundOpacity: 65, layout: 'cluster', placements: MOVED}});
-  const bytes = await read(); expect(JSON.parse(bytes.toString()).version).toBe(11); // ET-052: the current format is v11.
+  const bytes = await read(); expect(JSON.parse(bytes.toString()).version).toBe(12); // ET-052: the current format is v11.
   expect((await store().load()).overlay.backgroundOpacity).toBe(65); expect(await read()).toEqual(bytes);
 });
 it('refuses invalid/read-only opacity and preserves the committed value on failure before recovery', async () => {
@@ -903,7 +904,7 @@ it('refuses invalid/read-only opacity and preserves the committed value on failu
   await expect(settings.setOverlayBackgroundOpacity(40)).rejects.toMatchObject({code: 'SETTINGS_WRITE_FAILED'});
   expect(settings.view().overlay.backgroundOpacity).toBe(80); fail = false;
   expect(await settings.setOverlayBackgroundOpacity(100)).toMatchObject({overlay: {backgroundOpacity: 100}, saveError: null});
-  const newer = '{"format":"ets2telemetry.settings","version":12}'; await seed(newer); const readOnly = store(); await readOnly.load();
+  const newer = '{"format":"ets2telemetry.settings","version":13}'; await seed(newer); const readOnly = store(); await readOnly.load();
   await expect(readOnly.setOverlayBackgroundOpacity(40)).rejects.toMatchObject({code: 'SETTINGS_READ_ONLY'}); expect((await read()).toString()).toBe(newer);
 });
 
@@ -912,12 +913,12 @@ it('keeps a v8 file byte-identical at startup and writes exact v11 on the first 
   const v8 = v8Text('us-customary', 'metric', 'ru', 'card', false, MOVED, true);
   await seed(v8);
   const settings: SettingsStore = store(wrapped({rename: async (from, to) => {expect(settings.view().gearDisplay).toEqual(AUTO); await fs.rename(from, to);}}));
-  expect(await settings.load()).toEqual({language: 'ru', autostart: true, units: {ets2: 'us-customary', ats: 'metric'}, gearDisplay: AUTO,
+  expect(await settings.load()).toEqual({nowPlaying: DEFAULT_NOW_PLAYING, language: 'ru', autostart: true, units: {ets2: 'us-customary', ats: 'metric'}, gearDisplay: AUTO,
     overlay: {...DEFAULT_OVERLAY, layout: 'card', sections: {...ALL_ON, rpm: false}, placements: MOVED}, state: 'loaded', writable: true, saveError: null});
   expect(events).toEqual([{event: 'SETTINGS_LOADED', facts: {state: 'loaded', migratedFrom: 8}}]);
   expect((await read()).toString('utf8')).toBe(v8); expect(await list()).toEqual(['settings.json']);
   expect((await settings.setGearDisplay('ets2', 'manual')).gearDisplay).toEqual({ets2: 'manual', ats: 'automatic'});
-  expect((await read()).toString('utf8')).toBe(v11Text('us-customary', 'metric', 'ru', 'card', false, MOVED, true, {ets2: 'manual', ats: 'automatic'}));
+  expect((await read()).toString('utf8')).toBe(v12Text('us-customary', 'metric', 'ru', 'card', false, MOVED, true, {ets2: 'manual', ats: 'automatic'}));
   expect(events.at(-1)).toEqual({event: 'SETTINGS_SAVED', facts: {game: 'ets2', gearDisplay: 'manual'}});
   expect(await list()).toEqual(['settings.json']);
   const restarted = store(); const saved = await read();
@@ -935,7 +936,7 @@ it('keeps a v9 file byte-identical at startup, then saves the crawler mode as ex
   expect(events).toEqual([{event: 'SETTINGS_LOADED', facts: {state: 'loaded', migratedFrom: 9}}]);
   expect((await read()).toString('utf8')).toBe(v9);
   expect((await settings.setGearDisplay('ets2', 'crawler')).gearDisplay).toEqual({ets2: 'crawler', ats: 'automatic'});
-  expect((await read()).toString('utf8')).toBe(v11Text('metric', 'us-customary', 'ru', 'hud', true, MOVED, false, {ets2: 'crawler', ats: 'automatic'}));
+  expect((await read()).toString('utf8')).toBe(v12Text('metric', 'us-customary', 'ru', 'hud', true, MOVED, false, {ets2: 'crawler', ats: 'automatic'}));
   expect(events.at(-1)).toEqual({event: 'SETTINGS_SAVED', facts: {game: 'ets2', gearDisplay: 'crawler'}});
   expect((await settings.setGearDisplay('ats', 'crawler')).gearDisplay).toEqual({ets2: 'crawler', ats: 'crawler'});
   const saved = await read();
@@ -959,7 +960,7 @@ it('rejects invalid gear display requests without queuing a write', async () => 
   expect(events.filter(row => row.event === 'SETTINGS_SAVED')).toEqual([]);
 });
 it('refuses gear display saves for a newer-version file and while the startup read is pending', async () => {
-  const newer = '{"format":"ets2telemetry.settings","version":12,"gearDisplay":{"ets2":"manual","ats":"manual"}}';
+  const newer = '{"format":"ets2telemetry.settings","version":13,"gearDisplay":{"ets2":"manual","ats":"manual"}}';
   await seed(newer);
   const settings = store(); await settings.load();
   await expect(settings.setGearDisplay('ets2', 'manual')).rejects.toMatchObject({code: 'SETTINGS_READ_ONLY'});
@@ -981,5 +982,5 @@ it('shares the queue and four-request bound with unit saves so that both changes
   release();
   expect((await gear).gearDisplay).toEqual({ets2: 'manual', ats: 'automatic'}); await Promise.all(rest);
   expect(settings.view()).toMatchObject({units: {ets2: 'us-customary', ats: 'metric'}, gearDisplay: {ets2: 'manual', ats: 'manual'}});
-  expect((await read()).toString('utf8')).toBe(v11Text('us-customary', 'metric', 'en', 'strip', true, PLACEMENTS, false, {ets2: 'manual', ats: 'manual'}));
+  expect((await read()).toString('utf8')).toBe(v12Text('us-customary', 'metric', 'en', 'strip', true, PLACEMENTS, false, {ets2: 'manual', ats: 'manual'}));
 });

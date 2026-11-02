@@ -101,6 +101,7 @@ const BUNDLE_SCHEMA = object({
     })
   }),
   settings: object({
+    nowPlaying: object({enabled: boolean, style: oneOf(['minimal', 'full']), backgroundOpacity: number, position: object({displayId: nullable(pattern(/^-?\d{1,16}$/)), x: number, y: number})}),
     language: oneOf(ENUMS.language),
     autostart: boolean,
     units: map(ENUMS.pluginGame, oneOf(ENUMS.unitProfile)),

@@ -49,7 +49,7 @@ module.exports = {
     // install and updated hooks place in Squirrel's install root and name as the Installed apps DisplayIcon (ET-045g,
     // docs/release.md). The Squirrel maker keeps electron-winstaller's default iconUrl, the Electron icon (HTTP(S) only);
     // with app.ico already in place Squirrel never downloads it.
-    extraResource: ['.local/package-native/telemetry-client', '.local/package-native/telemetry-plugin', '.local/package-native/uninstall', ICON_DIRECTORY],
+    extraResource: ['.local/package-native/media-session-reader', '.local/package-native/telemetry-client', '.local/package-native/telemetry-plugin', '.local/package-native/uninstall', ICON_DIRECTORY],
     // The physical Node worker must resolve SQLite's JavaScript loader without ASAR patches.
     asar: { unpack: '**/*.{node,cjs}', unpackDir: '**/better-sqlite3' }, executableName: identity.executableName,
     appBundleId: identity.appBundleId,

@@ -31,13 +31,17 @@ The plugin streams over local named pipes that only the current Windows user can
 
 ### Live dashboard
 
-The Live screen shows the connection state and every live telemetry field: speed and RPM gauges, gear, fuel and range, the SDK average consumption, the current job (cargo, origin and destination, distance left, deadline, income), the truck and trailers, and game time. A value that stops updating becomes unavailable instead of staying frozen. The games briefly report the average consumption as zero while driving, so the dashboard and the overlay keep its last non-zero value for up to 10 seconds; history keeps what the game sent. Units follow a per-game profile, metric for ETS2 and US customary for ATS by default. Gears can be shown as automatic (1, 2, 3), manual range-splitter labels that follow the truck's gearbox layout (1L, 1H…), or crawler first (C, 1, 2…).
+The Live screen shows the connection state and every live telemetry field: speed and RPM gauges, gear, fuel and range, the SDK average consumption, the current job (cargo, origin and destination, distance left, deadline, income), the truck and trailers, and game time. A value that stops updating becomes unavailable instead of staying frozen. The dashboard and the overlay show the last non-zero average consumption through a zero for up to 10 seconds; history keeps what the game sent. Units follow a per-game profile, metric for ETS2 and US customary for ATS by default. Gears can be shown as automatic (1, 2, 3), manual range-splitter labels that follow the truck's gearbox layout (1L, 1H…), or crawler first (C, 1, 2…).
 
 ### Overlay
 
 The overlay is a transparent window above the game in windowed or borderless fullscreen mode. It passes mouse clicks to the game, never takes focus, and hides when the game is paused, in menu, minimized, or another application is in front. It updates up to 20 times per second.
 
 The driver chooses one of four layouts (Strip, the default, plus Card, Cluster and Minimal HUD) and which sections it shows, such as speed, gear, RPM, fuel, consumption, cargo, destination, distance left, deadline, income, game time and the time left until the next mandatory break. Measurements round to whole units, route endpoints show only cities, the clock shows only hours and minutes, and the delivery countdown omits "in" while retaining overdue warnings. In an explicit edit mode the driver moves and resizes it (50–300%). The background opacity and whether the overlay is shown at all are saved settings.
+
+### Current track
+
+An optional independent window shows the current Windows media item over the active game in windowed/borderless mode. Minimal shows title and artist; Full adds proportional artwork, album and a readable source name when recognized, and a bounded timeline. Its own saved position, background opacity and style are controlled from General settings, with a desktop preview while editing the position. The normal panel hides outside the game, during Alt+Tab and game minimization; paused media is labelled and progress freezes. Missing, stopped or failed media clears the panel. Automatic selection prefers playing sessions, while an explicit unavailable source never switches to another player. Media is read locally without accounts or listening-history storage.
 
 ### Trip recording
 

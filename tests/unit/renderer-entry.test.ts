@@ -19,7 +19,7 @@ describe('renderer stylesheet isolation', () => {
           }
         }}],
         resolve: {alias: {'@': path.resolve('apps/desktop/src')}},
-        build: {outDir: outputDirectory, emptyOutDir: true, assetsInlineLimit: 0, manifest: true},
+        build: {outDir: outputDirectory, emptyOutDir: true, assetsInlineLimit: 0, manifest: true, rollupOptions: {input: {index: path.resolve('apps/desktop/index.html'), nowPlaying: path.resolve('apps/desktop/now-playing.html')}}},
       });
       const manifest = JSON.parse(await readFile(path.join(outputDirectory, '.vite/manifest.json'), 'utf8')) as Manifest;
       const license = manifest['src/assets/huninn-OFL.txt'];
@@ -61,6 +61,12 @@ describe('renderer stylesheet isolation', () => {
       expect(overlayModules).not.toMatch(/\/components\/ui\/|\/radix-ui\/|\/@radix-ui\/|\/index\.css|\/dashboard-renderer\.tsx|\/overlay-settings-card\.tsx/);
       // The layouts' icons are inline SVG from lucide-react, bundled into the overlay's own closure.
       expect(overlayModules).toMatch(/\/lucide-react\//);
+      const widgetStyles = stylesFor('now-playing.html');
+      expect(widgetStyles.every(style => !dashboardStyles.includes(style) && !overlayStyles.includes(style))).toBe(true);
+      const widgetCss = (await Promise.all(widgetStyles.map(style => readFile(path.join(outputDirectory, style), 'utf8')))).join('\n');
+      expect(widgetCss).toContain('object-fit:contain'); expect(widgetCss).not.toMatch(/backdrop-filter|--background|--tw-|--radix-/);
+      const widgetHtml = await readFile(path.join(outputDirectory, 'now-playing.html'), 'utf8');
+      expect(widgetHtml).toContain("img-src 'self' blob:"); expect(widgetHtml).not.toContain('data:'); expect(html).not.toContain('blob:');
       const dashboardCss = (await Promise.all(dashboardStyles.map(style => readFile(path.join(outputDirectory, style), 'utf8')))).join('\n');
       expect(dashboardCss).toContain('@font-face');
       expect(dashboardCss).toMatch(/Huninn/);

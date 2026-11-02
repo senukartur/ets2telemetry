@@ -12,20 +12,21 @@ const sources = sourceHashes();
 const resolved = resolveBuild();
 const define = {__ETS2TELEMETRY_BUILD_CHANNEL__: JSON.stringify(resolved.channel), __ETS2TELEMETRY_APP_VERSION__: JSON.stringify(resolved.version)};
 const external = ['electron', 'better-sqlite3', ...builtinModules, ...builtinModules.map(x => `node:${x}`)];
-for (const name of ['main', 'preload', 'overlay-preload', 'telemetry-service', 'storage-worker']) {
-  await build({configFile:false, define, build:{outDir:'apps/desktop/dist',emptyOutDir:name === 'main',lib:{entry:`apps/desktop/src/${name}.ts`,formats:['cjs'],fileName:()=>`${name}.cjs`},rollupOptions:{external}}});
+for (const name of ['main', 'preload', 'overlay-preload', 'now-playing/preload', 'telemetry-service', 'storage-worker']) {
+  await build({configFile:false, define, build:{outDir:'apps/desktop/dist',emptyOutDir:name === 'main',lib:{entry:`apps/desktop/src/${name}.ts`,formats:['cjs'],fileName:()=>`${name === 'now-playing/preload' ? 'now-playing-preload' : name}.cjs`},rollupOptions:{external}}});
 }
 // The page title is the channel's display name (the main window shows it until the renderer loads). Production keeps the
 // tracked index.html text.
 const escapeHtml = text => text.replace(/[&<>"']/g, character => `&#${character.charCodeAt(0)};`);
-const channelTitle = {name: 'ets2telemetry-channel-title', transformIndexHtml: html => {
+const channelTitle = {name: 'ets2telemetry-channel-title', transformIndexHtml: (html, context) => {
+  if (context.filename.endsWith('now-playing.html')) return html;
   const replaced = html.replace(/<title>Yukon Union Telemetry<\/title>/, () => `<title>${escapeHtml(resolved.identity.displayName)}</title>`);
   if (replaced === html && resolved.channel !== 'production') throw new Error('apps/desktop/index.html has no <title> to name the channel');
   return replaced;
 }};
 // Tailwind v4 compiles the renderer stylesheet. The '@' alias mirrors tsconfig.json paths for shadcn/ui components.
 // The renderer CSP has no data: source, so assets must never be inlined as data URIs.
-await build({configFile:false,root:'apps/desktop',base:'./',define,plugins:[tailwindcss(), channelTitle],resolve:{alias:{'@':path.resolve('apps/desktop/src')}},build:{outDir:'dist/renderer',emptyOutDir:true,assetsInlineLimit:0}});
+await build({configFile:false,root:'apps/desktop',base:'./',define,plugins:[tailwindcss(), channelTitle],resolve:{alias:{'@':path.resolve('apps/desktop/src')}},build:{outDir:'dist/renderer',emptyOutDir:true,assetsInlineLimit:0,rollupOptions:{input:{index:path.resolve('apps/desktop/index.html'),nowPlaying:path.resolve('apps/desktop/now-playing.html')}}}});
 // The renderer CSP has no data: source. Fail here rather than ship a stylesheet or page the CSP would block.
 const rendererOutput = 'apps/desktop/dist/renderer';
 const emitted = [['index.html', /\b(?:src|href)\s*=\s*["']?data:/i], ...readdirSync(`${rendererOutput}/assets`).filter(name => name.endsWith('.css')).map(name => [`assets/${name}`, /url\(\s*["']?data:/i])];

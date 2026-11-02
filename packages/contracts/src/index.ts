@@ -1,3 +1,4 @@
+import type {NowPlayingEditState, NowPlayingSelection, NowPlayingStyle, NowPlayingView} from './now-playing';
 // Scaffold status only. The telemetry wire protocol belongs to ET-002a.
 export interface ScaffoldStatus { service: 'ready'; storage: 'verified'; synthetic: true }
 import type {CurrentState, SourceIdentity, AppliedState, CaptureTime} from './protocol-v0';
@@ -43,6 +44,13 @@ export interface LiveTelemetry {
   v1?: LiveTelemetryV1;
 }
 export interface DesktopBridge {
+  setNowPlayingEnabled(enabled: boolean): Promise<SettingsView>;
+  setNowPlayingStyle(style: NowPlayingStyle): Promise<SettingsView>;
+  setNowPlayingBackgroundOpacity(opacity: number): Promise<SettingsView>;
+  selectNowPlayingSource(selection: NowPlayingSelection): Promise<NowPlayingView>;
+  beginNowPlayingEdit(): Promise<NowPlayingEditState>;
+  resetNowPlayingEditPlacement(): Promise<NowPlayingEditState>;
+  finishNowPlayingEdit(outcome: 'save' | 'cancel'): Promise<SettingsView>;
   getHardModeStatus(): Promise<HardModeStatus>;
   refreshHardMode(): Promise<HardModeStatus>;
   /** `null` while the telemetry service is not ready, for example during a supervised restart. */
@@ -240,3 +248,5 @@ export * from './journal-export';
 export * from './uninstall';
 
 export * from './hard-mode';
+
+export * from './now-playing';
