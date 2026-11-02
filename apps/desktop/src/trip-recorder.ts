@@ -280,7 +280,9 @@ export class TripRecorderSink implements DurableSink {
       this.continuity=current;
     }
     if (message.kind === 'checkpoint') {
-      this.previousSample=undefined;this.continuity=undefined;
+      this.previousSample=undefined;
+      // A running checkpoint may own a sampled endpoint; unchanged counters must preserve its next observed step.
+      this.continuity={pluginSessionId:message.source.pluginSessionId,processInstanceId:message.source.processInstanceId,sourceClockId:message.capture.clockId,...message.data.continuity};
       const hydrated = stepTrip(next, {kind: 'checkpoint', message, receivedUtcMs: context.receivedUtcMs});
       if (!hydrated.ok) return refused(RECORDER_CODE[hydrated.code]);
       next = hydrated.state;

@@ -50,6 +50,47 @@ function close(storage: Storage, script: Script, uuid: string, terminal = false)
 }
 
 describe('REG-003/005/008/012/014 durable logical trips', () => {
+  it.each([
+    {name:'same-second stable snapshot',firstMs:100,advanced:false,missingEndpoint:false},
+    {name:'later-second stable snapshot',firstMs:1000,advanced:false,missingEndpoint:false},
+    {name:'same-second counter advance',firstMs:100,advanced:true,missingEndpoint:false},
+    {name:'later-second counter advance',firstMs:1000,advanced:true,missingEndpoint:false},
+    {name:'unsupported reconnect endpoint',firstMs:1000,advanced:false,missingEndpoint:true}
+  ])('uses the owned running checkpoint counter baseline: $name',async({firstMs,advanced,missingEndpoint})=>{
+    const accepted=<T>(result:{ok:true;value:T}|{ok:false;error:{code:string}}):T=>{if(!result.ok)throw new Error(result.error.code);return result.value;};
+    const worker=storageWorker(),client=new StorageClient(worker.handle),s=new Script(ETS2_A),context={receivedUtcMs:1000};
+    ok(await client.open({path:ws.database,backupsDirectory:ws.backups,purpose:'synthetic',appVersion:'test'}));
+    const recorder=new TripRecorderSink(client,{profileEvidence:()=>proof(s)});
+    accepted(await recorder.openSession(s.welcome()));accepted(recorder.observe(s.checkpoint(null),context));
+    accepted(await recorder.commit(s.event(r.jobConfigured()),context));
+    const configuration=s.checkpoint(job()).data.state.configuration;
+    let order=100;
+    const snapshot=async(odo:number,fuel:number,counter:string,ms=1000)=>{
+      const message=s.snapshot({configuration,simulation:'running',boundaryOrder:String(++order),odometer:{available:true,value:odo,unit:'m'},fuel:{available:true,value:fuel,unit:'L'}},ms);
+      message.data.continuity={coalescedSnapshots:counter,offlineTransitions:'7'};
+      accepted(recorder.observe(message,context));
+      if(recorder.attach.due())accepted(await recorder.attach.open(context));
+    };
+    await snapshot(1000000,100,'5');await snapshot(1000100,90,'5');accepted(await recorder.samples.write(3600,true));
+    const uuid=tripUuidFor(ETS2_A,'1');expect(ok(await client.journalTrip(uuid)).trip.observedDistanceM).toEqual({available:true,value:100});
+    // Advance into a fresh source second without claiming any observation during the disconnected interval.
+    s.snapshot({},1000);accepted(await recorder.openSession(s.welcome()));
+    const endpoint=missingEndpoint?1000125:1000100;
+    const checkpoint=s.checkpoint(job(),0,{configuration,simulation:'running',boundaryOrder:String(++order),odometer:{available:true,value:endpoint,unit:'m'},fuel:{available:true,value:90,unit:'L'}});
+    checkpoint.data.continuity={coalescedSnapshots:'5',offlineTransitions:'7'};
+    accepted(recorder.observe(checkpoint,context));
+    if(recorder.attach.due())accepted(await recorder.attach.open(context));
+    accepted(await recorder.samples.write(3600,true));
+    const checkpointRow=ok(await client.listSamples({pluginSessionId:ETS2_A})).find(row=>row.monotonicNs===checkpoint.capture.monotonicNs)!;
+    expect(checkpointRow.tripUuid).toBe(uuid);expect(checkpointRow.odometer).toEqual({available:true,value:endpoint});
+    const counter=advanced?'6':'5';await snapshot(endpoint+25,89,counter,firstMs);await snapshot(endpoint+50,88,counter);
+    accepted(await recorder.samples.write(3600,true));
+    const detail=validateJournalTripDetail(ok(await client.journalTrip(uuid)));
+    if(!advanced && !missingEndpoint){expect(detail.trip.observedDistanceM).toEqual({available:true,value:150});expect(detail.trip.fuelUsedL).toEqual({available:true,value:12});}
+    else {expect(detail.trip.observedDistanceM.available).toBe(false);expect(detail.trip.fuelUsedL.available).toBe(false);}
+    expect(ok(await client.listSamples({pluginSessionId:ETS2_A}))).toHaveLength(firstMs===100?4:5);
+    expect(ok(await client.committedThrough(ETS2_A))).toBe('1');expect(await client.close()).toEqual({clean:true});
+  });
   it('counts ordinary driving after historical nonzero counters and a later coalescing advance',async()=>{
     const accepted=<T>(result:{ok:true;value:T}|{ok:false;error:{code:string}}):T=>{if(!result.ok)throw new Error(result.error.code);return result.value;};
     const worker=storageWorker(),client=new StorageClient(worker.handle),s=new Script(ETS2_A),context={receivedUtcMs:1000};
