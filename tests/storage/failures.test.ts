@@ -25,9 +25,8 @@ describe('REG-007 visible write failures', () => {
       if (worst.kind !== 'event') throw new Error('fixture');
       ok(storage.upsertSession({message: {...v1('welcome'), source: worst.source}}));
       const db = connection.writer();
-      // Schema version 2 rebuilds job_configurations, which leaves the old table's pages on the freelist of a new
-      // database (ET-016). VACUUM empties the freelist first, so the cap below leaves no page to allocate.
-      expect(Number(db.pragma('freelist_count', {simple: true}))).toBeGreaterThan(0);
+      // Migrations may leave reusable pages or consume them in later tables. Remove any freelist before capping the
+      // database, so the injected capacity failure does not depend on the current schema's allocation pattern.
       db.exec('VACUUM');
       expect(Number(db.pragma('freelist_count', {simple: true}))).toBe(0);
       const pages = Number(db.pragma('page_count', {simple: true}));

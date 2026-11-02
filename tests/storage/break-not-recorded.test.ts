@@ -50,7 +50,9 @@ function dump(file: string): Record<string, Json[]> {
   return readOnly(file, db => {
     const tables = (db.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%' ORDER BY name").pluck().all() as string[]);
     return Object.fromEntries(tables.map(table => [table, (db.prepare(`SELECT * FROM "${table}" ORDER BY rowid`).safeIntegers(true).all() as Json[])
-      .map(row => Object.fromEntries(Object.entries(row).filter(([column]) => !NOT_RECORDED.has(column))))]));
+      .map(row => Object.fromEntries(Object.entries(row).filter(([column]) => !NOT_RECORDED.has(column))
+        .map(([column, value]) => [column, table === 'logical_projection_states' && column === 'row_json'
+          ? Object.fromEntries(Object.entries(JSON.parse(value as string) as Json).filter(([key]) => !NOT_RECORDED.has(key))) : value])))]));
   });
 }
 const minors = (file: string) => readOnly(file, db => ({

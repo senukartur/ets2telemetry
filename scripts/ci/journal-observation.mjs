@@ -439,7 +439,7 @@ export async function runJournalExport({application, dashboard, config, record})
   await back(dashboard);
   for (let page = 2; page <= 3; page++) {
     await clickTestId(dashboard, 'journal-list-next');
-    await until(dashboard, listState, {page, count: page === 3 ? 19 : 50});
+    await until(dashboard, listState, {page, count: page === 3 ? 20 : 50});
   }
   await stubSaveDialog(application, {canceled: false, filePath: path.join(folder, 'delivered.json')});
   await openDetail(dashboard, T.delivered);

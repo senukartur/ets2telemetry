@@ -609,7 +609,19 @@ async function reconcileExport({config, record, raw, session, restartMainEvents}
   assert.deepEqual(document.samples.map(s => ({id: s.id, monotonicNs: s.monotonicNs, utcMs: s.utcMs, speed: s.speed, odometer: s.odometer})),
     tripSamples.map(s => ({id: s.id, monotonicNs: s.monotonicNs, utcMs: s.utcMs, speed: storedValue(s.speedMps), odometer: storedValue(s.odometerM)})), 'The exported samples differ from the stored rows');
   // Bounds: coverage 13 at the detail read, and the trip's largest stored ids.
-  assert.deepEqual(exported.bounds, {committedThroughEventSeq: '13', lastSampleId: stored.sampleIds.at(-1) ?? null, lastIntervalId: stored.intervalIds.at(-1) ?? null, snapshot: false});
+  const {projection, sources, sourceTotal, accountingHead, ...rawBounds} = exported.bounds;
+  assert.deepEqual(rawBounds, {committedThroughEventSeq: '13', lastSampleId: stored.sampleIds.at(-1) ?? null, lastIntervalId: stored.intervalIds.at(-1) ?? null, snapshot: false});
+  assert.deepEqual(sources, [{pluginSessionId: stored.pluginSessionId, committedThroughEventSeq: '13'}]);
+  assert.equal(sourceTotal, 1); assert.equal(accountingHead, null);
+  for (const [kind, token] of Object.entries(projection)) {
+    assert.ok(['events', 'intervals', 'samples', 'sources'].includes(kind));
+    const parts = token.split(':');
+    assert.deepEqual(parts.slice(0, 3), ['v4', stored.databaseUuid, trip]);
+    assert.match(parts[3], /^[1-9][0-9]*$/);
+    assert.equal(parts[4], {events: 'e', intervals: 'i', samples: 's', sources: 'r'}[kind]);
+    assert.equal(parts[5], '0');
+  }
+  assert.equal(Object.keys(projection).length, 4);
   journal.exportReconciled = true;
 }
 

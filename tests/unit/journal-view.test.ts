@@ -218,10 +218,10 @@ describe('trip detail (J13, J21, J22; REG-014, REG-009)', () => {
     expect(fields(text.sections, 'distance').deliveredDistance).toBe('none (not delivered) [reported by the game]');
     expect(text.sections.map(s => s.id)).not.toContain('delivery');
   });
-  it('reports more than 5,000 amounts as incomplete without a partial sum', () => {
+  it('explains incomplete money totals without guessing an amount count or showing a partial sum', () => {
     const text = journalDetailText({...CANCELLED_DETAIL, money: {incomplete: true, totals: [], unavailable: []}}, {timeZone: ZONE});
     expect(fields(text.sections, 'money')).toEqual({expectedIncome: '12345 (currency unknown) [job offer]', penalty: '12000 EUR (SDK-documented) [reported by the game]'});
-    expect(notes(text.sections, 'money')).toEqual(['This trip has more than 5,000 amounts; no totals are shown, so a partial sum is never presented as a total.',
+    expect(notes(text.sections, 'money')).toEqual(['Complete money totals are unavailable. No partial sum is shown as a total.',
       'Amounts are the exact game values. They are never converted, netted or added across currencies.']);
   });
   it('shows a partial trip closed by lost events with its own outcome', () => {

@@ -396,8 +396,10 @@ describe('automatic selection across the real recording boundary (ET-056)', () =
         intervals: db.prepare("SELECT kind FROM completeness_intervals WHERE kind IN ('event-loss', 'not-connected')").all()
       }));
       expect(rows.sessions).toEqual([{game: 'ets2', origin: 'game', session: ETS2_A}, {game: 'ats', origin: 'game', session: ATS_A}, {game: 'ets2', origin: 'game', session: ETS2_B}]);
-      // The existing reducer closes the first trip at explicit event loss; switching never merges it.
-      expect(rows.trips).toEqual([{game: 'ets2', outcome: 'none', reason: 'gap'}, {game: 'ats', outcome: 'delivered', reason: 'outcome'}, {game: 'ets2', outcome: 'open', reason: null}]);
+      // Event loss closes the first raw trip. A fresh current job resumes tracking before selection changes, which
+      // closes that checkpoint recording at restart; no verified profile proof is available to merge either recording.
+      expect(rows.trips).toEqual([{game: 'ets2', outcome: 'none', reason: 'gap'}, {game: 'ets2', outcome: 'none', reason: 'restart'},
+        {game: 'ats', outcome: 'delivered', reason: 'outcome'}, {game: 'ets2', outcome: 'open', reason: null}]);
       expect(rows.gaps).toEqual([{first: '00000000000000000002', last: '00000000000000000003'}]);
       expect(rows.samples).toHaveLength(2); expect(rows.samples[1].ns - rows.samples[0].ns).toBe(4_000_000_000);
       expect(rows.intervals).toContainEqual({kind: 'event-loss'}); expect(f.discoveries()).toBe(6);
