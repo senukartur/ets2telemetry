@@ -49,4 +49,27 @@ describe('REG-003/008 independent verified profile identity',()=>{
     observer.select({source,clockId:'clock',gameClockId:'restored-save',monotonicNs:'201'});expect(observer.evidence()).toBeUndefined();
     now=4_000_000_000n;expect(observer.evidence()).toBeUndefined();observer.close();
   });
+  it('keeps an unbound result across the next scan tick so the next probe response can bind it',async()=>{
+    let now=0n,reads=0;
+    const resolved=await resolve();
+    const fake={resolveProfile:()=>{reads++;now+=1_000_000n;return Promise.resolve(resolved);}} as unknown as HardModeReader;
+    const observer=new ProfileObserver(()=>fake,()=>now);
+    observer.select({source,clockId:'clock',monotonicNs:'1'});await observer.refresh();
+    now=1_000_000_000n;await observer.refresh();expect(reads).toBe(1);
+    now=1_010_000_000n;
+    observer.select({source,clockId:'clock',monotonicNs:'20',boundary:{clockId:'clock',probeSentClientNs:'1000000000',receivedSourceNs:'20'}});
+    expect(observer.evidence()?.afterMonotonicNs).toBe('21');observer.close();
+  });
+  it('expires an unbound result and discards late reads after an epoch change or close',async()=>{
+    let now=0n,reads=0,finish:((value:Awaited<ReturnType<HardModeReader['resolveProfile']>>)=>void)|undefined;
+    const resolved=await resolve();
+    const fake={resolveProfile:()=>{reads++;return new Promise<Awaited<ReturnType<HardModeReader['resolveProfile']>>>(r=>{finish=r;});}} as unknown as HardModeReader;
+    const observer=new ProfileObserver(()=>fake,()=>now);
+    observer.select({source,clockId:'clock',monotonicNs:'1'});finish!(resolved);await observer.refresh();
+    now=3_000_000_001n;const expired=observer.refresh();expect(reads).toBe(2);
+    observer.select({source,clockId:'changed',monotonicNs:'2'});finish!(resolved);await expired;
+    expect(observer.evidence()).toBeUndefined();
+    now=5_000_000_000n;const closing=observer.refresh();observer.close();finish!(resolved);await closing;
+    observer.select(null);expect(observer.evidence()).toBeUndefined();
+  });
 });

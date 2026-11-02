@@ -88,7 +88,7 @@ const TRIP_PAGE_ARGS = {cursor: (field: unknown) => typeof field === 'string', l
 const COMPLETENESS_OPTIONS_ARGS = {ifAbsent: (field: unknown) => typeof field === 'boolean'};
 /** ET-015b: the `appendSamples` options, checked strictly like the completeness options. */
 const SAMPLE_OPTIONS_ARGS = {uniqueSeconds: (field: unknown) => typeof field === 'boolean'};
-const ATTACH_INPUT_KEYS: readonly string[] = ['pluginSessionId', 'nextEventSeq', 'job', 'effects', 'profile', 'sourceClockId', 'monotonicNs','profileChange'];
+const ATTACH_INPUT_KEYS: readonly string[] = ['pluginSessionId', 'nextEventSeq', 'job', 'effects', 'profile', 'sourceClockId', 'monotonicNs','profileChange','observeTripUuid'];
 const isCount = (value: unknown): value is number => typeof value === 'number' && Number.isSafeInteger(value) && value >= 0;
 export type JournalCommandName = 'journalTrips' | 'journalTrip' | 'journalEvents' | 'journalIntervals';
 const JOURNAL_COMMAND_KEYS: Readonly<Record<JournalCommandName, readonly string[]>> = {

@@ -56,7 +56,8 @@ async function main() {
         jobConfiguration:'this-event',recordingCompleteness:'complete',startedUtcMs:BASE_UTC}]}),'logical open');return uuid;
     };
     const samples=(script,uuid,values)=>values.map((odo,index)=>({...seedSample(script,uuid,index+1,BASE_UTC+(index+1)*1000,{odometer:{available:true,value:odo},speed:{available:true,value:20}}),
-      recording:{profile:proof(script),job:logicalJob,truck:'synthetic_verified_truck',processInstanceId:script.welcome().source.processInstanceId}}));
+      recording:{profile:proof(script),job:logicalJob,truck:'synthetic_verified_truck',processInstanceId:script.welcome().source.processInstanceId,
+        previous:{tripUuid:uuid,sourceClockId:script.clockId,monotonicNs:seedSample(script,uuid,index,BASE_UTC).monotonicNs}}}));
     const before=new Script('10000000-0000-4000-8000-000000006301'),logicalUuid=logicalOpen(before);
     check(storage.appendSamples(before.session,samples(before,logicalUuid,[1000000,1000050,1000100]),{uniqueSeconds:true}),'logical prefix');
     check(storage.commitEvent({message:before.event(r.timersRestart()),effects:[{kind:'trip.close',tripUuid:logicalUuid,outcome:'none',closeReason:'restart',recordingCompleteness:'partial',endedUtcMs:BASE_UTC+3000}]}),'logical restart');

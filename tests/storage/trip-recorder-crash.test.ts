@@ -403,7 +403,7 @@ describe(`ET-019 seeded kill campaign (${RECOVERY_SEEDS} seeds)`, () => {
 });
 
 describe('REG-005/006 atomic continuation and rollback across process death',()=>{
-  for(const operation of ['open','rollback','terminal']) for(const kind of ['inside','after']) it(`${kind} ${operation} commit recovers one logical result`,async()=>{
+  for(const operation of ['open','observation','rollback','terminal']) for(const kind of ['inside','after']) it(`${kind} ${operation} commit recovers one logical result`,async()=>{
     const a=new Script(ETS2_A),b=new Script(ETS2_B),first=tripUuidFor(ETS2_A,'1'),second=tripUuidFor(ETS2_B,'1');
     const proof=(s:Script):ProfileObservation=>({version:1,scope:'a'.repeat(64),binding:'b'.repeat(64),game:'ets2',pluginSessionId:s.session,
       processInstanceId:s.welcome().source.processInstanceId,sourceClockId:s.clockId,afterMonotonicNs:'0',loadGeneration:1});
@@ -413,14 +413,17 @@ describe('REG-005/006 atomic continuation and rollback across process death',()=
       const absent={available:false,reason:'not-observed'} as const;
       return {tripUuid:uuid,utcMs:1000+second*1000,sourceClockId:s.clockId,monotonicNs:String(BigInt(second)*1_000_000_000n),gameTime:null,
         speed:absent,fuel:absent,averageConsumption:absent,estimatedRange:absent,engineRpm:absent,gear:absent,position:absent,odometer:{available:true,value:odo},
-        recording:{profile:proof(s),job:job(),truck:'verified-truck',processInstanceId:s.welcome().source.processInstanceId}};
+        recording:{profile:proof(s),job:job(),truck:'verified-truck',processInstanceId:s.welcome().source.processInstanceId,
+          previous:{tripUuid:uuid,sourceClockId:s.clockId,monotonicNs:String(BigInt(second-1)*1_000_000_000n)}}};
     };
     const storage=await ws.open();ok(storage.upsertSession({message:a.welcome()}));
     ok(storage.commitEvent({message:a.event(r.jobConfigured()),profile:proof(a),effects:opening(first)}));
     ok(storage.appendSamples(ETS2_A,[sample(a,first,1,1000000),sample(a,first,2,1000050),sample(a,first,3,1000100)],{uniqueSeconds:true}));
     ok(storage.commitEvent({message:a.event(r.timersRestart()),effects:[{kind:'trip.close',tripUuid:first,outcome:'none',closeReason:'restart',recordingCompleteness:'partial',endedUtcMs:2000}]}));
     ok(storage.close());
-    const operations=[{name:'open',kind:'event',input:{message:b.event(r.jobConfigured()),profile:proof(b),effects:opening(second)}},
+    const operations=[{name:'open',kind:'event',input:{message:b.event(r.jobConfigured()),effects:opening(second)}},
+      {name:'observation',kind:'observation',input:{pluginSessionId:ETS2_B,nextEventSeq:'2',job:job(),effects:[],observeTripUuid:second,
+        profile:proof(b),sourceClockId:b.clockId,monotonicNs:'1000000000000'}},
       {name:'rollback',kind:'samples',session:ETS2_B,rows:[sample(b,second,1,1000060),sample(b,second,2,1000100)]},
       {name:'terminal',kind:'event',input:{message:b.event(r.delivered('12345')),effects:[{kind:'trip.close',tripUuid:second,outcome:'delivered',closeReason:'outcome',outcomeEvent:'this-event',recordingCompleteness:'partial',endedUtcMs:4000}]}}];
     const run=async(barrier:unknown,label:string)=>{

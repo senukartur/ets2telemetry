@@ -1,6 +1,6 @@
 import type Database from 'better-sqlite3';
 import type {JobConfiguration} from '../../../contracts/src/protocol-v1';
-import {compatibleContinuation, continuationFingerprint, type ProfileObservation} from '../../../telemetry-core/src/trips/continuation';
+import {compatibleContinuation, continuationFingerprint, learnContinuationConstraints, type ContinuationConstraints, type ProfileObservation} from '../../../telemetry-core/src/trips/continuation';
 import {advanceProgress, restoredProgress, type ProgressAnchor, type ProgressCheckpoint} from '../../../telemetry-core/src/trips/progress';
 import type {SampleInput, TripEffect} from '../api';
 import {fail} from '../errors';
@@ -39,19 +39,26 @@ export function associate(db: Database.Database, row: LogicalRow, proof: Profile
   createGroup(db, row);
   let id = logicalFor(db, row.id);const group=get(db,'SELECT * FROM logical_trips WHERE id=?',id)!;
   const membership = get(db, 'SELECT proof_json FROM logical_memberships WHERE trip_ref = ?', row.id)!;
-  if (!proof || membership.proof_json !== null || group.retired === 1n || row.outcome !== 'open') return id;
+  if (!proof || group.retired === 1n || row.outcome !== 'open') return id;
+  const learned = learnContinuationConstraints(JSON.parse(String(group.canonical_constraints)) as ContinuationConstraints, currentJob);
+  if (membership.proof_json !== null) {
+    if (learned) db.prepare('UPDATE logical_trips SET canonical_constraints=? WHERE id=?').run(JSON.stringify(learned),id);
+    else db.prepare('UPDATE logical_trips SET retired=1 WHERE id=?').run(id);
+    return id;
+  }
   const fingerprint = continuationFingerprint(currentJob);
   const canonical=compatibleContinuation(job(db,row),currentJob);
   const candidates = db.prepare(`SELECT * FROM logical_trips WHERE game = ? AND profile_scope = ? AND retired = 0 AND id <> ? ORDER BY id LIMIT 2`)
     .all(row.game, proof.scope, id) as LogicalRow[];
   const candidate = candidates.length === 1 ? candidates[0] : undefined;
-  if (canonical && fingerprint !== null && candidate && candidate.fingerprint === fingerprint && compatibleContinuation(job(db, raw(db, candidate.id)), currentJob)) {
+  const combined = candidate ? learnContinuationConstraints(JSON.parse(String(candidate.canonical_constraints)) as ContinuationConstraints,currentJob) : null;
+  if (canonical && fingerprint !== null && candidate && candidate.fingerprint === fingerprint && combined !== null && compatibleContinuation(job(db, raw(db, candidate.id)), currentJob)) {
     // Keep the public UUID of the original recording. Never change a raw trip's session or event identity.
     db.prepare('UPDATE logical_memberships SET logical_ref = ?, previous_logical_ref = ?, joined_after_revision = (SELECT coalesce(max(id),0) FROM logical_revisions) WHERE trip_ref = ?').run(candidate.id, id, row.id);
     const abandonedGroup = id;
     db.prepare('UPDATE logical_trips SET retired = 1 WHERE id = ?').run(id);
     id = candidate.id as bigint;
-    db.prepare('UPDATE logical_trips SET latest_trip_ref = ?, member_count = member_count + 1, accounting_rebased=1 WHERE id = ?').run(row.id, id);
+    db.prepare('UPDATE logical_trips SET latest_trip_ref = ?, member_count = member_count + 1, accounting_rebased=1,canonical_constraints=? WHERE id = ?').run(row.id,JSON.stringify(combined), id);
     revise(db,abandonedGroup);
   } else {
     // Conflicting/ambiguous candidates are retired permanently; their outcome remains unknown.
@@ -59,7 +66,7 @@ export function associate(db: Database.Database, row: LogicalRow, proof: Profile
     for (const previous of candidates) revise(db, previous.id as bigint);
   }
   db.prepare('UPDATE logical_memberships SET proof_json = ? WHERE trip_ref = ?').run(JSON.stringify(proof), row.id);
-  db.prepare('UPDATE logical_trips SET profile_scope = ?, fingerprint = ? WHERE id = ?').run(proof.scope,canonical?fingerprint:null,id);
+  db.prepare('UPDATE logical_trips SET profile_scope = ?, fingerprint = ?,canonical_constraints=? WHERE id = ?').run(proof.scope,canonical?fingerprint:null,JSON.stringify(candidate && id===candidate.id ? combined : learned ?? {}),id);
   return id;
 }
 
@@ -70,6 +77,8 @@ export function projectionRow(db: Database.Database, id: bigint, includeProgress
     opened_by: first.opened_by, opened_event_ref: first.opened_event_ref, started_utc_ms: first.started_utc_ms, created_utc_ms: first.created_utc_ms,
     game_mode: first.game_mode, game_mode_method: first.game_mode_method, game_mode_confidence: first.game_mode_confidence};
   const rawPath=Number(group.member_count)===1 && group.accounting_rebased===0n;
+  row._moneyIncomplete=group.reconciliation_unknown===1n;
+  row._currentProgress=group.progress_head===null || get(db,'SELECT trip_ref FROM logical_progress WHERE id=?',group.progress_head)!.trip_ref===group.latest_trip_ref;
   row._rawDistance=rawPath && row.observed_distance_m_state==='available';row._rawFuel=rawPath && row.fuel_used_l_state==='available';
   if (Number(group.member_count) > 1) row.recording_completeness = 'partial';
   if (group.mode_ambiguous === 1n || first.game_mode_ambiguous === 1n || last.game_mode_ambiguous === 1n
@@ -147,7 +156,9 @@ export function projectSample(db: Database.Database, session: {game: string; pro
   const elapsed = sameSource ? Number(BigInt(sample.monotonicNs) - BigInt(previous.anchor.monotonicNs)) / 1e9 : 0;
   const delta = previous?.anchor.odometerM === null || !previous || anchor.odometerM === null ? null : anchor.odometerM - previous.anchor.odometerM;
   const positionContinuous=!previous?.anchor.position || !anchor.position || Math.hypot(anchor.position.x-previous.anchor.position.x,anchor.position.y-previous.anchor.position.y,anchor.position.z-previous.anchor.position.z)<=100*elapsed+50;
-  const continuous = sameSource && previous?.anchor.gameClockId===anchor.gameClockId && positionContinuous && elapsed > 0 && elapsed < 5 && delta !== null && delta >= 0 && delta <= 100 * elapsed + 50;
+  const predecessor=sample.recording.previous;
+  const linked=predecessor && head && head.trip_ref===row.id && predecessor.tripUuid===sample.tripUuid && predecessor.sourceClockId===previous?.anchor.sourceClockId && predecessor.monotonicNs===previous?.anchor.monotonicNs;
+  const continuous = !!linked && sameSource && previous?.anchor.gameClockId===anchor.gameClockId && positionContinuous && elapsed > 0 && elapsed < 5 && delta !== null && delta >= 0 && delta <= 100 * elapsed + 50;
   let value = advanceProgress(previous, anchor, continuous);
   let prefix: unknown = head?.prefix_ref ?? null, start: unknown = head?.start_ref ?? head?.id ?? null;
   if (previous && (!continuous || delta !== null && delta < 0)) {
@@ -170,7 +181,11 @@ export function projectSample(db: Database.Database, session: {game: string; pro
         value.fuelUsedL.available ? value.fuelUsedL.value : null);
       prefix = cut.lastInsertRowid; start = null;
     }
-    else {prefix = head?.id ?? null; start = null;}
+    else {
+      db.prepare('UPDATE logical_trips SET accounting_rebased=1,reconciliation_unknown=1 WHERE id=?').run(id);
+      // A known backward move abandons the old suffix even when no supported cut can recover its prefix.
+      prefix = delta!==null && delta<0 ? null : head?.id ?? null; start = null;
+    }
   }
   const result = db.prepare(`INSERT INTO logical_progress(logical_ref,trip_ref,anchor_sample_ref,sample_ref,bound_sample_ref,prefix_ref,start_ref,truck_ref,odometer_m,start_odometer_m,distance_m,fuel_used_l)
     VALUES(?,?,?,?,?,?,?,?,?,?,?,?)`).run(id, row.id, sampleId,sampleId, sampleId, prefix, start, truckRef, anchor.odometerM,
@@ -209,8 +224,10 @@ export function progressCheckpoint(db:Database.Database,row:LogicalRow):Progress
 export function applyProgress(db:Database.Database,row:LogicalRow,head:unknown):LogicalRow {
   if(head===null)return row;
   const point=get(db,'SELECT * FROM logical_progress WHERE id=?',head)!,progress=progressCheckpoint(db,point);
+  if(row._currentProgress===false){row.observed_distance_m=null;row.observed_distance_m_state='not-observed';row.fuel_used_l=null;row.fuel_used_l_state='not-observed';return row;}
   if(point.start_ref===null && point.prefix_ref===null){progress.distanceM={available:false,reason:'not-observed'};progress.fuelUsedL={available:false,reason:'not-observed'};}
-  for(const [column,reading] of [['observed_distance_m',progress.distanceM],['fuel_used_l',progress.fuelUsedL]] as const){if(column==='observed_distance_m'?row._rawDistance===true:row._rawFuel===true)continue;row[column]=reading.available?reading.value:null;row[`${column}_state`]=reading.available?'available':reading.reason;}
+  for(const [column,reading] of [['observed_distance_m',progress.distanceM],['fuel_used_l',progress.fuelUsedL]] as const){if(column==='observed_distance_m'?row._rawDistance===true:row._rawFuel===true)continue;
+    const invalid=reading.available && reading.value<0;row[column]=reading.available && !invalid?reading.value:null;row[`${column}_state`]=invalid?'invalid':reading.available?'available':reading.reason;}
   return row;
 }
 

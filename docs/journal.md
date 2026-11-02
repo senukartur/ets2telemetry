@@ -15,7 +15,7 @@ The journal reads the database that the telemetry service opened, through the se
 
 Journal reads share the recorder's single command lane in the storage client: one command in flight, at most 64 queued, 10 s per command. A read that missed that deadline would fail the client closed and stop recording for the service lifetime, so every read is bounded, uses an index or a primary key ([below](#query-plans)), and the service sends at most one journal command at a time ([routing](#routing-and-bounds-j4)).
 
-The list and detail present one logical trip across verified continuations. Ordinary route/outcome/completeness/progress views do not expose membership, continuation or rollback controls. Source-qualified raw events, samples and provenance remain available in JSON. The current sample page/chart selects the supported accounting path; export also retains excluded observations with `accountingIncluded` provenance.
+The list and detail present one logical trip across verified continuations. Ordinary route/outcome/completeness/progress views do not expose membership, continuation or rollback controls. Source-qualified raw events, samples and provenance remain available in JSON. The current sample page/chart selects the supported accounting path; export also retains excluded observations with `accountingIncluded` provenance. Trailer details and counts include all snapshot members under the existing display bound, with source-qualified references for grouped recordings.
 
 ## Read commands and bounds (J5)
 

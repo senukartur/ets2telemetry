@@ -1,10 +1,16 @@
 import {describe, expect, it} from 'vitest';
-import {compatibleContinuation, continuationFingerprint, matchContinuation} from '../../packages/telemetry-core/src/trips/continuation';
+import {compatibleContinuation, continuationFingerprint, learnContinuationConstraints, matchContinuation} from '../../packages/telemetry-core/src/trips/continuation';
 import {job, otherJob} from '../shared/trip-messages';
 import {ETS2_A,r,Script,run,sessionInput} from '../shared/trip-messages';
 import {initialTripState,normalizeV1State,dueAttach,stepTrip,type TripInput} from '../../packages/telemetry-core/src';
 
 describe('REG-003/004/008 continuation evidence', () => {
+  it('retains learned optional evidence through unavailable members and rejects later conflicts',()=>{
+    const absent=job({plannedDistance:{available:false,reason:'not-observed',unit:'m'}});
+    const known=learnContinuationConstraints({},job({plannedDistance:{available:true,value:100,unit:'m'}}))!;
+    expect(learnContinuationConstraints(learnContinuationConstraints(known,absent)!,job({plannedDistance:{available:true,value:200,unit:'m'}}))).toBeNull();
+    expect(learnContinuationConstraints(learnContinuationConstraints({},absent)!,job({plannedDistance:{available:true,value:100,unit:'m'}}))).toEqual(known);
+  });
   it('continues a localized offer and cargo pickup without changing stream identity', () => {
     const a = job(), b = job({cargo: {available: true, value: 'Localized cargo'}, cargoLoaded: {available: true, value: false}});
     expect(compatibleContinuation(a, b)).toBe(true);

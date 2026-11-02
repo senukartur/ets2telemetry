@@ -270,6 +270,7 @@ export function journalIntervals(conn: StorageConnection, tripUuid: string, page
  * marked incomplete, so a partial sum is never reported as a total. Unavailable amounts are counted by reason.
  */
 function moneyTotals(db: Database.Database, trip: bigint, snap?: LogicalSnapshot): JournalMoneyTotals {
+  if (snap?.row._moneyIncomplete===true) return {incomplete:true,totals:[],unavailable:[]};
   if (snap?.head !== null && snap?.head !== undefined && get(db,`${ACCOUNTING_PATH} SELECT 1 AS present FROM path WHERE cut_odometer_m IS NOT NULL LIMIT 1`,{head:snap.head})) return {incomplete:true,totals:[],unavailable:[]};
   const rows = snap ? all(db, `SELECT e.type,m.amount_raw,m.amount_sdk_type,m.amount_currency_status,m.amount_currency_code,m.amount_currency_source,m.amount_state
     FROM logical_snapshot_memberships x JOIN event_attributions a ON a.trip_ref = x.trip_ref JOIN events e ON e.id = a.event_ref JOIN event_amounts m ON m.event_ref = e.id
@@ -318,6 +319,13 @@ export function journalTrip(conn: StorageConnection, tripUuid: string): JournalT
   const samples = snap ? get(db, `SELECT count(*) AS total,min(s.id) AS first,max(s.id) AS last FROM logical_snapshot_memberships x JOIN samples s ON s.trip_ref = x.trip_ref
     WHERE x.logical_ref = ? AND x.trip_ref <= ? AND x.from_revision < ? AND (x.through_revision IS NULL OR x.through_revision >= ?) AND s.id <= ?`, id, snap.members, snap.revision, snap.revision, snap.samples)! : get(db, JOURNAL_QUERIES.sampleSummary, id)!;
   const label = (ref: unknown) => ref === null ? null : toSafeNumber(get(db, JOURNAL_QUERIES.sampleLabel, ref)?.utc_ms, Number.MAX_SAFE_INTEGER, 0);
+  const trailerScope=`FROM logical_snapshot_memberships m JOIN trip_trailers x ON x.trip_ref=m.trip_ref JOIN trailer_configurations c ON c.id=x.trailer_configuration_ref
+    JOIN events e ON e.id=c.event_ref JOIN trips t ON t.id=x.trip_ref JOIN plugin_sessions s ON s.id=e.plugin_session_id
+    WHERE m.logical_ref=? AND m.trip_ref<=? AND m.from_revision<? AND (m.through_revision IS NULL OR m.through_revision>=?) AND e.id<=?`;
+  const trailerArgs=snap?[id,snap.members,snap.revision,snap.revision,snap.events]:[];
+  const trailerRows=snap?all(db,`SELECT e.event_seq,e.payload_json,s.plugin_session_uuid,t.trip_uuid ${trailerScope} ORDER BY e.id DESC LIMIT ?`,...trailerArgs,JOURNAL_DETAIL_TRAILERS)
+    :all(db,JOURNAL_QUERIES.trailers,id,JOURNAL_DETAIL_TRAILERS);
+  const qualifiedTrailers=snap && Number(get(db,`SELECT count(*) AS total FROM logical_snapshot_memberships WHERE logical_ref=? AND trip_ref<=? AND from_revision<? AND (through_revision IS NULL OR through_revision>=?)`,...trailerArgs.slice(0,4))!.total)>1;
   return {
     database: database(db),
     trip: {...listItem(db, trip), pluginSessionId: String(session.plugin_session_uuid), openedBy: trip.opened_by as 'event' | 'checkpoint',
@@ -326,9 +334,9 @@ export function journalTrip(conn: StorageConnection, tripUuid: string): JournalT
     job: {source: job.source as 'event' | 'checkpoint', eventSeq: job.source === 'event' ? fromU64Key(event(job.event_ref).event_seq) : null,
       checkpointNextEventSeq: job.source === 'checkpoint' ? fromU64Key(job.checkpoint_next_event_seq) : null, values: jobValues(job)},
     truck: truck === null ? null : {eventSeq: fromU64Key(truck.event_seq), values: valuesOf<TruckConfiguration>(payloadOf(truck).record)},
-    trailers: {items: all(db, JOURNAL_QUERIES.trailers, id, JOURNAL_DETAIL_TRAILERS).reverse()
-      .map(r => ({eventSeq: fromU64Key(r.event_seq), values: valuesOf<TrailerConfiguration>(payloadOf(r).record)})),
-      total: toSafeNumber(get(db, JOURNAL_QUERIES.trailerTotal, id)?.total, Number.MAX_SAFE_INTEGER, 0)},
+    trailers: {items: trailerRows.reverse()
+      .map(r => ({...(qualifiedTrailers?{pluginSessionId:String(r.plugin_session_uuid),rawTripUuid:String(r.trip_uuid)}:{}),eventSeq: fromU64Key(r.event_seq), values: valuesOf<TrailerConfiguration>(payloadOf(r).record)})),
+      total: toSafeNumber(snap?get(db,`SELECT count(*) AS total ${trailerScope}`,...trailerArgs)!.total:get(db, JOURNAL_QUERIES.trailerTotal, id)?.total, Number.MAX_SAFE_INTEGER, 0)},
     outcomeDetails: outcome === null ? null : {eventSeq: fromU64Key(outcome.event_seq), record: payloadOf(outcome).record as JournalOutcomeRecord},
     money: moneyTotals(db, id, snap),
     window: snap?logicalWindow(db,snap):windowOf(db, trip).dto,

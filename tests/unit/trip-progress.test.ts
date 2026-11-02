@@ -4,6 +4,13 @@ import {advanceProgress, restoredProgress, type ProgressAnchor} from '../../pack
 const anchor = (odometerM: number, fuelL = 200, pluginSessionId = 'session-a'): ProgressAnchor =>
   ({pluginSessionId, sourceClockId: 'clock', monotonicNs: '1', truck: 'truck-a', odometerM, fuelL});
 describe('REG-008 current-save progress', () => {
+  it('nets small fuel rises as measurement noise and counts a real refuel separately from consumption',()=>{
+    let progress=advanceProgress(null,anchor(0,100),true);
+    for(const [odo,fuel] of [[1,99],[2,99.005],[3,98.005]])progress=advanceProgress(progress,anchor(odo,fuel),true);
+    expect(progress.fuelUsedL.available && progress.fuelUsedL.value).toBeCloseTo(1.995,9);
+    progress=advanceProgress(progress,anchor(4,110),true);
+    expect(progress.fuelUsedL.available && progress.fuelUsedL.value).toBeCloseTo(1.995,9);
+  });
   it.each(['session-a', 'next-day-session'])('replaces abandoned driving after restore in %s: 100 → 60 → 100 km', session => {
     const start = advanceProgress(null, anchor(1_000_000), true);
     const end = advanceProgress(start, anchor(1_100_000, 160), true);

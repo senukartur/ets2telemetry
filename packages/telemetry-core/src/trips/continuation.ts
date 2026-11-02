@@ -9,6 +9,18 @@ export interface ProfileObservation {
 export const CONTINUATION_FIELDS = ['cargoId', 'sourceCityId', 'sourceCompanyId', 'destinationCityId', 'destinationCompanyId',
   'cargoMass', 'market', 'deliveryDeadline', 'expectedIncome'] as const;
 const EXTRA_FIELDS = ['cargoUnitMass', 'cargoUnitCount', 'isSpecialJob', 'plannedDistance'] as const;
+export type ContinuationConstraints = Partial<Record<typeof EXTRA_FIELDS[number], unknown>>;
+/** Learned canonical values survive later unavailable observations; at most four optional offer fields are retained. */
+export function learnContinuationConstraints(known: ContinuationConstraints, job: JobConfiguration): ContinuationConstraints | null {
+  const result = {...known};
+  for (const field of EXTRA_FIELDS) {
+    const reading = job[field];
+    if (!reading.available) continue;
+    if (Object.hasOwn(result, field) && canonicalJson(result[field]) !== canonicalJson(reading.value)) return null;
+    result[field] = structuredClone(reading.value);
+  }
+  return result;
+}
 /** Exact canonical evidence only. Localized labels, cargoLoaded and currency descriptions are deliberately excluded. */
 export function continuationFingerprint(job: JobConfiguration): string | null {
   const values: unknown[] = [];

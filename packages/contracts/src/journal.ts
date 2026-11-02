@@ -136,7 +136,7 @@ export interface JournalTripDetail {
    * The latest JOURNAL_DETAIL_TRAILERS trailer configurations of the trip in commit order, and how many the trip holds.
    * A trip that was given more (a trailer re-sent or changed while it was open) shows only the latest ones here.
    */
-  trailers: {items: {eventSeq: Uint64; values: TrailerConfiguration}[]; total: number};
+  trailers: {items: {eventSeq: Uint64; values: TrailerConfiguration; pluginSessionId?:string;rawTripUuid?:string}[]; total: number};
   /** The gameplay outcome event with its revenue or penalty; null unless the trip was delivered or cancelled. */
   outcomeDetails: {eventSeq: Uint64; record: JournalOutcomeRecord} | null;
   money: JournalMoneyTotals;
@@ -409,7 +409,11 @@ export function validateJournalTripDetail(value: unknown): JournalTripDetail {
   const trailers = exact(o.trailers, ['items', 'total']);
   count(trailers.total);
   if (!Array.isArray(trailers.items) || trailers.items.length !== Math.min(JOURNAL_DETAIL_TRAILERS, trailers.total as number)) bad();
-  for (const trailer of trailers.items as unknown[]) { const t = exact(trailer, ['eventSeq', 'values']); eventSeq(t.eventSeq); configuration(t.values, 'trailer.configured'); }
+  for (const trailer of trailers.items as unknown[]) {
+    const qualified=isRecord(trailer) && trailer.pluginSessionId!==undefined;
+    const t = exact(trailer, [...(qualified?['pluginSessionId','rawTripUuid']:[]),'eventSeq', 'values']);
+    if(qualified){uuid(t.pluginSessionId);uuid(t.rawTripUuid);}eventSeq(t.eventSeq); configuration(t.values, 'trailer.configured');
+  }
   nullable(o.outcomeDetails, details => {
     const d = exact(details, ['eventSeq', 'record']); eventSeq(d.eventSeq);
     if (!isRecord(d.record) || d.record.type !== (trip.outcome === 'delivered' ? 'job.delivered' : 'job.cancelled')) bad();

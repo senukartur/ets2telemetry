@@ -1,4 +1,5 @@
 import type {Available} from '../../../contracts/src/protocol-v1';
+import {FUEL_NOISE_LITERS} from '../derived';
 
 export interface ProgressAnchor {
   gameClockId?:string|null;position?:{x:number;y:number;z:number}|null;pluginSessionId: string; sourceClockId: string; monotonicNs: string; truck: string | null;
@@ -25,5 +26,5 @@ export function advanceProgress(previous: ProgressCheckpoint | null, anchor: Pro
   const valid = continuous && a.truck !== null && a.truck === anchor.truck && meters !== null && meters >= 0;
   const fuel = a.fuelL === null || anchor.fuelL === null ? null : a.fuelL - anchor.fuelL;
   return {anchor, distanceM: valid && previous.distanceM.available ? {available: true, value: previous.distanceM.value + meters} : unknown(),
-    fuelUsedL: valid && fuel !== null && previous.fuelUsedL.available ? {available: true, value: previous.fuelUsedL.value + Math.max(0, fuel)} : unknown()};
+    fuelUsedL: valid && fuel !== null && previous.fuelUsedL.available ? {available: true, value: previous.fuelUsedL.value + (fuel < -FUEL_NOISE_LITERS ? 0 : fuel)} : unknown()};
 }

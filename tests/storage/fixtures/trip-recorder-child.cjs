@@ -104,9 +104,10 @@ async function logicalCrash() {
     const hold = config.logical.barrier && config.logical.barrier.operation===operation.name;
     const options = hold && config.logical.barrier.kind==='inside' ? {testHooks:{beforeCommit:()=>holdInside(operation.name)}} : undefined;
     const value = operation.kind==='samples' ? must(storage.appendSamples(operation.session,operation.rows,{uniqueSeconds:true},options))
+      : operation.kind==='observation' ? must(storage.openAttachedTrip(operation.input,options))
       : must(storage.commitEvent(operation.input,options));
     if (hold && config.logical.barrier.kind==='after') {await write(`barrier after ${operation.name}`);await forever();}
-    if (operation.kind!=='samples') await write(`ack ${operation.session} ${value.committedThroughEventSeq}`);
+    if (operation.kind==='event') await write(`ack ${operation.session} ${value.committedThroughEventSeq}`);
   }
   must(storage.close());await write('done');
 }

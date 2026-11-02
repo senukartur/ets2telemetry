@@ -20,6 +20,7 @@ export class ProfileObserver {
     if (before?.source.pluginSessionId !== source?.source.pluginSessionId || before?.source.processInstanceId !== source?.source.processInstanceId || before?.clockId !== source?.clockId || before?.gameClockId !== source?.gameClockId) {
       this.epoch++; this.controller?.abort(); this.pending = undefined; this.proof = undefined;
     }
+    if (this.pending && this.nowNs() - this.pending.completedNs > 3_000_000_000n) this.pending = undefined;
     const boundary = source?.boundary, pending = this.pending;
     if (pending && boundary && source?.clockId === boundary.clockId && BigInt(boundary.probeSentClientNs) > pending.completedNs) {
       this.pending = undefined;
@@ -35,6 +36,8 @@ export class ProfileObserver {
   refresh(): Promise<void> {return this.work ??= this.scan().finally(()=>{this.work=undefined;});}
   private async scan(): Promise<void> {
     const reader = this.reader(), source = this.source, now = this.nowNs();
+    if (this.pending && now - this.pending.completedNs <= 3_000_000_000n) return;
+    this.pending = undefined;
     if (!reader || !source?.clockId || this.inFlight || this.lastScan >= 0n && now - this.lastScan < 1_000_000_000n) return;
     this.lastScan = now; this.inFlight = true;
     const epoch = this.epoch, controller = this.controller = new AbortController();

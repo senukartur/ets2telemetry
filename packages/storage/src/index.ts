@@ -40,7 +40,7 @@ export class Storage {
     return attempt(() => writes.recordCompleteness(this.connection, pluginSessionId, interval, options));
   }
   /** ET-016 PR-7 (J9): opens a trip from a checkpoint job; see AttachInput. */
-  openAttachedTrip(input: AttachInput): Result<AttachResult> { return attempt(() => writes.openAttachedTrip(this.connection, input)); }
+  openAttachedTrip(input: AttachInput, options?:CommitOptions): Result<AttachResult> { return attempt(() => writes.openAttachedTrip(this.connection, input,options)); }
   observeHardMode(game: 'ets2' | 'ats', observation: HardModeObservation, fresh = false): Result<void> {return attempt(() => writes.observeHardMode(this.connection, game, observation, fresh));}
   committedThrough(pluginSessionId: string): Result<Uint64> { return attempt(() => reads.committedThrough(this.connection, pluginSessionId)); }
   getSession(pluginSessionId: string): Result<SessionRecord> { return attempt(() => reads.getSession(this.connection, pluginSessionId)); }
