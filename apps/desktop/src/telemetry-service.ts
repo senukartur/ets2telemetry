@@ -28,6 +28,7 @@ import type {V1SourceState} from './v1-ingestion';
 import {GAME_HISTORY_RECORDING} from './recording-policy';
 import {createRecordingRuntime} from './recording-runtime';
 import {JournalService} from './journal-service';
+import {ConsumptionHold} from '../../../packages/telemetry-core/src/consumption-hold';
 import type {LiveTelemetry, LiveTelemetryV1, SourceSelection} from '../../../packages/contracts/src';
 import {liveV1Projection, withV1} from './live-v1';
 import {HEARTBEAT_INTERVAL_MS} from './service-heartbeat';
@@ -84,9 +85,11 @@ let effectiveSelection: SourceSelection = 'game';
 let v0Live: LiveTelemetry = initialLive();
 let v1Live: LiveTelemetryV1 | undefined;
 function publishLive(): void {subscriptions.publish(withV1(v0Live, v1Live));}
+// ET-051, display only: the dashboard and the overlay read this update; history is recorded from protocol v1.
+const consumptionHold = new ConsumptionHold();
 // Broker exits are logged as fixed outcome/stage codes and numbers only; routine waiting exits are omitted
 // and repeated identical failures are coalesced so a retry loop cannot fill the bounded log.
-const ingestion = new TelemetryIngestion(update => {if (update.selection !== effectiveSelection) return; v0Live = {...update, selection: requestedSelection}; coordinator.observe('v0', update); publishLive();}, {diagnose: coalesceBrokerDiagnostics(diagnostic => log('NATIVE_BROKER_EXIT', undefined, {...diagnostic}))});
+const ingestion = new TelemetryIngestion(update => {if (update.selection !== effectiveSelection) return; v0Live = consumptionHold.apply({...update, selection: requestedSelection}); coordinator.observe('v0', update); publishLive();}, {diagnose: coalesceBrokerDiagnostics(diagnostic => log('NATIVE_BROKER_EXIT', undefined, {...diagnostic}))});
 const fixtureEndpoint = process.env.ETS2TELEMETRY_SOURCE_PIPE;
 // Protocol v1 (ET-006b, E2) runs beside v0 and follows every selection. Unless the recording gate below gives it a sink,
 // it is live-only: each hello asks for durableEvents false, nothing is acknowledged and no history row is written. Since
