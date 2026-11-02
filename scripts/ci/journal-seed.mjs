@@ -46,13 +46,17 @@ async function main() {
   const storage = check(opened, 'open');
   try {
     await seedJournalAnchors(storage);
-    const fillers = await seedJournalFillers(storage, FILLERS);
+    const fillers = await seedJournalFillers({
+      upsertSession: input => storage.upsertSession(input), appendSamples: (...args) => storage.appendSamples(...args),
+      commitEvent: input => storage.commitEvent({...input, effects: input.effects?.map(effect => effect.kind === 'trip.open' && effect.tripUuid.endsWith('00000000006d')
+        ? {...effect, gameMode: {mode: 'single-player', method: 'module-scan', confidence: 'weak'}} : effect)})
+    }, FILLERS);
     // The paging trip: opened by its job, then each toll is attributed to it and adds one truck-change annotation.
     const script = new Script(PAGING_SESSION, 'ets2', {utcMs: PAGING_UTC});
     check(storage.upsertSession({message: script.welcome()}), 'paging session');
     const configured = script.event(r.jobConfigured(job({cargoId: {available: true, value: 'synthetic_paging_cargo'}})));
-    check(storage.commitEvent({message: configured, effects: [{kind: 'trip.open', tripUuid: PAGING_TRIP, game: 'ets2', gameMode: {mode: 'unknown', method: 'none', confidence: 'none'},
-      jobConfiguration: 'this-event', recordingCompleteness: 'unknown', startedUtcMs: PAGING_UTC + 1_000}]}), 'paging job');
+    check(storage.commitEvent({message: configured, effects: [{kind: 'trip.open', tripUuid: PAGING_TRIP, game: 'ets2', gameMode: {mode: 'truckersmp', method: 'module-scan', confidence: 'strong'},
+      jobConfiguration: 'this-event', recordingCompleteness: 'unknown', startedUtcMs: PAGING_UTC + 1_000}, {kind: 'trip.update', tripUuid: PAGING_TRIP, set: {gameModeAmbiguous: true}}]}), 'paging job');
     for (let i = 0; i < PAGING_TOLLS; i++) {
       const toll = script.event({type: 'player.tollgate.paid', amount: money('1', 's64', EUR)});
       const atEventSeq = toll.data.eventSeq;

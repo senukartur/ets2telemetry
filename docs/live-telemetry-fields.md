@@ -150,7 +150,7 @@ Every row has one source ([live-sources.ts](../apps/desktop/src/live-sources.ts)
 - **(e) Origin.** v1 data counts only when its origin and game equal the v0 observation's, whenever v0 has an observation.
 - **Units** (F9) follow the displayed game's profile: 18,000 kg reads `18.0 t` or `39683 lb` in the dashboard card, and `18 t` or `39683 lb` in the overlay, which rounds measurements to whole units.
 
-The **Protocol v1 source** section (`live-section-source`, F5) appears last once a v1 observation exists for the current selection. Its status line `live-v1-status` reads `<status>: <reason>`, for example `connected: Validated current observation`; its rows are the game mode (`live-game-mode`, with method and confidence, or `unknown` until OD-3) and the total of lost events (`live-event-loss`, with the note "this version records no gameplay events": the live-only connection loses every event to the missing durable consumer).
+The **Protocol v1 source** section (`live-section-source`, F5) appears last once a v1 observation exists for the current selection. Its status line `live-v1-status` reads `<status>: <reason>`, for example `connected: Validated current observation`; its rows are the game mode (`live-game-mode`, with method and confidence, or `unknown` when detection is unavailable) and the total of lost events (`live-event-loss`, with the note "this version records no gameplay events": the live-only connection loses every event to the missing durable consumer).
 
 ## Overlay
 

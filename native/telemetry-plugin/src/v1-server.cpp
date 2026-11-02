@@ -286,7 +286,7 @@ bool Server::Connection::send() {
       throw Retire(EndReason::source_retired, false);
     const auto now = GetTickCount64(); window::Snapshot storage; const auto* w = window_now(storage);
     pending->state.window = window_field(*pending, w, server.process_creation_, now);
-    StatusInfo info; info.durable = durable; info.delivery = store.status(); info.continuity = continuity(*pending, server.coalesced_);
+    StatusInfo info; info.game_mode = pending->game_mode; info.durable = durable; info.delivery = store.status(); info.continuity = continuity(*pending, server.coalesced_);
     if (!write(encoder.checkpoint(server.next_seq(), capture.stamp(server.now_ns(), info.delivery.oldest_retained_ns.value_or(0)), pending->state, info, minor))) return false;
     validator.checkpoint(info.delivery.acked_through_event_seq);
     sent_boundary = pending->state.boundary_order; sent_window_revision = w ? w->revision : 0; sent_window_available = pending->state.window.available();
@@ -309,7 +309,7 @@ bool Server::Connection::send() {
     server.close_diagnostic_.write = "snapshot";
     window::Snapshot storage; const auto* w = window_now(storage);
     pending->state.window = window_field(*pending, w, server.process_creation_, now);
-    StatusInfo info; info.durable = durable; info.delivery = store.status(); info.continuity = continuity(*pending, server.coalesced_);
+    StatusInfo info; info.game_mode = pending->game_mode; info.durable = durable; info.delivery = store.status(); info.continuity = continuity(*pending, server.coalesced_);
     if (!write(encoder.snapshot(server.next_seq(), capture.stamp(server.now_ns(), info.delivery.oldest_retained_ns.value_or(0)), pending->state, info, minor))) return false;
     sent_boundary = pending->state.boundary_order; sent_window_revision = w ? w->revision : 0; sent_window_available = pending->state.window.available();
     has_pending = false; next_snapshot = now + snapshot_interval_ms;

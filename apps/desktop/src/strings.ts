@@ -784,7 +784,8 @@ export const JOURNAL_STRINGS = Object.freeze({
   windowCloseGap: "Events of the trip's plugin session from eventSeq {from} through {through}; lost events closed the trip.",
   windowEndOfSession: "Events of the trip's plugin session from eventSeq {from} to the end of that session; a later session closed the trip.",
   windowUnknown: 'This trip was closed before schema version 2, so its window is unknown. Only the events attributed to it or referenced by it are listed.',
-  gameModeChanged: 'changed during the trip',
+  gameModeChanged: 'ambiguous evidence',
+  gameModeUnconfirmed: 'unconfirmed',
   zeroConsumption: 'no consumption recorded'
 });
 /** The persistent banner of a test database (J3); history has none. */

@@ -89,9 +89,10 @@ export interface OpenTrip {
   /** The identical job re-send that started a reload check (T8). */
   reloadEventSeq: Uint64 | null;
   /**
-   * The load window after opening: until the first `simulation.started` (`before-start`) and for the one event right
-   * after it (`after-start`). A timer restart or game-time regression inside it is the load that restored this job,
-   * not a discontinuity of it (O1, O10); an outcome before the start is ambiguous (T14).
+   * The load window after opening: until the first `simulation.started` (`before-start`) and for the next event other
+   * than `source.gameMode` after it (`after-start`). Mode notifications preserve this window. A timer restart or
+   * game-time regression inside it is the load that restored this job, not a discontinuity of it (O1, O10);
+   * an outcome before the start is ambiguous (T14).
    */
   loadCheck: 'before-start' | 'after-start' | null;
   /** A loaded job needs terminal distance AND game-duration corroboration before a complete close. */

@@ -172,3 +172,13 @@ it('writes every run, name and if value that contains ": " as a block or quoted 
   expect(['      - run: echo a: b', '      - name: Step: two', "        if: a == 'b: c'"].map(line => PLAIN_SCALAR.exec(line)?.[1])).toEqual(['echo a: b', 'Step: two', "a == 'b: c'"]);
   expect(['        run: |', "      - name: 'Step: two'", '        if: "a: b"'].map(line => PLAIN_SCALAR.exec(line))).toEqual([null, null, null]);
 });
+
+it('builds the game-mode ASan executable before running its registered contract', async () => {
+  const asan = job(await workflow(), 'windows-asan');
+  const build = asan.split('\n').find(line => line.includes('cmake --build native/telemetry-plugin/build-asan --config Release --target '));
+  expect(build).toBeDefined();
+  expect(build?.trim().split(/\s+/)).toContain('game-mode-detector-asan-test');
+  const test = 'ctest --test-dir native/telemetry-plugin/build-asan -C Release --output-on-failure -R asan-contract';
+  expect(asan).toContain(test);
+  expect(asan.indexOf(build!)).toBeLessThan(asan.indexOf(test));
+});

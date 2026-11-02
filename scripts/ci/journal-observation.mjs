@@ -84,7 +84,7 @@ function listState(expected) {
   if (d.querySelector('[data-testid="journal-list-loading"]')) return false;
   const rows = [...d.querySelectorAll('[data-testid="journal-list"] [data-testid="journal-row"]')].map(row => {
     const cell = id => row.querySelector(`[data-testid="${id}"]`)?.textContent ?? null;
-    return {trip: row.getAttribute('data-trip'), started: cell('journal-row-started'), game: cell('journal-row-game'), route: cell('journal-row-route'), outcome: cell('journal-row-outcome'),
+    return {trip: row.getAttribute('data-trip'), started: cell('journal-row-started'), game: cell('journal-row-game-name'), route: cell('journal-row-route'), outcome: cell('journal-row-outcome'),
       completeness: cell('journal-row-completeness'), observed: cell('journal-row-observed'), fuel: cell('journal-row-fuel'), cargo: cell('journal-row-cargo')};
   });
   const state = {page: text('journal-list-page'), error: text('journal-list-error'), empty: text('journal-empty'), emptyNote: text('journal-empty-note'), banner: text('journal-banner'),
@@ -298,7 +298,9 @@ export async function runJournalSeeded({dashboard, record}) {
     await clickTestId(dashboard, 'journal-list-previous');
     await until(dashboard, listState, {page, count: 50, first: page === 1 ? T.paging : filler(60)});
   }
+  assert.equal(await dashboard.getByTestId('journal-row-mode').first().innerText(), 'TruckersMP · ambiguous evidence');
   const paging = await openDetail(dashboard, T.paging);
+  assert.equal(await dashboard.getByTestId('journal-detail-mode').innerText(), 'TruckersMP · ambiguous evidence');
   record.pagingSummary = {toll: paging.fields['money-toll'] ?? null, samples: paging.fields['samples-sampleCount'] ?? null};
   assert.deepEqual(record.pagingSummary, {toll: '104 EUR (SDK-documented), 104 amounts', samples: '3600'});
   const timeline = await openTable(dashboard, 'timeline', 100);

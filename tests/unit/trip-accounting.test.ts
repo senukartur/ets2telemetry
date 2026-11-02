@@ -81,9 +81,10 @@ describe('T17 thresholds', () => {
 });
 
 describe('loaded-job coverage (REG-003, REG-008)', () => {
-  function deliveredLoadedJob(options: {distance?: number | null; duration?: string | null; observed?: number; gap?: boolean; hole?: boolean; cancel?: boolean; clock?: string; initialRegression?: boolean} = {}) {
+  function deliveredLoadedJob(options: {distance?: number | null; duration?: string | null; observed?: number; gap?: boolean; hole?: boolean; cancel?: boolean; clock?: string; initialRegression?: boolean; modeMetadata?: boolean} = {}) {
     const s = new Script(ETS2_A);
     let state = run(initialTripState(), [sessionInput(s.welcome()), s.event(r.jobConfigured(), paused), s.event(r.started())]).state;
+    if (options.modeMetadata) state = run(state, [s.event(r.gameMode({mode: 'truckersmp', method: 'module-scan', confidence: 'strong', module: 'synthetic-multiplayer-module.dll'}))]).state;
     if (options.initialRegression) state = run(state, [s.event(r.regression('13000', '12345'))]).state;
     // Ten continuous 100 m steps. The SDK fixture's opening game time is 12345; the delivery is at 12347.
     for (let second = 2; second <= 12; second++) {
@@ -107,6 +108,12 @@ describe('loaded-job coverage (REG-003, REG-008)', () => {
   });
   it('uses the new clock when the initial load resets time before any observed progress', () => {
     expect(tripView(deliveredLoadedJob({initialRegression: true}).state, 'ets2').lastClosed?.recordingCompleteness).toBe('complete');
+  });
+  it('can corroborate a loaded job completely after mode metadata and its initial regression', () => {
+    const result = deliveredLoadedJob({initialRegression: true, modeMetadata: true});
+    expect(tripView(result.state, 'ets2').lastClosed).toMatchObject({outcome: 'delivered', recordingCompleteness: 'complete', gameMode: UNKNOWN_MODE, gameModeAmbiguous: true});
+    expect(result.effects.flat()).toContainEqual(expect.objectContaining({kind: 'completeness.add', interval: expect.objectContaining({
+      detail: expect.objectContaining({annotation: true, cause: 'loaded-job-coverage-confirmed'})})}));
   });
   it.each([
     {distance: 2000}, {duration: '3'}, {distance: null}, {duration: null}, {cancel: true}, {gap: true}, {hole: true}, {clock: GAME_CLOCK_2}, {observed: 0}, {distance: 0}

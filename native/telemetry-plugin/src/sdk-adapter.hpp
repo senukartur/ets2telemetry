@@ -95,6 +95,7 @@ struct Snapshot {
 struct V1Current {
   Identity identity;
   v1::StatePod state;
+  v1::GameModePod game_mode;
   v1::Continuity continuity;
   scs_result_t gameplay_result = SCS_RESULT_unsupported;
   bool active = false, exhausted = false, source_retired = false;
@@ -145,6 +146,8 @@ class Adapter final {
   // slot. Without a channel every v1 path is inert; v0 and CAP0 behavior is identical either way. initialize() detaches
   // a channel left attached from an earlier plugin session, whose eventSeq must not continue under a new session.
   void attach_events(v1::EventChannel* channel) noexcept;
+  // SDK initialization only, before attaching the prepared event channel.
+  void set_game_mode(const v1::GameModePod& mode) noexcept { game_mode_ = mode; }
   // Transport worker: an owned copy of the current v1 state slot. It consumes nothing, so the v0 read_latest slot keeps
   // its single consumer. False before the first v1 publication of this plugin session.
   bool read_v1_current(V1Current& output) noexcept;
@@ -189,7 +192,8 @@ class Adapter final {
   void v1_configuration(const scs_telemetry_configuration_t&) noexcept;
   void v1_gameplay(const scs_telemetry_gameplay_event_t&) noexcept;
   void v1_game_time(v1::GameTimePod& output) const noexcept;
-  void v1_emit(bool boundary) noexcept;
+  // Assigned eventSeq, including ordinary loss; zero means no sequence was assigned.
+  std::uint64_t v1_emit(bool boundary) noexcept;
   Snapshot producer_{}, published_{};
   std::mutex publication_mutex_;
   std::mutex pending_mutex_;
@@ -202,6 +206,8 @@ class Adapter final {
   std::atomic<v1::EventChannel*> events_{nullptr};
   // v1 producer state: the record being built, the current configuration with its own revision, and v1 continuity.
   v1::EventRecord v1_record_{};
+  v1::GameModePod game_mode_{};
+  bool game_mode_emitted_ = false;
   v1::ConfigurationPod v1_configuration_{};
   v1::Continuity v1_continuity_{};
   bool v1_configuration_dirty_ = true;

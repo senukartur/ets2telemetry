@@ -1,4 +1,5 @@
 #include "sdk-adapter.hpp"
+#include "game-mode-detector.hpp"
 #include "protocol-v1-producer.hpp"
 #include "protocol-v1-delivery.hpp"
 #include <algorithm>
@@ -30,6 +31,7 @@ struct AdapterTestAccess {
   static std::unique_lock<std::mutex> hold_pending(Adapter& adapter) { return std::unique_lock<std::mutex>(adapter.pending_mutex_); }
   static std::unique_lock<std::mutex> hold_v1(Adapter& adapter) { return std::unique_lock<std::mutex>(adapter.v1_mutex_); }
   static bool no_pending(Adapter& adapter) { auto lock = hold_pending(adapter); return adapter.producer_.observation_count == 0; }
+  static std::uint64_t order(const Adapter& adapter) { return adapter.producer_.boundary_order; }
   static void exhaust(Adapter& adapter) { adapter.producer_.boundary_order = UINT64_MAX; }
 };
 }
@@ -85,6 +87,54 @@ scs_named_value_t attribute(const char* name, scs_value_t value, scs_u32_t index
 std::unique_ptr<Snapshot> read(Adapter& adapter) { auto output = std::make_unique<Snapshot>(); require(adapter.read_latest(*output), "coherent publication available"); return output; }
 Reading<double> reading(const Snapshot& snapshot, Field field) { return snapshot.state.channels[static_cast<std::size_t>(field)]; }
 Reading<double> reading(const std::unique_ptr<Snapshot>& snapshot, Field field) { return reading(*snapshot, field); }
+void game_mode_evidence() {
+  auto adapter = std::make_unique<Adapter>(); Host host; auto params = host.params();
+  auto channel = std::make_unique<v1::EventChannel>();
+  require(adapter->initialize(SCS_TELEMETRY_VERSION_1_01, &params) == SCS_RESULT_ok && channel->prepare(), "mode initialization");
+  const auto mode = ets2telemetry::game_mode::detect(v1::GameId::ets2, [](const wchar_t*) noexcept { return ets2telemetry::game_mode::LookupResult::present; });
+  adapter->set_game_mode(mode); adapter->attach_events(channel.get());
+  auto current = std::make_unique<V1Current>();
+  require(adapter->read_v1_current(*current) && current->game_mode.module.view() == "core_ets2mp.dll" && current->state.boundary_order == 0, "attachment immediately publishes mode without a fabricated callback");
+  require(channel->next_event_seq() == 1 && !channel->front(), "attachment assigns no mode event or loss");
+  host.frame_end(); host.frame_end(); channel->set_gate(v1::Gate::live); host.frame_end();
+  require(channel->next_event_seq() == 1 && !channel->front(), "offline and live-only frames leave mode pending without loss");
+  host.event(SCS_TELEMETRY_EVENT_started); host.frame_end();
+  auto* slot = channel->front();
+  require(slot && slot->has_loss && !slot->has_record && slot->loss_before.first_event_seq == 1 && slot->loss_before.last_event_seq == 1 && slot->loss_before.causes.no_durable_consumer == 1, "genuine SDK lifecycle loss is preserved");
+  channel->pop(); channel->set_gate(v1::Gate::durable);
+  auto minutes = u32(123); host.channel(Field::game_time, &minutes);
+  scs_named_value_t empty[]{{}}; host.config("job", empty);
+  slot = channel->front(); require(slot && slot->has_record && slot->record.event_seq == 2 && std::holds_alternative<v1::records::JobCleared>(slot->record.record), "SDK configuration precedes source notification"); channel->pop();
+  const auto before_order = AdapterTestAccess::order(*adapter);
+  std::uint64_t before_ns = 0, after_ns = 0;
+  require(adapter->source_monotonic_ns(before_ns), "pre-publication source clock"); host.frame_end();
+  require(adapter->source_monotonic_ns(after_ns), "post-publication source clock");
+  slot = channel->front(); require(slot && slot->has_record && slot->record.event_seq == 3, "first durable frame publishes one pending mode");
+  const auto& record = slot->record;
+  require(std::get<v1::records::SourceGameMode>(record.record).mode.module.view() == "core_ets2mp.dll", "cached module evidence");
+  require(record.occurred.monotonic_ns.available() && record.occurred.monotonic_ns.value >= before_ns && record.occurred.monotonic_ns.value <= after_ns &&
+    record.occurred.utc_unix_ms.available() && record.occurred.boundary_order == before_order + 1 && record.occurred.configuration_revision == 1 &&
+    record.occurred.simulation == v1::SimulationState::running && record.occurred.game_time.minutes.available() && record.occurred.game_time.minutes.value == 123, "occurrence uses publishing callback time, order and current state");
+  channel->pop(); host.frame_end(); adapter->attach_events(nullptr); adapter->attach_events(channel.get()); host.frame_end();
+  require(channel->next_event_seq() == 4 && !channel->front(), "later frames and reattachment do not repeat notification");
+  adapter->shutdown(); require(adapter->initialize(SCS_TELEMETRY_VERSION_1_01, &params) == SCS_RESULT_ok && channel->prepare(), "fresh session");
+  adapter->attach_events(channel.get()); channel->set_gate(v1::Gate::durable); host.frame_end();
+  require(adapter->read_v1_current(*current) && current->game_mode.mode == v1::GameModeKind::unknown && channel->next_event_seq() == 1 && !channel->front(), "reset clears evidence and unknown is silent");
+  adapter->shutdown(); adapter->attach_events(nullptr);
+  require(adapter->initialize(SCS_TELEMETRY_VERSION_1_01, &params) == SCS_RESULT_ok && channel->prepare(), "full-ring session");
+  adapter->set_game_mode(mode); adapter->attach_events(channel.get()); channel->set_gate(v1::Gate::durable);
+  for (std::size_t i = 0; i < v1::channel_slots; ++i) host.gameplay(SCS_TELEMETRY_GAMEPLAY_EVENT_job_cancelled, empty);
+  host.frame_end();
+  require(channel->next_event_seq() == v1::channel_slots + 2, "full ring still assigns source notification exactly once");
+  for (std::size_t i = 0; i < v1::channel_slots; ++i) {
+    slot = channel->front(); require(slot && slot->has_record && !slot->has_loss && slot->record.event_seq == i + 1 && std::holds_alternative<v1::records::JobCancelled>(slot->record.record), "full ring preserves ordered SDK records"); channel->pop();
+  }
+  host.frame_end(); slot = channel->front();
+  require(slot && slot->has_loss && !slot->has_record && slot->loss_before.first_event_seq == v1::channel_slots + 1 && slot->loss_before.last_event_seq == v1::channel_slots + 1 && slot->loss_before.causes.queue_count == 1, "lost source notification has explicit queueCount coverage");
+  channel->pop(); host.frame_end();
+  require(channel->next_event_seq() == v1::channel_slots + 2 && !channel->front(), "assigned notification loss is never retried");
+  adapter->shutdown(); adapter->attach_events(nullptr);
+}
 void lifecycle() {
   auto adapter = std::make_unique<Adapter>(); Host host; auto params = host.params();
   require(adapter->initialize(SCS_MAKE_VERSION(2,0), &params) == SCS_RESULT_unsupported && host.api_calls == 0, "negotiate unsupported API without SDK side effects");
@@ -1211,7 +1261,7 @@ int main(int argc, char** argv) {
     // ET-052: the optional break channel; needs tests/fixtures for the hand-written minor-2 corpus.
     else if (argc == 3 && std::string(argv[1]) == "mandatory-break") mandatory_break(argv[2]);
     else {
-      lifecycle(); config_terminal_and_bounds(); clocks_and_contention(); failure_cleanup(); deferred_log(); missing_game_time_reset(); game_time_reset_callback_orders(); game_time_reset_frame_delimitation();
+      game_mode_evidence(); lifecycle(); config_terminal_and_bounds(); clocks_and_contention(); failure_cleanup(); deferred_log(); missing_game_time_reset(); game_time_reset_callback_orders(); game_time_reset_frame_delimitation();
       v1_capture_records(); v1_state_and_gate(); v1_nonblocking(); v1_isolation(); v1_drain_into_store(); v1_session_boundary();
     }
     std::cout << "SDK adapter: " << assertions << " checks passed; snapshot bytes=" << sizeof(Snapshot) << ", adapter bytes=" << sizeof(Adapter) << "\n"; return 0;

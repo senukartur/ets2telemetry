@@ -25,8 +25,7 @@ SessionIdentity session_identity(const sdk::Identity& id, Origin origin) {
 WelcomeInfo welcome_info(const sdk::V1Current& current, bool durable_events) {
   WelcomeInfo output; output.durable_events = durable_events;
   output.gameplay_events_registered = current.gameplay_result == SCS_RESULT_ok;
-  // OD-3: no game-mode detection yet, so no source.gameMode events and the default unknown/none/none evidence.
-  output.game_mode_events = false; output.game_mode = GameModePod{};
+  output.game_mode_events = true; output.game_mode = current.game_mode;
   output.telemetry_api = version_of(current.identity.api_version); output.game_telemetry = version_of(current.identity.game_telemetry_version);
   return output;
 }

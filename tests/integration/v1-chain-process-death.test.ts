@@ -183,6 +183,18 @@ async function events(driver: Driver, count: number) {
   expect(await until(() => driver.coverage.filter(item => item.kind === 'event').length >= count || driver.errors.length > 0 || driver.closed, DELIVERY_GUARD_MS), `${count} events`).toBe(true);
   expect(driver.errors).toEqual([]);
 }
+/** Preserve the host's real offline SDK loss, then release the once-only cached mode before the kill barriers. */
+async function modeBootstrap(driver: Driver): Promise<bigint> {
+  expect(driver.checkpoint.data.status.delivery.ackedThroughEventSeq).toBe('0');
+  await events(driver, 1);
+  expect(driver.coverage).toEqual([
+    {kind: 'gap', first: '1', last: '1', causes: {...NO_LOSS, offline: '1'}, redelivered: false},
+    {kind: 'event', eventSeq: '2', type: 'source.gameMode', redelivered: false}
+  ]);
+  driver.ack(2n);
+  await statusUntil(driver, status => status.delivery.ackedThroughEventSeq === '2' && status.delivery.nextEventSeq === '3' && status.delivery.retainedEvents === 0, 'SDK loss and cached mode baseline released');
+  return 3n;
+}
 /** Waits for a checkpoint or snapshot received at index `from` or later whose status satisfies the predicate. */
 async function statusUntil(driver: Driver, predicate: (status: Driver['status']) => boolean, what: string, from = 0) {
   expect(await until(() => driver.messages.slice(from).some(message => (message.kind === 'snapshot' || message.kind === 'checkpoint') && predicate(message.data.status)) || driver.errors.length > 0, DELIVERY_GUARD_MS), what).toBe(true);
@@ -212,26 +224,19 @@ it('ends the broker mid-session: the client reports a retryable rejection, and a
   const host = await startHost(v0, v1);
 
   // A durable test-level driver: the plugin's offline coverage before it (the host's initial `started` callback, gate
-  // `none`) is acknowledged, so the store retains only what follows.
+  // `none`) and the first durable cached-mode notification are acknowledged, so only later SDK records remain retained.
   const first = await connect(v1, true);
   expect(first.welcome.data.durableEvents).toBe(true);
   expect(first.welcome.source).toMatchObject({game: 'ets2', origin: 'synthetic', processId: host.processId});
   expect(first.welcome.source).toEqual({...first.client.authority, origin: 'synthetic'});
-  const baseline = BigInt(first.checkpoint.data.status.delivery.nextEventSeq);
-  expect(first.checkpoint.data.status.delivery.ackedThroughEventSeq).toBe('0');
-  expect(await until(() => BigInt(first.consumer.nextEventSeq) >= baseline || first.errors.length > 0, DELIVERY_GUARD_MS), 'baseline coverage').toBe(true);
-  expect(first.coverage.every(item => item.kind === 'gap' && !item.redelivered)).toBe(true);
-  if (baseline > 1n) {
-    first.ack(baseline - 1n);
-    await statusUntil(first, status => status.delivery.ackedThroughEventSeq === (baseline - 1n).toString() && status.delivery.retainedEvents === 0, 'baseline released');
-  }
+  const baseline = await modeBootstrap(first);
   const acked = (baseline - 1n).toString();
 
   // Barrier: both lifecycle events were delivered and the store retains them unacknowledged; then the broker is killed.
   const beforeEvents = first.messages.length;
   await command(host, 'pause', 'start');
-  await events(first, 2);
-  const delivered = first.coverage.filter(item => item.kind === 'event');
+  await events(first, 3);
+  const delivered = first.coverage.filter(item => item.kind === 'event' && BigInt(item.eventSeq) >= baseline);
   expect(delivered).toEqual([
     {kind: 'event', eventSeq: baseline.toString(), type: 'simulation.paused', redelivered: false},
     {kind: 'event', eventSeq: (baseline + 1n).toString(), type: 'simulation.started', redelivered: false}
@@ -247,14 +252,13 @@ it('ends the broker mid-session: the client reports a retryable rejection, and a
   expect(live.welcome.source).toEqual(first.welcome.source);
   expect(live.welcome.data.durableEvents).toBe(false);
   expect(live.checkpoint.data.status.delivery).toMatchObject({durable: false, ackedThroughEventSeq: acked, nextEventSeq: (baseline + 2n).toString(), retainedEvents: 2});
-  // Loss counters, by hand: before any client the gate was `none`, so every eventSeq below the baseline was lost as
-  // `offline`; the durable connection copied its two events, and nothing was observed while no client was connected
-  // (native-transport-v1.md, gate table; protocol v1 §7: counters are cumulative per plugin session).
-  expect(live.checkpoint.data.status.eventLoss).toEqual({...NO_LOSS, offline: (baseline - 1n).toString()});
+  // Only the host's initial SDK `started` callback was offline. The cached source notification was delivered and ACKed,
+  // so it contributes no loss; counters stay cumulative per plugin session (protocol v1 section 7).
+  expect(live.checkpoint.data.status.eventLoss).toEqual({...NO_LOSS, offline: '1'});
   // An event observed while only a live-only client is connected is noDurableConsumer coverage (OD-4).
   await command(host, 'pause');
   await statusUntil(live, status => status.delivery.nextEventSeq === (baseline + 3n).toString(), 'the live-only loss stored');
-  const pausedLoss = {...NO_LOSS, offline: (baseline - 1n).toString(), noDurableConsumer: '1'};
+  const pausedLoss = {...NO_LOSS, offline: '1', noDurableConsumer: '1'};
   expect(live.status.eventLoss).toEqual(pausedLoss);
   expect(live.coverage).toEqual([]);
   terminate(live.pid);
@@ -321,9 +325,10 @@ it('ends the fake game host mid-session: the source ends, the service waits on t
   const durable = await connect(v1, true);
   const old = durable.welcome.source;
   expect(old).toMatchObject({origin: 'synthetic', processId: killed.processId});
+  await modeBootstrap(durable);
   const beforeEvents = durable.messages.length;
   await command(killed, 'pause', 'start');
-  await events(durable, 2);
+  await events(durable, 3);
   await statusUntil(durable, status => status.delivery.retainedEvents >= 2, 'retained events', beforeEvents);
   const oldRecord = `${old.processInstanceId}.json`;
   expect(records(v1)).toEqual([oldRecord]);
@@ -392,14 +397,16 @@ it('ends the fake game host mid-session: the source ends, the service waits on t
   expect(next.welcome.source).toEqual({...fresh, origin: 'synthetic'});
   expect(identity(next.welcome.source)).not.toEqual(identity(old));
   expect(next.checkpoint.data.status.delivery).toMatchObject({durable: true, ackedThroughEventSeq: '0'});
-  const nextBaseline = BigInt(next.checkpoint.data.status.delivery.nextEventSeq);
+  const nextBaseline = await modeBootstrap(next);
   await command(restarted, 'pause');
-  await events(next, 1);
+  await events(next, 2);
   expect(next.messages.every(message => message.source.pluginSessionId === fresh.pluginSessionId)).toBe(true);
   const coverage = next.coverage;
-  expect(coverage[0]).toMatchObject(coverage[0].kind === 'gap' ? {first: '1'} : {eventSeq: '1'});
-  expect(coverage.every(item => !item.redelivered)).toBe(true);
-  expect(coverage.filter(item => item.kind === 'event')).toEqual([{kind: 'event', eventSeq: nextBaseline.toString(), type: 'simulation.paused', redelivered: false}]);
+  expect(coverage).toEqual([
+    {kind: 'gap', first: '1', last: '1', causes: {...NO_LOSS, offline: '1'}, redelivered: false},
+    {kind: 'event', eventSeq: '2', type: 'source.gameMode', redelivered: false},
+    {kind: 'event', eventSeq: nextBaseline.toString(), type: 'simulation.paused', redelivered: false}
+  ]);
   await statusUntil(next, status => status.delivery.retainedEvents >= 1 && status.delivery.nextEventSeq === (nextBaseline + 1n).toString(), 'the new event retained');
   expect(records(v1)).toEqual([`${fresh.processInstanceId}.json`]);
 
@@ -410,7 +417,7 @@ it('ends the fake game host mid-session: the source ends, the service waits on t
   expect(await until(() => restarted.exit !== undefined && next.closed, DELIVERY_GUARD_MS), 'clean exit').toBe(true);
   expect(restarted.exit).toEqual({code: 0, signal: null});
   const ends = next.messages.filter(message => message.kind === 'end');
-  expect(ends.map(message => message.data)).toEqual([{reason: 'plugin-shutdown', nextEventSeq: (nextBaseline + 1n).toString(), ackedThroughEventSeq: '0', retainedUnacked: '1'}]);
+  expect(ends.map(message => message.data)).toEqual([{reason: 'plugin-shutdown', nextEventSeq: (nextBaseline + 1n).toString(), ackedThroughEventSeq: '2', retainedUnacked: '1'}]);
   expect(next.messages.at(-1)?.kind).toBe('end');
   expect([next.errors, next.ended]).toEqual([[], true]);
   expect(next.diagnostics).toEqual([expect.objectContaining({outcome: 'ended', exitCode: 3})]);

@@ -15,6 +15,8 @@ import {HistoryStorage} from '../../apps/desktop/src/history-storage';
 import {parseJournalReply, refusal, type JournalQuery} from '../../apps/desktop/src/journal-contract';
 import {JournalExporter} from '../../apps/desktop/src/journal-export-writer';
 import {JournalService} from '../../apps/desktop/src/journal-service';
+import {initialTripState} from '../../packages/telemetry-core/src/index';
+import {run, sessionInput, otherJob} from '../shared/trip-messages';
 import {EUR, JOURNAL_TRIPS as T, seedJournalAnchors, seedSample} from '../shared/journal-seed';
 import {BASE_UTC, ETS2_A, job, money, r, Script} from '../shared/trip-messages';
 import {tripExportProblems} from '../shared/trip-export-validator';
@@ -204,3 +206,53 @@ describe('a trip export through the real worker, the service journal and main\'s
     expect(logs.filter(([event]) => /UNAVAILABLE|INVALID|REJECTED/.test(event))).toEqual([]);
   });
 });
+
+it('persists opening mode and ambiguity through worker reopen and JSON export, retaining full module events', async () => {
+  const local = await workspace();
+  const create = () => new HistoryStorage({localAppData: local.directory, target: {purpose: 'synthetic', name: 'mode'}, appVersion: '0.1.0-test', closeGraceMs: TEST_CLOSE_GRACE_MS,
+    createWorker: () => storageWorker().handle, log: () => {}});
+  let own = create();
+  let output = '';
+  try {
+    own.start(); await until(() => own.state === 'open', 'mode database open', HANG_GUARD_MS);
+    const c = own.client!, script = new Script('10000000-0000-4000-8000-000000000059');
+    const welcome = script.welcome(); await ok(c.upsertSession({message: welcome}), 'mode session');
+    let state = run(initialTripState(), [sessionInput(welcome)]).state;
+    const ids: string[] = [];
+    const observation = r.gameMode({mode: 'truckersmp', method: 'module-scan', confidence: 'strong', module: 'synthetic-multiplayer-module.dll'});
+    const regression = r.regression('12345', '12000');
+    let simulation: 'running' | 'paused' = 'paused';
+    for (const record of [r.truckConfigured(), r.trailerConfigured(), r.timersRestart(), r.started(), r.paused(), r.jobConfigured(), r.started(), observation, observation, regression, r.paused(), r.delivered(), r.jobCleared(), r.jobConfigured(otherJob()), r.started(), r.paused(), r.delivered()]) {
+      if (record.type === 'simulation.started') simulation = 'running';
+      else if (record.type === 'simulation.paused') simulation = 'paused';
+      const message = script.event(record, {simulation});
+      const reduced = run(state, [message]); state = reduced.state;
+      const effects = reduced.effects.flat();
+      for (const effect of effects) if (effect.kind === 'trip.open') ids.push(effect.tripUuid);
+      await ok(c.commitEvent({message, effects}), 'mode event');
+      if (record.type === 'gameTime.regression') {
+        expect(ids).toHaveLength(1);
+        const active = await ok(c.journalTrip(ids[0]), 'mode regression detail');
+        expect(active.trip).toMatchObject({tripUuid: ids[0], outcome: 'open', closeReason: null, recordingCompleteness: 'unknown',
+          gameMode: {mode: 'unknown', method: 'none', confidence: 'none'}, gameModeAmbiguous: true});
+        expect(active.intervals.items).toContainEqual(expect.objectContaining({kind: 'discontinuity', cause: 'save-load', annotation: true}));
+      }
+    }
+    expect(ids).toHaveLength(2);
+    await own.close(); own = create(); own.start(); await until(() => own.state === 'open', 'mode database reopen', HANG_GUARD_MS);
+    const first = await ok(own.client!.journalTrip(ids[0]), 'first detail');
+    const second = await ok(own.client!.journalTrip(ids[1]), 'second detail');
+    expect(first.trip).toMatchObject({tripUuid: ids[0], outcome: 'delivered', closeReason: 'outcome', recordingCompleteness: 'partial',
+      gameMode: {mode: 'unknown', method: 'none', confidence: 'none'}, gameModeAmbiguous: true});
+    expect(second.trip).toMatchObject({gameMode: {mode: 'truckersmp', method: 'module-scan', confidence: 'strong'}, gameModeAmbiguous: false});
+    const service = new JournalService({history: own, stopping: () => false, log: () => {}});
+    const instance = new JournalExporter({read: async query => parseJournalReply(query, await service.query(query)) ?? refusal('FAILED'), documents: () => local.directory,
+      localAppData: local.directory, appVersion: '0.1.0-test', log: () => {}, showSaveDialog: () => {output = path.join(local.directory, 'mode-export.json'); return Promise.resolve({canceled: false, filePath: output});}});
+    expect((await instance.export(ids[0])).ok).toBe(true);
+    const exported = JSON.parse(readFileSync(output, 'utf8')) as {trip: unknown; events: {record: unknown}[]};
+    expect(tripExportProblems(exported)).toEqual([]);
+    expect(exported.trip).toMatchObject({tripUuid: ids[0], outcome: 'delivered', closeReason: 'outcome', recordingCompleteness: 'partial', gameMode: first.trip.gameMode, gameModeAmbiguous: true});
+    expect(exported.events.filter(event => (event.record as {type: string}).type === 'gameTime.regression').map(event => event.record)).toEqual([regression]);
+    expect(exported.events.filter(event => (event.record as {type: string}).type === 'source.gameMode').map(event => event.record)).toEqual([observation, observation]);
+  } finally {await own.close(); await local.dispose();}
+}, HANG_GUARD_MS);

@@ -396,8 +396,9 @@ function stepEvent(state: TripState, message: EventMessage, coveredThrough: Uint
       c.gameTime !== null && c.gameTime.clockId === pending.before.gameTime.clockId && c.gameTime.minutes === pending.before.gameTime.minutes;
     if (!safeEvent) finishReconnect(session, c.slot, false);
   }
-  // The one event right after the first start may still be the load's regression (O10); any other event ends the window.
-  if (c.slot.trip?.loadCheck === 'after-start' && record.type !== 'gameTime.regression') c.slot.trip.loadCheck = null;
+  // The next non-mode-metadata event after the first start may still be the load's regression (O10).
+  // Cached source evidence does not consume the load window; other events keep their existing decisive behavior.
+  if (c.slot.trip?.loadCheck === 'after-start' && record.type !== 'gameTime.regression' && record.type !== 'source.gameMode') c.slot.trip.loadCheck = null;
   switch (record.type) {
     case 'job.configured': onJobConfigured(c, record); break;
     case 'job.cleared':

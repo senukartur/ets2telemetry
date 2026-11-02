@@ -112,6 +112,7 @@ export type I18nKey =
   | "copy.events-of-the-trip-s-plugin-session-from-eventseq-from-to-the-end-of"
   | "copy.this-trip-was-closed-before-schema-version-2-so-its-window-is-unknow"
   | "copy.changed-during-the-trip"
+  | "copy.mode-unconfirmed"
   | "copy.synthetic-test-database-never-game-history"
   | "copy.replay-test-database-never-game-history"
   | "copy.the-telemetry-service-is-not-available-right-now-try-again-when-it-i"
