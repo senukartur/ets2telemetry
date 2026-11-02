@@ -31,7 +31,7 @@ The plugin streams over local named pipes that only the current Windows user can
 
 ### Live dashboard
 
-The Live screen shows the connection state and every live telemetry field: speed and RPM gauges, gear, fuel and range, the SDK average consumption, the current job (cargo, origin and destination, distance left, deadline, income), the truck and trailers, and game time. A value that stops updating becomes unavailable instead of staying frozen. Units follow a per-game profile, metric for ETS2 and US customary for ATS by default. Gears can be shown as automatic (1, 2, 3), manual range-splitter labels that follow the truck's gearbox layout (1L, 1H…), or crawler first (C, 1, 2…).
+The Live screen shows the connection state and every live telemetry field: speed and RPM gauges, gear, fuel and range, the SDK average consumption, the current job (cargo, origin and destination, distance left, deadline, income), the truck and trailers, and game time. A value that stops updating becomes unavailable instead of staying frozen. The games briefly report the average consumption as zero while driving, so the dashboard and the overlay keep its last non-zero value for up to 10 seconds; history keeps what the game sent. Units follow a per-game profile, metric for ETS2 and US customary for ATS by default. Gears can be shown as automatic (1, 2, 3), manual range-splitter labels that follow the truck's gearbox layout (1L, 1H…), or crawler first (C, 1, 2…).
 
 ### Overlay
 

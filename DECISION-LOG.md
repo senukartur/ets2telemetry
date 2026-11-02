@@ -823,3 +823,7 @@ The owner authorized automatic ETS2/ATS connection and approved the bounded nati
 ## M PLUS Rounded 1c typography — October 31, 2026
 
 The owner chose M PLUS Rounded 1c for the dashboard and overlay, bundled offline with its OFL notice. Body text uses 400, labels and telemetry/journal values use 500, and headings use 700. This supersedes the Onest family and previous value weights; existing sizes, numeric reserves and layout constraints remain.
+
+## ET-051 average consumption zeros — November 2, 2026
+
+An owner-run raw channel capture showed that ETS2 itself sends 0.0 for `truck.fuel.consumption.average` for about a quarter of a second every two to three seconds while driving, and for longer while standing. Of the options on the card, the owner chose to hold the value on screen: the dashboard and the overlay keep the last non-zero value through a zero, for up to 10 s (the agent picked 10 s from the card's 10–15 s), and the database and exports keep what the SDK sent. Converting such zeros to unavailable at ingestion was not chosen.
