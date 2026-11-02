@@ -3349,12 +3349,17 @@ it.each(['close', 'destroyed'] as const)('releases current-track ownership on %s
   vi.stubEnv('ETS2TELEMETRY_SOURCE_KIND', 'ets2');
   const widget = await readyCurrentTrack();
   if (boundary === 'close') widget.emit('close', {preventDefault: vi.fn()});
-  widget.webContents.isDestroyed = () => true;
-  if (boundary === 'destroyed') widget.webContents.emit('destroyed');
+  else {widget.webContents.isDestroyed = () => true; widget.webContents.emit('destroyed');}
   const destroyed = () => {throw new TypeError('Object has been destroyed');};
   widget.hide.mockImplementation(destroyed); widget.setIgnoreMouseEvents.mockImplementation(destroyed);
   const writes = widget.hide.mock.calls.length;
-  expect(() => {deliver(currentGame()); nowReaderOptions.failed('READER_UNAVAILABLE'); widget.webContents.emit('did-start-loading'); widget.emit('closed');}).not.toThrow();
+  const source = {id: 's1', sourceAppId: 'Synthetic player', playback: 'playing' as const, current: true};
+  expect(() => {
+    deliver(currentGame());
+    nowReaderOptions.snapshot({version: 1, type: 'snapshot', requestId: 1, sessions: [source], error: null,
+      selected: {id: source.id, revision: 1, title: 'Late track', artist: null, album: null, playback: 'playing', timeline: null, artwork: null}}, 1);
+    nowReaderOptions.failed('READER_UNAVAILABLE'); widget.webContents.emit('did-start-loading'); widget.emit('closed');
+  }).not.toThrow();
   expect(widget.hide).toHaveBeenCalledTimes(writes);
 });
 it('releases current-track ownership before exit cleanup can reenter with late game and media updates', async () => {
