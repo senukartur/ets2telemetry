@@ -11,12 +11,14 @@ import {CONSUMPTION_CHANNEL, ProbeSummarizer, type ProbeFrame, type ProbeSummary
 export const FRAMES_FILE = 'frames.ndjson';
 export const SUMMARY_FILE = 'summary.json';
 export const PROBE_FORMAT = 'ets2telemetry-channel-probe';
+/** 2: exact zero runs, received and published frame rates. */
+export const PROBE_FORMAT_VERSION = 2;
 export const MAX_SECONDS = 3600;
 /** About one hour at 500 frames per second; a capture stops at this bound rather than growing without limit. */
 export const MAX_FRAMES = 2_000_000;
 const CHANNELS = {consumption: CONSUMPTION_CHANNEL, speed: 'truck.speed', rpm: 'truck.engine.rpm', fuel: 'truck.fuel.amount'} as const;
 
-export type StopReason = 'deadline' | 'interrupted' | 'frame-cap' | 'diagnostics-refused' | 'protocol-error';
+export type StopReason = 'deadline' | 'interrupted' | 'frame-cap' | 'diagnostics-refused' | 'protocol-error' | 'write-error';
 export interface ProbeOptions {
   /** A directory that must not exist yet; its parent must. */
   output: string;
@@ -38,7 +40,9 @@ function raw(observations: DiagnosticObservation[], channel: string): RawValue {
   const observation = observations.find(o => o.channel === channel);
   if (!observation) return null;
   if (!observation.value.available) return 'unavailable';
-  return typeof observation.value.value === 'number' ? observation.value.value : 'unavailable';
+  // The probed channels are numeric: any other type means the plugin contract changed, so the capture stops.
+  if (typeof observation.value.value !== 'number') throw new Error(`Non-numeric ${channel}`);
+  return observation.value.value;
 }
 /** JSON text of one frame that keeps a raw -0 visible; JSON.stringify would write it as 0. */
 export function frameLine(frame: ProbeFrame): string {
@@ -58,6 +62,9 @@ export async function runProbe(options: ProbeOptions): Promise<ProbeResult> {
   const stopped = () => stopReason !== undefined;
   const stop = (reason: StopReason) => {stopReason ??= reason;};
   options.signal?.addEventListener('abort', () => stop('interrupted'), {once: true});
+  // A disk error ends the capture like an interrupt, so the summary of what was recorded is still written.
+  const writeFailed = new AbortController();
+  frames.on('error', error => {log(`Cannot write ${FRAMES_FILE} (${error.message}); the capture stops.`); stop('write-error'); writeFailed.abort();});
 
   while (!stopped()) {
     const remaining = deadline - performance.now();
@@ -67,14 +74,14 @@ export async function runProbe(options: ProbeOptions): Promise<ProbeResult> {
       const socket = options.connect(), decoder = new FrameDecoder(), consumer = new V0Consumer(true);
       let done = false, last: {monotonicNs: string; simulation: Simulation} | undefined, identity: SourceIdentity | undefined;
       const finish = () => {
-        if (done) return; done = true; clearTimeout(timer); options.signal?.removeEventListener('abort', abort); socket.destroy();
+        if (done) return; done = true; clearTimeout(timer); options.signal?.removeEventListener('abort', abort); writeFailed.signal.removeEventListener('abort', abort); socket.destroy();
         // The broker has exited (or the fixture socket closed) before the next attempt.
         void (socket.completion ?? Promise.resolve()).then(() => resolve());
       };
       const fail = (reason: StopReason, message: string) => {log(message); stop(reason); finish();};
       const abort = () => finish();
       const timer = setTimeout(() => {stop('deadline'); finish();}, remaining);
-      options.signal?.addEventListener('abort', abort, {once: true});
+      options.signal?.addEventListener('abort', abort, {once: true}); writeFailed.signal.addEventListener('abort', abort, {once: true});
       socket.once('connect', () => {
         if (done) return;
         socket.write(encodeFrame({version: PROTOCOL_V0, kind: 'hello', data: {clientInstanceId: randomUUID(), minMinor: 0, maxMinor: 0, diagnostics: true}}));
@@ -100,7 +107,7 @@ export async function runProbe(options: ProbeOptions): Promise<ProbeResult> {
             const frame: ProbeFrame = {connection, monotonicNs: message.capture.monotonicNs, simulation: last?.monotonicNs === message.capture.monotonicNs ? last.simulation : null,
               consumption: raw(observations, CHANNELS.consumption), speed: raw(observations, CHANNELS.speed), rpm: raw(observations, CHANNELS.rpm), fuel: raw(observations, CHANNELS.fuel),
               coalescedSnapshots: message.data.continuity.coalescedSnapshots, lostObservations: message.data.continuity.lostObservations};
-            summarizer.add(frame); frames.write(frameLine(frame));
+            summarizer.add(frame); if (!frames.errored) frames.write(frameLine(frame));
             if (++recorded >= maxFrames) {stop('frame-cap'); finish();}
           });
         } catch {fail('protocol-error', 'Invalid protocol, ordering or source identity; the capture stops.');}
@@ -116,16 +123,18 @@ export async function runProbe(options: ProbeOptions): Promise<ProbeResult> {
     if (welcomed && !stopped()) log('Connection ended; waiting for the game again.');
     if (!stopped()) await new Promise<void>(resolve => {
       const timer = setTimeout(done, Math.min(retryMs, Math.max(0, deadline - performance.now())));
-      function done() {clearTimeout(timer); options.signal?.removeEventListener('abort', done); resolve();}
-      options.signal?.addEventListener('abort', done, {once: true});
+      function done() {clearTimeout(timer); options.signal?.removeEventListener('abort', done); writeFailed.signal.removeEventListener('abort', done); resolve();}
+      options.signal?.addEventListener('abort', done, {once: true}); writeFailed.signal.addEventListener('abort', done, {once: true});
     });
   }
   await close(frames);
   const summary = summarizer.result(), reason = stopReason ?? 'deadline';
-  await writeFile(path.join(directory, SUMMARY_FILE), JSON.stringify({format: PROBE_FORMAT, formatVersion: 1, game: options.game, origin: options.origin,
+  await writeFile(path.join(directory, SUMMARY_FILE), JSON.stringify({format: PROBE_FORMAT, formatVersion: PROBE_FORMAT_VERSION, game: options.game, origin: options.origin,
     requestedSeconds: options.seconds, stopReason: reason, summary}, null, 2) + '\n', {flag: 'wx'});
   return {stopReason: reason, summary, directory};
 }
 function close(stream: WriteStream): Promise<void> {
-  return new Promise((resolve, reject) => {stream.once('error', reject); stream.end(() => resolve());});
+  // After a write error the stream is already destroyed and the error was reported as the stop reason.
+  if (stream.errored) return Promise.resolve();
+  return new Promise(resolve => {stream.once('error', () => resolve()); stream.end(() => resolve());});
 }

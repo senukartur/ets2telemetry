@@ -36,8 +36,19 @@ describe('channel probe summary', () => {
     expect(s.zeroRuns.durationMs).toMatchObject({count: 2, median: 10, max: 20});
     expect(s.zeroRuns.startIntervalMs).toMatchObject({count: 2, median: 30, max: 50});
     expect(s.zeroRuns.singleFrameBetweenCloseNeighbours).toBe(1);
-    expect(s.frameIntervalMs).toMatchObject({count: 9, median: 10, max: 10, approximateFps: 100});
+    // The counter only grows at the last frame, so both closed runs and their neighbours are adjacent game frames.
+    expect(s.zeroRuns.exact).toEqual({count: 2, lengthFrames: {'1': 1, '2': 1, '3': 0, '4-10': 0, '11-60': 0, '61+': 0}, singleFrameBetweenCloseNeighbours: 1});
+    expect(s.frameIntervalMs).toMatchObject({count: 9, median: 10, max: 10, receivedPerSecond: 100});
+    // 9 received intervals plus 2 coalesced frames over 90 ms.
+    expect(s.publishedPerSecond).toBe(122.2);
     expect(s.missed).toEqual({coalescedSnapshots: '2', lostObservations: '0'});
+  });
+  it('does not count a run as exact when frames were coalesced inside it or next to it, and counts from the first received frame', () => {
+    const s = summarize([frame(1, 0, 0.3, 20, '1000'), frame(1, 10, 0, 20, '1000'), frame(1, 20, 0.3, 20, '1003')]);
+    expect(s.zeroRuns).toMatchObject({count: 1, singleFrameBetweenCloseNeighbours: 1, exact: {count: 0, singleFrameBetweenCloseNeighbours: 0}});
+    // What was coalesced before the first received frame is not counted.
+    expect(s.missed.coalescedSnapshots).toBe('3');
+    expect(s.publishedPerSecond).toBe(250);
   });
   it('never joins runs, intervals or counters across connections', () => {
     const s = summarize([frame(1, 0, 0.3, 20, '10'), frame(1, 10, 0, 20, '11'), frame(2, 5, 0, 20, '0'), frame(2, 15, 0.3, 20, '3')]);
@@ -62,20 +73,24 @@ const observations = (consumption: number | null, speed: number): DiagnosticObse
   {channel: 'synthetic.private', sdkType: 'string', unit: 'raw', value: {available: true, value: 'not-recorded'}}
 ];
 const diagnostic = (atMs: number, consumption: number | null, speed = 20) => ({action: 'diagnostic' as const, atMs, observations: observations(consumption, speed)});
-const scenario = (diagnostics = true): Scenario => ({id: 'synthetic-channel-probe', origin: 'synthetic', game: 'ets2', seed: 'channel-probe', diagnostics, steps: [
+const scenario = (diagnostics = true, seed = 'channel-probe'): Scenario => ({id: 'synthetic-channel-probe', origin: 'synthetic', game: 'ets2', seed, diagnostics, steps: [
   {action: 'connect', atMs: 0}, reading(10), diagnostic(10, 0.35), reading(20), diagnostic(20, 0), reading(30), diagnostic(30, 0.3501), {action: 'disconnect', atMs: 31},
   {action: 'connect', atMs: 40}, reading(50, 'paused'), diagnostic(50, null, 0), diagnostic(60, 0, 0), {action: 'disconnect', atMs: 61}
 ]});
-/** A broker-like socket replaying one connection's frames after the hello, then ending. */
+/** A broker-like socket replaying one connection's frames after the hello, then ending, staying open, or refusing as busy. */
 class FakeSocket extends EventEmitter {
   hello?: HelloMessage['data'];
-  constructor(private readonly frames: Uint8Array[], readonly authority?: SourceIdentity) {super(); setImmediate(() => this.emit('connect'));}
+  constructor(private readonly frames: Uint8Array[], readonly authority?: SourceIdentity, private readonly mode: 'end' | 'hang' | 'busy' = 'end') {
+    super();
+    setImmediate(() => mode === 'busy' ? this.emit('error', Object.assign(new Error('busy'), {outcome: 'busy'})) : this.emit('connect'));
+  }
   write(bytes: Uint8Array): void {
     this.hello = (decodePayload(bytes.subarray(4)) as HelloMessage).data;
-    setImmediate(() => {for (const frame of this.frames) this.emit('data', frame); this.emit('end'); this.emit('close');});
+    setImmediate(() => {for (const frame of this.frames) this.emit('data', frame); if (this.mode === 'end') {this.emit('end'); this.emit('close');}});
   }
   destroy(): void {}
 }
+const firstConnection = (s = scenario()) => replay(s).filter(e => e.connection === 1).map(e => e.frame);
 async function output(directory: string) {
   const lines = (await readFile(path.join(directory, FRAMES_FILE), 'utf8')).trimEnd().split('\n').map(line => JSON.parse(line) as ProbeFrame);
   const text = await readFile(path.join(directory, SUMMARY_FILE), 'utf8');
@@ -99,8 +114,7 @@ describe('channel probe capture', () => {
     for (const value of [source.pluginSessionId, source.processInstanceId, 'not-recorded', 'synthetic.private']) expect(text).not.toContain(value);
   });
   it('stops when the plugin does not enable diagnostics', async () => {
-    const frames = replay(scenario(false)).filter(e => e.connection === 1).map(e => e.frame);
-    const result = await runProbe({output: path.join(resources.directory, 'refused'), game: 'ets2', origin: 'synthetic', seconds: 60, connect: () => new FakeSocket(frames)});
+    const result = await runProbe({output: path.join(resources.directory, 'refused'), game: 'ets2', origin: 'synthetic', seconds: 60, connect: () => new FakeSocket(firstConnection(scenario(false)))});
     expect(result.stopReason).toBe('diagnostics-refused'); expect(result.summary.frames).toBe(0);
   });
   it('rejects a game frame whose source differs from the broker authority', async () => {
@@ -108,6 +122,33 @@ describe('channel probe capture', () => {
     const authority: SourceIdentity = {...replay(scenario())[0].message.source, origin: 'game'};
     const result = await runProbe({output: path.join(resources.directory, 'mismatch'), game: 'ets2', origin: 'game', seconds: 60, connect: () => new FakeSocket(frames, authority)});
     expect(result.stopReason).toBe('protocol-error'); expect(result.summary.frames).toBe(0);
+  });
+  it('stops at the frame cap and at the deadline of a connection that stays open', async () => {
+    const capped = await runProbe({output: path.join(resources.directory, 'cap'), game: 'ets2', origin: 'synthetic', seconds: 60, maxFrames: 2, connect: () => new FakeSocket(firstConnection(), undefined, 'hang')});
+    expect(capped.stopReason).toBe('frame-cap'); expect(capped.summary.frames).toBe(2);
+    expect((await output(capped.directory)).lines).toHaveLength(2);
+    const timed = await runProbe({output: path.join(resources.directory, 'deadline'), game: 'ets2', origin: 'synthetic', seconds: 1, connect: () => new FakeSocket(firstConnection(), undefined, 'hang')});
+    expect(timed.stopReason).toBe('deadline'); expect(timed.summary.frames).toBe(3);
+  });
+  it('waits and reconnects after the broker reports another client', async () => {
+    const lines: string[] = [], controller = new AbortController();
+    let attempts = 0;
+    const result = await runProbe({output: path.join(resources.directory, 'busy'), game: 'ets2', origin: 'synthetic', seconds: 60, retryMs: 1, signal: controller.signal, log: line => lines.push(line),
+      connect: () => {if (++attempts === 3) controller.abort(); return new FakeSocket(attempts === 2 ? firstConnection() : [], undefined, attempts === 1 ? 'busy' : 'end');}});
+    expect(result.stopReason).toBe('interrupted'); expect(result.summary.frames).toBe(3);
+    expect(lines[0]).toContain('Another client holds the game connection');
+  });
+  it('stops on a source change, out-of-order frames or a non-numeric probed value within one connection', async () => {
+    const run = (name: string, frames: Uint8Array[]) => runProbe({output: path.join(resources.directory, name), game: 'ets2', origin: 'synthetic', seconds: 60, connect: () => new FakeSocket(frames)});
+    const changed = await run('changed', [...firstConnection(), ...firstConnection(scenario(true, 'another-plugin-session'))]);
+    expect(changed.stopReason).toBe('protocol-error'); expect(changed.summary.frames).toBe(3);
+    const frames = firstConnection(), last = frames.length - 1;
+    const reordered = await run('reordered', [...frames.slice(0, last - 1), frames[last], frames[last - 1]]);
+    expect(reordered.stopReason).toBe('protocol-error');
+    const text: Scenario = {...scenario(), steps: [{action: 'connect', atMs: 0}, reading(10),
+      {action: 'diagnostic', atMs: 10, observations: [{channel: 'truck.fuel.consumption.average', sdkType: 'string', unit: 'raw', value: {available: true, value: 'x'}}]}]};
+    const nonNumeric = await run('non-numeric', firstConnection(text));
+    expect(nonNumeric.stopReason).toBe('protocol-error'); expect(nonNumeric.summary.frames).toBe(0);
   });
   it('refuses an existing output directory and out-of-range durations before connecting', async () => {
     const connect = () => {throw new Error('must not connect');};

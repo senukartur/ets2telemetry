@@ -20,6 +20,7 @@ export interface ProbeFrame {
   coalescedSnapshots: string; lostObservations: string;
 }
 interface Share { frames: number; zero: number; zeroPercent: number }
+type Lengths = Record<'1' | '2' | '3' | '4-10' | '11-60' | '61+', number>;
 export interface Distribution { count: number; median: number | null; p10: number | null; p90: number | null; p95: number | null; max: number | null }
 export interface ProbeSummary {
   channel: typeof CONSUMPTION_CHANNEL;
@@ -34,14 +35,23 @@ export interface ProbeSummary {
     count: number;
     /** Runs still open when their connection or the capture ended; their duration is unknown. */
     open: number;
-    lengthFrames: Record<'1' | '2' | '3' | '4-10' | '11-60' | '61+', number>;
+    /** In received frames. */
+    lengthFrames: Lengths;
     /** From the first zero frame to the first following frame with a different consumption reading. */
     durationMs: Distribution;
     startIntervalMs: Distribution;
     /** Single-frame zeros whose two neighbours differ by less than 1 % of the earlier one. */
     singleFrameBetweenCloseNeighbours: number;
+    /**
+     * Run lengths count received frames, and the plugin may coalesce frames between two received ones. These are the closed
+     * runs with no coalesced frame from the reading before the run to the reading after it, so their lengths are game frames.
+     */
+    exact: {count: number; lengthFrames: Lengths; singleFrameBetweenCloseNeighbours: number};
   };
-  frameIntervalMs: Distribution & { approximateFps: number | null };
+  /** Between received frames: the relay's delivery cadence, not the game's frame rate. */
+  frameIntervalMs: Distribution & { receivedPerSecond: number | null };
+  /** Received plus coalesced frames over the capture-clock span of each connection: the plugin's publication rate. */
+  publishedPerSecond: number | null;
   /**
    * From the plugin's counters. `coalescedSnapshots` counts frames published but not received. `lostObservations` also
    * counts observations v0 cannot carry, such as the world placement in every frame, so it is not a frame count.
@@ -59,7 +69,8 @@ function distribution(values: number[]): Distribution {
 }
 const share = (frames: number, zero: number): Share => ({frames, zero, zeroPercent: frames ? round(100 * zero / frames) : 0});
 const milliseconds = (fromNs: bigint, toNs: bigint): number => Number(toNs - fromNs) / 1e6;
-function bucket(length: number): keyof ProbeSummary['zeroRuns']['lengthFrames'] {
+const emptyLengths = (): Lengths => ({'1': 0, '2': 0, '3': 0, '4-10': 0, '11-60': 0, '61+': 0});
+function bucket(length: number): keyof Lengths {
   return length <= 3 ? String(length) as '1' | '2' | '3' : length <= 10 ? '4-10' : length <= 60 ? '11-60' : '61+';
 }
 
@@ -72,27 +83,31 @@ export class ProbeSummarizer {
   private readonly frameIntervals: number[] = [];
   private readonly runDurations: number[] = [];
   private readonly runStartIntervals: number[] = [];
-  private readonly lengths: ProbeSummary['zeroRuns']['lengthFrames'] = {'1': 0, '2': 0, '3': 0, '4-10': 0, '11-60': 0, '61+': 0};
-  private runs = 0; private open = 0; private closeSingles = 0;
+  private readonly lengths = emptyLengths();
+  private readonly exactLengths = emptyLengths();
+  private runs = 0; private open = 0; private closeSingles = 0; private exactRuns = 0; private exactCloseSingles = 0;
   private missedCoalesced = 0n; private missedLost = 0n;
+  private published = 0n; private spanNs = 0n;
   // Per-connection state.
   private connection = 0;
+  private connectionFrames = 0;
+  private firstNs?: bigint;
   private previousNs?: bigint;
   private firstCounters?: [bigint, bigint];
   private lastCounters?: [bigint, bigint];
   private lastStartNs?: bigint;
-  /** The last numeric reading before the current run, and the run itself. */
-  private before?: number;
+  /** The last numeric reading before the current run with the coalesced counter at it, and the run itself. */
+  private before?: {value: number; coalesced: bigint};
   private run?: {startNs: bigint; length: number};
 
   add(frame: ProbeFrame): void {
     const ns = BigInt(frame.monotonicNs), counters: [bigint, bigint] = [BigInt(frame.coalescedSnapshots), BigInt(frame.lostObservations)];
-    if (frame.connection !== this.connection) {this.endConnection(); this.connection = frame.connection; this.firstCounters = counters;}
+    if (frame.connection !== this.connection) {this.endConnection(); this.connection = frame.connection; this.firstNs = ns; this.firstCounters = counters;}
     else if (this.previousNs !== undefined && ns > this.previousNs) this.frameIntervals.push(milliseconds(this.previousNs, ns));
-    this.frames++; this.connections.add(frame.connection); this.previousNs = ns; this.lastCounters = counters;
+    this.frames++; this.connectionFrames++; this.connections.add(frame.connection); this.previousNs = ns; this.lastCounters = counters;
     const value = frame.consumption;
     if (value === null) {this.absent++; return;}
-    if (value === 'unavailable') {this.unavailable++; this.endRun(ns, undefined); this.before = undefined; return;}
+    if (value === 'unavailable') {this.unavailable++; this.endRun(ns, undefined, counters[0]); this.before = undefined; return;}
     this.observed++;
     const isZero = value === 0;
     if (isZero) {this.zero++; if (Object.is(value, -0)) this.negativeZero++;}
@@ -108,20 +123,28 @@ export class ProbeSummarizer {
       }
       return;
     }
-    this.endRun(ns, value); this.before = value;
+    this.endRun(ns, value, counters[0]); this.before = {value, coalesced: counters[0]};
   }
-  private endRun(ns: bigint, after: number | undefined): void {
+  private endRun(ns: bigint, after: number | undefined, coalesced: bigint): void {
     if (!this.run) return;
+    const before = this.before?.value;
+    const close = this.run.length === 1 && before !== undefined && after !== undefined && before !== 0 && Math.abs(after - before) < Math.abs(before) * 0.01;
     this.lengths[bucket(this.run.length)]++; this.runDurations.push(milliseconds(this.run.startNs, ns));
-    if (this.run.length === 1 && this.before !== undefined && after !== undefined && this.before !== 0 && Math.abs(after - this.before) < Math.abs(this.before) * 0.01) this.closeSingles++;
+    if (close) this.closeSingles++;
+    if (this.before && after !== undefined && coalesced === this.before.coalesced) {this.exactRuns++; this.exactLengths[bucket(this.run.length)]++; if (close) this.exactCloseSingles++;}
     this.run = undefined;
   }
   private endConnection(): void {
     if (this.run) {this.lengths[bucket(this.run.length)]++; this.open++; this.run = undefined;}
+    // The counters are cumulative: the delta from the first received frame leaves out what was coalesced before the probe saw any.
     if (this.firstCounters && this.lastCounters) {
-      this.missedCoalesced += this.lastCounters[0] - this.firstCounters[0]; this.missedLost += this.lastCounters[1] - this.firstCounters[1];
+      const coalesced = this.lastCounters[0] - this.firstCounters[0];
+      this.missedCoalesced += coalesced; this.missedLost += this.lastCounters[1] - this.firstCounters[1];
+      if (this.firstNs !== undefined && this.previousNs !== undefined && this.previousNs > this.firstNs) {
+        this.spanNs += this.previousNs - this.firstNs; this.published += BigInt(this.connectionFrames - 1) + coalesced;
+      }
     }
-    this.previousNs = undefined; this.before = undefined; this.lastStartNs = undefined; this.firstCounters = this.lastCounters = undefined;
+    this.previousNs = this.firstNs = undefined; this.before = undefined; this.lastStartNs = undefined; this.firstCounters = this.lastCounters = undefined; this.connectionFrames = 0;
   }
   result(): ProbeSummary {
     // Closing the open connection is idempotent for later frames: they always start a new connection index.
@@ -134,8 +157,10 @@ export class ProbeSummarizer {
         running: share(this.split.running[0], this.split.running[1]), paused: share(this.split.paused[0], this.split.paused[1]),
         standing: share(this.split.standing[0], this.split.standing[1]), moving: share(this.split.moving[0], this.split.moving[1])},
       zeroRuns: {count: this.runs, open: this.open, lengthFrames: {...this.lengths}, durationMs: distribution(this.runDurations),
-        startIntervalMs: distribution(this.runStartIntervals), singleFrameBetweenCloseNeighbours: this.closeSingles},
-      frameIntervalMs: {...intervals, approximateFps: intervals.median ? round(1000 / intervals.median) : null},
+        startIntervalMs: distribution(this.runStartIntervals), singleFrameBetweenCloseNeighbours: this.closeSingles,
+        exact: {count: this.exactRuns, lengthFrames: {...this.exactLengths}, singleFrameBetweenCloseNeighbours: this.exactCloseSingles}},
+      frameIntervalMs: {...intervals, receivedPerSecond: intervals.median ? round(1000 / intervals.median) : null},
+      publishedPerSecond: this.spanNs ? round(Number(this.published) * 1e9 / Number(this.spanNs)) : null,
       missed: {coalescedSnapshots: this.missedCoalesced.toString(), lostObservations: this.missedLost.toString()}
     };
   }

@@ -22,10 +22,10 @@ async function main(): Promise<void> {
   process.once('SIGINT', () => {console.log('Stopping…'); controller.abort();});
   console.log(`Recording up to ${seconds} s; press Ctrl+C to stop early.`);
   const result = await runProbe({output: args['--output'], game, origin: fixture ? 'synthetic' : 'game', seconds, connect, signal: controller.signal, log: line => console.log(line)});
-  const {consumption, zeroRuns, frameIntervalMs, missed} = result.summary;
+  const {consumption, zeroRuns, frameIntervalMs, publishedPerSecond, missed} = result.summary;
   console.log(`Stopped: ${result.stopReason}. Frames ${result.summary.frames}, consumption observed ${consumption.observed}, zero ${consumption.zero} (${consumption.zeroPercent} %), ` +
-    `zero runs ${zeroRuns.count} (median ${zeroRuns.durationMs.median ?? '-'} ms), frame interval median ${frameIntervalMs.median ?? '-'} ms, missed frames ${missed.coalescedSnapshots}.`);
+    `zero runs ${zeroRuns.count} (median ${zeroRuns.durationMs.median ?? '-'} ms, exact ${zeroRuns.exact.count}), received ${frameIntervalMs.receivedPerSecond ?? '-'}/s of ${publishedPerSecond ?? '-'}/s published, missed frames ${missed.coalescedSnapshots}.`);
   console.log(`Written to ${result.directory}`);
-  if (result.stopReason === 'protocol-error' || result.stopReason === 'diagnostics-refused') process.exitCode = 1;
+  if (result.stopReason === 'protocol-error' || result.stopReason === 'diagnostics-refused' || result.stopReason === 'write-error') process.exitCode = 1;
 }
 void main().catch((error: unknown) => {console.error(error instanceof Error ? error.message : 'Channel probe failed'); process.exitCode = 1;});
