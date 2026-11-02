@@ -774,7 +774,11 @@ export async function runUiSmoke({application, dashboard, overlay, source, sourc
         const modeLabel = language === 'en' ? 'TruckersMP · ambiguous evidence' : 'TruckersMP · неоднозначные данные';
         const modeRow = dashboard.getByTestId('journal-row').first();
         assert.equal(await modeRow.getByTestId('journal-row-mode').innerText(), modeLabel);
-        assert.equal(await dashboard.locator('[data-trip="7f000000-0000-4000-8000-00000000006d"]').getByTestId('journal-row-mode').innerText(), language === 'en' ? 'Single-player · unconfirmed' : 'Одиночная игра · не подтверждено');
+        const singlePlayerBadge = dashboard.locator('[data-trip="7f000000-0000-4000-8000-00000000006d"]').getByTestId('journal-row-mode');
+        assert.equal(await singlePlayerBadge.innerText(), language === 'en' ? 'Single-player' : 'Одиночная игра');
+        assert.equal(await singlePlayerBadge.getAttribute('data-variant'), 'neutral');
+        assert.equal(await singlePlayerBadge.locator('.lucide-user-round').count(), 1);
+        assert.equal(await singlePlayerBadge.locator('.lucide-triangle-alert').count(), 0);
         await dashboard.bringToFront();
         await dashboard.waitForFunction(() => globalThis.document.hasFocus(), undefined, {timeout: 5000});
         const hint = modeRow.locator('.yu-info-hint');
@@ -798,7 +802,11 @@ export async function runUiSmoke({application, dashboard, overlay, source, sourc
         await dashboard.getByTestId('journal-back').click();
         await dashboard.locator('[data-trip="7f000000-0000-4000-8000-00000000006d"]').getByTestId('journal-row-open').click();
         await dashboard.getByTestId('journal-detail-title').waitFor({state: 'visible'});
-        assert.equal(await dashboard.getByTestId('journal-detail-mode').innerText(), language === 'en' ? 'Single-player · unconfirmed' : 'Одиночная игра · не подтверждено');
+        const singlePlayerDetail = dashboard.getByTestId('journal-detail-mode');
+        assert.equal(await singlePlayerDetail.innerText(), language === 'en' ? 'Single-player' : 'Одиночная игра');
+        assert.equal(await singlePlayerDetail.getAttribute('data-variant'), 'neutral');
+        assert.equal(await singlePlayerDetail.locator('.lucide-user-round').count(), 1);
+        assert.equal(await singlePlayerDetail.locator('.lucide-triangle-alert').count(), 0);
         await save('weak-mode-trip', language, size);
         await dashboard.getByTestId('journal-back').click();
         await dashboard.getByTestId('journal-list-next').click(); await until(() => dashboard.getByTestId('journal-list-page').innerText(), text => text.includes('2'), 'UI_JOURNAL_PAGE_TWO');

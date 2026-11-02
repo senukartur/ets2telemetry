@@ -847,7 +847,7 @@ export const JOURNAL_REASON_TEXT: Readonly<Record<UnavailableReason, string>> = 
 export const JOURNAL_GAME_MODE_TEXT: Readonly<Record<GameMode['mode'] | 'convoy', string>> = Object.freeze({
   'single-player': 'Single-player', 'truckersmp': 'TruckersMP', 'unknown': 'Unknown', 'convoy': 'Convoy'
 });
-/** Detection evidence: a weak result is never presented as confirmed (D9). */
+/** Raw evidence terms; the Journal formatter applies D9's module-absence presentation exception. */
 export const JOURNAL_GAME_MODE_EVIDENCE_TEXT = Object.freeze({
   confidence: Object.freeze({strong: 'strong evidence', weak: 'weak evidence, not confirmed', none: 'no evidence'}) satisfies Readonly<Record<GameMode['confidence'], string>>,
   method: Object.freeze({'module-scan': 'module scan', 'process-scan': 'process scan', 'none': 'no detection'}) satisfies Readonly<Record<GameMode['method'], string>>

@@ -41,7 +41,7 @@ export interface JournalSection {id: string; title: string; fields: JournalField
 /** A badge's text and shadcn variant. */
 export interface JournalBadge {text: string; variant: 'secondary' | 'destructive' | 'outline'}
 
-export interface JournalModeBadge {text: string; evidence: string; tone: 'ok' | 'warn' | 'neutral'}
+export interface JournalModeBadge {kind: JournalGameMode['mode']; text: string; evidence: string; tone: 'ok' | 'warn' | 'neutral'}
 export interface JournalTripRow {
   mode: JournalModeBadge;
   tripUuid: string; isHardMode: boolean; gameId: JournalGame; started: string; game: string; route: string; cargo: string;
@@ -150,15 +150,18 @@ function outcomeText(trip: Pick<JournalTripListItem, 'outcome' | 'closeReason'>)
 function completenessBadge(completeness: JournalTripListItem['recordingCompleteness']): JournalBadge {
   return {text: JOURNAL_COMPLETENESS_TEXT[completeness], variant: completeness === 'complete' ? 'secondary' : completeness === 'partial' ? 'destructive' : 'outline'};
 }
-/** The mode with its detection evidence; a weak result is never presented as confirmed (D9). */
+/** Module absence is presented as ordinary single-player; raw confidence remains unchanged. */
+function ordinarySinglePlayer(mode: JournalGameMode): boolean {
+  return mode.mode === 'single-player' && mode.method === 'module-scan' && mode.confidence === 'weak';
+}
 function gameModeText(mode: JournalGameMode, ambiguous: boolean): string {
-  const evidence = mode.mode === 'unknown' ? '' : ` (${JOURNAL_GAME_MODE_EVIDENCE_TEXT.confidence[mode.confidence]}, ${JOURNAL_GAME_MODE_EVIDENCE_TEXT.method[mode.method]})`;
+  const evidence = mode.mode === 'unknown' || ordinarySinglePlayer(mode) ? '' : ` (${JOURNAL_GAME_MODE_EVIDENCE_TEXT.confidence[mode.confidence]}, ${JOURNAL_GAME_MODE_EVIDENCE_TEXT.method[mode.method]})`;
   return `${JOURNAL_GAME_MODE_TEXT[mode.mode]}${evidence}${ambiguous ? `; ${JOURNAL_STRINGS.gameModeChanged}` : ''}`;
 }
 function gameModeBadge(mode: JournalGameMode, ambiguous: boolean): JournalModeBadge {
-  const unconfirmed = mode.mode !== 'unknown' && mode.confidence !== 'strong';
+  const unconfirmed = mode.mode !== 'unknown' && mode.confidence !== 'strong' && !ordinarySinglePlayer(mode);
   const text = `${JOURNAL_GAME_MODE_TEXT[mode.mode]}${unconfirmed ? ` · ${JOURNAL_STRINGS.gameModeUnconfirmed}` : ''}${ambiguous ? ` · ${JOURNAL_STRINGS.gameModeChanged}` : ''}`;
-  return {text, evidence: gameModeText(mode, ambiguous), tone: ambiguous || unconfirmed ? 'warn' : mode.mode === 'truckersmp' ? 'ok' : 'neutral'};
+  return {kind: mode.mode, text, evidence: gameModeText(mode, ambiguous), tone: ambiguous || unconfirmed ? 'warn' : mode.mode === 'truckersmp' ? 'ok' : 'neutral'};
 }
 const routeText = (job: JournalTripListItem['job']) => `${nameOf(job.sourceCity)} → ${nameOf(job.destinationCity)}`;
 
