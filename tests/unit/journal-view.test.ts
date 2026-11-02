@@ -465,16 +465,18 @@ describe('journal mode badges', () => {
     ] as const;
     for (const [mode, en, ru, tone] of cases) for (const language of ['en', 'ru'] as const) for (const ambiguous of [false, true]) {
       const trip = {...DELIVERED_DETAIL.trip, gameMode: mode, gameModeAmbiguous: ambiguous};
+      const before = structuredClone(trip);
       const list = journalListText({database: DATABASE, trips: [trip], nextCursor: null}, {filtered: false, language}).rows[0].mode;
       const detail = journalDetailText({...DELIVERED_DETAIL, trip}, {language}).mode;
       expect(list).toEqual(detail);
+      expect(list.kind).toBe(before.gameMode.mode);
       expect(list.text).toBe(`${language === 'en' ? en : ru}${ambiguous ? language === 'en' ? ' · ambiguous evidence' : ' · неоднозначные данные' : ''}`);
       expect(list.tone).toBe(ambiguous ? 'warn' : tone);
       if (mode.mode === 'single-player' && mode.method === 'module-scan') {
         expect(list.evidence).toBe(`${language === 'en' ? en : ru}${ambiguous ? language === 'en' ? '; ambiguous evidence' : '; неоднозначные данные' : ''}`);
-        expect(trip.gameMode).toEqual({mode: 'single-player', method: 'module-scan', confidence: 'weak'});
       }
       expect(fields(journalDetailText({...DELIVERED_DETAIL, trip}, {language}).sections, 'trip').gameMode).toBe(list.evidence);
+      expect(trip).toEqual(before);
     }
   });
 });

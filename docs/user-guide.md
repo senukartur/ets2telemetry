@@ -64,7 +64,7 @@ Your trip history is stored only on this computer. It is not synchronized anywhe
 
 The Journal shows mode badges in each trip row and its detail header: **TruckersMP**, **Single-player**, or **Unknown**. When the module check finds no TruckersMP module, single-player uses a neutral badge without a warning or **unconfirmed** qualifier. Other weak results still say **unconfirmed**. The information icon is available on hover or keyboard focus; Escape closes it. **Ambiguous evidence** means later evidence differed from the trip's opening evidence and retains warning styling; it does not prove the game switched modes. Historical unknown trips stay unknown.
 
-Mode detection checks one known TruckersMP module inside the game process when the plugin initializes. It does not use a running launcher as evidence. A missing module still records weak evidence in storage and JSON exports; the simpler single-player label changes presentation only. Real-game detection and initialization timing still require validation for the game/client versions in use.
+Mode detection checks one known TruckersMP module inside the game process when the plugin initializes. It does not use a running launcher as evidence. A missing module still records weak evidence in storage and JSON exports; the simpler single-player label changes presentation only. If TruckersMP loads its module after this one-time check, it can be missed and that session can appear as single-player. Real-game detection and initialization timing still require validation for the game/client versions in use.
 
 ## Updating
 
