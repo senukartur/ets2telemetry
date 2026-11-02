@@ -1,3 +1,4 @@
+import type {ProfileObservation} from '../../../telemetry-core/src/trips/continuation';
 import {isHardModeObservation, type HardModeObservation} from '../../../contracts/src/hard-mode';
 // Messages between the StorageClient in the telemetry service and the storage worker host (ET-013). Node-safe: plain
 // data only, so the client and its tests never load native SQLite. Messages cross a worker port by structured clone.
@@ -25,8 +26,8 @@ export interface WorkerOpenOptions {path: string; purpose: Purpose; backupsDirec
 export interface StorageCommands {
   open: {args: {options: WorkerOpenOptions}; value: OpenSummary};
   upsertSession: {args: {input: {message: unknown}}; value: {created: boolean; committedThroughEventSeq: Uint64}};
-  commitEvent: {args: {input: {message: unknown; effects?: TripEffect[]; hardMode?: HardModeObservation; hardModeFresh?: boolean; hardModeLoss?: HardModeObservation}}; value: CommitResult};
-  commitGap: {args: {input: {message: unknown; effects?: TripEffect[]; hardMode?: HardModeObservation; hardModeFresh?: boolean; hardModeLoss?: HardModeObservation}}; value: CommitResult};
+  commitEvent: {args: {input: {message: unknown; effects?: TripEffect[]; hardMode?: HardModeObservation; hardModeFresh?: boolean; hardModeLoss?: HardModeObservation; profile?: ProfileObservation}}; value: CommitResult};
+  commitGap: {args: {input: {message: unknown; effects?: TripEffect[]; hardMode?: HardModeObservation; hardModeFresh?: boolean; hardModeLoss?: HardModeObservation; profile?: ProfileObservation}}; value: CommitResult};
   appendSamples: {args: {pluginSessionId: string; rows: SampleInput[]; options?: SampleAppendOptions}; value: SampleAppendResult};
   recordCompleteness: {args: {pluginSessionId: string; interval: CompletenessInterval; options?: CompletenessOptions}; value: undefined};
   /** ET-016 PR-7 (J9): a late-attach trip; never acknowledged and never a coverage change. */
@@ -38,7 +39,7 @@ export interface StorageCommands {
   listEvents: {args: {pluginSessionId: string; page?: {afterEventSeq?: Uint64; limit?: number}}; value: EventRow[]};
   getTrip: {args: {tripUuid: string}; value: TripRecord | undefined};
   listTrips: {args: {page?: TripPage}; value: TripList};
-  listSamples: {args: {scope: {tripUuid: string} | {pluginSessionId: string}; page?: {afterId?: string; limit?: number}}; value: SampleRecord[]};
+  listSamples: {args: {scope: {tripUuid: string} | {pluginSessionId: string}; page?: {afterId?: string; limit?: number; includeExcluded?: boolean}}; value: SampleRecord[]};
   storageInfo: {args: Record<never, never>; value: StorageInfo};
   /** Journal reads (ET-016 PR-2, J5); arguments and answers are checked strictly on both sides of the boundary. */
   journalTrips: {args: {query?: JournalTripsQuery}; value: JournalTripPage};
@@ -87,7 +88,7 @@ const TRIP_PAGE_ARGS = {cursor: (field: unknown) => typeof field === 'string', l
 const COMPLETENESS_OPTIONS_ARGS = {ifAbsent: (field: unknown) => typeof field === 'boolean'};
 /** ET-015b: the `appendSamples` options, checked strictly like the completeness options. */
 const SAMPLE_OPTIONS_ARGS = {uniqueSeconds: (field: unknown) => typeof field === 'boolean'};
-const ATTACH_INPUT_KEYS: readonly string[] = ['pluginSessionId', 'nextEventSeq', 'job', 'effects'];
+const ATTACH_INPUT_KEYS: readonly string[] = ['pluginSessionId', 'nextEventSeq', 'job', 'effects', 'profile', 'sourceClockId', 'monotonicNs','profileChange','observeTripUuid'];
 const isCount = (value: unknown): value is number => typeof value === 'number' && Number.isSafeInteger(value) && value >= 0;
 export type JournalCommandName = 'journalTrips' | 'journalTrip' | 'journalEvents' | 'journalIntervals';
 const JOURNAL_COMMAND_KEYS: Readonly<Record<JournalCommandName, readonly string[]>> = {
@@ -141,6 +142,10 @@ export function parseRequest(message: unknown): {ok: true; id: number; command: 
   }
   if ((name === 'upsertSession' || name === 'commitEvent' || name === 'commitGap') && !isRecord(command.input)) return {ok: false, id};
   if ((name === 'commitEvent' || name === 'commitGap') && isRecord(command.input) && command.input.hardModeFresh !== undefined && typeof command.input.hardModeFresh !== 'boolean') return {ok: false, id};
+  if (name === 'listSamples' && (!Object.keys(command).every(key => ['name', 'scope', 'page'].includes(key))
+    || !isRecord(command.scope) || Object.keys(command.scope).length !== 1
+    || !(isText(command.scope.tripUuid) || isText(command.scope.pluginSessionId))
+    || !optionalArgs(command.page, {afterId: isText, limit: field => typeof field === 'number', includeExcluded: field => typeof field === 'boolean'}))) return {ok: false, id};
   if (name === 'listTrips' && !optionalArgs(command.page, TRIP_PAGE_ARGS)) return {ok: false, id};
   if (name === 'observeHardMode' && (Object.keys(command).sort().join(',') !== 'fresh,game,name,observation' || !['ets2', 'ats'].includes(command.game as string) || !isHardModeObservation(command.observation) || typeof command.fresh !== 'boolean')) return {ok: false, id};
   if (name === 'recordCompleteness' && !optionalArgs(command.options, COMPLETENESS_OPTIONS_ARGS)) return {ok: false, id};

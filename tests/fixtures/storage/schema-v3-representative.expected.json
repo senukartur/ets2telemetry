@@ -1,0 +1,17 @@
+{
+  "comment": "Hand-written from the frozen SQL: migration must preserve four independent public IDs, including its not-merged restart annotation. No profile evidence exists.",
+  "tripUuids": [
+    "70000000-0000-4000-8000-000000000001",
+    "70000000-0000-4000-8000-000000000002",
+    "70000000-0000-4000-8000-000000000003",
+    "70000000-0000-4000-8000-000000000004"
+  ],
+  "outcomes": [
+    "delivered",
+    "none",
+    "none",
+    "open"
+  ],
+  "samples": 2,
+  "events": 5
+}

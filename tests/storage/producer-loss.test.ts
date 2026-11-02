@@ -110,7 +110,7 @@ function expectInvariants(file: string, pluginSessionId: string, acks: string[])
 }
 
 const TRIPS: JournalQuery = {kind: 'trips', query: {}};
-const SYNTHETIC_V3 = {purpose: 'synthetic', schemaVersion: 3};
+const SYNTHETIC_V3 = {purpose: 'synthetic', schemaVersion: 4};
 /** A journal read that main would forward unchanged (journal-contract.ts, parseJournalReply). */
 async function read(journal: JournalService, query: JournalQuery): Promise<JournalCallResult<unknown>> {
   const result = await guarded(journal.query(query), `the journal ${query.kind} read`, HANG_GUARD_MS);
@@ -122,7 +122,7 @@ async function read(journal: JournalService, query: JournalQuery): Promise<Journ
  * none and close reason gap; its intervals page holds exactly the trip's event-loss intervals of the expectation, and its
  * timeline window ends just before the gap (`close-gap`, J7).
  */
-async function expectJournal(journal: JournalService, e: LossExpected, window: {fromEventSeq: string; throughEventSeq: string; end: string; events: string[]}) {
+async function expectJournal(journal: JournalService, e: LossExpected, pluginSessionId: string, window: {fromEventSeq: string; throughEventSeq: string; end: string; events: string[]}) {
   const trip = e.trips[0] as {startedUtcMs: number; endedUtcMs: number};
   const list = await read(journal, TRIPS);
   expect(list).toMatchObject({ok: true, value: {database: SYNTHETIC_V3, nextCursor: null, trips: [{game: 'ets2', outcome: 'none', closeReason: 'gap',
@@ -135,7 +135,7 @@ async function expectJournal(journal: JournalService, e: LossExpected, window: {
   expect([(partial as {value: {trips: {tripUuid: string}[]}}).value.trips.map(t => t.tripUuid), (complete as {value: {trips: unknown[]}}).value.trips]).toEqual([[tripUuid], []]);
   const intervals = await read(journal, {kind: 'intervals', tripUuid, page: {limit: 100}});
   const own = (e.intervals as Json[]).filter(i => i.trip !== null)
-    .map(i => ({kind: i.kind, annotation: false, cause: 'gap', firstEventSeq: i.firstEventSeq, lastEventSeq: i.lastEventSeq, startMonotonicNs: i.startMonotonicNs,
+    .map(i => ({pluginSessionId, rawTripUuid: tripUuid, kind: i.kind, annotation: false, cause: 'gap', firstEventSeq: i.firstEventSeq, lastEventSeq: i.lastEventSeq, startMonotonicNs: i.startMonotonicNs,
       endMonotonicNs: i.endMonotonicNs, startUtcMs: null, endUtcMs: null, detail: i.detail}));
   const page = (intervals as {value: {intervals: Json[]; total: number; nextCursor: string | null}}).value;
   expect({total: page.total, nextCursor: page.nextCursor, intervals: page.intervals.map(({id, sourceClockId, ...rest}) => { void id; void sourceClockId; return rest; })})
@@ -191,7 +191,7 @@ async function expectRecorded(run: RecordingRun, input: Json & {seed: string}, e
   const summary = ok(await client.open({path: ws.database, purpose: 'synthetic', backupsDirectory: ws.backups, appVersion: '0.1.0-test'}));
   const history: JournalHistory = {state: 'open', failureCode: null, client, database: {purpose: summary.purpose, schemaVersion: summary.schemaVersion}, databaseUuid: summary.databaseUuid};
   try {
-    await expectJournal(new JournalService({history, stopping: () => false, log: () => undefined}), e, window);
+    await expectJournal(new JournalService({history, stopping: () => false, log: () => undefined}), e, session, window);
   } finally { expect(await client.close()).toEqual({clean: true}); }
   expectNoGameHistory();
 }
@@ -303,7 +303,7 @@ describe('ET-019 producer losses inside an open trip (production recording wirin
       expect(s.logs.filter(([event]) => /^V1_(DURABLE|SAMPLES)_/.test(event))).toEqual([]);
       const acks = e.acks as string[];
       expect([servedAcks(report, 0), timeline.filter(line => line.startsWith('ack '))]).toEqual([acks, acks.map(a => `ack ${a}`)]);
-      await expectJournal(new JournalService({history: s.runtime.history, stopping: () => false, log: () => undefined}), e, e.window!);
+      await expectJournal(new JournalService({history: s.runtime.history, stopping: () => false, log: () => undefined}), e, sessionOf(input), e.window!);
 
       s.runtime.stopStatus();
       const shutdown = tracedShutdown(timeline);

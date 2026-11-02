@@ -143,7 +143,11 @@ int wmain(int argc, wchar_t** argv) {
       auto request = command(bytes);
 #ifdef MEDIA_READER_FIXTURE
       if (request.selected == L"s999") Sleep(INFINITE);
-      if (request.selected == L"s998") {uint32_t length = 2; const char invalid[] = {static_cast<char>(0xff), static_cast<char>(0xff)}; write_exact(GetStdHandle(STD_OUTPUT_HANDLE), &length, 4); write_exact(GetStdHandle(STD_OUTPUT_HANDLE), invalid, 2); continue;}
+      if (request.selected == L"s998") {
+        {std::lock_guard<std::mutex> lock(mutex); occupied = false;}
+        uint32_t length = 2; const char invalid[] = {static_cast<char>(0xff), static_cast<char>(0xff)};
+        write_exact(GetStdHandle(STD_OUTPUT_HANDLE), &length, 4); write_exact(GetStdHandle(STD_OUTPUT_HANDLE), invalid, 2); continue;
+      }
       auto result = response(request.request);
 #else
 #ifdef MEDIA_READER_PROVIDER_FIXTURE

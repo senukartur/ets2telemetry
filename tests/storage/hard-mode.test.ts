@@ -37,14 +37,14 @@ async function setup() {
   return {script, recorder, send, trip: trips[0].tripUuid, set: (v: HardModeObservation) => {current = v;}, reads: () => reads};
 }
 describe('ET-026 worker classification (REG-001/003/005/006/007/014)', () => {
-  it('qualifies a compliant manual delivery, reconciles SQL and exports typed v2', async () => {
+  it('qualifies a compliant manual delivery, reconciles SQL and exports typed v4', async () => {
     const f = await setup(); await f.send(manual());
     const trip = ok(await client.getTrip(f.trip)); expect(trip).toMatchObject({outcome: 'delivered', isHardMode: true, hardModeDetails: {manualDelivery: true, firstLoss: null}});
     const detail = ok(await client.journalTrip(f.trip)); expect(detail.trip.isHardMode).toBe(true);
     const page = ok(await client.journalTrips()); expect(page.trips[0].isHardMode).toBe(true);
-    const header = tripExportHeader({uuid: '30000000-0000-4000-8000-000000000001', purpose: 'synthetic', schemaVersion: 3}, 'test', Date.now());
-    const serializer = new TripExportSerializer(detail, header), text = serializer.begin() + serializer.rows('intervals', ok(await client.journalIntervals(f.trip, {limit: 500})).intervals) + serializer.rows('events', ok(await client.journalEvents(f.trip, {limit: 500})).events) + serializer.end();
-    const exported = JSON.parse(text) as {formatVersion: number; trip: {is_hard_mode: boolean}}; expect(exported.formatVersion).toBe(3); expect(exported.trip.is_hard_mode).toBe(true); expect(tripExportProblems(exported)).toEqual([]);
+    const header = tripExportHeader({uuid: '30000000-0000-4000-8000-000000000001', purpose: 'synthetic', schemaVersion: 4}, 'test', Date.now());
+    const serializer = new TripExportSerializer(detail, header), text = serializer.begin() + serializer.rows('sources', ok(await client.journalIntervals(f.trip, {limit: 500, cursor: detail.exportBounds.snapshot!.sources})).sources!) + serializer.rows('intervals', ok(await client.journalIntervals(f.trip, {limit: 500, cursor: detail.exportBounds.snapshot!.intervals})).intervals) + serializer.rows('events', ok(await client.journalEvents(f.trip, {limit: 500, cursor: detail.exportBounds.snapshot!.events})).events) + serializer.end();
+    const exported = JSON.parse(text) as {formatVersion: number; trip: {is_hard_mode: boolean}}; expect(exported.formatVersion).toBe(4); expect(exported.trip.is_hard_mode).toBe(true); expect(tripExportProblems(exported)).toEqual([]);
     expect(await client.close()).toEqual({clean: true});
     readOnly(ws.database, db => expect(db.prepare("SELECT outcome, is_hard_mode, json_extract(hard_mode_details, '$.manualDelivery') AS manual FROM trips").get()).toEqual({outcome: 'delivered', is_hard_mode: 1, manual: 1}));
   });
@@ -75,8 +75,8 @@ describe('ET-026 worker classification (REG-001/003/005/006/007/014)', () => {
     ok(await f.recorder.commit(last, {receivedUtcMs: Date.now(), hardModeCapture: capture}));
     expect(ok(await client.getTrip(f.trip))).toMatchObject({isHardMode: false, hardModeDetails: {latest: expected, firstLoss: first}});
     const detail = ok(await client.journalTrip(f.trip)); expect(detail.trip.hardModeDetails!.latest).toEqual(expected);
-    const serializer = new TripExportSerializer(detail, tripExportHeader({uuid: '30000000-0000-4000-8000-000000000001', purpose: 'synthetic', schemaVersion: 3}, 'test', Date.now()));
-    const text = serializer.begin() + serializer.rows('intervals', ok(await client.journalIntervals(f.trip, {limit: 500})).intervals) + serializer.rows('events', ok(await client.journalEvents(f.trip, {limit: 500})).events) + serializer.end();
+    const serializer = new TripExportSerializer(detail, tripExportHeader({uuid: '30000000-0000-4000-8000-000000000001', purpose: 'synthetic', schemaVersion: 4}, 'test', Date.now()));
+    const text = serializer.begin() + serializer.rows('sources', ok(await client.journalIntervals(f.trip, {limit: 500, cursor: detail.exportBounds.snapshot!.sources})).sources!) + serializer.rows('intervals', ok(await client.journalIntervals(f.trip, {limit: 500, cursor: detail.exportBounds.snapshot!.intervals})).intervals) + serializer.rows('events', ok(await client.journalEvents(f.trip, {limit: 500, cursor: detail.exportBounds.snapshot!.events})).events) + serializer.end();
     const exported = JSON.parse(text) as {trip: {hard_mode_details: {latest: unknown; firstLoss: unknown}}};
     expect(exported.trip.hard_mode_details).toMatchObject({latest: expected, firstLoss: first}); expect(tripExportProblems(exported)).toEqual([]);
   });

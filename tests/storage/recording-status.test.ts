@@ -288,9 +288,9 @@ describe('ET-015c recording status through the production wiring', () => {
       await guarded(server.done, 'the reactive server run', HANG_GUARD_MS);
       await until(() => lastState(s.statuses) === 'interrupted', 'the final interrupted status', HANG_GUARD_MS);
       expect(sequence(s.statuses)).toEqual([...STARTED, 'recording', 'interrupted']);
-      // ET-016 PR-7 (J9): the checkpoint job now opens a late-attach trip with its own not-connected interval, the third
-      // beside the two offline gaps (the expectation's intervals); before J9 the job stayed untracked and only the gaps counted.
-      expect(s.statuses.at(-1)).toEqual(status('interrupted', {lostEvents: 4, notConnected: 3}));
+      // The second replayed gap closes the first checkpoint attach. The fresh current snapshot re-establishes tracking
+      // with another late-attach interval; job.cleared leaves that recording awaiting an observed outcome.
+      expect(s.statuses.at(-1)).toEqual(status('interrupted', {lostEvents: 4, notConnected: 4}, {phase: 'awaiting-outcome', completeness: 'partial', untrackedJob: false}));
       await stopService(s, timeline, worker.exit);
       const storage = await reader('t').open(), session = sessionOf(input);
       expect([ok(storage.committedThrough(session)), ok(storage.listEvents(session)).map(event => event.eventSeq)]).toEqual([expected.coverage.committedThroughEventSeq, ['5']]);

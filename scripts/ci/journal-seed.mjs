@@ -17,6 +17,7 @@ import {performance} from 'node:perf_hooks';
 import {BUILD_CHANNELS, BUILD_IDENTITIES} from '../build-channel.mjs';
 import {openStorage} from '../../packages/storage/src/index';
 import {EUR, seedJournalAnchors, seedJournalFillers, seedSample} from '../../tests/shared/journal-seed';
+import {tripUuidFor} from '../../packages/telemetry-core/src/trips/identity';
 import {BASE_UTC, job, money, r, Script} from '../../tests/shared/trip-messages';
 
 /** The paging trip's plugin session and trip; neither is used by the shared seed. */
@@ -43,8 +44,26 @@ async function main() {
     return result.value;
   };
   const opened = await openStorage({path: database, purpose: 'synthetic', backupsDirectory: path.join(path.dirname(database), 'backups'), appVersion: '0.1.0'});
-  const storage = check(opened, 'open');
+  let storage = check(opened, 'open');
   try {
+    // A new recording fixture crosses a real database close/reopen, then restores a supported distance prefix.
+    const logicalJob=job(),scope='6'.repeat(64);
+    const proof=script=>({version:1,scope,binding:'7'.repeat(64),game:'ets2',pluginSessionId:script.session,
+      processInstanceId:script.welcome().source.processInstanceId,sourceClockId:script.clockId,afterMonotonicNs:'0',loadGeneration:1});
+    const logicalOpen=script=>{
+      check(storage.upsertSession({message:script.welcome()}),'logical session');const message=script.event(r.jobConfigured(logicalJob)),uuid=tripUuidFor(script.session,message.data.eventSeq);
+      check(storage.commitEvent({message,profile:proof(script),effects:[{kind:'trip.open',tripUuid:uuid,game:'ets2',gameMode:{mode:'unknown',method:'none',confidence:'none'},
+        jobConfiguration:'this-event',recordingCompleteness:'complete',startedUtcMs:BASE_UTC}]}),'logical open');return uuid;
+    };
+    const samples=(script,uuid,values)=>values.map((odo,index)=>({...seedSample(script,uuid,index+1,BASE_UTC+(index+1)*1000,{odometer:{available:true,value:odo},speed:{available:true,value:20}}),
+      recording:{profile:proof(script),job:logicalJob,truck:'synthetic_verified_truck',processInstanceId:script.welcome().source.processInstanceId,
+        previous:{tripUuid:uuid,sourceClockId:script.clockId,monotonicNs:seedSample(script,uuid,index,BASE_UTC).monotonicNs}}}));
+    const before=new Script('10000000-0000-4000-8000-000000006301'),logicalUuid=logicalOpen(before);
+    check(storage.appendSamples(before.session,samples(before,logicalUuid,[1000000,1000050,1000100]),{uniqueSeconds:true}),'logical prefix');
+    check(storage.commitEvent({message:before.event(r.timersRestart()),effects:[{kind:'trip.close',tripUuid:logicalUuid,outcome:'none',closeReason:'restart',recordingCompleteness:'partial',endedUtcMs:BASE_UTC+3000}]}),'logical restart');
+    check(storage.close(),'logical close');storage=check(await openStorage({path:database,purpose:'synthetic',backupsDirectory:path.join(path.dirname(database),'backups'),appVersion:'0.1.0'}),'logical reopen');
+    const next=new Script('10000000-0000-4000-8000-000000006302'),suffix=logicalOpen(next);
+    check(storage.appendSamples(next.session,samples(next,suffix,[1000060,1000100]),{uniqueSeconds:true}),'logical restored suffix');
     await seedJournalAnchors(storage);
     const fillers = await seedJournalFillers({
       upsertSession: input => storage.upsertSession(input), appendSamples: (...args) => storage.appendSamples(...args),
@@ -65,7 +84,7 @@ async function main() {
     }
     check(storage.appendSamples(PAGING_SESSION, Array.from({length: PAGING_SAMPLES}, (_, second) =>
       seedSample(script, PAGING_TRIP, second, PAGING_UTC + 200_000 + second * 1_000, {speed: {available: true, value: variant === '--ui-signed' ? [-20, 0, 20][second % 3] : 20 + (second % 5)}}))), 'paging samples');
-    process.stdout.write(JSON.stringify({trips: 8 + fillers.length + 1, fillers: fillers.length, pagingTolls: PAGING_TOLLS, pagingSamples: PAGING_SAMPLES,
+    process.stdout.write(JSON.stringify({trips: 8 + fillers.length + 2,logicalTripUuid:logicalUuid, fillers: fillers.length, pagingTolls: PAGING_TOLLS, pagingSamples: PAGING_SAMPLES,
       elapsedMs: Math.round(performance.now() - started)}) + '\n');
   } finally {
     check(storage.close(), 'close');

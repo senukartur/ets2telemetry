@@ -1,6 +1,6 @@
 # Trip journal
 
-ET-016 adds the trip journal: a list of recorded trips, a detail view of one trip and a versioned JSON export. This document describes where the journal reads its data, the read commands and their bounds, and the timeline window of a trip. Decisions J1–J22 are in [DESIGN-DECISIONS.md](../DESIGN-DECISIONS.md#et-016-authorization--october-16-2026); the schema they read is [storage schema version 2](storage.md#schema-version-2-et-016).
+ET-016 adds the trip journal: a list of recorded trips, a detail view of one trip and a versioned JSON export. This document describes where the journal reads its data, the read commands and their bounds, and the timeline window of a trip. Decisions J1–J22 are in [DESIGN-DECISIONS.md](../DESIGN-DECISIONS.md#et-016-authorization--october-16-2026); the current logical projection is described in [storage schema version 4](storage.md#logical-trips-and-snapshots-schema-version-4).
 
 Status (October 16, 2026): ET-016a PR-2 implements the storage reads in the storage worker and their tests. PR-3 routes them from the dashboard through main to the telemetry service with five bridge methods ([IPC methods and codes](#ipc-methods-and-codes-j10-j11)). PR-4 adds the [Journal tab](#the-journal-tab-j12j14) to the main window, which reads through those methods. PR-5 (October 17, 2026) adds the sixth method and the [JSON export](#json-export-j15j18). The parts below marked **pending** belong to later PRs. `GAME_HISTORY_RECORDING` stays `false`, so no real game history exists to show.
 
@@ -14,6 +14,8 @@ The journal reads the database that the telemetry service opened, through the se
 - Tests and smokes seed only temporary or isolated synthetic databases, never history.
 
 Journal reads share the recorder's single command lane in the storage client: one command in flight, at most 64 queued, 10 s per command. A read that missed that deadline would fail the client closed and stop recording for the service lifetime, so every read is bounded, uses an index or a primary key ([below](#query-plans)), and the service sends at most one journal command at a time ([routing](#routing-and-bounds-j4)).
+
+The list and detail present one logical trip across verified continuations. Ordinary route/outcome/completeness/progress views do not expose membership, continuation or rollback controls. Source-qualified raw events, samples and provenance remain available in JSON. The current sample page/chart selects the supported accounting path; export also retains excluded observations with `accountingIncluded` provenance. Trailer details and counts include all snapshot members under the existing display bound, with source-qualified references for grouped recordings.
 
 ## Read commands and bounds (J5)
 
@@ -50,7 +52,7 @@ The contract is [packages/contracts/src/journal.ts](../packages/contracts/src/jo
 
 ## Timeline window (J7)
 
-A trip's timeline lists events of the trip's own plugin session in eventSeq order. The window starts at the earlier of the trip's opening event and its job configuration (the `job.configured` event, or the checkpoint's nextEventSeq) and ends at the trip's close carrier, which storage records in the `trip.close` transaction ([schema version 2](storage.md#schema-version-2-et-016)):
+A logical timeline lists its member recording windows in stored row order. Event identity is `(pluginSessionId, eventSeq)`; source-qualified rows retain `rawTripUuid` and their storage row ID. Pagination tokens fix the database/logical trip/revision/kind; list tokens also retain their filter and snapshot watermark. `exportBounds.snapshot` fixes event, interval, sample and recording-source cursors, `accountingHead` and source totals. The existing interval method carries bounded JSON provenance pages for source tokens; no bridge method or renderer filesystem authority is added. The raw recording window rules below apply independently to every member. The window starts at the earlier of the trip's opening event and its job configuration (the `job.configured` event, or the checkpoint's nextEventSeq) and ends at the trip's close carrier, which storage records in the `trip.close` transaction ([schema version 2](storage.md#schema-version-2-et-016)):
 
 | Trip | Window end | `end` |
 | --- | --- | --- |

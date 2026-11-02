@@ -103,8 +103,14 @@ export class JournalService {
     case 'trip': return client.journalTrip(query.tripUuid);
     case 'events': return client.journalEvents(query.tripUuid, query.page);
     case 'intervals': return client.journalIntervals(query.tripUuid, query.page);
-    case 'samples': return client.listSamples({tripUuid: query.tripUuid}, {...(query.page.cursor === undefined ? {} : {afterId: query.page.cursor}), limit: query.page.limit})
-      .then(result => samplePage(result, database, query.page.limit));
+    case 'samples': return (async () => {
+      let cursor=query.page.cursor;
+      if (cursor===undefined) {const detail=await client.journalTrip(query.tripUuid); if (!detail.ok) return detail; cursor=detail.value.exportBounds.snapshot?.samples;}
+      const result=await client.listSamples({tripUuid:query.tripUuid},{...(cursor===undefined?{}:{afterId:cursor}),limit:query.page.limit,...(query.includeExcluded === undefined ? {} : {includeExcluded:query.includeExcluded})});
+      const value=samplePage(result,database,query.page.limit);
+      if (value.ok && value.value.nextCursor!==null && cursor?.startsWith('v4:')) value.value.nextCursor=cursor.slice(0,cursor.lastIndexOf(':')+1)+value.value.nextCursor;
+      return value;
+    })();
     }
   }
 

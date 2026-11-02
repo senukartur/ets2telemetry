@@ -139,7 +139,7 @@ export function readVersion1(copy: string) {
  */
 export function expectMigratedFromVersion1(storage: Storage, copy: string, {original, v1Jobs, v1Trips, v1Referencing}: ReturnType<typeof readVersion1>, backup: string) {
   const backupName = path.basename(backup), version = storage.summary.schemaVersion;
-  expectRepresentative(storage, copy, {schema_migrations: version});
+  expectRepresentative(storage, copy, {schema_migrations: version,...(version>=4?{observation_closes:0,logical_trips:1,logical_memberships:1,logical_trucks:0,logical_progress:0,logical_projection_states:1,logical_revisions:1}:{})});
   // The backup is the version 1 content, byte-for-byte in logical terms, with a manifest written last.
   expect(digestOf(backup)).toEqual(original);
   const manifest = JSON.parse(readFileSync(backup.replace(/\.sqlite$/, '.json'), 'utf8'));
@@ -147,7 +147,7 @@ export function expectMigratedFromVersion1(storage: Storage, copy: string, {orig
     fileSha256: sha256(backup), logicalDigest: original.logicalDigest, rowCounts: original.rowCounts, reason: 'pre-migration'});
   const recorded = readOnly(copy, db => db.prepare('SELECT version, name, backup_file_name, backup_sha256 FROM schema_migrations ORDER BY version').all());
   expect(recorded).toEqual([{version: 1, name: '0001-initial', backup_file_name: null, backup_sha256: null}, {version: 2, name: '0002-journal', backup_file_name: backupName, backup_sha256: manifest.fileSha256},
-    ...(version >= 3 ? [{version: 3, name: '0003-hard-mode', backup_file_name: backupName, backup_sha256: manifest.fileSha256}] : [])]);
+    ...(version >= 3 ? [{version: 3, name: '0003-hard-mode', backup_file_name: backupName, backup_sha256: manifest.fileSha256}] : []),...(version>=4?[{version:4,name:'0004-logical-trips',backup_file_name:backupName,backup_sha256:manifest.fileSha256}]:[])]);
   expect(digestOf(copy).userVersion).toBe(version);
   readOnly(copy, db => {
     // The cancelled trip of version 1 keeps every column, opened at an event, has no recorded carrier, and its fuel

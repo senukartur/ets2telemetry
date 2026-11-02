@@ -101,7 +101,7 @@ The utilityProcess owns ingestion and source validation. A fixed project-owned n
 - Generate project-owned record IDs. Do not assume the game exposes a globally unique job ID.
 - Distinguish unavailable values from zero, real time from game time, planned distance from observed/delivered distance, and expected income from actual revenue.
 - Record one sample per real second during active simulation, including road stops. Represent pauses as events without adding duplicate paused samples.
-- Keep completion status separate from recording completeness. Missing job configuration alone does not prove delivery; ambiguous continuations must not be merged automatically.
+- Keep completion status separate from recording completeness. Missing job configuration alone does not prove delivery. Automatic continuation requires verified profile/canonical job evidence and one eligible candidate; missing/conflicting evidence or multiple candidates stays separate. The approved heuristic accepts an identical unobserved offer matching a continuation.
 - Handle late attachment, reconnection, save loading, timer resets, truck changes, and refueling explicitly. Do not fabricate data for missing intervals.
 - Convert SDK average consumption from liters/km to liters/100 km for display. Do not equate it with a trip-specific average without a defined calculation.
 - Treat game-world coordinates as game coordinates, not latitude/longitude.

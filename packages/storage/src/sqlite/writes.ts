@@ -1,3 +1,5 @@
+import {admittedProfile, associate, projectSessionBounds, retireObservedTerminal, projectEffects, projectSample, logicalEnabled, logicalFor, revise} from './logical-trips';
+import type {ProfileObservation} from '../../../telemetry-core/src/trips/continuation';
 import type {HardModeObservation} from '../../../contracts/src/hard-mode';
 // Write commands. Each command is one BEGIN IMMEDIATE transaction on the verified writer connection; a commit result
 // exists only after COMMIT returned. Events and gaps are keyed UNIQUE(plugin session, eventSeq range): a redelivery
@@ -138,7 +140,7 @@ interface EffectContext {
   /** openAttachedTrip only (ET-016 PR-7, J9): the checkpoint job configuration the command stored for its trip.open. */
   attachJobRef?: bigint;
   /** openAttachedTrip only: the trip UUID the attach must open, attachTripUuidFor(session, nextEventSeq) (review round 1). */
-  attachTripUuid?: string;
+  attachTripUuid?: string;profileChange?:boolean;
 }
 const enumValue = (value: unknown, options: readonly string[]) => { if (typeof value !== 'string' || !options.includes(value)) fail('INVALID_INPUT'); return value; };
 const utcMs = (value: unknown) => { if (typeof value !== 'number' || !Number.isSafeInteger(value) || value < 0) fail('INVALID_INPUT'); return value; };
@@ -257,7 +259,10 @@ function applyEffects(c: EffectContext, effects: unknown): void {
         if (trip.outcome !== 'open') fail('INVALID_INPUT');
         // PR-7 review round 1: an attach carries only closes of earlier plugin sessions' trips (restart). A close of a trip
         // of this session would record carrier (session, nextEventSeq), which the journal would read as the next live event.
-        if (c.attachJobRef !== undefined && statement(c.db, 'SELECT plugin_session_ref FROM trips WHERE id = ?').pluck().get(trip.id) === c.session.id) fail('INVALID_INPUT');
+        if (c.attachJobRef !== undefined && statement(c.db, 'SELECT plugin_session_ref FROM trips WHERE id = ?').pluck().get(trip.id) === c.session.id) {
+          if(!c.profileChange || effect.closeReason!=='different-job' || effect.outcome!=='none')fail('INVALID_INPUT');
+          statement(c.db,'INSERT INTO observation_closes(trip_ref) VALUES(?)').run(trip.id);
+        }
         let outcomeEvent: bigint | null = null;
         // Only the gameplay outcome event decides delivery or cancellation (DESIGN-DECISIONS.md §7).
         if (outcome !== 'none') {
@@ -294,7 +299,7 @@ function applyEffects(c: EffectContext, effects: unknown): void {
  * and advances coverage; an existing one is `duplicate` (same canonical payload) or `conflict` (the stored row is kept),
  * and neither writes anything.
  */
-export function commitEvent(conn: StorageConnection, input: {message: unknown; effects?: TripEffect[]; hardMode?: HardModeObservation; hardModeFresh?: boolean; hardModeLoss?: HardModeObservation}, options: CommitOptions = {}): CommitResult {
+export function commitEvent(conn: StorageConnection, input: {message: unknown; effects?: TripEffect[]; hardMode?: HardModeObservation; hardModeFresh?: boolean; hardModeLoss?: HardModeObservation; profile?: ProfileObservation}, options: CommitOptions = {}): CommitResult {
   const m = serverMessage(input?.message, 'event');
   if (m.kind !== 'event') fail('INVALID_INPUT');
   checkHardModeObservation(input.hardMode); checkHardModeObservation(input.hardModeLoss);
@@ -326,7 +331,10 @@ export function commitEvent(conn: StorageConnection, input: {message: unknown; e
     if (input.hardMode) updateOpenHardMode(db, session.game, input.hardMode, now, input.hardModeFresh === true, 'frozen');
     applyEffects({db, session, game: session.game, now, eventRef, eventType: record.type, carrierEventSeq: seqKey}, input.effects);
     applyEventHardMode(db, m, input.effects, input.hardMode, now, input.hardModeLoss, input.hardModeFresh === true);
+    projectEffects(db, input.effects, m.data.occurred.monotonicNs.available && !m.data.redelivered ? admittedProfile(input.profile, m.source, m.capture.clockId, m.data.occurred.monotonicNs.value) : undefined);
+    if (record.type==='job.cancelled' || record.type==='job.delivered') retireObservedTerminal(db,session.id);
     const through = advanceCoverage(db, session, BigInt(eventSeq), BigInt(eventSeq));
+    projectSessionBounds(db,session.id);
     options.testHooks?.beforeCommit?.();
     return {status: 'committed', committedThroughEventSeq: through};
   });
@@ -340,7 +348,7 @@ const CAUSES: [keyof GapData['causes'], string][] = [['offline', 'cause_offline'
  * extends beyond coverage is stored with its own cause counts, even where it overlaps earlier gap rows, and events
  * already committed inside it keep their rows. Every result carries `previouslyCoveredThrough` (see CommitResult).
  */
-export function commitGap(conn: StorageConnection, input: {message: unknown; effects?: TripEffect[]; hardMode?: HardModeObservation; hardModeFresh?: boolean; hardModeLoss?: HardModeObservation}, options: CommitOptions = {}): CommitResult {
+export function commitGap(conn: StorageConnection, input: {message: unknown; effects?: TripEffect[]; hardMode?: HardModeObservation; hardModeFresh?: boolean; hardModeLoss?: HardModeObservation; profile?: ProfileObservation}, options: CommitOptions = {}): CommitResult {
   const m = serverMessage(input?.message, 'gap');
   if (m.kind !== 'gap') fail('INVALID_INPUT');
   checkHardModeObservation(input.hardMode); checkHardModeObservation(input.hardModeLoss);
@@ -376,7 +384,9 @@ export function commitGap(conn: StorageConnection, input: {message: unknown; eff
     // eventSeq when it starts beyond that (ET-016, J7). It is at most lastEventSeq, which is above the coverage here.
     const firstNew = BigInt(previouslyCoveredThrough) + 1n, carrier = BigInt(d.firstEventSeq) > firstNew ? BigInt(d.firstEventSeq) : firstNew;
     applyEffects({db, session, game: session.game, now, carrierEventSeq: u64Key(carrier)}, input.effects);
+    projectEffects(db, input.effects);
     const through = advanceCoverage(db, session, BigInt(d.firstEventSeq), BigInt(d.lastEventSeq));
+    projectSessionBounds(db,session.id);
     options.testHooks?.beforeCommit?.();
     return {status: 'committed', committedThroughEventSeq: through, previouslyCoveredThrough};
   });
@@ -411,6 +421,17 @@ function availability(input: unknown): Available<unknown> {
 /** Validates one sample and returns its column values; nothing is written for a batch with any invalid sample. */
 function sampleColumns(row: SampleInput): {trip: string | null; clock: string; gameClock: string | null; monotonic: bigint; values: unknown[]} {
   if (typeof row !== 'object' || row === null || !isUuid(row.sourceClockId)) fail('INVALID_INPUT');
+  if(row.recording!==undefined){
+    const evidence=row.recording;
+    if(!plainRecord(evidence)||!Object.keys(evidence).every(key=>['profile','job','truck','processInstanceId','previous'].includes(key))||!isUuid(evidence.processInstanceId)
+      || !(evidence.truck===null || typeof evidence.truck==='string' && evidence.truck.length>0 && evidence.truck.length<=2048)) fail('INVALID_INPUT');
+    checkpointJobValues(evidence.job);
+    if(evidence.previous!==undefined){
+      const p=evidence.previous;
+      if(!plainRecord(p)||Object.keys(p).sort().join(',')!=='monotonicNs,sourceClockId,tripUuid'||!isUuid(p.tripUuid)||!isUuid(p.sourceClockId))fail('INVALID_INPUT');
+      sampleMonotonicNs(p.monotonicNs);
+    }
+  }
   if (row.tripUuid !== undefined && row.tripUuid !== null && !isUuid(row.tripUuid)) fail('INVALID_INPUT');
   let notSupported = 0, invalid = 0;
   const monotonic = sampleMonotonicNs(row.monotonicNs);
@@ -467,7 +488,7 @@ export function appendSamples(conn: StorageConnection, pluginSessionId: string, 
       if (last) lastSecond.set(last.clock, BigInt(last.monotonic) / NS_PER_SECOND);
     }
     let appended = 0;
-    for (const row of prepared) {
+    for (const [index, row] of prepared.entries()) {
       // The trip is resolved for a skipped row too, so an unknown or foreign trip refuses the batch either way.
       let trip: bigint | null = null;
       if (row.trip !== null) { trip = trips.get(row.trip) ?? tripRow(c, row.trip).id; trips.set(row.trip, trip); }
@@ -476,9 +497,11 @@ export function appendSamples(conn: StorageConnection, pluginSessionId: string, 
         if (previous !== undefined && second <= previous) continue;
         lastSecond.set(row.clock, second);
       }
-      statement(db, sql).run(session.id, trip, clockRef(db, session.id, 'source-monotonic', row.clock), row.gameClock === null ? null : clockRef(db, session.id, 'game', row.gameClock), ...row.values);
+      const inserted = statement(db, sql).run(session.id, trip, clockRef(db, session.id, 'source-monotonic', row.clock), row.gameClock === null ? null : clockRef(db, session.id, 'game', row.gameClock), ...row.values);
+      projectSample(db, session, pluginSessionId, rows[index], BigInt(inserted.lastInsertRowid));
       appended++;
     }
+    if (logicalEnabled(db)) for (const trip of trips.values()) revise(db,logicalFor(db,trip));
     commitOptions.testHooks?.beforeCommit?.();
     return {appended, skipped: prepared.length - appended};
   });
@@ -540,11 +563,31 @@ function attachTripUuid(pluginSessionId: string, nextEventSeq: string): string {
  * open at that point (PR-7 review round 1). The same session and nextEventSeq again is `duplicate` and writes
  * nothing. Coverage is unchanged: the command commits no event and is never acknowledged.
  */
-export function openAttachedTrip(conn: StorageConnection, input: AttachInput): AttachResult {
+export function openAttachedTrip(conn: StorageConnection, input: AttachInput, options:CommitOptions = {}): AttachResult {
   if (!plainRecord(input)) fail('INVALID_INPUT');
   const nextKey = u64Key(input.nextEventSeq);
   if (BigInt(input.nextEventSeq) < 1n) fail('INVALID_INPUT');
   const values = checkpointJobValues(input.job), effects: unknown = input.effects;
+  if(input.observeTripUuid!==undefined){
+    if(!isUuid(input.observeTripUuid)||!Array.isArray(effects)||effects.length!==0||!input.sourceClockId||!isUuid(input.sourceClockId)||!input.monotonicNs||input.profileChange!==undefined)fail('INVALID_INPUT');
+    sampleMonotonicNs(input.monotonicNs);
+    return transact(conn,db=>{
+      const session=sessionByUuid(db,input.pluginSessionId);
+      const row=statement(db,'SELECT * FROM trips WHERE trip_uuid=? AND plugin_session_ref=?').get(input.observeTripUuid,session.id) as Record<string,unknown>|undefined;
+      if(!row)fail('INVALID_INPUT');
+      const proof=admittedProfile(input.profile,{game:session.game,processInstanceId:session.process_instance_uuid,pluginSessionId:input.pluginSessionId},input.sourceClockId!,input.monotonicNs!);
+      if(!proof)fail('INVALID_INPUT');
+      const key=canonicalJson([input.observeTripUuid,input.nextEventSeq,input.job,proof,input.sourceClockId,input.monotonicNs]);
+      const decision=statement(db,'SELECT observation_key FROM logical_memberships WHERE trip_ref=?').get(row.id) as {observation_key:string|null}|undefined;
+      // Exact redelivery can acknowledge a prior decision after terminal closure; it never associates a closed row.
+      if(decision?.observation_key===key)return {status:'duplicate'};
+      if(row.outcome!=='open' || BigInt(input.nextEventSeq)!==BigInt(fromU64Key(session.committed_through_event_seq))+1n)fail('INVALID_INPUT');
+      const id=associate(db,row,proof,input.job);revise(db,id);
+      statement(db,'UPDATE logical_memberships SET observation_key=? WHERE trip_ref=?').run(key,row.id);
+      options.testHooks?.beforeCommit?.();
+      return {status:'committed'};
+    });
+  }
   if (!Array.isArray(effects) || effects.length < 1 || effects.length > MAX_EFFECTS) fail('INVALID_INPUT');
   // Queued lifecycle effects of earlier trips may come first; then exactly one trip.open, then only that trip's intervals.
   const list = effects as unknown[], at = list.findIndex(effect => plainRecord(effect) && effect.kind === 'trip.open'), open = list[at];
@@ -566,7 +609,15 @@ export function openAttachedTrip(conn: StorageConnection, input: AttachInput): A
       .run(session.id, 'checkpoint', nextKey, ...values).lastInsertRowid;
     // A queued close sent with the attach records this session and nextEventSeq as its close carrier (J7): the first
     // eventSeq after the coverage the attach follows.
-    applyEffects({db, session, game: session.game, now: conn.now(), attachJobRef: BigInt(job), attachTripUuid: attachTripUuid(input.pluginSessionId, input.nextEventSeq), carrierEventSeq: nextKey}, effects);
+    const proof = input.sourceClockId && input.monotonicNs ? admittedProfile(input.profile, {game: session.game, processInstanceId: session.process_instance_uuid, pluginSessionId: input.pluginSessionId}, input.sourceClockId, input.monotonicNs) : undefined;
+    if(input.profileChange!==undefined && typeof input.profileChange!=='boolean')fail('INVALID_INPUT');
+    if(input.profileChange){
+      if(!proof)fail('INVALID_INPUT');
+      for(const effect of input.effects)if(effect.kind==='trip.close'){const old=statement(db,'SELECT l.profile_scope FROM trips t JOIN logical_memberships m ON m.trip_ref=t.id JOIN logical_trips l ON l.id=m.logical_ref WHERE t.trip_uuid=?').get(effect.tripUuid) as {profile_scope:string|null}|undefined;if(!old?.profile_scope || old.profile_scope===proof.scope)fail('INVALID_INPUT');}
+    }
+    applyEffects({db, session, game: session.game, now: conn.now(), attachJobRef: BigInt(job), attachTripUuid: attachTripUuid(input.pluginSessionId, input.nextEventSeq), carrierEventSeq: nextKey,profileChange:input.profileChange}, effects);
+    projectEffects(db, input.effects, proof);
+    options.testHooks?.beforeCommit?.();
     return {status: 'committed'};
   });
 }
@@ -579,11 +630,14 @@ export function recordCompleteness(conn: StorageConnection, pluginSessionId: str
   if (typeof interval !== 'object' || interval === null) fail('INVALID_INPUT');
   if (typeof options !== 'object' || options === null || Array.isArray(options) || (options.ifAbsent !== undefined && typeof options.ifAbsent !== 'boolean')) fail('INVALID_INPUT');
   const ifAbsent = options.ifAbsent === true;
-  transact(conn, db => { const session = sessionByUuid(db, pluginSessionId); addInterval({db, session, game: session.game, now: conn.now()}, interval, ifAbsent); });
+  transact(conn, db => { const session = sessionByUuid(db, pluginSessionId); addInterval({db, session, game: session.game, now: conn.now()}, interval, ifAbsent); if (logicalEnabled(db) && interval.tripUuid) revise(db,logicalFor(db,tripRow({db,session,game:session.game,now:conn.now()},interval.tripUuid).id)); });
 }
 
 export function observeHardMode(conn: StorageConnection, game: 'ets2' | 'ats', observation: HardModeObservation, fresh = false): void {
   if (typeof fresh !== 'boolean') fail('INVALID_INPUT');
   if (!['ets2', 'ats'].includes(game)) fail('INVALID_INPUT');
-  transact(conn, db => updateOpenHardMode(db, game, observation, conn.now(), fresh));
+  transact(conn, db => {
+    updateOpenHardMode(db, game, observation, conn.now(), fresh);
+    if (logicalEnabled(db)) for (const row of db.prepare("SELECT id FROM trips WHERE game = ? AND outcome = 'open' LIMIT 101").all(game) as {id: bigint}[]) revise(db, logicalFor(db, row.id));
+  });
 }

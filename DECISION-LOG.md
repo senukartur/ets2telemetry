@@ -835,3 +835,7 @@ The owner requested readable media source names and current-track visibility onl
 ## ET-051 average consumption zeros — November 2, 2026
 
 An owner-run raw channel capture showed that ETS2 itself sends 0.0 for `truck.fuel.consumption.average` for about a quarter of a second every two to three seconds while driving, and for longer while standing. Of the options on the card, the owner chose to hold the value on screen: the dashboard and the overlay keep the last non-zero value through a zero, for up to 10 s (the agent picked 10 s from the card's 10–15 s), and the database and exports keep what the SDK sent. Converting such zeros to unavailable at ingestion was not chosen.
+
+## ET-063 automatic trip continuation — November 2, 2026
+
+The owner approved schema v3→v4, logical Journal trips, existing DTO/cursor amendments and JSON v4. One verified profile/canonical job candidate continues across reconnects, restarts and next-day loads, accepting identical-unobserved-offer false matches without confirmation. Save restoration replaces abandoned progress (100→60→100 km); raw evidence stays intact and unsupported totals unavailable. Missing/conflicting evidence, multiple candidates, cancellation or replacement veto joining; different jobs interrupt without invented outcomes. Old history migrates as singletons, Hard Mode loss is irreversible, and membership/continuation/rollback diagnostics are JSON-only.

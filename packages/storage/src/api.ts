@@ -1,4 +1,5 @@
 import type {HardModeDetails} from '../../contracts/src/hard-mode';
+import type {ProfileObservation} from '../../telemetry-core/src/trips/continuation';
 // Typed storage commands, results, errors and trip effects. Node-safe: no native SQLite, Electron or filesystem
 // access, so the Node-safe test suite and a future worker client can import it. See docs/storage.md.
 import type {Available, GameMode, JobConfiguration, Uint64} from '../../contracts/src/protocol-v1';
@@ -40,13 +41,17 @@ export type SampleField = 'speed' | 'fuel' | 'averageConsumption' | 'estimatedRa
  * their own game clock. Not observed, not supported and invalid readings stay distinct from zero.
  */
 export interface SampleInput {
+  /** Private recorder evidence; never part of a renderer sample. Captured at the reading, not at write time. */
+  recording?: {profile?: ProfileObservation; job: JobConfiguration; truck: string | null; processInstanceId: string;
+    /** Previous sampled row in this uninterrupted connection; storage must match it to the persisted accounting head. */
+    previous?: {tripUuid:string;sourceClockId:string;monotonicNs:Uint64}};
   tripUuid?: string | null; utcMs: number; sourceClockId: string; monotonicNs: Uint64;
   gameTime: {minutes: Available<number>; clockId: string} | null;
   speed: Available<number>; fuel: Available<number>; averageConsumption: Available<number>; estimatedRange: Available<number>;
   engineRpm: Available<number>; gear: Available<number>; odometer: Available<number>;
   position: Available<{x: number; y: number; z: number}>;
 }
-export interface SampleRecord extends SampleInput {id: string; tripUuid: string | null}
+export interface SampleRecord extends Omit<SampleInput, 'recording'> {id: string; tripUuid: string | null; pluginSessionId?: string; rawTripUuid?: string; accountingIncluded?: boolean}
 /**
  * `uniqueSeconds` (ET-015b, H6): keep at most one row per plugin session, source clock and source second, where the
  * source second is floor(monotonicNs / 1e9). Inside the transaction, each row is compared with the session's latest
@@ -131,9 +136,12 @@ export const MAX_TRIP_PAGE = 100;
  * (the job stored by this command), which names no truck or trailer (J22) and which leaves the game with no other open
  * trip; then only `completeness.add` intervals of that trip. The command stores the job as a `checkpoint` configuration keyed UNIQUE(plugin session,
  * nextEventSeq) and the trip with `opened_by` `checkpoint`, in one transaction. It never changes coverage and is never
- * acknowledged.
+ * acknowledged. With `observeTripUuid`, this same private command instead records a causally admitted current-job
+ * membership for an existing open raw trip: effects must be empty, proof/clock/time are required, and nextEventSeq
+ * must follow current coverage. Exact persisted retries are duplicate even after terminal closure; new decisions
+ * never associate a closed trip. This operation does not depend on sampling or simulation running.
  */
-export interface AttachInput {pluginSessionId: string; nextEventSeq: Uint64; job: JobConfiguration; effects: TripEffect[]}
+export interface AttachInput {pluginSessionId: string; nextEventSeq: Uint64; job: JobConfiguration; effects: TripEffect[]; profile?: ProfileObservation; sourceClockId?: string; monotonicNs?: Uint64;profileChange?:boolean;observeTripUuid?:string}
 /**
  * `committed`: the job, trip and intervals were stored. `duplicate`: the session already holds a checkpoint job at this
  * nextEventSeq, such as the same attach retried after a lost answer; nothing is written and the effects are not applied
@@ -177,7 +185,7 @@ export interface EventRow {
  * `jobSource` `event`, an `openedEventSeq` and a `jobConfigurationEventSeq`, and `checkpointJob` null.
  */
 export interface TripRecord {
-  isHardMode: boolean; hardModeDetails: HardModeDetails | null;
+  profileScope?:string;isHardMode: boolean; hardModeDetails: HardModeDetails | null;
   tripUuid: string; pluginSessionId: string; game: 'ets2' | 'ats'; gameMode: Pick<GameMode, 'mode' | 'method' | 'confidence'>; gameModeAmbiguous: boolean;
   jobSource: 'event' | 'checkpoint'; jobConfigurationEventSeq: Uint64 | null; checkpointJob: {nextEventSeq: Uint64; values: JobConfiguration} | null;
   truckConfigurationEventSeq: Uint64 | null; trailerConfigurationEventSeqs: Uint64[];

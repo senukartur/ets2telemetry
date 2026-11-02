@@ -55,7 +55,7 @@ export interface JournalListText {rows: JournalTripRow[]; empty: string | null; 
 export interface JournalDetailText {mode: JournalModeBadge; title: string; outcome: string; completeness: JournalBadge; sections: JournalSection[]}
 export interface JournalIntervalRow {id: string; kind: string; cause: string; start: string; end: string; events: string}
 export interface JournalIntervalText {total: string; rows: JournalIntervalRow[]; empty: string | null; hasNext: boolean}
-export interface JournalEventRow {eventSeq: string; time: string; type: string; detail: string; attribution: string}
+export interface JournalEventRow {key: string; eventSeq: string; time: string; type: string; detail: string; attribution: string}
 export interface JournalEventText {window: string; rows: JournalEventRow[]; empty: string | null; hasNext: boolean}
 export type JournalSampleRow =
   | {kind: 'gap'; key: string; text: string}
@@ -290,10 +290,11 @@ function journalIntervalText(page: JournalIntervalPage, options: JournalTextOpti
 }
 
 function windowText(window: JournalWindow): string {
+  if((window.sourceCount ?? 0)>1)return '';
   if (!window.known) return JOURNAL_STRINGS.windowUnknown;
   const values = {from: window.fromEventSeq, through: window.throughEventSeq ?? ''};
   const template = {'open': JOURNAL_STRINGS.windowOpen, 'close-event': JOURNAL_STRINGS.windowCloseEvent, 'close-gap': JOURNAL_STRINGS.windowCloseGap,
-    'end-of-session': JOURNAL_STRINGS.windowEndOfSession}[window.end];
+    'end-of-session': JOURNAL_STRINGS.windowEndOfSession,'close-observation':''}[window.end];
   return fill(template, values);
 }
 const transferText = (record: Extract<EventRecord, {type: 'player.use.ferry' | 'player.use.train'}>) =>
@@ -317,7 +318,7 @@ function eventDetail(record: EventRecord, units: DisplayUnits): string {
 function attributionText(event: JournalEvent, tripUuid: string): string {
   const a = event.attribution;
   if (a === null) return JOURNAL_ATTRIBUTION_TEXT.none;
-  if ((a.kind === 'trip' || a.kind === 'trip-before-loaded') && a.tripUuid !== tripUuid) return JOURNAL_ATTRIBUTION_TEXT['other-trip'];
+  if ((a.kind === 'trip' || a.kind === 'trip-before-loaded') && (a.logicalTripUuid ?? a.tripUuid) !== tripUuid) return JOURNAL_ATTRIBUTION_TEXT['other-trip'];
   return JOURNAL_ATTRIBUTION_TEXT[a.kind];
 }
 /** One page of the trip's timeline (J7) in the trip's own game profile. */
@@ -325,7 +326,7 @@ function journalEventText(page: JournalEventPage, trip: {tripUuid: string; game:
   const units = unitsFor(trip.game, options);
   return {
     window: windowText(page.window),
-    rows: page.events.map(event => ({eventSeq: event.eventSeq, time: show(event.occurred.utcUnixMs, value => localTime(Number(value), options.timeZone)),
+    rows: page.events.map(event => ({key: `${event.pluginSessionId ?? page.window.pluginSessionId}:${event.eventSeq}`,eventSeq: event.eventSeq, time: show(event.occurred.utcUnixMs, value => localTime(Number(value), options.timeZone)),
       type: JOURNAL_EVENT_TYPE_TEXT[event.type], detail: eventDetail(event.record, units), attribution: attributionText(event, trip.tripUuid)})),
     empty: page.events.length ? null : (options.firstPage ?? true) ? JOURNAL_STRINGS.noEvents : JOURNAL_STRINGS.noMoreEvents, hasNext: page.nextCursor !== null
   };
@@ -349,7 +350,7 @@ function journalSampleText(page: JournalSamplePage, game: JournalGame, options: 
   const units = unitsFor(game, options), rows: JournalSampleRow[] = [], language = options.language ?? 'en';
   let previous: JournalSample | undefined;
   for (const sample of page.samples) {
-    if (previous && previous.sourceClockId !== sample.sourceClockId) rows.push({kind: 'restart', key: `restart-${sample.id}`, text: JOURNAL_STRINGS.sourceRestarted});
+    if (previous && (previous.pluginSessionId !== sample.pluginSessionId || previous.sourceClockId !== sample.sourceClockId)) rows.push({kind: 'restart', key: `restart-${sample.id}`, text: JOURNAL_STRINGS.sourceRestarted});
     else if (previous) {
       const missing = sourceSecond(sample) - sourceSecond(previous) - 1n;
       if (missing > 0n) rows.push({kind: 'gap', key: `gap-${sample.id}`, text: fill(JOURNAL_STRINGS.sampleGap, {seconds: missing.toString()})});

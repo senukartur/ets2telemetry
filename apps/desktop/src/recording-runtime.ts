@@ -1,3 +1,4 @@
+import type {ProfileObservation} from '../../../packages/telemetry-core/src/trips/continuation';
 // The recording runtime of the telemetry service (ET-015a R3, R10, R14; ET-015c G13, G14, G20): the recording plan,
 // the history or recording-target database, the trip recorder and the protocol v1 ingestion, wired exactly as the
 // service runs them, their three shutdown steps and the recording status they report (ET-015c G3-G5). telemetry-service.ts
@@ -51,6 +52,7 @@ export interface RecordingRuntimeOptions {
   /** ET-015c (G4, G5): every recording status to send to main, from `start()` until `stopStatus()`. */
   onRecordingStatus?: (status: RecordingHealth) => void;
   /** Tests only: the coalescing interval (G5) and timers of the recording status; 250 ms and the system timers by default. */
+  profileEvidence?: () => ProfileObservation | undefined;
   hardModeEvidence?: () => HardModeObservation;
   onHardModeTrip?: (details: HardModeDetails | null) => void;
   statusOverrides?: {intervalMs?: number; timers?: RecordingStatusTimers};
@@ -87,7 +89,7 @@ export function createRecordingRuntime(options: RecordingRuntimeOptions): Record
   const changed = () => status.changed();
   // The recorder reaches storage through the history client, so a command before the open or after a failure answers
   // STORAGE_CLOSED (recorderClient).
-  const recorder = plan.durableSelections.length ? new TripRecorderSink(recorderClient({get client() {return history.client;}}), {onChange: changed, hardModeEvidence: options.hardModeEvidence, onHardModeTrip: options.onHardModeTrip}) : undefined;
+  const recorder = plan.durableSelections.length ? new TripRecorderSink(recorderClient({get client() {return history.client;}}), {onChange: changed, profileEvidence: options.profileEvidence, hardModeEvidence: options.hardModeEvidence, onHardModeTrip: options.onHardModeTrip}) : undefined;
   // The selection that was recording or paused (durable delivery active, fresh v1 data) since it was selected: G3 rule 8.
   let recorded: SourceSelection | undefined;
   const v1 = new V1Ingestion({

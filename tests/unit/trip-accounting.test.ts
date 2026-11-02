@@ -11,7 +11,7 @@ import {describe, expect, it} from 'vitest';
 import {decodePayload, type ServerMessage} from '../../packages/contracts/src/protocol-v1';
 import {
   GAME_TIME_JUMP_MINUTES, GAME_TIME_JUMP_RATE, MAX_ANNOTATIONS_PER_COMMIT, MAX_EFFECTS, MAX_PLAUSIBLE_SPEED_MPS, POSITION_JUMP_MARGIN_METERS, READING_HOLE_SECONDS, initialTripState,
-  jobKey, normalizeV1State, stepTrip, tripView, type NormalizedLiveState, type TripEffect, type TripInput, type TripSeed, type TripState
+  dueAttach, jobKey, normalizeV1State, stepTrip, tripView, type NormalizedLiveState, type TripEffect, type TripInput, type TripSeed, type TripState
 } from '../../packages/telemetry-core/src/index';
 import {BASE_UTC, ETS2_A, ETS2_B, GAME_CLOCK_1, GAME_CLOCK_2, Script, job, r, run, sessionInput, type Step} from '../shared/trip-messages';
 
@@ -152,7 +152,10 @@ describe('pause-only reconnection (REG-002, REG-003, REG-005, REG-008)', () => {
       options.replay === 'paused' ? [s.event(r.fined(), paused)] : options.replay === 'gap' ? [s.gap(1)] : [];
     state = run(state, [sessionInput(s.welcome(), '3'), {kind: 'checkpoint', message: s.checkpoint(options.job === undefined ? job() : options.job, retained.length, {simulation: 'paused'})}]).state;
     if (!options.noReading) state = run(state, [reading(s, {ms: 6000, ...stationary, ...options.after})]).state;
-    const result = run(state, [...retained, s.event(r.started()), s.event(r.paused(), paused), s.event(r.delivered(), paused)]);
+    const replayed=run(state,retained);state=replayed.state;
+    const attached=dueAttach(state)?run(state,[{kind:'attach',receivedUtcMs:BASE_UTC+6000}]):{state,effects:[]};
+    const result = run(attached.state, [s.event(r.started()), s.event(r.paused(), paused), s.event(r.delivered(), paused)]);
+    result.effects.unshift(...replayed.effects,...attached.effects);
     return {view: tripView(result.state, 'ets2'), effects: result.effects.flat()};
   }
   it('records a pause-only reconnection as an annotation and closes complete', () => {

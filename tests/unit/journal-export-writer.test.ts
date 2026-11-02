@@ -79,13 +79,13 @@ describe('a saved export (J16, J17)', () => {
       return {ok: true as const, value: {...value, database: {purpose: 'history', schemaVersion: 2}}};
     };
   };
-  it('collects history diagnostics once after Save and includes them in format 3', async () => {
+  it('collects history diagnostics once after Save and includes them in format 4', async () => {
     const diagnostics = vi.fn().mockResolvedValue(diagnosticInput());
     const f = exporter({read: historyRead(), diagnostics});
     expect((await f.instance.export(TRIP)).ok).toBe(true);
     expect(diagnostics).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({trip: DETAIL.trip}), 1_800_000_000_000);
     const value = JSON.parse(await readFile(path.join(out, 'trip.json'), 'utf8'));
-    expect(value.diagnostics).toEqual(diagnosticInput()); expect(value.formatVersion).toBe(3);
+    expect(value.diagnostics).toEqual(diagnosticInput()); expect(value.formatVersion).toBe(4);
   });
   it.each(['cancelled', 'refused', 'synthetic'] as const)('does not collect game diagnostics for a %s export', async mode => {
     const diagnostics = vi.fn().mockResolvedValue(diagnosticInput());
@@ -123,7 +123,7 @@ describe('a saved export (J16, J17)', () => {
     expect(events(f.log)).toEqual([['JOURNAL_EXPORT_SAVED', {events: 2, samples: 1}]]);
     // Each read at the export page size of its kind (J5, J16).
     expect(f.queries).toEqual([{kind: 'trip', tripUuid: TRIP}, {kind: 'database'}, {kind: 'intervals', tripUuid: TRIP, page: {limit: 500}},
-      {kind: 'events', tripUuid: TRIP, page: {limit: 500}}, {kind: 'samples', tripUuid: TRIP, page: {limit: 3_600}}]);
+      {kind: 'events', tripUuid: TRIP, page: {limit: 500}}, {kind: 'samples', tripUuid: TRIP, includeExcluded: true, page: {limit: 3_600}}]);
   });
   it('appends every part from the current position, so the file is exactly the parts in order (review round 1, finding 4)', async () => {
     const parts: string[] = [];
@@ -163,8 +163,8 @@ describe('a saved export (J16, J17)', () => {
     expect([document.samples.length, document.samples.at(-1)!.id, document.events.map(e => e.eventSeq), document.intervals.map(i => i.id)]).toEqual([3_700, '3700', ['3', '4'], ['7']]);
     expect(document.bounds).toEqual({committedThroughEventSeq: '4', lastSampleId: '3700', lastIntervalId: '7', snapshot: true});
     expect(tripExportProblems(document)).toEqual([]);
-    expect(read.queries.filter(query => query.kind === 'samples')).toEqual([{kind: 'samples', tripUuid: TRIP, page: {limit: 3_600}},
-      {kind: 'samples', tripUuid: TRIP, page: {cursor: '3600', limit: 3_600}}]);
+    expect(read.queries.filter(query => query.kind === 'samples')).toEqual([{kind: 'samples', tripUuid: TRIP, includeExcluded: true, page: {limit: 3_600}},
+      {kind: 'samples', tripUuid: TRIP, includeExcluded: true, page: {cursor: '3600', limit: 3_600}}]);
   });
   it('reads no samples or intervals when the detail saw none', async () => {
     const empty = changed(DETAIL as unknown as JournalTripDetail, d => { d.exportBounds = {committedThroughEventSeq: '4', lastSampleId: null, lastIntervalId: null}; d.samples = {count: 0, firstUtcMs: null, lastUtcMs: null};

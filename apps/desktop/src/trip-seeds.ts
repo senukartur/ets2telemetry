@@ -65,7 +65,7 @@ function seedOf(trip: TripRecord, jobRow: EventRow | undefined, scan: SessionSca
   const lastObserved = trip.openedBy !== 'checkpoint' ? scan.lastLabel?.utcMs
     : scan.lastLabel !== null && scan.lastLabel.eventSeq > opened ? scan.lastLabel.utcMs : trip.startedUtcMs;
   return {
-    tripUuid: trip.tripUuid, pluginSessionId: trip.pluginSessionId, game: trip.game, jobKey: job, startedUtcMs: trip.startedUtcMs,
+    ...(trip.profileScope?{profileScope:trip.profileScope}:{}),tripUuid: trip.tripUuid, pluginSessionId: trip.pluginSessionId, game: trip.game, jobKey: job, startedUtcMs: trip.startedUtcMs,
     recordingCompleteness: trip.recordingCompleteness, ...(lastObserved !== undefined ? {lastObservedUtcMs: lastObserved} : {}),
     ...(trip.observedDistanceM.available ? {observedDistanceM: trip.observedDistanceM.value} : {}),
     ...(trip.fuelUsedL.available ? {fuelUsedL: trip.fuelUsedL.value} : {}),

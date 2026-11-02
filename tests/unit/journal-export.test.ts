@@ -21,7 +21,7 @@ const detail = DETAIL as unknown as JournalTripDetail;
 const EVENT_4 = {...EVENT, eventSeq: '4', attribution: null} as unknown as JournalEvent;
 const NO = {available: false, reason: 'not-observed'};
 /** Serializes one document from its parts; each section's pages in order. */
-function serialize(d: JournalTripDetail, pages: {intervals?: unknown[][]; events?: unknown[][]; samples?: unknown[][]}, header = HEADER): string {
+function serialize(d: JournalTripDetail, pages: {sources?:unknown[][];intervals?: unknown[][]; events?: unknown[][]; samples?: unknown[][]}, header = HEADER): string {
   const s = new TripExportSerializer(d, header);
   let text = s.begin();
   for (const section of ['intervals', 'events', 'samples'] as TripExportSection[]) for (const rows of pages[section] ?? []) text += s.rows(section, rows as never);
@@ -62,8 +62,8 @@ const EXPECTED = {
 
 const EXPECTED_V2 = {...EXPECTED, formatVersion: 2, trip: {is_hard_mode: false, hard_mode_details: null, ...EXPECTED.trip}};
 const {intervals: expectedIntervals, events: expectedEvents, samples: expectedSamples, ...fixedV2} = EXPECTED_V2;
-const EXPECTED_V3 = {...fixedV2, formatVersion: 3, diagnostics: {collection: 'retained-logs-at-export', matchedBy: 'plugin-session-and-utc-window',
-  status: 'not-applicable', notes: [], records: []}, intervals: expectedIntervals, events: expectedEvents, samples: expectedSamples};
+const EXPECTED_V4 = {...fixedV2, formatVersion: 4, diagnostics: {collection: 'retained-logs-at-export', matchedBy: 'plugin-session-and-utc-window',
+  status: 'not-applicable', notes: [], records: []}, sources:[],intervals: expectedIntervals, events: expectedEvents, samples: expectedSamples};
 
 describe('trip-scoped connection diagnostics (REG-011, REG-014)', () => {
   const start = DETAIL.trip.startedUtcMs, now = start + 10_000;
@@ -128,14 +128,14 @@ describe('trip-scoped connection diagnostics (REG-011, REG-014)', () => {
   });
 });
 
-describe('format version 3 (J15, REG-014)', () => {
+describe('format version 4 (J15, REG-014)', () => {
   it('still validates the hand-written historical format-1 document', () => {expect(tripExportProblems(EXPECTED)).toEqual([]);});
   it('still validates the historical format-2 document', () => {expect(tripExportProblems(EXPECTED_V2)).toEqual([]);});
   it('writes the open anchor exactly as the hand-written document, in key order, one row per line', () => {
     const text = serialize(detail, {intervals: [[INTERVAL]], events: [[EVENT], [EVENT_4]], samples: [[SAMPLE]]});
     const document = JSON.parse(text) as Record<string, unknown>;
-    expect(document).toEqual(EXPECTED_V3);
-    expect(Object.keys(document)).toEqual(Object.keys(EXPECTED_V3));
+    expect(document).toEqual(EXPECTED_V4);
+    expect(Object.keys(document)).toEqual(Object.keys(EXPECTED_V4));
     expect(tripExportProblems(document)).toEqual([]);
     // Fixed sections, then each row of each section on its own line, then the closing lines.
     const lines = text.split('\n');

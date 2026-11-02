@@ -1,3 +1,4 @@
+import type {JobConfiguration} from '../../../contracts/src/protocol-v1';
 // The pure trip lifecycle and completeness reducer (ET-014 PR-1). It turns committed protocol v1 events and gaps,
 // session changes and checkpoint hydration into storage TripEffect lists. It is deterministic and never mutates its
 // inputs; the caller adopts the returned state only after storage reports the commit (T3). Rules, evidence and the
@@ -39,7 +40,7 @@ export function stepTrip(state: TripState, input: TripInput): TripStepResult {
     case 'attach': return stepAttach(state, input.receivedUtcMs);
     case 'event': return stepEvent(state, input.message, input.coveredThrough, input.receivedUtcMs);
     case 'gap': return stepGap(state, input.message, input.coveredThrough, input.receivedUtcMs);
-    case 'reading': return stepReading(state, input.sample);
+    case 'reading': return stepReading(state, input.sample, input.currentJob,input.profileScope);
     case 'disconnected': return stepDisconnected(state);
   }
 }
@@ -72,7 +73,7 @@ function freshSession(welcome: WelcomeMessage, coveredThrough: Uint64): SessionS
 }
 function seedTrip(seed: TripSeed): OpenTrip {
   return {
-    tripUuid: seed.tripUuid, pluginSessionId: seed.pluginSessionId, jobKey: seed.jobKey, jobEventSeq: null, phase: seed.awaitingOutcome === true ? 'awaiting-outcome' : 'active', reloadEventSeq: null, loadCheck: null, loadCoverage: null,
+    ...(seed.profileScope?{profileScope:seed.profileScope}:{}),tripUuid: seed.tripUuid, pluginSessionId: seed.pluginSessionId, jobKey: seed.jobKey, jobEventSeq: null, phase: seed.awaitingOutcome === true ? 'awaiting-outcome' : 'active', reloadEventSeq: null, loadCheck: null, loadCoverage: null,
     completeness: seed.recordingCompleteness, gameMode: {mode: 'unknown', method: 'none', confidence: 'none'}, gameModeAmbiguous: false,
     startedUtcMs: seed.startedUtcMs, startedMonotonicNs: null, clockId: null, market: null, cargoLoaded: null, truckKey: null,
     trailerKeys: new Array<null>(TRAILER_SLOTS).fill(null), plannedDistance: null, expectedIncome: null,
@@ -195,7 +196,7 @@ function openTrip(c: Carrier, o: OpenOptions) {
     recordingCompleteness: completeness, startedUtcMs: c.label});
   for (const interval of causes) c.own.push({kind: 'completeness.add', interval: {tripUuid: uuid, ...interval, detail: {...interval.detail, atEventSeq: c.eventSeq}}});
   c.slot.trip = {
-    tripUuid: uuid, pluginSessionId: s.pluginSessionId, jobKey: o.key, jobEventSeq: o.jobEventSeq, phase: 'active', reloadEventSeq: null, loadCheck: o.loadCheck,
+    ...(s.profileScope?{profileScope:s.profileScope}:{}),tripUuid: uuid, pluginSessionId: s.pluginSessionId, jobKey: o.key, jobEventSeq: o.jobEventSeq, phase: 'active', reloadEventSeq: null, loadCheck: o.loadCheck,
     loadCoverage: s.load === 'loading' ? {start: null} : null,
     completeness, gameMode: modeOf(s.gameMode), gameModeAmbiguous: false, startedUtcMs: c.label, startedMonotonicNs: c.monotonicNs, clockId: s.clockId,
     ...o.job, truckKey: s.truck?.key ?? null, trailerKeys: s.trailers.map(t => t?.key ?? null),
@@ -322,6 +323,7 @@ function onTimersRestart(c: Carrier) {
     return;
   }
   closeTrip(c, 'none', 'discontinuity');
+  if (trip.phase==='active' && trip.jobKey!==null) c.session.untrackedJob={key:trip.jobKey,source:'recovery'};
 }
 /** gameTime.regression (O9, O10): a save load. It continues a reload-checked or just-loaded trip as partial, else closes it. */
 function onRegression(c: Carrier, record: Extract<EventRecord, {type: 'gameTime.regression'}>) {
@@ -346,6 +348,7 @@ function onRegression(c: Carrier, record: Extract<EventRecord, {type: 'gameTime.
     return;
   }
   closeTrip(c, 'none', 'discontinuity');
+  if (trip.phase==='active' && trip.jobKey!==null) c.session.untrackedJob={key:trip.jobKey,source:'recovery'};
 }
 function onTruck(c: Carrier, record: Extract<EventRecord, {type: 'truck.configured'}>) {
   const key = valueKey(record);
@@ -451,6 +454,7 @@ function stepEvent(state: TripState, message: EventMessage, coveredThrough: Uint
   // A replayed event can show that the checkpoint's state lagged the replay and that its job had already ended or been
   // replaced (a newer clear or configuration proves it, an outcome is treated as ending it): the checkpoint job is then
   // neither untracked nor a late-attach trip (stale checkpoints, docs/trips.md).
+  if (session.checkpointJob && ((!replayed(c) && (record.type==='job.cleared' || record.type==='job.delivered' || record.type==='job.cancelled')) || replayed(c) && endsStaleCheckpointJob(record,occurred.configurationRevision,session.checkpointJob.configurationRevision))) session.checkpointJob=null;
   if (replayed(c) && session.pendingAttach !== null && endsStaleCheckpointJob(record, occurred.configurationRevision, session.pendingAttach.configurationRevision)) {
     session.pendingAttach = null;
     if (session.untrackedJob?.source === 'checkpoint') session.untrackedJob = null;
@@ -500,6 +504,7 @@ function stepGap(state: TripState, message: GapMessage, coveredThrough: Uint64, 
   session.processedThrough = d.lastEventSeq; session.lastUtcMs = c.label; session.clockId = message.capture.clockId;
   flushTotals(c);
   // A gap that covers an eventSeq at or after the checkpoint hides live events, which may have ended the checkpoint's job.
+  if (c.slot.trip === null && session.checkpointJob && last < BigInt(session.checkpointJob.nextEventSeq)) session.pendingAttach = structuredClone(session.checkpointJob);
   settleAttach(session, c.slot, session.pendingAttach !== null && last >= BigInt(session.pendingAttach.nextEventSeq));
   return {ok: true, state: draft, effects: assemble(c.slot, c.own, c.annotations)};
 }
@@ -638,6 +643,10 @@ function stepCheckpoint(state: TripState, message: CheckpointMessage, receivedUt
   }
   session.attachedFromEventSeq = next;
   session.pendingAttach = null;
+  session.checkpointJob = null;
+  if (job.available) session.checkpointJob = {nextEventSeq: next, key: jobKey(job.value), job: structuredClone(job.value),
+    labelUtcMs: utcOf(message.data.state.captureUtcUnixMs) ?? session.lastUtcMs ?? receivedUtcMs ?? null, monotonicNs: message.capture.monotonicNs,
+    clockId: message.capture.clockId, gameMode: modeOf(message.data.status.gameMode), simulation: message.data.state.simulation, configurationRevision: message.data.state.configuration.revision};
   if (slot.trip === null) {
     session.untrackedJob = job.available ? {key: jobKey(job.value), source: 'checkpoint'} : null;
     if (job.available) {
@@ -713,7 +722,7 @@ export function dueAttach(state: TripState): AttachRequest | null {
   const session = state.sessions[id];
   if (!attachDue(session, state.games[session.game])) return null;
   const a = session.pendingAttach!;
-  return {pluginSessionId: id, nextEventSeq: a.nextEventSeq, job: structuredClone(a.job)};
+  return {pluginSessionId: id, nextEventSeq: a.nextEventSeq, job: structuredClone(a.job),...(session.profileChangePending?{profileChange:true}:{})};
 }
 /**
  * Opens the due late-attach trip (J9): partial, with a `late-attach` not-connected interval from the checkpoint and a
@@ -728,7 +737,7 @@ function stepAttach(state: TripState, receivedUtcMs: number): TripStepResult {
   if (id === null || !has(state.sessions, id)) return {ok: false, code: 'UNKNOWN_SESSION'};
   if (!attachDue(state.sessions[id], state.games[state.sessions[id].game])) return {ok: false, code: 'ORDER_VIOLATION'};
   const draft = structuredClone(state), session = draft.sessions[id], slot = draft.games[session.game], a = session.pendingAttach!;
-  session.pendingAttach = null;
+  session.pendingAttach = null; session.profileChangePending=false;
   const uuid = attachTripUuidFor(id, a.nextEventSeq), label = a.labelUtcMs ?? receivedUtcMs, at = {source: 'checkpoint', nextEventSeq: a.nextEventSeq};
   const causes: CompletenessInterval[] = [{kind: 'not-connected', detail: {cause: 'late-attach', ...at}}];
   const continuation = slot.continuation;
@@ -743,7 +752,7 @@ function stepAttach(state: TripState, receivedUtcMs: number): TripStepResult {
     recordingCompleteness: 'partial', startedUtcMs: label}];
   for (const interval of causes) effects.push({kind: 'completeness.add', interval: {tripUuid: uuid, ...interval}});
   slot.trip = {
-    tripUuid: uuid, pluginSessionId: id, jobKey: a.key, jobEventSeq: null, phase: 'active', reloadEventSeq: null, loadCheck: a.simulation === 'running' ? null : 'before-start', loadCoverage: null,
+    ...(session.profileScope?{profileScope:session.profileScope}:{}),tripUuid: uuid, pluginSessionId: id, jobKey: a.key, jobEventSeq: null, phase: 'active', reloadEventSeq: null, loadCheck: a.simulation === 'running' ? null : 'before-start', loadCoverage: null,
     completeness: 'partial', gameMode: modeOf(a.gameMode), gameModeAmbiguous: false, startedUtcMs: label, startedMonotonicNs: a.monotonicNs, clockId: a.clockId,
     market: plain(a.job.market), cargoLoaded: plain(a.job.cargoLoaded), plannedDistance: plain(a.job.plannedDistance), expectedIncome: plain(a.job.expectedIncome),
     truckKey: null, trailerKeys: new Array<null>(TRAILER_SLOTS).fill(null),
@@ -760,7 +769,7 @@ function stepDisconnected(state: TripState): TripStepResult {
     finishReconnect(session, draft.games[session.game], false);
     // A pending late-attach trip belongs to this connection's checkpoint; the next connection's checkpoint decides again.
     // The checkpoint's untracked job is kept: the job is still likely active, and the next checkpoint replaces or clears it.
-    session.pendingAttach = null;
+    session.pendingAttach = null; session.checkpointJob = null;
     session.disconnected = {utcMs: session.lastUtcMs, monotonicNs: session.lastMonotonicNs, clockId: session.clockId, reading: session.lastReading};
     // The next connection starts its own readings: no step crosses a connection hole (T16).
     session.lastReading = null; session.connectionSinceNs = null; session.runClock = null; session.gameTimeWindow = null; session.jumpEpisode = null; session.bridge = null;
@@ -774,10 +783,31 @@ type GameJump = GameTimeJump & {grows: 'new' | 'extend'};
  * One reading of the current connection (T16, T17). It changes only state: distance, fuel and refuels accumulate on
  * the open trip, and annotations or a reading-hole downgrade wait for the game's next commit carrier.
  */
-function stepReading(state: TripState, sample: StepSample & {utcMs?: number}): TripStepResult {
+function stepReading(state: TripState, sample: StepSample & {utcMs?: number}, currentJob?: JobConfiguration | null,profileScope?:string): TripStepResult {
   const id = sample.source.pluginSessionId;
   if (state.connection !== id || !has(state.sessions, id) || state.sessions[id].game !== sample.source.game) return {ok: false, code: 'UNKNOWN_SESSION'};
   const draft = structuredClone(state), session = draft.sessions[id], slot = draft.games[session.game], next = readingPoint(sample), prev = session.lastReading;
+  const oldScope=slot.trip?.profileScope ?? session.profileScope;
+  if(profileScope!==undefined){
+    if(oldScope!==undefined && oldScope!==profileScope && slot.trip!==null){
+      const previous=slot.trip,totals=accountingUpdate(previous.tripUuid,previous.accounting);if(totals)slot.pending.push(totals);
+      const ended=Math.max(previous.startedUtcMs,next.utcMs ?? session.lastUtcMs ?? previous.startedUtcMs);
+      slot.pending.push({kind:'trip.close',tripUuid:previous.tripUuid,outcome:'none',closeReason:'different-job',recordingCompleteness:'partial',endedUtcMs:ended});
+      slot.lastClosed=closedFrom(previous,{outcome:'none',closeReason:'different-job',endedUtcMs:ended,endedMonotonicNs:null,completeness:'partial'});
+      slot.trip=null;slot.continuation=null;session.profileChangePending=true;session.untrackedJob=previous.jobKey===null?null:{key:previous.jobKey,source:'recovery'};
+    }
+    session.profileScope=profileScope;if(slot.trip)slot.trip.profileScope=profileScope;
+  }
+  if (currentJob !== undefined && session.attachedFromEventSeq !== null && BigInt(session.processedThrough) >= BigInt(session.attachedFromEventSeq) - 1n) {
+    if (currentJob === null) {session.pendingAttach = null; session.checkpointJob = null;}
+    else if (slot.trip === null && (session.untrackedJob?.source === 'gap' || session.untrackedJob?.source === 'recovery')) {
+      session.pendingAttach = {nextEventSeq: (BigInt(session.processedThrough) + 1n).toString(), key: jobKey(currentJob), job: structuredClone(currentJob),
+        labelUtcMs: next.utcMs ?? session.lastUtcMs, monotonicNs: next.capture.monotonicNs, clockId: next.capture.clockId,
+        gameMode: session.gameMode, simulation: next.simulation, configurationRevision: sample.state.configurationRevision};
+      if(session.profileChangePending && slot.lastClosed?.tripUuid===attachTripUuidFor(id,session.pendingAttach.nextEventSeq))session.pendingAttach=null;
+      else session.untrackedJob = {key: jobKey(currentJob), source: 'checkpoint'};
+    }
+  }
   if (session.reconnect !== null) {
     session.reconnect.matches = samePausedState(session.reconnect.before, next);
     session.reconnect.read = true;

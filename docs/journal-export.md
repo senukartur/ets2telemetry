@@ -4,7 +4,7 @@ ET-016 PR-5 exports one recorded trip as a JSON file, `ets2telemetry.trip-export
 
 Status (October 17, 2026): the format, the save flow and the Export button are implemented and tested with synthetic databases only. `GAME_HISTORY_RECORDING` has been `true` since October 25, 2026, but no real game trip has been recorded or exported yet. The Windows Save dialog itself (overwrite prompt, cancel by Esc and by the close box, OneDrive Documents, long paths, a read-only folder) remains a pending manual check.
 
-Current exports use [format 3](#connection-diagnostics-format-3), adding trip-scoped connection evidence to the [format-2 Hard Mode fields](#hard-mode-format-2-et-026); the format-1 specification and example below remain historical coverage.
+Current exports use format 4: one immutable logical snapshot, its reconciled current-save totals, and paged source-qualified evidence. `bounds.projection` contains database/trip/revision/page-kind tokens; `sources` records every original recording window and its row bounds. Samples retain their original session/raw-trip identity and `accountingIncluded` flag, including observations excluded after rollback. Event identity is the original plugin session plus eventSeq. Connection diagnostics are collected for every included session under the retained-log/record limits. No source session or missing distance, fuel, money or active time is synthesized. The format-1 example and format-2/3 field descriptions below remain historical coverage.
 
 ## Saving a trip (J16, J17)
 
@@ -40,7 +40,7 @@ The whole document is never held in memory: main holds the detail and one page a
 
 ## Bounds and snapshots (J17)
 
-The trip detail read at the start of an export fixes three bounds: the trip session's committed coverage (`committedThroughEventSeq`), the trip's largest sample id and its largest completeness interval id. Each section's pages stop at its bound, and rows past it are left out: an event, interval or sample committed after the detail read is not in the file, even when it belongs to the trip. A section whose bound is null (no samples or intervals at the read) is not read at all.
+For logical snapshots the detail fixes membership, accounting head and per-kind row watermarks in persisted projection revisions. Source provenance is streamed through the existing interval read using its source token; later continuation/rollback cannot change an old snapshot. The legacy singleton detail fixes three bounds: the trip session's committed coverage (`committedThroughEventSeq`), the trip's largest sample id and its largest completeness interval id. Each section's pages stop at its bound, and rows past it are left out: an event, interval or sample committed after the detail read is not in the file, even when it belongs to the trip. A section whose bound is null (no samples or intervals at the read) is not read at all.
 
 Storage has no delete command for history entities ([storage](storage.md)), so a bound's row still exists when the export reads its section. A valid document therefore holds, for a non-null `lastIntervalId` or `lastSampleId`, a non-empty section whose last row has that id, and for a null one an empty section. `committedThroughEventSeq` is the session's committed coverage, not the id of a trip row, so the events section, the trip's timeline window (J7), can be empty or end before it. The hand-written validator `tests/shared/trip-export-validator.ts` checks these rules ([ET-019 validation](validation/et-019.md#export-validator-bounds-october-19-2026)).
 

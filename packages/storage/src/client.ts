@@ -1,3 +1,4 @@
+import type {ProfileObservation} from '../../telemetry-core/src/trips/continuation';
 import type {HardModeObservation} from '../../contracts/src/hard-mode';
 // The telemetry service's handle on the storage worker (ET-013). Node-safe: it never loads native SQLite; the worker
 // owns the one connection. Commands are sent one at a time with monotonic request ids, each bounded by a deadline.
@@ -100,8 +101,8 @@ export class StorageClient {
   }
   observeHardMode(game: 'ets2' | 'ats', observation: HardModeObservation, fresh = false): Promise<Result<undefined>> {return this.#request({name: 'observeHardMode', game, observation, fresh});}
   upsertSession(input: {message: unknown}) { return this.#request({name: 'upsertSession', input}); }
-  commitEvent(input: {message: unknown; effects?: TripEffect[]; hardMode?: HardModeObservation; hardModeFresh?: boolean; hardModeLoss?: HardModeObservation}): Promise<Result<CommitResult>> { return this.#request({name: 'commitEvent', input}); }
-  commitGap(input: {message: unknown; effects?: TripEffect[]; hardMode?: HardModeObservation; hardModeFresh?: boolean; hardModeLoss?: HardModeObservation}): Promise<Result<CommitResult>> { return this.#request({name: 'commitGap', input}); }
+  commitEvent(input: {message: unknown; effects?: TripEffect[]; hardMode?: HardModeObservation; hardModeFresh?: boolean; hardModeLoss?: HardModeObservation; profile?: ProfileObservation}): Promise<Result<CommitResult>> { return this.#request({name: 'commitEvent', input}); }
+  commitGap(input: {message: unknown; effects?: TripEffect[]; hardMode?: HardModeObservation; hardModeFresh?: boolean; hardModeLoss?: HardModeObservation; profile?: ProfileObservation}): Promise<Result<CommitResult>> { return this.#request({name: 'commitGap', input}); }
   /**
    * Only `uniqueSeconds` of the options crosses the worker boundary (ET-015b). A value that is not an object is forwarded
    * as given, so the worker's request parser refuses it with INVALID_INPUT instead of the client throwing.
@@ -123,7 +124,9 @@ export class StorageClient {
    * object is forwarded as given, so the worker's request parser refuses it with INVALID_INPUT.
    */
   openAttachedTrip(input: AttachInput): Promise<Result<AttachResult>> {
-    return this.#request({name: 'openAttachedTrip', input: isObject(input) ? {pluginSessionId: input.pluginSessionId, nextEventSeq: input.nextEventSeq, job: input.job, effects: input.effects} : input});
+    return this.#request({name: 'openAttachedTrip', input: isObject(input) ? {pluginSessionId: input.pluginSessionId, nextEventSeq: input.nextEventSeq, job: input.job, effects: input.effects,
+      ...(input.profile?{profile:input.profile}:{}),...(input.sourceClockId?{sourceClockId:input.sourceClockId}:{}),...(input.monotonicNs?{monotonicNs:input.monotonicNs}:{}),
+      ...(input.profileChange!==undefined?{profileChange:input.profileChange}:{}),...(input.observeTripUuid!==undefined?{observeTripUuid:input.observeTripUuid}:{})} : input});
   }
   committedThrough(pluginSessionId: string): Promise<Result<Uint64>> { return this.#request({name: 'committedThrough', pluginSessionId}); }
   getSession(pluginSessionId: string): Promise<Result<SessionRecord>> { return this.#request({name: 'getSession', pluginSessionId}); }
@@ -138,7 +141,8 @@ export class StorageClient {
     if (page === undefined) return this.#request({name: 'listTrips'});
     return this.#request({name: 'listTrips', page: isObject(page) ? {cursor: page.cursor, limit: page.limit, game: page.game, outcome: page.outcome} : page});
   }
-  listSamples(scope: {tripUuid: string} | {pluginSessionId: string}, page?: {afterId?: string; limit?: number}): Promise<Result<SampleRecord[]>> { return this.#request({name: 'listSamples', scope, page}); }
+  listSamples(scope: {tripUuid: string} | {pluginSessionId: string}, page?: {afterId?: string; limit?: number; includeExcluded?: boolean}): Promise<Result<SampleRecord[]>> { return this.#request({name: 'listSamples', scope: isObject(scope) ? ('tripUuid' in scope ? {tripUuid: scope.tripUuid} : {pluginSessionId: scope.pluginSessionId}) : scope,
+    ...(page === undefined ? {} : {page: isObject(page) ? {afterId: page.afterId, limit: page.limit, includeExcluded: page.includeExcluded} : page})}); }
   storageInfo(): Promise<Result<StorageInfo>> { return this.#request({name: 'storageInfo'}); }
   /**
    * Journal reads (ET-016, J5). Queries and pages are copied field by field, so only their listed fields cross the

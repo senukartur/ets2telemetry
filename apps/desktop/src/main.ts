@@ -392,8 +392,15 @@ function runApplication(profileError: unknown): void {
     nowValidatedArtwork = null; nowDocument++; nowPort = undefined; nowSubscriptions.close(); nowController?.loaded(false); nowFocus.stop();
   }
   function retireNowPlaying(): void {
-    nowTrack = null; nowSource = null; nowReaderIdle = nowReader.stop(); retireNowDocument();
-    const previous = nowWindow; nowWindow = undefined; nowController = undefined; previous?.destroy();
+    const previous = nowWindow;
+    if (previous) releaseNowWindow(previous); else retireNowDocument();
+    nowTrack = null; nowSource = null; nowReaderIdle = nowReader.stop();
+    if (previous && !previous.isDestroyed()) previous.destroy();
+  }
+  function releaseNowWindow(created: BrowserWindow): void {
+    if (nowWindow !== created) return;
+    const controller = nowController; nowWindow = undefined; nowController = undefined;
+    controller?.retire(); retireNowDocument();
   }
   function syncNowPlaying(): void {
     const settings = settingsStore.view();
@@ -429,9 +436,12 @@ function runApplication(profileError: unknown): void {
     });
     const topology = () => nowController?.topologyChanged();
     screen.on('display-added', topology); screen.on('display-removed', topology); screen.on('display-metrics-changed', topology);
+    // `closed` is too late: native visibility callbacks can already see destroyed web contents.
+    created.on('close', () => releaseNowWindow(created));
+    created.webContents.on('destroyed', () => releaseNowWindow(created));
     created.on('closed', () => {
       screen.removeListener('display-added', topology); screen.removeListener('display-removed', topology); screen.removeListener('display-metrics-changed', topology);
-      if (nowWindow === created) {retireNowDocument(); nowWindow = undefined; nowController = undefined;}
+      releaseNowWindow(created);
     });
     void created.loadFile(path.join(__dirname, 'renderer', 'now-playing.html')).catch(() => {if (nowWindow === created) {nowPlayingView = {...nowPlayingView, state: 'error', error: 'READER_UNAVAILABLE'}; publishNowPlaying();}});
   }

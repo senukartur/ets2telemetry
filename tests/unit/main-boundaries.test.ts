@@ -27,7 +27,7 @@ let ipc: EventEmitter;
 let handlers: Map<string, (event: unknown, source?: unknown) => unknown>;
 let child: EventEmitter & {postMessage: ReturnType<typeof vi.fn>; kill: ReturnType<typeof vi.fn>};
 let children: typeof child[];
-let contents: EventEmitter & {mainFrame: object; send: ReturnType<typeof vi.fn>; postMessage: ReturnType<typeof vi.fn>; setZoomFactor: ReturnType<typeof vi.fn>};
+let contents: EventEmitter & {mainFrame: object; send: ReturnType<typeof vi.fn>; postMessage: ReturnType<typeof vi.fn>; setZoomFactor: ReturnType<typeof vi.fn>; isDestroyed(): boolean};
 let resolveBroker: ReturnType<typeof vi.fn>;
 let loadFile: ReturnType<typeof vi.fn>;
 let overlayContents: typeof contents;
@@ -135,8 +135,8 @@ function installFixture() {
     requestSingleInstanceLock: vi.fn(() => lockGranted), disableHardwareAcceleration: vi.fn(), commandLine: {appendSwitch: vi.fn()}});
   child = Object.assign(new EventEmitter(), {postMessage: vi.fn(), kill: vi.fn(() => true)});
   children = [child]; let forks = 0;
-  contents = Object.assign(new EventEmitter(), {mainFrame: {}, send: vi.fn(), postMessage: vi.fn(), setWindowOpenHandler: vi.fn(), setZoomFactor: vi.fn()});
-  overlayContents = Object.assign(new EventEmitter(), {mainFrame: {}, send: vi.fn(), postMessage: vi.fn(), setWindowOpenHandler: vi.fn(), setZoomFactor: vi.fn()});
+  contents = Object.assign(new EventEmitter(), {mainFrame: {}, send: vi.fn(), postMessage: vi.fn(), setWindowOpenHandler: vi.fn(), setZoomFactor: vi.fn(), isDestroyed: () => false});
+  overlayContents = Object.assign(new EventEmitter(), {mainFrame: {}, send: vi.fn(), postMessage: vi.fn(), setWindowOpenHandler: vi.fn(), setZoomFactor: vi.fn(), isDestroyed: () => false});
   windows = []; channels = []; configurations = [];
   loadFile = vi.fn(() => Promise.resolve());
   handlers = new Map(); ipc = new EventEmitter();
@@ -156,7 +156,7 @@ function installFixture() {
     screen: Object.assign(new EventEmitter(), {screenToDipRect: (_window: null, bounds: Electron.Rectangle) => bounds, getAllDisplays: () => [{id: 1, bounds: {x: -1920, y: 0, width: 3840, height: 1080}, workArea: {x: 0, y: 0, width: 1920, height: 1040}}], getPrimaryDisplay: () => ({id: 1, workArea: {x: 0, y: 0, width: 1920, height: 1040}})}),
     BrowserWindow: class extends EventEmitter {
       webContents = windows.length === 0 ? contents : windows.length === 1 ? overlayContents : (() => {
-        const next = Object.assign(new EventEmitter(), {mainFrame: {}, send: vi.fn(), postMessage: vi.fn(), setWindowOpenHandler: vi.fn(), setZoomFactor: vi.fn()}); extraContents.push(next); return next;
+        const next = Object.assign(new EventEmitter(), {mainFrame: {}, send: vi.fn(), postMessage: vi.fn(), setWindowOpenHandler: vi.fn(), setZoomFactor: vi.fn(), isDestroyed: () => false}); extraContents.push(next); return next;
       })();
       minimized = false; isMinimized = () => this.minimized; minimize = vi.fn(() => {this.minimized = true;}); restore = vi.fn(() => {this.minimized = false;}); show = vi.fn(); focus = vi.fn();
       visible = false; isVisible = () => this.visible;
@@ -3345,6 +3345,36 @@ async function latestCurrentTrack() {
   await vi.advanceTimersByTimeAsync(50);
   return port.postMessage.mock.lastCall![0].update as import('../../packages/contracts/src').NowPlayingDisplay;
 }
+it.each(['close', 'destroyed'] as const)('releases current-track ownership on %s before late live and media callbacks', async boundary => {
+  vi.stubEnv('ETS2TELEMETRY_SOURCE_KIND', 'ets2');
+  const widget = await readyCurrentTrack();
+  if (boundary === 'close') widget.emit('close', {preventDefault: vi.fn()});
+  else {widget.webContents.isDestroyed = () => true; widget.webContents.emit('destroyed');}
+  const destroyed = () => {throw new TypeError('Object has been destroyed');};
+  widget.hide.mockImplementation(destroyed); widget.setIgnoreMouseEvents.mockImplementation(destroyed);
+  const writes = widget.hide.mock.calls.length;
+  const source = {id: 's1', sourceAppId: 'Synthetic player', playback: 'playing' as const, current: true};
+  expect(() => {
+    deliver(currentGame());
+    nowReaderOptions.snapshot({version: 1, type: 'snapshot', requestId: 1, sessions: [source], error: null,
+      selected: {id: source.id, revision: 1, title: 'Late track', artist: null, album: null, playback: 'playing', timeline: null, artwork: null}}, 1);
+    nowReaderOptions.failed('READER_UNAVAILABLE'); widget.webContents.emit('did-start-loading'); widget.emit('closed');
+  }).not.toThrow();
+  expect(widget.hide).toHaveBeenCalledTimes(writes);
+});
+it('releases current-track ownership before exit cleanup can reenter with late game and media updates', async () => {
+  vi.stubEnv('ETS2TELEMETRY_SOURCE_KIND', 'ets2');
+  const widget = await readyCurrentTrack();
+  widget.hide.mockImplementationOnce(() => {
+    widget.webContents.isDestroyed = () => true;
+    widget.setIgnoreMouseEvents.mockImplementation(() => {throw new TypeError('Object has been destroyed');});
+    deliver(currentGame()); nowReaderOptions.failed('READER_UNAVAILABLE');
+  });
+  expect(() => app.emit('before-quit', {preventDefault: vi.fn()})).not.toThrow();
+  expect(child.postMessage).toHaveBeenCalledWith({type: 'stop'});
+  child.emit('exit', 0); await settle();
+  expect(app.exit).toHaveBeenCalledExactlyOnceWith(0);
+});
 const CURRENT_TRACK_PNG = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jRZkAAAAASUVORK5CYII=';
 it('retains an explicit token through reader failure and requires reselecting a recreated same-app session', async () => {
   await readyCurrentTrack();

@@ -132,9 +132,16 @@ describe('each query reads through the service database (J2, J5)', () => {
     f.answer(0, {ok: true, value: rows});
     await expect(full).resolves.toEqual({ok: true, value: {database: {purpose: 'synthetic', schemaVersion: 2}, samples: rows, nextCursor: '310'}});
     const short = f.service.query({kind: 'samples', tripUuid: TRIP, page: {limit: 300}});
-    expect(f.calls[1]).toEqual(['listSamples', {tripUuid: TRIP}, {limit: 300}]);
-    f.answer(1, {ok: true, value: [SAMPLE]});
+    expect(f.calls[1]).toEqual(['journalTrip',TRIP]);
+    f.answer(1,{ok:true,value:DETAIL});await Promise.resolve();
+    expect(f.calls[2]).toEqual(['listSamples',{tripUuid:TRIP},{limit:300}]);
+    f.answer(2, {ok: true, value: [SAMPLE]});
     await expect(short).resolves.toEqual({ok: true, value: {database: {purpose: 'synthetic', schemaVersion: 2}, samples: [SAMPLE], nextCursor: null}});
+  });
+  it.each([true,false])('forwards explicit private sample mode %s independently of the page size',async includeExcluded=>{
+    const f=fixture(),result=f.service.query({kind:'samples',tripUuid:TRIP,includeExcluded,page:{cursor:'10',limit:300}});
+    expect(f.calls).toEqual([['listSamples',{tripUuid:TRIP},{afterId:'10',limit:300,includeExcluded}]]);
+    f.answer(0,{ok:true,value:[]});expect((await result).ok).toBe(true);
   });
 });
 

@@ -79,12 +79,13 @@ export interface JournalTripPage {database: JournalDatabase; trips: JournalTripL
  * the first eventSeq a gap newly covered. A trip closed before schema version 2 recorded no close carrier: its window
  * is unknown, and its timeline lists only the events of its session attributed to it or referenced by it.
  */
-export type JournalWindow =
-  | {known: true; pluginSessionId: string; fromEventSeq: Uint64; throughEventSeq: Uint64 | null; end: 'open' | 'close-event' | 'close-gap' | 'end-of-session'}
-  | {known: false; pluginSessionId: string};
+export type JournalWindow = (
+  | {known: true; pluginSessionId: string; fromEventSeq: Uint64; throughEventSeq: Uint64 | null; end: 'open' | 'close-event' | 'close-gap' | 'close-observation' | 'end-of-session'}
+  | {known: false; pluginSessionId: string}) & {sourceCount?:number};
 
 /** One completeness interval of a trip. `annotation` marks a discontinuity that never downgrades completeness. */
 export interface JournalInterval {
+  pluginSessionId?: string; rawTripUuid?: string;
   id: string; kind: JournalIntervalKind; annotation: boolean; cause: string | null;
   startUtcMs: number | null; endUtcMs: number | null;
   /** Source monotonic bounds, both in `sourceClockId`. */
@@ -92,12 +93,14 @@ export interface JournalInterval {
   firstEventSeq: Uint64 | null; lastEventSeq: Uint64 | null;
   detail: Record<string, unknown> | null;
 }
-export interface JournalIntervalPage {database: JournalDatabase; intervals: JournalInterval[]; total: number; nextCursor: string | null}
+export interface JournalRecordingSource {id:string;rawTripUuid:string;pluginSessionId:string;fromEventSeq:Uint64;throughEventSeq:Uint64;lastSampleId:string|null;lastIntervalId:string|null}
+export interface JournalIntervalPage {sources?:JournalRecordingSource[];sourceTotal?:number;nextSourceCursor?:string|null;database: JournalDatabase; intervals: JournalInterval[]; total: number; nextCursor: string | null}
 
 /** One timeline event: the stored protocol v1 occurrence and record, and the event's trip attribution, if any. */
 export interface JournalEvent {
+  id?: string; pluginSessionId?: string; rawTripUuid?: string;
   eventSeq: Uint64; type: EventRecord['type']; occurred: EventOccurrence; record: EventRecord;
-  attribution: {kind: JournalAttributionKind; tripUuid: string | null} | null;
+  attribution: {kind: JournalAttributionKind; tripUuid: string | null; logicalTripUuid?:string} | null;
 }
 export interface JournalEventPage {database: JournalDatabase; window: JournalWindow; events: JournalEvent[]; nextCursor: string | null}
 
@@ -133,7 +136,7 @@ export interface JournalTripDetail {
    * The latest JOURNAL_DETAIL_TRAILERS trailer configurations of the trip in commit order, and how many the trip holds.
    * A trip that was given more (a trailer re-sent or changed while it was open) shows only the latest ones here.
    */
-  trailers: {items: {eventSeq: Uint64; values: TrailerConfiguration}[]; total: number};
+  trailers: {items: {eventSeq: Uint64; values: TrailerConfiguration; pluginSessionId?:string;rawTripUuid?:string}[]; total: number};
   /** The gameplay outcome event with its revenue or penalty; null unless the trip was delivered or cancelled. */
   outcomeDetails: {eventSeq: Uint64; record: JournalOutcomeRecord} | null;
   money: JournalMoneyTotals;
@@ -146,7 +149,7 @@ export interface JournalTripDetail {
    * Fixed at this read (J17): the trip session's committed coverage and the largest sample and interval ids of the
    * trip. An export of a trip that is still changing stops at them.
    */
-  exportBounds: {committedThroughEventSeq: Uint64; lastSampleId: string | null; lastIntervalId: string | null};
+  exportBounds: {snapshot?: {events: string; intervals: string; samples: string; sources: string}; sourceTotal?:number; accountingHead?:string|null; sources?: {pluginSessionId: string; committedThroughEventSeq: Uint64}[]; committedThroughEventSeq: Uint64; lastSampleId: string | null; lastIntervalId: string | null};
 }
 
 /** A trip, sample or interval cursor: the decimal row id of the last row read, 1 to 2^63 - 1. */
@@ -158,6 +161,14 @@ const MAX_EVENT_SEQ = 18_446_744_073_709_551_614n;
 export const isJournalRowCursor = (value: unknown): value is string => typeof value === 'string' && ROW_CURSOR.test(value) && BigInt(value) <= MAX_ROW_ID;
 export const isJournalEventCursor = (value: unknown): value is string => typeof value === 'string' && EVENT_CURSOR.test(value) && BigInt(value) <= MAX_EVENT_SEQ;
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
+/** Versioned source-qualified page token. Numeric row/event cursors remain accepted for legacy pages. */
+export const isJournalListCursor = (value: unknown): value is string => typeof value === 'string' && value.length <= 160
+  && /^l4:[0-9a-f-]{36}:(0|[1-9][0-9]{0,18}):[1-9][0-9]{0,18}:(ets2|ats|any)\.(open|delivered|cancelled|none|any)\.(complete|partial|unknown|any)$/.test(value)
+  && BigInt(value.split(':')[2]) <= MAX_ROW_ID && BigInt(value.split(':')[3]) <= MAX_ROW_ID;
+export const isJournalSnapshotCursor = (value: unknown): value is string => typeof value === 'string' && value.length <= 240
+  && /^v4:[0-9a-f-]{36}:[0-9a-f-]{36}:[1-9][0-9]{0,18}:[eisr]:(0|[1-9][0-9]{0,18})$/.test(value)
+  && BigInt(value.split(':')[3]) <= MAX_ROW_ID && BigInt(value.split(':')[5]) <= MAX_ROW_ID;
+export const journalCursorPosition = (value: string) => isJournalSnapshotCursor(value) ? value.split(':')[5] : value;
 export const isJournalUuid = (value: unknown): value is string => typeof value === 'string' && UUID.test(value);
 
 const isRecord = (value: unknown): value is Record<string, unknown> => typeof value === 'object' && value !== null && !Array.isArray(value);
@@ -171,13 +182,13 @@ const COMPLETENESS: readonly unknown[] = ['complete', 'partial', 'unknown'];
 export function isJournalTripsQuery(value: unknown): value is JournalTripsQuery | undefined {
   if (value === undefined) return true;
   if (!isRecord(value) || !onlyKeys(value, ['cursor', 'game', 'outcome', 'completeness'])) return false;
-  return (value.cursor === undefined || isJournalRowCursor(value.cursor)) && (value.game === undefined || GAMES.includes(value.game))
+  return (value.cursor === undefined || (isJournalRowCursor(value.cursor) || isJournalListCursor(value.cursor))) && (value.game === undefined || GAMES.includes(value.game))
     && (value.outcome === undefined || OUTCOMES.includes(value.outcome)) && (value.completeness === undefined || COMPLETENESS.includes(value.completeness));
 }
 /** A strict page query: a `limit` from the allowed set and an optional cursor of the given kind. */
 export function isJournalPageQuery(value: unknown, limits: readonly number[], cursor: 'row' | 'event'): value is JournalPageQuery {
   if (!isRecord(value) || !onlyKeys(value, ['cursor', 'limit'])) return false;
-  return limits.includes(value.limit as number) && (value.cursor === undefined || (cursor === 'row' ? isJournalRowCursor(value.cursor) : isJournalEventCursor(value.cursor)));
+  return limits.includes(value.limit as number) && (value.cursor === undefined || (isJournalSnapshotCursor(value.cursor) || (cursor === 'row' ? isJournalRowCursor(value.cursor) : isJournalEventCursor(value.cursor))));
 }
 
 /** Thrown by the validators below for any value that is not exactly the documented shape. */
@@ -276,17 +287,19 @@ function listItem(o: Record<string, unknown>): void {
   available(job.expectedIncome, value => money(value, 'u64'));
 }
 function window(value: unknown): void {
-  if (isRecord(value) && value.known === false) { uuid(exact(value, ['known', 'pluginSessionId']).pluginSessionId); return; }
-  const o = exact(value, ['known', 'pluginSessionId', 'fromEventSeq', 'throughEventSeq', 'end']);
+  if(isRecord(value)&&value.sourceCount!==undefined){count(value.sourceCount);if((value.sourceCount as number)<2)bad();}
+  if (isRecord(value) && value.known === false) { uuid(exact(value, [...(value.sourceCount!==undefined?['sourceCount']:[]),'known', 'pluginSessionId']).pluginSessionId); return; }
+  const o = exact(value, [...(isRecord(value)&&value.sourceCount!==undefined?['sourceCount']:[]),'known', 'pluginSessionId', 'fromEventSeq', 'throughEventSeq', 'end']);
   if (o.known !== true) bad();
   // The window can start at a checkpoint's nextEventSeq, which the schema allows up to 2^64 - 1.
   uuid(o.pluginSessionId); positiveUint64(o.fromEventSeq); nullable(o.throughEventSeq, uint64);
-  oneOf(o.end, ['open', 'close-event', 'close-gap', 'end-of-session']);
+  oneOf(o.end, ['open', 'close-event', 'close-gap','close-observation', 'end-of-session']);
   if ((o.throughEventSeq === null) !== (o.end === 'open' || o.end === 'end-of-session')) bad();
 }
 const INTERVAL_KINDS: readonly unknown[] = ['event-loss', 'not-connected', 'storage-unavailable', 'sample-loss', 'discontinuity', 'restore-loss'];
 function interval(value: unknown): void {
-  const o = exact(value, ['id', 'kind', 'annotation', 'cause', 'startUtcMs', 'endUtcMs', 'startMonotonicNs', 'endMonotonicNs', 'sourceClockId', 'firstEventSeq', 'lastEventSeq', 'detail']);
+  const o = exact(value, [...(isRecord(value) && value.pluginSessionId !== undefined ? ['pluginSessionId', 'rawTripUuid'] : []), 'id', 'kind', 'annotation', 'cause', 'startUtcMs', 'endUtcMs', 'startMonotonicNs', 'endMonotonicNs', 'sourceClockId', 'firstEventSeq', 'lastEventSeq', 'detail']);
+  if (o.pluginSessionId !== undefined) {uuid(o.pluginSessionId); uuid(o.rawTripUuid);}
   rowId(o.id); oneOf(o.kind, INTERVAL_KINDS); boolean(o.annotation); nullable(o.cause, text);
   nullable(o.startUtcMs, utcMs); nullable(o.endUtcMs, utcMs); nullable(o.startMonotonicNs, uint64); nullable(o.endMonotonicNs, uint64); nullable(o.sourceClockId, uuid);
   // Interval eventSeq bounds are any 20-digit key in the schema, so 0 and 2^64 - 1 are accepted here too.
@@ -298,12 +311,14 @@ function interval(value: unknown): void {
 }
 const ATTRIBUTIONS: readonly unknown[] = ['trip', 'trip-before-loaded', 'free-driving', 'ambiguous'];
 function event(value: unknown): void {
-  const o = exact(value, ['eventSeq', 'type', 'occurred', 'record', 'attribution']);
+  const o = exact(value, [...(isRecord(value) && value.pluginSessionId !== undefined ? ['id', 'pluginSessionId', 'rawTripUuid'] : []), 'eventSeq', 'type', 'occurred', 'record', 'attribution']);
+  if (o.pluginSessionId !== undefined) {rowId(o.id); uuid(o.pluginSessionId); uuid(o.rawTripUuid);}
   eventSeq(o.eventSeq);
   if (!isRecord(o.record) || o.record.type !== o.type) bad();
   protocolRecord(o.record, o.occurred);
   nullable(o.attribution, attribution => {
-    const a = exact(attribution, ['kind', 'tripUuid']);
+    const a = exact(attribution, [...(isRecord(attribution)&&attribution.logicalTripUuid!==undefined?['logicalTripUuid']:[]),'kind', 'tripUuid']);
+    if(a.logicalTripUuid!==undefined)uuid(a.logicalTripUuid);
     oneOf(a.kind, ATTRIBUTIONS); nullable(a.tripUuid, uuid);
     if ((a.tripUuid === null) !== (a.kind === 'free-driving' || a.kind === 'ambiguous')) bad();
   });
@@ -343,7 +358,7 @@ function page(rows: unknown, limit: number, cursor: unknown, check: (value: unkn
 export function validateJournalTripPage(value: unknown): JournalTripPage {
   const o = exact(value, ['database', 'trips', 'nextCursor']);
   database(o.database);
-  for (const trip of page(o.trips, JOURNAL_TRIP_PAGE, o.nextCursor, rowId)) listItem(exact(trip, LIST_KEYS));
+  for (const trip of page(o.trips, JOURNAL_TRIP_PAGE, o.nextCursor, value => {if (!isJournalListCursor(value)) rowId(value);})) listItem(exact(trip, LIST_KEYS));
   return value as JournalTripPage;
 }
 /**
@@ -353,7 +368,7 @@ export function validateJournalTripPage(value: unknown): JournalTripPage {
 export function validateJournalEventPage(value: unknown, limit = Math.max(...JOURNAL_EVENT_LIMITS)): JournalEventPage {
   const o = exact(value, ['database', 'window', 'events', 'nextCursor']);
   database(o.database); window(o.window);
-  for (const item of page(o.events, limit, o.nextCursor, eventSeq)) event(item);
+  for (const item of page(o.events, limit, o.nextCursor, value => {if (!isJournalSnapshotCursor(value)) eventSeq(value);})) event(item);
   return value as JournalEventPage;
 }
 /**
@@ -361,9 +376,16 @@ export function validateJournalEventPage(value: unknown, limit = Math.max(...JOU
  * Without a limit the largest allowed page applies.
  */
 export function validateJournalIntervalPage(value: unknown, limit = Math.max(...JOURNAL_INTERVAL_LIMITS)): JournalIntervalPage {
-  const o = exact(value, ['database', 'intervals', 'total', 'nextCursor']);
+  const o = exact(value, [...(isRecord(value) && value.sources !== undefined ? ['sources','sourceTotal','nextSourceCursor']:[]),'database', 'intervals', 'total', 'nextCursor']);
+  if (o.sources !== undefined) {
+    count(o.sourceTotal);for(const source of page(o.sources,limit,o.nextSourceCursor,value=>{if(!isJournalSnapshotCursor(value)||value.split(':')[4]!=='r')bad();})) {
+      const row=exact(source,['id','rawTripUuid','pluginSessionId','fromEventSeq','throughEventSeq','lastSampleId','lastIntervalId']);
+      rowId(row.id);uuid(row.rawTripUuid);uuid(row.pluginSessionId);positiveUint64(row.fromEventSeq);uint64(row.throughEventSeq);nullable(row.lastSampleId,rowId);nullable(row.lastIntervalId,rowId);
+    }
+    if(!Array.isArray(o.intervals)||o.intervals.length!==0||o.total!==0||o.nextCursor!==null)bad();
+  }
   database(o.database); count(o.total);
-  const list = page(o.intervals, limit, o.nextCursor, rowId);
+  const list = page(o.intervals, limit, o.nextCursor, value => {if (!isJournalSnapshotCursor(value)) rowId(value);});
   if (list.length > (o.total as number)) bad();
   for (const item of list) interval(item);
   return value as JournalIntervalPage;
@@ -387,7 +409,11 @@ export function validateJournalTripDetail(value: unknown): JournalTripDetail {
   const trailers = exact(o.trailers, ['items', 'total']);
   count(trailers.total);
   if (!Array.isArray(trailers.items) || trailers.items.length !== Math.min(JOURNAL_DETAIL_TRAILERS, trailers.total as number)) bad();
-  for (const trailer of trailers.items as unknown[]) { const t = exact(trailer, ['eventSeq', 'values']); eventSeq(t.eventSeq); configuration(t.values, 'trailer.configured'); }
+  for (const trailer of trailers.items as unknown[]) {
+    const qualified=isRecord(trailer) && trailer.pluginSessionId!==undefined;
+    const t = exact(trailer, [...(qualified?['pluginSessionId','rawTripUuid']:[]),'eventSeq', 'values']);
+    if(qualified){uuid(t.pluginSessionId);uuid(t.rawTripUuid);}eventSeq(t.eventSeq); configuration(t.values, 'trailer.configured');
+  }
   nullable(o.outcomeDetails, details => {
     const d = exact(details, ['eventSeq', 'record']); eventSeq(d.eventSeq);
     if (!isRecord(d.record) || d.record.type !== (trip.outcome === 'delivered' ? 'job.delivered' : 'job.cancelled')) bad();
@@ -398,13 +424,20 @@ export function validateJournalTripDetail(value: unknown): JournalTripDetail {
   if ((o.window as Record<string, unknown>).pluginSessionId !== trip.pluginSessionId) bad();
   const intervals = exact(o.intervals, ['items', 'total', 'nextCursor']);
   count(intervals.total);
-  const items = page(intervals.items, JOURNAL_DETAIL_INTERVALS, intervals.nextCursor, rowId);
+  const items = page(intervals.items, JOURNAL_DETAIL_INTERVALS, intervals.nextCursor, value => {if (!isJournalSnapshotCursor(value)) rowId(value);});
   if (items.length !== Math.min(JOURNAL_DETAIL_INTERVALS, intervals.total as number)) bad();
   for (const item of items) interval(item);
   const samples = exact(o.samples, ['count', 'firstUtcMs', 'lastUtcMs']);
   count(samples.count); nullable(samples.firstUtcMs, utcMs); nullable(samples.lastUtcMs, utcMs);
   if ((samples.count === 0) !== (samples.firstUtcMs === null) || (samples.firstUtcMs === null) !== (samples.lastUtcMs === null)) bad();
-  const bounds = exact(o.exportBounds, ['committedThroughEventSeq', 'lastSampleId', 'lastIntervalId']);
+  const bounds = exact(o.exportBounds, [...(isRecord(o.exportBounds) && o.exportBounds.snapshot !== undefined ? ['snapshot', 'sources','sourceTotal','accountingHead'] : []), 'committedThroughEventSeq', 'lastSampleId', 'lastIntervalId']);
+  if (bounds.snapshot !== undefined) {
+    const tokens = exact(bounds.snapshot, ['events', 'intervals', 'samples','sources']);
+    for (const [kind, key] of [['e', 'events'], ['i', 'intervals'], ['s', 'samples'],['r','sources']] as const) if (!isJournalSnapshotCursor(tokens[key]) || String(tokens[key]).split(':')[4] !== kind) bad();
+    count(bounds.sourceTotal);nullable(bounds.accountingHead,rowId);
+    if (!Array.isArray(bounds.sources) || bounds.sources.length > 256) bad();
+    for (const source of bounds.sources as unknown[]) {const row = exact(source, ['pluginSessionId', 'committedThroughEventSeq']); uuid(row.pluginSessionId); uint64(row.committedThroughEventSeq);}
+  }
   uint64(bounds.committedThroughEventSeq); nullable(bounds.lastSampleId, rowId); nullable(bounds.lastIntervalId, rowId);
   if ((bounds.lastSampleId === null) !== (samples.count === 0) || (bounds.lastIntervalId === null) !== (intervals.total === 0)) bad();
   return value as JournalTripDetail;

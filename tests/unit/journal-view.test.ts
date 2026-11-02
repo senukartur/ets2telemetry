@@ -218,11 +218,15 @@ describe('trip detail (J13, J21, J22; REG-014, REG-009)', () => {
     expect(fields(text.sections, 'distance').deliveredDistance).toBe('none (not delivered) [reported by the game]');
     expect(text.sections.map(s => s.id)).not.toContain('delivery');
   });
-  it('reports more than 5,000 amounts as incomplete without a partial sum', () => {
+  it('explains incomplete money totals without guessing an amount count or showing a partial sum', () => {
     const text = journalDetailText({...CANCELLED_DETAIL, money: {incomplete: true, totals: [], unavailable: []}}, {timeZone: ZONE});
     expect(fields(text.sections, 'money')).toEqual({expectedIncome: '12345 (currency unknown) [job offer]', penalty: '12000 EUR (SDK-documented) [reported by the game]'});
-    expect(notes(text.sections, 'money')).toEqual(['This trip has more than 5,000 amounts; no totals are shown, so a partial sum is never presented as a total.',
+    expect(notes(text.sections, 'money')).toEqual(['Complete money totals are unavailable. No partial sum is shown as a total.',
       'Amounts are the exact game values. They are never converted, netted or added across currencies.']);
+  });
+  it('presents the generic unavailable-money explanation in Russian through the Journal copy mapping', () => {
+    const text = journalDetailText({...CANCELLED_DETAIL, money: {incomplete: true, totals: [], unavailable: []}}, {timeZone: ZONE, language: 'ru'});
+    expect(notes(text.sections, 'money')).toContain('Полные денежные итоги недоступны. Частичная сумма не выдаётся за полную.');
   });
   it('shows a partial trip closed by lost events with its own outcome', () => {
     const text = journalDetailText(GAP_DETAIL, {timeZone: ZONE});
@@ -326,12 +330,12 @@ describe('completeness intervals and timeline (J7, J13)', () => {
     for (const [units, delivered] of [[DEFAULT, '151.3 km'], [SWAPPED, '94.0 mi']] as const) {
       expect(journalEventText(page, {tripUuid: T.delivered, game: 'ets2'}, {units, timeZone: ZONE})).toEqual({
         window: "Events of the trip's plugin session from eventSeq 4 through 9, the event that closed the trip.", empty: null, hasNext: true, rows: [
-          {eventSeq: '4', time: '2026-10-11 02:00:04', type: 'Job configured', detail: 'Synthetic Cargo, Synthetic City A → Synthetic City B', attribution: '—'},
-          {eventSeq: '5', time: '2026-10-11 02:00:05', type: 'Fine', detail: 'crash: 400 EUR (SDK-documented)', attribution: 'this trip'},
-          {eventSeq: '6', time: '2026-10-11 02:00:06', type: 'Toll', detail: 'unavailable (not observed)', attribution: 'this trip, before the cargo was loaded'},
-          {eventSeq: '7', time: '2026-10-11 02:00:07', type: 'Ferry', detail: 'Synthetic Port A → Synthetic Port B: 677 EUR (SDK-documented)', attribution: 'another trip'},
-          {eventSeq: '8', time: 'unavailable (not observed)', type: 'Game paused', detail: '', attribution: 'free driving'},
-          {eventSeq: '9', time: '2026-10-11 02:00:09', type: 'Delivered', detail: `Revenue 15000 EUR (SDK-documented), delivered distance ${delivered}`, attribution: 'ambiguous'}]});
+          {key:`${ETS2_A}:4`,eventSeq: '4', time: '2026-10-11 02:00:04', type: 'Job configured', detail: 'Synthetic Cargo, Synthetic City A → Synthetic City B', attribution: '—'},
+          {key:`${ETS2_A}:5`,eventSeq: '5', time: '2026-10-11 02:00:05', type: 'Fine', detail: 'crash: 400 EUR (SDK-documented)', attribution: 'this trip'},
+          {key:`${ETS2_A}:6`,eventSeq: '6', time: '2026-10-11 02:00:06', type: 'Toll', detail: 'unavailable (not observed)', attribution: 'this trip, before the cargo was loaded'},
+          {key:`${ETS2_A}:7`,eventSeq: '7', time: '2026-10-11 02:00:07', type: 'Ferry', detail: 'Synthetic Port A → Synthetic Port B: 677 EUR (SDK-documented)', attribution: 'another trip'},
+          {key:`${ETS2_A}:8`,eventSeq: '8', time: 'unavailable (not observed)', type: 'Game paused', detail: '', attribution: 'free driving'},
+          {key:`${ETS2_A}:9`,eventSeq: '9', time: '2026-10-11 02:00:09', type: 'Delivered', detail: `Revenue 15000 EUR (SDK-documented), delivered distance ${delivered}`, attribution: 'ambiguous'}]});
     }
   });
   it('describes every window kind', () => {

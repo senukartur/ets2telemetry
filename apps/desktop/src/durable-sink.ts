@@ -59,6 +59,7 @@ export interface SampleSink {
 export type AttachStatus = 'committed' | 'duplicate' | 'none';
 /**
  * ET-016 PR-7 (J9): the sink's late-attach trip, a trip opened from a checkpoint job once the replayed events drained.
+ * The same lane persists current-observation logical membership independently of the buffered sample flush (ET-063).
  * DurableDelivery asks `due()` after each observed reading and after each successful commit of a connection; when it is
  * true, `open(context)` runs as the very next op of the FIFO, before anything queued behind, with the receipt label of
  * the item that made it due. `open` stores the trip and adopts it; it never changes coverage and never produces an ACK. A

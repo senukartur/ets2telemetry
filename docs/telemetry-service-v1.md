@@ -123,7 +123,13 @@ The durable path is proven only against temporary synthetic-purpose databases in
 
 ## Trip recorder (ET-015a)
 
-`TripRecorderSink` (R2) implements `DurableSink` over the storage client and owns the reducer state. `DurableDelivery` stays the only FIFO and the only single-in-flight scheduler; the recorder adds no queue of its own. It follows the [caller contract](trips.md#caller-contract-for-et-015a):
+`TripRecorderSink` (R2) implements `DurableSink` over the storage client and owns the reducer state. Hard Mode and private profile identity share one fresh serialized file scan on the monitor's cadence: one pre-read and one post-read process query, independent settings/profile outcomes, and independently cancellable consumers. Overlaps coalesce; completed proof is never cached for a later refresh. Original read-plus-bind deadlines and proof age follow the physical scan, including a consumer joining it later. Profile proof waits for a later same-clock probe; replayed events cannot borrow later file evidence.
+
+Canonical job evidence travels with ordered event/attach decisions and sampled anchors. The existing attach lane persists admitted current-observation membership before later events, including paused readings and outcomes within the default sample-flush window. Exact retries are idempotent without joining closed recordings. Storage commits logical membership/accounting atomically without changing source-scoped ACK coverage. Checkpoint/current evidence can restore raw tracking after replay drains; unresolved replay leaves sample ownership unassigned.
+
+A sampled predecessor must match the persisted source-qualified head and raw member. Reconnects, gaps, counter advances, pauses and dropped rows break the chain; plausible endpoints alone cannot bridge it. Connection boundaries clear the predecessor, checkpoints initialize the cumulative counter baseline, and every snapshot updates it, including unsampled slots. A supported running checkpoint followed by unchanged counters can precede ordinary driving; unchanged nonzero counters do not create another break.
+
+`DurableDelivery` remains the only FIFO and single-in-flight durable scheduler; the recorder adds no queue. It follows the [caller contract](trips.md#caller-contract-for-et-015a):
 
 | Sink member | What the recorder does |
 | --- | --- |

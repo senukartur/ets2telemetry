@@ -47,7 +47,7 @@ An optional independent window shows the current Windows media item over the act
 
 The application builds trips automatically from the game's job and delivery events and records them, with their events, gaps and one sample per real second of active driving, in a local SQLite database under `%LOCALAPPDATA%\ETS2Telemetry`. Pauses are recorded as events, not as repeated samples; free driving without a job is recorded too. Events are acknowledged to the plugin only after they are saved, so a crash or reconnection neither loses nor duplicates them.
 
-A trip's outcome (delivered, cancelled, unknown) is kept separate from how completely it was recorded. A job that started before the application attached, a lost connection or lost events make the trip partial; an ambiguous continuation is never merged automatically. History is never deleted automatically and survives updates.
+A trip's outcome (delivered, cancelled, unknown) is kept separate from how completely it was recorded. A job that started before the application attached, a lost connection or lost events make the trip partial. A matching verified profile and canonical job offer automatically continue one Journal entry across reconnects, game/application restarts and next-day save loads; missing or conflicting evidence keeps entries separate. After restoring a save, progress follows that save instead of summing repeated driving; unsupported totals stay unavailable. History is never deleted automatically and survives updates.
 
 ### Journal and export
 

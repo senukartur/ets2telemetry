@@ -1,3 +1,4 @@
+import {projectEffects} from '../../packages/storage/src/sqlite/logical-trips';
 // ET-016 PR-2: journal reads through the in-process storage core, against temporary synthetic-purpose databases. The
 // main database is a copy of the immutable version 1 fixture, migrated to version 2 (its trip is the migrated anchor),
 // then seeded with the hand-written anchors and 110 filler trips of tests/shared/journal-seed.ts. Every expected value
@@ -15,7 +16,7 @@ import {
 import {ATS_A, BASE_UTC, ETS2_A, ETS2_B, job, money, r, Script, trailer, truck} from '../shared/trip-messages';
 import {failed, ok, REPRESENTATIVE, workspace} from './helpers';
 
-const DATABASE = {purpose: 'synthetic', schemaVersion: 3};
+const DATABASE = {purpose: 'synthetic', schemaVersion: 4};
 const NOT_OBSERVED = {available: false, reason: 'not-observed'} as const;
 const text = (value: string) => ({available: true as const, value});
 
@@ -26,7 +27,7 @@ beforeAll(async () => {
   ws = await workspace();
   ws.copyFixture(REPRESENTATIVE, ws.database);
   storage = await ws.open();
-  expect(storage.summary).toMatchObject({schemaVersion: 3, migratedFrom: 1});
+  expect(storage.summary).toMatchObject({schemaVersion: 4, migratedFrom: 1});
   await seedJournalAnchors(storage);
   fillers = await seedJournalFillers(storage, 110);
 }, 120_000);
@@ -59,7 +60,7 @@ function readAll(query: Omit<JournalTripsQuery, 'cursor'>) {
     expect(page.database).toEqual(DATABASE);
     pages.push(page.trips.length);
     trips.push(...page.trips.map(trip => trip.tripUuid));
-    if (page.trips.length === JOURNAL_TRIP_PAGE) expect(page.nextCursor).toMatch(/^[1-9][0-9]*$/);
+    if (page.trips.length === JOURNAL_TRIP_PAGE) expect(page.nextCursor).toMatch(/^l4:/);
     else expect(page.nextCursor).toBeNull();
     if (page.nextCursor === null) return {pages, trips};
     cursor = page.nextCursor;
@@ -148,7 +149,7 @@ describe('journal trip detail (J5, J13; REG-009, REG-014)', () => {
       intervals: {items: [], total: 0, nextCursor: null},
       // Samples: the fixture holds ids 1–3; the delivered batch is ids 4–7, of which 5–7 belong to the trip.
       samples: {count: 3, firstUtcMs: BASE_UTC + 5_000, lastUtcMs: BASE_UTC + 8_000},
-      exportBounds: {committedThroughEventSeq: '29', lastSampleId: '7', lastIntervalId: null}
+      exportBounds: {snapshot: expect.objectContaining({events: expect.stringMatching(/^v4:/), intervals: expect.stringMatching(/^v4:/), samples: expect.stringMatching(/^v4:/)}), sourceTotal:1,accountingHead:null,sources:[{pluginSessionId:ETS2_A,committedThroughEventSeq:'29'}], committedThroughEventSeq: '29', lastSampleId: '7', lastIntervalId: null}
     });
   });
   it('keeps zero apart from unavailable for every job, outcome and sample value of the zero-values trip (REG-009)', () => {
@@ -171,10 +172,10 @@ describe('journal trip detail (J5, J13; REG-009, REG-014)', () => {
       intervals: {items: [], total: 0, nextCursor: null},
       samples: {count: 1, firstUtcMs: SESSION_C_UTC + 3_500, lastUtcMs: SESSION_C_UTC + 3_500},
       // Sample ids: fixture 1–3, delivered batch 4–7, open trip 8–9, this trip 10.
-      exportBounds: {committedThroughEventSeq: '5', lastSampleId: '10', lastIntervalId: null}
+      exportBounds: {snapshot: expect.objectContaining({events: expect.stringMatching(/^v4:/), intervals: expect.stringMatching(/^v4:/), samples: expect.stringMatching(/^v4:/)}), sourceTotal:1,accountingHead:null,sources:[{pluginSessionId:ATS_A,committedThroughEventSeq:'5'}], committedThroughEventSeq: '5', lastSampleId: '10', lastIntervalId: null}
     });
     const [sample] = ok(storage.listSamples({tripUuid: T.zeroValues}, {limit: 300}));
-    expect(sample).toEqual({id: '10', tripUuid: T.zeroValues, utcMs: SESSION_C_UTC + 3_500, sourceClockId: '30000000-0000-4000-8000-0000000000c3', monotonicNs: '5001000000000',
+    expect(sample).toEqual({pluginSessionId:ATS_A,rawTripUuid:T.zeroValues,accountingIncluded:true,id: '10', tripUuid: T.zeroValues, utcMs: SESSION_C_UTC + 3_500, sourceClockId: '30000000-0000-4000-8000-0000000000c3', monotonicNs: '5001000000000',
       gameTime: {minutes: {available: true, value: 0}, clockId: '40000000-0000-4000-8000-000000000001'},
       speed: {available: true, value: 0}, fuel: {available: true, value: 0}, averageConsumption: {available: false, reason: 'not-supported'},
       estimatedRange: {available: false, reason: 'invalid'}, engineRpm: {available: true, value: 0}, gear: {available: true, value: 0}, odometer: NOT_OBSERVED,
@@ -211,9 +212,9 @@ describe('journal trip detail (J5, J13; REG-009, REG-014)', () => {
         detail: {cause: 'reading-hole'}},
       {id: '4', kind: 'event-loss', annotation: false, cause: 'gap', startUtcMs: null, endUtcMs: null, startMonotonicNs: null, endMonotonicNs: null, sourceClockId: null,
         firstEventSeq: '25', lastEventSeq: '26', detail: {cause: 'gap', firstEventSeq: '25', lastEventSeq: '26'}}];
-    expect(detail.intervals).toEqual({items: intervals, total: 3, nextCursor: null});
-    expect(detail.exportBounds).toEqual({committedThroughEventSeq: '29', lastSampleId: null, lastIntervalId: '4'});
-    expect(ok(storage.journalIntervals(T.gapClosed, {limit: 100}))).toEqual({database: DATABASE, intervals, total: 3, nextCursor: null});
+    expect(detail.intervals).toEqual({items: intervals.map(i=>({...i,pluginSessionId:ETS2_A,rawTripUuid:T.gapClosed})), total: 3, nextCursor: null});
+    expect(detail.exportBounds).toEqual({snapshot: expect.objectContaining({events:expect.stringMatching(/^v4:/),intervals:expect.stringMatching(/^v4:/),samples:expect.stringMatching(/^v4:/)}), sourceTotal:1,accountingHead:null,sources:[{pluginSessionId:ETS2_A,committedThroughEventSeq:'29'}],committedThroughEventSeq: '29', lastSampleId: null, lastIntervalId: '4'});
+    expect(ok(storage.journalIntervals(T.gapClosed, {limit: 100}))).toEqual({database: DATABASE, intervals:intervals.map(i=>({...i,pluginSessionId:ETS2_A,rawTripUuid:T.gapClosed})), total: 3, nextCursor: null});
     expect(ok(storage.journalIntervals(T.gapClosed, {limit: 500, cursor: '2'})).intervals.map(i => i.id)).toEqual(['3', '4']);
     expect(ok(storage.journalIntervals(T.delivered, {limit: 100}))).toEqual({database: DATABASE, intervals: [], total: 0, nextCursor: null});
   });
@@ -267,7 +268,7 @@ describe('journal timeline window (J7)', () => {
       ['4', 'job.configured', null], ['5', 'player.fined', {kind: 'trip', tripUuid: T.delivered}], ['6', 'player.tollgate.paid', {kind: 'trip', tripUuid: T.delivered}],
       ['7', 'player.use.ferry', {kind: 'trip', tripUuid: T.delivered}], ['8', 'player.fined', {kind: 'trip', tripUuid: T.delivered}],
       ['9', 'job.delivered', {kind: 'trip', tripUuid: T.delivered}]]);
-    expect(events[1]).toEqual({eventSeq: '5', type: 'player.fined', record: {type: 'player.fined', offence: text('crash'), amount: money('400', 's64', EUR)},
+    expect(events[1]).toEqual({id:'10',pluginSessionId:ETS2_A,rawTripUuid:T.delivered,eventSeq: '5', type: 'player.fined', record: {type: 'player.fined', offence: text('crash'), amount: money('400', 's64', EUR)},
       occurred: {monotonicNs: {available: true, value: '1004999000000'}, gameTime: {minutes: text('12345'), clockId: '40000000-0000-4000-8000-000000000001'},
         utcUnixMs: text(String(BASE_UTC + 5_000)), simulation: 'running', configurationRevision: '1', boundaryOrder: '6'},
       attribution: {kind: 'trip', tripUuid: T.delivered}});
@@ -369,6 +370,7 @@ describe('a trip opened from a checkpoint (schema version 2, J7; written only fr
           outcome, recording_completeness, started_utc_ms, observed_distance_m_state, created_utc_ms, updated_utc_ms)
           SELECT ?, id, 'ets2', 'unknown', 'none', 'none', ?, NULL, 'checkpoint', 'open', 'partial', ?, 'not-observed', ?, ? FROM plugin_sessions WHERE plugin_session_uuid = ?`)
           .run(tripUuid, job, SESSION_B_UTC + 1_500, SESSION_B_UTC + 1_500, SESSION_B_UTC + 1_500, ETS2_B);
+        projectEffects(db,[{kind:'trip.update',tripUuid,set:{}}]);
       } finally { db.close(); }
       st = await cp.open();
       const listed = ok(st.journalTrips()).trips[0];
@@ -504,6 +506,7 @@ describe('a trip with more than 5,000 money amounts and more than 100 intervals 
       // pay 5,000 synchronous commits; the core then commits the next item at eventSeq 5,002 as usual.
       ok(st.close());
       seedFineCopies(big.database);
+      {const db=new Database(big.database);try {projectEffects(db,[{kind:'trip.update',tripUuid:trip,set:{}}]);}finally{db.close();}}
       st = await big.open(); s.next = BigInt(SEEDED_FINE.lastEventSeq) + 1n;
       expect(ok(st.journalTrip(trip)).money).toEqual({incomplete: false, unavailable: [], totals: [{category: 'fine', sdkType: 's64', currency: EUR, raw: '10000', count: 5_000}]});
       commit(r.fined('3'), [{kind: 'event.attribute', tripUuid: trip, attribution: 'trip'}]);
@@ -511,11 +514,11 @@ describe('a trip with more than 5,000 money amounts and more than 100 intervals 
       expect(detail.money).toEqual({incomplete: true, totals: [], unavailable: []});
       // The first 50 intervals, the total and the cursor of the next page.
       expect(detail.intervals.items.map(i => i.id)).toEqual(Array.from({length: JOURNAL_DETAIL_INTERVALS}, (_, i) => String(i + 1)));
-      expect(detail.intervals).toMatchObject({total: 120, nextCursor: '50'});
+      expect(detail.intervals).toMatchObject({total: 120, nextCursor: expect.stringMatching(/:i:50$/)});
       expect(ok(st.journalIntervals(trip, {limit: 100, cursor: '50'}))).toMatchObject({total: 120, nextCursor: null});
       expect(ok(st.journalIntervals(trip, {limit: 100, cursor: '50'})).intervals.map(i => i.id)).toEqual(Array.from({length: 70}, (_, i) => String(i + 51)));
       const first = ok(st.journalIntervals(trip, {limit: 100}));
-      expect([first.intervals.length, first.nextCursor]).toEqual([100, '100']);
+      expect([first.intervals.length, first.nextCursor]).toEqual([100, expect.stringMatching(/:i:100$/)]);
       expect(ok(st.journalIntervals(trip, {limit: 100, cursor: first.nextCursor!})).intervals).toHaveLength(20);
       // 5,002 events in the open window: ten full export pages with cursors, then two events and no cursor.
       const seen: string[] = [], sizes: number[] = [];
@@ -523,14 +526,14 @@ describe('a trip with more than 5,000 money amounts and more than 100 intervals 
       for (let round = 0; round < 100; round++) {
         const page = ok(st.journalEvents(trip, {limit: 500, cursor}));
         sizes.push(page.events.length); seen.push(...page.events.map(e => e.eventSeq));
-        if (page.events.length === 500) expect(page.nextCursor).toBe(page.events.at(-1)!.eventSeq); else expect(page.nextCursor).toBeNull();
+        if (page.events.length === 500) expect(page.nextCursor).toMatch(new RegExp(':e:'+page.events.at(-1)!.id+'$')); else expect(page.nextCursor).toBeNull();
         if (page.nextCursor === null) break;
         cursor = page.nextCursor;
       }
       expect(sizes).toEqual([...Array(10).fill(500), 2]);
       expect(seen).toEqual(Array.from({length: 5_002}, (_, i) => String(i + 1)));
       const ui = ok(st.journalEvents(trip, {limit: 100}));
-      expect([ui.events.length, ui.nextCursor, ui.events[0].eventSeq]).toEqual([100, '100', '1']);
+      expect([ui.events.length, ui.nextCursor, ui.events[0].eventSeq]).toEqual([100, expect.stringMatching(/:e:100$/), '1']);
     } finally { await big.dispose(); }
   }, 240_000);
 });

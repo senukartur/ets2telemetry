@@ -1,9 +1,11 @@
+import {revise} from './logical-trips';
 // Forward-only schema migrations. Each version is applied once, records itself in `schema_migrations` and sets
 // PRAGMA user_version; all pending versions run in one transaction. Released migrations are frozen.
 import type Database from 'better-sqlite3';
 import {SCHEMA_V1} from './schema-v1';
 import {SCHEMA_V2} from './schema-v2';
 import {SCHEMA_V3} from './schema-v3';
+import {SCHEMA_V4} from './schema-v4';
 
 /** PRAGMA application_id of every database this application creates: the ASCII bytes 'ETS2'. */
 export const APPLICATION_ID = 0x45545332;
@@ -17,7 +19,8 @@ export const MIGRATIONS: readonly Migration[] = Object.freeze([
   // ET-016 (J6): fuel used, the trip close carrier, checkpoint job configurations and checkpoint-opened trips; rebuilds
   // job_configurations and trips.
   Object.freeze({version: 2, name: '0002-journal', foreignKeysOff: true, up(db: Database.Database) { for (const statement of SCHEMA_V2) db.exec(statement); }}),
-  Object.freeze({version: 3, name: '0003-hard-mode', up(db: Database.Database) {for (const statement of SCHEMA_V3) db.exec(statement);}})
+  Object.freeze({version: 3, name: '0003-hard-mode', up(db: Database.Database) {for (const statement of SCHEMA_V3) db.exec(statement);}}),
+  Object.freeze({version: 4, name: '0004-logical-trips', up(db: Database.Database) {for (const statement of SCHEMA_V4) db.exec(statement); let after=0n;for(;;){const rows=db.prepare('SELECT id FROM trips WHERE id>? ORDER BY id LIMIT 100').all(after) as {id:bigint}[];if(!rows.length)break;for(const row of rows)revise(db,row.id);after=rows.at(-1)!.id;}}})
 ]);
 
 /** The schema version a migration list produces; versions must be 1, 2, ... without gaps. */

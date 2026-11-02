@@ -105,7 +105,7 @@ export const APP_COPY_KEYS: Readonly<Record<string, I18nKey>> = Object.freeze(ch
   "No truck was recorded for this trip. A trip whose recording started during the job has no truck until the game sends it again.": "copy.no-truck-was-recorded-for-this-trip-a-trip-whose-recording-started-d",
   "No trailer was recorded for this trip. A trip whose recording started during the job has no trailer until the game sends it again.": "copy.no-trailer-was-recorded-for-this-trip-a-trip-whose-recording-started",
   "Amounts are the exact game values. They are never converted, netted or added across currencies.": "copy.amounts-are-the-exact-game-values-they-are-never-converted-netted-or",
-  "This trip has more than 5,000 amounts; no totals are shown, so a partial sum is never presented as a total.": "copy.this-trip-has-more-than-5-000-amounts-no-totals-are-shown-so-a-parti",
+  "Complete money totals are unavailable. No partial sum is shown as a total.": "copy.this-trip-has-more-than-5-000-amounts-no-totals-are-shown-so-a-parti",
   "none recorded": "copy.none-recorded",
   "{count} amounts": "copy.count-amounts",
   "1 amount": "copy.1-amount",

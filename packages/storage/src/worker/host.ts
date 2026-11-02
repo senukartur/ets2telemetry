@@ -67,8 +67,8 @@ export function serveStorage(port: HostPort, testOptions: HostTestOptions = {}):
       return storage.recordCompleteness(command.pluginSessionId, command.interval, command.options === undefined ? undefined : {ifAbsent: command.options.ifAbsent});
     // ET-016 PR-7: only the parsed input fields are forwarded.
     case 'openAttachedTrip': {
-      const {pluginSessionId, nextEventSeq, job, effects} = command.input;
-      return storage.openAttachedTrip({pluginSessionId, nextEventSeq, job, effects});
+      const {pluginSessionId, nextEventSeq, job, effects,profile,sourceClockId,monotonicNs,profileChange,observeTripUuid} = command.input;
+      return storage.openAttachedTrip({pluginSessionId, nextEventSeq, job, effects,profile,sourceClockId,monotonicNs,profileChange,observeTripUuid});
     }
     case 'observeHardMode': return storage.observeHardMode(command.game, command.observation, command.fresh);
     case 'committedThrough': return storage.committedThrough(command.pluginSessionId);

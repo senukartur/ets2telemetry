@@ -12,7 +12,7 @@ import {once} from 'node:events';
 import {existsSync, readFileSync, statSync, writeFileSync} from 'node:fs';
 import path from 'node:path';
 import {afterAll, afterEach, beforeEach, describe, expect, it} from 'vitest';
-import {digestOf, expectMigratedFromVersion1, files, readOnly, readVersion1, REPRESENTATIVE, sha256, STORAGE_FIXTURES, workspace} from './helpers';
+import {ok,digestOf, expectMigratedFromVersion1, files, readOnly, readVersion1, REPRESENTATIVE, sha256, STORAGE_FIXTURES, workspace} from './helpers';
 
 const CHILD = path.resolve('tests/storage/fixtures/crash-child.cjs');
 if (!process.env.ETS2TELEMETRY_STORAGE_TEST_BUNDLES) throw new Error('Storage test bundles are missing; run npm run test:storage.');
@@ -40,7 +40,7 @@ const REOPEN_BACKUP = 'telemetry-f0000000-v1-20261015T120000000Z';
 const pair = (stem: string) => [`${stem}.json`, `${stem}.sqlite`];
 const UUID = 'f0000000-0000-4000-8000-000000000001';
 
-type Barrier = 'afterInspect' | 'afterCopy' | 'afterBackupRename' | 'inside0002' | 'afterOpen';
+type Barrier = 'afterInspect' | 'afterCopy' | 'afterBackupRename' | 'inside0002' | 'inside0004' | 'afterOpen';
 
 /**
  * Runs the child on `copy` until it reports `barrier`, then terminates it there with TerminateProcess (SIGKILL): no exit
@@ -95,7 +95,7 @@ describe('REG-013 killed open of a version 1 database', () => {
     expect(backupFiles()).toBeNull();
 
     const storage = await ws.open({path: copy});
-    expect(storage.summary).toEqual({schemaVersion: 3, created: false, databaseUuid: UUID, purpose: 'synthetic', migratedFrom: 1, backupFileName: `${REOPEN_BACKUP}.sqlite`});
+    expect(storage.summary).toEqual({schemaVersion: 4, created: false, databaseUuid: UUID, purpose: 'synthetic', migratedFrom: 1, backupFileName: `${REOPEN_BACKUP}.sqlite`});
     expectMigratedFromVersion1(storage, copy, before, path.join(ws.backups, `${REOPEN_BACKUP}.sqlite`));
     expect(backupFiles()).toEqual(pair(REOPEN_BACKUP));
   });
@@ -108,7 +108,7 @@ describe('REG-013 killed open of a version 1 database', () => {
     expect(digestOf(copy)).toEqual(before.original);
 
     const storage = await ws.open({path: copy});
-    expect(storage.summary).toEqual({schemaVersion: 3, created: false, databaseUuid: UUID, purpose: 'synthetic', migratedFrom: 1, backupFileName: `${REOPEN_BACKUP}.sqlite`,
+    expect(storage.summary).toEqual({schemaVersion: 4, created: false, databaseUuid: UUID, purpose: 'synthetic', migratedFrom: 1, backupFileName: `${REOPEN_BACKUP}.sqlite`,
       removedPartialBackups: 1});
     expectMigratedFromVersion1(storage, copy, before, path.join(ws.backups, `${REOPEN_BACKUP}.sqlite`));
     // Exactly one verified backup with its manifest; the stale partial copy is gone and was never trusted.
@@ -123,7 +123,7 @@ describe('REG-013 killed open of a version 1 database', () => {
     expect(digestOf(copy)).toEqual(before.original);
 
     const storage = await ws.open({path: copy});
-    expect(storage.summary).toEqual({schemaVersion: 3, created: false, databaseUuid: UUID, purpose: 'synthetic', migratedFrom: 1, backupFileName: `${REOPEN_BACKUP}.sqlite`,
+    expect(storage.summary).toEqual({schemaVersion: 4, created: false, databaseUuid: UUID, purpose: 'synthetic', migratedFrom: 1, backupFileName: `${REOPEN_BACKUP}.sqlite`,
       removedPartialBackups: 2});
     expectMigratedFromVersion1(storage, copy, before, path.join(ws.backups, `${REOPEN_BACKUP}.sqlite`));
     // Exactly one verified backup with its manifest; the unmanifested backup and stale partial manifest are gone.
@@ -154,7 +154,7 @@ describe('REG-013 killed open of a version 1 database', () => {
 
     const storage = await ws.open({path: copy});
     // A backup of exactly this content is reused (docs/storage.md, "Backups and restore", step 2).
-    expect(storage.summary).toEqual({schemaVersion: 3, created: false, databaseUuid: UUID, purpose: 'synthetic', migratedFrom: 1, backupFileName: `${CHILD_BACKUP}.sqlite`});
+    expect(storage.summary).toEqual({schemaVersion: 4, created: false, databaseUuid: UUID, purpose: 'synthetic', migratedFrom: 1, backupFileName: `${CHILD_BACKUP}.sqlite`});
     expectMigratedFromVersion1(storage, copy, before, path.join(ws.backups, `${CHILD_BACKUP}.sqlite`));
     expect(backupFiles()).toEqual(pair(CHILD_BACKUP));
   });
@@ -162,14 +162,25 @@ describe('REG-013 killed open of a version 1 database', () => {
   it('terminated after the open returned, without a close: the committed migration survives and the next open does not migrate', async () => {
     const copy = ws.copyFixture(REPRESENTATIVE), before = readVersion1(copy);
     const facts = await killAtBarrier('afterOpen', copy);
-    expect(facts).toEqual({summary: {schemaVersion: 3, created: false, databaseUuid: UUID, purpose: 'synthetic', migratedFrom: 1, backupFileName: `${CHILD_BACKUP}.sqlite`}});
+    expect(facts).toEqual({summary: {schemaVersion: 4, created: false, databaseUuid: UUID, purpose: 'synthetic', migratedFrom: 1, backupFileName: `${CHILD_BACKUP}.sqlite`}});
     // The committed migration is in the WAL the killed writer never checkpointed.
-    expect(digestOf(copy).userVersion).toBe(3);
+    expect(digestOf(copy).userVersion).toBe(4);
     expect(backupFiles()).toEqual(pair(CHILD_BACKUP));
 
     const storage = await ws.open({path: copy});
-    expect(storage.summary).toEqual({schemaVersion: 3, created: false, databaseUuid: UUID, purpose: 'synthetic'});
+    expect(storage.summary).toEqual({schemaVersion: 4, created: false, databaseUuid: UUID, purpose: 'synthetic'});
     expectMigratedFromVersion1(storage, copy, before, path.join(ws.backups, `${CHILD_BACKUP}.sqlite`));
     expect(backupFiles()).toEqual(pair(CHILD_BACKUP));
   });
+});
+
+it('REG-013 kills the real v3→v4 projection migration inside its transaction and recovers singleton history',async()=>{
+  const copy=ws.copyFixture('schema-v3-representative.sqlite');
+  const before=readOnly(copy,db=>db.prepare('SELECT * FROM trips ORDER BY id').all());
+  const facts=await killAtBarrier('inside0004',copy);
+  expect(facts).toMatchObject({userVersion:3,versions:[1,2,3]});
+  readOnly(copy,db=>{expect(db.pragma('user_version',{simple:true})).toBe(3);expect(db.prepare("SELECT name FROM sqlite_schema WHERE name='logical_trips'").get()).toBeUndefined();});
+  const storage=await ws.open({path:copy});expect(storage.summary).toMatchObject({schemaVersion:4,migratedFrom:3});
+  expect(ok(storage.journalTrips()).trips).toHaveLength(4);storage.close();
+  readOnly(copy,db=>{expect(db.prepare('SELECT * FROM trips ORDER BY id').all()).toEqual(before);expect(db.pragma('integrity_check',{simple:true})).toBe('ok');expect(db.pragma('foreign_key_check')).toEqual([]);});
 });

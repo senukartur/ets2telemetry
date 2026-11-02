@@ -1,3 +1,5 @@
+import type {ProfileObservation} from '../../../packages/telemetry-core/src/trips/continuation';
+import {truckKey} from '../../../packages/telemetry-core/src/derived';
 // The trip recorder of protocol v1 ingestion (ET-015a, R2): a DurableSink that owns the ET-014 TripState and commits
 // each event or gap together with its trip effects in one storage transaction, so the ACK pipeline acknowledges an item
 // only after its effects are stored. DurableDelivery stays the only FIFO and runs one command at a time; the recorder
@@ -12,7 +14,7 @@ import type {HardModeDetails, HardModeObservation} from '../../../packages/contr
 import {unknownHardMode} from '../../../packages/telemetry-core/src/hard-mode';
 import type {RecordingLosses, RecordingTrip} from '../../../packages/contracts/src';
 import type {Uint64} from '../../../packages/contracts/src/protocol-v1';
-import type {CommitResult, CompletenessKind, SampleAppendResult, TripEffect} from '../../../packages/storage/src/api';
+import type {AttachInput, CommitResult, CompletenessKind, SampleAppendResult, SampleInput, TripEffect} from '../../../packages/storage/src/api';
 import type {StorageClient} from '../../../packages/storage/src/client';
 import {
   dueAttach, initialSamplerState, initialTripState, normalizeV1State, sampleReading, stepTrip, tripView, type SamplerState, type TripErrorCode, type TripGame, type TripInput,
@@ -43,12 +45,12 @@ const COUNTED: Partial<Record<CompletenessKind, 'eventLoss' | 'notConnected' | '
 };
 const MAX_SAFE = BigInt(Number.MAX_SAFE_INTEGER);
 /** ET-015c: `onChange` is called after every change the recording status may show: trip state, losses or dropped samples. */
-export interface TripRecorderOptions {onChange?: () => void; hardModeEvidence?: () => HardModeObservation; onHardModeTrip?: (details: HardModeDetails | null) => void}
+export interface TripRecorderOptions {onChange?: () => void; profileEvidence?: () => ProfileObservation | undefined; hardModeEvidence?: () => HardModeObservation; onHardModeTrip?: (details: HardModeDetails | null) => void}
 
 /** The reducer reading of a checkpoint or snapshot: its normalized state, source identity, capture time and UTC label. */
-function reading(message: ReadingMessage): TripInput {
+function reading(message: ReadingMessage,profile?:ProfileObservation): TripInput {
   const utc = message.data.state.captureUtcUnixMs, source = message.source;
-  return {kind: 'reading', sample: {
+  return {kind: 'reading',...(profile && profile.pluginSessionId===source.pluginSessionId && profile.processInstanceId===source.processInstanceId && profile.sourceClockId===message.capture.clockId && BigInt(message.capture.monotonicNs)>=BigInt(profile.afterMonotonicNs)?{profileScope:profile.scope}:{}), ...(message.kind === 'snapshot' ? {currentJob: message.data.state.configuration.job.available ? message.data.state.configuration.job.value : null} : {}), sample: {
     source: {game: source.game, origin: source.origin, pluginSessionId: source.pluginSessionId, processInstanceId: source.processInstanceId},
     capture: {clockId: message.capture.clockId, monotonicNs: message.capture.monotonicNs}, state: normalizeV1State(message.data.state, message.data.status),
     ...(utc.available ? {utcMs: Number(utc.value)} : {})
@@ -176,6 +178,11 @@ export class TripRecorderSink implements DurableSink {
     if (this.pendingObservation) {this.startObservationWrite(); await this.observationWrite;}
     return this.observationError;
   }
+  private lastReadingProfile:ProfileObservation|undefined;
+  private pendingProfile: {key:string;input:AttachInput}|undefined;
+  private storedProfileKey:string|undefined;
+  private previousSample: NonNullable<SampleInput['recording']>['previous'];
+  private continuity: {pluginSessionId:string;processInstanceId:string;sourceClockId:string;coalescedSnapshots:string;offlineTransitions:string}|undefined;
   private state: TripState = initialTripState();
   private sampler: SamplerState = initialSamplerState();
   private readonly buffer = new SampleBuffer();
@@ -188,12 +195,14 @@ export class TripRecorderSink implements DurableSink {
     dropped: () => this.buffer.dropped
   };
   readonly attach: AttachSink = {
-    due: () => dueAttach(this.state) !== null,
+    due: () => dueAttach(this.state) !== null || this.pendingProfile!==undefined,
     open: context => this.openAttach(context)
   };
   constructor(private readonly client: TripRecorderClient, private readonly options: TripRecorderOptions = {}) {}
 
   async openSession(welcome: WelcomeMessage): Promise<SinkResult<{committedThroughEventSeq: Uint64}>> {
+    this.lastReadingProfile=undefined;
+    this.pendingProfile=undefined;this.storedProfileKey=undefined;this.previousSample=undefined;this.continuity=undefined;
     if (this.options.hardModeEvidence && this.client.observeHardMode) {
       const lost = await this.client.observeHardMode(welcome.source.game, {assessment: unknownHardMode(Date.now(), 'interrupted'), binding: null, pluginSessionId: null, sourceMonotonicNs: null});
       if (!lost.ok) return lost;
@@ -247,6 +256,7 @@ export class TripRecorderSink implements DurableSink {
     // R7: the gap's effects describe only (coveredThrough, lastEventSeq]; another starting point means they were wrong.
     if (message.kind === 'gap' && result.value.previouslyCoveredThrough !== coveredThrough) return refused('TRIP_COVERAGE_MISMATCH');
     this.state = stepped.state;
+    if(message.kind==='gap'){this.previousSample=undefined;this.pendingProfile=undefined;}
     this.capturedEvidence.delete(key);
     await this.readHardModeTrip(message.source.game);
     // G6: only a new row stored its effects; a gap covers (previouslyCoveredThrough, lastEventSeq] anew.
@@ -260,18 +270,53 @@ export class TripRecorderSink implements DurableSink {
 
   observe(message: ReadingMessage, context: CommitContext): SinkResult<undefined> {
     let next = this.state;
+    if(message.kind==='snapshot'){
+      const current={pluginSessionId:message.source.pluginSessionId,processInstanceId:message.source.processInstanceId,sourceClockId:message.capture.clockId,...message.data.continuity};
+      const before=this.continuity;
+      // Counters are cumulative. Update the baseline even when this reading occupies an already sampled second.
+      if(before ? before.pluginSessionId!==current.pluginSessionId || before.processInstanceId!==current.processInstanceId || before.sourceClockId!==current.sourceClockId
+        || before.coalescedSnapshots!==current.coalescedSnapshots || before.offlineTransitions!==current.offlineTransitions
+        : current.coalescedSnapshots!=='0' || current.offlineTransitions!=='0')this.previousSample=undefined;
+      this.continuity=current;
+    }
     if (message.kind === 'checkpoint') {
+      this.previousSample=undefined;
+      // A running checkpoint may own a sampled endpoint; unchanged counters must preserve its next observed step.
+      this.continuity={pluginSessionId:message.source.pluginSessionId,processInstanceId:message.source.processInstanceId,sourceClockId:message.capture.clockId,...message.data.continuity};
       const hydrated = stepTrip(next, {kind: 'checkpoint', message, receivedUtcMs: context.receivedUtcMs});
       if (!hydrated.ok) return refused(RECORDER_CODE[hydrated.code]);
       next = hydrated.state;
     }
-    const read = stepTrip(next, reading(message));
+    const profile=this.options.profileEvidence?.();
+    const read = stepTrip(next, reading(message,profile));
     if (!read.ok) return refused(RECORDER_CODE[read.code]);
     this.state = read.state;
+    this.lastReadingProfile=profile && profile.pluginSessionId===message.source.pluginSessionId && profile.processInstanceId===message.source.processInstanceId && profile.sourceClockId===message.capture.clockId && BigInt(message.capture.monotonicNs)>=BigInt(profile.afterMonotonicNs)?structuredClone(profile):undefined;
+    const current=message.data.state.configuration.job,session=this.state.sessions[message.source.pluginSessionId];
+    const replayDrained=session.attachedFromEventSeq!==null && BigInt(session.processedThrough)>=BigInt(session.attachedFromEventSeq)-1n;
+    const view=tripView(this.state,message.source.game);
+    this.pendingProfile=undefined;
+    if(replayDrained && current.available && view.current && this.lastReadingProfile){
+      const key=JSON.stringify([view.current.tripUuid,this.lastReadingProfile.binding,current.value]);
+      if(key!==this.storedProfileKey)this.pendingProfile={key,input:{pluginSessionId:message.source.pluginSessionId,
+        nextEventSeq:(BigInt(session.processedThrough)+1n).toString(),job:structuredClone(current.value),effects:[],
+        observeTripUuid:view.current.tripUuid,profile:this.lastReadingProfile,sourceClockId:message.capture.clockId,monotonicNs:message.capture.monotonicNs}};
+    }
     // H2, H7: the sample sees the trip state that the commits before it in the FIFO left, and this reading.
     const sampled = sampleReading(this.sampler, {message, receivedUtcMs: context.receivedUtcMs, view: tripView(this.state, message.source.game)});
     this.sampler = sampled.state;
-    if (sampled.row) this.buffer.push(message.source.pluginSessionId, sampled.row);
+    if (sampled.row) {
+      if(!replayDrained)sampled.row.tripUuid=null;
+      if (current.available && replayDrained && sampled.row.tripUuid) {
+        const normalized = normalizeV1State(message.data.state, message.data.status), t = normalized.truck;
+        sampled.row.recording = {job: structuredClone(current.value), processInstanceId: message.source.processInstanceId,
+          truck: t.state === 'value' && t.value.brand.id.state === 'value' && t.value.model.id.state === 'value' && t.value.licensePlate.state === 'value' ? truckKey(normalized) : null,
+          profile: this.lastReadingProfile,...(this.previousSample?{previous:this.previousSample}:{})};
+      }
+      this.previousSample=sampled.row.recording && sampled.row.tripUuid ? {tripUuid:sampled.row.tripUuid,sourceClockId:sampled.row.sourceClockId,monotonicNs:sampled.row.monotonicNs}:undefined;
+      this.buffer.push(message.source.pluginSessionId, sampled.row);
+    }
+    if(message.data.state.simulation!=='running')this.previousSample=undefined;
     this.options.onChange?.();
     return {ok: true, value: undefined};
   }
@@ -279,12 +324,21 @@ export class TripRecorderSink implements DurableSink {
   /** J9: opens the due late-attach trip; `none` when nothing is due. */
   private async openAttach(context: CommitContext): Promise<SinkResult<{status: AttachStatus}>> {
     const request = dueAttach(this.state);
-    if (request === null) return {ok: true, value: {status: 'none'}};
+    if (request === null) {
+      const pending=this.pendingProfile;
+      if(!pending)return {ok:true,value:{status:'none'}};
+      const result=await this.client.openAttachedTrip(pending.input);
+      if(result.ok){this.storedProfileKey=pending.key;if(this.pendingProfile===pending)this.pendingProfile=undefined;}
+      return result;
+    }
     const stepped = stepTrip(this.state, {kind: 'attach', receivedUtcMs: context.receivedUtcMs});
     if (!stepped.ok) return refused(RECORDER_CODE[stepped.code]);
-    const result = await this.client.openAttachedTrip({...request, effects: stepped.effects});
+    const session = this.state.sessions[request.pluginSessionId];
+    const profile = this.lastReadingProfile;
+    const result = await this.client.openAttachedTrip({...request, effects: stepped.effects, ...(profile ? {profile, sourceClockId: session.lastReading?.capture.clockId ?? session.clockId ?? undefined, monotonicNs: session.lastReading?.capture.monotonicNs ?? session.lastMonotonicNs ?? undefined} : {})});
     if (!result.ok) return result;
     this.state = stepped.state;
+    this.pendingProfile=undefined;
     // G6: only a new row stored the intervals.
     if (result.value.status === 'committed') this.countIntervals(stepped.effects);
     this.options.onChange?.();

@@ -57,7 +57,7 @@ export function collectTripDiagnostics(detail: JournalTripDetail, exportedUtcMs:
         const row = diagnosticLogRow(line);
         if (!row) continue;
         const utc = Date.parse(row.time), f = row.facts;
-        if (!Number.isFinite(utc) || utc < start || utc > end || f?.game !== detail.trip.game || f.pluginSessionId !== detail.trip.pluginSessionId) continue;
+        if (!Number.isFinite(utc) || utc < start || utc > end || f?.game !== detail.trip.game || !(detail.exportBounds.sources ?? [{pluginSessionId:detail.trip.pluginSessionId}]).some(s=>s.pluginSessionId===f.pluginSessionId)) continue;
         const safe = kind === 'plugin' ? pluginRow(row) : brokerRow(row);
         if (!safe) continue;
         const key = JSON.stringify(safe);

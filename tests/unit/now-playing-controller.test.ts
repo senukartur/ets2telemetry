@@ -16,7 +16,7 @@ function game(): LiveTelemetry {
 function harness() {
   let bounds = {x: 0, y: 0, width: 300, height: 78};
   const calls: string[] = [];
-  const window = {isDestroyed: () => false, hide: () => calls.push('hide'), showInactive: () => calls.push('showInactive'),
+  const window = {isDestroyed: () => false, webContents: {isDestroyed: () => false}, hide: (): void => {calls.push('hide');}, showInactive: () => calls.push('showInactive'),
     setBounds: (value: typeof bounds) => {bounds = value;}, getBounds: () => bounds,
     setIgnoreMouseEvents: (value: boolean) => calls.push(`ignore:${value}`), setFocusable: (value: boolean) => calls.push(`focusable:${value}`),
     setSkipTaskbar: vi.fn(), setMovable: (value: boolean) => calls.push(`movable:${value}`), setAlwaysOnTop: vi.fn(), isAlwaysOnTop: () => false, moveTop: vi.fn()};
@@ -76,4 +76,34 @@ it('reports an unavailable placement when Windows refuses the requested bounds',
   const {controller, window, calls} = harness(); window.setBounds = () => undefined;
   expect(controller.begin(true)).toEqual({active: true, placement: 'unavailable'});
   expect(calls).not.toContain('ignore:false');
+});
+it('ignores updates while web contents are destroyed before the native window', () => {
+  const {controller, window, calls} = harness(); controller.update(true); controller.updateGame(game());
+  window.webContents.isDestroyed = () => true;
+  window.hide = () => {throw new TypeError('Object has been destroyed');};
+  calls.length = 0;
+  expect(() => {controller.updateGame(initialLive()); controller.loaded(false); controller.update(false); controller.topologyChanged();}).not.toThrow();
+  expect(calls).toEqual([]);
+});
+it('retires before native hide callbacks and never resumes a reentrant placement', () => {
+  const {controller, window, calls} = harness(); controller.update(true); controller.updateGame(game());
+  window.hide = () => {calls.push('hide'); controller.retire(); window.webContents.isDestroyed = () => true;};
+  calls.length = 0;
+  controller.update(false);
+  // Destruction inside the nested hide forbids even the remaining click-through writes.
+  expect(calls).toEqual(['hide', 'hide']);
+  calls.length = 0;
+  controller.updateGame(game()); controller.loaded(true); controller.update(true); controller.setOwnForeground(true); controller.topologyChanged();
+  expect(controller.editState()).toEqual({active: false, placement: 'unavailable'});
+  expect(() => controller.begin(true)).toThrow('Current track edit unavailable');
+  expect(calls).toEqual([]);
+});
+it('stops a placement when a bounds callback retires its window', () => {
+  const {controller, window, calls} = harness(); controller.update(true);
+  window.setBounds = () => {controller.retire(); window.webContents.isDestroyed = () => true;};
+  calls.length = 0;
+  controller.updateGame(game());
+  expect(calls).toEqual(['hide', 'ignore:true', 'movable:false', 'focusable:false']);
+  expect(window.setAlwaysOnTop).not.toHaveBeenCalled();
+  expect(calls).not.toContain('showInactive');
 });

@@ -20,6 +20,10 @@ Columns:
 
 | Entry point | Layer | REG IDs | Source | Owning card (PR) | Runs in | Protected |
 | --- | --- | --- | --- | --- | --- | --- |
+| `tests/unit/trip-continuation.test.ts` | Node unit (Vitest) | REG-003, REG-004, REG-008 | F, T | ET-063 | PR (tests job, `npm test`) | regression, trip completeness |
+| `tests/unit/trip-progress.test.ts` | Node unit (Vitest) | REG-008, REG-009 | F, T | ET-063 | PR (tests job, `npm test`) | regression, unavailable accounting |
+| `tests/unit/profile-observation.test.ts` | Node unit (Vitest), temporary local/cloud trees | REG-003, REG-008 | F, T | ET-063 | PR (tests job, `npm test`) | security, regression, profile identity |
+| `tests/storage/trip-continuation.test.ts` | Real SQLite (Vitest, Electron) | REG-003, REG-004, REG-005, REG-008, REG-012, REG-013, REG-014 | F, T | ET-063 | PR (tests job, `npm run test:storage`) | regression, historical fixture, logical membership, snapshot and rollback integrity |
 | `tests/unit/now-playing-contract.test.ts` | Node unit (Vitest) | REG-010, REG-020 | T | ET-061 | PR (tests job, `npm test`) | security (bounded metadata/artwork and response identity) |
 | `tests/unit/now-playing-selection.test.ts` | Node unit (Vitest) | REG-020 | T | ET-061 | PR (tests job, `npm test`) | security (native selection correlation, highest playback tier and explicit-token loss) |
 | `tests/unit/now-playing-presentation.test.ts` | Node unit (Vitest) | REG-020 | T | ET-061 | PR (tests job, `npm test`) | regression (readable source names; paused/unknown anchors do not advance) |

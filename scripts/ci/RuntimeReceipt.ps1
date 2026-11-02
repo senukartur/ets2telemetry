@@ -387,7 +387,7 @@ function Test-RecordingReceipt {
     # Files and rows: the closed synthetic database without sidecars, no history database, and the expected rows.
     $files = $recording.files
     if ($null -eq $files -or @($files.sidecars).Count -ne 0 -or $files.historyDatabase -isnot [bool] -or $files.historyDatabase -or
-        $files.syntheticBackups -isnot [bool] -or $files.syntheticBackups -or !(Test-ReceiptInteger -Value $files.userVersion -Minimum 3 -Maximum 3)) { return $false }
+        $files.syntheticBackups -isnot [bool] -or $files.syntheticBackups -or !(Test-ReceiptInteger -Value $files.userVersion -Minimum 4 -Maximum 4)) { return $false }
     $database = $recording.database
     if ($null -eq $database -or (@($database.integrity) -join ',') -cne 'ok' -or !(Test-ReceiptInteger -Value $database.foreignKeyViolations -Minimum 0 -Maximum 0) -or
         $database.purpose -cne 'synthetic' -or @($database.sessions).Count -ne 1 -or $database.sessions[0].origin -cne 'synthetic' -or
@@ -442,7 +442,7 @@ function Test-JournalReceipt {
     $journal = $Driver.journal
     if ($null -eq $journal) { return $false }
     foreach ($field in @('liveLinesInViewport','liveHiddenInJournal','emptyHistoryShown','recordingOffNoteAbsent','liveRestored','seeded','syntheticBannerShown',
-        'pagesWalked','anchorRowsMatch','anchorDetailsMatch','backKeptPage','sampleGapShown','timelinePaged','intervalsPaged','samplesPaged','filtersApplied','shutdownClean')) {
+        'pagesWalked','anchorRowsMatch','anchorDetailsMatch','backKeptPage','sampleGapShown','timelinePaged','intervalsPaged','samplesPaged','filtersApplied','logicalContinuationVerified','shutdownClean')) {
         if ($journal.$field -isnot [bool] -or $journal.$field -ne $true) { return $false }
     }
     $empty = $journal.emptyHistory
@@ -450,11 +450,11 @@ function Test-JournalReceipt {
         $null -ne $empty.emptyNote -or
         $null -ne $empty.banner -or $null -ne $empty.error -or @($empty.rows).Count -ne 0) { return $false }
     $seed = $journal.seed
-    if ($null -eq $seed -or !(Test-ReceiptInteger -Value $seed.trips -Minimum 119 -Maximum 119) -or !(Test-ReceiptInteger -Value $seed.fillers -Minimum 110 -Maximum 110) -or
+    if ($null -eq $seed -or !(Test-ReceiptInteger -Value $seed.trips -Minimum 120 -Maximum 120) -or !(Test-ReceiptInteger -Value $seed.fillers -Minimum 110 -Maximum 110) -or
         !(Test-ReceiptInteger -Value $seed.pagingTolls -Minimum 104 -Maximum 104) -or !(Test-ReceiptInteger -Value $seed.pagingSamples -Minimum 3600 -Maximum 3600)) { return $false }
-    if ((@($journal.pages | ForEach-Object { $_.count }) -join ',') -cne '50,50,19' -or @($journal.pages)[2].next -isnot [bool] -or @($journal.pages)[2].next) { return $false }
+    if ((@($journal.pages | ForEach-Object { $_.count }) -join ',') -cne '50,50,20' -or @($journal.pages)[2].next -isnot [bool] -or @($journal.pages)[2].next) { return $false }
     $filters = $journal.filters
-    if ($null -eq $filters -or @($filters.none).Count -ne 3 -or !(Test-ReceiptInteger -Value $filters.partial -Minimum 39 -Maximum 39)) { return $false }
+    if ($null -eq $filters -or @($filters.none).Count -ne 3 -or !(Test-ReceiptInteger -Value $filters.partial -Minimum 40 -Maximum 40)) { return $false }
     # Review round 1: the B6 viewport bounds and the anchors' order are re-checked here, not only as driver flags. The
     # status, speed and fuel lines must lie inside the first viewport; page 3 lists the anchors newest first, and the
     # details are opened oldest first.
@@ -494,7 +494,7 @@ function Test-JournalReceipt {
     if (!(Test-ReceiptInteger -Value $journal.restartLauncherExit -Minimum 0 -Maximum 0) -or $Driver.launcherExit -ne 0 -or
         $null -eq $Driver.probesAfterExit -or @($Driver.probesAfterExit).Count -ne 0) { return $false }
     $files = $journal.files
-    if ($null -eq $files -or !(Test-ReceiptInteger -Value $files.userVersion -Minimum 3 -Maximum 3) -or @($files.sidecars).Count -ne 0 -or
+    if ($null -eq $files -or !(Test-ReceiptInteger -Value $files.userVersion -Minimum 4 -Maximum 4) -or @($files.sidecars).Count -ne 0 -or
         $files.syntheticBackups -isnot [bool] -or $files.syntheticBackups) { return $false }
     # Run 1 opened the new history database; run 2 only the existing synthetic one.
     $serviceEvents = @($Driver.serviceEvents); $restartService = @($journal.restartServiceEvents)
@@ -507,7 +507,7 @@ function Test-JournalReceipt {
     foreach ($run in @(@{rows=$serviceEvents; created=$true}, @{rows=$restartService; created=$false})) {
         $opened = @($run.rows | Where-Object { $_.event -ceq 'HISTORY_STORAGE_OPENED' })
         if ($opened.Count -ne 1 -or $opened[0].facts.created -isnot [bool] -or $opened[0].facts.created -ne $run.created -or
-            !(Test-ReceiptInteger -Value $opened[0].facts.schemaVersion -Minimum 3 -Maximum 3)) { return $false }
+            !(Test-ReceiptInteger -Value $opened[0].facts.schemaVersion -Minimum 4 -Maximum 4)) { return $false }
         if (@($run.rows | Where-Object { $_.event -ceq 'HISTORY_STORAGE_CLOSED' }).Count -ne 1) { return $false }
     }
     $targets = @($restartService | Where-Object { $_.event -ceq 'RECORDING_TARGET' })
@@ -632,7 +632,7 @@ function Test-SoakReceipt {
     # (packages/contracts/src/journal.ts), so M trips give floor(M / 50) full pages and a last page of M % 50, empty when
     # M is a multiple of 50.
     $pages = @($soak.journal.pages)
-    if ($soak.journal.database.purpose -cne 'synthetic' -or !(Test-ReceiptInteger -Value $soak.journal.database.schemaVersion -Minimum 3 -Maximum 3)) { return $false }
+    if ($soak.journal.database.purpose -cne 'synthetic' -or !(Test-ReceiptInteger -Value $soak.journal.database.schemaVersion -Minimum 4 -Maximum 4)) { return $false }
     foreach ($page in $pages) { if (!(Test-ReceiptInteger -Value $page -Minimum 0 -Maximum 50)) { return $false } }
     $expectedPages = @(@(50) * [int][math]::Floor($m / 50)) + @($m % 50)
     if ((@($pages | ForEach-Object { [string]$_ }) -join ',') -cne ($expectedPages -join ',')) { return $false } # rule: journal pages
@@ -651,7 +651,7 @@ function Test-SoakReceipt {
     $stopMs = [double]$source.scenarioMs
     if (!(Test-ReceiptInteger -Value $tail.lastSecond -Minimum (1000 + [math]::Floor(($stopMs - 100) / 1000)) -Maximum (1000 + [math]::Floor($stopMs / 1000)))) { return $false } # rule: tail stop
     $files = $soak.files
-    if ($null -eq $files -or $files.magic -cne 'SQLite format 3' -or !(Test-ReceiptInteger -Value $files.userVersion -Minimum 3 -Maximum 3) -or @($files.sidecars).Count -ne 0 -or
+    if ($null -eq $files -or $files.magic -cne 'SQLite format 3' -or !(Test-ReceiptInteger -Value $files.userVersion -Minimum 4 -Maximum 4) -or @($files.sidecars).Count -ne 0 -or
         $files.historyDatabase -isnot [bool] -or $files.historyDatabase -or $files.syntheticBackups -isnot [bool] -or $files.syntheticBackups) { return $false }
     # H11: at most one exit flush row, which wrote what was pending without a loss.
     foreach ($exit in @($soak.sampleExits)) {
@@ -1076,7 +1076,7 @@ function Test-RuntimeReceipt {
         foreach ($field in @('unknown','fail','pass','hints','hover','inlineDetails','bilingual','languageHotChange','keyboard','refresh','lost','restoredLost','irreversible','badge','export','overlayExcluded','persisted')) {
             if ($hardMode.$field -isnot [bool] -or !$hardMode.$field) { $validation.reason = 'HARD_MODE_RESULT_INVALID'; return $validation }
         }
-        if ($hardMode.schemaVersion -ne 3 -or @($hardMode.flags).Count -ne 2 -or $hardMode.flags[0] -isnot [bool] -or $hardMode.flags[0] -or
+        if ($hardMode.schemaVersion -ne 4 -or @($hardMode.flags).Count -ne 2 -or $hardMode.flags[0] -isnot [bool] -or $hardMode.flags[0] -or
             $hardMode.flags[1] -isnot [bool] -or !$hardMode.flags[1] -or @($hardMode.errors).Count -ne 0) { $validation.reason = 'HARD_MODE_RESULT_INVALID'; return $validation }
     }
     # Lifecycle is additive as well; earlier scenario rules are unchanged.

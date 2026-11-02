@@ -1,3 +1,4 @@
+import type {ProfileObservation} from '../../telemetry-core/src/trips/continuation';
 import type {HardModeObservation} from '../../contracts/src/hard-mode';
 // In-process storage API (ET-013). It loads native better-sqlite3, so only the storage worker and the Electron-runtime
 // storage suite may import it; Node-safe callers use ./api. Every method returns a Result and never throws for storage
@@ -30,8 +31,8 @@ export class Storage {
   get summary(): OpenSummary { return this.connection.summary; }
   get closed(): boolean { return this.connection.closed; }
   upsertSession(input: {message: unknown}) { return attempt(() => writes.upsertSession(this.connection, input)); }
-  commitEvent(input: {message: unknown; effects?: TripEffect[]; hardMode?: HardModeObservation; hardModeFresh?: boolean; hardModeLoss?: HardModeObservation}, options?: CommitOptions): Result<CommitResult> { return attempt(() => writes.commitEvent(this.connection, input, options)); }
-  commitGap(input: {message: unknown; effects?: TripEffect[]; hardMode?: HardModeObservation; hardModeFresh?: boolean; hardModeLoss?: HardModeObservation}, options?: CommitOptions): Result<CommitResult> { return attempt(() => writes.commitGap(this.connection, input, options)); }
+  commitEvent(input: {message: unknown; effects?: TripEffect[]; hardMode?: HardModeObservation; hardModeFresh?: boolean; hardModeLoss?: HardModeObservation; profile?: ProfileObservation}, options?: CommitOptions): Result<CommitResult> { return attempt(() => writes.commitEvent(this.connection, input, options)); }
+  commitGap(input: {message: unknown; effects?: TripEffect[]; hardMode?: HardModeObservation; hardModeFresh?: boolean; hardModeLoss?: HardModeObservation; profile?: ProfileObservation}, options?: CommitOptions): Result<CommitResult> { return attempt(() => writes.commitGap(this.connection, input, options)); }
   appendSamples(pluginSessionId: string, rows: SampleInput[], options?: SampleAppendOptions, commitOptions?: CommitOptions): Result<SampleAppendResult> {
     return attempt(() => writes.appendSamples(this.connection, pluginSessionId, rows, options, commitOptions));
   }
@@ -39,7 +40,7 @@ export class Storage {
     return attempt(() => writes.recordCompleteness(this.connection, pluginSessionId, interval, options));
   }
   /** ET-016 PR-7 (J9): opens a trip from a checkpoint job; see AttachInput. */
-  openAttachedTrip(input: AttachInput): Result<AttachResult> { return attempt(() => writes.openAttachedTrip(this.connection, input)); }
+  openAttachedTrip(input: AttachInput, options?:CommitOptions): Result<AttachResult> { return attempt(() => writes.openAttachedTrip(this.connection, input,options)); }
   observeHardMode(game: 'ets2' | 'ats', observation: HardModeObservation, fresh = false): Result<void> {return attempt(() => writes.observeHardMode(this.connection, game, observation, fresh));}
   committedThrough(pluginSessionId: string): Result<Uint64> { return attempt(() => reads.committedThrough(this.connection, pluginSessionId)); }
   getSession(pluginSessionId: string): Result<SessionRecord> { return attempt(() => reads.getSession(this.connection, pluginSessionId)); }
@@ -47,7 +48,7 @@ export class Storage {
   listEvents(pluginSessionId: string, page?: {afterEventSeq?: Uint64; limit?: number}): Result<EventRow[]> { return attempt(() => reads.listEvents(this.connection, pluginSessionId, page)); }
   getTrip(tripUuid: string): Result<TripRecord | undefined> { return attempt(() => reads.getTrip(this.connection, tripUuid)); }
   listTrips(page?: TripPage): Result<TripList> { return attempt(() => reads.listTrips(this.connection, page)); }
-  listSamples(scope: {tripUuid: string} | {pluginSessionId: string}, page?: {afterId?: string; limit?: number}): Result<SampleRecord[]> { return attempt(() => reads.listSamples(this.connection, scope, page)); }
+  listSamples(scope: {tripUuid: string} | {pluginSessionId: string}, page?: {afterId?: string; limit?: number; includeExcluded?: boolean}): Result<SampleRecord[]> { return attempt(() => reads.listSamples(this.connection, scope, page)); }
   /** Journal reads (ET-016 PR-2, J5): bounded pages for the trip journal and its export; see sqlite/journal.ts. */
   journalTrips(query?: JournalTripsQuery): Result<JournalTripPage> { return attempt(() => journal.journalTrips(this.connection, query)); }
   journalTrip(tripUuid: string): Result<JournalTripDetail> { return attempt(() => journal.journalTrip(this.connection, tripUuid)); }

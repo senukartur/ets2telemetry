@@ -268,7 +268,7 @@ export async function runHardModeSmoke({application, dashboard, source, config, 
   await dashboard.getByTestId('journal-export-result').filter({hasText: 'Saved the trip as JSON'}).waitFor({state: 'visible', timeout: 10000});
   const exported = JSON.parse(await readFile(file, 'utf8'));
   const validate = await exportValidator(config); assert.deepEqual(validate(exported), []);
-  assert.equal(exported.formatVersion, 3); assert.equal(exported.trip.is_hard_mode, true); assert.equal(exported.trip.hard_mode_details.manualDelivery, true);
+  assert.equal(exported.formatVersion, 4); assert.equal(exported.trip.is_hard_mode, true); assert.equal(exported.trip.hard_mode_details.manualDelivery, true);
   record.export = true; record.flags = rows.map(row => row.isHardMode); healthy();
   const overlay = application.windows().find(page => page.url().endsWith('?view=overlay'));
   assert.equal(await overlay.evaluate(() => typeof globalThis.overlay.getHardModeStatus), 'undefined'); record.overlayExcluded = true;
@@ -277,7 +277,7 @@ export async function verifyHardModeRun({config, record}) {
   const filename = path.join(smokeDataRoot(config), 'synthetic', 'hard-mode.sqlite');
   const file = await open(filename, 'r'), bytes = Buffer.alloc(100);
   try {await file.read(bytes, 0, 100, 0);} finally {await file.close();}
-  assert.equal(bytes.readUInt32BE(60), 3); record.schemaVersion = 3;
+  assert.equal(bytes.readUInt32BE(60), 4); record.schemaVersion = 4;
   // Running-app journal and export are read through the real worker; independent SQL reconciliation is in storage tests.
   assert.deepEqual(record.flags, [false, true]); record.persisted = true;
 }

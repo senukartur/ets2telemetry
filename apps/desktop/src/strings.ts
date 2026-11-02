@@ -771,7 +771,7 @@ export const JOURNAL_STRINGS = Object.freeze({
   noTruck: 'No truck was recorded for this trip. A trip whose recording started during the job has no truck until the game sends it again.',
   noTrailers: 'No trailer was recorded for this trip. A trip whose recording started during the job has no trailer until the game sends it again.',
   moneyNote: 'Amounts are the exact game values. They are never converted, netted or added across currencies.',
-  moneyIncomplete: 'This trip has more than 5,000 amounts; no totals are shown, so a partial sum is never presented as a total.',
+  moneyIncomplete: 'Complete money totals are unavailable. No partial sum is shown as a total.',
   moneyNone: 'none recorded',
   moneyCount: '{count} amounts',
   moneyCountOne: '1 amount',
