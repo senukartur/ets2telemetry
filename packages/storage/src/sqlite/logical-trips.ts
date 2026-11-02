@@ -40,18 +40,21 @@ export function associate(db: Database.Database, row: LogicalRow, proof: Profile
   let id = logicalFor(db, row.id);const group=get(db,'SELECT * FROM logical_trips WHERE id=?',id)!;
   const membership = get(db, 'SELECT proof_json FROM logical_memberships WHERE trip_ref = ?', row.id)!;
   if (!proof || group.retired === 1n || row.outcome !== 'open') return id;
-  const learned = learnContinuationConstraints(JSON.parse(String(group.canonical_constraints)) as ContinuationConstraints, currentJob);
+  const recordedJob=job(db,row),known=JSON.parse(String(group.canonical_constraints)) as ContinuationConstraints;
+  const recorded=learnContinuationConstraints(known,recordedJob);
+  const learned = recorded===null?null:learnContinuationConstraints(recorded,currentJob);
   if (membership.proof_json !== null) {
     if (learned) db.prepare('UPDATE logical_trips SET canonical_constraints=? WHERE id=?').run(JSON.stringify(learned),id);
     else db.prepare('UPDATE logical_trips SET retired=1 WHERE id=?').run(id);
     return id;
   }
   const fingerprint = continuationFingerprint(currentJob);
-  const canonical=compatibleContinuation(job(db,row),currentJob);
+  const canonical=learned!==null && compatibleContinuation(recordedJob,currentJob);
   const candidates = db.prepare(`SELECT * FROM logical_trips WHERE game = ? AND profile_scope = ? AND retired = 0 AND id <> ? ORDER BY id LIMIT 2`)
     .all(row.game, proof.scope, id) as LogicalRow[];
   const candidate = candidates.length === 1 ? candidates[0] : undefined;
-  const combined = candidate ? learnContinuationConstraints(JSON.parse(String(candidate.canonical_constraints)) as ContinuationConstraints,currentJob) : null;
+  const candidateRecorded=candidate?learnContinuationConstraints(JSON.parse(String(candidate.canonical_constraints)) as ContinuationConstraints,recordedJob):null;
+  const combined = candidateRecorded===null?null:learnContinuationConstraints(candidateRecorded,currentJob);
   if (canonical && fingerprint !== null && candidate && candidate.fingerprint === fingerprint && combined !== null && compatibleContinuation(job(db, raw(db, candidate.id)), currentJob)) {
     // Keep the public UUID of the original recording. Never change a raw trip's session or event identity.
     db.prepare('UPDATE logical_memberships SET logical_ref = ?, previous_logical_ref = ?, joined_after_revision = (SELECT coalesce(max(id),0) FROM logical_revisions) WHERE trip_ref = ?').run(candidate.id, id, row.id);
@@ -66,7 +69,7 @@ export function associate(db: Database.Database, row: LogicalRow, proof: Profile
     for (const previous of candidates) revise(db, previous.id as bigint);
   }
   db.prepare('UPDATE logical_memberships SET proof_json = ? WHERE trip_ref = ?').run(JSON.stringify(proof), row.id);
-  db.prepare('UPDATE logical_trips SET profile_scope = ?, fingerprint = ?,canonical_constraints=? WHERE id = ?').run(proof.scope,canonical?fingerprint:null,JSON.stringify(candidate && id===candidate.id ? combined : learned ?? {}),id);
+  db.prepare('UPDATE logical_trips SET profile_scope = ?, fingerprint = ?,canonical_constraints=? WHERE id = ?').run(proof.scope,canonical?fingerprint:null,JSON.stringify(candidate && id===candidate.id ? combined : learned ?? recorded ?? known),id);
   return id;
 }
 

@@ -182,6 +182,7 @@ export class TripRecorderSink implements DurableSink {
   private pendingProfile: {key:string;input:AttachInput}|undefined;
   private storedProfileKey:string|undefined;
   private previousSample: NonNullable<SampleInput['recording']>['previous'];
+  private continuity: {pluginSessionId:string;processInstanceId:string;sourceClockId:string;coalescedSnapshots:string;offlineTransitions:string}|undefined;
   private state: TripState = initialTripState();
   private sampler: SamplerState = initialSamplerState();
   private readonly buffer = new SampleBuffer();
@@ -201,7 +202,7 @@ export class TripRecorderSink implements DurableSink {
 
   async openSession(welcome: WelcomeMessage): Promise<SinkResult<{committedThroughEventSeq: Uint64}>> {
     this.lastReadingProfile=undefined;
-    this.pendingProfile=undefined;this.storedProfileKey=undefined;this.previousSample=undefined;
+    this.pendingProfile=undefined;this.storedProfileKey=undefined;this.previousSample=undefined;this.continuity=undefined;
     if (this.options.hardModeEvidence && this.client.observeHardMode) {
       const lost = await this.client.observeHardMode(welcome.source.game, {assessment: unknownHardMode(Date.now(), 'interrupted'), binding: null, pluginSessionId: null, sourceMonotonicNs: null});
       if (!lost.ok) return lost;
@@ -269,9 +270,17 @@ export class TripRecorderSink implements DurableSink {
 
   observe(message: ReadingMessage, context: CommitContext): SinkResult<undefined> {
     let next = this.state;
-    if(message.kind==='snapshot' && (message.data.continuity.coalescedSnapshots!=='0' || message.data.continuity.offlineTransitions!=='0'))this.previousSample=undefined;
+    if(message.kind==='snapshot'){
+      const current={pluginSessionId:message.source.pluginSessionId,processInstanceId:message.source.processInstanceId,sourceClockId:message.capture.clockId,...message.data.continuity};
+      const before=this.continuity;
+      // Counters are cumulative. Update the baseline even when this reading occupies an already sampled second.
+      if(before ? before.pluginSessionId!==current.pluginSessionId || before.processInstanceId!==current.processInstanceId || before.sourceClockId!==current.sourceClockId
+        || before.coalescedSnapshots!==current.coalescedSnapshots || before.offlineTransitions!==current.offlineTransitions
+        : current.coalescedSnapshots!=='0' || current.offlineTransitions!=='0')this.previousSample=undefined;
+      this.continuity=current;
+    }
     if (message.kind === 'checkpoint') {
-      this.previousSample=undefined;
+      this.previousSample=undefined;this.continuity=undefined;
       const hydrated = stepTrip(next, {kind: 'checkpoint', message, receivedUtcMs: context.receivedUtcMs});
       if (!hydrated.ok) return refused(RECORDER_CODE[hydrated.code]);
       next = hydrated.state;

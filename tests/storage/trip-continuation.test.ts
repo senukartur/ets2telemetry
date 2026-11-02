@@ -50,6 +50,63 @@ function close(storage: Storage, script: Script, uuid: string, terminal = false)
 }
 
 describe('REG-003/005/008/012/014 durable logical trips', () => {
+  it('counts ordinary driving after historical nonzero counters and a later coalescing advance',async()=>{
+    const accepted=<T>(result:{ok:true;value:T}|{ok:false;error:{code:string}}):T=>{if(!result.ok)throw new Error(result.error.code);return result.value;};
+    const worker=storageWorker(),client=new StorageClient(worker.handle),s=new Script(ETS2_A),context={receivedUtcMs:1000};
+    ok(await client.open({path:ws.database,backupsDirectory:ws.backups,purpose:'synthetic',appVersion:'test'}));
+    const recorder=new TripRecorderSink(client,{profileEvidence:()=>proof(s)});
+    accepted(await recorder.openSession(s.welcome()));accepted(recorder.observe(s.checkpoint(null),context));
+    accepted(await recorder.commit(s.event(r.jobConfigured()),context));
+    const configuration=s.checkpoint(job()).data.state.configuration;
+    const observe=async(odo:number,counter:string,ms=1000)=>{
+      const message=s.snapshot({configuration,simulation:'running',odometer:{available:true,value:odo,unit:'m'},fuel:{available:true,value:100,unit:'L'}},ms);
+      message.data.continuity={coalescedSnapshots:counter,offlineTransitions:'5'};
+      accepted(recorder.observe(message,context));
+      if(recorder.attach.due())accepted(await recorder.attach.open(context));
+    };
+    await observe(1000000,'5');await observe(1000050,'5');accepted(await recorder.samples.write(3600,true));
+    const uuid=tripUuidFor(ETS2_A,'1');expect(ok(await client.journalTrip(uuid)).trip.observedDistanceM).toEqual({available:true,value:50});
+    await observe(1000050,'6',100);await observe(1000050,'6');await observe(1000100,'6');
+    accepted(await recorder.samples.write(3600,true));
+    const detail=validateJournalTripDetail(ok(await client.journalTrip(uuid)));
+    expect(detail.trip.observedDistanceM).toEqual({available:true,value:100});expect(detail.trip.fuelUsedL).toEqual({available:true,value:0});
+    expect(ok(await client.listSamples({tripUuid:uuid},{limit:3600}))).toHaveLength(4);
+    expect(await client.close()).toEqual({clean:true});
+  });
+  it.each([
+    {name:'recorded known before unavailable current proof',initial:null,current:null,middle:false,joins:true},
+    {name:'missing then recorded known then unavailable member',initial:null,current:null,middle:true,joins:true},
+    {name:'conflicting recorded and current facts',initial:null,current:200,middle:false,joins:false},
+    {name:'recorded facts conflicting with candidate constraints',initial:200,current:null,middle:false,joins:false}
+  ])('retains raw canonical evidence through delayed proof: $name',async({initial,current,middle,joins})=>{
+    const worker=storageWorker(),client=new StorageClient(worker.handle);
+    ok(await client.open({path:ws.database,backupsDirectory:ws.backups,purpose:'synthetic',appVersion:'test'}));
+    const offer=(value:number|null)=>job({plannedDistance:value===null?{available:false,reason:'not-observed',unit:'m'}:{available:true,value:value*1000,unit:'m'}});
+    const openRaw=async(s:Script,distance:number|null)=>{
+      ok(await client.upsertSession({message:s.welcome()}));const message=s.event(r.jobConfigured(offer(distance))),uuid=tripUuidFor(s.session,'1');
+      ok(await client.commitEvent({message,effects:[{kind:'trip.open',tripUuid:uuid,game:'ets2',gameMode:mode,jobConfiguration:'this-event',startedUtcMs:1000,recordingCompleteness:'complete'}]}));
+      return uuid;
+    };
+    const observe=async(s:Script,uuid:string,distance:number|null)=>ok(await client.openAttachedTrip({pluginSessionId:s.session,nextEventSeq:'2',job:offer(distance),effects:[],
+      observeTripUuid:uuid,profile:proof(s),sourceClockId:s.clockId,monotonicNs:'2000000000000'}));
+    const finish=async(s:Script,uuid:string)=>ok(await client.commitEvent({message:s.event(r.timersRestart()),effects:[
+      {kind:'trip.close',tripUuid:uuid,outcome:'none',closeReason:'restart',recordingCompleteness:'partial',endedUtcMs:2000}]}));
+    const a=new Script(ETS2_A),first=await openRaw(a,initial);await observe(a,first,initial);await finish(a,first);
+    const b=new Script(ETS2_B),second=await openRaw(b,100),before=ok(await client.journalTrip(second));
+    await observe(b,second,current);expect(ok(await client.journalTrips()).trips).toHaveLength(joins?1:2);await finish(b,second);
+    if(middle){
+      const d=new Script('10000000-0000-4000-8000-000000000064'),uuid=await openRaw(d,null);
+      await observe(d,uuid,null);expect(ok(await client.journalTrips()).trips).toHaveLength(1);await finish(d,uuid);
+    }
+    const c=new Script('10000000-0000-4000-8000-000000000063'),last=await openRaw(c,200);await observe(c,last,200);
+    expect(ok(await client.journalTrips()).trips).toHaveLength(joins?2:3);
+    expect(ok(await client.journalEvents(second,{limit:500,cursor:before.exportBounds.snapshot!.events})).events.map(row=>[row.pluginSessionId,row.eventSeq])).toEqual([[ETS2_B,'1']]);
+    expect(await client.close()).toEqual({clean:true});
+    readOnly(ws.database,db=>{
+      expect(db.prepare('SELECT j.planned_distance_m FROM trips t JOIN job_configurations j ON j.id=t.job_configuration_ref WHERE t.trip_uuid=?').pluck().get(second)).toBe(100000);
+      if(joins)expect(db.prepare("SELECT json_extract(canonical_constraints,'$.plannedDistance') FROM logical_trips WHERE trip_uuid=?").pluck().get(first)).toBe(100000);
+    });
+  });
   it('preserves net fuel noise on a continued accounting path',async()=>{
     const storage=await ws.open(),a=new Script(ETS2_A),first=open(storage,a);
     const rows=(s:Script,uuid:string,values:number[])=>values.map((fuel,index)=>({...seedSample(s,uuid,index+1,1000+(index+1)*1000,

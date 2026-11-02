@@ -19,7 +19,7 @@ import type {TelemetrySocket} from '../../apps/desktop/src/native-pipe-client';
 import {RECORDER_FAILURE_CLASS, TripRecorderSink, type TripRecorderClient} from '../../apps/desktop/src/trip-recorder';
 import {V1Ingestion, type V1IngestionOptions, type V1SourceState} from '../../apps/desktop/src/v1-ingestion';
 import {failureClass} from '../../apps/desktop/src/durable-sink';
-import {BASE_UTC, ETS2_A, RECEIVED_UTC, Script, job, r} from '../shared/trip-messages';
+import {BASE_UTC, ETS2_A, ETS2_B, RECEIVED_UTC, Script, job, r} from '../shared/trip-messages';
 import {TripStorageModel} from '../shared/trip-replay';
 
 const ENDPOINT = '\\\\.\\pipe\\ETS2Telemetry-SYNTHETIC-TEST-v1-1-00000000-0000-4000-8000-000000000000';
@@ -397,6 +397,51 @@ describe('ET-015a trip recorder in the v1 ingestion pipeline', () => {
 describe('ET-015b one-second samples through the trip recorder', () => {
   /** The stored samples as [source second, trip UUID or null, UTC label]. */
   const stored = (storage: ModelStorage) => storage.model.samples.map(row => [second(row.monotonicNs), row.tripUuid ?? null, row.utcMs]);
+
+  it.each(['0','7'])('links unchanged cumulative counters after initial value %s and breaks only on advances',async initial=>{
+    const storage=new ModelStorage(),recorder=new TripRecorderSink(storage),s=new Script(ETS2_A),context={receivedUtcMs:RECEIVED_UTC};
+    const accept=<T>(result:{ok:true;value:T}|{ok:false;error:{code:string}}):T=>{if(!result.ok)throw new Error(result.error.code);return result.value;};
+    accept(await recorder.openSession(s.welcome()));accept(recorder.observe(s.checkpoint(null),context));
+    accept(await recorder.commit(s.event(r.jobConfigured()),context));
+    const n=BigInt(initial),counters=[[n,n],[n,n],[n+1n,n],[n+1n,n],[n+1n,n+1n],[n+1n,n+1n]];
+    for(const [coalesced,offline] of counters){
+      const message=s.snapshot();message.data.continuity={coalescedSnapshots:String(coalesced),offlineTransitions:String(offline)};
+      accept(recorder.observe(message,context));
+    }
+    accept(await recorder.samples.write(3600,true));
+    expect(storage.model.samples.map(row=>row.recording?.previous!==undefined)).toEqual([false,true,false,true,false,true]);
+  });
+
+  it('resets continuity baselines on reconnect and source changes without poisoning subsequent samples',async()=>{
+    const storage=new ModelStorage(),recorder=new TripRecorderSink(storage),context={receivedUtcMs:RECEIVED_UTC};
+    const accept=<T>(result:{ok:true;value:T}|{ok:false;error:{code:string}}):T=>{if(!result.ok)throw new Error(result.error.code);return result.value;};
+    let s=new Script(ETS2_A);
+    accept(await recorder.openSession(s.welcome()));accept(recorder.observe(s.checkpoint(null),context));
+    accept(await recorder.commit(s.event(r.jobConfigured()),context));
+    const snapshot=(counter:string)=>{const message=s.snapshot();message.data.continuity={coalescedSnapshots:counter,offlineTransitions:counter};accept(recorder.observe(message,context));};
+    snapshot('8');snapshot('8');
+    accept(await recorder.openSession(s.welcome()));accept(recorder.observe(s.checkpoint(job()),context));
+    snapshot('0');snapshot('0');
+    s=new Script(ETS2_B);
+    accept(await recorder.openSession(s.welcome()));accept(recorder.observe(s.checkpoint(null),context));
+    accept(await recorder.commit(s.event(r.jobConfigured()),context));
+    snapshot('5');snapshot('5');
+    while(recorder.samples.pending().rows>0)accept(await recorder.samples.write(3600,true));
+    expect(storage.model.samples.map(row=>row.recording?.previous!==undefined)).toEqual([false,true,false,true,false,true]);
+  });
+
+  it('remembers a counter advance between sample slots without breaking every later unchanged reading',async()=>{
+    const storage=new ModelStorage(),recorder=new TripRecorderSink(storage),s=new Script(ETS2_A),context={receivedUtcMs:RECEIVED_UTC};
+    const accept=<T>(result:{ok:true;value:T}|{ok:false;error:{code:string}}):T=>{if(!result.ok)throw new Error(result.error.code);return result.value;};
+    accept(await recorder.openSession(s.welcome()));accept(recorder.observe(s.checkpoint(null),context));
+    accept(await recorder.commit(s.event(r.jobConfigured()),context));
+    for(const [ms,counter] of [[1000,'0'],[100,'1'],[1000,'1'],[1000,'1']] as const){
+      const message=s.snapshot({},ms);message.data.continuity={coalescedSnapshots:counter,offlineTransitions:'0'};
+      accept(recorder.observe(message,context));
+    }
+    accept(await recorder.samples.write(3600,true));
+    expect(storage.model.samples.map(row=>row.recording?.previous!==undefined)).toEqual([false,false,true]);
+  });
 
   it('S1: a sample names the trip that a committed event earlier in the FIFO opened, and is written with uniqueSeconds (H2, H6, H7, REG-001)', async () => {
     const storage = new ModelStorage(); storage.holdAt = '2';
