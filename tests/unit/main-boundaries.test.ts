@@ -104,6 +104,7 @@ const APPLICATION = {version: APP_VERSION, channel: 'production', packaged: fals
 const UPDATE_UNSUPPORTED = {state: 'unsupported', available: null, progress: null, refusal: null, failure: null, lastCheck: null};
 let nowReaderOptions: MediaReaderOptions;
 let nowReaderSelection: ReturnType<typeof vi.fn<(id: string | null) => void>>;
+let decodeImage: ReturnType<typeof vi.fn<(buffer: Buffer) => {addRepresentation: ReturnType<typeof vi.fn>; getSize: () => {width: number; height: number}; isEmpty: () => boolean}>>;
 let settingsView: {nowPlaying: typeof DEFAULT_NOW_PLAYING; autostart: boolean; units: {ets2: string; ats: string}; gearDisplay?: {ets2: string; ats: string}; overlay: {enabled: boolean; backgroundOpacity: number; layout: string; sections: Record<string, boolean>; placements: Record<string, {x: number; y: number; scale: number}>}; state: string; writable: boolean; saveError: string | null};
 type OverlayWrite = (kind: 'backgroundOpacity' | 'enabled' | 'layout' | 'sections' | 'placement', value: unknown) => Promise<unknown>;
 let overlayWrite: ReturnType<typeof vi.fn<OverlayWrite>>;
@@ -145,6 +146,7 @@ function installFixture() {
   showMessageBox = vi.fn(() => Promise.resolve({response: 0}));
   shell = {showItemInFolder: vi.fn(), openPath: vi.fn(() => Promise.resolve(''))};
   forkCalls = [];
+  decodeImage = vi.fn(() => ({addRepresentation: vi.fn(), getSize: () => ({width: 1, height: 1}), isEmpty: () => false}));
   vi.doMock('electron', () => ({app, ipcMain: ipc, utilityProcess: {fork: (...args: unknown[]) => {
     forkCalls.push(args);
     if (forks++ === 0) return child;
@@ -175,7 +177,7 @@ function installFixture() {
       isDestroyed() {return this.destroyed;}
     },
     Menu: {buildFromTemplate: (template: unknown[]) => ({template})},
-    nativeImage: {createFromBuffer: () => ({addRepresentation: vi.fn()})},
+    nativeImage: {createFromBuffer: (buffer: Buffer) => decodeImage(buffer)},
     dialog: {showSaveDialog: (window: unknown, options: unknown) => showSaveDialog(window, options), showOpenDialog: (window: unknown, options: unknown) => showOpenDialog(window, options),
       showMessageBox: (...args: unknown[]) => showMessageBox(...args)},
     shell: {showItemInFolder: (file: string) => shell.showItemInFolder(file), openPath: (folder: string) => shell.openPath(folder)}}));
@@ -3280,6 +3282,74 @@ async function readyCurrentTrack(beforeEnable?: () => void) {
   ipc.emit('now-playing:subscribe', {sender: widget.webContents, senderFrame: widget.webContents.mainFrame}, generation);
   return widget;
 }
+async function latestCurrentTrack() {
+  const port = channels.at(-1)!.port1;
+  port.emit('message', {data: {type: 'consumed', delivery: port.postMessage.mock.lastCall![0].delivery}});
+  await vi.advanceTimersByTimeAsync(50);
+  return port.postMessage.mock.lastCall![0].update as import('../../packages/contracts/src').NowPlayingDisplay;
+}
+const CURRENT_TRACK_PNG = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jRZkAAAAASUVORK5CYII=';
+it('retains an explicit token through reader failure and requires reselecting a recreated same-app session', async () => {
+  await readyCurrentTrack();
+  const old = {id: 's1', sourceAppId: 'Chrome', playback: 'playing' as const, current: true};
+  const track = {id: old.id, revision: 1, title: 'Old session', artist: null, album: null, playback: 'playing' as const, timeline: null, artwork: null};
+  const snapshot = {version: 1 as const, type: 'snapshot' as const, requestId: 1, sessions: [old], selected: track, error: null};
+  nowReaderOptions.snapshot(snapshot, 1); handlers.get('now-playing:select-source')!(trusted(), {kind: 'session', id: old.id});
+  nowReaderOptions.snapshot({...snapshot, sessions: [], selected: null}, 1);
+  expect(handlers.get('app:get-state')!(trusted())).toMatchObject({nowPlaying: {state: 'unavailable'}});
+  nowReaderOptions.snapshot(snapshot, 1);
+  expect(handlers.get('app:get-state')!(trusted())).toMatchObject({nowPlaying: {state: 'playing', selection: {kind: 'session', id: old.id}}});
+  nowReaderOptions.failed('READER_TIMEOUT');
+  expect((await latestCurrentTrack()).track).toBeNull();
+  const fresh = {...old, id: 's2'}, other = {...old, id: 's3', current: false};
+  nowReaderOptions.snapshot({...snapshot, sessions: [fresh, other], selected: null}, 2);
+  expect(handlers.get('app:get-state')!(trusted())).toMatchObject({nowPlaying: {state: 'unavailable', selection: {kind: 'session', id: old.id}, sources: [fresh, other], error: null}});
+  expect((await latestCurrentTrack()).track).toBeNull(); expect(nowReaderSelection.mock.calls).toEqual([[old.id]]);
+  handlers.get('now-playing:select-source')!(trusted(), {kind: 'session', id: fresh.id});
+  nowReaderOptions.snapshot({...snapshot, sessions: [fresh, other], selected: {...track, id: fresh.id, title: 'Recreated session'}}, 2);
+  expect(handlers.get('app:get-state')!(trusted())).toMatchObject({nowPlaying: {state: 'playing', selection: {kind: 'session', id: fresh.id}, error: null}});
+  expect((await latestCurrentTrack()).track?.title).toBe('Recreated session'); expect(nowReaderSelection.mock.calls).toEqual([[old.id], [fresh.id]]);
+});
+it('caches exactly one successful PNG validation and projects artwork only in Full', async () => {
+  await readyCurrentTrack(); decodeImage.mockClear();
+  const source = {id: 's1', sourceAppId: 'Chrome', playback: 'playing' as const, current: true};
+  const artwork = {png: CURRENT_TRACK_PNG, width: 1, height: 1};
+  const track = {id: source.id, revision: 1, title: 'Fixture', artist: null, album: null, playback: 'playing' as const, timeline: null, artwork};
+  const snapshot = {version: 1 as const, type: 'snapshot' as const, requestId: 1, sessions: [source], selected: track, error: null};
+  nowReaderOptions.snapshot(snapshot, 1); nowReaderOptions.snapshot({...snapshot, selected: {...track, revision: 2}}, 1);
+  expect(decodeImage).toHaveBeenCalledTimes(1); expect((await latestCurrentTrack()).track?.artwork).toBeNull();
+  await handlers.get('settings:set-now-playing-style')!(trusted(), 'full');
+  expect((await latestCurrentTrack()).track?.artwork).toEqual(artwork); expect(decodeImage).toHaveBeenCalledTimes(1);
+  const changed = {...artwork, png: Buffer.concat([Buffer.from(CURRENT_TRACK_PNG, 'base64'), Buffer.from([0])]).toString('base64')};
+  nowReaderOptions.snapshot({...snapshot, selected: {...track, artwork: changed}}, 1);
+  expect(decodeImage).toHaveBeenCalledTimes(2); expect((await latestCurrentTrack()).track?.artwork).toEqual(changed);
+  nowReaderOptions.snapshot(snapshot, 1);
+  expect(decodeImage).toHaveBeenCalledTimes(3); expect((await latestCurrentTrack()).track?.artwork).toEqual(artwork);
+  const wide = Buffer.from(CURRENT_TRACK_PNG, 'base64'); wide.writeUInt32BE(2, 16);
+  const mismatch = {...artwork, png: wide.toString('base64'), width: 2};
+  nowReaderOptions.snapshot({...snapshot, selected: {...track, artwork: mismatch}}, 1);
+  expect(decodeImage).toHaveBeenCalledTimes(4); expect((await latestCurrentTrack()).track?.artwork).toBeNull();
+  decodeImage.mockReturnValueOnce({addRepresentation: vi.fn(), getSize: () => ({width: 1, height: 1}), isEmpty: () => true});
+  nowReaderOptions.snapshot(snapshot, 1); expect((await latestCurrentTrack()).track?.artwork).toBeNull();
+  nowReaderOptions.snapshot(snapshot, 1); expect(decodeImage).toHaveBeenCalledTimes(6); expect((await latestCurrentTrack()).track?.artwork).toEqual(artwork);
+  nowReaderOptions.snapshot({...snapshot, selected: {...track, artwork: {...artwork, width: 2}}}, 1);
+  expect(decodeImage).toHaveBeenCalledTimes(7); expect((await latestCurrentTrack()).track?.artwork).toBeNull();
+  decodeImage.mockImplementationOnce(() => {throw new Error('Invalid PNG');});
+  nowReaderOptions.snapshot(snapshot, 1); expect((await latestCurrentTrack()).track?.artwork).toBeNull();
+  nowReaderOptions.snapshot(snapshot, 1); expect(decodeImage).toHaveBeenCalledTimes(9); expect((await latestCurrentTrack()).track?.artwork).toEqual(artwork);
+  expect(snapshot.selected.artwork).toEqual(artwork);
+});
+it.each(['reader-failure', 'disable', 'document-retired'] as const)('retires successful PNG validation on %s', async retirement => {
+  const widget = await readyCurrentTrack(); decodeImage.mockClear();
+  const source = {id: 's1', sourceAppId: 'Chrome', playback: 'playing' as const, current: true};
+  const snapshot = {version: 1 as const, type: 'snapshot' as const, requestId: 1, sessions: [source], error: null,
+    selected: {id: source.id, revision: 1, title: null, artist: null, album: null, playback: 'playing' as const, timeline: null, artwork: {png: CURRENT_TRACK_PNG, width: 1, height: 1}}};
+  nowReaderOptions.snapshot(snapshot, 1); nowReaderOptions.snapshot(snapshot, 1); expect(decodeImage).toHaveBeenCalledTimes(1);
+  if (retirement === 'reader-failure') nowReaderOptions.failed('READER_TIMEOUT');
+  else if (retirement === 'document-retired') widget.webContents.emit('did-start-loading');
+  else {await handlers.get('settings:set-now-playing-enabled')!(trusted(), false); await handlers.get('settings:set-now-playing-enabled')!(trusted(), true);}
+  nowReaderOptions.snapshot(snapshot, 2); expect(decodeImage).toHaveBeenCalledTimes(2);
+});
 it('starts the production current-track focus gate and restores click-through after the 150ms blur grace', async () => {
   const widget = await readyCurrentTrack(), dashboard = windows[0];
   dashboard.focused = true; dashboard.emit('focus');

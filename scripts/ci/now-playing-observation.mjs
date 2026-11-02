@@ -75,6 +75,13 @@ export async function runNowPlayingSmoke({application, dashboard, config}) {
   await dashboard.evaluate(() => globalThis.desktop.selectNowPlayingSource({kind: 'automatic'}));
   await inject(application, snapshot({...track, playback: 'paused'}, [{...source, playback: 'paused'}]));
   await dashboard.evaluate(() => globalThis.desktop.finishNowPlayingEdit('cancel'));
+  await inject(application, snapshot({...track, title: null, playback: 'paused'}, [{...source, playback: 'paused'}]));
+  for (const language of ['en', 'ru']) {
+    await dashboard.evaluate(language => globalThis.desktop.setLanguage(language), language);
+    await widget.waitForFunction(label => !globalThis.document.querySelector('.np-title') && globalThis.document.querySelector('.np-status')?.textContent.includes(label), language === 'en' ? 'Paused' : 'Пауза', {polling: 100});
+    assert.equal(await widget.locator('.np-artist').innerText(), 'Synthetic artist');
+    assert.ok((await widget.locator('.np-status').innerText()).includes('Synthetic Chrome'));
+  }
   await dashboard.evaluate(() => globalThis.desktop.selectNowPlayingSource({kind: 'session', id: 's1'}));
   await inject(application, snapshot(null, [{id: 's2', sourceAppId: 'Synthetic other player', playback: 'playing', current: true}]));
   await dashboard.waitForFunction(async () => (await globalThis.desktop.getAppState()).nowPlaying.state === 'unavailable');

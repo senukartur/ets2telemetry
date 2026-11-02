@@ -316,11 +316,16 @@ function runApplication(profileError: unknown): void {
   let overlayEdit: OverlayEditState = {active: false};
   let nowWindow: BrowserWindow | undefined, nowController: NowPlayingController | undefined, nowPort: MessagePortMain | undefined;
   let nowTrack: MediaTrack | null = null, nowSource: string | null = null, nowGeneration = 0, nowDocument = 0, nowDashboardReady = false;
+  let nowValidatedArtwork: MediaTrack['artwork'] = null;
   const nowWindowBudget = new RecoveryBudget();
   let nowReaderIdle: Promise<void> | undefined;
   let nowPlayingView: NowPlayingView = {state: 'disabled', sources: [], selection: {kind: 'automatic'}, error: null, edit: {active: false, placement: 'unavailable'}};
-  const nowSnapshot = (): NowPlayingDisplay => ({generation: nowGeneration, language: settingsStore.view().language, style: settingsStore.view().nowPlaying.style,
-    backgroundOpacity: settingsStore.view().nowPlaying.backgroundOpacity, editing: nowController?.editState().active ?? false, source: nowSource, track: nowTrack});
+  const nowSnapshot = (): NowPlayingDisplay => {
+    const settings = settingsStore.view();
+    return {generation: nowGeneration, language: settings.language, style: settings.nowPlaying.style,
+      backgroundOpacity: settings.nowPlaying.backgroundOpacity, editing: nowController?.editState().active ?? false, source: nowSource,
+      track: nowTrack && settings.nowPlaying.style === 'minimal' ? {...nowTrack, artwork: null} : nowTrack};
+  };
   const nowSubscriptions = new LiveSubscriptions<NowPlayingDisplay>(nowSnapshot(), 1, 5000);
   const nowFocus = new OwnForegroundGate(foreground => nowController?.setOwnForeground(foreground));
   const requestedNowFixture = process.env.ETS2TELEMETRY_NOW_PLAYING_FIXTURE === '1';
@@ -334,20 +339,29 @@ function runApplication(profileError: unknown): void {
     } catch {return false;}
   })();
   const nowReader = new MediaReader({resolve: () => verifiedMediaReader(app.isPackaged, process.resourcesPath, __dirname, ACTIVE_CHANNEL),
-    snapshot: acceptNowSnapshot, failed: error => {nowTrack = null; nowSource = null; nowGeneration++; nowPlayingView = {...nowPlayingView, sources: [], state: 'error', error}; publishNowPlaying();}});
+    snapshot: acceptNowSnapshot, failed: error => {nowValidatedArtwork = null; nowTrack = null; nowSource = null; nowGeneration++; nowPlayingView = {...nowPlayingView, sources: [], state: 'error', error}; publishNowPlaying();}});
+  function validateNowArtwork(artwork: MediaTrack['artwork']): MediaTrack['artwork'] {
+    if (!artwork) return null;
+    if (nowValidatedArtwork?.png === artwork.png && nowValidatedArtwork.width === artwork.width && nowValidatedArtwork.height === artwork.height) return artwork;
+    nowValidatedArtwork = null;
+    try {
+      const image = nativeImage.createFromBuffer(Buffer.from(artwork.png, 'base64'));
+      const size = image.getSize();
+      if (!image.isEmpty() && size.width === artwork.width && size.height === artwork.height) {
+        nowValidatedArtwork = {...artwork}; return artwork;
+      }
+    } catch { /* Invalid image data never enters a display snapshot or the successful-validation cache. */ }
+    return null;
+  }
   function acceptNowSnapshot(snapshot: MediaSnapshot): void {
       if (!settingsStore.view().nowPlaying.enabled || lifecycle.exiting) return;
       nowGeneration++;
       const selection = nowPlayingView.selection;
       const selected = snapshot.selected;
-      if (!acceptsSelectedSession(snapshot.sessions, selection, selected)) {nowTrack = null; nowSource = null; nowPlayingView = {...nowPlayingView, state: 'error', error: 'INVALID_RESPONSE', sources: []}; publishNowPlaying(); return;}
-      if (selection.kind === 'session' && selected && selected.id !== selection.id) {nowTrack = null; nowSource = null; nowPlayingView = {...nowPlayingView, state: 'error', error: 'INVALID_RESPONSE', sources: []}; publishNowPlaying(); return;}
-      if (selected?.artwork) {
-        const image = nativeImage.createFromBuffer(Buffer.from(selected.artwork.png, 'base64'));
-        const size = image.getSize();
-        if (image.isEmpty() || size.width !== selected.artwork.width || size.height !== selected.artwork.height) {selected.artwork = null;}
-      }
-      nowTrack = snapshot.error === null && selected && (selected.playback === 'playing' || selected.playback === 'paused') ? selected : null;
+      if (!acceptsSelectedSession(snapshot.sessions, selection, selected)) {nowValidatedArtwork = null; nowTrack = null; nowSource = null; nowPlayingView = {...nowPlayingView, state: 'error', error: 'INVALID_RESPONSE', sources: []}; publishNowPlaying(); return;}
+      if (selection.kind === 'session' && selected && selected.id !== selection.id) {nowValidatedArtwork = null; nowTrack = null; nowSource = null; nowPlayingView = {...nowPlayingView, state: 'error', error: 'INVALID_RESPONSE', sources: []}; publishNowPlaying(); return;}
+      if (snapshot.error) nowValidatedArtwork = null;
+      nowTrack = snapshot.error === null && selected && (selected.playback === 'playing' || selected.playback === 'paused') ? {...selected, artwork: validateNowArtwork(selected.artwork)} : null;
       nowSource = nowTrack ? snapshot.sessions.find(source => source.id === nowTrack!.id)?.sourceAppId ?? null : null;
       nowPlayingView = {...nowPlayingView, sources: snapshot.sessions, error: snapshot.error, state: snapshot.error ? 'error' : nowTrack ? nowTrack.playback as 'playing' | 'paused' :
         selection.kind === 'session' && !snapshot.sessions.some(source => source.id === selection.id) ? 'unavailable' : snapshot.sessions.length ? 'stopped' : 'no-session'};
@@ -359,7 +373,7 @@ function runApplication(profileError: unknown): void {
     nowSubscriptions.publish(nowSnapshot()); nowController?.update(nowTrack !== null); pushAppState();
   }
   function retireNowDocument(): void {
-    nowDocument++; nowPort = undefined; nowSubscriptions.close(); nowController?.loaded(false); nowFocus.stop();
+    nowValidatedArtwork = null; nowDocument++; nowPort = undefined; nowSubscriptions.close(); nowController?.loaded(false); nowFocus.stop();
   }
   function retireNowPlaying(): void {
     nowTrack = null; nowSource = null; nowReaderIdle = nowReader.stop(); retireNowDocument();

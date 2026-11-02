@@ -21,14 +21,14 @@ Columns:
 | Entry point | Layer | REG IDs | Source | Owning card (PR) | Runs in | Protected |
 | --- | --- | --- | --- | --- | --- | --- |
 | `tests/unit/now-playing-contract.test.ts` | Node unit (Vitest) | REG-010, REG-020 | T | ET-061 | PR (tests job, `npm test`) | security (bounded metadata/artwork and response identity) |
-| `tests/unit/now-playing-selection.test.ts` | Node unit (Vitest) | REG-020 | T | ET-061 | PR (tests job, `npm test`) | regression (playing preference and explicit-source loss) |
+| `tests/unit/now-playing-selection.test.ts` | Node unit (Vitest) | REG-020 | T | ET-061 | PR (tests job, `npm test`) | security (native selection correlation, highest playback tier and explicit-token loss) |
 | `tests/unit/now-playing-presentation.test.ts` | Node unit (Vitest) | REG-020 | T | ET-061 | PR (tests job, `npm test`) | regression (readable source names; paused/unknown anchors do not advance) |
 | `tests/unit/now-playing-placement.test.ts` | Node unit (Vitest) | REG-016, REG-020 | T | ET-061 | PR (tests job, `npm test`) | regression (reachable placement and topology fallback) |
 | `tests/unit/now-playing-controller.test.ts` | Node unit (Vitest) | REG-012, REG-016, REG-020 | T | ET-061 | PR (tests job, `npm test`) | security (game-only visibility, client bounds, click-through and main-owned draft) |
 | `tests/unit/now-playing-reader.test.ts` | Node unit (Vitest) | REG-010, REG-011, REG-020 | T | ET-061 | PR (tests job, `npm test`) | security (framing, deadlines, generations and bounded restarts) |
 | `tests/unit/now-playing-preload.test.ts` | Node unit (Vitest) | REG-010, REG-020 | T | ET-061 | PR (tests job, `npm test`) | security (readonly authority, IPC arity and subscription retirement) |
 | `tests/unit/now-playing-settings.test.ts` | Node unit (Vitest) | REG-012, REG-017, REG-020 | T | ET-061 | PR (tests job, `npm test`) | regression (migration, startup bytes and durable restart) |
-| `tests/unit/now-playing-settings-rendering.test.ts` | Node unit (Vitest) | REG-020 | T | ET-061 | PR (tests job, `npm test`) | regression (conditional controls and localization) |
+| `tests/unit/now-playing-settings-rendering.test.ts` | Node unit (Vitest) | REG-020 | T | ET-061 | PR (tests job, `npm test`) | regression (conditional controls, missing-title rendering and localization) |
 | `tests/host/media-session-reader.test.ts` | Host subprocess (Vitest) | REG-010, REG-011, REG-012, REG-020 | T | ET-061 | PR (tests job, `npm test`) | security (real stdio, parent/EOF and supervision); no live observation |
 | `tests/unit/hard-mode-smoke-source.test.ts` | Node unit (Vitest), deterministic socket write failures and controlled timers | Harness: REG-003, REG-010, REG-011 | F, T | NO-CARD (staging release CI repair) | PR (`Windows x64 tests`, `npm test`) | regression (peer-close diagnostics, per-connection frames/timers, reconnection ACK, unexpected errors retained) |
 | `tests/unit/action-result-rendering.test.ts` | Node unit (Vitest) | REG-015 | R, F, V (et-045b) | ET-045b | PR (tests job, `npm test`) | — |

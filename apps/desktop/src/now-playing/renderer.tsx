@@ -19,7 +19,7 @@ export function CurrentTrack({display}: {display: NowPlayingDisplay}) {
   return <section className={`np-panel np-${display.style}${display.editing ? ' np-editing' : ''}`} style={{backgroundColor: `rgb(11 17 32 / ${display.backgroundOpacity / 100})`}} data-testid="now-playing-panel" lang={display.language}>
     {full && track?.artwork ? <Cover key={`${track.id}:${track.revision}`} png={track.artwork.png} /> : null}
     <div className="np-content">
-      <div className="np-title">{track?.title || text('np.title')}</div>
+      {track?.title || display.editing ? <div className="np-title">{track?.title || text('np.title')}</div> : null}
       {track?.artist ? <div className="np-artist">{track.artist}</div> : null}
       {full && track?.album ? <div className="np-album">{track.album}</div> : null}
       <div className="np-status">{track?.playback === 'paused' ? <span>{text('np.paused')}</span> : null}{full && display.source ? <span>{mediaSourceName(display.source)}</span> : null}{display.editing ? <span>{text('np.drag')}</span> : null}</div>

@@ -45,3 +45,17 @@ it('clears on the five-second deadline, terminates within 500ms, bounds restarts
   await vi.advanceTimersByTimeAsync(1000); expect(processes).toHaveLength(3);
   processes[2].stdout.write(frame(empty(999))); await vi.advanceTimersByTimeAsync(1000); expect(processes).toHaveLength(3);
 });
+it('preserves the explicit helper-lifetime token in commands after a helper restart', async () => {
+  vi.useFakeTimers(); const processes: ReturnType<typeof childProcess>[] = [], writes: Buffer[][] = [];
+  reader = new MediaReader({resolve: () => Promise.resolve('fixed.exe'), launch: () => {
+    const process = childProcess(), sent: Buffer[] = []; processes.push(process); writes.push(sent);
+    process.stdin.on('data', chunk => sent.push(Buffer.from(chunk))); return process.child;
+  }, snapshot: vi.fn(), failed: vi.fn()});
+  reader.select('s1'); reader.setEnabled(true); await Promise.resolve();
+  expect(JSON.parse(writes[0][0].subarray(4).toString())).toMatchObject({selectedId: 's1'});
+  processes[0].child.emit('exit', 1, null); await vi.advanceTimersByTimeAsync(1000);
+  expect(processes).toHaveLength(2);
+  expect(JSON.parse(writes[1][0].subarray(4).toString())).toMatchObject({selectedId: 's1'});
+  reader.select('s2'); processes[1].stdout.write(frame(empty(2))); await vi.advanceTimersByTimeAsync(1000);
+  expect(JSON.parse(writes[1][1].subarray(4).toString())).toMatchObject({selectedId: 's2'});
+});
