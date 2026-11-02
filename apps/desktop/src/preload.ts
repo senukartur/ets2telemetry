@@ -10,7 +10,8 @@ import {isOverlayLayout, parseOverlaySections} from './overlay-sections';
 import {isOverlayEditOutcome, parseOverlayEditScale} from './overlay-placement';
 import {isGearDisplayMode, isUnitGame, isUnitProfile} from './unit-profiles';
 import {isAppLanguage} from './settings-schema';
-import {copyTripsQuery, isPageArgument, JOURNAL_CHANNELS, JOURNAL_EXPORT_CHANNEL} from './journal-contract';
+import {copyTripsQuery, isPageArgument, JOURNAL_CHANNELS, JOURNAL_DELETE_TRIP_CHANNEL, JOURNAL_EXPORT_CHANNEL} from './journal-contract';
+import {ACTIVE_CHANNEL} from './channel';
 import {isJournalUuid} from '../../../packages/contracts/src/journal';
 import {DIAGNOSTICS_EXPORT_CHANNEL, isPluginGame, isPluginTargetId, PLUGIN_CHANNELS} from './plugin-setup-contract';
 import {UNINSTALL_CHANNEL} from './uninstall-contract';
@@ -217,6 +218,13 @@ const bridge: DesktopBridge = {
   // ET-016 PR-5 (J16): only a validated trip UUID is forwarded; main validates it again, owns the Save dialog and the file
   // writer, and answers with fixed codes and row counts, never a path.
   exportJournalTrip: tripUuid => isJournalUuid(tripUuid) ? ipcRenderer.invoke(JOURNAL_EXPORT_CHANNEL, tripUuid) : Promise.reject(new Error('Invalid journal request')),
+  // ET-065: trip deletion in staging builds; rejects before IPC in production builds or for invalid UUIDs.
+  deleteJournalTrip: (tripUuid: string) => {
+    if (ACTIVE_CHANNEL !== 'staging') return Promise.reject(new Error('Trip deletion is only available in staging builds'));
+    return isJournalUuid(tripUuid)
+      ? ipcRenderer.invoke(JOURNAL_DELETE_TRIP_CHANNEL, tripUuid)
+      : Promise.reject(new Error('Invalid journal request'));
+  },
   // ET-017 plugin setup (P16): fixed channels; only a validated game, exclusion flag or target id is forwarded, and main
   // validates again. Main owns the folder dialog, Explorer and the game folders; no answer carries a path.
   retryPluginSetup: () => ipcRenderer.invoke(PLUGIN_CHANNELS.retry),

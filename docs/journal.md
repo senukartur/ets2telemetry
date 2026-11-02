@@ -81,6 +81,7 @@ ET-016 PR-3 adds five methods to the dashboard's preload bridge, after `finishOv
 | `listJournalEvents(tripUuid, cursor?)` | `journal:list-events` | the UUID and the event cursor, or `null` | 100 events | `JournalEventPage` |
 | `listJournalIntervals(tripUuid, cursor?)` | `journal:list-intervals` | the UUID and the interval cursor, or `null` | 100 intervals | `JournalIntervalPage` |
 | `listJournalSamples(tripUuid, cursor?)` | `journal:list-samples` | the UUID and the sample cursor, or `null` | 300 samples | `JournalSamplePage`: `{database, samples, nextCursor}`, where a full page's cursor is its last sample id |
+| `deleteJournalTrip(tripUuid)` | `journal:delete-trip` | the UUID | — | `void` (staging builds only; refused in production) |
 
 **Arguments.** The preload checks every argument before it invokes, with the same rules as the storage worker: a lower-case UUID, a cursor of the read's format (a trip, interval or sample cursor is a row id up to 2^63 − 1; an event cursor an eventSeq up to 2^64 − 2), and a filter of only the listed keys and values. It forwards only own fields, read once, in a fresh object; anything else rejects with `Invalid journal request` and no IPC. Main checks the same rules again with exact argument counts (`list-trips` one object, `get-trip` one UUID, the page channels a UUID and a cursor or `null`) and sets the page size itself; the renderer cannot choose it. Only the trusted dashboard main frame may call: another sender, a subframe or the overlay rejects with `Untrusted journal request`. The code is in [journal-contract.ts](../apps/desktop/src/journal-contract.ts).
 
@@ -145,6 +146,21 @@ ET-016 PR-5 exports one trip as `ets2telemetry.trip-export` format version 1; th
 - Main reads the detail, then the open database's UUID with the main-only `database` query, which the service answers from its open summary without a storage command. The pages are read through the same broker at the export page sizes: events and intervals 500, samples 3,600.
 - The detail's export bounds (J17) fix what the file contains; an open trip's export is marked `snapshot`.
 - A cancelled dialog writes nothing; a target inside `%LOCALAPPDATA%\ETS2Telemetry\` or a device path is refused; a failure or an exit removes the partial file and leaves an existing target unchanged.
+
+## Trip deletion in staging builds (ET-065)
+
+In staging builds (`ACTIVE_CHANNEL === 'staging'`), the trip detail view provides a **Delete trip** action:
+
+- **Channel restriction.** In production builds, the button is completely unrendered in the UI and both the preload bridge and main process IPC handlers reject any call to `deleteJournalTrip` with an error.
+- **Explicit confirmation.** Clicking the button opens an inline confirmation warning. The user must explicitly click "Delete permanently" to execute.
+- **Atomic cascading cleanup.** Deletion runs in an exclusive storage transaction:
+  1. Checks existence (`UNKNOWN_TRIP` if missing).
+  2. If the trip is currently open and recording is active (`rejectIfOpen: true`), deletion is refused with `STORAGE_BUSY`.
+  3. Cascades through schema version 4 logical trip tables (`observation_closes`, `logical_trips`, `logical_memberships`, `logical_revisions`, `logical_progress`).
+  4. Deletes associated `samples`, `completeness_intervals`, and `trip_trailers`.
+  5. Unlinks `event_attributions` (`trip_ref = NULL, attribution = 'free-driving'`), satisfying database schema CHECK constraints while keeping immutable `events` and timeline history intact.
+  6. Deletes the `trips` record.
+- **Seamless navigation.** Upon successful deletion, the detail view seamlessly navigates back to the Journal list and increments the list remount version to reload the refreshed trip list.
 
 ## Pending parts
 

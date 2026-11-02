@@ -6,7 +6,7 @@ import type {HardModeObservation} from '../../contracts/src/hard-mode';
 // queued command get an error, later commands fail at once, and no success is reported afterwards. See docs/storage.md.
 import type {Worker} from 'node:worker_threads';
 import type {
-  AttachInput, AttachResult, CommitResult, CompletenessInterval, CompletenessOptions, EventRow, JournalEventPage, JournalResult, JournalIntervalPage, JournalPageQuery, JournalTripDetail, JournalTripPage, JournalTripsQuery,
+  AttachInput, AttachResult, CommitResult, CompletenessInterval, CompletenessOptions, DeleteTripOptions, EventRow, JournalEventPage, JournalResult, JournalIntervalPage, JournalPageQuery, JournalTripDetail, JournalTripPage, JournalTripsQuery,
   OpenSummary, Result, SampleAppendOptions, SampleAppendResult, SampleInput, SampleRecord, SessionRecord, StorageError, StorageErrorCode, StorageInfo, TripEffect, TripList,
   TripPage, TripRecord, Uint64
 } from './api';
@@ -133,6 +133,10 @@ export class StorageClient {
   getEvent(pluginSessionId: string, eventSeq: Uint64): Promise<Result<EventRow | undefined>> { return this.#request({name: 'getEvent', pluginSessionId, eventSeq}); }
   listEvents(pluginSessionId: string, page?: {afterEventSeq?: Uint64; limit?: number}): Promise<Result<EventRow[]>> { return this.#request({name: 'listEvents', pluginSessionId, page}); }
   getTrip(tripUuid: string): Promise<Result<TripRecord | undefined>> { return this.#request({name: 'getTrip', tripUuid}); }
+  deleteTrip(tripUuid: string, options?: DeleteTripOptions): Promise<Result<void>> {
+    if (options === undefined) return this.#request({name: 'deleteTrip', tripUuid});
+    return this.#request({name: 'deleteTrip', tripUuid, options: isObject(options) ? {rejectIfOpen: options.rejectIfOpen} : options});
+  }
   /**
    * The page is copied field by field: only the cursor, limit and the `game` and `outcome` filter cross the boundary.
    * A page that is not an object is forwarded as given, so the worker's request parser refuses it with INVALID_INPUT.

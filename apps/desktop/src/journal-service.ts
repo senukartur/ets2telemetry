@@ -12,7 +12,7 @@ import type {HistoryState} from './history-storage';
 import {parseJournalQuery, refusal, type JournalQuery} from './journal-contract';
 
 /** The reads a journal query uses; StorageClient provides them. */
-export type JournalClient = Pick<StorageClient, 'journalTrips' | 'journalTrip' | 'journalEvents' | 'journalIntervals' | 'listSamples'>;
+export type JournalClient = Pick<StorageClient, 'journalTrips' | 'journalTrip' | 'journalEvents' | 'journalIntervals' | 'listSamples' | 'deleteTrip'>;
 /** The service's database as the journal sees it; HistoryStorage provides it. */
 export interface JournalHistory {
   readonly state: HistoryState;
@@ -30,6 +30,8 @@ export interface JournalServiceOptions {
   stopping: () => boolean;
   /** Fixed codes and facts only. */
   log: (event: string, detail?: unknown, facts?: DiagnosticFacts) => void;
+  /** True when game recording is active; defaults rejectIfOpen to true when deleting trips. */
+  isRecordingActive?: () => boolean;
 }
 /** A journal reply on the parent port. */
 export interface JournalReplyMessage {type: 'journal'; id: number; result: JournalCallResult<unknown>}
@@ -103,6 +105,10 @@ export class JournalService {
     case 'trip': return client.journalTrip(query.tripUuid);
     case 'events': return client.journalEvents(query.tripUuid, query.page);
     case 'intervals': return client.journalIntervals(query.tripUuid, query.page);
+    case 'deleteTrip': {
+      const rejectIfOpen = query.options?.rejectIfOpen ?? (this.options.isRecordingActive?.() === true);
+      return client.deleteTrip(query.tripUuid, {rejectIfOpen});
+    }
     case 'samples': return (async () => {
       let cursor=query.page.cursor;
       if (cursor===undefined) {const detail=await client.journalTrip(query.tripUuid); if (!detail.ok) return detail; cursor=detail.value.exportBounds.snapshot?.samples;}

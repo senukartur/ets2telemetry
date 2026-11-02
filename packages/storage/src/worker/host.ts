@@ -76,6 +76,7 @@ export function serveStorage(port: HostPort, testOptions: HostTestOptions = {}):
     case 'getEvent': return storage.getEvent(command.pluginSessionId, command.eventSeq);
     case 'listEvents': return storage.listEvents(command.pluginSessionId, command.page);
     case 'getTrip': return storage.getTrip(command.tripUuid);
+    case 'deleteTrip': return storage.deleteTrip(command.tripUuid, command.options);
     case 'listTrips': return storage.listTrips(command.page);
     case 'listSamples': return storage.listSamples(command.scope, command.page);
     case 'storageInfo': return storage.storageInfo();

@@ -10,7 +10,7 @@ import {
   validateJournalEventPage, validateJournalIntervalPage, validateJournalTripDetail, validateJournalTripPage, type JournalPageQuery, type JournalTripListItem
 } from '../../../packages/contracts/src/journal';
 import {NAME_BYTES} from '../../../packages/contracts/src/protocol-v1';
-import type {SampleRecord, StorageErrorCode} from '../../../packages/storage/src/api';
+import type {DeleteTripOptions, SampleRecord, StorageErrorCode} from '../../../packages/storage/src/api';
 
 /** The five fixed invoke channels of the journal reads (J10). */
 export const JOURNAL_CHANNELS = {
@@ -18,6 +18,8 @@ export const JOURNAL_CHANNELS = {
 } as const;
 /** The sixth journal channel (J10, ET-016 PR-5): one trip's JSON export through main's Save dialog. */
 export const JOURNAL_EXPORT_CHANNEL = 'journal:export-trip';
+/** ET-065: the staging-only trip deletion channel. */
+export const JOURNAL_DELETE_TRIP_CHANNEL = 'journal:delete-trip';
 /** Page sizes main sets for the dashboard (J5, J10); the renderer cannot choose them. */
 export const JOURNAL_UI_EVENT_LIMIT = JOURNAL_EVENT_LIMITS[0];
 export const JOURNAL_UI_INTERVAL_LIMIT = JOURNAL_INTERVAL_LIMITS[0];
@@ -37,7 +39,8 @@ export type JournalQuery =
   | {kind: 'trip'; tripUuid: string}
   | {kind: 'events' | 'intervals'; tripUuid: string; page: JournalPageQuery}
   | {kind: 'samples'; tripUuid: string; page: JournalPageQuery; includeExcluded?: boolean}
-  | {kind: 'database'};
+  | {kind: 'database'}
+  | {kind: 'deleteTrip'; tripUuid: string; options?: DeleteTripOptions};
 export type JournalQueryKind = JournalQuery['kind'];
 /** The reads the dashboard may request, one per read channel. */
 export type JournalChannelKind = keyof typeof JOURNAL_CHANNELS;
@@ -102,6 +105,15 @@ export function parseJournalQuery(value: unknown): JournalQuery | undefined {
   }
   if (value.kind === 'trip') return hasExactly(value, ['kind', 'tripUuid']) && isJournalUuid(value.tripUuid) ? {kind: 'trip', tripUuid: value.tripUuid} : undefined;
   if (value.kind === 'database') return hasExactly(value, ['kind']) ? {kind: 'database'} : undefined;
+  if (value.kind === 'deleteTrip') {
+    if (!isJournalUuid(value.tripUuid)) return undefined;
+    if (hasExactly(value, ['kind', 'tripUuid'])) return {kind: 'deleteTrip', tripUuid: value.tripUuid};
+    if (hasExactly(value, ['kind', 'tripUuid', 'options']) && isRecord(value.options)
+      && (value.options.rejectIfOpen === undefined || typeof value.options.rejectIfOpen === 'boolean')) {
+      return {kind: 'deleteTrip', tripUuid: value.tripUuid, options: value.options.rejectIfOpen !== undefined ? {rejectIfOpen: value.options.rejectIfOpen} : {}};
+    }
+    return undefined;
+  }
   const kind = value.kind;
   if ((kind !== 'events' && kind !== 'intervals' && kind !== 'samples') || !(hasExactly(value, ['kind', 'tripUuid', 'page']) || kind === 'samples' && hasExactly(value, ['kind', 'tripUuid', 'page', 'includeExcluded']) && typeof value.includeExcluded === 'boolean') || !isJournalUuid(value.tripUuid)) return undefined;
   const page = value.page;
@@ -231,6 +243,10 @@ function checkValue(query: JournalQuery, value: unknown): void {
     const ids = samples.map(item => (item as {id: string}).id);
     if (o.nextCursor !== null && !pageCursor('samples', o.nextCursor)) bad();
     ascending(ids, query.page.cursor); nextCursor(o.nextCursor as string | null, ids, query.page.limit);
+    return;
+  }
+  case 'deleteTrip': {
+    if (value !== undefined) bad();
     return;
   }
   }

@@ -183,7 +183,7 @@ it('marks v1 data stale when the subscription closes or a replacement port await
   stop(); expect(vi.getTimerCount()).toBe(0);
 });
 it('preserves the frozen narrow bridge and rejects privileged source values before IPC', async () => {
-  expect(Object.isFrozen(bridge)).toBe(true); expect(Object.keys(bridge).sort()).toEqual(['beginOverlayEdit', 'checkForUpdates', 'choosePluginFolder', 'exitApplication', 'exportDiagnostics', 'exportJournalTrip', 'finishOverlayEdit', 'getAppState', 'getHardModeStatus', 'getJournalTrip', 'getStatus',
+  expect(Object.isFrozen(bridge)).toBe(true); expect(Object.keys(bridge).sort()).toEqual(['beginOverlayEdit', 'checkForUpdates', 'choosePluginFolder', 'deleteJournalTrip', 'exitApplication', 'exportDiagnostics', 'exportJournalTrip', 'finishOverlayEdit', 'getAppState', 'getHardModeStatus', 'getJournalTrip', 'getStatus',
     'listJournalEvents', 'listJournalIntervals', 'listJournalSamples', 'listJournalTrips', 'openPluginFolder', 'refreshHardMode',
     'resetOverlayEditPlacement', 'retryPluginSetup', 'selectSource', 'setAutostart', 'setGearDisplay', 'setLanguage', 'setOverlayBackgroundOpacity', 'setOverlayEditScale', 'setOverlayEnabled', 'setOverlayLayout', 'setOverlaySections', 'setPluginGameExcluded', 'setUnitProfile',
     'showPluginFile', 'subscribeAppState', 'subscribeLive', 'uninstallApplication', 'updateApplication', 'setNowPlayingEnabled', 'setNowPlayingStyle', 'setNowPlayingBackgroundOpacity', 'selectNowPlayingSource', 'beginNowPlayingEdit', 'resetNowPlayingEditPlacement', 'finishNowPlayingEdit'].sort());
@@ -228,7 +228,7 @@ it('appends the application state and exit methods after the original three brid
   // update click and the manual update check.
   expect(Object.keys(bridge)).toEqual(['getStatus', 'selectSource', 'subscribeLive', 'getAppState', 'subscribeAppState', 'exitApplication', 'setLanguage', 'setAutostart', 'setUnitProfile',
     'setGearDisplay', 'setOverlayBackgroundOpacity', 'setOverlayEnabled', 'setOverlayLayout', 'setOverlaySections', 'beginOverlayEdit', 'setOverlayEditScale', 'resetOverlayEditPlacement', 'finishOverlayEdit',
-    'listJournalTrips', 'getJournalTrip', 'listJournalEvents', 'listJournalIntervals', 'listJournalSamples', 'exportJournalTrip',
+    'listJournalTrips', 'getJournalTrip', 'listJournalEvents', 'listJournalIntervals', 'listJournalSamples', 'exportJournalTrip', 'deleteJournalTrip',
     'retryPluginSetup', 'choosePluginFolder', 'setPluginGameExcluded', 'showPluginFile', 'openPluginFolder', 'exportDiagnostics', 'uninstallApplication', 'getHardModeStatus', 'refreshHardMode',
     'updateApplication', 'checkForUpdates', 'setNowPlayingEnabled', 'setNowPlayingStyle', 'setNowPlayingBackgroundOpacity', 'selectNowPlayingSource', 'beginNowPlayingEdit', 'resetNowPlayingEditPlacement', 'finishNowPlayingEdit']);
 });
