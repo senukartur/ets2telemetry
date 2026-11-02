@@ -135,6 +135,48 @@ describe('ET-026 isolated reader (REG-008/010/011)', () => {
     expect(observer.evidence()).toBeUndefined(); expect(m.evidence().assessment.state).toBe('unknown');
     m.close(); observer.close();
   });
+  it.each(['deadline','physical-first','early-subscriber-deadline','consumer-cancel'] as const)('distinguishes %s when cadence offset skips the profile subscriber',async ending=>{
+    vi.useFakeTimers();const start=Date.now(),now=()=>BigInt(Date.now()-start)*1_000_000n;
+    const constructed=gate(),secondConstructed=gate(),firstEntered=gate(),firstRelease=gate(),completed=gate(),secondEntered=gate(),secondRelease=gate();
+    const inspect=vi.fn(async()=>{
+      if(inspect.mock.calls.length===1){firstEntered.resolve();await firstRelease.promise;}
+      if(inspect.mock.calls.length===3){secondEntered.resolve();await secondRelease.promise;}
+      return processFacts();
+    });
+    const r=new HardModeReader({documents:path.join(root,'Documents'),process:inspect,nowNs:now});
+    const resolve=vi.spyOn(r,'resolveProfile'),observer=new ProfileObserver(()=>r,now,false);
+    const rawController=new AbortController();let rawFailure:Promise<unknown>|undefined;
+    let initial=true;
+    const m=new HardModeMonitor(async(s,ns,at,signal)=>{
+      if(initial){initial=false;await constructed.promise;}
+      else if(ending==='early-subscriber-deadline')await secondConstructed.promise;
+      return observer.readSettings(r,s,ns,at,signal).then(value=>{completed.resolve();return value;});
+    },undefined,now);
+    const current={source,clockId:'clock',monotonicNs:'1'};
+    try {
+      observer.select(current);m.select(current);
+      await vi.advanceTimersByTimeAsync(10);constructed.resolve();await firstEntered.promise;
+      await vi.advanceTimersByTimeAsync(190);firstRelease.resolve();await completed.promise;await observer.refresh();
+      await vi.advanceTimersByTimeAsync(100);
+      const bound={...current,boundary:{clockId:'clock',probeSentClientNs:now().toString(),receivedSourceNs:'10'}};
+      observer.select(bound);m.select(bound);await m.refresh();
+      expect(observer.evidence()).toBeDefined();expect(m.evidence().assessment.state).toBe('pass');
+      await vi.advanceTimersByTimeAsync(700);
+      if(ending==='physical-first'){
+        rawFailure=expect(r.read(source,'1',created+10000,rawController.signal)).rejects.toThrow('Read deadline');
+        await secondEntered.promise;await vi.advanceTimersByTimeAsync(1);
+      }
+      const next=m.refresh();
+      if(ending==='early-subscriber-deadline'){await vi.advanceTimersByTimeAsync(1);secondConstructed.resolve();}
+      await secondEntered.promise;
+      // HM's cadence is due at 1000 ms; the profile's scan at 10 ms is only 990 ms old.
+      expect(resolve).toHaveBeenCalledTimes(1);expect(inspect).toHaveBeenCalledTimes(3);
+      await vi.advanceTimersByTimeAsync(ending==='early-subscriber-deadline'||ending==='physical-first'?1998:1999);expect(observer.evidence()).toBeDefined();
+      if(ending!=='consumer-cancel')await vi.advanceTimersByTimeAsync(1);else m.close();
+      await next;await rawFailure;expect(m.evidence().assessment.state).toBe('unknown');
+      if(ending==='deadline'||ending==='physical-first')expect(observer.evidence()).toBeUndefined();else expect(observer.evidence()).toBeDefined();
+    } finally {rawController.abort();secondRelease.resolve();firstRelease.resolve();constructed.resolve();secondConstructed.resolve();m.close();observer.close();}
+  });
   it.each(['process','log','profile'].flatMap(failure=>[false,true].map(profileBound=>({failure,profileBound}))))('invalidates both consumers on shared $failure failure (profile bound=$profileBound)',async({failure,profileBound})=>{
     let now=0n,wrongProcess=false;
     const r=new HardModeReader({documents:path.join(root,'Documents'),nowNs:()=>now,process:async()=>({...await processFacts(),...(wrongProcess?{pid:999}:{})})});

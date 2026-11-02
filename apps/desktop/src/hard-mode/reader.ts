@@ -117,7 +117,7 @@ export class HardModeReader {
       const promise = new Promise<ProfileScan>((yes, no) => {resolve = yes; reject = no;});
       void promise.catch(() => undefined);
       operation = {key, source: {...source}, atUtcMs, startedClientNs: this.nowNs(), controller, promise, resolve, reject,
-        consumers: new Set(), timer: setTimeout(() => this.cancel(operation!), 2000), settled: false};
+        consumers: new Set(), timer: setTimeout(() => this.cancel(operation!, true), 2000), settled: false};
       if (this.running) this.queued = operation; else this.run(operation);
     }
     const work = operation;
@@ -130,15 +130,20 @@ export class HardModeReader {
         work.consumers.delete(consumer); action();
         if (!work.settled && work.consumers.size === 0) this.cancel(work);
       };
-      const cancel = () => finish(() => reject(readError(signal.reason)));
+      const cancel = () => {
+        // A consumer timer may run first at the shared deadline. Preserve the physical timeout instead of masking it
+        // as ordinary cancellation; an earlier consumer cancellation still has no authority over the other proofs.
+        if (!work.settled && this.nowNs() - work.startedClientNs >= 2_000_000_000n) this.cancel(work, true);
+        else finish(() => reject(readError(signal.reason)));
+      };
       const cancelled = () => finish(() => reject(readError(work.controller.signal.reason)));
       signal.addEventListener('abort', cancel, {once: true}); work.controller.signal.addEventListener('abort', cancelled, {once: true});
       if (signal.aborted) cancel(); else if (work.controller.signal.aborted) cancelled();
       work.promise.then(value => finish(() => resolve(value)), error => finish(() => reject(readError(error))));
     });
   }
-  private cancel(work: ScanOperation): void {
-    work.controller.abort();
+  private cancel(work: ScanOperation, timedOut = false): void {
+    work.controller.abort(timedOut ? new ProfileVerificationError(new Error('Read deadline')) : undefined);
     if (this.queued === work) {
       this.queued = undefined; clearTimeout(work.timer); work.settled = true; work.reject(work.controller.signal.reason);
     }
