@@ -10,7 +10,9 @@ export async function hardModeFixtureSnapshot({hint, details} = {}) {
     return {id, state: row.getAttribute('data-state'), buttonCount: buttons.length,
       label: button?.getAttribute('aria-label'), name: button?.querySelector('span:last-child')?.textContent};
   });
-  const snapshot = {status, language: globalThis.document.documentElement.lang, rows};
+  const sources = nodes('[data-testid="hard-mode-source"]');
+  const snapshot = {status, language: globalThis.document.documentElement.lang, rows,
+    source: {count: Math.min(sources.length, 2), visible: visible(sources[0]), text: (sources[0]?.innerText ?? '').slice(0, 256)}};
   if (hint) {
     const matches = nodes('[data-testid="hard-mode-hint-' + hint + '"]'), node = matches[0];
     snapshot.hint = {count: matches.length, visible: visible(node), lines: node ? [...node.querySelectorAll(':scope > p')].map(p => p.innerText) : []};
@@ -27,6 +29,8 @@ function matchesFixture(snapshot, expected) {
   const assessment = snapshot.status?.assessment;
   if (snapshot.status?.trip?.firstLoss || assessment?.state !== 'fail' || assessment.source !== 'fixture' ||
       snapshot.language !== expected.language || assessment.rules?.length !== 12 || snapshot.rows?.length !== 12 || expected.rules.length !== 12) return false;
+  if (expected.sourceText && (!snapshot.source || snapshot.source.count !== 1 || !snapshot.source.visible ||
+      !snapshot.source.text.match(expected.sourceText))) return false;
   for (const [index, rule] of expected.rules.entries()) {
     const backend = assessment.rules[index], rendered = snapshot.rows[index];
     if (backend.id !== rule.id || backend.state !== rule.state || backend.reason !== rule.reason || JSON.stringify(backend.values) !== JSON.stringify(rule.values) ||

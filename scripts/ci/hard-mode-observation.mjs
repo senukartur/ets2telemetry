@@ -144,6 +144,7 @@ export async function runHardModeSmoke({application, dashboard, source, config, 
     detected.replaceAll('On', 'Вкл.').replaceAll('Off', 'Выкл.').replaceAll('Skilled', 'Умелая'),
     id === 'parking' ? 'Выкл. (0) и умелая (2); требуется ручная парковка' : required.replaceAll('On', 'Вкл.'),
     reason === 'Meets the required setting' ? 'Соответствует требуемой настройке' : 'Не соответствует требуемой настройке']);
+  let englishFixture;
   for (const lang of ['en', 'ru']) {
     await language(lang);
     const names = lang === 'en' ? ['Realistic fuel consumption', 'Air brake simulation', 'Police and fines', 'Fatigue simulation', 'Speed limiter', 'Truck stability', 'Trailer stability', 'Configured skilled parking', 'Rain probability', 'Random road events', 'Braking intensity', 'Traffic density'] : ['Реалистичный расход топлива', 'Пневмотормоза', 'Штрафы / полиция', 'Усталость', 'Ограничитель скорости', 'Стабилизация тягача', 'Стабилизация прицепа', 'Настроенная умелая парковка', 'Вероятность дождя', 'Случайные события', 'Интенсивность торможения', 'Плотность трафика'];
@@ -160,9 +161,10 @@ export async function runHardModeSmoke({application, dashboard, source, config, 
     const renderedFixture = (message, options = {}) => {
       const observation = {message}; (record.fixtureWaits ??= []).push(observation);
       return waitForHardModeFixture({refresh: () => dashboard.evaluate(() => globalThis.desktop.refreshHardMode()),
-        observe: () => dashboard.evaluate(hardModeFixtureSnapshot, options),
+        observe: () => dashboard.evaluate(hardModeFixtureSnapshot, {hint: options.hint, details: options.details}),
         expected: {language: lang, rules: fixtureRules, ...options}, record: observation, message});
     };
+    if (lang === 'en') englishFixture = renderedFixture;
     assert.equal(await dashboard.locator('[data-testid^="hard-mode-rule-"]').count(), 12);
     await renderedFixture('HARD_MODE_RENDERED_FAIL_' + lang);
     await dashboard.getByTestId('hard-mode-name-fuel').focus(); await dashboard.keyboard.press('Shift+Tab');
@@ -203,7 +205,10 @@ export async function runHardModeSmoke({application, dashboard, source, config, 
     assert.equal(await dashboard.getByRole('dialog').count(), 0);
   }
   await language('en');
-  assert.match(await dashboard.getByTestId('hard-mode-source').innerText(), /Synthetic \/ replay settings.*s since observation/);
+  const sourceText = /Synthetic \/ replay settings.*s since observation/;
+  // Language readiness does not reacquire retired proof. Accept backend, rules and source in the same bounded snapshot.
+  const finalEnglish = await englishFixture('HARD_MODE_FINAL_ENGLISH_SOURCE', {sourceText});
+  assert.match(finalEnglish.source.text, sourceText);
   await clickTestId(dashboard, 'hard-mode-refresh');
   record.hints = true; record.hover = true; record.inlineDetails = true; record.bilingual = true; record.keyboard = true; record.refresh = true;
   await source.settings('pass'); await until(async () => (await readStatus()).assessment.state, value => value === 'pass', 'HARD_MODE_PASS', 8000); record.pass = true; await until(() => dashboard.getByTestId('hard-mode-card').getAttribute('data-state'), state => state === 'pass', 'HARD_MODE_RENDERED_PASS', 5000); await dashboard.getByTestId('hard-mode-card').screenshot({path: path.join(config.output, 'hard-mode-pass.png')});
