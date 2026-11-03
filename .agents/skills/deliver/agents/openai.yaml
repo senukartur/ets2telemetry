@@ -1,7 +1,7 @@
 interface:
   display_name: "Deliver Task"
-  short_description: "Plan, implement, verify, and review one ETS2Telemetry task and open a draft PR"
-  default_prompt: "Deliver task "
+  short_description: "Deliver a ready PR with green CI and addressed feedback"
+  default_prompt: "Use $deliver to deliver task "
 
 policy:
   allow_implicit_invocation: false

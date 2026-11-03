@@ -843,3 +843,7 @@ The owner approved schema v3→v4, logical Journal trips, existing DTO/cursor am
 ## Single-player mode presentation — November 2, 2026
 
 The owner requested that absence of the TruckersMP module be displayed simply as **Single-player**, without a yellow warning or an **unconfirmed** qualifier. This presentation exception supersedes the earlier requirement to visibly qualify that result; stored method/confidence remain unchanged, and conflicting evidence still appears ambiguous.
+
+## Deliver Ready and feedback handoff — November 3, 2026
+
+The owner requested that `deliver` take its PR through Ready for review, monitor and address PR comments, and ensure CI is green before handoff. Invoking the skill therefore authorizes the Ready transition and task-related feedback replies/resolutions; merge and release still need separate owner permission, and skipped documentation-only CI is disclosed rather than claimed green. At the owner's follow-up request to raise the review limit, the pipeline allows 5 review passes: the initial candidate and up to 4 shared fix rounds.
