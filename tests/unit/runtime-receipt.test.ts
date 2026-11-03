@@ -938,6 +938,9 @@ function hardModeCases() {
   const accepted = {scenario: 'hard-mode', code: 0, available: true, reason: null};
   const rejected = {...accepted, reason: 'HARD_MODE_RESULT_INVALID'};
   return [{name: 'intact Hard Mode receipt', body: body(hardMode), ...accepted},
+    {name: 'Hard Mode passive tooltip diagnostics preserve intact success rules', body: body({...hardMode, tooltipPhases: [{phase: 'hover', criterion: 'fatigue', outcome: 'completed', after: {available: true, value: {events: [{kind: 'hint-inserted'}, {kind: 'hint-removed'}]}}}]}), ...accepted},
+    ...['hover','keyboard','irreversible','persisted'].map(field => ({name: `Hard Mode passive facts cannot replace ${field}`, body: body({...hardMode, [field]: undefined,
+      tooltipPhases: [{phase: 'hover', criterion: 'fatigue', outcome: 'failed', after: {available: true, value: {events: [{kind: 'hint-inserted'}]}}}]}), ...rejected})),
     ...['unknown','fail','pass','hints','hover','inlineDetails','bilingual','languageHotChange','keyboard','refresh','lost','restoredLost','irreversible','badge','export','overlayExcluded','persisted'].flatMap(field => [
       {name: `Hard Mode missing ${field}`, body: body({...hardMode, [field]: undefined}), ...rejected},
       {name: `Hard Mode false ${field}`, body: body({...hardMode, [field]: false}), ...rejected}]),
