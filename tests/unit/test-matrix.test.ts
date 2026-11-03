@@ -10,12 +10,12 @@ describe('test areas', () => {
     expect(Object.fromEntries(['packages/storage/src/sqlite/writes.ts', 'apps/desktop/src/overlay-geometry.ts', 'native/telemetry-client/src/main.cpp',
       'packages/telemetry-core/src/trips/reducer.ts', 'packages/telemetry-core/src/normalize-v1.ts', 'scripts/ci/runtime-smoke.mjs', 'apps/desktop/src/main.ts',
       'tools/telemetry-simulator/src/v1/soak.ts', 'apps/desktop/src/updater/update-feed.ts', 'scripts/installer/update-feed-fixture.mjs',
-      'scripts/installer/installer-lifecycle.mjs', 'native/media-session-reader/src/reader.cpp', 'apps/desktop/src/hard-mode/view.ts', 'docs/TESTING.md'].map(file => [file, areaOf(file)])))
+      'scripts/installer/installer-lifecycle.mjs', 'native/media-session-reader/src/reader.cpp', 'apps/desktop/src/hard-mode/view.ts', 'native/telemetry-plugin/src/sdk-exports.cpp', 'docs/TESTING.md'].map(file => [file, areaOf(file)])))
       .toEqual({'packages/storage/src/sqlite/writes.ts': 'storage', 'apps/desktop/src/overlay-geometry.ts': 'overlay', 'native/telemetry-client/src/main.cpp': 'native-client',
         'packages/telemetry-core/src/trips/reducer.ts': 'trip', 'packages/telemetry-core/src/normalize-v1.ts': 'ingestion', 'scripts/ci/runtime-smoke.mjs': 'ci',
         'apps/desktop/src/main.ts': 'shell', 'tools/telemetry-simulator/src/v1/soak.ts': 'protocol', 'apps/desktop/src/updater/update-feed.ts': 'updater',
         'scripts/installer/update-feed-fixture.mjs': 'updater', 'scripts/installer/installer-lifecycle.mjs': 'setup', 'native/media-session-reader/src/reader.cpp': 'now-playing',
-        'apps/desktop/src/hard-mode/view.ts': 'hard-mode', 'docs/TESTING.md': null});
+        'apps/desktop/src/hard-mode/view.ts': 'hard-mode', 'native/telemetry-plugin/src/sdk-exports.cpp': 'native-plugin', 'docs/TESTING.md': null});
   });
 
   it('selects the runtime scenarios of a source as the local plan does', () => {
@@ -76,7 +76,7 @@ describe('test entry points', () => {
 
 describe('area × layer matrix', () => {
   const matrix = buildMatrix({
-    vitest: [['tests/unit/overlay-x.test.ts', 2], ['tests/unit/overlay-y.test.ts', 4]], storage: [['tests/storage/trip-x.test.ts', 12]],
+    vitest: [['tests/unit/overlay-x.test.ts', 2], ['tests/unit/overlay-y.test.ts', 4], ['tests/unit/setup-x.test.ts', 1], ['tests/host/setup-x.test.ts', 3]], storage: [['tests/storage/trip-x.test.ts', 12]],
     ctest: [['v1-producer-contract-store', 0.5], ['v1-producer-contract-fuzz', 1]], asan: [['v1-producer-asan-contract-fuzz', 40]],
     steps: [
       {job: 'Windows x64 runtime and UI (ui-2)', name: 'Bounded packaged Yukon UI overlay shard', seconds: 74},
@@ -91,6 +91,7 @@ describe('area × layer matrix', () => {
     expect(matrix.cells.trip.storage).toEqual([['trip-x', 12]]);
     expect(matrix.cells['native-plugin']).toMatchObject({ctest: [['v1-producer-contract-*', 1.5]], asan: [['v1-producer-contract-*', 40]]});
     expect(matrix.cells.setup.chains).toEqual([['plugin-image-lock', 14]]);
+    expect(matrix.cells.setup.unit).toEqual([['host/setup-x', 3], ['setup-x', 1]]);
     expect(matrix.cells.updater.installer).toEqual([['update-from-feed lifecycle', 206]]);
     expect(Object.values(matrix.cells).flatMap(layers => Object.values(layers).flat()).map(([entry]) => entry)).not.toContain('Build desktop and native x64');
   });

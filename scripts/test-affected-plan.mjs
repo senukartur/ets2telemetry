@@ -80,7 +80,8 @@ export const TEST_AREAS = [
   {id: 'setup', label: 'Setup, installer and uninstall', paths: [/plugin-setup|plugin-(?:bundle|installer|registry|action|cleanup)|steam-|game-folder|game-processes|fixed-program|atomic-json-file|vdf/,
     /uninstall|squirrel|installer|installed-app-icon|legacy-shortcuts|app-uninstall|data-wipe|deferral/, /^tests\/(?:windows|vm)\//, /^forge\.config\.cjs$/, /^resources\//]},
   {id: 'overlay', label: 'Overlay', paths: [/overlay|window-placement|latency-|game-window/, /^scripts\/diagnostics\//], ctest: /window/},
-  {id: 'journal', label: 'Journal and export', paths: [/journal|export|sample-chart/]},
+  // The plugin's sdk-exports sources are the native plugin's, not the journal export's.
+  {id: 'journal', label: 'Journal and export', paths: [/^(?!native\/).*(?:journal|export|sample-chart)/]},
   {id: 'settings', label: 'Settings', paths: [/settings|unit-profiles|language|i18n|display-profile|gear-display|autostart/]},
   {id: 'storage', label: 'Storage', paths: [/^packages\/storage\//, /storage|history-file|recording-(?:status|policy|runtime)|recovery-budget|retention/, /^tests\/fixtures\/storage\//]},
   {id: 'trip', label: 'Trip domain', paths: [/^packages\/telemetry-core\/src\/trips\//, /trip|profile-observation|history-samples/]},
