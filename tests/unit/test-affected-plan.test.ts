@@ -1,5 +1,5 @@
 import {describe, expect, it} from 'vitest';
-import {MAX_SELECTED_FILES, planChecks, type Plan} from '../../scripts/test-affected-plan.mjs';
+import {MAX_SELECTED_FILES, findReferences, formatSummary, planChecks, runSteps, type Plan} from '../../scripts/test-affected-plan.mjs';
 
 // ET-066: the local check plan (docs/TESTING.md section 5). Every expected plan below is written by hand from the rules in
 // scripts/test-affected-plan.mjs and the CI job layout in docs/ci.md, never produced by running the planner.
@@ -15,7 +15,7 @@ describe('local check plan', () => {
   });
 
   it('runs the importing unit tests, lint of the file and the overlay scenarios for an overlay module', () => {
-    const plan = planChecks({changed: ['apps/desktop/src/overlay-geometry.ts'], affectedTests: ['tests/unit/overlay-geometry.test.ts', 'tests/unit/overlay.test.ts']});
+    const plan = planChecks({changed: ['apps/desktop/src/overlay-geometry.ts'], imports: {'apps/desktop/src/overlay-geometry.ts': ['tests/unit/overlay-geometry.test.ts', 'tests/unit/overlay.test.ts']}});
     expect(ids(plan)).toEqual(['typecheck', 'lint', 'vitest', ...PACKAGED, 'runtime:overlay', 'runtime:ui:overlay']);
     expect(command(plan, 'vitest')).toBe('npm test -- tests/unit/overlay-geometry.test.ts tests/unit/overlay.test.ts');
     expect(command(plan, 'lint')).toBe('node tools/lint/node_modules/eslint/bin/eslint.js --max-warnings 0 --no-warn-ignored apps/desktop/src/overlay-geometry.ts');
@@ -45,8 +45,8 @@ describe('local check plan', () => {
   });
 
   it('runs the whole storage suite when the import graph reaches a storage bundle entry', () => {
-    const plan = planChecks({changed: ['packages/telemetry-core/src/trip-reducer.ts'], affectedTests: ['tests/unit/trip-reducer.test.ts', 'tests/storage/trip-recorder.test.ts'],
-      affectedEntries: ['apps/desktop/src/trip-recorder.ts']});
+    const plan = planChecks({changed: ['packages/telemetry-core/src/trip-reducer.ts'], imports: {'packages/telemetry-core/src/trip-reducer.ts':
+      ['apps/desktop/src/trip-recorder.ts', 'tests/storage/trip-recorder.test.ts', 'tests/unit/trip-reducer.test.ts']}});
     expect(command(plan, 'vitest')).toBe('npm test -- tests/unit/trip-reducer.test.ts');
     expect(command(plan, 'storage')).toBe('npm run test:storage');
     expect(ids(plan).filter(id => id.startsWith('runtime:'))).toEqual(['runtime:telemetry', 'runtime:journal', 'runtime:ui:live', 'runtime:ui:journal']);
@@ -71,7 +71,7 @@ describe('local check plan', () => {
   });
 
   it('runs the scaffold for the scenario driver and leaves the other scenarios to the files that select them', () => {
-    const plan = planChecks({changed: ['scripts/ci/runtime-smoke.mjs', 'apps/desktop/src/hard-mode/reader.ts'], affectedTests: ['tests/unit/hard-mode-reader.test.ts']});
+    const plan = planChecks({changed: ['scripts/ci/runtime-smoke.mjs', 'apps/desktop/src/hard-mode/reader.ts'], imports: {'apps/desktop/src/hard-mode/reader.ts': ['tests/unit/hard-mode-reader.test.ts']}});
     expect(ids(plan).filter(id => id.startsWith('runtime:'))).toEqual(['runtime:scaffold', 'runtime:hard-mode']);
   });
 
@@ -80,7 +80,7 @@ describe('local check plan', () => {
   });
 
   it('runs the simulator smokes on its own build when nothing else needs the full build', () => {
-    const plan = planChecks({changed: ['tools/telemetry-simulator/src/cli.ts'], affectedTests: ['tests/unit/simulator-v0.test.ts']});
+    const plan = planChecks({changed: ['tools/telemetry-simulator/src/cli.ts'], imports: {'tools/telemetry-simulator/src/cli.ts': ['tests/unit/simulator-v0.test.ts']}});
     expect(ids(plan)).toEqual(['typecheck', 'lint', 'vitest', 'simulator:build', 'smoke:v0', 'smoke:v1']);
     expect(plan.steps.find(step => step.id === 'smoke:v1')?.needs).toEqual(['simulator:build']);
   });
@@ -100,13 +100,70 @@ describe('local check plan', () => {
 
   it('falls back to the whole suite above the selection limit', () => {
     const many = Array.from({length: MAX_SELECTED_FILES + 1}, (_, index) => `tests/unit/case-${index}.test.ts`);
-    const plan = planChecks({changed: ['packages/contracts/src/units.ts'], affectedTests: many});
+    const plan = planChecks({changed: ['packages/contracts/src/units.ts'], imports: {'packages/contracts/src/units.ts': many}});
     expect(command(plan, 'vitest')).toBe('npm test');
   });
 
-  it('reports a changed file that no rule, import or test name covers', () => {
+  it('reports a changed file that no rule, import or test name covers, a linted module included', () => {
     const plan = planChecks({changed: ['.gitattributes', 'scripts/ci/versions.mjs']});
-    expect(plan.unmapped).toEqual(['.gitattributes']);
+    expect(plan.unmapped).toEqual(['.gitattributes', 'scripts/ci/versions.mjs']);
     expect(ids(plan)).toEqual(['typecheck', 'lint']);
+  });
+
+  it('counts every full-run trigger as covered when several change together', () => {
+    const plan = planChecks({changed: ['package.json', 'tsconfig.json', 'vitest.config.mts', 'vitest.storage.config.mts']});
+    expect(command(plan, 'vitest')).toBe('npm test');
+    expect(command(plan, 'storage')).toBe('npm run test:storage');
+    expect(plan.unmapped).toEqual([]);
+  });
+
+  it('treats a documentation file that a test reads as that test input', () => {
+    const plan = planChecks({changed: ['docs/journal-export.md', 'docs/TESTING.md'], references: {'docs/journal-export.md': ['tests/unit/journal-export.test.ts']}});
+    expect(plan.kind).toBe('code');
+    expect(ids(plan)).toEqual(['typecheck', 'vitest']);
+    expect(command(plan, 'vitest')).toBe('npm test -- tests/unit/journal-export.test.ts');
+    expect(plan.unmapped).toEqual([]);
+    const tokens = planChecks({changed: ['docs/design/tokens.css'], references: {'docs/design/tokens.css': ['tests/unit/overlay-strip.test.ts']}});
+    expect(command(tokens, 'vitest')).toBe('npm test -- tests/unit/overlay-strip.test.ts');
+  });
+
+  it('runs the recording and refusal scenarios for the recorder, ingestion, history and sample modules', () => {
+    for (const file of ['apps/desktop/src/trip-recorder.ts', 'apps/desktop/src/v1-ingestion.ts', 'apps/desktop/src/history-storage.ts', 'apps/desktop/src/sample-buffer.ts']) {
+      expect(ids(planChecks({changed: [file]})), file).toEqual(expect.arrayContaining(['runtime:recording', 'runtime:refusal']));
+    }
+  });
+
+  it('refuses a changed or selected path that a shell could split or expand', () => {
+    expect(() => planChecks({changed: ['scripts/a b.mjs']})).toThrow(/refusing paths/);
+    expect(() => planChecks({changed: ['scripts/a.mjs'], references: {'scripts/a.mjs': ['tests/unit/$(x).test.ts']}})).toThrow(/refusing paths/);
+  });
+});
+
+describe('local check inputs and runner', () => {
+  const tracked = ['apps/desktop/src/overlay-geometry.ts', 'apps/desktop/src/index.ts', 'packages/storage/src/index.ts', 'docs/journal-export.md',
+    'tests/unit/overlay.test.ts', 'tests/unit/journal-export.test.ts', 'tests/unit/test-affected-plan.test.ts'];
+  const sources = new Map([
+    ['tests/unit/overlay.test.ts', "// see docs/journal-export.md\nvi.mock('../../apps/desktop/src/overlay-geometry.ts');\nconst index = 'index.ts';"],
+    ['tests/unit/journal-export.test.ts', "readFileSync('docs/journal-export.md', 'utf8'); import '../../apps/desktop/src/old-module';"],
+    ['tests/unit/test-affected-plan.test.ts', "planChecks({changed: ['docs/journal-export.md', 'apps/desktop/src/overlay-geometry.ts']});"]]);
+
+  it('finds tests by repository path, unique file name, failing import and quoted documentation path', () => {
+    expect(findReferences({changed: ['apps/desktop/src/overlay-geometry.ts', 'apps/desktop/src/index.ts', 'apps/desktop/src/old-module.ts', 'docs/journal-export.md'],
+      existing: ['apps/desktop/src/overlay-geometry.ts', 'apps/desktop/src/index.ts', 'docs/journal-export.md'], tracked, sources})).toEqual({
+      'apps/desktop/src/overlay-geometry.ts': ['tests/unit/overlay.test.ts'],
+      'apps/desktop/src/old-module.ts': ['tests/unit/journal-export.test.ts'],
+      'docs/journal-export.md': ['tests/unit/journal-export.test.ts']});
+  });
+
+  it('runs steps in order, skips a step whose prerequisite failed and summarizes every step', () => {
+    const steps = [{id: 'build', command: 'npm run build', reason: '', needs: []}, {id: 'package', command: 'npm run package', reason: '', needs: ['build']},
+      {id: 'typecheck', command: 'npm run typecheck', reason: '', needs: []}];
+    const ran: string[] = [];
+    let clock = 0;
+    const results = runSteps(steps, step => { ran.push(step.id); return step.id === 'build' ? 1 : 0; }, () => (clock += 500));
+    expect(ran).toEqual(['build', 'typecheck']);
+    expect(results.map(result => [result.id, result.result, result.seconds])).toEqual([['build', 'FAIL', 0.5], ['package', 'NOT RUN', 0], ['typecheck', 'PASS', 0.5]]);
+    expect(formatSummary(results).split('\n')).toEqual(['| Step | Result | Duration | Command |', '| --- | --- | ---: | --- |',
+      '| build | FAIL | 0.5 s | `npm run build` |', '| package | NOT RUN | 0.0 s | `npm run package` |', '| typecheck | PASS | 0.5 s | `npm run typecheck` |']);
   });
 });
