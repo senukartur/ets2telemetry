@@ -2479,21 +2479,36 @@ it('ends an export whose dialog is open at a fatal stop as interrupted, without 
 });
 // ET-065: the seventh journal channel deletes one trip in staging builds.
 const deleteCall = (event: unknown, ...request: unknown[]) => Promise.resolve().then(() => handlers.get('journal:delete-trip')!(event, ...request as [unknown]));
-it('rejects trip deletion requests from untrusted senders, frames and the overlay, and every invalid shape', async () => {
-  trayAvailable = true; await ready();
-  for (const event of [{sender: {}, senderFrame: contents.mainFrame}, {sender: contents, senderFrame: {}}, overlayTrusted()])
-    await expect(deleteCall(event, TRIP)).rejects.toThrow('Untrusted journal request');
-  for (const request of [[], [TRIP, null], [TRIP.toUpperCase()], ['not-a-uuid'], [{tripUuid: TRIP}]])
-    await expect(deleteCall(trusted(), ...request)).rejects.toThrow('Invalid journal request');
+it('refuses trip deletion requests in production builds', async () => {
+  await ready();
+  await expect(deleteCall(trusted(), TRIP)).rejects.toThrow('Trip deletion is only available in staging builds');
   expect(journalSent()).toEqual([]);
 });
-it('routes a valid trip deletion request to the journal service and returns its reply', async () => {
-  await ready();
-  const deleting = deleteCall(trusted(), TRIP);
-  await settle();
-  expect(journalSent().at(-1)).toEqual({type: 'journal', id: 1, query: {kind: 'deleteTrip', tripUuid: TRIP}});
-  journalReply(1, {ok: true, value: undefined});
-  await expect(deleting).resolves.toEqual({ok: true, value: undefined});
+it('rejects trip deletion requests from untrusted senders, frames and the overlay, and every invalid shape in staging builds', async () => {
+  vi.doMock('../../apps/desktop/src/channel', async importOriginal => ({...await importOriginal<typeof import('../../apps/desktop/src/channel')>(), ACTIVE_CHANNEL: 'staging'}));
+  try {
+    trayAvailable = true; await ready();
+    for (const event of [{sender: {}, senderFrame: contents.mainFrame}, {sender: contents, senderFrame: {}}, overlayTrusted()])
+      await expect(deleteCall(event, TRIP)).rejects.toThrow('Untrusted journal request');
+    for (const request of [[], [TRIP, null], [TRIP.toUpperCase()], ['not-a-uuid'], [{tripUuid: TRIP}]])
+      await expect(deleteCall(trusted(), ...request)).rejects.toThrow('Invalid journal request');
+    expect(journalSent()).toEqual([]);
+  } finally {
+    vi.doUnmock('../../apps/desktop/src/channel');
+  }
+});
+it('routes a valid trip deletion request to the journal service and returns its reply in staging builds', async () => {
+  vi.doMock('../../apps/desktop/src/channel', async importOriginal => ({...await importOriginal<typeof import('../../apps/desktop/src/channel')>(), ACTIVE_CHANNEL: 'staging'}));
+  try {
+    await ready();
+    const deleting = deleteCall(trusted(), TRIP);
+    await settle();
+    expect(journalSent().at(-1)).toEqual({type: 'journal', id: 1, query: {kind: 'deleteTrip', tripUuid: TRIP}});
+    journalReply(1, {ok: true, value: undefined});
+    await expect(deleting).resolves.toEqual({ok: true, value: undefined});
+  } finally {
+    vi.doUnmock('../../apps/desktop/src/channel');
+  }
 });
 // ET-017 PR-4 (P12, P13, P16): plugin setup in main. A fake orchestrator stands in for plugin-setup.ts, whose own tests
 // cover discovery, installs and timing; these cases cover main's part: the five fixed-shape channels from the trusted
