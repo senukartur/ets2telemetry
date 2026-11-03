@@ -371,7 +371,9 @@ describe('ET-015c recording status through the production wiring', () => {
   it('(i) live state and the status keep advancing while a commit is held (G20)', async () => {
     // one-second-samples with one connection whose client does not wait for ACKs, so the server keeps writing frames while
     // the commit of simulation.paused (eventSeq 5, 5,900 ms) is held inside its transaction. The paused frames reach the
-    // live state and the status before the release; the recorder sees them only after the commit, in FIFO order.
+    // live state and the status before the release; the recorder sees them only after the commit, in FIFO order. Events
+    // 6-8 arrive only after the release (the gate below), so this case covers the live state and the status during a held
+    // commit; later events queued behind a commit in flight are case (c)'s and trip-recorder-faults (g)'s.
     const input = withTransport(samplesScenario(), 'one-second-samples-held-commit', [connect(0, {durable: true, ack: 'withhold'}), disconnect(17_500)]);
     expect(reactiveConflicts(input)).toEqual([]);
     const server = await serveV1Reactive(input, {scale: 0, awaitScriptedAcks: true, quiesceMs: 0});
