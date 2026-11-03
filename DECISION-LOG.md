@@ -846,4 +846,4 @@ The owner requested that absence of the TruckersMP module be displayed simply as
 
 ## Deliver Ready and feedback handoff — November 3, 2026
 
-The owner requested that `deliver` take its PR through Ready for review, monitor and address PR comments, and ensure CI is green before handoff. Invoking the skill therefore authorizes the Ready transition and task-related feedback replies/resolutions; merge and release still need separate owner permission, and skipped documentation-only CI is disclosed rather than claimed green.
+The owner requested that `deliver` take its PR through Ready for review, monitor and address PR comments, and ensure CI is green before handoff. Invoking the skill therefore authorizes the Ready transition and task-related feedback replies/resolutions; merge and release still need separate owner permission, and skipped documentation-only CI is disclosed rather than claimed green. At the owner's follow-up request to raise the review limit, the pipeline allows 5 review passes: the initial candidate and up to 4 shared fix rounds.

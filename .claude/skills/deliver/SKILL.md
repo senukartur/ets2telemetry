@@ -97,7 +97,7 @@ Talk to the owner in Russian. Write plans, commits, PR text and repository files
 2. If the result is `INVALID`, stop and report. Something changed the worktree unexpectedly.
 3. If the result is `FAIL`, send the failure excerpts to the implementer, then repeat steps 5.2 and 6 on the new candidate.
 4. If the result is `INCOMPLETE` because of `NOT RUN` or `FLAKY` checks, continue. Carry every such check into the PR's remaining verification.
-5. The run has a budget of 2 fix rounds in total. It is shared by verifier failures, independent review fixes, CI failures and PR feedback fixes and never resets. When it is spent and a required fix remains, record the blocker and stop without marking the run done.
+5. The run has a budget of 4 fix rounds in total. It is shared by verifier failures, independent review fixes, CI failures and PR feedback fixes and never resets. When it is spent and a required fix remains, record the blocker and stop without marking the run done.
 
 ## 7. Review
 
@@ -110,7 +110,7 @@ Talk to the owner in Russian. Write plans, commits, PR text and repository files
    - Send all of them to the implementer at once. This uses one fix round.
    - Run step 5.2 and the full step 6 on the new candidate.
    - Send the fix delta to the same reviewer for a follow-up pass.
-4. Allow at most 3 review passes in total: the initial candidate plus one pass for each of the 2 shared fix rounds, including post-publish fixes. Review every changed candidate before pushing; if no pass remains, stop and report without pushing it. Accepted `blocker` or `major` findings must be closed before publishing.
+4. Allow at most 5 review passes in total: the initial candidate plus one pass for each of the 4 shared fix rounds, including post-publish fixes. Review every changed candidate before pushing; if no pass remains, stop and report without pushing it. Accepted `blocker` or `major` findings must be closed before publishing.
 5. Record every finding with its outcome in `state.md`: the fixing commit, the reason for rejection, or "listed in PR".
 6. Read-only agents can still run shell commands. After the verifier and the reviewer return, confirm that the worktree HEAD and `git status` are unchanged.
 
