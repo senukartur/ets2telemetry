@@ -669,6 +669,15 @@ export async function runUiSmoke({application, dashboard, overlay, source, sourc
   assert.ok(UI_CASES.includes(config.uiCase));
   Object.assign(record, {case: config.uiCase, screenshots: [], languages: [], sizes, flags: {}});
   const save = (name, language, size, page = dashboard) => capture({page, application, config, record, name, language, size, overlay: page === overlay});
+  // ET-067: Playwright drives the pointer through the renderer, but the dashboard is a real window, so the desktop's own
+  // cursor still reaches it, and Windows moves it there whenever a window changes under a resting cursor. One such move
+  // between a hover and Radix's 150 ms delayed open leaves the hint closed. Click-through for OS input only, so every
+  // pointer event the page sees is the driver's; the overlay keeps its own state.
+  record.osPointerIsolated = await application.evaluate(({BrowserWindow}) => {
+    const window = BrowserWindow.getAllWindows().find(candidate => !candidate.webContents.getURL().endsWith('?view=overlay'));
+    window.setIgnoreMouseEvents(true);
+    return true;
+  });
   // The source selector remains a working diagnostic control, not an invented reference-screen toolbar.
   if (source) await waitState(dashboard, 'connected');
   for (const language of ['en', 'ru']) {
@@ -1129,7 +1138,29 @@ export async function runUiSmoke({application, dashboard, overlay, source, sourc
   const indicator = dashboard.getByTestId('shell.sidebar.recording'), hint = dashboard.getByTestId('shell.recording.hint');
   const hintHeadline = () => dashboard.evaluate(() => [globalThis.document.querySelector('[data-testid="shell.recording.hint"] p')?.textContent,
     globalThis.document.querySelector('[data-testid="health-recording"]')?.textContent]);
-  await indicator.hover(); await hint.waitFor({state: 'visible'});
+  // Radix opens the hint 150 ms after a pointermove on the trigger and only on a new move after a leave, so a hover is
+  // one stimulus; a hint that stays closed keeps the pointer events the page saw for the failure (ET-067).
+  await dashboard.evaluate(recordPointer);
+  // ET-067 regression: the hover runs with the resting desktop cursor over the dashboard's content and the window moved
+  // under it right after, which makes Windows deliver a move at the cursor. Without osPointerIsolated that move leaves
+  // the trigger and the hint stays closed on every host; the window returns to its place afterwards.
+  const place = await application.evaluate(({BrowserWindow, screen}) => {
+    const window = BrowserWindow.getAllWindows().find(candidate => !candidate.webContents.getURL().endsWith('?view=overlay'));
+    const before = window.getPosition(), cursor = screen.getCursorScreenPoint();
+    window.setPosition(cursor.x - 700, cursor.y - 300);
+    return before;
+  });
+  await indicator.hover();
+  await application.evaluate(({BrowserWindow}) => {
+    const window = BrowserWindow.getAllWindows().find(candidate => !candidate.webContents.getURL().endsWith('?view=overlay')), [x, y] = window.getPosition();
+    window.setPosition(x + 1, y);
+  });
+  await hint.waitFor({state: 'visible'}).catch(async error => {
+    record.recordingHintPointer = await dashboard.evaluate(() => globalThis.__et067PointerLog).catch(() => null);
+    throw error;
+  });
+  await application.evaluate(({BrowserWindow}, [x, y]) => {BrowserWindow.getAllWindows().find(candidate => !candidate.webContents.getURL().endsWith('?view=overlay')).setPosition(x, y);}, place);
+  record.flags.hoverUnderDesktopCursor = true;
   const [hovered, headline] = await hintHeadline(); assert.ok(headline && headline !== '—'); assert.equal(hovered, headline);
   await dashboard.keyboard.press('Escape'); await hint.waitFor({state: 'hidden'}); await dashboard.mouse.move(0, 0);
   await indicator.focus(); await hint.waitFor({state: 'visible'});
@@ -1148,6 +1179,22 @@ export async function runUiSmoke({application, dashboard, overlay, source, sourc
   record.flags.offlineFonts = await dashboard.evaluate(() => [...globalThis.document.fonts].some(font => font.family.includes('Huninn')));
   assert.equal(record.flags.offlineFonts, true);
   await chooseLanguage(dashboard, 'en'); await screen(dashboard, 'live');
+}
+
+/**
+ * Self-contained (ET-067): from now on, the pointer events the dashboard sees (type, target, client point; bounded) and
+ * each data-state of the recording indicator, in `__et067PointerLog`, read when its tooltip does not open after a hover.
+ */
+function recordPointer() {
+  const log = globalThis.__et067PointerLog = [], start = globalThis.performance.now();
+  const push = entry => { if (log.length < 200) log.push({t: Math.round(globalThis.performance.now() - start), ...entry}); };
+  const name = node => node?.getAttribute?.('data-testid') ?? node?.nodeName ?? null;
+  for (const type of ['pointerover', 'pointermove', 'pointerout', 'pointerdown', 'scroll']) {
+    globalThis.addEventListener(type, event => push({type, target: name(event.target), x: event.clientX, y: event.clientY}), {capture: true});
+  }
+  for (const type of ['blur', 'focus']) globalThis.addEventListener(type, event => { if (event.target === globalThis) push({type}); });
+  const trigger = globalThis.document.querySelector('[data-testid="shell.sidebar.recording"]');
+  new globalThis.MutationObserver(() => push({type: 'data-state', state: trigger.getAttribute('data-state')})).observe(trigger, {attributes: true, attributeFilter: ['data-state']});
 }
 
 /** The sidebar version line and the hidden update control (ET-055 UP10, UP11) in `language`, the language shown now. */
