@@ -42,7 +42,7 @@ Shared files needing care: <lockfiles, protocol types, build files, migrations, 
 Design: <interfaces, invariants, data flow; each non-obvious decision with the rejected alternative>
 Steps: <ordered, each small enough to verify>
 Tests: <files, layer, REG scenario IDs, what each proves>
-Checks: <exact npm/ctest commands the verifier must run>
+Checks: <exact commands the verifier must run beyond `npm run test:affected`; often none>
 Docs to update: <existing paths and what changes, within the documentation budget in docs/agent-rules.md; often none>
 Remaining verification: <real-game, environment or performance checks this PR cannot provide>
 Risks and open questions: <anything that needs an owner answer>

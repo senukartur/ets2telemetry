@@ -31,39 +31,20 @@ Confirm that every relative Markdown link and anchor in the changed files resolv
 
 ### Every code change
 
-This sequence mirrors the Windows CI jobs in `.github/workflows/windows-ci.yml` and the local rule in `docs/TESTING.md`:
+Run the affected-check plan of `docs/TESTING.md` section 5 (ET-066). Windows CI runs every suite on the PR and is the merge gate; locally only the checks that cover the changed paths run.
 
-1. `npm run lint:install`, `npm run lint`, `npm run lint:ps`
-2. `npm run typecheck`, `npm test`, `npm run test:storage`
-3. `npm run native:configure`, `npm run build`, then `ctest --test-dir native/telemetry-client/build -C Release --output-on-failure --no-tests=error`
-4. `npm run native:build`, `npm run native:test`
-5. `npm run test:cap0-chain`, `npm run test:v1-chain`, `npm run test:plugin-lock`
-6. `npm run smoke --workspace @ets2telemetry/telemetry-simulator`, `npm run smoke:v1 --workspace @ets2telemetry/telemetry-simulator`
+1. `npm run test:affected -- --base <base> --plan` prints the plan: each selected step with its reason, and any changed file that no local check covers.
+2. `npm run test:affected -- --base <base>` runs the steps in order and ends with a summary table. It always runs `npm run typecheck` and lints the changed files (`npm run lint:ps` for changed PowerShell), runs the Vitest and storage files that import or name a changed file, and adds native CTest, the chains, the simulator smokes, the package inspection and packaged runtime scenarios only when the changed paths need them. A step whose prerequisite failed is `NOT RUN`.
 
-### Additional runtime checks
-
-Run these when the diff touches any of the following:
-
-- `apps/desktop/**`
-- `packages/**`
-- `native/telemetry-client/**`
-- `scripts/build*.mjs`, `scripts/stage-native-plugin.mjs`, `scripts/ci/**` or `scripts/watchdog/**`
-- `forge.config.cjs`
-- `package*.json`
-
-Each run is bounded by the Windows Job Object that the script uses (following the PR check layout in `.github/workflows/windows-ci.yml`, owner decisions E1 and E2):
-
-1. `npm run package`, `npm run inspect:package`.
-2. `scripts/ci/Invoke-RuntimeSmoke.ps1 -Mode packaged`, then the same script with `-Scenario telemetry`, `-Scenario overlay -ForceRendererReuse`, `-Scenario lifecycle`, `-Scenario plugin`, `-Scenario recording`, `-Scenario journal`, and `-Scenario refusal`.
-
-If the diff does not touch these paths, report these checks as `CI ONLY`.
+Report every step of the summary table as a row. Do not add checks the plan did not select unless the plan's `Checks` list names them, and do not run the full suites to be thorough.
 
 ### Always CI ONLY
 
 Report the following as `CI ONLY` (unless a specific command was explicitly requested in the plan's `Checks` list):
 
+- every suite, file and scenario the affected plan did not select, and the changed files it reports as covered by no local check;
 - the AddressSanitizer targets of the plugin and the client (`windows-asan`);
-- development-mode runtime smokes on pull requests (E2) and the Squirrel maker / `release-identity` / hosted `Invoke-InstallerLifecycle.ps1` (E1; never run installer lifecycle on the owner's machine without an explicit owner request);
+- development-mode runtime smokes and the packaged session-end audit, the Squirrel maker / `release-identity` / hosted `Invoke-InstallerLifecycle.ps1` (never run installer lifecycle on the owner's machine without an explicit owner request);
 - the extended regressions (`Invoke-Extended.ps1` / `windows-extended.yml`) and the soak workflow (`windows-soak.yml`).
 
 They are not local passes unless actually run.
@@ -71,7 +52,7 @@ They are not local passes unless actually run.
 ## Rules
 
 - Never edit, stage or commit files. Never change tests, configuration or expected values to get a pass. Do not run `git` commands that change state.
-- Do not filter tests or add retries. If a failure looks nondeterministic, rerun that one command once and report the check as `FLAKY` with both outcomes.
+- Do not filter tests beyond the affected plan or add retries. If a failure looks nondeterministic, rerun that one command once and report the check as `FLAKY` with both outcomes.
 - Never launch ETS2 or ATS, install a game DLL into a real game folder, run `Invoke-InstallerLifecycle.ps1`, or touch real user data under `%LOCALAPPDATA%\ETS2Telemetry`. Application launches are allowed only through the bounded runtime smoke script.
 - Run every build with `ETS2TELEMETRY_BUILD_CHANNEL` unset, which builds staging (ET-055 UP13, `docs/agent-rules.md`). Never build with `ETS2TELEMETRY_BUILD_CHANNEL=production` or set the owner-only `ETS2TELEMETRY_OWNER_PRODUCTION_BUILD`, and never install or run a production-identity build; production packaging is a CI ONLY check of runs on `main`; a dispatch on the task branch builds staging, and its artifact is never installed as production.
 - If a tool is missing, report the check as `NOT RUN` with the exact error. Do not install anything globally.

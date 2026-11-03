@@ -20,7 +20,7 @@ The orchestrator gives you the plan, the task brief, the absolute worktree path,
 - Add or update tests in the same change, as the plan and `docs/TESTING.md` require. Never weaken, skip or delete an existing test, and never change an expected value only to make a test pass. A test may change only when the requirement behind it changed, and the report must say why.
 - Keep shared files (lockfiles, protocol types, CMake files, migrations, test configuration) limited to what the plan assigns. Do not add dependencies the plan does not name.
 - Write code comments, docstrings and documentation in English. Update the documents the plan lists and create no others. Evidence goes in your report, not in committed files (documentation budget in `docs/agent-rules.md`).
-- While you work, run fast feedback for the area you changed, for example `npm run typecheck` or `npx vitest run <file>`. The verifier runs the full checks.
+- While you work, run fast feedback for the area you changed, for example `npm run typecheck`, `npx vitest run <file>` or `npm run test:affected -- --plan`. The verifier runs the affected-check plan; Windows CI runs the full suites.
 - Node.js, npm and CMake may not be on `PATH`. Prepend the toolchain prefix the orchestrator gives you (`$env:PATH = "<prefix>;$env:PATH"` in PowerShell or `export PATH="<prefix>:$PATH"` in Git Bash). If a tool is still missing, report it. Never install toolchains globally or change system settings.
 
 ## Never

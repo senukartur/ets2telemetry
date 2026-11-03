@@ -1,0 +1,15 @@
+export const STORAGE_BUNDLE_ENTRIES: string[];
+export const RUNTIME_SCENARIOS: Record<string, string[]>;
+export const DOCUMENTATION: RegExp;
+export const SAFE_PATH: RegExp;
+export const PATH_DATA_TESTS: string[];
+export const CI_ONLY: string[];
+export const MAX_SELECTED_FILES: number;
+export type PlanStep = {id: string; command: string; reason: string; needs: string[]};
+export type Plan = {kind: 'empty' | 'documentation' | 'code'; steps: PlanStep[]; unmapped: string[]; ciOnly: string[]};
+export type StepResult = {id: string; command: string; result: 'PASS' | 'FAIL' | 'NOT RUN'; seconds: number};
+export function planChecks(input: {changed: string[]; imports?: Record<string, string[]>; references?: Record<string, string[]>;
+  existing?: string[]; lintInstalled?: boolean}): Plan;
+export function findReferences(input: {changed: string[]; existing?: string[]; tracked: string[]; sources: Map<string, string>}): Record<string, string[]>;
+export function runSteps(steps: PlanStep[], run: (step: PlanStep) => number | null, now?: () => number): StepResult[];
+export function formatSummary(results: StepResult[]): string;

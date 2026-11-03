@@ -71,13 +71,14 @@ Every scenario below keeps the same ID across domain, integration and UI tests, 
 
 | When | Checks |
 | --- | --- |
-| Local development | The focused suite for the changed behavior, then the relevant boundary scenarios before pushing |
+| Local development | `npm run test:affected` (ET-066): typecheck, lint of the changed files, and only the Vitest and storage files, native checks, chains, simulator smokes and packaged runtime scenarios that cover the changed paths. The full suites run in CI, never locally to be thorough |
 | Every code PR | Lockfile install, lint (`npm run lint:install`, `npm run lint`, `npm run lint:ps`), typecheck, desktop and native builds, the full fast suite and the bounded Windows integration and packaged smokes |
 | Risky change | Also the affected migration, crash and recovery, packaging, native or overlay checks on the PR commit, with any manual evidence recorded |
 | Push to `main` and manual dispatch | The broader replay, recovery, extended and packaged suites, including the installer lifecycle |
 | Before a release | The exact candidate artifact, a fresh install and an upgrade, the real-game matrix and a one-hour recording session |
 
 - CI does not run on draft PRs or on changes limited to `**.md` and `docs/**`. A skipped or absent run is not a pass: the merge gate is a successful run of the three required jobs (`Windows x64 tests`, `Windows x64 scaffold`, `Windows x64 native AddressSanitizer`) on the final head after Ready for review ([docs/ci.md](ci.md#triggers-and-draft-checks)).
+- `scripts/test-affected-plan.mjs` maps changed paths to checks: Vitest files whose static imports reach a changed file, test files that name it, and path rules for native trees, shared fixtures, packaging, the runtime driver and desktop areas. Markdown counts as prose unless a test reads it by a quoted path; other files under `docs/` are inputs like any file. A file that no rule, import or test name covers, a linted module included, is printed as tested only in CI. A local affected pass is not a merge gate: CI runs every suite on the PR, and a CI failure in an unselected suite is fixed on the branch like any other failure.
 - A failing baseline suite blocks the change. Check the current PR commit, not an earlier run, and run every consumer of a changed shared contract or migration.
 - Required checks prove only that the jobs passed. Review, real-game and other acceptance evidence remain owner and reviewer policy; the advisory Claude review is never a required check.
 - Dependency upgrades (Electron, Node, better-sqlite3, the SDK, protocol tooling) need the native, packaged and migration checks besides unit tests. SDK, window, input, game-client and native changes need real-game checks that simulation cannot replace. If a machine or game is unavailable, keep the evidence pending instead of claiming success.
