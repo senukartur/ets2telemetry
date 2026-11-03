@@ -22,12 +22,14 @@ describe('local check plan', () => {
     expect(command(plan, 'runtime:overlay')).toBe(`${RUNTIME} -Scenario overlay -ForceRendererReuse`);
     expect(command(plan, 'runtime:ui:overlay')).toBe(`${RUNTIME} -Scenario ui -UiCase overlay`);
     expect(plan.unmapped).toEqual([]);
+    expect(plan.areas).toEqual(['overlay']);
   });
 
   it('runs native tests, both chains and the lock check, but no Vitest file, for a native plugin source', () => {
     const plan = planChecks({changed: ['native/telemetry-plugin/src/v1-transport.cpp']});
     expect(ids(plan)).toEqual(['typecheck', 'native:configure', 'build', 'ctest:client', 'native:build', 'native:test', 'cap0-chain', 'v1-chain', 'plugin-lock']);
     expect(plan.steps.find(step => step.id === 'native:test')?.needs).toEqual(['native:build']);
+    expect(plan.areas).toEqual(['native-plugin']);
   });
 
   it('treats the shared protocol fixtures as inputs of the native, simulator and importing tests', () => {

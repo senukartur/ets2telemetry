@@ -51,7 +51,7 @@ const RUNTIME_OBSERVATIONS = [
   [/^scripts\/ci\/now-playing-/, ['now-playing']], [/^scripts\/ci\/hard-mode-/, ['hard-mode']], [/^scripts\/ci\/(?:lifecycle-|exit-)/, ['lifecycle']],
   [/^scripts\/ci\/refusal-/, ['refusal']], [/^scripts\/ci\/plugin-fixture/, ['plugin']]];
 /** Desktop and package sources by the scenarios that show their behavior; a desktop file without a rule gets scaffold and the shell. */
-const RUNTIME_SOURCES = [
+export const RUNTIME_SOURCES = [
   [/overlay/, ['overlay', 'ui:overlay']], [/journal|trip|history|export/, ['journal', 'ui:journal']],
   [/recording|durable-sink|storage-worker|^packages\/storage\//, ['recording', 'refusal']], [/now-playing|media-session/, ['now-playing']],
   [/hard-mode/, ['hard-mode']], [/plugin-setup|plugin-/, ['plugin']], [/settings|-card\.tsx$|\/i18n\//, ['ui:settings']],
@@ -62,8 +62,43 @@ const MEDIA_HOST_TEST = 'tests/host/media-session-reader.test.ts';
 /** Test entry points whose subject the import graph cannot see (a native executable). */
 const EXTRA_TESTS = [[MEDIA_READER, [MEDIA_HOST_TEST]]];
 
-const matches = (file, patterns) => patterns.some(pattern => pattern.test(file));
-const sorted = values => [...new Set(values)].sort();
+/**
+ * Product areas of the area × layer test matrix (docs/regression-registry.md#area--layer-matrix), in matching order: the
+ * first area with a pattern that matches a repository path owns it. scripts/test-matrix.mjs assigns a test file to the
+ * area that owns most of the files it imports, a runtime scenario to the area that owns most of the sources that
+ * RUNTIME_SOURCES selects it for, and a CTest case by its name (`ctest`).
+ */
+export const TEST_AREAS = [
+  {id: 'hard-mode', label: 'Hard Mode', paths: [/hard-mode/]},
+  {id: 'now-playing', label: 'Now playing', paths: [...MEDIA_READER, /now-playing|media-session/], ctest: /^media-session-reader-/},
+  {id: 'updater', label: 'Updater', paths: [/^apps\/desktop\/src\/updater\//, /update-(?:control|feed|manifest|key)/, /^scripts\/release\/(?!check-github-release)/]},
+  {id: 'setup', label: 'Setup, installer and uninstall', paths: [/plugin-setup|plugin-(?:bundle|installer|registry|action|cleanup)|steam-|game-folder|game-processes|fixed-program|atomic-json-file|vdf/,
+    /uninstall|squirrel|installer|installed-app-icon|legacy-shortcuts|app-uninstall|data-wipe|deferral/, /^tests\/(?:windows|vm)\//, /^forge\.config\.cjs$/, /^resources\//]},
+  {id: 'overlay', label: 'Overlay', paths: [/overlay|window-placement|latency-|game-window/, /^scripts\/diagnostics\//], ctest: /window/},
+  {id: 'journal', label: 'Journal and export', paths: [/journal|export|sample-chart/]},
+  {id: 'settings', label: 'Settings', paths: [/settings|unit-profiles|language|i18n|display-profile|gear-display|autostart/]},
+  {id: 'storage', label: 'Storage', paths: [/^packages\/storage\//, /storage|history-file|recording-(?:status|policy|runtime)|recovery-budget|retention/, /^tests\/fixtures\/storage\//]},
+  {id: 'trip', label: 'Trip domain', paths: [/^packages\/telemetry-core\/src\/trips\//, /trip|profile-observation|history-samples/]},
+  {id: 'native-client', label: 'Native client', paths: [...NATIVE_CLIENT.slice(0, 1), /native-pipe-client|native-game-discovery|broker-artifact|build-native-client/], ctest: /^native-pipe-client-/},
+  {id: 'native-plugin', label: 'Native plugin transport', paths: [/^native\/telemetry-plugin\//, /^scripts\/(?:configure|stage)-native-plugin\.mjs$/, /channel-identity|two-plugin/],
+    ctest: /^(?!protocol-v[01]-)/},
+  {id: 'protocol', label: 'Protocol v0/v1 and simulator', paths: [/^packages\/contracts\/src\/(?:protocol-|capture-cap0)/, /^tests\/fixtures\/(?:protocol|simulator|cap0)/, /^tools\//, /protocol|simulator|cap0/],
+    ctest: /^protocol-v[01]-/},
+  {id: 'ingestion', label: 'Ingestion and telemetry service', paths: [/^packages\/telemetry-core\//, /v1-|ingestion|telemetry-service|game-source|durable-sink|capture-|source-mode|service-|connection-diagnosis|shutdown|sample-buffer|event-loop-lag|live-(?:sources|subscriptions|state|freshness|v1|view)|app-health/,
+    /telemetry-core|normalize|derived|mandatory-break|consumption-hold/]},
+  {id: 'ci', label: 'CI, release scripts and test harness', paths: [/^scripts\//, /receipt|harness|test-resources|test-affected|test-matrix/,/^\.github\//, /^tests\/(?:package-integrity|watchdog)\//, /^tools\/lint\//, /^package(?:-lock)?\.json$/, /^vitest\..*config/]},
+  {id: 'shell', label: 'App shell, dashboard and lifecycle', paths: [/^apps\/desktop\//, /^packages\/contracts\//, /dashboard|speed-|tray|lifecycle|scaffold|diagnostic|main-boundaries|renderer|preload/]}
+];
+/** The area that owns a repository path, or null. */
+export function areaOf(file) { return TEST_AREAS.find(area => matches(file, area.paths))?.id ?? null; }
+/** The packaged runtime scenarios that show the behavior of a desktop or package source, as planChecks selects them. */
+export function runtimeScenariosOf(file) {
+  const hits = RUNTIME_SOURCES.filter(([pattern]) => pattern.test(file)).flatMap(([, names]) => names);
+  return hits.length > 0 ? sorted(hits) : (file.startsWith('apps/') ? ['scaffold', 'ui:shell'] : []);
+}
+
+function matches(file, patterns) { return patterns.some(pattern => pattern.test(file)); }
+function sorted(values) { return [...new Set(values)].sort(); }
 
 /**
  * Plans the local checks for `changed` (repository paths, POSIX separators, deleted paths included).
@@ -74,8 +109,8 @@ const sorted = values => [...new Set(values)].sort();
  */
 export function planChecks({changed, affectedTests = [], affectedEntries = [], references = {}, existing = changed, lintInstalled = true}) {
   const files = sorted(changed);
-  if (files.length === 0) return {kind: 'empty', steps: [], unmapped: [], ciOnly: CI_ONLY};
-  if (files.every(file => DOCUMENTATION.test(file))) return {kind: 'documentation', steps: [], unmapped: [], ciOnly: CI_ONLY};
+  if (files.length === 0) return {kind: 'empty', steps: [], unmapped: [], areas: [], ciOnly: CI_ONLY};
+  if (files.every(file => DOCUMENTATION.test(file))) return {kind: 'documentation', steps: [], unmapped: [], areas: [], ciOnly: CI_ONLY};
   const code = files.filter(file => !DOCUMENTATION.test(file));
   const present = new Set(existing);
   const steps = [];
@@ -127,8 +162,7 @@ export function planChecks({changed, affectedTests = [], affectedEntries = [], r
   for (const [pattern, names] of RUNTIME_OBSERVATIONS) if (take([pattern]).length > 0) names.forEach(name => scenarios.add(name));
   for (const file of code.filter(file => /^(?:apps\/desktop\/src|packages\/[^/]+\/src)\//.test(file))) {
     mapped.add(file);
-    const hits = RUNTIME_SOURCES.filter(([pattern]) => pattern.test(file)).flatMap(([, names]) => names);
-    (hits.length > 0 ? hits : (file.startsWith('apps/') ? ['scaffold', 'ui:shell'] : [])).forEach(name => scenarios.add(name));
+    runtimeScenariosOf(file).forEach(name => scenarios.add(name));
   }
   if (media) scenarios.add('now-playing');
   const runtime = ALL_SCENARIOS.filter(name => scenarios.has(name));
@@ -158,5 +192,5 @@ export function planChecks({changed, affectedTests = [], affectedEntries = [], r
         'changed desktop, package or runtime driver files', ['inspect:package']);
     }
   }
-  return {kind: 'code', steps, unmapped: code.filter(file => !mapped.has(file) && !POWERSHELL.test(file)), ciOnly: CI_ONLY};
+  return {kind: 'code', steps, unmapped: code.filter(file => !mapped.has(file) && !POWERSHELL.test(file)), areas: sorted(code.map(areaOf).filter(Boolean)), ciOnly: CI_ONLY};
 }
