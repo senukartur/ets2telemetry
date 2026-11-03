@@ -672,12 +672,15 @@ export async function runUiSmoke({application, dashboard, overlay, source, sourc
   // ET-067: Playwright drives the pointer through the renderer, but the dashboard is a real window, so the desktop's own
   // cursor still reaches it, and Windows moves it there whenever a window changes under a resting cursor. One such move
   // between a hover and Radix's 150 ms delayed open leaves the hint closed. Click-through for OS input only, so every
-  // pointer event the page sees is the driver's; the overlay keeps its own state.
-  record.osPointerIsolated = await application.evaluate(({BrowserWindow}) => {
+  // pointer event the page sees is the driver's; the overlay keeps its own state. Electron cannot read the setting back,
+  // so the flag only records the call; the hover check under the desktop cursor below shows its effect.
+  const dashboardId = await application.evaluate(({BrowserWindow}) => {
     const window = BrowserWindow.getAllWindows().find(candidate => !candidate.webContents.getURL().endsWith('?view=overlay'));
+    if (!window) throw new Error('UI_DASHBOARD_WINDOW_MISSING');
     window.setIgnoreMouseEvents(true);
-    return true;
+    return window.id;
   });
+  record.flags.osPointerIsolated = true;
   // The source selector remains a working diagnostic control, not an invented reference-screen toolbar.
   if (source) await waitState(dashboard, 'connected');
   for (const language of ['en', 'ru']) {
@@ -1143,23 +1146,36 @@ export async function runUiSmoke({application, dashboard, overlay, source, sourc
   await dashboard.evaluate(recordPointer);
   // ET-067 regression: the hover runs with the resting desktop cursor over the dashboard's content and the window moved
   // under it right after, which makes Windows deliver a move at the cursor. Without osPointerIsolated that move leaves
-  // the trigger and the hint stays closed on every host; the window returns to its place afterwards.
-  const place = await application.evaluate(({BrowserWindow, screen}) => {
-    const window = BrowserWindow.getAllWindows().find(candidate => !candidate.webContents.getURL().endsWith('?view=overlay'));
-    const before = window.getPosition(), cursor = screen.getCursorScreenPoint();
+  // the trigger and the hint stays closed on every host. The check fails closed unless the moved window really holds the
+  // cursor in its content (the cursor is always on a display, so that point is on screen), and the window gets its bounds
+  // back, also when the hover fails. Under fractional display scaling Windows may round the outer size by a pixel on a
+  // move; the screenshots use Playwright's viewport, so the position and that viewport must come back exactly.
+  // `hoverPlacement` keeps the geometry.
+  const viewport = () => dashboard.evaluate(() => ({width: globalThis.innerWidth, height: globalThis.innerHeight})), viewportBefore = await viewport();
+  const placement = record.hoverPlacement = await application.evaluate(({BrowserWindow, screen}, id) => {
+    const window = BrowserWindow.fromId(id), bounds = window.getBounds(), cursor = screen.getCursorScreenPoint();
     window.setPosition(cursor.x - 700, cursor.y - 300);
-    return before;
-  });
-  await indicator.hover();
-  await application.evaluate(({BrowserWindow}) => {
-    const window = BrowserWindow.getAllWindows().find(candidate => !candidate.webContents.getURL().endsWith('?view=overlay')), [x, y] = window.getPosition();
-    window.setPosition(x + 1, y);
-  });
-  await hint.waitFor({state: 'visible'}).catch(async error => {
-    record.recordingHintPointer = await dashboard.evaluate(() => globalThis.__et067PointerLog).catch(() => null);
-    throw error;
-  });
-  await application.evaluate(({BrowserWindow}, [x, y]) => {BrowserWindow.getAllWindows().find(candidate => !candidate.webContents.getURL().endsWith('?view=overlay')).setPosition(x, y);}, place);
+    const moved = window.getBounds(), content = window.getContentBounds();
+    const underCursor = window.isVisible() && !window.isMinimized() && moved.x === cursor.x - 700 && moved.y === cursor.y - 300 &&
+      cursor.x >= content.x && cursor.x < content.x + content.width && cursor.y >= content.y && cursor.y < content.y + content.height;
+    return {bounds, cursor, moved, content, underCursor};
+  }, dashboardId);
+  let restored;
+  try {
+    assert.equal(placement.underCursor, true, 'UI_HOVER_CURSOR_OFF_DASHBOARD');
+    await indicator.hover();
+    await application.evaluate(({BrowserWindow}, id) => {const window = BrowserWindow.fromId(id), [x, y] = window.getPosition(); window.setPosition(x + 1, y);}, dashboardId);
+    await hint.waitFor({state: 'visible'}).catch(async error => {
+      record.recordingHintPointer = await dashboard.evaluate(() => globalThis.__et067PointerLog).catch(() => null);
+      throw error;
+    });
+  } finally {
+    restored = await application.evaluate(({BrowserWindow}, [id, bounds]) => {const window = BrowserWindow.fromId(id); window.setBounds(bounds); return window.getBounds();},
+      [dashboardId, placement.bounds]).catch(() => null);
+  }
+  placement.restored = restored;
+  assert.deepEqual([restored?.x, restored?.y], [placement.bounds.x, placement.bounds.y], 'UI_DASHBOARD_POSITION_NOT_RESTORED');
+  assert.deepEqual(await viewport(), viewportBefore, 'UI_DASHBOARD_VIEWPORT_CHANGED');
   record.flags.hoverUnderDesktopCursor = true;
   const [hovered, headline] = await hintHeadline(); assert.ok(headline && headline !== '—'); assert.equal(hovered, headline);
   await dashboard.keyboard.press('Escape'); await hint.waitFor({state: 'hidden'}); await dashboard.mouse.move(0, 0);
