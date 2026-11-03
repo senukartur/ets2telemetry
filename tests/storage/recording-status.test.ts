@@ -384,7 +384,13 @@ describe('ET-015c recording status through the production wiring', () => {
     // The hold is released only once the live state passed 8,000 ms and the status reported the pause, so a live state
     // or status that waited for the held commit would end at the hang guard instead.
     const released = Promise.all([held, livePast, pausedStatus]).then(() => { timeline.push('release'); control.postMessage({type: 'release'}); });
-    const s = serviceRuntime('t', traced.handle, tracedConnect(timeline), timeline, {onState: state => {
+    // simulation.started (eventSeq 6, 9,000 ms) and everything after it reach the ingestion only after the release. The
+    // publisher computes the status one macrotask after a change (G5): with scale 0 a slow host can read the paused frames
+    // and eventSeq 6 in one macrotask, and then correctly sends no `paused` (hosted run 41698082853). Holding 6 back keeps
+    // the source paused until the status reported it, on every host.
+    const failures: unknown[] = [], gate = {beforeEventSeq: '6', until: () => released};
+    const gatedConnect = {connect: (endpoint: string) => new ClientSocket(net.connect(endpoint), gate, error => failures.push(error)) as unknown as TelemetrySocket};
+    const s = serviceRuntime('t', traced.handle, gatedConnect, timeline, {onState: state => {
       const capture = state.observation?.capture.monotonicNs;
       if (capture === undefined || BigInt(capture) < LIVE_PAST_NS || timeline.includes('live 8000')) return;
       timeline.push('live 8000'); live();
@@ -394,6 +400,7 @@ describe('ET-015c recording status through the production wiring', () => {
       expect(await held).toEqual([{type: 'held', eventSeq: '5'}]);
       await guarded(released, 'the live state and the paused status while the commit of eventSeq 5 is held', HANG_GUARD_MS);
       await guarded(server.done, 'the reactive server run', HANG_GUARD_MS);
+      expect(failures).toEqual([]);
       await until(() => timeline.includes('done commitEvent 8'), 'the last commit', HANG_GUARD_MS);
       // No commit after 4 completed before the release; the commit of 5 completed only after it.
       const at = (line: string) => timeline.indexOf(line);
