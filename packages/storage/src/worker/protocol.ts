@@ -8,7 +8,7 @@ import {
   validateJournalTripDetail, validateJournalTripPage
 } from '../../../contracts/src/journal';
 import type {
-  AttachInput, AttachResult, CommitResult, CompletenessInterval, CompletenessOptions, EventRow, JournalAnswerError, JournalEventPage, JournalIntervalPage, JournalPageQuery, JournalTripDetail, JournalTripPage, JournalTripsQuery,
+  AttachInput, AttachResult, CommitResult, CompletenessInterval, CompletenessOptions, DeleteTripOptions, EventRow, JournalAnswerError, JournalEventPage, JournalIntervalPage, JournalPageQuery, JournalTripDetail, JournalTripPage, JournalTripsQuery,
   OpenSummary, Purpose, Result, SampleAppendOptions, SampleAppendResult, SampleInput, SampleRecord, SessionRecord, StorageError, StorageInfo, TripEffect, TripList, TripPage,
   TripRecord, Uint64
 } from '../api';
@@ -38,6 +38,7 @@ export interface StorageCommands {
   getEvent: {args: {pluginSessionId: string; eventSeq: Uint64}; value: EventRow | undefined};
   listEvents: {args: {pluginSessionId: string; page?: {afterEventSeq?: Uint64; limit?: number}}; value: EventRow[]};
   getTrip: {args: {tripUuid: string}; value: TripRecord | undefined};
+  deleteTrip: {args: {tripUuid: string; options?: DeleteTripOptions}; value: undefined};
   listTrips: {args: {page?: TripPage}; value: TripList};
   listSamples: {args: {scope: {tripUuid: string} | {pluginSessionId: string}; page?: {afterId?: string; limit?: number; includeExcluded?: boolean}}; value: SampleRecord[]};
   storageInfo: {args: Record<never, never>; value: StorageInfo};
@@ -63,7 +64,7 @@ export type ParsedResponse = StorageResponse | {type: 'storage.response'; id: nu
 
 export const COMMAND_NAMES: readonly CommandName[] = Object.freeze([
   'observeHardMode', 'open', 'upsertSession', 'commitEvent', 'commitGap', 'appendSamples', 'recordCompleteness', 'openAttachedTrip', 'committedThrough', 'getSession', 'getEvent',
-  'listEvents', 'getTrip', 'listTrips', 'listSamples', 'storageInfo', 'journalTrips', 'journalTrip', 'journalEvents', 'journalIntervals', 'close'
+  'listEvents', 'getTrip', 'deleteTrip', 'listTrips', 'listSamples', 'storageInfo', 'journalTrips', 'journalTrip', 'journalEvents', 'journalIntervals', 'close'
 ] as const);
 
 const isRecord = (value: unknown): value is Record<string, unknown> => typeof value === 'object' && value !== null && !Array.isArray(value);
@@ -147,6 +148,7 @@ export function parseRequest(message: unknown): {ok: true; id: number; command: 
     || !(isText(command.scope.tripUuid) || isText(command.scope.pluginSessionId))
     || !optionalArgs(command.page, {afterId: isText, limit: field => typeof field === 'number', includeExcluded: field => typeof field === 'boolean'}))) return {ok: false, id};
   if (name === 'listTrips' && !optionalArgs(command.page, TRIP_PAGE_ARGS)) return {ok: false, id};
+  if (name === 'deleteTrip' && (!isJournalUuid(command.tripUuid) || !optionalArgs(command.options, {rejectIfOpen: field => typeof field === 'boolean'}))) return {ok: false, id};
   if (name === 'observeHardMode' && (Object.keys(command).sort().join(',') !== 'fresh,game,name,observation' || !['ets2', 'ats'].includes(command.game as string) || !isHardModeObservation(command.observation) || typeof command.fresh !== 'boolean')) return {ok: false, id};
   if (name === 'recordCompleteness' && !optionalArgs(command.options, COMPLETENESS_OPTIONS_ARGS)) return {ok: false, id};
   if (name === 'appendSamples' && !optionalArgs(command.options, SAMPLE_OPTIONS_ARGS)) return {ok: false, id};
@@ -178,7 +180,7 @@ function validValue(command: StorageCommand, value: unknown): boolean {
   case 'openAttachedTrip': return isRecord(value) && Object.keys(value).length === 1 && (value.status === 'committed' || value.status === 'duplicate');
   case 'open': return isRecord(value) && typeof value.schemaVersion === 'number' && typeof value.created === 'boolean' && isText(value.databaseUuid) && isText(value.purpose);
   case 'upsertSession': return isRecord(value) && typeof value.created === 'boolean' && isUint64(value.committedThroughEventSeq);
-  case 'close': case 'recordCompleteness': case 'observeHardMode': return value === undefined;
+  case 'close': case 'recordCompleteness': case 'observeHardMode': case 'deleteTrip': return value === undefined;
   // ET-016: a journal page reaches main and the renderer, so its value is checked exactly; parseResponse turns a
   // mismatch into a per-command error rather than a client failure.
   case 'journalTrips': case 'journalTrip': case 'journalEvents': case 'journalIntervals':

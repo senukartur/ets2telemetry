@@ -9,7 +9,7 @@ import {createHash} from 'node:crypto';
 import type Database from 'better-sqlite3';
 import {V1_MAX_MINOR, validateServerMessage, type Available, type EventRecord, type GapData, type ServerMessage, type SourceIdentity} from '../../../contracts/src/protocol-v1';
 import {
-  MAX_EFFECTS, MAX_SAMPLE_BATCH, type AttachInput, type AttachResult, type CommitOptions, type CommitResult, type CompletenessInterval, type CompletenessOptions, type EventReference, type SampleAppendOptions,
+  MAX_EFFECTS, MAX_SAMPLE_BATCH, type AttachInput, type AttachResult, type CommitOptions, type CommitResult, type CompletenessInterval, type CompletenessOptions, type DeleteTripOptions, type EventReference, type SampleAppendOptions,
   type SampleAppendResult, type SampleInput, type TripEffect, type Uint64
 } from '../api';
 import {
@@ -640,6 +640,87 @@ export function recordCompleteness(conn: StorageConnection, pluginSessionId: str
   if (typeof options !== 'object' || options === null || Array.isArray(options) || (options.ifAbsent !== undefined && typeof options.ifAbsent !== 'boolean')) fail('INVALID_INPUT');
   const ifAbsent = options.ifAbsent === true;
   transact(conn, db => { const session = sessionByUuid(db, pluginSessionId); addInterval({db, session, game: session.game, now: conn.now()}, interval, ifAbsent); if (logicalEnabled(db) && interval.tripUuid) revise(db,logicalFor(db,tripRow({db,session,game:session.game,now:conn.now()},interval.tripUuid).id)); });
+}
+
+/**
+ * Deletes a recorded trip (and its whole logical group if continued) and cleans up
+ * its associated child records atomically (ET-065).
+ * Cascading cleanup order:
+ * 1. Checks trip existence (UNKNOWN_TRIP if missing).
+ * 2. Checks schema v4 logical group membership to find all member trips.
+ * 3. Active recording guard: if `options.rejectIfOpen` and ANY member trip has `outcome === 'open'`, aborts with STORAGE_BUSY.
+ * 4. Schema v4 logical trip tables cleanup (if logicalEnabled(db)):
+ *    - logical_trips progress_head
+ *    - logical_revisions progress_head and rows
+ *    - logical_progress prefix_ref / start_ref and rows
+ *    - logical_memberships previous_logical_ref and rows
+ *    - logical_trips
+ * 5. Child records for all member trips:
+ *    - observation_closes
+ *    - samples
+ *    - completeness_intervals
+ *    - trip_trailers
+ *    - event_attributions (unlinked: trip_ref = NULL, attribution = 'ambiguous')
+ *    - trips records
+ * Immutable tables (events, database_info) are never updated or deleted.
+ */
+export function deleteTrip(conn: StorageConnection, tripUuid: string, options: DeleteTripOptions = {}): void {
+  if (!isUuid(tripUuid)) fail('INVALID_INPUT');
+  if (typeof options !== 'object' || options === null || Array.isArray(options) || (options.rejectIfOpen !== undefined && typeof options.rejectIfOpen !== 'boolean')) fail('INVALID_INPUT');
+  transact(conn, db => {
+    const target = statement(db, 'SELECT id, outcome FROM trips WHERE trip_uuid = ?').get(tripUuid) as {id: bigint; outcome: string} | undefined;
+    if (!target) fail('UNKNOWN_TRIP');
+
+    const hasV4 = statement(db, "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'logical_trips'").get() !== undefined;
+    let memberRows: {id: bigint; outcome: string}[] = [target];
+    let logicalIds: bigint[] = [];
+
+    if (hasV4) {
+      const membership = statement(db, 'SELECT logical_ref FROM logical_memberships WHERE trip_ref = ?').get(target.id) as {logical_ref: bigint} | undefined;
+      if (membership) {
+        const logicalId = membership.logical_ref;
+        memberRows = statement(db, 'SELECT t.id, t.outcome FROM logical_memberships m JOIN trips t ON t.id = m.trip_ref WHERE m.logical_ref = ?').all(logicalId) as {id: bigint; outcome: string}[];
+        if (memberRows.length === 0) memberRows = [target];
+        const allLogicalRows = statement(db, 'SELECT id FROM logical_trips WHERE id = ? OR latest_trip_ref = ? OR id IN (SELECT trip_ref FROM logical_memberships WHERE logical_ref = ?)').all(logicalId, logicalId, logicalId) as {id: bigint}[];
+        const set = new Set<bigint>([logicalId]);
+        for (const r of allLogicalRows) set.add(r.id);
+        logicalIds = Array.from(set);
+      }
+    }
+
+    const rejectIfOpen = options.rejectIfOpen ?? true;
+    if (rejectIfOpen && memberRows.some(m => m.outcome === 'open')) {
+      fail('STORAGE_BUSY');
+    }
+
+    if (hasV4 && logicalIds.length > 0) {
+      for (const lId of logicalIds) {
+        statement(db, 'UPDATE logical_trips SET progress_head = NULL WHERE id = ?').run(lId);
+        statement(db, 'UPDATE logical_revisions SET progress_head = NULL WHERE logical_ref = ?').run(lId);
+        statement(db, 'UPDATE logical_progress SET prefix_ref = NULL, start_ref = NULL WHERE logical_ref = ?').run(lId);
+        statement(db, 'DELETE FROM logical_progress WHERE logical_ref = ?').run(lId);
+        statement(db, 'DELETE FROM logical_revisions WHERE logical_ref = ?').run(lId);
+        statement(db, 'UPDATE logical_memberships SET previous_logical_ref = NULL WHERE previous_logical_ref = ?').run(lId);
+        statement(db, 'DELETE FROM logical_memberships WHERE logical_ref = ?').run(lId);
+        statement(db, 'DELETE FROM logical_trips WHERE id = ?').run(lId);
+      }
+      statement(db, 'DELETE FROM logical_projection_states WHERE id NOT IN (SELECT state_ref FROM logical_revisions)').run();
+    }
+
+    const memberIds = memberRows.map(m => m.id);
+    for (const mId of memberIds) {
+      if (hasV4) {
+        statement(db, 'DELETE FROM observation_closes WHERE trip_ref = ?').run(mId);
+        statement(db, 'DELETE FROM logical_memberships WHERE trip_ref = ?').run(mId);
+        statement(db, 'DELETE FROM logical_trips WHERE latest_trip_ref = ? OR id = ?').run(mId, mId);
+      }
+      statement(db, 'DELETE FROM samples WHERE trip_ref = ?').run(mId);
+      statement(db, 'DELETE FROM completeness_intervals WHERE trip_ref = ?').run(mId);
+      statement(db, 'DELETE FROM trip_trailers WHERE trip_ref = ?').run(mId);
+      statement(db, "UPDATE event_attributions SET trip_ref = NULL, attribution = 'ambiguous' WHERE trip_ref = ?").run(mId);
+      statement(db, 'DELETE FROM trips WHERE id = ?').run(mId);
+    }
+  });
 }
 
 export function observeHardMode(conn: StorageConnection, game: 'ets2' | 'ats', observation: HardModeObservation, fresh = false): void {

@@ -49,7 +49,7 @@ import {failureCode, initialHealth, reduceHealth, sameHealth, type HealthEvent} 
 import {addLosses, parseRecordingHealth, recordingFacts, sameRecording, ZERO_LOSSES} from './recording-status';
 import {TrayPresenter, type TrayMenuItem} from './tray-model';
 import {JournalBroker} from './journal-broker';
-import {JOURNAL_CHANNELS, JOURNAL_EXPORT_CHANNEL, journalRequest, type JournalChannelKind} from './journal-contract';
+import {JOURNAL_CHANNELS, JOURNAL_DELETE_TRIP_CHANNEL, JOURNAL_EXPORT_CHANNEL, journalRequest, type JournalChannelKind} from './journal-contract';
 import {EXPORT_DIALOG_FILTERS, JournalExporter} from './journal-export-writer';
 import {isJournalUuid} from '../../../packages/contracts/src/journal';
 import {TRAY_ICON_REPRESENTATIONS, trayIconPng, type TrayTone} from './tray-icon';
@@ -1237,6 +1237,13 @@ function runApplication(profileError: unknown): void {
     if (!trusted(event)) throw new Error('Untrusted journal request');
     if (request.length !== 1 || !isJournalUuid(request[0])) throw new Error('Invalid journal request');
     return exporter.export(request[0]);
+  });
+  // ET-065: the seventh journal channel deletes one trip in staging builds, from the trusted dashboard main frame only.
+  ipcMain.handle(JOURNAL_DELETE_TRIP_CHANNEL, (event, ...request: unknown[]) => {
+    if (ACTIVE_CHANNEL !== 'staging') throw new Error('Trip deletion is only available in staging builds');
+    if (!trusted(event)) throw new Error('Untrusted journal request');
+    if (request.length !== 1 || !isJournalUuid(request[0])) throw new Error('Invalid journal request');
+    return journal.request({kind: 'deleteTrip', tripUuid: request[0]});
   });
   // ET-017 (P12, P16): five fixed-shape plugin setup channels, from the trusted dashboard main frame only (the overlay is
   // rejected). Exact argument counts, every argument checked again here, and refused once the exit has started. No reply

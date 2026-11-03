@@ -5,7 +5,7 @@ import type {HardModeObservation} from '../../contracts/src/hard-mode';
 // failures; error results carry fixed text and never a filesystem path. See docs/storage.md.
 import {rmSync} from 'node:fs';
 import type {
-  AttachInput, AttachResult, CommitOptions, CommitResult, CompletenessInterval, CompletenessOptions, EventRow, JournalEventPage, JournalIntervalPage, JournalPageQuery, JournalTripDetail, JournalTripPage,
+  AttachInput, AttachResult, CommitOptions, CommitResult, CompletenessInterval, CompletenessOptions, DeleteTripOptions, EventRow, JournalEventPage, JournalIntervalPage, JournalPageQuery, JournalTripDetail, JournalTripPage,
   JournalTripsQuery, OpenSummary, Result, SampleAppendOptions, SampleAppendResult, SampleInput, SampleRecord, SessionRecord, StorageInfo, TripEffect, TripList, TripPage, TripRecord, Uint64
 } from './api';
 import {classifyError} from './errors';
@@ -48,6 +48,7 @@ export class Storage {
   listEvents(pluginSessionId: string, page?: {afterEventSeq?: Uint64; limit?: number}): Result<EventRow[]> { return attempt(() => reads.listEvents(this.connection, pluginSessionId, page)); }
   getTrip(tripUuid: string): Result<TripRecord | undefined> { return attempt(() => reads.getTrip(this.connection, tripUuid)); }
   listTrips(page?: TripPage): Result<TripList> { return attempt(() => reads.listTrips(this.connection, page)); }
+  deleteTrip(tripUuid: string, options?: DeleteTripOptions): Result<void> { return attempt(() => writes.deleteTrip(this.connection, tripUuid, options)); }
   listSamples(scope: {tripUuid: string} | {pluginSessionId: string}, page?: {afterId?: string; limit?: number; includeExcluded?: boolean}): Result<SampleRecord[]> { return attempt(() => reads.listSamples(this.connection, scope, page)); }
   /** Journal reads (ET-016 PR-2, J5): bounded pages for the trip journal and its export; see sqlite/journal.ts. */
   journalTrips(query?: JournalTripsQuery): Result<JournalTripPage> { return attempt(() => journal.journalTrips(this.connection, query)); }

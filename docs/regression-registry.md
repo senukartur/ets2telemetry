@@ -109,6 +109,7 @@ Columns:
 | `tests/unit/journal-export-writer.test.ts` | Node unit (Vitest) | REG-014 | R, F | ET-016a (#101) | PR (tests job, `npm test`) | security |
 | `tests/unit/journal-export.test.ts` | Node unit (Vitest) | REG-011, REG-014 | R, F | ET-016a (#101) | PR (tests job, `npm test`) | gap, trip completeness, security |
 | `tests/unit/journal-preload.test.ts` | Node unit (Vitest) | REG-011, REG-012, REG-014 | R, T | ET-016a (#97) | PR (tests job, `npm test`) | security |
+| `tests/unit/journal-delete.test.ts` | Node unit (Vitest) | REG-011, REG-012, REG-014 | F, T | ET-065 | PR (tests job, `npm test`) | security, channel restriction, contract arity |
 | `tests/unit/journal-service.test.ts` | Node unit (Vitest) | REG-011, REG-014 | R, F | ET-016a (#97) | PR (tests job, `npm test`) | — |
 | `tests/unit/journal-view.test.ts` | Node unit (Vitest) | REG-009, REG-014, REG-017 | R, F | ET-016a (#98); ET-059 | PR (tests job, `npm test`) | gap, trip completeness, mode evidence |
 | `tests/unit/info-hint-rendering.test.ts` | Node unit (Vitest) | REG-009 | R | ET-057 (#225) | PR (tests job, `npm test`) | — |
@@ -242,6 +243,7 @@ Columns:
 | `tests/storage/shutdown-stalls.test.ts` | Storage (Vitest under Electron) | REG-006, REG-011, REG-012 | F, T, V (et-019) | ET-019 (PR-4); ET-038; ET-011 (#167) | PR (tests job, `npm run test:storage`) | ACK, dedup, gap, trip completeness |
 | `tests/storage/trip-accounting-effects.test.ts` | Storage (Vitest under Electron) | REG-001, REG-002, REG-003, REG-008 | R | ET-014 (#72) | PR (tests job, `npm run test:storage`) | trip completeness, loaded-job coverage and paused reconnect persistence |
 | `tests/storage/trip-effects.test.ts` | Storage (Vitest under Electron) | REG-001, REG-003, REG-004, REG-005, REG-006, REG-008, REG-013 | R, F | ET-014 (#71) | PR (tests job, `npm run test:storage`) | dedup, trip completeness |
+| `tests/storage/trip-deletion.test.ts` | Storage (Vitest under Electron) | REG-005, REG-008, REG-013, REG-014 | F, T | ET-065 | PR (tests job, `npm run test:storage`) | regression, historical fixture, cascading deletion, schema constraints |
 | `tests/storage/trip-recorder-crash.test.ts` | Storage (Vitest under Electron) | REG-005, REG-006, REG-012 | R, F, T, V (et-019) | ET-015a (#77); ET-019 (PR-1) invariants, kill rows and seeded campaign | PR (tests job, `npm run test:storage`); Extended campaigns workflow (200 seeds) | ACK, dedup, gap, trip completeness |
 | `tests/storage/trip-recorder-faults.test.ts` | Storage (Vitest under Electron) | REG-007, REG-011 | R, F | ET-015a (#77) | PR (tests job, `npm run test:storage`) | ACK |
 | `tests/storage/trip-recorder.test.ts` | Storage (Vitest under Electron) | REG-001, REG-003, REG-004, REG-005, REG-006, REG-007, REG-009 | R, F | ET-015a (#77) | PR (tests job, `npm run test:storage`) | ACK, dedup, trip completeness |

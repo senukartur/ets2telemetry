@@ -121,6 +121,11 @@ export interface DesktopBridge {
    */
   exportJournalTrip(tripUuid: string): Promise<JournalExportResult>;
   /**
+   * ET-065: deletes one trip and cascades its child records in staging builds. Resolves `{ok: true, value: undefined}`
+   * or a fixed refusal code. Refused in production builds.
+   */
+  deleteJournalTrip(tripUuid: string): Promise<JournalCallResult<void>>;
+  /**
    * ET-017 (P13, P16): runs plugin setup again now and resolves with the plugin state after that run. Refused while the
    * application exits. In the disabled mode it changes nothing and resolves with the current state.
    */

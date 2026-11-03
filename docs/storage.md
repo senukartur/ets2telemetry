@@ -119,9 +119,10 @@ Journal list cursors fix the database, filters and revision watermark. Detail/ex
 
 ## Storage API
 
-[packages/storage/src/index.ts](../packages/storage/src/index.ts) is the in-process API; it loads native SQLite. [api.ts](../packages/storage/src/api.ts) holds the Node-safe types. Every method returns `{ok: true, value}` or `{ok: false, error: {code, retryable, message, sqliteCode?, cause?, backupFileName?}}`. The message is fixed text per code; an error never contains a filesystem path or a SQLite message. There is no delete command for history entities, and the MVP never deletes history automatically.
+[packages/storage/src/index.ts](../packages/storage/src/index.ts) is the in-process API; it loads native SQLite. [api.ts](../packages/storage/src/api.ts) holds the Node-safe types. Every method returns `{ok: true, value}` or `{ok: false, error: {code, retryable, message, sqliteCode?, cause?, backupFileName?}}`. The message is fixed text per code; an error never contains a filesystem path or a SQLite message. In production, there is no delete command for history entities, and the MVP never deletes history automatically. In staging builds (ET-065), `deleteTrip(tripUuid, options?)` removes a recorded trip and its continuation group from the database.
 
 | Command | Behavior |
+| `deleteTrip(tripUuid, options?)` | ET-065: staging-only trip deletion in one transaction. Cascades across all member trips in the logical group for `samples`, `completeness_intervals`, `trip_trailers`, `observation_closes`, and schema v4 logical tables (`logical_progress`, `logical_revisions`, `logical_memberships`, `logical_trips`, and unreferenced `logical_projection_states`). Re-attributes `event_attributions` to `trip_ref = NULL, attribution = 'ambiguous'`. Refuses with `STORAGE_BUSY` when `rejectIfOpen` is true (default) and any member trip has `outcome = 'open'`. |
 | --- | --- |
 | `openStorage(options)` | The durability sequence, then creation or migration |
 | `upsertSession({message})` | Stores the session from a validated welcome. Repeating it changes nothing; a changed identity, version or capability is `SESSION_CONFLICT`. Later game-mode changes arrive as `source.gameMode` events and are kept beside the welcome's evidence |

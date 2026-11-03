@@ -21,6 +21,7 @@ import {
 import {JOURNAL_COMPLETENESS_TEXT, JOURNAL_EXPORT_STRINGS, JOURNAL_GAME_TEXT, JOURNAL_LABEL_TEXT, JOURNAL_OUTCOME_TEXT, JOURNAL_STRINGS} from './strings';
 import {copyTable} from './screens/app-copy';
 import {InfoHint} from './info-hint';
+import {ACTIVE_CHANNEL} from './channel';
 const JournalLanguage = React.createContext<AppLanguage>('en');
 const baseCopy = {JOURNAL_COMPLETENESS_TEXT, JOURNAL_EXPORT_STRINGS, JOURNAL_GAME_TEXT, JOURNAL_LABEL_TEXT, JOURNAL_OUTCOME_TEXT, JOURNAL_STRINGS};
 const journalCopy = {en: baseCopy, ru: copyTable(baseCopy, 'ru')};
@@ -263,7 +264,62 @@ function ExportTrip({tripUuid}: {tripUuid: string}) {
   </div>;
 }
 
-function TripDetail({trip, options, onDatabase, onBack}: {trip: Selected; options: JournalTextOptions; onDatabase: (database: JournalDatabase) => void; onBack: () => void}) {
+/**
+ * Staging-only trip deletion action (ET-065). Completely hidden in production builds.
+ * Displays a destructive confirmation warning before executing deletion.
+ * On success, triggers `onDeleted` to return to the list and refresh it.
+ */
+function DeleteTrip({tripUuid, onDeleted}: {tripUuid: string; onDeleted?: () => void}) {
+  const {JOURNAL_STRINGS} = useJournalCopy();
+  const language = React.useContext(JournalLanguage);
+  const [confirming, setConfirming] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const mounted = useRef(true);
+  useEffect(() => { mounted.current = true; return () => { mounted.current = false; }; }, []);
+
+  if (ACTIVE_CHANNEL !== 'staging') return null;
+
+  const handleDelete = () => {
+    setBusy(true);
+    setError(null);
+    void window.desktop.deleteJournalTrip(tripUuid).then(
+      result => {
+        if (!mounted.current) return;
+        if (result.ok) {
+          onDeleted?.();
+        } else {
+          setBusy(false);
+          setError(journalErrorText(result, language));
+        }
+      },
+      () => {
+        if (!mounted.current) return;
+        setBusy(false);
+        setError(JOURNAL_STRINGS.requestRefused);
+      }
+    );
+  };
+
+  if (!confirming) {
+    return <Button size="sm" variant="outline" className="text-destructive hover:text-destructive" onClick={() => setConfirming(true)} data-testid="journal-delete-button">
+      {JOURNAL_STRINGS.deleteTripButton}
+    </Button>;
+  }
+
+  return <div className="flex flex-wrap items-center gap-2 p-2 border border-destructive/50 rounded-md bg-destructive/10" data-testid="journal-delete-confirmation">
+    <span className="text-xs font-medium text-destructive">{JOURNAL_STRINGS.deleteTripWarning}</span>
+    <Button size="sm" variant="destructive" disabled={busy} onClick={handleDelete} data-testid="journal-delete-confirm-button">
+      {busy ? JOURNAL_STRINGS.deletingTrip : JOURNAL_STRINGS.deleteTripConfirm}
+    </Button>
+    <Button size="sm" variant="outline" disabled={busy} onClick={() => { setConfirming(false); setError(null); }} data-testid="journal-delete-cancel-button">
+      {JOURNAL_STRINGS.deleteTripCancel}
+    </Button>
+    {error ? <span role="status" className="text-xs text-destructive" data-testid="journal-delete-error">{error}</span> : null}
+  </div>;
+}
+
+function TripDetail({trip, options, onDatabase, onBack, onDeleted}: {trip: Selected; options: JournalTextOptions; onDatabase: (database: JournalDatabase) => void; onBack: () => void; onDeleted?: () => void}) {
   const [rawOpen, setRawOpen] = useState(false);
   const {JOURNAL_STRINGS} = useJournalCopy();
   const read = useCallback<Read<JournalTripDetail & {nextCursor: null}>>(
@@ -275,7 +331,8 @@ function TripDetail({trip, options, onDatabase, onBack}: {trip: Selected; option
   return <div className="space-y-3" data-testid="journal-detail" data-trip={trip.tripUuid}>
     <header className="yu-trip-header" data-testid="trip.header">
       <div className="yu-trip-actions"><Button size="sm" variant="ghost" onClick={onBack} data-testid="journal-back"><ArrowLeft className="size-4" aria-hidden="true" />{JOURNAL_STRINGS.back}</Button>
-        <Button size="sm" variant="outline" disabled={paged.loaded.state === 'loading'} onClick={paged.refresh} data-testid="journal-summary-refresh">{JOURNAL_STRINGS.refresh}</Button></div>
+        <Button size="sm" variant="outline" disabled={paged.loaded.state === 'loading'} onClick={paged.refresh} data-testid="journal-summary-refresh">{JOURNAL_STRINGS.refresh}</Button>
+        <DeleteTrip tripUuid={trip.tripUuid} onDeleted={onDeleted} /></div>
       <Status loaded={paged.loaded} testId="journal-summary" />
       {text && detail ? <><div className="flex flex-wrap gap-2 items-center"><Badge variant={trip.game}>{trip.game.toUpperCase()}</Badge><ModeBadge mode={text.mode} testId="journal-detail-mode" /><Badge variant={detail.trip.outcome === 'delivered' ? 'ok' : detail.trip.outcome === 'cancelled' ? 'error' : 'neutral'} data-testid="journal-detail-outcome">{text.outcome}</Badge>
         {completenessBadge(text.completeness, 'journal-detail-completeness')}{detail.trip.isHardMode ? <HardModeBadge language={language} /> : null}</div>
@@ -327,13 +384,18 @@ export function Journal({units, recording, language}: {units: UnitProfiles | und
   const [database, setDatabase] = useState<JournalDatabase>();
   const [filters, setFilters] = useState<Filters>({});
   const [selected, setSelected] = useState<Selected | null>(null);
+  const [listVersion, setListVersion] = useState(0);
+  const handleDeleted = useCallback(() => {
+    setSelected(null);
+    setListVersion(v => v + 1);
+  }, []);
   const options = useMemo<JournalTextOptions>(() => ({...(units ? {units} : {}), ...(language ? {language} : {})}), [units, language]);
   const banner = journalBannerText(database, language);
   const filterKey = `${filters.game ?? ''}|${filters.outcome ?? ''}|${filters.completeness ?? ''}`;
   return <JournalLanguage.Provider value={language ?? 'en'}><Card size="sm" data-testid="journal"><CardHeader hidden={selected !== null}><CardTitle><h2>{JOURNAL_STRINGS.title}</h2></CardTitle></CardHeader>
     <CardContent className="space-y-3">
       {banner ? <Alert variant="destructive"><AlertDescription data-testid="journal-banner">{banner}</AlertDescription></Alert> : null}
-      {selected ? <TripDetail key={selected.tripUuid} trip={selected} options={options} onDatabase={setDatabase} onBack={() => setSelected(null)} /> : null}
+      {selected ? <TripDetail key={selected.tripUuid} trip={selected} options={options} onDatabase={setDatabase} onBack={() => setSelected(null)} onDeleted={handleDeleted} /> : null}
       {/* The list stays mounted, hidden, while a trip is open, so Back returns to the same page without reading it again. */}
       <div className="space-y-3" hidden={selected !== null}>
         <div className="flex flex-wrap gap-3 yu-journal-filters">
@@ -345,7 +407,7 @@ export function Journal({units, recording, language}: {units: UnitProfiles | und
             testId="journal-filter-completeness" onChange={completeness => setFilters(current => ({...current, completeness}))} />
         </div>
         {/* A filter change starts a new list at its first page. */}
-        <TripList key={filterKey} filters={filters} options={options} recording={recording} onDatabase={setDatabase} onOpen={setSelected} />
+        <TripList key={`${filterKey}|${listVersion}`} filters={filters} options={options} recording={recording} onDatabase={setDatabase} onOpen={setSelected} />
       </div>
     </CardContent></Card></JournalLanguage.Provider>;
 }

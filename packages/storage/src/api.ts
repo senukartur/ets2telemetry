@@ -121,6 +121,9 @@ export interface TripList {trips: TripRecord[]; nextCursor: string | null}
  * intervals such as the restore-loss interval (R9).
  */
 export interface CompletenessOptions {ifAbsent?: boolean}
+/** Options of `deleteTrip` (ET-065). `rejectIfOpen`: fails with STORAGE_BUSY if the trip is currently open. */
+/** Options for deleting a trip (ET-065). When rejectIfOpen is true (the default), refuses with STORAGE_BUSY if any trip in the group has outcome = 'open'. */
+export interface DeleteTripOptions {readonly rejectIfOpen?: boolean;}
 export const MAX_EFFECTS = 16;
 export const MAX_SAMPLE_BATCH = 3_600;
 export const MAX_EVENT_PAGE = 500;
