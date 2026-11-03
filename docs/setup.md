@@ -235,6 +235,7 @@ The recovery changes include physical unpacked service/worker paths, the entire 
 Build and non-desktop checks (Node/npm on PATH):
 
 ```powershell
+npm run test:affected -- --plan # The local checks for the change against origin/main; drop --plan to run them (ET-066).
 npm run typecheck
 npm test
 ./tests/watchdog/run.ps1 -NodePath (Get-Command node).Source
