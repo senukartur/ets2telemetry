@@ -130,6 +130,30 @@ it('retains every runtime scenario, fixed required names, timeout ceilings and e
   expect(workflow.split('  windows-installer:')[1].split(/\n {2}[a-z-]+:\n/)[0]).toContain('\n    timeout-minutes: 55\n');
 });
 
+// ET-066: the runtime job runs on three matrix runners. Every smoke step belongs to exactly one shard, both modes of a
+// scenario share it, the event conditions of E1/E2 and the extended input are kept, and each shard uploads its own evidence.
+it('runs every runtime smoke step in exactly one shard of the runtime matrix', async () => {
+  const workflow = (await readFile('.github/workflows/windows-ci.yml', 'utf8')).replaceAll('\r\n', '\n');
+  const runtime = workflow.split('  windows-runtime:\n')[1].split('  windows-installer:\n')[0];
+  expect(runtime).toContain('    strategy:\n      fail-fast: false\n      matrix:\n');
+  expect(runtime).toContain('        shard: [scenarios, ui-1, ui-2]\n');
+  expect(runtime).toContain('name: windows-runtime-evidence-${{ github.run_id }}-${{ github.run_attempt }}-${{ matrix.shard }}\n');
+  const steps = runtime.split('\n      - name: ').slice(1).filter(step => /Invoke-(?:RuntimeSmoke|SessionEndSmoke|Extended)\.ps1/.test(step));
+  const expected = (step: string) => /-UiCase (?:shell|live|journal)\b/.test(step) ? 'ui-1' : /-UiCase (?:settings|overlay)\b/.test(step) ? 'ui-2' : 'scenarios';
+  const counts: Record<string, number> = {};
+  for (const step of steps) {
+    const condition = /\n {8}if: (.+)\n/.exec(step)?.[1] ?? '';
+    expect(condition.match(/matrix\.shard == '/g), step).toHaveLength(1);
+    expect(condition.startsWith(`matrix.shard == '${expected(step)}'`), step).toBe(true);
+    if (/-Mode development/.test(step)) expect(condition).toContain("&& github.event_name != 'pull_request'");
+    counts[expected(step)] = (counts[expected(step)] ?? 0) + 1;
+  }
+  // Development and packaged: 11 scenario steps each (the worker smoke, 9 scenarios, refusal) less the development
+  // session-end audit, which does not exist, plus the extended regressions; three and two UI shards per mode.
+  expect(counts).toEqual({scenarios: 10 + 11 + 1, 'ui-1': 6, 'ui-2': 4});
+  expect(steps.find(step => step.includes('Invoke-Extended.ps1'))).toContain("if: matrix.shard == 'scenarios' && (github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && inputs.extended))");
+});
+
 // One case per installer value and helper variant (ET-019, October 28, 2026): the variants used to share one case, which
 // timed out under load; each builds its own producer, so the split changes no scene or assertion.
 it.each([false, true].flatMap(installer => (['missing', 'renamed'] as const).map(variant => [installer, variant] as const)))(
