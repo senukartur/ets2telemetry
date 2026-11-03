@@ -159,7 +159,7 @@ const runtime = createRecordingRuntime({env: process.env, gameHistory: GAME_HIST
 const v1 = runtime.v1;
 // ET-016 (J2, J4): journal reads from main, through the database the runtime opened, one at a time and only while it is
 // open. Main sends {type: 'journal', id, query}; the answer is {type: 'journal', id, result} with a fixed J11 code on refusal.
-const journal = new JournalService({history: runtime.history, stopping: () => stopping, log, isRecordingActive: () => { const status = runtime.recordingStatus(); return status.state === 'recording' || status.state === 'paused' || ('trip' in status && status.trip?.phase === 'active'); }});
+const journal = new JournalService({history: runtime.history, stopping: () => stopping, log, isRecordingActive: () => { const status = runtime.recordingStatus(); return status.state === 'recording' || status.state === 'paused' || ('trip' in status && Boolean(status.trip)); }});
 /** A v1 failure never fails the v0 selection it follows. */
 function selectV1(selection: SourceSelection, broker: BrokerConfiguration | undefined): void {
   try {v1.configureBroker(v1BrokerConfiguration(broker)); v1.select(selection, v1FixtureEndpoint);}

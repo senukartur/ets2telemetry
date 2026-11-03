@@ -2477,6 +2477,24 @@ it('ends an export whose dialog is open at a fatal stop as interrupted, without 
   await expect(exportCall(trusted(), TRIP)).resolves.toEqual({ok: false, code: 'EXPORT_INTERRUPTED'});
   expect(journalSent()).toHaveLength(2);
 });
+// ET-065: the seventh journal channel deletes one trip in staging builds.
+const deleteCall = (event: unknown, ...request: unknown[]) => Promise.resolve().then(() => handlers.get('journal:delete-trip')!(event, ...request as [unknown]));
+it('rejects trip deletion requests from untrusted senders, frames and the overlay, and every invalid shape', async () => {
+  trayAvailable = true; await ready();
+  for (const event of [{sender: {}, senderFrame: contents.mainFrame}, {sender: contents, senderFrame: {}}, overlayTrusted()])
+    await expect(deleteCall(event, TRIP)).rejects.toThrow('Untrusted journal request');
+  for (const request of [[], [TRIP, null], [TRIP.toUpperCase()], ['not-a-uuid'], [{tripUuid: TRIP}]])
+    await expect(deleteCall(trusted(), ...request)).rejects.toThrow('Invalid journal request');
+  expect(journalSent()).toEqual([]);
+});
+it('routes a valid trip deletion request to the journal service and returns its reply', async () => {
+  await ready();
+  const deleting = deleteCall(trusted(), TRIP);
+  await settle();
+  expect(journalSent().at(-1)).toEqual({type: 'journal', id: 1, query: {kind: 'deleteTrip', tripUuid: TRIP}});
+  journalReply(1, {ok: true, value: undefined});
+  await expect(deleting).resolves.toEqual({ok: true, value: undefined});
+});
 // ET-017 PR-4 (P12, P13, P16): plugin setup in main. A fake orchestrator stands in for plugin-setup.ts, whose own tests
 // cover discovery, installs and timing; these cases cover main's part: the five fixed-shape channels from the trusted
 // dashboard main frame only, the folder dialog parented to the dashboard, main-owned shell calls, the AppState.plugins

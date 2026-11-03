@@ -30,7 +30,7 @@ export interface JournalServiceOptions {
   stopping: () => boolean;
   /** Fixed codes and facts only. */
   log: (event: string, detail?: unknown, facts?: DiagnosticFacts) => void;
-  /** True when game recording is active; defaults rejectIfOpen to true when deleting trips. */
+  /** True when game recording is active; trip deletions are refused with BUSY while active. */
   isRecordingActive?: () => boolean;
 }
 /** A journal reply on the parent port. */
@@ -90,6 +90,7 @@ export class JournalService {
         : {ok: true, value: {database: {purpose: database.purpose, schemaVersion: database.schemaVersion}, databaseUuid}};
     }
     if (this.#busy) return refusal('BUSY');
+    if (query.kind === 'deleteTrip' && this.options.isRecordingActive?.() === true) return refusal('BUSY');
     this.#busy = true;
     try {
       return this.#answer(await this.#read(client, database, query));
@@ -106,7 +107,7 @@ export class JournalService {
     case 'events': return client.journalEvents(query.tripUuid, query.page);
     case 'intervals': return client.journalIntervals(query.tripUuid, query.page);
     case 'deleteTrip': {
-      const rejectIfOpen = query.options?.rejectIfOpen ?? (this.options.isRecordingActive?.() === true);
+      const rejectIfOpen = query.options?.rejectIfOpen ?? true;
       return client.deleteTrip(query.tripUuid, {rejectIfOpen});
     }
     case 'samples': return (async () => {

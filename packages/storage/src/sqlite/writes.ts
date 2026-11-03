@@ -651,7 +651,7 @@ export function recordCompleteness(conn: StorageConnection, pluginSessionId: str
  *    - samples
  *    - completeness_intervals
  *    - trip_trailers
- *    - event_attributions (unlinked: trip_ref = NULL, attribution = 'free-driving')
+ *    - event_attributions (unlinked: trip_ref = NULL, attribution = 'ambiguous')
  *    - trips records
  * Immutable tables (events, database_info) are never updated or deleted.
  */
@@ -679,7 +679,8 @@ export function deleteTrip(conn: StorageConnection, tripUuid: string, options: D
       }
     }
 
-    if (options.rejectIfOpen && memberRows.some(m => m.outcome === 'open')) {
+    const rejectIfOpen = options.rejectIfOpen ?? true;
+    if (rejectIfOpen && memberRows.some(m => m.outcome === 'open')) {
       fail('STORAGE_BUSY');
     }
 
@@ -694,6 +695,7 @@ export function deleteTrip(conn: StorageConnection, tripUuid: string, options: D
         statement(db, 'DELETE FROM logical_memberships WHERE logical_ref = ?').run(lId);
         statement(db, 'DELETE FROM logical_trips WHERE id = ?').run(lId);
       }
+      statement(db, 'DELETE FROM logical_projection_states WHERE id NOT IN (SELECT state_ref FROM logical_revisions)').run();
     }
 
     const memberIds = memberRows.map(m => m.id);
@@ -706,7 +708,7 @@ export function deleteTrip(conn: StorageConnection, tripUuid: string, options: D
       statement(db, 'DELETE FROM samples WHERE trip_ref = ?').run(mId);
       statement(db, 'DELETE FROM completeness_intervals WHERE trip_ref = ?').run(mId);
       statement(db, 'DELETE FROM trip_trailers WHERE trip_ref = ?').run(mId);
-      statement(db, "UPDATE event_attributions SET trip_ref = NULL, attribution = 'free-driving' WHERE trip_ref = ?").run(mId);
+      statement(db, "UPDATE event_attributions SET trip_ref = NULL, attribution = 'ambiguous' WHERE trip_ref = ?").run(mId);
       statement(db, 'DELETE FROM trips WHERE id = ?').run(mId);
     }
   });

@@ -108,8 +108,8 @@ describe('ET-065 trip deletion', () => {
       const totalSamples = db.prepare('SELECT count(*) AS n FROM samples').get() as {n: number};
       expect(totalSamples.n).toBeGreaterThan(0);
 
-      // Event attributions for deleted trip are unlinked to free-driving
-      const unlinkedAttributions = db.prepare("SELECT count(*) AS n FROM event_attributions WHERE trip_ref IS NULL AND attribution = 'free-driving'").get() as {n: number};
+      // Event attributions for deleted trip are unlinked to ambiguous
+      const unlinkedAttributions = db.prepare("SELECT count(*) AS n FROM event_attributions WHERE trip_ref IS NULL AND attribution = 'ambiguous'").get() as {n: number};
       expect(unlinkedAttributions.n).toBeGreaterThan(0);
 
       // Events remain intact
@@ -221,6 +221,7 @@ describe('ET-065 trip deletion', () => {
       expect((db.prepare('SELECT count(*) AS n FROM logical_progress').get() as {n: number}).n).toBe(0);
       expect((db.prepare('SELECT count(*) AS n FROM logical_revisions').get() as {n: number}).n).toBe(0);
       expect((db.prepare('SELECT count(*) AS n FROM observation_closes').get() as {n: number}).n).toBe(0);
+      expect((db.prepare('SELECT count(*) AS n FROM logical_projection_states WHERE id NOT IN (SELECT state_ref FROM logical_revisions)').get() as {n: number}).n).toBe(0);
 
       const fkCheck = db.pragma('foreign_key_check') as unknown[];
       expect(fkCheck).toEqual([]);
@@ -280,7 +281,8 @@ describe('ET-065 trip deletion', () => {
     ok(await client.open(workerOptions()));
     await seedJournalAnchors(client);
 
-    // rejectIfOpen guard over IPC worker
+    // rejectIfOpen guard over IPC worker (defaults to true)
+    failed(await client.deleteTrip(T.open), 'STORAGE_BUSY');
     failed(await client.deleteTrip(T.open, {rejectIfOpen: true}), 'STORAGE_BUSY');
     ok(await client.journalTrip(T.open));
 

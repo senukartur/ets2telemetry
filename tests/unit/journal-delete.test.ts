@@ -118,24 +118,20 @@ describe('JournalService deleteTrip queries (ET-065)', () => {
     return {service, calls, setResult: (res: Result<void>) => { nextResult = res; }};
   }
 
-  it('delegates deleteTrip to client with rejectIfOpen matching recording status', async () => {
+  it('delegates deleteTrip to client with rejectIfOpen = true when inactive and refuses with BUSY when recording is active', async () => {
     const inactive = createFixture(false);
     await expect(inactive.service.query({kind: 'deleteTrip', tripUuid: VALID_UUID})).resolves.toEqual({ok: true, value: undefined});
-    expect(inactive.calls).toEqual([['deleteTrip', VALID_UUID, {rejectIfOpen: false}]]);
+    expect(inactive.calls).toEqual([['deleteTrip', VALID_UUID, {rejectIfOpen: true}]]);
 
     const active = createFixture(true);
-    await expect(active.service.query({kind: 'deleteTrip', tripUuid: VALID_UUID})).resolves.toEqual({ok: true, value: undefined});
-    expect(active.calls).toEqual([['deleteTrip', VALID_UUID, {rejectIfOpen: true}]]);
+    await expect(active.service.query({kind: 'deleteTrip', tripUuid: VALID_UUID})).resolves.toEqual({ok: false, code: 'BUSY'});
+    expect(active.calls).toEqual([]);
   });
 
-  it('allows explicit rejectIfOpen override in query options', async () => {
-    const active = createFixture(true);
-    await active.service.query({kind: 'deleteTrip', tripUuid: VALID_UUID, options: {rejectIfOpen: false}});
-    expect(active.calls).toEqual([['deleteTrip', VALID_UUID, {rejectIfOpen: false}]]);
-
+  it('allows explicit rejectIfOpen override in query options when inactive', async () => {
     const inactive = createFixture(false);
-    await inactive.service.query({kind: 'deleteTrip', tripUuid: VALID_UUID, options: {rejectIfOpen: true}});
-    expect(inactive.calls).toEqual([['deleteTrip', VALID_UUID, {rejectIfOpen: true}]]);
+    await inactive.service.query({kind: 'deleteTrip', tripUuid: VALID_UUID, options: {rejectIfOpen: false}});
+    expect(inactive.calls).toEqual([['deleteTrip', VALID_UUID, {rejectIfOpen: false}]]);
   });
 
   it('maps UNKNOWN_TRIP to NOT_FOUND and STORAGE_BUSY to BUSY', async () => {
