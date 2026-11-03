@@ -204,11 +204,21 @@ jobs:
           if-no-files-found: error
           include-hidden-files: true
   windows-runtime:
-    name: Windows x64 runtime and UI
+    name: Windows x64 runtime and UI (${{ matrix.shard }})
     needs: windows-build
     if: github.event_name != 'pull_request' || !github.event.pull_request.draft
     runs-on: windows-2022
     timeout-minutes: 20
+    # ET-066 (docs/ci.md#job-layout): three runners split the scenarios by measured duration, so the PR critical path is
+    # the longest shard instead of their sum. Every scenario step runs in exactly one shard; needs.windows-runtime.result
+    # is success only when every shard succeeds, so the scaffold gate is unchanged. fail-fast is off so that one failing
+    # shard does not cancel the evidence of the others.
+    strategy:
+      fail-fast: false
+      matrix:
+        # scenarios: worker, session-end, telemetry, overlay, current track, lifecycle, plugin, recording, journal, Hard Mode,
+        # refusal and the extended regressions; ui-1: the shell, live and journal UI shards; ui-2: the settings and overlay UI shards.
+        shard: [scenarios, ui-1, ui-2]
     defaults:
       run:
         shell: pwsh
@@ -267,90 +277,106 @@ jobs:
       # ET-015a PR-4: synthetic v1 recording through a killed service, close-to-tray, tray exit and restart.
       # ET-016 PR-4: the Journal tab on an empty history, then on a seeded synthetic database (never history).
       - name: Bounded development Electron worker smoke
-        if: github.event_name != 'pull_request'
+        if: matrix.shard == 'scenarios' && github.event_name != 'pull_request'
         run: ./scripts/ci/Invoke-RuntimeSmoke.ps1 -Mode development
       - name: Bounded development telemetry source and recovery smoke
-        if: github.event_name != 'pull_request'
+        if: matrix.shard == 'scenarios' && github.event_name != 'pull_request'
         run: ./scripts/ci/Invoke-RuntimeSmoke.ps1 -Mode development -Scenario telemetry
       - name: Bounded development hidden overlay projection and isolation smoke
-        if: github.event_name != 'pull_request'
+        if: matrix.shard == 'scenarios' && github.event_name != 'pull_request'
         run: ./scripts/ci/Invoke-RuntimeSmoke.ps1 -Mode development -Scenario overlay -ForceRendererReuse
       - name: Bounded development current track journey
-        if: github.event_name != 'pull_request'
+        if: matrix.shard == 'scenarios' && github.event_name != 'pull_request'
         run: ./scripts/ci/Invoke-RuntimeSmoke.ps1 -Mode development -Scenario now-playing
       - name: Bounded development tray lifecycle, single instance and explicit exit smoke
-        if: github.event_name != 'pull_request'
+        if: matrix.shard == 'scenarios' && github.event_name != 'pull_request'
         run: ./scripts/ci/Invoke-RuntimeSmoke.ps1 -Mode development -Scenario lifecycle
       - name: Bounded development plugin setup and Game plugin card smoke
-        if: github.event_name != 'pull_request'
+        if: matrix.shard == 'scenarios' && github.event_name != 'pull_request'
         run: ./scripts/ci/Invoke-RuntimeSmoke.ps1 -Mode development -Scenario plugin
       - name: Bounded development synthetic recording journey smoke
-        if: github.event_name != 'pull_request'
+        if: matrix.shard == 'scenarios' && github.event_name != 'pull_request'
         run: ./scripts/ci/Invoke-RuntimeSmoke.ps1 -Mode development -Scenario recording
       - name: Bounded development synthetic trip journal smoke
-        if: github.event_name != 'pull_request'
+        if: matrix.shard == 'scenarios' && github.event_name != 'pull_request'
         run: ./scripts/ci/Invoke-RuntimeSmoke.ps1 -Mode development -Scenario journal
       - name: Development Hard Mode journey
-        if: github.event_name != 'pull_request'
+        if: matrix.shard == 'scenarios' && github.event_name != 'pull_request'
         run: ./scripts/ci/Invoke-RuntimeSmoke.ps1 -Mode development -Scenario hard-mode
       - name: Bounded development Yukon UI shell shard
-        if: github.event_name != 'pull_request'
+        if: matrix.shard == 'ui-1' && github.event_name != 'pull_request'
         run: ./scripts/ci/Invoke-RuntimeSmoke.ps1 -Mode development -Scenario ui -UiCase shell
       - name: Bounded development Yukon UI live shard
-        if: github.event_name != 'pull_request'
+        if: matrix.shard == 'ui-1' && github.event_name != 'pull_request'
         run: ./scripts/ci/Invoke-RuntimeSmoke.ps1 -Mode development -Scenario ui -UiCase live
       - name: Bounded development Yukon UI journal shard
-        if: github.event_name != 'pull_request'
+        if: matrix.shard == 'ui-1' && github.event_name != 'pull_request'
         run: ./scripts/ci/Invoke-RuntimeSmoke.ps1 -Mode development -Scenario ui -UiCase journal
       - name: Bounded development Yukon UI settings shard
-        if: github.event_name != 'pull_request'
+        if: matrix.shard == 'ui-2' && github.event_name != 'pull_request'
         run: ./scripts/ci/Invoke-RuntimeSmoke.ps1 -Mode development -Scenario ui -UiCase settings
       - name: Bounded development Yukon UI overlay shard
-        if: github.event_name != 'pull_request'
+        if: matrix.shard == 'ui-2' && github.event_name != 'pull_request'
         run: ./scripts/ci/Invoke-RuntimeSmoke.ps1 -Mode development -Scenario ui -UiCase overlay
       # ET-019 PR-7: a newer-schema history database is refused, shown in Journal and left unchanged.
       - name: Bounded development newer history database refusal smoke
-        if: github.event_name != 'pull_request'
+        if: matrix.shard == 'scenarios' && github.event_name != 'pull_request'
         run: ./scripts/ci/Invoke-RuntimeSmoke.ps1 -Mode development -Scenario refusal
       - name: Bounded Forge packaged Electron worker smoke
+        if: matrix.shard == 'scenarios'
         run: ./scripts/ci/Invoke-RuntimeSmoke.ps1 -Mode packaged
       - name: Bounded packaged native Windows session-end audit
+        if: matrix.shard == 'scenarios'
         run: |
           # The package folder of the build that was made: staging on pull requests, production on main (ET-055 PR-4).
           $packageHash = node --input-type=module -e 'import {verifyPackage} from "./scripts/package-integrity.mjs"; import {packageDirectoryName, readBuiltBuild} from "./scripts/build-channel.mjs"; console.log(verifyPackage(packageDirectoryName(readBuiltBuild().identity)).packageSha256)'
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           ./scripts/ci/Invoke-SessionEndSmoke.ps1 -OutputRoot .local/ci -ExpectedPackageSha256 $packageHash
       - name: Bounded packaged telemetry source and recovery smoke
+        if: matrix.shard == 'scenarios'
         run: ./scripts/ci/Invoke-RuntimeSmoke.ps1 -Mode packaged -Scenario telemetry
       - name: Bounded packaged hidden overlay projection and isolation smoke
+        if: matrix.shard == 'scenarios'
         run: ./scripts/ci/Invoke-RuntimeSmoke.ps1 -Mode packaged -Scenario overlay -ForceRendererReuse
       - name: Bounded packaged current track journey
+        if: matrix.shard == 'scenarios'
         run: ./scripts/ci/Invoke-RuntimeSmoke.ps1 -Mode packaged -Scenario now-playing
       - name: Bounded packaged tray lifecycle, single instance and explicit exit smoke
+        if: matrix.shard == 'scenarios'
         run: ./scripts/ci/Invoke-RuntimeSmoke.ps1 -Mode packaged -Scenario lifecycle
       - name: Bounded packaged plugin setup and Game plugin card smoke
+        if: matrix.shard == 'scenarios'
         run: ./scripts/ci/Invoke-RuntimeSmoke.ps1 -Mode packaged -Scenario plugin
       - name: Bounded packaged synthetic recording journey smoke
+        if: matrix.shard == 'scenarios'
         run: ./scripts/ci/Invoke-RuntimeSmoke.ps1 -Mode packaged -Scenario recording
       - name: Bounded packaged synthetic trip journal smoke
+        if: matrix.shard == 'scenarios'
         run: ./scripts/ci/Invoke-RuntimeSmoke.ps1 -Mode packaged -Scenario journal
       - name: Packaged Hard Mode journey
+        if: matrix.shard == 'scenarios'
         run: ./scripts/ci/Invoke-RuntimeSmoke.ps1 -Mode packaged -Scenario hard-mode
       - name: Bounded packaged Yukon UI shell shard
+        if: matrix.shard == 'ui-1'
         run: ./scripts/ci/Invoke-RuntimeSmoke.ps1 -Mode packaged -Scenario ui -UiCase shell
       - name: Bounded packaged Yukon UI live shard
+        if: matrix.shard == 'ui-1'
         run: ./scripts/ci/Invoke-RuntimeSmoke.ps1 -Mode packaged -Scenario ui -UiCase live
       - name: Bounded packaged Yukon UI journal shard
+        if: matrix.shard == 'ui-1'
         run: ./scripts/ci/Invoke-RuntimeSmoke.ps1 -Mode packaged -Scenario ui -UiCase journal
       - name: Bounded packaged Yukon UI settings shard
+        if: matrix.shard == 'ui-2'
         run: ./scripts/ci/Invoke-RuntimeSmoke.ps1 -Mode packaged -Scenario ui -UiCase settings
       - name: Bounded packaged Yukon UI overlay shard
+        if: matrix.shard == 'ui-2'
         run: ./scripts/ci/Invoke-RuntimeSmoke.ps1 -Mode packaged -Scenario ui -UiCase overlay
       # ET-019 PR-7: the same refusal postconditions in the packaged runtime.
       - name: Bounded packaged newer history database refusal smoke
+        if: matrix.shard == 'scenarios'
         run: ./scripts/ci/Invoke-RuntimeSmoke.ps1 -Mode packaged -Scenario refusal
       - name: Extended existing safety regressions
-        if: github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && inputs.extended)
+        if: matrix.shard == 'scenarios' && (github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && inputs.extended))
         run: ./scripts/ci/Invoke-Extended.ps1
       - name: Record final versions and duration
         if: always()
@@ -358,7 +384,7 @@ jobs:
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         if: always()
         with:
-          name: windows-runtime-evidence-${{ github.run_id }}-${{ github.run_attempt }}
+          name: windows-runtime-evidence-${{ github.run_id }}-${{ github.run_attempt }}-${{ matrix.shard }}
           path: .local/ci
           include-hidden-files: true
           if-no-files-found: error
@@ -541,7 +567,9 @@ jobs:
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           cmake --build native/telemetry-plugin/build-asan --config Release --target protocol-v0-asan-test protocol-v1-asan-test v1-producer-asan-test sdk-adapter-asan-test game-mode-detector-asan-test event-channel-asan-test snapshot-transport-asan-test snapshot-transport-test-plugin snapshot-transport-hooked-test-plugin game-window-monitor-asan-test snapshot-transport-game-host-asan capture-cap0-asan-test v1-transport-asan-test --parallel
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          ctest --test-dir native/telemetry-plugin/build-asan -C Release --output-on-failure -R asan-contract --output-junit "$PWD/.local/ci/ctest-plugin-asan.xml"
+          # ET-066 (docs/ci.md#job-layout): four cases at a time, one per runner core. Endpoint and event names carry the process
+          # identity, so parallel cases never share one; the per-test deadlines, selection and assertions are unchanged.
+          ctest --test-dir native/telemetry-plugin/build-asan -C Release --output-on-failure -R asan-contract --parallel 4 --output-junit "$PWD/.local/ci/ctest-plugin-asan.xml"
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
       - name: Media reader AddressSanitizer controls
         run: |
