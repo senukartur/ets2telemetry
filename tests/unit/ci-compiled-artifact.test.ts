@@ -135,6 +135,7 @@ it('retains every runtime scenario, fixed required names, timeout ceilings and e
 it('runs every runtime smoke step in exactly one shard of the runtime matrix', async () => {
   const workflow = (await readFile('.github/workflows/windows-ci.yml', 'utf8')).replaceAll('\r\n', '\n');
   const runtime = workflow.split('  windows-runtime:\n')[1].split('  windows-installer:\n')[0];
+  expect(runtime).toContain('    name: Windows x64 runtime and UI (${{ matrix.shard }})\n');
   expect(runtime).toContain('    strategy:\n      fail-fast: false\n      matrix:\n');
   expect(runtime).toContain('        shard: [scenarios, ui-1, ui-2]\n');
   expect(runtime).toContain('name: windows-runtime-evidence-${{ github.run_id }}-${{ github.run_attempt }}-${{ matrix.shard }}\n');
@@ -152,6 +153,9 @@ it('runs every runtime smoke step in exactly one shard of the runtime matrix', a
   // session-end audit, which does not exist, plus the extended regressions; three and two UI shards per mode.
   expect(counts).toEqual({scenarios: 10 + 11 + 1, 'ui-1': 6, 'ui-2': 4});
   expect(steps.find(step => step.includes('Invoke-Extended.ps1'))).toContain("if: matrix.shard == 'scenarios' && (github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && inputs.extended))");
+  // The plugin ASan selection runs four cases at a time; endpoint names carry the process instance id, so cases never collide.
+  const asan = workflow.split('  windows-asan:\n')[1].split(/\n {2}[a-z-]+:\n/)[0];
+  expect(asan).toContain('ctest --test-dir native/telemetry-plugin/build-asan -C Release --output-on-failure -R asan-contract --parallel 4 ');
 });
 
 // One case per installer value and helper variant (ET-019, October 28, 2026): the variants used to share one case, which
