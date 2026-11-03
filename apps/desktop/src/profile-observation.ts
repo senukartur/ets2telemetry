@@ -59,8 +59,8 @@ export class ProfileObserver {
   /** The monitor's sole cadence also invalidates old proof when a later shared verification fails. */
   readSettings(reader: HardModeReader, source: SourceIdentity, ns: string, atUtcMs: number, signal: AbortSignal, force = false) {
     const epoch = this.epoch;
-    void this.refresh();
-    return reader.readTimed(source, ns, atUtcMs, signal, binding => {
+    // The full consumer owns cold bootstrap; a pre-snapshot boundary guard can join it without starting inspection.
+    const work = reader.readTimed(source, ns, atUtcMs, signal, binding => {
       if (epoch === this.epoch && (this.pending && this.pending.proof.binding !== binding || this.proof && this.proof.value.binding !== binding)) {
         clearTimeout(this.deadline); this.pending = undefined; this.proof = undefined;
       }
@@ -70,6 +70,8 @@ export class ProfileObserver {
       }
       throw error;
     });
+    void this.refresh();
+    return work;
   }
   private async scan(): Promise<void> {
     const reader = this.reader(), source = this.source, now = this.nowNs();

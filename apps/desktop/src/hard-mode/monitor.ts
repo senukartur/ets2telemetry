@@ -34,8 +34,9 @@ export class HardModeMonitor {
     pending.resolve();
   }
   private retireProof(): void {const pending = this.pendingProof; this.pendingProof = undefined; pending?.resolve();}
-  private timer: ReturnType<typeof setInterval> | undefined;
+  private timer: ReturnType<typeof setTimeout> | undefined;
   private healthTimer: ReturnType<typeof setInterval> | undefined;
+  private started = false;
   constructor(private readonly read: (source: SourceIdentity, monotonicNs: string, atUtcMs: number, signal: AbortSignal, force?: boolean) => Promise<HardModeObservation | TimedHardModeObservation>,
     private readonly changed: (value: HardModeObservation) => void = () => undefined, private readonly nowNs: () => bigint = () => process.hrtime.bigint(),
     private readonly requestFull: () => void = () => undefined, private readonly retain: () => boolean = () => false,
@@ -69,8 +70,17 @@ export class HardModeMonitor {
   status(): HardModeStatus {return {assessment: this.evidence().assessment, trip: null};}
   /** Memory-only service lease: it never changes the observation's timestamp or causal watermark. */
   heartbeat(): void {this.expireCoverage(); if (this.source) {this.healthNs = this.nowNs(); this.publishHealth();}}
+  private scheduleGuard(): void {
+    if (!this.started) return;
+    clearTimeout(this.timer);
+    const remaining = !this.source || this.lastScanNs === undefined ? HARD_MODE_POLL_MS
+      : Math.ceil(Number(this.lastScanNs + BigInt(HARD_MODE_POLL_MS) * 1_000_000n - this.nowNs()) / 1_000_000);
+    // Attachment/manual scans need not align with service startup. An early tick must re-arm for its real due time.
+    this.timer = setTimeout(() => {this.timer = undefined; void this.refresh().finally(() => this.scheduleGuard());}, Math.max(0, Math.min(HARD_MODE_POLL_MS, remaining)));
+    this.timer.unref();
+  }
   start(): void {
-    this.timer ??= setInterval(() => {void this.refresh();}, HARD_MODE_POLL_MS); this.timer.unref();
+    if (!this.started) {this.started = true; this.scheduleGuard();}
     this.healthTimer ??= setInterval(() => this.heartbeat(), 1000); this.healthTimer.unref();
   }
   refresh(manual = false, followup = false): Promise<void> {
@@ -118,5 +128,5 @@ export class HardModeMonitor {
     });
     return this.inFlight;
   }
-  close(): void {clearInterval(this.timer); clearInterval(this.healthTimer); this.timer = undefined; this.healthTimer = undefined; this.epoch++; this.controller?.abort(); this.retireProof(); this.publish(this.unknown());}
+  close(): void {this.started = false; clearTimeout(this.timer); clearInterval(this.healthTimer); this.timer = undefined; this.healthTimer = undefined; this.epoch++; this.controller?.abort(); this.retireProof(); this.publish(this.unknown());}
 }

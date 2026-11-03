@@ -180,6 +180,9 @@ export class HardModeReader {
     let operation = this.running?.key === key && !this.running.settled && !this.running.controller.signal.aborted ? this.running
       : this.queued?.key === key && !this.queued.controller.signal.aborted ? this.queued : undefined;
     if (!operation) {
+      // A boundary tail guard cannot bootstrap process inspection or occupy the full consumer's scan slot.
+      // It may still join a normal operation above, whose authenticated inspection is already owned.
+      if (cheap && (this.running || this.queued || !this.processes.get(this.lifetime(source) ?? '')?.value)) throw new ProfileVerificationError(new Error('Process inspection unavailable for tail guard'));
       if (this.running) this.cancel(this.running, false, true);
       if (this.queued) this.cancel(this.queued, false, true);
       const controller = new AbortController();
@@ -192,6 +195,7 @@ export class HardModeReader {
     }
     const work = operation;
     if (force) work.force = true;
+    if (!cheap) work.cheap = false;
     return new Promise<ProfileScan>((resolve, reject) => {
       const consumer = {}; work.consumers.add(consumer);
       let finished = false;

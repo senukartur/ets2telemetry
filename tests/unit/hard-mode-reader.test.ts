@@ -34,6 +34,36 @@ const reader = () => new HardModeReader({documents: path.join(root, 'Documents')
 const read = (r = reader()) => r.read(source, '100', created + 10000, new AbortController().signal);
 function gate<T = void>() {let resolve!: (value: T) => void; const promise = new Promise<T>(yes => {resolve = yes;}); return {promise, resolve};}
 describe('ET-026 isolated reader (REG-008/010/011)', () => {
+  it('allows the initial settings consumer to inspect the process after a pre-snapshot checkpoint tail guard',async()=>{
+    vi.useFakeTimers();let now=0n;const completed=gate(),inspect=vi.fn(processFacts);
+    const r=new HardModeReader({documents:path.join(root,'Documents'),process:inspect,nowNs:()=>now}),observer=new ProfileObserver(()=>r,()=>now,false);
+    const m=new HardModeMonitor((s,ns,at,signal)=>observer.readSettings(r,s,ns,at,signal).finally(()=>completed.resolve()),undefined,()=>now);
+    const current={source,clockId:'clock',monotonicNs:'1'};
+    try{
+      observer.boundary();observer.select(current);m.select(current);await completed.promise;
+      expect(inspect).toHaveBeenCalledOnce();await observer.refresh();now=1n;
+      const next={...current,boundary:{clockId:'clock',probeSentClientNs:'1',receivedSourceNs:'2'}};observer.select(next);m.select(next);await m.refresh();
+      expect(m.evidence().assessment.state).toBe('pass');expect(observer.evidence()).toBeDefined();
+    }finally{m.close();observer.close();}
+  });
+  it('does not let a standalone cold tail guard launch inspection or occupy the full verification slot',async()=>{
+    const inspect=vi.fn(processFacts),r=new HardModeReader({documents:path.join(root,'Documents'),process:inspect}),signal=new AbortController().signal;
+    const tail=r.resolveProfile(source,created+10000,signal,true);
+    await expect(tail).rejects.toThrow('unavailable for tail guard');expect(inspect).not.toHaveBeenCalled();
+    expect((await read(r)).assessment.state).toBe('pass');
+    expect((await r.resolveProfile(source,created+10000,signal,true)).binding).toMatch(/^[a-f0-9]{64}$/);expect(inspect).toHaveBeenCalledOnce();
+  });
+  it('does not let a cached older boundary cancel queued full verification while a retired process drains',async()=>{
+    const entered=gate(),release=gate();let active=0,maximum=0;
+    const inspect=vi.fn(async(s:SourceIdentity)=>{maximum=Math.max(maximum,++active);try{if(s.processId===456){entered.resolve();await release.promise;}return {...await processFacts(),pid:s.processId};}finally{active--;}});
+    const r=new HardModeReader({documents:path.join(root,'Documents'),process:inspect}),signal=new AbortController().signal;
+    await read(r);const retired=r.read({...source,processId:456},'1',created+10000,signal),failed=expect(retired).rejects.toThrow();await entered.promise;
+    const queued=r.read({...source,processId:789},'1',created+10000,signal);
+    try{
+      await expect(r.resolveProfile(source,created+10000,signal,true)).rejects.toThrow('unavailable for tail guard');
+      release.resolve();await failed;expect((await queued).assessment.state).toBe('pass');expect(inspect).toHaveBeenCalledTimes(3);expect(maximum).toBe(1);
+    }finally{release.resolve();await queued.catch(()=>undefined);}
+  });
   it('reads settings initially, on change and at sixty seconds, with one successful inspection per lifetime',async()=>{
     let now=0n,configReads=0;
     const inspect=vi.fn(processFacts),r=new HardModeReader({documents:path.join(root,'Documents'),process:inspect,nowNs:()=>now,
@@ -86,16 +116,24 @@ describe('ET-026 isolated reader (REG-008/010/011)', () => {
     now=900_000_000n;await m.refresh(true);expect(scan).toHaveBeenCalledTimes(2);
     now=1_100_000_000n;const c=m.refresh(true);expect(scan).toHaveBeenCalledTimes(3);finish();await c;m.close();
   });
-  it('detects changed evidence at the five-second guard while one-second health publications perform no reads or audit writes',async()=>{
+  it('detects changes five seconds after attachment between timer ticks while memory health performs no reads or audit writes',async()=>{
     vi.useFakeTimers();const start=Date.now(),now=()=>BigInt(Date.now()-start)*1_000_000n;
     const {evaluateHardMode,parseHardModeConfig}=await import('../../packages/telemetry-core/src/hard-mode');
     let config=HARD_MODE_CONFIG;
     const audit=vi.fn(),health=vi.fn(),scan=vi.fn(()=>Promise.resolve({assessment:evaluateHardMode(parseHardModeConfig(config),Date.now(),'fixture'),binding:'a'.repeat(64),pluginSessionId:source.pluginSessionId,sourceMonotonicNs:'1'}));
     const m=new HardModeMonitor(scan,audit,now,undefined,undefined,health),current={source,clockId:'clock',monotonicNs:'1'};
-    m.select(current);await Promise.resolve();await vi.advanceTimersByTimeAsync(1);m.select({...current,boundary:{clockId:'clock',probeSentClientNs:'1',receivedSourceNs:'2'}});await m.refresh();m.start();
+    m.start();await vi.advanceTimersByTimeAsync(10);m.select(current);await Promise.resolve();await vi.advanceTimersByTimeAsync(1);m.select({...current,boundary:{clockId:'clock',probeSentClientNs:now().toString(),receivedSourceNs:'2'}});await m.refresh();
     const before=audit.mock.calls.length;config=HARD_MODE_CONFIG.replace('g_fatigue "1"','g_fatigue "0"');
-    await vi.advanceTimersByTimeAsync(4999);expect(scan).toHaveBeenCalledOnce();expect(audit).toHaveBeenCalledTimes(before);expect(health).toHaveBeenCalledTimes(4);expect(m.evidence().assessment.state).toBe('pass');
+    await vi.advanceTimersByTimeAsync(4998);expect(scan).toHaveBeenCalledOnce();expect(audit).toHaveBeenCalledTimes(before);expect(health).toHaveBeenCalledTimes(5);expect(m.evidence().assessment.state).toBe('pass');
     await vi.advanceTimersByTimeAsync(1);expect(scan).toHaveBeenCalledTimes(2);expect(m.evidence().assessment.state).toBe('fail');m.close();
+  });
+  it('waits for a held guard to drain without busy rearming and does not resurrect timers after close',async()=>{
+    vi.useFakeTimers();const start=Date.now(),now=()=>BigInt(Date.now()-start)*1_000_000n,held=gate<HardModeObservation>();
+    const scan=vi.fn(()=>held.promise),m=new HardModeMonitor(scan,undefined,now);
+    m.start();await vi.advanceTimersByTimeAsync(10);m.select({source,clockId:'clock',monotonicNs:'1'});const work=m.refresh();
+    await vi.advanceTimersByTimeAsync(15000);expect(scan).toHaveBeenCalledOnce();
+    m.close();expect(vi.getTimerCount()).toBe(0);held.resolve(m.evidence());await work;await Promise.resolve();
+    expect(vi.getTimerCount()).toBe(0);expect(scan).toHaveBeenCalledOnce();
   });
   it.each(['timeout','failed','invalid'] as const)('reports only a fixed process-query code for %s',async kind=>{
     vi.useFakeTimers();
