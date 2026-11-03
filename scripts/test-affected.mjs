@@ -72,6 +72,7 @@ try {
 
 if (json) { console.log(JSON.stringify({base, mergeBase, changed, ...plan}, null, 2)); if (planOnly) process.exit(0); }
 console.log(`Changed against ${base} (${mergeBase.slice(0, 12)}): ${changed.length} file(s); plan: ${plan.kind}, ${plan.steps.length} step(s).`);
+if (plan.areas.length > 0) console.log(`Areas (docs/regression-registry.md#area--layer-matrix): ${plan.areas.join(', ')}.`);
 for (const step of plan.steps) console.log(`  ${step.id}: ${step.command}\n      ${step.reason}`);
 if (plan.unmapped.length > 0) console.log(`No local test covers: ${plan.unmapped.join(', ')}. Locally they are at most typechecked and linted; only CI tests them.`);
 if (plan.kind === 'documentation') console.log('Documentation only: check links, anchors and headings; no application checks.');

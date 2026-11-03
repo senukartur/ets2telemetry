@@ -6,7 +6,6 @@ import path from 'node:path';
 import {performance} from 'node:perf_hooks';
 import {fileURLToPath} from 'node:url';
 import {promisify} from 'node:util';
-import {_electron as electron} from '@playwright/test';
 import {rendererPages} from '../ci/overlay-observation.mjs';
 import {settingsPanel, waitForStartup} from '../ci/ui-navigation.mjs';
 import {BUILD_CHANNELS, BUILD_IDENTITIES} from '../build-channel.mjs';
@@ -103,6 +102,9 @@ import {checkFeedRequests, closedLoopbackOrigin, createTestSigningKey, feedRelea
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const checkout = path.resolve(here, '..', '..');
+// ET-066: Playwright loads only for the commands that launch the application; it was half of every other command's
+// start-up, which the unit tests pay once per driver run.
+const electron = {launch: async options => (await import('@playwright/test'))._electron.launch(options)};
 /** The synthetic recording target: the version 1 fixture is a `synthetic` database, so it migrates as `synthetic\upgrade.sqlite`. */
 export const RECORDING_NAME = 'upgrade';
 const FIXTURE = 'schema-v1-representative.sqlite';

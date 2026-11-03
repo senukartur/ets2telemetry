@@ -177,8 +177,11 @@ describe('simulator v1 soak schedule', () => {
 });
 
 describe('simulator v1 soak serving', () => {
-  it('serves one minute unpaced to the soak client: eventSeq 1..9 once each, all acknowledged, counters only', async () => {
-    const {report, client} = await served(1, 0);
+  // ET-066: one unpaced minute also carries the refused live-only hello, which needed a second identical serve.
+  it('refuses and counts a live-only hello, then serves one minute unpaced to the soak client: eventSeq 1..9 once each, all acknowledged, counters only', async () => {
+    let bytes = -1;
+    const {report, client} = await served(1, 0, async endpoint => { bytes = await liveOnlyHello(endpoint); });
+    expect(bytes).toBe(0);
     expect(report.cancelled).toBe(false);
     expect(report.transcript).toEqual([]);
     expect(report.connections).toHaveLength(1);
@@ -189,11 +192,13 @@ describe('simulator v1 soak serving', () => {
     expect(s.lastEventSeq).toBe('9');
     expect(s.maxAckThroughEventSeq).toBe('9');
     expect(s.ackCount).toBe(9);
-    expect(s.refusedLiveOnly).toBe(0);
+    // Exactly the one live-only hello: the durable client's hello is not counted.
+    expect(s.refusedLiveOnly).toBe(1);
     // Frames 50 ms through 359,950 ms each write one snapshot; the state of the frame at 0 is in the checkpoint.
     expect(s.snapshots).toBe(7_199);
     expect(s.messages.server).toEqual({welcome: 1, checkpoint: 1, event: 9, snapshot: 7_199});
-    expect(s.messages.client).toEqual({hello: 1, ack: 9});
+    // Messages are counted by kind and direction (docs/simulator-v1.md): the refused hello and the durable one.
+    expect(s.messages.client).toEqual({hello: 2, ack: 9});
     expect(s.scenarioMs).toBe(359_950);
     expect(client.welcomed).toBe(1);
     expect(client.acks).toBe(9);
@@ -213,16 +218,6 @@ describe('simulator v1 soak serving', () => {
     expect(client.welcomed).toBe(3);
     expect(client.ledger).toEqual({committedThroughEventSeq: '75', committedEvents: 75, committedGapMarkers: '0', duplicates: 0});
   }, UNPACED_TWELVE_MINUTES_BUDGET_MS);
-
-  it('refuses and counts a live-only hello for its durable connection, then serves the durable client', async () => {
-    let bytes = -1;
-    const {report, client} = await served(1, 0, async endpoint => { bytes = await liveOnlyHello(endpoint); });
-    expect(bytes).toBe(0);
-    expect(report.soak!.refusedLiveOnly).toBe(1);
-    expect(report.connections.map(c => [c.closedBy, c.rejectedAttempts])).toEqual([['open', 0]]);
-    expect(report.soak!.lastEventSeq).toBe('9');
-    expect(client.ledger.committedEvents).toBe(9);
-  }, UNPACED_ONE_MINUTE_BUDGET_MS);
 
   it('ends with a cancelled report and `end` when stopped while paced', async () => {
     const server = await serveV1Soak(1), abort = new AbortController();
