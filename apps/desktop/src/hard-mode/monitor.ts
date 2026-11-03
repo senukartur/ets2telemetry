@@ -35,6 +35,7 @@ export class HardModeMonitor {
   }
   private retireProof(): void {const pending = this.pendingProof; this.pendingProof = undefined; pending?.resolve();}
   private timer: ReturnType<typeof setInterval> | undefined;
+  private healthTimer: ReturnType<typeof setInterval> | undefined;
   constructor(private readonly read: (source: SourceIdentity, monotonicNs: string, atUtcMs: number, signal: AbortSignal, force?: boolean) => Promise<HardModeObservation | TimedHardModeObservation>,
     private readonly changed: (value: HardModeObservation) => void = () => undefined, private readonly nowNs: () => bigint = () => process.hrtime.bigint(),
     private readonly requestFull: () => void = () => undefined, private readonly retain: () => boolean = () => false,
@@ -68,7 +69,10 @@ export class HardModeMonitor {
   status(): HardModeStatus {return {assessment: this.evidence().assessment, trip: null};}
   /** Memory-only service lease: it never changes the observation's timestamp or causal watermark. */
   heartbeat(): void {this.expireCoverage(); if (this.source) {this.healthNs = this.nowNs(); this.publishHealth();}}
-  start(): void {this.timer ??= setInterval(() => {this.heartbeat(); void this.refresh();}, 1000); this.timer.unref();}
+  start(): void {
+    this.timer ??= setInterval(() => {void this.refresh();}, HARD_MODE_POLL_MS); this.timer.unref();
+    this.healthTimer ??= setInterval(() => this.heartbeat(), 1000); this.healthTimer.unref();
+  }
   refresh(manual = false, followup = false): Promise<void> {
     this.expireCoverage();
     if (this.inFlight) {if (manual) this.requestFull(); return this.inFlight;}
@@ -114,5 +118,5 @@ export class HardModeMonitor {
     });
     return this.inFlight;
   }
-  close(): void {clearInterval(this.timer); this.timer = undefined; this.epoch++; this.controller?.abort(); this.retireProof(); this.publish(this.unknown());}
+  close(): void {clearInterval(this.timer); clearInterval(this.healthTimer); this.timer = undefined; this.healthTimer = undefined; this.epoch++; this.controller?.abort(); this.retireProof(); this.publish(this.unknown());}
 }
