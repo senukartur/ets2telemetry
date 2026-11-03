@@ -108,12 +108,14 @@ export class ProfileVerificationError extends Error {
 }
 /** Only independent unchanged-generation guards authorize retaining an admitted proof on a timed-out reread. */
 export class UnchangedVerificationError extends ProfileVerificationError {}
+/** A same-source hint supersedes control flow; it is not a failed filesystem or identity observation. */
+export class ProfileSuperseded extends Error {}
 interface ResolvedProfile {root: string; local: string; config: string; directories?: string[]; profile: BoundProfile; scope: string; binding: string; timing: ReadTiming}
 interface ProfileScan {profile: ResolvedProfile; settings: HardModeObservation | null; settingsError?: unknown}
 interface ScanOperation {
   key: string; source: SourceIdentity; atUtcMs: number; startedClientNs: bigint; controller: AbortController;
   force: boolean; cheap: boolean; preserve?: boolean; promise: Promise<ProfileScan>; resolve: (value: ProfileScan) => void; reject: (error: unknown) => void;
-  consumers: Set<object>; timer: ReturnType<typeof setTimeout>; settled: boolean;
+  consumers: Set<object>; timer: ReturnType<typeof setTimeout>; settled: boolean; drain?: Promise<void>;
 }
 const readError = (cause: unknown): Error => cause instanceof Error ? cause : new Error('Profile read failed', {cause});
 /** One physical operation and one pending epoch; only independently unchanged generations reuse completed evidence. */
@@ -130,6 +132,7 @@ export class HardModeReader {
   constructor(private readonly options: HardModeReaderOptions) {}
   requestFull(): void {if (this.running && !this.running.settled) this.running.force = true;}
   canRetain(): boolean {return this.admitted !== undefined && this.running?.preserve === true;}
+  drain(): Promise<void> {return this.running?.drain ?? Promise.resolve();}
   onInvalidate(listener: (profileChanged: boolean) => void): () => void {this.invalidations.add(listener); return () => this.invalidations.delete(listener);}
   private invalidate(profileChanged = true): void {this.admitted = undefined; for (const listener of this.invalidations) listener(profileChanged);}
   private lifetime(source: SourceIdentity): string | undefined {
@@ -199,17 +202,17 @@ export class HardModeReader {
     return new Promise<ProfileScan>((resolve, reject) => {
       const consumer = {}; work.consumers.add(consumer);
       let finished = false;
-      const finish = (action: () => void) => {
+      const finish = (action: () => void, reason?: unknown) => {
         if (finished) return;
         finished = true; signal.removeEventListener('abort', cancel); work.controller.signal.removeEventListener('abort', cancelled);
         work.consumers.delete(consumer); action();
-        if (!work.settled && work.consumers.size === 0) this.cancel(work);
+        if (!work.settled && work.consumers.size === 0) this.cancel(work, false, false, reason);
       };
       const cancel = () => {
         // A consumer timer may run first at the shared deadline. Preserve the physical timeout instead of masking it
         // as ordinary cancellation; an earlier consumer cancellation still has no authority over the other proofs.
         if (!work.settled && this.nowNs() - work.startedClientNs >= 2_000_000_000n) this.cancel(work, true);
-        else finish(() => reject(readError(signal.reason)));
+        else finish(() => reject(readError(signal.reason)), signal.reason);
       };
       const cancelled = () => finish(() => reject(readError(work.controller.signal.reason)));
       signal.addEventListener('abort', cancel, {once: true}); work.controller.signal.addEventListener('abort', cancelled, {once: true});
@@ -217,18 +220,22 @@ export class HardModeReader {
       work.promise.then(value => finish(() => resolve(value)), error => finish(() => reject(readError(error))));
     });
   }
-  private cancel(work: ScanOperation, timedOut = false, retired = false): void {
-    if (work.controller.signal.aborted) return;
+  private cancel(work: ScanOperation, timedOut = false, retired = false, reason?: unknown): void {
+    if (work.controller.signal.aborted) {
+      if (timedOut && !work.settled && work.controller.signal.reason instanceof ProfileSuperseded && !work.preserve) this.invalidate();
+      return;
+    }
     const code = timedOut ? 'PROFILE_DEADLINE' : retired ? 'PROFILE_EPOCH_RETIRED' : 'PROFILE_CANCELLED';
     this.options.diagnostic?.({code, durationMs: Math.min(2000, Math.max(0, Number(this.nowNs() - work.startedClientNs) / 1e6))});
-    work.controller.abort(timedOut ? new (work.preserve ? UnchangedVerificationError : ProfileVerificationError)(new Error('Read deadline'), code) : undefined);
+    if (timedOut && !work.preserve || reason instanceof ProfileVerificationError && !work.preserve) this.invalidate();
+    work.controller.abort(timedOut ? new (work.preserve ? UnchangedVerificationError : ProfileVerificationError)(new Error('Read deadline'), code) : reason);
     if (this.queued === work) {
       this.queued = undefined; clearTimeout(work.timer); work.settled = true; work.reject(work.controller.signal.reason);
     }
   }
   private run(work: ScanOperation): void {
     this.running = work;
-    void this.scan(work).then(value => {work.settled = true; work.resolve(value);}, error => {
+    work.drain = this.scan(work).then(value => {work.settled = true; work.resolve(value);}, error => {
       work.settled = true;
       if (!work.controller.signal.aborted) this.options.diagnostic?.({code: error instanceof ProfileVerificationError ? error.code : 'PROFILE_PROCESS_UNPROVEN',
         durationMs: Math.min(2000, Math.max(0, Number(this.nowNs() - work.startedClientNs) / 1e6))});
@@ -354,6 +361,7 @@ export class HardModeReader {
     this.admitted = {key: work.key, scan: structuredClone(result), metadata, fullNs: work.startedClientNs};
     return result;
     } catch (cause) {
+      if (cause instanceof ProfileSuperseded && signal.aborted && cause === signal.reason) throw cause;
       if (guardedUnchanged && this.admitted && stage === 'PROFILE_DEADLINE') throw new UnchangedVerificationError(cause, stage);
       if (!guardedUnchanged || !signal.aborted || cause !== signal.reason) this.invalidate();
       throw cause instanceof ProfileVerificationError ? cause : new ProfileVerificationError(cause, stage);

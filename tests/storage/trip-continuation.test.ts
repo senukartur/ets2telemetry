@@ -1,10 +1,16 @@
 import Database from 'better-sqlite3';
 import {snapshot as logicalSnapshot} from '../../packages/storage/src/sqlite/logical-snapshot';
 import net from 'node:net';
-import {decodePayload, type ClientMessage} from '../../packages/contracts/src/protocol-v1';
+import {EventEmitter} from 'node:events';
+import {mkdir,writeFile} from 'node:fs/promises';
+import {decodePayload,encodeFrame,type ClientMessage,type ServerMessage,type CurrentState} from '../../packages/contracts/src/protocol-v1';
+import {HardModeReader,readStableFile} from '../../apps/desktop/src/hard-mode/reader';
+import {HardModeMonitor} from '../../apps/desktop/src/hard-mode/monitor';
+import {ProfileObserver} from '../../apps/desktop/src/profile-observation';
+import {HARD_MODE_CONFIG} from '../shared/hard-mode';
 import {V1Ingestion} from '../../apps/desktop/src/v1-ingestion';
 import {serveV1Reactive} from '../../tools/telemetry-simulator/src/v1/reactive';
-import {afterEach, beforeEach, describe, expect, it} from 'vitest';
+import {afterEach, beforeEach, describe, expect, it,vi} from 'vitest';
 import {readFileSync} from 'node:fs';
 import path from 'node:path';
 import type {SampleInput, Storage} from '../../packages/storage/src';
@@ -27,7 +33,7 @@ import {JournalExporter} from '../../apps/desktop/src/journal-export-writer';
 
 let ws: Awaited<ReturnType<typeof workspace>>;
 beforeEach(async () => {ws = await workspace();});
-afterEach(async () => {await terminateWorkers();await ws.dispose();});
+afterEach(async () => {vi.useRealTimers();await terminateWorkers();await ws.dispose();});
 const mode = {mode: 'unknown', method: 'none', confidence: 'none'} as const;
 const succeeded=<T>(result:{ok:true;value:T}|{ok:false;error:{code:string}}):T=>{if(!result.ok)throw new Error(result.error.code);return result.value;};
 function proof(script: Script): ProfileObservation {
@@ -62,6 +68,110 @@ function close(storage: Storage, script: Script, uuid: string, terminal = false)
 }
 
 describe('REG-003/005/008/012/014 durable logical trips', () => {
+  it.each(['unchanged','witness','revoked','profile','load','gap','clock','truck','job','refuel','teleport','missing','unqualified-sample','over-limit'] as const)('retains only a qualified predecessor through wired lifecycle verification: %s',async variant=>{
+    vi.useFakeTimers();let clientNs=0n,wireSeq=0n,boundary=100n;const revision='1';const now=()=>++clientNs;const diagnostics:string[]=[];
+    const worker=storageWorker(),client=new StorageClient(worker.handle),script=new Script(ETS2_A),welcome=script.welcome();
+    const documents=path.join(ws.directory,'Documents'),game=path.join(documents,'Euro Truck Simulator 2'),id=Buffer.from('Synthetic').toString('hex').toUpperCase(),directory=path.join(game,'profiles',id);
+    await mkdir(directory,{recursive:true});
+    const log=`log created on : Wednesday October 21 2026 @ 12:00:00\nNew profile selected: Synthetic\nLoading save. /home/profiles/${id}/save/autosave/game.sii\n`;
+    await writeFile(path.join(game,'game.log.txt'),log);await writeFile(path.join(game,'config.cfg'),'uset g_traffic "1"');
+    await writeFile(path.join(directory,'config_local.cfg'),'uset g_brake_intensity "0.75"');await writeFile(path.join(directory,'config.cfg'),HARD_MODE_CONFIG);
+    let holdGuard=false,guardHeld=false,enterGuard!:()=>void,releaseGuard!:()=>void;
+    const guardEntered=new Promise<void>(resolve=>{enterGuard=resolve;}),guardRelease=new Promise<void>(resolve=>{releaseGuard=resolve;});
+    const reader=new HardModeReader({documents,diagnostic:value=>diagnostics.push(value.code),fixtureOrigin:'synthetic',nowNs:now,
+      file:async(filename,limit,signal)=>{if(holdGuard&&!guardHeld&&filename.endsWith('game.log.txt')){guardHeld=true;enterGuard();await guardRelease;}return readStableFile(filename,limit,signal);},
+      process:s=>Promise.resolve({pid:s.processId,createdUtcMs:new Date(2026,9,21,12).getTime(),executable:'C:/Synthetic/eurotrucks2.exe',homeDirectory:null})});
+    const observer=new ProfileObserver(()=>reader,now,false,value=>diagnostics.push(value.code));let recorder!:TripRecorderSink,settings:Promise<unknown>|undefined;
+    const monitor=new HardModeMonitor((s,ns,at,signal)=>{const work=observer.readSettings(reader,s,ns,at,signal);settings=work.catch(()=>undefined);return work;},value=>recorder.observeHardMode('ets2',value),now,()=>reader.requestFull(),()=>reader.canRetain());
+    reader.onInvalidate(()=>monitor.invalidate());
+    recorder=new TripRecorderSink(client,{profileEvidence:()=>observer.evidence(),profileStatus:()=>observer.status(),hardModeEvidence:()=>monitor.evidence()});
+    let committed:(()=>void)|undefined,observed:(()=>void)|undefined,replyEnabled=false,boundaryWork:Promise<void>|undefined;let lastServer:ServerMessage=welcome;
+    const commit=recorder.commit.bind(recorder),observe=recorder.observe.bind(recorder);
+    recorder.commit=async(...args)=>{const result=await commit(...args);committed?.();return result;};
+    recorder.observe=(...args)=>{const result=observe(...args);observed?.();return result;};
+    let pendingProbe:Extract<ClientMessage,{kind:'clock.probe'}>|undefined;
+    const answerProbe=(message:Extract<ClientMessage,{kind:'clock.probe'}>)=>{const ns=BigInt(lastServer.capture.monotonicNs)+3n;pendingProbe=undefined;send({...welcome,kind:'clock.reply',capture:{clockId:script.clockId,monotonicNs:ns.toString()},data:{probeId:message.data.probeId,receivedMonotonicNs:(ns-2n).toString(),sentMonotonicNs:(ns-1n).toString()}});};
+    const acks:string[]=[],socket=Object.assign(new EventEmitter(),{destroy:()=>undefined,write:(bytes:Uint8Array)=>{
+      const message=decodePayload(bytes.subarray(4),'client') as ClientMessage;
+      if(message.kind==='ack')acks.push(message.data.throughEventSeq);
+      if(message.kind==='clock.probe'){pendingProbe=message;if(replyEnabled)answerProbe(message);}
+    }});
+    const send=(input:ServerMessage)=>{
+      const message=structuredClone(input);message.seq=(++wireSeq).toString();
+      if(message.kind==='checkpoint'){message.data.boundarySeq=message.seq;message.data.state.boundaryOrder=(++boundary).toString();message.data.state.configuration.revision=revision;}
+      if(message.kind==='snapshot'){message.data.state.boundaryOrder=(++boundary).toString();message.data.state.configuration.revision=revision;}
+      if(message.kind==='event'){message.data.occurred.boundaryOrder=(++boundary).toString();message.data.occurred.configurationRevision=revision;}
+      lastServer=message;socket.emit('data',encodeFrame(message));
+    };
+    const ingestion=new V1Ingestion({sink:recorder,connect:()=>socket,diagnose:event=>diagnostics.push(event),now:()=>Number(clientNs)/1e6,nowNs:now,staleMs:1e9,
+      onState:state=>{const value=state.fresh&&state.observation?{source:state.observation.source,monotonicNs:state.observation.capture.monotonicNs,clockId:state.observation.capture.clockId,gameClockId:state.observation.state.gameTime.clockId,boundary:state.clockBoundary}:null;observer.select(value);monitor.select(value);}});
+    ingestion.onProfileBoundary=()=>{boundaryWork=observer.boundary();};
+    const event=async(record:Parameters<Script['event']>[0],simulation:'running'|'paused'='running',advanceMs=10)=>{
+      const done=new Promise<void>(resolve=>{committed=resolve;});send(script.event(record,{simulation,advanceMs,configurationRevision:revision}));await done;committed=undefined;
+    };
+    const snapshot=async(odo:number,fuel:number,simulation:'running'|'paused',advanceMs:number,changes:Partial<CurrentState>={})=>{
+      const configuration=script.checkpoint(job(),0,{},revision).data.state.configuration;
+      const message=script.snapshot({configuration,simulation,odometer:{available:true,value:odo,unit:'m'},fuel:{available:true,value:fuel,unit:'L'},speed:{available:true,value:simulation==='running'?20:0,unit:'m/s'},gameTime:{available:true,value:'500',unit:'min',clockId:script.gameTime.clockId},worldPlacement:{available:true,value:{position:{x:(odo-1000000)/5,y:0,z:0},orientation:{heading:0,pitch:0,roll:0}}},...changes},advanceMs);
+      const done=new Promise<void>(resolve=>{observed=resolve;});send(message);await done;observed=undefined;return message;
+    };
+    const admit=async()=>{await boundaryWork;await settings;await observer.refresh();replyEnabled=true;clientNs+=1_000_000n;if(pendingProbe)answerProbe(pendingProbe);await vi.advanceTimersByTimeAsync(1000);expect(observer.evidence(),JSON.stringify({diagnostics,status:ingestion.current.status,reason:ingestion.current.reason,phase:observer.status().phase})).toBeDefined();};
+    try{
+      ok(await client.open({path:ws.database,backupsDirectory:ws.backups,purpose:'synthetic',appVersion:'test'}));
+      ingestion.select('synthetic','\\\\.\\pipe\\ETS2Telemetry-SYNTHETIC-TEST-v1-1-00000000-0000-4000-8000-000000000000');socket.emit('connect');send(welcome);
+      const checkpointDone=new Promise<void>(resolve=>{observed=resolve;});send(script.checkpoint(null,0,{},revision));await checkpointDone;observed=undefined;await admit();
+      await event(r.started());await event(r.jobConfigured());await admit();
+      const uuid=tripUuidFor(script.session,'2');
+      await snapshot(1000000,100,'running',1000);await snapshot(1000100,99,'running',1000);succeeded(await recorder.samples.write(3600,true));
+      const before=ok(await client.journalTrip(uuid));expect(before.trip.observedDistanceM).toEqual({available:true,value:100});expect(before.trip.fuelUsedL).toEqual({available:true,value:1});
+      if(variant==='witness'){
+        replyEnabled=false;await event(r.paused(),'paused',10);await snapshot(1000110,98.9,'paused',10);await admit();await snapshot(1000110,98.9,'paused',10);
+        expect(ok(await client.journalTrip(uuid)).trip.observedDistanceM).toEqual({available:true,value:110});
+        replyEnabled=false;await event(r.started(),'running',10);await admit();await snapshot(1000120,98.7,'running',10);
+      }
+      const token=observer.status().token;replyEnabled=false;holdGuard=variant==='unchanged';await event(r.paused(),'paused',100);
+      if(variant==='unchanged')await guardEntered;
+      expect(observer.evidence()).toBeUndefined();expect(observer.status()).toEqual({phase:'pending',token});
+      const changes:Partial<CurrentState>={};
+      if(variant==='clock')changes.gameTime={available:true,value:'500',unit:'min',clockId:'40000000-0000-4000-8000-000000000099'};
+      if(variant==='truck'){const configuration=script.checkpoint(job()).data.state.configuration;if(configuration.truck.available)configuration.truck.value.licensePlate={available:true,value:'OTHER'};changes.configuration=configuration;}
+      if(variant==='job')changes.configuration=script.checkpoint(otherJob()).data.state.configuration;
+      if(variant==='missing')changes.worldPlacement={available:false,reason:'not-observed'};
+      if(variant==='teleport')changes.worldPlacement={available:true,value:{position:{x:10000,y:0,z:0},orientation:{heading:0,pitch:0,roll:0}}};
+      await snapshot(1000125,variant==='refuel'?110:98.5,'paused',variant==='over-limit'?5000:100,changes);
+      expect(ok(await client.listSamples({tripUuid:uuid}))).toHaveLength(2);
+      if(variant==='unchanged'){await event(r.paused(),'paused',0);releaseGuard();}
+      if(variant==='revoked')observer.suspend();
+      if(variant==='load')await writeFile(path.join(game,'game.log.txt'),log+`Loading save. /home/profiles/${id}/save/autosave/game.sii\n`);
+      if(variant==='profile')await writeFile(path.join(game,'game.log.txt'),log+'New profile selected: Other\n');
+      if(variant==='gap'){
+        const done=new Promise<void>(resolve=>{committed=resolve;});send(script.gap(1,'queueCount',10));await done;committed=undefined;
+      }
+      if(variant==='unqualified-sample')await snapshot(1000130,98.4,'running',1000);
+      await boundaryWork;
+      if(variant==='load'||variant==='profile'||variant==='revoked'){
+        clientNs+=5_000_000_000n;await observer.refresh();
+      }
+      if(variant!=='profile'){await admit();await snapshot(1000125,98.5,'paused',100);}
+      succeeded(await recorder.samples.write(3600,true));
+      const detail=ok(await client.journalTrip(uuid));
+      if(variant==='unchanged'||variant==='witness'){
+        expect(detail.trip.observedDistanceM).toEqual({available:true,value:125});expect(detail.trip.fuelUsedL).toEqual({available:true,value:1.5});expect(detail.trip.recordingCompleteness).toBe('complete');
+        const samples=ok(await client.listSamples({tripUuid:uuid}));expect(samples).toHaveLength(2);expect(samples.map(sample=>sample.speed.available?sample.speed.value:null)).toEqual([20,20]);
+        expect(ok(await client.getTrip(uuid))!.hardModeDetails!.firstLoss).toBeNull();
+      }else{
+        // No newly admitted endpoint exists after profile/clock uncertainty:
+        // its already supported prefix remains 100 m/1 L. An admitted but unsupported new leg is unavailable.
+        if(variant==='profile'||variant==='clock'){
+          expect(detail.trip.observedDistanceM).toEqual({available:true,value:100});expect(detail.trip.fuelUsedL).toEqual({available:true,value:1});
+        }else{
+          expect(detail.trip.observedDistanceM).toEqual({available:false,reason:'not-observed'});expect(detail.trip.fuelUsedL).toEqual({available:false,reason:'not-observed'});
+        }
+        if(variant==='gap')expect(detail.trip.recordingCompleteness).toBe('partial');
+        if(variant==='profile'||variant==='load'||variant==='clock')expect(ok(await client.getTrip(uuid))!.hardModeDetails!.firstLoss).not.toBeNull();
+      }
+      expect(acks).toContain('3');
+    }finally{releaseGuard();monitor.close();observer.close();await ingestion.stop();await client.close();}
+  });
   it.each(['before','long-before','after','foreign-source','foreign-clock','unknown-time','overflow'] as const)('bounds and source-qualifies persisted transfer checks: %s',async variant=>{
     const storage=await ws.open(),s=new Script(ETS2_A);ok(storage.upsertSession({message:s.welcome()}));ok(storage.commitEvent({message:s.event(r.started())}));const uuid=open(storage,s);
     const commitTransfer=()=>{const event=s.event(r.ferry(),{advanceMs:500});

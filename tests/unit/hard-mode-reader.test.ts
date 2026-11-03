@@ -34,13 +34,41 @@ const reader = () => new HardModeReader({documents: path.join(root, 'Documents')
 const read = (r = reader()) => r.read(source, '100', created + 10000, new AbortController().signal);
 function gate<T = void>() {let resolve!: (value: T) => void; const promise = new Promise<T>(yes => {resolve = yes;}); return {promise, resolve};}
 describe('ET-026 isolated reader (REG-008/010/011)', () => {
+  it.each(['superseded','guard-error','deadline','log-change','profile-change'] as const)('distinguishes same-source supersession from a required %s failure',async mode=>{
+    vi.useFakeTimers();let now=0n,hold=false,held=false;const entered=gate(),release=gate(),completed=gate();
+    const changes:HardModeObservation[]=[],r=new HardModeReader({documents:path.join(root,'Documents'),process:processFacts,nowNs:()=>now,
+      file:async(filename,limit,signal)=>{
+        if(hold&&!held&&filename.endsWith('game.log.txt')){held=true;entered.resolve();await release.promise;if(mode==='guard-error')throw new Error('Independent guard failed');}
+        return readStableFile(filename,limit,signal);
+      }});
+    const observer=new ProfileObserver(()=>r,()=>now,false),m=new HardModeMonitor((s,ns,at,signal)=>observer.readSettings(r,s,ns,at,signal).finally(()=>completed.resolve()),value=>changes.push(value),()=>now);
+    r.onInvalidate(()=>m.invalidate());const current={source,clockId:'clock',monotonicNs:'1'};
+    try{
+      observer.select(current);m.select(current);await completed.promise;await observer.refresh();now=1n;
+      const bound={...current,boundary:{clockId:'clock',probeSentClientNs:'1',receivedSourceNs:'2'}};observer.select(bound);m.select(bound);await m.refresh();
+      expect(m.evidence().assessment.state).toBe('pass');const baseline=changes.length,token=observer.status().token;
+      hold=true;void observer.boundary();await entered.promise;const replacement=observer.boundary();
+      expect(observer.evidence()).toBeUndefined();expect(observer.status()).toEqual({phase:'pending',token});
+      if(mode==='deadline'){
+        for(let hint=1;hint<=3;hint++){now=BigInt(hint)*500_000_000n;await vi.advanceTimersByTimeAsync(500);void observer.boundary();}
+        now=2_000_000_002n;await vi.advanceTimersByTimeAsync(500);
+      }
+      if(mode==='log-change')await writeFile(path.join(game,'game.log.txt'),header+selection);
+      if(mode==='profile-change')await writeFile(path.join(game,'game.log.txt'),header+selection+save()+selection+save());
+      release.resolve();await replacement;
+      if(mode==='superseded'){
+        now=2n;observer.select({...bound,boundary:{clockId:'clock',probeSentClientNs:'2',receivedSourceNs:'3'}});
+        expect(observer.status()).toEqual({phase:'admitted',token});expect(changes.slice(baseline)).toEqual([]);expect(m.evidence().assessment.state).toBe('pass');
+      }else{expect(changes.slice(baseline).some(value=>value.assessment.state==='unknown')).toBe(true);expect(observer.status().token).not.toBe(token);}
+    }finally{release.resolve();m.close();observer.close();await r.drain();}
+  });
   it('allows the initial settings consumer to inspect the process after a pre-snapshot checkpoint tail guard',async()=>{
     vi.useFakeTimers();let now=0n;const completed=gate(),inspect=vi.fn(processFacts);
     const r=new HardModeReader({documents:path.join(root,'Documents'),process:inspect,nowNs:()=>now}),observer=new ProfileObserver(()=>r,()=>now,false);
     const m=new HardModeMonitor((s,ns,at,signal)=>observer.readSettings(r,s,ns,at,signal).finally(()=>completed.resolve()),undefined,()=>now);
     const current={source,clockId:'clock',monotonicNs:'1'};
     try{
-      observer.boundary();observer.select(current);m.select(current);await completed.promise;
+      void observer.boundary();observer.select(current);m.select(current);await completed.promise;
       expect(inspect).toHaveBeenCalledOnce();await observer.refresh();now=1n;
       const next={...current,boundary:{clockId:'clock',probeSentClientNs:'1',receivedSourceNs:'2'}};observer.select(next);m.select(next);await m.refresh();
       expect(m.evidence().assessment.state).toBe('pass');expect(observer.evidence()).toBeDefined();

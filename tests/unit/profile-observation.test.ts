@@ -22,8 +22,8 @@ describe('REG-003/008 independent verified profile identity',()=>{
     const observer=new ProfileObserver(()=>r,()=>now,false),current={source,clockId:'clock',monotonicNs:'1'};
     observer.select(current);await observer.refresh();now=1n;observer.select({...current,boundary:{clockId:'clock',probeSentClientNs:'1',receivedSourceNs:'2'}});
     const first=observer.evidence();expect(first).toBeDefined();
-    const reads=vi.spyOn(r,'resolveProfile');observer.boundary();expect(observer.evidence()).toBeUndefined();observer.boundary();observer.boundary();
-    await Promise.resolve();await observer.refresh();expect(reads).toHaveBeenCalledOnce();expect(reads.mock.calls[0][3]).toBe(true);expect(inspect).toBe(1);
+    const reads=vi.spyOn(r,'resolveProfile');void observer.boundary();expect(observer.evidence()).toBeUndefined();void observer.boundary();const boundary=observer.boundary();
+    await boundary;expect(reads).toHaveBeenCalledOnce();expect(reads.mock.calls[0][3]).toBe(true);expect(inspect).toBe(1);
     observer.select({...current,boundary:{clockId:'clock',probeSentClientNs:'1',receivedSourceNs:'3'}});expect(observer.evidence()).toBeUndefined();
     now=2n;observer.select({...current,boundary:{clockId:'clock',probeSentClientNs:'2',receivedSourceNs:'4'}});
     expect(observer.evidence()).toMatchObject({binding:first!.binding,afterMonotonicNs:'5'});expect(inspect).toBe(1);observer.close();

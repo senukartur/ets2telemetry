@@ -17,6 +17,7 @@ import {deriveRecordingStatus, RecordingStatusPublisher, type RecordingStatusTim
 import type {ShutdownSequence} from './shutdown-sequence';
 import {TripRecorderSink} from './trip-recorder';
 import {V1Ingestion, type V1IngestionOptions, type V1SourceState} from './v1-ingestion';
+import type {ProfileObserverStatus} from './profile-observation';
 
 /** Budget of the `v1-ingestion` step in the `intake` shutdown phase. */
 export const V1_INTAKE_BUDGET_MS = 1000;
@@ -53,6 +54,7 @@ export interface RecordingRuntimeOptions {
   onRecordingStatus?: (status: RecordingHealth) => void;
   /** Tests only: the coalescing interval (G5) and timers of the recording status; 250 ms and the system timers by default. */
   profileEvidence?: () => ProfileObservation | undefined;
+  profileStatus?: () => ProfileObserverStatus;
   hardModeEvidence?: () => HardModeObservation;
   onHardModeTrip?: (details: HardModeDetails | null) => void;
   statusOverrides?: {intervalMs?: number; timers?: RecordingStatusTimers};
@@ -89,7 +91,7 @@ export function createRecordingRuntime(options: RecordingRuntimeOptions): Record
   const changed = () => status.changed();
   // The recorder reaches storage through the history client, so a command before the open or after a failure answers
   // STORAGE_CLOSED (recorderClient).
-  const recorder = plan.durableSelections.length ? new TripRecorderSink(recorderClient({get client() {return history.client;}}), {onChange: changed, profileEvidence: options.profileEvidence, hardModeEvidence: options.hardModeEvidence, onHardModeTrip: options.onHardModeTrip}) : undefined;
+  const recorder = plan.durableSelections.length ? new TripRecorderSink(recorderClient({get client() {return history.client;}}), {onChange: changed, profileEvidence: options.profileEvidence, profileStatus: options.profileStatus, hardModeEvidence: options.hardModeEvidence, onHardModeTrip: options.onHardModeTrip}) : undefined;
   // The selection that was recording or paused (durable delivery active, fresh v1 data) since it was selected: G3 rule 8.
   let recorded: SourceSelection | undefined;
   const v1 = new V1Ingestion({
