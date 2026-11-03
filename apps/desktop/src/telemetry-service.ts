@@ -3,7 +3,7 @@ import {GameSourceCoordinator} from './game-source-coordinator';
 import {discoverGames} from './native-game-discovery';
 import {resolveSourceMode} from './source-mode';
 import {hardModeFixtureReader} from './hard-mode/fixture';
-import {HardModeReader} from './hard-mode/reader';
+import {HardModeReader, coalesceProfileDiagnostics} from './hard-mode/reader';
 import {HardModeMonitor} from './hard-mode/monitor';
 import {inspectGameProcess} from './hard-mode/process';
 import {readSteamRoot} from './plugin-setup/steam-registry';
@@ -109,6 +109,7 @@ function recordV1State(state: V1SourceState): void {
   const count = (v1StatusCounts.get(state.status) ?? 0) + 1; v1StatusCounts.set(state.status, count);
   if ((count & (count - 1)) === 0) log('V1_SOURCE_STATUS', undefined, {status: state.status, selection: state.selection, durable: state.durable.state, count});
 }
+const profileDiagnostic = coalesceProfileDiagnostics(value => log('PROFILE_VERIFICATION', undefined, {...value}));
 let hardModeGame: 'ets2' | 'ats' | undefined;
 let steamRoot: string | undefined;
 // Registry discovery has no renderer input; an unavailable Cloud root fails closed while local profiles remain readable.
@@ -116,8 +117,8 @@ const hardModeLifetime = new AbortController();
 let steamDiscoveryStarted = false;
 const hardMode = new HardModeMonitor((source, ns, at, signal) => {
   const documents = process.env.ETS2TELEMETRY_DOCUMENTS;
-  if (!hardModeReader && !documents) return Promise.reject(new Error('Documents unavailable'));
-  const reader = hardModeReader ??= new HardModeReader({documents: documents!, get steamRoot() {return steamRoot;}, process: inspectGameProcess});
+  if (!hardModeReader && !documents) {profileDiagnostic({code:'PROFILE_LOCATION_UNPROVEN'}); return Promise.reject(new Error('Documents unavailable'));}
+  const reader = hardModeReader ??= new HardModeReader({diagnostic: profileDiagnostic, documents: documents!, get steamRoot() {return steamRoot;}, process: (source,signal) => inspectGameProcess(source,signal,profileDiagnostic)});
   // The monitor owns the only scan cadence; independent consumers share this fresh physical operation.
   return profileObserver.readSettings(reader, source, ns, at, signal);
 }, observation => {
@@ -125,7 +126,7 @@ const hardMode = new HardModeMonitor((source, ns, at, signal) => {
   port.postMessage(hardMode.publication());
 });
 let hardModeReader: HardModeReader | undefined = hardModeFixtureReader(process.env) ?? undefined;
-const profileObserver = new ProfileObserver(() => hardModeReader, undefined, false);
+const profileObserver = new ProfileObserver(() => hardModeReader, undefined, false, profileDiagnostic);
 let lastV1: V1SourceState | undefined;
 /** Republishes only for a change the projection shows: a clock mapping or durable status update alone is not one. */
 function onV1State(state: V1SourceState): void {

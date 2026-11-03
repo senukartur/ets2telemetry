@@ -1,8 +1,10 @@
+import {advanceCoverage as advanceLogicalCoverage, applyCoverage, cleanLoadWindow, COVERAGE_LOSS, latestCoverage, originalCoverage, validCoverage, validCapturedEndpoint, type CoverageEndpoint, type LogicalCoverage} from './logical-coverage';
+import {gameDistanceStep} from '../../../telemetry-core/src/trips/game-distance';
 import type Database from 'better-sqlite3';
 import type {JobConfiguration} from '../../../contracts/src/protocol-v1';
 import {compatibleContinuation, continuationFingerprint, learnContinuationConstraints, type ContinuationConstraints, type ProfileObservation} from '../../../telemetry-core/src/trips/continuation';
 import {advanceProgress, restoredProgress, type ProgressAnchor, type ProgressCheckpoint} from '../../../telemetry-core/src/trips/progress';
-import type {SampleInput, TripEffect} from '../api';
+import type {CapturedEndpoint, CapturedRunning, SampleInput, TripEffect} from '../api';
 import {fail} from '../errors';
 import {jobValues} from './journal';
 import {readHardModeDetails} from './hard-mode';
@@ -11,8 +13,11 @@ export type LogicalRow = Record<string, unknown>;
 const get = (db: Database.Database, sql: string, ...args: unknown[]) => db.prepare(sql).get(...args) as LogicalRow | undefined;
 export const logicalEnabled = (db: Database.Database) => Number(db.pragma('user_version', {simple: true})) >= 4;
 export const encodeRow = (value: unknown) => JSON.stringify(value, (_key, v: unknown) => typeof v === 'bigint' ? {$integer: v.toString()} : v);
-export const decodeRow = (value: unknown): LogicalRow => JSON.parse(String(value), (_key, v: unknown) =>
-  v && typeof v === 'object' && '$integer' in v ? BigInt((v as {$integer: string}).$integer) : v) as LogicalRow;
+export const decodeRow = (value: unknown): LogicalRow => {
+  const row = JSON.parse(String(value), (_key, v: unknown) => v && typeof v === 'object' && '$integer' in v ? BigInt((v as {$integer: string}).$integer) : v) as LogicalRow;
+  if (Object.hasOwn(row, '_coverage') && !validCoverage(row._coverage)) row.recording_completeness = 'partial';
+  return row;
+};
 const raw = (db: Database.Database, id: unknown) => get(db, 'SELECT * FROM trips WHERE id = ?', id)!;
 const job = (db: Database.Database, row: LogicalRow) => jobValues(get(db, 'SELECT * FROM job_configurations WHERE id = ?', row.job_configuration_ref)!);
 export function logicalFor(db: Database.Database, trip: unknown): bigint {
@@ -21,8 +26,9 @@ export function logicalFor(db: Database.Database, trip: unknown): bigint {
   return row.logical_ref as bigint;
 }
 function createGroup(db: Database.Database, row: LogicalRow): void {
-  db.prepare('INSERT OR IGNORE INTO logical_trips(id, trip_uuid, latest_trip_ref, game) VALUES (?, ?, ?, ?)').run(row.id, row.trip_uuid, row.id, row.game);
+  const created = db.prepare('INSERT OR IGNORE INTO logical_trips(id, trip_uuid, latest_trip_ref, game) VALUES (?, ?, ?, ?)').run(row.id, row.trip_uuid, row.id, row.game).changes;
   db.prepare('INSERT OR IGNORE INTO logical_memberships(trip_ref, logical_ref, decision_key) VALUES (?, ?, ?)').run(row.id, row.id, `open-v1:${String(row.trip_uuid)}`);
+  if (created) revise(db, row.id as bigint, originalCoverage(db, row));
 }
 /** Private proof is source-qualified and bounded. Events older than this boundary cannot borrow it. */
 export function admittedProfile(proof: ProfileObservation | undefined, source: {game: string; pluginSessionId: string; processInstanceId: string}, clock: string, at: string): ProfileObservation | undefined {
@@ -53,16 +59,20 @@ export function associate(db: Database.Database, row: LogicalRow, proof: Profile
   const candidates = db.prepare(`SELECT * FROM logical_trips WHERE game = ? AND profile_scope = ? AND retired = 0 AND id <> ? ORDER BY id LIMIT 2`)
     .all(row.game, proof.scope, id) as LogicalRow[];
   const candidate = candidates.length === 1 ? candidates[0] : undefined;
+  let pendingCoverage: LogicalCoverage | undefined;
   const candidateRecorded=candidate?learnContinuationConstraints(JSON.parse(String(candidate.canonical_constraints)) as ContinuationConstraints,recordedJob):null;
   const combined = candidateRecorded===null?null:learnContinuationConstraints(candidateRecorded,currentJob);
   if (canonical && fingerprint !== null && candidate && candidate.fingerprint === fingerprint && combined !== null && compatibleContinuation(job(db, raw(db, candidate.id)), currentJob)) {
     // Keep the public UUID of the original recording. Never change a raw trip's session or event identity.
     db.prepare('UPDATE logical_memberships SET logical_ref = ?, previous_logical_ref = ?, joined_after_revision = (SELECT coalesce(max(id),0) FROM logical_revisions) WHERE trip_ref = ?').run(candidate.id, id, row.id);
+    const coverage = latestCoverage(db, candidate.id).value;
     const abandonedGroup = id;
     db.prepare('UPDATE logical_trips SET retired = 1 WHERE id = ?').run(id);
     id = candidate.id as bigint;
     db.prepare('UPDATE logical_trips SET latest_trip_ref = ?, member_count = member_count + 1, accounting_rebased=1,canonical_constraints=? WHERE id = ?').run(row.id,JSON.stringify(combined), id);
     revise(db,abandonedGroup);
+    if (coverage) pendingCoverage = {...coverage, member: String(row.id), phase: 'pending', endpoint: latestEndpoint(db, coverage.endpoint, candidate.progress_head, candidate.latest_trip_ref),
+      window: {session: String(row.plugin_session_ref), opened: row.opened_event_ref === null ? null : (row.opened_event_ref as bigint).toString()}};
   } else {
     // Conflicting/ambiguous candidates are retired permanently; their outcome remains unknown.
     db.prepare('UPDATE logical_trips SET retired = 1, interrupted = 1 WHERE game = ? AND profile_scope = ? AND retired = 0 AND id <> ?').run(row.game, proof.scope, id);
@@ -70,6 +80,7 @@ export function associate(db: Database.Database, row: LogicalRow, proof: Profile
   }
   db.prepare('UPDATE logical_memberships SET proof_json = ? WHERE trip_ref = ?').run(JSON.stringify(proof), row.id);
   db.prepare('UPDATE logical_trips SET profile_scope = ?, fingerprint = ?,canonical_constraints=? WHERE id = ?').run(proof.scope,canonical?fingerprint:null,JSON.stringify(candidate && id===candidate.id ? combined : learned ?? recorded ?? known),id);
+  if (pendingCoverage) revise(db, id, pendingCoverage);
   return id;
 }
 
@@ -83,7 +94,8 @@ export function projectionRow(db: Database.Database, id: bigint, includeProgress
   row._moneyIncomplete=group.reconciliation_unknown===1n;
   row._currentProgress=group.progress_head===null || get(db,'SELECT trip_ref FROM logical_progress WHERE id=?',group.progress_head)!.trip_ref===group.latest_trip_ref;
   row._rawDistance=rawPath && row.observed_distance_m_state==='available';row._rawFuel=rawPath && row.fuel_used_l_state==='available';
-  if (Number(group.member_count) > 1) row.recording_completeness = 'partial';
+  const coverage = latestCoverage(db, id);
+  applyCoverage(row, group, coverage.value, coverage.present);
   if (group.mode_ambiguous === 1n || first.game_mode_ambiguous === 1n || last.game_mode_ambiguous === 1n
     || last.game_mode !== first.game_mode || last.game_mode_method !== first.game_mode_method || last.game_mode_confidence !== first.game_mode_confidence) row.game_mode_ambiguous = 1n;
   const opening = readHardModeDetails(first.hard_mode_details), latest = readHardModeDetails(last.hard_mode_details);
@@ -112,9 +124,12 @@ function latchEvidence(db: Database.Database, id: bigint): void {
       loss ? JSON.stringify(loss) : null, first.game_mode_ambiguous === 1n || last.game_mode_ambiguous === 1n || last.game_mode !== first.game_mode
       || last.game_mode_method !== first.game_mode_method || last.game_mode_confidence !== first.game_mode_confidence ? 1 : 0, id);
 }
-export function revise(db: Database.Database, id: bigint): void {
+export function revise(db: Database.Database, id: bigint, override?: LogicalCoverage): void {
   latchEvidence(db,id);
   const row = projectionRow(db, id,false), head = get(db, 'SELECT progress_head FROM logical_trips WHERE id = ?', id)!.progress_head;
+  const group = get(db, 'SELECT * FROM logical_trips WHERE id=?', id)!;
+  const coverage = advanceLogicalCoverage(db, id, group, raw(db, group.latest_trip_ref), override);
+  applyCoverage(row, group, coverage, latestCoverage(db,id).present || override !== undefined);
   const max = (table: string) => get(db, `SELECT coalesce(max(id),0) AS id FROM ${table}`)!.id;
   const member = get(db, 'SELECT max(trip_ref) AS id FROM logical_memberships WHERE logical_ref = ?', id)!.id;
 
@@ -152,19 +167,32 @@ export function projectSample(db: Database.Database, session: {game: string; pro
   if(sample.recording.truck!==null){db.prepare('INSERT OR IGNORE INTO logical_trucks(identity_key) VALUES(?)').run(sample.recording.truck);truckRef=get(db,'SELECT id FROM logical_trucks WHERE identity_key=?',sample.recording.truck)!.id;}
   const group = get(db, 'SELECT * FROM logical_trips WHERE id = ?', id)!;
   const head = group.progress_head === null ? undefined : get(db, 'SELECT * FROM logical_progress WHERE id = ?', group.progress_head);
-  const previous = head ? progressCheckpoint(db,head) : null;
-  const anchor: ProgressAnchor = {gameClockId:sample.gameTime?.clockId ?? null,position:sample.position.available?sample.position.value:null,pluginSessionId, sourceClockId: sample.sourceClockId, monotonicNs: sample.monotonicNs, truck: sample.recording.truck,
+  const coverage = latestCoverage(db,id).value, predecessor = sample.recording.previous, endpoint = coverage?.endpoint;
+  const captured = coverage?.phase !== 'pending' && endpoint?.trip === String(row.id) && predecessor?.tripUuid === sample.tripUuid
+    && predecessor?.sourceClockId === endpoint?.anchor.sourceClockId && predecessor?.monotonicNs === endpoint?.anchor.monotonicNs
+    && endpoint?.anchor.pluginSessionId === pluginSessionId ? endpoint : undefined;
+  const previous = captured ?? (head ? progressCheckpoint(db,head) : null);
+  const anchor: ProgressAnchor = {speedMps: sample.speed.available ? sample.speed.value : null, gameMinutes: sample.gameTime?.minutes.available ? String(sample.gameTime.minutes.value) : null, gameClockId:sample.gameTime?.clockId ?? null,position:sample.position.available?sample.position.value:null,pluginSessionId, sourceClockId: sample.sourceClockId, monotonicNs: sample.monotonicNs, truck: sample.recording.truck,
     odometerM: sample.odometer.available ? sample.odometer.value : null, fuelL: sample.fuel.available ? sample.fuel.value : null};
   const sameSource = previous?.anchor.pluginSessionId === pluginSessionId && previous.anchor.sourceClockId === sample.sourceClockId;
-  const elapsed = sameSource ? Number(BigInt(sample.monotonicNs) - BigInt(previous.anchor.monotonicNs)) / 1e9 : 0;
+  let elapsed = sameSource ? Number(BigInt(sample.monotonicNs) - BigInt(previous.anchor.monotonicNs)) / 1e9 : 0;
   const delta = previous?.anchor.odometerM === null || !previous || anchor.odometerM === null ? null : anchor.odometerM - previous.anchor.odometerM;
-  const positionContinuous=!previous?.anchor.position || !anchor.position || Math.hypot(anchor.position.x-previous.anchor.position.x,anchor.position.y-previous.anchor.position.y,anchor.position.z-previous.anchor.position.z)<=100*elapsed+50;
-  const predecessor=sample.recording.previous;
-  const linked=predecessor && head && head.trip_ref===row.id && predecessor.tripUuid===sample.tripUuid && predecessor.sourceClockId===previous?.anchor.sourceClockId && predecessor.monotonicNs===previous?.anchor.monotonicNs;
-  const continuous = !!linked && sameSource && previous?.anchor.gameClockId===anchor.gameClockId && positionContinuous && elapsed > 0 && elapsed < 5 && delta !== null && delta >= 0 && delta <= 100 * elapsed + 50;
+  if (captured && elapsed >= 5) {
+    const resumed = get(db, `SELECT e.occurred_monotonic_ns FROM events e JOIN clocks c ON c.id=e.source_clock_ref WHERE e.plugin_session_id=? AND c.clock_uuid=? AND e.type='simulation.started'
+      AND e.occurred_monotonic_ns>? AND e.occurred_monotonic_ns<=? ORDER BY e.id DESC LIMIT 1`, row.plugin_session_ref, sample.sourceClockId,
+      captured.anchor.monotonicNs.padStart(20,'0'), sample.monotonicNs.padStart(20,'0'));
+    if (resumed) elapsed = Number(BigInt(sample.monotonicNs)-BigInt(String(resumed.occurred_monotonic_ns)))/1e9;
+  }
+  const linked=predecessor && (captured || head && head.trip_ref===row.id) && predecessor.tripUuid===sample.tripUuid && predecessor.sourceClockId===previous?.anchor.sourceClockId && predecessor.monotonicNs===previous?.anchor.monotonicNs;
+  const distance = previous ? gameDistanceStep({...previous.anchor, speedMps: previous.anchor.speedMps ?? null, gameMinutes: previous.anchor.gameMinutes ?? null, position: previous.anchor.position ?? null},
+    {...anchor, speedMps: anchor.speedMps ?? null, gameMinutes: anchor.gameMinutes ?? null, position: anchor.position ?? null}, elapsed) : null;
+  const continuous = elapsed > 0 && elapsed < 5 && !!linked && sameSource && previous?.anchor.gameClockId===anchor.gameClockId && distance?.kind === 'continuous'
+    && !transferBoundary(db,row,previous.anchor,anchor);
   let value = advanceProgress(previous, anchor, continuous);
-  let prefix: unknown = head?.prefix_ref ?? null, start: unknown = head?.start_ref ?? head?.id ?? null;
-  if (previous && (!continuous || delta !== null && delta < 0)) {
+  let prefix: unknown = captured ? captured.head === null ? null : BigInt(captured.head) : head?.prefix_ref ?? null, start: unknown = captured ? null : head?.start_ref ?? head?.id ?? null;
+  const bootstrap = !captured && previous && head?.prefix_ref === null && head.start_ref === null && previous.distanceM.available && previous.distanceM.value === 0 && previous.anchor.gameMinutes === null;
+  if (bootstrap && !continuous) value = advanceProgress(null, anchor, false);
+  if (previous && !captured && !bootstrap && (!continuous || delta !== null && delta < 0)) {
     // Walk span prefixes, not per-sample history. Every run points directly to its start and retained prefix.
     let cursor = head, matched: {value: ProgressCheckpoint; prefix: unknown; start: unknown; end: LogicalRow} | undefined;
     let runs = 0;
@@ -192,9 +220,119 @@ export function projectSample(db: Database.Database, session: {game: string; pro
   }
   const result = db.prepare(`INSERT INTO logical_progress(logical_ref,trip_ref,anchor_sample_ref,sample_ref,bound_sample_ref,prefix_ref,start_ref,truck_ref,odometer_m,start_odometer_m,distance_m,fuel_used_l)
     VALUES(?,?,?,?,?,?,?,?,?,?,?,?)`).run(id, row.id, sampleId,sampleId, sampleId, prefix, start, truckRef, anchor.odometerM,
-    start === null ? anchor.odometerM : get(db, 'SELECT odometer_m FROM logical_progress WHERE id = ?', start)?.odometer_m ?? null,
+    start === null ? captured?.anchor.odometerM ?? anchor.odometerM : get(db, 'SELECT odometer_m FROM logical_progress WHERE id = ?', start)?.odometer_m ?? null,
     value.distanceM.available ? value.distanceM.value : null, value.fuelUsedL.available ? value.fuelUsedL.value : null);
+  if (captured && continuous && prefix === null) db.prepare('UPDATE logical_progress SET start_ref=id WHERE id=?').run(result.lastInsertRowid);
   db.prepare('UPDATE logical_trips SET progress_head = ? WHERE id = ?').run(result.lastInsertRowid, id);
+  if (coverage?.phase === 'pending' && coverage.member === String(row.id) && coverage.window?.session === String(row.plugin_session_ref) && coverage.endpoint && cleanLoadWindow(db, row)) {
+    if (matchesEndpoint(coverage.endpoint.anchor, anchor)) revise(db, id, {...coverage, phase: 'resumed', window: null,
+      endpoint: {...coverage.endpoint, trip: String(row.id), anchor, head: String(result.lastInsertRowid),running:undefined}});
+    else if (completeEndpoint(coverage.endpoint.anchor) && completeEndpoint(anchor)) revise(db, id, {...coverage, losses: coverage.losses | COVERAGE_LOSS.unknown});
+  }
+}
+
+/** The existing session/sequence index bounds every check. An overflowing or unordered window cannot prove continuity. */
+function transferBoundary(db: Database.Database, row: LogicalRow, a: ProgressAnchor, b: ProgressAnchor): boolean {
+  const opening = row.opened_event_ref === null ? get(db,'SELECT checkpoint_next_event_seq AS seq FROM job_configurations WHERE id=?',row.job_configuration_ref)
+    : get(db,'SELECT event_seq AS seq FROM events WHERE id=?',row.opened_event_ref);
+  const events = db.prepare(`SELECT e.type,e.occurred_monotonic_ns,c.clock_uuid FROM events e JOIN clocks c ON c.id=e.source_clock_ref
+    WHERE e.plugin_session_id=? AND e.event_seq>=? ORDER BY e.event_seq DESC LIMIT 65`).all(row.plugin_session_ref,opening?.seq ?? '00000000000000000000') as LogicalRow[];
+  const sameClock=events.filter(e=>e.clock_uuid===b.sourceClockId), start=BigInt(a.monotonicNs),end=BigInt(b.monotonicNs);
+  if(events.length===65 && !sameClock.some(e=>e.occurred_monotonic_ns!==null && BigInt(e.occurred_monotonic_ns as string)<=start))return true;
+  let later:bigint|undefined;
+  for(const event of sameClock){
+    const at=event.occurred_monotonic_ns===null?null:BigInt(event.occurred_monotonic_ns as string);
+    if(at!==null && later!==undefined && at>later)return true;
+    if(at!==null)later=at;
+    if((event.type==='player.use.ferry'||event.type==='player.use.train') && (at===null || at>start && at<=end))return true;
+  }
+  return false;
+}
+
+function completeEndpoint(a: ProgressAnchor): boolean {
+  return a.truck !== null && a.odometerM !== null && a.fuelL !== null && a.gameMinutes !== null && a.gameMinutes !== undefined && a.position !== null && a.position !== undefined;
+}
+function matchesEndpoint(a: ProgressAnchor, b: ProgressAnchor): boolean {
+  return completeEndpoint(a) && completeEndpoint(b) && a.truck === b.truck && a.odometerM === b.odometerM && a.fuelL === b.fuelL && a.gameMinutes === b.gameMinutes
+    && a.position!.x === b.position!.x && a.position!.y === b.position!.y && a.position!.z === b.position!.z;
+}
+function endpointFromHead(db: Database.Database, head: unknown, trip: unknown): CoverageEndpoint | null {
+  if (head === null) return null;
+  const point = get(db, 'SELECT * FROM logical_progress WHERE id=?', head);
+  return point ? {...progressCheckpoint(db, point), trip: String(trip), head: (head as bigint).toString(), prefixState: null} : null;
+}
+function latestEndpoint(db: Database.Database, captured: CoverageEndpoint | null, head: unknown, trip: unknown): CoverageEndpoint | null {
+  const sampled = endpointFromHead(db,head,trip);
+  return captured && captured.trip === String(trip) && (!sampled || captured.anchor.pluginSessionId === sampled.anchor.pluginSessionId
+    && captured.anchor.sourceClockId === sampled.anchor.sourceClockId && BigInt(captured.anchor.monotonicNs) >= BigInt(sampled.anchor.monotonicNs)) ? captured : sampled;
+}
+/** A prefix lookup is confined to the selected path, not any abandoned/replayed sample with the same odometer. */
+function retainedEndpoint(db: Database.Database, id: bigint, head: unknown, current: CoverageEndpoint | null, at: ProgressAnchor): CoverageEndpoint | null {
+  const latest = head === null ? null : get(db,'SELECT distance_m FROM logical_progress WHERE id=? AND logical_ref=?',head,id);
+  const limit = Math.max(latest?.distance_m === null || !latest ? -1 : Number(latest.distance_m), current?.distanceM.available ? current.distanceM.value : -1);
+  let boundary = current;
+  for (let count=0; boundary && count<256; count++) {
+    const selected = boundary.head === null ? boundary.distanceM.available && boundary.distanceM.value === 0 : get(db, ACCOUNTING_PATH + ` SELECT p.id FROM logical_progress p
+      WHERE p.id=@point AND p.logical_ref=@logical AND EXISTS(SELECT 1 FROM ranges r WHERE coalesce(p.sample_ref,p.bound_sample_ref)>=r.first
+        AND coalesce(p.sample_ref,p.bound_sample_ref)<=r.last AND (r.cut_odometer_m IS NULL OR @odo<=r.cut_odometer_m)) LIMIT 1`,
+      {head,point:BigInt(boundary.head),logical:id,odo:boundary.anchor.odometerM});
+    if (selected && boundary.distanceM.available && boundary.distanceM.value<=limit && matchesEndpoint(boundary.anchor,at)) return boundary;
+    if (!boundary.prefixState) break;
+    const state = get(db,'SELECT s.row_json FROM logical_projection_states s WHERE s.id=? AND EXISTS(SELECT 1 FROM logical_revisions r WHERE r.logical_ref=? AND r.state_ref=s.id)',BigInt(boundary.prefixState),id);
+    const prior = state ? (JSON.parse(String(state.row_json)) as LogicalRow)._coverage : null;
+    boundary = validCoverage(prior) ? prior.endpoint : null;
+  }
+  if (head === null || !completeEndpoint(at)) return null;
+  const point = get(db, ACCOUNTING_PATH + ` SELECT p.* FROM logical_progress p JOIN samples s ON s.id=p.sample_ref JOIN logical_trucks t ON t.id=p.truck_ref
+    WHERE p.logical_ref=@logical AND t.identity_key=@truck AND s.odometer_m=@odo AND s.fuel_l=@fuel AND s.x=@x AND s.y=@y AND s.z=@z AND s.game_minutes=@minutes
+      AND EXISTS(SELECT 1 FROM ranges r WHERE s.id>=r.first AND s.id<=r.last AND (r.cut_odometer_m IS NULL OR s.odometer_m<=r.cut_odometer_m)) ORDER BY p.id DESC LIMIT 1`,
+    {head,logical:id,truck:at.truck,odo:at.odometerM,fuel:at.fuelL,x:at.position!.x,y:at.position!.y,z:at.position!.z,minutes:BigInt(at.gameMinutes!)});
+  return point ? {...progressCheckpoint(db, point), trip: String(point.trip_ref), head: String(point.id), prefixState: null} : null;
+}
+/** Captured pause/load observations share the membership transaction; they never insert a paused sample. */
+export function projectEndpoint(db: Database.Database, id: bigint, row: LogicalRow, source: {pluginSessionId: string}, clock: string, ns: string, input: CapturedEndpoint, profile: ProfileObservation): void {
+  if (!validCapturedEndpoint(input)) fail('INVALID_INPUT');
+  const group = get(db, 'SELECT * FROM logical_trips WHERE id=?', id)!, prior = latestCoverage(db,id), coverage = prior.value;
+  if (!coverage || group.latest_trip_ref !== row.id) return;
+  const anchor: ProgressAnchor = {pluginSessionId:source.pluginSessionId,sourceClockId:clock,monotonicNs:ns,truck:input.truck,odometerM:input.odometerM,
+    fuelL:input.fuelL,speedMps:input.speedMps,gameClockId:input.gameClockId,gameMinutes:input.gameMinutes,position:input.position};
+  if (coverage.phase === 'pending') {
+    if (!cleanLoadWindow(db,row,false)) return;
+    const matched = retainedEndpoint(db,id,group.progress_head,coverage.endpoint,anchor);
+    if (matched) {
+      db.prepare('UPDATE logical_trips SET progress_head=?,accounting_rebased=1 WHERE id=?').run(matched.head === null ? null : BigInt(matched.head),id);
+      revise(db,id,{...coverage,phase:cleanLoadWindow(db,row)?'resumed':'pending',window:cleanLoadWindow(db,row)?null:coverage.window,endpoint:{...matched,trip:String(row.id),anchor,running:undefined,prefixState:prior.revision ? String(prior.revision.state_ref) : null}});
+    } else if (coverage.endpoint && completeEndpoint(coverage.endpoint.anchor) && completeEndpoint(anchor)) revise(db,id,{...coverage,losses:coverage.losses|COVERAGE_LOSS.unknown});
+    return;
+  }
+  if (input.simulation !== 'paused') return;
+  const head = group.progress_head === null ? null : get(db,'SELECT * FROM logical_progress WHERE id=?',group.progress_head)!, predecessor=input.previous, endpoint=coverage.endpoint;
+  const captured=endpoint?.trip===String(row.id) && predecessor?.tripUuid===row.trip_uuid && predecessor?.sourceClockId===endpoint.anchor.sourceClockId
+    && predecessor?.monotonicNs===endpoint.anchor.monotonicNs && endpoint.anchor.pluginSessionId===source.pluginSessionId ? endpoint : null;
+  const previous=captured ?? (head ? progressCheckpoint(db,head) : null),a=previous?.anchor;
+  const linked = predecessor && predecessor.tripUuid === row.trip_uuid && predecessor.sourceClockId === a?.sourceClockId && predecessor.monotonicNs === a.monotonicNs
+    && (captured || head?.trip_ref === row.id) && a.pluginSessionId === source.pluginSessionId && a.sourceClockId === clock && a.gameClockId === anchor.gameClockId;
+  const supported=(from:ProgressAnchor,to:ProgressAnchor)=>{
+    const elapsed=Number(BigInt(to.monotonicNs)-BigInt(from.monotonicNs))/1e9;
+    return from.pluginSessionId===to.pluginSessionId && from.sourceClockId===to.sourceClockId && from.gameClockId===to.gameClockId && from.truck===to.truck
+      && elapsed>0 && elapsed<5 && gameDistanceStep({...from,speedMps:from.speedMps??null,gameMinutes:from.gameMinutes??null,position:from.position??null},
+        {...to,speedMps:to.speedMps??null,gameMinutes:to.gameMinutes??null,position:to.position??null},elapsed).kind==='continuous' && !transferBoundary(db,row,from,to);
+  };
+  const running=input.running;
+  let midpoint:ProgressAnchor|undefined,qualifiedRunning:CapturedRunning|undefined;
+  if(running && linked && a && running.tripUuid===row.trip_uuid && running.pluginSessionId===source.pluginSessionId && running.sourceClockId===clock
+    && running.profile.scope===profile.scope && running.profile.binding===profile.binding && running.profile.loadGeneration===profile.loadGeneration
+    && admittedProfile(running.profile,{game:profile.game,processInstanceId:profile.processInstanceId,pluginSessionId:source.pluginSessionId},clock,running.monotonicNs)){
+    midpoint={pluginSessionId:source.pluginSessionId,sourceClockId:clock,monotonicNs:running.monotonicNs,truck:running.truck,odometerM:running.odometerM,
+      fuelL:running.fuelL,speedMps:running.speedMps,gameClockId:running.gameClockId,gameMinutes:running.gameMinutes,position:running.position};
+    if(supported(a,midpoint)&&supported(midpoint,anchor))qualifiedRunning=running;
+  }
+  const totals = previous && matchesEndpoint(previous.anchor,anchor) ? {...previous,anchor}
+    : qualifiedRunning && previous && midpoint ? advanceProgress(advanceProgress(previous,midpoint,true),anchor,true)
+      : advanceProgress(previous,anchor,!running && !!linked && !!a && supported(a,anchor));
+  revise(db,id,{...coverage,endpoint:{anchor:totals.anchor,distanceM:totals.distanceM,fuelUsedL:totals.fuelUsedL,trip:String(row.id),running:qualifiedRunning,
+    head:group.progress_head === null ? null : (group.progress_head as bigint).toString(),
+    prefixState:prior.revision ? String(prior.revision.state_ref) : null}});
 }
 
 /** Selected run ranges are materialized once for each page, bounded by the persisted prefix path. */
@@ -217,19 +355,23 @@ export function retireObservedTerminal(db: Database.Database, session: bigint): 
 }
 
 export function progressCheckpoint(db:Database.Database,row:LogicalRow):ProgressCheckpoint {
-  const sample=get(db,`SELECT s.fuel_l,s.odometer_m,s.monotonic_ns,s.x,s.y,s.z,c.clock_uuid,g.clock_uuid AS game_clock_uuid,p.plugin_session_uuid FROM samples s JOIN clocks c ON c.id=s.source_clock_ref LEFT JOIN clocks g ON g.id=s.game_clock_ref
+  const sample=get(db,`SELECT s.fuel_l,s.odometer_m,s.speed_mps,s.game_minutes,s.monotonic_ns,s.x,s.y,s.z,c.clock_uuid,g.clock_uuid AS game_clock_uuid,p.plugin_session_uuid FROM samples s JOIN clocks c ON c.id=s.source_clock_ref LEFT JOIN clocks g ON g.id=s.game_clock_ref
     JOIN plugin_sessions p ON p.id=s.plugin_session_ref WHERE s.id=?`,row.anchor_sample_ref)!;
   const truck=row.truck_ref===null?null:String(get(db,'SELECT identity_key FROM logical_trucks WHERE id=?',row.truck_ref)!.identity_key);
   const available=(n:unknown)=>n===null?{available:false as const,reason:'not-observed' as const}:{available:true as const,value:Number(n)};
-  return {anchor:{gameClockId:sample.game_clock_uuid===null?null:sample.game_clock_uuid as string,position:sample.x===null?null:{x:Number(sample.x),y:Number(sample.y),z:Number(sample.z)},pluginSessionId:String(sample.plugin_session_uuid),sourceClockId:String(sample.clock_uuid),monotonicNs:String(sample.monotonic_ns),truck,
+  return {anchor:{speedMps: sample.speed_mps === null ? null : Number(sample.speed_mps), gameMinutes: sample.game_minutes === null ? null : (sample.game_minutes as bigint).toString(), gameClockId:sample.game_clock_uuid===null?null:sample.game_clock_uuid as string,position:sample.x===null?null:{x:Number(sample.x),y:Number(sample.y),z:Number(sample.z)},pluginSessionId:String(sample.plugin_session_uuid),sourceClockId:String(sample.clock_uuid),monotonicNs:String(sample.monotonic_ns),truck,
     odometerM:sample.odometer_m===null?null:Number(sample.odometer_m),fuelL:sample.fuel_l===null?null:Number(sample.fuel_l)},distanceM:available(row.distance_m),fuelUsedL:available(row.fuel_used_l)};
 }
 export function applyProgress(db:Database.Database,row:LogicalRow,head:unknown):LogicalRow {
-  if(head===null)return row;
-  const point=get(db,'SELECT * FROM logical_progress WHERE id=?',head)!,progress=progressCheckpoint(db,point);
-  if(row._currentProgress===false){row.observed_distance_m=null;row.observed_distance_m_state='not-observed';row.fuel_used_l=null;row.fuel_used_l_state='not-observed';return row;}
-  if(point.start_ref===null && point.prefix_ref===null){progress.distanceM={available:false,reason:'not-observed'};progress.fuelUsedL={available:false,reason:'not-observed'};}
-  for(const [column,reading] of [['observed_distance_m',progress.distanceM],['fuel_used_l',progress.fuelUsedL]] as const){if(column==='observed_distance_m'?row._rawDistance===true:row._rawFuel===true)continue;
+  const point = head === null ? null : get(db,'SELECT * FROM logical_progress WHERE id=?',head)!, sampled = point ? progressCheckpoint(db,point) : null;
+  const c = validCoverage(row._coverage) ? row._coverage : undefined, endpoint = c?.phase !== 'pending' ? c?.endpoint : null;
+  const boundary = endpoint && endpoint.trip === c?.member && (!point || String(point.trip_ref)!==endpoint.trip || sampled?.anchor.pluginSessionId===endpoint.anchor.pluginSessionId
+    && sampled.anchor.sourceClockId===endpoint.anchor.sourceClockId && BigInt(sampled.anchor.monotonicNs)<=BigInt(endpoint.anchor.monotonicNs)) ? endpoint : null;
+  const progress = boundary ?? sampled;
+  if (!progress) return row;
+  if (!boundary && row._currentProgress===false) {row.observed_distance_m=null;row.observed_distance_m_state='not-observed';row.fuel_used_l=null;row.fuel_used_l_state='not-observed';return row;}
+  if (!boundary && point?.start_ref===null && point.prefix_ref===null) {progress.distanceM={available:false,reason:'not-observed'};progress.fuelUsedL={available:false,reason:'not-observed'};}
+  for(const [column,reading] of [['observed_distance_m',progress.distanceM],['fuel_used_l',progress.fuelUsedL]] as const){if(!boundary && (column==='observed_distance_m'?row._rawDistance===true:row._rawFuel===true))continue;
     const invalid=reading.available && reading.value<0;row[column]=reading.available && !invalid?reading.value:null;row[`${column}_state`]=invalid?'invalid':reading.available?'available':reading.reason;}
   return row;
 }

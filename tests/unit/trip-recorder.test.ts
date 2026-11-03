@@ -230,7 +230,7 @@ describe('ET-015a trip recorder in the v1 ingestion pipeline', () => {
     const storage = new ModelStorage(); storage.holdAt = '1';
     start(storage); connectLatest();
     const s = new Script(ETS2_A), trip = uuid(ETS2_A, '1');
-    const odometer = (value: number) => ({odometer: {available: true as const, value, unit: 'm' as const}});
+    const odometer = (value: number) => ({speed:{available:true as const,value:20,unit:'m/s' as const},worldPlacement:{available:true as const,value:{position:{x:value/5,y:0,z:0},orientation:{heading:0,pitch:0,roll:0}}},odometer: {available: true as const, value, unit: 'm' as const}});
     latest().feed(s.welcome(), s.checkpoint(null, 0, odometer(1_000)), s.event(r.jobConfigured()));
     // Both snapshots arrive while job.configured is in flight; they reach the recorder only after its commit.
     latest().feed(s.snapshot(odometer(1_100), 2_000), s.snapshot(odometer(1_250), 2_000), s.event(r.delivered()));
@@ -398,6 +398,27 @@ describe('ET-015b one-second samples through the trip recorder', () => {
   /** The stored samples as [source second, trip UUID or null, UTC label]. */
   const stored = (storage: ModelStorage) => storage.model.samples.map(row => [second(row.monotonicNs), row.tripUuid ?? null, row.utcMs]);
 
+  it.each([false,true])('persists preceding bounded samples before a new welcome and fails closed on flush failure=%s',async failure=>{
+    const storage=new ModelStorage(),recorder=new TripRecorderSink(storage),s=new Script(ETS2_A),context={receivedUtcMs:RECEIVED_UTC};
+    await recorder.openSession(s.welcome());recorder.observe(s.checkpoint(null),context);await recorder.commit(s.event(r.jobConfigured()),context);recorder.observe(s.snapshot(),context);
+    const append=storage.appendSamples.bind(storage),upsert=storage.upsertSession.bind(storage),trace:string[]=[];
+    let enter!:()=>void,release!:()=>void;const entered=new Promise<void>(resolve=>{enter=resolve;}),held=new Promise<void>(resolve=>{release=resolve;});
+    storage.appendSamples=async(...args)=>{trace.push('samples');enter();await held;return failure?{ok:false,error:storageError('DISK_FULL')}:append(...args);};
+    storage.upsertSession=async input=>{trace.push('welcome');return upsert(input);};
+    const next=recorder.openSession(new Script(ETS2_B).welcome());await entered;expect(trace).toEqual(['samples']);expect(recorder.samples.pending().rows).toBe(1);release();
+    const result=await next;
+    if(failure){expect(result).toMatchObject({ok:false,error:{code:'DISK_FULL'}});expect(trace).toEqual(['samples']);expect(recorder.samples.pending().rows).toBe(1);}
+    else {expect(result.ok).toBe(true);expect(trace).toEqual(['samples','welcome']);expect(recorder.samples.pending().rows).toBe(0);}
+  });
+  it('does not reuse a pre-replay paused endpoint after a committed gap makes a checkpoint attach due',async()=>{
+    const storage=new ModelStorage(),s=new Script(ETS2_A),context={receivedUtcMs:RECEIVED_UTC};
+    const profile={version:1 as const,scope:'a'.repeat(64),binding:'b'.repeat(64),game:'ets2' as const,pluginSessionId:s.session,processInstanceId:s.welcome().source.processInstanceId,sourceClockId:s.clockId,afterMonotonicNs:'0',loadGeneration:1};
+    const recorder=new TripRecorderSink(storage,{profileEvidence:()=>profile});await recorder.openSession(s.welcome());
+    const gap=s.gap(2);recorder.observe(s.checkpoint(job(),2,{simulation:'paused'}),context);expect(recorder.attach.due()).toBe(false);
+    await recorder.commit(gap,context);expect(recorder.attach.due()).toBe(true);
+    const attached=vi.spyOn(storage,'openAttachedTrip');await recorder.attach.open(context);
+    expect(attached).toHaveBeenCalledTimes(1);expect(attached.mock.calls[0][0]).not.toHaveProperty('endpoint');
+  });
   it.each(['0','7'])('links unchanged cumulative counters after initial value %s and breaks only on advances',async initial=>{
     const storage=new ModelStorage(),recorder=new TripRecorderSink(storage),s=new Script(ETS2_A),context={receivedUtcMs:RECEIVED_UTC};
     const accept=<T>(result:{ok:true;value:T}|{ok:false;error:{code:string}}):T=>{if(!result.ok)throw new Error(result.error.code);return result.value;};

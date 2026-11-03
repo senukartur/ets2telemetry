@@ -1,9 +1,14 @@
 import type {HardModeStatus, HardModeRule} from '../../packages/contracts/src/hard-mode';
+export interface TooltipPhase {phase: 'hover' | 'keyboard'; criterion: HardModeRule['id'] | 'caveats'; language: 'en' | 'ru'}
+export function hardModeTooltipDiagnostics(input: TooltipPhase & {action: 'start' | 'stop'; token: number}): unknown;
+export function observeHardModeTooltip<T>(input: TooltipPhase & {record: Record<string, unknown>; start: () => Promise<unknown>;
+  stop: () => Promise<unknown>; action: () => Promise<T>; native: () => Promise<unknown>}): Promise<T>;
 export interface FixtureRule extends HardModeRule {label: string; name: string; tooltip: string[]; details: string[]}
-export interface FixtureExpectation {language: string; rules: FixtureRule[]; hint?: string; details?: boolean}
+export interface FixtureExpectation {language: string; rules: FixtureRule[]; hint?: string; details?: boolean; sourceText?: RegExp}
 export interface FixtureSnapshot {
   status: HardModeStatus; language: string;
   rows: {id: string; state: string; buttonCount: number; label: string; name: string}[];
+  source: {count: number; visible: boolean; text: string};
   hint?: {count: number; visible: boolean; lines: string[]};
   details?: {count: number; visible: boolean; rows: {id: string; lines: string[]}[]};
 }

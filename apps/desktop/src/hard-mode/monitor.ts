@@ -5,12 +5,18 @@ import type {SourceIdentity} from '../../../../packages/contracts/src/protocol-v
 import {unknownHardMode} from '../../../../packages/telemetry-core/src/hard-mode';
 export const HARD_MODE_POLL_MS = 1000, HARD_MODE_DEADLINE_MS = 2000;
 export interface MonitorSource {source: SourceIdentity; monotonicNs: string; clockId?: string; gameClockId?: string; boundary?: {clockId: string; probeSentClientNs: string; receivedSourceNs: string}}
+/** Null/stale publications retire proof without turning an unchanged process into a new physical scan cadence. */
+export function profileSourceKey(value: MonitorSource): string {
+  const s = value.source;
+  return JSON.stringify([s.game, s.origin, s.processId, s.windowsSessionId, s.processInstanceId, s.pluginSessionId, value.clockId, value.gameClockId]);
+}
 export class HardModeMonitor {
   private observation: HardModeObservation = this.unknown();
   private source: MonitorSource | null = null;
   private inFlight: Promise<void> | undefined;
   private controller: AbortController | undefined;
   private epoch = 0;
+  private cadenceKey: string | undefined;
   private lastScanNs: bigint | undefined;
   private observedClientNs: bigint | undefined;
   private pendingProof: {value: HardModeObservation; completedClientNs: bigint; deadlineClientNs: bigint; resolve: () => void} | undefined;
@@ -37,8 +43,12 @@ export class HardModeMonitor {
     const previousClock = this.source?.clockId, previousGameClock = this.source?.gameClockId;
     this.source = next;
     if (previousClock === next?.clockId && previousGameClock === next?.gameClockId && before?.pluginSessionId === after?.pluginSessionId && before?.processInstanceId === after?.processInstanceId && before?.processId === after?.processId && before?.windowsSessionId === after?.windowsSessionId && before?.game === after?.game && before?.origin === after?.origin) {this.bindProof(); return;}
+    const key = next ? profileSourceKey(next) : undefined;
+    if (key !== undefined && key !== this.cadenceKey) {this.lastScanNs = undefined; this.cadenceKey = key;}
     this.epoch++; this.controller?.abort(); this.retireProof(); this.publish(this.unknown());
-    void this.refresh();
+    const epoch = this.epoch, draining = this.inFlight;
+    if (draining) void draining.finally(() => {if (epoch === this.epoch && this.source) void this.refresh();});
+    else void this.refresh();
   }
   evidence(): HardModeObservation {
     if (this.expired()) return this.unknown();

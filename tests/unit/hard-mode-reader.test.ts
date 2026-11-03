@@ -1,9 +1,10 @@
+import {inspectGameProcess} from '../../apps/desktop/src/hard-mode/process';
 import {mkdtemp, mkdir, open, rm, writeFile, rename, utimes, symlink} from 'node:fs/promises';
 import path from 'node:path';
 import os from 'node:os';
 import {afterEach, beforeEach, describe, expect, it, vi} from 'vitest';
 import {hardModeFixtureOptions} from '../../apps/desktop/src/hard-mode/fixture';
-import {HardModeReader, profileFromLog, readStableFile} from '../../apps/desktop/src/hard-mode/reader';
+import {HardModeReader, coalesceProfileDiagnostics, type ProfileDiagnostic, profileFromLog, readStableFile} from '../../apps/desktop/src/hard-mode/reader';
 import {HardModeMonitor} from '../../apps/desktop/src/hard-mode/monitor';
 import {ProfileObserver} from '../../apps/desktop/src/profile-observation';
 import type {HardModeObservation} from '../../packages/contracts/src/hard-mode';
@@ -30,6 +31,94 @@ const reader = () => new HardModeReader({documents: path.join(root, 'Documents')
 const read = (r = reader()) => r.read(source, '100', created + 10000, new AbortController().signal);
 function gate<T = void>() {let resolve!: (value: T) => void; const promise = new Promise<T>(yes => {resolve = yes;}); return {promise, resolve};}
 describe('ET-026 isolated reader (REG-008/010/011)', () => {
+  it.each(['timeout','failed','invalid'] as const)('reports only a fixed process-query code for %s',async kind=>{
+    const diagnostics:ProfileDiagnostic[]=[];
+    const execute=((_file:unknown,_args:unknown,options:unknown,callback:unknown)=>{
+      expect(options).toMatchObject({timeout:1500,maxBuffer:16*1024,windowsHide:true});
+      const done=callback as (error:Error|null,stdout:string,stderr:string)=>void;
+      done(kind==='invalid'?null:Object.assign(new Error('private synthetic path and command line'),{killed:kind==='timeout'}),kind==='invalid'?'invalid JSON':'','');
+    }) as unknown as typeof import('node:child_process').execFile;
+    expect(await inspectGameProcess(source,new AbortController().signal,value=>diagnostics.push(value),execute)).toBeNull();
+    expect(diagnostics).toEqual([{code:kind==='timeout'?'PROFILE_PROCESS_QUERY_DEADLINE':kind==='failed'?'PROFILE_PROCESS_QUERY_FAILED':'PROFILE_PROCESS_QUERY_INVALID'}]);
+  });
+  it('drains a held old process read, rejects late proof after close, and verifies again after full reader restart',async()=>{
+    vi.useFakeTimers();let now=0n,active=0,maximum=0,calls=0,entered=gate(),release=gate(),done=gate();
+    const inspect=vi.fn(async(s:SourceIdentity)=>{maximum=Math.max(maximum,++active);const call=++calls;
+      try{if(call===1||call===4){entered.resolve();await release.promise;}return {...await processFacts(),pid:s.processId,createdUtcMs:created+(s.processId===123?0:s.processId===456?1000:2000)};}finally{active--;}});
+    const options={documents:path.join(root,'Documents'),process:inspect,nowNs:()=>now};let r=new HardModeReader(options),observer=new ProfileObserver(()=>r,()=>now,false);
+    let m=new HardModeMonitor((s,ns,at,signal)=>observer.readSettings(r,s,ns,at,signal).then(value=>{done.resolve();return value;}),undefined,()=>now);
+    const initial={source,clockId:'old-clock',monotonicNs:'1'};observer.select(initial);m.select(initial);const old=m.refresh();await entered.promise;
+    now=100_000_000n;await rename(path.join(game,'game.log.txt'),path.join(game,'held-old.log'));await writeFile(path.join(game,'game.log.txt'),header.replace('12:00:00','12:00:01')+selection+save());
+    const next={source:{...source,processId:456,processInstanceId:'10000000-0000-4000-8000-000000000002',pluginSessionId:'20000000-0000-4000-8000-000000000002'},clockId:'new-clock',monotonicNs:'1'};
+    observer.select(next);m.select(next);await old;release.resolve();await done.promise;await observer.refresh();now++;
+    const bound={...next,boundary:{clockId:next.clockId,probeSentClientNs:now.toString(),receivedSourceNs:'2'}};observer.select(bound);m.select(bound);await m.refresh();
+    expect(observer.evidence()?.pluginSessionId).toBe(next.source.pluginSessionId);expect(calls).toBe(3);expect(maximum).toBe(1);
+    now=200_000_000n;entered=gate();release=gate();done=gate();await rename(path.join(game,'game.log.txt'),path.join(game,'second-old.log'));await writeFile(path.join(game,'game.log.txt'),header.replace('12:00:00','12:00:02')+selection+save());
+    const third={...next,source:{...next.source,processId:789,pluginSessionId:'20000000-0000-4000-8000-000000000003'},clockId:'third-clock'};
+    observer.select(third);m.select(third);const closing=m.refresh();await entered.promise;m.close();observer.close();release.resolve();await closing;
+    expect(observer.evidence()).toBeUndefined();expect(m.evidence().assessment.state).toBe('unknown');
+    r=new HardModeReader(options);observer=new ProfileObserver(()=>r,()=>now,false);done=gate();
+    m=new HardModeMonitor((s,ns,at,signal)=>observer.readSettings(r,s,ns,at,signal).then(value=>{done.resolve();return value;}),undefined,()=>now);
+    observer.select(third);m.select(third);const restarted=m.refresh();await done.promise;await observer.refresh();now++;
+    const fresh={...third,boundary:{clockId:third.clockId,probeSentClientNs:now.toString(),receivedSourceNs:'3'}};observer.select(fresh);m.select(fresh);await restarted;
+    expect(observer.evidence()?.pluginSessionId).toBe(third.source.pluginSessionId);expect(m.evidence().assessment.state).toBe('pass');expect(calls).toBe(6);expect(maximum).toBe(1);m.close();observer.close();
+  });
+  it('reports bounded private rejection transitions anew for every epoch and expires admitted proof',async()=>{
+    vi.useFakeTimers();let now=0n;const output:(ProfileDiagnostic & {count:number;epoch:number})[]=[],diagnostic=coalesceProfileDiagnostics(value=>output.push(value));
+    const inspect=vi.fn(processFacts),r=new HardModeReader({documents:path.join(root,'Documents'),process:inspect,nowNs:()=>now,diagnostic});
+    const observer=new ProfileObserver(()=>r,()=>now,false,diagnostic),current={source,clockId:'clock',monotonicNs:'1'};
+    observer.select(current);await observer.refresh();now=1n;observer.select({...current,boundary:{clockId:'clock',probeSentClientNs:'1',receivedSourceNs:'2'}});
+    expect(observer.evidence()).toBeDefined();now=3_000_000_001n;expect(observer.evidence()).toBeUndefined();expect(output.at(-1)?.code).toBe('PROFILE_PROOF_EXPIRED');
+    for(let n=0;n<2;n++){
+      diagnostic({code:'PROFILE_EPOCH_RETIRED'});
+      diagnostic({code:'PROFILE_SELECTION_UNPROVEN'});diagnostic({code:'PROFILE_SELECTION_UNPROVEN'});diagnostic({code:'PROFILE_SELECTION_UNPROVEN'});
+    }
+    expect(output.filter(v=>v.code==='PROFILE_SELECTION_UNPROVEN' && v.count===1)).toHaveLength(2);
+    for(const value of output){expect(Object.keys(value).every(key=>['code','count','epoch','durationMs'].includes(key))).toBe(true);expect(value.code).toMatch(/^PROFILE_[A-Z_]+$/);}
+    expect(JSON.stringify(output)).not.toContain(name);expect(JSON.stringify(output)).not.toContain(id);expect(JSON.stringify(output)).not.toContain(root);
+    observer.close();
+  });
+  it('does not multiply physical scans on fresh/stale/null oscillation of the same lifetime and recovers after loading',async()=>{
+    vi.useFakeTimers();let now=0n,done=gate();
+    const inspect=vi.fn(processFacts),r=new HardModeReader({documents:path.join(root,'Documents'),process:inspect,nowNs:()=>now});
+    const observer=new ProfileObserver(()=>r,()=>now,false),m=new HardModeMonitor((s,ns,at,signal)=>observer.readSettings(r,s,ns,at,signal).then(value=>{done.resolve();return value;},error=>{done.resolve();throw error;}),undefined,()=>now);
+    const current={source,clockId:'clock',monotonicNs:'1'};observer.select(current);m.select(current);const initial=m.refresh();await done.promise;await observer.refresh();
+    now=1n;const bound={...current,boundary:{clockId:'clock',probeSentClientNs:'1',receivedSourceNs:'2'}};observer.select(bound);m.select(bound);await initial;
+    for(let n=1;n<=9;n++){now=BigInt(n)*100_000_000n;observer.select(null);m.select(null);observer.select(current);m.select(current);await m.refresh();await observer.refresh();}
+    expect(inspect).toHaveBeenCalledTimes(2);expect(observer.evidence()).toBeUndefined();
+    await writeFile(path.join(game,'game.log.txt'),header+selection+save()+'New profile selected: '+JSON.stringify(name)+'\n');
+    now=1_000_000_000n;done=gate();const loading=m.refresh();await done.promise;await loading;await observer.refresh();expect(observer.evidence()).toBeUndefined();
+    await writeFile(path.join(game,'game.log.txt'),header+selection+save()+'New profile selected: '+JSON.stringify(name)+'\n'+save());
+    now=2_000_000_000n;done=gate();const ready=m.refresh();await done.promise;await observer.refresh();now++;
+    const next={...current,boundary:{clockId:'clock',probeSentClientNs:now.toString(),receivedSourceNs:'3'}};observer.select(next);m.select(next);await ready;
+    expect(observer.evidence()).toBeDefined();expect(m.evidence().assessment.state).toBe('pass');expect(inspect).toHaveBeenCalledTimes(5);
+    m.close();observer.close();
+  });
+  it('starts a fresh process epoch while the previous process is still waiting for its causal probe', async () => {
+    vi.useFakeTimers(); let now = 0n, currentCreated = created;
+    const inspect = vi.fn(async (s: SourceIdentity) => ({...await processFacts(), pid: s.processId, createdUtcMs: currentCreated}));
+    const r = new HardModeReader({documents: path.join(root, 'Documents'), process: inspect, nowNs: () => now});
+    const observer = new ProfileObserver(() => r, () => now, false);
+    let readDone = gate(), readFailure: unknown;
+    const monitor = new HardModeMonitor((s, ns, at, signal) => observer.readSettings(r, s, ns, at, signal).then(value => {readDone.resolve(); return value;}, error => {readFailure = error; readDone.resolve(); throw error;}), undefined, () => now);
+    const initial = {source, clockId: 'first-clock', monotonicNs: '1'};
+    observer.select(initial); monitor.select(initial); const old = monitor.refresh();
+    await readDone.promise; await observer.refresh(); expect(inspect).toHaveBeenCalledTimes(2);
+    now = 100_000_000n; currentCreated = created + 1000;
+    await rename(path.join(game, 'game.log.txt'), path.join(game, 'previous.log.txt'));
+    await writeFile(path.join(game, 'game.log.txt'), header.replace('12:00:00', '12:00:01') + selection + save());
+    const next = {source: {...source, processId: 456, processInstanceId: '10000000-0000-4000-8000-000000000002', pluginSessionId: '20000000-0000-4000-8000-000000000002'}, clockId: 'second-clock', monotonicNs: '1'};
+    readDone = gate(); observer.select(next); monitor.select(next); await old;
+    // A new process has its own scan cadence; the preceding process's pending probe must not consume it.
+    const current = monitor.refresh(); await readDone.promise; await observer.refresh();
+    expect(readFailure).toBeUndefined(); expect(inspect).toHaveBeenCalledTimes(4);
+    now += 1n;
+    const bound = {...next, monotonicNs: '2', boundary: {clockId: next.clockId, probeSentClientNs: now.toString(), receivedSourceNs: '2'}};
+    observer.select(bound); monitor.select(bound); await current;
+    expect(observer.evidence()?.pluginSessionId).toBe(next.source.pluginSessionId);
+    expect(monitor.evidence().pluginSessionId).toBe(next.source.pluginSessionId);
+    monitor.close(); observer.close();
+  });
   it('shares exactly two process queries between overlapping settings and profile consumers, then reads fresh again', async () => {
     const inspect = vi.fn(processFacts), r = new HardModeReader({documents: path.join(root, 'Documents'), process: inspect});
     const [settings, identity] = await Promise.all([read(r), r.resolveProfile(source, created + 10000, new AbortController().signal)]);

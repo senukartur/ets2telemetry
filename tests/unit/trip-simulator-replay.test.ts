@@ -94,7 +94,7 @@ describe('trip replay of a synthetic transcript with readings accounting (fix ro
     const message = JSON.parse(readFileSync('tests/fixtures/protocol-v1/snapshot.json', 'utf8')) as Extract<ServerMessage, {kind: 'snapshot'}>;
     message.source = {game: 'ets2', pluginSessionId: s.session, processInstanceId: `20000000${s.session.slice(8)}`, processId: 4242, windowsSessionId: 1, origin: 'synthetic'};
     message.seq = String(100 + ms); message.capture = {clockId: s.clockId, monotonicNs: ns(ms)};
-    Object.assign(message.data.state, {simulation: 'running', odometer: {available: true, value: odometer, unit: 'm'}, fuel: {available: true, value: fuel, unit: 'L'},
+    Object.assign(message.data.state, {simulation: 'running', speed:{available:true,value:20,unit:'m/s'},worldPlacement:{available:true,value:{position:{x:ms*0.02,y:0,z:0},orientation:{heading:0,pitch:0,roll:0}}}, odometer: {available: true, value: odometer, unit: 'm'}, fuel: {available: true, value: fuel, unit: 'L'},
       gameTime: {available: true, value: String(minutes), unit: 'min', clockId: GAME_CLOCK_1}, captureUtcUnixMs: {available: true, value: String(BASE_UTC + ms)}});
     return validateServerMessage(message);
   }

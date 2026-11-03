@@ -16,6 +16,21 @@ class Port {
   deliver(value: NowPlayingDisplay, delivery: number) {this.onmessage?.({data: {type: 'live', delivery, update: value}});}
 }
 const display: NowPlayingDisplay = {generation: 1, language: 'en', style: 'full', backgroundOpacity: 80, editing: false, source: 'Synthetic player', track: {id: 's1', revision: 1, title: 'Fixture', artist: null, album: null, playback: 'paused', timeline: null, artwork: null}};
+it.each(['DISPLAY_ENVELOPE_REJECTED','DISPLAY_INVALID','DISPLAY_GENERATION_REGRESSED','PORT_MESSAGE_ERROR','CREDIT_SEND_FAILED'] as const)('reports a fixed local %s once without rejected values or changed cleanup',async code=>{
+  const warn=vi.spyOn(console,'warn').mockImplementation(()=>undefined);
+  try{
+    await import('../../apps/desktop/src/now-playing/preload');const receive=vi.fn();unsubscribe=bridge.subscribeNowPlaying(receive);
+    ipc.emit('now-playing:port',{ports:[]},{generation:1});const port=new Port();ipc.emit('now-playing:port',{ports:[port]},{generation:1});port.deliver(display,1);
+    if(code==='DISPLAY_ENVELOPE_REJECTED')port.onmessage?.({data:{type:'live',delivery:2,update:display,secret:'PRIVATE VALUE'}});
+    if(code==='DISPLAY_INVALID')port.onmessage?.({data:{type:'live',delivery:2,update:{...display,style:'PRIVATE VALUE'}}});
+    if(code==='DISPLAY_GENERATION_REGRESSED')port.deliver({...display,generation:0},2);
+    if(code==='PORT_MESSAGE_ERROR')port.onmessageerror?.();
+    if(code==='CREDIT_SEND_FAILED'){port.postMessage.mockImplementation(()=>{throw new Error('PRIVATE VALUE');});port.deliver({...display,editing:true},2);}
+    port.onmessageerror?.();port.events.emit('close');
+    expect(warn).toHaveBeenCalledExactlyOnceWith('NOW_PLAYING_LOCAL',code);expect(port.close).toHaveBeenCalledOnce();expect(receive.mock.lastCall?.[0].track).toBeNull();
+    expect(port.postMessage).toHaveBeenCalledTimes(code==='CREDIT_SEND_FAILED'?2:1);expect(JSON.stringify(warn.mock.calls)).not.toContain('PRIVATE');expect(Object.keys(bridge)).toEqual(['subscribeNowPlaying']);
+  }finally{warn.mockRestore();}
+});
 it('exposes only a frozen readonly subscription and clears quiet/closed channels after five seconds', async () => {
   await import('../../apps/desktop/src/now-playing/preload');
   expect(Object.keys(bridge)).toEqual(['subscribeNowPlaying']); expect(Object.isFrozen(bridge)).toBe(true);

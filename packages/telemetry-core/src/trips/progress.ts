@@ -2,7 +2,7 @@ import type {Available} from '../../../contracts/src/protocol-v1';
 import {FUEL_NOISE_LITERS} from '../derived';
 
 export interface ProgressAnchor {
-  gameClockId?:string|null;position?:{x:number;y:number;z:number}|null;pluginSessionId: string; sourceClockId: string; monotonicNs: string; truck: string | null;
+  speedMps?: number | null; gameMinutes?: string | null; gameClockId?:string|null;position?:{x:number;y:number;z:number}|null;pluginSessionId: string; sourceClockId: string; monotonicNs: string; truck: string | null;
   odometerM: number | null; fuelL: number | null;
 }
 export interface ProgressCheckpoint {

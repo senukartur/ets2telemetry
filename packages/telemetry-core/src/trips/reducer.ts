@@ -417,7 +417,8 @@ function stepEvent(state: TripState, message: EventMessage, coveredThrough: Uint
     case 'job.delivered': case 'job.cancelled': onOutcome(c, record); break;
     case 'player.use.ferry': case 'player.use.train':
       // T17: a game-time or position jump next to a transfer, by source time, is labelled a crossing.
-      if (c.monotonicNs !== null) session.lastTransfer = {clockId: message.capture.clockId, monotonicNs: c.monotonicNs};
+      session.lastTransfer = {pluginSessionId: message.source.pluginSessionId, processInstanceId: message.source.processInstanceId,
+        clockId: message.capture.clockId, monotonicNs: c.monotonicNs ?? message.capture.monotonicNs};
       onGameplay(c, record); break;
     case 'player.fined': case 'player.tollgate.paid': onGameplay(c, record); break;
     case 'truck.configured': onTruck(c, record); break;
@@ -832,7 +833,7 @@ function stepReading(state: TripState, sample: StepSample & {utcMs?: number}, cu
     if (prev !== null && acc.lastReading !== 'none') {
       if (hole) queueHole(slot, trip, prev, next, session.connectionSinceNs);
       if (acc.lastReading === 'active' && trip.phase === 'active') {
-        accountStep(slot, trip, session, prev, next, classifyStep(prev, next), jump);
+        accountStep(slot, trip, session, prev, next, classifyStep(prev, next, session.lastTransfer), jump);
         if (jump !== null) annotated = trip.tripUuid;
       }
     }

@@ -1,3 +1,4 @@
+import {replayTrips} from '../shared/trip-replay';
 import {spawn} from 'node:child_process';
 import {randomUUID} from 'node:crypto';
 import {mkdtempSync, rmSync} from 'node:fs';
@@ -86,6 +87,14 @@ const UNPACED_TWELVE_MINUTES_BUDGET_MS = 120_000;
 const CLI_BUILD_BUDGET_MS = 60_000;
 
 describe('simulator v1 soak schedule', () => {
+  it('retains the hand-computed accumulated distance of generated ordinary motion through raw accounting',()=>{
+    const generated=reduced(1,50) as {steps:Json[];transport:Json[]} & Json;
+    const terminal=generated.steps.find(step=>step.action==='gameplay'&&step.id==='job.delivered')!;
+    const short={...generated,steps:[...generated.steps.filter(step=>(step.atMs as number)<=10000),{...terminal,atMs:10025}]};
+    const trip=replayTrips(replayV1(short)).storage.trips[0];
+    // First active reading is50ms;199 following50ms steps each add0.9765625m and1/4096L.
+    expect(trip).toMatchObject({outcome:'delivered',observedDistanceM:{available:true,value:194.3359375},fuelUsedL:{available:true,value:0.048583984375}});
+  });
   it('generates the hand-written plan for one minute', () => {
     const {steps, frames} = plan(1);
     expect(steps).toEqual(PLAN_M1);
@@ -115,11 +124,11 @@ describe('simulator v1 soak schedule', () => {
 
   it('derives float32-exact frame values from the frame index', () => {
     const frames = new Map([...soakRawSteps(1)].filter(s => s.step.action === 'frame').map(s => [s.step.atMs as number, s.step.channels]));
-    expect(frames.get(0)).toEqual({speed: 19.53125, 'fuel.amount': 400, odometer: 1_000, 'game.time': 480});
+    expect(frames.get(0)).toEqual({speed: 19.53125, 'fuel.amount': 400, odometer: 1_000, 'game.time': 480,'world.placement':{x:0,y:0,z:0,heading:0,pitch:0,roll:0}});
     // n = 60: fuel 400 - 60/4,096, odometer 1,000 + 60/1,024 km, one game minute later.
-    expect(frames.get(3_000)).toEqual({speed: 19.53125, 'fuel.amount': 399.9853515625, odometer: 1_000.05859375, 'game.time': 481});
+    expect(frames.get(3_000)).toEqual({speed: 19.53125, 'fuel.amount': 399.9853515625, odometer: 1_000.05859375, 'game.time': 481,'world.placement':{x:58.59375,y:0,z:0,heading:0,pitch:0,roll:0}});
     // n = 7,199: 7,199/4,096 = 1.757568359375 L used, 7,199/1,024 = 7.0302734375 km, ⌊7,199/60⌋ = 119 minutes.
-    expect(frames.get(359_950)).toEqual({speed: 19.53125, 'fuel.amount': 398.242431640625, odometer: 1_007.0302734375, 'game.time': 599});
+    expect(frames.get(359_950)).toEqual({speed: 19.53125, 'fuel.amount': 398.242431640625, odometer: 1_007.0302734375, 'game.time': 599,'world.placement':{x:7030.2734375,y:0,z:0,heading:0,pitch:0,roll:0}});
   });
 
   it('passes every step of a two-minute run through the per-step validators', () => {

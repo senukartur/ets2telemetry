@@ -19,23 +19,60 @@ const nativeWindow = application => application.evaluate(({BrowserWindow}) => {
   const prefs = widget.webContents.getLastWebPreferences();
   return {visible: widget.isVisible(), focusable: widget.isFocusable(), movable: widget.isMovable(), topmost: widget.isAlwaysOnTop(), bounds: widget.getBounds(), security: {sandbox: prefs.sandbox, isolation: prefs.contextIsolation, node: prefs.nodeIntegration}};
 });
-export async function runNowPlayingSmoke({application, dashboard, config}) {
-  const result = {origin: 'synthetic', realMediaObserved: false};
+/** Diagnostic collection has its own short bound; it cannot replace a journey's original failure. */
+export async function boundedNowPlayingEvidence(collect,budgetMs=250) {
+  let timer;
+  try {return await Promise.race([Promise.resolve().then(collect).then(value=>value===null||value===undefined?{available:false,reason:'unavailable'}:{available:true,value},()=>({available:false,reason:'collection-failed'})),
+    new Promise(resolve=>{timer=setTimeout(()=>resolve({available:false,reason:'collection-deadline'}),budgetMs);})]);}
+  finally {clearTimeout(timer);}
+}
+export async function observeNowPlayingEdit({record,phase,begin,wait,collect}) {
+  const observation={phase};const observations=record.editObservations??=[];
+  if(observations.length<4)observations.push(observation);
+  observation.before=await boundedNowPlayingEvidence(collect);
+  try {
+    const beginResult=await begin();
+    observation.begin=beginResult && typeof beginResult.active==='boolean' && ['visible','not-foreground','unavailable'].includes(beginResult.placement)
+      ? {active:beginResult.active,placement:beginResult.placement}:{available:false};
+    // Start the original wait immediately: collecting evidence must not grant the renderer an extra deadline.
+    const waiting=Promise.resolve().then(wait).then(()=>({ok:true}),error=>({ok:false,error}));
+    observation.afterBegin=await boundedNowPlayingEvidence(collect);
+    const waited=await waiting;if(!waited.ok)throw waited.error;observation.waitCompleted=true;
+  } catch(error) {observation.afterFailure=await boundedNowPlayingEvidence(collect);throw error;}
+}
+async function currentTrackFacts(application,dashboard,widget) {
+  const evidence=collect=>boundedNowPlayingEvidence(collect,200);
+  const [state,main,dom,native]=await Promise.all([
+    evidence(()=>dashboard.evaluate(async()=>{const state=await globalThis.desktop.getAppState();return {state:state.nowPlaying.state,edit:state.nowPlaying.edit};})),
+    evidence(()=>application.evaluate(({app})=>{let result=null;app.emit('ets2telemetry:diagnostic-lifecycle-state',state=>{result=state.nowPlayingDiagnostics??null;});return result;})),
+    evidence(()=>widget.evaluate(()=>{const root=globalThis.document.getElementById('root'),editing=globalThis.document.querySelector('.np-editing');return {
+      readyState:globalThis.document.readyState,rootPresent:!!root,rootChildren:Math.min(100,root?.childElementCount??0),panelPresent:!!globalThis.document.querySelector('.np-panel'),
+      editingPresent:!!editing,editingVisible:!!editing && globalThis.getComputedStyle(editing).display!=='none' && globalThis.getComputedStyle(editing).visibility!=='hidden' && editing.getClientRects().length>0};})),
+    evidence(()=>application.evaluate(({BrowserWindow})=>{const widget=BrowserWindow.getAllWindows().find(window=>!window.isDestroyed() && !window.webContents.isDestroyed() && /now-playing\.html$/.test(window.webContents.getURL()));
+      return widget?{visible:widget.isVisible(),focused:widget.isFocused(),focusable:widget.isFocusable(),movable:widget.isMovable(),topmost:widget.isAlwaysOnTop()}:null;}))
+  ]);
+  return {state,main,dom,native};
+}
+export async function runNowPlayingSmoke({application, dashboard, config,record={origin:'synthetic',realMediaObserved:false}}) {
+  const result = record;
+  const edit=(phase,wait)=>observeNowPlayingEdit({record:result,phase,begin:()=>dashboard.evaluate(()=>globalThis.desktop.beginNowPlayingEdit()),wait,
+    collect:()=>currentTrackFacts(application,dashboard,widget)});
   await settingsPanel(dashboard, 'general');
   assert.equal(await dashboard.locator('#now-playing-source').count(), 0);
   await dashboard.getByTestId('now-playing-enabled').click();
   await dashboard.locator('#now-playing-source').waitFor({state: 'visible'});
+  result.enabled=true;
   const widget = await widgetOf(application);
   await widget.waitForFunction(() => typeof globalThis.nowPlaying === 'object');
   assert.deepEqual(await widget.evaluate(() => ({keys: Object.keys(globalThis.nowPlaying), frozen: Object.isFrozen(globalThis.nowPlaying), node: typeof globalThis.require, desktop: typeof globalThis.desktop})), {keys: ['subscribeNowPlaying'], frozen: true, node: 'undefined', desktop: 'undefined'});
+  result.bridgeVerified=true;
   await inject(application, snapshot());
   await widget.getByTestId('now-playing-panel').waitFor({state: 'visible'});
   const native = await nativeWindow(application);
   assert.deepEqual(native.security, {sandbox: true, isolation: true, node: false}); assert.equal(native.focusable, false); assert.equal(native.movable, false);
   assert.equal(native.visible, false, 'Media without an active game must stay off the desktop'); result.desktopHidden = true;
   await dashboard.bringToFront();
-  await dashboard.evaluate(() => globalThis.desktop.beginNowPlayingEdit());
-  await widget.locator('.np-editing').waitFor();
+  await edit('minimal-preview',()=>widget.locator('.np-editing').waitFor());
   assert.equal((await nativeWindow(application)).visible, true); result.editPreview = true;
   assert.equal(await widget.locator('.np-title').innerText(), track.title);
   assert.equal(await widget.locator('.np-panel').evaluate(element => element.classList.contains('np-minimal')), true);
@@ -43,8 +80,7 @@ export async function runNowPlayingSmoke({application, dashboard, config}) {
   assert.equal((await nativeWindow(application)).topmost, true);
   await dashboard.evaluate(() => globalThis.desktop.finishNowPlayingEdit('cancel'));
   await dashboard.evaluate(() => globalThis.desktop.setNowPlayingStyle('full'));
-  await dashboard.evaluate(() => globalThis.desktop.beginNowPlayingEdit());
-  await widget.locator('.np-full').waitFor();
+  await edit('full-preview',()=>widget.locator('.np-full').waitFor());
   assert.equal(await widget.locator('.np-album').innerText(), 'Fixture album');
   assert.equal(await widget.locator('.np-times').innerText(), '1:00\n4:00');
   result.full = true;
@@ -90,13 +126,12 @@ export async function runNowPlayingSmoke({application, dashboard, config}) {
   await inject(application, snapshot(null, []));
   await dashboard.waitForFunction(async () => (await globalThis.desktop.getAppState()).nowPlaying.state === 'no-session'); result.noSessionClears = true;
   await dashboard.bringToFront();
-  await dashboard.evaluate(() => globalThis.desktop.beginNowPlayingEdit());
-  await widget.locator('.np-editing').waitFor();
+  await edit('empty-preview',()=>widget.locator('.np-editing').waitFor());
   assert.equal(await widget.locator('.np-title').innerText(), 'Текущий трек');
   assert.equal(await dashboard.evaluate(() => globalThis.desktop.beginOverlayEdit().then(() => false, () => true)), true); result.editExclusion = true;
   await dashboard.evaluate(() => globalThis.desktop.resetNowPlayingEditPlacement());
   await dashboard.evaluate(() => globalThis.desktop.finishNowPlayingEdit('cancel')); result.cancel = true;
-  await dashboard.evaluate(() => globalThis.desktop.beginNowPlayingEdit());
+  await edit('reset-preview',async()=>undefined);
   await dashboard.evaluate(() => globalThis.desktop.resetNowPlayingEditPlacement());
   await dashboard.evaluate(() => globalThis.desktop.finishNowPlayingEdit('save')); result.resetSave = true;
   await inject(application, snapshot());

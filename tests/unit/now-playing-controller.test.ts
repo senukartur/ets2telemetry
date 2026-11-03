@@ -26,6 +26,15 @@ function harness() {
   controller.configure({...DEFAULT_NOW_PLAYING, enabled: true}); controller.loaded(true);
   return {controller, window, calls, screen};
 }
+it('reads diagnostic state without native calls or changes to editing authority',()=>{
+  const {controller,window,calls}=harness();controller.begin(true);calls.length=0;
+  const before=controller.editState();
+  window.isDestroyed=()=>{throw new Error('Snapshot must not query native lifetime');};
+  window.webContents.isDestroyed=()=>{throw new Error('Snapshot must not query web contents');};
+  const state=controller.diagnosticSnapshot();expect(state).toMatchObject({ready:true,retired:false,draft:true,foreground:true,visible:true,interactive:true,placement:'visible'});
+  Object.assign(state,{draft:false});
+  expect(controller.editState()).toEqual(before);expect(calls).toEqual([]);
+});
 it('shows without activation only over an active game and hides unavailable content', () => {
   const {controller, window, calls} = harness(); controller.update(true);
   expect(calls).not.toContain('showInactive');

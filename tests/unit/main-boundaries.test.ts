@@ -1080,7 +1080,8 @@ it('opens and exits through the gated diagnostic tray action and reports read-on
   vi.stubEnv('ETS2TELEMETRY_LIVE_SMOKE', '1'); vi.stubEnv('ETS2TELEMETRY_DIAGNOSTIC_DIR', 'C:\\isolated\\diagnostics');
   vi.stubEnv('ETS2TELEMETRY_PROFILE_DIR', profile); trayAvailable = true; await ready();
   const facts = () => {let value: Record<string, unknown> | undefined; app.emit('ets2telemetry:diagnostic-lifecycle-state', (state: Record<string, unknown>) => {value = state;}); return value;};
-  expect(facts()).toMatchObject({started: true, exiting: false, serviceReady: true, tray: true, dashboard: true, overlay: true, upstream: true, health: {service: 'ready'}});
+  expect(facts()).toMatchObject({started: true, exiting: false, serviceReady: true, tray: true, dashboard: true, overlay: true, upstream: true, health: {service: 'ready'},
+    nowPlayingDiagnostics:{controllerPresent:false,portPresent:false,windowPresent:false,subscribed:false,ackTimeoutMs:5000}});
   closeDashboard(); expect(facts()).toMatchObject({dashboard: false, overlay: true, upstream: true});
   app.emit('ets2telemetry:diagnostic-tray-action', 'C:\\anything'); expect(windows).toHaveLength(2);
   app.emit('ets2telemetry:diagnostic-tray-action', 'open'); expect(windows).toHaveLength(3); expect(facts()).toMatchObject({dashboard: true});
@@ -3345,6 +3346,48 @@ async function latestCurrentTrack() {
   await vi.advanceTimersByTimeAsync(50);
   return port.postMessage.mock.lastCall![0].update as import('../../packages/contracts/src').NowPlayingDisplay;
 }
+it.each([false,true])('gates current-track diagnostics and distinguishes edit queued/sent/credited without payloads: %s',async enabled=>{
+  vi.stubEnv('ETS2TELEMETRY_DIAGNOSTIC_DIR',enabled?'C:\\isolated\\diagnostics':undefined);
+  const widget=await readyCurrentTrack(),port=channels.at(-1)!.port1,dashboard=windows[0];dashboard.focused=true;
+  const begin=handlers.get('now-playing-edit:begin')!(trusted());expect(begin).toEqual({active:true,placement:'visible'});
+  const deliveries=()=>log.mock.calls.filter(call=>call[0]==='NOW_PLAYING_EDIT_DELIVERY').map(call=>call[2] as Record<string,unknown>);
+  expect(deliveries().map(row=>row.stage)).toEqual(enabled?['queued']:[]);
+  port.emit('message',{data:{type:'consumed',delivery:port.postMessage.mock.lastCall![0].delivery}});await vi.advanceTimersByTimeAsync(50);
+  expect(port.postMessage.mock.lastCall![0].update.editing).toBe(true);expect(deliveries().map(row=>row.stage)).toEqual(enabled?['queued','sent']:[]);
+  port.emit('message',{data:{type:'consumed',delivery:port.postMessage.mock.lastCall![0].delivery}});
+  expect(deliveries().map(row=>row.stage)).toEqual(enabled?['queued','sent','credited']:[]);
+  const source={id:'PRIVATE SESSION',sourceAppId:'PRIVATE PLAYER',playback:'playing' as const,current:true};
+  for(let n=0;n<100;n++)nowReaderOptions.snapshot({version:1,type:'snapshot',requestId:1,sessions:[source],error:null,selected:{id:source.id,revision:n,title:'PRIVATE TITLE',artist:null,album:null,playback:'playing',timeline:null,artwork:null}},1);
+  expect(deliveries()).toHaveLength(enabled?3:0);
+  dashboard.focused=false;dashboard.emit('blur');await vi.advanceTimersByTimeAsync(150);
+  port.close();
+  const states=log.mock.calls.filter(call=>call[0]==='NOW_PLAYING_STATE').map(call=>call[2] as Record<string,unknown>);
+  if(enabled){expect(states).toContainEqual(expect.objectContaining({draft:true,ownForeground:true,dashboardFocused:true,focusGate:true}));
+    expect(states).toContainEqual(expect.objectContaining({draft:true,ownForeground:false,dashboardFocused:false,focusGate:false,nativeVisible:false,interactiveIntent:false}));
+    expect(states.at(-1)).toMatchObject({ready:false,draft:false,portPresent:false});expect(states.length).toBeLessThan(20);
+    expect(log.mock.calls.filter(call=>call[0]==='LIVE_SUBSCRIPTION_REMOVED').at(-1)?.[2]).toMatchObject({consumer:'current-track',origin:'peer-close',ackTimeoutMs:5000});}
+  else expect(states).toEqual([]);
+  expect(JSON.stringify(log.mock.calls.filter(call=>/^(NOW_PLAYING_|LIVE_SUBSCRIPTION_)/.test(String(call[0]))))).not.toContain('PRIVATE');
+  expect(widget.visible).toBe(false);
+});
+it('diagnoses actual overlay500ms/current-track5000ms retirement while ignoring stale ports',async()=>{
+  vi.stubEnv('ETS2TELEMETRY_DIAGNOSTIC_DIR','C:\\isolated\\diagnostics');
+  const widget=await readyCurrentTrack(),old=channels.at(-1)!.port1;
+  widget.webContents.emit('did-navigate');widget.webContents.emit('did-finish-load');
+  const document=widget.webContents.postMessage.mock.lastCall![1].generation;
+  ipc.emit('now-playing:subscribe',{sender:widget.webContents,senderFrame:widget.webContents.mainFrame},document);
+  const current=channels.at(-1)!.port1;old.emit('close');old.emit('message',{data:{type:'wrong',delivery:0}});
+  ipc.emit('telemetry:subscribe',trusted());const dashboardChannel=channels.at(-1)!.port1;
+  ipc.emit('overlay:subscribe',overlayTrusted());const overlayChannel=channels.at(-1)!.port1;
+  await vi.advanceTimersByTimeAsync(499);expect(overlayChannel.close).not.toHaveBeenCalled();expect(current.close).not.toHaveBeenCalled();
+  await vi.advanceTimersByTimeAsync(1);expect(overlayChannel.close).toHaveBeenCalledOnce();expect(current.close).not.toHaveBeenCalled();
+  await vi.advanceTimersByTimeAsync(4499);expect(current.close).not.toHaveBeenCalled();await vi.advanceTimersByTimeAsync(1);expect(current.close).toHaveBeenCalledOnce();
+  const removed=log.mock.calls.filter(call=>call[0]==='LIVE_SUBSCRIPTION_REMOVED').map(call=>call[2] as Record<string,unknown>);
+  expect(removed.filter(row=>row.consumer==='current-track').map(row=>row.origin)).toEqual(['owner-retirement','ack-deadline']);
+  expect(removed).toContainEqual(expect.objectContaining({consumer:'overlay',origin:'ack-deadline',ackTimeoutMs:500}));
+  expect(dashboardChannel.close).toHaveBeenCalledOnce();expect(removed).toContainEqual(expect.objectContaining({consumer:'dashboard',origin:'ack-deadline',ackTimeoutMs:5000}));
+  expect(removed).toContainEqual(expect.objectContaining({consumer:'current-track',origin:'ack-deadline',subscriptionDocument:document,ackTimeoutMs:5000}));
+});
 it.each(['close', 'destroyed'] as const)('releases current-track ownership on %s before late live and media callbacks', async boundary => {
   vi.stubEnv('ETS2TELEMETRY_SOURCE_KIND', 'ets2');
   const widget = await readyCurrentTrack();

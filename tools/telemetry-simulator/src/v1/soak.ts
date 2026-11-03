@@ -66,11 +66,12 @@ const CLIENT = {durable: true, commit: 'each', ack: 'each'};
 export interface SoakRawStep {lane: 'source' | 'transport'; step: Record<string, unknown>}
 /**
  * The frame at `atMs`, a multiple of 50 ms: values derived from the frame index n = atMs / 50 only, all float32-exact
- * (speed 19.53125 m/s, fuel 400 − n/4,096 L, odometer 1,000 + n/1,024 km, game time 480 + ⌊n/60⌋ min).
+ * (speed 19.53125 m/s, fuel 400 − n/4,096 L, odometer 1,000 + n/1,024 km, game time 480 + ⌊n/60⌋ min, physical placement x=n×0.9765625 m).
  */
 export function soakFrame(atMs: number): Record<string, unknown> {
   const n = atMs / SOAK_FRAME_MS;
-  return {atMs, action: 'frame', channels: {speed: 19.53125, 'fuel.amount': 400 - n / 4_096, odometer: 1_000 + n / 1_024, 'game.time': 480 + Math.floor(n / 60)}};
+  return {atMs, action: 'frame', channels: {speed: 19.53125, 'fuel.amount': 400 - n / 4_096, odometer: 1_000 + n / 1_024, 'game.time': 480 + Math.floor(n / 60),
+    'world.placement': {x:n*0.9765625,y:0,z:0,heading:0,pitch:0,roll:0}}};
 }
 /** Every step but the frames, in time order. */
 function* soakEvents(minutes: number): Generator<SoakRawStep> {

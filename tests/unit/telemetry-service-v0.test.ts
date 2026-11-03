@@ -7,7 +7,7 @@ import {afterEach, beforeAll, beforeEach, describe, expect, it, vi} from 'vitest
 import {SERVICE_REPORT_SETTLE_MS} from '../../apps/desktop/src/diagnostics';
 import {SERVICE_EXIT_RESERVE_MS, SERVICE_KILL_DEADLINE_MS} from '../../apps/desktop/src/service-supervisor';
 import {TelemetryIngestion, TEST_PIPE_PATTERN, initialLive, sourceSelection} from '../../apps/desktop/src/telemetry-ingestion';
-import {LiveSubscriptions, type LivePort} from '../../apps/desktop/src/live-subscriptions';
+import {LiveSubscriptions, type LivePort, type LiveSubscriptionDiagnostic} from '../../apps/desktop/src/live-subscriptions';
 import {ServiceSupervisor} from '../../apps/desktop/src/service-supervisor';
 import type {ProbeDependencies} from '../../apps/desktop/src/service-probe';
 import {FrameDecoder, encodeFrame} from '../../packages/contracts/src/protocol-v0';
@@ -260,6 +260,35 @@ describe('v0 utility ingestion', () => {
   });
 });
 describe('bounded live subscription delivery', () => {
+  it('keeps retirement cleanup and its original error even when diagnostics throw or reenter',async()=>{
+    vi.useFakeTimers();const removed=vi.fn();const fanout:LiveSubscriptions=new LiveSubscriptions(initialLive(),1,500,Number.MAX_SAFE_INTEGER,event=>{if(event.stage==='removed'){removed();fanout.remove(port);throw new Error('Diagnostic failure');}});
+    const port=new TestPort();fanout.attach(port);fanout.publish(initialLive());const original=new Error('Original close failure');port.close=()=>{throw original;};
+    expect(()=>fanout.remove(port)).toThrow(original);expect(fanout.size).toBe(0);expect(removed).toHaveBeenCalledOnce();
+    await vi.advanceTimersByTimeAsync(500);expect(vi.getTimerCount()).toBe(0);
+  });
+  it.each(['ack-deadline','malformed-credit','mismatched-credit','peer-close','send-failure','owner-retirement','delivery-exhaustion'] as const)('observes removal once without changing the existing boundary: %s',async origin=>{
+    vi.useFakeTimers();const events:LiveSubscriptionDiagnostic[]=[];
+    const fanout=new LiveSubscriptions(initialLive(),1,500,origin==='delivery-exhaustion'?1:Number.MAX_SAFE_INTEGER,event=>{events.push(event);if(event.stage==='removed')throw new Error('Diagnostic sink failed');});
+    const port=new TestPort();if(origin==='send-failure')port.postMessage=()=>{throw new Error('Send failed');};
+    fanout.attach(port);fanout.publish(initialLive());
+    if(origin==='ack-deadline'){await vi.advanceTimersByTimeAsync(499);expect(port.closed).toBe(false);await vi.advanceTimersByTimeAsync(1);}
+    else if(origin==='malformed-credit')port.emit('message',{data:{type:'wrong',delivery:1}});
+    else if(origin==='mismatched-credit')port.emit('message',{data:{type:'consumed',delivery:99}});
+    else if(origin==='peer-close')port.close();
+    else if(origin==='delivery-exhaustion'){port.consume();await vi.advanceTimersByTimeAsync(50);}
+    else if(origin==='owner-retirement')fanout.close();
+    expect(port.closed).toBe(true);expect(fanout.size).toBe(0);fanout.remove(port);port.emit('close');fanout.close();
+    const removed=events.filter(event=>event.stage==='removed');expect(removed).toHaveLength(1);expect(removed[0].origin).toBe(origin);
+    expect(removed[0].sent).toBe(origin==='send-failure'?0:1);expect(removed[0].attempted).toBe(1);expect(removed[0].ageMs).toBeGreaterThanOrEqual(0);expect(vi.getTimerCount()).toBe(0);
+  });
+  it('observes queued, sent and credited publications independently without exposing update content',async()=>{
+    vi.useFakeTimers();const events:LiveSubscriptionDiagnostic[]=[],fanout=new LiveSubscriptions(initialLive(),1,500,Number.MAX_SAFE_INTEGER,event=>events.push(event)),port=new TestPort();fanout.attach(port);
+    for(let n=0;n<10000;n++)fanout.publish({...initialLive(),reason:'PRIVATE PAYLOAD'});
+    expect(events.filter(event=>event.stage==='queued')).toHaveLength(1);expect(fanout.snapshot(port)).toMatchObject({inFlight:true,pending:true,publications:10000,sent:1,credited:0,replaced:9999});
+    port.consume();await vi.advanceTimersByTimeAsync(50);expect(fanout.snapshot(port)).toMatchObject({sent:2,credited:1,sentPublication:10000,inFlight:true,pending:false});
+    port.consume();expect(fanout.snapshot(port)).toMatchObject({credited:2,creditedPublication:10000,inFlight:false});
+    expect(JSON.stringify(events)).not.toContain('PRIVATE PAYLOAD');fanout.close();
+  });
   it('coalesces thousands of updates for a slow consumer and limits delivery to 20 Hz', async () => {
     vi.useFakeTimers(); const fanout = new LiveSubscriptions(initialLive()); const port = new TestPort(); fanout.attach(port);
     for (let i = 0; i < 10000; i++) fanout.publish({...initialLive(), reason: String(i)});

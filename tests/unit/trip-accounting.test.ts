@@ -1,3 +1,4 @@
+import {classifyStep, readingPoint} from '../../packages/telemetry-core/src/trips/accounting';
 // ET-014 PR-2: readings accounting (T16) and the provisional thresholds (T17), fed through the trip reducer as `reading`
 // inputs between committed events. Every expected value is written by hand from docs/trips.md, the T16/T17 decisions
 // and the derived.ts step rules (docs/live-telemetry-fields.md); none is copied from reducer output. Each case names its
@@ -42,18 +43,19 @@ const BASE: NormalizedLiveState = normalizeV1State(snapshot.data.state, snapshot
 const NONE = {state: 'missing', reason: 'not-observed'} as const;
 const value = <T>(v: T) => ({state: 'value' as const, value: v});
 interface At {
-  ms: number; odometer?: number; fuel?: number; minutes?: number; clock?: string; simulation?: 'running' | 'paused';
+  ms: number; speed?: number | null; odometer?: number; fuel?: number; minutes?: number; clock?: string; simulation?: 'running' | 'paused';
   position?: {x: number; y: number; z: number}; plate?: string; country?: string; noTruck?: boolean; captureClock?: string; utc?: boolean; utcMs?: number;
 }
-/** One reading of script `s`'s session. Fields not given are not observed. */
+/** Synthetic ordinary motion supplies speed, position and a stable game minute; explicit undefined position/minutes are unavailable. */
 function reading(s: Script, a: At): TripInput {
   const base = BASE.truck.state === 'value' ? BASE.truck.value : undefined;
   const truck = a.noTruck === true ? NONE : base === undefined ? BASE.truck : value({...base, ...(a.plate !== undefined ? {licensePlate: value(a.plate)} : {}),
     ...(a.country !== undefined ? {plateCountry: {id: value(a.country), name: value(a.country)}} : {})});
-  const state: NormalizedLiveState = {...BASE, simulation: a.simulation ?? 'running', truck,
+  const position = 'position' in a ? a.position : {x: a.ms * 0.02, y: 0, z: 0};
+  const state: NormalizedLiveState = {...BASE, speed: a.speed === null ? NONE : value(a.speed ?? 20), simulation: a.simulation ?? 'running', truck,
     odometer: a.odometer === undefined ? NONE : value({kind: 'odometer' as const, meters: a.odometer}), fuel: a.fuel === undefined ? NONE : value(a.fuel),
-    gameTime: {minutes: a.minutes === undefined ? NONE : value(BigInt(a.minutes)), clockId: a.clock ?? GAME_CLOCK_1},
-    worldPlacement: a.position === undefined ? NONE : value({position: a.position, orientation: {heading: 0, pitch: 0, roll: 0}})};
+    gameTime: {minutes: 'minutes' in a && a.minutes === undefined ? NONE : value(BigInt(a.minutes ?? 12345)), clockId: a.clock ?? GAME_CLOCK_1},
+    worldPlacement: position === undefined ? NONE : value({position, orientation: {heading: 0, pitch: 0, roll: 0}})};
   return {kind: 'reading', sample: {source: {game: s.game, origin: 'synthetic', pluginSessionId: s.session, processInstanceId: `20000000${s.session.slice(8)}`},
     capture: {clockId: a.captureClock ?? s.clockId, monotonicNs: ns(a.ms)}, state, ...(a.utc === false ? {} : {utcMs: a.utcMs ?? BASE_UTC + a.ms})}};
 }
@@ -74,6 +76,51 @@ function opened(s = new Script(ETS2_A)): {s: Script; trip: string; rows: Row[]} 
   return {s, trip, rows: [[sessionInput(s.welcome())], [s.event(r.started())], [s.event(r.jobConfigured()), [open(trip, at(2))]]]};
 }
 
+describe('REG-008 SDK scaled game distance', () => {
+  it.each(['session','process','clock','before','after'] as const)('qualifies transfer barriers by source, clock and ordered interval: %s',field=>{
+    const s=new Script(ETS2_A),a=reading(s,{ms:1000,odometer:1000000,fuel:100,minutes:500}),b=reading(s,{ms:2000,odometer:1000343.75,fuel:99,minutes:500});
+    if(a.kind!=='reading'||b.kind!=='reading')throw new Error('Reading expected');
+    const mark={pluginSessionId:s.session,processInstanceId:a.sample.source.processInstanceId,clockId:s.clockId,monotonicNs:ns(1500)};
+    if(field==='session')mark.pluginSessionId=ETS2_B;if(field==='process')mark.processInstanceId='20000000-0000-4000-8000-000000000099';
+    if(field==='clock')mark.clockId='40000000-0000-4000-8000-000000000099';if(field==='before')mark.monotonicNs=ns(999);if(field==='after')mark.monotonicNs=ns(2001);
+    const step=classifyStep(readingPoint(a.sample),readingPoint(b.sample),mark);
+    expect(step.odometer).toEqual({kind:'continuous',meters:343.75});expect(step.fuel).toEqual({kind:'consumed',liters:1});
+  });
+  it.each(['ferry','train'] as const)('never counts a subthreshold %s transfer as driven distance or fuel',type=>{
+    const {s,rows}=opened();let state=play(rows);
+    state=run(state,[reading(s,{ms:3000,odometer:1000000,fuel:100,minutes:500}),reading(s,{ms:4000,odometer:1000100,fuel:99,minutes:500})]).state;
+    state=run(state,[s.event(r[type](),{advanceMs:2500}),reading(s,{ms:5000,odometer:1000443.75,fuel:98,minutes:500})]).state;
+    expect(tripView(state,'ets2').current).toMatchObject({observedDistanceM:{state:'value',value:100},fuelUsedL:{state:'value',value:1}});
+    state=run(state,[reading(s,{ms:6000,odometer:1000493.75,fuel:97.5,minutes:500})]).state;
+    expect(tripView(state,'ets2').current).toMatchObject({observedDistanceM:{state:'value',value:150},fuelUsedL:{state:'value',value:1.5}});
+  });
+  it.each([[20,20],[-20,-20],[20,-20],[-20,20]])('uses physical speed magnitude for forward/reverse motion (%d -> %d)', (before,after) => {
+    const script=new Script(ETS2_A),a=reading(script,{ms:1000,odometer:1000000,minutes:500,speed:before,position:{x:0,y:0,z:0}}),
+      b=reading(script,{ms:2000,odometer:1000343.75,minutes:500,speed:after,position:{x:-19,y:0,z:0}});
+    if(a.kind!=='reading'||b.kind!=='reading')throw new Error('Reading expected');
+    expect(classifyStep(readingPoint(a.sample),readingPoint(b.sample)).odometer).toEqual({kind:'continuous',meters:343.75});
+  });
+  it.each([
+    {name:'missing speed',change:{speed:null},kind:'unavailable'}, {name:'missing position',change:{position:undefined},kind:'unavailable'},
+    {name:'missing game time',change:{minutes:undefined},kind:'unavailable'}, {name:'stationary odometer advance',change:{speed:0,position:{x:0,y:0,z:0}},kind:'discontinuity'},
+    {name:'no physical displacement',change:{position:{x:0,y:0,z:0}},kind:'discontinuity'}, {name:'forward overspeed',change:{speed:101},kind:'discontinuity'},
+    {name:'reverse overspeed',change:{speed:-101},kind:'discontinuity'}, {name:'position teleport',change:{position:{x:10000,y:0,z:0}},kind:'discontinuity'},
+    {name:'game-distance jump',change:{odometer:1100000},kind:'discontinuity'}
+  ])('does not invent distance for $name',({change,kind})=>{
+    const script=new Script(ETS2_A),a=reading(script,{ms:1000,odometer:1000000,minutes:500,position:{x:0,y:0,z:0}}),
+      b=reading(script,{ms:2000,odometer:1000343.75,minutes:500,position:{x:19,y:0,z:0},...change});
+    if(a.kind!=='reading'||b.kind!=='reading')throw new Error('Reading expected');
+    expect(classifyStep(readingPoint(a.sample),readingPoint(b.sample)).odometer.kind).toBe(kind);
+  });
+  it.each([{base: 240000000, delta: 343.75, elapsed: 1001}, {base: 1100000000, delta: 156.25, elapsed: 997}])('accepts corroborated scaled distance $delta at $base m', ({base, delta, elapsed}) => {
+    const script = new Script(ETS2_A);
+    const a = reading(script, {ms: 1000, odometer: base, fuel: 100, minutes: 500, position: {x: 0, y: 0, z: 0}});
+    const b = reading(script, {ms: 1000 + elapsed, odometer: base + delta, fuel: 99, minutes: 500, position: {x: 19, y: 0, z: 0}});
+    if (a.kind !== 'reading' || b.kind !== 'reading') throw new Error('Reading expected');
+    expect(classifyStep(readingPoint(a.sample), readingPoint(b.sample)).odometer).toEqual({kind: 'continuous', meters: delta});
+  });
+});
+
 describe('T17 thresholds', () => {
   it('are the provisional named values of docs/trips.md', () => {
     expect([GAME_TIME_JUMP_MINUTES, GAME_TIME_JUMP_RATE, POSITION_JUMP_MARGIN_METERS, READING_HOLE_SECONDS, MAX_PLAUSIBLE_SPEED_MPS]).toEqual([30, 60, 50, 5, 100]);
@@ -89,7 +136,7 @@ describe('loaded-job coverage (REG-003, REG-008)', () => {
     // Ten continuous 100 m steps. The SDK fixture's opening game time is 12345; the delivery is at 12347.
     for (let second = 2; second <= 12; second++) {
       state = run(state, [reading(s, {ms: second * 2000 + (options.hole && second >= 6 ? 6000 : 0), odometer: 10_000 + (second - 2) * (options.observed ?? 1000) / 10,
-        fuel: 100, minutes: 12345, clock: options.initialRegression ? GAME_CLOCK_2 : GAME_CLOCK_1, position: {x: 0, y: 0, z: 0}})]).state;
+        fuel: 100, minutes: 12345, clock: options.initialRegression ? GAME_CLOCK_2 : GAME_CLOCK_1, position: {x: second * 20, y: 0, z: 0}})]).state;
     }
     if (options.gap) state = run(state, [s.gap(1)]).state;
     const delivery = r.delivered();

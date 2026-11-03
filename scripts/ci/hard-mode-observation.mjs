@@ -8,7 +8,7 @@ import path from 'node:path';
 import {until} from './lifecycle-observation.mjs';
 import {clickTestId, openDetail, stubSaveDialog, exportValidator} from './journal-observation.mjs';
 import {waitForHardModeProof} from './hard-mode-proof-observation.mjs';
-import {hardModeFixtureSnapshot, waitForHardModeFixture} from './hard-mode-fixture-observation.mjs';
+import {hardModeFixtureSnapshot, waitForHardModeFixture, hardModeTooltipDiagnostics, observeHardModeTooltip} from './hard-mode-fixture-observation.mjs';
 import {smokeDataRoot} from './smoke-build.mjs';
 export const HARD_MODE_TARGET = 'synthetic:hard-mode';
 const CONFIG = `uset g_fuel_simulation "1"
@@ -122,6 +122,16 @@ export async function runHardModeSmoke({application, dashboard, source, config, 
     return waitForHardModeProof({message, accept, timeoutMs, record: observation, read: () => readStatus(),
       refresh: () => dashboard.evaluate(() => globalThis.desktop.refreshHardMode())});
   };
+  const tooltipPhase = (phase, criterion, language, action) => {
+    const input = {phase, criterion, language, token: (record.tooltipPhases?.length ?? 0) + 1};
+    return observeHardModeTooltip({record, phase, criterion, language, action,
+      start: () => dashboard.evaluate(hardModeTooltipDiagnostics, {...input, action: 'start'}),
+      stop: () => dashboard.evaluate(hardModeTooltipDiagnostics, {...input, action: 'stop'}),
+      native: () => application.evaluate(({BrowserWindow}, url) => {
+        const window = BrowserWindow.getAllWindows().find(window => !window.isDestroyed() && !window.webContents.isDestroyed() && window.webContents.getURL() === url);
+        return window ? {visible: window.isVisible(), focused: window.isFocused(), minimized: window.isMinimized()} : null;
+      }, dashboard.url())});
+  };
   await chooseSource(dashboard, 'synthetic');
   await screen(dashboard, 'hardMode');
   await until(() => {healthy(); return source.connected();}, Boolean, 'HARD_MODE_DURABLE_SOURCE', 10000);
@@ -144,6 +154,7 @@ export async function runHardModeSmoke({application, dashboard, source, config, 
     detected.replaceAll('On', 'Вкл.').replaceAll('Off', 'Выкл.').replaceAll('Skilled', 'Умелая'),
     id === 'parking' ? 'Выкл. (0) и умелая (2); требуется ручная парковка' : required.replaceAll('On', 'Вкл.'),
     reason === 'Meets the required setting' ? 'Соответствует требуемой настройке' : 'Не соответствует требуемой настройке']);
+  let englishFixture;
   for (const lang of ['en', 'ru']) {
     await language(lang);
     const names = lang === 'en' ? ['Realistic fuel consumption', 'Air brake simulation', 'Police and fines', 'Fatigue simulation', 'Speed limiter', 'Truck stability', 'Trailer stability', 'Configured skilled parking', 'Rain probability', 'Random road events', 'Braking intensity', 'Traffic density'] : ['Реалистичный расход топлива', 'Пневмотормоза', 'Штрафы / полиция', 'Усталость', 'Ограничитель скорости', 'Стабилизация тягача', 'Стабилизация прицепа', 'Настроенная умелая парковка', 'Вероятность дождя', 'Случайные события', 'Интенсивность торможения', 'Плотность трафика'];
@@ -160,40 +171,51 @@ export async function runHardModeSmoke({application, dashboard, source, config, 
     const renderedFixture = (message, options = {}) => {
       const observation = {message}; (record.fixtureWaits ??= []).push(observation);
       return waitForHardModeFixture({refresh: () => dashboard.evaluate(() => globalThis.desktop.refreshHardMode()),
-        observe: () => dashboard.evaluate(hardModeFixtureSnapshot, options),
+        observe: () => dashboard.evaluate(hardModeFixtureSnapshot, {hint: options.hint, details: options.details}),
         expected: {language: lang, rules: fixtureRules, ...options}, record: observation, message});
     };
+    if (lang === 'en') englishFixture = renderedFixture;
     assert.equal(await dashboard.locator('[data-testid^="hard-mode-rule-"]').count(), 12);
     await renderedFixture('HARD_MODE_RENDERED_FAIL_' + lang);
     await dashboard.getByTestId('hard-mode-name-fuel').focus(); await dashboard.keyboard.press('Shift+Tab');
     for (const [id] of expected) {
       const trigger = dashboard.getByTestId(`hard-mode-name-${id}`), hint = dashboard.getByTestId(`hard-mode-hint-${id}`);
       await renderedFixture(`HARD_MODE_RULE_${lang}_${id}`);
-      await trigger.hover(); await hint.waitFor({state: 'visible'});
-      await renderedFixture(`HARD_MODE_HOVER_${lang}_${id}`, {hint: id});
-      await dashboard.keyboard.press('Escape'); await hint.waitFor({state: 'hidden'});
-      await dashboard.mouse.move(0, 0); await dashboard.keyboard.press('Tab');
-      assert.equal(await trigger.evaluate(element => element === globalThis.document.activeElement), true, `Tab did not focus ${lang}/${id}`);
-      await hint.waitFor({state: 'visible'}); await renderedFixture(`HARD_MODE_KEYBOARD_${lang}_${id}`, {hint: id});
-      if (id === 'fatigue') {
-        await renderedFixture('HARD_MODE_HINT_CAPTURE_' + lang, {hint: id});
-        await dashboard.screenshot({path: path.join(config.output, `hard-mode-parameter-hint-${lang}.png`)});
-      }
-      await dashboard.keyboard.press('Escape'); await hint.waitFor({state: 'hidden'});
-      assert.equal(await trigger.evaluate(element => element === globalThis.document.activeElement), true, `Escape moved focus from ${lang}/${id}`);
+      await tooltipPhase('hover', id, lang, async () => {
+        await trigger.hover(); await hint.waitFor({state: 'visible'});
+        await renderedFixture(`HARD_MODE_HOVER_${lang}_${id}`, {hint: id});
+        await dashboard.keyboard.press('Escape'); await hint.waitFor({state: 'hidden'});
+      });
+      await dashboard.mouse.move(0, 0);
+      await tooltipPhase('keyboard', id, lang, async () => {
+        await dashboard.keyboard.press('Tab');
+        assert.equal(await trigger.evaluate(element => element === globalThis.document.activeElement), true, `Tab did not focus ${lang}/${id}`);
+        await hint.waitFor({state: 'visible'}); await renderedFixture(`HARD_MODE_KEYBOARD_${lang}_${id}`, {hint: id});
+        if (id === 'fatigue') {
+          await renderedFixture('HARD_MODE_HINT_CAPTURE_' + lang, {hint: id});
+          await dashboard.screenshot({path: path.join(config.output, `hard-mode-parameter-hint-${lang}.png`)});
+        }
+        await dashboard.keyboard.press('Escape'); await hint.waitFor({state: 'hidden'});
+        assert.equal(await trigger.evaluate(element => element === globalThis.document.activeElement), true, `Escape moved focus from ${lang}/${id}`);
+      });
     }
     const details = dashboard.getByTestId('hard-mode-details'); await details.waitFor({state: 'visible'});
     assert.equal(await details.locator('[data-testid^="hard-mode-detail-rule-"]').count(), 1);
     await renderedFixture('HARD_MODE_INLINE_' + lang, {details: true});
     // ET-057: the caveats are the headline's hint. Open it by hover and by keyboard and read the tooltip a driver sees.
     const caveatButton = dashboard.locator('[data-testid="hard-mode-card"] h2 .yu-info-hint'), caveatTip = dashboard.getByTestId('hard-mode-caveats-tooltip');
-    await caveatButton.hover(); await caveatTip.waitFor({state: 'visible'});
-    const hoverText = await caveatTip.innerText();
-    await dashboard.keyboard.press('Escape'); await caveatTip.waitFor({state: 'hidden'}); await dashboard.mouse.move(0, 0);
-    await caveatButton.focus(); await caveatTip.waitFor({state: 'visible'});
-    assert.equal(await caveatTip.innerText(), hoverText, `Hard Mode caveat tooltip differs between hover and focus (${lang})`);
-    await dashboard.keyboard.press('Escape'); await caveatTip.waitFor({state: 'hidden'});
-    assert.equal(await caveatButton.evaluate(element => element === globalThis.document.activeElement), true, `Escape moved focus from the ${lang} caveat hint`);
+    const hoverText = await tooltipPhase('hover', 'caveats', lang, async () => {
+      await caveatButton.hover(); await caveatTip.waitFor({state: 'visible'});
+      const text = await caveatTip.innerText();
+      await dashboard.keyboard.press('Escape'); await caveatTip.waitFor({state: 'hidden'}); return text;
+    });
+    await dashboard.mouse.move(0, 0);
+    await tooltipPhase('keyboard', 'caveats', lang, async () => {
+      await caveatButton.focus(); await caveatTip.waitFor({state: 'visible'});
+      assert.equal(await caveatTip.innerText(), hoverText, `Hard Mode caveat tooltip differs between hover and focus (${lang})`);
+      await dashboard.keyboard.press('Escape'); await caveatTip.waitFor({state: 'hidden'});
+      assert.equal(await caveatButton.evaluate(element => element === globalThis.document.activeElement), true, `Escape moved focus from the ${lang} caveat hint`);
+    });
     const pageText = await dashboard.getByTestId('hard-mode-card').innerText();
     for (const caveat of (lang === 'en' ? ['Read-only checks observe persisted settings.', 'Unpersisted menu or console changes and transient changes between checks are not verified.', 'Manual delivery is required; actual Expert placement is not verified.', 'Current settings pass is separate from delivered-trip qualification.'] : ['Проверка только читает сохранённые настройки.', 'Несохранённые изменения в меню или консоли и временные изменения между проверками не проверяются.', 'Требуется ручная парковка; фактическое место уровня «Эксперт» не подтверждается.', 'Соответствие текущих настроек не означает, что завершённый рейс будет засчитан как Hard Mode.'])) assert.ok(hoverText.includes(caveat), `Missing ${lang} caveat in the tooltip: ${caveat}`);
     if (lang === 'ru') assert.doesNotMatch(pageText, /Detected:|Required:|Reason:|Check again|Current settings|Read-only/);
@@ -203,7 +225,10 @@ export async function runHardModeSmoke({application, dashboard, source, config, 
     assert.equal(await dashboard.getByRole('dialog').count(), 0);
   }
   await language('en');
-  assert.match(await dashboard.getByTestId('hard-mode-source').innerText(), /Synthetic \/ replay settings.*s since observation/);
+  const sourceText = /Synthetic \/ replay settings.*s since observation/;
+  // Language readiness does not reacquire retired proof. Accept backend, rules and source in the same bounded snapshot.
+  const finalEnglish = await englishFixture('HARD_MODE_FINAL_ENGLISH_SOURCE', {sourceText});
+  assert.match(finalEnglish.source.text, sourceText);
   await clickTestId(dashboard, 'hard-mode-refresh');
   record.hints = true; record.hover = true; record.inlineDetails = true; record.bilingual = true; record.keyboard = true; record.refresh = true;
   await source.settings('pass'); await until(async () => (await readStatus()).assessment.state, value => value === 'pass', 'HARD_MODE_PASS', 8000); record.pass = true; await until(() => dashboard.getByTestId('hard-mode-card').getAttribute('data-state'), state => state === 'pass', 'HARD_MODE_RENDERED_PASS', 5000); await dashboard.getByTestId('hard-mode-card').screenshot({path: path.join(config.output, 'hard-mode-pass.png')});
