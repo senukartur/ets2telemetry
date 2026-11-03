@@ -25,8 +25,13 @@ export const CI_ONLY = ['the full Vitest, storage, native, chain and runtime sui
 /** Above this many selected files a suite runs whole: the selection saves little and the command line stays short. */
 export const MAX_SELECTED_FILES = 60;
 
-// Agent definitions are instructions, like the Markdown ones; CI still runs for them.
-export const DOCUMENTATION =/^docs\/|\.md$|^\.codex\/agents\/[^/]+\.toml$/;
+// Prose: Markdown and the Codex agent definitions, which are instructions like the Markdown ones. A prose file that a test
+// reads (a quoted path literal in its source) is a test input instead. Other files under docs/ are inputs like any file.
+export const DOCUMENTATION = /\.md$|^\.codex\/agents\/[^/]+\.toml$/;
+/** Repository paths that every step command can carry unquoted: the CLI refuses any other changed or selected path. */
+export const SAFE_PATH = /^[A-Za-z0-9._/@+-]+$/;
+/** Test files whose sources name repository paths as planner data, not as files they read or import. */
+export const PATH_DATA_TESTS = ['tests/unit/test-affected-plan.test.ts'];
 const LINTABLE = /\.(?:[cm]?[jt]s|tsx)$/;
 const POWERSHELL = /\.ps(?:1|m1|d1)$/;
 const DEPENDENCIES = /(?:^|\/)package(?:-lock)?\.json$/;
@@ -53,7 +58,7 @@ const RUNTIME_OBSERVATIONS = [
 /** Desktop and package sources by the scenarios that show their behavior; a desktop file without a rule gets scaffold and the shell. */
 export const RUNTIME_SOURCES = [
   [/overlay/, ['overlay', 'ui:overlay']], [/journal|trip|history|export/, ['journal', 'ui:journal']],
-  [/recording|durable-sink|storage-worker|^packages\/storage\//, ['recording', 'refusal']], [/now-playing|media-session/, ['now-playing']],
+  [/recording|trip-recorder|durable-sink|storage-worker|v1-ingestion|history-|sample-|^packages\/storage\//, ['recording', 'refusal']], [/now-playing|media-session/, ['now-playing']],
   [/hard-mode/, ['hard-mode']], [/plugin-setup|plugin-/, ['plugin']], [/settings|-card\.tsx$|\/i18n\//, ['ui:settings']],
   [/live-|dashboard|gear-|telemetry-service|game-source|native-pipe-client|v1-ingestion|capture-|^packages\/(?:contracts|telemetry-core)\//, ['telemetry', 'ui:live']],
   [/app-lifecycle|tray|single-instance|autostart|session-end|\/main\.ts$/, ['scaffold', 'lifecycle']],
@@ -102,16 +107,22 @@ function sorted(values) { return [...new Set(values)].sort(); }
 
 /**
  * Plans the local checks for `changed` (repository paths, POSIX separators, deleted paths included).
- * `affectedTests` are the test files whose static imports reach a changed file, `affectedEntries` the storage bundle entries
- * they reach, `references` the test files that name each changed path, `existing` the changed paths that still exist and
- * `lintInstalled` whether tools/lint has its dependencies. `unmapped` lists the changed files that no rule, import or test
- * name covers: only CI checks them.
+ * `imports` maps each changed file to the test files and storage bundle entries whose static imports reach it, `references`
+ * to the test files that name it, `existing` lists the changed paths that still exist and `lintInstalled` says whether
+ * tools/lint has its dependencies. `unmapped` lists the changed files that no rule, import or test name covers: locally they
+ * are at most typechecked and linted, and only CI tests them.
  */
-export function planChecks({changed, affectedTests = [], affectedEntries = [], references = {}, existing = changed, lintInstalled = true}) {
+export function planChecks({changed, imports = {}, references = {}, existing = changed, lintInstalled = true}) {
   const files = sorted(changed);
+  const unsafe = [...files, ...Object.values(imports).flat(), ...Object.values(references).flat()].filter(file => !SAFE_PATH.test(file));
+  if (unsafe.length > 0) throw new Error(`refusing paths outside ${SAFE_PATH}: ${sorted(unsafe).map(file => JSON.stringify(file)).join(', ')}`);
   if (files.length === 0) return {kind: 'empty', steps: [], unmapped: [], areas: [], ciOnly: CI_ONLY};
-  if (files.every(file => DOCUMENTATION.test(file))) return {kind: 'documentation', steps: [], unmapped: [], areas: [], ciOnly: CI_ONLY};
-  const code = files.filter(file => !DOCUMENTATION.test(file));
+  const prose = file => DOCUMENTATION.test(file) && (references[file] ?? []).length === 0;
+  if (files.every(prose)) return {kind: 'documentation', steps: [], unmapped: [], areas: [], ciOnly: CI_ONLY};
+  const code = files.filter(file => !prose(file));
+  const reached = sorted(Object.values(imports).flat());
+  const affectedTests = reached.filter(file => /^tests\/.*\.test\.ts$/.test(file));
+  const affectedEntries = reached.filter(file => STORAGE_BUNDLE_ENTRIES.includes(file));
   const present = new Set(existing);
   const steps = [];
   const add = (id, command, reason, needs = []) => { if (!steps.some(step => step.id === id)) steps.push({id, command, reason, needs}); };
@@ -133,18 +144,19 @@ export function planChecks({changed, affectedTests = [], affectedEntries = [], r
   const changedTests = code.filter(file => /^tests\/.*\.test\.ts$/.test(file) && present.has(file));
   const referencedTests = Object.values(references).flat();
   const tests = sorted([...affectedTests, ...referencedTests, ...changedTests, ...extra]);
-  // A module is covered through the import graph; another file is covered when a test names it.
-  code.filter(file => LINTABLE.test(file) || changedTests.includes(file) || (references[file] ?? []).length > 0).forEach(file => mapped.add(file));
+  // A file is covered when it is a test, a test imports it or a test names it; linting alone does not cover it.
+  code.filter(file => changedTests.includes(file) || (imports[file] ?? []).length > 0 || (references[file] ?? []).length > 0).forEach(file => mapped.add(file));
 
   const unitTests = tests.filter(test => /^tests\/(?:unit|host)\//.test(test));
-  const fullUnit = dependencies || take(FULL_UNIT).length > 0 || unitTests.length > MAX_SELECTED_FILES;
+  const unitConfiguration = take(FULL_UNIT).length > 0, storageConfiguration = take(FULL_STORAGE).length > 0;
+  const fullUnit = dependencies || unitConfiguration || unitTests.length > MAX_SELECTED_FILES;
   // The host test drives the built reader executable; CI builds it before npm test too.
   const reader = fullUnit || unitTests.includes(MEDIA_HOST_TEST);
   if (reader) add('media:build', 'node scripts/build-media-session-reader.mjs', `${MEDIA_HOST_TEST} drives the built reader`);
   if (fullUnit) add('vitest', 'npm test', 'shared test configuration, dependencies or many files changed', reader ? ['media:build'] : []);
   else if (unitTests.length > 0) add('vitest', `npm test -- ${unitTests.join(' ')}`, 'tests that import or name the changed files', reader ? ['media:build'] : []);
   const storageTests = tests.filter(test => test.startsWith('tests/storage/'));
-  if (dependencies || take(FULL_STORAGE).length > 0 || affectedEntries.length > 0 || storageTests.length > MAX_SELECTED_FILES) {
+  if (dependencies || storageConfiguration || affectedEntries.length > 0 || storageTests.length > MAX_SELECTED_FILES) {
     add('storage', 'npm run test:storage', affectedEntries.length > 0 ? `the storage bundle reaches ${affectedEntries.join(', ')}` : 'storage configuration, dependencies or many files changed');
   } else if (storageTests.length > 0) add('storage', `npm run test:storage -- ${storageTests.join(' ')}`, 'storage tests that import or name the changed files');
 
@@ -194,3 +206,44 @@ export function planChecks({changed, affectedTests = [], affectedEntries = [], r
   }
   return {kind: 'code', steps, unmapped: code.filter(file => !mapped.has(file) && !POWERSHELL.test(file)), areas: sorted(code.map(areaOf).filter(Boolean)), ciOnly: CI_ONLY};
 }
+
+const basename = file => file.slice(file.lastIndexOf('/') + 1);
+
+/**
+ * Test files that name each changed path, from `sources` (test file to its source). A prose file counts only as a quoted
+ * path literal, which a test reads; another file counts as its repository path, as its file name when that name is unique
+ * in `tracked` and 8 characters or longer, and for a deleted module as its path without the extension (the failing import).
+ */
+export function findReferences({changed, existing = changed, tracked, sources}) {
+  const counts = new Map();
+  for (const file of tracked) counts.set(basename(file), (counts.get(basename(file)) ?? 0) + 1);
+  const tests = [...sources.keys()].filter(test => !PATH_DATA_TESTS.includes(test));
+  const found = {};
+  for (const file of changed) {
+    const name = basename(file);
+    const tokens = DOCUMENTATION.test(file) ? ["'", '"', '`'].map(quote => `${quote}${file}${quote}`)
+      : [file, ...(counts.get(name) === 1 && name.length >= 8 ? [name] : []), ...(!existing.includes(file) && LINTABLE.test(file) ? [file.replace(/\.[^.]+$/, '')] : [])];
+    const hits = tests.filter(test => test !== file && tokens.some(token => sources.get(test).includes(token)));
+    if (hits.length > 0) found[file] = hits;
+  }
+  return found;
+}
+
+/** Runs the steps in order through `run`, which returns a step's exit status; a step whose prerequisite did not pass is NOT RUN. */
+export function runSteps(steps, run, now = () => performance.now()) {
+  const results = [];
+  for (const step of steps) {
+    if (!step.needs.every(need => results.some(result => result.id === need && result.result === 'PASS'))) {
+      results.push({id: step.id, command: step.command, result: 'NOT RUN', seconds: 0});
+      continue;
+    }
+    const started = now();
+    const status = run(step);
+    results.push({id: step.id, command: step.command, result: status === 0 ? 'PASS' : 'FAIL', seconds: (now() - started) / 1000});
+  }
+  return results;
+}
+
+/** The Markdown summary table that the verifier copies into its report. */
+export const formatSummary = results => ['| Step | Result | Duration | Command |', '| --- | --- | ---: | --- |',
+  ...results.map(({id, result, seconds, command}) => `| ${id} | ${result} | ${seconds.toFixed(1)} s | \`${command}\` |`)].join('\n');
