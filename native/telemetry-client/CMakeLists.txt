@@ -27,7 +27,8 @@ set(CLIENT_TEST_CASES
   v1-client-kind v1-client-oversize v1-bad-tag v1-partial-length v1-partial-payload v1-zero-length v1-ack-while-quiet v1-write-deadline v1-capture-conflict
   v1-minor1-valid v1-minor-above-offer v1-minor-changed v1-minor2-valid v1-minor2-above-offer
   policy-prune policy-cap policy-duplicate policy-case-duplicate policy-junction
-  policy-lock-busy policy-lock-pending policy-publish-busy image-busy policy-readonly)
+  policy-lock-busy policy-lock-pending policy-publish-busy image-busy
+  profile-valid profile-homedir profile-creation profile-session profile-user profile-game profile-framing profile-unknown profile-query-failure profile-unavailable policy-readonly)
 # These cases wait out the broker's fixed 5 s frame or client-write deadline or the fixture's 5.5 s
 # quiet window (about 5-6 s each; every other case takes well under 1 s). Per-entry timeouts are hang
 # backstops above the fixture's own 15 s wait bound; ASan entries get twice the time.
@@ -60,7 +61,7 @@ if(ETS2TELEMETRY_CLIENT_ASAN)
     target_compile_definitions(${target} PRIVATE WIN32_LEAN_AND_MEAN NOMINMAX UNICODE _UNICODE ETS2TELEMETRY_CLIENT_ASAN_DIAGNOSTICS ETS2TELEMETRY_CHANNEL_${ETS2TELEMETRY_CHANNEL_UPPER})
     target_compile_options(${target} PRIVATE /W4 /WX /EHsc /fsanitize=address /Zi)
     target_link_options(${target} PRIVATE /DEBUG /INCREMENTAL:NO)
-    target_link_libraries(${target} PRIVATE advapi32 bcrypt)
+    target_link_libraries(${target} PRIVATE advapi32 bcrypt ole32 oleaut32 wbemuuid shell32)
   endforeach()
   set_target_properties(telemetry-client-test-asan PROPERTIES OUTPUT_NAME eurotrucks2 RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/asan-test-fixture")
   add_custom_command(TARGET telemetry-client-test-asan POST_BUILD COMMAND ${CMAKE_COMMAND} -E copy_if_different $<TARGET_FILE:telemetry-client-test-asan> $<TARGET_FILE_DIR:telemetry-client-test-asan>/amtrucks.exe)
@@ -70,13 +71,13 @@ add_executable(telemetry-pipe-client src/client.cpp ../telemetry-plugin/src/prot
 target_include_directories(telemetry-pipe-client PRIVATE ../telemetry-plugin/src)
 target_compile_definitions(telemetry-pipe-client PRIVATE WIN32_LEAN_AND_MEAN NOMINMAX UNICODE _UNICODE ETS2TELEMETRY_CHANNEL_${ETS2TELEMETRY_CHANNEL_UPPER})
 target_compile_options(telemetry-pipe-client PRIVATE /W4 /WX /EHsc)
-target_link_libraries(telemetry-pipe-client PRIVATE advapi32 bcrypt)
+target_link_libraries(telemetry-pipe-client PRIVATE advapi32 bcrypt ole32 oleaut32 wbemuuid shell32)
 if(BUILD_TESTING)
   add_executable(telemetry-client-test tests/client-test.cpp ../telemetry-plugin/src/protocol-v0.cpp ../telemetry-plugin/src/protocol-v1.cpp)
   target_include_directories(telemetry-client-test PRIVATE ../telemetry-plugin/src)
   target_compile_definitions(telemetry-client-test PRIVATE WIN32_LEAN_AND_MEAN NOMINMAX UNICODE _UNICODE ETS2TELEMETRY_CHANNEL_${ETS2TELEMETRY_CHANNEL_UPPER})
   target_compile_options(telemetry-client-test PRIVATE /W4 /WX /EHsc)
-  target_link_libraries(telemetry-client-test PRIVATE advapi32 bcrypt)
+  target_link_libraries(telemetry-client-test PRIVATE advapi32 bcrypt ole32 oleaut32 wbemuuid shell32)
   set_target_properties(telemetry-client-test PROPERTIES OUTPUT_NAME eurotrucks2 RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/test-fixture")
   add_custom_command(TARGET telemetry-client-test POST_BUILD COMMAND ${CMAKE_COMMAND} -E copy_if_different $<TARGET_FILE:telemetry-client-test> $<TARGET_FILE_DIR:telemetry-client-test>/amtrucks.exe)
   add_client_test_cases(native-pipe-client telemetry-client-test telemetry-pipe-client 1)

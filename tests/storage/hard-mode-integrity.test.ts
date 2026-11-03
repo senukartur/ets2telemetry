@@ -1,6 +1,6 @@
 import path from 'node:path';
 import {mkdir, writeFile} from 'node:fs/promises';
-import {HardModeReader} from '../../apps/desktop/src/hard-mode/reader';
+import {HardModeReader, readStableFile} from '../../apps/desktop/src/hard-mode/reader';
 import {Worker} from 'node:worker_threads';
 import {afterEach, beforeEach, describe, expect, it, vi} from 'vitest';
 import {StorageClient, workerHandle} from '../../packages/storage/src/client';
@@ -144,7 +144,7 @@ describe('ET-026 integrity (REG-005/006/007)', () => {
       const connection = pipeline.connect(welcome, {current: () => true, write: () => undefined, close: () => undefined});
       connection.checkpoint(script.checkpoint(null), Date.now()); await pipeline.idle();
       const observe = async (ns: string) => {
-        monitor.select({source: welcome.source, clockId: script.clockId, monotonicNs: ns}); const pending = monitor.refresh(); await Promise.resolve();
+        monitor.select({source: welcome.source, clockId: script.clockId, monotonicNs: ns}); const pending = monitor.refresh(true); await Promise.resolve();
         mono++; monitor.select({source: welcome.source, clockId: script.clockId, monotonicNs: ns, boundary: {clockId: script.clockId, probeSentClientNs: mono.toString(), receivedSourceNs: ns}}); await pending;
       };
       await observe(welcome.capture.monotonicNs); observing = true;
@@ -163,7 +163,7 @@ describe('ET-026 integrity (REG-005/006/007)', () => {
       expect(ok(await client.getTrip(trip.tripUuid))).toMatchObject({outcome: 'delivered', isHardMode: false, hardModeDetails: {firstLoss: {rule: 'fatigue', values: [0]}}});
     } finally {utcClock.mockRestore(); monitor.close(); await pipeline.stop(); expect(await client.close()).toEqual({clean: true});}
   });
-  it.each(['delay', 'utc-forward', 'utc-back', 'expired-intake', 'pending-unknown', 'pending-failure', 'process-probe'] as const)('freezes monotonic intake freshness across held opening/delivery: %s', async mode => {
+  it.each(['delay', 'utc-forward', 'utc-back', 'expired-intake', 'pending-unknown', 'pending-failure', 'process-probe', 'process-retired', 'periodic-failure', 'changed-failure', 'initial-process-failure'] as const)('freezes admitted generation across held opening/delivery: %s', async mode => {
     const directory = process.env.ETS2TELEMETRY_STORAGE_TEST_BUNDLES; if (!directory) throw new Error('Run storage suite');
     // Only this isolated real worker's UTC label is controlled; no clock is added to the production command surface.
     const clock = new BigInt64Array(new SharedArrayBuffer(8)); Atomics.store(clock, 0, BigInt(Date.now()));
@@ -176,17 +176,23 @@ describe('ET-026 integrity (REG-005/006/007)', () => {
     await writeFile(path.join(game, 'game.log.txt'), "************ : log created on : Tuesday October 20 2026 @ 12:00:00\nNew profile selected: 'Synthetic'\nLoading save. Type: 0, path: /home/profiles/53796E746865746963/save/autosave/game.sii\n");
     await writeFile(path.join(game, 'config.cfg'), 'uset g_traffic "1"'); await writeFile(path.join(profile, 'config_local.cfg'), 'uset g_brake_intensity "0.75"');
     await writeFile(path.join(profile, 'config.cfg'), HARD_MODE_CONFIG);
-    let mono = 0n, probeFailed = false, observe = false, readFinished: (() => void) | undefined;
-    const reader = new HardModeReader({documents: path.join(ws.directory, 'Documents'), fixtureOrigin: 'synthetic', process: source => Promise.resolve(probeFailed ? null : {
+    let mono = 0n, probeFailed = mode === 'initial-process-failure', observe = false, readFinished: (() => void) | undefined;
+    const reader = new HardModeReader({documents: path.join(ws.directory, 'Documents'), fixtureOrigin: 'synthetic', nowNs: () => mono,
+      processLifetime: () => mode === 'process-retired' && probeFailed ? undefined : 'isolated-process',
+      file: async (filename, limit, signal) => {
+        if ((mode === 'periodic-failure' || mode === 'changed-failure') && probeFailed && filename === path.join(profile, 'config.cfg')) throw new Error('Injected config read failure');
+        return readStableFile(filename, limit, signal);
+      }, process: source => Promise.resolve(probeFailed ? null : {
       pid: source.processId, createdUtcMs: new Date(2026, 9, 20, 12, 0, 0).getTime(), executable: 'C:/Synthetic/eurotrucks2.exe', commandLine: 'synthetic'})});
     let recorder!: TripRecorderSink;
     const monitor = new HardModeMonitor(async (...args) => {try {return await reader.read(...args);} finally {readFinished?.();}}, value => {if (observe) recorder.observeHardMode('ets2', value);}, () => mono);
+    reader.onInvalidate(() => monitor.invalidate());
     recorder = new TripRecorderSink(recorderClient({client}), {hardModeEvidence: () => monitor.evidence()});
     const pipeline = new DurableDelivery(recorder), acks: string[] = [], failures: string[] = [];
     const script = new Script(ETS2_A), welcome = script.welcome();
     const scan = async () => {
       const snapshot = script.snapshot(); monitor.select({source: welcome.source, clockId: script.clockId, monotonicNs: snapshot.capture.monotonicNs});
-      const readDone = new Promise<void>(resolve => {readFinished = resolve;}); const pending = monitor.refresh(); await readDone; await Promise.resolve();
+      const readDone = new Promise<void>(resolve => {readFinished = resolve;}); const pending = monitor.refresh(true); await readDone; await Promise.resolve();
       mono++; monitor.select({source: welcome.source, clockId: script.clockId, monotonicNs: snapshot.capture.monotonicNs,
         boundary: {clockId: script.clockId, probeSentClientNs: mono.toString(), receivedSourceNs: snapshot.capture.monotonicNs}}); await pending;
       return snapshot;
@@ -197,7 +203,7 @@ describe('ET-026 integrity (REG-005/006/007)', () => {
       const initialDone = new Promise<void>(resolve => {readFinished = resolve;});
       monitor.select({source: welcome.source, clockId: script.clockId, monotonicNs: welcome.capture.monotonicNs}); const initial = monitor.refresh(); await initialDone; await Promise.resolve();
       mono++; monitor.select({source: welcome.source, clockId: script.clockId, monotonicNs: welcome.capture.monotonicNs,
-        boundary: {clockId: script.clockId, probeSentClientNs: mono.toString(), receivedSourceNs: welcome.capture.monotonicNs}}); await initial; observe = true;
+        boundary: {clockId: script.clockId, probeSentClientNs: mono.toString(), receivedSourceNs: welcome.capture.monotonicNs}}); await initial; observe = true; probeFailed = false;
       const connection = pipeline.connect(welcome, {current: () => true, write: bytes => {const m = decodePayload(bytes.subarray(4), 'client') as ClientMessage; if (m.kind === 'ack') acks.push(m.data.throughEventSeq);}, close: (_kind, code) => failures.push(code)});
       connection.checkpoint(script.checkpoint(null), Date.now()); await pipeline.idle();
       const through = client.committedThrough.bind(client), offered = client.observeHardMode.bind(client);
@@ -218,21 +224,25 @@ describe('ET-026 integrity (REG-005/006/007)', () => {
         for (let tick = 0; tick < 5; tick++) {
           mono += 1_000_000_000n; Atomics.add(clock, 0, 1000n);
           if (seq === '1' && tick === 1) {
-            if (mode === 'pending-failure') await writeFile(path.join(profile, 'config.cfg'), HARD_MODE_CONFIG.replace('g_fatigue "1"', 'g_fatigue "0"'));
-            if (mode === 'process-probe') probeFailed = true;
+            if (mode === 'pending-failure' || mode === 'changed-failure') await writeFile(path.join(profile, 'config.cfg'), HARD_MODE_CONFIG.replace('g_fatigue "1"', 'g_fatigue "0"'));
+            if (['process-probe', 'process-retired', 'periodic-failure', 'changed-failure'].includes(mode)) probeFailed = true;
             if (mode === 'pending-unknown') recorder.observeHardMode('ets2', {...evidence(), assessment: unknownHardMode(Date.now(), 'interrupted')});
           }
           const snapshot = await scan(); connection.snapshot(snapshot, Date.now());
-          if (seq === '1' && tick === 1) {probeFailed = false; await writeFile(path.join(profile, 'config.cfg'), HARD_MODE_CONFIG);}
+          if (seq === '1' && tick === 1) {
+            if (mode === 'pending-failure') expect(monitor.evidence().assessment.rules[3]).toMatchObject({state: 'fail', values: [0]});
+            probeFailed = false;
+            if (mode === 'pending-failure' || mode === 'changed-failure') await writeFile(path.join(profile, 'config.cfg'), HARD_MODE_CONFIG);
+          }
         }
         expect(monitor.status().assessment.state).toBe('pass'); expect(ok(await through(ETS2_A))).toBe(seq === '1' ? '0' : '1'); expect(acks).toEqual(seq === '1' ? [] : ['1']);
         release(); await pipeline.idle(); expect(failures).toEqual([]); expect(acks.at(-1)).toBe(seq);
       }
       const trip = ok(await client.listTrips()).trips[0], details = ok(await client.getTrip(trip.tripUuid))!;
-      const qualified = ['delay', 'utc-forward', 'utc-back'].includes(mode);
+      const qualified = ['delay', 'utc-forward', 'utc-back', 'expired-intake', 'process-probe', 'periodic-failure'].includes(mode);
       expect(details).toMatchObject({outcome: 'delivered', isHardMode: qualified});
       if (qualified) {expect(details.hardModeDetails!.firstLoss).toBeNull(); expect(openPasses).toBeGreaterThanOrEqual(2);}
-      else {expect(details.hardModeDetails!.firstLoss).not.toBeNull(); if (mode === 'pending-failure') expect(details.hardModeDetails!.firstLoss).toMatchObject({rule: 'fatigue', values: [0]});}
+      else {expect(details.hardModeDetails!.firstLoss).not.toBeNull(); if (mode === 'pending-failure' || mode === 'changed-failure') expect(details.hardModeDetails!.firstLoss).toMatchObject({values: [null]});}
       expect(acks).toEqual(['1', '2']);
     } finally {monitor.close(); await pipeline.stop(); utc.mockRestore(); expect(await client.close()).toEqual({clean: true});}
   });

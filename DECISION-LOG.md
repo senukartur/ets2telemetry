@@ -847,3 +847,7 @@ The owner requested that absence of the TruckersMP module be displayed simply as
 ## Deliver Ready and feedback handoff — November 3, 2026
 
 The owner requested that `deliver` take its PR through Ready for review, monitor and address PR comments, and ensure CI is green before handoff. Invoking the skill therefore authorizes the Ready transition and task-related feedback replies/resolutions; merge and release still need separate owner permission, and skipped documentation-only CI is disclosed rather than claimed green. At the owner's follow-up request to raise the review limit, the pipeline allows 5 review passes: the initial candidate and up to 4 shared fix rounds.
+
+## ET-064 observation coverage and bounded inspection — November 3, 2026
+
+The owner's November 2 decision keeps verified Hard Mode evidence valid until its files/profile/process change; a slow or failed periodic read alone must not create unknown. The owner accepted five-second metadata/log-tail guards, minute byte verification and memory-only service health renewal, and authorized the fixed native COM inspection. Success is cached for the OS process lifetime within one utility lifetime; failures retry at 5/15/30/60 seconds, then every 60 seconds, capped at eight starts per rolling five minutes. Restart may query again. Check again requests full verification immediately, coalesces work and allows at most one manual start per second. Actual unknown/failure still loses trip qualification irreversibly.

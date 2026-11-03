@@ -1,7 +1,7 @@
 import {mkdtemp,mkdir,writeFile,rename,rm} from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
-import {afterEach,beforeEach,describe,expect,it} from 'vitest';
+import {afterEach,beforeEach,describe,expect,it,vi} from 'vitest';
 import {HardModeReader} from '../../apps/desktop/src/hard-mode/reader';
 import {ProfileObserver} from '../../apps/desktop/src/profile-observation';
 import type {SourceIdentity} from '../../packages/contracts/src/protocol-v1';
@@ -17,6 +17,17 @@ afterEach(async()=>{await rm(root,{recursive:true,force:true});});
 const reader=(nowNs?:()=>bigint)=>new HardModeReader({documents:root,nowNs,process:(s)=>Promise.resolve({pid:s.processId,createdUtcMs:created,executable:'C:/Synthetic/eurotrucks2.exe',commandLine:'eurotrucks2.exe'})});
 const resolve=(r=reader(),s=source)=>r.resolveProfile(s,created+10000,new AbortController().signal);
 describe('REG-003/008 independent verified profile identity',()=>{
+  it('suspends before a lifecycle event, coalesces cheap guards and admits only beyond a later causal receipt',async()=>{
+    let now=0n,inspect=0;const r=new HardModeReader({documents:root,nowNs:()=>now,process:s=>{inspect++;return Promise.resolve({pid:s.processId,createdUtcMs:created,executable:'C:/Synthetic/eurotrucks2.exe',homeDirectory:null});}});
+    const observer=new ProfileObserver(()=>r,()=>now,false),current={source,clockId:'clock',monotonicNs:'1'};
+    observer.select(current);await observer.refresh();now=1n;observer.select({...current,boundary:{clockId:'clock',probeSentClientNs:'1',receivedSourceNs:'2'}});
+    const first=observer.evidence();expect(first).toBeDefined();
+    const reads=vi.spyOn(r,'resolveProfile');observer.boundary();expect(observer.evidence()).toBeUndefined();observer.boundary();observer.boundary();
+    await Promise.resolve();await observer.refresh();expect(reads).toHaveBeenCalledOnce();expect(reads.mock.calls[0][3]).toBe(true);expect(inspect).toBe(1);
+    observer.select({...current,boundary:{clockId:'clock',probeSentClientNs:'1',receivedSourceNs:'3'}});expect(observer.evidence()).toBeUndefined();
+    now=2n;observer.select({...current,boundary:{clockId:'clock',probeSentClientNs:'2',receivedSourceNs:'4'}});
+    expect(observer.evidence()).toMatchObject({binding:first!.binding,afterMonotonicNs:'5'});expect(inspect).toBe(1);observer.close();
+  });
   it('survives process/plugin/log lifetime changes without requiring any settings file or a passing assessment',async()=>{
     const r=reader(),a=await resolve(r);
     await rename(path.join(game,'game.log.txt'),path.join(game,'old.log.txt'));await writeFile(path.join(game,'game.log.txt'),loaded());
@@ -39,7 +50,7 @@ describe('REG-003/008 independent verified profile identity',()=>{
     expect((await resolve(r)).scope).not.toBe(local.scope);
     await mkdir(remote('101'),{recursive:true});await expect(resolve(r)).rejects.toThrow('ambiguous');
   });
-  it('does not admit proof until a later same-clock probe and expires it without fresh verification',async()=>{
+  it('does not admit proof until a later same-clock probe and retires it on a game-clock change',async()=>{
     let now=100n;
     const r=reader(()=>now),observer=new ProfileObserver(()=>r,()=>now);
     observer.select({source,clockId:'clock',monotonicNs:'100'});await observer.refresh();
@@ -52,7 +63,7 @@ describe('REG-003/008 independent verified profile identity',()=>{
   it('keeps an unbound result across the next scan tick so the next probe response can bind it',async()=>{
     let now=0n,reads=0;
     const resolved=await resolve();
-    const fake={resolveProfile:()=>{reads++;now+=1_000_000n;return Promise.resolve({...resolved,timing:{startedClientNs:now-1_000_000n,completedClientNs:now}});}} as unknown as HardModeReader;
+    const fake={onInvalidate:()=>()=>undefined,resolveProfile:()=>{reads++;now+=1_000_000n;return Promise.resolve({...resolved,timing:{startedClientNs:now-1_000_000n,completedClientNs:now}});}} as unknown as HardModeReader;
     const observer=new ProfileObserver(()=>fake,()=>now);
     observer.select({source,clockId:'clock',monotonicNs:'1'});await observer.refresh();
     now=1_000_000_000n;await observer.refresh();expect(reads).toBe(1);
@@ -63,10 +74,10 @@ describe('REG-003/008 independent verified profile identity',()=>{
   it('expires an unbound result and discards late reads after an epoch change or close',async()=>{
     let now=0n,reads=0,finish:((value:Awaited<ReturnType<HardModeReader['resolveProfile']>>)=>void)|undefined;
     const resolved=await resolve();
-    const fake={resolveProfile:()=>{reads++;return new Promise<Awaited<ReturnType<HardModeReader['resolveProfile']>>>(r=>{finish=r;});}} as unknown as HardModeReader;
+    const fake={onInvalidate:()=>()=>undefined,resolveProfile:()=>{reads++;return new Promise<Awaited<ReturnType<HardModeReader['resolveProfile']>>>(r=>{finish=r;});}} as unknown as HardModeReader;
     const observer=new ProfileObserver(()=>fake,()=>now);
     observer.select({source,clockId:'clock',monotonicNs:'1'});finish!({...resolved,timing:{startedClientNs:now,completedClientNs:now}});await observer.refresh();
-    now=3_000_000_001n;const expired=observer.refresh();expect(reads).toBe(2);
+    now=5_000_000_001n;const expired=observer.refresh();expect(reads).toBe(2);
     observer.select({source,clockId:'changed',monotonicNs:'2'});finish!(resolved);await expired;
     expect(observer.evidence()).toBeUndefined();
     now=5_000_000_000n;const closing=observer.refresh();observer.close();finish!(resolved);await closing;
@@ -74,7 +85,7 @@ describe('REG-003/008 independent verified profile identity',()=>{
   });
   it.each(['game','origin','processId','windowsSessionId','processInstanceId','pluginSessionId','clockId','gameClockId'] as const)('retires an in-flight proof when %s changes',async field=>{
     let now=0n,signal:AbortSignal|undefined,finish!: (value:Awaited<ReturnType<HardModeReader['resolveProfile']>>)=>void;
-    const resolved=await resolve(),fake={resolveProfile:(_s:SourceIdentity,_at:number,s:AbortSignal)=>{signal=s;return new Promise<Awaited<ReturnType<HardModeReader['resolveProfile']>>>(done=>{finish=done;});}} as unknown as HardModeReader;
+    const resolved=await resolve(),fake={onInvalidate:()=>()=>undefined,resolveProfile:(_s:SourceIdentity,_at:number,s:AbortSignal)=>{signal=s;return new Promise<Awaited<ReturnType<HardModeReader['resolveProfile']>>>(done=>{finish=done;});}} as unknown as HardModeReader;
     const observer=new ProfileObserver(()=>fake,()=>now,false),initial={source,clockId:'clock',gameClockId:'game-clock',monotonicNs:'1'};
     observer.select(initial);const work=observer.refresh();
     const next=structuredClone(initial);

@@ -187,7 +187,7 @@ it('waits for genuine same-source reacquisition and rendered source after the la
     expect(() => expect(renderedSource).toMatch(sourceText)).toThrow();
     const record: FixtureRecord = {};
     let settled = false;
-    const pending = waitForHardModeFixture({refresh: () => {void monitor.refresh(); return Promise.resolve();}, observe,
+    const pending = waitForHardModeFixture({refresh: () => {void monitor.refresh(true); return Promise.resolve();}, observe,
       expected: {...expected, language: 'en', sourceText}, record, message: 'FINAL_ENGLISH'}).then(value => {settled = true; return value;});
     await vi.advanceTimersByTimeAsync(900); expect(read).toHaveBeenCalledTimes(2); expect(settled).toBe(false);
     release(); await vi.advanceTimersByTimeAsync(100);
@@ -213,7 +213,7 @@ it('reacquires genuine fail evidence after real monitor selection loss and waits
     monitor.select(null); expect(monitor.status().assessment.state).toBe('unknown');
     expect(rendered.status.assessment.state).toBe('fail');
     setTimeout(() => monitor.select({source, monotonicNs: '200', clockId: 'clock'}), 200);
-    const refresh = vi.fn(() => {void monitor.refresh(); return Promise.resolve();});
+    const refresh = vi.fn(() => {void monitor.refresh(true); return Promise.resolve();});
     const observe = vi.fn(() => Promise.resolve({...structuredClone(rendered), status: monitor.status()}));
     const record: FixtureRecord = {};
     const outcome = waitForHardModeFixture({refresh, observe, expected, record, message: 'FAIL_FIXTURE'}).then(value => ({value, error: undefined}), (error: unknown) => ({value: undefined, error}));

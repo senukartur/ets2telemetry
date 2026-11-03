@@ -8,6 +8,12 @@ const publication = (remainingNs = '3000000000') => ({type: 'hard-mode', update:
 const tripUpdate = {type: 'hard-mode', update: 'trip', trip};
 afterEach(() => vi.restoreAllMocks());
 describe('private Hard Mode relative display lifetime', () => {
+  it('keeps an old verified assessment while memory health publications continue and expires after they stop',()=>{
+    let mono=0n;const cache=new HardModeServiceCache(()=>mono);
+    for(let second=0;second<=60;second++){mono=BigInt(second)*1_000_000_000n;cache.accept(publication());expect(cache.status(true).assessment).toEqual(assessment);}
+    mono+=3_000_000_000n;cache.accept(tripUpdate);expect(cache.status(true).assessment.state).toBe('unknown');
+    cache.retire();cache.accept(tripUpdate);expect(cache.status(true).assessment.state).toBe('unknown');
+  });
   it('counts down aged proof without renewal from repeated trip updates or UTC steps, then accepts a genuine publication', () => {
     let mono = 900_000_000_000n, utc = 1000; vi.spyOn(Date, 'now').mockImplementation(() => utc);
     const cache = new HardModeServiceCache(() => mono);

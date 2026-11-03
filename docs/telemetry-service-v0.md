@@ -20,6 +20,8 @@ Broker-created security descriptors explicitly set the owner to the current `Tok
 
 ## Native broker control
 
+The separate read-only `--inspect-profile-process` mode accepts exactly one length-prefixed `GameTarget` on stdin followed by EOF (16 KiB payload bound, no unknown fields or trailing bytes). Only the service's active authenticated peer may supply it. A retained handle checks current user/session, creation FILETIME, liveness and game image before and after exactly one fixed numeric-PID COM `Win32_Process.CommandLine` query. Native `-homedir` parsing returns one bounded frame `{type:"profile-process",schemaVersion:1,target,executable,homeDirectory}` (16 KiB); absent override is null only after successful command-line inspection. No raw command line, arbitrary query, elevation or game-memory API is exposed. The service owns one inspection child, kills it at two seconds and awaits actual close before retrying. Success is reused for the OS lifetime; bounded failed-attempt retries and file-proof policy are described in [Hard Mode](hard-mode.md#read-only-evidence). Relay/discovery controls and telemetry wires are unchanged.
+
 Relay mode accepts `--game ets2|ats --discovery-dir <main-owned-directory>` for v0, or the same arguments followed by `--capture cap0` for the separate opt-in [CAP0 evidence mode](protocol/cap0.md); the capture mode connects only to the CAP0 endpoint, marks its receipt with `"evidence":"cap0"` and accepts only a CAP0 hello. Its first stdout frame is a four-byte little-endian length followed by a JSON receipt of at most 4,096 bytes:
 
 ```json

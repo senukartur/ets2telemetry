@@ -5,7 +5,8 @@ import {resolveSourceMode} from './source-mode';
 import {hardModeFixtureReader} from './hard-mode/fixture';
 import {HardModeReader, coalesceProfileDiagnostics} from './hard-mode/reader';
 import {HardModeMonitor} from './hard-mode/monitor';
-import {inspectGameProcess} from './hard-mode/process';
+import {inspectGameProcess, processLifetime} from './hard-mode/process';
+import type {GameTarget} from './native-game-discovery';
 import {readSteamRoot} from './plugin-setup/steam-registry';
 import { Worker } from 'node:worker_threads';
 import path from 'node:path';
@@ -115,16 +116,21 @@ let steamRoot: string | undefined;
 // Registry discovery has no renderer input; an unavailable Cloud root fails closed while local profiles remain readable.
 const hardModeLifetime = new AbortController();
 let steamDiscoveryStarted = false;
-const hardMode = new HardModeMonitor((source, ns, at, signal) => {
+let profileTarget: GameTarget | undefined;
+let monitoredReader: HardModeReader | undefined;
+const hardMode = new HardModeMonitor((source, ns, at, signal, force) => {
   const documents = process.env.ETS2TELEMETRY_DOCUMENTS;
   if (!hardModeReader && !documents) {profileDiagnostic({code:'PROFILE_LOCATION_UNPROVEN'}); return Promise.reject(new Error('Documents unavailable'));}
-  const reader = hardModeReader ??= new HardModeReader({diagnostic: profileDiagnostic, documents: documents!, get steamRoot() {return steamRoot;}, process: (source,signal) => inspectGameProcess(source,signal,profileDiagnostic)});
+  const reader = hardModeReader ??= new HardModeReader({diagnostic: profileDiagnostic, documents: documents!, get steamRoot() {return steamRoot;},
+    processLifetime: source => profileTarget ? processLifetime(profileTarget, source) : undefined,
+    process: (source,signal) => inspectGameProcess(source,signal,profileDiagnostic, activeBroker && profileTarget ? {executable: activeBroker.executable, target: profileTarget} : undefined)});
+  if (monitoredReader !== reader) {monitoredReader = reader; reader.onInvalidate(() => hardMode.invalidate());}
   // The monitor owns the only scan cadence; independent consumers share this fresh physical operation.
-  return profileObserver.readSettings(reader, source, ns, at, signal);
+  return profileObserver.readSettings(reader, source, ns, at, signal, force);
 }, observation => {
   if (hardModeGame) runtime.observeHardMode(hardModeGame, observation);
   port.postMessage(hardMode.publication());
-});
+}, undefined, () => hardModeReader?.requestFull(), () => hardModeReader?.canRetain() ?? false, () => port.postMessage(hardMode.publication()));
 let hardModeReader: HardModeReader | undefined = hardModeFixtureReader(process.env) ?? undefined;
 const profileObserver = new ProfileObserver(() => hardModeReader, undefined, false, profileDiagnostic);
 let lastV1: V1SourceState | undefined;
@@ -158,6 +164,7 @@ const runtime = createRecordingRuntime({env: process.env, gameHistory: GAME_HIST
   profileEvidence: () => profileObserver.evidence(), hardModeEvidence: () => hardMode.evidence(), onHardModeTrip: details => {port.postMessage({type: 'hard-mode', update: 'trip', trip: details});},
   onV1State, onV1Healthy: target => coordinator.healthy(target), onRecordingStatus: status => port.postMessage({type: 'recording', status})});
 const v1 = runtime.v1;
+v1.onProfileBoundary = () => profileObserver.boundary();
 // ET-016 (J2, J4): journal reads from main, through the database the runtime opened, one at a time and only while it is
 // open. Main sends {type: 'journal', id, query}; the answer is {type: 'journal', id, result} with a fixed J11 code on refusal.
 const journal = new JournalService({history: runtime.history, stopping: () => stopping, log, isRecordingActive: () => { const status = runtime.recordingStatus(); return status.state === 'recording' || status.state === 'paused' || ('trip' in status && Boolean(status.trip)); }});
@@ -169,12 +176,14 @@ function selectV1(selection: SourceSelection, broker: BrokerConfiguration | unde
 const coordinator = new GameSourceCoordinator({
   discover: discoverGames,
   retire: async () => {
+    profileTarget = undefined;
     effectiveSelection = 'game'; v0Live = initialLive(requestedSelection); v1Live = undefined; lastV1 = undefined; publishLive();
     hardMode.select(null); hardModeGame = undefined;
     await Promise.all([ingestion.retire(), v1.retire()]);
     ingestion.configureTarget(undefined); v1.configureTarget(undefined);
   },
   attach: (selection, target) => {
+    profileTarget = target;
     effectiveSelection = selection;
     ingestion.configureTarget(target); v1.configureTarget(target);
     ingestion.select(selection, fixtureEndpoint); selectV1(selection, activeBroker);
@@ -287,7 +296,7 @@ port.on('message', event => {
   const incoming: unknown = event.data;
   const command = incoming && typeof incoming === 'object' && !Array.isArray(incoming) ? incoming as Record<string, unknown> : undefined;
   if (command?.type === 'stop') stop();
-  else if (command?.type === 'hard-mode-refresh') {void hardMode.refresh();}
+  else if (command?.type === 'hard-mode-refresh') {void hardMode.refresh(true);}
   else if (command?.type === 'unsubscribe') subscriptions.close();
   else if (command?.type === 'subscribe' && event.ports.length === 1) subscriptions.attach(event.ports[0]);
   else if (command?.type === 'select') {

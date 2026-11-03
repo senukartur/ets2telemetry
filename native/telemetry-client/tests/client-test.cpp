@@ -1,13 +1,22 @@
 // This is an isolated console fixture named eurotrucks2.exe; it never launches or touches a game.
 #define wmain broker_entrypoint
 #define ETS2TELEMETRY_CLIENT_DISCOVERY_TEST
+#define ETS2TELEMETRY_PROFILE_PROCESS_TEST
 #include "../src/client.cpp"
 #undef ETS2TELEMETRY_CLIENT_DISCOVERY_TEST
+#undef ETS2TELEMETRY_PROFILE_PROCESS_TEST
 #undef wmain
 #include <fstream>
 #include <iostream>
 #include <winioctl.h>
 void require(bool value) {if (!value) throw std::runtime_error("Native client test assertion failed");}
+std::optional<std::wstring> profile_test_command_line(DWORD pid) {
+  (void)pid;
+  wchar_t mode[32]{}; GetEnvironmentVariableW(L"ETS2TELEMETRY_PROFILE_QUERY_TEST", mode, 32);
+  if (std::wstring(mode) == L"failure") fail();
+  if (std::wstring(mode) == L"unavailable") return L"";
+  return std::nullopt;
+}
 struct TestDirectoryCleanup {
   fs::path path;
   ~TestDirectoryCleanup() {std::error_code ignored; fs::remove_all(path, ignored);}
@@ -160,11 +169,12 @@ const char* const v1Cases[] = {"v1-valid", "v1-policy", "v1-major-mismatch", "v1
   "v1-minor1-valid", "v1-minor-above-offer", "v1-minor-changed", "v1-minor2-valid", "v1-minor2-above-offer"};
 const char* const policyCases[] = {"policy-prune", "policy-cap", "policy-duplicate", "policy-case-duplicate", "policy-junction"};
 const char* const contentionCases[] = {"policy-lock-busy", "policy-lock-pending", "policy-publish-busy", "image-busy"};
+const char* const profileCases[] = {"profile-valid", "profile-homedir", "profile-creation", "profile-session", "profile-user", "profile-game", "profile-framing", "profile-unknown", "profile-query-failure", "profile-unavailable"};
 std::string case_list() {
   std::string joined;
   auto add = [&](const auto& names) {for (const auto* name : names) joined += (joined.empty() ? "" : ",") + std::string(name);};
   add(discoveryCases); add(oneShotCases); add(hostCases); add(captureCases); add(v1Cases); add(policyCases); add(contentionCases);
-  return joined + ",policy-readonly";
+  add(profileCases); return joined + ",policy-readonly";
 }
 unsigned casesRun = 0;
 // Reports each case's wall time on stderr (unbuffered), so a slow case is visible even when CTest
@@ -535,6 +545,8 @@ int wmain(int argc, wchar_t** argv) {
       wchar_t* arguments[] = {argv[0], const_cast<wchar_t*>(L"--game"), const_cast<wchar_t*>(L"ets2"), const_cast<wchar_t*>(L"--discovery-dir"), argv[2]};
       return broker_entrypoint(5, arguments);
     }
+    if (argc == 2 && std::wstring(argv[1]) == L"--inspect-profile-process") return broker_entrypoint(argc, argv);
+    if (argc == 4 && std::wstring(argv[1]) == L"--profile-hold") {unsigned char byte = 0; read_control(&byte, 1); return 0;}
     if (argc == 5 && std::wstring(argv[1]) == L"--host") return host(argv[2], argv[3], utf8(argv[4]));
     if (argc == 4 && std::wstring(argv[1]) == L"--capture-host") return capture_host(argv[2], utf8(argv[3]));
     if (argc == 5 && std::wstring(argv[1]) == L"--v1-host") return v1_host(argv[2], argv[3], utf8(argv[4]));
@@ -552,6 +564,37 @@ int wmain(int argc, wchar_t** argv) {
     controlled_token_owner_test(base, identity);
     wchar_t selfName[32768]; const auto selfLength = GetModuleFileNameW(nullptr, selfName, 32768); require(selfLength > 0); const std::wstring self(selfName, selfLength);
     wchar_t filterBuffer[128]{}; const auto filterSize = GetEnvironmentVariableW(L"ETS2TELEMETRY_CLIENT_TEST_CASE", filterBuffer, 128); require(filterSize < 128); const auto filter = filterSize ? utf8(filterBuffer) : std::string();
+    for (const auto* mode : profileCases) {
+      if (!filter.empty() && filter != mode) continue;
+      CaseTimer timer(mode); const std::string scenario(mode);
+      std::optional<Child> holder;
+      if (scenario == "profile-homedir") holder.emplace(self, L"--profile-hold -homedir \"C:\\Synthetic\\Profile \u041f\u0440\u043e\u0444\u0438\u043b\u044c\"");
+      const auto process = holder ? holder->process.value : GetCurrentProcess();
+      Json::Object source{{"game", Json{std::string(scenario == "profile-game" ? "ats" : "ets2")}}, {"origin", Json{std::string("game")}},
+        {"processId", Json{static_cast<double>(holder ? holder->pid : GetCurrentProcessId())}}, {"windowsSessionId", Json{static_cast<double>(identity.session + (scenario == "profile-session" ? 1 : 0))}},
+        {"processInstanceId", Json{std::string("00112233-4455-6677-8899-aabbccddeeff")}}, {"pluginSessionId", Json{std::string("11112233-4455-6677-8899-aabbccddeeff")}}};
+      Json::Object fields{{"source", Json{source}}, {"processCreationTime", Json{std::to_string(creation(process) + (scenario == "profile-creation" ? 1 : 0))}},
+        {"userTag", Json{scenario == "profile-user" ? std::string(64, '0') : identity.userTag}}};
+      if (scenario == "profile-unknown") fields["commandLine"] = Json{std::string("forbidden")};
+      const bool injected = scenario == "profile-query-failure" || scenario == "profile-unavailable";
+      if (injected) require(SetEnvironmentVariableW(L"ETS2TELEMETRY_PROFILE_QUERY_TEST", scenario == "profile-query-failure" ? L"failure" : L"unavailable"));
+      Child client(injected ? self : broker, L"--inspect-profile-process");
+      if (injected) require(SetEnvironmentVariableW(L"ETS2TELEMETRY_PROFILE_QUERY_TEST", nullptr));
+      auto payload = v0::detail::serialize(Json{fields}); auto size = static_cast<DWORD>(payload.size());
+      unsigned char prefix[] = {static_cast<unsigned char>(size), static_cast<unsigned char>(size >> 8), static_cast<unsigned char>(size >> 16), static_cast<unsigned char>(size >> 24)};
+      stdio_io(client.input.value, prefix, 4, true); stdio_io(client.input.value, payload.data(), size, true);
+      if (scenario == "profile-framing") {unsigned char trailing = 0; stdio_io(client.input.value, &trailing, 1, true);}
+      client.eof();
+      if (scenario == "profile-valid" || scenario == "profile-homedir") {
+        const auto result = parse(read_frame(client.output.value)); exact(result, {"type", "schemaVersion", "target", "executable", "homeDirectory"});
+        require(result.at("type").string() == "profile-process" && integer(result.at("schemaVersion")) == 1);
+        require(v0::detail::serialize(result.at("target")) == v0::detail::serialize(Json{fields}));
+        if (scenario == "profile-homedir") require(result.at("homeDirectory").string() == utf8(L"C:\\Synthetic\\Profile \u041f\u0440\u043e\u0444\u0438\u043b\u044c"));
+        else require(std::holds_alternative<std::nullptr_t>(result.at("homeDirectory").value));
+        require(client.wait() == 0);
+      } else require(client.wait() != 0);
+      if (holder) {holder->eof(); require(holder->wait() == 0);}
+    }
     for (const auto* mode : discoveryCases) {
       if (!filter.empty() && filter != mode) continue;
       CaseTimer timer(mode);

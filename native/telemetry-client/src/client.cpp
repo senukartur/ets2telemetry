@@ -2,6 +2,9 @@
 #include <aclapi.h>
 #include <sddl.h>
 #include <bcrypt.h>
+#include <wbemidl.h>
+#include <shellapi.h>
+#include <wrl/client.h>
 #include "protocol-json.hpp"
 #include "protocol-v1.hpp"
 #include "capture-hello.hpp"
@@ -444,8 +447,8 @@ void Credits::tagged(HANDLE pipe, HANDLE process) {
     }
   } catch (...) {client = ClientFailure::frame;}
 }
-void receipt(const Json& value) {
-  auto text = v0::detail::serialize(value); if (text.empty() || text.size() > 4096) fail(); const auto n = static_cast<DWORD>(text.size());
+void receipt(const Json& value, std::size_t bound = 4096) {
+  auto text = v0::detail::serialize(value); if (text.empty() || text.size() > bound) fail(); const auto n = static_cast<DWORD>(text.size());
   unsigned char prefix[] = {static_cast<unsigned char>(n), static_cast<unsigned char>(n >> 8), static_cast<unsigned char>(n >> 16), static_cast<unsigned char>(n >> 24)};
   stdio_io(GetStdHandle(STD_OUTPUT_HANDLE), prefix, 4, true); stdio_io(GetStdHandle(STD_OUTPUT_HANDLE), text.data(), n, true);
 }
@@ -458,10 +461,15 @@ Json discovery_result(const std::optional<Json>& record, unsigned count) {
   if (count == 1) result["target"] = Json{Json::Object{{"source", source_identity(*record)}, {"processCreationTime", record->at("processCreationTime")}, {"userTag", record->at("userTag")}}};
   return Json{result};
 }
+#ifdef ETS2TELEMETRY_PROFILE_PROCESS_TEST
+std::optional<std::wstring> profile_test_command_line(DWORD pid);
+#endif
+#include "profile-process.hpp"
 int wmain(int argc, wchar_t** argv) {
   test_trace("entry");
   Stage stage;
   try {
+    if (argc == 2 && std::wstring(argv[1]) == L"--inspect-profile-process") {inspect_profile_process(); return finish(0, stage);}
     const bool discover = (argc == 4 || argc == 6) && std::wstring(argv[1]) == L"--discover" && std::wstring(argv[2]) == L"--discovery-dir";
     const bool discoverV1 = discover && argc == 6 && std::wstring(argv[4]) == L"--protocol" && std::wstring(argv[5]) == L"v1";
     if (discover && argc == 6 && !discoverV1) fail();
