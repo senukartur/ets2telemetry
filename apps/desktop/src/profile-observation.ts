@@ -1,6 +1,6 @@
 import type {ProfileObservation} from '../../../packages/telemetry-core/src/trips/continuation';
 import {profileSourceKey, type MonitorSource} from './hard-mode/monitor';
-import {ProfileSuperseded, ProfileVerificationError, UnchangedVerificationError, type HardModeReader, type ProfileDiagnostic} from './hard-mode/reader';
+import {ProfileSuperseded, ProfileSettingsUnavailableError, ProfileVerificationError, UnchangedVerificationError, type HardModeReader, type ProfileDiagnostic} from './hard-mode/reader';
 import type {SourceIdentity} from '../../../packages/contracts/src/protocol-v1';
 
 /** In-process revocation identity. Pending status never supplies a publishable/storable profile proof. */
@@ -96,7 +96,7 @@ export class ProfileObserver {
         clearTimeout(this.deadline); this.pending = undefined; this.proof = undefined;
       }
     }, force).catch(error => {
-      if (epoch === this.epoch && error instanceof ProfileVerificationError && !(error instanceof UnchangedVerificationError)) {
+      if (epoch === this.epoch && error instanceof ProfileVerificationError && !(error instanceof UnchangedVerificationError) && !(error instanceof ProfileSettingsUnavailableError)) {
         this.controller?.abort(); this.suspend();
       }
       throw error;
@@ -113,7 +113,7 @@ export class ProfileObserver {
     this.lastScan = now; this.inFlight = true;
     const epoch = this.epoch, controller = this.controller = new AbortController();
     reader.selectGuardSource?.(profileSourceKey(source));
-    const expire = () => {this.diagnostic({code: 'PROFILE_PROBE_EXPIRED'}); controller.abort(new ProfileVerificationError(new Error('Profile verification deadline'), 'PROFILE_DEADLINE')); if (epoch === this.epoch) {this.pending = undefined; if (!reader.canRetain() || !this.proof) this.suspend();}};
+    const expire = () => {this.diagnostic({code: 'PROFILE_PROBE_EXPIRED'}); controller.abort(new ProfileVerificationError(new Error('Profile verification deadline'), 'PROFILE_DEADLINE')); if (epoch === this.epoch) {this.pending = undefined; if (!reader.canRetainProfile() || !this.proof) this.suspend();}};
     clearTimeout(this.deadline); this.deadline = setTimeout(expire, 2000);
     try {
       const value = await reader.resolveProfile(source.source, Date.now(), controller.signal, this.tailOnly);
@@ -133,7 +133,7 @@ export class ProfileObserver {
           pluginSessionId: source.source.pluginSessionId, processInstanceId: source.source.processInstanceId, sourceClockId: source.clockId,
           afterMonotonicNs: source.monotonicNs, loadGeneration: value.profile.generation}, completedNs: timing.completedClientNs, expiresNs: timing.startedClientNs + 2_000_000_000n};
       }
-    } catch (error) {if (epoch === this.epoch) {this.pending = undefined; if (!(error instanceof ProfileSuperseded) && !(error instanceof UnchangedVerificationError)) this.suspend();}}
+    } catch (error) {if (epoch === this.epoch) {this.pending = undefined; if (!(error instanceof ProfileSuperseded) && !(error instanceof UnchangedVerificationError) && !(error instanceof ProfileSettingsUnavailableError)) this.suspend();}}
     finally {if (!this.pending) clearTimeout(this.deadline); this.inFlight = false;}
   }
   start(): void {if (!this.automatic) return; this.timer ??= setInterval(() => {void this.refresh();}, 5000); this.timer.unref();}

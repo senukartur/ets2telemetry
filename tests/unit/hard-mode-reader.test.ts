@@ -1,13 +1,14 @@
 import {inspectGameProcess} from '../../apps/desktop/src/hard-mode/process';
 import {EventEmitter} from 'node:events';
 import {PassThrough} from 'node:stream';
+import type {BigIntStats} from 'node:fs';
 import {mkdtemp, mkdir, open, rm, writeFile, rename, utimes, symlink, appendFile, realpath, stat, opendir} from 'node:fs/promises';
 import {ProfileLogParser, ProfileLogTail} from '../../apps/desktop/src/hard-mode/log-tail';
 import path from 'node:path';
 import os from 'node:os';
 import {afterEach, beforeEach, describe, expect, it, vi} from 'vitest';
 import {hardModeFixtureOptions} from '../../apps/desktop/src/hard-mode/fixture';
-import {HardModeReader, coalesceProfileDiagnostics, type ProfileDiagnostic, profileFromLog, readStableFile} from '../../apps/desktop/src/hard-mode/reader';
+import {HardModeReader, FileEvidenceError, ProfileSuperseded, coalesceProfileDiagnostics, type ProfileDiagnostic, profileFromLog, readStableFile} from '../../apps/desktop/src/hard-mode/reader';
 import {HardModeMonitor} from '../../apps/desktop/src/hard-mode/monitor';
 import {ProfileObserver} from '../../apps/desktop/src/profile-observation';
 import type {HardModeObservation} from '../../packages/contracts/src/hard-mode';
@@ -49,6 +50,83 @@ function nativeInspection(game: 'ets2' | 'ats' = 'ets2') {
   return {child,controller,diagnostics,target,receipt,work,settled:()=>settled};
 }
 describe('ET-026 isolated reader (REG-008/010/011)', () => {
+  it.each(['file','missing','directory-hint','missing-to-present','superseded'] as const)('withdraws Hard Mode for a partial %s tuple without retiring independent profile identity',async mode=>{
+    vi.useFakeTimers();let now=0n,hold=false;const completed=gate(),entered=gate(),release=gate(),observed=gate(),tupleRelease=gate();
+    const target=mode==='directory-hint'?path.join(game,'profiles'):mode==='missing-to-present'?path.join(game,'steam_profiles'):path.join(profile,'config.cfg');
+    const r=new HardModeReader({documents:path.join(root,'Documents'),process:processFacts,nowNs:()=>now,metadata:{
+      realpath:async filename=>{if(hold&&filename===path.join(game,'config.cfg')){entered.resolve();await release.promise;}try{return await realpath(filename);}catch(error){if(hold&&filename===target)observed.resolve();throw error;}},
+      stat:async filename=>{const value=await stat(filename,{bigint:true});if(hold&&filename===target){observed.resolve();if(mode==='superseded')await tupleRelease.promise;}return value;}}});
+    const observer=new ProfileObserver(()=>r,()=>now,false),m=new HardModeMonitor((s,ns,at,signal,force)=>observer.readSettings(r,s,ns,at,signal,force).finally(()=>completed.resolve()),undefined,()=>now,undefined,()=>r.canRetain(),undefined,()=>r.drain(),
+      {eligible:()=>r.guardEligible(),select:key=>r.selectGuardSource(key)}),current={source,clockId:'clock',monotonicNs:'1'};
+    r.onInvalidate(()=>m.invalidate());let pending:Promise<unknown>|undefined,replacement:Promise<unknown>|undefined;
+    try{
+      observer.select(current);m.select(current);await completed.promise;await observer.refresh();now=1n;
+      const bound={...current,boundary:{clockId:'clock',probeSentClientNs:'1',receivedSourceNs:'2'}};observer.select(bound);m.select(bound);await m.refresh();const proof=observer.evidence(),token=observer.status().token;
+      if(mode==='missing')await rm(target);else if(mode==='missing-to-present')await mkdir(target);else{if(mode!=='directory-hint')await writeFile(target,HARD_MODE_CONFIG.replace('g_fatigue "1"','g_fatigue "0"'));const changed=new Date('2026-10-22T12:00:00Z');await utimes(target,changed,changed);}
+      now=5_000_000_000n;hold=true;pending=mode==='superseded'?observer.boundary():m.refresh(true);await entered.promise;await observed.promise;
+      if(mode==='superseded'){expect(m.evidence().assessment.state).toBe('pass');replacement=observer.boundary();tupleRelease.resolve();}
+      await Promise.resolve();await Promise.resolve();
+      expect(m.evidence().assessment.state).toBe('unknown');expect(observer.status().token).toBe(token);if(mode!=='superseded')expect(observer.evidence()).toEqual(proof);
+      let drained=false;void r.drain().then(()=>{drained=true;});await Promise.resolve();expect(drained).toBe(false);
+    }finally{m.close();observer.close();release.resolve();tupleRelease.resolve();await pending;await replacement;await r.drain();}
+  });
+  it.each(['compliant','generic-EIO','generic-message','retired','superseded'] as const)('handles partial optional byte evidence as %s while retaining physical ownership',async mode=>{
+    vi.useFakeTimers();let now=0n,hold=false,readDone=gate();const entered=gate(),release=gate(),observed=gate(),byteRelease=gate(),snapshots=new Map<string,BigIntStats>(),changes:HardModeObservation[]=[];
+    const r=new HardModeReader({documents:path.join(root,'Documents'),process:processFacts,nowNs:()=>now,metadata:{realpath,stat:async filename=>{
+      if(hold&&snapshots.has(filename))return snapshots.get(filename)!;const value=await stat(filename,{bigint:true});snapshots.set(filename,value);return value;
+    }},file:async(filename,limit,signal)=>{
+      if(hold&&filename===path.join(profile,'config_local.cfg')){entered.resolve();await release.promise;}
+      if(hold&&filename===path.join(profile,'config.cfg')){
+        if(mode==='generic-EIO'||mode==='generic-message'){observed.resolve();throw Object.assign(new Error(mode==='generic-message'?'Changing file':'Injected I/O failure'),{code:'EIO'});}
+        const value=await readStableFile(filename,limit,signal);observed.resolve();if(mode==='retired'||mode==='superseded')await byteRelease.promise;return value;
+      }return readStableFile(filename,limit,signal);
+    }}),observer=new ProfileObserver(()=>r,()=>now,false),m=new HardModeMonitor((s,ns,at,signal,force)=>observer.readSettings(r,s,ns,at,signal,force).finally(()=>readDone.resolve()),value=>changes.push(value),()=>now,undefined,()=>r.canRetain(),undefined,()=>r.drain(),
+      {eligible:()=>r.guardEligible(),select:key=>r.selectGuardSource(key)}),current={source,clockId:'clock',monotonicNs:'1'};
+    r.onInvalidate(()=>m.invalidate());let pending:Promise<unknown>|undefined;
+    try{
+      observer.select(current);m.select(current);await readDone.promise;await observer.refresh();now=1n;
+      const bound={...current,boundary:{clockId:'clock',probeSentClientNs:'1',receivedSourceNs:'2'}};observer.select(bound);m.select(bound);await m.refresh();const proof=observer.evidence(),token=observer.status().token;
+      if(!mode.startsWith('generic'))await writeFile(path.join(profile,'config.cfg'),HARD_MODE_CONFIG+'\n# independently observed edit\n');
+      now=5_000_000_000n;hold=true;readDone=gate();const signal=new AbortController();
+      pending=mode==='superseded'?r.readTimed(source,'3',created+10000,signal.signal,undefined,true).catch(error=>error):m.refresh(true);
+      await entered.promise;await observed.promise;
+      if(mode==='retired'){
+        m.close();observer.close();const count=changes.length,retiredToken=observer.status().token;byteRelease.resolve();release.resolve();await pending;await r.drain();expect(changes).toHaveLength(count);expect(observer.status().token).toBe(retiredToken);
+      }else{
+        if(mode==='superseded'){signal.abort(new ProfileSuperseded('Shared byte read superseded'));byteRelease.resolve();}
+        await Promise.resolve();await Promise.resolve();expect(m.evidence().assessment.state).toBe(mode.startsWith('generic')?'pass':'unknown');expect(observer.evidence()).toEqual(proof);expect(observer.status().token).toBe(token);
+        if(mode==='compliant'){
+          release.resolve();await readDone.promise;await r.drain();expect(m.evidence().assessment.state).toBe('unknown');now++;
+          const later={...current,boundary:{clockId:'clock',probeSentClientNs:now.toString(),receivedSourceNs:'3'}};observer.select(later);m.select(later);await pending;
+          expect(m.evidence().assessment.state).toBe('pass');expect(m.evidence().sourceMonotonicNs).toBe('4');
+        }else if(mode.startsWith('generic')){release.resolve();await pending;expect(m.evidence().assessment.state).toBe('pass');}
+      }
+    }finally{m.close();observer.close();release.resolve();byteRelease.resolve();await pending;await r.drain();}
+  });
+  it.each(['monitor-first','physical-first','profile-first'] as const)('retains only profile proof through an optional byte deadline with %s cancellation order',async order=>{
+    vi.useFakeTimers();const start=Date.now(),now=()=>BigInt(Date.now()-start)*1_000_000n;let hold=false;const entered=gate(),release=gate(),completed=gate();
+    const r=new HardModeReader({documents:path.join(root,'Documents'),process:processFacts,nowNs:now,file:async(filename,limit,signal)=>{
+      if(hold&&filename===path.join(profile,'config_local.cfg')){entered.resolve();await release.promise;}return readStableFile(filename,limit,signal);
+    }}),observer=new ProfileObserver(()=>r,now,false),m=new HardModeMonitor((s,ns,at,signal,force)=>observer.readSettings(r,s,ns,at,signal,force).finally(()=>completed.resolve()),undefined,now,undefined,()=>r.canRetain(),undefined,()=>r.drain(),
+      {eligible:()=>r.guardEligible(),select:key=>r.selectGuardSource(key)}),current={source,clockId:'clock',monotonicNs:'1'};
+    r.onInvalidate(()=>m.invalidate());let pending:Promise<unknown>|undefined,raw:Promise<unknown>|undefined;
+    try{
+      observer.select(current);m.select(current);await completed.promise;await observer.refresh();await vi.advanceTimersByTimeAsync(1);
+      const bound={...current,boundary:{clockId:'clock',probeSentClientNs:now().toString(),receivedSourceNs:'2'}};observer.select(bound);m.select(bound);await m.refresh();const proof=observer.evidence(),token=observer.status().token;
+      await vi.advanceTimersByTimeAsync(4999);await writeFile(path.join(profile,'config.cfg'),HARD_MODE_CONFIG.replace('g_fatigue "1"','g_fatigue "0"'));hold=true;
+      if(order==='physical-first')raw=r.readTimed(source,'3',created+10000,new AbortController().signal,undefined,true).catch(error=>error);
+      if(order==='profile-first')void observer.refresh();pending=m.refresh(true);await entered.promise;
+      expect(m.evidence().assessment.state).toBe('unknown');expect(r.canRetain()).toBe(false);expect(r.canRetainProfile()).toBe(true);
+      await vi.advanceTimersByTimeAsync(2000);await raw;expect(observer.evidence()).toEqual(proof);expect(observer.status().token).toBe(token);expect(m.evidence().assessment.state).toBe('unknown');
+      await vi.advanceTimersByTimeAsync(5000);expect(observer.evidence()).toBeUndefined();expect(observer.status().token).not.toBe(token);
+    }finally{m.close();observer.close();release.resolve();await pending;await r.drain();}
+  });
+  it('marks only its own stable-file evidence rejections with a private type',async()=>{
+    const signal=new AbortController().signal,target=path.join(profile,'config.cfg');
+    await writeFile(target,Buffer.from([0xc3,0x28]));await expect(readStableFile(target,256*1024,signal)).rejects.toBeInstanceOf(FileEvidenceError);
+    await writeFile(target,'x'.repeat(256*1024+1));await expect(readStableFile(target,256*1024,signal)).rejects.toMatchObject({constructor:FileEvidenceError,message:'Unbounded file'});
+    const alias=path.join(root,'aliased-settings');await symlink(profile,alias,'junction');await expect(readStableFile(path.join(alias,'config.cfg'),256*1024,signal)).rejects.toMatchObject({constructor:FileEvidenceError,message:'Redirected file'});
+  });
   it('discards fulfilled retired metadata before comparisons can publish another invalidation',async()=>{
     vi.useFakeTimers();let now=0n,hold=false;const entered=gate(),release=gate(),completed=gate(),changes:HardModeObservation[]=[],paths:Promise<unknown>[]=[],stats:Promise<unknown>[]=[];
     const global=path.join(game,'config.cfg'),r=new HardModeReader({documents:path.join(root,'Documents'),process:processFacts,nowNs:()=>now,
