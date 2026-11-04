@@ -734,7 +734,8 @@ export async function runUiSmoke({application, dashboard, overlay, source, sourc
         // destination city show v1's names, all only while v1 is current (500 ms), so under the CPU cap a late v1 frame leaves
         // them unavailable or raw. The rows are awaited together; on a timeout the last reading is what the assertion reports.
         const jobRows = [['cargo', 'Synthetic Cargo'], ['source-city', 'Synthetic City A'], ['source-company', 'Synthetic Company A'], ['destination-city', 'Synthetic City B'], ['destination-company', 'Synthetic Company B'], ['truck', 'truck.volvo']];
-        const readJobRows = () => Promise.all(jobRows.map(([id]) => dashboard.getByTestId(`live-${id}`).innerText()));
+        let lastJobRows;
+        const readJobRows = async () => (lastJobRows = await Promise.all(jobRows.map(([id]) => dashboard.getByTestId(`live-${id}`).innerText())));
         // ET-067 regression: once, the wait starts inside a v1 gap that ends 300 ms later, so a single read fails on every host.
         const v1Gap = language === 'en' && size === sizes.at(-1);
         if (v1Gap) {
@@ -743,7 +744,12 @@ export async function runUiSmoke({application, dashboard, overlay, source, sourc
           setTimeout(() => sourceV1.resume(), 300);
         }
         await until(readJobRows, texts => texts.every((text, index) => text === jobRows[index][1]), 'UI_LIVE_JOB_ROWS', 5000)
-          .catch(async () => assert.deepEqual(await readJobRows(), jobRows.map(([, text]) => text), 'UI_LIVE_JOB_ROWS'));
+          .catch(error => {
+            // Only the timeout reports the rows: its last reading never matched. Any other failure keeps its own error.
+            if (!error.message?.startsWith('UI_LIVE_JOB_ROWS within') || !lastJobRows) throw error;
+            assert.deepEqual(lastJobRows, jobRows.map(([, text]) => text), 'UI_LIVE_JOB_ROWS');
+            throw error;
+          });
         if (v1Gap) record.flags.jobRowsAfterV1Gap = true;
         await observeMandatoryBreak({dashboard, sourceV1, language, record});
         // ET-057: no "This trip" placeholder of dashes; the field list is collapsed until opened.
