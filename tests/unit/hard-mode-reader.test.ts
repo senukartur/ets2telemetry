@@ -1,7 +1,7 @@
 import {inspectGameProcess} from '../../apps/desktop/src/hard-mode/process';
 import {EventEmitter} from 'node:events';
 import {PassThrough} from 'node:stream';
-import {mkdtemp, mkdir, open, rm, writeFile, rename, utimes, symlink, appendFile, realpath} from 'node:fs/promises';
+import {mkdtemp, mkdir, open, rm, writeFile, rename, utimes, symlink, appendFile, realpath, stat, opendir} from 'node:fs/promises';
 import {ProfileLogParser, ProfileLogTail} from '../../apps/desktop/src/hard-mode/log-tail';
 import path from 'node:path';
 import os from 'node:os';
@@ -49,6 +49,77 @@ function nativeInspection(game: 'ets2' | 'ats' = 'ets2') {
   return {child,controller,diagnostics,target,receipt,work,settled:()=>settled};
 }
 describe('ET-026 isolated reader (REG-008/010/011)', () => {
+  it('discards fulfilled retired metadata before comparisons can publish another invalidation',async()=>{
+    vi.useFakeTimers();let now=0n,hold=false;const entered=gate(),release=gate(),completed=gate(),changes:HardModeObservation[]=[],paths:Promise<unknown>[]=[],stats:Promise<unknown>[]=[];
+    const global=path.join(game,'config.cfg'),r=new HardModeReader({documents:path.join(root,'Documents'),process:processFacts,nowNs:()=>now,
+      metadata:{realpath:filename=>{const value=realpath(filename);if(hold)paths.push(value);return value;},stat:async filename=>{
+        if(hold&&filename===global){entered.resolve();await release.promise;return stat(filename,{bigint:true});}
+        const value=stat(filename,{bigint:true});if(hold)stats.push(value);return value;
+      }}}),observer=new ProfileObserver(()=>r,()=>now,false),m=new HardModeMonitor((s,ns,at,signal,force)=>observer.readSettings(r,s,ns,at,signal,force).finally(()=>completed.resolve()),value=>changes.push(value),()=>now,undefined,()=>r.canRetain(),undefined,()=>r.drain(),
+      {eligible:()=>r.guardEligible(),select:key=>r.selectGuardSource(key)}),current={source,clockId:'clock',monotonicNs:'1'};
+    r.onInvalidate(()=>m.invalidate());let pending:Promise<void>|undefined;
+    try{
+      observer.select(current);m.select(current);await completed.promise;await observer.refresh();now=1n;
+      const bound={...current,boundary:{clockId:'clock',probeSentClientNs:'1',receivedSourceNs:'2'}};observer.select(bound);m.select(bound);await m.refresh();
+      now=5_000_000_000n;hold=true;pending=m.refresh(true);await entered.promise;await Promise.allSettled(paths);await Promise.allSettled(stats);
+      m.close();observer.close();const count=changes.length,token=observer.status().token;
+      await rename(global,global+'.old');await writeFile(global,'uset g_traffic "2"');release.resolve();await pending;await r.drain();
+      expect(changes).toHaveLength(count);expect(observer.status().token).toBe(token);expect(r.guardEligible()).toBe(false);
+    }finally{m.close();observer.close();release.resolve();await pending;await r.drain();}
+  });
+  it.each(['admitted','cleared','superseded'] as const)('revokes an observed directory replacement while a metadata sibling is held and baseline is %s',async mode=>{
+    vi.useFakeTimers();let now=0n,holdMetadata=false,holdLocation=false;const completed=gate(),globalEntered=gate(),globalRelease=gate(),identityEntered=gate(),identityRelease=gate(),identityPathRelease=gate(),locationEntered=gate(),locationRelease=gate();
+    const r=new HardModeReader({documents:path.join(root,'Documents'),process:processFacts,nowNs:()=>now,
+      profileDirectory:async parent=>{if(holdLocation){locationEntered.resolve();await locationRelease.promise;}return opendir(parent);},
+      metadata:{realpath:async filename=>{if(holdMetadata&&filename===path.join(game,'config.cfg')){globalEntered.resolve();await globalRelease.promise;}if(holdMetadata&&mode==='cleared'&&filename===profile)await identityPathRelease.promise;return realpath(filename);},
+        stat:async filename=>{const value=await stat(filename,{bigint:true});if(holdMetadata&&filename===profile){identityEntered.resolve();if(mode==='superseded')await identityRelease.promise;}return value;}}});
+    const observer=new ProfileObserver(()=>r,()=>now,false),m=new HardModeMonitor((s,ns,at,signal,force)=>observer.readSettings(r,s,ns,at,signal,force).finally(()=>completed.resolve()),undefined,()=>now,undefined,()=>r.canRetain(),undefined,()=>r.drain(),
+      {eligible:()=>r.guardEligible(),select:key=>r.selectGuardSource(key)}),current={source,clockId:'clock',monotonicNs:'1'};
+    r.onInvalidate(()=>m.invalidate());let pending:Promise<unknown>|undefined,replacement:Promise<unknown>|undefined;
+    try{
+      observer.select(current);m.select(current);await completed.promise;await observer.refresh();now=1n;
+      const bound={...current,boundary:{clockId:'clock',probeSentClientNs:'1',receivedSourceNs:'2'}};observer.select(bound);m.select(bound);await m.refresh();const token=observer.status().token,original=observer.evidence();
+      now=5_000_000_000n;
+      if(mode==='cleared'){
+        await rename(path.join(game,'config.cfg'),path.join(game,'config.old'));await writeFile(path.join(game,'config.cfg'),'uset g_traffic "1"');holdLocation=true;
+        pending=m.refresh(true);await locationEntered.promise;expect(observer.evidence()).toEqual(original);expect(observer.status().token).toBe(token);
+      }
+      const replace=async()=>{await rename(profile,profile+'.old');await mkdir(profile);await writeFile(path.join(profile,'config.cfg'),HARD_MODE_CONFIG);await writeFile(path.join(profile,'config_local.cfg'),'uset g_brake_intensity "0.75"');};
+      if(mode!=='cleared')await replace();
+      holdMetadata=true;
+      if(mode==='cleared'){holdLocation=false;locationRelease.resolve();}
+      else pending=mode==='superseded'?observer.boundary():m.refresh(true);
+      await globalEntered.promise;if(mode==='cleared'){await replace();identityPathRelease.resolve();}await identityEntered.promise;
+      if(mode==='superseded'){replacement=observer.boundary();expect(observer.status().token).toBe(token);identityRelease.resolve();}
+      // The adapter's resolved stat continues before this microtask barrier; the unrelated realpath is still held.
+      await Promise.resolve();await Promise.resolve();
+      expect(observer.evidence()).toBeUndefined();expect(observer.status().token).not.toBe(token);expect(m.evidence().assessment.state).toBe('unknown');
+    }finally{m.close();observer.close();globalRelease.resolve();identityRelease.resolve();identityPathRelease.resolve();locationRelease.resolve();await pending;await replacement;await r.drain();}
+  });
+  it.each(['realpath','stat','retired-error'] as const)('retains physical metadata ownership after independent failure while %s remains held',async stage=>{
+    vi.useFakeTimers();let now=0n,hold=false,logReads=0,globalStats=0,completed=gate();const entered=gate(),release=gate();
+    const global=path.join(game,'config.cfg'),local=path.join(profile,'config_local.cfg'),inspect=vi.fn(async(s:SourceIdentity)=>({...await processFacts(),pid:s.processId}));
+    const r=new HardModeReader({documents:path.join(root,'Documents'),process:inspect,nowNs:()=>now,
+      file:async(filename,limit,signal)=>{if(filename.endsWith('game.log.txt'))logReads++;return readStableFile(filename,limit,signal);},
+      metadata:{realpath:async filename=>{if(hold&&filename===global&&stage!=='stat'){entered.resolve();await release.promise;if(stage==='retired-error')throw new Error('Retired metadata failed');}return realpath(filename);},
+        stat:async filename=>{if(hold&&filename===global){globalStats++;if(stage==='stat'){entered.resolve();await release.promise;}}if(hold&&filename===local){await entered.promise;throw new Error('Independent metadata failed');}return stat(filename,{bigint:true});}}});
+    const observer=new ProfileObserver(()=>r,()=>now,false),m=new HardModeMonitor((s,ns,at,signal,force)=>observer.readSettings(r,s,ns,at,signal,force).finally(()=>completed.resolve()),undefined,()=>now,undefined,()=>r.canRetain(),undefined,()=>r.drain(),
+      {eligible:()=>r.guardEligible(),select:key=>r.selectGuardSource(key)}),current={source,clockId:'clock',monotonicNs:'1'};
+    r.onInvalidate(()=>m.invalidate());let pending:Promise<void>|undefined,drain:Promise<void>|undefined,latest:Promise<unknown>|undefined;
+    try{
+      observer.select(current);m.select(current);await completed.promise;await observer.refresh();now=1n;
+      const bound={...current,boundary:{clockId:'clock',probeSentClientNs:'1',receivedSourceNs:'2'}};observer.select(bound);m.select(bound);await m.refresh();const token=observer.status().token;
+      now=5_000_000_000n;hold=true;completed=gate();pending=m.refresh(true);await entered.promise;await completed.promise;
+      expect(m.evidence().assessment.state).toBe('unknown');expect(observer.evidence()).toBeUndefined();expect(observer.status().token).not.toBe(token);
+      expect(m.refresh(true)).toBe(pending);expect(m.refresh()).toBe(pending);
+      let drained=false;drain=r.drain().then(()=>{drained=true;});const reads=logReads;
+      const first=r.read({...source,processId:456},'1',created+10000,new AbortController().signal).catch(error=>error);
+      latest=r.read({...source,processId:789},'1',created+10000,new AbortController().signal).catch(error=>error);await first;
+      expect(drained).toBe(false);expect(logReads).toBe(reads);expect(inspect).toHaveBeenCalledOnce();
+      m.close();observer.close();const retiredToken=observer.status().token;release.resolve();await drain;await pending;await latest;
+      expect(observer.status().token).toBe(retiredToken);expect(m.evidence().assessment.state).toBe('unknown');if(stage!=='stat')expect(globalStats).toBe(0);
+    }finally{m.close();observer.close();release.resolve();await drain;await pending;await latest;}
+  });
   it.each(['superseded','guard-error','deadline','log-change','profile-change'] as const)('distinguishes same-source supersession from a required %s failure',async mode=>{
     vi.useFakeTimers();let now=0n,hold=false,held=false;const entered=gate(),release=gate(),completed=gate();
     const changes:HardModeObservation[]=[],r=new HardModeReader({documents:path.join(root,'Documents'),process:processFacts,nowNs:()=>now,

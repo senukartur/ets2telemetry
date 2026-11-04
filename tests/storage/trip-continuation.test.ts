@@ -2,7 +2,7 @@ import Database from 'better-sqlite3';
 import {snapshot as logicalSnapshot} from '../../packages/storage/src/sqlite/logical-snapshot';
 import net from 'node:net';
 import {EventEmitter} from 'node:events';
-import {mkdir,writeFile,rename,symlink,opendir} from 'node:fs/promises';
+import {mkdir,writeFile,rename,symlink,opendir,appendFile} from 'node:fs/promises';
 import {decodePayload,encodeFrame,type ClientMessage,type ServerMessage,type CurrentState} from '../../packages/contracts/src/protocol-v1';
 import {HardModeReader,readStableFile} from '../../apps/desktop/src/hard-mode/reader';
 import {HardModeMonitor} from '../../apps/desktop/src/hard-mode/monitor';
@@ -68,7 +68,7 @@ function close(storage: Storage, script: Script, uuid: string, terminal = false)
 }
 
 describe('REG-003/005/008/012/014 durable logical trips', () => {
-  it.each(['identity-replaced','identity-missing','identity-redirect','identity-settings','identity-settings-error','watchdog-timer','watchdog-getter','unchanged','witness','admitted-consumption','admitted-refuel','admitted-refuel-recheck','admitted-regression','admitted-long-unchanged','admitted-long-motion','admitted-persist-revoked','revoked','profile','load','gap','clock','truck','job','refuel','teleport','missing','unqualified-sample','over-limit'] as const)('retains only a qualified predecessor through wired lifecycle verification: %s',async variant=>{
+  it.each(['identity-root','identity-profile','identity-load','identity-namespace','identity-load-after-settings-error','identity-unchanged','identity-append','identity-replaced','identity-missing','identity-redirect','identity-settings','identity-settings-error','watchdog-timer','watchdog-getter','unchanged','witness','admitted-consumption','admitted-refuel','admitted-refuel-recheck','admitted-regression','admitted-long-unchanged','admitted-long-motion','admitted-persist-revoked','revoked','profile','load','gap','clock','truck','job','refuel','teleport','missing','unqualified-sample','over-limit'] as const)('retains only a qualified predecessor through wired lifecycle verification: %s',async variant=>{
     vi.useFakeTimers();const watchdog=variant.startsWith('watchdog-');let clientNs=0n,wireSeq=0n,boundary=100n;const revision='1';const now=()=>++clientNs;const diagnostics:string[]=[];
     const worker=storageWorker(),client=new StorageClient(worker.handle),script=new Script(ETS2_A),welcome=script.welcome();
     let holdPersist=false,persistHeld=false,enterPersist!:()=>void,releasePersist!:()=>void;
@@ -82,7 +82,7 @@ describe('REG-003/005/008/012/014 durable logical trips', () => {
     await writeFile(path.join(directory,'config_local.cfg'),'uset g_brake_intensity "0.75"');await writeFile(path.join(directory,'config.cfg'),HARD_MODE_CONFIG);
     let holdGuard=false,guardHeld=false,holdSettings=false,holdLocation=false,failSettings=false,enterGuard!:()=>void,releaseGuard!:()=>void,watchdogWork:Promise<void>|undefined,physicalStarts=0;
     const guardEntered=new Promise<void>(resolve=>{enterGuard=resolve;}),guardRelease=new Promise<void>(resolve=>{releaseGuard=resolve;});
-    const reader=new HardModeReader({documents,diagnostic:value=>diagnostics.push(value.code),fixtureOrigin:'synthetic',nowNs:now,
+    const reader=new HardModeReader({documents,steamRoot:path.join(ws.directory,'Steam'),diagnostic:value=>diagnostics.push(value.code),fixtureOrigin:'synthetic',nowNs:now,
       profileDirectory:async parent=>{if(holdLocation){enterGuard();await guardRelease;}return opendir(parent);},
       file:async(filename,limit,signal)=>{if(filename.endsWith('game.log.txt'))physicalStarts++;if(failSettings&&filename===path.join(directory,'config.cfg'))throw new Error('Settings read unavailable');if(holdGuard&&!guardHeld&&filename.endsWith('game.log.txt')||holdSettings&&filename===path.join(directory,'config.cfg')){guardHeld=true;enterGuard();await guardRelease;}return readStableFile(filename,limit,signal);},
       process:s=>Promise.resolve({pid:s.processId,createdUtcMs:new Date(2026,9,21,12).getTime(),executable:'C:/Synthetic/eurotrucks2.exe',homeDirectory:null})});
@@ -139,21 +139,43 @@ describe('REG-003/005/008/012/014 durable logical trips', () => {
         replyEnabled=false;await event(r.paused(),'paused',100);await snapshot(1000125,98.5,'paused',100);await admit();await admittedSnapshot(1000125,98.5);
         const token=observer.status().token,original=observer.evidence()!,endpointCount=endpointScopes.length;expect(original).toBeDefined();const baseline=ok(await client.journalTrip(uuid));
         expect(baseline.trip.observedDistanceM).toEqual({available:true,value:125});expect(baseline.trip.fuelUsedL).toEqual({available:true,value:1.5});
-        const settingsOnly=variant==='identity-settings'||variant==='identity-settings-error';
-        if(settingsOnly){await rename(path.join(directory,'config.cfg'),path.join(directory,'config.old'));await writeFile(path.join(directory,'config.cfg'),HARD_MODE_CONFIG);failSettings=variant==='identity-settings-error';}
+        const settingsOnly=variant==='identity-settings'||variant==='identity-settings-error'||variant==='identity-unchanged'||variant==='identity-append';
+        if(variant==='identity-load-after-settings-error'){
+          await rename(path.join(directory,'config.cfg'),path.join(directory,'config.old'));await writeFile(path.join(directory,'config.cfg'),HARD_MODE_CONFIG);failSettings=true;
+          await monitor.refresh(true);expect(observer.evidence()).toEqual(original);expect(observer.status().token).toBe(token);clientNs+=1_000_000_000n;
+        }
+        if(variant==='identity-root'){
+          const replacement=path.join(ws.directory,'OtherGameRoot');await mkdir(path.join(replacement,'profiles',id),{recursive:true});
+          await writeFile(path.join(replacement,'game.log.txt'),log);await writeFile(path.join(replacement,'config.cfg'),'uset g_traffic "1"');
+          await writeFile(path.join(replacement,'profiles',id,'config.cfg'),HARD_MODE_CONFIG);await writeFile(path.join(replacement,'profiles',id,'config_local.cfg'),'uset g_brake_intensity "0.75"');
+          await rename(game,game+'.old');await symlink(replacement,game,'junction');holdGuard=true;
+        }else if(variant==='identity-profile'){
+          const other=Buffer.from('OtherSynthetic').toString('hex').toUpperCase();await mkdir(path.join(game,'profiles',other));
+          await appendFile(path.join(game,'game.log.txt'),`New profile selected: OtherSynthetic\nLoading save. /home/profiles/${other}/save/autosave/game.sii\n`);
+        }else if(variant==='identity-load'||variant==='identity-load-after-settings-error')await appendFile(path.join(game,'game.log.txt'),`Loading save. /home/profiles/${id}/save/autosave/game.sii\n`);
+        else if(variant==='identity-namespace'){
+          await mkdir(path.join(game,'steam_profiles',id),{recursive:true});await mkdir(path.join(ws.directory,'Steam','userdata','100','227300','remote','profiles',id),{recursive:true});
+          await appendFile(path.join(game,'game.log.txt'),`Loading save. /steam/profiles/${id}/save/autosave/game.sii\n`);
+        }else if(variant==='identity-append')await appendFile(path.join(game,'game.log.txt'),'Unrelated log append\n');
+        else if(variant==='identity-unchanged'){
+          // The forced verification below must leave the already qualified profile intact.
+        }
+        else if(settingsOnly){await rename(path.join(directory,'config.cfg'),path.join(directory,'config.old'));await writeFile(path.join(directory,'config.cfg'),HARD_MODE_CONFIG);failSettings=variant==='identity-settings-error';}
         else{
           await rename(directory,directory+'.old');
           if(variant==='identity-replaced'){await mkdir(directory);await writeFile(path.join(directory,'config.cfg'),HARD_MODE_CONFIG);await writeFile(path.join(directory,'config_local.cfg'),'uset g_brake_intensity "0.75"');}
           if(variant==='identity-redirect')await symlink(directory+'.old',directory,'junction');
         }
-        const completed=new Promise<void>(resolve=>{readCompleted=resolve;});holdLocation=variant!=='identity-missing'&&variant!=='identity-redirect';
+        const completed=new Promise<void>(resolve=>{readCompleted=resolve;});holdLocation=variant!=='identity-root'&&variant!=='identity-replaced'&&variant!=='identity-missing'&&variant!=='identity-redirect';
         replyEnabled=false;watchdogWork=monitor.refresh(true);
-        if(holdLocation)await guardEntered;else await completed;
-        const during=observer.evidence(),duringToken=observer.status().token;
+        if(holdLocation||holdGuard)await guardEntered;else await completed;
+        const during=observer.evidence(),duringToken=observer.status().token,duringState=monitor.evidence().assessment.state;
         await snapshot(1000125,98,'paused',100,{speed:{available:true,value:1,unit:'m/s'}});await event(r.fined(),'paused',0);
         const held=ok(await client.journalTrip(uuid));
         expect(held.trip.observedDistanceM).toEqual({available:true,value:125});expect(held.trip.fuelUsedL).toEqual({available:true,value:settingsOnly?2:1.5});
         expect(endpointScopes.slice(endpointCount)).toEqual(settingsOnly?[original.scope]:[]);
+        if(!settingsOnly)expect(duringState).toBe('unknown');
+        if(variant==='identity-unchanged'||variant==='identity-append'){expect(duringState).toBe('pass');expect(ok(await client.getTrip(uuid))!.hardModeDetails!.firstLoss).toBeNull();}
         if(settingsOnly){expect(during).toEqual(original);expect(duringToken).toBe(token);}else{expect(during).toBeUndefined();expect(duringToken).not.toBe(token);}
         holdLocation=false;releaseGuard();await completed;
         if(settingsOnly){await admit();await watchdogWork;expect(observer.evidence()).toEqual(original);expect(observer.status().token).toBe(token);}
