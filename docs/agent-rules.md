@@ -136,7 +136,7 @@ Use lightweight GitHub Flow: `main` -> task branch -> pull request -> validation
 - Commit and push the task branch, then open a PR targeting `main`. Use a draft PR for unfinished work. CI does not run automatically on draft PRs or on changes limited to `**.md`/`docs/**`. A skipped or absent run is not a passed check. Check a draft head by manual dispatch and record the run link; the run after **Ready for review** on the final head is the merge gate (see [docs/ci.md](ci.md#triggers-and-draft-checks)). Implementation requests authorize the normal branch, commit, push, and PR workflow unless the owner specifies otherwise.
 - Follow `.github/pull_request_template.md`. Explain the problem and resulting behavior, report checks actually performed, and identify remaining verification. Do not claim that CI or game testing passed when it did not run.
 - Attach or bind the created PR to the current chat or session when the app provides a tool for it (Codex attachment tool, Claude Code desktop PR binding), and provide the PR link to the owner.
-- The owner reviews and merges PRs by default. The agent may merge only when the owner explicitly requests or authorizes it; do not infer merge authorization from a request to implement a task or open a PR.
+- The owner reviews and merges PRs by default. The agent may merge only when the owner explicitly requests or authorizes it; do not infer merge authorization from a request to implement a task or open a PR. A `deliver` run is authorized to squash-merge its own PR after independent review and green final CI ([decision](../DECISION-LOG.md#deliver-merge-and-trello-card-status--november-4-2026)).
 - Merge with **Squash merge** after relevant checks pass and review feedback is resolved as described in [Review Threads](#review-threads). A PR becomes one descriptive commit on `main`; the task branch is deleted after merging.
 - After a merge, update local `main` with `git pull --ff-only` before starting the next task. Confirm the PR is merged before deleting a local task branch; preserve any remaining work.
 
@@ -240,7 +240,7 @@ Evidence and claims:
 Scope and authority:
 
 - Work on a package needs an authorization recorded in the decision log or given by the owner in the conversation. An authorization covers only the package it names; it authorizes no release, later phase or server work. Since October 15, 2026 a standing delegation lets the coordinator start packages and adopt architect decisions until a task needs a real-game test ([delegation](../DECISION-LOG.md#et-005b-authorization--october-15-2026)).
-- Merge authority is granted per package and recorded with it, or comes from that standing delegation, under which the coordinator has merged packages (for example ET-010c). A PR that neither covers is merged by the owner.
+- Merge authority is granted per package and recorded with it, or comes from that standing delegation, under which the coordinator has merged packages (for example ET-010c), or from the `deliver` skill for its own PR ([deliver](../DECISION-LOG.md#deliver-merge-and-trello-card-status--november-4-2026)). A PR that none of these covers is merged by the owner.
 
 Recording and data:
 

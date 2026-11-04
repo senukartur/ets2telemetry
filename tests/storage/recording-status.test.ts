@@ -371,7 +371,9 @@ describe('ET-015c recording status through the production wiring', () => {
   it('(i) live state and the status keep advancing while a commit is held (G20)', async () => {
     // one-second-samples with one connection whose client does not wait for ACKs, so the server keeps writing frames while
     // the commit of simulation.paused (eventSeq 5, 5,900 ms) is held inside its transaction. The paused frames reach the
-    // live state and the status before the release; the recorder sees them only after the commit, in FIFO order.
+    // live state and the status before the release; the recorder sees them only after the commit, in FIFO order. Events
+    // 6-8 arrive only after the release (the gate below), so this case covers the live state and the status during a held
+    // commit; later events queued behind a commit in flight are case (c)'s and trip-recorder-faults (g)'s.
     const input = withTransport(samplesScenario(), 'one-second-samples-held-commit', [connect(0, {durable: true, ack: 'withhold'}), disconnect(17_500)]);
     expect(reactiveConflicts(input)).toEqual([]);
     const server = await serveV1Reactive(input, {scale: 0, awaitScriptedAcks: true, quiesceMs: 0});
@@ -384,7 +386,13 @@ describe('ET-015c recording status through the production wiring', () => {
     // The hold is released only once the live state passed 8,000 ms and the status reported the pause, so a live state
     // or status that waited for the held commit would end at the hang guard instead.
     const released = Promise.all([held, livePast, pausedStatus]).then(() => { timeline.push('release'); control.postMessage({type: 'release'}); });
-    const s = serviceRuntime('t', traced.handle, tracedConnect(timeline), timeline, {onState: state => {
+    // simulation.started (eventSeq 6, 9,000 ms) and everything after it reach the ingestion only after the release. The
+    // publisher computes the status one macrotask after a change (G5): with scale 0 a slow host can read the paused frames
+    // and eventSeq 6 in one macrotask, and then correctly sends no `paused` (hosted run 41698082853). Holding 6 back keeps
+    // the source paused until the status reported it, on every host.
+    const failures: unknown[] = [], gate = {beforeEventSeq: '6', until: () => released};
+    const gatedConnect = {connect: (endpoint: string) => new ClientSocket(net.connect(endpoint), gate, error => failures.push(error)) as unknown as TelemetrySocket};
+    const s = serviceRuntime('t', traced.handle, gatedConnect, timeline, {onState: state => {
       const capture = state.observation?.capture.monotonicNs;
       if (capture === undefined || BigInt(capture) < LIVE_PAST_NS || timeline.includes('live 8000')) return;
       timeline.push('live 8000'); live();
@@ -394,6 +402,7 @@ describe('ET-015c recording status through the production wiring', () => {
       expect(await held).toEqual([{type: 'held', eventSeq: '5'}]);
       await guarded(released, 'the live state and the paused status while the commit of eventSeq 5 is held', HANG_GUARD_MS);
       await guarded(server.done, 'the reactive server run', HANG_GUARD_MS);
+      expect(failures).toEqual([]);
       await until(() => timeline.includes('done commitEvent 8'), 'the last commit', HANG_GUARD_MS);
       // No commit after 4 completed before the release; the commit of 5 completed only after it.
       const at = (line: string) => timeline.indexOf(line);

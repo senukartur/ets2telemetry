@@ -669,6 +669,18 @@ export async function runUiSmoke({application, dashboard, overlay, source, sourc
   assert.ok(UI_CASES.includes(config.uiCase));
   Object.assign(record, {case: config.uiCase, screenshots: [], languages: [], sizes, flags: {}});
   const save = (name, language, size, page = dashboard) => capture({page, application, config, record, name, language, size, overlay: page === overlay});
+  // ET-067: Playwright drives the pointer through the renderer, but the dashboard is a real window, so the desktop's own
+  // cursor still reaches it, and Windows moves it there whenever a window changes under a resting cursor. One such move
+  // between a hover and Radix's 150 ms delayed open leaves the hint closed. Click-through for OS input only, so every
+  // pointer event the page sees is the driver's; the overlay keeps its own state. Electron cannot read the setting back,
+  // so the flag only records the call; the hover check under the desktop cursor below shows its effect.
+  const dashboardId = await application.evaluate(({BrowserWindow}) => {
+    const window = BrowserWindow.getAllWindows().find(candidate => !candidate.webContents.getURL().endsWith('?view=overlay'));
+    if (!window) throw new Error('UI_DASHBOARD_WINDOW_MISSING');
+    window.setIgnoreMouseEvents(true);
+    return window.id;
+  });
+  record.flags.osPointerIsolated = true;
   // The source selector remains a working diagnostic control, not an invented reference-screen toolbar.
   if (source) await waitState(dashboard, 'connected');
   for (const language of ['en', 'ru']) {
@@ -718,9 +730,27 @@ export async function runUiSmoke({application, dashboard, overlay, source, sourc
         if (!record.flags.detailsCollapsed) {assert.equal(detailsOpen, false, 'UI_LIVE_DETAILS_NOT_COLLAPSED'); record.flags.detailsCollapsed = true;}
         // Opened in place: a click would scroll the page to the toggle, and the job card is checked at the top below.
         if (!detailsOpen) await dashboard.getByTestId('live.details').evaluate(node => {node.open = true;});
-        for (const [id, text] of [['cargo', 'Synthetic Cargo'], ['source-city', 'Synthetic City A'], ['source-company', 'Synthetic Company A'], ['destination-city', 'Synthetic City B'], ['destination-company', 'Synthetic Company B'], ['truck', 'truck.volvo']]) {
-          assert.equal(await dashboard.getByTestId(`live-${id}`).innerText(), text);
+        // ET-067: the instrument wait reads v0 only. The source and destination companies come from v1 and the cargo and
+        // destination city show v1's names, all only while v1 is current (500 ms), so under the CPU cap a late v1 frame leaves
+        // them unavailable or raw. The rows are awaited together; on a timeout the last reading is what the assertion reports.
+        const jobRows = [['cargo', 'Synthetic Cargo'], ['source-city', 'Synthetic City A'], ['source-company', 'Synthetic Company A'], ['destination-city', 'Synthetic City B'], ['destination-company', 'Synthetic Company B'], ['truck', 'truck.volvo']];
+        let lastJobRows;
+        const readJobRows = async () => (lastJobRows = await Promise.all(jobRows.map(([id]) => dashboard.getByTestId(`live-${id}`).innerText())));
+        // ET-067 regression: once, the wait starts inside a v1 gap that ends 300 ms later, so a single read fails on every host.
+        const v1Gap = language === 'en' && size === sizes.at(-1);
+        if (v1Gap) {
+          sourceV1.hold();
+          try {await until(() => dashboard.getByTestId('live-source-company').innerText(), text => text === 'unavailable', 'UI_LIVE_V1_GAP_NOT_SHOWN', 5000);} catch (error) {sourceV1.resume(); throw error;}
+          setTimeout(() => sourceV1.resume(), 300);
         }
+        await until(readJobRows, texts => texts.every((text, index) => text === jobRows[index][1]), 'UI_LIVE_JOB_ROWS', 5000)
+          .catch(error => {
+            // Only the timeout reports the rows: its last reading never matched. Any other failure keeps its own error.
+            if (!error.message?.startsWith('UI_LIVE_JOB_ROWS within') || !lastJobRows) throw error;
+            assert.deepEqual(lastJobRows, jobRows.map(([, text]) => text), 'UI_LIVE_JOB_ROWS');
+            throw error;
+          });
+        if (v1Gap) record.flags.jobRowsAfterV1Gap = true;
         await observeMandatoryBreak({dashboard, sourceV1, language, record});
         // ET-057: no "This trip" placeholder of dashes; the field list is collapsed until opened.
         assert.equal(await dashboard.getByTestId('live.trip').count(), 0);
@@ -1131,7 +1161,42 @@ export async function runUiSmoke({application, dashboard, overlay, source, sourc
   const indicator = dashboard.getByTestId('shell.sidebar.recording'), hint = dashboard.getByTestId('shell.recording.hint');
   const hintHeadline = () => dashboard.evaluate(() => [globalThis.document.querySelector('[data-testid="shell.recording.hint"] p')?.textContent,
     globalThis.document.querySelector('[data-testid="health-recording"]')?.textContent]);
-  await indicator.hover(); await hint.waitFor({state: 'visible'});
+  // Radix opens the hint 150 ms after a pointermove on the trigger and only on a new move after a leave, so a hover is
+  // one stimulus; a hint that stays closed keeps the pointer events the page saw for the failure (ET-067).
+  await dashboard.evaluate(recordPointer);
+  // ET-067 regression: the hover runs with the resting desktop cursor over the dashboard's content and the window moved
+  // under it right after, which makes Windows deliver a move at the cursor. Without osPointerIsolated that move leaves
+  // the trigger and the hint stays closed on every host. The check fails closed unless the moved window really holds the
+  // cursor in its content (the cursor is always on a display, so that point is on screen), and the window gets its bounds
+  // back, also when the hover fails. Under fractional display scaling Windows may round the outer size by a pixel on a
+  // move; the screenshots use Playwright's viewport, so the position and that viewport must come back exactly.
+  // `hoverPlacement` keeps the geometry.
+  const viewport = () => dashboard.evaluate(() => ({width: globalThis.innerWidth, height: globalThis.innerHeight})), viewportBefore = await viewport();
+  const placement = record.hoverPlacement = await application.evaluate(({BrowserWindow, screen}, id) => {
+    const window = BrowserWindow.fromId(id), bounds = window.getBounds(), cursor = screen.getCursorScreenPoint();
+    window.setPosition(cursor.x - 700, cursor.y - 300);
+    const moved = window.getBounds(), content = window.getContentBounds();
+    const underCursor = window.isVisible() && !window.isMinimized() && moved.x === cursor.x - 700 && moved.y === cursor.y - 300 &&
+      cursor.x >= content.x && cursor.x < content.x + content.width && cursor.y >= content.y && cursor.y < content.y + content.height;
+    return {bounds, cursor, moved, content, underCursor};
+  }, dashboardId);
+  let restored;
+  try {
+    assert.equal(placement.underCursor, true, 'UI_HOVER_CURSOR_OFF_DASHBOARD');
+    await indicator.hover();
+    await application.evaluate(({BrowserWindow}, id) => {const window = BrowserWindow.fromId(id), [x, y] = window.getPosition(); window.setPosition(x + 1, y);}, dashboardId);
+    await hint.waitFor({state: 'visible'}).catch(async error => {
+      record.recordingHintPointer = await dashboard.evaluate(() => globalThis.__et067PointerLog).catch(() => null);
+      throw error;
+    });
+  } finally {
+    restored = await application.evaluate(({BrowserWindow}, [id, bounds]) => {const window = BrowserWindow.fromId(id); window.setBounds(bounds); return window.getBounds();},
+      [dashboardId, placement.bounds]).catch(() => null);
+  }
+  placement.restored = restored;
+  assert.deepEqual([restored?.x, restored?.y], [placement.bounds.x, placement.bounds.y], 'UI_DASHBOARD_POSITION_NOT_RESTORED');
+  assert.deepEqual(await viewport(), viewportBefore, 'UI_DASHBOARD_VIEWPORT_CHANGED');
+  record.flags.hoverUnderDesktopCursor = true;
   const [hovered, headline] = await hintHeadline(); assert.ok(headline && headline !== '—'); assert.equal(hovered, headline);
   await dashboard.keyboard.press('Escape'); await hint.waitFor({state: 'hidden'}); await dashboard.mouse.move(0, 0);
   await indicator.focus(); await hint.waitFor({state: 'visible'});
@@ -1150,6 +1215,22 @@ export async function runUiSmoke({application, dashboard, overlay, source, sourc
   record.flags.offlineFonts = await dashboard.evaluate(() => [...globalThis.document.fonts].some(font => font.family.includes('Huninn')));
   assert.equal(record.flags.offlineFonts, true);
   await chooseLanguage(dashboard, 'en'); await screen(dashboard, 'live');
+}
+
+/**
+ * Self-contained (ET-067): from now on, the pointer events the dashboard sees (type, target, client point; bounded) and
+ * each data-state of the recording indicator, in `__et067PointerLog`, read when its tooltip does not open after a hover.
+ */
+function recordPointer() {
+  const log = globalThis.__et067PointerLog = [], start = globalThis.performance.now();
+  const push = entry => { if (log.length < 200) log.push({t: Math.round(globalThis.performance.now() - start), ...entry}); };
+  const name = node => node?.getAttribute?.('data-testid') ?? node?.nodeName ?? null;
+  for (const type of ['pointerover', 'pointermove', 'pointerout', 'pointerdown', 'scroll']) {
+    globalThis.addEventListener(type, event => push({type, target: name(event.target), x: event.clientX, y: event.clientY}), {capture: true});
+  }
+  for (const type of ['blur', 'focus']) globalThis.addEventListener(type, event => { if (event.target === globalThis) push({type}); });
+  const trigger = globalThis.document.querySelector('[data-testid="shell.sidebar.recording"]');
+  new globalThis.MutationObserver(() => push({type: 'data-state', state: trigger.getAttribute('data-state')})).observe(trigger, {attributes: true, attributeFilter: ['data-state']});
 }
 
 /** The sidebar version line and the hidden update control (ET-055 UP10, UP11) in `language`, the language shown now. */

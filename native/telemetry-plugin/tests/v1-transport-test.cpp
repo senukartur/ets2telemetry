@@ -923,11 +923,21 @@ void fuzz() {
   const unsigned multiplier = ets2telemetry::test::native_fuzz_multiplier(), rounds = 40 * multiplier;
   std::cout << "fuzzMultiplier=" << multiplier << " rounds=" << rounds << std::endl;
   Fixture f; f.start(); std::uint32_t random = 0x5a17c0de; auto next = [&] { random = random * 1664525U + 1013904223U; return random; };
+  // A bit flip of the hello's maxMinor digit '0' gives a valid offer of 1, 2, 4 or 8, served at min(offer, highest minor),
+  // so the mutated-hello client accepts every minor the endpoint selects. The x50 run first draws one at round 320 (offer
+  // 4); the four flips also run here, at every multiplier. The handshake cases test minor selection itself; this guards
+  // the fuzz client's own maximum, whose Consumer must apply the welcome and the checkpoint at the selected minor.
+  for (const unsigned offer : {1U, 2U, 4U, 8U}) {
+    auto c = f.client(true, v1::highest_minor); send(c->pipe.get(), framed(hello_payload(true, offer))); const auto minor = (std::min)(offer, v1::highest_minor);
+    require(c->read(2) && c->messages[0].kind == "welcome" && c->messages[0].minor == minor && c->messages[0].welcome->minor == minor && c->messages[1].kind == "checkpoint" &&
+      c->messages[1].minor == minor && c->applied[1].hydration && c->consumer.minor() == minor, "a flipped maxMinor digit is served at min(offer, highest minor)");
+    c.reset(); require(f.listening(), "relisten after a flipped maxMinor digit");
+  }
   unsigned hello_closed = 0, hello_served = 0;
   for (unsigned i = 0; i < rounds; ++i) {
     auto bytes = framed(hello_payload(true)); const auto offset = 4 + next() % (bytes.size() - 4);
     switch (next() % 3) { case 0: bytes[offset] = static_cast<std::uint8_t>(1 + next() % 7); break; case 1: bytes[offset] ^= static_cast<std::uint8_t>(1u << (next() % 8)); break; default: bytes.resize(offset); bytes[0] = static_cast<std::uint8_t>(bytes.size() - 4); break; }
-    auto c = f.client(true); send(c->pipe.get(), bytes);
+    auto c = f.client(true, v1::highest_minor); send(c->pipe.get(), bytes);
     if (c->closed(1500)) ++hello_closed; else ++hello_served;
     c.reset(); require(f.listening(), "relisten after a mutated hello");
   }

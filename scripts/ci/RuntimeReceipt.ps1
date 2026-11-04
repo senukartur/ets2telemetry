@@ -817,11 +817,11 @@ function Test-UiReceipt {
     if ($Driver.mode -cnotin @('development','packaged') -or $ExpectedUiCase -cnotin $cases -or $null -eq $ui -or $ui.case -cne $ExpectedUiCase -or
         (@($ui.languages) -join ',') -cne 'en,ru' -or @($ui.sizes).Count -ne 2 -or
         $ui.sizes[0].width -ne 1280 -or $ui.sizes[0].height -ne 800 -or $ui.sizes[1].width -ne 1100 -or $ui.sizes[1].height -ne 720) { return $false }
-    $flags = @('bilingual','bothSizes','security','offlineFonts','recordingIndicator','versionLine','updateHidden')
+    $flags = @('bilingual','bothSizes','security','offlineFonts','recordingIndicator','osPointerIsolated','hoverUnderDesktopCursor','versionLine','updateHidden')
     $screens = @()
     switch -CaseSensitive ($ExpectedUiCase) {
         'shell' { $flags += @('navigation','headingFocus','hardModePage','journalUnmount','exitHintKeyboard','exitAvailable','noAccountPlaceholder'); $screens = @('live','hardMode','journal','settings') }
-        'live' { $flags += @('numericGauge','unavailableVsZero','paused','staleDashes','rawNames','noTripPlaceholder','jobViewport','hmNamesReadable','fullWidthTelemetry','tankUnknownVsZero','mandatoryBreak'); $screens = @('current','zero','missing','paused','stale') }
+        'live' { $flags += @('numericGauge','unavailableVsZero','paused','staleDashes','rawNames','noTripPlaceholder','jobViewport','jobRowsAfterV1Gap','hmNamesReadable','fullWidthTelemetry','tankUnknownVsZero','mandatoryBreak'); $screens = @('current','zero','missing','paused','stale') }
         'journal' { $flags += @('syntheticBanner','pageReturn','chartBounded','rawTabs','noPlannedSearch','tripRegions','tableReadable','signedChart'); $screens = @('list','mode-trip','weak-mode-trip','trip','intervals','timeline','samples') }
         'settings' { $flags += @('allPanels','allSections','committedSave','sourceSelector','uninstallRefusal','refusedSave','readOnly','controlsKeyboard','lastEnabled','fontLicense','overlayVisibility','visibilityFailedSave','actionResult','overlayOpacity','opacityFailedSave','opacityReadOnly','overlayUnified','overlayEditing','overlayScroll','scaleControl','gearDisplay','gearDisplayFailedSave'); $screens = @('general','overlay','overlay-sections','plugin','about','data','save-error') }
         'overlay' { $flags += @('fourLayouts','transparent','contained','independentFont','missing','paused','staleDashes','heroSubsets','formatterProfiles','stableNumbers','opacityKeyboardFocus','opacityGestures','backgroundOpacityOverlay','clusterRpmContained','scaleRange','clusterSpeedArc','gearDisplayManual','gearboxLabels'); $screens = @('strip','card','cluster','hud') }

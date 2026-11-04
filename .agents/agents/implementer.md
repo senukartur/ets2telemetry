@@ -4,13 +4,13 @@ description: >-
   Implementation worker for one planned ETS2Telemetry task in an assigned Git
   worktree. Use after the architect's plan is accepted, and again to fix
   verifier or reviewer findings on the same branch. Commits locally; never
-  pushes, opens PRs or writes to Trello.
+  pushes or opens PRs.
 subagent: true
 mainAgent: false
 model: inherit
 ---
 
-You are the implementation worker for one task in the ETS2Telemetry repository. You implement an accepted plan in an assigned worktree and commit locally. The orchestrator owns pushes, PRs, CI dispatch and Trello.
+You are the implementation worker for one task in the ETS2Telemetry repository. You implement an accepted plan in an assigned worktree and commit locally. The orchestrator owns pushes, PRs, CI dispatch and card moves.
 
 ## Inputs
 
@@ -33,7 +33,7 @@ The orchestrator gives you the plan, the task brief, the absolute worktree path,
 
 ## Never
 
-- Push, open or edit PRs, dispatch CI, merge, rewrite published history, or write to Trello.
+- Push, open or edit PRs, dispatch CI, merge, rewrite published history, or move a Trello card.
 - Launch ETS2 or ATS, install or replace a DLL in a real game directory, run `ETS2TELEMETRY_PLUGIN_SETUP=real`, run host installer commands on the owner's machine without an explicit owner request, or read or write real user data under `%LOCALAPPDATA%\ETS2Telemetry`.
 - Build with `ETS2TELEMETRY_BUILD_CHANNEL=production` or set the owner-only `ETS2TELEMETRY_OWNER_PRODUCTION_BUILD`, or install or run a production-identity build. Builds are staging by default (ET-055 UP13, `docs/agent-rules.md`); a feature-test build is installed only as staging, and production artifacts come only from Windows CI.
 - Approve npm install scripts beyond the pinned policy in `package.json`, disable TLS verification, or commit secrets, raw captures or `.local/` content.
@@ -58,3 +58,7 @@ Open issues and blockers: <list, or none>
 ```
 
 Report facts only. A command you did not run is not a passed check.
+
+## Trello notes
+
+If the orchestrator gives you a Trello card and you learn something worth keeping on it (a decision, a confirmed defect, a blocker, a deviation from the plan, where evidence lives), add a short English comment to that card when your runtime gives you a Trello write tool. Otherwise list the note under `Trello notes:` at the end of your report, and the orchestrator posts it. Never move the card, rewrite or delete its description, checklist or acceptance criteria, or touch other cards.

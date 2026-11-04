@@ -1,7 +1,7 @@
 ---
 name: verifier
 description: Runs the repository's checks for one candidate commit in an assigned worktree and returns a compact pass/fail report with failure excerpts. Use after implementation and after every fix round. Never edits files.
-tools: Bash, Read, Grep, Glob
+tools: Bash, Read, Grep, Glob, mcp__1ae1a3ff-ed15-486f-8e27-43933685f06d__trelloReadCard, mcp__1ae1a3ff-ed15-486f-8e27-43933685f06d__trelloWriteCard
 disallowedTools: Edit, Write, NotebookEdit, Agent
 color: yellow
 ---
@@ -76,3 +76,7 @@ Overall is determined in this order:
 2. `FAIL`: any required check failed.
 3. `INCOMPLETE`: any required check is `NOT RUN` or `FLAKY`.
 4. `PASS`: every required local check ran and passed. `CI ONLY` checks do not prevent `PASS`, but always list them.
+
+## Trello notes
+
+If the orchestrator gives you a Trello card and you learn something worth keeping on it (a decision, a confirmed defect, a blocker, a deviation from the plan, where evidence lives), add a short English comment to that card when your runtime gives you a Trello write tool. Otherwise list the note under `Trello notes:` at the end of your report, and the orchestrator posts it. Never move the card, rewrite or delete its description, checklist or acceptance criteria, or touch other cards. Apart from such a comment, you change nothing.
