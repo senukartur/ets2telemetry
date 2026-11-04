@@ -7,6 +7,7 @@ export interface CoverageEndpoint extends ProgressCheckpoint {trip: string; head
 
 /** References change at coverage boundaries only; ordinary samples use logical_revisions' existing bounds/head. */
 export interface LogicalCoverage {
+  acceptancePending?: boolean;
   version: 1; start: 'observed' | 'unproven'; losses: number; member: string;
   phase: 'active' | 'pending' | 'resumed'; endpoint: CoverageEndpoint | null;
   window: {session: string; opened: string | null} | null;
@@ -19,6 +20,51 @@ const reference = (v: unknown): v is string => typeof v === 'string' && /^[1-9][
 const nullableReference = (v: unknown) => v === null || reference(v);
 const nullableNumber = (v: unknown) => v === null || typeof v === 'number' && Number.isFinite(v);
 const unsigned = (v: unknown): v is string => typeof v === 'string' && /^(0|[1-9][0-9]{0,19})$/.test(v) && BigInt(v) <= 18_446_744_073_709_551_615n;
+export function validAcceptanceDetail(v: unknown): boolean {
+  if(!v || typeof v!=='object')return false;
+  const d=v as Row,confirmed=d.phase==='confirmed';
+  return keys(d,confirmed?'absenceBoundaryOrder,absenceMonotonicNs,annotation,cause,clearEventSeq,configurationRevision,confirmedThroughEventSeq,loadGeneration,phase,throughEventSeq,version'
+    :'absenceBoundaryOrder,absenceMonotonicNs,annotation,cause,clearEventSeq,configurationRevision,loadGeneration,phase,throughEventSeq,version')
+    && d.version===1 && d.annotation===true && d.cause==='observed-acceptance' && (confirmed || d.phase==='pending')
+    && unsigned(d.clearEventSeq) && BigInt(d.clearEventSeq)>0n && unsigned(d.throughEventSeq) && BigInt(d.clearEventSeq)<=BigInt(d.throughEventSeq)
+    && unsigned(d.configurationRevision) && unsigned(d.absenceMonotonicNs) && unsigned(d.absenceBoundaryOrder)
+    && Number.isSafeInteger(d.loadGeneration) && Number(d.loadGeneration)>=0 && (!confirmed || unsigned(d.confirmedThroughEventSeq));
+}
+function acceptedStart(db:Database.Database,row:Row,detail:Row):boolean {
+  if(!validAcceptanceDetail(detail)||detail.phase!=='confirmed'||row.opened_event_ref===null)return false;
+  const opened=get(db,'SELECT event_seq,occurred_monotonic_ns,payload_json,source_clock_ref FROM events WHERE id=?',row.opened_event_ref);
+  const membership=get(db,'SELECT proof_json FROM logical_memberships WHERE trip_ref=?',row.id);
+  if(!opened || typeof membership?.proof_json!=='string' || typeof opened.occurred_monotonic_ns!=='string')return false;
+  const profile=JSON.parse(membership.proof_json) as Row,payload=JSON.parse(String(opened.payload_json)) as {occurred:{configurationRevision:string;boundaryOrder:string}};
+  const clock=get(db,'SELECT clock_uuid FROM clocks WHERE id=?',opened.source_clock_ref);
+  if(profile.sourceClockId!==clock?.clock_uuid || profile.loadGeneration!==detail.loadGeneration || BigInt(String(profile.afterMonotonicNs))>BigInt(String(detail.absenceMonotonicNs))
+    || BigInt(String(detail.absenceMonotonicNs))>BigInt(opened.occurred_monotonic_ns) || BigInt(String(detail.throughEventSeq))>=BigInt(String(opened.event_seq))
+    || BigInt(String(detail.confirmedThroughEventSeq))<=BigInt(String(opened.event_seq))
+    || BigInt(payload.occurred.configurationRevision)<=BigInt(String(detail.configurationRevision)) || BigInt(payload.occurred.boundaryOrder)<=BigInt(String(detail.absenceBoundaryOrder)))return false;
+  const clear=get(db,"SELECT id FROM events WHERE plugin_session_id=? AND event_seq=? AND type='job.cleared' AND first_redelivered=0",row.plugin_session_ref,String(detail.clearEventSeq).padStart(20,'0'));
+  if(!clear)return false;
+  if(get(db,"SELECT id FROM events WHERE plugin_session_id=? AND event_seq>? AND event_seq<=? AND type IN ('job.configured','job.cleared') LIMIT 1",row.plugin_session_ref,
+    String(detail.clearEventSeq).padStart(20,'0'),String(detail.throughEventSeq).padStart(20,'0')))return false;
+  const intervening=db.prepare(`SELECT type,event_seq FROM events WHERE plugin_session_id=? AND event_seq>? AND event_seq<=? ORDER BY event_seq LIMIT 65`)
+    .all(row.plugin_session_ref,String(detail.throughEventSeq).padStart(20,'0'),String(detail.confirmedThroughEventSeq).padStart(20,'0')) as Row[];
+  if(intervening.length>64 || intervening.some(e=>['timers.restart','gameTime.regression','job.cleared'].includes(String(e.type))
+    || e.type==='job.configured' && e.event_seq!==opened.event_seq))return false;
+  return !get(db,'SELECT id FROM event_gaps WHERE plugin_session_ref=? AND last_event_seq>? AND first_event_seq<=? LIMIT 1',row.plugin_session_ref,
+    String(detail.throughEventSeq).padStart(20,'0'),String(detail.confirmedThroughEventSeq).padStart(20,'0'));
+}
+/** Only source-qualified bounds strictly before every selected job in this session exclude a session-level loss. */
+function beforeJobWindow(db:Database.Database,id:unknown,row:Row,interval:Row):boolean {
+  if(interval.trip_ref!==null || interval.plugin_session_ref!==row.plugin_session_ref)return false;
+  const first=get(db,`SELECT t.opened_event_ref,e.event_seq,e.occurred_monotonic_ns,e.source_clock_ref FROM trips t
+    JOIN logical_memberships m ON m.trip_ref=t.id LEFT JOIN events e ON e.id=t.opened_event_ref
+    WHERE m.logical_ref=? AND t.plugin_session_ref=? ORDER BY t.id LIMIT 1`,id,row.plugin_session_ref);
+  if(typeof first?.event_seq!=='string')return false;
+  if(typeof interval.first_event_seq==='string' && typeof interval.last_event_seq==='string')
+    return interval.first_event_seq<=interval.last_event_seq && interval.last_event_seq<first.event_seq;
+  return interval.source_clock_ref!==null && interval.source_clock_ref===first.source_clock_ref && interval.start_monotonic_ns!==null
+    && typeof interval.start_monotonic_ns==='string' && typeof interval.end_monotonic_ns==='string' && typeof first.occurred_monotonic_ns==='string'
+    && interval.start_monotonic_ns<=interval.end_monotonic_ns && interval.end_monotonic_ns<first.occurred_monotonic_ns;
+}
 const position = (v: unknown) => v === null || typeof v === 'object' && keys(v, 'x,y,z') && Object.values(v).every(n => typeof n === 'number' && Number.isFinite(n));
 const point = (v: CapturedEndpoint | ProgressAnchor) => (v.truck === null || typeof v.truck === 'string' && v.truck.length > 0 && v.truck.length <= 2048)
   && nullableNumber(v.odometerM) && (v.odometerM === null || v.odometerM >= 0) && nullableNumber(v.fuelL) && (v.fuelL === null || v.fuelL >= 0)
@@ -55,9 +101,9 @@ function validEndpoint(v: unknown): v is CoverageEndpoint {
       && BigInt(c.running.profile.afterMonotonicNs)<=BigInt(c.running.monotonicNs));
 }
 export function validCoverage(v: unknown): v is LogicalCoverage {
-  if (!v || typeof v !== 'object' || !keys(v, 'endpoint,losses,member,phase,start,version,window')) return false;
+  if (!v || typeof v !== 'object' || Object.keys(v).filter(key=>key!=='acceptancePending').sort().join(',')!=='endpoint,losses,member,phase,start,version,window') return false;
   const c = v as LogicalCoverage;
-  return c.version === 1 && ['observed', 'unproven'].includes(c.start) && Number.isInteger(c.losses) && c.losses >= 0 && c.losses <= 31
+  return (!Object.hasOwn(c,'acceptancePending') || typeof c.acceptancePending==='boolean') && c.version === 1 && ['observed', 'unproven'].includes(c.start) && Number.isInteger(c.losses) && c.losses >= 0 && c.losses <= 31
     && reference(c.member) && ['active', 'pending', 'resumed'].includes(c.phase) && (c.endpoint === null || validEndpoint(c.endpoint))
     && (c.window === null || typeof c.window === 'object' && keys(c.window, 'opened,session') && reference(c.window.session) && (c.window.opened === null || reference(c.window.opened)))
     && (c.phase === 'pending' || c.window === null);
@@ -73,8 +119,10 @@ export function originalCoverage(db: Database.Database, row: Row): LogicalCovera
   const payload = event ? JSON.parse(String(event.payload_json)) as {occurred: {simulation: string}} : null;
   const started = event && get(db, "SELECT id FROM events WHERE plugin_session_id=? AND event_seq<? AND type='simulation.started' ORDER BY id DESC LIMIT 1", row.plugin_session_ref, event.event_seq);
   const gap = event && get(db, 'SELECT id FROM event_gaps WHERE plugin_session_ref=? AND first_event_seq<=? LIMIT 1', row.plugin_session_ref, event.event_seq);
+  const notes=db.prepare('SELECT detail_json FROM completeness_intervals WHERE trip_ref=? ORDER BY id LIMIT 129').all(row.id) as Row[];
+  const pending=notes.some(note=>{const detail=typeof note.detail_json!=='string'?null:JSON.parse(note.detail_json) as Row;return detail?.cause==='observed-acceptance'&&detail.phase==='pending'&&validAcceptanceDetail(detail);});
   return {version: 1, start: row.opened_by === 'event' && payload?.occurred.simulation === 'running' && started && !gap ? 'observed' : 'unproven',
-    losses: 0, member: String(row.id), phase: 'active', endpoint: null, window: null};
+    ...(pending?{acceptancePending:true}:{}),losses: 0, member: String(row.id), phase: 'active', endpoint: null, window: null};
 }
 /** A bootstrap loss is outside this member's active job only for the explicit ordered loaded-job boundary. */
 export function cleanLoadWindow(db: Database.Database, row: Row, requireStarted = true): boolean {
@@ -106,6 +154,13 @@ export function advanceCoverage(db: Database.Database, id: unknown, _group: Row,
   if (intervals.length > 128) coverage.losses |= COVERAGE_LOSS.unknown;
   for (const interval of intervals) {
     const detail = interval.detail_json === null ? {} : JSON.parse(interval.detail_json as string) as Row;
+    if(beforeJobWindow(db,id,row,interval))continue;
+    if(detail.cause==='observed-acceptance'){
+      // A later member cannot establish the first recording's missing acceptance.
+      if(acceptedStart(db,row,detail) && String(id)===String(row.id)){coverage.start='observed';if(coverage.acceptancePending)coverage.acceptancePending=false;}
+      else if(!validAcceptanceDetail(detail))coverage.losses|=COVERAGE_LOSS.unknown;
+      continue;
+    }
     if (interval.kind === 'event-loss' && interval.plugin_session_ref !== row.plugin_session_ref && (row.outcome === 'open' || row.close_reason === 'restart')
       && !get(db,'SELECT t.id FROM trips t JOIN logical_memberships m ON m.trip_ref=t.id WHERE m.logical_ref=? AND t.plugin_session_ref=? LIMIT 1',id,interval.plugin_session_ref)) {
       if (coverage.phase === 'pending' && coverage.window?.opened !== null) coverage.losses |= COVERAGE_LOSS.unknown;
@@ -136,7 +191,8 @@ export function advanceCoverage(db: Database.Database, id: unknown, _group: Row,
 export function applyCoverage(row: Row, group: Row, coverage: LogicalCoverage | undefined, present: boolean): void {
   if (coverage) {
     row._coverage = coverage;
-    if (group.profile_scope !== null && coverage.start === 'observed' && coverage.losses === 0 && coverage.phase !== 'pending') row.recording_completeness = 'complete';
+    if(coverage.acceptancePending===true)row.recording_completeness='partial';
+    else if (group.profile_scope !== null && coverage.start === 'observed' && coverage.losses === 0 && coverage.phase !== 'pending') row.recording_completeness = 'complete';
     else if (coverage.losses !== 0 || coverage.phase === 'pending' || Number(group.member_count) > 1) row.recording_completeness = 'partial';
   } else if (present || Number(group.member_count) > 1) row.recording_completeness = 'partial';
 }

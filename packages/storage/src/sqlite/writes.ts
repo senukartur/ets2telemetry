@@ -1,4 +1,4 @@
-import {validCapturedEndpoint} from './logical-coverage';
+import {validCapturedEndpoint,validAcceptanceDetail} from './logical-coverage';
 import {admittedProfile, associate, projectEndpoint, projectSessionBounds, retireObservedTerminal, projectEffects, projectSample, logicalEnabled, logicalFor, revise} from './logical-trips';
 import type {ProfileObservation} from '../../../telemetry-core/src/trips/continuation';
 import type {HardModeObservation} from '../../../contracts/src/hard-mode';
@@ -190,7 +190,9 @@ function addInterval(c: EffectContext, interval: CompletenessInterval, ifAbsent 
   if (interval.sourceClockId !== undefined && !isUuid(interval.sourceClockId)) fail('INVALID_INPUT');
   if (hasMonotonic && interval.sourceClockId === undefined) fail('INVALID_INPUT');
   let detail: string | null = null;
-  if (interval.detail !== undefined) { if (typeof interval.detail !== 'object' || interval.detail === null || Array.isArray(interval.detail)) fail('INVALID_INPUT'); detail = canonicalJson(interval.detail); }
+  if (interval.detail !== undefined) { if (typeof interval.detail !== 'object' || interval.detail === null || Array.isArray(interval.detail)) fail('INVALID_INPUT');
+    if(interval.detail.cause==='observed-acceptance' && !validAcceptanceDetail(interval.detail))fail('INVALID_INPUT');
+    detail = canonicalJson(interval.detail); }
   const kind = enumValue(interval.kind, INTERVAL_KINDS), startUtc = optionalUtc(interval.startUtcMs), endUtc = optionalUtc(interval.endUtcMs);
   const startMonotonic = optionalKey(interval.startMonotonicNs), endMonotonic = optionalKey(interval.endMonotonicNs);
   const first = optionalKey(interval.firstEventSeq), last = optionalKey(interval.lastEventSeq);
