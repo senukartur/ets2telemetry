@@ -79,3 +79,7 @@ Overall is determined in this order:
 2. `FAIL`: any required check failed.
 3. `INCOMPLETE`: any required check is `NOT RUN` or `FLAKY`.
 4. `PASS`: every required local check ran and passed. `CI ONLY` checks do not prevent `PASS`, but always list them.
+
+## Trello notes
+
+If the orchestrator gives you a Trello card and you learn something worth keeping on it (a decision, a confirmed defect, a blocker, a deviation from the plan, where evidence lives), add a short English comment to that card when your runtime gives you a Trello write tool. Otherwise list the note under `Trello notes:` at the end of your report, and the orchestrator posts it. Never move the card, rewrite or delete its description, checklist or acceptance criteria, or touch other cards. Apart from such a comment, you change nothing.

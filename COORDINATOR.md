@@ -19,7 +19,7 @@ Follow [AGENTS.md](AGENTS.md) and [the agent rules](docs/agent-rules.md). Before
 
 Discover available Trello tools or an already configured API integration. Read the board and target cards before changing them. Verify read and write access separately. A board URL or an old export does not establish current access or status. Use Git and GitHub CLI for repository operations as specified in [the agent rules](docs/agent-rules.md#git-workflow).
 
-The launch prompt authorizes updates to the selected implementation cards: status moves, checklist results, and concise progress, blocker, and PR comments. Keep these writes with the coordinator. Preserve unrelated descriptions, comments, cards, and board structure. Do not create/delete cards, lists, or dependencies or change acceptance criteria without an owner instruction. Avoid duplicate comments: reread after an uncertain write before retrying.
+The launch prompt authorizes updates to the selected implementation cards: status moves, checklist results, and concise progress, blocker, and PR comments. Status moves stay with the coordinator; any agent or subagent may comment on its card to record important information. Preserve unrelated descriptions, comments, cards, and board structure. Do not create/delete cards, lists, or dependencies or change acceptance criteria without an owner instruction. Avoid duplicate comments: reread after an uncertain write before retrying.
 
 If Trello is unavailable, report the missing capability and record pending board updates locally. An existing local `planning/trello-cards.json`, supplied card text, or a previously verified snapshot can support work within the authorized scope; record its date and that live status is unverified. Do not commit the temporary manifest, copy it wholesale into tracked documents, or claim synchronization succeeded. If the task brief or dependencies cannot be established, request that missing information and continue independent authorized work. Never request credentials in chat; use the integration's supported authentication flow.
 
@@ -76,7 +76,7 @@ Use the session's subagent tools for bounded assignments. Do not create separate
 | Need | Codex | Claude Code |
 | --- | --- | --- |
 | Implementation worker | Subagent with the assignment below | `Agent` tool, `general-purpose` type, assignment below as the prompt |
-| Independent reviewer | Separate read-only subagent | `Agent` tool with a prompt that forbids edits, commits, and PR or Trello writes; a read-only type such as `Explore` suits searches but not whole-file review |
+| Independent reviewer | Separate read-only subagent | `Agent` tool with a prompt that forbids edits, commits, PR writes and card moves; a read-only type such as `Explore` suits searches but not whole-file review |
 | Worktree isolation | Separate worktree per card | For per-card branches, create the `git worktree` yourself from the verified base and pass its absolute path. `isolation: "worktree"` creates the worktree for you, so you cannot choose its path or base commit up front; read back the created path and base commit and record them in the ledger |
 | Continue or steer a worker | Message the existing subagent | `SendMessage` to the agent's ID or name; a new `Agent` call starts cold without its context |
 | Worker result | Subagent response | The agent's final report is not shown to the owner; relay what matters in your own update |
@@ -93,7 +93,7 @@ Runtime-specific rules:
 
 For parallel cards, use a separate task branch and worktree per card. Subagent creation alone does not provide filesystem isolation. Pass the absolute working directory to every worker and reviewer. Inspect existing worktrees before creating another. Keep the coordinator's control checkout and ledger location stable.
 
-If isolated worktrees are unavailable, serialize implementation. Within one card, multiple agents may use one checkout only with disjoint file ownership and a single agent responsible for branch changes, staging, and commits. Never let agents switch branches in another agent's active checkout. Workers may make scoped local commits in their exclusive worktree; the coordinator normally owns pushes, PR creation, and Trello writes.
+If isolated worktrees are unavailable, serialize implementation. Within one card, multiple agents may use one checkout only with disjoint file ownership and a single agent responsible for branch changes, staging, and commits. Never let agents switch branches in another agent's active checkout. Workers may make scoped local commits in their exclusive worktree; the coordinator normally owns pushes, PR creation, and card status moves.
 
 Name an owner for shared protocol types, root manifests, lockfiles, native build files, migrations, and test configuration before parallel edits. Reserve those files to one writer or integrate agreed changes sequentially. Coordinate contracts before implementing their consumers. Worktrees prevent working-file collisions; they do not prevent incompatible interfaces or merge conflicts.
 
@@ -107,7 +107,7 @@ Absolute worktree path and task branch:
 Owned files/modules; shared files requiring coordination:
 Required interfaces/invariants and explicit exclusions:
 Relevant REG scenarios and required checks:
-Local commit responsibility; no push, PR, or Trello write unless assigned:
+Local commit responsibility; no push, PR, or card move unless assigned:
 Return: changed paths, commit/diff, criterion-by-criterion results,
 actual commands and outcomes, remaining checks, blockers, and next action.
 Read the card brief, docs/CONCEPT.md, docs/TESTING.md and the applicable sections of

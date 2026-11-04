@@ -1,6 +1,6 @@
 interface:
   display_name: "Deliver Task"
-  short_description: "Deliver a ready PR with green CI and addressed feedback"
+  short_description: "Deliver and merge a PR with green CI and addressed feedback"
   default_prompt: "Use $deliver to deliver task "
 
 policy:
