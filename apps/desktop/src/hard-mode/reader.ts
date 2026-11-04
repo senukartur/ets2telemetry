@@ -121,6 +121,11 @@ export class ProfileSettingsUnavailableError extends ProfileVerificationError {}
 /** A same-source hint supersedes control flow; it is not a failed filesystem or identity observation. */
 export class ProfileSuperseded extends Error {}
 interface ResolvedProfile {root: string; local: string; config: string; directories?: string[]; profile: BoundProfile; scope: string; binding: string; timing: ReadTiming}
+function discoveryContainers(resolved: Pick<ResolvedProfile, 'local' | 'config' | 'directories'>): string[] {
+  const canonical = (filename: string) => path.resolve(filename).toLowerCase();
+  const required = new Set([resolved.local, path.dirname(resolved.config)].map(canonical));
+  return [...new Set([path.dirname(resolved.local), ...(resolved.directories ?? [])].map(canonical).filter(filename => !required.has(filename)))].sort();
+}
 interface ProfileScan {profile: ResolvedProfile; settings: HardModeObservation | null; settingsError?: unknown}
 interface ScanOperation {
   key: string; source: SourceIdentity; atUtcMs: number; startedClientNs: bigint; controller: AbortController; generation: number;
@@ -254,7 +259,7 @@ export class HardModeReader {
     const tuple = (filename: string, values: string[]): string[] => {
       this.generation(work);
       const encoded = JSON.stringify(values);
-      if (discovery.has(filename) && expectedDiscovery?.has(filename) && expectedDiscovery.get(filename) !== encoded) this.invalidate();
+      if (discovery.has(path.resolve(filename).toLowerCase()) && expectedDiscovery?.has(filename) && expectedDiscovery.get(filename) !== encoded) this.invalidate();
       else if (baseline && baseline.tuples.get(filename) !== encoded) this.changedSettings(work);
       return values;
     };
@@ -265,7 +270,7 @@ export class HardModeReader {
     const expectedDiscovery = expected ? bound!.discovery : undefined;
     // Content changes inside the required profile directories can be atomic settings writes. Only enumeration
     // containers identify candidate-list provenance; keep their baseline independently of settings admission.
-    const discovery = new Set([path.dirname(resolved.local), ...(resolved.directories ?? [])].filter(filename => !required.has(filename)));
+    const discovery = new Set(discoveryContainers(resolved));
     const paths = [resolved.root, path.join(resolved.root, 'profiles'), path.join(resolved.root, 'steam_profiles'),
       resolved.local, path.dirname(resolved.local), path.dirname(resolved.config), ...(resolved.directories ?? []),
       path.join(resolved.root, 'config.cfg'), path.join(resolved.local, 'config_local.cfg'), resolved.config];
@@ -297,7 +302,7 @@ export class HardModeReader {
     // Physical profile identity excludes settings-file replacements and directory content-change hints.
     const directories = values.filter(value => required.has(value[0])).map(value => value.slice(0, 4));
     return {fingerprint: JSON.stringify(values), profileIdentity: JSON.stringify(directories), directories: new Map(directories.map(value => [value[0], JSON.stringify(value)])),
-      discovery: new Map(values.filter(value => discovery.has(value[0])).map(value => [value[0], JSON.stringify(value)])),
+      discovery: new Map(values.filter(value => discovery.has(path.resolve(value[0]).toLowerCase())).map(value => [value[0], JSON.stringify(value)])),
       tuples: new Map(values.map(value => [value[0], JSON.stringify(value)]))};
   }
   private nowNs(): bigint {return (this.options.nowNs ?? (() => process.hrtime.bigint()))();}
@@ -501,6 +506,7 @@ export class HardModeReader {
     const checked = await this.location(source, root, profile);
     this.generation(work);
     if (checked.scope !== resolved.scope || checked.config !== resolved.config) throw new Error('Profile directory changed during read');
+    if (JSON.stringify(discoveryContainers(checked)) !== JSON.stringify(discoveryContainers(resolved))) throw new Error('Profile discovery containers changed during read');
     stage = 'PROFILE_PROCESS_CHANGED';
     if (this.lifetime(source) !== processKey) throw new Error('Process changed');
     const afterMetadata = await this.metadata({...resolved, binding: '', timing: {startedClientNs: work.startedClientNs, completedClientNs: this.nowNs()}}, work);

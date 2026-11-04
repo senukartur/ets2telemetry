@@ -903,6 +903,21 @@ describe('ET-026 isolated reader (REG-008/010/011)', () => {
     const duplicate = path.join(steam, 'userdata', '101', '227300', 'remote', 'profiles', id); await mkdir(duplicate, {recursive: true}); await writeFile(path.join(duplicate, 'config.cfg'), HARD_MODE_CONFIG);
     await expect(read(r)).rejects.toThrow('ambiguous');
   });
+  it('recovers a stable Cloud watch set after rejecting an account added between traversal and metadata',async()=>{
+    const steam=path.join(root,'Steam'),userdata=path.join(steam,'userdata'),parent=path.join(userdata,'101','227300','remote','profiles');
+    const remote=path.join(userdata,'100','227300','remote','profiles',id),local=path.join(game,'steam_profiles',id);
+    await mkdir(remote,{recursive:true});await mkdir(local,{recursive:true});await writeFile(path.join(remote,'config.cfg'),HARD_MODE_CONFIG);
+    await writeFile(path.join(local,'config_local.cfg'),'uset g_brake_intensity "0.75"');await writeFile(path.join(game,'game.log.txt'),header+selection+save('steam'));
+    let inserting=false,phase=0;
+    const r=new HardModeReader({documents:path.join(root,'Documents'),steamRoot:steam,process:processFacts,metadata:{realpath:async filename=>{
+      if(inserting&&filename===userdata&&++phase===2){await mkdir(parent,{recursive:true});await utimes(userdata,new Date('2026-10-22T12:00:00Z'),new Date('2026-10-22T12:00:00Z'));}return realpath(filename);
+    },stat:filename=>stat(filename,{bigint:true})}});
+    await read(r);inserting=true;await expect(r.read(source,'101',created+10000,new AbortController().signal,true)).rejects.toThrow('discovery containers changed');
+    inserting=false;const recovered=await read(r);expect(recovered.assessment.state).toBe('pass');
+    const stable=await r.read(source,'102',created+10000,new AbortController().signal,true);expect(stable.binding).toBe(recovered.binding);expect(stable.assessment.state).toBe('pass');
+    await mkdir(path.join(parent,id));await writeFile(path.join(parent,id,'config.cfg'),HARD_MODE_CONFIG);await utimes(parent,new Date('2026-10-23T12:00:00Z'),new Date('2026-10-23T12:00:00Z'));
+    await expect(r.resolveProfile(source,created+10000,new AbortController().signal,true)).rejects.toThrow('ambiguous');
+  });
   it('does not let an old Cloud type override a later local save, or an old save survive a new selection', () => {
     expect(profileFromLog(selection + 'Profile type: PC_steam_cloud\n' + save('steam') + selection + save())).toMatchObject({storage: 'local', profile: id});
     expect(profileFromLog(selection + save() + 'New profile selected: Other\n')).toBeNull();
