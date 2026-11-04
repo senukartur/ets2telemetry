@@ -655,7 +655,7 @@ ET-019 PR-10 (October 19, 2026) adds the workflow `.github/workflows/windows-ext
 | --- | --- | --- | --- | ---: | ---: |
 | Native v1 producer fuzz, x50 | `v1-producer-test fuzz` (3,000 client, 2,000 record and 300 state rounds at x1) | x1 (CTest) | x50 | 27.0 s | 3 min |
 | Native v0 snapshot transport fuzz, x50 | `snapshot-transport-test fuzz` (96 mutated hellos at x1; the burst phase stays fixed) | x1 (CTest) | x50 | 4.8 s | 3 min |
-| Native v1 transport fuzz, x50 | `v1-transport-test fuzz` (40 mutated hellos and 40 mutated frames at x1) | x1 (CTest) | x50 | 119.9 s | 9 min |
+| Native v1 transport fuzz, x50 | `v1-transport-test fuzz` (four fixed maxMinor flips, then 40 mutated hellos and 40 mutated frames at x1) | x1 (CTest) | x50 | 119.9 s | 9 min |
 | Recovery campaign, 200 seeds | `tests/storage/trip-recorder-crash.test.ts` through `npm run test:storage` | 4 seeds | 200 seeds (`ETS2TELEMETRY_RECOVERY_SEEDS`) | 108 s | 9 min |
 | Protocol fuzz campaign, payload decoders | `tests/unit/protocol-fuzz.test.ts -t 'starts every campaign\|rejects only with its protocol error'`: the seed check and the four payload decoders | 2,000 | 200,000 (`ETS2TELEMETRY_FUZZ_ITERATIONS`) | 234 s | 18 min |
 | Protocol fuzz campaign, frame decoders | `-t 'follows the documented framing'`: the four frame decoders | 2,000 | 200,000 | 242 s | 19 min |
