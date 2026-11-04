@@ -16,9 +16,9 @@ uset g_hardcore_simulation "1"
 uset g_police "1"
 uset g_fatigue "1"
 uset g_use_speed_limiter "1"
-uset g_truck_stability "0.5"
-uset g_trailer_stability "0.5"
-uset g_simple_parking_doubles "0"
+uset g_truck_stability "0.25"
+uset g_trailer_stability "0.25"
+uset g_simple_parking_doubles "1"
 uset g_parking_difficulty "2"
 uset g_bad_weather_factor "0.12"
 uset g_road_events "0.30"
@@ -103,7 +103,7 @@ export async function startHardModeSource(config) {
   return {endpoint, errors, peerDisconnects, connected: () => !!(active(connection) && connection.durable), acked: () => acked.toString(),
     settings: async kind => {if (kind === 'unknown') await rm(profileConfig, {force: true}); else await writeFile(profileConfig, kind === 'fail' ? CONFIG.replace('g_fatigue "1"', 'g_fatigue "0"') : CONFIG);},
     begin: label => {revision++; state.configuration.revision = revision.toString(); const job = {...configured.data.record, cargoId: {available: true, value: `synthetic_${label}`}, cargo: {available: true, value: `Synthetic ${label}`}}; const {type, ...value} = job; void type; state.configuration.job = {available: true, value}; return event(job);},
-    deliver: () => event({...delivered.data.record, autoParkUsed: {available: true, value: false}}),
+    deliver: () => event({...delivered.data.record, autoParkUsed: {available: true, value: true}}),
     stop: () => {
       if (!stopping) {stopped = true; retire(connection); stopping = new Promise(resolve => server.close(resolve));}
       return stopping;
@@ -141,8 +141,8 @@ export async function runHardModeSmoke({application, dashboard, source, config, 
   const hints = [
     ['fuel', 'On (1)', 'On (1)', 'Meets the required setting'], ['air', 'On (1)', 'On (1)', 'Meets the required setting'],
     ['police', 'On (1)', 'On (1)', 'Meets the required setting'], ['fatigue', 'Off (0)', 'On (1)', 'Does not meet the required setting'],
-    ['limiter', 'On (1)', 'On (1)', 'Meets the required setting'], ['truck', '50% (0.5)', '≤ 50% (0.5)', 'Meets the required setting'],
-    ['trailer', '50% (0.5)', '≤ 50% (0.5)', 'Meets the required setting'], ['parking', 'Off (0) / Skilled (2)', 'Off (0) and skilled (2); manual delivery required', 'Meets the required setting'],
+    ['limiter', 'On (1)', 'On (1)', 'Meets the required setting'], ['truck', '50% (0.25)', '≤ 50% (0.25)', 'Meets the required setting'],
+    ['trailer', '50% (0.25)', '≤ 50% (0.25)', 'Meets the required setting'], ['parking', 'Simplified double-trailer parking: On (1) / Normal (2)', 'Normal (2)', 'Meets the required setting'],
     ['rain', '12% (0.12)', '≥ 12% (0.12)', 'Meets the required setting'], ['events', '30% (0.3)', '≥ 30% (0.3)', 'Meets the required setting'],
     ['braking', '75% (0.75)', '≤ 75% (0.75)', 'Meets the required setting'], ['traffic', '100% (1)', '≥ 100% (1)', 'Meets the required setting']
   ];
@@ -151,16 +151,16 @@ export async function runHardModeSmoke({application, dashboard, source, config, 
     await until(() => dashboard.evaluate(() => globalThis.desktop.getAppState()), state => state.settings?.language === value, 'HARD_MODE_LANGUAGE_SAVED', 5000);
   };
   const localizedHints = value => value === 'en' ? hints : hints.map(([id, detected, required, reason]) => [id,
-    detected.replaceAll('On', 'Вкл.').replaceAll('Off', 'Выкл.').replaceAll('Skilled', 'Умелая'),
-    id === 'parking' ? 'Выкл. (0) и умелая (2); требуется ручная парковка' : required.replaceAll('On', 'Вкл.'),
+    detected.replaceAll('On', 'Вкл.').replaceAll('Off', 'Выкл.').replaceAll('Normal', 'Нормальная').replaceAll('Simplified double-trailer parking', 'Упрощённая парковка двойных прицепов'),
+    id === 'parking' ? 'Нормальная (2)' : required.replaceAll('On', 'Вкл.'),
     reason === 'Meets the required setting' ? 'Соответствует требуемой настройке' : 'Не соответствует требуемой настройке']);
   let englishFixture;
   for (const lang of ['en', 'ru']) {
     await language(lang);
-    const names = lang === 'en' ? ['Realistic fuel consumption', 'Air brake simulation', 'Police and fines', 'Fatigue simulation', 'Speed limiter', 'Truck stability', 'Trailer stability', 'Configured skilled parking', 'Rain probability', 'Random road events', 'Braking intensity', 'Traffic density'] : ['Реалистичный расход топлива', 'Пневмотормоза', 'Штрафы / полиция', 'Усталость', 'Ограничитель скорости', 'Стабилизация тягача', 'Стабилизация прицепа', 'Настроенная умелая парковка', 'Вероятность дождя', 'Случайные события', 'Интенсивность торможения', 'Плотность трафика'];
+    const names = lang === 'en' ? ['Realistic fuel consumption', 'Air brake simulation', 'Police and fines', 'Fatigue simulation', 'Speed limiter', 'Truck stability', 'Trailer stability', 'Configured Normal parking', 'Rain probability', 'Random road events', 'Braking intensity', 'Traffic density'] : ['Реалистичный расход топлива', 'Пневмотормоза', 'Штрафы / полиция', 'Усталость', 'Ограничитель скорости', 'Стабилизация тягача', 'Стабилизация прицепа', 'Настроенная нормальная парковка', 'Вероятность дождя', 'Случайные события', 'Интенсивность торможения', 'Плотность трафика'];
     const expected = localizedHints(lang), fail = lang === 'en' ? 'fail' : 'не выполнено', pass = lang === 'en' ? 'pass' : 'выполнено';
     const detectedLabel = lang === 'en' ? 'Detected' : 'Обнаружено', requiredLabel = lang === 'en' ? 'Required' : 'Требуется', reasonLabel = lang === 'en' ? 'Reason' : 'Причина';
-    const values = [[1],[1],[1],[0],[1],[0.5],[0.5],[0,2],[0.12],[0.3],[0.75],[1]], short = text => text.replace(/ \([^)]*\)/g, '');
+    const values = [[1],[1],[1],[0],[1],[0.25],[0.25],[1,2],[0.12],[0.3],[0.75],[1]], short = text => text.replace(/ \([^)]*\)/g, '');
     const fixtureRules = expected.map(([id, detected, required, reason], index) => {
       const label = `${names[index]}: ${id === 'fatigue' ? fail : pass}`;
       return {id, state: id === 'fatigue' ? 'fail' : 'pass', values: values[index], reason: id === 'fatigue' ? 'outside-limit' : 'compliant',
@@ -217,7 +217,7 @@ export async function runHardModeSmoke({application, dashboard, source, config, 
       assert.equal(await caveatButton.evaluate(element => element === globalThis.document.activeElement), true, `Escape moved focus from the ${lang} caveat hint`);
     });
     const pageText = await dashboard.getByTestId('hard-mode-card').innerText();
-    for (const caveat of (lang === 'en' ? ['Read-only checks observe persisted settings.', 'Unpersisted menu or console changes and transient changes between checks are not verified.', 'Manual delivery is required; actual Expert placement is not verified.', 'Current settings pass is separate from delivered-trip qualification.'] : ['Проверка только читает сохранённые настройки.', 'Несохранённые изменения в меню или консоли и временные изменения между проверками не проверяются.', 'Требуется ручная парковка; фактическое место уровня «Эксперт» не подтверждается.', 'Соответствие текущих настроек не означает, что завершённый рейс будет засчитан как Hard Mode.'])) assert.ok(hoverText.includes(caveat), `Missing ${lang} caveat in the tooltip: ${caveat}`);
+    for (const caveat of (lang === 'en' ? ['Read-only checks observe persisted settings.', 'Unpersisted menu or console changes and transient changes between checks are not verified.', 'Parking is checked only through its settings; actual parking at delivery is not checked.', 'Current settings pass is separate from delivered-trip qualification.'] : ['Проверка только читает сохранённые настройки.', 'Несохранённые изменения в меню или консоли и временные изменения между проверками не проверяются.', 'Парковка проверяется только по настройкам; фактическая парковка при доставке не проверяется.', 'Соответствие текущих настроек не означает, что завершённый рейс будет засчитан как Hard Mode.'])) assert.ok(hoverText.includes(caveat), `Missing ${lang} caveat in the tooltip: ${caveat}`);
     if (lang === 'ru') assert.doesNotMatch(pageText, /Detected:|Required:|Reason:|Check again|Current settings|Read-only/);
     await dashboard.getByTestId('shell.content').evaluate(node => {node.scrollTop = 0;});
     await dashboard.screenshot({path: path.join(config.output, `hard-mode-checklist-${lang}.png`)});
@@ -282,7 +282,7 @@ export async function runHardModeSmoke({application, dashboard, source, config, 
   await openDetail(dashboard, record.qualified);
   assert.match(await dashboard.getByTestId('trip-hard-mode').innerText(), /This trip qualifies/);
   await dashboard.evaluate(() => globalThis.desktop.setLanguage('ru'));
-  await until(() => dashboard.getByTestId('trip-hard-mode').innerText(), text => text.includes('Рейс засчитывается как Hard Mode') && text.includes('Ручная парковка: подтверждена'), 'HARD_MODE_RUSSIAN_TRIP_AUDIT', 5000);
+  await until(() => dashboard.getByTestId('trip-hard-mode').innerText(), text => text.includes('Рейс засчитывается как Hard Mode'), 'HARD_MODE_RUSSIAN_TRIP_AUDIT', 5000);
   assert.doesNotMatch(await dashboard.getByTestId('trip-hard-mode').innerText(), /At opening:|Latest observation:|Manual delivery:|Settings snapshots|Read-only/);
   assert.match(await dashboard.getByTestId('journal-detail').innerText(), /Synthetic qualifying/); // SDK cargo text is never translated.
   await dashboard.screenshot({path: path.join(config.output, 'hard-mode-trip-ru.png')});
@@ -293,7 +293,8 @@ export async function runHardModeSmoke({application, dashboard, source, config, 
   await dashboard.getByTestId('journal-export-result').filter({hasText: 'Saved the trip as JSON'}).waitFor({state: 'visible', timeout: 10000});
   const exported = JSON.parse(await readFile(file, 'utf8'));
   const validate = await exportValidator(config); assert.deepEqual(validate(exported), []);
-  assert.equal(exported.formatVersion, 4); assert.equal(exported.trip.is_hard_mode, true); assert.equal(exported.trip.hard_mode_details.manualDelivery, true);
+  assert.equal(exported.formatVersion, 4); assert.equal(exported.trip.is_hard_mode, true); assert.equal(exported.trip.hard_mode_details.manualDelivery, null);
+  assert.deepEqual(exported.outcomeDetails.record.autoParkUsed, {available: true, value: true});
   record.export = true; record.flags = rows.map(row => row.isHardMode); healthy();
   const overlay = application.windows().find(page => page.url().endsWith('?view=overlay'));
   assert.equal(await overlay.evaluate(() => typeof globalThis.overlay.getHardModeStatus), 'undefined'); record.overlayExcluded = true;

@@ -1,4 +1,6 @@
 const {readFileSync, writeFileSync} = require('node:fs');
+const {randomUUID} = require('node:crypto');
+const {tmpdir} = require('node:os');
 const path = require('node:path');
 // ET-055: the build channel and its version come only from scripts/build-channel.mjs (Node loads that ES module
 // synchronously). Production names and the production version are those of every build before ET-055.
@@ -44,6 +46,8 @@ module.exports = {
   // Other native dependencies remain eligible for Forge's Electron rebuild.
   rebuildConfig: {ignoreModules:['better-sqlite3']},
   packagerConfig: {
+    // Packager clears its temporary root at startup; concurrent invocations must never share it.
+    tmpdir: path.join(tmpdir(), `etp-${process.pid}-${randomUUID()}`),
     // resources/uninstall holds the deferred-cleanup executor that an uninstall copies and registers (ET-018 PR-5, U7);
     // scripts/build.mjs stages it with this build's channel stamped in (ET-055). The channel's icon folder ships app.ico, which the
     // install and updated hooks place in Squirrel's install root and name as the Installed apps DisplayIcon (ET-045g,

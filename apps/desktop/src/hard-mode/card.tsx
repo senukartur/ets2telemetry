@@ -12,13 +12,13 @@ import {hardModeView, hardModeState, hardModeLossText} from './view';
 export function HardModeBadge({short = false, language = 'en'}: {short?: boolean; language?: AppLanguage}) {
   return <Badge data-testid="hard-mode-badge"><Flame className="mr-1 size-3" aria-hidden="true" />{short ? 'HM' : t('hm.title', undefined, language)}</Badge>;
 }
-/** A trip's Hard Mode result; the audit (opening and latest state, manual delivery, snapshots) is behind the Info icon (ET-057). */
+/** A trip's Hard Mode result; the audit (opening and latest state, snapshots) is behind the Info icon (ET-057). */
 export function HardModeTrip({qualified, details, language = 'en'}: {qualified: boolean; details: HardModeDetails | null; language?: AppLanguage}) {
   const title = t('hm.title', undefined, language);
   return <section className="space-y-1" data-testid="trip-hard-mode"><h4 className="flex items-center gap-1 font-medium"><Flame className="size-4" aria-hidden="true" />{title}</h4>
     <p className="flex flex-wrap items-center gap-1">{t(qualified ? 'hm.tripYes' : 'hm.tripNo', undefined, language)}{qualified ? <> <HardModeBadge language={language} /></> : null}
       <InfoHint label={t('ui.moreAbout', {v: title}, language)}>
-        {details ? <><span className="block">{t('hm.audit', {opening: hardModeState(details.opening.state, language), latest: hardModeState(details.latest.state, language), manual: t(details.manualDelivery === null ? 'hm.manual.pending' : details.manualDelivery ? 'hm.manual.yes' : 'hm.manual.no', undefined, language)}, language)}</span>
+        {details ? <><span className="block">{t('hm.audit', {opening: hardModeState(details.opening.state, language), latest: hardModeState(details.latest.state, language)}, language)}</span>
           <span className="block">{t('hm.snapshots', undefined, language)}</span></> : <span className="block">{t('hm.notEvaluated', undefined, language)}</span>}
         <span className="block text-xs text-muted-foreground">{t('hm.notice', undefined, language)}</span>
       </InfoHint></p>
