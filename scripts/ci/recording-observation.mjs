@@ -539,7 +539,7 @@ function recordingHardModeAudit(document, record) {
     ['fuel', 'air', 'police', 'fatigue', 'limiter', 'truck', 'trailer', 'parking', 'rain', 'events', 'braking', 'traffic']
       .map(id => ({id, state: 'unknown', values: id === 'parking' ? [null, null] : [null], reason}))});
   return {version: 1, binding: null, opening: unknown(opening, 'historical'), latest: unknown(latest, 'source-unproven'),
-    firstLoss: {atUtcMs: opening, reason: 'historical', rule: null, values: null}, manualDelivery: true};
+    firstLoss: {atUtcMs: opening, reason: 'historical', rule: null, values: null}, manualDelivery: null};
 }
 /** The window's events as [eventSeq, type, attribution kind]: only job.delivered (8) is attributed, to the trip itself. */
 const EXPORT_EVENTS = [['3', 'job.configured', null], ['4', 'simulation.started', null], ['5', 'job.configured', null], ['6', 'simulation.paused', null],
