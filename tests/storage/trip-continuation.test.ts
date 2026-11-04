@@ -107,10 +107,18 @@ describe('REG-003/005/008/012/014 durable logical trips', () => {
     const persistEntered=new Promise<void>(resolve=>{enterPersist=resolve;}),persistRelease=new Promise<void>(resolve=>{releasePersist=resolve;}),persist=client.openAttachedTrip.bind(client);
     const endpointScopes:string[]=[];
     client.openAttachedTrip=async input=>{if(input.endpoint&&input.profile)endpointScopes.push(input.profile.scope);if(holdPersist&&!persistHeld&&input.endpoint){persistHeld=true;enterPersist();await persistRelease;}return persist(input);};
-    const documents=path.join(ws.directory,'Documents'),game=path.join(documents,'Euro Truck Simulator 2'),id=Buffer.from('Synthetic').toString('hex').toUpperCase(),directory=path.join(game,variant.startsWith('discovery-')?'steam_profiles':'profiles',id);
+    let fixtureInput=ws.directory;
+    if(variant==='discovery-cloud'||variant==='partial-config'){
+      const target=path.join(ws.directory,'profile-fixture'),alias=path.join(ws.directory,'profile-fixture-alias');
+      await mkdir(target);await symlink(target,alias,'junction');fixtureInput=alias;
+    }
+    // All exact file gates share the reader's canonical basis, including aliased Windows TEMP roots.
+    const fixtureRoot=await realpath(fixtureInput);
+    if(fixtureInput!==ws.directory)expect(fixtureRoot).not.toBe(fixtureInput);
+    const documents=path.join(fixtureRoot,'Documents'),game=path.join(documents,'Euro Truck Simulator 2'),id=Buffer.from('Synthetic').toString('hex').toUpperCase(),directory=path.join(game,variant.startsWith('discovery-')?'steam_profiles':'profiles',id);
     await mkdir(directory,{recursive:true});
     const log=`log created on : Wednesday October 21 2026 @ 12:00:00\nNew profile selected: Synthetic\nLoading save. /home/profiles/${id}/save/autosave/game.sii\n`;
-    const steam=path.join(ws.directory,'Steam'),userdata=path.join(steam,'userdata'),remote=path.join(userdata,'100','227300','remote','profiles',id);
+    const steam=path.join(fixtureRoot,'Steam'),userdata=path.join(steam,'userdata'),remote=path.join(userdata,'100','227300','remote','profiles',id);
     if(variant.startsWith('discovery-')){await mkdir(remote,{recursive:true});await writeFile(path.join(remote,'config.cfg'),HARD_MODE_CONFIG);await utimes(userdata,new Date('2026-10-20T12:00:00Z'),new Date('2026-10-20T12:00:00Z'));}
     await writeFile(path.join(game,'game.log.txt'),variant.startsWith('discovery-')?log.replace('/home/','/steam/'):log);await writeFile(path.join(game,'config.cfg'),'uset g_traffic "1"');
     await writeFile(path.join(directory,'config_local.cfg'),'uset g_brake_intensity "0.75"');await writeFile(path.join(directory,'config.cfg'),HARD_MODE_CONFIG);
@@ -118,7 +126,7 @@ describe('REG-003/005/008/012/014 durable logical trips', () => {
     let emptyDiscovery=false,emptyPhase=0;let discovery=false,discoveryPhase=0;const metadataBaseline=new Map<string,BigIntStats>();
     const guardEntered=new Promise<void>(resolve=>{enterGuard=resolve;}),guardRelease=new Promise<void>(resolve=>{releaseGuard=resolve;});
     const observedMetadata=new Promise<void>(resolve=>{metadataObserved=resolve;});
-    const reader=new HardModeReader({documents,steamRoot:path.join(ws.directory,'Steam'),diagnostic:value=>diagnostics.push(value.code),fixtureOrigin:'synthetic',nowNs:now,
+    const reader=new HardModeReader({documents,steamRoot:steam,diagnostic:value=>diagnostics.push(value.code),fixtureOrigin:'synthetic',nowNs:now,
       profileDirectory:async parent=>{if(holdLocation){enterGuard();await guardRelease;}return opendir(parent);},
       metadata:{realpath:async filename=>{if(emptyDiscovery&&filename===userdata&&++emptyPhase===2){await mkdir(path.join(userdata,'101','227300','remote','profiles'),{recursive:true});await utimes(userdata,new Date('2026-10-22T12:00:00Z'),new Date('2026-10-22T12:00:00Z'));}if(discovery&&filename===userdata){discoveryPhase++;if(discoveryPhase===3){const duplicate=path.join(userdata,'101','227300','remote','profiles',id);await mkdir(duplicate,{recursive:true});await writeFile(path.join(duplicate,'config.cfg'),HARD_MODE_CONFIG);await utimes(userdata,new Date('2026-10-22T12:00:00Z'),new Date('2026-10-22T12:00:00Z'));}}if(discovery&&discoveryPhase===3&&filename===path.join(game,'config.cfg')){enterGuard();await guardRelease;}if(partialMetadata&&filename===path.join(game,'config.cfg')){enterGuard();await guardRelease;}try{return await realpath(filename);}catch(error){if(partialMetadata&&filename===path.join(directory,'config.cfg')&&(error as NodeJS.ErrnoException).code==='ENOENT')metadataObserved();throw error;}},
         stat:async filename=>{if(preserveMetadata&&metadataBaseline.has(filename))return metadataBaseline.get(filename)!;const value=await stat(filename,{bigint:true});const previous=metadataBaseline.get(filename);metadataBaseline.set(filename,value);if(discovery&&discoveryPhase===3&&filename===userdata){expect(value.mtimeNs).not.toBe(previous!.mtimeNs);metadataObserved();}if(partialMetadata&&filename===path.join(directory,'config.cfg'))metadataObserved();return value;}},
@@ -246,7 +254,7 @@ describe('REG-003/005/008/012/014 durable logical trips', () => {
           await wait(monitor.refresh(true),'monitor.refresh');expect(observer.evidence()).toEqual(original);expect(observer.status().token).toBe(token);clientNs+=1_000_000_000n;
         }
         if(variant==='identity-root'){
-          const replacement=path.join(ws.directory,'OtherGameRoot');await wait(mkdir(path.join(replacement,'profiles',id),{recursive:true}),'mkdir');
+          const replacement=path.join(fixtureRoot,'OtherGameRoot');await wait(mkdir(path.join(replacement,'profiles',id),{recursive:true}),'mkdir');
           await wait(writeFile(path.join(replacement,'game.log.txt'),log),'writeFile');await wait(writeFile(path.join(replacement,'config.cfg'),'uset g_traffic "1"'),'writeFile');
           await wait(writeFile(path.join(replacement,'profiles',id,'config.cfg'),HARD_MODE_CONFIG),'writeFile');await wait(writeFile(path.join(replacement,'profiles',id,'config_local.cfg'),'uset g_brake_intensity "0.75"'),'writeFile');
           await wait(rename(game,game+'.old'),'rename');await wait(symlink(replacement,game,'junction'),'symlink');holdGuard=true;
@@ -255,7 +263,7 @@ describe('REG-003/005/008/012/014 durable logical trips', () => {
           await wait(appendFile(path.join(game,'game.log.txt'),`New profile selected: OtherSynthetic\nLoading save. /home/profiles/${other}/save/autosave/game.sii\n`),'appendFile');
         }else if(variant==='identity-load'||variant==='identity-load-after-settings-error')await wait(appendFile(path.join(game,'game.log.txt'),`Loading save. /home/profiles/${id}/save/autosave/game.sii\n`),'appendFile');
         else if(variant==='identity-namespace'){
-          await wait(mkdir(path.join(game,'steam_profiles',id),{recursive:true}),'mkdir');await wait(mkdir(path.join(ws.directory,'Steam','userdata','100','227300','remote','profiles',id),{recursive:true}),'mkdir');
+          await wait(mkdir(path.join(game,'steam_profiles',id),{recursive:true}),'mkdir');await wait(mkdir(path.join(steam,'userdata','100','227300','remote','profiles',id),{recursive:true}),'mkdir');
           await wait(appendFile(path.join(game,'game.log.txt'),`Loading save. /steam/profiles/${id}/save/autosave/game.sii\n`),'appendFile');
         }else if(variant==='identity-append')await wait(appendFile(path.join(game,'game.log.txt'),'Unrelated log append\n'),'appendFile');
         else if(variant==='identity-unchanged'){

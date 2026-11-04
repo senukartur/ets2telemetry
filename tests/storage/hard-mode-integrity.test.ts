@@ -1,5 +1,5 @@
 import path from 'node:path';
-import {mkdir, writeFile, stat, utimes} from 'node:fs/promises';
+import {mkdir, writeFile, stat, utimes, realpath, symlink} from 'node:fs/promises';
 import {HardModeReader, readStableFile} from '../../apps/desktop/src/hard-mode/reader';
 import {Worker} from 'node:worker_threads';
 import {afterEach, beforeEach, describe, expect, it, vi} from 'vitest';
@@ -171,7 +171,15 @@ describe('ET-026 integrity (REG-005/006/007)', () => {
       Date.now=()=>Number(Atomics.load(clock,0)); require(workerData.entry);`, {eval: true, workerData: {kind: 'storage', clock: clock.buffer, entry: path.join(directory, 'storage-worker.cjs')}});
     const client = new StorageClient(workerHandle(worker), {closeGraceMs: TEST_CLOSE_GRACE_MS});
     const utc = vi.spyOn(Date, 'now').mockImplementation(() => Number(Atomics.load(clock, 0)));
-    const game = path.join(ws.directory, 'Documents', 'Euro Truck Simulator 2'), profile = path.join(game, 'profiles', '53796E746865746963');
+    let fixtureInput=ws.directory;
+    if(mode==='periodic-failure'||mode==='changed-failure'){
+      const target=path.join(ws.directory,'settings-fixture'),alias=path.join(ws.directory,'settings-fixture-alias');
+      await mkdir(target);await symlink(target,alias,'junction');fixtureInput=alias;
+    }
+    // Reader callbacks use canonical paths even when the isolated input root is a junction or a short TEMP alias.
+    const fixtureRoot=await realpath(fixtureInput),documents=path.join(fixtureRoot,'Documents');
+    if(fixtureInput!==ws.directory)expect(fixtureRoot).not.toBe(fixtureInput);
+    const game = path.join(documents, 'Euro Truck Simulator 2'), profile = path.join(game, 'profiles', '53796E746865746963');
     await mkdir(profile, {recursive: true});
     await writeFile(path.join(game, 'game.log.txt'), "************ : log created on : Tuesday October 20 2026 @ 12:00:00\nNew profile selected: 'Synthetic'\nLoading save. Type: 0, path: /home/profiles/53796E746865746963/save/autosave/game.sii\n");
     await writeFile(path.join(game, 'config.cfg'), 'uset g_traffic "1"'); await writeFile(path.join(profile, 'config_local.cfg'), 'uset g_brake_intensity "0.75"');
@@ -183,11 +191,11 @@ describe('ET-026 integrity (REG-005/006/007)', () => {
       const timestamp=before.mtimeNs===BigInt(first.getTime())*1_000_000n?new Date('2026-10-23T12:00:00Z'):first;
       await utimes(filename,timestamp,timestamp);expect((await stat(filename,{bigint:true})).mtimeNs).not.toBe(before.mtimeNs);
     };
-    let mono = 0n, probeFailed = mode === 'initial-process-failure', observe = false, readFinished: (() => void) | undefined;
-    const reader = new HardModeReader({documents: path.join(ws.directory, 'Documents'), fixtureOrigin: 'synthetic', nowNs: () => mono,
+    let mono = 0n, probeFailed = mode === 'initial-process-failure', observe = false, readFinished: (() => void) | undefined, configReadFailures=0;
+    const reader = new HardModeReader({documents, fixtureOrigin: 'synthetic', nowNs: () => mono,
       processLifetime: () => mode === 'process-retired' && probeFailed ? undefined : 'isolated-process',
       file: async (filename, limit, signal) => {
-        if ((mode === 'periodic-failure' || mode === 'changed-failure') && probeFailed && filename === path.join(profile, 'config.cfg')) throw new Error('Injected config read failure');
+        if ((mode === 'periodic-failure' || mode === 'changed-failure') && probeFailed && filename === path.join(profile, 'config.cfg')) {configReadFailures++;throw new Error('Injected config read failure');}
         return readStableFile(filename, limit, signal);
       }, process: source => Promise.resolve(probeFailed ? null : {
       pid: source.processId, createdUtcMs: new Date(2026, 9, 20, 12, 0, 0).getTime(), executable: 'C:/Synthetic/eurotrucks2.exe', commandLine: 'synthetic'})});
@@ -247,6 +255,7 @@ describe('ET-026 integrity (REG-005/006/007)', () => {
         expect(monitor.status().assessment.state).toBe('pass'); expect(ok(await through(ETS2_A))).toBe(seq === '1' ? '0' : '1'); expect(acks).toEqual(seq === '1' ? [] : ['1']);
         release(); await pipeline.idle(); expect(failures).toEqual([]); expect(acks.at(-1)).toBe(seq);
       }
+      expect(configReadFailures).toBe(mode==='periodic-failure'||mode==='changed-failure'?1:0);
       const trip = ok(await client.listTrips()).trips[0], details = ok(await client.getTrip(trip.tripUuid))!;
       const qualified = ['delay', 'utc-forward', 'utc-back', 'expired-intake', 'process-probe', 'periodic-failure'].includes(mode);
       expect(details).toMatchObject({outcome: 'delivered', isHardMode: qualified});
