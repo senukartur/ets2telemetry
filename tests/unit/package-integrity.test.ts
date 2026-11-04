@@ -4,8 +4,9 @@ import {execFileSync} from 'node:child_process';
 import {mkdtemp, mkdir, readFile, writeFile, rm} from 'node:fs/promises';
 import path from 'node:path';
 import {tmpdir} from 'node:os';
-import {createPackageWithOptions} from '@electron/asar';
+import {createPackageWithOptions, statFile} from '@electron/asar';
 import {verifyPackage} from '../../scripts/package-integrity.mjs';
+import type {ForgeConfigValues} from '../shared/forge-config';
 
 const temporary: string[] = [];
 const shell = path.join(process.env.SystemRoot || 'C:\\Windows', 'System32/WindowsPowerShell/v1.0/powershell.exe');
@@ -48,6 +49,44 @@ function expectPowershellFailure(packageDirectory: string, diagnostic: string) {
   expect(failure?.status).toBe(1);
   expect(failure?.stderr).toContain(diagnostic);
 }
+
+it('isolates Forge packaging cleanup and physically unpacks code without changing TEMP or TMP', async () => {
+  const environment = {TEMP: process.env.TEMP, TMP: process.env.TMP};
+  const loaded = JSON.parse(execFileSync(process.execPath, ['-e', `
+    const before = {TEMP: process.env.TEMP, TMP: process.env.TMP};
+    const file = require.resolve('./forge.config.cjs');
+    const load = () => {delete require.cache[file]; return require(file).packagerConfig;};
+    const first = load(), second = load();
+    process.stdout.write(JSON.stringify({first, second, before, after: {TEMP: process.env.TEMP, TMP: process.env.TMP}}));
+  `], {cwd: path.resolve(import.meta.dirname, '../..'), encoding: 'utf8', timeout: 15000, windowsHide: true})) as {
+    first: ForgeConfigValues['packagerConfig']; second: ForgeConfigValues['packagerConfig']; before: typeof environment; after: typeof environment};
+  const {first, second} = loaded;
+  expect(loaded.after).toEqual(loaded.before);
+  const roots = [first.tmpdir, second.tmpdir];
+  expect(roots[0]).not.toBe(roots[1]);
+  // Validate both task-owned direct children before cleanup can reach any directory.
+  for (const root of roots) {
+    if (typeof root !== 'string' || path.dirname(root) !== tmpdir() || !path.basename(root).startsWith('etp-')) throw new Error('Expected an isolated packaging temporary directory');
+  }
+  const [rootA, rootB] = roots as string[];
+  temporary.push(rootA, rootB);
+  const source = path.join(rootA, 'electron-packager', 'fixture-app'), stale = path.join(rootB, 'electron-packager', 'stale');
+  await mkdir(source, {recursive: true}); await mkdir(path.dirname(stale), {recursive: true});
+  await writeFile(path.join(source, 'inert.cjs'), 'inert code fixture'); await writeFile(path.join(source, 'inert.node'), 'inert native fixture'); await writeFile(stale, 'other invocation');
+  // Exercise the installed packager's real cleanup without downloading Electron or building/launching an app.
+  const installed = new URL('packager.js', import.meta.resolve('@electron/packager'));
+  const {Packager} = await import(installed.href) as {Packager: new (options: {tmpdir: string}) => {ensureTempDir(): Promise<void>}};
+  await new Packager({tmpdir: rootB}).ensureTempDir();
+  await expect(readFile(stale)).rejects.toMatchObject({code: 'ENOENT'});
+  expect(await readFile(path.join(source, 'inert.cjs'), 'utf8')).toBe('inert code fixture');
+  const archive = path.join(rootA, 'fixture.asar');
+  await createPackageWithOptions(source, archive, first.asar as Parameters<typeof createPackageWithOptions>[2]);
+  for (const [filename, bytes] of [['inert.cjs', 'inert code fixture'], ['inert.node', 'inert native fixture']]) {
+    expect(statFile(archive, filename).unpacked).toBe(true);
+    expect(await readFile(path.join(`${archive}.unpacked`, filename), 'utf8')).toBe(bytes);
+  }
+  expect({TEMP: process.env.TEMP, TMP: process.env.TMP}).toEqual(environment);
+});
 
 it('matches Node and clean-Windows PowerShell fingerprints without launching package files', async () => {
   const f = await fixture();
