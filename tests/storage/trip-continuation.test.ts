@@ -68,9 +68,12 @@ function close(storage: Storage, script: Script, uuid: string, terminal = false)
 }
 
 describe('REG-003/005/008/012/014 durable logical trips', () => {
-  it.each(['unchanged','witness','revoked','profile','load','gap','clock','truck','job','refuel','teleport','missing','unqualified-sample','over-limit'] as const)('retains only a qualified predecessor through wired lifecycle verification: %s',async variant=>{
+  it.each(['unchanged','witness','admitted-consumption','admitted-refuel','admitted-refuel-recheck','admitted-regression','admitted-long-unchanged','admitted-long-motion','admitted-persist-revoked','revoked','profile','load','gap','clock','truck','job','refuel','teleport','missing','unqualified-sample','over-limit'] as const)('retains only a qualified predecessor through wired lifecycle verification: %s',async variant=>{
     vi.useFakeTimers();let clientNs=0n,wireSeq=0n,boundary=100n;const revision='1';const now=()=>++clientNs;const diagnostics:string[]=[];
     const worker=storageWorker(),client=new StorageClient(worker.handle),script=new Script(ETS2_A),welcome=script.welcome();
+    let holdPersist=false,persistHeld=false,enterPersist!:()=>void,releasePersist!:()=>void;
+    const persistEntered=new Promise<void>(resolve=>{enterPersist=resolve;}),persistRelease=new Promise<void>(resolve=>{releasePersist=resolve;}),persist=client.openAttachedTrip.bind(client);
+    client.openAttachedTrip=async input=>{if(holdPersist&&!persistHeld&&input.endpoint){persistHeld=true;enterPersist();await persistRelease;}return persist(input);};
     const documents=path.join(ws.directory,'Documents'),game=path.join(documents,'Euro Truck Simulator 2'),id=Buffer.from('Synthetic').toString('hex').toUpperCase(),directory=path.join(game,'profiles',id);
     await mkdir(directory,{recursive:true});
     const log=`log created on : Wednesday October 21 2026 @ 12:00:00\nNew profile selected: Synthetic\nLoading save. /home/profiles/${id}/save/autosave/game.sii\n`;
@@ -85,10 +88,12 @@ describe('REG-003/005/008/012/014 durable logical trips', () => {
     const monitor=new HardModeMonitor((s,ns,at,signal)=>{const work=observer.readSettings(reader,s,ns,at,signal);settings=work.catch(()=>undefined);return work;},value=>recorder.observeHardMode('ets2',value),now,()=>reader.requestFull(),()=>reader.canRetain());
     reader.onInvalidate(()=>monitor.invalidate());
     recorder=new TripRecorderSink(client,{profileEvidence:()=>observer.evidence(),profileStatus:()=>observer.status(),hardModeEvidence:()=>monitor.evidence()});
-    let committed:(()=>void)|undefined,observed:(()=>void)|undefined,replyEnabled=false,boundaryWork:Promise<void>|undefined;let lastServer:ServerMessage=welcome;
+    let committed:(()=>void)|undefined,observed:(()=>void)|undefined,attached:(()=>void)|undefined,replyEnabled=false,boundaryWork:Promise<void>|undefined;let lastServer:ServerMessage=welcome;
     const commit=recorder.commit.bind(recorder),observe=recorder.observe.bind(recorder);
     recorder.commit=async(...args)=>{const result=await commit(...args);committed?.();return result;};
     recorder.observe=(...args)=>{const result=observe(...args);observed?.();return result;};
+    const attach=recorder.attach.open.bind(recorder.attach);
+    recorder.attach.open=async context=>{const result=await attach(context);attached?.();return result;};
     let pendingProbe:Extract<ClientMessage,{kind:'clock.probe'}>|undefined;
     const answerProbe=(message:Extract<ClientMessage,{kind:'clock.probe'}>)=>{const ns=BigInt(lastServer.capture.monotonicNs)+3n;pendingProbe=undefined;send({...welcome,kind:'clock.reply',capture:{clockId:script.clockId,monotonicNs:ns.toString()},data:{probeId:message.data.probeId,receivedMonotonicNs:(ns-2n).toString(),sentMonotonicNs:(ns-1n).toString()}});};
     const acks:string[]=[],socket=Object.assign(new EventEmitter(),{destroy:()=>undefined,write:(bytes:Uint8Array)=>{
@@ -115,6 +120,10 @@ describe('REG-003/005/008/012/014 durable logical trips', () => {
       const done=new Promise<void>(resolve=>{observed=resolve;});send(message);await done;observed=undefined;return message;
     };
     const admit=async()=>{await boundaryWork;await settings;await observer.refresh();replyEnabled=true;clientNs+=1_000_000n;if(pendingProbe)answerProbe(pendingProbe);await vi.advanceTimersByTimeAsync(1000);expect(observer.evidence(),JSON.stringify({diagnostics,status:ingestion.current.status,reason:ingestion.current.reason,phase:observer.status().phase})).toBeDefined();};
+    const admittedSnapshot=async(odo:number,fuel:number,advanceMs=100,changes:Partial<CurrentState>={})=>{
+      expect(observer.status().phase).toBe('admitted');
+      const done=new Promise<void>(resolve=>{attached=resolve;});await snapshot(odo,fuel,'paused',advanceMs,changes);await done;attached=undefined;
+    };
     try{
       ok(await client.open({path:ws.database,backupsDirectory:ws.backups,purpose:'synthetic',appVersion:'test'}));
       ingestion.select('synthetic','\\\\.\\pipe\\ETS2Telemetry-SYNTHETIC-TEST-v1-1-00000000-0000-4000-8000-000000000000');socket.emit('connect');send(welcome);
@@ -151,11 +160,45 @@ describe('REG-003/005/008/012/014 durable logical trips', () => {
       if(variant==='load'||variant==='profile'||variant==='revoked'){
         clientNs+=5_000_000_000n;await observer.refresh();
       }
-      if(variant!=='profile'){await admit();await snapshot(1000125,98.5,'paused',100);}
+      if(variant!=='profile'){
+        await admit();
+        if(variant.startsWith('admitted-')){
+          if(variant==='admitted-persist-revoked'){
+            holdPersist=true;const capturedToken=observer.status().token,capturedProof=observer.evidence()!;
+            const pendingWrite=admittedSnapshot(1000125,98.5);await persistEntered;
+            observer.suspend();boundaryWork=observer.boundary();await admit();
+            expect(observer.status().token).not.toBe(capturedToken);expect(observer.evidence()!.binding).toBe(capturedProof.binding);
+            releasePersist();await pendingWrite;
+          }else await admittedSnapshot(1000125,98.5);
+          const first=ok(await client.journalTrip(uuid));expect(first.trip.observedDistanceM).toEqual({available:true,value:125});expect(first.trip.fuelUsedL).toEqual({available:true,value:1.5});
+          if(variant==='admitted-persist-revoked'){
+            await admittedSnapshot(1000125,98.4);
+          }else if(variant==='admitted-regression'){
+            await admittedSnapshot(1000150,98,100,{speed:{available:true,value:20,unit:'m/s'}});
+            expect(ok(await client.journalTrip(uuid)).trip.observedDistanceM).toEqual({available:true,value:150});
+            await admittedSnapshot(1000140,97.5,100,{speed:{available:true,value:20,unit:'m/s'}});
+          }else if(variant==='admitted-long-unchanged'||variant==='admitted-long-motion'){
+            // Change only the speed hint to persist the same physical endpoint after each long admitted pause.
+            await admittedSnapshot(1000125,98.5,6000,{speed:{available:true,value:1,unit:'m/s'}});
+            expect(ok(await client.journalTrip(uuid)).trip.fuelUsedL).toEqual({available:true,value:1.5});
+            if(variant==='admitted-long-motion')await admittedSnapshot(1000150,98,6000,{speed:{available:true,value:20,unit:'m/s'}});
+            else await admittedSnapshot(1000125,98.5,6000,{speed:{available:true,value:2,unit:'m/s'}});
+          }else{
+            const refuel=variant==='admitted-refuel'||variant==='admitted-refuel-recheck';
+            await admittedSnapshot(1000125,refuel?96:98);
+            expect(ok(await client.journalTrip(uuid)).trip.fuelUsedL).toEqual({available:true,value:refuel?4:2});
+            await admittedSnapshot(1000125,refuel?97:97.5);
+            if(variant==='admitted-refuel-recheck'){
+              expect(ok(await client.journalTrip(uuid)).trip.fuelUsedL).toEqual({available:false,reason:'not-observed'});
+              replyEnabled=false;await event(r.paused(),'paused',10);await snapshot(1000125,96.5,'paused',10);await admit();await admittedSnapshot(1000125,96.5);
+            }
+          }
+        }else await snapshot(1000125,98.5,'paused',100);
+      }
       succeeded(await recorder.samples.write(3600,true));
       const detail=ok(await client.journalTrip(uuid));
-      if(variant==='unchanged'||variant==='witness'){
-        expect(detail.trip.observedDistanceM).toEqual({available:true,value:125});expect(detail.trip.fuelUsedL).toEqual({available:true,value:1.5});expect(detail.trip.recordingCompleteness).toBe('complete');
+      if(variant==='unchanged'||variant==='witness'||variant==='admitted-consumption'||variant==='admitted-long-unchanged'){
+        expect(detail.trip.observedDistanceM).toEqual({available:true,value:125});expect(detail.trip.fuelUsedL).toEqual({available:true,value:variant==='admitted-consumption'?2.5:1.5});expect(detail.trip.recordingCompleteness).toBe('complete');
         const samples=ok(await client.listSamples({tripUuid:uuid}));expect(samples).toHaveLength(2);expect(samples.map(sample=>sample.speed.available?sample.speed.value:null)).toEqual([20,20]);
         expect(ok(await client.getTrip(uuid))!.hardModeDetails!.firstLoss).toBeNull();
       }else{
@@ -170,7 +213,7 @@ describe('REG-003/005/008/012/014 durable logical trips', () => {
         if(variant==='profile'||variant==='load'||variant==='clock')expect(ok(await client.getTrip(uuid))!.hardModeDetails!.firstLoss).not.toBeNull();
       }
       expect(acks).toContain('3');
-    }finally{releaseGuard();monitor.close();observer.close();await ingestion.stop();await client.close();}
+    }finally{releasePersist();releaseGuard();monitor.close();observer.close();await ingestion.stop();await client.close();}
   });
   it.each(['before','long-before','after','foreign-source','foreign-clock','unknown-time','overflow'] as const)('bounds and source-qualifies persisted transfer checks: %s',async variant=>{
     const storage=await ws.open(),s=new Script(ETS2_A);ok(storage.upsertSession({message:s.welcome()}));ok(storage.commitEvent({message:s.event(r.started())}));const uuid=open(storage,s);

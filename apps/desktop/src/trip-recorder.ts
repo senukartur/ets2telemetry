@@ -2,7 +2,7 @@ import type {ProfileObservation} from '../../../packages/telemetry-core/src/trip
 import {compatibleContinuation} from '../../../packages/telemetry-core/src/trips/continuation';
 import type {ProfileObserverStatus} from './profile-observation';
 import {truckKey} from '../../../packages/telemetry-core/src/derived';
-import {classifyStep, type ReadingPoint} from '../../../packages/telemetry-core/src/trips/accounting';
+import {classifyStep} from '../../../packages/telemetry-core/src/trips/accounting';
 // The trip recorder of protocol v1 ingestion (ET-015a, R2): a DurableSink that owns the ET-014 TripState and commits
 // each event or gap together with its trip effects in one storage transaction, so the ACK pipeline acknowledges an item
 // only after its effects are stored. DurableDelivery stays the only FIFO and runs one command at a time; the recorder
@@ -50,7 +50,7 @@ const MAX_SAFE = BigInt(Number.MAX_SAFE_INTEGER);
 /** ET-015c: `onChange` is called after every change the recording status may show: trip state, losses or dropped samples. */
 export interface TripRecorderOptions {onChange?: () => void; profileEvidence?: () => ProfileObservation | undefined; profileStatus?: () => ProfileObserverStatus; hardModeEvidence?: () => HardModeObservation; onHardModeTrip?: (details: HardModeDetails | null) => void}
 interface TrustedPredecessor {
-  token: object; profile: ProfileObservation; tripUuid: string; job: JobConfiguration; point: ReadingPoint; referenceNs: string;
+  token: object; profile: ProfileObservation; tripUuid: string; job: JobConfiguration; referenceNs: string; suspended: boolean;
   previous: NonNullable<SampleInput['recording']>['previous']; boundary: NonNullable<SampleInput['recording']>['previous']; running: CapturedRunning | undefined;
 }
 
@@ -194,7 +194,7 @@ export class TripRecorderSink implements DurableSink {
     return this.observationError;
   }
   private lastReadingProfile:ProfileObservation|undefined;
-  private pendingProfile: {key:string;input:AttachInput}|undefined;
+  private pendingProfile: {key:string;input:AttachInput;token?:object}|undefined;
   private storedProfileKey:string|undefined;
   private boundaryPrevious: NonNullable<SampleInput['recording']>['previous'];
   private boundaryRunning: CapturedRunning | undefined;
@@ -331,21 +331,27 @@ export class TripRecorderSink implements DurableSink {
     const normalizedBoundary=normalizeV1State(message.data.state,message.data.status);
     const status=this.options.profileStatus?.(),retained=this.trustedPredecessor,point=session.lastReading;
     if(retained){
-      const physical=capturedPoint(normalizedBoundary),step=point?classifyStep(retained.point,point,session.lastTransfer):undefined;
-      const elapsed=BigInt(message.capture.monotonicNs)-BigInt(retained.referenceNs);
       const sameProfile=this.lastReadingProfile && this.lastReadingProfile.binding===retained.profile.binding && this.lastReadingProfile.scope===retained.profile.scope
         && this.lastReadingProfile.loadGeneration===retained.profile.loadGeneration && this.lastReadingProfile.pluginSessionId===retained.profile.pluginSessionId
         && this.lastReadingProfile.processInstanceId===retained.profile.processInstanceId && this.lastReadingProfile.sourceClockId===retained.profile.sourceClockId;
       if(!status || status.phase==='unavailable' || status.token!==retained.token || !current.available || !compatibleContinuation(retained.job,current.value)
-        || retained.tripUuid!==view.current?.tripUuid || elapsed<=0n || elapsed>=5_000_000_000n || normalizedBoundary.simulation==='unavailable'
-        || Object.values(physical).some(value=>value===null) || !step || step.boundary || step.elapsedNs===null || step.elapsedNs<=0n
-        || step.odometer.kind!=='continuous' || step.positionJump!==null || step.fuel.kind!=='consumed' && step.fuel.kind!=='unchanged'
+        || retained.tripUuid!==view.current?.tripUuid
         || this.lastReadingProfile && !sameProfile){this.trustedPredecessor=undefined;this.previousSample=undefined;this.boundaryPrevious=undefined;this.boundaryRunning=undefined;}
-      else if(status.phase==='admitted' && sameProfile){
-        this.previousSample=retained.previous;this.boundaryPrevious=retained.boundary;this.boundaryRunning=retained.running;
-        this.previousSampleQualified=retained.previous!==undefined;
+      else if(retained.suspended || status.phase==='pending' || !this.lastReadingProfile){
+        retained.suspended=true;
+        // The accounting anchor may be older; safety always compares the actual consecutive readings.
+        const step=previousReading&&point?classifyStep(previousReading,point,session.lastTransfer):undefined;
+        const elapsed=BigInt(message.capture.monotonicNs)-BigInt(retained.referenceNs);
+        if(elapsed<=0n || elapsed>=5_000_000_000n || normalizedBoundary.simulation==='unavailable'
+          || Object.values(capturedPoint(normalizedBoundary)).some(value=>value===null) || !step || step.boundary || step.elapsedNs===null || step.elapsedNs<=0n
+          || step.odometer.kind!=='continuous' || step.positionJump!==null || step.fuel.kind!=='consumed' && step.fuel.kind!=='unchanged'){
+          this.trustedPredecessor=undefined;this.previousSample=undefined;this.boundaryPrevious=undefined;this.boundaryRunning=undefined;
+        }else if(status.phase==='admitted' && sameProfile){
+          this.previousSample=retained.previous;this.boundaryPrevious=retained.boundary;this.boundaryRunning=retained.running;
+          this.previousSampleQualified=retained.previous!==undefined;
+          this.trustedPredecessor=undefined; // A handoff is consumed; admitted reads must keep their newer live state.
+        }
       }
-      else retained.point=structuredClone(point!);
     }
     if(status && !this.lastReadingProfile){this.previousSample=undefined;this.boundaryPrevious=undefined;this.boundaryRunning=undefined;}
     // One retained witness cannot conceal an unsupported intermediate reading or an unretained refuel episode.
@@ -355,13 +361,13 @@ export class TripRecorderSink implements DurableSink {
       || boundaryStep && (boundaryStep.boundary || boundaryStep.odometer.kind!=='continuous' || boundaryStep.positionJump!==null || boundaryStep.fuel.kind==='refuelled')
       || this.boundaryRunning && (this.boundaryRunning.profile.binding!==this.lastReadingProfile.binding || this.boundaryRunning.profile.scope!==this.lastReadingProfile.scope
         || this.boundaryRunning.gameClockId!==normalizedBoundary.gameTime.clockId))) {
-      this.boundaryPrevious=undefined;this.boundaryRunning=undefined;
+      this.boundaryPrevious=undefined;this.boundaryRunning=undefined;this.trustedPredecessor=undefined;
     }
     this.lastEndpoint=this.lastReadingProfile && normalizedBoundary.simulation==='paused' ? {version:1,simulation:'paused',...capturedPoint(normalizedBoundary),
       ...(this.previousSample?{previous:this.previousSample}:this.boundaryPrevious?{previous:this.boundaryPrevious}:{}),...(this.boundaryRunning?{running:this.boundaryRunning}:{})}:undefined;
     if(replayDrained && current.available && view.current && this.lastReadingProfile){
       const key=JSON.stringify([view.current.tripUuid,this.lastReadingProfile.binding,current.value,normalizedBoundary.simulation, this.lastEndpoint ? {...this.lastEndpoint,previous:undefined,running:undefined}:null]);
-      if(key!==this.storedProfileKey)this.pendingProfile={key,input:{pluginSessionId:message.source.pluginSessionId,
+      if(key!==this.storedProfileKey)this.pendingProfile={key,token:status?.phase==='admitted'?status.token:undefined,input:{pluginSessionId:message.source.pluginSessionId,
         nextEventSeq:(BigInt(session.processedThrough)+1n).toString(),job:structuredClone(current.value),effects:[],
         observeTripUuid:view.current.tripUuid,...(this.lastEndpoint?{endpoint:this.lastEndpoint}:{}),profile:this.lastReadingProfile,sourceClockId:message.capture.clockId,monotonicNs:message.capture.monotonicNs}};
     }
@@ -391,10 +397,24 @@ export class TripRecorderSink implements DurableSink {
     if(status?.phase==='admitted' && this.lastReadingProfile && current.available && view.current && point && predecessor && (!this.previousSample || this.previousSampleQualified)
       && !Object.values(capturedPoint(normalizedBoundary)).some(value=>value===null)){
       this.trustedPredecessor={token:status.token,profile:structuredClone(this.lastReadingProfile),tripUuid:view.current.tripUuid,job:structuredClone(current.value),
-        point:structuredClone(point),referenceNs:predecessor.monotonicNs,previous:this.previousSample,boundary:this.boundaryPrevious,running:this.boundaryRunning};
+        suspended:false,referenceNs:predecessor.monotonicNs,previous:this.previousSample,boundary:this.boundaryPrevious,running:this.boundaryRunning};
     }
     this.options.onChange?.();
     return {ok: true, value: undefined};
+  }
+
+  private rememberQualifiedEndpoint(input: AttachInput, token: object | undefined): void {
+    const status=this.options.profileStatus?.();
+    if(!status)return;
+    const profile=input.profile,point=this.state.sessions[input.pluginSessionId]?.lastReading;
+    if(!token || status.phase==='unavailable' || status.token!==token || !profile || !input.endpoint || !input.observeTripUuid
+      || !point || point.capture.clockId!==input.sourceClockId || point.capture.monotonicNs!==input.monotonicNs
+      || Object.values(input.endpoint).some(value=>value===null)){
+      this.trustedPredecessor=undefined;this.boundaryPrevious=undefined;this.boundaryRunning=undefined;return;
+    }
+    // Persisted while qualified, even if a newer boundary arrived during the storage await. The token can revoke it.
+    this.trustedPredecessor={token,profile:structuredClone(profile),tripUuid:input.observeTripUuid,job:structuredClone(input.job),suspended:false,
+      referenceNs:input.monotonicNs,previous:undefined,boundary:this.boundaryPrevious,running:undefined};
   }
 
   /** J9: opens the due late-attach trip; `none` when nothing is due. */
@@ -407,7 +427,7 @@ export class TripRecorderSink implements DurableSink {
         while(this.buffer.rowCount+this.buffer.lossCount>0){const flushed=await this.writeSamples(3600,true);if(!flushed.ok)return flushed;}
       }
       const result=await this.client.openAttachedTrip(pending.input);
-      if(result.ok){this.storedProfileKey=pending.key;if(pending.input.endpoint){this.boundaryPrevious={tripUuid:pending.input.observeTripUuid!,sourceClockId:pending.input.sourceClockId!,monotonicNs:pending.input.monotonicNs!};this.boundaryRunning=undefined;}if(this.pendingProfile===pending)this.pendingProfile=undefined;}
+      if(result.ok){this.storedProfileKey=pending.key;if(pending.input.endpoint){this.boundaryPrevious={tripUuid:pending.input.observeTripUuid!,sourceClockId:pending.input.sourceClockId!,monotonicNs:pending.input.monotonicNs!};this.boundaryRunning=undefined;this.rememberQualifiedEndpoint(pending.input,pending.token);}if(this.pendingProfile===pending)this.pendingProfile=undefined;}
       return result;
     }
     const stepped = stepTrip(this.state, {kind: 'attach', receivedUtcMs: context.receivedUtcMs});
