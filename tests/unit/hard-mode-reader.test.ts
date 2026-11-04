@@ -34,6 +34,15 @@ afterEach(async () => {vi.useRealTimers(); await rm(root, {recursive: true, forc
 const processFacts = () => Promise.resolve({pid: source.processId, createdUtcMs: created, executable: 'C:\\Synthetic\\eurotrucks2.exe', commandLine: 'eurotrucks2.exe'});
 const reader = () => new HardModeReader({documents: path.join(root, 'Documents'), process: processFacts});
 const read = (r = reader()) => r.read(source, '100', created + 10000, new AbortController().signal);
+/** Establish a metadata-visible edit independently of host timestamp granularity or an unfinished sibling byte read. */
+async function writeSettingsChange(filename: string, text: string) {
+  const before=await stat(filename,{bigint:true}),first=new Date('2026-10-22T12:00:00Z');
+  await writeFile(filename,text);
+  const timestamp=before.mtimeNs===BigInt(first.getTime())*1_000_000n?new Date('2026-10-23T12:00:00Z'):first;
+  await utimes(filename,timestamp,timestamp);
+  const after=await stat(filename,{bigint:true});expect(after.mtimeNs).not.toBe(before.mtimeNs);
+  return {before,after};
+}
 function gate<T = void>() {let resolve!: (value: T) => void; const promise = new Promise<T>(yes => {resolve = yes;}); return {promise, resolve};}
 const unknownObservation=():HardModeObservation=>({assessment:unknownHardMode(0),binding:null,pluginSessionId:null,sourceMonotonicNs:null});
 function nativeFrame(value: unknown): Buffer {
@@ -90,10 +99,8 @@ describe('ET-026 isolated reader (REG-008/010/011)', () => {
       const bound={...current,boundary:{clockId:'clock',probeSentClientNs:'1',receivedSourceNs:'2'}};observer.select(bound);m.select(bound);await m.refresh();const proof=observer.evidence(),token=observer.status().token;
       now=5_000_000_000n;if(order==='monitor-only')await observer.refresh();
       if(changed){
-        const filename=path.join(profile,'config.cfg'),before=await stat(filename,{bigint:true});
-        await writeFile(filename,HARD_MODE_CONFIG.replace('g_fatigue "1"','g_fatigue "0"'));
-        const timestamp=new Date('2026-10-22T12:00:00Z');await utimes(filename,timestamp,timestamp);
-        const after=await stat(filename,{bigint:true});expect(after.size).toBe(before.size);expect(after.mtimeNs).not.toBe(before.mtimeNs);
+        const {before,after}=await writeSettingsChange(path.join(profile,'config.cfg'),HARD_MODE_CONFIG.replace('g_fatigue "1"','g_fatigue "0"'));
+        expect(after.size).toBe(before.size);
       }
       hold=true;skew=true;completed=gate();if(order==='profile-first')void observer.refresh();pending=m.refresh(true);await entered.promise;
       // Optional reads start only after metadata guards; establish withdrawal before racing their deadline.
@@ -172,7 +179,7 @@ describe('ET-026 isolated reader (REG-008/010/011)', () => {
     try{
       observer.select(current);m.select(current);await completed.promise;await observer.refresh();await vi.advanceTimersByTimeAsync(1);
       const bound={...current,boundary:{clockId:'clock',probeSentClientNs:now().toString(),receivedSourceNs:'2'}};observer.select(bound);m.select(bound);await m.refresh();const proof=observer.evidence(),token=observer.status().token;
-      await vi.advanceTimersByTimeAsync(4999);await writeFile(path.join(profile,'config.cfg'),HARD_MODE_CONFIG.replace('g_fatigue "1"','g_fatigue "0"'));hold=true;
+      await vi.advanceTimersByTimeAsync(4999);await writeSettingsChange(path.join(profile,'config.cfg'),HARD_MODE_CONFIG.replace('g_fatigue "1"','g_fatigue "0"'));hold=true;
       if(order==='physical-first')raw=r.readTimed(source,'3',created+10000,new AbortController().signal,undefined,true).catch(error=>error);
       if(order==='profile-first')void observer.refresh();pending=m.refresh(true);await entered.promise;
       expect(m.evidence().assessment.state).toBe('unknown');expect(r.canRetain()).toBe(false);expect(r.canRetainProfile()).toBe(true);
@@ -323,7 +330,7 @@ describe('ET-026 isolated reader (REG-008/010/011)', () => {
     for(let second=1;second<60;second++){now=BigInt(second)*1_000_000_000n;await appendFile(path.join(game,'game.log.txt'),'Unrelated append\n');expect((await read(r)).assessment.state).toBe('pass');}
     expect(configReads).toBe(3);expect(inspect).toHaveBeenCalledOnce();
     now=60_000_000_000n;await read(r);expect(configReads).toBe(6);
-    await writeFile(path.join(profile,'config.cfg'),HARD_MODE_CONFIG.replace('g_fatigue "1"','g_fatigue "0"'));
+    await writeSettingsChange(path.join(profile,'config.cfg'),HARD_MODE_CONFIG.replace('g_fatigue "1"','g_fatigue "0"'));
     expect((await read(r)).assessment.state).toBe('fail');expect(configReads).toBe(9);expect(inspect).toHaveBeenCalledOnce();
   });
   it('uses positioned incremental reads through split UTF-8/lines and a log growing beyond four MiB',async()=>{
@@ -896,8 +903,8 @@ describe('ET-026 isolated reader (REG-008/010/011)', () => {
   });
   it('uses file bytes on unchanged hashes/changed mtimes and detects live persisted changes', async () => {
     const r = reader(); expect((await read(r)).assessment.state).toBe('pass');
-    await utimes(path.join(profile, 'config.cfg'), new Date(), new Date()); expect((await read(r)).assessment.state).toBe('pass');
-    await writeFile(path.join(profile, 'config.cfg'), HARD_MODE_CONFIG.replace('g_fatigue "1"', 'g_fatigue "0"'));
+    await writeSettingsChange(path.join(profile, 'config.cfg'), HARD_MODE_CONFIG); expect((await read(r)).assessment.state).toBe('pass');
+    await writeSettingsChange(path.join(profile, 'config.cfg'), HARD_MODE_CONFIG.replace('g_fatigue "1"', 'g_fatigue "0"'));
     expect((await read(r)).assessment.rules[3]).toMatchObject({values: [0], state: 'fail'});
   });
   it('supports the unique Cloud layout and rejects multiple matching accounts', async () => {

@@ -1,5 +1,5 @@
 import path from 'node:path';
-import {mkdir, writeFile} from 'node:fs/promises';
+import {mkdir, writeFile, stat, utimes} from 'node:fs/promises';
 import {HardModeReader, readStableFile} from '../../apps/desktop/src/hard-mode/reader';
 import {Worker} from 'node:worker_threads';
 import {afterEach, beforeEach, describe, expect, it, vi} from 'vitest';
@@ -176,6 +176,13 @@ describe('ET-026 integrity (REG-005/006/007)', () => {
     await writeFile(path.join(game, 'game.log.txt'), "************ : log created on : Tuesday October 20 2026 @ 12:00:00\nNew profile selected: 'Synthetic'\nLoading save. Type: 0, path: /home/profiles/53796E746865746963/save/autosave/game.sii\n");
     await writeFile(path.join(game, 'config.cfg'), 'uset g_traffic "1"'); await writeFile(path.join(profile, 'config_local.cfg'), 'uset g_brake_intensity "0.75"');
     await writeFile(path.join(profile, 'config.cfg'), HARD_MODE_CONFIG);
+    // This variant deliberately fails optional byte reads, so changed metadata must independently establish loss.
+    const writeChangedConfig = async (text: string) => {
+      const filename=path.join(profile,'config.cfg'),before=await stat(filename,{bigint:true}),first=new Date('2026-10-22T12:00:00Z');
+      await writeFile(filename,text);
+      const timestamp=before.mtimeNs===BigInt(first.getTime())*1_000_000n?new Date('2026-10-23T12:00:00Z'):first;
+      await utimes(filename,timestamp,timestamp);expect((await stat(filename,{bigint:true})).mtimeNs).not.toBe(before.mtimeNs);
+    };
     let mono = 0n, probeFailed = mode === 'initial-process-failure', observe = false, readFinished: (() => void) | undefined;
     const reader = new HardModeReader({documents: path.join(ws.directory, 'Documents'), fixtureOrigin: 'synthetic', nowNs: () => mono,
       processLifetime: () => mode === 'process-retired' && probeFailed ? undefined : 'isolated-process',
@@ -224,7 +231,8 @@ describe('ET-026 integrity (REG-005/006/007)', () => {
         for (let tick = 0; tick < 5; tick++) {
           mono += 1_000_000_000n; Atomics.add(clock, 0, 1000n);
           if (seq === '1' && tick === 1) {
-            if (mode === 'pending-failure' || mode === 'changed-failure') await writeFile(path.join(profile, 'config.cfg'), HARD_MODE_CONFIG.replace('g_fatigue "1"', 'g_fatigue "0"'));
+            if (mode === 'pending-failure') await writeFile(path.join(profile, 'config.cfg'), HARD_MODE_CONFIG.replace('g_fatigue "1"', 'g_fatigue "0"'));
+            if (mode === 'changed-failure') await writeChangedConfig(HARD_MODE_CONFIG.replace('g_fatigue "1"', 'g_fatigue "0"'));
             if (['process-probe', 'process-retired', 'periodic-failure', 'changed-failure'].includes(mode)) probeFailed = true;
             if (mode === 'pending-unknown') recorder.observeHardMode('ets2', {...evidence(), assessment: unknownHardMode(Date.now(), 'interrupted')});
           }
@@ -232,7 +240,8 @@ describe('ET-026 integrity (REG-005/006/007)', () => {
           if (seq === '1' && tick === 1) {
             if (mode === 'pending-failure') expect(monitor.evidence().assessment.rules[3]).toMatchObject({state: 'fail', values: [0]});
             probeFailed = false;
-            if (mode === 'pending-failure' || mode === 'changed-failure') await writeFile(path.join(profile, 'config.cfg'), HARD_MODE_CONFIG);
+            if (mode === 'pending-failure') await writeFile(path.join(profile, 'config.cfg'), HARD_MODE_CONFIG);
+            if (mode === 'changed-failure') await writeChangedConfig(HARD_MODE_CONFIG);
           }
         }
         expect(monitor.status().assessment.state).toBe('pass'); expect(ok(await through(ETS2_A))).toBe(seq === '1' ? '0' : '1'); expect(acks).toEqual(seq === '1' ? [] : ['1']);
