@@ -1,11 +1,19 @@
 import Database from 'better-sqlite3';
+import {setTimeout as nativeSetTimeout,clearTimeout as nativeClearTimeout} from 'node:timers';
+import {performance as nativePerformance} from 'node:perf_hooks';
 import {snapshot as logicalSnapshot} from '../../packages/storage/src/sqlite/logical-snapshot';
 import net from 'node:net';
-import {decodePayload, type ClientMessage} from '../../packages/contracts/src/protocol-v1';
+import {EventEmitter} from 'node:events';
+import {mkdir,writeFile,rename,symlink,opendir,appendFile,realpath,stat,utimes,rm} from 'node:fs/promises';
+import {decodePayload,encodeFrame,type ClientMessage,type ServerMessage,type CurrentState} from '../../packages/contracts/src/protocol-v1';
+import {HardModeReader,readStableFile} from '../../apps/desktop/src/hard-mode/reader';
+import {HardModeMonitor} from '../../apps/desktop/src/hard-mode/monitor';
+import {ProfileObserver} from '../../apps/desktop/src/profile-observation';
+import {HARD_MODE_CONFIG} from '../shared/hard-mode';
 import {V1Ingestion} from '../../apps/desktop/src/v1-ingestion';
 import {serveV1Reactive} from '../../tools/telemetry-simulator/src/v1/reactive';
-import {afterEach, beforeEach, describe, expect, it} from 'vitest';
-import {readFileSync} from 'node:fs';
+import {afterEach, beforeEach, describe, expect, it,vi} from 'vitest';
+import {readFileSync,type BigIntStats} from 'node:fs';
 import path from 'node:path';
 import type {SampleInput, Storage} from '../../packages/storage/src';
 import {attachTripUuidFor,tripUuidFor, type ProfileObservation} from '../../packages/telemetry-core/src';
@@ -26,8 +34,23 @@ import {JournalService} from '../../apps/desktop/src/journal-service';
 import {JournalExporter} from '../../apps/desktop/src/journal-export-writer';
 
 let ws: Awaited<ReturnType<typeof workspace>>;
+// Capture before scenario fake timers. These bounds diagnose a missing stage; they never advance game or service time.
+const realSetTimeout=nativeSetTimeout,realClearTimeout=nativeClearTimeout,realNow=nativePerformance.now.bind(nativePerformance);
+class WiredHangGuardError extends Error {}
+async function wiredGuarded<T>(work:Promise<T>,stage:string,deadline:number,signal?:AbortSignal):Promise<T>{
+  let timer:ReturnType<typeof realSetTimeout>|undefined;
+  let abort:(()=>void)|undefined;
+  const failed=new Promise<never>((_,reject)=>{
+    abort=()=>{const reason:unknown=signal?.reason;reject(reason instanceof Error?reason:new Error('Wired case retired',{cause:reason}));};
+    if(signal?.aborted){abort();return;}
+    signal?.addEventListener('abort',abort,{once:true});
+    timer=realSetTimeout(()=>reject(new WiredHangGuardError(`Hang guard: ${stage} did not settle before the wired deadline`)),Math.max(0,deadline-realNow()));
+  });
+  try{return await Promise.race([work,failed]);}
+  finally{realClearTimeout(timer);if(abort)signal?.removeEventListener('abort',abort);}
+}
 beforeEach(async () => {ws = await workspace();});
-afterEach(async () => {await terminateWorkers();await ws.dispose();});
+afterEach(async () => {vi.useRealTimers();await terminateWorkers();await ws.dispose();});
 const mode = {mode: 'unknown', method: 'none', confidence: 'none'} as const;
 const succeeded=<T>(result:{ok:true;value:T}|{ok:false;error:{code:string}}):T=>{if(!result.ok)throw new Error(result.error.code);return result.value;};
 function proof(script: Script): ProfileObservation {
@@ -62,6 +85,315 @@ function close(storage: Storage, script: Script, uuid: string, terminal = false)
 }
 
 describe('REG-003/005/008/012/014 durable logical trips', () => {
+  it('names a missing wired stage with real timers while scenario time is stopped',async()=>{
+    vi.useFakeTimers();
+    await expect(wiredGuarded(new Promise<void>(()=>undefined),'synthetic: missing callback',realNow()+1)).rejects.toThrow('Hang guard: synthetic: missing callback');
+    expect(vi.getTimerCount()).toBe(0);
+  });
+  it.each(['discovery-empty-account','discovery-cloud','partial-byte-timeout','partial-byte-utf8','partial-byte-unbounded','partial-bytes','partial-byte-missing','partial-config','partial-delete','identity-root','identity-profile','identity-load','identity-namespace','identity-load-after-settings-error','identity-unchanged','identity-append','identity-replaced','identity-missing','identity-redirect','identity-settings','identity-settings-error','watchdog-timer','watchdog-getter','unchanged','witness','admitted-consumption','admitted-refuel','admitted-refuel-recheck','admitted-regression','admitted-long-unchanged','admitted-long-motion','admitted-persist-revoked','revoked','profile','load','gap','clock','truck','job','refuel','teleport','missing','unqualified-sample','over-limit'] as const)('retains only a qualified predecessor through wired lifecycle verification: %s',async variant=>{
+    vi.useFakeTimers();const deadline=realNow()+25_000,retirement=new AbortController(),launched:Promise<unknown>[]=[];
+    let retired=false,primary:unknown,hasPrimary=false;
+    const active=()=>{if(retired){const reason:unknown=retirement.signal.reason;throw reason;}};
+    const retire=(reason:unknown)=>{if(!retired){retired=true;retirement.abort(reason);}};
+    const wait=async<T>(work:T,stage:string):Promise<Awaited<T>>=>{
+      active();
+      try{const value=await wiredGuarded(Promise.resolve(work),`${variant}: ${stage}`,deadline,retirement.signal);active();return value;}
+      catch(error){if(error instanceof WiredHangGuardError&&!retired){console.error(error.message);retire(error);}throw error;}
+    };
+    const launch=<T>(work:Promise<T>)=>{launched.push(work);void work.catch(()=>undefined);return work;};
+    const watchdog=variant.startsWith('watchdog-');let clientNs=0n,wireSeq=0n,boundary=100n;const revision='1';const now=()=>++clientNs;const diagnostics:string[]=[];
+    const worker=storageWorker(),client=new StorageClient(worker.handle),script=new Script(ETS2_A),welcome=script.welcome();
+    let holdPersist=false,persistHeld=false,enterPersist!:()=>void,releasePersist!:()=>void;
+    const persistEntered=new Promise<void>(resolve=>{enterPersist=resolve;}),persistRelease=new Promise<void>(resolve=>{releasePersist=resolve;}),persist=client.openAttachedTrip.bind(client);
+    const endpointScopes:string[]=[];
+    client.openAttachedTrip=async input=>{if(input.endpoint&&input.profile)endpointScopes.push(input.profile.scope);if(holdPersist&&!persistHeld&&input.endpoint){persistHeld=true;enterPersist();await persistRelease;}return persist(input);};
+    let fixtureInput=ws.directory;
+    if(variant==='discovery-cloud'||variant==='partial-config'){
+      const target=path.join(ws.directory,'profile-fixture'),alias=path.join(ws.directory,'profile-fixture-alias');
+      await mkdir(target);await symlink(target,alias,'junction');fixtureInput=alias;
+    }
+    // All exact file gates share the reader's canonical basis, including aliased Windows TEMP roots.
+    const fixtureRoot=await realpath(fixtureInput);
+    if(fixtureInput!==ws.directory)expect(fixtureRoot).not.toBe(fixtureInput);
+    const documents=path.join(fixtureRoot,'Documents'),game=path.join(documents,'Euro Truck Simulator 2'),id=Buffer.from('Synthetic').toString('hex').toUpperCase(),directory=path.join(game,variant.startsWith('discovery-')?'steam_profiles':'profiles',id);
+    await mkdir(directory,{recursive:true});
+    const log=`log created on : Wednesday October 21 2026 @ 12:00:00\nNew profile selected: Synthetic\nLoading save. /home/profiles/${id}/save/autosave/game.sii\n`;
+    const steam=path.join(fixtureRoot,'Steam'),userdata=path.join(steam,'userdata'),remote=path.join(userdata,'100','227300','remote','profiles',id);
+    if(variant.startsWith('discovery-')){await mkdir(remote,{recursive:true});await writeFile(path.join(remote,'config.cfg'),HARD_MODE_CONFIG);await utimes(userdata,new Date('2026-10-20T12:00:00Z'),new Date('2026-10-20T12:00:00Z'));}
+    await writeFile(path.join(game,'game.log.txt'),variant.startsWith('discovery-')?log.replace('/home/','/steam/'):log);await writeFile(path.join(game,'config.cfg'),'uset g_traffic "1"');
+    await writeFile(path.join(directory,'config_local.cfg'),'uset g_brake_intensity "0.75"');await writeFile(path.join(directory,'config.cfg'),HARD_MODE_CONFIG);
+    let holdGuard=false,guardHeld=false,holdSettings=false,holdLocation=false,failSettings=false,partialMetadata=false,partialBytes=false,preserveMetadata=false,bytesDeleted=false,metadataObserved!:()=>void,enterGuard!:()=>void,releaseGuard!:()=>void,watchdogWork:Promise<void>|undefined,physicalStarts=0;
+    let emptyDiscovery=false,emptyPhase=0;let discovery=false,discoveryPhase=0;const metadataBaseline=new Map<string,BigIntStats>();
+    const guardEntered=new Promise<void>(resolve=>{enterGuard=resolve;}),guardRelease=new Promise<void>(resolve=>{releaseGuard=resolve;});
+    const observedMetadata=new Promise<void>(resolve=>{metadataObserved=resolve;});
+    const reader=new HardModeReader({documents,steamRoot:steam,diagnostic:value=>diagnostics.push(value.code),fixtureOrigin:'synthetic',nowNs:now,
+      profileDirectory:async parent=>{if(holdLocation){enterGuard();await guardRelease;}return opendir(parent);},
+      metadata:{realpath:async filename=>{if(emptyDiscovery&&filename===userdata&&++emptyPhase===2){await mkdir(path.join(userdata,'101','227300','remote','profiles'),{recursive:true});await utimes(userdata,new Date('2026-10-22T12:00:00Z'),new Date('2026-10-22T12:00:00Z'));}if(discovery&&filename===userdata){discoveryPhase++;if(discoveryPhase===3){const duplicate=path.join(userdata,'101','227300','remote','profiles',id);await mkdir(duplicate,{recursive:true});await writeFile(path.join(duplicate,'config.cfg'),HARD_MODE_CONFIG);await utimes(userdata,new Date('2026-10-22T12:00:00Z'),new Date('2026-10-22T12:00:00Z'));}}if(discovery&&discoveryPhase===3&&filename===path.join(game,'config.cfg')){enterGuard();await guardRelease;}if(partialMetadata&&filename===path.join(game,'config.cfg')){enterGuard();await guardRelease;}try{return await realpath(filename);}catch(error){if(partialMetadata&&filename===path.join(directory,'config.cfg')&&(error as NodeJS.ErrnoException).code==='ENOENT')metadataObserved();throw error;}},
+        stat:async filename=>{if(preserveMetadata&&metadataBaseline.has(filename))return metadataBaseline.get(filename)!;const value=await stat(filename,{bigint:true});const previous=metadataBaseline.get(filename);metadataBaseline.set(filename,value);if(discovery&&discoveryPhase===3&&filename===userdata){expect(value.mtimeNs).not.toBe(previous!.mtimeNs);metadataObserved();}if(partialMetadata&&filename===path.join(directory,'config.cfg'))metadataObserved();return value;}},
+      file:async(filename,limit,signal)=>{if(filename.endsWith('game.log.txt'))physicalStarts++;if(failSettings&&filename===path.join(directory,'config.cfg'))throw new Error('Settings read unavailable');if(holdGuard&&!guardHeld&&filename.endsWith('game.log.txt')||holdSettings&&filename===path.join(directory,'config.cfg')||partialBytes&&filename===path.join(directory,'config_local.cfg')){guardHeld=true;enterGuard();await guardRelease;}
+        if(partialBytes&&filename===path.join(directory,'config.cfg')){if(!bytesDeleted){bytesDeleted=true;if(variant==='partial-byte-missing')await rm(filename);if(variant==='partial-byte-utf8')await writeFile(filename,Buffer.from([0xc3,0x28]));if(variant==='partial-byte-unbounded')await writeFile(filename,'x'.repeat(256*1024+1));}try{return await readStableFile(filename,limit,signal);}finally{metadataObserved();}}
+        return readStableFile(filename,limit,signal);},
+      process:s=>Promise.resolve({pid:s.processId,createdUtcMs:new Date(2026,9,21,12).getTime(),executable:'C:/Synthetic/eurotrucks2.exe',homeDirectory:null})});
+    const observer=new ProfileObserver(()=>reader,now,false,value=>diagnostics.push(value.code));let recorder!:TripRecorderSink,settings:Promise<unknown>|undefined,readCompleted:(()=>void)|undefined;const publications:string[]=[];
+    const monitor=new HardModeMonitor((s,ns,at,signal,force)=>{const work=observer.readSettings(reader,s,ns,at,signal,force).finally(()=>{if(!retired)readCompleted?.();});settings=work.catch(()=>undefined);return work;},value=>{if(!retired){publications.push(value.assessment.state);recorder.observeHardMode('ets2',value);}},now,()=>reader.requestFull(),()=>reader.canRetain(),undefined,()=>reader.drain(),
+      {eligible:()=>reader.guardEligible(),select:key=>reader.selectGuardSource(key),deadline:s=>reader.deadline(s)});
+    reader.onInvalidate(()=>monitor.invalidate());
+    recorder=new TripRecorderSink(client,{profileEvidence:()=>observer.evidence(),profileStatus:()=>observer.status(),hardModeEvidence:()=>monitor.evidence()});
+    let committed:(()=>void)|undefined,observed:(()=>void)|undefined,attached:(()=>void)|undefined,replyEnabled=false,boundaryWork:Promise<void>|undefined;let lastServer:ServerMessage=welcome;
+    const commit=recorder.commit.bind(recorder),observe=recorder.observe.bind(recorder);
+    recorder.commit=async(...args)=>{const result=await commit(...args);if(!retired)committed?.();return result;};
+    recorder.observe=(...args)=>{const result=observe(...args);if(!retired)observed?.();return result;};
+    const attach=recorder.attach.open.bind(recorder.attach);
+    recorder.attach.open=async context=>{const result=await attach(context);if(!retired)attached?.();return result;};
+    let pendingProbe:Extract<ClientMessage,{kind:'clock.probe'}>|undefined;
+    const answerProbe=(message:Extract<ClientMessage,{kind:'clock.probe'}>)=>{if(retired)return;const ns=BigInt(lastServer.capture.monotonicNs)+3n;pendingProbe=undefined;send({...welcome,kind:'clock.reply',capture:{clockId:script.clockId,monotonicNs:ns.toString()},data:{probeId:message.data.probeId,receivedMonotonicNs:(ns-2n).toString(),sentMonotonicNs:(ns-1n).toString()}});};
+    const acks:string[]=[],socket=Object.assign(new EventEmitter(),{destroy:()=>undefined,write:(bytes:Uint8Array)=>{
+      const message=decodePayload(bytes.subarray(4),'client') as ClientMessage;
+      if(message.kind==='ack')acks.push(message.data.throughEventSeq);
+      if(message.kind==='clock.probe'){pendingProbe=message;if(replyEnabled)answerProbe(message);}
+    }});
+    const send=(input:ServerMessage)=>{
+      active();
+      const message=structuredClone(input);message.seq=(++wireSeq).toString();
+      if(message.kind==='checkpoint'){message.data.boundarySeq=message.seq;message.data.state.boundaryOrder=(++boundary).toString();message.data.state.configuration.revision=revision;}
+      if(message.kind==='snapshot'){message.data.state.boundaryOrder=(++boundary).toString();message.data.state.configuration.revision=revision;}
+      if(message.kind==='event'){message.data.occurred.boundaryOrder=(++boundary).toString();message.data.occurred.configurationRevision=revision;}
+      lastServer=message;socket.emit('data',encodeFrame(message));
+    };
+    const ingestion=new V1Ingestion({sink:recorder,connect:()=>socket,diagnose:event=>diagnostics.push(event),now:()=>Number(clientNs)/1e6,nowNs:now,staleMs:1e9,
+      onState:state=>{if(retired)return;const value=state.fresh&&state.observation?{source:state.observation.source,monotonicNs:state.observation.capture.monotonicNs,clockId:state.observation.capture.clockId,gameClockId:state.observation.state.gameTime.clockId,boundary:state.clockBoundary}:null;observer.select(value);monitor.select(value);}});
+    ingestion.onProfileBoundary=()=>{if(!retired)boundaryWork=observer.boundary();};
+    const event=async(record:Parameters<Script['event']>[0],simulation:'running'|'paused'='running',advanceMs=10)=>{
+      active();const done=new Promise<void>(resolve=>{committed=resolve;});send(script.event(record,{simulation,advanceMs,configurationRevision:revision}));await wait(done,`event ${record.type} committed`);committed=undefined;
+    };
+    const snapshot=async(odo:number,fuel:number,simulation:'running'|'paused',advanceMs:number,changes:Partial<CurrentState>={})=>{
+      active();const configuration=script.checkpoint(job(),0,{},revision).data.state.configuration;
+      const message=script.snapshot({configuration,simulation,odometer:{available:true,value:odo,unit:'m'},fuel:{available:true,value:fuel,unit:'L'},speed:{available:true,value:simulation==='running'?20:0,unit:'m/s'},gameTime:{available:true,value:'500',unit:'min',clockId:script.gameTime.clockId},worldPlacement:{available:true,value:{position:{x:(odo-1000000)/5,y:0,z:0},orientation:{heading:0,pitch:0,roll:0}}},...changes},advanceMs);
+      const done=new Promise<void>(resolve=>{observed=resolve;});send(message);await wait(done,`snapshot ${simulation} ${odo}/${fuel} observed`);observed=undefined;return message;
+    };
+    const admit=async()=>{active();await wait(boundaryWork,'profile boundary completed');await wait(settings,'settings read completed');await wait(observer.refresh(),'observer.refresh');replyEnabled=true;clientNs+=1_000_000n;if(pendingProbe)answerProbe(pendingProbe);await wait(vi.advanceTimersByTimeAsync(1000),'vi.advanceTimersByTimeAsync');expect(observer.evidence(),JSON.stringify({diagnostics,status:ingestion.current.status,reason:ingestion.current.reason,phase:observer.status().phase})).toBeDefined();};
+    const admittedSnapshot=async(odo:number,fuel:number,advanceMs=100,changes:Partial<CurrentState>={})=>{
+      active();expect(observer.status().phase).toBe('admitted');
+      const done=new Promise<void>(resolve=>{attached=resolve;});await snapshot(odo,fuel,'paused',advanceMs,changes);await wait(done,`paused endpoint ${odo}/${fuel} persisted`);attached=undefined;
+    };
+    const cleanup=async()=>{
+      const reason=hasPrimary?primary:new Error(`Wired case retired: ${variant}`);retire(reason);
+      committed=undefined;observed=undefined;attached=undefined;readCompleted=undefined;
+      releasePersist();releaseGuard();monitor.close();observer.close();
+      const stopped=ingestion.stop();vi.useRealTimers();
+      const cleanupDeadline=realNow()+4_000,errors:unknown[]=[];
+      const drains=Promise.allSettled([watchdogWork,settings,boundaryWork,reader.drain(),stopped,...launched]);
+      const inspect=(results:PromiseSettledResult<unknown>[])=>{for(const result of results)if(result.status==='rejected'&&result.reason!==reason)errors.push(result.reason);};
+      try{inspect(await wiredGuarded(drains,`${variant}: cleanup drain`,cleanupDeadline-2_000));}catch(error){errors.push(error);}
+      if(!errors.length){try{await wiredGuarded(client.close(),`${variant}: cleanup storage close`,cleanupDeadline-500);}catch(error){errors.push(error);}}
+      if(errors.length){
+        // Only failed cleanup forces the owned worker. Closing it also releases any storage command blocking intake.
+        const forced=Promise.allSettled([worker.handle.terminate(),client.close(),stopped,drains]);
+        try{inspect(await wiredGuarded(forced,`${variant}: cleanup worker termination`,cleanupDeadline));}catch(error){errors.push(error);}
+        throw new AggregateError(hasPrimary?[primary,...errors]:errors,`Wired cleanup failed: ${variant}`,hasPrimary?{cause:primary}:undefined);
+      }
+    };
+    try{
+      ok(await wait(client.open({path:ws.database,backupsDirectory:ws.backups,purpose:'synthetic',appVersion:'test'}),'client.open'));
+      ingestion.select('synthetic','\\\\.\\pipe\\ETS2Telemetry-SYNTHETIC-TEST-v1-1-00000000-0000-4000-8000-000000000000');socket.emit('connect');send(welcome);
+      const checkpointDone=new Promise<void>(resolve=>{observed=resolve;});send(script.checkpoint(null,0,{},revision));await wait(checkpointDone,'initial checkpoint observed');observed=undefined;await admit();
+      await event(r.started());await event(r.jobConfigured());await admit();
+      const uuid=tripUuidFor(script.session,'2');
+      await snapshot(1000000,100,'running',1000);await snapshot(1000100,99,'running',1000);succeeded(await wait(recorder.samples.write(3600,true),'recorder.samples.write'));
+      const before=ok(await wait(client.journalTrip(uuid),'client.journalTrip'));expect(before.trip.observedDistanceM).toEqual({available:true,value:100});expect(before.trip.fuelUsedL).toEqual({available:true,value:1});
+      if(variant==='discovery-empty-account'){
+        replyEnabled=false;await event(r.paused(),'paused',100);await snapshot(1000125,98.5,'paused',100);await admit();await admittedSnapshot(1000125,98.5);
+        const original=observer.evidence()!;clientNs+=5_000_000_000n;emptyDiscovery=true;replyEnabled=false;
+        watchdogWork=monitor.refresh(true);await wait(settings,'settings read completed');await wait(observer.refresh(),'observer.refresh');replyEnabled=true;clientNs+=1_000_000n;if(pendingProbe)answerProbe(pendingProbe);await wait(vi.advanceTimersByTimeAsync(1000),'vi.advanceTimersByTimeAsync');
+        emptyDiscovery=false;await wait(watchdogWork,'Hard Mode scan completed');await wait(reader.drain(),'reader.drain');expect(emptyPhase).toBeGreaterThanOrEqual(2);
+        const parent=path.join(userdata,'101','227300','remote','profiles'),beforeHint=await wait(stat(parent,{bigint:true}),'stat'),userdataHint=await wait(stat(userdata,{bigint:true}),'stat');
+        await wait(mkdir(path.join(parent,id)),'mkdir');await wait(writeFile(path.join(parent,id,'config.cfg'),HARD_MODE_CONFIG),'writeFile');await wait(utimes(parent,new Date('2026-10-23T12:00:00Z'),new Date('2026-10-23T12:00:00Z')),'utimes');
+        expect((await wait(stat(parent,{bigint:true}),'stat')).mtimeNs).not.toBe(beforeHint.mtimeNs);expect((await wait(stat(userdata,{bigint:true}),'stat')).mtimeNs).toBe(userdataHint.mtimeNs);
+        clientNs+=5_000_000_000n;await wait(monitor.refresh(),'monitor.refresh');const count=endpointScopes.length;
+        await snapshot(1000150,98,'paused',100);expect(endpointScopes.slice(count)).not.toContain(original.scope);
+        const during=ok(await wait(client.journalTrip(uuid),'client.journalTrip'));expect(during.trip.observedDistanceM).toEqual({available:true,value:125});expect(during.trip.fuelUsedL).toEqual({available:true,value:1.5});
+        expect(observer.evidence()).toBeUndefined();expect(monitor.evidence().assessment.state).toBe('unknown');return;
+      }
+      if(variant==='discovery-cloud'){
+        replyEnabled=false;await event(r.paused(),'paused',100);await snapshot(1000125,98.5,'paused',100);await admit();await admittedSnapshot(1000125,98.5);
+        const token=observer.status().token,original=observer.evidence()!,count=endpointScopes.length;
+        discovery=true;watchdogWork=monitor.refresh(true);await wait(guardEntered,'reader gate entered');await wait(observedMetadata,'changed metadata or byte evidence observed');await Promise.resolve();await Promise.resolve();
+        expect(observer.evidence()).toBeUndefined();expect(observer.status().token).not.toBe(token);expect(monitor.evidence().assessment.state).toBe('unknown');
+        await snapshot(1000150,98,'paused',100);expect(endpointScopes.slice(count)).not.toContain(original.scope);
+        const during=ok(await wait(client.journalTrip(uuid),'client.journalTrip'));expect(during.trip.observedDistanceM).toEqual({available:true,value:125});expect(during.trip.fuelUsedL).toEqual({available:true,value:1.5});
+        discovery=false;releaseGuard();await wait(watchdogWork,'Hard Mode scan completed');await wait(reader.drain(),'reader.drain');expect(observer.evidence()).toBeUndefined();
+        await wait(monitor.refresh(true),'monitor.refresh');expect(observer.evidence()).toBeUndefined();expect(monitor.evidence().assessment.state).toBe('unknown');return;
+      }
+      if(variant.startsWith('partial-')){
+        replyEnabled=false;await event(r.paused(),'paused',100);await snapshot(1000125,98.5,'paused',100);await admit();await admittedSnapshot(1000125,98.5);
+        expect(ok(await wait(client.getTrip(uuid),'client.getTrip'))!.hardModeDetails!.firstLoss).toBeNull();const token=observer.status().token,original=observer.evidence();
+        const target=path.join(directory,'config.cfg');
+        if(variant==='partial-delete')await wait(rm(target),'rm');else if(variant==='partial-config'||variant==='partial-bytes'||variant==='partial-byte-timeout'){await wait(writeFile(target,HARD_MODE_CONFIG.replace('g_fatigue "1"','g_fatigue "0"')),'writeFile');const changed=new Date('2026-10-22T12:00:00Z');await wait(utimes(target,changed,changed),'utimes');}
+        partialBytes=variant.startsWith('partial-byte');preserveMetadata=partialBytes&&variant!=='partial-byte-timeout';partialMetadata=!partialBytes;
+        watchdogWork=monitor.refresh(true);await wait(guardEntered,'reader gate entered');await wait(observedMetadata,'changed metadata or byte evidence observed');
+        await Promise.resolve();await Promise.resolve();const during=monitor.evidence().assessment.state;let drained=false;void reader.drain().then(()=>{drained=true;});
+        const delivered=r.delivered();if(delivered.type!=='job.delivered')throw new Error('Fixture delivery');await event({...delivered,autoParkUsed:{available:true,value:false}},'paused',100);
+        const closed=ok(await wait(client.getTrip(uuid),'client.getTrip'))!;expect(closed).toMatchObject({outcome:'delivered',isHardMode:false});expect(closed.hardModeDetails!.firstLoss).not.toBeNull();
+        expect(during).toBe('unknown');expect(observer.evidence()).toEqual(original);expect(observer.status().token).toBe(token);expect(drained).toBe(false);
+        if(variant==='partial-byte-timeout'){
+          clientNs+=2_000_000_000n;await wait(vi.advanceTimersByTimeAsync(2000),'vi.advanceTimersByTimeAsync');await wait(settings,'settings read completed');
+          expect(monitor.evidence().assessment.state).toBe('unknown');expect(observer.evidence()).toEqual(original);expect(observer.status().token).toBe(token);expect(drained).toBe(false);
+          clientNs+=5_001_000_000n;await wait(vi.advanceTimersByTimeAsync(5000),'vi.advanceTimersByTimeAsync');expect(observer.evidence()).toBeUndefined();expect(observer.status().token).not.toBe(token);
+        }
+        partialMetadata=false;partialBytes=false;releaseGuard();await wait(watchdogWork,'Hard Mode scan completed');await wait(reader.drain(),'reader.drain');preserveMetadata=false;
+        if(variant==='partial-byte-timeout')expect(observer.evidence()).toBeUndefined();else{expect(observer.evidence()).toEqual(original);expect(observer.status().token).toBe(token);}
+        expect(ok(await wait(client.getTrip(uuid),'client.getTrip'))!.hardModeDetails!.firstLoss).toEqual(closed.hardModeDetails!.firstLoss);return;
+      }
+      if(variant.startsWith('identity-')){
+        replyEnabled=false;await event(r.paused(),'paused',100);await snapshot(1000125,98.5,'paused',100);await admit();await admittedSnapshot(1000125,98.5);
+        const token=observer.status().token,original=observer.evidence()!,endpointCount=endpointScopes.length;expect(original).toBeDefined();const baseline=ok(await wait(client.journalTrip(uuid),'client.journalTrip'));
+        expect(baseline.trip.observedDistanceM).toEqual({available:true,value:125});expect(baseline.trip.fuelUsedL).toEqual({available:true,value:1.5});
+        const settingsOnly=variant==='identity-settings'||variant==='identity-settings-error'||variant==='identity-unchanged'||variant==='identity-append';
+        if(variant==='identity-load-after-settings-error'){
+          await wait(rename(path.join(directory,'config.cfg'),path.join(directory,'config.old')),'rename');await wait(writeFile(path.join(directory,'config.cfg'),HARD_MODE_CONFIG),'writeFile');failSettings=true;
+          await wait(monitor.refresh(true),'monitor.refresh');expect(observer.evidence()).toEqual(original);expect(observer.status().token).toBe(token);clientNs+=1_000_000_000n;
+        }
+        if(variant==='identity-root'){
+          const replacement=path.join(fixtureRoot,'OtherGameRoot');await wait(mkdir(path.join(replacement,'profiles',id),{recursive:true}),'mkdir');
+          await wait(writeFile(path.join(replacement,'game.log.txt'),log),'writeFile');await wait(writeFile(path.join(replacement,'config.cfg'),'uset g_traffic "1"'),'writeFile');
+          await wait(writeFile(path.join(replacement,'profiles',id,'config.cfg'),HARD_MODE_CONFIG),'writeFile');await wait(writeFile(path.join(replacement,'profiles',id,'config_local.cfg'),'uset g_brake_intensity "0.75"'),'writeFile');
+          await wait(rename(game,game+'.old'),'rename');await wait(symlink(replacement,game,'junction'),'symlink');holdGuard=true;
+        }else if(variant==='identity-profile'){
+          const other=Buffer.from('OtherSynthetic').toString('hex').toUpperCase();await wait(mkdir(path.join(game,'profiles',other)),'mkdir');
+          await wait(appendFile(path.join(game,'game.log.txt'),`New profile selected: OtherSynthetic\nLoading save. /home/profiles/${other}/save/autosave/game.sii\n`),'appendFile');
+        }else if(variant==='identity-load'||variant==='identity-load-after-settings-error')await wait(appendFile(path.join(game,'game.log.txt'),`Loading save. /home/profiles/${id}/save/autosave/game.sii\n`),'appendFile');
+        else if(variant==='identity-namespace'){
+          await wait(mkdir(path.join(game,'steam_profiles',id),{recursive:true}),'mkdir');await wait(mkdir(path.join(steam,'userdata','100','227300','remote','profiles',id),{recursive:true}),'mkdir');
+          await wait(appendFile(path.join(game,'game.log.txt'),`Loading save. /steam/profiles/${id}/save/autosave/game.sii\n`),'appendFile');
+        }else if(variant==='identity-append')await wait(appendFile(path.join(game,'game.log.txt'),'Unrelated log append\n'),'appendFile');
+        else if(variant==='identity-unchanged'){
+          // The forced verification below must leave the already qualified profile intact.
+        }
+        else if(settingsOnly){await wait(rename(path.join(directory,'config.cfg'),path.join(directory,'config.old')),'rename');await wait(writeFile(path.join(directory,'config.cfg'),HARD_MODE_CONFIG),'writeFile');failSettings=variant==='identity-settings-error';}
+        else{
+          await wait(rename(directory,directory+'.old'),'rename');
+          if(variant==='identity-replaced'){await wait(mkdir(directory),'mkdir');await wait(writeFile(path.join(directory,'config.cfg'),HARD_MODE_CONFIG),'writeFile');await wait(writeFile(path.join(directory,'config_local.cfg'),'uset g_brake_intensity "0.75"'),'writeFile');}
+          if(variant==='identity-redirect')await wait(symlink(directory+'.old',directory,'junction'),'symlink');
+        }
+        const completed=new Promise<void>(resolve=>{readCompleted=resolve;});holdLocation=variant!=='identity-root'&&variant!=='identity-replaced'&&variant!=='identity-missing'&&variant!=='identity-redirect';
+        replyEnabled=false;watchdogWork=monitor.refresh(true);
+        if(holdLocation||holdGuard)await wait(guardEntered,'reader gate entered');else await wait(completed,'profile reread completed');
+        const during=observer.evidence(),duringToken=observer.status().token,duringState=monitor.evidence().assessment.state;
+        await snapshot(1000125,98,'paused',100,{speed:{available:true,value:1,unit:'m/s'}});await event(r.fined(),'paused',0);
+        const held=ok(await wait(client.journalTrip(uuid),'client.journalTrip'));
+        expect(held.trip.observedDistanceM).toEqual({available:true,value:125});expect(held.trip.fuelUsedL).toEqual({available:true,value:settingsOnly?2:1.5});
+        expect(endpointScopes.slice(endpointCount)).toEqual(settingsOnly?[original.scope]:[]);
+        if(!settingsOnly)expect(duringState).toBe('unknown');
+        if(variant==='identity-unchanged'||variant==='identity-append'){expect(duringState).toBe('pass');expect(ok(await wait(client.getTrip(uuid),'client.getTrip'))!.hardModeDetails!.firstLoss).toBeNull();}
+        if(settingsOnly){expect(during).toEqual(original);expect(duringToken).toBe(token);}else{expect(during).toBeUndefined();expect(duringToken).not.toBe(token);}
+        holdLocation=false;releaseGuard();await wait(completed,'profile reread completed');
+        if(settingsOnly){await admit();await wait(watchdogWork,'Hard Mode scan completed');expect(observer.evidence()).toEqual(original);expect(observer.status().token).toBe(token);}
+        else{monitor.close();await wait(watchdogWork,'Hard Mode scan completed');expect(observer.evidence()).toBeUndefined();}
+        expect(ok(await wait(client.listSamples({tripUuid:uuid}),'client.listSamples'))).toHaveLength(2);return;
+      }
+      if(watchdog){
+        expect(ok(await wait(client.getTrip(uuid),'client.getTrip'))!.hardModeDetails!.firstLoss).toBeNull();
+        const origin=clientNs;
+        for(let second=5;second<60;second+=5){clientNs=origin+BigInt(second)*1_000_000_000n;await wait(reader.resolveProfile(welcome.source,Date.now(),new AbortController().signal,true),'reader.resolveProfile');}
+        clientNs=origin+60_000_000_000n;holdSettings=true;watchdogWork=monitor.refresh();await wait(guardEntered,'reader gate entered');const token=observer.status().token,starts=physicalStarts;
+        clientNs+=2_000_000_000n;await wait(vi.advanceTimersByTimeAsync(2000),'vi.advanceTimersByTimeAsync');await wait(settings,'settings read completed');
+        expect(monitor.evidence().assessment.state).toBe('pass');expect(observer.evidence()).toBeDefined();expect(observer.status().token).toBe(token);
+        for(let second=1;second<5;second++){clientNs+=1_000_000_000n;monitor.heartbeat();await snapshot(1000100,99,'running',1000);}
+        clientNs=origin+67_001_000_000n;
+        if(variant==='watchdog-timer'){await wait(vi.advanceTimersByTimeAsync(5000),'vi.advanceTimersByTimeAsync');expect(publications.at(-1)).toBe('unknown');}
+        // The getter case deliberately leaves timer callbacks pending at the same monotonic deadline.
+        expect(monitor.evidence().assessment.state).toBe('unknown');expect(observer.evidence()).toBeUndefined();expect(observer.status().token).not.toBe(token);
+        expect(physicalStarts).toBe(starts);await event(r.fined());const lost=ok(await wait(client.getTrip(uuid),'client.getTrip'))!.hardModeDetails!.firstLoss;expect(lost).not.toBeNull();
+        const recoveredRead=new Promise<void>(resolve=>{readCompleted=resolve;});holdSettings=false;releaseGuard();await wait(reader.drain(),'reader.drain');
+        expect(monitor.evidence().assessment.state).toBe('unknown');expect(observer.evidence()).toBeUndefined();
+        await wait(recoveredRead,'recovery settings read completed');await wait(settings,'settings read completed');await wait(observer.refresh(),'observer.refresh');expect(monitor.evidence().assessment.state).toBe('unknown');await admit();await wait(watchdogWork,'Hard Mode scan completed');
+        expect(monitor.evidence().assessment.state).toBe('pass');await snapshot(1000100,99,'running',1000);await event(r.delivered());
+        const recovered=ok(await wait(client.getTrip(uuid),'client.getTrip'))!;expect(recovered.hardModeDetails!.firstLoss).toEqual(lost);expect(recovered.isHardMode).toBe(false);return;
+      }
+      if(variant==='witness'){
+        replyEnabled=false;await event(r.paused(),'paused',10);await snapshot(1000110,98.9,'paused',10);await admit();await snapshot(1000110,98.9,'paused',10);
+        expect(ok(await wait(client.journalTrip(uuid),'client.journalTrip')).trip.observedDistanceM).toEqual({available:true,value:110});
+        replyEnabled=false;await event(r.started(),'running',10);await admit();await snapshot(1000120,98.7,'running',10);
+      }
+      const token=observer.status().token;replyEnabled=false;holdGuard=variant==='unchanged';await event(r.paused(),'paused',100);
+      if(variant==='unchanged')await wait(guardEntered,'reader gate entered');
+      expect(observer.evidence()).toBeUndefined();expect(observer.status()).toEqual({phase:'pending',token});
+      const changes:Partial<CurrentState>={};
+      if(variant==='clock')changes.gameTime={available:true,value:'500',unit:'min',clockId:'40000000-0000-4000-8000-000000000099'};
+      if(variant==='truck'){const configuration=script.checkpoint(job()).data.state.configuration;if(configuration.truck.available)configuration.truck.value.licensePlate={available:true,value:'OTHER'};changes.configuration=configuration;}
+      if(variant==='job')changes.configuration=script.checkpoint(otherJob()).data.state.configuration;
+      if(variant==='missing')changes.worldPlacement={available:false,reason:'not-observed'};
+      if(variant==='teleport')changes.worldPlacement={available:true,value:{position:{x:10000,y:0,z:0},orientation:{heading:0,pitch:0,roll:0}}};
+      await snapshot(1000125,variant==='refuel'?110:98.5,'paused',variant==='over-limit'?5000:100,changes);
+      expect(ok(await wait(client.listSamples({tripUuid:uuid}),'client.listSamples'))).toHaveLength(2);
+      if(variant==='unchanged'){await event(r.paused(),'paused',0);releaseGuard();}
+      if(variant==='revoked')observer.suspend();
+      if(variant==='load')await wait(writeFile(path.join(game,'game.log.txt'),log+`Loading save. /home/profiles/${id}/save/autosave/game.sii\n`),'writeFile');
+      if(variant==='profile')await wait(writeFile(path.join(game,'game.log.txt'),log+'New profile selected: Other\n'),'writeFile');
+      if(variant==='gap'){
+        const done=new Promise<void>(resolve=>{committed=resolve;});send(script.gap(1,'queueCount',10));await wait(done,'semantic callback');committed=undefined;
+      }
+      if(variant==='unqualified-sample')await snapshot(1000130,98.4,'running',1000);
+      await wait(boundaryWork,'profile boundary completed');
+      if(variant==='load'||variant==='profile'||variant==='revoked'){
+        clientNs+=5_000_000_000n;await wait(observer.refresh(),'observer.refresh');
+      }
+      if(variant!=='profile'){
+        await admit();
+        if(variant.startsWith('admitted-')){
+          if(variant==='admitted-persist-revoked'){
+            holdPersist=true;const capturedToken=observer.status().token,capturedProof=observer.evidence()!;
+            const pendingWrite=launch(admittedSnapshot(1000125,98.5));await wait(persistEntered,'paused endpoint write held');
+            observer.suspend();boundaryWork=observer.boundary();await admit();
+            expect(observer.status().token).not.toBe(capturedToken);expect(observer.evidence()!.binding).toBe(capturedProof.binding);
+            releasePersist();await wait(pendingWrite,'paused endpoint write released');
+          }else await admittedSnapshot(1000125,98.5);
+          const first=ok(await wait(client.journalTrip(uuid),'client.journalTrip'));expect(first.trip.observedDistanceM).toEqual({available:true,value:125});expect(first.trip.fuelUsedL).toEqual({available:true,value:1.5});
+          if(variant==='admitted-persist-revoked'){
+            await admittedSnapshot(1000125,98.4);
+          }else if(variant==='admitted-regression'){
+            await admittedSnapshot(1000150,98,100,{speed:{available:true,value:20,unit:'m/s'}});
+            expect(ok(await wait(client.journalTrip(uuid),'client.journalTrip')).trip.observedDistanceM).toEqual({available:true,value:150});
+            await admittedSnapshot(1000140,97.5,100,{speed:{available:true,value:20,unit:'m/s'}});
+          }else if(variant==='admitted-long-unchanged'||variant==='admitted-long-motion'){
+            // Change only the speed hint to persist the same physical endpoint after each long admitted pause.
+            await admittedSnapshot(1000125,98.5,6000,{speed:{available:true,value:1,unit:'m/s'}});
+            expect(ok(await wait(client.journalTrip(uuid),'client.journalTrip')).trip.fuelUsedL).toEqual({available:true,value:1.5});
+            if(variant==='admitted-long-motion')await admittedSnapshot(1000150,98,6000,{speed:{available:true,value:20,unit:'m/s'}});
+            else await admittedSnapshot(1000125,98.5,6000,{speed:{available:true,value:2,unit:'m/s'}});
+          }else{
+            const refuel=variant==='admitted-refuel'||variant==='admitted-refuel-recheck';
+            await admittedSnapshot(1000125,refuel?96:98);
+            expect(ok(await wait(client.journalTrip(uuid),'client.journalTrip')).trip.fuelUsedL).toEqual({available:true,value:refuel?4:2});
+            await admittedSnapshot(1000125,refuel?97:97.5);
+            if(variant==='admitted-refuel-recheck'){
+              expect(ok(await wait(client.journalTrip(uuid),'client.journalTrip')).trip.fuelUsedL).toEqual({available:false,reason:'not-observed'});
+              replyEnabled=false;await event(r.paused(),'paused',10);await snapshot(1000125,96.5,'paused',10);await admit();await admittedSnapshot(1000125,96.5);
+            }
+          }
+        }else await snapshot(1000125,98.5,'paused',100);
+      }
+      succeeded(await wait(recorder.samples.write(3600,true),'recorder.samples.write'));
+      const detail=ok(await wait(client.journalTrip(uuid),'client.journalTrip'));
+      if(variant==='unchanged'||variant==='witness'||variant==='admitted-consumption'||variant==='admitted-long-unchanged'){
+        expect(detail.trip.observedDistanceM).toEqual({available:true,value:125});expect(detail.trip.fuelUsedL).toEqual({available:true,value:variant==='admitted-consumption'?2.5:1.5});expect(detail.trip.recordingCompleteness).toBe('complete');
+        const samples=ok(await wait(client.listSamples({tripUuid:uuid}),'client.listSamples'));expect(samples).toHaveLength(2);expect(samples.map(sample=>sample.speed.available?sample.speed.value:null)).toEqual([20,20]);
+        expect(ok(await wait(client.getTrip(uuid),'client.getTrip'))!.hardModeDetails!.firstLoss).toBeNull();
+      }else{
+        // No newly admitted endpoint exists after profile/clock uncertainty:
+        // its already supported prefix remains 100 m/1 L. An admitted but unsupported new leg is unavailable.
+        if(variant==='profile'||variant==='clock'){
+          expect(detail.trip.observedDistanceM).toEqual({available:true,value:100});expect(detail.trip.fuelUsedL).toEqual({available:true,value:1});
+        }else{
+          expect(detail.trip.observedDistanceM).toEqual({available:false,reason:'not-observed'});expect(detail.trip.fuelUsedL).toEqual({available:false,reason:'not-observed'});
+        }
+        if(variant==='gap')expect(detail.trip.recordingCompleteness).toBe('partial');
+        if(variant==='profile'||variant==='load'||variant==='clock')expect(ok(await wait(client.getTrip(uuid),'client.getTrip'))!.hardModeDetails!.firstLoss).not.toBeNull();
+      }
+      expect(acks).toContain('3');
+    }catch(error){primary=error;hasPrimary=true;throw error;}
+    finally{await cleanup();}
+  });
   it.each(['before','long-before','after','foreign-source','foreign-clock','unknown-time','overflow'] as const)('bounds and source-qualifies persisted transfer checks: %s',async variant=>{
     const storage=await ws.open(),s=new Script(ETS2_A);ok(storage.upsertSession({message:s.welcome()}));ok(storage.commitEvent({message:s.event(r.started())}));const uuid=open(storage,s);
     const commitTransfer=()=>{const event=s.event(r.ferry(),{advanceMs:500});

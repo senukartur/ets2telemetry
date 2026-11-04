@@ -87,6 +87,17 @@ function edited(name: string, edit: (m: ServerMessage & {data: Record<string, un
 }
 
 describe('ET-006b protocol v1 ingestion', () => {
+  it.each(['simulation.paused','simulation.started','timers.restart','gameTime.regression','job.cleared','truck.cleared'] as const)('suspends profile admission before FIFO capture of %s, independently of snapshots',async type=>{
+    const trace:string[]=[],sink=new Sink() as Sink & {capture:NonNullable<DurableSink['capture']>};
+    sink.capture=()=>{trace.push('capture');return undefined;};
+    const input=start({sink});input.onProfileBoundary=()=>trace.push('boundary');connectLatest();
+    latest().feed(frame('welcome'),frame('checkpoint'));expect(trace).toEqual(['boundary']);await settle();trace.length=0;
+    const event=structuredClone(server(type==='gameTime.regression'?'event-game-time-regression':'event-job-configured'));
+    if(event.kind!=='event')throw new Error('Expected event');
+    if(type!=='gameTime.regression')event.data.record={type};
+    latest().feed(encodeFrame(event));expect(trace).toEqual(['boundary','capture']);
+    await settle();expect(sink.commits).toEqual(['event 1']);expect(latest().acks).toEqual(['1']);
+  });
   it('sends one live-only hello without a sink and a durable hello with one', () => {
     start(); connectLatest();
     // ET-050b B1, ET-052: the hello is version 1.0 and offers minor 2 (it offered 0 before ET-050b PR-5 and 1 before ET-052 PR-4).

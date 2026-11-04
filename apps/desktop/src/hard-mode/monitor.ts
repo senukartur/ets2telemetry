@@ -1,9 +1,9 @@
-import type {TimedHardModeObservation} from './reader';
+import {UnchangedVerificationError, type TimedHardModeObservation} from './reader';
 import type {HardModeObservation, HardModeStatus} from '../../../../packages/contracts/src/hard-mode';
 import {HARD_MODE_COVERAGE_NS, type HardModeServiceMessage} from './service-status';
 import type {SourceIdentity} from '../../../../packages/contracts/src/protocol-v1';
 import {unknownHardMode} from '../../../../packages/telemetry-core/src/hard-mode';
-export const HARD_MODE_POLL_MS = 1000, HARD_MODE_DEADLINE_MS = 2000;
+export const HARD_MODE_POLL_MS = 5000, HARD_MODE_DEADLINE_MS = 2000;
 export interface MonitorSource {source: SourceIdentity; monotonicNs: string; clockId?: string; gameClockId?: string; boundary?: {clockId: string; probeSentClientNs: string; receivedSourceNs: string}}
 /** Null/stale publications retire proof without turning an unchanged process into a new physical scan cadence. */
 export function profileSourceKey(value: MonitorSource): string {
@@ -19,8 +19,17 @@ export class HardModeMonitor {
   private cadenceKey: string | undefined;
   private lastScanNs: bigint | undefined;
   private observedClientNs: bigint | undefined;
+  private healthNs: bigint | undefined;
+  private lastManualNs: bigint | undefined;
+  private manualPending = false;
+  private forced = false;
+  private activeEpoch = 0;
+  private manualTimer: ReturnType<typeof setTimeout> | undefined;
+  private closed = false;
+  private followup = false;
   private pendingProof: {value: HardModeObservation; completedClientNs: bigint; deadlineClientNs: bigint; resolve: () => void} | undefined;
   private bindProof(): void {
+    if (this.guard && !this.guard.eligible()) {this.retireProof(); return;}
     const pending = this.pendingProof, current = this.source, boundary = current?.boundary;
     if (pending && this.nowNs() >= pending.deadlineClientNs) {this.retireProof(); this.publish(this.unknown()); return;}
     if (!pending || !boundary || boundary.clockId !== current?.clockId || BigInt(boundary.probeSentClientNs) <= pending.completedClientNs) return;
@@ -31,48 +40,92 @@ export class HardModeMonitor {
     pending.resolve();
   }
   private retireProof(): void {const pending = this.pendingProof; this.pendingProof = undefined; pending?.resolve();}
-  private timer: ReturnType<typeof setInterval> | undefined;
-  constructor(private readonly read: (source: SourceIdentity, monotonicNs: string, atUtcMs: number, signal: AbortSignal) => Promise<HardModeObservation | TimedHardModeObservation>,
-    private readonly changed: (value: HardModeObservation) => void = () => undefined, private readonly nowNs: () => bigint = () => process.hrtime.bigint()) {}
+  private timer: ReturnType<typeof setTimeout> | undefined;
+  private healthTimer: ReturnType<typeof setInterval> | undefined;
+  private started = false;
+  constructor(private readonly read: (source: SourceIdentity, monotonicNs: string, atUtcMs: number, signal: AbortSignal, force?: boolean) => Promise<HardModeObservation | TimedHardModeObservation>,
+    private readonly changed: (value: HardModeObservation) => void = () => undefined, private readonly nowNs: () => bigint = () => process.hrtime.bigint(),
+    private readonly requestFull: () => void = () => undefined, private readonly retain: () => boolean = () => false,
+    private readonly publishHealth: () => void = () => undefined, private readonly drain: () => Promise<void> = () => Promise.resolve(),
+    private readonly guard?: {eligible: () => boolean; select: (key: string | undefined) => void; deadline?: (source: SourceIdentity) => Error | undefined}) {}
   private unknown(): HardModeObservation {return {assessment: unknownHardMode(Date.now()), binding: null, pluginSessionId: null, sourceMonotonicNs: null};}
-  private publish(value: HardModeObservation, observedClientNs = this.nowNs()): void {this.observation = value; this.observedClientNs = observedClientNs; this.changed(value);}
-  private expired(): boolean {const age = this.observedClientNs === undefined ? -1n : this.nowNs() - this.observedClientNs; return age < 0n || age > BigInt(HARD_MODE_POLL_MS + HARD_MODE_DEADLINE_MS) * 1_000_000n;}
-  private expireCoverage(): void {if (this.observation.binding !== null && this.expired()) this.publish(this.unknown());}
+  private publish(value: HardModeObservation, observedClientNs = this.nowNs()): void {this.observation = value; this.observedClientNs = observedClientNs; this.healthNs = this.nowNs(); this.changed(value);}
+  private expired(): boolean {return this.observedClientNs === undefined || this.nowNs() < this.observedClientNs;}
+  private expireCoverage(): void {
+    if (this.guard && !this.guard.eligible()) {
+      this.retireProof();
+      if (this.observation.binding !== null || this.observation.assessment.state !== 'unknown') this.publish(this.unknown());
+    }
+    if (this.observation.binding !== null && this.expired()) this.publish(this.unknown());
+  }
+  invalidate(): void {this.followup ||= this.inFlight !== undefined; this.retireProof(); this.publish(this.unknown());}
   select(next: MonitorSource | null): void {
+    if (this.closed) return;
+    this.guard?.select(next ? profileSourceKey(next) : undefined);
     const before = this.source?.source, after = next?.source;
     const previousClock = this.source?.clockId, previousGameClock = this.source?.gameClockId;
     this.source = next;
     if (previousClock === next?.clockId && previousGameClock === next?.gameClockId && before?.pluginSessionId === after?.pluginSessionId && before?.processInstanceId === after?.processInstanceId && before?.processId === after?.processId && before?.windowsSessionId === after?.windowsSessionId && before?.game === after?.game && before?.origin === after?.origin) {this.bindProof(); return;}
     const key = next ? profileSourceKey(next) : undefined;
     if (key !== undefined && key !== this.cadenceKey) {this.lastScanNs = undefined; this.cadenceKey = key;}
-    this.epoch++; this.controller?.abort(); this.retireProof(); this.publish(this.unknown());
+    this.epoch++; this.followup = false; this.manualPending = false; clearTimeout(this.manualTimer); this.manualTimer = undefined;
+    this.controller?.abort(); this.retireProof(); this.publish(this.unknown());
     const epoch = this.epoch, draining = this.inFlight;
-    if (draining) void draining.finally(() => {if (epoch === this.epoch && this.source) void this.refresh();});
+    if (draining) void draining.finally(() => {if (epoch === this.epoch && this.source) void this.refresh(this.manualPending);});
     else void this.refresh();
   }
   evidence(): HardModeObservation {
+    this.expireCoverage();
     if (this.expired()) return this.unknown();
     return structuredClone(this.observation);
   }
   publication(): Extract<HardModeServiceMessage, {update: 'assessment'}> {
-    const age = this.observedClientNs === undefined ? -1n : this.nowNs() - this.observedClientNs;
+    const age = this.healthNs === undefined ? -1n : this.nowNs() - this.healthNs;
     const remaining = age >= 0n && age < HARD_MODE_COVERAGE_NS ? HARD_MODE_COVERAGE_NS - age : 0n;
     return {type: 'hard-mode', update: 'assessment', assessment: this.evidence().assessment, remainingNs: remaining.toString()};
   }
   status(): HardModeStatus {return {assessment: this.evidence().assessment, trip: null};}
-  start(): void {this.timer ??= setInterval(() => {void this.refresh();}, HARD_MODE_POLL_MS); this.timer.unref();}
-  refresh(): Promise<void> {
+  /** Memory-only service lease: it never changes the observation's timestamp or causal watermark. */
+  heartbeat(): void {this.expireCoverage(); if (this.source) {this.healthNs = this.nowNs(); this.publishHealth();}}
+  private scheduleGuard(): void {
+    if (!this.started) return;
+    clearTimeout(this.timer);
+    const remaining = !this.source || this.lastScanNs === undefined ? HARD_MODE_POLL_MS
+      : Math.ceil(Number(this.lastScanNs + BigInt(HARD_MODE_POLL_MS) * 1_000_000n - this.nowNs()) / 1_000_000);
+    // Attachment/manual scans need not align with service startup. An early tick must re-arm for its real due time.
+    this.timer = setTimeout(() => {this.timer = undefined; void this.refresh().finally(() => this.scheduleGuard());}, Math.max(0, Math.min(HARD_MODE_POLL_MS, remaining)));
+    this.timer.unref();
+  }
+  start(): void {
+    if (!this.started) {this.started = true; this.scheduleGuard();}
+    this.healthTimer ??= setInterval(() => this.heartbeat(), 1000); this.healthTimer.unref();
+  }
+  refresh(manual = false, followup = false): Promise<void> {
+    if (this.closed) return Promise.resolve();
     this.expireCoverage();
-    if (this.inFlight) return this.inFlight;
+    if (this.inFlight) {if (manual && (!this.forced || this.activeEpoch !== this.epoch)) this.manualPending = true; return this.inFlight;}
     const current = this.source;
-    if (!current || this.lastScanNs !== undefined && this.nowNs() - this.lastScanNs < BigInt(HARD_MODE_POLL_MS) * 1_000_000n) return Promise.resolve();
+    if (!current) return Promise.resolve();
+    if (manual && this.lastManualNs !== undefined && this.nowNs() - this.lastManualNs < 1_000_000_000n) {
+      this.manualPending = true;
+      if (!this.manualTimer) {
+        const epoch = this.epoch, remaining = this.lastManualNs + 1_000_000_000n - this.nowNs();
+        this.manualTimer = setTimeout(() => {this.manualTimer = undefined; if (epoch === this.epoch && this.manualPending) void this.refresh(true);}, Math.ceil(Number(remaining) / 1_000_000));
+        this.manualTimer.unref();
+      }
+      return Promise.resolve();
+    }
+    if (!manual && !followup && this.lastScanNs !== undefined && this.nowNs() - this.lastScanNs < BigInt(HARD_MODE_POLL_MS) * 1_000_000n) return Promise.resolve();
+    if (manual) {this.lastManualNs = this.nowNs(); this.manualPending = false; clearTimeout(this.manualTimer); this.manualTimer = undefined; this.requestFull();}
+    this.forced = manual;
     this.lastScanNs = this.nowNs();
     let deadlineClientNs = this.lastScanNs + BigInt(HARD_MODE_DEADLINE_MS) * 1_000_000n;
     const epoch = this.epoch, controller = this.controller = new AbortController();
-    const expire = () => {controller.abort(); if (epoch === this.epoch) {this.publish(this.unknown()); this.retireProof();}};
+    this.activeEpoch = epoch;
+    const expire = () => {controller.abort(this.guard?.deadline?.(current.source)); if (epoch === this.epoch) {if (!this.retain()) this.publish(this.unknown()); this.retireProof();}};
     let deadline = setTimeout(expire, HARD_MODE_DEADLINE_MS);
-    this.inFlight = this.read(current.source, current.monotonicNs, Date.now(), controller.signal).then(result => {
-      if (controller.signal.aborted || epoch !== this.epoch) return;
+    this.inFlight = this.read(current.source, current.monotonicNs, Date.now(), controller.signal, manual).then(result => {
+      if (controller.signal.aborted || epoch !== this.epoch || this.guard && !this.guard.eligible()) return;
       const value = 'observation' in result ? result.observation : result;
       const completed = 'timing' in result ? result.timing.completedClientNs : this.nowNs();
       if ('timing' in result) {
@@ -83,16 +136,33 @@ export class HardModeMonitor {
         deadline = setTimeout(expire, Number(remaining) / 1_000_000);
       }
       if (!controller.signal.aborted && epoch === this.epoch) {
+        if (this.observation.binding !== null && this.observation.binding === value.binding
+          && JSON.stringify(this.observation.assessment.rules) === JSON.stringify(value.assessment.rules)
+          && this.observation.assessment.state === value.assessment.state) {
+          if (this.observation.assessment.observedUtcMs !== value.assessment.observedUtcMs) this.publish({...value, sourceMonotonicNs: this.observation.sourceMonotonicNs});
+          return;
+        }
         if (this.observation.binding !== null && this.observation.binding !== value.binding) this.publish(this.unknown());
         if (value.assessment.state !== 'pass') {this.publish({...value, sourceMonotonicNs: null}); return;}
         // A source receipt of a probe sent after the file read is a causal boundary, without clock-origin mapping.
         return new Promise<void>(resolve => {
-          this.pendingProof = {value: {...value, assessment: {...value.assessment, observedUtcMs: Date.now()}}, completedClientNs: completed, deadlineClientNs, resolve};
+          this.pendingProof = {value, completedClientNs: completed, deadlineClientNs, resolve};
           this.bindProof();
         });
       }
-    }, () => {if (epoch === this.epoch) this.publish(this.unknown());}).finally(() => {clearTimeout(deadline); this.inFlight = undefined;});
+    }, error => {if (epoch === this.epoch && !(error instanceof UnchangedVerificationError)) this.publish(this.unknown());}).finally(async () => {
+      clearTimeout(deadline);
+      // Cancellation/read completion can precede physical close. Manual intent owns a new full operation after drain,
+      // even when the previous reader already settled before its monitor's causal probe arrived.
+      await this.drain();
+      this.inFlight = undefined; this.forced = false;
+      const requested = this.followup; this.followup = false;
+      if (epoch === this.epoch && this.source && !this.closed) {
+        if (this.manualPending) return this.refresh(true, true);
+        if (requested && !followup && !manual) return this.refresh(false, true);
+      }
+    });
     return this.inFlight;
   }
-  close(): void {clearInterval(this.timer); this.timer = undefined; this.epoch++; this.controller?.abort(); this.retireProof(); this.publish(this.unknown());}
+  close(): void {this.closed = true; this.guard?.select(undefined); this.started = false; clearTimeout(this.timer); clearTimeout(this.manualTimer); clearInterval(this.healthTimer); this.timer = undefined; this.manualTimer = undefined; this.healthTimer = undefined; this.manualPending = false; this.epoch++; this.controller?.abort(); this.retireProof(); this.publish(this.unknown());}
 }

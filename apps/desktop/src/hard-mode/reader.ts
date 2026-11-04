@@ -1,12 +1,15 @@
 // Read-only, bounded observation of the current process's persisted settings. Tests inject all roots and process facts.
 import {createHash} from 'node:crypto';
+import type {BigIntStats} from 'node:fs';
 import {open, realpath, opendir, stat} from 'node:fs/promises';
 import path from 'node:path';
+import {ProfileLogTail} from './log-tail';
 import type {SourceIdentity} from '../../../../packages/contracts/src/protocol-v1';
 import type {HardModeObservation} from '../../../../packages/contracts/src/hard-mode';
 import {evaluateHardMode, parseHardModeConfig} from '../../../../packages/telemetry-core/src/hard-mode';
 export const CONFIG_BYTES = 256 * 1024, LOG_BYTES = 4 * 1024 * 1024, MAX_PROFILES = 256;
-export interface GameProcess {pid: number; createdUtcMs: number; executable: string; commandLine: string}
+const REQUIRED_GUARD_NS = 5_000_000_000n + 2_000_000_000n;
+export interface GameProcess {pid: number; createdUtcMs: number; executable: string; commandLine?: string; homeDirectory?: string | null}
 /** Fixed privacy-safe diagnostics. No file text, identity, hashes, paths or arbitrary errors cross this seam. */
 export type ProfileDiagnosticCode = 'PROFILE_SOURCE_UNPROVEN' | 'PROFILE_PROCESS_QUERY_FAILED' | 'PROFILE_PROCESS_QUERY_DEADLINE' | 'PROFILE_PROCESS_QUERY_INVALID' | 'PROFILE_PROCESS_UNPROVEN' | 'PROFILE_LOG_GENERATION' | 'PROFILE_LOG_CHANGED' |
   'PROFILE_SELECTION_UNPROVEN' | 'PROFILE_LOCATION_UNPROVEN' | 'PROFILE_PROCESS_CHANGED' | 'PROFILE_DEADLINE' | 'PROFILE_CANCELLED' |
@@ -25,6 +28,7 @@ export function coalesceProfileDiagnostics(write: (value: ProfileDiagnostic & {c
 }
 export interface HardModeReaderOptions {
   diagnostic?: (value: ProfileDiagnostic) => void;
+  processLifetime?: (source: SourceIdentity) => string | undefined;
   documents: string; steamRoot?: string;
   /** Isolated smoke/test roots only; a fixture reader never accepts a real game source. */
   fixtureOrigin?: 'synthetic' | 'replay';
@@ -32,6 +36,8 @@ export interface HardModeReaderOptions {
   /** Controlled clocks/file gates for isolated tests only. */
   nowNs?: () => bigint;
   file?: typeof readStableFile;
+  profileDirectory?: (directory: string) => ReturnType<typeof opendir>;
+  metadata?: {realpath: (filename: string) => Promise<string>; stat: (filename: string) => Promise<BigIntStats>};
 }
 export interface BoundProfile {profile: string; storage: 'local' | 'cloud'; generation: number}
 /** New selections invalidate preceding save markers; a later save namespace supersedes old profile-type markers. */
@@ -55,17 +61,19 @@ export function profileFromLog(log: string): BoundProfile | null {
   }
   return loaded;
 }
+/** Own validation observed invalid file evidence; generic filesystem failures carry no such conclusion. */
+export class FileEvidenceError extends Error {}
 /** Node/libuv opens with shared read/write/delete on Windows. Identity, size and bytes are checked across both reads. */
 export async function readStableFile(filename: string, limit: number, signal: AbortSignal): Promise<{text: string; identity: string; birthtimeMs: number}> {
   signal.throwIfAborted();
   const resolved = await realpath(filename);
   // A redirected Documents root is canonicalized before this call. Cloud placeholders that retain their path work;
   // links redirecting a requested file outside that canonical tree are unsupported rather than followed silently.
-  if (path.resolve(resolved).toLowerCase() !== path.resolve(filename).toLowerCase()) throw new Error('Redirected file');
+  if (path.resolve(resolved).toLowerCase() !== path.resolve(filename).toLowerCase()) throw new FileEvidenceError('Redirected file');
   const file = await open(filename, 'r');
   try {
     const before = await file.stat();
-    if (!before.isFile() || before.size > limit) throw new Error('Unbounded file');
+    if (!before.isFile() || before.size > limit) throw new FileEvidenceError('Unbounded file');
     const bytes = Buffer.alloc(before.size + 1), second = Buffer.alloc(before.size + 1);
     const read = async (buffer: Buffer) => {
       let offset = 0;
@@ -74,9 +82,11 @@ export async function readStableFile(filename: string, limit: number, signal: Ab
     };
     const a = await read(bytes), b = await read(second), after = await file.stat(), current = await stat(filename);
     if (a.length !== before.size || !a.equals(b) || before.dev !== current.dev || before.ino !== current.ino || before.size !== after.size
-      || before.mtimeMs !== after.mtimeMs || before.ctimeMs !== after.ctimeMs || after.ino !== current.ino || after.size !== current.size || after.mtimeMs !== current.mtimeMs) throw new Error('Changing file');
+      || before.mtimeMs !== after.mtimeMs || before.ctimeMs !== after.ctimeMs || after.ino !== current.ino || after.size !== current.size || after.mtimeMs !== current.mtimeMs) throw new FileEvidenceError('Changing file');
     signal.throwIfAborted();
-    return {text: new TextDecoder('utf-8', {fatal: true}).decode(a), identity: `${before.dev}:${before.ino}:${before.birthtimeMs}`, birthtimeMs: before.birthtimeMs};
+    let text: string;
+    try {text = new TextDecoder('utf-8', {fatal: true}).decode(a);} catch (cause) {throw new FileEvidenceError(readError(cause).message, {cause});}
+    return {text, identity: `${before.dev}:${before.ino}:${before.birthtimeMs}`, birthtimeMs: before.birthtimeMs};
   } finally {await file.close();}
 }
 function logCreation(log: string): number {
@@ -86,13 +96,13 @@ function logCreation(log: string): number {
   if (month < 0) return NaN;
   return new Date(Number(header[3]), month, Number(header[2]), Number(header[4]), Number(header[5]), Number(header[6])).getTime();
 }
-async function boundedDirectory(directory: string, limit: number) {
+async function boundedDirectory(directory: string, limit: number, openDirectory = (directory: string) => opendir(directory)) {
   const entries = [];
-  for await (const entry of await opendir(directory)) {entries.push(entry); if (entries.length > limit) throw new Error('Directory bound');}
+  for await (const entry of await openDirectory(directory)) {entries.push(entry); if (entries.length > limit) throw new Error('Directory bound');}
   return entries;
 }
-async function profileDirectory(parent: string, profile: string): Promise<string> {
-  const entries = await boundedDirectory(parent, MAX_PROFILES);
+async function profileDirectory(parent: string, profile: string, openDirectory?: HardModeReaderOptions['profileDirectory']): Promise<string> {
+  const entries = await boundedDirectory(parent, MAX_PROFILES, openDirectory);
   if (entries.length > MAX_PROFILES) throw new Error('Profile bound');
   const matching = entries.filter(e => e.isDirectory() && e.name.toUpperCase() === profile);
   if (matching.length !== 1) throw new Error('Profile ambiguous');
@@ -104,54 +114,254 @@ export interface TimedHardModeObservation {observation: HardModeObservation; tim
 export class ProfileVerificationError extends Error {
   constructor(cause: unknown, readonly code: ProfileDiagnosticCode = 'PROFILE_PROCESS_UNPROVEN') {super(cause instanceof Error ? cause.message : 'Profile verification failed', {cause});}
 }
-interface ResolvedProfile {root: string; local: string; config: string; profile: BoundProfile; scope: string; binding: string; timing: ReadTiming}
+/** Only independent unchanged-generation guards authorize retaining an admitted proof on a timed-out reread. */
+export class UnchangedVerificationError extends ProfileVerificationError {}
+/** Required profile guards completed; unavailable optional settings cannot retain a known-changed Hard Mode pass. */
+export class ProfileSettingsUnavailableError extends ProfileVerificationError {}
+/** A same-source hint supersedes control flow; it is not a failed filesystem or identity observation. */
+export class ProfileSuperseded extends Error {}
+interface ResolvedProfile {root: string; local: string; config: string; directories?: string[]; profile: BoundProfile; scope: string; binding: string; timing: ReadTiming}
+function discoveryContainers(resolved: Pick<ResolvedProfile, 'local' | 'config' | 'directories'>): string[] {
+  const canonical = (filename: string) => path.resolve(filename).toLowerCase();
+  const required = new Set([resolved.local, path.dirname(resolved.config)].map(canonical));
+  return [...new Set([path.dirname(resolved.local), ...(resolved.directories ?? [])].map(canonical).filter(filename => !required.has(filename)))].sort();
+}
 interface ProfileScan {profile: ResolvedProfile; settings: HardModeObservation | null; settingsError?: unknown}
 interface ScanOperation {
-  key: string; source: SourceIdentity; atUtcMs: number; startedClientNs: bigint; controller: AbortController;
-  promise: Promise<ProfileScan>; resolve: (value: ProfileScan) => void; reject: (error: unknown) => void;
-  consumers: Set<object>; timer: ReturnType<typeof setTimeout>; settled: boolean;
+  key: string; source: SourceIdentity; atUtcMs: number; startedClientNs: bigint; controller: AbortController; generation: number;
+  force: boolean; cheap: boolean; preserve?: boolean; promise: Promise<ProfileScan>; resolve: (value: ProfileScan) => void; reject: (error: unknown) => void;
+  failure?: ProfileVerificationError;
+  settingsChanged?: boolean;
+  profileGuarded?: boolean;
+  consumers: Set<object>; timer: ReturnType<typeof setTimeout>; settled: boolean; drain?: Promise<void>;
 }
 const readError = (cause: unknown): Error => cause instanceof Error ? cause : new Error('Profile read failed', {cause});
-/** One physical scan, at most one pending source epoch; completed evidence is never cached for a later read. */
+/** One physical operation and one pending epoch; only independently unchanged generations reuse completed evidence. */
 export class HardModeReader {
-  private boundProfile: {process: string; generation: number; profile: string; scope: string} | undefined;
+  private boundProfile: {process: string; root: string; storage: BoundProfile['storage']; generation: number; profile: string; scope: string; directories: Map<string, string>; discovery: Map<string, string>} | undefined;
   private previous: {process: string; identity: string; text: string} | undefined;
   private running: ScanOperation | undefined;
   private queued: ScanOperation | undefined;
+  private readonly processes = new Map<string, {value?: GameProcess; failures: number; nextNs: bigint}>();
+  private starts: bigint[] = [];
+  private tail: {process: string; value: ProfileLogTail} | undefined;
+  private admitted: {key: string; scan: ProfileScan; metadata: string; profileIdentity: string; tuples: Map<string, string>; files: Map<string, string>; fullNs: bigint} | undefined;
+  private guard: {startedNs: bigint; deadlineNs: bigint} | undefined;
+  private guardTimer: ReturnType<typeof setTimeout> | undefined;
+  private guardGeneration = 0;
+  private guardSource: string | undefined;
+  private guardSelected = false;
+  private readonly invalidations = new Set<(profileChanged: boolean) => void>();
   constructor(private readonly options: HardModeReaderOptions) {}
+  requestFull(): void {if (this.running && !this.running.settled) this.running.force = true;}
+  canRetain(): boolean {return this.guardEligible() && this.admitted !== undefined && this.running?.preserve === true;}
+  canRetainProfile(): boolean {return this.guardEligible() && this.running?.generation === this.guardGeneration && this.running.profileGuarded === true;}
+  /** Subscriber clocks start before physical work. Classify their deadline from shared evidence, never elapsed age. */
+  deadline(source: SourceIdentity): ProfileVerificationError {
+    const work = this.running;
+    if (work && !work.settled && work.key === this.sourceKey(source) && work.generation === this.guardGeneration && !work.failure && this.guardEligible()) {
+      if (work.controller.signal.aborted) {
+        const reason: unknown = work.controller.signal.reason;
+        if (reason instanceof ProfileVerificationError && reason.code === 'PROFILE_DEADLINE') return reason;
+      } else if (work.profileGuarded) {
+        const ErrorType = work.preserve && !work.settingsChanged && this.admitted ? UnchangedVerificationError : ProfileSettingsUnavailableError;
+        return new ErrorType(new Error('Read deadline'), 'PROFILE_DEADLINE');
+      }
+    }
+    return new ProfileVerificationError(new Error('Read deadline'), 'PROFILE_DEADLINE');
+  }
+  private sourceKey(source: SourceIdentity): string {return JSON.stringify([source.game, source.origin, source.processId, source.windowsSessionId, source.processInstanceId, source.pluginSessionId]);}
+  /** Both evidence providers check this synchronously; event-loop delay cannot lend overdue guard eligibility. */
+  guardEligible(): boolean {
+    const guard = this.guard, now = this.nowNs();
+    if (guard && (now < guard.startedNs || now >= guard.deadlineNs)) {
+      this.options.diagnostic?.({code: 'PROFILE_DEADLINE'});
+      this.retireGuards();
+    }
+    return this.guard !== undefined;
+  }
+  selectGuardSource(key: string | undefined): void {
+    if (this.guardSelected && key === this.guardSource) return;
+    const initial = !this.guardSelected; this.guardSelected = true; this.guardSource = key;
+    if (!initial || key === undefined) this.retireGuards(true);
+  }
+  private retireGuards(retainBaseline = false): void {
+    clearTimeout(this.guardTimer); this.guardTimer = undefined; this.guard = undefined; this.guardGeneration++;
+    this.invalidate(true, retainBaseline);
+    const reason = retainBaseline ? new Error('Source guard eligibility retired') : new ProfileVerificationError(new Error('Required guard eligibility retired'), 'PROFILE_DEADLINE');
+    if (this.queued) this.cancel(this.queued, false, true, reason);
+    if (this.running) this.cancel(this.running, false, true, reason);
+  }
+  private armGuardTimer(): void {
+    clearTimeout(this.guardTimer);
+    if (!this.guard) return;
+    const generation = this.guardGeneration, remaining = this.guard.deadlineNs - this.nowNs();
+    this.guardTimer = setTimeout(() => {
+      this.guardTimer = undefined;
+      if (generation === this.guardGeneration && this.guardEligible()) this.armGuardTimer();
+    }, Math.max(0, Math.ceil(Number(remaining) / 1_000_000)));
+    this.guardTimer.unref();
+  }
+  private current(work: ScanOperation): void {
+    this.guardEligible();
+    this.generation(work);
+    work.controller.signal.throwIfAborted();
+  }
+  private generation(work: ScanOperation): void {
+    if (work.generation !== this.guardGeneration) throw new ProfileVerificationError(new Error('Retired guard generation'), 'PROFILE_DEADLINE');
+  }
+  private physicalProfile(work: ScanOperation, process: string, resolved: Pick<ResolvedProfile, 'root' | 'profile' | 'scope'>): void {
+    this.generation(work);
+    const bound = this.boundProfile, profile = resolved.profile;
+    if (bound?.process === process && bound.root === resolved.root && bound.storage === profile.storage && bound.generation === profile.generation
+      && bound.profile === profile.profile && bound.scope !== resolved.scope) throw new ProfileVerificationError(new Error('Profile directory replaced'), 'PROFILE_LOCATION_UNPROVEN');
+  }
+  private guarded(work: ScanOperation): void {
+    this.current(work);
+    const deadlineNs = work.startedClientNs + REQUIRED_GUARD_NS;
+    if (this.nowNs() >= deadlineNs) throw new ProfileVerificationError(new Error('Required guard deadline'), 'PROFILE_DEADLINE');
+    this.guard = {startedNs: work.startedClientNs, deadlineNs}; this.armGuardTimer();
+  }
+  drain(): Promise<void> {return this.running?.drain ?? Promise.resolve();}
+  onInvalidate(listener: (profileChanged: boolean) => void): () => void {this.invalidations.add(listener); return () => this.invalidations.delete(listener);}
+  private invalidate(profileChanged = true, retainBaseline = false): void {if (profileChanged && this.running) this.running.profileGuarded = false; if (!retainBaseline) this.admitted = undefined; for (const listener of this.invalidations) listener(profileChanged);}
+  private lifetime(source: SourceIdentity): string | undefined {
+    return this.options.processLifetime ? this.options.processLifetime(source)
+      : JSON.stringify([source.game, source.origin, source.processId, source.windowsSessionId, source.processInstanceId]);
+  }
+  private async process(source: SourceIdentity, signal: AbortSignal, cheap: boolean): Promise<GameProcess> {
+    const key = this.lifetime(source), now = this.nowNs();
+    if (!key) throw new Error('Process lifetime unproven');
+    let entry = this.processes.get(key);
+    if (entry?.value) return entry.value;
+    if (cheap) throw new Error('Process inspection unavailable for tail guard');
+    this.starts = this.starts.filter(start => now < start || now - start < 300_000_000_000n);
+    if (entry && now < entry.nextNs || this.starts.length >= 8 || !entry && this.processes.size >= 256) throw new Error('Process inspection deferred');
+    if (!entry) {entry = {failures: 0, nextNs: now}; this.processes.set(key, entry);}
+    this.starts.push(now);
+    try {
+      const value = await this.options.process(source, signal);
+      signal.throwIfAborted();
+      if (!value || this.lifetime(source) !== key || value.pid !== source.processId
+        || path.win32.basename(value.executable).toLowerCase() !== (source.game === 'ets2' ? 'eurotrucks2.exe' : 'amtrucks.exe')
+        || !Number.isSafeInteger(value.createdUtcMs) || value.createdUtcMs < 0
+        || value.homeDirectory === undefined && typeof value.commandLine !== 'string') throw new Error('Process unproven');
+      entry.value = {...value}; return entry.value;
+    } catch (error) {
+      const delay = [5, 15, 30, 60][Math.min(entry.failures++, 3)];
+      entry.nextNs = this.nowNs() + BigInt(delay) * 1_000_000_000n;
+      throw error;
+    }
+  }
+  private async metadata(resolved: ResolvedProfile, work: ScanOperation): Promise<{fingerprint: string; profileIdentity: string; directories: Map<string, string>; discovery: Map<string, string>; tuples: Map<string, string>}> {
+    const signal = work.controller.signal;
+    const baseline = this.admitted;
+    const tuple = (filename: string, values: string[]): string[] => {
+      this.generation(work);
+      const encoded = JSON.stringify(values);
+      if (discovery.has(path.resolve(filename).toLowerCase()) && expectedDiscovery?.has(filename) && expectedDiscovery.get(filename) !== encoded) this.invalidate();
+      else if (baseline && baseline.tuples.get(filename) !== encoded) this.changedSettings(work);
+      return values;
+    };
+    const required = new Set([resolved.local, path.dirname(resolved.config)]);
+    const bound = this.boundProfile, profile = resolved.profile;
+    const expected = bound && bound.process === this.lifetime(work.source) && bound.root === resolved.root && bound.storage === profile.storage
+      && bound.profile === profile.profile && bound.generation === profile.generation ? bound.directories : undefined;
+    const expectedDiscovery = expected ? bound!.discovery : undefined;
+    // Content changes inside the required profile directories can be atomic settings writes. Only enumeration
+    // containers identify candidate-list provenance; keep their baseline independently of settings admission.
+    const discovery = new Set(discoveryContainers(resolved));
+    const paths = [resolved.root, path.join(resolved.root, 'profiles'), path.join(resolved.root, 'steam_profiles'),
+      resolved.local, path.dirname(resolved.local), path.dirname(resolved.config), ...(resolved.directories ?? []),
+      path.join(resolved.root, 'config.cfg'), path.join(resolved.local, 'config_local.cfg'), resolved.config];
+    const results = await Promise.allSettled(paths.map(async filename => {
+      try {
+        signal.throwIfAborted();
+        const canonical = await (this.options.metadata?.realpath ?? realpath)(filename);
+        this.generation(work);
+        if (path.resolve(canonical).toLowerCase() !== path.resolve(filename).toLowerCase()) throw new Error('Redirected path');
+        signal.throwIfAborted();
+        const value = await (this.options.metadata?.stat ?? (filename => stat(filename, {bigint: true})))(filename);
+        this.generation(work);
+        if (required.has(filename) && !value.isDirectory()) throw new Error('Profile directory unproven');
+        if (required.has(filename) && expected?.has(filename) && expected.get(filename) !== JSON.stringify([filename, value.dev, value.ino, value.birthtimeNs].map(String))) throw new Error('Profile directory replaced');
+        return tuple(filename, [filename, value.dev, value.ino, value.birthtimeNs, value.size, value.mtimeNs, value.ctimeNs].map(String));
+      } catch (error) {
+        if (!required.has(filename) && (error as NodeJS.ErrnoException)?.code === 'ENOENT') return tuple(filename, [filename, 'missing']);
+        if (!(signal.aborted && error === signal.reason) && work.generation === this.guardGeneration && !work.failure) {
+          // Reject consumers immediately, while the physical aggregate still owns every launched sibling I/O.
+          work.failure = new ProfileVerificationError(error, 'PROFILE_LOCATION_UNPROVEN');
+          this.invalidate(); this.cancel(work, false, false, work.failure);
+        }
+        throw error;
+      }
+    }));
+    this.generation(work);
+    if (work.failure) throw work.failure;
+    const values = results.map(result => {if (result.status === 'rejected') throw result.reason; return result.value;});
+    // Physical profile identity excludes settings-file replacements and directory content-change hints.
+    const directories = values.filter(value => required.has(value[0])).map(value => value.slice(0, 4));
+    return {fingerprint: JSON.stringify(values), profileIdentity: JSON.stringify(directories), directories: new Map(directories.map(value => [value[0], JSON.stringify(value)])),
+      discovery: new Map(values.filter(value => discovery.has(path.resolve(value[0]).toLowerCase())).map(value => [value[0], JSON.stringify(value)])),
+      tuples: new Map(values.map(value => [value[0], JSON.stringify(value)]))};
+  }
   private nowNs(): bigint {return (this.options.nowNs ?? (() => process.hrtime.bigint()))();}
   private file(filename: string, limit: number, signal: AbortSignal) {return (this.options.file ?? readStableFile)(filename, limit, signal);}
-  private request(source: SourceIdentity, atUtcMs: number, signal: AbortSignal): Promise<ProfileScan> {
+  private changedSettings(work: ScanOperation): void {
+    this.generation(work);
+    if (!work.settingsChanged) {work.settingsChanged = true; this.invalidate(false);}
+  }
+  private async settingsFile(work: ScanOperation, filename: string, baseline: Map<string, string> | undefined) {
+    const signal = work.controller.signal;
     signal.throwIfAborted();
-    const key = JSON.stringify([source.game, source.origin, source.processId, source.windowsSessionId, source.processInstanceId, source.pluginSessionId]);
+    try {
+      const value = await this.file(filename, CONFIG_BYTES, signal);
+      this.generation(work);
+      const fingerprint = createHash('sha256').update(value.text).digest('hex');
+      if (baseline?.has(filename) && baseline.get(filename) !== fingerprint) this.changedSettings(work);
+      return {value, fingerprint};
+    } catch (error) {
+      if (!(signal.aborted && error === signal.reason) && (error instanceof FileEvidenceError || (error as NodeJS.ErrnoException)?.code === 'ENOENT') && baseline?.has(filename)) this.changedSettings(work);
+      throw error;
+    }
+  }
+  private request(source: SourceIdentity, atUtcMs: number, signal: AbortSignal, force = false, cheap = false): Promise<ProfileScan> {
+    signal.throwIfAborted();
+    this.guardEligible();
+    const key = this.sourceKey(source);
     let operation = this.running?.key === key && !this.running.settled && !this.running.controller.signal.aborted ? this.running
       : this.queued?.key === key && !this.queued.controller.signal.aborted ? this.queued : undefined;
     if (!operation) {
+      // A boundary tail guard cannot bootstrap process inspection or occupy the full consumer's scan slot.
+      // It may still join a normal operation above, whose authenticated inspection is already owned.
+      if (cheap && (this.running || this.queued || !this.processes.get(this.lifetime(source) ?? '')?.value)) throw new ProfileVerificationError(new Error('Process inspection unavailable for tail guard'));
       if (this.running) this.cancel(this.running, false, true);
       if (this.queued) this.cancel(this.queued, false, true);
       const controller = new AbortController();
       let resolve!: ScanOperation['resolve'], reject!: ScanOperation['reject'];
       const promise = new Promise<ProfileScan>((yes, no) => {resolve = yes; reject = no;});
       void promise.catch(() => undefined);
-      operation = {key, source: {...source}, atUtcMs, startedClientNs: this.nowNs(), controller, promise, resolve, reject,
-        consumers: new Set(), timer: setTimeout(() => this.cancel(operation!, true), 2000), settled: false};
+      operation = {key, source: {...source}, atUtcMs, startedClientNs: this.nowNs(), controller, generation: this.guardGeneration, promise, resolve, reject,
+        force, cheap, consumers: new Set(), timer: setTimeout(() => this.cancel(operation!, true), 2000), settled: false};
       if (this.running) this.queued = operation; else this.run(operation);
     }
     const work = operation;
+    if (force) work.force = true;
+    if (!cheap) work.cheap = false;
     return new Promise<ProfileScan>((resolve, reject) => {
       const consumer = {}; work.consumers.add(consumer);
       let finished = false;
-      const finish = (action: () => void) => {
+      const finish = (action: () => void, reason?: unknown) => {
         if (finished) return;
         finished = true; signal.removeEventListener('abort', cancel); work.controller.signal.removeEventListener('abort', cancelled);
         work.consumers.delete(consumer); action();
-        if (!work.settled && work.consumers.size === 0) this.cancel(work);
+        if (!work.settled && work.consumers.size === 0) this.cancel(work, false, false, reason);
       };
       const cancel = () => {
-        // A consumer timer may run first at the shared deadline. Preserve the physical timeout instead of masking it
-        // as ordinary cancellation; an earlier consumer cancellation still has no authority over the other proofs.
-        if (!work.settled && this.nowNs() - work.startedClientNs >= 2_000_000_000n) this.cancel(work, true);
-        else finish(() => reject(readError(signal.reason)));
+        // Subscriber deadlines carry the shared reader's classification even when their timer runs first.
+        // Other aborts keep their own cause; elapsed time does not turn source retirement or supersession into a timeout.
+        if (!work.settled && signal.reason instanceof ProfileVerificationError && signal.reason.code === 'PROFILE_DEADLINE') this.cancel(work, true, false, signal.reason);
+        else finish(() => reject(readError(signal.reason)), signal.reason);
       };
       const cancelled = () => finish(() => reject(readError(work.controller.signal.reason)));
       signal.addEventListener('abort', cancel, {once: true}); work.controller.signal.addEventListener('abort', cancelled, {once: true});
@@ -159,18 +369,24 @@ export class HardModeReader {
       work.promise.then(value => finish(() => resolve(value)), error => finish(() => reject(readError(error))));
     });
   }
-  private cancel(work: ScanOperation, timedOut = false, retired = false): void {
-    if (work.controller.signal.aborted) return;
+  private cancel(work: ScanOperation, timedOut = false, retired = false, reason?: unknown): void {
+    if (work.controller.signal.aborted) {
+      if (timedOut && !work.settled && work.controller.signal.reason instanceof ProfileSuperseded && !work.preserve) this.invalidate();
+      return;
+    }
     const code = timedOut ? 'PROFILE_DEADLINE' : retired ? 'PROFILE_EPOCH_RETIRED' : 'PROFILE_CANCELLED';
     this.options.diagnostic?.({code, durationMs: Math.min(2000, Math.max(0, Number(this.nowNs() - work.startedClientNs) / 1e6))});
-    work.controller.abort(timedOut ? new ProfileVerificationError(new Error('Read deadline'), code) : undefined);
+    const timeout = timedOut ? reason instanceof ProfileVerificationError ? reason : this.deadline(work.source) : undefined;
+    if (timedOut && !(timeout instanceof UnchangedVerificationError) && !(timeout instanceof ProfileSettingsUnavailableError)
+      || !timedOut && reason instanceof ProfileVerificationError && !work.preserve && reason !== work.failure) this.invalidate();
+    work.controller.abort(timedOut ? timeout : reason);
     if (this.queued === work) {
       this.queued = undefined; clearTimeout(work.timer); work.settled = true; work.reject(work.controller.signal.reason);
     }
   }
   private run(work: ScanOperation): void {
     this.running = work;
-    void this.scan(work).then(value => {work.settled = true; work.resolve(value);}, error => {
+    work.drain = this.scan(work).then(value => {work.settled = true; work.resolve(value);}, error => {
       work.settled = true;
       if (!work.controller.signal.aborted) this.options.diagnostic?.({code: error instanceof ProfileVerificationError ? error.code : 'PROFILE_PROCESS_UNPROVEN',
         durationMs: Math.min(2000, Math.max(0, Number(this.nowNs() - work.startedClientNs) / 1e6))});
@@ -185,17 +401,20 @@ export class HardModeReader {
     });
   }
   private async location(source: SourceIdentity, root: string, profile: BoundProfile) {
-    const local = await profileDirectory(path.join(root, profile.storage === 'local' ? 'profiles' : 'steam_profiles'), profile.profile);
+    const local = await profileDirectory(path.join(root, profile.storage === 'local' ? 'profiles' : 'steam_profiles'), profile.profile, this.options.profileDirectory);
     let config = path.join(local, 'config.cfg');
+    const directories: string[] = [];
     if (profile.storage === 'cloud') {
       if (!this.options.steamRoot) throw new Error('Cloud root unproven');
       const steam = await realpath(this.options.steamRoot), userdata = path.join(steam, 'userdata'), accounts = await boundedDirectory(userdata, 32);
+      directories.push(steam, userdata);
       if (accounts.length > 32) throw new Error('Account bound');
       const candidates: string[] = [];
       let profiles = 0;
       for (const account of accounts) {
         if (!account.isDirectory() || !/^[0-9]+$/.test(account.name)) continue;
         const parent = path.join(userdata, account.name, source.game === 'ets2' ? '227300' : '270880', 'remote', 'profiles');
+        directories.push(path.join(userdata, account.name), parent);
         let entries;
         try {entries = await boundedDirectory(parent, MAX_PROFILES);} catch (error) {if ((error as NodeJS.ErrnoException).code === 'ENOENT') continue; throw error;}
         profiles += entries.length;
@@ -211,73 +430,131 @@ export class HardModeReader {
     if (!identity.isDirectory() || !localIdentity.isDirectory()) throw new Error('Profile directory unproven');
     const scope = createHash('sha256').update(JSON.stringify([1, source.game, root.toLowerCase(), profile.storage, directory.toLowerCase(),
       identity.dev, identity.ino, identity.birthtimeMs, localIdentity.dev, localIdentity.ino, localIdentity.birthtimeMs])).digest('hex');
-    return {root, local, config, profile, scope};
+    return {root, local, config, directories, profile, scope};
   }
   private async scan(work: ScanOperation): Promise<ProfileScan> {
     const {source, atUtcMs, controller} = work, signal = controller.signal;
     let stage: ProfileDiagnosticCode = 'PROFILE_SOURCE_UNPROVEN';
+    let guardedUnchanged = false;
     try {
     signal.throwIfAborted();
     if (source.origin !== (this.options.fixtureOrigin ?? 'game')) throw new Error('Real evidence cannot qualify a fixture');
     stage = 'PROFILE_PROCESS_UNPROVEN';
-    const process = await this.options.process(source, signal), expected = source.game === 'ets2' ? 'eurotrucks2.exe' : 'amtrucks.exe';
+    const process = await this.process(source, signal, work.cheap), expected = source.game === 'ets2' ? 'eurotrucks2.exe' : 'amtrucks.exe';
+    this.generation(work);
     if (!process || process.pid !== source.processId || path.win32.basename(process.executable).toLowerCase() !== expected || !Number.isFinite(process.createdUtcMs) || process.createdUtcMs > atUtcMs) throw new Error('Process unproven');
     stage = 'PROFILE_LOCATION_UNPROVEN';
-    const override = /(?:^|\s)-homedir\s+(?:"([^"]+)"|(\S+))/i.exec(process.commandLine);
-    const root = await realpath(override ? override[1] ?? override[2] : path.join(this.options.documents, source.game === 'ets2' ? 'Euro Truck Simulator 2' : 'American Truck Simulator'));
+    const processKey = this.lifetime(source)!, bound = this.boundProfile;
+    const override = process.homeDirectory === undefined ? /(?:^|\s)-homedir\s+(?:"([^"]+)"|(\S+))/i.exec(process.commandLine ?? '') : null;
+    const root = await realpath(process.homeDirectory ?? (override ? override[1] ?? override[2] : path.join(this.options.documents, source.game === 'ets2' ? 'Euro Truck Simulator 2' : 'American Truck Simulator')));
+    this.generation(work);
+    if (bound?.process === processKey && bound.root !== root) this.invalidate();
     stage = 'PROFILE_LOG_GENERATION';
-    const log = await this.file(path.join(root, 'game.log.txt'), LOG_BYTES, signal);
+    if (this.tail?.process !== processKey) this.tail = {process: processKey, value: new ProfileLogTail()};
+    const log = this.options.file ? await this.file(path.join(root, 'game.log.txt'), LOG_BYTES, signal) : await this.tail.value.read(path.join(root, 'game.log.txt'), signal);
+    this.generation(work);
     if (!Number.isFinite(logCreation(log.text)) || Math.abs(logCreation(log.text) - process.createdUtcMs) > 5000) throw new Error('Stale log generation');
-    const processKey = `${source.processId}:${source.windowsSessionId}:${process.createdUtcMs}:${source.processInstanceId}:${source.pluginSessionId}`;
     stage = 'PROFILE_LOG_CHANGED';
-    const previous = this.previous, bound = this.boundProfile;
-    if (previous?.process === processKey && (previous.identity !== log.identity || !log.text.startsWith(previous.text))) throw new Error('Log replaced or truncated');
+    const previous = this.previous;
+    if (this.options.file && previous?.process === processKey && (previous.identity !== log.identity || !log.text.startsWith(previous.text))) throw new Error('Log replaced or truncated');
     stage = 'PROFILE_SELECTION_UNPROVEN';
-    const profile = profileFromLog(log.text);
+    const profile = 'profile' in log ? log.profile : profileFromLog(log.text);
     if (!profile) throw new Error('Current profile unproven');
+    if (bound?.process === processKey && (bound.profile !== profile.profile || bound.storage !== profile.storage || bound.generation !== profile.generation)) this.invalidate();
     stage = 'PROFILE_LOCATION_UNPROVEN';
-    const resolved = await this.location(source, root, profile);
-    if (bound?.process === processKey && bound.generation === profile.generation && bound.profile === profile.profile && bound.scope !== resolved.scope) throw new Error('Profile directory replaced');
-    let settings: HardModeObservation | null = null, settingsError: unknown;
+    const old = this.admitted;
+    const sameProfile = old?.key === work.key && JSON.stringify(old.scan.profile.profile) === JSON.stringify(profile) && old.scan.profile.root === root;
+    let resolved = sameProfile ? old.scan.profile : await this.location(source, root, profile);
+    this.physicalProfile(work, processKey, resolved);
+    let metadata = await this.metadata({...resolved, binding: '', timing: {startedClientNs: work.startedClientNs, completedClientNs: this.nowNs()}}, work);
+    const sameIdentity = sameProfile && old.profileIdentity === metadata.profileIdentity;
+    const unchanged = sameIdentity && old.metadata === metadata.fingerprint;
+    guardedUnchanged = unchanged === true;
+    work.preserve = guardedUnchanged;
+    if (old && !unchanged) this.invalidate(!sameIdentity);
+    // Required guards renew before optional byte verification. A hung settings read cannot renew this bound again.
+    this.guarded(work);
+    const full = work.force || !unchanged || !work.cheap && (this.nowNs() < old.fullNs || this.nowNs() - old.fullNs >= 60_000_000_000n);
+    if (!full) return {...structuredClone(old.scan), profile: {...structuredClone(old.scan.profile), timing: {startedClientNs: work.startedClientNs, completedClientNs: this.nowNs()}}};
+    if (unchanged) old.fullNs = work.startedClientNs;
+    // Full rediscovery also checks newly created Cloud candidates and directory replacement.
+    resolved = await this.location(source, root, profile);
+    this.physicalProfile(work, processKey, resolved);
+    metadata = await this.metadata({...resolved, binding: '', timing: {startedClientNs: work.startedClientNs, completedClientNs: this.nowNs()}}, work);
+    if (old && (old.metadata !== metadata.fingerprint || old.profileIdentity !== metadata.profileIdentity || old.scan.profile.scope !== resolved.scope || old.scan.profile.config !== resolved.config)) {
+      this.invalidate(!sameProfile || old.profileIdentity !== metadata.profileIdentity || old.scan.profile.scope !== resolved.scope || old.scan.profile.config !== resolved.config);
+    }
+    work.profileGuarded = true;
+    let settings: HardModeObservation | null = null, settingsError: unknown;let settingsFiles = new Map<string, string>();
     try {
-      const files = await Promise.allSettled([this.file(path.join(root, 'config.cfg'), CONFIG_BYTES, signal), this.file(path.join(resolved.local, 'config_local.cfg'), CONFIG_BYTES, signal), this.file(resolved.config, CONFIG_BYTES, signal)]);
-      const [global, localSettings, values] = files.map(file => {if (file.status === 'rejected') throw file.reason; return parseHardModeConfig(file.value.text);});
+      const paths = [path.join(root, 'config.cfg'), path.join(resolved.local, 'config_local.cfg'), resolved.config];
+      const files = await Promise.allSettled(paths.map(filename => this.settingsFile(work, filename, old?.files)));
+      const verified = files.map(file => {if (file.status === 'rejected') throw file.reason; return file.value;});
+      const [global, localSettings, values] = verified.map(file => parseHardModeConfig(file.value.text));
       settings = {assessment: evaluateHardMode({...values, g_traffic: global.g_traffic, g_brake_intensity: localSettings.g_brake_intensity}, atUtcMs, this.options.fixtureOrigin ? 'fixture' : profile.storage),
         binding: '', pluginSessionId: source.pluginSessionId, sourceMonotonicNs: null};
+      settingsFiles = new Map(verified.map((file, index) => [paths[index], file.fingerprint]));
     } catch (error) {settingsError = error;}
+    this.generation(work);
     if (settingsError) this.options.diagnostic?.({code: 'PROFILE_SETTINGS_UNAVAILABLE'});
     stage = 'PROFILE_LOG_CHANGED';
-    const again = await this.file(path.join(root, 'game.log.txt'), LOG_BYTES, signal), latest = profileFromLog(again.text);
-    if (again.identity !== log.identity || !again.text.startsWith(log.text) || JSON.stringify(latest) !== JSON.stringify(profile)) throw new Error('Profile changed during read');
+    const again = this.options.file ? await this.file(path.join(root, 'game.log.txt'), LOG_BYTES, signal) : await this.tail.value.read(path.join(root, 'game.log.txt'), signal);
+    this.generation(work);
+    const latest = 'profile' in again ? again.profile : profileFromLog(again.text);
+    if (again.identity !== log.identity || this.options.file && !again.text.startsWith(log.text) || JSON.stringify(latest) !== JSON.stringify(profile)) throw new Error('Profile changed during read');
     stage = 'PROFILE_LOCATION_UNPROVEN';
     const checked = await this.location(source, root, profile);
+    this.generation(work);
     if (checked.scope !== resolved.scope || checked.config !== resolved.config) throw new Error('Profile directory changed during read');
+    if (JSON.stringify(discoveryContainers(checked)) !== JSON.stringify(discoveryContainers(resolved))) throw new Error('Profile discovery containers changed during read');
     stage = 'PROFILE_PROCESS_CHANGED';
-    const current = await this.options.process(source, signal);
-    if (!current || current.pid !== process.pid || current.createdUtcMs !== process.createdUtcMs || current.executable !== process.executable || current.commandLine !== process.commandLine) throw new Error('Process changed');
-    signal.throwIfAborted();
+    if (this.lifetime(source) !== processKey) throw new Error('Process changed');
+    const afterMetadata = await this.metadata({...resolved, binding: '', timing: {startedClientNs: work.startedClientNs, completedClientNs: this.nowNs()}}, work);
+    if (afterMetadata.profileIdentity !== metadata.profileIdentity) throw new Error('Profile directory changed during read');
+    if (JSON.stringify([...afterMetadata.discovery]) !== JSON.stringify([...metadata.discovery])) throw new Error('Profile candidates changed during read');
+    if (afterMetadata.fingerprint !== metadata.fingerprint) {
+      // The required profile identity was independently rechecked; changing optional settings cannot qualify bytes.
+      this.changedSettings(work);
+      if (!settingsError) this.options.diagnostic?.({code: 'PROFILE_SETTINGS_UNAVAILABLE'});
+      settings = null; settingsError = new FileEvidenceError('Settings changed during read'); settingsFiles = new Map(); metadata = afterMetadata;
+    }
+    this.current(work);
     stage = 'PROFILE_DEADLINE';
     const timing = {startedClientNs: work.startedClientNs, completedClientNs: this.nowNs()};
     if (timing.completedClientNs - timing.startedClientNs >= 2_000_000_000n) throw new Error('Read deadline');
     const binding = createHash('sha256').update(processKey + ':' + log.identity + ':' + JSON.stringify(profile) + ':' + resolved.scope).digest('hex');
     // Commit both baselines only after this ordered operation has passed every shared verification.
     this.previous = {process: processKey, identity: again.identity, text: again.text};
-    this.boundProfile = {process: processKey, generation: profile.generation, profile: profile.profile, scope: resolved.scope};
+    this.boundProfile = {process: processKey, root, storage: profile.storage, generation: profile.generation, profile: profile.profile, scope: resolved.scope, directories: metadata.directories, discovery: metadata.discovery};
     if (settings) settings.binding = binding;
     this.options.diagnostic?.({code: 'PROFILE_VERIFIED', durationMs: Number(timing.completedClientNs - timing.startedClientNs) / 1e6});
-    return {profile: {...resolved, binding, timing}, settings, settingsError};
-    } catch (cause) {throw cause instanceof ProfileVerificationError ? cause : new ProfileVerificationError(cause, stage);}
+    const result = {profile: {...resolved, binding, timing}, settings, settingsError};
+    if (settingsError && unchanged && this.admitted === old && old.scan.settings) {
+      // Independent tail, process and metadata guards above established the same generation.
+      return {...structuredClone(old.scan), profile: {...result.profile}};
+    }
+    this.admitted = {key: work.key, scan: structuredClone(result), metadata: metadata.fingerprint, profileIdentity: metadata.profileIdentity, tuples: metadata.tuples, files: settingsFiles, fullNs: work.startedClientNs};
+    return result;
+    } catch (cause) {
+      if (work.generation !== this.guardGeneration) throw cause;
+      if (work.failure) throw work.failure;
+      if ((cause instanceof ProfileSettingsUnavailableError || cause instanceof UnchangedVerificationError) && signal.aborted && cause === signal.reason) throw cause;
+      if (cause instanceof ProfileSuperseded && signal.aborted && cause === signal.reason) throw cause;
+      if (guardedUnchanged && this.admitted && stage === 'PROFILE_DEADLINE') throw new UnchangedVerificationError(cause, stage);
+      if (!guardedUnchanged || !signal.aborted || cause !== signal.reason) this.invalidate();
+      throw cause instanceof ProfileVerificationError ? cause : new ProfileVerificationError(cause, stage);
+    }
   }
-  async resolveProfile(source: SourceIdentity, atUtcMs: number, signal: AbortSignal): Promise<ResolvedProfile> {
-    return structuredClone((await this.request(source, atUtcMs, signal)).profile);
+  async resolveProfile(source: SourceIdentity, atUtcMs: number, signal: AbortSignal, cheap = false): Promise<ResolvedProfile> {
+    return structuredClone((await this.request(source, atUtcMs, signal, false, cheap)).profile);
   }
-  async readTimed(source: SourceIdentity, sourceMonotonicNs: string, atUtcMs: number, signal: AbortSignal, verified?: (binding: string) => void): Promise<TimedHardModeObservation> {
-    const result = await this.request(source, atUtcMs, signal);
+  async readTimed(source: SourceIdentity, sourceMonotonicNs: string, atUtcMs: number, signal: AbortSignal, verified?: (binding: string) => void, force = false): Promise<TimedHardModeObservation> {
+    const result = await this.request(source, atUtcMs, signal, force);
     verified?.(result.profile.binding);
     if (!result.settings) throw result.settingsError;
     return {observation: {...structuredClone(result.settings), sourceMonotonicNs}, timing: {...result.profile.timing}};
   }
-  async read(source: SourceIdentity, sourceMonotonicNs: string, atUtcMs: number, signal: AbortSignal): Promise<HardModeObservation> {
-    return (await this.readTimed(source, sourceMonotonicNs, atUtcMs, signal)).observation;
+  async read(source: SourceIdentity, sourceMonotonicNs: string, atUtcMs: number, signal: AbortSignal, force = false): Promise<HardModeObservation> {
+    return (await this.readTimed(source, sourceMonotonicNs, atUtcMs, signal, undefined, force)).observation;
   }
 }

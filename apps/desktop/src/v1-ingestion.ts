@@ -99,6 +99,8 @@ function initialState(selection: SourceSelection, durable: DurableStatus): V1Sou
 
 /** One v1 source at a time. Node pipe I/O is confined to explicitly selected synthetic fixtures. */
 export class V1Ingestion {
+  /** Private service callback, before durable intake freezes profile eligibility. */
+  onProfileBoundary?: () => void;
   /** One client instance and one client clock per service lifetime (§4, §11). */
   readonly clientInstanceId = randomUUID();
   readonly clientClockId = randomUUID();
@@ -341,6 +343,7 @@ export class V1Ingestion {
               return;
             }
             case 'checkpoint':
+              this.onProfileBoundary?.();
               if (!durable) healthy();
               clearTimeout(this.handshake); this.handshake = undefined;
               // R5: the checkpoint starts the connection's cursor and is the recorder's first reading, in FIFO order. H13:
@@ -352,6 +355,8 @@ export class V1Ingestion {
               return;
             case 'snapshot': observe(message); durable?.snapshot(message, this.utcNow()); return;
             case 'event': case 'gap':
+              if (message.kind === 'event' && ['timers.restart', 'gameTime.regression', 'simulation.paused', 'simulation.started',
+                'job.configured', 'job.cleared', 'truck.configured', 'truck.cleared'].includes(message.data.record.type)) this.onProfileBoundary?.();
               // The consumer accepts coverage only on a durable connection; receipt is never an ACK.
               if (!durable || !applied.coverage) throw new Error('Coverage without a durable connection');
               // R8: the receipt label is taken when the frame is decoded, never when its commit runs.

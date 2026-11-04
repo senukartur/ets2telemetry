@@ -10,7 +10,7 @@ export function hardModeFixtureOptions(env: Readonly<Record<string, string | und
   const root = path.join(env.LOCALAPPDATA, CHANNEL.dataRootName, 'synthetic', 'hard-mode-fixture');
   return {documents: path.join(root, 'Documents'), steamRoot: path.join(root, 'Steam'), fixtureOrigin: target.purpose,
     process: source => Promise.resolve({pid: source.processId, createdUtcMs: new Date(2026, 9, 20, 12, 0, 0).getTime(),
-      executable: source.game === 'ets2' ? 'C:\\Synthetic\\eurotrucks2.exe' : 'C:\\Synthetic\\amtrucks.exe', commandLine: 'synthetic fixture'})};
+      executable: source.game === 'ets2' ? 'C:\\Synthetic\\eurotrucks2.exe' : 'C:\\Synthetic\\amtrucks.exe', homeDirectory: null})};
 }
 export function hardModeFixtureReader(env: Readonly<Record<string, string | undefined>>): HardModeReader | null {
   const options = hardModeFixtureOptions(env);

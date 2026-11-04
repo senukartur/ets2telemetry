@@ -26,21 +26,21 @@ function monitorFixture() {
   monitor.select({source, monotonicNs: '100', clockId: 'clock'}); monitor.start();
   const read = vi.fn(() => Promise.resolve({...monitor.status(), trip}));
   // Main's trusted request posts refresh and returns current status; it does not await the monitor's file/bind work.
-  const refresh = vi.fn(() => {void monitor.refresh(); return Promise.resolve(monitor.status());});
+  const refresh = vi.fn(() => {void monitor.refresh(true); return Promise.resolve(monitor.status());});
   return {monitor, scans, publications, read, refresh, open: () => {trip = advanceHardMode(null, monitor.status().assessment);},
     status: () => ({...monitor.status(), trip}), close: () => {trip = null; monitor.close();}};
 }
 
-it('reproduces passive polling loss when the periodic tick is coalesced behind post-read binding', async () => {
+it('retains unchanged proof without passive polling loss while the periodic bind is pending', async () => {
   const f = monitorFixture();
   try {
     await vi.advanceTimersByTimeAsync(1100); f.open();
     expect(f.status().trip?.firstLoss).toBeNull(); expect(f.scans).toEqual([0]);
     await vi.advanceTimersByTimeAsync(2000);
-    expect(f.scans).toEqual([0, 2000]);
-    // This direct reducer port uses unknownHardMode's default source-unproven reason, without the storage adapter.
-    expect(f.status().trip?.firstLoss).toMatchObject({atUtcMs: 3100, reason: 'source-unproven'});
-    expect(f.publications.slice(-2).map(value => value.assessment.state)).toEqual(['unknown', 'pass']);
+    expect(f.scans).toEqual([0]);
+    expect(f.status().trip?.firstLoss).toBeNull();
+    await vi.advanceTimersByTimeAsync(3000);expect(f.scans).toEqual([0,5000]);
+    expect(f.status().trip?.firstLoss).toBeNull();expect(f.status().assessment.state).toBe('pass');
   } finally {f.close();}
 });
 
