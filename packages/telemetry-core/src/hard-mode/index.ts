@@ -6,9 +6,9 @@ export const HARD_MODE_RULES = [
   {id: 'police', label: 'Police offences and fines', keys: ['g_police'], required: '= 1', limit: 1, op: 'eq'},
   {id: 'fatigue', label: 'Driver fatigue', keys: ['g_fatigue'], required: '= 1', limit: 1, op: 'eq'},
   {id: 'limiter', label: 'Speed limiter', keys: ['g_use_speed_limiter'], required: '= 1', limit: 1, op: 'eq'},
-  {id: 'truck', label: 'Truck stability', keys: ['g_truck_stability'], required: '≤ 0.5', limit: 0.5, op: 'max'},
-  {id: 'trailer', label: 'Trailer stability', keys: ['g_trailer_stability'], required: '≤ 0.5', limit: 0.5, op: 'max'},
-  {id: 'parking', label: 'Configured skilled parking', keys: ['g_simple_parking_doubles', 'g_parking_difficulty'], required: '= 0 and = 2; manual delivery required', limit: 0, op: 'parking'},
+  {id: 'truck', label: 'Truck stability', keys: ['g_truck_stability'], required: '≤ 0.25', limit: 0.25, op: 'max'},
+  {id: 'trailer', label: 'Trailer stability', keys: ['g_trailer_stability'], required: '≤ 0.25', limit: 0.25, op: 'max'},
+  {id: 'parking', label: 'Configured Normal parking', keys: ['g_simple_parking_doubles', 'g_parking_difficulty'], required: '= 0 or 1 and = 2', limit: 0, op: 'parking'},
   {id: 'rain', label: 'Rain probability', keys: ['g_bad_weather_factor'], required: '≥ 0.12', limit: 0.12, op: 'min'},
   {id: 'events', label: 'Random road events', keys: ['g_road_events'], required: '≥ 0.30', limit: 0.30, op: 'min'},
   {id: 'braking', label: 'Braking intensity', keys: ['g_brake_intensity'], required: '≤ 0.75', limit: 0.75, op: 'max'},
@@ -39,7 +39,7 @@ export function evaluateHardMode(settings: ParsedSettings, observedUtcMs: number
     const fields = rule.keys.map(k => settings[k] ?? {value: null, reason: 'missing' as const}), values = fields.map(f => f.value);
     const invalid = fields.find(f => f.reason !== 'compliant');
     const value = values[0]!;
-    const pass = !invalid && (rule.op === 'eq' ? value === rule.limit : rule.op === 'parking' ? value === 0 && values[1] === 2
+    const pass = !invalid && (rule.op === 'eq' ? value === rule.limit : rule.op === 'parking' ? (value === 0 || value === 1) && values[1] === 2
       : rule.op === 'max' ? value <= rule.limit + HARD_MODE_TOLERANCE : value >= rule.limit - HARD_MODE_TOLERANCE);
     return {id: rule.id, state: invalid ? 'unknown' as const : pass ? 'pass' as const : 'fail' as const, values,
       reason: invalid?.reason ?? (pass ? 'compliant' as const : 'outside-limit' as const)};

@@ -5,6 +5,8 @@
 import {describe, expect, it} from 'vitest';
 import {copyTripsQuery, journalRequest, parseJournalQuery, parseJournalReply, type JournalQuery} from '../../apps/desktop/src/journal-contract';
 import {changed, DETAIL, EVENT, EVENT_PAGE, INTERVAL, INTERVAL_PAGE, LIST_ITEM, numbered, SAMPLE, SAMPLE_PAGE, TRIP, TRIP_PAGE} from '../shared/journal-replies';
+import {advanceHardMode, evaluateHardMode, parseHardModeConfig} from '../../packages/telemetry-core/src/hard-mode';
+import {HARD_MODE_CONFIG} from '../shared/hard-mode';
 
 const OTHER_TRIP = '7a000000-0000-4000-8000-000000000002';
 const MAX_ROW = '9223372036854775807', MAX_EVENT = '18446744073709551614';
@@ -134,6 +136,20 @@ describe('the export header read (ET-016 PR-5)', () => {
 });
 
 describe('main accepts a service reply only when it answers the request exactly (J10, J11)', () => {
+  it('accepts qualified delivered trips with null compatibility evidence, while retaining outcome and loss checks', () => {
+    const details = advanceHardMode(null, evaluateHardMode(parseHardModeConfig(HARD_MODE_CONFIG), 1000, 'fixture'));
+    const item = {...LIST_ITEM, isHardMode: true, hardModeDetails: details, outcome: 'delivered', closeReason: 'outcome', endedUtcMs: LIST_ITEM.startedUtcMs + 1000};
+    const reply = {ok: true, value: {...TRIP_PAGE, trips: [item]}};
+    expect(details.manualDelivery).toBeNull(); expect(parseJournalReply(TRIPS, reply)).toEqual(reply);
+    for (const outcome of ['open', 'cancelled']) {
+      const other = {...item, outcome, ...(outcome === 'open' ? {closeReason: null, endedUtcMs: null} : {})};
+      expect(parseJournalReply(TRIPS, {...reply, value: {...reply.value, trips: [{...other, isHardMode: false}]}})).toBeDefined();
+      expect(parseJournalReply(TRIPS, {...reply, value: {...reply.value, trips: [other]}})).toBeUndefined();
+    }
+    const firstLoss = {atUtcMs: 1000, reason: 'parking-unproven', rule: null, values: null};
+    expect(parseJournalReply(TRIPS, {...reply, value: {...reply.value, trips: [{...item, hardModeDetails: {...details, firstLoss}}]}})).toBeUndefined();
+    expect(parseJournalReply(TRIPS, {...reply, value: {...reply.value, trips: [{...item, hardModeDetails: null}]}})).toBeUndefined();
+  });
   it.each<[string, JournalQuery, unknown]>([
     ['a trip page', TRIPS, TRIP_PAGE],
     ['a filtered trip page', {kind: 'trips', query: {game: 'ets2', outcome: 'open', completeness: 'partial', cursor: '9'}}, TRIP_PAGE],

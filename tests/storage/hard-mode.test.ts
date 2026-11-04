@@ -1,6 +1,7 @@
 // Real storage worker/temp SQLite checks. No real game directories or application history are opened.
 import path from 'node:path';
 import {Worker} from 'node:worker_threads';
+import Database from 'better-sqlite3';
 import {afterEach, beforeEach, describe, expect, it} from 'vitest';
 import {StorageClient, workerHandle} from '../../packages/storage/src/client';
 import {TripRecorderSink} from '../../apps/desktop/src/trip-recorder';
@@ -8,6 +9,7 @@ import {evaluateHardMode, parseHardModeConfig, unknownHardMode} from '../../pack
 import type {HardModeObservation} from '../../packages/contracts/src/hard-mode';
 import type {EventRecord} from '../../packages/contracts/src/protocol-v1';
 import {TripExportSerializer, tripExportHeader} from '../../apps/desktop/src/journal-export';
+import {hardModeView} from '../../apps/desktop/src/hard-mode/view';
 import {tripExportProblems} from '../shared/trip-export-validator';
 import {HARD_MODE_CONFIG} from '../shared/hard-mode';
 import {ETS2_A, Script, r} from '../shared/trip-messages';
@@ -37,16 +39,68 @@ async function setup() {
   return {script, recorder, send, trip: trips[0].tripUuid, set: (v: HardModeObservation) => {current = v;}, reads: () => reads};
 }
 describe('ET-026 worker classification (REG-001/003/005/006/007/014)', () => {
-  it('qualifies a compliant manual delivery, reconciles SQL and exports typed v4', async () => {
-    const f = await setup(); await f.send(manual());
-    const trip = ok(await client.getTrip(f.trip)); expect(trip).toMatchObject({outcome: 'delivered', isHardMode: true, hardModeDetails: {manualDelivery: true, firstLoss: null}});
+  it.each(['manual', 'automatic', 'unavailable'] as const)('qualifies compliant settings with %s parking, reconciles SQL and exports typed v4', async kind => {
+    const f = await setup(), d = manual(); if (d.type !== 'job.delivered') throw new Error('fixture');
+    await f.send({...d, autoParkUsed: kind === 'unavailable' ? {available: false, reason: 'not-supported'} : {available: true, value: kind === 'automatic'}});
+    const trip = ok(await client.getTrip(f.trip)); expect(trip).toMatchObject({outcome: 'delivered', isHardMode: true, hardModeDetails: {manualDelivery: null, firstLoss: null}});
     const detail = ok(await client.journalTrip(f.trip)); expect(detail.trip.isHardMode).toBe(true);
+    expect(detail.outcomeDetails?.record).toMatchObject({autoParkUsed: kind === 'unavailable' ? {available: false, reason: 'not-supported'} : {available: true, value: kind === 'automatic'}});
     const page = ok(await client.journalTrips()); expect(page.trips[0].isHardMode).toBe(true);
     const header = tripExportHeader({uuid: '30000000-0000-4000-8000-000000000001', purpose: 'synthetic', schemaVersion: 4}, 'test', Date.now());
     const serializer = new TripExportSerializer(detail, header), text = serializer.begin() + serializer.rows('sources', ok(await client.journalIntervals(f.trip, {limit: 500, cursor: detail.exportBounds.snapshot!.sources})).sources!) + serializer.rows('intervals', ok(await client.journalIntervals(f.trip, {limit: 500, cursor: detail.exportBounds.snapshot!.intervals})).intervals) + serializer.rows('events', ok(await client.journalEvents(f.trip, {limit: 500, cursor: detail.exportBounds.snapshot!.events})).events) + serializer.end();
-    const exported = JSON.parse(text) as {formatVersion: number; trip: {is_hard_mode: boolean}}; expect(exported.formatVersion).toBe(4); expect(exported.trip.is_hard_mode).toBe(true); expect(tripExportProblems(exported)).toEqual([]);
+    const exported = JSON.parse(text) as {formatVersion: number; trip: {is_hard_mode: boolean; hard_mode_details: {manualDelivery: null}}}; expect(exported.formatVersion).toBe(4); expect(exported.trip.is_hard_mode).toBe(true); expect(exported.trip.hard_mode_details.manualDelivery).toBeNull(); expect(tripExportProblems(exported)).toEqual([]);
     expect(await client.close()).toEqual({clean: true});
-    readOnly(ws.database, db => expect(db.prepare("SELECT outcome, is_hard_mode, json_extract(hard_mode_details, '$.manualDelivery') AS manual FROM trips").get()).toEqual({outcome: 'delivered', is_hard_mode: 1, manual: 1}));
+    readOnly(ws.database, db => expect(db.prepare("SELECT outcome, is_hard_mode, json_extract(hard_mode_details, '$.manualDelivery') AS manual FROM trips").get()).toEqual({outcome: 'delivered', is_hard_mode: 1, manual: null}));
+  });
+  it.each(['truck', 'trailer'] as const)('keeps the original raw %s stability loss through restoration and export', async id => {
+    const f = await setup(), raw = id === 'truck' ? 0.255 : 0.26;
+    const failed = evidence(HARD_MODE_CONFIG.replace(`g_${id}_stability "0.25"`, `g_${id}_stability "${raw}"`));
+    ok(await client.observeHardMode('ets2', failed, true));
+    ok(await client.observeHardMode('ets2', evidence(), true)); await f.send(manual());
+    const trip = ok(await client.getTrip(f.trip))!;
+    expect(trip).toMatchObject({isHardMode: false, hardModeDetails: {firstLoss: {rule: id, values: [raw]}, manualDelivery: null}});
+    const detail = ok(await client.journalTrip(f.trip));
+    const serialized = new TripExportSerializer(detail, tripExportHeader({uuid: '30000000-0000-4000-8000-000000000001', purpose: 'synthetic', schemaVersion: 4}, 'test', Date.now())).begin();
+    expect(serialized).toContain(`"values":[${raw}]`);
+    expect(await client.close()).toEqual({clean: true});
+    readOnly(ws.database, db => expect(db.prepare("SELECT json_extract(hard_mode_details, '$.firstLoss.values[0]') AS raw FROM trips").get()).toEqual({raw}));
+  });
+  it('keeps a cancelled trip unqualified despite continuous passing settings', async () => {
+    const f = await setup(); await f.send(r.cancelled());
+    expect(ok(await client.getTrip(f.trip))).toMatchObject({outcome: 'cancelled', isHardMode: false, hardModeDetails: {firstLoss: null, manualDelivery: null}});
+  });
+  it.each([false, true])('preserves saved qualification and legacy parking evidence across reopen (qualified=%s)', async qualified => {
+    const f = await setup(); await f.send(manual());
+    const saved = structuredClone(ok(await client.getTrip(f.trip))!.hardModeDetails!);
+    for (const assessment of [saved.opening, saved.latest]) {
+      for (const rule of assessment.rules) if (rule.id === 'truck' || rule.id === 'trailer') rule.values = [0.5];
+      assessment.rules[7].values = [0, 2];
+    }
+    saved.manualDelivery = qualified;
+    saved.firstLoss = qualified ? null : {atUtcMs: 1000, reason: 'parking-unproven', rule: null, values: null};
+    expect(await client.close()).toEqual({clean: true}); await worker.terminate();
+    // Emulate earlier saved audits only in this test's temporary database; frozen historical fixtures stay untouched.
+    const db = new Database(ws.database), text = JSON.stringify(saved);
+    try {
+      db.prepare('UPDATE trips SET is_hard_mode = ?, hard_mode_details = ?').run(qualified ? 1 : 0, text);
+      db.prepare('UPDATE logical_trips SET hard_mode_lost = ?, first_loss_json = ?').run(qualified ? 0 : 1, saved.firstLoss === null ? null : JSON.stringify(saved.firstLoss));
+      db.prepare("UPDATE logical_projection_states SET row_json = json_set(row_json, '$.is_hard_mode', json(?), '$.hard_mode_details', ?) WHERE id = (SELECT state_ref FROM logical_revisions ORDER BY id DESC LIMIT 1)")
+        .run(JSON.stringify({$integer: qualified ? '1' : '0'}), text);
+    } finally {db.close();}
+    worker = new Worker(path.join(process.env.ETS2TELEMETRY_STORAGE_TEST_BUNDLES!, 'storage-worker.cjs'), {workerData: {kind: 'storage'}});
+    client = new StorageClient(workerHandle(worker), {closeGraceMs: TEST_CLOSE_GRACE_MS});
+    ok(await client.open({path: ws.database, backupsDirectory: ws.backups, appVersion: 'test-et026', purpose: 'synthetic'}));
+    ok(await client.observeHardMode('ets2', evidence(), true));
+    const trip = ok(await client.getTrip(f.trip))!;
+    expect(trip).toMatchObject({isHardMode: qualified, hardModeDetails: saved});
+    expect(ok(await client.journalTrips()).trips[0].isHardMode).toBe(qualified);
+    const audit = ok(await client.journalTrip(f.trip)).trip.hardModeDetails!;
+    expect(audit).toEqual(saved);
+    const before = structuredClone(audit);
+    expect(hardModeView({assessment: audit.latest, trip: audit}, 2000).rows[5]).toMatchObject({state: 'pass', detected: '100% (0.5)'});
+    expect(audit).toEqual(before);
+    expect(await client.close()).toEqual({clean: true});
+    readOnly(ws.database, sql => expect(sql.prepare('SELECT is_hard_mode, hard_mode_details FROM trips').get()).toEqual({is_hard_mode: qualified ? 1 : 0, hard_mode_details: text}));
   });
   it.each(['failed', 'unknown', 'source-changed'] as const)('irreversibly loses %s evidence and preserves first loss through later compliant observations', async kind => {
     const f = await setup();
@@ -79,11 +133,6 @@ describe('ET-026 worker classification (REG-001/003/005/006/007/014)', () => {
     const text = serializer.begin() + serializer.rows('sources', ok(await client.journalIntervals(f.trip, {limit: 500, cursor: detail.exportBounds.snapshot!.sources})).sources!) + serializer.rows('intervals', ok(await client.journalIntervals(f.trip, {limit: 500, cursor: detail.exportBounds.snapshot!.intervals})).intervals) + serializer.rows('events', ok(await client.journalEvents(f.trip, {limit: 500, cursor: detail.exportBounds.snapshot!.events})).events) + serializer.end();
     const exported = JSON.parse(text) as {trip: {hard_mode_details: {latest: unknown; firstLoss: unknown}}};
     expect(exported.trip.hard_mode_details).toMatchObject({latest: expected, firstLoss: first}); expect(tripExportProblems(exported)).toEqual([]);
-  });
-  it.each(['automatic', 'unavailable'] as const)('requires explicit manual delivery rather than %s autoparking evidence', async kind => {
-    const f = await setup(), d = manual(); if (d.type !== 'job.delivered') throw new Error('fixture');
-    await f.send({...d, autoParkUsed: kind === 'automatic' ? {available: true, value: true} : {available: false, reason: 'not-supported'}});
-    expect(ok(await client.getTrip(f.trip))).toMatchObject({isHardMode: false, hardModeDetails: {firstLoss: {reason: 'parking-unproven'}}});
   });
   it('requires an explicit validated freshness verdict and never discards negative evidence with a false verdict', async () => {
     const f = await setup(), message = f.script.event(r.fined());

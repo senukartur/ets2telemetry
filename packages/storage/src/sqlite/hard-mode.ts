@@ -1,7 +1,7 @@
 import type Database from 'better-sqlite3';
 import {isHardModeDetails, isHardModeObservation, type HardModeDetails, type HardModeObservation, type HardModeReason} from '../../../contracts/src/hard-mode';
 import type {ServerMessage} from '../../../contracts/src/protocol-v1';
-import {advanceHardMode, hardModeLoss, unknownHardMode} from '../../../telemetry-core/src/hard-mode';
+import {advanceHardMode, unknownHardMode} from '../../../telemetry-core/src/hard-mode';
 import {fail} from '../errors';
 export function readHardModeDetails(value: unknown): HardModeDetails | null {
   if (value === null || value === undefined) return null;
@@ -57,11 +57,8 @@ export function applyEventHardMode(db: Database.Database, message: Extract<Serve
       write(db, row.id, details);
     } else if (previous) {
       const loss: HardModeReason | undefined = assessment.state === 'fail' ? undefined : previous.binding !== observation?.binding ? 'source-changed' : fresh ? undefined : 'interrupted';
-      let details = advanceHardMode(previous, assessment, loss, 'frozen');
-      const delivered = message.data.record;
-      details.manualDelivery = delivered.type === 'job.delivered' && delivered.autoParkUsed.available ? delivered.autoParkUsed.value === false : null;
-      if (row.outcome === 'delivered' && details.manualDelivery !== true) details = hardModeLoss(details, now, 'parking-unproven');
-      write(db, row.id, details, row.outcome === 'delivered' && details.firstLoss === null && details.manualDelivery === true);
+      const details = advanceHardMode(previous, assessment, loss, 'frozen');
+      write(db, row.id, details, row.outcome === 'delivered' && details.firstLoss === null);
     }
   }
 }

@@ -12,7 +12,7 @@ beforeEach(() => {vi.useFakeTimers(); vi.setSystemTime(0); vi.spyOn(performance,
 afterEach(() => {vi.clearAllTimers(); vi.restoreAllMocks(); vi.useRealTimers();});
 const failing = (at = Date.now()) => evaluateHardMode(parseHardModeConfig(HARD_MODE_CONFIG.replace('g_fatigue "1"', 'g_fatigue "0"')), at, 'fixture');
 const ids = ['fuel','air','police','fatigue','limiter','truck','trailer','parking','rain','events','braking','traffic'];
-const values = [[1],[1],[1],[0],[1],[0.5],[0.5],[0,2],[0.12],[0.3],[0.75],[1]];
+const values = [[1],[1],[1],[0],[1],[0.25],[0.25],[1,2],[0.12],[0.3],[0.75],[1]];
 it.each(['completed', 'failed'] as const)('retains passive tooltip facts and cleans up a %s phase without changing its result', async outcome => {
   const observer = fixtureDiagnostics as unknown as {observeHardModeTooltip: (input: Record<string, unknown>) => Promise<unknown>};
   const record: Record<string, unknown> = {}, primary = new Error('Original tooltip visibility timeout');

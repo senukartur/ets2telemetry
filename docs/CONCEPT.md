@@ -55,7 +55,7 @@ The Journal lists the recorded trips page by page. A trip's details show its rou
 
 ### Hard Mode
 
-Hard Mode checks whether the game's persisted profile settings meet twelve realistic-driving rules (for example realistic fuel, air brakes and skilled parking) and shows each rule's state; a rule that does not pass also shows its detected and required value. A delivered trip qualifies only if every rule passed throughout the trip and the delivery was manual. Any failure or unknown value loses the trip's qualification for good. Hard Mode reads files only and is not anti-cheat proof.
+Hard Mode checks whether the game's persisted profile settings meet twelve realistic-driving rules (for example realistic fuel, air brakes and Normal parking) and shows each rule's state; a rule that does not pass also shows its detected and required value. A delivered trip qualifies only if every rule passed throughout the trip. Parking is checked through settings only. Any failure or unknown value loses the trip's qualification for good. Hard Mode reads files only and is not anti-cheat proof.
 
 ### Application
 

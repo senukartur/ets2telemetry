@@ -84,7 +84,7 @@ export function tripExportProblems(document: unknown): string[] {
     if (audit !== null && (!isObject(audit) || !sameKeys(audit, keys) || audit.version !== 1
       || !(audit.binding === null || /^[0-9a-f]{64}$/.test(textOf(audit.binding)))
       || !(audit.manualDelivery === null || typeof audit.manualDelivery === 'boolean'))) problem('$.trip.hard_mode_details', 'malformed');
-    if (trip.is_hard_mode && (trip.outcome !== 'delivered' || !isObject(audit) || audit.firstLoss !== null || audit.manualDelivery !== true)) problem('$.trip.is_hard_mode', 'qualification lacks delivery proof');
+    if (trip.is_hard_mode && (trip.outcome !== 'delivered' || !isObject(audit) || audit.firstLoss !== null)) problem('$.trip.is_hard_mode', 'qualification lacks delivery proof');
   }
   const window = document.window;
   if ((document.formatVersion === 3 || document.formatVersion === 4)) {

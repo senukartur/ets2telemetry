@@ -10,6 +10,7 @@ import {afterEach, beforeEach, describe, expect, it, vi} from 'vitest';
 import {hardModeFixtureOptions} from '../../apps/desktop/src/hard-mode/fixture';
 import {HardModeReader, FileEvidenceError, ProfileSuperseded, coalesceProfileDiagnostics, type ProfileDiagnostic, profileFromLog, readStableFile} from '../../apps/desktop/src/hard-mode/reader';
 import {HardModeMonitor} from '../../apps/desktop/src/hard-mode/monitor';
+import {hardModeView} from '../../apps/desktop/src/hard-mode/view';
 import {ProfileObserver} from '../../apps/desktop/src/profile-observation';
 import type {HardModeObservation} from '../../packages/contracts/src/hard-mode';
 import type {SourceIdentity} from '../../packages/contracts/src/protocol-v1';
@@ -59,6 +60,16 @@ function nativeInspection(game: 'ets2' | 'ats' = 'ets2') {
   return {child,controller,diagnostics,target,receipt,work,settled:()=>settled};
 }
 describe('ET-026 isolated reader (REG-008/010/011)', () => {
+  it.each([[0.25, 50, 'pass'], [0.255, 51, 'fail'], [0.26, 52, 'fail'], [0.5, 100, 'fail']] as const)('reads owner-observed stability raw %s as %s%% with state %s', async (raw, percent, state) => {
+    const config = HARD_MODE_CONFIG.replace(/g_(truck|trailer)_stability "[^"]+"/g, (_, id: string) => `g_${id}_stability "${raw}"`);
+    await writeFile(path.join(profile, 'config.cfg'), config);
+    const {assessment} = await read(); expect(assessment.state).toBe(state);
+    for (const id of ['truck', 'trailer']) {
+      expect(assessment.rules.find(rule => rule.id === id)).toMatchObject({state, values: [raw]});
+      expect(hardModeView({assessment, trip: null}, created + 10000).rows.find(rule => rule.id === id)).toMatchObject({detected: `${percent}% (${raw})`, required: '≤ 50% (0.25)'});
+    }
+    expect(assessment.rules[7]).toMatchObject({state: 'pass', values: [1, 2]});
+  });
   it.each(['admitted','cleared','settings-first','superseded'] as const)('revokes discovery provenance while a sibling drains with %s settings admission',async mode=>{
     vi.useFakeTimers();let now=0n,hold=false,clearHold=false;const completed=gate(),entered=gate(),release=gate(),hintEntered=gate(),hintRelease=gate(),globalObserved=gate(),clearEntered=gate(),clearRelease=gate();
     const parent=path.dirname(profile),global=path.join(game,'config.cfg'),r=new HardModeReader({documents:path.join(root,'Documents'),process:processFacts,nowNs:()=>now,

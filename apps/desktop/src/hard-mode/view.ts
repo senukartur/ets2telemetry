@@ -9,15 +9,17 @@ export function hardModeLossText(lost: NonNullable<HardModeDetails['firstLoss']>
     value: lost.values?.map(v => v === null ? t('hm.value.unknown', undefined, language) : String(v)).join(' / ') ?? t('hm.value.unknown', undefined, language), time: new Date(lost.atUtcMs).toISOString()}, language);
 }
 const BOOLEANS = ['fuel', 'air', 'police', 'fatigue', 'limiter'];
+const percentScale = (id: string) => id === 'truck' || id === 'trailer' ? 200 : 100;
 /** A setting value; `raw` adds the config value in parentheses (the tooltip), without it the text is the short inline form. */
 const valueText = (id: string, value: number | null, index: number, language: AppLanguage, raw = true): string => {
   if (value === null) return t('hm.value.unknown', undefined, language);
   const suffix = raw ? ` (${value})` : '';
-  return BOOLEANS.includes(id) || id === 'parking' && index === 0 ? `${t(value === 1 ? 'val.on' : value === 0 ? 'val.off' : 'hm.value.invalid', undefined, language)}${suffix}`
-    : id === 'parking' ? `${t(value === 2 ? 'hm.value.skilled' : 'hm.value.other', undefined, language)}${suffix}` : `${Number((value * 100).toFixed(6))}%${suffix}`;
+  return id === 'parking' && index === 0 ? `${t('hm.value.simpleDoubles', {value: t(value === 1 ? 'val.on' : value === 0 ? 'val.off' : 'hm.value.invalid', undefined, language)}, language)}${suffix}`
+    : BOOLEANS.includes(id) ? `${t(value === 1 ? 'val.on' : value === 0 ? 'val.off' : 'hm.value.invalid', undefined, language)}${suffix}`
+    : id === 'parking' ? `${t(value === 2 ? 'hm.value.normal' : 'hm.value.other', undefined, language)}${suffix}` : `${Number((value * percentScale(id)).toFixed(6))}%${suffix}`;
 };
 const requiredText = (rule: typeof HARD_MODE_RULES[number], language: AppLanguage, raw = true): string => rule.op === 'eq' ? `${t('val.on', undefined, language)}${raw ? ' (1)' : ''}`
-  : rule.op === 'parking' ? t(raw ? 'hm.required.parking' : 'hm.required.parkingShort', undefined, language) : `${rule.op === 'max' ? '≤' : '≥'} ${rule.limit * 100}%${raw ? ` (${rule.limit})` : ''}`;
+  : rule.op === 'parking' ? t(raw ? 'hm.required.parking' : 'hm.required.parkingShort', undefined, language) : `${rule.op === 'max' ? '≤' : '≥'} ${rule.limit * percentScale(rule.id)}%${raw ? ` (${rule.limit})` : ''}`;
 export function hardModeView(status: HardModeStatus, nowUtcMs: number, language: AppLanguage = 'en') {
   const a = status.assessment, passed = a.rules.filter(r => r.state === 'pass').length, lost = status.trip?.firstLoss;
   return {headline: t(lost ? 'hm.status.lost' : `hm.status.${a.state}`, undefined, language), passed,
