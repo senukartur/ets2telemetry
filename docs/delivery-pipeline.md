@@ -1,6 +1,6 @@
 # Delivery pipeline
 
-The `deliver` skill (`/deliver` in Antigravity and Claude Code, `$deliver` in OpenAI Codex) runs one task through four project-defined subagents (`architect`, `implementer`, `verifier` and `reviewer`) and delivers a PR in Ready for review with successful final-head CI and addressed PR feedback (or an explicit documentation-only CI exclusion). It automates the planning, implementation, checks and independent review steps that [AGENTS.md](../AGENTS.md) and [TESTING.md](TESTING.md) already require. The [owner delivery decision](../DECISION-LOG.md#deliver-ready-and-feedback-handoff--november-3-2026) authorizes the Ready transition and task feedback replies/resolutions; the other owner decisions, real-game acceptance and owner merges still apply.
+The `deliver` skill (`/deliver` in Antigravity and Claude Code, `$deliver` in OpenAI Codex) runs one task through four project-defined subagents (`architect`, `implementer`, `verifier` and `reviewer`) and delivers a PR in Ready for review with successful final-head CI and addressed PR feedback (or an explicit documentation-only CI exclusion). It automates the planning, implementation, checks and independent review steps that [AGENTS.md](../AGENTS.md) and [TESTING.md](TESTING.md) already require. The [owner delivery decision](../DECISION-LOG.md#deliver-ready-and-feedback-handoff--november-3-2026) authorizes the Ready transition and task feedback replies/resolutions, and the [Trello status decision](../DECISION-LOG.md#deliver-trello-card-status--november-4-2026) makes the run keep its card status current; the other owner decisions, real-game acceptance and owner merges still apply.
 
 The optional [coordinator role](../COORDINATOR.md) remains the way to run a Trello-driven multi-card session. A coordinator in Antigravity, Codex or Claude Code may also use these subagent definitions as its worker, verifier and reviewer roles.
 
@@ -44,7 +44,7 @@ $deliver ET-004b --review-plan
 $deliver fix the overlay unit label for ATS
 ```
 
-A card or package ID makes the orchestrator read that Trello card read-only. Free text runs as `NO-CARD`. `--review-plan` always pauses after planning. Without it, the run pauses only when the architect reports a scope problem, open questions, or a change to requirements, architecture, a wire protocol, storage, IPC or security boundaries.
+A card or package ID makes the orchestrator read that Trello card and keep its status current: `В процессе` when the worktree is created, a comment with the PR link, and `Review` at handoff. The card moves to `Готово` only after its PR is merged and when no manual or real-game check and no other package of the card remains; a card that needs such checks stays in `Review` with a comment listing what to check, how and on which build. Free text runs as `NO-CARD` and writes nothing to Trello. `--review-plan` always pauses after planning. Without it, the run pauses only when the architect reports a scope problem, open questions, or a change to requirements, architecture, a wire protocol, storage, IPC or security boundaries.
 
 ## Flow and limits
 
@@ -85,7 +85,7 @@ The run has a budget of 4 fix rounds in total, shared by verifier failures, inde
 - A verifier `PASS` covers local checks on one commit. Delivery also waits for the Windows CI run after **Ready for review** on the final head ([CI triggers](ci.md#triggers-and-draft-checks)).
 - The reviewer agent is an independent reviewer in the sense of `COORDINATOR.md`; it is not owner approval.
 - Real ETS2/ATS, TruckersMP, display, latency and frame-time criteria stay pending. They need actual game sessions.
-- Invoking the pipeline authorizes its Ready transition and task-related review replies/resolutions. Merging and Trello writes still require the owner's request in the session.
+- Invoking the pipeline authorizes its Ready transition, task-related review replies/resolutions and the card status updates above. Merging still requires the owner's request in the session.
 
 ## Changing the agents
 
