@@ -925,10 +925,12 @@ void fuzz() {
   Fixture f; f.start(); std::uint32_t random = 0x5a17c0de; auto next = [&] { random = random * 1664525U + 1013904223U; return random; };
   // A bit flip of the hello's maxMinor digit '0' gives a valid offer of 1, 2, 4 or 8, served at min(offer, highest minor),
   // so the mutated-hello client accepts every minor the endpoint selects. The x50 run first draws one at round 320 (offer
-  // 4); the four flips also run here, at every multiplier.
+  // 4); the four flips also run here, at every multiplier. The handshake cases test minor selection itself; this guards
+  // the fuzz client's own maximum, whose Consumer must apply the welcome and the checkpoint at the selected minor.
   for (const unsigned offer : {1U, 2U, 4U, 8U}) {
-    auto c = f.client(true, v1::highest_minor); send(c->pipe.get(), framed(hello_payload(true, offer)));
-    require(c->read(2) && c->messages[0].minor == (std::min)(offer, v1::highest_minor), "a flipped maxMinor digit is served at min(offer, highest minor)");
+    auto c = f.client(true, v1::highest_minor); send(c->pipe.get(), framed(hello_payload(true, offer))); const auto minor = (std::min)(offer, v1::highest_minor);
+    require(c->read(2) && c->messages[0].kind == "welcome" && c->messages[0].minor == minor && c->messages[0].welcome->minor == minor && c->messages[1].kind == "checkpoint" &&
+      c->messages[1].minor == minor && c->applied[1].hydration && c->consumer.minor() == minor, "a flipped maxMinor digit is served at min(offer, highest minor)");
     c.reset(); require(f.listening(), "relisten after a flipped maxMinor digit");
   }
   unsigned hello_closed = 0, hello_served = 0;
