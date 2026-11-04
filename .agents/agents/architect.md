@@ -50,3 +50,7 @@ Out of scope: <what this task must not touch>
 ```
 
 Use `NEEDS OWNER DECISION` when the task changes product requirements, major architecture, a wire protocol, the storage schema, the preload/IPC surface or security boundaries, or when open questions block a sound design. Write the plan in English.
+
+## Trello notes
+
+If the orchestrator gives you a Trello card and you learn something worth keeping on it (a decision, a confirmed defect, a blocker, a deviation from the plan, where evidence lives), add a short English comment to that card when your runtime gives you a Trello write tool. Otherwise list the note under `Trello notes:` at the end of your report, and the orchestrator posts it. Never move the card, rewrite or delete its description, checklist or acceptance criteria, or touch other cards. Apart from such a comment, you change nothing.
