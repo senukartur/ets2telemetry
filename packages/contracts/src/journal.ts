@@ -274,7 +274,8 @@ const LIST_KEYS = ['isHardMode', 'hardModeDetails', 'tripUuid', 'game', 'gameMod
 const CLOSE_REASONS: readonly unknown[] = ['outcome', 'configuration-cleared', 'different-job', 'restart', 'discontinuity', 'gap'];
 function listItem(o: Record<string, unknown>): void {
   boolean(o.isHardMode); if (o.hardModeDetails !== null && !isHardModeDetails(o.hardModeDetails)) bad();
-  if (o.isHardMode && (o.outcome !== 'delivered' || o.hardModeDetails === null || (o.hardModeDetails as HardModeDetails).firstLoss !== null)) bad();
+  // Qualified audits retain legacy true or the current null compatibility value.
+  if (o.isHardMode && (o.outcome !== 'delivered' || o.hardModeDetails === null || (o.hardModeDetails as HardModeDetails).firstLoss !== null || (o.hardModeDetails as HardModeDetails).manualDelivery === false)) bad();
   uuid(o.tripUuid); oneOf(o.game, GAMES); gameMode(o.gameMode); boolean(o.gameModeAmbiguous); oneOf(o.outcome, OUTCOMES);
   nullable(o.closeReason, value => oneOf(value, CLOSE_REASONS)); oneOf(o.recordingCompleteness, COMPLETENESS);
   if ((o.outcome === 'open') !== (o.closeReason === null) || (o.outcome === 'open') !== (o.endedUtcMs === null)) bad();

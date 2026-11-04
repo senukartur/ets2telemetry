@@ -49,6 +49,11 @@ describe('ET-026 worker classification (REG-001/003/005/006/007/014)', () => {
     const header = tripExportHeader({uuid: '30000000-0000-4000-8000-000000000001', purpose: 'synthetic', schemaVersion: 4}, 'test', Date.now());
     const serializer = new TripExportSerializer(detail, header), text = serializer.begin() + serializer.rows('sources', ok(await client.journalIntervals(f.trip, {limit: 500, cursor: detail.exportBounds.snapshot!.sources})).sources!) + serializer.rows('intervals', ok(await client.journalIntervals(f.trip, {limit: 500, cursor: detail.exportBounds.snapshot!.intervals})).intervals) + serializer.rows('events', ok(await client.journalEvents(f.trip, {limit: 500, cursor: detail.exportBounds.snapshot!.events})).events) + serializer.end();
     const exported = JSON.parse(text) as {formatVersion: number; trip: {is_hard_mode: boolean; hard_mode_details: {manualDelivery: null}}}; expect(exported.formatVersion).toBe(4); expect(exported.trip.is_hard_mode).toBe(true); expect(exported.trip.hard_mode_details.manualDelivery).toBeNull(); expect(tripExportProblems(exported)).toEqual([]);
+    for (const manualDelivery of [null, true, false]) {
+      const variant = {...exported, trip: {...exported.trip, hard_mode_details: {...exported.trip.hard_mode_details, manualDelivery}}};
+      expect(tripExportProblems(variant)).toEqual(manualDelivery === false ? ['$.trip.is_hard_mode: qualification lacks delivery proof'] : []);
+      if (manualDelivery === false) expect(tripExportProblems({...variant, trip: {...variant.trip, is_hard_mode: false}})).toEqual([]);
+    }
     expect(await client.close()).toEqual({clean: true});
     readOnly(ws.database, db => expect(db.prepare("SELECT outcome, is_hard_mode, json_extract(hard_mode_details, '$.manualDelivery') AS manual FROM trips").get()).toEqual({outcome: 'delivered', is_hard_mode: 1, manual: null}));
   });

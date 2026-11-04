@@ -173,7 +173,7 @@ In staging builds (`ACTIVE_CHANNEL === 'staging'`), the trip detail view provide
 
 ## Hard Mode (ET-026)
 
-Current journal list/detail records add `isHardMode: boolean` and `hardModeDetails: HardModeDetails | null`, validated across worker/service/main boundaries. Only a qualifying delivered trip shows the Flame `HM` badge; standard/historical/open trips do not acquire it from current settings. Details retain opening/latest assessment, explicit manual delivery and first loss with the original detected value/time. Historical rows show not evaluated. This flag is independent of recording completeness and outcome. See [Hard Mode](hard-mode.md).
+Current journal list/detail records add `isHardMode: boolean` and `hardModeDetails: HardModeDetails | null`, validated across worker/service/main boundaries. Only a qualifying delivered trip shows the Flame `HM` badge; standard/historical/open trips do not acquire it from current settings. Details retain opening/latest assessment, the nullable `manualDelivery` compatibility field (null for new audits) and first loss with the original detected value/time. Parking is checked through settings only. Historical rows show not evaluated. This flag is independent of recording completeness and outcome. See [Hard Mode](hard-mode.md).
 
 
 ## Yukon presentation (ET-028)

@@ -141,6 +141,12 @@ describe('main accepts a service reply only when it answers the request exactly 
     const item = {...LIST_ITEM, isHardMode: true, hardModeDetails: details, outcome: 'delivered', closeReason: 'outcome', endedUtcMs: LIST_ITEM.startedUtcMs + 1000};
     const reply = {ok: true, value: {...TRIP_PAGE, trips: [item]}};
     expect(details.manualDelivery).toBeNull(); expect(parseJournalReply(TRIPS, reply)).toEqual(reply);
+    const legacy = {...reply, value: {...reply.value, trips: [{...item, hardModeDetails: {...details, manualDelivery: true}}]}};
+    expect(parseJournalReply(TRIPS, legacy)).toEqual(legacy);
+    const contradictory = {...item, hardModeDetails: {...details, manualDelivery: false}};
+    expect(parseJournalReply(TRIPS, {...reply, value: {...reply.value, trips: [contradictory]}})).toBeUndefined();
+    const unqualified = {...reply, value: {...reply.value, trips: [{...contradictory, isHardMode: false}]}};
+    expect(parseJournalReply(TRIPS, unqualified)).toEqual(unqualified);
     for (const outcome of ['open', 'cancelled']) {
       const other = {...item, outcome, ...(outcome === 'open' ? {closeReason: null, endedUtcMs: null} : {})};
       expect(parseJournalReply(TRIPS, {...reply, value: {...reply.value, trips: [{...other, isHardMode: false}]}})).toBeDefined();
