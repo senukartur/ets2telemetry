@@ -831,6 +831,71 @@ describe('REG-003/005/008/012/014 durable logical trips', () => {
     for(const ack of acks)expect(BigInt(ack.through)).toBeLessThanOrEqual(BigInt(ack.stored));
     expect(await client.close()).toEqual({clean:true});
   },60_000);
+  it.each(['sample-conflict','captured-conflict','sample-equivalent','captured-equivalent','restart-equivalent','candidate-overflow','captured-overflow','path-overflow'] as const)('requires a unique retained saved accounting prefix: %s',async variant=>{
+    let worker=storageWorker(),client=new StorageClient(worker.handle);const a=new Script(ETS2_A),b=new Script(ETS2_B),context={receivedUtcMs:1000};
+    let lastBoundary:Parameters<StorageClient['openAttachedTrip']>[0]|undefined;
+    const attach=client.openAttachedTrip.bind(client);client.openAttachedTrip=input=>{if(input.endpoint)lastBoundary=structuredClone(input);return attach(input);};
+    let currentProof=proof(a);ok(await client.open({path:ws.database,backupsDirectory:ws.backups,purpose:'synthetic',appVersion:'test'}));
+    let recorder=new TripRecorderSink(client,{profileEvidence:()=>currentProof});
+    const capture=async(s:Script,odo:number,fuel:number,x:number,simulation:'running'|'paused',advance=1000)=>{
+      const message=s.snapshot({configuration:s.checkpoint(job()).data.state.configuration,simulation,speed:{available:true,value:simulation==='running'?20:0,unit:'m/s'},
+        odometer:{available:true,value:odo,unit:'m'},fuel:{available:true,value:fuel,unit:'L'},gameTime:{available:true,value:'500',unit:'min',clockId:s.clockId},
+        worldPlacement:{available:true,value:{position:{x,y:0,z:0},orientation:{heading:0,pitch:0,roll:0}}}},advance);
+      succeeded(recorder.observe(message,context));if(recorder.attach.due())succeeded(await recorder.attach.open(context));return message;
+    };
+    succeeded(await recorder.openSession(a.welcome()));succeeded(recorder.observe(a.checkpoint(null),context));succeeded(await recorder.commit(a.event(r.started()),context));
+    const configured=a.event(r.jobConfigured());succeeded(await recorder.commit(configured,context));const uuid=tripUuidFor(a.session,configured.data.eventSeq);
+    const captured=variant.startsWith('captured'),conflict=variant.endsWith('conflict')||variant.endsWith('overflow'),secondFuel=variant.endsWith('conflict')?(captured?99.37:99.39):99.4;
+    await capture(a,1000000,100,0,'running');await capture(a,1000060,99.4,12,'running');
+    if(captured){succeeded(await recorder.commit(a.event(r.paused(),{simulation:'paused',advanceMs:50}),context));await capture(a,1000060,99.4,12,'paused',0);succeeded(await recorder.commit(a.event(r.started(),{advanceMs:50}),context));}
+    await capture(a,1000060,secondFuel,12,'running');
+    if(variant==='candidate-overflow')for(let n=0;n<63;n++)await capture(a,1000060,secondFuel,12,'running');
+    if(captured){succeeded(await recorder.commit(a.event(r.paused(),{simulation:'paused',advanceMs:50}),context));await capture(a,1000060,secondFuel,12,'paused',0);succeeded(await recorder.commit(a.event(r.started(),{advanceMs:50}),context));}
+    if(variant==='captured-overflow'){
+      const boundary=lastBoundary!;expect(boundary.endpoint).toBeDefined();const base=boundary.monotonicNs!,nextEventSeq=String(BigInt(ok(await client.committedThrough(a.session)))+1n);let previous=base;
+      for(let n=1;n<=257;n++){
+        const ns=(BigInt(base)+BigInt(n)*1000n).toString();
+        ok(await client.openAttachedTrip({pluginSessionId:a.session,nextEventSeq,job:job(),effects:[],observeTripUuid:uuid,
+          profile:proof(a),sourceClockId:a.clockId,monotonicNs:ns,endpoint:{...boundary.endpoint!,version:1,simulation:'paused',odometerM:1000060,fuelL:99.4+(n%2?0.001:0),speedMps:0,
+            gameClockId:a.clockId,gameMinutes:'500',position:{x:12,y:0,z:0},previous:{tripUuid:uuid,sourceClockId:a.clockId,monotonicNs:previous}}}));previous=ns;
+      }
+    }
+    await capture(a,1000100,99,20,'running');
+    if(captured){succeeded(await recorder.commit(a.event(r.paused(),{simulation:'paused',advanceMs:50}),context));await capture(a,1000100,99,20,'paused',0);}
+    succeeded(await recorder.samples.write(3600,true));const before=ok(await client.journalTrip(uuid));
+    if(variant==='path-overflow'){
+      expect(await client.close()).toEqual({clean:true});
+      const db=new Database(ws.database);db.defaultSafeIntegers(true);
+      try{
+        // Synthetic valid selected run aliases exceed the recursive path budget; no fixture/history bytes are used.
+        let head=db.prepare('SELECT progress_head FROM logical_trips WHERE trip_uuid=?').pluck().get(uuid) as bigint;
+        const append=db.prepare(`INSERT INTO logical_progress(logical_ref,trip_ref,anchor_sample_ref,sample_ref,bound_sample_ref,prefix_ref,start_ref,cut_odometer_m,truck_ref,odometer_m,start_odometer_m,distance_m,fuel_used_l)
+          SELECT logical_ref,trip_ref,anchor_sample_ref,NULL,bound_sample_ref,?,NULL,cut_odometer_m,truck_ref,odometer_m,start_odometer_m,distance_m,fuel_used_l FROM logical_progress WHERE id=?`);
+        for(let n=0;n<257;n++)head=append.run(head,head).lastInsertRowid as bigint;
+        db.prepare('UPDATE logical_trips SET progress_head=? WHERE trip_uuid=?').run(head,uuid);
+      }finally{db.close();}
+      worker=storageWorker();client=new StorageClient(worker.handle);ok(await client.open({path:ws.database,backupsDirectory:ws.backups,purpose:'synthetic',appVersion:'test'}));
+      recorder=new TripRecorderSink(client,{profileEvidence:()=>currentProof});
+    }
+    currentProof=proof(b);succeeded(await recorder.openSession(b.welcome()));succeeded(recorder.observe(b.checkpoint(null),context));succeeded(await recorder.commit(b.gap(2),context));
+    succeeded(await recorder.commit(b.event(r.jobConfigured(),{simulation:'paused'}),context));const savedFuel=(99.4+secondFuel)/2;
+    await capture(b,1000060,savedFuel,12,'paused',10);succeeded(await recorder.commit(b.event(r.started()),context));
+    await capture(b,1000060,savedFuel,12,'running');
+    let last=b;
+    if(variant==='restart-equivalent'){
+      succeeded(await recorder.commit(b.event(r.paused(),{simulation:'paused',advanceMs:50}),context));await capture(b,1000060,savedFuel,12,'paused',0);
+      const c=new Script('10000000-0000-4000-8000-0000000000c3');currentProof=proof(c);succeeded(await recorder.openSession(c.welcome()));succeeded(recorder.observe(c.checkpoint(null),context));
+      succeeded(await recorder.commit(c.gap(2),context));succeeded(await recorder.commit(c.event(r.jobConfigured(),{simulation:'paused'}),context));
+      await capture(c,1000060,savedFuel,12,'paused',10);succeeded(await recorder.commit(c.event(r.started()),context));await capture(c,1000060,savedFuel,12,'running');last=c;
+    }
+    await capture(last,1000085,savedFuel-0.5,17,'running');succeeded(await recorder.samples.write(3600,true));
+    succeeded(await recorder.commit(last.event(r.delivered(),{simulation:'paused'}),context));const detail=ok(await client.journalTrip(uuid));
+    if(conflict){expect(detail.trip.fuelUsedL.available).toBe(false);expect(detail.trip.observedDistanceM.available).toBe(false);expect(detail.trip.recordingCompleteness).toBe('partial');}
+    else {expect(detail.trip.fuelUsedL.available&&detail.trip.fuelUsedL.value).toBeCloseTo(1.1,9);expect(detail.trip.observedDistanceM).toEqual({available:true,value:85});expect(detail.trip.recordingCompleteness).toBe('complete');}
+    expect(ok(await client.listSamples({tripUuid:uuid},{includeExcluded:true}))).toHaveLength(6+(variant==='candidate-overflow'?63:variant==='restart-equivalent'?1:0));
+    expect(ok(await client.listSamples({tripUuid:uuid},{afterId:before.exportBounds.snapshot!.samples,includeExcluded:true}))).toHaveLength(4+(variant==='candidate-overflow'?63:0));
+    expect(await client.close()).toEqual({clean:true});
+  });
   it.each(['between-ticks','earlier-prefix','between-ticks-noisy','earlier-prefix-noisy'] as const)('resumes a captured PAUSED save before its first advancing running sample: %s',async variant=>{
     const earlier=variant.startsWith('earlier-prefix'),noisy=variant.endsWith('noisy');
     const accepted=<T>(result:{ok:true;value:T}|{ok:false;error:{code:string}}):T=>{if(!result.ok)throw new Error(result.error.code);return result.value;};
