@@ -47,7 +47,7 @@ export class HardModeMonitor {
     private readonly changed: (value: HardModeObservation) => void = () => undefined, private readonly nowNs: () => bigint = () => process.hrtime.bigint(),
     private readonly requestFull: () => void = () => undefined, private readonly retain: () => boolean = () => false,
     private readonly publishHealth: () => void = () => undefined, private readonly drain: () => Promise<void> = () => Promise.resolve(),
-    private readonly guard?: {eligible: () => boolean; select: (key: string | undefined) => void}) {}
+    private readonly guard?: {eligible: () => boolean; select: (key: string | undefined) => void; deadline?: (source: SourceIdentity) => Error | undefined}) {}
   private unknown(): HardModeObservation {return {assessment: unknownHardMode(Date.now()), binding: null, pluginSessionId: null, sourceMonotonicNs: null};}
   private publish(value: HardModeObservation, observedClientNs = this.nowNs()): void {this.observation = value; this.observedClientNs = observedClientNs; this.healthNs = this.nowNs(); this.changed(value);}
   private expired(): boolean {return this.observedClientNs === undefined || this.nowNs() < this.observedClientNs;}
@@ -122,7 +122,7 @@ export class HardModeMonitor {
     let deadlineClientNs = this.lastScanNs + BigInt(HARD_MODE_DEADLINE_MS) * 1_000_000n;
     const epoch = this.epoch, controller = this.controller = new AbortController();
     this.activeEpoch = epoch;
-    const expire = () => {controller.abort(); if (epoch === this.epoch) {if (!this.retain()) this.publish(this.unknown()); this.retireProof();}};
+    const expire = () => {controller.abort(this.guard?.deadline?.(current.source)); if (epoch === this.epoch) {if (!this.retain()) this.publish(this.unknown()); this.retireProof();}};
     let deadline = setTimeout(expire, HARD_MODE_DEADLINE_MS);
     this.inFlight = this.read(current.source, current.monotonicNs, Date.now(), controller.signal, manual).then(result => {
       if (controller.signal.aborted || epoch !== this.epoch || this.guard && !this.guard.eligible()) return;

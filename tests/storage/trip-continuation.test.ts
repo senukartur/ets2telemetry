@@ -68,33 +68,35 @@ function close(storage: Storage, script: Script, uuid: string, terminal = false)
 }
 
 describe('REG-003/005/008/012/014 durable logical trips', () => {
-  it.each(['partial-byte-timeout','partial-byte-utf8','partial-byte-unbounded','partial-bytes','partial-byte-missing','partial-config','partial-delete','identity-root','identity-profile','identity-load','identity-namespace','identity-load-after-settings-error','identity-unchanged','identity-append','identity-replaced','identity-missing','identity-redirect','identity-settings','identity-settings-error','watchdog-timer','watchdog-getter','unchanged','witness','admitted-consumption','admitted-refuel','admitted-refuel-recheck','admitted-regression','admitted-long-unchanged','admitted-long-motion','admitted-persist-revoked','revoked','profile','load','gap','clock','truck','job','refuel','teleport','missing','unqualified-sample','over-limit'] as const)('retains only a qualified predecessor through wired lifecycle verification: %s',async variant=>{
+  it.each(['discovery-cloud','partial-byte-timeout','partial-byte-utf8','partial-byte-unbounded','partial-bytes','partial-byte-missing','partial-config','partial-delete','identity-root','identity-profile','identity-load','identity-namespace','identity-load-after-settings-error','identity-unchanged','identity-append','identity-replaced','identity-missing','identity-redirect','identity-settings','identity-settings-error','watchdog-timer','watchdog-getter','unchanged','witness','admitted-consumption','admitted-refuel','admitted-refuel-recheck','admitted-regression','admitted-long-unchanged','admitted-long-motion','admitted-persist-revoked','revoked','profile','load','gap','clock','truck','job','refuel','teleport','missing','unqualified-sample','over-limit'] as const)('retains only a qualified predecessor through wired lifecycle verification: %s',async variant=>{
     vi.useFakeTimers();const watchdog=variant.startsWith('watchdog-');let clientNs=0n,wireSeq=0n,boundary=100n;const revision='1';const now=()=>++clientNs;const diagnostics:string[]=[];
     const worker=storageWorker(),client=new StorageClient(worker.handle),script=new Script(ETS2_A),welcome=script.welcome();
     let holdPersist=false,persistHeld=false,enterPersist!:()=>void,releasePersist!:()=>void;
     const persistEntered=new Promise<void>(resolve=>{enterPersist=resolve;}),persistRelease=new Promise<void>(resolve=>{releasePersist=resolve;}),persist=client.openAttachedTrip.bind(client);
     const endpointScopes:string[]=[];
     client.openAttachedTrip=async input=>{if(input.endpoint&&input.profile)endpointScopes.push(input.profile.scope);if(holdPersist&&!persistHeld&&input.endpoint){persistHeld=true;enterPersist();await persistRelease;}return persist(input);};
-    const documents=path.join(ws.directory,'Documents'),game=path.join(documents,'Euro Truck Simulator 2'),id=Buffer.from('Synthetic').toString('hex').toUpperCase(),directory=path.join(game,'profiles',id);
+    const documents=path.join(ws.directory,'Documents'),game=path.join(documents,'Euro Truck Simulator 2'),id=Buffer.from('Synthetic').toString('hex').toUpperCase(),directory=path.join(game,variant==='discovery-cloud'?'steam_profiles':'profiles',id);
     await mkdir(directory,{recursive:true});
     const log=`log created on : Wednesday October 21 2026 @ 12:00:00\nNew profile selected: Synthetic\nLoading save. /home/profiles/${id}/save/autosave/game.sii\n`;
-    await writeFile(path.join(game,'game.log.txt'),log);await writeFile(path.join(game,'config.cfg'),'uset g_traffic "1"');
+    const steam=path.join(ws.directory,'Steam'),userdata=path.join(steam,'userdata'),remote=path.join(userdata,'100','227300','remote','profiles',id);
+    if(variant==='discovery-cloud'){await mkdir(remote,{recursive:true});await writeFile(path.join(remote,'config.cfg'),HARD_MODE_CONFIG);await utimes(userdata,new Date('2026-10-20T12:00:00Z'),new Date('2026-10-20T12:00:00Z'));}
+    await writeFile(path.join(game,'game.log.txt'),variant==='discovery-cloud'?log.replace('/home/','/steam/'):log);await writeFile(path.join(game,'config.cfg'),'uset g_traffic "1"');
     await writeFile(path.join(directory,'config_local.cfg'),'uset g_brake_intensity "0.75"');await writeFile(path.join(directory,'config.cfg'),HARD_MODE_CONFIG);
     let holdGuard=false,guardHeld=false,holdSettings=false,holdLocation=false,failSettings=false,partialMetadata=false,partialBytes=false,preserveMetadata=false,bytesDeleted=false,metadataObserved!:()=>void,enterGuard!:()=>void,releaseGuard!:()=>void,watchdogWork:Promise<void>|undefined,physicalStarts=0;
-    const metadataBaseline=new Map<string,BigIntStats>();
+    let discovery=false,discoveryPhase=0;const metadataBaseline=new Map<string,BigIntStats>();
     const guardEntered=new Promise<void>(resolve=>{enterGuard=resolve;}),guardRelease=new Promise<void>(resolve=>{releaseGuard=resolve;});
     const observedMetadata=new Promise<void>(resolve=>{metadataObserved=resolve;});
     const reader=new HardModeReader({documents,steamRoot:path.join(ws.directory,'Steam'),diagnostic:value=>diagnostics.push(value.code),fixtureOrigin:'synthetic',nowNs:now,
       profileDirectory:async parent=>{if(holdLocation){enterGuard();await guardRelease;}return opendir(parent);},
-      metadata:{realpath:async filename=>{if(partialMetadata&&filename===path.join(game,'config.cfg')){enterGuard();await guardRelease;}try{return await realpath(filename);}catch(error){if(partialMetadata&&filename===path.join(directory,'config.cfg')&&(error as NodeJS.ErrnoException).code==='ENOENT')metadataObserved();throw error;}},
-        stat:async filename=>{if(preserveMetadata&&metadataBaseline.has(filename))return metadataBaseline.get(filename)!;const value=await stat(filename,{bigint:true});metadataBaseline.set(filename,value);if(partialMetadata&&filename===path.join(directory,'config.cfg'))metadataObserved();return value;}},
+      metadata:{realpath:async filename=>{if(discovery&&filename===userdata){discoveryPhase++;if(discoveryPhase===3){const duplicate=path.join(userdata,'101','227300','remote','profiles',id);await mkdir(duplicate,{recursive:true});await writeFile(path.join(duplicate,'config.cfg'),HARD_MODE_CONFIG);await utimes(userdata,new Date('2026-10-22T12:00:00Z'),new Date('2026-10-22T12:00:00Z'));}}if(discovery&&discoveryPhase===3&&filename===path.join(game,'config.cfg')){enterGuard();await guardRelease;}if(partialMetadata&&filename===path.join(game,'config.cfg')){enterGuard();await guardRelease;}try{return await realpath(filename);}catch(error){if(partialMetadata&&filename===path.join(directory,'config.cfg')&&(error as NodeJS.ErrnoException).code==='ENOENT')metadataObserved();throw error;}},
+        stat:async filename=>{if(preserveMetadata&&metadataBaseline.has(filename))return metadataBaseline.get(filename)!;const value=await stat(filename,{bigint:true});const previous=metadataBaseline.get(filename);metadataBaseline.set(filename,value);if(discovery&&discoveryPhase===3&&filename===userdata){expect(value.mtimeNs).not.toBe(previous!.mtimeNs);metadataObserved();}if(partialMetadata&&filename===path.join(directory,'config.cfg'))metadataObserved();return value;}},
       file:async(filename,limit,signal)=>{if(filename.endsWith('game.log.txt'))physicalStarts++;if(failSettings&&filename===path.join(directory,'config.cfg'))throw new Error('Settings read unavailable');if(holdGuard&&!guardHeld&&filename.endsWith('game.log.txt')||holdSettings&&filename===path.join(directory,'config.cfg')||partialBytes&&filename===path.join(directory,'config_local.cfg')){guardHeld=true;enterGuard();await guardRelease;}
         if(partialBytes&&filename===path.join(directory,'config.cfg')){if(!bytesDeleted){bytesDeleted=true;if(variant==='partial-byte-missing')await rm(filename);if(variant==='partial-byte-utf8')await writeFile(filename,Buffer.from([0xc3,0x28]));if(variant==='partial-byte-unbounded')await writeFile(filename,'x'.repeat(256*1024+1));}try{return await readStableFile(filename,limit,signal);}finally{metadataObserved();}}
         return readStableFile(filename,limit,signal);},
       process:s=>Promise.resolve({pid:s.processId,createdUtcMs:new Date(2026,9,21,12).getTime(),executable:'C:/Synthetic/eurotrucks2.exe',homeDirectory:null})});
     const observer=new ProfileObserver(()=>reader,now,false,value=>diagnostics.push(value.code));let recorder!:TripRecorderSink,settings:Promise<unknown>|undefined,readCompleted:(()=>void)|undefined;const publications:string[]=[];
     const monitor=new HardModeMonitor((s,ns,at,signal,force)=>{const work=observer.readSettings(reader,s,ns,at,signal,force).finally(()=>readCompleted?.());settings=work.catch(()=>undefined);return work;},value=>{publications.push(value.assessment.state);recorder.observeHardMode('ets2',value);},now,()=>reader.requestFull(),()=>reader.canRetain(),undefined,()=>reader.drain(),
-      {eligible:()=>reader.guardEligible(),select:key=>reader.selectGuardSource(key)});
+      {eligible:()=>reader.guardEligible(),select:key=>reader.selectGuardSource(key),deadline:s=>reader.deadline(s)});
     reader.onInvalidate(()=>monitor.invalidate());
     recorder=new TripRecorderSink(client,{profileEvidence:()=>observer.evidence(),profileStatus:()=>observer.status(),hardModeEvidence:()=>monitor.evidence()});
     let committed:(()=>void)|undefined,observed:(()=>void)|undefined,attached:(()=>void)|undefined,replyEnabled=false,boundaryWork:Promise<void>|undefined;let lastServer:ServerMessage=welcome;
@@ -141,6 +143,16 @@ describe('REG-003/005/008/012/014 durable logical trips', () => {
       const uuid=tripUuidFor(script.session,'2');
       await snapshot(1000000,100,'running',1000);await snapshot(1000100,99,'running',1000);succeeded(await recorder.samples.write(3600,true));
       const before=ok(await client.journalTrip(uuid));expect(before.trip.observedDistanceM).toEqual({available:true,value:100});expect(before.trip.fuelUsedL).toEqual({available:true,value:1});
+      if(variant==='discovery-cloud'){
+        replyEnabled=false;await event(r.paused(),'paused',100);await snapshot(1000125,98.5,'paused',100);await admit();await admittedSnapshot(1000125,98.5);
+        const token=observer.status().token,original=observer.evidence()!,count=endpointScopes.length;
+        discovery=true;watchdogWork=monitor.refresh(true);await guardEntered;await observedMetadata;await Promise.resolve();await Promise.resolve();
+        expect(observer.evidence()).toBeUndefined();expect(observer.status().token).not.toBe(token);expect(monitor.evidence().assessment.state).toBe('unknown');
+        await snapshot(1000150,98,'paused',100);expect(endpointScopes.slice(count)).not.toContain(original.scope);
+        const during=ok(await client.journalTrip(uuid));expect(during.trip.observedDistanceM).toEqual({available:true,value:125});expect(during.trip.fuelUsedL).toEqual({available:true,value:1.5});
+        discovery=false;releaseGuard();await watchdogWork;await reader.drain();expect(observer.evidence()).toBeUndefined();
+        await monitor.refresh(true);expect(observer.evidence()).toBeUndefined();expect(monitor.evidence().assessment.state).toBe('unknown');return;
+      }
       if(variant.startsWith('partial-')){
         replyEnabled=false;await event(r.paused(),'paused',100);await snapshot(1000125,98.5,'paused',100);await admit();await admittedSnapshot(1000125,98.5);
         expect(ok(await client.getTrip(uuid))!.hardModeDetails!.firstLoss).toBeNull();const token=observer.status().token,original=observer.evidence();

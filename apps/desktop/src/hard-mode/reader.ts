@@ -133,7 +133,7 @@ interface ScanOperation {
 const readError = (cause: unknown): Error => cause instanceof Error ? cause : new Error('Profile read failed', {cause});
 /** One physical operation and one pending epoch; only independently unchanged generations reuse completed evidence. */
 export class HardModeReader {
-  private boundProfile: {process: string; root: string; storage: BoundProfile['storage']; generation: number; profile: string; scope: string; directories: Map<string, string>} | undefined;
+  private boundProfile: {process: string; root: string; storage: BoundProfile['storage']; generation: number; profile: string; scope: string; directories: Map<string, string>; discovery: Map<string, string>} | undefined;
   private previous: {process: string; identity: string; text: string} | undefined;
   private running: ScanOperation | undefined;
   private queued: ScanOperation | undefined;
@@ -151,6 +151,21 @@ export class HardModeReader {
   requestFull(): void {if (this.running && !this.running.settled) this.running.force = true;}
   canRetain(): boolean {return this.guardEligible() && this.admitted !== undefined && this.running?.preserve === true;}
   canRetainProfile(): boolean {return this.guardEligible() && this.running?.generation === this.guardGeneration && this.running.profileGuarded === true;}
+  /** Subscriber clocks start before physical work. Classify their deadline from shared evidence, never elapsed age. */
+  deadline(source: SourceIdentity): ProfileVerificationError {
+    const work = this.running;
+    if (work && !work.settled && work.key === this.sourceKey(source) && work.generation === this.guardGeneration && !work.failure && this.guardEligible()) {
+      if (work.controller.signal.aborted) {
+        const reason: unknown = work.controller.signal.reason;
+        if (reason instanceof ProfileVerificationError && reason.code === 'PROFILE_DEADLINE') return reason;
+      } else if (work.profileGuarded) {
+        const ErrorType = work.preserve && !work.settingsChanged && this.admitted ? UnchangedVerificationError : ProfileSettingsUnavailableError;
+        return new ErrorType(new Error('Read deadline'), 'PROFILE_DEADLINE');
+      }
+    }
+    return new ProfileVerificationError(new Error('Read deadline'), 'PROFILE_DEADLINE');
+  }
+  private sourceKey(source: SourceIdentity): string {return JSON.stringify([source.game, source.origin, source.processId, source.windowsSessionId, source.processInstanceId, source.pluginSessionId]);}
   /** Both evidence providers check this synchronously; event-loop delay cannot lend overdue guard eligibility. */
   guardEligible(): boolean {
     const guard = this.guard, now = this.nowNs();
@@ -233,18 +248,24 @@ export class HardModeReader {
       throw error;
     }
   }
-  private async metadata(resolved: ResolvedProfile, work: ScanOperation): Promise<{fingerprint: string; profileIdentity: string; directories: Map<string, string>; tuples: Map<string, string>}> {
+  private async metadata(resolved: ResolvedProfile, work: ScanOperation): Promise<{fingerprint: string; profileIdentity: string; directories: Map<string, string>; discovery: Map<string, string>; tuples: Map<string, string>}> {
     const signal = work.controller.signal;
     const baseline = this.admitted;
     const tuple = (filename: string, values: string[]): string[] => {
       this.generation(work);
-      if (baseline && baseline.tuples.get(filename) !== JSON.stringify(values)) this.changedSettings(work);
+      const encoded = JSON.stringify(values);
+      if (discovery.has(filename) && expectedDiscovery?.has(filename) && expectedDiscovery.get(filename) !== encoded) this.invalidate();
+      else if (baseline && baseline.tuples.get(filename) !== encoded) this.changedSettings(work);
       return values;
     };
     const required = new Set([resolved.local, path.dirname(resolved.config)]);
     const bound = this.boundProfile, profile = resolved.profile;
     const expected = bound && bound.process === this.lifetime(work.source) && bound.root === resolved.root && bound.storage === profile.storage
       && bound.profile === profile.profile && bound.generation === profile.generation ? bound.directories : undefined;
+    const expectedDiscovery = expected ? bound!.discovery : undefined;
+    // Content changes inside the required profile directories can be atomic settings writes. Only enumeration
+    // containers identify candidate-list provenance; keep their baseline independently of settings admission.
+    const discovery = new Set([path.dirname(resolved.local), ...(resolved.directories ?? [])].filter(filename => !required.has(filename)));
     const paths = [resolved.root, path.join(resolved.root, 'profiles'), path.join(resolved.root, 'steam_profiles'),
       resolved.local, path.dirname(resolved.local), path.dirname(resolved.config), ...(resolved.directories ?? []),
       path.join(resolved.root, 'config.cfg'), path.join(resolved.local, 'config_local.cfg'), resolved.config];
@@ -276,6 +297,7 @@ export class HardModeReader {
     // Physical profile identity excludes settings-file replacements and directory content-change hints.
     const directories = values.filter(value => required.has(value[0])).map(value => value.slice(0, 4));
     return {fingerprint: JSON.stringify(values), profileIdentity: JSON.stringify(directories), directories: new Map(directories.map(value => [value[0], JSON.stringify(value)])),
+      discovery: new Map(values.filter(value => discovery.has(value[0])).map(value => [value[0], JSON.stringify(value)])),
       tuples: new Map(values.map(value => [value[0], JSON.stringify(value)]))};
   }
   private nowNs(): bigint {return (this.options.nowNs ?? (() => process.hrtime.bigint()))();}
@@ -301,7 +323,7 @@ export class HardModeReader {
   private request(source: SourceIdentity, atUtcMs: number, signal: AbortSignal, force = false, cheap = false): Promise<ProfileScan> {
     signal.throwIfAborted();
     this.guardEligible();
-    const key = JSON.stringify([source.game, source.origin, source.processId, source.windowsSessionId, source.processInstanceId, source.pluginSessionId]);
+    const key = this.sourceKey(source);
     let operation = this.running?.key === key && !this.running.settled && !this.running.controller.signal.aborted ? this.running
       : this.queued?.key === key && !this.queued.controller.signal.aborted ? this.queued : undefined;
     if (!operation) {
@@ -331,9 +353,9 @@ export class HardModeReader {
         if (!work.settled && work.consumers.size === 0) this.cancel(work, false, false, reason);
       };
       const cancel = () => {
-        // A consumer timer may run first at the shared deadline. Preserve the physical timeout instead of masking it
-        // as ordinary cancellation; an earlier consumer cancellation still has no authority over the other proofs.
-        if (!work.settled && this.nowNs() - work.startedClientNs >= 2_000_000_000n) this.cancel(work, true);
+        // Subscriber deadlines carry the shared reader's classification even when their timer runs first.
+        // Other aborts keep their own cause; elapsed time does not turn source retirement or supersession into a timeout.
+        if (!work.settled && signal.reason instanceof ProfileVerificationError && signal.reason.code === 'PROFILE_DEADLINE') this.cancel(work, true, false, signal.reason);
         else finish(() => reject(readError(signal.reason)), signal.reason);
       };
       const cancelled = () => finish(() => reject(readError(work.controller.signal.reason)));
@@ -349,10 +371,10 @@ export class HardModeReader {
     }
     const code = timedOut ? 'PROFILE_DEADLINE' : retired ? 'PROFILE_EPOCH_RETIRED' : 'PROFILE_CANCELLED';
     this.options.diagnostic?.({code, durationMs: Math.min(2000, Math.max(0, Number(this.nowNs() - work.startedClientNs) / 1e6))});
-    const profileRetained = timedOut && work.profileGuarded === true && work.generation === this.guardGeneration && this.guardEligible();
-    if (timedOut && !work.preserve && !profileRetained || reason instanceof ProfileVerificationError && !work.preserve && reason !== work.failure) this.invalidate();
-    const timeout = work.preserve && !work.settingsChanged ? UnchangedVerificationError : profileRetained ? ProfileSettingsUnavailableError : ProfileVerificationError;
-    work.controller.abort(timedOut ? new timeout(new Error('Read deadline'), code) : reason);
+    const timeout = timedOut ? reason instanceof ProfileVerificationError ? reason : this.deadline(work.source) : undefined;
+    if (timedOut && !(timeout instanceof UnchangedVerificationError) && !(timeout instanceof ProfileSettingsUnavailableError)
+      || !timedOut && reason instanceof ProfileVerificationError && !work.preserve && reason !== work.failure) this.invalidate();
+    work.controller.abort(timedOut ? timeout : reason);
     if (this.queued === work) {
       this.queued = undefined; clearTimeout(work.timer); work.settled = true; work.reject(work.controller.signal.reason);
     }
@@ -483,6 +505,7 @@ export class HardModeReader {
     if (this.lifetime(source) !== processKey) throw new Error('Process changed');
     const afterMetadata = await this.metadata({...resolved, binding: '', timing: {startedClientNs: work.startedClientNs, completedClientNs: this.nowNs()}}, work);
     if (afterMetadata.profileIdentity !== metadata.profileIdentity) throw new Error('Profile directory changed during read');
+    if (JSON.stringify([...afterMetadata.discovery]) !== JSON.stringify([...metadata.discovery])) throw new Error('Profile candidates changed during read');
     if (afterMetadata.fingerprint !== metadata.fingerprint) {
       // The required profile identity was independently rechecked; changing optional settings cannot qualify bytes.
       this.changedSettings(work);
@@ -496,7 +519,7 @@ export class HardModeReader {
     const binding = createHash('sha256').update(processKey + ':' + log.identity + ':' + JSON.stringify(profile) + ':' + resolved.scope).digest('hex');
     // Commit both baselines only after this ordered operation has passed every shared verification.
     this.previous = {process: processKey, identity: again.identity, text: again.text};
-    this.boundProfile = {process: processKey, root, storage: profile.storage, generation: profile.generation, profile: profile.profile, scope: resolved.scope, directories: metadata.directories};
+    this.boundProfile = {process: processKey, root, storage: profile.storage, generation: profile.generation, profile: profile.profile, scope: resolved.scope, directories: metadata.directories, discovery: metadata.discovery};
     if (settings) settings.binding = binding;
     this.options.diagnostic?.({code: 'PROFILE_VERIFIED', durationMs: Number(timing.completedClientNs - timing.startedClientNs) / 1e6});
     const result = {profile: {...resolved, binding, timing}, settings, settingsError};
@@ -509,7 +532,7 @@ export class HardModeReader {
     } catch (cause) {
       if (work.generation !== this.guardGeneration) throw cause;
       if (work.failure) throw work.failure;
-      if (cause instanceof ProfileSettingsUnavailableError && signal.aborted && cause === signal.reason) throw cause;
+      if ((cause instanceof ProfileSettingsUnavailableError || cause instanceof UnchangedVerificationError) && signal.aborted && cause === signal.reason) throw cause;
       if (cause instanceof ProfileSuperseded && signal.aborted && cause === signal.reason) throw cause;
       if (guardedUnchanged && this.admitted && stage === 'PROFILE_DEADLINE') throw new UnchangedVerificationError(cause, stage);
       if (!guardedUnchanged || !signal.aborted || cause !== signal.reason) this.invalidate();

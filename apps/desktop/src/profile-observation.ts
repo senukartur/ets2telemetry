@@ -113,7 +113,7 @@ export class ProfileObserver {
     this.lastScan = now; this.inFlight = true;
     const epoch = this.epoch, controller = this.controller = new AbortController();
     reader.selectGuardSource?.(profileSourceKey(source));
-    const expire = () => {this.diagnostic({code: 'PROFILE_PROBE_EXPIRED'}); controller.abort(new ProfileVerificationError(new Error('Profile verification deadline'), 'PROFILE_DEADLINE')); if (epoch === this.epoch) {this.pending = undefined; if (!reader.canRetainProfile() || !this.proof) this.suspend();}};
+    const expire = () => {this.diagnostic({code: 'PROFILE_PROBE_EXPIRED'}); controller.abort(reader.deadline?.(source.source) ?? new ProfileVerificationError(new Error('Profile verification deadline'), 'PROFILE_DEADLINE')); if (epoch === this.epoch) {this.pending = undefined; if (!reader.canRetainProfile() || !this.proof) this.suspend();}};
     clearTimeout(this.deadline); this.deadline = setTimeout(expire, 2000);
     try {
       const value = await reader.resolveProfile(source.source, Date.now(), controller.signal, this.tailOnly);

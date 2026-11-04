@@ -50,14 +50,63 @@ function nativeInspection(game: 'ets2' | 'ats' = 'ets2') {
   return {child,controller,diagnostics,target,receipt,work,settled:()=>settled};
 }
 describe('ET-026 isolated reader (REG-008/010/011)', () => {
-  it.each(['file','missing','directory-hint','missing-to-present','superseded'] as const)('withdraws Hard Mode for a partial %s tuple without retiring independent profile identity',async mode=>{
+  it.each(['admitted','cleared','settings-first','superseded'] as const)('revokes discovery provenance while a sibling drains with %s settings admission',async mode=>{
+    vi.useFakeTimers();let now=0n,hold=false,clearHold=false;const completed=gate(),entered=gate(),release=gate(),hintEntered=gate(),hintRelease=gate(),globalObserved=gate(),clearEntered=gate(),clearRelease=gate();
+    const parent=path.dirname(profile),global=path.join(game,'config.cfg'),r=new HardModeReader({documents:path.join(root,'Documents'),process:processFacts,nowNs:()=>now,
+      file:async(filename,limit,signal)=>{if(clearHold&&filename===path.join(profile,'config_local.cfg')){clearEntered.resolve();await clearRelease.promise;}return readStableFile(filename,limit,signal);},
+      metadata:{realpath:async filename=>{if(hold&&filename===path.join(profile,'config_local.cfg')){entered.resolve();await release.promise;}return realpath(filename);},stat:async filename=>{
+        const value=await stat(filename,{bigint:true});if(hold&&filename===parent){hintEntered.resolve();await hintRelease.promise;}if(hold&&filename===global)globalObserved.resolve();return value;
+      }}}),observer=new ProfileObserver(()=>r,()=>now,false),m=new HardModeMonitor((s,ns,at,signal,force)=>observer.readSettings(r,s,ns,at,signal,force).finally(()=>completed.resolve()),undefined,()=>now,undefined,()=>r.canRetain(),undefined,()=>r.drain(),
+      {eligible:()=>r.guardEligible(),select:key=>r.selectGuardSource(key),deadline:s=>r.deadline(s)}),current={source,clockId:'clock',monotonicNs:'1'};
+    r.onInvalidate(()=>m.invalidate());let pending:Promise<unknown>|undefined;
+    try{
+      observer.select(current);m.select(current);await completed.promise;await observer.refresh();now=1n;
+      const bound={...current,boundary:{clockId:'clock',probeSentClientNs:'1',receivedSourceNs:'2'}};observer.select(bound);m.select(bound);await m.refresh();const proof=observer.evidence(),token=observer.status().token;
+      if(mode==='cleared'){
+        await writeFile(global,'uset g_traffic "2"');clearHold=true;const cancelled=new AbortController();
+        const clearing=r.readTimed(source,'2',created+10000,cancelled.signal,undefined,true).catch(error=>error);await clearEntered.promise;
+        expect(m.evidence().assessment.state).toBe('unknown');cancelled.abort(new ProfileSuperseded('Settings scan superseded'));clearHold=false;clearRelease.resolve();await clearing;await r.drain();
+        expect(observer.evidence()).toEqual(proof);expect(observer.status().token).toBe(token);
+      }
+      if(mode==='settings-first')await writeFile(global,'uset g_traffic "2"');
+      await utimes(parent,new Date('2026-10-23T12:00:00Z'),new Date('2026-10-23T12:00:00Z'));now=5_000_000_000n;hold=true;
+      const controller=new AbortController();pending=mode==='superseded'?r.readTimed(source,'3',created+10000,controller.signal,undefined,true).catch(error=>error):m.refresh(true);
+      await entered.promise;await hintEntered.promise;await globalObserved.promise;await Promise.resolve();await Promise.resolve();
+      expect(observer.evidence()).toEqual(proof);expect(observer.status().token).toBe(token);if(mode==='settings-first')expect(m.evidence().assessment.state).toBe('unknown');
+      if(mode==='superseded')controller.abort(new ProfileSuperseded('Same-generation hint'));
+      hintRelease.resolve();await Promise.resolve();await Promise.resolve();expect(observer.evidence()).toBeUndefined();expect(observer.status().token).not.toBe(token);expect(m.evidence().assessment.state).toBe('unknown');
+      let drained=false;void r.drain().then(()=>{drained=true;});await Promise.resolve();expect(drained).toBe(false);
+    }finally{m.close();observer.close();release.resolve();hintRelease.resolve();clearRelease.resolve();await pending;await r.drain();}
+  });
+  it.each([1n,1_000_000n].flatMap(offset=>['profile-first','monitor-only'].flatMap(order=>[false,true].flatMap(changed=>[false,true].map(watchdog=>({offset,order,changed,watchdog}))))) )('classifies an early subscriber deadline without revoking fresh profile guards: $offset/$order/$changed/$watchdog',async({offset,order,changed,watchdog})=>{
+    vi.useFakeTimers();let now=0n,skew=false,hold=false,completed=gate();const entered=gate(),release=gate();
+    const r=new HardModeReader({documents:path.join(root,'Documents'),process:processFacts,nowNs:()=>{if(skew){skew=false;now+=offset;}return now;},file:async(filename,limit,signal)=>{
+      if(hold&&filename===path.join(profile,'config_local.cfg')){entered.resolve();await release.promise;}return readStableFile(filename,limit,signal);
+    }}),observer=new ProfileObserver(()=>r,()=>now,false),m=new HardModeMonitor((s,ns,at,signal,force)=>observer.readSettings(r,s,ns,at,signal,force).finally(()=>completed.resolve()),undefined,()=>now,undefined,()=>r.canRetain(),undefined,()=>r.drain(),
+      {eligible:()=>r.guardEligible(),select:key=>r.selectGuardSource(key),deadline:s=>r.deadline(s)}),current={source,clockId:'clock',monotonicNs:'1'};
+    r.onInvalidate(()=>m.invalidate());let pending:Promise<void>|undefined;
+    try{
+      observer.select(current);m.select(current);await completed.promise;await observer.refresh();now=1n;
+      const bound={...current,boundary:{clockId:'clock',probeSentClientNs:'1',receivedSourceNs:'2'}};observer.select(bound);m.select(bound);await m.refresh();const proof=observer.evidence(),token=observer.status().token;
+      now=5_000_000_000n;if(order==='monitor-only')await observer.refresh();
+      if(changed)await writeFile(path.join(profile,'config.cfg'),HARD_MODE_CONFIG.replace('g_fatigue "1"','g_fatigue "0"'));
+      hold=true;skew=true;completed=gate();if(order==='profile-first')void observer.refresh();pending=m.refresh(true);await entered.promise;
+      now+=2_000_000_000n-offset;await vi.advanceTimersByTimeAsync(2000);await completed.promise;
+      expect(observer.evidence()).toEqual(proof);expect(observer.status().token).toBe(token);expect(m.evidence().assessment.state).toBe(changed?'unknown':'pass');
+      if(watchdog){now+=5_001_000_000n;await vi.advanceTimersByTimeAsync(5001);expect(observer.evidence()).toBeUndefined();expect(observer.status().token).not.toBe(token);expect(m.evidence().assessment.state).toBe('unknown');}
+      release.resolve();await pending;await r.drain();
+      if(watchdog){expect(observer.evidence()).toBeUndefined();expect(m.evidence().assessment.state).toBe('unknown');}
+      else{expect(observer.evidence()).toEqual(proof);expect(observer.status().token).toBe(token);expect(m.evidence().assessment.state).toBe(changed?'unknown':'pass');}
+    }finally{m.close();observer.close();release.resolve();await pending;await r.drain();}
+  });
+  it.each(['file','missing','directory-hint','missing-to-present','superseded'] as const)('withdraws each partial %s tuple according to its independent evidence role',async mode=>{
     vi.useFakeTimers();let now=0n,hold=false;const completed=gate(),entered=gate(),release=gate(),observed=gate(),tupleRelease=gate();
     const target=mode==='directory-hint'?path.join(game,'profiles'):mode==='missing-to-present'?path.join(game,'steam_profiles'):path.join(profile,'config.cfg');
     const r=new HardModeReader({documents:path.join(root,'Documents'),process:processFacts,nowNs:()=>now,metadata:{
       realpath:async filename=>{if(hold&&filename===path.join(game,'config.cfg')){entered.resolve();await release.promise;}try{return await realpath(filename);}catch(error){if(hold&&filename===target)observed.resolve();throw error;}},
       stat:async filename=>{const value=await stat(filename,{bigint:true});if(hold&&filename===target){observed.resolve();if(mode==='superseded')await tupleRelease.promise;}return value;}}});
     const observer=new ProfileObserver(()=>r,()=>now,false),m=new HardModeMonitor((s,ns,at,signal,force)=>observer.readSettings(r,s,ns,at,signal,force).finally(()=>completed.resolve()),undefined,()=>now,undefined,()=>r.canRetain(),undefined,()=>r.drain(),
-      {eligible:()=>r.guardEligible(),select:key=>r.selectGuardSource(key)}),current={source,clockId:'clock',monotonicNs:'1'};
+      {eligible:()=>r.guardEligible(),select:key=>r.selectGuardSource(key),deadline:s=>r.deadline(s)}),current={source,clockId:'clock',monotonicNs:'1'};
     r.onInvalidate(()=>m.invalidate());let pending:Promise<unknown>|undefined,replacement:Promise<unknown>|undefined;
     try{
       observer.select(current);m.select(current);await completed.promise;await observer.refresh();now=1n;
@@ -66,7 +115,10 @@ describe('ET-026 isolated reader (REG-008/010/011)', () => {
       now=5_000_000_000n;hold=true;pending=mode==='superseded'?observer.boundary():m.refresh(true);await entered.promise;await observed.promise;
       if(mode==='superseded'){expect(m.evidence().assessment.state).toBe('pass');replacement=observer.boundary();tupleRelease.resolve();}
       await Promise.resolve();await Promise.resolve();
-      expect(m.evidence().assessment.state).toBe('unknown');expect(observer.status().token).toBe(token);if(mode!=='superseded')expect(observer.evidence()).toEqual(proof);
+      expect(m.evidence().assessment.state).toBe('unknown');
+      // Enumeration-parent changes retire profile provenance; unrelated/settings tuples preserve it.
+      if(mode==='directory-hint'){expect(observer.evidence()).toBeUndefined();expect(observer.status().token).not.toBe(token);}
+      else{expect(observer.status().token).toBe(token);if(mode!=='superseded')expect(observer.evidence()).toEqual(proof);}
       let drained=false;void r.drain().then(()=>{drained=true;});await Promise.resolve();expect(drained).toBe(false);
     }finally{m.close();observer.close();release.resolve();tupleRelease.resolve();await pending;await replacement;await r.drain();}
   });
@@ -81,7 +133,7 @@ describe('ET-026 isolated reader (REG-008/010/011)', () => {
         const value=await readStableFile(filename,limit,signal);observed.resolve();if(mode==='retired'||mode==='superseded')await byteRelease.promise;return value;
       }return readStableFile(filename,limit,signal);
     }}),observer=new ProfileObserver(()=>r,()=>now,false),m=new HardModeMonitor((s,ns,at,signal,force)=>observer.readSettings(r,s,ns,at,signal,force).finally(()=>readDone.resolve()),value=>changes.push(value),()=>now,undefined,()=>r.canRetain(),undefined,()=>r.drain(),
-      {eligible:()=>r.guardEligible(),select:key=>r.selectGuardSource(key)}),current={source,clockId:'clock',monotonicNs:'1'};
+      {eligible:()=>r.guardEligible(),select:key=>r.selectGuardSource(key),deadline:s=>r.deadline(s)}),current={source,clockId:'clock',monotonicNs:'1'};
     r.onInvalidate(()=>m.invalidate());let pending:Promise<unknown>|undefined;
     try{
       observer.select(current);m.select(current);await readDone.promise;await observer.refresh();now=1n;
@@ -108,7 +160,7 @@ describe('ET-026 isolated reader (REG-008/010/011)', () => {
     const r=new HardModeReader({documents:path.join(root,'Documents'),process:processFacts,nowNs:now,file:async(filename,limit,signal)=>{
       if(hold&&filename===path.join(profile,'config_local.cfg')){entered.resolve();await release.promise;}return readStableFile(filename,limit,signal);
     }}),observer=new ProfileObserver(()=>r,now,false),m=new HardModeMonitor((s,ns,at,signal,force)=>observer.readSettings(r,s,ns,at,signal,force).finally(()=>completed.resolve()),undefined,now,undefined,()=>r.canRetain(),undefined,()=>r.drain(),
-      {eligible:()=>r.guardEligible(),select:key=>r.selectGuardSource(key)}),current={source,clockId:'clock',monotonicNs:'1'};
+      {eligible:()=>r.guardEligible(),select:key=>r.selectGuardSource(key),deadline:s=>r.deadline(s)}),current={source,clockId:'clock',monotonicNs:'1'};
     r.onInvalidate(()=>m.invalidate());let pending:Promise<unknown>|undefined,raw:Promise<unknown>|undefined;
     try{
       observer.select(current);m.select(current);await completed.promise;await observer.refresh();await vi.advanceTimersByTimeAsync(1);
@@ -134,7 +186,7 @@ describe('ET-026 isolated reader (REG-008/010/011)', () => {
         if(hold&&filename===global){entered.resolve();await release.promise;return stat(filename,{bigint:true});}
         const value=stat(filename,{bigint:true});if(hold)stats.push(value);return value;
       }}}),observer=new ProfileObserver(()=>r,()=>now,false),m=new HardModeMonitor((s,ns,at,signal,force)=>observer.readSettings(r,s,ns,at,signal,force).finally(()=>completed.resolve()),value=>changes.push(value),()=>now,undefined,()=>r.canRetain(),undefined,()=>r.drain(),
-      {eligible:()=>r.guardEligible(),select:key=>r.selectGuardSource(key)}),current={source,clockId:'clock',monotonicNs:'1'};
+      {eligible:()=>r.guardEligible(),select:key=>r.selectGuardSource(key),deadline:s=>r.deadline(s)}),current={source,clockId:'clock',monotonicNs:'1'};
     r.onInvalidate(()=>m.invalidate());let pending:Promise<void>|undefined;
     try{
       observer.select(current);m.select(current);await completed.promise;await observer.refresh();now=1n;
@@ -150,9 +202,9 @@ describe('ET-026 isolated reader (REG-008/010/011)', () => {
     const r=new HardModeReader({documents:path.join(root,'Documents'),process:processFacts,nowNs:()=>now,
       profileDirectory:async parent=>{if(holdLocation){locationEntered.resolve();await locationRelease.promise;}return opendir(parent);},
       metadata:{realpath:async filename=>{if(holdMetadata&&filename===path.join(game,'config.cfg')){globalEntered.resolve();await globalRelease.promise;}if(holdMetadata&&mode==='cleared'&&filename===profile)await identityPathRelease.promise;return realpath(filename);},
-        stat:async filename=>{const value=await stat(filename,{bigint:true});if(holdMetadata&&filename===profile){identityEntered.resolve();if(mode==='superseded')await identityRelease.promise;}return value;}}});
+        stat:async filename=>{const value=await stat(filename,{bigint:true});if(holdMetadata&&mode==='superseded'&&filename===path.dirname(profile))await identityRelease.promise;if(holdMetadata&&filename===profile){identityEntered.resolve();if(mode==='superseded')await identityRelease.promise;}return value;}}});
     const observer=new ProfileObserver(()=>r,()=>now,false),m=new HardModeMonitor((s,ns,at,signal,force)=>observer.readSettings(r,s,ns,at,signal,force).finally(()=>completed.resolve()),undefined,()=>now,undefined,()=>r.canRetain(),undefined,()=>r.drain(),
-      {eligible:()=>r.guardEligible(),select:key=>r.selectGuardSource(key)}),current={source,clockId:'clock',monotonicNs:'1'};
+      {eligible:()=>r.guardEligible(),select:key=>r.selectGuardSource(key),deadline:s=>r.deadline(s)}),current={source,clockId:'clock',monotonicNs:'1'};
     r.onInvalidate(()=>m.invalidate());let pending:Promise<unknown>|undefined,replacement:Promise<unknown>|undefined;
     try{
       observer.select(current);m.select(current);await completed.promise;await observer.refresh();now=1n;
@@ -182,7 +234,7 @@ describe('ET-026 isolated reader (REG-008/010/011)', () => {
       metadata:{realpath:async filename=>{if(hold&&filename===global&&stage!=='stat'){entered.resolve();await release.promise;if(stage==='retired-error')throw new Error('Retired metadata failed');}return realpath(filename);},
         stat:async filename=>{if(hold&&filename===global){globalStats++;if(stage==='stat'){entered.resolve();await release.promise;}}if(hold&&filename===local){await entered.promise;throw new Error('Independent metadata failed');}return stat(filename,{bigint:true});}}});
     const observer=new ProfileObserver(()=>r,()=>now,false),m=new HardModeMonitor((s,ns,at,signal,force)=>observer.readSettings(r,s,ns,at,signal,force).finally(()=>completed.resolve()),undefined,()=>now,undefined,()=>r.canRetain(),undefined,()=>r.drain(),
-      {eligible:()=>r.guardEligible(),select:key=>r.selectGuardSource(key)}),current={source,clockId:'clock',monotonicNs:'1'};
+      {eligible:()=>r.guardEligible(),select:key=>r.selectGuardSource(key),deadline:s=>r.deadline(s)}),current={source,clockId:'clock',monotonicNs:'1'};
     r.onInvalidate(()=>m.invalidate());let pending:Promise<void>|undefined,drain:Promise<void>|undefined,latest:Promise<unknown>|undefined;
     try{
       observer.select(current);m.select(current);await completed.promise;await observer.refresh();now=1n;
@@ -693,7 +745,8 @@ describe('ET-026 isolated reader (REG-008/010/011)', () => {
     const entered=gate(),release=gate();let periodic=false,completed=gate();
     const inspect=vi.fn(processFacts),r=new HardModeReader({documents:path.join(root,'Documents'),process:inspect,nowNs:now,
       file:async(filename,limit,signal)=>{if(periodic&&filename===path.join(profile,'config.cfg')){entered.resolve();await release.promise;}return readStableFile(filename,limit,signal);}});
-    const observer=new ProfileObserver(()=>r,now,false),m=new HardModeMonitor((s,ns,at,signal)=>observer.readSettings(r,s,ns,at,signal).then(value=>{completed.resolve();return value;}),undefined,now,undefined,()=>r.canRetain());
+    const observer=new ProfileObserver(()=>r,now,false),m=new HardModeMonitor((s,ns,at,signal)=>observer.readSettings(r,s,ns,at,signal).then(value=>{completed.resolve();return value;}),undefined,now,undefined,()=>r.canRetain(),undefined,undefined,{eligible:()=>r.guardEligible(),select:()=>undefined,deadline:s=>r.deadline(s)});
+    // The observer owns source retirement here; closing only the monitor remains an independent consumer cancellation.
     const current={source,clockId:'clock',monotonicNs:'1'};
     try {
       observer.select(current);m.select(current);await completed.promise;await observer.refresh();
@@ -719,7 +772,7 @@ describe('ET-026 isolated reader (REG-008/010/011)', () => {
     const r=new HardModeReader({documents:path.join(root,'Documents'),process:processFacts,nowNs:()=>now,
       file:async(filename,limit,signal)=>{if(hold&&filename===path.join(profile,'config.cfg')){entered.resolve();await release.promise;}return readStableFile(filename,limit,signal);}}),observer=new ProfileObserver(()=>r,()=>now,false);
     const m=new HardModeMonitor((s,ns,at,signal,force)=>observer.readSettings(r,s,ns,at,signal,force).finally(()=>completed.resolve()),undefined,()=>now,undefined,()=>r.canRetain(),undefined,()=>r.drain(),
-      {eligible:()=>r.guardEligible(),select:key=>r.selectGuardSource(key)}),current={source,clockId:'clock',monotonicNs:'1'};
+      {eligible:()=>r.guardEligible(),select:key=>r.selectGuardSource(key),deadline:s=>r.deadline(s)}),current={source,clockId:'clock',monotonicNs:'1'};
     r.onInvalidate(()=>m.invalidate());let pending:Promise<void>|undefined;
     try{
       observer.select(current);m.select(current);await completed.promise;await observer.refresh();now=1n;
@@ -740,7 +793,7 @@ describe('ET-026 isolated reader (REG-008/010/011)', () => {
     const r=new HardModeReader({documents:path.join(root,'Documents'),process:inspect,nowNs:()=>now,file:async(filename,limit,signal)=>{
       if(!filename.endsWith('game.log.txt'))configs++;if(fail&&filename===path.join(profile,'config.cfg'))throw new Error('Optional settings unavailable');return readStableFile(filename,limit,signal);
     }}),observer=new ProfileObserver(()=>r,()=>now,false),m=new HardModeMonitor((s,ns,at,signal,force)=>observer.readSettings(r,s,ns,at,signal,force).finally(()=>completed.resolve()),undefined,()=>now,undefined,()=>r.canRetain(),undefined,()=>r.drain(),
-      {eligible:()=>r.guardEligible(),select:key=>r.selectGuardSource(key)}),current={source,clockId:'clock',monotonicNs:'1'};
+      {eligible:()=>r.guardEligible(),select:key=>r.selectGuardSource(key),deadline:s=>r.deadline(s)}),current={source,clockId:'clock',monotonicNs:'1'};
     r.onInvalidate(()=>m.invalidate());
     try{
       observer.select(current);m.select(current);await completed.promise;await observer.refresh();now=1n;
@@ -754,7 +807,7 @@ describe('ET-026 isolated reader (REG-008/010/011)', () => {
     const r=new HardModeReader({documents:path.join(root,'Documents'),process:inspect,nowNs:()=>now,file:async(filename,limit,signal)=>{
       if(hold&&!held&&filename.endsWith('game.log.txt')){held=true;entered.resolve();await release.promise;}return readStableFile(filename,limit,signal);
     }}),observer=new ProfileObserver(()=>r,()=>now,false),m=new HardModeMonitor((s,ns,at,signal)=>observer.readSettings(r,s,ns,at,signal).finally(()=>completed.resolve()),undefined,()=>now,undefined,()=>r.canRetain(),undefined,()=>r.drain(),
-      {eligible:()=>r.guardEligible(),select:key=>r.selectGuardSource(key)}),current={source,clockId:'clock',monotonicNs:'1'};
+      {eligible:()=>r.guardEligible(),select:key=>r.selectGuardSource(key),deadline:s=>r.deadline(s)}),current={source,clockId:'clock',monotonicNs:'1'};
     r.onInvalidate(()=>m.invalidate());let pending:Promise<void>|undefined;
     try{
       observer.select(current);m.select(current);await completed.promise;await observer.refresh();now=1n;
