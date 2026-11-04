@@ -89,8 +89,15 @@ describe('ET-026 isolated reader (REG-008/010/011)', () => {
       observer.select(current);m.select(current);await completed.promise;await observer.refresh();now=1n;
       const bound={...current,boundary:{clockId:'clock',probeSentClientNs:'1',receivedSourceNs:'2'}};observer.select(bound);m.select(bound);await m.refresh();const proof=observer.evidence(),token=observer.status().token;
       now=5_000_000_000n;if(order==='monitor-only')await observer.refresh();
-      if(changed)await writeFile(path.join(profile,'config.cfg'),HARD_MODE_CONFIG.replace('g_fatigue "1"','g_fatigue "0"'));
+      if(changed){
+        const filename=path.join(profile,'config.cfg'),before=await stat(filename,{bigint:true});
+        await writeFile(filename,HARD_MODE_CONFIG.replace('g_fatigue "1"','g_fatigue "0"'));
+        const timestamp=new Date('2026-10-22T12:00:00Z');await utimes(filename,timestamp,timestamp);
+        const after=await stat(filename,{bigint:true});expect(after.size).toBe(before.size);expect(after.mtimeNs).not.toBe(before.mtimeNs);
+      }
       hold=true;skew=true;completed=gate();if(order==='profile-first')void observer.refresh();pending=m.refresh(true);await entered.promise;
+      // Optional reads start only after metadata guards; establish withdrawal before racing their deadline.
+      expect(m.evidence().assessment.state).toBe(changed?'unknown':'pass');
       now+=2_000_000_000n-offset;await vi.advanceTimersByTimeAsync(2000);await completed.promise;
       expect(observer.evidence()).toEqual(proof);expect(observer.status().token).toBe(token);expect(m.evidence().assessment.state).toBe(changed?'unknown':'pass');
       if(watchdog){now+=5_001_000_000n;await vi.advanceTimersByTimeAsync(5001);expect(observer.evidence()).toBeUndefined();expect(observer.status().token).not.toBe(token);expect(m.evidence().assessment.state).toBe('unknown');}
