@@ -1,4 +1,4 @@
-import {mkdtemp,mkdir,writeFile,rename,rm,utimes,stat} from 'node:fs/promises';
+import {mkdtemp,mkdir,writeFile,rename,rm,utimes,stat,opendir} from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import {afterEach,beforeEach,describe,expect,it,vi} from 'vitest';
@@ -17,6 +17,24 @@ afterEach(async()=>{await rm(root,{recursive:true,force:true});});
 const reader=(nowNs?:()=>bigint)=>new HardModeReader({documents:root,nowNs,process:(s)=>Promise.resolve({pid:s.processId,createdUtcMs:created,executable:'C:/Synthetic/eurotrucks2.exe',commandLine:'eurotrucks2.exe'})});
 const resolve=(r=reader(),s=source)=>r.resolveProfile(s,created+10000,new AbortController().signal);
 describe('REG-003/008 independent verified profile identity',()=>{
+  it.each(['local','cloud-local','cloud-remote'] as const)('revokes a replaced %s directory before held rediscovery can lend old proof',async variant=>{
+    let now=0n,hold=false,enter!:()=>void,release!:()=>void;
+    const entered=new Promise<void>(resolve=>{enter=resolve;}),released=new Promise<void>(resolve=>{release=resolve;}),steam=path.join(root,'Steam');
+    const local=path.join(game,variant==='local'?'profiles':'steam_profiles',profile),remote=path.join(steam,'userdata','100','227300','remote','profiles',profile);
+    if(variant!=='local'){await mkdir(local,{recursive:true});await mkdir(remote,{recursive:true});await writeFile(path.join(game,'game.log.txt'),loaded('steam'));}
+    const r=new HardModeReader({documents:root,steamRoot:steam,nowNs:()=>now,process:()=>Promise.resolve({pid:source.processId,createdUtcMs:created,executable:'C:/Synthetic/eurotrucks2.exe',homeDirectory:null}),
+      profileDirectory:async parent=>{if(hold){enter();await released;}return opendir(parent);}}),observer=new ProfileObserver(()=>r,()=>now,false),current={source,clockId:'clock',monotonicNs:'1'};
+    let work:Promise<unknown>|undefined;
+    try{
+      observer.select(current);await observer.refresh();now=1n;observer.select({...current,boundary:{clockId:'clock',probeSentClientNs:'1',receivedSourceNs:'2'}});
+      expect(observer.evidence()).toBeDefined();const token=observer.status().token,target=variant==='cloud-remote'?remote:local;
+      await rename(target,target+'.old');await mkdir(target);hold=true;
+      work=resolve(r).catch(error=>error);await entered;
+      expect(observer.evidence()).toBeUndefined();expect(observer.status()).toMatchObject({phase:'unavailable'});expect(observer.status().token).not.toBe(token);
+      // Current required guards cannot lend the old directory's proof while rediscovery is incomplete.
+      expect(r.guardEligible()).toBe(true);expect(observer.evidence()).toBeUndefined();
+    }finally{hold=false;release();observer.close();await work;await r.drain();}
+  });
   it('suspends before a lifecycle event, coalesces cheap guards and admits only beyond a later causal receipt',async()=>{
     let now=0n,inspect=0;const r=new HardModeReader({documents:root,nowNs:()=>now,process:s=>{inspect++;return Promise.resolve({pid:s.processId,createdUtcMs:created,executable:'C:/Synthetic/eurotrucks2.exe',homeDirectory:null});}});
     const observer=new ProfileObserver(()=>r,()=>now,false),current={source,clockId:'clock',monotonicNs:'1'};

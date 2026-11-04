@@ -35,6 +35,7 @@ export interface HardModeReaderOptions {
   /** Controlled clocks/file gates for isolated tests only. */
   nowNs?: () => bigint;
   file?: typeof readStableFile;
+  profileDirectory?: (directory: string) => ReturnType<typeof opendir>;
 }
 export interface BoundProfile {profile: string; storage: 'local' | 'cloud'; generation: number}
 /** New selections invalidate preceding save markers; a later save namespace supersedes old profile-type markers. */
@@ -89,13 +90,13 @@ function logCreation(log: string): number {
   if (month < 0) return NaN;
   return new Date(Number(header[3]), month, Number(header[2]), Number(header[4]), Number(header[5]), Number(header[6])).getTime();
 }
-async function boundedDirectory(directory: string, limit: number) {
+async function boundedDirectory(directory: string, limit: number, openDirectory = (directory: string) => opendir(directory)) {
   const entries = [];
-  for await (const entry of await opendir(directory)) {entries.push(entry); if (entries.length > limit) throw new Error('Directory bound');}
+  for await (const entry of await openDirectory(directory)) {entries.push(entry); if (entries.length > limit) throw new Error('Directory bound');}
   return entries;
 }
-async function profileDirectory(parent: string, profile: string): Promise<string> {
-  const entries = await boundedDirectory(parent, MAX_PROFILES);
+async function profileDirectory(parent: string, profile: string, openDirectory?: HardModeReaderOptions['profileDirectory']): Promise<string> {
+  const entries = await boundedDirectory(parent, MAX_PROFILES, openDirectory);
   if (entries.length > MAX_PROFILES) throw new Error('Profile bound');
   const matching = entries.filter(e => e.isDirectory() && e.name.toUpperCase() === profile);
   if (matching.length !== 1) throw new Error('Profile ambiguous');
@@ -128,7 +129,7 @@ export class HardModeReader {
   private readonly processes = new Map<string, {value?: GameProcess; failures: number; nextNs: bigint}>();
   private starts: bigint[] = [];
   private tail: {process: string; value: ProfileLogTail} | undefined;
-  private admitted: {key: string; scan: ProfileScan; metadata: string; fullNs: bigint} | undefined;
+  private admitted: {key: string; scan: ProfileScan; metadata: string; profileIdentity: string; fullNs: bigint} | undefined;
   private guard: {startedNs: bigint; deadlineNs: bigint} | undefined;
   private guardTimer: ReturnType<typeof setTimeout> | undefined;
   private guardGeneration = 0;
@@ -211,17 +212,21 @@ export class HardModeReader {
       throw error;
     }
   }
-  private async metadata(resolved: ResolvedProfile): Promise<string> {
+  private async metadata(resolved: ResolvedProfile): Promise<{fingerprint: string; profileIdentity: string}> {
+    const required = new Set([resolved.local, path.dirname(resolved.config)]);
     const paths = [resolved.root, path.join(resolved.root, 'profiles'), path.join(resolved.root, 'steam_profiles'),
       resolved.local, path.dirname(resolved.local), path.dirname(resolved.config), ...(resolved.directories ?? []),
       path.join(resolved.root, 'config.cfg'), path.join(resolved.local, 'config_local.cfg'), resolved.config];
-    return JSON.stringify(await Promise.all(paths.map(async filename => {
+    const values = await Promise.all(paths.map(async filename => {
       try {
         if (path.resolve(await realpath(filename)).toLowerCase() !== path.resolve(filename).toLowerCase()) throw new Error('Redirected path');
         const value = await stat(filename, {bigint: true});
+        if (required.has(filename) && !value.isDirectory()) throw new Error('Profile directory unproven');
         return [filename, value.dev, value.ino, value.birthtimeNs, value.size, value.mtimeNs, value.ctimeNs].map(String);
-      } catch (error) {if ((error as NodeJS.ErrnoException).code === 'ENOENT') return [filename, 'missing']; throw error;}
-    })));
+      } catch (error) {if (!required.has(filename) && (error as NodeJS.ErrnoException).code === 'ENOENT') return [filename, 'missing']; throw error;}
+    }));
+    // Physical profile identity excludes settings-file replacements and directory content-change hints.
+    return {fingerprint: JSON.stringify(values), profileIdentity: JSON.stringify(values.filter(value => required.has(value[0])).map(value => value.slice(0, 4)))};
   }
   private nowNs(): bigint {return (this.options.nowNs ?? (() => process.hrtime.bigint()))();}
   private file(filename: string, limit: number, signal: AbortSignal) {return (this.options.file ?? readStableFile)(filename, limit, signal);}
@@ -299,7 +304,7 @@ export class HardModeReader {
     });
   }
   private async location(source: SourceIdentity, root: string, profile: BoundProfile) {
-    const local = await profileDirectory(path.join(root, profile.storage === 'local' ? 'profiles' : 'steam_profiles'), profile.profile);
+    const local = await profileDirectory(path.join(root, profile.storage === 'local' ? 'profiles' : 'steam_profiles'), profile.profile, this.options.profileDirectory);
     let config = path.join(local, 'config.cfg');
     const directories: string[] = [];
     if (profile.storage === 'cloud') {
@@ -359,10 +364,11 @@ export class HardModeReader {
     const sameProfile = old?.key === work.key && JSON.stringify(old.scan.profile.profile) === JSON.stringify(profile) && old.scan.profile.root === root;
     let resolved = sameProfile ? old.scan.profile : await this.location(source, root, profile);
     let metadata = await this.metadata({...resolved, binding: '', timing: {startedClientNs: work.startedClientNs, completedClientNs: this.nowNs()}});
-    const unchanged = sameProfile && old.metadata === metadata;
+    const sameIdentity = sameProfile && old.profileIdentity === metadata.profileIdentity;
+    const unchanged = sameIdentity && old.metadata === metadata.fingerprint;
     guardedUnchanged = unchanged === true;
     work.preserve = guardedUnchanged;
-    if (old && !unchanged) this.invalidate(!sameProfile);
+    if (old && !unchanged) this.invalidate(!sameIdentity);
     // Required guards renew before optional byte verification. A hung settings read cannot renew this bound again.
     this.guarded(work);
     const full = work.force || !unchanged || !work.cheap && (this.nowNs() < old.fullNs || this.nowNs() - old.fullNs >= 60_000_000_000n);
@@ -371,8 +377,8 @@ export class HardModeReader {
     // Full rediscovery also checks newly created Cloud candidates and directory replacement.
     resolved = await this.location(source, root, profile);
     metadata = await this.metadata({...resolved, binding: '', timing: {startedClientNs: work.startedClientNs, completedClientNs: this.nowNs()}});
-    if (old && (old.metadata !== metadata || old.scan.profile.scope !== resolved.scope || old.scan.profile.config !== resolved.config)) {
-      this.invalidate(!sameProfile || old.scan.profile.scope !== resolved.scope || old.scan.profile.config !== resolved.config);
+    if (old && (old.metadata !== metadata.fingerprint || old.profileIdentity !== metadata.profileIdentity || old.scan.profile.scope !== resolved.scope || old.scan.profile.config !== resolved.config)) {
+      this.invalidate(!sameProfile || old.profileIdentity !== metadata.profileIdentity || old.scan.profile.scope !== resolved.scope || old.scan.profile.config !== resolved.config);
     }
     if (bound?.process === processKey && bound.generation === profile.generation && bound.profile === profile.profile && bound.scope !== resolved.scope) throw new Error('Profile directory replaced');
     let settings: HardModeObservation | null = null, settingsError: unknown;
@@ -393,7 +399,7 @@ export class HardModeReader {
     stage = 'PROFILE_PROCESS_CHANGED';
     if (this.lifetime(source) !== processKey) throw new Error('Process changed');
     const afterMetadata = await this.metadata({...resolved, binding: '', timing: {startedClientNs: work.startedClientNs, completedClientNs: this.nowNs()}});
-    if (afterMetadata !== metadata) throw new Error('Settings changed during read');
+    if (afterMetadata.fingerprint !== metadata.fingerprint || afterMetadata.profileIdentity !== metadata.profileIdentity) throw new Error('Settings changed during read');
     this.current(work);
     stage = 'PROFILE_DEADLINE';
     const timing = {startedClientNs: work.startedClientNs, completedClientNs: this.nowNs()};
@@ -409,7 +415,7 @@ export class HardModeReader {
       // Independent tail, process and metadata guards above established the same generation.
       return {...structuredClone(old.scan), profile: {...result.profile}};
     }
-    this.admitted = {key: work.key, scan: structuredClone(result), metadata, fullNs: work.startedClientNs};
+    this.admitted = {key: work.key, scan: structuredClone(result), metadata: metadata.fingerprint, profileIdentity: metadata.profileIdentity, fullNs: work.startedClientNs};
     return result;
     } catch (cause) {
       if (cause instanceof ProfileSuperseded && signal.aborted && cause === signal.reason) throw cause;
