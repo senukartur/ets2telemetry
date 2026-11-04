@@ -1,7 +1,7 @@
 import {inspectGameProcess} from '../../apps/desktop/src/hard-mode/process';
 import {EventEmitter} from 'node:events';
 import {PassThrough} from 'node:stream';
-import {mkdtemp, mkdir, open, rm, writeFile, rename, utimes, symlink, appendFile} from 'node:fs/promises';
+import {mkdtemp, mkdir, open, rm, writeFile, rename, utimes, symlink, appendFile, realpath} from 'node:fs/promises';
 import {ProfileLogParser, ProfileLogTail} from '../../apps/desktop/src/hard-mode/log-tail';
 import path from 'node:path';
 import os from 'node:os';
@@ -13,6 +13,7 @@ import {ProfileObserver} from '../../apps/desktop/src/profile-observation';
 import type {HardModeObservation} from '../../packages/contracts/src/hard-mode';
 import type {SourceIdentity} from '../../packages/contracts/src/protocol-v1';
 import {HARD_MODE_CONFIG} from '../shared/hard-mode';
+import {unknownHardMode} from '../../packages/telemetry-core/src/hard-mode';
 const source: SourceIdentity = {game: 'ets2', origin: 'game', processId: 123, windowsSessionId: 1, processInstanceId: '10000000-0000-4000-8000-000000000001', pluginSessionId: '20000000-0000-4000-8000-000000000001'};
 const name = 'Synthetic Профиль', id = Buffer.from(name).toString('hex').toUpperCase();
 const created = new Date(2026, 9, 21, 12, 0, 0).getTime();
@@ -21,7 +22,7 @@ const selection = `00:00:01.000 : New profile selected: '${name}'\n`;
 const save = (storage: 'home' | 'steam' = 'home') => `00:00:02.000 : Loading save. Type: 0, path: <MEMFILE><UFS>/${storage}/profiles/${id}/save/autosave/game.sii\n`;
 let root: string, game: string, profile: string;
 beforeEach(async () => {
-  root = await mkdtemp(path.join(os.tmpdir(), 'ets2-hard-mode-')); game = path.join(root, 'Documents', 'Euro Truck Simulator 2'); profile = path.join(game, 'profiles', id);
+  root = await realpath(await mkdtemp(path.join(os.tmpdir(), 'ets2-hard-mode-'))); game = path.join(root, 'Documents', 'Euro Truck Simulator 2'); profile = path.join(game, 'profiles', id);
   await mkdir(profile, {recursive: true});
   await writeFile(path.join(game, 'game.log.txt'), header + selection + save());
   await writeFile(path.join(game, 'config.cfg'), 'uset g_traffic "1.0"');
@@ -33,6 +34,20 @@ const processFacts = () => Promise.resolve({pid: source.processId, createdUtcMs:
 const reader = () => new HardModeReader({documents: path.join(root, 'Documents'), process: processFacts});
 const read = (r = reader()) => r.read(source, '100', created + 10000, new AbortController().signal);
 function gate<T = void>() {let resolve!: (value: T) => void; const promise = new Promise<T>(yes => {resolve = yes;}); return {promise, resolve};}
+const unknownObservation=():HardModeObservation=>({assessment:unknownHardMode(0),binding:null,pluginSessionId:null,sourceMonotonicNs:null});
+function nativeFrame(value: unknown): Buffer {
+  const bytes=value instanceof Buffer?value:Buffer.from(JSON.stringify(value)),prefix=Buffer.alloc(4);prefix.writeUInt32LE(bytes.length);
+  return Buffer.concat([prefix,bytes]);
+}
+function nativeInspection(game: 'ets2' | 'ats' = 'ets2') {
+  const peer={...source,game},target={source:peer,processCreationTime:(BigInt(created)*10000n+116444736000000000n+9999n).toString(),userTag:'a'.repeat(64)};
+  const child=Object.assign(new EventEmitter(),{stdin:new PassThrough(),stdout:new PassThrough(),stderr:new PassThrough(),kill:vi.fn()});
+  const launch=vi.fn(()=>child) as unknown as typeof import('node:child_process').spawn,controller=new AbortController(),diagnostics:ProfileDiagnostic[]=[];
+  let settled=false;
+  const work=inspectGameProcess(peer,controller.signal,value=>diagnostics.push(value),{executable:'C:\\Synthetic\\client.exe',target},launch).then(value=>{settled=true;return value;});
+  const receipt={type:'profile-process',schemaVersion:1,target,executable:`C:\\Synthetic\\${game==='ets2'?'eurotrucks2':'amtrucks'}.exe`,homeDirectory:null as string|null};
+  return {child,controller,diagnostics,target,receipt,work,settled:()=>settled};
+}
 describe('ET-026 isolated reader (REG-008/010/011)', () => {
   it.each(['superseded','guard-error','deadline','log-change','profile-change'] as const)('distinguishes same-source supersession from a required %s failure',async mode=>{
     vi.useFakeTimers();let now=0n,hold=false,held=false;const entered=gate(),release=gate(),completed=gate();
@@ -144,6 +159,99 @@ describe('ET-026 isolated reader (REG-008/010/011)', () => {
     now=900_000_000n;await m.refresh(true);expect(scan).toHaveBeenCalledTimes(2);
     now=1_100_000_000n;const c=m.refresh(true);expect(scan).toHaveBeenCalledTimes(3);finish();await c;m.close();
   });
+  it('latches one manual full read after a cached reconnect has drained but awaits causal binding',async()=>{
+    let now=0n,configReads=0,active=0,maximum=0,completed=gate();
+    const inspect=vi.fn(processFacts),r=new HardModeReader({documents:path.join(root,'Documents'),process:inspect,nowNs:()=>now,
+      file:async(filename,limit,signal)=>{maximum=Math.max(maximum,++active);try{if(!filename.endsWith('game.log.txt'))configReads++;return await readStableFile(filename,limit,signal);}finally{active--;}}});
+    const observer=new ProfileObserver(()=>r,()=>now,false),scan=vi.fn((s:SourceIdentity,ns:string,at:number,signal:AbortSignal,force?:boolean)=>observer.readSettings(r,s,ns,at,signal,force).finally(()=>completed.resolve()));
+    const m=new HardModeMonitor(scan,undefined,()=>now,()=>r.requestFull(),undefined,undefined,()=>r.drain()),current={source,clockId:'clock',monotonicNs:'1'};
+    try{
+      observer.select(current);m.select(current);await completed.promise;await observer.refresh();now=1n;
+      const bound={...current,boundary:{clockId:'clock',probeSentClientNs:'1',receivedSourceNs:'2'}};observer.select(bound);m.select(bound);await m.refresh();await r.drain();
+      expect(m.evidence().assessment.state).toBe('pass');expect(configReads).toBe(3);
+      now=5_000_000_000n;observer.select(null);m.select(null);completed=gate();observer.select(current);m.select(current);
+      await completed.promise;await observer.refresh();await r.drain();expect(configReads).toBe(3);
+      const pending=m.refresh(true);expect(m.refresh(true)).toBe(pending);expect(m.refresh(true)).toBe(pending);
+      expect(scan).toHaveBeenCalledTimes(2);now++;
+      const rebound={...current,boundary:{clockId:'clock',probeSentClientNs:now.toString(),receivedSourceNs:'3'}};observer.select(rebound);m.select(rebound);
+      await pending;await r.drain();expect(configReads).toBe(6);expect(scan).toHaveBeenCalledTimes(3);expect(scan.mock.calls[2][4]).toBe(true);
+      expect(inspect).toHaveBeenCalledOnce();expect(maximum).toBe(3);expect(m.evidence().assessment.state).toBe('pass');
+    }finally{m.close();observer.close();await r.drain();}
+  });
+  it('requires a later causal probe for a changed profile found by the latched manual follow-up',async()=>{
+    let now=0n,configReads=0,completed=gate();const forcedDone=gate();
+    const r=new HardModeReader({documents:path.join(root,'Documents'),process:processFacts,nowNs:()=>now,
+      file:async(filename,limit,signal)=>{if(!filename.endsWith('game.log.txt'))configReads++;return readStableFile(filename,limit,signal);}}),observer=new ProfileObserver(()=>r,()=>now,false);
+    const scan=vi.fn((s:SourceIdentity,ns:string,at:number,signal:AbortSignal,force?:boolean)=>observer.readSettings(r,s,ns,at,signal,force).then(value=>{completed.resolve();if(force)forcedDone.resolve();return value;}));
+    const m=new HardModeMonitor(scan,undefined,()=>now,()=>r.requestFull(),()=>r.canRetain(),undefined,()=>r.drain()),current={source,clockId:'clock',monotonicNs:'1'};
+    r.onInvalidate(()=>m.invalidate());
+    try{
+      observer.select(current);m.select(current);await completed.promise;await observer.refresh();now=1n;
+      const initial={...current,boundary:{clockId:'clock',probeSentClientNs:'1',receivedSourceNs:'2'}};observer.select(initial);m.select(initial);await m.refresh();
+      expect(m.evidence().assessment.state).toBe('pass');const original=m.evidence().binding;
+      now=5_000_000_000n;observer.select(null);m.select(null);completed=gate();observer.select(current);m.select(current);await completed.promise;await observer.refresh();await r.drain();
+      const pending=m.refresh(true);await appendFile(path.join(game,'game.log.txt'),selection+save());now++;
+      const oldProbe={...current,boundary:{clockId:'clock',probeSentClientNs:now.toString(),receivedSourceNs:'3'}};observer.select(oldProbe);m.select(oldProbe);
+      await forcedDone.promise;await r.drain();await observer.refresh();expect(configReads).toBe(6);expect(m.evidence().assessment.state).toBe('unknown');expect(observer.evidence()).toBeUndefined();
+      now++;const later={...current,boundary:{clockId:'clock',probeSentClientNs:now.toString(),receivedSourceNs:'4'}};observer.select(later);m.select(later);await pending;
+      expect(m.evidence().assessment.state).toBe('pass');expect(m.evidence().binding).not.toBe(original);expect(m.evidence().sourceMonotonicNs).toBe('5');expect(scan).toHaveBeenCalledTimes(3);
+    }finally{m.close();observer.close();await r.drain();}
+  });
+  it('drains the physical reader before one forced follow-up and joins clicks throughout forced work',async()=>{
+    const finished=gate(),physical=gate(),forcedEntered=gate(),forced=gate<HardModeObservation>();let now=0n;
+    const result=unknownObservation();
+    const scan=vi.fn((_s:SourceIdentity,_ns:string,_at:number,_signal:AbortSignal,force?:boolean)=>{if(scan.mock.calls.length===1){finished.resolve();return Promise.resolve(result);}expect(force).toBe(true);forcedEntered.resolve();return forced.promise;});
+    const drain=vi.fn(()=>drain.mock.calls.length===1?physical.promise:Promise.resolve()),m=new HardModeMonitor(scan,undefined,()=>now,undefined,undefined,undefined,drain);
+    try{
+      m.select({source,clockId:'clock',monotonicNs:'1'});await finished.promise;
+      const pending=m.refresh(true);expect(m.refresh(true)).toBe(pending);await Promise.resolve();expect(scan).toHaveBeenCalledOnce();
+      now=100n;physical.resolve();await physical.promise;
+      await forcedEntered.promise;
+      expect(m.refresh(true)).not.toBeUndefined();expect(m.refresh(true)).toBe(m.refresh(true));expect(scan).toHaveBeenCalledTimes(2);
+      forced.resolve(result);await pending;expect(scan).toHaveBeenCalledTimes(2);expect(drain).toHaveBeenCalledTimes(2);
+    }finally{physical.resolve();forced.resolve(result);m.close();}
+  });
+  it('coalesces cooldown clicks into one nonresetting timer and preserves the one-second start limit',async()=>{
+    vi.useFakeTimers();const start=Date.now(),now=()=>BigInt(Date.now()-start)*1_000_000n;
+    const scan=vi.fn<ConstructorParameters<typeof HardModeMonitor>[0]>(()=>Promise.resolve(unknownObservation()));
+    const m=new HardModeMonitor(scan,undefined,now);
+    try{
+      m.select({source,clockId:'clock',monotonicNs:'1'});await m.refresh();await vi.advanceTimersByTimeAsync(100);await m.refresh(true);
+      expect(scan).toHaveBeenCalledTimes(2);
+      await vi.advanceTimersByTimeAsync(400);await m.refresh(true);await m.refresh(true);expect(vi.getTimerCount()).toBe(1);
+      await vi.advanceTimersByTimeAsync(400);await m.refresh(true);expect(vi.getTimerCount()).toBe(1);
+      await vi.advanceTimersByTimeAsync(199);expect(scan).toHaveBeenCalledTimes(2);
+      await vi.advanceTimersByTimeAsync(1);expect(scan).toHaveBeenCalledTimes(3);expect(scan.mock.calls[2]).toHaveLength(5);expect(vi.getTimerCount()).toBe(0);
+    }finally{m.close();expect(vi.getTimerCount()).toBe(0);}
+  });
+  it.each(['close','detach','replace'] as const)('retires manual cooldown intent on %s',async ending=>{
+    vi.useFakeTimers();const start=Date.now(),now=()=>BigInt(Date.now()-start)*1_000_000n;
+    const scan=vi.fn(()=>Promise.resolve(unknownObservation())),m=new HardModeMonitor(scan,undefined,now);
+    m.select({source,clockId:'clock',monotonicNs:'1'});await m.refresh();await m.refresh(true);await vi.advanceTimersByTimeAsync(100);await m.refresh(true);
+    expect(vi.getTimerCount()).toBe(1);
+    if(ending==='close')m.close();else m.select(ending==='detach'?null:{source:{...source,processId:456},clockId:'other-clock',monotonicNs:'1'});
+    await m.refresh();const count=scan.mock.calls.length;await vi.advanceTimersByTimeAsync(2000);expect(scan).toHaveBeenCalledTimes(count);expect(vi.getTimerCount()).toBe(0);m.close();
+  });
+  it.each(['close','detach','replace'] as const)('retires queued manual intent while the old physical operation drains on %s',async ending=>{
+    const physical=gate(),entered=gate(),result=unknownObservation();
+    const scan=vi.fn<ConstructorParameters<typeof HardModeMonitor>[0]>(()=>{entered.resolve();return Promise.resolve(result);}),drain=vi.fn(()=>drain.mock.calls.length===1?physical.promise:Promise.resolve()),m=new HardModeMonitor(scan,undefined,()=>0n,undefined,undefined,undefined,drain);
+    try{
+      m.select({source,clockId:'clock',monotonicNs:'1'});await entered.promise;const pending=m.refresh(true);
+      if(ending==='close')m.close();else m.select(ending==='detach'?null:{source:{...source,processId:456},clockId:'other-clock',monotonicNs:'1'});
+      expect(scan).toHaveBeenCalledOnce();physical.resolve();await pending;await m.refresh();
+      expect(scan).toHaveBeenCalledTimes(ending==='replace'?2:1);expect(scan.mock.calls.every(call=>call[4]!==true)).toBe(true);
+    }finally{physical.resolve();m.close();}
+  });
+  it('accepts new-epoch manual intent while a retired forced operation still owns physical drain',async()=>{
+    const physical=gate(),forcedEntered=gate();let now=0n;
+    const scan=vi.fn((_s:SourceIdentity,_ns:string,_at:number,_signal:AbortSignal,force?:boolean)=>{if(force)forcedEntered.resolve();return Promise.resolve(unknownObservation());});
+    const drain=vi.fn(()=>drain.mock.calls.length===2?physical.promise:Promise.resolve()),m=new HardModeMonitor(scan,undefined,()=>now,undefined,undefined,undefined,drain);
+    try{
+      m.select({source,clockId:'clock',monotonicNs:'1'});await m.refresh();now=1_000_000_000n;const retired=m.refresh(true);await forcedEntered.promise;
+      m.select({source:{...source,processId:456},clockId:'new-clock',monotonicNs:'1'});now=2_000_000_000n;void m.refresh(true);expect(scan).toHaveBeenCalledTimes(2);
+      physical.resolve();await retired;await m.refresh();expect(scan).toHaveBeenCalledTimes(3);expect(scan.mock.calls[2][0].processId).toBe(456);expect(scan.mock.calls[2][4]).toBe(true);
+    }finally{physical.resolve();m.close();}
+  });
   it('detects changes five seconds after attachment between timer ticks while memory health performs no reads or audit writes',async()=>{
     vi.useFakeTimers();const start=Date.now(),now=()=>BigInt(Date.now()-start)*1_000_000n;
     const {evaluateHardMode,parseHardModeConfig}=await import('../../packages/telemetry-core/src/hard-mode');
@@ -175,6 +283,78 @@ describe('ET-026 isolated reader (REG-008/010/011)', () => {
     child.emit('close',kind==='invalid'?0:1);
     expect(await work).toBeNull();
     expect(diagnostics).toEqual([{code:kind==='timeout'?'PROFILE_PROCESS_QUERY_DEADLINE':kind==='failed'?'PROFILE_PROCESS_QUERY_FAILED':'PROFILE_PROCESS_QUERY_INVALID'}]);
+  });
+  it.each((['ets2','ats'] as const).flatMap(game=>[null,'C:\\Synthetic Профиль\\Дом'].map(homeDirectory=>({game,homeDirectory}))))('accepts a fragmented $game receipt with home $homeDirectory only after child close',async({game,homeDirectory})=>{
+    const h=nativeInspection(game),receipt={...h.receipt,homeDirectory},bytes=nativeFrame(receipt);
+    try{
+      const request=h.child.stdin.read() as Buffer;
+      expect(request.readUInt32LE()).toBe(request.length-4);expect(JSON.parse(request.subarray(4).toString('utf8'))).toEqual(h.target);
+      const split=homeDirectory?bytes.indexOf(Buffer.from('П'))+1:11;
+      for(const chunk of [bytes.subarray(0,1),bytes.subarray(1,3),bytes.subarray(3,split),bytes.subarray(split,bytes.length-1),bytes.subarray(-1)])h.child.stdout.write(chunk);
+      h.child.stdout.end();h.child.emit('exit',0);await Promise.resolve();expect(h.settled()).toBe(false);
+      h.child.emit('close',0);
+      expect(await h.work).toEqual({pid:source.processId,createdUtcMs:created,executable:receipt.executable,homeDirectory});expect(h.diagnostics).toEqual([]);expect(h.child.kill).not.toHaveBeenCalled();
+    }finally{h.child.emit('close',0);await h.work;}
+  });
+  it.each(['abort','deadline','kill'] as const)('keeps ownership after %s until actual native child close',async ending=>{
+    vi.useFakeTimers();const h=nativeInspection();
+    try{
+      h.child.stdout.write(nativeFrame(h.receipt));
+      if(ending==='abort')h.controller.abort();else if(ending==='deadline')await vi.advanceTimersByTimeAsync(2000);else h.child.kill();
+      h.child.emit('exit',0);await Promise.resolve();expect(h.settled()).toBe(false);expect(h.child.kill).toHaveBeenCalledOnce();
+      h.child.emit('close',0);const result=await h.work;
+      if(ending==='kill'){expect(result).toMatchObject({pid:source.processId});expect(h.diagnostics).toEqual([]);}
+      else{expect(result).toBeNull();expect(h.diagnostics).toEqual([{code:ending==='abort'?'PROFILE_CANCELLED':'PROFILE_PROCESS_QUERY_DEADLINE'}]);}
+      expect(vi.getTimerCount()).toBe(0);
+    }finally{h.child.emit('close',0);await h.work;}
+  });
+  it.each(['target-process','target-session','target-instance','target-plugin','target-game','target-origin','target-created','target-user','target-extra','target-missing','source-extra','source-missing',
+    'missing-key','extra-key','wrong-type','wrong-version','relative-executable','wrong-executable','long-executable','relative-home','empty-home','wrong-home','long-home',
+    'invalid-utf8','invalid-json','zero-length','oversize-length','oversize-output','short-prefix','short-payload','trailing-bytes','non-bytes'] as const)('rejects %s receipt without exposing output or settling before close',async kind=>{
+    const h=nativeInspection(),receipt:Record<string,unknown>=structuredClone(h.receipt),target=receipt.target as Record<string,unknown>,peer=target.source as Record<string,unknown>;
+    let frame:Buffer;
+    switch(kind){
+      case 'target-process':peer.processId=456;break;
+      case 'target-session':peer.windowsSessionId=2;break;
+      case 'target-instance':peer.processInstanceId='10000000-0000-4000-8000-000000000002';break;
+      case 'target-plugin':peer.pluginSessionId='20000000-0000-4000-8000-000000000002';break;
+      case 'target-game':peer.game='ats';break;
+      case 'target-origin':peer.origin='replay';break;
+      case 'target-created':target.processCreationTime=(BigInt(h.target.processCreationTime)+1n).toString();break;
+      case 'target-user':target.userTag='b'.repeat(64);break;
+      case 'target-extra':target.extra=true;break;
+      case 'target-missing':delete target.userTag;break;
+      case 'source-extra':peer.extra=true;break;
+      case 'source-missing':delete peer.pluginSessionId;break;
+      case 'missing-key':delete receipt.homeDirectory;break;
+      case 'extra-key':receipt.commandLine='private fixture text';break;
+      case 'wrong-type':receipt.type='other';break;
+      case 'wrong-version':receipt.schemaVersion=2;break;
+      case 'relative-executable':receipt.executable='eurotrucks2.exe';break;
+      case 'wrong-executable':receipt.executable='C:\\Synthetic\\amtrucks.exe';break;
+      case 'long-executable':receipt.executable='C:\\'+'x'.repeat(8192)+'\\eurotrucks2.exe';break;
+      case 'relative-home':receipt.homeDirectory='relative';break;
+      case 'empty-home':receipt.homeDirectory='';break;
+      case 'wrong-home':receipt.homeDirectory=42;break;
+      case 'long-home':receipt.homeDirectory='C:\\'+'x'.repeat(4096);break;
+    }
+    frame=nativeFrame(receipt);
+    switch(kind){
+      case 'invalid-utf8':frame=nativeFrame(Buffer.from([0xc3,0x28]));break;
+      case 'invalid-json':frame=nativeFrame(Buffer.from('{private fixture text'));break;
+      case 'zero-length':frame=Buffer.alloc(4);break;
+      case 'oversize-length':frame=Buffer.alloc(4);frame.writeUInt32LE(16385);break;
+      case 'oversize-output':frame=Buffer.alloc(16389);break;
+      case 'short-prefix':frame=frame.subarray(0,3);break;
+      case 'short-payload':frame=frame.subarray(0,frame.length-1);break;
+      case 'trailing-bytes':frame=Buffer.concat([frame,Buffer.from([0])]);break;
+    }
+    try{
+      h.child.stderr.write('private fixture stderr');
+      if(kind==='non-bytes')h.child.stdout.emit('data','private fixture text');else h.child.stdout.write(frame);
+      h.child.emit('exit',0);await Promise.resolve();expect(h.settled()).toBe(false);
+      h.child.emit('close',0);expect(await h.work).toBeNull();expect(h.diagnostics).toEqual([{code:'PROFILE_PROCESS_QUERY_INVALID'}]);
+    }finally{h.child.emit('close',0);await h.work;}
   });
   it('drains a held old process read, rejects late proof after close, and verifies again after full reader restart',async()=>{
     vi.useFakeTimers();let now=0n,active=0,maximum=0,calls=0,entered=gate(),release=gate(),done=gate();
@@ -486,6 +666,19 @@ describe('ET-026 isolated reader (REG-008/010/011)', () => {
     const redirected = new HardModeReader({documents, process: processFacts}); expect((await read(redirected)).assessment.state).toBe('pass');
     const r = reader(); await read(r); await rename(path.join(game, 'game.log.txt'), path.join(game, 'old.log.txt'));
     await writeFile(path.join(game, 'game.log.txt'), header + selection + save()); await expect(read(r)).rejects.toThrow('replaced');
+  });
+  it('canonicalizes an isolated ancestor alias before deriving exact file callback gates',async()=>{
+    const alias=path.join(root,'fixture-ancestor-alias');await symlink(path.join(root,'Documents'),alias,'junction');
+    const aliasedLog=path.join(alias,'Euro Truck Simulator 2','game.log.txt'),signal=new AbortController().signal;
+    expect(await realpath(aliasedLog)).toBe(path.join(game,'game.log.txt'));
+    await expect(new ProfileLogTail().read(aliasedLog,signal)).rejects.toThrow('Redirected file');
+    const entered=gate(),release=gate(),canonicalRoot=await realpath(alias),expected=path.join(canonicalRoot,'Euro Truck Simulator 2','config.cfg');
+    let gated=false;
+    const r=new HardModeReader({documents:alias,process:processFacts,file:async(filename,limit,readSignal)=>{
+      if(filename===expected){gated=true;entered.resolve();await release.promise;}return readStableFile(filename,limit,readSignal);
+    }}),work=read(r);
+    try{await entered.promise;expect(gated).toBe(true);expect(expected).not.toBe(path.join(alias,'Euro Truck Simulator 2','config.cfg'));release.resolve();expect((await work).assessment.state).toBe('pass');}
+    finally{release.resolve();await work.catch(()=>undefined);await r.drain();}
   });
   it('gates fixture roots on smoke flag, explicit synthetic target and absolute isolated LOCALAPPDATA', () => {
     const env = {LOCALAPPDATA: root, ETS2TELEMETRY_LIVE_SMOKE: '1', ETS2TELEMETRY_HARD_MODE_FIXTURE: '1', ETS2TELEMETRY_RECORDING: 'synthetic:smoke'};

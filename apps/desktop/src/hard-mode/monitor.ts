@@ -21,6 +21,11 @@ export class HardModeMonitor {
   private observedClientNs: bigint | undefined;
   private healthNs: bigint | undefined;
   private lastManualNs: bigint | undefined;
+  private manualPending = false;
+  private forced = false;
+  private activeEpoch = 0;
+  private manualTimer: ReturnType<typeof setTimeout> | undefined;
+  private closed = false;
   private followup = false;
   private pendingProof: {value: HardModeObservation; completedClientNs: bigint; deadlineClientNs: bigint; resolve: () => void} | undefined;
   private bindProof(): void {
@@ -40,22 +45,24 @@ export class HardModeMonitor {
   constructor(private readonly read: (source: SourceIdentity, monotonicNs: string, atUtcMs: number, signal: AbortSignal, force?: boolean) => Promise<HardModeObservation | TimedHardModeObservation>,
     private readonly changed: (value: HardModeObservation) => void = () => undefined, private readonly nowNs: () => bigint = () => process.hrtime.bigint(),
     private readonly requestFull: () => void = () => undefined, private readonly retain: () => boolean = () => false,
-    private readonly publishHealth: () => void = () => undefined) {}
+    private readonly publishHealth: () => void = () => undefined, private readonly drain: () => Promise<void> = () => Promise.resolve()) {}
   private unknown(): HardModeObservation {return {assessment: unknownHardMode(Date.now()), binding: null, pluginSessionId: null, sourceMonotonicNs: null};}
   private publish(value: HardModeObservation, observedClientNs = this.nowNs()): void {this.observation = value; this.observedClientNs = observedClientNs; this.healthNs = this.nowNs(); this.changed(value);}
   private expired(): boolean {return this.observedClientNs === undefined || this.nowNs() < this.observedClientNs;}
   private expireCoverage(): void {if (this.observation.binding !== null && this.expired()) this.publish(this.unknown());}
   invalidate(): void {this.followup ||= this.inFlight !== undefined; this.retireProof(); this.publish(this.unknown());}
   select(next: MonitorSource | null): void {
+    if (this.closed) return;
     const before = this.source?.source, after = next?.source;
     const previousClock = this.source?.clockId, previousGameClock = this.source?.gameClockId;
     this.source = next;
     if (previousClock === next?.clockId && previousGameClock === next?.gameClockId && before?.pluginSessionId === after?.pluginSessionId && before?.processInstanceId === after?.processInstanceId && before?.processId === after?.processId && before?.windowsSessionId === after?.windowsSessionId && before?.game === after?.game && before?.origin === after?.origin) {this.bindProof(); return;}
     const key = next ? profileSourceKey(next) : undefined;
     if (key !== undefined && key !== this.cadenceKey) {this.lastScanNs = undefined; this.cadenceKey = key;}
-    this.epoch++; this.followup = false; this.controller?.abort(); this.retireProof(); this.publish(this.unknown());
+    this.epoch++; this.followup = false; this.manualPending = false; clearTimeout(this.manualTimer); this.manualTimer = undefined;
+    this.controller?.abort(); this.retireProof(); this.publish(this.unknown());
     const epoch = this.epoch, draining = this.inFlight;
-    if (draining) void draining.finally(() => {if (epoch === this.epoch && this.source) void this.refresh();});
+    if (draining) void draining.finally(() => {if (epoch === this.epoch && this.source) void this.refresh(this.manualPending);});
     else void this.refresh();
   }
   evidence(): HardModeObservation {
@@ -84,15 +91,27 @@ export class HardModeMonitor {
     this.healthTimer ??= setInterval(() => this.heartbeat(), 1000); this.healthTimer.unref();
   }
   refresh(manual = false, followup = false): Promise<void> {
+    if (this.closed) return Promise.resolve();
     this.expireCoverage();
-    if (this.inFlight) {if (manual) this.requestFull(); return this.inFlight;}
+    if (this.inFlight) {if (manual && (!this.forced || this.activeEpoch !== this.epoch)) this.manualPending = true; return this.inFlight;}
     const current = this.source;
-    if (!current || !followup && (manual ? this.lastManualNs !== undefined && this.nowNs() - this.lastManualNs < 1_000_000_000n
-      : this.lastScanNs !== undefined && this.nowNs() - this.lastScanNs < BigInt(HARD_MODE_POLL_MS) * 1_000_000n)) return Promise.resolve();
-    if (manual) this.lastManualNs = this.nowNs();
+    if (!current) return Promise.resolve();
+    if (manual && this.lastManualNs !== undefined && this.nowNs() - this.lastManualNs < 1_000_000_000n) {
+      this.manualPending = true;
+      if (!this.manualTimer) {
+        const epoch = this.epoch, remaining = this.lastManualNs + 1_000_000_000n - this.nowNs();
+        this.manualTimer = setTimeout(() => {this.manualTimer = undefined; if (epoch === this.epoch && this.manualPending) void this.refresh(true);}, Math.ceil(Number(remaining) / 1_000_000));
+        this.manualTimer.unref();
+      }
+      return Promise.resolve();
+    }
+    if (!manual && !followup && this.lastScanNs !== undefined && this.nowNs() - this.lastScanNs < BigInt(HARD_MODE_POLL_MS) * 1_000_000n) return Promise.resolve();
+    if (manual) {this.lastManualNs = this.nowNs(); this.manualPending = false; clearTimeout(this.manualTimer); this.manualTimer = undefined; this.requestFull();}
+    this.forced = manual;
     this.lastScanNs = this.nowNs();
     let deadlineClientNs = this.lastScanNs + BigInt(HARD_MODE_DEADLINE_MS) * 1_000_000n;
     const epoch = this.epoch, controller = this.controller = new AbortController();
+    this.activeEpoch = epoch;
     const expire = () => {controller.abort(); if (epoch === this.epoch) {if (!this.retain()) this.publish(this.unknown()); this.retireProof();}};
     let deadline = setTimeout(expire, HARD_MODE_DEADLINE_MS);
     this.inFlight = this.read(current.source, current.monotonicNs, Date.now(), controller.signal, manual).then(result => {
@@ -121,12 +140,19 @@ export class HardModeMonitor {
           this.bindProof();
         });
       }
-    }, error => {if (epoch === this.epoch && !(error instanceof UnchangedVerificationError)) this.publish(this.unknown());}).finally(() => {
-      clearTimeout(deadline); this.inFlight = undefined;
+    }, error => {if (epoch === this.epoch && !(error instanceof UnchangedVerificationError)) this.publish(this.unknown());}).finally(async () => {
+      clearTimeout(deadline);
+      // Cancellation/read completion can precede physical close. Manual intent owns a new full operation after drain,
+      // even when the previous reader already settled before its monitor's causal probe arrived.
+      await this.drain();
+      this.inFlight = undefined; this.forced = false;
       const requested = this.followup; this.followup = false;
-      if (requested && !followup && epoch === this.epoch && this.source) void this.refresh(false, true);
+      if (epoch === this.epoch && this.source && !this.closed) {
+        if (this.manualPending) return this.refresh(true, true);
+        if (requested && !followup && !manual) return this.refresh(false, true);
+      }
     });
     return this.inFlight;
   }
-  close(): void {this.started = false; clearTimeout(this.timer); clearInterval(this.healthTimer); this.timer = undefined; this.healthTimer = undefined; this.epoch++; this.controller?.abort(); this.retireProof(); this.publish(this.unknown());}
+  close(): void {this.closed = true; this.started = false; clearTimeout(this.timer); clearTimeout(this.manualTimer); clearInterval(this.healthTimer); this.timer = undefined; this.manualTimer = undefined; this.healthTimer = undefined; this.manualPending = false; this.epoch++; this.controller?.abort(); this.retireProof(); this.publish(this.unknown());}
 }

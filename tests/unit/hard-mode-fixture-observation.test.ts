@@ -220,7 +220,8 @@ it('reacquires genuine fail evidence after real monitor selection loss and waits
     await vi.advanceTimersByTimeAsync(1300); const result = await outcome;
     expect(result.error).toBeUndefined(); expect(result.value?.status.assessment.state).toBe('fail');
     expect(result.value?.status.assessment.observedUtcMs).toBeGreaterThan(100);
-    expect(publications.map(value => value.assessment.state)).toEqual(['unknown','fail','unknown','unknown','fail']);
+    // A refresh requested during cooldown remains pending and publishes its later full verification at one second.
+    expect(publications.map(value => value.assessment.state)).toEqual(['unknown','fail','unknown','unknown','fail','fail']);
     expect(record.phase).toBe('complete'); expect(refresh.mock.calls.length).toBeGreaterThan(1);
   } finally {monitor.close();}
 });

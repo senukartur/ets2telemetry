@@ -130,7 +130,7 @@ const hardMode = new HardModeMonitor((source, ns, at, signal, force) => {
 }, observation => {
   if (hardModeGame) runtime.observeHardMode(hardModeGame, observation);
   port.postMessage(hardMode.publication());
-}, undefined, () => hardModeReader?.requestFull(), () => hardModeReader?.canRetain() ?? false, () => port.postMessage(hardMode.publication()));
+}, undefined, () => hardModeReader?.requestFull(), () => hardModeReader?.canRetain() ?? false, () => port.postMessage(hardMode.publication()), () => hardModeReader?.drain() ?? Promise.resolve());
 let hardModeReader: HardModeReader | undefined = hardModeFixtureReader(process.env) ?? undefined;
 const profileObserver = new ProfileObserver(() => hardModeReader, undefined, false, profileDiagnostic);
 let lastV1: V1SourceState | undefined;
