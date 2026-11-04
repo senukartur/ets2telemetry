@@ -730,9 +730,21 @@ export async function runUiSmoke({application, dashboard, overlay, source, sourc
         if (!record.flags.detailsCollapsed) {assert.equal(detailsOpen, false, 'UI_LIVE_DETAILS_NOT_COLLAPSED'); record.flags.detailsCollapsed = true;}
         // Opened in place: a click would scroll the page to the toggle, and the job card is checked at the top below.
         if (!detailsOpen) await dashboard.getByTestId('live.details').evaluate(node => {node.open = true;});
-        for (const [id, text] of [['cargo', 'Synthetic Cargo'], ['source-city', 'Synthetic City A'], ['source-company', 'Synthetic Company A'], ['destination-city', 'Synthetic City B'], ['destination-company', 'Synthetic Company B'], ['truck', 'truck.volvo']]) {
-          assert.equal(await dashboard.getByTestId(`live-${id}`).innerText(), text);
+        // ET-067: the instrument wait reads v0 only. The source and destination companies come from v1 and the cargo and
+        // destination city show v1's names, all only while v1 is current (500 ms), so under the CPU cap a late v1 frame leaves
+        // them unavailable or raw. The rows are awaited together; on a timeout the last reading is what the assertion reports.
+        const jobRows = [['cargo', 'Synthetic Cargo'], ['source-city', 'Synthetic City A'], ['source-company', 'Synthetic Company A'], ['destination-city', 'Synthetic City B'], ['destination-company', 'Synthetic Company B'], ['truck', 'truck.volvo']];
+        const readJobRows = () => Promise.all(jobRows.map(([id]) => dashboard.getByTestId(`live-${id}`).innerText()));
+        // ET-067 regression: once, the wait starts inside a v1 gap that ends 300 ms later, so a single read fails on every host.
+        const v1Gap = language === 'en' && size === sizes.at(-1);
+        if (v1Gap) {
+          sourceV1.hold();
+          try {await until(() => dashboard.getByTestId('live-source-company').innerText(), text => text === 'unavailable', 'UI_LIVE_V1_GAP_NOT_SHOWN', 5000);} catch (error) {sourceV1.resume(); throw error;}
+          setTimeout(() => sourceV1.resume(), 300);
         }
+        await until(readJobRows, texts => texts.every((text, index) => text === jobRows[index][1]), 'UI_LIVE_JOB_ROWS', 5000)
+          .catch(async () => assert.deepEqual(await readJobRows(), jobRows.map(([, text]) => text), 'UI_LIVE_JOB_ROWS'));
+        if (v1Gap) record.flags.jobRowsAfterV1Gap = true;
         await observeMandatoryBreak({dashboard, sourceV1, language, record});
         // ET-057: no "This trip" placeholder of dashes; the field list is collapsed until opened.
         assert.equal(await dashboard.getByTestId('live.trip').count(), 0);
