@@ -839,6 +839,8 @@ export async function runUiSmoke({application, dashboard, overlay, source, sourc
         await save('samples', language, size);
 
         await dashboard.getByTestId('journal-samples-next').click(); await until(() => dashboard.getByTestId('journal-samples-page').innerText(), text => text.includes('2'), 'UI_SAMPLE_PAGE_TWO');
+        await dashboard.getByTestId('journal-samples-loading').waitFor({state: 'detached', timeout: 5000});
+        await dashboard.getByTestId('trip.chart').locator('svg').waitFor({state: 'attached', timeout: 5000});
         assert.equal(await dashboard.locator('[data-testid="trip.chart"] circle').count(), 300);
         await dashboard.getByTestId('journal-back').click();
         Object.assign(record.flags, {syntheticBanner: true, pageReturn: true, chartBounded: true, rawTabs: true, noPlannedSearch: true, tripRegions: true, tableReadable: true});
