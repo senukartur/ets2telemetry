@@ -1,4 +1,4 @@
-import {mkdtemp,mkdir,writeFile,rename,rm} from 'node:fs/promises';
+import {mkdtemp,mkdir,writeFile,rename,rm,utimes,stat} from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import {afterEach,beforeEach,describe,expect,it,vi} from 'vitest';
@@ -46,9 +46,13 @@ describe('REG-003/008 independent verified profile identity',()=>{
     await mkdir(path.join(game,'steam_profiles',profile),{recursive:true});
     const remote=(id:string)=>path.join(steam,'userdata',id,'227300','remote','profiles',profile);
     await mkdir(remote('100'),{recursive:true});await writeFile(path.join(game,'game.log.txt'),loaded('steam'));
+    const watched=path.join(steam,'userdata'),baseline=new Date('2026-10-21T12:00:00Z');
+    await utimes(watched,baseline,baseline);const before=await stat(watched,{bigint:true});
     const r=new HardModeReader({documents:root,steamRoot:steam,process:()=>Promise.resolve({pid:123,createdUtcMs:created,executable:'C:/Synthetic/eurotrucks2.exe',commandLine:''})});
     expect((await resolve(r)).scope).not.toBe(local.scope);
-    await mkdir(remote('101'),{recursive:true});await expect(resolve(r)).rejects.toThrow('ambiguous');
+    await mkdir(remote('101'),{recursive:true});const changed=new Date('2026-10-21T12:00:10Z');await utimes(watched,changed,changed);
+    expect((await stat(watched,{bigint:true})).mtimeNs).not.toBe(before.mtimeNs);
+    await expect(resolve(r)).rejects.toThrow('ambiguous');
   });
   it('does not admit proof until a later same-clock probe and retires it on a game-clock change',async()=>{
     let now=100n;

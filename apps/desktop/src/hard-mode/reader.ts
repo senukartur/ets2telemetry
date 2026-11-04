@@ -7,6 +7,7 @@ import type {SourceIdentity} from '../../../../packages/contracts/src/protocol-v
 import type {HardModeObservation} from '../../../../packages/contracts/src/hard-mode';
 import {evaluateHardMode, parseHardModeConfig} from '../../../../packages/telemetry-core/src/hard-mode';
 export const CONFIG_BYTES = 256 * 1024, LOG_BYTES = 4 * 1024 * 1024, MAX_PROFILES = 256;
+const REQUIRED_GUARD_NS = 5_000_000_000n + 2_000_000_000n;
 export interface GameProcess {pid: number; createdUtcMs: number; executable: string; commandLine?: string; homeDirectory?: string | null}
 /** Fixed privacy-safe diagnostics. No file text, identity, hashes, paths or arbitrary errors cross this seam. */
 export type ProfileDiagnosticCode = 'PROFILE_SOURCE_UNPROVEN' | 'PROFILE_PROCESS_QUERY_FAILED' | 'PROFILE_PROCESS_QUERY_DEADLINE' | 'PROFILE_PROCESS_QUERY_INVALID' | 'PROFILE_PROCESS_UNPROVEN' | 'PROFILE_LOG_GENERATION' | 'PROFILE_LOG_CHANGED' |
@@ -113,7 +114,7 @@ export class ProfileSuperseded extends Error {}
 interface ResolvedProfile {root: string; local: string; config: string; directories?: string[]; profile: BoundProfile; scope: string; binding: string; timing: ReadTiming}
 interface ProfileScan {profile: ResolvedProfile; settings: HardModeObservation | null; settingsError?: unknown}
 interface ScanOperation {
-  key: string; source: SourceIdentity; atUtcMs: number; startedClientNs: bigint; controller: AbortController;
+  key: string; source: SourceIdentity; atUtcMs: number; startedClientNs: bigint; controller: AbortController; generation: number;
   force: boolean; cheap: boolean; preserve?: boolean; promise: Promise<ProfileScan>; resolve: (value: ProfileScan) => void; reject: (error: unknown) => void;
   consumers: Set<object>; timer: ReturnType<typeof setTimeout>; settled: boolean; drain?: Promise<void>;
 }
@@ -128,13 +129,60 @@ export class HardModeReader {
   private starts: bigint[] = [];
   private tail: {process: string; value: ProfileLogTail} | undefined;
   private admitted: {key: string; scan: ProfileScan; metadata: string; fullNs: bigint} | undefined;
+  private guard: {startedNs: bigint; deadlineNs: bigint} | undefined;
+  private guardTimer: ReturnType<typeof setTimeout> | undefined;
+  private guardGeneration = 0;
+  private guardSource: string | undefined;
+  private guardSelected = false;
   private readonly invalidations = new Set<(profileChanged: boolean) => void>();
   constructor(private readonly options: HardModeReaderOptions) {}
   requestFull(): void {if (this.running && !this.running.settled) this.running.force = true;}
-  canRetain(): boolean {return this.admitted !== undefined && this.running?.preserve === true;}
+  canRetain(): boolean {return this.guardEligible() && this.admitted !== undefined && this.running?.preserve === true;}
+  /** Both evidence providers check this synchronously; event-loop delay cannot lend overdue guard eligibility. */
+  guardEligible(): boolean {
+    const guard = this.guard, now = this.nowNs();
+    if (guard && (now < guard.startedNs || now >= guard.deadlineNs)) {
+      this.options.diagnostic?.({code: 'PROFILE_DEADLINE'});
+      this.retireGuards();
+    }
+    return this.guard !== undefined;
+  }
+  selectGuardSource(key: string | undefined): void {
+    if (this.guardSelected && key === this.guardSource) return;
+    const initial = !this.guardSelected; this.guardSelected = true; this.guardSource = key;
+    if (!initial || key === undefined) this.retireGuards(true);
+  }
+  private retireGuards(retainBaseline = false): void {
+    clearTimeout(this.guardTimer); this.guardTimer = undefined; this.guard = undefined; this.guardGeneration++;
+    this.invalidate(true, retainBaseline);
+    const reason = retainBaseline ? new Error('Source guard eligibility retired') : new ProfileVerificationError(new Error('Required guard eligibility retired'), 'PROFILE_DEADLINE');
+    if (this.queued) this.cancel(this.queued, false, true, reason);
+    if (this.running) this.cancel(this.running, false, true, reason);
+  }
+  private armGuardTimer(): void {
+    clearTimeout(this.guardTimer);
+    if (!this.guard) return;
+    const generation = this.guardGeneration, remaining = this.guard.deadlineNs - this.nowNs();
+    this.guardTimer = setTimeout(() => {
+      this.guardTimer = undefined;
+      if (generation === this.guardGeneration && this.guardEligible()) this.armGuardTimer();
+    }, Math.max(0, Math.ceil(Number(remaining) / 1_000_000)));
+    this.guardTimer.unref();
+  }
+  private current(work: ScanOperation): void {
+    this.guardEligible();
+    if (work.generation !== this.guardGeneration) throw new ProfileVerificationError(new Error('Retired guard generation'), 'PROFILE_DEADLINE');
+    work.controller.signal.throwIfAborted();
+  }
+  private guarded(work: ScanOperation): void {
+    this.current(work);
+    const deadlineNs = work.startedClientNs + REQUIRED_GUARD_NS;
+    if (this.nowNs() >= deadlineNs) throw new ProfileVerificationError(new Error('Required guard deadline'), 'PROFILE_DEADLINE');
+    this.guard = {startedNs: work.startedClientNs, deadlineNs}; this.armGuardTimer();
+  }
   drain(): Promise<void> {return this.running?.drain ?? Promise.resolve();}
   onInvalidate(listener: (profileChanged: boolean) => void): () => void {this.invalidations.add(listener); return () => this.invalidations.delete(listener);}
-  private invalidate(profileChanged = true): void {this.admitted = undefined; for (const listener of this.invalidations) listener(profileChanged);}
+  private invalidate(profileChanged = true, retainBaseline = false): void {if (!retainBaseline) this.admitted = undefined; for (const listener of this.invalidations) listener(profileChanged);}
   private lifetime(source: SourceIdentity): string | undefined {
     return this.options.processLifetime ? this.options.processLifetime(source)
       : JSON.stringify([source.game, source.origin, source.processId, source.windowsSessionId, source.processInstanceId]);
@@ -179,6 +227,7 @@ export class HardModeReader {
   private file(filename: string, limit: number, signal: AbortSignal) {return (this.options.file ?? readStableFile)(filename, limit, signal);}
   private request(source: SourceIdentity, atUtcMs: number, signal: AbortSignal, force = false, cheap = false): Promise<ProfileScan> {
     signal.throwIfAborted();
+    this.guardEligible();
     const key = JSON.stringify([source.game, source.origin, source.processId, source.windowsSessionId, source.processInstanceId, source.pluginSessionId]);
     let operation = this.running?.key === key && !this.running.settled && !this.running.controller.signal.aborted ? this.running
       : this.queued?.key === key && !this.queued.controller.signal.aborted ? this.queued : undefined;
@@ -192,7 +241,7 @@ export class HardModeReader {
       let resolve!: ScanOperation['resolve'], reject!: ScanOperation['reject'];
       const promise = new Promise<ProfileScan>((yes, no) => {resolve = yes; reject = no;});
       void promise.catch(() => undefined);
-      operation = {key, source: {...source}, atUtcMs, startedClientNs: this.nowNs(), controller, promise, resolve, reject,
+      operation = {key, source: {...source}, atUtcMs, startedClientNs: this.nowNs(), controller, generation: this.guardGeneration, promise, resolve, reject,
         force, cheap, consumers: new Set(), timer: setTimeout(() => this.cancel(operation!, true), 2000), settled: false};
       if (this.running) this.queued = operation; else this.run(operation);
     }
@@ -314,6 +363,8 @@ export class HardModeReader {
     guardedUnchanged = unchanged === true;
     work.preserve = guardedUnchanged;
     if (old && !unchanged) this.invalidate(!sameProfile);
+    // Required guards renew before optional byte verification. A hung settings read cannot renew this bound again.
+    this.guarded(work);
     const full = work.force || !unchanged || !work.cheap && (this.nowNs() < old.fullNs || this.nowNs() - old.fullNs >= 60_000_000_000n);
     if (!full) return {...structuredClone(old.scan), profile: {...structuredClone(old.scan.profile), timing: {startedClientNs: work.startedClientNs, completedClientNs: this.nowNs()}}};
     if (unchanged) old.fullNs = work.startedClientNs;
@@ -343,7 +394,7 @@ export class HardModeReader {
     if (this.lifetime(source) !== processKey) throw new Error('Process changed');
     const afterMetadata = await this.metadata({...resolved, binding: '', timing: {startedClientNs: work.startedClientNs, completedClientNs: this.nowNs()}});
     if (afterMetadata !== metadata) throw new Error('Settings changed during read');
-    signal.throwIfAborted();
+    this.current(work);
     stage = 'PROFILE_DEADLINE';
     const timing = {startedClientNs: work.startedClientNs, completedClientNs: this.nowNs()};
     if (timing.completedClientNs - timing.startedClientNs >= 2_000_000_000n) throw new Error('Read deadline');

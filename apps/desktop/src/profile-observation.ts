@@ -32,6 +32,8 @@ export class ProfileObserver {
   private finishSuspension(): void {clearTimeout(this.suspensionTimer); this.suspensionTimer = undefined; this.suspensionDeadline = undefined;}
   constructor(private readonly reader: () => HardModeReader | undefined, private readonly nowNs = () => process.hrtime.bigint(), private readonly automatic = true, private readonly diagnostic: (value: ProfileDiagnostic) => void = () => undefined) {}
   select(source: (MonitorSource & {gameClockId?:string}) | null): void {
+    this.reader()?.selectGuardSource?.(source ? profileSourceKey(source) : undefined);
+    this.reader()?.guardEligible?.();
     const before = this.source;
     this.source = source;
     if (before?.source.game !== source?.source.game || before?.source.origin !== source?.source.origin || before?.source.processId !== source?.source.processId || before?.source.windowsSessionId !== source?.source.windowsSessionId || before?.source.pluginSessionId !== source?.source.pluginSessionId || before?.source.processInstanceId !== source?.source.processInstanceId || before?.clockId !== source?.clockId || before?.gameClockId !== source?.gameClockId) {
@@ -54,6 +56,10 @@ export class ProfileObserver {
     if (this.automatic) void this.refresh();
   }
   evidence(): ProfileObservation | undefined {
+    if (this.reader()?.guardEligible?.() === false) {
+      if (this.proof || this.pending || this.phase !== 'unavailable') this.suspend();
+      return undefined;
+    }
     const proof = this.proof;
     if (proof && this.nowNs() < proof.atNs) {this.suspend(); this.diagnostic({code: 'PROFILE_PROOF_EXPIRED'}); return undefined;}
     return proof ? structuredClone(proof.value) : undefined;
@@ -106,12 +112,13 @@ export class ProfileObserver {
     if (!reader || !source?.clockId || this.inFlight || this.lastScan >= 0n && now - this.lastScan < 5_000_000_000n) return;
     this.lastScan = now; this.inFlight = true;
     const epoch = this.epoch, controller = this.controller = new AbortController();
+    reader.selectGuardSource?.(profileSourceKey(source));
     const expire = () => {this.diagnostic({code: 'PROFILE_PROBE_EXPIRED'}); controller.abort(new ProfileVerificationError(new Error('Profile verification deadline'), 'PROFILE_DEADLINE')); if (epoch === this.epoch) {this.pending = undefined; if (!reader.canRetain() || !this.proof) this.suspend();}};
     clearTimeout(this.deadline); this.deadline = setTimeout(expire, 2000);
     try {
       const value = await reader.resolveProfile(source.source, Date.now(), controller.signal, this.tailOnly);
       this.tailOnly = false;
-      if (controller.signal.aborted || epoch !== this.epoch) return;
+      if (controller.signal.aborted || epoch !== this.epoch || reader.guardEligible?.() === false) return;
       const now = this.nowNs(), timing = value.timing;
       const remaining = 2_000_000_000n - (now - timing.startedClientNs);
       if (remaining <= 0n || timing.completedClientNs > now || timing.completedClientNs < timing.startedClientNs) {expire(); return;}

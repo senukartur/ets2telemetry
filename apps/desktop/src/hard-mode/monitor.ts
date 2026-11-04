@@ -29,6 +29,7 @@ export class HardModeMonitor {
   private followup = false;
   private pendingProof: {value: HardModeObservation; completedClientNs: bigint; deadlineClientNs: bigint; resolve: () => void} | undefined;
   private bindProof(): void {
+    if (this.guard && !this.guard.eligible()) {this.retireProof(); return;}
     const pending = this.pendingProof, current = this.source, boundary = current?.boundary;
     if (pending && this.nowNs() >= pending.deadlineClientNs) {this.retireProof(); this.publish(this.unknown()); return;}
     if (!pending || !boundary || boundary.clockId !== current?.clockId || BigInt(boundary.probeSentClientNs) <= pending.completedClientNs) return;
@@ -45,14 +46,22 @@ export class HardModeMonitor {
   constructor(private readonly read: (source: SourceIdentity, monotonicNs: string, atUtcMs: number, signal: AbortSignal, force?: boolean) => Promise<HardModeObservation | TimedHardModeObservation>,
     private readonly changed: (value: HardModeObservation) => void = () => undefined, private readonly nowNs: () => bigint = () => process.hrtime.bigint(),
     private readonly requestFull: () => void = () => undefined, private readonly retain: () => boolean = () => false,
-    private readonly publishHealth: () => void = () => undefined, private readonly drain: () => Promise<void> = () => Promise.resolve()) {}
+    private readonly publishHealth: () => void = () => undefined, private readonly drain: () => Promise<void> = () => Promise.resolve(),
+    private readonly guard?: {eligible: () => boolean; select: (key: string | undefined) => void}) {}
   private unknown(): HardModeObservation {return {assessment: unknownHardMode(Date.now()), binding: null, pluginSessionId: null, sourceMonotonicNs: null};}
   private publish(value: HardModeObservation, observedClientNs = this.nowNs()): void {this.observation = value; this.observedClientNs = observedClientNs; this.healthNs = this.nowNs(); this.changed(value);}
   private expired(): boolean {return this.observedClientNs === undefined || this.nowNs() < this.observedClientNs;}
-  private expireCoverage(): void {if (this.observation.binding !== null && this.expired()) this.publish(this.unknown());}
+  private expireCoverage(): void {
+    if (this.guard && !this.guard.eligible()) {
+      this.retireProof();
+      if (this.observation.binding !== null || this.observation.assessment.state !== 'unknown') this.publish(this.unknown());
+    }
+    if (this.observation.binding !== null && this.expired()) this.publish(this.unknown());
+  }
   invalidate(): void {this.followup ||= this.inFlight !== undefined; this.retireProof(); this.publish(this.unknown());}
   select(next: MonitorSource | null): void {
     if (this.closed) return;
+    this.guard?.select(next ? profileSourceKey(next) : undefined);
     const before = this.source?.source, after = next?.source;
     const previousClock = this.source?.clockId, previousGameClock = this.source?.gameClockId;
     this.source = next;
@@ -66,6 +75,7 @@ export class HardModeMonitor {
     else void this.refresh();
   }
   evidence(): HardModeObservation {
+    this.expireCoverage();
     if (this.expired()) return this.unknown();
     return structuredClone(this.observation);
   }
@@ -115,7 +125,7 @@ export class HardModeMonitor {
     const expire = () => {controller.abort(); if (epoch === this.epoch) {if (!this.retain()) this.publish(this.unknown()); this.retireProof();}};
     let deadline = setTimeout(expire, HARD_MODE_DEADLINE_MS);
     this.inFlight = this.read(current.source, current.monotonicNs, Date.now(), controller.signal, manual).then(result => {
-      if (controller.signal.aborted || epoch !== this.epoch) return;
+      if (controller.signal.aborted || epoch !== this.epoch || this.guard && !this.guard.eligible()) return;
       const value = 'observation' in result ? result.observation : result;
       const completed = 'timing' in result ? result.timing.completedClientNs : this.nowNs();
       if ('timing' in result) {
@@ -154,5 +164,5 @@ export class HardModeMonitor {
     });
     return this.inFlight;
   }
-  close(): void {this.closed = true; this.started = false; clearTimeout(this.timer); clearTimeout(this.manualTimer); clearInterval(this.healthTimer); this.timer = undefined; this.manualTimer = undefined; this.healthTimer = undefined; this.manualPending = false; this.epoch++; this.controller?.abort(); this.retireProof(); this.publish(this.unknown());}
+  close(): void {this.closed = true; this.guard?.select(undefined); this.started = false; clearTimeout(this.timer); clearTimeout(this.manualTimer); clearInterval(this.healthTimer); this.timer = undefined; this.manualTimer = undefined; this.healthTimer = undefined; this.manualPending = false; this.epoch++; this.controller?.abort(); this.retireProof(); this.publish(this.unknown());}
 }

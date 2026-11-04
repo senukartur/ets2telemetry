@@ -68,8 +68,8 @@ function close(storage: Storage, script: Script, uuid: string, terminal = false)
 }
 
 describe('REG-003/005/008/012/014 durable logical trips', () => {
-  it.each(['unchanged','witness','admitted-consumption','admitted-refuel','admitted-refuel-recheck','admitted-regression','admitted-long-unchanged','admitted-long-motion','admitted-persist-revoked','revoked','profile','load','gap','clock','truck','job','refuel','teleport','missing','unqualified-sample','over-limit'] as const)('retains only a qualified predecessor through wired lifecycle verification: %s',async variant=>{
-    vi.useFakeTimers();let clientNs=0n,wireSeq=0n,boundary=100n;const revision='1';const now=()=>++clientNs;const diagnostics:string[]=[];
+  it.each(['watchdog-timer','watchdog-getter','unchanged','witness','admitted-consumption','admitted-refuel','admitted-refuel-recheck','admitted-regression','admitted-long-unchanged','admitted-long-motion','admitted-persist-revoked','revoked','profile','load','gap','clock','truck','job','refuel','teleport','missing','unqualified-sample','over-limit'] as const)('retains only a qualified predecessor through wired lifecycle verification: %s',async variant=>{
+    vi.useFakeTimers();const watchdog=variant.startsWith('watchdog-');let clientNs=0n,wireSeq=0n,boundary=100n;const revision='1';const now=()=>++clientNs;const diagnostics:string[]=[];
     const worker=storageWorker(),client=new StorageClient(worker.handle),script=new Script(ETS2_A),welcome=script.welcome();
     let holdPersist=false,persistHeld=false,enterPersist!:()=>void,releasePersist!:()=>void;
     const persistEntered=new Promise<void>(resolve=>{enterPersist=resolve;}),persistRelease=new Promise<void>(resolve=>{releasePersist=resolve;}),persist=client.openAttachedTrip.bind(client);
@@ -79,13 +79,14 @@ describe('REG-003/005/008/012/014 durable logical trips', () => {
     const log=`log created on : Wednesday October 21 2026 @ 12:00:00\nNew profile selected: Synthetic\nLoading save. /home/profiles/${id}/save/autosave/game.sii\n`;
     await writeFile(path.join(game,'game.log.txt'),log);await writeFile(path.join(game,'config.cfg'),'uset g_traffic "1"');
     await writeFile(path.join(directory,'config_local.cfg'),'uset g_brake_intensity "0.75"');await writeFile(path.join(directory,'config.cfg'),HARD_MODE_CONFIG);
-    let holdGuard=false,guardHeld=false,enterGuard!:()=>void,releaseGuard!:()=>void;
+    let holdGuard=false,guardHeld=false,holdSettings=false,enterGuard!:()=>void,releaseGuard!:()=>void,watchdogWork:Promise<void>|undefined,physicalStarts=0;
     const guardEntered=new Promise<void>(resolve=>{enterGuard=resolve;}),guardRelease=new Promise<void>(resolve=>{releaseGuard=resolve;});
     const reader=new HardModeReader({documents,diagnostic:value=>diagnostics.push(value.code),fixtureOrigin:'synthetic',nowNs:now,
-      file:async(filename,limit,signal)=>{if(holdGuard&&!guardHeld&&filename.endsWith('game.log.txt')){guardHeld=true;enterGuard();await guardRelease;}return readStableFile(filename,limit,signal);},
+      file:async(filename,limit,signal)=>{if(filename.endsWith('game.log.txt'))physicalStarts++;if(holdGuard&&!guardHeld&&filename.endsWith('game.log.txt')||holdSettings&&filename===path.join(directory,'config.cfg')){guardHeld=true;enterGuard();await guardRelease;}return readStableFile(filename,limit,signal);},
       process:s=>Promise.resolve({pid:s.processId,createdUtcMs:new Date(2026,9,21,12).getTime(),executable:'C:/Synthetic/eurotrucks2.exe',homeDirectory:null})});
-    const observer=new ProfileObserver(()=>reader,now,false,value=>diagnostics.push(value.code));let recorder!:TripRecorderSink,settings:Promise<unknown>|undefined;
-    const monitor=new HardModeMonitor((s,ns,at,signal)=>{const work=observer.readSettings(reader,s,ns,at,signal);settings=work.catch(()=>undefined);return work;},value=>recorder.observeHardMode('ets2',value),now,()=>reader.requestFull(),()=>reader.canRetain());
+    const observer=new ProfileObserver(()=>reader,now,false,value=>diagnostics.push(value.code));let recorder!:TripRecorderSink,settings:Promise<unknown>|undefined,readCompleted:(()=>void)|undefined;const publications:string[]=[];
+    const monitor=new HardModeMonitor((s,ns,at,signal,force)=>{const work=observer.readSettings(reader,s,ns,at,signal,force).finally(()=>readCompleted?.());settings=work.catch(()=>undefined);return work;},value=>{publications.push(value.assessment.state);recorder.observeHardMode('ets2',value);},now,()=>reader.requestFull(),()=>reader.canRetain(),undefined,()=>reader.drain(),
+      {eligible:()=>reader.guardEligible(),select:key=>reader.selectGuardSource(key)});
     reader.onInvalidate(()=>monitor.invalidate());
     recorder=new TripRecorderSink(client,{profileEvidence:()=>observer.evidence(),profileStatus:()=>observer.status(),hardModeEvidence:()=>monitor.evidence()});
     let committed:(()=>void)|undefined,observed:(()=>void)|undefined,attached:(()=>void)|undefined,replyEnabled=false,boundaryWork:Promise<void>|undefined;let lastServer:ServerMessage=welcome;
@@ -132,6 +133,25 @@ describe('REG-003/005/008/012/014 durable logical trips', () => {
       const uuid=tripUuidFor(script.session,'2');
       await snapshot(1000000,100,'running',1000);await snapshot(1000100,99,'running',1000);succeeded(await recorder.samples.write(3600,true));
       const before=ok(await client.journalTrip(uuid));expect(before.trip.observedDistanceM).toEqual({available:true,value:100});expect(before.trip.fuelUsedL).toEqual({available:true,value:1});
+      if(watchdog){
+        expect(ok(await client.getTrip(uuid))!.hardModeDetails!.firstLoss).toBeNull();
+        const origin=clientNs;
+        for(let second=5;second<60;second+=5){clientNs=origin+BigInt(second)*1_000_000_000n;await reader.resolveProfile(welcome.source,Date.now(),new AbortController().signal,true);}
+        clientNs=origin+60_000_000_000n;holdSettings=true;watchdogWork=monitor.refresh();await guardEntered;const token=observer.status().token,starts=physicalStarts;
+        clientNs+=2_000_000_000n;await vi.advanceTimersByTimeAsync(2000);await settings;
+        expect(monitor.evidence().assessment.state).toBe('pass');expect(observer.evidence()).toBeDefined();expect(observer.status().token).toBe(token);
+        for(let second=1;second<5;second++){clientNs+=1_000_000_000n;monitor.heartbeat();await snapshot(1000100,99,'running',1000);}
+        clientNs=origin+67_001_000_000n;
+        if(variant==='watchdog-timer'){await vi.advanceTimersByTimeAsync(5000);expect(publications.at(-1)).toBe('unknown');}
+        // The getter case deliberately leaves timer callbacks pending at the same monotonic deadline.
+        expect(monitor.evidence().assessment.state).toBe('unknown');expect(observer.evidence()).toBeUndefined();expect(observer.status().token).not.toBe(token);
+        expect(physicalStarts).toBe(starts);await event(r.fined());const lost=ok(await client.getTrip(uuid))!.hardModeDetails!.firstLoss;expect(lost).not.toBeNull();
+        const recoveredRead=new Promise<void>(resolve=>{readCompleted=resolve;});holdSettings=false;releaseGuard();await reader.drain();
+        expect(monitor.evidence().assessment.state).toBe('unknown');expect(observer.evidence()).toBeUndefined();
+        await recoveredRead;await settings;await observer.refresh();expect(monitor.evidence().assessment.state).toBe('unknown');await admit();await watchdogWork;
+        expect(monitor.evidence().assessment.state).toBe('pass');await snapshot(1000100,99,'running',1000);await event(r.delivered());
+        const recovered=ok(await client.getTrip(uuid))!;expect(recovered.hardModeDetails!.firstLoss).toEqual(lost);expect(recovered.isHardMode).toBe(false);return;
+      }
       if(variant==='witness'){
         replyEnabled=false;await event(r.paused(),'paused',10);await snapshot(1000110,98.9,'paused',10);await admit();await snapshot(1000110,98.9,'paused',10);
         expect(ok(await client.journalTrip(uuid)).trip.observedDistanceM).toEqual({available:true,value:110});
@@ -213,7 +233,7 @@ describe('REG-003/005/008/012/014 durable logical trips', () => {
         if(variant==='profile'||variant==='load'||variant==='clock')expect(ok(await client.getTrip(uuid))!.hardModeDetails!.firstLoss).not.toBeNull();
       }
       expect(acks).toContain('3');
-    }finally{releasePersist();releaseGuard();monitor.close();observer.close();await ingestion.stop();await client.close();}
+    }finally{releasePersist();releaseGuard();monitor.close();observer.close();await watchdogWork;await ingestion.stop();await client.close();}
   });
   it.each(['before','long-before','after','foreign-source','foreign-clock','unknown-time','overflow'] as const)('bounds and source-qualifies persisted transfer checks: %s',async variant=>{
     const storage=await ws.open(),s=new Script(ETS2_A);ok(storage.upsertSession({message:s.welcome()}));ok(storage.commitEvent({message:s.event(r.started())}));const uuid=open(storage,s);
