@@ -3032,6 +3032,43 @@ function installedLogin() {
   vi.doMock('../../apps/desktop/src/uninstall/roots', () => ({resolveUninstallRoots: discover}));
   return {get, set, discover};
 }
+it.each([
+  {legacy: false, osDisabled: false, refused: false},
+  {legacy: false, osDisabled: true, refused: false},
+  {legacy: true, osDisabled: false, refused: false},
+  {legacy: true, osDisabled: true, refused: false},
+  {legacy: true, osDisabled: false, refused: true}
+])('reconciles saved false against an owned command: %j', async ({legacy, osDisabled, refused}) => {
+  const login = installedLogin();
+  const executable = path.win32.basename(process.execPath);
+  let present = true;
+  const args = ['--processStart', legacy ? `"${executable}"` : executable, '--process-start-args', legacy ? '"--hidden"' : '--hidden'];
+  login.get.mockImplementation((options?: {path?: string; args?: string[]}) => ({
+    openAtLogin: present && JSON.stringify(options?.args) === JSON.stringify(args), executableWillLaunchAtLogin: !osDisabled
+  }));
+  login.set.mockImplementation(() => {if (!refused) present = false;});
+  await ready(); await settle();
+  expect(login.set).toHaveBeenCalledExactlyOnceWith({openAtLogin: false, path: 'C:\\isolated\\Update.exe',
+    args: ['--processStart', executable, '--process-start-args', '--hidden']});
+  expect(handlers.get('app:get-state')!(trusted())).toMatchObject({autostart: refused ? 'failed' : 'unregistered', settings: {autostart: false}});
+});
+
+it.each([
+  {known: false, legacy: false, marked: false},
+  {known: false, legacy: true, marked: false},
+  {known: true, legacy: false, marked: true},
+  {known: true, legacy: true, marked: true}
+])('keeps startup registration read-only without intent or exact ownership: %j', async ({known, legacy, marked}) => {
+  const login = installedLogin(); autostartKnown = known;
+  const executable = path.win32.basename(process.execPath);
+  const args = ['--processStart', legacy ? `"${executable}"` : executable, '--process-start-args', legacy ? '"--hidden"' : '--hidden',
+    ...(marked ? ['--installer-lifecycle-planted'] : [])];
+  login.get.mockImplementation((options?: {args?: string[]}) => ({openAtLogin: JSON.stringify(options?.args) === JSON.stringify(args)}));
+  await ready(); await settle();
+  expect(login.get).toHaveBeenCalled(); expect(login.set).not.toHaveBeenCalled();
+  expect(handlers.get('app:get-state')!(trusted())).toMatchObject({autostart: known || legacy ? 'unregistered' : 'registered'});
+});
+
 it('replaces legacy prequoted login arguments from authoritative enabled startup intent', async () => {
   const login = installedLogin();
   const expected = {path: 'C:\\isolated\\Update.exe',
@@ -3039,12 +3076,12 @@ it('replaces legacy prequoted login arguments from authoritative enabled startup
   let registration = {...expected,
     args: ['--processStart', `"${path.win32.basename(process.execPath)}"`, '--process-start-args', '"--hidden"']};
   login.get.mockImplementation((options?: {path?: string; args?: string[]}) => ({
-    openAtLogin: options?.path === registration.path && JSON.stringify(options.args) === JSON.stringify(registration.args)
+    openAtLogin: options?.path === `"${registration.path}"` && JSON.stringify(options.args) === JSON.stringify(registration.args)
   }));
   login.set.mockImplementation((options: {path: string; args: string[]}) => {registration = options;});
   settingsView = {...settingsView, state: 'loaded', autostart: true};
   await ready(); await settle();
-  expect(login.get).toHaveBeenNthCalledWith(1, expected);
+  expect(login.get).toHaveBeenNthCalledWith(1, {...expected, path: `"${expected.path}"`});
   expect(login.set).toHaveBeenCalledExactlyOnceWith({openAtLogin: true, ...expected});
   expect(registration).toEqual({openAtLogin: true, ...expected});
   expect(handlers.get('app:get-state')!(trusted())).toMatchObject({autostart: 'registered', settings: {autostart: true}});

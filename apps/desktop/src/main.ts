@@ -21,7 +21,7 @@ import type {AppHealth, AppLanguage, AppState, AutostartRegistrationStatus, AppU
 import {SettingsBusyError, SettingsError, SettingsStore, settingsDirectory} from './settings-store';
 import {isGearDisplayMode, isUnitGame, isUnitProfile} from './unit-profiles';
 import {isAppLanguage} from './settings-schema';
-import {applyAutostartRegistration, queryAutostartStatus, removeAutostartLoginItem, resolveAutostartTarget, type AutostartTarget} from './autostart';
+import {applyAutostartRegistration, inspectAutostartRegistration, queryAutostartStatus, removeAutostartLoginItem, resolveAutostartTarget, type AutostartTarget} from './autostart';
 import {processEntrypoint} from './entrypoints';
 import {BUNDLE_FLUSH_MS, createDiagnostics, MAIN_EXIT_FLUSH_MS, type DiagnosticFacts} from './diagnostics';
 import {mainLogLocation, serviceEnvironment} from './log-location';
@@ -159,9 +159,9 @@ function runApplication(profileError: unknown): void {
       autostartTarget = resolveAutostartTarget(roots, process.execPath);
       const intent = settingsStore.knownAutostartIntent;
       startupAutostartRetired = intent !== undefined || settingsStore.view().state !== 'loading';
-      const current = queryAutostartStatus(app, autostartTarget);
-      autostartStatus = intent === true || (intent === false && current === 'registered')
-        ? applyAutostartRegistration(app, autostartTarget, intent) : current;
+      const current = inspectAutostartRegistration(app, autostartTarget);
+      autostartStatus = intent === true || (intent === false && current.owned)
+        ? applyAutostartRegistration(app, autostartTarget, intent) : current.status;
     } catch {
       if (generation !== autostartGeneration || startupAutostartRetired || lifecycle.exiting) return;
       startupAutostartRetired = settingsStore.view().state !== 'loading';

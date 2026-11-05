@@ -658,15 +658,15 @@ function Get-RunValue([string]$Channel) {
     try { return $key.GetValue([string]$identities[$Channel].appUserModelId) } finally { Close-Disposable $key }
 }
 function Set-PlantedRunValue([string]$Channel) {
-    # Hosted side-by-side runs only: plants the channel's autostart value under its own name (the AUMID) in the shape
-    # Electron writes, pointing at the channel's Update.exe in R, so that the other channel's install, launch and uninstall
+    # Hosted side-by-side runs only: plants the channel's autostart value under its own name (the AUMID), using a quoted
+    # Update.exe path in R and Electron's raw executable/--hidden argument values, so the other channel's install, launch and uninstall
     # can be shown to leave it alone. A trailing marker argument keeps it from matching the application's own login item,
     # which the application's startup reconciliation would otherwise remove (autostart off). Refuses an existing value.
     if (!$hosted -or $Scenario -ne 'side-by-side') { throw ('RUN_VALUE_PLANT_HOSTED_ONLY for ' + $Channel) }
     if ($null -ne (Get-RunValue $Channel)) { throw ('RUN_VALUE_EXISTS for ' + $Channel) }
     $identity = $identities[$Channel]
-    $data = '"' + (Join-Path (Join-Path $base $identity.productRoot) 'Update.exe') + '" --processStart "' + $identity.executable +
-        '" --process-start-args "--hidden" --installer-lifecycle-planted'
+    $data = '"' + (Join-Path (Join-Path $base $identity.productRoot) 'Update.exe') + '" --processStart ' + $identity.executable +
+        ' --process-start-args --hidden --installer-lifecycle-planted'
     $key = [Microsoft.Win32.Registry]::CurrentUser.CreateSubKey($runKey)
     try { $key.SetValue([string]$identity.appUserModelId, $data, [Microsoft.Win32.RegistryValueKind]::String) } finally { Close-Disposable $key }
     $script:plantedRunValues.Add([ordered]@{name=[string]$identity.appUserModelId; data=$data})

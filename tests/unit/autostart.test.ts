@@ -2,6 +2,7 @@ import path from 'node:path';
 import {describe, expect, it, vi} from 'vitest';
 import {
   applyAutostartRegistration,
+  inspectAutostartRegistration,
   queryAutostartStatus,
   removeAutostartLoginItem,
   resolveAutostartTarget,
@@ -33,8 +34,8 @@ describe('autostart target resolution', () => {
         expect(applyAutostartRegistration(ports, target, true)).toBe('registered');
         expect(removeAutostartLoginItem(ports, installRoot, executableName)).toBe(true);
         expect(ports.getLoginItemSettings).toHaveBeenCalledTimes(2);
-        expect(ports.getLoginItemSettings).toHaveBeenNthCalledWith(1, expected);
-        expect(ports.getLoginItemSettings).toHaveBeenNthCalledWith(2, expected);
+        expect(ports.getLoginItemSettings).toHaveBeenNthCalledWith(1, {...expected, path: `"${expected.path}"`});
+        expect(ports.getLoginItemSettings).toHaveBeenNthCalledWith(2, {...expected, path: `"${expected.path}"`});
         expect(ports.setLoginItemSettings).toHaveBeenNthCalledWith(1, {openAtLogin: true, ...expected});
         expect(ports.setLoginItemSettings).toHaveBeenNthCalledWith(2, {openAtLogin: false, ...expected});
       }
@@ -94,6 +95,14 @@ describe('autostart query', () => {
     args: ['--processStart', 'ETS2TelemetryDesktop.exe', '--process-start-args', '--hidden']
   };
 
+  it('quotes a spaced path only for the Electron query and keeps setter values raw', () => {
+    const spaced = {...target, path: 'C:\\Users\\Test Driver\\Install Root\\Update.exe'};
+    const ports: LoginItemPorts = {getLoginItemSettings: vi.fn(() => ({openAtLogin: true})), setLoginItemSettings: vi.fn()};
+    expect(applyAutostartRegistration(ports, spaced, true)).toBe('registered');
+    expect(ports.setLoginItemSettings).toHaveBeenCalledExactlyOnceWith({openAtLogin: true, ...spaced});
+    expect(ports.getLoginItemSettings).toHaveBeenCalledExactlyOnceWith({path: `"${spaced.path}"`, args: [...spaced.args]});
+  });
+
   it('returns not-installed when target is undefined', () => {
     const ports: LoginItemPorts = {
       getLoginItemSettings: vi.fn(),
@@ -110,7 +119,7 @@ describe('autostart query', () => {
     };
     expect(queryAutostartStatus(ports, target)).toBe('registered');
     expect(ports.getLoginItemSettings).toHaveBeenCalledWith({
-      path: target.path,
+      path: `"${target.path}"`,
       args: [...target.args]
     });
   });
@@ -142,11 +151,61 @@ describe('autostart query', () => {
   });
 });
 
+describe('autostart command ownership', () => {
+  const target: AutostartTarget = {path: 'C:\\Install Root\\Update.exe',
+    args: ['--processStart', 'ETS2TelemetryDesktop.exe', '--process-start-args', '--hidden']};
+
+  it.each([
+    {form: 'current', launch: true, status: 'registered', owned: true},
+    {form: 'current', launch: false, status: 'unregistered', owned: true},
+    {form: 'legacy', launch: true, status: 'unregistered', owned: true},
+    {form: 'legacy', launch: false, status: 'unregistered', owned: true},
+    {form: 'marked', launch: true, status: 'unregistered', owned: false},
+    {form: 'absent', launch: false, status: 'unregistered', owned: false}
+  ])('inspects $form with launch=$launch', ({form, launch, status, owned}) => {
+    const command = form === 'legacy'
+      ? ['--processStart', '"ETS2TelemetryDesktop.exe"', '--process-start-args', '"--hidden"']
+      : [...target.args, ...(form === 'marked' ? ['--installer-lifecycle-planted'] : [])];
+    const ports: LoginItemPorts = {setLoginItemSettings: vi.fn(), getLoginItemSettings: vi.fn(options => ({
+      openAtLogin: form !== 'absent' && options?.path === '"C:\\Install Root\\Update.exe"' && JSON.stringify(options.args) === JSON.stringify(command),
+      executableWillLaunchAtLogin: launch
+    }))};
+    expect(inspectAutostartRegistration(ports, target)).toEqual({status, owned});
+    expect(ports.setLoginItemSettings).not.toHaveBeenCalled();
+  });
+
+  it.each([1, 2])('fails closed when required query %s throws during disable readback', failingQuery => {
+    let queries = 0;
+    const ports: LoginItemPorts = {setLoginItemSettings: vi.fn(), getLoginItemSettings: vi.fn(() => {
+      if (++queries === failingQuery) throw new Error('query refused');
+      return {openAtLogin: false};
+    })};
+    expect(applyAutostartRegistration(ports, target, false)).toBe('failed');
+  });
+
+  it('queries both exact shapes before confirming that disable removed the command', () => {
+    const ports: LoginItemPorts = {setLoginItemSettings: vi.fn(), getLoginItemSettings: vi.fn(() => ({openAtLogin: false}))};
+    expect(applyAutostartRegistration(ports, target, false)).toBe('unregistered');
+    expect(ports.getLoginItemSettings).toHaveBeenCalledTimes(2);
+    expect(ports.getLoginItemSettings).toHaveBeenNthCalledWith(1, {path: '"C:\\Install Root\\Update.exe"', args: [...target.args]});
+    expect(ports.getLoginItemSettings).toHaveBeenNthCalledWith(2, {path: '"C:\\Install Root\\Update.exe"',
+      args: ['--processStart', '"ETS2TelemetryDesktop.exe"', '--process-start-args', '"--hidden"']});
+  });
+});
+
 describe('autostart apply registration', () => {
   const target: AutostartTarget = {
     path: 'C:\\Users\\User\\AppData\\Local\\ETS2TelemetryDesktop\\Update.exe',
     args: ['--processStart', 'ETS2TelemetryDesktop.exe', '--process-start-args', '--hidden']
   };
+
+  it('reports failure when disabling silently leaves the legacy prequoted command', () => {
+    const ports: LoginItemPorts = {
+      getLoginItemSettings: vi.fn(options => ({openAtLogin: options?.args?.[1] === '"ETS2TelemetryDesktop.exe"'})),
+      setLoginItemSettings: vi.fn()
+    };
+    expect(applyAutostartRegistration(ports, target, false)).toBe('failed');
+  });
 
   it('returns not-installed when target is undefined', () => {
     const ports: LoginItemPorts = {

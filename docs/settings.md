@@ -300,7 +300,7 @@ Both are refused for an untrusted sender or frame (including the overlay), for a
 
 The dashboard's **General** settings panel includes an **Autostart** card with a toggle switch and status badge:
 - Displays live status: `Active`, `Disabled`, `Not installed` (in unpackaged/portable mode), or `Failed`.
-- In an installed application, toggling updates the Windows login item via `Update.exe --processStart "<exe>" --process-start-args "--hidden"`.
+- In an installed application, toggling updates the Windows login item targeting `Update.exe`, with raw API arguments `['--processStart', executableName, '--process-start-args', '--hidden']`; Electron serializes the command line ([login-item boundary](app-lifecycle.md#start-with-windows-and-background-launch-et-031)).
 - In an unpackaged or portable environment, the toggle is disabled with an informational note indicating autostart is available after installation.
 - Toggling invokes `setAutostart(enabled)` over the bridge and persists the setting atomically.
 
@@ -337,7 +337,7 @@ The first save writes canonical v6 (v7 since ET-049, v8 since ET-045e); v1–v5 
 
 The main-only store getter distinguishes a confirmed initial autostart choice from display defaults. A positively missing file/directory supplies false; parsed settings supply their current committed choice, including a migration or unrelated field fallback. A fallback of autostart itself, invalid/unsupported/newer files, unavailable/read-error/reparse outcomes, pending reads and the read limit supply no intent. Generic saves never promote an unknown initial load. A read retired at 30 seconds cannot restore authority later.
 
-Startup queries actual registration while intent is unknown and never writes login registration from provisional defaults. A late load may reconcile once; it supersedes older target discovery. Ordinary save publications do not restart this startup operation. A valid trusted explicit autostart request retires startup before awaiting discovery, even if its durable save fails; invalid/untrusted requests do not. Exit retires pending discovery and prevents OS mutation after a durable save. Explicit successful writes apply the current committed choice, preserving shared-queue ordering.
+Startup queries actual registration while intent is unknown and never writes login registration from provisional defaults. A confirmed false choice removes only an exact current or former prequoted command, including a Windows-disabled entry; commands with additional arguments remain untouched. Disable readback checks both forms and reports failure if either remains or a query fails. A late load may reconcile once; it supersedes older target discovery. Ordinary save publications do not restart this startup operation. A valid trusted explicit autostart request retires startup before awaiting discovery, even if its durable save fails; invalid/untrusted requests do not. Exit retires pending discovery and prevents OS mutation after a durable save. Explicit successful writes apply the current committed choice, preserving shared-queue ordering.
 
 ## Unified Overlay page (ET-048)
 
