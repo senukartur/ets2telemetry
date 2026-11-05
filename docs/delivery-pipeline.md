@@ -49,7 +49,7 @@ A card or package ID makes the orchestrator read that Trello card and keep its s
 ## Flow and limits
 
 0. **Refresh target and instructions:**
-   - Before planning or other workflow actions on every start/resume, resolve the intended PR target: the owner's explicit target, otherwise the existing PR base, otherwise `main`.
+   - Before planning or other workflow actions on every start/resume, resolve the intended PR target: the owner's explicit target, otherwise the existing PR base, otherwise a resumed run's saved target before PR creation, otherwise `main`.
    - Fetch that branch successfully and pin its SHA. Read the runtime skill, repository rules and agent definitions from that exact commit; a fetch alone does not update an old checkout or instructions already loaded in a chat. Failed fetches or missing required target instructions stop the run.
    - Keep the root checkout and existing task work intact. A resumed run records the fresh target tip separately from its original base; it does not reset or recreate the task branch.
 1. **Plan:**
