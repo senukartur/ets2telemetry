@@ -798,6 +798,8 @@ The workflow text is guarded by `tests/unit/release-workflow.test.ts`: dispatch 
 
 ## ET-026 Hard Mode journey
 
+The synthetic plugin runs in a dedicated Node worker so Playwright and trace collection cannot pause its snapshot timer and cause artificial source staleness. Commands and shutdown are awaited; worker failures reject pending commands and remain in the source error receipt.
+
 The October 22 ET-011 harness correction arms a new passing publication immediately after the pass screenshot, then
 drives the existing trusted `refreshHardMode()` and status requests sequentially while waiting for the open audit,
 both distinct persisted passing publications and the qualifying delivery. The production monitor may coalesce these

@@ -3,7 +3,8 @@ import {prepareNowPlayingSmoke, runNowPlayingSmoke, verifyNowPlayingRestart, now
 import {dashboardObservation} from './dashboard-observation.mjs';
 import {runUiSmoke, runUiReadOnly, UI_CASES} from './ui-observation.mjs';
 import {screen, settingsPanel, waitForStartup} from './ui-navigation.mjs';
-import {HARD_MODE_TARGET, runHardModeSmoke, startHardModeSource, verifyHardModeRun} from './hard-mode-observation.mjs';
+import {HARD_MODE_TARGET, runHardModeSmoke, verifyHardModeRun} from './hard-mode-observation.mjs';
+import {startHardModeWorker} from './hard-mode-source-worker.mjs';
 import assert from 'node:assert/strict';
 import path from 'node:path';
 import os from 'node:os';
@@ -161,7 +162,7 @@ try {
   if (config.scenario === 'ui' && (!UI_CASES.includes(config.uiCase) || config.mode === 'installed')) throw new Error('INVALID_UI_SHARD');
   if (config.scenario === 'ui' && config.uiCase !== 'journal' || config.scenario === 'now-playing' || config.scenario === 'telemetry' || config.scenario === 'overlay' || config.scenario === 'lifecycle' || config.scenario === 'recording' || config.scenario === 'soak') telemetrySource = await startLiveSmokeSource(config.checkout);
   if (config.scenario === 'telemetry' || config.scenario === 'ui' && ['live', 'overlay'].includes(config.uiCase)) telemetrySourceV1 = await startLiveSmokeSourceV1(config.checkout);
-  if (config.scenario === 'hard-mode') hardModeSource = await startHardModeSource(config);
+  if (config.scenario === 'hard-mode') hardModeSource = await startHardModeWorker(config);
   if (config.scenario === 'recording') recordingSource = await startRecordingSource(config);
   if (config.scenario === 'soak') soakSource = await startSoakSource(config);
   // ET-011b: the lifecycle journey starts from a deliberately invalid settings file in the isolated LOCALAPPDATA.
