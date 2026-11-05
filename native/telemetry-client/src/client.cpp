@@ -282,7 +282,10 @@ void bootstrap_policy(const fs::path& directory, const Identity& identity, HANDL
   if (fs::exists(policyPath)) {
     auto handle = secure_file(policyPath, identity); existing = read_bounded(handle.value, 16384); const auto policy = parse(existing);
     exact(policy, {"schemaVersion", "userTag", "windowsSessionId", "allowedExecutables"});
-    if (integer(policy.at("schemaVersion")) != 1 || policy.at("userTag").string() != identity.userTag || integer(policy.at("windowsSessionId")) != identity.session) fail();
+    if (integer(policy.at("schemaVersion")) != 1 || policy.at("userTag").string() != identity.userTag) fail();
+    // This owner-only policy survives logoff/reboot. Validate its old session field, then republish for our
+    // current session through the existing lock and atomic replacement, preserving verified approval entries.
+    integer(policy.at("windowsSessionId"));
     const auto* list = std::get_if<Json::Array>(&policy.at("allowedExecutables").value); if (!list || list->empty() || list->size() > 4) fail();
     bool found = false; std::vector<std::string> paths;
     for (const auto& entry : *list) {
@@ -502,15 +505,19 @@ int wmain(int argc, wchar_t** argv) {
       auto file = enumerated_discovery_file(entry.path(), self); if (!file) continue;
       auto record = parse(read_bounded(file->value, 16384));
       exact(record, {"schemaVersion", "protocolMajor", "game", "userTag", "windowsSessionId", "processId", "processCreationTime", "processInstanceId", "pluginSessionId", "pipeName"});
-      if (integer(record.at("schemaVersion")) != 1 || integer(record.at("protocolMajor")) != protocolMajor || record.at("userTag").string() != self.userTag || integer(record.at("windowsSessionId")) != self.session || record.at("processInstanceId").string() != stem || !uuid(record.at("pluginSessionId").string())) fail();
+      if (integer(record.at("schemaVersion")) != 1 || integer(record.at("protocolMajor")) != protocolMajor || record.at("userTag").string() != self.userTag || record.at("processInstanceId").string() != stem || !uuid(record.at("pluginSessionId").string())) fail();
+      const auto recordSession = integer(record.at("windowsSessionId"));
       const auto& recordGame = record.at("game").string();
       if (recordGame != "ets2" && recordGame != "ats") fail();
       const auto pid = integer(record.at("processId")); if (!pid) fail();
       const auto expectedCreation = v0::parse_uint64(record.at("processCreationTime"));
       // Only names under this build channel's prefix (ET-055) are accepted: a record naming another prefix, such as the
       // other channel's, fails closed like any inconsistent derived name.
-      const auto endpoint = channel::active.pipe_prefix + recordGame + segment + self.userTag + "-" + std::to_string(self.session) + "-" + stem;
+      const auto endpoint = channel::active.pipe_prefix + recordGame + segment + self.userTag + "-" + std::to_string(recordSession) + "-" + stem;
       if (record.at("pipeName").string() != endpoint) fail();
+      // The same user's records can outlive a Windows session, or belong to another still-live session.
+      // Validate them fully and count them toward the scan bounds, but neither select nor delete them.
+      if (recordSession != self.session) {if (++visited > 256 || ++records > 128) fail(); continue;}
       stage = "server-process";
       const auto raw = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION | SYNCHRONIZE, FALSE, pid);
       if (!raw) {
