@@ -36,7 +36,7 @@ export function resolveAutostartTarget(roots: UninstallRoots, executable: string
   const exeName = path.win32.basename(executable);
   return {
     path: path.win32.join(roots.installRoot, 'Update.exe'),
-    args: ['--processStart', `"${exeName}"`, '--process-start-args', '"--hidden"']
+    args: ['--processStart', exeName, '--process-start-args', '--hidden']
   };
 }
 
@@ -101,7 +101,7 @@ export function removeAutostartLoginItem(
     ports.setLoginItemSettings({
       openAtLogin: false,
       path: path.win32.join(installRoot, 'Update.exe'),
-      args: ['--processStart', `"${executableName}"`, '--process-start-args', '"--hidden"']
+      args: ['--processStart', executableName, '--process-start-args', '--hidden']
     });
     return true;
   } catch {

@@ -3,7 +3,7 @@ import * as fsp from 'node:fs/promises';
 import path from 'node:path';
 import {afterEach, beforeEach, describe, expect, it, vi} from 'vitest';
 import type {ShortcutLink} from '../../apps/desktop/src/legacy-shortcuts';
-import {cancelDeferralOnStart, countOtherProcesses, deadlineSignal, EXIT_CODES, hookDeadlines, prepareSquirrelProcess, PROCESS_POLL_MS, INSTANCE_EXIT_WAIT_MS, parseSquirrelArgs, PROCESS_START_MARGIN_MS, RECEIPT_FORMAT, runSquirrelEvent, settle,
+import {cancelDeferralOnStart, countOtherProcesses, deadlineSignal, EXIT_CODES, hookDeadlines, prepareSquirrelProcess, PROCESS_POLL_MS, INSTANCE_EXIT_WAIT_MS, parseSquirrelArgs, productionSquirrelPorts, PROCESS_START_MARGIN_MS, RECEIPT_FORMAT, runSquirrelEvent, settle,
   UNINSTALL_DEADLINE_MS, UNINSTALL_HARD_STOP_MS,
   type SquirrelArgs, type SquirrelPorts, type UninstallReceipt} from '../../apps/desktop/src/squirrel-events';
 import type {UninstallPorts, UninstallResult} from '../../apps/desktop/src/uninstall/engine';
@@ -531,6 +531,23 @@ describe('the old-name shortcuts (ET-045h)', () => {
 });
 
 describe('uninstall', () => {
+  it.each(['ETS2TelemetryDesktop.exe', 'ETS2TelemetryDesktopStaging.exe', 'Telemetry Test.exe'])(
+    'the production removal adapter passes raw Electron arguments for %s', executableName => {
+      const setLoginItemSettings = vi.fn();
+      const ports = productionSquirrelPorts({
+        app: {getPath: () => guard.root, setPath: vi.fn(), requestSingleInstanceLock: () => true,
+          releaseSingleInstanceLock: vi.fn(), getAppMetrics: () => [], setLoginItemSettings},
+        appVersion: '0.1.0', executable: path.win32.join(guard.root, 'app-0.1.0', executableName),
+        env: {}, mainDirectory: guard.root, resourcesPath: guard.root
+      });
+      const installRoot = path.win32.join(guard.root, 'Install With Spaces');
+      expect(ports.removeLoginItem!(installRoot, executableName)).toBe(true);
+      expect(setLoginItemSettings).toHaveBeenCalledExactlyOnceWith({openAtLogin: false,
+        path: path.win32.join(installRoot, 'Update.exe'),
+        args: ['--processStart', executableName, '--process-start-args', '--hidden']});
+    }
+  );
+
   it('requests the lock before the engine, cleans everything and writes a complete receipt without a path', async () => {
     const {fixture, game, unrelated} = await scene();
     const test = harness(fixture);

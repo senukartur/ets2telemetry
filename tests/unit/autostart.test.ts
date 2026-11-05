@@ -1,3 +1,4 @@
+import path from 'node:path';
 import {describe, expect, it, vi} from 'vitest';
 import {
   applyAutostartRegistration,
@@ -11,6 +12,35 @@ import {
 import type {UninstallRoots} from '../../apps/desktop/src/uninstall/roots';
 
 describe('autostart target resolution', () => {
+  it.each(['ETS2TelemetryDesktop.exe', 'ETS2TelemetryDesktopStaging.exe', 'Telemetry Test.exe'])(
+    'keeps a stable launcher and raw API arguments for %s across app versions', executableName => {
+      const installRoot = 'C:\\Users\\Test Driver\\AppData\\Local\\Telemetry Install';
+      const expected = {
+        path: `${installRoot}\\Update.exe`,
+        args: ['--processStart', executableName, '--process-start-args', '--hidden']
+      };
+      for (const version of ['0.1.0', '0.2.0']) {
+        const appDirectory = `${installRoot}\\app-${version}`;
+        const roots: UninstallRoots = {ok: true, mode: 'production', installRoot, appDirectory,
+          base: 'C:\\Users\\Test Driver\\AppData\\Local', dataRoot: 'C:\\isolated-data'};
+        const target = resolveAutostartTarget(roots, path.win32.join(appDirectory, executableName));
+        expect(target).toEqual(expected);
+        const ports: LoginItemPorts = {
+          getLoginItemSettings: vi.fn(() => ({openAtLogin: true})),
+          setLoginItemSettings: vi.fn()
+        };
+        expect(queryAutostartStatus(ports, target)).toBe('registered');
+        expect(applyAutostartRegistration(ports, target, true)).toBe('registered');
+        expect(removeAutostartLoginItem(ports, installRoot, executableName)).toBe(true);
+        expect(ports.getLoginItemSettings).toHaveBeenCalledTimes(2);
+        expect(ports.getLoginItemSettings).toHaveBeenNthCalledWith(1, expected);
+        expect(ports.getLoginItemSettings).toHaveBeenNthCalledWith(2, expected);
+        expect(ports.setLoginItemSettings).toHaveBeenNthCalledWith(1, {openAtLogin: true, ...expected});
+        expect(ports.setLoginItemSettings).toHaveBeenNthCalledWith(2, {openAtLogin: false, ...expected});
+      }
+    }
+  );
+
   it('returns undefined when roots resolution is not ok (e.g. ROOT_MISMATCH)', () => {
     const roots: UninstallRoots = {ok: false, code: 'ROOT_MISMATCH'};
     expect(resolveAutostartTarget(roots, 'C:\\app\\ETS2TelemetryDesktop.exe')).toBeUndefined();
@@ -34,7 +64,7 @@ describe('autostart target resolution', () => {
     const target = resolveAutostartTarget(roots, executable);
     expect(target).toEqual({
       path: 'C:\\Users\\User\\AppData\\Local\\ETS2TelemetryDesktop\\Update.exe',
-      args: ['--processStart', '"ETS2TelemetryDesktop.exe"', '--process-start-args', '"--hidden"']
+      args: ['--processStart', 'ETS2TelemetryDesktop.exe', '--process-start-args', '--hidden']
     });
   });
 
@@ -53,7 +83,7 @@ describe('autostart target resolution', () => {
     const target = resolveAutostartTarget(roots, executable);
     expect(target).toEqual({
       path: 'D:\\temp\\LocalAppData\\ETS2TelemetryDesktop\\Update.exe',
-      args: ['--processStart', '"ETS2TelemetryDesktop.exe"', '--process-start-args', '"--hidden"']
+      args: ['--processStart', 'ETS2TelemetryDesktop.exe', '--process-start-args', '--hidden']
     });
   });
 });
@@ -61,7 +91,7 @@ describe('autostart target resolution', () => {
 describe('autostart query', () => {
   const target: AutostartTarget = {
     path: 'C:\\Users\\User\\AppData\\Local\\ETS2TelemetryDesktop\\Update.exe',
-    args: ['--processStart', '"ETS2TelemetryDesktop.exe"', '--process-start-args', '"--hidden"']
+    args: ['--processStart', 'ETS2TelemetryDesktop.exe', '--process-start-args', '--hidden']
   };
 
   it('returns not-installed when target is undefined', () => {
@@ -115,7 +145,7 @@ describe('autostart query', () => {
 describe('autostart apply registration', () => {
   const target: AutostartTarget = {
     path: 'C:\\Users\\User\\AppData\\Local\\ETS2TelemetryDesktop\\Update.exe',
-    args: ['--processStart', '"ETS2TelemetryDesktop.exe"', '--process-start-args', '"--hidden"']
+    args: ['--processStart', 'ETS2TelemetryDesktop.exe', '--process-start-args', '--hidden']
   };
 
   it('returns not-installed when target is undefined', () => {
@@ -200,7 +230,7 @@ describe('remove autostart login item', () => {
     expect(setLoginItemSettings).toHaveBeenCalledWith({
       openAtLogin: false,
       path: 'C:\\InstallRoot\\Update.exe',
-      args: ['--processStart', '"ETS2TelemetryDesktop.exe"', '--process-start-args', '"--hidden"']
+      args: ['--processStart', 'ETS2TelemetryDesktop.exe', '--process-start-args', '--hidden']
     });
   });
 

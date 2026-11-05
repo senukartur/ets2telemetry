@@ -40,7 +40,7 @@ electron-squirrel-startup was removed because its uninstall branch quits the pro
 
 ET-031 adds an optional Start with Windows capability:
 - **Login item registration:** When enabled in an installed application, the login item registers Squirrel's `Update.exe` rather than the versioned executable path (`app-<version>\ETS2TelemetryDesktop.exe`):
-  `Update.exe --processStart "ETS2TelemetryDesktop.exe" --process-start-args "--hidden"`
+  Electron receives the raw argument array `['--processStart', executableName, '--process-start-args', '--hidden']`, with the executable name of the current channel. Electron quotes and escapes each argument when serializing the Windows command line; API values contain no added quotes, including names or paths with spaces.
   Pointing to `Update.exe` ensures that when Squirrel updates the application to a newer version directory, the Windows Run entry remains valid and executes the updated executable.
 - **Background launch via `--hidden`:** When launched with the `--hidden` command-line switch, Electron main initializes the telemetry service, tray icon, and transparent overlay as usual, but skips initial dashboard window creation (`createWindow()`). The application starts running quietly minimized to the notification area (system tray).
 - **Subsequent launch:** A second launch of the application (or clicking the tray icon) detects the running instance and invokes `openDashboard()`, creating and focusing the dashboard window.

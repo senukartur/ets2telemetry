@@ -467,7 +467,7 @@ export function productionSquirrelPorts(options: {app: SquirrelApp; appVersion: 
         app.setLoginItemSettings?.({
           openAtLogin: false,
           path: path.win32.join(installRoot, 'Update.exe'),
-          args: ['--processStart', '"' + executableName + '"', '--process-start-args', '"--hidden"']
+          args: ['--processStart', executableName, '--process-start-args', '--hidden']
         });
         return true;
       } catch {
