@@ -553,6 +553,12 @@ void policy_and_exhaustion() {
   {bool rejected=false; try{read_service_policy(f.directory,f.security,f.user);}catch(...){rejected=true;} require(rejected,"foreign user policy still rejected");}
   const auto path=f.directory+L"\\service-policy.json";
   auto bad=[&](const std::string& bytes){Handle out(CreateFileW(path.c_str(),GENERIC_WRITE,0,f.security.attributes(),CREATE_ALWAYS,FILE_FLAG_OPEN_REPARSE_POINT,nullptr)); DWORD written=0; require(out&&WriteFile(out.get(),bytes.data(),static_cast<DWORD>(bytes.size()),&written,nullptr),"invalid policy fixture"); out.reset(); bool rejected=false; try{read_service_policy(f.directory,f.security,f.user);}catch(...){rejected=true;} require(rejected,"invalid policy rejected");};
+  v0::Json policy_fields{v0::Json::Object{{"schemaVersion",v0::Json{1.0}},{"userTag",v0::Json{f.user.tag}},
+    {"allowedExecutables",v0::Json{v0::Json::Array{v0::Json{v0::Json::Object{{"path",v0::Json{utf8(f.self.image)}},{"sha256",v0::Json{f.self.sha256}}}}}}}}};
+  bad(v0::detail::serialize(policy_fields)); // Only windowsSessionId is absent; every other field is valid.
+  for(const auto& invalid:{v0::Json{std::string("1")},v0::Json{nullptr},v0::Json{true}}) {
+    std::get<v0::Json::Object>(policy_fields.value)["windowsSessionId"]=invalid; bad(v0::detail::serialize(policy_fields));
+  }
   bad("{}"); bad("{\"schemaVersion\":1,\"schemaVersion\":1}"); bad(std::string(16385,' '));
   write_policy(f.directory,f.security,f.user,f.self); PSECURITY_DESCRIPTOR insecure=nullptr;
   require(ConvertStringSecurityDescriptorToSecurityDescriptorW(L"D:P(A;;GA;;;WD)",SDDL_REVISION_1,&insecure,nullptr)!=FALSE,"untrusted ACL fixture");

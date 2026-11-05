@@ -31,6 +31,7 @@ set(CLIENT_TEST_CASES
   session-recovery-v0 session-recovery-v1 session-waiting-v0 session-waiting-v1
   session-policy-user session-policy-schema session-policy-id session-record-user session-record-name session-record-id session-record-bound
   session-stale-v0 session-stale-v1 session-limit-v0 session-limit-v1
+  session-denied-v0 session-denied-v1
   profile-valid profile-homedir profile-creation profile-session profile-user profile-game profile-framing profile-unknown profile-query-failure profile-unavailable policy-readonly)
 # These cases wait out the broker's fixed 5 s frame or client-write deadline or the fixture's 5.5 s
 # quiet window (about 5-6 s each; every other case takes well under 1 s). Per-entry timeouts are hang

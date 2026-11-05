@@ -25,7 +25,15 @@ using v0::Json;
 namespace fs = std::filesystem;
 #ifdef ETS2TELEMETRY_CLIENT_DISCOVERY_TEST
 void discovery_before_open(const fs::path& filename);
+HANDLE discovery_open_process(DWORD access, DWORD pid);
 #endif
+HANDLE open_discovery_process(DWORD access, DWORD pid) {
+#ifdef ETS2TELEMETRY_CLIENT_DISCOVERY_TEST
+  return discovery_open_process(access, pid);
+#else
+  return OpenProcess(access, FALSE, pid);
+#endif
+}
 void test_trace(const char* value) {
 #ifdef ETS2TELEMETRY_CLIENT_ASAN_DIAGNOSTICS
   const auto text = std::string(value) + ":" + std::to_string(GetTickCount64()) + "\n"; DWORD written = 0;
@@ -178,7 +186,7 @@ bool sweep_stale_record(const fs::path& path, std::optional<Handle>& verifiedFil
   return true;
 }
 bool is_reused_or_gone_on_access_denied(DWORD pid, std::uint64_t expectedCreation, const std::string& endpoint, const fs::path& path, std::optional<Handle>& file, const Identity& self) {
-  const auto rawLimited = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, pid);
+  const auto rawLimited = open_discovery_process(PROCESS_QUERY_LIMITED_INFORMATION, pid);
   if (rawLimited) {
     Handle limited(rawLimited);
     FILETIME created{}, exited{}, kernel{}, user{};
@@ -516,13 +524,14 @@ int wmain(int argc, wchar_t** argv) {
       const auto endpoint = channel::active.pipe_prefix + recordGame + segment + self.userTag + "-" + std::to_string(recordSession) + "-" + stem;
       if (record.at("pipeName").string() != endpoint) fail();
       stage = "server-process";
-      const auto raw = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION | SYNCHRONIZE, FALSE, pid);
+      const auto raw = open_discovery_process(PROCESS_QUERY_LIMITED_INFORMATION | SYNCHRONIZE, pid);
       if (!raw) {
         const auto openError = GetLastError();
         if (openError == ERROR_INVALID_PARAMETER) {sweep_stale_record(entry.path(), file, self); stage = "discovery"; continue;}
+        // An absent endpoint in another session is not proof that its unqueryable process is gone.
+        // Retain the record before entering the same-session access-denied sweep fallback.
+        if (openError == ERROR_ACCESS_DENIED && recordSession != self.session) {stage = "discovery"; if (++visited > 256 || ++records > 128) fail(); continue;}
         if (openError == ERROR_ACCESS_DENIED && is_reused_or_gone_on_access_denied(pid, expectedCreation, endpoint, entry.path(), file, self)) {stage = "discovery"; continue;}
-        // An unqueryable other-session process grants no attachment authority. Retain the record and bound the scan.
-        if (openError == ERROR_ACCESS_DENIED && recordSession != self.session) {if (++visited > 256 || ++records > 128) fail(); stage = "discovery"; continue;}
         SetLastError(openError); fail();
       }
       std::optional<Handle> candidate(std::in_place, raw);
