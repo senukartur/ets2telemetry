@@ -1,5 +1,6 @@
 import type {Available} from '../../../contracts/src/protocol-v1';
 import {FUEL_NOISE_LITERS} from '../derived';
+import {matchesSavedEndpoint} from './saved-endpoint';
 
 export interface ProgressAnchor {
   speedMps?: number | null; gameMinutes?: string | null; gameClockId?:string|null;position?:{x:number;y:number;z:number}|null;pluginSessionId: string; sourceClockId: string; monotonicNs: string; truck: string | null;
@@ -10,14 +11,14 @@ export interface ProgressCheckpoint {
 }
 const unknown = (): Available<number> => ({available: false, reason: 'not-observed'});
 /** An exact recorded prefix, or a distance-only cut inside a proven continuous odometer span. */
-export function restoredProgress(start: ProgressCheckpoint, end: ProgressCheckpoint, at: ProgressAnchor): ProgressCheckpoint {
+export function restoredProgress(start: ProgressCheckpoint, end: ProgressCheckpoint, at: ProgressAnchor, savedBoundary = false): ProgressCheckpoint {
   const a = start.anchor.odometerM, b = end.anchor.odometerM, x = at.odometerM;
   if (!at.truck || at.truck !== start.anchor.truck || at.truck !== end.anchor.truck || a === null || b === null || x === null || x < a || x > b
     || !start.distanceM.available || !end.distanceM.available || end.distanceM.value - start.distanceM.value !== b - a) {
     return {anchor: at, distanceM: unknown(), fuelUsedL: unknown()};
   }
   const exact = x === a ? start : x === b ? end : null;
-  return {anchor: at, distanceM: {available: true, value: start.distanceM.value + x - a}, fuelUsedL: exact && exact.anchor.fuelL === at.fuelL ? exact.fuelUsedL : unknown()};
+  return {anchor: at, distanceM: {available: true, value: start.distanceM.value + x - a}, fuelUsedL: exact && matchesSavedEndpoint(exact.anchor,at,savedBoundary) ? exact.fuelUsedL : unknown()};
 }
 /** No bridging sessions, holes, truck changes or implausible jumps. A restore supplies its own supported prefix. */
 export function advanceProgress(previous: ProgressCheckpoint | null, anchor: ProgressAnchor, continuous: boolean): ProgressCheckpoint {

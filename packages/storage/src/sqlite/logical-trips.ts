@@ -1,5 +1,6 @@
 import {advanceCoverage as advanceLogicalCoverage, applyCoverage, cleanLoadWindow, COVERAGE_LOSS, latestCoverage, originalCoverage, validCoverage, validCapturedEndpoint, type CoverageEndpoint, type LogicalCoverage} from './logical-coverage';
 import {gameDistanceStep} from '../../../telemetry-core/src/trips/game-distance';
+import {matchesSavedEndpoint, savedEndpointLimits} from '../../../telemetry-core/src/trips/saved-endpoint';
 import type Database from 'better-sqlite3';
 import type {JobConfiguration} from '../../../contracts/src/protocol-v1';
 import {compatibleContinuation, continuationFingerprint, learnContinuationConstraints, type ContinuationConstraints, type ProfileObservation} from '../../../telemetry-core/src/trips/continuation';
@@ -15,7 +16,7 @@ export const logicalEnabled = (db: Database.Database) => Number(db.pragma('user_
 export const encodeRow = (value: unknown) => JSON.stringify(value, (_key, v: unknown) => typeof v === 'bigint' ? {$integer: v.toString()} : v);
 export const decodeRow = (value: unknown): LogicalRow => {
   const row = JSON.parse(String(value), (_key, v: unknown) => v && typeof v === 'object' && '$integer' in v ? BigInt((v as {$integer: string}).$integer) : v) as LogicalRow;
-  if (Object.hasOwn(row, '_coverage') && !validCoverage(row._coverage)) row.recording_completeness = 'partial';
+  if (Object.hasOwn(row, '_coverage') && (!validCoverage(row._coverage) || row._coverage.acceptancePending===true)) row.recording_completeness = 'partial';
   return row;
 };
 const raw = (db: Database.Database, id: unknown) => get(db, 'SELECT * FROM trips WHERE id = ?', id)!;
@@ -66,12 +67,13 @@ export function associate(db: Database.Database, row: LogicalRow, proof: Profile
     // Keep the public UUID of the original recording. Never change a raw trip's session or event identity.
     db.prepare('UPDATE logical_memberships SET logical_ref = ?, previous_logical_ref = ?, joined_after_revision = (SELECT coalesce(max(id),0) FROM logical_revisions) WHERE trip_ref = ?').run(candidate.id, id, row.id);
     const coverage = latestCoverage(db, candidate.id).value;
+    const ownAcceptancePending=latestCoverage(db,id).value?.acceptancePending===true;
     const abandonedGroup = id;
     db.prepare('UPDATE logical_trips SET retired = 1 WHERE id = ?').run(id);
     id = candidate.id as bigint;
     db.prepare('UPDATE logical_trips SET latest_trip_ref = ?, member_count = member_count + 1, accounting_rebased=1,canonical_constraints=? WHERE id = ?').run(row.id,JSON.stringify(combined), id);
     revise(db,abandonedGroup);
-    if (coverage) pendingCoverage = {...coverage, member: String(row.id), phase: 'pending', endpoint: latestEndpoint(db, coverage.endpoint, candidate.progress_head, candidate.latest_trip_ref),
+    if (coverage) pendingCoverage = {...coverage,...(ownAcceptancePending?{acceptancePending:true}:{}), member: String(row.id), phase: 'pending', endpoint: latestEndpoint(db, coverage.endpoint, candidate.progress_head, candidate.latest_trip_ref),
       window: {session: String(row.plugin_session_ref), opened: row.opened_event_ref === null ? null : (row.opened_event_ref as bigint).toString()}};
   } else {
     // Conflicting/ambiguous candidates are retired permanently; their outcome remains unknown.
@@ -188,18 +190,23 @@ export function projectSample(db: Database.Database, session: {game: string; pro
     {...anchor, speedMps: anchor.speedMps ?? null, gameMinutes: anchor.gameMinutes ?? null, position: anchor.position ?? null}, elapsed) : null;
   const continuous = elapsed > 0 && elapsed < 5 && !!linked && sameSource && previous?.anchor.gameClockId===anchor.gameClockId && distance?.kind === 'continuous'
     && !transferBoundary(db,row,previous.anchor,anchor);
-  let value = advanceProgress(previous, anchor, continuous);
+  const unchangedBoundary=!!captured && continuous && !!previous && matchesEndpoint(previous.anchor,anchor);
+  let value = unchangedBoundary ? {...previous,anchor} : advanceProgress(previous, anchor, continuous);
+  if(unchangedBoundary && !matchesSavedEndpoint(previous.anchor,anchor,false))db.prepare('UPDATE logical_trips SET accounting_rebased=1 WHERE id=?').run(id);
   let prefix: unknown = captured ? captured.head === null ? null : BigInt(captured.head) : head?.prefix_ref ?? null, start: unknown = captured ? null : head?.start_ref ?? head?.id ?? null;
-  const bootstrap = !captured && previous && head?.prefix_ref === null && head.start_ref === null && previous.distanceM.available && previous.distanceM.value === 0 && previous.anchor.gameMinutes === null;
+  const unresolvedSaved=group.reconciliation_unknown===1n && !!coverage && (coverage.losses&COVERAGE_LOSS.unknown)!==0 && !!coverage.endpoint
+    && !coverage.endpoint.distanceM.available && !coverage.endpoint.fuelUsedL.available;
+  if(unresolvedSaved)value={anchor,distanceM:{available:false,reason:'not-observed'},fuelUsedL:{available:false,reason:'not-observed'}};
+  const bootstrap = !unresolvedSaved && !captured && previous && head?.prefix_ref === null && head.start_ref === null && previous.distanceM.available && previous.distanceM.value === 0 && previous.anchor.gameMinutes === null;
   if (bootstrap && !continuous) value = advanceProgress(null, anchor, false);
-  if (previous && !captured && !bootstrap && (!continuous || delta !== null && delta < 0)) {
+  if (!unresolvedSaved && previous && !captured && !bootstrap && (!continuous || delta !== null && delta < 0)) {
     // Walk span prefixes, not per-sample history. Every run points directly to its start and retained prefix.
     let cursor = head, matched: {value: ProgressCheckpoint; prefix: unknown; start: unknown; end: LogicalRow} | undefined;
     let runs = 0;
     while (cursor && ++runs <= 256) {
       const begin = get(db, 'SELECT * FROM logical_progress WHERE id = ?', cursor.start_ref ?? cursor.id)!;
       const a = progressCheckpoint(db,begin), b = progressCheckpoint(db,cursor);
-      const restored = restoredProgress(a, b, anchor);
+      const restored = restoredProgress(a, b, anchor, coverage?.phase==='pending' && proof!==undefined && cleanLoadWindow(db,row));
       if (restored.distanceM.available) {matched = {value: restored, prefix: cursor.prefix_ref, start: begin.id, end: cursor}; break;}
       cursor = cursor.prefix_ref === null ? undefined : get(db, 'SELECT * FROM logical_progress WHERE id = ?', cursor.prefix_ref);
     }
@@ -253,8 +260,7 @@ function completeEndpoint(a: ProgressAnchor): boolean {
   return a.truck !== null && a.odometerM !== null && a.fuelL !== null && a.gameMinutes !== null && a.gameMinutes !== undefined && a.position !== null && a.position !== undefined;
 }
 function matchesEndpoint(a: ProgressAnchor, b: ProgressAnchor): boolean {
-  return completeEndpoint(a) && completeEndpoint(b) && a.truck === b.truck && a.odometerM === b.odometerM && a.fuelL === b.fuelL && a.gameMinutes === b.gameMinutes
-    && a.position!.x === b.position!.x && a.position!.y === b.position!.y && a.position!.z === b.position!.z;
+  return matchesSavedEndpoint(a,b);
 }
 function endpointFromHead(db: Database.Database, head: unknown, trip: unknown): CoverageEndpoint | null {
   if (head === null) return null;
@@ -267,27 +273,48 @@ function latestEndpoint(db: Database.Database, captured: CoverageEndpoint | null
     && captured.anchor.sourceClockId === sampled.anchor.sourceClockId && BigInt(captured.anchor.monotonicNs) >= BigInt(sampled.anchor.monotonicNs)) ? captured : sampled;
 }
 /** A prefix lookup is confined to the selected path, not any abandoned/replayed sample with the same odometer. */
-function retainedEndpoint(db: Database.Database, id: bigint, head: unknown, current: CoverageEndpoint | null, at: ProgressAnchor): CoverageEndpoint | null {
+function retainedEndpoint(db: Database.Database, id: bigint, head: unknown, current: CoverageEndpoint | null, at: ProgressAnchor): {kind:'matched';endpoint:CoverageEndpoint}|{kind:'none'|'unsafe'} {
   const latest = head === null ? null : get(db,'SELECT distance_m FROM logical_progress WHERE id=? AND logical_ref=?',head,id);
   const limit = Math.max(latest?.distance_m === null || !latest ? -1 : Number(latest.distance_m), current?.distanceM.available ? current.distanceM.value : -1);
-  let boundary = current;
+  if(head!==null && (!latest || get(db,ACCOUNTING_PATH+' SELECT 1 FROM path WHERE depth=256 AND prefix_ref IS NOT NULL LIMIT 1',{head})))return {kind:'unsafe'};
+  let boundary = current,matched:CoverageEndpoint|undefined;
+  // Verified restart aliases can have different source IDs/timestamps but the same accounting outcome.
+  const sameAmount=(a:ProgressCheckpoint['distanceM'],b:ProgressCheckpoint['distanceM'])=>a.available?b.available && a.value===b.value:!b.available && a.reason===b.reason;
+  const equivalent=(a:CoverageEndpoint,b:CoverageEndpoint)=>a.anchor.truck===b.anchor.truck
+    && sameAmount(a.distanceM,b.distanceM) && sameAmount(a.fuelUsedL,b.fuelUsedL);
   for (let count=0; boundary && count<256; count++) {
     const selected = boundary.head === null ? boundary.distanceM.available && boundary.distanceM.value === 0 : get(db, ACCOUNTING_PATH + ` SELECT p.id FROM logical_progress p
       WHERE p.id=@point AND p.logical_ref=@logical AND EXISTS(SELECT 1 FROM ranges r WHERE coalesce(p.sample_ref,p.bound_sample_ref)>=r.first
         AND coalesce(p.sample_ref,p.bound_sample_ref)<=r.last AND (r.cut_odometer_m IS NULL OR @odo<=r.cut_odometer_m)) LIMIT 1`,
       {head,point:BigInt(boundary.head),logical:id,odo:boundary.anchor.odometerM});
-    if (selected && boundary.distanceM.available && boundary.distanceM.value<=limit && matchesEndpoint(boundary.anchor,at)) return boundary;
-    if (!boundary.prefixState) break;
+    const owned=get(db,`SELECT t.id FROM trips t JOIN logical_memberships m ON m.trip_ref=t.id JOIN plugin_sessions s ON s.id=t.plugin_session_ref
+      WHERE t.id=? AND m.logical_ref=? AND s.plugin_session_uuid=?`,BigInt(boundary.trip),id,boundary.anchor.pluginSessionId);
+    if (selected && owned && boundary.distanceM.available && boundary.distanceM.value<=limit && matchesEndpoint(boundary.anchor,at)) {
+      if(matched && !equivalent(matched,boundary))return {kind:'unsafe'};
+      matched??=boundary;
+    }
+    if (!boundary.prefixState) {boundary=null;break;}
     const state = get(db,'SELECT s.row_json FROM logical_projection_states s WHERE s.id=? AND EXISTS(SELECT 1 FROM logical_revisions r WHERE r.logical_ref=? AND r.state_ref=s.id)',BigInt(boundary.prefixState),id);
     const prior = state ? (JSON.parse(String(state.row_json)) as LogicalRow)._coverage : null;
-    boundary = validCoverage(prior) ? prior.endpoint : null;
+    if(!validCoverage(prior))return {kind:'unsafe'};
+    boundary = prior.endpoint;
   }
-  if (head === null || !completeEndpoint(at)) return null;
-  const point = get(db, ACCOUNTING_PATH + ` SELECT p.* FROM logical_progress p JOIN samples s ON s.id=p.sample_ref JOIN logical_trucks t ON t.id=p.truck_ref
-    WHERE p.logical_ref=@logical AND t.identity_key=@truck AND s.odometer_m=@odo AND s.fuel_l=@fuel AND s.x=@x AND s.y=@y AND s.z=@z AND s.game_minutes=@minutes
-      AND EXISTS(SELECT 1 FROM ranges r WHERE s.id>=r.first AND s.id<=r.last AND (r.cut_odometer_m IS NULL OR s.odometer_m<=r.cut_odometer_m)) ORDER BY p.id DESC LIMIT 1`,
-    {head,logical:id,truck:at.truck,odo:at.odometerM,fuel:at.fuelL,x:at.position!.x,y:at.position!.y,z:at.position!.z,minutes:BigInt(at.gameMinutes!)});
-  return point ? {...progressCheckpoint(db, point), trip: String(point.trip_ref), head: String(point.id), prefixState: null} : null;
+  if(boundary)return {kind:'unsafe'};
+  if(matched)return {kind:'matched',endpoint:matched};
+  if (head === null || !completeEndpoint(at)) return {kind:'none'};
+  const limits=savedEndpointLimits(at);
+  const points = db.prepare(ACCOUNTING_PATH + ` SELECT p.* FROM logical_progress p JOIN samples s ON s.id=p.sample_ref JOIN logical_trucks t ON t.id=p.truck_ref
+    WHERE p.logical_ref=@logical AND t.identity_key=@truck AND s.odometer_m=@odo AND abs(s.fuel_l-@fuel)<=@fuelLimit AND s.game_minutes=@minutes
+      AND (s.x-@x)*(s.x-@x)+(s.y-@y)*(s.y-@y)+(s.z-@z)*(s.z-@z)<=@positionSquared
+      AND EXISTS(SELECT 1 FROM ranges r WHERE s.id>=r.first AND s.id<=r.last AND (r.cut_odometer_m IS NULL OR s.odometer_m<=r.cut_odometer_m)) ORDER BY p.id DESC LIMIT 65`).all(
+    {head,logical:id,truck:at.truck,odo:at.odometerM,fuel:at.fuelL,fuelLimit:limits.fuel,positionSquared:limits.position**2,x:at.position!.x,y:at.position!.y,z:at.position!.z,minutes:BigInt(at.gameMinutes!)}) as LogicalRow[];
+  if(points.length>64)return {kind:'unsafe'};
+  for(const point of points){
+    const endpoint={...progressCheckpoint(db,point),trip:String(point.trip_ref),head:String(point.id),prefixState:null};
+    if(matched && !equivalent(matched,endpoint))return {kind:'unsafe'};
+    matched??=endpoint;
+  }
+  return matched?{kind:'matched',endpoint:matched}:{kind:'none'};
 }
 /** Captured pause/load observations share the membership transaction; they never insert a paused sample. */
 export function projectEndpoint(db: Database.Database, id: bigint, row: LogicalRow, source: {pluginSessionId: string}, clock: string, ns: string, input: CapturedEndpoint, profile: ProfileObservation): void {
@@ -298,8 +325,15 @@ export function projectEndpoint(db: Database.Database, id: bigint, row: LogicalR
     fuelL:input.fuelL,speedMps:input.speedMps,gameClockId:input.gameClockId,gameMinutes:input.gameMinutes,position:input.position};
   if (coverage.phase === 'pending') {
     if (!cleanLoadWindow(db,row,false)) return;
-    const matched = retainedEndpoint(db,id,group.progress_head,coverage.endpoint,anchor);
-    if (matched) {
+    if(group.reconciliation_unknown===1n && (coverage.losses&COVERAGE_LOSS.unknown)!==0 && coverage.endpoint && !coverage.endpoint.distanceM.available && !coverage.endpoint.fuelUsedL.available)return;
+    const retained = retainedEndpoint(db,id,group.progress_head,coverage.endpoint,anchor);
+    if (retained.kind==='unsafe') {
+      db.prepare('UPDATE logical_trips SET accounting_rebased=1,reconciliation_unknown=1 WHERE id=?').run(id);
+      revise(db,id,{...coverage,losses:coverage.losses|COVERAGE_LOSS.unknown,endpoint:{anchor,distanceM:{available:false,reason:'not-observed'},fuelUsedL:{available:false,reason:'not-observed'},trip:String(row.id),head:group.progress_head===null?null:(group.progress_head as bigint).toString(),prefixState:null}});
+      return;
+    }
+    if (retained.kind==='matched') {
+      const matched=retained.endpoint;
       db.prepare('UPDATE logical_trips SET progress_head=?,accounting_rebased=1 WHERE id=?').run(matched.head === null ? null : BigInt(matched.head),id);
       revise(db,id,{...coverage,phase:cleanLoadWindow(db,row)?'resumed':'pending',window:cleanLoadWindow(db,row)?null:coverage.window,endpoint:{...matched,trip:String(row.id),anchor,running:undefined,prefixState:prior.revision ? String(prior.revision.state_ref) : null}});
     } else if (coverage.endpoint && completeEndpoint(coverage.endpoint.anchor) && completeEndpoint(anchor)) revise(db,id,{...coverage,losses:coverage.losses|COVERAGE_LOSS.unknown});
@@ -327,9 +361,13 @@ export function projectEndpoint(db: Database.Database, id: bigint, row: LogicalR
       fuelL:running.fuelL,speedMps:running.speedMps,gameClockId:running.gameClockId,gameMinutes:running.gameMinutes,position:running.position};
     if(supported(a,midpoint)&&supported(midpoint,anchor))qualifiedRunning=running;
   }
-  const totals = previous && matchesEndpoint(previous.anchor,anchor) ? {...previous,anchor}
+  const exactBoundary=previous && matchesSavedEndpoint(previous.anchor,anchor,false);
+  const noisyBoundary=previous && !!linked && a && BigInt(anchor.monotonicNs)>BigInt(a.monotonicNs)
+    && (!running || qualifiedRunning!==undefined) && matchesEndpoint(a,anchor) && !transferBoundary(db,row,a,anchor);
+  const totals = previous && (exactBoundary || noisyBoundary) ? {...previous,anchor}
     : qualifiedRunning && previous && midpoint ? advanceProgress(advanceProgress(previous,midpoint,true),anchor,true)
       : advanceProgress(previous,anchor,!running && !!linked && !!a && supported(a,anchor));
+  if(noisyBoundary && !exactBoundary)db.prepare('UPDATE logical_trips SET accounting_rebased=1 WHERE id=?').run(id);
   revise(db,id,{...coverage,endpoint:{anchor:totals.anchor,distanceM:totals.distanceM,fuelUsedL:totals.fuelUsedL,trip:String(row.id),running:qualifiedRunning,
     head:group.progress_head === null ? null : (group.progress_head as bigint).toString(),
     prefixState:prior.revision ? String(prior.revision.state_ref) : null}});

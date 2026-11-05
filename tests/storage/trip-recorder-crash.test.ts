@@ -460,7 +460,7 @@ describe('REG-005/006 atomic continuation and rollback across process death',()=
 // The captured pause is durable metadata, not a paused sample. Recovery replays the same current observation and
 // running sample after kills before commit and after commit/before ACK; no new source proof is borrowed for replay.
 describe('REG-005/006 verified captured-pause coverage across process death',()=>{
-  for(const operation of ['boundary','progress','terminal'])for(const kind of ['inside','after'])it(kind+' '+operation+' preserves complete coverage and the captured prefix',async()=>{
+  for(const noisy of [false,true])for(const operation of ['boundary','progress','terminal'])for(const kind of ['inside','after'])it(kind+' '+operation+' preserves complete coverage and the captured prefix (noisy='+noisy+')',async()=>{
     const a=new Script(ETS2_A),b=new Script(ETS2_B,'ets2',{utcMs:BASE_UTC+86400000});
     const proof=(s:Script):ProfileObservation=>({version:1,scope:'8'.repeat(64),binding:'9'.repeat(64),game:'ets2',pluginSessionId:s.session,
       processInstanceId:s.welcome().source.processInstanceId,sourceClockId:s.clockId,afterMonotonicNs:'0',loadGeneration:1});
@@ -483,9 +483,10 @@ describe('REG-005/006 verified captured-pause coverage across process death',()=
     const second=tripUuidFor(b.session,'3'),bootstrap=b.gap(2);
     const operations=[{name:'bootstrap',kind:'gap',session:b.session,input:{message:bootstrap,effects:[{kind:'trip.close',tripUuid:first,outcome:'none',closeReason:'restart',recordingCompleteness:'partial',endedUtcMs:BASE_UTC+86401000}]}},
       {name:'open',kind:'event',session:b.session,input:{message:b.event(r.jobConfigured(),{simulation:'paused'}),effects:opening(second,BASE_UTC+86402000,'partial')}},
-      {name:'boundary',kind:'observation',input:{pluginSessionId:b.session,nextEventSeq:'4',job:job(),effects:[],observeTripUuid:second,profile:proof(b),sourceClockId:b.clockId,monotonicNs:'1002010000000',endpoint}},
+      {name:'boundary',kind:'observation',input:{pluginSessionId:b.session,nextEventSeq:'4',job:job(),effects:[],observeTripUuid:second,profile:proof(b),sourceClockId:b.clockId,monotonicNs:'1002010000000',
+        endpoint:{...endpoint,fuelL:endpoint.fuelL+(noisy?0.015:0),position:{...endpoint.position,x:endpoint.position.x+(noisy?0.003:0)}}}},
       {name:'start',kind:'event',session:b.session,input:{message:b.event(r.started())}},
-      {name:'progress',kind:'samples',session:b.session,rows:[point(b,second,4,1000150,97,30,501,'1002010000000')]},
+      {name:'progress',kind:'samples',session:b.session,rows:[point(b,second,4,1000150,97+(noisy?0.015:0),30+(noisy?0.003:0),501,'1002010000000')]},
       {name:'terminal',kind:'event',session:b.session,input:{message:b.event(r.delivered('12345'),{advanceMs:2000}),effects:[{kind:'trip.close',tripUuid:second,outcome:'delivered',closeReason:'outcome',outcomeEvent:'this-event',recordingCompleteness:'partial',endedUtcMs:BASE_UTC+86405000}]}}];
     const run=async(barrier:unknown,label:string)=>{
       const file=path.join(ws.directory,label+'.json');writeFileSync(file,JSON.stringify({open:ws.options(),logical:{sessions:[b.welcome()],operations,barrier}}));
