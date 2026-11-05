@@ -67,7 +67,7 @@ Columns:
 | `tests/unit/history-samples.test.ts` | Node unit (Vitest) | REG-001, REG-002, REG-003, REG-009, REG-018 | R, F | ET-015b (#85) | PR (tests job, `npm test`) | gap |
 | `tests/unit/history-storage.test.ts` | Node unit (Vitest) | REG-007, REG-011 | R | ET-013 (#60); ET-038 | PR (tests job, `npm test`) | regression |
 | `tests/unit/installer-driver-provenance.test.ts` | Node unit (Vitest) | REG-017 (historical provenance) | T, V (et-001) | ET-001 (#5) | PR (tests job, `npm test`) | — |
-| `tests/unit/installer-guard.test.ts` | Node unit (Vitest) | REG-013, REG-017 | T, V (et-018) | ET-018 (PR-1); ET-045g; ET-045h | PR (tests job, `npm test`) | security |
+| `tests/unit/installer-guard.test.ts` | Node unit (Vitest) | REG-013, REG-017, REG-019 | T, V (et-018) | ET-018 (PR-1); ET-045g; ET-045h; ET-068 | PR (tests job, `npm test`) | security, regression |
 | `tests/unit/installer-ui-navigation.test.ts` | Inert Node unit (Vitest), production navigation helpers and hidden-control/budget fixture | REG-017 | T, R (et-028 closeout) | ET-028 | PR (tests job, `npm test`) | exact visible startup, About warning, remaining deadline |
 | `tests/unit/uninstall-data-wipe.test.ts` | Node unit (Vitest) | REG-017 | T, V (et-018) | ET-018 (PR-2) | PR (tests job, `npm test`) | security |
 | `tests/unit/uninstall-engine.test.ts` | Node unit (Vitest) | REG-015, REG-017 | T, V (et-018) | ET-018 (PR-2) | PR (tests job, `npm test`) | security |

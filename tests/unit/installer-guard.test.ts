@@ -869,6 +869,16 @@ describe('harness shortcut helpers at runtime (ET-045h)', () => {
 describe('harness Job bounds', () => {
   const checkout = fileURLToPath(new URL('../..', import.meta.url));
   const read = (relative: string) => readFile(path.join(checkout, relative), 'utf8');
+  it('keeps the hosted planted Run command distinct using raw arguments and an exact cleanup marker', async () => {
+    const harness = await read('scripts/installer/Invoke-InstallerLifecycle.ps1');
+    const plant = harness.slice(harness.indexOf('function Set-PlantedRunValue'), harness.indexOf('\n}', harness.indexOf('function Set-PlantedRunValue')));
+    expect(plant).toContain("if (!$hosted -or $Scenario -ne 'side-by-side') { throw ('RUN_VALUE_PLANT_HOSTED_ONLY for ' + $Channel) }");
+    expect(plant).toContain(`$data = '"' + (Join-Path (Join-Path $base $identity.productRoot) 'Update.exe') + '" --processStart ' + $identity.executable +`);
+    expect(plant).toContain("' --process-start-args --hidden --installer-lifecycle-planted'");
+    const cleanup = harness.slice(harness.indexOf('function Remove-PlantedRunValues'), harness.indexOf('\n}', harness.indexOf('function Remove-PlantedRunValues')));
+    expect(cleanup).toContain('if ($key.GetValue($row.name) -ceq $row.data) { $key.DeleteValue($row.name, $false) }');
+  });
+
   async function jobCap(): Promise<number> {
     const match = /if \(timeoutMs<100 \|\| timeoutMs>(\d+)\) throw new ArgumentOutOfRangeException\("timeoutMs"\)/.exec(await read('scripts/watchdog/BoundedProcess.cs'));
     expect(match, 'BoundedProcess.Run timeout check').not.toBeNull();
