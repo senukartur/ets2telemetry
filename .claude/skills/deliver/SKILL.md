@@ -17,11 +17,22 @@ architect -> implementer -> verifier -> reviewer -> PR -> Ready -> CI + feedback
 
 Task: $ARGUMENTS
 
+Start with step 0: fetch the intended PR target and reload its instructions before acting on the workflow below.
+
 You are the orchestrator. Run every agent in the foreground, because each step depends on the previous one. You own the Git branch setup, pushes, the PR, its Ready transition, CI monitoring, feedback handling, the merge and the card moves. Subagents start cold. Pass them absolute paths and every fact they need. Within one session, continue an existing agent with `SendMessage` rather than starting a new one.
 
-Read [docs/delivery-pipeline.md](../../../docs/delivery-pipeline.md) for the design. This pipeline does not replace the coordinator role in `COORDINATOR.md` and follows `AGENTS.md`, `docs/agent-rules.md` and the owner decisions on [Ready and feedback](../../../DECISION-LOG.md#deliver-ready-and-feedback-handoff--november-3-2026) and on [merge and card status](../../../DECISION-LOG.md#deliver-merge-and-trello-card-status--november-4-2026). Invoking this skill authorizes marking the task PR Ready for review, replying to and resolving its review feedback, squash-merging it once independent review has passed and CI is green (step 10), and the card updates in [Trello card status](#trello-card-status). It authorizes no release.
+After step 0, read the target version of [docs/delivery-pipeline.md](../../../docs/delivery-pipeline.md) for the design. This pipeline does not replace the coordinator role in `COORDINATOR.md` and follows `AGENTS.md`, `docs/agent-rules.md` and the owner decisions on [Ready and feedback](../../../DECISION-LOG.md#deliver-ready-and-feedback-handoff--november-3-2026) and on [merge and card status](../../../DECISION-LOG.md#deliver-merge-and-trello-card-status--november-4-2026). Invoking this skill authorizes marking the task PR Ready for review, replying to and resolving its review feedback, squash-merging it once independent review has passed and CI is green (step 10), and the card updates in [Trello card status](#trello-card-status). It authorizes no release.
 
 Talk to the owner in Russian. Write plans, commits, PR text and repository files in English.
+
+## 0. Refresh the target and instructions
+
+Run this bootstrap on every start or resume, before planning, delegation, Trello writes or interpreting a previously loaded workflow.
+
+1. Determine the PR target branch: use the owner's explicit target, otherwise the existing PR's actual base on resume, otherwise `main`. Verify a saved target against GitHub; if it conflicts with the owner's target, stop for reconciliation rather than silently retargeting the PR. Validate the branch name with `git check-ref-format --branch <target>`.
+2. Inspect `git status --short`, then fetch that branch explicitly: `git fetch origin "refs/heads/<target>:refs/remotes/origin/<target>"`. Require a successful fetch and resolve `git rev-parse --verify "refs/remotes/origin/<target>^{commit}"` as `<target-sha>`. A missing branch, failed fetch or failed resolution stops delivery; a cached ref is not a substitute. Preserve local work and do not switch, reset or pull the root checkout's task branch.
+3. Read this runtime's `deliver/SKILL.md`, root `AGENTS.md`, the relevant rules/references and agent definitions from that exact target commit, using `git show <target-sha>:<path>` or an isolated snapshot. Follow those fetched instructions and pass their versions to subagents, subject to higher-priority instructions and explicit owner overrides. Fetching alone does not refresh files in an old checkout or text already loaded in the chat; do not continue from that stale copy. If a required instruction is absent on the target, report it instead of falling back silently.
+4. Pin the target name, fetched SHA and instruction-source SHA for the run; step 2 records them in state. A new task's base and worktree come from this SHA. On resume, record the latest target tip separately from the original base and preserve the existing task branch, HEAD and worktree; fetching does not authorize a reset, rebase or recreation of ongoing work.
 
 ## 1. Understand the task
 
@@ -40,18 +51,18 @@ Talk to the owner in Russian. Write plans, commits, PR text and repository files
 ## 2. Prepare the base
 
 1. In the repository root, inspect `git status`, `git worktree list` and `gh pr list --state open`. Run `gh` and every authenticated Git remote operation (`git fetch`, `git ls-remote`, `git push`) outside the sandbox, because their credentials live in the Windows keyring. Preserve unrelated local work. If an open PR or worktree obviously belongs to this task, report it and continue there only with the owner's agreement.
-2. Run `git fetch origin` and record the SHA of `origin/main` as the base commit. Do not switch the branch of the root checkout.
+2. Use the fresh target SHA pinned in step 0 as the base commit for a new task. On resume, retain the original base and separately record the latest fetched target tip. Do not use the root checkout's HEAD or a stale local target branch as the base.
 3. Resolve the toolchain:
    - Use `node --version` (must be 24.19.0) and `cmake --version` if they work.
    - Otherwise look for `.local/toolchain/node-v24.19.0-win-x64` in each checkout that `git worktree list` shows, and for `C:\Program Files\Microsoft Visual Studio\*\*\Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\bin`.
    - If either tool is still missing, ask the owner.
 
    Build one Git Bash `PATH` prefix and pass it to every agent. Never install anything globally. Add `NODE_OPTIONS=--use-system-ca` if npm downloads fail on TLS validation.
-4. Create `state.md` with the brief, the run key, the base commit and `step: plan`. Update it after every step below.
+4. Create or update `state.md` with the brief, run key, target branch, fetched target SHA, instruction-source SHA, original base commit and current step (`plan` for a new task). Preserve the recorded progress on resume. Update it after every step below.
 
 ## 3. Plan
 
-1. Run the `architect` agent with the brief, the acceptance criteria, the repository root and the base commit.
+1. Run the `architect` agent with the brief, the acceptance criteria, the repository root, the base commit and the fetched instruction versions. Before the implementation worktree exists, inspect source at the pinned target commit with `git show <target-sha>:<path>` or an isolated snapshot, not the stale root checkout.
 2. Save its plan as `plan.md` in the run directory.
 3. Confirm that the root checkout's HEAD and `git status` are unchanged by the architect.
 4. Stop and show the plan to the owner when any of these holds:
@@ -129,7 +140,7 @@ Talk to the owner in Russian. Write plans, commits, PR text and repository files
      - every real-game, TruckersMP, display or performance criterion this PR cannot satisfy.
 
    End the body with `🤖 Generated with [Claude Code](https://claude.com/claude-code)`.
-4. Create a draft PR: `gh pr create --draft --base main --head <branch> --title "[<ID>] <type>: <summary>" --body-file <pr-body.md>`. Bind it to this session if the app provides a PR-binding tool. Comment the PR link on the card ([Trello card status](#trello-card-status)).
+4. Create a draft PR: `gh pr create --draft --base <target> --head <branch> --title "[<ID>] <type>: <summary>" --body-file <pr-body.md>`. Bind it to this session if the app provides a PR-binding tool. Comment the PR link on the card ([Trello card status](#trello-card-status)).
 5. Read all PR feedback before the Ready transition as described in step 9. Address existing findings and confirm no review thread is unresolved, then run `gh pr ready <pr>`. This transition is part of delivery and needs no additional owner confirmation. Record `step: monitor` and the Ready time in `state.md`.
 
 ## 9. Monitor CI and PR feedback
@@ -148,7 +159,7 @@ Skip this step when `--no-merge` was given.
 
 1. Merge only right after step 9.7 confirmed the handoff: the last independent review pass covered the PR head and left no accepted `blocker` or `major` finding open, no review thread is unresolved, and the three required Windows CI jobs succeeded on that head after Ready. A documentation-only PR has no CI run and may be merged only under the documentation-only rule in [branch protection](../../../docs/agent-rules.md#branch-protection--october-16-2026).
 2. From the repository root, run `gh pr merge <pr> --squash --match-head-commit <published SHA>`. Add `--admin` only for a documentation-only PR under that rule; never use it to get past a failing, pending, cancelled or missing check.
-3. If GitHub refuses the merge, do not bypass it. A conflict with `main` makes a new candidate: resolve it through steps 5.2 to 7 and step 9 within the shared budget, or stop and report when no budget remains.
+3. If GitHub refuses the merge, do not bypass it. A conflict with the target branch makes a new candidate: resolve it through steps 5.2 to 7 and step 9 within the shared budget, or stop and report when no budget remains.
 4. Confirm with `gh pr view <pr> --json state,mergeCommit` that the PR is `MERGED`, and record the merge commit in `state.md`. The repository deletes the remote branch on merge; leave the worktree and the local branch in place.
 5. Apply the Done rule in [Trello card status](#trello-card-status).
 
