@@ -278,14 +278,14 @@ void bootstrap_policy(const fs::path& directory, const Identity& identity, HANDL
   const auto bytes = read_bounded(ownImage, 64 * 1024 * 1024); const auto hash = sha256(std::vector<unsigned char>(bytes.begin(), bytes.end()));
   stage = "policy-existing"; const auto policyPath = directory / "service-policy.json";
   test_trace(stage);
-  Json::Array entries; std::string existing;
+  Json::Array entries; std::string existing; DWORD policySession = identity.session;
   if (fs::exists(policyPath)) {
     auto handle = secure_file(policyPath, identity); existing = read_bounded(handle.value, 16384); const auto policy = parse(existing);
     exact(policy, {"schemaVersion", "userTag", "windowsSessionId", "allowedExecutables"});
     if (integer(policy.at("schemaVersion")) != 1 || policy.at("userTag").string() != identity.userTag) fail();
-    // This owner-only policy survives logoff/reboot. Validate its old session field, then republish for our
-    // current session through the existing lock and atomic replacement, preserving verified approval entries.
-    integer(policy.at("windowsSessionId"));
+    // The policy authorizes executable images for this user, not a Windows session. Keep the legacy creation-session
+    // metadata unchanged so concurrent sessions do not rewrite it; actual pipe peers must still share a session.
+    policySession = integer(policy.at("windowsSessionId"));
     const auto* list = std::get_if<Json::Array>(&policy.at("allowedExecutables").value); if (!list || list->empty() || list->size() > 4) fail();
     bool found = false; std::vector<std::string> paths;
     for (const auto& entry : *list) {
@@ -296,7 +296,7 @@ void bootstrap_policy(const fs::path& directory, const Identity& identity, HANDL
     }
     if (!found) {if (entries.size() == 4) fail(); entries.push_back(Json{Json::Object{{"path", Json{ownPath}}, {"sha256", Json{hash}}}});}
   } else entries.push_back(Json{Json::Object{{"path", Json{ownPath}}, {"sha256", Json{hash}}}});
-  stage = "policy-json"; const auto policy = Json{Json::Object{{"schemaVersion", Json{1.0}}, {"userTag", Json{identity.userTag}}, {"windowsSessionId", Json{static_cast<double>(identity.session)}}, {"allowedExecutables", Json{entries}}}};
+  stage = "policy-json"; const auto policy = Json{Json::Object{{"schemaVersion", Json{1.0}}, {"userTag", Json{identity.userTag}}, {"windowsSessionId", Json{static_cast<double>(policySession)}}, {"allowedExecutables", Json{entries}}}};
   test_trace(stage);
   const auto encoded = v0::detail::serialize(policy); if (encoded.size() > 16384) fail();
   // An identical policy is not replaced: each replacement races readers such as the plugin's per-connection check.
@@ -515,15 +515,14 @@ int wmain(int argc, wchar_t** argv) {
       // other channel's, fails closed like any inconsistent derived name.
       const auto endpoint = channel::active.pipe_prefix + recordGame + segment + self.userTag + "-" + std::to_string(recordSession) + "-" + stem;
       if (record.at("pipeName").string() != endpoint) fail();
-      // The same user's records can outlive a Windows session, or belong to another still-live session.
-      // Validate them fully and count them toward the scan bounds, but neither select nor delete them.
-      if (recordSession != self.session) {if (++visited > 256 || ++records > 128) fail(); continue;}
       stage = "server-process";
       const auto raw = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION | SYNCHRONIZE, FALSE, pid);
       if (!raw) {
         const auto openError = GetLastError();
         if (openError == ERROR_INVALID_PARAMETER) {sweep_stale_record(entry.path(), file, self); stage = "discovery"; continue;}
         if (openError == ERROR_ACCESS_DENIED && is_reused_or_gone_on_access_denied(pid, expectedCreation, endpoint, entry.path(), file, self)) {stage = "discovery"; continue;}
+        // An unqueryable other-session process grants no attachment authority. Retain the record and bound the scan.
+        if (openError == ERROR_ACCESS_DENIED && recordSession != self.session) {if (++visited > 256 || ++records > 128) fail(); stage = "discovery"; continue;}
         SetLastError(openError); fail();
       }
       std::optional<Handle> candidate(std::in_place, raw);
@@ -531,6 +530,8 @@ int wmain(int argc, wchar_t** argv) {
       file.reset();
       stage = "discovery";
       if (++visited > 256 || ++records > 128) fail();
+      // Proven stale records were swept above, including those from prior sessions. Live other-session records stay.
+      if (recordSession != self.session) continue;
       if (!discover && recordGame != game) continue;
       stage = "server-process";
       Identity server(candidate->value); if (server.sid != self.sid || server.session != self.session) fail();
