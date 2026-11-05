@@ -859,3 +859,7 @@ The owner requested that `deliver` keep the card's Trello status current and mer
 ## ET-064 game settings and parking qualification — November 4, 2026
 
 The owner confirmed stability slider mapping raw × 200% and a 50% limit (raw `0.25`). Normal parking (`g_parking_difficulty == 2`) accepts either valid simplified-double flag (`0` or `1`). Parking is checked through configuration only; no post-trip manual/automatic parking check is required. Delivered outcome and uninterrupted passing settings remain required. Historical qualification, raw audits and legacy parking-loss evidence stay unchanged; new audits retain `manualDelivery: null` for compatibility.
+
+## Deliver target freshness — November 5, 2026
+
+The owner requested that delivery always fetch the current PR target before starting: `main` when the PR will merge there, otherwise its intended target branch. The skill refreshes its instructions from that fetched commit before planning and records the target and SHA; resuming preserves existing work and the original base while refreshing the target tip.

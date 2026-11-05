@@ -41,6 +41,7 @@ In OpenAI Codex opened at the repository root:
 ```text
 $deliver ET-010
 $deliver ET-004b --review-plan
+$deliver ET-010 --target integration/next --no-merge
 $deliver fix the overlay unit label for ATS
 ```
 
@@ -48,12 +49,17 @@ A card or package ID makes the orchestrator read that Trello card and keep its s
 
 ## Flow and limits
 
+0. **Refresh target and instructions:**
+   - Parse flags, derive the run key and inspect saved state/PR-base metadata read-only before choosing a target. `--target <branch>` explicitly selects the PR base and is stripped from the task brief.
+   - Before planning or other workflow actions on every start/resume, resolve the intended PR target: the owner's explicit target, otherwise the existing PR base, otherwise a resumed run's saved target before PR creation, otherwise `main`.
+   - Fetch that branch successfully and pin its SHA. Read the runtime skill, repository rules and agent definitions from that exact commit; role text is supplied as task instructions and does not reload registered roles/tool permissions. Verify compatibility before delegation, and stop for a fresh runtime at the target snapshot if the loaded role conflicts or cannot be verified; a fetch alone does not update an old checkout or instructions already loaded in a chat. Failed fetches or missing required target instructions stop the run.
+   - Keep the root checkout and existing task work intact. A resumed run records the fresh target tip separately from its original base; it does not reset or recreate the task branch.
 1. **Plan:**
    - Run state starts in `.local/deliver/<run key>/state.md`; the run key is the card ID or a short task summary.
    - The architect returns a plan, saved next to the state as `plan.md`.
 2. **Worktree:**
    - The orchestrator checks that the planned branch and PR do not exist yet.
-   - It creates `.local/worktrees/<slug>` on a new branch from `origin/main`.
+   - It creates `.local/worktrees/<slug>` on a new branch from the freshly fetched target SHA.
    - It installs dependencies only for code changes.
 3. **Implement:**
    - The implementer commits on the task branch.
@@ -68,7 +74,7 @@ A card or package ID makes the orchestrator read that Trello card and keep its s
    - Every fix, including a minor one, goes through verification again and a review pass over the fix delta.
 6. **Publish:**
    - Only the commit that was last verified and reviewed is pushed.
-   - The orchestrator opens a draft PR from the template.
+   - The orchestrator opens a draft PR from the template against the recorded target branch.
    - It addresses existing feedback and unresolved threads, then marks the PR Ready for review without another owner confirmation. Ready starts hosted CI; it does not claim that CI has already passed. Hosted failures may first appear while the PR is ready, and keep delivery incomplete.
 7. **Monitor and hand over:**
    - Discover the expected advisory review for up to 2 minutes after Ready, disclosing an absent run; wait for the automatic final-head Windows CI run and discovered/already-started advisory review runs; inspect conversation comments, reviews and all inline threads, including replies and edited feedback.
@@ -76,8 +82,8 @@ A card or package ID makes the orchestrator read that Trello card and keep its s
    - Finish only after a fresh check confirms the PR is ready, all three required CI jobs actually succeeded on the final source, and observed feedback is addressed with no unresolved threads or accepted blocker/major findings. A diff limited to `**.md` and `docs/**` gets document checks and an explicit CI exclusion, never a green claim; skill metadata/config changes still trigger CI.
    - Record final evidence in the PR description and resumable state locally. Monitoring ends at this handoff; later feedback is handled when the same task resumes. No recurring automation is created implicitly.
 8. **Merge:**
-   - With independent review passed, no unresolved thread and the three required jobs green on the final head, the orchestrator squash-merges the PR with `--match-head-commit`. A documentation-only PR is merged under the `--admin` rule in [branch protection](agent-rules.md#branch-protection--october-16-2026).
-   - A refused merge is never bypassed; a conflict with `main` becomes a new candidate. After the merge the card status rules decide between `Готово` and `Review`. `--no-merge` skips this step.
+   - With independent review passed, no unresolved thread and the three required jobs green on the final head, the orchestrator squash-merges the PR with `--match-head-commit`. Also satisfy the actual target branch's protection rules. The documentation-only `--admin` exception in [branch protection](agent-rules.md#branch-protection--october-16-2026) applies to `main` only; it is not inherited by other targets.
+   - A refused merge is never bypassed; a conflict with the target branch becomes a new candidate. After the merge the card status rules decide between `Готово` and `Review`. `--no-merge` skips this step.
 
 Every build in the pipeline is a staging build (ET-055 UP13; [build channels](setup.md#build-channels-et-055)). The agents leave `ETS2TELEMETRY_BUILD_CHANNEL` unset, never build with `production` or set the owner-only `ETS2TELEMETRY_OWNER_PRODUCTION_BUILD`, and never install or run a production-identity build; a feature-test build for the owner is a staging Setup, which installs beside production. Production artifacts come only from a Windows CI run on `main`; the pipeline's PR runs and any recovery dispatch on the task branch build staging, and their artifacts are never installed as production.
 
