@@ -50,8 +50,8 @@ struct Host {
 };
 Host* Host::active=nullptr;
 std::string utf8(const std::wstring& w) { const auto n=WideCharToMultiByte(CP_UTF8,0,w.data(),static_cast<int>(w.size()),nullptr,0,nullptr,nullptr); std::string s(static_cast<std::size_t>(n),'\0'); WideCharToMultiByte(CP_UTF8,0,w.data(),static_cast<int>(w.size()),s.data(),n,nullptr,nullptr); return s; }
-void write_policy(const std::wstring& directory,const OwnerSecurity& security,const UserIdentity& user,const PeerIdentity& peer,const std::string& digest="") {
-  v0::Json j{v0::Json::Object{{"schemaVersion",v0::Json{1.0}},{"userTag",v0::Json{user.tag}},{"windowsSessionId",v0::Json{static_cast<double>(user.session)}},
+void write_policy(const std::wstring& directory,const OwnerSecurity& security,const UserIdentity& user,const PeerIdentity& peer,const std::string& digest="",std::optional<double> session=std::nullopt) {
+  v0::Json j{v0::Json::Object{{"schemaVersion",v0::Json{1.0}},{"userTag",v0::Json{user.tag}},{"windowsSessionId",v0::Json{session.value_or(static_cast<double>(user.session))}},
     {"allowedExecutables",v0::Json{v0::Json::Array{v0::Json{v0::Json::Object{{"path",v0::Json{utf8(peer.image)}},{"sha256",v0::Json{digest.empty()?peer.sha256:digest}}}}}}}}};
   const auto bytes=v0::detail::serialize(j); Handle f(CreateFileW((directory+L"\\service-policy.json").c_str(),GENERIC_WRITE,0,security.attributes(),CREATE_ALWAYS,FILE_FLAG_OPEN_REPARSE_POINT,nullptr));
   require(static_cast<bool>(f),"policy create"); DWORD written=0; require(WriteFile(f.get(),bytes.data(),static_cast<DWORD>(bytes.size()),&written,nullptr)&&written==bytes.size(),"policy write");
@@ -538,8 +538,27 @@ void coalescing_and_stalled_shutdown() {
 }
 void policy_and_exhaustion() {
   Fixture f; auto policy=read_service_policy(f.directory,f.security,f.user); require(policy.size()==1&&policy[0].sha256==f.self.sha256,"valid bounded held policy");
+  auto prior=f.user; prior.session^=1; write_policy(f.directory,f.security,prior,f.self);
+  auto current=read_service_policy(f.directory,f.security,f.user), other=read_service_policy(f.directory,f.security,prior);
+  require(current.size()==1&&other.size()==1&&current[0].sha256==f.self.sha256&&other[0].sha256==f.self.sha256,"persistent same-user policy is readable in both sessions without rewriting it");
+  f.start();
+  {auto client=f.connect(); send(client.get(),framed(hello_payload)); Receiver receiver; receiver.read(client.get(),2);
+    require(receiver.messages[0].kind=="welcome"&&receiver.messages[1].kind=="checkpoint","actual same-session client connects with a prior-session policy");}
+  f.server.stop();
+  for(const auto invalid:{-1.0,0.5,4294967296.0}) {
+    write_policy(f.directory,f.security,f.user,f.self,"",invalid); bool rejected=false;
+    try{read_service_policy(f.directory,f.security,f.user);}catch(...){rejected=true;} require(rejected,"invalid persisted session metadata rejected");
+  }
+  auto foreign=f.user; foreign.tag=std::string(64,'0'); write_policy(f.directory,f.security,foreign,f.self);
+  {bool rejected=false; try{read_service_policy(f.directory,f.security,f.user);}catch(...){rejected=true;} require(rejected,"foreign user policy still rejected");}
   const auto path=f.directory+L"\\service-policy.json";
   auto bad=[&](const std::string& bytes){Handle out(CreateFileW(path.c_str(),GENERIC_WRITE,0,f.security.attributes(),CREATE_ALWAYS,FILE_FLAG_OPEN_REPARSE_POINT,nullptr)); DWORD written=0; require(out&&WriteFile(out.get(),bytes.data(),static_cast<DWORD>(bytes.size()),&written,nullptr),"invalid policy fixture"); out.reset(); bool rejected=false; try{read_service_policy(f.directory,f.security,f.user);}catch(...){rejected=true;} require(rejected,"invalid policy rejected");};
+  v0::Json policy_fields{v0::Json::Object{{"schemaVersion",v0::Json{1.0}},{"userTag",v0::Json{f.user.tag}},
+    {"allowedExecutables",v0::Json{v0::Json::Array{v0::Json{v0::Json::Object{{"path",v0::Json{utf8(f.self.image)}},{"sha256",v0::Json{f.self.sha256}}}}}}}}};
+  bad(v0::detail::serialize(policy_fields)); // Only windowsSessionId is absent; every other field is valid.
+  for(const auto& invalid:{v0::Json{std::string("1")},v0::Json{nullptr},v0::Json{true}}) {
+    std::get<v0::Json::Object>(policy_fields.value)["windowsSessionId"]=invalid; bad(v0::detail::serialize(policy_fields));
+  }
   bad("{}"); bad("{\"schemaVersion\":1,\"schemaVersion\":1}"); bad(std::string(16385,' '));
   write_policy(f.directory,f.security,f.user,f.self); PSECURITY_DESCRIPTOR insecure=nullptr;
   require(ConvertStringSecurityDescriptorToSecurityDescriptorW(L"D:P(A;;GA;;;WD)",SDDL_REVISION_1,&insecure,nullptr)!=FALSE,"untrusted ACL fixture");

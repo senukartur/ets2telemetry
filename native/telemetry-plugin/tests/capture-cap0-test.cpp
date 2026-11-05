@@ -339,6 +339,8 @@ void wire() {
 
 void server_capture() {
   Fixture f; f.host.event(SCS_TELEMETRY_EVENT_started); f.host.frame(10);
+  auto prior_user = f.user; prior_user.session ^= 1;
+  write_policy(f.directory, f.security, prior_user, f.self);
   f.start(); const auto endpoint = f.capture.endpoint();
   sdk::Snapshot current; f.adapter->read_current(current);
   require(endpoint == cap0::capture_endpoint_name(current, f.user) && endpoint.find(L"-cap0-") != std::wstring::npos, "separate keyed capture namespace");

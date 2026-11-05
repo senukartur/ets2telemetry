@@ -1048,9 +1048,10 @@ void policy() {
   require(DeleteFileW((f.directory + L"\\service-policy.json").c_str()) != FALSE, "remove broad policy");
   // The v0 policy in its own directory does not authorize the v1 endpoint.
   denied("the v0 directory's policy does not apply to v1");
-  write_policy(f.directory, f.security, f.user, f.self);
+  auto prior = f.user; prior.session ^= 1;
+  write_policy(f.directory, f.security, prior, f.self);
   auto valid = f.client(true); valid->handshake();
-  require(f.hydrated() && f.server->hydrations() == 1, "only the authorized client hydrated");
+  require(f.hydrated() && f.server->hydrations() == 1, "only the authorized client hydrated with prior-session policy metadata");
   // v0, with its own valid policy, serves throughout.
   transport::Server v0{*f.adapter}; require(v0.start(f.v0_directory) && until([&] { return v0.status() == transport::Status::listening; }, 10000), "v0 listening");
   auto live = open_pipe(v0.endpoint()); send(live.get(), framed(v0_hello)); std::vector<std::uint8_t> bytes;

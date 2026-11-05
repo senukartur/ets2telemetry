@@ -236,7 +236,7 @@ export async function runHardModeSmoke({application, dashboard, source, config, 
   // opening; subsequent waits drive the trusted refresh boundary instead of assuming a periodic tick was eligible.
   const beforeOpening = (await readStatus()).assessment.observedUtcMs;
   await proof('HARD_MODE_ARMED_PASS', value => value.assessment.state === 'pass' && value.assessment.observedUtcMs !== beforeOpening);
-  source.begin('qualifying');
+  await source.begin('qualifying');
   await proof('HARD_MODE_OPEN', async () => {const rows = await readTrips(); return rows.length === 1 && rows[0].outcome === 'open';}, 5000);
   // Require two distinct persisted passing publications while this trip is open, through the production adapter.
   let observed = (await proof('HARD_MODE_OPEN_AUDIT', value => value.trip?.latest.state === 'pass' && value.trip.firstLoss === null, 5000)).trip.latest.observedUtcMs;
@@ -247,11 +247,11 @@ export async function runHardModeSmoke({application, dashboard, source, config, 
     });
     observed = next.trip.latest.observedUtcMs;
   }
-  source.deliver();
+  await source.deliver();
   let positive;
   await proof('HARD_MODE_QUALIFIED', async () => {positive = await readTrips(); return positive.length === 1 && positive[0].isHardMode === true;}, 5000);
   record.qualified = positive[0].tripUuid;
-  source.begin('lost');
+  await source.begin('lost');
   await until(async () => await readTrips(), rows => rows.length === 2 && rows[0].outcome === 'open', 'HARD_MODE_SECOND_OPEN', 5000);
   await source.settings('unknown');
   await until(async () => await readStatus(), value => value.assessment.state === 'unknown' && Boolean(value.trip?.firstLoss), 'HARD_MODE_LOST', 8000);
@@ -273,7 +273,7 @@ export async function runHardModeSmoke({application, dashboard, source, config, 
   assert.match(await dashboard.getByTestId('hard-mode-card').innerText(), /Hard Mode потерян для этого рейса/);
   record.languageHotChange = true;
   await language('en');
-  source.deliver();
+  await source.deliver();
   const rows = await until(async () => await readTrips(), rows => rows.length === 2 && rows.every(row => row.outcome === 'delivered'), 'HARD_MODE_DELIVERIES', 5000);
   assert.deepEqual(rows.map(row => row.isHardMode), [false, true]); record.irreversible = true;
   await clickTestId(dashboard, 'tab-journal');

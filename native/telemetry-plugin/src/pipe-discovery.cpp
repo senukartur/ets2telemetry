@@ -1,6 +1,7 @@
 #include "pipe-discovery.hpp"
 #include "channel-identity.hpp"
 #include "protocol-json.hpp"
+#include <cmath>
 #include <set>
 #include <stdexcept>
 
@@ -41,7 +42,11 @@ std::vector<AllowedPeer> read_service_policy(const std::wstring& directory, cons
   const auto bytes = bounded_file(file.get(),16384,stop_event); inspection_running(stop_event);
   const auto j = v0::detail::Parser(bytes).parse(); inspection_running(stop_event);
   keys(j,{"schemaVersion","userTag","windowsSessionId","allowedExecutables"});
-  if (j.at("schemaVersion").number() != 1 || j.at("userTag").string() != user.tag || j.at("windowsSessionId").number() != user.session) fail();
+  if (j.at("schemaVersion").number() != 1 || j.at("userTag").string() != user.tag) fail();
+  // Persistent executable approvals belong to the user. This legacy field records policy creation, not current
+  // connection authority: every server checks the connected client's actual SID and session before reading policy.
+  const auto session = j.at("windowsSessionId").number();
+  if (session < 0 || session > MAXDWORD || std::floor(session) != session) fail();
   const auto* array = std::get_if<J::Array>(&j.at("allowedExecutables").value); if (!array || array->empty() || array->size() > 4) fail();
   std::vector<AllowedPeer> result; std::set<std::wstring> paths;
   for (const auto& e : *array) {

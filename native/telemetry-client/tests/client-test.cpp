@@ -169,12 +169,16 @@ const char* const v1Cases[] = {"v1-valid", "v1-policy", "v1-major-mismatch", "v1
   "v1-minor1-valid", "v1-minor-above-offer", "v1-minor-changed", "v1-minor2-valid", "v1-minor2-above-offer"};
 const char* const policyCases[] = {"policy-prune", "policy-cap", "policy-duplicate", "policy-case-duplicate", "policy-junction"};
 const char* const contentionCases[] = {"policy-lock-busy", "policy-lock-pending", "policy-publish-busy", "image-busy"};
+const char* const sessionCases[] = {"session-recovery-v0", "session-recovery-v1", "session-waiting-v0", "session-waiting-v1",
+  "session-policy-user", "session-policy-schema", "session-policy-id", "session-record-user", "session-record-name", "session-record-id", "session-record-bound",
+  "session-stale-v0", "session-stale-v1", "session-limit-v0", "session-limit-v1"};
+const char* const deniedSessionCases[] = {"session-denied-v0", "session-denied-v1"};
 const char* const profileCases[] = {"profile-valid", "profile-homedir", "profile-creation", "profile-session", "profile-user", "profile-game", "profile-framing", "profile-unknown", "profile-query-failure", "profile-unavailable"};
 std::string case_list() {
   std::string joined;
   auto add = [&](const auto& names) {for (const auto* name : names) joined += (joined.empty() ? "" : ",") + std::string(name);};
   add(discoveryCases); add(oneShotCases); add(hostCases); add(captureCases); add(v1Cases); add(policyCases); add(contentionCases);
-  add(profileCases); return joined + ",policy-readonly";
+  add(sessionCases); add(deniedSessionCases); add(profileCases); return joined + ",policy-readonly";
 }
 unsigned casesRun = 0;
 // Reports each case's wall time on stderr (unbuffered), so a slow case is visible even when CTest
@@ -185,6 +189,11 @@ struct CaseTimer {
   ~CaseTimer() {std::cerr << "case " << name << " ms=" << GetTickCount64() - started << "\n";}
 };
 std::string discoveryCase;
+DWORD deniedDiscoveryPid = 0;
+HANDLE discovery_open_process(DWORD access, DWORD pid) {
+  if (deniedDiscoveryPid && pid == deniedDiscoveryPid) {SetLastError(ERROR_ACCESS_DENIED); return nullptr;}
+  return OpenProcess(access, FALSE, pid);
+}
 std::optional<Handle> pendingRecord;
 void discovery_before_open(const fs::path& filename) {
   if (discoveryCase == "retired-record") require(DeleteFileW(filename.c_str()) != 0);
@@ -545,6 +554,12 @@ int wmain(int argc, wchar_t** argv) {
       wchar_t* arguments[] = {argv[0], const_cast<wchar_t*>(L"--game"), const_cast<wchar_t*>(L"ets2"), const_cast<wchar_t*>(L"--discovery-dir"), argv[2]};
       return broker_entrypoint(5, arguments);
     }
+    if (argc == 5 && std::wstring(argv[1]) == L"--access-denied-discovery") {
+      deniedDiscoveryPid = static_cast<DWORD>(std::stoul(argv[3]));
+      require(deniedDiscoveryPid != 0 && (std::wstring(argv[4]) == L"v0" || std::wstring(argv[4]) == L"v1"));
+      wchar_t* arguments[] = {argv[0], const_cast<wchar_t*>(L"--discover"), const_cast<wchar_t*>(L"--discovery-dir"), argv[2], const_cast<wchar_t*>(L"--protocol"), argv[4]};
+      return broker_entrypoint(std::wstring(argv[4]) == L"v1" ? 6 : 4, arguments);
+    }
     if (argc == 2 && std::wstring(argv[1]) == L"--inspect-profile-process") return broker_entrypoint(argc, argv);
     if (argc == 4 && std::wstring(argv[1]) == L"--profile-hold") {unsigned char byte = 0; read_control(&byte, 1); return 0;}
     if (argc == 5 && std::wstring(argv[1]) == L"--host") return host(argv[2], argv[3], utf8(argv[4]));
@@ -564,6 +579,111 @@ int wmain(int argc, wchar_t** argv) {
     controlled_token_owner_test(base, identity);
     wchar_t selfName[32768]; const auto selfLength = GetModuleFileNameW(nullptr, selfName, 32768); require(selfLength > 0); const std::wstring self(selfName, selfLength);
     wchar_t filterBuffer[128]{}; const auto filterSize = GetEnvironmentVariableW(L"ETS2TELEMETRY_CLIENT_TEST_CASE", filterBuffer, 128); require(filterSize < 128); const auto filter = filterSize ? utf8(filterBuffer) : std::string();
+    for (const auto* mode : sessionCases) {
+      if (!filter.empty() && filter != mode) continue;
+      CaseTimer timer(mode); const std::string scenario(mode);
+      const bool protocolV1 = scenario.find("-v1") != std::string::npos;
+      const bool waiting = scenario.find("session-waiting-") == 0;
+      const bool stale = scenario.find("session-stale-") == 0;
+      const bool limit = scenario.find("session-limit-") == 0;
+      const bool policyRejected = scenario.find("session-policy-") == 0;
+      const bool recordRejected = scenario.find("session-record-") == 0;
+      const auto directory = base / wide(mode) / "transport" / (protocolV1 ? "v1" : "v0");
+      fs::create_directory(directory.parent_path().parent_path());
+      require(CreateDirectoryW(directory.parent_path().c_str(), &security.attributes)); require(CreateDirectoryW(directory.c_str(), &security.attributes));
+      const auto arguments = L"--discover --discovery-dir \"" + directory.wstring() + L"\"" + (protocolV1 ? L" --protocol v1" : L"");
+      {Child initial(broker, arguments); require(initial.wait() == 0); require(parse(read_frame(initial.output.value)).at("type").string() == "discovery");}
+      const auto policyPath = directory / "service-policy.json";
+      auto policy = parse(file_bytes(policyPath)); auto& fields = std::get<Json::Object>(policy.value);
+      auto own = image(GetCurrentProcess());
+      std::get<Json::Array>(fields["allowedExecutables"].value).push_back(Json{Json::Object{{"path", Json{utf8(final_path(own.value))}}, {"sha256", Json{std::string(64, 'a')}}}});
+      const auto approvals = v0::detail::serialize(policy.at("allowedExecutables"));
+      const DWORD previousSession = identity.session ^ 1u;
+      fields["windowsSessionId"] = Json{static_cast<double>(previousSession)};
+      if (scenario == "session-policy-user") fields["userTag"] = Json{std::string(64, '0')};
+      if (scenario == "session-policy-schema") fields["schemaVersion"] = Json{2.0};
+      if (scenario == "session-policy-id") fields["windowsSessionId"] = Json{-1.0};
+      require(DeleteFileW(policyPath.c_str()) != 0); write_file(policyPath, policy, identity); const auto previousPolicy = file_bytes(policyPath);
+      const std::string oldInstance = "00112233-4455-6677-8899-aabbccddeeff", currentInstance = "22112233-4455-6677-8899-aabbccddeeff";
+      const auto recordPath = directory / (oldInstance + ".json");
+      const auto recordFor = [&](DWORD session, const std::string& instance) {
+        const auto endpoint = std::string(channel::active.pipe_prefix) + "ets2-v" + (protocolV1 ? "1" : "0") + "-" + identity.userTag + "-" + std::to_string(session) + "-" + instance;
+        return Json{Json::Object{{"schemaVersion", Json{1.0}}, {"protocolMajor", Json{protocolV1 ? 1.0 : 0.0}}, {"game", Json{std::string("ets2")}},
+          {"userTag", Json{identity.userTag}}, {"windowsSessionId", Json{static_cast<double>(session)}}, {"processId", Json{static_cast<double>(GetCurrentProcessId())}},
+          {"processCreationTime", Json{std::to_string(creation(GetCurrentProcess()))}}, {"processInstanceId", Json{instance}},
+          {"pluginSessionId", Json{std::string("11112233-4455-6677-8899-aabbccddeeff")}}, {"pipeName", Json{endpoint}}}};
+      };
+      auto record = recordFor(previousSession, oldInstance); auto& recordFields = std::get<Json::Object>(record.value);
+      if (scenario == "session-record-user") recordFields["userTag"] = Json{std::string(64, '0')};
+      if (scenario == "session-record-name") recordFields["pipeName"] = recordFor(identity.session, oldInstance).at("pipeName");
+      if (scenario == "session-record-id") recordFields["windowsSessionId"] = Json{-1.0};
+      if (stale) recordFields["processId"] = Json{static_cast<double>(MAXDWORD)};
+      write_file(recordPath, record, identity); const auto previousRecord = file_bytes(recordPath);
+      if (scenario == "session-record-bound" || stale || limit) {
+        for (unsigned index = 0; index < (limit ? 127u : 128u); ++index) {
+          const auto instance = indexed_uuid(0xbeef0001u, index); auto extra = recordFor(previousSession, instance);
+          if (stale) {
+            auto& extraFields = std::get<Json::Object>(extra.value);
+            if (index % 2 == 0) extraFields["processId"] = Json{static_cast<double>(MAXDWORD)};
+            else extraFields["processCreationTime"] = Json{std::to_string(creation(GetCurrentProcess()) - 1)};
+          }
+          write_file(directory / (instance + ".json"), extra, identity);
+        }
+      }
+      if (!waiting && !limit && !policyRejected && !recordRejected) write_file(directory / (currentInstance + ".json"), recordFor(identity.session, currentInstance), identity);
+      Child client(broker, waiting ? L"--game ets2 --discovery-dir \"" + directory.wstring() + L"\"" + (protocolV1 ? L" --protocol v1" : L"") : arguments, true);
+      client.eof(); const auto code = client.wait(); const auto diagnostic = client.diagnostic();
+      std::cerr << "session exit " << code << " diagnostic " << diagnostic;
+      require(code == (policyRejected || recordRejected ? 1u : waiting ? 2u : 0u));
+      if (policyRejected || recordRejected) {
+        DWORD available = 0; const auto peeked = PeekNamedPipe(client.output.value, nullptr, 0, nullptr, &available, nullptr);
+        require((peeked || GetLastError() == ERROR_BROKEN_PIPE) && available == 0);
+        require(std::regex_search(diagnostic, std::regex("(^|\n)diag1 " + std::string(policyRejected ? "policy-existing" : "discovery") + " [0-9]{1,10} [0-9]{1,10} [a-z-]{1,24} [0-9]{1,10}\n$")));
+      }
+      else {
+        const auto result = parse(read_frame(client.output.value));
+        require(result.at("type").string() == (waiting ? "waiting" : "discovery"));
+        if (!waiting) {
+          const auto& games = result.at("games");
+          require(games.at("ets2").at("status").string() == (limit ? "absent" : "unique") && games.at("ats").at("status").string() == "absent");
+          if (!limit) require(games.at("ets2").at("target").at("source").at("processInstanceId").string() == currentInstance);
+        }
+      }
+      if (stale) {for (const auto& entry : fs::directory_iterator(directory)) require(entry.path().extension() != L".json" || entry.path().filename() == L"service-policy.json" || entry.path().stem() == wide(currentInstance));}
+      else require(file_bytes(recordPath) == previousRecord); // Live records from another session are retained.
+      if (policyRejected) require(file_bytes(policyPath) == previousPolicy);
+      else {
+        auto handle = secure_file(policyPath, identity); const auto updated = parse(read_bounded(handle.value, 16384));
+        require(integer(updated.at("windowsSessionId")) == previousSession && updated.at("userTag").string() == identity.userTag);
+        require(v0::detail::serialize(updated.at("allowedExecutables")) == approvals);
+        require(file_bytes(policyPath) == previousPolicy); // Discovery never oscillates shared policy metadata between sessions.
+      }
+    }
+    for (const auto* mode : deniedSessionCases) {
+      if (!filter.empty() && filter != mode) continue;
+      CaseTimer timer(mode); const bool protocolV1 = std::string(mode) == "session-denied-v1";
+      const auto directory = base / wide(mode) / "transport" / (protocolV1 ? "v1" : "v0"); fs::create_directory(directory.parent_path().parent_path());
+      require(CreateDirectoryW(directory.parent_path().c_str(), &security.attributes)); require(CreateDirectoryW(directory.c_str(), &security.attributes));
+      Child holder(self, L"--hold"); require(parse(read_frame(holder.output.value)).at("type").string() == "ready");
+      const std::string oldInstance = "00112233-4455-6677-8899-aabbccddeeff", currentInstance = "22112233-4455-6677-8899-aabbccddeeff";
+      const auto recordFor = [&](DWORD session, const std::string& instance, DWORD pid, HANDLE process) {
+        const auto endpoint = std::string(channel::active.pipe_prefix) + "ets2-v" + (protocolV1 ? "1" : "0") + "-" + identity.userTag + "-" + std::to_string(session) + "-" + instance;
+        return Json{Json::Object{{"schemaVersion", Json{1.0}}, {"protocolMajor", Json{protocolV1 ? 1.0 : 0.0}}, {"game", Json{std::string("ets2")}},
+          {"userTag", Json{identity.userTag}}, {"windowsSessionId", Json{static_cast<double>(session)}}, {"processId", Json{static_cast<double>(pid)}},
+          {"processCreationTime", Json{std::to_string(creation(process))}}, {"processInstanceId", Json{instance}},
+          {"pluginSessionId", Json{std::string("11112233-4455-6677-8899-aabbccddeeff")}}, {"pipeName", Json{endpoint}}}};
+      };
+      const auto oldRecord = recordFor(identity.session ^ 1u, oldInstance, holder.pid, holder.process.value);
+      const auto oldPath = directory / (oldInstance + ".json"); write_file(oldPath, oldRecord, identity); const auto before = file_bytes(oldPath);
+      write_file(directory / (currentInstance + ".json"), recordFor(identity.session, currentInstance, GetCurrentProcessId(), GetCurrentProcess()), identity);
+      require(!WaitNamedPipeW(wide(oldRecord.at("pipeName").string()).c_str(), 0) && GetLastError() == ERROR_FILE_NOT_FOUND);
+      Child client(self, L"--access-denied-discovery \"" + directory.wstring() + L"\" " + std::to_wstring(holder.pid) + (protocolV1 ? L" v1" : L" v0"), true);
+      client.eof(); require(client.wait() == 0); const auto result = parse(read_frame(client.output.value));
+      require(result.at("games").at("ets2").at("status").string() == "unique" && result.at("games").at("ets2").at("target").at("source").at("processInstanceId").string() == currentInstance);
+      std::cerr << "access-denied other-session record retained=" << fs::exists(oldPath) << "\n";
+      require(WaitForSingleObject(holder.process.value, 0) == WAIT_TIMEOUT && file_bytes(oldPath) == before);
+      holder.eof(); require(holder.wait() == 0);
+    }
     for (const auto* mode : profileCases) {
       if (!filter.empty() && filter != mode) continue;
       CaseTimer timer(mode); const std::string scenario(mode);

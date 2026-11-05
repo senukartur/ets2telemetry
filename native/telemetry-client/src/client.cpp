@@ -25,7 +25,15 @@ using v0::Json;
 namespace fs = std::filesystem;
 #ifdef ETS2TELEMETRY_CLIENT_DISCOVERY_TEST
 void discovery_before_open(const fs::path& filename);
+HANDLE discovery_open_process(DWORD access, DWORD pid);
 #endif
+HANDLE open_discovery_process(DWORD access, DWORD pid) {
+#ifdef ETS2TELEMETRY_CLIENT_DISCOVERY_TEST
+  return discovery_open_process(access, pid);
+#else
+  return OpenProcess(access, FALSE, pid);
+#endif
+}
 void test_trace(const char* value) {
 #ifdef ETS2TELEMETRY_CLIENT_ASAN_DIAGNOSTICS
   const auto text = std::string(value) + ":" + std::to_string(GetTickCount64()) + "\n"; DWORD written = 0;
@@ -178,7 +186,7 @@ bool sweep_stale_record(const fs::path& path, std::optional<Handle>& verifiedFil
   return true;
 }
 bool is_reused_or_gone_on_access_denied(DWORD pid, std::uint64_t expectedCreation, const std::string& endpoint, const fs::path& path, std::optional<Handle>& file, const Identity& self) {
-  const auto rawLimited = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, pid);
+  const auto rawLimited = open_discovery_process(PROCESS_QUERY_LIMITED_INFORMATION, pid);
   if (rawLimited) {
     Handle limited(rawLimited);
     FILETIME created{}, exited{}, kernel{}, user{};
@@ -278,11 +286,14 @@ void bootstrap_policy(const fs::path& directory, const Identity& identity, HANDL
   const auto bytes = read_bounded(ownImage, 64 * 1024 * 1024); const auto hash = sha256(std::vector<unsigned char>(bytes.begin(), bytes.end()));
   stage = "policy-existing"; const auto policyPath = directory / "service-policy.json";
   test_trace(stage);
-  Json::Array entries; std::string existing;
+  Json::Array entries; std::string existing; DWORD policySession = identity.session;
   if (fs::exists(policyPath)) {
     auto handle = secure_file(policyPath, identity); existing = read_bounded(handle.value, 16384); const auto policy = parse(existing);
     exact(policy, {"schemaVersion", "userTag", "windowsSessionId", "allowedExecutables"});
-    if (integer(policy.at("schemaVersion")) != 1 || policy.at("userTag").string() != identity.userTag || integer(policy.at("windowsSessionId")) != identity.session) fail();
+    if (integer(policy.at("schemaVersion")) != 1 || policy.at("userTag").string() != identity.userTag) fail();
+    // The policy authorizes executable images for this user, not a Windows session. Keep the legacy creation-session
+    // metadata unchanged so concurrent sessions do not rewrite it; actual pipe peers must still share a session.
+    policySession = integer(policy.at("windowsSessionId"));
     const auto* list = std::get_if<Json::Array>(&policy.at("allowedExecutables").value); if (!list || list->empty() || list->size() > 4) fail();
     bool found = false; std::vector<std::string> paths;
     for (const auto& entry : *list) {
@@ -293,7 +304,7 @@ void bootstrap_policy(const fs::path& directory, const Identity& identity, HANDL
     }
     if (!found) {if (entries.size() == 4) fail(); entries.push_back(Json{Json::Object{{"path", Json{ownPath}}, {"sha256", Json{hash}}}});}
   } else entries.push_back(Json{Json::Object{{"path", Json{ownPath}}, {"sha256", Json{hash}}}});
-  stage = "policy-json"; const auto policy = Json{Json::Object{{"schemaVersion", Json{1.0}}, {"userTag", Json{identity.userTag}}, {"windowsSessionId", Json{static_cast<double>(identity.session)}}, {"allowedExecutables", Json{entries}}}};
+  stage = "policy-json"; const auto policy = Json{Json::Object{{"schemaVersion", Json{1.0}}, {"userTag", Json{identity.userTag}}, {"windowsSessionId", Json{static_cast<double>(policySession)}}, {"allowedExecutables", Json{entries}}}};
   test_trace(stage);
   const auto encoded = v0::detail::serialize(policy); if (encoded.size() > 16384) fail();
   // An identical policy is not replaced: each replacement races readers such as the plugin's per-connection check.
@@ -502,20 +513,24 @@ int wmain(int argc, wchar_t** argv) {
       auto file = enumerated_discovery_file(entry.path(), self); if (!file) continue;
       auto record = parse(read_bounded(file->value, 16384));
       exact(record, {"schemaVersion", "protocolMajor", "game", "userTag", "windowsSessionId", "processId", "processCreationTime", "processInstanceId", "pluginSessionId", "pipeName"});
-      if (integer(record.at("schemaVersion")) != 1 || integer(record.at("protocolMajor")) != protocolMajor || record.at("userTag").string() != self.userTag || integer(record.at("windowsSessionId")) != self.session || record.at("processInstanceId").string() != stem || !uuid(record.at("pluginSessionId").string())) fail();
+      if (integer(record.at("schemaVersion")) != 1 || integer(record.at("protocolMajor")) != protocolMajor || record.at("userTag").string() != self.userTag || record.at("processInstanceId").string() != stem || !uuid(record.at("pluginSessionId").string())) fail();
+      const auto recordSession = integer(record.at("windowsSessionId"));
       const auto& recordGame = record.at("game").string();
       if (recordGame != "ets2" && recordGame != "ats") fail();
       const auto pid = integer(record.at("processId")); if (!pid) fail();
       const auto expectedCreation = v0::parse_uint64(record.at("processCreationTime"));
       // Only names under this build channel's prefix (ET-055) are accepted: a record naming another prefix, such as the
       // other channel's, fails closed like any inconsistent derived name.
-      const auto endpoint = channel::active.pipe_prefix + recordGame + segment + self.userTag + "-" + std::to_string(self.session) + "-" + stem;
+      const auto endpoint = channel::active.pipe_prefix + recordGame + segment + self.userTag + "-" + std::to_string(recordSession) + "-" + stem;
       if (record.at("pipeName").string() != endpoint) fail();
       stage = "server-process";
-      const auto raw = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION | SYNCHRONIZE, FALSE, pid);
+      const auto raw = open_discovery_process(PROCESS_QUERY_LIMITED_INFORMATION | SYNCHRONIZE, pid);
       if (!raw) {
         const auto openError = GetLastError();
         if (openError == ERROR_INVALID_PARAMETER) {sweep_stale_record(entry.path(), file, self); stage = "discovery"; continue;}
+        // An absent endpoint in another session is not proof that its unqueryable process is gone.
+        // Retain the record before entering the same-session access-denied sweep fallback.
+        if (openError == ERROR_ACCESS_DENIED && recordSession != self.session) {stage = "discovery"; if (++visited > 256 || ++records > 128) fail(); continue;}
         if (openError == ERROR_ACCESS_DENIED && is_reused_or_gone_on_access_denied(pid, expectedCreation, endpoint, entry.path(), file, self)) {stage = "discovery"; continue;}
         SetLastError(openError); fail();
       }
@@ -524,6 +539,8 @@ int wmain(int argc, wchar_t** argv) {
       file.reset();
       stage = "discovery";
       if (++visited > 256 || ++records > 128) fail();
+      // Proven stale records were swept above, including those from prior sessions. Live other-session records stay.
+      if (recordSession != self.session) continue;
       if (!discover && recordGame != game) continue;
       stage = "server-process";
       Identity server(candidate->value); if (server.sid != self.sid || server.session != self.session) fail();

@@ -174,3 +174,50 @@ it('reconnects the production v1 consumer over a real pipe after a peer write fa
     expect(source.peerDisconnects).toEqual([{code: 'EPIPE', durable: false}]);
   } finally {clearTimeout(guard); receive = undefined; await ingestion.stop();}
 });
+
+it('keeps real-pipe snapshots flowing while the Playwright driver event loop is blocked', async () => {
+  await source.stop(); vi.useRealTimers();
+  netMock.createServer.mockImplementation((listener: (socket: net.Socket) => void) => net.createServer(listener));
+  const {startHardModeWorker} = await import(pathToFileURL(path.resolve('scripts/ci/hard-mode-source-worker.mjs')).href);
+  const isolated = await startHardModeWorker({checkout: path.resolve('.'), localappdata: directory, channel: 'staging', appVersion: '0.1.0'});
+  const received: number[] = [];
+  let bytes = Buffer.alloc(0), guard: ReturnType<typeof setTimeout> | undefined;
+  const peer = net.createConnection(isolated.endpoint);
+  try {
+    const first = new Promise<void>((resolve, reject) => {
+      guard = setTimeout(() => reject(new Error('Hard Mode worker pipe hang guard')), 5000);
+      peer.on('error', reject);
+      peer.on('data', chunk => {
+        bytes = Buffer.concat([bytes, chunk]);
+        while (bytes.length >= 4 && bytes.length >= 4 + bytes.readUInt32LE(0)) {
+          const length = bytes.readUInt32LE(0);
+          const message = JSON.parse(bytes.subarray(4, 4 + length).toString('utf8'));
+          bytes = bytes.subarray(4 + length);
+          if (message.kind === 'snapshot') {
+            received.push(Number(message.data.state.captureUtcUnixMs.value)); resolve();
+          }
+        }
+      });
+      peer.once('connect', () => peer.write(frame('hello', {durableEvents: true})));
+    });
+    await first; clearTimeout(guard);
+    const before = Date.now();
+    // Deliberately reproduce a driver/trace stall beyond the consumer's 500 ms stale boundary.
+    Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 1000);
+    const after = Date.now();
+    await isolated.settings('fail'); // A worker round trip lets the receiver drain the queued real pipe bytes.
+    await new Promise(resolve => setTimeout(resolve, 100));
+    expect(received.some(at => at > before + 100 && at < after - 100)).toBe(true);
+    expect(isolated.errors).toEqual([]); expect(isolated.peerDisconnects).toEqual([]);
+    expect(isolated.connected()).toBe(true);
+    await isolated.stop(); await isolated.stop();
+    expect(isolated.errors).toEqual([]); expect(isolated.connected()).toBe(false);
+  } finally {clearTimeout(guard); peer.destroy(); await isolated.stop();}
+});
+
+it('rejects a source worker startup failure instead of leaving its caller pending', async () => {
+  await source.stop(); vi.useRealTimers();
+  const {startHardModeWorker} = await import(pathToFileURL(path.resolve('scripts/ci/hard-mode-source-worker.mjs')).href);
+  await expect(startHardModeWorker({checkout: path.join(directory, 'missing-checkout'), localappdata: directory,
+    channel: 'staging', appVersion: '0.1.0'})).rejects.toThrow('HARD_MODE_SOURCE_WORKER_FAILED');
+});
