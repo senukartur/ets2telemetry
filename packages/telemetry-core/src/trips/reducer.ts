@@ -1,5 +1,4 @@
 import type {JobConfiguration} from '../../../contracts/src/protocol-v1';
-import type {ObservedAcceptance} from './types';
 // The pure trip lifecycle and completeness reducer (ET-014 PR-1). It turns committed protocol v1 events and gaps,
 // session changes and checkpoint hydration into storage TripEffect lists. It is deterministic and never mutates its
 // inputs; the caller adopts the returned state only after storage reports the commit (T3). Rules, evidence and the
@@ -39,9 +38,9 @@ export function stepTrip(state: TripState, input: TripInput): TripStepResult {
     case 'session': return stepSession(state, input.welcome, input.coveredThrough, input.openTrips);
     case 'checkpoint': return stepCheckpoint(state, input.message, input.receivedUtcMs);
     case 'attach': return stepAttach(state, input.receivedUtcMs);
-    case 'event': return stepEvent(state, input.message, input.coveredThrough, input.receivedUtcMs, input.observedAcceptance);
+    case 'event': return stepEvent(state, input.message, input.coveredThrough, input.receivedUtcMs);
     case 'gap': return stepGap(state, input.message, input.coveredThrough, input.receivedUtcMs);
-    case 'reading': return stepReading(state, input.sample, input.currentJob,input.profileScope,input.acceptanceConfirmed);
+    case 'reading': return stepReading(state, input.sample, input.currentJob,input.profileScope);
     case 'disconnected': return stepDisconnected(state);
   }
 }
@@ -124,7 +123,6 @@ function assemble(slot: GameSlot, own: TripEffect[], annotations: TripEffect[]):
 }
 
 interface Carrier {
-  observedAcceptance?: ObservedAcceptance;
   state: TripState; session: SessionState; slot: GameSlot; game: TripGame;
   own: TripEffect[]; annotations: TripEffect[];
   /** UTC label (T15): occurred.utcUnixMs, else the session's last label, else the receipt time. */
@@ -177,7 +175,7 @@ function openTrip(c: Carrier, o: OpenOptions) {
   c.slot.continuation = null;
   if (o.reloadOf !== undefined) causes.push({kind: 'discontinuity', detail: {cause: 'reload', continuationOf: o.reloadOf, decision: 'not-merged'}});
   else {
-    if (s.load === 'loading' && !c.observedAcceptance) causes.push({kind: 'discontinuity', detail: {cause: 'opened-at-load', annotation: true}});
+    if (s.load === 'loading') causes.push({kind: 'discontinuity', detail: {cause: 'opened-at-load', annotation: true}});
     // A configuration replayed from before the checkpoint is a real start, but the consumer was not attached then and has
     // no readings for that time. A checkpoint job without its configuration event is a late attach (T9).
     const untracked = untrackedFor(c);
@@ -199,13 +197,11 @@ function openTrip(c: Carrier, o: OpenOptions) {
   for (const interval of causes) c.own.push({kind: 'completeness.add', interval: {tripUuid: uuid, ...interval, detail: {...interval.detail, atEventSeq: c.eventSeq}}});
   c.slot.trip = {
     ...(s.profileScope?{profileScope:s.profileScope}:{}),tripUuid: uuid, pluginSessionId: s.pluginSessionId, jobKey: o.key, jobEventSeq: o.jobEventSeq, phase: 'active', reloadEventSeq: null, loadCheck: o.loadCheck,
-    loadCoverage: s.load === 'loading' && !c.observedAcceptance ? {start: null} : null,
-    ...(c.observedAcceptance ? {observedAcceptance:{witness:structuredClone(c.observedAcceptance),confirmed:false}} : {}),
+    loadCoverage: s.load === 'loading' ? {start: null} : null,
     completeness, gameMode: modeOf(s.gameMode), gameModeAmbiguous: false, startedUtcMs: c.label, startedMonotonicNs: c.monotonicNs, clockId: s.clockId,
     ...o.job, truckKey: s.truck?.key ?? null, trailerKeys: s.trailers.map(t => t?.key ?? null),
     fines: emptyMoney(), finesBeforeLoaded: emptyMoney(), tolls: emptyMoney(), transfers: emptyMoney(), accounting: newAccounting()
   };
-  if(c.observedAcceptance)c.own.push(annotation(uuid,{cause:'observed-acceptance',phase:'pending',...c.observedAcceptance}));
 }
 const jobFields = (record: Extract<EventRecord, {type: 'job.configured'}>): OpenOptions['job'] => ({
   market: plain(record.market), cargoLoaded: plain(record.cargoLoaded), plannedDistance: plain(record.plannedDistance), expectedIncome: plain(record.expectedIncome)
@@ -317,7 +313,6 @@ function onTimersRestart(c: Carrier) {
   const trip = c.slot.trip;
   c.session.load = 'loading';
   if (trip === null) return;
-  if(trip.observedAcceptance){delete trip.observedAcceptance;trip.loadCoverage={start:null};}
   if (trip.phase === 'reload-check') { resolveReload(c, 'restart'); return; }
   if (trip.phase === 'active' && trip.loadCheck !== null) {
     if (trip.loadCoverage === null && trip.completeness !== 'partial') {
@@ -384,7 +379,7 @@ function carrierSession(state: TripState, source: {pluginSessionId: string; game
   return coveredThrough === state.sessions[id].processedThrough ? state.sessions[id] : 'COVERAGE_MISMATCH';
 }
 
-function stepEvent(state: TripState, message: EventMessage, coveredThrough: Uint64, receivedUtcMs: number, observedAcceptance?: ObservedAcceptance): TripStepResult {
+function stepEvent(state: TripState, message: EventMessage, coveredThrough: Uint64, receivedUtcMs: number): TripStepResult {
   const checked = carrierSession(state, message.source, coveredThrough);
   if (typeof checked === 'string') return {ok: false, code: checked};
   const seq = BigInt(message.data.eventSeq), processed = BigInt(checked.processedThrough);
@@ -394,7 +389,6 @@ function stepEvent(state: TripState, message: EventMessage, coveredThrough: Uint
   const draft = structuredClone(state), session = draft.sessions[checked.pluginSessionId], {occurred, record} = message.data;
   const label = utcOf(occurred.utcUnixMs) ?? session.lastUtcMs ?? receivedUtcMs;
   const c = carrierFor(draft, session, label, occurred.monotonicNs.available ? occurred.monotonicNs.value : null, message.data.eventSeq, occurred.simulation);
-  if(observedAcceptance && record.type==='job.configured' && !message.data.redelivered && !replayed(c))c.observedAcceptance=observedAcceptance;
   c.gameTime = occurred.gameTime.minutes.available ? {minutes: occurred.gameTime.minutes.value, clockId: occurred.gameTime.clockId} : null;
   if (session.reconnect !== null) {
     const pending = session.reconnect;
@@ -790,7 +784,7 @@ type GameJump = GameTimeJump & {grows: 'new' | 'extend'};
  * One reading of the current connection (T16, T17). It changes only state: distance, fuel and refuels accumulate on
  * the open trip, and annotations or a reading-hole downgrade wait for the game's next commit carrier.
  */
-function stepReading(state: TripState, sample: StepSample & {utcMs?: number}, currentJob?: JobConfiguration | null,profileScope?:string,acceptanceConfirmed=false): TripStepResult {
+function stepReading(state: TripState, sample: StepSample & {utcMs?: number}, currentJob?: JobConfiguration | null,profileScope?:string): TripStepResult {
   const id = sample.source.pluginSessionId;
   if (state.connection !== id || !has(state.sessions, id) || state.sessions[id].game !== sample.source.game) return {ok: false, code: 'UNKNOWN_SESSION'};
   const draft = structuredClone(state), session = draft.sessions[id], slot = draft.games[session.game], next = readingPoint(sample), prev = session.lastReading;
@@ -832,11 +826,6 @@ function stepReading(state: TripState, sample: StepSample & {utcMs?: number}, cu
   let annotated: string | null = null;
   const trip = slot.trip;
   if (trip !== null && trip.pluginSessionId === id) {
-    if(trip.observedAcceptance && !trip.observedAcceptance.confirmed && acceptanceConfirmed && session.load==='running'
-      && next.simulation==='running' && trip.loadCheck!=='before-start'){
-      trip.observedAcceptance.confirmed=true;
-      queueAnnotations(slot,[annotation(trip.tripUuid,{cause:'observed-acceptance',phase:'confirmed',...trip.observedAcceptance.witness,confirmedThroughEventSeq:session.processedThrough})]);
-    }
     if (trip.loadCoverage !== null && trip.loadCoverage.start === null && next.gameTime.minutes !== null) trip.loadCoverage.start = {...next.gameTime, minutes: next.gameTime.minutes};
     const acc = trip.accounting;
     // A step belongs to the trip only when its earlier reading was taken while the trip was open; it counts towards

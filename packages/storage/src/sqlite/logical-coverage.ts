@@ -115,14 +115,19 @@ export function latestCoverage(db: Database.Database, id: unknown): {revision?: 
   return {revision, present: Object.hasOwn(row, '_coverage'), ...(validCoverage(value) ? {value: structuredClone(value)} : {})};
 }
 export function originalCoverage(db: Database.Database, row: Row): LogicalCoverage {
-  const event = row.opened_event_ref === null ? undefined : get(db, 'SELECT event_seq,payload_json FROM events WHERE id=?', row.opened_event_ref);
-  const payload = event ? JSON.parse(String(event.payload_json)) as {occurred: {simulation: string}} : null;
-  const started = event && get(db, "SELECT id FROM events WHERE plugin_session_id=? AND event_seq<? AND type='simulation.started' ORDER BY id DESC LIMIT 1", row.plugin_session_ref, event.event_seq);
-  const gap = event && get(db, 'SELECT id FROM event_gaps WHERE plugin_session_ref=? AND first_event_seq<=? LIMIT 1', row.plugin_session_ref, event.event_seq);
+  const event = row.opened_event_ref === null ? undefined : get(db, 'SELECT event_seq,type,first_redelivered FROM events WHERE id=?', row.opened_event_ref);
+  const started = event && get(db, "SELECT event_seq FROM events WHERE plugin_session_id=? AND event_seq<? AND type='simulation.started' ORDER BY event_seq DESC LIMIT 1", row.plugin_session_ref, event.event_seq);
+  const previousJob = event && get(db, "SELECT event_seq,type,first_redelivered FROM events WHERE plugin_session_id=? AND event_seq<? AND type IN ('job.configured','job.cleared') ORDER BY event_seq DESC LIMIT 1", row.plugin_session_ref, event.event_seq);
+  const reset = event && started && get(db, "SELECT id FROM events WHERE plugin_session_id=? AND event_seq>? AND event_seq<? AND type IN ('timers.restart','gameTime.regression') LIMIT 1", row.plugin_session_ref, started.event_seq, event.event_seq);
+  // Both the absence and the start must remain trustworthy; a gap before a later clear can hide a load.
+  const gapAfter = previousJob && started && String(started.event_seq) < String(previousJob.event_seq) ? started.event_seq : previousJob?.event_seq ?? '00000000000000000000';
+  const gap = event && get(db, 'SELECT id FROM event_gaps WHERE plugin_session_ref=? AND last_event_seq>? AND first_event_seq<=? LIMIT 1', row.plugin_session_ref, gapAfter, event.event_seq);
+  const observed = row.opened_by === 'event' && event?.type === 'job.configured' && event.first_redelivered === 0n && started && !reset && !gap
+    && (!previousJob || previousJob.type === 'job.cleared' && previousJob.first_redelivered === 0n);
   const notes=db.prepare('SELECT detail_json FROM completeness_intervals WHERE trip_ref=? ORDER BY id LIMIT 129').all(row.id) as Row[];
   const pending=notes.some(note=>{const detail=typeof note.detail_json!=='string'?null:JSON.parse(note.detail_json) as Row;return detail?.cause==='observed-acceptance'&&detail.phase==='pending'&&validAcceptanceDetail(detail);});
-  return {version: 1, start: row.opened_by === 'event' && payload?.occurred.simulation === 'running' && started && !gap ? 'observed' : 'unproven',
-    ...(pending?{acceptancePending:true}:{}),losses: 0, member: String(row.id), phase: 'active', endpoint: null, window: null};
+  return {version: 1, start: observed ? 'observed' : 'unproven',
+    ...(pending && !observed?{acceptancePending:true}:{}),losses: 0, member: String(row.id), phase: 'active', endpoint: null, window: null};
 }
 /** A bootstrap loss is outside this member's active job only for the explicit ordered loaded-job boundary. */
 export function cleanLoadWindow(db: Database.Database, row: Row, requireStarted = true): boolean {
@@ -161,6 +166,7 @@ export function advanceCoverage(db: Database.Database, id: unknown, _group: Row,
       else if(!validAcceptanceDetail(detail))coverage.losses|=COVERAGE_LOSS.unknown;
       continue;
     }
+    if (interval.trip_ref === id && ['opened-at-load','save-load'].includes(String(detail.cause))) coverage.start = 'unproven';
     if (interval.kind === 'event-loss' && interval.plugin_session_ref !== row.plugin_session_ref && (row.outcome === 'open' || row.close_reason === 'restart')
       && !get(db,'SELECT t.id FROM trips t JOIN logical_memberships m ON m.trip_ref=t.id WHERE m.logical_ref=? AND t.plugin_session_ref=? LIMIT 1',id,interval.plugin_session_ref)) {
       if (coverage.phase === 'pending' && coverage.window?.opened !== null) coverage.losses |= COVERAGE_LOSS.unknown;
