@@ -225,7 +225,7 @@ Not part of the MVP; drawn so that the shell reserves its place and the dashboar
 
 | Spec id | Content |
 | --- | --- |
-| `account.token` | Masked token field with a show/hide button, **Save and connect**, note "Uploading is not acceptance: trips are reviewed on the dashboard." |
+| `account.token` | Masked token entry with show/hide for the currently entered value only; verify against the configured Dashboard, then confirm the authenticated account and all retained eligible history before binding/uploading. Clear the entered token after submission or cancellation; saved credentials are never read back into the renderer. Note "Uploading is not acceptance: trips are reviewed on the dashboard." See the proposed [upload specification](../dashboard-upload.md#connection-credentials-and-ownership). |
 | `account.status` | Dashboard connection (Connected as … / offline), upload queue count, last upload |
 | `account.firstSync` | First history upload progress "87 of 143 trips" |
 
