@@ -11,7 +11,7 @@ import type {
   TripPage, TripRecord, Uint64
 } from './api';
 import {storageError} from './errors';
-import type {UploadProjectionPageQuery} from './upload-projection';
+import type {UploadProjectionBegin, UploadProjectionPageQuery} from './upload-projection';
 import {parseResponse, type CommandName, type CommandValue, type JournalCommandName, type StorageCommand, type StorageRequest, type WorkerOpenOptions} from './worker/protocol';
 
 /** Deadline of one command after it was sent to the worker. */
@@ -149,7 +149,10 @@ export class StorageClient {
   listSamples(scope: {tripUuid: string} | {pluginSessionId: string}, page?: {afterId?: string; limit?: number; includeExcluded?: boolean}): Promise<Result<SampleRecord[]>> { return this.#request({name: 'listSamples', scope: isObject(scope) ? ('tripUuid' in scope ? {tripUuid: scope.tripUuid} : {pluginSessionId: scope.pluginSessionId}) : scope,
     ...(page === undefined ? {} : {page: isObject(page) ? {afterId: page.afterId, limit: page.limit, includeExcluded: page.includeExcluded} : page})}); }
   storageInfo(): Promise<Result<StorageInfo>> { return this.#request({name: 'storageInfo'}); }
-  pinUploadProjection(tripUuid: string) { return this.#request({name: 'pinUploadProjection', tripUuid}); }
+  beginUploadProjection(input: UploadProjectionBegin) {return this.#request({name:'beginUploadProjection',input:isObject(input)?{pinId:input.pinId,tripUuid:input.tripUuid}:input});}
+  advanceUploadProjection(pinId: string) {return this.#request({name:'advanceUploadProjection',pinId});}
+  getUploadProjectionPreparation(pinId: string) {return this.#request({name:'getUploadProjectionPreparation',pinId});}
+  releaseUploadProjection(pinId: string) {return this.#request({name:'releaseUploadProjection',pinId});}
   readUploadProjectionPage(query: UploadProjectionPageQuery) {
     return this.#request({name: 'readUploadProjectionPage', query: isObject(query)
       ? {snapshot: query.snapshot, kind: query.kind, cursor: query.cursor, limit: query.limit} : query});
@@ -214,7 +217,10 @@ export class StorageClient {
 
   #pump(): void {
     if (this.#inFlight || this.#state !== 'running') return;
-    const next = this.#queue.shift();
+    // Projection work yields after every bounded request; recorder requests retain FIFO priority.
+    const background = (name: CommandName) => ['beginUploadProjection','advanceUploadProjection','getUploadProjectionPreparation','readUploadProjectionPage','releaseUploadProjection'].includes(name);
+    const ordinary = this.#queue.findIndex(pending => !background(pending.command.name));
+    const next = this.#queue.splice(ordinary<0?0:ordinary,1)[0];
     if (next) this.#send(next);
   }
 

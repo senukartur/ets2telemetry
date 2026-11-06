@@ -15,7 +15,7 @@ import * as journal from './sqlite/journal';
 import * as reads from './sqlite/reads';
 import * as writes from './sqlite/writes';
 import * as upload from './sqlite/upload-projection';
-import type {UploadProjectionPageQuery} from './upload-projection';
+import type {UploadProjectionBegin, UploadProjectionPageQuery} from './upload-projection';
 
 export * from './api';
 export {MIGRATIONS, APPLICATION_ID, type Migration} from './sqlite/migrations';
@@ -58,7 +58,10 @@ export class Storage {
   journalEvents(tripUuid: string, page: JournalPageQuery): Result<JournalEventPage> { return attempt(() => journal.journalEvents(this.connection, tripUuid, page)); }
   journalIntervals(tripUuid: string, page: JournalPageQuery): Result<JournalIntervalPage> { return attempt(() => journal.journalIntervals(this.connection, tripUuid, page)); }
   storageInfo(): Result<StorageInfo> { return attempt(() => reads.storageInfo(this.connection)); }
-  pinUploadProjection(tripUuid: string) { return attempt(() => upload.pinUploadProjection(this.connection, tripUuid)); }
+  beginUploadProjection(input: UploadProjectionBegin) {return attempt(() => upload.beginUploadProjection(this.connection,input));}
+  advanceUploadProjection(pinId: string, options?: CommitOptions) {return attempt(() => upload.advanceUploadProjection(this.connection,pinId,options?.testHooks));}
+  getUploadProjectionPreparation(pinId: string) {return attempt(() => upload.getUploadProjectionPreparation(this.connection,pinId));}
+  releaseUploadProjection(pinId: string, options?: CommitOptions) {return attempt(() => upload.releaseUploadProjection(this.connection,pinId,options?.testHooks));}
   readUploadProjectionPage(query: UploadProjectionPageQuery) { return attempt(() => upload.readUploadProjectionPage(this.connection, query)); }
   /** Closes the connection. SQLite checkpoints the WAL into the main file; further commands fail with STORAGE_CLOSED. */
   close(): Result<void> { return attempt(() => this.connection.close()); }

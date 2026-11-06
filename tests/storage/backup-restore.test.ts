@@ -1,12 +1,20 @@
 import {closeSync, existsSync, mkdirSync, openSync, readFileSync, writeFileSync, writeSync} from 'node:fs';
 import path from 'node:path';
+import {randomUUID} from 'node:crypto';
+import {Storage} from '../../packages/storage/src';
+import {openConnection} from '../../packages/storage/src/sqlite/connection';
+import {backupBeforeMigration} from '../../packages/storage/src/sqlite/backup';
+import {contentDigest} from '../../packages/storage/src/sqlite/digest';
+import {revise} from '../../packages/storage/src/sqlite/logical-trips';
 import {afterEach, beforeEach, describe, expect, it} from 'vitest';
 import {MIGRATIONS, openStorage, restoreBackup, type Migration} from '../../packages/storage/src/index';
 import {digestOf, expectRepresentative, failed, files, ok, REPRESENTATIVE, sha256, workspace} from './helpers';
 
+const directStorage:Storage[]=[];
+function tracked(connection:ConstructorParameters<typeof Storage>[0]){const storage=new Storage(connection);directStorage.push(storage);return storage;}
 let ws: Awaited<ReturnType<typeof workspace>>;
 beforeEach(async () => { ws = await workspace(); });
-afterEach(async () => { await ws.dispose(); });
+afterEach(async () => {for(const storage of directStorage.splice(0))storage.close(); await ws.dispose(); });
 
 const step = (version: number): Migration => ({version, name: `000${version}-test`, up: db => { db.exec(`CREATE TABLE test_v${version} (id INTEGER PRIMARY KEY)`); }});
 /** Production migrations, then injected steps beyond the current production version. */
@@ -18,6 +26,26 @@ const failingStep = (version: number): Migration => ({version, name: `000${versi
 function damage(file: string) { const fd = openSync(file, 'r+'); try { writeSync(fd, Buffer.alloc(4096, 0xa5), 0, 4096, 8192); } finally { closeSync(fd); } }
 
 describe('REG-013/REG-007 verified backups', () => {
+  it('copies preparing/ready pins, generations and cursors consistently through the existing verified backup and digest',async()=>{
+    const file=ws.copyFixture('schema-v4-representative.sqlite'),conn=await openConnection(ws.options({path:file})),storage=tracked(conn),db=conn.writer();
+    const tripUuid='70000000-0000-4000-8000-000000000001',readyId=randomUUID(),preparingId=randomUUID();
+    db.prepare('UPDATE logical_memberships SET joined_after_revision=joined_after_revision WHERE trip_ref=1').run();
+    ok(storage.beginUploadProjection({pinId:readyId,tripUuid}));const ready=ok(storage.advanceUploadProjection(readyId));expect(ready.state).toBe('ready');
+    db.transaction(()=>{for(let i=0;i<160;i++)db.exec("INSERT INTO completeness_intervals(plugin_session_ref,trip_ref,kind,created_utc_ms) VALUES(1,1,'sample-loss',1000)");})();revise(db,1n);
+    ok(storage.beginUploadProjection({pinId:preparingId,tripUuid}));const preparing=ok(storage.advanceUploadProjection(preparingId));expect(preparing.state).toBe('preparing');
+    const source=contentDigest(db);expect(source.rowCounts.upload_projection_pins).toBe(2);expect(source.rowCounts.upload_projection_evidence_versions).toBe(1);
+    expect(source.rowCounts.upload_projection_intervals).toBeGreaterThan(0);
+    const backup=await backupBeforeMigration(db,{file,backupsDirectory:ws.backups,databaseUuid:storage.summary.databaseUuid,fromVersion:5,now:ws.now,appVersion:'0.1.0-test'});
+    const copy=path.join(ws.backups,backup.fileName);expect(digestOf(copy)).toEqual(source);
+    const manifest=JSON.parse(readFileSync(copy.replace(/\.sqlite$/,'.json'),'utf8'));expect(manifest.rowCounts).toEqual(source.rowCounts);expect(manifest.logicalDigest).toBe(source.logicalDigest);
+    const copied=tracked(await openConnection(ws.options({path:copy})));
+    expect(ok(copied.getUploadProjectionPreparation(readyId))).toEqual(ready);expect(ok(copied.getUploadProjectionPreparation(preparingId))).toEqual(preparing);
+    expect(ok(copied.readUploadProjectionPage({snapshot:ready.projection!.snapshot,kind:'members',limit:100}))).toEqual(ok(storage.readUploadProjectionPage({snapshot:ready.projection!.snapshot,kind:'members',limit:100})));
+    // Identical durable cursors on a consistent database copy resume to identical complete metadata.
+    let original=preparing;
+    while(original.state==='preparing'){original=ok(storage.advanceUploadProjection(preparingId));const replica=ok(copied.advanceUploadProjection(preparingId));expect(replica).toEqual(original);}
+    expect(original.projection!.totals.intervals).toBe(160);copied.close();storage.close();
+  });
   it('refuses a damaged backup copy and migrates nothing', async () => {
     const copy = ws.copyFixture(REPRESENTATIVE), before = digestOf(copy);
     const error = failed(await openStorage(ws.options({path: copy, migrations: upTo(2), testHooks: {afterCopy: damage}})), 'BACKUP_FAILED');
@@ -91,7 +119,7 @@ describe('REG-013 restore into a new file', () => {
     const manifest = await migratedWithBackup(), target = path.join(ws.directory, 'restored.sqlite');
     const storage = ok(await restoreBackup(manifest, ws.options({path: target, backupsDirectory: path.join(ws.directory, 'restored-backups'), migrations: upTo(5)})));
     expect(storage.summary).toMatchObject({schemaVersion: 5, migratedFrom: 1});
-    expectRepresentative(storage, target, {schema_migrations: 5, test_v5: 0, logical_memberships: 1, logical_progress: 0,
+    expectRepresentative(storage, target, {schema_migrations: 5, upload_projection_pins:0,upload_projection_members:0,upload_projection_configurations:0,upload_projection_intervals:0,upload_projection_evidence_versions:0, logical_memberships: 1, logical_progress: 0,
       logical_projection_states: 1, logical_revisions: 1, logical_trips: 1, logical_trucks: 0, observation_closes: 0});
   });
   it('refuses synthetic data at the production history path before writing anything', async () => {

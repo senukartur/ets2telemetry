@@ -28,6 +28,12 @@ export interface UploadProjection {
   bounds: {members: string; events: string; gaps: string; samples: string; intervals: string; accountingHead: string | null};
   totals: Record<UploadPageKind, number>; facts: UploadFacts;
 }
+export interface UploadProjectionBegin {pinId: string; tripUuid: string}
+export interface UploadProjectionPreparation {
+  pinId: string; state: 'preparing' | 'ready' | 'invalidated' | 'releasing' | 'released';
+  /** Rows examined or empty-stream/phase transitions in the last committed turn, at most 100. */
+  examined: number; projection: UploadProjection | null;
+}
 export interface UploadProjectionPageQuery {snapshot: string; kind: UploadPageKind; cursor?: string; limit: number}
 export interface UploadProjectionPage {snapshot: string; kind: UploadPageKind; cursor: string | null; nextCursor: string | null;
   total: number; rows: (UploadMember | UploadConfiguration | UploadInterval)[]}
@@ -77,8 +83,7 @@ const readiness = one('ready','identity-pending');
 export const uploadSnapshotParts = (v: unknown): string[] | undefined => {
   if (typeof v !== 'string' || v.length > 256) return undefined;
   const p = v.split(':');
-  return p.length === 9 && p[0] === 'u1' && isUploadUuid(p[1]) && isUploadUuid(p[2]) && positive(p[3]) && p.slice(4,8).every(decimal)
-    && /^[0-9a-f]{64}$/.test(p[8]) ? p : undefined;
+  return p.length === 6 && p[0] === 'u2' && isUploadUuid(p[1]) && isUploadUuid(p[2]) && isUploadUuid(p[3]) && isUploadUuid(p[4]) && positive(p[5]) ? p : undefined;
 };
 export function isUploadPageQuery(v: unknown): v is UploadProjectionPageQuery {
   if (!record(v) || !Object.keys(v).every(k => ['snapshot','kind','cursor','limit'].includes(k)) || !uploadSnapshotParts(v.snapshot)
@@ -93,9 +98,14 @@ export function isUploadProjection(v: unknown, requested?: string): v is UploadP
     snapshot: v => !!uploadSnapshotParts(v), databaseUuid: isUploadUuid, purpose: one('history','synthetic','replay'), revision: positive,
     bounds: shape({members: decimal, events: decimal, gaps: decimal, samples: decimal, intervals: decimal, accountingHead: nullable(positive)}), totals, facts})(v)) return false;
   const p = v as UploadProjection, token = uploadSnapshotParts(p.snapshot)!;
-  return (requested === undefined || requested === p.requestedTripUuid) && token[1] === p.databaseUuid && token[2] === p.rootTripUuid && token[3] === p.revision
-    && token[4] === String(p.totals.members) && token[5] === String(p.totals.configurations) && token[6] === String(p.totals.intervals)
-    && token[7] === p.bounds.members && (p.requestedTripUuid !== p.rootTripUuid ? p.readiness === 'redirected' : p.readiness === p.rootReadiness);
+  return (requested === undefined || requested === p.requestedTripUuid) && token[1] === p.databaseUuid && token[4] === p.rootTripUuid && token[5] === p.revision && (p.requestedTripUuid !== p.rootTripUuid ? p.readiness === 'redirected' : p.readiness === p.rootReadiness);
+}
+export const isUploadProjectionBegin = (v: unknown): v is UploadProjectionBegin => shape({pinId: isUploadUuid, tripUuid: isUploadUuid})(v);
+export function isUploadPreparation(v: unknown, pinId: string): v is UploadProjectionPreparation {
+  if (!shape({pinId: one(pinId), state: one('preparing','ready','invalidated','releasing','released'), examined: v => count(v) && (v as number)<=100,
+    projection: nullable(v => isUploadProjection(v))})(v)) return false;
+  const p = v as UploadProjectionPreparation;
+  return p.state === 'ready' ? p.projection !== null && uploadSnapshotParts(p.projection.snapshot)![2] === p.pinId : p.projection === null;
 }
 const rowChecks: Record<UploadPageKind, Check> = {
   members: shape({id: positive, rawTripUuid: isUploadUuid, pluginSessionId: isUploadUuid, game: one('ets2','ats'), origin: one('game','synthetic','replay'), versions}),
@@ -105,10 +115,10 @@ const rowChecks: Record<UploadPageKind, Check> = {
 export function isUploadProjectionPage(v: unknown, query: UploadProjectionPageQuery): v is UploadProjectionPage {
   if (!isUploadPageQuery(query) || !shape({snapshot: one(query.snapshot), kind: one(query.kind), cursor: one(query.cursor ?? null), nextCursor: nullable(text), total: count,
     rows: v => Array.isArray(v) && v.length <= query.limit && v.every(rowChecks[query.kind])})(v)) return false;
-  const p = v as UploadProjectionPage, parts = uploadSnapshotParts(query.snapshot)!, total = Number(parts[4 + UPLOAD_PAGE_KINDS.indexOf(query.kind)]);
+  const p = v as UploadProjectionPage, total = p.total;
   let after = query.cursor ? BigInt(query.cursor.split(':').at(-1)!) : 0n;
   for (const row of p.rows) {if (BigInt(row.id) <= after) return false; after = BigInt(row.id);}
-  return p.total === total && p.rows.length <= total && (p.nextCursor === null || p.rows.length === query.limit
+  return p.rows.length <= total && (p.nextCursor === null || p.rows.length === query.limit
     && p.nextCursor === `${query.snapshot}:${query.kind}:${after}`);
 }
 
@@ -142,7 +152,7 @@ export function mapUploadProjection(pin: UploadProjection, pages: readonly Uploa
   for (const kind of UPLOAD_PAGE_KINDS) {
     let cursor: string | undefined, done = false;
     for (const page of pages.filter(p => p.kind === kind)) {
-      if (done || !isUploadProjectionPage(page, {snapshot: pin.snapshot, kind, cursor, limit: Math.max(1, page.rows.length)})) return hold('evidence-incomplete');
+      if (done || page.total !== pin.totals[kind] || !isUploadProjectionPage(page, {snapshot: pin.snapshot, kind, cursor, limit: Math.max(1, page.rows.length)})) return hold('evidence-incomplete');
       collected[kind].push(...page.rows); cursor = page.nextCursor ?? undefined; done = page.nextCursor === null;
     }
     if (!done || collected[kind].length !== pin.totals[kind]) return hold('evidence-incomplete');

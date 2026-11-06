@@ -80,7 +80,10 @@ export function serveStorage(port: HostPort, testOptions: HostTestOptions = {}):
     case 'listTrips': return storage.listTrips(command.page);
     case 'listSamples': return storage.listSamples(command.scope, command.page);
     case 'storageInfo': return storage.storageInfo();
-    case 'pinUploadProjection': return storage.pinUploadProjection(command.tripUuid);
+    case 'beginUploadProjection': return storage.beginUploadProjection(command.input);
+    case 'advanceUploadProjection': return storage.advanceUploadProjection(command.pinId);
+    case 'getUploadProjectionPreparation': return storage.getUploadProjectionPreparation(command.pinId);
+    case 'releaseUploadProjection': return storage.releaseUploadProjection(command.pinId);
     case 'readUploadProjectionPage': return storage.readUploadProjectionPage(command.query);
     // ET-016: only the parsed fields are forwarded; the parser already refused any other key.
     case 'journalTrips': return storage.journalTrips(command.query === undefined ? undefined

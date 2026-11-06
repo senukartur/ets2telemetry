@@ -1,15 +1,15 @@
-import {createHash} from 'node:crypto';
+import {randomUUID} from 'node:crypto';
 import type Database from 'better-sqlite3';
 import type {Available, Money} from '../../../contracts/src/protocol-v1';
 import {fromAvailability, fromU64Key, toReal, toSafeNumber} from '../codec';
 import {fail} from '../errors';
-import {isUploadPageQuery, isUploadProjection, isUploadProjectionPage, isUploadUuid, uploadSnapshotParts,
-  type QualifiedOccurrence, type UploadConfiguration, type UploadFacts, type UploadInterval, type UploadMember, type UploadPageKind,
-  type UploadProjection, type UploadProjectionPage, type UploadProjectionPageQuery, type UploadReadiness, type UploadVersions} from '../upload-projection';
+import {isUploadPageQuery, isUploadProjection, isUploadProjectionPage, isUploadUuid, isUploadProjectionBegin, uploadSnapshotParts,
+  type QualifiedOccurrence, type UploadConfiguration, type UploadFacts, type UploadInterval, type UploadMember,
+  type UploadProjection, type UploadProjectionBegin, type UploadProjectionPreparation, type UploadProjectionPage, type UploadProjectionPageQuery, type UploadReadiness, type UploadVersions} from '../upload-projection';
 import type {StorageConnection} from './connection';
 import {jobValues} from './journal';
 import {snapshot, type LogicalSnapshot} from './logical-snapshot';
-import {ACCOUNTING_PATH, type LogicalRow} from './logical-trips';
+import {ACCOUNTING_PATH, encodeRow, decodeRow, type LogicalRow} from './logical-trips';
 
 const get = (db: Database.Database, sql: string, ...args: unknown[]) => db.prepare(sql).get(...args) as LogicalRow | undefined;
 const all = (db: Database.Database, sql: string, ...args: unknown[]) => db.prepare(sql).all(...args) as LogicalRow[];
@@ -17,15 +17,6 @@ const required = (row: LogicalRow | undefined): LogicalRow => {if (!row) fail('D
 const n = (value: unknown) => toSafeNumber(value, Number.MAX_SAFE_INTEGER, 0);
 const av = (row: LogicalRow, column: string): Available<number> => fromAvailability(row[column],row[`${column}_state`],toReal);
 const text = (row: LogicalRow, column: string): Available<string> => fromAvailability(row[column],row[`${column}_state`],String);
-const MEMBERS = `FROM logical_snapshot_memberships x JOIN trips t ON t.id=x.trip_ref
-  WHERE x.logical_ref=@logical AND x.trip_ref<=@members AND x.from_revision<@revision AND (x.through_revision IS NULL OR x.through_revision>=@revision)`;
-const scope = (snap: LogicalSnapshot) => ({logical: snap.logical, members: snap.members, revision: snap.revision});
-const trailerSql = `FROM logical_snapshot_memberships x JOIN trips t ON t.id=x.trip_ref
-  JOIN trip_trailers a ON a.trip_ref=t.id JOIN trailer_configurations c ON c.id=a.trailer_configuration_ref JOIN events e ON e.id=c.event_ref
-  WHERE x.logical_ref=@logical AND x.trip_ref<=@members AND x.from_revision<@revision AND (x.through_revision IS NULL OR x.through_revision>=@revision) AND e.id<=@events`;
-const intervalSql = `FROM logical_snapshot_memberships x JOIN trips t ON t.id=x.trip_ref JOIN completeness_intervals c ON c.trip_ref=t.id
-  WHERE x.logical_ref=@logical AND x.trip_ref<=@members AND x.from_revision<@revision AND (x.through_revision IS NULL OR x.through_revision>=@revision) AND c.id<=@intervals`;
-
 function current(db: Database.Database, requested: string): {root: string; readiness: UploadReadiness} {
   const member = get(db, `SELECT m.logical_ref FROM trips t JOIN logical_memberships m ON m.trip_ref=t.id WHERE t.trip_uuid=?`,requested);
   if (!member) fail('UNKNOWN_TRIP');
@@ -34,19 +25,6 @@ function current(db: Database.Database, requested: string): {root: string; readi
   // An abandoned singleton is retired too. Self-membership must be established before considering retirement/proof.
   if (root.logical_ref !== member.logical_ref) fail('DATABASE_CORRUPT');
   return {root: String(root.trip_uuid), readiness: root.proof_json !== null || root.retired === 1n || root.outcome !== 'open' ? 'ready' : 'identity-pending'};
-}
-function totals(db: Database.Database, snap: LogicalSnapshot): UploadProjection['totals'] {
-  return {members: n(required(get(db,`SELECT count(*) AS total ${MEMBERS}`,scope(snap))).total),
-    configurations: n(required(get(db,`SELECT count(DISTINCT e.id) AS total ${trailerSql}`,{...scope(snap),events:snap.events})).total),
-    intervals: n(required(get(db,`SELECT count(*) AS total ${intervalSql}`,{...scope(snap),intervals:snap.intervals})).total)};
-}
-function configurationLinks(db: Database.Database, snap: LogicalSnapshot): string {
-  const hash = createHash('sha256');
-  // Stream every qualified association: distinct event counts do not detect a new owner of an existing event.
-  for (const row of db.prepare(`SELECT e.id,t.id AS trip_ref ${trailerSql} ORDER BY e.id,t.id`).iterate({...scope(snap),events:snap.events}) as Iterable<LogicalRow>) {
-    hash.update(`${String(row.id)}:${String(row.trip_ref)};`);
-  }
-  return hash.digest('hex');
 }
 function versions(row: LogicalRow): UploadVersions {
   return {nativeProtocol: {major: 1, minor: n(row.protocol_minor)}, sdkArchive: {available:true,value:String(row.sdk_archive)},
@@ -60,11 +38,11 @@ function occurrence(db: Database.Database, ref: unknown, rawTripUuid: string, sn
   const utcMs = value !== null && value <= 253_402_300_799_999n ? Number(value) : null;
   return {pluginSessionId: String(e.plugin_session_uuid), rawTripUuid, eventSeq: fromU64Key(e.event_seq), type: String(e.type), utcMs};
 }
-function facts(db: Database.Database, snap: LogicalSnapshot): UploadFacts {
+function facts(db: Database.Database, snap: LogicalSnapshot, pin: LogicalRow): UploadFacts {
   const row = snap.row, root = required(get(db,'SELECT trip_uuid FROM trips WHERE id=?',snap.logical));
   const openingSession = required(get(db,'SELECT plugin_session_uuid FROM plugin_sessions WHERE id=?',row.plugin_session_ref));
   const job = required(get(db,'SELECT * FROM job_configurations WHERE id=?',row.job_configuration_ref));
-  const outcomeRaw = row.outcome_event_ref === null ? undefined : get(db,`SELECT t.trip_uuid ${MEMBERS} AND t.outcome_event_ref=@outcome`,{...scope(snap),outcome:row.outcome_event_ref});
+  const outcomeRaw = pin.outcome_trip_ref === null ? undefined : required(get(db,'SELECT trip_uuid FROM trips WHERE id=?',pin.outcome_trip_ref));
   if (row.outcome_event_ref !== null && !outcomeRaw) fail('DATABASE_CORRUPT');
   const outcome = occurrence(db,row.outcome_event_ref,String(outcomeRaw?.trip_uuid ?? root.trip_uuid),snap);
   const event = row.outcome_event_ref === null ? undefined : required(get(db,'SELECT payload_json FROM events WHERE id=?',row.outcome_event_ref));
@@ -74,8 +52,7 @@ function facts(db: Database.Database, snap: LogicalSnapshot): UploadFacts {
   if (row.outcome !== 'open' && row.closed_by_session_ref !== null && row.closed_by_event_seq !== null) {
     // Closed raw rows cannot close again. Membership and carrier equality select the member of this revision,
     // independently of a gameplay outcome or the mutable current logical head.
-    const closed = required(get(db,`SELECT t.id,t.trip_uuid ${MEMBERS} AND t.closed_by_session_ref=@session AND t.closed_by_event_seq=@seq ORDER BY t.id DESC LIMIT 1`,
-      {...scope(snap),session:row.closed_by_session_ref,seq:row.closed_by_event_seq}));
+    const closed = required(get(db,'SELECT id,trip_uuid FROM trips WHERE id=?',pin.close_trip_ref));
     const observation = get(db,'SELECT 1 FROM observation_closes WHERE trip_ref=?',closed.id);
     const carrier = observation ? undefined : get(db,'SELECT id FROM events WHERE plugin_session_id=? AND event_seq=? AND id<=?',row.closed_by_session_ref,row.closed_by_event_seq,snap.events);
     // A checkpoint/gap carrier is not an observed event. Its label must not become actual terminal time.
@@ -98,67 +75,167 @@ function facts(db: Database.Database, snap: LogicalSnapshot): UploadFacts {
       || outcome?.utcMs !== null && outcome?.utcMs !== undefined && row.ended_utc_ms !== null && outcome.utcMs !== n(row.ended_utc_ms)};
 }
 
-export function pinUploadProjection(conn: StorageConnection, tripUuid: string): UploadProjection {
-  if (!isUploadUuid(tripUuid)) fail('INVALID_INPUT');
-  const db = conn.reader();
+const generation = (db: Database.Database, root: unknown) => get(db,'SELECT generation FROM upload_projection_evidence_versions WHERE root_ref=?',root)?.generation ?? 0n;
+const retained = (db: Database.Database, pinId: string) => {const pin=get(db,'SELECT * FROM upload_projection_pins WHERE pin_id=?',pinId);if(!pin)fail('INVALID_INPUT');return pin;};
+function status(pin: LogicalRow): UploadProjectionPreparation {
+  return {pinId:String(pin.pin_id),state:pin.state as UploadProjectionPreparation['state'],examined:n(pin.examined),
+    projection:pin.state==='ready'?JSON.parse(String(pin.metadata_json)) as UploadProjection:null};
+}
+const checkPinId = (pinId: string) => {if (!isUploadUuid(pinId)) fail('INVALID_INPUT');};
+
+export function beginUploadProjection(conn: StorageConnection, input: UploadProjectionBegin): UploadProjectionPreparation {
+  if (!isUploadProjectionBegin(input)) fail('INVALID_INPUT');
+  const db=conn.writer();
   return db.transaction(() => {
-    const state = current(db,tripUuid), snap = snapshot(db,state.root), counts = totals(db,snap);
-    if (!counts.members) fail('DATABASE_CORRUPT');
-    const info = required(get(db,'SELECT database_uuid,purpose FROM database_info WHERE id=1'));
-    const token = `u1:${String(info.database_uuid)}:${state.root}:${snap.revision}:${counts.members}:${counts.configurations}:${counts.intervals}:${snap.members}:${configurationLinks(db,snap)}`;
-    const value: UploadProjection = {requestedTripUuid:tripUuid, rootTripUuid:state.root, readiness:state.root===tripUuid?state.readiness:'redirected',rootReadiness:state.readiness,
-      snapshot:token,databaseUuid:String(info.database_uuid),purpose:info.purpose as UploadProjection['purpose'],revision:String(snap.revision),
-      bounds:{members:String(snap.members),events:String(snap.events),gaps:String(snap.gaps),samples:String(snap.samples),intervals:String(snap.intervals),accountingHead:snap.head===null?null:String(snap.head)},
-      totals:counts,facts:facts(db,snap)};
-    if (!isUploadProjection(value)) fail('DATABASE_CORRUPT');
-    return value;
+    const prior=get(db,'SELECT * FROM upload_projection_pins WHERE pin_id=?',input.pinId);
+    if(prior){if(prior.requested_trip_uuid!==input.tripUuid)fail('INVALID_INPUT');return status(prior);}
+    // The header limit also includes invalidated and partially released preparations.
+    if(all(db,'SELECT pin_id FROM upload_projection_pins LIMIT 8').length===8)fail('STORAGE_BUSY');
+    const state=current(db,input.tripUuid);
+    const root=required(get(db,'SELECT id FROM trips WHERE trip_uuid=?',state.root));
+    // Never invoke the Journal's legacy revision repair in a preparation turn.
+    if(!get(db,'SELECT id FROM logical_revisions WHERE logical_ref=? ORDER BY id DESC LIMIT 1',root.id))fail('INVALID_INPUT');
+    const snap=snapshot(db,state.root),info=required(get(db,'SELECT database_uuid,purpose FROM database_info WHERE id=1'));
+    const incarnation=randomUUID();
+    const initial={requestedTripUuid:input.tripUuid,rootTripUuid:state.root,readiness:state.root===input.tripUuid?state.readiness:'redirected',rootReadiness:state.readiness,
+      snapshot:`u2:${String(info.database_uuid)}:${input.pinId}:${incarnation}:${state.root}:${snap.revision}`,databaseUuid:String(info.database_uuid),purpose:info.purpose,revision:String(snap.revision),
+      bounds:{members:String(snap.members),events:String(snap.events),gaps:String(snap.gaps),samples:String(snap.samples),intervals:String(snap.intervals),accountingHead:snap.head===null?null:String(snap.head)}};
+    db.prepare(`INSERT INTO upload_projection_pins(pin_id,incarnation_uuid,requested_trip_uuid,root_ref,revision_ref,evidence_generation,state,phase,snapshot_json)
+      VALUES(?,?,?,?,?,?,'preparing','current',?)`).run(input.pinId,incarnation,input.tripUuid,snap.logical,snap.revision,generation(db,snap.logical),encodeRow({snap,initial}));
+    return status(retained(db,input.pinId));
+  })();
+}
+export function getUploadProjectionPreparation(conn: StorageConnection, pinId: string): UploadProjectionPreparation {
+  checkPinId(pinId);const pin=get(conn.reader(),'SELECT * FROM upload_projection_pins WHERE pin_id=?',pinId);
+  if(!pin)fail('INVALID_INPUT');return status(pin);
+}
+
+/** Each iteration consumes one input row or an empty-stream/phase transition, including rejected inputs. */
+export function advanceUploadProjection(conn: StorageConnection, pinId: string, hooks?: {beforeCommit?: () => void}): UploadProjectionPreparation {
+  checkPinId(pinId);const db=conn.writer();
+  return db.transaction(() => {
+    const pin=retained(db,pinId);
+    if(pin.state!=='preparing')return status(pin);
+    const saved=decodeRow(pin.snapshot_json),snap=saved.snap as LogicalSnapshot;
+    let examined=0;
+    if(generation(db,pin.root_ref)!==pin.evidence_generation)pin.state='invalidated';
+    while(pin.state==='preparing' && examined<100){
+      examined++;
+      if(pin.phase==='current'||pin.phase==='previous'){
+        const previous=pin.phase==='previous',column=previous?'previous_logical_ref':'logical_ref';
+        const m=get(db,`SELECT trip_ref,joined_after_revision FROM logical_memberships WHERE ${column}=? AND trip_ref>? AND trip_ref<=? ORDER BY trip_ref LIMIT 1`,pin.root_ref,pin.member_after,snap.members);
+        if(!m){pin.phase=previous?'configurations':'previous';pin.member_after=0n;continue;}
+        pin.member_after=m.trip_ref;
+        const joined=m.joined_after_revision as bigint|null;
+        if(previous ? joined===null || joined<snap.revision : (joined??0n)>=snap.revision)continue;
+        const t=required(get(db,'SELECT * FROM trips WHERE id=?',m.trip_ref));
+        const session=required(get(db,'SELECT * FROM plugin_sessions WHERE id=?',t.plugin_session_ref));
+        const row:UploadMember={id:String(t.id),rawTripUuid:String(t.trip_uuid),pluginSessionId:String(session.plugin_session_uuid),game:session.game as UploadMember['game'],origin:session.origin as UploadMember['origin'],versions:versions(session)};
+        const inserted=db.prepare('INSERT OR IGNORE INTO upload_projection_members VALUES(?,?,?)').run(pinId,t.id,JSON.stringify(row));
+        pin.member_count=BigInt(String(pin.member_count))+BigInt(inserted.changes);
+        if(t.outcome_event_ref!==null && t.outcome_event_ref===snap.row.outcome_event_ref && (pin.outcome_trip_ref===null || (t.id as bigint)<(pin.outcome_trip_ref as bigint)))pin.outcome_trip_ref=t.id;
+        if(snap.row.outcome!=='open' && t.closed_by_session_ref!==null && t.closed_by_session_ref===snap.row.closed_by_session_ref && t.closed_by_event_seq===snap.row.closed_by_event_seq
+          && (pin.close_trip_ref===null || (t.id as bigint)>(pin.close_trip_ref as bigint)))pin.close_trip_ref=t.id;
+      }else if(pin.phase==='configurations'||pin.phase==='intervals'){
+        // source_after retains the active copied member; member_after is the last completed member.
+        if(pin.source_after===0n){
+          const member=get(db,'SELECT trip_ref FROM upload_projection_members WHERE pin_ref=? AND trip_ref>? ORDER BY trip_ref LIMIT 1',pinId,pin.member_after);
+          if(!member){pin.phase=pin.phase==='configurations'?'intervals':'finalize';pin.member_after=0n;pin.item_after=0n;continue;}
+          pin.source_after=member.trip_ref;pin.item_after=0n;continue;
+        }
+        const member=required(get(db,'SELECT trip_uuid,plugin_session_ref FROM trips WHERE id=?',pin.source_after));
+        if(pin.phase==='configurations'){
+          const link=get(db,'SELECT trailer_configuration_ref FROM trip_trailers WHERE trip_ref=? AND trailer_configuration_ref>? ORDER BY trailer_configuration_ref LIMIT 1',pin.source_after,pin.item_after);
+          if(!link){pin.member_after=pin.source_after;pin.source_after=0n;continue;}
+          pin.item_after=link.trailer_configuration_ref;
+          const c=required(get(db,'SELECT * FROM trailer_configurations WHERE id=?',link.trailer_configuration_ref));
+          if((c.event_ref as bigint)>snap.events)continue;
+          const event=required(get(db,'SELECT plugin_session_id FROM events WHERE id=?',c.event_ref));
+          const qualified=event.plugin_session_id===member.plugin_session_ref?1:0,uuid=String(member.trip_uuid);
+          const prior=get(db,'SELECT qualified,raw_trip_uuid FROM upload_projection_configurations WHERE pin_ref=? AND event_ref=?',pinId,c.event_ref);
+          if(prior && (Number(prior.qualified)>qualified || Number(prior.qualified)===qualified && String(prior.raw_trip_uuid)<=uuid))continue;
+          const row:UploadConfiguration={id:String(c.event_ref),occurrence:occurrence(db,c.event_ref,uuid,snap)!,index:n(c.slot_index),idValue:text(c,'trailer_id'),bodyType:text(c,'body_type'),chainType:text(c,'chain_type')};
+          db.prepare(`INSERT INTO upload_projection_configurations VALUES(?,?,?,?,?) ON CONFLICT(pin_ref,event_ref)
+            DO UPDATE SET qualified=excluded.qualified,raw_trip_uuid=excluded.raw_trip_uuid,row_json=excluded.row_json`).run(pinId,c.event_ref,qualified,uuid,JSON.stringify(row));
+          if(!prior)pin.configuration_count=BigInt(String(pin.configuration_count))+1n;
+        }else{
+          const c=get(db,'SELECT id,kind,plugin_session_ref FROM completeness_intervals WHERE trip_ref=? AND id>? AND id<=? ORDER BY id LIMIT 1',pin.source_after,pin.item_after,snap.intervals);
+          if(!c){pin.member_after=pin.source_after;pin.source_after=0n;continue;}
+          pin.item_after=c.id;
+          const session=required(get(db,'SELECT plugin_session_uuid FROM plugin_sessions WHERE id=?',c.plugin_session_ref));
+          const row:UploadInterval={id:String(c.id),kind:c.kind as UploadInterval['kind'],rawTripUuid:String(member.trip_uuid),pluginSessionId:String(session.plugin_session_uuid)};
+          db.prepare('INSERT INTO upload_projection_intervals VALUES(?,?,?)').run(pinId,c.id,JSON.stringify(row));
+          pin.interval_count=BigInt(String(pin.interval_count))+1n;
+        }
+      }else{
+        if(pin.member_count===0n)fail('DATABASE_CORRUPT');
+        const value={...saved.initial as object,totals:{members:n(pin.member_count),configurations:n(pin.configuration_count),intervals:n(pin.interval_count)},facts:facts(db,snap,pin)};
+        if(!isUploadProjection(value))fail('DATABASE_CORRUPT');
+        pin.metadata_json=JSON.stringify(value);pin.state='ready';
+      }
+    }
+    if(generation(db,pin.root_ref)!==pin.evidence_generation){pin.state='invalidated';pin.metadata_json=null;}
+    db.prepare(`UPDATE upload_projection_pins SET state=@state,phase=@phase,member_after=@member_after,item_after=@item_after,source_after=@source_after,
+      member_count=@member_count,configuration_count=@configuration_count,interval_count=@interval_count,outcome_trip_ref=@outcome_trip_ref,
+      close_trip_ref=@close_trip_ref,metadata_json=@metadata_json,examined=@examined WHERE pin_id=@pin_id`).run({...pin,examined});
+    hooks?.beforeCommit?.();
+    return status({...pin,examined});
   })();
 }
 
-function readPinned(db: Database.Database, token: string): LogicalSnapshot {
-  const p = uploadSnapshotParts(token);
-  if (!p || required(get(db,'SELECT database_uuid FROM database_info WHERE id=1')).database_uuid !== p[1]) fail('INVALID_INPUT');
-  const snap = snapshot(db,p[2],BigInt(p[3])), counts = totals(db,snap);
-  // Later attachment of older evidence (including count-stable links) or staging deletion invalidates the handle.
-  if (p[4] !== String(counts.members) || p[5] !== String(counts.configurations) || p[6] !== String(counts.intervals) || p[7] !== String(snap.members)
-    || p[8] !== configurationLinks(db,snap)) fail('INVALID_INPUT');
-  return snap;
+function readPinned(db: Database.Database, token: string): LogicalRow {
+  const p=uploadSnapshotParts(token);
+  if(!p || required(get(db,'SELECT database_uuid FROM database_info WHERE id=1')).database_uuid!==p[1])fail('INVALID_INPUT');
+  const pin=get(db,'SELECT * FROM upload_projection_pins WHERE pin_id=?',p[2]);
+  if(!pin || pin.incarnation_uuid!==p[3] || pin.state!=='ready' || (JSON.parse(String(pin.metadata_json)) as UploadProjection).snapshot!==token)fail('INVALID_INPUT');
+  return pin;
 }
-
-/** Storage-local comparison, for use inside a future owner/freeze transaction. A detached true is not publication permission. */
-export function recheckUploadProjection(db: Database.Database, pin: UploadProjection): boolean {
-  if (!isUploadProjection(pin)) fail('INVALID_INPUT');
-  const info = required(get(db,'SELECT database_uuid FROM database_info WHERE id=1'));
-  if (info.database_uuid !== pin.databaseUuid) return false;
-  const trip = get(db,'SELECT id FROM trips WHERE trip_uuid=?',pin.requestedTripUuid);
-  if (!trip) return false;
-  const state = current(db,pin.requestedTripUuid);
-  const snap = snapshot(db,state.root);
-  return state.root === pin.rootTripUuid && state.readiness === 'ready' && pin.rootReadiness === 'ready'
-    && String(snap.revision) === pin.revision && configurationLinks(db,snap) === uploadSnapshotParts(pin.snapshot)![8];
+/** Storage-local point checks for a future atomic owner/freeze transaction. Detached true grants no publication authority. */
+export function recheckUploadProjection(db: Database.Database, projection: UploadProjection): boolean {
+  if(!isUploadProjection(projection))fail('INVALID_INPUT');
+  const p=uploadSnapshotParts(projection.snapshot)!;
+  if(required(get(db,'SELECT database_uuid FROM database_info WHERE id=1')).database_uuid!==p[1])return false;
+  const pin=get(db,'SELECT * FROM upload_projection_pins WHERE pin_id=?',p[2]);
+  if(!pin || pin.incarnation_uuid!==p[3] || pin.state!=='ready' || pin.metadata_json!==JSON.stringify(projection))return false;
+  const state=current(db,projection.requestedTripUuid);
+  const latest=get(db,'SELECT id FROM logical_revisions WHERE logical_ref=? ORDER BY id DESC LIMIT 1',pin.root_ref);
+  return state.root===projection.rootTripUuid && state.readiness==='ready' && projection.rootReadiness==='ready'
+    && latest?.id===pin.revision_ref && generation(db,pin.root_ref)===pin.evidence_generation;
 }
-
+const copies={members:['upload_projection_members','trip_ref'],configurations:['upload_projection_configurations','event_ref'],intervals:['upload_projection_intervals','interval_ref']} as const;
 export function readUploadProjectionPage(conn: StorageConnection, query: UploadProjectionPageQuery): UploadProjectionPage {
-  if (!isUploadPageQuery(query)) fail('INVALID_INPUT');
-  const db = conn.reader();
+  if(!isUploadPageQuery(query))fail('INVALID_INPUT');
+  const db=conn.reader();
   return db.transaction(() => {
-    const snap = readPinned(db,query.snapshot), after = query.cursor ? BigInt(query.cursor.split(':').at(-1)!) : 0n;
-    const params = {...scope(snap),after,limit:query.limit+1};
-    let rows: (UploadMember|UploadConfiguration|UploadInterval)[];
-    switch (query.kind) {
-    case 'members': rows = all(db,`SELECT s.*,t.id AS member_id,t.trip_uuid ${MEMBERS.replace('WHERE','JOIN plugin_sessions s ON s.id=t.plugin_session_ref WHERE')} AND t.id>@after ORDER BY t.id LIMIT @limit`,params)
-      .map(r => ({id:String(r.member_id),rawTripUuid:String(r.trip_uuid),pluginSessionId:String(r.plugin_session_uuid),game:r.game as UploadMember['game'],origin:r.origin as UploadMember['origin'],versions:versions(r)})); break;
-    // Prefer a linked member in the event's session. An unqualified fallback retains evidence for a mapper hold.
-    case 'configurations': rows = all(db,`SELECT c.*,coalesce(min(CASE WHEN t.plugin_session_ref=e.plugin_session_id THEN t.trip_uuid END),min(t.trip_uuid)) AS trip_uuid ${trailerSql} AND c.event_ref>@after GROUP BY c.event_ref ORDER BY c.event_ref LIMIT @limit`,{...params,events:snap.events})
-      .map(r => ({id:String(r.event_ref),occurrence:occurrence(db,r.event_ref,String(r.trip_uuid),snap)!,index:n(r.slot_index),idValue:text(r,'trailer_id'),bodyType:text(r,'body_type'),chainType:text(r,'chain_type')})); break;
-    case 'intervals': rows = all(db,`SELECT c.id,c.kind,t.trip_uuid,s.plugin_session_uuid ${intervalSql.replace('WHERE','JOIN plugin_sessions s ON s.id=c.plugin_session_ref WHERE')} AND c.id>@after ORDER BY c.id LIMIT @limit`,{...params,intervals:snap.intervals})
-      .map(r => ({id:String(r.id),kind:r.kind as UploadInterval['kind'],rawTripUuid:String(r.trip_uuid),pluginSessionId:String(r.plugin_session_uuid)})); break;
+    const pin=readPinned(db,query.snapshot),projection=JSON.parse(String(pin.metadata_json)) as UploadProjection;
+    const [table,key]=copies[query.kind],after=query.cursor?BigInt(query.cursor.split(':').at(-1)!):0n;
+    const rows=all(db,`SELECT row_json FROM ${table} WHERE pin_ref=? AND ${key}>? ORDER BY ${key} LIMIT ?`,pin.pin_id,after,query.limit+1)
+      .map(r=>JSON.parse(String(r.row_json)) as UploadMember|UploadConfiguration|UploadInterval);
+    const more=rows.length>query.limit;if(more)rows.pop();
+    const page:UploadProjectionPage={snapshot:query.snapshot,kind:query.kind,cursor:query.cursor??null,nextCursor:more?`${query.snapshot}:${query.kind}:${rows.at(-1)!.id}`:null,total:projection.totals[query.kind],rows};
+    if(!isUploadProjectionPage(page,query))fail('DATABASE_CORRUPT');return page;
+  })();
+}
+export function releaseUploadProjection(conn: StorageConnection, pinId: string, hooks?: {beforeCommit?: () => void}): UploadProjectionPreparation {
+  checkPinId(pinId);const db=conn.writer();
+  return db.transaction(() => {
+    const pin=get(db,'SELECT * FROM upload_projection_pins WHERE pin_id=?',pinId);
+    let examined=0;
+    if(pin){
+      db.prepare("UPDATE upload_projection_pins SET state='releasing',metadata_json=NULL WHERE pin_id=?").run(pinId);
+      let complete=true;
+      for(const [table,key] of Object.values(copies)){
+        const rows=all(db,`SELECT ${key} AS id FROM ${table} WHERE pin_ref=? ORDER BY ${key} LIMIT ?`,pinId,100-examined);
+        for(const row of rows){db.prepare(`DELETE FROM ${table} WHERE pin_ref=? AND ${key}=?`).run(pinId,row.id);examined++;}
+        if(rows.length===0)examined++;
+        // No extra existence probe after exhausting the budget: retain the header until the next call.
+        if(examined===100){complete=false;break;}
+      }
+      if(complete){db.prepare('DELETE FROM upload_projection_pins WHERE pin_id=?').run(pinId);examined++;}
+      else db.prepare('UPDATE upload_projection_pins SET examined=? WHERE pin_id=?').run(examined,pinId);
+      hooks?.beforeCommit?.();
+      if(!complete)return {pinId,state:'releasing' as const,examined,projection:null};
     }
-    const more = rows.length > query.limit;
-    if (more) rows.pop();
-    const kind: UploadPageKind = query.kind, total = Number(uploadSnapshotParts(query.snapshot)![4+['members','configurations','intervals'].indexOf(kind)]);
-    const page: UploadProjectionPage = {snapshot:query.snapshot,kind,cursor:query.cursor??null,nextCursor:more?`${query.snapshot}:${kind}:${rows.at(-1)!.id}`:null,total,rows};
-    if (!isUploadProjectionPage(page,query)) fail('DATABASE_CORRUPT');
-    return page;
+    return {pinId,state:'released' as const,examined,projection:null};
   })();
 }
