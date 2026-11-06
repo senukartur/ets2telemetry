@@ -25,7 +25,7 @@ Compatibility with either game in single-player and TruckersMP is required but h
 - Explicit handling of pauses, disconnections, late attachment, save loading, and incomplete recordings.
 - Tray operation so closing the main window does not stop recording.
 
-Exclusive fullscreen, rendering hooks, and arbitrary game memory reads are outside the MVP. Website development, accounts, company permissions, server synchronization, and online reporting belong to a later phase. Visual design is deferred until the telemetry path works.
+Exclusive fullscreen, rendering hooks, and arbitrary game memory reads are outside the MVP. Planned upload integration uses the existing VTC Dashboard for accounts, company permissions and online reports; the local application remains usable offline. Visual design follows the [UI specification](docs/design/ui-spec.md).
 
 ## Working architecture
 

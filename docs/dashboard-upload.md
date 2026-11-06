@@ -21,7 +21,7 @@ There is no server-to-client history download, restoration or import, including 
 | Storage | [Single storage worker](storage.md), schema v4 logical memberships, immutable revisions and accounting snapshots | Private projection reads, owner bindings, durable discovery/materialization/queue/receipt commands and an additive migration |
 | Journal | Logical trip UUIDs and revision-bound provenance | Upload status keyed to the agreed source identity; no renderer DTO/export reused as an upload payload |
 | Electron main | Supervision, narrow preload, channel/data-root separation | Protected token adapter, fixed-origin configuration and validated connection/status IPC |
-| UI | [Account and sync design](design/ui-spec.md#56-account-and-sync-account-server-phase) | Connection confirmation, safe status and errors; ET-032 owns presentation |
+| UI | [Account and sync design](design/ui-spec.md#56-account-and-sync-account-dashboard-upload) | Connection confirmation, safe status and errors; ET-032 owns presentation |
 
 `getTrip`/`listTrips` are raw recorder reads; Journal queries project logical groups. Neither API is a durable global upload cursor. Journal detail limits (ten trailer configurations and fifty intervals) do not establish complete rule context. Existing snapshot cursors fix a trip/revision, not the initial upload scan. Do not derive correctness from `updatedUtcMs`, UI ordering or polling alone.
 
@@ -98,16 +98,19 @@ Missing historical evidence stays unavailable; adding future capture cannot back
 
 ## Durable local state and transaction contract
 
-All synchronization metadata resides in the history SQLite database under the existing WAL/FULL single-writer contract. Table/command names below are proposed private interfaces, not implemented API exports. Allocate the next migration number at implementation time; freeze versions 1–4 and add historical migration fixtures. Backup/digest/restore tooling and staging trip deletion must account for the new tables. Technical local database-copy recovery remains distinct from the cancelled product history download.
+All synchronization metadata resides in the history SQLite database under the existing WAL/FULL single-writer contract. The following persistence requirements define the accepted interface contract; they are not current storage exports. Allocate the next migration number at implementation time; freeze versions 1–4 and add historical migration fixtures. Backup/digest/restore tooling and staging trip deletion must account for the new tables. Technical local database-copy recovery remains distinct from the cancelled product history download.
 
 | Durable state | Required constraints |
 | --- | --- |
 | Installation and owner registrations | Stable local installation ID; unique confirmed owner/epoch registrations; protected-secret generation reference, never secret bytes |
 | Source binding and projection head | One permanent owner per agreed source key; last compared source snapshot/material digest; monotone HTTP revision allocator and original provenance |
 | Scan run | Owner, stable high-water boundary, bounded keyset cursor, scan-complete state and original backfill run UUID |
+| Provisional opening-owner reservation | Source-qualified raw/candidate identity plus the confirmed opening-owner tuple `(origin, accountId, companyId, identityEpoch)` and its nonsecret registration/binding IDs, or an explicit `unbound` state. Persist with first discovery or confirmed historical enumeration, before any account change can affect the work. Preserve through restart and consistent database copy; no token or permanent HTTP source key is stored here. |
 | Discovery work | Durable source revision/change position, including changes overlapping the scan; retain reconstructible source references while materialization is paused |
 | Frozen envelopes | Unique event ID and source-key/revision; original registration, run/mode, contract/projector version, exact UTF-8 bytes and byte count; sending/backoff/held state |
 | Receipts | Event ID, matching server receipt ID and first receipt time; committed before deleting envelope bytes or releasing queue capacity; sufficient identity/digest retained to detect contradictory retries |
+
+An assigned provisional reservation cannot change from A to B when the active account changes or readiness resolves; only explicit first-binding confirmation may assign an `unbound` reservation. A genuinely new root uses its persisted reservation, never the account active at freeze time. When a member redirects into an already bound root, the target root's permanent owner wins; the incoming reservation cannot overwrite it, and another account cannot send the root's work. An unbound target follows its own persisted reservation or explicit first-binding confirmation; conflicting unresolved reservations are held for reconciliation rather than choosing the latest account. Redirect/reservation consumption and source freezing are transactional.
 
 Required operations cross only the private service/worker channel, with strict argument/result validation: begin/resume scan, page scan/discovery, pin/read projection context, compare-and-freeze, select eligible pending work, record attempt/hold, commit validated receipt, and read safe status. Renderers cannot invoke them or select paths, owners, arbitrary URLs, SQL or source purpose.
 
@@ -146,35 +149,8 @@ ET-032 implements the existing design on a safe status DTO: unconfigured, verify
 
 Journal status is per agreed logical source/revision: queued, held, sending or sent after a durable local receipt. No company acceptance indicator is inferred. Account & sync remains discoverable when the feature is implemented but unconfigured; top-bar/Journal sync decorations appear only when configured. Masking/show-hide applies to the token currently entered, not a saved secret readback. RU/EN wording follows existing localization. No history restore controls are provided.
 
-## Delivery ownership and entry gates
-
-These agreed allocations use existing cards. Implementation authorization and package-specific verification remain separate.
-
-| Work owner | Deliverable and dependency |
-| --- | --- |
-| ET-101 | Accepted specification, including stable-root publication and qualified occurrences. Product decisions are in the decision log; technical alternatives/review evidence belong in the PR. |
-| ET-102 + Dashboard VTC-023 | Reuse existing ingestion; verify exact route/response/parser/auth/receipt compatibility and document the root-anchor/session-local occurrence convention in the existing contract. Replace obsolete separate-server/restore allocation; any required Dashboard change gets a scoped PR in that repository. No new PostgreSQL backend. |
-| ET-103a | Implement the accepted stable-root readiness and qualified-occurrence rules, retain compatibility fixtures, provide the full projection API and serialize storage migration ownership. Prove delayed membership and freeze serialization, original cross-session sequences and logical terminal decisions before enabling real materialization. |
-| ET-103b | Additive durable metadata/discovery/scan/freeze/receipt transactions and historical migration/crash tests; depends on ET-103a mapping and accepted specification. |
-| ET-103c | Main credential boundary, registration and service HTTP scheduler/recovery; depends on durable APIs and ET-102 compatibility. Fault tests precede real server use. |
-| ET-032 | Confirmation flow, Account & sync, Journal/top-bar status using ET-103 data; no duplicate queue/credential logic. |
-| ET-103d + VTC-024 | Actual desktop-to-isolated-Dashboard integration with real MySQL, backlog/crash/owner tests and separately authorized game evidence. |
-| ET-104 + Dashboard report owners | Reconcile existing company review/qualification/analytics/notification effects with uploaded fixtures; replace obsolete website rebuild/restore requirements. Receipt success alone closes none of these gates. |
-
-The stable-root publication decision is accepted. Before affected implementation, complete the Dashboard contract clarification, immutable projection read/change-coverage interfaces, protected-secret recovery/IPC bounds, configured channel origins and isolated integration environment. ET-103a must retain regression cases for every readiness state, delayed proof, freeze-versus-association serialization, original occurrence sequences and logical terminal decisions. Map/build/locale/DLC uncertainty remains explicit uploaded evidence unless a separate capture enhancement is justified. Keep the existing recorder enablement decision and check its actual validation record; do not reopen an obsolete `GAME_HISTORY_RECORDING=false` requirement from discovery notes. Preparation may precede ET-021; implementation readiness and local MVP acceptance are separate gates.
-
 ## Verification and acceptance
 
-Use the Dashboard [P0–P11 procedures and TEL ledger](https://github.com/senukartur/vtc-dashboard/blob/1f9e34ab1ffeb12eba9d624a8116d19b3e5bb27a/docs/integrations/telemetry-verification.md) rather than copying its 36-case matrix. Its old raw-schema/recording-disabled observations are historical source findings; its suggestion of later remote restore is superseded for this client by the owner decision. Preserve technical consistent-database-copy tests. The minimum allocation is:
+Follow the repository [testing rules](TESTING.md) and the Dashboard [TEL matrix and P0–P11 protocol](https://github.com/senukartur/vtc-dashboard/blob/1f9e34ab1ffeb12eba9d624a8116d19b3e5bb27a/docs/integrations/telemetry-verification.md). Verify every readiness state, original cross-session occurrences, and preservation of pending opening-owner reservations through restart/account switches before proof or closure; test redirection into bound and unbound roots without reassignment. Retain meaningful storage-worker/SQLite migration, commit-boundary crash, scan/live overlap, credential, receipt and pressure/drain regressions. Test canonical effects against isolated real MySQL and current Dashboard consumers. Remote-only history must never appear locally.
 
-| Verification boundary | Cases and required evidence |
-| --- | --- |
-| Projection/contract | TEL-010–012, 018–023, 034–036; independently expected fixtures for every root-readiness state, provisional join versus freeze serialization, equal/decreasing original endpoint sequences across sessions, checkpoint/non-observed starts, restored-save accounting, more than ten configurations/fifty intervals, missing context, money extrema and RU/EN stable IDs |
-| Storage/migration/crash | TEL-002/003, 028–031; real storage worker/temporary SQLite, killed subprocesses at discovery/scan/freeze/receipt/cleanup commits, copy/reopen and migration preservation; no mocks-only durability claim |
-| Credential/transport/UI | TEL-013–018, 024–026; Windows secret-store failures, canary-secret absence, account switch during an open trip/request, token rotation/revocation, epoch change, redirects/TLS, malformed receipts, persisted retry and real UI statuses |
-| Initial/live concurrency | TEL-028–031 plus logical association; history scan overlaps local recording, pressure by both count/bytes, restart while paused, continued drain/capacity release/resume with no omitted source changes |
-| Dashboard effects | TEL-001, 003–009, 016/017, 027, 032/033; actual isolated MySQL and current consumers, once-only canonical credit, manual overlap, unknown historical qualification, freshness and permission filtering |
-| Product boundary | TEL-035; a remote-only/manual trip never appears locally; reinstall starts with empty local history and new registration, never downloads prior Dashboard records |
-| Real environment | P10 authorized ETS2/ATS sessions and supported mode evidence; P11 separately approved host TLS/redaction/rate/latency tests. Simulation, source inspection and old CI results do not satisfy these gates. |
-
-Implementation PRs run `npm run test:affected`, relevant existing storage/contract/runtime lanes, then repository-required CI; Dashboard fixes use that repository's commands and actual MySQL lane. Add one regression-registry row per new test entry point and preserve applicable REG-003–014/017/018 scenarios. No uploader test command exists merely because this document specifies it. ET-101 acceptance covers the specification; implementation cards become Ready only after their prerequisites are resolved and authorized. VTC-024 remains incomplete until real client/game/integration evidence is accepted.
+Simulation and pure contract checks do not establish actual desktop/game/host behavior. Real ETS2/ATS and hosted checks retain their separate authorization and evidence requirements. Record results and remaining checks in implementation PRs, with one regression-registry row per new test entry point. Work-package allocation and verification tracking belong to the linked cards and PR, not this contract.
