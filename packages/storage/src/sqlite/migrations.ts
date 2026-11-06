@@ -7,6 +7,7 @@ import {SCHEMA_V2} from './schema-v2';
 import {SCHEMA_V3} from './schema-v3';
 import {SCHEMA_V4} from './schema-v4';
 import {SCHEMA_V5} from './schema-v5';
+import {SCHEMA_V6} from './schema-v6';
 
 /** PRAGMA application_id of every database this application creates: the ASCII bytes 'ETS2'. */
 export const APPLICATION_ID = 0x45545332;
@@ -22,7 +23,8 @@ export const MIGRATIONS: readonly Migration[] = Object.freeze([
   Object.freeze({version: 2, name: '0002-journal', foreignKeysOff: true, up(db: Database.Database) { for (const statement of SCHEMA_V2) db.exec(statement); }}),
   Object.freeze({version: 3, name: '0003-hard-mode', up(db: Database.Database) {for (const statement of SCHEMA_V3) db.exec(statement);}}),
   Object.freeze({version: 4, name: '0004-logical-trips', up(db: Database.Database) {for (const statement of SCHEMA_V4) db.exec(statement); let after=0n;for(;;){const rows=db.prepare('SELECT id FROM trips WHERE id>? ORDER BY id LIMIT 100').all(after) as {id:bigint}[];if(!rows.length)break;for(const row of rows)revise(db,row.id);after=rows.at(-1)!.id;}}}),
-  Object.freeze({version: 5, name: '0005-upload-projections', up(db: Database.Database) {for (const statement of SCHEMA_V5) db.exec(statement);}})
+  Object.freeze({version: 5, name: '0005-upload-projections', up(db: Database.Database) {for (const statement of SCHEMA_V5) db.exec(statement);}}),
+  Object.freeze({version: 6, name: '0006-upload-ownership-queue', up(db: Database.Database) {for (const statement of SCHEMA_V6) db.exec(statement);}})
 ]);
 
 /** The schema version a migration list produces; versions must be 1, 2, ... without gaps. */

@@ -122,7 +122,7 @@ export function isUploadProjectionPage(v: unknown, query: UploadProjectionPageQu
     && p.nextCursor === `${query.snapshot}:${query.kind}:${after}`);
 }
 
-export interface UploadTime {utcMs: number | null; basis: 'event' | 'checkpoint' | 'unknown'; eventSeq: string | null}
+export interface UploadTime {utcMs: number | null; basis: 'event' | 'checkpoint' | 'last-known' | 'receipt' | 'unknown'; eventSeq: string | null}
 export interface UploadSummary {
   source: {provider: 'ets2telemetry'; game: 'ets2' | 'ats'; tripId: string; pluginSessionId: string; databaseUuid: string; origin: 'game'};
   snapshot: {
@@ -159,13 +159,19 @@ export function mapUploadProjection(pin: UploadProjection, pages: readonly Uploa
   }
   if (pages.some(p => !UPLOAD_PAGE_KINDS.includes(p.kind))) return hold('evidence-incomplete');
   const members = collected.members as UploadMember[], configs = collected.configurations as UploadConfiguration[], intervals = collected.intervals as UploadInterval[];
-  const f = pin.facts, j = f.job, openingMember = members.find(m => m.rawTripUuid === pin.rootTripUuid && m.pluginSessionId === f.pluginSessionId);
+  const f = pin.facts, openingMember = members.find(m => m.rawTripUuid === pin.rootTripUuid && m.pluginSessionId === f.pluginSessionId);
   if (!openingMember || members.some(m => m.origin !== 'game' || m.game !== f.game)) return hold('source-ineligible');
   const owned = (e: QualifiedOccurrence | null) => !e || members.some(m => m.rawTripUuid === e.rawTripUuid && m.pluginSessionId === e.pluginSessionId);
   // Restart carriers may come from a new session while closing an earlier raw trip.
   const closeOwned = !f.close || owned(f.close) || f.closeReason === 'restart' && members.some(m => m.rawTripUuid === f.close!.rawTripUuid);
   if (![f.opening,f.outcomeOccurrence].every(owned) || !closeOwned || configs.some(c => !owned(c.occurrence))
-    || f.outcome === 'open' && f.close !== null
+ || !lifecycleValid(pin)) return hold('evidence-contradictory');
+  const changed=new Set(configs.map(c=>c.index)).size!==configs.length;
+  return projectedSummary(pin,openingMember.versions,changed?[]:configs.map(c=>({index:c.index,id:c.idValue,bodyType:c.bodyType,chainType:c.chainType})),configs.length>0,intervals.length>0,changed);
+}
+function lifecycleValid(pin:UploadProjection):boolean {
+  const f=pin.facts;
+  return !(f.outcome === 'open' && f.close !== null
     || f.close && f.outcomeOccurrence && f.close.rawTripUuid !== f.outcomeOccurrence.rawTripUuid
     || f.openedBy === 'event' && (!f.opening || f.opening.type !== 'job.configured' || f.opening.rawTripUuid !== pin.rootTripUuid || f.opening.pluginSessionId !== f.pluginSessionId)
     || f.openedBy === 'event' && f.checkpointNextEventSeq !== null
@@ -174,28 +180,30 @@ export function mapUploadProjection(pin: UploadProjection, pages: readonly Uploa
     || (f.outcome === 'open' || f.outcome === 'none') && f.outcomeOccurrence !== null
     || f.outcome === 'open' && f.closeReason !== null || f.outcome !== 'open' && f.closeReason === null
     || (f.outcome === 'delivered' || f.outcome === 'cancelled') && f.closeReason !== 'outcome'
-    || f.outcome === 'none' && f.closeReason === 'outcome') return hold('evidence-contradictory');
+    || f.outcome === 'none' && f.closeReason === 'outcome');
+}
+function projectedSummary(pin:UploadProjection,openingVersions:UploadVersions,items:UploadSummary['snapshot']['trailers']['items'],hasConfigurations:boolean,hasIntervals:boolean,changed:boolean):UploadMapping {
+  const f=pin.facts,j=f.job;
+  const hold=(reason:Extract<UploadMapping,{status:'hold'}>['reason']):UploadMapping=>({status:'hold',reason});
   const time = (e: QualifiedOccurrence | null): UploadTime => e?.utcMs !== null && e?.utcMs !== undefined && e.utcMs <= 253_402_300_799_999
     ? {utcMs: e.utcMs, basis: 'event', eventSeq: e.eventSeq} : {utcMs: null, basis: 'unknown', eventSeq: null};
   const start: UploadTime = f.openedBy === 'checkpoint' ? {utcMs: f.checkpointUtcMs, basis: 'checkpoint', eventSeq: null} : time(f.opening);
   const end = f.outcome === 'open' ? null : time(f.outcomeOccurrence ?? f.close);
   const clockAnomaly = f.clockAnomaly || start.utcMs !== null && end?.utcMs !== null && end?.utcMs !== undefined && end.utcMs < start.utcMs;
   const reasons = new Set<string>(['catalog-context-unavailable']);
-  if (intervals.length) reasons.add('recording-intervals');
+  if (hasIntervals) reasons.add('recording-intervals');
   if (clockAnomaly) reasons.add('clock-anomaly');
   if (f.gameMode.ambiguous) reasons.add('game-mode-ambiguous');
   if (f.moneyIncomplete) reasons.add('accounting-unavailable');
   // History is rule context, not ten active slots. Never describe changing configurations as a complete current chain.
-  const changed = new Set(configs.map(c => c.index)).size !== configs.length;
   if (changed) reasons.add('trailer-context-changed');
-  if (!configs.length) reasons.add('trailer-context-unavailable');
-  const items = changed ? [] : configs.map(c => ({index: c.index, id: c.idValue, bodyType: c.bodyType, chainType: c.chainType}));
+  if (!hasConfigurations) reasons.add('trailer-context-unavailable');
   if (items.length > 10) return hold('unrepresentable');
   const place = (prefix: 'source' | 'destination'): UploadPlace => ({cityId: j[`${prefix}CityId`], cityName: j[`${prefix}City`], companyId: j[`${prefix}CompanyId`], companyName: j[`${prefix}Company`]});
   const summary: UploadSummary = {source: {provider: 'ets2telemetry', game: f.game, tripId: pin.rootTripUuid, pluginSessionId: f.pluginSessionId, databaseUuid: pin.databaseUuid, origin: 'game'}, snapshot: {
     outcome: f.outcome, closeReason: f.closeReason, recordingCompleteness: f.outcome === 'none' ? 'partial' : f.recordingCompleteness,
     start, end, openedBy: f.openedBy, openedEventSeq: f.opening?.eventSeq ?? null, checkpointNextEventSeq: f.checkpointNextEventSeq, outcomeEventSeq: f.outcomeOccurrence?.eventSeq ?? null,
-    context: {gameBuild: absent, sourceLocale: absent, mapId: absent, dlcIds: absent, versions: openingMember.versions}, gameMode: f.gameMode,
+    context: {gameBuild: absent, sourceLocale: absent, mapId: absent, dlcIds: absent, versions: openingVersions}, gameMode: f.gameMode,
     job: {origin: place('source'), destination: place('destination'), cargoId: j.cargoId, cargoName: j.cargo, cargoMass: j.cargoMass, cargoUnitMass: j.cargoUnitMass,
       cargoUnitCount: j.cargoUnitCount, market: j.market, isSpecialJob: j.isSpecialJob, cargoLoaded: j.cargoLoaded},
     trailers: {complete: false, items}, plannedDistance: j.plannedDistance, observedDistance: f.observedDistance, deliveredDistance: f.deliveredDistance,
@@ -227,4 +235,77 @@ function wireValuesFit(summary: UploadSummary): boolean {
   const m = summary.snapshot.gameMode;
   return (m.mode === 'unknown' ? m.method === 'none' && m.confidence === 'none' : m.method !== 'none' && m.confidence !== 'none' && (m.mode !== 'single-player' || m.confidence === 'weak'))
     && walk(summary) && Buffer.byteLength(JSON.stringify(summary)) < 60_000;
+}
+
+/** Constant-size durable fold: at most ten trailer slots and three occurrence checks, never full history arrays. */
+export interface UploadFold {
+  kind:number;cursor:string|null;counts:Record<UploadPageKind,number>;openingVersions:UploadVersions|null;
+  openingOwned:boolean;outcomeOwned:boolean;closeOwned:boolean;hasIntervals:boolean;changed:boolean;
+  items:UploadSummary['snapshot']['trailers']['items'];invalid:Extract<UploadMapping,{status:'hold'}>['reason']|null;
+}
+export function beginUploadFold(pin:UploadProjection):UploadFold {
+  return {kind:0,cursor:null,counts:{members:0,configurations:0,intervals:0},openingVersions:null,openingOwned:pin.facts.opening===null,
+    outcomeOwned:pin.facts.outcomeOccurrence===null,closeOwned:pin.facts.close===null,hasIntervals:false,changed:false,items:[],invalid:null};
+}
+export function advanceUploadFold(pin:UploadProjection,prior:UploadFold,page:UploadProjectionPage,isMember:(rawTripUuid:string,pluginSessionId:string)=>boolean):UploadFold {
+  const fold=structuredClone(prior),kind=UPLOAD_PAGE_KINDS[fold.kind];
+  if(!kind||page.kind!==kind||page.total!==pin.totals[kind]||!isUploadProjectionPage(page,{snapshot:pin.snapshot,kind,cursor:fold.cursor??undefined,limit:Math.max(1,page.rows.length)})){
+    fold.invalid='evidence-incomplete';return fold;
+  }
+  for(const row of page.rows){
+    if(kind==='members'){
+      const member=row as UploadMember;
+      if(member.origin!=='game'||member.game!==pin.facts.game)fold.invalid='source-ineligible';
+      if(member.rawTripUuid===pin.rootTripUuid&&member.pluginSessionId===pin.facts.pluginSessionId)fold.openingVersions=member.versions;
+      const owns=(ref:QualifiedOccurrence|null)=>!!ref&&ref.rawTripUuid===member.rawTripUuid&&ref.pluginSessionId===member.pluginSessionId;
+      fold.openingOwned ||= owns(pin.facts.opening);fold.outcomeOwned ||= owns(pin.facts.outcomeOccurrence);
+      fold.closeOwned ||= owns(pin.facts.close)||pin.facts.closeReason==='restart'&&pin.facts.close?.rawTripUuid===member.rawTripUuid;
+    }else if(kind==='configurations'){
+      const config=row as UploadConfiguration;
+      if(!isMember(config.occurrence.rawTripUuid,config.occurrence.pluginSessionId))fold.invalid='evidence-contradictory';
+      if(!fold.changed){
+        if(fold.items.some(item=>item.index===config.index)){fold.changed=true;fold.items=[];}
+        else fold.items.push({index:config.index,id:config.idValue,bodyType:config.bodyType,chainType:config.chainType});
+      }
+    }else fold.hasIntervals=true;
+  }
+  fold.counts[kind]+=page.rows.length;fold.cursor=page.nextCursor;
+  if(page.nextCursor===null){if(fold.counts[kind]!==pin.totals[kind])fold.invalid='evidence-incomplete';fold.kind++;}
+  return fold;
+}
+export function finishUploadFold(pin:UploadProjection,fold:UploadFold):UploadMapping {
+  if(!isUploadProjection(pin))return {status:'hold',reason:'evidence-contradictory'};
+  if(pin.rootReadiness!=='ready')return {status:'hold',reason:'identity-pending'};
+  if(pin.purpose!=='history')return {status:'hold',reason:'source-ineligible'};
+  if(fold.invalid)return {status:'hold',reason:fold.invalid};
+  if(fold.kind!==3||UPLOAD_PAGE_KINDS.some(kind=>fold.counts[kind]!==pin.totals[kind]))return {status:'hold',reason:'evidence-incomplete'};
+  if(!fold.openingVersions)return {status:'hold',reason:'source-ineligible'};
+  if(!fold.openingOwned||!fold.outcomeOwned||!fold.closeOwned||!lifecycleValid(pin))return {status:'hold',reason:'evidence-contradictory'};
+  return projectedSummary(pin,fold.openingVersions,fold.items,fold.counts.configurations>0,fold.hasIntervals,fold.changed);
+}
+
+/** Exact closed source/snapshot shape shared with the frozen-envelope boundary. */
+export function isUploadSummary(value:unknown):value is UploadSummary {
+  const time=shape({utcMs:nullable(count),basis:one('event','checkpoint','last-known','receipt','unknown'),eventSeq:nullable(sequence)});
+  const place=shape({cityId:available(text),cityName:available(text),companyId:available(text),companyName:available(text)});
+  const metric=(unit:string)=>available(real,unit);
+  const check=shape({source:shape({provider:one('ets2telemetry'),game:one('ets2','ats'),tripId:isUploadUuid,pluginSessionId:isUploadUuid,databaseUuid:isUploadUuid,origin:one('game')}),
+    snapshot:shape({outcome:one('open','none','delivered','cancelled'),closeReason:nullable(one('outcome','configuration-cleared','different-job','restart','discontinuity','gap')),recordingCompleteness:one('complete','partial','unknown'),
+      start:time,end:nullable(time),openedBy:one('event','checkpoint'),openedEventSeq:nullable(sequence),checkpointNextEventSeq:nullable(sequence),outcomeEventSeq:nullable(sequence),
+      context:shape({gameBuild:available(text),sourceLocale:available(text),mapId:available(text),dlcIds:available(v=>Array.isArray(v)&&v.length<=256&&v.every(text)),versions}),gameMode:mode,
+      job:shape({origin:place,destination:place,cargoId:available(text),cargoName:available(text),cargoMass:metric('kg'),cargoUnitMass:metric('kg'),cargoUnitCount:available(v=>count(v)&&(v as number)<=4_294_967_295),market:available(text),isSpecialJob:available(bool),cargoLoaded:available(bool)}),
+      trailers:shape({complete:bool,items:v=>Array.isArray(v)&&v.length<=10&&v.every(shape({index:v=>count(v)&&(v as number)<=9,id:available(text),bodyType:available(text),chainType:available(text)}))}),
+      plannedDistance:metric('m'),observedDistance:metric('m'),deliveredDistance:metric('m'),fuelUsed:metric('L'),cargoDamage:metric('fraction'),expectedIncome:moneyOf('u64'),revenue:moneyOf('s64'),penalty:moneyOf('s64'),
+      evidence:shape({startObserved:bool,endObserved:bool,ruleContextComplete:bool,clockAnomaly:bool,reasons:v=>Array.isArray(v)&&v.length<=32&&new Set(v).size===v.length&&v.every(x=>typeof x==='string'&&/^[a-z][a-z0-9-]{0,63}$/.test(x))})})});
+  if(!check(value))return false;
+  const summary=value as UploadSummary,s=summary.snapshot;
+  const validTime=(t:UploadTime)=>t.basis==='unknown'?t.utcMs===null&&t.eventSeq===null:t.utcMs!==null&&(t.basis==='event'?t.eventSeq!==null:t.eventSeq===null);
+  return wireValuesFit(summary)&&validTime(s.start)&&(s.end===null||validTime(s.end))
+    && (s.outcome==='open'?s.end===null&&s.closeReason===null:s.end!==null&&s.closeReason!==null)
+    && (s.openedBy==='event'?s.openedEventSeq!==null&&s.checkpointNextEventSeq===null:s.openedEventSeq===null&&s.checkpointNextEventSeq!==null)
+    && (s.outcome==='delivered'||s.outcome==='cancelled'?s.outcomeEventSeq!==null&&s.closeReason==='outcome':s.outcomeEventSeq===null)
+    && (!s.evidence.startObserved||s.start.basis==='event'&&s.start.eventSeq===s.openedEventSeq)
+    && (!s.evidence.endObserved||s.end?.basis==='event'&&s.end.eventSeq===s.outcomeEventSeq)
+    && (s.start.utcMs===null||s.end?.utcMs===null||s.end?.utcMs===undefined||s.end.utcMs>=s.start.utcMs||s.evidence.clockAnomaly)
+    && new Set(s.trailers.items.map(item=>item.index)).size===s.trailers.items.length;
 }

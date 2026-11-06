@@ -541,7 +541,7 @@ async function launch(config, label, executable, migratedFrom) {
   assert.deepEqual(record.exit, {code: 0, signal: null}, 'LAUNCH_EXIT_NONZERO');
   assert.equal(record.runtime.executableMatches, true, 'LAUNCH_EXECUTABLE_DIFFERS');
   assert.equal(record.runtime.packaged, true);
-  assert.deepEqual(record.events.opened, [{schemaVersion: 5, created: false, migratedFrom: migratedFrom === 'none' ? null : Number(migratedFrom)}], 'HISTORY_OPEN_UNEXPECTED');
+  assert.deepEqual(record.events.opened, [{schemaVersion: 6, created: false, migratedFrom: migratedFrom === 'none' ? null : Number(migratedFrom)}], 'HISTORY_OPEN_UNEXPECTED');
   assert.deepEqual(record.events.target, [{purpose: 'synthetic'}], 'RECORDING_TARGET_UNEXPECTED');
   assert.equal(record.events.closed, 1, 'HISTORY_NOT_CLOSED');
   // The format 2 settings load as migrated in memory, and nothing saves or quarantines them.
@@ -1774,7 +1774,7 @@ async function updateFeedVerify(config, label) {
     'RESTARTED_IMAGE_NOT_B');
   assert.deepEqual(record.b.pids, {main: 1, service: 1}, 'RESTARTED_PROCESSES_UNEXPECTED');
   assert.deepEqual(bMain.filter(row => row.event === 'SETTINGS_LOADED').map(row => row.facts), [{state: 'loaded', migratedFrom: 2}], 'RESTARTED_SETTINGS_UNEXPECTED');
-  assert.deepEqual(record.b.opened, [{schemaVersion: 5, created: false, migratedFrom: null}], 'RESTARTED_HISTORY_UNEXPECTED');
+  assert.deepEqual(record.b.opened, [{schemaVersion: 6, created: false, migratedFrom: null}], 'RESTARTED_HISTORY_UNEXPECTED');
   assert.deepEqual(record.b.target, [{purpose: 'synthetic'}], 'RESTARTED_TARGET_UNEXPECTED');
   // The restarted instance exited orderly on the uninstall hook's request, and nothing under R is left running.
   assert.equal(observed.requester?.locked, true, 'RESTARTED_INSTANCE_DID_NOT_EXIT');
@@ -1840,7 +1840,7 @@ async function stubLaunch(config, label) {
   await writeEvidence(config, `stub-launch-${label}-observed.json`, record);
   assert.ok(started, 'STUB_LAUNCH_NOT_STARTED: Squirrel\'s stub started no instance that reached the history (an unlaunchable install)');
   assert.match(String(record.launchedVersion), /^[0-9]+\.[0-9]+\.[0-9]+/, 'STUB_LAUNCH_IMAGE_UNEXPECTED');
-  assert.deepEqual(record.events.opened, [{schemaVersion: 5, created: false, migratedFrom: null}], 'STUB_LAUNCH_HISTORY_UNEXPECTED');
+  assert.deepEqual(record.events.opened, [{schemaVersion: 6, created: false, migratedFrom: null}], 'STUB_LAUNCH_HISTORY_UNEXPECTED');
   assert.equal(record.requester?.locked, true, 'STUB_LAUNCH_DID_NOT_EXIT');
   assert.deepEqual({app: record.events.appExit, service: record.events.serviceExit}, {app: [0], service: [0]}, 'STUB_LAUNCH_EXIT_UNEXPECTED');
   assert.deepEqual(record.events.failures, [], 'FAILURE_EVENT_LOGGED');

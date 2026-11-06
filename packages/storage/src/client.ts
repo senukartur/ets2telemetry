@@ -1,3 +1,4 @@
+import {UPLOAD_SYNC_NAMES,type UploadSyncCommands} from './upload-sync';
 import type {ProfileObservation} from '../../telemetry-core/src/trips/continuation';
 import type {HardModeObservation} from '../../contracts/src/hard-mode';
 // The telemetry service's handle on the storage worker (ET-013). Node-safe: it never loads native SQLite; the worker
@@ -71,7 +72,7 @@ interface InFlight extends Pending {id: number; timer: unknown}
 /** Whether an argument is an object whose fields can be copied; anything else is forwarded for the parser to refuse. */
 const isObject = (value: unknown): value is object => typeof value === 'object' && value !== null;
 const failure = (code: StorageErrorCode): {ok: false; error: StorageError} => ({ok: false, error: storageError(code)});
-const backgroundCommands = new Set<CommandName>(['beginUploadProjection','advanceUploadProjection','getUploadProjectionPreparation','readUploadProjectionPage','releaseUploadProjection']);
+const backgroundCommands = new Set<CommandName>([...UPLOAD_SYNC_NAMES,'beginUploadProjection','advanceUploadProjection','getUploadProjectionPreparation','readUploadProjectionPage','releaseUploadProjection']);
 const isBackground = (name: CommandName) => backgroundCommands.has(name);
 
 export class StorageClient {
@@ -159,6 +160,22 @@ export class StorageClient {
     return this.#request({name: 'readUploadProjectionPage', query: isObject(query)
       ? {snapshot: query.snapshot, kind: query.kind, cursor: query.cursor, limit: query.limit} : query});
   }
+  ensureUploadInstallation() {return this.#request({name:'ensureUploadInstallation'});}
+  recordUploadRegistration(input:UploadSyncCommands['recordUploadRegistration']['args']['input']) {return this.#request({name:'recordUploadRegistration',input:isObject(input)?{registrationId:input.registrationId,clientInstallationId:input.clientInstallationId,origin:input.origin,accountId:input.accountId,companyId:input.companyId,identityEpoch:input.identityEpoch,installationId:input.installationId,bindingId:input.bindingId}:input});}
+  confirmUploadOwner(input:UploadSyncCommands['confirmUploadOwner']['args']['input']) {return this.#request({name:'confirmUploadOwner',input:isObject(input)?{confirmationId:input.confirmationId,registrationId:input.registrationId,credentialGeneration:input.credentialGeneration,expectedVersion:input.expectedVersion}:input});}
+  disconnectUploadOwner(input:UploadSyncCommands['disconnectUploadOwner']['args']['input']) {return this.#request({name:'disconnectUploadOwner',input:isObject(input)?{expectedVersion:input.expectedVersion}:input});}
+  getUploadStoreStatus(input:UploadSyncCommands['getUploadStoreStatus']['args']['input']) {return this.#request({name:'getUploadStoreStatus',input:isObject(input)?{registrationId:input.registrationId}:input});}
+  advanceUploadScan(input:UploadSyncCommands['advanceUploadScan']['args']['input']) {return this.#request({name:'advanceUploadScan',input:isObject(input)?{runId:input.runId,registrationId:input.registrationId}:input});}
+  pageUploadDiscovery(input:UploadSyncCommands['pageUploadDiscovery']['args']['input']) {return this.#request({name:'pageUploadDiscovery',input:isObject(input)?{registrationId:input.registrationId,after:input.after,limit:input.limit}:input});}
+  beginUploadMaterialization(input:UploadSyncCommands['beginUploadMaterialization']['args']['input']) {return this.#request({name:'beginUploadMaterialization',input:isObject(input)?{workId:input.workId,tripUuid:input.tripUuid,registrationId:input.registrationId}:input});}
+  advanceUploadMaterialization(input:UploadSyncCommands['advanceUploadMaterialization']['args']['input']) {return this.#request({name:'advanceUploadMaterialization',input:isObject(input)?{workId:input.workId}:input});}
+  freezeUploadMaterialization(input:UploadSyncCommands['freezeUploadMaterialization']['args']['input']) {return this.#request({name:'freezeUploadMaterialization',input:isObject(input)?{workId:input.workId,producerVersion:input.producerVersion,createdUtcMs:input.createdUtcMs}:input});}
+  releaseUploadMaterialization(input:UploadSyncCommands['releaseUploadMaterialization']['args']['input']) {return this.#request({name:'releaseUploadMaterialization',input:isObject(input)?{workId:input.workId}:input});}
+  claimUploadAttempt(input:UploadSyncCommands['claimUploadAttempt']['args']['input']) {return this.#request({name:'claimUploadAttempt',input:isObject(input)?{attemptId:input.attemptId,registrationId:input.registrationId,expectedVersion:input.expectedVersion,mode:input.mode,nowMs:input.nowMs}:input});}
+  recordUploadAttemptOutcome(input:UploadSyncCommands['recordUploadAttemptOutcome']['args']['input']) {return this.#request({name:'recordUploadAttemptOutcome',input:isObject(input)?{attemptId:input.attemptId,kind:input.kind,retryAtMs:input.retryAtMs,nowMs:input.nowMs}:input});}
+  recoverUploadAttempt(input:UploadSyncCommands['recoverUploadAttempt']['args']['input']) {return this.#request({name:'recoverUploadAttempt',input:isObject(input)?{attemptId:input.attemptId}:input});}
+  commitUploadReceipt(input:UploadSyncCommands['commitUploadReceipt']['args']['input']) {return this.#request({name:'commitUploadReceipt',input:isObject(input)?{attemptId:input.attemptId,statusCode:input.statusCode,body:input.body instanceof Uint8Array&&input.body.byteLength<=4096?new Uint8Array(input.body):input.body}:input});}
+  reclaimUploadPayloads(input:UploadSyncCommands['reclaimUploadPayloads']['args']['input']) {return this.#request({name:'reclaimUploadPayloads',input:isObject(input)?{limit:input.limit}:input});}
   /**
    * Journal reads (ET-016, J5). Queries and pages are copied field by field, so only their listed fields cross the
    * boundary; a value that is not an object is forwarded as given, and the worker's request parser refuses it with

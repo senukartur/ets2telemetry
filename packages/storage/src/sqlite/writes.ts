@@ -1,3 +1,4 @@
+import {retainUploadDeletion} from './upload-discovery';
 import {validCapturedEndpoint,validAcceptanceDetail} from './logical-coverage';
 import {admittedProfile, associate, projectEndpoint, projectSessionBounds, retireObservedTerminal, projectEffects, projectSample, logicalEnabled, logicalFor, revise} from './logical-trips';
 import type {ProfileObservation} from '../../../telemetry-core/src/trips/continuation';
@@ -692,6 +693,7 @@ export function deleteTrip(conn: StorageConnection, tripUuid: string, options: D
 
     const hasPins=statement(db,"SELECT 1 FROM sqlite_master WHERE type='table' AND name='upload_projection_pins'").get()!==undefined;
     if(hasPins)for(const id of logicalIds)if(statement(db,'SELECT 1 FROM upload_projection_pins WHERE root_ref=? LIMIT 1').get(id))fail('STORAGE_BUSY');
+    retainUploadDeletion(db,target.id,logicalIds);
     const rejectIfOpen = options.rejectIfOpen ?? true;
     if (rejectIfOpen && memberRows.some(m => m.outcome === 'open')) {
       fail('STORAGE_BUSY');

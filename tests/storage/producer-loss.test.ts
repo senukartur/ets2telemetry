@@ -110,7 +110,7 @@ function expectInvariants(file: string, pluginSessionId: string, acks: string[])
 }
 
 const TRIPS: JournalQuery = {kind: 'trips', query: {}};
-const SYNTHETIC_V3 = {purpose: 'synthetic', schemaVersion: 5};
+const SYNTHETIC_V3 = {purpose: 'synthetic', schemaVersion: 6};
 /** A journal read that main would forward unchanged (journal-contract.ts, parseJournalReply). */
 async function read(journal: JournalService, query: JournalQuery): Promise<JournalCallResult<unknown>> {
   const result = await guarded(journal.query(query), `the journal ${query.kind} read`, HANG_GUARD_MS);

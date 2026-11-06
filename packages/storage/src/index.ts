@@ -1,3 +1,6 @@
+import type {UploadSyncCommands} from './upload-sync';
+import * as sync from './sqlite/upload-sync';
+import * as queue from './sqlite/upload-queue';
 import type {ProfileObservation} from '../../telemetry-core/src/trips/continuation';
 import type {HardModeObservation} from '../../contracts/src/hard-mode';
 // In-process storage API (ET-013). It loads native better-sqlite3, so only the storage worker and the Electron-runtime
@@ -63,6 +66,22 @@ export class Storage {
   getUploadProjectionPreparation(pinId: string) {return attempt(() => upload.getUploadProjectionPreparation(this.connection,pinId));}
   releaseUploadProjection(pinId: string, options?: CommitOptions) {return attempt(() => upload.releaseUploadProjection(this.connection,pinId,options?.testHooks));}
   readUploadProjectionPage(query: UploadProjectionPageQuery) { return attempt(() => upload.readUploadProjectionPage(this.connection, query)); }
+  ensureUploadInstallation(options?:CommitOptions) {return attempt(()=>sync.ensureUploadInstallation(this.connection,options));}
+  recordUploadRegistration(input:UploadSyncCommands['recordUploadRegistration']['args']['input'],options?:CommitOptions) {return attempt(()=>sync.recordUploadRegistration(this.connection,input,options));}
+  confirmUploadOwner(input:UploadSyncCommands['confirmUploadOwner']['args']['input'],options?:CommitOptions) {return attempt(()=>sync.confirmUploadOwner(this.connection,input,options));}
+  disconnectUploadOwner(input:UploadSyncCommands['disconnectUploadOwner']['args']['input'],options?:CommitOptions) {return attempt(()=>sync.disconnectUploadOwner(this.connection,input,options));}
+  getUploadStoreStatus(input:UploadSyncCommands['getUploadStoreStatus']['args']['input']) {return attempt(()=>sync.getUploadStoreStatus(this.connection,input));}
+  advanceUploadScan(input:UploadSyncCommands['advanceUploadScan']['args']['input'],options?:CommitOptions) {return attempt(()=>sync.advanceUploadScan(this.connection,input,options));}
+  pageUploadDiscovery(input:UploadSyncCommands['pageUploadDiscovery']['args']['input'],options?:CommitOptions) {return attempt(()=>sync.pageUploadDiscovery(this.connection,input,options));}
+  beginUploadMaterialization(input:UploadSyncCommands['beginUploadMaterialization']['args']['input'],options?:CommitOptions) {return attempt(()=>queue.beginUploadMaterialization(this.connection,input,options));}
+  advanceUploadMaterialization(input:UploadSyncCommands['advanceUploadMaterialization']['args']['input'],options?:CommitOptions) {return attempt(()=>queue.advanceUploadMaterialization(this.connection,input,options));}
+  freezeUploadMaterialization(input:UploadSyncCommands['freezeUploadMaterialization']['args']['input'],options?:CommitOptions) {return attempt(()=>queue.freezeUploadMaterialization(this.connection,input,options));}
+  releaseUploadMaterialization(input:UploadSyncCommands['releaseUploadMaterialization']['args']['input'],options?:CommitOptions) {return attempt(()=>queue.releaseUploadMaterialization(this.connection,input,options));}
+  claimUploadAttempt(input:UploadSyncCommands['claimUploadAttempt']['args']['input'],options?:CommitOptions) {return attempt(()=>queue.claimUploadAttempt(this.connection,input,options));}
+  recordUploadAttemptOutcome(input:UploadSyncCommands['recordUploadAttemptOutcome']['args']['input'],options?:CommitOptions) {return attempt(()=>queue.recordUploadAttemptOutcome(this.connection,input,options));}
+  recoverUploadAttempt(input:UploadSyncCommands['recoverUploadAttempt']['args']['input'],options?:CommitOptions) {return attempt(()=>queue.recoverUploadAttempt(this.connection,input,options));}
+  commitUploadReceipt(input:UploadSyncCommands['commitUploadReceipt']['args']['input'],options?:CommitOptions) {return attempt(()=>queue.commitUploadReceipt(this.connection,input,options));}
+  reclaimUploadPayloads(input:UploadSyncCommands['reclaimUploadPayloads']['args']['input'],options?:CommitOptions) {return attempt(()=>queue.reclaimUploadPayloads(this.connection,input,options));}
   /** Closes the connection. SQLite checkpoints the WAL into the main file; further commands fail with STORAGE_CLOSED. */
   close(): Result<void> { return attempt(() => this.connection.close()); }
 }

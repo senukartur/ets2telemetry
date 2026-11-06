@@ -435,11 +435,13 @@ describe('immutable private upload projections through the SQLite worker', () =>
     const uuid=tripUuidFor(s.session,'1');ok(await client.commitEvent({message,profile:proof(s),effects:[{kind:'trip.open',tripUuid:uuid,game:'ets2',gameMode:mode,jobConfiguration:'this-event',recordingCompleteness:'complete',startedUtcMs:1000}]}));
     const pin=ok(await prepare(client,uuid));expect(mapUploadProjection(pin,await pages(client,pin))).toEqual({status:'hold',reason:'source-ineligible'});await client.close();
   });
-  it('retains a pinned trip until bounded release completes in staging', async () => {
+  it('releases its pin boundedly while schema6 opening synchronization evidence still retains a new history/game trip', async () => {
     const client=await start(),s=new Script(ETS2_A),uuid=await open(client,s),pin=ok(await prepare(client,uuid));
-    failed(await client.deleteTrip(uuid,{rejectIfOpen:false}),'STORAGE_BUSY');
+    failed(await client.deleteTrip(uuid,{rejectIfOpen:false}),'STORAGE_BUSY');const retained=ok(await client.getTrip(uuid));
     let released=ok(await client.releaseUploadProjection(pin.snapshot.split(':')[2]));
     while(released.state==='releasing')released=ok(await client.releaseUploadProjection(released.pinId));
-    ok(await client.deleteTrip(uuid,{rejectIfOpen:false}));failed(await client.readUploadProjectionPage({snapshot:pin.snapshot,kind:'members',limit:1}),'INVALID_INPUT');await client.close();expect(recheck(pin)).toBe(false);
+    expect(released.state).toBe('released');failed(await client.deleteTrip(uuid,{rejectIfOpen:false}),'STORAGE_BUSY');expect(ok(await client.getTrip(uuid))).toEqual(retained);failed(await client.readUploadProjectionPage({snapshot:pin.snapshot,kind:'members',limit:1}),'INVALID_INPUT');await client.close();expect(recheck(pin)).toBe(false);
+    readOnly(ws.database,db=>{for(const table of ['upload_projection_pins','upload_projection_members','upload_projection_configurations','upload_projection_intervals'])expect(db.prepare(`SELECT count(*) FROM ${table}`).pluck().get()).toBe(0);
+      expect(db.prepare('SELECT mode,registration_ref,run_ref FROM upload_reservations').all()).toEqual([{mode:'unbound',registration_ref:null,run_ref:null}]);expect(db.prepare('SELECT trip_uuid FROM trips').pluck().all()).toEqual([uuid]);});
   });
 });

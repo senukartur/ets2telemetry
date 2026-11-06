@@ -1,3 +1,6 @@
+import {Script,r} from '../shared/trip-messages';
+import {tripUuidFor} from '../../packages/telemetry-core/src';
+import {UPLOAD_SYNC_EMPTY_COUNTS} from './helpers';
 import {closeSync, existsSync, mkdirSync, openSync, readFileSync, writeFileSync, writeSync} from 'node:fs';
 import path from 'node:path';
 import {randomUUID} from 'node:crypto';
@@ -8,7 +11,7 @@ import {contentDigest} from '../../packages/storage/src/sqlite/digest';
 import {revise} from '../../packages/storage/src/sqlite/logical-trips';
 import {afterEach, beforeEach, describe, expect, it} from 'vitest';
 import {MIGRATIONS, openStorage, restoreBackup, type Migration} from '../../packages/storage/src/index';
-import {digestOf, expectRepresentative, failed, files, ok, REPRESENTATIVE, sha256, workspace} from './helpers';
+import {uploadTestSource,uploadTestWork,uploadReceipt,uploadGame,uploadProof,digestOf, expectRepresentative, failed, files, ok, REPRESENTATIVE, sha256, workspace} from './helpers';
 
 const directStorage:Storage[]=[];
 function tracked(connection:ConstructorParameters<typeof Storage>[0]){const storage=new Storage(connection);directStorage.push(storage);return storage;}
@@ -35,7 +38,7 @@ describe('REG-013/REG-007 verified backups', () => {
     ok(storage.beginUploadProjection({pinId:preparingId,tripUuid}));const preparing=ok(storage.advanceUploadProjection(preparingId));expect(preparing.state).toBe('preparing');
     const source=contentDigest(db);expect(source.rowCounts.upload_projection_pins).toBe(2);expect(source.rowCounts.upload_projection_evidence_versions).toBe(1);
     expect(source.rowCounts.upload_projection_intervals).toBeGreaterThan(0);
-    const backup=await backupBeforeMigration(db,{file,backupsDirectory:ws.backups,databaseUuid:storage.summary.databaseUuid,fromVersion:5,now:ws.now,appVersion:'0.1.0-test'});
+    const backup=await backupBeforeMigration(db,{file,backupsDirectory:ws.backups,databaseUuid:storage.summary.databaseUuid,fromVersion:6,now:ws.now,appVersion:'0.1.0-test'});
     const copy=path.join(ws.backups,backup.fileName);expect(digestOf(copy)).toEqual(source);
     const manifest=JSON.parse(readFileSync(copy.replace(/\.sqlite$/,'.json'),'utf8'));expect(manifest.rowCounts).toEqual(source.rowCounts);expect(manifest.logicalDigest).toBe(source.logicalDigest);
     const copied=tracked(await openConnection(ws.options({path:copy})));
@@ -87,15 +90,15 @@ describe('REG-013/REG-007 verified backups', () => {
     mkdirSync(ws.backups);
     writeFileSync(path.join(ws.backups, 'unrelated.sqlite'), 'not described by a manifest');
     writeFileSync(path.join(ws.backups, 'other.json'), JSON.stringify({format: 'something-else'}));
-    for (let version = 2; version <= 5; version++) {
+    for (let version = 2; version <= 6; version++) {
       ws.advance(60_000);
       ok(await openStorage(ws.options({path: copy, migrations: upTo(version)}))).close();
     }
     const backups = files(ws.backups).filter(name => name.startsWith('telemetry-'));
     expect(backups).toEqual([
-      'telemetry-f0000000-v2-20261015T120200000Z.json', 'telemetry-f0000000-v2-20261015T120200000Z.sqlite',
       'telemetry-f0000000-v3-20261015T120300000Z.json', 'telemetry-f0000000-v3-20261015T120300000Z.sqlite',
-      'telemetry-f0000000-v4-20261015T120400000Z.json', 'telemetry-f0000000-v4-20261015T120400000Z.sqlite'
+      'telemetry-f0000000-v4-20261015T120400000Z.json', 'telemetry-f0000000-v4-20261015T120400000Z.sqlite',
+      'telemetry-f0000000-v5-20261015T120500000Z.json', 'telemetry-f0000000-v5-20261015T120500000Z.sqlite'
     ]);
     expect(files(ws.backups).filter(name => !name.startsWith('telemetry-'))).toEqual(['other.json', 'unrelated.sqlite']);
   });
@@ -117,9 +120,9 @@ describe('REG-013 restore into a new file', () => {
   });
   it('migrates a restored older backup through the normal open path', async () => {
     const manifest = await migratedWithBackup(), target = path.join(ws.directory, 'restored.sqlite');
-    const storage = ok(await restoreBackup(manifest, ws.options({path: target, backupsDirectory: path.join(ws.directory, 'restored-backups'), migrations: upTo(5)})));
-    expect(storage.summary).toMatchObject({schemaVersion: 5, migratedFrom: 1});
-    expectRepresentative(storage, target, {schema_migrations: 5, upload_projection_pins:0,upload_projection_members:0,upload_projection_configurations:0,upload_projection_intervals:0,upload_projection_evidence_versions:0, logical_memberships: 1, logical_progress: 0,
+    const storage = ok(await restoreBackup(manifest, ws.options({path: target, backupsDirectory: path.join(ws.directory, 'restored-backups'), migrations: upTo(6)})));
+    expect(storage.summary).toMatchObject({schemaVersion: 6, migratedFrom: 1});
+    expectRepresentative(storage, target, {schema_migrations: 6,...UPLOAD_SYNC_EMPTY_COUNTS, upload_projection_pins:0,upload_projection_members:0,upload_projection_configurations:0,upload_projection_intervals:0,upload_projection_evidence_versions:0, logical_memberships: 1, logical_progress: 0,
       logical_projection_states: 1, logical_revisions: 1, logical_trips: 1, logical_trucks: 0, observation_closes: 0});
   });
   it('refuses synthetic data at the production history path before writing anything', async () => {
@@ -159,4 +162,21 @@ describe('REG-013 restore into a new file', () => {
     expect(files(ws.directory).filter(name => name.startsWith('from-damaged'))).toEqual([]);
     expect(JSON.parse(readFileSync(manifest, 'utf8')).fileSha256).not.toBe(sha256(backup));
   });
+});
+
+it('REG-012/013 copies owners, unbound reservations, scan cursors, frozen bytes, backoff, attempts and receipts through generic verified backup',async()=>{
+  const conn=await openConnection(ws.options({purpose:'history'})),storage=tracked(conn),db=conn.writer(),source=await uploadTestSource(storage);
+  let workId=await uploadTestWork(storage,source);ok(storage.freezeUploadMaterialization({workId,producerVersion:'test',createdUtcMs:1000}));ok(storage.releaseUploadMaterialization({workId}));
+  const first=ok(storage.claimUploadAttempt({attemptId:randomUUID(),registrationId:source.registrationId,expectedVersion:'1',mode:'any',nowMs:1000}));ok(storage.recordUploadAttemptOutcome({attemptId:first.attemptId!,kind:'retry',retryAtMs:10000,nowMs:1000}));
+  ok(storage.recordCompleteness(source.script.session,{tripUuid:source.tripUuid,kind:'sample-loss'}));workId=await uploadTestWork(storage,source);ok(storage.freezeUploadMaterialization({workId,producerVersion:'test',createdUtcMs:2000}));
+  const second=ok(storage.claimUploadAttempt({attemptId:randomUUID(),registrationId:source.registrationId,expectedVersion:'1',mode:'any',nowMs:2000}));ok(storage.commitUploadReceipt({attemptId:second.attemptId!,statusCode:202,body:uploadReceipt(second.eventId!)}));
+  const runId=randomUUID();ok(storage.confirmUploadOwner({confirmationId:runId,registrationId:source.registrationId,credentialGeneration:'rotated',expectedVersion:'1'}));ok(storage.advanceUploadScan({runId,registrationId:source.registrationId}));
+  const active=ok(storage.claimUploadAttempt({attemptId:randomUUID(),registrationId:source.registrationId,expectedVersion:'2',mode:'any',nowMs:10000}));expect(active.payload).toEqual(first.payload);ok(storage.disconnectUploadOwner({expectedVersion:'2'}));
+  const script=new Script('10000000-0000-4000-8000-000000000099'),tripUuid=tripUuidFor(script.session,'1');ok(storage.upsertSession({message:uploadGame(script.welcome())}));ok(storage.commitEvent({message:uploadGame(script.event(r.jobConfigured())),profile:{...uploadProof(script),scope:'c'.repeat(64)},effects:[{kind:'trip.open',tripUuid,game:'ets2',gameMode:{mode:'unknown',method:'none',confidence:'none'},jobConfiguration:'this-event',recordingCompleteness:'complete',startedUtcMs:3000}]}));
+  const digest=contentDigest(db);expect(digest.rowCounts.upload_envelopes).toBe(2);expect(digest.rowCounts.upload_receipts).toBe(1);expect(digest.rowCounts.upload_candidates).toBe(2);expect(digest.rowCounts.upload_connection).toBe(1);
+  const backup=await backupBeforeMigration(db,{file:ws.database,backupsDirectory:ws.backups,databaseUuid:storage.summary.databaseUuid,fromVersion:6,now:ws.now,appVersion:'test'}),copy=path.join(ws.backups,backup.fileName);expect(digestOf(copy)).toEqual(digest);
+  const replicaConn=await openConnection(ws.options({path:copy,purpose:'history'})),replica=tracked(replicaConn);expect(contentDigest(replicaConn.writer())).toEqual(digest);
+  expect(ok(replica.ensureUploadInstallation())).toEqual(ok(storage.ensureUploadInstallation()));expect(ok(replica.getUploadStoreStatus({registrationId:source.registrationId}))).toEqual(ok(storage.getUploadStoreStatus({registrationId:source.registrationId})));
+  for(const item of [replica,storage]){expect(ok(item.recoverUploadAttempt({attemptId:active.attemptId!})).status).toBe('recovered');expect(ok(item.reclaimUploadPayloads({limit:1}))).toMatchObject({examined:1,reclaimed:1,events:1});}
+  expect(contentDigest(replicaConn.writer())).toEqual(contentDigest(db));expect(db.prepare("SELECT count(*) FROM upload_reservations WHERE mode='unbound'").pluck().get()).toBe(1n);
 });

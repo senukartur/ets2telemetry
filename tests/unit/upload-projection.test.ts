@@ -1,6 +1,6 @@
 import {readFileSync} from 'node:fs';
 import {describe, expect, it} from 'vitest';
-import {isUploadPageQuery, isUploadProjection, isUploadProjectionPage, mapUploadProjection,
+import {beginUploadFold,advanceUploadFold,finishUploadFold,isUploadPageQuery, isUploadProjection, isUploadProjectionPage, mapUploadProjection,
   type UploadMember, type UploadProjection, type UploadProjectionPage, type UploadSummary} from '../../packages/storage/src/upload-projection';
 import {ETS2_A, ETS2_B, job} from '../shared/trip-messages';
 
@@ -108,4 +108,18 @@ describe('private Dashboard summary projection', () => {
     const page={...f.pages[0],rows:f.pages[0].rows.slice(0,1),nextCursor:`${query.snapshot}:members:1`};expect(isUploadProjectionPage(page,query)).toBe(true);
     expect(isUploadProjectionPage({...page,rows:[{...page.rows[0],extra:true}]},query)).toBe(false);
   });
+});
+
+it('REG-004/009 folds independently expected pages with constant state and refuses missing/out-of-order pages',()=>{
+  const f=fixture();let fold=beginUploadFold(f.pin);
+  expect(finishUploadFold(f.pin,fold)).toEqual({status:'hold',reason:'evidence-incomplete'});
+  expect(advanceUploadFold(f.pin,fold,f.pages[1],()=>true).invalid).toBe('evidence-incomplete');
+  for(const page of f.pages)fold=advanceUploadFold(f.pin,fold,page,(trip,session)=>trip===root&&session===ETS2_A);
+  expect(finishUploadFold(f.pin,fold)).toMatchObject({status:'projected',summary:golden.expected});
+  const many=fixture();many.pin.totals.members=10_001;many.pages[0].total=10_001;fold=beginUploadFold(many.pin);
+  for(let offset=0;offset<10_001;offset+=100){const rows=Array.from({length:Math.min(100,10_001-offset)},(_,i)=>({...many.pages[0].rows[0],id:String(offset+i+1)}));const end=offset+rows.length;
+    fold=advanceUploadFold(many.pin,fold,{...many.pages[0],cursor:offset?`${many.pin.snapshot}:members:${offset}`:null,nextCursor:end<10_001?`${many.pin.snapshot}:members:${end}`:null,rows},()=>true);
+    expect(JSON.stringify(fold).length).toBeLessThan(2500);expect(fold.items.length).toBeLessThanOrEqual(10);
+  }
+  expect(fold.counts.members).toBe(10_001);expect(fold.kind).toBe(1);
 });
