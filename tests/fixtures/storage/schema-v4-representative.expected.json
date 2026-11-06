@@ -1,0 +1,20 @@
+{
+  "comment": "Hand-written from frozen schema3 inputs and migration4 at c4ade0cbc7f02176d303e47601aff54f3c2105c1: four retired singleton roots, no invented profile or continuation; originals preserved.",
+  "tripUuids": [
+    "70000000-0000-4000-8000-000000000001",
+    "70000000-0000-4000-8000-000000000002",
+    "70000000-0000-4000-8000-000000000003",
+    "70000000-0000-4000-8000-000000000004"
+  ],
+  "outcomes": [
+    "delivered",
+    "none",
+    "none",
+    "open"
+  ],
+  "samples": 2,
+  "events": 5,
+  "roots": 4,
+  "memberships": 4,
+  "revisions": 4
+}

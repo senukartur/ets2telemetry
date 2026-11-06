@@ -4,6 +4,7 @@
 // cascades across multi-segment continuation trips under schema v4, enforces active recording guards
 // (STORAGE_BUSY), and works across the StorageClient worker boundary.
 import {once} from 'node:events';
+import {randomUUID} from 'node:crypto';
 import path from 'node:path';
 import {Worker} from 'node:worker_threads';
 import {afterEach, beforeEach, describe, expect, it} from 'vitest';
@@ -75,6 +76,20 @@ function closeContinuation(storage: Storage, script: Script, uuid: string, termi
 }
 
 describe('ET-065 trip deletion', () => {
+  it('retains redirected provisional roots before any group deletion mutation until their pins are released',async()=>{
+    const storage=await ws.open(),a=new Script(ETS2_A),root=openContinuation(storage,a);closeContinuation(storage,a,root);
+    const b=new Script(ETS2_B),alias=openContinuation(storage,b,job(),false),pinId=randomUUID();
+    ok(storage.beginUploadProjection({pinId,tripUuid:alias}));
+    // Commit the association after the provisional root has been retained.
+    ok(storage.openAttachedTrip({pluginSessionId:b.session,nextEventSeq:String(b.next),job:job(),effects:[],observeTripUuid:alias,
+      profile:proof(b),sourceClockId:b.clockId,monotonicNs:'999999999999999'}));
+    closeContinuation(storage,b,alias,true);
+    const before=ok(storage.journalTrip(root));
+    failed(storage.deleteTrip(root),'STORAGE_BUSY');failed(storage.deleteTrip(alias),'STORAGE_BUSY');expect(ok(storage.journalTrip(root))).toEqual(before);
+    expect(ok(storage.advanceUploadProjection(pinId)).state).toBe('invalidated');failed(storage.deleteTrip(root),'STORAGE_BUSY');
+    let released=ok(storage.releaseUploadProjection(pinId));while(released.state==='releasing')released=ok(storage.releaseUploadProjection(pinId));
+    ok(storage.deleteTrip(root));expect(ok(storage.listTrips()).trips).toEqual([]);
+  });
   it('deletes a delivered trip, cascades child records, unlinks event attributions, and satisfies schema foreign keys (REG-014)', async () => {
     ws.copyFixture(REPRESENTATIVE, ws.database);
     const storage: Storage = await ws.open();

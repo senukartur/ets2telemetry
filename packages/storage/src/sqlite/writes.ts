@@ -690,6 +690,8 @@ export function deleteTrip(conn: StorageConnection, tripUuid: string, options: D
       }
     }
 
+    const hasPins=statement(db,"SELECT 1 FROM sqlite_master WHERE type='table' AND name='upload_projection_pins'").get()!==undefined;
+    if(hasPins)for(const id of logicalIds)if(statement(db,'SELECT 1 FROM upload_projection_pins WHERE root_ref=? LIMIT 1').get(id))fail('STORAGE_BUSY');
     const rejectIfOpen = options.rejectIfOpen ?? true;
     if (rejectIfOpen && memberRows.some(m => m.outcome === 'open')) {
       fail('STORAGE_BUSY');

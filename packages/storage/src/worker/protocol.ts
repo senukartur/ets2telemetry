@@ -14,8 +14,8 @@ import type {
 } from '../api';
 import {JOURNAL_ANSWER_INVALID} from '../api';
 import {ERROR_MESSAGES} from '../errors';
-import {isUploadPageQuery, isUploadProjection, isUploadProjectionPage, isUploadUuid,
-  type UploadProjection, type UploadProjectionPage, type UploadProjectionPageQuery} from '../upload-projection';
+import {isUploadPageQuery, isUploadProjection, isUploadProjectionPage, isUploadUuid, isUploadProjectionBegin, isUploadPreparation,
+  type UploadProjectionBegin, type UploadProjectionPreparation, type UploadProjectionPage, type UploadProjectionPageQuery} from '../upload-projection';
 
 /**
  * Open options that cross the worker boundary. Test hooks, injected migrations and clocks are in-process only and are
@@ -44,7 +44,10 @@ export interface StorageCommands {
   listTrips: {args: {page?: TripPage}; value: TripList};
   listSamples: {args: {scope: {tripUuid: string} | {pluginSessionId: string}; page?: {afterId?: string; limit?: number; includeExcluded?: boolean}}; value: SampleRecord[]};
   storageInfo: {args: Record<never, never>; value: StorageInfo};
-  pinUploadProjection: {args: {tripUuid: string}; value: UploadProjection};
+  beginUploadProjection: {args: {input: UploadProjectionBegin}; value: UploadProjectionPreparation};
+  advanceUploadProjection: {args: {pinId: string}; value: UploadProjectionPreparation};
+  getUploadProjectionPreparation: {args: {pinId: string}; value: UploadProjectionPreparation};
+  releaseUploadProjection: {args: {pinId: string}; value: UploadProjectionPreparation};
   readUploadProjectionPage: {args: {query: UploadProjectionPageQuery}; value: UploadProjectionPage};
   /** Journal reads (ET-016 PR-2, J5); arguments and answers are checked strictly on both sides of the boundary. */
   journalTrips: {args: {query?: JournalTripsQuery}; value: JournalTripPage};
@@ -68,7 +71,7 @@ export type ParsedResponse = StorageResponse | {type: 'storage.response'; id: nu
 
 export const COMMAND_NAMES: readonly CommandName[] = Object.freeze([
   'observeHardMode', 'open', 'upsertSession', 'commitEvent', 'commitGap', 'appendSamples', 'recordCompleteness', 'openAttachedTrip', 'committedThrough', 'getSession', 'getEvent',
-  'listEvents', 'getTrip', 'deleteTrip', 'listTrips', 'listSamples', 'storageInfo', 'pinUploadProjection', 'readUploadProjectionPage', 'journalTrips', 'journalTrip', 'journalEvents', 'journalIntervals', 'close'
+  'listEvents', 'getTrip', 'deleteTrip', 'listTrips', 'listSamples', 'storageInfo', 'beginUploadProjection', 'advanceUploadProjection', 'getUploadProjectionPreparation', 'releaseUploadProjection', 'readUploadProjectionPage', 'journalTrips', 'journalTrip', 'journalEvents', 'journalIntervals', 'close'
 ] as const);
 
 const isRecord = (value: unknown): value is Record<string, unknown> => typeof value === 'object' && value !== null && !Array.isArray(value);
@@ -141,7 +144,9 @@ export function parseRequest(message: unknown): {ok: true; id: number; command: 
   const id = message.id, command = message.command;
   if (!isRecord(command) || typeof command.name !== 'string' || !(COMMAND_NAMES as readonly string[]).includes(command.name)) return {ok: false, id};
   const name = command.name as CommandName;
-  if (name === 'pinUploadProjection' && (Object.keys(command).sort().join(',') !== 'name,tripUuid' || !isUploadUuid(command.tripUuid))) return {ok:false,id};
+  if(name==='beginUploadProjection' && (Object.keys(command).sort().join(',')!=='input,name' || !isUploadProjectionBegin(command.input)))return {ok:false,id};
+  if(['advanceUploadProjection','getUploadProjectionPreparation','releaseUploadProjection'].includes(name)
+    && (Object.keys(command).sort().join(',')!=='name,pinId' || !isUploadUuid(command.pinId)))return {ok:false,id};
   if (name === 'readUploadProjectionPage' && (Object.keys(command).sort().join(',') !== 'name,query' || !isUploadPageQuery(command.query))) return {ok:false,id};
   if (name === 'open') {
     const options = command.options;
@@ -177,7 +182,10 @@ function isStorageError(value: unknown): value is StorageError {
 function validValue(command: StorageCommand, value: unknown): boolean {
   const name = command.name;
   switch (command.name) {
-  case 'pinUploadProjection': return isUploadProjection(value, command.tripUuid);
+  case 'beginUploadProjection': return isUploadPreparation(value,command.input.pinId) && value.state!=='released'
+    && (value.state==='ready'?isUploadProjection(value.projection,command.input.tripUuid):true);
+  case 'advanceUploadProjection': case 'getUploadProjectionPreparation': return isUploadPreparation(value,command.pinId) && value.state!=='released';
+  case 'releaseUploadProjection': return isUploadPreparation(value,command.pinId) && ['releasing','released'].includes(value.state);
   case 'readUploadProjectionPage': return isUploadProjectionPage(value, command.query);
   case 'appendSamples': return isRecord(value) && isCount(value.appended) && isCount(value.skipped);
   case 'commitEvent': case 'commitGap':

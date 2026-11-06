@@ -99,3 +99,19 @@ describe('REG-013 immutable storage fixtures', () => {
     expectRepresentativeV2(storage, copy);
   });
 });
+
+it('REG-013 freezes the actual schema4 DDL and four singleton meanings without upgrading the fixture',async()=>{
+  const copy=ws.copyFixture('schema-v4-representative.sqlite');
+  const expected=JSON.parse(readFileSync(path.join(STORAGE_FIXTURES,'schema-v4-representative.expected.json'),'utf8'));
+  const storage=await ws.open({path:copy,migrations:MIGRATIONS.slice(0,4)});expect(storage.summary.schemaVersion).toBe(4);storage.close();
+  const fresh=await ws.open({migrations:MIGRATIONS.slice(0,4)});fresh.close();expect(schemaOf(copy)).toEqual(schemaOf(ws.database));
+  readOnly(copy,db=>{
+    expect(db.prepare('SELECT trip_uuid FROM trips ORDER BY id').pluck().all()).toEqual(expected.tripUuids);
+    expect(db.prepare('SELECT outcome FROM trips ORDER BY id').pluck().all()).toEqual(expected.outcomes);
+    expect(db.prepare('SELECT count(*) FROM logical_trips WHERE retired=1 AND profile_scope IS NULL').pluck().get()).toBe(expected.roots);
+    expect(db.prepare('SELECT count(*) FROM logical_memberships WHERE trip_ref=logical_ref AND previous_logical_ref IS NULL').pluck().get()).toBe(expected.memberships);
+    expect(db.prepare('SELECT count(*) FROM logical_revisions').pluck().get()).toBe(expected.revisions);
+    expect(db.prepare('SELECT count(*) FROM events').pluck().get()).toBe(expected.events);
+    expect(db.prepare('SELECT count(*) FROM samples').pluck().get()).toBe(expected.samples);
+  });
+});

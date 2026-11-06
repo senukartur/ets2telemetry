@@ -10,7 +10,7 @@ const absent = {available:false,reason:'not-observed'} as const;
 function fixture() {
   const occurrence = {pluginSessionId:ETS2_A,rawTripUuid:root,eventSeq:'1200',type:'job.configured',utcMs:1000};
   const pin: UploadProjection = {requestedTripUuid:root,rootTripUuid:root,readiness:'ready',rootReadiness:'ready',databaseUuid:db,purpose:'history',revision:'5',
-    snapshot:`u1:${db}:${root}:5:2:1:0:2:${'a'.repeat(64)}`,totals:{members:2,configurations:1,intervals:0},bounds:{members:'2',events:'20',gaps:'0',samples:'0',intervals:'0',accountingHead:null},
+    snapshot:`u2:${db}:${child}:80000000-0000-4000-8000-000000000001:${root}:5`,totals:{members:2,configurations:1,intervals:0},bounds:{members:'2',events:'20',gaps:'0',samples:'0',intervals:'0',accountingHead:null},
     facts:{game:'ets2',pluginSessionId:ETS2_A,outcome:'delivered',closeReason:'outcome',recordingCompleteness:'partial',openedBy:'event',checkpointNextEventSeq:null,checkpointUtcMs:null,
       opening:occurrence,outcomeOccurrence:{pluginSessionId:ETS2_B,rawTripUuid:child,eventSeq:'3',type:'job.delivered',utcMs:2000},close:null,
       gameMode:{mode:'unknown',method:'none',confidence:'none',ambiguous:false},job:job({expectedIncome:{available:true,value:{raw:'18446744073709551615',sdkType:'u64',currency:{status:'unknown'}}}}),
@@ -68,10 +68,10 @@ describe('private Dashboard summary projection', () => {
   it('holds identity-pending roots and incomplete/mixed pages', () => {
     const f=fixture();f.pin.readiness=f.pin.rootReadiness='identity-pending';expect(mapUploadProjection(f.pin,f.pages)).toEqual({status:'hold',reason:'identity-pending'});
     f.pin.readiness=f.pin.rootReadiness='ready';expect(mapUploadProjection(f.pin,f.pages.slice(0,2))).toEqual({status:'hold',reason:'evidence-incomplete'});
-    f.pages[0].snapshot=f.pin.snapshot.replace(':5:',':6:');expect(mapUploadProjection(f.pin,f.pages)).toEqual({status:'hold',reason:'evidence-incomplete'});
+    f.pages[0].snapshot=f.pin.snapshot.replace(/:5$/,':6');expect(mapUploadProjection(f.pin,f.pages)).toEqual({status:'hold',reason:'evidence-incomplete'});
   });
   it('folds all historical trailers and intervals without exposing private rows or claiming a current chain', () => {
-    const f=fixture();f.pin.totals.configurations=11;f.pin.totals.intervals=51;f.pin.snapshot=`u1:${db}:${root}:5:2:11:51:2:${'a'.repeat(64)}`;
+    const f=fixture();f.pin.totals.configurations=11;f.pin.totals.intervals=51;f.pin.snapshot=`u2:${db}:${child}:80000000-0000-4000-8000-000000000001:${root}:5`;
     const config=f.pages[1].rows[0];f.pages[1].rows=Array.from({length:11},(_,i)=>({...config,id:String(i+1)}));f.pages[1].total=11;
     f.pages[2].rows=Array.from({length:51},(_,i)=>({id:String(i+1),rawTripUuid:root,pluginSessionId:ETS2_A,kind:'event-loss'}));f.pages[2].total=51;
     for(const page of f.pages)page.snapshot=f.pin.snapshot;
