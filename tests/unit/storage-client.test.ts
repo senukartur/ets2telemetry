@@ -51,6 +51,54 @@ const code = (result: Result<unknown> | undefined) => result && !result.ok ? res
 const error = (value: StorageErrorCode) => ({ok: false, error: storageError(value)});
 
 describe('StorageClient command flow', () => {
+  it.each(['commitEvent','appendSamples'] as const)('admits %s at the combined limit by refusing only the newest queued background request',async name=>{
+    const f=fixture({maxQueued:2}),opening=f.client.open(OPEN),oldest=f.client.beginUploadProjection({pinId:P1,tripUuid:P1});
+    const newest=track(f.client.advanceUploadProjection(P1));
+    const recorder=name==='commitEvent'?f.client.commitEvent({message:{}}):f.client.appendSamples(P1,[]);
+    await Promise.resolve();expect(newest.value).toEqual(error('STORAGE_BUSY'));
+    expect(f.sent).toHaveLength(1);
+    await expect(f.client.releaseUploadProjection(P1)).resolves.toEqual(error('STORAGE_BUSY'));
+    f.ok(1,SUMMARY);await opening;expect(f.sent[1].command.name).toBe(name);
+    f.ok(2,name==='commitEvent'?COMMITTED:{appended:0,skipped:0});await expect(recorder).resolves.toMatchObject({ok:true});
+    expect(f.sent[2].command.name).toBe('beginUploadProjection');f.ok(3,{pinId:P1,state:'preparing',examined:0,projection:null});await oldest;
+    expect(f.sent.map(request=>request.command.name)).toEqual(['open',name,'beginUploadProjection']);
+  });
+  it('keeps FIFO within the surviving mixed queue while repeated recorder admission uses the same capacity',async()=>{
+    const f=fixture({maxQueued:4}),opening=f.client.open(OPEN),first=f.client.beginUploadProjection({pinId:P1,tripUuid:P1});
+    const coverage=f.client.committedThrough(P1),second=f.client.advanceUploadProjection(P1),newest=f.client.releaseUploadProjection(P1);
+    const commit=f.client.commitEvent({message:{}});await expect(newest).resolves.toEqual(error('STORAGE_BUSY'));
+    const samples=f.client.appendSamples(P1,[]);await expect(second).resolves.toEqual(error('STORAGE_BUSY'));
+    await expect(f.client.getUploadProjectionPreparation(P1)).resolves.toEqual(error('STORAGE_BUSY'));
+    f.ok(1,SUMMARY);await opening;expect(f.sent[1].command.name).toBe('committedThrough');
+    f.ok(2,'1');await coverage;expect(f.sent[2].command.name).toBe('commitEvent');
+    f.ok(3,COMMITTED);await commit;expect(f.sent[3].command.name).toBe('appendSamples');
+    f.ok(4,{appended:0,skipped:0});await samples;expect(f.sent[4].command.name).toBe('beginUploadProjection');
+    f.ok(5,{pinId:P1,state:'preparing',examined:0,projection:null});await first;expect(f.sent).toHaveLength(5);
+  });
+  it('refuses overflow when the queue contains only recorder work or its configured capacity is zero',async()=>{
+    for(const maxQueued of [0,1]){
+      const f=fixture({maxQueued}),opening=f.client.open(OPEN);
+      const queued=maxQueued===1?f.client.commitEvent({message:{}}):undefined;
+      await expect(f.client.appendSamples(P1,[])).resolves.toEqual(error('STORAGE_BUSY'));
+      await expect(f.client.advanceUploadProjection(P1)).resolves.toEqual(error('STORAGE_BUSY'));
+      f.ok(1,SUMMARY);await opening;
+      if(queued){f.ok(2,COMMITTED);await queued;}expect(f.sent).toHaveLength(maxQueued+1);
+    }
+  });
+  it('keeps an evicted request busy across close while admitted work is cancelled and in-flight work finishes',async()=>{
+    const f=fixture({maxQueued:1}),advance=f.client.advanceUploadProjection(P1),evicted=f.client.releaseUploadProjection(P1),commit=f.client.commitEvent({message:{}});
+    await expect(evicted).resolves.toEqual(error('STORAGE_BUSY'));
+    const closing=f.client.close();await expect(commit).resolves.toEqual(error('STORAGE_CLOSED'));
+    f.ok(1,{pinId:P1,state:'invalidated',examined:0,projection:null});await expect(advance).resolves.toMatchObject({ok:true});
+    expect(f.sent[1].command.name).toBe('close');f.ok(2,undefined);f.exit(0);await expect(closing).resolves.toEqual({clean:true});
+  });
+  it('keeps the original in-flight deadline after admission evicts background work',async()=>{
+    const f=fixture({maxQueued:1}),advance=f.client.advanceUploadProjection(P1),evicted=f.client.releaseUploadProjection(P1);
+    vi.advanceTimersByTime(COMMAND_DEADLINE_MS-1);
+    const commit=f.client.commitEvent({message:{}});await expect(evicted).resolves.toEqual(error('STORAGE_BUSY'));
+    vi.advanceTimersByTime(1);await expect(advance).resolves.toEqual(error('TIMEOUT'));await expect(commit).resolves.toEqual(error('WORKER_FAILED'));
+    expect(f.sent).toHaveLength(1);expect(f.client.state).toBe('failed');
+  });
   it('prioritizes queued recorder commands and keeps FIFO within both classes under the combined limit',async()=>{
     const f=fixture({maxQueued:4}),opening=f.client.open(OPEN),begin=f.client.beginUploadProjection({pinId:P1,tripUuid:P1}),advance=f.client.advanceUploadProjection(P1);
     const commit=f.client.commitEvent({message:{}}),coverage=f.client.committedThrough(P1);

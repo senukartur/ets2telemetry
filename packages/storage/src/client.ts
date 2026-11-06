@@ -71,6 +71,8 @@ interface InFlight extends Pending {id: number; timer: unknown}
 /** Whether an argument is an object whose fields can be copied; anything else is forwarded for the parser to refuse. */
 const isObject = (value: unknown): value is object => typeof value === 'object' && value !== null;
 const failure = (code: StorageErrorCode): {ok: false; error: StorageError} => ({ok: false, error: storageError(code)});
+const backgroundCommands = new Set<CommandName>(['beginUploadProjection','advanceUploadProjection','getUploadProjectionPreparation','readUploadProjectionPage','releaseUploadProjection']);
+const isBackground = (name: CommandName) => backgroundCommands.has(name);
 
 export class StorageClient {
   #state: ClientState = 'running';
@@ -208,7 +210,15 @@ export class StorageClient {
   #request<K extends CommandName>(command: StorageCommand & {name: K}): Promise<Result<CommandValue<K>>> {
     if (this.#close) return Promise.resolve(failure('STORAGE_CLOSED'));
     if (this.#state === 'failed') return Promise.resolve(failure('WORKER_FAILED'));
-    if (this.#inFlight && this.#queue.length >= this.#options.maxQueued) return Promise.resolve(failure('STORAGE_BUSY'));
+    if (this.#inFlight && this.#queue.length >= this.#options.maxQueued) {
+      let newestBackground = -1;
+      if (!isBackground(command.name)) for (let at=this.#queue.length-1;at>=0;at--) {
+        if (isBackground(this.#queue[at].command.name)) {newestBackground=at;break;}
+      }
+      if (newestBackground < 0) return Promise.resolve(failure('STORAGE_BUSY'));
+      // Queued work has never reached the worker: refusing it preserves the combined cap without an ambiguous write.
+      this.#queue.splice(newestBackground,1)[0].resolve(failure('STORAGE_BUSY'));
+    }
     return new Promise<Result<CommandValue<K>>>(resolve => {
       this.#queue.push({command, resolve: resolve as Pending['resolve']});
       this.#pump();
@@ -218,8 +228,7 @@ export class StorageClient {
   #pump(): void {
     if (this.#inFlight || this.#state !== 'running') return;
     // Projection work yields after every bounded request; recorder requests retain FIFO priority.
-    const background = (name: CommandName) => ['beginUploadProjection','advanceUploadProjection','getUploadProjectionPreparation','readUploadProjectionPage','releaseUploadProjection'].includes(name);
-    const ordinary = this.#queue.findIndex(pending => !background(pending.command.name));
+    const ordinary = this.#queue.findIndex(pending => !isBackground(pending.command.name));
     const next = this.#queue.splice(ordinary<0?0:ordinary,1)[0];
     if (next) this.#send(next);
   }

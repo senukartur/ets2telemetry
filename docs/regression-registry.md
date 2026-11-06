@@ -198,7 +198,7 @@ Columns:
 | `tests/unit/steam-discovery.test.ts` | Node unit (Vitest) | REG-015 | R, F, V (et-017) | ET-017 (PR-2) | PR (tests job, `npm test`) | security |
 | `tests/unit/steam-registry.test.ts` | Node unit (Vitest) | REG-015 | R, F, V (et-017) | ET-017 (PR-2) | PR (tests job, `npm test`) | security |
 | `tests/unit/steam-vdf.test.ts` | Node unit (Vitest) | REG-015 | R, F, V (et-017) | ET-017 (PR-2) | PR (tests job, `npm test`) | — |
-| `tests/unit/storage-client.test.ts` | Node unit (Vitest) | REG-007, REG-010, REG-011, REG-014 | R, T | ET-013 (#60); ET-038; ET-103a | PR (tests job, `npm test`) | ACK, regression, private upload request/result bounds |
+| `tests/unit/storage-client.test.ts` | Node unit (Vitest) | REG-007, REG-010, REG-011, REG-014 | R, T | ET-013 (#60); ET-038; ET-103a, ET-103b | PR (tests job, `npm test`) | ACK, regression, private upload request/result bounds, recorder admission/dispatch priority within the combined queue cap |
 | `tests/unit/storage-codec.test.ts` | Node unit (Vitest) | REG-009 | R | ET-013 (#51) | PR (tests job, `npm test`) | — |
 | `tests/unit/storage-errors.test.ts` | Node unit (Vitest) | REG-007 | R | ET-013 (#51) | PR (tests job, `npm test`) | — |
 | `tests/unit/storage-retention.test.ts` | Node unit (Vitest) | REG-007, REG-013 | V (et-013) | ET-013 (#51) | PR (tests job, `npm test`) | — |

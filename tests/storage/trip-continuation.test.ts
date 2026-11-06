@@ -1338,7 +1338,9 @@ describe('REG-003/005/008/012/014 durable logical trips', () => {
     const first={...base,id:'logical-before-restart',seed:'et063-before-restart',steps:[truck,base.steps[1],configured,base.steps[3],
       {atMs:100,action:'frame',channels:{speed:20,odometer:1000,'game.time':601,'world.placement':{x:0,y:0,z:0,heading:0,pitch:0,roll:0}}},
       {atMs:1100,action:'frame',channels:{speed:20,odometer:1000.0625,'game.time':602,'world.placement':{x:20,y:0,z:0,heading:0,pitch:0,roll:0}}},
-      {atMs:2100,action:'frame',channels:{speed:20,odometer:1000.125,'game.time':603,'world.placement':{x:40,y:0,z:0,heading:0,pitch:0,roll:0}}}],
+      {atMs:2100,action:'frame',channels:{speed:20,odometer:1000.125,'game.time':603,'world.placement':{x:40,y:0,z:0,heading:0,pitch:0,roll:0}}},
+      // Its ACK proves the preceding readings passed the recorder FIFO before the source closes.
+      {atMs:2150,action:'gameplay',id:'player.fined',attributes:[{name:'fine',sdkType:'s64',value:'0'}]}],
       transport:[{atMs:0,action:'connect',client:{durable:true}},{atMs:2200,action:'disconnect'}]};
     const next={...first,id:'logical-next-day',seed:'et063-next-day',steps:[{atMs:0,action:'utcJump',deltaMs:86_400_000},truck,base.steps[1],configured,base.steps[3],
       {atMs:100,action:'frame',channels:{speed:20,odometer:1000.0625,'game.time':602,'world.placement':{x:20,y:0,z:0,heading:0,pitch:0,roll:0}}},
@@ -1350,9 +1352,26 @@ describe('REG-003/005/008/012/014 durable logical trips', () => {
       const source=scenarioSource(replayV1(input).scenario);
       const profile:ProfileObservation={version:1,scope:'c'.repeat(64),binding:'d'.repeat(64),game:'ets2',pluginSessionId:source.pluginSessionId,
         processInstanceId:source.processInstanceId,sourceClockId:seededId(input.seed,'capture-clock'),afterMonotonicNs:'0',loadGeneration:1};
-      const run=await runRecording(input,{path:ws.database,backups:ws.backups},{profileEvidence:()=>profile});
+      let gated=false,held=false,release!:()=>void;
+      const membershipAnswer=new Promise<void>(resolve=>{release=resolve;});
+      const run=await runRecording(input,{path:ws.database,backups:ws.backups},{profileEvidence:()=>profile,onState:(_state,service)=>{
+        if(input!==first || gated)return;gated=true;
+        const attach=service.client.openAttachedTrip.bind(service.client),capture=service.recorder.capture.bind(service.recorder),flush=service.ingestion.flush.bind(service.ingestion);
+        // Gate one membership answer on tail-event intake instead of relying on host scheduling.
+        service.client.openAttachedTrip=async request=>{if(held)return attach(request);held=true;const result=await attach(request);await guarded(membershipAnswer,'next-day tail marker intake',15_000);return result;};
+        service.recorder.capture=message=>{if(message.kind==='event' && message.data.record.type==='player.fined')release();return capture(message);};
+        // On a source without a tail ACK barrier, stop legitimately drops the queued readings before this answer returns.
+        service.ingestion.flush=()=>{const pending=flush();release();return pending;};
+      }}).finally(release);
+      if(input===first)expect(held).toBe(true);
       for(const ack of run.acks)expect(ack.through).toBeLessThanOrEqual(ack.coverage);
       const client=run.services.at(-1)!.client,list=ok(await client.journalTrips());expect(run.services.flatMap(s=>s.logs.filter(([event])=>event==='V1_DURABLE_UNAVAILABLE' || event==='V1_SAMPLES_DISCARDED'))).toEqual([]);expect(list.trips).toHaveLength(1);
+      if(input===first){
+        expect(run.served(0).at(-1),'tail event acknowledged before disconnect').toBe('5');
+        const samples=ok(await client.listSamples({pluginSessionId:source.pluginSessionId}));
+        expect(samples.map(sample=>sample.odometer.available?sample.odometer.value:null),'all original endpoints persisted, including the 62.5 m save point')
+          .toEqual([1000000,1000062.5,1000125]);
+      }
       firstUuid ||= list.trips[0].tripUuid;expect(list.trips[0].tripUuid).toBe(firstUuid);
       const detail=ok(await client.journalTrip(firstUuid));expect(parseJournalReply({kind:'trip',tripUuid:firstUuid},{ok:true,value:detail})).toEqual({ok:true,value:detail});
       if(input===next){expect(detail.trip).toMatchObject({outcome:'delivered',observedDistanceM:driving==='driving'?{available:true,value:125}:{available:false,reason:'not-observed'}});expect(detail.exportBounds.sourceTotal).toBe(2);}

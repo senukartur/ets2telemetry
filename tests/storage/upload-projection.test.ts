@@ -126,7 +126,7 @@ describe('immutable private upload projections through the SQLite worker', () =>
     ok(storage.commitEvent({message:withEventSeq('event-trailer-configured',7n)}));
     db.transaction(()=>{
       db.exec('CREATE TEMP TABLE member_seed AS SELECT * FROM trips WHERE id=1');
-      for(let id=10;id<261;id++){
+      for(let id=20;id<=520;id+=2){
         db.prepare('UPDATE member_seed SET id=?,trip_uuid=?').run(id,`71000000-0000-4000-8000-${String(id).padStart(12,'0')}`);
         db.exec('INSERT INTO trips SELECT * FROM member_seed');
         db.prepare('INSERT INTO logical_memberships(trip_ref,logical_ref,decision_key) VALUES(?,1,?)').run(id,`fixture-member-${id}`);
@@ -134,8 +134,8 @@ describe('immutable private upload projections through the SQLite worker', () =>
       // One shared event has hundreds of links, but must produce one deterministic configuration.
       db.exec('INSERT INTO trip_trailers SELECT trip_ref,1 FROM logical_memberships WHERE logical_ref=1');
       db.exec("INSERT INTO completeness_intervals(plugin_session_ref,trip_ref,kind,created_utc_ms) SELECT 1,trip_ref,'sample-loss',1000 FROM logical_memberships WHERE logical_ref=1");
-      // Earlier previous-root links are raw input rows even when they no longer belong to this revision.
-      for(let id=300;id<451;id++){
+      // Interleave 151 rejected previous memberships below the current-member bound, so each is examined.
+      for(let id=21;id<=321;id+=2){
         db.prepare('UPDATE member_seed SET id=?,trip_uuid=?').run(id,`72000000-0000-4000-8000-${String(id).padStart(12,'0')}`);db.exec('INSERT INTO trips SELECT * FROM member_seed');
         db.prepare('INSERT INTO logical_memberships(trip_ref,logical_ref,previous_logical_ref,joined_after_revision,decision_key) VALUES(?,2,1,1,?)').run(id,`old-member-${id}`);
       }
@@ -154,25 +154,50 @@ describe('immutable private upload projections through the SQLite worker', () =>
     const intervalPlan=(db.prepare('EXPLAIN QUERY PLAN SELECT id,kind,plugin_session_ref FROM completeness_intervals WHERE trip_ref=? AND id>? AND id<=? ORDER BY id LIMIT ?')
       .all(1n,0n,9_223_372_036_854_775_807n,1) as {detail:string}[]).map(row=>row.detail);
     expect(intervalPlan).toEqual(['SEARCH completeness_intervals USING INDEX completeness_intervals_trip (trip_ref=? AND rowid>? AND rowid<?)']);
-    const prepareSpy=vi.spyOn(db,'prepare');
+    // Observe persisted copies and cursors independently of the worker's examined counter or SQL spellings.
+    const observe=(connection:typeof db)=>{
+      const prepare=connection.prepare.bind(connection);
+      return ()=>({
+        cursor:prepare('SELECT phase,member_after,item_after,source_after FROM upload_projection_pins WHERE pin_id=?').get(pinId),
+        copies:Object.fromEntries(['members','configurations','intervals'].map(kind=>[kind,Number(prepare(`SELECT count(*) FROM upload_projection_${kind} WHERE pin_ref=?`).pluck().get(pinId))])) as Record<'members'|'configurations'|'intervals',number>
+      });
+    };
+    // From the fixture: 252 current rows, 151 rejected previous rows, and one phase-end transition each.
+    // Each member then costs entry + one link/interval + empty end; each stream adds one phase-end.
+    // Total: 252+1+151+1 + (252*3+1)*2 + finalization = 1920 units, or 19 full turns and 20 units.
+    const milestones={
+      1:{cursor:{phase:'current',member_after:216n,item_after:0n,source_after:0n},copies:{members:100,configurations:0,intervals:0}},
+      2:{cursor:{phase:'current',member_after:416n,item_after:0n,source_after:0n},copies:{members:200,configurations:0,intervals:0}},
+      3:{cursor:{phase:'previous',member_after:113n,item_after:0n,source_after:0n},copies:{members:252,configurations:0,intervals:0}},
+      4:{cursor:{phase:'previous',member_after:313n,item_after:0n,source_after:0n},copies:{members:252,configurations:0,intervals:0}},
+      5:{cursor:{phase:'configurations',member_after:78n,item_after:1n,source_after:80n},copies:{members:252,configurations:1,intervals:0}},
+      12:{cursor:{phase:'intervals',member_after:40n,item_after:15n,source_after:42n},copies:{members:252,configurations:1,intervals:13}},
+      19:{cursor:{phase:'intervals',member_after:508n,item_after:248n,source_after:0n},copies:{members:252,configurations:1,intervals:246}},
+      20:{cursor:{phase:'finalize',member_after:0n,item_after:0n,source_after:0n},copies:{members:252,configurations:1,intervals:252}}
+    };
+    const initialProgress=observe(db),prepareSpy=vi.spyOn(db,'prepare');
     let state=ok(storage.beginUploadProjection({pinId,tripUuid:root}));expect(state).toMatchObject({state:'preparing',examined:0,projection:null});
     failed(storage.readUploadProjectionPage({snapshot:`u2:${storage.summary.databaseUuid}:${pinId}:80000000-0000-4000-8000-000000000001:${root}:1`,kind:'members',limit:1}),'INVALID_INPUT');
     state=ok(storage.advanceUploadProjection(pinId));expect(state).toMatchObject({state:'preparing',examined:100,projection:null});
-    const cursor=db.prepare('SELECT member_after,member_count FROM upload_projection_pins WHERE pin_id=?').get(pinId);
+    let previous=initialProgress();expect(previous).toEqual(milestones[1]);
     storage.close();const reopenedConn=await openConnection(ws.options({path:file}));
-    const reopened=tracked(reopenedConn),writer=reopenedConn.writer();
-    expect(writer.prepare('SELECT member_after,member_count FROM upload_projection_pins WHERE pin_id=?').get(pinId)).toEqual(cursor);
+    const reopened=tracked(reopenedConn),writer=reopenedConn.writer(),resumedProgress=observe(writer);
+    expect(resumedProgress()).toEqual(previous);
     const resumedSpy=vi.spyOn(writer,'prepare');
-    const workQueries=(calls:readonly (readonly [string,...unknown[]])[])=>calls.filter(([sql])=>/^SELECT (trip_ref,joined_after_revision FROM logical_memberships|trip_ref FROM upload_projection_members|trailer_configuration_ref FROM trip_trailers|id,kind,plugin_session_ref FROM completeness_intervals)/.test(sql)).length;
-    expect(workQueries(prepareSpy.mock.calls)).toBe(100);
     let turns=1,totalExamined=100;
     while(state.state==='preparing'){
       // A real ordinary recorder write can commit between every background turn.
       ok(reopened.recordCompleteness('10000000-0000-4000-8000-000000000001',{kind:'sample-loss'}));
-      const before=resumedSpy.mock.calls.length;state=ok(reopened.advanceUploadProjection(pinId));
-      expect(workQueries(resumedSpy.mock.calls.slice(before))+(state.state==='ready'?1:0)).toBe(state.examined);expect(state.examined).toBeLessThanOrEqual(100);totalExamined+=state.examined;turns++;
+      state=ok(reopened.advanceUploadProjection(pinId));expect(state.examined).toBeLessThanOrEqual(100);totalExamined+=state.examined;turns++;
+      const current=resumedProgress();
+      const deltas=Object.entries(current.copies).map(([kind,count])=>count-previous.copies[kind as keyof typeof previous.copies]);
+      expect(deltas.every(delta=>delta>=0)).toBe(true);expect(deltas.reduce((sum,delta)=>sum+delta,0)).toBeLessThanOrEqual(100);
+      expect(current.cursor).not.toEqual(previous.cursor);
+      if(Object.hasOwn(milestones,turns))expect(current).toEqual(milestones[turns as keyof typeof milestones]);
+      previous=current;
     }
-    expect(turns).toBeGreaterThan(10);expect(totalExamined).toBeGreaterThan(1000);expect(state.state).toBe('ready');expect(state.projection!.totals).toEqual({members:252,configurations:1,intervals:252});
+    expect(turns).toBe(20);expect(totalExamined).toBe(1920);expect(state).toMatchObject({state:'ready',examined:20});
+    expect(state.projection!.totals).toEqual({members:252,configurations:1,intervals:252});
     expect(ok(reopened.readUploadProjectionPage({snapshot:state.projection!.snapshot,kind:'members',limit:100})).rows).toHaveLength(100);
     expect(ok(reopened.readUploadProjectionPage({snapshot:state.projection!.snapshot,kind:'configurations',limit:100})).rows[0]).toMatchObject({occurrence:{rawTripUuid:root}});
     expect(recheckUploadProjection(writer,state.projection!)).toBe(true);
