@@ -54,6 +54,22 @@ export function serveStorage(port: HostPort, testOptions: HostTestOptions = {}):
     }
     if (!storage) return failed('STORAGE_CLOSED');
     switch (command.name) {
+    case 'ensureUploadInstallation': return storage.ensureUploadInstallation();
+    case 'recordUploadRegistration': return storage.recordUploadRegistration(command.input);
+    case 'confirmUploadOwner': return storage.confirmUploadOwner(command.input);
+    case 'disconnectUploadOwner': return storage.disconnectUploadOwner(command.input);
+    case 'getUploadStoreStatus': return storage.getUploadStoreStatus(command.input);
+    case 'advanceUploadScan': return storage.advanceUploadScan(command.input);
+    case 'pageUploadDiscovery': return storage.pageUploadDiscovery(command.input);
+    case 'beginUploadMaterialization': return storage.beginUploadMaterialization(command.input);
+    case 'advanceUploadMaterialization': return storage.advanceUploadMaterialization(command.input);
+    case 'freezeUploadMaterialization': return storage.freezeUploadMaterialization(command.input);
+    case 'releaseUploadMaterialization': return storage.releaseUploadMaterialization(command.input);
+    case 'claimUploadAttempt': return storage.claimUploadAttempt(command.input);
+    case 'recordUploadAttemptOutcome': return storage.recordUploadAttemptOutcome(command.input);
+    case 'recoverUploadAttempt': return storage.recoverUploadAttempt(command.input);
+    case 'commitUploadReceipt': return storage.commitUploadReceipt(command.input);
+    case 'reclaimUploadPayloads': return storage.reclaimUploadPayloads(command.input);
     case 'upsertSession': return storage.upsertSession({message: command.input.message});
     // Only the message and its effects are forwarded; in-process commit options never come from a message, only from
     // a test entry's in-process testOptions.

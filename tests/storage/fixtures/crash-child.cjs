@@ -74,7 +74,7 @@ async function migrate() {
   };
   // The real 0002 statements, then the barrier, still inside the runner's migration transaction. The facts are read on
   // the migrating connection, so they show the uncommitted state; the connection reads 64-bit integers as BigInt.
-  const real = MIGRATIONS[config.barrier==='inside0005'?4:config.barrier==='inside0004'?3:1];
+  const real = MIGRATIONS[config.barrier==='inside0006'?5:config.barrier==='inside0005'?4:config.barrier==='inside0004'?3:1];
   const wrapped = Object.freeze({...real, up(db) {
     // With `spill`, a page cache of a few pages makes SQLite write uncommitted pages of the transaction to the WAL before
     // the barrier, so the kill leaves frames without a commit record on disk instead of nothing at all.
@@ -82,7 +82,7 @@ async function migrate() {
     real.up(db);
     let walBytes = 0;
     try { walBytes = statSync(`${config.open.path}-wal`).size; } catch { /* no WAL file */ }
-    barrier(config.barrier==='inside0005'?'inside0005':config.barrier==='inside0004'?'inside0004':'inside0002', {
+    barrier(config.barrier==='inside0006'?'inside0006':config.barrier==='inside0005'?'inside0005':config.barrier==='inside0004'?'inside0004':'inside0002', {
       userVersion: Number(db.pragma('user_version', {simple: true})),
       versions: db.prepare('SELECT version FROM schema_migrations ORDER BY version').pluck().all().map(Number),
       tripsOpenedBy: Number(db.prepare("SELECT count(*) FROM pragma_table_info('trips') WHERE name = 'opened_by'").pluck().get()),
@@ -90,7 +90,7 @@ async function migrate() {
     });
   }});
   const options = {...config.open, now: () => config.nowMs,
-    ...(config.barrier === 'inside0002' ? {migrations: [MIGRATIONS[0], wrapped]} : config.barrier==='inside0005'?{migrations:[...MIGRATIONS.slice(0,4),wrapped]}:config.barrier==='inside0004'?{migrations:[...MIGRATIONS.slice(0,3),wrapped]}:{}),
+    ...(config.barrier === 'inside0002' ? {migrations: [MIGRATIONS[0], wrapped]} : config.barrier==='inside0006'?{migrations:[...MIGRATIONS.slice(0,5),wrapped]}:config.barrier==='inside0005'?{migrations:[...MIGRATIONS.slice(0,4),wrapped]}:config.barrier==='inside0004'?{migrations:[...MIGRATIONS.slice(0,3),wrapped]}:{}),
     testHooks: {afterInspect: () => barrier('afterInspect'), afterCopy: partial => barrier('afterCopy', {partial: path.basename(partial)}), afterBackupRename: backup => barrier('afterBackupRename', {backup: path.basename(backup)})}};
   const storage = must(await openStorage(options));
   barrier('afterOpen', {summary: storage.summary});

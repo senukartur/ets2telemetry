@@ -435,11 +435,13 @@ describe('immutable private upload projections through the SQLite worker', () =>
     const uuid=tripUuidFor(s.session,'1');ok(await client.commitEvent({message,profile:proof(s),effects:[{kind:'trip.open',tripUuid:uuid,game:'ets2',gameMode:mode,jobConfiguration:'this-event',recordingCompleteness:'complete',startedUtcMs:1000}]}));
     const pin=ok(await prepare(client,uuid));expect(mapUploadProjection(pin,await pages(client,pin))).toEqual({status:'hold',reason:'source-ineligible'});await client.close();
   });
-  it('retains a pinned trip until bounded release completes in staging', async () => {
+  it('releases its pin boundedly and permits explicit deletion of wholly unowned game history', async () => {
     const client=await start(),s=new Script(ETS2_A),uuid=await open(client,s),pin=ok(await prepare(client,uuid));
-    failed(await client.deleteTrip(uuid,{rejectIfOpen:false}),'STORAGE_BUSY');
+    const retained=ok(await client.getTrip(uuid));failed(await client.deleteTrip(uuid,{rejectIfOpen:false}),'STORAGE_BUSY');expect(ok(await client.getTrip(uuid))).toEqual(retained);
     let released=ok(await client.releaseUploadProjection(pin.snapshot.split(':')[2]));
     while(released.state==='releasing')released=ok(await client.releaseUploadProjection(released.pinId));
-    ok(await client.deleteTrip(uuid,{rejectIfOpen:false}));failed(await client.readUploadProjectionPage({snapshot:pin.snapshot,kind:'members',limit:1}),'INVALID_INPUT');await client.close();expect(recheck(pin)).toBe(false);
+    expect(released.state).toBe('released');ok(await client.deleteTrip(uuid,{rejectIfOpen:false}));expect(ok(await client.getTrip(uuid))).toBeUndefined();failed(await client.readUploadProjectionPage({snapshot:pin.snapshot,kind:'members',limit:1}),'INVALID_INPUT');await client.close();expect(recheck(pin)).toBe(false);
+    readOnly(ws.database,db=>{for(const table of ['upload_projection_pins','upload_projection_members','upload_projection_configurations','upload_projection_intervals'])expect(db.prepare(`SELECT count(*) FROM ${table}`).pluck().get()).toBe(0);
+      for(const table of ['trips','upload_candidates','upload_reservations','upload_change_heads','upload_source_transitions'])expect(db.prepare(`SELECT count(*) FROM ${table}`).pluck().get()).toBe(0);});
   });
 });

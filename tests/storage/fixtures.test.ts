@@ -115,3 +115,14 @@ it('REG-013 freezes the actual schema4 DDL and four singleton meanings without u
     expect(db.prepare('SELECT count(*) FROM samples').pluck().get()).toBe(expected.samples);
   });
 });
+
+it('REG-013 freezes actual schema5, ready copied evidence and an interrupted preparation without migrating it',async()=>{
+  const copy=ws.copyFixture('schema-v5-representative.sqlite'),expected=JSON.parse(readFileSync(path.join(STORAGE_FIXTURES,'schema-v5-representative.expected.json'),'utf8'));
+  const storage=await ws.open({path:copy,migrations:MIGRATIONS.slice(0,5)});expect(storage.summary.schemaVersion).toBe(5);storage.close();
+  const fresh=await ws.open({migrations:MIGRATIONS.slice(0,5)});fresh.close();expect(schemaOf(copy)).toEqual(schemaOf(ws.database));
+  readOnly(copy,db=>{
+    expect(db.prepare('SELECT pin_id,state,phase,member_count,configuration_count,interval_count,item_after,source_after,evidence_generation,examined FROM upload_projection_pins ORDER BY pin_id').all()).toEqual(expected.pins);
+    expect(db.prepare('SELECT root_ref,generation FROM upload_projection_evidence_versions').all()).toEqual(expected.generations);
+    expect(db.prepare('SELECT count(*) FROM completeness_intervals WHERE trip_ref=2').pluck().get()).toBe(expected.root2Intervals);
+  });
+});

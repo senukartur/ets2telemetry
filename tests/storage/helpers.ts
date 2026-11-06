@@ -1,3 +1,7 @@
+import {randomUUID} from 'node:crypto';
+import {Script,ETS2_A,r} from '../shared/trip-messages';
+import {tripUuidFor,type ProfileObservation} from '../../packages/telemetry-core/src';
+import type {StorageClient} from '../../packages/storage/src/client';
 // Shared helpers of the Electron-runtime storage suite. Every database lives in a per-test temporary directory from
 // tests/shared/resources.ts; committed fixtures are copied there first and never opened in place.
 import {createHash} from 'node:crypto';
@@ -137,9 +141,10 @@ export function readVersion1(copy: string) {
  * Checks a copy of the representative fixture migrated to version 2 through `storage` (which it closes) against `before`
  * from readVersion1 and against the pre-migration backup at `backup` with its manifest.
  */
+export const UPLOAD_SYNC_EMPTY_COUNTS={upload_installation:0,upload_connection:1,upload_registrations:0,upload_owner_counters:0,upload_scan_runs:0,upload_history_claims:0,upload_candidates:0,upload_reservations:0,upload_change_heads:0,upload_source_transitions:0,upload_source_bindings:0,upload_materializations:0,upload_envelopes:0,upload_receipts:0,upload_attempt:0,upload_queue_usage:1};
 export function expectMigratedFromVersion1(storage: Storage, copy: string, {original, v1Jobs, v1Trips, v1Referencing}: ReturnType<typeof readVersion1>, backup: string) {
   const backupName = path.basename(backup), version = storage.summary.schemaVersion;
-  expectRepresentative(storage, copy, {schema_migrations: version,...(version>=5?{upload_projection_pins:0,upload_projection_members:0,upload_projection_configurations:0,upload_projection_intervals:0,upload_projection_evidence_versions:0}:{}),...(version>=4?{observation_closes:0,logical_trips:1,logical_memberships:1,logical_trucks:0,logical_progress:0,logical_projection_states:1,logical_revisions:1}:{})});
+  expectRepresentative(storage, copy, {schema_migrations: version,...(version>=6?UPLOAD_SYNC_EMPTY_COUNTS:{}),...(version>=5?{upload_projection_pins:0,upload_projection_members:0,upload_projection_configurations:0,upload_projection_intervals:0,upload_projection_evidence_versions:0}:{}),...(version>=4?{observation_closes:0,logical_trips:1,logical_memberships:1,logical_trucks:0,logical_progress:0,logical_projection_states:1,logical_revisions:1}:{})});
   // The backup is the version 1 content, byte-for-byte in logical terms, with a manifest written last.
   expect(digestOf(backup)).toEqual(original);
   const manifest = JSON.parse(readFileSync(backup.replace(/\.sqlite$/, '.json'), 'utf8'));
@@ -147,7 +152,7 @@ export function expectMigratedFromVersion1(storage: Storage, copy: string, {orig
     fileSha256: sha256(backup), logicalDigest: original.logicalDigest, rowCounts: original.rowCounts, reason: 'pre-migration'});
   const recorded = readOnly(copy, db => db.prepare('SELECT version, name, backup_file_name, backup_sha256 FROM schema_migrations ORDER BY version').all());
   expect(recorded).toEqual([{version: 1, name: '0001-initial', backup_file_name: null, backup_sha256: null}, {version: 2, name: '0002-journal', backup_file_name: backupName, backup_sha256: manifest.fileSha256},
-    ...(version >= 3 ? [{version: 3, name: '0003-hard-mode', backup_file_name: backupName, backup_sha256: manifest.fileSha256}] : []),...(version>=4?[{version:4,name:'0004-logical-trips',backup_file_name:backupName,backup_sha256:manifest.fileSha256}]:[]),...(version>=5?[{version:5,name:'0005-upload-projections',backup_file_name:backupName,backup_sha256:manifest.fileSha256}]:[])]);
+    ...(version >= 3 ? [{version: 3, name: '0003-hard-mode', backup_file_name: backupName, backup_sha256: manifest.fileSha256}] : []),...(version>=4?[{version:4,name:'0004-logical-trips',backup_file_name:backupName,backup_sha256:manifest.fileSha256}]:[]),...(version>=5?[{version:5,name:'0005-upload-projections',backup_file_name:backupName,backup_sha256:manifest.fileSha256}]:[]),...(version>=6?[{version:6,name:'0006-upload-ownership-queue',backup_file_name:backupName,backup_sha256:manifest.fileSha256}]:[])]);
   expect(digestOf(copy).userVersion).toBe(version);
   readOnly(copy, db => {
     // The cancelled trip of version 1 keeps every column, opened at an event, has no recorded carrier, and its fuel
@@ -164,3 +169,21 @@ export function expectMigratedFromVersion1(storage: Storage, copy: string, {orig
     expect(db.pragma('integrity_check', {simple: true})).toBe('ok');
   });
 }
+
+export const uploadGame=<T extends {source:{origin:string}}>(message:T):T=>({...message,source:{...message.source,origin:'game'}});
+export const uploadProof=(script:Script):ProfileObservation=>({version:1,scope:'a'.repeat(64),binding:'b'.repeat(64),game:'ets2',pluginSessionId:script.session,processInstanceId:script.welcome().source.processInstanceId,sourceClockId:script.clockId,afterMonotonicNs:'0',loadGeneration:1});
+export async function uploadTestOwner(storage:Storage|StorageClient){
+  const installation=ok(await storage.ensureUploadInstallation()),registrationId=randomUUID(),runId=randomUUID();
+  ok(await storage.recordUploadRegistration({registrationId,clientInstallationId:installation.clientInstallationId!,origin:'https://dashboard.example',accountId:'A',companyId:'company',identityEpoch:'epoch',installationId:randomUUID(),bindingId:randomUUID()}));return {registrationId,runId};
+}
+export async function uploadTestSource(storage:Storage|StorageClient){
+  const owner=await uploadTestOwner(storage);ok(await storage.confirmUploadOwner({confirmationId:owner.runId,registrationId:owner.registrationId,credentialGeneration:'generation',expectedVersion:'0'}));
+  const script=new Script(ETS2_A),tripUuid=tripUuidFor(script.session,'1');ok(await storage.upsertSession({message:uploadGame(script.welcome())}));
+  ok(await storage.commitEvent({message:uploadGame(script.event(r.jobConfigured())),profile:uploadProof(script),effects:[{kind:'trip.open',tripUuid,game:'ets2',gameMode:{mode:'unknown',method:'none',confidence:'none'},jobConfiguration:'this-event',recordingCompleteness:'complete',startedUtcMs:1000}]}));return {...owner,script,tripUuid};
+}
+export async function uploadTestWork(storage:Storage|StorageClient,source:{tripUuid:string;registrationId:string}){
+  const workId=randomUUID();let work=ok(await storage.beginUploadMaterialization({workId,tripUuid:source.tripUuid,registrationId:source.registrationId}));
+  for(let turns=0;['preparing','folding'].includes(work.status)&&turns<1000;turns++){work=ok(await storage.advanceUploadMaterialization({workId}));expect(work.examined).toBeLessThanOrEqual(100);}
+  expect(work.status).toBe('complete');return workId;
+}
+export const uploadReceipt=(eventId:string,receiptId=randomUUID())=>new TextEncoder().encode(JSON.stringify({contract:{major:1,minor:0},eventId,receiptId,status:'stored',firstReceivedAtUtcMs:5000}));

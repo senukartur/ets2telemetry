@@ -228,3 +228,5 @@ export const JOURNAL_ANSWER_INVALID: Readonly<JournalAnswerError> = Object.freez
 /** The result of a journal command: a storage Result, or JOURNAL_ANSWER_INVALID for a page that broke the contract. */
 export type JournalResult<T> = {ok: true; value: T} | {ok: false; error: StorageError | JournalAnswerError};
 export type {UploadProjectionBegin, UploadProjectionPreparation, UploadProjection, UploadProjectionPage, UploadProjectionPageQuery} from './upload-projection';
+
+export type * from './upload-sync';

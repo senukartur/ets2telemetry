@@ -1,3 +1,4 @@
+import {candidate as uploadCandidate,discoverRevision,syncEnabled,redirectReservation} from './upload-discovery';
 import {advanceCoverage as advanceLogicalCoverage, applyCoverage, cleanLoadWindow, COVERAGE_LOSS, latestCoverage, originalCoverage, validCoverage, validCapturedEndpoint, type CoverageEndpoint, type LogicalCoverage} from './logical-coverage';
 import {gameDistanceStep} from '../../../telemetry-core/src/trips/game-distance';
 import {matchesSavedEndpoint, savedEndpointLimits} from '../../../telemetry-core/src/trips/saved-endpoint';
@@ -43,6 +44,7 @@ export function admittedProfile(proof: ProfileObservation | undefined, source: {
 }
 /** Bounded unresolved slot lookup; migrated history and already decided recordings never participate. */
 export function associate(db: Database.Database, row: LogicalRow, proof: ProfileObservation | undefined, currentJob: JobConfiguration): bigint {
+  if(syncEnabled(db))uploadCandidate(db,row.id);
   createGroup(db, row);
   let id = logicalFor(db, row.id);const group=get(db,'SELECT * FROM logical_trips WHERE id=?',id)!;
   const membership = get(db, 'SELECT proof_json FROM logical_memberships WHERE trip_ref = ?', row.id)!;
@@ -64,6 +66,7 @@ export function associate(db: Database.Database, row: LogicalRow, proof: Profile
   const candidateRecorded=candidate?learnContinuationConstraints(JSON.parse(String(candidate.canonical_constraints)) as ContinuationConstraints,recordedJob):null;
   const combined = candidateRecorded===null?null:learnContinuationConstraints(candidateRecorded,currentJob);
   if (canonical && fingerprint !== null && candidate && candidate.fingerprint === fingerprint && combined !== null && compatibleContinuation(job(db, raw(db, candidate.id)), currentJob)) {
+    redirectReservation(db,row.id,candidate.id);
     // Keep the public UUID of the original recording. Never change a raw trip's session or event identity.
     db.prepare('UPDATE logical_memberships SET logical_ref = ?, previous_logical_ref = ?, joined_after_revision = (SELECT coalesce(max(id),0) FROM logical_revisions) WHERE trip_ref = ?').run(candidate.id, id, row.id);
     const coverage = latestCoverage(db, candidate.id).value;
@@ -138,8 +141,9 @@ export function revise(db: Database.Database, id: bigint, override?: LogicalCove
   const metadata=encodeRow(row);
   db.prepare('INSERT OR IGNORE INTO logical_projection_states(row_json) VALUES(?)').run(metadata);
   const state=get(db,'SELECT id FROM logical_projection_states WHERE row_json=?',metadata)!.id;
-  db.prepare(`INSERT INTO logical_revisions(logical_ref,state_ref,member_through,event_through,gap_through,sample_through,interval_through,progress_head) VALUES(?,?,?,?,?,?,?,?)`)
+  const revision=db.prepare(`INSERT INTO logical_revisions(logical_ref,state_ref,member_through,event_through,gap_through,sample_through,interval_through,progress_head) VALUES(?,?,?,?,?,?,?,?)`)
     .run(id, state, member ?? 0n, max('events'), max('event_gaps'), max('samples'), max('completeness_intervals'), head);
+  discoverRevision(db,id,revision.lastInsertRowid);
 }
 export function projectEffects(db: Database.Database, effects: TripEffect[] | undefined, proof?: ProfileObservation): void {
   if (!logicalEnabled(db)) return;

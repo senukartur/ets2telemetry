@@ -16,7 +16,7 @@ import {
 import {ATS_A, BASE_UTC, ETS2_A, ETS2_B, job, money, r, Script, trailer, truck} from '../shared/trip-messages';
 import {failed, ok, REPRESENTATIVE, workspace} from './helpers';
 
-const DATABASE = {purpose: 'synthetic', schemaVersion: 5};
+const DATABASE = {purpose: 'synthetic', schemaVersion: 6};
 const NOT_OBSERVED = {available: false, reason: 'not-observed'} as const;
 const text = (value: string) => ({available: true as const, value});
 
@@ -27,7 +27,7 @@ beforeAll(async () => {
   ws = await workspace();
   ws.copyFixture(REPRESENTATIVE, ws.database);
   storage = await ws.open();
-  expect(storage.summary).toMatchObject({schemaVersion: 5, migratedFrom: 1});
+  expect(storage.summary).toMatchObject({schemaVersion: 6, migratedFrom: 1});
   await seedJournalAnchors(storage);
   fillers = await seedJournalFillers(storage, 110);
 }, 120_000);

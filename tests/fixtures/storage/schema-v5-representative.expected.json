@@ -1,0 +1,37 @@
+{
+  "provenance": "Created at base 3ad76411 using frozen production migrations 1-5 on a copy of schema-v4-representative.sqlite. Ready pin for root1 was captured before adding 120 sample-loss intervals to root2; one bounded preparation turn captured root2. Expected counts and cursor milestones are hand-authored from those operations, not generated from production mapping.",
+  "schemaVersion": 5,
+  "pins": [
+    {
+      "pin_id": "80000000-0000-4000-8000-000000000001",
+      "state": "ready",
+      "phase": "finalize",
+      "member_count": 1,
+      "configuration_count": 0,
+      "interval_count": 0,
+      "item_after": 0,
+      "source_after": 0,
+      "evidence_generation": 0,
+      "examined": 10
+    },
+    {
+      "pin_id": "80000000-0000-4000-8000-000000000002",
+      "state": "preparing",
+      "phase": "intervals",
+      "member_count": 1,
+      "configuration_count": 0,
+      "interval_count": 93,
+      "item_after": 94,
+      "source_after": 2,
+      "evidence_generation": 120,
+      "examined": 100
+    }
+  ],
+  "root2Intervals": 121,
+  "generations": [
+    {
+      "root_ref": 2,
+      "generation": 120
+    }
+  ]
+}

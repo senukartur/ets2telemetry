@@ -1,3 +1,4 @@
+import {isUploadSyncResult,isUploadSyncRequest} from '../../packages/storage/src/upload-sync';
 import {unknownHardMode} from '../../packages/telemetry-core/src/hard-mode';
 import {readFileSync} from 'node:fs';
 import path from 'node:path';
@@ -778,4 +779,55 @@ it('strictly validates private Hard Mode freshness verdicts on observer and even
     expect(parseRequest(request({name: 'observeHardMode', game: 'ets2', observation, fresh})).ok).toBe(false);
     if (fresh !== undefined) expect(parseRequest(request({name: 'commitEvent', input: {message: {}, hardMode: observation, hardModeFresh: fresh}})).ok).toBe(false);
   }
+});
+
+describe('REG-007/010/011/012 private upload synchronization boundary',()=>{
+  const command={name:'claimUploadAttempt' as const,input:{attemptId:P1,registrationId:P1,expectedVersion:'1',mode:'live' as const,nowMs:0}};
+  it('validates exact owner/CAS/class fields and bounded typed receipt bytes without accepting secrets or hooks',()=>{
+    expect(isUploadSyncRequest(command)).toBe(true);
+    for(const bad of [{...command,input:{...command.input,mode:'fair'}},{...command,input:{...command.input,expectedVersion:'01'}},{...command,input:{...command.input,registrationId:'other'}},{...command,input:{...command.input,nowMs:Infinity}},{...command,input:{...command.input,token:'private'}},{...command,testHooks:{}}]){
+      expect(isUploadSyncRequest(bad)).toBe(false);expect(parseRequest({type:'storage.request',id:1,command:bad})).toEqual({ok:false,id:1});
+    }
+    expect(isUploadSyncRequest({name:'commitUploadReceipt',input:{attemptId:P1,statusCode:202,body:new Uint8Array(4096)}})).toBe(true);
+    expect(isUploadSyncRequest({name:'commitUploadReceipt',input:{attemptId:P1,statusCode:202,body:new Uint8Array(4097)}})).toBe(false);
+    expect(isUploadSyncRequest({name:'reclaimUploadPayloads',input:{limit:101}})).toBe(false);
+    expect(isUploadSyncRequest({name:'recordUploadRegistration',input:{registrationId:P1,clientInstallationId:P1,origin:'https://dashboard.example/path',accountId:'A',companyId:'C',identityEpoch:'e',installationId:P1,bindingId:P1}})).toBe(false);
+  });
+  it('refuses malformed success identity, missing payload, extra fields and impossible bounded counters',()=>{
+    const claimed={status:'claimed',attemptId:P1,eventId:P1,registrationId:P1,registration:{registrationId:P1,clientInstallationId:P1,origin:'https://dashboard.example',accountId:'A',companyId:'C',identityEpoch:'e',installationId:P1,bindingId:P1},payload:new Uint8Array([1])};expect(isUploadSyncResult(command,claimed)).toBe(true);
+    for(const bad of [{...claimed,payload:null},{...claimed,attemptId:'80000000-0000-4000-8000-000000000001'},{...claimed,eventId:null},{...claimed,extra:1},{...claimed,status:'empty'}])expect(isUploadSyncResult(command,bad)).toBe(false);
+    expect(isUploadSyncResult({name:'reclaimUploadPayloads',input:{limit:1}},{examined:1,reclaimed:2,events:0,bytes:0})).toBe(false);
+    expect(isUploadSyncResult({name:'ensureUploadInstallation'},{status:'ready',clientInstallationId:null})).toBe(false);
+  });
+  it('applies combined-cap admission and recorder priority to new ownership/queue work',async()=>{
+    const f=fixture({maxQueued:2}),opening=f.client.open(OPEN),old=f.client.ensureUploadInstallation(),newest=f.client.claimUploadAttempt(command.input),recorder=f.client.commitEvent({message:{}});
+    await expect(newest).resolves.toEqual(error('STORAGE_BUSY'));f.ok(1,SUMMARY);await opening;expect(f.sent[1].command.name).toBe('commitEvent');f.ok(2,COMMITTED);await recorder;
+    expect(f.sent[2].command.name).toBe('ensureUploadInstallation');f.ok(3,{status:'ready',clientInstallationId:P1});await old;
+    const claim=f.client.claimUploadAttempt({...command.input,mode:'backfill'});expect(f.sent[3].command).toEqual({...command,input:{...command.input,mode:'backfill'}});
+    f.ok(4,{status:'empty',attemptId:null,eventId:null,registrationId:null,registration:null,payload:null});await claim;
+  });
+  it('keeps new background deadlines and close behavior within existing budgets',async()=>{
+    const f=fixture({commandDeadlineMs:50}),opening=f.client.open(OPEN);f.ok(1,SUMMARY);await opening;
+    const pending=f.client.advanceUploadMaterialization({workId:P1});await vi.advanceTimersByTimeAsync(50);await expect(pending).resolves.toEqual(error('TIMEOUT'));
+    const g=fixture(),opened=g.client.open(OPEN);g.ok(1,SUMMARY);await opened;const queued=g.client.getUploadStoreStatus({registrationId:P1}),closing=g.client.close();
+    g.ok(2,{registrationId:P1,version:'0',active:false,paused:null,discoveryAfter:'0',identityPendingSources:0,pendingSources:0,heldSources:0,queuedEvents:0,queuedBytes:0,deliveredEvents:0,pressure:false});await queued;expect(g.sent[2].command.name).toBe('close');g.ok(3,undefined);g.exit(0);await expect(closing).resolves.toEqual({clean:true});
+  });
+});
+
+it('REG-007/010/012 validates explicit startup recovery as an exclusive private input and never treats ordinary busy as recovery',async()=>{
+  const command={name:'recoverUploadAttempt' as const,input:{startup:true as const}};expect(isUploadSyncRequest(command)).toBe(true);
+  const invalid=fixture();for(const input of [{startup:false},{startup:true,attemptId:P1},{startup:true,registrationId:P1},{}, {startup:'true'}]){expect(isUploadSyncRequest({...command,input})).toBe(false);await expect(invalid.client.recoverUploadAttempt(input as never)).resolves.toEqual(error('INVALID_INPUT'));}expect(invalid.sent).toEqual([]);
+  const recovered={status:'recovered',attemptId:P1,eventId:P1,registrationId:P1,registration:null,payload:null},empty={status:'empty',attemptId:null,eventId:null,registrationId:null,registration:null,payload:null};
+  expect(isUploadSyncResult(command,recovered)).toBe(true);expect(isUploadSyncResult(command,empty)).toBe(true);
+  for(const bad of [{...recovered,attemptId:null},{...recovered,payload:new Uint8Array([1])},{...empty,eventId:P1},{...recovered,status:'busy'}])expect(isUploadSyncResult(command,bad)).toBe(false);
+  expect(isUploadSyncResult({name:'recoverUploadAttempt',input:{attemptId:P1}},empty)).toBe(false);
+  const f=fixture(),opening=f.client.open(OPEN),recovery=f.client.recoverUploadAttempt({startup:true}),recorder=f.client.commitEvent({message:{}});f.ok(1,SUMMARY);await opening;expect(f.sent[1].command.name).toBe('commitEvent');f.ok(2,COMMITTED);await recorder;expect(f.sent[2].command).toEqual(command);f.ok(3,empty);await expect(recovery).resolves.toEqual({ok:true,value:empty});
+});
+
+it('REG-005/010/011/012 strictly accepts command-specific stale outcomes and claim replay without payload or authority',async()=>{
+  const input={attemptId:P1,kind:'authentication' as const,retryAtMs:9000,nowMs:1000},command={name:'recordUploadAttemptOutcome' as const,input},stale={status:'stale',attemptId:P1,eventId:P1,registrationId:P1,payload:null,registration:null};expect(isUploadSyncResult(command,stale)).toBe(true);
+  for(const value of [{...stale,attemptId:'80000000-0000-4000-8000-000000000001'},{...stale,eventId:null},{...stale,payload:new Uint8Array([1])},...['claimed','recovered','empty','busy'].map(status=>({...stale,status}))])expect(isUploadSyncResult(command,value)).toBe(false);
+  const claim={name:'claimUploadAttempt' as const,input:{attemptId:P1,registrationId:P1,expectedVersion:'2',mode:'any' as const,nowMs:1000}};expect(isUploadSyncResult(claim,stale)).toBe(true);
+  for(const value of [{...stale,registrationId:'80000000-0000-4000-8000-000000000001'},{...stale,attemptId:null},{...stale,payload:new Uint8Array([1])},{...stale,status:'recovered'}])expect(isUploadSyncResult(claim,value)).toBe(false);
+  const f=fixture(),opening=f.client.open(OPEN);f.ok(1,SUMMARY);await opening;const outcome=f.client.recordUploadAttemptOutcome(input);f.ok(2,stale);await expect(outcome).resolves.toEqual({ok:true,value:stale});const replay=f.client.claimUploadAttempt(claim.input);f.ok(3,stale);await expect(replay).resolves.toEqual({ok:true,value:stale});expect(f.failures).toEqual([]);
 });
