@@ -196,7 +196,7 @@ describe('REG-003/005/008/012/014 durable logical trips', () => {
       expect(await client.close()).toEqual({clean:true});
     }finally{await ingestion?.stop();}
   },60_000);
-  it.each(['observed','running','no-absence-reading','absence-during-load','bare-absence','configured-before-timer','reset-before-config','replayed','replayed-clear','gap-after-absence','gap-before-clear','gap-before-clear-recovered','previous-configuration','regression-before-config','no-profile','pending-profile','late-profile'] as const)(
+  it.each(['observed','running','no-absence-reading','absence-during-load','first-job','first-job-with-gap','configured-before-timer','reset-before-config','replayed','replayed-clear','gap-after-absence','gap-before-clear','gap-before-clear-recovered','previous-configuration','regression-before-config','no-profile','pending-profile','late-profile'] as const)(
     'recognizes a contiguous new job independently of pause and profile timing: %s', async variant=>{
       const worker=storageWorker(),client=new StorageClient(worker.handle),s=new Script(ETS2_A),context={receivedUtcMs:1000};
       ok(await client.open({path:ws.database,backupsDirectory:ws.backups,purpose:'synthetic',appVersion:'test'}));
@@ -205,13 +205,13 @@ describe('REG-003/005/008/012/014 durable logical trips', () => {
         profileStatus:()=>qualified?{phase:'admitted',token}:{phase:'pending',token}});
       succeeded(await recorder.openSession(s.welcome()));
       const checkpoint=s.checkpoint(null,0,{simulation:'paused'},'1');succeeded(recorder.observe(checkpoint,context));
-      succeeded(await recorder.commit(s.gap(2),context));
+      if(variant!=='first-job')succeeded(await recorder.commit(s.gap(2),context));
       const event=async(record:Parameters<Script['event']>[0],simulation:'running'|'paused'='paused',revision='1')=>{
         const message=s.event(record,{simulation,configurationRevision:revision,advanceMs:100});message.capture.clockId=clock;message.data.occurred.boundaryOrder=String(++order);
         if(variant==='replayed' && record.type==='job.configured' || variant==='replayed-clear' && record.type==='job.cleared')message.data.redelivered=true;
         succeeded(await recorder.commit(message,context));return message;
       };
-      if(variant!=='bare-absence')await event(r.jobCleared());else await event(r.gameMode(mode));
+      if(variant!=='first-job'&&variant!=='first-job-with-gap')await event(r.jobCleared());else await event(r.gameMode(mode));
       await event(r.truckConfigured());
       clock='30000000-0000-4000-8000-000000000099';currentProof={...currentProof,sourceClockId:clock,loadGeneration:1};
       await event(r.timersRestart());await event(r.gameMode(mode));
@@ -243,14 +243,15 @@ describe('REG-003/005/008/012/014 durable logical trips', () => {
       await capture(1000000,100,0,'running',true);await capture(1000250,99.5,13,'running',true);
       succeeded(await recorder.samples.write(3600,true));await event(r.fined(),'running','2');
       const detail=ok(await client.journalTrip(uuid));
-      if(['observed','running','no-absence-reading','pending-profile','late-profile','gap-before-clear-recovered'].includes(variant))expect(detail.trip.recordingCompleteness).toBe('complete');
+      if(['observed','running','no-absence-reading','pending-profile','late-profile','gap-before-clear-recovered','first-job'].includes(variant))expect(detail.trip.recordingCompleteness).toBe('complete');
       else expect(detail.trip.recordingCompleteness).not.toBe('complete');
       expect(await client.close()).toEqual({clean:true});
-      if(variant==='no-profile')readOnly(ws.database,db=>{
+      if(variant==='no-profile'||variant==='first-job'||variant==='first-job-with-gap')readOnly(ws.database,db=>{
         const row=db.prepare(`SELECT l.profile_scope,s.row_json FROM logical_trips l JOIN logical_memberships m ON m.logical_ref=l.id
           JOIN trips t ON t.id=m.trip_ref JOIN logical_revisions r ON r.id=(SELECT max(id) FROM logical_revisions WHERE logical_ref=l.id)
           JOIN logical_projection_states s ON s.id=r.state_ref WHERE t.trip_uuid=?`).get(uuid) as {profile_scope:string|null;row_json:string};
-        expect(row.profile_scope).toBeNull();expect(JSON.parse(row.row_json)._coverage.start).toBe('observed');
+        if(variant==='no-profile')expect(row.profile_scope).toBeNull();else expect(row.profile_scope).not.toBeNull();
+        expect(JSON.parse(row.row_json)._coverage.start).toBe(variant==='first-job-with-gap'?'unproven':'observed');
       });
     });
   it.each(['plain','intermediate','same-second-pending','steady-pause','steady-pause-pending','stale-qualified','long-pending','profile-change','load-change','revoked','coalesced','offline'] as const)(
