@@ -114,6 +114,10 @@ describe('immutable private upload projections through the SQLite worker', () =>
       expect(plan.some(p=>/SEARCH .* (?:COVERING )?INDEX/.test(p.detail)),sql).toBe(true);
       expect(plan.some(p=>/TEMP B-TREE|SCAN /.test(p.detail)),sql).toBe(false);
     }
+    // INTEGER PRIMARY KEY id is already the rowid tiebreaker in the existing trip index.
+    const intervalPlan=(db.prepare('EXPLAIN QUERY PLAN SELECT id,kind,plugin_session_ref FROM completeness_intervals WHERE trip_ref=? AND id>? AND id<=? ORDER BY id LIMIT ?')
+      .all(1n,0n,9_223_372_036_854_775_807n,1) as {detail:string}[]).map(row=>row.detail);
+    expect(intervalPlan).toEqual(['SEARCH completeness_intervals USING INDEX completeness_intervals_trip (trip_ref=? AND rowid>? AND rowid<?)']);
     const prepareSpy=vi.spyOn(db,'prepare');
     let state=ok(storage.beginUploadProjection({pinId,tripUuid:root}));expect(state).toMatchObject({state:'preparing',examined:0,projection:null});
     failed(storage.readUploadProjectionPage({snapshot:`u2:${storage.summary.databaseUuid}:${pinId}:80000000-0000-4000-8000-000000000001:${root}:1`,kind:'members',limit:1}),'INVALID_INPUT');

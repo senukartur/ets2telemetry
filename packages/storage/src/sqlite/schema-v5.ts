@@ -30,7 +30,6 @@ export const SCHEMA_V5: readonly string[] = [
     row_json TEXT NOT NULL CHECK(json_valid(row_json)), PRIMARY KEY(pin_ref,event_ref)) STRICT`,
   `CREATE TABLE upload_projection_intervals(pin_ref TEXT NOT NULL REFERENCES upload_projection_pins(pin_id), interval_ref INTEGER NOT NULL REFERENCES completeness_intervals(id),
     row_json TEXT NOT NULL CHECK(json_valid(row_json)), PRIMARY KEY(pin_ref,interval_ref)) STRICT`,
-  'CREATE INDEX completeness_intervals_trip_keyset ON completeness_intervals(trip_ref,id)',
   ...(['INSERT','DELETE','UPDATE'] as const).map(event => `CREATE TRIGGER upload_projection_trailer_${event.toLowerCase()} AFTER ${event} ON trip_trailers BEGIN
     ${bump(event==='INSERT'?linkRoots('NEW'):event==='DELETE'?linkRoots('OLD'):`${linkRoots('OLD')} UNION ${linkRoots('NEW')}`)} END`),
   ...(['INSERT','DELETE','UPDATE'] as const).map(event => `CREATE TRIGGER upload_projection_membership_${event.toLowerCase()} AFTER ${event}${event==='UPDATE'?' OF logical_ref,previous_logical_ref,joined_after_revision':''} ON logical_memberships BEGIN
