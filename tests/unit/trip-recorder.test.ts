@@ -132,7 +132,7 @@ class ModelStorage implements TripRecorderClient {
 }
 
 it.each(['qualified-at-intake','pending-at-intake','revoked-while-held','foreign-while-held','refresh-while-held','later-proof-at-intake'] as const)(
-  'freezes menu-start eligibility before asynchronous coverage/storage: %s',async variant=>{
+  'records ordinary menu acceptance independently of asynchronous profile refresh: %s',async variant=>{
     const storage=new ModelStorage(),s=new Script(ETS2_A),context={receivedUtcMs:RECEIVED_UTC},welcome=s.welcome(),token={};
     let qualified=true,profile={version:1 as const,scope:'a'.repeat(64),binding:'b'.repeat(64),game:'ets2' as const,pluginSessionId:s.session,
       processInstanceId:welcome.source.processInstanceId,sourceClockId:s.clockId,afterMonotonicNs:'0',loadGeneration:1};
@@ -151,14 +151,16 @@ it.each(['qualified-at-intake','pending-at-intake','revoked-while-held','foreign
     if(variant==='foreign-while-held')profile={...profile,binding:'c'.repeat(64)};
     if(variant==='refresh-while-held')profile={...profile,afterMonotonicNs:String(BigInt(message.capture.monotonicNs)+1n)};
     release();expect((await commit).ok).toBe(true);storage.committedThrough=through;
-    const effects=storage.attempts.at(-1)!.effects,positive=variant==='qualified-at-intake'||variant==='refresh-while-held';
+    const effects=storage.attempts.at(-1)!.effects;
     const witness=effects.filter(effect=>effect.kind==='completeness.add'&&effect.interval.detail?.cause==='observed-acceptance');
-    expect(witness).toHaveLength(positive?1:0);expect(JSON.stringify(witness)).not.toContain(profile.scope);expect(JSON.stringify(witness)).not.toContain(profile.binding);
+    expect(witness).toHaveLength(0);expect(JSON.stringify(witness)).not.toContain(profile.scope);expect(JSON.stringify(witness)).not.toContain(profile.binding);
     qualified=true;expect((await recorder.commit(s.event(r.started(),{configurationRevision:'2'}),context)).ok).toBe(true);
     const configuration=s.checkpoint(job()).data.state.configuration;
     expect(recorder.observe(s.snapshot({configuration:{...configuration,revision:'2'},simulation:'running',boundaryOrder:'200'}),context).ok).toBe(true);
     expect((await recorder.commit(s.event(r.fined(),{configurationRevision:'2'}),context)).ok).toBe(true);
-    expect(storage.attempts.at(-1)!.effects.some(effect=>effect.kind==='completeness.add'&&effect.interval.detail?.phase==='confirmed')).toBe(positive);
+    expect(storage.attempts.at(-1)!.effects.some(effect=>effect.kind==='completeness.add'&&effect.interval.detail?.phase==='confirmed')).toBe(false);
+    expect((await recorder.commit(s.event(r.delivered(),{simulation:'paused',configurationRevision:'2'}),context)).ok).toBe(true);
+    expect(storage.model.trips.at(-1)).toMatchObject({outcome:'delivered',recordingCompleteness:'complete'});
   });
 
 let clock: {ms: number; ns: bigint; utc: number};

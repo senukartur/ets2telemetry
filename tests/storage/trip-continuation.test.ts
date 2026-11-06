@@ -95,8 +95,8 @@ describe('REG-003/005/008/012/014 durable logical trips', () => {
     expect(storage.commitEvent({message,effects:[{kind:'completeness.add',interval:{tripUuid:uuid,kind:'discontinuity',detail}}]})).toMatchObject({ok:false,error:{code:'INVALID_INPUT'}});
     expect(ok(storage.committedThrough(s.session))).toBe('1');expect(ok(storage.getEvent(s.session,'2'))).toBeUndefined();ok(storage.close());
   });
-  it('retains750m and1.5L through paused menu acceptance, noisy7s pause and three real pipe sources with a service restart',async()=>{
-    const values=job({market:{available:true,value:'quick_job'}}),signals=new EventEmitter(),coverage=new Map<string,string>(),acks:{stored:string;through:string}[]=[];
+  it('retains 750m and 1.5L through ordinary paused acceptance with late profile proof and three pipe sources with a service restart',async()=>{
+    const values=job(),signals=new EventEmitter(),coverage=new Map<string,string>(),acks:{stored:string;through:string}[]=[];
     let worker=storageWorker(),client=new StorageClient(worker.handle),ingestion:V1Ingestion|undefined,currentProof:ProfileObservation|undefined,qualified=true;
     const token={};
     const create=()=>{
@@ -156,8 +156,9 @@ describe('REG-003/005/008/012/014 durable logical trips', () => {
           if(index===0){
             await event(r.jobCleared());await event(r.truckConfigured());await event(r.timersRestart());await event(r.gameMode(mode));
             for(let n=0;n<3;n++){await event(r.started(),'running');await event(r.paused());}
-            await capture(1000000,100,0,'500','paused',100,false,false);
+            qualified=false;await capture(1000000,100,0,'500','paused',100,false,false);
             const opened=await event(r.jobConfigured(values),'paused','2');original=tripUuidFor(s.session,opened.data.eventSeq);
+            currentProof={...proof(s),afterMonotonicNs:opened.capture.monotonicNs};qualified=true;
             await event(r.started(),'running','2');await capture(1000000,100,0,'500','running',1000);
             await event(r.paused(),'paused','2');await capture(1000000,100.015625,0.001953125,'500','paused',100,true);
             for(let n=0;n<7;n++)await capture(1000000,100.015625,0.001953125,'500','paused',1000);
@@ -195,8 +196,8 @@ describe('REG-003/005/008/012/014 durable logical trips', () => {
       expect(await client.close()).toEqual({clean:true});
     }finally{await ingestion?.stop();}
   },60_000);
-  it.each(['observed','absence-during-load','bare-absence','configured-before-timer','replayed','gap-after-absence','pending-profile','late-profile','no-qualified-confirmation','confirmation-overflow'] as const)(
-    'qualifies an observed paused menu acceptance only from the current cleared configuration: %s', async variant=>{
+  it.each(['observed','running','no-absence-reading','absence-during-load','bare-absence','configured-before-timer','reset-before-config','replayed','gap-after-absence','pending-profile','late-profile','no-qualified-confirmation','confirmation-overflow'] as const)(
+    'recognizes a contiguous new job independently of pause and profile timing: %s', async variant=>{
       const worker=storageWorker(),client=new StorageClient(worker.handle),s=new Script(ETS2_A),context={receivedUtcMs:1000};
       ok(await client.open({path:ws.database,backupsDirectory:ws.backups,purpose:'synthetic',appVersion:'test'}));
       let currentProof=proof(s),qualified=true,clock=s.clockId,order=100;const token={};
@@ -215,7 +216,7 @@ describe('REG-003/005/008/012/014 durable logical trips', () => {
       clock='30000000-0000-4000-8000-000000000099';currentProof={...currentProof,sourceClockId:clock,loadGeneration:1};
       await event(r.timersRestart());await event(r.gameMode(mode));
       if(variant!=='absence-during-load')for(let n=0;n<3;n++){await event(r.started(),'running');await event(r.paused());}
-      const values=job({market:{available:true,value:'quick_job'}}),configuration=s.checkpoint(values).data.state.configuration;
+      const values=job(),configuration=s.checkpoint(values).data.state.configuration;
       const capture=async(odo:number,fuel:number,x:number,simulation:'running'|'paused',hasJob:boolean,ms=1000)=>{
         const message=s.snapshot({configuration:{...configuration,revision:hasJob?'2':'1',job:hasJob?{available:true,value:values}:{available:false,reason:'not-observed'}},simulation,
           odometer:{available:true,value:odo,unit:'m'},fuel:{available:true,value:fuel,unit:'L'},speed:{available:true,value:simulation==='paused'?0:13,unit:'m/s'},
@@ -224,10 +225,11 @@ describe('REG-003/005/008/012/014 durable logical trips', () => {
         message.capture.clockId=clock;succeeded(recorder.observe(message,context));if(recorder.attach.due())succeeded(await recorder.attach.open(context));
       };
       if(variant==='pending-profile'||variant==='late-profile')qualified=false;
-      await capture(1000000,100,0,'paused',false);
+      if(variant!=='no-absence-reading')await capture(1000000,100,0,'paused',false);
+      if(variant==='reset-before-config')await event(r.timersRestart());
       if(variant==='gap-after-absence')succeeded(await recorder.commit(s.gap(1),context));
-      const configured=await event(r.jobConfigured(values),'paused','2'),uuid=tripUuidFor(s.session,configured.data.eventSeq);
-      expect(ok(await client.journalTrip(uuid)).trip.recordingCompleteness).not.toBe('complete');
+      const configured=await event(r.jobConfigured(values),variant==='running'?'running':'paused','2'),uuid=tripUuidFor(s.session,configured.data.eventSeq);
+      if(variant==='late-profile')currentProof={...currentProof,afterMonotonicNs:configured.capture.monotonicNs};
       if(variant==='configured-before-timer')await event(r.timersRestart());
       qualified=true;
       await event(r.started(),'running','2');
@@ -237,7 +239,8 @@ describe('REG-003/005/008/012/014 durable logical trips', () => {
       succeeded(await recorder.samples.write(3600,true));await event(r.fined(),'running','2');
       if(variant==='no-qualified-confirmation'||variant==='confirmation-overflow'){qualified=true;await event(r.cancelled(),'paused','2');}
       const detail=ok(await client.journalTrip(uuid));
-      if(variant==='observed')expect(detail.trip.recordingCompleteness).toBe('complete');else expect(detail.trip.recordingCompleteness).not.toBe('complete');
+      if(['observed','running','no-absence-reading','pending-profile','late-profile','no-qualified-confirmation','confirmation-overflow'].includes(variant))expect(detail.trip.recordingCompleteness).toBe('complete');
+      else expect(detail.trip.recordingCompleteness).not.toBe('complete');
       expect(await client.close()).toEqual({clean:true});
     });
   it.each(['plain','intermediate','same-second-pending','steady-pause','steady-pause-pending','stale-qualified','long-pending','profile-change','load-change','revoked','coalesced','offline'] as const)(

@@ -18,12 +18,6 @@ export type CheckpointMessage = Extract<ServerMessage, {kind: 'checkpoint'}>;
 export type EventMessage = Extract<ServerMessage, {kind: 'event'}>;
 export type GapMessage = Extract<ServerMessage, {kind: 'gap'}>;
 export type GameModeEvidence = Pick<GameMode, 'mode' | 'method' | 'confidence'>;
-/** Sanitized private evidence; never contains a profile identity or fingerprint. */
-export interface ObservedAcceptance {
-  version: 1; clearEventSeq: Uint64; throughEventSeq: Uint64; configurationRevision: Uint64;
-  absenceMonotonicNs: Uint64; absenceBoundaryOrder: Uint64; loadGeneration: number;
-}
-
 /**
  * A stored open trip of the welcome's game, supplied at a session input for a session the reducer does not know yet
  * (a cold start, ET-015a). A trip of another plugin session is closed with reason `restart` (T11). A trip of the same
@@ -60,9 +54,9 @@ export type TripInput =
   | {kind: 'session'; welcome: WelcomeMessage; coveredThrough: Uint64; openTrips: TripSeed[]}
   | {kind: 'checkpoint'; message: CheckpointMessage; receivedUtcMs?: number}
   | {kind: 'attach'; receivedUtcMs: number}
-  | {kind: 'event'; message: EventMessage; coveredThrough: Uint64; receivedUtcMs: number; observedAcceptance?: ObservedAcceptance}
+  | {kind: 'event'; message: EventMessage; coveredThrough: Uint64; receivedUtcMs: number}
   | {kind: 'gap'; message: GapMessage; coveredThrough: Uint64; receivedUtcMs: number}
-  | {kind: 'reading'; sample: StepSample & {utcMs?: number}; currentJob?: JobConfiguration | null; profileScope?:string; acceptanceConfirmed?:boolean}
+  | {kind: 'reading'; sample: StepSample & {utcMs?: number}; currentJob?: JobConfiguration | null; profileScope?:string}
   | {kind: 'disconnected'};
 
 /**
@@ -89,7 +83,6 @@ export interface MoneyTally {currency: Currency; sdkType: Money['sdkType']; tota
 export interface MoneyTotals {byCurrency: MoneyTally[]; unavailable: number}
 
 export interface OpenTrip {
-  observedAcceptance?: {witness: ObservedAcceptance; confirmed: boolean};
   profileScope?:string;
   tripUuid: string; pluginSessionId: string; jobKey: string | null; jobEventSeq: Uint64 | null;
   phase: TripPhase;
