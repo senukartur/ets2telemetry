@@ -148,7 +148,8 @@ export function readUploadProjectionPage(conn: StorageConnection, query: UploadP
     switch (query.kind) {
     case 'members': rows = all(db,`SELECT s.*,t.id AS member_id,t.trip_uuid ${MEMBERS.replace('WHERE','JOIN plugin_sessions s ON s.id=t.plugin_session_ref WHERE')} AND t.id>@after ORDER BY t.id LIMIT @limit`,params)
       .map(r => ({id:String(r.member_id),rawTripUuid:String(r.trip_uuid),pluginSessionId:String(r.plugin_session_uuid),game:r.game as UploadMember['game'],origin:r.origin as UploadMember['origin'],versions:versions(r)})); break;
-    case 'configurations': rows = all(db,`SELECT c.*,min(t.trip_uuid) AS trip_uuid ${trailerSql} AND c.event_ref>@after GROUP BY c.event_ref ORDER BY c.event_ref LIMIT @limit`,{...params,events:snap.events})
+    // Prefer a linked member in the event's session. An unqualified fallback retains evidence for a mapper hold.
+    case 'configurations': rows = all(db,`SELECT c.*,coalesce(min(CASE WHEN t.plugin_session_ref=e.plugin_session_id THEN t.trip_uuid END),min(t.trip_uuid)) AS trip_uuid ${trailerSql} AND c.event_ref>@after GROUP BY c.event_ref ORDER BY c.event_ref LIMIT @limit`,{...params,events:snap.events})
       .map(r => ({id:String(r.event_ref),occurrence:occurrence(db,r.event_ref,String(r.trip_uuid),snap)!,index:n(r.slot_index),idValue:text(r,'trailer_id'),bodyType:text(r,'body_type'),chainType:text(r,'chain_type')})); break;
     case 'intervals': rows = all(db,`SELECT c.id,c.kind,t.trip_uuid,s.plugin_session_uuid ${intervalSql.replace('WHERE','JOIN plugin_sessions s ON s.id=c.plugin_session_ref WHERE')} AND c.id>@after ORDER BY c.id LIMIT @limit`,{...params,intervals:snap.intervals})
       .map(r => ({id:String(r.id),kind:r.kind as UploadInterval['kind'],rawTripUuid:String(r.trip_uuid),pluginSessionId:String(r.plugin_session_uuid)})); break;

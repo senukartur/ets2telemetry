@@ -39,6 +39,13 @@ async function close(client:StorageClient,s:Script,uuid:string,outcome:'none'|'d
     ...(outcome==='none'?{}:{outcomeEvent:'this-event' as const}),recordingCompleteness:'partial',endedUtcMs:2000},
     {kind:'event.attribute',tripUuid:uuid,attribution:'trip'}]}));
 }
+async function appendSample(client:StorageClient,s:Script,uuid:string,second:number,odo:number) {
+  const sample:SampleInput={tripUuid:uuid,utcMs:1000+second*1000,sourceClockId:s.clockId,monotonicNs:String(second*1_000_000_000),gameTime:{minutes:{available:true,value:500},clockId:'40000000-0000-4000-8000-000000000001'},
+    speed:{available:true,value:20},odometer:{available:true,value:odo},fuel:{available:true,value:500-odo/10000},averageConsumption:absent,estimatedRange:absent,engineRpm:absent,gear:absent,position:{available:true,value:{x:odo/5,y:0,z:0}},
+    recording:{profile:proof(s),job:job(),truck:'fixture-truck',processInstanceId:s.welcome().source.processInstanceId,
+      previous:{tripUuid:uuid,sourceClockId:s.clockId,monotonicNs:String((second-1)*1_000_000_000)}}};
+  ok(await client.appendSamples(s.session,[sample]));
+}
 async function pages(client:StorageClient,pin:UploadProjection,limit=7) {
   const result:UploadProjectionPage[]=[];
   for(const kind of UPLOAD_PAGE_KINDS){let cursor:string|undefined;
@@ -106,6 +113,25 @@ describe('immutable private upload projections through the SQLite worker', () =>
     await client.close();expect(recheck(pin)).toBe(true);
     expect(recheck({...pin,snapshot:`${pin.snapshot.slice(0,-1)}${pin.snapshot.endsWith('0')?'1':'0'}`})).toBe(false);
   });
+  it('qualifies a shared configuration with a linked member from the configuration event session', async () => {
+    const client=await start(),a=new Script(ETS2_A),root=await open(client,a,true,1,'10000000-0000-4000-8000-000000000001'),b=new Script(ETS2_B);
+    ok(await client.upsertSession({message:gameShaped(b.welcome())}));
+    ok(await client.commitEvent({message:gameShaped(b.event(r.trailerConfigured())),effects:[
+      {kind:'trip.update',tripUuid:root,set:{trailerConfigurations:['this-event']}}]}));
+    const unqualified=ok(await client.pinUploadProjection(root)),unqualifiedPages=await pages(client,unqualified);
+    expect(mapUploadProjection(unqualified,unqualifiedPages)).toEqual({status:'hold',reason:'evidence-contradictory'});
+    const child='f0000000-0000-4000-8000-000000000001';
+    ok(await client.commitEvent({message:gameShaped(b.event(r.jobConfigured())),profile:proof(b),effects:[
+      {kind:'trip.close',tripUuid:root,outcome:'none',closeReason:'restart',recordingCompleteness:'partial',endedUtcMs:2000},
+      {kind:'trip.open',tripUuid:child,game:'ets2',gameMode:mode,jobConfiguration:'this-event',trailerConfigurations:[{eventSeq:'1'}],recordingCompleteness:'partial',startedUtcMs:2000},
+      {kind:'event.attribute',tripUuid:child,attribution:'trip'}]}));
+    const pin=ok(await client.pinUploadProjection(child)),complete=await pages(client,pin);
+    expect(pin.rootTripUuid).toBe(root);expect(pin.totals).toMatchObject({members:2,configurations:1});
+    expect(complete.find(p=>p.kind==='configurations')!.rows[0]).toMatchObject({occurrence:{pluginSessionId:ETS2_B,rawTripUuid:child,eventSeq:'1'}});
+    expect(mapUploadProjection(pin,complete).status).toBe('projected');
+    expect(await pages(client,unqualified)).toEqual(unqualifiedPages);
+    await client.close();
+  });
   it('qualifies an unknown-outcome close by its continued raw member and preserves it after later commits', async () => {
     const client=await start(),a=new Script(ETS2_A),root=await open(client,a);await close(client,a,root);
     const b=new Script(ETS2_B),child=await open(client,b);
@@ -164,13 +190,7 @@ describe('immutable private upload projections through the SQLite worker', () =>
   });
   it('preserves selected save accounting and unavailable fuel instead of summing member totals', async () => {
     const client=await start(),s=new Script(ETS2_A),uuid=await open(client,s);
-    const append=async(second:number,odo:number)=>{
-      const sample:SampleInput={tripUuid:uuid,utcMs:1000+second*1000,sourceClockId:s.clockId,monotonicNs:String(second*1_000_000_000),gameTime:{minutes:{available:true,value:500},clockId:'40000000-0000-4000-8000-000000000001'},
-        speed:{available:true,value:20},odometer:{available:true,value:odo},fuel:{available:true,value:500-odo/10000},averageConsumption:absent,estimatedRange:absent,engineRpm:absent,gear:absent,position:{available:true,value:{x:odo/5,y:0,z:0}},
-        recording:{profile:proof(s),job:job(),truck:'fixture-truck',processInstanceId:s.welcome().source.processInstanceId,
-          previous:{tripUuid:uuid,sourceClockId:s.clockId,monotonicNs:String((second-1)*1_000_000_000)}}};
-      ok(await client.appendSamples(s.session,[sample]));
-    };
+    const append=(second:number,odo:number)=>appendSample(client,s,uuid,second,odo);
     await append(1,1000000);await append(2,1000050);await append(3,1000100);
     const first=ok(await client.pinUploadProjection(uuid)),oldPages=await pages(client,first);
     expect(first.facts.observedDistance).toEqual({available:true,value:100,unit:'m'});
@@ -184,6 +204,29 @@ describe('immutable private upload projections through the SQLite worker', () =>
     const mapped=mapUploadProjection(next,await pages(client,next));expect(mapped.status).toBe('projected');
     if(mapped.status==='projected'){expect(mapped.summary.snapshot.observedDistance).toEqual({available:true,value:100,unit:'m'});expect(mapped.summary.snapshot.fuelUsed).toEqual({...absent,unit:'L'});}
     await client.close();expect(recheck(first)).toBe(false);
+  });
+  it.each([
+    ['delivered','0'],['delivered','-9223372036854775808'],['delivered','9223372036854775807'],
+    ['cancelled','0'],['cancelled','-9223372036854775808'],['cancelled','9223372036854775807']
+  ] as const)('preserves native %s money %s after a selected-accounting rollback', async (outcome,raw) => {
+    const client=await start(),s=new Script(ETS2_A),uuid=await open(client,s);
+    await appendSample(client,s,uuid,1,1000000);await appendSample(client,s,uuid,2,1000050);await appendSample(client,s,uuid,3,1000100);
+    await appendSample(client,s,uuid,4,1000060);await appendSample(client,s,uuid,5,1000100);
+    ok(await client.commitEvent({message:gameShaped(s.event(r.fined('300'))),effects:[{kind:'event.attribute',tripUuid:uuid,attribution:'trip'}]}));
+    const native={available:true,value:{raw,sdkType:'s64',currency:{status:'unknown'}}} as const;
+    const key=outcome==='delivered'?'revenue':'penalty';
+    const record=outcome==='delivered'?{...r.delivered(raw),revenue:native}:{...r.cancelled(raw),penalty:native};
+    ok(await client.commitEvent({message:gameShaped(s.event(record)),effects:[
+      {kind:'trip.close',tripUuid:uuid,outcome,closeReason:'outcome',outcomeEvent:'this-event',recordingCompleteness:'partial',endedUtcMs:2000},
+      {kind:'event.attribute',tripUuid:uuid,attribution:'trip'}]}));
+    const pin=ok(await client.pinUploadProjection(uuid));expect(pin.facts.moneyIncomplete).toBe(true);expect(pin.facts[key]).toEqual(native);
+    const mapped=mapUploadProjection(pin,await pages(client,pin));expect(mapped.status).toBe('projected');
+    if(mapped.status==='projected'){
+      expect(mapped.summary.snapshot[key]).toEqual(native);expect(mapped.summary.snapshot[key==='revenue'?'penalty':'revenue']).toEqual(absent);
+      expect(mapped.summary.snapshot.observedDistance).toEqual({available:true,value:100,unit:'m'});
+      expect(mapped.summary.snapshot.evidence.reasons).toContain('accounting-unavailable');
+    }
+    await client.close();
   });
   it('retains a checkpoint opening in A when an event in B supplies the logical delivery', async () => {
     const client=await start(),a=new Script(ETS2_A);ok(await client.upsertSession({message:gameShaped(a.welcome())}));

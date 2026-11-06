@@ -17,7 +17,9 @@ export interface UploadFacts {
   opening: QualifiedOccurrence | null; outcomeOccurrence: QualifiedOccurrence | null; close: QualifiedOccurrence | null;
   gameMode: Pick<GameMode, 'mode' | 'method' | 'confidence'> & {ambiguous: boolean}; job: JobConfiguration;
   observedDistance: Measure<'m'>; fuelUsed: Measure<'L'>; deliveredDistance: Measure<'m'>; cargoDamage: Measure<'fraction'>;
-  revenue: Available<Money>; penalty: Available<Money>; moneyIncomplete: boolean;
+  revenue: Available<Money>; penalty: Available<Money>;
+  /** Aggregate accounting uncertainty does not invalidate native terminal money. */
+  moneyIncomplete: boolean;
   clockAnomaly: boolean;
 }
 export interface UploadProjection {
@@ -187,7 +189,7 @@ export function mapUploadProjection(pin: UploadProjection, pages: readonly Uploa
     job: {origin: place('source'), destination: place('destination'), cargoId: j.cargoId, cargoName: j.cargo, cargoMass: j.cargoMass, cargoUnitMass: j.cargoUnitMass,
       cargoUnitCount: j.cargoUnitCount, market: j.market, isSpecialJob: j.isSpecialJob, cargoLoaded: j.cargoLoaded},
     trailers: {complete: false, items}, plannedDistance: j.plannedDistance, observedDistance: f.observedDistance, deliveredDistance: f.deliveredDistance,
-    fuelUsed: f.fuelUsed, cargoDamage: f.cargoDamage, expectedIncome: j.expectedIncome, revenue: f.moneyIncomplete ? absent : f.revenue, penalty: f.moneyIncomplete ? absent : f.penalty,
+    fuelUsed: f.fuelUsed, cargoDamage: f.cargoDamage, expectedIncome: j.expectedIncome, revenue: f.revenue, penalty: f.penalty,
     evidence: {startObserved: start.basis === 'event' && !clockAnomaly, endObserved: !!f.outcomeOccurrence && end?.basis === 'event' && !clockAnomaly,
       ruleContextComplete: false, clockAnomaly, reasons: [...reasons].sort()}
   }};

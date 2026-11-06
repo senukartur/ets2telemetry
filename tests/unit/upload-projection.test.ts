@@ -79,10 +79,17 @@ describe('private Dashboard summary projection', () => {
     expect(value.summary.snapshot.evidence.reasons).toEqual(['catalog-context-unavailable','recording-intervals','trailer-context-changed']);
     const wire=JSON.stringify(value.summary);for(const key of ['rawTripUuid','proof','profile','samples','position','occurrence','revision','accountingHead'])expect(wire).not.toContain(`"${key}"`);
   });
-  it('does not sum raw accounting, publishes unavailable selected money and keeps anomalous UTC unknown', () => {
+  it('preserves native terminal money despite aggregate uncertainty and keeps anomalous UTC unknown', () => {
     const f=fixture();f.pin.facts.moneyIncomplete=true;f.pin.facts.opening!.utcMs=3000;const s=mapped(f).summary.snapshot;
-    expect(s.observedDistance).toEqual({available:true,value:0,unit:'m'});expect(s.revenue).toEqual(absent);expect(s.evidence).toMatchObject({startObserved:false,endObserved:false,clockAnomaly:true});
+    expect(s.observedDistance).toEqual({available:true,value:0,unit:'m'});expect(s.revenue).toEqual(f.pin.facts.revenue);expect(s.penalty).toEqual(absent);
+    expect(s.evidence).toMatchObject({startObserved:false,endObserved:false,clockAnomaly:true});expect(s.evidence.reasons).toContain('accounting-unavailable');
     f.pin.facts.opening!.utcMs=Number.MAX_SAFE_INTEGER;expect(mapped(f).summary.snapshot.start).toEqual({utcMs:null,basis:'unknown',eventSeq:null});
+  });
+  it.each(['0','-9223372036854775808','9223372036854775807'])('preserves exact native cancellation penalty %s with uncertain aggregate accounting', raw => {
+    const f=fixture();Object.assign(f.pin.facts,{outcome:'cancelled',revenue:absent,moneyIncomplete:true,
+      penalty:{available:true,value:{raw,sdkType:'s64',currency:{status:'unknown'}}}});
+    f.pin.facts.outcomeOccurrence!.type='job.cancelled';const s=mapped(f).summary.snapshot;
+    expect(s.penalty).toEqual(f.pin.facts.penalty);expect(s.revenue).toEqual(absent);expect(s.evidence.reasons).toContain('accounting-unavailable');
   });
   it.each(['oversized','negative','money','mode','private-field'] as const)('holds contradictory or unrepresentable evidence: %s', fault => {
     const f=fixture();if(fault==='oversized')f.pin.facts.job.cargo={available:true,value:'я'.repeat(129)};
