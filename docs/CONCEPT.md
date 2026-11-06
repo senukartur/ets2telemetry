@@ -8,7 +8,7 @@ This file describes the product idea and how its features work. It is not a log.
 
 **Yukon Union Telemetry** (technical name ETS2Telemetry) is a telemetry utility for **Euro Truck Simulator 2** and **American Truck Simulator**, made for the drivers of a virtual trucking company (VTC). It shows the essential driving data over the game, keeps a trip journal on its own, and records detailed samples for later analysis.
 
-The current product is a local Windows x64 application. It works without an account or internet connection. A later phase adds a server and a company website with driver and company statistics, fed by the locally recorded data.
+The current product is a local Windows x64 application. It works without an account or internet connection. A later integration sends recorded game-trip summaries to the existing VTC Dashboard for driver and company statistics, using its v1.0 API and a personal token. It uploads retained history and subsequent changes; it does not download or restore history into the application.
 
 The owner knows React and TypeScript and is new to desktop development, so most of the product is TypeScript and React, and native code stays in one small game plugin.
 
@@ -71,7 +71,7 @@ Windows x64, ETS2 and ATS, each in single-player and TruckersMP, in windowed and
 
 ## Not in scope yet
 
-- The server phase: driver accounts, company membership and permissions, synchronization of local data, reports and the company website (planned stack: Node.js, TypeScript, Fastify, PostgreSQL, React).
+- Dashboard integration: token-based connection and automatic upload of recorded game-trip summaries to the existing company website. Accounts, company permissions and reports belong to the Dashboard; samples and raw event streams stay local. History download and restoration are outside the product scope.
 - A geographic map: game coordinates are game-world coordinates, not latitude and longitude.
 - Telemetry of other TruckersMP players, and screenshots that include the overlay.
 

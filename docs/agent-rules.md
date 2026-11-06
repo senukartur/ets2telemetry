@@ -226,7 +226,7 @@ Consult the primary sources listed in section 12 of `DESIGN-DECISIONS.md` when v
 
 ## Uninstall removes local data — October 16, 2026
 
-On October 16, 2026 the owner confirmed that uninstalling ETS2Telemetry removes all of its local data under `%LOCALAPPDATA%\ETS2Telemetry`: the history database and its backups, settings, logs and synthetic recordings. Unsynchronized history is lost until the later server phase can restore it. Only application-owned data and the plugin file this application installed are removed. ET-018 implements this, changing the ET-001 baseline that keeps the data root. The ET-016 journal states the rule next to its JSON export, which is a copy for the user's records and cannot be imported (J18). See [DESIGN-DECISIONS.md](../DESIGN-DECISIONS.md#uninstall-removes-local-data--october-16-2026).
+On October 16, 2026 the owner confirmed that uninstalling ETS2Telemetry removes all of its local data under `%LOCALAPPDATA%\ETS2Telemetry`: the history database and its backups, settings, logs and synthetic recordings. Local history is lost; uploaded records remain on the Dashboard under its policies, but history download and restoration into the application are cancelled ([upload-only decision](../DECISION-LOG.md#et-101-dashboard-upload-scope--november-6-2026)). Only application-owned data and the plugin file this application installed are removed. ET-018 implements this, changing the ET-001 baseline that keeps the data root. The ET-016 journal states the rule next to its JSON export, which is a copy for the user's records and cannot be imported (J18). See [DESIGN-DECISIONS.md](../DESIGN-DECISIONS.md#uninstall-removes-local-data--october-16-2026).
 
 ## Standing Owner Rules
 

@@ -104,7 +104,7 @@ Cover startup order, real values, pause and resume, Alt+Tab, click-through, mini
 
 ## 8. Later server phase
 
-When the server phase is specified, extend this strategy with API and schema compatibility, authentication and company isolation, idempotent uploads, offline and restart recovery, account switching and report reconciliation, using a disposable real PostgreSQL instance. The offline desktop suite stays a regression gate.
+When Dashboard integration is specified, extend this strategy with v1.0 API and schema compatibility, token authentication and company isolation, idempotent uploads, offline and restart recovery, account switching and report reconciliation, using a disposable real instance of the Dashboard's database. Verify that synchronization never downloads or restores server history into the desktop Journal. The offline desktop suite stays a regression gate.
 
 ## 9. Handoff for every behavior change
 
