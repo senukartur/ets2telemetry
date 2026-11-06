@@ -43,7 +43,45 @@ The permanent owner key is `(origin, accountId, companyId, identityEpoch)`, inde
 
 The v1 source key is `(provider, game, pluginSessionId, tripId)`; `databaseUuid` is provenance, not another deduplication dimension. Preserve source IDs across retries, application restart and consistent database copies. Event IDs are generated once; positive safe-integer HTTP revisions increase per source trip and are separate from SQLite revision row IDs. Never match source identity by cargo, route, name or timestamp.
 
-**Logical-trip compatibility gate.** Schema v4 can join raw recordings from different plugin sessions into one Journal trip, including when profile proof arrives after a provisional singleton was created. The older VTC-024 discovery assumed raw single-session trips. Proposed mapping is the logical root UUID plus its opening plugin session, with all later observations remaining evidence of that root. Before freezing any real upload, ET-103a must establish, with Dashboard contract fixtures, how provisional membership, retirement, later association and cross-session occurrence references are represented. The v1 schema has no source-merge command or per-occurrence session field. Do not publish provisional children as independent trips, silently rewrite a frozen source key, reopen a remotely terminal source, or treat event sequences from different sessions as ordered. If one key has already been published before association, retain both frozen histories and hold affected work for explicit reconciliation. A proven v1-compatible mapping or separately agreed contract revision is a prerequisite to enabling this path; this specification does not authorize the latter.
+### Continued-trip identity: stable root, publication after membership resolution
+
+The proposed v1-compatible rule is **one immutable source key for one resolved logical root**. Set `source.tripId` to the root's original `trip_uuid` and `source.pluginSessionId` to that original raw trip's opening plugin session. The session field anchors source identity; it does not change to the latest member's session. Keep each member's genuine raw UUID/session/events locally. Use the logical projection and selected accounting path for summaries, not an upload per raw `listTrips` row.
+
+Schema v4 already keeps the root UUID/opening session while adopting later members. Its `associate` operation can move a provisional singleton to an older root only while its raw trip is open, its group is not retired and its membership has no persisted profile proof. Once proof is persisted, later observations refine constraints or retire the group rather than reassigning that member. Closed raw trips and retired groups cannot be reassigned by this operation. Publication therefore waits for this existing decision boundary, rather than imposing a timer or disabling local continuation.
+
+In a single worker transaction resolve current membership, reject superseded/empty aliases, and derive readiness for the **current root**:
+
+| Source state | Publication rule |
+| --- | --- |
+| Current root's membership points to itself and its profile proof is committed | Ready; root identity cannot subsequently move under the existing association rules |
+| Current self-root is retired, or its original raw trip is closed | Ready even without profile proof; absence of proof stays uncertainty, not a fabricated driver identity |
+| Current self-root is open, unretired and proof is absent | `identity-pending`; retain discovery/opening-owner context, but allocate no permanent source binding, HTTP revision, event ID or frozen envelope yet |
+| A provisional member now points to an older root | Redirect only its unmaterialized work to that root; do not publish its retired former singleton. The target root must independently pass readiness |
+| Stored publication metadata contradicts current membership | `reconciliation-required`; preserve frozen keys/bytes/receipts, stop affected publication and expose the inconsistency. No replacement IDs, silent rebind or remote merge |
+
+`retired` alone is insufficient: an abandoned singleton is also retired. Check its current membership before considering it a publishable root. Recheck current root/readiness atomically with compare-and-freeze, even when a pinned snapshot was read before a later association. Record the resolved root/key and owner only after this check. An existing root's permanent owner wins over a newly attached member's current account; that member never transfers the old trip to a different account. Opening-owner context determines first binding only for a genuinely new root, under the connection confirmation rules.
+
+This gives a concrete v1 lifecycle without a merge endpoint:
+
+| Observation | HTTP source key and action |
+| --- | --- |
+| Session A opens root T and commits membership proof | `(ets2telemetry, game, A, T)`; `trip.started`, revision 1 |
+| Session B creates provisional U while checking continuation | No publication for U; identity-pending is visible in the backlog |
+| B's membership joins T | Same `(…, A, T)`; publish a higher-revision open refresh only if material context changed |
+| B delivers the job | Same `(…, A, T)`; `trip.completed` with the next HTTP revision and the logical trip's final snapshot |
+| Retried request, token rotation or consistent database copy | Same source key, event ID, revision and exact frozen bytes; duplicate delivery is not new evidence |
+
+Before first publication, old singleton revisions of U are superseded by its resolved membership; retain them as local evidence, not separate remote history. A raw restart/gap/observation close does not emit `trip.closed` while the logical projection remains resumable/open. Emit a terminal message only for the logical delivered/cancelled outcome or an irreversible logical unknown-outcome closure. A later material correction of a terminal summary uses `trip.corrected`, never `trip.started` to reopen it. Different/ambiguous jobs remain separate roots under the recorder's existing conservative rules. No uploader heuristic may join them by route/cargo/time.
+
+A new job can therefore publish its start as soon as membership proof commits; it need not wait for delivery. If proof never becomes available, keep the unresolved open record visibly pending. Once identity settles, publish the current logical state; if already terminal, its full terminal snapshot may be the first HTTP revision, which v1 already supports. Retirement alone does not establish delivery, cancellation or even terminal logical state. Never make up proof or expire this work merely to finish the initial scan. First-upload progress must distinguish enumeration complete from all sources delivered and show identity-pending roots.
+
+### Occurrence references across sessions
+
+Retain source occurrence sequences without renumbering. `openedEventSeq` and event-basis `start.eventSeq` refer to the original opening event; `outcomeEventSeq` and event-basis `end.eventSeq` refer to the actual final event in its own member session. They may be equal or decrease across a continuation. The source header remains the root identity anchor. Do not interpret an endpoint sequence as a lookup in that anchor session, compare sequences across sessions, or substitute HTTP/SQLite revision numbers for native event sequences.
+
+For example, start sequence `1200` in A and delivery sequence `3` in B are valid original values. Preserve each raw occurrence's UTC/basis and the local qualified reference `(pluginSessionId, rawTripUuid, eventSeq)` in projection metadata tied to the frozen snapshot. Validate each observed flag against its own qualified stored event; the opening root's session must never be used to fetch B's delivery. A checkpoint opening remains checkpoint-based and unobserved even if a later member has an observed start.
+
+The existing v1 schema/adapter requires matching endpoint/associated-event sequence values and supported actual UTC evidence; it does not impose global native sequence ordering. It has no per-occurrence session field, so qualified local event addressing is not remotely reconstructible from v1 alone. Add no unknown wire fields and advertise no remote event replay or forensic lookup. ET-102 should document this root-anchor convention alongside the existing contract; no JSON schema, endpoint, version bump or server identity algorithm is required by this proposal. Missing/clamped or contradictory occurrence evidence stays unknown/anomalous under existing rules, rather than being repaired with another session's event.
 
 | v1 group | Local source and required mapping |
 | --- | --- |
@@ -114,16 +152,16 @@ These are proposed allocations to existing cards, not authorization to implement
 
 | Work owner | Deliverable and dependency |
 | --- | --- |
-| ET-101 | Review/accept this specification and resolve the logical-trip compatibility gate. Record product decisions only in the decision log; technical alternatives/review evidence belong in the PR. |
-| ET-102 + Dashboard VTC-023 | Reuse existing ingestion; verify exact route/response/parser/auth/receipt compatibility. Replace obsolete separate-server/restore allocation; any required Dashboard change gets a scoped PR in that repository. No new PostgreSQL backend. |
-| ET-103a | Consume the mapping agreed during ET-101 review, add logical source/occurrence compatibility fixtures and full projection API, and serialize storage migration ownership. Provisional joining, cross-session sequences, source retirement and raw-vs-logical API use must be resolved before enabling real materialization. |
+| ET-101 | Review/accept this specification, including the stable-root publication and qualified-occurrence proposal. Record product decisions only in the decision log; technical alternatives/review evidence belong in the PR. |
+| ET-102 + Dashboard VTC-023 | Reuse existing ingestion; verify exact route/response/parser/auth/receipt compatibility and document the root-anchor/session-local occurrence convention in the existing contract. Replace obsolete separate-server/restore allocation; any required Dashboard change gets a scoped PR in that repository. No new PostgreSQL backend. |
+| ET-103a | Implement the accepted stable-root readiness and qualified-occurrence rules, retain compatibility fixtures, provide the full projection API and serialize storage migration ownership. Prove delayed membership and freeze serialization, original cross-session sequences and logical terminal decisions before enabling real materialization. |
 | ET-103b | Additive durable metadata/discovery/scan/freeze/receipt transactions and historical migration/crash tests; depends on ET-103a mapping and accepted specification. |
 | ET-103c | Main credential boundary, registration and service HTTP scheduler/recovery; depends on durable APIs and ET-102 compatibility. Fault tests precede real server use. |
 | ET-032 | Confirmation flow, Account & sync, Journal/top-bar status using ET-103 data; no duplicate queue/credential logic. |
 | ET-103d + VTC-024 | Actual desktop-to-isolated-Dashboard integration with real MySQL, backlog/crash/owner tests and separately authorized game evidence. |
 | ET-104 + Dashboard report owners | Reconcile existing company review/qualification/analytics/notification effects with uploaded fixtures; replace obsolete website rebuild/restore requirements. Receipt success alone closes none of these gates. |
 
-Resolve before affected implementation: the logical-v4/v1 mapping; complete immutable projection reads/change coverage; exact protected-secret API and recovery/IPC bounds; configured channel origins and isolated integration environment. Map/build/locale/DLC uncertainty remains explicit uploaded evidence unless a separate capture enhancement is justified. Keep the existing recorder enablement decision and check its actual validation record; do not reopen an obsolete `GAME_HISTORY_RECORDING=false` requirement from discovery notes. Preparation may precede ET-021; implementation readiness and local MVP acceptance are separate gates.
+Before affected implementation, accept the stable-root publication proposal and its contract clarification; complete immutable projection read/change-coverage interfaces, protected-secret recovery/IPC bounds, configured channel origins and isolated integration environment. ET-103a must retain regression cases for every readiness state, delayed proof, freeze-versus-association serialization, original occurrence sequences and logical terminal decisions. Map/build/locale/DLC uncertainty remains explicit uploaded evidence unless a separate capture enhancement is justified. Keep the existing recorder enablement decision and check its actual validation record; do not reopen an obsolete `GAME_HISTORY_RECORDING=false` requirement from discovery notes. Preparation may precede ET-021; implementation readiness and local MVP acceptance are separate gates.
 
 ## Verification and acceptance
 
@@ -131,7 +169,7 @@ Use the Dashboard [P0–P11 procedures and TEL ledger](https://github.com/senuka
 
 | Verification boundary | Cases and required evidence |
 | --- | --- |
-| Projection/contract | TEL-010–012, 018–023, 034–036; independently expected fixtures for logical cross-session identity, provisional join before/after freeze, restored-save accounting, more than ten configurations/fifty intervals, missing context, money extrema and RU/EN stable IDs |
+| Projection/contract | TEL-010–012, 018–023, 034–036; independently expected fixtures for every root-readiness state, provisional join versus freeze serialization, equal/decreasing original endpoint sequences across sessions, checkpoint/non-observed starts, restored-save accounting, more than ten configurations/fifty intervals, missing context, money extrema and RU/EN stable IDs |
 | Storage/migration/crash | TEL-002/003, 028–031; real storage worker/temporary SQLite, killed subprocesses at discovery/scan/freeze/receipt/cleanup commits, copy/reopen and migration preservation; no mocks-only durability claim |
 | Credential/transport/UI | TEL-013–018, 024–026; Windows secret-store failures, canary-secret absence, account switch during an open trip/request, token rotation/revocation, epoch change, redirects/TLS, malformed receipts, persisted retry and real UI statuses |
 | Initial/live concurrency | TEL-028–031 plus logical association; history scan overlaps local recording, pressure by both count/bytes, restart while paused, continued drain/capacity release/resume with no omitted source changes |
