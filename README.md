@@ -25,7 +25,7 @@ Compatibility with either game in single-player and TruckersMP is required but h
 - Explicit handling of pauses, disconnections, late attachment, save loading, and incomplete recordings.
 - Tray operation so closing the main window does not stop recording.
 
-Exclusive fullscreen, rendering hooks, and arbitrary game memory reads are outside the MVP. Website development, accounts, company permissions, server synchronization, and online reporting belong to a later phase. Visual design is deferred until the telemetry path works.
+Exclusive fullscreen, rendering hooks, and arbitrary game memory reads are outside the MVP. Planned upload integration uses the existing VTC Dashboard for accounts, company permissions and online reports; the local application remains usable offline. Visual design follows the [UI specification](docs/design/ui-spec.md).
 
 ## Working architecture
 
@@ -50,7 +50,7 @@ The scaffold pins Node/npm and application dependencies. Electron main supervise
 2. Add connection states, reconnection, tray behavior, settings, game-window tracking, and monitor/DPI handling.
 3. Add reliable trip accounting, SQLite persistence, one-second recording, the journal, and export.
 4. Add game discovery, safe plugin installation, packaging, and updates that preserve history.
-5. Specify and implement the separate server and company website phase.
+5. Specify and implement upload-only integration with the existing VTC Dashboard.
 
 ## Documentation
 
@@ -58,6 +58,7 @@ The scaffold pins Node/npm and application dependencies. Electron main supervise
 - [Design decisions](DESIGN-DECISIONS.md): the earlier full concept and the dated design decisions of each card.
 - [Agent instructions](AGENTS.md): the short summary every agent session loads; the full rules are in [docs/agent-rules.md](docs/agent-rules.md).
 - [Testing and regression strategy](docs/TESTING.md): the testing rules and the permanent regression scenarios; the [test index](docs/regression-registry.md) maps tests to scenarios.
+- [Dashboard upload specification](docs/dashboard-upload.md): agreed v1.0 token connection, ownership, projection, durable queue and integration gates.
 - [Windows setup](docs/setup.md): pinned tools, build/test/package entrypoints, process boundaries, SDK acquisition, and remaining checks.
 - [Releases](docs/release.md): the release channel, the release checklist, the artifact identity and the signing decision.
 - [Implementation coordinator](COORDINATOR.md): Trello execution, subagent assignments, worktree ownership, independent review, and recovery handoffs.

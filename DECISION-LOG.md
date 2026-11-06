@@ -863,3 +863,11 @@ The owner confirmed stability slider mapping raw × 200% and a 50% limit (raw `0
 ## Deliver target freshness — November 5, 2026
 
 The owner requested that delivery always fetch the current PR target before starting: `main` when the PR will merge there, otherwise its intended target branch. The skill refreshes its instructions from that fetched commit before planning and records the target and SHA; resuming preserves existing work and the original base while refreshing the target tip.
+
+## ET-101 Dashboard upload scope — November 6, 2026
+
+The owner chose the existing VTC Dashboard and its [v1.0 contract](https://github.com/senukartur/vtc-dashboard/blob/1f9e34ab1ffeb12eba9d624a8116d19b3e5bb27a/docs/contracts/telemetry-v1.md), personal token and confirmed automatic upload of retained game-trip summaries and changes. Samples/raw events stay local; history download/restoration is cancelled. This supersedes the separate-server and restore proposals. Preparation may precede ET-021; local use stays offline-capable. Implementation, deployment, release and merge remain separately authorized. See the [specification](docs/dashboard-upload.md).
+
+## ET-101 continued-trip identity acceptance — November 6, 2026
+
+The owner accepted [stable-root publication for continued trips](docs/dashboard-upload.md#continued-trip-identity-stable-root-publication-after-membership-resolution) and requested ET-101 closure. The specification is accepted; implementation and integration/game evidence remain with their owning cards. This grants no uploader implementation, release or PR merge authorization.

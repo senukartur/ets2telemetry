@@ -47,7 +47,7 @@ Snapshot as of October 28, 2026 (`main` at `ae5ab6a7`). Inspect the actual files
 - Target Windows x64 first. TruckersMP compatibility is required; validate single-player as well. The built-in Convoy mode is deferred from the validation matrix by owner decision on October 12, 2026 and is not claimed as supported.
 - The MVP is local and works without an account or internet connection: live telemetry, an overlay, a trip journal, and one-second samples.
 - Support windowed and borderless fullscreen overlays. Exclusive fullscreen, rendering hooks, and arbitrary game memory reads are outside the MVP.
-- Keep website development, accounts, company permissions, server synchronization, and online reporting in the later server phase.
+- The desktop remains offline-capable. Upload integration targets the existing VTC Dashboard, which owns accounts, company permissions and online reports; its [accepted scope](../DECISION-LOG.md#et-101-dashboard-upload-scope--november-6-2026) replaces the separate-server proposal.
 - Visual design follows [the UI specification](design/ui-spec.md) in [docs/design](design/README.md), by owner decision of October 19, 2026. New UI work follows the specification; each package still needs its own card.
 - The owner knows React and TypeScript and is new to desktop development. Explain unfamiliar native and desktop concepts clearly.
 
@@ -62,7 +62,7 @@ Snapshot as of October 28, 2026 (`main` at `ae5ab6a7`). Inspect the actual files
 | Process supervision | Electron main supervises a telemetry utilityProcess that owns the storage worker |
 | Packaging | Electron Forge |
 | Validation | Vitest, CTest for native executables, Playwright, simulation/replay, and actual game sessions |
-| Later server direction | Node.js, TypeScript, Fastify, PostgreSQL, React |
+| Dashboard integration | Existing VTC Dashboard (Fastify/React, MySQL); v1.0 summary upload only |
 
 The ET-001 scaffold pins dependencies and defines process boundaries; consult [docs/setup.md](setup.md) and actual check evidence for installed and verified tooling. Distinguish SDK archive versions from API versions and game versions.
 
@@ -226,7 +226,7 @@ Consult the primary sources listed in section 12 of `DESIGN-DECISIONS.md` when v
 
 ## Uninstall removes local data — October 16, 2026
 
-On October 16, 2026 the owner confirmed that uninstalling ETS2Telemetry removes all of its local data under `%LOCALAPPDATA%\ETS2Telemetry`: the history database and its backups, settings, logs and synthetic recordings. Unsynchronized history is lost until the later server phase can restore it. Only application-owned data and the plugin file this application installed are removed. ET-018 implements this, changing the ET-001 baseline that keeps the data root. The ET-016 journal states the rule next to its JSON export, which is a copy for the user's records and cannot be imported (J18). See [DESIGN-DECISIONS.md](../DESIGN-DECISIONS.md#uninstall-removes-local-data--october-16-2026).
+Uninstalling ETS2Telemetry removes all of its local data under `%LOCALAPPDATA%\ETS2Telemetry`: the history database and its backups, settings, logs and synthetic recordings. Uploaded records remain on the Dashboard under its policies; local history is not downloaded or restored from it ([current upload-only decision](../DECISION-LOG.md#et-101-dashboard-upload-scope--november-6-2026)). Only application-owned data and the plugin file this application installed are removed. ET-018 implements local cleanup. The ET-016 journal's JSON export is a copy for the user's records and cannot be imported (J18).
 
 ## Standing Owner Rules
 

@@ -1,0 +1,156 @@
+# Dashboard upload specification
+
+**Owner-accepted specification; uploader implementation is not included.** [ET-101](https://trello.com/c/v8LZYyH3) defines the desktop side of [VTC-024](https://trello.com/c/aluAoQAX). The [scope decision](../DECISION-LOG.md#et-101-dashboard-upload-scope--november-6-2026) permits preparation before ET-021; the [identity acceptance](../DECISION-LOG.md#et-101-continued-trip-identity-acceptance--november-6-2026) closes the specification decision. Implementation, deployment, release and merge require their own authorization; local MVP acceptance is not waived.
+
+## Contract and product boundary
+
+The existing Dashboard owns accounts, Steam linking, company permissions, token issuance/revocation, ingestion, canonical trips, review, qualifications, reports and notifications. Reuse its [HTTP v1.0 contract](https://github.com/senukartur/vtc-dashboard/blob/1f9e34ab1ffeb12eba9d624a8116d19b3e5bb27a/docs/contracts/telemetry-v1.md), [schema/examples](https://github.com/senukartur/vtc-dashboard/tree/1f9e34ab1ffeb12eba9d624a8116d19b3e5bb27a/docs/contracts) and [acceptance matrix](https://github.com/senukartur/vtc-dashboard/blob/1f9e34ab1ffeb12eba9d624a8116d19b3e5bb27a/docs/contracts/telemetry-v1-acceptance.md). Do not create another server, account system or wire format. Contract revisions must be coordinated with the Dashboard owner before either implementation changes.
+
+The Dashboard telemetry module is opt-in and disabled by default; code and tests do not prove that any hosted origin has activated its migrations, grants or ingestion. Verify an explicitly isolated configured environment before integration; this specification authorizes no activation or production request.
+
+After explicit connection, automatically upload every retained eligible game trip, including open, delivered, cancelled, partial and interrupted trips, without an age cutoff or per-trip selection. Continue with new trips and material changes. Free-driving samples without a trip are not upload records. Upload lifecycle summaries, not one-second samples, raw events, profile identities, positions, process/window details, paths, diagnostics or local exports. Real upload requires both a history-purpose database and game-origin evidence; synthetic/replay databases never qualify. An isolated synthetic server fixture must not relabel a recorded synthetic source as genuine game history.
+
+There is no server-to-client history download, restoration or import, including after reinstall. Already uploaded evidence remains subject to Dashboard policies; uninstall deletes desktop history and synchronization state. Local recording and the overlay work without a token, internet or a healthy Dashboard. A durable upload receipt means **sent**, never accepted by the company. Company decisions and statistics are computed on the website, without being imported into the Journal.
+
+## Existing components and required seams
+
+| Boundary | Reuse | Required desktop extension |
+| --- | --- | --- |
+| Dashboard | [Telemetry routes and service](https://github.com/senukartur/vtc-dashboard/tree/1f9e34ab1ffeb12eba9d624a8116d19b3e5bb27a/apps/api/src/modules/telemetry), immutable source records, MySQL ownership/receipt constraints, browser token workspace | Client use of existing endpoints; scoped Dashboard fixes only for verified incompatibilities |
+| Recorder | [Recording runtime](../apps/desktop/src/recording-runtime.ts), native ACK after local durability | Transactional upload discovery indication; no network work on the ACK path |
+| Storage | [Single storage worker](storage.md), schema v4 logical memberships, immutable revisions and accounting snapshots | Private projection reads, owner bindings, durable discovery/materialization/queue/receipt commands and an additive migration |
+| Journal | Logical trip UUIDs and revision-bound provenance | Upload status keyed to the agreed source identity; no renderer DTO/export reused as an upload payload |
+| Electron main | Supervision, narrow preload, channel/data-root separation | Protected token adapter, fixed-origin configuration and validated connection/status IPC |
+| UI | [Account and sync design](design/ui-spec.md#56-account-and-sync-account-dashboard-upload) | Connection confirmation, safe status and errors; ET-032 owns presentation |
+
+`getTrip`/`listTrips` are raw recorder reads; Journal queries project logical groups. Neither API is a durable global upload cursor. Journal detail limits (ten trailer configurations and fifty intervals) do not establish complete rule context. Existing snapshot cursors fix a trip/revision, not the initial upload scan. Do not derive correctness from `updatedUtcMs`, UI ordering or polling alone.
+
+## Connection, credentials and ownership
+
+1. The driver creates a personal token in the Dashboard's existing `/account/connections` workspace. The desktop never signs in with a Dashboard password or issues/revokes tokens through browser-session APIs.
+2. Main validates a token submission of at most 128 UTF-8 bytes from the main-window preload (the current `vtc1_` token is ASCII). Use a fixed, channel-specific HTTPS origin configured outside the renderer. Show that origin before submitting a token for verification; reject URL userinfo, query, fragment and redirects. Production/staging origins are separate deployment configuration gates; test-only loopback overrides must not be available in release builds.
+3. Call `GET /api/telemetry/v1/connection`; validate its exact supported contract, authoritative `accountId`, `companyId`, `identityEpoch` and limits. The existing response uses `contract: {major: 1, minor: 0}`, not an invented versions array. Do not infer nickname/roles from opaque IDs or introduce an unsupported profile-read route.
+4. Before binding history, show the verified owner identifiers, origin, and the first-upload scope: every retained eligible trip, with a bounded scan/count preview or an explicit calculating state. Explain that previously unbound history binds once and that the SDK cannot prove its historical driver. Cancel leaves history unbound and sends no trip. Revalidate identity before final confirmation.
+5. Persist a random `clientInstallationId` before registration. POST `/api/telemetry/v1/installations` with only `contract` and that ID. Persist the returned `installationId`, `bindingId`, `identityEpoch` and authoritative owner tuple before materializing uploads. Lost registration replies retry the same client ID.
+
+Main owns the credential store. Use an OS-protected adapter, backed on Windows by Electron [safeStorage/DPAPI](https://www.electronjs.org/docs/latest/api/safe-storage), with no plaintext fallback; verify the exact API against the pinned Electron version. A typed token exists transiently in the entry control and one-shot IPC only; clear it after submission/cancellation. Never return a saved secret to the renderer, persist it in settings/SQLite rows, put it in environment/command-line arguments, or include it in errors, logs, exports or diagnostics. Only the trusted upload service receives the active credential over private IPC.
+
+Credential replacement uses a generation identifier: write protected candidate bytes atomically, commit the confirmed binding plus generation, then activate that generation. On recovery, a missing/unreadable matching secret pauses upload; an orphan candidate never authorizes a binding or upload. Channel-specific credential files must join the installer/uninstaller data inventory; copying a database alone does not transfer a decryptable secret.
+
+The permanent owner key is `(origin, accountId, companyId, identityEpoch)`, independent of token bytes. Rotation for the same owner/epoch resumes unchanged work. Another owner or epoch receives a distinct registration and cannot adopt bound history or pending envelopes. Disconnect pauses sending, stops assigning new unbound trips to that owner, and forgets the local credential without erasing bindings, history, pending work or receipts. Network/authentication pauses retain the configured owner. Reconnecting as another account requires confirmation for still-unbound records; existing bindings remain held for their owner. An open trip bound to A stays A's across a switch to B. Identity revocation is authoritative on every request; no expiration policy or automatic reconciliation is invented by the client.
+
+## Source identity and summary projection
+
+The v1 source key is `(provider, game, pluginSessionId, tripId)`; `databaseUuid` is provenance, not another deduplication dimension. Preserve source IDs across retries, application restart and consistent database copies. Event IDs are generated once; positive safe-integer HTTP revisions increase per source trip and are separate from SQLite revision row IDs. Never match source identity by cargo, route, name or timestamp.
+
+### Continued-trip identity: stable root, publication after membership resolution
+
+The agreed v1-compatible rule is **one immutable source key for one resolved logical root**. Set `source.tripId` to the root's original `trip_uuid` and `source.pluginSessionId` to that original raw trip's opening plugin session. The session field anchors source identity; it does not change to the latest member's session. Keep each member's genuine raw UUID/session/events locally. Use the logical projection and selected accounting path for summaries, not an upload per raw `listTrips` row.
+
+Schema v4 already keeps the root UUID/opening session while adopting later members. Its `associate` operation can move a provisional singleton to an older root only while its raw trip is open, its group is not retired and its membership has no persisted profile proof. Once proof is persisted, later observations refine constraints or retire the group rather than reassigning that member. Closed raw trips and retired groups cannot be reassigned by this operation. Publication therefore waits for this existing decision boundary, rather than imposing a timer or disabling local continuation.
+
+In a single worker transaction resolve current membership, reject superseded/empty aliases, and derive readiness for the **current root**:
+
+| Source state | Publication rule |
+| --- | --- |
+| Current root's membership points to itself and its profile proof is committed | Ready; root identity cannot subsequently move under the existing association rules |
+| Current self-root is retired, or its original raw trip is closed | Ready even without profile proof; absence of proof stays uncertainty, not a fabricated driver identity |
+| Current self-root is open, unretired and proof is absent | `identity-pending`; retain discovery/opening-owner context, but allocate no permanent source binding, HTTP revision, event ID or frozen envelope yet |
+| A provisional member now points to an older root | Redirect only its unmaterialized work to that root; do not publish its retired former singleton. The target root must independently pass readiness |
+| Stored publication metadata contradicts current membership | `reconciliation-required`; preserve frozen keys/bytes/receipts, stop affected publication and expose the inconsistency. No replacement IDs, silent rebind or remote merge |
+
+`retired` alone is insufficient: an abandoned singleton is also retired. Check its current membership before considering it a publishable root. Recheck current root/readiness atomically with compare-and-freeze, even when a pinned snapshot was read before a later association. Record the resolved root/key and owner only after this check. An existing root's permanent owner wins over a newly attached member's current account; that member never transfers the old trip to a different account. Opening-owner context determines first binding only for a genuinely new root, under the connection confirmation rules.
+
+This gives a concrete v1 lifecycle without a merge endpoint:
+
+| Observation | HTTP source key and action |
+| --- | --- |
+| Session A opens root T and commits membership proof | `(ets2telemetry, game, A, T)`; `trip.started`, revision 1 |
+| Session B creates provisional U while checking continuation | No publication for U; identity-pending is visible in the backlog |
+| B's membership joins T | Same `(…, A, T)`; publish a higher-revision open refresh only if material context changed |
+| B delivers the job | Same `(…, A, T)`; `trip.completed` with the next HTTP revision and the logical trip's final snapshot |
+| Retried request, token rotation or consistent database copy | Same source key, event ID, revision and exact frozen bytes; duplicate delivery is not new evidence |
+
+Before first publication, old singleton revisions of U are superseded by its resolved membership; retain them as local evidence, not separate remote history. A raw restart/gap/observation close does not emit `trip.closed` while the logical projection remains resumable/open. Emit a terminal message only for the logical delivered/cancelled outcome or an irreversible logical unknown-outcome closure. A later material correction of a terminal summary uses `trip.corrected`, never `trip.started` to reopen it. Different/ambiguous jobs remain separate roots under the recorder's existing conservative rules. No uploader heuristic may join them by route/cargo/time.
+
+A new job can therefore publish its start as soon as membership proof commits; it need not wait for delivery. If proof never becomes available, keep the unresolved open record visibly pending. Once identity settles, publish the current logical state; if already terminal, its full terminal snapshot may be the first HTTP revision, which v1 already supports. Retirement alone does not establish delivery, cancellation or even terminal logical state. Never make up proof or expire this work merely to finish the initial scan. First-upload progress must distinguish enumeration complete from all sources delivered and show identity-pending roots.
+
+### Occurrence references across sessions
+
+Retain source occurrence sequences without renumbering. `openedEventSeq` and event-basis `start.eventSeq` refer to the original opening event; `outcomeEventSeq` and event-basis `end.eventSeq` refer to the actual final event in its own member session. They may be equal or decrease across a continuation. The source header remains the root identity anchor. Do not interpret an endpoint sequence as a lookup in that anchor session, compare sequences across sessions, or substitute HTTP/SQLite revision numbers for native event sequences.
+
+For example, start sequence `1200` in A and delivery sequence `3` in B are valid original values. Preserve each raw occurrence's UTC/basis and the local qualified reference `(pluginSessionId, rawTripUuid, eventSeq)` in projection metadata tied to the frozen snapshot. Validate each observed flag against its own qualified stored event; the opening root's session must never be used to fetch B's delivery. A checkpoint opening remains checkpoint-based and unobserved even if a later member has an observed start.
+
+The existing v1 schema/adapter requires matching endpoint/associated-event sequence values and supported actual UTC evidence; it does not impose global native sequence ordering. It has no per-occurrence session field, so qualified local event addressing is not remotely reconstructible from v1 alone. Add no unknown wire fields and advertise no remote event replay or forensic lookup. ET-102 documents this root-anchor convention alongside the existing contract; no JSON schema, endpoint, version bump or server identity algorithm is required by this mapping. Missing/clamped or contradictory occurrence evidence stays unknown/anomalous under existing rules, rather than being repaired with another session's event.
+
+| v1 group | Local source and required mapping |
+| --- | --- |
+| Outcome, completeness, close reason | Revision-bound logical projection, including irreversible losses and actual delivered/cancelled evidence. A resumable raw restart closure must not terminate a still-open logical trip. Initially terminal history needs no invented start request. |
+| Opening and time | Stored opening/checkpoint provenance plus original event occurrence; final event and close carrier retain their own source session. Distinguish actual occurrence, checkpoint, inherited last-known label, receipt fallback and clock clamp. Set observed flags only from supported lifecycle evidence; unsupported time is unknown. Never use upload time or current qualification as historical fact. |
+| Job and quantities | Stored job configuration: stable city/company/cargo IDs and original names, shipment mass versus unit mass/count, market and flags. Follow the wire field allowlist, not display strings. |
+| Distances and fuel | Selected logical accounting path; planned, observed and SDK-delivered distances remain separate. Partial observed distance is a segment; reverted driving after a save load must not be summed twice. Use stored fuel availability and supported cargo-damage evidence. |
+| Money | Native expected income as exact u64 decimal text; revenue and penalty as exact s64 text. Do not use Journal combined money or lossy Number conversions. Currency remains unknown unless SDK-documented evidence supports it. |
+| Trailers and quality | Read all relevant snapshot-bound membership/configuration/interval evidence in bounded pages, not just latest detail windows. Ten active trailer slots are not ten historical configurations. Mark missed, changed or unavailable rule context explicitly; no partial page may imply complete context. |
+| Context and versions | Persisted welcome/session versions and supported recorded metadata. Current source reads do not establish exact retail build, map namespace, DLC inventory or source locale; send unavailable rather than inferring `official` from fixtures or API version. Unknown catalog context can prevent automatic company credit without preventing honest upload. |
+| Game mode | Retain opening evidence plus ambiguity across members. Unknown requires none/none; known requires supported detection and non-none confidence; single-player is weak. Never upload module names/paths or claim driver identity proof. |
+
+Missing historical evidence stays unavailable; adding future capture cannot backfill it. Hard Mode's local flag is not company acceptance and is not an extra v1 field. Derive only the evidence supported by the frozen schema. If a value cannot fit without truncation, retain a visible projection hold and source pointer; do not discard data or fabricate a compatible value.
+
+## Durable local state and transaction contract
+
+All synchronization metadata resides in the history SQLite database under the existing WAL/FULL single-writer contract. The following persistence requirements define the accepted interface contract; they are not current storage exports. Allocate the next migration number at implementation time; freeze versions 1–4 and add historical migration fixtures. Backup/digest/restore tooling and staging trip deletion must account for the new tables. Technical local database-copy recovery remains distinct from the cancelled product history download.
+
+| Durable state | Required constraints |
+| --- | --- |
+| Installation and owner registrations | Stable local installation ID; unique confirmed owner/epoch registrations; protected-secret generation reference, never secret bytes |
+| Source binding and projection head | One permanent owner per agreed source key; last compared source snapshot/material digest; monotone HTTP revision allocator and original provenance |
+| Scan run | Owner, stable high-water boundary, bounded keyset cursor, scan-complete state and original backfill run UUID |
+| Provisional opening-owner reservation | Source-qualified raw/candidate identity plus the confirmed opening-owner tuple `(origin, accountId, companyId, identityEpoch)` and its nonsecret registration/binding IDs, or an explicit `unbound` state. Persist with first discovery or confirmed historical enumeration, before any account change can affect the work. Preserve through restart and consistent database copy; no token or permanent HTTP source key is stored here. |
+| Discovery work | Durable source revision/change position, including changes overlapping the scan; retain reconstructible source references while materialization is paused |
+| Frozen envelopes | Unique event ID and source-key/revision; original registration, run/mode, contract/projector version, exact UTF-8 bytes and byte count; sending/backoff/held state |
+| Receipts | Event ID, matching server receipt ID and first receipt time; committed before deleting envelope bytes or releasing queue capacity; sufficient identity/digest retained to detect contradictory retries |
+
+An assigned provisional reservation cannot change from A to B when the active account changes or readiness resolves; only explicit first-binding confirmation may assign an `unbound` reservation. A genuinely new root uses its persisted reservation, never the account active at freeze time. When a member redirects into an already bound root, the target root's permanent owner wins; the incoming reservation cannot overwrite it, and another account cannot send the root's work. An unbound target follows its own persisted reservation or explicit first-binding confirmation; conflicting unresolved reservations are held for reconciliation rather than choosing the latest account. Redirect/reservation consumption and source freezing are transactional.
+
+Required operations cross only the private service/worker channel, with strict argument/result validation: begin/resume scan, page scan/discovery, pin/read projection context, compare-and-freeze, select eligible pending work, record attempt/hold, commit validated receipt, and read safe status. Renderers cannot invoke them or select paths, owners, arbitrary URLs, SQL or source purpose.
+
+**T1 — discover with source commit.** Event/gap effects, checkpoint membership, completeness/Hard Mode changes, logical association/retirement and relevant sample accounting update their discovery indication in the same transaction as source history. Bind newly identified roots to the configured confirmed owner in this transaction, independently of queue capacity; provisional identities retain the opening owner context until the compatibility gate resolves their root. An account switch cannot take work recorded for a previous owner merely because serialization was delayed. Existing immutable logical revisions are useful source evidence but are not by themselves the complete upload change stream. A crash must not commit a change without discoverability. Ordinary per-second counters are not material open updates; use compact/coalesced work pointers while retaining reconstructible terminal, correction and uncertainty transitions. No serialization or HTTP runs inside a recorder transaction.
+
+**T2 — begin and enumerate.** Atomically persist the scan's high-water boundary and durable change position with confirmed ownership. Walk retained eligible logical roots by stable key, in pages of at most 100; resolve the identity gate before assigning permanent keys. Binding/enumeration progress advances only with durable pending work or a pointer that guarantees later materialization. Recording and changes beyond the boundary remain discoverable. Scan/live paths share one comparison/revision allocator. A restart resumes the same run; another account cannot take it over.
+
+**T3 — pin, compare and freeze.** Obtain a consistent logical snapshot and all necessary evidence within its immutable bounds. Heavy pagination may span worker turns, but every read must use that snapshot; source revisions required by pending work cannot be reclaimed. Compare normalized material evidence, excluding volatile upload time, against the stored projection head. In one transaction recheck owner, snapshot/progress and queue capacity, allocate a revision/event ID and store the exact final envelope before advancing progress. An equal projection records comparison progress without minting an event. A conflict restarts from a new snapshot, never combines pages from different revisions. Contract-invalid projections remain held. Initial completed/cancelled/closed records may start at revision 1; open context refreshes use higher `trip.started` revisions; later terminal changes use `trip.corrected`.
+
+**T4 — remote receipt then local commit.** Send outside SQLite transactions. Validate the full bounded response, then atomically commit receipt/delivered state. Only subsequently clean up payload bytes and release capacity. A crash after remote commit but before local receipt commit retries the identical envelope, obtaining the same duplicate receipt; a crash after local commit cannot resend it as new work. Losing metadata produces a reconciliation hold, never fresh replacement IDs.
+
+## Transport, scheduling and failures
+
+Use bearer authentication only, one event per uncompressed UTF-8 JSON request to `/api/telemetry/v1/events`, and at most one upload request in flight. Enforce v1.0 shape/semantic checks and the contract's 65,536-byte/depth-16 limits before freezing. No arbitrary renderer-controlled request target, cookie fallback, redirects, disabled TLS validation or silent minor-version downgrade. Proposed client defaults are a 30 s total request deadline, control replies at most 16 KiB, receipt/error replies at most 4 KiB and response JSON depth at most 16; malformed or oversized replies cannot release work. These are resource bounds, not latency or throughput claims.
+
+Accept only `202` with `stored` or `200` with `duplicate`, exact v1.0, the expected event ID, valid receipt identity and nonnegative safe first-receipt time. Persisted receipt identity/time cannot change on replay. A generic 2xx, timeout, malformed/truncated reply, wrong status/identity/version or server-side company decision is not an ACK. Native contiguous-event ACK remains a separate local durability mechanism.
+
+| Result | Client action |
+| --- | --- |
+| 401 / 403 | Pause that owner's queue until credentials/eligibility are repaired; retain source bindings and work |
+| 409 binding/identity conflict | Hold affected work for reconciliation; never reassign or overwrite evidence |
+| 400 / 413 / 415 / 422 | Visible validation/size/media/version hold; repair through a reviewed compatible producer change, preserving original frozen evidence |
+| 429 | Persist retry time from valid seconds/date `Retry-After` plus jitter; invalid header uses normal backoff |
+| Network timeout / transient 5xx | Retry exact bytes with capped exponential full jitter, base 2 s and cap 5 min; timeout may follow a committed event |
+| TLS / redirect / unknown failure / invalid receipt | Keep work and a fixed diagnostic; pause configuration faults, use bounded retries for transient reply faults, never hot-loop |
+
+Attempts, backoff and holds survive restart. Schedule using the existing 60 events/minute, burst-10 server defaults and advertised compatible limits; these are not measured capacity. Use bounded fair scheduling (proposed: at most one backfill event between eligible live events) and skip temporarily ineligible/held work without discarding it. Out-of-order revisions remain valid under the server contract. Historical/delayed events retain frozen mode/run; they must not create false current activity.
+
+At 10,000 pending serialized events or 64 MiB, pause only new materialization/enumeration. Already frozen eligible work keeps uploading; durable receipts free capacity and resume materialization automatically. Retain discovery positions and source changes during pressure; do not expire pending work, erase older history, or block the recorder on HTTP. The queue bound is not a total history/database-size guarantee. Storage work must yield between bounded pages and prioritize recorder commits; HTTP errors must not poison the local recording state.
+
+On orderly exit stop new uploads, bound/cancel the in-flight request and retain ambiguous delivery for retry. Do not wait for a remote backlog to drain or extend the existing recording shutdown budget. Updates/restarts keep IDs, bindings, pending bytes, backoff and receipts. Uninstall removes all local state. Staging deletion must refuse deletion of source/revision data referenced by pending or held synchronization work until an explicit reviewed cleanup policy exists; it never issues a Dashboard delete.
+
+## User-visible state
+
+ET-032 implements the existing design on a safe status DTO: unconfigured, verifying, awaiting confirmation, connected, offline/backoff, authentication required, projection/reconciliation hold and queue pressure. Include owner identifiers, channel/origin, first-scan progress, unsynchronized source backlog separately from frozen queued events, held count, last durable upload and fixed actionable error. Counts must not expose another owner's trip data. First-upload progress counts distinct source trips, not HTTP attempts or revisions; changing totals and unresolved sources remain explicit.
+
+Journal status is per agreed logical source/revision: queued, held, sending or sent after a durable local receipt. No company acceptance indicator is inferred. Account & sync remains discoverable when the feature is implemented but unconfigured; top-bar/Journal sync decorations appear only when configured. Masking/show-hide applies to the token currently entered, not a saved secret readback. RU/EN wording follows existing localization. No history restore controls are provided.
+
+## Verification and acceptance
+
+Follow the repository [testing rules](TESTING.md) and the Dashboard [TEL matrix and P0–P11 protocol](https://github.com/senukartur/vtc-dashboard/blob/1f9e34ab1ffeb12eba9d624a8116d19b3e5bb27a/docs/integrations/telemetry-verification.md). Verify every readiness state, original cross-session occurrences, and preservation of pending opening-owner reservations through restart/account switches before proof or closure; test redirection into bound and unbound roots without reassignment. Retain meaningful storage-worker/SQLite migration, commit-boundary crash, scan/live overlap, credential, receipt and pressure/drain regressions. Test canonical effects against isolated real MySQL and current Dashboard consumers. Remote-only history must never appear locally.
+
+Simulation and pure contract checks do not establish actual desktop/game/host behavior. Real ETS2/ATS and hosted checks retain their separate authorization and evidence requirements. Record results and remaining checks in implementation PRs, with one regression-registry row per new test entry point. Work-package allocation and verification tracking belong to the linked cards and PR, not this contract.

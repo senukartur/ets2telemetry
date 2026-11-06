@@ -125,7 +125,7 @@ Top-bar status chips:
 | Game connection | `LiveTelemetry.status` | `connected`: "ETS2 · Single-player" with the live dot | `paused` | `stale`, `disconnected`, `incompatible`, `service-failed` | `waiting`, `unavailable`, `restarting` |
 | Plugin | `AppState.plugins` targets (`PluginTargetState`) | all discovered games `installed` ("Plugin 2/2") | any `outdated`, `working` | any `blocked` | `missing`, `excluded` only |
 | Hard Mode | ET-026 status (new IPC, ET-026c) | all 12 pass | some fail ("Hard Mode 10/12") | lost during the current trip | not evaluated (no profile read yet) |
-| Dashboard sync | server phase | — | — | — | Later: dashed outline chip, hidden until sync exists |
+| Dashboard sync | Validated upload status DTO, once implemented and configured | Durable upload progress / sent | Offline, backoff, identity pending or queue pressure | Authentication required or reconciliation hold | Hidden before implementation or configuration |
 
 Game mode text comes from the trip's game-mode evidence; while it is unknown, show only the game.
 
@@ -184,7 +184,7 @@ The existing parameter hints remain optional supplementary information: hover/fo
 | Spec id | Content | Data binding |
 | --- | --- | --- |
 | `journal.filters` | Segmented game filter (All, ETS2, ATS), outcome select, recording select, search field, trip count | `JournalTripsQuery` `game`, `outcome`, `completeness`. Search is a proposal: it needs a storage query that does not exist yet; omit it until then |
-| `journal.table` | Columns: Started (local date and time), Game chip, Cargo (+ `HM` badge for Hard Mode trips), Route (cities, companies below), Distance (observed, "of planned" below), Revenue (revenue, or −penalty in error colour; "expected …" below), Outcome, Recording, Sync (Later), chevron | `JournalTripSummary`; Hard Mode from `is_hard_mode` (ET-026b); Sync from the server phase |
+| `journal.table` | Columns: Started (local date and time), Game chip, Cargo (+ `HM` badge for Hard Mode trips), Route (cities, companies below), Distance (observed, "of planned" below), Revenue (revenue, or −penalty in error colour; "expected …" below), Outcome, Recording, optional Sync, chevron | `JournalTripSummary`; Hard Mode from `is_hard_mode` (ET-026b); Sync uses validated per-root/revision queued, sending, identity-pending, held or durably sent status and appears only after upload is implemented and configured; sent never means company acceptance |
 | `journal.pager` | "Page N · 50 trips per page · the journal does not update by itself", Previous / Next; **Refresh** in the top bar | Cursor paging as today (ET-016) |
 
 Outcome badges: open → ◌ "In progress" (neutral); delivered → ✓ (ok); cancelled → ✕ (error); none → "No outcome" (neutral). The mockup also shows **Delivered late** (warn); that needs a defined lateness rule from stored data and is a proposal, not a current field. Recording badges: complete ✓ ok, partial ⚠ warn, unknown ◌ neutral. A row opens Trip details. Empty journal: see §6.
@@ -219,15 +219,15 @@ Settings save as today: a choice shows as selected only after main saved it; a r
 
 Edit position enters the existing main-owned draft. Layout is unavailable during editing; presets and section switches keep their existing availability. Scale/reset change only the draft, Cancel writes nothing and Done uses the existing durable save. Visibility-off prevents editing and a committed off save discards the draft; a failed save retains the committed selection and existing error. Read-only guards and the final-enabled-section guard remain. ET-048 changes presentation only: settings v6, preload/IPC, geometry and ET-045 corrections retain their existing contracts.
 
-### 5.6 Account and sync (`account.*`, server phase)
+### 5.6 Account and sync (`account.*`, Dashboard upload)
 
-Not part of the MVP; drawn so that the shell reserves its place and the dashboard work can align. The top of the screen carries a dashed "Server phase · not in this version" chip, and the sidebar group is marked **Later**. Do not ship non-functional controls: until the server phase, hide the screen and the sync chip and column.
+The upload interface is an implementation target, separate from the offline MVP. Before the feature is implemented, hide its screen, chip and Journal column. Once implemented, Account & sync is discoverable even while unconfigured so the driver can connect; the chip and Journal column appear only when configured. Show the real connection/upload state instead of a "Later" or "not in this version" chip. Local recording remains available throughout; no history download or restore control is provided.
 
 | Spec id | Content |
 | --- | --- |
-| `account.token` | Masked token field with a show/hide button, **Save and connect**, note "Uploading is not acceptance: trips are reviewed on the dashboard." |
-| `account.status` | Dashboard connection (Connected as … / offline), upload queue count, last upload |
-| `account.firstSync` | First history upload progress "87 of 143 trips" |
+| `account.token` | Masked token entry with show/hide for the currently entered value only; verify against the configured Dashboard, then confirm the authenticated account and all retained eligible history before binding/uploading. Clear the entered token after submission or cancellation; saved credentials are never read back into the renderer. Note "Uploading is not acceptance: trips are reviewed on the dashboard." See the agreed [upload specification](../dashboard-upload.md#connection-credentials-and-ownership). |
+| `account.status` | Verified owner identifiers, service origin and channel; unconfigured, verifying, awaiting confirmation, connected, offline/backoff, authentication required, identity pending, reconciliation hold and queue pressure. Show source backlog separately from frozen queued/held counts, last durable upload and a fixed actionable diagnostic; never expose another owner's data. |
+| `account.firstSync` | Initial enumeration progress and distinct trips durably sent, with changing totals explicit. Distinguish scan complete from all work delivered; identity-pending/held roots remain visible and are never counted as sent. |
 
 ### 5.7 First run (`onboarding.*`)
 
@@ -251,9 +251,9 @@ Each state is an icon in a 52 px rounded square (error and warning states tint i
 | `states.versionMismatch` | `incompatible` or plugin `outdated` | — (close the game to update) |
 | `states.recordingStopped` | Recording `stopped` | Open folder |
 | `states.journalEmpty` | No trips (filters: use the existing "No trips match these filters") | — |
-| `states.noToken` | Server phase: no token | Add token |
-| `states.offline` | Server phase: no network, trips queued | — |
-| `states.firstSync` | Server phase: first history upload running | progress bar |
+| `states.noToken` | Upload implemented but not configured; Account & sync remains accessible | Verify token, then confirm owner/scope |
+| `states.offline` | Configured upload has no network; local recording continues and pending work is retained | Show backlog and retry status |
+| `states.firstSync` | Initial history enumeration/upload, including identity-pending and held records | Separate scan progress from durable trip delivery |
 
 ## 7. Overlay (`overlay.*`)
 
@@ -308,7 +308,7 @@ These are suggestions for future cards; none is authorized by this document.
 5. **ET-026c**: Hard Mode card, parameter hints, journal badge and the optional overlay section, after ET-026a/b.
 6. **Russian UI**: localization framework and the Russian dictionary.
 7. **First run** wizard.
-8. **Account and sync**: only with the server phase (ET-101 and later).
+8. **Account and sync**: implement the accepted Dashboard upload interface after its service/credential prerequisites; use the visibility and state rules in §5.6.
 
 ## 11. Open points for the owner
 
