@@ -68,6 +68,42 @@ async function pages(client:StorageClient,pin:UploadProjection,limit=7) {
 function recheck(pin:UploadProjection) {return readOnly(ws.database,db=>{db.defaultSafeIntegers(true);return recheckUploadProjection(db,pin);});}
 
 describe('immutable private upload projections through the SQLite worker', () => {
+  it('invalidates preparation when unrelated deletion lets a new interval reuse an ID inside the captured bound',async()=>{
+    ws.copyFixture('schema-v4-representative.sqlite',ws.database);
+    const client=await start('synthetic'),root='70000000-0000-4000-8000-000000000001',unrelated='70000000-0000-4000-8000-000000000004';
+    const ready=ok(await prepare(client,root)),before=await pages(client,ready),pinId=randomUUID();
+    expect(ready.revision).toBe('1');expect(ready.bounds.intervals).toBe('2');expect(ready.totals.intervals).toBe(0);
+    expect(ok(await client.beginUploadProjection({pinId,tripUuid:root})).state).toBe('preparing');
+    ok(await client.deleteTrip(unrelated,{rejectIfOpen:false}));
+    ok(await client.recordCompleteness('10000000-0000-4000-8000-000000000001',{tripUuid:root,kind:'sample-loss'}));
+    await client.close();
+    expect(readOnly(ws.database,db=>db.prepare('SELECT id FROM completeness_intervals WHERE trip_ref=1').pluck().all())).toEqual([2]);
+    const reopened=await start('synthetic');
+    expect(ok(await reopened.advanceUploadProjection(pinId))).toMatchObject({state:'invalidated',examined:0,projection:null});
+    expect(await pages(reopened,ready)).toEqual(before);await reopened.close();expect(recheck(ready)).toBe(false);
+  });
+  it('tracks interval insert/update/delete through current and previous roots without inventing a root for unassigned intervals',async()=>{
+    const file=ws.copyFixture('schema-v4-representative.sqlite'),conn=await openConnection(ws.options({path:file})),storage=tracked(conn),db=conn.writer();
+    const generations=()=>[1,2,3].map(id=>db.prepare('SELECT generation FROM upload_projection_evidence_versions WHERE root_ref=?').pluck().get(id)??0n);
+    db.prepare('UPDATE logical_memberships SET previous_logical_ref=3,joined_after_revision=1 WHERE trip_ref=2').run();
+    expect(generations()).toEqual([0n,1n,1n]);
+    const interval=db.prepare("INSERT INTO completeness_intervals(plugin_session_ref,trip_ref,kind,created_utc_ms) VALUES(1,2,'sample-loss',1000)").run().lastInsertRowid;
+    expect(generations()).toEqual([0n,2n,2n]);
+    db.prepare('UPDATE completeness_intervals SET trip_ref=1 WHERE id=?').run(interval);expect(generations()).toEqual([1n,3n,3n]);
+    // An in-place content change also invalidates captured evidence, with the same root counted once.
+    db.prepare("UPDATE completeness_intervals SET kind='event-loss' WHERE id=?").run(interval);expect(generations()).toEqual([2n,3n,3n]);
+    db.prepare('UPDATE completeness_intervals SET trip_ref=NULL WHERE id=?').run(interval);expect(generations()).toEqual([3n,3n,3n]);
+    db.prepare('DELETE FROM completeness_intervals WHERE id=?').run(interval);expect(generations()).toEqual([3n,3n,3n]);
+    const unassigned=db.prepare("INSERT INTO completeness_intervals(plugin_session_ref,kind,created_utc_ms) VALUES(1,'sample-loss',1000)").run().lastInsertRowid;
+    db.prepare("UPDATE completeness_intervals SET kind='event-loss' WHERE id=?").run(unassigned);
+    db.prepare('DELETE FROM completeness_intervals WHERE id=?').run(unassigned);expect(generations()).toEqual([3n,3n,3n]);
+    const previous=db.prepare("INSERT INTO completeness_intervals(plugin_session_ref,trip_ref,kind,created_utc_ms) VALUES(1,2,'sample-loss',1000)").run().lastInsertRowid;
+    expect(generations()).toEqual([3n,4n,4n]);
+    db.prepare('DELETE FROM completeness_intervals WHERE id=?').run(previous);expect(generations()).toEqual([3n,5n,5n]);
+    // Group deletion removes membership first, so interval cleanup must not reference a deleted logical root.
+    ok(storage.deleteTrip('70000000-0000-4000-8000-000000000002'));
+    expect(db.pragma('foreign_key_check')).toEqual([]);storage.close();
+  });
   it.each([false,true])('never resurrects a released handle when caller UUID/root/revision repeat (changed old link: %s)',async changed=>{
     const file=ws.copyFixture('schema-v4-representative.sqlite'),conn=await openConnection(ws.options({path:file})),storage=tracked(conn),db=conn.writer();
     const tripUuid='70000000-0000-4000-8000-000000000001',pinId=randomUUID();

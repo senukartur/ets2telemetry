@@ -32,6 +32,8 @@ export const SCHEMA_V5: readonly string[] = [
     row_json TEXT NOT NULL CHECK(json_valid(row_json)), PRIMARY KEY(pin_ref,interval_ref)) STRICT`,
   ...(['INSERT','DELETE','UPDATE'] as const).map(event => `CREATE TRIGGER upload_projection_trailer_${event.toLowerCase()} AFTER ${event} ON trip_trailers BEGIN
     ${bump(event==='INSERT'?linkRoots('NEW'):event==='DELETE'?linkRoots('OLD'):`${linkRoots('OLD')} UNION ${linkRoots('NEW')}`)} END`),
+  ...(['INSERT','DELETE','UPDATE'] as const).map(event => `CREATE TRIGGER upload_projection_interval_${event.toLowerCase()} AFTER ${event} ON completeness_intervals BEGIN
+    ${bump(event==='INSERT'?linkRoots('NEW'):event==='DELETE'?linkRoots('OLD'):`${linkRoots('OLD')} UNION ${linkRoots('NEW')}`)} END`),
   ...(['INSERT','DELETE','UPDATE'] as const).map(event => `CREATE TRIGGER upload_projection_membership_${event.toLowerCase()} AFTER ${event}${event==='UPDATE'?' OF logical_ref,previous_logical_ref,joined_after_revision':''} ON logical_memberships BEGIN
     ${bump(event==='INSERT'?memberRoots('NEW'):event==='DELETE'?memberRoots('OLD'):`${memberRoots('OLD')} UNION ${memberRoots('NEW')}`)} END`)
 ];
