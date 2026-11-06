@@ -20,6 +20,8 @@ Columns:
 
 | Entry point | Layer | REG IDs | Source | Owning card (PR) | Runs in | Protected |
 | --- | --- | --- | --- | --- | --- | --- |
+| `tests/unit/upload-projection.test.ts` | Node unit (Vitest), hand-authored Dashboard contract fixture | REG-003, REG-004, REG-008, REG-009, REG-010 | F, T | ET-103a | PR (tests job, `npm test`) | security (closed summary allowlist, synthetic/replay exclusion), exact money/availability, qualified occurrences, checkpoint and bounded quality holds |
+| `tests/storage/upload-projection.test.ts` | Real worker/SQLite (Vitest, Electron), isolated game-shaped streams | REG-003, REG-004, REG-005, REG-008, REG-009, REG-012, REG-014 | T | ET-103a | PR (tests job, `npm run test:storage`) | regression, logical root/readiness, retired aliases, immutable complete paging, selected accounting, stale recheck/deletion refusal |
 | `tests/unit/hard-mode-reader.test.ts` | Node unit (Vitest), isolated filesystem and controlled clocks | REG-003, REG-008, REG-010, REG-011 | F, T | ET-026, ET-064 | PR (tests job, `npm test`) | regression, minute/metadata cadence, incremental log bounds, process retry/cache/drain, manual full verification, causal evidence |
 | `tests/unit/hard-mode-service-status.test.ts` | Node unit (Vitest), controlled clocks | REG-011, REG-012 | T | ET-026, ET-064 | PR (tests job, `npm test`) | regression, independent service health lease, trip-only expiry, malformed publication rejection |
 | `tests/storage/hard-mode-integrity.test.ts` | Real worker/SQLite (Vitest, Electron) | REG-005, REG-006, REG-007, REG-008, REG-011 | F, T | ET-026, ET-064 | PR (tests job, `npm run test:storage`) | ACK, pending first loss, retained unchanged failure, irreversible detected-change/retry recovery loss |
@@ -194,7 +196,7 @@ Columns:
 | `tests/unit/steam-discovery.test.ts` | Node unit (Vitest) | REG-015 | R, F, V (et-017) | ET-017 (PR-2) | PR (tests job, `npm test`) | security |
 | `tests/unit/steam-registry.test.ts` | Node unit (Vitest) | REG-015 | R, F, V (et-017) | ET-017 (PR-2) | PR (tests job, `npm test`) | security |
 | `tests/unit/steam-vdf.test.ts` | Node unit (Vitest) | REG-015 | R, F, V (et-017) | ET-017 (PR-2) | PR (tests job, `npm test`) | — |
-| `tests/unit/storage-client.test.ts` | Node unit (Vitest) | REG-007, REG-011, REG-014 | R | ET-013 (#60); ET-038 | PR (tests job, `npm test`) | ACK, regression |
+| `tests/unit/storage-client.test.ts` | Node unit (Vitest) | REG-007, REG-010, REG-011, REG-014 | R, T | ET-013 (#60); ET-038; ET-103a | PR (tests job, `npm test`) | ACK, regression, private upload request/result bounds |
 | `tests/unit/storage-codec.test.ts` | Node unit (Vitest) | REG-009 | R | ET-013 (#51) | PR (tests job, `npm test`) | — |
 | `tests/unit/storage-errors.test.ts` | Node unit (Vitest) | REG-007 | R | ET-013 (#51) | PR (tests job, `npm test`) | — |
 | `tests/unit/storage-retention.test.ts` | Node unit (Vitest) | REG-007, REG-013 | V (et-013) | ET-013 (#51) | PR (tests job, `npm test`) | — |

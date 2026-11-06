@@ -227,3 +227,4 @@ export const JOURNAL_ANSWER_INVALID: Readonly<JournalAnswerError> = Object.freez
   message: 'The storage worker returned a journal page that does not match the journal contract.'});
 /** The result of a journal command: a storage Result, or JOURNAL_ANSWER_INVALID for a page that broke the contract. */
 export type JournalResult<T> = {ok: true; value: T} | {ok: false; error: StorageError | JournalAnswerError};
+export type {UploadProjection, UploadProjectionPage, UploadProjectionPageQuery} from './upload-projection';
