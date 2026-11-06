@@ -1,7 +1,7 @@
 import {randomUUID} from 'node:crypto';
 import type {CommitOptions} from '../api';
 import {fail} from '../errors';
-import {beginUploadFold,advanceUploadFold,finishUploadFold,UPLOAD_PAGE_KINDS,type UploadFold,type UploadProjection} from '../upload-projection';
+import {beginUploadFold,advanceUploadFold,finishUploadFold,isUploadUuid,UPLOAD_PAGE_KINDS,type UploadFold,type UploadProjection} from '../upload-projection';
 import {decodeUploadReceipt,encodeUploadEnvelope,uploadDigest,uploadMaterialDigest,type UploadEnvelope} from '../upload-envelope';
 import {UPLOAD_MAX_BYTES,UPLOAD_MAX_EVENTS,type UploadSyncCommands,type UploadWork,type UploadWorkReason,type UploadAttemptResult,type UploadRegistration,type UploadReceiptResult,type UploadCleanup} from '../upload-sync';
 import type {StorageConnection} from './connection';
@@ -112,15 +112,17 @@ export function releaseUploadMaterialization(conn:StorageConnection,input:Input<
   },options);
 }
 const attemptReply=(status:UploadAttemptResult['status'],row?:Row,payload:Uint8Array|null=null,registration:UploadRegistration|null=null):UploadAttemptResult=>({status,attemptId:row?String(row.attempt_id):null,eventId:row?String(row.event_ref):null,registrationId:row?String(row.registration_ref):null,registration,payload});
+const freshAttempt=(state:Row,attempt:Row)=>state.active_registration===attempt.registration_ref&&state.version===attempt.connection_version&&state.credential_generation===attempt.credential_generation;
 function reconcile(db:ReturnType<StorageConnection['writer']>,registration:unknown):void {db.prepare("UPDATE upload_registrations SET pause_reason='reconciliation' WHERE registration_id=?").run(registration);}
 export function claimUploadAttempt(conn:StorageConnection,input:Input<'claimUploadAttempt'>,options?:CommitOptions):UploadAttemptResult {
   check('claimUploadAttempt',input);return syncTransaction(conn,db=>{
-    const state=connection(db),registration=get(db,'SELECT * FROM upload_registrations WHERE registration_id=?',input.registrationId);
+    const state=connection(db),registration=get(db,'SELECT * FROM upload_registrations WHERE registration_id=?',input.registrationId),prior=get(db,'SELECT * FROM upload_attempt WHERE attempt_id=?',input.attemptId);
+    if(prior&&prior.registration_ref!==input.registrationId)fail('INVALID_INPUT');
+    if(prior?.active===1n&&!freshAttempt(state,prior))return attemptReply('stale',prior);
     if(!registration)return attemptReply('reconciliation-required');
     if(state.active_registration!==input.registrationId||String(state.version)!==input.expectedVersion||registration.pause_reason!==null)return attemptReply('paused');
-    const prior=get(db,'SELECT * FROM upload_attempt WHERE attempt_id=?',input.attemptId),active=get(db,'SELECT * FROM upload_attempt WHERE active=1');
+    const active=get(db,'SELECT * FROM upload_attempt WHERE active=1');
     if(active && active.attempt_id!==input.attemptId)return attemptReply('busy');
-    if(prior&&prior.registration_ref!==input.registrationId)fail('INVALID_INPUT');
     if(prior&&prior.active!==1n){const receipt=get(db,'SELECT 1 FROM upload_receipts WHERE event_ref=?',prior.event_ref);if(prior.outcome==='receipt'&&!receipt){reconcile(db,input.registrationId);return attemptReply('reconciliation-required');}return attemptReply(receipt?'delivered':'recorded',prior);}
     const envelope=prior?get(db,'SELECT * FROM upload_envelopes WHERE event_id=?',prior.event_ref):input.mode==='any'?get(db,"SELECT * FROM upload_envelopes WHERE registration_ref=? AND state='queued' AND retry_at<=? ORDER BY retry_at,event_id LIMIT 1",input.registrationId,input.nowMs):get(db,"SELECT * FROM upload_envelopes WHERE registration_ref=? AND state='queued' AND mode=? AND retry_at<=? ORDER BY retry_at,event_id LIMIT 1",input.registrationId,input.mode,input.nowMs);
     if(!envelope)return attemptReply('empty');
@@ -134,7 +136,19 @@ export function claimUploadAttempt(conn:StorageConnection,input:Input<'claimUplo
 }
 export function recordUploadAttemptOutcome(conn:StorageConnection,input:Input<'recordUploadAttemptOutcome'>,options?:CommitOptions):UploadAttemptResult {
   check('recordUploadAttemptOutcome',input);if(input.retryAtMs<input.nowMs)fail('INVALID_INPUT');return syncTransaction(conn,db=>{
-    const attempt=required(get(db,'SELECT * FROM upload_attempt WHERE attempt_id=?',input.attemptId));if(attempt.outcome==='receipt'&&!get(db,'SELECT 1 FROM upload_receipts WHERE event_ref=?',attempt.event_ref)){reconcile(db,attempt.registration_ref);return attemptReply('reconciliation-required',attempt);}if(attempt.active!==1n)return attemptReply(attempt.outcome==='receipt'?'delivered':'recorded',attempt);
+    const attempt=required(get(db,'SELECT * FROM upload_attempt WHERE attempt_id=?',input.attemptId)),receipt=get(db,'SELECT * FROM upload_receipts WHERE event_ref=?',attempt.event_ref),envelope=get(db,'SELECT state,registration_ref FROM upload_envelopes WHERE event_id=?',attempt.event_ref);
+    if(receipt){
+      if(!isUploadUuid(receipt.receipt_id)||!Number.isSafeInteger(Number(receipt.first_received))||Number(receipt.first_received)<0||envelope?.state!=='delivered'||envelope.registration_ref!==attempt.registration_ref||!get(db,'SELECT 1 FROM upload_registrations WHERE registration_id=?',attempt.registration_ref)){reconcile(db,attempt.registration_ref);return attemptReply('reconciliation-required',attempt);}
+      return attemptReply('delivered',attempt);
+    }
+    if(attempt.outcome==='receipt'||envelope?.state==='delivered'){reconcile(db,attempt.registration_ref);return attemptReply('reconciliation-required',attempt);}
+    if(attempt.active!==1n)return attemptReply('stale',attempt);
+    if(!freshAttempt(connection(db),attempt)){
+      db.prepare("UPDATE upload_envelopes SET state='queued' WHERE event_id=? AND state='sending'").run(attempt.event_ref);
+      db.prepare("UPDATE upload_attempt SET active=0,outcome='ambiguous' WHERE attempt_id=?").run(input.attemptId);
+      return attemptReply('stale',attempt);
+    }
+    if(!envelope||!get(db,'SELECT 1 FROM upload_registrations WHERE registration_id=?',attempt.registration_ref)){reconcile(db,attempt.registration_ref);return attemptReply('reconciliation-required',attempt);}
     const queued=input.kind==='retry'||input.kind==='authentication'||input.kind==='configuration';
     db.prepare('UPDATE upload_envelopes SET state=?,retry_at=?,hold_reason=? WHERE event_id=?').run(queued?'queued':'held',input.retryAtMs,input.kind==='retry'?null:input.kind,attempt.event_ref);
     if(['authentication','configuration','reconciliation'].includes(input.kind))db.prepare('UPDATE upload_registrations SET pause_reason=? WHERE registration_id=?').run(input.kind,attempt.registration_ref);

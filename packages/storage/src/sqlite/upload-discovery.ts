@@ -85,20 +85,44 @@ export function discoverRevision(db:Database.Database,root:bigint,revision:unkno
   }
   resolveBinding(db,root);
 }
-export function retainUploadDeletion(db:Database.Database,trip:unknown,roots:readonly bigint[]):void {
-  if(!syncEnabled(db))return;
-  // An existing candidate, even explicitly unbound, is retained synchronization evidence.
-  for(const root of roots){
-    if(get(db,'SELECT 1 FROM upload_candidates WHERE trip_ref=?',root)||get(db,'SELECT 1 FROM upload_change_heads WHERE root_ref=?',root)
-      ||get(db,'SELECT 1 FROM upload_source_bindings WHERE root_ref=?',root))fail('STORAGE_BUSY');
+/** Checks the entire explicit deletion set before returning its unowned metadata cleanup. No guard mutates data. */
+export function retainUploadDeletion(db:Database.Database,members:readonly bigint[],roots:readonly bigint[]):()=>void {
+  if(!syncEnabled(db))return ()=>undefined;
+  const state=get(db,'SELECT legacy_boundary,claimed_through FROM upload_connection WHERE id=1');if(!state)fail('STORAGE_BUSY');
+  const refs=[...new Set([...members,...roots])];
+  for(const ref of refs){
+    const trip=get(db,'SELECT t.trip_uuid,s.origin FROM trips t JOIN plugin_sessions s ON s.id=t.plugin_session_ref WHERE t.id=?',ref);
+    if(!trip)fail('STORAGE_BUSY');
+    const entry=get(db,'SELECT * FROM upload_candidates WHERE trip_ref=?',ref),head=get(db,'SELECT run_ref FROM upload_change_heads WHERE root_ref=?',ref);
+    // Every receipt and attempt depends on an envelope. Its indexed root guard protects those children too.
+    if(get(db,'SELECT 1 FROM upload_source_bindings WHERE root_ref=?',ref)||get(db,'SELECT 1 FROM upload_materializations WHERE root_ref=? LIMIT 1',ref)
+      ||get(db,'SELECT 1 FROM upload_envelopes WHERE root_ref=? LIMIT 1',ref)||get(db,'SELECT 1 FROM upload_projection_pins WHERE root_ref=? LIMIT 1',ref)
+      ||head?.run_ref!==undefined&&head.run_ref!==null||get(db,'SELECT 1 FROM upload_source_transitions WHERE root_ref=? AND run_ref IS NOT NULL LIMIT 1',ref))fail('STORAGE_BUSY');
+    let ordinal:bigint|undefined;
+    if(entry){
+      const reserved=get(db,'SELECT * FROM upload_reservations WHERE candidate_ref=?',entry.ordinal);
+      if(entry.trip_uuid!==trip.trip_uuid||entry.opening_registration!==null||entry.opening_run!==null||!reserved||reserved.registration_ref!==null||reserved.run_ref!==null
+        ||reserved.mode!=='unbound'||reserved.hold_reason!==null||!['unbound','redirected'].includes(String(reserved.identity_state)))fail('STORAGE_BUSY');
+      ordinal=entry.ordinal as bigint;
+    }else{
+      // A head/transition without its observed candidate is inconsistent. Only untouched legacy rows use raw IDs.
+      if(head||get(db,'SELECT 1 FROM upload_source_transitions WHERE root_ref=? LIMIT 1',ref))fail('STORAGE_BUSY');
+      const eligible=trip.origin==='game'&&get(db,"SELECT 1 FROM database_info WHERE id=1 AND purpose='history'");
+      if(ref<=(state.legacy_boundary as bigint))ordinal=ref;
+      else if(eligible)fail('STORAGE_BUSY');
+    }
+    if(ordinal!==undefined){
+      const claim=get(db,'SELECT last_ordinal FROM upload_history_claims WHERE first_ordinal<=? ORDER BY first_ordinal DESC LIMIT 1',ordinal);
+      if(ordinal<=(state.claimed_through as bigint)||claim&&(claim.last_ordinal as bigint)>=ordinal)fail('STORAGE_BUSY');
+    }
   }
-  const entry=get(db,'SELECT ordinal FROM upload_candidates WHERE trip_ref=?',trip);
-  if(entry)fail('STORAGE_BUSY');
-  const boundary=connection(db).legacy_boundary as bigint;
-  for(const ref of [trip,...roots])if(typeof ref==='bigint'&&ref<=boundary){
-    const claim=get(db,'SELECT last_ordinal FROM upload_history_claims WHERE first_ordinal<=? ORDER BY first_ordinal DESC LIMIT 1',ref);
-    if(claim&&(claim.last_ordinal as bigint)>=ref)fail('STORAGE_BUSY');
-  }
+  // Caller runs this only after its remaining guards (including rejectIfOpen). Remove discovery before source triggers.
+  return ()=>{
+    for(const ref of refs)db.prepare('DELETE FROM upload_source_transitions WHERE root_ref=?').run(ref);
+    for(const ref of refs)db.prepare('DELETE FROM upload_change_heads WHERE root_ref=?').run(ref);
+    for(const ref of refs)db.prepare('DELETE FROM upload_reservations WHERE candidate_ref=(SELECT ordinal FROM upload_candidates WHERE trip_ref=?)').run(ref);
+    for(const ref of refs)db.prepare('DELETE FROM upload_candidates WHERE trip_ref=?').run(ref);
+  };
 }
 
 /** Association already knows both roots; preserve reservations without walking the member group. */

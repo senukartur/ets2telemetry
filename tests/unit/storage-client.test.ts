@@ -823,3 +823,11 @@ it('REG-007/010/012 validates explicit startup recovery as an exclusive private 
   expect(isUploadSyncResult({name:'recoverUploadAttempt',input:{attemptId:P1}},empty)).toBe(false);
   const f=fixture(),opening=f.client.open(OPEN),recovery=f.client.recoverUploadAttempt({startup:true}),recorder=f.client.commitEvent({message:{}});f.ok(1,SUMMARY);await opening;expect(f.sent[1].command.name).toBe('commitEvent');f.ok(2,COMMITTED);await recorder;expect(f.sent[2].command).toEqual(command);f.ok(3,empty);await expect(recovery).resolves.toEqual({ok:true,value:empty});
 });
+
+it('REG-005/010/011/012 strictly accepts command-specific stale outcomes and claim replay without payload or authority',async()=>{
+  const input={attemptId:P1,kind:'authentication' as const,retryAtMs:9000,nowMs:1000},command={name:'recordUploadAttemptOutcome' as const,input},stale={status:'stale',attemptId:P1,eventId:P1,registrationId:P1,payload:null,registration:null};expect(isUploadSyncResult(command,stale)).toBe(true);
+  for(const value of [{...stale,attemptId:'80000000-0000-4000-8000-000000000001'},{...stale,eventId:null},{...stale,payload:new Uint8Array([1])},...['claimed','recovered','empty','busy'].map(status=>({...stale,status}))])expect(isUploadSyncResult(command,value)).toBe(false);
+  const claim={name:'claimUploadAttempt' as const,input:{attemptId:P1,registrationId:P1,expectedVersion:'2',mode:'any' as const,nowMs:1000}};expect(isUploadSyncResult(claim,stale)).toBe(true);
+  for(const value of [{...stale,registrationId:'80000000-0000-4000-8000-000000000001'},{...stale,attemptId:null},{...stale,payload:new Uint8Array([1])},{...stale,status:'recovered'}])expect(isUploadSyncResult(claim,value)).toBe(false);
+  const f=fixture(),opening=f.client.open(OPEN);f.ok(1,SUMMARY);await opening;const outcome=f.client.recordUploadAttemptOutcome(input);f.ok(2,stale);await expect(outcome).resolves.toEqual({ok:true,value:stale});const replay=f.client.claimUploadAttempt(claim.input);f.ok(3,stale);await expect(replay).resolves.toEqual({ok:true,value:stale});expect(f.failures).toEqual([]);
+});

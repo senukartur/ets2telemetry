@@ -693,12 +693,14 @@ export function deleteTrip(conn: StorageConnection, tripUuid: string, options: D
 
     const hasPins=statement(db,"SELECT 1 FROM sqlite_master WHERE type='table' AND name='upload_projection_pins'").get()!==undefined;
     if(hasPins)for(const id of logicalIds)if(statement(db,'SELECT 1 FROM upload_projection_pins WHERE root_ref=? LIMIT 1').get(id))fail('STORAGE_BUSY');
-    retainUploadDeletion(db,target.id,logicalIds);
+    const memberIds = memberRows.map(m => m.id);
+    const deleteUnownedUploadMetadata=retainUploadDeletion(db,memberIds,logicalIds);
     const rejectIfOpen = options.rejectIfOpen ?? true;
     if (rejectIfOpen && memberRows.some(m => m.outcome === 'open')) {
       fail('STORAGE_BUSY');
     }
 
+    deleteUnownedUploadMetadata();
     if (hasV4 && logicalIds.length > 0) {
       for (const lId of logicalIds) {
         statement(db, 'UPDATE logical_trips SET progress_head = NULL WHERE id = ?').run(lId);
@@ -713,7 +715,6 @@ export function deleteTrip(conn: StorageConnection, tripUuid: string, options: D
       statement(db, 'DELETE FROM logical_projection_states WHERE id NOT IN (SELECT state_ref FROM logical_revisions)').run();
     }
 
-    const memberIds = memberRows.map(m => m.id);
     for (const mId of memberIds) {
       if (hasV4) {
         statement(db, 'DELETE FROM observation_closes WHERE trip_ref = ?').run(mId);

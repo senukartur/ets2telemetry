@@ -23,7 +23,7 @@ export interface UploadDiscoveryPage {after:string;next:string;examined:number;i
 export type UploadWorkState='preparing'|'folding'|'complete'|'frozen'|'equal'|'held'|'stale'|'pressure'|'released';
 export type UploadWorkReason='source-ineligible'|'identity-pending'|'unbound'|'reconciliation-required'|'projection-invalid'|'material-changed'|'revision-exhausted'|'queue-pressure';
 export interface UploadWork {workId:string;status:UploadWorkState;examined:number;eventId:string|null;reason:UploadWorkReason|null}
-export interface UploadAttemptResult {status:'claimed'|'empty'|'paused'|'busy'|'reconciliation-required'|'recorded'|'recovered'|'delivered';attemptId:string|null;eventId:string|null;registrationId:string|null;registration:UploadRegistration|null;payload:Uint8Array|null}
+export interface UploadAttemptResult {status:'claimed'|'empty'|'paused'|'busy'|'reconciliation-required'|'recorded'|'recovered'|'delivered'|'stale';attemptId:string|null;eventId:string|null;registrationId:string|null;registration:UploadRegistration|null;payload:Uint8Array|null}
 export interface UploadReceiptResult {status:'delivered'|'duplicate'|'reconciliation-required'|'invalid-response';eventId:string;receiptId:string|null}
 export interface UploadCleanup {examined:number;reclaimed:number;events:number;bytes:number}
 export interface UploadStoreStatus {registrationId:string;version:string;active:boolean;paused:'authentication'|'configuration'|'reconciliation'|null;
@@ -71,7 +71,7 @@ export function isUploadSyncRequest(command:unknown):command is UploadSyncComman
   return command.name==='ensureUploadInstallation'?requestChecks[command.name](command):shape({name:one(command.name),input:requestChecks[command.name]})(command);
 }
 const work=shape({workId:isUploadUuid,status:one('preparing','folding','complete','frozen','equal','held','stale','pressure','released'),examined:bounded,eventId:nullable(isUploadUuid),reason:nullable(one('source-ineligible','identity-pending','unbound','reconciliation-required','projection-invalid','material-changed','revision-exhausted','queue-pressure'))});
-const attempt=shape({status:one('claimed','empty','paused','busy','reconciliation-required','recorded','recovered','delivered'),attemptId:nullable(isUploadUuid),eventId:nullable(isUploadUuid),registrationId:nullable(isUploadUuid),registration:nullable(registrationCheck),payload:nullable(payload)});
+const attempt=shape({status:one('claimed','empty','paused','busy','reconciliation-required','recorded','recovered','delivered','stale'),attemptId:nullable(isUploadUuid),eventId:nullable(isUploadUuid),registrationId:nullable(isUploadUuid),registration:nullable(registrationCheck),payload:nullable(payload)});
 const resultChecks:Record<UploadSyncName,Check>={
   ensureUploadInstallation:shape({status:one('ready','reconciliation-required'),clientInstallationId:nullable(isUploadUuid)}),
   recordUploadRegistration:shape({status:one('recorded','reconciliation-required'),registrationId:isUploadUuid}),
@@ -96,13 +96,13 @@ export function isUploadSyncResult(command:UploadSyncCommand,value:unknown):bool
   if(command.name==='advanceUploadScan'&&value.runId!==command.input.runId)return false;
   if(command.name==='pageUploadDiscovery'&&(value.after!==command.input.after||(value.examined as number)>command.input.limit||(value.items as unknown[]).length>(value.examined as number)||BigInt(value.next as string)<BigInt(command.input.after)||value.examined===0&&value.next!==command.input.after))return false;
   if(command.name==='reclaimUploadPayloads'&&((value.examined as number)>command.input.limit||(value.reclaimed as number)>(value.examined as number)))return false;
-  if(command.name==='recordUploadAttemptOutcome'&&(value.attemptId!==command.input.attemptId||value.eventId===null||value.registrationId===null||value.payload!==null||value.registration!==null))return false;
+  if(command.name==='recordUploadAttemptOutcome'&&(!['recorded','stale','delivered','reconciliation-required'].includes(value.status as string)||value.attemptId!==command.input.attemptId||value.eventId===null||value.registrationId===null||value.payload!==null||value.registration!==null))return false;
   if(command.name==='recoverUploadAttempt'){
     if(value.payload!==null||value.registration!==null)return false;
     if(value.status==='empty')return 'startup' in command.input&&value.attemptId===null&&value.eventId===null&&value.registrationId===null;
     return ['recovered','delivered','reconciliation-required'].includes(value.status as string)&&value.attemptId!==null&&value.eventId!==null&&value.registrationId!==null&&(!('attemptId' in command.input)||value.attemptId===command.input.attemptId);
   }
   if(command.name==='commitUploadReceipt'&&((value.status==='delivered'||value.status==='duplicate')?value.receiptId===null:value.status==='invalid-response'&&value.receiptId!==null))return false;
-  if(command.name==='claimUploadAttempt')return value.status==='claimed'?value.attemptId===command.input.attemptId&&value.registrationId===command.input.registrationId&&value.eventId!==null&&record(value.registration)&&value.registration.registrationId===command.input.registrationId&&payload(value.payload):value.registration===null&&value.payload===null&&(['empty','paused','busy','reconciliation-required'].includes(value.status as string)?value.attemptId===null&&value.eventId===null&&value.registrationId===null:value.attemptId===command.input.attemptId&&value.eventId!==null&&value.registrationId===command.input.registrationId);
+  if(command.name==='claimUploadAttempt')return value.status==='claimed'?value.attemptId===command.input.attemptId&&value.registrationId===command.input.registrationId&&value.eventId!==null&&record(value.registration)&&value.registration.registrationId===command.input.registrationId&&payload(value.payload):value.registration===null&&value.payload===null&&(['empty','paused','busy','reconciliation-required'].includes(value.status as string)?value.attemptId===null&&value.eventId===null&&value.registrationId===null:['recorded','delivered','stale'].includes(value.status as string)&&value.attemptId===command.input.attemptId&&value.eventId!==null&&value.registrationId===command.input.registrationId);
   return true;
 }
