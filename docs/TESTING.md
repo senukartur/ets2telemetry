@@ -102,9 +102,9 @@ Keep a matrix for ETS2 and ATS, each in single-player and TruckersMP, in windowe
 
 Cover startup order, real values, pause and resume, Alt+Tab, click-through, minimize and restore, monitor changes, delivery and cancellation, reconnect and orderly exit; before a release, also the journal and export, setup and upgrade, history preservation and a measured one-hour session. A simulator run is never evidence of real-game support.
 
-## 8. Later server phase
+## 8. Dashboard upload integration
 
-Dashboard integration follows the proposed [upload specification and verification allocation](dashboard-upload.md#verification-and-acceptance) and the Dashboard TEL matrix: v1.0 compatibility, logical-trip identity, token/owner isolation, idempotent uploads, offline/restart recovery and report reconciliation against a disposable real MySQL instance. Verify that synchronization never downloads or restores server history into the desktop Journal. The offline desktop suite stays a regression gate.
+Dashboard integration follows the agreed [upload specification and verification allocation](dashboard-upload.md#verification-and-acceptance) and the Dashboard TEL matrix: v1.0 compatibility, logical-trip identity, token/owner isolation, idempotent uploads, offline/restart recovery and report reconciliation against a disposable real MySQL instance using the existing VTC Dashboard schema and migrations. The Dashboard repository owns that server schema; do not create a separate PostgreSQL backend. Verify that synchronization never downloads or restores server history into the desktop Journal. The offline desktop suite stays a regression gate.
 
 ## 9. Handoff for every behavior change
 

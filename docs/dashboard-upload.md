@@ -1,6 +1,6 @@
 # Dashboard upload specification
 
-**Proposed specification; uploader implementation is not included.** [ET-101](https://trello.com/c/v8LZYyH3) defines the desktop side of [VTC-024](https://trello.com/c/aluAoQAX). The [owner's scope decision](../DECISION-LOG.md#et-101-dashboard-upload-scope--november-6-2026) permits preparation before ET-021. Implementation, deployment, release and merge require their own authorization; local MVP acceptance is not waived.
+**Owner-accepted specification; uploader implementation is not included.** [ET-101](https://trello.com/c/v8LZYyH3) defines the desktop side of [VTC-024](https://trello.com/c/aluAoQAX). The [scope decision](../DECISION-LOG.md#et-101-dashboard-upload-scope--november-6-2026) permits preparation before ET-021; the [identity acceptance](../DECISION-LOG.md#et-101-continued-trip-identity-acceptance--november-6-2026) closes the specification decision. Implementation, deployment, release and merge require their own authorization; local MVP acceptance is not waived.
 
 ## Contract and product boundary
 
@@ -45,7 +45,7 @@ The v1 source key is `(provider, game, pluginSessionId, tripId)`; `databaseUuid`
 
 ### Continued-trip identity: stable root, publication after membership resolution
 
-The proposed v1-compatible rule is **one immutable source key for one resolved logical root**. Set `source.tripId` to the root's original `trip_uuid` and `source.pluginSessionId` to that original raw trip's opening plugin session. The session field anchors source identity; it does not change to the latest member's session. Keep each member's genuine raw UUID/session/events locally. Use the logical projection and selected accounting path for summaries, not an upload per raw `listTrips` row.
+The agreed v1-compatible rule is **one immutable source key for one resolved logical root**. Set `source.tripId` to the root's original `trip_uuid` and `source.pluginSessionId` to that original raw trip's opening plugin session. The session field anchors source identity; it does not change to the latest member's session. Keep each member's genuine raw UUID/session/events locally. Use the logical projection and selected accounting path for summaries, not an upload per raw `listTrips` row.
 
 Schema v4 already keeps the root UUID/opening session while adopting later members. Its `associate` operation can move a provisional singleton to an older root only while its raw trip is open, its group is not retired and its membership has no persisted profile proof. Once proof is persisted, later observations refine constraints or retire the group rather than reassigning that member. Closed raw trips and retired groups cannot be reassigned by this operation. Publication therefore waits for this existing decision boundary, rather than imposing a timer or disabling local continuation.
 
@@ -81,7 +81,7 @@ Retain source occurrence sequences without renumbering. `openedEventSeq` and eve
 
 For example, start sequence `1200` in A and delivery sequence `3` in B are valid original values. Preserve each raw occurrence's UTC/basis and the local qualified reference `(pluginSessionId, rawTripUuid, eventSeq)` in projection metadata tied to the frozen snapshot. Validate each observed flag against its own qualified stored event; the opening root's session must never be used to fetch B's delivery. A checkpoint opening remains checkpoint-based and unobserved even if a later member has an observed start.
 
-The existing v1 schema/adapter requires matching endpoint/associated-event sequence values and supported actual UTC evidence; it does not impose global native sequence ordering. It has no per-occurrence session field, so qualified local event addressing is not remotely reconstructible from v1 alone. Add no unknown wire fields and advertise no remote event replay or forensic lookup. ET-102 should document this root-anchor convention alongside the existing contract; no JSON schema, endpoint, version bump or server identity algorithm is required by this proposal. Missing/clamped or contradictory occurrence evidence stays unknown/anomalous under existing rules, rather than being repaired with another session's event.
+The existing v1 schema/adapter requires matching endpoint/associated-event sequence values and supported actual UTC evidence; it does not impose global native sequence ordering. It has no per-occurrence session field, so qualified local event addressing is not remotely reconstructible from v1 alone. Add no unknown wire fields and advertise no remote event replay or forensic lookup. ET-102 documents this root-anchor convention alongside the existing contract; no JSON schema, endpoint, version bump or server identity algorithm is required by this mapping. Missing/clamped or contradictory occurrence evidence stays unknown/anomalous under existing rules, rather than being repaired with another session's event.
 
 | v1 group | Local source and required mapping |
 | --- | --- |
@@ -148,11 +148,11 @@ Journal status is per agreed logical source/revision: queued, held, sending or s
 
 ## Delivery ownership and entry gates
 
-These are proposed allocations to existing cards, not authorization to implement or a second uploader backlog.
+These agreed allocations use existing cards. Implementation authorization and package-specific verification remain separate.
 
 | Work owner | Deliverable and dependency |
 | --- | --- |
-| ET-101 | Review/accept this specification, including the stable-root publication and qualified-occurrence proposal. Record product decisions only in the decision log; technical alternatives/review evidence belong in the PR. |
+| ET-101 | Accepted specification, including stable-root publication and qualified occurrences. Product decisions are in the decision log; technical alternatives/review evidence belong in the PR. |
 | ET-102 + Dashboard VTC-023 | Reuse existing ingestion; verify exact route/response/parser/auth/receipt compatibility and document the root-anchor/session-local occurrence convention in the existing contract. Replace obsolete separate-server/restore allocation; any required Dashboard change gets a scoped PR in that repository. No new PostgreSQL backend. |
 | ET-103a | Implement the accepted stable-root readiness and qualified-occurrence rules, retain compatibility fixtures, provide the full projection API and serialize storage migration ownership. Prove delayed membership and freeze serialization, original cross-session sequences and logical terminal decisions before enabling real materialization. |
 | ET-103b | Additive durable metadata/discovery/scan/freeze/receipt transactions and historical migration/crash tests; depends on ET-103a mapping and accepted specification. |
@@ -161,7 +161,7 @@ These are proposed allocations to existing cards, not authorization to implement
 | ET-103d + VTC-024 | Actual desktop-to-isolated-Dashboard integration with real MySQL, backlog/crash/owner tests and separately authorized game evidence. |
 | ET-104 + Dashboard report owners | Reconcile existing company review/qualification/analytics/notification effects with uploaded fixtures; replace obsolete website rebuild/restore requirements. Receipt success alone closes none of these gates. |
 
-Before affected implementation, accept the stable-root publication proposal and its contract clarification; complete immutable projection read/change-coverage interfaces, protected-secret recovery/IPC bounds, configured channel origins and isolated integration environment. ET-103a must retain regression cases for every readiness state, delayed proof, freeze-versus-association serialization, original occurrence sequences and logical terminal decisions. Map/build/locale/DLC uncertainty remains explicit uploaded evidence unless a separate capture enhancement is justified. Keep the existing recorder enablement decision and check its actual validation record; do not reopen an obsolete `GAME_HISTORY_RECORDING=false` requirement from discovery notes. Preparation may precede ET-021; implementation readiness and local MVP acceptance are separate gates.
+The stable-root publication decision is accepted. Before affected implementation, complete the Dashboard contract clarification, immutable projection read/change-coverage interfaces, protected-secret recovery/IPC bounds, configured channel origins and isolated integration environment. ET-103a must retain regression cases for every readiness state, delayed proof, freeze-versus-association serialization, original occurrence sequences and logical terminal decisions. Map/build/locale/DLC uncertainty remains explicit uploaded evidence unless a separate capture enhancement is justified. Keep the existing recorder enablement decision and check its actual validation record; do not reopen an obsolete `GAME_HISTORY_RECORDING=false` requirement from discovery notes. Preparation may precede ET-021; implementation readiness and local MVP acceptance are separate gates.
 
 ## Verification and acceptance
 
@@ -177,4 +177,4 @@ Use the Dashboard [P0–P11 procedures and TEL ledger](https://github.com/senuka
 | Product boundary | TEL-035; a remote-only/manual trip never appears locally; reinstall starts with empty local history and new registration, never downloads prior Dashboard records |
 | Real environment | P10 authorized ETS2/ATS sessions and supported mode evidence; P11 separately approved host TLS/redaction/rate/latency tests. Simulation, source inspection and old CI results do not satisfy these gates. |
 
-Implementation PRs run `npm run test:affected`, relevant existing storage/contract/runtime lanes, then repository-required CI; Dashboard fixes use that repository's commands and actual MySQL lane. Add one regression-registry row per new test entry point and preserve applicable REG-003–014/017/018 scenarios. No uploader test command exists merely because this document proposes it. The specification can enter Review with its mappings and open compatibility gates explicit; implementation cards become Ready only after their prerequisites are resolved and authorized. ET-101 is not Done until its specification is accepted; VTC-024 remains incomplete until real client/game/integration evidence is accepted.
+Implementation PRs run `npm run test:affected`, relevant existing storage/contract/runtime lanes, then repository-required CI; Dashboard fixes use that repository's commands and actual MySQL lane. Add one regression-registry row per new test entry point and preserve applicable REG-003–014/017/018 scenarios. No uploader test command exists merely because this document specifies it. ET-101 acceptance covers the specification; implementation cards become Ready only after their prerequisites are resolved and authorized. VTC-024 remains incomplete until real client/game/integration evidence is accepted.

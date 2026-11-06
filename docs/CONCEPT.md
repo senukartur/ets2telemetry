@@ -19,7 +19,7 @@ The owner knows React and TypeScript and is new to desktop development, so most 
 - **Honest data.** An unavailable value is never shown or stored as zero. Real time differs from game time, planned distance from driven distance, and expected income from actual revenue. Missing intervals are recorded as gaps, never filled in.
 - **Real and test data never mix.** Simulated and replayed sources are marked as such and never written into the real history.
 - **Out of the driver's way.** The overlay never takes focus or mouse input while driving. Closing the main window does not stop recording; leaving the application is an explicit action.
-- **Local and private.** Data stays on the driver's computer. Uninstalling removes all of it.
+- **Local and private by default.** Trip summaries leave the computer only after the driver connects a Dashboard account and confirms the upload scope. Uninstall removes local data; uploaded records remain subject to Dashboard policies.
 
 ## Features
 

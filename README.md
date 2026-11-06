@@ -58,7 +58,7 @@ The scaffold pins Node/npm and application dependencies. Electron main supervise
 - [Design decisions](DESIGN-DECISIONS.md): the earlier full concept and the dated design decisions of each card.
 - [Agent instructions](AGENTS.md): the short summary every agent session loads; the full rules are in [docs/agent-rules.md](docs/agent-rules.md).
 - [Testing and regression strategy](docs/TESTING.md): the testing rules and the permanent regression scenarios; the [test index](docs/regression-registry.md) maps tests to scenarios.
-- [Dashboard upload specification](docs/dashboard-upload.md): proposed v1.0 token connection, ownership, projection, durable queue and integration gates.
+- [Dashboard upload specification](docs/dashboard-upload.md): agreed v1.0 token connection, ownership, projection, durable queue and integration gates.
 - [Windows setup](docs/setup.md): pinned tools, build/test/package entrypoints, process boundaries, SDK acquisition, and remaining checks.
 - [Releases](docs/release.md): the release channel, the release checklist, the artifact identity and the signing decision.
 - [Implementation coordinator](COORDINATOR.md): Trello execution, subagent assignments, worktree ownership, independent review, and recovery handoffs.

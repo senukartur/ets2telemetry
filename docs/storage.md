@@ -6,7 +6,7 @@ Status (October 15, 2026): PR-1 added the in-process storage core in [packages/s
 
 Current schema: **4**, introduced by [ET-063](#logical-trips-and-snapshots-schema-version-4). Earlier schema descriptions below are retained as migration history.
 
-The proposed [Dashboard upload contract](dashboard-upload.md#durable-local-state-and-transaction-contract) defines future synchronization metadata and worker extensions. These are not current storage commands or migrations; raw recorder reads and logical Journal snapshots must retain their existing contracts.
+The agreed [Dashboard upload specification](dashboard-upload.md#durable-local-state-and-transaction-contract) defines future synchronization metadata and worker extensions. These are not current storage commands or migrations; raw recorder reads and logical Journal snapshots must retain their existing contracts.
 
 ET-016 PR-1 (October 16, 2026): the then-current schema was [version 2](#schema-version-2-et-016). Migration `0002-journal` adds trip fuel used, the trip close carrier, checkpoint job configurations and trips that open from a checkpoint; a new database is created at version 2, and an existing version 1 database, including an existing history database, is migrated after a verified backup the first time a version 2 build opens it.
 
