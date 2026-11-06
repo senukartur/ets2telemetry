@@ -51,6 +51,21 @@ const code = (result: Result<unknown> | undefined) => result && !result.ok ? res
 const error = (value: StorageErrorCode) => ({ok: false, error: storageError(value)});
 
 describe('StorageClient command flow', () => {
+  it('strictly validates private upload requests and rejects malformed or mismatched answers', async () => {
+    const snapshot=`u1:${SUMMARY.databaseUuid}:${P1}:1:1:0:0:1`,query={snapshot,kind:'members' as const,limit:1};
+    expect(parseRequest({type:'storage.request',id:1,command:{name:'pinUploadProjection',tripUuid:P1}}).ok).toBe(true);
+    for(const command of [{name:'pinUploadProjection',tripUuid:P1,renderer:true},{name:'pinUploadProjection',tripUuid:'bad'},
+      {name:'readUploadProjectionPage',query:{...query,limit:101}},{name:'readUploadProjectionPage',query:{...query,cursor:`${snapshot}:intervals:1`}},
+      {name:'readUploadProjectionPage',query:{...query,extra:true}},{name:'readUploadProjectionPage',query:{...query,snapshot:snapshot.replace(':1:1:',':01:1:')}}])
+      expect(parseRequest({type:'storage.request',id:1,command})).toEqual({ok:false,id:1});
+    const f=fixture(),request=f.client.readUploadProjectionPage({...query,extra:true} as typeof query);
+    expect(f.sent[0].command).toEqual({name:'readUploadProjectionPage',query:{...query,cursor:undefined}});
+    f.ok(1,{snapshot,kind:'members',cursor:null,nextCursor:null,total:1,rows:[{id:'1',extra:true}]});
+    await expect(request).resolves.toEqual(error('WORKER_FAILED'));
+    const g=fixture(),pin=g.client.pinUploadProjection(P1);g.ok(1,{readiness:'ready',tripUuid:P1});await expect(pin).resolves.toEqual(error('WORKER_FAILED'));
+    const h=fixture(),page=h.client.readUploadProjectionPage({...query,kind:'intervals'});
+    h.ok(1,{snapshot,kind:'intervals',cursor:null,nextCursor:null,total:0,rows:[]});await expect(page).resolves.toMatchObject({ok:true});
+  });
   it('copies only the private sample mode/page fields without allowing extra worker authority', async () => {
     const f = fixture(); const scope = {tripUuid: P1, injected: true}, page = {limit: 2, includeExcluded: true, injected: true};
     const request = f.client.listSamples(scope, page);

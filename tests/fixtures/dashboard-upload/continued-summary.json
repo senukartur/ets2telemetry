@@ -1,0 +1,35 @@
+{
+  "provenance": {
+    "origin": "hand-authored game-shaped test input; not game evidence",
+    "contractCommit": "1f9e34ab1ffeb12eba9d624a8116d19b3e5bb27a",
+    "sources": ["docs/contracts/telemetry-v1.schema.json", "apps/api/src/modules/telemetry/parser.ts", "apps/api/src/modules/sources/contracts/telemetry.ts"],
+    "scenario": "REG-003/004/008/009/010: root start 1200 in A, delivery 3 in B, selected zero distance and unavailable fuel; unknown map/build/currency",
+    "timing": "opening UTC 1000; delivery UTC 2000"
+  },
+  "expected": {
+    "source": {"provider":"ets2telemetry","game":"ets2","tripId":"70000000-0000-4000-8000-000000000001","pluginSessionId":"10000000-0000-4000-8000-0000000000a1","databaseUuid":"50000000-0000-4000-8000-000000000001","origin":"game"},
+    "snapshot": {
+      "outcome":"delivered","closeReason":"outcome","recordingCompleteness":"partial",
+      "start":{"utcMs":1000,"basis":"event","eventSeq":"1200"},"end":{"utcMs":2000,"basis":"event","eventSeq":"3"},
+      "openedBy":"event","openedEventSeq":"1200","checkpointNextEventSeq":null,"outcomeEventSeq":"3",
+      "context": {
+        "gameBuild":{"available":false,"reason":"not-observed"},"sourceLocale":{"available":false,"reason":"not-observed"},
+        "mapId":{"available":false,"reason":"not-observed"},"dlcIds":{"available":false,"reason":"not-observed"},
+        "versions":{"nativeProtocol":{"major":1,"minor":0},"sdkArchive":{"available":true,"value":"scs-sdk-1.15"},"telemetryApi":{"available":true,"value":{"major":1,"minor":1}},"gameTelemetryApi":{"available":true,"value":{"major":1,"minor":19}}}
+      },
+      "gameMode":{"mode":"unknown","method":"none","confidence":"none","ambiguous":false},
+      "job": {
+        "origin":{"cityId":{"available":true,"value":"synthetic_city_a"},"cityName":{"available":true,"value":"Synthetic City A"},"companyId":{"available":true,"value":"synthetic_company_a"},"companyName":{"available":true,"value":"Synthetic Company A"}},
+        "destination":{"cityId":{"available":true,"value":"synthetic_city_b"},"cityName":{"available":true,"value":"Synthetic City B"},"companyId":{"available":true,"value":"synthetic_company_b"},"companyName":{"available":true,"value":"Synthetic Company B"}},
+        "cargoId":{"available":true,"value":"synthetic_cargo"},"cargoName":{"available":true,"value":"Synthetic Cargo"},"cargoMass":{"available":true,"value":18000,"unit":"kg"},
+        "cargoUnitMass":{"available":true,"value":1000,"unit":"kg"},"cargoUnitCount":{"available":true,"value":18},"market":{"available":true,"value":"freight_market"},"isSpecialJob":{"available":true,"value":false},"cargoLoaded":{"available":true,"value":true}
+      },
+      "trailers":{"complete":false,"items":[{"index":0,"id":{"available":true,"value":"curtainsider"},"bodyType":{"available":false,"reason":"not-observed"},"chainType":{"available":false,"reason":"not-observed"}}]},
+      "plannedDistance":{"available":true,"value":152000,"unit":"m"},"observedDistance":{"available":true,"value":0,"unit":"m"},
+      "deliveredDistance":{"available":true,"value":151250.5,"unit":"m"},"fuelUsed":{"available":false,"reason":"not-observed","unit":"L"},"cargoDamage":{"available":true,"value":0.0125,"unit":"fraction"},
+      "expectedIncome":{"available":true,"value":{"raw":"18446744073709551615","sdkType":"u64","currency":{"status":"unknown"}}},
+      "revenue":{"available":true,"value":{"raw":"-9223372036854775808","sdkType":"s64","currency":{"status":"unknown"}}},"penalty":{"available":false,"reason":"not-observed"},
+      "evidence":{"startObserved":true,"endObserved":true,"ruleContextComplete":false,"clockAnomaly":false,"reasons":["catalog-context-unavailable"]}
+    }
+  }
+}

@@ -57,8 +57,8 @@ export function serveStorage(port: HostPort, testOptions: HostTestOptions = {}):
     case 'upsertSession': return storage.upsertSession({message: command.input.message});
     // Only the message and its effects are forwarded; in-process commit options never come from a message, only from
     // a test entry's in-process testOptions.
-    case 'commitEvent': return storage.commitEvent({message: command.input.message, effects: command.input.effects, hardMode: command.input.hardMode, hardModeFresh: command.input.hardModeFresh, hardModeLoss: command.input.hardModeLoss}, testOptions.commitOptions?.(command));
-    case 'commitGap': return storage.commitGap({message: command.input.message, effects: command.input.effects, hardMode: command.input.hardMode, hardModeFresh: command.input.hardModeFresh, hardModeLoss: command.input.hardModeLoss}, testOptions.commitOptions?.(command));
+    case 'commitEvent': return storage.commitEvent({message: command.input.message, effects: command.input.effects, hardMode: command.input.hardMode, hardModeFresh: command.input.hardModeFresh, hardModeLoss: command.input.hardModeLoss, profile: command.input.profile}, testOptions.commitOptions?.(command));
+    case 'commitGap': return storage.commitGap({message: command.input.message, effects: command.input.effects, hardMode: command.input.hardMode, hardModeFresh: command.input.hardModeFresh, hardModeLoss: command.input.hardModeLoss, profile: command.input.profile}, testOptions.commitOptions?.(command));
     // Only `uniqueSeconds` of the options is forwarded; the commit options come from the in-process testOptions only.
     case 'appendSamples':
       return storage.appendSamples(command.pluginSessionId, command.rows, command.options === undefined ? undefined : {uniqueSeconds: command.options.uniqueSeconds},
@@ -80,6 +80,8 @@ export function serveStorage(port: HostPort, testOptions: HostTestOptions = {}):
     case 'listTrips': return storage.listTrips(command.page);
     case 'listSamples': return storage.listSamples(command.scope, command.page);
     case 'storageInfo': return storage.storageInfo();
+    case 'pinUploadProjection': return storage.pinUploadProjection(command.tripUuid);
+    case 'readUploadProjectionPage': return storage.readUploadProjectionPage(command.query);
     // ET-016: only the parsed fields are forwarded; the parser already refused any other key.
     case 'journalTrips': return storage.journalTrips(command.query === undefined ? undefined
       : {cursor: command.query.cursor, game: command.query.game, outcome: command.query.outcome, completeness: command.query.completeness});

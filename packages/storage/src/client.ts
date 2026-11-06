@@ -11,6 +11,7 @@ import type {
   TripPage, TripRecord, Uint64
 } from './api';
 import {storageError} from './errors';
+import type {UploadProjectionPageQuery} from './upload-projection';
 import {parseResponse, type CommandName, type CommandValue, type JournalCommandName, type StorageCommand, type StorageRequest, type WorkerOpenOptions} from './worker/protocol';
 
 /** Deadline of one command after it was sent to the worker. */
@@ -148,6 +149,11 @@ export class StorageClient {
   listSamples(scope: {tripUuid: string} | {pluginSessionId: string}, page?: {afterId?: string; limit?: number; includeExcluded?: boolean}): Promise<Result<SampleRecord[]>> { return this.#request({name: 'listSamples', scope: isObject(scope) ? ('tripUuid' in scope ? {tripUuid: scope.tripUuid} : {pluginSessionId: scope.pluginSessionId}) : scope,
     ...(page === undefined ? {} : {page: isObject(page) ? {afterId: page.afterId, limit: page.limit, includeExcluded: page.includeExcluded} : page})}); }
   storageInfo(): Promise<Result<StorageInfo>> { return this.#request({name: 'storageInfo'}); }
+  pinUploadProjection(tripUuid: string) { return this.#request({name: 'pinUploadProjection', tripUuid}); }
+  readUploadProjectionPage(query: UploadProjectionPageQuery) {
+    return this.#request({name: 'readUploadProjectionPage', query: isObject(query)
+      ? {snapshot: query.snapshot, kind: query.kind, cursor: query.cursor, limit: query.limit} : query});
+  }
   /**
    * Journal reads (ET-016, J5). Queries and pages are copied field by field, so only their listed fields cross the
    * boundary; a value that is not an object is forwarded as given, and the worker's request parser refuses it with
