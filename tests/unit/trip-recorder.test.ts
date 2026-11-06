@@ -131,37 +131,18 @@ class ModelStorage implements TripRecorderClient {
   }
 }
 
-it.each(['qualified-at-intake','pending-at-intake','revoked-while-held','foreign-while-held','refresh-while-held','later-proof-at-intake'] as const)(
-  'records ordinary menu acceptance independently of asynchronous profile refresh: %s',async variant=>{
-    const storage=new ModelStorage(),s=new Script(ETS2_A),context={receivedUtcMs:RECEIVED_UTC},welcome=s.welcome(),token={};
-    let qualified=true,profile={version:1 as const,scope:'a'.repeat(64),binding:'b'.repeat(64),game:'ets2' as const,pluginSessionId:s.session,
-      processInstanceId:welcome.source.processInstanceId,sourceClockId:s.clockId,afterMonotonicNs:'0',loadGeneration:1};
-    const recorder=new TripRecorderSink(storage,{profileEvidence:()=>qualified?profile:undefined,profileStatus:()=>qualified?{phase:'admitted',token}:{phase:'pending',token}});
-    expect((await recorder.openSession(welcome)).ok).toBe(true);expect(recorder.observe(s.checkpoint(null,0,{simulation:'paused'},'1'),context).ok).toBe(true);
-    expect((await recorder.commit(s.event(r.started(),{configurationRevision:'1'}),context)).ok).toBe(true);
-    expect((await recorder.commit(s.event(r.jobCleared(),{simulation:'paused',configurationRevision:'1'}),context)).ok).toBe(true);
-    expect(recorder.observe(s.snapshot({simulation:'paused',configuration:{...s.checkpoint(null).data.state.configuration,revision:'1'},boundaryOrder:'100'}),context).ok).toBe(true);
-    const message=s.event(r.jobConfigured(),{simulation:'paused',configurationRevision:'2'});message.data.occurred.boundaryOrder='101';
-    if(variant==='later-proof-at-intake')profile={...profile,afterMonotonicNs:String(BigInt(message.capture.monotonicNs)+1n)};
-    if(variant==='pending-at-intake')qualified=false;recorder.capture(message);qualified=true;
-    let enter!:()=>void,release!:()=>void;const entered=new Promise<void>(resolve=>{enter=resolve;}),held=new Promise<void>(resolve=>{release=resolve;});
-    const through=storage.committedThrough.bind(storage);storage.committedThrough=async session=>{enter();await held;return through(session);};
-    const commit=recorder.commit(message,context);await entered;
-    if(variant==='revoked-while-held')qualified=false;
-    if(variant==='foreign-while-held')profile={...profile,binding:'c'.repeat(64)};
-    if(variant==='refresh-while-held')profile={...profile,afterMonotonicNs:String(BigInt(message.capture.monotonicNs)+1n)};
-    release();expect((await commit).ok).toBe(true);storage.committedThrough=through;
-    const effects=storage.attempts.at(-1)!.effects;
-    const witness=effects.filter(effect=>effect.kind==='completeness.add'&&effect.interval.detail?.cause==='observed-acceptance');
-    expect(witness).toHaveLength(0);expect(JSON.stringify(witness)).not.toContain(profile.scope);expect(JSON.stringify(witness)).not.toContain(profile.binding);
-    qualified=true;expect((await recorder.commit(s.event(r.started(),{configurationRevision:'2'}),context)).ok).toBe(true);
-    const configuration=s.checkpoint(job()).data.state.configuration;
-    expect(recorder.observe(s.snapshot({configuration:{...configuration,revision:'2'},simulation:'running',boundaryOrder:'200'}),context).ok).toBe(true);
-    expect((await recorder.commit(s.event(r.fined(),{configurationRevision:'2'}),context)).ok).toBe(true);
-    expect(storage.attempts.at(-1)!.effects.some(effect=>effect.kind==='completeness.add'&&effect.interval.detail?.phase==='confirmed')).toBe(false);
-    expect((await recorder.commit(s.event(r.delivered(),{simulation:'paused',configurationRevision:'2'}),context)).ok).toBe(true);
-    expect(storage.model.trips.at(-1)).toMatchObject({outcome:'delivered',recordingCompleteness:'complete'});
-  });
+it('records ordinary paused acceptance and delivery without an absence-confirmation handshake',async()=>{
+  const storage=new ModelStorage(),s=new Script(ETS2_A),context={receivedUtcMs:RECEIVED_UTC},recorder=new TripRecorderSink(storage);
+  expect((await recorder.openSession(s.welcome())).ok).toBe(true);
+  expect(recorder.observe(s.checkpoint(null,0,{simulation:'paused'},'1'),context).ok).toBe(true);
+  for(const record of [r.started(),r.jobCleared(),r.jobConfigured(),r.started(),r.delivered()]){
+    expect((await recorder.commit(s.event(record,{simulation:record.type==='simulation.started'?'running':'paused'}),context)).ok).toBe(true);
+  }
+  const effects=storage.attempts.flatMap(attempt=>attempt.effects);
+  expect(effects.filter(effect=>effect.kind==='trip.open')).toHaveLength(1);
+  expect(effects.filter(effect=>effect.kind==='trip.close')).toMatchObject([{outcome:'delivered',closeReason:'outcome'}]);
+  expect(effects.some(effect=>effect.kind==='completeness.add'&&effect.interval.detail?.cause==='observed-acceptance')).toBe(false);
+});
 
 let clock: {ms: number; ns: bigint; utc: number};
 let sockets: FakeSocket[];

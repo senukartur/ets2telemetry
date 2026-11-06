@@ -119,8 +119,9 @@ export function originalCoverage(db: Database.Database, row: Row): LogicalCovera
   const started = event && get(db, "SELECT event_seq FROM events WHERE plugin_session_id=? AND event_seq<? AND type='simulation.started' ORDER BY event_seq DESC LIMIT 1", row.plugin_session_ref, event.event_seq);
   const previousJob = event && get(db, "SELECT event_seq,type,first_redelivered FROM events WHERE plugin_session_id=? AND event_seq<? AND type IN ('job.configured','job.cleared') ORDER BY event_seq DESC LIMIT 1", row.plugin_session_ref, event.event_seq);
   const reset = event && started && get(db, "SELECT id FROM events WHERE plugin_session_id=? AND event_seq>? AND event_seq<? AND type IN ('timers.restart','gameTime.regression') LIMIT 1", row.plugin_session_ref, started.event_seq, event.event_seq);
-  // A clear establishes a new job window even when the initial source bootstrap was lost.
-  const gap = event && get(db, 'SELECT id FROM event_gaps WHERE plugin_session_ref=? AND last_event_seq>? AND first_event_seq<=? LIMIT 1', row.plugin_session_ref, previousJob?.event_seq ?? '00000000000000000000', event.event_seq);
+  // Both the absence and the start must remain trustworthy; a gap before a later clear can hide a load.
+  const gapAfter = previousJob && started && String(started.event_seq) < String(previousJob.event_seq) ? started.event_seq : previousJob?.event_seq ?? '00000000000000000000';
+  const gap = event && get(db, 'SELECT id FROM event_gaps WHERE plugin_session_ref=? AND last_event_seq>? AND first_event_seq<=? LIMIT 1', row.plugin_session_ref, gapAfter, event.event_seq);
   const observed = row.opened_by === 'event' && event?.type === 'job.configured' && event.first_redelivered === 0n && started && !reset && !gap
     && (!previousJob || previousJob.type === 'job.cleared' && previousJob.first_redelivered === 0n);
   const notes=db.prepare('SELECT detail_json FROM completeness_intervals WHERE trip_ref=? ORDER BY id LIMIT 129').all(row.id) as Row[];
