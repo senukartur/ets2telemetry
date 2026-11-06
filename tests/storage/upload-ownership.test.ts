@@ -88,8 +88,9 @@ it.each([true,false])('REG-003/005/008 preserves assigned=%s reservation through
   if(!assigned){const confirmed=ok(storage.confirmUploadOwner({confirmationId:randomUUID(),registrationId:a.registrationId,credentialGeneration:'a',expectedVersion:version}));version=confirmed.version;}
   ok(storage.confirmUploadOwner({confirmationId:randomUUID(),registrationId:b.registrationId,credentialGeneration:'b',expectedVersion:version}));storage.close();
   conn=await openConnection(ws.options({purpose:'history'}));storage=new Storage(conn);direct.push(storage);
+  const beforeRun=randomUUID();ok(storage.confirmUploadOwner({confirmationId:beforeRun,registrationId:b.registrationId,credentialGeneration:'b-refreshed',expectedVersion:'2'}));ok(storage.advanceUploadScan({runId:beforeRun,registrationId:b.registrationId}));expect(ok(storage.getUploadStoreStatus({registrationId:a.registrationId})).identityPendingSources).toBe(1);
   ok(storage.commitEvent({message:game(script.event(r.delivered())),effects:[{kind:'trip.close',tripUuid:uuid,outcome:'delivered',closeReason:'outcome',outcomeEvent:'this-event',recordingCompleteness:'complete',endedUtcMs:2000}]}));
-  expect(conn.writer().prepare('SELECT registration_ref,http_revision FROM upload_source_bindings').all()).toEqual([{registration_ref:a.registrationId,http_revision:0n}]);
+  expect(conn.writer().prepare('SELECT registration_ref,http_revision FROM upload_source_bindings').all()).toEqual([{registration_ref:a.registrationId,http_revision:0n}]);expect(ok(storage.getUploadStoreStatus({registrationId:a.registrationId}))).toMatchObject({identityPendingSources:0,pendingSources:1});
   expect(ok(storage.beginUploadMaterialization({workId:randomUUID(),tripUuid:uuid,registrationId:b.registrationId}))).toMatchObject({status:'held',reason:'reconciliation-required'});
 });
 it.each([true,false])('REG-005/008 keeps A target ownership when incoming B joins, alreadyBound=%s, and preserves incoming B reservation',async alreadyBound=>{
@@ -103,6 +104,7 @@ it.each([true,false])('REG-005/008 keeps A target ownership when incoming B join
   expect(db.prepare('SELECT logical_ref FROM logical_memberships WHERE trip_ref=2').pluck().get()).toBe(1n);
   expect(db.prepare('SELECT registration_ref FROM upload_source_bindings WHERE root_ref=1').pluck().get()).toBe(a.registrationId);
   expect(db.prepare('SELECT registration_ref FROM upload_reservations WHERE candidate_ref=2').pluck().get()).toBe(b.registrationId);
+  expect(ok(storage.getUploadStoreStatus({registrationId:a.registrationId}))).toMatchObject({identityPendingSources:0,pendingSources:1});expect(ok(storage.getUploadStoreStatus({registrationId:b.registrationId}))).toMatchObject({identityPendingSources:0,pendingSources:0,heldSources:0});
   const before=contentDigest(db);failed(storage.deleteTrip(child,{rejectIfOpen:false}),'STORAGE_BUSY');failed(storage.deleteTrip(root,{rejectIfOpen:false}),'STORAGE_BUSY');expect(contentDigest(db)).toEqual(before);
   expect(ok(storage.beginUploadMaterialization({workId:randomUUID(),tripUuid:child,registrationId:a.registrationId})).status).toBe('preparing');
 });
@@ -116,6 +118,11 @@ it('REG-005/008 holds an unassigned target when an earlier B opening redirects i
   conn=await openConnection(ws.options({purpose:'history'}));storage=new Storage(conn);direct.push(storage);
   expect(ok(storage.beginUploadMaterialization({workId:randomUUID(),tripUuid:target,registrationId:b.registrationId}))).toMatchObject({status:'held',reason:'reconciliation-required'});
   expect(conn.writer().prepare('SELECT mode,registration_ref FROM upload_reservations WHERE candidate_ref=2').all()).toEqual([{mode:'unbound',registration_ref:null}]);
+  expect(ok(storage.getUploadStoreStatus({registrationId:b.registrationId}))).toMatchObject({identityPendingSources:0,pendingSources:0,heldSources:0});
+  const runId=randomUUID();ok(storage.confirmUploadOwner({confirmationId:runId,registrationId:b.registrationId,credentialGeneration:'b-confirmed',expectedVersion:'2'}));expect(ok(storage.advanceUploadScan({runId,registrationId:b.registrationId})).phase).toBe('complete');
+  // Two raw reservations now belong to B, but only the held logical self-root contributes to its identity backlog.
+  expect(conn.writer().prepare('SELECT identity_state FROM upload_reservations ORDER BY candidate_ref').pluck().all()).toEqual(['redirected','held']);
+  expect(ok(storage.getUploadStoreStatus({registrationId:b.registrationId}))).toMatchObject({identityPendingSources:0,pendingSources:0,heldSources:1});expect(conn.writer().prepare('SELECT count(*) FROM upload_source_bindings').pluck().get()).toBe(0n);
 });
 it('REG-005/012 rotates one owner without reassignment and isolates a new identity epoch',async()=>{
   const conn=await openConnection(ws.options({purpose:'history'})),storage=new Storage(conn);direct.push(storage);const a=await owner(storage,'A'),firstRun=randomUUID();
@@ -138,4 +145,15 @@ it('REG-005/012 refuses observed missing confirmed claim metadata instead of ass
   expect(ok(storage.confirmUploadOwner({confirmationId:bRun,registrationId:b.registrationId,credentialGeneration:'b',expectedVersion:'1'}))).toEqual({status:'reconciliation-required',version:'1',runId:null});
   expect(db.prepare('SELECT count(*) FROM upload_scan_runs').pluck().get()).toBe(1n);ok(storage.advanceUploadScan({runId:aRun,registrationId:a.registrationId}));
   expect(db.prepare('SELECT DISTINCT registration_ref,hold_reason FROM upload_reservations').all()).toEqual([{registration_ref:null,hold_reason:'reconciliation-required'}]);expect(db.prepare('SELECT count(*) FROM upload_source_bindings').pluck().get()).toBe(0n);
+});
+
+it('REG-003/005/008/012 exposes assigned identity-pending self-roots after scan completion without allocating a permanent source',async()=>{
+  let conn=await openConnection(ws.options({purpose:'history'})),storage=new Storage(conn);direct.push(storage);const a=await owner(storage,'A'),b=await owner(storage,'B'),script=new Script(ETS2_A),uuid=opening(storage,script);
+  expect(ok(storage.getUploadStoreStatus({registrationId:a.registrationId}))).toMatchObject({identityPendingSources:0,pendingSources:0,heldSources:0,queuedEvents:0});
+  const runId=randomUUID();ok(storage.confirmUploadOwner({confirmationId:runId,registrationId:a.registrationId,credentialGeneration:'a',expectedVersion:'0'}));expect(ok(storage.advanceUploadScan({runId,registrationId:a.registrationId})).phase).toBe('complete');
+  expect(ok(storage.getUploadStoreStatus({registrationId:a.registrationId}))).toMatchObject({identityPendingSources:1,pendingSources:0,heldSources:0,queuedEvents:0});
+  for(const table of ['upload_source_bindings','upload_envelopes'])expect(conn.writer().prepare(`SELECT count(*) FROM ${table}`).pluck().get()).toBe(0n);
+  ok(storage.confirmUploadOwner({confirmationId:randomUUID(),registrationId:b.registrationId,credentialGeneration:'b',expectedVersion:'1'}));storage.close();conn=await openConnection(ws.options({purpose:'history'}));storage=new Storage(conn);direct.push(storage);
+  expect(ok(storage.getUploadStoreStatus({registrationId:a.registrationId}))).toMatchObject({identityPendingSources:1,pendingSources:0});expect(ok(storage.getUploadStoreStatus({registrationId:b.registrationId}))).toMatchObject({identityPendingSources:0,pendingSources:0});
+  observe(storage,script,uuid);expect(ok(storage.getUploadStoreStatus({registrationId:a.registrationId}))).toMatchObject({identityPendingSources:0,pendingSources:1});expect(conn.writer().prepare('SELECT registration_ref,http_revision FROM upload_source_bindings').all()).toEqual([{registration_ref:a.registrationId,http_revision:0n}]);
 });

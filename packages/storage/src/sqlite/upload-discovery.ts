@@ -29,19 +29,27 @@ export function reservation(db:Database.Database,entry:Row):Row {
   }
   return value;
 }
+function identityState(db:Database.Database,root:unknown,state:'unbound'|'pending'|'held'|'resolved'|'redirected'):void {
+  // One reservation per original root, never one count per joined raw member. The trigger updates two owner points.
+  db.prepare('UPDATE upload_reservations SET identity_state=? WHERE candidate_ref=(SELECT ordinal FROM upload_candidates WHERE trip_ref=?) AND identity_state<>?').run(state,root,state);
+}
 export function resolveBinding(db:Database.Database,root:unknown):Row|undefined {
   const t=get(db,`SELECT t.*,s.plugin_session_uuid,m.logical_ref,m.proof_json,l.retired FROM trips t JOIN logical_trips l ON l.id=t.id
     JOIN logical_memberships m ON m.trip_ref=t.id JOIN plugin_sessions s ON s.id=t.plugin_session_ref WHERE t.id=?`,root);
   if(!t)return undefined;
   const bound=get(db,'SELECT * FROM upload_source_bindings WHERE root_ref=?',root);
   if(t.logical_ref!==t.id){
+    identityState(db,root,'redirected');
     if(bound)db.prepare("UPDATE upload_source_bindings SET held=1,hold_reason='reconciliation-required' WHERE root_ref=?").run(root);
     return undefined;
   }
-  if(bound)return bound;
+  if(bound){identityState(db,root,'resolved');return bound;}
   const entry=candidate(db,root);if(!entry)return undefined;
   const owner=reservation(db,entry);
-  if(owner.hold_reason!==null || owner.registration_ref===null || t.proof_json===null&&t.retired===0n&&t.outcome==='open')return undefined;
+  const pending=t.proof_json===null&&t.retired===0n&&t.outcome==='open';
+  const state=owner.hold_reason!==null?'held':owner.registration_ref===null?'unbound':pending?'pending':'resolved';
+  identityState(db,root,state);
+  if(state!=='resolved')return undefined;
   db.prepare(`INSERT INTO upload_source_bindings(root_ref,registration_ref,run_ref,mode,game,plugin_session_uuid,trip_uuid)
     VALUES(?,?,?,?,?,?,?)`).run(root,owner.registration_ref,owner.run_ref,owner.mode,t.game,t.plugin_session_uuid,t.trip_uuid);
   return required(get(db,'SELECT * FROM upload_source_bindings WHERE root_ref=?',root));

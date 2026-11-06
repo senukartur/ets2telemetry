@@ -228,3 +228,15 @@ it('REG-007/009/012 does not starve an owned projection while actual one-second 
   for(let second=3;second<=12;second++)sample(second);expect(db.prepare('SELECT material_version FROM upload_change_heads').pluck().get()).toBe(version);expect(db.prepare('SELECT distance_m FROM logical_progress ORDER BY id DESC LIMIT 1').pluck().get()).toBe(220);
   expect(ok(storage.freezeUploadMaterialization({workId,producerVersion:'test',createdUtcMs:1000})).status).toBe('frozen');
 });
+
+it('REG-005/010/012 startup recovery holds observed missing registration metadata, frees only the attempt slot and never transfers its bytes',async()=>{
+  const conn=await openConnection(ws.options({purpose:'history'})),storage=new Storage(conn);opened.push(storage);const source=await setup(storage),workId=await complete(storage,source),db=conn.writer();ok(storage.freezeUploadMaterialization({workId,producerVersion:'test',createdUtcMs:1000}));
+  const attempt=ok(storage.claimUploadAttempt({attemptId:randomUUID(),registrationId:source.registrationId,expectedVersion:'1',mode:'any',nowMs:1000})),before=db.prepare('SELECT events,bytes FROM upload_queue_usage').get();
+  // Explicit external partial metadata loss in an isolated fixture; recovery must not invent the observed identity.
+  db.pragma('foreign_keys=OFF');db.prepare('DELETE FROM upload_registrations WHERE registration_id=?').run(source.registrationId);db.pragma('foreign_keys=ON');
+  const result=ok(storage.recoverUploadAttempt({startup:true}));expect(result).toMatchObject({status:'reconciliation-required',attemptId:attempt.attemptId,eventId:attempt.eventId,registrationId:source.registrationId,payload:null,registration:null});
+  expect(db.prepare('SELECT count(*) FROM upload_attempt WHERE active=1').pluck().get()).toBe(0n);expect(db.prepare('SELECT state,registration_ref,payload FROM upload_envelopes').get()).toEqual({state:'held',registration_ref:source.registrationId,payload:Buffer.from(attempt.payload!)});expect(db.prepare('SELECT events,bytes FROM upload_queue_usage').get()).toEqual(before);
+  expect(db.prepare('SELECT count(*) FROM upload_registrations WHERE registration_id=?').pluck().get(source.registrationId)).toBe(0n);expect(ok(storage.recoverUploadAttempt({startup:true})).status).toBe('empty');
+  const install=ok(storage.ensureUploadInstallation()),b=randomUUID();ok(storage.recordUploadRegistration({registrationId:b,clientInstallationId:install.clientInstallationId!,origin:'https://dashboard.example',accountId:'B',companyId:'company',identityEpoch:'epoch',installationId:randomUUID(),bindingId:randomUUID()}));ok(storage.confirmUploadOwner({confirmationId:randomUUID(),registrationId:b,credentialGeneration:'b',expectedVersion:'1'}));
+  expect(ok(storage.claimUploadAttempt({attemptId:randomUUID(),registrationId:b,expectedVersion:'2',mode:'any',nowMs:2000}))).toMatchObject({status:'empty',payload:null});expect(db.prepare('SELECT registration_ref FROM upload_source_bindings').pluck().get()).toBe(source.registrationId);
+});

@@ -40,3 +40,8 @@ describe('REG-004/005/009/010 frozen Dashboard v1 boundary',()=>{
     expect(decodeUploadReceipt(new Uint8Array([0xc3,0x28]),202,id)).toBeUndefined();expect(decodeUploadReceipt(bytes(' '.repeat(4097)),202,id)).toBeUndefined();expect(decodeUploadReceipt(bytes(receipt),201,id)).toBeUndefined();
   });
 });
+
+it('REG-004/009/010 accepts unique DLC IDs and rejects duplicate DLC IDs required unique by the frozen v1 schema',()=>{
+  const value=envelope();value.snapshot.context.dlcIds={available:true,value:['x','y']};expect(validateUploadEnvelope(value)).toBe(true);expect(encodeUploadEnvelope(value)).toBeDefined();
+  value.snapshot.context.dlcIds={available:true,value:['x','x']};expect(validateUploadEnvelope(value)).toBe(false);expect(encodeUploadEnvelope(value)).toBeUndefined();
+});

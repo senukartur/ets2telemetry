@@ -810,6 +810,16 @@ describe('REG-007/010/011/012 private upload synchronization boundary',()=>{
     const f=fixture({commandDeadlineMs:50}),opening=f.client.open(OPEN);f.ok(1,SUMMARY);await opening;
     const pending=f.client.advanceUploadMaterialization({workId:P1});await vi.advanceTimersByTimeAsync(50);await expect(pending).resolves.toEqual(error('TIMEOUT'));
     const g=fixture(),opened=g.client.open(OPEN);g.ok(1,SUMMARY);await opened;const queued=g.client.getUploadStoreStatus({registrationId:P1}),closing=g.client.close();
-    g.ok(2,{registrationId:P1,version:'0',active:false,paused:null,discoveryAfter:'0',pendingSources:0,heldSources:0,queuedEvents:0,queuedBytes:0,deliveredEvents:0,pressure:false});await queued;expect(g.sent[2].command.name).toBe('close');g.ok(3,undefined);g.exit(0);await expect(closing).resolves.toEqual({clean:true});
+    g.ok(2,{registrationId:P1,version:'0',active:false,paused:null,discoveryAfter:'0',identityPendingSources:0,pendingSources:0,heldSources:0,queuedEvents:0,queuedBytes:0,deliveredEvents:0,pressure:false});await queued;expect(g.sent[2].command.name).toBe('close');g.ok(3,undefined);g.exit(0);await expect(closing).resolves.toEqual({clean:true});
   });
+});
+
+it('REG-007/010/012 validates explicit startup recovery as an exclusive private input and never treats ordinary busy as recovery',async()=>{
+  const command={name:'recoverUploadAttempt' as const,input:{startup:true as const}};expect(isUploadSyncRequest(command)).toBe(true);
+  const invalid=fixture();for(const input of [{startup:false},{startup:true,attemptId:P1},{startup:true,registrationId:P1},{}, {startup:'true'}]){expect(isUploadSyncRequest({...command,input})).toBe(false);await expect(invalid.client.recoverUploadAttempt(input as never)).resolves.toEqual(error('INVALID_INPUT'));}expect(invalid.sent).toEqual([]);
+  const recovered={status:'recovered',attemptId:P1,eventId:P1,registrationId:P1,registration:null,payload:null},empty={status:'empty',attemptId:null,eventId:null,registrationId:null,registration:null,payload:null};
+  expect(isUploadSyncResult(command,recovered)).toBe(true);expect(isUploadSyncResult(command,empty)).toBe(true);
+  for(const bad of [{...recovered,attemptId:null},{...recovered,payload:new Uint8Array([1])},{...empty,eventId:P1},{...recovered,status:'busy'}])expect(isUploadSyncResult(command,bad)).toBe(false);
+  expect(isUploadSyncResult({name:'recoverUploadAttempt',input:{attemptId:P1}},empty)).toBe(false);
+  const f=fixture(),opening=f.client.open(OPEN),recovery=f.client.recoverUploadAttempt({startup:true}),recorder=f.client.commitEvent({message:{}});f.ok(1,SUMMARY);await opening;expect(f.sent[1].command.name).toBe('commitEvent');f.ok(2,COMMITTED);await recorder;expect(f.sent[2].command).toEqual(command);f.ok(3,empty);await expect(recovery).resolves.toEqual({ok:true,value:empty});
 });

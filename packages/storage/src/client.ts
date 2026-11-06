@@ -1,4 +1,4 @@
-import {UPLOAD_SYNC_NAMES,type UploadSyncCommands} from './upload-sync';
+import {UPLOAD_SYNC_NAMES,isUploadSyncRequest,type UploadSyncCommands} from './upload-sync';
 import type {ProfileObservation} from '../../telemetry-core/src/trips/continuation';
 import type {HardModeObservation} from '../../contracts/src/hard-mode';
 // The telemetry service's handle on the storage worker (ET-013). Node-safe: it never loads native SQLite; the worker
@@ -173,7 +173,10 @@ export class StorageClient {
   releaseUploadMaterialization(input:UploadSyncCommands['releaseUploadMaterialization']['args']['input']) {return this.#request({name:'releaseUploadMaterialization',input:isObject(input)?{workId:input.workId}:input});}
   claimUploadAttempt(input:UploadSyncCommands['claimUploadAttempt']['args']['input']) {return this.#request({name:'claimUploadAttempt',input:isObject(input)?{attemptId:input.attemptId,registrationId:input.registrationId,expectedVersion:input.expectedVersion,mode:input.mode,nowMs:input.nowMs}:input});}
   recordUploadAttemptOutcome(input:UploadSyncCommands['recordUploadAttemptOutcome']['args']['input']) {return this.#request({name:'recordUploadAttemptOutcome',input:isObject(input)?{attemptId:input.attemptId,kind:input.kind,retryAtMs:input.retryAtMs,nowMs:input.nowMs}:input});}
-  recoverUploadAttempt(input:UploadSyncCommands['recoverUploadAttempt']['args']['input']) {return this.#request({name:'recoverUploadAttempt',input:isObject(input)?{attemptId:input.attemptId}:input});}
+  recoverUploadAttempt(input:UploadSyncCommands['recoverUploadAttempt']['args']['input']) {
+    if(!isUploadSyncRequest({name:'recoverUploadAttempt',input}))return Promise.resolve(failure('INVALID_INPUT'));
+    return this.#request({name:'recoverUploadAttempt',input:'startup' in input?{startup:true}:{attemptId:input.attemptId}});
+  }
   commitUploadReceipt(input:UploadSyncCommands['commitUploadReceipt']['args']['input']) {return this.#request({name:'commitUploadReceipt',input:isObject(input)?{attemptId:input.attemptId,statusCode:input.statusCode,body:input.body instanceof Uint8Array&&input.body.byteLength<=4096?new Uint8Array(input.body):input.body}:input});}
   reclaimUploadPayloads(input:UploadSyncCommands['reclaimUploadPayloads']['args']['input']) {return this.#request({name:'reclaimUploadPayloads',input:isObject(input)?{limit:input.limit}:input});}
   /**

@@ -75,7 +75,7 @@ export function getUploadStoreStatus(conn:StorageConnection,input:{registrationI
   check('getUploadStoreStatus',input);const db=conn.reader(),state=connection(db),counts=required(get(db,'SELECT * FROM upload_owner_counters WHERE registration_ref=?',input.registrationId));
   const registration=required(get(db,'SELECT pause_reason FROM upload_registrations WHERE registration_id=?',input.registrationId));
   return {registrationId:input.registrationId,version:String(state.version),active:state.active_registration===input.registrationId,paused:registration.pause_reason as UploadStoreStatus['paused'],
-    discoveryAfter:String(counts.change_after),pendingSources:Number(counts.pending_sources),heldSources:Number(counts.held_sources),queuedEvents:Number(counts.queued_events),queuedBytes:Number(counts.queued_bytes),deliveredEvents:Number(counts.delivered_events),pressure:pressure(db)};
+    discoveryAfter:String(counts.change_after),identityPendingSources:Number(counts.identity_pending_sources),pendingSources:Number(counts.pending_sources),heldSources:Number(counts.held_sources)+Number(counts.identity_held_sources),queuedEvents:Number(counts.queued_events),queuedBytes:Number(counts.queued_bytes),deliveredEvents:Number(counts.delivered_events),pressure:pressure(db)};
 }
 function scanStatus(run:Row,full=false):UploadScanProgress {
   return {runId:String(run.run_id),phase:full?'pressure':run.phase as UploadScanProgress['phase'],examined:Number(run.examined),cursor:{legacy:String(run.legacy_after),ordinal:String(run.ordinal_after)}};

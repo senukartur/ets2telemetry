@@ -27,7 +27,7 @@ export interface UploadAttemptResult {status:'claimed'|'empty'|'paused'|'busy'|'
 export interface UploadReceiptResult {status:'delivered'|'duplicate'|'reconciliation-required'|'invalid-response';eventId:string;receiptId:string|null}
 export interface UploadCleanup {examined:number;reclaimed:number;events:number;bytes:number}
 export interface UploadStoreStatus {registrationId:string;version:string;active:boolean;paused:'authentication'|'configuration'|'reconciliation'|null;
-  discoveryAfter:string;pendingSources:number;heldSources:number;queuedEvents:number;queuedBytes:number;deliveredEvents:number;pressure:boolean}
+  discoveryAfter:string;identityPendingSources:number;pendingSources:number;heldSources:number;queuedEvents:number;queuedBytes:number;deliveredEvents:number;pressure:boolean}
 export interface UploadSyncCommands {
   ensureUploadInstallation:{args:Record<never,never>;value:UploadInstallation};
   recordUploadRegistration:{args:{input:UploadRegistration};value:UploadRegistrationResult};
@@ -42,7 +42,7 @@ export interface UploadSyncCommands {
   releaseUploadMaterialization:{args:{input:{workId:string}};value:UploadWork};
   claimUploadAttempt:{args:{input:{attemptId:string;registrationId:string;expectedVersion:string;mode:'live'|'backfill'|'any';nowMs:number}};value:UploadAttemptResult};
   recordUploadAttemptOutcome:{args:{input:{attemptId:string;kind:'retry'|'authentication'|'configuration'|'reconciliation'|'validation';retryAtMs:number;nowMs:number}};value:UploadAttemptResult};
-  recoverUploadAttempt:{args:{input:{attemptId:string}};value:UploadAttemptResult};
+  recoverUploadAttempt:{args:{input:{attemptId:string}|{startup:true}};value:UploadAttemptResult};
   commitUploadReceipt:{args:{input:{attemptId:string;statusCode:number;body:Uint8Array}};value:UploadReceiptResult};
   reclaimUploadPayloads:{args:{input:{limit:number}};value:UploadCleanup};
 }
@@ -61,7 +61,7 @@ const requestChecks:Record<UploadSyncName,Check>={
   freezeUploadMaterialization:shape({workId:isUploadUuid,producerVersion:v=>text(v)&&Buffer.byteLength(v)<=64,createdUtcMs:safe}),
   claimUploadAttempt:shape({attemptId:isUploadUuid,registrationId:isUploadUuid,expectedVersion:decimal,mode:one('live','backfill','any'),nowMs:safe}),
   recordUploadAttemptOutcome:shape({attemptId:isUploadUuid,kind:one('retry','authentication','configuration','reconciliation','validation'),retryAtMs:safe,nowMs:safe}),
-  recoverUploadAttempt:shape({attemptId:isUploadUuid}),commitUploadReceipt:shape({attemptId:isUploadUuid,statusCode:v=>safe(v)&&v<=599,body:v=>v instanceof Uint8Array&&v.byteLength<=4096}),
+  recoverUploadAttempt:v=>shape({attemptId:isUploadUuid})(v)||shape({startup:one(true)})(v),commitUploadReceipt:shape({attemptId:isUploadUuid,statusCode:v=>safe(v)&&v<=599,body:v=>v instanceof Uint8Array&&v.byteLength<=4096}),
   reclaimUploadPayloads:shape({limit:v=>bounded(v)&&v!==0})
 };
 export const UPLOAD_SYNC_NAMES=Object.freeze(Object.keys(requestChecks) as UploadSyncName[]);
@@ -78,7 +78,7 @@ const resultChecks:Record<UploadSyncName,Check>={
   confirmUploadOwner:shape({status:one('confirmed','stale','reconciliation-required'),version:decimal,runId:nullable(isUploadUuid)}),
   disconnectUploadOwner:shape({status:one('disconnected','stale'),version:decimal,runId:nullable(isUploadUuid)}),
   getUploadStoreStatus:shape({registrationId:isUploadUuid,version:decimal,active:one(true,false),paused:nullable(one('authentication','configuration','reconciliation')),
-    discoveryAfter:decimal,pendingSources:safe,heldSources:safe,queuedEvents:safe,queuedBytes:safe,deliveredEvents:safe,pressure:one(true,false)}),
+    discoveryAfter:decimal,identityPendingSources:safe,pendingSources:safe,heldSources:safe,queuedEvents:safe,queuedBytes:safe,deliveredEvents:safe,pressure:one(true,false)}),
   advanceUploadScan:shape({runId:isUploadUuid,phase:one('legacy','candidates','complete','pressure'),examined:bounded,cursor:shape({legacy:decimal,ordinal:decimal})}),
   pageUploadDiscovery:shape({after:decimal,next:decimal,examined:bounded,items:v=>Array.isArray(v)&&v.length<=100&&v.every(shape({tripUuid:isUploadUuid,materialVersion:decimal,workId:nullable(isUploadUuid)}))}),
   beginUploadMaterialization:work,advanceUploadMaterialization:work,freezeUploadMaterialization:work,releaseUploadMaterialization:work,
@@ -96,7 +96,12 @@ export function isUploadSyncResult(command:UploadSyncCommand,value:unknown):bool
   if(command.name==='advanceUploadScan'&&value.runId!==command.input.runId)return false;
   if(command.name==='pageUploadDiscovery'&&(value.after!==command.input.after||(value.examined as number)>command.input.limit||(value.items as unknown[]).length>(value.examined as number)||BigInt(value.next as string)<BigInt(command.input.after)||value.examined===0&&value.next!==command.input.after))return false;
   if(command.name==='reclaimUploadPayloads'&&((value.examined as number)>command.input.limit||(value.reclaimed as number)>(value.examined as number)))return false;
-  if((command.name==='recoverUploadAttempt'||command.name==='recordUploadAttemptOutcome')&&(value.attemptId!==command.input.attemptId||value.eventId===null||value.registrationId===null||value.payload!==null))return false;
+  if(command.name==='recordUploadAttemptOutcome'&&(value.attemptId!==command.input.attemptId||value.eventId===null||value.registrationId===null||value.payload!==null||value.registration!==null))return false;
+  if(command.name==='recoverUploadAttempt'){
+    if(value.payload!==null||value.registration!==null)return false;
+    if(value.status==='empty')return 'startup' in command.input&&value.attemptId===null&&value.eventId===null&&value.registrationId===null;
+    return ['recovered','delivered','reconciliation-required'].includes(value.status as string)&&value.attemptId!==null&&value.eventId!==null&&value.registrationId!==null&&(!('attemptId' in command.input)||value.attemptId===command.input.attemptId);
+  }
   if(command.name==='commitUploadReceipt'&&((value.status==='delivered'||value.status==='duplicate')?value.receiptId===null:value.status==='invalid-response'&&value.receiptId!==null))return false;
   if(command.name==='claimUploadAttempt')return value.status==='claimed'?value.attemptId===command.input.attemptId&&value.registrationId===command.input.registrationId&&value.eventId!==null&&record(value.registration)&&value.registration.registrationId===command.input.registrationId&&payload(value.payload):value.registration===null&&value.payload===null&&(['empty','paused','busy','reconciliation-required'].includes(value.status as string)?value.attemptId===null&&value.eventId===null&&value.registrationId===null:value.attemptId===command.input.attemptId&&value.eventId!==null&&value.registrationId===command.input.registrationId);
   return true;

@@ -22,7 +22,7 @@ export const SCHEMA_V6: readonly string[] = [
   `CREATE TABLE upload_registrations(registration_id TEXT PRIMARY KEY,client_uuid TEXT NOT NULL,
     origin TEXT NOT NULL,account_id TEXT NOT NULL,company_id TEXT NOT NULL,identity_epoch TEXT NOT NULL,installation_id TEXT NOT NULL,binding_id TEXT NOT NULL,
     pause_reason TEXT CHECK(pause_reason IN ('authentication','configuration','reconciliation')),UNIQUE(origin,account_id,company_id,identity_epoch)) STRICT`,
-  `CREATE TABLE upload_owner_counters(registration_ref TEXT PRIMARY KEY REFERENCES upload_registrations(registration_id),change_after INTEGER NOT NULL DEFAULT 0 CHECK(change_after>=0),pending_sources INTEGER NOT NULL DEFAULT 0 CHECK(pending_sources>=0),
+  `CREATE TABLE upload_owner_counters(registration_ref TEXT PRIMARY KEY REFERENCES upload_registrations(registration_id),change_after INTEGER NOT NULL DEFAULT 0 CHECK(change_after>=0),identity_pending_sources INTEGER NOT NULL DEFAULT 0 CHECK(identity_pending_sources>=0),identity_held_sources INTEGER NOT NULL DEFAULT 0 CHECK(identity_held_sources>=0),pending_sources INTEGER NOT NULL DEFAULT 0 CHECK(pending_sources>=0),
     held_sources INTEGER NOT NULL DEFAULT 0 CHECK(held_sources>=0),queued_events INTEGER NOT NULL DEFAULT 0 CHECK(queued_events>=0),queued_bytes INTEGER NOT NULL DEFAULT 0 CHECK(queued_bytes>=0),delivered_events INTEGER NOT NULL DEFAULT 0 CHECK(delivered_events>=0)) STRICT`,
   `CREATE TABLE upload_scan_runs(run_id TEXT PRIMARY KEY,registration_ref TEXT NOT NULL REFERENCES upload_registrations(registration_id),request_json TEXT NOT NULL CHECK(json_valid(request_json)),
     ordinal_through INTEGER NOT NULL,change_through INTEGER NOT NULL,legacy_after INTEGER NOT NULL DEFAULT 0,ordinal_after INTEGER NOT NULL DEFAULT 0,
@@ -32,9 +32,13 @@ export const SCHEMA_V6: readonly string[] = [
   `CREATE TABLE upload_candidates(ordinal INTEGER PRIMARY KEY CHECK(ordinal>0),trip_ref INTEGER NOT NULL UNIQUE REFERENCES trips(id),trip_uuid TEXT NOT NULL UNIQUE REFERENCES trips(trip_uuid),
     opening_registration TEXT REFERENCES upload_registrations(registration_id),opening_run TEXT REFERENCES upload_scan_runs(run_id)) STRICT`,
   `CREATE TABLE upload_reservations(candidate_ref INTEGER PRIMARY KEY REFERENCES upload_candidates(ordinal),registration_ref TEXT REFERENCES upload_registrations(registration_id),
-    run_ref TEXT REFERENCES upload_scan_runs(run_id),mode TEXT NOT NULL CHECK(mode IN ('live','backfill','unbound')),hold_reason TEXT,
+    run_ref TEXT REFERENCES upload_scan_runs(run_id),mode TEXT NOT NULL CHECK(mode IN ('live','backfill','unbound')),hold_reason TEXT,identity_state TEXT NOT NULL DEFAULT 'unbound' CHECK(identity_state IN ('unbound','pending','held','resolved','redirected')),
     CHECK((registration_ref IS NULL)=(mode='unbound')),CHECK((registration_ref IS NULL)=(run_ref IS NULL))) STRICT`,
   'CREATE INDEX upload_reservations_owner ON upload_reservations(registration_ref,candidate_ref)',
+  `CREATE TRIGGER upload_identity_counts AFTER UPDATE OF registration_ref,identity_state ON upload_reservations BEGIN
+    UPDATE upload_owner_counters SET identity_pending_sources=identity_pending_sources-(OLD.identity_state='pending'),identity_held_sources=identity_held_sources-(OLD.identity_state='held') WHERE registration_ref=OLD.registration_ref;
+    UPDATE upload_owner_counters SET identity_pending_sources=identity_pending_sources+(NEW.identity_state='pending'),identity_held_sources=identity_held_sources+(NEW.identity_state='held') WHERE registration_ref=NEW.registration_ref;
+  END`,
   `CREATE TABLE upload_change_heads(root_ref INTEGER PRIMARY KEY REFERENCES logical_trips(id),revision_ref INTEGER NOT NULL REFERENCES logical_revisions(id),
     position INTEGER NOT NULL,material_version INTEGER NOT NULL CHECK(material_version>0),material_key TEXT NOT NULL,dirty INTEGER NOT NULL CHECK(dirty IN (0,1)),mode TEXT NOT NULL DEFAULT 'live' CHECK(mode IN ('live','backfill')),run_ref TEXT REFERENCES upload_scan_runs(run_id)) STRICT`,
   'CREATE INDEX upload_change_position ON upload_change_heads(position,root_ref)',

@@ -4,7 +4,7 @@ import {randomUUID} from 'node:crypto';
 import {writeFileSync} from 'node:fs';
 import path from 'node:path';
 import {afterEach,beforeEach,describe,expect,it} from 'vitest';
-import {MIGRATIONS,Storage} from '../../packages/storage/src';
+import {MIGRATIONS,Storage,type UploadAttemptResult} from '../../packages/storage/src';
 import {openConnection} from '../../packages/storage/src/sqlite/connection';
 import {ETS2_A,r,Script} from '../shared/trip-messages';
 import {ok,uploadGame,uploadProof,uploadReceipt,uploadTestOwner,uploadTestSource,uploadTestWork,workspace} from './helpers';
@@ -97,4 +97,24 @@ it('REG-006/012 recovers lost page and begin answers with the original work/pin,
   const third=add('10000000-0000-4000-8000-000000000003','d');storage.close();await kill('pageUploadDiscovery',{...input,after:cursor},'after-commit');({storage,db}=await direct());
   page=ok(storage.pageUploadDiscovery({...input,after:ok(storage.getUploadStoreStatus({registrationId:source.registrationId})).discoveryAfter}));expect(page.items).toMatchObject([{tripUuid:third,workId:null}]);
   expect(db.prepare('SELECT pin_released FROM upload_materializations WHERE work_id=?').pluck().get(workId)).toBe(1n);
+});
+
+it('REG-006/012 recovers a claim committed before its answer without retaining the caller attempt UUID, then keeps A and B bytes isolated',async()=>{
+  let {storage,db}=await direct();const a=await uploadTestSource(storage),workId=await uploadTestWork(storage,a),frozen=ok(storage.freezeUploadMaterialization({workId,producerVersion:'test',createdUtcMs:1000}));
+  const original=db.prepare('SELECT payload FROM upload_envelopes WHERE event_id=?').pluck().get(frozen.eventId) as Uint8Array;
+  storage.close();
+  // The restarted consumer retains no claim UUID or answer. The only identifier it has is the durable source/owner.
+  await kill('claimUploadAttempt',{attemptId:randomUUID(),registrationId:a.registrationId,expectedVersion:'1',mode:'any',nowMs:1000},'after-commit');storage=(await direct()).storage;
+  const install=ok(storage.ensureUploadInstallation()),b=randomUUID();ok(storage.recordUploadRegistration({registrationId:b,clientInstallationId:install.clientInstallationId!,origin:'https://dashboard.example',accountId:'B',companyId:'company',identityEpoch:'epoch',installationId:randomUUID(),bindingId:randomUUID()}));
+  ok(storage.confirmUploadOwner({confirmationId:randomUUID(),registrationId:b,credentialGeneration:'b',expectedVersion:'1'}));
+  const script=new Script('10000000-0000-4000-8000-000000000002'),tripUuid='70000000-0000-4000-8000-000000000002';ok(storage.upsertSession({message:uploadGame(script.welcome())}));ok(storage.commitEvent({message:uploadGame(script.event(r.jobConfigured())),profile:{...uploadProof(script),scope:'c'.repeat(64)},effects:[{kind:'trip.open',tripUuid,game:'ets2',gameMode:{mode:'unknown',method:'none',confidence:'none'},jobConfiguration:'this-event',recordingCompleteness:'complete',startedUtcMs:2000}]}));
+  const bWork=await uploadTestWork(storage,{tripUuid,registrationId:b}),bEvent=ok(storage.freezeUploadMaterialization({workId:bWork,producerVersion:'test',createdUtcMs:2000}));
+  expect(ok(storage.claimUploadAttempt({attemptId:randomUUID(),registrationId:b,expectedVersion:'2',mode:'any',nowMs:2000}))).toMatchObject({status:'busy',attemptId:null,eventId:null,registrationId:null,payload:null});
+  storage.close();const recovered=await kill('recoverUploadAttempt',{startup:true},'after-answer') as UploadAttemptResult;({storage,db}=await direct());expect(recovered).toMatchObject({status:'recovered',eventId:frozen.eventId,registrationId:a.registrationId,registration:null,payload:null});expect(recovered.attemptId).not.toBeNull();
+  expect(ok(storage.recoverUploadAttempt({startup:true}))).toMatchObject({status:'empty',attemptId:null,eventId:null});
+  expect(ok(storage.claimUploadAttempt({attemptId:randomUUID(),registrationId:a.registrationId,expectedVersion:'2',mode:'any',nowMs:2000})).status).toBe('paused');
+  const sentB=ok(storage.claimUploadAttempt({attemptId:randomUUID(),registrationId:b,expectedVersion:'2',mode:'any',nowMs:2000}));expect(sentB.eventId).toBe(bEvent.eventId);expect(sentB.registration?.accountId).toBe('B');ok(storage.recoverUploadAttempt({attemptId:sentB.attemptId!}));
+  ok(storage.confirmUploadOwner({confirmationId:randomUUID(),registrationId:a.registrationId,credentialGeneration:'rotated-a',expectedVersion:'2'}));const sentA=ok(storage.claimUploadAttempt({attemptId:randomUUID(),registrationId:a.registrationId,expectedVersion:'3',mode:'any',nowMs:3000}));expect(sentA.eventId).toBe(frozen.eventId);expect(sentA.payload).toEqual(new Uint8Array(original));expect(sentA.registration?.accountId).toBe('A');
+  expect(db.prepare('SELECT credential_generation FROM upload_attempt WHERE attempt_id=?').pluck().get(sentA.attemptId)).toBe('rotated-a');expect(db.prepare('SELECT credential_generation,active,outcome FROM upload_attempt WHERE attempt_id=?').get(recovered.attemptId)).toEqual({credential_generation:'generation',active:0n,outcome:'ambiguous'});
+  expect(db.prepare('SELECT count(*) FROM upload_attempt WHERE active=1').pluck().get()).toBe(1n);expect(db.prepare('SELECT count(*) FROM upload_envelopes').pluck().get()).toBe(2n);
 });

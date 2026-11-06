@@ -143,9 +143,18 @@ export function recordUploadAttemptOutcome(conn:StorageConnection,input:Input<'r
 }
 export function recoverUploadAttempt(conn:StorageConnection,input:Input<'recoverUploadAttempt'>,options?:CommitOptions):UploadAttemptResult {
   check('recoverUploadAttempt',input);return syncTransaction(conn,db=>{
-    const attempt=required(get(db,'SELECT * FROM upload_attempt WHERE attempt_id=?',input.attemptId)),receipt=get(db,'SELECT 1 FROM upload_receipts WHERE event_ref=?',attempt.event_ref);
-    if(!receipt&&(attempt.outcome==='receipt'||get(db,'SELECT state FROM upload_envelopes WHERE event_id=?',attempt.event_ref)?.state==='delivered')){reconcile(db,attempt.registration_ref);return attemptReply('reconciliation-required',attempt);}
-    if(attempt.active===1n){db.prepare("UPDATE upload_envelopes SET state='queued' WHERE event_id=? AND state='sending'").run(attempt.event_ref);db.prepare("UPDATE upload_attempt SET active=0,outcome='ambiguous' WHERE attempt_id=?").run(input.attemptId);}
+    // Startup recovery is explicit: the trusted consumer must first establish that its predecessor has ended.
+    // A normal busy claim never invokes this path or preempts an HTTP request that may still be in flight.
+    const found='startup' in input?get(db,'SELECT * FROM upload_attempt WHERE active=1'):get(db,'SELECT * FROM upload_attempt WHERE attempt_id=?',input.attemptId);
+    if(!found&&'startup' in input)return attemptReply('empty');
+    const attempt=required(found),receipt=get(db,'SELECT 1 FROM upload_receipts WHERE event_ref=?',attempt.event_ref),envelope=get(db,'SELECT state,payload FROM upload_envelopes WHERE event_id=?',attempt.event_ref);
+    const missing=!get(db,'SELECT 1 FROM upload_registrations WHERE registration_id=?',attempt.registration_ref)||!envelope||!receipt&&(attempt.outcome==='receipt'||envelope.state==='delivered'||!(envelope.payload instanceof Uint8Array));
+    if(missing){
+      reconcile(db,attempt.registration_ref);
+      if(attempt.active===1n){db.prepare("UPDATE upload_envelopes SET state='held',hold_reason='reconciliation' WHERE event_id=?").run(attempt.event_ref);db.prepare("UPDATE upload_attempt SET active=0,outcome='reconciliation' WHERE attempt_id=?").run(attempt.attempt_id);}
+      return attemptReply('reconciliation-required',attempt);
+    }
+    if(attempt.active===1n){db.prepare("UPDATE upload_envelopes SET state='queued' WHERE event_id=? AND state='sending'").run(attempt.event_ref);db.prepare("UPDATE upload_attempt SET active=0,outcome='ambiguous' WHERE attempt_id=?").run(attempt.attempt_id);}
     return attemptReply(receipt?'delivered':'recovered',attempt);
   },options);
 }
