@@ -21,10 +21,10 @@ async function start(purpose:'history'|'synthetic'|'replay'='history') {
   const worker=storageWorker(),client=new StorageClient(worker.handle,{closeGraceMs:TEST_CLOSE_GRACE_MS});
   ok(await client.open({path:ws.database,purpose,backupsDirectory:ws.backups,appVersion:'0.1.0-test'}));return client;
 }
-async function open(client:StorageClient,s:Script,verified=true,seq=1) {
+async function open(client:StorageClient,s:Script,verified=true,seq=1,rawTripUuid?:string) {
   ok(await client.upsertSession({message:gameShaped(s.welcome())}));
   if(seq>1)ok(await client.commitGap({message:gameShaped(s.gap(seq-1))}));
-  const message=gameShaped(s.event(r.jobConfigured())),uuid=tripUuidFor(s.session,message.data.eventSeq);
+  const message=gameShaped(s.event(r.jobConfigured())),uuid=rawTripUuid??tripUuidFor(s.session,message.data.eventSeq);
   const effects:TripEffect[]=[{kind:'trip.open',tripUuid:uuid,game:s.game,gameMode:mode,jobConfiguration:'this-event',recordingCompleteness:'complete',startedUtcMs:1000},
     {kind:'event.attribute',tripUuid:uuid,attribution:'trip'}];
   ok(await client.commitEvent({message,effects,...(verified?{profile:proof(s)}:{})}));return uuid;
@@ -81,6 +81,68 @@ describe('immutable private upload projections through the SQLite worker', () =>
     failed(await client.readUploadProjectionPage({snapshot:pin.snapshot,kind:'members',limit:101}),'INVALID_INPUT');
     failed(await client.readUploadProjectionPage({snapshot:pin.snapshot,kind:'intervals',limit:1,cursor:`${pin.snapshot}:members:1`}),'INVALID_INPUT');
     await client.close();expect(recheck(pin)).toBe(false);expect(recheck(fresh)).toBe(true);
+  });
+  it.each([false,true])('invalidates an old token when an old configuration gains a link (already counted: %s)', async counted => {
+    const client=await start(),s=new Script(ETS2_A),root=await open(client,s,true,1,'f0000000-0000-4000-8000-000000000001');
+    ok(await client.commitEvent({message:gameShaped(s.event(r.trailerConfigured())),
+      effects:counted?[{kind:'trip.update',tripUuid:root,set:{trailerConfigurations:['this-event']}}]:[]}));
+    await close(client,s,root);
+    const child=await open(client,s,true,1,'10000000-0000-4000-8000-000000000001');
+    const pin=ok(await client.pinUploadProjection(root)),before=await pages(client,pin);
+    expect(pin.totals).toMatchObject({members:2,configurations:counted?1:0});
+    if(counted)expect(before.find(p=>p.kind==='configurations')!.rows[0]).toMatchObject({occurrence:{rawTripUuid:root}});
+    ok(await client.commitEvent({message:gameShaped(s.event(r.paused())),effects:[
+      {kind:'trip.update',tripUuid:child,set:{trailerConfigurations:[{eventSeq:'2'}]}}]}));
+    const reread=await client.readUploadProjectionPage({snapshot:pin.snapshot,kind:'configurations',limit:7});
+    if(reread.ok)expect(reread.value).toEqual(before.find(p=>p.kind==='configurations'));
+    failed(reread,'INVALID_INPUT');
+    for(const kind of ['members','intervals'] as const)failed(await client.readUploadProjectionPage({snapshot:pin.snapshot,kind,limit:7}),'INVALID_INPUT');
+    const fresh=ok(await client.pinUploadProjection(root));expect(fresh.totals.configurations).toBe(1);
+    expect((await pages(client,fresh)).find(p=>p.kind==='configurations')!.rows[0]).toMatchObject({occurrence:{rawTripUuid:child}});
+    await client.close();expect(recheck(pin)).toBe(false);expect(recheck(fresh)).toBe(true);
+  });
+  it('rejects a stale configuration-link digest even at the current root and revision', async () => {
+    const client=await start(),s=new Script(ETS2_A),root=await open(client,s),pin=ok(await client.pinUploadProjection(root));
+    await client.close();expect(recheck(pin)).toBe(true);
+    expect(recheck({...pin,snapshot:`${pin.snapshot.slice(0,-1)}${pin.snapshot.endsWith('0')?'1':'0'}`})).toBe(false);
+  });
+  it('qualifies an unknown-outcome close by its continued raw member and preserves it after later commits', async () => {
+    const client=await start(),a=new Script(ETS2_A),root=await open(client,a);await close(client,a,root);
+    const b=new Script(ETS2_B),child=await open(client,b);
+    ok(await client.commitEvent({message:gameShaped(b.event(r.jobConfigured())),effects:[
+      {kind:'trip.close',tripUuid:child,outcome:'none',closeReason:'different-job',recordingCompleteness:'partial',endedUtcMs:2000}]}));
+    const pin=ok(await client.pinUploadProjection(root)),before=await pages(client,pin);
+    expect(pin.facts).toMatchObject({outcome:'none',outcomeOccurrence:null,close:{rawTripUuid:child,pluginSessionId:ETS2_B,eventSeq:'2',type:'job.configured'}});
+    const mapped=mapUploadProjection(pin,before);expect(mapped.status).toBe('projected');
+    if(mapped.status==='projected'){expect(mapped.provenance.close).toEqual(pin.facts.close);expect(mapped.summary.snapshot.evidence.endObserved).toBe(false);}
+    ok(await client.recordCompleteness(b.session,{tripUuid:child,kind:'sample-loss'}));
+    expect(await pages(client,pin)).toEqual(before);expect(ok(await client.pinUploadProjection(root)).facts.close).toEqual(pin.facts.close);
+    await client.close();
+  });
+  it('keeps observation closure time unknown after the next unrelated event and a later closed-trip revision', async () => {
+    const client=await start(),s=new Script(ETS2_A),root=await open(client,s),next=attachTripUuidFor(s.session,'2');
+    ok(await client.openAttachedTrip({pluginSessionId:s.session,nextEventSeq:'2',job:job(),profile:{...proof(s),scope:'e'.repeat(64)},
+      profileChange:true,sourceClockId:s.clockId,monotonicNs:'2000000000000',effects:[
+        {kind:'trip.close',tripUuid:root,outcome:'none',closeReason:'different-job',recordingCompleteness:'partial',endedUtcMs:2000},
+        {kind:'trip.open',tripUuid:next,game:'ets2',gameMode:mode,jobConfiguration:'this-event',recordingCompleteness:'partial',startedUtcMs:2000}]}));
+    const before=ok(await client.pinUploadProjection(root));expect(before.facts.close).toBeNull();
+    ok(await client.commitEvent({message:gameShaped(s.event(r.fined(),{utcMs:9000})),effects:[{kind:'event.attribute',tripUuid:next,attribution:'trip'}]}));
+    ok(await client.recordCompleteness(s.session,{tripUuid:root,kind:'sample-loss'}));
+    const pin=ok(await client.pinUploadProjection(root));expect(pin.revision).not.toBe(before.revision);expect(pin.facts.close).toBeNull();
+    const mapped=mapUploadProjection(pin,await pages(client,pin));expect(mapped.status).toBe('projected');
+    if(mapped.status==='projected')expect(mapped.summary.snapshot.end).toEqual({utcMs:null,basis:'unknown',eventSeq:null});
+    await client.close();
+  });
+  it('preserves a real restart close carrier from a session outside the closed member set', async () => {
+    const client=await start(),a=new Script(ETS2_A),root=await open(client,a,false),b=new Script(ETS2_B);
+    ok(await client.upsertSession({message:gameShaped(b.welcome())}));
+    ok(await client.commitEvent({message:gameShaped(b.event(r.jobConfigured())),effects:[
+      {kind:'trip.close',tripUuid:root,outcome:'none',closeReason:'restart',recordingCompleteness:'partial',endedUtcMs:2000}]}));
+    const pin=ok(await client.pinUploadProjection(root));
+    expect(pin.facts.close).toMatchObject({rawTripUuid:root,pluginSessionId:ETS2_B,eventSeq:'1',type:'job.configured'});
+    const mapped=mapUploadProjection(pin,await pages(client,pin));expect(mapped.status).toBe('projected');
+    if(mapped.status==='projected')expect(mapped.provenance.close).toEqual(pin.facts.close);
+    await client.close();
   });
   it('keeps proof-committed, closed and retired roots stable when matching observations arrive', async () => {
     const client=await start(),a=new Script(ETS2_A),root=await open(client,a,false);

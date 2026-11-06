@@ -1,3 +1,4 @@
+import {createHash} from 'node:crypto';
 import type Database from 'better-sqlite3';
 import type {Available, Money} from '../../../contracts/src/protocol-v1';
 import {fromAvailability, fromU64Key, toReal, toSafeNumber} from '../codec';
@@ -39,6 +40,14 @@ function totals(db: Database.Database, snap: LogicalSnapshot): UploadProjection[
     configurations: n(required(get(db,`SELECT count(DISTINCT e.id) AS total ${trailerSql}`,{...scope(snap),events:snap.events})).total),
     intervals: n(required(get(db,`SELECT count(*) AS total ${intervalSql}`,{...scope(snap),intervals:snap.intervals})).total)};
 }
+function configurationLinks(db: Database.Database, snap: LogicalSnapshot): string {
+  const hash = createHash('sha256');
+  // Stream every qualified association: distinct event counts do not detect a new owner of an existing event.
+  for (const row of db.prepare(`SELECT e.id,t.id AS trip_ref ${trailerSql} ORDER BY e.id,t.id`).iterate({...scope(snap),events:snap.events}) as Iterable<LogicalRow>) {
+    hash.update(`${String(row.id)}:${String(row.trip_ref)};`);
+  }
+  return hash.digest('hex');
+}
 function versions(row: LogicalRow): UploadVersions {
   return {nativeProtocol: {major: 1, minor: n(row.protocol_minor)}, sdkArchive: {available:true,value:String(row.sdk_archive)},
     telemetryApi: {available:true,value:{major:n(row.telemetry_api_major),minor:n(row.telemetry_api_minor)}},
@@ -63,9 +72,14 @@ function facts(db: Database.Database, snap: LogicalSnapshot): UploadFacts {
   const money = (key: string): Available<Money> => (record[key] ?? {available:false,reason:'not-observed'}) as Available<Money>;
   let close: QualifiedOccurrence | null = null;
   if (row.outcome !== 'open' && row.closed_by_session_ref !== null && row.closed_by_event_seq !== null) {
-    const carrier = get(db,'SELECT id FROM events WHERE plugin_session_id=? AND event_seq=? AND id<=?',row.closed_by_session_ref,row.closed_by_event_seq,snap.events);
+    // Closed raw rows cannot close again. Membership and carrier equality select the member of this revision,
+    // independently of a gameplay outcome or the mutable current logical head.
+    const closed = required(get(db,`SELECT t.id,t.trip_uuid ${MEMBERS} AND t.closed_by_session_ref=@session AND t.closed_by_event_seq=@seq ORDER BY t.id DESC LIMIT 1`,
+      {...scope(snap),session:row.closed_by_session_ref,seq:row.closed_by_event_seq}));
+    const observation = get(db,'SELECT 1 FROM observation_closes WHERE trip_ref=?',closed.id);
+    const carrier = observation ? undefined : get(db,'SELECT id FROM events WHERE plugin_session_id=? AND event_seq=? AND id<=?',row.closed_by_session_ref,row.closed_by_event_seq,snap.events);
     // A checkpoint/gap carrier is not an observed event. Its label must not become actual terminal time.
-    if (carrier) close = occurrence(db,carrier.id,String(outcomeRaw?.trip_uuid ?? root.trip_uuid),snap);
+    if (carrier) close = occurrence(db,carrier.id,String(closed.trip_uuid),snap);
   }
   const measure = <U extends string>(key: string, unit: U) => ({...av(row,key),unit});
   const unknown = {available:false,reason:'not-observed'} as const;
@@ -91,7 +105,7 @@ export function pinUploadProjection(conn: StorageConnection, tripUuid: string): 
     const state = current(db,tripUuid), snap = snapshot(db,state.root), counts = totals(db,snap);
     if (!counts.members) fail('DATABASE_CORRUPT');
     const info = required(get(db,'SELECT database_uuid,purpose FROM database_info WHERE id=1'));
-    const token = `u1:${String(info.database_uuid)}:${state.root}:${snap.revision}:${counts.members}:${counts.configurations}:${counts.intervals}:${snap.members}`;
+    const token = `u1:${String(info.database_uuid)}:${state.root}:${snap.revision}:${counts.members}:${counts.configurations}:${counts.intervals}:${snap.members}:${configurationLinks(db,snap)}`;
     const value: UploadProjection = {requestedTripUuid:tripUuid, rootTripUuid:state.root, readiness:state.root===tripUuid?state.readiness:'redirected',rootReadiness:state.readiness,
       snapshot:token,databaseUuid:String(info.database_uuid),purpose:info.purpose as UploadProjection['purpose'],revision:String(snap.revision),
       bounds:{members:String(snap.members),events:String(snap.events),gaps:String(snap.gaps),samples:String(snap.samples),intervals:String(snap.intervals),accountingHead:snap.head===null?null:String(snap.head)},
@@ -105,9 +119,9 @@ function readPinned(db: Database.Database, token: string): LogicalSnapshot {
   const p = uploadSnapshotParts(token);
   if (!p || required(get(db,'SELECT database_uuid FROM database_info WHERE id=1')).database_uuid !== p[1]) fail('INVALID_INPUT');
   const snap = snapshot(db,p[2],BigInt(p[3])), counts = totals(db,snap);
-  // References are immutable within their row bounds. A later attachment of older evidence or staging deletion
-  // invalidates this handle explicitly, rather than silently returning a changed or apparently complete set.
-  if (p[4] !== String(counts.members) || p[5] !== String(counts.configurations) || p[6] !== String(counts.intervals) || p[7] !== String(snap.members)) fail('INVALID_INPUT');
+  // Later attachment of older evidence (including count-stable links) or staging deletion invalidates the handle.
+  if (p[4] !== String(counts.members) || p[5] !== String(counts.configurations) || p[6] !== String(counts.intervals) || p[7] !== String(snap.members)
+    || p[8] !== configurationLinks(db,snap)) fail('INVALID_INPUT');
   return snap;
 }
 
@@ -119,8 +133,9 @@ export function recheckUploadProjection(db: Database.Database, pin: UploadProjec
   const trip = get(db,'SELECT id FROM trips WHERE trip_uuid=?',pin.requestedTripUuid);
   if (!trip) return false;
   const state = current(db,pin.requestedTripUuid);
+  const snap = snapshot(db,state.root);
   return state.root === pin.rootTripUuid && state.readiness === 'ready' && pin.rootReadiness === 'ready'
-    && String(snapshot(db,state.root).revision) === pin.revision;
+    && String(snap.revision) === pin.revision && configurationLinks(db,snap) === uploadSnapshotParts(pin.snapshot)![8];
 }
 
 export function readUploadProjectionPage(conn: StorageConnection, query: UploadProjectionPageQuery): UploadProjectionPage {

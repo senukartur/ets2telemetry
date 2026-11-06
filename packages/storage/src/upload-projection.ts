@@ -1,5 +1,5 @@
 // Private service/worker contract. No renderer DTOs or durable publication authority.
-import type {Available, GameMode, JobConfiguration, Measure, Money} from '../../contracts/src/protocol-v1';
+import {EVENT_TYPES, type Available, type GameMode, type JobConfiguration, type Measure, type Money} from '../../contracts/src/protocol-v1';
 import type {CloseReason, RecordingCompleteness, TripOutcome} from './api';
 
 export const UPLOAD_PAGE_KINDS = ['members', 'configurations', 'intervals'] as const;
@@ -63,7 +63,7 @@ const jobFields: [string, Check][] = [
   ['expectedIncome', moneyOf('u64')], ['deliveryDeadline', available(v => typeof v === 'string' && /^(0|[1-9][0-9]{0,19})$/.test(v), 'min')]
 ];
 const jobCheck = shape(Object.fromEntries(jobFields));
-const occurrence = shape({pluginSessionId: isUploadUuid, rawTripUuid: isUploadUuid, eventSeq: sequence, type: text, utcMs: nullable(count)});
+const occurrence = shape({pluginSessionId: isUploadUuid, rawTripUuid: isUploadUuid, eventSeq: sequence, type: one(...EVENT_TYPES), utcMs: nullable(count)});
 const mode = shape({mode: one('unknown','single-player','truckersmp'), method: one('none','module-scan','process-scan'), confidence: one('none','weak','strong'), ambiguous: bool});
 const facts = shape({game: one('ets2','ats'), pluginSessionId: isUploadUuid, outcome: one('open','none','delivered','cancelled'),
   closeReason: nullable(one('outcome','configuration-cleared','different-job','restart','discontinuity','gap')), recordingCompleteness: one('complete','partial','unknown'),
@@ -75,7 +75,8 @@ const readiness = one('ready','identity-pending');
 export const uploadSnapshotParts = (v: unknown): string[] | undefined => {
   if (typeof v !== 'string' || v.length > 256) return undefined;
   const p = v.split(':');
-  return p.length === 8 && p[0] === 'u1' && isUploadUuid(p[1]) && isUploadUuid(p[2]) && positive(p[3]) && p.slice(4).every(decimal) ? p : undefined;
+  return p.length === 9 && p[0] === 'u1' && isUploadUuid(p[1]) && isUploadUuid(p[2]) && positive(p[3]) && p.slice(4,8).every(decimal)
+    && /^[0-9a-f]{64}$/.test(p[8]) ? p : undefined;
 };
 export function isUploadPageQuery(v: unknown): v is UploadProjectionPageQuery {
   if (!record(v) || !Object.keys(v).every(k => ['snapshot','kind','cursor','limit'].includes(k)) || !uploadSnapshotParts(v.snapshot)
@@ -149,7 +150,11 @@ export function mapUploadProjection(pin: UploadProjection, pages: readonly Uploa
   const f = pin.facts, j = f.job, openingMember = members.find(m => m.rawTripUuid === pin.rootTripUuid && m.pluginSessionId === f.pluginSessionId);
   if (!openingMember || members.some(m => m.origin !== 'game' || m.game !== f.game)) return hold('source-ineligible');
   const owned = (e: QualifiedOccurrence | null) => !e || members.some(m => m.rawTripUuid === e.rawTripUuid && m.pluginSessionId === e.pluginSessionId);
-  if (![f.opening,f.outcomeOccurrence].every(owned) || configs.some(c => !owned(c.occurrence))
+  // Restart carriers may come from a new session while closing an earlier raw trip.
+  const closeOwned = !f.close || owned(f.close) || f.closeReason === 'restart' && members.some(m => m.rawTripUuid === f.close!.rawTripUuid);
+  if (![f.opening,f.outcomeOccurrence].every(owned) || !closeOwned || configs.some(c => !owned(c.occurrence))
+    || f.outcome === 'open' && f.close !== null
+    || f.close && f.outcomeOccurrence && f.close.rawTripUuid !== f.outcomeOccurrence.rawTripUuid
     || f.openedBy === 'event' && (!f.opening || f.opening.type !== 'job.configured' || f.opening.rawTripUuid !== pin.rootTripUuid || f.opening.pluginSessionId !== f.pluginSessionId)
     || f.openedBy === 'event' && f.checkpointNextEventSeq !== null
     || f.openedBy === 'checkpoint' && (f.opening !== null || !f.checkpointNextEventSeq)

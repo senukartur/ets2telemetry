@@ -52,7 +52,7 @@ const error = (value: StorageErrorCode) => ({ok: false, error: storageError(valu
 
 describe('StorageClient command flow', () => {
   it('strictly validates private upload requests and rejects malformed or mismatched answers', async () => {
-    const snapshot=`u1:${SUMMARY.databaseUuid}:${P1}:1:1:0:0:1`,query={snapshot,kind:'members' as const,limit:1};
+    const snapshot=`u1:${SUMMARY.databaseUuid}:${P1}:1:1:0:0:1:${'a'.repeat(64)}`,query={snapshot,kind:'members' as const,limit:1};
     expect(parseRequest({type:'storage.request',id:1,command:{name:'pinUploadProjection',tripUuid:P1}}).ok).toBe(true);
     for(const command of [{name:'pinUploadProjection',tripUuid:P1,renderer:true},{name:'pinUploadProjection',tripUuid:'bad'},
       {name:'readUploadProjectionPage',query:{...query,limit:101}},{name:'readUploadProjectionPage',query:{...query,cursor:`${snapshot}:intervals:1`}},

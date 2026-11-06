@@ -10,7 +10,7 @@ const absent = {available:false,reason:'not-observed'} as const;
 function fixture() {
   const occurrence = {pluginSessionId:ETS2_A,rawTripUuid:root,eventSeq:'1200',type:'job.configured',utcMs:1000};
   const pin: UploadProjection = {requestedTripUuid:root,rootTripUuid:root,readiness:'ready',rootReadiness:'ready',databaseUuid:db,purpose:'history',revision:'5',
-    snapshot:`u1:${db}:${root}:5:2:1:0:2`,totals:{members:2,configurations:1,intervals:0},bounds:{members:'2',events:'20',gaps:'0',samples:'0',intervals:'0',accountingHead:null},
+    snapshot:`u1:${db}:${root}:5:2:1:0:2:${'a'.repeat(64)}`,totals:{members:2,configurations:1,intervals:0},bounds:{members:'2',events:'20',gaps:'0',samples:'0',intervals:'0',accountingHead:null},
     facts:{game:'ets2',pluginSessionId:ETS2_A,outcome:'delivered',closeReason:'outcome',recordingCompleteness:'partial',openedBy:'event',checkpointNextEventSeq:null,checkpointUtcMs:null,
       opening:occurrence,outcomeOccurrence:{pluginSessionId:ETS2_B,rawTripUuid:child,eventSeq:'3',type:'job.delivered',utcMs:2000},close:null,
       gameMode:{mode:'unknown',method:'none',confidence:'none',ambiguous:false},job:job({expectedIncome:{available:true,value:{raw:'18446744073709551615',sdkType:'u64',currency:{status:'unknown'}}}}),
@@ -36,6 +36,27 @@ describe('private Dashboard summary projection', () => {
     expect(value.summary.source.pluginSessionId).toBe(ETS2_A);expect(value.summary.snapshot.start.eventSeq).toBe('1200');expect(value.summary.snapshot.end?.eventSeq).toBe(seq);
     expect(value.summary.snapshot.evidence.endObserved).toBe(true);
   });
+  it('keeps the qualified continued member on an unknown-outcome close', () => {
+    const f=fixture();Object.assign(f.pin.facts,{outcome:'none',closeReason:'different-job',outcomeOccurrence:null,
+      close:{pluginSessionId:ETS2_B,rawTripUuid:child,eventSeq:'4',type:'job.configured',utcMs:2000}});
+    const value=mapped(f);expect(value.provenance.close).toEqual(f.pin.facts.close);
+    expect(value.summary.snapshot.end).toEqual({utcMs:2000,basis:'event',eventSeq:'4'});expect(value.summary.snapshot.evidence.endObserved).toBe(false);
+  });
+  it.each(['unknown-trip','wrong-member-session','open-close','outcome-member','invalid-type'] as const)('holds malformed close provenance: %s', fault => {
+    const f=fixture();f.pin.facts.close={...f.pin.facts.outcomeOccurrence!};
+    if(fault==='unknown-trip')f.pin.facts.close.rawTripUuid=db;
+    if(fault==='wrong-member-session')Object.assign(f.pin.facts,{outcome:'none',closeReason:'different-job',outcomeOccurrence:null,
+      close:{...f.pin.facts.close,rawTripUuid:root}});
+    if(fault==='open-close')Object.assign(f.pin.facts,{outcome:'open',closeReason:null,outcomeOccurrence:null});
+    if(fault==='outcome-member')Object.assign(f.pin.facts.close,{rawTripUuid:root,pluginSessionId:ETS2_A});
+    if(fault==='invalid-type')f.pin.facts.close.type='unrecognized';
+    expect(mapUploadProjection(f.pin,f.pages)).toEqual({status:'hold',reason:'evidence-contradictory'});
+  });
+  it('preserves a restart carrier from a later session that closes an earlier raw member', () => {
+    const f=fixture();Object.assign(f.pin.facts,{outcome:'none',closeReason:'restart',outcomeOccurrence:null,
+      close:{pluginSessionId:db,rawTripUuid:root,eventSeq:'1',type:'job.configured',utcMs:2000}});
+    expect(mapped(f).provenance.close).toEqual(f.pin.facts.close);
+  });
   it('keeps a checkpoint start unobserved despite a later observed member and supports cancellation', () => {
     const f=fixture();Object.assign(f.pin.facts,{openedBy:'checkpoint',opening:null,checkpointNextEventSeq:'1200',checkpointUtcMs:900,outcome:'cancelled',penalty:{available:true,value:{raw:'0',sdkType:'s64',currency:{status:'unknown'}}}});
     f.pin.facts.outcomeOccurrence!.type='job.cancelled';const s=mapped(f).summary.snapshot;
@@ -50,7 +71,7 @@ describe('private Dashboard summary projection', () => {
     f.pages[0].snapshot=f.pin.snapshot.replace(':5:',':6:');expect(mapUploadProjection(f.pin,f.pages)).toEqual({status:'hold',reason:'evidence-incomplete'});
   });
   it('folds all historical trailers and intervals without exposing private rows or claiming a current chain', () => {
-    const f=fixture();f.pin.totals.configurations=11;f.pin.totals.intervals=51;f.pin.snapshot=`u1:${db}:${root}:5:2:11:51:2`;
+    const f=fixture();f.pin.totals.configurations=11;f.pin.totals.intervals=51;f.pin.snapshot=`u1:${db}:${root}:5:2:11:51:2:${'a'.repeat(64)}`;
     const config=f.pages[1].rows[0];f.pages[1].rows=Array.from({length:11},(_,i)=>({...config,id:String(i+1)}));f.pages[1].total=11;
     f.pages[2].rows=Array.from({length:51},(_,i)=>({id:String(i+1),rawTripUuid:root,pluginSessionId:ETS2_A,kind:'event-loss'}));f.pages[2].total=51;
     for(const page of f.pages)page.snapshot=f.pin.snapshot;
@@ -74,7 +95,8 @@ describe('private Dashboard summary projection', () => {
   it('strictly binds page kind, revision, database and position and rejects malformed success rows', () => {
     const f=fixture(),query={snapshot:f.pin.snapshot,kind:'members' as const,limit:1};
     expect(isUploadPageQuery(query)).toBe(true);
-    for(const bad of [{...query,limit:101},{...query,limit:0},{...query,cursor:`${query.snapshot}:intervals:1`},{...query,cursor:`${query.snapshot}:members:01`},{...query,extra:true}])expect(isUploadPageQuery(bad)).toBe(false);
+    for(const bad of [{...query,limit:101},{...query,limit:0},{...query,cursor:`${query.snapshot}:intervals:1`},{...query,cursor:`${query.snapshot}:members:01`},
+      {...query,snapshot:query.snapshot.slice(0,query.snapshot.lastIndexOf(':'))},{...query,snapshot:`${query.snapshot.slice(0,-1)}A`},{...query,extra:true}])expect(isUploadPageQuery(bad)).toBe(false);
     expect(isUploadProjectionPage(f.pages[0],query)).toBe(false);
     const page={...f.pages[0],rows:f.pages[0].rows.slice(0,1),nextCursor:`${query.snapshot}:members:1`};expect(isUploadProjectionPage(page,query)).toBe(true);
     expect(isUploadProjectionPage({...page,rows:[{...page.rows[0],extra:true}]},query)).toBe(false);
