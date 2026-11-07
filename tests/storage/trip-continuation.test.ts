@@ -285,7 +285,7 @@ describe('REG-003/005/008/012/014 durable logical trips', () => {
       if(variant==='confirmed'){expect(result.trip.recordingCompleteness).toBe('complete');expect(result.trip.observedDistanceM).toEqual({available:true,value:250});expect(result.trip.fuelUsedL).toEqual({available:true,value:0.5});}
       else expect(result.trip.recordingCompleteness).not.toBe('complete');storage.close();
     });
-  it.each(['never-matches','later-continuous-match','delayed-minute','delayed-minute-reopen','delayed-movement','delayed-hole','delayed-missing-predecessor','delayed-never-matches','incomplete-fuel','incomplete-position','unqualified-profile','absent-profile'] as const)('bounds saved-baseline search while awaiting complete stationary evidence: %s',async variant=>{
+  it.each(['never-matches','later-continuous-match','delayed-minute','delayed-minute-reopen','delayed-movement','delayed-hole','delayed-missing-predecessor','delayed-never-matches','delayed-lost-profile','incomplete-fuel','incomplete-position','incomplete-fuel-pause-match','incomplete-fuel-pause-moved','unqualified-profile','absent-profile'] as const)('bounds saved-baseline search while awaiting complete stationary evidence: %s',async variant=>{
     let storage=await ws.open();const a=new Script(ETS2_A),b=new Script(ETS2_B),delayed=variant.startsWith('delayed-');
     ok(storage.upsertSession({message:a.welcome()}));ok(storage.commitEvent({message:a.event(r.started())}));const uuid=open(storage,a);
     const append=(source:Script,trip:string,second:number,x:number,fuel:number,previous?:string,minute:number|null=500,speed=second===1003?20:0)=>{
@@ -294,11 +294,12 @@ describe('REG-003/005/008/012/014 durable logical trips', () => {
         gameTime:{minutes:minute===null?{available:false,reason:'not-observed'}:{available:true,value:minute},clockId:source.clockId},recording:{profile:proof(source),job:job(),truck:'same-truck',
           processInstanceId:source.welcome().source.processInstanceId,...(previous?{previous:{tripUuid:trip,sourceClockId:source.clockId,monotonicNs:previous}}:{})}});
       if(source===b && second===2001){
-        if(variant==='incomplete-fuel')row.fuel={available:false,reason:'not-observed'};
+        if(variant.startsWith('incomplete-fuel'))row.fuel={available:false,reason:'not-observed'};
         if(variant==='incomplete-position')row.position={available:false,reason:'not-observed'};
         if(variant==='absent-profile')delete row.recording!.profile;
         if(variant==='unqualified-profile')row.recording!.profile={...proof(b),afterMonotonicNs:'9999000000000'};
       }
+      if(source===b && second===2002 && variant==='delayed-lost-profile')delete row.recording!.profile;
       row.monotonicNs=String(BigInt(second)*1_000_000_000n);ok(storage.appendSamples(source.session,[row]));
     };
     append(a,uuid,1003,0,100);append(a,uuid,1004,13,99.5,'1003000000000');close(storage,a,uuid);
@@ -309,14 +310,22 @@ describe('REG-003/005/008/012/014 durable logical trips', () => {
     const prepare=vi.spyOn(Database.prototype,'prepare');
     const searches=()=>prepare.mock.calls.filter(([sql])=>sql.includes('ORDER BY p.id DESC LIMIT 65')).length;
     try{
-      if(variant.startsWith('incomplete-')||variant.endsWith('-profile')){
+      if(variant.startsWith('incomplete-')||variant==='absent-profile'||variant==='unqualified-profile'){
         append(b,next,2001,13.017,99.509);expect(searches()).toBe(0);
-        expect(ok(storage.journalTrip(uuid)).trip.recordingCompleteness).not.toBe('complete');
+        const first=ok(storage.journalTrip(uuid));expect(first.trip.recordingCompleteness).not.toBe('complete');expect(first.trip.fuelUsedL.available).toBe(false);
+        const pause=variant.includes('-pause-');
+        if(pause){
+          ok(storage.openAttachedTrip({pluginSessionId:b.session,nextEventSeq:'5',job:job(),effects:[],observeTripUuid:next,profile:proof(b),sourceClockId:b.clockId,monotonicNs:'2002000000000',
+            endpoint:{version:1,simulation:'paused',truck:'same-truck',odometerM:variant.endsWith('-moved')?1000350:1000250,fuelL:99.5,speedMps:0,gameClockId:b.clockId,gameMinutes:'500',position:{x:13,y:0,z:0}}}));
+          const after=ok(storage.journalTrip(uuid));
+          if(variant.endsWith('-match')){expect(after.trip.recordingCompleteness).toBe('complete');expect(after.trip.fuelUsedL).toEqual({available:true,value:0.5});}
+          else expect(after.trip.recordingCompleteness).not.toBe('complete');
+        }
         ok(storage.close());
         // Missing evidence keeps the durable resume decision pending; it must not latch a real loss.
         readOnly(ws.database,db=>{
           const coverage=JSON.parse(db.prepare('SELECT row_json FROM logical_projection_states WHERE id=(SELECT state_ref FROM logical_revisions WHERE logical_ref=(SELECT id FROM logical_trips WHERE trip_uuid=?) ORDER BY id DESC LIMIT 1)').pluck().get(uuid) as string)._coverage;
-          expect(coverage).toMatchObject({phase:'pending',losses:0,sampleResumePending:false});
+          expect(coverage).toMatchObject({phase:variant.endsWith('-match')?'resumed':'pending',losses:variant.endsWith('-moved')?16:0,sampleResumePending:false});
         });
         return;
       }
@@ -324,7 +333,14 @@ describe('REG-003/005/008/012/014 durable logical trips', () => {
         append(b,next,2001,13.017,99.509,undefined,null);expect(searches()).toBe(0);
         const second=variant==='delayed-hole'?2007:2002;
         append(b,next,second,13.017,99.509,variant==='delayed-missing-predecessor'?undefined:'2001000000000',null,variant==='delayed-movement'?1:0);expect(searches()).toBe(0);
-        if(variant==='delayed-minute-reopen'){ok(storage.close());storage=await ws.open();}
+        if(variant==='delayed-minute-reopen'||variant==='delayed-lost-profile'){
+          ok(storage.close());
+          if(variant==='delayed-lost-profile')readOnly(ws.database,db=>{
+            const coverage=JSON.parse(db.prepare('SELECT row_json FROM logical_projection_states WHERE id=(SELECT state_ref FROM logical_revisions WHERE logical_ref=(SELECT id FROM logical_trips WHERE trip_uuid=?) ORDER BY id DESC LIMIT 1)').pluck().get(uuid) as string)._coverage;
+            expect(coverage).toMatchObject({phase:'pending',losses:0,sampleResumePending:false});
+          });
+          storage=await ws.open();
+        }
         append(b,next,second+1,13.017,99.509,String(BigInt(second)*1_000_000_000n),variant==='delayed-never-matches'?501:500);
         expect(searches()).toBeLessThanOrEqual(1);prepare.mockClear();
         for(let n=2;n<=9;n++)append(b,next,second+n,13.017,99.509,String(BigInt(second+n-1)*1_000_000_000n));
