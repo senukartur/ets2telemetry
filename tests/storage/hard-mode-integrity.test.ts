@@ -323,6 +323,35 @@ describe('ET-026 integrity (REG-005/006/007)', () => {
       expect(ok(await client.committedThrough(ETS2_A))).toBe(mode==='same-session'?'2':'0');
     } finally {expect(await client.close()).toEqual({clean:true});}
   });
+  it.each(['attached-member','queued-boundary'] as const)('releases a failed opening replaced by a retention gap, preserving %s ownership',async mode=>{
+    const directory=process.env.ETS2TELEMETRY_STORAGE_TEST_BUNDLES;if(!directory)throw new Error('Run storage suite');
+    worker=new Worker(path.join(directory,'storage-worker.cjs'),{workerData:{kind:'storage'}});
+    const client=new StorageClient(workerHandle(worker),{closeGraceMs:TEST_CLOSE_GRACE_MS});let current=evidence();const recorder=new TripRecorderSink(client,{hardModeEvidence:()=>current});
+    try {
+      ok(await client.open({path:ws.database,purpose:'synthetic',backupsDirectory:ws.backups,appVersion:'test-gap-owner'}));const script=new Script(ETS2_A);
+      sinkOk(await recorder.openSession(script.welcome()));const first=script.event(r.jobConfigured()),commit=client.commitEvent.bind(client);
+      client.commitEvent=()=>{client.commitEvent=commit;return Promise.resolve({ok:false,error:{code:'IO_ERROR',retryable:true,message:'Injected failed opening'}});};
+      expect(await recorder.commit(first,{receivedUtcMs:Date.now()})).toMatchObject({ok:false,error:{code:'IO_ERROR'}});
+      sinkOk(await recorder.openSession(script.welcome()));const checkpoint=script.checkpoint(job());
+      // Event 1 was never acknowledged and has expired: the producer retains its gap, with no retained event bytes.
+      checkpoint.data.status.delivery.ackedThroughEventSeq='0';sinkOk(recorder.observe(checkpoint,{receivedUtcMs:Date.now()}));
+      expect(recorder.attach.due()).toBe(false);
+      // No job.configured replay can recover the lost opening.
+      const gap=script.gapRange(1n,1n,{retentionExpired:'1'}),gapCapture=recorder.capture(gap);
+      const configured=mode==='queued-boundary'?script.event(r.jobConfigured()):undefined,capture=configured?recorder.capture(configured):undefined;
+      if(configured) {
+        current=evidence(HARD_MODE_CONFIG.replace('g_fatigue "1"','g_fatigue "0"'));recorder.observeHardMode('ets2',current);recorder.observeHardMode('ets2',current);
+      }
+      sinkOk(await recorder.commit(gap,{receivedUtcMs:Date.now(),hardModeCapture:gapCapture}));expect(ok(await client.committedThrough(ETS2_A))).toBe('1');
+      expect(recorder.attach.due()).toBe(true);sinkOk(await recorder.attach.open({receivedUtcMs:Date.now()}));
+      if(configured)sinkOk(await recorder.commit(configured,{receivedUtcMs:Date.now(),hardModeCapture:capture}));
+      current=evidence();recorder.observeHardMode('ets2',current);await recorder.flushHardMode();
+      sinkOk(await recorder.commit(script.event(delivery()),{receivedUtcMs:Date.now()}));
+      const trips=ok(await client.listTrips()).trips;expect(trips).toHaveLength(1);expect(trips[0]).toMatchObject({openedBy:'checkpoint',pluginSessionId:ETS2_A});
+      expect(ok(await client.journalTrips()).trips[0]).toMatchObject({outcome:'delivered',isHardMode:mode==='attached-member',hardModeDetails:{passingChecks:1,failingChecks:configured?1:0,unknownChecks:0}});
+      expect(ok(await client.committedThrough(ETS2_A))).toBe(configured?'3':'2');
+    } finally {expect(await client.close()).toEqual({clean:true});}
+  });
   it('owns scheduled checks from opening intake while the preceding session operation is held', async () => {
     const directory=process.env.ETS2TELEMETRY_STORAGE_TEST_BUNDLES;if(!directory)throw new Error('Run storage suite');
     worker=new Worker(path.join(directory,'storage-worker.cjs'),{workerData:{kind:'storage'}});

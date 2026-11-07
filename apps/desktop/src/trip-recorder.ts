@@ -184,9 +184,14 @@ export class TripRecorderSink implements DurableSink {
     this.prepareCheckCapture(message, captured, true);
     this.pendingCaptures.add(captured); return captured;
   }
+  private retireUnownedCheckOwner(): void {
+    const owner = this.checkOwner;
+    // Replacing the retry carrier can retire an older opening while a newer queued boundary still owns its interval.
+    if (owner && !this.pendingCaptures.has(owner) && ![...this.capturedEvidence.values()].includes(owner)) this.checkOwner = undefined;
+  }
   releaseCapture(captured: HardModeCapture): void {
     this.pendingCaptures.delete(captured);
-    if (this.checkOwner === captured && ![...this.capturedEvidence.values()].includes(captured)) this.checkOwner = undefined;
+    this.retireUnownedCheckOwner();
   }
   private pendingObservation: PendingHardMode | undefined;
   private observing = false;
@@ -358,6 +363,7 @@ export class TripRecorderSink implements DurableSink {
     const key = this.evidenceKey(message);
     const capture = this.capturedEvidence.get(key) ?? context.hardModeCapture ?? this.capture(message);
     if (capture) {this.capturedEvidence.clear(); this.capturedEvidence.set(key, capture); this.pendingCaptures.add(capture);}
+    this.retireUnownedCheckOwner();
     if (capture) this.prepareCheckCapture(message, capture, false);
     try {return await this.commitCaptured(message, context, key, capture);} finally {if (capture) this.releaseCapture(capture);}
   }
