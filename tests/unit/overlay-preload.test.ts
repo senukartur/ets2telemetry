@@ -224,3 +224,37 @@ it('delivers a valid break urgency unchanged and strips an invalid, misplaced or
   expect(expired.sections).toEqual([{id: 'speed', state: 'unavailable'}, {id: 'mandatory-break', state: 'unavailable'}]);
   stop();
 });
+
+// ET-070 (D4): the preload validates the Hard Mode indicator again. A malformed one becomes not active, never active, without
+// dropping the update, the credit or the channel; a missing one stays missing (it renders as not active). The quiet expiry
+// turns an active indicator into not active and keeps a loss.
+it('delivers a valid Hard Mode indicator unchanged and turns a malformed one into not active without dropping the update or the channel', async () => {
+  const active: OverlayPresentation = {...projected, layout: 'strip', hardMode: {state: 'active'}};
+  const receive = vi.fn(), stop = bridge.subscribeOverlay(receive), port = attach();
+  port.deliver(active, 1); expect(receive.mock.lastCall?.[0]).toEqual(active);
+  const as = (hardMode: unknown): OverlayPresentation => ({...active, hardMode: hardMode as OverlayPresentation['hardMode']});
+  const cases: [OverlayPresentation, OverlayPresentation][] = [
+    [as({state: 'inactive', passed: 11}), as({state: 'inactive', passed: 11})],
+    [as({state: 'lost'}), as({state: 'lost'})],
+    [as({state: 'active', passed: 12}), as({state: 'inactive'})],
+    [as({state: 'ACTIVE'}), as({state: 'inactive'})],
+    [as('active'), as({state: 'inactive'})],
+    [as(null), as({state: 'inactive'})],
+    [as({state: 'inactive', passed: 12}), as({state: 'inactive'})],
+    [as({state: 'inactive', passed: 2.5}), as({state: 'inactive'})],
+    [as(Object.defineProperty({}, 'state', {get: () => 'active', enumerable: true})), as({state: 'inactive'})],
+    [projected, projected]
+  ];
+  for (const [index, [input, output]] of cases.entries()) {
+    port.deliver(input, index + 2);
+    expect(receive.mock.lastCall?.[0], String(index)).toStrictEqual(output);
+    expect(port.postMessage).toHaveBeenLastCalledWith({type: 'consumed', delivery: index + 2});
+  }
+  expect('hardMode' in (receive.mock.lastCall?.[0] as object)).toBe(false);
+  expect(port.closed).toBe(false); expect(subscriptions()).toBe(1);
+  port.deliver({...active, paused: false}, 20); await vi.advanceTimersByTimeAsync(500);
+  expect(receive.mock.lastCall?.[0]).toMatchObject({freshness: 'stale', hardMode: {state: 'inactive'}});
+  port.deliver({...active, paused: false, hardMode: {state: 'lost'}}, 21); await vi.advanceTimersByTimeAsync(500);
+  expect(receive.mock.lastCall?.[0]).toMatchObject({freshness: 'stale', hardMode: {state: 'lost'}});
+  stop();
+});

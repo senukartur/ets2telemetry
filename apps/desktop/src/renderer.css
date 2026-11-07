@@ -54,6 +54,17 @@ html:has(.overlay-body) { background: transparent; }
 .overlay [data-urgency="soon"] .overlay-value { color: var(--yu-ov-break-soon); }
 .overlay [data-urgency="due"] .overlay-value { color: var(--yu-ov-break-due); text-decoration: underline; }
 
+/* Hard Mode indicator (ET-070, owner decisions D1-D4): the fixed last element of every layout, green when active, amber
+   when not active (also unknown) and red when lost. Its non-colour cues are a check, a count or the missing check, and a
+   cross with the strip and HUD label struck through; the cue sits in a fixed 14 px slot that stays when empty, so a state
+   change never resizes the indicator or moves a section. Root dimming applies through its value and icon classes. */
+.overlay-hard-mode[data-state="active"] { --yu-ov-hm: var(--yu-ov-hm-active); }
+.overlay-hard-mode[data-state="inactive"] { --yu-ov-hm: var(--yu-ov-hm-inactive); }
+.overlay-hard-mode[data-state="lost"] { --yu-ov-hm: var(--yu-ov-hm-lost); }
+.overlay-hard-mode .overlay-icon, .overlay-hard-mode .overlay-value, .overlay-hard-mode .overlay-hm-text { color: var(--yu-ov-hm); }
+.overlay-hm-cue { display: inline-flex; flex: none; align-self: center; align-items: center; justify-content: center; width: 14px; height: 14px; }
+.overlay-hm-struck { text-decoration: line-through; }
+
 /* Card, cluster panel and HUD (ET-012d): fixed-height rows, one per enabled section, in a window main sized for them
    (overlay-rows.ts, whose constants these rules must match). Each row centres its content and clips what does not fit,
    so a value never makes a row taller; a longer value ends in an ellipsis. Header and tag rows have a fixed height too,

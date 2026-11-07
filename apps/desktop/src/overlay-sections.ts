@@ -1,6 +1,7 @@
 import {DEFAULT_OVERLAY_OPACITY} from './overlay-opacity';
 import type {OverlayLayout, OverlayPresentation, OverlaySectionId, OverlaySections, OverlaySettings} from '../../../packages/contracts/src';
 import {DEFAULT_OVERLAY_PLACEMENTS} from './overlay-placement';
+import {staleOverlayHardMode} from './overlay-hard-mode';
 
 // Overlay layouts, sections, groups and presets (ET-012a). Pure data and validation, without Node built-ins, so main,
 // both preloads, both renderers and plain Node tests share one definition.
@@ -145,8 +146,10 @@ export function overlayUrgency(presentation: OverlayPresentation): OverlayPresen
 /**
  * The overlay preload's view after its quiet deadline: stale, not paused, and every section it was showing becomes an
  * unavailable placeholder. The layout and the displayed units stay, so the overlay neither jumps nor shows old values.
+ * ET-070: the Hard Mode indicator is no longer known to be active, so it becomes not active without a count; a loss stays.
  */
 export function staleOverlay(presentation: OverlayPresentation): OverlayPresentation {
+  const hardMode = staleOverlayHardMode(presentation.hardMode);
   return {...presentation, status: 'stale', freshness: 'stale', paused: false, speed: '—', fuel: '—',
-    sections: presentation.sections.map(section => ({id: section.id, state: 'unavailable'}))};
+    sections: presentation.sections.map(section => ({id: section.id, state: 'unavailable'})), ...(hardMode ? {hardMode} : {})};
 }

@@ -241,14 +241,21 @@ export async function waitForOverlayBreakCue(page, expected) {
 // off inside its own box (an ellipsis in the card or cluster rows).
 export function overlayOverflow() {
   const root = globalThis.document.querySelector('[data-testid="overlay-root"]');
-  if (!root) return {layout: null, root: null, sections: [], outside: [], truncated: []};
-  const bounds = root.getBoundingClientRect(), sections = [], outside = [], truncated = [];
-  for (const element of globalThis.document.querySelectorAll('[data-testid^="overlay-section-"]')) {
-    const id = element.getAttribute('data-testid').slice('overlay-section-'.length), box = element.getBoundingClientRect();
-    sections.push(id);
+  if (!root) return {layout: null, root: null, sections: [], fixed: [], outside: [], truncated: []};
+  const bounds = root.getBoundingClientRect(), sections = [], fixed = [], outside = [], truncated = [];
+  const check = (id, element) => {
+    const box = element.getBoundingClientRect();
     if (box.left < bounds.left || box.top < bounds.top || box.right > bounds.right || box.bottom > bounds.bottom) outside.push(id);
     if ([...element.querySelectorAll('.overlay-value')].some(value => value.scrollWidth > value.clientWidth)) truncated.push(id);
+  };
+  for (const element of globalThis.document.querySelectorAll('[data-testid^="overlay-section-"]')) {
+    const id = element.getAttribute('data-testid').slice('overlay-section-'.length);
+    sections.push(id); check(id, element);
   }
+  // ET-070: the fixed Hard Mode indicator is checked like a section under the name 'hard-mode'; a missing or duplicated
+  // indicator is reported as outside, because every layout must show exactly one.
+  const indicators = [...globalThis.document.querySelectorAll('[data-testid="overlay-hard-mode"]')];
+  if (indicators.length === 1) {fixed.push('hard-mode'); check('hard-mode', indicators[0]);} else outside.push('hard-mode');
   let alignment;
   const content = root.querySelector?.('[data-testid="overlay-content"]');
   if (content) {
@@ -258,7 +265,8 @@ export function overlayOverflow() {
     alignment = {fraction, capacityHeight: bounds.height, paintedHeight: painted.height, top: painted.top - bounds.top, expectedTop: expectedTop - bounds.top, aligned};
     if (!aligned) outside.push('content-anchor');
   }
-  return {...(alignment ? {alignment} : {}), layout: root.getAttribute('data-layout'), root: {width: Math.round(bounds.width), height: Math.round(bounds.height)}, sections, outside, truncated};
+  return {...(alignment ? {alignment} : {}), layout: root.getAttribute('data-layout'), root: {width: Math.round(bounds.width), height: Math.round(bounds.height)}, sections, fixed,
+    outside, truncated};
 }
 
 // ET-045d stable numbers. Self-contained browser callback for the strip: it writes each step's texts into the existing text

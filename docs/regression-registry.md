@@ -153,6 +153,7 @@ Columns:
 | `tests/unit/overlay-bounds.test.ts` | Node unit (Vitest) | REG-016 | R, F | ET-045c | PR (tests job, `npm test`) | regression |
 | `tests/unit/overlay-edit.test.ts` | Node unit (Vitest) | REG-016 | R | ET-012b (#74) | PR (tests job, `npm test`) | — |
 | `tests/unit/overlay-geometry.test.ts` | Node unit (Vitest) | REG-016 | R, F | ET-012a (#70) | PR (tests job, `npm test`) | — |
+| `tests/unit/overlay-hard-mode.test.ts` | Node unit (Vitest) | REG-009, REG-016 | R, F | ET-070 | PR (tests job, `npm test`) | security, regression |
 | `tests/unit/overlay-placement.test.ts` | Node unit (Vitest) | REG-016 | T, V (et-012b) | ET-012b (#74) | PR (tests job, `npm test`) | — |
 | `tests/unit/overlay-preload.test.ts` | Node unit (Vitest) | REG-016 | R | ET-008 (#21) | PR (tests job, `npm test`) | security, regression |
 | `tests/unit/overlay-rendering.test.ts` | Node unit (Vitest) | REG-009, REG-010 | R, F | ET-056 (existing rendering entry extended) | PR (tests job, `npm test`) | localized explicit game choice |
