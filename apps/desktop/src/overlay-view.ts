@@ -1,6 +1,7 @@
 import type {AppLanguage, OverlayHardModeState, OverlayLayout, OverlayPresentation, OverlaySectionId, OverlayUrgency} from '../../../packages/contracts/src';
 import {OVERLAY_HARD_MODE_RULES, sanitizeOverlayHardMode} from './overlay-hard-mode';
 import {DEFAULT_OVERLAY_OPACITY, isOverlayOpacity} from './overlay-opacity';
+import {CRUISE_CONTROL_OFF} from '../../../packages/telemetry-core/src/cruise-control';
 import {CARD_ROW_HEIGHT_CSS} from './overlay-rows';
 import {localizedMeasurement} from './screens/app-copy';
 import {CLUSTER_GAUGE_SECTIONS, OVERLAY_GROUPS, type OverlayGroupId} from './overlay-sections';
@@ -19,7 +20,10 @@ export interface OverlayItem {
   label: string;
   /** Short label for the strip, cluster panel and HUD. */
   short: string;
-  /** The formatted text, or a dash while unavailable. Speed, fuel and RPM hold the number only; `unit` holds the unit. */
+  /**
+   * The formatted text, or a dash while unavailable. Speed, fuel, RPM and a set cruise control speed hold the number only;
+   * `unit` holds the unit.
+   */
   value: string;
   unit?: string;
   /**
@@ -111,7 +115,7 @@ const reserveFor = (id: OverlaySectionId, language: AppLanguage): string | undef
  * section either; the 90 px cap, row heights and window sizes stay the same. The ETS2 crawler labels "C1" and "C2"
  * (B5 as amended on October 26, 2026) are two more lines.
  */
-const VALUE_RESERVES: Partial<Record<OverlaySectionId, string>> = {speed: '000', gear: 'R0\n0H\n0L\nLH\nLL\nC1\nC2', rpm: '0000'};
+const VALUE_RESERVES: Partial<Record<OverlaySectionId, string>> = {speed: '000', gear: 'R0\n0H\n0L\nLH\nLL\nC1\nC2', rpm: '0000', 'cruise-control': '000'};
 /** telemetry-core's formatRpm always ends in this suffix; only that exact form is split into number and unit. */
 const RPM_SUFFIX = ' rpm';
 /** Old projections retain their layout anchor; malformed provided values never become CSS/native coordinates. */
@@ -162,6 +166,15 @@ export function overlayView(presentation: OverlayPresentation = OVERLAY_PLACEHOL
       const ring = section.ring !== undefined ? {ring: section.ring} : {};
       return section.text.endsWith(RPM_SUFFIX) ? {...base, value: section.text.slice(0, -RPM_SUFFIX.length), unit: translateUnit('rpm', language), ...ring}
         : {...base, value: section.text, ...ring};
+    }
+    // ET-071: a set speed splits into number and unit like speed; `off` is the localized word and a dash has no unit, and
+    // the strip's fixed slot (STRIP_FIXED_WIDTH_SECTIONS) keeps all three the same width.
+    if (section.id === 'cruise-control') {
+      if (!available) return {...base, value: DASH};
+      if (section.text === CRUISE_CONTROL_OFF) return {...base, value: strings.overlayCruiseOff};
+      const suffix = ` ${presentation.speedUnit}`;
+      return section.text.endsWith(suffix) ? {...base, value: section.text.slice(0, -suffix.length), unit: translateUnit(presentation.speedUnit, language)}
+        : {...base, value: section.text};
     }
     let value = available ? section.text : DASH;
     if (available) {

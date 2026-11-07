@@ -7,6 +7,10 @@
 // are the minor-2 run's rows. Nothing is added to
 // samples, trips, events, gaps or attributions for the break, and a break that changes does not change a sample, a trip,
 // a completeness interval or an ACK. The existing recording, journal and export suites are unchanged by this proof.
+// ET-071 applies the same proof to the cruise control set speed of minor 3: a source whose cruise control changes in every
+// frame (off, set speeds, the bound, out of range, not observed, invalid) records exactly the rows of the same source at
+// minor 2, which carries no cruise control. Since ET-071 the simulator serves minor 3 by default, so the minor-2 runs of
+// the ET-052 cases name `highestMinor` 2.
 import {readFileSync} from 'node:fs';
 import path from 'node:path';
 import {afterEach, beforeEach, describe, expect, it} from 'vitest';
@@ -27,13 +31,28 @@ const expected = JSON.parse(readFileSync(path.join(RECORDING_FIXTURES, 'one-seco
 /** Break readings by frame: soon, an hour apart from due, zero, overdue and the s32 minimum, repeating, so every urgency occurs. */
 const BREAKS = [95, 94, 61, 60, 59, 15, 1, 0, -1, -30, 120, 119, 121, -2147483648, 2147483647];
 
-/** The scenario with a different break in every frame; `highestMinor` models a plugin from before ET-052 (minor 1). */
-function withBreaks(id: string, highestMinor?: 1): Json & {seed: string} {
+/** Cruise control readings by frame in m/s: off, set speeds, the bound, out of range (invalid), not observed and invalid. */
+const CRUISE = [0, 25, 22.5, 0, 1000, 0.5, -1, 1000.5, null, 'invalid', 30.5, 0];
+
+/** The scenario with a different break in every frame; `highestMinor` models an older plugin (minor 1 or 2). */
+function withBreaks(id: string, highestMinor?: 1 | 2): Json & {seed: string} {
   const scenario = base();
   let index = 0;
   for (const step of scenario.steps) {
     if (step.action !== 'frame') continue;
     step.channels = {...(step.channels as Json | undefined), 'mandatory.break': BREAKS[index++ % BREAKS.length]};
+  }
+  scenario.id = id;
+  if (highestMinor !== undefined) scenario.source = {...scenario.source, highestMinor};
+  return scenario;
+}
+/** The scenario with a different cruise control reading in every frame; `highestMinor` 2 models a plugin from before ET-071. */
+function withCruise(id: string, highestMinor?: 2): Json & {seed: string} {
+  const scenario = base();
+  let index = 0;
+  for (const step of scenario.steps) {
+    if (step.action !== 'frame') continue;
+    step.channels = {...(step.channels as Json | undefined), 'cruise_control': CRUISE[index++ % CRUISE.length]};
   }
   scenario.id = id;
   if (highestMinor !== undefined) scenario.source = {...scenario.source, highestMinor};
@@ -74,7 +93,7 @@ async function record(scenario: Json & {seed: string}, name: string) {
 
 describe('ET-052 D4: the next mandatory break is never recorded', () => {
   it('records a changing minor-2 break into exactly the rows a minor-1 plugin gives, and stores protocol minor 2', async () => {
-    const withBreak = await record(withBreaks('break-minor-2'), 'minor2');
+    const withBreak = await record(withBreaks('break-minor-2', 2), 'minor2');
     const older = await record(withBreaks('break-minor-1', 1), 'minor1');
     // The break reached the service on one connection and not on the other (the stored minor is the envelope minor).
     expect(minors(withBreak.database.path)).toEqual({sessions: [2], events: [2]});
@@ -108,8 +127,30 @@ describe('ET-052 D4: the next mandatory break is never recorded', () => {
     const written = withBreak.run.acks.map(ack => ({pluginSessionId: withBreak.session, throughEventSeq: ack.through.toString()}));
     const violations = checkHistoryInvariants(readHistoryRows(withBreak.database.path), written);
     expect(violations, formatViolations(violations)).toEqual([]);
-    // Both runs are minor 2; one lists a different break in every frame, the other never calls the channel back (not-observed).
+    // Both runs are minor 3; one lists a different break in every frame, the other never calls the channel back (not-observed).
     // Their databases hold the same rows, so the break's value, changes and absence store nothing.
     expect(dump(withBreak.database.path)).toEqual(dump(absent.database.path));
+  }, 120_000);
+});
+
+describe('ET-071: the cruise control set speed is never recorded', () => {
+  it('records a changing minor-3 cruise control into exactly the rows a minor-2 plugin gives, and stores protocol minor 3', async () => {
+    const withReading = await record(withCruise('cruise-minor-3'), 'minor3');
+    const older = await record(withCruise('cruise-minor-2', 2), 'minor2');
+    expect(minors(withReading.database.path)).toEqual({sessions: [3], events: [3]});
+    expect(minors(older.database.path)).toEqual({sessions: [2], events: [2]});
+    const left = dump(withReading.database.path), right = dump(older.database.path);
+    expect(Object.keys(left)).toEqual(Object.keys(right));
+    for (const table of Object.keys(left)) expect(left[table], table).toEqual(right[table]);
+    expect(left.samples.length).toBeGreaterThan(0);
+    expect(left.events.length).toBeGreaterThan(0);
+    expect(left.trips.length).toBeGreaterThan(0);
+    expect(withReading.run.acks.map(a => [a.connection, a.through, a.coverage])).toEqual(older.run.acks.map(a => [a.connection, a.through, a.coverage]));
+    // No stored value names cruise control: no column, no JSON field.
+    const text = JSON.stringify(left, (_key, v: unknown) => typeof v === 'bigint' ? v.toString() : v);
+    expect(text).not.toMatch(/[Cc]ruise/);
+    // The hand-written one-second sample rows are this run's rows too.
+    const reader = {database: withReading.database.path, open: () => ws.open({path: withReading.database.path, backupsDirectory: withReading.database.backups})};
+    expect(await storedSamples(reader, base().seed, withReading.session)).toEqual(expected.samples);
   }, 120_000);
 });

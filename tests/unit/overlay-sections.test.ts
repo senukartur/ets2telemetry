@@ -5,21 +5,24 @@ import {
   isGaugeFraction, overlayGauges, overlayUrgency, parseOverlaySections, sameSections, staleOverlay
 } from '../../apps/desktop/src/overlay-sections';
 
-// Hand-written expectations (ET-012a plan, design step 2). ET-052 appends the fifteenth section last.
-const IDS = ['speed', 'gear', 'rpm', 'fuel', 'range', 'sdk-consumption', 'cargo', 'origin', 'destination', 'distance-driven', 'distance-remaining',
+// Hand-written expectations (ET-012a plan, design step 2). ET-052 appends the fifteenth section last; ET-071 inserts the
+// sixteenth, cruise control, at the end of the driving group, so the canonical order stays the group order.
+const IDS = ['speed', 'gear', 'rpm', 'cruise-control', 'fuel', 'range', 'sdk-consumption', 'cargo', 'origin', 'destination', 'distance-driven', 'distance-remaining',
   'deadline', 'expected-income', 'game-time', 'mandatory-break'];
 const only = (...enabled: string[]) => Object.fromEntries(IDS.map(id => [id, enabled.includes(id)]));
 const ALL_ON = only(...IDS);
 const without = (record: Record<string, boolean>, key: string) => Object.fromEntries(Object.entries(record).filter(([name]) => name !== key));
 
-it('lists fifteen sections in canonical order and groups each exactly once', () => {
+it('lists sixteen sections in canonical order and groups each exactly once, in that same order', () => {
   expect(OVERLAY_SECTION_IDS).toEqual(IDS);
   expect(OVERLAY_GROUPS.map(group => [group.id, group.sections])).toEqual([
-    ['driving', ['speed', 'gear', 'rpm']],
+    ['driving', ['speed', 'gear', 'rpm', 'cruise-control']],
     ['fuel', ['fuel', 'range', 'sdk-consumption']],
     ['job', ['cargo', 'origin', 'destination', 'distance-driven', 'distance-remaining', 'deadline', 'expected-income']],
     ['time', ['game-time', 'mandatory-break']]
   ]);
+  // The strip packs its rows in canonical order and renders them in group order, so the two must be the same (ET-071).
+  expect(OVERLAY_GROUPS.flatMap(group => group.sections)).toEqual(OVERLAY_SECTION_IDS);
 });
 
 it('shows speed, gear and RPM in the cluster gauge and nothing else (ET-012d decision K7)', () => {
@@ -30,24 +33,27 @@ it('defaults to the strip layout with every section and the default placements, 
   // ET-012b added the default placements: the ET-012a anchors at scale 1.
   expect(DEFAULT_OVERLAY_SETTINGS).toEqual({enabled: true, backgroundOpacity: 80, layout: 'strip', sections: ALL_ON, placements: {strip: {x: 0.5, y: 0, scale: 1}, card: {x: 1, y: 0, scale: 1},
     cluster: {x: 0, y: 1, scale: 1}, hud: {x: 0, y: 0, scale: 1}}});
-  // ET-052 (MB11): only `everything` includes the break; job-focus and driving-only are unchanged.
+  // ET-052 (MB11): only `everything` includes the break. ET-071: `everything` and `driving-only` include cruise control,
+  // job-focus does not.
   expect(OVERLAY_PRESETS).toEqual({
     'everything': ALL_ON,
     'job-focus': only('speed', 'gear', 'fuel', 'cargo', 'destination', 'distance-remaining', 'deadline'),
-    'driving-only': only('speed', 'gear', 'rpm', 'fuel', 'range')
+    'driving-only': only('speed', 'gear', 'rpm', 'cruise-control', 'fuel', 'range')
   });
   expect(Object.isFrozen(OVERLAY_PRESETS['job-focus'])).toBe(true);
-  expect(enabledSectionCount(OVERLAY_PRESETS['driving-only'])).toBe(5);
-  expect(enabledSectionCount(OVERLAY_PRESETS['everything'])).toBe(15);
+  expect(enabledSectionCount(OVERLAY_PRESETS['driving-only'])).toBe(6);
+  expect(enabledSectionCount(OVERLAY_PRESETS['everything'])).toBe(16);
   expect(OVERLAY_PRESETS['job-focus']['mandatory-break']).toBe(false);
   expect(OVERLAY_PRESETS['driving-only']['mandatory-break']).toBe(false);
+  expect(OVERLAY_PRESETS['job-focus']['cruise-control']).toBe(false);
+  expect(OVERLAY_PRESETS['driving-only']['cruise-control']).toBe(true);
   expect(sameSections(OVERLAY_PRESETS['everything'], {...ALL_ON} as never)).toBe(true);
   expect(sameSections(OVERLAY_PRESETS['everything'], OVERLAY_PRESETS['job-focus'])).toBe(false);
 });
 
 it('marks the sections that need protocol v1 or trip tracking', () => {
   expect(OVERLAY_SECTION_REQUIREMENTS).toEqual({'origin': 'protocol-v1', 'distance-remaining': 'protocol-v1', 'deadline': 'protocol-v1',
-    'mandatory-break': 'protocol-v1', 'distance-driven': 'trip-tracking', 'cargo': 'ids-until-v1', 'destination': 'ids-until-v1'});
+    'mandatory-break': 'protocol-v1', 'cruise-control': 'protocol-v1', 'distance-driven': 'trip-tracking', 'cargo': 'ids-until-v1', 'destination': 'ids-until-v1'});
 });
 
 it('accepts exactly the four layout ids', () => {
@@ -65,7 +71,8 @@ it('parses a complete section record into a fresh frozen copy', () => {
 it.each([
   ['an extra key', {...ALL_ON, theme: true}],
   ['a missing key', without(ALL_ON, 'rpm')],
-  ['the fourteen keys of before ET-052', without(ALL_ON, 'mandatory-break')],
+  ['the fourteen keys of before ET-052', without(without(ALL_ON, 'mandatory-break'), 'cruise-control')],
+  ['the fifteen keys of before ET-071', without(ALL_ON, 'cruise-control')],
   ['a non-boolean value', {...ALL_ON, rpm: 1}],
   ['a string boolean', {...ALL_ON, gear: 'true'}],
   ['every section disabled', only()],

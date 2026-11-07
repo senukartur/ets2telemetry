@@ -221,8 +221,8 @@ async function controlledRecoverySource(timeline: string[]) {
   const frame = () => {at += 100; adapter.frame(false, {}, at); producer.drain(clock.sourceNs(at)); write(producer.publication(clock.sourceNs(at)));};
   const server = net.createServer(incoming => {
     socket = incoming; producer.open();
-    // ET-050b, ET-052: the ingestion offers minor 2, so this producer selects it and the ACKs carry {1,2}.
-    const decoder = new FrameDecoder('client', {maxMinor: 2}); let record: typeof connections[number] | undefined;
+    // ET-050b, ET-052, ET-071: the ingestion offers minor 3, so this producer selects it and the ACKs carry {1,3}.
+    const decoder = new FrameDecoder('client', {maxMinor: 3}); let record: typeof connections[number] | undefined;
     incoming.on('error', error => {failures.push(String((error as NodeJS.ErrnoException).code));});
     incoming.on('data', bytes => {
       try {

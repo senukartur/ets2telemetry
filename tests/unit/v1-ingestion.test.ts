@@ -29,8 +29,8 @@ const CAPTURE_CLOCK = '30000000-0000-4000-8000-000000000001';
 
 class FakeSocket extends EventEmitter implements TelemetrySocket {
   readonly sent: ClientMessage[] = []; destroyed = false; target?: GameTarget; authority?: SourceIdentity; completion?: Promise<void>;
-  // Any minor decodes here; the ET-050b and ET-052 cases check which minor each message carries.
-  write(bytes: Uint8Array) { this.sent.push(decodePayload(bytes.subarray(4), 'client', {maxMinor: 2}) as ClientMessage); }
+  // Any minor decodes here; the ET-050b, ET-052 and ET-071 cases check which minor each message carries.
+  write(bytes: Uint8Array) { this.sent.push(decodePayload(bytes.subarray(4), 'client', {maxMinor: 3}) as ClientMessage); }
   destroy() { this.destroyed = true; }
   feed(...parts: Uint8Array[]) { this.emit('data', concat(...parts)); }
   get hello() { const h = this.sent[0]; if (h?.kind !== 'hello') throw new Error('hello expected'); return h.data; }
@@ -100,8 +100,9 @@ describe('ET-006b protocol v1 ingestion', () => {
   });
   it('sends one live-only hello without a sink and a durable hello with one', () => {
     start(); connectLatest();
-    // ET-050b B1, ET-052: the hello is version 1.0 and offers minor 2 (it offered 0 before ET-050b PR-5 and 1 before ET-052 PR-4).
-    expect(latest().sent).toEqual([{version: {major: 1, minor: 0}, kind: 'hello', data: {clientInstanceId: ingestion!.clientInstanceId, minMinor: 0, maxMinor: 2, durableEvents: false}}]);
+    // ET-050b B1, ET-052, ET-071: the hello is version 1.0 and offers minor 3 (it offered 0 before ET-050b PR-5, 1 before
+    // ET-052 PR-4 and 2 before ET-071).
+    expect(latest().sent).toEqual([{version: {major: 1, minor: 0}, kind: 'hello', data: {clientInstanceId: ingestion!.clientInstanceId, minMinor: 0, maxMinor: 3, durableEvents: false}}]);
     void ingestion!.stop();
     start({sink: new Sink()}); connectLatest();
     expect(latest().hello.durableEvents).toBe(true);
@@ -498,10 +499,13 @@ const server1 = (name: string) => decodePayload(fileBytes(resolve(M1, `${name}.j
 const M2 = resolve(V1, 'minor2');
 const frame2 = (name: string) => prefix(fileBytes(resolve(M2, `${name}.json`)));
 const server2 = (name: string) => decodePayload(fileBytes(resolve(M2, `${name}.json`)), 'server', {maxMinor: 2}) as ServerMessage;
+// ET-071: the minor-3 corpus (tests/fixtures/protocol-v1/minor3), hand-authored from the minor-2 bytes.
+const M3 = resolve(V1, 'minor3');
+const frame3 = (name: string) => prefix(fileBytes(resolve(M3, `${name}.json`)));
 describe('ET-050b protocol v1 minor negotiation', () => {
   it('derives the hello offer, the probe and ACK minors and the clock mapping from one negotiated minor', async () => {
-    // ET-052: the service offers minor 2, and a minor-1 plugin (ET-050b) still selects 1 for the whole connection.
-    expect(V1_CLIENT_MAX_MINOR).toBe(2);
+    // ET-052, ET-071: the service offers minor 3, and a minor-1 plugin (ET-050b) still selects 1 for the whole connection.
+    expect(V1_CLIENT_MAX_MINOR).toBe(3);
     const sink = new Sink(); start({sink}); connectLatest();
     expect(latest().hello.maxMinor).toBe(V1_CLIENT_MAX_MINOR);
     latest().feed(frame1('welcome'), frame1('checkpoint'), frame1('event-job-configured'));
@@ -520,7 +524,7 @@ describe('ET-050b protocol v1 minor negotiation', () => {
 
   it('accepts a minor-0 welcome from an older plugin and then writes every probe and ACK at minor 0', async () => {
     const sink = new Sink(); start({sink}); connectLatest();
-    expect(latest().hello.maxMinor).toBe(2);
+    expect(latest().hello.maxMinor).toBe(3);
     latest().feed(frame1('welcome-minor-0'), frame1('checkpoint-minor-0'), frame1('event-job-configured-minor-0'));
     await settle();
     expect(state().status).toBe('connected');
@@ -536,7 +540,8 @@ describe('ET-050b protocol v1 minor negotiation', () => {
     ['a minor-0 frame after a minor-1 welcome', () => concat(frame1('welcome'), frame1('checkpoint-minor-0'))],
     ['a minor-0 state with a gearbox', () => concat(frame1('welcome-minor-0'), frame1('checkpoint-minor-0-with-gearbox'))],
     ['a minor-1 state without a gearbox', () => concat(frame1('welcome'), frame1('checkpoint-without-gearbox'))],
-    ['a welcome above the offer', () => frame2('welcome-minor-3')]
+    // ET-071: minor 3 is within the offer now, so the first welcome above it is minor 4.
+    ['a welcome above the offer', () => frame3('welcome-minor-4')]
   ])('closes the connection as incompatible on %s', (_name, bytes) => {
     start({sink: new Sink()}); connectLatest(); latest().feed(bytes());
     expect([state().status, state().fresh, state().observation]).toEqual(['incompatible', false, undefined]);
@@ -561,10 +566,11 @@ describe('ET-050b protocol v1 minor negotiation', () => {
 
 // ET-052 MB3, MB4, MB5: the service offers minor 2 and the connection keeps the one minor its welcome selected. The
 // minor-2 fixtures carry the next mandatory break; the expected readings are written by hand from docs/protocol/v1.md.
+// ET-071: the service offers minor 3; a minor-2 plugin still selects 2 for the whole connection.
 describe('ET-052 protocol v1 minor 2', () => {
-  it('offers minor 2 and writes every probe and ACK, and reads the clock reply, at the minor-2 welcome\'s minor', async () => {
+  it('writes every probe and ACK, and reads the clock reply, at the minor-2 welcome\'s minor', async () => {
     const sink = new Sink(); start({sink}); connectLatest();
-    expect(latest().hello.maxMinor).toBe(2);
+    expect(latest().hello.maxMinor).toBe(3);
     latest().feed(frame2('welcome'), frame2('checkpoint'), frame2('event-job-configured'));
     await settle();
     expect(state().status).toBe('connected');
@@ -618,7 +624,8 @@ describe('ET-052 protocol v1 minor 2', () => {
     ['a minor-2 frame after a minor-0 welcome', () => concat(frame2('welcome-minor-0'), frame2('checkpoint'))],
     ['a minor-2 state without the break', () => concat(frame2('welcome'), frame2('checkpoint-without-break'))],
     ['a minor-1 state with the break', () => concat(frame2('welcome-minor-1'), frame2('checkpoint-minor-1-with-break'))],
-    ['a welcome above the offer', () => frame2('welcome-minor-3')]
+    // ET-071: the minor-2 corpus's welcome-minor-3 is valid now (see the minor-3 block below); minor 4 is above the offer.
+    ['a welcome above the offer', () => frame3('welcome-minor-4')]
   ])('closes the connection as incompatible on %s', (_name, bytes) => {
     start({sink: new Sink()}); connectLatest(); latest().feed(bytes());
     expect([state().status, state().fresh, state().observation]).toEqual(['incompatible', false, undefined]);
@@ -638,6 +645,85 @@ describe('ET-052 protocol v1 minor 2', () => {
     // The fixtures are the ones the contract tests read; a service pinned below minor 2 could not decode this welcome.
     expect(server2('welcome').version).toEqual({major: 1, minor: 2});
     expect(server2('welcome-minor-1').version).toEqual({major: 1, minor: 1});
+  });
+});
+
+// ET-071: the service offers minor 3 and keeps the one minor its welcome selected. The minor-3 fixtures carry the cruise
+// control set speed in m/s, where 0 is the value "off"; the expected readings are written by hand from docs/protocol/v1.md.
+describe('ET-071 protocol v1 minor 3', () => {
+  it('writes every probe and ACK, and reads the clock reply, at the minor-3 welcome\'s minor', async () => {
+    const sink = new Sink(); start({sink}); connectLatest();
+    expect(latest().hello.maxMinor).toBe(3);
+    latest().feed(frame3('welcome'), frame3('checkpoint'), frame3('event-job-configured'));
+    await settle();
+    expect(state().status).toBe('connected');
+    expect(latest().sent.slice(1).map(m => [m.kind, m.version])).toEqual([['clock.probe', {major: 1, minor: 3}], ['ack', {major: 1, minor: 3}]]);
+    expect([sink.commits, latest().acks]).toEqual([['event 1'], ['1']]);
+    // The checkpoint hydrates the state with the set speed exactly as sent: 22.5 m/s, beside the minor-2 break.
+    expect(state().observation).toMatchObject({kind: 'checkpoint', hydration: true});
+    expect(state().observation!.state.cruiseControl).toEqual({available: true, value: 22.5, unit: 'm/s'});
+    expect(Object.hasOwn(state().observation!.state, 'nextMandatoryBreak')).toBe(true);
+    clock.ns = 2_000_000_500_000n; latest().feed(frame3('snapshot'), frame3('clock-reply'));
+    expect(state().status).toBe('connected');
+    expect(state().observation!.state.cruiseControl).toEqual({available: true, value: 25, unit: 'm/s'});
+    expect(state().clockMapping).toEqual({sourceClockId: CAPTURE_CLOCK, clientClockId: ingestion!.clientClockId, offsetNs: '-999550450000', uncertaintyNs: '150000', measuredAtClientNs: '2000000500000'});
+    await advance(1000);
+    expect(latest().sent.at(-1)).toEqual({version: {major: 1, minor: 3}, kind: 'clock.probe', data: {probeId: '2'}});
+  });
+
+  it('replaces the set speed with every new state, zero and the maximum included, and unavailable readings keep their reason', () => {
+    start({sink: new Sink()}); connectLatest();
+    latest().feed(frame3('welcome'), frame3('checkpoint'));
+    const cruiseOf = () => state().observation!.state.cruiseControl;
+    for (const [name, expected] of [
+      ['snapshot-cruise-zero', {available: true, value: 0, unit: 'm/s'}],
+      ['snapshot-cruise-max', {available: true, value: 1000, unit: 'm/s'}],
+      ['snapshot-cruise-not-observed', {available: false, reason: 'not-observed', unit: 'm/s'}],
+      ['snapshot-cruise-not-supported', {available: false, reason: 'not-supported', unit: 'm/s'}],
+      ['snapshot-cruise-invalid', {available: false, reason: 'invalid', unit: 'm/s'}]
+    ] as const) {
+      latest().feed(frame3(name));
+      expect([name, cruiseOf()]).toEqual([name, expected]);
+    }
+    expect(state().status).toBe('connected');
+  });
+
+  it('accepts a welcome at minor 2 and at minor 0 from an older plugin, whose states carry no set speed', async () => {
+    start({sink: new Sink()}); connectLatest();
+    latest().feed(frame3('welcome-minor-2'), frame3('checkpoint-minor-2'), frame3('event-job-configured-minor-2'));
+    await settle();
+    expect([state().status, latest().sent.slice(1).map(m => m.version.minor)]).toEqual(['connected', [2, 2]]);
+    expect(Object.hasOwn(state().observation!.state, 'cruiseControl')).toBe(false);
+    expect(Object.hasOwn(state().observation!.state, 'nextMandatoryBreak')).toBe(true);
+    latest().emit('close'); await advance(250); connectLatest();
+    latest().feed(frame3('welcome-minor-0'), frame3('checkpoint-minor-0'), frame3('event-job-configured-minor-0'));
+    await settle();
+    expect([state().status, latest().sent.slice(1).map(m => m.version.minor)]).toEqual(['connected', [0, 0]]);
+    expect(Object.hasOwn(state().observation!.state, 'cruiseControl')).toBe(false);
+  });
+
+  it.each([
+    ['a minor-2 frame after a minor-3 welcome', () => concat(frame3('welcome'), frame3('checkpoint-minor-2'))],
+    ['a minor-3 frame after a minor-2 welcome', () => concat(frame3('welcome-minor-2'), frame3('checkpoint'))],
+    ['a minor-3 frame after a minor-0 welcome', () => concat(frame3('welcome-minor-0'), frame3('checkpoint'))],
+    ['a minor-3 state without the set speed', () => concat(frame3('welcome'), frame3('checkpoint-without-cruise'))],
+    ['a minor-2 state with the set speed', () => concat(frame3('welcome-minor-2'), frame3('checkpoint-minor-2-with-cruise'))],
+    ['a welcome above the offer', () => frame3('welcome-minor-4')],
+    ['a welcome whose envelope and data minors differ', () => frame3('welcome-envelope-2-data-3')]
+  ])('closes the connection as incompatible on %s', (_name, bytes) => {
+    start({sink: new Sink()}); connectLatest(); latest().feed(bytes());
+    expect([state().status, state().fresh, state().observation]).toEqual(['incompatible', false, undefined]);
+  });
+
+  it.each([
+    ['snapshot-cruise-negative'], ['snapshot-cruise-above-max'], ['snapshot-cruise-string'], ['snapshot-cruise-null'], ['snapshot-cruise-unit-kmh'],
+    ['snapshot-cruise-missing-unit'], ['snapshot-cruise-extra-key'], ['snapshot-cruise-value-and-reason'], ['snapshot-cruise-reason-unknown'],
+    ['snapshot-cruise-unavailable-with-value'], ['snapshot-without-cruise'], ['snapshot-minor-2']
+  ])('closes a minor-3 connection as incompatible on the later state %s', name => {
+    start({sink: new Sink()}); connectLatest(); latest().feed(frame3('welcome'), frame3('checkpoint'));
+    expect(state().status).toBe('connected');
+    latest().feed(frame3(name));
+    expect(state().status).toBe('incompatible');
   });
 });
 

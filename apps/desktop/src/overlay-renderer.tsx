@@ -1,7 +1,7 @@
 import React, {Fragment, useEffect, useMemo, useState} from 'react';
 import type {OverlayPresentation} from '../../../packages/contracts/src';
 import {HardModeCue, HardModeIcon, SectionIcon, TagIcon} from './overlay-icons';
-import {STRIP_HARD_MODE_MAX_WIDTH_CSS, STRIP_ITEM_MAX_WIDTH_CSS, STRIP_TAG_MAX_WIDTH_CSS} from './overlay-strip';
+import {STRIP_FIXED_WIDTH_SECTIONS, STRIP_HARD_MODE_MAX_WIDTH_CSS, STRIP_ITEM_MAX_WIDTH_CSS, STRIP_TAG_MAX_WIDTH_CSS} from './overlay-strip';
 import {overlayView, overlayCardParts, type OverlayHardModeItem, type OverlayItem, type OverlayTag, type OverlayView} from './overlay-view';
 import {latencyBits, MARKER_CELL, MARKER_HEIGHT} from './latency-marker';
 import './renderer.css';
@@ -57,14 +57,16 @@ function Tags({tags, maxWidth}: {tags: OverlayTag[]; maxWidth?: number}) {
  * 38 px rows (ET-012c): tags, then the groups' items with icons, wrapped whole onto as many rows as the window reserves
  * for the enabled sections. The first item of each later group draws a thin divider before itself, so an item that
  * starts a row keeps its divider. Every item is capped at the maximum width main reserved for it (overlay-strip.ts); a
- * longer value ends in an ellipsis, so every enabled section stays inside the window.
+ * longer value ends in an ellipsis, so every enabled section stays inside the window. A fixed-width section (ET-071) also
+ * has that width as its minimum, so its value changes never move a neighbour.
  */
 function Strip({view}: {view: OverlayView}) {
   return <div className="overlay-surface overlay-strip-row">
     <Tags tags={view.tags} maxWidth={STRIP_TAG_MAX_WIDTH_CSS} />
     {view.groups.map((group, index) => <Fragment key={group.id}>
       {group.items.map((item, position) => <span key={item.id} className={index > 0 && position === 0 ? 'overlay-item overlay-group-start' : 'overlay-item'}
-        data-testid={`overlay-section-${item.id}`} aria-label={item.short} {...urgencyMarks(item, item.short)} style={{maxWidth: STRIP_ITEM_MAX_WIDTH_CSS[item.id]}}>
+        data-testid={`overlay-section-${item.id}`} aria-label={item.short} {...urgencyMarks(item, item.short)}
+        style={{maxWidth: STRIP_ITEM_MAX_WIDTH_CSS[item.id], ...(STRIP_FIXED_WIDTH_SECTIONS.has(item.id) ? {minWidth: STRIP_ITEM_MAX_WIDTH_CSS[item.id]} : {})}}>
         <SectionIcon id={item.id} /><Value item={item} />
       </span>)}
     </Fragment>)}

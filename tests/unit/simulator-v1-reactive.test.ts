@@ -2,9 +2,9 @@ import {randomUUID} from 'node:crypto';
 import net from 'node:net';
 import {describe, expect, it} from 'vitest';
 import {FrameDecoder, PROTOCOL_V1, V1_MAX_MINOR, encodeFrame as encodeAnyMinor, type ProtocolMessage, type ServerMessage} from '../../packages/contracts/src/protocol-v1';
-// ET-050b, ET-052: these raw clients offer the contract's highest minor (2 since ET-052) and the simulator producer selects
-// it, so their connections are minor 2 and every frame after the hello carries {1,2}.
-const M2 = {major: 1, minor: 2} as const;
+// ET-050b, ET-052, ET-071: these raw clients offer the contract's highest minor (3 since ET-071) and the simulator producer
+// selects it, so their connections are minor 3 and every frame after the hello carries {1,3}.
+const M3 = {major: 1, minor: 3} as const;
 const encodeFrame = (message: ProtocolMessage) => encodeAnyMinor(message, {maxMinor: V1_MAX_MINOR});
 import {V1Consumer} from '../../packages/contracts/src/protocol-v1-delivery';
 import {readFixtureFile} from '../../tools/telemetry-simulator/src/fixture-file';
@@ -72,7 +72,7 @@ describe('simulator v1 reactive serving for any contract consumer', () => {
     try {
       const client = rawClient(server.endpoint, hello(false));
       await until(() => client.messages.length === 2);
-      client.socket.write(encodeFrame({version: M2, kind: 'clock.probe', data: {probeId: '1'}}));
+      client.socket.write(encodeFrame({version: M3, kind: 'clock.probe', data: {probeId: '1'}}));
       await until(() => client.messages.some(m => m.kind === 'clock.reply'));
       await server.stop();
       const {messages} = await client.closed, consumer = new V1Consumer(false, {maxMinor: V1_MAX_MINOR});
@@ -166,7 +166,7 @@ describe('simulator v1 reactive serving for any contract consumer', () => {
   it('awaits a scripted ACK slower than the quiesce bound when asked to', async () => {
     const steps = [{atMs: 10, action: 'lifecycle', event: 'simulation.started'}];
     const s = inline(steps, [{atMs: 0, action: 'connect', client: {durable: true}}, {atMs: 100, action: 'disconnect'}]);
-    const ack = (welcome: ServerMessage) => encodeFrame({version: M2, kind: 'ack', data: {pluginSessionId: welcome.source.pluginSessionId, throughEventSeq: '1'}});
+    const ack = (welcome: ServerMessage) => encodeFrame({version: M3, kind: 'ack', data: {pluginSessionId: welcome.source.pluginSessionId, throughEventSeq: '1'}});
     const slow = await serveV1Reactive(s, {scale: 0, quiesceMs: 20, awaitScriptedAcks: true});
     try {
       const client = rawClient(slow.endpoint, hello(true));
@@ -207,7 +207,7 @@ describe('simulator v1 reactive serving for any contract consumer', () => {
       for (const throughEventSeq of ['1', '2']) {
         await until(() => client.messages.some(m => m.kind === 'event' && m.data.eventSeq === throughEventSeq));
         expect(client.messages.filter(m => m.kind === 'event').map(m => m.data.eventSeq)).toEqual(throughEventSeq === '1' ? ['1'] : ['1', '2']);
-        client.socket.write(encodeFrame({version: M2, kind: 'ack', data: {pluginSessionId: client.messages[0].source.pluginSessionId, throughEventSeq}}));
+        client.socket.write(encodeFrame({version: M3, kind: 'ack', data: {pluginSessionId: client.messages[0].source.pluginSessionId, throughEventSeq}}));
       }
       // The third ACK is deliberately absent: the server must still reach the scripted disconnect.
       const report = await server.done;
@@ -253,7 +253,7 @@ describe('simulator v1 reactive serving for any contract consumer', () => {
     try {
       const client = rawClient(server.endpoint, hello(true));
       await until(() => client.messages.some(m => m.kind === 'event'));
-      const ack = encodeFrame({version: M2, kind: 'ack', data: {pluginSessionId: client.messages[0].source.pluginSessionId, throughEventSeq: '1'}});
+      const ack = encodeFrame({version: M3, kind: 'ack', data: {pluginSessionId: client.messages[0].source.pluginSessionId, throughEventSeq: '1'}});
       client.socket.write(ack); client.socket.write(ack);
       const report = await server.done;
       await client.closed;
@@ -273,18 +273,18 @@ describe('simulator v1 reactive serving for any contract consumer', () => {
       let probed = false, probedAgain = false, sentLateAck = false;
       client.socket.on('data', () => {
         if (!probed && client.messages.some(m => m.kind === 'event' && m.data.eventSeq === '2')) {
-          probed = true; client.socket.write(encodeFrame({version: M2, kind: 'clock.probe', data: {probeId: '1'}}));
+          probed = true; client.socket.write(encodeFrame({version: M3, kind: 'clock.probe', data: {probeId: '1'}}));
         }
         if (!probedAgain && client.messages.some(m => m.kind === 'clock.reply' && m.data.probeId === '1')) {
-          probedAgain = true; client.socket.write(encodeFrame({version: M2, kind: 'clock.probe', data: {probeId: '2'}}));
+          probedAgain = true; client.socket.write(encodeFrame({version: M3, kind: 'clock.probe', data: {probeId: '2'}}));
         }
         if (!sentLateAck && client.messages.some(m => m.kind === 'clock.reply' && m.data.probeId === '2')) {
           sentLateAck = true;
-          client.socket.write(encodeFrame({version: M2, kind: 'ack', data: {pluginSessionId: client.messages[0].source.pluginSessionId, throughEventSeq: '2'}}));
+          client.socket.write(encodeFrame({version: M3, kind: 'ack', data: {pluginSessionId: client.messages[0].source.pluginSessionId, throughEventSeq: '2'}}));
         }
       });
       await until(() => client.messages.some(m => m.kind === 'event' && m.data.eventSeq === '1'));
-      client.socket.write(encodeFrame({version: M2, kind: 'ack', data: {pluginSessionId: client.messages[0].source.pluginSessionId, throughEventSeq: '1'}}));
+      client.socket.write(encodeFrame({version: M3, kind: 'ack', data: {pluginSessionId: client.messages[0].source.pluginSessionId, throughEventSeq: '1'}}));
       const report = await server.done;
       await client.closed;
       expect(sentLateAck).toBe(true);

@@ -103,18 +103,19 @@ export async function waitForStripLayout(page, expected) {
 // twelve before ET-052 added the next mandatory break, which the pair's 95-minute break shows), so the window reserves no
 // row for a hidden section. Without a game window main never places the hidden overlay, so
 // the smoke sizes it to each layout's window for those sections at the scale setting 1 (overlayWindowSize in
-// overlay-geometry.ts) at that setting's zoom, overlayZoom(1) = 0.7 (ET-045e). ET-070 re-derived with the fixed Hard Mode
-// row: the card's 14 rows have a content of 46 + 24 × 14 = 382 CSS px, so ceil(382 × 0.7 + 2) = ceil(269.4) = 270 DIP high,
-// 210 wide; the cluster's panel holds 10 sections outside the gauge and the indicator, a reserve of 36 + 21 × 11 = 267 CSS px
-// (content 265), so ceil(265 × 0.7 + 2) = ceil(187.5) = 188 high, 308 wide; the HUD's content is 18 + 24 × 14 = 354, so
-// ceil(354 × 0.7) = ceil(247.8) = 248 high, 224 wide. Their CSS viewports are 300 × 385.71, 440 × 268.57 and 320 × 354.29.
-// The reserved CSS heights are 48 + 24 × 14 = 384, 267 and 18 + 24 × 14 = 354 (layoutReservedCss in overlay-rows.ts). A
+// overlay-geometry.ts) at that setting's zoom, overlayZoom(1) = 0.7 (ET-045e). ET-071 re-derived with the pair's fourteen
+// sections (cruise control added) and ET-070's fixed Hard Mode row: the card's 15 rows have a content of 46 + 24 × 15 = 406
+// CSS px, so ceil(406 × 0.7 + 2) = ceil(286.2) = 287 DIP high, 210 wide; the cluster's panel holds 11 sections outside the
+// gauge and the indicator, a reserve of 36 + 21 × 12 = 288 CSS px (content 286), so ceil(286 × 0.7 + 2) = ceil(202.2) = 203
+// high, 308 wide; the HUD's content is 18 + 24 × 15 = 378, so ceil(378 × 0.7) = ceil(264.6) = 265 high, 224 wide. Their CSS
+// viewports are 300 × 410, 440 × 290 and 320 × 378.57 (270, 188 and 248 DIP before ET-071).
+// The reserved CSS heights are 48 + 24 × 15 = 408, 288 and 18 + 24 × 15 = 378 (layoutReservedCss in overlay-rows.ts). A
 // unit test ties these hand-written values to both functions and the zoom to overlayZoom. All three windows are smaller
 // than the hosted runner's 1024 x 768 screen, so Windows does not narrow them.
 export const LAYOUT_SMOKE_WINDOWS = Object.freeze({
-  card: Object.freeze({width: 210, height: 270}),
-  cluster: Object.freeze({width: 308, height: 188}),
-  hud: Object.freeze({width: 224, height: 248})
+  card: Object.freeze({width: 210, height: 287}),
+  cluster: Object.freeze({width: 308, height: 203}),
+  hud: Object.freeze({width: 224, height: 265})
 });
 export const LAYOUT_SMOKE_ZOOM = 0.7;
 /**
@@ -138,31 +139,34 @@ export function verifyAppliedWindow(requested, actual) {
     `The overlay window was not applied at the requested size: ${JSON.stringify(requested)} became ${JSON.stringify(actual)}`);
   return actual;
 }
-export const LAYOUT_SMOKE_RESERVED_CSS = Object.freeze({card: 384, cluster: 267, hud: 354});
+export const LAYOUT_SMOKE_RESERVED_CSS = Object.freeze({card: 408, cluster: 288, hud: 378});
 // ET-045e review frames for the UI overlay shard, at the zoom of a scale setting (overlayZoom in overlay-placement.ts).
 // SCALE_REFERENCE_FRAMES are the product windows with every section at the new 100% (overlayWindowSize(layout, 1)) and
 // the ET-045d strip at its 70% (896 × 82 at zoom 0.7) and 100% (1280 × 116 at zoom 1) for the owner's comparison.
-// SCALE_RANGE_FRAMES are the product windows at 50% (zoom 0.35: strip 1280 × 16, card 105 × 153, cluster 154 × 110, HUD
-// 112 × 141 with every section and ET-070's Hard Mode row: ceil(430 × 0.35 + 2), ceil(307 × 0.35 + 2) and ceil(402 × 0.35);
-// 145, 103 and 133 without the row), the strip raised to the 38 DIP minimum height
+// SCALE_RANGE_FRAMES are the product windows at 50% (zoom 0.35: strip 1280 × 29, card 105 × 161, cluster 154 × 117, HUD
+// 112 × 150 with every section, ET-071's cruise control and ET-070's Hard Mode row: ceil(38 × 2 × 0.35 + 2) for two strip
+// rows (3,674 CSS px against the inner 3,627), ceil(454 × 0.35 + 2), ceil(328 × 0.35 + 2) and ceil(426 × 0.35); the strip
+// was one row and 16, the others 153, 110 and 141 before ET-071), the strip raised to the 38 DIP minimum height
 // that the ET-045c probe measured at 150%. The ET-045e probe at 150% showed Windows accepting the card, cluster and HUD
 // within one DIP (106 × 136, 154 × 96, 112 × 124); if a hosted runner refuses a size, the frame wait fails and the
-// refusal is recorded. The 100% references are the ET-070 product windows: strip 1280 × 82 (three rows, the indicator after
-// the break), card 210 × 303, cluster 308 × 217 and HUD 224 × 282 (287, 203 and 265 without the Hard Mode row).
+// refusal is recorded. The 100% references are the ET-071 product windows: strip 1280 × 82 (three rows, the indicator after
+// the break; the first row now ends at cargo, 1,678 of 1,801), card 210 × 320 (ceil(454 × 0.7 + 2)), cluster 308 × 232
+// (ceil(328 × 0.7 + 2)) and HUD 224 × 299 (ceil(426 × 0.7)); 303, 217 and 282 before ET-071. The two old strip references
+// stay ET-045d's frozen sizes; with sixteen sections their content needs four rows, so those screenshots clip the last row.
 export const SCALE_REFERENCE_FRAMES = Object.freeze([
   Object.freeze({name: 'scale-strip', layout: 'strip', zoom: 0.7, width: 1280, height: 82}),
-  Object.freeze({name: 'scale-card', layout: 'card', zoom: 0.7, width: 210, height: 303}),
-  Object.freeze({name: 'scale-cluster', layout: 'cluster', zoom: 0.7, width: 308, height: 217}),
-  Object.freeze({name: 'scale-hud', layout: 'hud', zoom: 0.7, width: 224, height: 282}),
+  Object.freeze({name: 'scale-card', layout: 'card', zoom: 0.7, width: 210, height: 320}),
+  Object.freeze({name: 'scale-cluster', layout: 'cluster', zoom: 0.7, width: 308, height: 232}),
+  Object.freeze({name: 'scale-hud', layout: 'hud', zoom: 0.7, width: 224, height: 299}),
   Object.freeze({name: 'scale-strip-old70', layout: 'strip', zoom: 0.7, width: 896, height: 82}),
   Object.freeze({name: 'scale-strip-old100', layout: 'strip', zoom: 1, width: 1280, height: 116})
 ]);
 export const SCALE_RANGE_ZOOM = 0.35;
 export const SCALE_RANGE_FRAMES = Object.freeze({
   strip: Object.freeze({width: 1280, height: 38}),
-  card: Object.freeze({width: 105, height: 153}),
-  cluster: Object.freeze({width: 154, height: 110}),
-  hud: Object.freeze({width: 112, height: 141})
+  card: Object.freeze({width: 105, height: 161}),
+  cluster: Object.freeze({width: 154, height: 117}),
+  hud: Object.freeze({width: 112, height: 150})
 });
 
 // Self-contained browser callback: false until exactly one current root of the expected layout shows exactly the
@@ -502,8 +506,8 @@ async function zoomFactors(application) {
   return {overlay: of('?view=overlay'), dashboard: of('')};
 }
 
-// The Driving only preset of apps/desktop/src/overlay-sections.ts.
-const DRIVING_ONLY_SECTIONS = ['speed', 'gear', 'rpm', 'fuel', 'range'];
+// The Driving only preset of apps/desktop/src/overlay-sections.ts in canonical order (overlay-smoke-source.test.ts pins it).
+export const DRIVING_ONLY_SECTIONS = Object.freeze(['speed', 'gear', 'rpm', 'cruise-control', 'fuel', 'range']);
 // ET-012b edit mode (REG-016, REG-017). The synthetic source has no game window, so edit mode waits for the game: the
 // overlay never shows, never becomes focusable and stays topmost while its document is marked as editing. A scale
 // reaches only the overlay's zoom factor, overlayZoom(scale) = scale × 0.7 since ET-045e (0.7 at 100%, 2.1 at 300%, 0.35

@@ -7,7 +7,7 @@ import {readFileSync} from 'node:fs';
 import {resolve} from 'node:path';
 import {afterEach, beforeEach, describe, expect, it, vi} from 'vitest';
 import {AckValidator, V1Consumer} from '../../packages/contracts/src/protocol-v1-delivery';
-import {decodePayload, negotiateV1, validateClientMessage, type ClientMessage, type ServerMessage} from '../../packages/contracts/src/protocol-v1';
+import {V1_MAX_MINOR, decodePayload, negotiateV1, validateClientMessage, type ClientMessage, type ServerMessage} from '../../packages/contracts/src/protocol-v1';
 import type {CommitResult, Result, StorageErrorCode} from '../../packages/storage/src/api';
 import {ERROR_MESSAGES, storageError} from '../../packages/storage/src/errors';
 import {STORAGE_FAILURE_CLASS, StorageDurableSink, failureClass, type CoverageMessage, type DurableSink, type WelcomeMessage} from '../../apps/desktop/src/durable-sink';
@@ -118,8 +118,8 @@ class Link implements DurableLink {
   constructor(private readonly log: string[], private readonly validator?: AckValidator) {}
   current() { return this.open; }
   write(bytes: Uint8Array) {
-    // Any minor decodes here; the producer-side validator holds the connection to its own minor.
-    const m = decodePayload(bytes.subarray(4), 'client', {maxMinor: 2}) as ClientMessage;
+    // Any minor the contract implements decodes here; the producer-side validator holds the connection to its own minor.
+    const m = decodePayload(bytes.subarray(4), 'client', {maxMinor: V1_MAX_MINOR}) as ClientMessage;
     if (m.kind !== 'ack') throw new Error('ACK expected');
     // The producer-side validator proves that every ACK the pipeline writes satisfies the producer rule (§10).
     this.validator?.accept(m);

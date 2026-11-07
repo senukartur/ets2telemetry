@@ -40,6 +40,17 @@ it('serves validated live-only v1 data that goes stale while held on the same co
     }
     source.setBreak(undefined);
     await vi.waitFor(() => expect(breakNow()).toEqual({available: true, value: 95, unit: 'min'}), {timeout: 2000, interval: 20});
+    // ET-071: the source selects minor 3 (the service offers it), so every state also carries a cruise control set speed of
+    // 25 m/s until setCruiseControl names another reading; zero (off) is a value; setCruiseControl(undefined) restores 25.
+    expect(observation.state.cruiseControl).toEqual({available: true, value: 25, unit: 'm/s'});
+    expect(liveV1Projection(ingestion.current)?.observation?.state.cruiseControl).toEqual({available: true, value: 25, unit: 'm/s'});
+    const cruiseNow = () => ingestion.current.observation!.state.cruiseControl;
+    for (const reading of [{available: true, value: 0, unit: 'm/s'}, {available: true, value: 22.5, unit: 'm/s'}, {available: false, reason: 'not-observed', unit: 'm/s'}] as const) {
+      source.setCruiseControl(structuredClone(reading));
+      await vi.waitFor(() => expect(cruiseNow()).toEqual(reading), {timeout: 2000, interval: 20});
+    }
+    source.setCruiseControl(undefined);
+    await vi.waitFor(() => expect(cruiseNow()).toEqual({available: true, value: 25, unit: 'm/s'}), {timeout: 2000, interval: 20});
     // ET-050b: the source also carries the Mack gearbox of the minor-1 fixture in every state, and the v1
     // truck keeps the fixture's model id until setTruckId names v0's.
     const mack = (JSON.parse(readFileSync('tests/fixtures/protocol-v1/minor1/checkpoint-ats-mack.json', 'utf8')) as {data: {state: {gearbox: unknown}}}).data.state.gearbox;

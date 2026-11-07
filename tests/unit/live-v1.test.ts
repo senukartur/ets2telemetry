@@ -9,9 +9,12 @@ import {liveV1Key, liveV1Projection, parseLiveV1, withV1} from '../../apps/deskt
 import {smokePair, v1Projection, v1SourceState} from '../shared/live-v1-fixtures';
 
 const STATE_KEYS = ['simulation', 'speed', 'fuel', 'fuelCapacity', 'engineRpm', 'gear', 'odometer', 'averageConsumption', 'estimatedRange',
-  'navigationDistance', 'gameTime', 'captureUtcUnixMs', 'boundaryOrder', 'worldPlacement', 'configuration', 'gearbox', 'nextMandatoryBreak'];
+  'navigationDistance', 'gameTime', 'captureUtcUnixMs', 'boundaryOrder', 'worldPlacement', 'configuration', 'gearbox', 'nextMandatoryBreak',
+  'cruiseControl'];
 /** ET-052 MB5: a minor-0 or minor-1 state carries no break, so the projection reports it not-supported. */
 const NOT_SUPPORTED_BREAK = {available: false, reason: 'not-supported', unit: 'min'};
+/** ET-071: a state below minor 3 carries no cruise control, so the projection reports it not-supported. */
+const NOT_SUPPORTED_CRUISE = {available: false, reason: 'not-supported', unit: 'm/s'};
 /** ET-050b B7: a minor-0 state carries no gearbox, so the projection reports every part not-supported. */
 const NOT_SUPPORTED = {forwardGears: {available: false, reason: 'not-supported'}, reverseGears: {available: false, reason: 'not-supported'}, hshifter: {available: false, reason: 'not-supported'}};
 const minor1 = (name: string) => {
@@ -29,8 +32,14 @@ function sourceStateOf(m: ReturnType<typeof minor1>) {
   const base = v1SourceState();
   return {...base, observation: {...base.observation!, kind: m.kind, source: m.source, seq: m.seq, capture: m.capture, state: m.data.state, status: m.data.status, continuity: m.data.continuity, hydration: m.kind === 'checkpoint'}};
 }
+const minor3 = (name: string) => {
+  const m = decodePayload(new Uint8Array(readFileSync(`tests/fixtures/protocol-v1/minor3/${name}.json`)), 'server', {maxMinor: 3}) as ServerMessage;
+  if (m.kind !== 'checkpoint' && m.kind !== 'snapshot') throw new Error(`${name} is not a state message`);
+  return m;
+};
 const minor1SourceState = (name: string) => sourceStateOf(minor1(name));
 const minor2SourceState = (name: string) => sourceStateOf(minor2(name));
+const minor3SourceState = (name: string) => sourceStateOf(minor3(name));
 
 describe('liveV1Projection', () => {
   const projection = liveV1Projection(v1SourceState());
@@ -87,6 +96,27 @@ describe('liveV1Projection', () => {
     expect(liveV1Projection(minor2SourceState('checkpoint-minor-1')).observation!.state.nextMandatoryBreak).toEqual(NOT_SUPPORTED_BREAK);
     expect(liveV1Projection(minor2SourceState('checkpoint-minor-0')).observation!.state.nextMandatoryBreak).toEqual(NOT_SUPPORTED_BREAK);
   });
+  it('carries the minor-3 cruise control exactly, zero included, and reports an older state as not-supported (ET-071)', () => {
+    for (const live of [projection, liveV1Projection(minor1SourceState('checkpoint')), liveV1Projection(minor2SourceState('checkpoint')),
+      liveV1Projection(minor3SourceState('checkpoint-minor-2')), liveV1Projection(minor3SourceState('checkpoint-minor-0'))]) {
+      expect(live.observation!.state.cruiseControl).toEqual(NOT_SUPPORTED_CRUISE);
+    }
+    // A minor-3 state carries what the wire carried: 22.5 and 25 m/s, zero (off), the bound and each unavailable reading.
+    for (const [name, expected] of [
+      ['checkpoint', {available: true, value: 22.5, unit: 'm/s'}], ['snapshot', {available: true, value: 25, unit: 'm/s'}],
+      ['snapshot-cruise-zero', {available: true, value: 0, unit: 'm/s'}], ['snapshot-cruise-max', {available: true, value: 1000, unit: 'm/s'}],
+      ['snapshot-cruise-not-observed', {available: false, reason: 'not-observed', unit: 'm/s'}], ['snapshot-cruise-not-supported', {available: false, reason: 'not-supported', unit: 'm/s'}],
+      ['snapshot-cruise-invalid', {available: false, reason: 'invalid', unit: 'm/s'}]
+    ] as const) {
+      const live = liveV1Projection(minor3SourceState(name));
+      expect([name, live.observation!.state.cruiseControl]).toEqual([name, expected]);
+      expect(Object.keys(live.observation!.state)).toEqual(STATE_KEYS);
+      expect(parseLiveV1(structuredClone(live), 'synthetic')).toBeDefined();
+    }
+    // The gearbox and the break ride along unchanged beside it.
+    expect(liveV1Projection(minor3SourceState('snapshot')).observation!.state.nextMandatoryBreak).toEqual(minor3('snapshot').data.state.nextMandatoryBreak);
+    expect(liveV1Projection(minor3SourceState('snapshot')).observation!.state.gearbox).toEqual(minor3('snapshot').data.state.gearbox);
+  });
   it('omits the observation before the first one', () => {
     expect(liveV1Projection(v1SourceState('snapshot-live', {status: 'waiting', reason: 'Awaiting selected source', fresh: false, observation: undefined})))
       .toEqual({selection: 'synthetic', status: 'waiting', reason: 'Awaiting selected source', fresh: false});
@@ -137,6 +167,14 @@ describe('parseLiveV1', () => {
     ['a next mandatory break in metres', mutate(value => {observation(value).state.nextMandatoryBreak = {available: true, value: 45, unit: 'm'};})],
     ['a next mandatory break with an extra key', mutate(value => {observation(value).state.nextMandatoryBreak = {available: true, value: 45, unit: 'min', extra: 1};})],
     ['an unavailable next mandatory break with a value', mutate(value => {observation(value).state.nextMandatoryBreak = {available: false, reason: 'not-observed', unit: 'min', value: 1};})],
+    // ET-071: the projection always carries cruise control, a number from 0 to 1,000 with unit m/s.
+    ['a missing cruise control', mutate(value => {delete observation(value).state.cruiseControl;})],
+    ['a null cruise control', mutate(value => {observation(value).state.cruiseControl = null;})],
+    ['a negative cruise control', mutate(value => {observation(value).state.cruiseControl = {available: true, value: -0.5, unit: 'm/s'};})],
+    ['a cruise control above 1000 m/s', mutate(value => {observation(value).state.cruiseControl = {available: true, value: 1000.5, unit: 'm/s'};})],
+    ['a cruise control in km/h', mutate(value => {observation(value).state.cruiseControl = {available: true, value: 90, unit: 'km/h'};})],
+    ['a cruise control as a string', mutate(value => {observation(value).state.cruiseControl = {available: true, value: '25', unit: 'm/s'};})],
+    ['an unavailable cruise control with a value', mutate(value => {observation(value).state.cruiseControl = {available: false, reason: 'not-observed', unit: 'm/s', value: 0};})],
     ['fresh data without an observation', mutate(value => {delete value.observation;})],
     ['fresh stale data', mutate(value => {value.status = 'stale';})],
     ['a service status', mutate(value => {value.status = 'service-failed'; value.fresh = false;})],
@@ -162,6 +200,13 @@ describe('parseLiveV1', () => {
     [{available: false, reason: 'not-observed', unit: 'min'}], [{available: false, reason: 'not-supported', unit: 'min'}], [{available: false, reason: 'invalid', unit: 'min'}]
   ])('accepts the next mandatory break %j', measure => {
     const value = mutate(v => {observation(v).state.nextMandatoryBreak = structuredClone(measure);});
+    expect(parseLiveV1(value, 'synthetic')).toBe(value);
+  });
+  it.each([
+    [{available: true, value: 25, unit: 'm/s'}], [{available: true, value: 0, unit: 'm/s'}], [{available: true, value: 22.5, unit: 'm/s'}], [{available: true, value: 1000, unit: 'm/s'}],
+    [{available: false, reason: 'not-observed', unit: 'm/s'}], [{available: false, reason: 'not-supported', unit: 'm/s'}], [{available: false, reason: 'invalid', unit: 'm/s'}]
+  ])('accepts the cruise control %j (ET-071)', measure => {
+    const value = mutate(v => {observation(v).state.cruiseControl = structuredClone(measure);});
     expect(parseLiveV1(value, 'synthetic')).toBe(value);
   });
   it('accepts a 256-character reason and a stale projection that keeps its observation', () => {

@@ -6,10 +6,10 @@ import {DEFAULT_OVERLAY_PLACEMENTS, normalizeFraction, normalizeScale, parseOver
 import {DEFAULT_OVERLAY_SECTIONS, DEFAULT_OVERLAY_SETTINGS, isOverlayLayout, OVERLAY_LAYOUTS, OVERLAY_SECTION_IDS} from './overlay-sections';
 import {DEFAULT_GEAR_DISPLAY, DEFAULT_UNIT_PROFILES, isGearDisplayMode, isUnitProfile, UNIT_GAMES} from './unit-profiles';
 
-// Settings file format v12 (docs/settings.md). Pure parsing and serialization; the store owns file access.
+// Settings file format v13 (docs/settings.md). Pure parsing and serialization; the store owns file access.
 
 export const SETTINGS_FORMAT = 'ets2telemetry.settings';
-export const SETTINGS_VERSION = 12;
+export const SETTINGS_VERSION = 13;
 /** Larger files are rejected as invalid without being parsed. */
 export const MAX_SETTINGS_BYTES = 64 * 1024;
 
@@ -42,7 +42,7 @@ export const DEFAULT_SETTINGS: Settings = Object.freeze({
 export type SettingsField = 'nowPlaying.enabled' | 'nowPlaying.style' | 'nowPlaying.backgroundOpacity' | 'nowPlaying.position' | 'overlay.backgroundOpacity' | 'overlay.enabled' | 'language' | 'autostart' | `units.${UnitGame}` | `gearDisplay.${UnitGame}` | 'overlay.layout' | 'overlay.sections' | `overlay.sections.${OverlaySectionId}`
   | 'overlay.placements' | `overlay.placements.${OverlayLayout}`;
 /** Set when the file was upgraded in memory from an older format; the file itself stays unchanged until the next save. */
-type Migrated = {migratedFrom?: 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9 | 10 | 11};
+type Migrated = {migratedFrom?: 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9 | 10 | 11 | 12};
 export type ParsedSettings =
   | ({state: 'loaded'; settings: Settings} & Migrated)
   /** A valid file with some invalid or missing fields; they use defaults until the next save rewrites them. */
@@ -80,10 +80,13 @@ const isRecord = (value: unknown): value is Record<string, unknown> => typeof va
  * v10 -> v11 adds the overlay section `mandatory-break`, switched on (ET-052 MB11, owner decision D2: on by default, also for
  * upgraders; ET-050b took v10 first). It is set on a copy of an `overlay.sections` record, so every other saved choice is
  * preserved, including a user who switched other sections off; anything that is not a record is left to the existing
- * fallbacks. The bump makes an older build read a v12 file as newer-version (read-only defaults) instead of ignoring the new
+ * fallbacks. The bump makes an older build read a v11 file as newer-version (read-only defaults) instead of ignoring the new
  * key and dropping it on its next save.
- * Version 0 and below have no path.
  * v11 -> v12 adds disabled current-track defaults without changing existing fields (ET-061).
+ * v12 -> v13 adds the overlay section `cruise-control`, switched on also for upgraders (ET-071, as ET-052 D2 did for the
+ * break), on a copy of an `overlay.sections` record exactly like v10 -> v11, so every other saved choice is preserved.
+ * The bump makes an older build read a v13 file as newer-version instead of dropping the new key on its next save.
+ * Version 0 and below have no path.
  */
 const MIGRATIONS: ReadonlyMap<number, (raw: Record<string, unknown>) => Record<string, unknown>> = new Map<number, (raw: Record<string, unknown>) => Record<string, unknown>>([
   [1, (raw: Record<string, unknown>) => ({...raw, version: 2, overlay: defaultOverlayDocument()})],
@@ -97,7 +100,9 @@ const MIGRATIONS: ReadonlyMap<number, (raw: Record<string, unknown>) => Record<s
   [9, (raw: Record<string, unknown>) => ({...raw, version: 10})],
   [10, (raw: Record<string, unknown>) => ({...raw, version: 11,
     overlay: isRecord(raw.overlay) && isRecord(raw.overlay.sections) ? {...raw.overlay, sections: {...raw.overlay.sections, 'mandatory-break': true}} : raw.overlay})],
-  [11, (raw: Record<string, unknown>) => ({...raw, version: 12, nowPlaying: {...DEFAULT_NOW_PLAYING, position: {...DEFAULT_NOW_PLAYING.position}}})]
+  [11, (raw: Record<string, unknown>) => ({...raw, version: 12, nowPlaying: {...DEFAULT_NOW_PLAYING, position: {...DEFAULT_NOW_PLAYING.position}}})],
+  [12, (raw: Record<string, unknown>) => ({...raw, version: 13,
+    overlay: isRecord(raw.overlay) && isRecord(raw.overlay.sections) ? {...raw.overlay, sections: {...raw.overlay.sections, 'cruise-control': true}} : raw.overlay})]
 ]);
 
 /** Upgrades an older raw document to the current version through the migration chain, or undefined without a complete path. */
@@ -175,7 +180,7 @@ export function parseSettings(bytes: Uint8Array): ParsedSettings {
     document = migrateToCurrent(raw, version);
     if (!document) return {state: 'unsupported-older'};
   }
-  const migrated: Migrated = version === 1 || version === 2 || version === 3 || version === 4 || version === 5 || version === 6 || version === 7 || version === 8 || version === 9 || version === 10 || version === 11 ? {migratedFrom: version} : {};
+  const migrated: Migrated = version === 1 || version === 2 || version === 3 || version === 4 || version === 5 || version === 6 || version === 7 || version === 8 || version === 9 || version === 10 || version === 11 || version === 12 ? {migratedFrom: version} : {};
   const fallbackFields: SettingsField[] = [];
 
   let language: AppLanguage = DEFAULT_APP_LANGUAGE;
@@ -208,9 +213,9 @@ export function parseSettings(bytes: Uint8Array): ParsedSettings {
 }
 
 /**
- * The exact v12 file content: UTF-8 without a byte order mark, two-space indentation, a trailing newline, language,
+ * The exact v13 file content: UTF-8 without a byte order mark, two-space indentation, a trailing newline, language,
  * both games' unit profiles followed by their gear display modes,
- * all fifteen overlay sections in canonical order and the placements of all four layouts in canonical order, each with
+ * all sixteen overlay sections in canonical order and the placements of all four layouts in canonical order, each with
  * x and y rounded to four decimals and the scale to two.
  */
 export function serializeSettings(settings: Settings): string {

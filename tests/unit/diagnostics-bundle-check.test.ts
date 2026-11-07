@@ -127,7 +127,7 @@ describe('names outside the runtime strings', () => {
       liveStatus: {waiting: true, connected: true, paused: true, stale: true, incompatible: true, disconnected: true, unavailable: true, 'service-failed': true,
         restarting: true} satisfies Record<LiveTelemetry['status'], true>
 ,
-      overlaySection: {speed: true, gear: true, rpm: true, fuel: true, range: true, 'sdk-consumption': true, cargo: true, origin: true, destination: true,
+      overlaySection: {speed: true, gear: true, rpm: true, 'cruise-control': true, fuel: true, range: true, 'sdk-consumption': true, cargo: true, origin: true, destination: true,
         'distance-driven': true, 'distance-remaining': true, deadline: true, 'expected-income': true, 'game-time': true, 'mandatory-break': true} satisfies Record<OverlaySectionId, true>
     };
     for (const [name, union] of Object.entries(unions)) expect([...ENUMS[name as keyof typeof ENUMS]].sort(), name).toEqual(Object.keys(union).sort());

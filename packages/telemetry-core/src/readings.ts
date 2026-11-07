@@ -102,5 +102,10 @@ export interface NormalizedLiveState {
    * minor 2 carries it; a source below minor 2 reports `not-supported`; v0 does not carry it.
    */
   nextMandatoryBreak: Reading<number>;
+  /**
+   * The cruise control set speed in m/s (ET-071), the raw SDK value: zero means cruise control is off and is a value,
+   * never unavailable. v1 minor 3 carries it; a source below minor 3 reports `not-supported`; v0 does not carry it.
+   */
+  cruiseControl: Reading<number>;
   configurationRevision: string;
 }

@@ -178,8 +178,9 @@ Json gearbox(const GearboxPod& g) {
 Json mandatory_break(const Field<std::int32_t>& f) {
   return with_unit(field(f, [](std::int32_t v) { return number(v); }), "min");
 }
-// The state of `minor`: minor 1 adds `gearbox` and minor 2 adds `nextMandatoryBreak` after it; minor 0 carries neither,
-// whatever the POD holds, so lower-minor bytes never change.
+// The state of `minor`: minor 1 adds `gearbox`, minor 2 adds `nextMandatoryBreak` after it and minor 3 adds
+// `cruiseControl` (ET-071) after that; a lower minor carries none of the later keys, whatever the POD holds, so
+// lower-minor bytes never change.
 Json state(const StatePod& s, const Currency& currency, unsigned minor) {
   Object o{{"simulation", text_value(simulation(s.simulation))},
     {"speed", measure(scaled(s.speed_mps, 1, -1000, 1000, "m/s"))}, {"fuel", measure(scaled(s.fuel_l, 1, 0, 1e6, "L"))},
@@ -193,6 +194,8 @@ Json state(const StatePod& s, const Currency& currency, unsigned minor) {
     {"window", window(s.window)}};
   if (minor >= 1) o.emplace("gearbox", gearbox(s.gearbox));
   if (minor >= 2) o.emplace("nextMandatoryBreak", mandatory_break(s.next_mandatory_break_min));
+  // SDK m/s unscaled; a negative, non-finite or above-bound value is `invalid`, never clamped.
+  if (minor >= 3) o.emplace("cruiseControl", measure(scaled(s.cruise_control_mps, 1, 0, 1000, "m/s")));
   return Json{std::move(o)};
 }
 }

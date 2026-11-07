@@ -93,6 +93,8 @@ export function normalizeV1State(state: Omit<CurrentState, 'window'>, status?: P
     gearbox: normalizeV1Gearbox(state.gearbox),
     // Below minor 2 the state carries no break: the protocol does not transport it, which is not-supported (ET-052 MB5).
     nextMandatoryBreak: state.nextMandatoryBreak ? fromAvailable(state.nextMandatoryBreak) : missing('not-supported'),
+    // Below minor 3 the state carries no cruise control: the protocol does not transport it, which is not-supported (ET-071).
+    cruiseControl: state.cruiseControl ? fromAvailable(state.cruiseControl) : missing('not-supported'),
     configurationRevision: configuration.revision
   };
 }
