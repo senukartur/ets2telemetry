@@ -127,7 +127,8 @@ export function listItem(db: Database.Database, r: Row): JournalTripListItem {
     observedDistanceM: fromAvailability(r.observed_distance_m, r.observed_distance_m_state, toReal),
     fuelUsedL: fromAvailability(r.fuel_used_l, r.fuel_used_l_state, toReal),
     job: {source: job.source as 'event' | 'checkpoint', sourceCity: values.sourceCity, sourceCompany: values.sourceCompany, destinationCity: values.destinationCity,
-      destinationCompany: values.destinationCompany, cargo: values.cargo, plannedDistance: values.plannedDistance, expectedIncome: values.expectedIncome}
+      destinationCompany: values.destinationCompany, cargo: values.cargo, market: values.market, isSpecialJob: values.isSpecialJob,
+      plannedDistance: values.plannedDistance, expectedIncome: values.expectedIncome}
   };
 }
 

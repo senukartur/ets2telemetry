@@ -687,6 +687,8 @@ export const EN_DICTIONARY: TranslationDictionary = channelCopyTable(Object.free
   'sync.none': '—',
   'j.emptyTitle': 'No trips yet',
   'j.emptyText': 'Take a job in the game. A trip appears here as soon as it starts.',
+  'j.specialTransport': 'Special transport',
+  'j.worldOfTrucks': 'World of Trucks',
   'tr.back': 'Journal',
   'tr.distance': 'Distance observed',
   'tr.planned': 'planned {v}',

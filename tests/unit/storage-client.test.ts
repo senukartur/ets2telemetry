@@ -569,7 +569,7 @@ describe('ET-016 journal reads at the worker boundary', () => {
   const LIST_ITEM = {isHardMode: false, hardModeDetails: null, tripUuid: TRIP, game: 'ets2', gameMode: {mode: 'unknown', method: 'none', confidence: 'none'}, gameModeAmbiguous: false, outcome: 'open', closeReason: null,
     recordingCompleteness: 'unknown', startedUtcMs: 1_791_676_800_000, endedUtcMs: null, observedDistanceM: {available: true, value: 0}, fuelUsedL: NO,
     job: {source: 'event', sourceCity: {available: true, value: ''}, sourceCompany: NO, destinationCity: NO, destinationCompany: NO, cargo: NO,
-      plannedDistance: {available: true, value: 0, unit: 'm'}, expectedIncome: {available: true, value: {raw: '18446744073709551615', sdkType: 'u64', currency: {status: 'unknown'}}}}};
+      market: {available: true, value: 'quick_job'}, isSpecialJob: NO, plannedDistance: {available: true, value: 0, unit: 'm'}, expectedIncome: {available: true, value: {raw: '18446744073709551615', sdkType: 'u64', currency: {status: 'unknown'}}}}};
   const INTERVAL = {id: '1', kind: 'discontinuity', annotation: true, cause: 'truck-change', startUtcMs: null, endUtcMs: null, startMonotonicNs: null, endMonotonicNs: null,
     sourceClockId: null, firstEventSeq: null, lastEventSeq: null, detail: {cause: 'truck-change', annotation: true, atEventSeq: '2'}};
   const WINDOW = {known: true, pluginSessionId: P1, fromEventSeq: '1', throughEventSeq: null, end: 'open'};
@@ -662,6 +662,8 @@ describe('ET-016 journal reads at the worker boundary', () => {
     ['a negative distance', 'trips', changed(PAGE, p => { p.trips[0].observedDistanceM = {available: true, value: -1}; })],
     ['an unknown availability reason', 'trips', changed(PAGE, p => { (p.trips[0] as {fuelUsedL: unknown}).fuelUsedL = {available: false, reason: 'zero'}; })],
     ['money as a number', 'trips', changed(PAGE, p => { (p.trips[0].job as {expectedIncome: unknown}).expectedIncome = {available: true, value: {raw: 5, sdkType: 'u64', currency: {status: 'unknown'}}}; })],
+    // ET-072 (REG-010, REG-014): the job summary's special-job flag is a boolean, as in the stored job values.
+    ['a numeric special-job flag', 'trips', changed(PAGE, p => { (p.trips[0].job as {isSpecialJob: unknown}).isSpecialJob = {available: true, value: 1}; })],
     ['an open trip with a close reason', 'trips', changed(PAGE, p => { (p.trips[0] as {closeReason: unknown}).closeReason = 'gap'; })],
     ['an extra field', 'trips', changed(PAGE, p => { (p.trips[0] as Record<string, unknown>).processId = 4242; })],
     ['an interval flag that disagrees with its detail', 'intervals', changed(INTERVALS, p => { p.intervals[0].annotation = false; })],

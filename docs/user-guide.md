@@ -66,6 +66,8 @@ The Journal shows mode badges in each trip row and its detail header: **Truckers
 
 Mode detection checks one known TruckersMP module inside the game process when the plugin initializes. It does not use a running launcher as evidence. A missing module still records weak evidence in storage and JSON exports; the simpler single-player label changes presentation only. If TruckersMP loads its module after this one-time check, it can be missed and that session can appear as single-player. Real-game detection and initialization timing still require validation for the game/client versions in use.
 
+Each trip row and detail header also shows the trip's job type: **Cargo market**, **Freight market**, **Quick job**, or **World of Trucks** (external contracts and the external market), with a **Special transport** badge for special transport jobs. This includes trips recorded by earlier versions.
+
 ## Updating
 
 ### In the application (ET-055)

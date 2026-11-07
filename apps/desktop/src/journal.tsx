@@ -5,7 +5,7 @@ import {journalTileValues} from './screens/journal-tiles';
 import {SampleChart} from './screens/sample-chart';
 import {t} from './i18n';
 import {HardModeBadge, HardModeTrip} from './hard-mode/card';
-import {ArrowLeft, Check, ChevronRight, Circle, X, Route, Fuel, Coins, UserRound, UsersRound, CircleHelp, TriangleAlert} from 'lucide-react';
+import {ArrowLeft, Check, ChevronRight, Circle, X, Route, Fuel, Coins, UserRound, UsersRound, CircleHelp, TriangleAlert, Globe, Zap, Package, Truck, Construction} from 'lucide-react';
 import React, {useCallback, useEffect, useMemo, useRef, useState} from 'react';
 import type {
   AppLanguage, JournalCallResult, JournalCompleteness, JournalDatabase, JournalGame, JournalOutcome, JournalTripDetail, JournalTripPage, JournalTripsQuery, RecordingHealth, UnitProfiles
@@ -18,7 +18,7 @@ import {Select, SelectContent, SelectItem, SelectTrigger, SelectValue} from '@/c
 import {Table, TableBody, TableCell, TableHead, TableHeader, TableRow} from '@/components/ui/table';
 import {Tabs, TabsContent, TabsList, TabsTrigger} from '@/components/ui/tabs';
 import {
-  journalBannerText, journalDetailText, journalErrorText, journalEventText, journalExportText, journalIntervalText, journalListText, journalSampleText, type JournalModeBadge, type JournalBadge,
+  journalBannerText, journalDetailText, journalErrorText, journalEventText, journalExportText, journalIntervalText, journalListText, journalSampleText, type JournalModeBadge, type JournalBadge, type JournalJobBadge,
   type JournalTextOptions
 } from './journal-view';
 import {JOURNAL_COMPLETENESS_TEXT, JOURNAL_EXPORT_STRINGS, JOURNAL_GAME_TEXT, JOURNAL_LABEL_TEXT, JOURNAL_OUTCOME_TEXT, JOURNAL_STRINGS} from './strings';
@@ -99,6 +99,14 @@ function ModeBadge({mode, testId}: {mode: JournalModeBadge; testId: string}) {
   const Icon = mode.tone === 'warn' ? TriangleAlert : mode.kind === 'single-player' ? UserRound : mode.kind === 'truckersmp' ? UsersRound : CircleHelp;
   return <Badge variant={mode.tone} className="max-w-full whitespace-normal text-left" data-testid={testId}><Icon aria-hidden="true" className="size-3.5 shrink-0" strokeWidth={1.8} /><span className="min-w-0 break-words">{mode.text}</span></Badge>;
 }
+/** The job market badge (ET-072): one neutral badge whose icon names the market kind, never a good or bad tone. */
+function JobTypeBadge({job, testId}: {job: JournalJobBadge; testId: string}) {
+  const Icon = job.kind === 'world-of-trucks' ? Globe : job.kind === 'quick-job' ? Zap : job.kind === 'cargo-market' ? Package : job.kind === 'freight-market' ? Truck : CircleHelp;
+  return <Badge variant="neutral" className="max-w-full whitespace-normal text-left" data-testid={testId} data-kind={job.kind}><Icon aria-hidden="true" className="size-3.5 shrink-0" strokeWidth={1.8} /><span className="min-w-0 break-words">{job.text}</span></Badge>;
+}
+function SpecialTransportBadge({text, testId}: {text: string; testId: string}) {
+  return <Badge variant="neutral" className="max-w-full whitespace-normal text-left" data-testid={testId}><Construction aria-hidden="true" className="size-3.5 shrink-0" strokeWidth={1.8} /><span className="min-w-0 break-words">{text}</span></Badge>;
+}
 interface Filters {game?: JournalGame; outcome?: JournalOutcome; completeness?: JournalCompleteness}
 /** A query with only the filters that are set; the preload refuses unknown keys. */
 function tripsQuery(filters: Filters, cursor: string | undefined): JournalTripsQuery {
@@ -148,7 +156,8 @@ function TripList({filters, options, recording, onDatabase, onOpen, uploadStatus
         const OutcomeIcon = outcome === 'delivered' ? Check : outcome === 'cancelled' ? X : Circle;
         return <TableRow key={row.tripUuid} data-testid="journal-row" data-trip={row.tripUuid}>
           <TableCell data-testid="journal-row-started">{row.started}</TableCell><TableCell data-testid="journal-row-game"><div className="flex max-w-60 flex-wrap items-center gap-1.5"><Badge variant={row.gameId} data-testid="journal-row-game-name">{row.game}</Badge><ModeBadge mode={row.mode} testId="journal-row-mode" /><InfoHint testId={`journal-mode-evidence-${row.tripUuid}`} label={t('ui.moreAbout', {v: JOURNAL_LABEL_TEXT.gameMode}, options.language)}>{row.mode.evidence}</InfoHint></div></TableCell>
-          <TableCell data-testid="journal-row-cargo">{row.cargo}{row.isHardMode ? <> <HardModeBadge short language={options.language} /></> : null}</TableCell>
+          <TableCell><div data-testid="journal-row-cargo">{row.cargo}{row.isHardMode ? <> <HardModeBadge short language={options.language} /></> : null}</div>
+            <div className="mt-1 flex max-w-60 flex-wrap items-center gap-1.5"><JobTypeBadge job={row.jobType} testId="journal-row-job-type" />{row.specialTransport ? <SpecialTransportBadge text={row.specialTransport} testId="journal-row-special" /> : null}</div></TableCell>
           <TableCell data-testid="journal-row-route">{row.route}</TableCell>
           <TableCell><div data-testid="journal-row-observed">{row.observedDistance}</div><small className="yu-muted" data-testid="journal-row-planned">{row.plannedDistance}</small></TableCell>
           <TableCell><div data-testid="journal-row-expected">{row.expectedIncome}</div></TableCell>
@@ -340,7 +349,7 @@ function TripDetail({trip, options, onDatabase, onBack, onDeleted}: {trip: Selec
         <Button size="sm" variant="outline" disabled={paged.loaded.state === 'loading'} onClick={paged.refresh} data-testid="journal-summary-refresh">{JOURNAL_STRINGS.refresh}</Button>
         <DeleteTrip tripUuid={trip.tripUuid} onDeleted={onDeleted} /></div>
       <Status loaded={paged.loaded} testId="journal-summary" />
-      {text && detail ? <><div className="flex flex-wrap gap-2 items-center"><Badge variant={trip.game}>{trip.game.toUpperCase()}</Badge><ModeBadge mode={text.mode} testId="journal-detail-mode" /><Badge variant={detail.trip.outcome === 'delivered' ? 'ok' : detail.trip.outcome === 'cancelled' ? 'error' : 'neutral'} data-testid="journal-detail-outcome">{text.outcome}</Badge>
+      {text && detail ? <><div className="flex flex-wrap gap-2 items-center"><Badge variant={trip.game}>{trip.game.toUpperCase()}</Badge><ModeBadge mode={text.mode} testId="journal-detail-mode" /><JobTypeBadge job={text.jobType} testId="journal-detail-job-type" />{text.specialTransport ? <SpecialTransportBadge text={text.specialTransport} testId="journal-detail-special" /> : null}<Badge variant={detail.trip.outcome === 'delivered' ? 'ok' : detail.trip.outcome === 'cancelled' ? 'error' : 'neutral'} data-testid="journal-detail-outcome">{text.outcome}</Badge>
         {completenessBadge(text.completeness, 'journal-detail-completeness')}{detail.trip.isHardMode ? <HardModeBadge language={language} /> : null}</div>
         <h2 data-testid="trip.header.cargo">{cargoTitle}</h2><p data-testid="journal-detail-title">{text.title}</p>
         <p className="yu-muted">{value('job', 'sourceCompany')} → {value('job', 'destinationCompany')} · {value('trip', 'started')}</p>

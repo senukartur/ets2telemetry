@@ -687,6 +687,8 @@ export const RU_DICTIONARY: TranslationDictionary = channelCopyTable(Object.free
   'sync.none': '—',
   'j.emptyTitle': 'Рейсов пока нет',
   'j.emptyText': 'Возьмите заказ в игре. Рейс появится здесь, как только начнётся.',
+  'j.specialTransport': 'Спецтранспорт',
+  'j.worldOfTrucks': 'World of Trucks',
   'tr.back': 'Журнал',
   'tr.distance': 'Пройдено по одометру',
   'tr.planned': 'по заказу {v}',
