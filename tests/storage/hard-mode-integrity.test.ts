@@ -286,6 +286,28 @@ describe('ET-026 integrity (REG-005/006/007)', () => {
       const trip=ok(await client.journalTrips()).trips[0];expect(trip).toMatchObject({isHardMode:false,hardModeDetails:{passingChecks:4,failingChecks:1,unknownChecks:1}});
     } finally {expect(await client.close()).toEqual({clean:true});}
   });
+  it('persists pending scheduled counts when a clock invalidation clears current proof session', async () => {
+    const directory=process.env.ETS2TELEMETRY_STORAGE_TEST_BUNDLES; if(!directory)throw new Error('Run storage suite');
+    worker=new Worker(path.join(directory,'storage-worker.cjs'),{workerData:{kind:'storage'}});
+    const client=new StorageClient(workerHandle(worker),{closeGraceMs:TEST_CLOSE_GRACE_MS});
+    let current=evidence();const recorder=new TripRecorderSink(recorderClient({client}),{hardModeEvidence:()=>current});
+    try {
+      ok(await client.open({path:ws.database,purpose:'synthetic',backupsDirectory:ws.backups,appVersion:'test-v2'}));
+      const script=new Script(ETS2_A);sinkOk(await recorder.openSession(script.welcome()));sinkOk(await recorder.commit(script.event(r.jobConfigured()),{receivedUtcMs:Date.now()}));
+      let entered!:()=>void,release!:()=>void;const held=new Promise<void>(resolve=>{entered=resolve;}),original=client.observeHardMode.bind(client);
+      client.observeHardMode=async(game,value,fresh)=>{client.observeHardMode=original;entered();await new Promise<void>(resolve=>{release=resolve;});return original(game,value,fresh);};
+      current=evidence();recorder.observeHardMode('ets2',current);await held;
+      current=evidence();recorder.observeHardMode('ets2',current);
+      current={assessment:unknownHardMode(Date.now()),binding:null,pluginSessionId:null,sourceMonotonicNs:null,diagnostic:'session-transition'};
+      recorder.observeHardMode('ets2',current);release();await recorder.flushHardMode();
+      let trip=ok(await client.journalTrips()).trips[0];expect(trip.hardModeDetails).toMatchObject({passingChecks:3,failingChecks:0,unknownChecks:0,latest:{state:'unknown'}});
+      current={...evidence(),assessment:unknownHardMode(Date.now()),binding:null,diagnostic:'settings-unavailable'};
+      recorder.observeHardMode('ets2',current);await recorder.flushHardMode();
+      sinkOk(await recorder.commit(script.event(delivery()),{receivedUtcMs:Date.now()}));trip=ok(await client.journalTrips()).trips[0];
+      expect(trip).toMatchObject({isHardMode:true,hardModeDetails:{passingChecks:3,failingChecks:0,unknownChecks:1,latest:{state:'unknown'}}});
+      expect(ok(await client.committedThrough(ETS2_A))).toBe('2');
+    } finally {expect(await client.close()).toEqual({clean:true});}
+  });
   it('scopes cumulative checks to the intended raw member and authenticated plugin session', async () => {
     const directory=process.env.ETS2TELEMETRY_STORAGE_TEST_BUNDLES; if(!directory)throw new Error('Run storage suite');
     worker=new Worker(path.join(directory,'storage-worker.cjs'),{workerData:{kind:'storage'}});
@@ -303,6 +325,12 @@ describe('ET-026 integrity (REG-005/006/007)', () => {
       expect(ok(await client.getTrip(other))!.hardModeDetails).toMatchObject({passingChecks:0,failingChecks:0});
       const invalid=await client.observeHardMode('ets2',{...evidence(),pluginSessionId:foreign,batch:{...batch,sequence:101,passingChecks:96}},true);
       expect(invalid).toMatchObject({ok:false,error:{code:'INVALID_INPUT'}});
+      expect(await client.observeHardMode('ets2',{...evidence(),pluginSessionId:null,batchSessionId:foreign,batch:{...batch,sequence:101,passingChecks:96}},true)).toMatchObject({ok:false,error:{code:'INVALID_INPUT'}});
+      const third='70000000-0000-4000-8000-000000000003',source=new Script(ETS2_A);source.next=2n;
+      expect(await client.commitEvent({message:source.event(r.jobConfigured()),hardMode:{...evidence(),batchSessionId:foreign,batch:{...batch,tripUuid:third}},hardModeFresh:true,
+        effects:[{...opening,tripUuid:third}]})).toMatchObject({ok:false,error:{code:'INVALID_INPUT'}});
+      expect(ok(await client.committedThrough(ETS2_A))).toBe('1');expect(ok(await client.getTrip(third))).toBeUndefined();
+
       expect(ok(await client.getTrip(id))!.hardModeDetails).toMatchObject({passingChecks:95,failingChecks:5});
     } finally {expect(await client.close()).toEqual({clean:true});}
   });

@@ -229,7 +229,7 @@ function applyEffects(c: EffectContext, effects: unknown): void {
           .run(effect.tripUuid, c.session.id, effect.game, enumValue(effect.gameMode.mode, MODES), enumValue(effect.gameMode.method, METHODS), enumValue(effect.gameMode.confidence, CONFIDENCES),
             optionalBoolean(effect.gameModeAmbiguous) ?? 0n, job, truck, attached ? null : c.eventRef, attached ? 'checkpoint' : 'event', 'open', enumValue(effect.recordingCompleteness, COMPLETENESS),
             utcMs(effect.startedUtcMs), null, 'not-observed', c.now, c.now).lastInsertRowid;
-        statement(c.db, 'UPDATE trips SET hard_mode_details = ? WHERE id = ?').run(JSON.stringify(newHardModeDetails(unknownHardMode(Number(c.now), 'historical'), null)), id);
+        statement(c.db, 'UPDATE trips SET hard_mode_details = ? WHERE id = ?').run(JSON.stringify(newHardModeDetails(unknownHardMode(effect.startedUtcMs, 'historical'), null)), id);
         addTrailers(c, BigInt(id), effect.trailerConfigurations);
         break;
       }

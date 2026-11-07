@@ -25,7 +25,8 @@ export interface HardModeDetailsV2 extends HardModeCounts {
 export type HardModeDetails = HardModeDetailsV1 | HardModeDetailsV2;
 export interface HardModeStatus {assessment: HardModeAssessment; trip: HardModeDetails | null}
 // Internal evidence: digest binds process/session/profile/log generation without retaining names or absolute paths.
-export interface HardModeObservation {assessment: HardModeAssessment; binding: string | null; pluginSessionId: string | null; sourceMonotonicNs: string | null; check?: {producer: string; sequence: number}; batch?: HardModeCheckBatch; diagnostic?: HardModeDiagnosticCode; member?: string; diagnostics?: HardModeDiagnostic[]}
+// Accumulated checks retain their source session even when current assessment proof becomes unavailable.
+export interface HardModeObservation {assessment: HardModeAssessment; binding: string | null; pluginSessionId: string | null; sourceMonotonicNs: string | null; check?: {producer: string; sequence: number}; batch?: HardModeCheckBatch; batchSessionId?: string; diagnostic?: HardModeDiagnosticCode; member?: string; diagnostics?: HardModeDiagnostic[]}
 const reasons: readonly unknown[] = ['compliant', 'outside-limit', 'missing', 'malformed', 'conflicting', 'source-unproven', 'interrupted', 'historical', 'source-changed', 'parking-unproven'];
 const record = (v: unknown): v is Record<string, unknown> => typeof v === 'object' && v !== null && !Array.isArray(v);
 const exact = (v: unknown, keys: string[]): v is Record<string, unknown> => record(v) && Object.keys(v).sort().join(',') === keys.sort().join(',');
@@ -73,10 +74,11 @@ export function isHardModeStatus(v: unknown): v is HardModeStatus {
   return exact(v, ['assessment', 'trip']) && isHardModeAssessment(v.assessment) && (v.trip === null || isHardModeDetails(v.trip));
 }
 export function isHardModeObservation(v: unknown): v is HardModeObservation {
-  return record(v) && exact(v, ['assessment', 'binding', 'pluginSessionId', 'sourceMonotonicNs', ...('check' in v ? ['check'] : []), ...('batch' in v ? ['batch'] : []), ...('diagnostic' in v ? ['diagnostic'] : []), ...('member' in v ? ['member'] : []), ...('diagnostics' in v ? ['diagnostics'] : [])])
+  return record(v) && exact(v, ['assessment', 'binding', 'pluginSessionId', 'sourceMonotonicNs', ...('check' in v ? ['check'] : []), ...('batch' in v ? ['batch'] : []), ...('batchSessionId' in v ? ['batchSessionId'] : []), ...('diagnostic' in v ? ['diagnostic'] : []), ...('member' in v ? ['member'] : []), ...('diagnostics' in v ? ['diagnostics'] : [])])
     && (!('check' in v) || exact(v.check, ['producer', 'sequence']) && uuid(v.check.producer) && time(v.check.sequence) && Number(v.check.sequence) > 0)
     && (!('diagnostics' in v) || Array.isArray(v.diagnostics) && v.diagnostics.length > 0 && v.diagnostics.length <= 2 && v.diagnostics.every(d => d !== null && diagnostic(d)))
-    && (!('member' in v) || uuid(v.member)) && (!('batch' in v) || isHardModeCheckBatch(v.batch)) && (!('diagnostic' in v) || HARD_MODE_DIAGNOSTIC_CODES.includes(v.diagnostic as HardModeDiagnosticCode)) && isHardModeAssessment(v.assessment)
+    && (!('batchSessionId' in v) || uuid(v.batchSessionId) && 'batch' in v)
+    && (!('member' in v) || uuid(v.member)) && (!('member' in v) || !('batch' in v) || record(v.batch) && v.batch.tripUuid === v.member) && (!('batch' in v) || isHardModeCheckBatch(v.batch)) && (!('diagnostic' in v) || HARD_MODE_DIAGNOSTIC_CODES.includes(v.diagnostic as HardModeDiagnosticCode)) && isHardModeAssessment(v.assessment)
     && (v.binding === null || typeof v.binding === 'string' && /^[0-9a-f]{64}$/.test(v.binding))
     && (v.pluginSessionId === null || typeof v.pluginSessionId === 'string' && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(v.pluginSessionId))
     && (v.sourceMonotonicNs === null || typeof v.sourceMonotonicNs === 'string' && /^(0|[1-9][0-9]{0,19})$/.test(v.sourceMonotonicNs) && BigInt(v.sourceMonotonicNs) <= 18446744073709551615n);

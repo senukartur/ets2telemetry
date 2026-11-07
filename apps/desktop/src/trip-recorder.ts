@@ -190,7 +190,7 @@ export class TripRecorderSink implements DurableSink {
     this.countCheck(game, value);
     if (!this.client.observeHardMode) return;
     const target = this.checkTarget;
-    if (target?.game === game) value = {...value, member: target.batch.tripUuid, ...(target.batch.sequence ? {batch: {...target.batch}} : {})};
+    if (target?.game === game) value = {...value, member: target.batch.tripUuid, ...(target.batch.sequence ? {batch: {...target.batch}, batchSessionId: target.session} : {})};
     const prior = this.pendingObservation, diagnostics = prior?.diagnostics ? [...prior.diagnostics] : [];
     const diagnostic = hardModeDiagnostic(value, previousBinding ?? null);
     if (diagnostic) {if (diagnostics.length === 2) diagnostics[1] = diagnostic; else diagnostics.push(diagnostic);}
@@ -354,7 +354,7 @@ export class TripRecorderSink implements DurableSink {
     }
     else if (stepped.effects.some(e => e.kind === 'trip.close' && e.tripUuid === this.checkTarget?.batch.tripUuid)) this.checkTarget = undefined;
     const target = opening?.kind === 'trip.open' ? this.checkTarget : undefined;
-    const hardMode = capture ? {...capture.observation, ...(target && target.batch.sequence ? {batch: {...target.batch}} : {})} : undefined;
+    const hardMode = capture ? {...capture.observation, ...(target && target.batch.sequence ? {batch: {...target.batch}, batchSessionId: target.session} : {})} : undefined;
     // An optional observer command cannot veto healthy recording. Its retained checkpoint instead commits atomically
     // with the next ordinary event/gap, so no check or original diagnostic disappears before ACK.
     const hardModeLoss = retained ? {...retained.value, assessment: unknownHardMode(Date.now(), 'interrupted'), diagnostic: 'storage-failure' as const,

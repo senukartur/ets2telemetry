@@ -130,6 +130,15 @@ describe('ET-026 persisted settings (REG-009/010)', () => {
     expect(ru.loss).toContain('обнаружено 0'); expect(ru.loss).not.toContain('outside-limit');
     expect(JSON.stringify(details)).toBe(before); expect(hardModeView({assessment: fail, trip: details}, 2000, 'en').rows[3].detected).toBe('Off (0)');
   });
+  it('validates private batch provenance independently of nullable current proof', () => {
+    const batch={tripUuid:'70000000-0000-4000-8000-000000000001',producer:'80000000-0000-4000-8000-000000000001',sequence:1,passingChecks:1,failingChecks:0,unknownChecks:0};
+    const value={assessment:unknownHardMode(0),binding:null,pluginSessionId:null,sourceMonotonicNs:null,batch,batchSessionId:'90000000-0000-4000-8000-000000000001',member:batch.tripUuid};
+    expect(isHardModeObservation(value)).toBe(true);
+    expect(isHardModeObservation({...value,batchSessionId:'private text'})).toBe(false);
+    expect(isHardModeObservation({...value,member:'70000000-0000-4000-8000-000000000002'})).toBe(false);
+    const {batch:removed,...withoutBatch}=value;void removed;
+    expect(isHardModeObservation(withoutBatch)).toBe(false);
+  });
   it('rejects unlisted fields, identities, bad lengths and malformed cross-boundary values', () => {
     const status = {assessment: evaluate(), trip: null}; expect(isHardModeStatus(status)).toBe(true);
     expect(isHardModeStatus({...status, filename: 'private'})).toBe(false);

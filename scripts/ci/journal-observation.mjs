@@ -366,10 +366,17 @@ const EXPORT_TARGET_REFUSED_TEXT = Object.freeze({
 });
 const ETS2_A = '10000000-0000-4000-8000-0000000000a1';
 const EUR = {status: 'sdk-documented', code: 'EUR', source: 'scs-sdk-1.15/include/eurotrucks2/scssdk_telemetry_eut2.h#game-specific-units'};
+/** Independent zero-check expectation for current synthetic seeds; historical fixtures remain null/v1. */
+export function unobservedHardModeAudit(atUtcMs) {
+  const assessment={observedUtcMs:atUtcMs,state:'unknown',source:'unknown',rules:
+    ['fuel','air','police','fatigue','limiter','truck','trailer','parking','rain','events','braking','traffic'].map(id=>({id,state:'unknown',values:id==='parking'?[null,null]:[null],reason:'historical'}))};
+  return {version:2,binding:null,opening:assessment,latest:structuredClone(assessment),firstLoss:null,manualDelivery:null,
+    passingChecks:0,failingChecks:0,unknownChecks:0,checkpoint:null,firstDiagnostic:null,latestDiagnostic:null};
+}
 /** The delivered anchor's export, written by hand from tests/shared/journal-seed.ts: its row, bounds, timeline, samples and money. */
 const DELIVERED_EXPORT = {
   bounds: {committedThroughEventSeq: '29', lastSampleId: '9', lastIntervalId: null, snapshot: false},
-  trip: {is_hard_mode: false, hard_mode_details: null, tripUuid: T.delivered, pluginSessionId: ETS2_A, game: 'ets2', gameMode: {mode: 'single-player', method: 'module-scan', confidence: 'weak'}, gameModeAmbiguous: false,
+  trip: {is_hard_mode: false, hard_mode_details: unobservedHardModeAudit(BASE_UTC+4_000), tripUuid: T.delivered, pluginSessionId: ETS2_A, game: 'ets2', gameMode: {mode: 'single-player', method: 'module-scan', confidence: 'weak'}, gameModeAmbiguous: false,
     outcome: 'delivered', closeReason: 'outcome', recordingCompleteness: 'complete', startedUtcMs: BASE_UTC + 4_000, endedUtcMs: BASE_UTC + 9_000,
     observedDistanceM: {available: true, value: 152_000.5}, fuelUsedL: {available: false, reason: 'not-observed'}, openedBy: 'event', openedEventSeq: '4', outcomeEventSeq: '9',
     closedBy: {pluginSessionId: ETS2_A, eventSeq: '9'}},
@@ -452,15 +459,15 @@ export async function runJournalExport({application, dashboard, config, record})
   const documents = {};
   for (const name of ['paging', 'delivered']) {
     const document = documents[name] = JSON.parse(await readFile(path.join(folder, `${name}.json`), 'utf8'));
-    assert.deepEqual(problemsOf(document), [], `The ${name} export is not a valid format version 4 document`);
+    assert.deepEqual(problemsOf(document), [], `The ${name} export is not a valid format version 5 document`);
     assert.deepEqual({format: document.format, formatVersion: document.formatVersion, application: document.header.application, purpose: document.header.database.purpose,
       schemaVersion: document.header.database.schemaVersion, sessionOrigin: document.header.sessionOrigin},
     {format: 'ets2telemetry.trip-export', formatVersion: 5, application: {name: 'ETS2Telemetry', version: smokeBuild(config).version}, purpose: 'synthetic', schemaVersion: 6, sessionOrigin: 'synthetic'});
   }
   assert.equal(documents.paging.header.database.uuid, documents.delivered.header.database.uuid);
-  // Historical seeds never supplied observation metadata; current settings cannot create retrospective proof.
+  // Current synthetic seeds supply no verification observations: zero known checks cannot qualify.
   assert.equal(documents.paging.trip.is_hard_mode, false);
-  assert.equal(documents.paging.trip.hard_mode_details, null);
+  assert.deepEqual(documents.paging.trip.hard_mode_details, unobservedHardModeAudit(documents.paging.trip.startedUtcMs));
   const p = documents.paging;
   record.pagingExport = {events: p.events.length, firstEvent: p.events[0].eventSeq, lastEvent: p.events.at(-1).eventSeq, intervals: p.intervals.length, samples: p.samples.length,
     snapshot: p.bounds.snapshot, outcome: p.trip.outcome, tollTotal: p.money.totals};

@@ -35,7 +35,7 @@ export function updateOpenHardMode(db: Database.Database, game: string, observat
       if (target !== row.trip_uuid) continue;
       const batch = observation.batch;
       const changesCounts = batch && (previous.checkpoint?.producer !== batch.producer || batch.sequence > previous.checkpoint.sequence);
-      if (changesCounts && observation.pluginSessionId !== row.plugin_session_uuid) fail('INVALID_INPUT');
+      if (changesCounts && (observation.batchSessionId ?? observation.pluginSessionId) !== row.plugin_session_uuid) fail('INVALID_INPUT');
       write(db, row.id, advanceHardModeV2(previous, !fresh && observation.assessment.state === 'pass' ? {...observation, assessment: unknownHardMode(now, 'interrupted'), diagnostic: 'profile-verification'} : observation, latest));
       continue;
     }
@@ -67,6 +67,7 @@ export function applyEventHardMode(db: Database.Database, message: Extract<Serve
     const row = db.prepare('SELECT id, hard_mode_details, outcome, opened_by FROM trips WHERE trip_uuid = ?').get(effect.tripUuid) as {id: unknown; hard_mode_details: unknown; outcome: string; opened_by: string};
     const previous = readHardModeDetails(row.hard_mode_details);
     if (effect.kind === 'trip.open') {
+      if (observation.batch?.tripUuid === effect.tripUuid && (observation.batchSessionId ?? observation.pluginSessionId) !== message.source.pluginSessionId) fail('INVALID_INPUT');
       const diagnostics = [hardModeDiagnostic(observation), pendingLoss ? hardModeDiagnostic(pendingLoss) : null].filter(value => value !== null);
       const details = advanceHardModeV2(newHardModeDetails(assessment, fresh ? observation.binding : null), {...observation, assessment,
         ...(diagnostics.length ? {diagnostics} : {}), ...(observation.batch?.tripUuid === effect.tripUuid ? {} : {batch: undefined})});

@@ -20,6 +20,7 @@
 // docs/journal-export.md, docs/storage.md and docs/trips.md, never read back from the code under test (docs/TESTING.md
 // §4). Every case also checks I1-I5 (scripts/ci/history-invariants.mjs) over the stored rows and every ACK written, and
 // that no game history exists. Waits are the run's own completion; the only real-time values are named hang guards.
+import {unobservedHardModeAudit} from '../shared/hard-mode';
 import {existsSync, mkdirSync, readFileSync} from 'node:fs';
 import path from 'node:path';
 import {afterEach, beforeEach, describe, expect, it} from 'vitest';
@@ -166,7 +167,7 @@ function expectationsOf(s: Scenario): TripExpectation[] {
   expect(journal.trips.map(t => t.trip).sort(), `${s.id}: the journal fixture names every stored trip`).toEqual([...stored.keys()].sort());
   return journal.trips.map(t => {
     const row = stored.get(t.trip)!;
-    const listItem = {isHardMode: false, hardModeDetails: null, tripUuid: t.trip, game, gameMode: row.gameMode, gameModeAmbiguous: row.gameModeAmbiguous, outcome: row.outcome, closeReason: row.closeReason,
+    const listItem = {isHardMode: false, hardModeDetails: unobservedHardModeAudit(row.startedUtcMs), tripUuid: t.trip, game, gameMode: row.gameMode, gameModeAmbiguous: row.gameModeAmbiguous, outcome: row.outcome, closeReason: row.closeReason,
       recordingCompleteness: row.recordingCompleteness, startedUtcMs: row.startedUtcMs, endedUtcMs: row.endedUtcMs, observedDistanceM: row.observedDistanceM, fuelUsedL: row.fuelUsedL,
       job: expandMoney(t.job)};
     // A trip opened at an event has its job at its job configuration event; a late-attach trip (attach@<nextEventSeq>) has the checkpoint's job (J9).
