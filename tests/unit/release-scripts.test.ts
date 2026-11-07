@@ -540,36 +540,77 @@ describe('the released commit\'s keys', () => {
     writeFileSync(path.join(folder, 'update-keys.ts'), changed);
     return path.join(folder, 'update-keys.ts');
   };
-  const node = (script: string, args: string[]) => spawnSync(process.execPath, [path.join(REPOSITORY_ROOT, 'scripts/release', script), ...args],
-    {encoding: 'utf8', env: {...process.env, NODE_OPTIONS: '--disable-warning=MODULE_TYPELESS_PACKAGE_JSON'}});
+  // Bounds a stuck CLI child; this is not a release-performance assertion or a larger case deadline.
+  const RELEASE_CLI_HANG_GUARD_MS = 4000;
+  const node = (script: string, args: string[]) => {
+    const child = spawnSync(process.execPath, [path.join(REPOSITORY_ROOT, 'scripts/release', script), ...args],
+      {encoding: 'utf8', timeout: RELEASE_CLI_HANG_GUARD_MS, windowsHide: true,
+        env: {...process.env, NODE_OPTIONS: '--disable-warning=MODULE_TYPELESS_PACKAGE_JSON'}});
+    expect(child.error).toBeUndefined();
+    return child;
+  };
 
-  it('writes and verifies with the keys of the released commit, and refuses keys the released build did not compile', () => {
+  const releasedArtifact = () => {
     const key = ownerKey('production'), keysFile = releasedKeys(key.entry);
     const {folder} = artifactFolder();
     const manifest = path.join(scratch, 'update-manifest.json'), notes = path.join(scratch, 'notes.md');
     const common = ['--artifacts', folder, '--channel', 'production', '--run-id', RUN, '--commit', COMMIT];
+    return {key, keysFile, folder, manifest, notes, common};
+  };
+  const signedReleasedArtifact = () => {
+    const fixture = releasedArtifact(), {key, folder, manifest} = fixture;
+    const facts = verifyReleaseArtifacts(folder, {channel: 'production', runId: RUN, commit: COMMIT});
+    const bytes = manifestBytesOf(buildUpdateManifest(facts, {keyId: key.entry.keyId, now: new Date('2026-10-28T12:34:56.789Z')}));
+    const signatureBytes = signManifestBytes(bytes, key.privateKey).signature;
+    expect(verifySignedManifest({manifestBytes: bytes, signatureBytes, facts, keys: parseUpdateKeysSource(readFileSync(fixture.keysFile, 'utf8')).production})).toMatchObject({keyId: key.entry.keyId});
+    writeFileSync(manifest, bytes);
+    const signature = path.join(scratch, 'update-manifest.json.sig');
+    writeFileSync(signature, signatureBytes);
+    return {...fixture, signature};
+  };
+
+  it('writes with the keys of the released commit', () => {
+    const {key, keysFile, folder, manifest, notes, common} = releasedArtifact();
     const written = node('write-update-manifest.mjs', [...common, '--out', manifest, '--notes', notes, '--keys-file', keysFile]);
     expect(written.status, written.stderr).toBe(0);
-    expect(JSON.parse(readFileSync(manifest, 'utf8'))).toMatchObject({keyId: key.entry.keyId});
-    const signature = path.join(scratch, 'update-manifest.json.sig');
-    writeFileSync(signature, signManifestBytes(readFileSync(manifest), key.privateKey).signature);
+    const bytes = readFileSync(manifest);
+    expect(JSON.parse(bytes.toString('utf8'))).toMatchObject({keyId: key.entry.keyId});
+    const facts = verifyReleaseArtifacts(folder, {channel: 'production', runId: RUN, commit: COMMIT});
+    expect(verifySignedManifest({manifestBytes: bytes, signatureBytes: signManifestBytes(bytes, key.privateKey).signature,
+      facts, keys: parseUpdateKeysSource(readFileSync(keysFile, 'utf8')).production})).toMatchObject({keyId: key.entry.keyId});
+  });
+  it('verifies with the keys of the released commit', () => {
+    const {key, keysFile, manifest, signature, common} = signedReleasedArtifact();
     const verified = node('verify-update-manifest.mjs', ['--manifest', manifest, '--signature', signature, ...common, '--keys-file', keysFile]);
     expect(verified.status, verified.stderr).toBe(0);
     expect(JSON.parse(verified.stdout)).toMatchObject({verified: true, keyId: key.entry.keyId});
+  });
+  it('refuses a signed manifest against the different keys of this checkout', () => {
+    const {key, manifest, signature, common} = signedReleasedArtifact();
     // This checkout ships only the owner's key, so the same signed manifest is refused against it.
     const shipped = node('verify-update-manifest.mjs', ['--manifest', manifest, '--signature', signature, ...common]);
     expect(shipped.status).toBe(1);
     expect(shipped.stderr).toContain(`keyId ${key.entry.keyId} is not a compiled production key`);
+  });
+  it('refuses a requested key the released build did not compile before writing', () => {
+    const {keysFile, common} = releasedArtifact();
     // A requested keyId the released build did not compile is refused before anything is written.
     const other = node('write-update-manifest.mjs', [...common, '--out', path.join(scratch, 'm2.json'), '--notes', path.join(scratch, 'n2.md'), '--keys-file', keysFile,
       '--key-id', 'production-ffffffffffffffff']);
     expect(other.status).toBe(1);
     expect(other.stderr).toContain('is not a production key compiled into the released build');
+    expect(existsSync(path.join(scratch, 'm2.json'))).toBe(false);
+    expect(existsSync(path.join(scratch, 'n2.md'))).toBe(false);
+  });
+  it('refuses an empty staging key list in the released build', () => {
+    const keysFile = releasedKeys(ownerKey('production').entry);
     // The staging list of the same file is empty.
     const staging = node('write-update-manifest.mjs', ['--artifacts', artifactFolder({channel: 'staging'}).folder, '--channel', 'staging', '--run-id', RUN, '--run-number', '000042', '--commit', COMMIT,
       '--out', path.join(scratch, 'm3.json'), '--notes', path.join(scratch, 'n3.md'), '--keys-file', keysFile]);
     expect(staging.status).toBe(1);
     expect(staging.stderr).toContain('No compiled staging update key in the released build');
+    expect(existsSync(path.join(scratch, 'm3.json'))).toBe(false);
+    expect(existsSync(path.join(scratch, 'n3.md'))).toBe(false);
   });
 });
 

@@ -691,10 +691,15 @@ export async function runUiSmoke({application, dashboard, overlay, source, sourc
     for (const size of sizes) {
       await resize(dashboard, size);
       if (config.uiCase === 'shell') {
-        for (const route of ['live', 'hardMode', 'journal', 'settings']) {
+        for (const route of ['live', 'hardMode', 'journal', 'settings', 'account']) {
           await focusRoute(dashboard, route); await save(route, language, size);
         }
-        assert.deepEqual(await dashboard.locator('.yu-sidebar nav button').evaluateAll(nodes => nodes.map(node => node.getAttribute('data-testid'))), ['tab-live', 'tab-hardMode', 'tab-journal', 'tab-settings']);
+        assert.deepEqual(await dashboard.locator('.yu-sidebar nav button').evaluateAll(nodes => nodes.map(node => node.getAttribute('data-testid'))), ['tab-live', 'tab-hardMode', 'tab-journal', 'tab-settings', 'tab-account']);
+        assert.equal(await dashboard.getByTestId('account.unconfigured').isVisible(), true);
+        assert.equal(await dashboard.getByTestId('account.token.input').count(), 0);
+        assert.equal(await dashboard.getByTestId('shell.status.sync').count(), 0);
+        assert.equal(await dashboard.getByTestId('journal-sync-column').count(), 0);
+        record.flags.accountUnconfigured = true;
         await dashboard.getByTestId('tab-hardMode').focus(); await dashboard.keyboard.press('Enter');
         await dashboard.waitForFunction(() => globalThis.document.activeElement?.getAttribute('data-testid') === 'screen-title');
         assert.equal(await dashboard.getByTestId('hardMode.screen').isVisible(), true);
@@ -800,6 +805,10 @@ export async function runUiSmoke({application, dashboard, overlay, source, sourc
       } else if (config.uiCase === 'journal') {
         await screen(dashboard, 'journal');
         await until(() => dashboard.getByTestId('journal-row').count(), count => count === 50, 'UI_JOURNAL_FIRST_PAGE');
+        assert.equal(await dashboard.getByTestId('shell.status.sync').count(), 0);
+        assert.equal(await dashboard.getByTestId('journal-sync-column').count(), 0);
+        assert.equal(await dashboard.getByTestId('journal-row-sync').count(), 0);
+        record.flags.syncHidden = true;
         assert.equal(await dashboard.getByTestId('journal-banner').innerText(), language === 'en' ? 'Synthetic test database — never game history' : 'Синтетическая тестовая база — не история игры');
         assert.equal(await dashboard.getByTestId('journal-search-planned').count(), 0);
         assert.ok(await dashboard.getByTestId('journal-row-game').first().evaluate(node => globalThis.getComputedStyle(node).whiteSpace === 'nowrap' && node.getBoundingClientRect().width >= 64));

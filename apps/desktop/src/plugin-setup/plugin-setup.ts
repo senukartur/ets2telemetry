@@ -80,6 +80,8 @@ export interface PluginSetupOptions {
   changed: () => void;
   /** Required unless the mode is disabled. */
   ports?: PluginSetupPorts;
+  /** Trusted composition only; admitted exclusively after the existing test-root marker check. */
+  testRootRunningCheck?: RunningCheck;
 }
 
 /** A refused plugin setup request; main turns it into a rejection with a fixed message. Never carries a path. */
@@ -109,6 +111,7 @@ export class PluginSetup {
   private readonly log: Log;
   private readonly changed: () => void;
   private readonly ports: PluginSetupPorts | undefined;
+  private readonly testRootRunningCheck: RunningCheck | undefined;
   private readonly fs: InstallerFileSystem | undefined;
   private readonly registryFs: AtomicFileSystem | undefined;
   private readonly games: Record<PluginGame, GameState> = {ets2: emptyGame(), ats: emptyGame()};
@@ -149,6 +152,7 @@ export class PluginSetup {
     this.decision = options.decision;
     this.log = options.log;
     this.changed = options.changed;
+    this.testRootRunningCheck = options.decision.mode === 'test-root' ? options.testRootRunningCheck : undefined;
     if (options.decision.mode !== 'disabled') {
       if (!options.ports) throw new Error('Plugin setup needs its ports outside the disabled mode');
       this.ports = options.ports;
@@ -541,9 +545,20 @@ export class PluginSetup {
 
   /** The running check the installer uses; it remembers the latest successful listing for the poll. */
   private readonly check: RunningCheck = async signal => {
-    const result = await this.ports!.checkRunning(signal);
+    const result = await this.runningCheck(signal);
     if (result.ok) this.seenRunning = result.running;
     return result;
+  };
+
+  private readonly runningCheck: RunningCheck = async signal => {
+    if (this.closed || signal?.aborted || this.decision.mode === 'disabled') return {ok: false, code: 'RUNNING_CHECK_FAILED'};
+    if (this.testRootRunningCheck && this.decision.mode === 'test-root') {
+      if (!await this.allowed() || this.closed || signal?.aborted) return {ok: false, code: 'RUNNING_CHECK_FAILED'};
+      this.logOnChange('running-check-port', 'PLUGIN_PROCESS_CHECK_PORT', {mode: 'test-root', source: 'fixture'});
+      return this.testRootRunningCheck(signal);
+    }
+    this.logOnChange('running-check-port', 'PLUGIN_PROCESS_CHECK_PORT', {mode: this.decision.mode, source: 'host'});
+    return this.ports!.checkRunning(signal);
   };
 
   private ensureRegistry(): Promise<PluginRegistry> {
@@ -582,7 +597,7 @@ export class PluginSetup {
     if (this.closed || this.suspended || this.current) return;
     const controller = this.pollController = new AbortController();
     let check: Awaited<ReturnType<RunningCheck>>;
-    try {check = await this.ports!.checkRunning(controller.signal);} catch {check = {ok: false, code: 'RUNNING_CHECK_FAILED'};}
+    try {check = await this.runningCheck(controller.signal);} catch {check = {ok: false, code: 'RUNNING_CHECK_FAILED'};}
     if (this.pollController === controller) this.pollController = undefined;
     if (this.closed || this.current) return;
     if (check.ok && this.unblocked(check.running)) void this.trigger('poll');
@@ -637,13 +652,17 @@ export function productionPluginSetupPorts(options: {mainDirectory: string; reso
   installDirectory: string | undefined; log: Log}): PluginSetupPorts {
   const bundleDirectory = pluginBundleDirectory(options.mainDirectory, options.resourcesPath, options.packaged);
   const data = options.localAppData && path.win32.isAbsolute(options.localAppData) ? dataPaths(options.localAppData) : undefined;
+  let observations = 0;
   return {
     fs: nodeInstallerFs,
     registryFs: nodeAtomicFs,
     readBundle: signal => readPluginBundle(bundleDirectory, {signal}),
     loadRegistry: (directory, fs) => PluginRegistry.load(directory, {fs, log: options.log}),
     readSteamRoot: signal => readSteamRoot({signal}),
-    checkRunning: signal => checkRunningGames({signal}),
+    checkRunning: signal => checkRunningGames({signal, observe: facts => {
+      if (observations++ < 256) options.log('PLUGIN_PROCESS_CHECK', undefined, {...facts});
+      else if (observations === 257) options.log('PLUGIN_PROCESS_CHECK_TRUNCATED', undefined, {limit: 256});
+    }}),
     registryDirectory: data?.pluginMetadata,
     dataRoot: data?.root,
     installDirectory: options.installDirectory

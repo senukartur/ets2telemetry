@@ -1,6 +1,6 @@
 import path from 'node:path';
 import type {PluginGame} from './steam-discovery';
-import {nodeExecFile, runFixedProgram, systemRoot, type ExecFilePort} from './fixed-program';
+import {nodeExecFile, runFixedProgram, systemRoot, type ExecFilePort, type FixedProgramObservation} from './fixed-program';
 
 // Running-game detection before every plugin change (ET-017 P7; docs/plugin-setup.md, "Running games"). It runs the
 // fixed `tasklist.exe /fo csv /nh` and matches image names only, case-insensitively. A failed or unparseable listing is
@@ -85,7 +85,12 @@ export interface ProcessListOptions {
   execFile?: ExecFilePort;
   env?: Readonly<Record<string, string | undefined>>;
   signal?: AbortSignal;
+  observe?: (observation: ProcessCheckObservation) => void;
 }
+export interface ProcessCheckObservation extends Omit<FixedProgramObservation, 'stage' | 'reason'> {
+  sequence: number; stage: FixedProgramObservation['stage'] | 'classified'; reason: FixedProgramObservation['reason'] | 'output-invalid'; rows: number;
+}
+let processCheckSequence = 0;
 
 /**
  * Lists the processes of every session, as tasklist does without a filter, through the absolute tasklist.exe path. The
@@ -99,11 +104,15 @@ export async function listProcesses(options: ProcessListOptions = {}): Promise<P
 export async function listProcessSessions(options: ProcessListOptions = {}): Promise<{readonly ok: true; readonly rows: readonly SessionProcessRow[]}
   | {readonly ok: false; readonly code: 'RUNNING_CHECK_FAILED'; readonly reason: string}> {
   const tasklist = path.win32.join(systemRoot(options.env ?? process.env), 'System32', 'tasklist.exe');
+  const sequence = processCheckSequence = processCheckSequence >= Number.MAX_SAFE_INTEGER ? 1 : processCheckSequence + 1;
+  let last: FixedProgramObservation = {stage: 'start', elapsedMs: 0, childPid: null, reason: null, stdoutBytes: 0, stderrBytes: 0, exitCode: null};
+  const observe = (observation: FixedProgramObservation) => {last = observation; try {options.observe?.({...observation, sequence, rows: 0});} catch {/* observation only */}};
   const result = await runFixedProgram(options.execFile ?? nodeExecFile, tasklist, ['/fo', 'csv', '/nh'],
-    {timeoutMs: TASKLIST_TIMEOUT_MS, maxOutputBytes: TASKLIST_MAX_OUTPUT_BYTES, signal: options.signal});
+    {timeoutMs: TASKLIST_TIMEOUT_MS, maxOutputBytes: TASKLIST_MAX_OUTPUT_BYTES, signal: options.signal, ...(options.observe ? {observe} : {})});
   if (!result.ok) return {ok: false, code: 'RUNNING_CHECK_FAILED', reason: result.failure};
   // tasklist writes in the console code page. The names matched here are ASCII, so latin1 never changes them.
   const rows = parseTasklistSessions(result.stdout.toString('latin1'));
+  try {options.observe?.({...last, stage: 'classified', sequence, reason: rows ? null : 'output-invalid', rows: rows?.length ?? 0});} catch {/* observation only */}
   return rows ? {ok: true, rows} : {ok: false, code: 'RUNNING_CHECK_FAILED', reason: 'output-invalid'};
 }
 

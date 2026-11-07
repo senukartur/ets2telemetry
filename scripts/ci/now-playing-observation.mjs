@@ -2,11 +2,65 @@ import {spawn} from 'node:child_process';
 import {once} from 'node:events';
 import assert from 'node:assert/strict';
 import {writeFile} from 'node:fs/promises';
+import {writeFileSync} from 'node:fs';
 import path from 'node:path';
+import {observeExit} from './exit-observation.mjs';
 import {settingsPanel} from './ui-navigation.mjs';
 import {until} from './lifecycle-observation.mjs';
 
 const marker = 'ets2telemetry.now-playing.synthetic-smoke.v1\n';
+/** A small independent journal survives a later stalled operation or Job termination; it is never a pass receipt. */
+export function nowPlayingCheckpoints(filename, {write = writeFileSync, now = Date.now} = {}) {
+  const rows = [], started = now(); let truncated = false;
+  return (phase, observation) => {
+    assert.match(phase, /^[a-z0-9-]{1,80}$/);
+    if (rows.length >= 64) {truncated = true; rows.pop();}
+    const row = {phase, milliseconds: now() - started};
+    if (observation) row.exit = {mainPid: Number.isSafeInteger(observation.main?.pid) ? observation.main.pid : null,
+      launcherPid: Number.isSafeInteger(observation.launcherPid) ? observation.launcherPid : null,
+      mainIdentity: ['verified', 'captured'].includes(observation.main?.identity) ? observation.main.identity : 'unknown',
+      mainTermination: ['exited', 'observing'].includes(observation.main?.termination) ? observation.main.termination : 'unknown',
+      launcherExit: Number.isInteger(observation.launcherExit) ? observation.launcherExit : null,
+      request: ['pending', 'fulfilled', 'rejected'].includes(observation.request) ? observation.request : 'unknown'};
+    rows.push(row);
+    try {write(filename, JSON.stringify({rows, truncated})); return true;} catch {return false;}
+  };
+}
+export async function nowPlayingStage(phase, work, checkpoint, milliseconds) {
+  checkpoint(`${phase}-started`); let timer;
+  try {
+    const value = await Promise.race([Promise.resolve().then(work), new Promise((_, reject) => {
+      timer = setTimeout(() => reject(new Error(`NOW_PLAYING_${phase.toUpperCase().replaceAll('-', '_')}_TIMEOUT`)), milliseconds);
+    })]);
+    checkpoint(`${phase}-fulfilled`); return value;
+  } catch (error) {checkpoint(`${phase}-failed`); throw error;}
+  finally {clearTimeout(timer);}
+}
+export async function finishNowPlayingFirstRun({application, launcher, record, checkpoint, observe = observeExit}) {
+  const observation = record.firstExitObservation = {};
+  checkpoint('first-exit-started');
+  try {
+    const exit = await observe({application, launcher, record: observation, requireRequest: true, message: 'NOW_PLAYING_FIRST_EXIT_TIMEOUT_8_SECONDS', request: async () => {
+      const errors = [];
+      checkpoint('tray-exit-request-started', observation);
+      try {
+        assert.equal(await application.evaluate(({app}) => app.emit('ets2telemetry:diagnostic-tray-action', 'exit')), true, 'NOW_PLAYING_TRAY_EXIT_NOT_DELIVERED');
+        record.trayExitDelivered = true; checkpoint('tray-exit-request-fulfilled');
+      } catch (error) {errors.push(error); checkpoint('tray-exit-request-failed');}
+      checkpoint('first-transport-disposal-started', observation);
+      try {await application.close(); checkpoint('first-transport-disposal-fulfilled');}
+      catch (error) {errors.push(error); checkpoint('first-transport-disposal-failed');}
+      if (errors.length === 1) throw errors[0];
+      if (errors.length > 1) throw new AggregateError(errors, 'NOW_PLAYING_TRAY_AND_CLOSE_FAILED');
+    }});
+    record.firstExit = exit.code;
+  } finally {checkpoint('first-exit-settled', observation);}
+}
+export async function restartNowPlayingAfterExit({exit, launch, checkpoint}) {
+  await exit();
+  // Playwright must dispose its first transport before another launch; the existing launch allowance remains 20 s.
+  return nowPlayingStage('second-launch', launch, checkpoint, 20000);
+}
 export async function prepareNowPlayingSmoke(config) {await writeFile(path.join(config.profile, '.ets2telemetry-now-playing-smoke'), marker, {flag: 'wx'});}
 const source = {id: 's1', sourceAppId: 'Synthetic Chrome', playback: 'playing', current: true};
 const track = {id: 's1', revision: 1, title: 'Fictional northern road', artist: 'Synthetic artist', album: 'Fixture album', playback: 'playing', timeline: {start: 0, end: 240000, position: 60000, lastUpdatedUtc: 0, rate: null}, artwork: null};

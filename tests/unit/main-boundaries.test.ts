@@ -1,5 +1,6 @@
 import type {MediaReaderOptions} from '../../apps/desktop/src/now-playing/reader';
 import type {UploadMainController} from '../../apps/desktop/src/dashboard-upload/main-controller';
+import type {RunningCheck} from '../../apps/desktop/src/plugin-setup/plugin-installer';
 import {pathToFileURL} from 'node:url';
 import {DEFAULT_NOW_PLAYING} from '../../apps/desktop/src/now-playing/contract';
 import {EventEmitter} from 'node:events';
@@ -2569,15 +2570,16 @@ interface FakePluginSetup {
   folderToOpen: ReturnType<typeof vi.fn>; current: unknown; suspend: ReturnType<typeof vi.fn>; resume: ReturnType<typeof vi.fn>; targetIdFor: ReturnType<typeof vi.fn>;
 }
 let pluginSetup: FakePluginSetup;
-let pluginOptions: {decision: unknown; ports: unknown} | undefined;
+let pluginOptions: {decision: unknown; ports: unknown; testRootRunningCheck?: RunningCheck} | undefined;
 /** Replaces the orchestrator with a fake in `mode` before main loads. */
 function mockPluginSetup(mode = 'test-root') {
   class PluginSetupError extends Error {}
+  const realCheck = vi.fn<RunningCheck>(() => Promise.resolve({ok: true, running: {ets2: true, ats: false, client: false}}));
   vi.doMock('../../apps/desktop/src/plugin-setup/plugin-setup', () => ({
     PluginSetupError,
-    productionPluginSetupPorts: () => ({}),
+    productionPluginSetupPorts: () => ({checkRunning: realCheck}),
     PluginSetup: class {
-      constructor(options: {decision: unknown; ports: unknown; changed: () => void}) {
+      constructor(options: {decision: unknown; ports: unknown; changed: () => void; testRootRunningCheck?: RunningCheck}) {
         pluginOptions = options;
         const fake: FakePluginSetup = pluginSetup = {mode, current: PLUGIN_VIEW, changed: options.changed, view: () => fake.current,
           start: vi.fn(), abort: vi.fn(), idle: vi.fn(() => undefined), retry: vi.fn(() => Promise.resolve(fake.current)),
@@ -2588,6 +2590,7 @@ function mockPluginSetup(mode = 'test-root') {
       }
     }
   }));
+  return realCheck;
 }
 const pluginCall = (channel: PluginChannel, event: unknown, ...request: unknown[]) =>
   new Promise<unknown>(resolve => resolve(handlers.get(channel)!(event, ...request as [unknown])));
@@ -2611,6 +2614,22 @@ it('starts plugin setup once Electron is ready and the tray exists, without wait
   expect(windows).toHaveLength(0);
   child.emit('message', {type: 'ready'}); await settle();
   expect(windows).toHaveLength(2);
+});
+it.each(['active', 'test-root', 'disabled'] as const)('composes the private plugin check only for selected %s mode', async mode => {
+  const realCheck = mockPluginSetup(mode), decision = mode === 'disabled' ? {mode, reason: 'off'} : mode === 'test-root' ? {mode, root: 'C:\\isolated\\plugin-root'} : {mode};
+  vi.doMock('../../apps/desktop/src/plugin-setup/mode', async original => ({...await original<typeof import('../../apps/desktop/src/plugin-setup/mode')>(), pluginSetupMode: () => decision}));
+  try {
+    await loadMain(); await settle(); expect(pluginOptions?.decision).toEqual(decision);
+    if (mode === 'test-root') {
+      expect(await pluginOptions!.testRootRunningCheck!()).toEqual({ok: true, running: {ets2: false, ats: false, client: false}});
+      const retired = new AbortController(); retired.abort(); expect(await pluginOptions!.testRootRunningCheck!(retired.signal)).toEqual({ok: false, code: 'RUNNING_CHECK_FAILED'});
+      expect((pluginOptions!.ports as {checkRunning: RunningCheck}).checkRunning).toBe(realCheck); expect(realCheck).not.toHaveBeenCalled();
+    } else {
+      expect(pluginOptions?.testRootRunningCheck).toBeUndefined();
+      if (mode === 'active') expect((pluginOptions!.ports as {checkRunning: RunningCheck}).checkRunning).toBe(realCheck);
+      else expect(pluginOptions?.ports).toBeUndefined();
+    }
+  } finally {vi.doUnmock('../../apps/desktop/src/plugin-setup/mode');}
 });
 it('rejects plugin requests from untrusted senders, frames and the overlay, and every invalid shape, before any dialog or change', async () => {
   mockPluginSetup(); trayAvailable = true; await ready();

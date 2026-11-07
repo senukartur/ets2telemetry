@@ -1,4 +1,5 @@
 import {UploadMainController} from './dashboard-upload/main-controller';
+import {readJournalWithSync} from './dashboard-upload/journal-sync-guard';
 import {UploadServiceBridge} from './dashboard-upload/service-bridge';
 import {UploadCredentialStore,CredentialFiles} from './dashboard-upload/credential-store';
 import {electronUploadCrypto} from './dashboard-upload/credential-ports';
@@ -237,6 +238,8 @@ function runApplication(profileError: unknown): void {
   // the existing app:state push.
   const pluginDecision = pluginSetupMode(process.env, app.isPackaged);
   const pluginSetup = new PluginSetup({decision: pluginDecision, log, changed: () => pushAppState(),
+    testRootRunningCheck: pluginDecision.mode === 'test-root' ? signal => Promise.resolve(signal?.aborted ? {ok: false, code: 'RUNNING_CHECK_FAILED'}
+      : {ok: true, running: {ets2: false, ats: false, client: false}}) : undefined,
     ports: pluginDecision.mode === 'disabled' ? undefined : productionPluginSetupPorts({mainDirectory: __dirname, resourcesPath: process.resourcesPath,
       packaged: app.isPackaged, localAppData: process.env.LOCALAPPDATA, installDirectory: path.dirname(app.getPath('exe')), log})});
   // ET-018 PR-4 (U8): the in-app uninstall. Main owns both dialogs; the dashboard gets fixed codes and target ids only.
@@ -1260,7 +1263,7 @@ function runApplication(profileError: unknown): void {
       if (!trusted(event)) throw new Error('Untrusted journal request');
       const query = journalRequest(kind, request);
       if (!query) throw new Error('Invalid journal request');
-      return journal.request(query);
+      return readJournalWithSync(query, request => journal.request(request), () => upload.journalReadScope);
     });
   }
   // ET-016 PR-5 (J16): the sixth journal channel exports exactly one trip UUID, from the trusted dashboard main frame only.
