@@ -400,9 +400,11 @@ const localTime = utcMs => {
 };
 /** T4: the UUID of the trip that the job configuration eventSeq 3 of the simulator's plugin session opened. */
 const journeyTripUuid = session => uuidOf(createHash('sha256').update(`ets2telemetry-trip-v1:${session}:3`, 'utf8').digest('hex'));
-/** trip@3's list row: delivered and partial after the service restart, observed 0 m, no fuel channel, no city or cargo names. */
+/** The job market badge of trip@3 (ET-072): the job of eventSeq 3 sends no job.market, so the list and the header name it unavailable. */
+const JOURNEY_JOB_TYPE = `Job market: ${NOT_OBSERVED}`;
+/** trip@3's list row: delivered and partial after the service restart, observed 0 m, no fuel channel, no city, cargo or market names. */
 const journalRow = trip => ({trip, started: localTime(labelAt(30)), game: 'ETS2', route: JOURNEY_ROUTE, outcome: 'Delivered', completeness: 'Partial',
-  observed: '0.0 km', fuel: NOT_OBSERVED, cargo: NOT_OBSERVED});
+  observed: '0.0 km', fuel: NOT_OBSERVED, cargo: NOT_OBSERVED, jobType: JOURNEY_JOB_TYPE});
 /**
  * trip@3's detail: every field of the summary. The job of eventSeq 3 has ids, 152 km planned, income 12345 and cargo not
  * loaded; job.delivered (8) has revenue 12000, 250 XP, damage 0.03125, 152.5 km and 300 game minutes; the truck has a
@@ -423,7 +425,7 @@ function journalDetail(session, trip, sampleCount) {
     'samples-sampleCount': String(sampleCount),
     ...(sampleCount ? {'samples-firstSample': localTime(labelAt(100)), 'samples-lastSample': localTime(labelAt(100))} : {})
   };
-  return {error: null, title: `ETS2: ${JOURNEY_ROUTE}`, outcome: 'Delivered', completeness: 'Partial', fields, banner: JOURNAL_BANNER,
+  return {error: null, title: `ETS2: ${JOURNEY_ROUTE}`, outcome: 'Delivered', completeness: 'Partial', jobType: JOURNEY_JOB_TYPE, special: null, fields, banner: JOURNAL_BANNER,
     notes: {trip: ['Times are the recorded UTC labels shown in local time.'], money: ['Amounts are the exact game values. They are never converted, netted or added across currencies.']}};
 }
 /** The two completeness intervals (kind, cause, start, end, events): neither carries a UTC label or an eventSeq range. */
