@@ -1,4 +1,5 @@
-import type {AppLanguage, OverlayLayout, OverlayPresentation, OverlaySectionId, OverlayUrgency} from '../../../packages/contracts/src';
+import type {AppLanguage, OverlayHardModeState, OverlayLayout, OverlayPresentation, OverlaySectionId, OverlayUrgency} from '../../../packages/contracts/src';
+import {OVERLAY_HARD_MODE_RULES, sanitizeOverlayHardMode} from './overlay-hard-mode';
 import {DEFAULT_OVERLAY_OPACITY, isOverlayOpacity} from './overlay-opacity';
 import {CARD_ROW_HEIGHT_CSS} from './overlay-rows';
 import {localizedMeasurement} from './screens/app-copy';
@@ -41,6 +42,26 @@ export interface OverlayItem {
   urgencyName?: string;
   unavailable: boolean;
 }
+/**
+ * The fixed Hard Mode indicator (ET-070, owner decisions D1-D4), always the last element of every layout and never one of
+ * the sections. `short` ("HM") is the strip and HUD label and `label` the card and cluster row label. `cue` is the
+ * non-colour cue: a check when active, a cross when lost, none when not active (the strip keeps an empty slot of the same
+ * width). `struck` strikes the strip and HUD label through on a loss. `rowValue` is the card and cluster value ("12/12",
+ * "N/12", empty without a count, or the localized "lost"); `hudValue` is "N/12" only when not active with a count, since the
+ * strip never shows a count (D2). `name` is the accessible name with the state in words.
+ */
+export type OverlayHardModeCue = 'check' | 'cross' | 'none';
+export interface OverlayHardModeItem {
+  testId: 'overlay-hard-mode';
+  state: OverlayHardModeState;
+  label: string;
+  short: string;
+  cue: OverlayHardModeCue;
+  struck: boolean;
+  rowValue: string;
+  hudValue: string;
+  name: string;
+}
 export type OverlayTagId = 'paused' | 'no-signal' | 'stale' | 'origin';
 export interface OverlayTag {id: OverlayTagId; testId: `overlay-tag-${OverlayTagId}`; text: string}
 export interface OverlayItemGroup {id: OverlayGroupId; items: OverlayItem[]}
@@ -61,6 +82,8 @@ export interface OverlayView {
   gauge?: {speed?: OverlayItem; gear?: OverlayItem; rpm?: OverlayItem};
   /** Items outside the cluster gauge, in order. */
   panel: OverlayItem[];
+  /** The fixed Hard Mode indicator (ET-070); not one of `items`, `groups`, `panel` or the gauge. */
+  hardMode: OverlayHardModeItem;
   /** The overlay edit mode (ET-012b): the renderer outlines the overlay and makes it a drag region. */
   editing: boolean;
   contentAnchorY: number;
@@ -95,6 +118,23 @@ const RPM_SUFFIX = ' rpm';
 export function contentAnchorY(presentation: Pick<OverlayPresentation, 'layout' | 'contentAnchorY'>): number {
   const value = presentation.contentAnchorY;
   return typeof value === 'number' && Number.isFinite(value) && value >= 0 && value <= 1 ? value : presentation.layout === 'cluster' ? 1 : 0;
+}
+
+/**
+ * The Hard Mode indicator for a projection's `hardMode` in this language. The value is validated again, so a missing or
+ * malformed one is not active without a count (D4); only an exactly valid `{state: 'active'}` is active.
+ */
+export function overlayHardModeItem(value: unknown, language: AppLanguage = 'en'): OverlayHardModeItem {
+  const strings = getStrings(language), hardMode = sanitizeOverlayHardMode(value);
+  const base = {testId: 'overlay-hard-mode' as const, state: hardMode.state, label: strings.overlayHardModeLabel, short: strings.overlayHardModeShort};
+  if (hardMode.state === 'active') {
+    const count = `${OVERLAY_HARD_MODE_RULES}/${OVERLAY_HARD_MODE_RULES}`;
+    return {...base, cue: 'check', struck: false, rowValue: count, hudValue: '', name: strings.overlayHardModeActiveName};
+  }
+  if (hardMode.state === 'lost') return {...base, cue: 'cross', struck: true, rowValue: strings.overlayHardModeLost, hudValue: '', name: strings.overlayHardModeLostName};
+  if (hardMode.passed === undefined) return {...base, cue: 'none', struck: false, rowValue: '', hudValue: '', name: strings.overlayHardModeInactiveName};
+  const count = `${hardMode.passed}/${OVERLAY_HARD_MODE_RULES}`;
+  return {...base, cue: 'none', struck: false, rowValue: count, hudValue: count, name: strings.overlayHardModeInactiveCountName.replace('{n}', String(hardMode.passed))};
 }
 
 export function overlayView(presentation: OverlayPresentation = OVERLAY_PLACEHOLDER): OverlayView {
@@ -155,6 +195,7 @@ export function overlayView(presentation: OverlayPresentation = OVERLAY_PLACEHOL
     paused: presentation.paused, dim: presentation.freshness !== 'current', tags, items, groups,
     ...(gaugeShown ? {gauge: {speed: byId.get('speed'), gear: byId.get('gear'), rpm: byId.get('rpm')}} : {}),
     panel: gaugeShown ? items.filter(item => !CLUSTER_GAUGE_SECTIONS.has(item.id)) : items,
+    hardMode: overlayHardModeItem(presentation.hardMode, language),
     backgroundOpacity: isOverlayOpacity(presentation.backgroundOpacity) ? presentation.backgroundOpacity : DEFAULT_OVERLAY_OPACITY,
     editing: presentation.editing === true, contentAnchorY: contentAnchorY(presentation)
   };

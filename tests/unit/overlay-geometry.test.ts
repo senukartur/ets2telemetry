@@ -26,6 +26,12 @@ import {DEFAULT_OVERLAY_SECTIONS, OVERLAY_PRESETS, OVERLAY_SECTION_IDS} from '..
 // the fifteen maxima with the break's 150, sixteen gaps); at 1280 DIP, inner 1801, the second row ends at game time
 // (1704) and the break (150 + 14) no longer fits it (1868 > 1801), so a third row holds it: ceil(114 × 0.7 + 2) = 82 high.
 // The expectations that changed are marked with ET-052 below; those that did not are unchanged on purpose.
+// ET-070 (owner decision D3; the requirement changed again: the fixed Hard Mode indicator is one more row and the strip's
+// last item, at most 100 CSS px plus its 14 px gap, for every selection): every section now has 16 rows in the card
+// (content 46 + 24 × 16 = 430), 13 in the cluster's panel (34 + 21 × 13 = 307) and 16 in the HUD (18 + 24 × 16 = 402). At
+// zoom 0.7 the card is 210 × 303 (301 + 2), the cluster 308 × 217 (214.9 + 2 up) and the HUD 224 × 282 (281.4 up), needing
+// 242 × 335, 340 × 249 and 256 × 314. The strip's worst-case line is 3520 CSS px; at 1280 DIP (inner 1801) the indicator
+// joins the break's third row (150 + 114 = 264), so the strip stays 82 high. Expectations ET-070 changed are marked with it.
 const client = (x: number, y: number, width: number, height: number): DipRect => ({x, y, width, height});
 /** The fourteen sections of before ET-052 (the next mandatory break off). */
 const WITHOUT_BREAK = {...DEFAULT_OVERLAY_SECTIONS, 'mandatory-break': false};
@@ -36,23 +42,25 @@ const SPEED_ONLY = only('speed');
 const OWNER_CLIENT = client(2560 / 1.5, 240, 2560 / 1.5, 960);
 const LAYOUTS = ['strip', 'card', 'cluster', 'hud'] as const;
 
-// Card x = cx + cw − 226; cluster y = cy + ch − 204.
+// Card x = cx + cw − 226; cluster y = cy + ch − 233 (ET-070: 16 + 217).
 it.each([
-  // ET-052: 1280 DIP strip, CSS 1828, inner 1801, three rows (see above): 82. Cluster y = 16 + (1080 − 32 − 203) = 861.
+  // ET-052: 1280 DIP strip, CSS 1828, inner 1801, three rows (see above): 82; ET-070's indicator joins the third row.
+  // ET-070: card 303, HUD 282, cluster y = 16 + (1080 − 32 − 217) = 847.
   {name: '1920 x 1080 at the origin', area: client(0, 0, 1920, 1080), strip: {x: 320, y: 8, width: 1280, height: 82},
-    card: {x: 1694, y: 16, width: 210, height: 287}, cluster: {x: 16, y: 861, width: 308, height: 203}, hud: {x: 16, y: 16, width: 224, height: 265}},
+    card: {x: 1694, y: 16, width: 210, height: 303}, cluster: {x: 16, y: 847, width: 308, height: 217}, hud: {x: 16, y: 16, width: 224, height: 282}},
   // ET-052: the 1248 DIP strip has CSS width floor(1782.86) = 1782, inner 1755: the second row ends at game time (1704) and
-  // the break would reach 1868, so three rows: 82. Cluster y = 16 + (720 − 32 − 203) = 501.
+  // the break would reach 1868, so three rows: 82 (ET-070: the indicator ends the third at 264). Cluster y = 16 + (720 − 32 − 217) = 487.
   {name: '1280 x 720 at the origin', area: client(0, 0, 1280, 720), strip: {x: 16, y: 8, width: 1248, height: 82},
-    card: {x: 1054, y: 16, width: 210, height: 287}, cluster: {x: 16, y: 501, width: 308, height: 203}, hud: {x: 16, y: 16, width: 224, height: 265}},
+    card: {x: 1054, y: 16, width: 210, height: 303}, cluster: {x: 16, y: 487, width: 308, height: 217}, hud: {x: 16, y: 16, width: 224, height: 282}},
   // The 768 DIP strip has CSS width floor(1097.14) = 1097, inner 1070: four rows, ceil(152 × 0.7 + 2) = 109; the break joins
-  // game time on the fourth row (514 + 164 = 678), so ET-052 changes no strip row here. Cluster y = 50 + 16 + (600 − 32 − 203) = 431.
+  // game time on the fourth row (514 + 164 = 678) and ET-070's indicator follows (792), so neither changes a strip row here.
+  // Cluster y = 50 + 16 + (600 − 32 − 217) = 417.
   {name: '800 x 600 at (100, 50)', area: client(100, 50, 800, 600), strip: {x: 116, y: 58, width: 768, height: 109},
-    card: {x: 674, y: 66, width: 210, height: 287}, cluster: {x: 116, y: 431, width: 308, height: 203}, hud: {x: 116, y: 66, width: 224, height: 265}},
+    card: {x: 674, y: 66, width: 210, height: 303}, cluster: {x: 116, y: 417, width: 308, height: 217}, hud: {x: 116, y: 66, width: 224, height: 282}},
   // The 928 DIP strip has CSS width floor(1325.71) = 1325, inner 1298: three rows, ceil(114 × 0.7 + 2) = 82; the break joins
-  // the third row (748 + 164 = 912). Cluster y = 16 + (540 − 32 − 203) = 321.
+  // the third row (748 + 164 = 912) and the indicator follows (1026). Cluster y = 16 + (540 − 32 − 217) = 307.
   {name: 'a 960 x 540 area left of the primary display', area: client(-960, 0, 960, 540), strip: {x: -944, y: 8, width: 928, height: 82},
-    card: {x: -226, y: 16, width: 210, height: 287}, cluster: {x: -944, y: 321, width: 308, height: 203}, hud: {x: -944, y: 16, width: 224, height: 265}}
+    card: {x: -226, y: 16, width: 210, height: 303}, cluster: {x: -944, y: 307, width: 308, height: 217}, hud: {x: -944, y: 16, width: 224, height: 282}}
 ])('places every layout for $name', ({area, strip, card, cluster, hud}) => {
   expect(overlayBounds('strip', area)).toEqual(strip);
   expect(overlayBounds('card', area)).toEqual(card);
@@ -61,37 +69,40 @@ it.each([
 });
 
 it('hides the strip, card and HUD in a 360 x 260 area while the cluster still fits', () => {
-  // The strip needs a 336 DIP window plus 32; ET-052: the card needs 319 high and the HUD 297 (302 and 280 before the break).
+  // The strip needs a 336 DIP window plus 32; ET-070: the card needs 335 high, the HUD 314 and the cluster 249 (ET-052: 319,
+  // 297 and 235).
   const area = client(0, 0, 360, 260);
   expect(overlayBounds('strip', area)).toBeUndefined();
   expect(overlayBounds('card', area)).toBeUndefined();
-  // 16 + (260 − 32 − 203) = 41.
-  expect(overlayBounds('cluster', area)).toEqual({x: 16, y: 41, width: 308, height: 203});
+  // 16 + (260 − 32 − 217) = 27.
+  expect(overlayBounds('cluster', area)).toEqual({x: 16, y: 27, width: 308, height: 217});
   expect(overlayBounds('hud', area)).toBeUndefined();
-  expect(overlayBounds('hud', client(0, 0, 360, 296))).toBeUndefined();
-  expect(overlayBounds('hud', client(0, 0, 360, 297))).toEqual({x: 16, y: 16, width: 224, height: 265});
+  expect(overlayBounds('hud', client(0, 0, 360, 313))).toBeUndefined();
+  expect(overlayBounds('hud', client(0, 0, 360, 314))).toEqual({x: 16, y: 16, width: 224, height: 282});
 });
 
 it.each([
   // The strip's minimum window is round(480 × 0.7) = 336, CSS width floor(480.0) = 480 and inner floor(453.14) = 453, where
-  // every section needs ten rows: ceil(380 × 0.7 + 2) = 268, plus 16 = 284. It fits from a 368 DIP client and hides at 367.
-  {layout: 'strip' as const, fits: client(0, 0, 368, 284), narrow: client(0, 0, 367, 284), short: client(0, 0, 368, 283)},
-  // Every section (ET-052): 210 × 287, 308 × 203 and 224 × 265, plus 32 each way.
-  {layout: 'card' as const, fits: client(0, 0, 242, 319), narrow: client(0, 0, 241, 319), short: client(0, 0, 242, 318)},
-  {layout: 'cluster' as const, fits: client(0, 0, 340, 235), narrow: client(0, 0, 339, 235), short: client(0, 0, 340, 234)},
-  {layout: 'hud' as const, fits: client(0, 0, 256, 297), narrow: client(0, 0, 255, 297), short: client(0, 0, 256, 296)}
+  // every section needs ten rows and ET-070's indicator an eleventh (game time and the break end at 364, 364 + 114 = 478 >
+  // 453): ceil(418 × 0.7 + 2) = ceil(294.6) = 295, plus 16 = 311. It fits from a 368 DIP client and hides at 367.
+  {layout: 'strip' as const, fits: client(0, 0, 368, 311), narrow: client(0, 0, 367, 311), short: client(0, 0, 368, 310)},
+  // Every section (ET-070): 210 × 303, 308 × 217 and 224 × 282, plus 32 each way.
+  {layout: 'card' as const, fits: client(0, 0, 242, 335), narrow: client(0, 0, 241, 335), short: client(0, 0, 242, 334)},
+  {layout: 'cluster' as const, fits: client(0, 0, 340, 249), narrow: client(0, 0, 339, 249), short: client(0, 0, 340, 248)},
+  {layout: 'hud' as const, fits: client(0, 0, 256, 314), narrow: client(0, 0, 255, 314), short: client(0, 0, 256, 313)}
 ])('applies the exact fit threshold of the $layout layout', ({layout, fits, narrow, short}) => {
   expect(overlayBounds(layout, fits)).toBeDefined();
   expect(overlayBounds(layout, narrow)).toBeUndefined();
   expect(overlayBounds(layout, short)).toBeUndefined();
 });
 
-it('applies the one-row fit threshold of a strip with speed only', () => {
-  // Speed only is 96 + 96 + 140 with two gaps, 360 of the minimum's 453 inner CSS px: ceil(26.6 + 2) = 29, plus 16 = 45.
+it('applies the fit threshold of a strip with speed only', () => {
+  // Speed only is 96 + 96 + 140 with two gaps, 360 of the minimum's 453 inner CSS px; ET-070's indicator would reach 474, so
+  // it takes a second row: ceil(76 × 0.7 + 2) = ceil(55.2) = 56, plus 16 = 72 (one row, 29 and 45, before).
   const placement = DEFAULT_OVERLAY_PLACEMENTS.strip;
-  expect(overlayBounds('strip', client(0, 0, 368, 45), placement, SPEED_ONLY)).toEqual({x: 16, y: 8, width: 336, height: 29});
-  expect(overlayBounds('strip', client(0, 0, 367, 45), placement, SPEED_ONLY)).toBeUndefined();
-  expect(overlayBounds('strip', client(0, 0, 368, 44), placement, SPEED_ONLY)).toBeUndefined();
+  expect(overlayBounds('strip', client(0, 0, 368, 72), placement, SPEED_ONLY)).toEqual({x: 16, y: 8, width: 336, height: 56});
+  expect(overlayBounds('strip', client(0, 0, 367, 72), placement, SPEED_ONLY)).toBeUndefined();
+  expect(overlayBounds('strip', client(0, 0, 368, 71), placement, SPEED_ONLY)).toBeUndefined();
 });
 
 it('rounds fractional DIP positions and floors the strip width', () => {
@@ -100,10 +111,10 @@ it('rounds fractional DIP positions and floors the strip width', () => {
   // x = round(−623.33 + 0.5 × 0.33) = −623, y = round(18.67) = 19.
   const area = client(-639.3333, 10.6667, 1279.3333, 719.3333);
   expect(overlayBounds('strip', area)).toEqual({x: -623, y: 19, width: 1247, height: 82});
-  // Card x = round(−639.3333 + 16 + 1037.3333) = 414; cluster y = round(10.6667 + 16 + (719.3333 − 32 − 203)) = round(511) = 511.
-  expect(overlayBounds('card', area)).toEqual({x: 414, y: 27, width: 210, height: 287});
-  expect(overlayBounds('cluster', area)).toEqual({x: -623, y: 511, width: 308, height: 203});
-  expect(overlayBounds('hud', area)).toEqual({x: -623, y: 27, width: 224, height: 265});
+  // Card x = round(−639.3333 + 16 + 1037.3333) = 414; ET-070: cluster y = round(10.6667 + 16 + (719.3333 − 32 − 217)) = round(497) = 497.
+  expect(overlayBounds('card', area)).toEqual({x: 414, y: 27, width: 210, height: 303});
+  expect(overlayBounds('cluster', area)).toEqual({x: -623, y: 497, width: 308, height: 217});
+  expect(overlayBounds('hud', area)).toEqual({x: -623, y: 27, width: 224, height: 282});
 });
 
 it('keeps every placed layout inside its client area', () => {
@@ -152,12 +163,17 @@ it.each([
 // so 572; 2.1: 852.6 + 4.2 = 856.8, so 857. Cluster 0.35: 100.1 + 2 = 102.1, so 103; 0.7: 200.2 + 2, so 203; 1.05: 300.3 + 2.1 = 302.4,
 // so 303; 1.4: 400.4 + 2.8 = 403.2, so 404; 2.1: 600.6 + 4.2 = 604.8, so 605. HUD 0.35: 132.3, so 133; 0.7: 264.6, so 265; 1.05: 396.9,
 // so 397; 1.4: 529.2, so 530; 2.1: 793.8, so 794. Widths are unchanged.
+// ET-070 (the Hard Mode row adds a row to each): with the contents 430 (card, border 1), 307 (cluster panel, border 1) and 402
+// (HUD): Card 0.35: 150.5 + 2 = 152.5, so 153; 0.7: 301 + 2 = 303; 1.05: 451.5 + 2.1 = 453.6, so 454; 1.4: 602 + 2.8 = 604.8,
+// so 605; 2.1: 903 + 4.2 = 907.2, so 908. Cluster 0.35: 107.45 + 2 = 109.45, so 110; 0.7: 214.9 + 2, so 217; 1.05: 322.35 + 2.1
+// = 324.45, so 325; 1.4: 429.8 + 2.8 = 432.6, so 433; 2.1: 644.7 + 4.2 = 648.9, so 649. HUD 0.35: 140.7, so 141; 0.7: 281.4,
+// so 282; 1.05: 422.1, so 423; 1.4: 562.8, so 563; 2.1: 844.2, so 845. Every one is above its nominal floor; widths are unchanged.
 const ROW_LAYOUT_TABLE = [
-  {scale: 0.5, card: {width: 105, height: 145}, cluster: {width: 154, height: 103}, hud: {width: 112, height: 133}},
-  {scale: 1, card: {width: 210, height: 287}, cluster: {width: 308, height: 203}, hud: {width: 224, height: 265}},
-  {scale: 1.5, card: {width: 315, height: 429}, cluster: {width: 462, height: 303}, hud: {width: 336, height: 397}},
-  {scale: 2, card: {width: 420, height: 572}, cluster: {width: 616, height: 404}, hud: {width: 448, height: 530}},
-  {scale: 3, card: {width: 630, height: 857}, cluster: {width: 924, height: 605}, hud: {width: 672, height: 794}}
+  {scale: 0.5, card: {width: 105, height: 153}, cluster: {width: 154, height: 110}, hud: {width: 112, height: 141}},
+  {scale: 1, card: {width: 210, height: 303}, cluster: {width: 308, height: 217}, hud: {width: 224, height: 282}},
+  {scale: 1.5, card: {width: 315, height: 454}, cluster: {width: 462, height: 325}, hud: {width: 336, height: 423}},
+  {scale: 2, card: {width: 420, height: 605}, cluster: {width: 616, height: 433}, hud: {width: 448, height: 563}},
+  {scale: 3, card: {width: 630, height: 908}, cluster: {width: 924, height: 649}, hud: {width: 672, height: 845}}
 ];
 it.each(ROW_LAYOUT_TABLE)('sizes the card, cluster and HUD at the setting $scale from its zoom', ({scale, card, cluster, hud}) => {
   const area = client(0, 0, 1920, 1080);
@@ -172,13 +188,15 @@ it.each(ROW_LAYOUT_TABLE)('sizes the card, cluster and HUD at the setting $scale
 it('renders the new 100% exactly as large as the earlier 70% for the card, cluster and HUD', () => {
   // ET-045d's overlaySize(layout, 1920 × 1080, 0.7) with every section, hand-computed with the same formula at scale 0.7:
   // card 210 × 270, cluster 308 × 188 and HUD 224 × 248 with fourteen sections; ET-052's fifteenth makes them 287, 203 and 265.
+  // ET-070's Hard Mode row makes every section 303, 217 and 282, and fourteen sections with it are as high as fifteen were
+  // without it: content 406, 286 and 378, so 287, 203 and 265.
   const area = client(0, 0, 1920, 1080);
-  expect(overlaySize('card', area, 1)).toEqual({width: 210, height: 287});
-  expect(overlaySize('cluster', area, 1)).toEqual({width: 308, height: 203});
-  expect(overlaySize('hud', area, 1)).toEqual({width: 224, height: 265});
-  expect(overlaySize('card', area, 1, WITHOUT_BREAK)).toEqual({width: 210, height: 270});
-  expect(overlaySize('cluster', area, 1, WITHOUT_BREAK)).toEqual({width: 308, height: 188});
-  expect(overlaySize('hud', area, 1, WITHOUT_BREAK)).toEqual({width: 224, height: 248});
+  expect(overlaySize('card', area, 1)).toEqual({width: 210, height: 303});
+  expect(overlaySize('cluster', area, 1)).toEqual({width: 308, height: 217});
+  expect(overlaySize('hud', area, 1)).toEqual({width: 224, height: 282});
+  expect(overlaySize('card', area, 1, WITHOUT_BREAK)).toEqual({width: 210, height: 287});
+  expect(overlaySize('cluster', area, 1, WITHOUT_BREAK)).toEqual({width: 308, height: 203});
+  expect(overlaySize('hud', area, 1, WITHOUT_BREAK)).toEqual({width: 224, height: 265});
 });
 
 it.each([
@@ -214,17 +232,18 @@ it('rounds a scaled strip height up, never down', () => {
 });
 
 it.each([
-  // The card with every section at 1.5 is 315 x 429 (ET-052; 404 with fourteen sections) and needs 347 x 461.
-  {layout: 'card' as const, scale: 1.5, fits: client(0, 0, 347, 461), narrow: client(0, 0, 346, 461), short: client(0, 0, 347, 460)},
+  // ET-070: the card with every section at 1.5 is 315 x 454 (429 with ET-052's fifteen sections) and needs 347 x 486.
+  {layout: 'card' as const, scale: 1.5, fits: client(0, 0, 347, 486), narrow: client(0, 0, 346, 486), short: client(0, 0, 347, 485)},
   // The strip at 2 (zoom 1.4) needs round(480 × 1.4) + 32 = 704 wide; its CSS width is then 480 and its inner width 454,
-  // where every section needs ten rows: ceil(532 + 2.8) + 16 = 551 high. With speed only: ceil(53.2 + 2.8) + 16 = 72.
-  {layout: 'strip' as const, scale: 2, fits: client(0, 0, 704, 551), narrow: client(0, 0, 703, 551), short: client(0, 0, 704, 550)},
-  {layout: 'strip' as const, scale: 2, sections: SPEED_ONLY, fits: client(0, 0, 704, 72), narrow: client(0, 0, 703, 72), short: client(0, 0, 704, 71)},
+  // where every section needs ten rows and ET-070's indicator an eleventh (478 > 454): ceil(585.2 + 2.8) + 16 = 604 high.
+  // Speed only needs two rows with it (474 > 454): ceil(106.4 + 2.8) + 16 = 126.
+  {layout: 'strip' as const, scale: 2, fits: client(0, 0, 704, 604), narrow: client(0, 0, 703, 604), short: client(0, 0, 704, 603)},
+  {layout: 'strip' as const, scale: 2, sections: SPEED_ONLY, fits: client(0, 0, 704, 126), narrow: client(0, 0, 703, 126), short: client(0, 0, 704, 125)},
   // The strip at 0.5 (zoom 0.35) needs round(480 × 0.35) + 32 = 200 wide. Its CSS width 480 with 2.857 CSS px borders
-  // leaves an inner width of floor(450.29) = 450, where every section still needs ten rows: ceil(133 + 2) + 16 = 151
-  // high. Speed only needs one row: 16 + 16 = 32.
-  {layout: 'strip' as const, scale: 0.5, fits: client(0, 0, 200, 151), narrow: client(0, 0, 199, 151), short: client(0, 0, 200, 150)},
-  {layout: 'strip' as const, scale: 0.5, sections: SPEED_ONLY, fits: client(0, 0, 200, 32), narrow: client(0, 0, 199, 32), short: client(0, 0, 200, 31)}
+  // leaves an inner width of floor(450.29) = 450, where every section needs ten rows and the indicator an eleventh:
+  // ceil(146.3 + 2) + 16 = 165 high. Speed only needs two rows: ceil(26.6 + 2) + 16 = 45.
+  {layout: 'strip' as const, scale: 0.5, fits: client(0, 0, 200, 165), narrow: client(0, 0, 199, 165), short: client(0, 0, 200, 164)},
+  {layout: 'strip' as const, scale: 0.5, sections: SPEED_ONLY, fits: client(0, 0, 200, 45), narrow: client(0, 0, 199, 45), short: client(0, 0, 200, 44)}
 ])('applies the scaled fit threshold of the $layout layout at $scale', ({layout, scale, sections, fits, narrow, short}) => {
   const placement = {x: 0, y: 0, scale};
   expect(overlayBounds(layout, fits, placement, sections)).toBeDefined();
@@ -233,14 +252,18 @@ it.each([
 });
 
 it.each([
-  // Driving-only's worst case is 966 CSS px: one row from a 696 DIP strip (CSS 994, inner 967), two at 695 (CSS 992, inner 965).
-  {name: 'driving-only in 800 x 600', sections: OVERLAY_PRESETS['driving-only'], area: client(0, 0, 800, 600), bounds: {x: 16, y: 8, width: 768, height: 29}},
+  // Driving-only's worst case is 966 CSS px, ET-070: 1080 with the Hard Mode indicator. One row from a 775 DIP strip (CSS
+  // floor(1107.14) = 1107, inner floor(1080.14) = 1080), two at 774 (CSS 1105, inner 1078) and at 768 (inner 1070, which
+  // fitted one row before the indicator); the 695 and 696 DIP strips of before both need two now.
+  {name: 'driving-only in 800 x 600', sections: OVERLAY_PRESETS['driving-only'], area: client(0, 0, 800, 600), bounds: {x: 16, y: 8, width: 768, height: 56}},
   {name: 'driving-only in 960 x 540', sections: OVERLAY_PRESETS['driving-only'], area: client(0, 0, 960, 540), bounds: {x: 16, y: 8, width: 928, height: 29}},
   {name: 'driving-only in 1280 x 720', sections: OVERLAY_PRESETS['driving-only'], area: client(0, 0, 1280, 720), bounds: {x: 16, y: 8, width: 1248, height: 29}},
-  {name: 'driving-only in 728 x 600', sections: OVERLAY_PRESETS['driving-only'], area: client(0, 0, 728, 600), bounds: {x: 16, y: 8, width: 696, height: 29}},
-  {name: 'driving-only in 727 x 600', sections: OVERLAY_PRESETS['driving-only'], area: client(0, 0, 727, 600), bounds: {x: 16, y: 8, width: 695, height: 56}},
-  // Job-focus's worst case is 1694 CSS px: one row at 1280 (inner 1801), two at 768 (inner 1070).
-  {name: 'job-focus in 1920 x 1080', sections: OVERLAY_PRESETS['job-focus'], area: client(0, 0, 1920, 1080), bounds: {x: 320, y: 8, width: 1280, height: 29}},
+  {name: 'driving-only in 807 x 600', sections: OVERLAY_PRESETS['driving-only'], area: client(0, 0, 807, 600), bounds: {x: 16, y: 8, width: 775, height: 29}},
+  {name: 'driving-only in 806 x 600', sections: OVERLAY_PRESETS['driving-only'], area: client(0, 0, 806, 600), bounds: {x: 16, y: 8, width: 774, height: 56}},
+  {name: 'driving-only in 728 x 600', sections: OVERLAY_PRESETS['driving-only'], area: client(0, 0, 728, 600), bounds: {x: 16, y: 8, width: 696, height: 56}},
+  // Job-focus's worst case is 1694 CSS px, ET-070: 1808 with the indicator, more than the 1801 at 1280, so two rows there
+  // (one before); two at 768 (inner 1070) as before.
+  {name: 'job-focus in 1920 x 1080', sections: OVERLAY_PRESETS['job-focus'], area: client(0, 0, 1920, 1080), bounds: {x: 320, y: 8, width: 1280, height: 56}},
   {name: 'job-focus in 800 x 600', sections: OVERLAY_PRESETS['job-focus'], area: client(0, 0, 800, 600), bounds: {x: 16, y: 8, width: 768, height: 56}}
 ])('sizes the strip for its enabled sections: $name', ({sections, area, bounds}) => {
   expect(overlayBounds('strip', area, DEFAULT_OVERLAY_PLACEMENTS.strip, sections)).toEqual(bounds);
@@ -267,28 +290,34 @@ it('shows the old visual references: the earlier 70% and 100% strips', () => {
   // ET-045d's strip at scale 0.7 was round(1280 × 0.7) = 896 wide at CSS width 1280 (inner 1253, three rows,
   // ceil(79.8 + 2) = 82) and at scale 1 1280 × 116 (inner 1254, three rows). The new 100% keeps the 70% text size but,
   // by D5, the full 1280 DIP width: two rows, 1280 × 56 with fourteen sections and, with ET-052's fifteenth, three rows, 1280 × 82.
+  // ET-070: the Hard Mode indicator takes the break's place without it (the second row ends at game time, 1704 + 114 = 1818 >
+  // 1801), so fourteen sections need three rows too.
   expect(overlayWindowSize('strip', 1)).toEqual({width: 1280, height: 82});
-  expect(overlayWindowSize('strip', 1, WITHOUT_BREAK)).toEqual({width: 1280, height: 56});
+  expect(overlayWindowSize('strip', 1, WITHOUT_BREAK)).toEqual({width: 1280, height: 82});
 });
 
 // ET-012d (decision K4): the plan's hand-written table of reserves at zoom 1 (card 48 + 24n, cluster 36 + 21m, HUD
 // 18 + 24n) and the window each gives at the setting 1 (zoom 0.7) with its nominal floor of 210 × 252, 308 × 154 and
 // 224 × 224: max(round(nominal × 0.7), ceil((reserve − 2 × border) × 0.7 + 2 × border)).
 // ET-052: the historical rows keep the fourteen sections of ET-012d, so their hand-written numbers still test the same sets.
+// ET-070: every reserve includes the Hard Mode row (card 72 + 24n, cluster 57 + 21m, HUD 42 + 24n), so each set needs one
+// row more than before: fourteen sections now need what fifteen did, and so on down.
 const WITHOUT_DRIVEN = {...WITHOUT_BREAK, 'distance-driven': false};
 const WITHOUT_RANGE_AND_DRIVEN = {...WITHOUT_DRIVEN, range: false};
 it.each([
-  // ET-052: card 408 (406 content, 287), cluster 288 (203) and HUD 378 (265).
-  {name: 'every section (card 408, cluster 288, HUD 378)', sections: DEFAULT_OVERLAY_SECTIONS, card: 287, cluster: 203, hud: 265},
-  {name: 'every section but the break (card 384, cluster 267, HUD 354)', sections: WITHOUT_BREAK, card: 270, cluster: 188, hud: 248},
+  // ET-070: card 432 (430 content, 303), cluster 309 (217) and HUD 402 (282).
+  {name: 'every section (card 432, cluster 309, HUD 402)', sections: DEFAULT_OVERLAY_SECTIONS, card: 303, cluster: 217, hud: 282},
+  // Card 406 × 0.7 + 2 = 286.2, so 287; cluster 286 × 0.7 + 2 = 202.2, so 203; HUD 378 × 0.7 = 264.6, so 265.
+  {name: 'every section but the break (card 408, cluster 288, HUD 378)', sections: WITHOUT_BREAK, card: 287, cluster: 203, hud: 265},
+  // Card 382 × 0.7 + 2 = 269.4, so 270; cluster 265 × 0.7 + 2 = 187.5, so 188; HUD 354 × 0.7 = 247.8, so 248.
+  {name: 'without distance driven (card 384, cluster 267, HUD 354)', sections: WITHOUT_DRIVEN, card: 270, cluster: 188, hud: 248},
   // Card 358 × 0.7 + 2 = 252.6, so 253; cluster 244 × 0.7 + 2 = 172.8, so 173; HUD 330 × 0.7 = 231.
-  {name: 'without distance driven (card 360, cluster 246, HUD 330)', sections: WITHOUT_DRIVEN, card: 253, cluster: 173, hud: 231},
-  // Cluster 223 × 0.7 + 2 = 158.1, so 159.
-  {name: 'without range and distance driven (card 336, cluster 225, HUD 306)', sections: WITHOUT_RANGE_AND_DRIVEN, card: 252, cluster: 159, hud: 224},
-  {name: 'also without game time (card 312, cluster 204, HUD 282)', sections: {...WITHOUT_RANGE_AND_DRIVEN, 'game-time': false}, card: 252, cluster: 154, hud: 224},
-  {name: 'job-focus (card 216, cluster 141, HUD 186)', sections: OVERLAY_PRESETS['job-focus'], card: 252, cluster: 154, hud: 224},
-  {name: 'driving-only (card 168, cluster 78, HUD 138)', sections: OVERLAY_PRESETS['driving-only'], card: 252, cluster: 154, hud: 224},
-  {name: 'speed only (card 72, cluster 36, HUD 42)', sections: only('speed'), card: 252, cluster: 154, hud: 224}
+  {name: 'without range and distance driven (card 360, cluster 246, HUD 330)', sections: WITHOUT_RANGE_AND_DRIVEN, card: 253, cluster: 173, hud: 231},
+  // Card 334 × 0.7 + 2 = 235.8, below 252; cluster 223 × 0.7 + 2 = 158.1, so 159; HUD 306 × 0.7 = 214.2, below 224.
+  {name: 'also without game time (card 336, cluster 225, HUD 306)', sections: {...WITHOUT_RANGE_AND_DRIVEN, 'game-time': false}, card: 252, cluster: 159, hud: 224},
+  {name: 'job-focus (card 240, cluster 162, HUD 210)', sections: OVERLAY_PRESETS['job-focus'], card: 252, cluster: 154, hud: 224},
+  {name: 'driving-only (card 192, cluster 99, HUD 162)', sections: OVERLAY_PRESETS['driving-only'], card: 252, cluster: 154, hud: 224},
+  {name: 'speed only (card 96, cluster 57, HUD 66)', sections: only('speed'), card: 252, cluster: 154, hud: 224}
 ])('creates the card, cluster and HUD windows for $name at their reserved height, never below nominal', ({sections, card, cluster, hud}) => {
   expect(overlayWindowSize('card', 1, sections)).toEqual({width: 210, height: card});
   expect(overlayWindowSize('cluster', 1, sections)).toEqual({width: 308, height: cluster});
@@ -310,15 +339,16 @@ it('keeps the exact nominal geometry of the presets that fit it', () => {
 });
 
 it('keeps the nominal size only at the zooms where the reserved rows fit it', () => {
-  // Thirteen sections (without distance driven): content 46 + 24 × 13 = 358, so 360 with the border, exactly the card's
+  // Thirteen rows (ET-070: twelve sections without range and distance driven, and the Hard Mode row; before, thirteen sections
+  // without distance driven): content 46 + 24 × 13 = 358, so 360 with the border, exactly the card's
   // nominal height at zoom 1 and above. At 1.5 (zoom 1.05): ceil(375.9 + 2.1) = 378 = round(378). Below zoom 1 the border
   // stays one DIP: at 1 (zoom 0.7) ceil(250.6 + 2) = 253, not round(252); at 0.5 (zoom 0.35) ceil(125.3 + 2) = 128, not
   // round(126). At 1.6 (zoom 1.12): ceil(400.96 + 2.24 = 403.2) = 404, not round(403.2) = 403.
   const area = client(0, 0, 1920, 1080);
-  expect(overlaySize('card', area, 1.5, WITHOUT_DRIVEN)).toEqual({width: 315, height: 378});
-  expect(overlaySize('card', area, 1, WITHOUT_DRIVEN)).toEqual({width: 210, height: 253});
-  expect(overlaySize('card', area, 0.5, WITHOUT_DRIVEN)).toEqual({width: 105, height: 128});
-  expect(overlaySize('card', area, 1.6, WITHOUT_DRIVEN)).toEqual({width: 336, height: 404});
+  expect(overlaySize('card', area, 1.5, WITHOUT_RANGE_AND_DRIVEN)).toEqual({width: 315, height: 378});
+  expect(overlaySize('card', area, 1, WITHOUT_RANGE_AND_DRIVEN)).toEqual({width: 210, height: 253});
+  expect(overlaySize('card', area, 0.5, WITHOUT_RANGE_AND_DRIVEN)).toEqual({width: 105, height: 128});
+  expect(overlaySize('card', area, 1.6, WITHOUT_RANGE_AND_DRIVEN)).toEqual({width: 336, height: 404});
 });
 
 it('computes a surface height with the border snapped to one device pixel below zoom 1', () => {
@@ -331,16 +361,16 @@ it('computes a surface height with the border snapped to one device pixel below 
 });
 
 it('places fractions 0, 0.5 and 1 across the free space', () => {
-  // A card with every section in 1920 x 1080 (ET-052: 287 high): free space 1678 x 761, so y = 16 + 380.5 = 396.5 → 397 and
-  // 16 + 761 = 777.
+  // A card with every section in 1920 x 1080 (ET-070: 303 high): free space 1678 x 745, so y = 16 + 372.5 = 388.5 → 389 and
+  // 16 + 745 = 761.
   const area = client(0, 0, 1920, 1080);
-  expect(overlayBounds('card', area, {x: 0, y: 0, scale: 1})).toEqual({x: 16, y: 16, width: 210, height: 287});
-  expect(overlayBounds('card', area, {x: 0.5, y: 0.5, scale: 1})).toEqual({x: 855, y: 397, width: 210, height: 287});
-  expect(overlayBounds('card', area, {x: 1, y: 1, scale: 1})).toEqual({x: 1694, y: 777, width: 210, height: 287});
-  // The strip keeps 8 above and below: free height 1080 − 16 − 82 = 982, so y = 8 + 982 = 990. A HUD in 960 x 540 has
-  // 704 x 243 free: x = −960 + 16 + 176 = −768, y = 16 + 182.25 = 198.25 → 198.
+  expect(overlayBounds('card', area, {x: 0, y: 0, scale: 1})).toEqual({x: 16, y: 16, width: 210, height: 303});
+  expect(overlayBounds('card', area, {x: 0.5, y: 0.5, scale: 1})).toEqual({x: 855, y: 389, width: 210, height: 303});
+  expect(overlayBounds('card', area, {x: 1, y: 1, scale: 1})).toEqual({x: 1694, y: 761, width: 210, height: 303});
+  // The strip keeps 8 above and below: free height 1080 − 16 − 82 = 982, so y = 8 + 982 = 990. A HUD (ET-070: 282 high) in
+  // 960 x 540 has 704 x 226 free: x = −960 + 16 + 176 = −768, y = 16 + 169.5 = 185.5 → 186.
   expect(overlayBounds('strip', area, {x: 0, y: 1, scale: 1})).toEqual({x: 16, y: 990, width: 1280, height: 82});
-  expect(overlayBounds('hud', client(-960, 0, 960, 540), {x: 0.25, y: 0.75, scale: 1})).toEqual({x: -768, y: 198, width: 224, height: 265});
+  expect(overlayBounds('hud', client(-960, 0, 960, 540), {x: 0.25, y: 0.75, scale: 1})).toEqual({x: -768, y: 186, width: 224, height: 282});
 });
 
 it('keeps every scaled placement inside its client area', () => {
@@ -363,11 +393,11 @@ it('keeps every scaled placement inside its client area', () => {
 it.each([
   {name: 'past the left and top edges', bounds: {x: -500, y: -500}, expected: {x: 0, y: 0}},
   {name: 'past the right and bottom edges', bounds: {x: 5000, y: 5000}, expected: {x: 1, y: 1}},
-  {name: 'inside', bounds: {x: 855, y: 396.5}, expected: {x: 0.5, y: 0.5}},
+  {name: 'inside', bounds: {x: 855, y: 388.5}, expected: {x: 0.5, y: 0.5}},
   {name: 'at a fraction that needs rounding', bounds: {x: 575, y: 16}, expected: {x: 0.3331, y: 0}}
 ])('converts a card dropped $name into clamped fractions', ({bounds, expected}) => {
-  // Every section (287 high), free space 1678 x 761: (575 − 16) / 1678 = 0.33313 and (396.5 − 16) / 761 = 0.5.
-  expect(placementFromBounds('card', client(0, 0, 1920, 1080), {...bounds, width: 210, height: 287}, {x: 0.9, y: 0.9, scale: 1}))
+  // Every section (ET-070: 303 high), free space 1678 x 745: (575 − 16) / 1678 = 0.33313 and (388.5 − 16) / 745 = 0.5.
+  expect(placementFromBounds('card', client(0, 0, 1920, 1080), {...bounds, width: 210, height: 303}, {x: 0.9, y: 0.9, scale: 1}))
     .toEqual({...expected, scale: 1});
 });
 
@@ -380,17 +410,18 @@ it('converts a dropped strip against the height of its enabled sections', () => 
 });
 
 it('converts a drop at the new scales against the size of that scale', () => {
-  // A card at 3 (ET-052: 630 × 857) in 1920 x 1080 has 1258 x 191 free: (645 − 16) / 1258 = 0.5, (111.5 − 16) / 191 = 0.5.
-  // A HUD at 0.5 (112 × 133) has 1776 x 915 free: (460 − 16) / 1776 = 0.25.
+  // A card at 3 (ET-070: 630 × 908) in 1920 x 1080 has 1258 x 140 free: (645 − 16) / 1258 = 0.5, (86 − 16) / 140 = 0.5.
+  // A HUD at 0.5 (112 × 141) has 1776 x 907 free: (460 − 16) / 1776 = 0.25.
   const area = client(0, 0, 1920, 1080);
-  expect(placementFromBounds('card', area, {x: 645, y: 111.5, width: 630, height: 857}, {x: 0, y: 0, scale: 3})).toEqual({x: 0.5, y: 0.5, scale: 3});
-  expect(placementFromBounds('hud', area, {x: 460, y: 16, width: 112, height: 133}, {x: 0, y: 1, scale: 0.5})).toEqual({x: 0.25, y: 0, scale: 0.5});
+  expect(placementFromBounds('card', area, {x: 645, y: 86, width: 630, height: 908}, {x: 0, y: 0, scale: 3})).toEqual({x: 0.5, y: 0.5, scale: 3});
+  expect(placementFromBounds('hud', area, {x: 460, y: 16, width: 112, height: 141}, {x: 0, y: 1, scale: 0.5})).toEqual({x: 0.25, y: 0, scale: 0.5});
 });
 
 it('keeps the previous fraction on an axis without free space, or when the layout does not fit', () => {
-  // A 242 x 600 area leaves the card no horizontal free space; vertically, with every section (287 high), (100 − 16) / 281 = 0.29893.
-  expect(placementFromBounds('card', client(0, 0, 242, 600), {x: 0, y: 100, width: 210, height: 287}, {x: 0.25, y: 0, scale: 1})).toEqual({x: 0.25, y: 0.2989, scale: 1});
-  expect(placementFromBounds('card', client(0, 0, 200, 200), {x: 0, y: 0, width: 210, height: 287}, {x: 0.25, y: 0.75, scale: 1})).toEqual({x: 0.25, y: 0.75, scale: 1});
+  // A 242 x 600 area leaves the card no horizontal free space; vertically, with every section (ET-070: 303 high),
+  // (100 − 16) / 265 = 0.31698.
+  expect(placementFromBounds('card', client(0, 0, 242, 600), {x: 0, y: 100, width: 210, height: 303}, {x: 0.25, y: 0, scale: 1})).toEqual({x: 0.25, y: 0.317, scale: 1});
+  expect(placementFromBounds('card', client(0, 0, 200, 200), {x: 0, y: 0, width: 210, height: 303}, {x: 0.25, y: 0.75, scale: 1})).toEqual({x: 0.25, y: 0.75, scale: 1});
 });
 
 it('round-trips a placement through its bounds within one DIP', () => {

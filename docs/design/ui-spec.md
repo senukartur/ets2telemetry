@@ -278,7 +278,7 @@ ET-045f amendment, October 24, 2026 (ET-045 item 3, owner decision D4): the Clus
 
 Behaviour is unchanged from ET-012a/b: sections come from `overlay.sections` and the layout from `overlay.layout`; a section without data is hidden; stale values are greyed with a "No signal 12 s" tag; paused shows a "Paused" tag; while no game is connected the overlay is hidden. Layout-edit mode draws a 2 px dashed `--yu-ov-edit` outline, a drag handle and an edit bar with Reset and Done.
 
-**Proposed new section `hard-mode`** (group **Status**): the `Flame` icon with `HM` (ok colour) or `HM N/12` (problem colour). Adding it requires extending `OVERLAY_SECTION_IDS`, the settings migration and the presets (Everything and Job focus include it) in the ET-026c package.
+**Hard Mode indicator.** Not a section: a fixed, mandatory element at the end of every layout, without a setting, preset entry or settings migration. Lucide `Flame`, then `HM` (Strip, HUD) or "Hard Mode" (Card, Cluster panel), then a fixed 14 px cue slot. Active `--yu-ov-hm-active` #8FD3AE with a check (`12/12` in Card and Cluster); not active, also unknown or unconfirmed, `--yu-ov-hm-inactive` #E8C58A without a check, with `N/12` in Card, Cluster and HUD when a rule is known and no count in the Strip; lost for the current trip `--yu-ov-hm-lost` #F87171 with a cross, `HM` struck through in Strip and HUD, `lost` / `потерян` in Card and Cluster. Accessible names carry the state in words. It adds one row to Card, Cluster panel and HUD and a 100 px strip item; see [the minimal overlay](../minimal-overlay.md#hard-mode-indicator).
 
 ## 8. Localization
 
@@ -316,7 +316,7 @@ These are suggestions for future cards; none is authorized by this document.
 - Small logo sizes: resolved on October 22, 2026 by the "road merge" application icon in §3; the bear stays the in-app logo.
 - Review the Russian translation.
 - Start with Windows: needs an explicit authorization (autostart is currently out of scope).
-- The overlay `hard-mode` section and the "Delivered late" outcome display are proposals.
+- The "Delivered late" outcome display is a proposal.
 - Journal search needs a new storage query.
 
 

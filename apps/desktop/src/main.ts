@@ -16,6 +16,7 @@ import {isOpacity, isStyle, isSelection} from './now-playing/contract';
 import type {MediaTrack, NowPlayingDisplay, NowPlayingView} from '../../../packages/contracts/src/now-playing';
 import {initialSource, resolveSourceMode} from './source-mode';
 import {HardModeServiceCache} from './hard-mode/service-status';
+import {overlayHardMode, sameOverlayHardMode} from './overlay-hard-mode';
 import {app, BrowserWindow, dialog, ipcMain, Menu, MessageChannelMain, nativeImage, net, safeStorage, screen, shell, Tray, utilityProcess, type MessagePortMain, type UtilityProcess, type IpcMainEvent, type IpcMainInvokeEvent} from 'electron';
 import {spawn} from 'node:child_process';
 import {existsSync, mkdirSync, readFileSync, lstatSync} from 'node:fs';
@@ -183,8 +184,9 @@ function runApplication(profileError: unknown): void {
   let dashboardPort: MessagePortMain | undefined, overlayPort: MessagePortMain | undefined, upstream: MessagePortMain | undefined;
   let upstreamRecovery: ReturnType<typeof setTimeout> | undefined;
   let tray: Tray | undefined, trayPresenter: TrayPresenter | undefined, trayUnavailable = false;
-  const hardMode = new HardModeServiceCache();
-  function retireHardMode(): void {hardMode.retire();}
+  // ET-070: lease expiry and retirement republish the overlay's Hard Mode indicator without a telemetry frame.
+  const hardMode = new HardModeServiceCache(undefined, () => publishOverlayHardMode());
+  function retireHardMode(): void {hardMode.retire(); publishOverlayHardMode();}
   let health: AppHealth = initialHealth(), appStateSubscribed = false, lastLive: LiveTelemetry = initialLive();
   let failureReported = false, reportedFailureCode: unknown;
   // ET-015c (G4, G6, G12): the service whose recording status main accepts, until it fails, exits or restarts; the
@@ -519,7 +521,7 @@ function runApplication(profileError: unknown): void {
   function publishOverlay(live: LiveTelemetry, units: UnitProfiles, settings: OverlaySettings, language: AppLanguage = settingsStore.view().language,
     gearDisplay: GearDisplayModes = settingsStore.view().gearDisplay): void {
     lastOverlay = {...overlayPresentation(live, units, settings, lastOverlay, overlayEdit.active, language, gearDisplay),
-      contentAnchorY: overlayController?.contentAnchorY ?? settings.placements[settings.layout].y};
+      contentAnchorY: overlayController?.contentAnchorY ?? settings.placements[settings.layout].y, hardMode: overlayHardModeNow()};
     if (latency) lastOverlay = latency.project(lastOverlay, live, Boolean(overlay && !overlay.isDestroyed() && overlay.isVisible()));
     overlaySubscriptions.publish(lastOverlay);
   }
@@ -527,6 +529,18 @@ function runApplication(profileError: unknown): void {
     if (lifecycle.exiting || lastOverlay.contentAnchorY === contentAnchorY) return;
     // Preserve the existing projection/capture/diagnostic token and the normal credit/coalescing/epoch path.
     lastOverlay = {...lastOverlay, contentAnchorY}; overlaySubscriptions.publish(lastOverlay);
+  }
+  /** ET-070: the overlay's Hard Mode indicator from main's lease-checked status, the same source as the dashboard's chip. */
+  function overlayHardModeNow() {return overlayHardMode(hardMode.status(serviceReady && !supervisor.stopping));}
+  /**
+   * Republishes only the Hard Mode indicator when it changed, like the content anchor: it renews no telemetry, freshness
+   * or window authority, and a non-current projection keeps its shape (root dimming applies to the indicator too).
+   */
+  function publishOverlayHardMode(): void {
+    if (lifecycle.exiting) return;
+    const next = overlayHardModeNow();
+    if (sameOverlayHardMode(lastOverlay.hardMode, next)) return;
+    lastOverlay = {...lastOverlay, hardMode: next}; overlaySubscriptions.publish(lastOverlay);
   }
   const freshness = new LiveFreshness(update => {
     const view = settingsStore.view();
@@ -956,7 +970,7 @@ function runApplication(profileError: unknown): void {
       const type = message && typeof message === 'object' && !Array.isArray(message) ? (message as Record<string, unknown>).type : undefined;
       if (type === 'heartbeat') return;
       if (type === 'hard-mode') {
-        hardMode.accept(message);
+        hardMode.accept(message); publishOverlayHardMode();
         return;
       }
       if (latency && type === 'overlay-latency-result') {latency.reply(message); return;}
@@ -970,6 +984,7 @@ function runApplication(profileError: unknown): void {
           child.postMessage(selectMessage(requested, broker));
           commitSelection(requested, selectionDispatched ? 'restore' : 'startup');
           serviceReady = true; selectionPending = false; status = {service: 'ready', storage: 'verified', synthetic: true};
+          publishOverlayHardMode();
           journal.attach(child);
           if(uploadBridge===childUpload)void upload.attach(childUpload);
           updateHealth({type: 'service-ready'});

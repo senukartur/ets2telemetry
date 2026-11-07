@@ -525,7 +525,7 @@ try {
       await screen(window, 'live');
     }
   }
-  if (config.scenario === 'hard-mode') await runHardModeSmoke({application, dashboard: window, source: hardModeSource, config, record: result.hardMode = {}});
+  if (config.scenario === 'hard-mode') await runHardModeSmoke({application, dashboard: window, overlay, source: hardModeSource, config, record: result.hardMode = {}});
   if (config.scenario === 'lifecycle') {
     result.lifecycle = {};
     await runLifecycleSmoke({application, launcher, dashboard: window, overlay, source: telemetrySource, config,

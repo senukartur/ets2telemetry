@@ -45,10 +45,12 @@ export const STRIP_SMOKE_SECTIONS = Object.freeze(['speed', 'gear', 'rpm', 'fuel
 // px of viewport rounding, the same rule as zoomedViewportTolerance below (ET-045e verifier round 1).
 export const STRIP_SMOKE_WINDOW = Object.freeze({innerHeight: 117, heightTolerance: 1 / 0.7 + 0.5, minWidth: 480, maxWidth: 1829});
 
-// Self-contained browser callback: false until exactly one current strip root shows exactly the expected sections, then
-// one coherent read of where they lie. `outside` lists sections with an empty box or one not fully inside both the root
-// (the window's viewport) and the strip row, which clips its overflow. `uncapped` lists strip items without a maximum
-// width. `truncated` (values that end in an ellipsis) and `rows` (distinct section tops) are recorded for review only.
+// Self-contained browser callback: false until exactly one current strip root shows exactly the expected sections and
+// exactly one fixed Hard Mode indicator (ET-070), then one coherent read of where they lie. `sections` lists the section
+// ids only and `fixed` the fixed elements ('hard-mode'). `outside` lists sections, and the indicator as 'hard-mode', with
+// an empty box or one not fully inside both the root (the window's viewport) and the strip row, which clips its overflow.
+// `uncapped` lists strip items without a maximum width. `truncated` (values that end in an ellipsis) and `rows` (distinct
+// item tops) are recorded for review only.
 export function stripLayoutObservation(expected) {
   const roots = globalThis.document.querySelectorAll('[data-testid="overlay-root"]');
   if (roots.length !== 1) return false;
@@ -57,26 +59,28 @@ export function stripLayoutObservation(expected) {
   const nodes = Array.from(root.querySelectorAll('[data-testid^="overlay-section-"]'));
   const sections = nodes.map(node => String(node.getAttribute('data-testid')).slice('overlay-section-'.length));
   if (sections.length !== expected.sections.length || sections.some((id, index) => id !== expected.sections[index])) return false;
+  const indicators = Array.from(root.querySelectorAll('[data-testid="overlay-hard-mode"]'));
+  if (indicators.length !== 1) return false;
   const row = root.querySelector('.overlay-strip-row');
   if (!row) return false;
   const rootBox = root.getBoundingClientRect(), rowBox = row.getBoundingClientRect();
   const within = (box, outer) => box.left >= outer.left && box.top >= outer.top && box.right <= outer.right && box.bottom <= outer.bottom;
   const outside = [], truncated = [], tops = new Set();
-  nodes.forEach((node, index) => {
-    const box = node.getBoundingClientRect();
-    if (!(box.width > 0 && box.height > 0) || !within(box, rootBox) || !within(box, rowBox)) outside.push(sections[index]);
+  [...nodes, indicators[0]].forEach((node, index) => {
+    const id = index < sections.length ? sections[index] : 'hard-mode', box = node.getBoundingClientRect();
+    if (!(box.width > 0 && box.height > 0) || !within(box, rootBox) || !within(box, rowBox)) outside.push(id);
     tops.add(Math.round(box.top));
     const value = node.querySelector('.overlay-value');
-    if (value && value.scrollWidth > value.clientWidth) truncated.push(sections[index]);
+    if (value && value.scrollWidth > value.clientWidth) truncated.push(id);
   });
   const uncapped = Array.from(row.children).filter(child => globalThis.getComputedStyle(child).maxWidth === 'none')
     .map(child => child.getAttribute('data-testid') ?? String(child.className));
-  return {viewport: {innerWidth: globalThis.innerWidth, innerHeight: globalThis.innerHeight}, sections, outside, uncapped, truncated, rows: tops.size};
+  return {viewport: {innerWidth: globalThis.innerWidth, innerHeight: globalThis.innerHeight}, sections, fixed: ['hard-mode'], outside, uncapped, truncated, rows: tops.size};
 }
 
 /**
- * Every shown strip section lies inside the overlay window, every item is capped, and the window has the reserved
- * height with a width the screen may have narrowed. The actual viewport stays in the recorded observation.
+ * Every shown strip section and the Hard Mode indicator lie inside the overlay window, every item is capped, and the
+ * window has the reserved height with a width the screen may have narrowed. The actual viewport stays in the recorded observation.
  */
 export function verifyStripLayout(observation) {
   assert.deepEqual(observation.outside, [], 'Enabled strip sections lie outside the overlay window');
@@ -99,18 +103,18 @@ export async function waitForStripLayout(page, expected) {
 // twelve before ET-052 added the next mandatory break, which the pair's 95-minute break shows), so the window reserves no
 // row for a hidden section. Without a game window main never places the hidden overlay, so
 // the smoke sizes it to each layout's window for those sections at the scale setting 1 (overlayWindowSize in
-// overlay-geometry.ts) at that setting's zoom, overlayZoom(1) = 0.7 (ET-045e). ET-052 re-derived: the card's content is
-// 46 + 24 × 13 = 358 CSS px, so ceil(358 × 0.7 + 2) = 253 DIP high (above its nominal floor of 252), 210 wide; the
-// cluster's panel holds 10 sections outside the gauge, a reserve of 36 + 21 × 10 = 246 CSS px (content 244), so
-// ceil(244 × 0.7 + 2) = 173 high, 308 wide; the HUD's content is 18 + 24 × 13 = 330, so ceil(330 × 0.7) = 231 high (above
-// its floor of 224), 224 wide. Their CSS viewports are 300 × 361.43, 440 × 247.14 and 320 × 330. The
-// reserved CSS heights are 48 + 24 × 13 = 360, 246 and 18 + 24 × 13 = 330 (layoutReservedCss in overlay-rows.ts). A unit
-// test ties these hand-written values to both functions and the zoom to overlayZoom. All three windows are smaller than
-// the hosted runner's 1024 x 768 screen, so Windows does not narrow them.
+// overlay-geometry.ts) at that setting's zoom, overlayZoom(1) = 0.7 (ET-045e). ET-070 re-derived with the fixed Hard Mode
+// row: the card's 14 rows have a content of 46 + 24 × 14 = 382 CSS px, so ceil(382 × 0.7 + 2) = ceil(269.4) = 270 DIP high,
+// 210 wide; the cluster's panel holds 10 sections outside the gauge and the indicator, a reserve of 36 + 21 × 11 = 267 CSS px
+// (content 265), so ceil(265 × 0.7 + 2) = ceil(187.5) = 188 high, 308 wide; the HUD's content is 18 + 24 × 14 = 354, so
+// ceil(354 × 0.7) = ceil(247.8) = 248 high, 224 wide. Their CSS viewports are 300 × 385.71, 440 × 268.57 and 320 × 354.29.
+// The reserved CSS heights are 48 + 24 × 14 = 384, 267 and 18 + 24 × 14 = 354 (layoutReservedCss in overlay-rows.ts). A
+// unit test ties these hand-written values to both functions and the zoom to overlayZoom. All three windows are smaller
+// than the hosted runner's 1024 x 768 screen, so Windows does not narrow them.
 export const LAYOUT_SMOKE_WINDOWS = Object.freeze({
-  card: Object.freeze({width: 210, height: 253}),
-  cluster: Object.freeze({width: 308, height: 173}),
-  hud: Object.freeze({width: 224, height: 231})
+  card: Object.freeze({width: 210, height: 270}),
+  cluster: Object.freeze({width: 308, height: 188}),
+  hud: Object.freeze({width: 224, height: 248})
 });
 export const LAYOUT_SMOKE_ZOOM = 0.7;
 /**
@@ -134,34 +138,37 @@ export function verifyAppliedWindow(requested, actual) {
     `The overlay window was not applied at the requested size: ${JSON.stringify(requested)} became ${JSON.stringify(actual)}`);
   return actual;
 }
-export const LAYOUT_SMOKE_RESERVED_CSS = Object.freeze({card: 360, cluster: 246, hud: 330});
+export const LAYOUT_SMOKE_RESERVED_CSS = Object.freeze({card: 384, cluster: 267, hud: 354});
 // ET-045e review frames for the UI overlay shard, at the zoom of a scale setting (overlayZoom in overlay-placement.ts).
 // SCALE_REFERENCE_FRAMES are the product windows with every section at the new 100% (overlayWindowSize(layout, 1)) and
 // the ET-045d strip at its 70% (896 × 82 at zoom 0.7) and 100% (1280 × 116 at zoom 1) for the owner's comparison.
-// SCALE_RANGE_FRAMES are the product windows at 50% (zoom 0.35: strip 1280 × 16, card 105 × 145, cluster 154 × 103, HUD
-// 112 × 133 with ET-052's fifteen sections; 136, 95 and 124 with fourteen), the strip raised to the 38 DIP minimum height
+// SCALE_RANGE_FRAMES are the product windows at 50% (zoom 0.35: strip 1280 × 16, card 105 × 153, cluster 154 × 110, HUD
+// 112 × 141 with every section and ET-070's Hard Mode row: ceil(430 × 0.35 + 2), ceil(307 × 0.35 + 2) and ceil(402 × 0.35);
+// 145, 103 and 133 without the row), the strip raised to the 38 DIP minimum height
 // that the ET-045c probe measured at 150%. The ET-045e probe at 150% showed Windows accepting the card, cluster and HUD
 // within one DIP (106 × 136, 154 × 96, 112 × 124); if a hosted runner refuses a size, the frame wait fails and the
-// refusal is recorded. The 100% references are the ET-052 product windows: strip 1280 × 82 (three rows), card 210 × 287,
-// cluster 308 × 203 and HUD 224 × 265 (56, 270, 188 and 248 with fourteen sections).
+// refusal is recorded. The 100% references are the ET-070 product windows: strip 1280 × 82 (three rows, the indicator after
+// the break), card 210 × 303, cluster 308 × 217 and HUD 224 × 282 (287, 203 and 265 without the Hard Mode row).
 export const SCALE_REFERENCE_FRAMES = Object.freeze([
   Object.freeze({name: 'scale-strip', layout: 'strip', zoom: 0.7, width: 1280, height: 82}),
-  Object.freeze({name: 'scale-card', layout: 'card', zoom: 0.7, width: 210, height: 287}),
-  Object.freeze({name: 'scale-cluster', layout: 'cluster', zoom: 0.7, width: 308, height: 203}),
-  Object.freeze({name: 'scale-hud', layout: 'hud', zoom: 0.7, width: 224, height: 265}),
+  Object.freeze({name: 'scale-card', layout: 'card', zoom: 0.7, width: 210, height: 303}),
+  Object.freeze({name: 'scale-cluster', layout: 'cluster', zoom: 0.7, width: 308, height: 217}),
+  Object.freeze({name: 'scale-hud', layout: 'hud', zoom: 0.7, width: 224, height: 282}),
   Object.freeze({name: 'scale-strip-old70', layout: 'strip', zoom: 0.7, width: 896, height: 82}),
   Object.freeze({name: 'scale-strip-old100', layout: 'strip', zoom: 1, width: 1280, height: 116})
 ]);
 export const SCALE_RANGE_ZOOM = 0.35;
 export const SCALE_RANGE_FRAMES = Object.freeze({
   strip: Object.freeze({width: 1280, height: 38}),
-  card: Object.freeze({width: 105, height: 145}),
-  cluster: Object.freeze({width: 154, height: 103}),
-  hud: Object.freeze({width: 112, height: 133})
+  card: Object.freeze({width: 105, height: 153}),
+  cluster: Object.freeze({width: 154, height: 110}),
+  hud: Object.freeze({width: 112, height: 141})
 });
 
 // Self-contained browser callback: false until exactly one current root of the expected layout shows exactly the
-// expected sections, then one coherent read of where they lie. `outside` lists sections with an empty box or one not
+// expected sections and exactly one fixed Hard Mode indicator (ET-070), then one coherent read of where they lie.
+// `sections` lists the section ids only and `fixed` the fixed elements ('hard-mode'), which every check below covers like a
+// section, under that name. `outside` lists sections with an empty box or one not
 // fully inside the root (the window's viewport) and every ancestor up to the root that clips its overflow, such as the
 // cluster's side panel. `clipped` lists sections whose value box is not vertically inside the section's fixed row.
 // `bottom` is the lowest section bottom below the higher of the root's top and the top of the surface that holds the
@@ -183,11 +190,14 @@ export function layoutContainmentObservation(expected) {
   const nodes = Array.from(root.querySelectorAll('[data-testid^="overlay-section-"]'));
   const sections = nodes.map(node => String(node.getAttribute('data-testid')).slice('overlay-section-'.length));
   if (sections.length !== expected.sections.length || sections.some((id, index) => id !== expected.sections[index])) return false;
+  const indicators = Array.from(root.querySelectorAll('[data-testid="overlay-hard-mode"]'));
+  if (indicators.length !== 1) return false;
+  const ids = [...sections, 'hard-mode'];
   const rootBox = root.getBoundingClientRect(), noise = 0.01;
   const within = (box, outer) => box.left >= outer.left - noise && box.top >= outer.top - noise && box.right <= outer.right + noise && box.bottom <= outer.bottom + noise;
   const outside = [], clipped = [], truncated = [], surfaces = [], seen = [];
   let bottom = 0;
-  nodes.forEach((node, index) => {
+  [...nodes, indicators[0]].forEach((node, index) => {
     const box = node.getBoundingClientRect();
     const surface = node.closest('.overlay-card-body, .overlay-panel, .overlay-hud-lines');
     const surfaceBox = surface ? surface.getBoundingClientRect() : rootBox;
@@ -200,19 +210,20 @@ export function layoutContainmentObservation(expected) {
     let inside = box.width > 0 && box.height > 0 && within(box, rootBox);
     for (let ancestor = node.parentElement; inside && ancestor && ancestor !== root; ancestor = ancestor.parentElement)
       if (globalThis.getComputedStyle(ancestor).overflow !== 'visible' && !within(box, ancestor.getBoundingClientRect())) inside = false;
-    if (!inside) outside.push(sections[index]);
+    if (!inside) outside.push(ids[index]);
     const value = node.querySelector('.overlay-value');
     if (!value) return;
     const valueBox = value.getBoundingClientRect();
-    if (valueBox.top < box.top - noise || valueBox.bottom > box.bottom + noise) clipped.push(sections[index]);
-    if (value.scrollWidth > value.clientWidth) truncated.push(sections[index]);
+    if (valueBox.top < box.top - noise || valueBox.bottom > box.bottom + noise) clipped.push(ids[index]);
+    if (value.scrollWidth > value.clientWidth) truncated.push(ids[index]);
   });
-  return {layout: expected.layout, viewport: {innerWidth: globalThis.innerWidth, innerHeight: globalThis.innerHeight}, sections, outside, clipped, bottom,
-    surfaces, truncated};
+  return {layout: expected.layout, viewport: {innerWidth: globalThis.innerWidth, innerHeight: globalThis.innerHeight}, sections, fixed: ['hard-mode'], outside,
+    clipped, bottom, surfaces, truncated};
 }
 
 /**
- * Every shown section lies inside the overlay window and its clipping ancestors, no value is clipped by its row, the one
+ * Every shown section and the Hard Mode indicator lie inside the overlay window and its clipping ancestors, no value is
+ * clipped by its row, the one
  * surface holding the rows lies inside the window, the lowest section ends within the CSS height the row model reserves
  * for the shown sections below that surface's top (0.01 px of float noise allowed), and the CSS viewport has the
  * window's DIP size divided by the zoom. At zoom 1 it may be one DIP larger (getBounds can round a window up by one
