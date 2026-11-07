@@ -9,7 +9,7 @@ import path from 'node:path';
 
 /** The data root's top-level entries an uninstall removes; `dataPaths()` may not name anything outside them. `updates`
  * holds the in-app update's verified download (ET-055 UP18). */
-export const DATA_ALLOWLIST = Object.freeze(['data', 'backups', 'settings', 'logs', 'synthetic', 'plugins', 'captures', 'transport', 'uninstall', 'updates'] as const);
+export const DATA_ALLOWLIST = Object.freeze(['data', 'backups', 'settings', 'logs', 'synthetic', 'plugins', 'captures', 'transport', 'uninstall', 'updates', 'credentials'] as const);
 export type DataEntry = typeof DATA_ALLOWLIST[number];
 /** Removed last, and only when the plugin cleanup finished: they hold the install registry and the uninstall intent. */
 export const KEPT_UNTIL_CLEAN: readonly DataEntry[] = Object.freeze(['plugins', 'uninstall']);

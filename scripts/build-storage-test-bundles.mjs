@@ -27,7 +27,8 @@ const external = ['better-sqlite3', ...builtinModules, ...builtinModules.map(nam
 // recorder runs with the bundled ingestion in the recording crash child (tests/storage/trip-recorder-crash.test.ts).
 const entries = {'storage-worker': 'apps/desktop/src/storage-worker.ts', 'storage-core': 'packages/storage/src/index.ts', 'storage-client': 'packages/storage/src/client.ts',
   'v1-ingestion': 'apps/desktop/src/v1-ingestion.ts', 'durable-sink': 'apps/desktop/src/durable-sink.ts', 'fault-storage-worker': 'tests/storage/fixtures/fault-storage-worker.ts',
-  'trip-recorder': 'apps/desktop/src/trip-recorder.ts'};
+  'trip-recorder': 'apps/desktop/src/trip-recorder.ts', 'upload-main-controller':'apps/desktop/src/dashboard-upload/main-controller.ts',
+  'upload-credential-store':'apps/desktop/src/dashboard-upload/credential-store.ts'};
 const directory = await mkdtemp(path.join(tmpdir(), 'ets2telemetry-storage-bundles-'));
 let code;
 try {

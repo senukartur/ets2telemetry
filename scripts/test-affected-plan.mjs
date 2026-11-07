@@ -51,12 +51,14 @@ const RUNTIME_DRIVER = [/^scripts\/ci\/(?:Invoke-RuntimeSmoke\.ps1|RuntimeReceip
 const SCENARIO_DRIVER = [/^scripts\/ci\/runtime-smoke\.mjs$/];
 /** Scenario drivers and observations under scripts/ci, by the scenario they observe. */
 const RUNTIME_OBSERVATIONS = [
+  [/^scripts\/ci\/dashboard-upload-credentials-observation\.mjs$|^tests\/runtime\/dashboard-upload-credentials-main\.ts$/, ['recording']],
   [/^scripts\/ci\/(?:ui-|renderer-observation|dashboard-observation)/, UI_SHARDS], [/^scripts\/ci\/live-smoke-source/, ['telemetry']],
   [/^scripts\/ci\/overlay-/, ['overlay']], [/^scripts\/ci\/journal-/, ['journal']], [/^scripts\/ci\/(?:recording-|history-invariants)/, ['recording']],
   [/^scripts\/ci\/now-playing-/, ['now-playing']], [/^scripts\/ci\/hard-mode-/, ['hard-mode']], [/^scripts\/ci\/(?:lifecycle-|exit-)/, ['lifecycle']],
   [/^scripts\/ci\/refusal-/, ['refusal']], [/^scripts\/ci\/plugin-fixture/, ['plugin']]];
 /** Desktop and package sources by the scenarios that show their behavior; a desktop file without a rule gets scaffold and the shell. */
 export const RUNTIME_SOURCES = [
+  [/^apps\/desktop\/src\/dashboard-upload\/(?:credential-store|credential-ports)\.ts$/, ['recording']],
   [/overlay/, ['overlay', 'ui:overlay']], [/journal|trip|history|export/, ['journal', 'ui:journal']],
   [/recording|trip-recorder|durable-sink|storage-worker|v1-ingestion|history-|sample-|^packages\/storage\//, ['recording', 'refusal']], [/now-playing|media-session/, ['now-playing']],
   [/hard-mode/, ['hard-mode']], [/plugin-setup|plugin-/, ['plugin']], [/settings|-card\.tsx$|\/i18n\//, ['ui:settings']],

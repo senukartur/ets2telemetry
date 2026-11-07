@@ -1,5 +1,6 @@
 import * as fsp from 'node:fs/promises';
 import path from 'node:path';
+import {runInNewContext} from 'node:vm';
 import {afterEach, beforeEach, describe, expect, it} from 'vitest';
 import {dataPaths} from '../../apps/desktop/src/paths';
 import {DATA_ALLOWLIST, KEPT_UNTIL_CLEAN, removeOwnedTree, wipeDataRoot, type WipeFileSystem} from '../../apps/desktop/src/uninstall/data-wipe';
@@ -123,30 +124,30 @@ describe('a spent budget', () => {
     await seedAll();
     const report = await wipeDataRoot(fs(), dataRoot, {removeRoot: true, expired: expiresAt(7)});
     expect(report).toEqual({removed: 2, kept: 0, rootRemoved: false,
-      failed: ['data', 'logs', 'plugins', 'settings', 'synthetic', 'transport', 'uninstall', 'updates'].map(entry => ({entry, code: 'BUDGET_EXPIRED'}))});
-    expect(await remaining()).toEqual(['data', 'logs', 'plugins', 'settings', 'synthetic', 'transport', 'uninstall', 'updates']);
+      failed: ['credentials', 'data', 'logs', 'plugins', 'settings', 'synthetic', 'transport', 'uninstall', 'updates'].map(entry => ({entry, code: 'BUDGET_EXPIRED'}))});
+    expect(await remaining()).toEqual(['credentials', 'data', 'logs', 'plugins', 'settings', 'synthetic', 'transport', 'uninstall', 'updates']);
   });
   it('stays spent within one call even if the check would answer false again', async () => {
     await seedAll();
     let calls = 0;
     const report = await wipeDataRoot(fs(), dataRoot, {removeRoot: true, expired: () => ++calls === 7});
     expect(report.removed).toBe(2);
-    expect(report.failed.map(entry => entry.entry)).toEqual(['data', 'logs', 'plugins', 'settings', 'synthetic', 'transport', 'uninstall', 'updates']);
-    expect(await remaining()).toEqual(['data', 'logs', 'plugins', 'settings', 'synthetic', 'transport', 'uninstall', 'updates']);
+    expect(report.failed.map(entry => entry.entry)).toEqual(['credentials', 'data', 'logs', 'plugins', 'settings', 'synthetic', 'transport', 'uninstall', 'updates']);
+    expect(await remaining()).toEqual(['credentials', 'data', 'logs', 'plugins', 'settings', 'synthetic', 'transport', 'uninstall', 'updates']);
   });
   it('in the first step of wipeEverything: lists plugins and uninstall too, and deletes neither', async () => {
     await seedAll();
     const report = await wipeEverything(fs() as never, dataRoot, expiresAt(7), true);
     expect(report.removed).toBe(2);
-    expect(report.failed).toEqual(['data', 'logs', 'settings', 'synthetic', 'transport', 'updates', 'plugins', 'uninstall'].map(entry => ({entry, code: 'BUDGET_EXPIRED'})));
-    expect(await remaining()).toEqual(['data', 'logs', 'plugins', 'settings', 'synthetic', 'transport', 'uninstall', 'updates']);
+    expect(report.failed).toEqual(['credentials', 'data', 'logs', 'settings', 'synthetic', 'transport', 'updates', 'plugins', 'uninstall'].map(entry => ({entry, code: 'BUDGET_EXPIRED'})));
+    expect(await remaining()).toEqual(['credentials', 'data', 'logs', 'plugins', 'settings', 'synthetic', 'transport', 'uninstall', 'updates']);
   });
   it('right after the first step of wipeEverything: reports plugins and uninstall instead of nothing', async () => {
     await seedAll();
-    // The first step removes eight entries with 24 checks (ET-055 added `updates`); the registry step's first check
+    // The first step removes nine entries with 27 checks (including protected credentials); the registry step's first check
     // finds the budget spent.
-    const report = await wipeEverything(fs() as never, dataRoot, expiresAt(25), true);
-    expect(report).toEqual({removed: 8, kept: 0, rootRemoved: false, failed: [{entry: 'plugins', code: 'BUDGET_EXPIRED'}, {entry: 'uninstall', code: 'BUDGET_EXPIRED'}]});
+    const report = await wipeEverything(fs() as never, dataRoot, expiresAt(28), true);
+    expect(report).toEqual({removed: 9, kept: 0, rootRemoved: false, failed: [{entry: 'plugins', code: 'BUDGET_EXPIRED'}, {entry: 'uninstall', code: 'BUDGET_EXPIRED'}]});
     expect(await remaining()).toEqual(['plugins', 'uninstall']);
   });
   it('a real failure still keeps plugins and uninstall for the deferral, unreported', async () => {
@@ -176,4 +177,22 @@ describe('updates folder', () => {
     expect(await exists(path.win32.join(dataRoot, 'updates'))).toBe(false);
     expect(await listTree(outside)).toEqual(['keep.nupkg']);
   });
+});
+it('REG-007/012/017 removes protected generations and partials without following a credential junction',async()=>{
+  expect(DATA_ALLOWLIST).toContain('credentials');
+  await write('credentials\\generation.dummy.bin');await write('credentials\\generation.dummy.bin.partial');await write('credentials\\disconnect.json');
+  const outside=path.win32.join(guard.root,'outside-credentials');await fsp.mkdir(outside);await fsp.writeFile(path.win32.join(outside,'keep'),'unrelated');
+  await guard.fs.symlink(outside,path.win32.join(dataRoot,'credentials','linked'),'junction');
+  expect(await wipeDataRoot(fs(),dataRoot,{removeRoot:true})).toEqual({removed:1,kept:0,failed:[],rootRemoved:true});expect(await listTree(outside)).toEqual(['keep']);
+});
+it('REG-007/012/017 installer inventory and evidence sampling never read credential contents',async()=>{
+  await write('credentials\\generation.dummy.bin');
+  const source=await fsp.readFile(path.resolve('scripts/installer/installer-lifecycle.mjs'),'utf8');
+  // Load the actual private read helpers without executing the installer's command dispatcher.
+  const tree=source.slice(source.indexOf('async function tree(root)'),source.indexOf('async function snapshot(config)'));
+  const samples=source.slice(source.indexOf('async function entrySamples(dataRoot, entries)'),source.indexOf('\n}',source.indexOf('async function entrySamples(dataRoot, entries)'))+2);
+  const forbidden=()=>{throw Error('CREDENTIAL_CONTENT_WAS_READ');};
+  const inventory=await (runInNewContext(`${tree}\ntree(root)`,{root:dataRoot,readdir:fsp.readdir,lstat:fsp.lstat,path:path.win32,readFile:forbidden,sha256:forbidden}) as Promise<unknown>);
+  expect(inventory).toEqual({'credentials\\':{directory:true}});
+  const sampled=await (runInNewContext(`${samples}\nentrySamples(root,['credentials'])`,{root:dataRoot,path:path.win32,readdir:forbidden,lstat:forbidden,fileState:forbidden}) as Promise<unknown>);expect(sampled).toEqual({credentials:null});
 });

@@ -1,3 +1,9 @@
+import {APP_VERSION as version} from './app-version';
+import {DashboardUploadService} from './dashboard-upload/service';
+import {UploadHttp} from './dashboard-upload/http';
+import {configuredDashboardOrigin} from './dashboard-upload/config';
+import {isUploadServiceRequest,isUploadServiceCancel,type UploadServiceReply} from './dashboard-upload/service-contract';
+import {ACTIVE_CHANNEL} from './channel';
 import {ProfileObserver} from './profile-observation';
 import {GameSourceCoordinator} from './game-source-coordinator';
 import {discoverGames} from './native-game-discovery';
@@ -164,6 +170,24 @@ const runtime = createRecordingRuntime({env: process.env, gameHistory: GAME_HIST
   createWorker: () => historyWorker(__dirname), connectGame: (configuration, game, target) => new NativePipeClient(configuration, game, diagnoseV1Broker, 'v1', target),
   profileEvidence: () => profileObserver.evidence(), profileStatus: () => profileObserver.status(), hardModeEvidence: () => hardMode.evidence(), onHardModeTrip: details => {port.postMessage({type: 'hard-mode', update: 'trip', trip: details});},
   onV1State, onV1Healthy: target => coordinator.healthy(target), onRecordingStatus: status => port.postMessage({type: 'recording', status})});
+let dashboardUpload:DashboardUploadService|undefined,uploadGeneration:string|undefined,uploadCommandPending=false;
+const uploadOrigin=configuredDashboardOrigin(ACTIVE_CHANNEL);
+async function uploadCommand(incoming:unknown):Promise<void>{
+  if(!isUploadServiceRequest(incoming))return;
+  if(uploadGeneration!==undefined&&uploadGeneration!==incoming.generation)return;
+  uploadGeneration=incoming.generation;
+  const answer=(reply:UploadServiceReply)=>{if(!stopping&&!exiting)port.postMessage({type:'dashboard-upload:answer',id:incoming.id,generation:incoming.generation,reply});};
+  if(!uploadOrigin){answer({ok:false,error:'UNCONFIGURED'});return;}
+  if(uploadCommandPending){answer({ok:false,error:'BUSY'});return;}
+  uploadCommandPending=true;
+  try{
+    for(let turn=0;!runtime.history.client&&!stopping&&!exiting&&turn<300;turn++)await new Promise<void>(resolve=>setTimeout(resolve,100));
+    if(stopping||exiting)return;
+    const client=runtime.history.client;if(!client){answer({ok:false,error:'STORAGE_UNAVAILABLE'});return;}
+    dashboardUpload??=new DashboardUploadService(client,new UploadHttp(uploadOrigin),uploadOrigin,version,status=>{if(!stopping&&!exiting)port.postMessage({type:'dashboard-upload:status',generation:uploadGeneration,status});});
+    answer(await dashboardUpload.execute(incoming.command));
+  }catch{answer({ok:false,error:'STORAGE_UNAVAILABLE'});}finally{uploadCommandPending=false;}
+}
 const v1 = runtime.v1;
 v1.onProfileBoundary = () => {void profileObserver.boundary();};
 // ET-016 (J2, J4): journal reads from main, through the database the runtime opened, one at a time and only while it is
@@ -268,13 +292,14 @@ function exitAfterLog(code: number): Promise<void> {
 function exitAfterHistory(code: number): void {
   if (exiting) return;
   stopHeartbeat();
-  exiting = true; hardModeLifetime.abort(); hardMode.close(); profileObserver.close(); runtime.stopStatus();
+  exiting = true; void dashboardUpload?.stop(); hardModeLifetime.abort(); hardMode.close(); profileObserver.close(); runtime.stopStatus();
   let timer: ReturnType<typeof setTimeout> | undefined;
   const bound = new Promise<void>(resolve => {timer = setTimeout(resolve, HISTORY_CLOSE_BUDGET_MS);});
   void Promise.race([runtime.history.close().catch(() => undefined), bound]).then(() => {clearTimeout(timer); return exitAfterLog(code);});
 }
 const shutdown = new ShutdownSequence(log);
 shutdown.register('intake', {name: 'ingestion', budgetMs: 1000, run: async () => {await coordinator.stop(); await ingestion.stop();}});
+shutdown.register('intake', {name:'dashboard-upload',budgetMs:1000,run:()=>dashboardUpload?.stop()});
 shutdown.register('intake', {name: 'capture', budgetMs: 1000, run: () => captures.stop()});
 shutdown.register('storage', {name: 'storage-probe', budgetMs: 1000, run: async () => {
   await probe.stop();
@@ -286,7 +311,7 @@ runtime.register(shutdown);
 function stop(): void {
   if (stopping) return;
   stopHeartbeat();
-  stopping = true; stopReceivedAt = performance.now(); subscriptions.close(); hardModeLifetime.abort(); hardMode.close(); profileObserver.close(); runtime.stopStatus();
+  stopping = true; void dashboardUpload?.stop(); stopReceivedAt = performance.now(); subscriptions.close(); hardModeLifetime.abort(); hardMode.close(); profileObserver.close(); runtime.stopStatus();
   void shutdown.run().then(({clean}) => {
     const message = {type: 'stopped', clean};
     log('SERVICE_REPORT', message); port.postMessage(message);
@@ -297,6 +322,8 @@ port.on('message', event => {
   const incoming: unknown = event.data;
   const command = incoming && typeof incoming === 'object' && !Array.isArray(incoming) ? incoming as Record<string, unknown> : undefined;
   if (command?.type === 'stop') stop();
+  else if(command?.type==='dashboard-upload:cancel'){if(!stopping&&!exiting&&isUploadServiceCancel(incoming)&&command.generation===uploadGeneration)dashboardUpload?.cancel();}
+  else if(command?.type==='dashboard-upload:request'){if(!stopping&&!exiting)void uploadCommand(incoming);}
   else if (command?.type === 'hard-mode-refresh') {void hardMode.refresh(true);}
   else if (command?.type === 'unsubscribe') subscriptions.close();
   else if (command?.type === 'subscribe' && event.ports.length === 1) subscriptions.attach(event.ports[0]);

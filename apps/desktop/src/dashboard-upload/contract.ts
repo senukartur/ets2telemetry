@@ -1,0 +1,10 @@
+import {isDashboardUploadStatus,isDashboardToken,uploadUuid,type DashboardUploadBridge,type DashboardUploadStatus} from '../../../../packages/contracts/src/dashboard-upload';
+export const UPLOAD_CHANNELS=Object.freeze({context:'dashboard-upload:context',verify:'dashboard-upload:verify',confirm:'dashboard-upload:confirm',cancel:'dashboard-upload:cancel',disconnect:'dashboard-upload:disconnect',status:'dashboard-upload:status'});
+export type UploadAction='context'|'verify'|'confirm'|'cancel'|'disconnect';
+export function validUploadArguments(action:UploadAction,args:unknown[]):boolean {return action==='verify'?args.length===1&&isDashboardToken(args[0]):action==='confirm'||action==='cancel'?args.length===1&&uploadUuid(args[0]):args.length===0;}
+export interface UploadPreloadPort {invoke(channel:string,...args:unknown[]):Promise<unknown>;on(channel:string,listener:(event:unknown,value:unknown)=>void):unknown;removeListener(channel:string,listener:(event:unknown,value:unknown)=>void):unknown}
+export function dashboardUploadPreload(port:UploadPreloadPort):DashboardUploadBridge {
+  const call=async(action:UploadAction,args:unknown[]):Promise<DashboardUploadStatus>=>{if(!validUploadArguments(action,args))throw Error('INVALID_UPLOAD_REQUEST');const reply=await port.invoke(UPLOAD_CHANNELS[action],...args);if(!isDashboardUploadStatus(reply))throw Error('INVALID_UPLOAD_REPLY');return reply;};
+  return {getDashboardUploadContext:(...args:unknown[])=>call('context',args),verifyDashboardUploadToken:(...args:unknown[])=>call('verify',args),confirmDashboardUpload:(...args:unknown[])=>call('confirm',args),cancelDashboardUpload:(...args:unknown[])=>call('cancel',args),disconnectDashboardUpload:(...args:unknown[])=>call('disconnect',args),
+    subscribeDashboardUpload:(...args:unknown[])=>{if(args.length!==1||typeof args[0]!=='function')throw Error('INVALID_UPLOAD_REQUEST');const listener=args[0] as (status:DashboardUploadStatus)=>void;const receive=(_event:unknown,value:unknown)=>{if(isDashboardUploadStatus(value))listener(value);};port.on(UPLOAD_CHANNELS.status,receive);return ()=>{port.removeListener(UPLOAD_CHANNELS.status,receive);};}};
+}

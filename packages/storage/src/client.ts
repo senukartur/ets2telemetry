@@ -160,6 +160,11 @@ export class StorageClient {
     return this.#request({name: 'readUploadProjectionPage', query: isObject(query)
       ? {snapshot: query.snapshot, kind: query.kind, cursor: query.cursor, limit: query.limit} : query});
   }
+  readRetainedUploadMaterializations(...args:unknown[]) {return args.length?Promise.resolve(failure('INVALID_INPUT')):this.#request({name:'readRetainedUploadMaterializations',input:{}});}
+  getUploadConfiguration(...args:unknown[]) {return args.length?Promise.resolve(failure('INVALID_INPUT')):this.#request({name:'getUploadConfiguration'});}
+  pageUploadScanRuns(input:UploadSyncCommands['pageUploadScanRuns']['args']['input']) {if(!isUploadSyncRequest({name:'pageUploadScanRuns',input}))return Promise.resolve(failure('INVALID_INPUT'));return this.#request({name:'pageUploadScanRuns',input:{registrationId:input.registrationId,after:input.after,limit:input.limit}});}
+  pageUploadSources(input:UploadSyncCommands['pageUploadSources']['args']['input']) {if(!isUploadSyncRequest({name:'pageUploadSources',input}))return Promise.resolve(failure('INVALID_INPUT'));return this.#request({name:'pageUploadSources',input:{registrationId:input.registrationId,phase:input.phase,after:input.after,limit:input.limit}});}
+  getUploadSchedulingHints(input:{registrationId:string}) {if(!isUploadSyncRequest({name:'getUploadSchedulingHints',input}))return Promise.resolve(failure('INVALID_INPUT'));return this.#request({name:'getUploadSchedulingHints',input:{registrationId:input.registrationId}});}
   ensureUploadInstallation() {return this.#request({name:'ensureUploadInstallation'});}
   recordUploadRegistration(input:UploadSyncCommands['recordUploadRegistration']['args']['input']) {return this.#request({name:'recordUploadRegistration',input:isObject(input)?{registrationId:input.registrationId,clientInstallationId:input.clientInstallationId,origin:input.origin,accountId:input.accountId,companyId:input.companyId,identityEpoch:input.identityEpoch,installationId:input.installationId,bindingId:input.bindingId}:input});}
   confirmUploadOwner(input:UploadSyncCommands['confirmUploadOwner']['args']['input']) {return this.#request({name:'confirmUploadOwner',input:isObject(input)?{confirmationId:input.confirmationId,registrationId:input.registrationId,credentialGeneration:input.credentialGeneration,expectedVersion:input.expectedVersion}:input});}

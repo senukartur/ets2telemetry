@@ -43,7 +43,9 @@ export interface LiveTelemetry {
   /** Protocol v1 fields beside the v0 observation (ET-010c); absent without a v1 source state for this selection. */
   v1?: LiveTelemetryV1;
 }
-export interface DesktopBridge {
+import type {DashboardUploadBridge} from './dashboard-upload';
+export type {DashboardUploadBridge,DashboardUploadStatus,DashboardUploadError,DashboardOwner} from './dashboard-upload';
+export interface DesktopBridge extends DashboardUploadBridge {
   setNowPlayingEnabled(enabled: boolean): Promise<SettingsView>;
   setNowPlayingStyle(style: NowPlayingStyle): Promise<SettingsView>;
   setNowPlayingBackgroundOpacity(opacity: number): Promise<SettingsView>;

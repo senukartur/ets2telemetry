@@ -1,4 +1,5 @@
 import type {MediaReaderOptions} from '../../apps/desktop/src/now-playing/reader';
+import type {UploadMainController} from '../../apps/desktop/src/dashboard-upload/main-controller';
 import {pathToFileURL} from 'node:url';
 import {DEFAULT_NOW_PLAYING} from '../../apps/desktop/src/now-playing/contract';
 import {EventEmitter} from 'node:events';
@@ -228,6 +229,16 @@ async function removeFixture() {
 async function settle() {await Promise.resolve(); await Promise.resolve();}
 async function ready() {await loadMain(); await Promise.resolve(); child.emit('message', {type: 'ready'}); await settle();}
 const trusted = () => ({sender: contents, senderFrame: contents.mainFrame});
+it('REG-010/012 restricts every upload command to the current main document and leaves unconfigured credentials unavailable',async()=>{
+  await ready();
+  for(const action of ['context','verify','confirm','cancel','disconnect']){
+    const handler=handlers.get(`dashboard-upload:${action}`)!;
+    for(const event of [{sender:{},senderFrame:contents.mainFrame},{sender:contents,senderFrame:{}},overlayTrusted()])expect(()=>handler(event)).toThrow('Untrusted');
+  }
+  await expect(handlers.get('dashboard-upload:context')!(trusted())).resolves.toMatchObject({state:'unavailable',origin:null,error:'UNCONFIGURED'});
+  await expect(handlers.get('dashboard-upload:verify')!(trusted(),{origin:'https://evil.example'})).rejects.toThrow('INVALID_UPLOAD_REQUEST');
+  expect(child.postMessage.mock.calls.some(([message])=>message.type==='dashboard-upload:request')).toBe(false);
+});
 const sourceEvents = () => log.mock.calls.filter(call => call[0] === 'SOURCE_SELECTED' || call[0] === 'SOURCE_SELECTION_RETIRED');
 function upstreamRequests(target = child) {return target.postMessage.mock.calls.filter(call => call[0].type === 'subscribe').length;}
 async function exhaustUpstream() {
@@ -811,6 +822,27 @@ it('keeps default logs free of the diagnostic timeline and lag monitor', async (
 const trayMenuItem = (label: string) => (trays[0].setContextMenu.mock.lastCall![0] as {template: {label?: string; enabled?: boolean; click?: () => void}[]}).template.find(item => item.label === label)!;
 const failurePattern = /FAILED|TIMEOUT|UNCAUGHT|UNHANDLED|INVALID|RENDER_PROCESS_GONE/;
 function closeDashboard(target = windows[0]) {const event = {preventDefault: vi.fn()}; target.emit('close', event); if (!event.preventDefault.mock.calls.length) target.emit('closed'); return event;}
+it.each(['closed','destroyed-before-closed','contents-destroyed-before-closed','retire-callback-failure'] as const)('REG-010/012 retires a configured pending upload candidate without publishing through %s web contents',async boundary=>{
+  const instance:{controller?:UploadMainController}={};
+  vi.doMock('../../apps/desktop/src/dashboard-upload/main-controller',async()=>{
+    const actual=await vi.importActual<typeof import('../../apps/desktop/src/dashboard-upload/main-controller')>('../../apps/desktop/src/dashboard-upload/main-controller');
+    const {UploadCredentialStore}=await import('../../apps/desktop/src/dashboard-upload/credential-store');
+    return {UploadMainController:class extends actual.UploadMainController {
+      constructor(_origin:unknown,channel:ConstructorParameters<typeof actual.UploadMainController>[1],_store:unknown,publish:ConstructorParameters<typeof actual.UploadMainController>[3]){
+        const store=new UploadCredentialStore({read:()=>Promise.resolve(undefined),write:()=>Promise.resolve(),remove:()=>Promise.resolve(),names:()=>Promise.resolve([])},{available:()=>Promise.resolve(true),encrypt:()=>Promise.resolve(Buffer.from('dummy')),decrypt:()=>Promise.resolve({result:'',shouldReEncrypt:false})});
+        super('https://dashboard.example',channel,()=>store,publish);instance.controller=this;
+      }
+    }};
+  });
+  try{trayAvailable=true;await ready();const upload=instance.controller!;await upload.attach({generation:'10000000-0000-4000-8000-000000000001',retire(){},call:command=>Promise.resolve(command.action==='configuration'?{ok:true,value:{kind:'configuration',configuration:{status:'ready',purpose:'history',version:'0',registration:null,credentialGeneration:null,runId:null}}}:{ok:true,value:{kind:'verified',owner:{origin:'https://dashboard.example',accountId:'a',companyId:'c',identityEpoch:'e'},limits:{maxEventBytes:65536,maxDepth:16,eventsPerMinute:60,burst:10}}})});await settle();
+    expect((await upload.handle('verify',['vtc1_10000000-0000-4000-8000-000000000001_'+'a'.repeat(43)])).state).toBe('confirmation-required');
+    const destroyed=Object.assign(windows[0],{isDestroyed:()=>boundary!=='contents-destroyed-before-closed'}),before=contents.send.mock.calls.length;contents.isDestroyed=()=>true;contents.send.mockImplementation(()=>{throw Error('DESTROYED_WEB_CONTENTS');});
+    if(boundary==='retire-callback-failure'){const retire=upload.documentChanged.bind(upload);upload.documentChanged=()=>{retire();throw Error('RETIRE_CALLBACK_FAILED');};expect(()=>destroyed.emit('closed')).toThrow('RETIRE_CALLBACK_FAILED');}
+    else{if(boundary!=='closed')expect(()=>upload.documentChanged()).not.toThrow();expect(()=>destroyed.emit('closed')).not.toThrow();}
+    expect(contents.send.mock.calls.length).toBe(before);expect(()=>handlers.get('app:get-state')!(trusted())).toThrow('Untrusted');
+    trays[0].emit('click');expect(windows).toHaveLength(3);expect(child.postMessage).not.toHaveBeenCalledWith({type:'stop'});expect(child.kill).not.toHaveBeenCalled();upload.stop();
+  }finally{contents.send.mockReset();instance.controller?.stop();vi.doUnmock('../../apps/desktop/src/dashboard-upload/main-controller');}
+});
 async function isolatedProfile(run: (profile: string) => Promise<void>) {
   const profile = await mkdtemp(path.join(os.tmpdir(), 'ets2telemetry-lifecycle-profile-'));
   try {await run(profile);} finally {await rm(profile, {recursive: true, force: true});}

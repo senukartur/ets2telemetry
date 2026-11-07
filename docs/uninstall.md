@@ -17,6 +17,8 @@ ET-018 PR-2 (October 18, 2026) adds the engine that removes this application's o
 
 ## Roots
 
+The channel data inventory includes `credentials/`: encrypted upload generations, atomic-write partials, activation metadata and disconnect intent. Both the in-app walker and deferred PowerShell executor remove this allowlisted entry with the existing no-follow/budget rules. Installer evidence records only its presence, never credential contents or hashes; diagnostics and exports do not sample it.
+
 The central safety rule: an uninstall derives its folders from the running executable's install location, never from `%LOCALAPPDATA%` alone. `resolveUninstallRoots` reads the layout `<base>\ETS2TelemetryDesktop\app-<semver>\<executable>`:
 
 - `app-<semver>` must be a folder named like Squirrel's version folders, and `ETS2TelemetryDesktop` must be a folder holding a regular `Update.exe`. Anything else, such as the portable package, an unpackaged or a development launch, is `NOT_INSTALLED`, and nothing is deleted.

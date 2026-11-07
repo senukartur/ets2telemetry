@@ -161,6 +161,12 @@ ET-055 PR-6 (October 28, 2026) adds the update controller in main (`apps/desktop
 
 ## Service shutdown
 
+Dashboard upload credentials stay in main's asynchronous OS-protected store. Its main-frame-only preload commands validate exact arguments and safe replies; pending confirmation is retired on document navigation/closure, utility replacement or exit. The utility owns control/event HTTPS and the sole history storage client. Upload recovery starts only in the replacement utility after the predecessor exited, including recovery of a persisted attempt whose reply/UUID was lost. Rotation/disconnect serialize with abort/settlement of the old HTTP flight; a complete known ACK still commits its matching receipt across the transition.
+
+A private generation-only cancellation aborts a retired document's control without granting renderer authority. Reconciliation waits for busy control settlement on a bounded timer and rereads SQLite before decrypting/resuming its matching generation. Failed replacement or navigation therefore cannot strand a valid previously confirmed queue; a newly committed confirmation takes precedence over the old owner. Transient offline revalidation retries only a committed generation with capped backoff, while authentication/TLS/configuration faults remain paused. Stop/replacement cancels every revalidation timer. Upload status publication checks both BrowserWindow and webContents lifetime. The closed handler clears its window reference in a finally block after document retirement, and legacy retirement cleanup runs even if a synchronous upload callback fails.
+
+At stop entry the consumer synchronously disables new HTTP/background work and aborts its request. Its bounded settlement is an intake step inside the existing 1000 ms intake maximum; no upload backlog drain or extension to the 2500 ms shutdown sequence, main kill or exit-idle budget is granted. Ciphertext operations never delay the exit coordinator. NULL channel origins leave this feature unavailable without reading credentials or contacting a server.
+
 The service stops through an ordered sequence (`apps/desktop/src/shutdown-sequence.ts`):
 
 | Phase | Steps (budget) |

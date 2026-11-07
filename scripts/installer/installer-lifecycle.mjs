@@ -398,6 +398,7 @@ async function tree(root) {
     for (const name of names.sort()) {
       const file = path.join(directory, name), item = await lstat(file), relative = path.relative(root, file);
       if (item.isSymbolicLink()) throw new Error('SNAPSHOT_LINK');
+      if (item.isDirectory() && path.relative(root,file).split(path.sep)[0] === 'credentials') {entries[`${relative}\\`] = {directory:true}; continue;}
       if (item.isDirectory()) {entries[`${relative}\\`] = {directory: true}; await walk(file);}
       else {const bytes = await readFile(file); entries[relative] = {size: bytes.length, sha256: sha256(bytes)};}
     }
@@ -1330,7 +1331,7 @@ const TRANSIENT = /(-wal|-shm|-journal|\.jsonl|\.jsonl\.1|\.tmp|\.partial)$/i;
 async function entrySamples(dataRoot, entries) {
   const samples = {};
   for (const entry of entries) {
-    if (entry === 'transport') {samples[entry] = null; continue;}
+    if (entry === 'transport' || entry === 'credentials') {samples[entry] = null; continue;}
     const files = [];
     const walk = async (relative, depth) => {
       if (files.length >= 512) return;

@@ -3,7 +3,7 @@ import type Database from 'better-sqlite3';
 import type {Available, Money} from '../../../contracts/src/protocol-v1';
 import {fromAvailability, fromU64Key, toReal, toSafeNumber} from '../codec';
 import {fail} from '../errors';
-import {isUploadPageQuery, isUploadProjection, isUploadProjectionPage, isUploadUuid, isUploadProjectionBegin, uploadSnapshotParts,
+import {MAX_UPLOAD_PROJECTION_PINS,isUploadPageQuery, isUploadProjection, isUploadProjectionPage, isUploadUuid, isUploadProjectionBegin, uploadSnapshotParts,
   type QualifiedOccurrence, type UploadConfiguration, type UploadFacts, type UploadInterval, type UploadMember,
   type UploadProjection, type UploadProjectionBegin, type UploadProjectionPreparation, type UploadProjectionPage, type UploadProjectionPageQuery, type UploadReadiness, type UploadVersions} from '../upload-projection';
 import type {StorageConnection} from './connection';
@@ -90,7 +90,7 @@ export function beginUploadProjection(conn: StorageConnection, input: UploadProj
     const prior=get(db,'SELECT * FROM upload_projection_pins WHERE pin_id=?',input.pinId);
     if(prior){if(prior.requested_trip_uuid!==input.tripUuid)fail('INVALID_INPUT');return status(prior);}
     // The header limit also includes invalidated and partially released preparations.
-    if(all(db,'SELECT pin_id FROM upload_projection_pins LIMIT 8').length===8)fail('STORAGE_BUSY');
+    if(all(db,'SELECT pin_id FROM upload_projection_pins LIMIT ?',MAX_UPLOAD_PROJECTION_PINS).length===MAX_UPLOAD_PROJECTION_PINS)fail('STORAGE_BUSY');
     const state=current(db,input.tripUuid);
     const root=required(get(db,'SELECT id FROM trips WHERE trip_uuid=?',state.root));
     // Never invoke the Journal's legacy revision repair in a preparation turn.

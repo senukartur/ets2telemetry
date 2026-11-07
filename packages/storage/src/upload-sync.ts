@@ -1,5 +1,5 @@
 // Private storage/service contract. No credentials, renderer authority or network operations.
-import {isUploadUuid} from './upload-projection';
+import {MAX_UPLOAD_PROJECTION_PINS,isUploadUuid} from './upload-projection';
 
 export const UPLOAD_MAX_EVENTS=10_000,UPLOAD_MAX_BYTES=64*1024*1024;
 export type Check=(value:unknown)=>boolean;
@@ -28,7 +28,20 @@ export interface UploadReceiptResult {status:'delivered'|'duplicate'|'reconcilia
 export interface UploadCleanup {examined:number;reclaimed:number;events:number;bytes:number}
 export interface UploadStoreStatus {registrationId:string;version:string;active:boolean;paused:'authentication'|'configuration'|'reconciliation'|null;
   discoveryAfter:string;identityPendingSources:number;pendingSources:number;heldSources:number;queuedEvents:number;queuedBytes:number;deliveredEvents:number;pressure:boolean}
+export interface UploadActiveConfiguration {status:'ready'|'reconciliation-required';purpose:'history'|'synthetic'|'replay';version:string;registration:UploadRegistration|null;credentialGeneration:string|null;runId:string|null}
+export interface UploadRunPage {after:string|null;next:string|null;examined:number;items:UploadScanProgress[]}
+export interface UploadSourceState {tripUuid:string;state:'identity-pending'|'held'|'pending'|'queued'|'delivered';latestRevision:number;lastReceiptUtcMs:number|null}
+export interface UploadSourcePage {phase:'sources'|'receipts';after:string|null;next:string|null;examined:number;sources:UploadSourceState[];receipts:{eventId:string;firstReceivedUtcMs:number}[]}
+export interface UploadSchedulingHints {status:'ready'|'reconciliation-required';registrationId:string;version:string;credentialGeneration:string|null;retryAtMs:number|null;failureStreak:number;retryEventId:string|null;paused:'authentication'|'configuration'|'reconciliation'|null;held:'validation'|'reconciliation'|null}
+const receiptCursor:Check=v=>typeof v==='string'&&v.length<=64&&/^r:(0|[1-9][0-9]{0,15}):[0-9a-f-]{36}$/.test(v)&&safe(Number(v.split(':')[1]))&&isUploadUuid(v.split(':')[2]);
+const receiptCursorAfter=(next:string,after:string)=>{const n=next.split(':'),a=after.split(':');return BigInt(n[1])>BigInt(a[1])||n[1]===a[1]&&n[2]>a[2];};
+export interface RetainedUploadMaterializations {examined:number;unmanagedPins:number;items:{workId:string;registrationId:string;state:'preparing'|'folding'|'complete'|'frozen'|'equal'|'held'|'stale'}[]}
 export interface UploadSyncCommands {
+  readRetainedUploadMaterializations:{args:{input:Record<never,never>};value:RetainedUploadMaterializations};
+  getUploadConfiguration:{args:Record<never,never>;value:UploadActiveConfiguration};
+  pageUploadScanRuns:{args:{input:{registrationId:string;after:string|null;limit:number}};value:UploadRunPage};
+  pageUploadSources:{args:{input:{registrationId:string;phase:'sources'|'receipts';after:string|null;limit:number}};value:UploadSourcePage};
+  getUploadSchedulingHints:{args:{input:{registrationId:string}};value:UploadSchedulingHints};
   ensureUploadInstallation:{args:Record<never,never>;value:UploadInstallation};
   recordUploadRegistration:{args:{input:UploadRegistration};value:UploadRegistrationResult};
   confirmUploadOwner:{args:{input:UploadConfirmation};value:UploadConnectionResult};
@@ -50,7 +63,11 @@ export type UploadSyncName=keyof UploadSyncCommands;
 export type UploadSyncCommand={[K in UploadSyncName]:{name:K}&UploadSyncCommands[K]['args']}[UploadSyncName];
 export const registrationCheck=shape({registrationId:isUploadUuid,clientInstallationId:isUploadUuid,origin,accountId:text,companyId:text,identityEpoch:text,installationId:isUploadUuid,bindingId:isUploadUuid});
 const requestChecks:Record<UploadSyncName,Check>={
-  ensureUploadInstallation:shape({name:one('ensureUploadInstallation')}),
+  readRetainedUploadMaterializations:shape({}),
+  ensureUploadInstallation:shape({name:one('ensureUploadInstallation')}),getUploadConfiguration:shape({name:one('getUploadConfiguration')}),
+  pageUploadScanRuns:shape({registrationId:isUploadUuid,after:nullable(isUploadUuid),limit:v=>bounded(v)&&v!==0}),
+  pageUploadSources:v=>shape({registrationId:isUploadUuid,phase:one('sources','receipts'),after:nullable(v=>decimal(v)||receiptCursor(v)),limit:v=>bounded(v)&&v!==0})(v)&&record(v)&&(v.after===null||(v.phase==='sources'?decimal(v.after):receiptCursor(v.after))),
+  getUploadSchedulingHints:shape({registrationId:isUploadUuid}),
   recordUploadRegistration:registrationCheck,
   confirmUploadOwner:shape({confirmationId:isUploadUuid,registrationId:isUploadUuid,credentialGeneration:text,expectedVersion:decimal}),
   disconnectUploadOwner:shape({expectedVersion:decimal}),getUploadStoreStatus:shape({registrationId:isUploadUuid}),
@@ -68,11 +85,16 @@ export const UPLOAD_SYNC_NAMES=Object.freeze(Object.keys(requestChecks) as Uploa
 export const isUploadSyncName=(value:string):value is UploadSyncName=>Object.hasOwn(requestChecks,value);
 export function isUploadSyncRequest(command:unknown):command is UploadSyncCommand {
   if(!record(command)||typeof command.name!=='string'||!isUploadSyncName(command.name))return false;
-  return command.name==='ensureUploadInstallation'?requestChecks[command.name](command):shape({name:one(command.name),input:requestChecks[command.name]})(command);
+  return command.name==='ensureUploadInstallation'||command.name==='getUploadConfiguration'?requestChecks[command.name](command):shape({name:one(command.name),input:requestChecks[command.name]})(command);
 }
 const work=shape({workId:isUploadUuid,status:one('preparing','folding','complete','frozen','equal','held','stale','pressure','released'),examined:bounded,eventId:nullable(isUploadUuid),reason:nullable(one('source-ineligible','identity-pending','unbound','reconciliation-required','projection-invalid','material-changed','revision-exhausted','queue-pressure'))});
 const attempt=shape({status:one('claimed','empty','paused','busy','reconciliation-required','recorded','recovered','delivered','stale'),attemptId:nullable(isUploadUuid),eventId:nullable(isUploadUuid),registrationId:nullable(isUploadUuid),registration:nullable(registrationCheck),payload:nullable(payload)});
 const resultChecks:Record<UploadSyncName,Check>={
+  readRetainedUploadMaterializations:shape({examined:v=>safe(v)&&v<=MAX_UPLOAD_PROJECTION_PINS,unmanagedPins:v=>safe(v)&&v<=MAX_UPLOAD_PROJECTION_PINS,items:v=>Array.isArray(v)&&v.length<=MAX_UPLOAD_PROJECTION_PINS&&v.every(shape({workId:isUploadUuid,registrationId:isUploadUuid,state:one('preparing','folding','complete','frozen','equal','held','stale')}))}),
+  getUploadConfiguration:shape({status:one('ready','reconciliation-required'),purpose:one('history','synthetic','replay'),version:decimal,registration:nullable(registrationCheck),credentialGeneration:nullable(text),runId:nullable(isUploadUuid)}),
+  pageUploadScanRuns:shape({after:nullable(isUploadUuid),next:nullable(isUploadUuid),examined:bounded,items:v=>Array.isArray(v)&&v.length<=100&&v.every(shape({runId:isUploadUuid,phase:one('legacy','candidates','complete','pressure'),examined:bounded,cursor:shape({legacy:decimal,ordinal:decimal})}))}),
+  pageUploadSources:shape({phase:one('sources','receipts'),after:nullable(v=>decimal(v)||receiptCursor(v)),next:nullable(v=>decimal(v)||receiptCursor(v)),examined:bounded,sources:v=>Array.isArray(v)&&v.length<=100&&v.every(shape({tripUuid:isUploadUuid,state:one('identity-pending','held','pending','queued','delivered'),latestRevision:safe,lastReceiptUtcMs:nullable(safe)})),receipts:v=>Array.isArray(v)&&v.length<=100&&v.every(shape({eventId:isUploadUuid,firstReceivedUtcMs:safe}))}),
+  getUploadSchedulingHints:shape({status:one('ready','reconciliation-required'),registrationId:isUploadUuid,version:decimal,credentialGeneration:nullable(text),retryAtMs:nullable(safe),failureStreak:v=>safe(v)&&v<=9,retryEventId:nullable(isUploadUuid),paused:nullable(one('authentication','configuration','reconciliation')),held:nullable(one('validation','reconciliation'))}),
   ensureUploadInstallation:shape({status:one('ready','reconciliation-required'),clientInstallationId:nullable(isUploadUuid)}),
   recordUploadRegistration:shape({status:one('recorded','reconciliation-required'),registrationId:isUploadUuid}),
   confirmUploadOwner:shape({status:one('confirmed','stale','reconciliation-required'),version:decimal,runId:nullable(isUploadUuid)}),
@@ -88,6 +110,23 @@ const resultChecks:Record<UploadSyncName,Check>={
 };
 export function isUploadSyncResult(command:UploadSyncCommand,value:unknown):boolean {
   if(!resultChecks[command.name](value)||!record(value))return false;
+  if(command.name==='readRetainedUploadMaterializations')return (value.items as {workId:string}[]).length+(value.unmanagedPins as number)===value.examined&&new Set((value.items as {workId:string}[]).map(item=>item.workId)).size===(value.items as unknown[]).length;
+  if(command.name==='getUploadConfiguration')return value.status==='reconciliation-required'||((value.registration===null)===(value.credentialGeneration===null)&&(value.registration===null)===(value.runId===null));
+  if(command.name==='getUploadSchedulingHints'&&(value.registrationId!==command.input.registrationId||value.failureStreak!==0&&value.retryEventId===null))return false;
+  if(command.name==='pageUploadScanRuns'){
+    const page=value as unknown as UploadRunPage;
+    if(page.after!==command.input.after||page.examined>command.input.limit||page.items.length>page.examined||(page.examined===0)!==(page.next===null)||page.next!==null&&page.next<=(page.after??''))return false;
+    if(new Set(page.items.map(item=>item.runId)).size!==page.items.length||page.items.some(item=>item.runId<=(page.after??'')||page.next===null||item.runId>page.next))return false;
+  }
+  if(command.name==='pageUploadSources'){
+    const page=value as unknown as UploadSourcePage,source=command.input.phase==='sources',cursor=source?decimal:receiptCursor;
+    if(page.phase!==command.input.phase||page.after!==command.input.after||page.examined>command.input.limit||page.sources.length+page.receipts.length>page.examined||(source?page.receipts.length!==0:page.sources.length!==0)||(page.examined===0)!==(page.next===null)||page.next!==null&&!cursor(page.next))return false;
+    if(page.next!==null&&page.after!==null){
+      if(source?BigInt(page.next)<=BigInt(page.after):!receiptCursorAfter(page.next,page.after))return false;
+    }
+    if(new Set(page.sources.map(item=>item.tripUuid)).size!==page.sources.length||new Set(page.receipts.map(item=>item.eventId)).size!==page.receipts.length)return false;
+    if(page.sources.some(item=>item.lastReceiptUtcMs!==null&&item.latestRevision===0||item.state==='delivered'&&item.lastReceiptUtcMs===null))return false;
+  }
   if('input' in command&&'workId' in command.input&&value.workId!==command.input.workId)return false;
   if(command.name==='ensureUploadInstallation'&&((value.status==='ready')!==(value.clientInstallationId!==null)))return false;
   if(command.name==='confirmUploadOwner'&&value.status==='confirmed'&&(value.runId!==command.input.confirmationId||value.version!==String(BigInt(command.input.expectedVersion)+1n)))return false;

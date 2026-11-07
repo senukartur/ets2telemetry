@@ -54,6 +54,11 @@ export function serveStorage(port: HostPort, testOptions: HostTestOptions = {}):
     }
     if (!storage) return failed('STORAGE_CLOSED');
     switch (command.name) {
+    case 'readRetainedUploadMaterializations': return storage.readRetainedUploadMaterializations();
+    case 'getUploadConfiguration': return storage.getUploadConfiguration();
+    case 'pageUploadScanRuns': return storage.pageUploadScanRuns(command.input);
+    case 'pageUploadSources': return storage.pageUploadSources(command.input);
+    case 'getUploadSchedulingHints': return storage.getUploadSchedulingHints(command.input);
     case 'ensureUploadInstallation': return storage.ensureUploadInstallation();
     case 'recordUploadRegistration': return storage.recordUploadRegistration(command.input);
     case 'confirmUploadOwner': return storage.confirmUploadOwner(command.input);
