@@ -130,9 +130,22 @@ export function hardModeChip(status: HardModeStatus, nowUtcMs: number, language:
   return {text: t('chip.hm.fail', {n: hardModeView(status, nowUtcMs, language).passed}, language), tone};
 }
 
-/** The Live page state (ET-074): current values are connected or paused; a lost stream is stale; anything else waits. */
-export type LiveScreenState = 'connected' | 'paused' | 'stale' | 'waiting';
-export function liveScreenState(status: LiveTelemetry['status'] | undefined, current: boolean, paused: boolean): LiveScreenState {
+/**
+ * One telemetry stream current and the other not, in either direction: the rule gameConnectionText uses for its
+ * "connection is incomplete" text, so the page state and the banner text always agree.
+ */
+export function liveSourcesPartial(live: LiveTelemetry | undefined): boolean {
+  const current = (state: {status: string; fresh: boolean}) => state.fresh && (state.status === 'connected' || state.status === 'paused');
+  return !!live?.v1 && current(live) !== current(live.v1);
+}
+
+/**
+ * The Live page state (ET-074): current values are connected or paused; one current stream of two is partial; a lost
+ * stream with no current source is stale; anything else waits.
+ */
+export type LiveScreenState = 'connected' | 'paused' | 'partial' | 'stale' | 'waiting';
+export function liveScreenState(status: LiveTelemetry['status'] | undefined, current: boolean, paused: boolean, partial = false): LiveScreenState {
+  if (partial) return 'partial';
   if (current) return paused ? 'paused' : 'connected';
   return status === 'stale' || status === 'disconnected' ? 'stale' : 'waiting';
 }

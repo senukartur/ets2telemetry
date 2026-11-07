@@ -1010,8 +1010,6 @@ export const RU_DICTIONARY: TranslationDictionary = channelCopyTable(Object.free
   'ver.stagingA': 'тестовая сборка (staging)',
   'ui.moreAbout': 'Подробнее: {v}',
   's.interface': 'Интерфейс',
-  'live.time': 'Время',
-  'live.nextBreak': 'До обязательного перерыва',
   'hm.howChecked': 'Как проверяется Hard Mode',
   'hm.now': 'Сейчас {detected} · нужно {required}',
   'hm.required.parkingShort': 'Нормальная',
@@ -1025,6 +1023,7 @@ export const RU_DICTIONARY: TranslationDictionary = channelCopyTable(Object.free
   'live.sub.paused': 'игра на паузе, значения текущие',
   'live.sub.stale': 'значения устарели и приглушены',
   'live.sub.waiting': 'игра не подключена',
+  'live.sub.partial': 'подключение к игре неполное',
   'live.noJobHint': 'Нет активного заказа. Поля появятся, когда игра передаст заказ.',
   'live.staleReason': 'нет новых данных от игры'
 }));

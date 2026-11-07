@@ -5,7 +5,7 @@ import {initialLive} from '../../apps/desktop/src/live-state';
 import {v1Projection} from '../shared/live-v1-fixtures';
 import {dashboardFuel} from '../../apps/desktop/src/speed-display';
 import {describe, expect, it} from 'vitest';
-import {clampRatio, connectionChip, connectionTone, desktopLiveView, gaugeArc, hardModeChip, hardModeTone, liveGameMode, liveScreenState, liveSubline, pluginChip, pluginTone,
+import {clampRatio, connectionChip, connectionTone, desktopLiveView, gaugeArc, hardModeChip, hardModeTone, liveGameMode, liveScreenState, liveSourcesPartial, liveSubline, pluginChip, pluginTone,
   pluginStatusText, recordingMotion, recordingTone, routeGroup, staleReasonText} from '../../apps/desktop/src/screens/desktop-ui-view';
 import {liveDashboardText} from '../../apps/desktop/src/live-dashboard-text';
 import {unknownHardMode} from '../../packages/telemetry-core/src/hard-mode';
@@ -240,6 +240,24 @@ describe('compact shell chips and Live states (ET-074, REG-009, REG-002)', () =>
     ['unavailable', false, false, 'waiting'], ['restarting', false, false, 'waiting'], ['service-failed', false, false, 'waiting'], [undefined, false, false, 'waiting'],
     ['connected', false, false, 'waiting']
   ] as const)('maps status %s (current %s, paused %s) to the %s Live state', (status, current, paused, state) => expect(liveScreenState(status, current, paused)).toBe(state));
+  it('marks one current stream of two as partial in either direction, and stale only when no source is current', () => {
+    const v1Stale = {status: 'stale', fresh: false, reason: 'Main has no recent v1 SDK capture'} as const;
+    const v0Stale = {status: 'stale', fresh: false, reason: 'Main has no recent SDK capture'} as const;
+    const state = (live: LiveTelemetry | undefined) => {const view = desktopLiveView(live); return liveScreenState(live?.status, view.current, view.sources.paused, liveSourcesPartial(live));};
+    expect(state(smokePair())).toBe('connected');
+    expect(state(smokeV0())).toBe('connected');
+    expect(state(smokePair(v1Stale))).toBe('partial');
+    expect(state(smokePair({}, v0Stale))).toBe('partial');
+    expect(state(smokePair({}, {status: 'disconnected', fresh: false, reason: 'Game disconnected'}))).toBe('partial');
+    expect(state(smokePair(v1Stale, {status: 'paused'}))).toBe('partial');
+    expect(state(smokePair(v1Stale, v0Stale))).toBe('stale');
+    expect(state({...smokeV0(), ...v0Stale})).toBe('stale');
+    expect(state(undefined)).toBe('waiting');
+    // Partial wins over every other input, as the banner text does (gameConnectionText's rule).
+    expect(liveScreenState('stale', false, false, true)).toBe('partial');
+    expect(liveScreenState('connected', true, true, true)).toBe('partial');
+    expect([smokePair(), smokeV0(), undefined].map(liveSourcesPartial)).toEqual([false, false, false]);
+  });
   it('reads the mode from current v1 evidence: strong TruckersMP, single-player also from the ordinary weak module scan', () => {
     const mode = (patch: object | null, live = smokePair()) => {
       if (patch) live.v1!.observation!.sourceStatus.gameMode = {...live.v1!.observation!.sourceStatus.gameMode, ...patch};
@@ -265,6 +283,9 @@ describe('compact shell chips and Live states (ET-074, REG-009, REG-002)', () =>
     expect(liveSubline('stale', 'ETS2', 'Main has no recent SDK capture', 'en')).toBe('Real-time game data · values are out of date and dimmed · no new data from the game');
     expect(liveSubline('stale', 'ATS', 'Renderer has no recent SDK capture', 'ru')).toBe('Данные игры в реальном времени · значения устарели и приглушены · нет новых данных от игры');
     expect(liveSubline('waiting', '', 'Waiting for game', 'ru')).toBe('Данные игры в реальном времени · игра не подключена');
+    // Partial never says the values are out of date: the current stream's values are current.
+    expect(liveSubline('partial', 'ETS2', 'Main has no recent SDK capture', 'en')).toBe('Real-time game data · game connection is incomplete');
+    expect(liveSubline('partial', 'ETS2', undefined, 'ru')).toBe('Данные игры в реальном времени · подключение к игре неполное');
     for (const language of ['en', 'ru'] as const) expect(liveSubline('connected', 'ETS2', undefined, language)).not.toMatch(/20/);
   });
   it('maps every route to its sidebar group', () => {

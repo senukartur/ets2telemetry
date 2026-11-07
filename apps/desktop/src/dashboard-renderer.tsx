@@ -2,7 +2,7 @@ import {AccountScreen} from './dashboard-upload/account-screen';
 import {SyncChip} from './dashboard-upload/sync-chip';
 import {useDashboardUpload} from './dashboard-upload/use-dashboard-upload';
 import {NowPlayingSettingsCard} from './now-playing/settings-card';
-import {connectionChip, desktopLiveView, hardModeChip, liveGameMode, liveScreenState, liveSubline, pluginChip, recordingMotion, recordingTone, type ShellRoute} from './screens/desktop-ui-view';
+import {connectionChip, desktopLiveView, hardModeChip, liveGameMode, liveScreenState, liveSourcesPartial, liveSubline, pluginChip, recordingMotion, recordingTone, type ShellRoute} from './screens/desktop-ui-view';
 import {HardModeCard} from './hard-mode/card';
 import React, {useEffect, useMemo, useRef, useState} from 'react';
 import type {AppLanguage, AppState, LiveTelemetry, SettingsView, SourceSelection, UnitGame} from '../../../packages/contracts/src';
@@ -85,7 +85,7 @@ export default function App() {
   // ET-074: one live view for the game chip and the Live subline; the Live page builds its own from the same inputs.
   const liveView = useMemo(() => desktopLiveView(live, settings?.units, settings?.gearDisplay), [live, settings?.units, settings?.gearDisplay]);
   const game = live?.observation?.source.game.toUpperCase() ?? '', mode = liveGameMode(liveView.sources);
-  const liveState = liveScreenState(live?.status, liveView.current, liveView.sources.paused);
+  const liveState = liveScreenState(live?.status, liveView.current, liveView.sources.paused, liveSourcesPartial(live));
   const choose = (game: UnitGame, value: string) => {
     if (!isUnitProfile(value)) return;
     setLastCard('units'); setUnits('saving');

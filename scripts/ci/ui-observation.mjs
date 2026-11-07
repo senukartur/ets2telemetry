@@ -834,12 +834,21 @@ export async function runUiSmoke({application, dashboard, overlay, source, sourc
         source.setPaused(false); await waitState(dashboard, 'connected'); source.hold();
         try {
           await waitState(dashboard, 'stale'); assert.equal(await dashboard.locator('.yu-gauge-number').textContent(), '—');
-          // ET-074: the stale state is its own page state with a badge in the instrument, not the waiting banner.
+          // ET-074: v0 stopped while v1 still sends is partial: the banner says the connection is incomplete, v0's values are
+          // dashes and nothing is marked stale.
+          await until(() => dashboard.getByTestId('live-telemetry').getAttribute('data-live-state'), value => value === 'partial', `UI_LIVE_STATE_PARTIAL_${language}`, 5000);
+          const partialText = language === 'en' ? 'Game connection is incomplete. Waiting for the other telemetry stream.' : 'Подключение к игре неполное. Ожидание второго потока телеметрии.';
+          assert.equal(await dashboard.getByTestId('live.waiting').isVisible(), true, `UI_LIVE_PARTIAL_BANNER_${language}`);
+          assert.equal((await dashboard.getByTestId('live.waiting').innerText()).includes(partialText), true, `UI_LIVE_PARTIAL_TEXT_${language}`);
+          assert.equal(await dashboard.getByTestId('live.stale').count(), 0, `UI_LIVE_PARTIAL_STALE_BADGE_${language}`);
+          // Both streams stopped: the stale state, with its badge in the instrument and without the waiting banner.
+          sourceV1.hold();
           await until(() => dashboard.getByTestId('live-telemetry').getAttribute('data-live-state'), value => value === 'stale', `UI_LIVE_STATE_STALE_${language}`, 5000);
+          assert.equal(await dashboard.locator('.yu-gauge-number').textContent(), '—');
           assert.equal(await dashboard.getByTestId('live.instrument').getByTestId('live.stale').isVisible(), true, `UI_LIVE_STALE_BADGE_${language}`);
           assert.equal(await dashboard.getByTestId('live.waiting').count(), 0, `UI_LIVE_STALE_WAITING_${language}`);
           await save('stale', language, size);
-        } finally {source.resume();}
+        } finally {source.resume(); sourceV1.resume();}
         await waitLiveInstrument(dashboard, language);
         Object.assign(record.flags, {numericGauge: true, unavailableVsZero: true, paused: true, staleDashes: true, rawNames: true, noTripPlaceholder: true});
       } else if (config.uiCase === 'journal') {

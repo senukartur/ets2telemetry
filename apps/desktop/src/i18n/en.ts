@@ -1010,8 +1010,6 @@ export const EN_DICTIONARY: TranslationDictionary = channelCopyTable(Object.free
   'ver.stagingA': 'staging build',
   'ui.moreAbout': 'More about: {v}',
   's.interface': 'Interface',
-  'live.time': 'Time',
-  'live.nextBreak': 'Next mandatory break',
   'hm.howChecked': 'How Hard Mode is checked',
   'hm.now': 'Now {detected} · required {required}',
   'hm.required.parkingShort': 'Normal',
@@ -1025,6 +1023,7 @@ export const EN_DICTIONARY: TranslationDictionary = channelCopyTable(Object.free
   'live.sub.paused': 'game paused, values are current',
   'live.sub.stale': 'values are out of date and dimmed',
   'live.sub.waiting': 'game not connected',
+  'live.sub.partial': 'game connection is incomplete',
   'live.noJobHint': 'No active job. The fields appear when the game reports a job.',
   'live.staleReason': 'no new data from the game'
 }));

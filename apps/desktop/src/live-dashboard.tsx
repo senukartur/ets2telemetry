@@ -6,7 +6,7 @@ import {Card, CardContent, CardHeader, CardTitle} from '@/components/ui/card';
 import {Button} from '@/components/ui/button';
 import {Badge} from '@/components/ui/badge';
 import {gameConnectionText, liveDashboardText, liveFieldValue, type LiveRowText} from './live-dashboard-text';
-import {desktopLiveView, gaugeArc, liveGameMode, liveScreenState} from './screens/desktop-ui-view';
+import {desktopLiveView, gaugeArc, liveGameMode, liveScreenState, liveSourcesPartial} from './screens/desktop-ui-view';
 import {dashboardFuel, dashboardSpeed} from './speed-display';
 import {displayProfile} from './unit-profiles';
 import {getStrings} from './strings';
@@ -26,8 +26,9 @@ const COMPLETENESS_TONE = {complete: 'ok', partial: 'warn', unknown: 'neutral'} 
 
 /**
  * The Live page (ET-074 compact layout): the instrument, the current job, This trip, Truck and Game session, and the
- * collapsed list of every field. `data-live-state` is connected, paused, stale or waiting; stale values are dashes and
- * dimmed, and waiting shows dashes and the waiting banner. Values come only from the live view and the recording health.
+ * collapsed list of every field. `data-live-state` is connected, paused, partial, stale or waiting; stale values are
+ * dimmed dashes, partial shows the current stream's values with the banner, and waiting shows dashes and the banner.
+ * Values come only from the live view and the recording health.
  */
 export function LiveDashboard({live, units, gearDisplay, recording, language = 'en', onSelect}: {onSelect?: (game: 'ets2' | 'ats') => Promise<void>; live: LiveTelemetry | undefined;
   units: UnitProfiles | undefined; gearDisplay?: GearDisplayModes; recording?: RecordingHealth; language?: AppLanguage}) {
@@ -35,7 +36,7 @@ export function LiveDashboard({live, units, gearDisplay, recording, language = '
   const text = useMemo(() => liveDashboardText(live, units, language, gearDisplay), [live, units, language, gearDisplay]);
   const view = useMemo(() => desktopLiveView(live, units, gearDisplay), [live, units, gearDisplay]);
   const strings = getStrings(language), profile = displayProfile(live, units), sources = view.sources;
-  const state = liveScreenState(live?.status, view.current, text.paused);
+  const state = liveScreenState(live?.status, view.current, text.paused, liveSourcesPartial(live));
   const value = (id: LiveFieldId) => {const f = sources.field(id); return f.state === 'value' || f.state === 'absent' ? liveFieldValue(f, language) : '—';};
   const has = (id: LiveFieldId) => sources.field(id).state === 'value';
   const shown = (id: LiveFieldId) => sources.field(id).state !== 'hidden';
@@ -44,9 +45,9 @@ export function LiveDashboard({live, units, gearDisplay, recording, language = '
   const rows = (entries: [string, string, string?][]) => <dl>{entries.map(([label, shownValue, testId]) => <div className="yu-kv" key={label}><dt>{label}</dt><dd data-testid={testId}>{shownValue}</dd></div>)}</dl>;
   const title = (key: 'live.job' | 'live.trip' | 'live.truck' | 'live.session') => <CardTitle><h2>{t(key, undefined, language)}</h2></CardTitle>;
 
-  // The waiting banner: no current game, or current v0 data while the v1 source is not (the existing partial case). A
-  // stream that went stale shows its badge and dimmed dashes instead.
-  const waiting = state === 'waiting' || state !== 'stale' && !!live?.v1 && !live.v1.fresh;
+  // The waiting banner: no current game, or one current stream of two (partial, in either direction). A stream that went
+  // stale with no current source shows its badge and dimmed dashes instead.
+  const waiting = state === 'waiting' || state === 'partial';
   const status = live?.status ?? 'waiting';
   const connectionText = gameConnectionText(live, language);
   const consNote = t(sources.v0View.connection.game === 'ats' ? 'live.consNoteAts' : 'live.consNote', undefined, language);
@@ -93,7 +94,7 @@ export function LiveDashboard({live, units, gearDisplay, recording, language = '
         {state === 'stale' ? <Badge variant="error" data-testid="live.stale"><WifiOff aria-hidden="true" />{t(`ui.status.${status}`, undefined, language)}</Badge> : null}
       </div>
       <div className="yu-fuel" data-testid="live.instrument.fuel">
-        <div className="yu-tank" data-testid="live.instrument.tank" data-state={view.fuelRatio === null ? 'unavailable' : 'value'} aria-hidden="true">{view.fuelRatio === null ? <span className="yu-tank-unavailable">—</span> : <i style={{height: `${view.fuelRatio * 100}%`, background: view.fuelRatio < .3 ? 'var(--yu-progress-pending)' : 'var(--yu-ok-fg)'}} />}</div>
+        <div className="yu-tank" data-testid="live.instrument.tank" data-state={view.fuelRatio === null ? 'unavailable' : 'value'} aria-hidden="true">{view.fuelRatio === null ? <span className="yu-tank-unavailable">—</span> : <span className="yu-tank-track"><i style={{height: `${view.fuelRatio * 100}%`, background: view.fuelRatio < .3 ? 'var(--yu-progress-pending)' : 'var(--yu-ok-fg)'}} /></span>}</div>
         <div className="yu-fuel-info">
           <p className="yu-fuel-amount"><strong className="yu-metric" data-testid="fuel">{strings.fuelLabel}: {fuelText}</strong> <span className="yu-muted">{t('live.of', {v: value('fuel-capacity')}, language)} · {value('fuel-level')}</span></p>
           <dl className="yu-fuel-rows">

@@ -108,6 +108,35 @@ it.each([['en', 'No current data'], ['ru', 'Нет текущих данных']
   expect(job).not.toContain('Synthetic City');
 });
 
+describe('partial', () => {
+  const PARTIAL = {en: 'Game connection is incomplete. Waiting for the other telemetry stream.', ru: 'Подключение к игре неполное. Ожидание второго потока телеметрии.'} as const;
+  it.each(['en', 'ru'] as const)('v0 stale while v1 is current shows the banner and the current v1 values, not the stale badge, in %s', language => {
+    const html = render(smokePair({}, STALE), language);
+    expect(state(html)).toBe('partial');
+    expect(between(html, 'live.waiting', 'live.instrument')).toContain(`<p>${PARTIAL[language]}</p>`);
+    expect(html).not.toContain('data-testid="live.stale"');
+    // v0's values are dashes; v1's job values for the same job stay current.
+    expect(html).toContain('data-testid="live-speed-number">—</text>');
+    const job = between(html, 'live.job.break', 'live.trip');
+    expect(job).toContain(`<strong>${language === 'en' ? '1 h 35 min' : '1 ч 35 мин'}</strong>`);
+    expect(job).toContain('data-testid="live.job.break.badge"');
+    expect(between(html, 'live.session', 'live.details')).toContain(`<dd data-testid="live.session.mode">${language === 'en' ? 'Single-player' : 'Одиночная игра'}</dd>`);
+  });
+  it.each(['en', 'ru'] as const)('v0 current while v1 is stale shows the banner and the current v0 values in %s', language => {
+    const html = render(smokePair({status: 'stale', fresh: false, reason: 'Main has no recent v1 SDK capture'}), language);
+    expect(state(html)).toBe('partial');
+    expect(between(html, 'live.waiting', 'live.instrument')).toContain(`<p>${PARTIAL[language]}</p>`);
+    expect(html).not.toContain('data-testid="live.stale"');
+    expect(html).toContain('data-testid="live-speed-number">90</text>');
+    expect(html).toContain('<dd data-testid="live.session.mode">—</dd>');
+  });
+});
+
+it('puts the tank fill inside the inset track with its inline height', () => {
+  expect(render(smokePair())).toMatch(/data-testid="live.instrument.tank" data-state="value" aria-hidden="true"><span class="yu-tank-track"><i style="height:7.3%;background:var\(--yu-progress-pending\)"><\/i><\/span><\/div>/);
+  expect(render(stalePair())).toContain('data-state="unavailable" aria-hidden="true"><span class="yu-tank-unavailable">—</span></div>');
+});
+
 it.each([
   ['en', {title: 'Waiting for the game', text: 'Start Euro Truck Simulator 2 or American Truck Simulator. The plugin connects on its own; nothing to click here.',
     noJob: 'No active job. The fields appear when the game reports a job.'}],
