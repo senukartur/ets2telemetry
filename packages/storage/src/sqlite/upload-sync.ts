@@ -168,8 +168,8 @@ export function getUploadSchedulingHints(conn:StorageConnection,input:{registrat
     if(attempt.registration_ref!==input.registrationId||attempt.connection_version!==state.version||attempt.credential_generation!==state.credential_generation)break;
     const envelope=get(db,'SELECT registration_ref,state,retry_at FROM upload_envelopes WHERE event_id=?',attempt.event_ref),receipt=get(db,'SELECT receipt_id,first_received FROM upload_receipts WHERE event_ref=?',attempt.event_ref);
     if(!envelope||!isUploadUuid(attempt.event_ref)||envelope.registration_ref!==input.registrationId||!Number.isSafeInteger(Number(envelope.retry_at))||Number(envelope.retry_at)<0||attempt.outcome==='receipt'&&!receipt||receipt&&(!isUploadUuid(receipt.receipt_id)||!Number.isSafeInteger(Number(receipt.first_received))||Number(receipt.first_received)<0||envelope.state!=='delivered')){reconciliation=true;break;}
-    const transient=['retry','ambiguous'].includes(String(attempt.outcome)),pending=['queued','sending'].includes(String(envelope.state));
-    if(streakOpen){if(receipt||!transient)streakOpen=false;else{if(!pending){reconciliation=true;break;}connectionRetry=Math.max(connectionRetry,Number(envelope.retry_at));streak++;}}
+    const transient=attempt.outcome==='retry',pending=['queued','sending'].includes(String(envelope.state));
+    if(streakOpen){if(receipt||!transient&&attempt.outcome!=='ambiguous')streakOpen=false;else if(transient){if(!pending){reconciliation=true;break;}connectionRetry=Math.max(connectionRetry,Number(envelope.retry_at));streak++;}}
     // A new active attempt has no outcome; another event's receipt does not resolve this retry.
     if(!receipt&&transient&&pending)retryEventId??=String(attempt.event_ref);
   }

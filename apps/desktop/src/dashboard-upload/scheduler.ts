@@ -70,6 +70,10 @@ export class UploadScheduler {
       const receipt=await stored(this.db.commitUploadReceipt({attemptId:attempt.attemptId!,statusCode:result.statusCode,body:result.body}));
       if(receipt.status==='delivered'||receipt.status==='duplicate'){this.#failureStreak=0;this.#sendAfter=this.time.now();if(generation===this.#generation&&!this.#suspended){if(receipt.eventId===this.#retryEventId){this.#retryError=null;this.#retryEventId=null;}this.#resetProgress();this.#phase='sources';this.#diagnostic(true);}return;}
     }
+    if(!result.ok&&result.code==='ABORTED'){
+      const recovered=await stored(this.db.recoverUploadAttempt({attemptId:attempt.attemptId!}));
+      if(generation===this.#generation&&!this.#suspended&&recovered.status==='reconciliation-required'){this.#hintsReconciliation=true;this.#diagnostic(true);}return;
+    }
     const kind=result.ok?responseFailure(result.statusCode,result.body):result.code==='REDIRECT'||result.code==='TLS_CONFIGURATION'?'configuration':result.statusCode===401||result.statusCode===403?'authentication':'retry';
     const retryAt=this.time.now()+uploadRetryDelay(++this.#failureStreak,result.ok?result.retryAfter:null,this.time.now(),()=>this.time.random());
     const outcome=await stored(this.db.recordUploadAttemptOutcome({attemptId:attempt.attemptId!,kind,retryAtMs:retryAt,nowMs:this.time.now()}));this.#sendAfter=retryAt;

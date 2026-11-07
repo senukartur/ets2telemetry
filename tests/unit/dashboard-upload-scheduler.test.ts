@@ -83,6 +83,12 @@ it('REG-005/010/012 commits an already complete matching ACK before rotation set
   await scheduler.activate(configuration,token,limits);await vi.advanceTimersByTimeAsync(200);expect(f.http.request).toHaveBeenCalledOnce();expect(f.calls).toContain('readRetainedUploadMaterializations');
   resolve({ok:true,statusCode:202,body:Buffer.from('{}'),retryAfter:null});await scheduler.suspend();expect(commit).toHaveBeenCalledExactlyOnceWith({attemptId,statusCode:202,body:Buffer.from('{}')});await scheduler.stop();
 });
+it('REG-005/010/011/012 recovers a locally aborted attempt without a fabricated negative outcome or jitter',async()=>{
+  vi.useFakeTimers();const f=fixture(),attemptId=randomUUID(),eventId=randomUUID(),recover=vi.fn(()=>result({status:'recovered',attemptId,eventId,registrationId:registration.registrationId,registration:null,payload:null})),outcome=vi.fn(),random=vi.fn(()=>.5);let finish!:(answer:UploadHttpResult)=>void;
+  const claim=()=>result({status:'claimed',attemptId,eventId,registrationId:registration.registrationId,registration,payload:Buffer.from('{}')}),db=new Proxy(f.db,{get(target,key){return key==='claimUploadAttempt'?claim:key==='recoverUploadAttempt'?recover:key==='recordUploadAttemptOutcome'?outcome:Reflect.get(target,key);}});
+  f.http.request=vi.fn(()=>new Promise<UploadHttpResult>(resolve=>{finish=resolve;}));f.http.abort=()=>finish?.({ok:false,code:'ABORTED',statusCode:null,retryAfter:null});const scheduler=new UploadScheduler(db,f.http,origin,'test',()=>{},{...controlled,random});
+  try{await scheduler.activate(configuration,token,limits);await vi.advanceTimersByTimeAsync(1);expect(f.http.request).toHaveBeenCalledOnce();await scheduler.suspend();expect(recover).toHaveBeenCalledExactlyOnceWith({attemptId});expect(outcome).not.toHaveBeenCalled();expect(random).not.toHaveBeenCalled();expect(scheduler.status.error).toBeNull();}finally{await scheduler.stop();}
+});
 it('REG-005/010/011 persists a TLS configuration pause for the active attempt instead of treating it as transient',async()=>{
   vi.useFakeTimers();const f=fixture(),attemptId=randomUUID(),eventId=randomUUID(),outcome=vi.fn(()=>result({status:'recorded',attemptId,eventId,registrationId:registration.registrationId,registration:null,payload:null}));
   const claim=vi.fn(()=>result({status:'claimed',attemptId,eventId,registrationId:registration.registrationId,registration,payload:Buffer.from('{}')}));const db=new Proxy(f.db,{get(target,key){return key==='claimUploadAttempt'?claim:key==='recordUploadAttemptOutcome'?outcome:Reflect.get(target,key);}});
