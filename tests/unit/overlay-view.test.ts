@@ -237,3 +237,20 @@ it('localizes the break text in Russian and ignores an urgency on any other sect
     {id: 'game-time', state: 'value', text: 'Day 1, 08:00', urgency: 'due'}] as OverlayPresentation['sections']});
   expect(view.items.map(item => [item.id, item.value, item.urgency])).toEqual([['mandatory-break', '1 ч 35 мин', 'soon'], ['game-time', 'День 1, 08:00', undefined]]);
 });
+
+// ET-070 (D3, D4): the Hard Mode indicator is a fixed part of every view, not a section: never in the items, groups, panel,
+// gauge or card hero, so no section count, preset or setting includes it. A placeholder, a missing field and a malformed
+// value are all not active.
+it('keeps the Hard Mode indicator apart from the sections and shows anything but valid evidence as not active', () => {
+  for (const layout of ['strip', 'card', 'cluster', 'hud'] as const) {
+    const view = overlayView({...base, layout, hardMode: {state: 'active'}});
+    expect(view.hardMode, layout).toMatchObject({testId: 'overlay-hard-mode', state: 'active', name: 'Hard Mode active, 12 of 12'});
+    expect(view.items.map(item => item.id), layout).toEqual(['speed', 'rpm', 'fuel', 'sdk-consumption', 'cargo', 'game-time']);
+    const parts = overlayCardParts(view);
+    expect(JSON.stringify([view.items, view.groups, view.panel, view.gauge ?? null, parts.hero, parts.rows]), layout).not.toMatch(/hard-mode|Hard Mode|HM/);
+  }
+  expect(overlayView().hardMode).toMatchObject({state: 'inactive', cue: 'none', rowValue: '', hudValue: '', name: 'Hard Mode not active'});
+  expect(overlayView(base).hardMode).toMatchObject({state: 'inactive', name: 'Hard Mode not active'});
+  const malformed = {...base, hardMode: {state: 'active', passed: 12}} as unknown as OverlayPresentation;
+  expect(overlayView(malformed).hardMode).toMatchObject({state: 'inactive', cue: 'none', name: 'Hard Mode not active'});
+});

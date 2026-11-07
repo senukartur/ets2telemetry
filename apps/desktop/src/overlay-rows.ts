@@ -35,21 +35,28 @@ export const HUD_TAG_ROW_HEIGHT_CSS = 18;
 export const HUD_LINE_GAP_CSS = 2;
 export const HUD_LINE_HEIGHT_CSS = 22;
 
+/**
+ * ET-070 (owner decision D3): the fixed Hard Mode indicator is the last row of the card, the cluster's side panel and the
+ * HUD whatever the enabled sections, so every layout reserves this one extra row and its size never depends on its state.
+ */
+export const HARD_MODE_ROWS = 1;
+
 /** The outer border on each side that the window height must hold besides the content (`surfaceHeightDip`). */
 export const LAYOUT_BORDER_CSS: Readonly<Record<RowLayout, number>> = Object.freeze({card: CARD_BORDER_CSS, cluster: CLUSTER_PANEL_BORDER_CSS, hud: 0});
 
 /**
  * The rows a layout reserves for these enabled sections: one per section in the card and the HUD, and one per section
- * outside the gauge (speed, gear and RPM) in the cluster's side panel. The header or tag row is reserved separately.
+ * outside the gauge (speed, gear and RPM) in the cluster's side panel, plus the Hard Mode indicator's row (ET-070). The
+ * header or tag row is reserved separately.
  */
 export function layoutRowCount(layout: RowLayout, sections: OverlaySections): number {
-  return OVERLAY_SECTION_IDS.filter(id => sections[id] && !(layout === 'cluster' && CLUSTER_GAUGE_SECTIONS.has(id))).length;
+  return OVERLAY_SECTION_IDS.filter(id => sections[id] && !(layout === 'cluster' && CLUSTER_GAUGE_SECTIONS.has(id))).length + HARD_MODE_ROWS;
 }
 
 /**
  * The CSS height a layout's content needs inside its outer border: the header or tag row is always reserved, because
- * tags can appear at any time, plus one fixed row per counted section. Card 46 + 24 × rows, cluster panel 34 + 21 × rows,
- * HUD 18 + 24 × rows. The cluster's gauge is covered by its nominal height, not by this reserve.
+ * tags can appear at any time, plus one fixed row per counted row (the sections and the Hard Mode indicator). Card
+ * 46 + 24 × rows, cluster panel 34 + 21 × rows, HUD 18 + 24 × rows. The cluster's gauge is covered by its nominal height, not by this reserve.
  */
 export function layoutContentCss(layout: RowLayout, sections: OverlaySections): number {
   const rows = layoutRowCount(layout, sections);
@@ -58,7 +65,10 @@ export function layoutContentCss(layout: RowLayout, sections: OverlaySections): 
   return HUD_TAG_ROW_HEIGHT_CSS + (HUD_LINE_GAP_CSS + HUD_LINE_HEIGHT_CSS) * rows;
 }
 
-/** The reserved CSS height at zoom 1, the outer border included: card 48 + 24n, cluster panel 36 + 21m, HUD 18 + 24n. */
+/**
+ * The reserved CSS height at zoom 1, the outer border included, for n enabled sections (m outside the cluster's gauge) and
+ * the Hard Mode row: card 48 + 24(n + 1), cluster panel 36 + 21(m + 1), HUD 18 + 24(n + 1).
+ */
 export function layoutReservedCss(layout: RowLayout, sections: OverlaySections): number {
   return layoutContentCss(layout, sections) + 2 * LAYOUT_BORDER_CSS[layout];
 }

@@ -1,6 +1,7 @@
 import {contextBridge, ipcRenderer} from 'electron';
 import type {OverlayBridge, OverlayPresentation} from '../../../packages/contracts/src';
 import {overlayGauges, overlayUrgency, staleOverlay} from './overlay-sections';
+import {sanitizeOverlayHardMode} from './overlay-hard-mode';
 import {RecoveryBudget} from './recovery-budget';
 
 let listener: ((update: OverlayPresentation) => void) | undefined;
@@ -12,6 +13,10 @@ let budget = new RecoveryBudget();
 const unavailable: OverlayPresentation = {source: 'No game', origin: 'none', status: 'waiting', speed: '—', fuel: '—', speedUnit: 'km/h', fuelUnit: 'L', freshness: 'unavailable',
   layout: 'strip', paused: false, sections: [], editing: false};
 let current = unavailable;
+/** ET-070: a present Hard Mode indicator is replaced by its validated form; a missing one stays missing (not active). */
+function withHardMode(update: OverlayPresentation): OverlayPresentation {
+  return 'hardMode' in update ? {...update, hardMode: sanitizeOverlayHardMode(update.hardMode)} : update;
+}
 function close(): void {const previous = port; port = undefined; previous?.close(); clearTimeout(expiry); expiry = undefined;}
 // Stale keeps the layout and the section list, each section as an unavailable placeholder, so nothing old looks current.
 function invalidate(): void {current = staleOverlay(current); listener?.(current);}
@@ -41,8 +46,9 @@ ipcRenderer.on('overlay:port', event => {
     const data = event.data;
     if (!listener || !data || data.type !== 'live' || !Number.isSafeInteger(data.delivery) || data.delivery! < 1 || !data.update) {lost(next); return;}
     // ET-045f: only valid gauge fractions reach the renderer; a malformed one is dropped without dropping the update.
-    // ET-052: likewise the break urgency, allowed only on a current mandatory-break value.
-    clearTimeout(expiry); current = overlayUrgency(overlayGauges(data.update));
+    // ET-052: likewise the break urgency, allowed only on a current mandatory-break value. ET-070: a malformed Hard Mode
+    // indicator becomes not active, never active, without dropping the update.
+    clearTimeout(expiry); current = withHardMode(overlayUrgency(overlayGauges(data.update)));
     // The read-only projection has no native coordinates or SDK state. Main owns both expiry gates.
     if (current.freshness === 'current') expiry = setTimeout(() => {expiry = undefined; invalidate();}, 500);
     try {listener(current);} finally {if (port === next) {try {next.postMessage({type: 'consumed', delivery: data.delivery});} catch {lost(next);}}}

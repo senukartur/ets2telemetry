@@ -81,6 +81,17 @@ export const STRINGS = channelCopyTable(Object.freeze({
   /** The state words of the overlay's next-mandatory-break item (ET-052): its accessible name, for assistive technology (the visible cues are the colour and the due underline). */
   overlayBreakSoon: 'soon',
   overlayBreakDue: 'due now',
+  /**
+   * The overlay's fixed Hard Mode indicator (ET-070): the card and cluster row label, the strip and HUD short label, the
+   * row value of a loss and the accessible names per state; `{n}` is the number of rules that pass.
+   */
+  overlayHardModeLabel: 'Hard Mode',
+  overlayHardModeShort: 'HM',
+  overlayHardModeLost: 'lost',
+  overlayHardModeActiveName: 'Hard Mode active, 12 of 12',
+  overlayHardModeInactiveName: 'Hard Mode not active',
+  overlayHardModeInactiveCountName: 'Hard Mode not active, {n} of 12',
+  overlayHardModeLostName: 'Hard Mode lost for this trip',
   overlaySynthetic: 'Synthetic',
   overlayReplay: 'Replay',
   overlaySaveFailed: 'The overlay change was not saved; the previous overlay settings stay in use.',
@@ -163,6 +174,13 @@ export const STRINGS_RU: Readonly<Record<StringKey, string>> = channelCopyTable(
   overlayStale: 'Устарело',
   overlayBreakSoon: 'скоро',
   overlayBreakDue: 'пора',
+  overlayHardModeLabel: 'Hard Mode',
+  overlayHardModeShort: 'HM',
+  overlayHardModeLost: 'потерян',
+  overlayHardModeActiveName: 'Hard Mode активен, 12 из 12',
+  overlayHardModeInactiveName: 'Hard Mode не активен',
+  overlayHardModeInactiveCountName: 'Hard Mode не активен, {n} из 12',
+  overlayHardModeLostName: 'Hard Mode потерян для этого рейса',
   overlaySynthetic: 'Синтетический',
   overlayReplay: 'Повтор',
   overlaySaveFailed: 'Изменение оверлея не удалось сохранить; остаются предыдущие настройки.',

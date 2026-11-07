@@ -9,7 +9,7 @@ import {STRIP_BORDER_CSS, STRIP_ROW_HEIGHT_CSS, stripCssHeight, stripRowCount} f
 // ET-045e decisions Z2-Z4). Pure: the input is the game's client area already converted from physical pixels to
 // Electron DIP by `screen.screenToDipRect`; the output is the overlay window's DIP bounds inside that area, or undefined
 // when the layout does not fit and the overlay must hide. Every layout's size depends on its enabled sections, never on
-// their values.
+// their values; the fixed Hard Mode indicator (ET-070) adds the same reserve whatever its state.
 //
 // Two numbers describe the size (ET-045e decision Z2). `scale` is the user's setting from the placement (1 is 100%);
 // the exported functions below take it. `zoom` = overlayZoom(scale) = scale × 0.7 is the overlay document's zoom factor
@@ -107,9 +107,10 @@ export function overlaySize(layout: OverlayLayout, client: DipRect, scale: numbe
 
 /**
  * The size the overlay window is created with at this scale setting, before any client area is known. The card,
- * cluster and HUD have the size `overlaySize` gives them: with every section at the setting 1 (zoom 0.7) the card is
- * 210 × 270, the cluster 308 × 188 and the HUD 224 × 248. The strip is round(1280 × max(1, scale)) wide and as high as
- * its enabled sections need at that width's CSS width floor(width / zoom), 1280 × 56 at the setting 1 with every section.
+ * cluster and HUD have the size `overlaySize` gives them: with every section and the Hard Mode row at the setting 1
+ * (zoom 0.7) the card is 210 × 303, the cluster 308 × 217 and the HUD 224 × 282. The strip is round(1280 × max(1, scale))
+ * wide and as high as its enabled sections need at that width's CSS width floor(width / zoom), 1280 × 82 at the setting 1
+ * with every section.
  */
 export function overlayWindowSize(layout: OverlayLayout, scale: number, sections: OverlaySections = DEFAULT_OVERLAY_SECTIONS): {width: number; height: number} {
   const zoom = overlayZoom(scale);
@@ -124,13 +125,13 @@ export function overlayWindowSize(layout: OverlayLayout, scale: number, sections
  * The overlay's bounds for a placement: `x` and `y` are fractions of the free space between the margins once the
  * window is taken away, so left = round(client.x + margin + x × free width) and the same for the top. The default
  * placements (the setting 1, zoom 0.7) reproduce the ET-012a anchors:
- * strip: top centre, width min(1280, client width − 32), 8 below the top edge, 56 high with every section (two rows at
+ * strip: top centre, width min(1280, client width − 32), 8 below the top edge, 82 high with every section (three rows at
  * 1280); the height follows the enabled sections and the width, and the strip needs width ≥ 336 + 32 and height ≥ its
  * own height + 16.
- * card: top right with 16 margins; 210 × 270 with every section (never below 210 × 252), so it needs 242 × 302.
- * cluster: bottom left with 16 margins; 308 × 188 with every section (never below 308 × 154), so it needs 340 × 220.
- * hud: top left with 16 margins; 224 × 248 with every section (never below 224 × 224), so it needs 256 × 280.
- * The card, cluster and HUD heights follow their enabled sections (ET-012d).
+ * card: top right with 16 margins; 210 × 303 with every section (never below 210 × 252), so it needs 242 × 335.
+ * cluster: bottom left with 16 margins; 308 × 217 with every section (never below 308 × 154), so it needs 340 × 249.
+ * hud: top left with 16 margins; 224 × 282 with every section (never below 224 × 224), so it needs 256 × 314.
+ * The card, cluster and HUD heights follow their enabled sections and include the Hard Mode row (ET-012d, ET-070).
  */
 export function overlayBounds(layout: OverlayLayout, client: DipRect, placement: OverlayPlacement = DEFAULT_OVERLAY_PLACEMENTS[layout],
   sections: OverlaySections = DEFAULT_OVERLAY_SECTIONS): DipRect | undefined {

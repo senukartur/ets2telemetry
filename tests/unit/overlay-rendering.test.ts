@@ -6,7 +6,8 @@ import {OverlayContent} from '../../apps/desktop/src/overlay-renderer';
 import {overlayView} from '../../apps/desktop/src/overlay-view';
 import {LiveDashboard} from '../../apps/desktop/src/live-dashboard';
 import {smokeV0} from '../shared/live-v1-fixtures';
-import type {OverlayPresentation} from '../../packages/contracts/src';
+import type {OverlayHardMode, OverlayPresentation, OverlaySectionId} from '../../packages/contracts/src';
+import {OVERLAY_PRESETS, OVERLAY_SECTION_IDS} from '../../apps/desktop/src/overlay-sections';
 // Only the surrounding shadcn containers are substituted; the real SVG and text render unchanged.
 vi.mock('@/components/ui/button', () => ({Button: 'button'}));
 vi.mock('@/components/ui/card', () => ({Card: 'div', CardContent: 'div', CardHeader: 'div', CardTitle: 'div'}));
@@ -159,4 +160,77 @@ it.each(['en', 'ru'] as const)('renders explicit simultaneous game choices as se
   expect(html).toContain('data-testid="live-choose-ets2"'); expect(html).toContain('Euro Truck Simulator 2</button>');
   expect(html).toContain('data-testid="live-choose-ats"'); expect(html).toContain('American Truck Simulator</button>');
   expect(html).toContain(language === 'ru' ? 'Доступны обе игры. Выберите игру для подключения.' : 'Both games are available. Choose which game to connect to.');
+});
+
+// ET-070 (D1-D4, REG-016): the fixed Hard Mode indicator in every layout: exactly one, always last, never a section, with
+// its state, accessible name, lucide Flame, a 14 px cue slot that is present in every state (Check, X or empty) and, in the
+// strip and HUD, "HM" struck through on a loss. The texts are hand-written from strings.ts.
+const enabled = (preset: keyof typeof OVERLAY_PRESETS) => OVERLAY_SECTION_IDS.filter(id => OVERLAY_PRESETS[preset][id]);
+const SECTION_SETS: [string, readonly OverlaySectionId[]][] = [['every section', OVERLAY_SECTION_IDS], ['driving-only', enabled('driving-only')],
+  ['job-focus', enabled('job-focus')], ['speed only', ['speed']], ['fuel only', ['fuel']], ['gauge only', ['speed', 'gear', 'rpm']]];
+const HARD_MODE_STATES: {hardMode: OverlayHardMode; state: string; cue: string; en: {name: string; row: string}; ru: {name: string; row: string}}[] = [
+  {hardMode: {state: 'active'}, state: 'active', cue: 'check', en: {name: 'Hard Mode active, 12 of 12', row: '12/12'}, ru: {name: 'Hard Mode активен, 12 из 12', row: '12/12'}},
+  {hardMode: {state: 'inactive', passed: 11}, state: 'inactive', cue: 'none', en: {name: 'Hard Mode not active, 11 of 12', row: '11/12'}, ru: {name: 'Hard Mode не активен, 11 из 12', row: '11/12'}},
+  {hardMode: {state: 'inactive'}, state: 'inactive', cue: 'none', en: {name: 'Hard Mode not active', row: ''}, ru: {name: 'Hard Mode не активен', row: ''}},
+  {hardMode: {state: 'lost'}, state: 'lost', cue: 'cross', en: {name: 'Hard Mode lost for this trip', row: 'lost'}, ru: {name: 'Hard Mode потерян для этого рейса', row: 'потерян'}}
+];
+const CUE_ICON: Record<string, string | undefined> = {check: 'lucide-check', cross: 'lucide-x', none: undefined};
+it.each(['strip', 'card', 'cluster', 'hud'] as const)('renders exactly one Hard Mode indicator last in the %s, for every section set, state and language', layout => {
+  for (const [setName, ids] of SECTION_SETS) for (const language of ['en', 'ru'] as const) for (const expected of HARD_MODE_STATES) {
+    const sections: OverlayPresentation['sections'] = ids.map(id => ({id, state: 'unavailable'}));
+    const label = `${layout} ${setName} ${language} ${expected.en.name}`;
+    const html = renderToStaticMarkup(React.createElement(OverlayContent, {view: overlayView({...base, layout, language, sections, hardMode: expected.hardMode})}));
+    expect(html.match(/data-testid="overlay-hard-mode"/g), label).toHaveLength(1);
+    expect(html.match(/data-testid="overlay-section-/g) ?? [], label).toHaveLength(ids.length);
+    const text = expected[language];
+    const start = html.indexOf(`data-testid="overlay-hard-mode" data-state="${expected.state}" aria-label="${text.name}"`);
+    expect(start, label).toBeGreaterThan(-1);
+    // Last: no section follows the indicator.
+    expect(html.lastIndexOf('data-testid="overlay-section-'), label).toBeLessThan(start);
+    const element = html.slice(html.lastIndexOf('<', start));
+    expect(element, label).toContain('lucide-flame');
+    expect(element, label).toContain(`<span class="overlay-hm-cue" data-cue="${expected.cue}" aria-hidden="true">`);
+    const icon = CUE_ICON[expected.cue];
+    if (icon) expect(element, label).toContain(icon);
+    else expect(element, label).toContain('<span class="overlay-hm-cue" data-cue="none" aria-hidden="true"></span>');
+    expect(element, label).not.toContain('data-reserve');
+    const struck = expected.state === 'lost' && (layout === 'strip' || layout === 'hud');
+    expect(element.includes('overlay-hm-struck'), label).toBe(struck);
+    if (layout === 'strip') {
+      expect(element, label).toMatch(/^<span class="overlay-item( overlay-group-start)? overlay-hard-mode" [^>]*style="max-width:100px">/);
+      // A group divider precedes the indicator only when a section precedes it.
+      expect(element.startsWith('<span class="overlay-item overlay-group-start'), label).toBe(ids.length > 0);
+      expect(element, label).toContain(`<span class="overlay-value overlay-hm-text${struck ? ' overlay-hm-struck' : ''}">HM</span>`);
+      expect(element, label).not.toContain('/12');
+      expect(element, label).toMatch(/<\/span><\/span><\/div><\/div>$/);
+    } else if (layout === 'hud') {
+      expect(element, label).toMatch(/^<div class="overlay-hud-line overlay-hard-mode" /);
+      expect(element, label).toContain(`<span class="overlay-label overlay-hm-text${struck ? ' overlay-hm-struck' : ''}">HM</span>`);
+      // The HUD shows the count only while not active.
+      const count = expected.state === 'inactive' ? text.row : '';
+      if (count) expect(element, label).toContain(`<strong class="overlay-value">${count}</strong>`);
+      else expect(element, label).not.toContain('class="overlay-value"');
+    } else {
+      expect(element, label).toMatch(layout === 'card' ? /^<div class="overlay-row overlay-hard-mode" / : /^<div class="overlay-panel-row overlay-hard-mode" /);
+      expect(element, label).toContain('Hard Mode</' + (layout === 'card' ? 'dt>' : 'span>'));
+      expect(element, label).toContain(`<strong class="overlay-value">${text.row}</strong>`);
+      if (layout === 'card') expect(element, label).toMatch(/<\/dd><\/div><\/dl>/);
+    }
+  }
+});
+it('renders a missing Hard Mode field as not active in every layout', () => {
+  for (const layout of ['strip', 'card', 'cluster', 'hud'] as const) {
+    const html = renderToStaticMarkup(React.createElement(OverlayContent, {view: overlayView({...base, layout})}));
+    expect(html, layout).toContain('data-testid="overlay-hard-mode" data-state="inactive" aria-label="Hard Mode not active"');
+  }
+});
+it('colours the indicator per state with its own tokens, mirrored in the design tokens, without a transition', () => {
+  const css = readFileSync('apps/desktop/src/renderer.css', 'utf8'), tokens = readFileSync('apps/desktop/src/shell/overlay-tokens.css', 'utf8');
+  const design = readFileSync('docs/design/tokens.css', 'utf8');
+  for (const [state, colour] of [['active', '#8FD3AE'], ['inactive', '#E8C58A'], ['lost', '#F87171']]) {
+    expect(css).toContain(`.overlay-hard-mode[data-state="${state}"] { --yu-ov-hm: var(--yu-ov-hm-${state}); }`);
+    expect(tokens).toContain(`--yu-ov-hm-${state}: ${colour};`); expect(design).toContain(`--yu-ov-hm-${state}: ${colour};`);
+  }
+  expect(css).toMatch(/\.overlay-hm-cue \{[^}]*width: 14px;[^}]*height: 14px;[^}]*\}/);
+  expect(css).toMatch(/\.overlay-hm-struck \{ text-decoration: line-through; \}/);
 });

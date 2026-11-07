@@ -3,13 +3,16 @@ import {expect, it} from 'vitest';
 import type {OverlaySectionId, OverlaySections} from '../../packages/contracts/src';
 import {DEFAULT_OVERLAY_SECTIONS, OVERLAY_PRESETS, OVERLAY_SECTION_IDS} from '../../apps/desktop/src/overlay-sections';
 import {
-  STRIP_BORDER_CSS, STRIP_COLUMN_GAP_CSS, STRIP_ITEM_MAX_WIDTH_CSS, STRIP_PADDING_X_CSS, STRIP_ROW_HEIGHT_CSS, STRIP_TAG_MAX_WIDTH_CSS, STRIP_TAG_SLOTS,
+  STRIP_BORDER_CSS, STRIP_COLUMN_GAP_CSS, STRIP_HARD_MODE_MAX_WIDTH_CSS, STRIP_ITEM_MAX_WIDTH_CSS, STRIP_PADDING_X_CSS, STRIP_ROW_HEIGHT_CSS, STRIP_TAG_MAX_WIDTH_CSS, STRIP_TAG_SLOTS,
   stripCssHeight, stripRowCount
 } from '../../apps/desktop/src/overlay-strip';
 
 // REG-016 partial: the strip's reserved rows (ET-012c decisions S2-S4). The expected rows and heights are the plan's
 // hand-written geometry table, worked out by hand from the maximum widths, not produced by the implementation. The CSS
 // inner width is the CSS width minus the two 1 px borders and the two 12 px paddings.
+// ET-070 (owner decisions D2, D3; the requirement changed): the fixed Hard Mode indicator is the last strip item after every
+// selection, at most 100 px with its 14 px gap. The rows below that it changes are marked ET-070; the others were re-derived
+// with it and are unchanged on purpose.
 const only = (...ids: OverlaySectionId[]): OverlaySections =>
   Object.freeze(Object.fromEntries(OVERLAY_SECTION_IDS.map(id => [id, ids.includes(id)])) as Record<OverlaySectionId, boolean>);
 const ALL = DEFAULT_OVERLAY_SECTIONS;
@@ -19,6 +22,7 @@ it('fixes the hand-written maximum widths of every strip item', () => {
     'origin': 300, 'destination': 300, 'distance-driven': 150, 'distance-remaining': 150, 'deadline': 220, 'expected-income': 300, 'game-time': 200, 'mandatory-break': 150});
   expect({slots: STRIP_TAG_SLOTS, tag: STRIP_TAG_MAX_WIDTH_CSS, row: STRIP_ROW_HEIGHT_CSS, border: STRIP_BORDER_CSS, padding: STRIP_PADDING_X_CSS,
     gap: STRIP_COLUMN_GAP_CSS}).toEqual({slots: 2, tag: 96, row: 38, border: 1, padding: 12, gap: 14});
+  expect(STRIP_HARD_MODE_MAX_WIDTH_CSS).toBe(100);
 });
 
 it.each([
@@ -27,13 +31,16 @@ it.each([
   // ET-052 break section, which added 14 + 150 and changes no row count at this width).
   // ET-052: at 944 (scale 2) the break no longer fits the row that ended at game time (912 + 164 = 1076 > 918), so the
   // fifth row holds it alone: 5 rows, 192, where 14 sections fitted 4 rows, 154. The other rows are unchanged.
+  // ET-070: the indicator's 14 + 100 joins the last row everywhere (1190 at 1280; 478 after game time and the break at 768,
+  // 928 and 944) except at the 480 minimum (inner 454), where game time and the break end at 364 and 478 > 454 needs an
+  // eleventh row, and with speed alone there, where 360 + 114 = 474 > 454 needs a second.
   {name: 'every section at 1280 (1920 x 1080)', sections: ALL, width: 1280, rows: 3, height: 116},
   {name: 'every section at 1248 (1280 x 720)', sections: ALL, width: 1248, rows: 3, height: 116},
   {name: 'every section at 768 (800 x 600)', sections: ALL, width: 768, rows: 6, height: 230},
   {name: 'every section at 928 (960 x 540)', sections: ALL, width: 928, rows: 5, height: 192},
   {name: 'every section at 1247 (fractional client)', sections: ALL, width: 1247, rows: 3, height: 116},
-  {name: 'every section at the 480 minimum', sections: ALL, width: 480, rows: 10, height: 382},
-  {name: 'speed only at the 480 minimum', sections: only('speed'), width: 480, rows: 1, height: 40},
+  {name: 'every section at the 480 minimum', sections: ALL, width: 480, rows: 11, height: 420},
+  {name: 'speed only at the 480 minimum', sections: only('speed'), width: 480, rows: 2, height: 78},
   {name: 'every section at 1258 (scale 1.5)', sections: ALL, width: 1258, rows: 3, height: 116},
   {name: 'every section at 944 (scale 2)', sections: ALL, width: 944, rows: 5, height: 192},
   {name: 'every section at 1279 (scale 1.1)', sections: ALL, width: 1279, rows: 3, height: 116},
@@ -49,21 +56,25 @@ it.each([
 });
 
 it('fills a row exactly to the inner width and wraps one pixel below it', () => {
-  // Driving-only: tags 96 + 96, speed 140, gear 90, rpm 130, fuel 190 and range 140 with six 14 px gaps = 966.
-  expect(stripRowCount(OVERLAY_PRESETS['driving-only'], 992)).toBe(1);
-  expect(stripRowCount(OVERLAY_PRESETS['driving-only'], 991)).toBe(2);
+  // Driving-only: tags 96 + 96, speed 140, gear 90, rpm 130, fuel 190 and range 140 with six 14 px gaps = 966; ET-070 adds
+  // the Hard Mode indicator's 14 + 100 = 1080, an inner width of CSS width 1106.
+  expect(stripRowCount(OVERLAY_PRESETS['driving-only'], 1106)).toBe(1);
+  expect(stripRowCount(OVERLAY_PRESETS['driving-only'], 1105)).toBe(2);
 });
 
 it('reserves the next mandatory break its own 150 px slot (ET-052)', () => {
-  // Game time 200 and the break 150 with the two 96 px tags and three 14 px gaps take 584: inner 584 is CSS width 610.
+  // Game time 200 and the break 150 with the two 96 px tags and three 14 px gaps take 584, with the Hard Mode indicator
+  // (ET-070) 698: inner 698 is CSS width 724.
   const pair = only('game-time', 'mandatory-break');
-  expect(stripRowCount(pair, 610)).toBe(1);
-  expect(stripRowCount(pair, 609)).toBe(2);
-  // The break alone with the tags: 96 + 96 + 150 + two gaps = 370, so a CSS width of 396 fits one row and 395 two.
-  expect(stripRowCount(only('mandatory-break'), 396)).toBe(1);
-  expect(stripRowCount(only('mandatory-break'), 395)).toBe(2);
-  // Removing the break from every section gives back the 14-section rows at 944: four rows, 154.
-  expect(stripRowCount({...ALL, 'mandatory-break': false}, 944)).toBe(4);
+  expect(stripRowCount(pair, 724)).toBe(1);
+  expect(stripRowCount(pair, 723)).toBe(2);
+  // The break alone with the tags: 96 + 96 + 150 + two gaps = 370, 484 with the indicator, so a CSS width of 510 fits one
+  // row and 509 two.
+  expect(stripRowCount(only('mandatory-break'), 510)).toBe(1);
+  expect(stripRowCount(only('mandatory-break'), 509)).toBe(2);
+  // Removing the break from every section at 944 (inner 918) ends the fourth row at game time (912), so the indicator
+  // (912 + 114 = 1026) takes a fifth row of its own, as the break did: five rows.
+  expect(stripRowCount({...ALL, 'mandatory-break': false}, 944)).toBe(5);
 });
 
 it('reserves nothing when one item could not fit a row', () => {
@@ -77,19 +88,19 @@ it('reserves nothing when one item could not fit a row', () => {
 it('models the surface border as at least one device pixel below zoom 1', () => {
   // Chromium snaps a nonzero border thinner than one device pixel up to one device pixel, so below zoom 1 the 1 px
   // border takes 1 / scale CSS px: the inner width is floor(CSS width − 2 × max(1, 1 / scale) − 24).
-  // The reviewer's case: an 800 x 600 client at scale 0.75 gives a 768 DIP strip, CSS width floor(768 / 0.75) = 1024.
-  // Two 96 px tags, cargo 300, origin 300 and distance driven 150 with four 14 px gaps take 998. At zoom 1 the inner
-  // width is 1024 − 2 − 24 = 998: one row. At 0.75 it is floor(1024 − 2 × 1.3333 − 24) = floor(997.33) = 997: two rows.
+  // The reviewer's case, re-derived for ET-070: two 96 px tags, cargo 300, origin 300, distance driven 150 and the Hard
+  // Mode indicator 100 with five 14 px gaps take 998 + 114 = 1112. At CSS width 1138 and zoom 1 the inner width is
+  // 1138 − 2 − 24 = 1112: one row. At 0.75 it is floor(1138 − 2 × 1.3333 − 24) = floor(1111.33) = 1111: two rows.
   const sections = only('cargo', 'origin', 'distance-driven');
-  expect(stripRowCount(sections, 1024)).toBe(1);
-  expect(stripRowCount(sections, 1024, 0.75)).toBe(2);
+  expect(stripRowCount(sections, 1138)).toBe(1);
+  expect(stripRowCount(sections, 1138, 0.75)).toBe(2);
   // At 0.5 the border is 2 CSS px: every section at 1280 has an inner width of 1280 − 4 − 24 = 1252, still three rows
-  // (1210, 1092, then distance remaining would reach 1256); at 480 it is 452, still ten rows.
+  // (1210, 1092, then the break's row ends at 1076 and the indicator at 1190); at 480 it is 452, eleven rows as at 454.
   expect(stripRowCount(ALL, 1280, 0.5)).toBe(3);
-  expect(stripRowCount(ALL, 480, 0.5)).toBe(10);
-  // At zoom 1 and above the border stays 1 CSS px: the exact fit of driving-only at 992 holds at scale 2.
-  expect(stripRowCount(OVERLAY_PRESETS['driving-only'], 992, 2)).toBe(1);
-  expect(stripRowCount(OVERLAY_PRESETS['driving-only'], 992, 0.99)).toBe(2);
+  expect(stripRowCount(ALL, 480, 0.5)).toBe(11);
+  // At zoom 1 and above the border stays 1 CSS px: the exact fit of driving-only at 1106 holds at scale 2.
+  expect(stripRowCount(OVERLAY_PRESETS['driving-only'], 1106, 2)).toBe(1);
+  expect(stripRowCount(OVERLAY_PRESETS['driving-only'], 1106, 0.99)).toBe(2);
 });
 
 it('never reserves more rows for a subset of the sections than for all of them', () => {
@@ -131,9 +142,9 @@ it('reserves at least as many rows as any rendered strip with values up to their
     const width = 480 + Math.floor(next() * 801), inner = width - 26;
     let enabled = OVERLAY_SECTION_IDS.filter(() => next() < 0.5);
     if (!enabled.length) enabled = [OVERLAY_SECTION_IDS[Math.floor(next() * OVERLAY_SECTION_IDS.length)]];
-    // Zero, one or two tags; every value somewhere between empty and its maximum width.
+    // Zero, one or two tags; every value somewhere between empty and its maximum width; the Hard Mode indicator last (ET-070).
     const tags = Array.from({length: Math.floor(next() * 3)}, () => next() * STRIP_TAG_MAX_WIDTH_CSS);
-    const items = [...tags, ...enabled.map(id => next() * STRIP_ITEM_MAX_WIDTH_CSS[id])];
+    const items = [...tags, ...enabled.map(id => next() * STRIP_ITEM_MAX_WIDTH_CSS[id]), next() * STRIP_HARD_MODE_MAX_WIDTH_CSS];
     const reserved = stripRowCount(only(...enabled), width)!;
     if (flexLines(items, inner) > reserved) throw new Error(`run ${run}: ${enabled.join(',')} at ${width} needs ${flexLines(items, inner)} > ${reserved}`);
   }
@@ -149,7 +160,8 @@ it('reserves at least as many rows as any rendered strip needs at every scale, w
     if (!enabled.length) enabled = [OVERLAY_SECTION_IDS[Math.floor(next() * OVERLAY_SECTION_IDS.length)]];
     // Values at their maximum width half of the time, so lines land on the boundary.
     const size = (cap: number) => next() < 0.5 ? cap : next() * cap;
-    const items = [...Array.from({length: Math.floor(next() * 3)}, () => size(STRIP_TAG_MAX_WIDTH_CSS)), ...enabled.map(id => size(STRIP_ITEM_MAX_WIDTH_CSS[id]))];
+    const items = [...Array.from({length: Math.floor(next() * 3)}, () => size(STRIP_TAG_MAX_WIDTH_CSS)), ...enabled.map(id => size(STRIP_ITEM_MAX_WIDTH_CSS[id])),
+      size(STRIP_HARD_MODE_MAX_WIDTH_CSS)];
     const reserved = stripRowCount(only(...enabled), Math.floor(width / scale), scale);
     if (reserved === undefined || flexLines(items, inner) > reserved)
       throw new Error(`run ${run}: ${enabled.join(',')} at ${width} DIP and ${scale} needs ${flexLines(items, inner)} > ${String(reserved)}`);
@@ -204,6 +216,29 @@ it('colours the break by urgency from two tokens and underlines only due, changi
   for (const body of [soon, due]) expect(body).not.toMatch(/(^|[;\s])(height|width|padding|margin|font-size|font-weight|border|display)\s*:/);
   const tokens = readFileSync('apps/desktop/src/shell/overlay-tokens.css', 'utf8'), design = readFileSync('docs/design/tokens.css', 'utf8');
   for (const [name, value] of [['--yu-ov-break-soon', '#FB923C'], ['--yu-ov-break-due', '#F87171']]) {
+    expect(tokens, name).toContain(`${name}: ${value};`); expect(design, name).toContain(`${name}: ${value};`);
+  }
+});
+
+// ET-070 (D1-D4): the Hard Mode indicator's colours come from three state tokens, which the design tokens file repeats byte
+// for byte, and its cue sits in a fixed 14 px slot, so a state change (check, nothing, cross) never changes its width. The
+// strike-through changes no size either.
+it('colours the Hard Mode indicator by state from three tokens with a fixed cue slot, changing no size', () => {
+  const css = readFileSync('apps/desktop/src/renderer.css', 'utf8');
+  const rule = (selector: string) => {
+    const start = css.indexOf(`\n${selector} {`);
+    if (start < 0) throw new Error(`Missing rule ${selector}`);
+    return css.slice(css.indexOf('{', start) + 1, css.indexOf('}', start));
+  };
+  for (const state of ['active', 'inactive', 'lost']) expect(rule(`.overlay-hard-mode[data-state="${state}"]`)).toContain(`--yu-ov-hm: var(--yu-ov-hm-${state});`);
+  expect(rule('.overlay-hard-mode .overlay-icon, .overlay-hard-mode .overlay-value, .overlay-hard-mode .overlay-hm-text')).toContain('color: var(--yu-ov-hm);');
+  const cue = rule('.overlay-hm-cue');
+  expect(cue).toContain('flex: none;'); expect(cue).toContain('width: 14px;'); expect(cue).toContain('height: 14px;');
+  const struck = rule('.overlay-hm-struck');
+  expect(struck).toContain('text-decoration: line-through;');
+  expect(struck).not.toMatch(/(^|[;\s])(height|width|padding|margin|font-size|font-weight|border|display)\s*:/);
+  const tokens = readFileSync('apps/desktop/src/shell/overlay-tokens.css', 'utf8'), design = readFileSync('docs/design/tokens.css', 'utf8');
+  for (const [name, value] of [['--yu-ov-hm-active', '#8FD3AE'], ['--yu-ov-hm-inactive', '#E8C58A'], ['--yu-ov-hm-lost', '#F87171']]) {
     expect(tokens, name).toContain(`${name}: ${value};`); expect(design, name).toContain(`${name}: ${value};`);
   }
 });

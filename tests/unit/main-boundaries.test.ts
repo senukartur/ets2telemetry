@@ -3035,6 +3035,48 @@ it('does not renew aged Hard Mode publication lifetime on trip-only updates', as
   expect(handlers.get('hard-mode:status')!(trusted())).toEqual({assessment, trip});
 });
 
+// ET-070 (D3, D4): the overlay's fixed Hard Mode indicator is main's lease-checked status reduced to an enum and a pass count.
+async function hardModeFixtures() {
+  const {evaluateHardMode, parseHardModeConfig, advanceHardMode} = await import('../../packages/telemetry-core/src/hard-mode');
+  const {HARD_MODE_CONFIG} = await import('../shared/hard-mode');
+  const pass = evaluateHardMode(parseHardModeConfig(HARD_MODE_CONFIG), Date.now(), 'fixture');
+  // Fatigue off: eleven of the twelve rules pass.
+  const fail = evaluateHardMode(parseHardModeConfig(HARD_MODE_CONFIG.replace('g_fatigue "1"', 'g_fatigue "0"')), Date.now(), 'fixture');
+  const publish = (assessment: unknown, remainingNs = '3000000000') => child.emit('message', {type: 'hard-mode', update: 'assessment', assessment, remainingNs});
+  return {pass, fail, publish, lostTrip: advanceHardMode(advanceHardMode(null, pass), fail)};
+}
+it('ET-070 projects the overlay Hard Mode indicator from the lease-checked status: active only on a pass, lost on a trip loss', async () => {
+  await ready(); vi.spyOn(process.hrtime, 'bigint').mockImplementation(() => 0n);
+  const {pass, fail, publish, lostTrip} = await hardModeFixtures();
+  expect(fail.state).toBe('fail'); expect(fail.rules.filter(rule => rule.state === 'pass')).toHaveLength(11);
+  // A ready service without evidence has twelve unknown rules: not active, without a count.
+  expect(hydrateConsumers().overlay.hardMode).toStrictEqual({state: 'inactive'});
+  publish(pass); expect(hydrateConsumers().overlay.hardMode).toStrictEqual({state: 'active'});
+  publish(fail); expect(hydrateConsumers().overlay.hardMode).toStrictEqual({state: 'inactive', passed: 11});
+  // A malformed publication invalidates the evidence; it never keeps or yields active.
+  publish(pass); publish({...pass, filename: 'private'}); expect(hydrateConsumers().overlay.hardMode).toStrictEqual({state: 'inactive'});
+  publish(pass); child.emit('message', {type: 'hard-mode', update: 'trip', trip: lostTrip});
+  expect(hydrateConsumers().overlay.hardMode).toStrictEqual({state: 'lost'});
+  // Passing settings never restore the current trip's loss.
+  publish(pass); expect(hydrateConsumers().overlay.hardMode).toStrictEqual({state: 'lost'});
+});
+it('ET-070 republishes the overlay indicator as not active when the lease ends without telemetry, and at once on service exit', async () => {
+  await ready(); let mono = 0n; vi.spyOn(process.hrtime, 'bigint').mockImplementation(() => mono);
+  const {pass, publish} = await hardModeFixtures();
+  ipc.emit('overlay:subscribe', overlayTrusted()); const overlayChannel = channels.at(-1)!;
+  const last = () => overlayChannel.port1.postMessage.mock.lastCall![0];
+  const consume = () => overlayChannel.port1.emit('message', {data: {type: 'consumed', delivery: last().delivery}});
+  consume(); publish(pass); await vi.advanceTimersByTimeAsync(50);
+  expect(last().update.hardMode).toStrictEqual({state: 'active'}); consume();
+  const deliveries = overlayChannel.port1.postMessage.mock.calls.length;
+  // No telemetry frame and no service message arrives; main's clock passes the 3 s lease and its timer fires.
+  mono = 2_999_000_000n; await vi.advanceTimersByTimeAsync(2999); expect(overlayChannel.port1.postMessage.mock.calls).toHaveLength(deliveries);
+  mono = 3_000_000_000n; await vi.advanceTimersByTimeAsync(1); await vi.advanceTimersByTimeAsync(50);
+  expect(last().update.hardMode).toStrictEqual({state: 'inactive'}); consume();
+  publish(pass, '3000000000'); await vi.advanceTimersByTimeAsync(50); expect(last().update.hardMode).toStrictEqual({state: 'active'});
+  child.emit('exit', 1); expect(hydrateConsumers().overlay.hardMode).toStrictEqual({state: 'inactive'});
+});
+
 it('skips dashboard window creation when started with --hidden, but creates overlay and tray, and opens dashboard on second-instance', async () => {
   trayAvailable = true;
   await withArgv(['--hidden'], async () => {

@@ -1,8 +1,8 @@
 import React, {Fragment, useEffect, useMemo, useState} from 'react';
 import type {OverlayPresentation} from '../../../packages/contracts/src';
-import {SectionIcon, TagIcon} from './overlay-icons';
-import {STRIP_ITEM_MAX_WIDTH_CSS, STRIP_TAG_MAX_WIDTH_CSS} from './overlay-strip';
-import {overlayView, overlayCardParts, type OverlayItem, type OverlayTag, type OverlayView} from './overlay-view';
+import {HardModeCue, HardModeIcon, SectionIcon, TagIcon} from './overlay-icons';
+import {STRIP_HARD_MODE_MAX_WIDTH_CSS, STRIP_ITEM_MAX_WIDTH_CSS, STRIP_TAG_MAX_WIDTH_CSS} from './overlay-strip';
+import {overlayView, overlayCardParts, type OverlayHardModeItem, type OverlayItem, type OverlayTag, type OverlayView} from './overlay-view';
 import {latencyBits, MARKER_CELL, MARKER_HEIGHT} from './latency-marker';
 import './renderer.css';
 
@@ -23,6 +23,10 @@ function Value({item}: {item: OverlayItem}) {
     {item.detail ? <span className="overlay-detail" data-testid={item.detailTestId}>{item.detail}</span> : null}
   </span>;
 }
+/** The card and cluster row value of the Hard Mode indicator ("12/12", "N/12", empty or "lost") and its cue slot (ET-070). */
+function HardModeValue({item}: {item: OverlayHardModeItem}) {
+  return <span className="overlay-value-group"><strong className="overlay-value">{item.rowValue}</strong><HardModeCue cue={item.cue} /></span>;
+}
 /**
  * The next mandatory break's urgency marks (ET-052 MB10): `data-urgency` (the stylesheet colours soon orange and due red
  * and underlines due; a soon value has colour as its only visible cue) and an accessible name made of the label, the value and the state
@@ -31,6 +35,17 @@ function Value({item}: {item: OverlayItem}) {
  */
 function urgencyMarks(item: OverlayItem, name: string): {'data-urgency'?: string; 'aria-label'?: string} {
   return item.urgency ? {'data-urgency': item.urgency, 'aria-label': `${name}: ${item.value}, ${item.urgencyName}`} : {};
+}
+/**
+ * The fixed Hard Mode indicator's marks (ET-070): its own test id outside the `overlay-section-` prefix, the state for the
+ * stylesheet's colour and the accessible name with the state in words. The overlay takes no input, so there is no tooltip.
+ */
+function hardModeMarks(item: OverlayHardModeItem): {'data-testid': string; 'data-state': string; 'aria-label': string} {
+  return {'data-testid': item.testId, 'data-state': item.state, 'aria-label': item.name};
+}
+/** "HM", struck through on a loss: the strip's and the HUD's label of the indicator. */
+function HardModeShort({item, className}: {item: OverlayHardModeItem; className: string}) {
+  return <span className={`${className} overlay-hm-text${item.struck ? ' overlay-hm-struck' : ''}`}>{item.short}</span>;
 }
 /** `maxWidth` (strip only) caps each tag at the width the strip reserves for it. */
 function Tags({tags, maxWidth}: {tags: OverlayTag[]; maxWidth?: number}) {
@@ -53,6 +68,11 @@ function Strip({view}: {view: OverlayView}) {
         <SectionIcon id={item.id} /><Value item={item} />
       </span>)}
     </Fragment>)}
+    {/* ET-070: the fixed Hard Mode indicator after every section, with its own divider and the width main reserved for it. */}
+    <span className={view.groups.length ? 'overlay-item overlay-group-start overlay-hard-mode' : 'overlay-item overlay-hard-mode'} {...hardModeMarks(view.hardMode)}
+      style={{maxWidth: STRIP_HARD_MODE_MAX_WIDTH_CSS}}>
+      <HardModeIcon /><HardModeShort item={view.hardMode} className="overlay-value" /><HardModeCue cue={view.hardMode.cue} />
+    </span>
   </div>;
 }
 
@@ -72,6 +92,9 @@ function CardLayout({view}: {view: OverlayView}) {
       {parts.rows.map(item => <div key={item.id} className="overlay-row" data-testid={`overlay-section-${item.id}`} {...urgencyMarks(item, item.label)}>
         <dt><SectionIcon id={item.id} size={14} />{item.label}</dt><dd><Value item={item} /></dd>
       </div>)}
+      <div className="overlay-row overlay-hard-mode" {...hardModeMarks(view.hardMode)}>
+        <dt><HardModeIcon size={14} />{view.hardMode.label}</dt><dd><HardModeValue item={view.hardMode} /></dd>
+      </div>
     </dl>
   </div>;
 }
@@ -109,6 +132,9 @@ function Cluster({view}: {view: OverlayView}) {
       {view.panel.map(item => <div key={item.id} className="overlay-panel-row" data-testid={`overlay-section-${item.id}`} {...urgencyMarks(item, item.short)}>
         <span className="overlay-label"><SectionIcon id={item.id} size={14} />{item.short}</span><Value item={item} />
       </div>)}
+      <div className="overlay-panel-row overlay-hard-mode" {...hardModeMarks(view.hardMode)}>
+        <span className="overlay-label"><HardModeIcon size={14} />{view.hardMode.label}</span><HardModeValue item={view.hardMode} />
+      </div>
     </div>
   </div>;
 }
@@ -123,6 +149,11 @@ function Hud({view}: {view: OverlayView}) {
     {view.items.map(item => <div key={item.id} className="overlay-hud-line" data-testid={`overlay-section-${item.id}`} {...urgencyMarks(item, item.short)}>
       <SectionIcon id={item.id} size={14} /><span className="overlay-label">{item.short}</span><Value item={item} />
     </div>)}
+    <div className="overlay-hud-line overlay-hard-mode" {...hardModeMarks(view.hardMode)}>
+      <HardModeIcon size={14} /><HardModeShort item={view.hardMode} className="overlay-label" />
+      {view.hardMode.hudValue ? <span className="overlay-value-group"><strong className="overlay-value">{view.hardMode.hudValue}</strong></span> : null}
+      <HardModeCue cue={view.hardMode.cue} />
+    </div>
   </div>;
 }
 
