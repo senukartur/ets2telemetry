@@ -18,22 +18,26 @@
   color-scheme: dark;
 
   /* Surfaces */
-  --yu-bg-app: #111827;          /* window work area */
-  --yu-bg-chrome: #0B1120;       /* title bar, sidebar, top bar */
-  --yu-bg-card: #1F2937;         /* cards, panels, menus */
+  --yu-bg-app: #0E1525;          /* window work area */
+  --yu-bg-chrome: #0A101D;       /* title bar, sidebar, top bar */
+  --yu-bg-card: #121A29;         /* cards, panels, menus */
+  --yu-bg-raised: #1E293B;       /* selected segment, inline tags, route track */
   --yu-bg-inset: #1A2332;        /* table header, nested blocks */
   --yu-bg-input: #111827;        /* inputs, segmented control track */
 
   /* Lines */
-  --yu-border: #374151;          /* card and menu borders, progress track */
+  --yu-border: #1E2A40;          /* card and menu borders, gauge and progress track */
   --yu-border-input: #4B5563;    /* input and secondary button borders */
-  --yu-divider: #2B3544;         /* table rows, key-value rows */
-  --yu-divider-chrome: #1F2937;  /* chrome edges (sidebar, top bar) */
+  --yu-border-strong: #334155;   /* fuel tank outline */
+  --yu-divider: #1A2335;         /* table rows, key-value rows */
+  --yu-divider-chrome: #1C2638;  /* chrome edges (sidebar, top bar) */
 
   /* Text */
-  --yu-text: #F3F4F6;
-  --yu-text-secondary: #D1D5DB;
-  --yu-text-muted: #9CA3AF;
+  --yu-text: #E2E8F0;
+  --yu-text-strong: #F8FAFC;     /* page title, live values, active navigation */
+  --yu-text-secondary: #A3B1C6;
+  --yu-text-muted: #8492A8;      /* captions and labels; keeps 4.5:1 on cards and chrome */
+  --yu-text-subtle: #64748B;     /* non-text only (inactive nav icons, gauge ticks, separators): 3:1, never for text */
 
   /* Accent: actions, selection, active navigation. Never used for status. */
   --yu-accent: #2563EB;
@@ -42,12 +46,15 @@
   --yu-selected-bg: rgba(37, 99, 235, 0.16);
   --yu-selected-border: rgba(96, 165, 250, 0.45);
   --yu-selected-fg: #DBEAFE;
+  --yu-nav-active-bg: #182238;   /* active sidebar item, waiting banner icon tile */
+  --yu-gear-bg: #10203D;         /* Live gear box */
+  --yu-gear-border: #2F5BC4;
 
   /* Status: always paired with an icon and a label, never colour alone */
-  --yu-ok-fg: #8FD3AE;      --yu-ok-bg: #13261D;      --yu-ok-border: #2A5640;
-  --yu-warn-fg: #E8C58A;    --yu-warn-bg: #2A2213;    --yu-warn-border: #5A4421;
-  --yu-err-fg: #F3B4A4;     --yu-err-bg: #2A1616;     --yu-err-border: #5B2A27;
-  --yu-neutral-fg: #D1D5DB; --yu-neutral-bg: #182131; --yu-neutral-border: #4B5563;
+  --yu-ok-fg: #34D399;      --yu-ok-bg: rgba(52, 211, 153, 0.10);  --yu-ok-border: rgba(52, 211, 153, 0.30);
+  --yu-warn-fg: #FBBF24;    --yu-warn-bg: rgba(251, 191, 36, 0.10); --yu-warn-border: rgba(251, 191, 36, 0.30);
+  --yu-err-fg: #FCA5A5;     --yu-err-bg: rgba(248, 113, 113, 0.10); --yu-err-border: rgba(248, 113, 113, 0.32);
+  --yu-neutral-fg: #A3B1C6; --yu-neutral-bg: #151D2C;               --yu-neutral-border: #2A3548;
   --yu-online: #34D399;            /* live dot */
   /* Recording indicator dot: saturated so the colour reads at 10 px; its label carries the meaning */
   --yu-dot-ok: #34D399; --yu-dot-warn: #F59E0B; --yu-dot-err: #F87171; --yu-dot-neutral: #6B7280;
@@ -57,22 +64,23 @@
   --yu-ets2-fg: #7DD3FC; --yu-ets2-bg: rgba(14, 165, 233, 0.12); --yu-ets2-border: rgba(56, 189, 248, 0.4);
   --yu-ats-fg: #C4B5FD;  --yu-ats-bg: rgba(139, 92, 246, 0.12);  --yu-ats-border: rgba(167, 139, 250, 0.4);
 
-  /* Metric tiles */
+  /* Metric tiles; the Live instrument has its own compact gradient */
+  --yu-instrument-gradient: linear-gradient(135deg, #13203A, #121A29 60%);
   --yu-tile-gradient: linear-gradient(135deg, rgba(37, 99, 235, 0.32), rgba(31, 41, 55, 0.95) 70%);
   --yu-tile-border: rgba(96, 165, 250, 0.5);
   --yu-tile-teal-gradient: linear-gradient(135deg, rgba(20, 184, 166, 0.28), rgba(31, 41, 55, 0.95) 70%);
   --yu-tile-teal-border: rgba(45, 212, 191, 0.45);
 
   /* Shape */
-  --yu-radius-card: 12px;
-  --yu-radius-control: 10px;
-  --yu-radius-chip: 8px;
+  --yu-radius-card: 8px;
+  --yu-radius-control: 6px;
+  --yu-radius-chip: 6px;
   --yu-radius-badge: 6px;
   --yu-title-bar: 3px solid var(--yu-accent);  /* left bar of every card title, 10px text indent */
 
   /* Type: Huninn, bundled with @fontsource/huninn (the app works offline; never load Google Fonts at runtime) */
   --yu-font: 'Huninn', 'Segoe UI', system-ui, sans-serif;
-  --yu-text-screen: 24px;   /* screen title, 700 */
+  --yu-text-screen: 18px;   /* page title at the top of the content, 700 */
   --yu-text-card: 15px;     /* card title, 700 */
   --yu-text-body: 13px;     /* desktop body (one step denser than the web) */
   --yu-text-meta: 12px;     /* captions, table header */
@@ -80,10 +88,11 @@
   --yu-text-metric: 28px;   /* metric tile value, 500 */
 
   /* Size */
-  --yu-control-h: 34px;     /* buttons, inputs, selects (32-36px) */
-  --yu-nav-item-h: 38px;
-  --yu-sidebar-w: 220px;
-  --yu-topbar-h: 52px;
+  --yu-control-h: 32px;     /* buttons, inputs, selects */
+  --yu-control-h-xs: 24px;  /* status chips; a pseudo-element keeps their hit area at 32px */
+  --yu-nav-item-h: 32px;
+  --yu-sidebar-w: 216px;
+  --yu-topbar-h: 48px;
   --yu-titlebar-h: 32px;
 }
 
@@ -112,7 +121,7 @@
   --chart-3: #2DD4BF;
   --chart-4: var(--yu-progress-pending);
   --chart-5: var(--yu-text-muted);
-  --radius: 0.625rem; /* 10px controls; cards override to 12px (rounded-xl) */
+  --radius: 0.375rem; /* 6px controls; cards use --yu-radius-card (8px) */
   --sidebar: var(--yu-bg-chrome);
   --sidebar-foreground: var(--yu-text-secondary);
   --sidebar-primary: var(--yu-accent);
