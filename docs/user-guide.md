@@ -174,14 +174,11 @@ The overlay has an extra section, **Next mandatory break** (Russian: **До об
 - **Older versions.** After this version has saved your settings, an earlier version of the application treats the settings file as written by a newer version: it uses defaults and does not save until you run this version again.
 - **Not recorded.** The value is only shown live; it is not saved in the journal or the export.
 
-## Cruise control on the overlay (ET-071)
+## Cruise control on the overlay
 
 The overlay has a **Cruise control** section (Russian: **Круиз-контроль**; short name **Cruise** / **Круиз** in the strip, cluster panel and HUD) after RPM. It shows the speed set for cruise control in the game's units, for example `90 km/h` or `56 mph`, and **OFF** (**ВЫКЛ**) while cruise control is off. A dash (`—`) means the value is not available, for example with an older plugin still loaded in a running game; it never stands for off.
 
-- **Settings.** It is on by default, also after an update, and you can switch it off under **Driving** in **Settings → Overlay → Sections**. The **Everything** and **Driving only** presets include it; **Job focus** does not, so after the update a Job focus selection matches no preset until you choose it again.
-- **Bigger windows.** One more section makes the Card, the Cluster panel and the Minimal HUD one row taller, and the strip may need another row at small sizes. The extra space is transparent.
-- **Older versions.** After this version has saved your settings, an earlier version treats the settings file as newer: it uses defaults and does not save until you run this version again.
-- **Not recorded.** The value is only shown live; it is not saved in the journal or the export.
+It is on by default, also after an update, and you can switch it off under **Driving** in **Settings → Overlay → Sections**. The **Everything** and **Driving only** presets include it; **Job focus** does not, so after the update a Job focus selection matches no preset until you choose it again. As with the break, the Card, the Cluster panel and the Minimal HUD grow by one row, an earlier version treats settings saved by this version as newer, and the value is not recorded.
 
 ## Hard Mode on the overlay (ET-070)
 

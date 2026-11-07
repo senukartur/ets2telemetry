@@ -199,7 +199,7 @@ ET-052 PR-4 moves the simulator to protocol v1 minor 2 (MB1, MB3) with the nativ
 
 ## Cruise control and minor 3
 
-ET-071 moves the simulator to minor 3 with the same rules as the break: `V1Producer` selects min(hello `maxMinor`, `highestMinor`, default the literal 3), `ScriptedClient` offers 3 by default (0 to 3 in a scenario), and `source.highestMinor` is 0 to 3. The channel `cruise_control` (the SDK's `truck.cruise_control`, float m/s) sits after `mandatory.break` in the registration order and, like it, advances no boundary order. A frame may list it as a number, `null` (`not-observed`) or `"invalid"`; a value outside [0, 1,000] is `invalid`, and zero (off) is a value. `source.cruiseControl: "not-supported"` models a game that refuses the optional registration, and a frame that then lists the channel is rejected. The producer adds `state.cruiseControl` only at minor 3.
+The simulator serves minor 3 with the break's rules: `V1Producer` selects min(hello `maxMinor`, `highestMinor`, default the literal 3), `ScriptedClient` offers 3 by default (0 to 3 in a scenario), and `source.highestMinor` is 0 to 3. The channel `cruise_control` (the SDK's `truck.cruise_control`, float m/s) follows `mandatory.break` in the registration order and advances no boundary order. A frame may list it as a number, `null` (`not-observed`) or `"invalid"`; a value outside [0, 1,000] is `invalid`, and zero (off) is a value. `source.cruiseControl: "not-supported"` models a refused registration, and a frame that then lists the channel is rejected. `state.cruiseControl` is written only at minor 3.
 
 ## Pending
 
