@@ -878,3 +878,7 @@ The owner [approved the Account & sync UI and the bounded read-only synchronizat
 ## ET-070 overlay Hard Mode indicator — November 7, 2026
 
 On [ET-070](https://trello.com/c/pFkLfUzR) the owner chose: D1, the lucide `Flame` with `HM`; D2, no count in the Strip, where not active is an amber `HM` without a check, while Card, Cluster and HUD show the count; D3, a mandatory fixed indicator that is not a section, without a setting, preset entry or settings-format change; D4, unknown, an expired lease and a service that is not ready display exactly as not active, never active without positive evidence. A current trip's first loss takes priority and shows as lost. Details are in [the minimal overlay](docs/minimal-overlay.md#hard-mode-indicator).
+
+## Hard Mode known-check threshold — November 7, 2026
+
+The owner replaces irreversible loss for new trips with an inclusive 95% passing known-check threshold: delivered outcome, at least one known check, and `pass * 100 >= (pass + fail) * 95`. Unknown checks are separately diagnosed and excluded; temporary file verification failures, restarts and session changes are not permanent rejection. Verified logical continuation preserves summed member counts; heartbeat/manual/status updates add no sampling weight. No separate opening/final pass or anti-cheat guarantee is required. Audit v2 in the existing bounded JSON column and compatible export format 5 carry statistics and persistent reason diagnostics; historical v1 audits and qualification keep their original policy.

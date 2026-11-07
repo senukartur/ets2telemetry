@@ -529,7 +529,7 @@ const exportTripSection = (session, trip, audit) => ({is_hard_mode: false, hard_
   closedBy: {pluginSessionId: session, eventSeq: '8'}});
 /** Independent oracle: no Hard Mode fixture is enabled, so the normal reader refuses this synthetic source before
  * process/filesystem access. Opening has no eligible proof and is historical; ordered monitor failures publish all
- * twelve source-unproven rules. Frozen closing proof preserves that publication as latest. Only the UTC labels vary:
+ * twelve source-unproven rules. Frozen closing proof preserves that publication as latest. Known checks remain zero; scheduled unknown counts are bounded independently by cadence and source acquisitions. Diagnostic labels vary:
  * independently bound opening/latest by admission and journal read; latest is not a closing-capture timestamp. */
 function recordingHardModeAudit(document, record) {
   const opening = document.trip.hard_mode_details?.opening?.observedUtcMs;
@@ -540,8 +540,19 @@ function recordingHardModeAudit(document, record) {
   const unknown = (at, reason) => ({observedUtcMs: at, state: 'unknown', source: 'unknown', rules:
     ['fuel', 'air', 'police', 'fatigue', 'limiter', 'truck', 'trailer', 'parking', 'rain', 'events', 'braking', 'traffic']
       .map(id => ({id, state: 'unknown', values: id === 'parking' ? [null, null] : [null], reason}))});
-  return {version: 1, binding: null, opening: unknown(opening, 'historical'), latest: unknown(latest, 'source-unproven'),
-    firstLoss: {atUtcMs: opening, reason: 'historical', rule: null, values: null}, manualDelivery: null};
+  const audit=document.trip.hard_mode_details;
+  assert.equal(audit.passingChecks,0);assert.equal(audit.failingChecks,0);
+  assert.ok(Number.isSafeInteger(audit.unknownChecks) && audit.unknownChecks >= 0
+    && audit.unknownChecks <= 2 + Math.ceil((record.journal.readStartedUtcMs-record.hardModeAdmissionUtcMs)/5000), 'Unknown checks exceed the scheduled cadence and two source acquisitions');
+  assert.ok(['source-unproven','interrupted'].includes(audit.latest.rules[0].reason));
+  const endpoint=value=>{
+    assert.ok(value && ['profile-verification','settings-unavailable','session-transition'].includes(value.code));
+    assert.ok(Number.isSafeInteger(value.atUtcMs) && record.hardModeAdmissionUtcMs <= value.atUtcMs && value.atUtcMs <= record.journal.readStartedUtcMs);
+    assert.equal(value.rule,null);assert.equal(value.values,null);
+    return {atUtcMs:value.atUtcMs,code:value.code,rule:null,values:null};
+  };
+  return {version:2,binding:null,opening:unknown(opening,'historical'),latest:unknown(latest,audit.latest.rules[0].reason),firstLoss:null,manualDelivery:null,
+    passingChecks:0,failingChecks:0,unknownChecks:audit.unknownChecks,checkpoint:null,firstDiagnostic:endpoint(audit.firstDiagnostic),latestDiagnostic:endpoint(audit.latestDiagnostic)};
 }
 /** The window's events as [eventSeq, type, attribution kind]: only job.delivered (8) is attributed, to the trip itself. */
 const EXPORT_EVENTS = [['3', 'job.configured', null], ['4', 'simulation.started', null], ['5', 'job.configured', null], ['6', 'simulation.paused', null],
@@ -561,13 +572,13 @@ async function reconcileExport({config, record, raw, session, restartMainEvents}
   const document = JSON.parse(await readFile(path.join(config.output, 'recording-export', 'trip.json'), 'utf8'));
   const problemsOf = await exportValidator(config);
   journal.exportProblems = problemsOf(document);
-  assert.deepEqual(journal.exportProblems, [], 'The export is not a valid format version 4 document');
+  assert.deepEqual(journal.exportProblems, [], 'The export is not a valid format version 5 document');
   journal.exportValidated = true;
 
   // Hand-written sections.
   assert.deepEqual({format: document.format, formatVersion: document.formatVersion, application: document.header.application, purpose: document.header.database.purpose,
     schemaVersion: document.header.database.schemaVersion, sessionOrigin: document.header.sessionOrigin},
-  {format: 'ets2telemetry.trip-export', formatVersion: 4, application: {name: 'ETS2Telemetry', version: smokeBuild(config).version}, purpose: 'synthetic', schemaVersion: 6, sessionOrigin: 'synthetic'});
+  {format: 'ets2telemetry.trip-export', formatVersion: 5, application: {name: 'ETS2Telemetry', version: smokeBuild(config).version}, purpose: 'synthetic', schemaVersion: 6, sessionOrigin: 'synthetic'});
   assert.deepEqual(document.trip, exportTripSection(session, trip, recordingHardModeAudit(document, record)), 'The exported trip differs from the hand-written row');
   assert.deepEqual(document.window, {known: true, pluginSessionId: session, fromEventSeq: '3', throughEventSeq: '8', end: 'close-event'});
   assert.deepEqual({source: document.job.source, eventSeq: document.job.eventSeq, checkpointNextEventSeq: document.job.checkpointNextEventSeq, values: document.job.values},

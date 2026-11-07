@@ -1,5 +1,5 @@
 import type {JournalRecordingSource} from '../../../packages/contracts/src/journal';
-// The trip export document: pure serialization of `ets2telemetry.trip-export` format version 4.
+// The trip export document: pure serialization of `ets2telemetry.trip-export` format version 5.
 // The writer (journal-export-writer.ts) reads the trip detail once, then its completeness intervals, timeline events and
 // samples page by page, and appends this module's text for each page, so the whole document is never held in memory.
 // Every row is copied field by field in a fixed key order; values keep the protocol v1 availability and money shapes and

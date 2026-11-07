@@ -19,8 +19,8 @@ import {
 } from '../codec';
 import {fail} from '../errors';
 import type {StorageConnection} from './connection';
-import {unknownHardMode} from '../../../telemetry-core/src/hard-mode';
-import {applyEventHardMode, checkHardModeObservation, updateOpenHardMode} from './hard-mode';
+import {newHardModeDetails, unknownHardMode} from '../../../telemetry-core/src/hard-mode';
+import {applyEventHardMode, checkHardModeObservation, recordGapHardMode, updateOpenHardMode} from './hard-mode';
 
 const cache = new WeakMap<Database.Database, Map<string, Database.Statement>>();
 /** Prepared statements are cached per connection; SQL text is always a constant of this module. */
@@ -229,6 +229,7 @@ function applyEffects(c: EffectContext, effects: unknown): void {
           .run(effect.tripUuid, c.session.id, effect.game, enumValue(effect.gameMode.mode, MODES), enumValue(effect.gameMode.method, METHODS), enumValue(effect.gameMode.confidence, CONFIDENCES),
             optionalBoolean(effect.gameModeAmbiguous) ?? 0n, job, truck, attached ? null : c.eventRef, attached ? 'checkpoint' : 'event', 'open', enumValue(effect.recordingCompleteness, COMPLETENESS),
             utcMs(effect.startedUtcMs), null, 'not-observed', c.now, c.now).lastInsertRowid;
+        statement(c.db, 'UPDATE trips SET hard_mode_details = ? WHERE id = ?').run(JSON.stringify(newHardModeDetails(unknownHardMode(effect.startedUtcMs, 'historical'), null)), id);
         addTrailers(c, BigInt(id), effect.trailerConfigurations);
         break;
       }
@@ -379,6 +380,7 @@ export function commitGap(conn: StorageConnection, input: {message: unknown; eff
     }
     const now = conn.now(), clock = clockRef(db, session.id, 'source-monotonic', m.capture.clockId);
     if (input.hardModeLoss) updateOpenHardMode(db, session.game, input.hardModeLoss, now, false, 'frozen');
+    recordGapHardMode(db, m.source.pluginSessionId, now);
     updateOpenHardMode(db, session.game, {assessment: unknownHardMode(now, 'interrupted'), binding: null, pluginSessionId: null, sourceMonotonicNs: null}, now, false, 'frozen');
     const [firstLost, firstLostState] = availabilityColumns(d.firstLostMonotonicNs, u64Key), [lastLost, lastLostState] = availabilityColumns(d.lastLostMonotonicNs, u64Key);
     statement(db, insert('event_gaps', ['plugin_session_ref', 'first_event_seq', 'last_event_seq', ...CAUSES.map(([, c]) => c), 'first_lost_monotonic_ns', 'first_lost_monotonic_ns_state',
@@ -736,6 +738,7 @@ export function observeHardMode(conn: StorageConnection, game: 'ets2' | 'ats', o
   if (!['ets2', 'ats'].includes(game)) fail('INVALID_INPUT');
   transact(conn, db => {
     updateOpenHardMode(db, game, observation, conn.now(), fresh);
-    if (logicalEnabled(db)) for (const row of db.prepare("SELECT id FROM trips WHERE game = ? AND outcome = 'open' LIMIT 101").all(game) as {id: bigint}[]) revise(db, logicalFor(db, row.id));
+    const target=observation.batch?.tripUuid ?? observation.member;
+    if (logicalEnabled(db)) for (const row of db.prepare("SELECT id FROM trips WHERE game = ? AND outcome = 'open' AND (? IS NULL OR trip_uuid = ?) LIMIT 101").all(game,target ?? null,target ?? null) as {id: bigint}[]) revise(db, logicalFor(db, row.id));
   });
 }

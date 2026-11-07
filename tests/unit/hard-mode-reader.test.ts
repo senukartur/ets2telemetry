@@ -8,14 +8,14 @@ import path from 'node:path';
 import os from 'node:os';
 import {afterEach, beforeEach, describe, expect, it, vi} from 'vitest';
 import {hardModeFixtureOptions} from '../../apps/desktop/src/hard-mode/fixture';
-import {HardModeReader, FileEvidenceError, ProfileSuperseded, coalesceProfileDiagnostics, type ProfileDiagnostic, profileFromLog, readStableFile} from '../../apps/desktop/src/hard-mode/reader';
+import {HardModeReader, FileEvidenceError, ProfileSuperseded, UnchangedVerificationError, coalesceProfileDiagnostics, type ProfileDiagnostic, profileFromLog, readStableFile} from '../../apps/desktop/src/hard-mode/reader';
 import {HardModeMonitor} from '../../apps/desktop/src/hard-mode/monitor';
 import {hardModeView} from '../../apps/desktop/src/hard-mode/view';
 import {ProfileObserver} from '../../apps/desktop/src/profile-observation';
 import type {HardModeObservation} from '../../packages/contracts/src/hard-mode';
 import type {SourceIdentity} from '../../packages/contracts/src/protocol-v1';
 import {HARD_MODE_CONFIG} from '../shared/hard-mode';
-import {unknownHardMode} from '../../packages/telemetry-core/src/hard-mode';
+import {advanceHardModeV2, newHardModeDetails, qualifiesHardMode, unknownHardMode} from '../../packages/telemetry-core/src/hard-mode';
 const source: SourceIdentity = {game: 'ets2', origin: 'game', processId: 123, windowsSessionId: 1, processInstanceId: '10000000-0000-4000-8000-000000000001', pluginSessionId: '20000000-0000-4000-8000-000000000001'};
 const name = 'Synthetic Профиль', id = Buffer.from(name).toString('hex').toUpperCase();
 const created = new Date(2026, 9, 21, 12, 0, 0).getTime();
@@ -829,6 +829,33 @@ describe('ET-026 isolated reader (REG-008/010/011)', () => {
       expect(observer.evidence()).toBeDefined();expect(inspect).toHaveBeenCalledOnce();
     } finally {release.resolve();m.close();observer.close();await observer.refresh();await r.drain();}
   });
+  it.each(['optional-bytes','required-guards'] as const)('counts a scheduled deadline using only independently eligible evidence: %s',async blocked=>{
+    vi.useFakeTimers();const start=Date.now(),now=()=>BigInt(Date.now()-start)*1_000_000n;
+    const entered=gate(),release=gate(),completed=gate(),scheduledCheck=gate(),publications:HardModeObservation[]=[];let hold=false,lastReadError:unknown;
+    const r=ownedReader({documents:path.join(root,'Documents'),process:processFacts,nowNs:now,
+      metadata:{realpath:async filename=>{if(hold&&blocked==='required-guards'){entered.resolve();await release.promise;}return realpath(filename);},stat:filename=>stat(filename,{bigint:true})},
+      file:async(filename,limit,signal)=>{if(hold&&blocked==='optional-bytes'&&filename===path.join(profile,'config.cfg')){entered.resolve();await release.promise;}return readStableFile(filename,limit,signal);}});
+    const observer=ownedObserver(()=>r,now,false),m=ownedMonitor((s,ns,at,signal)=>observer.readSettings(r,s,ns,at,signal)
+      .catch(error=>{lastReadError=error;throw error;}).finally(()=>completed.resolve()),value=>{publications.push(value);if(value.check?.sequence===2)scheduledCheck.resolve();},now,undefined,()=>r.canRetain(),undefined,undefined,
+      {eligible:()=>r.guardEligible(),select:()=>undefined,deadline:s=>r.deadline(s)}),current={source,clockId:'clock',monotonicNs:'1'};
+    r.onInvalidate((_profileChanged,diagnostic)=>m.invalidate(diagnostic));let pending:Promise<void>|undefined;
+    try {
+      observer.select(current);m.select(current);await completed.promise;await observer.refresh();await vi.advanceTimersByTimeAsync(1);
+      const bound={...current,boundary:{clockId:'clock',probeSentClientNs:now().toString(),receivedSourceNs:'10'}};
+      observer.select(bound);m.select(bound);await m.refresh();expect(publications.filter(value=>value.check).map(value=>value.assessment.state)).toEqual(['pass']);
+      // Keep the real required guards advancing until the scheduled minute byte reread, without running monitor checks.
+      for(let second=5;second<60;second+=5){await vi.advanceTimersByTimeAsync(5000);await r.resolveProfile(source,created+10000,new AbortController().signal,true);}
+      await vi.advanceTimersByTimeAsync(5000);hold=true;pending=m.refresh();await entered.promise;await vi.advanceTimersByTimeAsync(2000);
+      if(blocked==='required-guards') {expect(m.evidence().assessment.state).toBe('unknown');release.resolve();}
+      await scheduledCheck.promise;
+      const checks=publications.filter(value=>value.check);
+      expect(checks.map(value=>value.assessment.state)).toEqual(['pass',blocked==='optional-bytes'?'pass':'unknown']);
+      expect(checks.map(value=>value.check!.sequence)).toEqual([1,2]);
+      expect(r.canRetain()).toBe(blocked==='optional-bytes');
+      if(blocked==='optional-bytes') {expect(lastReadError).toBeInstanceOf(UnchangedVerificationError);expect(checks[1].binding).toBe(checks[0].binding);}
+      else {expect(lastReadError).not.toBeInstanceOf(UnchangedVerificationError);expect(checks[1]).toMatchObject({binding:null,diagnostic:'guard-deadline'});}
+    } finally {release.resolve();m.close();observer.close();await pending;await r.drain();}
+  });
   it.each(['hard-mode','profile','status','retention'] as const)('expires the shared required guard synchronously through %s before delayed timer callbacks',async first=>{
     vi.useFakeTimers();let now=0n,hold=false;const entered=gate(),release=gate(),completed=gate();
     const r=ownedReader({documents:path.join(root,'Documents'),process:processFacts,nowNs:()=>now,
@@ -952,6 +979,20 @@ describe('ET-026 isolated reader (REG-008/010/011)', () => {
   it('reads shared-open log files through Node/libuv while another writer holds the file', async () => {
     const file = await open(path.join(game, 'game.log.txt'), 'a');
     try {expect((await read()).assessment.state).toBe('pass');} finally {await file.close();}
+  });
+  it.each(['identical-rewrite','unrelated-setting','save-directory'] as const)('reverifies %s without permanently rejecting a passing v2 trip', async trigger => {
+    const r = reader(), initial = await read(r);
+    let audit = {...newHardModeDetails(initial.assessment, initial.binding), passingChecks: 1};
+    r.onInvalidate(profileChanged => {audit = advanceHardModeV2(audit, {assessment: unknownHardMode(created + 10001), binding: null, pluginSessionId: null, sourceMonotonicNs: null,
+      diagnostic: profileChanged ? 'profile-verification' : 'settings-changing'});});
+    if (trigger === 'save-directory') await mkdir(path.join(profile,'save','synthetic-save'), {recursive:true});
+    else await writeSettingsChange(path.join(profile,'config.cfg'), HARD_MODE_CONFIG + (trigger === 'unrelated-setting' ? '\nuset r_vsync "0"' : ''));
+    const verified = await read(r); audit = advanceHardModeV2(audit, verified);
+    expect(verified.assessment.state).toBe('pass'); expect(verified.binding).toBe(initial.binding);
+    expect(audit.firstLoss).toBeNull(); expect(qualifiesHardMode(audit)).toBe(true);
+    expect(audit.latestDiagnostic).not.toBeNull();
+    await writeSettingsChange(path.join(profile,'config.cfg'), HARD_MODE_CONFIG.replace('g_fatigue "1"','g_fatigue "0"'));
+    expect((await read(r)).assessment.rules[3]).toMatchObject({state:'fail',values:[0]});
   });
   it('uses file bytes on unchanged hashes/changed mtimes and detects live persisted changes', async () => {
     const r = reader(); expect((await read(r)).assessment.state).toBe('pass');

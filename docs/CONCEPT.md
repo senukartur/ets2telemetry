@@ -37,7 +37,7 @@ The Live screen shows the connection state and every live telemetry field: speed
 
 The overlay is a transparent window above the game in windowed or borderless fullscreen mode. It passes mouse clicks to the game, never takes focus, and hides when the game is paused, in menu, minimized, or another application is in front. It updates up to 20 times per second.
 
-The driver chooses one of four layouts (Strip, the default, plus Card, Cluster and Minimal HUD) and which sections it shows, such as speed, gear, RPM, fuel, consumption, cargo, destination, distance left, deadline, income, game time and the time left until the next mandatory break. Measurements round to whole units, route endpoints show only cities, the clock shows only hours and minutes, and the delivery countdown omits "in" while retaining overdue warnings. In an explicit edit mode the driver moves and resizes it (50–300%). The background opacity and whether the overlay is shown at all are saved settings. Every layout also ends with a fixed Hard Mode indicator: active, not active (also when unknown) or lost for the current trip.
+The driver chooses one of four layouts (Strip, the default, plus Card, Cluster and Minimal HUD) and which sections it shows, such as speed, gear, RPM, fuel, consumption, cargo, destination, distance left, deadline, income, game time and the time left until the next mandatory break. Measurements round to whole units, route endpoints show only cities, the clock shows only hours and minutes, and the delivery countdown omits "in" while retaining overdue warnings. In an explicit edit mode the driver moves and resizes it (50–300%). The background opacity and whether the overlay is shown at all are saved settings. Every layout also ends with a fixed Hard Mode indicator: active for passing current settings, not active (also when unknown), or lost for a legacy trip with an irreversible loss. The indicator is separate from a new trip's qualifying check ratio.
 
 ### Current track
 
@@ -55,7 +55,7 @@ The Journal lists the recorded trips page by page. A trip's details show its rou
 
 ### Hard Mode
 
-Hard Mode checks whether the game's persisted profile settings meet twelve realistic-driving rules (for example realistic fuel, air brakes and Normal parking) and shows each rule's state; a rule that does not pass also shows its detected and required value. A delivered trip qualifies only if every rule passed throughout the trip. Parking is checked through settings only. Any failure or unknown value loses the trip's qualification for good. Hard Mode reads files only and is not anti-cheat proof.
+Hard Mode checks whether the game's persisted profile settings meet twelve realistic-driving rules (for example realistic fuel, air brakes and Normal parking) and shows each rule's state; a rule that does not pass also shows its detected and required value. A delivered trip qualifies when at least 95% of its known scheduled checks pass, with all twelve rules required for each passing check. Unknown checks are counted separately and excluded from the ratio; the ratio can recover while the trip is open. Verified continuation preserves the accumulated checks across sessions. Parking is checked through settings only. Historical audits retain their original qualification policy. Hard Mode reads files only and is not anti-cheat proof.
 
 ### Account and synchronization
 

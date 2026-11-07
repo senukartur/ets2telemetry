@@ -33,10 +33,10 @@ export function tripExportProblems(document: unknown): string[] {
   const problems: string[] = [];
   const problem = (where: string, what: string) => { problems.push(`${where}: ${what}`); };
   if (!isObject(document)) return ['$: not an object'];
-  const topKeys = document.formatVersion === 4 ? [...TOP_KEYS.slice(0,12),'diagnostics','sources',...TOP_KEYS.slice(12)] : document.formatVersion === 3 ? [...TOP_KEYS.slice(0,12),'diagnostics',...TOP_KEYS.slice(12)] : TOP_KEYS;
+  const topKeys = (document.formatVersion === 4 || document.formatVersion === 5) ? [...TOP_KEYS.slice(0,12),'diagnostics','sources',...TOP_KEYS.slice(12)] : document.formatVersion === 3 ? [...TOP_KEYS.slice(0,12),'diagnostics',...TOP_KEYS.slice(12)] : TOP_KEYS;
   if (!sameKeys(document, topKeys)) problem('$', `keys are not ${topKeys.join(', ')} in this order`);
   if (document.format !== 'ets2telemetry.trip-export') problem('$.format', 'not ets2telemetry.trip-export');
-  if (document.formatVersion !== 1 && document.formatVersion !== 2 && document.formatVersion !== 3 && document.formatVersion !== 4) problem('$.formatVersion', 'not 1, 2, 3 or 4');
+  if (document.formatVersion !== 1 && document.formatVersion !== 2 && document.formatVersion !== 3 && document.formatVersion !== 4 && document.formatVersion !== 5) problem('$.formatVersion', 'not 1, 2, 3, 4 or 5');
 
   const header = document.header;
   if (!isObject(header) || !isObject(header.application) || header.application.name !== 'ETS2Telemetry' || typeof header.application.version !== 'string'
@@ -69,10 +69,10 @@ export function tripExportProblems(document: unknown): string[] {
   const trip = document.trip, bounds = document.bounds;
   if (!isObject(trip) || !sameKeys(trip, document.formatVersion !== 1 ? ['is_hard_mode', 'hard_mode_details', ...TRIP_KEYS] : TRIP_KEYS) || !UUID.test(textOf(trip.tripUuid)) || !UUID.test(textOf(trip.pluginSessionId))) problem('$.trip', 'malformed');
   else if ((trip.outcome === 'open') !== (trip.closeReason === null) || (trip.outcome === 'open') !== (trip.endedUtcMs === null)) problem('$.trip', 'outcome, close reason and end disagree');
-  if (!isObject(bounds) || !sameKeys(bounds, [...(document.formatVersion === 4 && isObject(bounds) && bounds.projection !== undefined ? ['projection','sources','sourceTotal','accountingHead']:[]), 'committedThroughEventSeq', 'lastSampleId', 'lastIntervalId', 'snapshot']) || !U64.test(textOf(bounds.committedThroughEventSeq))
+  if (!isObject(bounds) || !sameKeys(bounds, [...((document.formatVersion === 4 || document.formatVersion === 5) && isObject(bounds) && bounds.projection !== undefined ? ['projection','sources','sourceTotal','accountingHead']:[]), 'committedThroughEventSeq', 'lastSampleId', 'lastIntervalId', 'snapshot']) || !U64.test(textOf(bounds.committedThroughEventSeq))
     || (bounds.lastSampleId !== null && !ROW_ID.test(textOf(bounds.lastSampleId))) || (bounds.lastIntervalId !== null && !ROW_ID.test(textOf(bounds.lastIntervalId)))
     || bounds.snapshot !== (isObject(trip) && trip.outcome === 'open')) { problem('$.bounds', 'malformed'); return problems; }
-  if (document.formatVersion === 4 && bounds.projection !== undefined) {
+  if ((document.formatVersion === 4 || document.formatVersion === 5) && bounds.projection !== undefined) {
     if (!isObject(bounds.projection) || !sameKeys(bounds.projection,['events','intervals','samples','sources']) || !Array.isArray(bounds.sources) || bounds.sources.length>256) problem('$.bounds','invalid logical projection');
     else for (const [kind,name] of [['e','events'],['i','intervals'],['s','samples'],['r','sources']]) if (!new RegExp('^v4:[0-9a-f-]{36}:[0-9a-f-]{36}:[1-9][0-9]{0,18}:'+kind+':0$').test(textOf(bounds.projection[name]))) problem('$.bounds.projection','invalid page token');
     for (const source of Array.isArray(bounds.sources)?bounds.sources:[]) if (!isObject(source) || !sameKeys(source,['pluginSessionId','committedThroughEventSeq']) || !UUID.test(textOf(source.pluginSessionId)) || !U64.test(textOf(source.committedThroughEventSeq))) problem('$.bounds.sources','invalid source bound');
@@ -81,13 +81,44 @@ export function tripExportProblems(document: unknown): string[] {
     if (typeof trip.is_hard_mode !== 'boolean') problem('$.trip.is_hard_mode', 'not boolean');
     const audit = trip.hard_mode_details;
     const keys = ['version', 'binding', 'opening', 'latest', 'firstLoss', 'manualDelivery'];
-    if (audit !== null && (!isObject(audit) || !sameKeys(audit, keys) || audit.version !== 1
-      || !(audit.binding === null || /^[0-9a-f]{64}$/.test(textOf(audit.binding)))
-      || !(audit.manualDelivery === null || typeof audit.manualDelivery === 'boolean'))) problem('$.trip.hard_mode_details', 'malformed');
-    if (trip.is_hard_mode && (trip.outcome !== 'delivered' || !isObject(audit) || audit.firstLoss !== null || audit.manualDelivery === false)) problem('$.trip.is_hard_mode', 'qualification lacks delivery proof');
+    if (document.formatVersion === 5 && isObject(audit) && audit.version === 2) {
+      const safe = (v: unknown): v is number => typeof v === 'number' && Number.isSafeInteger(v) && v >= 0;
+      const countKeys = ['passingChecks', 'failingChecks', 'unknownChecks'];
+      const codes = ['settings-changing', 'settings-unavailable', 'profile-verification', 'source-changed', 'guard-deadline', 'session-transition', 'storage-failure', 'rule-failed'];
+      const ruleIds = ['fuel','air','police','fatigue','limiter','truck','trailer','parking','rain','events','braking','traffic'];
+      const values = (v: unknown, rule: unknown) => Array.isArray(v) && v.length === (rule === 'parking' ? 2 : 1) && v.every(n => n === null || typeof n === 'number' && Number.isFinite(n));
+      const assessment = (v: unknown) => {
+        if (!isObject(v) || !(Object.keys(v).length === 4 && ['observedUtcMs','state','source','rules'].every(k=>Object.hasOwn(v,k))) || !safe(v.observedUtcMs) || !['local','cloud','fixture','unknown'].includes(textOf(v.source)) || !Array.isArray(v.rules) || v.rules.length !== 12) return false;
+        const rules = v.rules;
+        if (!rules.every((r,i) => isObject(r) && sameKeys(r,['id','state','values','reason']) && r.id === ruleIds[i] && values(r.values,r.id)
+          && (r.state === 'pass' ? r.reason === 'compliant' && (r.values as unknown[]).every(n=>n!==null) : r.state === 'fail' ? r.reason === 'outside-limit' && (r.values as unknown[]).every(n=>n!==null)
+            : r.state === 'unknown' && ['missing','malformed','conflicting','source-unproven','interrupted','historical','source-changed','parking-unproven'].includes(textOf(r.reason))))) return false;
+        return v.state === (rules.some(r=>(r as Json).state==='unknown')?'unknown':rules.every(r=>(r as Json).state==='pass')?'pass':'fail');
+      };
+      const diag = (v: unknown) => v === null || isObject(v) && sameKeys(v,['atUtcMs','code','rule','values']) && safe(v.atUtcMs) && codes.includes(textOf(v.code))
+        && (v.rule === null ? v.values === null : ruleIds.includes(textOf(v.rule)) && values(v.values,v.rule));
+      const countsValid = countKeys.every(k=>safe(audit[k])) && Number.isSafeInteger(Number(audit.passingChecks)+Number(audit.failingChecks)+Number(audit.unknownChecks));
+      const checkpoint = audit.checkpoint;
+      const checkpointValid = checkpoint === null || isObject(checkpoint) && sameKeys(checkpoint,['tripUuid','producer','sequence',...countKeys])
+        && UUID.test(textOf(checkpoint.tripUuid)) && UUID.test(textOf(checkpoint.producer)) && safe(checkpoint.sequence) && checkpoint.sequence > 0
+        && countKeys.every(k=>safe(checkpoint[k]) && Number(checkpoint[k])<=Number(audit[k])) && checkpoint.sequence === Number(checkpoint.passingChecks)+Number(checkpoint.failingChecks)+Number(checkpoint.unknownChecks);
+      if (!sameKeys(audit,[...keys,...countKeys,'checkpoint','firstDiagnostic','latestDiagnostic']) || !(audit.binding===null || /^[0-9a-f]{64}$/.test(textOf(audit.binding)))
+        || !assessment(audit.opening) || !assessment(audit.latest) || audit.firstLoss !== null || audit.manualDelivery !== null || !countsValid || !checkpointValid
+        || !diag(audit.firstDiagnostic) || !diag(audit.latestDiagnostic) || (audit.firstDiagnostic===null)!==(audit.latestDiagnostic===null)) problem('$.trip.hard_mode_details','malformed v2');
+      if (countsValid) {
+        const known = BigInt(Number(audit.passingChecks))+BigInt(Number(audit.failingChecks));
+        const qualified = trip.outcome === 'delivered' && known > 0n && BigInt(Number(audit.passingChecks))*100n >= known*95n;
+        if (trip.is_hard_mode !== qualified) problem('$.trip.is_hard_mode','does not match the v2 ratio');
+      }
+    } else {
+      if (audit !== null && (!isObject(audit) || !sameKeys(audit, keys) || audit.version !== 1
+        || !(audit.binding === null || /^[0-9a-f]{64}$/.test(textOf(audit.binding)))
+        || !(audit.manualDelivery === null || typeof audit.manualDelivery === 'boolean'))) problem('$.trip.hard_mode_details', 'malformed');
+      if (trip.is_hard_mode && (trip.outcome !== 'delivered' || !isObject(audit) || audit.firstLoss !== null || audit.manualDelivery === false)) problem('$.trip.is_hard_mode', 'qualification lacks delivery proof');
+    }
   }
   const window = document.window;
-  if ((document.formatVersion === 3 || document.formatVersion === 4)) {
+  if ((document.formatVersion === 3 || (document.formatVersion === 4 || document.formatVersion === 5))) {
     const d = document.diagnostics;
     if (!isObject(d) || !sameKeys(d, ['collection', 'matchedBy', 'status', 'notes', 'records']) || d.collection !== 'retained-logs-at-export'
       || d.matchedBy !== 'plugin-session-and-utc-window' || !['records-found', 'no-matching-records', 'unavailable', 'not-applicable'].includes(textOf(d.status))
@@ -96,7 +127,7 @@ export function tripExportProblems(document: unknown): string[] {
     else for (const row of d.records) {
       if (!isObject(row) || !sameKeys(row, ['time', 'event', 'facts']) || !Number.isFinite(Date.parse(textOf(row.time)))
         || !['PLUGIN_V1_CONNECTION_CLOSED', 'NATIVE_BROKER_V1_EXIT'].includes(textOf(row.event)) || !isObject(row.facts) || !isObject(trip)
-        || row.facts.game !== trip.game || !(document.formatVersion===4 && Array.isArray(document.sources) && document.sources.length?document.sources:Array.isArray(bounds.sources)?bounds.sources:[{pluginSessionId:trip.pluginSessionId}]).some(s=>isObject(s)&&s.pluginSessionId===(row.facts as Json).pluginSessionId)) { problem('$.diagnostics.records', 'malformed or unrelated'); continue; }
+        || row.facts.game !== trip.game || !((document.formatVersion===4 || document.formatVersion===5) && Array.isArray(document.sources) && document.sources.length?document.sources:Array.isArray(bounds.sources)?bounds.sources:[{pluginSessionId:trip.pluginSessionId}]).some(s=>isObject(s)&&s.pluginSessionId===(row.facts as Json).pluginSessionId)) { problem('$.diagnostics.records', 'malformed or unrelated'); continue; }
       const allowed = row.event === 'PLUGIN_V1_CONNECTION_CLOSED'
         ? ['game', 'pluginSessionId', 'reason', 'phase', 'write', 'end', 'win32', 'durable', 'connection', 'durationMs']
         : ['game', 'pluginSessionId', 'outcome', 'exitCode', 'serviceMs', 'stage', 'win32Error', 'elapsedMs', 'slowStage', 'slowMs', 'repeats'];
@@ -117,7 +148,7 @@ export function tripExportProblems(document: unknown): string[] {
     let previous = -1n;
     list.forEach((row: unknown, index) => {
       const where = `$.${name}[${index}]`;
-      const qualified = document.formatVersion === 4 && isObject(row) && row.pluginSessionId !== undefined;
+      const qualified = (document.formatVersion === 4 || document.formatVersion === 5) && isObject(row) && row.pluginSessionId !== undefined;
       const sourceKeys = qualified ? name === 'events' ? ['id','pluginSessionId','rawTripUuid'] : name === 'samples' ? ['pluginSessionId','rawTripUuid','accountingIncluded'] : ['pluginSessionId','rawTripUuid'] : [];
       if (!isObject(row) || !sameKeys(row, [...sourceKeys,...keys])) { problem(where, 'keys differ'); return; }
       if (qualified && (!UUID.test(textOf(row.pluginSessionId)) || !UUID.test(textOf(row.rawTripUuid)) || name==='samples' && typeof row.accountingIncluded!=='boolean')) problem(where,'invalid source provenance');
@@ -134,7 +165,7 @@ export function tripExportProblems(document: unknown): string[] {
   rows('intervals', INTERVAL_KEYS, row => row.id, bounds.lastIntervalId as string | null, true);
   rows('events', EVENT_KEYS, row => row.eventSeq, bounds.committedThroughEventSeq as string);
   rows('samples', SAMPLE_KEYS, row => row.id, bounds.lastSampleId as string | null, true);
-  if(document.formatVersion===4){
+  if((document.formatVersion===4 || document.formatVersion===5)){
     if(!Array.isArray(document.sources)) problem('$.sources','not an array');
     else {let previous=0n;for(const source of document.sources){
       if(!isObject(source)||!sameKeys(source,['id','rawTripUuid','pluginSessionId','fromEventSeq','throughEventSeq','lastSampleId','lastIntervalId'])||!ROW_ID.test(textOf(source.id))||!UUID.test(textOf(source.rawTripUuid))||!UUID.test(textOf(source.pluginSessionId))||!U64.test(textOf(source.fromEventSeq))||!U64.test(textOf(source.throughEventSeq))) {problem('$.sources','invalid source');continue;}
@@ -145,7 +176,7 @@ export function tripExportProblems(document: unknown): string[] {
   for (const [index, event] of (Array.isArray(document.events) ? document.events : []).entries()) {
     if (!isObject(event) || !isObject(event.record) || event.record.type !== event.type) problem(`$.events[${index}]`, 'record type differs');
     const attribution = isObject(event) ? event.attribution : undefined;
-    if (attribution !== null && !(isObject(attribution) && sameKeys(attribution, [...(document.formatVersion===4 && attribution.logicalTripUuid!==undefined?['logicalTripUuid']:[]),'kind', 'tripUuid']))) problem(`$.events[${index}].attribution`, 'malformed');
+    if (attribution !== null && !(isObject(attribution) && sameKeys(attribution, [...((document.formatVersion===4 || document.formatVersion===5) && attribution.logicalTripUuid!==undefined?['logicalTripUuid']:[]),'kind', 'tripUuid']))) problem(`$.events[${index}].attribution`, 'malformed');
   }
   return problems;
 }

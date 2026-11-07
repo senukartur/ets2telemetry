@@ -86,6 +86,10 @@ export type I18nKey =
  | 'upload.rowReason.validation'
  | 'upload.rowReason.reconciliation'
 
+ | 'hm.ratio' | 'hm.recoverable'
+ | 'hm.diagnostic.settings-changing' | 'hm.diagnostic.settings-unavailable' | 'hm.diagnostic.profile-verification'
+ | 'hm.diagnostic.source-changed' | 'hm.diagnostic.guard-deadline' | 'hm.diagnostic.session-transition'
+ | 'hm.diagnostic.storage-failure' | 'hm.diagnostic.rule-failed'
  | 'np.title'
  | 'np.enabled'
  | 'np.source'

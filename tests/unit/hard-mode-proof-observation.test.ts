@@ -107,3 +107,23 @@ it('propagates trusted request rejection and stops without another poll', async 
   await expect(waitForHardModeProof({refresh, read, accept: () => true, record: {}, message: 'REFRESH'})).rejects.toBe(error);
   expect(read).not.toHaveBeenCalled(); expect(vi.getTimerCount()).toBe(0);
 });
+
+it('counts scheduled cached verification once while manual refreshes, polls and heartbeats have no weight or cadence effect', async () => {
+  const f = monitorFixture();
+  try {
+    await vi.advanceTimersByTimeAsync(1100);
+    expect(f.publications.filter(v=>v.check)).toHaveLength(1);
+    for (let i=0;i<2;i++) {
+      void f.monitor.refresh(true); await vi.advanceTimersByTimeAsync(1100);
+      f.monitor.heartbeat(); f.monitor.evidence(); f.monitor.status(); f.monitor.publication();
+    }
+    expect(f.publications.filter(v=>v.check)).toHaveLength(1);
+    await vi.advanceTimersByTimeAsync(1800);
+    expect(f.scans).toContain(5000);
+    expect(f.publications.filter(v=>v.check)).toHaveLength(2);
+    const checks=f.publications.flatMap(v=>v.check?[`${v.check.producer}:${v.check.sequence}`]:[]);
+    expect(new Set(checks).size).toBe(2);
+    await vi.advanceTimersByTimeAsync(15000);
+    expect(f.publications.filter(v=>v.check)).toHaveLength(5);
+  } finally {f.close();}
+});

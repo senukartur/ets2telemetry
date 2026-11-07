@@ -2,8 +2,8 @@ import React from 'react';
 import {renderToStaticMarkup} from 'react-dom/server';
 import {expect, it, vi} from 'vitest';
 import {InfoHint} from '../../apps/desktop/src/info-hint';
-import {HardModeCard} from '../../apps/desktop/src/hard-mode/card';
-import {evaluateHardMode, parseHardModeConfig} from '../../packages/telemetry-core/src/hard-mode';
+import {HardModeCard, HardModeTrip} from '../../apps/desktop/src/hard-mode/card';
+import {newHardModeDetails, evaluateHardMode, parseHardModeConfig} from '../../packages/telemetry-core/src/hard-mode';
 import {HARD_MODE_CONFIG} from '../shared/hard-mode';
 
 // ET-057: the Info-icon hint and the Hard Mode grid that uses it. Only the shadcn primitives the card imports are
@@ -47,4 +47,18 @@ it('shows no in-game fix line when every Hard Mode rule passes', () => {
   const html = renderToStaticMarkup(React.createElement(HardModeCard, {language: 'en', controller: {status: {assessment, trip: null}, now: 0, busy: false, error: false, loaded: true, check: () => undefined}}));
   expect(html).not.toContain('hard-mode-detail-rule-');
   expect(html).not.toContain('data-testid="hard-mode-fix"');
+});
+
+it.each(['en','ru'] as const)('shows current rules separately from recoverable v2 trip statistics and diagnostic reasons (%s)', language => {
+  const assessment=evaluateHardMode(parseHardModeConfig(HARD_MODE_CONFIG),0,'fixture');
+  const details={...newHardModeDetails(assessment,null),passingChecks:94,failingChecks:6,unknownChecks:7,
+    firstDiagnostic:{atUtcMs:0,code:'settings-changing' as const,rule:null,values:null},latestDiagnostic:{atUtcMs:1,code:'guard-deadline' as const,rule:null,values:null}};
+  const html=renderToStaticMarkup(React.createElement(HardModeCard,{language,controller:{status:{assessment,trip:details},now:1,busy:true,error:false,loaded:true,check:()=>undefined}}));
+  expect(html).toContain('94/100');expect(html).toContain('94%');expect(html).toContain('≥95%');expect(html).toContain('7');
+  expect(html).toContain(language==='en'?'The ratio can recover':'Доля может восстановиться');
+  expect(html).toContain(language==='en'?'Required verification deadline exceeded':'Истёк срок обязательной проверки');
+  expect(html).not.toMatch(/lost for this trip|потерян для этого рейса/);
+  const trip=renderToStaticMarkup(React.createElement(HardModeTrip,{language,qualified:false,details}));
+  expect(trip).toContain('94/100');expect(trip).toContain('≥95%');
+  expect(trip).toContain(language==='en'?'Settings changed':'Изменение настроек');
 });
