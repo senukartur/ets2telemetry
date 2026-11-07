@@ -20,6 +20,7 @@ Columns:
 
 | Entry point | Layer | REG IDs | Source | Owning card (PR) | Runs in | Protected |
 | --- | --- | --- | --- | --- | --- | --- |
+| `tests/unit/language-card-rendering.test.ts` | Node unit (Vitest) | — | — | ET-073 | PR (`npm test`) | — |
 | `tests/unit/dashboard-upload-contract.test.ts` | Node unit (Vitest) | REG-010, REG-012 | F, T | ET-103c | PR (`npm test`) | closed safe DTO/control responses, fixed-null origins, exact token/UTF8/depth bounds |
 | `tests/unit/dashboard-upload-credentials.test.ts` | Node unit, injected crypto and isolated file I/O | REG-006, REG-007, REG-012 | F, T | ET-103c | PR (`npm test`) | sync/confirm/activation order, generation/context binding, missing/orphan refusal, persistent rotation flag and reopen, failed atomic replacement preserves ciphertext, bounded cleanup, no plaintext fallback |
 | `tests/unit/dashboard-upload-http.test.ts` | Node unit, controlled request streams | REG-010, REG-011 | F, T | ET-103c | PR (`npm test`) | single flight, absolute abort, redirect/cookie isolation, fixed TLS-configuration versus transient-network classification, strict bounded/truncated response rejection |
