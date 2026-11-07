@@ -204,7 +204,8 @@ describe('simulator v1 gearbox capture (ET-050b)', () => {
 describe('simulator v1 mandatory break capture (ET-052)', () => {
   const breakOf = (a: AdapterModel) => a.published.nextMandatoryBreak;
   it('lists the channel before the placement in registration order', () => {
-    expect(CHANNELS.slice(-2)).toEqual(['mandatory.break', 'world.placement']);
+    // ET-071 registers cruise control between the break and the placement.
+    expect(CHANNELS.slice(-3)).toEqual(['mandatory.break', 'cruise_control', 'world.placement']);
     expect(CHANNELS.indexOf('mandatory.break')).toBeGreaterThan(CHANNELS.indexOf('navigation.distance'));
   });
   it('is not-observed before any callback and carries each s32 value exactly, zero and negative included', () => {
@@ -258,5 +259,60 @@ describe('simulator v1 mandatory break capture (ET-052)', () => {
     a.frame(false, {'mandatory.break': 95}, 0);
     expect(a.channel.drain()).toEqual([]);
     expect(a.channel.nextEventSeq).toBe(1n);
+  });
+});
+
+// ET-071: the optional `truck.cruise_control` channel with the native adapter's rules (docs/native-transport-v1.md, "Cruise
+// control capture"): float m/s, zero (off) a value, a value outside [0, 1000] invalid and never clamped, a callback without a
+// value not-observed, a refused registration not-supported, and a copy that does not advance the shared boundary order.
+describe('simulator v1 cruise control capture (ET-071)', () => {
+  const cruiseOf = (a: AdapterModel) => a.published.cruiseControl;
+  it('is not-observed before any callback and carries each float32 value exactly, zero and the bound included', () => {
+    const a = adapter();
+    expect(cruiseOf(a)).toEqual({available: false, reason: 'not-observed', unit: 'm/s'});
+    for (const value of [25, 0, 22.5, 1000, 0.5]) {
+      a.frame(false, {cruise_control: value}, 0);
+      expect([value, cruiseOf(a)]).toEqual([value, {available: true, value, unit: 'm/s'}]);
+    }
+  });
+  it('maps an out-of-range value to invalid, a callback without a value to not-observed and a wrong-typed one to invalid, then recovers', () => {
+    const a = adapter();
+    for (const value of [-1, -0.5, 1000.5, 4096]) {
+      a.frame(false, {cruise_control: value}, 0);
+      expect([value, cruiseOf(a)]).toEqual([value, {available: false, reason: 'invalid', unit: 'm/s'}]);
+    }
+    a.frame(false, {cruise_control: null}, 1);
+    expect(cruiseOf(a)).toEqual({available: false, reason: 'not-observed', unit: 'm/s'});
+    a.frame(false, {cruise_control: 'invalid'}, 2);
+    expect(cruiseOf(a)).toEqual({available: false, reason: 'invalid', unit: 'm/s'});
+    a.frame(false, {cruise_control: 25}, 3);
+    expect(cruiseOf(a)).toEqual({available: true, value: 25, unit: 'm/s'});
+  });
+  it('clears the reading at a timer restart and at a truck configuration unless the new frame delivers it', () => {
+    const a = adapter();
+    a.frame(false, {cruise_control: 25}, 0); a.frame(false, {speed: 5}, 1);
+    expect(cruiseOf(a)).toEqual({available: true, value: 25, unit: 'm/s'});
+    a.frame(true, {}, 2);
+    expect(cruiseOf(a)).toEqual({available: false, reason: 'not-observed', unit: 'm/s'});
+    a.frame(false, {cruise_control: 25}, 3); a.frame(true, {cruise_control: 0}, 4);
+    expect(cruiseOf(a)).toEqual({available: true, value: 0, unit: 'm/s'});
+    a.configuration('truck', [], 'terminated', 5); a.frame(false, {}, 6);
+    expect(cruiseOf(a)).toEqual({available: false, reason: 'not-observed', unit: 'm/s'});
+  });
+  it('reports not-supported whatever a frame lists when the registration is refused, and never as zero', () => {
+    const a = adapter({cruiseControl: 'not-supported'});
+    expect(cruiseOf(a)).toEqual({available: false, reason: 'not-supported', unit: 'm/s'});
+    a.frame(false, {cruise_control: 25}, 0);
+    expect(cruiseOf(a)).toEqual({available: false, reason: 'not-supported', unit: 'm/s'});
+    expect(cruiseOf(adapter({cruiseControl: 'registered'}))).toEqual({available: false, reason: 'not-observed', unit: 'm/s'});
+  });
+  it('does not advance the shared boundary order and emits no record, event or eventSeq', () => {
+    const without = adapter(), withCruise = adapter();
+    without.frame(false, {speed: 9}, 0); withCruise.frame(false, {speed: 9, cruise_control: 25}, 0);
+    expect(withCruise.published.state).toEqual(without.published.state);
+    // The published state itself never carries cruise control; the producer adds it on minor-3 connections only.
+    expect(Object.hasOwn(withCruise.published.state, 'cruiseControl')).toBe(false);
+    expect(withCruise.channel.drain()).toEqual([]);
+    expect(withCruise.channel.nextEventSeq).toBe(1n);
   });
 });

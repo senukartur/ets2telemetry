@@ -95,22 +95,30 @@ describe('CAP-01 replay mandatory break (ET-052)', () => {
     for (const step of input.transport) if (step.action === 'connect') step.client!.maxMinor = maxMinor;
     return input;
   };
-  it('serves a not-observed break on every minor-2 state message of each replayed run', () => {
+  // ET-071: the replay connection is minor 3 since the client offers it; CAP0 omits cruise control too, so it is not-observed.
+  it('serves a not-observed break and cruise control on every minor-3 state message of each replayed run', () => {
     for (const run of [2, 4, 7, 8, 9]) {
       const all = states(load(run));
       expect(all.length).toBeGreaterThan(0);
-      for (const m of all) { expect(m.version).toEqual({major: 1, minor: 2}); expect(m.data.state.nextMandatoryBreak).toEqual({available: false, reason: 'not-observed', unit: 'min'}); }
+      for (const m of all) {
+        expect(m.version).toEqual({major: 1, minor: 3}); expect(m.data.state.nextMandatoryBreak).toEqual({available: false, reason: 'not-observed', unit: 'min'});
+        expect(m.data.state.cruiseControl).toEqual({available: false, reason: 'not-observed', unit: 'm/s'});
+      }
     }
   });
-  it('serves minor 1 without the break, and minor 0 without the gearbox, to clients that offer less', () => {
+  it('serves minor 2 without cruise control, minor 1 without the break, and minor 0 without the gearbox, to clients that offer less', () => {
     for (const run of [2, 9]) {
+      for (const m of states(offering(run, 2))) {
+        expect(m.version).toEqual({major: 1, minor: 2}); expect(Object.hasOwn(m.data.state, 'cruiseControl')).toBe(false);
+        expect(m.data.state.nextMandatoryBreak).toEqual({available: false, reason: 'not-observed', unit: 'min'});
+      }
       for (const m of states(offering(run, 1))) { expect(m.version).toEqual({major: 1, minor: 1}); expect(Object.hasOwn(m.data.state, 'nextMandatoryBreak')).toBe(false); expect(m.data.state.gearbox).toBeDefined(); }
       for (const m of states(offering(run, 0))) { expect(m.version).toEqual({major: 1, minor: 0}); expect(Object.hasOwn(m.data.state, 'nextMandatoryBreak')).toBe(false); expect(Object.hasOwn(m.data.state, 'gearbox')).toBe(false); }
     }
   });
   it('leaves the events, the ledger and the store of a run unchanged whatever minor the client offers', () => {
     const at = (maxMinor: number) => { const r = replayV1(offering(2, maxMinor)); return {events: r.transcript.flatMap(l => l.message.kind === 'event' ? [l.message.data.record] : []), ledger: r.ledger, retained: r.store.retainedEntries}; };
-    expect(at(1)).toEqual(at(2)); expect(at(0)).toEqual(at(2));
+    expect(at(2)).toEqual(at(3)); expect(at(1)).toEqual(at(3)); expect(at(0)).toEqual(at(3));
   });
 });
 
@@ -123,11 +131,11 @@ describe('CAP-01 replay gearbox (ET-050b)', () => {
   const twelve = slots([[-1, 1, 0], [-3, 1, 1], [-2, 1, 2], [-4, 1, 3], [1, 2, 0], [7, 2, 1], [2, 2, 2], [8, 2, 3], [3, 3, 0], [9, 3, 1], [4, 3, 2], [10, 3, 3],
     [5, 4, 0], [11, 4, 1], [6, 4, 2], [12, 4, 3]]);
   const states = (run: number) => replay(run).result.transcript.flatMap(l => l.message.kind === 'snapshot' || l.message.kind === 'checkpoint' ? [l.message] : []);
-  it('serves the gearbox on every state message of the replay connection, which is minor 2 since the client offers it (ET-052)', () => {
+  it('serves the gearbox on every state message of the replay connection, which is minor 3 since the client offers it (ET-052, ET-071)', () => {
     for (const run of [2, 4, 7, 8, 9]) {
       const all = states(run);
       expect(all.length).toBeGreaterThan(0);
-      for (const m of all) { expect(m.version).toEqual({major: 1, minor: 2}); expect(m.data.state.gearbox).toBeDefined(); }
+      for (const m of all) { expect(m.version).toEqual({major: 1, minor: 3}); expect(m.data.state.gearbox).toBeDefined(); }
     }
   });
   it('carries the ATS Mack 18F/4R layout once run4 and run7 configured their trucks', () => {

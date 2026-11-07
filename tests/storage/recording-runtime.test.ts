@@ -336,7 +336,7 @@ describe('ET-015c recording runtime with the real storage worker and the real sh
 class CoordinatedSocket extends EventEmitter {
   authority: GameTarget['source']; target: GameTarget; readonly sent: ClientMessage[] = []; destroyed = false;
   constructor(target: GameTarget) {super(); this.target = target; this.authority = target.source;}
-  write(bytes: Uint8Array) {this.sent.push(decodePayload(bytes.subarray(4), 'client', {maxMinor: 2}) as ClientMessage);}
+  write(bytes: Uint8Array) {this.sent.push(decodePayload(bytes.subarray(4), 'client', {maxMinor: 3}) as ClientMessage);}
   destroy() {this.destroyed = true;}
   feed(message: ServerMessage) {this.emit('data', encodeFrame({...message, source: this.authority}));}
   get acks() {return this.sent.flatMap(message => message.kind === 'ack' ? [message.data.throughEventSeq] : []);}

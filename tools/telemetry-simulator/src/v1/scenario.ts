@@ -123,8 +123,8 @@ function policy(v: unknown, path: string, connectAt: number): ClientPolicy & {pr
   const probes = opt(o, 'probes', raw => arr(raw, `${path}.probes`, 100).map((t, i) => {
     const at = int(t, `${path}.probes[${i}]`, connectAt + 1, MAX_AT_MS); if (at < last + 1_000) fail(`${path}.probes[${i}]`, 'probes must be at least 1,000 ms apart'); last = at; return at;
   }), []);
-  // ET-050b B1, ET-052: the hello's offer, 0 to 2; omitted, the client offers minor 2.
-  const maxMinor = Object.hasOwn(o, 'maxMinor') ? int(o.maxMinor, `${path}.maxMinor`, 0, 2) as 0 | 1 | 2 : undefined;
+  // ET-050b B1, ET-052, ET-071: the hello's offer, 0 to 3; omitted, the client offers minor 3.
+  const maxMinor = Object.hasOwn(o, 'maxMinor') ? int(o.maxMinor, `${path}.maxMinor`, 0, 3) as 0 | 1 | 2 | 3 : undefined;
   return {durable, commit, ack, probes, ...(maxMinor === undefined ? {} : {maxMinor})};
 }
 
@@ -153,6 +153,7 @@ export function sourceStep(v: unknown, path: string, source: Scenario['source'])
       const o = obj(v, path, ['atMs', 'action'], ['timerRestart', 'channels']);
       const frame = opt(o, 'channels', raw => channels(raw, `${path}.channels`), {});
       if (source.mandatoryBreak === 'not-supported' && Object.hasOwn(frame, 'mandatory.break')) fail(path, 'the mandatory.break callback is not registered in this session');
+      if (source.cruiseControl === 'not-supported' && Object.hasOwn(frame, 'cruise_control')) fail(path, 'the cruise_control callback is not registered in this session');
       return {atMs: at(o), action, timerRestart: opt(o, 'timerRestart', raw => bool(raw, `${path}.timerRestart`), false), channels: frame};
     }
     case 'gameMode': {
@@ -202,7 +203,7 @@ export function validateScenario(input: unknown): Scenario {
   if (origin === 'replay' && !provenance) fail('$.provenance', 'replay requires capture provenance');
   const reg = arr(o.reg, '$.reg', 18).map((r, i) => { const s = str(r, `$.reg[${i}]`); if (!/^REG-0(0[1-9]|1[0-8])$/.test(s)) fail(`$.reg[${i}]`); return s; });
   if (!reg.length || new Set(reg).size !== reg.length) fail('$.reg', 'unique REG identifiers expected');
-  const s = obj(o.source, '$.source', ['versions', 'gameplayEvents', 'currency', 'gameMode'], ['startEventSeq', 'mandatoryBreak', 'highestMinor']);
+  const s = obj(o.source, '$.source', ['versions', 'gameplayEvents', 'currency', 'gameMode'], ['startEventSeq', 'mandatoryBreak', 'cruiseControl', 'highestMinor']);
   const v = obj(s.versions, '$.source.versions', ['telemetryApi', 'gameTelemetry', 'sdkArchive']);
   const pair = (p: unknown, path: string) => { const x = obj(p, path, ['major', 'minor']); return {major: int(x.major, `${path}.major`, 0, 65_535), minor: int(x.minor, `${path}.minor`, 0, 65_535)}; };
   const sdkArchive = str(v.sdkArchive, '$.source.versions.sdkArchive');
@@ -215,8 +216,10 @@ export function validateScenario(input: unknown): Scenario {
     startEventSeq: opt(s, 'startEventSeq', raw => { if (!isUint64(raw) || BigInt(raw) < 1n || BigInt(raw) > BigInt(MAX_EVENT_SEQ)) fail('$.source.startEventSeq'); return BigInt(raw); }, 1n),
     // ET-052: omitted, the channel is registered; an explicit value keeps a scenario's intent readable.
     ...(Object.hasOwn(s, 'mandatoryBreak') ? {mandatoryBreak: oneOf(s.mandatoryBreak, '$.source.mandatoryBreak', ['registered', 'not-supported'] as const)} : {}),
-    // ET-052: a simulated older plugin; omitted, the plugin serves up to minor 2.
-    ...(Object.hasOwn(s, 'highestMinor') ? {highestMinor: int(s.highestMinor, '$.source.highestMinor', 0, 2) as 0 | 1 | 2} : {})
+    // ET-071: omitted, the channel is registered.
+    ...(Object.hasOwn(s, 'cruiseControl') ? {cruiseControl: oneOf(s.cruiseControl, '$.source.cruiseControl', ['registered', 'not-supported'] as const)} : {}),
+    // ET-052, ET-071: a simulated older plugin; omitted, the plugin serves up to minor 3.
+    ...(Object.hasOwn(s, 'highestMinor') ? {highestMinor: int(s.highestMinor, '$.source.highestMinor', 0, 3) as 0 | 1 | 2 | 3} : {})
   };
   const steps = arr(o.steps, '$.steps', MAX_STEPS).map((x, i) => sourceStep(x, `$.steps[${i}]`, source));
   const faultInjection = opt(o, 'faultInjection', raw => bool(raw, '$.faultInjection'), false);

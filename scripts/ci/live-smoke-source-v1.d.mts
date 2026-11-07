@@ -13,6 +13,8 @@ export interface LiveSmokeSourceV1 {
   setTruckId(id: string | undefined): void;
   /** ET-052: the next mandatory break of the following state messages, a wire measure of unit min; undefined restores 95 minutes. */
   setBreak(measure: {available: true; value: number; unit: 'min'} | {available: false; reason: string; unit: 'min'} | undefined): void;
+  /** ET-071: the cruise control of the following state messages, a wire measure of unit m/s; undefined restores 25 m/s. */
+  setCruiseControl(measure: {available: true; value: number; unit: 'm/s'} | {available: false; reason: string; unit: 'm/s'} | undefined): void;
   statistics(): LiveSmokeSourceV1Statistics;
 }
 export function startLiveSmokeSourceV1(checkout: string): Promise<LiveSmokeSourceV1>;

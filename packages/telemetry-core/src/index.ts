@@ -10,6 +10,8 @@ export * from './format';
 export * from './gear-labels';
 // The next mandatory break (ET-052).
 export * from './mandatory-break';
+// The cruise control set speed (ET-071).
+export * from './cruise-control';
 export * from './derived';
 export * from './live-view';
 // Pure trip lifecycle and completeness reducer (ET-014); see docs/trips.md.

@@ -119,9 +119,10 @@ describe('simulator v1 mandatory break scenarios (ET-052)', () => {
   it.each([[45.5], [2147483648], [-2147483649], ['95'], [true], [{}]])('rejects the frame channel mandatory.break = %j', value => {
     expect(() => validateScenario(withBreak(value))).toThrow(/Invalid simulator v1 scenario/);
   });
-  it.each([[0], [1], [2]])('accepts the client offer maxMinor %d and rejects 3 and a fraction', maxMinor => {
+  // ET-071 widened the offer to 3; 4 is the first rejected maximum.
+  it.each([[0], [1], [2], [3]])('accepts the client offer maxMinor %d and rejects 4 and a fraction', maxMinor => {
     expect(validateScenario(variant(clientMinor(maxMinor))).transport[0]).toMatchObject({client: {maxMinor}});
-    expect(() => validateScenario(variant(clientMinor(3)))).toThrow(/maxMinor/);
+    expect(() => validateScenario(variant(clientMinor(4)))).toThrow(/maxMinor/);
     expect(() => validateScenario(variant(s => { (transport(s)[0].client as Json).maxMinor = 1.5; }))).toThrow(/maxMinor/);
     expect(() => validateScenario(variant(s => { (transport(s)[0].client as Json).maxMinor = '2'; }))).toThrow(/maxMinor/);
   });
@@ -132,10 +133,10 @@ describe('simulator v1 mandatory break scenarios (ET-052)', () => {
     expect(() => validateScenario(variant(s => { source(s).mandatoryBreak = 'maybe'; }))).toThrow(/one of/);
     expect(() => validateScenario(variant(s => { source(s).mandatoryBreak = 'not-supported'; (frames(s)[0].channels as Json)['mandatory.break'] = 5; }))).toThrow(/not registered/);
   });
-  it('serves a changing break on minor 2 by default: 95, then 0, with not-observed before the first callback', () => {
+  it('serves a changing break on minor 3 by default (ET-071): 95, then 0, with not-observed before the first callback', () => {
     const s = withBreak(95, 0), all = states(s);
     const breaks = all.map(m => m.data.state.nextMandatoryBreak);
-    expect(all.every(m => m.version.minor === 2)).toBe(true);
+    expect(all.every(m => m.version.minor === 3)).toBe(true);
     // The checkpoint precedes the first frame; the snapshots then follow the frames at 100 ms and 200 ms.
     expect(breaks[0]).toEqual({available: false, reason: 'not-observed', unit: 'min'});
     expect(breaks).toContainEqual({available: true, value: 95, unit: 'min'});
@@ -151,7 +152,7 @@ describe('simulator v1 mandatory break scenarios (ET-052)', () => {
   });
   it('serves minor 1 or minor 0 bytes without the break to a client that offers less, with the same events and ledger', () => {
     const at = (maxMinor: number) => { const s = withBreak(95, 0); clientMinor(maxMinor)(s); return replayV1(s); };
-    const full = at(2);
+    const full = at(3);
     for (const [maxMinor, gearbox] of [[1, true], [0, false]] as const) {
       const result = at(maxMinor), all = result.transcript.flatMap(l => l.message.kind === 'checkpoint' || l.message.kind === 'snapshot' ? [l.message] : []);
       expect(all.length).toBeGreaterThan(0);
@@ -160,27 +161,76 @@ describe('simulator v1 mandatory break scenarios (ET-052)', () => {
       expect(result.transcript.flatMap(l => l.message.kind === 'event' ? [l.message.data.record] : [])).toEqual(full.transcript.flatMap(l => l.message.kind === 'event' ? [l.message.data.record] : []));
     }
   });
-  it.each([[0], [1], [2]])('models a simulated older plugin with source.highestMinor %d: a minor-2 offer is answered with its own highest minor', highestMinor => {
+  it.each([[0], [1], [2], [3]])('models a simulated older plugin with source.highestMinor %d: a minor-3 offer is answered with its own highest minor', highestMinor => {
     const s = withBreak(95, 0); source(s).highestMinor = highestMinor;
     expect(validateScenario(s).source.highestMinor).toBe(highestMinor);
     const all = states(s), full = replayV1(withBreak(95, 0));
     expect(all.length).toBeGreaterThan(0);
     for (const m of all) {
       expect(m.version.minor).toBe(highestMinor);
-      expect([Object.hasOwn(m.data.state, 'gearbox'), Object.hasOwn(m.data.state, 'nextMandatoryBreak')]).toEqual([highestMinor >= 1, highestMinor >= 2]);
+      expect([Object.hasOwn(m.data.state, 'gearbox'), Object.hasOwn(m.data.state, 'nextMandatoryBreak'), Object.hasOwn(m.data.state, 'cruiseControl')])
+        .toEqual([highestMinor >= 1, highestMinor >= 2, highestMinor >= 3]);
     }
     const older = replayV1(s);
     expect(older.ledger).toEqual(full.ledger);
     expect(older.transcript.flatMap(l => l.message.kind === 'event' ? [l.message.data.record] : [])).toEqual(full.transcript.flatMap(l => l.message.kind === 'event' ? [l.message.data.record] : []));
   });
-  it('rejects a highest minor above 2, a fraction and a string', () => {
-    for (const value of [3, 1.5, '1', -1]) expect(() => validateScenario(variant(s => { source(s).highestMinor = value; }))).toThrow(/highestMinor/);
+  it('rejects a highest minor above 3, a fraction and a string', () => {
+    for (const value of [4, 1.5, '1', -1]) expect(() => validateScenario(variant(s => { source(s).highestMinor = value; }))).toThrow(/highestMinor/);
   });
   it('gives the same events and the same boundary orders whether or not the game provides the break channel', () => {
     const plain = replayV1(base()), withChannel = replayV1(withBreak(95, 0));
     const boundaries = (r: typeof plain) => r.transcript.flatMap(l => l.message.kind === 'event' ? [l.message.data.occurred.boundaryOrder] : []);
     expect(boundaries(withChannel)).toEqual(boundaries(plain));
     expect(withChannel.ledger).toEqual(plain.ledger);
+  });
+});
+
+// ET-071: the cruise control channel in scenarios, with the break's rules: a float32 m/s value, null or "invalid"; an
+// optional refused registration; minor 3 only.
+describe('simulator v1 cruise control scenarios (ET-071)', () => {
+  const frames = (s: Json) => steps(s).filter(step => step.action === 'frame');
+  const withCruise = (first: unknown, second?: unknown) => variant(s => {
+    (frames(s)[0].channels as Json)['cruise_control'] = first;
+    if (second !== undefined) (frames(s)[1].channels as Json)['cruise_control'] = second;
+  });
+  const states = (s: Json) => replayV1(s).transcript.flatMap(l => l.message.kind === 'checkpoint' || l.message.kind === 'snapshot' ? [l.message] : []);
+
+  it.each([[25], [0], [22.5], [1000], [-1], [1000.5], [null], ['invalid']])('accepts the frame channel cruise_control = %j', value => {
+    expect((frames(validateScenario(withCruise(value)) as unknown as Json)[0]).channels).toMatchObject({'cruise_control': value});
+  });
+  it.each([[0.1], ['25'], [true], [{}]])('rejects the frame channel cruise_control = %j', value => {
+    expect(() => validateScenario(withCruise(value))).toThrow(/Invalid simulator v1 scenario/);
+  });
+  it('accepts the optional source cruiseControl option and rejects another value or a reading the session did not register', () => {
+    expect(validateScenario(variant(s => { source(s).cruiseControl = 'not-supported'; })).source.cruiseControl).toBe('not-supported');
+    expect(validateScenario(base()).source).not.toHaveProperty('cruiseControl');
+    expect(() => validateScenario(variant(s => { source(s).cruiseControl = 'maybe'; }))).toThrow(/one of/);
+    expect(() => validateScenario(variant(s => { source(s).cruiseControl = 'not-supported'; (frames(s)[0].channels as Json)['cruise_control'] = 25; }))).toThrow(/not registered/);
+  });
+  it('serves a set speed, then off, on minor 3, with not-observed before the first callback', () => {
+    const all = states(withCruise(25, 0)), cruise = all.map(m => m.data.state.cruiseControl);
+    expect(all.every(m => m.version.minor === 3)).toBe(true);
+    expect(cruise[0]).toEqual({available: false, reason: 'not-observed', unit: 'm/s'});
+    expect(cruise).toContainEqual({available: true, value: 25, unit: 'm/s'});
+    expect(cruise.at(-1)).toEqual({available: true, value: 0, unit: 'm/s'});
+  });
+  it('serves an out-of-range value as invalid and the unavailable readings unchanged', () => {
+    expect(states(withCruise(1000.5, -1)).at(-1)!.data.state.cruiseControl).toEqual({available: false, reason: 'invalid', unit: 'm/s'});
+    expect(states(withCruise(null, null)).at(-1)!.data.state.cruiseControl).toEqual({available: false, reason: 'not-observed', unit: 'm/s'});
+    expect(states(withCruise('invalid', 'invalid')).at(-1)!.data.state.cruiseControl).toEqual({available: false, reason: 'invalid', unit: 'm/s'});
+    expect(states(variant(s => { source(s).cruiseControl = 'not-supported'; })).at(-1)!.data.state.cruiseControl).toEqual({available: false, reason: 'not-supported', unit: 'm/s'});
+  });
+  it('serves minor 2 bytes without cruise control to a client that offers 2, with the same events, ledger and boundary orders', () => {
+    const offer2 = withCruise(25, 0); (transport(offer2)[0].client as Json).maxMinor = 2;
+    const older = replayV1(offer2), full = replayV1(withCruise(25, 0)), plain = replayV1(base());
+    const olderStates = older.transcript.flatMap(l => l.message.kind === 'checkpoint' || l.message.kind === 'snapshot' ? [l.message] : []);
+    expect(olderStates.length).toBeGreaterThan(0);
+    for (const m of olderStates) { expect(m.version.minor).toBe(2); expect(Object.hasOwn(m.data.state, 'cruiseControl')).toBe(false); }
+    const records = (r: typeof full) => r.transcript.flatMap(l => l.message.kind === 'event' ? [l.message.data.record] : []);
+    const boundaries = (r: typeof full) => r.transcript.flatMap(l => l.message.kind === 'event' ? [l.message.data.occurred.boundaryOrder] : []);
+    expect(older.ledger).toEqual(full.ledger); expect(records(older)).toEqual(records(full));
+    expect(boundaries(full)).toEqual(boundaries(plain)); expect(full.ledger).toEqual(plain.ledger);
   });
 });
 

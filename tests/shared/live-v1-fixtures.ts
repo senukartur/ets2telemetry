@@ -47,6 +47,8 @@ export interface V1Options {
   receivedMonotonicMs?: number;
   /** ET-052: the projection's next mandatory break; by default what the fixture carries, or not-supported below minor 2. */
   nextMandatoryBreak?: Measure<'min'>;
+  /** ET-071: the projection's cruise control; by default what the fixture carries, or not-supported below minor 3. */
+  cruiseControl?: Measure<'m/s'>;
 }
 /** The live v1 projection of a v1 fixture message, by hand: the state without its window and two status fields. */
 export function v1Projection(name = 'snapshot-live', options: V1Options = {}): LiveTelemetryV1 {
@@ -56,6 +58,8 @@ export function v1Projection(name = 'snapshot-live', options: V1Options = {}): L
   state.gearbox ??= {forwardGears: {available: false, reason: 'not-supported'}, reverseGears: {available: false, reason: 'not-supported'}, hshifter: {available: false, reason: 'not-supported'}};
   // ET-052 MB5: likewise the next mandatory break; a minor-0 or minor-1 fixture carries none, so it is not-supported.
   state.nextMandatoryBreak = structuredClone(options.nextMandatoryBreak ?? state.nextMandatoryBreak ?? {available: false, reason: 'not-supported', unit: 'min'});
+  // ET-071: likewise cruise control; a fixture below minor 3 carries none, so it is not-supported.
+  state.cruiseControl = structuredClone(options.cruiseControl ?? state.cruiseControl ?? {available: false, reason: 'not-supported', unit: 'm/s'});
   const job = state.configuration.job;
   if ((options.ids ?? 'v0') === 'v0' && job.available) {
     job.value.cargoId = {available: true, value: 'cargo.logs'};
@@ -74,8 +78,9 @@ export function v1Projection(name = 'snapshot-live', options: V1Options = {}): L
 }
 /** The smoke pair: the v0 smoke checkpoint with the v1 projection of snapshot-live carrying the same job ids. */
 export function smokePair(v1: V1Options = {}, v0Patch: Partial<LiveTelemetry> = {}): LiveTelemetry {
-  // ET-052: the smoke source serves minor-2 states with a next mandatory break of 95 game minutes (scripts/ci/live-smoke-source-v1.mjs).
-  return {...smokeV0(v0Patch), v1: v1Projection('snapshot-live', {nextMandatoryBreak: {available: true, value: 95, unit: 'min'}, ...v1})};
+  // ET-052: the smoke source serves states with a next mandatory break of 95 game minutes (scripts/ci/live-smoke-source-v1.mjs).
+  // ET-071: they are minor 3 and also carry a cruise control set speed of 25 m/s.
+  return {...smokeV0(v0Patch), v1: v1Projection('snapshot-live', {nextMandatoryBreak: {available: true, value: 95, unit: 'min'}, cruiseControl: {available: true, value: 25, unit: 'm/s'}, ...v1})};
 }
 /** A service-internal v1 source state of a fixture, with the service-only fields the projection must drop. */
 export function v1SourceState(name = 'snapshot-live', patch: Partial<V1SourceState> = {}): V1SourceState {
