@@ -171,6 +171,8 @@ export const APP_COPY_KEYS: Readonly<Record<string, I18nKey>> = Object.freeze(ch
   "Discontinuity": "copy.discontinuity",
   "Restored database": "copy.restored-database",
   "opened while a save was loading": "copy.opened-while-a-save-was-loading",
+  "distance or fuel accounting interrupted": "copy.accounting-chain-break",
+  "first job configured after an observed empty menu": "copy.menu-job-acceptance",
   "recording started during the job": "copy.recording-started-during-the-job",
   "job began before recording": "copy.job-began-before-recording",
   "continues a trip closed by a restart": "copy.continues-a-trip-closed-by-a-restart",

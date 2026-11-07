@@ -2,11 +2,18 @@ import {overlayPresentation} from '../../apps/desktop/src/overlay-presentation';
 import {expect, it} from 'vitest';
 import * as format from '../../packages/telemetry-core/src/format';
 import {resolveDisplayUnits} from '../../packages/telemetry-core/src/display-profile';
-import {localizedMeasurement} from '../../apps/desktop/src/screens/app-copy';
+import {appCopy, localizedMeasurement} from '../../apps/desktop/src/screens/app-copy';
+import {JOURNAL_INTERVAL_CAUSE_TEXT} from '../../apps/desktop/src/strings';
 import {localizeDeadlineString, localizeGameTimeString} from '../../apps/desktop/src/i18n';
 import {overlayView, OVERLAY_PLACEHOLDER} from '../../apps/desktop/src/overlay-view';
 import {liveDashboardText} from '../../apps/desktop/src/live-dashboard-text';
 import {smokePair} from '../shared/live-v1-fixtures';
+it.each([
+  ['accounting-chain-break','расчёт пробега или топлива прерван'],
+  ['menu-job-acceptance','первый заказ взят после наблюдаемого пустого меню']
+])('localizes Journal diagnostic %s through the application copy mapping', (cause,expected)=>{
+  expect(appCopy(JOURNAL_INTERVAL_CAUSE_TEXT[cause],'ru')).toBe(expected);
+});
 it.each(['ets2', 'ats'] as const)('binds every real formatter unit to EN/RU localization for both %s profiles', game => {
   for (const profile of ['metric', 'us-customary'] as const) {
     const u = resolveDisplayUnits(game, {profile});

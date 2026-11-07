@@ -84,7 +84,7 @@ export function associate(db: Database.Database, row: LogicalRow, proof: Profile
 
     db.prepare('UPDATE logical_trips SET latest_trip_ref = ?, member_count = member_count + 1, accounting_rebased=1,canonical_constraints=? WHERE id = ?').run(row.id,JSON.stringify(combined), id);
     revise(db,abandonedGroup);
-    if (coverage) pendingCoverage = {...coverage,...(ownAcceptancePending?{acceptancePending:true}:{}), member: String(row.id), phase: 'pending', endpoint: latestEndpoint(db, coverage.endpoint, candidate.progress_head, candidate.latest_trip_ref),
+    if (coverage) pendingCoverage = {...coverage,...(ownAcceptancePending?{acceptancePending:true}:{}), sampleResumePending:false, member: String(row.id), phase: 'pending', endpoint: latestEndpoint(db, coverage.endpoint, candidate.progress_head, candidate.latest_trip_ref),
       window: {session: String(row.plugin_session_ref), opened: row.opened_event_ref === null ? null : (row.opened_event_ref as bigint).toString()}};
   } else {
     // Conflicting/ambiguous candidates are retired permanently; their outcome remains unknown.
@@ -185,7 +185,7 @@ export function projectEffects(db: Database.Database, effects: TripEffect[] | un
 }
 
 /** Sample endpoints, membership and the selected accounting head commit together. Raw samples are never rewritten. */
-export function projectSample(db: Database.Database, session: {game: string; process_instance_uuid: string}, pluginSessionId: string, sample: SampleInput, sampleId: bigint): void {
+export function projectSample(db: Database.Database, session: {game: string; process_instance_uuid: string}, pluginSessionId: string, sample: SampleInput, sampleId: bigint, now: number): void {
   if (!logicalEnabled(db) || !sample.tripUuid || !sample.recording) return;
   const row = get(db, 'SELECT * FROM trips WHERE trip_uuid = ?', sample.tripUuid)!;
   if(sample.recording.processInstanceId!==session.process_instance_uuid) fail('INVALID_INPUT');
@@ -214,9 +214,10 @@ export function projectSample(db: Database.Database, session: {game: string; pro
   const linked=predecessor && (captured || head && head.trip_ref===row.id) && predecessor.tripUuid===sample.tripUuid && predecessor.sourceClockId===previous?.anchor.sourceClockId && predecessor.monotonicNs===previous?.anchor.monotonicNs;
   const distance = previous ? gameDistanceStep({...previous.anchor, speedMps: previous.anchor.speedMps ?? null, gameMinutes: previous.anchor.gameMinutes ?? null, position: previous.anchor.position ?? null},
     {...anchor, speedMps: anchor.speedMps ?? null, gameMinutes: anchor.gameMinutes ?? null, position: anchor.position ?? null}, elapsed) : null;
+  const transfer = !!previous && transferBoundary(db,row,previous.anchor,anchor);
   const continuous = elapsed > 0 && elapsed < 5 && !!linked && sameSource && previous?.anchor.gameClockId===anchor.gameClockId && distance?.kind === 'continuous'
-    && !transferBoundary(db,row,previous.anchor,anchor);
-  const unchangedBoundary=!!captured && continuous && !!previous && matchesEndpoint(previous.anchor,anchor);
+    && !transfer;
+  const unchangedBoundary=!!captured && continuous && !!previous && matchesEndpoint(db,previous.anchor,anchor);
   let value = unchangedBoundary ? {...previous,anchor} : advanceProgress(previous, anchor, continuous);
   if(unchangedBoundary && !matchesSavedEndpoint(previous.anchor,anchor,false))db.prepare('UPDATE logical_trips SET accounting_rebased=1 WHERE id=?').run(id);
   let prefix: unknown = captured ? captured.head === null ? null : BigInt(captured.head) : head?.prefix_ref ?? null, start: unknown = captured ? null : head?.start_ref ?? head?.id ?? null;
@@ -225,7 +226,20 @@ export function projectSample(db: Database.Database, session: {game: string; pro
   if(unresolvedSaved)value={anchor,distanceM:{available:false,reason:'not-observed'},fuelUsedL:{available:false,reason:'not-observed'}};
   const bootstrap = !unresolvedSaved && !captured && previous && head?.prefix_ref === null && head.start_ref === null && previous.distanceM.available && previous.distanceM.value === 0 && previous.anchor.gameMinutes === null;
   if (bootstrap && !continuous) value = advanceProgress(null, anchor, false);
-  if (!unresolvedSaved && previous && !captured && !bootstrap && (!continuous || delta !== null && delta < 0)) {
+  // Missing game minutes may defer the one saved-baseline search, while physical readings prove the same stopped point.
+  const firstLoadedSample=!continuous && head?.trip_ref!==row.id;
+  const waiting=coverage?.sampleResumePending===true;
+  const stationary=coverage?.endpoint && Math.max(Math.abs(coverage.endpoint.anchor.speedMps??Infinity),Math.abs(anchor.speedMps??Infinity))<=0.05
+    && matchesSavedEndpoint({...coverage.endpoint.anchor,gameMinutes:'0'},{...anchor,gameMinutes:'0'});
+  const resumeSample=firstLoadedSample || waiting && continuous && stationary && Math.abs(previous?.anchor.speedMps??Infinity)<=0.05;
+  const waitingForMinute=!!(resumeSample && stationary && anchor.gameMinutes===null && completeEndpoint({...anchor,gameMinutes:'0'}));
+  const saved=resumeSample && completeEndpoint(anchor) && coverage?.phase==='pending' && proof!==undefined && cleanLoadWindow(db,row)
+    ?retainedEndpoint(db,id,group.progress_head,coverage.endpoint,anchor):undefined;
+  if(saved?.kind==='matched'){
+    value={anchor,distanceM:saved.endpoint.distanceM,fuelUsedL:saved.endpoint.fuelUsedL};
+    prefix=saved.endpoint.head===null?null:BigInt(saved.endpoint.head);start=null;
+    db.prepare('UPDATE logical_trips SET accounting_rebased=1 WHERE id=?').run(id);
+  } else if (!unresolvedSaved && previous && !captured && !bootstrap && (!continuous || delta !== null && delta < 0)) {
     // Walk span prefixes, not per-sample history. Every run points directly to its start and retained prefix.
     let cursor = head, matched: {value: ProgressCheckpoint; prefix: unknown; start: unknown; end: LogicalRow} | undefined;
     let runs = 0;
@@ -251,16 +265,39 @@ export function projectSample(db: Database.Database, session: {game: string; pro
       prefix = delta!==null && delta<0 ? null : head?.id ?? null; start = null;
     }
   }
+  if(previous && (previous.distanceM.available && !value.distanceM.available || previous.fuelUsedL.available && !value.fuelUsedL.available)){
+    const reason=!sameSource?'source-changed':!predecessor?'missing-predecessor':!linked?'predecessor-mismatch'
+      :elapsed<=0?'nonpositive-time':elapsed>=5?'reading-hole':previous.anchor.truck!==anchor.truck?'truck-changed'
+      :previous.anchor.gameClockId!==anchor.gameClockId?'game-clock-changed':transfer?'transfer-boundary'
+      :distance?.kind==='discontinuity'?distance.cause:distance?.kind==='unavailable'?'channels-unavailable':'prefix-unproven';
+    const detail={annotation:true,cause:'accounting-chain-break',version:1,reason,recorderReset:sample.recording.predecessorReset??null,
+      distanceLost:previous.distanceM.available&&!value.distanceM.available,fuelLost:previous.fuelUsedL.available&&!value.fuelUsedL.available,
+      predecessorPresent:!!predecessor,predecessorMatches:!!linked,profileQualified:!!proof,sameSource,elapsedSeconds:sameSource?elapsed:null,
+      odometerDeltaM:delta,gameMinutesBefore:previous.anchor.gameMinutes??null,gameMinutesAfter:anchor.gameMinutes??null,
+      sameTruck:previous.anchor.truck!==null&&previous.anchor.truck===anchor.truck,sameGameClock:previous.anchor.gameClockId===anchor.gameClockId,
+      odometerStep:distance?.kind??null,transferBoundary:transfer,speedBeforeMps:previous.anchor.speedMps??null,speedAfterMps:anchor.speedMps??null,
+      fuelDeltaL:previous.anchor.fuelL===null||anchor.fuelL===null?null:previous.anchor.fuelL-anchor.fuelL,
+      positionDeltaM:previous.anchor.position&&anchor.position?Math.hypot(previous.anchor.position.x-anchor.position.x,previous.anchor.position.y-anchor.position.y,previous.anchor.position.z-anchor.position.z):null};
+    db.prepare(`INSERT INTO completeness_intervals(plugin_session_ref,trip_ref,kind,end_utc_ms,end_monotonic_ns,source_clock_ref,detail_json,created_utc_ms)
+      VALUES(?,?,'discontinuity',?,?,(SELECT source_clock_ref FROM samples WHERE id=?),?,?)`)
+      .run(row.plugin_session_ref,row.id,sample.utcMs,sample.monotonicNs.padStart(20,'0'),sampleId,JSON.stringify(detail),now);
+  }
   const result = db.prepare(`INSERT INTO logical_progress(logical_ref,trip_ref,anchor_sample_ref,sample_ref,bound_sample_ref,prefix_ref,start_ref,truck_ref,odometer_m,start_odometer_m,distance_m,fuel_used_l)
     VALUES(?,?,?,?,?,?,?,?,?,?,?,?)`).run(id, row.id, sampleId,sampleId, sampleId, prefix, start, truckRef, anchor.odometerM,
     start === null ? captured?.anchor.odometerM ?? anchor.odometerM : get(db, 'SELECT odometer_m FROM logical_progress WHERE id = ?', start)?.odometer_m ?? null,
     value.distanceM.available ? value.distanceM.value : null, value.fuelUsedL.available ? value.fuelUsedL.value : null);
   if (captured && continuous && prefix === null) db.prepare('UPDATE logical_progress SET start_ref=id WHERE id=?').run(result.lastInsertRowid);
   db.prepare('UPDATE logical_trips SET progress_head = ? WHERE id = ?').run(result.lastInsertRowid, id);
-  if (coverage?.phase === 'pending' && coverage.member === String(row.id) && coverage.window?.session === String(row.plugin_session_ref) && coverage.endpoint && cleanLoadWindow(db, row)) {
-    if (matchesEndpoint(coverage.endpoint.anchor, anchor)) revise(db, id, {...coverage, phase: 'resumed', window: null,
-      endpoint: {...coverage.endpoint, trip: String(row.id), anchor, head: String(result.lastInsertRowid),running:undefined}});
-    else if (completeEndpoint(coverage.endpoint.anchor) && completeEndpoint(anchor)) revise(db, id, {...coverage, losses: coverage.losses | COVERAGE_LOSS.unknown});
+  if ((firstLoadedSample || waiting) && coverage?.phase === 'pending' && coverage.member === String(row.id) && coverage.window?.session === String(row.plugin_session_ref) && coverage.endpoint) {
+    if(saved?.kind==='matched')revise(db,id,{...coverage,phase:'resumed',window:null,sampleResumePending:false,
+      endpoint:{...saved.endpoint,trip:String(row.id),anchor,head:String(result.lastInsertRowid),running:undefined}});
+    else if(waitingForMinute && proof!==undefined && (waiting || cleanLoadWindow(db,row))){
+      if(!waiting)revise(db,id,{...coverage,sampleResumePending:true});
+    } else {
+      // An incomplete or not-yet-qualified first reading is not evidence of a loss. A broken deferred chain is.
+      const lost=(waiting && !resumeSample) || (proof!==undefined && completeEndpoint(coverage.endpoint.anchor) && completeEndpoint(anchor));
+      revise(db,id,{...coverage,sampleResumePending:false,losses:coverage.losses|(lost?COVERAGE_LOSS.unknown:0)});
+    }
   }
 }
 
@@ -285,9 +322,27 @@ function transferBoundary(db: Database.Database, row: LogicalRow, a: ProgressAnc
 function completeEndpoint(a: ProgressAnchor): boolean {
   return a.truck !== null && a.odometerM !== null && a.fuelL !== null && a.gameMinutes !== null && a.gameMinutes !== undefined && a.position !== null && a.position !== undefined;
 }
-function matchesEndpoint(a: ProgressAnchor, b: ProgressAnchor): boolean {
-  return matchesSavedEndpoint(a,b);
+function matchesEndpoint(db: Database.Database, a: ProgressAnchor, b: ProgressAnchor): boolean {
+  if(matchesSavedEndpoint(a,b))return true;
+  if(a.truck!==b.truck || a.odometerM!==b.odometerM || a.speedMps===null || a.speedMps===undefined || b.speedMps===null || b.speedMps===undefined
+    || Math.max(Math.abs(a.speedMps),Math.abs(b.speedMps))>0.05 || !validMinute(a.gameMinutes) || !validMinute(b.gameMinutes) || BigInt(b.gameMinutes)!==BigInt(a.gameMinutes)+1n)return false;
+  // A pause callback can observe the next minute after the last physical frame. Require that actual source event.
+  const pause=get(db,`SELECT e.event_seq,e.occurred_monotonic_ns,e.payload_json FROM events e
+    JOIN plugin_sessions s ON s.id=e.plugin_session_id JOIN clocks c ON c.id=e.source_clock_ref
+    WHERE s.plugin_session_uuid=? AND c.clock_uuid=? AND e.type='simulation.paused'
+      AND e.occurred_monotonic_ns>=? AND e.occurred_monotonic_ns<=? ORDER BY e.event_seq LIMIT 1`,
+    a.pluginSessionId,a.sourceClockId,a.monotonicNs.padStart(20,'0'),(BigInt(a.monotonicNs)+2_000_000_000n).toString().padStart(20,'0'));
+  if(!pause || get(db,`SELECT e.id FROM events e JOIN plugin_sessions s ON s.id=e.plugin_session_id
+    WHERE s.plugin_session_uuid=? AND e.occurred_monotonic_ns>? AND e.event_seq<=?
+    AND e.type IN ('simulation.started','timers.restart','gameTime.regression','player.use.ferry','player.use.train') LIMIT 1`,
+    a.pluginSessionId,a.monotonicNs.padStart(20,'0'),pause.event_seq))return false;
+  try {
+    const occurred=(JSON.parse(String(pause.payload_json)) as {occurred?:{gameTime?:{clockId?:string;minutes?:{available?:boolean;value?:string}}}}|null)?.occurred?.gameTime;
+    return occurred?.clockId===a.gameClockId && occurred?.minutes?.available===true && validMinute(occurred.minutes.value)
+      && matchesSavedEndpoint(a,b,true,occurred.minutes.value);
+  } catch { return false; }
 }
+const validMinute=(value:unknown):value is string=>typeof value==='string' && /^(0|[1-9][0-9]{0,19})$/.test(value) && BigInt(value)<=18_446_744_073_709_551_615n;
 function endpointFromHead(db: Database.Database, head: unknown, trip: unknown): CoverageEndpoint | null {
   if (head === null) return null;
   const point = get(db, 'SELECT * FROM logical_progress WHERE id=?', head);
@@ -315,7 +370,9 @@ function retainedEndpoint(db: Database.Database, id: bigint, head: unknown, curr
       {head,point:BigInt(boundary.head),logical:id,odo:boundary.anchor.odometerM});
     const owned=get(db,`SELECT t.id FROM trips t JOIN logical_memberships m ON m.trip_ref=t.id JOIN plugin_sessions s ON s.id=t.plugin_session_ref
       WHERE t.id=? AND m.logical_ref=? AND s.plugin_session_uuid=?`,BigInt(boundary.trip),id,boundary.anchor.pluginSessionId);
-    if (selected && owned && boundary.distanceM.available && boundary.distanceM.value<=limit && matchesEndpoint(boundary.anchor,at)) {
+    if (selected && owned && (boundary.distanceM.available && boundary.distanceM.value<=limit
+      || boundary===current && boundary.head===String(head) && !boundary.distanceM.available && !boundary.fuelUsedL.available
+        && Math.max(Math.abs(boundary.anchor.speedMps??Infinity),Math.abs(at.speedMps??Infinity))<=0.05) && matchesEndpoint(db,boundary.anchor,at)) {
       if(matched && !equivalent(matched,boundary))return {kind:'unsafe'};
       matched??=boundary;
     }
@@ -330,13 +387,14 @@ function retainedEndpoint(db: Database.Database, id: bigint, head: unknown, curr
   if (head === null || !completeEndpoint(at)) return {kind:'none'};
   const limits=savedEndpointLimits(at);
   const points = db.prepare(ACCOUNTING_PATH + ` SELECT p.* FROM logical_progress p JOIN samples s ON s.id=p.sample_ref JOIN logical_trucks t ON t.id=p.truck_ref
-    WHERE p.logical_ref=@logical AND t.identity_key=@truck AND s.odometer_m=@odo AND abs(s.fuel_l-@fuel)<=@fuelLimit AND s.game_minutes=@minutes
+    WHERE p.logical_ref=@logical AND t.identity_key=@truck AND s.odometer_m=@odo AND abs(s.fuel_l-@fuel)<=@fuelLimit AND s.game_minutes BETWEEN @minutes-1 AND @minutes
       AND (s.x-@x)*(s.x-@x)+(s.y-@y)*(s.y-@y)+(s.z-@z)*(s.z-@z)<=@positionSquared
       AND EXISTS(SELECT 1 FROM ranges r WHERE s.id>=r.first AND s.id<=r.last AND (r.cut_odometer_m IS NULL OR s.odometer_m<=r.cut_odometer_m)) ORDER BY p.id DESC LIMIT 65`).all(
     {head,logical:id,truck:at.truck,odo:at.odometerM,fuel:at.fuelL,fuelLimit:limits.fuel,positionSquared:limits.position**2,x:at.position!.x,y:at.position!.y,z:at.position!.z,minutes:BigInt(at.gameMinutes!)}) as LogicalRow[];
   if(points.length>64)return {kind:'unsafe'};
   for(const point of points){
     const endpoint={...progressCheckpoint(db,point),trip:String(point.trip_ref),head:String(point.id),prefixState:null};
+    if(!matchesEndpoint(db,endpoint.anchor,at))continue;
     if(matched && !equivalent(matched,endpoint))return {kind:'unsafe'};
     matched??=endpoint;
   }
@@ -361,7 +419,7 @@ export function projectEndpoint(db: Database.Database, id: bigint, row: LogicalR
     if (retained.kind==='matched') {
       const matched=retained.endpoint;
       db.prepare('UPDATE logical_trips SET progress_head=?,accounting_rebased=1 WHERE id=?').run(matched.head === null ? null : BigInt(matched.head),id);
-      revise(db,id,{...coverage,phase:cleanLoadWindow(db,row)?'resumed':'pending',window:cleanLoadWindow(db,row)?null:coverage.window,endpoint:{...matched,trip:String(row.id),anchor,running:undefined,prefixState:prior.revision ? String(prior.revision.state_ref) : null}});
+      revise(db,id,{...coverage,sampleResumePending:false,phase:cleanLoadWindow(db,row)?'resumed':'pending',window:cleanLoadWindow(db,row)?null:coverage.window,endpoint:{...matched,trip:String(row.id),anchor,running:undefined,prefixState:prior.revision ? String(prior.revision.state_ref) : null}});
     } else if (coverage.endpoint && completeEndpoint(coverage.endpoint.anchor) && completeEndpoint(anchor)) revise(db,id,{...coverage,losses:coverage.losses|COVERAGE_LOSS.unknown});
     return;
   }
@@ -389,7 +447,7 @@ export function projectEndpoint(db: Database.Database, id: bigint, row: LogicalR
   }
   const exactBoundary=previous && matchesSavedEndpoint(previous.anchor,anchor,false);
   const noisyBoundary=previous && !!linked && a && BigInt(anchor.monotonicNs)>BigInt(a.monotonicNs)
-    && (!running || qualifiedRunning!==undefined) && matchesEndpoint(a,anchor) && !transferBoundary(db,row,a,anchor);
+    && (!running || qualifiedRunning!==undefined) && matchesEndpoint(db,a,anchor) && !transferBoundary(db,row,a,anchor);
   const totals = previous && (exactBoundary || noisyBoundary) ? {...previous,anchor}
     : qualifiedRunning && previous && midpoint ? advanceProgress(advanceProgress(previous,midpoint,true),anchor,true)
       : advanceProgress(previous,anchor,!running && !!linked && !!a && supported(a,anchor));

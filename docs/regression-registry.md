@@ -20,6 +20,7 @@ Columns:
 
 | Entry point | Layer | REG IDs | Source | Owning card (PR) | Runs in | Protected |
 | --- | --- | --- | --- | --- | --- | --- |
+| `tests/unit/language-card-rendering.test.ts` | Node unit (Vitest) | — | — | ET-073 | PR (`npm test`) | — |
 | `tests/unit/dashboard-upload-contract.test.ts` | Node unit (Vitest) | REG-010, REG-012 | F, T | ET-103c | PR (`npm test`) | closed safe DTO/control responses, fixed-null origins, exact token/UTF8/depth bounds |
 | `tests/unit/dashboard-upload-credentials.test.ts` | Node unit, injected crypto and isolated file I/O | REG-006, REG-007, REG-012 | F, T | ET-103c | PR (`npm test`) | sync/confirm/activation order, generation/context binding, missing/orphan refusal, persistent rotation flag and reopen, failed atomic replacement preserves ciphertext, bounded cleanup, no plaintext fallback |
 | `tests/unit/dashboard-upload-http.test.ts` | Node unit, controlled request streams | REG-010, REG-011 | F, T | ET-103c | PR (`npm test`) | single flight, absolute abort, redirect/cookie isolation, fixed TLS-configuration versus transient-network classification, strict bounded/truncated response rejection |
@@ -153,6 +154,7 @@ Columns:
 | `tests/unit/overlay-bounds.test.ts` | Node unit (Vitest) | REG-016 | R, F | ET-045c | PR (tests job, `npm test`) | regression |
 | `tests/unit/overlay-edit.test.ts` | Node unit (Vitest) | REG-016 | R | ET-012b (#74) | PR (tests job, `npm test`) | — |
 | `tests/unit/overlay-geometry.test.ts` | Node unit (Vitest) | REG-016 | R, F | ET-012a (#70) | PR (tests job, `npm test`) | — |
+| `tests/unit/overlay-hard-mode.test.ts` | Node unit (Vitest) | REG-009, REG-016 | R, F | ET-070 | PR (tests job, `npm test`) | security, regression |
 | `tests/unit/overlay-placement.test.ts` | Node unit (Vitest) | REG-016 | T, V (et-012b) | ET-012b (#74) | PR (tests job, `npm test`) | — |
 | `tests/unit/overlay-preload.test.ts` | Node unit (Vitest) | REG-016 | R | ET-008 (#21) | PR (tests job, `npm test`) | security, regression |
 | `tests/unit/overlay-rendering.test.ts` | Node unit (Vitest) | REG-009, REG-010 | R, F | ET-056 (existing rendering entry extended) | PR (tests job, `npm test`) | localized explicit game choice |

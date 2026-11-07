@@ -31,7 +31,8 @@ export interface OverlayBreakCue {urgency: string | null; label: string | null; 
 export const SYNTHETIC_V1_BREAK_CUE: OverlayBreakCue;
 export function overlayBreakCueObservation(expected: Partial<OverlayBreakCue>): OverlayBreakCue | false;
 export function waitForOverlayBreakCue(page: Page, expected: Partial<OverlayBreakCue>): Promise<OverlayBreakCue>;
-export interface OverlayOverflow {layout: string | null; root: {width: number; height: number} | null; sections: string[]; outside: string[]; truncated: string[]}
+/** ET-070: `fixed` lists the fixed elements found ('hard-mode'); a missing or duplicated indicator is 'hard-mode' in `outside`. */
+export interface OverlayOverflow {layout: string | null; root: {width: number; height: number} | null; sections: string[]; fixed: string[]; outside: string[]; truncated: string[]}
 export function overlayOverflow(): OverlayOverflow;
 /** ET-045d: the speed, gear and RPM value and unit texts one probe step writes into the rendered overlay. */
 export interface NumberProbeStep {speed?: string; speedUnit?: string; gear?: string; rpm?: string; rpmUnit?: string}

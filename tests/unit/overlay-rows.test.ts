@@ -5,7 +5,7 @@ import {DEFAULT_OVERLAY_SECTIONS, OVERLAY_PRESETS, OVERLAY_SECTION_IDS} from '..
 import {
   CARD_BORDER_CSS, CARD_HEADER_GAP_CSS, CARD_HEADER_HEIGHT_CSS, CARD_PADDING_X_CSS, CARD_PADDING_Y_CSS, CARD_ROW_HEIGHT_CSS, CLUSTER_GAUGE_SIZE_CSS,
   CLUSTER_PANEL_BORDER_CSS, CLUSTER_PANEL_PADDING_X_CSS, CLUSTER_PANEL_PADDING_Y_CSS, CLUSTER_ROW_GAP_CSS, CLUSTER_ROW_HEIGHT_CSS,
-  CLUSTER_TAG_ROW_HEIGHT_CSS, HUD_LINE_GAP_CSS, HUD_LINE_HEIGHT_CSS, HUD_TAG_ROW_HEIGHT_CSS, LAYOUT_BORDER_CSS, layoutContentCss, layoutReservedCss,
+  CLUSTER_TAG_ROW_HEIGHT_CSS, HARD_MODE_ROWS, HUD_LINE_GAP_CSS, HUD_LINE_HEIGHT_CSS, HUD_TAG_ROW_HEIGHT_CSS, LAYOUT_BORDER_CSS, layoutContentCss, layoutReservedCss,
   layoutRowCount, ROW_LAYOUTS
 } from '../../apps/desktop/src/overlay-rows';
 
@@ -14,6 +14,9 @@ import {
 // (CSS px at zoom 1, border-box, borders included): card 1 + 10 + 20 + 6 + 24 × n + 10 + 1 = 48 + 24n; cluster panel
 // 1 + 8 + 18 + (3 + 18) × m + 8 + 1 = 36 + 21m; HUD 18 + (2 + 22) × n = 18 + 24n. n counts the enabled sections, m those
 // outside the cluster's gauge (speed, gear and RPM). They are not produced by the implementation.
+// ET-070 (owner decision D3; the requirement changed): the fixed Hard Mode indicator is one more row in every layout,
+// whatever the sections, so the reserves are card 48 + 24(n + 1) = 72 + 24n, cluster panel 36 + 21(m + 1) = 57 + 21m and
+// HUD 18 + 24(n + 1) = 42 + 24n, and each layout counts n + 1 (cluster m + 1) rows. n and m below still count sections.
 const only = (...ids: OverlaySectionId[]): OverlaySections =>
   Object.freeze(Object.fromEntries(OVERLAY_SECTION_IDS.map(id => [id, ids.includes(id)])) as Record<OverlaySectionId, boolean>);
 const ALL = DEFAULT_OVERLAY_SECTIONS;
@@ -33,22 +36,25 @@ it('fixes the hand-written row constants of each layout', () => {
   expect({tags: HUD_TAG_ROW_HEIGHT_CSS, gap: HUD_LINE_GAP_CSS, line: HUD_LINE_HEIGHT_CSS}).toEqual({tags: 18, gap: 2, line: 22});
   expect(LAYOUT_BORDER_CSS).toEqual({card: 1, cluster: 1, hud: 0});
   expect(ROW_LAYOUTS).toEqual(['card', 'cluster', 'hud']);
+  expect(HARD_MODE_ROWS).toBe(1);
 });
 
 it.each([
-  // ET-052: 48 + 24 × 15 = 408, 36 + 21 × 12 = 288 (speed, gear and RPM are in the gauge) and 18 + 24 × 15 = 378.
-  {name: 'every section', sections: ALL, n: 15, m: 12, card: 408, cluster: 288, hud: 378},
-  {name: 'every section but the break', sections: WITHOUT_BREAK, n: 14, m: 11, card: 384, cluster: 267, hud: 354},
-  {name: 'the break alone', sections: only('mandatory-break'), n: 1, m: 1, card: 72, cluster: 57, hud: 42},
-  {name: 'every section without distance driven', sections: WITHOUT_DRIVEN, n: 13, m: 10, card: 360, cluster: 246, hud: 330},
-  {name: 'every section without range and distance driven', sections: WITHOUT_RANGE_AND_DRIVEN, n: 12, m: 9, card: 336, cluster: 225, hud: 306},
-  {name: 'also without game time', sections: ALSO_WITHOUT_GAME_TIME, n: 11, m: 8, card: 312, cluster: 204, hud: 282},
-  {name: 'job-focus', sections: OVERLAY_PRESETS['job-focus'], n: 7, m: 5, card: 216, cluster: 141, hud: 186},
-  {name: 'driving-only', sections: OVERLAY_PRESETS['driving-only'], n: 5, m: 2, card: 168, cluster: 78, hud: 138},
-  {name: 'speed only', sections: only('speed'), n: 1, m: 0, card: 72, cluster: 36, hud: 42}
+  // ET-070: 72 + 24 × 15 = 432, 57 + 21 × 12 = 309 (speed, gear and RPM are in the gauge) and 42 + 24 × 15 = 402
+  // (ET-052's 408, 288 and 378 without the Hard Mode row).
+  {name: 'every section', sections: ALL, n: 15, m: 12, card: 432, cluster: 309, hud: 402},
+  {name: 'every section but the break', sections: WITHOUT_BREAK, n: 14, m: 11, card: 408, cluster: 288, hud: 378},
+  {name: 'the break alone', sections: only('mandatory-break'), n: 1, m: 1, card: 96, cluster: 78, hud: 66},
+  {name: 'every section without distance driven', sections: WITHOUT_DRIVEN, n: 13, m: 10, card: 384, cluster: 267, hud: 354},
+  {name: 'every section without range and distance driven', sections: WITHOUT_RANGE_AND_DRIVEN, n: 12, m: 9, card: 360, cluster: 246, hud: 330},
+  {name: 'also without game time', sections: ALSO_WITHOUT_GAME_TIME, n: 11, m: 8, card: 336, cluster: 225, hud: 306},
+  {name: 'job-focus', sections: OVERLAY_PRESETS['job-focus'], n: 7, m: 5, card: 240, cluster: 162, hud: 210},
+  {name: 'driving-only', sections: OVERLAY_PRESETS['driving-only'], n: 5, m: 2, card: 192, cluster: 99, hud: 162},
+  // Speed alone is in the cluster's gauge: its panel holds only the Hard Mode row, 57.
+  {name: 'speed only', sections: only('speed'), n: 1, m: 0, card: 96, cluster: 57, hud: 66}
 ])('reserves $card / $cluster / $hud CSS px for $name', ({sections, n, m, card, cluster, hud}) => {
   expect({card: layoutRowCount('card', sections), cluster: layoutRowCount('cluster', sections), hud: layoutRowCount('hud', sections)})
-    .toEqual({card: n, cluster: m, hud: n});
+    .toEqual({card: n + 1, cluster: m + 1, hud: n + 1});
   expect({card: layoutReservedCss('card', sections), cluster: layoutReservedCss('cluster', sections), hud: layoutReservedCss('hud', sections)})
     .toEqual({card, cluster, hud});
   // The content height leaves out the outer border on both sides: 2 px for the card and the cluster's panel, none for the HUD.
@@ -57,13 +63,13 @@ it.each([
 });
 
 it('counts every enabled section in the cluster panel when no gauge section is enabled', () => {
-  // Fuel to the break are twelve panel sections: 36 + 21 × 12 = 288, as with every section (ET-052).
+  // Fuel to the break are twelve panel sections and the Hard Mode row: 36 + 21 × 13 = 309, as with every section (ET-070).
   const panelOnly = {...ALL, speed: false, gear: false, rpm: false};
-  expect(layoutRowCount('cluster', panelOnly)).toBe(12);
-  expect(layoutReservedCss('cluster', panelOnly)).toBe(288);
-  // Gear alone shows only the gauge: no panel row.
-  expect(layoutReservedCss('cluster', only('gear'))).toBe(36);
-  expect(layoutReservedCss('cluster', only('fuel'))).toBe(57);
+  expect(layoutRowCount('cluster', panelOnly)).toBe(13);
+  expect(layoutReservedCss('cluster', panelOnly)).toBe(309);
+  // Gear alone shows only the gauge: the panel keeps only the Hard Mode row, 36 + 21 = 57; fuel adds a second, 78.
+  expect(layoutReservedCss('cluster', only('gear'))).toBe(57);
+  expect(layoutReservedCss('cluster', only('fuel'))).toBe(78);
 });
 
 it('never reserves more for a subset of the sections than for all of them', () => {

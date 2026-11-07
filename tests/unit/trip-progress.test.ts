@@ -30,6 +30,19 @@ describe('REG-008 current-save progress', () => {
     expect(matchesSavedEndpoint(original,{...next,odometerM:251})).toBe(false);
     expect(matchesSavedEndpoint(original,{...next,gameMinutes:'501'})).toBe(false);
   });
+  it('allows centimetre save noise only for a stationary comparison and a minute tick only with a pause witness',()=>{
+    const a={...anchor(250,100),speedMps:0,position:{x:0,y:0,z:0}};
+    const b={...a,speedMps:0.004,fuelL:100.009,position:{x:0.017,y:0,z:0}};
+    expect(matchesSavedEndpoint(a,b)).toBe(true);
+    expect(matchesSavedEndpoint(a,{...b,position:{x:0.05001,y:0,z:0}})).toBe(false);
+    expect(matchesSavedEndpoint({...a,speedMps:1},b)).toBe(false);
+    expect(matchesSavedEndpoint(a,b,false)).toBe(false);
+    expect(matchesSavedEndpoint(a,{...b,gameMinutes:'501'})).toBe(false);
+    expect(matchesSavedEndpoint(a,{...b,gameMinutes:'501'},true,'501')).toBe(true);
+    expect(matchesSavedEndpoint(a,{...b,gameMinutes:'502'},true,'502')).toBe(false);
+    expect(matchesSavedEndpoint(a,{...b,gameMinutes:'499'},true,'499')).toBe(false);
+    expect(matchesSavedEndpoint({...a,speedMps:1},{...b,gameMinutes:'501'},true,'501')).toBe(false);
+  });
   it('nets small fuel rises as measurement noise and counts a real refuel separately from consumption',()=>{
     let progress=advanceProgress(null,anchor(0,100),true);
     for(const [odo,fuel] of [[1,99],[2,99.005],[3,98.005]])progress=advanceProgress(progress,anchor(odo,fuel),true);

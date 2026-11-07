@@ -277,12 +277,24 @@ describe('ET-010c overlay v1 observation', () => {
     const box = (left: number, top: number, width: number, height: number) => ({left, top, right: left + width, bottom: top + height, width, height});
     const section = (id: string, bounds: ReturnType<typeof box>, cut = false) => ({getAttribute: () => `overlay-section-${id}`, getBoundingClientRect: () => bounds,
       querySelectorAll: () => [{scrollWidth: cut ? 240 : 80, clientWidth: 80}]});
-    vi.stubGlobal('document', {
+    // ET-070: the fixed Hard Mode indicator is served only for its own selector; `indicators` are the ones the root holds.
+    const stub = (indicators: ReturnType<typeof section>[]) => vi.stubGlobal('document', {
       querySelector: () => ({getAttribute: () => 'strip', getBoundingClientRect: () => box(0, 0, 1280, 38)}),
-      querySelectorAll: () => [section('speed', box(10, 1, 80, 36)), section('origin', box(10, 39, 300, 36)), section('deadline', box(1200, 1, 120, 36)), section('cargo', box(100, 1, 80, 36), true)]
+      querySelectorAll: (selector: string) => selector === '[data-testid="overlay-hard-mode"]' ? indicators
+        : [section('speed', box(10, 1, 80, 36)), section('origin', box(10, 39, 300, 36)), section('deadline', box(1200, 1, 120, 36)), section('cargo', box(100, 1, 80, 36), true)]
     });
-    expect(overlayOverflow()).toEqual({layout: 'strip', root: {width: 1280, height: 38}, sections: ['speed', 'origin', 'deadline', 'cargo'],
+    const indicator = (bounds: ReturnType<typeof box>) => section('hard-mode', bounds);
+    stub([indicator(box(1100, 1, 90, 36))]);
+    expect(overlayOverflow()).toEqual({layout: 'strip', root: {width: 1280, height: 38}, sections: ['speed', 'origin', 'deadline', 'cargo'], fixed: ['hard-mode'],
       outside: ['origin', 'deadline'], truncated: ['cargo']});
+    // An indicator past the root's right edge (1250 + 90 = 1340 > 1280) is outside under its fixed name; a missing or
+    // duplicated one is reported as outside, because every layout shows exactly one.
+    stub([indicator(box(1250, 1, 90, 36))]);
+    expect(overlayOverflow()).toMatchObject({fixed: ['hard-mode'], outside: ['origin', 'deadline', 'hard-mode']});
+    for (const indicators of [[], [indicator(box(1100, 1, 90, 36)), indicator(box(1100, 1, 90, 36))]]) {
+      stub(indicators);
+      expect(overlayOverflow(), String(indicators.length)).toMatchObject({fixed: [], outside: ['origin', 'deadline', 'hard-mode']});
+    }
   });
 });
 

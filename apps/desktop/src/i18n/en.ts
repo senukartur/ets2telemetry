@@ -191,6 +191,8 @@ export const EN_DICTIONARY: TranslationDictionary = channelCopyTable(Object.free
   "copy.discontinuity": "Discontinuity",
   "copy.restored-database": "Restored database",
   "copy.opened-while-a-save-was-loading": "opened while a save was loading",
+  "copy.accounting-chain-break": "distance or fuel accounting interrupted",
+  "copy.menu-job-acceptance": "first job configured after an observed empty menu",
   "copy.recording-started-during-the-job": "recording started during the job",
   "copy.job-began-before-recording": "job began before recording",
   "copy.continues-a-trip-closed-by-a-restart": "continues a trip closed by a restart",

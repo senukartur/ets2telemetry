@@ -39,3 +39,49 @@ describe('private Hard Mode relative display lifetime', () => {
     cache.accept(publication()); mono = 0n; expect(cache.status(true).assessment.state).toBe('unknown');
   });
 });
+describe('ET-070 lease expiry notification for the overlay indicator', () => {
+  afterEach(() => vi.useRealTimers());
+  // Main's monotonic clock follows the fake timers: 1 ms of fake time is 1_000_000 ns.
+  const timed = () => {
+    vi.useFakeTimers(); const start = Date.now(), expired = vi.fn();
+    return {expired, cache: new HardModeServiceCache(() => BigInt(Date.now() - start) * 1_000_000n, expired)};
+  };
+  it('calls back exactly once when a 3 s lease ends, and the status is then unknown', async () => {
+    const {cache, expired} = timed(); cache.accept(publication());
+    await vi.advanceTimersByTimeAsync(2999); expect(expired).not.toHaveBeenCalled(); expect(cache.status(true).assessment).toEqual(assessment);
+    await vi.advanceTimersByTimeAsync(1); expect(expired).toHaveBeenCalledOnce(); expect(cache.status(true).assessment.state).toBe('unknown');
+    await vi.advanceTimersByTimeAsync(10_000); expect(expired).toHaveBeenCalledOnce();
+  });
+  it('re-arms on a renewal: a lease renewed at 2 s for 3 s ends at 5 s', async () => {
+    const {cache, expired} = timed(); cache.accept(publication());
+    await vi.advanceTimersByTimeAsync(2000); cache.accept(publication());
+    await vi.advanceTimersByTimeAsync(2999); expect(expired).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(1); expect(expired).toHaveBeenCalledOnce();
+  });
+  it('rounds a sub-millisecond rest up: a 1.5 ms lease ends after 2 ms, not 1', async () => {
+    const {cache, expired} = timed(); cache.accept(publication('1500000'));
+    await vi.advanceTimersByTimeAsync(1); expect(expired).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(1); expect(expired).toHaveBeenCalledOnce();
+  });
+  it('re-arms for the rest of the lease when the timer fires before main\'s clock reaches its end', async () => {
+    vi.useFakeTimers(); let mono = 0n; const expired = vi.fn(), cache = new HardModeServiceCache(() => mono, expired);
+    cache.accept(publication());
+    // 3000 ms of timer time pass while the monotonic clock advanced only 1 s: 2 s of the lease remain, so it waits 2000 ms more.
+    mono = 1_000_000_000n; await vi.advanceTimersByTimeAsync(3000); expect(expired).not.toHaveBeenCalled();
+    mono = 2_999_000_000n; await vi.advanceTimersByTimeAsync(1999); expect(expired).not.toHaveBeenCalled();
+    // At the re-armed timer the clock is at 3.0 s: the lease has ended.
+    mono = 3_000_000_000n; await vi.advanceTimersByTimeAsync(1); expect(expired).toHaveBeenCalledOnce();
+  });
+  it('expires a zero lease on the next timer turn', async () => {
+    const {cache, expired} = timed(); cache.accept(publication('0'));
+    expect(expired).not.toHaveBeenCalled(); await vi.advanceTimersByTimeAsync(0); expect(expired).toHaveBeenCalledOnce();
+  });
+  it('cancels the timer on retirement and on a malformed message, and a trip update does not arm it', async () => {
+    const retired = timed(); retired.cache.accept(publication()); retired.cache.retire();
+    await vi.advanceTimersByTimeAsync(10_000); expect(retired.expired).not.toHaveBeenCalled();
+    const invalidated = timed(); invalidated.cache.accept(publication()); invalidated.cache.accept({...publication(), path: 'private'});
+    await vi.advanceTimersByTimeAsync(10_000); expect(invalidated.expired).not.toHaveBeenCalled();
+    const tripOnly = timed(); tripOnly.cache.accept(tripUpdate);
+    await vi.advanceTimersByTimeAsync(10_000); expect(tripOnly.expired).not.toHaveBeenCalled();
+  });
+});

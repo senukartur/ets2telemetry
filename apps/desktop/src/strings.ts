@@ -81,6 +81,17 @@ export const STRINGS = channelCopyTable(Object.freeze({
   /** The state words of the overlay's next-mandatory-break item (ET-052): its accessible name, for assistive technology (the visible cues are the colour and the due underline). */
   overlayBreakSoon: 'soon',
   overlayBreakDue: 'due now',
+  /**
+   * The overlay's fixed Hard Mode indicator (ET-070): the card and cluster row label, the strip and HUD short label, the
+   * row value of a loss and the accessible names per state; `{n}` is the number of rules that pass.
+   */
+  overlayHardModeLabel: 'Hard Mode',
+  overlayHardModeShort: 'HM',
+  overlayHardModeLost: 'lost',
+  overlayHardModeActiveName: 'Hard Mode active, 12 of 12',
+  overlayHardModeInactiveName: 'Hard Mode not active',
+  overlayHardModeInactiveCountName: 'Hard Mode not active, {n} of 12',
+  overlayHardModeLostName: 'Hard Mode lost for this trip',
   overlaySynthetic: 'Synthetic',
   overlayReplay: 'Replay',
   overlaySaveFailed: 'The overlay change was not saved; the previous overlay settings stay in use.',
@@ -163,6 +174,13 @@ export const STRINGS_RU: Readonly<Record<StringKey, string>> = channelCopyTable(
   overlayStale: 'Устарело',
   overlayBreakSoon: 'скоро',
   overlayBreakDue: 'пора',
+  overlayHardModeLabel: 'Hard Mode',
+  overlayHardModeShort: 'HM',
+  overlayHardModeLost: 'потерян',
+  overlayHardModeActiveName: 'Hard Mode активен, 12 из 12',
+  overlayHardModeInactiveName: 'Hard Mode не активен',
+  overlayHardModeInactiveCountName: 'Hard Mode не активен, {n} из 12',
+  overlayHardModeLostName: 'Hard Mode потерян для этого рейса',
   overlaySynthetic: 'Синтетический',
   overlayReplay: 'Повтор',
   overlaySaveFailed: 'Изменение оверлея не удалось сохранить; остаются предыдущие настройки.',
@@ -863,6 +881,7 @@ export const JOURNAL_INTERVAL_KIND_TEXT: Readonly<Record<JournalIntervalKind, st
 });
 /** The interval causes the recorder writes (docs/trips.md#interval-detail-keys); any other cause shows as JOURNAL_OTHER_CAUSE. */
 export const JOURNAL_INTERVAL_CAUSE_TEXT: Readonly<Record<string, string>> = Object.freeze({
+  'accounting-chain-break': 'distance or fuel accounting interrupted', 'menu-job-acceptance': 'first job configured after an observed empty menu',
   'opened-at-load': 'opened while a save was loading', 'late-attach': 'recording started during the job', 'opened-before-attach': 'job began before recording',
   'loaded-job-unverified': 'the beginning of the loaded job could not be verified', 'loaded-job-coverage-confirmed': 'the full job was observed', 'paused-reconnect': 'reconnected during a verified pause',
   'restart': 'continues a trip closed by a restart', 'gap': 'lost events', 'discontinuity': 'continues a trip closed by a discontinuity',

@@ -207,7 +207,7 @@ Settings move from the single long Live column to their own screen with a left s
 
 | Panel | Spec id | Rows |
 | --- | --- | --- |
-| General | `settings.general` | Interface language (segmented English / Русский); Start with Windows (switch, marked **Planned**: autostart is not authorized); Closing the window (read-only: hides to the tray) |
+| General | `settings.general` | Interface language (dropdown English / Русский); Start with Windows (switch, marked **Planned**: autostart is not authorized); Closing the window (read-only: hides to the tray) |
 | Units | `settings.units` | One segmented control per game: Metric (km/h, L) / US customary (mph, gal); note that stored values never change |
 | Units: gear display (ET-050, October 25, 2026) | `gear-display-card` | A **Gear display** card below the units card: one labelled segmented control per game, Automatic (1, 2, 3) / Manual range-splitter (1L, 1H, 2L), since ET-050b Manual range-splitter (LL, 1L, 1H…), since the ETS2 crawler amendment of October 26, 2026 Manual range-splitter (1L, 1H, 2L…), with the description naming C1, C2 or LL, LH as crawler examples, and since the ETS2 crawler gear mode of October 26, 2026 a third option, Crawler first (C, 1, 2, 3…) for ETS2 and Crawler first (L, 1, 2, 3…) for ATS; a description of the forms, since ET-050b also of the gearbox-aware labels (reverse R1, R2, neutral N) and that stored telemetry keeps the game's gear numbers; only the committed mode is shown and a refused save is reported in the card; since October 28, 2026 the description is one short line (how gears are labelled, recorded telemetry does not change) and each option carries an info icon and opens its own hint on hover or keyboard focus, like the sidebar recording indicator: the mode name, when it fits, example labels for that game, the fallback without a gearbox layout for Manual, and reverse R1, R2 and neutral N; the hint text is also the radio's accessible description (`gear-display-<game>-<mode>-tooltip`) |
 | Overlay | `settings.overlay` | One card with labelled visibility, layout (four thumbnails), position/size and one Sections block (presets as a labelled button group under its heading, then the grouped section switches; ET-053). All fifteen section labels, icons and switches are on this page; no separate sections destination or Choose sections action. Background opacity remains informational **Planned** text below the card. |
@@ -278,7 +278,7 @@ ET-045f amendment, October 24, 2026 (ET-045 item 3, owner decision D4): the Clus
 
 Behaviour is unchanged from ET-012a/b: sections come from `overlay.sections` and the layout from `overlay.layout`; a section without data is hidden; stale values are greyed with a "No signal 12 s" tag; paused shows a "Paused" tag; while no game is connected the overlay is hidden. Layout-edit mode draws a 2 px dashed `--yu-ov-edit` outline, a drag handle and an edit bar with Reset and Done.
 
-**Proposed new section `hard-mode`** (group **Status**): the `Flame` icon with `HM` (ok colour) or `HM N/12` (problem colour). Adding it requires extending `OVERLAY_SECTION_IDS`, the settings migration and the presets (Everything and Job focus include it) in the ET-026c package.
+**Hard Mode indicator.** Not a section: a fixed, mandatory element at the end of every layout, without a setting, preset entry or settings migration. Lucide `Flame`, then `HM` (Strip, HUD) or "Hard Mode" (Card, Cluster panel), then a fixed 14 px cue slot. Active `--yu-ov-hm-active` #8FD3AE with a check (`12/12` in Card and Cluster); not active, also unknown or unconfirmed, `--yu-ov-hm-inactive` #E8C58A without a check, with `N/12` in Card, Cluster and HUD when a rule is known and no count in the Strip; lost for the current trip `--yu-ov-hm-lost` #F87171 with a cross, `HM` struck through in Strip and HUD, `lost` / `потерян` in Card and Cluster. Accessible names carry the state in words. It adds one row to Card, Cluster panel and HUD and a 100 px strip item; see [the minimal overlay](../minimal-overlay.md#hard-mode-indicator).
 
 ## 8. Localization
 
@@ -316,7 +316,7 @@ These are suggestions for future cards; none is authorized by this document.
 - Small logo sizes: resolved on October 22, 2026 by the "road merge" application icon in §3; the bear stays the in-app logo.
 - Review the Russian translation.
 - Start with Windows: needs an explicit authorization (autostart is currently out of scope).
-- The overlay `hard-mode` section and the "Delivered late" outcome display are proposals.
+- The "Delivered late" outcome display is a proposal.
 - Journal search needs a new storage query.
 
 

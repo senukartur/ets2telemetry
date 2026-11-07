@@ -10,7 +10,7 @@ import {createHash} from 'node:crypto';
 import type Database from 'better-sqlite3';
 import {V1_MAX_MINOR, validateServerMessage, type Available, type EventRecord, type GapData, type ServerMessage, type SourceIdentity} from '../../../contracts/src/protocol-v1';
 import {
-  MAX_EFFECTS, MAX_SAMPLE_BATCH, type AttachInput, type AttachResult, type CommitOptions, type CommitResult, type CompletenessInterval, type CompletenessOptions, type DeleteTripOptions, type EventReference, type SampleAppendOptions,
+  ACCOUNTING_PREDECESSOR_RESETS, MAX_EFFECTS, MAX_SAMPLE_BATCH, type AttachInput, type AttachResult, type CommitOptions, type CommitResult, type CompletenessInterval, type CompletenessOptions, type DeleteTripOptions, type EventReference, type SampleAppendOptions,
   type SampleAppendResult, type SampleInput, type TripEffect, type Uint64
 } from '../api';
 import {
@@ -428,9 +428,10 @@ function sampleColumns(row: SampleInput): {trip: string | null; clock: string; g
   if (typeof row !== 'object' || row === null || !isUuid(row.sourceClockId)) fail('INVALID_INPUT');
   if(row.recording!==undefined){
     const evidence=row.recording;
-    if(!plainRecord(evidence)||!Object.keys(evidence).every(key=>['profile','job','truck','processInstanceId','previous'].includes(key))||!isUuid(evidence.processInstanceId)
+    if(!plainRecord(evidence)||!Object.keys(evidence).every(key=>['profile','job','truck','processInstanceId','previous','predecessorReset'].includes(key))||!isUuid(evidence.processInstanceId)
       || !(evidence.truck===null || typeof evidence.truck==='string' && evidence.truck.length>0 && evidence.truck.length<=2048)) fail('INVALID_INPUT');
     checkpointJobValues(evidence.job);
+    if(evidence.predecessorReset!==undefined)enumValue(evidence.predecessorReset,ACCOUNTING_PREDECESSOR_RESETS);
     if(evidence.previous!==undefined){
       const p=evidence.previous;
       if(!plainRecord(p)||Object.keys(p).sort().join(',')!=='monotonicNs,sourceClockId,tripUuid'||!isUuid(p.tripUuid)||!isUuid(p.sourceClockId))fail('INVALID_INPUT');
@@ -503,7 +504,7 @@ export function appendSamples(conn: StorageConnection, pluginSessionId: string, 
         lastSecond.set(row.clock, second);
       }
       const inserted = statement(db, sql).run(session.id, trip, clockRef(db, session.id, 'source-monotonic', row.clock), row.gameClock === null ? null : clockRef(db, session.id, 'game', row.gameClock), ...row.values);
-      projectSample(db, session, pluginSessionId, rows[index], BigInt(inserted.lastInsertRowid));
+      projectSample(db, session, pluginSessionId, rows[index], BigInt(inserted.lastInsertRowid), c.now);
       appended++;
     }
     if (logicalEnabled(db)) for (const trip of trips.values()) revise(db,logicalFor(db,trip));

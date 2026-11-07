@@ -72,9 +72,10 @@ export const UI_CASES = ['shell', 'live', 'journal', 'settings', 'overlay'];
 const sizes = [{width: 1280, height: 800}, {width: 1100, height: 720}];
 const panels = ['general', 'overlay', 'plugin', 'about', 'data'];
 const layouts = ['strip', 'card', 'cluster', 'hud'];
-// ET-052: the reserved windows at zoom 1 for fifteen sections: the strip is still three rows at 1280 CSS px (116), the card 48 + 24 × 15 = 408,
-// the cluster's panel 36 + 21 × 12 = 288 and the HUD 18 + 24 × 15 = 378 (384, 267 and 354 with fourteen).
-const dimensions = {strip: {width: 1280, height: 116}, card: {width: 300, height: 408}, cluster: {width: 440, height: 288}, hud: {width: 320, height: 378}};
+// ET-070: the reserved windows at zoom 1 for fifteen sections and the fixed Hard Mode row: the strip is still three rows at
+// 1280 CSS px (116; the indicator ends the third row at 1190 of 1254), the card 48 + 24 × 16 = 432, the cluster's panel
+// 36 + 21 × 13 = 309 and the HUD 18 + 24 × 16 = 402 (ET-052's 408, 288 and 378 without the row).
+const dimensions = {strip: {width: 1280, height: 116}, card: {width: 300, height: 432}, cluster: {width: 440, height: 309}, hud: {width: 320, height: 402}};
 const waitState = (page, state) => until(() => page.getByTestId('telemetry-status').innerText(), value => value.startsWith(`${state}:`), `UI_LIVE_${state}`, 5000);
 /** Navigation and a source resume do not establish freshness. Capture all current instrument assertions in one DOM observation. */
 async function waitLiveInstrument(page, language) {
@@ -135,8 +136,9 @@ function cssDisplayGeometry() {
 // the 100% ones; the probes restore the layout loop's own frame (`dimensions` at zoom 1) afterwards.
 const SPEED_UNITS = {en: ['km/h', 'mph'], ru: ['км/ч', 'миль/ч']}, RPM_UNIT = {en: 'rpm', ru: 'об/мин'};
 const STRIP_FRAMES = [{zoom: 0.7, width: 1280, height: 80}, {zoom: 0.35, width: 640, height: 60}, {zoom: 2.1, width: 1000, height: 720}];
-// ET-052: the 100% and 300% frames are the product windows with fifteen sections (308 × 203 and 924 × 605; 188 and 561 with fourteen).
-const CLUSTER_FRAMES = [{zoom: 0.35, width: 160, height: 100}, {zoom: 0.7, width: 308, height: 203}, {zoom: 2.1, width: 924, height: 605}];
+// ET-070: the 100% and 300% frames are the product windows with fifteen sections and the Hard Mode row, 308 × 217
+// (ceil(307 × 0.7 + 2)) and 924 × 649 (ceil(307 × 2.1 + 4.2)); ET-052's 203 and 605 without the row.
+const CLUSTER_FRAMES = [{zoom: 0.35, width: 160, height: 100}, {zoom: 0.7, width: 308, height: 217}, {zoom: 2.1, width: 924, height: 649}];
 function stripSteps(speedUnit, rpmUnit) {
   return [{speed: '0', speedUnit, gear: 'N', rpm: '0', rpmUnit}, ...['9', '10', '99', '100', '-5', '—'].map(speed => ({speed})),
     // Exercise every digit at the reserve's full length with the actual bundled face, including 888 and 1111.
@@ -1307,7 +1309,7 @@ export async function runUiReadOnly({application, dashboard, config, record, set
   for (const size of sizes) {
     await resize(dashboard, size);
     await settingsPanel(dashboard, 'general');
-    assert.equal(await dashboard.locator('#language-ru').isDisabled(), true);
+    assert.equal(await dashboard.getByTestId('language-select').isDisabled(), true);
     await settingsPanel(dashboard, 'general');
     for (const game of ['ets2', 'ats']) for (const profile of ['metric', 'us-customary']) assert.equal(await dashboard.locator(`#units-${game}-${profile}`).isDisabled(), true);
     // ET-050: all four gear display radios are disabled while the settings are read-only.

@@ -192,6 +192,8 @@ export type I18nKey =
   | "copy.discontinuity"
   | "copy.restored-database"
   | "copy.opened-while-a-save-was-loading"
+  | "copy.accounting-chain-break"
+  | "copy.menu-job-acceptance"
   | "copy.recording-started-during-the-job"
   | "copy.job-began-before-recording"
   | "copy.continues-a-trip-closed-by-a-restart"

@@ -112,9 +112,20 @@ export async function startHardModeSource(config) {
 }
 const current = page => page.evaluate(() => globalThis.desktop.getHardModeStatus());
 const trips = page => page.evaluate(async () => {const result = await globalThis.desktop.listJournalTrips(); return result.ok ? result.value.trips : [];});
-export async function runHardModeSmoke({application, dashboard, source, config, record}) {
+// ET-070: every fixed Hard Mode indicator the overlay page shows, as main's projection reached it through the overlay
+// preload: its state, accessible name, text and strike. The smoke's overlay keeps the default strip layout.
+const overlayIndicators = page => page.evaluate(() => [...globalThis.document.querySelectorAll('[data-testid="overlay-hard-mode"]')].map(node => ({
+  state: node.getAttribute('data-state'), name: node.getAttribute('aria-label'), text: node.textContent, struck: node.querySelector('.overlay-hm-struck') !== null})));
+export async function runHardModeSmoke({application, dashboard, overlay, source, config, record}) {
+  assert.ok(overlay, 'HARD_MODE_OVERLAY_PAGE');
   record.errors = source.errors; record.peerDisconnects = source.peerDisconnects;
   const healthy = () => assert.deepEqual(source.errors, [], 'HARD_MODE_SOURCE_ERROR');
+  // Exactly one indicator with the expected state, name and strip text ("HM", struck through only on a loss).
+  const overlayPhase = async (phase, state, name) => {
+    const [indicator] = await until(() => overlayIndicators(overlay), list => list.length === 1 && list[0].state === state && list[0].name === name &&
+      list[0].text === 'HM' && list[0].struck === (state === 'lost'), `HARD_MODE_OVERLAY_${phase.toUpperCase()}`, 5000);
+    (record.overlay ??= {})[phase] = indicator;
+  };
   const readStatus = () => {healthy(); return current(dashboard);};
   const readTrips = () => {healthy(); return trips(dashboard);};
   const proof = (message, accept, timeoutMs = 8000) => {
@@ -135,9 +146,12 @@ export async function runHardModeSmoke({application, dashboard, source, config, 
   await chooseSource(dashboard, 'synthetic');
   await screen(dashboard, 'hardMode');
   await until(() => {healthy(); return source.connected();}, Boolean, 'HARD_MODE_DURABLE_SOURCE', 10000);
-  await until(async () => (await readStatus()).assessment.state, value => value === 'unknown', 'HARD_MODE_UNKNOWN', 5000); record.unknown = true; await until(() => dashboard.locator('[data-testid^="hard-mode-rule-"][data-state="unknown"]').count(), count => count === 12, 'HARD_MODE_UNKNOWN_NAMES', 5000); await dashboard.getByTestId('hard-mode-card').screenshot({path: path.join(config.output, 'hard-mode-unknown.png')});
+  await until(async () => (await readStatus()).assessment.state, value => value === 'unknown', 'HARD_MODE_UNKNOWN', 5000); record.unknown = true;
+  await overlayPhase('unknown', 'inactive', 'Hard Mode not active'); await until(() => dashboard.locator('[data-testid^="hard-mode-rule-"][data-state="unknown"]').count(), count => count === 12, 'HARD_MODE_UNKNOWN_NAMES', 5000); await dashboard.getByTestId('hard-mode-card').screenshot({path: path.join(config.output, 'hard-mode-unknown.png')});
   await source.settings('fail');
   await until(async () => (await readStatus()).assessment.state, value => value === 'fail', 'HARD_MODE_FAIL', 8000); record.fail = true;
+  // Eleven of the twelve rules pass (fatigue is off); the strip shows no count (D2), only the name carries it.
+  await overlayPhase('fail', 'inactive', 'Hard Mode not active, 11 of 12');
   const hints = [
     ['fuel', 'On (1)', 'On (1)', 'Meets the required setting'], ['air', 'On (1)', 'On (1)', 'Meets the required setting'],
     ['police', 'On (1)', 'On (1)', 'Meets the required setting'], ['fatigue', 'Off (0)', 'On (1)', 'Does not meet the required setting'],
@@ -231,7 +245,8 @@ export async function runHardModeSmoke({application, dashboard, source, config, 
   assert.match(finalEnglish.source.text, sourceText);
   await clickTestId(dashboard, 'hard-mode-refresh');
   record.hints = true; record.hover = true; record.inlineDetails = true; record.bilingual = true; record.keyboard = true; record.refresh = true;
-  await source.settings('pass'); await until(async () => (await readStatus()).assessment.state, value => value === 'pass', 'HARD_MODE_PASS', 8000); record.pass = true; await until(() => dashboard.getByTestId('hard-mode-card').getAttribute('data-state'), state => state === 'pass', 'HARD_MODE_RENDERED_PASS', 5000); await dashboard.getByTestId('hard-mode-card').screenshot({path: path.join(config.output, 'hard-mode-pass.png')});
+  await source.settings('pass'); await until(async () => (await readStatus()).assessment.state, value => value === 'pass', 'HARD_MODE_PASS', 8000); record.pass = true; await until(() => dashboard.getByTestId('hard-mode-card').getAttribute('data-state'), state => state === 'pass', 'HARD_MODE_RENDERED_PASS', 5000);
+  await overlayPhase('pass', 'active', 'Hard Mode active, 12 of 12'); await dashboard.getByTestId('hard-mode-card').screenshot({path: path.join(config.output, 'hard-mode-pass.png')});
   // Screenshots and the bilingual hint journey may outlive proof. Arm a new genuine publication immediately before
   // opening; subsequent waits drive the trusted refresh boundary instead of assuming a periodic tick was eligible.
   const beforeOpening = (await readStatus()).assessment.observedUtcMs;
@@ -261,14 +276,17 @@ export async function runHardModeSmoke({application, dashboard, source, config, 
   assert.equal(unavailable.trip.firstLoss, null);
   await until(() => dashboard.getByTestId('hard-mode-card').getAttribute('data-state'), state => state === 'unknown', 'HARD_MODE_RENDERED_UNKNOWN', 5000);
   assert.match(await dashboard.getByTestId('hard-mode-trip-ratio').innerText(), /Unknown: [1-9].*excluded/);
+  await overlayPhase('unavailable', 'inactive', 'Hard Mode not active');
   record.unknownExcluded = true;
   await source.settings('pass'); await until(async () => (await readStatus()).assessment.state, value => value === 'pass', 'HARD_MODE_RESTORED_SETTINGS', 8000);
   await until(() => dashboard.locator('[data-testid="hard-mode-card"] .yu-hard-mode-progress [role="status"]').innerText(), text => text === '12 of 12', 'HARD_MODE_RENDERED_RESTORATION', 5000);
   assert.equal(await dashboard.getByTestId('hard-mode-card').getAttribute('data-state'), 'pass');
   assert.doesNotMatch(await dashboard.getByTestId('hard-mode-card').innerText(), /lost for this trip|cannot be restored/);
+  await overlayPhase('restored', 'active', 'Hard Mode active, 12 of 12');
   await dashboard.evaluate(() => globalThis.desktop.setLanguage('ru'));
   await until(() => dashboard.getByTestId('hard-mode-trip-ratio').innerText(), text => text.includes('Неизвестно:') && text.includes('Порог: ≥95%'), 'HARD_MODE_PAGE_HOT_LANGUAGE', 5000);
   assert.equal(await dashboard.locator('[data-testid="hard-mode-card"] .yu-hard-mode-progress [role="status"]').innerText(), '12 из 12');
+  await overlayPhase('restoredRu', 'active', 'Hard Mode активен, 12 из 12');
   assert.doesNotMatch(await dashboard.getByTestId('hard-mode-card').innerText(), /Detected:|Required:|Current settings|Qualification cannot/);
   await dashboard.screenshot({path: path.join(config.output, 'hard-mode-recovered-ru.png')});
   await screen(dashboard, 'live'); await screen(dashboard, 'hardMode');
@@ -278,8 +296,13 @@ export async function runHardModeSmoke({application, dashboard, source, config, 
   const failed = await until(readStatus, value => value.trip?.version === 2 && value.trip.failingChecks > 0, 'HARD_MODE_SCHEDULED_FAILURE', 8000);
   assert.ok(failed.trip.passingChecks * 100 < (failed.trip.passingChecks + failed.trip.failingChecks) * 95);
   assert.match(await dashboard.getByTestId('hard-mode-trip-ratio').innerText(), /Required: ≥95%/);
+  await overlayPhase('belowThreshold', 'inactive', 'Hard Mode not active, 11 of 12');
   record.belowThreshold = true;
   await dashboard.getByTestId('hard-mode-card').screenshot({path: path.join(config.output, 'hard-mode-below-threshold.png')});
+  await source.settings('pass');
+  const recovered = await until(readStatus, value => value.assessment.state === 'pass', 'HARD_MODE_BELOW_THRESHOLD_RECOVERY', 8000);
+  assert.ok(recovered.trip.passingChecks * 100 < (recovered.trip.passingChecks + recovered.trip.failingChecks) * 95);
+  await overlayPhase('belowThresholdRecovered', 'active', 'Hard Mode active, 12 of 12');
   await source.deliver();
   const rows = await until(readTrips, rows => rows.length === 2 && rows.every(row => row.outcome === 'delivered'), 'HARD_MODE_DELIVERIES', 5000);
   assert.deepEqual(rows.map(row => row.isHardMode), [false, true]); record.knownRatio = true;
@@ -303,7 +326,6 @@ export async function runHardModeSmoke({application, dashboard, source, config, 
   assert.equal(exported.formatVersion, 5); assert.equal(exported.trip.is_hard_mode, true); assert.equal(exported.trip.hard_mode_details.manualDelivery, null);
   assert.deepEqual(exported.outcomeDetails.record.autoParkUsed, {available: true, value: true});
   record.export = true; record.flags = rows.map(row => row.isHardMode); healthy();
-  const overlay = application.windows().find(page => page.url().endsWith('?view=overlay'));
   assert.equal(await overlay.evaluate(() => typeof globalThis.overlay.getHardModeStatus), 'undefined'); record.overlayExcluded = true;
 }
 export async function verifyHardModeRun({config, record}) {
