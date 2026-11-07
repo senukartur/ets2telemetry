@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import path from 'node:path';
 import {mkdir, readFile, writeFile} from 'node:fs/promises';
 import {createRequire} from 'node:module';
+import {OWNER_PRODUCTION_BUILD_VARIABLE, resolveBuildChannel} from '../build-channel.mjs';
 
 export const UPLOAD_UI_SCREENS = ['no-token', 'confirmation', 'first-upload', 'offline', 'journal'];
 export const UPLOAD_UI_FLAGS = ['paste', 'password', 'visibility', 'enter', 'tokenCleared', 'cancelNavigation', 'cancelConfirmation', 'confirmNavigation', 'fixedRefusals', 'progress', 'chipNavigation', 'rowStates', 'headingFocus', 'contained', 'sharedStyles'];
@@ -11,11 +12,16 @@ export function validateUploadUiConfiguration(config, environment = process.env)
   for (const key of ['output', 'checkout', 'profile', 'cwd']) assert.ok(typeof config[key] === 'string' && path.isAbsolute(config[key]), `INVALID_UPLOAD_UI_${key}`);
   assert.equal(path.dirname(config.profile), config.output); assert.equal(path.dirname(config.cwd), config.output);
   assert.notEqual(config.output, config.checkout); assert.notEqual(config.output, path.parse(config.output).root);
-  assert.equal(environment.ETS2TELEMETRY_BUILD_CHANNEL, undefined); assert.equal(environment.ETS2TELEMETRY_OWNER_PRODUCTION_BUILD, undefined);
+  assert.equal(environment[OWNER_PRODUCTION_BUILD_VARIABLE], undefined);
+  const callerChannel = resolveBuildChannel(environment);
+  if (callerChannel === 'production') {
+    assert.equal(environment.GITHUB_REF, 'refs/heads/main');
+    assert.ok(['push', 'workflow_dispatch'].includes(environment.GITHUB_EVENT_NAME));
+  }
   return path.join(config.output, 'dashboard-upload-ui-fixture');
 }
-export function uploadUiBuildInputs(config) {
-  const root = validateUploadUiConfiguration(config);
+export function uploadUiBuildInputs(config, environment = process.env) {
+  const root = validateUploadUiConfiguration(config, environment);
   return {root, entries: ['main.ts', 'preload.ts', 'renderer.tsx', '.html'].map(suffix => path.join(config.checkout, 'tests/runtime', suffix === '.html' ? 'dashboard-upload-ui.html' : `dashboard-upload-ui-${suffix}`)),
     define: {__ETS2TELEMETRY_BUILD_CHANNEL__: JSON.stringify('staging'), __ETS2TELEMETRY_APP_VERSION__: JSON.stringify('0.0.0')}, alias: {'@': path.join(config.checkout, 'apps/desktop/src')}};
 }
