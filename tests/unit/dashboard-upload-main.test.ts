@@ -6,6 +6,7 @@ import {UploadCredentialStore} from '../../apps/desktop/src/dashboard-upload/cre
 import {UploadServiceBridge} from '../../apps/desktop/src/dashboard-upload/service-bridge';
 import {DashboardUploadService} from '../../apps/desktop/src/dashboard-upload/service';
 import type {UploadStorage} from '../../apps/desktop/src/dashboard-upload/scheduler';
+import type {UploadActiveConfiguration} from '../../packages/storage/src/upload-sync';
 import type {UploadServiceReply,UploadServiceCommand} from '../../apps/desktop/src/dashboard-upload/service-contract';
 const origin='https://dashboard.example',owner={origin,accountId:'a',companyId:'c',identityEpoch:'e'},token=`vtc1_${randomUUID()}_${'a'.repeat(43)}`;
 function activeStatus(configuration:Record<string,unknown>):DashboardUploadStatus {const reg=configuration.registration as DashboardOwner;return {...initialDashboardUploadStatus(origin),state:'connected',owner:{origin:reg.origin,accountId:reg.accountId,companyId:reg.companyId,identityEpoch:reg.identityEpoch}};}
@@ -149,4 +150,106 @@ it('REG-010/012 keeps a valid owner-free recovery context while the exact reconc
     settle({ok: true, value: {kind: 'connection', connection: {status: 'disconnected', version: '2', runId: null}}}); await pending;
     expect(f.controller.status).toEqual(initialDashboardUploadStatus(origin)); expect(f.files.size).toBe(0);
   } finally {f.controller.stop();}
+});
+
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>(done => {resolve = done;}); return {promise, resolve};
+}
+function controlledService(initial?: UploadActiveConfiguration) {
+  const state: {configuration: UploadActiveConfiguration} = {configuration: initial ?? {status: 'reconciliation-required', purpose: 'history', version: '1', registration: null, credentialGeneration: null, runId: null}};
+  const configuration = vi.fn<UploadStorage['getUploadConfiguration']>(() => Promise.resolve({ok: true, value: state.configuration}));
+  const recover = vi.fn<UploadStorage['recoverUploadAttempt']>(() => Promise.resolve({ok: true, value: {status: 'empty', attemptId: null, eventId: null, registrationId: null, registration: null, payload: null}}));
+  const disconnect = vi.fn<UploadStorage['disconnectUploadOwner']>(input => {
+    if (input.expectedVersion !== state.configuration.version) return Promise.resolve({ok: true, value: {status: 'stale', version: state.configuration.version, runId: null}});
+    state.configuration = {...state.configuration, status: 'ready', version: String(BigInt(input.expectedVersion) + 1n), registration: null, credentialGeneration: null, runId: null};
+    return Promise.resolve({ok: true, value: {status: 'disconnected', version: state.configuration.version, runId: null}});
+  });
+  const db = new Proxy({} as UploadStorage, {get(_target, key) {
+    if (key === 'getUploadConfiguration') return configuration;
+    if (key === 'recoverUploadAttempt') return recover;
+    if (key === 'disconnectUploadOwner') return disconnect;
+    throw Error('UNEXPECTED_STORAGE_OPERATION');
+  }});
+  const request = vi.fn(() => Promise.reject(Error('UNEXPECTED_HTTP')));
+  const service = new DashboardUploadService(db, {request, abort() {}, close() {}}, origin, 'test', () => {});
+  return {state, configuration, recover, disconnect, request, service};
+}
+it('REG-010/012 serializes reconciliation controls behind one conservative startup recovery and preserves stale disconnect', async () => {
+  const f = controlledService(), gate = deferred<Awaited<ReturnType<UploadStorage['recoverUploadAttempt']>>>(), entered = deferred<void>();
+  f.recover.mockImplementationOnce(() => {entered.resolve(); return gate.promise;});
+  try {
+    const pending = f.service.execute({action: 'configuration'}); await entered.promise;
+    expect(await f.service.execute({action: 'disconnect', expectedVersion: '1'})).toEqual({ok: false, error: 'BUSY'});
+    expect(f.configuration).toHaveBeenCalledTimes(1); expect(f.disconnect).not.toHaveBeenCalled(); expect(f.request).not.toHaveBeenCalled();
+    gate.resolve({ok: true, value: {status: 'empty', attemptId: null, eventId: null, registrationId: null, registration: null, payload: null}});
+    expect(await pending).toEqual({ok: true, value: {kind: 'configuration', configuration: f.state.configuration}});
+    expect(await f.service.execute({action: 'disconnect', expectedVersion: '0'})).toEqual({ok: true, value: {kind: 'connection', connection: {status: 'stale', version: '1', runId: null}}});
+    expect(f.state.configuration).toMatchObject({status: 'reconciliation-required', version: '1'});
+    expect(await f.service.execute({action: 'suspend'})).toEqual({ok: true, value: {kind: 'settled'}});
+    expect(f.recover.mock.calls).toEqual([[{startup: true}]]); expect(f.request).not.toHaveBeenCalled();
+  } finally {await f.service.stop();}
+});
+it.each(['synthetic', 'replay'] as const)('REG-010/012 rechecks current %s purpose even for inert suspend', async purpose => {
+  const f = controlledService();
+  try {
+    expect((await f.service.execute({action: 'configuration'})).ok).toBe(true);
+    f.state.configuration = {...f.state.configuration, purpose};
+    for (const command of [{action: 'configuration'}, {action: 'suspend'}, {action: 'disconnect', expectedVersion: '1'}, {action: 'verify', token}, {action: 'prepare', token, owner}, {action: 'activate', token, generation: randomUUID(), version: '1'}, {action: 'confirm', confirmationId: randomUUID(), registrationId: randomUUID(), credentialGeneration: randomUUID(), expectedVersion: '1'}] as UploadServiceCommand[]) expect(await f.service.execute(command)).toEqual({ok: false, error: 'RECONCILIATION'});
+    expect(f.recover.mock.calls).toEqual([[{startup: true}]]); expect(f.disconnect).not.toHaveBeenCalled(); expect(f.request).not.toHaveBeenCalled();
+  } finally {await f.service.stop();}
+});
+it.each(['startup', 'configuration', 'disconnect'] as const)('REG-010/012 fences cancellation while awaiting %s without a second startup recovery', async boundary => {
+  const f = controlledService(), entered = deferred<void>(), gate = deferred<void>();
+  const originalConfiguration = f.configuration.getMockImplementation()!, originalDisconnect = f.disconnect.getMockImplementation()!, originalRecovery = f.recover.getMockImplementation()!;
+  if (boundary === 'startup') f.recover.mockImplementationOnce(async input => {entered.resolve(); await gate.promise; return originalRecovery(input);});
+  else if (boundary === 'configuration') f.configuration.mockImplementationOnce(async () => {entered.resolve(); await gate.promise; return originalConfiguration();});
+  else f.disconnect.mockImplementationOnce(async input => {const result = await originalDisconnect(input); entered.resolve(); await gate.promise; return result;});
+  try {
+    const pending = f.service.execute({action: 'disconnect', expectedVersion: '1'}); await entered.promise;
+    f.service.cancel(); gate.resolve(); expect(await pending).toEqual({ok: false, error: 'RETIRED'});
+    expect(f.disconnect).toHaveBeenCalledTimes(boundary === 'disconnect' ? 1 : 0); expect(f.state.configuration.version).toBe(boundary === 'disconnect' ? '2' : '1');
+    expect((await f.service.execute({action: 'configuration'})).ok).toBe(true); expect(f.recover.mock.calls).toEqual([[{startup: true}]]); expect(f.request).not.toHaveBeenCalled();
+  } finally {gate.resolve(); await f.service.stop();}
+});
+it.each(['startup', 'configuration', 'disconnect'] as const)('REG-010/012 fences stop while awaiting %s before acknowledging a control', async boundary => {
+  const f = controlledService(), entered = deferred<void>(), gate = deferred<void>();
+  const originalConfiguration = f.configuration.getMockImplementation()!, originalDisconnect = f.disconnect.getMockImplementation()!, originalRecovery = f.recover.getMockImplementation()!;
+  if (boundary === 'startup') f.recover.mockImplementationOnce(async input => {entered.resolve(); await gate.promise; return originalRecovery(input);});
+  else if (boundary === 'configuration') f.configuration.mockImplementationOnce(async () => {entered.resolve(); await gate.promise; return originalConfiguration();});
+  else f.disconnect.mockImplementationOnce(async input => {const result = await originalDisconnect(input); entered.resolve(); await gate.promise; return result;});
+  try {
+    const pending = f.service.execute({action: 'disconnect', expectedVersion: '1'}); await entered.promise;
+    await f.service.stop(); gate.resolve(); expect(await pending).toEqual({ok: false, error: 'RETIRED'});
+    expect(await f.service.execute({action: 'configuration'})).toEqual({ok: false, error: 'RETIRED'});
+    expect(f.disconnect).toHaveBeenCalledTimes(boundary === 'disconnect' ? 1 : 0); expect(f.recover).toHaveBeenCalledTimes(1); expect(f.request).not.toHaveBeenCalled();
+  } finally {gate.resolve(); await f.service.stop();}
+});
+it('REG-010/012 fails closed on startup storage refusal before admitting private controls', async () => {
+  const f = controlledService(); f.recover.mockResolvedValue({ok: false, error: {code: 'IO_ERROR', message: 'private-storage-detail', retryable: true}});
+  try {
+    for (const command of [{action: 'configuration'}, {action: 'disconnect', expectedVersion: '1'}, {action: 'suspend'}, {action: 'verify', token}] as UploadServiceCommand[]) expect(await f.service.execute(command)).toEqual({ok: false, error: 'STORAGE_UNAVAILABLE'});
+    expect(f.recover).toHaveBeenCalledTimes(1); expect(f.configuration).toHaveBeenCalledTimes(1); expect(f.disconnect).not.toHaveBeenCalled(); expect(f.request).not.toHaveBeenCalled();
+  } finally {await f.service.stop();}
+});
+it.each(['cancel', 'stop'] as const)('REG-010/012 retains disconnect intent and ciphertext after %s races a committed service disconnect', async boundary => {
+  const f = fixture(); await f.controller.attach(f.rpc); const candidate = await f.controller.handle('verify', [token]); await f.controller.handle('confirm', [candidate.candidateId]);
+  await f.store.disconnectIntent({version: 1, channel: 'staging', origin, expectedVersion: '1'});
+  const before = new Map(f.files), load = vi.spyOn(f.store, 'load'), controlled = controlledService({...f.configuration(), status: 'reconciliation-required'} as UploadActiveConfiguration);
+  const entered = deferred<void>(), gate = deferred<void>(), original = controlled.disconnect.getMockImplementation()!;
+  controlled.disconnect.mockImplementationOnce(async input => {const result = await original(input); entered.resolve(); await gate.promise; return result;});
+  const main = new UploadMainController(origin, 'staging', () => f.store, () => {}), commands: string[] = [];
+  const attach = main.attach({generation: randomUUID(), call(command) {commands.push(command.action); return controlled.service.execute(command);}, retire() {}});
+  let resumed: UploadMainController | undefined;
+  try {
+    await entered.promise; if (boundary === 'cancel') controlled.service.cancel(); else await controlled.service.stop(); gate.resolve(); await attach;
+    expect(main.status).toMatchObject({state: 'paused', owner: null, error: 'RETIRED'}); expect(f.files).toEqual(before); expect(await f.store.readDisconnect()).toBeDefined(); expect(load).not.toHaveBeenCalled(); expect(commands).toEqual(['configuration', 'disconnect']);
+    const next = controlledService(controlled.state.configuration);
+    try {
+      resumed = new UploadMainController(origin, 'staging', () => f.store, () => {});
+      await resumed.attach({generation: randomUUID(), call: command => next.service.execute(command), retire() {}});
+      expect(resumed.status).toEqual(initialDashboardUploadStatus(origin)); expect(f.files.size).toBe(0); expect(await f.store.readDisconnect()).toBeUndefined(); expect(next.disconnect).not.toHaveBeenCalled(); expect(load).not.toHaveBeenCalled(); expect(next.request).not.toHaveBeenCalled();
+    } finally {resumed?.stop(); await next.service.stop();}
+    expect(controlled.recover.mock.calls).toEqual([[{startup: true}]]); expect(controlled.request).not.toHaveBeenCalled();
+  } finally {gate.resolve(); main.stop(); f.controller.stop(); await controlled.service.stop();}
 });
