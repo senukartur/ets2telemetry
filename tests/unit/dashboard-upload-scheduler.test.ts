@@ -1,18 +1,18 @@
 import {randomUUID} from 'node:crypto';
 import {it,expect,vi,afterEach} from 'vitest';
-import {UploadScheduler,type UploadStorage} from '../../apps/desktop/src/dashboard-upload/scheduler';
+import {UploadScheduler,type UploadStorage,type UploadClock} from '../../apps/desktop/src/dashboard-upload/scheduler';
 import {UploadRate,uploadRetryDelay,retryAfter} from '../../apps/desktop/src/dashboard-upload/retry';
 import type {UploadActiveConfiguration} from '../../packages/storage/src/upload-sync';
-import type {UploadTransport} from '../../apps/desktop/src/dashboard-upload/http';
+import type {UploadTransport,UploadHttpResult} from '../../apps/desktop/src/dashboard-upload/http';
 const origin='https://dashboard.example',registration={registrationId:randomUUID(),clientInstallationId:randomUUID(),origin,accountId:'a',companyId:'c',identityEpoch:'e',installationId:randomUUID(),bindingId:randomUUID()};
 const configuration:UploadActiveConfiguration={status:'ready',purpose:'history',version:'1',registration,credentialGeneration:randomUUID(),runId:randomUUID()},token=`vtc1_${randomUUID()}_${'a'.repeat(43)}`,limits={maxEventBytes:65536,maxDepth:16,eventsPerMinute:60,burst:10};
 const result=<T>(value:T)=>Promise.resolve({ok:true as const,value});
 function fixture(){
   const calls:string[]=[],db=new Proxy({} as UploadStorage,{get(_target,name){return vi.fn((input:Record<string,unknown>)=>{calls.push(String(name));switch(name){
-    case 'getUploadSchedulingHints':return result({registrationId:registration.registrationId,version:'1',credentialGeneration:configuration.credentialGeneration,retryAtMs:null,failureStreak:0});
+    case 'getUploadSchedulingHints':return result({status:'ready',registrationId:registration.registrationId,version:'1',credentialGeneration:configuration.credentialGeneration,retryAtMs:null,failureStreak:0,paused:null,held:null});
     case 'readRetainedUploadMaterializations':return result({examined:0,unmanagedPins:0,items:[]});
     case 'claimUploadAttempt':return result({status:'empty',attemptId:null,eventId:null,registrationId:null,registration:null,payload:null});
-    case 'getUploadStoreStatus':return result({discoveryAfter:'0',identityPendingSources:0,pendingSources:0,heldSources:0,queuedEvents:0,pressure:false});
+    case 'getUploadStoreStatus':return result({registrationId:registration.registrationId,version:'1',active:true,paused:null,discoveryAfter:'0',identityPendingSources:0,pendingSources:0,heldSources:0,queuedEvents:0,queuedBytes:0,deliveredEvents:0,pressure:false});
     case 'pageUploadScanRuns':return result({after:input.after,next:null,examined:0,items:[]});
     case 'pageUploadDiscovery':return result({after:'0',next:'0',examined:0,items:[]});
     case 'pageUploadSources':return result({phase:input.phase,after:input.after,next:null,examined:0,sources:[],receipts:[]});
@@ -21,6 +21,33 @@ function fixture(){
   const http:UploadTransport={request:vi.fn(()=>Promise.resolve({ok:true as const,statusCode:202,body:Buffer.from('{}'),retryAfter:null})),abort:vi.fn(),close:vi.fn()};return {db,http,calls};
 }
 afterEach(()=>vi.useRealTimers());
+const controlled:UploadClock={now:()=>Date.now(),random:()=>.5,schedule:(run,ms)=>setTimeout(run,ms),cancel:id=>clearTimeout(id as ReturnType<typeof setTimeout>)};
+it.each(['NETWORK','TIMEOUT',500,400,413,415,422] as const)('REG-005/010/011 surfaces durable %s as actionable backoff or validation status',async failure=>{
+  vi.useFakeTimers();const f=fixture(),attemptId=randomUUID(),eventId=randomUUID();
+  const claim=vi.fn(()=>result({status:'claimed',attemptId,eventId,registrationId:registration.registrationId,registration,payload:Buffer.from('{}')})),outcome=vi.fn(()=>result({status:'recorded',attemptId,eventId,registrationId:registration.registrationId,registration:null,payload:null}));
+  const db=new Proxy(f.db,{get(target,key){return key==='claimUploadAttempt'?claim:key==='recordUploadAttemptOutcome'?outcome:Reflect.get(target,key);}});
+  const response:UploadHttpResult=typeof failure==='string'?{ok:false,code:failure,statusCode:null,retryAfter:null}:{ok:true,statusCode:failure,body:Buffer.from('{}'),retryAfter:null};f.http.request=vi.fn(()=>Promise.resolve(response));
+  const scheduler=new UploadScheduler(db,f.http,origin,'test',()=>{},controlled);try{await scheduler.activate(configuration,token,limits);await vi.advanceTimersByTimeAsync(1);expect(outcome).toHaveBeenCalledWith(expect.objectContaining({attemptId,kind:typeof failure==='number'&&failure<500?'validation':'retry'}));expect(scheduler.status).toMatchObject({state:'paused',error:typeof failure==='number'&&failure<500?'VALIDATION':failure==='TIMEOUT'?'TIMEOUT':'NETWORK'});}finally{await scheduler.stop();}
+});
+it('REG-005/010/011 keeps a persisted validation hold visible through activation, counter refresh and another event success',async()=>{
+  vi.useFakeTimers();const f=fixture();let claimed=false;const hints=()=>result({status:'ready',registrationId:registration.registrationId,version:'1',credentialGeneration:configuration.credentialGeneration,retryAtMs:0,failureStreak:0,paused:null,held:'validation'});
+  const claim=()=>{if(claimed)return result({status:'empty',attemptId:null,eventId:null,registrationId:null,registration:null,payload:null});claimed=true;return result({status:'claimed',attemptId:randomUUID(),eventId:randomUUID(),registrationId:registration.registrationId,registration,payload:Buffer.from('{}')});},commit=vi.fn(()=>result({status:'delivered',eventId:randomUUID(),receiptId:randomUUID()}));
+  const db=new Proxy(f.db,{get(target,key){return key==='getUploadSchedulingHints'?hints:key==='claimUploadAttempt'?claim:key==='commitUploadReceipt'?commit:Reflect.get(target,key);}}),scheduler=new UploadScheduler(db,f.http,origin,'test',()=>{},controlled);
+  try{await scheduler.activate(configuration,token,limits);expect(scheduler.status).toMatchObject({state:'paused',error:'VALIDATION'});await vi.advanceTimersByTimeAsync(1500);expect(commit).toHaveBeenCalledOnce();expect(f.calls).toContain('getUploadStoreStatus');expect(scheduler.status).toMatchObject({state:'paused',error:'VALIDATION'});}finally{await scheduler.stop();}
+});
+it('REG-005/010/011 clears a transient diagnostic after the matching retry receives a durable receipt',async()=>{
+  vi.useFakeTimers();const f=fixture(),eventId=randomUUID();let failed=false,delivered=false,deadline:number|null=null;
+  const hints=()=>result({status:'ready',registrationId:registration.registrationId,version:'1',credentialGeneration:configuration.credentialGeneration,retryAtMs:deadline,failureStreak:failed&&!delivered?1:0,paused:null,held:null});
+  const claim=(input:{attemptId:string})=>result(delivered?{status:'empty',attemptId:null,eventId:null,registrationId:null,registration:null,payload:null}:{status:'claimed',attemptId:input.attemptId,eventId,registrationId:registration.registrationId,registration,payload:Buffer.from('{}')});
+  const outcome=(input:{retryAtMs:number})=>{failed=true;deadline=input.retryAtMs;return result({status:'recorded',attemptId:randomUUID(),eventId,registrationId:registration.registrationId,registration:null,payload:null});},commit=vi.fn(()=>{delivered=true;deadline=null;return result({status:'delivered',eventId,receiptId:randomUUID()});});
+  const db=new Proxy(f.db,{get(target,key){return key==='getUploadSchedulingHints'?hints:key==='claimUploadAttempt'?claim:key==='recordUploadAttemptOutcome'?outcome:key==='commitUploadReceipt'?commit:Reflect.get(target,key);}});
+  f.http.request=vi.fn(()=>Promise.resolve(failed?{ok:true as const,statusCode:202,body:Buffer.from('{}'),retryAfter:null}:{ok:false as const,code:'NETWORK' as const,statusCode:null,retryAfter:null}));
+  const scheduler=new UploadScheduler(db,f.http,origin,'test',()=>{},controlled);try{await scheduler.activate(configuration,token,limits);await vi.advanceTimersByTimeAsync(500);expect(scheduler.status).toMatchObject({state:'paused',error:'NETWORK'});expect(f.calls).toContain('getUploadStoreStatus');await vi.advanceTimersByTimeAsync(1000);expect(commit).toHaveBeenCalledOnce();expect(scheduler.status).toMatchObject({state:'connected',error:null});}finally{await scheduler.stop();}
+});
+it.each(['authentication','configuration','reconciliation'] as const)('REG-005/010/012 restores an authoritative %s pause before any claim or HTTP',async paused=>{
+  vi.useFakeTimers();const f=fixture(),db=new Proxy(f.db,{get(target,key){if(key==='getUploadSchedulingHints')return ()=>result({status:'ready',registrationId:registration.registrationId,version:'1',credentialGeneration:configuration.credentialGeneration,retryAtMs:0,failureStreak:0,paused,held:null});if(key==='getUploadStoreStatus')return ()=>result({registrationId:registration.registrationId,version:'1',active:true,paused,discoveryAfter:'0',identityPendingSources:0,pendingSources:0,heldSources:0,queuedEvents:1,queuedBytes:2,deliveredEvents:0,pressure:false});return Reflect.get(target,key);}}),scheduler=new UploadScheduler(db,f.http,origin,'test',()=>{},controlled);
+  try{await scheduler.activate(configuration,token,limits);await vi.advanceTimersByTimeAsync(3000);expect(scheduler.status).toMatchObject({state:'paused',error:paused==='authentication'?'AUTHENTICATION':paused==='configuration'?'CONFIGURATION':'RECONCILIATION'});expect(f.calls).not.toContain('claimUploadAttempt');expect(f.http.request).not.toHaveBeenCalled();}finally{await scheduler.stop();}
+});
 it('REG-011 uses capped advertised token bucket, full jitter and bounded Retry-After',()=>{
   const rate=new UploadRate(60,10,0);for(let i=0;i<10;i++)expect(rate.delay(0)).toBe(0);expect(rate.delay(0)).toBe(1000);expect(rate.delay(1000)).toBe(0);rate.configure(500,50);expect(rate.delay(1000)).toBe(1000);
   expect(uploadRetryDelay(1,null,0,()=>.5)).toBe(1000);expect(uploadRetryDelay(100,null,0,()=>1)).toBe(300000);expect(retryAfter('600',0)).toBe(300000);expect(retryAfter('Thu, 01 Jan 1970 00:00:03 GMT',1000)).toBe(2000);expect(retryAfter('nonsense',0)).toBe(0);

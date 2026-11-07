@@ -3,7 +3,7 @@ import {randomUUID} from 'node:crypto';
 import {initialDashboardUploadStatus,isDashboardUploadStatus,isDashboardToken} from '../../packages/contracts/src/dashboard-upload';
 import {DASHBOARD_ORIGINS,isReleaseDashboardOrigin,configuredDashboardOrigin} from '../../apps/desktop/src/dashboard-upload/config';
 import {connectionResponse,registrationResponse,jsonBody} from '../../apps/desktop/src/dashboard-upload/control-response';
-import {isUploadServiceRequest,isUploadServiceCancel} from '../../apps/desktop/src/dashboard-upload/service-contract';
+import {isUploadServiceRequest,isUploadServiceCancel,isUploadServiceReply,uploadReplyMatches} from '../../apps/desktop/src/dashboard-upload/service-contract';
 const bytes=(v:unknown)=>Buffer.from(JSON.stringify(v));
 const token=`vtc1_${randomUUID()}_${'a'.repeat(43)}`;
 describe('REG-010/012 closed Dashboard upload boundaries',()=>{
@@ -24,5 +24,10 @@ describe('REG-010/012 closed Dashboard upload boundaries',()=>{
     const status=initialDashboardUploadStatus(null);expect(isDashboardUploadStatus(status)).toBe(true);expect(isDashboardUploadStatus({...status,token})).toBe(false);
     const request={type:'dashboard-upload:request',id:randomUUID(),generation:randomUUID(),command:{action:'verify',token}};expect(isUploadServiceRequest(request)).toBe(true);expect(isUploadServiceRequest({...request,origin:'https://evil.example'})).toBe(false);
     const cancel={type:'dashboard-upload:cancel',generation:randomUUID()};expect(isUploadServiceCancel(cancel)).toBe(true);expect(isUploadServiceCancel({...cancel,token})).toBe(false);expect(isUploadServiceCancel({...cancel,generation:'old'})).toBe(false);
+  });
+  it('keeps private activation status closed, safe and command-specific',()=>{
+    const command={action:'activate' as const,token,generation:randomUUID(),version:'1'},status={...initialDashboardUploadStatus('https://dashboard.example'),state:'paused' as const,owner:{origin:'https://dashboard.example',accountId:'a',companyId:'c',identityEpoch:'e'},error:'VALIDATION' as const},reply={ok:true as const,value:{kind:'settled' as const,status}};
+    expect(isUploadServiceReply(reply)).toBe(true);expect(uploadReplyMatches(command,reply)).toBe(true);expect(uploadReplyMatches(command,{ok:true,value:{kind:'settled'}})).toBe(false);expect(uploadReplyMatches({action:'suspend'},reply)).toBe(false);
+    expect(isUploadServiceReply({...reply,value:{...reply.value,status:{...status,token}}})).toBe(false);expect(isUploadServiceReply({...reply,value:{...reply.value,payload:new Uint8Array([1])}})).toBe(false);
   });
 });

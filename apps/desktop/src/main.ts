@@ -151,7 +151,7 @@ function runApplication(profileError: unknown): void {
   let window: BrowserWindow | undefined, service: UtilityProcess | undefined, status: ScaffoldStatus | undefined;
   let subscribed = false, serviceReady = false;
   let uploadBridge:UploadServiceBridge|undefined;
-  const upload=new UploadMainController(configuredDashboardOrigin(ACTIVE_CHANNEL),ACTIVE_CHANNEL,()=>{if(!process.env.LOCALAPPDATA)throw Error('CREDENTIAL_UNAVAILABLE');return new UploadCredentialStore(new CredentialFiles(dataPaths(process.env.LOCALAPPDATA).credentials),electronUploadCrypto(safeStorage));},value=>{window?.webContents.send(UPLOAD_CHANNELS.status,value);});
+  const upload=new UploadMainController(configuredDashboardOrigin(ACTIVE_CHANNEL),ACTIVE_CHANNEL,()=>{if(!process.env.LOCALAPPDATA)throw Error('CREDENTIAL_UNAVAILABLE');return new UploadCredentialStore(new CredentialFiles(dataPaths(process.env.LOCALAPPDATA).credentials),electronUploadCrypto(safeStorage));},value=>{if(window&&!window.isDestroyed()&&!window.webContents.isDestroyed())window.webContents.send(UPLOAD_CHANNELS.status,value);});
   // First readiness creates the dashboard and overlay once; later service restarts never recreate them.
   let started = false;
   let startHiddenOnLaunch = process.argv.includes('--hidden');
@@ -856,9 +856,11 @@ function runApplication(profileError: unknown): void {
   }
   // Retires only dashboard document state. Upstream, freshness, the overlay and the service are unaffected; an overlay
   // edit started from the retired document is cancelled without writing.
-  function retireDashboard(): void {upload.documentChanged();nowDashboardReady = false; nowFocus.stop(); nowController?.end();
-    cancelOverlayEdit('dashboard-retired');
-    rendererEpoch++; subscribed = false; appStateSubscribed = false; dashboardSubscriptions.close(); dashboardPort = undefined;
+  function retireDashboard(): void {
+    try{upload.documentChanged();}finally{
+      nowDashboardReady = false; nowFocus.stop(); nowController?.end();cancelOverlayEdit('dashboard-retired');
+      rendererEpoch++; subscribed = false; appStateSubscribed = false; dashboardSubscriptions.close(); dashboardPort = undefined;
+    }
   }
   function createWindow(): void {
     // A packaged window inherits the executable's icon (forge packagerConfig.icon). Development runs electron.exe, so it
@@ -889,7 +891,7 @@ function runApplication(profileError: unknown): void {
     // notification-area registration failure that does not throw; a second launch always reopens the dashboard.
     created.on('close', event => {if (!lifecycle.exiting && !tray) {event.preventDefault(); created.minimize();}});
     created.on('session-end', endWindowsSession);
-    created.on('closed', () => {if (window !== created) return; retireDashboard(); window = undefined; timeline?.('DASHBOARD_WINDOW_CLOSED');});
+    created.on('closed', () => {if (window !== created) return; try{retireDashboard();}finally{if(window===created)window=undefined;timeline?.('DASHBOARD_WINDOW_CLOSED');}});
     loadWindow(created);
   }
   function loadWindow(target: BrowserWindow): void {

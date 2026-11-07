@@ -33,7 +33,7 @@ export class DashboardUploadService {
         const registered=await this.http.request('installations',command.token,new TextEncoder().encode(JSON.stringify({contract:{major:1,minor:0},clientInstallationId:reg.clientInstallationId})),this.#abort.signal);
         if(!registered.ok||registered.statusCode!==200&&registered.statusCode!==201)return failure(controlFailure(registered));
         const response=registrationResponse(registered.body,verified.owner);if(!response||response.installationId!==reg.installationId||response.bindingId!==reg.bindingId)return failure('RECONCILIATION');
-        if(this.#stopped||epoch!==this.#controlEpoch)return failure('RETIRED');await this.scheduler.activate(configuration,command.token,verified.limits);if(this.#stopped||epoch!==this.#controlEpoch)return failure('RETIRED');return {ok:true,value:{kind:'settled'}};
+        if(this.#stopped||epoch!==this.#controlEpoch)return failure('RETIRED');await this.scheduler.activate(configuration,command.token,verified.limits);if(this.#stopped||epoch!==this.#controlEpoch)return failure('RETIRED');return {ok:true,value:{kind:'settled',status:this.scheduler.status}};
       }
       if(!sameDashboardOwner(command.owner,verified.owner))return failure('RECONCILIATION');
       const installation=await stored(this.db.ensureUploadInstallation());if(installation.status!=='ready'||!installation.clientInstallationId)return failure('RECONCILIATION');

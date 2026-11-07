@@ -163,12 +163,19 @@ export function pageUploadSources(conn:StorageConnection,input:{registrationId:s
   if(rows.length)page.next=String(rows.at(-1)!.candidate_ref);return page;
 }
 export function getUploadSchedulingHints(conn:StorageConnection,input:{registrationId:string}):import('../upload-sync').UploadSchedulingHints {
-  check('getUploadSchedulingHints',input);const db=conn.reader(),state=connection(db);let streak=0;
+  check('getUploadSchedulingHints',input);const db=conn.reader(),state=connection(db),owner=get(db,'SELECT pause_reason FROM upload_registrations WHERE registration_id=?',input.registrationId);let streak=0,connectionRetry=0,reconciliation=!owner;
   if(state.active_registration===input.registrationId)for(const attempt of all(db,'SELECT * FROM upload_attempt ORDER BY rowid DESC LIMIT 9')){
-    if(attempt.registration_ref!==input.registrationId||attempt.connection_version!==state.version||attempt.credential_generation!==state.credential_generation||!['retry','ambiguous'].includes(String(attempt.outcome))||get(db,'SELECT 1 FROM upload_receipts WHERE event_ref=?',attempt.event_ref))break;streak++;
+    if(attempt.registration_ref!==input.registrationId||attempt.connection_version!==state.version||attempt.credential_generation!==state.credential_generation)break;
+    const envelope=get(db,'SELECT registration_ref,state,retry_at FROM upload_envelopes WHERE event_id=?',attempt.event_ref),receipt=get(db,'SELECT receipt_id,first_received FROM upload_receipts WHERE event_ref=?',attempt.event_ref);
+    if(!envelope||envelope.registration_ref!==input.registrationId||!Number.isSafeInteger(Number(envelope.retry_at))||Number(envelope.retry_at)<0||attempt.outcome==='receipt'&&!receipt||receipt&&(!isUploadUuid(receipt.receipt_id)||!Number.isSafeInteger(Number(receipt.first_received))||Number(receipt.first_received)<0||envelope.state!=='delivered')){reconciliation=true;break;}
+    if(receipt||!['retry','ambiguous'].includes(String(attempt.outcome)))break;
+    if(!['queued','sending'].includes(String(envelope.state))){reconciliation=true;break;}
+    connectionRetry=Math.max(connectionRetry,Number(envelope.retry_at));streak++;
   }
-  const queued=get(db,"SELECT retry_at FROM upload_envelopes WHERE registration_ref=? AND state='queued' ORDER BY retry_at,event_id LIMIT 1",input.registrationId);
-  return {registrationId:input.registrationId,version:String(state.version),credentialGeneration:nullableReference(state.credential_generation),retryAtMs:queued?Number(queued.retry_at):null,failureStreak:streak};
+  const queued=get(db,"SELECT retry_at FROM upload_envelopes WHERE registration_ref=? AND state='queued' ORDER BY retry_at,event_id LIMIT 1",input.registrationId),held=get(db,"SELECT event_id,hold_reason FROM upload_envelopes WHERE registration_ref=? AND state='held' ORDER BY retry_at,event_id LIMIT 1",input.registrationId);
+  const queuedRetry=queued?Number(queued.retry_at):null;if(queuedRetry!==null&&(!Number.isSafeInteger(queuedRetry)||queuedRetry<0)||held&&(!['validation','reconciliation'].includes(String(held.hold_reason))||get(db,'SELECT 1 FROM upload_receipts WHERE event_ref=?',held.event_id)))reconciliation=true;
+  const pause=owner?.pause_reason,paused=pause==='authentication'||pause==='configuration'||pause==='reconciliation'?pause:null;if(pause!==null&&paused===null)reconciliation=true;
+  return {status:reconciliation?'reconciliation-required':'ready',registrationId:input.registrationId,version:String(state.version),credentialGeneration:nullableReference(state.credential_generation),retryAtMs:queuedRetry!==null&&Number.isSafeInteger(queuedRetry)&&queuedRetry>=0?Math.max(connectionRetry,queuedRetry):null,failureStreak:streak,paused,held:held?held.hold_reason==='validation'?'validation':'reconciliation':null};
 }
 
 export function readRetainedUploadMaterializations(conn:StorageConnection):import('../upload-sync').RetainedUploadMaterializations {

@@ -843,3 +843,7 @@ it('REG-005/010/012 rejects original extra read inputs before cloning or dispatc
   for(const input of [null,{registrationId:P1,after:null,limit:101},{registrationId:P1,after:null,limit:1,extra:true}])await expect(f.client.pageUploadScanRuns(input as never)).resolves.toEqual(error('INVALID_INPUT'));
   await expect(f.client.pageUploadSources({registrationId:P1,phase:'sources',after:null,limit:1,secret:'x'} as never)).resolves.toEqual(error('INVALID_INPUT'));await expect(f.client.getUploadSchedulingHints({registrationId:P1,extra:true} as never)).resolves.toEqual(error('INVALID_INPUT'));expect(f.sent).toEqual([]);
 });
+it('REG-005/010/011/012 strictly validates bounded authoritative scheduling diagnostics',()=>{
+  const command={name:'getUploadSchedulingHints' as const,input:{registrationId:P1}},value={status:'ready',registrationId:P1,version:'1',credentialGeneration:P1,retryAtMs:300000,failureStreak:1,paused:null,held:'validation'};
+  expect(isUploadSyncResult(command,value)).toBe(true);for(const bad of [{...value,status:'missing'},{...value,paused:'arbitrary'},{...value,held:'unknown'},{...value,failureStreak:10},{...value,retryAtMs:-1},{...value,registrationId:'80000000-0000-4000-8000-000000000001'},{...value,rawError:'private'}])expect(isUploadSyncResult(command,bad)).toBe(false);
+});

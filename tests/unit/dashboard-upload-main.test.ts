@@ -1,5 +1,5 @@
 import {it,expect,vi} from 'vitest';
-import type {DashboardUploadStatus} from '../../packages/contracts/src/dashboard-upload';
+import {initialDashboardUploadStatus,type DashboardUploadStatus,type DashboardOwner} from '../../packages/contracts/src/dashboard-upload';
 import {randomUUID} from 'node:crypto';
 import {UploadMainController} from '../../apps/desktop/src/dashboard-upload/main-controller';
 import {UploadCredentialStore} from '../../apps/desktop/src/dashboard-upload/credential-store';
@@ -8,11 +8,12 @@ import {DashboardUploadService} from '../../apps/desktop/src/dashboard-upload/se
 import type {UploadStorage} from '../../apps/desktop/src/dashboard-upload/scheduler';
 import type {UploadServiceReply,UploadServiceCommand} from '../../apps/desktop/src/dashboard-upload/service-contract';
 const origin='https://dashboard.example',owner={origin,accountId:'a',companyId:'c',identityEpoch:'e'},token=`vtc1_${randomUUID()}_${'a'.repeat(43)}`;
+function activeStatus(configuration:Record<string,unknown>):DashboardUploadStatus {const reg=configuration.registration as DashboardOwner;return {...initialDashboardUploadStatus(origin),state:'connected',owner:{origin:reg.origin,accountId:reg.accountId,companyId:reg.companyId,identityEpoch:reg.identityEpoch}};}
 function fixture(publish:(status:DashboardUploadStatus)=>void=()=>{}){
   const files=new Map<string,Uint8Array>(),calls:UploadServiceCommand[]=[],generation=randomUUID();let configuration:Record<string,unknown>={status:'ready',purpose:'history',version:'0',registration:null,credentialGeneration:null,runId:null};
   const store=new UploadCredentialStore({async read(name){await Promise.resolve();return files.get(name);},async write(name,bytes){await Promise.resolve();files.set(name,bytes);},async remove(name){await Promise.resolve();files.delete(name);},async names(limit){await Promise.resolve();return [...files.keys()].slice(0,limit);}},{async available(){await Promise.resolve();return true;},async encrypt(v){await Promise.resolve();return Buffer.from(v);},async decrypt(v){await Promise.resolve();return {result:v.toString(),shouldReEncrypt:false};}});
   const registration={...owner,registrationId:randomUUID(),clientInstallationId:randomUUID(),installationId:randomUUID(),bindingId:randomUUID()};let lost=false;
-  const rpc={generation,retire(){},async call(command:UploadServiceCommand):Promise<UploadServiceReply>{await Promise.resolve();calls.push(command);switch(command.action){case 'configuration':return {ok:true,value:{kind:'configuration',configuration:configuration as never}};case 'verify':return {ok:true,value:{kind:'verified',owner,limits:{maxEventBytes:65536,maxDepth:16,eventsPerMinute:60,burst:10}}};case 'prepare':return {ok:true,value:{kind:'prepared',owner,registration,expectedVersion:'0'}};case 'confirm':configuration={...configuration,version:'1',registration,credentialGeneration:command.credentialGeneration,runId:command.confirmationId};return lost?{ok:false,error:'TIMEOUT'}:{ok:true,value:{kind:'connection',connection:{status:'confirmed',version:'1',runId:command.confirmationId}}};default:return {ok:true,value:{kind:'settled'}};}}};
+  const rpc={generation,retire(){},async call(command:UploadServiceCommand):Promise<UploadServiceReply>{await Promise.resolve();calls.push(command);switch(command.action){case 'configuration':return {ok:true,value:{kind:'configuration',configuration:configuration as never}};case 'verify':return {ok:true,value:{kind:'verified',owner,limits:{maxEventBytes:65536,maxDepth:16,eventsPerMinute:60,burst:10}}};case 'prepare':return {ok:true,value:{kind:'prepared',owner,registration,expectedVersion:'0'}};case 'confirm':configuration={...configuration,version:'1',registration,credentialGeneration:command.credentialGeneration,runId:command.confirmationId};return lost?{ok:false,error:'TIMEOUT'}:{ok:true,value:{kind:'connection',connection:{status:'confirmed',version:'1',runId:command.confirmationId}}};default:return {ok:true,value:command.action==='activate'?{kind:'settled',status:activeStatus(configuration)}:{kind:'settled'}};}}};
   const controller=new UploadMainController(origin,'staging',()=>store,publish);return {controller,rpc,files,calls,store,configuration:()=>configuration,setConfiguration(value:Record<string,unknown>){configuration=value;},lose(){lost=true;}};
 }
 it('REG-006/010/012 keeps committed ciphertext after lost confirmation reply and resumes from authoritative DB configuration',async()=>{
@@ -73,4 +74,18 @@ it('REG-010/012 out-of-band utility cancellation fences a control still waiting 
   const pending=new Promise(done=>{open=done;}),db=new Proxy({} as UploadStorage,{get(_target,key){if(key==='getUploadConfiguration')return ()=>{if(first){first=false;return pending;}return Promise.resolve({ok:true,value:configuration});};if(key==='recoverUploadAttempt')return ()=>Promise.resolve({ok:true,value:{status:'empty',attemptId:null,eventId:null,registrationId:null,registration:null,payload:null}});throw Error('UNEXPECTED_STORAGE_OPERATION');}});
   const service=new DashboardUploadService(db,{request(){requests++;return Promise.resolve({ok:true,statusCode:200,body:Buffer.from(JSON.stringify({contract:{major:1,minor:0},accountId:'a',companyId:'c',identityEpoch:'e',limits:{maxEventBytes:65536,maxDepth:16,eventsPerMinute:60,burst:10}})),retryAfter:null});},abort(){},close(){}},origin,'test',()=>{});
   const retired=service.execute({action:'verify',token});service.cancel();open({ok:true,value:configuration});expect(await retired).toEqual({ok:false,error:'RETIRED'});expect(requests).toBe(0);expect(await service.execute({action:'verify',token})).toMatchObject({ok:true,value:{kind:'verified',owner}});expect(requests).toBe(1);await service.stop();
+});
+it.each(['confirm','restart'] as const)('REG-005/010/012 keeps authoritative activation pause status through main %s',async boundary=>{
+  const f=fixture(),original=f.rpc.call;let restarted:UploadMainController|undefined;
+  try{f.rpc.call=command=>command.action==='activate'?Promise.resolve({ok:true,value:{kind:'settled',status:{...activeStatus(f.configuration()),state:'paused',error:'VALIDATION'}}}):original(command);
+    await f.controller.attach(f.rpc);const candidate=await f.controller.handle('verify',[token]);const confirmed=await f.controller.handle('confirm',[candidate.candidateId]);expect(confirmed).toMatchObject({state:'paused',error:'VALIDATION',owner,candidateId:null});
+    if(boundary==='restart'){restarted=new UploadMainController(origin,'staging',()=>f.store,()=>{});await restarted.attach(f.rpc);expect(restarted.status).toMatchObject({state:'paused',error:'VALIDATION',owner,candidateId:null});}
+  }finally{restarted?.stop();f.controller.stop();}
+});
+it.each(['owner','origin'] as const)('REG-010/012 rejects activation status for another %s',async mismatch=>{
+  const f=fixture(),original=f.rpc.call;try{await f.controller.attach(f.rpc);const candidate=await f.controller.handle('verify',[token]);await f.controller.handle('confirm',[candidate.candidateId]);
+    const wrong=activeStatus(f.configuration());if(mismatch==='owner')wrong.owner={...owner,accountId:'other'};else{wrong.origin='https://other.example';wrong.owner={...owner,origin:wrong.origin};}
+    f.rpc.call=command=>command.action==='activate'?Promise.resolve({ok:true,value:{kind:'settled',status:wrong}}):original(command);
+    const restarted=new UploadMainController(origin,'staging',()=>f.store,()=>{});await restarted.attach(f.rpc);expect(restarted.status).toMatchObject({state:'paused',error:'RECONCILIATION',owner});restarted.stop();
+  }finally{f.controller.stop();}
 });

@@ -32,7 +32,7 @@ export interface UploadActiveConfiguration {status:'ready'|'reconciliation-requi
 export interface UploadRunPage {after:string|null;next:string|null;examined:number;items:UploadScanProgress[]}
 export interface UploadSourceState {tripUuid:string;state:'identity-pending'|'held'|'pending'|'queued'|'delivered';latestRevision:number;lastReceiptUtcMs:number|null}
 export interface UploadSourcePage {phase:'sources'|'receipts';after:string|null;next:string|null;examined:number;sources:UploadSourceState[];receipts:{eventId:string;firstReceivedUtcMs:number}[]}
-export interface UploadSchedulingHints {registrationId:string;version:string;credentialGeneration:string|null;retryAtMs:number|null;failureStreak:number}
+export interface UploadSchedulingHints {status:'ready'|'reconciliation-required';registrationId:string;version:string;credentialGeneration:string|null;retryAtMs:number|null;failureStreak:number;paused:'authentication'|'configuration'|'reconciliation'|null;held:'validation'|'reconciliation'|null}
 const receiptCursor:Check=v=>typeof v==='string'&&v.length<=64&&/^r:(0|[1-9][0-9]{0,15}):[0-9a-f-]{36}$/.test(v)&&safe(Number(v.split(':')[1]))&&isUploadUuid(v.split(':')[2]);
 const receiptCursorAfter=(next:string,after:string)=>{const n=next.split(':'),a=after.split(':');return BigInt(n[1])>BigInt(a[1])||n[1]===a[1]&&n[2]>a[2];};
 export interface RetainedUploadMaterializations {examined:number;unmanagedPins:number;items:{workId:string;registrationId:string;state:'preparing'|'folding'|'complete'|'frozen'|'equal'|'held'|'stale'}[]}
@@ -94,7 +94,7 @@ const resultChecks:Record<UploadSyncName,Check>={
   getUploadConfiguration:shape({status:one('ready','reconciliation-required'),purpose:one('history','synthetic','replay'),version:decimal,registration:nullable(registrationCheck),credentialGeneration:nullable(text),runId:nullable(isUploadUuid)}),
   pageUploadScanRuns:shape({after:nullable(isUploadUuid),next:nullable(isUploadUuid),examined:bounded,items:v=>Array.isArray(v)&&v.length<=100&&v.every(shape({runId:isUploadUuid,phase:one('legacy','candidates','complete','pressure'),examined:bounded,cursor:shape({legacy:decimal,ordinal:decimal})}))}),
   pageUploadSources:shape({phase:one('sources','receipts'),after:nullable(v=>decimal(v)||receiptCursor(v)),next:nullable(v=>decimal(v)||receiptCursor(v)),examined:bounded,sources:v=>Array.isArray(v)&&v.length<=100&&v.every(shape({tripUuid:isUploadUuid,state:one('identity-pending','held','pending','queued','delivered'),latestRevision:safe,lastReceiptUtcMs:nullable(safe)})),receipts:v=>Array.isArray(v)&&v.length<=100&&v.every(shape({eventId:isUploadUuid,firstReceivedUtcMs:safe}))}),
-  getUploadSchedulingHints:shape({registrationId:isUploadUuid,version:decimal,credentialGeneration:nullable(text),retryAtMs:nullable(safe),failureStreak:v=>safe(v)&&v<=9}),
+  getUploadSchedulingHints:shape({status:one('ready','reconciliation-required'),registrationId:isUploadUuid,version:decimal,credentialGeneration:nullable(text),retryAtMs:nullable(safe),failureStreak:v=>safe(v)&&v<=9,paused:nullable(one('authentication','configuration','reconciliation')),held:nullable(one('validation','reconciliation'))}),
   ensureUploadInstallation:shape({status:one('ready','reconciliation-required'),clientInstallationId:nullable(isUploadUuid)}),
   recordUploadRegistration:shape({status:one('recorded','reconciliation-required'),registrationId:isUploadUuid}),
   confirmUploadOwner:shape({status:one('confirmed','stale','reconciliation-required'),version:decimal,runId:nullable(isUploadUuid)}),
