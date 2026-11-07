@@ -174,6 +174,16 @@ The overlay has an extra section, **Next mandatory break** (Russian: **До об
 - **Older versions.** After this version has saved your settings, an earlier version of the application treats the settings file as written by a newer version: it uses defaults and does not save until you run this version again.
 - **Not recorded.** The value is only shown live; it is not saved in the journal or the export.
 
+## Hard Mode on the overlay (ET-070)
+
+Every overlay layout ends with a Hard Mode indicator: a flame icon with **HM** in the strip and the Minimal HUD, or a **Hard Mode** row in the Card and the Cluster panel. It cannot be switched off and does not count as a section.
+
+- **Active** (green, with a check): your saved settings currently meet all twelve Hard Mode rules. The Card and the Cluster show `12/12`.
+- **Not active** (amber, no check): a rule does not pass, or the application cannot confirm the settings yet. The Card, the Cluster and the HUD show how many rules pass, for example `11/12`, when it is known; the strip shows only **HM**.
+- **Lost** (red, with a cross): the current trip has lost Hard Mode for good. The strip and the HUD strike through **HM**; the Card and the Cluster show **lost** (Russian **потерян**). Fixing the settings does not restore the trip.
+
+The indicator only shows what the **Hard Mode** page already knows; open that page for the rules and the reasons. It makes the Card, the Cluster panel and the Minimal HUD one row taller and can give the strip one more row; the extra space is transparent.
+
 ## Overlay size (ET-045e)
 
 In **Settings → Overlay**, **Edit position** shows **Smaller** and **Larger** (Russian: **Меньше** and **Больше**), which change the overlay's size in 10% steps from 50% to 300%. Since this version 100% is the size that earlier versions showed at 70%, so a size you saved before now looks about 30% smaller; choose a larger percentage (for example 70% instead of 50%) to keep the earlier look. The strip keeps its full width inside the game window at 100% and below and only its text gets smaller. Once this version saves a setting, earlier versions show default settings and cannot save until this version runs again; keep a separate Windows user profile for older test builds.

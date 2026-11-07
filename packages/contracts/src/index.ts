@@ -218,6 +218,14 @@ export type OverlayUrgency = 'soon' | 'due';
 export type OverlaySectionView =
   | {id: OverlaySectionId; state: 'value'; text: string; detail?: string; ring?: number; speedRing?: number; urgency?: OverlayUrgency}
   | {id: OverlaySectionId; state: 'unavailable'};
+/**
+ * The overlay's fixed Hard Mode indicator (ET-070): `active` only for a current passing assessment, `lost` when the
+ * current trip lost Hard Mode (it takes priority), `inactive` otherwise, including unknown, an expired publication lease
+ * and a service that is not ready.
+ */
+export type OverlayHardModeState = 'active' | 'inactive' | 'lost';
+/** `passed` (an integer 0 to 11, the rules in `pass`) is set only on `inactive` and only when at least one rule was evaluated. */
+export interface OverlayHardMode {state: OverlayHardModeState; passed?: number}
 /** Read-only display projection: no source selection, HWND or native placement authority. */
 export interface OverlayPresentation {
   /** Saved background opacity in whole percentages; absent legacy projections use 80%. */
@@ -244,6 +252,11 @@ export interface OverlayPresentation {
   editing: boolean;
   /** The interface language for localized tags and units. */
   language?: AppLanguage;
+  /**
+   * ET-070: display-only Hard Mode state for the fixed indicator, an enum and a pass count, never texts, rules or
+   * configuration. Validated in the overlay preload; a missing value renders as not active.
+   */
+  hardMode?: OverlayHardMode;
 }
 export interface OverlayBridge {
   subscribeOverlay(listener: (update: OverlayPresentation) => void): () => void;

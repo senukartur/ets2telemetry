@@ -27,6 +27,13 @@ export const STRIP_ITEM_MAX_WIDTH_CSS: Readonly<Record<OverlaySectionId, number>
 });
 
 /**
+ * ET-070 (owner decisions D2, D3): the fixed Hard Mode indicator is the strip's last item after every enabled section. Its
+ * cap holds the group divider's 15 px padding, the icon, "HM" and a fixed 14 px cue slot, so a state change never resizes
+ * it or moves a section.
+ */
+export const STRIP_HARD_MODE_MAX_WIDTH_CSS = 100;
+
+/**
  * The surface border's width in CSS px at this zoom. Chromium snaps a nonzero border thinner than one device pixel up to
  * one device pixel, so below zoom 1 the 1 px border takes 1 / zoom CSS px. At a device scale factor above 1 the snapped
  * border is thinner than that, so this stays conservative.
@@ -39,13 +46,14 @@ export function stripBorderWidthCss(zoom: number): number {
  * The number of rows the strip reserves for these enabled sections at this CSS width and zoom (the overlay document's
  * zoom factor, overlayZoom of the scale setting since ET-045e), or undefined when one item could not fit a row. The
  * inner width is floor(CSS width − 2 × border − 24), rounded down to stay conservative. It packs the worst case greedily
- * in DOM order, as flex-wrap collects lines: both tag slots, then every enabled section in canonical order, each at its
- * maximum width with the column gap between neighbours. Real items are never wider than their maximum and tags may be
- * absent, so the rendered strip never needs more lines.
+ * in DOM order, as flex-wrap collects lines: both tag slots, then every enabled section in canonical order and the Hard
+ * Mode indicator (ET-070), each at its maximum width with the column gap between neighbours. Real items are never wider
+ * than their maximum and tags may be absent, so the rendered strip never needs more lines.
  */
 export function stripRowCount(sections: OverlaySections, cssWidth: number, zoom = 1): number | undefined {
   const inner = Math.floor(cssWidth - 2 * stripBorderWidthCss(zoom) - 2 * STRIP_PADDING_X_CSS);
-  const widths = [...Array.from({length: STRIP_TAG_SLOTS}, () => STRIP_TAG_MAX_WIDTH_CSS), ...OVERLAY_SECTION_IDS.filter(id => sections[id]).map(id => STRIP_ITEM_MAX_WIDTH_CSS[id])];
+  const widths = [...Array.from({length: STRIP_TAG_SLOTS}, () => STRIP_TAG_MAX_WIDTH_CSS), ...OVERLAY_SECTION_IDS.filter(id => sections[id]).map(id => STRIP_ITEM_MAX_WIDTH_CSS[id]),
+    STRIP_HARD_MODE_MAX_WIDTH_CSS];
   if (!Number.isFinite(inner) || widths.some(width => width > inner)) return undefined;
   let rows = 1, line = 0;
   for (const width of widths) {

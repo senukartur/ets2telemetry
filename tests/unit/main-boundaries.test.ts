@@ -1438,13 +1438,15 @@ it('creates the overlay window at the strip size reserved for every section by d
 });
 it('creates the overlay window at the size the saved layout reserves for its sections', async () => {
   settingsView = {...settingsView, overlay: {enabled: true, backgroundOpacity: 80, layout: 'cluster', sections: ALL_SECTIONS, placements: PLACEMENTS}}; await ready();
-  expect(configurations[1]).toMatchObject({width: 308, height: 203, webPreferences: {zoomFactor: 0.7}});
+  // ET-070: the Hard Mode row makes the panel's content 34 + 21 × 13 = 307 CSS px, ceil(307 × 0.7 + 2) = ceil(216.9) = 217 (203 before).
+  expect(configurations[1]).toMatchObject({width: 308, height: 217, webPreferences: {zoomFactor: 0.7}});
 });
 it('delivers the saved layout and sections in the overlay document first projection', async () => {
   settingsView = {...settingsView, overlay: {enabled: true, backgroundOpacity: 80, layout: 'card', sections: {...ALL_SECTIONS, rpm: false, cargo: false}, placements: PLACEMENTS}}; await ready();
   // ET-052: thirteen sections reserve 48 + 24 × 13 = 360 CSS px: ceil(358 × 0.7 + 2) = ceil(252.6) = 253, one DIP above the
-  // card's nominal round(360 × 0.7) = 252 (twelve sections gave ceil(236) below it).
-  expect(configurations[1]).toMatchObject({width: 210, height: 253});
+  // card's nominal round(360 × 0.7) = 252 (twelve sections gave ceil(236) below it). ET-070: the Hard Mode row reserves
+  // 48 + 24 × 14 = 384, ceil(382 × 0.7 + 2) = ceil(269.4) = 270.
+  expect(configurations[1]).toMatchObject({width: 210, height: 270});
   ipc.emit('overlay:subscribe', overlayTrusted());
   const first = overlayProjection(channels.at(-1)!);
   expect(first).toMatchObject({layout: 'card', freshness: 'unavailable', paused: false});
@@ -1485,7 +1487,8 @@ it('applies an overlay layout only after the durable save, then republishes and 
   settingsView = {...settingsView, overlay: {enabled: true, backgroundOpacity: 80, layout: 'card', sections: ALL_SECTIONS, placements: PLACEMENTS}, state: 'loaded'}; saved.resolve(settingsView);
   await expect(request).resolves.toEqual(settingsView);
   expect(pushes().at(-1)).toMatchObject({settings: settingsView});
-  expect(windows[1].setBounds).toHaveBeenLastCalledWith({x: -226, y: 16, width: 210, height: 287});
+  // ET-070: every section and the Hard Mode row, ceil(430 × 0.7 + 2) = ceil(303) = 303 (287 before).
+  expect(windows[1].setBounds).toHaveBeenLastCalledWith({x: -226, y: 16, width: 210, height: 303});
   expect(windows[1].setAlwaysOnTop.mock.calls).toEqual([[true, 'screen-saver']]); expect(windows[1].moveTop).toHaveBeenCalledOnce();
   expect(windows[1].showInactive).toHaveBeenCalledOnce();
   await vi.advanceTimersByTimeAsync(50);
@@ -1565,7 +1568,9 @@ it('refuses overlay settings requests once exiting', async () => {
 // ET-010c decisions F2, F3 and F7: main validates the v1 projection before freshness and the overlay see it, expires it
 // on its own clock and feeds it into the overlay projection. The v1 input is snapshot-live with the v0 job ids under the
 // ETS2 game origin; the overlay origin text is written by hand from it. Since ET-012b the projection also carries `editing`.
-const OVERLAY_KEYS = ['source', 'origin', 'status', 'speed', 'speedUnit', 'fuel', 'fuelUnit', 'freshness', 'layout', 'backgroundOpacity', 'paused', 'sections', 'editing', 'language', 'contentAnchorY'];
+// ET-070 adds the display-only Hard Mode indicator after the content anchor.
+const OVERLAY_KEYS = ['source', 'origin', 'status', 'speed', 'speedUnit', 'fuel', 'fuelUnit', 'freshness', 'layout', 'backgroundOpacity', 'paused', 'sections', 'editing', 'language', 'contentAnchorY',
+  'hardMode'];
 const ORIGIN_VALUE = {id: 'origin', state: 'value', text: 'Synthetic City A'};
 const sectionOf = (projection: Record<string, unknown>, id: string) => (projection.sections as {id: string}[]).find(section => section.id === id);
 function readingWithV1(options: V1Options = {}): LiveTelemetry {
@@ -1701,7 +1706,8 @@ it('re-places the overlay when a late settings read brings another layout', asyn
   expect(windows[1].setBounds).not.toHaveBeenCalled(); expect(windows[1].showInactive).not.toHaveBeenCalled();
   settingsView = {...settingsView, overlay: {enabled: true, backgroundOpacity: 80, layout: 'hud', sections: ALL_SECTIONS, placements: PLACEMENTS}, state: 'loaded', writable: true};
   settingsChanged!();
-  expect(windows[1].setBounds).toHaveBeenLastCalledWith({x: -1904, y: 16, width: 224, height: 265});
+  // ET-070: the HUD with every section and the Hard Mode row is ceil(402 × 0.7) = ceil(281.4) = 282 high (265 before).
+  expect(windows[1].setBounds).toHaveBeenLastCalledWith({x: -1904, y: 16, width: 224, height: 282});
   await vi.advanceTimersByTimeAsync(50);
   expect(overlayProjection(overlayChannel)).toMatchObject({layout: 'hud', freshness: 'current'});
   expect(windows[1].showInactive).toHaveBeenCalledOnce();
@@ -1790,7 +1796,8 @@ it.each([false, true])('keeps the real pending settings defaults hidden until a 
     expect(store.view()).toMatchObject({state: 'loaded-with-fallbacks', autostart: true, overlay: {enabled, layout: 'hud'}});
     expect(await readFile(path.join(directory, 'settings.json'), 'utf8')).toBe(bytes);
     if (enabled) {
-      expect(windows[1].setBounds.mock.calls).toEqual([[{x: -1904, y: 16, width: 224, height: 265}]]);
+      // ET-070: 282 with the Hard Mode row, ceil(402 × 0.7).
+      expect(windows[1].setBounds.mock.calls).toEqual([[{x: -1904, y: 16, width: 224, height: 282}]]);
       expect(windows[1].showInactive).toHaveBeenCalledOnce();
       expect(windows[1].setBounds.mock.invocationCallOrder[0]).toBeLessThan(windows[1].showInactive.mock.invocationCallOrder[0]);
     } else expect(windows[1].showInactive).not.toHaveBeenCalled();
@@ -1823,8 +1830,9 @@ const EDITABLE = {ignoreMouse: false, focusable: true, movable: true, skipTaskba
 it('creates the overlay window at the saved scale of its layout and applies that zoom after every load', async () => {
   settingsView = {...settingsView, overlay: {enabled: true, backgroundOpacity: 80, layout: 'cluster', sections: ALL_SECTIONS, placements: {...PLACEMENTS, cluster: {x: 0, y: 1, scale: 1.5}}}}; await ready();
   // ET-045e: the saved setting 1.5 is zoom 1.05, so the cluster with every section is round(440 × 1.05) = 462 wide and
-  // ceil(286 × 1.05 + 2.1) = 303 high (ET-052; 281 with fourteen sections; ET-012d's 660 × 401 at zoom 1.5).
-  expect(configurations[1]).toMatchObject({width: 462, height: 303, webPreferences: {zoomFactor: 1.05, partition: 'ets2telemetry-overlay'}});
+  // ceil(286 × 1.05 + 2.1) = 303 high (ET-052; 281 with fourteen sections; ET-012d's 660 × 401 at zoom 1.5). ET-070: the
+  // Hard Mode row makes it ceil(307 × 1.05 + 2.1) = ceil(324.45) = 325.
+  expect(configurations[1]).toMatchObject({width: 462, height: 325, webPreferences: {zoomFactor: 1.05, partition: 'ets2telemetry-overlay'}});
   expect(configurations[0].webPreferences).not.toHaveProperty('zoomFactor');
   overlayContents.emit('did-finish-load'); expect(overlayContents.setZoomFactor).toHaveBeenLastCalledWith(1.05);
   expect(contents.setZoomFactor).not.toHaveBeenCalled();
@@ -3033,6 +3041,90 @@ it('does not renew aged Hard Mode publication lifetime on trip-only updates', as
   expect(handlers.get('hard-mode:status')!(trusted())).toMatchObject({assessment: {state: 'unknown'}, trip});
   child.emit('message', {type: 'hard-mode', update: 'assessment', assessment, remainingNs: '3000000000'});
   expect(handlers.get('hard-mode:status')!(trusted())).toEqual({assessment, trip});
+});
+
+// ET-070 (D3, D4): the overlay's fixed Hard Mode indicator is main's lease-checked status reduced to an enum and a pass count.
+async function hardModeFixtures() {
+  const {evaluateHardMode, parseHardModeConfig, advanceHardMode} = await import('../../packages/telemetry-core/src/hard-mode');
+  const {HARD_MODE_CONFIG} = await import('../shared/hard-mode');
+  const pass = evaluateHardMode(parseHardModeConfig(HARD_MODE_CONFIG), Date.now(), 'fixture');
+  // Fatigue off: eleven of the twelve rules pass.
+  const fail = evaluateHardMode(parseHardModeConfig(HARD_MODE_CONFIG.replace('g_fatigue "1"', 'g_fatigue "0"')), Date.now(), 'fixture');
+  const publish = (assessment: unknown, remainingNs = '3000000000') => child.emit('message', {type: 'hard-mode', update: 'assessment', assessment, remainingNs});
+  return {pass, fail, publish, lostTrip: advanceHardMode(advanceHardMode(null, pass), fail)};
+}
+it('ET-070 projects the overlay Hard Mode indicator from the lease-checked status: active only on a pass, lost on a trip loss', async () => {
+  await ready(); vi.spyOn(process.hrtime, 'bigint').mockImplementation(() => 0n);
+  const {pass, fail, publish, lostTrip} = await hardModeFixtures();
+  expect(fail.state).toBe('fail'); expect(fail.rules.filter(rule => rule.state === 'pass')).toHaveLength(11);
+  // A ready service without evidence has twelve unknown rules: not active, without a count.
+  expect(hydrateConsumers().overlay.hardMode).toStrictEqual({state: 'inactive'});
+  publish(pass); expect(hydrateConsumers().overlay.hardMode).toStrictEqual({state: 'active'});
+  publish(fail); expect(hydrateConsumers().overlay.hardMode).toStrictEqual({state: 'inactive', passed: 11});
+  // A malformed publication invalidates the evidence; it never keeps or yields active.
+  publish(pass); publish({...pass, filename: 'private'}); expect(hydrateConsumers().overlay.hardMode).toStrictEqual({state: 'inactive'});
+  publish(pass); child.emit('message', {type: 'hard-mode', update: 'trip', trip: lostTrip});
+  expect(hydrateConsumers().overlay.hardMode).toStrictEqual({state: 'lost'});
+  // Passing settings never restore the current trip's loss.
+  publish(pass); expect(hydrateConsumers().overlay.hardMode).toStrictEqual({state: 'lost'});
+});
+it('ET-070 republishes the overlay indicator as not active when the lease ends without telemetry, and at once on service exit', async () => {
+  await ready(); let mono = 0n; vi.spyOn(process.hrtime, 'bigint').mockImplementation(() => mono);
+  const {pass, publish} = await hardModeFixtures();
+  ipc.emit('overlay:subscribe', overlayTrusted()); const overlayChannel = channels.at(-1)!;
+  const last = () => overlayChannel.port1.postMessage.mock.lastCall![0];
+  const consume = () => overlayChannel.port1.emit('message', {data: {type: 'consumed', delivery: last().delivery}});
+  consume(); publish(pass); await vi.advanceTimersByTimeAsync(50);
+  expect(last().update.hardMode).toStrictEqual({state: 'active'}); consume();
+  const deliveries = overlayChannel.port1.postMessage.mock.calls.length;
+  // No telemetry frame and no service message arrives; main's clock passes the 3 s lease and its timer fires.
+  mono = 2_999_000_000n; await vi.advanceTimersByTimeAsync(2999); expect(overlayChannel.port1.postMessage.mock.calls).toHaveLength(deliveries);
+  mono = 3_000_000_000n; await vi.advanceTimersByTimeAsync(1); await vi.advanceTimersByTimeAsync(50);
+  expect(last().update.hardMode).toStrictEqual({state: 'inactive'}); consume();
+  publish(pass, '3000000000'); await vi.advanceTimersByTimeAsync(50); expect(last().update.hardMode).toStrictEqual({state: 'active'});
+  child.emit('exit', 1); expect(hydrateConsumers().overlay.hardMode).toStrictEqual({state: 'inactive'});
+});
+it('ET-070 keeps a passing publication accepted before service readiness not active until readiness republishes it', async () => {
+  await loadMain(); await Promise.resolve(); vi.spyOn(process.hrtime, 'bigint').mockImplementation(() => 0n);
+  const {pass, publish} = await hardModeFixtures();
+  // First start: no consumer can subscribe before readiness; after it the indicator is active.
+  publish(pass); child.emit('message', {type: 'ready'}); await settle();
+  expect(hydrateConsumers().overlay.hardMode).toStrictEqual({state: 'active'});
+  // A restarted service: its pass before readiness is computed from status(false), twelve unknown rules, so not active.
+  child.emit('exit', 1); await vi.advanceTimersByTimeAsync(250); const replacement = children[1];
+  replacement.emit('message', {type: 'hard-mode', update: 'assessment', assessment: pass, remainingNs: '3000000000'});
+  expect(hydrateConsumers().overlay.hardMode).toStrictEqual({state: 'inactive'});
+  // Readiness alone republishes it; no further service message or telemetry frame arrives.
+  replacement.emit('message', {type: 'ready'}); await settle();
+  expect(hydrateConsumers().overlay.hardMode).toStrictEqual({state: 'active'});
+});
+it('ET-070 posts no overlay indicator after the exit request, neither from a service message nor from the lease timer', async () => {
+  await ready(); let mono = 0n; vi.spyOn(process.hrtime, 'bigint').mockImplementation(() => mono);
+  const {pass, fail, publish} = await hardModeFixtures();
+  ipc.emit('overlay:subscribe', overlayTrusted()); const overlayChannel = channels.at(-1)!;
+  overlayChannel.port1.emit('message', {data: {type: 'consumed', delivery: overlayChannel.port1.postMessage.mock.lastCall![0].delivery}});
+  publish(pass); await vi.advanceTimersByTimeAsync(50); expect(overlayChannel.port1.postMessage.mock.lastCall![0].update.hardMode).toStrictEqual({state: 'active'});
+  app.emit('before-quit', {preventDefault: vi.fn()});
+  const deliveries = overlayChannel.port1.postMessage.mock.calls.length;
+  publish(fail); mono = 3_000_000_000n; await vi.advanceTimersByTimeAsync(3050);
+  child.emit('exit', 0); await vi.advanceTimersByTimeAsync(50);
+  expect(overlayChannel.port1.postMessage.mock.calls).toHaveLength(deliveries);
+});
+it('ET-070 republishes only the indicator: no overlay window placement, visibility or z-order call', async () => {
+  vi.stubEnv('ETS2TELEMETRY_SOURCE_KIND', 'ets2'); await ready(); vi.spyOn(process.hrtime, 'bigint').mockImplementation(() => 0n);
+  const {pass, fail, publish, lostTrip} = await hardModeFixtures();
+  ipc.emit('app:subscribe-state', trusted()); ipc.emit('overlay:subscribe', overlayTrusted()); const overlayChannel = channels.at(-1)!;
+  consumeOverlay(overlayChannel); deliver(currentReading()); await vi.advanceTimersByTimeAsync(50); consumeOverlay(overlayChannel);
+  const overlayWindow = windows[1], before = overlayChannel.port1.postMessage.mock.calls.length;
+  const calls = () => [overlayWindow.setBounds, overlayWindow.showInactive, overlayWindow.hide, overlayWindow.setAlwaysOnTop].map(spy => spy.mock.calls.length);
+  const windowCalls = calls(), projection = overlayProjection(overlayChannel);
+  publish(pass); await vi.advanceTimersByTimeAsync(50);
+  expect(overlayProjection(overlayChannel)).toEqual({...projection, hardMode: {state: 'active'}}); consumeOverlay(overlayChannel);
+  publish(fail); await vi.advanceTimersByTimeAsync(50); consumeOverlay(overlayChannel);
+  child.emit('message', {type: 'hard-mode', update: 'trip', trip: lostTrip}); await vi.advanceTimersByTimeAsync(50);
+  expect(overlayProjection(overlayChannel)).toEqual({...projection, hardMode: {state: 'lost'}});
+  expect(overlayChannel.port1.postMessage.mock.calls.length).toBeGreaterThan(before);
+  expect(calls()).toEqual(windowCalls);
 });
 
 it('skips dashboard window creation when started with --hidden, but creates overlay and tray, and opens dashboard on second-instance', async () => {
