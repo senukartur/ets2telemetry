@@ -288,7 +288,7 @@ export class TripRecorderSink implements DurableSink {
     this.state = stepped.state;
     if(message.kind==='gap' || message.kind==='event' && message.data.record.type==='gameTime.regression'
       || this.boundaryPrevious && this.boundaryPrevious.tripUuid!==this.view(message.source.game).current?.tripUuid){
-      this.notePredecessorReset(message.kind==='gap'?'event-gap':'game-clock-reset');
+      this.notePredecessorReset(message.kind==='gap'?'event-gap':message.data.record.type==='gameTime.regression'?'game-clock-reset':'trip-changed');
       this.previousSample=undefined;this.boundaryPrevious=undefined;this.boundaryRunning=undefined;this.lastEndpoint=undefined;this.pendingProfile=undefined;
     }
     if(message.kind==='gap' || message.kind==='event' && ['job.configured','job.cleared','truck.configured','truck.cleared','timers.restart','gameTime.regression','player.use.ferry','player.use.train'].includes(message.data.record.type)
@@ -388,7 +388,7 @@ export class TripRecorderSink implements DurableSink {
           truck: t.state === 'value' && t.value.brand.id.state === 'value' && t.value.model.id.state === 'value' && t.value.licensePlate.state === 'value' ? truckKey(normalized) : null,
           profile: this.lastReadingProfile,...(this.predecessorReset?{predecessorReset:this.predecessorReset}:{}),...(this.previousSample?{previous:this.previousSample}:this.boundaryPrevious?{previous:this.boundaryPrevious}:{})};
       }
-      this.predecessorReset=undefined;
+      if(sampled.row.recording)this.predecessorReset=undefined;
       this.previousSample=sampled.row.recording && sampled.row.tripUuid ? {tripUuid:sampled.row.tripUuid,sourceClockId:sampled.row.sourceClockId,monotonicNs:sampled.row.monotonicNs}:undefined;
       this.previousSampleQualified=sampled.row.recording?.profile!==undefined;
       if(!this.lastReadingProfile)this.trustedPredecessor=undefined;

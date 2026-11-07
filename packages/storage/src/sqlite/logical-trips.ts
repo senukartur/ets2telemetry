@@ -76,7 +76,7 @@ export function associate(db: Database.Database, row: LogicalRow, proof: Profile
     id = candidate.id as bigint;
     db.prepare('UPDATE logical_trips SET latest_trip_ref = ?, member_count = member_count + 1, accounting_rebased=1,canonical_constraints=? WHERE id = ?').run(row.id,JSON.stringify(combined), id);
     revise(db,abandonedGroup);
-    if (coverage) pendingCoverage = {...coverage,...(ownAcceptancePending?{acceptancePending:true}:{}), member: String(row.id), phase: 'pending', endpoint: latestEndpoint(db, coverage.endpoint, candidate.progress_head, candidate.latest_trip_ref),
+    if (coverage) pendingCoverage = {...coverage,...(ownAcceptancePending?{acceptancePending:true}:{}), sampleResumePending:false, member: String(row.id), phase: 'pending', endpoint: latestEndpoint(db, coverage.endpoint, candidate.progress_head, candidate.latest_trip_ref),
       window: {session: String(row.plugin_session_ref), opened: row.opened_event_ref === null ? null : (row.opened_event_ref as bigint).toString()}};
   } else {
     // Conflicting/ambiguous candidates are retired permanently; their outcome remains unknown.
@@ -204,9 +204,14 @@ export function projectSample(db: Database.Database, session: {game: string; pro
   if(unresolvedSaved)value={anchor,distanceM:{available:false,reason:'not-observed'},fuelUsedL:{available:false,reason:'not-observed'}};
   const bootstrap = !unresolvedSaved && !captured && previous && head?.prefix_ref === null && head.start_ref === null && previous.distanceM.available && previous.distanceM.value === 0 && previous.anchor.gameMinutes === null;
   if (bootstrap && !continuous) value = advanceProgress(null, anchor, false);
-  // Only the first physical sample of this loaded member can establish its saved baseline.
+  // Missing game minutes may defer the one saved-baseline search, while physical readings prove the same stopped point.
   const firstLoadedSample=!continuous && head?.trip_ref!==row.id;
-  const saved=firstLoadedSample && coverage?.phase==='pending' && proof!==undefined && cleanLoadWindow(db,row)
+  const waiting=coverage?.sampleResumePending===true;
+  const stationary=coverage?.endpoint && Math.max(Math.abs(coverage.endpoint.anchor.speedMps??Infinity),Math.abs(anchor.speedMps??Infinity))<=0.05
+    && matchesSavedEndpoint({...coverage.endpoint.anchor,gameMinutes:'0'},{...anchor,gameMinutes:'0'});
+  const resumeSample=firstLoadedSample || waiting && continuous && stationary && Math.abs(previous?.anchor.speedMps??Infinity)<=0.05;
+  const waitingForMinute=!!(resumeSample && stationary && anchor.gameMinutes===null && completeEndpoint({...anchor,gameMinutes:'0'}));
+  const saved=resumeSample && completeEndpoint(anchor) && coverage?.phase==='pending' && proof!==undefined && cleanLoadWindow(db,row)
     ?retainedEndpoint(db,id,group.progress_head,coverage.endpoint,anchor):undefined;
   if(saved?.kind==='matched'){
     value={anchor,distanceM:saved.endpoint.distanceM,fuelUsedL:saved.endpoint.fuelUsedL};
@@ -261,10 +266,12 @@ export function projectSample(db: Database.Database, session: {game: string; pro
     value.distanceM.available ? value.distanceM.value : null, value.fuelUsedL.available ? value.fuelUsedL.value : null);
   if (captured && continuous && prefix === null) db.prepare('UPDATE logical_progress SET start_ref=id WHERE id=?').run(result.lastInsertRowid);
   db.prepare('UPDATE logical_trips SET progress_head = ? WHERE id = ?').run(result.lastInsertRowid, id);
-  if (firstLoadedSample && coverage?.phase === 'pending' && coverage.member === String(row.id) && coverage.window?.session === String(row.plugin_session_ref) && coverage.endpoint && cleanLoadWindow(db, row)) {
-    if (matchesEndpoint(db,coverage.endpoint.anchor, anchor)) revise(db, id, {...coverage, phase: 'resumed', window: null,
-      endpoint: {...coverage.endpoint, trip: String(row.id), anchor, head: String(result.lastInsertRowid),running:undefined}});
-    else if (completeEndpoint(coverage.endpoint.anchor) && completeEndpoint(anchor)) revise(db, id, {...coverage, losses: coverage.losses | COVERAGE_LOSS.unknown});
+  if ((firstLoadedSample || waiting) && coverage?.phase === 'pending' && coverage.member === String(row.id) && coverage.window?.session === String(row.plugin_session_ref) && coverage.endpoint) {
+    if(saved?.kind==='matched')revise(db,id,{...coverage,phase:'resumed',window:null,sampleResumePending:false,
+      endpoint:{...saved.endpoint,trip:String(row.id),anchor,head:String(result.lastInsertRowid),running:undefined}});
+    else if(waitingForMinute && proof!==undefined && (waiting || cleanLoadWindow(db,row))){
+      if(!waiting)revise(db,id,{...coverage,sampleResumePending:true});
+    } else revise(db,id,{...coverage,sampleResumePending:false,losses:coverage.losses|COVERAGE_LOSS.unknown});
   }
 }
 
@@ -386,7 +393,7 @@ export function projectEndpoint(db: Database.Database, id: bigint, row: LogicalR
     if (retained.kind==='matched') {
       const matched=retained.endpoint;
       db.prepare('UPDATE logical_trips SET progress_head=?,accounting_rebased=1 WHERE id=?').run(matched.head === null ? null : BigInt(matched.head),id);
-      revise(db,id,{...coverage,phase:cleanLoadWindow(db,row)?'resumed':'pending',window:cleanLoadWindow(db,row)?null:coverage.window,endpoint:{...matched,trip:String(row.id),anchor,running:undefined,prefixState:prior.revision ? String(prior.revision.state_ref) : null}});
+      revise(db,id,{...coverage,sampleResumePending:false,phase:cleanLoadWindow(db,row)?'resumed':'pending',window:cleanLoadWindow(db,row)?null:coverage.window,endpoint:{...matched,trip:String(row.id),anchor,running:undefined,prefixState:prior.revision ? String(prior.revision.state_ref) : null}});
     } else if (coverage.endpoint && completeEndpoint(coverage.endpoint.anchor) && completeEndpoint(anchor)) revise(db,id,{...coverage,losses:coverage.losses|COVERAGE_LOSS.unknown});
     return;
   }

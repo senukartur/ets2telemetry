@@ -40,7 +40,7 @@ export type SampleField = 'speed' | 'fuel' | 'averageConsumption' | 'estimatedRa
  * `monotonicNs` is in the source clock `sourceClockId`; `utcMs` is a label only. Game minutes, when present, are in
  * their own game clock. Not observed, not supported and invalid readings stay distinct from zero.
  */
-export const ACCOUNTING_PREDECESSOR_RESETS = ['snapshot-coalesced','offline-transition','source-change','checkpoint','event-gap','game-clock-reset','profile-unavailable','profile-changed','profile-handoff-unsafe'] as const;
+export const ACCOUNTING_PREDECESSOR_RESETS = ['snapshot-coalesced','offline-transition','source-change','checkpoint','event-gap','game-clock-reset','trip-changed','profile-unavailable','profile-changed','profile-handoff-unsafe'] as const;
 export interface SampleInput {
   /** Private recorder evidence; never part of a renderer sample. Captured at the reading, not at write time. */
   recording?: {predecessorReset?: typeof ACCOUNTING_PREDECESSOR_RESETS[number]; profile?: ProfileObservation; job: JobConfiguration; truck: string | null; processInstanceId: string;

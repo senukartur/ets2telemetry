@@ -8,6 +8,7 @@ export interface CoverageEndpoint extends ProgressCheckpoint {trip: string; head
 /** References change at coverage boundaries only; ordinary samples use logical_revisions' existing bounds/head. */
 export interface LogicalCoverage {
   acceptancePending?: boolean;
+  sampleResumePending?: boolean;
   version: 1; start: 'observed' | 'unproven'; losses: number; member: string;
   phase: 'active' | 'pending' | 'resumed'; endpoint: CoverageEndpoint | null;
   window: {session: string; opened: string | null} | null;
@@ -101,9 +102,10 @@ function validEndpoint(v: unknown): v is CoverageEndpoint {
       && BigInt(c.running.profile.afterMonotonicNs)<=BigInt(c.running.monotonicNs));
 }
 export function validCoverage(v: unknown): v is LogicalCoverage {
-  if (!v || typeof v !== 'object' || Object.keys(v).filter(key=>key!=='acceptancePending').sort().join(',')!=='endpoint,losses,member,phase,start,version,window') return false;
+  if (!v || typeof v !== 'object' || Object.keys(v).filter(key=>key!=='acceptancePending'&&key!=='sampleResumePending').sort().join(',')!=='endpoint,losses,member,phase,start,version,window') return false;
   const c = v as LogicalCoverage;
-  return (!Object.hasOwn(c,'acceptancePending') || typeof c.acceptancePending==='boolean') && c.version === 1 && ['observed', 'unproven'].includes(c.start) && Number.isInteger(c.losses) && c.losses >= 0 && c.losses <= 31
+  return (!Object.hasOwn(c,'acceptancePending') || typeof c.acceptancePending==='boolean')
+    && (!Object.hasOwn(c,'sampleResumePending') || typeof c.sampleResumePending==='boolean') && c.version === 1 && ['observed', 'unproven'].includes(c.start) && Number.isInteger(c.losses) && c.losses >= 0 && c.losses <= 31
     && reference(c.member) && ['active', 'pending', 'resumed'].includes(c.phase) && (c.endpoint === null || validEndpoint(c.endpoint))
     && (c.window === null || typeof c.window === 'object' && keys(c.window, 'opened,session') && reference(c.window.session) && (c.window.opened === null || reference(c.window.opened)))
     && (c.phase === 'pending' || c.window === null);
@@ -202,7 +204,7 @@ export function advanceCoverage(db: Database.Database, id: unknown, _group: Row,
     else if (interval.kind === 'not-connected') coverage.losses |= COVERAGE_LOSS.unknown;
     else if (detail.annotation !== true || ['odometer-jump', 'position-jump', 'game-time-jump'].includes(String(detail.cause))) coverage.losses |= COVERAGE_LOSS.discontinuity;
   }
-  if (coverage.phase === 'pending' && coverage.endpoint?.trip === coverage.member && cleanLoadWindow(db,row)) {coverage.phase='resumed';coverage.window=null;}
+  if (coverage.phase === 'pending' && coverage.endpoint?.trip === coverage.member && cleanLoadWindow(db,row)) {coverage.phase='resumed';coverage.window=null;coverage.sampleResumePending=false;}
   return coverage;
 }
 export function applyCoverage(row: Row, group: Row, coverage: LogicalCoverage | undefined, present: boolean): void {

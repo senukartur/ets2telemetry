@@ -285,13 +285,13 @@ describe('REG-003/005/008/012/014 durable logical trips', () => {
       if(variant==='confirmed'){expect(result.trip.recordingCompleteness).toBe('complete');expect(result.trip.observedDistanceM).toEqual({available:true,value:250});expect(result.trip.fuelUsedL).toEqual({available:true,value:0.5});}
       else expect(result.trip.recordingCompleteness).not.toBe('complete');storage.close();
     });
-  it.each(['never-matches','later-continuous-match'] as const)('does not repeat saved-baseline search after the first loaded sample: %s',async variant=>{
-    const storage=await ws.open(),a=new Script(ETS2_A),b=new Script(ETS2_B);
+  it.each(['never-matches','later-continuous-match','delayed-minute','delayed-minute-reopen','delayed-movement','delayed-hole','delayed-missing-predecessor','delayed-never-matches'] as const)('bounds saved-baseline search while awaiting complete stationary evidence: %s',async variant=>{
+    let storage=await ws.open();const a=new Script(ETS2_A),b=new Script(ETS2_B),delayed=variant.startsWith('delayed-');
     ok(storage.upsertSession({message:a.welcome()}));ok(storage.commitEvent({message:a.event(r.started())}));const uuid=open(storage,a);
-    const append=(source:Script,trip:string,second:number,x:number,fuel:number,previous?:string)=>{
-      const row=seedSample(source,trip,second,1000+second*1000,{speed:{available:true,value:second===1003?20:0},
+    const append=(source:Script,trip:string,second:number,x:number,fuel:number,previous?:string,minute:number|null=500,speed=second===1003?20:0)=>{
+      const row=seedSample(source,trip,second,1000+second*1000,{speed:{available:true,value:speed},
         odometer:{available:true,value:second===1003?1000000:1000250},fuel:{available:true,value:fuel},position:{available:true,value:{x,y:0,z:0}},
-        gameTime:{minutes:{available:true,value:500},clockId:source.clockId},recording:{profile:proof(source),job:job(),truck:'same-truck',
+        gameTime:{minutes:minute===null?{available:false,reason:'not-observed'}:{available:true,value:minute},clockId:source.clockId},recording:{profile:proof(source),job:job(),truck:'same-truck',
           processInstanceId:source.welcome().source.processInstanceId,...(previous?{previous:{tripUuid:trip,sourceClockId:source.clockId,monotonicNs:previous}}:{})}});
       row.monotonicNs=String(BigInt(second)*1_000_000_000n);ok(storage.appendSamples(source.session,[row]));
     };
@@ -303,6 +303,20 @@ describe('REG-003/005/008/012/014 durable logical trips', () => {
     const prepare=vi.spyOn(Database.prototype,'prepare');
     const searches=()=>prepare.mock.calls.filter(([sql])=>sql.includes('ORDER BY p.id DESC LIMIT 65')).length;
     try{
+      if(delayed){
+        append(b,next,2001,13.017,99.509,undefined,null);expect(searches()).toBe(0);
+        const second=variant==='delayed-hole'?2007:2002;
+        append(b,next,second,13.017,99.509,variant==='delayed-missing-predecessor'?undefined:'2001000000000',null,variant==='delayed-movement'?1:0);expect(searches()).toBe(0);
+        if(variant==='delayed-minute-reopen'){ok(storage.close());storage=await ws.open();}
+        append(b,next,second+1,13.017,99.509,String(BigInt(second)*1_000_000_000n),variant==='delayed-never-matches'?501:500);
+        expect(searches()).toBeLessThanOrEqual(1);prepare.mockClear();
+        for(let n=2;n<=9;n++)append(b,next,second+n,13.017,99.509,String(BigInt(second+n-1)*1_000_000_000n));
+        expect(searches()).toBe(0);const result=ok(storage.journalTrip(uuid));
+        if(variant==='delayed-minute'||variant==='delayed-minute-reopen'){
+          expect(result.trip.recordingCompleteness).toBe('complete');expect(result.trip.observedDistanceM).toEqual({available:true,value:250});expect(result.trip.fuelUsedL).toEqual({available:true,value:0.5});
+        }else{expect(result.trip.recordingCompleteness).not.toBe('complete');expect(result.trip.fuelUsedL.available).toBe(false);}
+        return;
+      }
       append(b,next,2001,13.1,99.5);expect(searches()).toBe(1);prepare.mockClear();
       for(let second=2002;second<=2009;second++)append(b,next,second,variant==='later-continuous-match'?13.017:13.1+(second-2001)*0.01,99.509,String(BigInt(second-1)*1_000_000_000n));
       expect(searches()).toBe(0);
@@ -888,14 +902,14 @@ describe('REG-003/005/008/012/014 durable logical trips', () => {
     expect(ok(storage.journalTrip(uuid)).trip.observedDistanceM.available).toBe(false);
     expect(ok(storage.listSamples({tripUuid:uuid}))).toHaveLength(2);storage.close();
   });
-  it.each(['absent','unsupported','malformed','extra','pending-type','pending-true','pending-false'] as const)('distinguishes legacy absent coverage from present-invalid metadata: %s',async kind=>{
+  it.each(['absent','unsupported','malformed','extra','pending-type','pending-true','pending-false','resume-type','resume-false'] as const)('distinguishes legacy absent coverage from present-invalid metadata: %s',async kind=>{
     let storage=await ws.open();const script=new Script(ETS2_A),uuid=open(storage,script);ok(storage.close());
     const db=new Database(ws.database);let row:{id:number;row_json:string};
     try{row=db.prepare('SELECT s.id,s.row_json FROM logical_revisions r JOIN logical_projection_states s ON s.id=r.state_ref ORDER BY r.id DESC LIMIT 1').get() as {id:number;row_json:string};
-      const metadata=JSON.parse(row.row_json);if(kind==='absent')delete metadata._coverage;else metadata._coverage=kind==='unsupported'?{...metadata._coverage,version:99}:kind==='extra'?{...metadata._coverage,unknown:true}:kind.startsWith('pending')?{...metadata._coverage,acceptancePending:kind==='pending-type'?'false':kind==='pending-true'}:{version:1};
+      const metadata=JSON.parse(row.row_json);if(kind==='absent')delete metadata._coverage;else metadata._coverage=kind==='unsupported'?{...metadata._coverage,version:99}:kind==='extra'?{...metadata._coverage,unknown:true}:kind.startsWith('pending')?{...metadata._coverage,acceptancePending:kind==='pending-type'?'false':kind==='pending-true'}:kind.startsWith('resume')?{...metadata._coverage,sampleResumePending:kind==='resume-type'?'false':false}:{version:1};
       row.row_json=JSON.stringify(metadata);db.prepare('UPDATE logical_projection_states SET row_json=? WHERE id=?').run(row.row_json,row.id);
     }finally{db.close();}
-    storage=await ws.open();expect(ok(storage.journalTrip(uuid)).trip.recordingCompleteness).toBe(kind==='absent'||kind==='pending-false'?'complete':'partial');storage.close();
+    storage=await ws.open();expect(ok(storage.journalTrip(uuid)).trip.recordingCompleteness).toBe(kind==='absent'||kind==='pending-false'||kind==='resume-false'?'complete':'partial');storage.close();
     expect(readOnly(ws.database,db=>db.prepare('SELECT row_json FROM logical_projection_states WHERE id=?').pluck().get(row.id))).toBe(row.row_json);
   });
   it('deduplicates coverage metadata while ordinary samples advance existing immutable revision bounds',async()=>{
