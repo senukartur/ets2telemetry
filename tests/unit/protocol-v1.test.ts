@@ -3,7 +3,7 @@ import {resolve} from 'node:path';
 import {describe, expect, it} from 'vitest';
 import {
   decodePayload, encodeFrame, EVENT_TYPES, FrameDecoder, fraction, GAP_RECORD_BYTES, kmToMetersFloat, kmToMetersU32, MAX_EVENT_SEQ, negotiateV1, PROTOCOL_V1,
-  NOT_SUPPORTED_BREAK, NOT_SUPPORTED_GEARBOX, ProtocolError, sdkMoney, sdkText, V1_GEARBOX, V1_LIMITS, V1_MAX_MINOR, validateLiveObservationV1, type GearboxState, type ProtocolMessage, type Sender, type ServerMessage
+  NOT_SUPPORTED_BREAK, NOT_SUPPORTED_CRUISE_CONTROL, NOT_SUPPORTED_GEARBOX, ProtocolError, sdkMoney, sdkText, V1_GEARBOX, V1_LIMITS, V1_MAX_MINOR, validateLiveObservationV1, type GearboxState, type ProtocolMessage, type Sender, type ServerMessage
 } from '../../packages/contracts/src/protocol-v1';
 import * as v0 from '../../packages/contracts/src/protocol-v0';
 import {Cap0Error, decodeCap0Payload, encodeCap0Hello} from '../../packages/contracts/src/capture-cap0';
@@ -416,10 +416,11 @@ describe('ET-050b protocol v1 minor-1 corpus', () => {
   });
   // ET-050b B7 (PR-5): the live observation always carries the gearbox, validated with the minor-1 rules. This replaces
   // the PR-1 expectation that the gearbox was not projected yet. Since ET-052 PR-4 it also always carries the next mandatory
-  // break (MB5), so these states are completed with the substitute `NOT_SUPPORTED_BREAK`, as the projection does for minor 1.
+  // break (MB5), so these states are completed with the substitute `NOT_SUPPORTED_BREAK`, as the projection does for minor 1,
+  // and since ET-071 with `NOT_SUPPORTED_CRUISE_CONTROL` as well.
   it('requires the gearbox in the live observation and validates it with the minor-1 rules', () => {
     const m = m1Server('checkpoint'); if (m.kind !== 'checkpoint') throw new Error('fixture');
-    const withGearbox: Partial<typeof m.data.state> = {...m.data.state, nextMandatoryBreak: NOT_SUPPORTED_BREAK}; delete withGearbox.window;
+    const withGearbox: Partial<typeof m.data.state> = {...m.data.state, nextMandatoryBreak: NOT_SUPPORTED_BREAK, cruiseControl: NOT_SUPPORTED_CRUISE_CONTROL}; delete withGearbox.window;
     const withoutGearbox = {...withGearbox}; delete withoutGearbox.gearbox;
     const live = (state: unknown) => ({source: m.source, seq: m.seq, capture: m.capture, state, sourceStatus: {gameMode: m.data.status.gameMode, eventLoss: m.data.status.eventLoss},
       receivedMonotonicMs: 0, hydration: true});
@@ -543,8 +544,9 @@ describe('ET-052 protocol v1 minor-2 corpus', () => {
     for (const b of encodeFrame(m2Server('checkpoint-worst'), M2)) decoder.push(Uint8Array.of(b), m => found.push(m));
     decoder.end(); expect(found).toEqual([m2Server('checkpoint-worst')]);
   });
-  it('declares minor 2 as the highest implemented minor and a not-supported break for older minors', () => {
-    expect(V1_MAX_MINOR).toBe(2); expect(PROTOCOL_V1).toEqual({major: 1, minor: 0});
+  it('declares a not-supported break for older minors', () => {
+    // ET-071: the highest implemented minor moved to 3 (asserted with the minor-3 corpus below); this was 2 in ET-052.
+    expect(PROTOCOL_V1).toEqual({major: 1, minor: 0});
     expect(NOT_SUPPORTED_BREAK).toEqual({available: false, reason: 'not-supported', unit: 'min'}); expect(Object.isFrozen(NOT_SUPPORTED_BREAK)).toBe(true);
     // The constant has the wire shape, so a minor-2 state that carries it is valid.
     const snapshot = structuredClone(m2Server('snapshot')) as Extract<ServerMessage, {kind: 'snapshot'}>;
@@ -577,8 +579,9 @@ describe('ET-052 protocol v1 minor-2 corpus', () => {
     expect(() => decodePayload(m2Bytes('welcome-minor-3'), 'server', M2)).toThrow(/Unsupported protocol version/);
     expect(() => decodePayload(m2Bytes('hello-envelope-minor-2'), 'client', M2)).toThrow(/Unsupported protocol version/);
   });
-  it('rejects a caller maximum minor above 2 and accepts 0, 1 and 2', () => {
-    for (const maxMinor of [3, -1, 0.5]) {
+  // ET-071: minor 3 exists, so the first unsupported caller maximum is 4 (it was 3 in ET-052).
+  it('rejects a caller maximum minor above the highest implemented one and accepts 0, 1 and 2', () => {
+    for (const maxMinor of [4, -1, 0.5]) {
       expect(() => decodePayload(bytes('welcome'), 'server', {maxMinor})).toThrow(ProtocolError);
       expect(() => new FrameDecoder('server', {maxMinor})).toThrow(ProtocolError);
       expect(() => negotiateV1(client('hello'), {allowDurable: true, maxMinor})).toThrow(ProtocolError);
@@ -587,9 +590,10 @@ describe('ET-052 protocol v1 minor-2 corpus', () => {
   });
   // ET-052 MB5 (PR-4): the service projects the break, so the live observation has the minor-2 shape: the gearbox and the
   // break are both required, a minor-0 or minor-1 projection carries `NOT_SUPPORTED_BREAK`, and the wire rules apply to it.
+  // Since ET-071 the live state also always carries cruise control, so this minor-2 state gets `NOT_SUPPORTED_CRUISE_CONTROL`.
   it('requires the next mandatory break in the live observation and validates it with the minor-2 rules', () => {
     const m = m2Server('checkpoint'); if (m.kind !== 'checkpoint') throw new Error('fixture');
-    const state: Partial<typeof m.data.state> = {...m.data.state}; delete state.window;
+    const state: Partial<typeof m.data.state> = {...m.data.state, cruiseControl: NOT_SUPPORTED_CRUISE_CONTROL}; delete state.window;
     const live = (s: unknown) => ({source: m.source, seq: m.seq, capture: m.capture, state: s, sourceStatus: {gameMode: m.data.status.gameMode, eventLoss: m.data.status.eventLoss}, receivedMonotonicMs: 0, hydration: true});
     expect(validateLiveObservationV1(live(state)).state).toEqual(state);
     // The break is required: a minor-1 shaped state is no longer a live observation.
@@ -620,5 +624,186 @@ describe('ET-052 minor negotiation', () => {
     expect(negotiateV1(decodePayload(m2Bytes('hello'), 'client'), {allowDurable: true, maxMinor: 2}).minor).toBe(2);
     expect(negotiateV1(decodePayload(m2Bytes('hello'), 'client'), {allowDurable: false, maxMinor: 1}).minor).toBe(1);
     expect(negotiateV1(decodePayload(m2Bytes('hello-offer-1'), 'client'), {allowDurable: true, maxMinor: 2})).toEqual({version: {major: 1, minor: 1}, minor: 1, durableEvents: true});
+  });
+});
+
+// ET-071: protocol v1 minor 3, the cruise control set speed. The minor-3 corpus has its own directory, manifest and
+// streams, so the frozen minor-0, minor-1 and minor-2 corpora are unchanged. The expected values are written by hand from
+// docs/protocol/v1.md §7 (the SDK `truck.cruise_control` is a float in m/s, zero when cruise control is off).
+const m3Dir = resolve(dir, 'minor3');
+const M3 = {maxMinor: 3} as const;
+const m3Bytes = (name: string) => new Uint8Array(readFileSync(resolve(m3Dir, `${name}.json`)));
+const m3Server = (name: string) => decodePayload(m3Bytes(name), 'server', M3) as ServerMessage;
+const m3Entries = rows(readFileSync(resolve(m3Dir, 'manifest.txt'), 'utf8'));
+const m3Streams = rows(readFileSync(resolve(m3Dir, 'streams.txt'), 'utf8'));
+const cruiseOf = (name: string) => {
+  const m = m3Server(name); if (m.kind !== 'checkpoint' && m.kind !== 'snapshot') throw new Error('fixture');
+  return m.data.state.cruiseControl;
+};
+
+describe('ET-071 protocol v1 minor-3 corpus', () => {
+  it('reads its manifest and streams identically with Windows CRLF or LF', () => {
+    for (const [name, parsed] of [['manifest.txt', m3Entries], ['streams.txt', m3Streams]] as const) {
+      expect(rows(readFileSync(resolve(m3Dir, name), 'utf8').replace(/\r?\n/g, '\r\n'))).toEqual(parsed);
+    }
+  });
+  it('lists every minor-3 fixture exactly once with a known expectation', () => {
+    const files = readdirSync(m3Dir).filter(file => file.endsWith('.json')).sort();
+    expect(m3Entries.map(([file]) => file).sort()).toEqual(files);
+    expect(files).toHaveLength(45); expect(m3Streams).toHaveLength(12);
+    for (const entry of m3Entries) { expect(entry).toHaveLength(2); expect(['valid', 'invalid', 'valid-client', 'invalid-client']).toContain(entry[1]); }
+  });
+  for (const [filename, result] of m3Entries) it(`${result} at maxMinor 3: ${filename}`, () => {
+    const body = new Uint8Array(readFileSync(resolve(m3Dir, filename))), sender = senderOf(result);
+    if (result.startsWith('invalid')) { expect(() => decodePayload(body, sender, M3)).toThrow(ProtocolError); return; }
+    const parsed = decodePayload(body, sender, M3), encoded = encodeFrame(parsed, M3);
+    expect(new DataView(encoded.buffer).getUint32(0, true)).toBe(encoded.length - 4);
+    expect(decodePayload(encoded.subarray(4), sender, M3)).toEqual(parsed);
+    expect(() => decodePayload(body, sender === 'server' ? 'client' : 'server', M3)).toThrow(ProtocolError);
+    // A narrower reader refuses a message above its maximum and reads one at or below it exactly as a minor-3 reader does.
+    const minor = parsed.version.minor;
+    for (const max of [0, 1, 2] as const) {
+      const options = max === 0 ? {} : {maxMinor: max};
+      if (minor > max) {
+        expect(() => decodePayload(body, sender, options)).toThrow(/Unsupported protocol version/); expect(() => encodeFrame(parsed, options)).toThrow(/Unsupported protocol version/);
+      } else expect(decodePayload(body, sender, options)).toEqual(parsed);
+    }
+  });
+  it('gives every frozen minor-0 and minor-1 fixture the same result for a reader that accepts minor 3', () => {
+    for (const [corpus, list, older] of [[dir, entries, {}], [m1Dir, m1Entries, M1]] as const) {
+      for (const [filename, result] of list) {
+        const body = new Uint8Array(readFileSync(resolve(corpus, filename))), sender = senderOf(result);
+        if (result.startsWith('invalid')) {
+          // minor1/welcome-minor-2 and minor1/ack-minor-2 are minor 2's own messages; minor 3 accepts them as minor 2 does.
+          if (corpus === m1Dir && (filename === 'welcome-minor-2.json' || filename === 'ack-minor-2.json')) {
+            expect(decodePayload(body, sender, M3), filename).toEqual(decodePayload(body, sender, M2));
+          } else expect(() => decodePayload(body, sender, M3), filename).toThrow(ProtocolError);
+        } else expect(decodePayload(body, sender, M3), filename).toEqual(decodePayload(body, sender, older));
+      }
+    }
+  });
+  it('gives every frozen minor-2 fixture the same result for a reader that accepts minor 3, except the two minor-3 envelopes', () => {
+    // minor2/welcome-minor-3 and minor2/ack-minor-3 were the rejection cases for a minor-2 reader; they are minor 3's own
+    // welcome and ack, byte for byte, and the only results that change.
+    const turned = new Map([['welcome-minor-3.json', 'welcome'], ['ack-minor-3.json', 'ack-1']]);
+    for (const [filename, result] of m2Entries) {
+      const body = new Uint8Array(readFileSync(resolve(m2Dir, filename))), sender = senderOf(result);
+      if (turned.has(filename)) {
+        expect(() => decodePayload(body, sender, M2), filename).toThrow(ProtocolError);
+        expect(Buffer.from(body).equals(Buffer.from(m3Bytes(turned.get(filename)!))), filename).toBe(true);
+        expect(decodePayload(body, sender, M3), filename).toEqual(decodePayload(m3Bytes(turned.get(filename)!), sender, M3));
+      } else if (result.startsWith('invalid')) expect(() => decodePayload(body, sender, M3), filename).toThrow(ProtocolError);
+      else expect(decodePayload(body, sender, M3), filename).toEqual(decodePayload(body, sender, M2));
+    }
+  });
+  it('keeps the minor-2 copies byte-identical to the frozen minor-2 corpus', () => {
+    for (const name of ['welcome', 'checkpoint', 'snapshot', 'event-job-configured', 'ack-1', 'clock-probe']) {
+      expect(Buffer.from(m3Bytes(`${name}-minor-2`)).equals(Buffer.from(m2Bytes(name))), name).toBe(true);
+    }
+    expect(Buffer.from(m3Bytes('hello-offer-2')).equals(Buffer.from(m2Bytes('hello')))).toBe(true);
+  });
+  it('carries the set speed in m/s: fractional, whole, zero and the bound', () => {
+    expect(cruiseOf('checkpoint')).toEqual({available: true, value: 22.5, unit: 'm/s'});
+    expect(cruiseOf('snapshot')).toEqual({available: true, value: 25, unit: 'm/s'});
+    expect(cruiseOf('snapshot-cruise-zero')).toEqual({available: true, value: 0, unit: 'm/s'});
+    expect(cruiseOf('snapshot-cruise-max')).toEqual({available: true, value: 1000, unit: 'm/s'});
+  });
+  it('keeps zero (cruise control off) distinct from every unavailable reading', () => {
+    expect(cruiseOf('snapshot-cruise-not-observed')).toEqual({available: false, reason: 'not-observed', unit: 'm/s'});
+    expect(cruiseOf('snapshot-cruise-not-supported')).toEqual({available: false, reason: 'not-supported', unit: 'm/s'});
+    expect(cruiseOf('snapshot-cruise-invalid')).toEqual({available: false, reason: 'invalid', unit: 'm/s'});
+    expect(cruiseOf('snapshot-cruise-zero')).not.toEqual(cruiseOf('snapshot-cruise-not-observed'));
+  });
+  it('still carries the gearbox and the break before cruise control', () => {
+    const m = m3Server('checkpoint'); if (m.kind !== 'checkpoint') throw new Error('fixture');
+    expect(m.version).toEqual({major: 1, minor: 3}); expect(m.data.state.gearbox?.forwardGears).toEqual({available: true, value: 12});
+    expect(m.data.state.nextMandatoryBreak).toEqual({available: true, value: 95, unit: 'min'});
+    expect(Object.keys(m.data.state).slice(-4)).toEqual(['gearbox', 'nextMandatoryBreak', 'cruiseControl', 'window']);
+  });
+  it('fits the worst-case minor-3 checkpoint within the server frame (D17) and decodes it byte at a time', () => {
+    const worst = m3Bytes('checkpoint-worst');
+    // The minor-2 worst case plus the widest cruise reading, `{"available":true,"value":1.2345678901234568e-300,"unit":"m/s"}`
+    // (63 bytes, wider than any unavailable reading), and its key `,"cruiseControl":` (17 bytes).
+    expect(worst.length).toBe(55_553); expect(worst.length - m2Bytes('checkpoint-worst').length).toBe(80); expect(worst.length).toBeLessThanOrEqual(V1_LIMITS.serverFrameBytes);
+    expect(cruiseOf('checkpoint-worst')).toEqual({available: true, value: 1.2345678901234568e-300, unit: 'm/s'});
+    expect(encodeFrame(m3Server('checkpoint-worst'), M3).length - 4).toBe(worst.length);
+    const decoder = new FrameDecoder('server', M3), found: ProtocolMessage[] = [];
+    for (const b of encodeFrame(m3Server('checkpoint-worst'), M3)) decoder.push(Uint8Array.of(b), m => found.push(m));
+    decoder.end(); expect(found).toEqual([m3Server('checkpoint-worst')]);
+  });
+  it('declares minor 3 as the highest implemented minor and a not-supported cruise control for older minors', () => {
+    expect(V1_MAX_MINOR).toBe(3); expect(PROTOCOL_V1).toEqual({major: 1, minor: 0});
+    expect(NOT_SUPPORTED_CRUISE_CONTROL).toEqual({available: false, reason: 'not-supported', unit: 'm/s'}); expect(Object.isFrozen(NOT_SUPPORTED_CRUISE_CONTROL)).toBe(true);
+    const snapshot = structuredClone(m3Server('snapshot')) as Extract<ServerMessage, {kind: 'snapshot'}>;
+    snapshot.data.state.cruiseControl = {...NOT_SUPPORTED_CRUISE_CONTROL}; expect(() => encodeFrame(snapshot, M3)).not.toThrow();
+  });
+  it('accepts the set speed from 0 to 1000 m/s and rejects anything past the bounds or of another shape', () => {
+    const base = m3Server('snapshot') as Extract<ServerMessage, {kind: 'snapshot'}>;
+    const encode = (value: unknown) => { const m = structuredClone(base); (m.data.state as {cruiseControl: unknown}).cruiseControl = value; return () => encodeFrame(m, M3); };
+    const av = (value: unknown) => ({available: true, value, unit: 'm/s'});
+    for (const ok of [0, 0.5, 22.5, 25, 27.77777777777778, 999.9999, 1000, 5e-324]) expect(encode(av(ok)), String(ok)).not.toThrow();
+    for (const bad of [-1, -0.001, 1000.001, 1001, Number.NaN, Number.POSITIVE_INFINITY, '25', null, true, undefined]) expect(encode(av(bad)), String(bad)).toThrow(ProtocolError);
+    expect(encode({available: true, value: 25, unit: 'km/h'})).toThrow(ProtocolError); expect(encode({available: true, value: 25})).toThrow(ProtocolError);
+    expect(encode({available: true, value: 25, unit: 'm/s', extra: 1})).toThrow(ProtocolError); expect(encode({available: false, unit: 'm/s'})).toThrow(ProtocolError);
+    expect(encode({available: false, reason: 'unknown', unit: 'm/s'})).toThrow(ProtocolError); expect(encode(undefined)).toThrow(ProtocolError);
+  });
+  it('requires cruise control exactly in a minor-3 state, on top of the gearbox and the break', () => {
+    const snapshot = (name: string) => structuredClone(m3Server(name)) as Extract<ServerMessage, {kind: 'snapshot'}>;
+    const lacking = snapshot('snapshot'); delete lacking.data.state.cruiseControl; expect(() => encodeFrame(lacking, M3)).toThrow(ProtocolError);
+    const noBreak = snapshot('snapshot'); delete noBreak.data.state.nextMandatoryBreak; expect(() => encodeFrame(noBreak, M3)).toThrow(ProtocolError);
+    const noGearbox = snapshot('snapshot'); delete noGearbox.data.state.gearbox; expect(() => encodeFrame(noGearbox, M3)).toThrow(ProtocolError);
+    const minor2 = snapshot('snapshot'); minor2.version = {major: 1, minor: 2}; expect(() => encodeFrame(minor2, M3)).toThrow(ProtocolError);
+    delete minor2.data.state.cruiseControl; expect(() => encodeFrame(minor2, M3)).not.toThrow();
+  });
+  it('requires the welcome envelope minor to equal the minor it announces at minor 3 as well', () => {
+    const welcome = structuredClone(m3Server('welcome')) as Extract<ServerMessage, {kind: 'welcome'}>;
+    expect(welcome.version).toEqual({major: 1, minor: 3}); expect(welcome.data.minor).toBe(3);
+    welcome.data.minor = 2; expect(() => encodeFrame(welcome, M3)).toThrow(ProtocolError);
+    expect(() => decodePayload(m3Bytes('welcome-minor-4'), 'server', M3)).toThrow(/Unsupported protocol version/);
+    expect(() => decodePayload(m3Bytes('hello-envelope-minor-3'), 'client', M3)).toThrow(/Unsupported protocol version/);
+    expect(() => decodePayload(m3Bytes('ack-minor-4'), 'client', M3)).toThrow(/Unsupported protocol version/);
+  });
+  it('rejects a caller maximum minor above 3 and accepts 0 to 3', () => {
+    for (const maxMinor of [4, -1, 0.5]) {
+      expect(() => decodePayload(bytes('welcome'), 'server', {maxMinor})).toThrow(ProtocolError);
+      expect(() => new FrameDecoder('server', {maxMinor})).toThrow(ProtocolError);
+      expect(() => negotiateV1(client('hello'), {allowDurable: true, maxMinor})).toThrow(ProtocolError);
+    }
+    for (const maxMinor of [0, 1, 2, 3]) expect(() => new FrameDecoder('client', {maxMinor})).not.toThrow();
+  });
+  // ET-071: the service projects cruise control, so the live observation has the minor-3 shape: the gearbox, the break
+  // and cruise control are all required, a projection below minor 3 carries `NOT_SUPPORTED_CRUISE_CONTROL`, and the wire
+  // rules apply to it.
+  it('requires cruise control in the live observation and validates it with the minor-3 rules', () => {
+    const m = m3Server('checkpoint'); if (m.kind !== 'checkpoint') throw new Error('fixture');
+    const state: Partial<typeof m.data.state> = {...m.data.state}; delete state.window;
+    const live = (s: unknown) => ({source: m.source, seq: m.seq, capture: m.capture, state: s, sourceStatus: {gameMode: m.data.status.gameMode, eventLoss: m.data.status.eventLoss}, receivedMonotonicMs: 0, hydration: true});
+    expect(validateLiveObservationV1(live(state)).state).toEqual(state);
+    const without = {...state}; delete without.cruiseControl;
+    expect(() => validateLiveObservationV1(live(without))).toThrow(ProtocolError);
+    for (const value of [NOT_SUPPORTED_CRUISE_CONTROL, {available: true, value: 0, unit: 'm/s'}, {available: true, value: 1000, unit: 'm/s'},
+      {available: false, reason: 'not-observed', unit: 'm/s'}, {available: false, reason: 'invalid', unit: 'm/s'}])
+      expect(validateLiveObservationV1(live({...state, cruiseControl: value})).state.cruiseControl, JSON.stringify(value)).toEqual(value);
+    for (const value of [null, {available: true, value: -1, unit: 'm/s'}, {available: true, value: 1000.5, unit: 'm/s'}, {available: true, value: '25', unit: 'm/s'}, {available: true, value: 25, unit: 'km/h'}])
+      expect(() => validateLiveObservationV1(live({...state, cruiseControl: value})), JSON.stringify(value)).toThrow(ProtocolError);
+  });
+});
+
+describe('ET-071 minor negotiation', () => {
+  const hello = (maxMinor: number) => { const m = structuredClone(client('hello')); if (m.kind !== 'hello') throw new Error('fixture'); m.data.maxMinor = maxMinor; return m; };
+  it('selects min(hello maxMinor, server maxMinor) for every offer 0 to 4 against every server maximum 0 to 3', () => {
+    for (let offered = 0; offered <= 4; offered++) {
+      for (let own = 0; own <= 3; own++) {
+        // Written out: the smaller of the two, so an older client keeps exactly its own offer.
+        const selected = offered < own ? offered : own;
+        expect(negotiateV1(hello(offered), {allowDurable: true, maxMinor: own}), `${offered}/${own}`).toEqual({version: {major: 1, minor: selected}, minor: selected, durableEvents: true});
+      }
+    }
+    expect(negotiateV1(hello(65_535), {allowDurable: true, maxMinor: 3}).minor).toBe(3);
+  });
+  it('reads the minor-3 corpus hellos', () => {
+    expect(negotiateV1(decodePayload(m3Bytes('hello'), 'client'), {allowDurable: true, maxMinor: 3}).minor).toBe(3);
+    expect(negotiateV1(decodePayload(m3Bytes('hello'), 'client'), {allowDurable: false, maxMinor: 2})).toEqual({version: {major: 1, minor: 2}, minor: 2, durableEvents: false});
+    expect(negotiateV1(decodePayload(m3Bytes('hello-offer-2'), 'client'), {allowDurable: true, maxMinor: 3})).toEqual({version: {major: 1, minor: 2}, minor: 2, durableEvents: true});
   });
 });
