@@ -130,7 +130,7 @@ const hardMode = new HardModeMonitor((source, ns, at, signal, force) => {
   const reader = hardModeReader ??= new HardModeReader({diagnostic: profileDiagnostic, documents: documents!, get steamRoot() {return steamRoot;},
     processLifetime: source => profileTarget ? processLifetime(profileTarget, source) : undefined,
     process: (source,signal) => inspectGameProcess(source,signal,profileDiagnostic, activeBroker && profileTarget ? {executable: activeBroker.executable, target: profileTarget} : undefined)});
-  if (monitoredReader !== reader) {monitoredReader = reader; reader.onInvalidate(() => hardMode.invalidate());}
+  if (monitoredReader !== reader) {monitoredReader = reader; reader.onInvalidate((_profileChanged, diagnostic) => hardMode.invalidate(diagnostic));}
   // The monitor owns the only scan cadence; independent consumers share this fresh physical operation.
   return profileObserver.readSettings(reader, source, ns, at, signal, force);
 }, observation => {

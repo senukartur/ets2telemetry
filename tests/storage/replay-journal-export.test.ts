@@ -20,6 +20,7 @@
 // docs/journal-export.md, docs/storage.md and docs/trips.md, never read back from the code under test (docs/TESTING.md
 // §4). Every case also checks I1-I5 (scripts/ci/history-invariants.mjs) over the stored rows and every ACK written, and
 // that no game history exists. Waits are the run's own completion; the only real-time values are named hang guards.
+import {unobservedHardModeAudit} from '../shared/hard-mode';
 import {existsSync, mkdirSync, readFileSync} from 'node:fs';
 import path from 'node:path';
 import {afterEach, beforeEach, describe, expect, it} from 'vitest';
@@ -34,7 +35,7 @@ import {reactiveDifferences} from '../../tools/telemetry-simulator/src/v1/reacti
 import {scenarioSource} from '../../tools/telemetry-simulator/src/v1/replay';
 import {scenarioPath} from '../shared/simulator-v1-expected';
 import {tripExportProblems} from '../shared/trip-export-validator';
-import {ok, TEST_CLOSE_GRACE_MS, workspace} from './helpers';
+import {ok, readOnly, TEST_CLOSE_GRACE_MS, workspace} from './helpers';
 import {readHistoryRows} from './history-rows';
 import {
   guarded, labels, RECORDING_FIXTURES, recordingExpected, replayOf, runRecording, storageWorker, storedRows, terminateWorkers, tripExpected, type RowsExpected
@@ -156,7 +157,7 @@ interface TripExpectation {
   label: string; listItem: Json; detailTrip: Json; job: Json; truck: string | null; trailers: {eventSeqs: string[]; total: number};
   outcome: Json | null; money: Json[]; window: Json; intervals: Json[]; events: [string, string, Json | null][]; samples: TripJournal['samples'];
 }
-function expectationsOf(s: Scenario): TripExpectation[] {
+function expectationsOf(s: Scenario, gapCommittedUtcMs?: number): TripExpectation[] {
   const original=JOURNAL.scenarios[s.id];
   const journal=s.id==='app-absent-hydration'?{...original,trips:[{...original.trips[0],trip:'attach@5',closedBy:null,window:{fromEventSeq:'5',throughEventSeq:null,end:'open'},outcome:null,money:[],samples:[]},...original.trips]}:original;
   if(s.id==='timers-truck-refuel-trip')journal.trips=[{...original.trips[0],trip:'attach@7',job:{...original.trips[0].job,source:'checkpoint'},closedBy:null,window:{fromEventSeq:'7',throughEventSeq:null,end:'open'},outcome:null,money:[],samples:[]},...original.trips];
@@ -165,8 +166,14 @@ function expectationsOf(s: Scenario): TripExpectation[] {
   const attributions = new Map((s.rows.attributions as {eventSeq: string; trip: string | null; attribution: string}[]).map(a => [a.eventSeq, {kind: a.attribution, tripUuid: a.trip}]));
   expect(journal.trips.map(t => t.trip).sort(), `${s.id}: the journal fixture names every stored trip`).toEqual([...stored.keys()].sort());
   return journal.trips.map(t => {
-    const row = stored.get(t.trip)!;
-    const listItem = {isHardMode: false, hardModeDetails: null, tripUuid: t.trip, game, gameMode: row.gameMode, gameModeAmbiguous: row.gameModeAmbiguous, outcome: row.outcome, closeReason: row.closeReason,
+    const row = stored.get(t.trip)!, hardModeDetails = unobservedHardModeAudit(row.startedUtcMs);
+    if (s.id === 'app-absent-hydration' && t.trip === 'attach@4') {
+      if (gapCommittedUtcMs === undefined) throw new Error('Harness: missing commit timestamp for the closing gap 4–4');
+      // Gap 4–4 closes this member; the later attach@5 remains unobserved, without a diagnostic.
+      hardModeDetails.firstDiagnostic = {atUtcMs: gapCommittedUtcMs, code: 'session-transition', rule: null, values: null};
+      hardModeDetails.latestDiagnostic = {...hardModeDetails.firstDiagnostic};
+    }
+    const listItem = {isHardMode: false, hardModeDetails, tripUuid: t.trip, game, gameMode: row.gameMode, gameModeAmbiguous: row.gameModeAmbiguous, outcome: row.outcome, closeReason: row.closeReason,
       recordingCompleteness: row.recordingCompleteness, startedUtcMs: row.startedUtcMs, endedUtcMs: row.endedUtcMs, observedDistanceM: row.observedDistanceM, fuelUsedL: row.fuelUsedL,
       job: expandMoney(t.job)};
     // A trip opened at an event has its job at its job configuration event; a late-attach trip (attach@<nextEventSeq>) has the checkpoint's job (J9).
@@ -299,7 +306,9 @@ describe('ET-019 lifecycle scenarios replayed into the journal and the export', 
   for (const s of SCENARIOS) it(`${s.id}: the stored rows, the journal (list, filters, detail, intervals, timeline, samples) and each trip's export match the hand-written expectation`, async () => {
     expectNoGameHistory();
     const session = scenarioSource(replayOf(s.input).scenario).pluginSessionId;
+    const recordingStartedUtcMs = Date.now();
     const run = await runRecording(s.input, {path: ws.database, backups: ws.backups});
+    const recordingEndedUtcMs = Date.now();
     // The served stream is the replayed one, so the hand-written expectations of the lockstep replay apply to this consumer.
     expect(reactiveDifferences(replayOf(s.input), run.report)).toEqual([]);
     expect(run.services).toHaveLength(1);
@@ -317,7 +326,17 @@ describe('ET-019 lifecycle scenarios replayed into the journal and the export', 
     expect(violations, formatViolations(violations)).toEqual([]);
 
     // The journal and the export over a new real worker on the closed file, as the service reads the database it opened.
-    const trips = expectationsOf(s);
+    let gapCommittedUtcMs: number | undefined;
+    if (s.id === 'app-absent-hydration') {
+      const gaps = readOnly(ws.database, db => db.prepare(`SELECT g.committed_utc_ms FROM event_gaps g
+        JOIN plugin_sessions p ON p.id=g.plugin_session_ref WHERE p.plugin_session_uuid=?
+        AND g.first_event_seq='00000000000000000004' AND g.last_event_seq='00000000000000000004'`).all(session) as {committed_utc_ms: number}[]);
+      expect(gaps).toHaveLength(1);gapCommittedUtcMs = gaps[0].committed_utc_ms;
+      // This is the persisted gap operation's wall-clock label, independently bounded by the recording operation.
+      expect(Number.isSafeInteger(gapCommittedUtcMs)).toBe(true);
+      expect(gapCommittedUtcMs).toBeGreaterThanOrEqual(recordingStartedUtcMs);expect(gapCommittedUtcMs).toBeLessThanOrEqual(recordingEndedUtcMs);
+    }
+    const trips = expectationsOf(s, gapCommittedUtcMs);
     const worker = storageWorker(), client = new StorageClient(worker.handle, {closeGraceMs: TEST_CLOSE_GRACE_MS});
     const summary = ok(await client.open({path: ws.database, purpose: 'synthetic', backupsDirectory: ws.backups, appVersion: '0.1.0-test'}));
     const history: JournalHistory = {state: 'open', failureCode: null, client, database: {purpose: summary.purpose, schemaVersion: summary.schemaVersion}, databaseUuid: summary.databaseUuid};

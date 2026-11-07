@@ -1,5 +1,5 @@
 import {describe, expect, it} from 'vitest';
-import {advanceHardMode, evaluateHardMode, parseHardModeConfig, unknownHardMode} from '../../packages/telemetry-core/src/hard-mode';
+import {advanceHardModeV2, newHardModeDetails, qualifiesHardMode, advanceHardMode, evaluateHardMode, parseHardModeConfig, unknownHardMode} from '../../packages/telemetry-core/src/hard-mode';
 import {isHardModeDetails, isHardModeObservation, isHardModeStatus} from '../../packages/contracts/src/hard-mode';
 import {hardModeView} from '../../apps/desktop/src/hard-mode/view';
 import {t} from '../../apps/desktop/src/i18n';
@@ -130,10 +130,51 @@ describe('ET-026 persisted settings (REG-009/010)', () => {
     expect(ru.loss).toContain('обнаружено 0'); expect(ru.loss).not.toContain('outside-limit');
     expect(JSON.stringify(details)).toBe(before); expect(hardModeView({assessment: fail, trip: details}, 2000, 'en').rows[3].detected).toBe('Off (0)');
   });
+  it('validates private batch provenance independently of nullable current proof', () => {
+    const batch={tripUuid:'70000000-0000-4000-8000-000000000001',producer:'80000000-0000-4000-8000-000000000001',sequence:1,passingChecks:1,failingChecks:0,unknownChecks:0};
+    const value={assessment:unknownHardMode(0),binding:null,pluginSessionId:null,sourceMonotonicNs:null,batch,batchSessionId:'90000000-0000-4000-8000-000000000001',member:batch.tripUuid};
+    expect(isHardModeObservation(value)).toBe(true);
+    expect(isHardModeObservation({...value,batchSessionId:'private text'})).toBe(false);
+    expect(isHardModeObservation({...value,member:'70000000-0000-4000-8000-000000000002'})).toBe(false);
+    const {batch:removed,...withoutBatch}=value;void removed;
+    expect(isHardModeObservation(withoutBatch)).toBe(false);
+  });
   it('rejects unlisted fields, identities, bad lengths and malformed cross-boundary values', () => {
     const status = {assessment: evaluate(), trip: null}; expect(isHardModeStatus(status)).toBe(true);
     expect(isHardModeStatus({...status, filename: 'private'})).toBe(false);
     expect(isHardModeStatus({...status, assessment: {...status.assessment, rules: []}})).toBe(false);
     expect(isHardModeObservation({assessment: evaluate(), binding: 'raw profile', pluginSessionId: null, sourceMonotonicNs: null})).toBe(false);
+  });
+});
+
+describe('Hard Mode v2 known-check policy (REG-003/008/009/014)', () => {
+  it.each([[95,5,true],[98,2,true],[94,6,false],[0,0,false]])('classifies %s passing / %s failing inclusively', (passingChecks,failingChecks,qualified) => {
+    expect(qualifiesHardMode({passingChecks,failingChecks,unknownChecks: 1000})).toBe(qualified);
+    expect(qualifiesHardMode({passingChecks,failingChecks,unknownChecks: 0},false)).toBe(false);
+  });
+  it('recovers, excludes unknown and never requires passing opening/final snapshots', () => {
+    let audit = newHardModeDetails(unknownHardMode(0), null);
+    const batch = {tripUuid: '70000000-0000-4000-8000-000000000001', producer: '80000000-0000-4000-8000-000000000001', sequence: 106, passingChecks: 94, failingChecks: 6, unknownChecks: 6};
+    const observation = {assessment: unknownHardMode(1), binding: null, pluginSessionId: null, sourceMonotonicNs: null, batch};
+    audit = advanceHardModeV2(audit, observation); expect(qualifiesHardMode(audit)).toBe(false);
+    audit = advanceHardModeV2(audit, {...observation, batch: {...batch, sequence: 126, passingChecks: 114}});
+    expect(qualifiesHardMode(audit)).toBe(true); expect(audit.latest.state).toBe('unknown'); expect(audit.firstLoss).toBeNull();
+    expect(isHardModeDetails(audit)).toBe(true);
+    expect(isHardModeDetails({...audit, passingChecks: -1})).toBe(false);
+    expect(isHardModeDetails({...audit, checkpoint: {...batch, sequence: 1}})).toBe(false);
+    for (const language of ['en','ru'] as const) {
+      const view = hardModeView({assessment: audit.latest, trip: audit}, 2000, language);
+      expect(view.ratio).toContain('114/120'); expect(view.ratio).toContain('95%'); expect(view.loss).toBeNull();
+      expect(view.headline).not.toContain(language === 'en' ? 'lost' : 'потерян');
+    }
+  });
+  it('deduplicates a cumulative checkpoint and retains original diagnostic values', () => {
+    const fail = evaluate(HARD_MODE_CONFIG.replace('g_fatigue "1"','g_fatigue "0"'));
+    const observation = {assessment: fail, binding: null, pluginSessionId: null, sourceMonotonicNs: null,
+      batch: {tripUuid: '70000000-0000-4000-8000-000000000001', producer: '80000000-0000-4000-8000-000000000001', sequence: 1, passingChecks: 0, failingChecks: 1, unknownChecks: 0}};
+    const once = advanceHardModeV2(newHardModeDetails(evaluate(),null),observation);
+    const twice = advanceHardModeV2(once,observation);
+    expect(twice.failingChecks).toBe(1); expect(twice.firstDiagnostic).toMatchObject({code:'rule-failed',rule:'fatigue',values:[0]});
+    expect(isHardModeDetails(twice)).toBe(true);
   });
 });

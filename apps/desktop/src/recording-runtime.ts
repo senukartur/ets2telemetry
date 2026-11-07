@@ -127,7 +127,7 @@ export function createRecordingRuntime(options: RecordingRuntimeOptions): Record
       shutdown.register('intake', {name: 'v1-ingestion', budgetMs: V1_INTAKE_BUDGET_MS, run: () => v1.stopSource()});
       // Drops queued durable work and waits for the one storage command in flight before the database closes (R14); then,
       // unless durable delivery failed, writes the pending one-second samples (ET-015b, H11).
-      shutdown.register('flush', {name: 'recording-flush', budgetMs: RECORDING_FLUSH_BUDGET_MS, run: () => v1.flush()});
+      shutdown.register('flush', {name: 'recording-flush', budgetMs: RECORDING_FLUSH_BUDGET_MS, run: async () => {await v1.flush(); await recorder?.flushHardMode();}});
       shutdown.register('storage', {name: HISTORY_STORAGE_STEP_NAME, budgetMs: HISTORY_CLOSE_BUDGET_MS, run: context => history.close(context?.graceMs)});
     }
   };

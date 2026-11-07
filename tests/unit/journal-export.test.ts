@@ -128,13 +128,16 @@ describe('trip-scoped connection diagnostics (REG-011, REG-014)', () => {
   });
 });
 
-describe('format version 4 (J15, REG-014)', () => {
+it('independently validates the historical format-3 shape', () => {const v3:Record<string,unknown>={...EXPECTED_V4,formatVersion:3};delete v3.sources;expect(tripExportProblems(v3)).toEqual([]);});
+it('independently validates the frozen format-4 shape', () => {expect(tripExportProblems(EXPECTED_V4)).toEqual([]);});
+
+describe('format version 5 (J15, REG-014)', () => {
   it('still validates the hand-written historical format-1 document', () => {expect(tripExportProblems(EXPECTED)).toEqual([]);});
   it('still validates the historical format-2 document', () => {expect(tripExportProblems(EXPECTED_V2)).toEqual([]);});
   it('writes the open anchor exactly as the hand-written document, in key order, one row per line', () => {
     const text = serialize(detail, {intervals: [[INTERVAL]], events: [[EVENT], [EVENT_4]], samples: [[SAMPLE]]});
     const document = JSON.parse(text) as Record<string, unknown>;
-    expect(document).toEqual(EXPECTED_V4);
+    expect(document).toEqual({...EXPECTED_V4,formatVersion:5});
     expect(Object.keys(document)).toEqual(Object.keys(EXPECTED_V4));
     expect(tripExportProblems(document)).toEqual([]);
     // Fixed sections, then each row of each section on its own line, then the closing lines.

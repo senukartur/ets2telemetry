@@ -1,3 +1,4 @@
+import {unobservedHardModeAudit} from '../shared/hard-mode';
 import {projectEffects} from '../../packages/storage/src/sqlite/logical-trips';
 // ET-016 PR-2: journal reads through the in-process storage core, against temporary synthetic-purpose databases. The
 // main database is a copy of the immutable version 1 fixture, migrated to version 2 (its trip is the migrated anchor),
@@ -100,7 +101,7 @@ describe('journal trip list (J5; REG-014)', () => {
     const page = ok(storage.journalTrips({game: 'ats', outcome: 'delivered', completeness: 'complete'}));
     const zero = page.trips.at(-1)!;
     expect(zero).toEqual({
-      isHardMode: false, hardModeDetails: null, tripUuid: T.zeroValues, game: 'ats', gameMode: ANCHOR_GAME_MODE, gameModeAmbiguous: false, outcome: 'delivered', closeReason: 'outcome', recordingCompleteness: 'complete',
+      isHardMode: false, hardModeDetails: unobservedHardModeAudit(SESSION_C_UTC + 3_000), tripUuid: T.zeroValues, game: 'ats', gameMode: ANCHOR_GAME_MODE, gameModeAmbiguous: false, outcome: 'delivered', closeReason: 'outcome', recordingCompleteness: 'complete',
       startedUtcMs: SESSION_C_UTC + 3_000, endedUtcMs: SESSION_C_UTC + 4_000, observedDistanceM: {available: true, value: 0}, fuelUsedL: NOT_OBSERVED,
       job: {source: 'event', sourceCity: text(''), sourceCompany: text('Synthetic Company A'), destinationCity: {available: false, reason: 'not-supported'},
         destinationCompany: text('Synthetic Company B'), cargo: NOT_OBSERVED, market: FREIGHT, isSpecialJob: NOT_SPECIAL,
@@ -153,7 +154,7 @@ describe('journal trip detail (J5, J13; REG-009, REG-014)', () => {
   it('returns the delivered trip with its job, truck, trailer, revenue, exact money totals, window, samples and export bounds', () => {
     expect(ok(storage.journalTrip(T.delivered))).toEqual({
       database: DATABASE,
-      trip: {isHardMode: false, hardModeDetails: null,
+      trip: {isHardMode: false, hardModeDetails: unobservedHardModeAudit(BASE_UTC + 4_000),
         tripUuid: T.delivered, game: 'ets2', gameMode: ANCHOR_GAME_MODE, gameModeAmbiguous: false, outcome: 'delivered', closeReason: 'outcome', recordingCompleteness: 'complete',
         startedUtcMs: BASE_UTC + 4_000, endedUtcMs: BASE_UTC + 9_000, observedDistanceM: {available: true, value: 152_000.5}, fuelUsedL: NOT_OBSERVED,
         job: {source: 'event', sourceCity: text('Synthetic City A'), sourceCompany: text('Synthetic Company A'), destinationCity: text('Synthetic City B'),
@@ -182,7 +183,7 @@ describe('journal trip detail (J5, J13; REG-009, REG-014)', () => {
   it('keeps zero apart from unavailable for every job, outcome and sample value of the zero-values trip (REG-009)', () => {
     expect(ok(storage.journalTrip(T.zeroValues))).toEqual({
       database: DATABASE,
-      trip: {isHardMode: false, hardModeDetails: null,
+      trip: {isHardMode: false, hardModeDetails: unobservedHardModeAudit(SESSION_C_UTC + 3_000),
         tripUuid: T.zeroValues, game: 'ats', gameMode: ANCHOR_GAME_MODE, gameModeAmbiguous: false, outcome: 'delivered', closeReason: 'outcome', recordingCompleteness: 'complete',
         startedUtcMs: SESSION_C_UTC + 3_000, endedUtcMs: SESSION_C_UTC + 4_000, observedDistanceM: {available: true, value: 0}, fuelUsedL: NOT_OBSERVED,
         job: {source: 'event', sourceCity: text(''), sourceCompany: text('Synthetic Company A'), destinationCity: {available: false, reason: 'not-supported'},

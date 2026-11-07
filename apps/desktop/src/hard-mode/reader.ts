@@ -5,7 +5,7 @@ import {open, realpath, opendir, stat} from 'node:fs/promises';
 import path from 'node:path';
 import {ProfileLogTail} from './log-tail';
 import type {SourceIdentity} from '../../../../packages/contracts/src/protocol-v1';
-import type {HardModeObservation} from '../../../../packages/contracts/src/hard-mode';
+import type {HardModeDiagnosticCode, HardModeObservation} from '../../../../packages/contracts/src/hard-mode';
 import {evaluateHardMode, parseHardModeConfig} from '../../../../packages/telemetry-core/src/hard-mode';
 export const CONFIG_BYTES = 256 * 1024, LOG_BYTES = 4 * 1024 * 1024, MAX_PROFILES = 256;
 const REQUIRED_GUARD_NS = 5_000_000_000n + 2_000_000_000n;
@@ -151,7 +151,7 @@ export class HardModeReader {
   private guardGeneration = 0;
   private guardSource: string | undefined;
   private guardSelected = false;
-  private readonly invalidations = new Set<(profileChanged: boolean) => void>();
+  private readonly invalidations = new Set<(profileChanged: boolean, diagnostic: HardModeDiagnosticCode) => void>();
   constructor(private readonly options: HardModeReaderOptions) {}
   requestFull(): void {if (this.running && !this.running.settled) this.running.force = true;}
   canRetain(): boolean {return this.guardEligible() && this.admitted !== undefined && this.running?.preserve === true;}
@@ -187,7 +187,7 @@ export class HardModeReader {
   }
   private retireGuards(retainBaseline = false): void {
     clearTimeout(this.guardTimer); this.guardTimer = undefined; this.guard = undefined; this.guardGeneration++;
-    this.invalidate(true, retainBaseline);
+    this.invalidate(true, retainBaseline, retainBaseline ? 'source-changed' : 'guard-deadline');
     const reason = retainBaseline ? new Error('Source guard eligibility retired') : new ProfileVerificationError(new Error('Required guard eligibility retired'), 'PROFILE_DEADLINE');
     if (this.queued) this.cancel(this.queued, false, true, reason);
     if (this.running) this.cancel(this.running, false, true, reason);
@@ -223,8 +223,8 @@ export class HardModeReader {
     this.guard = {startedNs: work.startedClientNs, deadlineNs}; this.armGuardTimer();
   }
   drain(): Promise<void> {return this.running?.drain ?? Promise.resolve();}
-  onInvalidate(listener: (profileChanged: boolean) => void): () => void {this.invalidations.add(listener); return () => this.invalidations.delete(listener);}
-  private invalidate(profileChanged = true, retainBaseline = false): void {if (profileChanged && this.running) this.running.profileGuarded = false; if (!retainBaseline) this.admitted = undefined; for (const listener of this.invalidations) listener(profileChanged);}
+  onInvalidate(listener: (profileChanged: boolean, diagnostic: HardModeDiagnosticCode) => void): () => void {this.invalidations.add(listener); return () => this.invalidations.delete(listener);}
+  private invalidate(profileChanged = true, retainBaseline = false, diagnostic: HardModeDiagnosticCode = profileChanged ? 'profile-verification' : 'settings-changing'): void {if (profileChanged && this.running) this.running.profileGuarded = false; if (!retainBaseline) this.admitted = undefined; for (const listener of this.invalidations) listener(profileChanged, diagnostic);}
   private lifetime(source: SourceIdentity): string | undefined {
     return this.options.processLifetime ? this.options.processLifetime(source)
       : JSON.stringify([source.game, source.origin, source.processId, source.windowsSessionId, source.processInstanceId]);

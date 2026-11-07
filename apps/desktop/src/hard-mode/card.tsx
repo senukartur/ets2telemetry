@@ -8,7 +8,7 @@ import {Tooltip, TooltipContent, TooltipProvider, TooltipTrigger} from '../compo
 import {t, type AppLanguage} from '../i18n';
 import {InfoHint} from '../info-hint';
 import type {HardModeController} from './use-status';
-import {hardModeView, hardModeState, hardModeLossText} from './view';
+import {hardModeView, hardModeState, hardModeLossText, hardModeRatioText, hardModeDiagnosticText} from './view';
 export function HardModeBadge({short = false, language = 'en'}: {short?: boolean; language?: AppLanguage}) {
   return <Badge data-testid="hard-mode-badge"><Flame className="mr-1 size-3" aria-hidden="true" />{short ? 'HM' : t('hm.title', undefined, language)}</Badge>;
 }
@@ -22,6 +22,7 @@ export function HardModeTrip({qualified, details, language = 'en'}: {qualified: 
           <span className="block">{t('hm.snapshots', undefined, language)}</span></> : <span className="block">{t('hm.notEvaluated', undefined, language)}</span>}
         <span className="block text-xs text-muted-foreground">{t('hm.notice', undefined, language)}</span>
       </InfoHint></p>
+    {details?.version === 2 ? <><p>{hardModeRatioText(details, language)}</p>{details.firstDiagnostic ? <p>{hardModeDiagnosticText(details.firstDiagnostic, language)}</p> : null}{details.latestDiagnostic && JSON.stringify(details.latestDiagnostic) !== JSON.stringify(details.firstDiagnostic) ? <p>{hardModeDiagnosticText(details.latestDiagnostic, language)}</p> : null}</> : null}
     {details?.firstLoss ? <p>{t('hm.firstLoss', {loss: hardModeLossText(details.firstLoss, language)}, language)}</p> : null}
   </section>;
 }
@@ -47,6 +48,8 @@ export function HardModeCard({language = 'en', controller}: {language?: AppLangu
     <div className="yu-hard-mode-progress"><progress value={view.passed} max={12} aria-label={t('hm.progress', undefined, language)} data-state={status.assessment.state} />
       <p role="status">{!loaded ? t('hm.reading', undefined, language) : t('hm.configuredCount', {n: view.passed}, language)}</p></div>
     {error ? <p role="status">{t('hm.unavailable', undefined, language)}</p> : null}
+    {view.ratio ? <p role="status" data-testid="hard-mode-trip-ratio">{view.ratio} {t('hm.recoverable', undefined, language)}</p> : null}
+    {view.diagnostic ? <p data-testid="hard-mode-diagnostic">{view.diagnostic}</p> : null}
     {view.loss ? <p role="status" data-testid="hard-mode-loss">{view.loss}</p> : null}
     {loaded && failing.length ? <p className="yu-hard-mode-fix" data-testid="hard-mode-fix"><TriangleAlert aria-hidden="true" />{t('hm.fix', {settings: failing.map(row => row.label).join(', ')}, language)}</p> : null}
     <TooltipProvider disableHoverableContent delayDuration={100} skipDelayDuration={0}><ol className="yu-hard-mode-grid" data-testid="hard-mode-details">{view.rows.map(row => <li key={row.id} data-testid={`hard-mode-rule-${row.id}`} data-state={row.state}>
