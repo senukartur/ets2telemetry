@@ -152,6 +152,11 @@ describe('ET-012c strip containment observation', () => {
       document: stripDocument(layout), ...viewport,
       getComputedStyle: (node: {testId: string}) => ({maxWidth: layout.maxWidth?.[node.testId] ?? '140px'})}))) as false | Record<string, unknown>;
   }
+  it('builds the Driving only record of the edit step from the product preset, in canonical order', async () => {
+    const {DRIVING_ONLY_SECTIONS} = await import(observationModule);
+    const {OVERLAY_PRESETS, OVERLAY_SECTION_IDS} = await import('../../apps/desktop/src/overlay-sections');
+    expect(DRIVING_ONLY_SECTIONS).toEqual(OVERLAY_SECTION_IDS.filter(id => OVERLAY_PRESETS['driving-only'][id]));
+  });
   it('names the sections the synthetic checkpoint fixture shows in the strip', async () => {
     const {STRIP_SMOKE_SECTIONS, STRIP_SMOKE_WINDOW} = await import(observationModule);
     expect(STRIP_SMOKE_SECTIONS).toEqual(EXPECTED);

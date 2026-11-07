@@ -506,8 +506,8 @@ async function zoomFactors(application) {
   return {overlay: of('?view=overlay'), dashboard: of('')};
 }
 
-// The Driving only preset of apps/desktop/src/overlay-sections.ts.
-const DRIVING_ONLY_SECTIONS = ['speed', 'gear', 'rpm', 'fuel', 'range'];
+// The Driving only preset of apps/desktop/src/overlay-sections.ts in canonical order (overlay-smoke-source.test.ts pins it).
+export const DRIVING_ONLY_SECTIONS = Object.freeze(['speed', 'gear', 'rpm', 'cruise-control', 'fuel', 'range']);
 // ET-012b edit mode (REG-016, REG-017). The synthetic source has no game window, so edit mode waits for the game: the
 // overlay never shows, never becomes focusable and stays topmost while its document is marked as editing. A scale
 // reaches only the overlay's zoom factor, overlayZoom(scale) = scale × 0.7 since ET-045e (0.7 at 100%, 2.1 at 300%, 0.35

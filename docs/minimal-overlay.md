@@ -237,7 +237,7 @@ ET-052 PR-5 adds the fifteenth overlay section, `mandatory-break`, under owner d
 
 Real-game values (what ETS2 and ATS report with the break simulation on or off, an overdue value), the colours and underline above a real game at 40–100% background opacity in the four layouts in English and Russian, the strip's width stability, Windows scaling and the click-through over the taller default windows remain pending in [ET-052 validation](validation/et-052.md).
 
-### Cruise control (ET-071, November 7, 2026)
+### Cruise control
 
 ET-071 adds the sixteenth overlay section, `cruise-control`, with settings format v13 ([settings](settings.md#current-format-v13-the-cruise-control-overlay-section-et-071)). The data path is protocol v1 minor 3 ([live telemetry fields](live-telemetry-fields.md)).
 
