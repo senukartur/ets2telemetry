@@ -2,6 +2,7 @@
 import {EVENT_TYPES, type Available, type GameMode, type JobConfiguration, type Measure, type Money} from '../../contracts/src/protocol-v1';
 import type {CloseReason, RecordingCompleteness, TripOutcome} from './api';
 
+export const MAX_UPLOAD_PROJECTION_PINS=8;
 export const UPLOAD_PAGE_KINDS = ['members', 'configurations', 'intervals'] as const;
 export type UploadPageKind = typeof UPLOAD_PAGE_KINDS[number];
 export type UploadReadiness = 'ready' | 'identity-pending';

@@ -9,6 +9,9 @@ const RUNTIME = 'powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypa
 const PACKAGED = ['native:configure', 'build', 'package', 'inspect:package'];
 
 describe('local check plan', () => {
+  it.each(['apps/desktop/src/dashboard-upload/credential-store.ts','apps/desktop/src/dashboard-upload/credential-ports.ts','scripts/ci/dashboard-upload-credentials-observation.mjs','tests/runtime/dashboard-upload-credentials-main.ts'])('maps %s to the existing required recording credential canary',file=>{
+    const plan=planChecks({changed:[file]});expect(ids(plan)).toContain('runtime:recording');expect(command(plan,'runtime:recording')).toBe(`${RUNTIME} -Scenario recording`);
+  });
   it('plans nothing for no change and no application check for documentation', () => {
     expect(planChecks({changed: []})).toMatchObject({kind: 'empty', steps: []});
     expect(planChecks({changed: ['docs/TESTING.md', 'AGENTS.md', 'docs/validation/et-066.md']})).toMatchObject({kind: 'documentation', steps: []});

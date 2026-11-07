@@ -348,6 +348,7 @@ function recordingReceiptWith(edits: Edit[]): string {
     listMatch: true, detailMatch: true, intervalsMatch: true, timelineMatch: true, samplesMatch: true, exportSaved: true, exportCancelledWritesNothing: true,
     exportUnchangedByCancel: true, sampleCountMatch: true, exportValidated: true, exportReconciled: true};
   const value: Json = {passed: true, commit: 'candidate', mode: 'packaged', scenarioKind: 'recording', launcherExit: 0, probesAfterExit: ['ets2telemetry-probe-a'],
+    uploadCredentials:{passed:true,encryptedOnly:true,restartDecrypted:true,missingGenerationRefused:true,electron:'44.7.0',processes:2},
     mainEvents: [{event: 'DIAGNOSTIC_SERVICE_EXIT_REQUEST'}, {event: 'SERVICE_EXIT', detail: {code: 0}}, {event: 'APP_EXIT_REQUESTED', facts: {reason: 'tray'}},
       {event: 'SERVICE_EXIT', detail: {code: 0}}, {event: 'APP_EXIT', detail: {code: 0}}],
     serviceEvents: [...started(4100, true), ...started(4200, false), ...stopped(4200)],
@@ -393,6 +394,9 @@ function recordingCases() {
       reason: path.length ? 'RECORDING_RESULT_INCOMPLETE_OR_INVALID' : null});
   return [
     {name: 'intact recording receipt', body: recordingReceipt(), scenario: 'recording', code: 0, available: true, reason: null},
+    invalid('missing async credential canary',['uploadCredentials']),
+    ...['passed','encryptedOnly','restartDecrypted','missingGenerationRefused'].flatMap(flag=>[invalid(`false credential ${flag}`,['uploadCredentials',flag],false),invalid(`nonboolean credential ${flag}`,['uploadCredentials',flag],'true')]),
+    invalid('wrong credential Electron',['uploadCredentials','electron'],'44.6.0'),invalid('missing restart credential process',['uploadCredentials','processes'],1),invalid('extra credential detail',['uploadCredentials','secret'],'forbidden'),
     // ET-055 PR-4: the reopened losses name the staging display name in a staging run, and only there.
     {name: 'intact staging recording receipt', body: recordingReceipt(['recording', 'status', 'reopened', 'losses'], ['Gaps recorded since Yukon Union Telemetry Staging started', 'Intervals without a connection: 1']),
       scenario: 'recording', displayName: 'Yukon Union Telemetry Staging', code: 0, available: true, reason: null},

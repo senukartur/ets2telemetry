@@ -1,6 +1,7 @@
 import {isOpacity, isStyle, isSelection} from './now-playing/contract';
 import {isHardModeStatus, type HardModeStatus} from '../../../packages/contracts/src/hard-mode';
 import {contextBridge, ipcRenderer} from 'electron';
+import {dashboardUploadPreload} from './dashboard-upload/contract';
 import type {AppState, DesktopBridge, LiveTelemetry, UpdateView} from '../../../packages/contracts/src';
 import {initialLive, sourceSelection} from './live-state';
 import {expiredV1, liveV1Key, parseLiveV1, RENDERER_V1_EXPIRED_REASON, V1_LIVE_EXPIRY_MS} from './live-v1';
@@ -140,6 +141,7 @@ async function hardModeCall(channel: 'hard-mode:status' | 'hard-mode:refresh'): 
   return reply;
 }
 const bridge: DesktopBridge = {
+  ...dashboardUploadPreload(ipcRenderer),
   getStatus: () => ipcRenderer.invoke('scaffold:status'),
   selectSource: source => {
     try {return ipcRenderer.invoke('telemetry:select', sourceSelection(source));}

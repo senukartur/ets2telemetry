@@ -1,3 +1,10 @@
+import {UploadMainController} from './dashboard-upload/main-controller';
+import {UploadServiceBridge} from './dashboard-upload/service-bridge';
+import {UploadCredentialStore,CredentialFiles} from './dashboard-upload/credential-store';
+import {electronUploadCrypto} from './dashboard-upload/credential-ports';
+import {configuredDashboardOrigin} from './dashboard-upload/config';
+import {UPLOAD_CHANNELS,type UploadAction} from './dashboard-upload/contract';
+import {dataPaths} from './paths';
 import {pathToFileURL} from 'node:url';
 import {acceptsSelectedSession} from './now-playing/selection';
 import {NowPlayingController} from './now-playing/controller';
@@ -8,7 +15,7 @@ import {isOpacity, isStyle, isSelection} from './now-playing/contract';
 import type {MediaTrack, NowPlayingDisplay, NowPlayingView} from '../../../packages/contracts/src/now-playing';
 import {initialSource, resolveSourceMode} from './source-mode';
 import {HardModeServiceCache} from './hard-mode/service-status';
-import {app, BrowserWindow, dialog, ipcMain, Menu, MessageChannelMain, nativeImage, net, screen, shell, Tray, utilityProcess, type MessagePortMain, type UtilityProcess, type IpcMainEvent, type IpcMainInvokeEvent} from 'electron';
+import {app, BrowserWindow, dialog, ipcMain, Menu, MessageChannelMain, nativeImage, net, safeStorage, screen, shell, Tray, utilityProcess, type MessagePortMain, type UtilityProcess, type IpcMainEvent, type IpcMainInvokeEvent} from 'electron';
 import {spawn} from 'node:child_process';
 import {existsSync, mkdirSync, readFileSync, lstatSync} from 'node:fs';
 import * as nodeFsPromises from 'node:fs/promises';
@@ -143,6 +150,8 @@ function runApplication(profileError: unknown): void {
   const settingsLoad = settingsStore.load().then(() => undefined, (error: unknown) => {log('SETTINGS_LOAD_REJECTED', String(error));});
   let window: BrowserWindow | undefined, service: UtilityProcess | undefined, status: ScaffoldStatus | undefined;
   let subscribed = false, serviceReady = false;
+  let uploadBridge:UploadServiceBridge|undefined;
+  const upload=new UploadMainController(configuredDashboardOrigin(ACTIVE_CHANNEL),ACTIVE_CHANNEL,()=>{if(!process.env.LOCALAPPDATA)throw Error('CREDENTIAL_UNAVAILABLE');return new UploadCredentialStore(new CredentialFiles(dataPaths(process.env.LOCALAPPDATA).credentials),electronUploadCrypto(safeStorage));},value=>{window?.webContents.send(UPLOAD_CHANNELS.status,value);});
   // First readiness creates the dashboard and overlay once; later service restarts never recreate them.
   let started = false;
   let startHiddenOnLaunch = process.argv.includes('--hidden');
@@ -572,7 +581,7 @@ function runApplication(profileError: unknown): void {
     log,
     // A running trip export stops first, so a journal read that the retirement answers ends it as interrupted (J16).
     // ET-017: plugin setup stops after its current game folder; no new run, poll or trigger starts.
-    begin: () => {latency?.finish('exit'); exporter.abort(); diagnosticsExporter.abort(); pluginSetup.abort(); updates.retire(); heartbeatMonitor.stop(); updateHealth({type: 'exit-requested'}, true); retireLive();},
+    begin: () => {upload.stop(); latency?.finish('exit'); exporter.abort(); diagnosticsExporter.abort(); pluginSetup.abort(); updates.retire(); heartbeatMonitor.stop(); updateHealth({type: 'exit-requested'}, true); retireLive();},
     stopService: () => supervisor.stop(),
     // An in-flight settings save, the removal of an interrupted trip or diagnostics export's partial file and the plugin setup run in flight
     // (which ends with the removal of its temporary file) may delay the final exit by at most EXIT_IDLE_BUDGET_MS
@@ -595,7 +604,7 @@ function runApplication(profileError: unknown): void {
   });
   const supervisor: ServiceSupervisor = new ServiceSupervisor(log, code => lifecycle.finish(code), {
     restart: () => startService(),
-    state: state => {heartbeatMonitor.stop(); serviceReady = false; retireHardMode(); selectionPending = false; status = undefined; closeUpstream(); retireRecording(); journal.retire();
+    state: state => {upload.detach(); uploadBridge=undefined; heartbeatMonitor.stop(); serviceReady = false; retireHardMode(); selectionPending = false; status = undefined; closeUpstream(); retireRecording(); journal.retire();
       if (state === 'service-failed') {updateHealth({type: 'service-exited', afterFailure: failureReported}); failureReported = false;}
       else updateHealth({type: 'service-restarting'});
       const update: LiveTelemetry = {...initialLive(selection), status: state, reason: 'Telemetry service exited; current interval is unknown'};
@@ -616,7 +625,7 @@ function runApplication(profileError: unknown): void {
     // its exit arrives (up to 3000 ms later). The later state callback finds them already retired.
     // A new selection generation also retires a readiness still awaiting its broker or settings, so the failing service
     // never becomes ready, selected or the journal's service afterwards (ET-016 PR-3 review).
-    failure: code => {heartbeatMonitor.stop(); failureReported = true; serviceReady = false; retireHardMode(); selectionPending = false; status = undefined; selectionGeneration++; closeUpstream(); retireRecording(); journal.retire();
+    failure: code => {upload.detach(); uploadBridge=undefined; heartbeatMonitor.stop(); failureReported = true; serviceReady = false; retireHardMode(); selectionPending = false; status = undefined; selectionGeneration++; closeUpstream(); retireRecording(); journal.retire();
       updateHealth({type: 'service-failure', code: failureCode(code, reportedFailureCode)}); reportedFailureCode = undefined;
       const update: LiveTelemetry = {...initialLive(selection), status: 'restarting', reason: 'Telemetry service failed; current interval is unknown'};
       freshness.invalidate(update); dashboardSubscriptions.close(); dashboardPort = undefined; window?.webContents.send('telemetry:service-state', update);}
@@ -847,7 +856,7 @@ function runApplication(profileError: unknown): void {
   }
   // Retires only dashboard document state. Upstream, freshness, the overlay and the service are unaffected; an overlay
   // edit started from the retired document is cancelled without writing.
-  function retireDashboard(): void {nowDashboardReady = false; nowFocus.stop(); nowController?.end();
+  function retireDashboard(): void {upload.documentChanged();nowDashboardReady = false; nowFocus.stop(); nowController?.end();
     cancelOverlayEdit('dashboard-retired');
     rendererEpoch++; subscribed = false; appStateSubscribed = false; dashboardSubscriptions.close(); dashboardPort = undefined;
   }
@@ -935,9 +944,12 @@ function runApplication(profileError: unknown): void {
     child.stderr?.on('data', chunk => log('SERVICE_STDERR', String(chunk)));
     child.once('spawn', () => log('SERVICE_SPAWN', {pid: child.pid}));
     child.once('exit', code => {heartbeatMonitor.stop(); if (service === child) {service = undefined; supervisor.serviceExited(code);}});
+    const childUpload=new UploadServiceBridge(value=>child.postMessage(value),value=>upload.acceptStatus(value));
+    uploadBridge=childUpload;
     child.on('message', (message: unknown) => {
       if (supervisor.stopping || service !== child) return;
       heartbeatMonitor.touch();
+      if(childUpload.receive(message))return;
       const type = message && typeof message === 'object' && !Array.isArray(message) ? (message as Record<string, unknown>).type : undefined;
       if (type === 'heartbeat') return;
       if (type === 'hard-mode') {
@@ -956,6 +968,7 @@ function runApplication(profileError: unknown): void {
           commitSelection(requested, selectionDispatched ? 'restore' : 'startup');
           serviceReady = true; selectionPending = false; status = {service: 'ready', storage: 'verified', synthetic: true};
           journal.attach(child);
+          if(uploadBridge===childUpload)void upload.attach(childUpload);
           updateHealth({type: 'service-ready'});
           if (!started) {started = true; if (!startHiddenOnLaunch) createWindow(); createOverlay(); syncNowPlaying(); updates.start();} else connectSubscription();
           connectUpstream();
@@ -1079,6 +1092,7 @@ function runApplication(profileError: unknown): void {
     if (!trustedNowDashboard(event) || args.length !== 1 || !isOverlayEditOutcome(args[0]) || !nowController?.editState().active) throw new Error('Invalid current track edit');
     return finishNowPlayingEdit(args[0]);
   });
+  for(const action of ['context','verify','confirm','cancel','disconnect'] as UploadAction[])ipcMain.handle(UPLOAD_CHANNELS[action],(event,...args:unknown[])=>{if(!trusted(event)||lifecycle.exiting)throw Error('Untrusted upload request');return upload.handle(action,args);});
   ipcMain.handle('scaffold:status', event => {if (!trusted(event)) throw new Error('Untrusted status request'); return status ?? null;});
   for (const channel of ['hard-mode:status', 'hard-mode:refresh']) ipcMain.handle(channel, (event, ...request: unknown[]) => {
     if (!trusted(event) || request.length !== 0) throw new Error('Untrusted Hard Mode request');

@@ -1,0 +1,28 @@
+import {describe,it,expect} from 'vitest';
+import {randomUUID} from 'node:crypto';
+import {initialDashboardUploadStatus,isDashboardUploadStatus,isDashboardToken} from '../../packages/contracts/src/dashboard-upload';
+import {DASHBOARD_ORIGINS,isReleaseDashboardOrigin,configuredDashboardOrigin} from '../../apps/desktop/src/dashboard-upload/config';
+import {connectionResponse,registrationResponse,jsonBody} from '../../apps/desktop/src/dashboard-upload/control-response';
+import {isUploadServiceRequest,isUploadServiceCancel} from '../../apps/desktop/src/dashboard-upload/service-contract';
+const bytes=(v:unknown)=>Buffer.from(JSON.stringify(v));
+const token=`vtc1_${randomUUID()}_${'a'.repeat(43)}`;
+describe('REG-010/012 closed Dashboard upload boundaries',()=>{
+  it('keeps both release origins absent and rejects loopback, paths and credential URLs',()=>{
+    expect(DASHBOARD_ORIGINS).toEqual({production:null,staging:null});expect(configuredDashboardOrigin('staging')).toBeNull();
+    for(const value of ['https://localhost','https://127.0.0.1','https://[::1]','http://dashboard.example','https://dashboard.example/','https://user@dashboard.example'])expect(isReleaseDashboardOrigin(value)).toBe(false);
+  });
+  it('never trims or transforms the exact bounded ASCII token',()=>{expect(isDashboardToken(token)).toBe(true);for(const value of [` ${token}`,`${token}\n`,token.replace('vtc1','VTC1'),'x'.repeat(129),null])expect(isDashboardToken(value)).toBe(false);});
+  it('validates actual pinned control responses and caps compatible limits',()=>{
+    const response={contract:{major:1,minor:0},accountId:'a',companyId:'c',identityEpoch:'e',limits:{maxEventBytes:100000,maxDepth:20,eventsPerMinute:120,burst:30}};
+    expect(connectionResponse(bytes(response))?.limits).toEqual({maxEventBytes:65536,maxDepth:16,eventsPerMinute:60,burst:10});
+    for(const change of [{versions:[1]},{contract:{major:2,minor:0}},{limits:{...response.limits,maxEventBytes:65535}}])expect(connectionResponse(bytes({...response,...change}))).toBeUndefined();
+    const owner={origin:'https://dashboard.example',accountId:'a',companyId:'c',identityEpoch:'e'},registered={contract:{major:1,minor:0},installationId:randomUUID(),bindingId:randomUUID(),identityEpoch:'e'};
+    expect(registrationResponse(bytes(registered),owner)).toEqual(registered);expect(registrationResponse(bytes({...registered,identityEpoch:'new'}),owner)).toBeUndefined();
+  });
+  it('rejects duplicate keys, invalid UTF8, excessive depth and secret-bearing safe DTOs',()=>{
+    for(const body of [Buffer.from('{"a":1,"a":2}'),Buffer.from([0xff]),Buffer.from('['.repeat(17)+'0'+']'.repeat(17))])expect(()=>jsonBody(body,16384)).toThrow();
+    const status=initialDashboardUploadStatus(null);expect(isDashboardUploadStatus(status)).toBe(true);expect(isDashboardUploadStatus({...status,token})).toBe(false);
+    const request={type:'dashboard-upload:request',id:randomUUID(),generation:randomUUID(),command:{action:'verify',token}};expect(isUploadServiceRequest(request)).toBe(true);expect(isUploadServiceRequest({...request,origin:'https://evil.example'})).toBe(false);
+    const cancel={type:'dashboard-upload:cancel',generation:randomUUID()};expect(isUploadServiceCancel(cancel)).toBe(true);expect(isUploadServiceCancel({...cancel,token})).toBe(false);expect(isUploadServiceCancel({...cancel,generation:'old'})).toBe(false);
+  });
+});

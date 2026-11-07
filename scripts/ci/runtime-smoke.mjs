@@ -1,4 +1,5 @@
 import {once} from 'node:events';
+import {observeUploadCredentials} from './dashboard-upload-credentials-observation.mjs';
 import {prepareNowPlayingSmoke, runNowPlayingSmoke, verifyNowPlayingRestart, nowPlayingRendererPages} from './now-playing-observation.mjs';
 import {dashboardObservation} from './dashboard-observation.mjs';
 import {runUiSmoke, runUiReadOnly, UI_CASES} from './ui-observation.mjs';
@@ -160,6 +161,7 @@ try {
   result.playwright = JSON.parse(await readFile(new URL('../../node_modules/playwright-core/package.json', import.meta.url))).version;
   assert.equal(result.playwright, '1.64.0');
   if (config.scenario === 'ui' && (!UI_CASES.includes(config.uiCase) || config.mode === 'installed')) throw new Error('INVALID_UI_SHARD');
+  if(config.scenario==='recording')result.uploadCredentials=await observeUploadCredentials(config);
   if (config.scenario === 'ui' && config.uiCase !== 'journal' || config.scenario === 'now-playing' || config.scenario === 'telemetry' || config.scenario === 'overlay' || config.scenario === 'lifecycle' || config.scenario === 'recording' || config.scenario === 'soak') telemetrySource = await startLiveSmokeSource(config.checkout);
   if (config.scenario === 'telemetry' || config.scenario === 'ui' && ['live', 'overlay'].includes(config.uiCase)) telemetrySourceV1 = await startLiveSmokeSourceV1(config.checkout);
   if (config.scenario === 'hard-mode') hardModeSource = await startHardModeWorker(config);
@@ -223,7 +225,7 @@ try {
   result.actual = await window.evaluate(async () => ({require: typeof globalThis.require,
     process: typeof globalThis.process, keys: Object.keys(globalThis.desktop),
     frozen: Object.isFrozen(globalThis.desktop), status: await globalThis.desktop.getStatus()}));
-  assert.deepEqual(result.actual, {require: 'undefined', process: 'undefined', keys: ['getStatus', 'selectSource', 'subscribeLive', 'getAppState', 'subscribeAppState', 'exitApplication', 'setLanguage', 'setAutostart', 'setUnitProfile', 'setGearDisplay', 'setOverlayBackgroundOpacity', 'setOverlayEnabled', 'setOverlayLayout', 'setOverlaySections',
+  assert.deepEqual(result.actual, {require: 'undefined', process: 'undefined', keys: ['getDashboardUploadContext','verifyDashboardUploadToken','confirmDashboardUpload','cancelDashboardUpload','disconnectDashboardUpload','subscribeDashboardUpload','getStatus', 'selectSource', 'subscribeLive', 'getAppState', 'subscribeAppState', 'exitApplication', 'setLanguage', 'setAutostart', 'setUnitProfile', 'setGearDisplay', 'setOverlayBackgroundOpacity', 'setOverlayEnabled', 'setOverlayLayout', 'setOverlaySections',
     'beginOverlayEdit', 'setOverlayEditScale', 'resetOverlayEditPlacement', 'finishOverlayEdit',
     'listJournalTrips', 'getJournalTrip', 'listJournalEvents', 'listJournalIntervals', 'listJournalSamples', 'exportJournalTrip', 'deleteJournalTrip',
     'retryPluginSetup', 'choosePluginFolder', 'setPluginGameExcluded', 'showPluginFile', 'openPluginFolder', 'exportDiagnostics', 'uninstallApplication', 'getHardModeStatus', 'refreshHardMode', 'updateApplication', 'checkForUpdates', 'setNowPlayingEnabled', 'setNowPlayingStyle', 'setNowPlayingBackgroundOpacity', 'selectNowPlayingSource', 'beginNowPlayingEdit', 'resetNowPlayingEditPlacement', 'finishNowPlayingEdit'],

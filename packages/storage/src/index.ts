@@ -66,6 +66,11 @@ export class Storage {
   getUploadProjectionPreparation(pinId: string) {return attempt(() => upload.getUploadProjectionPreparation(this.connection,pinId));}
   releaseUploadProjection(pinId: string, options?: CommitOptions) {return attempt(() => upload.releaseUploadProjection(this.connection,pinId,options?.testHooks));}
   readUploadProjectionPage(query: UploadProjectionPageQuery) { return attempt(() => upload.readUploadProjectionPage(this.connection, query)); }
+  readRetainedUploadMaterializations() {return attempt(()=>sync.readRetainedUploadMaterializations(this.connection));}
+  getUploadConfiguration() {return attempt(()=>sync.getUploadConfiguration(this.connection));}
+  pageUploadScanRuns(input:import('./upload-sync').UploadSyncCommands['pageUploadScanRuns']['args']['input']) {return attempt(()=>sync.pageUploadScanRuns(this.connection,input));}
+  pageUploadSources(input:import('./upload-sync').UploadSyncCommands['pageUploadSources']['args']['input']) {return attempt(()=>sync.pageUploadSources(this.connection,input));}
+  getUploadSchedulingHints(input:{registrationId:string}) {return attempt(()=>sync.getUploadSchedulingHints(this.connection,input));}
   ensureUploadInstallation(options?:CommitOptions) {return attempt(()=>sync.ensureUploadInstallation(this.connection,options));}
   recordUploadRegistration(input:UploadSyncCommands['recordUploadRegistration']['args']['input'],options?:CommitOptions) {return attempt(()=>sync.recordUploadRegistration(this.connection,input,options));}
   confirmUploadOwner(input:UploadSyncCommands['confirmUploadOwner']['args']['input'],options?:CommitOptions) {return attempt(()=>sync.confirmUploadOwner(this.connection,input,options));}

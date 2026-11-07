@@ -228,6 +228,16 @@ async function removeFixture() {
 async function settle() {await Promise.resolve(); await Promise.resolve();}
 async function ready() {await loadMain(); await Promise.resolve(); child.emit('message', {type: 'ready'}); await settle();}
 const trusted = () => ({sender: contents, senderFrame: contents.mainFrame});
+it('REG-010/012 restricts every upload command to the current main document and leaves unconfigured credentials unavailable',async()=>{
+  await ready();
+  for(const action of ['context','verify','confirm','cancel','disconnect']){
+    const handler=handlers.get(`dashboard-upload:${action}`)!;
+    for(const event of [{sender:{},senderFrame:contents.mainFrame},{sender:contents,senderFrame:{}},overlayTrusted()])expect(()=>handler(event)).toThrow('Untrusted');
+  }
+  await expect(handlers.get('dashboard-upload:context')!(trusted())).resolves.toMatchObject({state:'unavailable',origin:null,error:'UNCONFIGURED'});
+  await expect(handlers.get('dashboard-upload:verify')!(trusted(),{origin:'https://evil.example'})).rejects.toThrow('INVALID_UPLOAD_REQUEST');
+  expect(child.postMessage.mock.calls.some(([message])=>message.type==='dashboard-upload:request')).toBe(false);
+});
 const sourceEvents = () => log.mock.calls.filter(call => call[0] === 'SOURCE_SELECTED' || call[0] === 'SOURCE_SELECTION_RETIRED');
 function upstreamRequests(target = child) {return target.postMessage.mock.calls.filter(call => call[0].type === 'subscribe').length;}
 async function exhaustUpstream() {

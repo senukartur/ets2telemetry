@@ -344,6 +344,11 @@ function Test-RecordingJournalReceipt {
 # application restart into one synthetic database, which holds the hand-written rows; no history database exists.
 function Test-RecordingReceipt {
     param([object]$Driver, [string]$DisplayName = 'Yukon Union Telemetry')
+    $credentials = $Driver.uploadCredentials
+    if ($null -eq $credentials -or $credentials.electron -cne '44.7.0' -or $credentials.processes -ne 2 -or @($credentials.PSObject.Properties).Count -ne 6) { return $false }
+    foreach ($flag in @('passed','encryptedOnly','restartDecrypted','missingGenerationRefused')) {
+        if ($credentials.$flag -isnot [bool] -or !$credentials.$flag) { return $false }
+    }
     $recording = $Driver.recording
     if ($null -eq $recording) { return $false }
     foreach ($field in @('commitsActive','serviceRestartRecovered','dashboardClosedRecordingContinued','trayExitOrderly','restartRecovered',
