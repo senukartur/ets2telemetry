@@ -25,7 +25,7 @@ import {
   verifyRendererStyles
 } from './overlay-observation.mjs';
 import {runLifecycleSmoke, seedLifecycleSettings, until, verifyLifecycleRestart} from './lifecycle-observation.mjs';
-import {assertNoGameRunning, buildPluginFixture, runDiagnosticsExport, runPluginJourney, snapshotPluginFixture, verifyDisabledPluginCard, verifyPluginEvents, verifyPluginRestart} from './plugin-fixture.mjs';
+import {assertNoGameRunning, buildPluginFixture, runDiagnosticsExport, runPluginJourney, snapshotPluginFixture, verifyDisabledPluginCard, verifyPluginEvents, verifyPluginRestart, pluginCheckpoints} from './plugin-fixture.mjs';
 import {RECORDING_TARGET, runRecordingSmoke, startRecordingSource, verifyRecordingRestart, verifyRecordingRun} from './recording-observation.mjs';
 import {JOURNAL_TARGET, runJournalEmpty, runJournalExport, runJournalSeeded, seedJournalDatabase, verifyJournalRun} from './journal-observation.mjs';
 import {placeNewerHistory, runRefusalSmoke, verifyRefusalRun} from './refusal-observation.mjs';
@@ -85,8 +85,9 @@ async function verifyUninstallNotInstalled(page, press) {
 
 // Driver timeline on its own wall and monotonic clocks, to align with app diagnostics and the Job CPU series.
 result.phases = [];
-const checkpoint = config.scenario === 'now-playing' ? nowPlayingCheckpoints(path.join(config.output, 'now-playing-checkpoints.json')) : () => true;
-const phase = name => {result.phases.push({phase: name, utc: new Date().toISOString(), monotonicMs: Math.round(performance.now() * 10) / 10}); if (!checkpoint(name)) result.checkpointWriteFailed = true;};
+const checkpoint = config.scenario === 'now-playing' ? nowPlayingCheckpoints(path.join(config.output, 'now-playing-checkpoints.json'))
+  : config.scenario === 'plugin' ? pluginCheckpoints(path.join(config.output, 'plugin-checkpoints.json')) : () => true;
+const phase = (name, observation) => {result.phases.push({phase: name, utc: new Date().toISOString(), monotonicMs: Math.round(performance.now() * 10) / 10}); if (!checkpoint(name, observation)) result.checkpointWriteFailed = true;};
 const diagnosticEvents = async directory => (await readFile(path.join(directory, 'startup.jsonl'), 'utf8'))
   .trim().split(/\r?\n/).filter(Boolean).map(line => JSON.parse(line));
 // ET-013: one service run opens the history database once per service process (`created` per opening, in order),
@@ -595,18 +596,20 @@ try {
     // ET-017 PR-5: run A installs into the fake folders, shows the card and excludes ATS through the card's switch, then
     // exits orderly; run B, a restart with the same profile, must reach the same states without writing. The shared close
     // path below owns run B.
-    result.plugin = {};
+    result.plugin = {restartPhase: 'NOT_REACHED'};
     await runPluginJourney({application, dashboard: window, fixture: pluginFixture, config, before: pluginBefore, record: result.plugin, phase});
     tracing = false; await application.context().tracing.stop({path: path.join(config.output, 'trace.zip')}); phase('tracing-stopped');
-    await observeExit({application, launcher, request: () => application.close(), requireRequest: true,
+    phase('plugin-run-a-exit-started');
+    await observeExit({application, launcher, request: () => {phase('plugin-run-a-exit-requested', result.plugin.exitObservation); return application.close();}, requireRequest: true,
       record: result.plugin.exitObservation = {}, message: 'APP_CLOSE_TIMEOUT_8_SECONDS'});
     result.plugin.runAExit = launcher.exitCode;
     assert.deepEqual({launcherExit: launcher.exitCode, signal: launcher.signalCode}, {launcherExit: 0, signal: null});
-    application = undefined; phase('plugin-run-a-exited');
+    application = undefined; phase('plugin-run-a-exited', result.plugin.exitObservation);
     // Run B must write nothing: every fixture file keeps the bytes and modification time run A left.
     assertNoGameRunning();
     const afterRunA = await snapshotPluginFixture(pluginFixture);
-    application = await launch(config.diagnosticsRestart);
+    phase('plugin-restart-requested'); result.plugin.restartPhase = 'LAUNCHING';
+    application = await launch(config.diagnosticsRestart); result.plugin.restartPhase = 'STARTED';
     launcher = application.process(); phase('restart-launch-returned');
     const {dashboard} = await rendererPages(application);
     await waitForStartup(dashboard);
@@ -639,20 +642,21 @@ finally {
     try {
       // Observe the exact main process separately from Playwright's Windows shell. Its exit is diagnostic evidence;
       // a pending Playwright close still fails the unchanged eight-second request/launcher guard.
-      await observeExit({application, launcher, request: () => {if (config.scenario === 'now-playing') checkpoint('final-exit-request-started', result.closeObservation); return application.close();}, requireRequest: true,
+      await observeExit({application, launcher, request: () => {if (config.scenario === 'now-playing') checkpoint('final-exit-request-started', result.closeObservation); if (config.scenario === 'plugin') phase('plugin-final-exit-requested', result.closeObservation); return application.close();}, requireRequest: true,
         record: result.closeObservation = {}, message: 'APP_CLOSE_TIMEOUT_8_SECONDS'});
       result.closeMilliseconds = performance.now() - start;
       result.launcherExit = launcher.exitCode;
       assert.equal(result.launcherExit, 0);
       assert.equal(launcher.signalCode, null);
     } catch (error) {result.closeFailure = failure(error);}
-    finally {phase('close-settled'); if (config.scenario === 'now-playing') checkpoint('final-exit-settled', result.closeObservation);}
+    finally {phase('close-settled'); if (config.scenario === 'now-playing') checkpoint('final-exit-settled', result.closeObservation); if (config.scenario === 'plugin') phase('plugin-final-exit-settled', result.closeObservation);}
   }
   // ET-019 PR-12b: a soak whose source the journey did not stop (a failure, or an application that exited first) ends it
   // now, so its summary records how its last connection closed.
   if (soakSource && !result.soak?.sourceStopped) {
     try {(result.soak ??= {}).source = await soakSource.stop({waitMs: 5000});} catch (error) {result.soakSourceFailure = failure(error);}
   }
+  if (config.scenario === 'plugin' && result.plugin?.restartPhase !== 'STARTED') { (result.plugin ??= {}).restartPhase = 'NOT_REACHED'; phase('plugin-restart-not-reached'); }
   try {
     // Preserve lifecycle evidence even when a later cleanup assertion fails.
     result.mainEvents = await diagnosticEvents(config.diagnostics);
@@ -732,7 +736,7 @@ finally {
       lifecycle.restartLauncherExit = result.launcherExit;
       lifecycle.shutdownClean = true;
     }
-    if (config.scenario === 'plugin') {
+    if (config.scenario === 'plugin' && result.plugin?.restartPhase === 'STARTED') {
       // ET-017 PR-5: both runs exit orderly in the test-root mode with nothing refused outside the root; run B changes no folder.
       const plugin = result.plugin ??= {};
       plugin.restartMainEvents = await diagnosticEvents(config.diagnosticsRestart);

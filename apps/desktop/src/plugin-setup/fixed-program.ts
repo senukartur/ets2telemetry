@@ -1,4 +1,5 @@
-import {spawn, type ExecFileException} from 'node:child_process';
+import {spawn, ChildProcess, type ExecFileException} from 'node:child_process';
+import {performance} from 'node:perf_hooks';
 import path from 'node:path';
 
 // Runs one fixed Windows system program (PowerShell for the Steam registry values, tasklist for running games) with
@@ -64,27 +65,49 @@ export const nodeExecFile: ExecFilePort = (file, args, options, callback) => {
 export type FixedProgramFailure = 'timeout' | 'output-too-large' | 'aborted' | 'failed';
 export type FixedProgramResult = {readonly ok: true; readonly stdout: Buffer} | {readonly ok: false; readonly failure: FixedProgramFailure};
 
-export interface FixedProgramLimits {timeoutMs: number; maxOutputBytes: number; signal?: AbortSignal; env?: Readonly<Record<string, string | undefined>>}
+export interface FixedProgramObservation {
+  stage: 'start' | 'spawn' | 'callback' | 'exit' | 'close'; elapsedMs: number; childPid: number | null;
+  reason: FixedProgramFailure | null; stdoutBytes: number; stderrBytes: number; exitCode: number | null;
+}
+export interface FixedProgramLimits {timeoutMs: number; maxOutputBytes: number; signal?: AbortSignal; env?: Readonly<Record<string, string | undefined>>;
+  observe?: (observation: FixedProgramObservation) => void}
 
 /** Runs `file` with `args`; a non-zero exit, a timeout, an abort or output beyond the bound is a failure. */
 export function runFixedProgram(execFilePort: ExecFilePort, file: string, args: readonly string[], limits: FixedProgramLimits): Promise<FixedProgramResult> {
-  if (limits.signal?.aborted) return Promise.resolve({ok: false, failure: 'aborted'});
+  const started = performance.now(); let child: unknown, stdoutBytes = 0, stderrBytes = 0;
+  const observe = (stage: FixedProgramObservation['stage'], reason: FixedProgramFailure | null = null, exitCode: number | null = null) => {
+    if (!limits.observe) return;
+    try {limits.observe({stage, reason, exitCode, childPid: child instanceof ChildProcess && Number.isSafeInteger(child.pid) ? child.pid! : null,
+      elapsedMs: Math.min(60000, Math.max(0, Math.round(performance.now() - started))), stdoutBytes, stderrBytes});} catch {/* diagnostics never change the answer */}
+  };
+  observe('start');
+  if (limits.signal?.aborted) {observe('callback', 'aborted'); return Promise.resolve({ok: false, failure: 'aborted'});}
   return new Promise(resolve => {
+    let answered = false;
+    const answer = (result: FixedProgramResult) => {if (answered) return; answered = true; observe('callback', result.ok ? null : result.failure); resolve(result);};
     try {
-      execFilePort(file, args, {encoding: 'buffer', timeout: limits.timeoutMs, maxBuffer: limits.maxOutputBytes, windowsHide: true, shell: false,
-        ...(limits.signal ? {signal: limits.signal} : {}), ...(limits.env ? {env: limits.env} : {})}, (error, stdout) => {
+      child = execFilePort(file, args, {encoding: 'buffer', timeout: limits.timeoutMs, maxBuffer: limits.maxOutputBytes, windowsHide: true, shell: false,
+        ...(limits.signal ? {signal: limits.signal} : {}), ...(limits.env ? {env: limits.env} : {})}, (error, stdout, stderr) => {
+        stdoutBytes = Buffer.isBuffer(stdout) ? Math.min(stdout.length, limits.maxOutputBytes + 1) : 0;
+        stderrBytes = Buffer.isBuffer(stderr) ? Math.min(stderr.length, limits.maxOutputBytes + 1) : 0;
         if (error) {
-          if (error.code === 'ERR_CHILD_PROCESS_STDIO_MAXBUFFER') resolve({ok: false, failure: 'output-too-large'});
-          else if (error.name === 'AbortError' || limits.signal?.aborted) resolve({ok: false, failure: 'aborted'});
+          if (error.code === 'ERR_CHILD_PROCESS_STDIO_MAXBUFFER') answer({ok: false, failure: 'output-too-large'});
+          else if (error.name === 'AbortError' || limits.signal?.aborted) answer({ok: false, failure: 'aborted'});
           // Node kills the child with SIGTERM when the timeout expires and reports it as killed.
-          else if (error.killed) resolve({ok: false, failure: 'timeout'});
-          else resolve({ok: false, failure: 'failed'});
+          else if (error.killed) answer({ok: false, failure: 'timeout'});
+          else answer({ok: false, failure: 'failed'});
           return;
         }
-        if (!Buffer.isBuffer(stdout) || stdout.length > limits.maxOutputBytes) resolve({ok: false, failure: 'output-too-large'});
-        else resolve({ok: true, stdout});
+        if (!Buffer.isBuffer(stdout) || stdout.length > limits.maxOutputBytes) answer({ok: false, failure: 'output-too-large'});
+        else answer({ok: true, stdout});
       });
-    } catch {resolve({ok: false, failure: 'failed'});}
+      if (limits.observe && child instanceof ChildProcess) {
+        const observed = child;
+        const spawned = () => observe('spawn'), exited = (code: number | null) => observe('exit', null, code);
+        const closed = (code: number | null) => {observe('close', null, code); observed.removeListener('spawn', spawned); observed.removeListener('exit', exited); observed.removeListener('close', closed);};
+        observed.once('spawn', spawned); observed.once('exit', exited); observed.once('close', closed);
+      }
+    } catch {answer({ok: false, failure: 'failed'});}
   });
 }
 

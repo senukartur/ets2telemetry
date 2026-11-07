@@ -1,7 +1,8 @@
-import type {ChildProcess} from 'node:child_process';
+import {ChildProcess} from 'node:child_process';
 import path from 'node:path';
 import {afterEach, expect, it} from 'vitest';
 import {nodeExecFile, runFixedProgram, type ExecFilePort} from '../../apps/desktop/src/plugin-setup/fixed-program';
+import type {FixedProgramObservation} from '../../apps/desktop/src/plugin-setup/fixed-program';
 
 // ET-017 P1/P7, ET-018 PR-3 fifth hosted run: the fixed-program runner on real child processes (this test's own Node).
 // An abort, a timeout or output beyond the bound kills the child and answers at once, but never destroys the child's
@@ -76,4 +77,22 @@ it('starts nothing when the signal is already aborted', async () => {
   controller.abort();
   expect(await runFixedProgram(tracked, node, ['-e', ''], {...limits, signal: controller.signal})).toEqual({ok: false, failure: 'aborted'});
   expect(children).toEqual([]);
+});
+it.each(['timeout', 'aborted'] as const)('observes %s callback classification before later child exit/close without delaying the answer or leaking output', async failure => {
+  const child = Object.assign(new ChildProcess(), {pid: 1234}), events: FixedProgramObservation[] = [];
+  let answer!: Parameters<ExecFilePort>[3];
+  const port: ExecFilePort = (_file, _args, _options, callback) => {answer = callback; return child;};
+  const work = runFixedProgram(port, 'PRIVATE_PROGRAM_PATH', [], {...limits, observe: event => events.push(event)});
+  child.emit('spawn'); answer(Object.assign(new Error('PRIVATE_ERROR_MESSAGE'), {killed: true, name: failure === 'aborted' ? 'AbortError' : 'Error'}), Buffer.from('PRIVATE_STDOUT'), Buffer.from('PRIVATE_STDERR'));
+  expect(await work).toEqual({ok: false, failure});
+  expect(events.map(event => event.stage)).toEqual(['start', 'spawn', 'callback']);
+  expect(events.at(-1)).toMatchObject({reason: failure, childPid: 1234, stdoutBytes: 14, stderrBytes: 14});
+  child.emit('exit', null, 'SIGTERM'); child.emit('close', null, 'SIGTERM');
+  expect(events.map(event => event.stage)).toEqual(['start', 'spawn', 'callback', 'exit', 'close']);
+  expect(child.listenerCount('spawn') + child.listenerCount('exit') + child.listenerCount('close')).toBe(0);
+  expect(JSON.stringify(events)).not.toContain('PRIVATE');
+});
+it('does not let a diagnostic callback change fixed-program success', async () => {
+  const port: ExecFilePort = (_file, _args, _options, callback) => {callback(null, Buffer.from('ok'), Buffer.alloc(0));};
+  expect(await runFixedProgram(port, 'fixture', [], {...limits, observe() {throw new Error('observer refused');}})).toEqual({ok: true, stdout: Buffer.from('ok')});
 });

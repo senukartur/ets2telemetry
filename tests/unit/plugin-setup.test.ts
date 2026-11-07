@@ -82,10 +82,10 @@ class CaseHarness {
     this.live();
     return path.join(this.guard.root, 'LocalAppData', 'ETS2Telemetry', 'plugins');
   }
-  create(overrides: Partial<PluginSetupPorts> = {}, mode: PluginSetupDecision = this.decision()): PluginSetup {
+  create(overrides: Partial<PluginSetupPorts> = {}, mode: PluginSetupDecision = this.decision(), testRootRunningCheck?: RunningCheck): PluginSetup {
     this.live();
     const setup: PluginSetup = new PluginSetup({decision: mode, log: (event, _detail, facts) => this.events.push({event, facts}),
-      changed: () => this.views.push(setup.view()), ports: mode.mode === 'disabled' ? undefined : this.ports(overrides)});
+      changed: () => this.views.push(setup.view()), ports: mode.mode === 'disabled' ? undefined : this.ports(overrides), testRootRunningCheck});
     this.setups.push(setup);
     return setup;
   }
@@ -227,6 +227,35 @@ function deferred<T>() {
 }
 
 describe('launch run', () => {
+  it('uses a fresh private fixture check only after test-root marker admission', async () => {
+    const h = harness(), fixture = vi.fn<RunningCheck>(() => Promise.resolve({ok: true, running: NOT_RUNNING}));
+    const setup = h.create({}, h.decision(), fixture); await h.launch(setup);
+    expect(fixture).toHaveBeenCalled(); expect(h.lister).not.toHaveBeenCalled(); expect(await fsp.readFile(dll(h.atsRoot))).toEqual(BUNDLE);
+    const checks = fixture.mock.calls.length; await setup.setExcluded('ats', true);
+    expect(fixture.mock.calls.length).toBeGreaterThan(checks); expect(await exists(dll(h.atsRoot))).toBe(false);
+    expect(h.logged('PLUGIN_PROCESS_CHECK_PORT')).toEqual([{event: 'PLUGIN_PROCESS_CHECK_PORT', facts: {mode: 'test-root', source: 'fixture'}}]);
+  });
+  it.each(['missing', 'directory', 'linked'] as const)('denies fixture check authority for a %s test-root marker', async marker => {
+    const h = harness(), fixture = vi.fn<RunningCheck>(() => Promise.resolve({ok: true, running: NOT_RUNNING}));
+    await fsp.rm(path.join(h.guard.root, TEST_ROOT_MARKER));
+    if (marker === 'directory') await fsp.mkdir(path.join(h.guard.root, TEST_ROOT_MARKER));
+    if (marker === 'linked') await fsp.symlink(h.steam.steam, path.join(h.guard.root, TEST_ROOT_MARKER), 'junction');
+    const setup = h.create({}, h.decision(), fixture); await h.launch(setup);
+    expect(setup.mode).toBe('disabled'); expect(fixture).not.toHaveBeenCalled(); expect(h.lister).not.toHaveBeenCalled(); expect(await exists(dll(h.ets2Root))).toBe(false);
+  });
+  it('keeps active-mode running-game refusal on the host port even if a fixture option is supplied', async () => {
+    const h = harness(), fixture = vi.fn<RunningCheck>(() => Promise.resolve({ok: true, running: NOT_RUNNING}));
+    h.lister.mockResolvedValue({ok: true, running: {ets2: true, ats: false, client: false}});
+    const setup = h.create({registryDirectory: h.registryDirectory(), readSteamRoot: () => Promise.resolve({kind: 'found', path: h.steam.steam})}, {mode: 'active'}, fixture);
+    await h.launch(setup); expect(h.lister).toHaveBeenCalled(); expect(fixture).not.toHaveBeenCalled();
+    expect(setup.view().games.ets2.targets[0]).toMatchObject({state: 'missing', reason: 'GAME_RUNNING'}); expect(await exists(dll(h.ets2Root))).toBe(false);
+    expect(h.logged('PLUGIN_ACTION').map(row => row.facts)).toContainEqual({game: 'ets2', source: 'steam', ordinal: 0, op: 'install', outcome: 'blocked', code: 'GAME_RUNNING', step: 'process', errno: null});
+  });
+  it('denies fixture authority in disabled mode', async () => {
+    const h = harness(), fixture = vi.fn<RunningCheck>(() => Promise.resolve({ok: true, running: NOT_RUNNING}));
+    const setup = h.create({}, {mode: 'disabled', reason: 'off'}, fixture); await h.launch(setup);
+    expect(fixture).not.toHaveBeenCalled(); expect(h.lister).not.toHaveBeenCalled(); expect(await exists(dll(h.ets2Root))).toBe(false);
+  });
   it('starts 2 s after start on an unreferenced timer that startup never awaits, and installs into both games', async () => {
     const h = harness();
     const setTimeoutSpy = h.spyOnSetTimeout();
@@ -567,6 +596,31 @@ describe('triggers', () => {
     expect(await restarted.setExcluded('ats', false)).toMatchObject({games: {ats: {excluded: false, targets: [target('ats:steam:0', 'installed')]}}});
     expect(await fsp.readFile(dll(h.atsRoot))).toEqual(BUNDLE);
     setup.abort(); restarted.abort();
+  });
+
+  it.each([['host', 'check-failure'], ['host', 'abort'], ['fixture', 'check-failure'], ['fixture', 'abort']] as const)('accepts exclusion behind an earlier target through %s and preserves files until a fresh check after %s', async (provider, ending) => {
+    const h = harness(), setup = h.create({}, h.decision(), provider === 'fixture' ? h.lister : undefined); await h.launch(setup);
+    const before = await fsp.readFile(dll(h.atsRoot)), entered = deferred<void>(), check = deferred<Awaited<ReturnType<RunningCheck>>>();
+    const failed = {ok: false as const, code: 'RUNNING_CHECK_FAILED' as const};
+    h.lister.mockResolvedValue(failed).mockImplementationOnce(() => {entered.resolve(); return check.promise;});
+    const prior = setup.retry(); await entered.promise;
+    const exclusion = setup.setExcluded('ats', true);
+    try {
+      await until(() => setup.view().games.ats.excluded);
+      expect(setup.view()).toMatchObject({running: true, games: {ats: {excluded: true, targets: [target('ats:steam:0', 'installed')]}}});
+      const registry = await PluginRegistry.load(h.registryDirectory(), {fs: h.guard.fs}); expect(registry.document.games.ats.excluded).toBe(true);
+      expect(await fsp.readFile(dll(h.atsRoot))).toEqual(before);
+      if (ending === 'abort') setup.abort();
+      check.resolve(ending === 'abort' ? {ok: true, running: NOT_RUNNING} : failed);
+      await Promise.all([prior, exclusion]); await settled(setup);
+      expect(setup.view().running).toBe(false); expect(await fsp.readFile(dll(h.atsRoot))).toEqual(before);
+      if (ending === 'check-failure') {
+        expect(setup.view().games.ats.targets[0]).toMatchObject({state: 'blocked', reason: 'RUNNING_CHECK_FAILED'});
+        const checks = h.lister.mock.calls.length; h.lister.mockResolvedValue({ok: true, running: NOT_RUNNING});
+        await setup.retry(); expect(h.lister.mock.calls.length).toBeGreaterThan(checks);
+        expect(await exists(dll(h.atsRoot))).toBe(false); expect(setup.view().games.ats.targets[0]).toMatchObject({state: 'excluded', reason: null});
+      }
+    } finally {check.resolve(failed); setup.abort(); await settled(setup);}
   });
 
   it('opens the plugins folder of a listed folder, bin\\win_x64 when it is absent, and nothing for an unknown or linked folder', async () => {

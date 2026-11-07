@@ -6,6 +6,7 @@ import {lstat, mkdir, readdir, readFile, realpath, stat, writeFile} from 'node:f
 import os from 'node:os';
 import path from 'node:path';
 import {performance} from 'node:perf_hooks';
+import {writeFileSync} from 'node:fs';
 import {dialogCalls, stubSaveDialog} from './journal-observation.mjs';
 import {checkDiagnosticsBundle} from './diagnostics-bundle-check.mjs';
 
@@ -16,6 +17,23 @@ import {checkDiagnosticsBundle} from './diagnostics-bundle-check.mjs';
 
 /** The marker file the test-root mode requires (apps/desktop/src/plugin-setup/mode.ts). */
 export const PLUGIN_TEST_ROOT_MARKER = 'ets2telemetry-plugin-test-root.marker';
+/** Independent bounded phase evidence; this journal cannot make a failed journey pass. */
+export function pluginCheckpoints(filename) {
+  const rows = [], start = performance.now(); let truncated = false;
+  return (phase, observation) => {
+    if (rows.length >= 64) {rows.pop(); truncated = true;}
+    const row = {phase, elapsedMs: Math.round(performance.now() - start)};
+    if (observation) row.observation = {
+      excluded: typeof observation.excluded === 'boolean' ? observation.excluded : null,
+      busy: typeof observation.busy === 'boolean' ? observation.busy : null,
+      mainPid: Number.isSafeInteger(observation.main?.pid) ? observation.main.pid : null,
+      launcherPid: Number.isSafeInteger(observation.launcherPid) ? observation.launcherPid : null,
+      mainTermination: ['observing', 'exited'].includes(observation.main?.termination) ? observation.main.termination : 'unknown',
+      request: ['pending', 'fulfilled', 'rejected'].includes(observation.request) ? observation.request : 'unknown'};
+    rows.push(row);
+    try {writeFileSync(filename, JSON.stringify({rows, truncated})); return true;} catch {return false;}
+  };
+}
 const GAMES = {
   ets2: {appId: '227300', folder: 'Euro Truck Simulator 2', executable: 'eurotrucks2.exe'},
   ats: {appId: '270880', folder: 'American Truck Simulator', executable: 'amtrucks.exe'}
@@ -240,8 +258,15 @@ export async function runPluginJourney({application, dashboard, fixture, config,
   record.pluginFolderResultContextual = true;
   phase('plugin-folder-result');
   // Switching ATS off goes through the card's switch and the plugin bridge, as a driver would.
-  await dashboard.getByTestId('plugin-ats-managed').click();
-  record.excludedView = await until(() => appPlugins(dashboard), view => view.games.ats.excluded && settled(RUN_A_EXCLUDED)(view), 'PLUGIN_EXCLUSION_NOT_APPLIED', 20000);
+  phase('plugin-exclusion-click-started');
+  await dashboard.getByTestId('plugin-ats-managed').click(); phase('plugin-exclusion-click-delivered');
+  let accepted = false;
+  record.excludedView = await until(async () => {
+    const view = await appPlugins(dashboard);
+    if (view.games.ats.excluded && !accepted) {accepted = true; record.exclusionAccepted = true; phase('plugin-exclusion-accepted', {excluded: true, busy: view.running});}
+    return view;
+  }, view => view.games.ats.excluded && settled(RUN_A_EXCLUDED)(view), 'PLUGIN_EXCLUSION_NOT_APPLIED', 20000);
+  phase('plugin-exclusion-settled', {excluded: record.excludedView.games.ats.excluded, busy: record.excludedView.running});
   record.excludedCard = await until(() => cardStates(dashboard), value => JSON.stringify(value) === JSON.stringify(CARD_EXCLUDED), 'PLUGIN_CARD_NOT_EXCLUDED', 10000);
   // The next card action cleared the folder result; a successful switch change shows none of its own.
   assert.equal(await actionResult(dashboard, folderSlot), null);

@@ -238,6 +238,8 @@ function runApplication(profileError: unknown): void {
   // the existing app:state push.
   const pluginDecision = pluginSetupMode(process.env, app.isPackaged);
   const pluginSetup = new PluginSetup({decision: pluginDecision, log, changed: () => pushAppState(),
+    testRootRunningCheck: pluginDecision.mode === 'test-root' ? signal => Promise.resolve(signal?.aborted ? {ok: false, code: 'RUNNING_CHECK_FAILED'}
+      : {ok: true, running: {ets2: false, ats: false, client: false}}) : undefined,
     ports: pluginDecision.mode === 'disabled' ? undefined : productionPluginSetupPorts({mainDirectory: __dirname, resourcesPath: process.resourcesPath,
       packaged: app.isPackaged, localAppData: process.env.LOCALAPPDATA, installDirectory: path.dirname(app.getPath('exe')), log})});
   // ET-018 PR-4 (U8): the in-app uninstall. Main owns both dialogs; the dashboard gets fixed codes and target ids only.
