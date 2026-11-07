@@ -234,3 +234,19 @@ describe('main accepts a service reply only when it answers the request exactly 
     expect(parseJournalReply(query, reply)).toBeUndefined();
   });
 });
+
+it('REG-010/014 accepts exactly ordered bounded sync rows and rejects malformed owner, version, row state and private facts', () => {
+  const owner = {origin: 'https://dashboard.example', accountId: 'a', companyId: 'c', identityEpoch: 'e'};
+  const sync = {owner, connectionVersion: '2', rows: [{tripUuid: TRIP, state: 'sent', materialVersion: '3', latestRevision: 1, lastDurableUploadUtcMs: 5000, reason: null}]};
+  const value = {...TRIP_PAGE, database: {purpose: 'history', schemaVersion: 6}, sync}, query = {kind: 'trips', query: {}} as const;
+  expect(parseJournalReply(query, {ok: true, value})).toEqual({ok: true, value});
+  for (const change of [
+    {sync: {...sync, credentialGeneration: 'private'}}, {sync: {...sync, owner: {...owner, token: 'private'}}}, {sync: {...sync, connectionVersion: '02'}},
+    {sync: {...sync, connectionVersion: '18446744073709551616'}}, {sync: {...sync, rows: []}}, {sync: {...sync, rows: [...sync.rows, ...sync.rows]}},
+    {sync: {...sync, rows: [{...sync.rows[0], tripUuid: OTHER_TRIP}]}}, {sync: {...sync, rows: [{...sync.rows[0], state: 'accepted'}]}},
+    {sync: {...sync, rows: [{...sync.rows[0], lastDurableUploadUtcMs: null}]}}, {sync: {...sync, rows: [{...sync.rows[0], state: 'queued'}]}},
+    {sync: {...sync, rows: [{...sync.rows[0], materialVersion: '0'}]}},
+    {sync: {...sync, rows: [{...sync.rows[0], state: 'sending', latestRevision: null, lastDurableUploadUtcMs: null}]}}, {database: {purpose: 'synthetic', schemaVersion: 6}}
+  ]) expect(parseJournalReply(query, {ok: true, value: {...value, ...change}}), JSON.stringify(change)).toBeUndefined();
+  expect(journalRequest('trips', [{owner}])).toBeUndefined(); expect(journalRequest('trips', [{}, owner])).toBeUndefined();
+});

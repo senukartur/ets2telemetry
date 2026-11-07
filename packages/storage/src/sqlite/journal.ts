@@ -18,6 +18,7 @@ import {fail} from '../errors';
 import {readHardModeDetails} from './hard-mode';
 import type {StorageConnection} from './connection';
 import {statement} from './writes';
+import {journalSync} from './journal-sync';
 
 const MAX_ROW_ID = 9_223_372_036_854_775_807n;
 const MONEY_TYPES: Readonly<Record<string, JournalMoneyCategory>> = {'player.fined': 'fine', 'player.tollgate.paid': 'toll', 'player.use.ferry': 'ferry', 'player.use.train': 'train'};
@@ -136,6 +137,14 @@ export function listItem(db: Database.Database, r: Row): JournalTripListItem {
  */
 export function journalTrips(conn: StorageConnection, query: JournalTripsQuery = {}): JournalTripPage {
   if (!isJournalTripsQuery(query)) fail('INVALID_INPUT');
+  const db = conn.reader();
+  return db.transaction(() => {
+    const page = tripPage(conn, query);
+    const sync = journalSync(db, page.trips.map(trip => trip.tripUuid));
+    return {...page, ...(sync ? {sync} : {})};
+  })();
+}
+function tripPage(conn: StorageConnection, query: JournalTripsQuery): JournalTripPage {
   const db = conn.reader(), q = query ?? {};
   if (logicalEnabled(db)) {
     const filter = `${q.game ?? 'any'}.${q.outcome ?? 'any'}.${q.completeness ?? 'any'}`;

@@ -8,7 +8,7 @@ This file describes the product idea and how its features work. It is not a log.
 
 **Yukon Union Telemetry** (technical name ETS2Telemetry) is a telemetry utility for **Euro Truck Simulator 2** and **American Truck Simulator**, made for the drivers of a virtual trucking company (VTC). It shows the essential driving data over the game, keeps a trip journal on its own, and records detailed samples for later analysis.
 
-The current product is a local Windows x64 application. It works without an account or internet connection. A later integration sends recorded game-trip summaries to the existing VTC Dashboard for driver and company statistics, using its v1.0 API and a personal token. It uploads retained history and subsequent changes; it does not download or restore history into the application.
+The current product is a local Windows x64 application. It works without an account or internet connection. The deployment-gated Dashboard integration sends recorded game-trip summaries to the existing VTC Dashboard for driver and company statistics, using its v1.0 API and a personal token. It uploads retained history and subsequent changes; it does not download or restore history into the application.
 
 The owner knows React and TypeScript and is new to desktop development, so most of the product is TypeScript and React, and native code stays in one small game plugin.
 
@@ -57,6 +57,10 @@ The Journal lists the recorded trips page by page. A trip's details show its rou
 
 Hard Mode checks whether the game's persisted profile settings meet twelve realistic-driving rules (for example realistic fuel, air brakes and Normal parking) and shows each rule's state; a rule that does not pass also shows its detected and required value. A delivered trip qualifies only if every rule passed throughout the trip. Parking is checked through settings only. Any failure or unknown value loses the trip's qualification for good. Hard Mode reads files only and is not anti-cheat proof.
 
+### Account and synchronization
+
+Account & sync verifies a personal token, then asks the driver to confirm the exact Dashboard owner and all retained eligible game-trip summaries before upload. Existing owners remain attached to their trips. Status separates distinct-source delivery, enumeration, pending identities, holds and queued events; Journal badges require current material and durable receipt evidence. Upload is not company acceptance. Both service origins remain unset, so the shipped Account screen explains unavailable configuration and exposes no token controls or sync decorations. Local recording works throughout.
+
 ### Application
 
 The application runs in the notification area as a single instance. Closing the main window hides it; recording and the overlay continue until the driver chooses Exit. It can start with Windows and shows its interface in English or Russian. Game-provided names (cargo, cities, companies, trucks) are never translated.
@@ -71,7 +75,7 @@ Windows x64, ETS2 and ATS, each in single-player and TruckersMP, in windowed and
 
 ## Not in scope yet
 
-- Dashboard integration: token-based connection and automatic upload of recorded game-trip summaries to the existing company website. Accounts, company permissions and reports belong to the Dashboard; samples and raw event streams stay local. History download and restoration are outside the product scope.
+- Dashboard deployment activation: enabling the configured service origins and verifying uploads against the existing company website. Accounts, company permissions and reports belong to the Dashboard; samples and raw event streams stay local. History download and restoration are outside the product scope.
 - A geographic map: game coordinates are game-world coordinates, not latitude and longitude.
 - Telemetry of other TruckersMP players, and screenshots that include the overlay.
 

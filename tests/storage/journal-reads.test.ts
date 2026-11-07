@@ -537,3 +537,8 @@ describe('a trip with more than 5,000 money amounts and more than 100 intervals 
     } finally { await big.dispose(); }
   }, 240_000);
 });
+
+it('REG-014 omits upload facts from synthetic-purpose Journal pages', async () => {
+  const isolated = await workspace();
+  try {const storage = await isolated.open(); expect(ok(storage.journalTrips()).sync).toBeUndefined(); storage.close();} finally {await isolated.dispose();}
+});

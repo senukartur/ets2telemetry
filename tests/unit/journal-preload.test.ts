@@ -98,3 +98,9 @@ it.each<[string, (bridge: DesktopBridge) => Promise<unknown>]>([
   await expect(call(bridge)).rejects.toThrow('Invalid journal request');
   expect(ipc.invoke).not.toHaveBeenCalled();
 });
+
+it('REG-010/014 keeps the additive synchronization reply on the existing one-filter Journal invocation', async () => {
+  const value = {database: {purpose: 'history', schemaVersion: 6}, trips: [], nextCursor: null, sync: {owner: {origin: 'https://dashboard.example', accountId: 'a', companyId: 'c', identityEpoch: 'e'}, connectionVersion: '2', rows: []}};
+  ipc.invoke.mockResolvedValue({ok: true, value}); expect(await bridge.listJournalTrips({})).toEqual({ok: true, value}); expect(ipc.invoke.mock.calls).toEqual([['journal:list-trips', {}]]);
+  await expect(bridge.listJournalTrips({owner: value.sync.owner} as never)).rejects.toThrow('Invalid journal request'); expect(ipc.invoke).toHaveBeenCalledTimes(1);
+});
