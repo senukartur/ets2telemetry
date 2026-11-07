@@ -16,7 +16,7 @@ import type {EventRecord} from '../../packages/contracts/src/protocol-v1';
 import type {TripEffect} from '../../packages/storage/src/api';
 import {evaluateHardMode, parseHardModeConfig, unknownHardMode} from '../../packages/telemetry-core/src/hard-mode';
 import {HARD_MODE_CONFIG} from '../shared/hard-mode';
-import {Script, ETS2_A, cargoMarketJob, r} from '../shared/trip-messages';
+import {Script, ETS2_A, ETS2_B, cargoMarketJob, job, r} from '../shared/trip-messages';
 import {ok, failed, TEST_CLOSE_GRACE_MS, workspace} from './helpers';
 let ws: Awaited<ReturnType<typeof workspace>>, worker: Worker | undefined;
 beforeEach(async () => {ws = await workspace();});
@@ -284,6 +284,43 @@ describe('ET-026 integrity (REG-005/006/007)', () => {
       current={...evidence(),assessment:unknownHardMode(Date.now())};recorder.observeHardMode('ets2',current);
       release();sinkOk(await opening);sinkOk(await recorder.commit(script.event(delivery()),{receivedUtcMs:Date.now()}));
       const trip=ok(await client.journalTrips()).trips[0];expect(trip).toMatchObject({isHardMode:false,hardModeDetails:{passingChecks:4,failingChecks:1,unknownChecks:1}});
+    } finally {expect(await client.close()).toEqual({clean:true});}
+  });
+  it.each(['checkpoint-session','same-session','queued-boundary'] as const)('retires only superseded failed-opening ownership during %s recovery',async mode=>{
+    const directory=process.env.ETS2TELEMETRY_STORAGE_TEST_BUNDLES;if(!directory)throw new Error('Run storage suite');
+    worker=new Worker(path.join(directory,'storage-worker.cjs'),{workerData:{kind:'storage'}});
+    const client=new StorageClient(workerHandle(worker),{closeGraceMs:TEST_CLOSE_GRACE_MS});let current=evidence();const recorder=new TripRecorderSink(client,{hardModeEvidence:()=>current});
+    try {
+      ok(await client.open({path:ws.database,purpose:'synthetic',backupsDirectory:ws.backups,appVersion:'test-owner-retirement'}));const a=new Script(ETS2_A);
+      sinkOk(await recorder.openSession(a.welcome()));const first=a.event(r.jobConfigured()),commit=client.commitEvent.bind(client);
+      client.commitEvent=()=>{client.commitEvent=commit;return Promise.resolve({ok:false,error:{code:'IO_ERROR',retryable:true,message:'Injected failed opening'}});};
+      expect(await recorder.commit(first,{receivedUtcMs:Date.now()})).toMatchObject({ok:false,error:{code:'IO_ERROR'}});expect(ok(await client.listTrips()).trips).toEqual([]);
+      if(mode==='same-session') {
+        current=evidence();recorder.observeHardMode('ets2',current);sinkOk(await recorder.openSession(a.welcome()));
+        current=evidence(HARD_MODE_CONFIG.replace('g_fatigue "1"','g_fatigue "0"'));recorder.observeHardMode('ets2',current);
+        sinkOk(await recorder.commit(a.redeliver(first),{receivedUtcMs:Date.now()}));current=evidence();sinkOk(await recorder.commit(a.event(delivery()),{receivedUtcMs:Date.now()}));
+        expect(ok(await client.journalTrips()).trips[0]).toMatchObject({isHardMode:false,hardModeDetails:{passingChecks:2,failingChecks:1,unknownChecks:0}});
+      } else {
+        const b=new Script(ETS2_B);current={...evidence(),pluginSessionId:ETS2_B};
+        if(mode==='queued-boundary') {
+          const configured=b.event(r.jobConfigured()),capture=recorder.capture(configured)!;
+          current={...evidence(HARD_MODE_CONFIG.replace('g_fatigue "1"','g_fatigue "0"')),pluginSessionId:ETS2_B};recorder.observeHardMode('ets2',current);
+          sinkOk(await recorder.openSession(b.welcome()));
+          current={...evidence(HARD_MODE_CONFIG.replace('g_fatigue "1"','g_fatigue "0"')),pluginSessionId:ETS2_B};recorder.observeHardMode('ets2',current);
+          sinkOk(await recorder.commit(configured,{receivedUtcMs:Date.now(),hardModeCapture:capture}));current={...evidence(),pluginSessionId:ETS2_B};
+          sinkOk(await recorder.commit(b.event(delivery()),{receivedUtcMs:Date.now()}));
+          expect(ok(await client.journalTrips()).trips[0]).toMatchObject({isHardMode:false,hardModeDetails:{passingChecks:1,failingChecks:2,unknownChecks:0}});
+        } else {
+          sinkOk(await recorder.openSession(b.welcome()));sinkOk(recorder.observe(b.checkpoint(job()),{receivedUtcMs:Date.now()}));expect(recorder.attach.due()).toBe(true);
+          sinkOk(await recorder.attach.open({receivedUtcMs:Date.now()}));sinkOk(await recorder.commit(b.event(r.fined()),{receivedUtcMs:Date.now()}));
+          current={...evidence(),pluginSessionId:ETS2_B};recorder.observeHardMode('ets2',current);await recorder.flushHardMode();
+          sinkOk(await recorder.commit(b.event(delivery()),{receivedUtcMs:Date.now()}));
+          expect(ok(await client.journalTrips()).trips[0]).toMatchObject({isHardMode:true,hardModeDetails:{passingChecks:1,failingChecks:0,unknownChecks:0}});
+          expect(ok(await client.listTrips()).trips[0]).toMatchObject({openedBy:'checkpoint',pluginSessionId:ETS2_B});
+        }
+      }
+      expect(ok(await client.listTrips()).trips).toHaveLength(1);
+      expect(ok(await client.committedThrough(ETS2_A))).toBe(mode==='same-session'?'2':'0');
     } finally {expect(await client.close()).toEqual({clean:true});}
   });
   it('owns scheduled checks from opening intake while the preceding session operation is held', async () => {

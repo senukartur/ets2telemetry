@@ -339,6 +339,10 @@ export class TripRecorderSink implements DurableSink {
     const session = stepTrip(next, {kind: 'session', welcome, coveredThrough, openTrips});
     if (!session.ok) return refused(RECORDER_CODE[session.code]);
     this.state = session.state;
+    // A retained failed head may retry in this session, but cannot own checks after another session supersedes it.
+    // A newer boundary already accepted at intake remains the owner, including while its welcome was pending.
+    const owner = this.checkOwner;
+    if (owner && owner.pluginSessionId !== welcome.source.pluginSessionId && [...this.capturedEvidence.values()].includes(owner)) this.checkOwner = undefined;
     const resumed = this.view(game).current;
     if (resumed) {
       this.seedCheckTarget(game, this.state.games[game].trip!.pluginSessionId, resumed.tripUuid); this.checkTarget!.ready = true;
