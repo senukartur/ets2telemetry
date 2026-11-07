@@ -1,3 +1,6 @@
+import {journalPageSync} from './journal-view';
+import {JournalSyncBadge} from './dashboard-upload/journal-sync';
+import {type DashboardUploadStatus} from '../../../packages/contracts/src/dashboard-upload';
 import {journalTileValues} from './screens/journal-tiles';
 import {SampleChart} from './screens/sample-chart';
 import {t} from './i18n';
@@ -119,8 +122,8 @@ function FilterSelect<T extends string>({label, value, options, text, onChange, 
 }
 
 interface Selected {tripUuid: string; game: JournalGame}
-function TripList({filters, options, recording, onDatabase, onOpen}: {
-  filters: Filters; options: JournalTextOptions; recording: RecordingHealth['state'] | undefined;
+function TripList({filters, options, recording, onDatabase, onOpen, uploadStatus}: {
+  uploadStatus?: DashboardUploadStatus | null; filters: Filters; options: JournalTextOptions; recording: RecordingHealth['state'] | undefined;
   onDatabase: (database: JournalDatabase) => void; onOpen: (trip: Selected) => void;
 }) {
   const {JOURNAL_LABEL_TEXT, JOURNAL_STRINGS} = useJournalCopy();
@@ -128,6 +131,8 @@ function TripList({filters, options, recording, onDatabase, onOpen}: {
   const read = useCallback<Read<JournalTripPage>>(cursor => window.desktop.listJournalTrips(tripsQuery({game, outcome, completeness}, cursor)), [game, outcome, completeness]);
   const paged = usePagedRead(read, onDatabase);
   const filtered = game !== undefined || outcome !== undefined || completeness !== undefined;
+  const page = paged.loaded.state === 'value' ? paged.loaded.value : undefined;
+  const sync = journalPageSync(page, uploadStatus);
   const text = paged.loaded.state === 'value' ? journalListText(paged.loaded.value, {...options, filtered, recording, firstPage: paged.number === 1}) : undefined;
   return <div className="space-y-2" data-testid="journal-list">
     <Pager paged={paged} testId="journal-list" />
@@ -137,7 +142,7 @@ function TripList({filters, options, recording, onDatabase, onOpen}: {
     {text?.rows.length ? <Table data-testid="journal-table"><TableHeader><TableRow>
       <TableHead>{JOURNAL_LABEL_TEXT.started}</TableHead><TableHead style={{width: 220}}>{JOURNAL_LABEL_TEXT.game}</TableHead><TableHead>{JOURNAL_LABEL_TEXT.cargo}</TableHead><TableHead>{JOURNAL_LABEL_TEXT.route}</TableHead>
       <TableHead>{JOURNAL_LABEL_TEXT.observedDistance}</TableHead><TableHead><span className="yu-label-hint">{JOURNAL_LABEL_TEXT.expectedIncome}<InfoHint label={t('ui.moreAbout', {v: JOURNAL_LABEL_TEXT.expectedIncome}, options.language)}>{t('j.incomeNote', undefined, options.language)}</InfoHint></span></TableHead><TableHead>{JOURNAL_LABEL_TEXT.outcome}</TableHead><TableHead>{JOURNAL_LABEL_TEXT.completeness}</TableHead>
-      <TableHead>{JOURNAL_LABEL_TEXT.fuelUsed}</TableHead><TableHead />
+      <TableHead>{JOURNAL_LABEL_TEXT.fuelUsed}</TableHead>{sync ? <TableHead data-testid="journal-sync-column">{t('upload.column', undefined, options.language)}</TableHead> : null}<TableHead />
     </TableRow></TableHeader><TableBody>
       {text.rows.map(row => {const outcome = paged.loaded.state === 'value' ? paged.loaded.value.trips.find(trip => trip.tripUuid === row.tripUuid)?.outcome : undefined;
         const OutcomeIcon = outcome === 'delivered' ? Check : outcome === 'cancelled' ? X : Circle;
@@ -150,6 +155,7 @@ function TripList({filters, options, recording, onDatabase, onOpen}: {
           <TableCell data-testid="journal-row-outcome"><Badge variant={outcome === 'delivered' ? 'ok' : outcome === 'cancelled' ? 'error' : 'neutral'}><OutcomeIcon aria-hidden="true" className="size-3" />{row.outcome}</Badge></TableCell>
           <TableCell>{completenessBadge(row.completeness, 'journal-row-completeness')}</TableCell>
           <TableCell data-testid="journal-row-fuel">{row.fuelUsed}</TableCell>
+          {sync ? <TableCell><JournalSyncBadge row={sync.rows.find(item => item.tripUuid === row.tripUuid)!} language={options.language ?? 'en'} /></TableCell> : null}
           <TableCell><Button size="sm" variant="outline" data-testid="journal-row-open" onClick={() => onOpen({tripUuid: row.tripUuid, game: row.gameId})}>{JOURNAL_STRINGS.open}</Button></TableCell>
         </TableRow>;
       })}
@@ -379,7 +385,7 @@ const GAMES: readonly JournalGame[] = ['ets2', 'ats'];
 const OUTCOMES: readonly JournalOutcome[] = ['open', 'delivered', 'cancelled', 'none'];
 const COMPLETENESS: readonly JournalCompleteness[] = ['complete', 'partial', 'unknown'];
 
-export function Journal({units, recording, language}: {units: UnitProfiles | undefined; recording: RecordingHealth['state'] | undefined; language?: AppLanguage}) {
+export function Journal({units, recording, language, uploadStatus}: {uploadStatus?: DashboardUploadStatus | null; units: UnitProfiles | undefined; recording: RecordingHealth['state'] | undefined; language?: AppLanguage}) {
   const {JOURNAL_STRINGS, JOURNAL_GAME_TEXT, JOURNAL_OUTCOME_TEXT, JOURNAL_COMPLETENESS_TEXT} = journalCopy[language ?? 'en'];
   const [database, setDatabase] = useState<JournalDatabase>();
   const [filters, setFilters] = useState<Filters>({});
@@ -407,7 +413,7 @@ export function Journal({units, recording, language}: {units: UnitProfiles | und
             testId="journal-filter-completeness" onChange={completeness => setFilters(current => ({...current, completeness}))} />
         </div>
         {/* A filter change starts a new list at its first page. */}
-        <TripList key={`${filterKey}|${listVersion}`} filters={filters} options={options} recording={recording} onDatabase={setDatabase} onOpen={setSelected} />
+        <TripList key={`${filterKey}|${listVersion}`} uploadStatus={uploadStatus} filters={filters} options={options} recording={recording} onDatabase={setDatabase} onOpen={setSelected} />
       </div>
     </CardContent></Card></JournalLanguage.Provider>;
 }

@@ -1,3 +1,6 @@
+import {AccountScreen} from './dashboard-upload/account-screen';
+import {SyncChip} from './dashboard-upload/sync-chip';
+import {useDashboardUpload} from './dashboard-upload/use-dashboard-upload';
 import {NowPlayingSettingsCard} from './now-playing/settings-card';
 import {recordingMotion, recordingTone, connectionTone, pluginTone, hardModeTone, pluginStatusText} from './screens/desktop-ui-view';
 import {HardModeCard} from './hard-mode/card';
@@ -10,7 +13,7 @@ import {Label} from '@/components/ui/label';
 import {RadioGroup, RadioGroupItem} from '@/components/ui/radio-group';
 import {Badge} from '@/components/ui/badge';
 import {Tooltip, TooltipContent, TooltipProvider, TooltipTrigger} from '@/components/ui/tooltip';
-import {Gauge, BookOpen, Settings2, Power, Flame, Plug, Info} from 'lucide-react';
+import {Gauge, BookOpen, Settings2, Power, Flame, Plug, Info, Cloud} from 'lucide-react';
 import {useHardModeStatus} from './hard-mode/use-status';
 import {hardModeView} from './hard-mode/view';
 import {useLanguageController} from './shell/use-language';
@@ -40,11 +43,12 @@ import {CHANNEL} from './channel';
 import './index.css';
 
 export default function App() {
-  const [route, setRoute] = useState<'live' | 'hardMode' | 'journal' | 'settings'>('live');
+  const [route, setRoute] = useState<'live' | 'hardMode' | 'journal' | 'settings' | 'account'>('live');
   const [panel, setPanel] = useState<'general' | 'overlay' | 'plugin' | 'about' | 'data'>('general');
   const heading = useRef<HTMLHeadingElement>(null);
   const content = useRef<HTMLElement>(null);
   const hardMode = useHardModeStatus();
+  const upload = useDashboardUpload(route === 'account');
   useEffect(() => {
     // Each top-level destination starts at its heading, including after the long inline checklist.
     if (content.current) content.current.scrollTop = 0;
@@ -87,8 +91,7 @@ export default function App() {
     }, () => setUnits('failed'));
   };
 
-  // ET-057: the Account placeholder returns with the server phase; Diagnostics comes last, apart from the driver's settings.
-  const nav = [{id: 'live', Icon: Gauge}, {id: 'hardMode', Icon: Flame}, {id: 'journal', Icon: BookOpen}, {id: 'settings', Icon: Settings2}] as const;
+  const nav = [{id: 'live', Icon: Gauge}, {id: 'hardMode', Icon: Flame}, {id: 'journal', Icon: BookOpen}, {id: 'settings', Icon: Settings2}, {id: 'account', Icon: Cloud}] as const;
   const settingsPanels = ['general', 'overlay', 'plugin', 'about', 'data'] as const;
   const showSettingsState = settings && settings.state !== 'loaded' && settings.state !== 'defaults';
   return <div className="yu-app" data-testid="shell.root">
@@ -120,6 +123,7 @@ export default function App() {
         {exit === 'failed' ? <p role="status">{strings.exitFailed}</p> : null}
       </div></aside>
       <div className="yu-column"><header className="yu-topbar" data-testid="shell.topbar"><h1 ref={heading} tabIndex={-1} data-testid="screen-title">{t(`nav.${route}`, undefined, language)}</h1>
+        <SyncChip state={upload.state} language={language} onOpen={() => setRoute('account')} />
         <Badge variant={connectionTone(live?.status)} data-testid="shell.status.connection"><Gauge aria-hidden="true" />{live?.observation?.source.game.toUpperCase() ?? ''} {t(`ui.status.${live?.status ?? 'waiting'}`, undefined, language)}</Badge>
         <Badge variant={pluginTone(targets)} data-testid="shell.status.plugin"><Plug aria-hidden="true" />{t('ui.plugin', undefined, language)} · {pluginStatusText(targets, language)}</Badge>
         <Badge variant={hardModeTone(hardMode.status)} data-testid="shell.status.hardMode"><Flame aria-hidden="true" />{hmView.headline}</Badge>
@@ -128,7 +132,8 @@ export default function App() {
           <LiveDashboard onSelect={game => window.desktop.selectSource(game)} live={live} units={settings?.units} gearDisplay={settings?.gearDisplay} language={language} />
         </div>
         <div hidden={route !== 'hardMode'} className="yu-stack" data-testid="hardMode.screen"><HardModeCard language={language} controller={hardMode} /></div>
-        {route === 'journal' ? <JournalBoundary language={language}><Journal units={settings?.units} recording={health?.recording.state} language={language} /></JournalBoundary> : null}
+        {route === 'journal' ? <JournalBoundary language={language}><Journal uploadStatus={upload.state.status} units={settings?.units} recording={health?.recording.state} language={language} /></JournalBoundary> : null}
+        {route === 'account' ? <AccountScreen state={upload.state} controller={upload.controller} language={language} /> : null}
         <div hidden={route !== 'settings'} className="yu-settings" data-testid="settings.screen"><nav className="yu-settings-nav" aria-label={t('nav.settings', undefined, language)} data-testid="settings.nav">{settingsPanels.map(id => <button key={id} type="button" aria-current={panel === id ? 'page' : undefined} data-testid={`settings.nav.${id}`} onClick={() => setPanel(id)}>{t(`s.${id}`, undefined, language)}</button>)}</nav>
           <div className="yu-stack"><div hidden={panel !== 'general'} className="yu-stack" data-testid="settings.general">
             {/* ET-057: how the saved settings were read is shown only when it matters (defaults kept, read-only or invalid file). */}

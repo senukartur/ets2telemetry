@@ -1,3 +1,5 @@
+import {journalPageSync} from '../../apps/desktop/src/journal-view';
+import {initialDashboardUploadStatus} from '../../packages/contracts/src/dashboard-upload';
 import {journalTileValues} from '../../apps/desktop/src/screens/journal-tiles';
 import {describe, expect, it} from 'vitest';
 import type {
@@ -479,4 +481,12 @@ describe('journal mode badges', () => {
       expect(trip).toEqual(before);
     }
   });
+});
+
+it('REG-012/014 hides loaded Journal sync facts during verification, disconnection and owner/origin changes', () => {
+  const origin = 'https://dashboard.example', owner = {origin, accountId: 'a', companyId: 'c', identityEpoch: 'e'};
+  const page: JournalTripPage = {database: {purpose: 'history', schemaVersion: 6}, trips: [], nextCursor: null, sync: {owner, connectionVersion: '1', rows: []}};
+  const status = {...initialDashboardUploadStatus(origin), state: 'connected' as const, owner};
+  expect(journalPageSync(page, status)).toEqual(page.sync);
+  for (const hidden of [null, initialDashboardUploadStatus(null), {...status, state: 'verifying' as const}, {...status, owner: {...owner, identityEpoch: 'other'}}, {...status, origin: 'https://other.example', owner: {...owner, origin: 'https://other.example'}}]) expect(journalPageSync(page, hidden)).toBeUndefined();
 });

@@ -814,6 +814,47 @@ function Test-ResourceEvidence {
     return ((Test-JobMemoryReceipt -Memory $Job.memory) -and (Test-ColdLaunchReceipt -Driver $Driver) -and (Test-ProcessMemoryReceipt -Driver $Driver))
 }
 
+function Test-UploadUiReceipt {
+    param([object]$Value, [string]$Directory)
+    if ($null -eq $Value -or $Value.passed -isnot [bool] -or !$Value.passed -or $Value.origin -cne 'synthetic' -or
+        $Value.productionAuthority -isnot [bool] -or $Value.productionAuthority -or
+        $Value.tokenPresentInScreenshots -isnot [bool] -or $Value.tokenPresentInScreenshots) { return $false }
+    foreach ($flag in @('paste','password','visibility','enter','tokenCleared','cancelNavigation','cancelConfirmation','confirmNavigation','fixedRefusals','progress','chipNavigation','rowStates','headingFocus','contained','sharedStyles')) {
+        if ($Value.flags.$flag -isnot [bool] -or !$Value.flags.$flag) { return $false }
+    }
+    foreach ($flag in @('sandbox','contextIsolation','localDocument','remoteFetchDenied','navigationDenied','newWindowDenied')) {
+        if ($Value.security.$flag -isnot [bool] -or !$Value.security.$flag) { return $false }
+    }
+    foreach ($flag in @('nodeIntegration','persistentSession')) {
+        if ($Value.security.$flag -isnot [bool] -or $Value.security.$flag) { return $false }
+    }
+    if (@($Value.screenshots).Count -ne 20) { return $false }
+    foreach ($language in @('en','ru')) {
+        foreach ($size in @(@{width=1280;height=800},@{width=1100;height=720})) {
+            foreach ($screen in @('no-token','confirmation','first-upload','offline','journal')) {
+                $rows = @($Value.screenshots | Where-Object { $_.language -ceq $language -and $_.width -eq $size.width -and $_.height -eq $size.height -and $_.screen -ceq $screen })
+                if ($rows.Count -ne 1) { return $false }
+                $row = $rows[0]
+                $expectedFile = "ui-upload-$screen-$language-$($size.width)x$($size.height).png"
+                if ($row.file -cne $expectedFile -or $row.tokenCleared -isnot [bool] -or !$row.tokenCleared -or
+                    !(Test-ReceiptInteger -Value $row.bytes -Minimum 501 -Maximum 5242880) -or $row.imageWidth -ne $size.width -or $row.imageHeight -ne $size.height) { return $false }
+                $file = Join-Path $Directory $expectedFile
+                if (!(Test-Path -LiteralPath $file -PathType Leaf)) { return $false }
+                $item = Get-Item -LiteralPath $file
+                if ($item.Attributes -band [IO.FileAttributes]::ReparsePoint -or $item.Length -ne $row.bytes) { return $false }
+                $header = New-Object byte[] 24
+                $stream = [IO.File]::OpenRead($file)
+                try { if ($stream.Read($header, 0, 24) -ne 24) { return $false } } finally { $stream.Dispose() }
+                if (($header[0..7] -join ',') -cne '137,80,78,71,13,10,26,10') { return $false }
+                $width = [double]$header[16] * 16777216 + [double]$header[17] * 65536 + [double]$header[18] * 256 + $header[19]
+                $height = [double]$header[20] * 16777216 + [double]$header[21] * 65536 + [double]$header[22] * 256 + $header[23]
+                if ($width -ne $size.width -or $height -ne $size.height) { return $false }
+            }
+        }
+    }
+    return $true
+}
+
 # ET-028 visual shards: exact language/size/screen coverage, assertions and bounded plain PNG files.
 function Test-UiReceipt {
     param([object]$Driver, [string]$ExpectedUiCase, [string]$Directory)
@@ -825,13 +866,15 @@ function Test-UiReceipt {
     $flags = @('bilingual','bothSizes','security','offlineFonts','recordingIndicator','osPointerIsolated','hoverUnderDesktopCursor','versionLine','updateHidden')
     $screens = @()
     switch -CaseSensitive ($ExpectedUiCase) {
-        'shell' { $flags += @('navigation','headingFocus','hardModePage','journalUnmount','exitHintKeyboard','exitAvailable','noAccountPlaceholder'); $screens = @('live','hardMode','journal','settings') }
+        'shell' { $flags += @('navigation','headingFocus','hardModePage','journalUnmount','exitHintKeyboard','exitAvailable','noAccountPlaceholder','accountUnconfigured'); $screens = @('live','hardMode','journal','settings','account') }
         'live' { $flags += @('numericGauge','unavailableVsZero','paused','staleDashes','rawNames','noTripPlaceholder','jobViewport','jobRowsAfterV1Gap','hmNamesReadable','fullWidthTelemetry','tankUnknownVsZero','mandatoryBreak'); $screens = @('current','zero','missing','paused','stale') }
         'journal' { $flags += @('syntheticBanner','pageReturn','chartBounded','rawTabs','noPlannedSearch','tripRegions','tableReadable','signedChart'); $screens = @('list','mode-trip','weak-mode-trip','trip','intervals','timeline','samples') }
         'settings' { $flags += @('allPanels','allSections','committedSave','sourceSelector','uninstallRefusal','refusedSave','readOnly','controlsKeyboard','lastEnabled','fontLicense','overlayVisibility','visibilityFailedSave','actionResult','overlayOpacity','opacityFailedSave','opacityReadOnly','overlayUnified','overlayEditing','overlayScroll','scaleControl','gearDisplay','gearDisplayFailedSave'); $screens = @('general','overlay','overlay-sections','plugin','about','data','save-error') }
         'overlay' { $flags += @('fourLayouts','transparent','contained','independentFont','missing','paused','staleDashes','heroSubsets','formatterProfiles','stableNumbers','opacityKeyboardFocus','opacityGestures','backgroundOpacityOverlay','clusterRpmContained','scaleRange','clusterSpeedArc','gearDisplayManual','gearboxLabels'); $screens = @('strip','card','cluster','hud') }
     }
     foreach ($flag in $flags) { if ($ui.flags.$flag -isnot [bool] -or !$ui.flags.$flag) { return $false } }
+    if ($ExpectedUiCase -ceq 'shell' -and !(Test-UploadUiReceipt -Value $Driver.uploadUi -Directory $Directory)) { return $false }
+    if ($ExpectedUiCase -ceq 'journal' -and ($ui.flags.syncHidden -isnot [bool] -or !$ui.flags.syncHidden)) { return $false }
     # ET-045e: the overlay shard adds six English 1280x800 scale reference screenshots to its 64 layout screenshots.
     if (@($ui.screenshots).Count -ne $(if ($ExpectedUiCase -ceq 'overlay') { 70 } elseif ($ExpectedUiCase -ceq 'settings') { 30 } else { 4 * $screens.Count })) { return $false }
     foreach ($language in @('en','ru')) {

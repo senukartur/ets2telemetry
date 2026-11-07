@@ -871,3 +871,6 @@ The owner chose the existing VTC Dashboard and its [v1.0 contract](https://githu
 ## ET-101 continued-trip identity acceptance — November 6, 2026
 
 The owner accepted [stable-root publication for continued trips](docs/dashboard-upload.md#continued-trip-identity-stable-root-publication-after-membership-resolution) and requested ET-101 closure. The specification is accepted; implementation and integration/game evidence remain with their owning cards. This grants no uploader implementation, release or PR merge authorization.
+
+## ET-032 account and synchronization interface — November 7, 2026
+The owner approved the Account & sync UI and the bounded read-only synchronization block on the existing Journal page IPC response, limited to its returned logical trips and protected by confirmed-owner, origin, connection-version, document and service-generation checks. Both deployment origins remain unset; server activation, releases and synchronization ownership rules are unchanged.

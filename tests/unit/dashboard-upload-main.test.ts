@@ -89,3 +89,17 @@ it.each(['owner','origin'] as const)('REG-010/012 rejects activation status for 
     const restarted=new UploadMainController(origin,'staging',()=>f.store,()=>{});await restarted.attach(f.rpc);expect(restarted.status).toMatchObject({state:'paused',error:'RECONCILIATION',owner});restarted.stop();
   }finally{f.controller.stop();}
 });
+
+it('REG-005/010/012/014 exposes only settled confirmed Journal read scope and retires it across document and utility lifetimes', async () => {
+  const f = fixture(); await f.controller.attach(f.rpc); expect(f.controller.journalReadScope).toBeUndefined();
+  const candidate = await f.controller.handle('verify', [token]); expect(f.controller.journalReadScope).toBeUndefined();
+  await f.controller.handle('confirm', [candidate.candidateId]);
+  const scope = f.controller.journalReadScope!; expect(scope).toEqual({owner, connectionVersion: '1', documentEpoch: expect.any(Number), utilityGeneration: f.rpc.generation}); expect(JSON.stringify(scope)).not.toMatch(/credential|token/);
+  f.controller.documentChanged(); expect(f.controller.journalReadScope).toBeUndefined(); f.controller.detach(); expect(f.controller.journalReadScope).toBeUndefined(); f.controller.stop();
+});
+
+it('REG-010/012 does not present an uncommitted candidate as a connected owner after confirmation failure', async () => {
+  const f = fixture(); await f.controller.attach(f.rpc); const candidate = await f.controller.handle('verify', [token]), original = f.rpc.call;
+  f.rpc.call = command => command.action === 'prepare' ? Promise.resolve({ok: false, error: 'NETWORK'}) : original(command);
+  const failed = await f.controller.handle('confirm', [candidate.candidateId]); expect(failed).toMatchObject({state: 'paused', error: 'NETWORK', owner: null, candidateId: null}); expect(f.controller.journalReadScope).toBeUndefined(); f.controller.stop();
+});

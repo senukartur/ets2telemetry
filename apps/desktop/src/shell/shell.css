@@ -327,3 +327,19 @@ button[aria-disabled="true"], [role="switch"][aria-disabled="true"] { cursor: no
 .yu-action-row { display: flex; flex-wrap: wrap; align-items: center; row-gap: 4px; }
 .yu-action-row > .yu-info-hint-wrap { order: 1; }
 .yu-action-row > :not(button):not(.yu-info-hint-wrap) { order: 2; flex-basis: 100%; }
+
+.yu-account-grid { display: grid; grid-template-columns: minmax(0,1.25fr) minmax(0,1fr); gap: 16px; align-items: start; }
+.yu-account-grid h2 { display: flex; align-items: center; gap: 8px; }
+.yu-account-grid h2 svg { width: 18px; height: 18px; }
+.yu-upload-identifiers { display: grid; grid-template-columns: minmax(0,1fr) minmax(0,1.25fr); gap: 8px 14px; }
+.yu-upload-identifiers :is(dd,strong) { margin: 0; overflow-wrap: anywhere; font-variant-numeric: tabular-nums; }
+.yu-upload-identifiers :is(dt,span) { color: var(--yu-text-secondary); }
+.yu-upload-token { display: flex; gap: 8px; }
+.yu-token-input { min-width: 0; width: 100%; border: 1px solid var(--yu-border-input); background: var(--yu-bg-input); color: var(--yu-text); padding: 8px 10px; }
+.yu-account-grid progress { width: 100%; height: 8px; accent-color: var(--yu-accent-light); }
+.yu-sync-chip { display: inline-flex; align-items: center; gap: 6px; padding: 3px 8px; border: 1px solid var(--yu-neutral-border); color: var(--yu-neutral-fg); background: var(--yu-neutral-bg); max-width: 100%; text-align: left; }
+.yu-sync-chip svg { width: 15px; height: 15px; flex: none; }
+.yu-sync-chip[data-tone="ok"] { color: var(--yu-ok-fg); border-color: var(--yu-ok-border); background: var(--yu-ok-bg); }
+.yu-sync-chip[data-tone="warn"] { color: var(--yu-warn-fg); border-color: var(--yu-warn-border); background: var(--yu-warn-bg); }
+.yu-sync-chip[data-tone="error"] { color: var(--yu-err-fg); border-color: var(--yu-err-border); background: var(--yu-err-bg); }
+@media (max-width: 950px) { .yu-account-grid { grid-template-columns: minmax(0,1fr); } }
