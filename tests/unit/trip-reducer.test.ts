@@ -66,14 +66,14 @@ describe('ET-014 constants', () => {
 });
 
 describe('job lifecycle', () => {
-  it.each(['clean','startup-timer','regression','regression-before-clear','second-timer','gap','checkpoint','disconnect','active-checkpoint','running-checkpoint','late-checkpoint','covered-session','previous-job','reload'] as const)(
+  it.each(['clean','startup-timer','no-checkpoint','regression','regression-before-clear','second-timer','gap','checkpoint','disconnect','active-checkpoint','running-checkpoint','late-checkpoint','covered-session','previous-job','reload'] as const)(
     'bounds first menu-job acceptance without trusting late attachment or restored jobs: %s', variant => {
       const s=new Script(ETS2_A);let state=initialTripState();const effects:TripEffect[]=[];
       const feed=(...steps:Step[])=>{const result=run(state,steps);state=result.state;effects.push(...result.effects.flat());};
       feed(sessionInput(s.welcome(),variant==='covered-session'?'10':'0'));
       if(variant==='covered-session')s.next=11n;
       const missing=variant==='late-checkpoint'?s.gap(19):null;
-      feed({kind:'checkpoint',message:s.checkpoint(variant==='active-checkpoint'?job():null,0,
+      if(variant!=='no-checkpoint')feed({kind:'checkpoint',message:s.checkpoint(variant==='active-checkpoint'?job():null,0,
         {simulation:variant==='running-checkpoint'?'running':'paused'}),receivedUtcMs:RECEIVED_UTC});
       if(missing)feed(missing);
       if(variant==='active-checkpoint')feed({kind:'attach',receivedUtcMs:RECEIVED_UTC});
@@ -85,7 +85,7 @@ describe('job lifecycle', () => {
       if(variant==='regression')feed(s.event(r.regression('500','400'),paused));
       if(variant==='gap')feed(s.gap(1));
       if(variant==='checkpoint')feed({kind:'checkpoint',message:s.checkpoint(null,0,{simulation:'paused'}),receivedUtcMs:RECEIVED_UTC});
-      if(variant==='disconnect')feed({kind:'disconnected'},sessionInput(s.welcome(),state.sessions[s.session].processedThrough));
+      if(variant==='disconnect')feed({kind:'disconnected'},sessionInput(s.welcome(),state.sessions[s.session].processedThrough),s.event(r.jobCleared(),paused));
       const configured=s.event(r.jobConfigured(variant==='reload'?cargoMarketJob(true):job()),paused),trip=uuid(s.session,configured.data.eventSeq);
       feed(configured);
       if(variant==='reload')expect(state.games.ets2.trip?.loadCoverage).not.toBeNull();

@@ -586,7 +586,7 @@ describe('game-time and position jumps (T17)', () => {
 
 describe('fix round 2', () => {
   it.each([false,true])('keeps stationary jump evidence only while the entire queued episode is stationary: moving=%s',moving=>{
-    const {s,trip,rows}=opened();let state=run(initialTripState(),rows.map(([step])=>step)).state;
+    const {s,rows}=opened();let state=run(initialTripState(),rows.map(([step])=>step)).state;
     for(const point of [{ms:2000,minutes:1000},{ms:2050,minutes:1595},{ms:3100,minutes:1700}]){
       state=run(state,[reading(s,{...point,odometer:1000,fuel:100,speed:moving&&point.ms===3100?1:0,
         position:{x:moving&&point.ms===3100?1:0,y:0,z:0}})]).state;
