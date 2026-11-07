@@ -4,6 +4,7 @@
 // and money stays exact decimal text with its SDK type and currency basis. Every response names the database purpose,
 // so synthetic and replay data are never shown as game history. See docs/journal.md.
 import {isHardModeDetails, type HardModeDetails} from './hard-mode';
+import {isDashboardOwner, type DashboardOwner} from './dashboard-upload';
 import {validateServerMessage, type Available, type Currency, type EventOccurrence, type EventRecord, type GameMode, type JobConfiguration, type Money,
   type TrailerConfiguration, type TruckConfiguration, type UnavailableReason, type Uint64} from './protocol-v1';
 
@@ -73,7 +74,14 @@ export interface JournalTripListItem {
   fuelUsedL: Available<number>;
   job: JournalJobSummary;
 }
-export interface JournalTripPage {database: JournalDatabase; trips: JournalTripListItem[]; nextCursor: string | null}
+export interface JournalSyncRow {
+  tripUuid: string;
+  state: 'unavailable' | 'unbound' | 'identity-pending' | 'pending' | 'queued' | 'sending' | 'held' | 'sent';
+  materialVersion: string | null; latestRevision: number | null; lastDurableUploadUtcMs: number | null;
+  reason: 'validation' | 'reconciliation' | null;
+}
+export interface JournalTripSync {owner: DashboardOwner; connectionVersion: string; rows: JournalSyncRow[]}
+export interface JournalTripPage {database: JournalDatabase; trips: JournalTripListItem[]; nextCursor: string | null; sync?: JournalTripSync}
 
 /**
  * The trip's timeline window (J7). A known window lists the events of the trip's own plugin session from
@@ -366,9 +374,31 @@ function page(rows: unknown, limit: number, cursor: unknown, check: (value: unkn
 }
 /** Validates a `journalTrips` answer exactly; throws JournalContractError otherwise. */
 export function validateJournalTripPage(value: unknown): JournalTripPage {
-  const o = exact(value, ['database', 'trips', 'nextCursor']);
+  const o = exact(value, ['database', 'trips', 'nextCursor', ...(isRecord(value) && Object.hasOwn(value, 'sync') ? ['sync'] : [])]);
   database(o.database);
   for (const trip of page(o.trips, JOURNAL_TRIP_PAGE, o.nextCursor, value => {if (!isJournalListCursor(value)) rowId(value);})) listItem(exact(trip, LIST_KEYS));
+  if (Object.hasOwn(o, 'sync')) {
+    const sync = exact(o.sync, ['owner', 'connectionVersion', 'rows']);
+    if (!isDashboardOwner(sync.owner) || (o.database as JournalDatabase).purpose !== 'history') bad();
+    uint64(sync.connectionVersion);
+    if (!Array.isArray(sync.rows) || sync.rows.length !== (o.trips as JournalTripListItem[]).length) bad();
+    const seen = new Set<string>();
+    for (const [index, item] of (sync.rows as unknown[]).entries()) {
+      const row = exact(item, ['tripUuid', 'state', 'materialVersion', 'latestRevision', 'lastDurableUploadUtcMs', 'reason']);
+      uuid(row.tripUuid);
+      if (row.tripUuid !== (o.trips as JournalTripListItem[])[index].tripUuid || seen.has(row.tripUuid)) bad();
+      seen.add(row.tripUuid as string);
+      oneOf(row.state, ['unavailable', 'unbound', 'identity-pending', 'pending', 'queued', 'sending', 'held', 'sent']);
+      nullable(row.materialVersion, positiveUint64); nullable(row.latestRevision, value => {count(value); if (value === 0) bad();});
+      nullable(row.lastDurableUploadUtcMs, utcMs); nullable(row.reason, value => oneOf(value, ['validation', 'reconciliation']));
+      if (row.state === 'unavailable' || row.state === 'unbound') {
+        if (row.materialVersion !== null || row.latestRevision !== null || row.lastDurableUploadUtcMs !== null || row.reason !== null) bad();
+      }
+      if ((row.reason !== null) !== (row.state === 'held') || row.state === 'sent' && (row.materialVersion === null || row.latestRevision === null || row.lastDurableUploadUtcMs === null)) bad();
+      if (['queued', 'sending'].includes(row.state as string) && (row.materialVersion === null || row.latestRevision === null)) bad();
+      if (row.state !== 'sent' && row.lastDurableUploadUtcMs !== null) bad();
+    }
+  }
   return value as JournalTripPage;
 }
 /**

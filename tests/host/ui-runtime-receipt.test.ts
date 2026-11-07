@@ -4,12 +4,12 @@ import path from 'node:path';
 import {temporaryResources} from '../shared/resources';
 import {receiptBatchTimeout, validateRuntimeReceipts} from '../shared/runtime-receipt-validator';
 
-const screens = {shell: ['live', 'hardMode', 'journal', 'settings'], live: ['current', 'zero', 'missing', 'paused', 'stale'],
+const screens = {shell: ['live', 'hardMode', 'journal', 'settings', 'account'], live: ['current', 'zero', 'missing', 'paused', 'stale'],
   journal: ['list', 'mode-trip', 'weak-mode-trip', 'trip', 'intervals', 'timeline', 'samples'], settings: ['general', 'overlay', 'overlay-sections', 'plugin', 'about', 'data', 'save-error'], overlay: ['strip', 'card', 'cluster', 'hud']};
 const common = ['bilingual', 'bothSizes', 'security', 'offlineFonts', 'recordingIndicator', 'osPointerIsolated', 'hoverUnderDesktopCursor', 'versionLine', 'updateHidden'];
-const flags = {shell: ['navigation', 'headingFocus','hardModePage', 'journalUnmount', 'exitHintKeyboard', 'exitAvailable', 'noAccountPlaceholder'],
+const flags = {shell: ['navigation', 'headingFocus','hardModePage', 'journalUnmount', 'exitHintKeyboard', 'exitAvailable', 'noAccountPlaceholder', 'accountUnconfigured'],
   live: ['numericGauge', 'unavailableVsZero', 'paused', 'staleDashes', 'rawNames', 'noTripPlaceholder', 'jobViewport', 'jobRowsAfterV1Gap', 'hmNamesReadable','fullWidthTelemetry','tankUnknownVsZero','mandatoryBreak'],
-  journal: ['syntheticBanner', 'pageReturn', 'chartBounded', 'rawTabs', 'noPlannedSearch', 'tripRegions', 'tableReadable','signedChart'], settings: ['allPanels', 'allSections', 'committedSave', 'sourceSelector', 'uninstallRefusal', 'refusedSave', 'readOnly', 'controlsKeyboard', 'lastEnabled', 'fontLicense', 'overlayVisibility', 'visibilityFailedSave', 'actionResult', 'overlayOpacity','opacityFailedSave','opacityReadOnly','overlayUnified', 'overlayEditing', 'overlayScroll', 'scaleControl', 'gearDisplay', 'gearDisplayFailedSave'],
+  journal: ['syntheticBanner', 'pageReturn', 'chartBounded', 'rawTabs', 'noPlannedSearch', 'tripRegions', 'tableReadable','signedChart','syncHidden'], settings: ['allPanels', 'allSections', 'committedSave', 'sourceSelector', 'uninstallRefusal', 'refusedSave', 'readOnly', 'controlsKeyboard', 'lastEnabled', 'fontLicense', 'overlayVisibility', 'visibilityFailedSave', 'actionResult', 'overlayOpacity','opacityFailedSave','opacityReadOnly','overlayUnified', 'overlayEditing', 'overlayScroll', 'scaleControl', 'gearDisplay', 'gearDisplayFailedSave'],
   overlay: ['fourLayouts', 'transparent', 'contained', 'independentFont', 'missing', 'paused', 'staleDashes', 'heroSubsets','formatterProfiles', 'stableNumbers', 'opacityKeyboardFocus','opacityGestures','backgroundOpacityOverlay','clusterRpmContained', 'scaleRange', 'clusterSpeedArc', 'gearDisplayManual', 'gearboxLabels']};
 // ET-045e: six English 1280x800 overlay scale references, captured at their own window sizes, beside the 64 layout screenshots.
 const references = ['scale-strip', 'scale-card', 'scale-cluster', 'scale-hud', 'scale-strip-old70', 'scale-strip-old100'];
@@ -19,8 +19,16 @@ const mainEvents = [{event: 'APP_EXIT', detail: {code: 0}}, {event: 'SERVICE_EXI
 const serviceEvents = [{event: 'STORAGE_VERIFIED'}, ...['ingestion', 'capture', 'storage-probe'].map(name => ({event: 'SHUTDOWN_STEP', facts: {name, outcome: 'ok'}})), {event: 'SERVICE_REPORT', detail: {type: 'stopped', clean: true}}];
 const windows = [{url: 'file:///app/renderer/index.html', rendererPid: 100, sandbox: true, isolation: true, node: false, isDefaultSession: true, isOverlaySession: false, sessionPersistent: true, alwaysOnTop: false},
   {url: 'file:///app/renderer/index.html?view=overlay', rendererPid: 101, sandbox: true, isolation: true, node: false, isDefaultSession: false, isOverlaySession: true, sessionPersistent: false, alwaysOnTop: true}];
+const uploadScreens = ['no-token', 'confirmation', 'first-upload', 'offline', 'journal'];
+const uploadFlags = ['paste', 'password', 'visibility', 'enter', 'tokenCleared', 'cancelNavigation', 'cancelConfirmation', 'confirmNavigation', 'fixedRefusals', 'progress', 'chipNavigation', 'rowStates', 'headingFocus', 'contained', 'sharedStyles', 'bridgeIsolation'];
+function uploadFixture() {
+  return {origin: 'synthetic', passed: true, productionAuthority: false, tokenPresentInScreenshots: false, moduleGraphs: [8, 6, 2100],
+    flags: Object.fromEntries(uploadFlags.map(flag => [flag, true])),
+    security: {sandbox: true, contextIsolation: true, nodeIntegration: false, persistentSession: false, localDocument: true, remoteFetchDenied: true, navigationDenied: true, newWindowDenied: true, permissionsDenied: true},
+    screenshots: ['en', 'ru'].flatMap(language => sizes.flatMap(size => uploadScreens.map(screen => ({file: `ui-upload-${screen}-${language}-${size.width}x${size.height}.png`, screen, language, ...size, imageWidth: size.width, imageHeight: size.height, bytes: 600, tokenCleared: true}))))};
+}
 function fixture(uiCase: Case) {
-  return {passed: true, commit: 'candidate', mode: 'packaged', scenarioKind: 'ui', // ET-050: the settings shard refuses units, visibility, opacity and gear display once per language and size (16, before 12).
+  return {passed: true, commit: 'candidate', mode: 'packaged', scenarioKind: 'ui', phases: ['upload-ui-fixture-started', 'upload-ui-fixture-completed', 'telemetry-source-started', 'launch-requested'].map(phase => ({phase})), uploadUi: uiCase === 'shell' ? uploadFixture() : undefined, // ET-050: the settings shard refuses units, visibility, opacity and gear display once per language and size (16, before 12).
     mainEvents: [...mainEvents, ...Array.from({length: 16}, () => ({event: 'SETTINGS_WRITE_FAILED', facts: {step: 'target', code: null}}))], serviceEvents, ui: {case: uiCase, languages: ['en', 'ru'], sizes,
     firstLauncherExit: 0, saveFailureFacts: Array.from({length: 16}, () => ({step: 'target', code: null})),
     readOnly: {state: 'newer-version', writable: false, language: 'en', bytesUnchanged: true, launcherExit: 0, windows, mainEvents: [...mainEvents, {event: 'SETTINGS_FALLBACK', facts: {state: 'newer-version'}}], serviceEvents},
@@ -36,6 +44,22 @@ it('requires every UI language/size/screen, assertion and plain screenshot file 
   const resources = await temporaryResources();
   const variants: {name: string; uiCase: Case; change?: (value: Fixture) => void; omitFile?: boolean; badPng?: boolean; accepted?: boolean}[] = [
     ...Object.keys(screens).map(uiCase => ({name: `${uiCase} intact`, uiCase: uiCase as Case, accepted: true})),
+    {name: 'absent configured upload fixture', uiCase: 'shell', change: value => {value.uploadUi = undefined;}},
+    {name: 'failed configured upload fixture', uiCase: 'shell', change: value => {value.uploadUi!.passed = false;}},
+    {name: 'configured fixture production authority', uiCase: 'shell', change: value => {value.uploadUi!.productionAuthority = true;}},
+    {name: 'configured fixture token screenshot', uiCase: 'shell', change: value => {value.uploadUi!.screenshots[0].tokenCleared = false;}},
+    {name: 'configured fixture missing locale-size-state', uiCase: 'shell', change: value => {value.uploadUi!.screenshots.pop();}},
+    {name: 'configured fixture duplicate screenshot', uiCase: 'shell', change: value => {value.uploadUi!.screenshots[0] = {...value.uploadUi!.screenshots[1]};}},
+    {name: 'configured fixture node enabled', uiCase: 'shell', change: value => {value.uploadUi!.security.nodeIntegration = true;}},
+    {name: 'configured fixture missing module graphs', uiCase: 'shell', change: value => {Reflect.deleteProperty(value.uploadUi!, 'moduleGraphs');}},
+    {name: 'configured fixture unchecked renderer build', uiCase: 'shell', change: value => {value.uploadUi!.moduleGraphs.pop();}},
+    {name: 'configured fixture empty module graph', uiCase: 'shell', change: value => {value.uploadUi!.moduleGraphs[0] = 0;}},
+    {name: 'configured fixture extra bridge authority', uiCase: 'shell', change: value => {value.uploadUi!.flags.bridgeIsolation = false;}},
+    {name: 'configured fixture permission allowed', uiCase: 'shell', change: value => {value.uploadUi!.security.permissionsDenied = false;}},
+    {name: 'configured fixture reordered launch phases', uiCase: 'shell', change: value => {value.phases.reverse();}},
+    {name: 'configured fixture missing source phase', uiCase: 'shell', change: value => {value.phases.splice(2, 1);}},
+    {name: 'configured fixture remote request allowed', uiCase: 'shell', change: value => {value.uploadUi!.security.remoteFetchDenied = false;}},
+    ...uploadFlags.map(flag => ({name: `configured fixture absent ${flag}`, uiCase: 'shell' as const, change: (value: Fixture) => {delete value.uploadUi!.flags[flag];}})),
     {name: 'read-only writable contradiction', uiCase: 'settings', change: value => {value.ui.readOnly.writable = true;}},
     {name: 'forced future-format language', uiCase: 'settings', change: value => {value.ui.readOnly.language = 'ru';}},
     {name: 'read-only bytes changed', uiCase: 'settings', change: value => {value.ui.readOnly.bytesUnchanged = false;}},
@@ -85,7 +109,7 @@ it('requires every UI language/size/screen, assertion and plain screenshot file 
     for (const [index, variant] of variants.entries()) {
       const directory = path.join(resources.directory, String(index)); await mkdir(directory);
       const value = fixture(variant.uiCase);
-      for (const [imageIndex, shot] of value.ui.screenshots.entries()) {
+      for (const [imageIndex, shot] of [...value.ui.screenshots, ...(value.uploadUi?.screenshots ?? [])].entries()) {
         if (variant.omitFile && imageIndex === 0) continue;
         await writeFile(path.join(directory, shot.file), variant.badPng && imageIndex === 0 ? Buffer.alloc(600) : png(shot.imageWidth, shot.imageHeight));
       }

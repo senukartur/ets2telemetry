@@ -1,6 +1,7 @@
 import {describe, expect, it} from 'vitest';
 import type {ExecFilePort} from '../../apps/desktop/src/plugin-setup/fixed-program';
 import {blockingProcess, checkRunningGames, parseTasklistCsv, parseTasklistSessions, runningGames} from '../../apps/desktop/src/plugin-setup/game-processes';
+import type {ProcessCheckObservation} from '../../apps/desktop/src/plugin-setup/game-processes';
 
 // REG-015 (ET-017 P7): running-game detection before a plugin change. CSV fixtures are written by hand in the format
 // of `tasklist /fo csv /nh`; the separate tests/host case lists real processes without changing anything.
@@ -70,6 +71,14 @@ describe('matching', () => {
 });
 
 describe('the fixed tasklist call', () => {
+  it('records parser classification and safe counts without process names or raw output', async () => {
+    const events: ProcessCheckObservation[] = [], {execFile} = stub({stdout: 'PRIVATE_UNPARSEABLE_OUTPUT'});
+    expect(await checkRunningGames({execFile, env, observe: event => events.push(event)})).toEqual({ok: false, code: 'RUNNING_CHECK_FAILED', reason: 'output-invalid'});
+    expect(events.map(event => event.stage)).toEqual(['start', 'callback', 'classified']);
+    expect(new Set(events.map(event => event.sequence)).size).toBe(1);
+    expect(events.at(-1)).toMatchObject({reason: 'output-invalid', rows: 0, stdoutBytes: 26});
+    expect(JSON.stringify(events)).not.toContain('PRIVATE');
+  });
   it('runs absolute tasklist.exe with fixed arguments, a hidden window, no shell, 10 s and 1 MiB', async () => {
     const {execFile, calls} = stub({stdout: [row('explorer.exe', 10), row('TruckersMP-Launcher.exe', 11)].join('\r\n')});
     expect(await checkRunningGames({execFile, env})).toEqual({ok: true, running: {ets2: false, ats: false, client: true}});

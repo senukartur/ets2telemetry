@@ -23,6 +23,28 @@ const header = '************ : log created on : Wednesday October 21 2026 @ 12:0
 const selection = `00:00:01.000 : New profile selected: '${name}'\n`;
 const save = (storage: 'home' | 'steam' = 'home') => `00:00:02.000 : Loading save. Type: 0, path: <MEMFILE><UFS>/${storage}/profiles/${id}/save/autosave/game.sii\n`;
 let root: string, game: string, profile: string;
+const readerOwners = new Set<HardModeReader>(), monitorOwners = new Set<HardModeMonitor>(), observerOwners = new Set<ProfileObserver>();
+const consumerWork = new Set<Promise<unknown>>(), readerHistory: {name: string; value: WeakRef<HardModeReader>}[] = [];
+let readerSequence = 0;
+function captureWork<Args extends unknown[], Value>(run: (...args: Args) => Promise<Value>): (...args: Args) => Promise<Value> {
+  return (...args) => {
+    const pending = run(...args); consumerWork.add(pending);
+    const settled = () => {consumerWork.delete(pending);}; void pending.then(settled, settled); return pending;
+  };
+}
+function ownedReader(...args: ConstructorParameters<typeof HardModeReader>) {
+  const value = new HardModeReader(...args); readerOwners.add(value);
+  readerHistory.push({name: `reader-${++readerSequence}`, value: new WeakRef(value)}); if (readerHistory.length > 32) readerHistory.shift();
+  value.read = captureWork(value.read.bind(value)); value.readTimed = captureWork(value.readTimed.bind(value)); value.resolveProfile = captureWork(value.resolveProfile.bind(value));
+  return value;
+}
+function ownedMonitor(...args: ConstructorParameters<typeof HardModeMonitor>) {
+  const value = new HardModeMonitor(...args); monitorOwners.add(value); value.refresh = captureWork(value.refresh.bind(value)); return value;
+}
+function ownedObserver(...args: ConstructorParameters<typeof ProfileObserver>) {
+  const value = new ProfileObserver(...args); observerOwners.add(value);
+  value.refresh = captureWork(value.refresh.bind(value)); value.boundary = captureWork(value.boundary.bind(value)); value.readSettings = captureWork(value.readSettings.bind(value)); return value;
+}
 beforeEach(async () => {
   root = await realpath(await mkdtemp(path.join(os.tmpdir(), 'ets2-hard-mode-'))); game = path.join(root, 'Documents', 'Euro Truck Simulator 2'); profile = path.join(game, 'profiles', id);
   await mkdir(profile, {recursive: true});
@@ -31,9 +53,23 @@ beforeEach(async () => {
   await writeFile(path.join(profile, 'config_local.cfg'), 'uset g_brake_intensity "0.75"');
   await writeFile(path.join(profile, 'config.cfg'), HARD_MODE_CONFIG);
 });
-afterEach(async () => {vi.useRealTimers(); await rm(root, {recursive: true, force: true});});
+afterEach(async () => {
+  try {
+    for (const monitor of monitorOwners) monitor.close();
+    for (const observer of observerOwners) observer.close();
+    // Consumer close does not own a shared reader's entire lifetime. The per-case fixture also owns standalone reads.
+    for (const reader of readerOwners) {reader.selectGuardSource('test-owner-retired'); reader.selectGuardSource(undefined);}
+    await Promise.allSettled([...consumerWork]);
+    await Promise.all([...observerOwners].map(observer => observer.refresh()));
+    await Promise.all([...readerOwners].map(reader => reader.drain()));
+    if (vi.isFakeTimers()) expect(vi.getTimerCount(), 'Owned Hard Mode work must settle before clock restoration').toBe(0);
+  } finally {
+    readerOwners.clear(); monitorOwners.clear(); observerOwners.clear();
+    vi.restoreAllMocks(); vi.useRealTimers(); await rm(root, {recursive: true, force: true});
+  }
+});
 const processFacts = () => Promise.resolve({pid: source.processId, createdUtcMs: created, executable: 'C:\\Synthetic\\eurotrucks2.exe', commandLine: 'eurotrucks2.exe'});
-const reader = () => new HardModeReader({documents: path.join(root, 'Documents'), process: processFacts});
+const reader = () => ownedReader({documents: path.join(root, 'Documents'), process: processFacts});
 const read = (r = reader()) => r.read(source, '100', created + 10000, new AbortController().signal);
 /** Establish a metadata-visible edit independently of host timestamp granularity or an unfinished sibling byte read. */
 async function writeSettingsChange(filename: string, text: string) {
@@ -72,11 +108,11 @@ describe('ET-026 isolated reader (REG-008/010/011)', () => {
   });
   it.each(['admitted','cleared','settings-first','superseded'] as const)('revokes discovery provenance while a sibling drains with %s settings admission',async mode=>{
     vi.useFakeTimers();let now=0n,hold=false,clearHold=false;const completed=gate(),entered=gate(),release=gate(),hintEntered=gate(),hintRelease=gate(),globalObserved=gate(),clearEntered=gate(),clearRelease=gate();
-    const parent=path.dirname(profile),global=path.join(game,'config.cfg'),r=new HardModeReader({documents:path.join(root,'Documents'),process:processFacts,nowNs:()=>now,
+    const parent=path.dirname(profile),global=path.join(game,'config.cfg'),r=ownedReader({documents:path.join(root,'Documents'),process:processFacts,nowNs:()=>now,
       file:async(filename,limit,signal)=>{if(clearHold&&filename===path.join(profile,'config_local.cfg')){clearEntered.resolve();await clearRelease.promise;}return readStableFile(filename,limit,signal);},
       metadata:{realpath:async filename=>{if(hold&&filename===path.join(profile,'config_local.cfg')){entered.resolve();await release.promise;}return realpath(filename);},stat:async filename=>{
         const value=await stat(filename,{bigint:true});if(hold&&filename===parent){hintEntered.resolve();await hintRelease.promise;}if(hold&&filename===global)globalObserved.resolve();return value;
-      }}}),observer=new ProfileObserver(()=>r,()=>now,false),m=new HardModeMonitor((s,ns,at,signal,force)=>observer.readSettings(r,s,ns,at,signal,force).finally(()=>completed.resolve()),undefined,()=>now,undefined,()=>r.canRetain(),undefined,()=>r.drain(),
+      }}}),observer=ownedObserver(()=>r,()=>now,false),m=ownedMonitor((s,ns,at,signal,force)=>observer.readSettings(r,s,ns,at,signal,force).finally(()=>completed.resolve()),undefined,()=>now,undefined,()=>r.canRetain(),undefined,()=>r.drain(),
       {eligible:()=>r.guardEligible(),select:key=>r.selectGuardSource(key),deadline:s=>r.deadline(s)}),current={source,clockId:'clock',monotonicNs:'1'};
     r.onInvalidate(()=>m.invalidate());let pending:Promise<unknown>|undefined;
     try{
@@ -96,13 +132,13 @@ describe('ET-026 isolated reader (REG-008/010/011)', () => {
       if(mode==='superseded')controller.abort(new ProfileSuperseded('Same-generation hint'));
       hintRelease.resolve();await Promise.resolve();await Promise.resolve();expect(observer.evidence()).toBeUndefined();expect(observer.status().token).not.toBe(token);expect(m.evidence().assessment.state).toBe('unknown');
       let drained=false;void r.drain().then(()=>{drained=true;});await Promise.resolve();expect(drained).toBe(false);
-    }finally{m.close();observer.close();release.resolve();hintRelease.resolve();clearRelease.resolve();await pending;await r.drain();}
+    }finally{release.resolve();hintRelease.resolve();clearRelease.resolve();m.close();observer.close();await pending;await observer.refresh();await r.drain();}
   });
   it.each([1n,1_000_000n].flatMap(offset=>['profile-first','monitor-only'].flatMap(order=>[false,true].flatMap(changed=>[false,true].map(watchdog=>({offset,order,changed,watchdog}))))) )('classifies an early subscriber deadline without revoking fresh profile guards: $offset/$order/$changed/$watchdog',async({offset,order,changed,watchdog})=>{
     vi.useFakeTimers();let now=0n,skew=false,hold=false,completed=gate();const entered=gate(),release=gate();
-    const r=new HardModeReader({documents:path.join(root,'Documents'),process:processFacts,nowNs:()=>{if(skew){skew=false;now+=offset;}return now;},file:async(filename,limit,signal)=>{
+    const r=ownedReader({documents:path.join(root,'Documents'),process:processFacts,nowNs:()=>{if(skew){skew=false;now+=offset;}return now;},file:async(filename,limit,signal)=>{
       if(hold&&filename===path.join(profile,'config_local.cfg')){entered.resolve();await release.promise;}return readStableFile(filename,limit,signal);
-    }}),observer=new ProfileObserver(()=>r,()=>now,false),m=new HardModeMonitor((s,ns,at,signal,force)=>observer.readSettings(r,s,ns,at,signal,force).finally(()=>completed.resolve()),undefined,()=>now,undefined,()=>r.canRetain(),undefined,()=>r.drain(),
+    }}),observer=ownedObserver(()=>r,()=>now,false),m=ownedMonitor((s,ns,at,signal,force)=>observer.readSettings(r,s,ns,at,signal,force).finally(()=>completed.resolve()),undefined,()=>now,undefined,()=>r.canRetain(),undefined,()=>r.drain(),
       {eligible:()=>r.guardEligible(),select:key=>r.selectGuardSource(key),deadline:s=>r.deadline(s)}),current={source,clockId:'clock',monotonicNs:'1'};
     r.onInvalidate(()=>m.invalidate());let pending:Promise<void>|undefined;
     try{
@@ -122,15 +158,15 @@ describe('ET-026 isolated reader (REG-008/010/011)', () => {
       release.resolve();await pending;await r.drain();
       if(watchdog){expect(observer.evidence()).toBeUndefined();expect(m.evidence().assessment.state).toBe('unknown');}
       else{expect(observer.evidence()).toEqual(proof);expect(observer.status().token).toBe(token);expect(m.evidence().assessment.state).toBe(changed?'unknown':'pass');}
-    }finally{m.close();observer.close();release.resolve();await pending;await r.drain();}
+    }finally{release.resolve();m.close();observer.close();await pending;await observer.refresh();await r.drain();}
   });
   it.each(['file','missing','directory-hint','missing-to-present','superseded'] as const)('withdraws each partial %s tuple according to its independent evidence role',async mode=>{
     vi.useFakeTimers();let now=0n,hold=false;const completed=gate(),entered=gate(),release=gate(),observed=gate(),tupleRelease=gate();
     const target=mode==='directory-hint'?path.join(game,'profiles'):mode==='missing-to-present'?path.join(game,'steam_profiles'):path.join(profile,'config.cfg');
-    const r=new HardModeReader({documents:path.join(root,'Documents'),process:processFacts,nowNs:()=>now,metadata:{
+    const r=ownedReader({documents:path.join(root,'Documents'),process:processFacts,nowNs:()=>now,metadata:{
       realpath:async filename=>{if(hold&&filename===path.join(game,'config.cfg')){entered.resolve();await release.promise;}try{return await realpath(filename);}catch(error){if(hold&&filename===target)observed.resolve();throw error;}},
       stat:async filename=>{const value=await stat(filename,{bigint:true});if(hold&&filename===target){observed.resolve();if(mode==='superseded')await tupleRelease.promise;}return value;}}});
-    const observer=new ProfileObserver(()=>r,()=>now,false),m=new HardModeMonitor((s,ns,at,signal,force)=>observer.readSettings(r,s,ns,at,signal,force).finally(()=>completed.resolve()),undefined,()=>now,undefined,()=>r.canRetain(),undefined,()=>r.drain(),
+    const observer=ownedObserver(()=>r,()=>now,false),m=ownedMonitor((s,ns,at,signal,force)=>observer.readSettings(r,s,ns,at,signal,force).finally(()=>completed.resolve()),undefined,()=>now,undefined,()=>r.canRetain(),undefined,()=>r.drain(),
       {eligible:()=>r.guardEligible(),select:key=>r.selectGuardSource(key),deadline:s=>r.deadline(s)}),current={source,clockId:'clock',monotonicNs:'1'};
     r.onInvalidate(()=>m.invalidate());let pending:Promise<unknown>|undefined,replacement:Promise<unknown>|undefined;
     try{
@@ -145,11 +181,11 @@ describe('ET-026 isolated reader (REG-008/010/011)', () => {
       if(mode==='directory-hint'){expect(observer.evidence()).toBeUndefined();expect(observer.status().token).not.toBe(token);}
       else{expect(observer.status().token).toBe(token);if(mode!=='superseded')expect(observer.evidence()).toEqual(proof);}
       let drained=false;void r.drain().then(()=>{drained=true;});await Promise.resolve();expect(drained).toBe(false);
-    }finally{m.close();observer.close();release.resolve();tupleRelease.resolve();await pending;await replacement;await r.drain();}
+    }finally{release.resolve();tupleRelease.resolve();m.close();observer.close();await pending;await replacement;await observer.refresh();await r.drain();}
   });
   it.each(['compliant','generic-EIO','generic-message','retired','superseded'] as const)('handles partial optional byte evidence as %s while retaining physical ownership',async mode=>{
     vi.useFakeTimers();let now=0n,hold=false,readDone=gate();const entered=gate(),release=gate(),observed=gate(),byteRelease=gate(),snapshots=new Map<string,BigIntStats>(),changes:HardModeObservation[]=[];
-    const r=new HardModeReader({documents:path.join(root,'Documents'),process:processFacts,nowNs:()=>now,metadata:{realpath,stat:async filename=>{
+    const r=ownedReader({documents:path.join(root,'Documents'),process:processFacts,nowNs:()=>now,metadata:{realpath,stat:async filename=>{
       if(hold&&snapshots.has(filename))return snapshots.get(filename)!;const value=await stat(filename,{bigint:true});snapshots.set(filename,value);return value;
     }},file:async(filename,limit,signal)=>{
       if(hold&&filename===path.join(profile,'config_local.cfg')){entered.resolve();await release.promise;}
@@ -157,7 +193,7 @@ describe('ET-026 isolated reader (REG-008/010/011)', () => {
         if(mode==='generic-EIO'||mode==='generic-message'){observed.resolve();throw Object.assign(new Error(mode==='generic-message'?'Changing file':'Injected I/O failure'),{code:'EIO'});}
         const value=await readStableFile(filename,limit,signal);observed.resolve();if(mode==='retired'||mode==='superseded')await byteRelease.promise;return value;
       }return readStableFile(filename,limit,signal);
-    }}),observer=new ProfileObserver(()=>r,()=>now,false),m=new HardModeMonitor((s,ns,at,signal,force)=>observer.readSettings(r,s,ns,at,signal,force).finally(()=>readDone.resolve()),value=>changes.push(value),()=>now,undefined,()=>r.canRetain(),undefined,()=>r.drain(),
+    }}),observer=ownedObserver(()=>r,()=>now,false),m=ownedMonitor((s,ns,at,signal,force)=>observer.readSettings(r,s,ns,at,signal,force).finally(()=>readDone.resolve()),value=>changes.push(value),()=>now,undefined,()=>r.canRetain(),undefined,()=>r.drain(),
       {eligible:()=>r.guardEligible(),select:key=>r.selectGuardSource(key),deadline:s=>r.deadline(s)}),current={source,clockId:'clock',monotonicNs:'1'};
     r.onInvalidate(()=>m.invalidate());let pending:Promise<unknown>|undefined;
     try{
@@ -168,7 +204,7 @@ describe('ET-026 isolated reader (REG-008/010/011)', () => {
       pending=mode==='superseded'?r.readTimed(source,'3',created+10000,signal.signal,undefined,true).catch(error=>error):m.refresh(true);
       await entered.promise;await observed.promise;
       if(mode==='retired'){
-        m.close();observer.close();const count=changes.length,retiredToken=observer.status().token;byteRelease.resolve();release.resolve();await pending;await r.drain();expect(changes).toHaveLength(count);expect(observer.status().token).toBe(retiredToken);
+        m.close();observer.close();const count=changes.length,retiredToken=observer.status().token;byteRelease.resolve();release.resolve();await pending;await observer.refresh();await r.drain();expect(changes).toHaveLength(count);expect(observer.status().token).toBe(retiredToken);
       }else{
         if(mode==='superseded'){signal.abort(new ProfileSuperseded('Shared byte read superseded'));byteRelease.resolve();}
         await Promise.resolve();await Promise.resolve();expect(m.evidence().assessment.state).toBe(mode.startsWith('generic')?'pass':'unknown');expect(observer.evidence()).toEqual(proof);expect(observer.status().token).toBe(token);
@@ -178,13 +214,13 @@ describe('ET-026 isolated reader (REG-008/010/011)', () => {
           expect(m.evidence().assessment.state).toBe('pass');expect(m.evidence().sourceMonotonicNs).toBe('4');
         }else if(mode.startsWith('generic')){release.resolve();await pending;expect(m.evidence().assessment.state).toBe('pass');}
       }
-    }finally{m.close();observer.close();release.resolve();byteRelease.resolve();await pending;await r.drain();}
+    }finally{release.resolve();byteRelease.resolve();m.close();observer.close();await pending;await observer.refresh();await r.drain();}
   });
   it.each(['monitor-first','physical-first','profile-first'] as const)('retains only profile proof through an optional byte deadline with %s cancellation order',async order=>{
     vi.useFakeTimers();const start=Date.now(),now=()=>BigInt(Date.now()-start)*1_000_000n;let hold=false;const entered=gate(),release=gate(),completed=gate();
-    const r=new HardModeReader({documents:path.join(root,'Documents'),process:processFacts,nowNs:now,file:async(filename,limit,signal)=>{
+    const r=ownedReader({documents:path.join(root,'Documents'),process:processFacts,nowNs:now,file:async(filename,limit,signal)=>{
       if(hold&&filename===path.join(profile,'config_local.cfg')){entered.resolve();await release.promise;}return readStableFile(filename,limit,signal);
-    }}),observer=new ProfileObserver(()=>r,now,false),m=new HardModeMonitor((s,ns,at,signal,force)=>observer.readSettings(r,s,ns,at,signal,force).finally(()=>completed.resolve()),undefined,now,undefined,()=>r.canRetain(),undefined,()=>r.drain(),
+    }}),observer=ownedObserver(()=>r,now,false),m=ownedMonitor((s,ns,at,signal,force)=>observer.readSettings(r,s,ns,at,signal,force).finally(()=>completed.resolve()),undefined,now,undefined,()=>r.canRetain(),undefined,()=>r.drain(),
       {eligible:()=>r.guardEligible(),select:key=>r.selectGuardSource(key),deadline:s=>r.deadline(s)}),current={source,clockId:'clock',monotonicNs:'1'};
     r.onInvalidate(()=>m.invalidate());let pending:Promise<unknown>|undefined,raw:Promise<unknown>|undefined;
     try{
@@ -196,7 +232,7 @@ describe('ET-026 isolated reader (REG-008/010/011)', () => {
       expect(m.evidence().assessment.state).toBe('unknown');expect(r.canRetain()).toBe(false);expect(r.canRetainProfile()).toBe(true);
       await vi.advanceTimersByTimeAsync(2000);await raw;expect(observer.evidence()).toEqual(proof);expect(observer.status().token).toBe(token);expect(m.evidence().assessment.state).toBe('unknown');
       await vi.advanceTimersByTimeAsync(5000);expect(observer.evidence()).toBeUndefined();expect(observer.status().token).not.toBe(token);
-    }finally{m.close();observer.close();release.resolve();await pending;await r.drain();}
+    }finally{release.resolve();m.close();observer.close();await pending;await observer.refresh();await r.drain();}
   });
   it('marks only its own stable-file evidence rejections with a private type',async()=>{
     const signal=new AbortController().signal,target=path.join(profile,'config.cfg');
@@ -206,11 +242,11 @@ describe('ET-026 isolated reader (REG-008/010/011)', () => {
   });
   it('discards fulfilled retired metadata before comparisons can publish another invalidation',async()=>{
     vi.useFakeTimers();let now=0n,hold=false;const entered=gate(),release=gate(),completed=gate(),changes:HardModeObservation[]=[],paths:Promise<unknown>[]=[],stats:Promise<unknown>[]=[];
-    const global=path.join(game,'config.cfg'),r=new HardModeReader({documents:path.join(root,'Documents'),process:processFacts,nowNs:()=>now,
+    const global=path.join(game,'config.cfg'),r=ownedReader({documents:path.join(root,'Documents'),process:processFacts,nowNs:()=>now,
       metadata:{realpath:filename=>{const value=realpath(filename);if(hold)paths.push(value);return value;},stat:async filename=>{
         if(hold&&filename===global){entered.resolve();await release.promise;return stat(filename,{bigint:true});}
         const value=stat(filename,{bigint:true});if(hold)stats.push(value);return value;
-      }}}),observer=new ProfileObserver(()=>r,()=>now,false),m=new HardModeMonitor((s,ns,at,signal,force)=>observer.readSettings(r,s,ns,at,signal,force).finally(()=>completed.resolve()),value=>changes.push(value),()=>now,undefined,()=>r.canRetain(),undefined,()=>r.drain(),
+      }}}),observer=ownedObserver(()=>r,()=>now,false),m=ownedMonitor((s,ns,at,signal,force)=>observer.readSettings(r,s,ns,at,signal,force).finally(()=>completed.resolve()),value=>changes.push(value),()=>now,undefined,()=>r.canRetain(),undefined,()=>r.drain(),
       {eligible:()=>r.guardEligible(),select:key=>r.selectGuardSource(key),deadline:s=>r.deadline(s)}),current={source,clockId:'clock',monotonicNs:'1'};
     r.onInvalidate(()=>m.invalidate());let pending:Promise<void>|undefined;
     try{
@@ -220,16 +256,16 @@ describe('ET-026 isolated reader (REG-008/010/011)', () => {
       m.close();observer.close();const count=changes.length,token=observer.status().token;
       await rename(global,global+'.old');await writeFile(global,'uset g_traffic "2"');release.resolve();await pending;await r.drain();
       expect(changes).toHaveLength(count);expect(observer.status().token).toBe(token);expect(r.guardEligible()).toBe(false);
-    }finally{m.close();observer.close();release.resolve();await pending;await r.drain();}
+    }finally{release.resolve();m.close();observer.close();await pending;await observer.refresh();await r.drain();}
   });
   it.each(['admitted','cleared','superseded'] as const)('revokes an observed directory replacement while a metadata sibling is held and baseline is %s',async mode=>{
     vi.useFakeTimers();let now=0n,holdMetadata=false,holdLocation=false;const completed=gate(),globalEntered=gate(),globalRelease=gate(),identityEntered=gate(),identityRelease=gate(),identityPathRelease=gate(),locationEntered=gate(),locationRelease=gate();
-    const r=new HardModeReader({documents:path.join(root,'Documents'),process:processFacts,nowNs:()=>now,
+    const r=ownedReader({documents:path.join(root,'Documents'),process:processFacts,nowNs:()=>now,
       profileDirectory:async parent=>{if(holdLocation){locationEntered.resolve();await locationRelease.promise;}return opendir(parent);},
       // Keep descendant lookups behind the same gate so Windows has no in-flight child lookup during the rename.
       metadata:{realpath:async filename=>{if(holdMetadata&&filename===path.join(game,'config.cfg')){globalEntered.resolve();await globalRelease.promise;}if(holdMetadata&&mode==='cleared'&&(filename===profile||filename.startsWith(profile+path.sep)))await identityPathRelease.promise;return realpath(filename);},
         stat:async filename=>{const value=await stat(filename,{bigint:true});if(holdMetadata&&mode==='superseded'&&filename===path.dirname(profile))await identityRelease.promise;if(holdMetadata&&filename===profile){identityEntered.resolve();if(mode==='superseded')await identityRelease.promise;}return value;}}});
-    const observer=new ProfileObserver(()=>r,()=>now,false),m=new HardModeMonitor((s,ns,at,signal,force)=>observer.readSettings(r,s,ns,at,signal,force).finally(()=>completed.resolve()),undefined,()=>now,undefined,()=>r.canRetain(),undefined,()=>r.drain(),
+    const observer=ownedObserver(()=>r,()=>now,false),m=ownedMonitor((s,ns,at,signal,force)=>observer.readSettings(r,s,ns,at,signal,force).finally(()=>completed.resolve()),undefined,()=>now,undefined,()=>r.canRetain(),undefined,()=>r.drain(),
       {eligible:()=>r.guardEligible(),select:key=>r.selectGuardSource(key),deadline:s=>r.deadline(s)}),current={source,clockId:'clock',monotonicNs:'1'};
     r.onInvalidate(()=>m.invalidate());let pending:Promise<unknown>|undefined,replacement:Promise<unknown>|undefined;
     try{
@@ -250,16 +286,16 @@ describe('ET-026 isolated reader (REG-008/010/011)', () => {
       // The adapter's resolved stat continues before this microtask barrier; the unrelated realpath is still held.
       await Promise.resolve();await Promise.resolve();
       expect(observer.evidence()).toBeUndefined();expect(observer.status().token).not.toBe(token);expect(m.evidence().assessment.state).toBe('unknown');
-    }finally{m.close();observer.close();globalRelease.resolve();identityRelease.resolve();identityPathRelease.resolve();locationRelease.resolve();await pending;await replacement;await r.drain();}
+    }finally{globalRelease.resolve();identityRelease.resolve();identityPathRelease.resolve();locationRelease.resolve();m.close();observer.close();await pending;await replacement;await observer.refresh();await r.drain();}
   });
   it.each(['realpath','stat','retired-error'] as const)('retains physical metadata ownership after independent failure while %s remains held',async stage=>{
     vi.useFakeTimers();let now=0n,hold=false,logReads=0,globalStats=0,completed=gate();const entered=gate(),release=gate();
     const global=path.join(game,'config.cfg'),local=path.join(profile,'config_local.cfg'),inspect=vi.fn(async(s:SourceIdentity)=>({...await processFacts(),pid:s.processId}));
-    const r=new HardModeReader({documents:path.join(root,'Documents'),process:inspect,nowNs:()=>now,
+    const r=ownedReader({documents:path.join(root,'Documents'),process:inspect,nowNs:()=>now,
       file:async(filename,limit,signal)=>{if(filename.endsWith('game.log.txt'))logReads++;return readStableFile(filename,limit,signal);},
       metadata:{realpath:async filename=>{if(hold&&filename===global&&stage!=='stat'){entered.resolve();await release.promise;if(stage==='retired-error')throw new Error('Retired metadata failed');}return realpath(filename);},
         stat:async filename=>{if(hold&&filename===global){globalStats++;if(stage==='stat'){entered.resolve();await release.promise;}}if(hold&&filename===local){await entered.promise;throw new Error('Independent metadata failed');}return stat(filename,{bigint:true});}}});
-    const observer=new ProfileObserver(()=>r,()=>now,false),m=new HardModeMonitor((s,ns,at,signal,force)=>observer.readSettings(r,s,ns,at,signal,force).finally(()=>completed.resolve()),undefined,()=>now,undefined,()=>r.canRetain(),undefined,()=>r.drain(),
+    const observer=ownedObserver(()=>r,()=>now,false),m=ownedMonitor((s,ns,at,signal,force)=>observer.readSettings(r,s,ns,at,signal,force).finally(()=>completed.resolve()),undefined,()=>now,undefined,()=>r.canRetain(),undefined,()=>r.drain(),
       {eligible:()=>r.guardEligible(),select:key=>r.selectGuardSource(key),deadline:s=>r.deadline(s)}),current={source,clockId:'clock',monotonicNs:'1'};
     r.onInvalidate(()=>m.invalidate());let pending:Promise<void>|undefined,drain:Promise<void>|undefined,latest:Promise<unknown>|undefined;
     try{
@@ -274,16 +310,16 @@ describe('ET-026 isolated reader (REG-008/010/011)', () => {
       expect(drained).toBe(false);expect(logReads).toBe(reads);expect(inspect).toHaveBeenCalledOnce();
       m.close();observer.close();const retiredToken=observer.status().token;release.resolve();await drain;await pending;await latest;
       expect(observer.status().token).toBe(retiredToken);expect(m.evidence().assessment.state).toBe('unknown');if(stage!=='stat')expect(globalStats).toBe(0);
-    }finally{m.close();observer.close();release.resolve();await drain;await pending;await latest;}
+    }finally{release.resolve();m.close();observer.close();await drain;await pending;await latest;await observer.refresh();await r.drain();}
   });
   it.each(['superseded','guard-error','deadline','log-change','profile-change'] as const)('distinguishes same-source supersession from a required %s failure',async mode=>{
     vi.useFakeTimers();let now=0n,hold=false,held=false;const entered=gate(),release=gate(),completed=gate();
-    const changes:HardModeObservation[]=[],r=new HardModeReader({documents:path.join(root,'Documents'),process:processFacts,nowNs:()=>now,
+    const changes:HardModeObservation[]=[],r=ownedReader({documents:path.join(root,'Documents'),process:processFacts,nowNs:()=>now,
       file:async(filename,limit,signal)=>{
         if(hold&&!held&&filename.endsWith('game.log.txt')){held=true;entered.resolve();await release.promise;if(mode==='guard-error')throw new Error('Independent guard failed');}
         return readStableFile(filename,limit,signal);
       }});
-    const observer=new ProfileObserver(()=>r,()=>now,false),m=new HardModeMonitor((s,ns,at,signal)=>observer.readSettings(r,s,ns,at,signal).finally(()=>completed.resolve()),value=>changes.push(value),()=>now);
+    const observer=ownedObserver(()=>r,()=>now,false),m=ownedMonitor((s,ns,at,signal)=>observer.readSettings(r,s,ns,at,signal).finally(()=>completed.resolve()),value=>changes.push(value),()=>now);
     r.onInvalidate(()=>m.invalidate());const current={source,clockId:'clock',monotonicNs:'1'};
     try{
       observer.select(current);m.select(current);await completed.promise;await observer.refresh();now=1n;
@@ -302,12 +338,12 @@ describe('ET-026 isolated reader (REG-008/010/011)', () => {
         now=2n;observer.select({...bound,boundary:{clockId:'clock',probeSentClientNs:'2',receivedSourceNs:'3'}});
         expect(observer.status()).toEqual({phase:'admitted',token});expect(changes.slice(baseline)).toEqual([]);expect(m.evidence().assessment.state).toBe('pass');
       }else{expect(changes.slice(baseline).some(value=>value.assessment.state==='unknown')).toBe(true);expect(observer.status().token).not.toBe(token);}
-    }finally{release.resolve();m.close();observer.close();await r.drain();}
+    }finally{release.resolve();m.close();observer.close();await observer.refresh();await r.drain();}
   });
   it('allows the initial settings consumer to inspect the process after a pre-snapshot checkpoint tail guard',async()=>{
     vi.useFakeTimers();let now=0n;const completed=gate(),inspect=vi.fn(processFacts);
-    const r=new HardModeReader({documents:path.join(root,'Documents'),process:inspect,nowNs:()=>now}),observer=new ProfileObserver(()=>r,()=>now,false);
-    const m=new HardModeMonitor((s,ns,at,signal)=>observer.readSettings(r,s,ns,at,signal).finally(()=>completed.resolve()),undefined,()=>now);
+    const r=ownedReader({documents:path.join(root,'Documents'),process:inspect,nowNs:()=>now}),observer=ownedObserver(()=>r,()=>now,false);
+    const m=ownedMonitor((s,ns,at,signal)=>observer.readSettings(r,s,ns,at,signal).finally(()=>completed.resolve()),undefined,()=>now);
     const current={source,clockId:'clock',monotonicNs:'1'};
     try{
       void observer.boundary();observer.select(current);m.select(current);await completed.promise;
@@ -317,7 +353,7 @@ describe('ET-026 isolated reader (REG-008/010/011)', () => {
     }finally{m.close();observer.close();}
   });
   it('does not let a standalone cold tail guard launch inspection or occupy the full verification slot',async()=>{
-    const inspect=vi.fn(processFacts),r=new HardModeReader({documents:path.join(root,'Documents'),process:inspect}),signal=new AbortController().signal;
+    const inspect=vi.fn(processFacts),r=ownedReader({documents:path.join(root,'Documents'),process:inspect}),signal=new AbortController().signal;
     const tail=r.resolveProfile(source,created+10000,signal,true);
     await expect(tail).rejects.toThrow('unavailable for tail guard');expect(inspect).not.toHaveBeenCalled();
     expect((await read(r)).assessment.state).toBe('pass');
@@ -326,7 +362,7 @@ describe('ET-026 isolated reader (REG-008/010/011)', () => {
   it('does not let a cached older boundary cancel queued full verification while a retired process drains',async()=>{
     const entered=gate(),release=gate();let active=0,maximum=0;
     const inspect=vi.fn(async(s:SourceIdentity)=>{maximum=Math.max(maximum,++active);try{if(s.processId===456){entered.resolve();await release.promise;}return {...await processFacts(),pid:s.processId};}finally{active--;}});
-    const r=new HardModeReader({documents:path.join(root,'Documents'),process:inspect}),signal=new AbortController().signal;
+    const r=ownedReader({documents:path.join(root,'Documents'),process:inspect}),signal=new AbortController().signal;
     await read(r);const retired=r.read({...source,processId:456},'1',created+10000,signal),failed=expect(retired).rejects.toThrow();await entered.promise;
     const queued=r.read({...source,processId:789},'1',created+10000,signal);
     try{
@@ -336,7 +372,7 @@ describe('ET-026 isolated reader (REG-008/010/011)', () => {
   });
   it('reads settings initially, on change and at sixty seconds, with one successful inspection per lifetime',async()=>{
     let now=0n,configReads=0;
-    const inspect=vi.fn(processFacts),r=new HardModeReader({documents:path.join(root,'Documents'),process:inspect,nowNs:()=>now,
+    const inspect=vi.fn(processFacts),r=ownedReader({documents:path.join(root,'Documents'),process:inspect,nowNs:()=>now,
       file:async(filename,limit,signal)=>{if(!filename.endsWith('game.log.txt'))configReads++;return readStableFile(filename,limit,signal);}});
     expect((await read(r)).assessment.state).toBe('pass');expect(configReads).toBe(3);
     for(let second=1;second<60;second++){now=BigInt(second)*1_000_000_000n;await appendFile(path.join(game,'game.log.txt'),'Unrelated append\n');expect((await read(r)).assessment.state).toBe('pass');}
@@ -367,7 +403,7 @@ describe('ET-026 isolated reader (REG-008/010/011)', () => {
   });
   it('retries failed inspection at 5/15/30/60 seconds, caps starts across lifetimes and caches recovery',async()=>{
     let now=0n,recover=false;const inspect=vi.fn(()=>recover?processFacts():Promise.resolve(null));
-    const r=new HardModeReader({documents:path.join(root,'Documents'),process:inspect,nowNs:()=>now});
+    const r=ownedReader({documents:path.join(root,'Documents'),process:inspect,nowNs:()=>now});
     const attempt=()=>read(r).catch(()=>undefined);
     await attempt();expect(inspect).toHaveBeenCalledTimes(1);
     for(const [before,due,count] of [[4,5,2],[19,20,3],[49,50,4],[109,110,5]] as const){now=BigInt(before)*1_000_000_000n;await attempt();expect(inspect).toHaveBeenCalledTimes(count-1);now=BigInt(due)*1_000_000_000n;await attempt();expect(inspect).toHaveBeenCalledTimes(count);}
@@ -380,7 +416,7 @@ describe('ET-026 isolated reader (REG-008/010/011)', () => {
     let now=0n;const {evaluateHardMode,parseHardModeConfig}=await import('../../packages/telemetry-core/src/hard-mode');
     const result={assessment:evaluateHardMode(parseHardModeConfig(HARD_MODE_CONFIG),1000,'fixture'),binding:'a'.repeat(64),pluginSessionId:source.pluginSessionId,sourceMonotonicNs:'1'};
     let finish!:()=>void;const full=vi.fn(),scan=vi.fn((_s:SourceIdentity,_ns:string,_at:number,_signal:AbortSignal,force?:boolean)=>scan.mock.calls.length===1?Promise.resolve(result):new Promise<HardModeObservation>(done=>{expect(force).toBe(true);finish=()=>done(result);}));
-    const m=new HardModeMonitor(scan,undefined,()=>now,full),current={source,clockId:'clock',monotonicNs:'1'};
+    const m=ownedMonitor(scan,undefined,()=>now,full),current={source,clockId:'clock',monotonicNs:'1'};
     m.select(current);await Promise.resolve();now=1n;m.select({...current,boundary:{clockId:'clock',probeSentClientNs:'1',receivedSourceNs:'2'}});await m.refresh();
     now=100_000_000n;const a=m.refresh(true),b=m.refresh(true);expect(a).toBe(b);expect(full).toHaveBeenCalledOnce();expect(scan).toHaveBeenCalledTimes(2);finish();await a;
     now=900_000_000n;await m.refresh(true);expect(scan).toHaveBeenCalledTimes(2);
@@ -388,10 +424,10 @@ describe('ET-026 isolated reader (REG-008/010/011)', () => {
   });
   it('latches one manual full read after a cached reconnect has drained but awaits causal binding',async()=>{
     let now=0n,configReads=0,active=0,maximum=0,completed=gate();
-    const inspect=vi.fn(processFacts),r=new HardModeReader({documents:path.join(root,'Documents'),process:inspect,nowNs:()=>now,
+    const inspect=vi.fn(processFacts),r=ownedReader({documents:path.join(root,'Documents'),process:inspect,nowNs:()=>now,
       file:async(filename,limit,signal)=>{maximum=Math.max(maximum,++active);try{if(!filename.endsWith('game.log.txt'))configReads++;return await readStableFile(filename,limit,signal);}finally{active--;}}});
-    const observer=new ProfileObserver(()=>r,()=>now,false),scan=vi.fn((s:SourceIdentity,ns:string,at:number,signal:AbortSignal,force?:boolean)=>observer.readSettings(r,s,ns,at,signal,force).finally(()=>completed.resolve()));
-    const m=new HardModeMonitor(scan,undefined,()=>now,()=>r.requestFull(),undefined,undefined,()=>r.drain()),current={source,clockId:'clock',monotonicNs:'1'};
+    const observer=ownedObserver(()=>r,()=>now,false),scan=vi.fn((s:SourceIdentity,ns:string,at:number,signal:AbortSignal,force?:boolean)=>observer.readSettings(r,s,ns,at,signal,force).finally(()=>completed.resolve()));
+    const m=ownedMonitor(scan,undefined,()=>now,()=>r.requestFull(),undefined,undefined,()=>r.drain()),current={source,clockId:'clock',monotonicNs:'1'};
     try{
       observer.select(current);m.select(current);await completed.promise;await observer.refresh();now=1n;
       const bound={...current,boundary:{clockId:'clock',probeSentClientNs:'1',receivedSourceNs:'2'}};observer.select(bound);m.select(bound);await m.refresh();await r.drain();
@@ -403,14 +439,14 @@ describe('ET-026 isolated reader (REG-008/010/011)', () => {
       const rebound={...current,boundary:{clockId:'clock',probeSentClientNs:now.toString(),receivedSourceNs:'3'}};observer.select(rebound);m.select(rebound);
       await pending;await r.drain();expect(configReads).toBe(6);expect(scan).toHaveBeenCalledTimes(3);expect(scan.mock.calls[2][4]).toBe(true);
       expect(inspect).toHaveBeenCalledOnce();expect(maximum).toBe(3);expect(m.evidence().assessment.state).toBe('pass');
-    }finally{m.close();observer.close();await r.drain();}
+    }finally{m.close();observer.close();await observer.refresh();await r.drain();}
   });
   it('requires a later causal probe for a changed profile found by the latched manual follow-up',async()=>{
     let now=0n,configReads=0,completed=gate();const forcedDone=gate();
-    const r=new HardModeReader({documents:path.join(root,'Documents'),process:processFacts,nowNs:()=>now,
-      file:async(filename,limit,signal)=>{if(!filename.endsWith('game.log.txt'))configReads++;return readStableFile(filename,limit,signal);}}),observer=new ProfileObserver(()=>r,()=>now,false);
+    const r=ownedReader({documents:path.join(root,'Documents'),process:processFacts,nowNs:()=>now,
+      file:async(filename,limit,signal)=>{if(!filename.endsWith('game.log.txt'))configReads++;return readStableFile(filename,limit,signal);}}),observer=ownedObserver(()=>r,()=>now,false);
     const scan=vi.fn((s:SourceIdentity,ns:string,at:number,signal:AbortSignal,force?:boolean)=>observer.readSettings(r,s,ns,at,signal,force).then(value=>{completed.resolve();if(force)forcedDone.resolve();return value;}));
-    const m=new HardModeMonitor(scan,undefined,()=>now,()=>r.requestFull(),()=>r.canRetain(),undefined,()=>r.drain()),current={source,clockId:'clock',monotonicNs:'1'};
+    const m=ownedMonitor(scan,undefined,()=>now,()=>r.requestFull(),()=>r.canRetain(),undefined,()=>r.drain()),current={source,clockId:'clock',monotonicNs:'1'};
     r.onInvalidate(()=>m.invalidate());
     try{
       observer.select(current);m.select(current);await completed.promise;await observer.refresh();now=1n;
@@ -422,13 +458,13 @@ describe('ET-026 isolated reader (REG-008/010/011)', () => {
       await forcedDone.promise;await r.drain();await observer.refresh();expect(configReads).toBe(6);expect(m.evidence().assessment.state).toBe('unknown');expect(observer.evidence()).toBeUndefined();
       now++;const later={...current,boundary:{clockId:'clock',probeSentClientNs:now.toString(),receivedSourceNs:'4'}};observer.select(later);m.select(later);await pending;
       expect(m.evidence().assessment.state).toBe('pass');expect(m.evidence().binding).not.toBe(original);expect(m.evidence().sourceMonotonicNs).toBe('5');expect(scan).toHaveBeenCalledTimes(3);
-    }finally{m.close();observer.close();await r.drain();}
+    }finally{m.close();observer.close();await observer.refresh();await r.drain();}
   });
   it('drains the physical reader before one forced follow-up and joins clicks throughout forced work',async()=>{
     const finished=gate(),physical=gate(),forcedEntered=gate(),forced=gate<HardModeObservation>();let now=0n;
     const result=unknownObservation();
     const scan=vi.fn((_s:SourceIdentity,_ns:string,_at:number,_signal:AbortSignal,force?:boolean)=>{if(scan.mock.calls.length===1){finished.resolve();return Promise.resolve(result);}expect(force).toBe(true);forcedEntered.resolve();return forced.promise;});
-    const drain=vi.fn(()=>drain.mock.calls.length===1?physical.promise:Promise.resolve()),m=new HardModeMonitor(scan,undefined,()=>now,undefined,undefined,undefined,drain);
+    const drain=vi.fn(()=>drain.mock.calls.length===1?physical.promise:Promise.resolve()),m=ownedMonitor(scan,undefined,()=>now,undefined,undefined,undefined,drain);
     try{
       m.select({source,clockId:'clock',monotonicNs:'1'});await finished.promise;
       const pending=m.refresh(true);expect(m.refresh(true)).toBe(pending);await Promise.resolve();expect(scan).toHaveBeenCalledOnce();
@@ -441,7 +477,7 @@ describe('ET-026 isolated reader (REG-008/010/011)', () => {
   it('coalesces cooldown clicks into one nonresetting timer and preserves the one-second start limit',async()=>{
     vi.useFakeTimers();const start=Date.now(),now=()=>BigInt(Date.now()-start)*1_000_000n;
     const scan=vi.fn<ConstructorParameters<typeof HardModeMonitor>[0]>(()=>Promise.resolve(unknownObservation()));
-    const m=new HardModeMonitor(scan,undefined,now);
+    const m=ownedMonitor(scan,undefined,now);
     try{
       m.select({source,clockId:'clock',monotonicNs:'1'});await m.refresh();await vi.advanceTimersByTimeAsync(100);await m.refresh(true);
       expect(scan).toHaveBeenCalledTimes(2);
@@ -453,7 +489,7 @@ describe('ET-026 isolated reader (REG-008/010/011)', () => {
   });
   it.each(['close','detach','replace'] as const)('retires manual cooldown intent on %s',async ending=>{
     vi.useFakeTimers();const start=Date.now(),now=()=>BigInt(Date.now()-start)*1_000_000n;
-    const scan=vi.fn(()=>Promise.resolve(unknownObservation())),m=new HardModeMonitor(scan,undefined,now);
+    const scan=vi.fn(()=>Promise.resolve(unknownObservation())),m=ownedMonitor(scan,undefined,now);
     m.select({source,clockId:'clock',monotonicNs:'1'});await m.refresh();await m.refresh(true);await vi.advanceTimersByTimeAsync(100);await m.refresh(true);
     expect(vi.getTimerCount()).toBe(1);
     if(ending==='close')m.close();else m.select(ending==='detach'?null:{source:{...source,processId:456},clockId:'other-clock',monotonicNs:'1'});
@@ -461,7 +497,7 @@ describe('ET-026 isolated reader (REG-008/010/011)', () => {
   });
   it.each(['close','detach','replace'] as const)('retires queued manual intent while the old physical operation drains on %s',async ending=>{
     const physical=gate(),entered=gate(),result=unknownObservation();
-    const scan=vi.fn<ConstructorParameters<typeof HardModeMonitor>[0]>(()=>{entered.resolve();return Promise.resolve(result);}),drain=vi.fn(()=>drain.mock.calls.length===1?physical.promise:Promise.resolve()),m=new HardModeMonitor(scan,undefined,()=>0n,undefined,undefined,undefined,drain);
+    const scan=vi.fn<ConstructorParameters<typeof HardModeMonitor>[0]>(()=>{entered.resolve();return Promise.resolve(result);}),drain=vi.fn(()=>drain.mock.calls.length===1?physical.promise:Promise.resolve()),m=ownedMonitor(scan,undefined,()=>0n,undefined,undefined,undefined,drain);
     try{
       m.select({source,clockId:'clock',monotonicNs:'1'});await entered.promise;const pending=m.refresh(true);
       if(ending==='close')m.close();else m.select(ending==='detach'?null:{source:{...source,processId:456},clockId:'other-clock',monotonicNs:'1'});
@@ -472,7 +508,7 @@ describe('ET-026 isolated reader (REG-008/010/011)', () => {
   it('accepts new-epoch manual intent while a retired forced operation still owns physical drain',async()=>{
     const physical=gate(),forcedEntered=gate();let now=0n;
     const scan=vi.fn((_s:SourceIdentity,_ns:string,_at:number,_signal:AbortSignal,force?:boolean)=>{if(force)forcedEntered.resolve();return Promise.resolve(unknownObservation());});
-    const drain=vi.fn(()=>drain.mock.calls.length===2?physical.promise:Promise.resolve()),m=new HardModeMonitor(scan,undefined,()=>now,undefined,undefined,undefined,drain);
+    const drain=vi.fn(()=>drain.mock.calls.length===2?physical.promise:Promise.resolve()),m=ownedMonitor(scan,undefined,()=>now,undefined,undefined,undefined,drain);
     try{
       m.select({source,clockId:'clock',monotonicNs:'1'});await m.refresh();now=1_000_000_000n;const retired=m.refresh(true);await forcedEntered.promise;
       m.select({source:{...source,processId:456},clockId:'new-clock',monotonicNs:'1'});now=2_000_000_000n;void m.refresh(true);expect(scan).toHaveBeenCalledTimes(2);
@@ -484,7 +520,7 @@ describe('ET-026 isolated reader (REG-008/010/011)', () => {
     const {evaluateHardMode,parseHardModeConfig}=await import('../../packages/telemetry-core/src/hard-mode');
     let config=HARD_MODE_CONFIG;
     const audit=vi.fn(),health=vi.fn(),scan=vi.fn(()=>Promise.resolve({assessment:evaluateHardMode(parseHardModeConfig(config),Date.now(),'fixture'),binding:'a'.repeat(64),pluginSessionId:source.pluginSessionId,sourceMonotonicNs:'1'}));
-    const m=new HardModeMonitor(scan,audit,now,undefined,undefined,health),current={source,clockId:'clock',monotonicNs:'1'};
+    const m=ownedMonitor(scan,audit,now,undefined,undefined,health),current={source,clockId:'clock',monotonicNs:'1'};
     m.start();await vi.advanceTimersByTimeAsync(10);m.select(current);await Promise.resolve();await vi.advanceTimersByTimeAsync(1);m.select({...current,boundary:{clockId:'clock',probeSentClientNs:now().toString(),receivedSourceNs:'2'}});await m.refresh();
     const before=audit.mock.calls.length;config=HARD_MODE_CONFIG.replace('g_fatigue "1"','g_fatigue "0"');
     await vi.advanceTimersByTimeAsync(4998);expect(scan).toHaveBeenCalledOnce();expect(audit).toHaveBeenCalledTimes(before);expect(health).toHaveBeenCalledTimes(5);expect(m.evidence().assessment.state).toBe('pass');
@@ -492,7 +528,7 @@ describe('ET-026 isolated reader (REG-008/010/011)', () => {
   });
   it('waits for a held guard to drain without busy rearming and does not resurrect timers after close',async()=>{
     vi.useFakeTimers();const start=Date.now(),now=()=>BigInt(Date.now()-start)*1_000_000n,held=gate<HardModeObservation>();
-    const scan=vi.fn(()=>held.promise),m=new HardModeMonitor(scan,undefined,now);
+    const scan=vi.fn(()=>held.promise),m=ownedMonitor(scan,undefined,now);
     m.start();await vi.advanceTimersByTimeAsync(10);m.select({source,clockId:'clock',monotonicNs:'1'});const work=m.refresh();
     await vi.advanceTimersByTimeAsync(15000);expect(scan).toHaveBeenCalledOnce();
     m.close();expect(vi.getTimerCount()).toBe(0);held.resolve(m.evidence());await work;await Promise.resolve();
@@ -587,8 +623,8 @@ describe('ET-026 isolated reader (REG-008/010/011)', () => {
     vi.useFakeTimers();let now=0n,active=0,maximum=0,calls=0,entered=gate(),release=gate(),done=gate();
     const inspect=vi.fn(async(s:SourceIdentity)=>{maximum=Math.max(maximum,++active);const call=++calls;
       try{if(call===1||call===3){entered.resolve();await release.promise;}return {...await processFacts(),pid:s.processId,createdUtcMs:created+(s.processId===123?0:s.processId===456?1000:2000)};}finally{active--;}});
-    const options={documents:path.join(root,'Documents'),process:inspect,nowNs:()=>now};let r=new HardModeReader(options),observer=new ProfileObserver(()=>r,()=>now,false);
-    let m=new HardModeMonitor((s,ns,at,signal)=>observer.readSettings(r,s,ns,at,signal).then(value=>{done.resolve();return value;}),undefined,()=>now);
+    const options={documents:path.join(root,'Documents'),process:inspect,nowNs:()=>now};let r=ownedReader(options),observer=ownedObserver(()=>r,()=>now,false);
+    let m=ownedMonitor((s,ns,at,signal)=>observer.readSettings(r,s,ns,at,signal).then(value=>{done.resolve();return value;}),undefined,()=>now);
     const initial={source,clockId:'old-clock',monotonicNs:'1'};observer.select(initial);m.select(initial);const old=m.refresh();await entered.promise;
     now=100_000_000n;await rename(path.join(game,'game.log.txt'),path.join(game,'held-old.log'));await writeFile(path.join(game,'game.log.txt'),header.replace('12:00:00','12:00:01')+selection+save());
     const next={source:{...source,processId:456,processInstanceId:'10000000-0000-4000-8000-000000000002',pluginSessionId:'20000000-0000-4000-8000-000000000002'},clockId:'new-clock',monotonicNs:'1'};
@@ -599,16 +635,16 @@ describe('ET-026 isolated reader (REG-008/010/011)', () => {
     const third={...next,source:{...next.source,processId:789,pluginSessionId:'20000000-0000-4000-8000-000000000003'},clockId:'third-clock'};
     observer.select(third);m.select(third);const closing=m.refresh();await entered.promise;m.close();observer.close();release.resolve();await closing;
     expect(observer.evidence()).toBeUndefined();expect(m.evidence().assessment.state).toBe('unknown');
-    r=new HardModeReader(options);observer=new ProfileObserver(()=>r,()=>now,false);done=gate();
-    m=new HardModeMonitor((s,ns,at,signal)=>observer.readSettings(r,s,ns,at,signal).then(value=>{done.resolve();return value;}),undefined,()=>now);
+    r=ownedReader(options);observer=ownedObserver(()=>r,()=>now,false);done=gate();
+    m=ownedMonitor((s,ns,at,signal)=>observer.readSettings(r,s,ns,at,signal).then(value=>{done.resolve();return value;}),undefined,()=>now);
     observer.select(third);m.select(third);const restarted=m.refresh();await done.promise;await observer.refresh();now++;
     const fresh={...third,boundary:{clockId:third.clockId,probeSentClientNs:now.toString(),receivedSourceNs:'3'}};observer.select(fresh);m.select(fresh);await restarted;
     expect(observer.evidence()?.pluginSessionId).toBe(third.source.pluginSessionId);expect(m.evidence().assessment.state).toBe('pass');expect(calls).toBe(4);expect(maximum).toBe(1);m.close();observer.close();
   });
   it('reports bounded private rejection transitions anew for every epoch and retains unchanged admitted proof',async()=>{
     vi.useFakeTimers();let now=0n;const output:(ProfileDiagnostic & {count:number;epoch:number})[]=[],diagnostic=coalesceProfileDiagnostics(value=>output.push(value));
-    const inspect=vi.fn(processFacts),r=new HardModeReader({documents:path.join(root,'Documents'),process:inspect,nowNs:()=>now,diagnostic});
-    const observer=new ProfileObserver(()=>r,()=>now,false,diagnostic),current={source,clockId:'clock',monotonicNs:'1'};
+    const inspect=vi.fn(processFacts),r=ownedReader({documents:path.join(root,'Documents'),process:inspect,nowNs:()=>now,diagnostic});
+    const observer=ownedObserver(()=>r,()=>now,false,diagnostic),current={source,clockId:'clock',monotonicNs:'1'};
     observer.select(current);await observer.refresh();now=1n;observer.select({...current,boundary:{clockId:'clock',probeSentClientNs:'1',receivedSourceNs:'2'}});
     expect(observer.evidence()).toBeDefined();now=3_000_000_001n;expect(observer.evidence()).toBeDefined();expect(output.at(-1)?.code).toBe('PROFILE_ADMITTED');
     for(let n=0;n<2;n++){
@@ -622,8 +658,8 @@ describe('ET-026 isolated reader (REG-008/010/011)', () => {
   });
   it('does not multiply physical scans on fresh/stale/null oscillation of the same lifetime and recovers after loading',async()=>{
     vi.useFakeTimers();let now=0n,done=gate();
-    const inspect=vi.fn(processFacts),r=new HardModeReader({documents:path.join(root,'Documents'),process:inspect,nowNs:()=>now});
-    const observer=new ProfileObserver(()=>r,()=>now,false),m=new HardModeMonitor((s,ns,at,signal)=>observer.readSettings(r,s,ns,at,signal).then(value=>{done.resolve();return value;},error=>{done.resolve();throw error;}),undefined,()=>now);
+    const inspect=vi.fn(processFacts),r=ownedReader({documents:path.join(root,'Documents'),process:inspect,nowNs:()=>now});
+    const observer=ownedObserver(()=>r,()=>now,false),m=ownedMonitor((s,ns,at,signal)=>observer.readSettings(r,s,ns,at,signal).then(value=>{done.resolve();return value;},error=>{done.resolve();throw error;}),undefined,()=>now);
     const current={source,clockId:'clock',monotonicNs:'1'};observer.select(current);m.select(current);const initial=m.refresh();await done.promise;await observer.refresh();
     now=1n;const bound={...current,boundary:{clockId:'clock',probeSentClientNs:'1',receivedSourceNs:'2'}};observer.select(bound);m.select(bound);await initial;
     for(let n=1;n<=9;n++){now=BigInt(n)*100_000_000n;observer.select(null);m.select(null);observer.select(current);m.select(current);await m.refresh();await observer.refresh();}
@@ -639,10 +675,10 @@ describe('ET-026 isolated reader (REG-008/010/011)', () => {
   it('starts a fresh process epoch while the previous process is still waiting for its causal probe', async () => {
     vi.useFakeTimers(); let now = 0n, currentCreated = created;
     const inspect = vi.fn(async (s: SourceIdentity) => ({...await processFacts(), pid: s.processId, createdUtcMs: currentCreated}));
-    const r = new HardModeReader({documents: path.join(root, 'Documents'), process: inspect, nowNs: () => now});
-    const observer = new ProfileObserver(() => r, () => now, false);
+    const r = ownedReader({documents: path.join(root, 'Documents'), process: inspect, nowNs: () => now});
+    const observer = ownedObserver(() => r, () => now, false);
     let readDone = gate(), readFailure: unknown;
-    const monitor = new HardModeMonitor((s, ns, at, signal) => observer.readSettings(r, s, ns, at, signal).then(value => {readDone.resolve(); return value;}, error => {readFailure = error; readDone.resolve(); throw error;}), undefined, () => now);
+    const monitor = ownedMonitor((s, ns, at, signal) => observer.readSettings(r, s, ns, at, signal).then(value => {readDone.resolve(); return value;}, error => {readFailure = error; readDone.resolve(); throw error;}), undefined, () => now);
     const initial = {source, clockId: 'first-clock', monotonicNs: '1'};
     observer.select(initial); monitor.select(initial); const old = monitor.refresh();
     await readDone.promise; await observer.refresh(); expect(inspect).toHaveBeenCalledTimes(1);
@@ -662,7 +698,7 @@ describe('ET-026 isolated reader (REG-008/010/011)', () => {
     monitor.close(); observer.close();
   });
   it('shares one successful process inspection across consumers and later scans', async () => {
-    const inspect = vi.fn(processFacts), r = new HardModeReader({documents: path.join(root, 'Documents'), process: inspect});
+    const inspect = vi.fn(processFacts), r = ownedReader({documents: path.join(root, 'Documents'), process: inspect});
     const [settings, identity] = await Promise.all([read(r), r.resolveProfile(source, created + 10000, new AbortController().signal)]);
     expect(settings.assessment.state).toBe('pass'); expect(settings.binding).toBe(identity.binding);
     expect(inspect).toHaveBeenCalledTimes(1);
@@ -670,7 +706,7 @@ describe('ET-026 isolated reader (REG-008/010/011)', () => {
   });
   it('serializes growing-log reads and retains actual truncation detection', async () => {
     const captured = gate(), release = gate(); let reads = 0;
-    const inspect = vi.fn(processFacts), r = new HardModeReader({documents: path.join(root, 'Documents'), process: inspect,
+    const inspect = vi.fn(processFacts), r = ownedReader({documents: path.join(root, 'Documents'), process: inspect,
       file: async (file, limit, signal) => {
         const value = await readStableFile(file, limit, signal);
         if (file.endsWith('game.log.txt') && ++reads === 1) {captured.resolve(); await release.promise;}
@@ -688,7 +724,7 @@ describe('ET-026 isolated reader (REG-008/010/011)', () => {
     if(failure==='encoding')await writeFile(path.join(profile,'config.cfg'),Buffer.from([0xff]));
     if(failure==='parse')await writeFile(path.join(profile,'config.cfg'),'uset g_fatigue "unsupported-value"');
     if(failure==='assessment')await writeFile(path.join(profile,'config.cfg'),HARD_MODE_CONFIG.replace('g_fatigue "1"','g_fatigue "0"'));
-    const inspect = vi.fn(processFacts), r = new HardModeReader({documents: path.join(root, 'Documents'), process: inspect});
+    const inspect = vi.fn(processFacts), r = ownedReader({documents: path.join(root, 'Documents'), process: inspect});
     const [settings, identity] = await Promise.allSettled([read(r), r.resolveProfile(source, created + 10000, new AbortController().signal)]);
     if(failure==='missing'||failure==='encoding')expect(settings.status).toBe('rejected');
     else {expect(settings.status).toBe('fulfilled');if(settings.status==='fulfilled')expect(settings.value.assessment.state).toBe(failure==='parse'?'unknown':'fail');}
@@ -699,7 +735,7 @@ describe('ET-026 isolated reader (REG-008/010/011)', () => {
   it('cancels one consumer independently and aborts physical work when the last consumer leaves', async () => {
     const entered = gate(), release = gate(); let physicalSignal!: AbortSignal;
     const inspect = vi.fn(async (_source: SourceIdentity, signal: AbortSignal) => {physicalSignal = signal; entered.resolve(); await release.promise; return processFacts();});
-    const r = new HardModeReader({documents: path.join(root, 'Documents'), process: inspect});
+    const r = ownedReader({documents: path.join(root, 'Documents'), process: inspect});
     const a = new AbortController(), b = new AbortController();
     const first = r.read(source, '1', created + 10000, a.signal), firstFailure = expect(first).rejects.toThrow();
     await entered.promise;
@@ -711,7 +747,7 @@ describe('ET-026 isolated reader (REG-008/010/011)', () => {
   it('retains the surviving profile consumer and shares the original timing with a late join', async () => {
     const entered = gate(), release = gate(); let now = 0n;
     const inspect = vi.fn(async () => {if (inspect.mock.calls.length === 1) {entered.resolve(); await release.promise;} return processFacts();});
-    const r = new HardModeReader({documents: path.join(root, 'Documents'), process: inspect, nowNs: () => now});
+    const r = ownedReader({documents: path.join(root, 'Documents'), process: inspect, nowNs: () => now});
     const cancelled = new AbortController(), a = r.read(source, '1', created + 10000, cancelled.signal), failed = expect(a).rejects.toThrow();
     await entered.promise; now = 1_500_000_000n;
     const b = r.resolveProfile(source, created + 10000, new AbortController().signal);
@@ -725,7 +761,7 @@ describe('ET-026 isolated reader (REG-008/010/011)', () => {
       if (inspect.mock.calls.length === 1) {entered.resolve(); await release.promise;}
       active--; return {...await processFacts(), pid: s.processId};
     });
-    const r = new HardModeReader({documents: path.join(root, 'Documents'), process: inspect});
+    const r = ownedReader({documents: path.join(root, 'Documents'), process: inspect});
     const old = read(r), oldFailure = expect(old).rejects.toThrow(); await entered.promise;
     const skipped = r.resolveProfile({...source, processId: 124}, created + 10000, new AbortController().signal), skippedFailure = expect(skipped).rejects.toThrow();
     const latest = r.resolveProfile({...source, processId: 125}, created + 10000, new AbortController().signal);
@@ -736,11 +772,11 @@ describe('ET-026 isolated reader (REG-008/010/011)', () => {
     vi.useFakeTimers(); let now = 0n;
     const entered = gate(), release = gate(), completed = gate();
     const inspect = vi.fn(async () => {if (inspect.mock.calls.length === 1) {entered.resolve(); await release.promise;} return processFacts();});
-    const r = new HardModeReader({documents: path.join(root, 'Documents'), process: inspect, nowNs: () => now});
-    const observer = new ProfileObserver(() => r, () => now, false);
+    const r = ownedReader({documents: path.join(root, 'Documents'), process: inspect, nowNs: () => now});
+    const observer = ownedObserver(() => r, () => now, false);
     observer.select({source, clockId: 'clock', monotonicNs: '1'}); observer.start(); expect(inspect).not.toHaveBeenCalled();
     const original = read(r); await entered.promise; now = 1_500_000_000n;
-    const m = new HardModeMonitor((s, ns, at, signal) => {
+    const m = ownedMonitor((s, ns, at, signal) => {
       return observer.readSettings(r,s,ns,at,signal).then(value => {completed.resolve(); return value;});
     }, undefined, () => now);
     m.select({source, clockId: 'clock', monotonicNs: '1'}); now = 1_600_000_000n; release.resolve();
@@ -753,12 +789,12 @@ describe('ET-026 isolated reader (REG-008/010/011)', () => {
   });
   it('rejects a causal reply after the original shared deadline even before timer callbacks run', async () => {
     vi.useFakeTimers(); let now = 0n;
-    const r = new HardModeReader({documents: path.join(root, 'Documents'), process: processFacts, nowNs: () => now});
+    const r = ownedReader({documents: path.join(root, 'Documents'), process: processFacts, nowNs: () => now});
     const value = await r.readTimed(source, '1', created + 10000, new AbortController().signal);
-    const observer = new ProfileObserver(() => r, () => now, false);
+    const observer = ownedObserver(() => r, () => now, false);
     observer.select({source, clockId: 'clock', monotonicNs: '1'}); await observer.refresh();
     now = 1_500_000_000n;
-    const m = new HardModeMonitor(() => Promise.resolve(value), undefined, () => now);
+    const m = ownedMonitor(() => Promise.resolve(value), undefined, () => now);
     m.select({source, clockId: 'clock', monotonicNs: '1'}); await Promise.resolve();
     now = 2_000_000_001n;
     const late = {source, clockId: 'clock', monotonicNs: '2', boundary: {clockId: 'clock', probeSentClientNs: '1900000000', receivedSourceNs: '2'}};
@@ -769,9 +805,9 @@ describe('ET-026 isolated reader (REG-008/010/011)', () => {
   it.each(['deadline','physical-first','early-subscriber-deadline','consumer-cancel'] as const)('retains unchanged proof across %s without extending the shared physical deadline',async ending=>{
     vi.useFakeTimers();const start=Date.now(),now=()=>BigInt(Date.now()-start)*1_000_000n;
     const entered=gate(),release=gate();let periodic=false,completed=gate();
-    const inspect=vi.fn(processFacts),r=new HardModeReader({documents:path.join(root,'Documents'),process:inspect,nowNs:now,
+    const inspect=vi.fn(processFacts),r=ownedReader({documents:path.join(root,'Documents'),process:inspect,nowNs:now,
       file:async(filename,limit,signal)=>{if(periodic&&filename===path.join(profile,'config.cfg')){entered.resolve();await release.promise;}return readStableFile(filename,limit,signal);}});
-    const observer=new ProfileObserver(()=>r,now,false),m=new HardModeMonitor((s,ns,at,signal)=>observer.readSettings(r,s,ns,at,signal).then(value=>{completed.resolve();return value;}),undefined,now,undefined,()=>r.canRetain(),undefined,undefined,{eligible:()=>r.guardEligible(),select:()=>undefined,deadline:s=>r.deadline(s)});
+    const observer=ownedObserver(()=>r,now,false),m=ownedMonitor((s,ns,at,signal)=>observer.readSettings(r,s,ns,at,signal).then(value=>{completed.resolve();return value;}),undefined,now,undefined,()=>r.canRetain(),undefined,undefined,{eligible:()=>r.guardEligible(),select:()=>undefined,deadline:s=>r.deadline(s)});
     // The observer owns source retirement here; closing only the monitor remains an independent consumer cancellation.
     const current={source,clockId:'clock',monotonicNs:'1'};
     try {
@@ -791,15 +827,15 @@ describe('ET-026 isolated reader (REG-008/010/011)', () => {
       await vi.advanceTimersByTimeAsync(2000);await pending;await rawWork;
       expect(m.evidence().assessment.state).toBe(ending==='consumer-cancel'?'unknown':'pass');
       expect(observer.evidence()).toBeDefined();expect(inspect).toHaveBeenCalledOnce();
-    } finally {release.resolve();m.close();observer.close();}
+    } finally {release.resolve();m.close();observer.close();await observer.refresh();await r.drain();}
   });
   it.each(['optional-bytes','required-guards'] as const)('counts a scheduled deadline using only independently eligible evidence: %s',async blocked=>{
     vi.useFakeTimers();const start=Date.now(),now=()=>BigInt(Date.now()-start)*1_000_000n;
     const entered=gate(),release=gate(),completed=gate(),scheduledCheck=gate(),publications:HardModeObservation[]=[];let hold=false,lastReadError:unknown;
-    const r=new HardModeReader({documents:path.join(root,'Documents'),process:processFacts,nowNs:now,
+    const r=ownedReader({documents:path.join(root,'Documents'),process:processFacts,nowNs:now,
       metadata:{realpath:async filename=>{if(hold&&blocked==='required-guards'){entered.resolve();await release.promise;}return realpath(filename);},stat:filename=>stat(filename,{bigint:true})},
       file:async(filename,limit,signal)=>{if(hold&&blocked==='optional-bytes'&&filename===path.join(profile,'config.cfg')){entered.resolve();await release.promise;}return readStableFile(filename,limit,signal);}});
-    const observer=new ProfileObserver(()=>r,now,false),m=new HardModeMonitor((s,ns,at,signal)=>observer.readSettings(r,s,ns,at,signal)
+    const observer=ownedObserver(()=>r,now,false),m=ownedMonitor((s,ns,at,signal)=>observer.readSettings(r,s,ns,at,signal)
       .catch(error=>{lastReadError=error;throw error;}).finally(()=>completed.resolve()),value=>{publications.push(value);if(value.check?.sequence===2)scheduledCheck.resolve();},now,undefined,()=>r.canRetain(),undefined,undefined,
       {eligible:()=>r.guardEligible(),select:()=>undefined,deadline:s=>r.deadline(s)}),current={source,clockId:'clock',monotonicNs:'1'};
     r.onInvalidate((_profileChanged,diagnostic)=>m.invalidate(diagnostic));let pending:Promise<void>|undefined;
@@ -822,9 +858,9 @@ describe('ET-026 isolated reader (REG-008/010/011)', () => {
   });
   it.each(['hard-mode','profile','status','retention'] as const)('expires the shared required guard synchronously through %s before delayed timer callbacks',async first=>{
     vi.useFakeTimers();let now=0n,hold=false;const entered=gate(),release=gate(),completed=gate();
-    const r=new HardModeReader({documents:path.join(root,'Documents'),process:processFacts,nowNs:()=>now,
-      file:async(filename,limit,signal)=>{if(hold&&filename===path.join(profile,'config.cfg')){entered.resolve();await release.promise;}return readStableFile(filename,limit,signal);}}),observer=new ProfileObserver(()=>r,()=>now,false);
-    const m=new HardModeMonitor((s,ns,at,signal,force)=>observer.readSettings(r,s,ns,at,signal,force).finally(()=>completed.resolve()),undefined,()=>now,undefined,()=>r.canRetain(),undefined,()=>r.drain(),
+    const r=ownedReader({documents:path.join(root,'Documents'),process:processFacts,nowNs:()=>now,
+      file:async(filename,limit,signal)=>{if(hold&&filename===path.join(profile,'config.cfg')){entered.resolve();await release.promise;}return readStableFile(filename,limit,signal);}}),observer=ownedObserver(()=>r,()=>now,false);
+    const m=ownedMonitor((s,ns,at,signal,force)=>observer.readSettings(r,s,ns,at,signal,force).finally(()=>completed.resolve()),undefined,()=>now,undefined,()=>r.canRetain(),undefined,()=>r.drain(),
       {eligible:()=>r.guardEligible(),select:key=>r.selectGuardSource(key),deadline:s=>r.deadline(s)}),current={source,clockId:'clock',monotonicNs:'1'};
     r.onInvalidate(()=>m.invalidate());let pending:Promise<void>|undefined;
     try{
@@ -839,13 +875,13 @@ describe('ET-026 isolated reader (REG-008/010/011)', () => {
       else expect(r.canRetain()).toBe(false);
       expect(m.evidence().assessment.state).toBe('unknown');expect(observer.evidence()).toBeUndefined();expect(observer.status().token).not.toBe(token);expect(r.guardEligible()).toBe(false);
       m.close();observer.close();release.resolve();await pending;expect(r.guardEligible()).toBe(false);
-    }finally{m.close();observer.close();release.resolve();await pending;}
+    }finally{release.resolve();m.close();observer.close();await pending;await observer.refresh();await r.drain();}
   });
   it('retains proof when failed optional settings verification drains and subsequent five-second guards succeed',async()=>{
     vi.useFakeTimers();let now=0n,fail=false,configs=0;const completed=gate(),inspect=vi.fn(processFacts);
-    const r=new HardModeReader({documents:path.join(root,'Documents'),process:inspect,nowNs:()=>now,file:async(filename,limit,signal)=>{
+    const r=ownedReader({documents:path.join(root,'Documents'),process:inspect,nowNs:()=>now,file:async(filename,limit,signal)=>{
       if(!filename.endsWith('game.log.txt'))configs++;if(fail&&filename===path.join(profile,'config.cfg'))throw new Error('Optional settings unavailable');return readStableFile(filename,limit,signal);
-    }}),observer=new ProfileObserver(()=>r,()=>now,false),m=new HardModeMonitor((s,ns,at,signal,force)=>observer.readSettings(r,s,ns,at,signal,force).finally(()=>completed.resolve()),undefined,()=>now,undefined,()=>r.canRetain(),undefined,()=>r.drain(),
+    }}),observer=ownedObserver(()=>r,()=>now,false),m=ownedMonitor((s,ns,at,signal,force)=>observer.readSettings(r,s,ns,at,signal,force).finally(()=>completed.resolve()),undefined,()=>now,undefined,()=>r.canRetain(),undefined,()=>r.drain(),
       {eligible:()=>r.guardEligible(),select:key=>r.selectGuardSource(key),deadline:s=>r.deadline(s)}),current={source,clockId:'clock',monotonicNs:'1'};
     r.onInvalidate(()=>m.invalidate());
     try{
@@ -853,33 +889,37 @@ describe('ET-026 isolated reader (REG-008/010/011)', () => {
       const bound={...current,boundary:{clockId:'clock',probeSentClientNs:'1',receivedSourceNs:'2'}};observer.select(bound);m.select(bound);await m.refresh();const token=observer.status().token;
       for(let second=5;second<=90;second+=5){now=BigInt(second)*1_000_000_000n;fail=second>=60;await m.refresh();await r.drain();expect(m.evidence().assessment.state).toBe('pass');expect(observer.status()).toEqual({phase:'admitted',token});expect(observer.evidence()).toBeDefined();}
       expect(configs).toBe(6);expect(inspect).toHaveBeenCalledOnce();
-    }finally{m.close();observer.close();await r.drain();}
+    }finally{m.close();observer.close();await observer.refresh();await r.drain();}
   });
-  it.each(['source','clock','close'] as const)('fences a late guard and clears its watchdog on %s retirement without discarding process success',async ending=>{
-    vi.useFakeTimers();let now=0n,hold=false,held=false;const entered=gate(),release=gate(),completed=gate(),inspect=vi.fn(processFacts);
-    const r=new HardModeReader({documents:path.join(root,'Documents'),process:inspect,nowNs:()=>now,file:async(filename,limit,signal)=>{
+  it.each(['source','clock','close','queued-boundary'] as const)('fences a late guard and clears its watchdog on %s retirement without discarding process success',async ending=>{
+    vi.useFakeTimers();const timers=vi.spyOn(globalThis,'setTimeout'),cleared=vi.spyOn(globalThis,'clearTimeout');
+    let now=0n,hold=false,held=false;const entered=gate(),release=gate(),completed=gate(),inspect=vi.fn(processFacts);
+    const r=ownedReader({documents:path.join(root,'Documents'),process:inspect,nowNs:()=>now,file:async(filename,limit,signal)=>{
       if(hold&&!held&&filename.endsWith('game.log.txt')){held=true;entered.resolve();await release.promise;}return readStableFile(filename,limit,signal);
-    }}),observer=new ProfileObserver(()=>r,()=>now,false),m=new HardModeMonitor((s,ns,at,signal)=>observer.readSettings(r,s,ns,at,signal).finally(()=>completed.resolve()),undefined,()=>now,undefined,()=>r.canRetain(),undefined,()=>r.drain(),
+    }}),observer=ownedObserver(()=>r,()=>now,false),m=ownedMonitor((s,ns,at,signal)=>observer.readSettings(r,s,ns,at,signal).finally(()=>completed.resolve()),undefined,()=>now,undefined,()=>r.canRetain(),undefined,()=>r.drain(),
       {eligible:()=>r.guardEligible(),select:key=>r.selectGuardSource(key),deadline:s=>r.deadline(s)}),current={source,clockId:'clock',monotonicNs:'1'};
-    r.onInvalidate(()=>m.invalidate());let pending:Promise<void>|undefined;
+    r.onInvalidate(()=>m.invalidate());let pending:Promise<void>|undefined,queued:Promise<void>|undefined,forced:Promise<void>|undefined;
     try{
       observer.select(current);m.select(current);await completed.promise;await observer.refresh();now=1n;
       const bound={...current,boundary:{clockId:'clock',probeSentClientNs:'1',receivedSourceNs:'2'}};observer.select(bound);m.select(bound);await m.refresh();const token=observer.status().token;
       now=5_000_000_000n;hold=true;pending=m.refresh();await entered.promise;
-      if(ending==='close'){m.close();observer.close();}else{
+      if(ending==='close'){m.close();observer.close();}else if(ending==='queued-boundary'){queued=observer.boundary();forced=m.refresh(true);m.close();observer.close();}else{
         const next=ending==='clock'?{...current,clockId:'new-clock'}:{...current,source:{...source,pluginSessionId:'20000000-0000-4000-8000-000000000002'}};
         observer.select(next);m.select(next);
       }
       expect(r.guardEligible()).toBe(false);expect(observer.status().token).not.toBe(token);expect(m.evidence().assessment.state).toBe('unknown');
-      m.close();observer.close();release.resolve();await pending;await r.drain();expect(r.guardEligible()).toBe(false);expect(vi.getTimerCount()).toBe(0);
+      release.resolve();m.close();observer.close();await pending;await forced;await queued;await observer.refresh();await r.drain();
+      const firstTimer=Math.max(0,timers.mock.results.length-16),timerOwners=timers.mock.results.slice(firstTimer).map((result,index)=>({operation:'retirement',ending,handle:firstTimer+index,delay:timers.mock.calls[firstTimer+index]?.[1]??null,
+        owner:readerHistory.find(owner=>Reflect.get(owner.value.deref()??{},'guardTimer')===result.value)?.name??'consumer-or-retired',cleared:cleared.mock.calls.some(call=>call[0]===result.value)}));
+      expect(r.guardEligible()).toBe(false);expect(observer.evidence()).toBeUndefined();expect(vi.getTimerCount(),JSON.stringify(timerOwners)).toBe(0);
       hold=false;expect((await read(r)).assessment.state).toBe('pass');expect(inspect).toHaveBeenCalledOnce();expect(m.evidence().assessment.state).toBe('unknown');
-    }finally{m.close();observer.close();release.resolve();await pending;await r.drain();r.selectGuardSource('cleanup');r.selectGuardSource(undefined);}
+    }finally{release.resolve();m.close();observer.close();await pending;await forced;await queued;await observer.refresh();await r.drain();r.selectGuardSource('cleanup');r.selectGuardSource(undefined);}
   });
   it.each(['process','log','profile'].flatMap(failure=>[false,true].map(profileBound=>({failure,profileBound}))))('invalidates both consumers on shared $failure failure (profile bound=$profileBound)',async({failure,profileBound})=>{
     let now=0n,wrongProcess=false;
-    const r=new HardModeReader({documents:path.join(root,'Documents'),nowNs:()=>now,processLifetime:()=>wrongProcess?undefined:'verified-lifetime',process:processFacts});
-    const observer=new ProfileObserver(()=>r,()=>now,false),completed=gate();
-    const m=new HardModeMonitor((s,ns,at,signal)=>observer.readSettings(r,s,ns,at,signal).then(value=>{completed.resolve();return value;}),undefined,()=>now);
+    const r=ownedReader({documents:path.join(root,'Documents'),nowNs:()=>now,processLifetime:()=>wrongProcess?undefined:'verified-lifetime',process:processFacts});
+    const observer=ownedObserver(()=>r,()=>now,false),completed=gate();
+    const m=ownedMonitor((s,ns,at,signal)=>observer.readSettings(r,s,ns,at,signal).then(value=>{completed.resolve();return value;}),undefined,()=>now);
     const current={source,clockId:'clock',monotonicNs:'1'};
     observer.select(current);m.select(current);await completed.promise;await observer.refresh();
     now=100n;const bound={...current,boundary:{clockId:'clock',probeSentClientNs:'100',receivedSourceNs:'10'}};
@@ -897,8 +937,8 @@ describe('ET-026 isolated reader (REG-008/010/011)', () => {
   });
   it('keeps bound profile proof on settings-only failure and clears it on a subsequent shared failure',async()=>{
     let now=0n;
-    const r=new HardModeReader({documents:path.join(root,'Documents'),process:processFacts,nowNs:()=>now});
-    const observer=new ProfileObserver(()=>r,()=>now,false),current={source,clockId:'clock',monotonicNs:'1'};
+    const r=ownedReader({documents:path.join(root,'Documents'),process:processFacts,nowNs:()=>now});
+    const observer=ownedObserver(()=>r,()=>now,false),current={source,clockId:'clock',monotonicNs:'1'};
     observer.select(current);await observer.readSettings(r,source,'1',created+10000,new AbortController().signal);await observer.refresh();
     now=100n;observer.select({...current,boundary:{clockId:'clock',probeSentClientNs:'100',receivedSourceNs:'10'}});
     const scope=observer.evidence()!.scope;
@@ -911,9 +951,9 @@ describe('ET-026 isolated reader (REG-008/010/011)', () => {
   });
   it.each([false,true])('retires an older pending profile on a verified load change even when settings fail=%s',async missing=>{
     let now=0n,completed=gate(),awaitUnknown=false;const invalidated=gate();
-    const r=new HardModeReader({documents:path.join(root,'Documents'),process:processFacts,nowNs:()=>now});
-    const observer=new ProfileObserver(()=>r,()=>now,false),current={source,clockId:'clock',monotonicNs:'1'};
-    const m=new HardModeMonitor((s,ns,at,signal)=>observer.readSettings(r,s,ns,at,signal).finally(()=>completed.resolve()),
+    const r=ownedReader({documents:path.join(root,'Documents'),process:processFacts,nowNs:()=>now});
+    const observer=ownedObserver(()=>r,()=>now,false),current={source,clockId:'clock',monotonicNs:'1'};
+    const m=ownedMonitor((s,ns,at,signal)=>observer.readSettings(r,s,ns,at,signal).finally(()=>completed.resolve()),
       value=>{if(awaitUnknown&&value.assessment.state==='unknown')invalidated.resolve();},()=>now);
     observer.select(current);m.select(current);await completed.promise;await observer.refresh();
     now=100n;const bound={...current,boundary:{clockId:'clock',probeSentClientNs:'100',receivedSourceNs:'10'}};
@@ -933,7 +973,7 @@ describe('ET-026 isolated reader (REG-008/010/011)', () => {
   });
   it('uses the matching ATS root/executable in an isolated layout', async () => {
     const ats = path.join(root, 'Documents', 'American Truck Simulator'); await rename(game, ats);
-    const r = new HardModeReader({documents: path.join(root, 'Documents'), process: async () => ({...(await processFacts()), executable: 'C:/Synthetic/amtrucks.exe'})});
+    const r = ownedReader({documents: path.join(root, 'Documents'), process: async () => ({...(await processFacts()), executable: 'C:/Synthetic/amtrucks.exe'})});
     expect((await r.read({...source, game: 'ats'}, '100', created + 10000, new AbortController().signal)).assessment.state).toBe('pass');
   });
   it('reads shared-open log files through Node/libuv while another writer holds the file', async () => {
@@ -965,7 +1005,7 @@ describe('ET-026 isolated reader (REG-008/010/011)', () => {
     const local = path.join(game, 'steam_profiles', id); await mkdir(remote, {recursive: true}); await mkdir(local, {recursive: true});
     await writeFile(path.join(remote, 'config.cfg'), HARD_MODE_CONFIG); await writeFile(path.join(local, 'config_local.cfg'), 'uset g_brake_intensity "0.75"');
     await writeFile(path.join(game, 'game.log.txt'), header + selection + save('steam'));
-    const r = new HardModeReader({documents: path.join(root, 'Documents'), steamRoot: steam, process: processFacts});
+    const r = ownedReader({documents: path.join(root, 'Documents'), steamRoot: steam, process: processFacts});
     expect((await read(r)).assessment.source).toBe('cloud');
     const duplicate = path.join(steam, 'userdata', '101', '227300', 'remote', 'profiles', id); await mkdir(duplicate, {recursive: true}); await writeFile(path.join(duplicate, 'config.cfg'), HARD_MODE_CONFIG);
     await expect(read(r)).rejects.toThrow('ambiguous');
@@ -976,7 +1016,7 @@ describe('ET-026 isolated reader (REG-008/010/011)', () => {
     await mkdir(remote,{recursive:true});await mkdir(local,{recursive:true});await writeFile(path.join(remote,'config.cfg'),HARD_MODE_CONFIG);
     await writeFile(path.join(local,'config_local.cfg'),'uset g_brake_intensity "0.75"');await writeFile(path.join(game,'game.log.txt'),header+selection+save('steam'));
     let inserting=false,phase=0;
-    const r=new HardModeReader({documents:path.join(root,'Documents'),steamRoot:steam,process:processFacts,metadata:{realpath:async filename=>{
+    const r=ownedReader({documents:path.join(root,'Documents'),steamRoot:steam,process:processFacts,metadata:{realpath:async filename=>{
       if(inserting&&filename===userdata&&++phase===2){await mkdir(parent,{recursive:true});await utimes(userdata,new Date('2026-10-22T12:00:00Z'),new Date('2026-10-22T12:00:00Z'));}return realpath(filename);
     },stat:filename=>stat(filename,{bigint:true})}});
     await read(r);inserting=true;await expect(r.read(source,'101',created+10000,new AbortController().signal,true)).rejects.toThrow('discovery containers changed');
@@ -993,7 +1033,7 @@ describe('ET-026 isolated reader (REG-008/010/011)', () => {
   });
   it('refuses stale generations, mismatched process, replay sources, missing files and replacement/truncation', async () => {
     await expect(reader().read({...source, origin: 'replay'}, '1', created + 10000, new AbortController().signal)).rejects.toThrow();
-    const wrong = new HardModeReader({documents: path.join(root, 'Documents'), process: async () => ({...(await processFacts()), pid: 456})}); await expect(read(wrong)).rejects.toThrow();
+    const wrong = ownedReader({documents: path.join(root, 'Documents'), process: async () => ({...(await processFacts()), pid: 456})}); await expect(read(wrong)).rejects.toThrow();
     const r = reader(); await read(r); await writeFile(path.join(game, 'game.log.txt'), header + selection); await expect(read(r)).rejects.toThrow();
     await writeFile(path.join(game, 'game.log.txt'), header.replace('12:00:00', '11:00:00') + selection + save()); await expect(read()).rejects.toThrow();
     await writeFile(path.join(game, 'game.log.txt'), header + selection + save());
@@ -1004,7 +1044,7 @@ describe('ET-026 isolated reader (REG-008/010/011)', () => {
     const link = path.join(root, 'redirected-profile'); await symlink(profile, link, 'junction');
     await expect(readStableFile(path.join(link, 'config.cfg'), 256 * 1024, new AbortController().signal)).rejects.toThrow('Redirected file');
     const documents = path.join(root, 'redirected-documents'); await symlink(path.join(root, 'Documents'), documents, 'junction');
-    const redirected = new HardModeReader({documents, process: processFacts}); expect((await read(redirected)).assessment.state).toBe('pass');
+    const redirected = ownedReader({documents, process: processFacts}); expect((await read(redirected)).assessment.state).toBe('pass');
     const r = reader(); await read(r); await rename(path.join(game, 'game.log.txt'), path.join(game, 'old.log.txt'));
     await writeFile(path.join(game, 'game.log.txt'), header + selection + save()); await expect(read(r)).rejects.toThrow('replaced');
   });
@@ -1015,7 +1055,7 @@ describe('ET-026 isolated reader (REG-008/010/011)', () => {
     await expect(new ProfileLogTail().read(aliasedLog,signal)).rejects.toThrow('Redirected file');
     const entered=gate(),release=gate(),canonicalRoot=await realpath(alias),expected=path.join(canonicalRoot,'Euro Truck Simulator 2','config.cfg');
     let gated=false;
-    const r=new HardModeReader({documents:alias,process:processFacts,file:async(filename,limit,readSignal)=>{
+    const r=ownedReader({documents:alias,process:processFacts,file:async(filename,limit,readSignal)=>{
       if(filename===expected){gated=true;entered.resolve();await release.promise;}return readStableFile(filename,limit,readSignal);
     }}),work=read(r);
     try{await entered.promise;expect(gated).toBe(true);expect(expected).not.toBe(path.join(alias,'Euro Truck Simulator 2','config.cfg'));release.resolve();expect((await work).assessment.state).toBe('pass');}
@@ -1032,7 +1072,7 @@ describe('ET-026 isolated reader (REG-008/010/011)', () => {
     vi.useFakeTimers(); const changes: HardModeObservation[] = [];
     const {evaluateHardMode, parseHardModeConfig} = await import('../../packages/telemetry-core/src/hard-mode');
     const scan = () => Promise.resolve({assessment: evaluateHardMode(parseHardModeConfig(HARD_MODE_CONFIG), Date.now(), 'fixture'), binding: 'a'.repeat(64), pluginSessionId: source.pluginSessionId, sourceMonotonicNs: '100'});
-    const m = new HardModeMonitor(scan, value => changes.push(value));
+    const m = ownedMonitor(scan, value => changes.push(value));
     const bind = () => m.select({source, monotonicNs: '100', clockId: 'clock', boundary: {clockId: 'clock', probeSentClientNs: (process.hrtime.bigint() + 1n).toString(), receivedSourceNs: '200'}});
     m.select({source, monotonicNs: '100', clockId: 'clock'}); await Promise.resolve(); bind(); await m.refresh();
     expect(m.status().assessment.state).toBe('pass'); const published = changes.length;
@@ -1042,7 +1082,7 @@ describe('ET-026 isolated reader (REG-008/010/011)', () => {
   it('requires a post-read validated same-clock probe boundary; an old/mismatched boundary cannot publish pass', async () => {
     const {evaluateHardMode, parseHardModeConfig} = await import('../../packages/telemetry-core/src/hard-mode');
     const scan = () => Promise.resolve({assessment: evaluateHardMode(parseHardModeConfig(HARD_MODE_CONFIG), Date.now(), 'fixture'), binding: 'a'.repeat(64), pluginSessionId: source.pluginSessionId, sourceMonotonicNs: '100'});
-    const m = new HardModeMonitor(scan, undefined, () => 100n);
+    const m = ownedMonitor(scan, undefined, () => 100n);
     const select = (clockId: string, probeSentClientNs: string) => m.select({source, clockId: 'current', monotonicNs: '100', boundary: {clockId, probeSentClientNs, receivedSourceNs: '300'}});
     select('current', '0'); await Promise.resolve(); expect(m.status().assessment.state).toBe('unknown');
     select('current', '100'); expect(m.status().assessment.state).toBe('unknown');
@@ -1052,7 +1092,7 @@ describe('ET-026 isolated reader (REG-008/010/011)', () => {
   });
   it('expires a completed passing read without a causal reply within the unchanged deadline', async () => {
     vi.useFakeTimers(); const {evaluateHardMode, parseHardModeConfig} = await import('../../packages/telemetry-core/src/hard-mode');
-    const changed = vi.fn<(value: HardModeObservation) => void>(), m = new HardModeMonitor(() => Promise.resolve({assessment: evaluateHardMode(parseHardModeConfig(HARD_MODE_CONFIG), Date.now(), 'fixture'), binding: 'a'.repeat(64), pluginSessionId: source.pluginSessionId, sourceMonotonicNs: '100'}), changed);
+    const changed = vi.fn<(value: HardModeObservation) => void>(), m = ownedMonitor(() => Promise.resolve({assessment: evaluateHardMode(parseHardModeConfig(HARD_MODE_CONFIG), Date.now(), 'fixture'), binding: 'a'.repeat(64), pluginSessionId: source.pluginSessionId, sourceMonotonicNs: '100'}), changed);
     m.select({source, monotonicNs: '100', clockId: 'clock'}); await Promise.resolve();
     expect(m.status().assessment.state).toBe('unknown'); const pending = m.refresh(); await vi.advanceTimersByTimeAsync(2001); await pending;
     expect(changed.mock.calls.every(([value]) => value.assessment.state === 'unknown')).toBe(true); m.close();
@@ -1061,7 +1101,7 @@ describe('ET-026 isolated reader (REG-008/010/011)', () => {
     let mono=0n;const changes:HardModeObservation[]=[];
     const {evaluateHardMode,parseHardModeConfig}=await import('../../packages/telemetry-core/src/hard-mode');
     const scan=vi.fn(()=>Promise.resolve({assessment:evaluateHardMode(parseHardModeConfig(HARD_MODE_CONFIG),1000,'fixture'),binding:'a'.repeat(64),pluginSessionId:source.pluginSessionId,sourceMonotonicNs:'100'}));
-    const m=new HardModeMonitor(scan,value=>changes.push(value),()=>mono);
+    const m=ownedMonitor(scan,value=>changes.push(value),()=>mono);
     m.select({source,monotonicNs:'100',clockId:'clock'});await Promise.resolve();mono=1n;
     m.select({source,monotonicNs:'100',clockId:'clock',boundary:{clockId:'clock',probeSentClientNs:'1',receivedSourceNs:'200'}});await m.refresh();
     const admitted=m.evidence(),utc=vi.spyOn(Date,'now').mockReturnValue(1);
@@ -1074,7 +1114,7 @@ describe('ET-026 isolated reader (REG-008/010/011)', () => {
   it('coalesces refresh, enforces the deadline and never starts a second outstanding read', async () => {
     vi.useFakeTimers(); let finish!: (v: HardModeObservation) => void; const callback = vi.fn();
     const scan = vi.fn(() => new Promise<HardModeObservation>(resolve => {finish = resolve;}));
-    const m = new HardModeMonitor(scan, callback); m.select({source, monotonicNs: '100'});
+    const m = ownedMonitor(scan, callback); m.select({source, monotonicNs: '100'});
     void m.refresh(); void m.refresh(); expect(scan).toHaveBeenCalledTimes(1);
     await vi.advanceTimersByTimeAsync(2001); expect(m.status().assessment.state).toBe('unknown'); void m.refresh(); expect(scan).toHaveBeenCalledTimes(1);
     finish({assessment: m.status().assessment, binding: 'a'.repeat(64), pluginSessionId: source.pluginSessionId, sourceMonotonicNs: '100'});

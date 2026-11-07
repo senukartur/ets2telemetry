@@ -33,6 +33,7 @@ function readAll(query: Omit<JournalTripsQuery, 'cursor'>): {pages: number[]; tr
   let cursor: string | undefined;
   for (let round = 0; round < 100; round++) {
     const page = ok(storage.journalTrips({...query, cursor}));
+    expect(page.trips.length).toBeLessThanOrEqual(50); expect(page.sync).toBeUndefined();
     pages.push(page.trips.length); trips.push(...page.trips.map(trip => trip.tripUuid));
     if (page.nextCursor === null) return {pages, trips};
     expect(page.trips).toHaveLength(JOURNAL_TRIP_PAGE);

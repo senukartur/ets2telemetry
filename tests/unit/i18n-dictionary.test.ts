@@ -85,3 +85,12 @@ describe('i18n dictionary completeness and parity', () => {
     expect(formatLocalizedBoolean(false, 'ru')).toBe('нет');
   });
 });
+
+it('REG-010/014 includes fixed Account/sync states and consent in both languages without secret interpolation', () => {
+  for (const dictionary of [EN_DICTIONARY, RU_DICTIONARY]) {
+    const entries = Object.entries(dictionary).filter(([key]) => key.startsWith('upload.'));
+    expect(entries.length).toBeGreaterThan(70);
+    for (const [key, value] of entries) {expect(value, key).not.toMatch(/⟦|\{token\}|\{credential/); expect(value.trim()).not.toBe('');}
+    expect(dictionary['upload.binding']).toBeTruthy(); expect(dictionary['upload.historyDriver']).toBeTruthy(); expect(dictionary['upload.error.RETIRED']).toBeTruthy();
+  }
+});

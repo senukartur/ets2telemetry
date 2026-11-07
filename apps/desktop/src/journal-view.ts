@@ -1,3 +1,4 @@
+import {sameDashboardOwner, type DashboardUploadStatus} from '../../../packages/contracts/src/dashboard-upload';
 import type {
   AppLanguage, JournalCallResult, JournalDatabase, JournalExportResult, JournalEvent, JournalEventPage, JournalGame, JournalGameMode, JournalInterval, JournalIntervalPage, JournalMoneyTotals,
   JournalSample, JournalSamplePage, JournalTripDetail, JournalTripListItem, JournalTripPage, JournalWindow, RecordingHealth, UnitProfiles
@@ -413,3 +414,8 @@ export const outcomeText = (trip: Pick<JournalTripListItem, 'outcome' | 'closeRe
 export const completenessBadge = (completeness: JournalTripListItem['recordingCompleteness'], language: AppLanguage = 'en'): ReturnType<typeof texts.en.completenessBadge> => texts[language].completenessBadge(completeness);
 export const localTime = texts.en.localTime;
 export const gameModeText = (mode: JournalGameMode, ambiguous: boolean, language: AppLanguage = 'en'): string => texts[language].gameModeText(mode, ambiguous);
+
+/** A loaded page loses its decorations immediately when the displayed connection no longer owns it. */
+export function journalPageSync(page: JournalTripPage | undefined, status: DashboardUploadStatus | null | undefined) {
+  return status?.origin && status.owner && ['connected', 'paused'].includes(status.state) && page?.sync && sameDashboardOwner(status.owner, page.sync.owner) ? page.sync : undefined;
+}

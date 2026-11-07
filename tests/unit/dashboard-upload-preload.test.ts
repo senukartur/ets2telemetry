@@ -12,3 +12,8 @@ describe('REG-010/012 upload preload',()=>{
     await expect(bridge.getDashboardUploadContext()).rejects.toThrow('INVALID_UPLOAD_REPLY');const listener=vi.fn(),unsubscribe=bridge.subscribeDashboardUpload(listener);receive?.({},{});expect(listener).not.toHaveBeenCalled();receive?.({},initialDashboardUploadStatus(null));expect(listener).toHaveBeenCalledOnce();unsubscribe();expect(removeListener).toHaveBeenCalledWith(UPLOAD_CHANNELS.status,receive);
   });
 });
+
+it('REG-010/012 provides exactly the existing six safe upload methods for the Account controller', () => {
+  const bridge = dashboardUploadPreload({invoke: vi.fn(), on: vi.fn(), removeListener: vi.fn()});
+  expect(Object.keys(bridge)).toEqual(['getDashboardUploadContext', 'verifyDashboardUploadToken', 'confirmDashboardUpload', 'cancelDashboardUpload', 'disconnectDashboardUpload', 'subscribeDashboardUpload']);
+});

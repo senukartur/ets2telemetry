@@ -1,3 +1,5 @@
+import {uploadView} from '../../apps/desktop/src/dashboard-upload/view';
+import {unavailableUploadUi} from '../../apps/desktop/src/dashboard-upload/ui-controller';
 import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
@@ -32,6 +34,7 @@ describe('i18n settings lifecycle and reflection', () => {
     const store1 = new SettingsStore(tempDir, STORE_OPTIONS);
     const initialView = await store1.load();
     expect(initialView.language).toBe('en');
+    expect(uploadView(unavailableUploadUi(), initialView.language).headline).toBe('Unavailable');
 
     // 1. Initial English tray and overlay reflection
     const health: AppHealth = {service: 'ready', storage: 'verified', recording: {state: 'disabled'}, lastError: null};
@@ -96,4 +99,8 @@ describe('i18n settings lifecycle and reflection', () => {
     const thirdView = await store3.load();
     expect(thirdView.language).toBe('en');
   });
+});
+
+it('REG-010/012 reflects a locale change in Account state without changing connection or retaining drafts', () => {
+  const ui = unavailableUploadUi(), before = structuredClone(ui); expect(uploadView(ui, 'en').headline).toBe('Unavailable'); expect(uploadView(ui, 'ru').headline).toBe('Недоступно'); expect(ui).toEqual(before);
 });
