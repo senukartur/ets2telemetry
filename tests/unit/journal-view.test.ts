@@ -490,3 +490,10 @@ it('REG-012/014 hides loaded Journal sync facts during verification, disconnecti
   expect(journalPageSync(page, status)).toEqual(page.sync);
   for (const hidden of [null, initialDashboardUploadStatus(null), {...status, state: 'verifying' as const}, {...status, owner: {...owner, identityEpoch: 'other'}}, {...status, origin: 'https://other.example', owner: {...owner, origin: 'https://other.example'}}]) expect(journalPageSync(page, hidden)).toBeUndefined();
 });
+it('REG-012/014 retains same-owner read-time assessments across connection versions until Refresh supplies a new page', () => {
+  const origin = 'https://dashboard.example', owner = {origin, accountId: 'a', companyId: 'c', identityEpoch: 'e'}, status = {...initialDashboardUploadStatus(origin), state: 'connected' as const, owner};
+  const previous: JournalTripPage = {database: {purpose: 'history', schemaVersion: 6}, trips: [DELIVERED_DETAIL.trip], nextCursor: null, sync: {owner, connectionVersion: '1', rows: [{tripUuid: DELIVERED_DETAIL.trip.tripUuid, state: 'sent', materialVersion: '1', latestRevision: 1, lastDurableUploadUtcMs: 5000, reason: null}]}};
+  const refreshed: JournalTripPage = {...previous, sync: {...previous.sync!, connectionVersion: '3', rows: [{...previous.sync!.rows[0], state: 'pending', materialVersion: '2', lastDurableUploadUtcMs: null}]}};
+  expect(journalPageSync(previous, status)).toBe(previous.sync); expect(journalPageSync(refreshed, status)).toBe(refreshed.sync);
+  expect(journalPageSync(previous, {...status, owner: {...owner, identityEpoch: 'new'}})).toBeUndefined(); expect(previous.sync?.rows[0].state).toBe('sent');
+});

@@ -5,7 +5,7 @@ import {createRequire} from 'node:module';
 import {OWNER_PRODUCTION_BUILD_VARIABLE, resolveBuildChannel} from '../build-channel.mjs';
 
 export const UPLOAD_UI_SCREENS = ['no-token', 'confirmation', 'first-upload', 'offline', 'journal'];
-export const UPLOAD_UI_FLAGS = ['paste', 'password', 'visibility', 'enter', 'tokenCleared', 'cancelNavigation', 'cancelConfirmation', 'confirmNavigation', 'fixedRefusals', 'progress', 'chipNavigation', 'rowStates', 'headingFocus', 'contained', 'sharedStyles'];
+export const UPLOAD_UI_FLAGS = ['paste', 'password', 'visibility', 'enter', 'tokenCleared', 'cancelNavigation', 'cancelConfirmation', 'confirmNavigation', 'fixedRefusals', 'progress', 'chipNavigation', 'rowStates', 'headingFocus', 'contained', 'sharedStyles', 'bridgeIsolation'];
 export function validateUploadUiConfiguration(config, environment = process.env) {
   assert.equal(config.scenario, 'ui'); assert.equal(config.uiCase, 'shell');
   assert.ok(['development', 'packaged'].includes(config.mode));
@@ -25,18 +25,38 @@ export function uploadUiBuildInputs(config, environment = process.env) {
   return {root, entries: ['main.ts', 'preload.ts', 'renderer.tsx', '.html'].map(suffix => path.join(config.checkout, 'tests/runtime', suffix === '.html' ? 'dashboard-upload-ui.html' : `dashboard-upload-ui-${suffix}`)),
     define: {__ETS2TELEMETRY_BUILD_CHANNEL__: JSON.stringify('staging'), __ETS2TELEMETRY_APP_VERSION__: JSON.stringify('0.0.0')}, alias: {'@': path.join(config.checkout, 'apps/desktop/src')}};
 }
+/** Checks resolved modules, including imports hidden behind aliases or re-exports, before any fixture is launched. */
+export function uploadUiIsolationPlugin(config, checked = () => {}) {
+  const uploadModules = new Set(['contract.ts', 'view.ts', 'ui-controller.ts', 'use-dashboard-upload.ts', 'account-screen.tsx', 'sync-chip.tsx', 'journal-sync.tsx']);
+  return {name: 'ets2telemetry-upload-ui-isolation', generateBundle() {
+    let modules = 0;
+    for (const id of this.getModuleIds()) {
+      if (id.startsWith('\0')) continue;
+      if (['electron', 'node:fs', 'node:path'].includes(id)) {modules++; continue;}
+      assert.ok(path.isAbsolute(id), 'UPLOAD_UI_FORBIDDEN_MODULE');
+      const relative = path.relative(config.checkout, id.split('?')[0]).replaceAll('\\', '/');
+      const app = relative.startsWith('apps/desktop/src/') ? relative.slice('apps/desktop/src/'.length) : null;
+      const allowedApp = app !== null && (['channel.ts', 'index.css', 'fonts.css'].includes(app) || ['components/ui/', 'i18n/', 'shell/', 'assets/'].some(prefix => app.startsWith(prefix)) || app.startsWith('dashboard-upload/') && uploadModules.has(app.slice('dashboard-upload/'.length)));
+      assert.ok(allowedApp || relative.startsWith('packages/contracts/src/') || relative.startsWith('node_modules/') || ['tests/runtime/dashboard-upload-ui-main.ts', 'tests/runtime/dashboard-upload-ui-preload.ts', 'tests/runtime/dashboard-upload-ui-renderer.tsx', 'tests/runtime/dashboard-upload-ui.html'].includes(relative), 'UPLOAD_UI_FORBIDDEN_MODULE');
+      modules++;
+    }
+    assert.ok(modules > 0, 'UPLOAD_UI_EMPTY_MODULE_GRAPH'); checked(modules);
+  }};
+}
 /** Called only by ui:shell inside the existing bounded runtime Job, before the normal application/source starts. */
 export async function runDashboardUploadUiFixture(config) {
   const inputs = uploadUiBuildInputs(config), {build} = await import('vite'), {default: tailwindcss} = await import('@tailwindcss/vite');
+  const moduleGraphs = [], isolation = () => uploadUiIsolationPlugin(config, modules => moduleGraphs.push(modules));
   await mkdir(inputs.root); await writeFile(path.join(inputs.root, '.upload-ui-root'), 'ets2telemetry.dashboard-upload.ui.v1\n', {flag: 'wx'});
-  for (const name of ['main', 'preload']) await build({configFile: false, root: config.checkout, logLevel: 'silent', define: inputs.define,
+  for (const name of ['main', 'preload']) await build({configFile: false, root: config.checkout, logLevel: 'silent', define: inputs.define, plugins: [isolation()],
     build: {outDir: inputs.root, emptyOutDir: false, minify: false, lib: {entry: path.join(config.checkout, `tests/runtime/dashboard-upload-ui-${name}.ts`), formats: ['cjs'], fileName: () => `${name}.cjs`}, rollupOptions: {external: ['electron', /^node:/]}}});
-  await build({configFile: false, root: config.checkout, base: './', logLevel: 'silent', define: inputs.define, plugins: [tailwindcss()], resolve: {alias: inputs.alias},
+  await build({configFile: false, root: config.checkout, base: './', logLevel: 'silent', define: inputs.define, plugins: [tailwindcss(), isolation()], resolve: {alias: inputs.alias},
     build: {outDir: path.join(inputs.root, 'renderer'), emptyOutDir: false, assetsInlineLimit: 0, rollupOptions: {input: inputs.entries[3]}}});
+  assert.equal(moduleGraphs.length, 3, 'UPLOAD_UI_UNCHECKED_BUILD');
   const {_electron: electron, expect} = await import('@playwright/test'), require = createRequire(path.join(config.checkout, 'package.json'));
   const env = {...process.env, LOCALAPPDATA: inputs.root, APPDATA: inputs.root, USERPROFILE: inputs.root}; delete env.ELECTRON_RUN_AS_NODE;
   const application = await electron.launch({executablePath: require('electron'), args: [path.join(inputs.root, 'main.cjs')], cwd: inputs.root, env, timeout: 20000});
-  const record = {origin: 'synthetic', passed: false, productionAuthority: false, screenshots: [], flags: {}, security: {}, tokenPresentInScreenshots: false};
+  const record = {origin: 'synthetic', passed: false, productionAuthority: false, moduleGraphs, screenshots: [], flags: {}, security: {}, tokenPresentInScreenshots: false};
   let stage = 'startup';
   try {
     const page = await application.firstWindow(); page.setDefaultTimeout(5000);
@@ -90,6 +110,10 @@ export async function runDashboardUploadUiFixture(config) {
     record.security = await application.evaluate(({BrowserWindow}) => {const window = BrowserWindow.getAllWindows()[0], p = window.webContents.getLastWebPreferences(); return {sandbox: p.sandbox, contextIsolation: p.contextIsolation, nodeIntegration: p.nodeIntegration, persistentSession: window.webContents.session.isPersistent(), localDocument: window.webContents.getURL().startsWith('file:')};});
     assert.deepEqual(record.security, {sandbox: true, contextIsolation: true, nodeIntegration: false, persistentSession: false, localDocument: true});
     assert.equal(await page.evaluate(() => typeof globalThis.require === 'undefined' && typeof globalThis.process === 'undefined'), true);
+    assert.deepEqual(await page.evaluate(() => Object.keys(globalThis.uploadUi).sort()), ['cancelDashboardUpload', 'confirmDashboardUpload', 'disconnectDashboardUpload', 'getDashboardUploadContext', 'listJournalTrips', 'subscribeDashboardUpload', 'verifyDashboardUploadToken']);
+    assert.equal(await page.evaluate(() => typeof globalThis.desktop === 'undefined'), true); record.flags.bridgeIsolation = true;
+    assert.equal(await application.evaluate(async ({BrowserWindow}) => BrowserWindow.getAllWindows()[0].webContents.executeJavaScript('Notification.requestPermission()', true)), 'denied');
+    assert.ok(await application.evaluate(() => globalThis.uploadUiFixture.denied.permissions > 0)); record.security.permissionsDenied = true;
     record.security.remoteFetchDenied = await page.evaluate(async () => {try {await globalThis.fetch('https://example.invalid'); return false;} catch {return true;}});
     assert.equal(record.security.remoteFetchDenied, true);
     for (const language of ['en', 'ru']) {

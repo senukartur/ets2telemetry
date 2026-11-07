@@ -14,7 +14,7 @@ let status = initialDashboardUploadStatus(origin), window: BrowserWindow;
 let pending: ((status: DashboardUploadStatus) => void) | undefined;
 let pendingKind: 'verify' | 'confirm' | null = null, failure: DashboardUploadStatus['error'] = null;
 const counts = {verify: 0, confirm: 0, cancel: 0, disconnect: 0};
-const denied = {navigation: 0, newWindow: 0};
+const denied = {navigation: 0, newWindow: 0, permissions: 0};
 const rows = ['unavailable', 'unbound', 'identity-pending', 'pending', 'queued', 'sending', 'held', 'sent'].map((state, index): JournalSyncRow => ({tripUuid: `70000000-0000-4000-8000-${String(index + 1).padStart(12, '0')}`, state: state as JournalSyncRow['state'], materialVersion: index < 2 ? null : '2', latestRevision: index < 4 ? null : 1, lastDurableUploadUtcMs: state === 'sent' ? 5000 : null, reason: state === 'held' ? 'validation' : null}));
 const absent = {available: false, reason: 'not-observed'} as const;
 const trips = rows.map(({tripUuid}): JournalTripListItem => ({tripUuid, game: 'ets2', isHardMode: false, hardModeDetails: null, gameMode: {mode: 'unknown', method: 'none', confidence: 'none'}, gameModeAmbiguous: false, outcome: 'open', closeReason: null, recordingCompleteness: 'partial', startedUtcMs: 1000, endedUtcMs: null, observedDistanceM: absent, fuelUsedL: absent, job: {source: 'event', sourceCity: absent, sourceCompany: absent, destinationCity: absent, destinationCompany: absent, cargo: absent, plannedDistance: {...absent, unit: 'm'}, expectedIncome: absent}}));
@@ -30,8 +30,8 @@ const fixture = {
 (globalThis as unknown as {uploadUiFixture: typeof fixture}).uploadUiFixture = fixture;
 void app.whenReady().then(async () => {
   const isolated = session.fromPartition('upload-ui-fixture');
-  isolated.setPermissionRequestHandler((_contents, _permission, callback) => callback(false));
-  isolated.setPermissionCheckHandler(() => false);
+  isolated.setPermissionRequestHandler((_contents, _permission, callback) => {denied.permissions++; callback(false);});
+  isolated.setPermissionCheckHandler(() => {denied.permissions++; return false;});
   isolated.webRequest.onBeforeRequest((details, callback) => {
     let allowed = false;
     try {const url = new URL(details.url); allowed = url.protocol === 'file:' && decodeURIComponent(url.pathname).replace(/^\//, '').toLowerCase().startsWith(__dirname.replace(/\\/g, '/').toLowerCase() + '/');} catch { /* Refuse malformed URLs. */ }

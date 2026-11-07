@@ -2,6 +2,10 @@ import {initialDashboardUploadStatus, isDashboardToken, type DashboardUploadBrid
 
 export type UploadUiPhase = 'idle' | 'verifying' | 'confirming' | 'cancelling' | 'cancel-failed' | 'disconnecting';
 export interface UploadUiState {status: DashboardUploadStatus | null; phase: UploadUiPhase; error: DashboardUploadError | 'INVALID_TOKEN' | null; abandoned: boolean}
+/** Shared admission for the rendered form and a submit racing a newer service notification. */
+export function canVerifyDashboardUpload(ui: UploadUiState): boolean {
+  return ui.phase === 'idle' && !ui.status?.candidateId && !!ui.status?.origin && ['disconnected', 'connected', 'paused'].includes(ui.status.state);
+}
 /** Dashboard-lifetime coordinator. No token is retained in its state or exposed to subscribers. */
 export class DashboardUploadUiController {
   #state: UploadUiState = {status: null, phase: 'idle', error: null, abandoned: false};
@@ -36,7 +40,10 @@ export class DashboardUploadUiController {
     else if (this.#state.phase === 'idle' && this.#state.status?.candidateId) void this.cancel();
   }
   async verify(token: string): Promise<boolean> {
-    if (this.#state.phase !== 'idle' || this.#state.status?.candidateId || !this.#state.status?.origin || !['disconnected', 'connected', 'paused'].includes(this.#state.status.state)) return false;
+    if (!canVerifyDashboardUpload(this.#state)) {
+      this.#set({error: this.#state.phase !== 'idle' || this.#state.status?.candidateId ? 'BUSY' : this.#state.status?.origin ? 'RETIRED' : 'UNCONFIGURED'});
+      return false;
+    }
     if (!isDashboardToken(token)) {this.#set({error: 'INVALID_TOKEN'}); return false;}
     const operation = ++this.#operation, revision = ++this.#revision;
     this.#set({phase: 'verifying', error: null, abandoned: !this.#active});

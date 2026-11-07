@@ -47,12 +47,14 @@ export class UploadMainController {
   async #recover(authority={committed:false}):Promise<void>{
     const rpc=this.#rpc!,epoch=this.#epoch;const store=this.#credentials(),intent=await store.readDisconnect();this.#current(epoch,rpc);
     this.#connectionVersion=undefined;
-    const config=await this.#call({action:'configuration'});this.#current(epoch,rpc);if(config.kind!=='configuration')throw Error('RECONCILIATION');const c=config.configuration;
-    if(c.status!=='ready')throw Error('RECONCILIATION');
-    if(intent){if(intent.channel!==this.channel||intent.origin!==this.origin)throw Error('RECONCILIATION');
-      if(c.registration){if(c.version!==intent.expectedVersion)throw Error('RECONCILIATION');const disconnected=await this.#call({action:'disconnect',expectedVersion:intent.expectedVersion});if(disconnected.kind!=='connection'||disconnected.connection.status!=='disconnected')throw Error('RECONCILIATION');}
+    const config=await this.#call({action:'configuration'});this.#current(epoch,rpc);if(config.kind!=='configuration')throw Error('RECONCILIATION');const c=config.configuration;this.#status={...this.#status,state:'paused',owner:null,candidateId:null};
+    if(intent){if(intent.channel!==this.channel||intent.origin!==this.origin||c.registration&&c.registration.origin!==intent.origin)throw Error('RECONCILIATION');
+      // The explicit intent authorizes only its exact connection version, including reconciliation repair.
+      if(c.version===intent.expectedVersion){const disconnected=await this.#call({action:'disconnect',expectedVersion:intent.expectedVersion});if(disconnected.kind!=='connection'||disconnected.connection.status!=='disconnected')throw Error('RECONCILIATION');}
+      else if(c.status!=='ready'||c.registration!==null||c.credentialGeneration!==null||c.runId!==null||BigInt(c.version)!==BigInt(intent.expectedVersion)+1n)throw Error('RECONCILIATION');
       await this.#removeCredentials(store);await store.clearDisconnect();this.#current(epoch,rpc);this.#status=initialDashboardUploadStatus(this.origin);this.#emit();return;
     }
+    if(c.status!=='ready')throw Error('RECONCILIATION');
     if(!c.registration){this.#status=initialDashboardUploadStatus(this.origin);this.#emit();return;}
     if(c.registration.origin!==this.origin||!c.credentialGeneration)throw Error('RECONCILIATION');
     authority.committed=true;this.#status.owner={origin:c.registration.origin,accountId:c.registration.accountId,companyId:c.registration.companyId,identityEpoch:c.registration.identityEpoch};

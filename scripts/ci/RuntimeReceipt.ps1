@@ -815,19 +815,23 @@ function Test-ResourceEvidence {
 }
 
 function Test-UploadUiReceipt {
-    param([object]$Value, [string]$Directory)
+    param([object]$Value, [string]$Directory, [object[]]$Phases)
     if ($null -eq $Value -or $Value.passed -isnot [bool] -or !$Value.passed -or $Value.origin -cne 'synthetic' -or
         $Value.productionAuthority -isnot [bool] -or $Value.productionAuthority -or
         $Value.tokenPresentInScreenshots -isnot [bool] -or $Value.tokenPresentInScreenshots) { return $false }
-    foreach ($flag in @('paste','password','visibility','enter','tokenCleared','cancelNavigation','cancelConfirmation','confirmNavigation','fixedRefusals','progress','chipNavigation','rowStates','headingFocus','contained','sharedStyles')) {
+    foreach ($flag in @('paste','password','visibility','enter','tokenCleared','cancelNavigation','cancelConfirmation','confirmNavigation','fixedRefusals','progress','chipNavigation','rowStates','headingFocus','contained','sharedStyles','bridgeIsolation')) {
         if ($Value.flags.$flag -isnot [bool] -or !$Value.flags.$flag) { return $false }
     }
-    foreach ($flag in @('sandbox','contextIsolation','localDocument','remoteFetchDenied','navigationDenied','newWindowDenied')) {
+    foreach ($flag in @('sandbox','contextIsolation','localDocument','remoteFetchDenied','navigationDenied','newWindowDenied','permissionsDenied')) {
         if ($Value.security.$flag -isnot [bool] -or !$Value.security.$flag) { return $false }
     }
     foreach ($flag in @('nodeIntegration','persistentSession')) {
         if ($Value.security.$flag -isnot [bool] -or $Value.security.$flag) { return $false }
     }
+    if (@($Value.moduleGraphs).Count -ne 3) { return $false }
+    foreach ($modules in $Value.moduleGraphs) { if (!(Test-ReceiptInteger -Value $modules -Minimum 1 -Maximum 10000)) { return $false } }
+    $expectedPhases = @('upload-ui-fixture-started','upload-ui-fixture-completed','telemetry-source-started','launch-requested')
+    if ((@($Phases | Where-Object { $_.phase -cin $expectedPhases } | ForEach-Object { $_.phase }) -join ',') -cne ($expectedPhases -join ',')) { return $false }
     if (@($Value.screenshots).Count -ne 20) { return $false }
     foreach ($language in @('en','ru')) {
         foreach ($size in @(@{width=1280;height=800},@{width=1100;height=720})) {
@@ -873,7 +877,7 @@ function Test-UiReceipt {
         'overlay' { $flags += @('fourLayouts','transparent','contained','independentFont','missing','paused','staleDashes','heroSubsets','formatterProfiles','stableNumbers','opacityKeyboardFocus','opacityGestures','backgroundOpacityOverlay','clusterRpmContained','scaleRange','clusterSpeedArc','gearDisplayManual','gearboxLabels'); $screens = @('strip','card','cluster','hud') }
     }
     foreach ($flag in $flags) { if ($ui.flags.$flag -isnot [bool] -or !$ui.flags.$flag) { return $false } }
-    if ($ExpectedUiCase -ceq 'shell' -and !(Test-UploadUiReceipt -Value $Driver.uploadUi -Directory $Directory)) { return $false }
+    if ($ExpectedUiCase -ceq 'shell' -and !(Test-UploadUiReceipt -Value $Driver.uploadUi -Directory $Directory -Phases $Driver.phases)) { return $false }
     if ($ExpectedUiCase -ceq 'journal' -and ($ui.flags.syncHidden -isnot [bool] -or !$ui.flags.syncHidden)) { return $false }
     # ET-045e: the overlay shard adds six English 1280x800 scale reference screenshots to its 64 layout screenshots.
     if (@($ui.screenshots).Count -ne $(if ($ExpectedUiCase -ceq 'overlay') { 70 } elseif ($ExpectedUiCase -ceq 'settings') { 30 } else { 4 * $screens.Count })) { return $false }

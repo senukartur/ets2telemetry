@@ -20,15 +20,15 @@ const serviceEvents = [{event: 'STORAGE_VERIFIED'}, ...['ingestion', 'capture', 
 const windows = [{url: 'file:///app/renderer/index.html', rendererPid: 100, sandbox: true, isolation: true, node: false, isDefaultSession: true, isOverlaySession: false, sessionPersistent: true, alwaysOnTop: false},
   {url: 'file:///app/renderer/index.html?view=overlay', rendererPid: 101, sandbox: true, isolation: true, node: false, isDefaultSession: false, isOverlaySession: true, sessionPersistent: false, alwaysOnTop: true}];
 const uploadScreens = ['no-token', 'confirmation', 'first-upload', 'offline', 'journal'];
-const uploadFlags = ['paste', 'password', 'visibility', 'enter', 'tokenCleared', 'cancelNavigation', 'cancelConfirmation', 'confirmNavigation', 'fixedRefusals', 'progress', 'chipNavigation', 'rowStates', 'headingFocus', 'contained', 'sharedStyles'];
+const uploadFlags = ['paste', 'password', 'visibility', 'enter', 'tokenCleared', 'cancelNavigation', 'cancelConfirmation', 'confirmNavigation', 'fixedRefusals', 'progress', 'chipNavigation', 'rowStates', 'headingFocus', 'contained', 'sharedStyles', 'bridgeIsolation'];
 function uploadFixture() {
-  return {origin: 'synthetic', passed: true, productionAuthority: false, tokenPresentInScreenshots: false,
+  return {origin: 'synthetic', passed: true, productionAuthority: false, tokenPresentInScreenshots: false, moduleGraphs: [8, 6, 2100],
     flags: Object.fromEntries(uploadFlags.map(flag => [flag, true])),
-    security: {sandbox: true, contextIsolation: true, nodeIntegration: false, persistentSession: false, localDocument: true, remoteFetchDenied: true, navigationDenied: true, newWindowDenied: true},
+    security: {sandbox: true, contextIsolation: true, nodeIntegration: false, persistentSession: false, localDocument: true, remoteFetchDenied: true, navigationDenied: true, newWindowDenied: true, permissionsDenied: true},
     screenshots: ['en', 'ru'].flatMap(language => sizes.flatMap(size => uploadScreens.map(screen => ({file: `ui-upload-${screen}-${language}-${size.width}x${size.height}.png`, screen, language, ...size, imageWidth: size.width, imageHeight: size.height, bytes: 600, tokenCleared: true}))))};
 }
 function fixture(uiCase: Case) {
-  return {passed: true, commit: 'candidate', mode: 'packaged', scenarioKind: 'ui', uploadUi: uiCase === 'shell' ? uploadFixture() : undefined, // ET-050: the settings shard refuses units, visibility, opacity and gear display once per language and size (16, before 12).
+  return {passed: true, commit: 'candidate', mode: 'packaged', scenarioKind: 'ui', phases: ['upload-ui-fixture-started', 'upload-ui-fixture-completed', 'telemetry-source-started', 'launch-requested'].map(phase => ({phase})), uploadUi: uiCase === 'shell' ? uploadFixture() : undefined, // ET-050: the settings shard refuses units, visibility, opacity and gear display once per language and size (16, before 12).
     mainEvents: [...mainEvents, ...Array.from({length: 16}, () => ({event: 'SETTINGS_WRITE_FAILED', facts: {step: 'target', code: null}}))], serviceEvents, ui: {case: uiCase, languages: ['en', 'ru'], sizes,
     firstLauncherExit: 0, saveFailureFacts: Array.from({length: 16}, () => ({step: 'target', code: null})),
     readOnly: {state: 'newer-version', writable: false, language: 'en', bytesUnchanged: true, launcherExit: 0, windows, mainEvents: [...mainEvents, {event: 'SETTINGS_FALLBACK', facts: {state: 'newer-version'}}], serviceEvents},
@@ -51,6 +51,13 @@ it('requires every UI language/size/screen, assertion and plain screenshot file 
     {name: 'configured fixture missing locale-size-state', uiCase: 'shell', change: value => {value.uploadUi!.screenshots.pop();}},
     {name: 'configured fixture duplicate screenshot', uiCase: 'shell', change: value => {value.uploadUi!.screenshots[0] = {...value.uploadUi!.screenshots[1]};}},
     {name: 'configured fixture node enabled', uiCase: 'shell', change: value => {value.uploadUi!.security.nodeIntegration = true;}},
+    {name: 'configured fixture missing module graphs', uiCase: 'shell', change: value => {Reflect.deleteProperty(value.uploadUi!, 'moduleGraphs');}},
+    {name: 'configured fixture unchecked renderer build', uiCase: 'shell', change: value => {value.uploadUi!.moduleGraphs.pop();}},
+    {name: 'configured fixture empty module graph', uiCase: 'shell', change: value => {value.uploadUi!.moduleGraphs[0] = 0;}},
+    {name: 'configured fixture extra bridge authority', uiCase: 'shell', change: value => {value.uploadUi!.flags.bridgeIsolation = false;}},
+    {name: 'configured fixture permission allowed', uiCase: 'shell', change: value => {value.uploadUi!.security.permissionsDenied = false;}},
+    {name: 'configured fixture reordered launch phases', uiCase: 'shell', change: value => {value.phases.reverse();}},
+    {name: 'configured fixture missing source phase', uiCase: 'shell', change: value => {value.phases.splice(2, 1);}},
     {name: 'configured fixture remote request allowed', uiCase: 'shell', change: value => {value.uploadUi!.security.remoteFetchDenied = false;}},
     ...uploadFlags.map(flag => ({name: `configured fixture absent ${flag}`, uiCase: 'shell' as const, change: (value: Fixture) => {delete value.uploadUi!.flags[flag];}})),
     {name: 'read-only writable contradiction', uiCase: 'settings', change: value => {value.ui.readOnly.writable = true;}},

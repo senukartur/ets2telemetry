@@ -163,8 +163,8 @@ try {
   assert.equal(result.playwright, '1.64.0');
   if (config.scenario === 'ui' && (!UI_CASES.includes(config.uiCase) || config.mode === 'installed')) throw new Error('INVALID_UI_SHARD');
   if(config.scenario==='recording')result.uploadCredentials=await observeUploadCredentials(config);
-  if(config.scenario==='ui' && config.uiCase==='shell')result.uploadUi=await runDashboardUploadUiFixture(config);
-  if (config.scenario === 'ui' && config.uiCase !== 'journal' || config.scenario === 'now-playing' || config.scenario === 'telemetry' || config.scenario === 'overlay' || config.scenario === 'lifecycle' || config.scenario === 'recording' || config.scenario === 'soak') telemetrySource = await startLiveSmokeSource(config.checkout);
+  if(config.scenario==='ui' && config.uiCase==='shell'){phase('upload-ui-fixture-started');result.uploadUi=await runDashboardUploadUiFixture(config);phase('upload-ui-fixture-completed');}
+  if (config.scenario === 'ui' && config.uiCase !== 'journal' || config.scenario === 'now-playing' || config.scenario === 'telemetry' || config.scenario === 'overlay' || config.scenario === 'lifecycle' || config.scenario === 'recording' || config.scenario === 'soak') {telemetrySource = await startLiveSmokeSource(config.checkout);if(config.scenario==='ui'&&config.uiCase==='shell')phase('telemetry-source-started');}
   if (config.scenario === 'telemetry' || config.scenario === 'ui' && ['live', 'overlay'].includes(config.uiCase)) telemetrySourceV1 = await startLiveSmokeSourceV1(config.checkout);
   if (config.scenario === 'hard-mode') hardModeSource = await startHardModeWorker(config);
   if (config.scenario === 'recording') recordingSource = await startRecordingSource(config);

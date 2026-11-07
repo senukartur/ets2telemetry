@@ -1,7 +1,7 @@
 import type {AppLanguage} from '../../../../packages/contracts/src';
 import type {JournalSyncRow} from '../../../../packages/contracts/src/journal';
 import {t, type I18nKey} from '../i18n';
-import type {UploadUiState} from './ui-controller';
+import {canVerifyDashboardUpload, type UploadUiState} from './ui-controller';
 
 type UploadTone = 'error' | 'warn' | 'ok' | 'neutral';
 
@@ -17,7 +17,7 @@ export function uploadView(ui: UploadUiState, language: AppLanguage) {
   return {
     available: !!status?.origin, busy, tone, headline: text(`state.${state}`),
     error: error ? text(`error.${error}`) : null,
-    canEnterToken: !!status?.origin && !status.candidateId && !busy && !['verifying', 'connecting', 'stopping'].includes(status.state),
+    canEnterToken: canVerifyDashboardUpload(ui),
     confirming: status?.state === 'confirmation-required' && !!status.candidateId && !ui.abandoned,
     connected: !!status?.owner && ['connected', 'paused'].includes(status.state) && !status.candidateId,
     enumeration: p ? text(`enumeration.${p.enumeration}`) : text('state.loading'),

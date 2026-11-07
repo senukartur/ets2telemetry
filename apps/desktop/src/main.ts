@@ -1,6 +1,5 @@
 import {UploadMainController} from './dashboard-upload/main-controller';
-import {guardJournalSync} from './dashboard-upload/journal-sync-guard';
-import type {JournalTripPage} from '../../../packages/contracts/src/journal';
+import {readJournalWithSync} from './dashboard-upload/journal-sync-guard';
 import {UploadServiceBridge} from './dashboard-upload/service-bridge';
 import {UploadCredentialStore,CredentialFiles} from './dashboard-upload/credential-store';
 import {electronUploadCrypto} from './dashboard-upload/credential-ports';
@@ -1243,13 +1242,11 @@ function runApplication(profileError: unknown): void {
   // call rejects. A valid call resolves the broker's {ok, value} or {ok: false, code}; no path, process id or Windows
   // session id is ever part of it.
   for (const kind of Object.keys(JOURNAL_CHANNELS) as JournalChannelKind[]) {
-    ipcMain.handle(JOURNAL_CHANNELS[kind], async (event, ...request: unknown[]) => {
+    ipcMain.handle(JOURNAL_CHANNELS[kind], (event, ...request: unknown[]) => {
       if (!trusted(event)) throw new Error('Untrusted journal request');
       const query = journalRequest(kind, request);
       if (!query) throw new Error('Invalid journal request');
-      const scope = upload.journalReadScope;
-      const result = await journal.request(query);
-      return kind === 'trips' && result.ok ? {ok: true, value: guardJournalSync(result.value as JournalTripPage, scope, upload.journalReadScope)} : result;
+      return readJournalWithSync(query, request => journal.request(request), () => upload.journalReadScope);
     });
   }
   // ET-016 PR-5 (J16): the sixth journal channel exports exactly one trip UUID, from the trusted dashboard main frame only.

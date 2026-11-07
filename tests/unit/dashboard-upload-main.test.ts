@@ -1,5 +1,5 @@
 import {it,expect,vi} from 'vitest';
-import {initialDashboardUploadStatus,type DashboardUploadStatus,type DashboardOwner} from '../../packages/contracts/src/dashboard-upload';
+import {initialDashboardUploadStatus,isDashboardUploadStatus,type DashboardUploadStatus,type DashboardOwner} from '../../packages/contracts/src/dashboard-upload';
 import {randomUUID} from 'node:crypto';
 import {UploadMainController} from '../../apps/desktop/src/dashboard-upload/main-controller';
 import {UploadCredentialStore} from '../../apps/desktop/src/dashboard-upload/credential-store';
@@ -102,4 +102,51 @@ it('REG-010/012 does not present an uncommitted candidate as a connected owner a
   const f = fixture(); await f.controller.attach(f.rpc); const candidate = await f.controller.handle('verify', [token]), original = f.rpc.call;
   f.rpc.call = command => command.action === 'prepare' ? Promise.resolve({ok: false, error: 'NETWORK'}) : original(command);
   const failed = await f.controller.handle('confirm', [candidate.candidateId]); expect(failed).toMatchObject({state: 'paused', error: 'NETWORK', owner: null, candidateId: null}); expect(f.controller.journalReadScope).toBeUndefined(); f.controller.stop();
+});
+
+it.each([false, true])('REG-010/012 keeps reconciliation fail-closed and preserves credentials with disconnect intent=%s', async intent => {
+  const f = fixture(); await f.controller.attach(f.rpc); const candidate = await f.controller.handle('verify', [token]); await f.controller.handle('confirm', [candidate.candidateId]);
+  f.setConfiguration({...f.configuration(), status: 'reconciliation-required', ...(intent ? {version: '2', registration: {...f.configuration().registration as object, accountId: 'new-owner'}} : {})});
+  if (intent) await f.store.disconnectIntent({version: 1, channel: 'staging', origin, expectedVersion: '1'});
+  const before = new Map(f.files), load = vi.spyOn(f.store, 'load'), start = f.calls.length;
+  const restarted = f.controller;
+  try {
+    await restarted.attach(f.rpc); expect(restarted.status).toMatchObject({state: 'paused', error: 'RECONCILIATION', owner: null, candidateId: null});
+    expect(f.files).toEqual(before); expect(await f.store.readDisconnect()).toEqual(intent ? {version: 1, channel: 'staging', origin, expectedVersion: '1'} : undefined);
+    expect(load).not.toHaveBeenCalled(); expect(f.calls.slice(start).map(call => call.action)).toEqual(['configuration']); expect(restarted.journalReadScope).toBeUndefined();
+  } finally {restarted.stop(); f.controller.stop();}
+});
+it.each(['reconciliation-owner', 'reconciliation-orphan', 'committed-disconnect'] as const)('REG-010/012 completes only the explicit version-bound disconnect during %s without secret loading', async boundary => {
+  const f = fixture(); await f.controller.attach(f.rpc); const candidate = await f.controller.handle('verify', [token]); await f.controller.handle('confirm', [candidate.candidateId]);
+  await f.store.disconnectIntent({version: 1, channel: 'staging', origin, expectedVersion: '1'});
+  f.setConfiguration({...f.configuration(), status: boundary === 'committed-disconnect' ? 'ready' : 'reconciliation-required', ...(boundary === 'committed-disconnect' ? {version: '2', registration: null, credentialGeneration: null, runId: null} : boundary === 'reconciliation-orphan' ? {registration: null} : {})});
+  const original = f.rpc.call, calls: UploadServiceCommand[] = [], load = vi.spyOn(f.store, 'load');
+  const restarted = new UploadMainController(origin, 'staging', () => f.store, () => {});
+  try {
+    await restarted.attach({...f.rpc, async call(command) {
+      calls.push(command);
+      if (command.action === 'disconnect') {
+        expect(command.expectedVersion).toBe('1'); expect(f.configuration().version).toBe('1');
+        f.setConfiguration({...f.configuration(), status: 'ready', version: '2', registration: null, credentialGeneration: null, runId: null});
+        return {ok: true, value: {kind: 'connection', connection: {status: 'disconnected', version: '2', runId: null}}};
+      }
+      return original(command);
+    }});
+    expect(restarted.status).toEqual(initialDashboardUploadStatus(origin)); expect(restarted.journalReadScope).toBeUndefined(); expect(f.files.size).toBe(0); expect(await f.store.readDisconnect()).toBeUndefined(); expect(load).not.toHaveBeenCalled();
+    expect(calls.map(call => call.action)).toEqual(boundary === 'committed-disconnect' ? ['configuration'] : ['configuration', 'disconnect']);
+  } finally {restarted.stop(); f.controller.stop();}
+});
+it('REG-010/012 keeps a valid owner-free recovery context while the exact reconciliation disconnect settles', async () => {
+  const f = fixture(); await f.controller.attach(f.rpc); const candidate = await f.controller.handle('verify', [token]); await f.controller.handle('confirm', [candidate.candidateId]);
+  await f.store.disconnectIntent({version: 1, channel: 'staging', origin, expectedVersion: '1'}); f.setConfiguration({...f.configuration(), status: 'reconciliation-required'});
+  let entered!: () => void, settle!: (reply: UploadServiceReply) => void;
+  const reached = new Promise<void>(done => {entered = done;}), reply = new Promise<UploadServiceReply>(done => {settle = done;}), original = f.rpc.call, load = vi.spyOn(f.store, 'load');
+  const pending = f.controller.attach({...f.rpc, call(command) {if (command.action === 'disconnect') {entered(); return reply;} return original(command);}});
+  try {
+    await reached; const context = await f.controller.handle('context', []); expect(isDashboardUploadStatus(context)).toBe(true); expect(context).toMatchObject({state: 'paused', owner: null, candidateId: null});
+    expect(await f.store.readDisconnect()).toBeDefined(); expect(load).not.toHaveBeenCalled();
+    f.setConfiguration({...f.configuration(), status: 'ready', version: '2', registration: null, credentialGeneration: null, runId: null});
+    settle({ok: true, value: {kind: 'connection', connection: {status: 'disconnected', version: '2', runId: null}}}); await pending;
+    expect(f.controller.status).toEqual(initialDashboardUploadStatus(origin)); expect(f.files.size).toBe(0);
+  } finally {f.controller.stop();}
 });

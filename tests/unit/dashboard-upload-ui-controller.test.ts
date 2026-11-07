@@ -1,4 +1,5 @@
 import {expect, it, vi} from 'vitest';
+import {uploadView} from '../../apps/desktop/src/dashboard-upload/view';
 import {initialDashboardUploadStatus, type DashboardUploadBridge, type DashboardUploadStatus} from '../../packages/contracts/src/dashboard-upload';
 import {DashboardUploadUiController} from '../../apps/desktop/src/dashboard-upload/ui-controller';
 const origin = 'https://dashboard.example', owner = {origin, accountId: 'a', companyId: 'c', identityEpoch: 'e'};
@@ -62,4 +63,19 @@ it('REG-010/012 cancels only the returned confirmation UUID and restores authori
   const f = fixture(); f.notify(candidate); const pending = f.controller.cancel();
   await f.controller.confirm(); expect(f.bridge.confirmDashboardUpload).not.toHaveBeenCalled(); expect(f.bridge.cancelDashboardUpload).toHaveBeenCalledExactlyOnceWith(candidate.candidateId);
   f.cancel.resolve(connected); await pending; expect(f.controller.getSnapshot()).toMatchObject({phase: 'idle', abandoned: false, status: connected});
+});
+it.each(['unavailable', 'disconnected', 'verifying', 'confirmation-required', 'connecting', 'connected', 'paused', 'stopping'] as const)('REG-010/012 aligns form and controller admission for %s', async state => {
+  const f = fixture(), status = {...initialDashboardUploadStatus(origin), state, ...(state === 'connected' ? {owner} : state === 'confirmation-required' ? {owner, candidateId: candidate.candidateId} : {})};
+  f.notify(status); const allowed = state === 'disconnected' || state === 'connected' || state === 'paused';
+  expect(uploadView(f.controller.getSnapshot(), 'en').canEnterToken).toBe(allowed);
+  const result = f.controller.verify(token);
+  if (allowed) {f.verify.resolve(initialDashboardUploadStatus(origin)); expect(await result).toBe(true); expect(f.bridge.verifyDashboardUploadToken).toHaveBeenCalledExactlyOnceWith(token);}
+  else {expect(await result).toBe(false); expect(f.bridge.verifyDashboardUploadToken).not.toHaveBeenCalled(); expect(uploadView(f.controller.getSnapshot(), 'en').error).toBeTruthy();}
+  expect(JSON.stringify(f.controller.getSnapshot())).not.toContain(token); f.controller.stop();
+});
+it('REG-010/012 gives fixed nonsecret feedback when a service notification retires a visible token form before submission', async () => {
+  const f = fixture(); f.notify(initialDashboardUploadStatus(origin)); expect(uploadView(f.controller.getSnapshot(), 'en').canEnterToken).toBe(true);
+  f.notify({...initialDashboardUploadStatus(origin), state: 'unavailable'}); expect(await f.controller.verify(token)).toBe(false);
+  const state = f.controller.getSnapshot(); expect(state.error).toBe('RETIRED'); expect(uploadView(state, 'en')).toMatchObject({available: true, canEnterToken: false, error: expect.stringContaining('restarted')});
+  expect(f.bridge.verifyDashboardUploadToken).not.toHaveBeenCalled(); expect(JSON.stringify(state)).not.toContain(token); f.controller.stop();
 });
