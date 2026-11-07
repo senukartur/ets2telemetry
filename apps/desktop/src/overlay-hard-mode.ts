@@ -10,13 +10,14 @@ export const OVERLAY_HARD_MODE_RULES = 12;
 const INACTIVE: OverlayHardMode = Object.freeze({state: 'inactive'});
 
 /**
- * The indicator for main's current status: `lost` when the current trip has a first loss, whatever the assessment;
+ * The indicator for main's current status: `lost` only when a legacy v1 trip has a first loss, whatever the assessment;
  * otherwise `active` only for a passing assessment; otherwise `inactive` with the number of rules in `pass`, but only
  * when at least one rule is not `unknown`. An expired lease, a service that is not ready and an observation without
- * evidence all yield twelve unknown rules, so they show no count rather than a guessed 0 of 12.
+ * evidence all yield twelve unknown rules, so they show no count rather than a guessed 0 of 12. V2 trip ratios and
+ * retained diagnostics never override the current settings.
  */
 export function overlayHardMode(status: HardModeStatus): OverlayHardMode {
-  if (status.trip?.firstLoss) return {state: 'lost'};
+  if (status.trip?.version === 1 && status.trip.firstLoss) return {state: 'lost'};
   if (status.assessment.state === 'pass') return {state: 'active'};
   const rules = status.assessment.rules;
   if (!rules.some(rule => rule.state !== 'unknown')) return {state: 'inactive'};

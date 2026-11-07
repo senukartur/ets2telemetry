@@ -48,8 +48,19 @@ describe('the indicator main projects from its Hard Mode status', () => {
     expect(projected).toStrictEqual({state: 'inactive'});
     expect(Object.keys(projected)).toEqual(['state']);
   });
-  it.each([['pass', PASS], ['fail', FATIGUE_OFF], ['unknown', UNKNOWN]] as const)('is lost on a current trip loss, whatever the %s assessment', (_name, value) => {
+  it.each([['pass', PASS], ['fail', FATIGUE_OFF], ['unknown', UNKNOWN]] as const)('is lost on a legacy v1 current trip loss, whatever the %s assessment', (_name, value) => {
     expect(overlayHardMode(status(value, trip(LOSS)))).toStrictEqual({state: 'lost'});
+  });
+});
+
+describe('the current settings of a recoverable v2 trip', () => {
+  const diagnostic = {atUtcMs:2000,code:'rule-failed' as const,rule:'fatigue' as const,values:[0]};
+  const details: HardModeDetails = {version:2,binding:null,opening:PASS,latest:FATIGUE_OFF,firstLoss:null,manualDelivery:null,
+    checkpoint:null,passingChecks:1,failingChecks:1,unknownChecks:3,firstDiagnostic:diagnostic,latestDiagnostic:diagnostic};
+  it.each<[HardModeAssessment, OverlayHardMode]>([
+    [PASS,{state:'active'}], [FATIGUE_OFF,{state:'inactive',passed:11}], [UNKNOWN,{state:'inactive'}]
+  ])('uses the current assessment despite a below-threshold ratio and retained diagnostics: %s', (value,expected) => {
+    expect(overlayHardMode(status(value,details))).toStrictEqual(expected);
   });
 });
 

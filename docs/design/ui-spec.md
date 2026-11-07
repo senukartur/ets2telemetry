@@ -184,7 +184,7 @@ The existing parameter hints remain optional supplementary information: hover/fo
 | Spec id | Content | Data binding |
 | --- | --- | --- |
 | `journal.filters` | Segmented game filter (All, ETS2, ATS), outcome select, recording select, search field, trip count | `JournalTripsQuery` `game`, `outcome`, `completeness`. Search is a proposal: it needs a storage query that does not exist yet; omit it until then |
-| `journal.table` | Columns: Started (local date and time), Game chip, Cargo (+ `HM` badge for Hard Mode trips), Route (cities, companies below), Distance (observed, "of planned" below), Revenue (revenue, or −penalty in error colour; "expected …" below), Outcome, Recording, optional Sync, chevron | `JournalTripSummary`; Hard Mode from `is_hard_mode` (ET-026b); Sync uses validated per-root/revision queued, sending, identity-pending, held or durably sent status and appears only after upload is implemented and configured; sent never means company acceptance |
+| `journal.table` | Columns: Started (local date and time), Game chip, Cargo (+ `HM` badge for Hard Mode trips; a job market badge below, with `Special transport` for a special job), Route (cities, companies below), Distance (observed, "of planned" below), Revenue (revenue, or −penalty in error colour; "expected …" below), Outcome, Recording, optional Sync, chevron | `JournalTripSummary`; Hard Mode from `is_hard_mode` (ET-026b); Sync uses validated per-root/revision queued, sending, identity-pending, held or durably sent status and appears only after upload is implemented and configured; sent never means company acceptance |
 | `journal.pager` | "Page N · 50 trips per page · the journal does not update by itself", Previous / Next; **Refresh** in the top bar | Cursor paging as today (ET-016) |
 
 Outcome badges: open → ◌ "In progress" (neutral); delivered → ✓ (ok); cancelled → ✕ (error); none → "No outcome" (neutral). The mockup also shows **Delivered late** (warn); that needs a defined lateness rule from stored data and is a proposal, not a current field. Recording badges: complete ✓ ok, partial ⚠ warn, unknown ◌ neutral. A row opens Trip details. Empty journal: see §6.
@@ -193,7 +193,7 @@ Outcome badges: open → ◌ "In progress" (neutral); delivered → ✓ (ok); ca
 
 | Spec id | Content | Data binding |
 | --- | --- | --- |
-| `trip.header` | Back to the journal, cargo as title, chips (game, outcome, recording, Hard Mode), route and companies and start time | `JournalTripDetail` |
+| `trip.header` | Back to the journal, cargo as title, chips (game, mode, job market, Special transport for a special job, outcome, recording, Hard Mode), route and companies and start time | `JournalTripDetail` |
 | `trip.export` | **Export JSON** (secondary button) | `exportJournalTrip` (ET-016 PR-5) |
 | `trip.tiles` | Four tiles: distance observed (hero gradient; "planned …" and "game reported …" below), revenue or penalty (teal; "expected …"), real time ("… game time"), fuel used ("from samples, refuels excluded") | Observed `observedDistanceM`, planned from the job, game-reported from the outcome record; money as exact text |
 | `trip.detailTabs` | Segmented tabs **Summary** (speed chart from 1 Hz samples, gaps shaded warn, missing data hatched), **Timeline** (events with time, coloured dot, title, detail), **Completeness** (recorded vs gap bar and interval count) | Samples, `journalEvents`, `journalIntervals` |

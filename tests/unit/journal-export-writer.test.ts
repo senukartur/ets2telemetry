@@ -79,13 +79,13 @@ describe('a saved export (J16, J17)', () => {
       return {ok: true as const, value: {...value, database: {purpose: 'history', schemaVersion: 2}}};
     };
   };
-  it('collects history diagnostics once after Save and includes them in format 4', async () => {
+  it('collects history diagnostics once after Save and includes them in format 5', async () => {
     const diagnostics = vi.fn().mockResolvedValue(diagnosticInput());
     const f = exporter({read: historyRead(), diagnostics});
     expect((await f.instance.export(TRIP)).ok).toBe(true);
     expect(diagnostics).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({trip: DETAIL.trip}), 1_800_000_000_000);
     const value = JSON.parse(await readFile(path.join(out, 'trip.json'), 'utf8'));
-    expect(value.diagnostics).toEqual(diagnosticInput()); expect(value.formatVersion).toBe(4);
+    expect(value.diagnostics).toEqual(diagnosticInput()); expect(value.formatVersion).toBe(5);
   });
   it.each(['cancelled', 'refused', 'synthetic'] as const)('does not collect game diagnostics for a %s export', async mode => {
     const diagnostics = vi.fn().mockResolvedValue(diagnosticInput());

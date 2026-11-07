@@ -3,6 +3,10 @@ import type {AppLanguage} from '../../../../packages/contracts/src';
 export type {AppLanguage};
 
 export type I18nKey =
+ | 'hm.ratio' | 'hm.recoverable'
+ | 'hm.diagnostic.settings-changing' | 'hm.diagnostic.settings-unavailable' | 'hm.diagnostic.profile-verification'
+ | 'hm.diagnostic.source-changed' | 'hm.diagnostic.guard-deadline' | 'hm.diagnostic.session-transition'
+ | 'hm.diagnostic.storage-failure' | 'hm.diagnostic.rule-failed'
  | 'np.title'
  | 'np.enabled'
  | 'np.source'
@@ -459,7 +463,7 @@ export type I18nKey =
   | 'j.of' | 'j.expected' | 'j.page' | 'j.prev' | 'j.next' | 'j.count'
   | 'out.open' | 'out.delivered' | 'out.late' | 'out.cancelled' | 'out.none'
   | 'sync.sent' | 'sync.queued' | 'sync.error' | 'sync.none'
-  | 'j.emptyTitle' | 'j.emptyText'
+  | 'j.emptyTitle' | 'j.emptyText' | 'j.specialTransport' | 'j.worldOfTrucks'
   | 'tr.back' | 'tr.distance' | 'tr.planned' | 'tr.delivered' | 'tr.revenue' | 'tr.penalty' | 'tr.expected'
   | 'tr.time' | 'tr.gameTime' | 'tr.fuel' | 'tr.fuelNote'
   | 'tr.tab.summary' | 'tr.tab.timeline' | 'tr.tab.completeness' | 'tr.speed' | 'tr.samples' | 'tr.gap'

@@ -1,4 +1,4 @@
-import type {HardModeAssessment, HardModeDetails, HardModeReason, HardModeRuleId} from '../../../contracts/src/hard-mode';
+import type {HardModeAssessment, HardModeDetails, HardModeDetailsV1, HardModeDetailsV2, HardModeCounts, HardModeObservation, HardModeDiagnostic, HardModeReason, HardModeRuleId} from '../../../contracts/src/hard-mode';
 export const HARD_MODE_TOLERANCE = 1e-6;
 export const HARD_MODE_RULES = [
   {id: 'fuel', label: 'Realistic fuel consumption', keys: ['g_fuel_simulation'], required: '= 1', limit: 1, op: 'eq'},
@@ -50,11 +50,49 @@ export function unknownHardMode(at: number, reason: HardModeReason = 'source-unp
   return {observedUtcMs: at, state: 'unknown', source: 'unknown', rules: HARD_MODE_RULES.map(({id}) => ({id, state: 'unknown', values: id === 'parking' ? [null, null] : [null], reason}))};
 }
 /** Ordered observer offers replace latest; queued intake reapplication only latches loss, independently of UTC labels. */
+export function advanceHardMode(previous: HardModeDetailsV1 | null, assessment: HardModeAssessment, loss?: HardModeReason, latest?: 'publication' | 'frozen'): HardModeDetailsV1;
+export function advanceHardMode(previous: HardModeDetails, assessment: HardModeAssessment, loss?: HardModeReason, latest?: 'publication' | 'frozen'): HardModeDetails;
 export function advanceHardMode(previous: HardModeDetails | null, assessment: HardModeAssessment, loss?: HardModeReason, latest: 'publication' | 'frozen' = 'publication'): HardModeDetails {
+  if (previous?.version === 2) return advanceHardModeV2(previous, {assessment, binding: previous.binding, pluginSessionId: null, sourceMonotonicNs: null}, latest);
   const failed = assessment.rules.find(r => r.state !== 'pass');
   const firstLoss = previous?.firstLoss ?? (loss || failed ? {atUtcMs: assessment.observedUtcMs, reason: loss ?? failed!.reason, rule: loss ? null : failed!.id, values: loss ? null : [...failed!.values]} : null);
   return {version: 1, binding: previous?.binding ?? null, opening: previous?.opening ?? assessment, latest: previous && latest === 'frozen' ? previous.latest : assessment, firstLoss, manualDelivery: previous?.manualDelivery ?? null};
 }
-export function hardModeLoss(details: HardModeDetails, atUtcMs: number, reason: HardModeReason, rule: HardModeRuleId | null = null): HardModeDetails {
+export function hardModeLoss(details: HardModeDetailsV1, atUtcMs: number, reason: HardModeReason, rule: HardModeRuleId | null = null): HardModeDetailsV1 {
   return {...details, firstLoss: details.firstLoss ?? {atUtcMs, reason, rule, values: rule ? details.latest.rules.find(r => r.id === rule)?.values ?? null : null}};
+}
+
+export const emptyHardModeCounts = (): HardModeCounts => ({passingChecks: 0, failingChecks: 0, unknownChecks: 0});
+/** Integer arithmetic keeps the inclusive threshold exact even near the safe counter limit. */
+export function qualifiesHardMode(counts: HardModeCounts, delivered = true): boolean {
+  const known = BigInt(counts.passingChecks) + BigInt(counts.failingChecks);
+  return delivered && known > 0n && BigInt(counts.passingChecks) * 100n >= known * 95n;
+}
+export function newHardModeDetails(assessment: HardModeAssessment, binding: string | null): HardModeDetailsV2 {
+  return {version: 2, binding, opening: assessment, latest: assessment, firstLoss: null, manualDelivery: null, ...emptyHardModeCounts(), checkpoint: null, firstDiagnostic: null, latestDiagnostic: null};
+}
+/** Publications update diagnostics; only a designated cumulative batch changes the sampling counts. */
+export function advanceHardModeV2(previous: HardModeDetailsV2, observation: HardModeObservation, latest: 'publication' | 'frozen' = 'publication'): HardModeDetailsV2 {
+  const next = {...previous, latest: latest === 'publication' ? observation.assessment : previous.latest};
+  const ownDiagnostic = hardModeDiagnostic(observation, previous.binding);
+  const diagnostics = observation.diagnostics ?? (ownDiagnostic ? [ownDiagnostic] : []);
+  if (diagnostics.length) {next.firstDiagnostic ??= diagnostics[0]; if (latest === 'publication' || !next.latestDiagnostic) next.latestDiagnostic = diagnostics[diagnostics.length - 1];}
+  const batch = observation.batch, checkpoint = previous.checkpoint;
+  if (batch && (checkpoint?.producer !== batch.producer || batch.sequence > checkpoint.sequence)) {
+    const before = checkpoint?.producer === batch.producer ? checkpoint : emptyHardModeCounts();
+    for (const key of ['passingChecks', 'failingChecks', 'unknownChecks'] as const) {
+      if (batch[key] < before[key] || !Number.isSafeInteger(next[key] + batch[key] - before[key])) throw new Error('Invalid Hard Mode checkpoint');
+      next[key] += batch[key] - before[key];
+    }
+    if (!Number.isSafeInteger(next.passingChecks + next.failingChecks + next.unknownChecks)) throw new Error('Hard Mode counter bound');
+    next.checkpoint = {...batch};
+  }
+  return next;
+}
+
+export function hardModeDiagnostic(observation: HardModeObservation, binding: string | null = null): HardModeDiagnostic | null {
+  const failed = observation.assessment.rules.find(r => r.state === 'fail');
+  const code = observation.diagnostic ?? (observation.assessment.state === 'fail' ? 'rule-failed' : observation.assessment.state === 'unknown' ? 'settings-unavailable'
+    : binding !== null && observation.binding !== null && binding !== observation.binding ? 'source-changed' : undefined);
+  return code ? {atUtcMs: observation.assessment.observedUtcMs, code, rule: failed?.id ?? null, values: failed ? [...failed.values] : null} : null;
 }

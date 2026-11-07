@@ -12,7 +12,7 @@ import type {MoneyCurrency} from '../../../packages/telemetry-core/src/readings'
 import * as BASE_COPY from './strings';
 import {copyTable, localizedMeasurement} from './screens/app-copy';
 import {DEFAULT_UNIT_PROFILES} from './unit-profiles';
-import {formatLocalizedBoolean, formatLocalizedGameDuration, formatLocalizedGameTime} from './i18n';
+import {formatLocalizedBoolean, formatLocalizedGameDuration, formatLocalizedGameTime, t} from './i18n';
 
 // Text of the trip journal (ET-016 PR-4, J12-J14): every string the Journal tab shows, built from one journal page or
 // trip detail at a time. Pure, safe for renderer bundles and plain Node tests: type imports, telemetry-core formatting
@@ -42,8 +42,16 @@ export interface JournalSection {id: string; title: string; fields: JournalField
 export interface JournalBadge {text: string; variant: 'secondary' | 'destructive' | 'outline'}
 
 export interface JournalModeBadge {kind: JournalGameMode['mode']; text: string; evidence: string; tone: 'ok' | 'warn' | 'neutral'}
+/**
+ * The kind of a trip's job market (ET-072): a market the SDK documents, World of Trucks for both external markets, `other`
+ * for any other stored value and `unavailable` when the game did not provide one.
+ */
+export type JournalJobKind = 'cargo-market' | 'freight-market' | 'quick-job' | 'world-of-trucks' | 'other' | 'unavailable';
+export interface JournalJobBadge {kind: JournalJobKind; text: string}
 export interface JournalTripRow {
   mode: JournalModeBadge;
+  /** The job market badge; `specialTransport` is its label only when the game marked the job as special. */
+  jobType: JournalJobBadge; specialTransport: string | null;
   tripUuid: string; isHardMode: boolean; gameId: JournalGame; started: string; game: string; route: string; cargo: string;
   /** `Delivered`, `Cancelled`, `In progress` or `No outcome — <why it closed>`. */
   outcome: string;
@@ -52,7 +60,9 @@ export interface JournalTripRow {
   plannedDistance: string; observedDistance: string; fuelUsed: string; expectedIncome: string;
 }
 export interface JournalListText {rows: JournalTripRow[]; empty: string | null; emptyNote: string | null; hasNext: boolean}
-export interface JournalDetailText {mode: JournalModeBadge; title: string; outcome: string; completeness: JournalBadge; sections: JournalSection[]}
+export interface JournalDetailText {
+  mode: JournalModeBadge; jobType: JournalJobBadge; specialTransport: string | null; title: string; outcome: string; completeness: JournalBadge; sections: JournalSection[];
+}
 export interface JournalIntervalRow {id: string; kind: string; cause: string; start: string; end: string; events: string}
 export interface JournalIntervalText {total: string; rows: JournalIntervalRow[]; empty: string | null; hasNext: boolean}
 export interface JournalEventRow {key: string; eventSeq: string; time: string; type: string; detail: string; attribution: string}
@@ -68,6 +78,10 @@ export interface JournalSampleText {columns: JournalColumn[]; rows: JournalSampl
 
 type JournalFailure = Extract<JournalCallResult<unknown>, {ok: false}>;
 type Avail<T> = {available: true; value: T} | {available: false; reason: UnavailableReason};
+/** The badge kinds of the SDK job markets; the SDK names no market World of Trucks, the community reading of external_* does. */
+const JOB_KINDS: Readonly<Record<string, JournalJobKind>> = Object.freeze({
+  'cargo_market': 'cargo-market', 'freight_market': 'freight-market', 'quick_job': 'quick-job', 'external_contracts': 'world-of-trucks', 'external_market': 'world-of-trucks'
+});
 
 function createJournalText(language: AppLanguage) {
  const formatVolume = (...args: Parameters<typeof coreFormatVolume>) => localizedMeasurement(coreFormatVolume(...args), language);
@@ -164,11 +178,23 @@ function gameModeBadge(mode: JournalGameMode, ambiguous: boolean): JournalModeBa
   return {kind: mode.mode, text, evidence: gameModeText(mode, ambiguous), tone: ambiguous || unconfirmed ? 'warn' : mode.mode === 'truckersmp' ? 'ok' : 'neutral'};
 }
 const routeText = (job: JournalTripListItem['job']) => `${nameOf(job.sourceCity)} → ${nameOf(job.destinationCity)}`;
+/**
+ * The job market badge: a documented market's label, prefixed with World of Trucks for the external markets; any other
+ * value (verbatim, `(empty)` for an empty one) or an unavailable market names the job market field. The raw value is never changed.
+ */
+function jobTypeBadge(market: Avail<string>): JournalJobBadge {
+  if (!market.available) return {kind: 'unavailable', text: `${JOURNAL_LABEL_TEXT.market}: ${unavailable(market.reason)}`};
+  if (!Object.hasOwn(JOB_KINDS, market.value)) return {kind: 'other', text: `${JOURNAL_LABEL_TEXT.market}: ${name(market.value)}`};
+  const kind = JOB_KINDS[market.value], label = BASE_COPY.getJobMarketText(market.value, language);
+  return {kind, text: kind === 'world-of-trucks' ? `${t('j.worldOfTrucks', undefined, language)} · ${label}` : label};
+}
+/** `Special transport` only when the game marked the job as special; false and unavailable show nothing. */
+const specialTransport = (special: Avail<boolean>) => special.available && special.value ? t('j.specialTransport', undefined, language) : null;
 
 function tripRow(trip: JournalTripListItem, options: JournalTextOptions): JournalTripRow {
   const units = unitsFor(trip.game, options);
   return {
-    mode: gameModeBadge(trip.gameMode, trip.gameModeAmbiguous), tripUuid: trip.tripUuid, gameId: trip.game, started: localTime(trip.startedUtcMs, options.timeZone), game: JOURNAL_GAME_TEXT[trip.game], route: routeText(trip.job),
+    mode: gameModeBadge(trip.gameMode, trip.gameModeAmbiguous), jobType: jobTypeBadge(trip.job.market), specialTransport: specialTransport(trip.job.isSpecialJob), tripUuid: trip.tripUuid, gameId: trip.game, started: localTime(trip.startedUtcMs, options.timeZone), game: JOURNAL_GAME_TEXT[trip.game], route: routeText(trip.job),
     isHardMode: trip.isHardMode, cargo: nameOf(trip.job.cargo), outcome: outcomeText(trip), completeness: completenessBadge(trip.recordingCompleteness),
     plannedDistance: show(trip.job.plannedDistance, distance(units)), observedDistance: show(trip.observedDistanceM, distance(units)),
     fuelUsed: show(trip.fuelUsedL, volume(units)), expectedIncome: show(trip.job.expectedIncome, moneyText)
@@ -272,7 +298,7 @@ function journalDetailText(detail: JournalTripDetail, options: JournalTextOption
     field('sampleCount', String(samples.count)),
     ...(samples.firstUtcMs !== null && samples.lastUtcMs !== null ? [field('firstSample', localTime(samples.firstUtcMs, zone)), field('lastSample', localTime(samples.lastUtcMs, zone))] : [])
   ]));
-  return {mode: gameModeBadge(trip.gameMode, trip.gameModeAmbiguous), title: `${JOURNAL_GAME_TEXT[trip.game]}: ${routeText(trip.job)}`, outcome: outcomeText(trip), completeness: completenessBadge(trip.recordingCompleteness), sections};
+  return {mode: gameModeBadge(trip.gameMode, trip.gameModeAmbiguous), jobType: jobTypeBadge(job.market), specialTransport: specialTransport(job.isSpecialJob), title: `${JOURNAL_GAME_TEXT[trip.game]}: ${routeText(trip.job)}`, outcome: outcomeText(trip), completeness: completenessBadge(trip.recordingCompleteness), sections};
 }
 
 /** An interval cause from the recorder's fixed list; anything else is `other`, never stored text. */

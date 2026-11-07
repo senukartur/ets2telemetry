@@ -1,3 +1,4 @@
+import {unobservedHardModeAudit} from '../shared/hard-mode';
 import {projectEffects} from '../../packages/storage/src/sqlite/logical-trips';
 // ET-016 PR-2: journal reads through the in-process storage core, against temporary synthetic-purpose databases. The
 // main database is a copy of the immutable version 1 fixture, migrated to version 2 (its trip is the migrated anchor),
@@ -19,6 +20,8 @@ import {failed, ok, REPRESENTATIVE, workspace} from './helpers';
 const DATABASE = {purpose: 'synthetic', schemaVersion: 6};
 const NOT_OBSERVED = {available: false, reason: 'not-observed'} as const;
 const text = (value: string) => ({available: true as const, value});
+/** The job market and special-job flag of every seeded job and of the version 1 fixture's job: stored before ET-072, read without a migration. */
+const FREIGHT = text('freight_market'), NOT_SPECIAL = {available: true as const, value: false};
 
 let ws: Awaited<ReturnType<typeof workspace>>;
 let storage: Storage;
@@ -98,10 +101,11 @@ describe('journal trip list (J5; REG-014)', () => {
     const page = ok(storage.journalTrips({game: 'ats', outcome: 'delivered', completeness: 'complete'}));
     const zero = page.trips.at(-1)!;
     expect(zero).toEqual({
-      isHardMode: false, hardModeDetails: null, tripUuid: T.zeroValues, game: 'ats', gameMode: ANCHOR_GAME_MODE, gameModeAmbiguous: false, outcome: 'delivered', closeReason: 'outcome', recordingCompleteness: 'complete',
+      isHardMode: false, hardModeDetails: unobservedHardModeAudit(SESSION_C_UTC + 3_000), tripUuid: T.zeroValues, game: 'ats', gameMode: ANCHOR_GAME_MODE, gameModeAmbiguous: false, outcome: 'delivered', closeReason: 'outcome', recordingCompleteness: 'complete',
       startedUtcMs: SESSION_C_UTC + 3_000, endedUtcMs: SESSION_C_UTC + 4_000, observedDistanceM: {available: true, value: 0}, fuelUsedL: NOT_OBSERVED,
       job: {source: 'event', sourceCity: text(''), sourceCompany: text('Synthetic Company A'), destinationCity: {available: false, reason: 'not-supported'},
-        destinationCompany: text('Synthetic Company B'), cargo: NOT_OBSERVED, plannedDistance: {available: true, value: 0, unit: 'm'},
+        destinationCompany: text('Synthetic Company B'), cargo: NOT_OBSERVED, market: FREIGHT, isSpecialJob: NOT_SPECIAL,
+        plannedDistance: {available: true, value: 0, unit: 'm'},
         expectedIncome: {available: true, value: {raw: '0', sdkType: 'u64', currency: USD}}}
     } satisfies JournalTripListItem);
     const open = ok(storage.journalTrips({game: 'ets2', outcome: 'open'})).trips.at(-1)!;
@@ -117,9 +121,32 @@ describe('journal trip list (J5; REG-014)', () => {
       isHardMode: false, hardModeDetails: null, tripUuid: MIGRATED_V1_TRIP, game: 'ets2', gameMode: ANCHOR_GAME_MODE, gameModeAmbiguous: false, outcome: 'cancelled', closeReason: 'outcome', recordingCompleteness: 'partial',
       startedUtcMs: 1_791_676_800_000, endedUtcMs: 1_791_677_100_000, observedDistanceM: {available: true, value: 1_500.5}, fuelUsedL: NOT_OBSERVED,
       job: {source: 'event', sourceCity: text('Synthetic City A'), sourceCompany: text('Synthetic Company A'), destinationCity: text('Synthetic City B'),
-        destinationCompany: text('Synthetic Company B'), cargo: text('Synthetic Cargo'), plannedDistance: {available: true, value: 152_000, unit: 'm'},
+        destinationCompany: text('Synthetic Company B'), cargo: text('Synthetic Cargo'), market: FREIGHT, isSpecialJob: NOT_SPECIAL,
+        plannedDistance: {available: true, value: 152_000, unit: 'm'},
         expectedIncome: {available: true, value: {raw: '18446744073709551615', sdkType: 'u64', currency: UNKNOWN_CURRENCY}}}
     });
+  });
+});
+
+describe('the job market and special-job flag of a list row and its detail (ET-072; REG-009, REG-014)', () => {
+  it('reads an unavailable market and a special job from the stored job configuration in both reads', async () => {
+    const special = await workspace();
+    try {
+      const st = await special.open(), s = new Script(ETS2_A), trip = '7d000000-0000-4000-8000-000000000001';
+      const values = job({market: {available: false, reason: 'not-supported'}, isSpecialJob: {available: true, value: true}});
+      ok(st.upsertSession({message: s.welcome()}));
+      expect(ok(st.commitEvent({message: s.event(r.jobConfigured(values)), effects: [{kind: 'trip.open', tripUuid: trip, game: 'ets2',
+        gameMode: {mode: 'unknown', method: 'none', confidence: 'none'}, jobConfiguration: 'this-event', recordingCompleteness: 'unknown', startedUtcMs: BASE_UTC}]})).status).toBe('committed');
+      const summary = {market: {available: false, reason: 'not-supported'}, isSpecialJob: {available: true, value: true}};
+      const listed = ok(st.journalTrips()).trips;
+      expect(listed.map(item => item.tripUuid)).toEqual([trip]);
+      expect(listed[0].job).toMatchObject(summary);
+      const detail = ok(st.journalTrip(trip));
+      expect(validateJournalTripDetail(detail)).toBe(detail);
+      expect(detail.trip.job).toMatchObject(summary);
+      expect(detail.job.values).toEqual(values);
+      st.close();
+    } finally { await special.dispose(); }
   });
 });
 
@@ -127,11 +154,12 @@ describe('journal trip detail (J5, J13; REG-009, REG-014)', () => {
   it('returns the delivered trip with its job, truck, trailer, revenue, exact money totals, window, samples and export bounds', () => {
     expect(ok(storage.journalTrip(T.delivered))).toEqual({
       database: DATABASE,
-      trip: {isHardMode: false, hardModeDetails: null,
+      trip: {isHardMode: false, hardModeDetails: unobservedHardModeAudit(BASE_UTC + 4_000),
         tripUuid: T.delivered, game: 'ets2', gameMode: ANCHOR_GAME_MODE, gameModeAmbiguous: false, outcome: 'delivered', closeReason: 'outcome', recordingCompleteness: 'complete',
         startedUtcMs: BASE_UTC + 4_000, endedUtcMs: BASE_UTC + 9_000, observedDistanceM: {available: true, value: 152_000.5}, fuelUsedL: NOT_OBSERVED,
         job: {source: 'event', sourceCity: text('Synthetic City A'), sourceCompany: text('Synthetic Company A'), destinationCity: text('Synthetic City B'),
-          destinationCompany: text('Synthetic Company B'), cargo: text('Synthetic Cargo'), plannedDistance: {available: true, value: 152_000, unit: 'm'},
+          destinationCompany: text('Synthetic Company B'), cargo: text('Synthetic Cargo'), market: FREIGHT, isSpecialJob: NOT_SPECIAL,
+        plannedDistance: {available: true, value: 152_000, unit: 'm'},
           expectedIncome: {available: true, value: {raw: '12345', sdkType: 'u64', currency: UNKNOWN_CURRENCY}}},
         pluginSessionId: ETS2_A, openedBy: 'event', openedEventSeq: '4', outcomeEventSeq: '9', closedBy: {pluginSessionId: ETS2_A, eventSeq: '9'}
       },
@@ -155,11 +183,12 @@ describe('journal trip detail (J5, J13; REG-009, REG-014)', () => {
   it('keeps zero apart from unavailable for every job, outcome and sample value of the zero-values trip (REG-009)', () => {
     expect(ok(storage.journalTrip(T.zeroValues))).toEqual({
       database: DATABASE,
-      trip: {isHardMode: false, hardModeDetails: null,
+      trip: {isHardMode: false, hardModeDetails: unobservedHardModeAudit(SESSION_C_UTC + 3_000),
         tripUuid: T.zeroValues, game: 'ats', gameMode: ANCHOR_GAME_MODE, gameModeAmbiguous: false, outcome: 'delivered', closeReason: 'outcome', recordingCompleteness: 'complete',
         startedUtcMs: SESSION_C_UTC + 3_000, endedUtcMs: SESSION_C_UTC + 4_000, observedDistanceM: {available: true, value: 0}, fuelUsedL: NOT_OBSERVED,
         job: {source: 'event', sourceCity: text(''), sourceCompany: text('Synthetic Company A'), destinationCity: {available: false, reason: 'not-supported'},
-          destinationCompany: text('Synthetic Company B'), cargo: NOT_OBSERVED, plannedDistance: {available: true, value: 0, unit: 'm'},
+          destinationCompany: text('Synthetic Company B'), cargo: NOT_OBSERVED, market: FREIGHT, isSpecialJob: NOT_SPECIAL,
+        plannedDistance: {available: true, value: 0, unit: 'm'},
           expectedIncome: {available: true, value: {raw: '0', sdkType: 'u64', currency: USD}}},
         pluginSessionId: ATS_A, openedBy: 'event', openedEventSeq: '3', outcomeEventSeq: '4', closedBy: {pluginSessionId: ATS_A, eventSeq: '4'}
       },

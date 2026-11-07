@@ -9,6 +9,7 @@ import {advanceProgress, restoredProgress, type ProgressAnchor, type ProgressChe
 import type {CapturedEndpoint, CapturedRunning, SampleInput, TripEffect} from '../api';
 import {fail} from '../errors';
 import {jobValues} from './journal';
+import {advanceHardMode, hardModeLoss, emptyHardModeCounts, qualifiesHardMode} from '../../../telemetry-core/src/hard-mode';
 import {readHardModeDetails} from './hard-mode';
 
 export type LogicalRow = Record<string, unknown>;
@@ -74,6 +75,13 @@ export function associate(db: Database.Database, row: LogicalRow, proof: Profile
     const abandonedGroup = id;
     db.prepare('UPDATE logical_trips SET retired = 1 WHERE id = ?').run(id);
     id = candidate.id as bigint;
+    const originalAudit = readHardModeDetails(raw(db, id).hard_mode_details), memberAudit = readHardModeDetails(row.hard_mode_details);
+    if (originalAudit?.version === 1 && memberAudit?.version === 2) {
+      // A continued legacy trip keeps its original strict interruption policy.
+      const legacy = hardModeLoss(advanceHardMode(advanceHardMode(null, memberAudit.opening), memberAudit.latest), memberAudit.opening.observedUtcMs, 'source-changed');
+      db.prepare('UPDATE trips SET hard_mode_details=?, is_hard_mode=0 WHERE id=?').run(JSON.stringify(legacy), row.id);
+    }
+
     db.prepare('UPDATE logical_trips SET latest_trip_ref = ?, member_count = member_count + 1, accounting_rebased=1,canonical_constraints=? WHERE id = ?').run(row.id,JSON.stringify(combined), id);
     revise(db,abandonedGroup);
     if (coverage) pendingCoverage = {...coverage,...(ownAcceptancePending?{acceptancePending:true}:{}), sampleResumePending:false, member: String(row.id), phase: 'pending', endpoint: latestEndpoint(db, coverage.endpoint, candidate.progress_head, candidate.latest_trip_ref),
@@ -105,8 +113,22 @@ export function projectionRow(db: Database.Database, id: bigint, includeProgress
     || last.game_mode !== first.game_mode || last.game_mode_method !== first.game_mode_method || last.game_mode_confidence !== first.game_mode_confidence) row.game_mode_ambiguous = 1n;
   const opening = readHardModeDetails(first.hard_mode_details), latest = readHardModeDetails(last.hard_mode_details);
   const loss = group.first_loss_json === null ? null : JSON.parse(group.first_loss_json as string) as NonNullable<import('../../../contracts/src/hard-mode').HardModeDetails['firstLoss']>;
-  if (opening && latest) row.hard_mode_details = JSON.stringify({...opening, latest: latest.latest, manualDelivery: latest.manualDelivery, firstLoss: loss ?? opening.firstLoss});
-  if (group.hard_mode_lost === 1n) row.is_hard_mode = 0n;
+  if (opening?.version === 2) {
+    const counts = emptyHardModeCounts();
+    let firstDiagnostic = opening.firstDiagnostic, latestDiagnostic = opening.latestDiagnostic;
+    const members = db.prepare('SELECT t.hard_mode_details FROM logical_memberships m JOIN trips t ON t.id=m.trip_ref WHERE m.logical_ref=? ORDER BY t.id').iterate(id);
+    for (const member of members as Iterable<{hard_mode_details: unknown}>) {
+      const audit = readHardModeDetails(member.hard_mode_details);
+      if (audit?.version !== 2) continue;
+      for (const key of ['passingChecks', 'failingChecks', 'unknownChecks'] as const) {counts[key] += audit[key]; if (!Number.isSafeInteger(counts[key])) fail('DATABASE_CORRUPT');}
+      firstDiagnostic ??= audit.firstDiagnostic; latestDiagnostic = audit.latestDiagnostic ?? latestDiagnostic;
+    }
+    row.hard_mode_details = JSON.stringify({...opening, latest: latest?.latest ?? opening.latest, ...counts, checkpoint: null, firstDiagnostic, latestDiagnostic});
+    row.is_hard_mode = qualifiesHardMode(counts, row.outcome === 'delivered') ? 1n : 0n;
+  } else if (opening === null) {
+    row.hard_mode_details = null; row.is_hard_mode = 0n;
+  } else if (latest) row.hard_mode_details = JSON.stringify({...opening, latest: latest.latest, manualDelivery: latest.manualDelivery, firstLoss: loss ?? opening.firstLoss});
+  if (opening?.version !== 2 && group.hard_mode_lost === 1n) row.is_hard_mode = 0n;
   if (group.interrupted === 1n && row.outcome !== 'delivered' && row.outcome !== 'cancelled') {
     row.outcome = 'none'; row.close_reason = 'different-job';
   } else if (group.profile_scope !== null && group.retired === 0n && row.outcome === 'none') {

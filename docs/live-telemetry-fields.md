@@ -74,7 +74,7 @@ Owner-requested presentation update, October 22, 2026 (ET-012e): the Live dashbo
 
 Standstill gauge, October 24, 2026 (ET-045a): the Live gauge draws no speed arc while the displayed integer is `0`. Its ratio is `0` then, so a tiny positive SDK speed such as 0.1 m/s (`0 km/h`) no longer paints the round line cap as a dot that blinks while the speed flickers around zero. Once the number is non-zero the ratio keeps its fractional precision (1.25 m/s shows `5` with the ratio 4.5/130). Unavailable or stale speed still has no ratio, reverse still draws no arc, and the RPM arc, the canonical reading, journal samples and exports are unchanged.
 
-Job market labels (ET-045a). The dashboard's Job badge and market row and the journal's trip details show these labels; telemetry-core, the v1 projection, storage and the JSON export keep the raw value. Any other value, an inherited name such as `constructor` and `(empty)` are shown verbatim.
+Job market labels (ET-045a). The dashboard's Job badge and market row and the journal's trip details show these labels; telemetry-core, the v1 projection, storage and the JSON export keep the raw value. Any other value, an inherited name such as `constructor` and `(empty)` are shown verbatim. The journal list rows and trip header badges (ET-072) use the same labels; there the two external markets carry the prefix `World of Trucks ·` (the SDK header does not name World of Trucks; the community wiki does), any other or unavailable value is shown as `Job market: <value>`, and a `Special transport` badge is added when `is.special.job` is true.
 
 | SDK 1.15 `job.market` | English | Russian |
 | --- | --- | --- |

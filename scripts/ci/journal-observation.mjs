@@ -31,21 +31,23 @@ const local = utcMs => {
   const d = new Date(utcMs), p = n => String(n).padStart(2, '0');
   return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())}`;
 };
+/** Every anchor's job market badge: the shared fixture job is a freight market job, not special transport (ET-072). */
+const JOB_TYPE = 'Freight market';
 /** The anchors on page 3 of the unfiltered list, newest first, with their hand-written row texts (ETS2 metric, ATS US customary). */
 const ANCHOR_ROWS = [
-  {trip: T.manySamples, started: local(BASE_UTC + 205_000), game: 'ATS', route: ROUTE, outcome: 'In progress', completeness: 'Unknown', observed: NOT_OBSERVED, fuel: NOT_OBSERVED, cargo: 'Synthetic Cargo'},
+  {trip: T.manySamples, started: local(BASE_UTC + 205_000), game: 'ATS', route: ROUTE, outcome: 'In progress', completeness: 'Unknown', observed: NOT_OBSERVED, fuel: NOT_OBSERVED, cargo: 'Synthetic Cargo', jobType: JOB_TYPE},
   {trip: T.zeroValues, started: local(BASE_UTC + 203_000), game: 'ATS', route: '(empty) → unavailable (not provided by the game)', outcome: 'Delivered', completeness: 'Complete',
-    observed: '0.0 mi', fuel: NOT_OBSERVED, cargo: NOT_OBSERVED},
-  {trip: T.open, started: local(BASE_UTC + 101_000), game: 'ETS2', route: ROUTE, outcome: 'In progress', completeness: 'Unknown', observed: NOT_OBSERVED, fuel: NOT_OBSERVED, cargo: 'Synthetic Cargo'},
+    observed: '0.0 mi', fuel: NOT_OBSERVED, cargo: NOT_OBSERVED, jobType: JOB_TYPE},
+  {trip: T.open, started: local(BASE_UTC + 101_000), game: 'ETS2', route: ROUTE, outcome: 'In progress', completeness: 'Unknown', observed: NOT_OBSERVED, fuel: NOT_OBSERVED, cargo: 'Synthetic Cargo', jobType: JOB_TYPE},
   {trip: T.restartClosed, started: local(BASE_UTC + 27_000), game: 'ETS2', route: ROUTE, outcome: 'No outcome — the game or plugin restarted', completeness: 'Partial', observed: NOT_OBSERVED,
-    fuel: NOT_OBSERVED, cargo: 'Synthetic Cargo'},
+    fuel: NOT_OBSERVED, cargo: 'Synthetic Cargo', jobType: JOB_TYPE},
   {trip: T.gapClosed, started: local(BASE_UTC + 22_000), game: 'ETS2', route: ROUTE, outcome: 'No outcome — events were lost', completeness: 'Partial', observed: NOT_OBSERVED, fuel: NOT_OBSERVED,
-    cargo: 'Synthetic Cargo'},
+    cargo: 'Synthetic Cargo', jobType: JOB_TYPE},
   {trip: T.differentJob, started: local(BASE_UTC + 20_000), game: 'ETS2', route: ROUTE, outcome: 'No outcome — a different job started', completeness: 'Partial', observed: NOT_OBSERVED,
-    fuel: NOT_OBSERVED, cargo: 'Synthetic Cargo'},
+    fuel: NOT_OBSERVED, cargo: 'Synthetic Cargo', jobType: JOB_TYPE},
   {trip: T.cancelled, started: local(BASE_UTC + 12_000), game: 'ETS2', route: ROUTE, outcome: 'Cancelled', completeness: 'Complete', observed: NOT_OBSERVED, fuel: NOT_OBSERVED,
-    cargo: 'Synthetic Cancel Cargo'},
-  {trip: T.delivered, started: local(BASE_UTC + 4_000), game: 'ETS2', route: ROUTE, outcome: 'Delivered', completeness: 'Complete', observed: '152.0 km', fuel: NOT_OBSERVED, cargo: 'Synthetic Cargo'}
+    cargo: 'Synthetic Cancel Cargo', jobType: JOB_TYPE},
+  {trip: T.delivered, started: local(BASE_UTC + 4_000), game: 'ETS2', route: ROUTE, outcome: 'Delivered', completeness: 'Complete', observed: '152.0 km', fuel: NOT_OBSERVED, cargo: 'Synthetic Cargo', jobType: JOB_TYPE}
 ];
 const NO_TRUCK = 'No truck was recorded for this trip. A trip whose recording started during the job has no truck until the game sends it again.';
 const NO_TRAILER = 'No trailer was recorded for this trip. A trip whose recording started during the job has no trailer until the game sends it again.';
@@ -86,7 +88,8 @@ function listState(expected) {
   const rows = [...d.querySelectorAll('[data-testid="journal-list"] [data-testid="journal-row"]')].map(row => {
     const cell = id => row.querySelector(`[data-testid="${id}"]`)?.textContent ?? null;
     return {trip: row.getAttribute('data-trip'), started: cell('journal-row-started'), game: cell('journal-row-game-name'), route: cell('journal-row-route'), outcome: cell('journal-row-outcome'),
-      completeness: cell('journal-row-completeness'), observed: cell('journal-row-observed'), fuel: cell('journal-row-fuel'), cargo: cell('journal-row-cargo')};
+      completeness: cell('journal-row-completeness'), observed: cell('journal-row-observed'), fuel: cell('journal-row-fuel'), cargo: cell('journal-row-cargo'),
+      jobType: cell('journal-row-job-type')};
   });
   const state = {page: text('journal-list-page'), error: text('journal-list-error'), empty: text('journal-empty'), emptyNote: text('journal-empty-note'), banner: text('journal-banner'),
     next: d.querySelector('[data-testid="journal-list-next"]')?.disabled === false, previous: d.querySelector('[data-testid="journal-list-previous"]')?.disabled === false, rows};
@@ -105,7 +108,8 @@ function detailState(expected) {
     const id = node.getAttribute('data-testid').slice('journal-section-'.length, -'-note'.length);
     (notes[id] ??= []).push(node.textContent);
   }
-  return {error, title: text('journal-detail-title'), outcome: text('journal-detail-outcome'), completeness: text('journal-detail-completeness'), fields, notes,
+  return {error, title: text('journal-detail-title'), outcome: text('journal-detail-outcome'), completeness: text('journal-detail-completeness'),
+    jobType: text('journal-detail-job-type'), special: text('journal-detail-special'), fields, notes,
     banner: d.querySelector('[data-testid="journal-banner"]')?.textContent ?? null};
 }
 function tableState(expected) {
@@ -268,6 +272,7 @@ export async function runJournalSeeded({dashboard, record}) {
     record.anchorDetails.push(actual);
     assert.equal(detail.error, null); assert.equal(detail.banner, BANNER);
     assert.deepEqual(actual, expected, `Detail of ${expected.trip} differs from the hand-written texts`);
+    assert.deepEqual({jobType: detail.jobType, special: detail.special}, {jobType: JOB_TYPE, special: null}, `Job type badges of ${expected.trip} differ`);
     if (expected.trip === T.delivered) {
       // The timeline window and the sample gap row of J14 (seconds 1, 2 and 4).
       const timeline = await openTable(dashboard, 'timeline', 6);
@@ -366,10 +371,17 @@ const EXPORT_TARGET_REFUSED_TEXT = Object.freeze({
 });
 const ETS2_A = '10000000-0000-4000-8000-0000000000a1';
 const EUR = {status: 'sdk-documented', code: 'EUR', source: 'scs-sdk-1.15/include/eurotrucks2/scssdk_telemetry_eut2.h#game-specific-units'};
+/** Independent zero-check expectation for current synthetic seeds; historical fixtures remain null/v1. */
+export function unobservedHardModeAudit(atUtcMs) {
+  const assessment={observedUtcMs:atUtcMs,state:'unknown',source:'unknown',rules:
+    ['fuel','air','police','fatigue','limiter','truck','trailer','parking','rain','events','braking','traffic'].map(id=>({id,state:'unknown',values:id==='parking'?[null,null]:[null],reason:'historical'}))};
+  return {version:2,binding:null,opening:assessment,latest:structuredClone(assessment),firstLoss:null,manualDelivery:null,
+    passingChecks:0,failingChecks:0,unknownChecks:0,checkpoint:null,firstDiagnostic:null,latestDiagnostic:null};
+}
 /** The delivered anchor's export, written by hand from tests/shared/journal-seed.ts: its row, bounds, timeline, samples and money. */
 const DELIVERED_EXPORT = {
   bounds: {committedThroughEventSeq: '29', lastSampleId: '9', lastIntervalId: null, snapshot: false},
-  trip: {is_hard_mode: false, hard_mode_details: null, tripUuid: T.delivered, pluginSessionId: ETS2_A, game: 'ets2', gameMode: {mode: 'single-player', method: 'module-scan', confidence: 'weak'}, gameModeAmbiguous: false,
+  trip: {is_hard_mode: false, hard_mode_details: unobservedHardModeAudit(BASE_UTC+4_000), tripUuid: T.delivered, pluginSessionId: ETS2_A, game: 'ets2', gameMode: {mode: 'single-player', method: 'module-scan', confidence: 'weak'}, gameModeAmbiguous: false,
     outcome: 'delivered', closeReason: 'outcome', recordingCompleteness: 'complete', startedUtcMs: BASE_UTC + 4_000, endedUtcMs: BASE_UTC + 9_000,
     observedDistanceM: {available: true, value: 152_000.5}, fuelUsedL: {available: false, reason: 'not-observed'}, openedBy: 'event', openedEventSeq: '4', outcomeEventSeq: '9',
     closedBy: {pluginSessionId: ETS2_A, eventSeq: '9'}},
@@ -452,15 +464,15 @@ export async function runJournalExport({application, dashboard, config, record})
   const documents = {};
   for (const name of ['paging', 'delivered']) {
     const document = documents[name] = JSON.parse(await readFile(path.join(folder, `${name}.json`), 'utf8'));
-    assert.deepEqual(problemsOf(document), [], `The ${name} export is not a valid format version 4 document`);
+    assert.deepEqual(problemsOf(document), [], `The ${name} export is not a valid format version 5 document`);
     assert.deepEqual({format: document.format, formatVersion: document.formatVersion, application: document.header.application, purpose: document.header.database.purpose,
       schemaVersion: document.header.database.schemaVersion, sessionOrigin: document.header.sessionOrigin},
-    {format: 'ets2telemetry.trip-export', formatVersion: 4, application: {name: 'ETS2Telemetry', version: smokeBuild(config).version}, purpose: 'synthetic', schemaVersion: 6, sessionOrigin: 'synthetic'});
+    {format: 'ets2telemetry.trip-export', formatVersion: 5, application: {name: 'ETS2Telemetry', version: smokeBuild(config).version}, purpose: 'synthetic', schemaVersion: 6, sessionOrigin: 'synthetic'});
   }
   assert.equal(documents.paging.header.database.uuid, documents.delivered.header.database.uuid);
-  // Historical seeds never supplied observation metadata; current settings cannot create retrospective proof.
+  // Current synthetic seeds supply no verification observations: zero known checks cannot qualify.
   assert.equal(documents.paging.trip.is_hard_mode, false);
-  assert.equal(documents.paging.trip.hard_mode_details, null);
+  assert.deepEqual(documents.paging.trip.hard_mode_details, unobservedHardModeAudit(documents.paging.trip.startedUtcMs));
   const p = documents.paging;
   record.pagingExport = {events: p.events.length, firstEvent: p.events[0].eventSeq, lastEvent: p.events.at(-1).eventSeq, intervals: p.intervals.length, samples: p.samples.length,
     snapshot: p.bounds.snapshot, outcome: p.trip.outcome, tollTotal: p.money.totals};

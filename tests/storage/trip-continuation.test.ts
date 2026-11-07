@@ -9,6 +9,7 @@ import {decodePayload,encodeFrame,type ClientMessage,type ServerMessage,type Cur
 import {HardModeReader,readStableFile} from '../../apps/desktop/src/hard-mode/reader';
 import {HardModeMonitor} from '../../apps/desktop/src/hard-mode/monitor';
 import {ProfileObserver} from '../../apps/desktop/src/profile-observation';
+import {advanceHardMode, evaluateHardMode, parseHardModeConfig} from '../../packages/telemetry-core/src/hard-mode';
 import {HARD_MODE_CONFIG} from '../shared/hard-mode';
 import {V1_CLIENT_MAX_MINOR,V1Ingestion} from '../../apps/desktop/src/v1-ingestion';
 import {serveV1Reactive} from '../../tools/telemetry-simulator/src/v1/reactive';
@@ -26,11 +27,14 @@ import {scenarioPath} from '../shared/simulator-v1-expected';
 import {seededId} from '../../tools/telemetry-simulator/src/v1/source';
 import {scenarioSource,replayV1} from '../../tools/telemetry-simulator/src/v1/replay';
 import {parseJournalReply} from '../../apps/desktop/src/journal-contract';
+import {recorderClient} from '../../apps/desktop/src/history-storage';
 import {TripRecorderSink} from '../../apps/desktop/src/trip-recorder';
 import {StorageClient} from '../../packages/storage/src/client';
 import {storageWorker} from './recording-helpers';
 import {seedSample} from '../shared/journal-seed';
 import {JournalService} from '../../apps/desktop/src/journal-service';
+import {TripExportSerializer,tripExportHeader} from '../../apps/desktop/src/journal-export';
+import {tripExportProblems} from '../shared/trip-export-validator';
 import {JournalExporter} from '../../apps/desktop/src/journal-export-writer';
 
 let ws: Awaited<ReturnType<typeof workspace>>;
@@ -85,6 +89,70 @@ function close(storage: Storage, script: Script, uuid: string, terminal = false)
 }
 
 describe('REG-003/005/008/012/014 durable logical trips', () => {
+  it.each([1,3])('sums v2 member check counts across %s sessions and worker/database reopen', async sessions => {
+    let worker=storageWorker(),client=new StorageClient(worker.handle),original='';
+    try {
+      ok(await client.open({path:ws.database,backupsDirectory:ws.backups,purpose:'synthetic',appVersion:'test-v2'}));
+      const ids=[ETS2_A,ETS2_B,'10000000-0000-4000-8000-0000000000d4'];
+      for(let i=0;i<sessions;i++) {
+        if(i>0) {expect(await client.close()).toEqual({clean:true});worker=storageWorker();client=new StorageClient(worker.handle);
+          ok(await client.open({path:ws.database,backupsDirectory:ws.backups,purpose:'synthetic',appVersion:'test-v2'}));}
+        const script=new Script(ids[i]);ok(await client.upsertSession({message:script.welcome()}));
+        const configured=script.event(r.jobConfigured()),uuid=tripUuidFor(script.session,configured.data.eventSeq);original ||= uuid;
+        ok(await client.commitEvent({message:configured,profile:proof(script),effects:[{kind:'trip.open',tripUuid:uuid,game:'ets2',gameMode:mode,
+          jobConfiguration:'this-event',recordingCompleteness:'complete',startedUtcMs:1000}]}));
+        const counts=sessions===1?{passingChecks:95,failingChecks:5,unknownChecks:7}:i===0?{passingChecks:1,failingChecks:5,unknownChecks:0}:i===1?{passingChecks:94,failingChecks:0,unknownChecks:0}:{passingChecks:0,failingChecks:0,unknownChecks:7};
+        const observation={assessment:evaluateHardMode(parseHardModeConfig(HARD_MODE_CONFIG),1000+i,'fixture'),binding:'b'.repeat(64),pluginSessionId:script.session,sourceMonotonicNs:'0',
+          batch:{tripUuid:uuid,producer:'90000000-0000-4000-8000-000000000001',sequence:counts.passingChecks+counts.failingChecks+counts.unknownChecks,...counts}};
+        ok(await client.observeHardMode('ets2',observation,true));ok(await client.observeHardMode('ets2',observation,true));
+        if(i===sessions-1) {
+          let published:import('../../packages/contracts/src/hard-mode').HardModeDetails|null=null;
+          const recorder=new TripRecorderSink(recorderClient({client}),{hardModeEvidence:()=>observation,onHardModeTrip:value=>{published=value;}});
+          succeeded(await recorder.openSession(script.welcome()));await recorder.flushHardMode();
+          expect(published).toMatchObject({version:2,passingChecks:95,failingChecks:5,unknownChecks:7});
+        }
+
+        const message=script.event(i===sessions-1?r.delivered():r.timersRestart());
+        ok(await client.commitEvent({message,effects:[{kind:'trip.close',tripUuid:uuid,outcome:i===sessions-1?'delivered':'none',closeReason:i===sessions-1?'outcome':'restart',
+          ...(i===sessions-1?{outcomeEvent:'this-event' as const}:{}),recordingCompleteness:'partial',endedUtcMs:2000}]}));
+      }
+      const list=ok(await client.journalTrips());expect(list.trips).toHaveLength(1);
+      const detail=ok(await client.journalTrip(original));expect(detail.trip).toMatchObject({outcome:'delivered',isHardMode:true,
+        hardModeDetails:{version:2,passingChecks:95,failingChecks:5,unknownChecks:7,firstLoss:null}});
+      expect(detail.exportBounds.sourceTotal).toBe(sessions);
+    } finally {expect(await client.close()).toEqual({clean:true});}
+    readOnly(ws.database, db=> {
+      const rows=db.prepare("SELECT json_extract(hard_mode_details,'$.passingChecks') AS p,json_extract(hard_mode_details,'$.failingChecks') AS f FROM trips").all() as {p:number;f:number}[];
+      expect(rows.reduce((sum,row)=>sum+row.p,0)).toBe(95);expect(rows.reduce((sum,row)=>sum+row.f,0)).toBe(5);
+    });
+  });
+  it('preserves a pre-change checkpoint null audit through a qualifying v2 continuation and export',async()=>{
+    let storage=await ws.open();const a=new Script(ETS2_A),first=attachTripUuidFor(a.session,'1');ok(storage.upsertSession({message:a.welcome()}));
+    ok(storage.openAttachedTrip({pluginSessionId:a.session,nextEventSeq:'1',job:job(),profile:proof(a),sourceClockId:a.clockId,monotonicNs:'0',effects:[
+      {kind:'trip.open',tripUuid:first,game:'ets2',gameMode:mode,jobConfiguration:'this-event',recordingCompleteness:'partial',startedUtcMs:1000}]}));close(storage,a,first);ok(storage.close());
+    const db=new Database(ws.database);try{db.prepare('UPDATE trips SET hard_mode_details=NULL,is_hard_mode=0 WHERE trip_uuid=?').run(first);}finally{db.close();}
+    storage=await ws.open();const b=new Script(ETS2_B),second=open(storage,b),assessment=evaluateHardMode(parseHardModeConfig(HARD_MODE_CONFIG),2000,'fixture');
+    ok(storage.observeHardMode('ets2',{assessment,binding:'b'.repeat(64),pluginSessionId:b.session,sourceMonotonicNs:'0',batch:{tripUuid:second,producer:'90000000-0000-4000-8000-000000000001',sequence:1,passingChecks:1,failingChecks:0,unknownChecks:0}},true));
+    ok(storage.commitEvent({message:b.event(r.delivered()),effects:[{kind:'trip.close',tripUuid:second,outcome:'delivered',closeReason:'outcome',outcomeEvent:'this-event',recordingCompleteness:'partial',endedUtcMs:3000}]}));
+    const detail=validateJournalTripDetail(ok(storage.journalTrip(first)));expect(detail.trip).toMatchObject({isHardMode:false,hardModeDetails:null});expect(ok(storage.journalTrips()).trips).toHaveLength(1);
+    const serializer=new TripExportSerializer(detail,tripExportHeader({uuid:'30000000-0000-4000-8000-000000000001',purpose:'synthetic',schemaVersion:6},'test',4000));
+    const exported=JSON.parse(serializer.begin()+serializer.rows('sources',ok(storage.journalIntervals(first,{limit:500,cursor:detail.exportBounds.snapshot!.sources})).sources!)+serializer.rows('intervals',ok(storage.journalIntervals(first,{limit:500,cursor:detail.exportBounds.snapshot!.intervals})).intervals)+serializer.rows('events',ok(storage.journalEvents(first,{limit:500,cursor:detail.exportBounds.snapshot!.events})).events)+serializer.end());
+    expect(tripExportProblems(exported)).toEqual([]);expect(exported.trip).toMatchObject({is_hard_mode:false,hard_mode_details:null});ok(storage.close());
+    readOnly(ws.database,sql=>expect(sql.prepare('SELECT hard_mode_details,is_hard_mode FROM trips WHERE trip_uuid=?').get(first)).toEqual({hard_mode_details:null,is_hard_mode:0}));
+  });
+  it('keeps a legacy original on its strict policy when a new recording continues it', async () => {
+    let storage=await ws.open();const a=new Script(ETS2_A),first=open(storage,a);close(storage,a,first);ok(storage.close());
+    const assessment=evaluateHardMode(parseHardModeConfig(HARD_MODE_CONFIG),1000,'fixture');
+    const legacy=advanceHardMode(null,assessment);legacy.binding='b'.repeat(64);const bytes=JSON.stringify(legacy);
+    const db=new Database(ws.database);
+    try {db.prepare('UPDATE trips SET hard_mode_details=? WHERE trip_uuid=?').run(bytes,first);db.prepare('UPDATE logical_trips SET hard_mode_lost=0,first_loss_json=NULL').run();} finally {db.close();}
+    storage=await ws.open();const b=new Script(ETS2_B),second=open(storage,b);
+    ok(storage.observeHardMode('ets2',{assessment,binding:'b'.repeat(64),pluginSessionId:b.session,sourceMonotonicNs:'0',
+      batch:{tripUuid:second,producer:'90000000-0000-4000-8000-000000000001',sequence:100,passingChecks:100,failingChecks:0,unknownChecks:0}},true));
+    const message=b.event(r.delivered());ok(storage.commitEvent({message,effects:[{kind:'trip.close',tripUuid:second,outcome:'delivered',closeReason:'outcome',outcomeEvent:'this-event',recordingCompleteness:'partial',endedUtcMs:3000}]}));
+    expect(ok(storage.journalTrip(first)).trip).toMatchObject({isHardMode:false,hardModeDetails:{version:1,firstLoss:{reason:'historical'}}});
+    ok(storage.close());readOnly(ws.database,sql=>expect(sql.prepare('SELECT hard_mode_details FROM trips WHERE trip_uuid=?').pluck().get(first)).toBe(bytes));
+  });
   it.each(['version','private-profile','phase','sequence'] as const)('rejects malformed acceptance details atomically without exporting private evidence: %s',async fault=>{
     const storage=await ws.open(),s=new Script(ETS2_A),uuid=open(storage,s);
     const detail:Record<string,unknown>={annotation:true,cause:'observed-acceptance',phase:'pending',version:1,clearEventSeq:'1',throughEventSeq:'1',
@@ -185,6 +253,13 @@ describe('REG-003/005/008/012/014 durable logical trips', () => {
             await event(r.started(),'running','2');minuteOffset+=540;
             await capture(1000250,savedFuel,savedX,minutes(1),'running',1000,false,true,true);
           }
+          if(scenario==='before-first-start') {
+            // The saved-endpoint/stationary resume and Hard Mode member totals survive the same worker restart.
+            const member=currentSink!.view('ets2').current!.tripUuid,unknownChecks=index===1?2:0;
+            ok(await client.observeHardMode('ets2',{assessment:evaluateHardMode(parseHardModeConfig(HARD_MODE_CONFIG),1000+index,'fixture'),
+              binding:'b'.repeat(64),pluginSessionId:s.session,sourceMonotonicNs:'0',member,
+              batch:{tripUuid:member,producer:'90000000-0000-4000-8000-000000000001',sequence:1+unknownChecks,passingChecks:1,failingChecks:0,unknownChecks}},true));
+          }
           if(index<2){
             if(prestart&&index===1){
               await capture(1000500,savedFuel,savedX,minutes(2),'running',1000,false,true,true);
@@ -206,15 +281,17 @@ describe('REG-003/005/008/012/014 durable logical trips', () => {
       }
       await ingestion!.stop();
       const detail=ok(await client.journalTrip(original));expect(detail.trip.outcome).toBe('delivered');expect(ok(await client.listTrips()).trips).toHaveLength(3);
+      if(scenario==='before-first-start')expect(detail.trip).toMatchObject({isHardMode:true,hardModeDetails:{version:2,passingChecks:3,failingChecks:0,unknownChecks:2}});
       expect(ok(await client.listSamples({tripUuid:original},{afterId:oldSnapshot,includeExcluded:true}))).toHaveLength(prestart?3:2);
       const service=new JournalService({history:{state:'open',failureCode:null,client,database:{purpose:'synthetic',schemaVersion:6},databaseUuid:summary.databaseUuid},stopping:()=>false,log:()=>undefined});
       const filename=path.join(ws.directory,'continuity.json'),exporter=new JournalExporter({read:query=>service.query(query),showSaveDialog:()=>Promise.resolve({canceled:false,filePath:filename}),documents:()=>undefined,localAppData:ws.directory,appVersion:'test',log:()=>undefined});
       expect(await exporter.export(original)).toMatchObject({ok:true,value:{outcome:'saved'}});
       const exported=JSON.parse(readFileSync(filename,'utf8')) as {formatVersion:number;trip:unknown;intervals:unknown[];sources:unknown[];events:{type:string}[];samples:unknown[]};
-      expect(exported.formatVersion).toBe(4);expect(exported.intervals.length).toBeGreaterThan(0);expect(JSON.stringify(exported.intervals)).not.toMatch(/[a-f0-9]{64}/);
+      expect(exported.formatVersion).toBe(5);expect(exported.intervals.length).toBeGreaterThan(0);expect(JSON.stringify(exported.intervals)).not.toMatch(/[a-f0-9]{64}/);
       expect(exported.trip).toMatchObject({outcome:'delivered',recordingCompleteness:'complete',observedDistanceM:broken?{available:false}:{available:true,value:750},fuelUsedL:broken?{available:false}:{available:true,value:1.5}});
       const breaks=(exported.intervals as {cause:string;detail:unknown}[]).filter(note=>note.cause==='accounting-chain-break');
       if(broken)expect(breaks).toMatchObject([{detail:{version:1,reason:'missing-predecessor',recorderReset:'snapshot-coalesced',distanceLost:true,fuelLost:true}}]);else expect(breaks.map(note=>note.detail)).toEqual([]);
+      if(scenario==='before-first-start')expect(exported.trip).toMatchObject({is_hard_mode:true,hard_mode_details:{version:2,passingChecks:3,failingChecks:0,unknownChecks:2}});
       expect(exported.sources).toHaveLength(3);expect(exported.events.filter(event=>event.type==='job.delivered')).toHaveLength(1);expect(exported.samples).toHaveLength(prestart?8:4);
       for(const ack of acks)expect(BigInt(ack.through)).toBeLessThanOrEqual(BigInt(ack.stored));
       expect(await client.close()).toEqual({clean:true});
@@ -524,7 +601,7 @@ describe('REG-003/005/008/012/014 durable logical trips', () => {
     const observer=new ProfileObserver(()=>reader,now,false,value=>diagnostics.push(value.code));let recorder!:TripRecorderSink,settings:Promise<unknown>|undefined,readCompleted:(()=>void)|undefined;const publications:string[]=[];
     const monitor=new HardModeMonitor((s,ns,at,signal,force)=>{const work=observer.readSettings(reader,s,ns,at,signal,force).finally(()=>{if(!retired)readCompleted?.();});settings=work.catch(()=>undefined);return work;},value=>{if(!retired){publications.push(value.assessment.state);recorder.observeHardMode('ets2',value);}},now,()=>reader.requestFull(),()=>reader.canRetain(),undefined,()=>reader.drain(),
       {eligible:()=>reader.guardEligible(),select:key=>reader.selectGuardSource(key),deadline:s=>reader.deadline(s)});
-    reader.onInvalidate(()=>monitor.invalidate());
+    reader.onInvalidate((_profileChanged,diagnostic)=>monitor.invalidate(diagnostic));
     recorder=new TripRecorderSink(client,{profileEvidence:()=>observer.evidence(),profileStatus:()=>observer.status(),hardModeEvidence:()=>monitor.evidence()});
     let committed:(()=>void)|undefined,observed:(()=>void)|undefined,attached:(()=>void)|undefined,replyEnabled=false,boundaryWork:Promise<void>|undefined;let lastServer:ServerMessage=welcome;
     const commit=recorder.commit.bind(recorder),observe=recorder.observe.bind(recorder);
@@ -620,7 +697,7 @@ describe('REG-003/005/008/012/014 durable logical trips', () => {
         watchdogWork=monitor.refresh(true);await wait(guardEntered,'reader gate entered');await wait(observedMetadata,'changed metadata or byte evidence observed');
         await Promise.resolve();await Promise.resolve();const during=monitor.evidence().assessment.state;let drained=false;void reader.drain().then(()=>{drained=true;});
         const delivered=r.delivered();if(delivered.type!=='job.delivered')throw new Error('Fixture delivery');await event({...delivered,autoParkUsed:{available:true,value:false}},'paused',100);
-        const closed=ok(await wait(client.getTrip(uuid),'client.getTrip'))!;expect(closed).toMatchObject({outcome:'delivered',isHardMode:false});expect(closed.hardModeDetails!.firstLoss).not.toBeNull();
+        const closed=ok(await wait(client.getTrip(uuid),'client.getTrip'))!;expect(closed).toMatchObject({outcome:'delivered',isHardMode:true,hardModeDetails:{version:2,firstLoss:null}});expect(closed.hardModeDetails).toHaveProperty('firstDiagnostic');
         expect(during).toBe('unknown');expect(observer.evidence()).toEqual(original);expect(observer.status().token).toBe(token);expect(drained).toBe(false);
         if(variant==='partial-byte-timeout'){
           clientNs+=2_000_000_000n;await wait(vi.advanceTimersByTimeAsync(2000),'vi.advanceTimersByTimeAsync');await wait(settings,'settings read completed');
@@ -690,12 +767,12 @@ describe('REG-003/005/008/012/014 durable logical trips', () => {
         if(variant==='watchdog-timer'){await wait(vi.advanceTimersByTimeAsync(5000),'vi.advanceTimersByTimeAsync');expect(publications.at(-1)).toBe('unknown');}
         // The getter case deliberately leaves timer callbacks pending at the same monotonic deadline.
         expect(monitor.evidence().assessment.state).toBe('unknown');expect(observer.evidence()).toBeUndefined();expect(observer.status().token).not.toBe(token);
-        expect(physicalStarts).toBe(starts);await event(r.fined());const lost=ok(await wait(client.getTrip(uuid),'client.getTrip'))!.hardModeDetails!.firstLoss;expect(lost).not.toBeNull();
+        expect(physicalStarts).toBe(starts);await event(r.fined());const lost=ok(await wait(client.getTrip(uuid),'client.getTrip'))!.hardModeDetails;expect(lost).toMatchObject({version:2,firstLoss:null,latestDiagnostic:{code:'guard-deadline'}});
         const recoveredRead=new Promise<void>(resolve=>{readCompleted=resolve;});holdSettings=false;releaseGuard();await wait(reader.drain(),'reader.drain');
         expect(monitor.evidence().assessment.state).toBe('unknown');expect(observer.evidence()).toBeUndefined();
         await wait(recoveredRead,'recovery settings read completed');await wait(settings,'settings read completed');await wait(observer.refresh(),'observer.refresh');expect(monitor.evidence().assessment.state).toBe('unknown');await admit();await wait(watchdogWork,'Hard Mode scan completed');
         expect(monitor.evidence().assessment.state).toBe('pass');await snapshot(1000100,99,'running',1000);await event(r.delivered());
-        const recovered=ok(await wait(client.getTrip(uuid),'client.getTrip'))!;expect(recovered.hardModeDetails!.firstLoss).toEqual(lost);expect(recovered.isHardMode).toBe(false);return;
+        const recovered=ok(await wait(client.getTrip(uuid),'client.getTrip'))!;expect(recovered.hardModeDetails).toMatchObject({firstLoss:null});expect(recovered.isHardMode).toBe(true);return;
       }
       if(variant==='witness'){
         replyEnabled=false;await event(r.paused(),'paused',10);await snapshot(1000110,98.9,'paused',10);await admit();await snapshot(1000110,98.9,'paused',10);
@@ -775,7 +852,7 @@ describe('REG-003/005/008/012/014 durable logical trips', () => {
           expect(detail.trip.observedDistanceM).toEqual({available:false,reason:'not-observed'});expect(detail.trip.fuelUsedL).toEqual({available:false,reason:'not-observed'});
         }
         if(variant==='gap')expect(detail.trip.recordingCompleteness).toBe('partial');
-        if(variant==='profile'||variant==='load'||variant==='clock')expect(ok(await wait(client.getTrip(uuid),'client.getTrip'))!.hardModeDetails!.firstLoss).not.toBeNull();
+        if(variant==='profile'||variant==='load'||variant==='clock')expect(ok(await wait(client.getTrip(uuid),'client.getTrip'))!.hardModeDetails).toMatchObject({version:2,firstLoss:null});
       }
       expect(acks).toContain('3');
     }catch(error){primary=error;hasPrimary=true;throw error;}
