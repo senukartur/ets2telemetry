@@ -66,6 +66,7 @@ function freshSession(welcome: WelcomeMessage, coveredThrough: Uint64): SessionS
   return {
     pluginSessionId: welcome.source.pluginSessionId, game: welcome.source.game, processedThrough: coveredThrough,
     // A session first seen at coverage 0 starts with the load burst of O1; joining later, the load state is unknown.
+    prestartBlocked: coveredThrough !== '0',
     load: coveredThrough === '0' ? 'loading' : 'unknown', gameMode: modeOf(welcome.data.gameMode), clockId: welcome.capture.clockId,
     lastUtcMs: null, lastMonotonicNs: null, truck: null, trailers: new Array<null>(TRAILER_SLOTS).fill(null), untrackedJob: null, pendingAttach: null, attachedFromEventSeq: null, disconnected: null,
     lastReading: null, connectionSinceNs: null, lastTransfer: null, runClock: null, gameTimeWindow: null, jumpEpisode: null, bridge: null, reconnect: null, simulation: 'unavailable'
@@ -171,12 +172,14 @@ function endUntracked(c: Carrier) { if (untrackedFor(c) !== null) c.session.untr
 /** Opens a trip at the carrier event with its cause intervals (T9, T11, T12, T8). */
 function openTrip(c: Carrier, o: OpenOptions) {
   const s = c.session, uuid = tripUuidFor(s.pluginSessionId, o.jobEventSeq);
+  const menuAcceptance = c.prestartAcceptance === true && o.reloadOf === undefined;
   const causes: CompletenessInterval[] = [];
   const continuation: ContinuationCandidate | null = c.slot.continuation;
   c.slot.continuation = null;
   if (o.reloadOf !== undefined) causes.push({kind: 'discontinuity', detail: {cause: 'reload', continuationOf: o.reloadOf, decision: 'not-merged'}});
   else {
-    if (s.load === 'loading' && !c.prestartAcceptance) causes.push({kind: 'discontinuity', detail: {cause: 'opened-at-load', annotation: true}});
+    if (s.load === 'loading' && !menuAcceptance) causes.push({kind: 'discontinuity', detail: {cause: 'opened-at-load', annotation: true}});
+    if (menuAcceptance) causes.push({kind: 'discontinuity', detail: {cause: 'menu-job-acceptance', version: 1, annotation: true}});
     // A configuration replayed from before the checkpoint is a real start, but the consumer was not attached then and has
     // no readings for that time. A checkpoint job without its configuration event is a late attach (T9).
     const untracked = untrackedFor(c);
@@ -198,7 +201,7 @@ function openTrip(c: Carrier, o: OpenOptions) {
   for (const interval of causes) c.own.push({kind: 'completeness.add', interval: {tripUuid: uuid, ...interval, detail: {...interval.detail, atEventSeq: c.eventSeq}}});
   c.slot.trip = {
     ...(s.profileScope?{profileScope:s.profileScope}:{}),tripUuid: uuid, pluginSessionId: s.pluginSessionId, jobKey: o.key, jobEventSeq: o.jobEventSeq, phase: 'active', reloadEventSeq: null, loadCheck: o.loadCheck,
-    loadCoverage: s.load === 'loading' && !c.prestartAcceptance ? {start: null} : null,
+    loadCoverage: s.load === 'loading' && !menuAcceptance ? {start: null} : null,
     completeness, gameMode: modeOf(s.gameMode), gameModeAmbiguous: false, startedUtcMs: c.label, startedMonotonicNs: c.monotonicNs, clockId: s.clockId,
     ...o.job, truckKey: s.truck?.key ?? null, trailerKeys: s.trailers.map(t => t?.key ?? null),
     fines: emptyMoney(), finesBeforeLoaded: emptyMoney(), tolls: emptyMoney(), transfers: emptyMoney(), accounting: newAccounting()
@@ -405,8 +408,9 @@ function stepEvent(state: TripState, message: EventMessage, coveredThrough: Uint
   if (c.slot.trip?.loadCheck === 'after-start' && record.type !== 'gameTime.regression' && record.type !== 'source.gameMode') c.slot.trip.loadCheck = null;
   switch (record.type) {
     case 'job.configured':
-      c.prestartAcceptance=session.emptyJobObserved===true && !session.hasStarted && !message.data.redelivered && !replayed(c);
-      session.emptyJobObserved=false;onJobConfigured(c, record);break;
+      c.prestartAcceptance=session.emptyJobObserved===true && session.attachedFromEventSeq!==null && !session.hasStarted && !session.prestartBlocked
+        && c.slot.trip===null && !message.data.redelivered && !replayed(c);
+      session.prestartBlocked=true;session.emptyJobObserved=false;onJobConfigured(c, record);break;
     case 'job.cleared':
       session.emptyJobObserved=!message.data.redelivered && !replayed(c);
       endUntracked(c);
@@ -434,8 +438,11 @@ function stepEvent(state: TripState, message: EventMessage, coveredThrough: Uint
       if (c.slot.trip?.loadCheck === 'before-start') c.slot.trip.loadCheck = 'after-start';
       break;
     case 'simulation.paused': break;
-    case 'timers.restart': onTimersRestart(c); break;
-    case 'gameTime.regression': onRegression(c, record); break;
+    case 'timers.restart':
+      // One startup timer baseline is allowed. Later resets are load evidence.
+      if(session.initialTimerSeen)session.prestartBlocked=true;
+      session.initialTimerSeen=true;onTimersRestart(c);break;
+    case 'gameTime.regression': session.prestartBlocked=true;onRegression(c, record); break;
     case 'source.gameMode': {
       session.gameMode = modeOf(record);
       const trip = c.slot.trip;
@@ -488,6 +495,7 @@ function stepGap(state: TripState, message: GapMessage, coveredThrough: Uint64, 
   if (first > processed + 1n || attachDue(checked, state.games[checked.game])) return {ok: false, code: 'ORDER_VIOLATION'};
   const draft = structuredClone(state), session = draft.sessions[checked.pluginSessionId], suffixFirst = processed + 1n;
   session.emptyJobObserved=false;
+  if(first!==1n || last>2n)session.prestartBlocked=true;
   const c = carrierFor(draft, session, session.lastUtcMs ?? receivedUtcMs, null, null, null);
   finishReconnect(session, c.slot, false);
   const d = message.data, whole = first === suffixFirst;
@@ -642,6 +650,9 @@ function stepCheckpoint(state: TripState, message: CheckpointMessage, receivedUt
   if (state.connection !== id || !has(state.sessions, id) || state.sessions[id].game !== message.source.game) return {ok: false, code: 'UNKNOWN_SESSION'};
   const draft = structuredClone(state), session = draft.sessions[id], slot = draft.games[session.game], job = message.data.state.configuration.job;
   session.emptyJobObserved=false;
+  // Only the initial empty startup checkpoint can support a later live menu transition.
+  if(session.attachedFromEventSeq!==null || job.available || message.data.state.simulation==='running'
+    || BigInt(message.data.status.delivery.nextEventSeq)>3n)session.prestartBlocked=true;
   const next = message.data.status.delivery.nextEventSeq;
   if (session.reconnect !== null) {
     session.reconnect.through = (BigInt(next) - 1n).toString();
@@ -774,6 +785,7 @@ function stepDisconnected(state: TripState): TripStepResult {
   draft.connection = null;
   if (session !== undefined) {
     session.emptyJobObserved=false;
+    session.prestartBlocked=true;
     finishReconnect(session, draft.games[session.game], false);
     // A pending late-attach trip belongs to this connection's checkpoint; the next connection's checkpoint decides again.
     // The checkpoint's untracked job is kept: the job is still likely active, and the next checkpoint replaces or clears it.

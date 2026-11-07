@@ -204,7 +204,9 @@ export function projectSample(db: Database.Database, session: {game: string; pro
   if(unresolvedSaved)value={anchor,distanceM:{available:false,reason:'not-observed'},fuelUsedL:{available:false,reason:'not-observed'}};
   const bootstrap = !unresolvedSaved && !captured && previous && head?.prefix_ref === null && head.start_ref === null && previous.distanceM.available && previous.distanceM.value === 0 && previous.anchor.gameMinutes === null;
   if (bootstrap && !continuous) value = advanceProgress(null, anchor, false);
-  const saved=coverage?.phase==='pending' && proof!==undefined && cleanLoadWindow(db,row)
+  // Only the first physical sample of this loaded member can establish its saved baseline.
+  const firstLoadedSample=!continuous && head?.trip_ref!==row.id;
+  const saved=firstLoadedSample && coverage?.phase==='pending' && proof!==undefined && cleanLoadWindow(db,row)
     ?retainedEndpoint(db,id,group.progress_head,coverage.endpoint,anchor):undefined;
   if(saved?.kind==='matched'){
     value={anchor,distanceM:saved.endpoint.distanceM,fuelUsedL:saved.endpoint.fuelUsedL};
@@ -259,7 +261,7 @@ export function projectSample(db: Database.Database, session: {game: string; pro
     value.distanceM.available ? value.distanceM.value : null, value.fuelUsedL.available ? value.fuelUsedL.value : null);
   if (captured && continuous && prefix === null) db.prepare('UPDATE logical_progress SET start_ref=id WHERE id=?').run(result.lastInsertRowid);
   db.prepare('UPDATE logical_trips SET progress_head = ? WHERE id = ?').run(result.lastInsertRowid, id);
-  if (coverage?.phase === 'pending' && coverage.member === String(row.id) && coverage.window?.session === String(row.plugin_session_ref) && coverage.endpoint && cleanLoadWindow(db, row)) {
+  if (firstLoadedSample && coverage?.phase === 'pending' && coverage.member === String(row.id) && coverage.window?.session === String(row.plugin_session_ref) && coverage.endpoint && cleanLoadWindow(db, row)) {
     if (matchesEndpoint(db,coverage.endpoint.anchor, anchor)) revise(db, id, {...coverage, phase: 'resumed', window: null,
       endpoint: {...coverage.endpoint, trip: String(row.id), anchor, head: String(result.lastInsertRowid),running:undefined}});
     else if (completeEndpoint(coverage.endpoint.anchor) && completeEndpoint(anchor)) revise(db, id, {...coverage, losses: coverage.losses | COVERAGE_LOSS.unknown});
@@ -290,7 +292,7 @@ function completeEndpoint(a: ProgressAnchor): boolean {
 function matchesEndpoint(db: Database.Database, a: ProgressAnchor, b: ProgressAnchor): boolean {
   if(matchesSavedEndpoint(a,b))return true;
   if(a.truck!==b.truck || a.odometerM!==b.odometerM || a.speedMps===null || a.speedMps===undefined || b.speedMps===null || b.speedMps===undefined
-    || Math.max(Math.abs(a.speedMps),Math.abs(b.speedMps))>0.05 || !a.gameMinutes || !b.gameMinutes || BigInt(b.gameMinutes)!==BigInt(a.gameMinutes)+1n)return false;
+    || Math.max(Math.abs(a.speedMps),Math.abs(b.speedMps))>0.05 || !validMinute(a.gameMinutes) || !validMinute(b.gameMinutes) || BigInt(b.gameMinutes)!==BigInt(a.gameMinutes)+1n)return false;
   // A pause callback can observe the next minute after the last physical frame. Require that actual source event.
   const pause=get(db,`SELECT e.event_seq,e.occurred_monotonic_ns,e.payload_json FROM events e
     JOIN plugin_sessions s ON s.id=e.plugin_session_id JOIN clocks c ON c.id=e.source_clock_ref
@@ -301,9 +303,13 @@ function matchesEndpoint(db: Database.Database, a: ProgressAnchor, b: ProgressAn
     WHERE s.plugin_session_uuid=? AND e.occurred_monotonic_ns>? AND e.event_seq<=?
     AND e.type IN ('simulation.started','timers.restart','gameTime.regression','player.use.ferry','player.use.train') LIMIT 1`,
     a.pluginSessionId,a.monotonicNs.padStart(20,'0'),pause.event_seq))return false;
-  const occurred=(JSON.parse(String(pause.payload_json)) as {occurred:{gameTime:{clockId:string;minutes:{available:boolean;value?:string}}}}).occurred.gameTime;
-  return occurred.clockId===a.gameClockId && occurred.minutes.available && matchesSavedEndpoint(a,b,true,occurred.minutes.value);
+  try {
+    const occurred=(JSON.parse(String(pause.payload_json)) as {occurred?:{gameTime?:{clockId?:string;minutes?:{available?:boolean;value?:string}}}}|null)?.occurred?.gameTime;
+    return occurred?.clockId===a.gameClockId && occurred?.minutes?.available===true && validMinute(occurred.minutes.value)
+      && matchesSavedEndpoint(a,b,true,occurred.minutes.value);
+  } catch { return false; }
 }
+const validMinute=(value:unknown):value is string=>typeof value==='string' && /^(0|[1-9][0-9]{0,19})$/.test(value) && BigInt(value)<=18_446_744_073_709_551_615n;
 function endpointFromHead(db: Database.Database, head: unknown, trip: unknown): CoverageEndpoint | null {
   if (head === null) return null;
   const point = get(db, 'SELECT * FROM logical_progress WHERE id=?', head);

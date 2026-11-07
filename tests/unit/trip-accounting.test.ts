@@ -585,6 +585,19 @@ describe('game-time and position jumps (T17)', () => {
 });
 
 describe('fix round 2', () => {
+  it.each([false,true])('keeps stationary jump evidence only while the entire queued episode is stationary: moving=%s',moving=>{
+    const {s,trip,rows}=opened();let state=run(initialTripState(),rows.map(([step])=>step)).state;
+    for(const point of [{ms:2000,minutes:1000},{ms:2050,minutes:1595},{ms:3100,minutes:1700}]){
+      state=run(state,[reading(s,{...point,odometer:1000,fuel:100,speed:moving&&point.ms===3100?1:0,
+        position:{x:moving&&point.ms===3100?1:0,y:0,z:0}})]).state;
+    }
+    const result=run(state,[s.event(r.paused(),{...paused,advanceMs:1100})]);
+    const jumps=result.effects.flat().filter(effect=>effect.kind==='completeness.add'&&effect.interval.detail?.cause==='game-time-jump');
+    expect(jumps).toHaveLength(1);
+    expect(jumps[0]).toMatchObject({interval:{detail:{toMinutes:'1700'}}});
+    const detail=(jumps[0] as Extract<TripEffect,{kind:'completeness.add'}>).interval.detail!;
+    if(moving)expect(detail).not.toHaveProperty('stationary');else expect(detail.stationary).toBe(true);
+  });
   const sleep = (trip: string, extra: Record<string, unknown> = {}): TripEffect =>
     note(trip, {cause: 'game-time-jump', label: 'possible-sleep', fromMinutes: '1000', toMinutes: '1595', atMonotonicNs: ns(2050), ...extra});
   it('an ordinary minute tick within 1 s after a 20 Hz sleep neither grows nor repeats the jump [synthetic-inference]', () => {

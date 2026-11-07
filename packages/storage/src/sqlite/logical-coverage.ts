@@ -118,13 +118,19 @@ export function originalCoverage(db: Database.Database, row: Row): LogicalCovera
   const event = row.opened_event_ref === null ? undefined : get(db, 'SELECT event_seq,type,first_redelivered FROM events WHERE id=?', row.opened_event_ref);
   const started = event && get(db, "SELECT event_seq FROM events WHERE plugin_session_id=? AND event_seq<? AND type='simulation.started' ORDER BY event_seq DESC LIMIT 1", row.plugin_session_ref, event.event_seq);
   const previousJob = event && get(db, "SELECT event_seq,type,first_redelivered FROM events WHERE plugin_session_id=? AND event_seq<? AND type IN ('job.configured','job.cleared') ORDER BY event_seq DESC LIMIT 1", row.plugin_session_ref, event.event_seq);
-  const reset = event && started && get(db, "SELECT id FROM events WHERE plugin_session_id=? AND event_seq>? AND event_seq<? AND type IN ('timers.restart','gameTime.regression') LIMIT 1", row.plugin_session_ref, started.event_seq, event.event_seq);
+  const reset = event && get(db, `SELECT id FROM events WHERE plugin_session_id=? AND event_seq>? AND event_seq<?
+    AND (type='gameTime.regression' OR (?=1 AND type='timers.restart')) LIMIT 1`, row.plugin_session_ref,
+    started?.event_seq ?? previousJob?.event_seq ?? '00000000000000000000', event.event_seq, started ? 1 : 0);
   // Both the absence and the start must remain trustworthy; a gap before a later clear can hide a load.
   const gapAfter = previousJob && started && String(started.event_seq) < String(previousJob.event_seq) ? started.event_seq : previousJob?.event_seq ?? '00000000000000000000';
   const gap = event && get(db, 'SELECT id FROM event_gaps WHERE plugin_session_ref=? AND last_event_seq>? AND first_event_seq<=? LIMIT 1', row.plugin_session_ref, gapAfter, event.event_seq);
-  const observed = row.opened_by === 'event' && event?.type === 'job.configured' && event.first_redelivered === 0n && (started || previousJob?.type === 'job.cleared') && !reset && !gap
-    && (!previousJob || previousJob.type === 'job.cleared' && previousJob.first_redelivered === 0n);
   const notes=db.prepare('SELECT detail_json FROM completeness_intervals WHERE trip_ref=? ORDER BY id LIMIT 129').all(row.id) as Row[];
+  // The reducer's durable witness includes initial checkpoint, reconnect and previous-job vetoes, absent from event history alone.
+  const menu=notes.length<=128 && notes.some(note=>{const d=typeof note.detail_json==='string'?JSON.parse(note.detail_json) as Row:null;
+    return d?.cause==='menu-job-acceptance' && d.version===1 && d.annotation===true && unsigned(d.atEventSeq)
+      && d.atEventSeq.padStart(20,'0')===event?.event_seq;});
+  const observed = row.opened_by === 'event' && event?.type === 'job.configured' && event.first_redelivered === 0n && (started || previousJob?.type === 'job.cleared' && menu) && !reset && !gap
+    && (!previousJob || previousJob.type === 'job.cleared' && previousJob.first_redelivered === 0n);
   const pending=notes.some(note=>{const detail=typeof note.detail_json!=='string'?null:JSON.parse(note.detail_json) as Row;return detail?.cause==='observed-acceptance'&&detail.phase==='pending'&&validAcceptanceDetail(detail);});
   return {version: 1, start: observed ? 'observed' : 'unproven',
     ...(pending && !observed?{acceptancePending:true}:{}),losses: 0, member: String(row.id), phase: 'active', endpoint: null, window: null};
@@ -160,6 +166,10 @@ export function advanceCoverage(db: Database.Database, id: unknown, _group: Row,
   for (const interval of intervals) {
     const detail = interval.detail_json === null ? {} : JSON.parse(interval.detail_json as string) as Row;
     if(beforeJobWindow(db,id,row,interval))continue;
+    if(detail.cause==='menu-job-acceptance'){
+      if(String(id)===String(row.id) && originalCoverage(db,row).start==='observed')coverage.start='observed';
+      continue;
+    }
     if(detail.cause==='observed-acceptance'){
       // A later member cannot establish the first recording's missing acceptance.
       if(acceptedStart(db,row,detail) && String(id)===String(row.id)){coverage.start='observed';if(coverage.acceptancePending)coverage.acceptancePending=false;}

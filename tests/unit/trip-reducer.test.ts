@@ -66,6 +66,35 @@ describe('ET-014 constants', () => {
 });
 
 describe('job lifecycle', () => {
+  it.each(['clean','startup-timer','regression','regression-before-clear','second-timer','gap','checkpoint','disconnect','active-checkpoint','running-checkpoint','late-checkpoint','covered-session','previous-job','reload'] as const)(
+    'bounds first menu-job acceptance without trusting late attachment or restored jobs: %s', variant => {
+      const s=new Script(ETS2_A);let state=initialTripState();const effects:TripEffect[]=[];
+      const feed=(...steps:Step[])=>{const result=run(state,steps);state=result.state;effects.push(...result.effects.flat());};
+      feed(sessionInput(s.welcome(),variant==='covered-session'?'10':'0'));
+      if(variant==='covered-session')s.next=11n;
+      const missing=variant==='late-checkpoint'?s.gap(19):null;
+      feed({kind:'checkpoint',message:s.checkpoint(variant==='active-checkpoint'?job():null,0,
+        {simulation:variant==='running-checkpoint'?'running':'paused'}),receivedUtcMs:RECEIVED_UTC});
+      if(missing)feed(missing);
+      if(variant==='active-checkpoint')feed({kind:'attach',receivedUtcMs:RECEIVED_UTC});
+      if(variant==='regression-before-clear')feed(s.event(r.regression('500','400'),paused));
+      if(variant==='previous-job'||variant==='reload')feed(s.event(r.jobConfigured(cargoMarketJob(false)),paused));
+      feed(s.event(r.jobCleared(),paused));
+      if(variant==='startup-timer'||variant==='second-timer')feed(s.event(r.timersRestart(),paused));
+      if(variant==='second-timer')feed(s.event(r.timersRestart(),paused));
+      if(variant==='regression')feed(s.event(r.regression('500','400'),paused));
+      if(variant==='gap')feed(s.gap(1));
+      if(variant==='checkpoint')feed({kind:'checkpoint',message:s.checkpoint(null,0,{simulation:'paused'}),receivedUtcMs:RECEIVED_UTC});
+      if(variant==='disconnect')feed({kind:'disconnected'},sessionInput(s.welcome(),state.sessions[s.session].processedThrough));
+      const configured=s.event(r.jobConfigured(variant==='reload'?cargoMarketJob(true):job()),paused),trip=uuid(s.session,configured.data.eventSeq);
+      feed(configured);
+      if(variant==='reload')expect(state.games.ets2.trip?.loadCoverage).not.toBeNull();
+      feed(s.event(r.started()),s.event(r.delivered(),paused));
+      const menu=effects.filter(effect=>effect.kind==='completeness.add'&&effect.interval.detail?.cause==='menu-job-acceptance');
+      expect(menu).toHaveLength(variant==='clean'||variant==='startup-timer'?1:0);
+      const closed=effects.find(effect=>effect.kind==='trip.close'&&(effect.tripUuid===trip||variant==='active-checkpoint'));
+      if(!['gap','covered-session','late-checkpoint'].includes(variant))expect(closed).toMatchObject({recordingCompleteness:variant==='clean'||variant==='startup-timer'?'complete':'partial'});
+    });
   it('1. normal delivery: pause, delivery while paused, then the clear (REG-001) [O1, O2, O5, O6, O8]', () => {
     const s = new Script(ETS2_A), t = uuid(ETS2_A, '6');
     const state = play([

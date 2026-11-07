@@ -244,7 +244,7 @@ describe('REG-003/005/008/012/014 durable logical trips', () => {
     (invalid.recording as unknown as Record<string,unknown>).predecessorReset='synthetic/private-profile';
     failed(storage.appendSamples(script.session,[first,invalid]),'INVALID_INPUT');expect(ok(storage.listSamples({tripUuid:uuid}))).toHaveLength(0);storage.close();
   });
-  it.each(['confirmed','missing-pause','wrong-clock','old-pause','moving','too-far','two-minutes','another-source','after-resume'] as const)(
+  it.each(['confirmed','missing-pause','wrong-clock','old-pause','moving','too-far','two-minutes','another-source','after-resume','null-pause','missing-pause-time'] as const)(
     'requires an actual stationary pause witness for a saved minute tick: %s',async variant=>{
       const storage=await ws.open(),a=new Script(ETS2_A),b=new Script(ETS2_B);
       ok(storage.upsertSession({message:a.welcome()}));ok(storage.commitEvent({message:a.event(r.started())}));const uuid=open(storage,a);
@@ -266,15 +266,51 @@ describe('REG-003/005/008/012/014 durable logical trips', () => {
       close(storage,a,uuid);ok(storage.upsertSession({message:b.welcome()}));ok(storage.commitGap({message:b.gap(2)}));
       const event=b.event(r.jobConfigured(),{simulation:'paused'}),next=tripUuidFor(b.session,event.data.eventSeq);
       ok(storage.commitEvent({message:event,profile:proof(b),effects:[{kind:'trip.open',tripUuid:next,game:b.game,gameMode:mode,jobConfiguration:'this-event',recordingCompleteness:'unknown',startedUtcMs:2000}]}));
-      ok(storage.openAttachedTrip({pluginSessionId:b.session,nextEventSeq:'4',job:job(),effects:[],observeTripUuid:next,profile:proof(b),sourceClockId:b.clockId,monotonicNs:'1003500000000',
+      const prepareOriginal=Database.prototype.prepare;
+      const malformed=variant==='null-pause'||variant==='missing-pause-time';
+      const spy=malformed?vi.spyOn(Database.prototype,'prepare').mockImplementation(function(this:Database.Database,sql:string){
+        const statement=prepareOriginal.call(this,sql);
+        if(sql.includes("e.type='simulation.paused'")){
+          const get=statement.get.bind(statement) as (...parameters:unknown[])=>unknown;
+          statement.get=(...parameters:unknown[])=>{const row=get(...parameters) as Record<string,unknown>|undefined;
+            return row?{...row,payload_json:variant==='null-pause'?'null':'{}'}:undefined;};
+        }
+        return statement;
+      }):undefined;
+      try{ok(storage.openAttachedTrip({pluginSessionId:b.session,nextEventSeq:'4',job:job(),effects:[],observeTripUuid:next,profile:proof(b),sourceClockId:b.clockId,monotonicNs:'1003500000000',
         endpoint:{version:1,simulation:'paused',truck:'same-truck',odometerM:1000250,fuelL:99.509,speedMps:0.004,gameClockId:b.clockId,
-          gameMinutes:variant==='two-minutes'?'502':'501',position:{x:variant==='too-far'?13.051:13.017,y:0,z:0}}}));
+          gameMinutes:variant==='two-minutes'?'502':'501',position:{x:variant==='too-far'?13.051:13.017,y:0,z:0}}}));}finally{spy?.mockRestore();}
       ok(storage.commitEvent({message:b.event(r.started(),{advanceMs:2000})}));
       const result=ok(storage.journalTrip(uuid));
       if(variant==='confirmed'){expect(result.trip.recordingCompleteness).toBe('complete');expect(result.trip.observedDistanceM).toEqual({available:true,value:250});expect(result.trip.fuelUsedL).toEqual({available:true,value:0.5});}
       else expect(result.trip.recordingCompleteness).not.toBe('complete');storage.close();
     });
-  it.each(['observed','running','no-absence-reading','before-first-start','prestart-gap','prestart-replayed','first-job','first-job-with-gap','configured-before-timer','reset-before-config','replayed','replayed-clear','gap-after-absence','gap-before-clear','gap-before-clear-recovered','previous-configuration','regression-before-config','no-profile','pending-profile','late-profile'] as const)(
+  it.each(['never-matches','later-continuous-match'] as const)('does not repeat saved-baseline search after the first loaded sample: %s',async variant=>{
+    const storage=await ws.open(),a=new Script(ETS2_A),b=new Script(ETS2_B);
+    ok(storage.upsertSession({message:a.welcome()}));ok(storage.commitEvent({message:a.event(r.started())}));const uuid=open(storage,a);
+    const append=(source:Script,trip:string,second:number,x:number,fuel:number,previous?:string)=>{
+      const row=seedSample(source,trip,second,1000+second*1000,{speed:{available:true,value:second===1003?20:0},
+        odometer:{available:true,value:second===1003?1000000:1000250},fuel:{available:true,value:fuel},position:{available:true,value:{x,y:0,z:0}},
+        gameTime:{minutes:{available:true,value:500},clockId:source.clockId},recording:{profile:proof(source),job:job(),truck:'same-truck',
+          processInstanceId:source.welcome().source.processInstanceId,...(previous?{previous:{tripUuid:trip,sourceClockId:source.clockId,monotonicNs:previous}}:{})}});
+      row.monotonicNs=String(BigInt(second)*1_000_000_000n);ok(storage.appendSamples(source.session,[row]));
+    };
+    append(a,uuid,1003,0,100);append(a,uuid,1004,13,99.5,'1003000000000');close(storage,a,uuid);
+    ok(storage.upsertSession({message:b.welcome()}));ok(storage.commitGap({message:b.gap(2)}));
+    const configured=b.event(r.jobConfigured(),{simulation:'paused'}),next=tripUuidFor(b.session,configured.data.eventSeq);
+    ok(storage.commitEvent({message:configured,profile:proof(b),effects:[{kind:'trip.open',tripUuid:next,game:b.game,gameMode:mode,jobConfiguration:'this-event',recordingCompleteness:'unknown',startedUtcMs:2000}]}));
+    ok(storage.commitEvent({message:b.event(r.started())}));
+    const prepare=vi.spyOn(Database.prototype,'prepare');
+    const searches=()=>prepare.mock.calls.filter(([sql])=>sql.includes('ORDER BY p.id DESC LIMIT 65')).length;
+    try{
+      append(b,next,2001,13.1,99.5);expect(searches()).toBe(1);prepare.mockClear();
+      for(let second=2002;second<=2009;second++)append(b,next,second,variant==='later-continuous-match'?13.017:13.1+(second-2001)*0.01,99.509,String(BigInt(second-1)*1_000_000_000n));
+      expect(searches()).toBe(0);
+      const detail=ok(storage.journalTrip(uuid));expect(detail.trip.recordingCompleteness).not.toBe('complete');
+      expect(detail.trip.fuelUsedL.available).toBe(false);expect(detail.trip.observedDistanceM).toEqual({available:true,value:250});
+    }finally{prepare.mockRestore();storage.close();}
+  });
+  it.each(['observed','running','no-absence-reading','before-first-start','prestart-gap','prestart-replayed','prestart-regression','prestart-reset','prestart-previous-job','prestart-checkpoint','first-job','first-job-with-gap','configured-before-timer','reset-before-config','replayed','replayed-clear','gap-after-absence','gap-before-clear','gap-before-clear-recovered','previous-configuration','regression-before-config','no-profile','pending-profile','late-profile'] as const)(
     'recognizes a contiguous new job independently of pause and profile timing: %s', async variant=>{
       const worker=storageWorker(),client=new StorageClient(worker.handle),s=new Script(ETS2_A),context={receivedUtcMs:1000};
       ok(await client.open({path:ws.database,backupsDirectory:ws.backups,purpose:'synthetic',appVersion:'test'}));
@@ -293,7 +329,7 @@ describe('REG-003/005/008/012/014 durable logical trips', () => {
       await event(r.truckConfigured());
       clock='30000000-0000-4000-8000-000000000099';currentProof={...currentProof,sourceClockId:clock,loadGeneration:1};
       await event(r.timersRestart());await event(r.gameMode(mode));
-      if(!['before-first-start','prestart-gap','prestart-replayed'].includes(variant))for(let n=0;n<3;n++){await event(r.started(),'running');await event(r.paused());}
+      if(variant!=='before-first-start'&&!variant.startsWith('prestart-'))for(let n=0;n<3;n++){await event(r.started(),'running');await event(r.paused());}
       const values=job(),configuration=s.checkpoint(values).data.state.configuration;
       const capture=async(odo:number,fuel:number,x:number,simulation:'running'|'paused',hasJob:boolean,ms=1000)=>{
         const message=s.snapshot({configuration:{...configuration,revision:hasJob?'2':'1',job:hasJob?{available:true,value:values}:{available:false,reason:'not-observed'}},simulation,
@@ -304,8 +340,10 @@ describe('REG-003/005/008/012/014 durable logical trips', () => {
       };
       if(variant==='pending-profile'||variant==='late-profile'||variant==='no-profile')qualified=false;
       if(variant!=='no-absence-reading')await capture(1000000,100,0,'paused',false);
-      if(variant==='reset-before-config')await event(r.timersRestart());
-      if(variant==='regression-before-config')await event(r.regression('500','400'));
+      if(variant==='reset-before-config'||variant==='prestart-reset')await event(r.timersRestart());
+      if(variant==='regression-before-config'||variant==='prestart-regression')await event(r.regression('500','400'));
+      if(variant==='prestart-previous-job'){await event(r.jobConfigured(otherJob()));await event(r.cancelled());await event(r.jobCleared());}
+      if(variant==='prestart-checkpoint'){succeeded(recorder.observe(s.checkpoint(null,0,{simulation:'paused'},'1'),context));await event(r.jobCleared());}
       if(variant==='gap-before-clear'||variant==='gap-before-clear-recovered'){
         // The missing range can contain a save load. A clear alone cannot restore the older start's trust.
         succeeded(await recorder.commit(s.gap(4),context));await event(r.jobCleared());
@@ -321,6 +359,7 @@ describe('REG-003/005/008/012/014 durable logical trips', () => {
       await capture(1000000,100,0,'running',true);await capture(1000250,99.5,13,'running',true);
       succeeded(await recorder.samples.write(3600,true));await event(r.fined(),'running','2');
       const detail=ok(await client.journalTrip(uuid));
+      if(variant==='before-first-start')expect(ok(await client.journalIntervals(uuid,{limit:100})).intervals).toEqual(expect.arrayContaining([expect.objectContaining({cause:'menu-job-acceptance'})]));
       if(['observed','running','no-absence-reading','pending-profile','late-profile','gap-before-clear-recovered','first-job','before-first-start'].includes(variant))expect(detail.trip.recordingCompleteness).toBe('complete');
       else expect(detail.trip.recordingCompleteness).not.toBe('complete');
       expect(await client.close()).toEqual({clean:true});

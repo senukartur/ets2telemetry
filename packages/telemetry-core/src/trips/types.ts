@@ -128,7 +128,7 @@ export interface PendingAttach {
 /** What an `attach` input will store: openAttachedTrip's session, checkpoint key and job (docs/storage.md). */
 export interface AttachRequest {pluginSessionId: string; nextEventSeq: Uint64; job: JobConfiguration; profileChange?:boolean}
 export interface SessionState {
-  emptyJobObserved?: boolean; hasStarted?: boolean;
+  emptyJobObserved?: boolean; hasStarted?: boolean; prestartBlocked?: boolean; initialTimerSeen?: boolean;
   profileScope?:string; profileChangePending?:boolean;
   pluginSessionId: string; game: TripGame; processedThrough: Uint64; load: LoadState; gameMode: GameModeEvidence;
   clockId: string | null; lastUtcMs: number | null; lastMonotonicNs: Uint64 | null;
