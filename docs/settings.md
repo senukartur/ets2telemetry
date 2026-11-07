@@ -8,7 +8,7 @@ ET-012e added saved overlay visibility in historical format v6, defaulting to en
 
 ET-045e update, October 24, 2026 (decision Z5, owner decision D1 option b; ET-049 took v7 first, so ET-045e uses v8): the current format is **v8**. It has exactly the fields and canonical layout of ET-049's v7 document below with `"version": 8`. What changed is the meaning of each placement's `scale`: it is the user's setting, shown as a percentage, and the overlay document's zoom factor is now setting × 0.7 (`overlayZoom` in `apps/desktop/src/overlay-placement.ts`), so the new 100% looks like the earlier 70%. Its range is [0.5, 3] (50–300%) instead of [0.5, 2]. Saved numbers are kept and reinterpreted, never rewritten: a v7 file migrates to v8 by an identity step (`migratedFrom: 7`), and the owner's saved strip at 0.5 now renders at the earlier 35% (choose 70% for the earlier 50% look). See [ET-045e validation](validation/et-045e.md). The v7 and v6 headings below keep their ET-049 and ET-012e wording; read "current" there as the field layout that v8 retains.
 
-## Current format v13: current track
+## Current format v13: cruise control and current track
 
 The current format is **v13**: the v12 document with `"version": 13` and the overlay section key `overlay.sections.cruise-control`, written after `rpm` and loaded like every other section (a missing or non-boolean value falls back to `true`). The pure v12-to-v13 step sets it to `true` on a copy of `overlay.sections`, so the section is on after an update; a v12 file stays unchanged at startup (`migratedFrom: 12`) and the next durable save writes v13. A build that only knows v12 reads v13 as newer-version and refuses to save.
 
