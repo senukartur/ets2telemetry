@@ -4,9 +4,13 @@ import {describe, expect, it, vi} from 'vitest';
 import type {SettingsView} from '../../packages/contracts/src';
 import {DEFAULT_SETTINGS} from '../../apps/desktop/src/settings-schema';
 
+let lastOnValueChange: ((value: string) => void) | undefined;
+
 vi.mock('@/components/ui/select', () => ({
-  Select: ({children, value, disabled}: {children?: React.ReactNode; value?: string; disabled?: boolean; onValueChange?: unknown}) =>
-    React.createElement('div', {'data-slot': 'select', 'data-value': value, disabled: disabled ? '' : undefined, 'data-disabled': disabled ? '' : undefined}, children),
+  Select: ({children, value, disabled, onValueChange}: {children?: React.ReactNode; value?: string; disabled?: boolean; onValueChange?: (value: string) => void}) => {
+    lastOnValueChange = onValueChange;
+    return React.createElement('div', {'data-slot': 'select', 'data-value': value, disabled: disabled ? '' : undefined, 'data-disabled': disabled ? '' : undefined}, children);
+  },
   SelectTrigger: ({children, className, ...props}: {children?: React.ReactNode; className?: string; [key: string]: unknown}) =>
     React.createElement('button', {type: 'button', className, ...props}, children),
   SelectValue: () => React.createElement('span', {'data-slot': 'select-value'}),
@@ -17,7 +21,7 @@ vi.mock('@/components/ui/select', () => ({
 
 import {LanguageCard} from '../../apps/desktop/src/language-card';
 
-// REG-009, REG-012, REG-017 (ET-073): Interface language selector renders as a dropdown Select rather than a radio group.
+// ET-073: Interface language selector renders as a dropdown Select rather than a radio group.
 const defaultSettings: SettingsView = {
   ...DEFAULT_SETTINGS,
   state: 'loaded',
@@ -31,6 +35,22 @@ const makeController = (overrides?: Partial<{saving: boolean; failed: boolean; c
   choose: () => undefined,
   ...overrides,
 });
+
+function verifyErrorBeneathRow(html: string) {
+  const rowClassPos = html.indexOf('class="yu-setting-row"');
+  expect(rowClassPos).toBeGreaterThan(-1);
+  const rowStart = html.lastIndexOf('<div', rowClassPos);
+  expect(rowStart).toBeGreaterThan(-1);
+  const errorStart = html.indexOf('data-testid="language-save-error"');
+  expect(errorStart).toBeGreaterThan(rowStart);
+  const between = html.slice(rowStart, errorStart);
+  // Count <div> and </div> in the segment from the start of yu-setting-row up to the error paragraph.
+  // The yu-setting-row div itself (and any nested divs like Select/SelectContent) must be fully closed.
+  const openDivCount = (between.match(/<div(\s|>)/g) || []).length;
+  const closeDivCount = (between.match(/<\/div>/g) || []).length;
+  expect(openDivCount).toBeGreaterThan(0);
+  expect(openDivCount).toEqual(closeDivCount);
+}
 
 describe('LanguageCard rendering', () => {
   it('renders a Select dropdown with aria-labelledby linked to language-label and no radio buttons', () => {
@@ -66,6 +86,18 @@ describe('LanguageCard rendering', () => {
     expect(html).toContain('data-testid="language-option-ru"');
   });
 
+  it('enables the dropdown when settings are writable and not saving', () => {
+    const html = renderToStaticMarkup(
+      React.createElement(LanguageCard, {
+        settings: {...defaultSettings, writable: true},
+        onSaved: () => undefined,
+        controller: makeController({saving: false}),
+      })
+    );
+    expect(html).not.toContain('disabled=""');
+    expect(html).not.toContain('data-disabled');
+  });
+
   it('disables the dropdown when settings are read-only (!writable)', () => {
     const html = renderToStaticMarkup(
       React.createElement(LanguageCard, {
@@ -90,6 +122,20 @@ describe('LanguageCard rendering', () => {
     expect(html).toContain('data-disabled');
   });
 
+  it('calls controller.choose when onValueChange is invoked', () => {
+    let chosen: string | undefined;
+    renderToStaticMarkup(
+      React.createElement(LanguageCard, {
+        settings: defaultSettings,
+        onSaved: () => undefined,
+        controller: makeController({choose: value => { chosen = value; }}),
+      })
+    );
+    expect(lastOnValueChange).toBeDefined();
+    lastOnValueChange?.('ru');
+    expect(chosen).toBe('ru');
+  });
+
   it('renders save error beneath the row when showSaveError is true and settings.saveError exists', () => {
     const html = renderToStaticMarkup(
       React.createElement(LanguageCard, {
@@ -102,9 +148,7 @@ describe('LanguageCard rendering', () => {
     expect(html).toContain('data-testid="language-save-error"');
     expect(html).toContain('role="status"');
     expect(html).toContain('yu-setting-row');
-    const rowEnd = html.indexOf('</div>', html.indexOf('class="yu-setting-row"'));
-    const errorPos = html.indexOf('data-testid="language-save-error"');
-    expect(errorPos).toBeGreaterThan(rowEnd);
+    verifyErrorBeneathRow(html);
   });
 
   it('renders save failure beneath the row when controller reports failed', () => {
@@ -117,8 +161,7 @@ describe('LanguageCard rendering', () => {
     );
     expect(html).toContain('data-testid="language-save-error"');
     expect(html).toContain('role="status"');
-    const rowEnd = html.indexOf('</div>', html.indexOf('class="yu-setting-row"'));
-    const errorPos = html.indexOf('data-testid="language-save-error"');
-    expect(errorPos).toBeGreaterThan(rowEnd);
+    expect(html).toContain('yu-setting-row');
+    verifyErrorBeneathRow(html);
   });
 });

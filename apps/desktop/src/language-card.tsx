@@ -14,9 +14,9 @@ export interface LanguageCardProps {
   controller: LanguageController;
 }
 
-const LANGUAGE_OPTIONS: readonly {value: AppLanguage; label: string}[] = [
-  {value: 'en', label: 'English'},
-  {value: 'ru', label: 'Русский'},
+const LANGUAGE_OPTIONS: readonly {value: AppLanguage; labelKey: 'lang.en' | 'lang.ru'}[] = [
+  {value: 'en', labelKey: 'lang.en'},
+  {value: 'ru', labelKey: 'lang.ru'},
 ];
 
 /** ET-073: one row of Settings > General > Interface; dropdown Select replaces radio group; the note on game-provided names is behind the Info icon. */
@@ -53,7 +53,7 @@ export function LanguageCard({settings, showSaveError, controller}: LanguageCard
                 value={opt.value}
                 data-testid={`language-option-${opt.value}`}
               >
-                {opt.label}
+                {t(opt.labelKey, undefined, currentLanguage)}
               </SelectItem>
             ))}
           </SelectContent>
