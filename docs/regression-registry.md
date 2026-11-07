@@ -223,6 +223,7 @@ Columns:
 | `tests/unit/storage-errors.test.ts` | Node unit (Vitest) | REG-007 | R | ET-013 (#51) | PR (tests job, `npm test`) | — |
 | `tests/unit/storage-retention.test.ts` | Node unit (Vitest) | REG-007, REG-013 | V (et-013) | ET-013 (#51) | PR (tests job, `npm test`) | — |
 | `tests/unit/telemetry-core-boundaries.test.ts` | Node unit (Vitest) | REG-008, REG-009 | R | ET-010a (#53) | PR (tests job, `npm test`) | — |
+| `tests/unit/telemetry-core-cruise-control.test.ts` | Node unit (Vitest) | REG-009, REG-010 | F | ET-071 | PR (tests job, `npm test`) | — |
 | `tests/unit/telemetry-core-derived.test.ts` | Node unit (Vitest) | REG-008 | R, F | ET-010a (#53) | PR (tests job, `npm test`) | — |
 | `tests/unit/telemetry-core-format.test.ts` | Node unit (Vitest) | REG-009 | F | ET-010a (#53) | PR (tests job, `npm test`) | — |
 | `tests/unit/telemetry-core-gear-labels.test.ts` | Node unit (Vitest) | REG-009 | F | ET-050b (#188) | PR (tests job, `npm test`) | — |
@@ -265,7 +266,7 @@ Columns:
 | `tests/storage/recording-status.test.ts` | Storage (Vitest under Electron) | REG-002, REG-003, REG-006, REG-007, REG-011 | R, F | ET-015c (#90) | PR (tests job, `npm run test:storage`) | gap |
 | `tests/storage/recording-target.test.ts` | Storage (Vitest under Electron) | REG-007 | R, F | ET-015a (#79) | PR (tests job, `npm run test:storage`) | — |
 | `tests/storage/replay-journal-export.test.ts` | Storage (Vitest under Electron) | REG-003, REG-004, REG-005, REG-008, REG-014 | R, F, T, V (et-019) | ET-019 (PR-5) | PR (tests job, `npm run test:storage`) | ACK, gap, trip completeness |
-| `tests/storage/break-not-recorded.test.ts` | Storage (Vitest under Electron) | REG-003, REG-005, REG-009, REG-014 | R, F | ET-052 PR-4 | PR (tests job, `npm run test:storage`) | — |
+| `tests/storage/break-not-recorded.test.ts` | Storage (Vitest under Electron) | REG-003, REG-005, REG-009, REG-014 | R, F | ET-052 PR-4; cruise control ET-071 | PR (tests job, `npm run test:storage`) | — |
 | `tests/storage/sample-recorder.test.ts` | Storage (Vitest under Electron) | REG-001, REG-002, REG-003, REG-005, REG-009, REG-012 | R, F | ET-015b (#86) | PR (tests job, `npm run test:storage`) | gap |
 | `tests/storage/samples.test.ts` | Storage (Vitest under Electron) | REG-005, REG-009 | R, F | ET-013 (#51) | PR (tests job, `npm run test:storage`) | dedup |
 | `tests/storage/schema-constraints.test.ts` | Storage (Vitest under Electron) | REG-013 | R | ET-013 (#51) | PR (tests job, `npm run test:storage`) | historical fixture |
@@ -300,6 +301,7 @@ From `ctest -N` on the four build trees at ET-019t: 75 cases in the plugin Relea
 | `v1-transport-contract-game-mode`, `v1-transport-asan-contract-game-mode` | Native CTest, actual local pipes | REG-003, REG-005, REG-010 | T | ET-059 | PR (scaffold and AddressSanitizer jobs) | welcome/checkpoint/snapshot evidence parity; durable frame notification and redelivery |
 | `sdk-adapter-contract` | Native CTest, plugin | REG-004, REG-005, REG-008, REG-009, REG-010, REG-011 | R, T | ET-003 (#10); ET-059 | PR (scaffold job) | gap, pending mode notification, current callback occurrence, queue loss, session reset |
 | `sdk-adapter-contract-gearbox`, `v1-producer-contract-gearbox`, `v1-transport-contract-gearbox` and their ASan twins `*-asan-contract-gearbox` | Native CTest, plugin (ASan twins in the AddressSanitizer job) | REG-005, REG-009, REG-010 | R, T | ET-050b (#190) | PR (scaffold job; AddressSanitizer job) | v0/CAP0 isolation |
+| `sdk-adapter-contract-cruise-control`, `v1-producer-contract-cruise-control`, `v1-transport-contract-cruise-control`, `-cruise-control-unsupported`, `-cruise-control-v0` and their ASan twins `*-asan-contract-cruise-control*` | Native CTest, plugin (ASan twins in the AddressSanitizer job) | REG-005, REG-009, REG-010 | R, T | ET-071 | PR (scaffold job; AddressSanitizer job) | v0/CAP0 isolation |
 | `event-channel-contract-{ring,gate,loss-runs,flush,concurrency,exhaustion}` | Native CTest, plugin | REG-003, REG-004, REG-005, REG-006, REG-007, REG-009, REG-011 | R | ET-004b (#48) | PR (scaffold job) | gap |
 | `sdk-exports-contract` | Native CTest, plugin | REG-017 (shipped plugin artifact integrity); supports REG-015, which is partial since ET-017 PR-1 | V (et-003), ET-019t review | ET-003 (#10) | PR (scaffold job) | security |
 | `snapshot-transport-contract-*` (13 cases) and `snapshot-transport-dll-contract` | Native CTest, plugin | REG-003, REG-005, REG-010, REG-011 | R | ET-004a (#12) | PR (scaffold job); Extended campaigns workflow: the `fuzz` case at x50 | security, regression |
@@ -313,9 +315,9 @@ From `ctest -N` on the four build trees at ET-019t: 75 cases in the plugin Relea
 | `native-pipe-client-profile-*`, `native-pipe-client-asan-profile-*` | Native CTest, client Release/ASan | REG-003, REG-010, REG-011 | F, T | ET-064 | PR (scaffold and AddressSanitizer jobs) | security, fixed COM inspection, framing, retained process identity, Unicode homedir, unavailable command line |
 | `native-pipe-client-discover-*`, `native-pipe-client-asan-discover-*` | Native CTest, client Release/ASan | REG-003, REG-010, REG-011 | R, T | ET-056 | PR (scaffold and AddressSanitizer jobs) | security, endpoint-free discovery, stale identity |
 | `native-pipe-client-session-*`, `native-pipe-client-asan-session-*` | Native CTest, client Release/ASan | REG-003, REG-010, REG-012 | R, T | ET-069 | PR (scaffold and AddressSanitizer jobs) | regression, persistent v0/v1 approvals without session rewrites, live other-session exclusion, stale other-session sweeping, injected access-denied retention without a pipe endpoint, schema/user/name validation and exact scan bounds |
-| `native-pipe-client-*` (72 cases, including discovery, CAP0 and protocol v1 broker modes) | Native CTest, client | REG-003, REG-005, REG-010, REG-011 | R, T | ET-006a (#13), extended by CAP-01a, ET-006b and ET-033 | PR (scaffold job) | security, v0/CAP0 isolation |
+| `native-pipe-client-*` (74 cases, including discovery, CAP0 and protocol v1 broker modes) | Native CTest, client | REG-003, REG-005, REG-010, REG-011 | R, T | ET-006a (#13), extended by CAP-01a, ET-006b and ET-033 | PR (scaffold job) | security, v0/CAP0 isolation |
 | `*-asan-contract*` (70 cases): the AddressSanitizer twins of the protocol v0 and v1, producer, adapter, event channel, snapshot transport, window, CAP0 and v1 transport cases | Native CTest, plugin ASan | as their Release twins | R, T | the twins' cards | PR (AddressSanitizer job) | as their Release twins |
-| `native-pipe-client-asan-*` (72 cases) | Native CTest, client ASan | as `native-pipe-client-*` | R | ET-006a (#13) and later | PR (AddressSanitizer job) | security, v0/CAP0 isolation |
+| `native-pipe-client-asan-*` (74 cases) | Native CTest, client ASan | as `native-pipe-client-*` | R | ET-006a (#13) and later | PR (AddressSanitizer job) | security, v0/CAP0 isolation |
 | `media-session-reader-protocol` | CTest | REG-010, REG-020 | T | ET-061 | PR (build job) | security (command bounds and Unicode) |
 | `media-session-reader-snapshot` | CTest | REG-010, REG-011, REG-020 | T | ET-061 | PR (build job) | regression (production enumeration, ID/cache transitions, explicit-to-Automatic history and playback coherence) |
 | `media-session-reader-selection` | CTest | REG-020 | T | ET-061 | PR (build job) | regression (session policy) |

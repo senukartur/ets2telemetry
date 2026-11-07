@@ -237,6 +237,18 @@ ET-052 PR-5 adds the fifteenth overlay section, `mandatory-break`, under owner d
 
 Real-game values (what ETS2 and ATS report with the break simulation on or off, an overdue value), the colours and underline above a real game at 40–100% background opacity in the four layouts in English and Russian, the strip's width stability, Windows scaling and the click-through over the taller default windows remain pending in [ET-052 validation](validation/et-052.md).
 
+### Cruise control (ET-071, November 7, 2026)
+
+ET-071 adds the sixteenth overlay section, `cruise-control`, with settings format v13 ([settings](settings.md#current-format-v13-the-cruise-control-overlay-section-et-071)). The data path is protocol v1 minor 3 ([live telemetry fields](live-telemetry-fields.md)).
+
+- **Section.** Id `cruise-control`, at the end of the Driving group after RPM (also its canonical position), with the lucide `CircleGauge` icon and the labels "Cruise control" / "Круиз-контроль" (card and settings) and "Cruise" / "Круиз" (strip, cluster panel and HUD). It is a cluster panel row, not part of the gauge. It needs protocol v1 and is not tied to the job.
+- **States.** A set speed is shown like the speed section, as a whole number with the profile's unit (25 m/s is `90 km/h` or `56 mph`). Zero, cruise control off, is the value `OFF` (`ВЫКЛ`) without a unit, never a dash. A carried v1 observation without a value (an older plugin, not observed, invalid or stale) is a dash, as for the break (`DASH_WHEN_CARRIED`); a source without v1 follows the L5 rule.
+- **Stable width.** In the strip the item is exactly 140 px (`STRIP_FIXED_WIDTH_SECTIONS`: its minimum width equals its cap), so a value, `OFF` and the dash never move a neighbour. The other layouts use their fixed rows.
+- **Presets.** `everything` and `driving-only` include the section; `job-focus` does not.
+- **Window sizes.** With every section at the setting 1 (zoom 0.7) the card is 210 × 320 DIP (454 CSS px of content; 303 before), the cluster 308 × 232 (328; 217) and the HUD 224 × 299 (426; 282). The strip stays 1280 × 82 with three rows: the first row now ends at cargo (1,678 of the inner 1,801). At 50% (zoom 0.35) every section no longer fits one strip row (3,674 CSS px against the inner 3,627), so the strip is two rows, 1280 × 29 instead of 1280 × 16. At 300% the cluster is 924 × 693 (649 before).
+
+Real-game values (whether ETS2 and ATS register the channel, the set speed against the game's own display), readability above a real game and the taller windows remain owner checks.
+
 ### Hard Mode indicator
 
 ET-070 shows on the overlay whether the current settings meet Hard Mode ([Hard Mode](hard-mode.md)), under owner decisions D1–D4 ([DECISION-LOG.md](../DECISION-LOG.md#et-070-overlay-hard-mode-indicator--november-7-2026)).

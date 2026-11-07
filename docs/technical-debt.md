@@ -46,6 +46,8 @@ Recorded October 15, 2026 by the coordinator during ET-010 planning. **This entr
 
 Protocol v1 minor 0 does not carry cruise control, throttle, brake and clutch inputs, navigation time, the navigation speed limit, the parking brake or lights. The ET-010 live dashboard therefore covers the MVP field set only: the concept §6 overlay metrics, the §7 sample fields, job, truck and trailer identity and source validity ([live telemetry fields](live-telemetry-fields.md)).
 
+ET-071 (November 7, 2026) added cruise control as protocol v1 minor 3, shown on the dashboard and the overlay; the other fields stay deferred.
+
 **Future work:**
 - Add these channels in a v1 minor revision with fixtures, in both the TypeScript and C++ representations.
 - Capture and review them in real sessions before showing them.
