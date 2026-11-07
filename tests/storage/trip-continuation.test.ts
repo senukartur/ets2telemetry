@@ -33,6 +33,8 @@ import {StorageClient} from '../../packages/storage/src/client';
 import {storageWorker} from './recording-helpers';
 import {seedSample} from '../shared/journal-seed';
 import {JournalService} from '../../apps/desktop/src/journal-service';
+import {TripExportSerializer,tripExportHeader} from '../../apps/desktop/src/journal-export';
+import {tripExportProblems} from '../shared/trip-export-validator';
 import {JournalExporter} from '../../apps/desktop/src/journal-export-writer';
 
 let ws: Awaited<ReturnType<typeof workspace>>;
@@ -123,6 +125,20 @@ describe('REG-003/005/008/012/014 durable logical trips', () => {
       const rows=db.prepare("SELECT json_extract(hard_mode_details,'$.passingChecks') AS p,json_extract(hard_mode_details,'$.failingChecks') AS f FROM trips").all() as {p:number;f:number}[];
       expect(rows.reduce((sum,row)=>sum+row.p,0)).toBe(95);expect(rows.reduce((sum,row)=>sum+row.f,0)).toBe(5);
     });
+  });
+  it('preserves a pre-change checkpoint null audit through a qualifying v2 continuation and export',async()=>{
+    let storage=await ws.open();const a=new Script(ETS2_A),first=attachTripUuidFor(a.session,'1');ok(storage.upsertSession({message:a.welcome()}));
+    ok(storage.openAttachedTrip({pluginSessionId:a.session,nextEventSeq:'1',job:job(),profile:proof(a),sourceClockId:a.clockId,monotonicNs:'0',effects:[
+      {kind:'trip.open',tripUuid:first,game:'ets2',gameMode:mode,jobConfiguration:'this-event',recordingCompleteness:'partial',startedUtcMs:1000}]}));close(storage,a,first);ok(storage.close());
+    const db=new Database(ws.database);try{db.prepare('UPDATE trips SET hard_mode_details=NULL,is_hard_mode=0 WHERE trip_uuid=?').run(first);}finally{db.close();}
+    storage=await ws.open();const b=new Script(ETS2_B),second=open(storage,b),assessment=evaluateHardMode(parseHardModeConfig(HARD_MODE_CONFIG),2000,'fixture');
+    ok(storage.observeHardMode('ets2',{assessment,binding:'b'.repeat(64),pluginSessionId:b.session,sourceMonotonicNs:'0',batch:{tripUuid:second,producer:'90000000-0000-4000-8000-000000000001',sequence:1,passingChecks:1,failingChecks:0,unknownChecks:0}},true));
+    ok(storage.commitEvent({message:b.event(r.delivered()),effects:[{kind:'trip.close',tripUuid:second,outcome:'delivered',closeReason:'outcome',outcomeEvent:'this-event',recordingCompleteness:'partial',endedUtcMs:3000}]}));
+    const detail=validateJournalTripDetail(ok(storage.journalTrip(first)));expect(detail.trip).toMatchObject({isHardMode:false,hardModeDetails:null});expect(ok(storage.journalTrips()).trips).toHaveLength(1);
+    const serializer=new TripExportSerializer(detail,tripExportHeader({uuid:'30000000-0000-4000-8000-000000000001',purpose:'synthetic',schemaVersion:6},'test',4000));
+    const exported=JSON.parse(serializer.begin()+serializer.rows('sources',ok(storage.journalIntervals(first,{limit:500,cursor:detail.exportBounds.snapshot!.sources})).sources!)+serializer.rows('intervals',ok(storage.journalIntervals(first,{limit:500,cursor:detail.exportBounds.snapshot!.intervals})).intervals)+serializer.rows('events',ok(storage.journalEvents(first,{limit:500,cursor:detail.exportBounds.snapshot!.events})).events)+serializer.end());
+    expect(tripExportProblems(exported)).toEqual([]);expect(exported.trip).toMatchObject({is_hard_mode:false,hard_mode_details:null});ok(storage.close());
+    readOnly(ws.database,sql=>expect(sql.prepare('SELECT hard_mode_details,is_hard_mode FROM trips WHERE trip_uuid=?').get(first)).toEqual({hard_mode_details:null,is_hard_mode:0}));
   });
   it('keeps a legacy original on its strict policy when a new recording continues it', async () => {
     let storage=await ws.open();const a=new Script(ETS2_A),first=open(storage,a);close(storage,a,first);ok(storage.close());

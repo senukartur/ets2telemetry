@@ -125,7 +125,9 @@ export function projectionRow(db: Database.Database, id: bigint, includeProgress
     }
     row.hard_mode_details = JSON.stringify({...opening, latest: latest?.latest ?? opening.latest, ...counts, checkpoint: null, firstDiagnostic, latestDiagnostic});
     row.is_hard_mode = qualifiesHardMode(counts, row.outcome === 'delivered') ? 1n : 0n;
-  } else if (opening && latest) row.hard_mode_details = JSON.stringify({...opening, latest: latest.latest, manualDelivery: latest.manualDelivery, firstLoss: loss ?? opening.firstLoss});
+  } else if (opening === null) {
+    row.hard_mode_details = null; row.is_hard_mode = 0n;
+  } else if (latest) row.hard_mode_details = JSON.stringify({...opening, latest: latest.latest, manualDelivery: latest.manualDelivery, firstLoss: loss ?? opening.firstLoss});
   if (opening?.version !== 2 && group.hard_mode_lost === 1n) row.is_hard_mode = 0n;
   if (group.interrupted === 1n && row.outcome !== 'delivered' && row.outcome !== 'cancelled') {
     row.outcome = 'none'; row.close_reason = 'different-job';

@@ -3,7 +3,7 @@
 // through the StorageClient interface and never loads native SQLite. `StorageDurableSink` commits messages without trip
 // effects; the trip recorder (trip-recorder.ts) commits them with their ET-014 effects. Production passes no sink yet,
 // so nothing is recorded or acknowledged; see docs/telemetry-service-v1.md.
-import type {HardModeCounts, HardModeObservation} from '../../../packages/contracts/src/hard-mode';
+import type {HardModeCheckBatch, HardModeCounts, HardModeObservation} from '../../../packages/contracts/src/hard-mode';
 import type {ServerMessage, Uint64} from '../../../packages/contracts/src/protocol-v1';
 import type {CommitResult, SampleAppendResult, StorageError, StorageErrorCode} from '../../../packages/storage/src/api';
 import type {StorageClient} from '../../../packages/storage/src/client';
@@ -34,8 +34,10 @@ export type SinkResult<T> = {ok: true; value: T} | {ok: false; error: SinkError}
  * R8, H13: the consumer's UTC label, captured when the frame was decoded, never when its commit or observation runs.
  * Every event, gap, checkpoint and snapshot of a durable connection carries one.
  */
-/** Bounded per-coverage intake evidence; the recorder may only latch the first later unsafe observation. */
-export interface HardModeCapture {game: 'ets2' | 'ats'; pluginSessionId?: string; observation: HardModeObservation; fresh: boolean; firstUnsafe: HardModeObservation | null; checks?: HardModeCounts & {lastCheck?: string}}
+/** One recording member's bounded cumulative checkpoint, shared with its retained intake capture across retries. */
+export interface HardModeCheckTarget {game: 'ets2' | 'ats'; session: string; batch: HardModeCheckBatch; lastCheck?: string; ready: boolean}
+/** Bounded per-coverage intake evidence and the scheduled-check interval owned by a job boundary. */
+export interface HardModeCapture {game: 'ets2' | 'ats'; pluginSessionId?: string; observation: HardModeObservation; fresh: boolean; firstUnsafe: HardModeObservation | null; checks?: HardModeCounts & {lastCheck?: string}; checkBoundary?: 'job' | 'terminal'; openingCheck?: boolean; checkTarget?: HardModeCheckTarget}
 export interface CommitContext {receivedUtcMs: number; hardModeCapture?: HardModeCapture}
 
 /**

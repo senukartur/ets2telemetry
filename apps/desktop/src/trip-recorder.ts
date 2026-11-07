@@ -14,7 +14,7 @@ import {classifyStep} from '../../../packages/telemetry-core/src/trips/accountin
 // and holds the rows until DurableDelivery's `samples` op writes them. ET-016 PR-7 (J9): a checkpoint job seen while the
 // game is idle opens a late-attach trip through DurableDelivery's `attach` op once the replayed events drained. Node-safe:
 // it talks to storage only through the StorageClient interface. See docs/telemetry-service-v1.md.
-import type {HardModeDiagnostic, HardModeCheckBatch, HardModeDetails, HardModeObservation} from '../../../packages/contracts/src/hard-mode';
+import type {HardModeDiagnostic, HardModeDetails, HardModeObservation} from '../../../packages/contracts/src/hard-mode';
 import {hardModeDiagnostic, unknownHardMode} from '../../../packages/telemetry-core/src/hard-mode';
 import type {RecordingLosses, RecordingTrip} from '../../../packages/contracts/src';
 import type {JobConfiguration, Uint64} from '../../../packages/contracts/src/protocol-v1';
@@ -24,7 +24,7 @@ import {
   dueAttach, initialSamplerState, initialTripState, normalizeV1State, sampleReading, stepTrip, tripView, type SamplerState, type TripErrorCode, type TripGame, type TripInput,
   type TripState, type TripView
 } from '../../../packages/telemetry-core/src/index';
-import type {AttachSink, AttachStatus, CommitContext, CoverageMessage, HardModeCapture, DurableSink, ReadingMessage, RecorderErrorCode, SampleSink, SinkError, SinkResult, WelcomeMessage} from './durable-sink';
+import type {AttachSink, AttachStatus, CommitContext, CoverageMessage, HardModeCapture, HardModeCheckTarget, DurableSink, ReadingMessage, RecorderErrorCode, SampleSink, SinkError, SinkResult, WelcomeMessage} from './durable-sink';
 import {saturatingAdd} from './recording-status';
 import {SampleBuffer} from './sample-buffer';
 import {readTripSeeds} from './trip-seeds';
@@ -114,32 +114,58 @@ function capturedPoint(state: ReturnType<typeof normalizeV1State>): Pick<Capture
  * A reducer `ok: false` result becomes a RecorderErrorCode and changes no state.
  */
 export class TripRecorderSink implements DurableSink {
-  private openingCapture = false;
-  private activeCapture: HardModeCapture | undefined;
+  private checkOwner: HardModeCapture | undefined;
   private readonly checkProducer = randomUUID();
-  private checkTarget: {game: TripGame; session: string; batch: HardModeCheckBatch; lastCheck?: string; ready: boolean} | undefined;
+  private checkTarget: HardModeCheckTarget | undefined;
   private seedCheckTarget(game: TripGame, session: string, tripUuid: string): void {
     if (this.checkTarget?.batch.tripUuid === tripUuid) return;
     this.checkTarget = {game, session, ready: false, batch: {tripUuid, producer: this.checkProducer, sequence: 0, passingChecks: 0, failingChecks: 0, unknownChecks: 0}};
   }
-  private countCheck(game: TripGame, value: HardModeObservation): void {
-    const target = this.checkTarget;
-    if (!target || this.openingCapture && target.ready) {
-      const capture = this.activeCapture;
-      if (!capture || capture.game !== game || capture.pluginSessionId !== value.pluginSessionId || !value.check) return;
-      const counts = capture.checks ??= {passingChecks: 0, failingChecks: 0, unknownChecks: 0};
-      const key = `${value.check.producer}:${value.check.sequence}`;
-      if (!newerCheck(counts.lastCheck, value.check)) return;
-      counts.lastCheck = key; counts[value.binding === null ? 'unknownChecks' : value.assessment.state === 'pass' ? 'passingChecks' : value.assessment.state === 'fail' ? 'failingChecks' : 'unknownChecks']++;
-      return;
+  /** Intake owns one interval until the next job/terminal boundary; no speculative reducer or check history. */
+  private prepareCheckCapture(message: CoverageMessage, capture: HardModeCapture, intake: boolean): void {
+    capture.pluginSessionId ??= message.source.pluginSessionId;
+    if (!capture.checkBoundary && message.kind === 'event') {
+      const kind = message.data.record.type;
+      if (kind === 'job.configured') {
+        capture.checkBoundary = 'job';
+        const obs = capture.observation, check = obs.check, occurred = message.data.occurred.monotonicNs;
+        capture.openingCheck = capture.fresh && check !== undefined && obs.pluginSessionId === message.source.pluginSessionId && obs.binding !== null
+          && obs.sourceMonotonicNs !== null && occurred.available && BigInt(occurred.value) >= BigInt(obs.sourceMonotonicNs) && !message.data.redelivered;
+        const previous = this.checkOwner?.checkTarget?.lastCheck ?? this.checkOwner?.checks?.lastCheck ?? this.checkTarget?.lastCheck;
+        capture.checks = {passingChecks:0,failingChecks:0,unknownChecks:0,lastCheck:check && newerCheck(previous,check) ? `${check.producer}:${check.sequence}` : previous};
+      } else if (kind === 'job.delivered' || kind === 'job.cancelled') capture.checkBoundary = 'terminal';
     }
-    if (target.game !== game || target.session !== value.pluginSessionId || !value.check) return;
+    if (capture.checkBoundary && (intake || !this.checkOwner)) this.checkOwner = capture;
+  }
+  private countCheck(game: TripGame, value: HardModeObservation): void {
+    if (!value.check) return;
+    const owner = this.checkOwner;
+    if (owner && (owner.game !== game || owner.pluginSessionId !== value.pluginSessionId || owner.checkBoundary === 'terminal')) return;
+    const target = owner?.checkTarget ?? (owner ? undefined : this.checkTarget);
     const key = `${value.check.producer}:${value.check.sequence}`;
-    if (!newerCheck(target.lastCheck, value.check)) return;
-    target.lastCheck = key;
+    const counter = value.binding === null ? 'unknownChecks' : value.assessment.state === 'pass' ? 'passingChecks' : value.assessment.state === 'fail' ? 'failingChecks' : 'unknownChecks';
+    if (owner && !target) {
+      const counts = owner.checks!;
+      if (!newerCheck(counts.lastCheck, value.check)) return;
+      if (counts.passingChecks + counts.failingChecks + counts.unknownChecks >= Number.MAX_SAFE_INTEGER) throw new Error('Hard Mode counter bound');
+      counts.lastCheck = key; counts[counter]++; return;
+    }
+    if (!target || target.game !== game || target.session !== value.pluginSessionId || !newerCheck(target.lastCheck, value.check)) return;
     if (target.batch.sequence >= Number.MAX_SAFE_INTEGER) throw new Error('Hard Mode counter bound');
-    target.batch.sequence++;
-    target.batch[value.binding === null ? 'unknownChecks' : value.assessment.state === 'pass' ? 'passingChecks' : value.assessment.state === 'fail' ? 'failingChecks' : 'unknownChecks']++;
+    target.lastCheck = key; target.batch.sequence++; target.batch[counter]++;
+  }
+  /** The actual reducer effect assigns the interval once: new member or supported same-job resend. */
+  private handoffChecks(capture: HardModeCapture, member: string, opening: boolean): HardModeCheckTarget {
+    if (capture.checkTarget?.batch.tripUuid === member) return this.checkTarget = capture.checkTarget;
+    this.seedCheckTarget(capture.game, capture.pluginSessionId!, member);
+    const target = this.checkTarget!, counts = capture.checks!;
+    if (opening && capture.openingCheck) target.batch.passingChecks++;
+    for (const key of ['passingChecks','failingChecks','unknownChecks'] as const) target.batch[key] += counts[key];
+    target.batch.sequence = target.batch.passingChecks + target.batch.failingChecks + target.batch.unknownChecks;
+    if (!Number.isSafeInteger(target.batch.sequence)) throw new Error('Hard Mode counter bound');
+    if (counts.passingChecks + counts.failingChecks + counts.unknownChecks > 0 || opening && capture.openingCheck) target.lastCheck = counts.lastCheck;
+    capture.checkTarget = target;
+    return target;
   }
   private readonly capturedEvidence = new Map<string, HardModeCapture>();
   private readonly pendingCaptures = new Set<HardModeCapture>();
@@ -155,9 +181,13 @@ export class TripRecorderSink implements DurableSink {
     const pending = this.pendingObservation;
     if (captured.firstUnsafe === null && pending?.game === captured.game && pending.value.assessment.state !== 'pass') captured.firstUnsafe = structuredClone(pending.value);
     if (captured.firstUnsafe === null && this.observationError) captured.firstUnsafe = {assessment: unknownHardMode(Date.now(), 'interrupted'), diagnostic: 'storage-failure', binding: null, pluginSessionId: null, sourceMonotonicNs: null};
+    this.prepareCheckCapture(message, captured, true);
     this.pendingCaptures.add(captured); return captured;
   }
-  releaseCapture(captured: HardModeCapture): void {this.pendingCaptures.delete(captured);}
+  releaseCapture(captured: HardModeCapture): void {
+    this.pendingCaptures.delete(captured);
+    if (this.checkOwner === captured && ![...this.capturedEvidence.values()].includes(captured)) this.checkOwner = undefined;
+  }
   private pendingObservation: PendingHardMode | undefined;
   private observing = false;
   private observationWrite: Promise<void> | undefined;
@@ -324,15 +354,10 @@ export class TripRecorderSink implements DurableSink {
     const key = this.evidenceKey(message);
     const capture = this.capturedEvidence.get(key) ?? context.hardModeCapture ?? this.capture(message);
     if (capture) {this.capturedEvidence.clear(); this.capturedEvidence.set(key, capture); this.pendingCaptures.add(capture);}
-    this.activeCapture = capture;
-    this.openingCapture = message.kind === 'event' && message.data.record.type === 'job.configured';
-    if (capture && !capture.checks) {
-      const obs = capture.observation, occurred = message.kind === 'event' ? message.data.occurred.monotonicNs : undefined;
-      if (this.openingCapture && capture.fresh && obs.check && obs.pluginSessionId === message.source.pluginSessionId && obs.sourceMonotonicNs !== null && occurred?.available
-        && BigInt(occurred.value) >= BigInt(obs.sourceMonotonicNs) && message.kind === 'event' && !message.data.redelivered) this.countCheck(message.source.game, obs);
-    }
-    try {return await this.commitCaptured(message, context, key, capture);} finally {this.activeCapture = undefined; this.openingCapture = false; if (capture) this.releaseCapture(capture);}
+    if (capture) this.prepareCheckCapture(message, capture, false);
+    try {return await this.commitCaptured(message, context, key, capture);} finally {if (capture) this.releaseCapture(capture);}
   }
+
   private async commitCaptured(message: CoverageMessage, context: CommitContext, key: string, capture: HardModeCapture | undefined): Promise<SinkResult<CommitResult>> {
     const observationError = await this.flushObservations();
     const retained = observationError && this.pendingObservation?.game === message.source.game ? this.pendingObservation : undefined;
@@ -344,17 +369,10 @@ export class TripRecorderSink implements DurableSink {
     if (!stepped.ok) return refused(RECORDER_CODE[stepped.code]);
     // No await between this read and posting the transaction: any earlier observed loss is part of opening/closing.
     const opening = stepped.effects.find(e => e.kind === 'trip.open');
-    if (opening?.kind === 'trip.open') {
-      this.seedCheckTarget(message.source.game, message.source.pluginSessionId, opening.tripUuid);
-      if (capture?.checks && this.checkTarget?.batch.sequence === 0) {
-        const {lastCheck, ...counts} = capture.checks;
-        Object.assign(this.checkTarget.batch, counts, {sequence: counts.passingChecks + counts.failingChecks + counts.unknownChecks});
-        this.checkTarget.lastCheck = lastCheck;
-      }
-    }
-    else if (stepped.effects.some(e => e.kind === 'trip.close' && e.tripUuid === this.checkTarget?.batch.tripUuid)) this.checkTarget = undefined;
-    const target = opening?.kind === 'trip.open' ? this.checkTarget : undefined;
-    const hardMode = capture ? {...capture.observation, ...(target && target.batch.sequence ? {batch: {...target.batch}, batchSessionId: target.session} : {})} : undefined;
+    const member = opening?.kind === 'trip.open' ? opening.tripUuid : capture?.checkBoundary === 'job' ? this.view(message.source.game).current?.tripUuid : undefined;
+    const target = capture?.checkBoundary === 'job' && member ? this.handoffChecks(capture, member, opening?.kind === 'trip.open') : undefined;
+    if (!target && stepped.effects.some(e => e.kind === 'trip.close' && e.tripUuid === this.checkTarget?.batch.tripUuid)) this.checkTarget = undefined;
+    const hardMode = capture ? {...capture.observation, ...(target && target.batch.sequence ? {member:target.batch.tripUuid,batch:{...target.batch},batchSessionId:target.session} : {})} : undefined;
     // An optional observer command cannot veto healthy recording. Its retained checkpoint instead commits atomically
     // with the next ordinary event/gap, so no check or original diagnostic disappears before ACK.
     const hardModeLoss = retained ? {...retained.value, assessment: unknownHardMode(Date.now(), 'interrupted'), diagnostic: 'storage-failure' as const,
@@ -366,7 +384,7 @@ export class TripRecorderSink implements DurableSink {
     if (message.kind === 'gap' && result.value.previouslyCoveredThrough !== coveredThrough) return refused('TRIP_COVERAGE_MISMATCH');
     this.state = stepped.state;
     if (retained && this.pendingObservation === retained && result.value.status === 'committed') {this.pendingObservation = undefined; this.observationError = undefined;}
-    if (target) {target.ready = true; this.openingCapture = false; this.startObservationWrite();}
+    if (target) {target.ready = true; this.startObservationWrite();}
     if(message.kind==='gap' || message.kind==='event' && message.data.record.type==='gameTime.regression'
       || this.boundaryPrevious && this.boundaryPrevious.tripUuid!==this.view(message.source.game).current?.tripUuid){
       this.previousSample=undefined;this.boundaryPrevious=undefined;this.boundaryRunning=undefined;this.lastEndpoint=undefined;this.pendingProfile=undefined;
