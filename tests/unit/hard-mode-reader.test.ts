@@ -15,7 +15,7 @@ import {ProfileObserver} from '../../apps/desktop/src/profile-observation';
 import type {HardModeObservation} from '../../packages/contracts/src/hard-mode';
 import type {SourceIdentity} from '../../packages/contracts/src/protocol-v1';
 import {HARD_MODE_CONFIG} from '../shared/hard-mode';
-import {unknownHardMode} from '../../packages/telemetry-core/src/hard-mode';
+import {advanceHardModeV2, newHardModeDetails, qualifiesHardMode, unknownHardMode} from '../../packages/telemetry-core/src/hard-mode';
 const source: SourceIdentity = {game: 'ets2', origin: 'game', processId: 123, windowsSessionId: 1, processInstanceId: '10000000-0000-4000-8000-000000000001', pluginSessionId: '20000000-0000-4000-8000-000000000001'};
 const name = 'Synthetic Профиль', id = Buffer.from(name).toString('hex').toUpperCase();
 const created = new Date(2026, 9, 21, 12, 0, 0).getTime();
@@ -912,6 +912,20 @@ describe('ET-026 isolated reader (REG-008/010/011)', () => {
   it('reads shared-open log files through Node/libuv while another writer holds the file', async () => {
     const file = await open(path.join(game, 'game.log.txt'), 'a');
     try {expect((await read()).assessment.state).toBe('pass');} finally {await file.close();}
+  });
+  it.each(['identical-rewrite','unrelated-setting','save-directory'] as const)('reverifies %s without permanently rejecting a passing v2 trip', async trigger => {
+    const r = reader(), initial = await read(r);
+    let audit = {...newHardModeDetails(initial.assessment, initial.binding), passingChecks: 1};
+    r.onInvalidate(profileChanged => {audit = advanceHardModeV2(audit, {assessment: unknownHardMode(created + 10001), binding: null, pluginSessionId: null, sourceMonotonicNs: null,
+      diagnostic: profileChanged ? 'profile-verification' : 'settings-changing'});});
+    if (trigger === 'save-directory') await mkdir(path.join(profile,'save','synthetic-save'), {recursive:true});
+    else await writeSettingsChange(path.join(profile,'config.cfg'), HARD_MODE_CONFIG + (trigger === 'unrelated-setting' ? '\nuset r_vsync "0"' : ''));
+    const verified = await read(r); audit = advanceHardModeV2(audit, verified);
+    expect(verified.assessment.state).toBe('pass'); expect(verified.binding).toBe(initial.binding);
+    expect(audit.firstLoss).toBeNull(); expect(qualifiesHardMode(audit)).toBe(true);
+    expect(audit.latestDiagnostic).not.toBeNull();
+    await writeSettingsChange(path.join(profile,'config.cfg'), HARD_MODE_CONFIG.replace('g_fatigue "1"','g_fatigue "0"'));
+    expect((await read(r)).assessment.rules[3]).toMatchObject({state:'fail',values:[0]});
   });
   it('uses file bytes on unchanged hashes/changed mtimes and detects live persisted changes', async () => {
     const r = reader(); expect((await read(r)).assessment.state).toBe('pass');

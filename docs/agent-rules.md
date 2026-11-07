@@ -247,7 +247,7 @@ Recording and data:
 
 - `GAME_HISTORY_RECORDING` is `true` since October 25, 2026: real ETS2 and ATS sources are configured to record over protocol v1 into history; the first real recorded trip remains unverified. Synthetic, replay and fixture sources are never durable in history, and `ETS2TELEMETRY_RECORDING` selects only a synthetic or replay database. Changing the flag is an owner decision ([enablement](../DECISION-LOG.md#game-history-recording-enablement--october-25-2026)).
 - CAP0 is evidence-only and default-off. Original captures and sanitized exports stay local; only minimized, anonymized CAP-01-derived fixtures may be committed ([CAP0](../DECISION-LOG.md#cap-01a-evidence-capture-transport--october-12-2026), [replay](../DECISION-LOG.md#et-005b-cap-01-replay-authorization--october-21-2026)).
-- Hard Mode qualification is conservative: an observed failure or any required unknown loses the trip's qualification irreversibly, and no grace period is adopted ([Hard Mode](../DECISION-LOG.md#et-026-persisted-setting-decision-and-implementation--october-21-2026)).
+- New Hard Mode audits qualify delivered trips at an inclusive 95% passing known checks, excluding separately counted unknown checks; verified logical continuation sums member counters. Legacy audits retain their original strict policy ([Hard Mode](../DECISION-LOG.md#hard-mode-known-check-threshold--november-7-2026)).
 - Uninstall removes all local data; see [Uninstall removes local data](#uninstall-removes-local-data--october-16-2026). The public repository must never receive secrets or personal data; see [Repository visibility and license](#repository-visibility-and-license--october-16-2026).
 
 Builds, installers and releases:

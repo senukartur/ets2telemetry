@@ -871,3 +871,7 @@ The owner chose the existing VTC Dashboard and its [v1.0 contract](https://githu
 ## ET-101 continued-trip identity acceptance — November 6, 2026
 
 The owner accepted [stable-root publication for continued trips](docs/dashboard-upload.md#continued-trip-identity-stable-root-publication-after-membership-resolution) and requested ET-101 closure. The specification is accepted; implementation and integration/game evidence remain with their owning cards. This grants no uploader implementation, release or PR merge authorization.
+
+## Hard Mode known-check threshold — November 7, 2026
+
+The owner replaces irreversible loss for new trips with an inclusive 95% passing known-check threshold: delivered outcome, at least one known check, and `pass * 100 >= (pass + fail) * 95`. Unknown checks are separately diagnosed and excluded; temporary file verification failures, restarts and session changes are not permanent rejection. Verified logical continuation preserves summed member counts; heartbeat/manual/status updates add no sampling weight. No separate opening/final pass or anti-cheat guarantee is required. Audit v2 in the existing bounded JSON column and compatible export format 5 carry statistics and persistent reason diagnostics; historical v1 audits and qualification keep their original policy.

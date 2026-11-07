@@ -236,6 +236,7 @@ export function recorderClient(storage: {readonly client: StorageClient | undefi
   return {
     observeHardMode: (game, observation, fresh) => storage.client?.observeHardMode(game, observation, fresh) ?? closed(),
     getTrip: uuid => storage.client?.getTrip(uuid) ?? closed(),
+    journalTrip: uuid => storage.client?.journalTrip(uuid) ?? closed(),
     upsertSession: input => storage.client?.upsertSession(input) ?? closed(),
     committedThrough: session => storage.client?.committedThrough(session) ?? closed(),
     commitEvent: input => storage.client?.commitEvent(input) ?? closed(),

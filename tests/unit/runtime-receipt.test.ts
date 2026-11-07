@@ -936,16 +936,16 @@ it('requires an intact current driver receipt and normal Job exit without overwr
 }, receiptBatchTimeout(cases.length) + 5000);
 
 function hardModeCases() {
-  const hardMode = {unknown: true, fail: true, pass: true, hints: true, hover: true, inlineDetails: true, bilingual: true, languageHotChange: true, keyboard: true, refresh: true, lost: true, restoredLost: true, irreversible: true, badge: true,
+  const hardMode = {unknown: true, fail: true, pass: true, hints: true, hover: true, inlineDetails: true, bilingual: true, languageHotChange: true, keyboard: true, refresh: true, belowThreshold: true, unknownExcluded: true, knownRatio: true, badge: true,
     export: true, overlayExcluded: true, persisted: true, schemaVersion: 6, flags: [false, true], errors: []};
   const body = (value: unknown) => JSON.stringify({passed: true, commit: 'candidate', mode: 'packaged', scenarioKind: 'hard-mode', hardMode: value});
   const accepted = {scenario: 'hard-mode', code: 0, available: true, reason: null};
   const rejected = {...accepted, reason: 'HARD_MODE_RESULT_INVALID'};
   return [{name: 'intact Hard Mode receipt', body: body(hardMode), ...accepted},
     {name: 'Hard Mode passive tooltip diagnostics preserve intact success rules', body: body({...hardMode, tooltipPhases: [{phase: 'hover', criterion: 'fatigue', outcome: 'completed', after: {available: true, value: {events: [{kind: 'hint-inserted'}, {kind: 'hint-removed'}]}}}]}), ...accepted},
-    ...['hover','keyboard','irreversible','persisted'].map(field => ({name: `Hard Mode passive facts cannot replace ${field}`, body: body({...hardMode, [field]: undefined,
+    ...['hover','keyboard','knownRatio','persisted'].map(field => ({name: `Hard Mode passive facts cannot replace ${field}`, body: body({...hardMode, [field]: undefined,
       tooltipPhases: [{phase: 'hover', criterion: 'fatigue', outcome: 'failed', after: {available: true, value: {events: [{kind: 'hint-inserted'}]}}}]}), ...rejected})),
-    ...['unknown','fail','pass','hints','hover','inlineDetails','bilingual','languageHotChange','keyboard','refresh','lost','restoredLost','irreversible','badge','export','overlayExcluded','persisted'].flatMap(field => [
+    ...['unknown','fail','pass','hints','hover','inlineDetails','bilingual','languageHotChange','keyboard','refresh','belowThreshold','unknownExcluded','knownRatio','badge','export','overlayExcluded','persisted'].flatMap(field => [
       {name: `Hard Mode missing ${field}`, body: body({...hardMode, [field]: undefined}), ...rejected},
       {name: `Hard Mode false ${field}`, body: body({...hardMode, [field]: false}), ...rejected}]),
     {name: 'Hard Mode false delivered flag', body: body({...hardMode, flags: [false, false]}), ...rejected},

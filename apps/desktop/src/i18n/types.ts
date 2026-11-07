@@ -3,6 +3,10 @@ import type {AppLanguage} from '../../../../packages/contracts/src';
 export type {AppLanguage};
 
 export type I18nKey =
+ | 'hm.ratio' | 'hm.recoverable'
+ | 'hm.diagnostic.settings-changing' | 'hm.diagnostic.settings-unavailable' | 'hm.diagnostic.profile-verification'
+ | 'hm.diagnostic.source-changed' | 'hm.diagnostic.guard-deadline' | 'hm.diagnostic.session-transition'
+ | 'hm.diagnostic.storage-failure' | 'hm.diagnostic.rule-failed'
  | 'np.title'
  | 'np.enabled'
  | 'np.source'

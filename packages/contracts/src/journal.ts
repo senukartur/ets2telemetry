@@ -275,7 +275,11 @@ const CLOSE_REASONS: readonly unknown[] = ['outcome', 'configuration-cleared', '
 function listItem(o: Record<string, unknown>): void {
   boolean(o.isHardMode); if (o.hardModeDetails !== null && !isHardModeDetails(o.hardModeDetails)) bad();
   // Qualified audits retain legacy true or the current null compatibility value.
-  if (o.isHardMode && (o.outcome !== 'delivered' || o.hardModeDetails === null || (o.hardModeDetails as HardModeDetails).firstLoss !== null || (o.hardModeDetails as HardModeDetails).manualDelivery === false)) bad();
+  const audit = o.hardModeDetails as HardModeDetails | null;
+  if (audit?.version === 2) {
+    const known = BigInt(audit.passingChecks) + BigInt(audit.failingChecks);
+    if (o.isHardMode !== (o.outcome === 'delivered' && known > 0n && BigInt(audit.passingChecks) * 100n >= known * 95n)) bad();
+  } else if (o.isHardMode && (o.outcome !== 'delivered' || audit === null || audit.firstLoss !== null || audit.manualDelivery === false)) bad();
   uuid(o.tripUuid); oneOf(o.game, GAMES); gameMode(o.gameMode); boolean(o.gameModeAmbiguous); oneOf(o.outcome, OUTCOMES);
   nullable(o.closeReason, value => oneOf(value, CLOSE_REASONS)); oneOf(o.recordingCompleteness, COMPLETENESS);
   if ((o.outcome === 'open') !== (o.closeReason === null) || (o.outcome === 'open') !== (o.endedUtcMs === null)) bad();

@@ -455,7 +455,7 @@ export async function runJournalExport({application, dashboard, config, record})
     assert.deepEqual(problemsOf(document), [], `The ${name} export is not a valid format version 4 document`);
     assert.deepEqual({format: document.format, formatVersion: document.formatVersion, application: document.header.application, purpose: document.header.database.purpose,
       schemaVersion: document.header.database.schemaVersion, sessionOrigin: document.header.sessionOrigin},
-    {format: 'ets2telemetry.trip-export', formatVersion: 4, application: {name: 'ETS2Telemetry', version: smokeBuild(config).version}, purpose: 'synthetic', schemaVersion: 6, sessionOrigin: 'synthetic'});
+    {format: 'ets2telemetry.trip-export', formatVersion: 5, application: {name: 'ETS2Telemetry', version: smokeBuild(config).version}, purpose: 'synthetic', schemaVersion: 6, sessionOrigin: 'synthetic'});
   }
   assert.equal(documents.paging.header.database.uuid, documents.delivered.header.database.uuid);
   // Historical seeds never supplied observation metadata; current settings cannot create retrospective proof.

@@ -217,7 +217,7 @@ export async function runHardModeSmoke({application, dashboard, source, config, 
       assert.equal(await caveatButton.evaluate(element => element === globalThis.document.activeElement), true, `Escape moved focus from the ${lang} caveat hint`);
     });
     const pageText = await dashboard.getByTestId('hard-mode-card').innerText();
-    for (const caveat of (lang === 'en' ? ['Read-only checks observe persisted settings.', 'Unpersisted menu or console changes and transient changes between checks are not verified.', 'Parking is checked only through its settings; actual parking at delivery is not checked.', 'Current settings pass is separate from delivered-trip qualification.'] : ['Проверка только читает сохранённые настройки.', 'Несохранённые изменения в меню или консоли и временные изменения между проверками не проверяются.', 'Парковка проверяется только по настройкам; фактическая парковка при доставке не проверяется.', 'Соответствие текущих настроек не означает, что завершённый рейс будет засчитан как Hard Mode.'])) assert.ok(hoverText.includes(caveat), `Missing ${lang} caveat in the tooltip: ${caveat}`);
+    for (const caveat of (lang === 'en' ? ['Read-only checks observe persisted settings.', 'Unpersisted menu or console changes and transient changes between checks are not verified.', 'Parking is checked only through its settings; actual parking at delivery is not checked.', 'Current settings and the trip check ratio are separate. Unknown checks are excluded from the ratio.'] : ['Проверка только читает сохранённые настройки.', 'Несохранённые изменения в меню или консоли и временные изменения между проверками не проверяются.', 'Парковка проверяется только по настройкам; фактическая парковка при доставке не проверяется.', 'Текущие настройки и доля успешных проверок рейса показаны отдельно. Неизвестные проверки не входят в расчёт.'])) assert.ok(hoverText.includes(caveat), `Missing ${lang} caveat in the tooltip: ${caveat}`);
     if (lang === 'ru') assert.doesNotMatch(pageText, /Detected:|Required:|Reason:|Check again|Current settings|Read-only/);
     await dashboard.getByTestId('shell.content').evaluate(node => {node.scrollTop = 0;});
     await dashboard.screenshot({path: path.join(config.output, `hard-mode-checklist-${lang}.png`)});
@@ -238,7 +238,7 @@ export async function runHardModeSmoke({application, dashboard, source, config, 
   await proof('HARD_MODE_ARMED_PASS', value => value.assessment.state === 'pass' && value.assessment.observedUtcMs !== beforeOpening);
   await source.begin('qualifying');
   await proof('HARD_MODE_OPEN', async () => {const rows = await readTrips(); return rows.length === 1 && rows[0].outcome === 'open';}, 5000);
-  // Require two distinct persisted passing publications while this trip is open, through the production adapter.
+  // Manual publications update the audit without sampling weight; qualification waits for a genuine scheduled check.
   let observed = (await proof('HARD_MODE_OPEN_AUDIT', value => value.trip?.latest.state === 'pass' && value.trip.firstLoss === null, 5000)).trip.latest.observedUtcMs;
   for (let refresh = 0; refresh < 2; refresh++) {
     const next = await proof('HARD_MODE_OPEN_PASSING_REFRESH', async value => {
@@ -247,35 +247,42 @@ export async function runHardModeSmoke({application, dashboard, source, config, 
     });
     observed = next.trip.latest.observedUtcMs;
   }
+  await until(readStatus, value => value.trip?.version === 2 && value.trip.passingChecks > 0, 'HARD_MODE_SCHEDULED_PASS', 8000);
   await source.deliver();
   let positive;
   await proof('HARD_MODE_QUALIFIED', async () => {positive = await readTrips(); return positive.length === 1 && positive[0].isHardMode === true;}, 5000);
   record.qualified = positive[0].tripUuid;
-  await source.begin('lost');
-  await until(async () => await readTrips(), rows => rows.length === 2 && rows[0].outcome === 'open', 'HARD_MODE_SECOND_OPEN', 5000);
+  await source.begin('ratio');
+  await until(readTrips, rows => rows.length === 2 && rows[0].outcome === 'open', 'HARD_MODE_SECOND_OPEN', 5000);
+  const beforeUnknown = await until(readStatus, value => value.trip?.version === 2 && value.trip.passingChecks > 0, 'HARD_MODE_SECOND_SCHEDULED_PASS', 8000);
   await source.settings('unknown');
-  await until(async () => await readStatus(), value => value.assessment.state === 'unknown' && Boolean(value.trip?.firstLoss), 'HARD_MODE_LOST', 8000);
-  await until(() => dashboard.getByTestId('hard-mode-card').getAttribute('data-state'), state => state === 'lost', 'HARD_MODE_RENDERED_LOSS', 5000);
-  assert.match(await dashboard.getByTestId('hard-mode-loss').innerText(), /Qualification cannot be restored/);
-  record.lost = true; await dashboard.getByTestId('hard-mode-card').screenshot({path: path.join(config.output, 'hard-mode-lost.png')});
+  const unavailable = await until(readStatus, value => value.assessment.state === 'unknown' && value.trip?.version === 2 && value.trip.unknownChecks > 0, 'HARD_MODE_UNKNOWN_EXCLUDED', 8000);
+  assert.equal(unavailable.trip.failingChecks, beforeUnknown.trip.failingChecks);
+  assert.equal(unavailable.trip.firstLoss, null);
+  await until(() => dashboard.getByTestId('hard-mode-card').getAttribute('data-state'), state => state === 'unknown', 'HARD_MODE_RENDERED_UNKNOWN', 5000);
+  assert.match(await dashboard.getByTestId('hard-mode-trip-ratio').innerText(), /Unknown: [1-9].*excluded/);
+  record.unknownExcluded = true;
   await source.settings('pass'); await until(async () => (await readStatus()).assessment.state, value => value === 'pass', 'HARD_MODE_RESTORED_SETTINGS', 8000);
   await until(() => dashboard.locator('[data-testid="hard-mode-card"] .yu-hard-mode-progress [role="status"]').innerText(), text => text === '12 of 12', 'HARD_MODE_RENDERED_RESTORATION', 5000);
-  assert.equal(await dashboard.getByTestId('hard-mode-card').getAttribute('data-state'), 'lost');
-  assert.match(await dashboard.getByTestId('hard-mode-card').innerText(), /Hard Mode lost for this trip/);
-  record.restoredLost = true; await dashboard.getByTestId('hard-mode-card').screenshot({path: path.join(config.output, 'hard-mode-restored-lost.png')});
+  assert.equal(await dashboard.getByTestId('hard-mode-card').getAttribute('data-state'), 'pass');
+  assert.doesNotMatch(await dashboard.getByTestId('hard-mode-card').innerText(), /lost for this trip|cannot be restored/);
   await dashboard.evaluate(() => globalThis.desktop.setLanguage('ru'));
-  await until(() => dashboard.getByTestId('hard-mode-card').innerText(), text => text.includes('восстановить нельзя'), 'HARD_MODE_PAGE_HOT_LANGUAGE', 5000);
+  await until(() => dashboard.getByTestId('hard-mode-trip-ratio').innerText(), text => text.includes('Неизвестно:') && text.includes('Порог: ≥95%'), 'HARD_MODE_PAGE_HOT_LANGUAGE', 5000);
   assert.equal(await dashboard.locator('[data-testid="hard-mode-card"] .yu-hard-mode-progress [role="status"]').innerText(), '12 из 12');
   assert.doesNotMatch(await dashboard.getByTestId('hard-mode-card').innerText(), /Detected:|Required:|Current settings|Qualification cannot/);
-  await dashboard.screenshot({path: path.join(config.output, 'hard-mode-restored-lost-ru.png')});
-  await screen(dashboard, 'live');
-  await screen(dashboard, 'hardMode');
-  assert.match(await dashboard.getByTestId('hard-mode-card').innerText(), /Hard Mode потерян для этого рейса/);
-  record.languageHotChange = true;
-  await language('en');
+  await dashboard.screenshot({path: path.join(config.output, 'hard-mode-recovered-ru.png')});
+  await screen(dashboard, 'live'); await screen(dashboard, 'hardMode');
+  assert.match(await dashboard.getByTestId('hard-mode-trip-ratio').innerText(), /Порог: ≥95%/);
+  record.languageHotChange = true; await language('en');
+  await source.settings('fail');
+  const failed = await until(readStatus, value => value.trip?.version === 2 && value.trip.failingChecks > 0, 'HARD_MODE_SCHEDULED_FAILURE', 8000);
+  assert.ok(failed.trip.passingChecks * 100 < (failed.trip.passingChecks + failed.trip.failingChecks) * 95);
+  assert.match(await dashboard.getByTestId('hard-mode-trip-ratio').innerText(), /Required: ≥95%/);
+  record.belowThreshold = true;
+  await dashboard.getByTestId('hard-mode-card').screenshot({path: path.join(config.output, 'hard-mode-below-threshold.png')});
   await source.deliver();
-  const rows = await until(async () => await readTrips(), rows => rows.length === 2 && rows.every(row => row.outcome === 'delivered'), 'HARD_MODE_DELIVERIES', 5000);
-  assert.deepEqual(rows.map(row => row.isHardMode), [false, true]); record.irreversible = true;
+  const rows = await until(readTrips, rows => rows.length === 2 && rows.every(row => row.outcome === 'delivered'), 'HARD_MODE_DELIVERIES', 5000);
+  assert.deepEqual(rows.map(row => row.isHardMode), [false, true]); record.knownRatio = true;
   await clickTestId(dashboard, 'tab-journal');
   await dashboard.getByTestId('journal-row').first().waitFor({state: 'visible'});
   assert.equal(await dashboard.getByTestId('hard-mode-badge').count(), 1); record.badge = true;
@@ -293,7 +300,7 @@ export async function runHardModeSmoke({application, dashboard, source, config, 
   await dashboard.getByTestId('journal-export-result').filter({hasText: 'Saved the trip as JSON'}).waitFor({state: 'visible', timeout: 10000});
   const exported = JSON.parse(await readFile(file, 'utf8'));
   const validate = await exportValidator(config); assert.deepEqual(validate(exported), []);
-  assert.equal(exported.formatVersion, 4); assert.equal(exported.trip.is_hard_mode, true); assert.equal(exported.trip.hard_mode_details.manualDelivery, null);
+  assert.equal(exported.formatVersion, 5); assert.equal(exported.trip.is_hard_mode, true); assert.equal(exported.trip.hard_mode_details.manualDelivery, null);
   assert.deepEqual(exported.outcomeDetails.record.autoParkUsed, {available: true, value: true});
   record.export = true; record.flags = rows.map(row => row.isHardMode); healthy();
   const overlay = application.windows().find(page => page.url().endsWith('?view=overlay'));

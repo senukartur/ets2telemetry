@@ -1,5 +1,7 @@
 import path from 'node:path';
 import {mkdir, writeFile, stat, utimes, realpath, symlink} from 'node:fs/promises';
+import {TripExportSerializer, tripExportHeader} from '../../apps/desktop/src/journal-export';
+import {tripExportProblems} from '../shared/trip-export-validator';
 import {HardModeReader, readStableFile} from '../../apps/desktop/src/hard-mode/reader';
 import {Worker} from 'node:worker_threads';
 import {afterEach, beforeEach, describe, expect, it, vi} from 'vitest';
@@ -19,7 +21,9 @@ import {ok, failed, TEST_CLOSE_GRACE_MS, workspace} from './helpers';
 let ws: Awaited<ReturnType<typeof workspace>>, worker: Worker | undefined;
 beforeEach(async () => {ws = await workspace();});
 afterEach(async () => {await worker?.terminate(); await ws.dispose();});
-const evidence = (config = HARD_MODE_CONFIG): HardModeObservation => ({assessment: evaluateHardMode(parseHardModeConfig(config), Date.now(), 'fixture'), binding: 'a'.repeat(64), pluginSessionId: ETS2_A, sourceMonotonicNs: '1'});
+let checkSequence = 0;
+const check = () => ({producer: '90000000-0000-4000-8000-000000000001', sequence: ++checkSequence});
+const evidence = (config = HARD_MODE_CONFIG): HardModeObservation => ({check: check(), assessment: evaluateHardMode(parseHardModeConfig(config), Date.now(), 'fixture'), binding: 'a'.repeat(64), pluginSessionId: ETS2_A, sourceMonotonicNs: '1'});
 const id = '70000000-0000-4000-8000-000000000001';
 const opening: TripEffect = {kind: 'trip.open', tripUuid: id, game: 'ets2', gameMode: {mode: 'unknown', method: 'none', confidence: 'none'}, jobConfiguration: 'this-event', recordingCompleteness: 'complete', startedUtcMs: Date.now()};
 function delivery(): EventRecord {const d = r.delivered(); if (d.type !== 'job.delivered') throw new Error('fixture'); return {...d, autoParkUsed: {available: true, value: false}};}
@@ -33,7 +37,7 @@ describe('ET-026 integrity (REG-005/006/007)', () => {
     failed(storage.commitEvent({message, hardMode: captured, effects}, {testHooks: {beforeCommit: () => {throw Object.assign(new Error('injected disk failure'), {code: 'SQLITE_IOERR'});}}}), 'IO_ERROR');
     expect(ok(storage.committedThrough(ETS2_A))).toBe('1'); expect(ok(storage.getTrip(id))).toEqual(before);
     ok(storage.commitEvent({message, hardMode: captured, effects}));
-    expect(ok(storage.getTrip(id))).toMatchObject({outcome: 'delivered', isHardMode: false, hardModeDetails: {firstLoss: {rule: 'fatigue', values: [0]}}});
+    expect(ok(storage.getTrip(id))).toMatchObject({outcome: 'delivered', isHardMode: false, hardModeDetails: {firstDiagnostic: {rule: 'fatigue', values: [0]}}});
   });
   it('holds delivery and every ACK behind a pending loss write in the production delivery FIFO', async () => {
     const directory = process.env.ETS2TELEMETRY_STORAGE_TEST_BUNDLES; if (!directory) throw new Error('Run storage suite');
@@ -54,7 +58,7 @@ describe('ET-026 integrity (REG-005/006/007)', () => {
       // The worker can answer another read, so this is an observable pending barrier, not a timing sleep.
       expect(ok(await client.committedThrough(ETS2_A))).toBe('1'); expect(ok(await client.getTrip(trip.tripUuid))!.outcome).toBe('open'); expect(acks.at(-1)).toBe('1');
       release(); await pipeline.idle(); expect(acks.at(-1)).toBe('2'); expect(failures).toEqual([]);
-      expect(ok(await client.getTrip(trip.tripUuid))).toMatchObject({outcome: 'delivered', isHardMode: false, hardModeDetails: {firstLoss: {rule: 'fatigue', values: [0]}}});
+      expect(ok(await client.getTrip(trip.tripUuid))).toMatchObject({outcome: 'delivered', isHardMode: false, hardModeDetails: {firstDiagnostic: {rule: 'fatigue', values: [0]}}});
     } finally {await pipeline.stop(); expect(await client.close()).toEqual({clean: true});}
   });
   it.each(['queued', 'delayed-first-arrival'] as const)('refuses retrospective proof for a %s opening after a delayed scan', async mode => {
@@ -85,7 +89,7 @@ describe('ET-026 integrity (REG-005/006/007)', () => {
       await pipeline.idle(); expect(acks).toEqual(['1']);
       const last = script.event(delivery()); connection.enqueue({firstEventSeq: '2', lastEventSeq: '2'}, last, Date.now()); await pipeline.idle();
       const trip = ok(await client.listTrips()).trips[0];
-      expect(ok(await client.getTrip(trip.tripUuid))).toMatchObject({isHardMode: false, outcome: 'delivered', hardModeDetails: {firstLoss: {reason: 'historical'}}});
+      expect(ok(await client.getTrip(trip.tripUuid))).toMatchObject({isHardMode: false, outcome: 'delivered', hardModeDetails: {firstLoss: null, opening: {state:'unknown'}, passingChecks:0}});
     } finally {monitor.close(); await pipeline.stop(); expect(await client.close()).toEqual({clean: true});}
   });
   it.each(['loss', 'loss-retry', 'observation-write-failure'] as const)('latches loss during a held opening coverage read: %s', async mode => {
@@ -120,11 +124,11 @@ describe('ET-026 integrity (REG-005/006/007)', () => {
       }
       expect(acks).toEqual(['1']); expect(ok(await through(ETS2_A))).toBe('1');
       const trip = ok(await client.listTrips()).trips[0];
-      const expectedLoss = mode === 'observation-write-failure' ? {reason: 'interrupted', values: [null]} : {rule: 'fatigue', values: [0]};
-      expect(ok(await client.getTrip(trip.tripUuid))).toMatchObject({hardModeDetails: {firstLoss: expectedLoss}});
+      const expectedLoss = mode === 'observation-write-failure' ? {code: 'storage-failure'} : {rule: 'fatigue', values: [0]};
+      expect(ok(await client.getTrip(trip.tripUuid))).toMatchObject({hardModeDetails: {firstDiagnostic: expectedLoss}});
       if (!retry) expect(ok(await client.getTrip(trip.tripUuid))!.hardModeDetails!.opening.state).toBe('pass');
       const last = script.event(delivery()); connection.enqueue({firstEventSeq: '2', lastEventSeq: '2'}, last, Date.now()); await pipeline.idle();
-      expect(acks).toEqual(['1', '2']); expect(ok(await client.getTrip(trip.tripUuid))).toMatchObject({isHardMode: false, outcome: 'delivered', hardModeDetails: {firstLoss: expectedLoss}});
+      expect(acks).toEqual(['1', '2']); expect(ok(await client.getTrip(trip.tripUuid))).toMatchObject({isHardMode: mode === 'observation-write-failure', outcome: 'delivered', hardModeDetails: {firstDiagnostic: expectedLoss}});
     } finally {await pipeline.stop(); expect(await client.close()).toEqual({clean: true});}
   });
   it('continues monitoring through UTC rollback with snapshots but no coverage events, retaining a restored fatigue loss', async () => {
@@ -156,11 +160,11 @@ describe('ET-026 integrity (REG-005/006/007)', () => {
       utc -= 120_000; mono += 1_000_000_000n; config = HARD_MODE_CONFIG.replace('g_fatigue "1"', 'g_fatigue "0"');
       const low = script.snapshot(); connection.snapshot(low, Date.now()); await observe(low.capture.monotonicNs); await failureStored;
       expect(monitor.status().assessment.state).toBe('fail'); expect(ok(await client.committedThrough(ETS2_A))).toBe('1');
-      expect(ok(await client.getTrip(trip.tripUuid))!.hardModeDetails!.firstLoss).toMatchObject({rule: 'fatigue', values: [0]});
+      expect(ok(await client.getTrip(trip.tripUuid))!.hardModeDetails).toMatchObject({firstDiagnostic: {rule: 'fatigue', values: [0]}});
       config = HARD_MODE_CONFIG; mono += 1_000_000_000n; const restored = script.snapshot(); connection.snapshot(restored, Date.now()); await observe(restored.capture.monotonicNs);
       expect(monitor.status().assessment.state).toBe('pass'); utc += 120_000;
       const last = script.event(delivery()); connection.enqueue({firstEventSeq: '2', lastEventSeq: '2'}, last, Date.now()); await pipeline.idle();
-      expect(ok(await client.getTrip(trip.tripUuid))).toMatchObject({outcome: 'delivered', isHardMode: false, hardModeDetails: {firstLoss: {rule: 'fatigue', values: [0]}}});
+      expect(ok(await client.getTrip(trip.tripUuid))).toMatchObject({outcome: 'delivered', isHardMode: false, hardModeDetails: {passingChecks:0,failingChecks:0,firstDiagnostic: {rule: 'fatigue', values: [0]}}});
     } finally {utcClock.mockRestore(); monitor.close(); await pipeline.stop(); expect(await client.close()).toEqual({clean: true});}
   });
   it.each(['delay', 'utc-forward', 'utc-back', 'expired-intake', 'pending-unknown', 'pending-failure', 'process-probe', 'process-retired', 'periodic-failure', 'changed-failure', 'initial-process-failure'] as const)('freezes admitted generation across held opening/delivery: %s', async mode => {
@@ -257,12 +261,86 @@ describe('ET-026 integrity (REG-005/006/007)', () => {
       }
       expect(configReadFailures).toBe(mode==='periodic-failure'||mode==='changed-failure'?1:0);
       const trip = ok(await client.listTrips()).trips[0], details = ok(await client.getTrip(trip.tripUuid))!;
-      const qualified = ['delay', 'utc-forward', 'utc-back', 'expired-intake', 'process-probe', 'periodic-failure'].includes(mode);
+      const qualified = mode !== 'initial-process-failure';
       expect(details).toMatchObject({outcome: 'delivered', isHardMode: qualified});
       if (qualified) {expect(details.hardModeDetails!.firstLoss).toBeNull(); expect(openPasses).toBeGreaterThanOrEqual(2);}
-      else {expect(details.hardModeDetails!.firstLoss).not.toBeNull(); if (mode === 'pending-failure' || mode === 'changed-failure') expect(details.hardModeDetails!.firstLoss).toMatchObject({values: [null]});}
+      else {expect(details.hardModeDetails).toMatchObject({firstLoss:null,passingChecks:0});}
       expect(acks).toEqual(['1', '2']);
     } finally {monitor.close(); await pipeline.stop(); utc.mockRestore(); expect(await client.close()).toEqual({clean: true});}
+  });
+  it('retains checks completed while the opening transaction response is held', async () => {
+    const directory=process.env.ETS2TELEMETRY_STORAGE_TEST_BUNDLES; if(!directory)throw new Error('Run storage suite');
+    worker=new Worker(path.join(directory,'storage-worker.cjs'),{workerData:{kind:'storage'}});
+    const client=new StorageClient(workerHandle(worker),{closeGraceMs:TEST_CLOSE_GRACE_MS});
+    let current=evidence();const recorder=new TripRecorderSink(client,{hardModeEvidence:()=>current});
+    try {
+      ok(await client.open({path:ws.database,purpose:'synthetic',backupsDirectory:ws.backups,appVersion:'test-v2'}));
+      const script=new Script(ETS2_A);sinkOk(await recorder.openSession(script.welcome()));
+      let release!:()=>void,entered!:()=>void;const held=new Promise<void>(resolve=>{entered=resolve;}),original=client.commitEvent.bind(client);
+      client.commitEvent=async input=>{client.commitEvent=original;const result=await original(input);entered();await new Promise<void>(resolve=>{release=resolve;});return result;};
+      const opening=recorder.commit(script.event(r.jobConfigured()),{receivedUtcMs:Date.now()});await held;
+      for(let i=0;i<3;i++){current=evidence();recorder.observeHardMode('ets2',current);}
+      current=evidence(HARD_MODE_CONFIG.replace('g_fatigue "1"','g_fatigue "0"'));recorder.observeHardMode('ets2',current);
+      current={...evidence(),assessment:unknownHardMode(Date.now())};recorder.observeHardMode('ets2',current);
+      release();sinkOk(await opening);sinkOk(await recorder.commit(script.event(delivery()),{receivedUtcMs:Date.now()}));
+      const trip=ok(await client.journalTrips()).trips[0];expect(trip).toMatchObject({isHardMode:false,hardModeDetails:{passingChecks:4,failingChecks:1,unknownChecks:1}});
+    } finally {expect(await client.close()).toEqual({clean:true});}
+  });
+  it('scopes cumulative checks to the intended raw member and authenticated plugin session', async () => {
+    const directory=process.env.ETS2TELEMETRY_STORAGE_TEST_BUNDLES; if(!directory)throw new Error('Run storage suite');
+    worker=new Worker(path.join(directory,'storage-worker.cjs'),{workerData:{kind:'storage'}});
+    const client=new StorageClient(workerHandle(worker),{closeGraceMs:TEST_CLOSE_GRACE_MS});
+    try {
+      ok(await client.open({path:ws.database,purpose:'synthetic',backupsDirectory:ws.backups,appVersion:'test-v2'}));
+      const other='70000000-0000-4000-8000-000000000002',foreign='10000000-0000-4000-8000-000000000002';
+      for(const [session,uuid] of [[ETS2_A,id],[foreign,other]]) {
+        const script=new Script(session);ok(await client.upsertSession({message:script.welcome()}));
+        ok(await client.commitEvent({message:script.event(r.jobConfigured()),effects:[{...opening,tripUuid:uuid}]}));
+      }
+      const batch={tripUuid:id,producer:'90000000-0000-4000-8000-000000000001',sequence:100,passingChecks:95,failingChecks:5,unknownChecks:0};
+      ok(await client.observeHardMode('ets2',{...evidence(),batch},true));
+      expect(ok(await client.getTrip(id))!.hardModeDetails).toMatchObject({passingChecks:95,failingChecks:5});
+      expect(ok(await client.getTrip(other))!.hardModeDetails).toMatchObject({passingChecks:0,failingChecks:0});
+      const invalid=await client.observeHardMode('ets2',{...evidence(),pluginSessionId:foreign,batch:{...batch,sequence:101,passingChecks:96}},true);
+      expect(invalid).toMatchObject({ok:false,error:{code:'INVALID_INPUT'}});
+      expect(ok(await client.getTrip(id))!.hardModeDetails).toMatchObject({passingChecks:95,failingChecks:5});
+    } finally {expect(await client.close()).toEqual({clean:true});}
+  });
+  it.each(['before-write','after-write','observer-unavailable'] as const)('preserves all coalesced checks and deduplicates retry %s', async failure => {
+    const directory = process.env.ETS2TELEMETRY_STORAGE_TEST_BUNDLES; if (!directory) throw new Error('Run storage suite');
+    worker = new Worker(path.join(directory,'storage-worker.cjs'), {workerData:{kind:'storage'}});
+    const client = new StorageClient(workerHandle(worker), {closeGraceMs:TEST_CLOSE_GRACE_MS});
+    let current = evidence(); const recorder = new TripRecorderSink(recorderClient({client}), {hardModeEvidence:()=>current});
+    try {
+      ok(await client.open({path:ws.database,purpose:'synthetic',backupsDirectory:ws.backups,appVersion:'test-v2'}));
+      const script = new Script(ETS2_A); sinkOk(await recorder.openSession(script.welcome()));
+      for (let i=0;i<100;i++) {current=evidence();recorder.observeHardMode('ets2',current);}
+      sinkOk(await recorder.commit(script.event(r.jobConfigured()), {receivedUtcMs:Date.now()}));
+      const trip = ok(await client.listTrips()).trips[0].tripUuid, original = client.observeHardMode.bind(client);
+      let release!:()=>void, entered!:()=>void; const held = new Promise<void>(resolve=>{entered=resolve;});
+      let first = true;
+      client.observeHardMode = async (game, observation, fresh) => {
+        if (!first) return failure === 'observer-unavailable' ? {ok:false,error:{code:'IO_ERROR',retryable:true,message:'Injected optional observer failure'}} : original(game,observation,fresh);
+        first = false; entered(); await new Promise<void>(resolve=>{release=resolve;});
+        if (failure === 'after-write') ok(await original(game,observation,fresh));
+        return {ok:false,error:{code:'IO_ERROR',retryable:true,message:'Injected acknowledgement loss'}};
+      };
+      current = evidence(HARD_MODE_CONFIG.replace('g_fatigue "1"','g_fatigue "0"')); recorder.observeHardMode('ets2',current); await held;
+      for (let i=0;i<4;i++) {current=evidence(HARD_MODE_CONFIG.replace('g_fatigue "1"','g_fatigue "0"')); recorder.observeHardMode('ets2',current);}
+      for (let i=0;i<94;i++) {current=evidence(); recorder.observeHardMode('ets2',current);}
+      for (let i=0;i<7;i++) {current={...evidence(),assessment:unknownHardMode(Date.now()),diagnostic:'settings-unavailable'};recorder.observeHardMode('ets2',current);}
+      // Reapplying a publication has no new check identity, and therefore no statistical weight.
+      recorder.observeHardMode('ets2',current); release();
+      current=evidence(); sinkOk(await recorder.commit(script.event(delivery()),{receivedUtcMs:Date.now()}));
+      const detail=ok(await client.journalTrip(trip));
+      expect(detail.trip).toMatchObject({isHardMode:true,hardModeDetails:{version:2,passingChecks:95,failingChecks:5,unknownChecks:7,
+        firstDiagnostic:{rule:'fatigue',values:[0]},latestDiagnostic:{code:'storage-failure'}}});
+      const serializer=new TripExportSerializer(detail,tripExportHeader({uuid:'30000000-0000-4000-8000-000000000001',purpose:'synthetic',schemaVersion:6},'test',Date.now()));
+      const text=serializer.begin()+serializer.rows('sources',ok(await client.journalIntervals(trip,{limit:500,cursor:detail.exportBounds.snapshot!.sources})).sources!)+serializer.rows('intervals',ok(await client.journalIntervals(trip,{limit:500,cursor:detail.exportBounds.snapshot!.intervals})).intervals)+serializer.rows('events',ok(await client.journalEvents(trip,{limit:500,cursor:detail.exportBounds.snapshot!.events})).events)+serializer.end();
+      const exported=JSON.parse(text);expect(tripExportProblems(exported)).toEqual([]);
+      expect(tripExportProblems({...exported,trip:{...exported.trip,is_hard_mode:false}})).toContain('$.trip.is_hard_mode: does not match the v2 ratio');
+      expect(ok(await client.committedThrough(ETS2_A))).toBe('2');
+    } finally {expect(await client.close()).toEqual({clean:true});}
   });
   it('qualifies deterministic injected replay-origin observations through the real recorder/worker in a replay database', async () => {
     const directory = process.env.ETS2TELEMETRY_STORAGE_TEST_BUNDLES; if (!directory) throw new Error('Run storage suite');
