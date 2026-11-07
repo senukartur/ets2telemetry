@@ -10,6 +10,7 @@ import {armExecutor, disarmExecutor, EXECUTOR_FILE, executorCommand, MAX_RUN_ONC
   runOnceKeyFor, validExecutorBytes, type ExecutorState} from '../../apps/desktop/src/uninstall/executor';
 import {resolveUninstallRoots, type UninstallRoots} from '../../apps/desktop/src/uninstall/roots';
 import {guardedTempRoot, type GuardedRoot} from '../shared/guarded-fs';
+import {withoutFlush} from '../shared/file-work';
 import {CURRENT, exists, fakeRunOnce, gameFolder, installFixture, installRecord, KNOWN, notRunning, seedData, TEST_RUN_ONCE, useRunOnceKey, writeRegistry,
   type InstallFixture} from '../shared/uninstall-fixture';
 
@@ -21,11 +22,18 @@ import {CURRENT, exists, fakeRunOnce, gameFolder, installFixture, installRecord,
 const SCRIPT = readFileSync(path.join(import.meta.dirname, '..', '..', 'resources', 'uninstall', EXECUTOR_FILE));
 const WINDOWS = 'C:\\Windows';
 let guard: GuardedRoot;
-beforeEach(async () => {guard = await guardedTempRoot('ets2telemetry-uninstall-executor-');});
+const caseGuards = new Set<GuardedRoot>(), pendingEngineCases = new Set<Promise<void>>();
+function engineCase(work: () => Promise<void>): Promise<void> {
+  const pending = Promise.resolve().then(work); pendingEngineCases.add(pending);
+  const settled = () => {pendingEngineCases.delete(pending);}; void pending.then(settled, settled); return pending;
+}
+beforeEach(async () => {guard = withoutFlush(await guardedTempRoot('ets2telemetry-uninstall-executor-')); caseGuards.add(guard);});
 afterEach(async () => {
-  const violations = [...guard.violations];
-  await guard.dispose();
-  expect(violations).toEqual([]);
+  await Promise.allSettled([...pendingEngineCases]);
+  const completedGuards = [...caseGuards]; caseGuards.clear();
+  for (const completedGuard of completedGuards) {
+    const violations = [...completedGuard.violations]; await completedGuard.dispose(); expect(violations).toEqual([]);
+  }
 });
 const scriptCopy = (fixture: InstallFixture) => path.win32.join(fixture.dataRoot, 'uninstall', EXECUTOR_FILE);
 async function testRoots(fixture: InstallFixture, key: string | null = TEST_RUN_ONCE): Promise<UninstallRoots> {
@@ -158,53 +166,53 @@ describe('the engine registers first and unregisters last', () => {
     return {result, order, arm, disarm};
   }
 
-  it('a complete run arms after the intent and before the first deletion, and disarms after the data root is gone', async () => {
+  it('a complete run arms after the intent and before the first deletion, and disarms after the data root is gone', () => engineCase(async () => {
     const {result, order} = await run(await scene());
     expect(result).toMatchObject({outcome: 'complete', executor: 'removed'});
     expect(order[0]).toBe('arm-after-intent');
     expect(order.indexOf('delete')).toBeGreaterThan(0);
     expect(order.at(-1)).toBe('disarm-after-root');
     expect(order.filter(step => step.startsWith('arm') || step.startsWith('disarm'))).toEqual(['arm-after-intent', 'disarm-after-root']);
-  });
+  }));
 
-  it('a deferred run keeps the registration', async () => {
+  it('a deferred run keeps the registration', () => engineCase(async () => {
     const {result, order, disarm} = await run(await scene(), {checkRunning: () => Promise.resolve({ok: true, running: {ets2: true, ats: false, client: false}})});
     expect(result).toMatchObject({outcome: 'deferred', code: 'GAME_RUNNING', executor: 'registered'});
     expect(order[0]).toBe('arm-after-intent');
     expect(disarm).not.toHaveBeenCalled();
-  });
+  }));
 
-  it('a running instance defers everything, still registered', async () => {
+  it('a running instance defers everything, still registered', () => engineCase(async () => {
     const {result, order} = await run(await scene(), {deferAll: 'INSTANCE_RUNNING'});
     expect(result).toMatchObject({outcome: 'deferred', code: 'INSTANCE_RUNNING', executor: 'registered'});
     expect(order).toEqual(['arm-after-intent']);
-  });
+  }));
 
-  it('the in-app scopes never register: the preflight writes nothing and the plugin scope rolls back instead', async () => {
+  it('the in-app scopes never register: the preflight writes nothing and the plugin scope rolls back instead', () => engineCase(async () => {
     for (const scope of ['preflight', 'plugins'] as const) {
       const {result, arm, disarm} = await run(await scene(), {scope});
       expect(result.executor).toBe('not-run');
       expect(arm).not.toHaveBeenCalled();
       expect(disarm).not.toHaveBeenCalled();
       await guard.dispose();
-      guard = await guardedTempRoot('ets2telemetry-uninstall-executor-');
+      guard = withoutFlush(await guardedTempRoot('ets2telemetry-uninstall-executor-')); caseGuards.add(guard);
     }
-  });
+  }));
 
-  it('nothing left to clean only removes a stray registration', async () => {
+  it('nothing left to clean only removes a stray registration', () => engineCase(async () => {
     const current = await scene();
     await fsp.rm(current.fixture.dataRoot, {recursive: true});
     await fsp.rm(current.game.dll);
     const {result, order} = await run(current);
     expect(result).toMatchObject({outcome: 'complete', executor: 'removed'});
     expect(order).toEqual(['disarm-after-root']);
-  });
+  }));
 
-  it('a failed registration does not stop the run', async () => {
+  it('a failed registration does not stop the run', () => engineCase(async () => {
     const {result} = await run(await scene(), {armExecutor: () => Promise.reject(new Error('reg.exe failed')),
       checkRunning: () => Promise.resolve({ok: true, running: {ets2: true, ats: false, client: false}})});
     expect(result).toMatchObject({outcome: 'deferred', code: 'GAME_RUNNING', executor: 'failed'});
-  });
+  }));
 });
 
 describe('the reg.exe port', () => {

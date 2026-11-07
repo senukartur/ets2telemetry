@@ -1,7 +1,6 @@
 import {runDashboardUploadUiFixture} from './ui-dashboard-upload-observation.mjs';
-import {once} from 'node:events';
 import {observeUploadCredentials} from './dashboard-upload-credentials-observation.mjs';
-import {prepareNowPlayingSmoke, runNowPlayingSmoke, verifyNowPlayingRestart, nowPlayingRendererPages} from './now-playing-observation.mjs';
+import {prepareNowPlayingSmoke, runNowPlayingSmoke, verifyNowPlayingRestart, nowPlayingRendererPages, nowPlayingCheckpoints, nowPlayingStage, finishNowPlayingFirstRun, restartNowPlayingAfterExit} from './now-playing-observation.mjs';
 import {dashboardObservation} from './dashboard-observation.mjs';
 import {runUiSmoke, runUiReadOnly, UI_CASES} from './ui-observation.mjs';
 import {screen, settingsPanel, waitForStartup} from './ui-navigation.mjs';
@@ -86,7 +85,8 @@ async function verifyUninstallNotInstalled(page, press) {
 
 // Driver timeline on its own wall and monotonic clocks, to align with app diagnostics and the Job CPU series.
 result.phases = [];
-const phase = name => result.phases.push({phase: name, utc: new Date().toISOString(), monotonicMs: Math.round(performance.now() * 10) / 10});
+const checkpoint = config.scenario === 'now-playing' ? nowPlayingCheckpoints(path.join(config.output, 'now-playing-checkpoints.json')) : () => true;
+const phase = name => {result.phases.push({phase: name, utc: new Date().toISOString(), monotonicMs: Math.round(performance.now() * 10) / 10}); if (!checkpoint(name)) result.checkpointWriteFailed = true;};
 const diagnosticEvents = async directory => (await readFile(path.join(directory, 'startup.jsonl'), 'utf8'))
   .trim().split(/\r?\n/).filter(Boolean).map(line => JSON.parse(line));
 // ET-013: one service run opens the history database once per service process (`created` per opening, in order),
@@ -233,15 +233,15 @@ try {
     'retryPluginSetup', 'choosePluginFolder', 'setPluginGameExcluded', 'showPluginFile', 'openPluginFolder', 'exportDiagnostics', 'uninstallApplication', 'getHardModeStatus', 'refreshHardMode', 'updateApplication', 'checkForUpdates', 'setNowPlayingEnabled', 'setNowPlayingStyle', 'setNowPlayingBackgroundOpacity', 'selectNowPlayingSource', 'beginNowPlayingEdit', 'resetNowPlayingEditPlacement', 'finishNowPlayingEdit', 'getDashboardUploadContext','verifyDashboardUploadToken','confirmDashboardUpload','cancelDashboardUpload','disconnectDashboardUpload','subscribeDashboardUpload'],
     frozen: true, status: result.expected.status});
   if (config.scenario === 'now-playing') {
-    await runNowPlayingSmoke({application, dashboard: window, config,record:result.nowPlaying});
-    await application.context().tracing.stop({path: path.join(config.output, 'trace-now-playing-first.zip')}); tracing = false;
-    const firstExit = once(application.process(), 'exit');
-    await application.evaluate(({app}) => app.emit('ets2telemetry:diagnostic-tray-action', 'exit'));
-    result.nowPlaying.firstExit = (await firstExit)[0];
-    application = await launch(config.diagnosticsRestart); launcher = application.process();
-    await application.context().tracing.start({screenshots: true, snapshots: true}); tracing = true;
-    const pages = await nowPlayingRendererPages(application); window = pages.dashboard; overlay = pages.overlay; await waitForStartup(window);
-    await verifyNowPlayingRestart({application, dashboard: window, record: result.nowPlaying});
+    await nowPlayingStage('first-journey', () => runNowPlayingSmoke({application, dashboard: window, config,record:result.nowPlaying}), checkpoint, 30000);
+    await nowPlayingStage('first-trace-stop', () => application.context().tracing.stop({path: path.join(config.output, 'trace-now-playing-first.zip')}), checkpoint, 5000); tracing = false;
+    application = await restartNowPlayingAfterExit({checkpoint,
+      exit: () => finishNowPlayingFirstRun({application, launcher, record: result.nowPlaying, checkpoint}), launch: () => launch(config.diagnosticsRestart)});
+    launcher = application.process();
+    await nowPlayingStage('second-trace-start', () => application.context().tracing.start({screenshots: true, snapshots: true}), checkpoint, 5000); tracing = true;
+    const pages = await nowPlayingStage('second-renderer-discovery', () => nowPlayingRendererPages(application), checkpoint, 10000); window = pages.dashboard; overlay = pages.overlay;
+    await nowPlayingStage('second-renderer-readiness', () => waitForStartup(window), checkpoint, 10000);
+    await nowPlayingStage('restart-verification', () => verifyNowPlayingRestart({application, dashboard: window, record: result.nowPlaying}), checkpoint, 10000);
   }
   if (config.scenario === 'scaffold') {
     // ET-016 PR-3: a journal read crosses the preload, main and the telemetry service to the new, empty history database
@@ -630,7 +630,7 @@ finally {
   try {await telemetrySourceV1?.stop();} catch (error) {result.sourceV1CloseFailure = failure(error);}
   if (application) {
     if (tracing) {
-      try {await application.context().tracing.stop({path: path.join(config.output, 'trace.zip')});}
+      try {const stop = () => application.context().tracing.stop({path: path.join(config.output, 'trace.zip')}); if (config.scenario === 'now-playing') await nowPlayingStage('final-trace-stop', stop, checkpoint, 5000); else await stop();}
       catch (error) {result.traceFailure = failure(error);}
       phase('tracing-stopped');
     }
@@ -639,14 +639,14 @@ finally {
     try {
       // Observe the exact main process separately from Playwright's Windows shell. Its exit is diagnostic evidence;
       // a pending Playwright close still fails the unchanged eight-second request/launcher guard.
-      await observeExit({application, launcher, request: () => application.close(), requireRequest: true,
+      await observeExit({application, launcher, request: () => {if (config.scenario === 'now-playing') checkpoint('final-exit-request-started', result.closeObservation); return application.close();}, requireRequest: true,
         record: result.closeObservation = {}, message: 'APP_CLOSE_TIMEOUT_8_SECONDS'});
       result.closeMilliseconds = performance.now() - start;
       result.launcherExit = launcher.exitCode;
       assert.equal(result.launcherExit, 0);
       assert.equal(launcher.signalCode, null);
     } catch (error) {result.closeFailure = failure(error);}
-    finally {phase('close-settled');}
+    finally {phase('close-settled'); if (config.scenario === 'now-playing') checkpoint('final-exit-settled', result.closeObservation);}
   }
   // ET-019 PR-12b: a soak whose source the journey did not stop (a failure, or an application that exited first) ends it
   // now, so its summary records how its last connection closed.
