@@ -9,7 +9,7 @@ AI review comments follow the same handling as human review: the agent that addr
 | Event | Job | Notes |
 | --- | --- | --- |
 | Non-draft PR opened or reopened, or draft marked ready for review | `Automatic PR review` | Runs from the PR's own workflow file. Pushing new commits does not re-run it, which keeps the cost bounded |
-| Owner comment containing `@claude` on a PR (conversation or review line) | `On-demand review (@claude)` | Use it for re-reviews after new commits and for questions. PR conversation comments (`issue_comment`) run the workflow file from the default branch, so they work only after the workflow is merged to `main`; checkout reads also see that branch, while `gh pr diff` shows the PR changes. Review-line comments (`pull_request_review_comment`) use the PR merge ref, like `pull_request` |
+| Owner comment containing `@claude` on a PR (conversation or review line) | `On-demand review (@claude)` | Use it for re-reviews after new commits and for questions. A bare `@claude`, optionally followed by a commit SHA, re-reviews the current PR head against the automatic review's criteria; add text to ask a question or narrow the review. PR conversation comments (`issue_comment`) run the workflow file from the default branch, so they work only after the workflow is merged to `main`; checkout reads also see that branch, while `gh pr diff` shows the PR changes. Review-line comments (`pull_request_review_comment`) use the PR merge ref, like `pull_request` |
 
 The on-demand job responds only to comments by the repository owner. The automatic job runs for same-repository PRs, which already require write access to push the branch. The automatic job and review-line mentions skip PRs from forks; a PR conversation comment does not carry the head repository, so an owner `@claude` comment on a fork PR would still run the on-demand job. The action refuses actors without write access and bot actors by default, so bot-opened pull requests (for example, Dependabot updates) will not receive an automatic review.
 
@@ -34,7 +34,7 @@ Without a valid secret, the review job fails with an authentication error (`api_
 
 ## Cost and limits
 
-Each run consumes Claude usage roughly proportional to the diff and the documents read. This public repository's standard Ubuntu runner time is free under GitHub Actions; see [GitHub-hosted runners](https://docs.github.com/en/actions/reference/runners/github-hosted-runners). Draft PRs are skipped; mark a PR ready for review, or comment `@claude review the latest changes` when a review is worth the cost.
+Each run consumes Claude usage roughly proportional to the diff and the documents read. This public repository's standard Ubuntu runner time is free under GitHub Actions; see [GitHub-hosted runners](https://docs.github.com/en/actions/reference/runners/github-hosted-runners). Draft PRs are skipped; mark a PR ready for review, or comment `@claude` when a review is worth the cost.
 
 The reviewer sees the PR checkout, not the game, native runtime, or packaged application. It does not run tests, builds, or the simulator. Findings can be wrong or incomplete; verify each one before acting on it.
 
