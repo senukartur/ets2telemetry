@@ -377,7 +377,7 @@ export function validateJournalTripPage(value: unknown): JournalTripPage {
     for (const [index, item] of (sync.rows as unknown[]).entries()) {
       const row = exact(item, ['tripUuid', 'state', 'materialVersion', 'latestRevision', 'lastDurableUploadUtcMs', 'reason']);
       uuid(row.tripUuid);
-      if (row.tripUuid !== (o.trips as JournalTripListItem[])[index].tripUuid || seen.has(row.tripUuid as string)) bad();
+      if (row.tripUuid !== (o.trips as JournalTripListItem[])[index].tripUuid || seen.has(row.tripUuid)) bad();
       seen.add(row.tripUuid as string);
       oneOf(row.state, ['unavailable', 'unbound', 'identity-pending', 'pending', 'queued', 'sending', 'held', 'sent']);
       nullable(row.materialVersion, positiveUint64); nullable(row.latestRevision, value => {count(value); if (value === 0) bad();});

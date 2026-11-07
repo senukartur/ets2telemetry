@@ -37,9 +37,9 @@ export async function runDashboardUploadUiFixture(config) {
     const errors = []; page.on('pageerror', error => errors.push(error.name));
     await page.getByTestId('account.form').waitFor();
     const styles = await page.evaluate(() => {
-      const button = getComputedStyle(document.querySelector('[data-testid="account.verify"]'));
-      const card = getComputedStyle(document.querySelector('[data-testid="account.token"]'));
-      const badge = getComputedStyle(document.querySelector('[data-slot="badge"]'));
+      const button = globalThis.getComputedStyle(globalThis.document.querySelector('[data-testid="account.verify"]'));
+      const card = globalThis.getComputedStyle(globalThis.document.querySelector('[data-testid="account.token"]'));
+      const badge = globalThis.getComputedStyle(globalThis.document.querySelector('[data-slot="badge"]'));
       return {buttonFlex: button.display === 'inline-flex', cardFlex: card.display === 'flex', cardOpaque: !['transparent', 'rgba(0, 0, 0, 0)'].includes(card.backgroundColor), badgeFlex: badge.display === 'inline-flex'};
     });
     assert.deepEqual(styles, {buttonFlex: true, cardFlex: true, cardOpaque: true, badgeFlex: true}); record.flags.sharedStyles = true;
@@ -54,7 +54,7 @@ export async function runDashboardUploadUiFixture(config) {
     const input = page.getByTestId('account.token.input');
     assert.equal(await input.getAttribute('type'), 'password'); record.flags.password = true;
     // Insert through a paste event, without OS clipboard access or trace recording of the synthetic sentinel.
-    await input.evaluate((node, value) => {node.focus(); const data = new DataTransfer(); data.setData('text/plain', value); node.dispatchEvent(new ClipboardEvent('paste', {clipboardData: data, bubbles: true})); const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set; setter.call(node, data.getData('text/plain')); node.dispatchEvent(new Event('input', {bubbles: true}));}, sentinel);
+    await input.evaluate((node, value) => {node.focus(); const data = new globalThis.DataTransfer(); data.setData('text/plain', value); node.dispatchEvent(new globalThis.ClipboardEvent('paste', {clipboardData: data, bubbles: true})); const setter = Object.getOwnPropertyDescriptor(globalThis.HTMLInputElement.prototype, 'value').set; setter.call(node, data.getData('text/plain')); node.dispatchEvent(new globalThis.Event('input', {bubbles: true}));}, sentinel);
     assert.equal((await input.inputValue()) === sentinel, true, 'PASTE_NOT_APPLIED'); record.flags.paste = true;
     await page.getByTestId('account.token.visibility').click(); assert.equal(await input.getAttribute('type'), 'text');
     await page.getByTestId('account.token.visibility').click(); assert.equal(await input.getAttribute('type'), 'password'); record.flags.visibility = true;
@@ -84,7 +84,7 @@ export async function runDashboardUploadUiFixture(config) {
     record.security = await application.evaluate(({BrowserWindow}) => {const window = BrowserWindow.getAllWindows()[0], p = window.webContents.getLastWebPreferences(); return {sandbox: p.sandbox, contextIsolation: p.contextIsolation, nodeIntegration: p.nodeIntegration, persistentSession: window.webContents.session.isPersistent(), localDocument: window.webContents.getURL().startsWith('file:')};});
     assert.deepEqual(record.security, {sandbox: true, contextIsolation: true, nodeIntegration: false, persistentSession: false, localDocument: true});
     assert.equal(await page.evaluate(() => typeof globalThis.require === 'undefined' && typeof globalThis.process === 'undefined'), true);
-    record.security.remoteFetchDenied = await page.evaluate(async () => {try {await fetch('https://example.invalid'); return false;} catch {return true;}});
+    record.security.remoteFetchDenied = await page.evaluate(async () => {try {await globalThis.fetch('https://example.invalid'); return false;} catch {return true;}});
     assert.equal(record.security.remoteFetchDenied, true);
     for (const language of ['en', 'ru']) {
       if (language === 'ru') await page.getByTestId('fixture.language').click();
@@ -101,9 +101,9 @@ export async function runDashboardUploadUiFixture(config) {
           stage = `${screen}-${language}-${size.width}-token-clear`;
           const token = page.getByTestId('account.token.input');
           if (await token.count()) {assert.equal((await token.inputValue()) === '', true, 'TOKEN_NOT_CLEARED'); assert.equal(await token.getAttribute('type'), 'password');}
-          assert.equal(await page.evaluate(value => document.body.innerText.includes(value) || [...document.querySelectorAll('input')].some(node => node.value.includes(value)), sentinel), false);
+          assert.equal(await page.evaluate(value => globalThis.document.body.innerText.includes(value) || [...globalThis.document.querySelectorAll('input')].some(node => node.value.includes(value)), sentinel), false);
           stage = `${screen}-${language}-${size.width}-containment`;
-          assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth && [...document.querySelectorAll('.yu-upload-identifiers dd')].every(node => node.scrollWidth <= node.clientWidth)), true); record.flags.contained = true;
+          assert.equal(await page.evaluate(() => globalThis.document.documentElement.scrollWidth <= globalThis.innerWidth && [...globalThis.document.querySelectorAll('.yu-upload-identifiers dd')].every(node => node.scrollWidth <= node.clientWidth)), true); record.flags.contained = true;
           stage = `${screen}-${language}-${size.width}-capture`;
           await page.getByTestId('fixture.content').evaluate(node => {node.scrollTop = 0;});
           if (screen === 'first-upload') await page.getByTestId('account.firstSync').scrollIntoViewIfNeeded();
@@ -115,20 +115,20 @@ export async function runDashboardUploadUiFixture(config) {
     }
     await page.getByTestId('fixture.account').click(); await publish(connected); await page.getByTestId('account.firstSync').waitFor();
     assert.equal(await page.locator('progress').getAttribute('value'), '20');
-    await publish({...connected, progress: {...connected.progress, enumeration: 'changing'}}); await page.waitForFunction(() => !document.querySelector('progress')?.hasAttribute('value')); record.flags.progress = true;
-    await page.getByTestId('fixture.journal').click(); await page.waitForFunction(() => document.activeElement?.getAttribute('data-testid') === 'screen-title'); record.flags.headingFocus = true;
+    await publish({...connected, progress: {...connected.progress, enumeration: 'changing'}}); await page.waitForFunction(() => !globalThis.document.querySelector('progress')?.hasAttribute('value')); record.flags.progress = true;
+    await page.getByTestId('fixture.journal').click(); await page.waitForFunction(() => globalThis.document.activeElement?.getAttribute('data-testid') === 'screen-title'); record.flags.headingFocus = true;
     stage = 'navigation-security';
-    const beforeUrl = page.url(); await page.evaluate(() => {const a = document.createElement('a'); a.href = 'https://example.invalid'; document.body.append(a); a.click(); a.remove();});
+    const beforeUrl = page.url(); await page.evaluate(() => {const a = globalThis.document.createElement('a'); a.href = 'https://example.invalid'; globalThis.document.body.append(a); a.click(); a.remove();});
     await expect.poll(() => application.evaluate(() => globalThis.uploadUiFixture.denied.navigation), {timeout: 5000}).toBe(1);
     assert.equal(page.url(), beforeUrl); record.security.navigationDenied = true;
-    await page.evaluate(() => {window.open('https://example.invalid');}); await expect.poll(() => application.evaluate(() => globalThis.uploadUiFixture.denied.newWindow), {timeout: 5000}).toBe(1); assert.equal(application.windows().length, 1); record.security.newWindowDenied = true;
+    await page.evaluate(() => {globalThis.window.open('https://example.invalid');}); await expect.poll(() => application.evaluate(() => globalThis.uploadUiFixture.denied.newWindow), {timeout: 5000}).toBe(1); assert.equal(application.windows().length, 1); record.security.newWindowDenied = true;
     assert.deepEqual(errors, []); for (const flag of UPLOAD_UI_FLAGS) assert.equal(record.flags[flag], true, flag);
     record.passed = true;
     return record;
   } catch (error) {
     const diagnostic = await application.evaluate(() => ({state: globalThis.uploadUiFixture.status.state, pending: globalThis.uploadUiFixture.pendingKind, counts: globalThis.uploadUiFixture.counts})).catch(() => null);
     const page = application.windows()[0];
-    const dom = page ? await page.evaluate(() => ({phase: document.querySelector('[data-testid="account.phase"]')?.textContent, hasForm: !!document.querySelector('[data-testid="account.form"]'), title: document.querySelector('[data-testid="screen-title"]')?.textContent})).catch(() => null) : null;
+    const dom = page ? await page.evaluate(() => ({phase: globalThis.document.querySelector('[data-testid="account.phase"]')?.textContent, hasForm: !!globalThis.document.querySelector('[data-testid="account.form"]'), title: globalThis.document.querySelector('[data-testid="screen-title"]')?.textContent})).catch(() => null) : null;
     await writeFile(path.join(config.output, 'upload-ui-diagnostic.json'), JSON.stringify({stage, diagnostic, dom}, null, 2));
-    const name = /^[A-Za-z]+$/.test(error.name) ? error.name : 'Error'; throw Error(`UPLOAD_UI_FIXTURE_FAILED_${stage}_${name}`);} finally {await application.close();}
+    const name = /^[A-Za-z]+$/.test(error.name) ? error.name : 'Error'; throw Error(`UPLOAD_UI_FIXTURE_FAILED_${stage}_${name}`, {cause: error});} finally {await application.close();}
 }
