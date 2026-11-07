@@ -19,27 +19,29 @@ export class UploadScheduler {
   #phase:'status'|'hints'|'runs'|'scan'|'discovery'|'begin'|'sources'|'receipts'='status';#runsAfter:string|null=null;#run:string|null=null;#runPending:string[]=[];#discoveryAfter='0';
   #pending:{tripUuid:string;workId:string|null}[]=[];#sourceAfter:string|null=null;#receiptAfter:string|null=null;#sources=0;#delivered=0;#lastReceipt:number|null=null;
   #status:DashboardUploadStatus;#reconstruct=true;#nextRefresh=0;#progressGeneration=0;
-  #paused:UploadStoreStatus['paused']=null;#held:UploadSchedulingHints['held']=null;#sourceHeld=false;#unmanaged=false;#scopeReady=false;#retryError:DashboardUploadError|null=null;
+  #paused:UploadStoreStatus['paused']=null;#hintsReconciliation=false;#held:UploadSchedulingHints['held']=null;#sourceHeld=false;#unmanaged=false;#scopeReady=false;#retryError:DashboardUploadError|null=null;#retryEventId:string|null=null;
   constructor(private readonly db:UploadStorage,private readonly http:UploadTransport,origin:string,private readonly producerVersion:string,private readonly publish:(status:DashboardUploadStatus)=>void,private readonly time:UploadClock=clock){this.#status=initialDashboardUploadStatus(origin);this.#rate=new UploadRate(60,10,time.now());}
   get status():DashboardUploadStatus{return structuredClone(this.#status);}
   async activate(configuration:UploadActiveConfiguration,token:string,limits:UploadLimits):Promise<void>{
     await this.suspend();if(this.#stopped||configuration.status!=='ready'||configuration.purpose!=='history'||!configuration.registration||!configuration.credentialGeneration)return;
     const generation=this.#generation;this.#active={configuration,registration:configuration.registration,token};this.#rate.configure(limits.eventsPerMinute,limits.burst);const hints=await stored(this.db.getUploadSchedulingHints({registrationId:configuration.registration.registrationId})),owner=await stored(this.db.getUploadStoreStatus({registrationId:configuration.registration.registrationId}));
     if(this.#stopped||generation!==this.#generation)return;this.#failureStreak=hints.failureStreak;this.#sendAfter=Math.max(this.time.now(),hints.retryAtMs??0);this.#generation++;this.#suspended=false;
-    this.#phase='status';this.#runsAfter=null;this.#runPending=[];this.#pending=[];this.#emptyModes=0;this.#resetProgress();this.#status={...initialDashboardUploadStatus(configuration.registration.origin),state:'connected',owner:{origin:configuration.registration.origin,accountId:configuration.registration.accountId,companyId:configuration.registration.companyId,identityEpoch:configuration.registration.identityEpoch}};this.#retryError=null;this.#unmanaged=false;this.#ownerState(owner,configuration);this.#hints(hints,configuration);this.#diagnostic();this.#emit();this.#wake(0);
+    this.#phase='status';this.#runsAfter=null;this.#runPending=[];this.#pending=[];this.#emptyModes=0;this.#resetProgress();this.#status={...initialDashboardUploadStatus(configuration.registration.origin),state:'connected',owner:{origin:configuration.registration.origin,accountId:configuration.registration.accountId,companyId:configuration.registration.companyId,identityEpoch:configuration.registration.identityEpoch}};this.#retryError=null;this.#retryEventId=null;this.#unmanaged=false;this.#ownerState(owner,configuration);this.#hints(hints,configuration);this.#diagnostic();this.#emit();this.#wake(0);
   }
   #ownerState(owner:UploadStoreStatus,configuration:UploadActiveConfiguration){
     this.#scopeReady=owner.active&&owner.version===configuration.version&&owner.registrationId===configuration.registration?.registrationId;this.#paused=this.#scopeReady?owner.paused:'reconciliation';this.#sourceHeld=owner.heldSources>0;
     Object.assign(this.#status.progress,{identityPendingSources:owner.identityPendingSources,pendingSources:owner.pendingSources,heldSources:owner.heldSources,queuedEvents:owner.queuedEvents,pressure:owner.pressure});
   }
   #hints(hints:UploadSchedulingHints,configuration:UploadActiveConfiguration){
-    this.#paused=!this.#scopeReady||hints.status!=='ready'||hints.version!==configuration.version||hints.credentialGeneration!==configuration.credentialGeneration?'reconciliation':hints.paused??(hints.held==='reconciliation'?'reconciliation':null);this.#held=hints.held;
+    // Counter refresh cannot clear a hold established by dependent-metadata validation.
+    this.#hintsReconciliation=!this.#scopeReady||hints.status!=='ready'||hints.version!==configuration.version||hints.credentialGeneration!==configuration.credentialGeneration||hints.held==='reconciliation';this.#held=hints.held;
+    if(hints.paused!==null)this.#paused=hints.paused;
     this.#failureStreak=hints.failureStreak;if(hints.retryAtMs!==null)this.#sendAfter=Math.max(this.#sendAfter,hints.retryAtMs);
-    this.#retryError=hints.failureStreak>0?this.#retryError??'NETWORK':null;
+    if(hints.retryEventId!==null){this.#retryError??='NETWORK';this.#retryEventId??=hints.retryEventId;}else if(hints.failureStreak>0)this.#hintsReconciliation=true;
   }
   #diagnostic(emit=false){
     if(this.#stopped)return;
-    const error:DashboardUploadError|null=this.#paused==='authentication'?'AUTHENTICATION':this.#paused==='configuration'?'CONFIGURATION':this.#paused==='reconciliation'||this.#held==='reconciliation'||this.#sourceHeld||this.#unmanaged?'RECONCILIATION':this.#held==='validation'?'VALIDATION':this.#retryError;
+    const error:DashboardUploadError|null=this.#paused==='authentication'?'AUTHENTICATION':this.#paused==='configuration'?'CONFIGURATION':this.#paused==='reconciliation'||this.#hintsReconciliation||this.#held==='reconciliation'||this.#sourceHeld||this.#unmanaged?'RECONCILIATION':this.#held==='validation'?'VALIDATION':this.#retryError;
     this.#status.state=error?'paused':'connected';this.#status.error=error;if(emit)this.#emit();
   }
   async suspend():Promise<void>{this.#suspended=true;this.#generation++;this.time.cancel(this.#timer);this.http.abort();await Promise.all([this.#sending,this.#backgroundFlight?.catch(()=>undefined)]);this.#active=undefined;}
@@ -48,7 +50,7 @@ export class UploadScheduler {
   #wake(ms:number){if(this.#stopped||this.#suspended)return;this.time.cancel(this.#timer);this.#timer=this.time.schedule(()=>{this.#timer=undefined;void this.#tick();},Math.max(0,ms));}
   #resetProgress(){this.#progressGeneration++;this.#sourceAfter=null;this.#receiptAfter=null;this.#sources=0;this.#delivered=0;this.#lastReceipt=null;this.#reconstruct=true;this.#nextRefresh=this.time.now()+5000;this.#status.progress.enumeration='changing';}
   async #tick(){if(this.#stopped||this.#suspended)return;const active=this.#active;if(!active)return;
-    if(!this.#sending&&this.#paused===null&&this.time.now()>=this.#sendAfter){this.#sending=this.#send(active).catch(()=>{this.#status.error='STORAGE_UNAVAILABLE';this.#sendAfter=this.time.now()+2000;}).finally(()=>{this.#sending=undefined;this.#wake(10);});}
+    if(!this.#sending&&this.#scopeReady&&this.#paused===null&&!this.#hintsReconciliation&&this.time.now()>=this.#sendAfter){this.#sending=this.#send(active).catch(()=>{this.#status.error='STORAGE_UNAVAILABLE';this.#sendAfter=this.time.now()+2000;}).finally(()=>{this.#sending=undefined;this.#wake(10);});}
     if(this.#background)return;this.#background=true;const generation=this.#generation;let delay=10;
     try{this.#backgroundFlight=this.#turn(active,generation);delay=await this.#backgroundFlight;}catch{this.#status.error='STORAGE_UNAVAILABLE';delay=2000;}finally{this.#backgroundFlight=undefined;this.#background=false;if(generation===this.#generation){this.#emit();this.#wake(delay);}}
   }
@@ -60,20 +62,20 @@ export class UploadScheduler {
     this.#emptyModes=0;
     this.#rate.delay(this.time.now());
     // A transition may have happened while the claim was in storage. Retire its slot without starting HTTP.
-    if(this.#suspended||generation!==this.#generation){await stored(this.db.recoverUploadAttempt({attemptId:attempt.attemptId!}));return;}
+    if(this.#suspended||generation!==this.#generation||!this.#scopeReady||this.#paused!==null||this.#hintsReconciliation){await stored(this.db.recoverUploadAttempt({attemptId:attempt.attemptId!}));return;}
     this.#nextMode=this.#nextMode==='live'?'backfill':'live';
     const result=await this.http.request('events',active.token,attempt.payload!);
     if(result.ok&&[200,202].includes(result.statusCode)){
       // A complete known ACK must reach SQLite even after rotation/disconnect/stop.
       const receipt=await stored(this.db.commitUploadReceipt({attemptId:attempt.attemptId!,statusCode:result.statusCode,body:result.body}));
-      if(receipt.status==='delivered'||receipt.status==='duplicate'){this.#failureStreak=0;this.#sendAfter=this.time.now();if(generation===this.#generation&&!this.#suspended){this.#retryError=null;this.#resetProgress();this.#phase='sources';this.#diagnostic(true);}return;}
+      if(receipt.status==='delivered'||receipt.status==='duplicate'){this.#failureStreak=0;this.#sendAfter=this.time.now();if(generation===this.#generation&&!this.#suspended){if(receipt.eventId===this.#retryEventId){this.#retryError=null;this.#retryEventId=null;}this.#resetProgress();this.#phase='sources';this.#diagnostic(true);}return;}
     }
     const kind=result.ok?responseFailure(result.statusCode,result.body):result.code==='REDIRECT'||result.code==='TLS_CONFIGURATION'?'configuration':result.statusCode===401||result.statusCode===403?'authentication':'retry';
     const retryAt=this.time.now()+uploadRetryDelay(++this.#failureStreak,result.ok?result.retryAfter:null,this.time.now(),()=>this.time.random());
     const outcome=await stored(this.db.recordUploadAttemptOutcome({attemptId:attempt.attemptId!,kind,retryAtMs:retryAt,nowMs:this.time.now()}));this.#sendAfter=retryAt;
     if(generation===this.#generation&&!this.#suspended){
-      if(outcome.status==='recorded'){if(kind==='retry')this.#retryError=!result.ok&&result.code==='TIMEOUT'?'TIMEOUT':'NETWORK';else if(kind==='validation')this.#held='validation';else this.#paused=kind;this.#diagnostic(true);}
-      else if(outcome.status==='reconciliation-required'){this.#paused='reconciliation';this.#diagnostic(true);}
+      if(outcome.status==='recorded'){if(kind==='retry'){this.#retryError=!result.ok&&result.code==='TIMEOUT'?'TIMEOUT':'NETWORK';this.#retryEventId=attempt.eventId;}else if(kind==='validation')this.#held='validation';else this.#paused=kind;this.#diagnostic(true);}
+      else if(outcome.status==='reconciliation-required'){this.#hintsReconciliation=true;this.#diagnostic(true);}
     }
   }
   async #turn(active:Active,generation:number):Promise<number>{
