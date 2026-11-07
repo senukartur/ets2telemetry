@@ -10,7 +10,7 @@ import {HardModeReader,readStableFile} from '../../apps/desktop/src/hard-mode/re
 import {HardModeMonitor} from '../../apps/desktop/src/hard-mode/monitor';
 import {ProfileObserver} from '../../apps/desktop/src/profile-observation';
 import {HARD_MODE_CONFIG} from '../shared/hard-mode';
-import {V1Ingestion} from '../../apps/desktop/src/v1-ingestion';
+import {V1_CLIENT_MAX_MINOR,V1Ingestion} from '../../apps/desktop/src/v1-ingestion';
 import {serveV1Reactive} from '../../tools/telemetry-simulator/src/v1/reactive';
 import {afterEach, beforeEach, describe, expect, it,vi} from 'vitest';
 import {readFileSync,type BigIntStats} from 'node:fs';
@@ -983,7 +983,8 @@ describe('REG-003/005/008/012/014 durable logical trips', () => {
       ingestion=new V1Ingestion({sink,connect:endpoint=>{
         const socket=new ClientSocket(net.connect(endpoint),undefined,error=>{throw error;});
         const write=socket.write.bind(socket);
-        socket.write=(bytes,...rest)=>{const message=decodePayload(bytes.subarray(4),'client',{maxMinor:2}) as ClientMessage;
+        // The ACKs carry the minor the chain negotiates, the service's offer against the simulator's highest (3 since ET-071).
+        socket.write=(bytes,...rest)=>{const message=decodePayload(bytes.subarray(4),'client',{maxMinor:V1_CLIENT_MAX_MINOR}) as ClientMessage;
           if(message.kind==='ack')acks.push({through:message.data.throughEventSeq,stored:coverage.get(message.data.pluginSessionId) ?? '0'});
           return write(bytes,...rest);};
         socket.once('close',()=>{ingestion.select('game');closed();});return socket;
