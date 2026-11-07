@@ -428,12 +428,12 @@ it('runs the ordered shutdown once and reports exactly one clean stopped message
     expect(f.stops()).toEqual([{type: 'stopped', clean: true}]);
     expect(f.exit).toHaveBeenCalledExactlyOnceWith(0);
     // ET-013 adds the history database close beside the probe in the storage phase, ET-006b the v1 ingestion beside the
-    // v0 ingestion and capture in the intake phase, and ET-015a (R14) the recording flush as the only flush step; steps
-    // of one phase finish in any order.
+    // v0 ingestion and capture in the intake phase, ET-103c the bounded upload settlement in intake, and ET-015a (R14)
+    // the recording flush as the only flush step; steps of one phase finish in any order.
     const steps = f.steps().map(step => [step.phase, step.name, step.outcome]);
-    expect(steps.slice(0, 3).sort()).toEqual([['intake', 'capture', 'ok'], ['intake', 'ingestion', 'ok'], ['intake', 'v1-ingestion', 'ok']]);
-    expect(steps[3]).toEqual(['flush', 'recording-flush', 'ok']);
-    expect(steps.slice(4).sort()).toEqual([['storage', 'history-storage', 'ok'], ['storage', 'storage-probe', 'ok']]);
+    expect(steps.slice(0, 4).sort()).toEqual([['intake', 'capture', 'ok'], ['intake', 'dashboard-upload', 'ok'], ['intake', 'ingestion', 'ok'], ['intake', 'v1-ingestion', 'ok']]);
+    expect(steps[4]).toEqual(['flush', 'recording-flush', 'ok']);
+    expect(steps.slice(5).sort()).toEqual([['storage', 'history-storage', 'ok'], ['storage', 'storage-probe', 'ok']]);
     expect(f.history.start).toHaveBeenCalledOnce(); expect(f.history.close).toHaveBeenCalledOnce();
     // R14: the intake step ends only the source; the flush step then waits for the storage command in flight.
     expect(f.v1.stopSource).toHaveBeenCalledOnce(); expect(f.v1.flush).toHaveBeenCalledOnce();

@@ -141,7 +141,6 @@ async function hardModeCall(channel: 'hard-mode:status' | 'hard-mode:refresh'): 
   return reply;
 }
 const bridge: DesktopBridge = {
-  ...dashboardUploadPreload(ipcRenderer),
   getStatus: () => ipcRenderer.invoke('scaffold:status'),
   selectSource: source => {
     try {return ipcRenderer.invoke('telemetry:select', sourceSelection(source));}
@@ -252,7 +251,8 @@ const bridge: DesktopBridge = {
   selectNowPlayingSource: (...args: unknown[]) => args.length === 1 && isSelection(args[0]) ? ipcRenderer.invoke('now-playing:select-source', {...args[0]}) : Promise.reject(new Error('Invalid current track request')),
   beginNowPlayingEdit: (...args: unknown[]) => args.length === 0 ? ipcRenderer.invoke('now-playing-edit:begin') : Promise.reject(new Error('Invalid current track request')),
   resetNowPlayingEditPlacement: (...args: unknown[]) => args.length === 0 ? ipcRenderer.invoke('now-playing-edit:reset') : Promise.reject(new Error('Invalid current track request')),
-  finishNowPlayingEdit: (...args: unknown[]) => args.length === 1 && (args[0] === 'save' || args[0] === 'cancel') ? ipcRenderer.invoke('now-playing-edit:finish', args[0]) : Promise.reject(new Error('Invalid current track request'))
+  finishNowPlayingEdit: (...args: unknown[]) => args.length === 1 && (args[0] === 'save' || args[0] === 'cancel') ? ipcRenderer.invoke('now-playing-edit:finish', args[0]) : Promise.reject(new Error('Invalid current track request')),
+  ...dashboardUploadPreload(ipcRenderer)
 };
 /** One page request of a trip: exactly the UUID and the cursor, or null for the first page. */
 function journalPage<T>(kind: 'events' | 'intervals' | 'samples', tripUuid: unknown, cursor: unknown): Promise<T> {
