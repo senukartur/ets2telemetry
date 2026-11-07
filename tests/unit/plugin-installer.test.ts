@@ -1,5 +1,6 @@
 import {spawn, execFileSync, type ChildProcessWithoutNullStreams} from 'node:child_process';
 import {createHash} from 'node:crypto';
+import {AsyncLocalStorage, createHook} from 'node:async_hooks';
 import * as fsp from 'node:fs/promises';
 import path from 'node:path';
 import {afterEach, beforeEach, describe, expect, it} from 'vitest';
@@ -10,7 +11,7 @@ import {MAX_PLUGIN_FILE_BYTES, PluginInstaller, TARGET_RETRY_DELAYS_MS, type Ins
 import {MAX_INSTALL_RECORDS, parsePluginRegistry, PluginRegistry, type InstallRecord, type PendingIntent} from '../../apps/desktop/src/plugin-setup/plugin-registry';
 import {guardedTempRoot, type GuardedRoot} from '../shared/guarded-fs';
 import {fakeSteam, type FakeSteam} from '../shared/fake-steam';
-import {withoutFlush} from '../shared/file-work';
+import {fileWorkBudget, withoutFlush} from '../shared/file-work';
 
 // REG-015 (ET-017 P6, P7, P8): install, update and removal of the owned plugin DLL in fake game folders under the
 // guarded temporary root. Failures are injected by wrapping the guarded file operations; the real-system cases take a
@@ -22,10 +23,21 @@ let steam: FakeSteam;
 let registryDirectory: string;
 let delays: number[];
 let events: {event: string; facts?: unknown}[];
+const fileContext = new AsyncLocalStorage<string>();
+// The raw-sync matrix and comparable order/intent/corrupt-byte cases have a checked cap of 225 async requests,
+// including fixture creation, recursive guard checks, registry/handle I/O, verification/recovery, assertions and teardown.
+// Async-local scopes exclude unrelated observer/output I/O. fileWorkBudget converts the request cap into a work
+// allowance; retry timing and power-loss performance are not inferred from it.
+const RAW_SYNC_CASE_FS_OPERATIONS = 225;
+const RAW_SYNC_CASE_FS_WORK_BUDGET_MS = fileWorkBudget(RAW_SYNC_CASE_FS_OPERATIONS);
+let fileWork: {count: number; measured: boolean; last: string | null; current: Map<number, string>; byType: Record<string, number>};
+let fileHook: ReturnType<typeof createHook>;
+const fileWorkContext = () => ({count: fileWork.count, byType: fileWork.byType, last: fileWork.last, current: [...fileWork.current.values()].slice(0, 8)});
+function measuredCase(work: () => Promise<void>): Promise<void> {fileWork.measured = true; return caseWork(work);}
 // A timed-out case must settle before its guarded root is removed or the next case replaces the globals.
 const pendingCaseWork = new Set<Promise<void>>();
 function caseWork(work: () => Promise<void>): Promise<void> {
-  const pending = Promise.resolve().then(work);
+  const pending = Promise.resolve().then(() => fileContext.run('case-fixture-or-assertion', work));
   pendingCaseWork.add(pending);
   const settled = () => {pendingCaseWork.delete(pending);};
   void pending.then(settled, settled);
@@ -45,18 +57,50 @@ const errno = (code: string) => Object.assign(new Error(`${code}: simulated`), {
 const notRunning: RunningCheck = () => Promise.resolve({ok: true, running: {ets2: false, ats: false, client: false}});
 const runningWith = (running: Partial<RunningGames>): RunningCheck => () => Promise.resolve({ok: true, running: {ets2: false, ats: false, client: false, ...running}});
 
-beforeEach(async () => {
+beforeEach(() => fileContext.run('fixture', async () => {
+  fileWork = {count: 0, measured: false, last: null, current: new Map(), byType: {}};
+  fileHook = createHook({init(id, type) {
+    const context = fileContext.getStore();
+    if (!context || !['FSREQPROMISE', 'FSREQCALLBACK', 'FILEHANDLECLOSEREQ'].includes(type)) return;
+    const operation = `${type}:${context}`;
+    fileWork.count++; fileWork.byType[type] = (fileWork.byType[type] ?? 0) + 1; fileWork.last = operation; fileWork.current.set(id, operation);
+  }, after(id) {fileWork.current.delete(id);}, destroy(id) {fileWork.current.delete(id);}}).enable();
   guard = await guardedTempRoot();
+  const raw = guard.fs;
+  // Observe the existing guarded calls without changing arguments, results, faults or disk flushes.
+  guard = {...guard, fs: new Proxy(raw, {get(target, key) {
+    const method: unknown = Reflect.get(target, key);
+    if (typeof method !== 'function') return method;
+    return (...args: unknown[]) => {
+      const relative = typeof args[0] === 'string' ? path.win32.relative(guard.root, args[0]) : '';
+      const label = `${String(key)}:${relative.startsWith('..') || path.win32.isAbsolute(relative) ? 'guard-ancestor' : relative.slice(0, 128)}`;
+      return fileContext.run(label, async () => {
+        const result: unknown = await Reflect.apply(method, target, args);
+        if (key !== 'open' || typeof result !== 'object' || result === null) return result;
+        return new Proxy(result, {get(handle, property) {
+          const member: unknown = Reflect.get(handle, property, handle);
+          return typeof member === 'function' ? (...values: unknown[]) => fileContext.run(`${label}.${String(property)}`, () => Reflect.apply(member, handle, values)) : member;
+        }});
+      });
+    };
+  }})};
   steam = await fakeSteam(guard.root);
   registryDirectory = path.join(guard.root, 'ETS2Telemetry', 'plugins');
   delays = []; events = [];
-});
-afterEach(async () => {
+}));
+afterEach(async ({task}) => {
   const completedGuard = guard;
-  await Promise.allSettled([...pendingCaseWork]);
-  const violations = [...completedGuard.violations];
-  await completedGuard.dispose();
-  expect(violations).toEqual([]);
+  try {
+    if (fileWork.measured && task.result?.state === 'fail') console.error('INSTALLER_FILE_WORK_BEFORE_SETTLEMENT', JSON.stringify(fileWorkContext()));
+    await Promise.allSettled([...pendingCaseWork]);
+    const violations = [...completedGuard.violations];
+    await fileContext.run('teardown', () => completedGuard.dispose());
+    if (fileWork.measured) {
+      const context = JSON.stringify(fileWorkContext());
+      expect(fileWork.count, context).toBeLessThanOrEqual(RAW_SYNC_CASE_FS_OPERATIONS);
+    }
+    expect(violations).toEqual([]);
+  } finally {fileHook.disable();}
 });
 
 // Content/ownership cases opt into withoutFlush per case for both ports; durability and explicit sync probes keep the raw guard.
@@ -150,7 +194,7 @@ describe('lifecycle', () => {
     expect((await fsp.stat(setup.dll)).mtimeMs).toBe(dllBefore.mtimeMs);
   });
 
-  it('updates an owned older file through a verified temporary file and keeps the created-folder flag', async () => {
+  it('updates an owned older file through a verified temporary file and keeps the created-folder flag', {timeout: RAW_SYNC_CASE_FS_WORK_BUDGET_MS}, () => measuredCase(async () => {
     const setup = await game({content: OLD});
     const registry = await loadRegistry();
     await registry.update(document => ({...document, installs: [record(setup, {sha256: sha(OLD), appVersion: '0.1.0', createdPluginsDirectory: true})]}));
@@ -162,7 +206,7 @@ describe('lifecycle', () => {
     expect(mutationsOf(probe.calls).map(call => [call.op, call.target, call.to ?? null])).toEqual([
       ['open', temp, null], ['write', temp, null], ['sync', temp, null], ['rename', temp, setup.dll]
     ]);
-  });
+  }));
 
   it('removes the owned file on exclusion and the plugins folder only because this application created it', async () => {
     guard = withoutFlush(guard);
@@ -336,7 +380,7 @@ describe('refusals before any change', () => {
     expect(await fsp.readFile(setup.dll)).toEqual(OLD);
   });
 
-  it('writes the pending intent durably before the temporary file exists, and touches nothing when that write fails', async () => {
+  it('writes the pending intent durably before the temporary file exists, and touches nothing when that write fails', {timeout: RAW_SYNC_CASE_FS_WORK_BUDGET_MS}, () => measuredCase(async () => {
     const setup = await game();
     const seen: unknown[] = [];
     const probe = instrument(guarded(), async call => {
@@ -353,7 +397,7 @@ describe('refusals before any change', () => {
     expect(await installer(registry, {fs: probe2.fs}).ensureInstalled(fresh.target)).toMatchObject({outcome: 'blocked', reason: 'REGISTRY_UNAVAILABLE', step: 'pending'});
     expect(mutationsOf(probe2.calls)).toEqual([]);
     expect(await exists(fresh.plugins)).toBe(false);
-  });
+  }));
 
   it('refuses a read-only target and never clears its attribute', async () => {
     guard = withoutFlush(guard);
@@ -404,7 +448,7 @@ describe('injected failures', () => {
   const cases = EXPECTED.flatMap(([point, eperm, ebusy, enospc, step]) => ([['EPERM', eperm], ['EBUSY', ebusy], ['ENOSPC', enospc]] as const)
     .map(([code, reason]) => [point, code, reason, step] as const));
 
-  it.each(cases)('an update failing at %s with %s reports %s at step %s and leaves no temporary file', async (pointName, code, reason, step) => {
+  it.each(cases)('an update failing at %s with %s reports %s at step %s and leaves no temporary file', {timeout: RAW_SYNC_CASE_FS_WORK_BUDGET_MS}, (pointName, code, reason, step) => measuredCase(async () => {
     const point = POINTS.find(candidate => candidate.name === pointName)!;
     const setup = await game({content: OLD});
     await fsp.writeFile(path.win32.join(setup.plugins, 'ets2telemetry-plugin.dll.fedcba9876543210.tmp'), 'stale');
@@ -428,7 +472,7 @@ describe('injected failures', () => {
       expect(await installer(registry).recover()).toEqual({recovered: 1, remaining: 0, reason: null});
       expect(await registryOnDisk()).toMatchObject({installs: [record(setup)], pending: []});
     }
-  });
+  }));
 
   it.each([['EPERM', 'PERMISSION_DENIED'], ['EBUSY', 'IO_ERROR'], ['ENOSPC', 'DISK_FULL']])('creating the plugins folder failing with %s reports %s and leaves no folder or intent', async (code, reason) => {
     guard = withoutFlush(guard);
@@ -468,7 +512,7 @@ describe('injected failures', () => {
     expect(delays).toEqual([]);
   }));
 
-  it('leaves no partial DLL after a short write followed by a full disk', async () => {
+  it('leaves no partial DLL after a short write followed by a full disk', {timeout: RAW_SYNC_CASE_FS_WORK_BUDGET_MS}, () => measuredCase(async () => {
     const setup = await game({content: OLD});
     let writes = 0;
     const base = guarded();
@@ -484,9 +528,9 @@ describe('injected failures', () => {
     expect(writes).toBe(2);
     expect(await fsp.readFile(setup.dll)).toEqual(OLD);
     expect(await list(setup.plugins)).toEqual(['ets2telemetry-plugin.dll']);
-  });
+  }));
 
-  it('refuses a temporary file whose bytes differ from the bundle before the rename', async () => {
+  it('refuses a temporary file whose bytes differ from the bundle before the rename', {timeout: RAW_SYNC_CASE_FS_WORK_BUDGET_MS}, () => measuredCase(async () => {
     const setup = await game({content: OLD});
     const base = guarded();
     const corrupt: InstallerFileSystem = {...base, open: async (target, flags) => {
@@ -503,7 +547,7 @@ describe('injected failures', () => {
     expect(probe.calls.filter(call => call.op === 'rename')).toEqual([]);
     expect(await fsp.readFile(setup.dll)).toEqual(OLD);
     expect(await list(setup.plugins)).toEqual(['ets2telemetry-plugin.dll']);
-  });
+  }));
 });
 
 function bind(handle: Awaited<ReturnType<InstallerFileSystem['open']>>) {
@@ -690,7 +734,7 @@ describe('review round 1', () => {
     expect((await registryOnDisk()).installs).toEqual([record(setup, {createdPluginsDirectory: true})]);
   });
 
-  it('records createdPluginsDirectory false durably when another process created the folder first', async () => {
+  it('records createdPluginsDirectory false durably when another process created the folder first', {timeout: RAW_SYNC_CASE_FS_WORK_BUDGET_MS}, () => measuredCase(async () => {
     const setup = await game();
     const seen: unknown[] = [];
     const probe = instrument(guarded(), async call => {
@@ -703,7 +747,7 @@ describe('review round 1', () => {
     expect((await registryOnDisk()).installs).toEqual([record(setup)]);
     expect((await installer(registry).remove(setup.target)).outcome).toBe('removed');
     expect(await list(setup.plugins)).toEqual([]);
-  });
+  }));
 
   it('keeps failures per root: two Steam roots of one game never clear each other, and unchanged runs write nothing', async () => {
     guard = withoutFlush(guard);
@@ -724,7 +768,7 @@ describe('review round 1', () => {
     expect((await registryOnDisk()).failures).toEqual([{game: 'ets2', root: blocked.target.root, code: 'UNRECOGNIZED_FILE', step: 'classify', utc: UTC}]);
   });
 
-  it('writes the removal intent durably before the unlink, and removes nothing when that write fails', async () => {
+  it('writes the removal intent durably before the unlink, and removes nothing when that write fails', {timeout: RAW_SYNC_CASE_FS_WORK_BUDGET_MS}, () => measuredCase(async () => {
     const setup = await game({content: OLD});
     const seen: unknown[] = [];
     const probe = instrument(guarded(), async call => {
@@ -740,7 +784,7 @@ describe('review round 1', () => {
     expect(await installer(await loadRegistry(failing), {fs: probe2.fs}).remove(kept.target)).toMatchObject({outcome: 'blocked', reason: 'REGISTRY_UNAVAILABLE', step: 'pending'});
     expect(mutationsOf(probe2.calls)).toEqual([]);
     expect(await fsp.readFile(kept.dll)).toEqual(OLD);
-  });
+  }));
 });
 
 describe('delta review: intents of removed game folders', () => {

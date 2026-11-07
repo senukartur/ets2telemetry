@@ -637,6 +637,8 @@ finally {
     const start = performance.now();
     phase('close-requested');
     try {
+      // Observe the exact main process separately from Playwright's Windows shell. Its exit is diagnostic evidence;
+      // a pending Playwright close still fails the unchanged eight-second request/launcher guard.
       await observeExit({application, launcher, request: () => application.close(), requireRequest: true,
         record: result.closeObservation = {}, message: 'APP_CLOSE_TIMEOUT_8_SECONDS'});
       result.closeMilliseconds = performance.now() - start;

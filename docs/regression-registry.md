@@ -91,7 +91,7 @@ Columns:
 | `tests/unit/diagnostic-bundle.test.ts` | Node unit (Vitest) | REG-010, REG-011, REG-015, REG-017 | R, F, T, V (et-017) | ET-017 (PR-6) | PR (tests job, `npm test`) | security |
 | `tests/unit/diagnostics.test.ts` | Node unit (Vitest) | REG-017 | T, V (et-001) | ET-001 (#5) | PR (tests job, `npm test`) | security |
 | `tests/unit/event-loop-lag.test.ts` | Node unit (Vitest) | smoke evidence: REG-011, REG-012, REG-014, REG-016, REG-017 | V (ci-smoke-window-stall) | ET-022 (#46) | PR (tests job, `npm test`) | — |
-| `tests/unit/exit-observation.test.ts` | Node unit (Vitest), inert emitters/promises and controlled clock | harness: REG-012, REG-017 | R, T | ET-011 (#162) | PR (tests job, `npm test`) | regression |
+| `tests/unit/exit-observation.test.ts` | Node unit (Vitest), inert emitters/promises and controlled clock | harness: REG-012, REG-017 | R, T | ET-011 (#162) | PR (tests job, `npm test`) | exact main identity/handle observation versus launcher exit, separately bounded setup, unchanged required-close guard, unknown/error/late rejection, bounded sanitized output and observer cleanup |
 | `tests/unit/hard-mode-proof-observation.test.ts` | Node unit (Vitest), real monitor with gated read/bind, controlled clocks and trusted-request ports | harness: REG-011, REG-012 | R, T | ET-011 (#167), ET-026 journey | PR (tests job, `npm test`) | regression |
 | `tests/unit/game-folder.test.ts` | Node unit (Vitest) | REG-015 | R, F, V (et-017) | ET-017 (PR-2) | PR (tests job, `npm test`) | security |
 | `tests/unit/game-processes.test.ts` | Node unit (Vitest) | REG-015 | R, F, V (et-017) | ET-017 (PR-2) | PR (tests job, `npm test`) | — |
@@ -185,7 +185,7 @@ Columns:
 | `tests/unit/plugin-action-result.test.ts` | Node unit (Vitest) | REG-015 | R, F, V (et-045b) | ET-045b | PR (tests job, `npm test`) | — |
 | `tests/unit/plugin-bundle-stage.test.ts` | Node unit (Vitest) | REG-015, REG-017 | R, F | ET-017 (PR-1) | PR (tests job, `npm test`) | security |
 | `tests/unit/plugin-bundle.test.ts` | Node unit (Vitest) | REG-015, REG-017 | R, F, T, V (et-017) | ET-017 (PR-4) | PR (tests job, `npm test`) | security |
-| `tests/unit/plugin-installer.test.ts` | Node unit (Vitest) | REG-015 | R, F, T, V (et-017) | ET-017 (PR-3) | PR (tests job, `npm test`) | security |
+| `tests/unit/plugin-installer.test.ts` | Node unit (Vitest) | REG-015 | R, F, T, V (et-017) | ET-017 (PR-3) | PR (tests job, `npm test`) | security, real sync/order/faults, counted underlying file-work bound and complete-case settlement before guarded cleanup |
 | `tests/unit/plugin-registry.test.ts` | Node unit (Vitest) | REG-015 | R, F, T, V (et-017) | ET-017 (PR-3) | PR (tests job, `npm test`) | security |
 | `tests/unit/plugin-setup-mode.test.ts` | Node unit (Vitest) | REG-015 | R, F, T, V (et-017) | ET-017 (PR-4) | PR (tests job, `npm test`) | security |
 | `tests/unit/plugin-setup-text.test.ts` | Node unit (Vitest) | REG-015 | R, F, T, V (et-017) | ET-017 (PR-5) | PR (tests job, `npm test`) | security |
