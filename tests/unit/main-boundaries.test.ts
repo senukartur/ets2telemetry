@@ -3084,6 +3084,48 @@ it('ET-070 republishes the overlay indicator as not active when the lease ends w
   publish(pass, '3000000000'); await vi.advanceTimersByTimeAsync(50); expect(last().update.hardMode).toStrictEqual({state: 'active'});
   child.emit('exit', 1); expect(hydrateConsumers().overlay.hardMode).toStrictEqual({state: 'inactive'});
 });
+it('ET-070 keeps a passing publication accepted before service readiness not active until readiness republishes it', async () => {
+  await loadMain(); await Promise.resolve(); vi.spyOn(process.hrtime, 'bigint').mockImplementation(() => 0n);
+  const {pass, publish} = await hardModeFixtures();
+  // First start: no consumer can subscribe before readiness; after it the indicator is active.
+  publish(pass); child.emit('message', {type: 'ready'}); await settle();
+  expect(hydrateConsumers().overlay.hardMode).toStrictEqual({state: 'active'});
+  // A restarted service: its pass before readiness is computed from status(false), twelve unknown rules, so not active.
+  child.emit('exit', 1); await vi.advanceTimersByTimeAsync(250); const replacement = children[1];
+  replacement.emit('message', {type: 'hard-mode', update: 'assessment', assessment: pass, remainingNs: '3000000000'});
+  expect(hydrateConsumers().overlay.hardMode).toStrictEqual({state: 'inactive'});
+  // Readiness alone republishes it; no further service message or telemetry frame arrives.
+  replacement.emit('message', {type: 'ready'}); await settle();
+  expect(hydrateConsumers().overlay.hardMode).toStrictEqual({state: 'active'});
+});
+it('ET-070 posts no overlay indicator after the exit request, neither from a service message nor from the lease timer', async () => {
+  await ready(); let mono = 0n; vi.spyOn(process.hrtime, 'bigint').mockImplementation(() => mono);
+  const {pass, fail, publish} = await hardModeFixtures();
+  ipc.emit('overlay:subscribe', overlayTrusted()); const overlayChannel = channels.at(-1)!;
+  overlayChannel.port1.emit('message', {data: {type: 'consumed', delivery: overlayChannel.port1.postMessage.mock.lastCall![0].delivery}});
+  publish(pass); await vi.advanceTimersByTimeAsync(50); expect(overlayChannel.port1.postMessage.mock.lastCall![0].update.hardMode).toStrictEqual({state: 'active'});
+  app.emit('before-quit', {preventDefault: vi.fn()});
+  const deliveries = overlayChannel.port1.postMessage.mock.calls.length;
+  publish(fail); mono = 3_000_000_000n; await vi.advanceTimersByTimeAsync(3050);
+  child.emit('exit', 0); await vi.advanceTimersByTimeAsync(50);
+  expect(overlayChannel.port1.postMessage.mock.calls).toHaveLength(deliveries);
+});
+it('ET-070 republishes only the indicator: no overlay window placement, visibility or z-order call', async () => {
+  vi.stubEnv('ETS2TELEMETRY_SOURCE_KIND', 'ets2'); await ready(); vi.spyOn(process.hrtime, 'bigint').mockImplementation(() => 0n);
+  const {pass, fail, publish, lostTrip} = await hardModeFixtures();
+  ipc.emit('app:subscribe-state', trusted()); ipc.emit('overlay:subscribe', overlayTrusted()); const overlayChannel = channels.at(-1)!;
+  consumeOverlay(overlayChannel); deliver(currentReading()); await vi.advanceTimersByTimeAsync(50); consumeOverlay(overlayChannel);
+  const overlayWindow = windows[1], before = overlayChannel.port1.postMessage.mock.calls.length;
+  const calls = () => [overlayWindow.setBounds, overlayWindow.showInactive, overlayWindow.hide, overlayWindow.setAlwaysOnTop].map(spy => spy.mock.calls.length);
+  const windowCalls = calls(), projection = overlayProjection(overlayChannel);
+  publish(pass); await vi.advanceTimersByTimeAsync(50);
+  expect(overlayProjection(overlayChannel)).toEqual({...projection, hardMode: {state: 'active'}}); consumeOverlay(overlayChannel);
+  publish(fail); await vi.advanceTimersByTimeAsync(50); consumeOverlay(overlayChannel);
+  child.emit('message', {type: 'hard-mode', update: 'trip', trip: lostTrip}); await vi.advanceTimersByTimeAsync(50);
+  expect(overlayProjection(overlayChannel)).toEqual({...projection, hardMode: {state: 'lost'}});
+  expect(overlayChannel.port1.postMessage.mock.calls.length).toBeGreaterThan(before);
+  expect(calls()).toEqual(windowCalls);
+});
 
 it('skips dashboard window creation when started with --hidden, but creates overlay and tray, and opens dashboard on second-instance', async () => {
   trayAvailable = true;
