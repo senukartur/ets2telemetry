@@ -285,7 +285,7 @@ describe('REG-003/005/008/012/014 durable logical trips', () => {
       if(variant==='confirmed'){expect(result.trip.recordingCompleteness).toBe('complete');expect(result.trip.observedDistanceM).toEqual({available:true,value:250});expect(result.trip.fuelUsedL).toEqual({available:true,value:0.5});}
       else expect(result.trip.recordingCompleteness).not.toBe('complete');storage.close();
     });
-  it.each(['never-matches','later-continuous-match','delayed-minute','delayed-minute-reopen','delayed-movement','delayed-hole','delayed-missing-predecessor','delayed-never-matches'] as const)('bounds saved-baseline search while awaiting complete stationary evidence: %s',async variant=>{
+  it.each(['never-matches','later-continuous-match','delayed-minute','delayed-minute-reopen','delayed-movement','delayed-hole','delayed-missing-predecessor','delayed-never-matches','incomplete-fuel','incomplete-position','unqualified-profile','absent-profile'] as const)('bounds saved-baseline search while awaiting complete stationary evidence: %s',async variant=>{
     let storage=await ws.open();const a=new Script(ETS2_A),b=new Script(ETS2_B),delayed=variant.startsWith('delayed-');
     ok(storage.upsertSession({message:a.welcome()}));ok(storage.commitEvent({message:a.event(r.started())}));const uuid=open(storage,a);
     const append=(source:Script,trip:string,second:number,x:number,fuel:number,previous?:string,minute:number|null=500,speed=second===1003?20:0)=>{
@@ -293,6 +293,12 @@ describe('REG-003/005/008/012/014 durable logical trips', () => {
         odometer:{available:true,value:second===1003?1000000:1000250},fuel:{available:true,value:fuel},position:{available:true,value:{x,y:0,z:0}},
         gameTime:{minutes:minute===null?{available:false,reason:'not-observed'}:{available:true,value:minute},clockId:source.clockId},recording:{profile:proof(source),job:job(),truck:'same-truck',
           processInstanceId:source.welcome().source.processInstanceId,...(previous?{previous:{tripUuid:trip,sourceClockId:source.clockId,monotonicNs:previous}}:{})}});
+      if(source===b && second===2001){
+        if(variant==='incomplete-fuel')row.fuel={available:false,reason:'not-observed'};
+        if(variant==='incomplete-position')row.position={available:false,reason:'not-observed'};
+        if(variant==='absent-profile')delete row.recording!.profile;
+        if(variant==='unqualified-profile')row.recording!.profile={...proof(b),afterMonotonicNs:'9999000000000'};
+      }
       row.monotonicNs=String(BigInt(second)*1_000_000_000n);ok(storage.appendSamples(source.session,[row]));
     };
     append(a,uuid,1003,0,100);append(a,uuid,1004,13,99.5,'1003000000000');close(storage,a,uuid);
@@ -303,6 +309,17 @@ describe('REG-003/005/008/012/014 durable logical trips', () => {
     const prepare=vi.spyOn(Database.prototype,'prepare');
     const searches=()=>prepare.mock.calls.filter(([sql])=>sql.includes('ORDER BY p.id DESC LIMIT 65')).length;
     try{
+      if(variant.startsWith('incomplete-')||variant.endsWith('-profile')){
+        append(b,next,2001,13.017,99.509);expect(searches()).toBe(0);
+        expect(ok(storage.journalTrip(uuid)).trip.recordingCompleteness).not.toBe('complete');
+        ok(storage.close());
+        // Missing evidence keeps the durable resume decision pending; it must not latch a real loss.
+        readOnly(ws.database,db=>{
+          const coverage=JSON.parse(db.prepare('SELECT row_json FROM logical_projection_states WHERE id=(SELECT state_ref FROM logical_revisions WHERE logical_ref=(SELECT id FROM logical_trips WHERE trip_uuid=?) ORDER BY id DESC LIMIT 1)').pluck().get(uuid) as string)._coverage;
+          expect(coverage).toMatchObject({phase:'pending',losses:0,sampleResumePending:false});
+        });
+        return;
+      }
       if(delayed){
         append(b,next,2001,13.017,99.509,undefined,null);expect(searches()).toBe(0);
         const second=variant==='delayed-hole'?2007:2002;
@@ -902,11 +919,11 @@ describe('REG-003/005/008/012/014 durable logical trips', () => {
     expect(ok(storage.journalTrip(uuid)).trip.observedDistanceM.available).toBe(false);
     expect(ok(storage.listSamples({tripUuid:uuid}))).toHaveLength(2);storage.close();
   });
-  it.each(['absent','unsupported','malformed','extra','pending-type','pending-true','pending-false','resume-type','resume-false'] as const)('distinguishes legacy absent coverage from present-invalid metadata: %s',async kind=>{
+  it.each(['absent','unsupported','malformed','extra','pending-type','pending-true','pending-false','resume-type','resume-active','resume-false'] as const)('distinguishes legacy absent coverage from present-invalid metadata: %s',async kind=>{
     let storage=await ws.open();const script=new Script(ETS2_A),uuid=open(storage,script);ok(storage.close());
     const db=new Database(ws.database);let row:{id:number;row_json:string};
     try{row=db.prepare('SELECT s.id,s.row_json FROM logical_revisions r JOIN logical_projection_states s ON s.id=r.state_ref ORDER BY r.id DESC LIMIT 1').get() as {id:number;row_json:string};
-      const metadata=JSON.parse(row.row_json);if(kind==='absent')delete metadata._coverage;else metadata._coverage=kind==='unsupported'?{...metadata._coverage,version:99}:kind==='extra'?{...metadata._coverage,unknown:true}:kind.startsWith('pending')?{...metadata._coverage,acceptancePending:kind==='pending-type'?'false':kind==='pending-true'}:kind.startsWith('resume')?{...metadata._coverage,sampleResumePending:kind==='resume-type'?'false':false}:{version:1};
+      const metadata=JSON.parse(row.row_json);if(kind==='absent')delete metadata._coverage;else metadata._coverage=kind==='unsupported'?{...metadata._coverage,version:99}:kind==='extra'?{...metadata._coverage,unknown:true}:kind.startsWith('pending')?{...metadata._coverage,acceptancePending:kind==='pending-type'?'false':kind==='pending-true'}:kind.startsWith('resume')?{...metadata._coverage,sampleResumePending:kind==='resume-type'?'false':kind==='resume-active'}:{version:1};
       row.row_json=JSON.stringify(metadata);db.prepare('UPDATE logical_projection_states SET row_json=? WHERE id=?').run(row.row_json,row.id);
     }finally{db.close();}
     storage=await ws.open();expect(ok(storage.journalTrip(uuid)).trip.recordingCompleteness).toBe(kind==='absent'||kind==='pending-false'||kind==='resume-false'?'complete':'partial');storage.close();

@@ -271,7 +271,11 @@ export function projectSample(db: Database.Database, session: {game: string; pro
       endpoint:{...saved.endpoint,trip:String(row.id),anchor,head:String(result.lastInsertRowid),running:undefined}});
     else if(waitingForMinute && proof!==undefined && (waiting || cleanLoadWindow(db,row))){
       if(!waiting)revise(db,id,{...coverage,sampleResumePending:true});
-    } else revise(db,id,{...coverage,sampleResumePending:false,losses:coverage.losses|COVERAGE_LOSS.unknown});
+    } else {
+      // An incomplete or not-yet-qualified first reading is not evidence of a loss. A broken deferred chain is.
+      const lost=waiting && !resumeSample || proof!==undefined && completeEndpoint(coverage.endpoint.anchor) && completeEndpoint(anchor);
+      revise(db,id,{...coverage,sampleResumePending:false,losses:coverage.losses|(lost?COVERAGE_LOSS.unknown:0)});
+    }
   }
 }
 

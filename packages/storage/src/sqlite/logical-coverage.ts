@@ -108,7 +108,8 @@ export function validCoverage(v: unknown): v is LogicalCoverage {
     && (!Object.hasOwn(c,'sampleResumePending') || typeof c.sampleResumePending==='boolean') && c.version === 1 && ['observed', 'unproven'].includes(c.start) && Number.isInteger(c.losses) && c.losses >= 0 && c.losses <= 31
     && reference(c.member) && ['active', 'pending', 'resumed'].includes(c.phase) && (c.endpoint === null || validEndpoint(c.endpoint))
     && (c.window === null || typeof c.window === 'object' && keys(c.window, 'opened,session') && reference(c.window.session) && (c.window.opened === null || reference(c.window.opened)))
-    && (c.phase === 'pending' || c.window === null);
+    && (c.phase === 'pending' || c.window === null)
+    && (c.sampleResumePending !== true || c.phase === 'pending' && c.window !== null && c.endpoint !== null);
 }
 export function latestCoverage(db: Database.Database, id: unknown): {revision?: Row; present: boolean; value?: LogicalCoverage} {
   const revision = get(db, 'SELECT r.*,s.row_json FROM logical_revisions r JOIN logical_projection_states s ON s.id=r.state_ref WHERE r.logical_ref=? ORDER BY r.id DESC LIMIT 1', id);
