@@ -132,6 +132,16 @@ describe('partial', () => {
   });
 });
 
+it('beside an incompatible v1 source stays connected and the banner names the version mismatch', () => {
+  const live = smokePair(); live.v1 = {selection: 'synthetic', status: 'incompatible', reason: 'Game protocol target mismatch', fresh: false};
+  const html = render(live, 'en');
+  expect(state(html)).toBe('connected');
+  expect(between(html, 'live.waiting', 'live.instrument')).toContain('<strong>Connected</strong>');
+  expect(between(html, 'live.waiting', 'live.instrument')).not.toContain('Game connection is incomplete');
+  expect(html).not.toContain('data-testid="live.stale"');
+  expect(html).toContain('data-testid="live-speed-number">90</text>');
+});
+
 it('puts the tank fill inside the inset track with its inline height', () => {
   expect(render(smokePair())).toMatch(/data-testid="live.instrument.tank" data-state="value" aria-hidden="true"><span class="yu-tank-track"><i style="height:7.3%;background:var\(--yu-progress-pending\)"><\/i><\/span><\/div>/);
   expect(render(stalePair())).toContain('data-state="unavailable" aria-hidden="true"><span class="yu-tank-unavailable">—</span></div>');

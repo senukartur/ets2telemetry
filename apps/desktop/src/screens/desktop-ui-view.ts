@@ -131,12 +131,14 @@ export function hardModeChip(status: HardModeStatus, nowUtcMs: number, language:
 }
 
 /**
- * One telemetry stream current and the other not, in either direction: the rule gameConnectionText uses for its
- * "connection is incomplete" text, so the page state and the banner text always agree.
+ * One telemetry stream current and the other not, in either direction, exactly when gameConnectionText shows its
+ * "connection is incomplete" text: an incompatible v1 source is not partial, because the banner names the version
+ * mismatch instead (a parity test in desktop-ui-view.test.ts keeps the two rules equal).
  */
 export function liveSourcesPartial(live: LiveTelemetry | undefined): boolean {
+  if (!live?.v1 || live.v1.status === 'incompatible') return false;
   const current = (state: {status: string; fresh: boolean}) => state.fresh && (state.status === 'connected' || state.status === 'paused');
-  return !!live?.v1 && current(live) !== current(live.v1);
+  return current(live) !== current(live.v1);
 }
 
 /**

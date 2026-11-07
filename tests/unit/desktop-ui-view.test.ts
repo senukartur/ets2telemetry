@@ -7,7 +7,8 @@ import {dashboardFuel} from '../../apps/desktop/src/speed-display';
 import {describe, expect, it} from 'vitest';
 import {clampRatio, connectionChip, connectionTone, desktopLiveView, gaugeArc, hardModeChip, hardModeTone, liveGameMode, liveScreenState, liveSourcesPartial, liveSubline, pluginChip, pluginTone,
   pluginStatusText, recordingMotion, recordingTone, routeGroup, staleReasonText} from '../../apps/desktop/src/screens/desktop-ui-view';
-import {liveDashboardText} from '../../apps/desktop/src/live-dashboard-text';
+import {gameConnectionText, liveDashboardText} from '../../apps/desktop/src/live-dashboard-text';
+import {getStrings} from '../../apps/desktop/src/strings';
 import {unknownHardMode} from '../../packages/telemetry-core/src/hard-mode';
 import type {HardModeStatus} from '../../packages/contracts/src/hard-mode';
 import type {GearDisplayModes, LiveTelemetry} from '../../packages/contracts/src';
@@ -257,6 +258,26 @@ describe('compact shell chips and Live states (ET-074, REG-009, REG-002)', () =>
     expect(liveScreenState('stale', false, false, true)).toBe('partial');
     expect(liveScreenState('connected', true, true, true)).toBe('partial');
     expect([smokePair(), smokeV0(), undefined].map(liveSourcesPartial)).toEqual([false, false, false]);
+  });
+  it('calls the sources partial exactly when the connection text says the connection is incomplete', () => {
+    const v1Stale = {status: 'stale', fresh: false, reason: 'Main has no recent v1 SDK capture'} as const;
+    const v0Stale = {status: 'stale', fresh: false, reason: 'Main has no recent SDK capture'} as const;
+    const incompatible = smokePair(); incompatible.v1 = {selection: 'synthetic', status: 'incompatible', reason: 'Game protocol target mismatch', fresh: false};
+    const v1Waiting = smokePair(); v1Waiting.v1 = {selection: 'synthetic', status: 'waiting', reason: 'Waiting for game', fresh: false};
+    const fixtures: [string, LiveTelemetry | undefined, boolean][] = [
+      ['full pair', smokePair(), false], ['v0 only', smokeV0(), false], ['v1 absent', {...smokePair(), v1: undefined}, false],
+      ['v0 stale', smokePair({}, v0Stale), true], ['v1 stale', smokePair(v1Stale), true], ['v1 waiting', v1Waiting, true],
+      ['v0 disconnected, v1 current', smokePair({}, {status: 'disconnected', fresh: false, reason: 'Game disconnected'}), true],
+      ['v0 paused, v1 stale', smokePair(v1Stale, {status: 'paused'}), true], ['v1 incompatible', incompatible, false],
+      ['both stale', smokePair(v1Stale, v0Stale), false], ['live undefined', undefined, false]
+    ];
+    for (const [name, live, partial] of fixtures) {
+      expect(liveSourcesPartial(live), name).toBe(partial);
+      for (const language of ['en', 'ru'] as const) expect(gameConnectionText(live, language) === getStrings(language).sourcePartial, `${name} ${language}`).toBe(partial);
+    }
+    // Current v0 beside an incompatible v1 source is connected; the banner names the mismatch, as before ET-074.
+    const view = desktopLiveView(incompatible);
+    expect(liveScreenState(incompatible.status, view.current, view.sources.paused, liveSourcesPartial(incompatible))).toBe('connected');
   });
   it('reads the mode from current v1 evidence: strong TruckersMP, single-player also from the ordinary weak module scan', () => {
     const mode = (patch: object | null, live = smokePair()) => {

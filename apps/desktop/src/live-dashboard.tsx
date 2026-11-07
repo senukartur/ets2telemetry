@@ -45,9 +45,10 @@ export function LiveDashboard({live, units, gearDisplay, recording, language = '
   const rows = (entries: [string, string, string?][]) => <dl>{entries.map(([label, shownValue, testId]) => <div className="yu-kv" key={label}><dt>{label}</dt><dd data-testid={testId}>{shownValue}</dd></div>)}</dl>;
   const title = (key: 'live.job' | 'live.trip' | 'live.truck' | 'live.session') => <CardTitle><h2>{t(key, undefined, language)}</h2></CardTitle>;
 
-  // The waiting banner: no current game, or one current stream of two (partial, in either direction). A stream that went
-  // stale with no current source shows its badge and dimmed dashes instead.
-  const waiting = state === 'waiting' || state === 'partial';
+  // The waiting banner: no current game, one current stream of two (partial, in either direction), or an incompatible v1
+  // source beside current v0 data, where the banner names the version mismatch. A stream that went stale with no current
+  // source shows its badge and dimmed dashes instead.
+  const waiting = state === 'waiting' || state === 'partial' || state !== 'stale' && live?.v1?.status === 'incompatible';
   const status = live?.status ?? 'waiting';
   const connectionText = gameConnectionText(live, language);
   const consNote = t(sources.v0View.connection.game === 'ats' ? 'live.consNoteAts' : 'live.consNote', undefined, language);
