@@ -138,13 +138,13 @@ Pending: the real Windows Save dialog (overwrite prompt, Esc and the close box, 
 
 Format 2 adds `is_hard_mode: boolean` and `hard_mode_details: HardModeDetails | null` before the trip's existing fields, with the typed, allowlisted, version-1 sanitized audit described in [Hard Mode](hard-mode.md#recording-and-durability). Format 3 retains these fields. Historical trips export false/null. The boolean is true only for delivered trips with uninterrupted passing settings evidence; a current settings pass is insufficient. Parking is checked through configuration only. Opening/latest source categories, observation times and first-loss values remain explicit; `manualDelivery` stays as a nullable compatibility field, null in new audits. Saved audits and qualification are preserved. Names, account IDs, paths and raw configs are excluded.
 
-Canonical units, streaming/bounds, identifiers, save cancellation/refusal and money semantics are unchanged. The existing [format-1 example](#example) and its hand-written historical validation remain unchanged. The independent validator accepts formats 1, 2 and 3 with their different exact keys; current storage/export tests reconcile the flag with SQLite. Future server payloads map `is_hard_mode` to this boolean; no server implementation or export import is added.
+Canonical units, streaming/bounds, identifiers, save cancellation/refusal and money semantics are unchanged. The existing [format-1 example](#example) and its hand-written historical validation remain unchanged. Formats 1–3 retain their separate exact historical shapes; current validator compatibility is described under [format 5](#hard-mode-statistics-format-5). Future server payloads map `is_hard_mode` to this boolean; no server implementation or export import is added.
 
 ## Hard Mode statistics: format 5
 
 Format 5 retains format 4's streaming arrays, immutable logical snapshot, sources, connection diagnostics and canonical units. `trip.hard_mode_details` additionally accepts the strict v2 audit: pass/fail/unknown counters, the last cumulative producer checkpoint, bounded first/latest fixed-code diagnostics with UTC labels and original rule values, and null `firstLoss`/`manualDelivery`. New delivered trips qualify when `known > 0 && passingChecks * 100 >= known * 95`; unknown is excluded. Logical trips add member counts before applying this one threshold. The exported boolean and audit are the same snapshot as the Journal, including after restart/save restoration. Diagnostics survive without retained logs and contain no paths, profile names, raw config or command lines.
 
-Stored v1 audits and qualification remain unchanged, including legacy first-loss/parking evidence. The independent validator keeps formats 1–4 valid under their own exact shapes; v2 audits are accepted only in format 5. No import or restore is added.
+Stored v1 audits and qualification remain unchanged, including legacy first-loss/parking evidence. The independent validator accepts formats 1–5 under their own exact shapes; v2 audits are accepted only in format 5. No import or restore is added.
 
 ## Connection diagnostics: format 3
 

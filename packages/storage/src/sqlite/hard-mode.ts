@@ -45,6 +45,18 @@ export function updateOpenHardMode(db: Database.Database, game: string, observat
     write(db, row.id, advanceHardMode(previous, assessment, loss, latest));
   }
 }
+/** The authenticated gap owns only its source session's open members; no counts or newer publication are replaced. */
+export function recordGapHardMode(db: Database.Database, pluginSessionId: string, now: number): void {
+  const rows = db.prepare(`SELECT t.id, t.hard_mode_details FROM trips t JOIN plugin_sessions p ON p.id=t.plugin_session_ref
+    WHERE p.plugin_session_uuid=? AND t.outcome='open' LIMIT 101`).all(pluginSessionId) as {id: unknown; hard_mode_details: unknown}[];
+  if (rows.length > 100) fail('INVALID_INPUT');
+  const observation: HardModeObservation = {assessment: unknownHardMode(now, 'interrupted'), diagnostic: 'session-transition',
+    binding: null, pluginSessionId, sourceMonotonicNs: null};
+  for (const row of rows) {
+    const previous = readHardModeDetails(row.hard_mode_details);
+    if (previous?.version === 2) write(db, row.id, advanceHardModeV2(previous, observation, 'frozen'));
+  }
+}
 /** Runs after the ordinary effects, within their event transaction. Duplicates return before this function. */
 export function applyEventHardMode(db: Database.Database, message: Extract<ServerMessage, {kind: 'event'}>, effects: readonly {kind: string; tripUuid?: string | null}[] | undefined,
   observation: HardModeObservation | undefined, now: number, pendingLoss?: HardModeObservation, admittedFresh = false): void {

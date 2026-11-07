@@ -29,6 +29,32 @@ const opening: TripEffect = {kind: 'trip.open', tripUuid: id, game: 'ets2', game
 function delivery(): EventRecord {const d = r.delivered(); if (d.type !== 'job.delivered') throw new Error('fixture'); return {...d, autoParkUsed: {available: true, value: false}};}
 function sinkOk<T>(result: {ok: true; value: T} | {ok: false; error: {code: string}}): T {if (!result.ok) throw new Error(result.error.code); return result.value;}
 describe('ET-026 integrity (REG-005/006/007)', () => {
+  it('persists a gap diagnostic only for its source session without changing counts or frozen evidence',async()=>{
+    const directory=process.env.ETS2TELEMETRY_STORAGE_TEST_BUNDLES;if(!directory)throw new Error('Run storage suite');
+    worker=new Worker(path.join(directory,'storage-worker.cjs'),{workerData:{kind:'storage'}});
+    const client=new StorageClient(workerHandle(worker),{closeGraceMs:TEST_CLOSE_GRACE_MS}),a=new Script(ETS2_A),b=new Script(ETS2_B),foreign='80000000-0000-4000-8000-000000000002';
+    try {
+      ok(await client.open({path:ws.database,purpose:'synthetic',backupsDirectory:ws.backups,appVersion:'test-gap-diagnostic'}));
+      for(const [script,uuid] of [[a,id],[b,foreign]] as const) {
+        ok(await client.upsertSession({message:script.welcome()}));const observation={...evidence(),pluginSessionId:script.session};
+        ok(await client.commitEvent({message:script.event(r.jobConfigured()),hardMode:observation,hardModeFresh:true,effects:[{...opening,tripUuid:uuid}]}));
+        ok(await client.observeHardMode('ets2',{...observation,member:uuid,batch:{tripUuid:uuid,producer:'90000000-0000-4000-8000-000000000001',sequence:107,passingChecks:95,failingChecks:5,unknownChecks:7}},true));
+      }
+      const before=ok(await client.getTrip(id))!,other=ok(await client.getTrip(foreign)),gap=a.gap(1);
+      const closing:TripEffect={kind:'trip.close',tripUuid:id,outcome:'none',closeReason:'gap',recordingCompleteness:'partial',endedUtcMs:Date.now()};
+      expect(await client.commitGap({message:gap,effects:[closing,{...closing,tripUuid:'80000000-0000-4000-8000-000000000003'}]})).toMatchObject({ok:false,error:{code:'UNKNOWN_TRIP'}});
+      expect(ok(await client.committedThrough(ETS2_A))).toBe('1');expect(ok(await client.getTrip(id))).toEqual(before);
+      expect(ok(await client.commitGap({message:gap,effects:[closing]}))).toMatchObject({status:'committed',previouslyCoveredThrough:'1',committedThroughEventSeq:'2'});
+      const closed=ok(await client.getTrip(id))!,audit=closed.hardModeDetails!;
+      expect(closed).toMatchObject({outcome:'none',closeReason:'gap',hardModeDetails:{version:2,passingChecks:95,failingChecks:5,unknownChecks:7,
+        firstDiagnostic:{code:'session-transition',rule:null,values:null},latestDiagnostic:{code:'session-transition',rule:null,values:null}}});
+      expect(audit.latest).toEqual(before.hardModeDetails!.latest);expect(audit.binding).toBe(before.hardModeDetails!.binding);
+      expect(audit.version===2&&audit.checkpoint).toEqual(before.hardModeDetails!.version===2&&before.hardModeDetails!.checkpoint);
+      expect(ok(await client.getTrip(foreign))).toEqual(other);
+      expect(ok(await client.commitGap({message:gap,effects:[closing]}))).toMatchObject({status:'duplicate',previouslyCoveredThrough:'2',committedThroughEventSeq:'2'});
+      expect(ok(await client.getTrip(id))).toEqual(closed);expect(ok(await client.getTrip(foreign))).toEqual(other);
+    } finally {expect(await client.close()).toEqual({clean:true});}
+  });
   it('rolls back failed audit/event/coverage changes together, then commits the originally captured failing evidence', async () => {
     const storage = await ws.open({now: Date.now}), script = new Script(ETS2_A); ok(storage.upsertSession({message: script.welcome()}));
     ok(storage.commitEvent({message: script.event(r.jobConfigured()), hardMode: evidence(), hardModeFresh: true, effects: [opening]}));
@@ -205,7 +231,7 @@ describe('ET-026 integrity (REG-005/006/007)', () => {
       pid: source.processId, createdUtcMs: new Date(2026, 9, 20, 12, 0, 0).getTime(), executable: 'C:/Synthetic/eurotrucks2.exe', commandLine: 'synthetic'})});
     let recorder!: TripRecorderSink;
     const monitor = new HardModeMonitor(async (...args) => {try {return await reader.read(...args);} finally {readFinished?.();}}, value => {if (observe) recorder.observeHardMode('ets2', value);}, () => mono);
-    reader.onInvalidate(() => monitor.invalidate());
+    reader.onInvalidate((_profileChanged, diagnostic) => monitor.invalidate(diagnostic));
     recorder = new TripRecorderSink(recorderClient({client}), {hardModeEvidence: () => monitor.evidence()});
     const pipeline = new DurableDelivery(recorder), acks: string[] = [], failures: string[] = [];
     const script = new Script(ETS2_A), welcome = script.welcome();
@@ -263,8 +289,14 @@ describe('ET-026 integrity (REG-005/006/007)', () => {
       const trip = ok(await client.listTrips()).trips[0], details = ok(await client.getTrip(trip.tripUuid))!;
       const qualified = mode !== 'initial-process-failure';
       expect(details).toMatchObject({outcome: 'delivered', isHardMode: qualified});
-      if (qualified) {expect(details.hardModeDetails!.firstLoss).toBeNull(); expect(openPasses).toBeGreaterThanOrEqual(2);}
-      else {expect(details.hardModeDetails).toMatchObject({firstLoss:null,passingChecks:0});}
+      // The initial scheduled proof may seed one opening check. Every scan() below is manual, with no sampling weight;
+      // only pending-unknown explicitly injects one additional designated check before the opening commits.
+      expect(details.hardModeDetails).toMatchObject({version:2,passingChecks:qualified?1:0,failingChecks:0,unknownChecks:mode==='pending-unknown'?1:0});
+      const diagnostic = mode==='pending-unknown' ? {code:'settings-unavailable',rule:null,values:null}
+        : mode==='process-retired'||mode==='initial-process-failure' ? {code:'profile-verification',rule:null,values:null}
+        : mode==='pending-failure'||mode==='changed-failure' ? {code:'settings-changing',rule:null,values:null} : null;
+      expect(details.hardModeDetails).toMatchObject({firstDiagnostic:diagnostic,latestDiagnostic:diagnostic});
+      if (qualified) expect(openPasses).toBeGreaterThanOrEqual(2);
       expect(acks).toEqual(['1', '2']);
     } finally {monitor.close(); await pipeline.stop(); utc.mockRestore(); expect(await client.close()).toEqual({clean: true});}
   });

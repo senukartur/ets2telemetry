@@ -20,7 +20,7 @@ import {
 import {fail} from '../errors';
 import type {StorageConnection} from './connection';
 import {newHardModeDetails, unknownHardMode} from '../../../telemetry-core/src/hard-mode';
-import {applyEventHardMode, checkHardModeObservation, updateOpenHardMode} from './hard-mode';
+import {applyEventHardMode, checkHardModeObservation, recordGapHardMode, updateOpenHardMode} from './hard-mode';
 
 const cache = new WeakMap<Database.Database, Map<string, Database.Statement>>();
 /** Prepared statements are cached per connection; SQL text is always a constant of this module. */
@@ -380,7 +380,8 @@ export function commitGap(conn: StorageConnection, input: {message: unknown; eff
     }
     const now = conn.now(), clock = clockRef(db, session.id, 'source-monotonic', m.capture.clockId);
     if (input.hardModeLoss) updateOpenHardMode(db, session.game, input.hardModeLoss, now, false, 'frozen');
-    updateOpenHardMode(db, session.game, {assessment: unknownHardMode(now, 'interrupted'), diagnostic: 'session-transition', binding: null, pluginSessionId: null, sourceMonotonicNs: null}, now, false, 'frozen');
+    recordGapHardMode(db, m.source.pluginSessionId, now);
+    updateOpenHardMode(db, session.game, {assessment: unknownHardMode(now, 'interrupted'), binding: null, pluginSessionId: null, sourceMonotonicNs: null}, now, false, 'frozen');
     const [firstLost, firstLostState] = availabilityColumns(d.firstLostMonotonicNs, u64Key), [lastLost, lastLostState] = availabilityColumns(d.lastLostMonotonicNs, u64Key);
     statement(db, insert('event_gaps', ['plugin_session_ref', 'first_event_seq', 'last_event_seq', ...CAUSES.map(([, c]) => c), 'first_lost_monotonic_ns', 'first_lost_monotonic_ns_state',
       'last_lost_monotonic_ns', 'last_lost_monotonic_ns_state', 'source_clock_ref', 'redelivered', 'committed_utc_ms']))
