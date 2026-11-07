@@ -477,6 +477,36 @@ describe('ET-015b one-second samples through the trip recorder', () => {
     expect(storage.model.samples.map(row=>row.recording?.previous!==undefined)).toEqual([false,false,true]);
   });
 
+  it('retains the reset reason across a sampled row without recording evidence',async()=>{
+    const storage=new ModelStorage(),recorder=new TripRecorderSink(storage),s=new Script(ETS2_A),context={receivedUtcMs:RECEIVED_UTC};
+    expect((await recorder.openSession(s.welcome())).ok).toBe(true);expect(recorder.observe(s.checkpoint(null),context).ok).toBe(true);
+    expect((await recorder.commit(s.event(r.jobConfigured()),context)).ok).toBe(true);
+    for(const [counter,hasJob] of [['0',true],['1',false],['1',true]] as const){
+      const message=s.snapshot();message.data.continuity.coalescedSnapshots=counter;
+      if(!hasJob)message.data.state.configuration.job={available:false,reason:'not-observed'};
+      expect(recorder.observe(message,context).ok).toBe(true);
+    }
+    expect((await recorder.samples.write(3600,true)).ok).toBe(true);
+    const rows=storage.model.samples;expect(rows.at(-2)?.recording).toBeUndefined();
+    expect(rows.at(-1)?.recording).toMatchObject({predecessorReset:'snapshot-coalesced'});
+  });
+
+  it('labels a trip-boundary predecessor reset separately from a game-clock reset',async()=>{
+    const storage=new ModelStorage(),s=new Script(ETS2_A),context={receivedUtcMs:RECEIVED_UTC};
+    const profile={version:1 as const,scope:'a'.repeat(64),binding:'b'.repeat(64),game:'ets2' as const,pluginSessionId:s.session,processInstanceId:s.welcome().source.processInstanceId,sourceClockId:s.clockId,afterMonotonicNs:'0',loadGeneration:1};
+    const recorder=new TripRecorderSink(storage,{profileEvidence:()=>profile});expect((await recorder.openSession(s.welcome())).ok).toBe(true);
+    expect(recorder.observe(s.checkpoint(null),context).ok).toBe(true);expect((await recorder.commit(s.event(r.jobConfigured()),context)).ok).toBe(true);
+    expect(recorder.observe(s.snapshot({simulation:'paused'}),context).ok).toBe(true);
+    // This unit adapter models lifecycle attaches; isolate the successful metadata/endpoint commit here.
+    const captured=vi.spyOn(storage,'openAttachedTrip').mockResolvedValue({ok:true,value:{status:'committed'}});
+    expect((await recorder.attach.open(context)).ok).toBe(true);expect(captured.mock.calls[0][0]).toMatchObject({endpoint:{simulation:'paused'}});captured.mockRestore();
+    const next=job({cargoId:{available:true,value:'synthetic_next'}});
+    expect((await recorder.commit(s.event(r.jobConfigured(next)),context)).ok).toBe(true);
+    const snapshot=s.snapshot();snapshot.data.state.configuration.job={available:true,value:next};expect(recorder.observe(snapshot,context).ok).toBe(true);
+    expect((await recorder.samples.write(3600,true)).ok).toBe(true);
+    expect(storage.model.samples.at(-1)?.recording).toMatchObject({predecessorReset:'trip-changed'});
+  });
+
   it('S1: a sample names the trip that a committed event earlier in the FIFO opened, and is written with uniqueSeconds (H2, H6, H7, REG-001)', async () => {
     const storage = new ModelStorage(); storage.holdAt = '2';
     const recorder = start(storage); connectLatest();

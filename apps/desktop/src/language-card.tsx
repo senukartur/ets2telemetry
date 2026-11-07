@@ -1,7 +1,6 @@
 import React from 'react';
 import type {AppLanguage, SettingsView} from '../../../packages/contracts/src';
-import {RadioGroup, RadioGroupItem} from '@/components/ui/radio-group';
-import {Label} from '@/components/ui/label';
+import {Select, SelectContent, SelectItem, SelectTrigger, SelectValue} from '@/components/ui/select';
 import {t} from './i18n';
 import {InfoHint} from './info-hint';
 import type {LanguageController} from './shell/use-language';
@@ -15,7 +14,12 @@ export interface LanguageCardProps {
   controller: LanguageController;
 }
 
-/** ET-057: one row of Settings > General > Interface; the note on game-provided names is behind the Info icon. */
+const LANGUAGE_OPTIONS: readonly {value: AppLanguage; labelKey: 'lang.en' | 'lang.ru'}[] = [
+  {value: 'en', labelKey: 'lang.en'},
+  {value: 'ru', labelKey: 'lang.ru'},
+];
+
+/** ET-073: one row of Settings > General > Interface; dropdown Select replaces radio group; the note on game-provided names is behind the Info icon. */
 export function LanguageCard({settings, showSaveError, controller}: LanguageCardProps) {
   const currentLanguage: AppLanguage = settings?.language ?? 'en';
   const {saving, failed: saveFailed, choose: chooseLanguage} = controller;
@@ -23,23 +27,37 @@ export function LanguageCard({settings, showSaveError, controller}: LanguageCard
   return (
     <div data-testid="language-card">
       <div className="yu-setting-row">
-        <span id="language-label">{label}<InfoHint label={t('ui.moreAbout', {v: label}, currentLanguage)}>{t('s.langD', undefined, currentLanguage)}</InfoHint></span>
-        <RadioGroup
-          aria-labelledby="language-label"
-          data-testid="language-radio-group" className="yu-segmented"
-          value={currentLanguage}
+        <span id="language-label">
+          {label}
+          <InfoHint label={t('ui.moreAbout', {v: label}, currentLanguage)}>
+            {t('s.langD', undefined, currentLanguage)}
+          </InfoHint>
+        </span>
+        <Select
           disabled={!settings?.writable || saving}
+          value={currentLanguage}
           onValueChange={chooseLanguage}
         >
-          <div className="yu-segment-option">
-            <RadioGroupItem value="en" id="language-en" />
-            <Label htmlFor="language-en">{t('lang.en', undefined, currentLanguage)}</Label>
-          </div>
-          <div className="yu-segment-option">
-            <RadioGroupItem value="ru" id="language-ru" />
-            <Label htmlFor="language-ru">{t('lang.ru', undefined, currentLanguage)}</Label>
-          </div>
-        </RadioGroup>
+          <SelectTrigger
+            aria-labelledby="language-label"
+            data-testid="language-select"
+            data-value={currentLanguage}
+            className="w-[180px]"
+          >
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            {LANGUAGE_OPTIONS.map(opt => (
+              <SelectItem
+                key={opt.value}
+                value={opt.value}
+                data-testid={`language-option-${opt.value}`}
+              >
+                {t(opt.labelKey, undefined, currentLanguage)}
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
       </div>
       {showSaveError && settings?.saveError ? (
         <p role="status" className="text-sm text-destructive" data-testid="language-save-error">

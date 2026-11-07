@@ -1318,7 +1318,7 @@ export async function runUiReadOnly({application, dashboard, config, record, set
   for (const size of sizes) {
     await resize(dashboard, size);
     await settingsPanel(dashboard, 'general');
-    assert.equal(await dashboard.locator('#language-ru').isDisabled(), true);
+    assert.equal(await dashboard.getByTestId('language-select').isDisabled(), true);
     await settingsPanel(dashboard, 'general');
     for (const game of ['ets2', 'ats']) for (const profile of ['metric', 'us-customary']) assert.equal(await dashboard.locator(`#units-${game}-${profile}`).isDisabled(), true);
     // ET-050: all four gear display radios are disabled while the settings are read-only.

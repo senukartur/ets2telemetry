@@ -306,7 +306,7 @@ The dashboard's **General** settings panel includes an **Autostart** card with a
 
 ## Language card (ET-029)
 
-The dashboard includes a standalone **Language** card (Option B, before the full Yukon Union multi-page navigation is introduced) with a radio group for English (`en`) and Russian (`ru`). Changing the language calls `setLanguage(language)` over the bridge, saves format v6 settings to disk, and pushes the updated `language` to both the dashboard renderer and the transparent overlay without restart. The notification area tray model also reflects the chosen language.
+The dashboard includes a standalone **Language** card (Option B, before the full Yukon Union multi-page navigation is introduced) with a dropdown select for English (`en`) and Russian (`ru`). Changing the language calls `setLanguage(language)` over the bridge, saves format v6 settings to disk, and pushes the updated `language` to both the dashboard renderer and the transparent overlay without restart. The notification area tray model also reflects the chosen language.
 
 ## Diagnostics
 

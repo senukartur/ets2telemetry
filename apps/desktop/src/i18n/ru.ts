@@ -274,6 +274,8 @@ export const RU_DICTIONARY: TranslationDictionary = channelCopyTable(Object.free
   "copy.discontinuity": "Разрыв",
   "copy.restored-database": "Восстановленная база данных",
   "copy.opened-while-a-save-was-loading": "открыт при загрузке сохранения",
+  "copy.accounting-chain-break": "расчёт пробега или топлива прерван",
+  "copy.menu-job-acceptance": "первый заказ взят после наблюдаемого пустого меню",
   "copy.recording-started-during-the-job": "запись началась во время заказа",
   "copy.job-began-before-recording": "заказ начался до записи",
   "copy.continues-a-trip-closed-by-a-restart": "продолжает рейс, закрытый при перезапуске",
