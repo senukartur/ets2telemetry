@@ -226,8 +226,9 @@ it('uses the API for signed physical bounds, stays bounded in client DIP bounds 
   overlay.update(current); expect(window.showInactive).not.toHaveBeenCalled(); overlay.loaded(true);
   expect(screen.screenToDipRect).toHaveBeenCalledWith(null, {x: -1920, y: 0, width: 1920, height: 1080});
   // ET-012a: the default strip layout replaces ET-008's fixed 300 x 132 box at the top left (decision L10). ET-045e: at
-  // the setting 1 (zoom 0.7) the 928 DIP strip has CSS width 1325 and reserves three rows, ceil(114 × 0.7 + 2) = 82.
-  expect(window.setBounds).toHaveBeenCalledWith({x: -944, y: 8, width: 928, height: 82});
+  // the setting 1 (zoom 0.7) the 928 DIP strip has CSS width 1325 and reserves three rows, ceil(114 × 0.7 + 2) = 82; ET-071's
+  // cruise control makes it four, ceil(152 × 0.7 + 2) = 109.
+  expect(window.setBounds).toHaveBeenCalledWith({x: -944, y: 8, width: 928, height: 109});
   expect(window.showInactive).toHaveBeenCalledOnce(); overlay.update(current);
   expect(window.showInactive).toHaveBeenCalledOnce(); expect(window.setBounds).toHaveBeenCalledOnce(); expect(screen.screenToDipRect).toHaveBeenCalledOnce();
 });
@@ -296,11 +297,14 @@ it('keeps metric without a game and the fixture game profile for synthetic sourc
 // DIP the break joins game time's row (748 + 164 = 912 of 1298).
 // ET-070 (the fixed Hard Mode row adds one more to each): the card is 210 × 303, the cluster 308 × 217 with its top at
 // 16 + (540 − 32 − 217) = 307, and the HUD 224 × 282. The strip stays 82: the indicator follows the break (912 + 114 = 1026).
+// ET-071 (cruise control, a sixteenth section, adds one more row to each and a 140 CSS px strip item): the card is 210 × 320,
+// the cluster 308 × 232 with its top at 16 + (540 − 32 − 232) = 292, and the HUD 224 × 299. The strip's rows (inner 1298)
+// now end at range (1120), destination (1172) and the break (1240), so the indicator takes a fourth: ceil(152 × 0.7 + 2) = 109.
 it.each([
-  {layout: 'strip' as const, bounds: {x: -944, y: 8, width: 928, height: 82}},
-  {layout: 'card' as const, bounds: {x: -226, y: 16, width: 210, height: 303}},
-  {layout: 'cluster' as const, bounds: {x: -944, y: 307, width: 308, height: 217}},
-  {layout: 'hud' as const, bounds: {x: -944, y: 16, width: 224, height: 282}}
+  {layout: 'strip' as const, bounds: {x: -944, y: 8, width: 928, height: 109}},
+  {layout: 'card' as const, bounds: {x: -226, y: 16, width: 210, height: 320}},
+  {layout: 'cluster' as const, bounds: {x: -944, y: 292, width: 308, height: 232}},
+  {layout: 'hud' as const, bounds: {x: -944, y: 16, width: 224, height: 299}}
 ])('places the $layout layout at its own anchor and shows it without focus', ({layout, bounds}) => {
   const {window, overlay} = controller(layout); overlay.loaded(true); overlay.update(live());
   expect(window.setBounds.mock.calls).toEqual([[bounds]]); raisedAfterShow(window); noActivation(window);
@@ -309,7 +313,7 @@ it('re-places a visible overlay for a new layout and re-asserts topmost without 
   const {window, screen, overlay} = controller(); overlay.loaded(true); overlay.update(live());
   window.setAlwaysOnTop.mockClear(); window.moveTop.mockClear();
   overlay.setLayout('card');
-  expect(window.setBounds.mock.calls).toEqual([[{x: -944, y: 8, width: 928, height: 82}], [{x: -226, y: 16, width: 210, height: 303}]]);
+  expect(window.setBounds.mock.calls).toEqual([[{x: -944, y: 8, width: 928, height: 109}], [{x: -226, y: 16, width: 210, height: 320}]]);
   expect(window.setAlwaysOnTop.mock.calls).toEqual([[true, 'screen-saver']]); expect(window.moveTop).toHaveBeenCalledOnce();
   expect(window.setBounds.mock.invocationCallOrder[1]).toBeLessThan(window.setAlwaysOnTop.mock.invocationCallOrder[0]);
   expect(window.showInactive).toHaveBeenCalledOnce(); expect(screen.screenToDipRect).toHaveBeenCalledTimes(2); noActivation(window);
@@ -327,8 +331,8 @@ it('never shows or raises a hidden overlay when the layout changes', () => {
   expect(window.setBounds).not.toHaveBeenCalled(); expect(window.hide).not.toHaveBeenCalled();
 });
 it('hides when the chosen layout does not fit the client area and shows again when one fits', () => {
-  // 1920 x 540 physical is 960 x 270 DIP: the strip (98 DIP) and cluster (ET-070: 249 DIP) fit; the card (335 DIP) and HUD
-  // (314 DIP) do not with every section. The cluster's top is 16 + (270 − 32 − 217) = 37.
+  // 1920 x 540 physical is 960 x 270 DIP: the strip (ET-071: 125 DIP) and cluster (ET-071: 264 DIP) fit; the card (352 DIP)
+  // and HUD (331 DIP) do not with every section. The cluster's top is 16 + (270 − 32 − 232) = 22.
   const {window, overlay} = controller(), current = live();
   const metadata = current.observation!.state.window;
   if (!metadata.available) throw new Error('Expected metadata');
@@ -338,7 +342,7 @@ it('hides when the chosen layout does not fit the client area and shows again wh
   overlay.update(current); expect(window.showInactive).toHaveBeenCalledOnce();
   overlay.setLayout('hud'); expect(window.showInactive).toHaveBeenCalledOnce();
   overlay.setLayout('cluster');
-  expect(window.setBounds).toHaveBeenLastCalledWith({x: -944, y: 37, width: 308, height: 217});
+  expect(window.setBounds).toHaveBeenLastCalledWith({x: -944, y: 22, width: 308, height: 232});
   expect(window.showInactive).toHaveBeenCalledTimes(2); raisedAfterShow(window); noActivation(window);
 });
 
@@ -346,7 +350,8 @@ it('hides when the chosen layout does not fit the client area and shows again wh
 // sets SetSkipTaskbar(!focusable). The game client is 1920 x 1080 physical at (-1920, 0), which the half-scale screen
 // converts to 960 x 540 DIP at (-960, 0): the cluster's free space with every section is 620 x 305 DIP at the setting 1
 // (ET-052: 308 x 203 with the fifteenth section; ET-045e's 308 x 188 left 620 x 320 and ET-012d's 440 x 267 left 488 x 241).
-// ET-070: the Hard Mode row makes the cluster 308 x 217, which leaves 620 x 291.
+// ET-070: the Hard Mode row makes the cluster 308 x 217, which leaves 620 x 291. ET-071: cruise control makes it 308 x 232,
+// which leaves 620 x 276.
 function trackedController(layout: OverlayLayout = 'cluster', placement?: OverlayPlacement, sections?: OverlaySections) {
   const state = {visible: false, ignoreMouse: true, focusable: false, movable: false, skipTaskbar: true, topmost: true};
   const calls: string[] = [];
@@ -427,7 +432,7 @@ it('makes the edit overlay interactive before an inactive show and raises it aft
     'setAlwaysOnTop', 'moveTop']);
   expect(sequence.every(index => index >= 0)).toBe(true);
   expect([...sequence].sort((left, right) => left - right)).toEqual(sequence);
-  expect(window.setBounds).toHaveBeenLastCalledWith({x: -944, y: 307, width: 308, height: 217});
+  expect(window.setBounds).toHaveBeenLastCalledWith({x: -944, y: 292, width: 308, height: 232});
   expect(window.show).not.toHaveBeenCalled(); expect(window.focus).not.toHaveBeenCalled();
   assertInvariant(tracked, true);
 });
@@ -508,34 +513,34 @@ it('keeps the REG-016 invariant after every step of a deterministic driving and 
 it('does not move the window while it is dragged and snaps a drop past the edges inside the client area', () => {
   const tracked = trackedController('cluster', {x: 0.5, y: 0.5, scale: 1}), {overlay, window} = tracked;
   editing(tracked);
-  // x = −960 + 16 + 310 = −634, y = round(16 + 145.5) = 162 (ET-070: free height 540 − 32 − 217 = 291).
-  expect(window.setBounds).toHaveBeenLastCalledWith({x: -634, y: 162, width: 308, height: 217});
+  // x = −960 + 16 + 310 = −634, y = 16 + 138 = 154 (ET-071: free height 540 − 32 − 232 = 276).
+  expect(window.setBounds).toHaveBeenLastCalledWith({x: -634, y: 154, width: 308, height: 232});
   overlay.moveStarted(); window.setBounds.mockClear();
   // The game window moves while the user drags: nothing is placed until the drag ends.
   tracked.metadata.x += 200; overlay.update(tracked.current); tracked.metadata.x -= 200; overlay.update(tracked.current);
   expect(window.setBounds).not.toHaveBeenCalled();
-  overlay.moved({x: -2000, y: 9999, width: 308, height: 217});
-  expect(window.setBounds.mock.calls).toEqual([[{x: -944, y: 307, width: 308, height: 217}]]);
+  overlay.moved({x: -2000, y: 9999, width: 308, height: 232});
+  expect(window.setBounds.mock.calls).toEqual([[{x: -944, y: 292, width: 308, height: 232}]]);
   expect(overlay.endEdit()).toEqual({x: 0, y: 1, scale: 1});
 });
 it('keeps a drop inside the client area where it was dropped', () => {
   const tracked = trackedController('cluster', {x: 0.5, y: 0.5, scale: 1}), {overlay, window} = tracked;
   editing(tracked); overlay.moveStarted(); window.setBounds.mockClear();
   // The native drag moved the window itself (ET-045c: the controller verifies against its actual bounds).
-  window.bounds = {x: -600, y: 200, width: 308, height: 217}; overlay.moved({x: -600, y: 200, width: 308, height: 217});
-  // (-600 + 944) / 620 = 0.55484 and (ET-070) (200 - 16) / 291 = 0.63230, rounded to four decimals; the window stays where it was dropped.
+  window.bounds = {x: -600, y: 200, width: 308, height: 232}; overlay.moved({x: -600, y: 200, width: 308, height: 232});
+  // (-600 + 944) / 620 = 0.55484 and (ET-071) (200 - 16) / 276 = 0.66667, rounded to four decimals; the window stays where it was dropped.
   expect(window.setBounds).not.toHaveBeenCalled();
-  expect(overlay.endEdit()).toEqual({x: 0.5548, y: 0.6323, scale: 1});
+  expect(overlay.endEdit()).toEqual({x: 0.5548, y: 0.6667, scale: 1});
 });
 it('applies the edited scale as zoom factor and size, and reports a scale that does not fit as too large', () => {
   const tracked = trackedController('cluster', {x: 0.5, y: 0.5, scale: 1}), {overlay, window} = tracked;
   editing(tracked); tracked.calls.length = 0;
   expect(overlay.setEditScale(1.5)).toEqual({active: true, layout: 'cluster', scale: 1.5, placement: 'visible'});
-  // ET-045e: the setting 1.5 is zoom 1.05. With every section 462 x 325 (ET-070: ceil(307 × 1.05 + 2.1) = ceil(324.45); 303
-  // with ET-052's fifteen sections) leaves 466 x 183 DIP of free space: x = −960 + 16 + 233 = −711, y = round(16 + 91.5) = 108.
-  expect(window.setBounds).toHaveBeenLastCalledWith({x: -711, y: 108, width: 462, height: 325});
+  // ET-045e: the setting 1.5 is zoom 1.05. With every section 462 x 347 (ET-071: ceil(328 × 1.05 + 2.1) = ceil(346.5); 325
+  // with ET-070's fifteen sections) leaves 466 x 161 DIP of free space: x = −960 + 16 + 233 = −711, y = round(16 + 80.5) = 97.
+  expect(window.setBounds).toHaveBeenLastCalledWith({x: -711, y: 97, width: 462, height: 347});
   expect(tracked.calls.indexOf('zoom(1.05)')).toBeLessThan(tracked.calls.indexOf('setBounds'));
-  // A 300 DIP high client area has no room for 325 + 32.
+  // A 300 DIP high client area has no room for 347 + 32.
   tracked.metadata.height = 600; overlay.update(tracked.current);
   expect(overlay.editState()).toEqual({active: true, layout: 'cluster', scale: 1.5, placement: 'too-large'});
   expect(tracked.state.visible).toBe(false); assertInvariant(tracked, true);
@@ -549,14 +554,15 @@ it('applies the edited scale as zoom factor and size, and reports a scale that d
 });
 it('applies the zoom of the 50% and 300% settings while editing', () => {
   const tracked = trackedController('card', {x: 0, y: 0, scale: 1}), {overlay, window} = tracked;
-  // A 2560 x 2000 physical client is 1280 x 1000 DIP at (-960, 0): the card at 3 (ET-070: 630 × 908) leaves 618 x 60 free.
+  // A 2560 x 2000 physical client is 1280 x 1000 DIP at (-960, 0): the card at 3 (ET-071: 630 × 958) leaves 618 x 10 free.
   tracked.metadata.width = 2560; tracked.metadata.height = 2000; editing(tracked);
   expect(overlay.setEditScale(3)).toEqual({active: true, layout: 'card', scale: 3, placement: 'visible'});
   expect(window.webContents.setZoomFactor.mock.lastCall).toEqual([2.1]);
-  expect(window.setBounds).toHaveBeenLastCalledWith({x: -944, y: 16, width: 630, height: 908});
+  expect(window.setBounds).toHaveBeenLastCalledWith({x: -944, y: 16, width: 630, height: 958});
   expect(overlay.setEditScale(0.5)).toEqual({active: true, layout: 'card', scale: 0.5, placement: 'visible'});
   expect(window.webContents.setZoomFactor.mock.lastCall).toEqual([0.35]);
-  expect(window.setBounds).toHaveBeenLastCalledWith({x: -944, y: 16, width: 105, height: 153});
+  // ET-071: at 0.5 the card is ceil(454 × 0.35 + 2) = ceil(160.9) = 161 high.
+  expect(window.setBounds).toHaveBeenLastCalledWith({x: -944, y: 16, width: 105, height: 161});
   expect(overlay.endEdit()).toEqual({x: 0, y: 0, scale: 0.5});
   expect(window.webContents.setZoomFactor.mock.lastCall).toEqual([0.7]);
 });
@@ -573,7 +579,7 @@ it('re-places a visible driving overlay for a new saved placement and scale of t
   overlay.loaded(true); overlay.update(tracked.current); tracked.calls.length = 0;
   overlay.setLayout('cluster', {x: 0.5, y: 0.5, scale: 1.5});
   expect(tracked.calls).toEqual(['zoom(1.05)', 'setBounds', 'setAlwaysOnTop', 'moveTop']);
-  expect(window.setBounds).toHaveBeenLastCalledWith({x: -711, y: 108, width: 462, height: 325});
+  expect(window.setBounds).toHaveBeenLastCalledWith({x: -711, y: 97, width: 462, height: 347});
   overlay.setLayout('cluster', {x: 0.5, y: 0.5, scale: 1.5}); expect(tracked.calls).toHaveLength(4);
   expect(window.showInactive).toHaveBeenCalledOnce(); assertInvariant(tracked, false);
   for (const method of [window.setFocusable, window.setIgnoreMouseEvents, window.setSkipTaskbar, window.setMovable]) expect(method).not.toHaveBeenCalled();
@@ -588,31 +594,32 @@ it('keeps the draft while a saved placement arrives during editing, and cancels 
 });
 it('places a restarted overlay at its saved non-default placement in driving mode without changing the zoom it was created with', () => {
   // As after a restart: the window was created at the saved setting 1.5, whose zoom is 1.05 (ET-045e). The cluster with
-  // every section is then 462 x 325 DIP (ET-070; 303 with ET-052's fifteen sections); the 960 x 540 client leaves
-  // 960 - 32 - 462 = 466 by 540 - 32 - 325 = 183 DIP free, and half of each is 233 and 91.5: x = -960 + 16 + 233 = -711 and
-  // y = round(16 + 91.5) = 108.
+  // every section is then 462 x 347 DIP (ET-071; 325 with ET-070's fifteen sections); the 960 x 540 client leaves
+  // 960 - 32 - 462 = 466 by 540 - 32 - 347 = 161 DIP free, and half of each is 233 and 80.5: x = -960 + 16 + 233 = -711 and
+  // y = round(16 + 80.5) = 97.
   const tracked = trackedController('cluster', {x: 0.5, y: 0.5, scale: 1.5}), {overlay, window} = tracked;
   overlay.loaded(true); overlay.update(tracked.current);
-  expect(window.setBounds.mock.calls).toEqual([[{x: -711, y: 108, width: 462, height: 325}]]);
+  expect(window.setBounds.mock.calls).toEqual([[{x: -711, y: 97, width: 462, height: 347}]]);
   expect(window.showInactive).toHaveBeenCalledOnce(); assertInvariant(tracked, false);
   expect(window.webContents.setZoomFactor).not.toHaveBeenCalled();
   // A reloaded document gets the saved zoom again; the default placement returns the zoom to 0.7.
   overlay.restoreZoom(); expect(window.webContents.setZoomFactor.mock.calls).toEqual([[1.05]]);
   overlay.setLayout('cluster');
   expect(window.webContents.setZoomFactor.mock.calls).toEqual([[1.05], [0.7]]);
-  expect(window.setBounds).toHaveBeenLastCalledWith({x: -944, y: 307, width: 308, height: 217});
+  expect(window.setBounds).toHaveBeenLastCalledWith({x: -944, y: 292, width: 308, height: 232});
 });
 
 // ET-012c (decision S7): the strip reserves rows for the saved sections, so a sections save can change its height. The
 // expected rectangles are hand-computed at the setting 1 (zoom 0.7, ET-045e): in the 960 x 540 DIP client the strip is 928
 // wide at CSS width 1325 (inner 1298), three rows (ceil(114 × 0.7 + 2) = 82) with every section and one
-// (ceil(26.6 + 2) = 29) with driving-only.
+// (ceil(26.6 + 2) = 29) with driving-only. ET-071: every section is four rows (ceil(152 × 0.7 + 2) = 109) and driving-only,
+// with cruise control, still one (1234 of 1298).
 it('re-places a visible strip for saved sections once, raising it without showing or focusing it again', () => {
   const {window, screen, overlay} = controller(); overlay.loaded(true); overlay.update(live());
-  expect(window.setBounds.mock.calls).toEqual([[{x: -944, y: 8, width: 928, height: 82}]]);
+  expect(window.setBounds.mock.calls).toEqual([[{x: -944, y: 8, width: 928, height: 109}]]);
   window.setAlwaysOnTop.mockClear(); window.moveTop.mockClear();
   overlay.setLayout('strip', DEFAULT_OVERLAY_PLACEMENTS.strip, OVERLAY_PRESETS['driving-only']);
-  expect(window.setBounds.mock.calls).toEqual([[{x: -944, y: 8, width: 928, height: 82}], [{x: -944, y: 8, width: 928, height: 29}]]);
+  expect(window.setBounds.mock.calls).toEqual([[{x: -944, y: 8, width: 928, height: 109}], [{x: -944, y: 8, width: 928, height: 29}]]);
   expect(window.setAlwaysOnTop.mock.calls).toEqual([[true, 'screen-saver']]); expect(window.moveTop).toHaveBeenCalledOnce();
   expect(window.setBounds.mock.invocationCallOrder[1]).toBeLessThan(window.setAlwaysOnTop.mock.invocationCallOrder[0]);
   expect(window.setAlwaysOnTop.mock.invocationCallOrder[0]).toBeLessThan(window.moveTop.mock.invocationCallOrder[0]);
@@ -627,11 +634,16 @@ it('neither moves nor raises a visible strip when saved sections keep its reserv
   // cargo would give two, so the case uses the default 928 DIP strip (inner 1298), where every section reserves three rows
   // (ceil(114 × 0.7 + 2) = 82) and so does the set without RPM and cargo: the first row ends at the SDK mean (1066), the second
   // at the deadline (1176; income would reach 1490), the third holds income, game time and the break (678).
+  // ET-071: every section is four rows at 928 DIP with the indicator alone on the fourth, so removing any section gives
+  // three; the case starts from ET-070's fifteen sections (cruise control off), three rows (1210, 1256, 1026), and removes
+  // RPM and cargo from them as before (1066, 1176, 792).
   const {window, overlay} = controller(), current = live();
+  const withoutCruise = {...DEFAULT_OVERLAY_SECTIONS, 'cruise-control': false};
+  overlay.setLayout('strip', DEFAULT_OVERLAY_PLACEMENTS.strip, withoutCruise);
   overlay.loaded(true); overlay.update(current);
   expect(window.setBounds.mock.calls).toEqual([[{x: -944, y: 8, width: 928, height: 82}]]);
   window.setAlwaysOnTop.mockClear(); window.moveTop.mockClear();
-  overlay.setLayout('strip', DEFAULT_OVERLAY_PLACEMENTS.strip, {...DEFAULT_OVERLAY_SECTIONS, rpm: false, cargo: false});
+  overlay.setLayout('strip', DEFAULT_OVERLAY_PLACEMENTS.strip, {...withoutCruise, rpm: false, cargo: false});
   expect(window.setBounds).toHaveBeenCalledOnce(); expect(window.setAlwaysOnTop).not.toHaveBeenCalled(); expect(window.moveTop).not.toHaveBeenCalled();
   expect(window.showInactive).toHaveBeenCalledOnce(); noActivation(window);
 });
@@ -663,21 +675,21 @@ it('keeps the strip rectangle while only the values change', () => {
 it('re-sizes the edit strip for saved sections from the unchanged draft fractions', () => {
   const tracked = trackedController('strip'), {overlay, window} = tracked;
   editing(tracked);
-  expect(window.setBounds).toHaveBeenLastCalledWith({x: -944, y: 8, width: 928, height: 82});
-  // A drop at y 100: free height 540 − 16 − 82 = 442; 92 / 442 = 0.208145… normalizes to 0.2081 (four decimals).
-  // There is no free width, so the draft retains x = 0.5.
-  overlay.moveStarted(); overlay.moved({x: -944, y: 100, width: 928, height: 82});
+  expect(window.setBounds).toHaveBeenLastCalledWith({x: -944, y: 8, width: 928, height: 109});
+  // A drop at y 100: free height 540 − 16 − 109 = 415 (ET-071; 442 with three rows); 92 / 415 = 0.221686… normalizes to
+  // 0.2217 (four decimals). There is no free width, so the draft retains x = 0.5.
+  overlay.moveStarted(); overlay.moved({x: -944, y: 100, width: 928, height: 109});
   window.setBounds.mockClear(); tracked.calls.length = 0;
   overlay.setLayout('strip', DEFAULT_OVERLAY_PLACEMENTS.strip, OVERLAY_PRESETS['driving-only']);
-  // Driving-only: free height 540 − 16 − 29 = 495, y = round(8 + 0.2081 × 495) = round(111.01) = 111.
-  expect(window.setBounds.mock.calls).toEqual([[{x: -944, y: 111, width: 928, height: 29}]]);
+  // Driving-only: free height 540 − 16 − 29 = 495, y = round(8 + 0.2217 × 495) = round(117.74) = 118.
+  expect(window.setBounds.mock.calls).toEqual([[{x: -944, y: 118, width: 928, height: 29}]]);
   expect(tracked.calls).toEqual(['setBounds', 'setAlwaysOnTop', 'moveTop']);
   expect(overlay.editState()).toEqual({active: true, layout: 'strip', scale: 1, placement: 'visible'});
   assertInvariant(tracked, true);
-  expect(overlay.endEdit()).toEqual({x: 0.5, y: 0.2081, scale: 1});
+  expect(overlay.endEdit()).toEqual({x: 0.5, y: 0.2217, scale: 1});
 });
 it('reports an edit strip that no longer fits its saved sections as too large and hides it before click-through', () => {
-  // A 1920 x 160 physical client is 960 x 80 DIP: driving-only needs 29 + 16 = 45, every section 82 + 16 = 98.
+  // A 1920 x 160 physical client is 960 x 80 DIP: driving-only needs 29 + 16 = 45, every section (ET-071) 109 + 16 = 125.
   const tracked = trackedController('strip', undefined, OVERLAY_PRESETS['driving-only']), {overlay, window} = tracked;
   tracked.metadata.height = 160; editing(tracked);
   expect(window.setBounds).toHaveBeenLastCalledWith({x: -944, y: 8, width: 928, height: 29});
@@ -690,16 +702,16 @@ it('reports an edit strip that no longer fits its saved sections as too large an
 
 // ET-012d (decisions K4 and K9): the card, cluster and HUD reserve rows for the saved sections, so a sections save can
 // change their height through the unchanged controller path. Hand-computed in the 960 x 540 DIP client at (-960, 0) at
-// the setting 1 (zoom 0.7, ET-045e): the card is 210 wide and 303 high with every section and the Hard Mode row (ET-070:
-// ceil(430 × 0.7 + 2); 287 with ET-052's fifteen sections alone) and 252 (its nominal floor round(360 × 0.7)) with
-// driving-only or job-focus; the cluster is 308 wide and 217 high with every section (ceil(307 × 0.7 + 2) = ceil(216.9)) at
-// y = 16 + (540 − 32 − 217) = 307, and 154 with driving-only at y = 16 + (540 − 32 − 154) = 370.
+// the setting 1 (zoom 0.7, ET-045e): the card is 210 wide and 320 high with every section, cruise control and the Hard
+// Mode row (ET-071: ceil(454 × 0.7 + 2); 303 with ET-070's fifteen sections) and 252 (its nominal floor round(360 × 0.7))
+// with driving-only or job-focus; the cluster is 308 wide and 232 high with every section (ceil(328 × 0.7 + 2) =
+// ceil(231.6)) at y = 16 + (540 − 32 − 232) = 292, and 154 with driving-only at y = 16 + (540 − 32 − 154) = 370.
 it('re-places a visible card for saved sections once, raising it without showing or focusing it again', () => {
   const {window, overlay} = controller('card'); overlay.loaded(true); overlay.update(live());
-  expect(window.setBounds.mock.calls).toEqual([[{x: -226, y: 16, width: 210, height: 303}]]);
+  expect(window.setBounds.mock.calls).toEqual([[{x: -226, y: 16, width: 210, height: 320}]]);
   window.setAlwaysOnTop.mockClear(); window.moveTop.mockClear();
   overlay.setLayout('card', DEFAULT_OVERLAY_PLACEMENTS.card, OVERLAY_PRESETS['driving-only']);
-  expect(window.setBounds.mock.calls).toEqual([[{x: -226, y: 16, width: 210, height: 303}], [{x: -226, y: 16, width: 210, height: 252}]]);
+  expect(window.setBounds.mock.calls).toEqual([[{x: -226, y: 16, width: 210, height: 320}], [{x: -226, y: 16, width: 210, height: 252}]]);
   expect(window.setAlwaysOnTop.mock.calls).toEqual([[true, 'screen-saver']]); expect(window.moveTop).toHaveBeenCalledOnce();
   expect(window.setBounds.mock.invocationCallOrder[1]).toBeLessThan(window.setAlwaysOnTop.mock.invocationCallOrder[0]);
   expect(window.setAlwaysOnTop.mock.invocationCallOrder[0]).toBeLessThan(window.moveTop.mock.invocationCallOrder[0]);
@@ -721,7 +733,7 @@ it('never shows, raises or moves a hidden card when the saved sections change', 
 });
 it('moves the top edge of a bottom-anchored cluster when saved sections change its height', () => {
   const {window, overlay} = controller('cluster'); overlay.loaded(true); overlay.update(live());
-  expect(window.setBounds.mock.calls).toEqual([[{x: -944, y: 307, width: 308, height: 217}]]);
+  expect(window.setBounds.mock.calls).toEqual([[{x: -944, y: 292, width: 308, height: 232}]]);
   window.setAlwaysOnTop.mockClear(); window.moveTop.mockClear();
   overlay.setLayout('cluster', DEFAULT_OVERLAY_PLACEMENTS.cluster, OVERLAY_PRESETS['driving-only']);
   expect(window.setBounds).toHaveBeenLastCalledWith({x: -944, y: 370, width: 308, height: 154});

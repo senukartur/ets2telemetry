@@ -72,10 +72,11 @@ export const UI_CASES = ['shell', 'live', 'journal', 'settings', 'overlay'];
 const sizes = [{width: 1280, height: 800}, {width: 1100, height: 720}];
 const panels = ['general', 'overlay', 'plugin', 'about', 'data'];
 const layouts = ['strip', 'card', 'cluster', 'hud'];
-// ET-070: the reserved windows at zoom 1 for fifteen sections and the fixed Hard Mode row: the strip is still three rows at
-// 1280 CSS px (116; the indicator ends the third row at 1190 of 1254), the card 48 + 24 × 16 = 432, the cluster's panel
-// 36 + 21 × 13 = 309 and the HUD 18 + 24 × 16 = 402 (ET-052's 408, 288 and 378 without the row).
-const dimensions = {strip: {width: 1280, height: 116}, card: {width: 300, height: 432}, cluster: {width: 440, height: 309}, hud: {width: 320, height: 402}};
+// ET-071: the reserved windows at zoom 1 for sixteen sections and ET-070's fixed Hard Mode row: the strip is four rows at
+// 1280 CSS px (38 × 4 + 2 = 154; inner 1254: the rows end at range 1120, destination 1172 and the break 1240, and the
+// indicator, 1240 + 114 = 1354, starts the fourth), the card 48 + 24 × 17 = 456, the cluster's panel 36 + 21 × 14 = 330
+// and the HUD 18 + 24 × 17 = 426 (ET-070's 116, 432, 309 and 402 without cruise control).
+const dimensions = {strip: {width: 1280, height: 154}, card: {width: 300, height: 456}, cluster: {width: 440, height: 330}, hud: {width: 320, height: 426}};
 const waitState = (page, state) => until(() => page.getByTestId('telemetry-status').innerText(), value => value.startsWith(`${state}:`), `UI_LIVE_${state}`, 5000);
 /** Navigation and a source resume do not establish freshness. Capture all current instrument assertions in one DOM observation. */
 async function waitLiveInstrument(page, language) {
@@ -136,9 +137,9 @@ function cssDisplayGeometry() {
 // the 100% ones; the probes restore the layout loop's own frame (`dimensions` at zoom 1) afterwards.
 const SPEED_UNITS = {en: ['km/h', 'mph'], ru: ['км/ч', 'миль/ч']}, RPM_UNIT = {en: 'rpm', ru: 'об/мин'};
 const STRIP_FRAMES = [{zoom: 0.7, width: 1280, height: 80}, {zoom: 0.35, width: 640, height: 60}, {zoom: 2.1, width: 1000, height: 720}];
-// ET-070: the 100% and 300% frames are the product windows with fifteen sections and the Hard Mode row, 308 × 217
-// (ceil(307 × 0.7 + 2)) and 924 × 649 (ceil(307 × 2.1 + 4.2)); ET-052's 203 and 605 without the row.
-const CLUSTER_FRAMES = [{zoom: 0.35, width: 160, height: 100}, {zoom: 0.7, width: 308, height: 217}, {zoom: 2.1, width: 924, height: 649}];
+// ET-071: the 100% and 300% frames are the product windows with sixteen sections and the Hard Mode row, 308 × 232
+// (ceil(328 × 0.7 + 2)) and 924 × 693 (ceil(328 × 2.1 + 4.2)); ET-070's 217 and 649 without cruise control.
+const CLUSTER_FRAMES = [{zoom: 0.35, width: 160, height: 100}, {zoom: 0.7, width: 308, height: 232}, {zoom: 2.1, width: 924, height: 693}];
 function stripSteps(speedUnit, rpmUnit) {
   return [{speed: '0', speedUnit, gear: 'N', rpm: '0', rpmUnit}, ...['9', '10', '99', '100', '-5', '—'].map(speed => ({speed})),
     // Exercise every digit at the reserve's full length with the actual bundled face, including 888 and 1111.
@@ -543,7 +544,7 @@ async function observeUnifiedOverlay({application, dashboard, language, size, re
   const visible = await dashboard.getByTestId('overlay-settings').evaluate(card => {
     const ids = ['overlay-enabled', 'overlay-layout', 'overlay-placement', 'overlay-presets', 'overlay-sections'];
     return ids.every(id => card.querySelector(`[data-testid="${id}"]`)?.checkVisibility()) &&
-      card.querySelectorAll('[data-testid^="overlay-switch-"]').length === 15 &&
+      card.querySelectorAll('[data-testid^="overlay-switch-"]').length === 16 &&
       [...card.querySelectorAll('[data-testid^="overlay-switch-"]')].every(node => node.checkVisibility());
   });
   assert.equal(visible, true, 'UI_OVERLAY_UNIFIED_CONTROLS');
@@ -928,7 +929,7 @@ export async function runUiSmoke({application, dashboard, overlay, source, sourc
         if (language === 'en' && size.width === 1280) await observeOverlayEditing({dashboard, config, record});
         // ET-045e: after ET-048's editing check, which may have saved another scale.
         if (size === sizes[0]) await observeScaleControl({dashboard, config, language, record});
-        assert.equal(await dashboard.locator('[data-testid^="overlay-switch-"]').count(), 15);
+        assert.equal(await dashboard.locator('[data-testid^="overlay-switch-"]').count(), 16);
         await dashboard.getByTestId('overlay-preset-driving-only').focus(); await dashboard.keyboard.press('Enter');
         await until(() => dashboard.evaluate(() => globalThis.desktop.getAppState()), state => !state.settings.overlay.sections.cargo, 'UI_SECTIONS_SAVED');
         const navigationBytes = await readFile(path.join(smokeDataRoot(config), 'settings', 'settings.json'));
@@ -1322,7 +1323,7 @@ export async function runUiReadOnly({application, dashboard, config, record, set
     await waitOverlayVisibility(dashboard, {enabled: true, writable: false}, 'UI_OVERLAY_READ_ONLY_RENDERED');
     for (const layout of layouts) assert.equal(await dashboard.locator(`#overlay-layout-${layout}`).isDisabled(), true);
     assert.equal(await dashboard.getByTestId('overlay-edit-start').isDisabled(), true);
-    assert.equal(await dashboard.locator('[data-testid^="overlay-switch-"]:disabled').count(), 15);
+    assert.equal(await dashboard.locator('[data-testid^="overlay-switch-"]:disabled').count(), 16);
     assert.equal(await dashboard.locator('[data-testid^="overlay-preset-"]:disabled').count(), 3);
   }
   const file = path.join(smokeDataRoot(config), 'settings', 'settings.json');

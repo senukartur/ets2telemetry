@@ -1,5 +1,6 @@
 import type {AppLanguage, GearDisplayModes, LiveTelemetry, OverlayPresentation, OverlaySectionId, OverlaySectionView, OverlaySettings, UnitProfiles} from '../../../packages/contracts/src';
 import {resolveDisplayUnits} from '../../../packages/telemetry-core/src/display-profile';
+import {CRUISE_CONTROL_OFF, cruiseControlActive} from '../../../packages/telemetry-core/src/cruise-control';
 import {fixed, formatDistance, formatMoneyAmount, formatVolume} from '../../../packages/telemetry-core/src/format';
 import {convertConsumption, convertMass, convertVolume} from '../../../packages/telemetry-core/src/units';
 import {carriesField, type LiveFieldId} from '../../../packages/telemetry-core/src/live-view';
@@ -22,6 +23,7 @@ const SECTION_FIELDS: Readonly<Record<OverlaySectionId, {parts: readonly LiveFie
   'speed': {parts: ['speed']},
   'gear': {parts: ['gear']},
   'rpm': {parts: ['engine-rpm']},
+  'cruise-control': {parts: ['cruise-control']},
   'fuel': {parts: ['fuel'], detail: 'fuel-level'},
   'range': {parts: ['estimated-range']},
   'sdk-consumption': {parts: ['sdk-average-consumption']},
@@ -39,10 +41,11 @@ const SECTION_FIELDS: Readonly<Record<OverlaySectionId, {parts: readonly LiveFie
 const BASELINE_SECTIONS: ReadonlySet<OverlaySectionId> = new Set<OverlaySectionId>(['speed', 'fuel']);
 /**
  * Sections that show a dash, not nothing, while current when a carried v1 observation gives them no value (ET-052 MB9): the
- * next mandatory break is "not supported" by an older plugin, "not observed" by the game, invalid, or its v1 data is stale.
- * Without a v1 observation the section follows ET-012a's L5 rule like every other v1-only section.
+ * next mandatory break or the cruise control speed (ET-071) is "not supported" by an older plugin, "not observed" by the
+ * game, invalid, or its v1 data is stale. Without a v1 observation the section follows ET-012a's L5 rule like every other
+ * v1-only section.
  */
-const DASH_WHEN_CARRIED: ReadonlySet<OverlaySectionId> = new Set<OverlaySectionId>(['mandatory-break']);
+const DASH_WHEN_CARRIED: ReadonlySet<OverlaySectionId> = new Set<OverlaySectionId>(['mandatory-break', 'cruise-control']);
 
 /**
  * The overlay's read-only display projection, built in main. Canonical v0 m/s and liters remain unchanged; values are
@@ -68,6 +71,10 @@ const DASH_WHEN_CARRIED: ReadonlySet<OverlaySectionId> = new Set<OverlaySectionI
  * telemetry-core's, clamped at zero, and its `urgency` (`soon` for 1 to 119 minutes, `due` for zero or less) is the live
  * view's, so the dashboard and the overlay cannot disagree. A shown section whose carried v1 observation has no value
  * (older plugin, not observed, invalid, or stale v1 data) is a dash (DASH_WHEN_CARRIED).
+ *
+ * The cruise control speed (ET-071) also comes from the v1 projection (minor 3) and is not tied to the job. A set speed is
+ * the speed section's whole number and unit; zero is `off`, a value and never a dash (REG-009); no value is a dash like
+ * the break.
  *
  * `editing` (ET-012b) only marks the overlay edit mode for the renderer; it changes no section or value.
  *
@@ -95,6 +102,11 @@ export function overlayPresentation(live: LiveTelemetry, units: UnitProfiles = D
       if (converted !== undefined) return `${fixed(converted, 0)} ${displayUnits.consumption}`;
     }
     if (id === 'route-remaining' && v1?.navigationDistance.state === 'value') return formatDistance(v1.navigationDistance.value.meters, displayUnits.distance, 0);
+    // ET-071: a set speed rounds like the speed section; zero (off) stays the app-owned word, never "0 km/h".
+    if (id === 'cruise-control' && v1?.cruiseControl.state === 'value') {
+      const mps = v1.cruiseControl.value;
+      return cruiseControlActive(mps) ? `${speedNumber(mps, profile)} ${speedUnit(profile)}` : CRUISE_CONTROL_OFF;
+    }
     const job = v1?.job;
     if (id === 'cargo-mass' && job?.state === 'value' && job.value.cargoMass.state === 'value') {
       return `${fixed(convertMass(job.value.cargoMass.value, displayUnits.mass), 0)} ${displayUnits.mass}`;

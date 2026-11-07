@@ -152,6 +152,41 @@ it('adds no urgency marks to a normal or unavailable break, nor to any other sec
   expect(dash).toContain('<strong class="overlay-value" data-testid="overlay-mandatory-break" data-reserve="00 h 00 min">—</strong>');
 });
 
+// ET-071: cruise control in every layout with the lucide CircleGauge, a three-digit reserve like speed, and in the strip a
+// fixed 140 px slot (minimum = maximum) in every state, so a set speed, OFF and the dash never move a neighbour. The texts are
+// hand-written from strings.ts: a set speed splits into number and unit, OFF is localized and the dash has no unit.
+const CRUISE_STATES: {section: OverlayPresentation['sections'][number]; en: {value: string; unit?: string}; ru: {value: string; unit?: string}}[] = [
+  {section: {id: 'cruise-control', state: 'value', text: '90 km/h'}, en: {value: '90', unit: 'km/h'}, ru: {value: '90', unit: 'км/ч'}},
+  {section: {id: 'cruise-control', state: 'value', text: 'off'}, en: {value: 'OFF'}, ru: {value: 'ВЫКЛ'}},
+  {section: {id: 'cruise-control', state: 'unavailable'}, en: {value: '—'}, ru: {value: '—'}}
+];
+const CRUISE_LABELS = {en: {short: 'Cruise', label: 'Cruise control'}, ru: {short: 'Круиз', label: 'Круиз-контроль'}} as const;
+it.each(['en', 'ru'] as const)('renders cruise control with its icon, reserve and a fixed strip slot in every state and layout in %s', language => {
+  const labels = CRUISE_LABELS[language];
+  for (const expected of CRUISE_STATES) {
+    const sections: OverlayPresentation['sections'] = [{id: 'speed', state: 'value', text: '90 km/h'}, expected.section, {id: 'fuel', state: 'value', text: '73.0 L'}];
+    const text = expected[language];
+    for (const layout of ['strip', 'card', 'cluster', 'hud'] as const) {
+      const label = `${layout} ${language} ${text.value}`;
+      const html = renderToStaticMarkup(React.createElement(OverlayContent, {view: overlayView({...base, layout, language, sections})}));
+      expect(html.match(/data-testid="overlay-section-cruise-control"/g), label).toHaveLength(1);
+      expect(html.match(/lucide-circle-gauge/g), label).toHaveLength(1);
+      expect(html, label).toContain(`<strong class="overlay-value" data-testid="overlay-cruise-control" data-reserve="000">${text.value}</strong>`);
+      if (text.unit) expect(html, label).toContain(`<span class="overlay-unit" data-testid="overlay-cruise-control-unit">${text.unit}</span>`);
+      else expect(html, label).not.toContain('overlay-cruise-control-unit');
+      if (layout === 'strip') {
+        expect(html, label).toContain(`data-testid="overlay-section-cruise-control" aria-label="${labels.short}" style="max-width:140px;min-width:140px"`);
+        // Only cruise control has a minimum width; speed and fuel keep their caps alone.
+        expect(html.match(/min-width/g), label).toHaveLength(1);
+        expect(html, label).toContain('data-testid="overlay-section-speed" aria-label="' + (language === 'en' ? 'Speed' : 'Скорость') + '" style="max-width:140px"');
+      } else {
+        expect(html, label).not.toContain('min-width');
+        expect(html, label).toContain(layout === 'card' ? `</svg>${labels.label}</dt>` : layout === 'cluster' ? `</svg>${labels.short}</span>` : `<span class="overlay-label">${labels.short}</span>`);
+      }
+    }
+  }
+});
+
 it.each(['en', 'ru'] as const)('renders explicit simultaneous game choices as semantic buttons in %s', language => {
   const html = renderToStaticMarkup(React.createElement(LiveDashboard, {live: {selection: 'game', status: 'waiting', fresh: false, recording: false, coverage: 'unknown',
     reason: 'Both games are available; choose ETS2 or ATS'}, units: undefined, language, onSelect: () => Promise.resolve()}));

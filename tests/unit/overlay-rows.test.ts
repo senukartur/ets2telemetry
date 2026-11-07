@@ -20,9 +20,11 @@ import {
 const only = (...ids: OverlaySectionId[]): OverlaySections =>
   Object.freeze(Object.fromEntries(OVERLAY_SECTION_IDS.map(id => [id, ids.includes(id)])) as Record<OverlaySectionId, boolean>);
 const ALL = DEFAULT_OVERLAY_SECTIONS;
-// ET-052: the fifteenth section, the next mandatory break, adds one row to every layout. The historical rows below keep the
-// fourteen sections of ET-012d (no break), so their hand-written numbers still test the same sets.
-const WITHOUT_BREAK = {...ALL, 'mandatory-break': false};
+// ET-052: the fifteenth section, the next mandatory break, adds one row to every layout; ET-071's sixteenth, cruise control,
+// another (a panel row in the cluster). The historical rows below keep the fifteen sections of ET-052 and the fourteen of
+// ET-012d, so their hand-written numbers still test the same sets.
+const WITHOUT_CRUISE = {...ALL, 'cruise-control': false};
+const WITHOUT_BREAK = {...WITHOUT_CRUISE, 'mandatory-break': false};
 const WITHOUT_DRIVEN = {...WITHOUT_BREAK, 'distance-driven': false};
 const WITHOUT_RANGE_AND_DRIVEN = {...WITHOUT_DRIVEN, range: false};
 const ALSO_WITHOUT_GAME_TIME = {...WITHOUT_RANGE_AND_DRIVEN, 'game-time': false};
@@ -40,16 +42,20 @@ it('fixes the hand-written row constants of each layout', () => {
 });
 
 it.each([
-  // ET-070: 72 + 24 × 15 = 432, 57 + 21 × 12 = 309 (speed, gear and RPM are in the gauge) and 42 + 24 × 15 = 402
-  // (ET-052's 408, 288 and 378 without the Hard Mode row).
-  {name: 'every section', sections: ALL, n: 15, m: 12, card: 432, cluster: 309, hud: 402},
-  {name: 'every section but the break', sections: WITHOUT_BREAK, n: 14, m: 11, card: 408, cluster: 288, hud: 378},
+  // ET-071: 72 + 24 × 16 = 456, 57 + 21 × 13 = 330 (speed, gear and RPM are in the gauge; cruise control is a panel row) and
+  // 42 + 24 × 16 = 426.
+  {name: 'every section', sections: ALL, n: 16, m: 13, card: 456, cluster: 330, hud: 426},
+  // ET-070: 72 + 24 × 15 = 432, 57 + 21 × 12 = 309 and 42 + 24 × 15 = 402 (ET-052's 408, 288 and 378 without the Hard Mode row).
+  {name: 'every section but cruise control', sections: WITHOUT_CRUISE, n: 15, m: 12, card: 432, cluster: 309, hud: 402},
+  {name: 'every section but cruise control and the break', sections: WITHOUT_BREAK, n: 14, m: 11, card: 408, cluster: 288, hud: 378},
   {name: 'the break alone', sections: only('mandatory-break'), n: 1, m: 1, card: 96, cluster: 78, hud: 66},
+  {name: 'cruise control alone', sections: only('cruise-control'), n: 1, m: 1, card: 96, cluster: 78, hud: 66},
   {name: 'every section without distance driven', sections: WITHOUT_DRIVEN, n: 13, m: 10, card: 384, cluster: 267, hud: 354},
   {name: 'every section without range and distance driven', sections: WITHOUT_RANGE_AND_DRIVEN, n: 12, m: 9, card: 360, cluster: 246, hud: 330},
   {name: 'also without game time', sections: ALSO_WITHOUT_GAME_TIME, n: 11, m: 8, card: 336, cluster: 225, hud: 306},
   {name: 'job-focus', sections: OVERLAY_PRESETS['job-focus'], n: 7, m: 5, card: 240, cluster: 162, hud: 210},
-  {name: 'driving-only', sections: OVERLAY_PRESETS['driving-only'], n: 5, m: 2, card: 192, cluster: 99, hud: 162},
+  // ET-071: driving-only includes cruise control: 72 + 24 × 6 = 216, 57 + 21 × 3 = 120 and 42 + 24 × 6 = 186.
+  {name: 'driving-only', sections: OVERLAY_PRESETS['driving-only'], n: 6, m: 3, card: 216, cluster: 120, hud: 186},
   // Speed alone is in the cluster's gauge: its panel holds only the Hard Mode row, 57.
   {name: 'speed only', sections: only('speed'), n: 1, m: 0, card: 96, cluster: 57, hud: 66}
 ])('reserves $card / $cluster / $hud CSS px for $name', ({sections, n, m, card, cluster, hud}) => {
@@ -63,10 +69,11 @@ it.each([
 });
 
 it('counts every enabled section in the cluster panel when no gauge section is enabled', () => {
-  // Fuel to the break are twelve panel sections and the Hard Mode row: 36 + 21 × 13 = 309, as with every section (ET-070).
+  // Cruise control to the break are thirteen panel sections and the Hard Mode row: 36 + 21 × 14 = 330, as with every section
+  // (ET-070, ET-071).
   const panelOnly = {...ALL, speed: false, gear: false, rpm: false};
-  expect(layoutRowCount('cluster', panelOnly)).toBe(13);
-  expect(layoutReservedCss('cluster', panelOnly)).toBe(309);
+  expect(layoutRowCount('cluster', panelOnly)).toBe(14);
+  expect(layoutReservedCss('cluster', panelOnly)).toBe(330);
   // Gear alone shows only the gauge: the panel keeps only the Hard Mode row, 36 + 21 = 57; fuel adds a second, 78.
   expect(layoutReservedCss('cluster', only('gear'))).toBe(57);
   expect(layoutReservedCss('cluster', only('fuel'))).toBe(78);

@@ -25,6 +25,11 @@ import {OVERLAY_PRESETS} from '../../apps/desktop/src/overlay-sections';
 // at CSS width 1828 (the second row ends at game time, 1704, and the break would reach 1868 of the inner 1801),
 // ceil(114 × 0.7 + 2) = 82, so its top is 248 + 944 − 82 = 1110. Driving only is unchanged (29, top 1163), so the scenarios'
 // discriminating relation holds: the two presets differ in height at the setting 1.
+// ET-071 re-derived (the requirement changed: a sixteenth section, cruise control, a fixed 140 CSS px strip item that Driving
+// only includes): at the setting 1 Everything is still three rows (82; the first row now ends at cargo, 1678) and Driving
+// only one (its line is 1234 of 1801, 29). At 50% (CSS 3657, inner 3627) Everything's 3674 CSS px line needs two rows,
+// ceil(26.6 + 2) = 29 at top 1163, while Driving only and Job focus stay one 16 DIP row at 1176. At 200% (inner 1169)
+// Driving only needs two rows, ceil(106.4 + 2.8) = 110.
 const SCALE = 1.5;
 const OWNER: OverlayPlacement = {x: 0.8485, y: 1, scale: 0.5};
 /** The owner's fractions at the setting 1, where Everything and Driving only differ. */
@@ -187,15 +192,18 @@ it('fits a window Windows keeps at least 40 DIP high at the same fractions, insi
 
 // ET-045e: the owner's saved 50% strip now requests 1280 × 16 at {2058, 1176}, below the 38 DIP minimum height the ET-045c
 // probe measured at 150%. It is fitted at the same fractions to {2058, 248 + 944 − 38 = 1154, 1280, 38}, inside the
-// client with its content at the window's bottom, and every preset keeps that rectangle without another setBounds.
+// client with its content at the window's bottom, and every preset of one row keeps that rectangle without another setBounds.
+// ET-071: Everything is two rows at 50% (29 DIP at 1163, see above), so the scenario starts from Driving only and cycles
+// through the one-row selections: Job focus, and Everything without cruise control (ET-070's fifteen sections).
 it('fits the owner 50% strip, which now requests 16 DIP, to a 38 DIP minimum at the bottom of the client', () => {
-  const t = setup(OVERLAY_PRESETS.everything, OWNER); t.setMode('min-height-40'); t.state.minHeight = 38;
+  const t = setup(OVERLAY_PRESETS['driving-only'], OWNER); t.setMode('min-height-40'); t.state.minHeight = 38;
   t.overlay.loaded(true); t.overlay.update(t.current);
   expect(t.state.bounds).toEqual({x: 2058, y: 1154, width: 1280, height: 38}); expect(inside(t.state.bounds)).toBe(true); expect(t.state.visible).toBe(true);
   expect(t.state.bounds.y + t.state.bounds.height).toBe(CLIENT.y + CLIENT.height - 8);
   expect(t.mismatches().map(report => report.facts)).toEqual([expect.objectContaining({mode: 'driving', outcome: 'fitted', reqX: 2058, reqY: 1176, reqW: 1280,
     reqH: 16, actH: 38})]);
-  for (const sections of [OVERLAY_PRESETS['driving-only'], OVERLAY_PRESETS['job-focus'], OVERLAY_PRESETS.everything]) {
+  expect(overlayBounds('strip', CLIENT, OWNER, OVERLAY_PRESETS.everything)).toEqual({x: 2058, y: 1163, width: 1280, height: 29});
+  for (const sections of [OVERLAY_PRESETS['job-focus'], {...OVERLAY_PRESETS.everything, 'cruise-control': false}, OVERLAY_PRESETS['driving-only']]) {
     const from = t.calls.length;
     t.overlay.setLayout('strip', OWNER, sections);
     expect(overlayBounds('strip', CLIENT, OWNER, sections)).toEqual({x: 2058, y: 1176, width: 1280, height: 16});
@@ -246,21 +254,23 @@ it('re-applies once when the first read after setBounds still reports the previo
 
 // Faithful Windows: every sections change at every bottom and side anchor and at 50, 100, 200 and 300 % sets each changed
 // rectangle exactly once, ends contained with its margins and reports no mismatch; an unchanged rectangle sets nothing
-// and does not raise the window again. At 50% every preset is one 16 DIP row, so no change moves the window. At 200% the
+// and does not raise the window again. At 50% every preset was one 16 DIP row, so no change moved the window. At 200% the
 // strip is floor(min(2560, 1674.67)) = 1674 wide, CSS 1195, inner 1169: Everything needs four rows, ceil(152 × 1.4 + 2.8)
 // = 216, and Driving only one, ceil(53.2 + 2.8) = 56. At 300% it is 1674 wide, CSS 797, inner 771: Everything needs five
 // rows, ceil(190 × 2.1 + 4.2) = 404, and Driving only two, ceil(76 × 2.1 + 4.2) = 164.
 // ET-052 re-derived: the fifteenth section makes Everything three rows at 100% (inner 1801; ceil(114 × 0.7 + 2) = 82) and six
 // rows at 300% (the break wraps to a sixth: ceil(228 × 2.1 + 4.2) = ceil(483.0) = 483); 200% stays four rows (216) and 50%
-// one row (16). Driving only is unchanged. The cycle mixes the presets with
+// one row (16). Driving only is unchanged. ET-071 re-derived: Everything is two rows at 50% (29; Driving only and Job focus
+// stay 16, so a preset change now moves the window there), and Driving only, now with cruise control, two rows at 200%
+// (110); 100% and 300% keep their heights. The cycle mixes the presets with
 // single-section toggles, whose rows may or may not change.
 const SECTION_CYCLE: OverlaySections[] = [OVERLAY_PRESETS['driving-only'], OVERLAY_PRESETS['job-focus'], {...OVERLAY_PRESETS['job-focus'], deadline: false},
   {...OVERLAY_PRESETS['job-focus'], deadline: false, cargo: false}, OVERLAY_PRESETS['driving-only'], {...OVERLAY_PRESETS['driving-only'], range: false},
   OVERLAY_PRESETS.everything, {...OVERLAY_PRESETS.everything, 'game-time': false}, OVERLAY_PRESETS['job-focus'], OVERLAY_PRESETS.everything];
 const MATRIX = [0.5, 1, 2, 3].flatMap(scale => [0, 1].flatMap(y => [0.5, 0.8485, 1].map(x => ({x, y, scale}))));
-const EVERYTHING_SIZE: Record<number, {width: number; height: number}> = {0.5: {width: 1280, height: 16}, 1: {width: 1280, height: 82},
+const EVERYTHING_SIZE: Record<number, {width: number; height: number}> = {0.5: {width: 1280, height: 29}, 1: {width: 1280, height: 82},
   2: {width: 1674, height: 216}, 3: {width: 1674, height: 483}};
-const DRIVING_ONLY_HEIGHT: Record<number, number> = {0.5: 16, 1: 29, 2: 56, 3: 164};
+const DRIVING_ONLY_HEIGHT: Record<number, number> = {0.5: 16, 1: 29, 2: 110, 3: 164};
 it.each(MATRIX.flatMap(placement => (['driving', 'edit'] as const).map(mode => ({placement, mode}))))(
   'keeps a faithfully placed strip inside the client across presets at $placement.x, $placement.y, scale $placement.scale ($mode)', ({placement, mode}) => {
     const t = setup(OVERLAY_PRESETS.everything, placement); t.overlay.loaded(true);
@@ -292,14 +302,15 @@ it.each(['cancel', 'escape', 'minimize'] as const)('discards the draft on %s aft
   const t = setup(); drivingEverything(t);
   t.metadata.foreground = false; t.overlay.update(t.current); t.overlay.beginEdit(true);
   t.overlay.setEditScale(2); t.overlay.setLayout('strip', AT_100, OVERLAY_PRESETS['driving-only']);
-  // At 200% (zoom 1.4) Driving only is 1674 × 56 at x = round(1722.67 + 0.8485 × 0.67) = 1723, y = 248 + 888 = 1136.
-  expect(t.state.bounds).toEqual({x: 1723, y: 1136, width: 1674, height: 56}); expect(t.state.visible).toBe(true);
+  // At 200% (zoom 1.4) Driving only is 1674 × 110 (ET-071: two rows; 56 before) at x = round(1722.67 + 0.8485 × 0.67) = 1723,
+  // y = 248 + 834 = 1082.
+  expect(t.state.bounds).toEqual({x: 1723, y: 1082, width: 1674, height: 110}); expect(t.state.visible).toBe(true);
   expect(t.window.webContents.setZoomFactor).toHaveBeenLastCalledWith(1.4);
   const from = t.calls.length;
   expect(t.overlay.endEdit(), reason).toEqual({...AT_100, scale: 2});
   expect(t.calls.slice(from, from + 5)).toEqual(['hide', 'setMovable(false)', 'setIgnoreMouseEvents(true)', 'setFocusable(false)', 'setSkipTaskbar(true)']);
   expect(t.window.webContents.setZoomFactor).toHaveBeenLastCalledWith(0.7);
-  // Back in driving mode at the saved setting 1 with the current sections; Windows first keeps the 56 DIP height.
+  // Back in driving mode at the saved setting 1 with the current sections; Windows first keeps the 110 DIP height.
   t.setMode('ignore-first-shrink'); t.metadata.foreground = true; t.overlay.update(t.current);
   expect(t.state.bounds).toEqual(DRIVING_ONLY); expect(t.state.visible).toBe(true);
   expect({ignoreMouse: t.state.ignoreMouse, focusable: t.state.focusable, movable: t.state.movable, skipTaskbar: t.state.skipTaskbar})

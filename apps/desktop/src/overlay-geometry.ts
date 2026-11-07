@@ -108,7 +108,7 @@ export function overlaySize(layout: OverlayLayout, client: DipRect, scale: numbe
 /**
  * The size the overlay window is created with at this scale setting, before any client area is known. The card,
  * cluster and HUD have the size `overlaySize` gives them: with every section and the Hard Mode row at the setting 1
- * (zoom 0.7) the card is 210 × 303, the cluster 308 × 217 and the HUD 224 × 282. The strip is round(1280 × max(1, scale))
+ * (zoom 0.7) the card is 210 × 320, the cluster 308 × 232 and the HUD 224 × 299. The strip is round(1280 × max(1, scale))
  * wide and as high as its enabled sections need at that width's CSS width floor(width / zoom), 1280 × 82 at the setting 1
  * with every section.
  */
@@ -128,9 +128,9 @@ export function overlayWindowSize(layout: OverlayLayout, scale: number, sections
  * strip: top centre, width min(1280, client width − 32), 8 below the top edge, 82 high with every section (three rows at
  * 1280); the height follows the enabled sections and the width, and the strip needs width ≥ 336 + 32 and height ≥ its
  * own height + 16.
- * card: top right with 16 margins; 210 × 303 with every section (never below 210 × 252), so it needs 242 × 335.
- * cluster: bottom left with 16 margins; 308 × 217 with every section (never below 308 × 154), so it needs 340 × 249.
- * hud: top left with 16 margins; 224 × 282 with every section (never below 224 × 224), so it needs 256 × 314.
+ * card: top right with 16 margins; 210 × 320 with every section (never below 210 × 252), so it needs 242 × 352.
+ * cluster: bottom left with 16 margins; 308 × 232 with every section (never below 308 × 154), so it needs 340 × 264.
+ * hud: top left with 16 margins; 224 × 299 with every section (never below 224 × 224), so it needs 256 × 331.
  * The card, cluster and HUD heights follow their enabled sections and include the Hard Mode row (ET-012d, ET-070).
  */
 export function overlayBounds(layout: OverlayLayout, client: DipRect, placement: OverlayPlacement = DEFAULT_OVERLAY_PLACEMENTS[layout],

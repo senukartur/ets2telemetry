@@ -8,10 +8,12 @@ import {staleOverlayHardMode} from './overlay-hard-mode';
 
 export const OVERLAY_LAYOUTS: readonly OverlayLayout[] = Object.freeze(['strip', 'card', 'cluster', 'hud']);
 /**
- * Canonical order: the settings file, the projection and every layout list sections in this order. A new section is
- * appended last (ET-052's `mandatory-break`), so the settings file's earlier keys keep their positions.
+ * Canonical order: the settings file, the projection and every layout list sections in this order, which is also the
+ * group order below (the strip packs its rows in canonical order and renders them in group order). A new section goes at
+ * the end of its group: ET-052's `mandatory-break` ends the time group and the list, ET-071's `cruise-control` the
+ * driving group, after `rpm`. Parsing reads keys by name, so a settings file's key order never matters.
  */
-export const OVERLAY_SECTION_IDS: readonly OverlaySectionId[] = Object.freeze(['speed', 'gear', 'rpm', 'fuel', 'range', 'sdk-consumption', 'cargo',
+export const OVERLAY_SECTION_IDS: readonly OverlaySectionId[] = Object.freeze(['speed', 'gear', 'rpm', 'cruise-control', 'fuel', 'range', 'sdk-consumption', 'cargo',
   'origin', 'destination', 'distance-driven', 'distance-remaining', 'deadline', 'expected-income', 'game-time', 'mandatory-break']);
 
 export type OverlayGroupId = 'driving' | 'fuel' | 'job' | 'time';
@@ -19,7 +21,7 @@ export interface OverlayGroup {id: OverlayGroupId; sections: readonly OverlaySec
 /** Groups for the settings card and the strip's dividers; together they list every section once, in canonical order. */
 const group = (id: OverlayGroupId, sections: OverlaySectionId[]): OverlayGroup => Object.freeze({id, sections: Object.freeze(sections)});
 export const OVERLAY_GROUPS: readonly OverlayGroup[] = Object.freeze([
-  group('driving', ['speed', 'gear', 'rpm']),
+  group('driving', ['speed', 'gear', 'rpm', 'cruise-control']),
   group('fuel', ['fuel', 'range', 'sdk-consumption']),
   group('job', ['cargo', 'origin', 'destination', 'distance-driven', 'distance-remaining', 'deadline', 'expected-income']),
   group('time', ['game-time', 'mandatory-break'])
@@ -46,7 +48,7 @@ export type OverlayPresetId = 'everything' | 'job-focus' | 'driving-only';
 export const OVERLAY_PRESETS: Readonly<Record<OverlayPresetId, OverlaySections>> = Object.freeze({
   'everything': DEFAULT_OVERLAY_SECTIONS,
   'job-focus': sectionsWith(['speed', 'gear', 'fuel', 'cargo', 'destination', 'distance-remaining', 'deadline']),
-  'driving-only': sectionsWith(['speed', 'gear', 'rpm', 'fuel', 'range'])
+  'driving-only': sectionsWith(['speed', 'gear', 'rpm', 'cruise-control', 'fuel', 'range'])
 });
 export const OVERLAY_PRESET_IDS: readonly OverlayPresetId[] = Object.freeze(['everything', 'job-focus', 'driving-only']);
 
@@ -57,7 +59,8 @@ export const OVERLAY_PRESET_IDS: readonly OverlayPresetId[] = Object.freeze(['ev
  */
 export type OverlayRequirement = 'protocol-v1' | 'trip-tracking' | 'ids-until-v1';
 export const OVERLAY_SECTION_REQUIREMENTS: Readonly<Partial<Record<OverlaySectionId, OverlayRequirement>>> = Object.freeze({
-  'origin': 'protocol-v1', 'distance-remaining': 'protocol-v1', 'deadline': 'protocol-v1', 'mandatory-break': 'protocol-v1', 'distance-driven': 'trip-tracking',
+  'origin': 'protocol-v1', 'distance-remaining': 'protocol-v1', 'deadline': 'protocol-v1', 'mandatory-break': 'protocol-v1', 'cruise-control': 'protocol-v1',
+  'distance-driven': 'trip-tracking',
   'cargo': 'ids-until-v1', 'destination': 'ids-until-v1'
 });
 
@@ -66,7 +69,7 @@ export function isOverlayLayout(value: unknown): value is OverlayLayout {
 }
 
 /**
- * Strictly validates a complete section record from an untrusted caller: a plain object with exactly the fifteen own
+ * Strictly validates a complete section record from an untrusted caller: a plain object with exactly the sixteen own
  * data properties, booleans only, at least one true. Returns a fresh frozen copy, or undefined. Getters are never run.
  */
 export function parseOverlaySections(value: unknown): OverlaySections | undefined {

@@ -347,6 +347,8 @@ const FULL: OverlaySectionView[] = [
   {id: 'speed', state: 'value', text: '0 km/h', speedRing: 0},
   {id: 'gear', state: 'value', text: 'R1'},
   {id: 'rpm', state: 'value', text: '600 rpm', ring: 0.2},
+  // ET-071: the minor-0 stand-in carries cruise control as not-supported, so the section is a dash, never off or zero.
+  {id: 'cruise-control', state: 'unavailable'},
   {id: 'fuel', state: 'unavailable'},
   {id: 'sdk-consumption', state: 'value', text: '25 L/100 km'},
   {id: 'cargo', state: 'value', text: 'Synthetic Cargo', detail: '18 t'},
@@ -377,6 +379,8 @@ it('keeps v1 sections as dashes when v1, then v0, stops being current, and drops
     {id: 'speed', state: 'value', text: '0 km/h', speedRing: 0},
     {id: 'gear', state: 'value', text: 'R1'},
     {id: 'rpm', state: 'value', text: '600 rpm', ring: 0.2},
+    // ET-071: stale v1 data is a carried observation without a value, so cruise control is a dash like the break.
+    {id: 'cruise-control', state: 'unavailable'},
     {id: 'fuel', state: 'unavailable'},
     {id: 'sdk-consumption', state: 'value', text: '25 L/100 km'},
     // Mixed sections keep their v0 part: the game ids, without the v1 mass and company.
@@ -393,7 +397,7 @@ it('keeps v1 sections as dashes when v1, then v0, stops being current, and drops
   expect(v1Stale.freshness).toBe('current');
   const v0Stale = overlayPresentation(withV1(V1_STALE, {...live(), fresh: false, status: 'stale'}), undefined, undefined, v1Stale);
   expect(v0Stale).toMatchObject({freshness: 'stale', speed: '—', fuel: '—', paused: false});
-  expect(v0Stale.sections).toEqual(['speed', 'gear', 'rpm', 'fuel', 'sdk-consumption', 'cargo', 'origin', 'destination', 'distance-remaining', 'deadline',
+  expect(v0Stale.sections).toEqual(['speed', 'gear', 'rpm', 'cruise-control', 'fuel', 'sdk-consumption', 'cargo', 'origin', 'destination', 'distance-remaining', 'deadline',
     'expected-income', 'game-time', 'mandatory-break'].map(id => ({id, state: 'unavailable'})));
   // A new selection clears the v1 projection: v1 sections are no longer carried, even as placeholders.
   const cleared = overlayPresentation(initialLive('ats'), undefined, undefined, v0Stale);
@@ -409,8 +413,9 @@ it('shows no v1 value while v0 is not current, even with current v1 data', () =>
 });
 it('leaves out v1 job sections for another job unless they were shown, and keeps distance remaining', () => {
   const mismatch = overlayPresentation(withV1({ids: 'fixture'}));
-  // ET-052: the break is not tied to the job, so it stays (as a dash for the minor-0 stand-in) beside another job's sections.
-  expect(ids(mismatch.sections)).toEqual(['speed', 'gear', 'rpm', 'fuel', 'sdk-consumption', 'cargo', 'destination', 'distance-remaining', 'expected-income', 'game-time',
+  // ET-052: the break is not tied to the job, so it stays (as a dash for the minor-0 stand-in) beside another job's sections;
+  // so does cruise control (ET-071).
+  expect(ids(mismatch.sections)).toEqual(['speed', 'gear', 'rpm', 'cruise-control', 'fuel', 'sdk-consumption', 'cargo', 'destination', 'distance-remaining', 'expected-income', 'game-time',
     'mandatory-break']);
   expect(mismatch.sections.find(section => section.id === 'cargo')).toEqual({id: 'cargo', state: 'value', text: 'cargo.logs'});
   expect(mismatch.sections.find(section => section.id === 'distance-remaining')).toEqual({id: 'distance-remaining', state: 'value', text: '151 km'});
@@ -422,7 +427,7 @@ it('leaves the v1 job sections out once v0 reports no job, without keeping dashe
   const noJob = withV1();
   noJob.observation!.state.configuration = {...noJob.observation!.state.configuration, job: {available: false, reason: 'not-observed'}};
   const presentation = overlayPresentation(noJob, undefined, undefined, overlayPresentation(withV1()));
-  expect(ids(presentation.sections)).toEqual(['speed', 'gear', 'rpm', 'fuel', 'sdk-consumption', 'distance-remaining', 'game-time', 'mandatory-break']);
+  expect(ids(presentation.sections)).toEqual(['speed', 'gear', 'rpm', 'cruise-control', 'fuel', 'sdk-consumption', 'distance-remaining', 'game-time', 'mandatory-break']);
 });
 it('keeps v1 sections that were never shown absent without v1 data (fix round 1)', () => {
   // Fix round 1 checked this with a previous projection that showed v1 sections; the PR #73 advisory review changed that
@@ -441,6 +446,8 @@ const LOST_V1: OverlaySectionView[] = [
   {id: 'speed', state: 'value', text: '0 km/h', speedRing: 0},
   {id: 'gear', state: 'value', text: 'R1'},
   {id: 'rpm', state: 'value', text: '600 rpm', ring: 0.2},
+  // ET-071: the minor-0 stand-in carries cruise control as not-supported, so the section is a dash, never off or zero.
+  {id: 'cruise-control', state: 'unavailable'},
   {id: 'fuel', state: 'unavailable'},
   {id: 'sdk-consumption', state: 'value', text: '25 L/100 km'},
   {id: 'cargo', state: 'value', text: 'cargo.logs'},
@@ -487,7 +494,8 @@ it('uses no v1 data of another origin or selection', () => {
 // renderer's view for the same smoke pair, so a wrong constant fails here rather than only in the Electron smoke.
 function rendered(presentation: OverlayPresentation): Record<string, string | null> {
   const view = overlayView(presentation), texts: Record<string, string | null> = {freshness: view.freshness};
-  for (const item of view.items) {texts[item.testId] = item.value; if (item.detailTestId) texts[item.detailTestId] = item.detail ?? null;}
+  // The unit element is `${testId}-unit` (overlay-renderer.tsx), present only with a unit (ET-071 reads cruise control's).
+  for (const item of view.items) {texts[item.testId] = item.value; if (item.unit) texts[`${item.testId}-unit`] = item.unit; if (item.detailTestId) texts[item.detailTestId] = item.detail ?? null;}
   return texts;
 }
 const expectRendered = (presentation: OverlayPresentation, expected: Readonly<Record<string, string | null>>) => {
@@ -631,4 +639,47 @@ it('leaves the break out when it is switched off, and in the job-focus and drivi
     expect(breakOf(overlayPresentation(smokePair(), undefined, {enabled: true, backgroundOpacity: 80, layout: 'strip', sections, placements: PLACEMENTS}))).toBeUndefined();
   expect(breakOf(overlayPresentation(smokePair(), undefined, {enabled: true, backgroundOpacity: 80, layout: 'strip', sections: OVERLAY_PRESETS['everything'], placements: PLACEMENTS})))
     .toMatchObject({state: 'value'});
+});
+
+// ET-071 (REG-009): the cruise control section. Expected text is written by hand: a set speed is the speed section's whole
+// number and unit (25 m/s = 90 km/h = 55.92 mph, so 56 mph; 22.5 m/s = 81 km/h), zero is the app word `off`, a value, and
+// an unavailable reading is a dash. The smoke pair carries 25 m/s unless a case replaces it.
+const cruiseOf = (presentation: OverlayPresentation) => presentation.sections.find(section => section.id === 'cruise-control');
+const mps = (value: number) => ({available: true, value, unit: 'm/s'}) as const;
+it.each([
+  [25, 'metric', '90 km/h'], [25, 'us-customary', '56 mph'], [22.5, 'metric', '81 km/h'], [22.5, 'us-customary', '50 mph'], [1000, 'metric', '3600 km/h']
+] as const)('shows %d m/s in the %s profile as %s, after rpm', (value, profile, text) => {
+  const presentation = overlayPresentation(smokePair({cruiseControl: mps(value)}), {ets2: profile, ats: profile});
+  expect(cruiseOf(presentation)).toEqual({id: 'cruise-control', state: 'value', text});
+  expect(ids(presentation.sections).slice(0, 5)).toEqual(['speed', 'gear', 'rpm', 'cruise-control', 'fuel']);
+});
+it('shows off, a value and never a dash or zero, while cruise control is off', () => {
+  expect(cruiseOf(overlayPresentation(smokePair({cruiseControl: mps(0)})))).toEqual({id: 'cruise-control', state: 'value', text: 'off'});
+  expect(cruiseOf(overlayPresentation(smokePair({cruiseControl: mps(0)}), {ets2: 'us-customary', ats: 'us-customary'}))).toEqual({id: 'cruise-control', state: 'value', text: 'off'});
+});
+it.each(['not-observed', 'not-supported', 'invalid'] as const)('shows a dash for a carried cruise control that is %s, also when it was never shown', reason => {
+  expect(cruiseOf(overlayPresentation(smokePair({cruiseControl: {available: false, reason, unit: 'm/s'}})))).toEqual({id: 'cruise-control', state: 'unavailable'});
+});
+it('shows a dash while the v1 data is stale and when v0 is not current, and the value again once current', () => {
+  const shown = overlayPresentation(smokePair());
+  const stale = overlayPresentation(smokePair({status: 'stale', fresh: false, reason: 'Main has no recent v1 SDK capture'}), undefined, undefined, shown);
+  expect(cruiseOf(stale)).toEqual({id: 'cruise-control', state: 'unavailable'});
+  expect(cruiseOf(overlayPresentation(smokePair(), undefined, undefined, stale))).toEqual({id: 'cruise-control', state: 'value', text: '90 km/h'});
+  expect(cruiseOf(overlayPresentation(smokePair({}, {status: 'stale', fresh: false}), undefined, undefined, shown))).toEqual({id: 'cruise-control', state: 'unavailable'});
+  expect(cruiseOf(overlayPresentation(smokePair({}, {status: 'stale', fresh: false})))).toBeUndefined();
+});
+it('does not tie cruise control to the job, keeps it while paused, and applies the L5 rule to a source without v1', () => {
+  expect(cruiseOf(overlayPresentation(smokePair({ids: 'fixture'})))).toEqual({id: 'cruise-control', state: 'value', text: '90 km/h'});
+  const noJob = smokePair();
+  noJob.observation!.state.configuration = {...noJob.observation!.state.configuration, job: {available: false, reason: 'not-observed'}};
+  expect(cruiseOf(overlayPresentation(noJob))).toEqual({id: 'cruise-control', state: 'value', text: '90 km/h'});
+  expect(cruiseOf(overlayPresentation(smokePair({cruiseControl: mps(0)}, {status: 'paused'})))).toEqual({id: 'cruise-control', state: 'value', text: 'off'});
+  expect(cruiseOf(overlayPresentation(live()))).toBeUndefined();
+  expect(cruiseOf(overlayPresentation(live(), undefined, undefined, overlayPresentation(smokePair())))).toEqual({id: 'cruise-control', state: 'unavailable'});
+});
+it('leaves cruise control out when it is switched off and in the job-focus preset, and shows it in driving-only and everything', () => {
+  for (const sections of [{...ALL, 'cruise-control': false}, OVERLAY_PRESETS['job-focus']])
+    expect(cruiseOf(overlayPresentation(smokePair(), undefined, {enabled: true, backgroundOpacity: 80, layout: 'strip', sections, placements: PLACEMENTS}))).toBeUndefined();
+  for (const sections of [OVERLAY_PRESETS['driving-only'], OVERLAY_PRESETS['everything']])
+    expect(cruiseOf(overlayPresentation(smokePair(), undefined, {enabled: true, backgroundOpacity: 80, layout: 'strip', sections, placements: PLACEMENTS}))).toMatchObject({state: 'value', text: '90 km/h'});
 });

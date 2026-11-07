@@ -3,8 +3,8 @@ import {expect, it} from 'vitest';
 import type {OverlaySectionId, OverlaySections} from '../../packages/contracts/src';
 import {DEFAULT_OVERLAY_SECTIONS, OVERLAY_PRESETS, OVERLAY_SECTION_IDS} from '../../apps/desktop/src/overlay-sections';
 import {
-  STRIP_BORDER_CSS, STRIP_COLUMN_GAP_CSS, STRIP_HARD_MODE_MAX_WIDTH_CSS, STRIP_ITEM_MAX_WIDTH_CSS, STRIP_PADDING_X_CSS, STRIP_ROW_HEIGHT_CSS, STRIP_TAG_MAX_WIDTH_CSS, STRIP_TAG_SLOTS,
-  stripCssHeight, stripRowCount
+  STRIP_BORDER_CSS, STRIP_COLUMN_GAP_CSS, STRIP_FIXED_WIDTH_SECTIONS, STRIP_HARD_MODE_MAX_WIDTH_CSS, STRIP_ITEM_MAX_WIDTH_CSS, STRIP_PADDING_X_CSS, STRIP_ROW_HEIGHT_CSS,
+  STRIP_TAG_MAX_WIDTH_CSS, STRIP_TAG_SLOTS, stripCssHeight, stripRowCount
 } from '../../apps/desktop/src/overlay-strip';
 
 // REG-016 partial: the strip's reserved rows (ET-012c decisions S2-S4). The expected rows and heights are the plan's
@@ -13,16 +13,22 @@ import {
 // ET-070 (owner decisions D2, D3; the requirement changed): the fixed Hard Mode indicator is the last strip item after every
 // selection, at most 100 px with its 14 px gap. The rows below that it changes are marked ET-070; the others were re-derived
 // with it and are unchanged on purpose.
+// ET-071: cruise control is a fixed 140 px item after RPM. The rows it changes are marked ET-071 and re-derived by hand with
+// the sequence tags 96, 96, speed 140, gear 90, RPM 130, cruise control 140, fuel 190, range 140, SDK consumption 230, cargo,
+// origin and destination 300, distance driven and remaining 150, deadline 220, income 300, game time 200, the break 150 and
+// the indicator 100, each after a 14 px gap.
 const only = (...ids: OverlaySectionId[]): OverlaySections =>
   Object.freeze(Object.fromEntries(OVERLAY_SECTION_IDS.map(id => [id, ids.includes(id)])) as Record<OverlaySectionId, boolean>);
 const ALL = DEFAULT_OVERLAY_SECTIONS;
 
 it('fixes the hand-written maximum widths of every strip item', () => {
-  expect(STRIP_ITEM_MAX_WIDTH_CSS).toEqual({'speed': 140, 'gear': 90, 'rpm': 130, 'fuel': 190, 'range': 140, 'sdk-consumption': 230, 'cargo': 300,
+  expect(STRIP_ITEM_MAX_WIDTH_CSS).toEqual({'speed': 140, 'gear': 90, 'rpm': 130, 'cruise-control': 140, 'fuel': 190, 'range': 140, 'sdk-consumption': 230, 'cargo': 300,
     'origin': 300, 'destination': 300, 'distance-driven': 150, 'distance-remaining': 150, 'deadline': 220, 'expected-income': 300, 'game-time': 200, 'mandatory-break': 150});
   expect({slots: STRIP_TAG_SLOTS, tag: STRIP_TAG_MAX_WIDTH_CSS, row: STRIP_ROW_HEIGHT_CSS, border: STRIP_BORDER_CSS, padding: STRIP_PADDING_X_CSS,
     gap: STRIP_COLUMN_GAP_CSS}).toEqual({slots: 2, tag: 96, row: 38, border: 1, padding: 12, gap: 14});
   expect(STRIP_HARD_MODE_MAX_WIDTH_CSS).toBe(100);
+  // ET-071: only cruise control is always exactly its cap, so a value, OFF and the dash take the same width.
+  expect([...STRIP_FIXED_WIDTH_SECTIONS]).toEqual(['cruise-control']);
 });
 
 it.each([
@@ -34,20 +40,32 @@ it.each([
   // ET-070: the indicator's 14 + 100 joins the last row everywhere (1190 at 1280; 478 after game time and the break at 768,
   // 928 and 944) except at the 480 minimum (inner 454), where game time and the break end at 364 and 478 > 454 needs an
   // eleventh row, and with speed alone there, where 360 + 114 = 474 > 454 needs a second.
-  {name: 'every section at 1280 (1920 x 1080)', sections: ALL, width: 1280, rows: 3, height: 116},
-  {name: 'every section at 1248 (1280 x 720)', sections: ALL, width: 1248, rows: 3, height: 116},
+  // ET-071: at 1280 (inner 1254) the rows end at range (1120), destination (1172) and the break (1240), so the indicator
+  // (1354) takes a fourth row: 4 rows, 154. At 1248, 1247 and 1258 (inner 1222, 1221 and 1232) the third row ends at game
+  // time (1076) and the break and the indicator share a fourth (264). At 1279 (inner 1253) the rows are those of 1280. At
+  // 768 (inner 742) cruise control starts the second row (RPM ends the first at 608) and the count stays 6; at 928 (inner
+  // 902) the rows end at cruise control 762, cargo 902, distance driven 778, income 698 and the indicator 478, still 5; at
+  // 944 (inner 918) they end at 762, 902, 778, game time 912 and the indicator 264, still 5. At the 480 minimum (inner 454)
+  // gear, RPM and cruise control fill the second row (388), so fuel and range share the third (344) and SDK consumption,
+  // which joined range before, starts a fourth: twelve rows, 458.
+  {name: 'every section at 1280 (1920 x 1080)', sections: ALL, width: 1280, rows: 4, height: 154},
+  {name: 'every section at 1248 (1280 x 720)', sections: ALL, width: 1248, rows: 4, height: 154},
   {name: 'every section at 768 (800 x 600)', sections: ALL, width: 768, rows: 6, height: 230},
   {name: 'every section at 928 (960 x 540)', sections: ALL, width: 928, rows: 5, height: 192},
-  {name: 'every section at 1247 (fractional client)', sections: ALL, width: 1247, rows: 3, height: 116},
-  {name: 'every section at the 480 minimum', sections: ALL, width: 480, rows: 11, height: 420},
+  {name: 'every section at 1247 (fractional client)', sections: ALL, width: 1247, rows: 4, height: 154},
+  {name: 'every section at the 480 minimum', sections: ALL, width: 480, rows: 12, height: 458},
   {name: 'speed only at the 480 minimum', sections: only('speed'), width: 480, rows: 2, height: 78},
-  {name: 'every section at 1258 (scale 1.5)', sections: ALL, width: 1258, rows: 3, height: 116},
+  {name: 'every section at 1258 (scale 1.5)', sections: ALL, width: 1258, rows: 4, height: 154},
   {name: 'every section at 944 (scale 2)', sections: ALL, width: 944, rows: 5, height: 192},
-  {name: 'every section at 1279 (scale 1.1)', sections: ALL, width: 1279, rows: 3, height: 116},
+  {name: 'every section at 1279 (scale 1.1)', sections: ALL, width: 1279, rows: 4, height: 154},
   {name: 'speed only at 1279 (scale 1.01)', sections: only('speed'), width: 1279, rows: 1, height: 40},
+  // ET-071: driving-only includes cruise control. At 768 (inner 742) the first row ends at RPM (608) and the second holds
+  // cruise control to the indicator (612); at 928 (inner 902) the first ends at cruise control (762) and the second at the
+  // indicator (458); at 1248 (inner 1222) the first ends at range (1120) and the indicator (1234) takes a second.
   {name: 'driving-only at 768', sections: OVERLAY_PRESETS['driving-only'], width: 768, rows: 2, height: 78},
   {name: 'driving-only at 928', sections: OVERLAY_PRESETS['driving-only'], width: 928, rows: 2, height: 78},
-  {name: 'driving-only at 1248', sections: OVERLAY_PRESETS['driving-only'], width: 1248, rows: 1, height: 40},
+  {name: 'driving-only at 1248', sections: OVERLAY_PRESETS['driving-only'], width: 1248, rows: 2, height: 78},
+  {name: 'driving-only at 1260', sections: OVERLAY_PRESETS['driving-only'], width: 1260, rows: 1, height: 40},
   {name: 'job-focus at 1280', sections: OVERLAY_PRESETS['job-focus'], width: 1280, rows: 2, height: 78},
   {name: 'all but RPM and cargo at 1280', sections: {...ALL, rpm: false, cargo: false}, width: 1280, rows: 3, height: 116}
 ])('reserves $rows rows for $name', ({sections, width, rows, height}) => {
@@ -57,9 +75,21 @@ it.each([
 
 it('fills a row exactly to the inner width and wraps one pixel below it', () => {
   // Driving-only: tags 96 + 96, speed 140, gear 90, rpm 130, fuel 190 and range 140 with six 14 px gaps = 966; ET-070 adds
-  // the Hard Mode indicator's 14 + 100 = 1080, an inner width of CSS width 1106.
-  expect(stripRowCount(OVERLAY_PRESETS['driving-only'], 1106)).toBe(1);
-  expect(stripRowCount(OVERLAY_PRESETS['driving-only'], 1105)).toBe(2);
+  // the Hard Mode indicator's 14 + 100 = 1080 and ET-071 cruise control's 14 + 140 = 1234, an inner width of CSS width 1260.
+  expect(stripRowCount(OVERLAY_PRESETS['driving-only'], 1260)).toBe(1);
+  expect(stripRowCount(OVERLAY_PRESETS['driving-only'], 1259)).toBe(2);
+  // Without cruise control it is ET-070's 1080 at CSS width 1106.
+  const withoutCruise = {...OVERLAY_PRESETS['driving-only'], 'cruise-control': false};
+  expect(stripRowCount(withoutCruise, 1106)).toBe(1);
+  expect(stripRowCount(withoutCruise, 1105)).toBe(2);
+});
+
+it('reserves cruise control its own 140 px slot (ET-071)', () => {
+  // Cruise control alone with the tags and the indicator: 96 + 96 + 140 + 100 with three gaps = 474, CSS width 500.
+  expect(stripRowCount(only('cruise-control'), 500)).toBe(1);
+  expect(stripRowCount(only('cruise-control'), 499)).toBe(2);
+  // Removing it from every section at 1280 gives ET-070's three rows back (1210, 1092, then the indicator at 1190).
+  expect(stripRowCount({...ALL, 'cruise-control': false}, 1280)).toBe(3);
 });
 
 it('reserves the next mandatory break its own 150 px slot (ET-052)', () => {
@@ -94,13 +124,13 @@ it('models the surface border as at least one device pixel below zoom 1', () => 
   const sections = only('cargo', 'origin', 'distance-driven');
   expect(stripRowCount(sections, 1138)).toBe(1);
   expect(stripRowCount(sections, 1138, 0.75)).toBe(2);
-  // At 0.5 the border is 2 CSS px: every section at 1280 has an inner width of 1280 − 4 − 24 = 1252, still three rows
-  // (1210, 1092, then the break's row ends at 1076 and the indicator at 1190); at 480 it is 452, eleven rows as at 454.
-  expect(stripRowCount(ALL, 1280, 0.5)).toBe(3);
-  expect(stripRowCount(ALL, 480, 0.5)).toBe(11);
-  // At zoom 1 and above the border stays 1 CSS px: the exact fit of driving-only at 1106 holds at scale 2.
-  expect(stripRowCount(OVERLAY_PRESETS['driving-only'], 1106, 2)).toBe(1);
-  expect(stripRowCount(OVERLAY_PRESETS['driving-only'], 1106, 0.99)).toBe(2);
+  // At 0.5 the border is 2 CSS px: every section at 1280 has an inner width of 1280 − 4 − 24 = 1252, four rows as at 1254
+  // since ET-071 (1120, 1172, the break's row ends at 1240, then the indicator); at 480 it is 452, twelve rows as at 454.
+  expect(stripRowCount(ALL, 1280, 0.5)).toBe(4);
+  expect(stripRowCount(ALL, 480, 0.5)).toBe(12);
+  // At zoom 1 and above the border stays 1 CSS px: the exact fit of driving-only at 1260 holds at scale 2.
+  expect(stripRowCount(OVERLAY_PRESETS['driving-only'], 1260, 2)).toBe(1);
+  expect(stripRowCount(OVERLAY_PRESETS['driving-only'], 1260, 0.99)).toBe(2);
 });
 
 it('never reserves more rows for a subset of the sections than for all of them', () => {

@@ -86,7 +86,7 @@ export interface DesktopBridge extends DashboardUploadBridge {
   /** Persists visibility; disabling discards an active placement draft only after the durable save. */
   setOverlayEnabled(enabled: boolean): Promise<SettingsView>;
   setOverlayBackgroundOpacity(opacity: number): Promise<SettingsView>;
-  /** Persists the complete overlay section set: exactly the fifteen ids, booleans only, at least one enabled. */
+  /** Persists the complete overlay section set: exactly the sixteen ids, booleans only, at least one enabled. */
   setOverlaySections(sections: OverlaySections): Promise<SettingsView>;
   /**
    * Enters the overlay edit mode for the saved layout (ET-012b): the overlay becomes draggable while this application is
