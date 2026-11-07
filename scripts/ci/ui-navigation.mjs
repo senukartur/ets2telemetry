@@ -20,14 +20,17 @@ export async function chooseSource(page, value) {
   await screen(page, 'live');
 }
 /**
- * ET-057: the language is chosen in Settings > General (the sidebar menu is gone). The route shown before the choice is
- * shown again afterwards, so callers keep their screen.
+ * ET-057, ET-073: the language is chosen in Settings > General via a dropdown select (the sidebar menu and radio buttons are gone).
+ * The route shown before the choice is shown again afterwards, so callers keep their screen.
  */
 export async function chooseLanguage(page, value) {
   const previous = await page.locator('.yu-sidebar .yu-nav-item[aria-current="page"]').getAttribute('data-testid', {timeout: 5000});
   await settingsPanel(page, 'general');
-  const radio = page.locator(`#language-${value}`);
-  if (await radio.getAttribute('aria-checked') !== 'true') await radio.click({timeout: 5000});
+  const trigger = page.getByTestId('language-select');
+  if (await trigger.getAttribute('data-value') !== value) {
+    await trigger.click({timeout: 5000});
+    await page.getByTestId(`language-option-${value}`).click({timeout: 5000});
+  }
   // Await IPC in the host and observe the rendered language under one condition deadline.
   const deadline = performance.now() + 5000, expired = () => new Error('UI_LANGUAGE_SAVED within 5000 ms');
   for (;;) {
@@ -36,17 +39,21 @@ export async function chooseLanguage(page, value) {
     let timer, observed;
     try {
       observed = await Promise.race([
-        page.evaluate(async language => {
+        page.evaluate(async () => {
           const state = await globalThis.desktop.getAppState();
-          return {language: state.settings.language, documentLanguage: globalThis.document.documentElement.lang,
-            checked: globalThis.document.getElementById(`language-${language}`)?.getAttribute('aria-checked')};
-        }, value),
+          const triggerEl = globalThis.document.querySelector('[data-testid="language-select"]');
+          return {
+            language: state.settings.language,
+            documentLanguage: globalThis.document.documentElement.lang,
+            selected: triggerEl?.getAttribute('data-value')
+          };
+        }),
         new Promise((_, reject) => {timer = setTimeout(() => reject(expired()), remaining);})
       ]);
     } finally {clearTimeout(timer);}
     const left = deadline - performance.now();
     if (left <= 0) throw expired();
-    if (observed.language === value && observed.documentLanguage === value && observed.checked === 'true') {
+    if (observed.language === value && observed.documentLanguage === value && observed.selected === value) {
       if (previous && previous !== 'tab-settings') await page.getByTestId(previous).click({timeout: Math.max(1, deadline - performance.now())});
       return;
     }
