@@ -871,3 +871,7 @@ The owner chose the existing VTC Dashboard and its [v1.0 contract](https://githu
 ## ET-101 continued-trip identity acceptance — November 6, 2026
 
 The owner accepted [stable-root publication for continued trips](docs/dashboard-upload.md#continued-trip-identity-stable-root-publication-after-membership-resolution) and requested ET-101 closure. The specification is accepted; implementation and integration/game evidence remain with their owning cards. This grants no uploader implementation, release or PR merge authorization.
+
+## ET-070 overlay Hard Mode indicator — November 7, 2026
+
+On [ET-070](https://trello.com/c/pFkLfUzR) the owner chose: D1, the lucide `Flame` with `HM`; D2, no count in the Strip, where not active is an amber `HM` without a check, while Card, Cluster and HUD show the count; D3, a mandatory fixed indicator that is not a section, without a setting, preset entry or settings-format change; D4, unknown, an expired lease and a service that is not ready display exactly as not active, never active without positive evidence. A current trip's first loss takes priority and shows as lost. Details are in [the minimal overlay](docs/minimal-overlay.md#hard-mode-indicator-et-070-november-7-2026).
