@@ -51,6 +51,10 @@ export interface JournalJobSummary {
   source: 'event' | 'checkpoint';
   sourceCity: Available<string>; sourceCompany: Available<string>; destinationCity: Available<string>; destinationCompany: Available<string>;
   cargo: Available<string>;
+  /** Raw SDK `job.market` value (for example `freight_market`), never translated. */
+  market: Available<string>;
+  /** Whether the game marked the job as special transport. */
+  isSpecialJob: Available<boolean>;
   /** Planned distance of the job offer, never the observed or delivered distance. */
   plannedDistance: JobConfiguration['plannedDistance'];
   /** Expected income of the job offer, never the revenue. */
@@ -281,9 +285,10 @@ function listItem(o: Record<string, unknown>): void {
   if ((o.outcome === 'open') !== (o.closeReason === null) || (o.outcome === 'open') !== (o.endedUtcMs === null)) bad();
   utcMs(o.startedUtcMs); nullable(o.endedUtcMs, utcMs);
   available(o.observedDistanceM, nonNegative); available(o.fuelUsedL, nonNegative);
-  const job = exact(o.job, ['source', 'sourceCity', 'sourceCompany', 'destinationCity', 'destinationCompany', 'cargo', 'plannedDistance', 'expectedIncome']);
+  const job = exact(o.job, ['source', 'sourceCity', 'sourceCompany', 'destinationCity', 'destinationCompany', 'cargo', 'market', 'isSpecialJob', 'plannedDistance', 'expectedIncome']);
   oneOf(job.source, ['event', 'checkpoint']);
-  for (const key of ['sourceCity', 'sourceCompany', 'destinationCity', 'destinationCompany', 'cargo']) available(job[key], text);
+  for (const key of ['sourceCity', 'sourceCompany', 'destinationCity', 'destinationCompany', 'cargo', 'market']) available(job[key], text);
+  available(job.isSpecialJob, boolean);
   measure(job.plannedDistance, 'm', nonNegative);
   available(job.expectedIncome, value => money(value, 'u64'));
 }

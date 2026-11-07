@@ -9,7 +9,7 @@ import {
   isJournalListCursor, isJournalSnapshotCursor, journalCursorPosition, isJournalEventCursor, isJournalRowCursor, isJournalTripsQuery, isJournalUuid, JOURNAL_EVENT_LIMITS, JOURNAL_INTERVAL_LIMITS, JOURNAL_SAMPLE_LIMITS,
   validateJournalEventPage, validateJournalIntervalPage, validateJournalTripDetail, validateJournalTripPage, type JournalPageQuery, type JournalTripListItem
 } from '../../../packages/contracts/src/journal';
-import {NAME_BYTES} from '../../../packages/contracts/src/protocol-v1';
+import {ID_BYTES, NAME_BYTES} from '../../../packages/contracts/src/protocol-v1';
 import type {DeleteTripOptions, SampleRecord, StorageErrorCode} from '../../../packages/storage/src/api';
 
 /** The five fixed invoke channels of the journal reads (J10). */
@@ -152,8 +152,10 @@ function exact(value: unknown, keys: readonly string[]): Record<string, unknown>
   return value as Record<string, unknown>;
 }
 const encoder = new TextEncoder();
-/** Display text of a list row: at most the protocol's NAME_BYTES of UTF-8, as every stored name was when it arrived. */
-function name(value: unknown): void { if (typeof value !== 'string' || encoder.encode(value).length > NAME_BYTES) bad(); }
+/** Text of at most `limit` bytes of UTF-8, as every stored text was when it arrived. */
+function bounded(value: unknown, limit: number): void { if (typeof value !== 'string' || encoder.encode(value).length > limit) bad(); }
+/** Display text of a list row: at most the protocol's NAME_BYTES of UTF-8. */
+const name = (value: unknown) => bounded(value, NAME_BYTES);
 const REASONS: readonly unknown[] = ['not-supported', 'not-observed', 'invalid'];
 function available(value: unknown, check: (value: unknown) => void): void {
   if (isRecord(value) && value.available === true) { check(exact(value, ['available', 'value']).value); return; }
@@ -186,9 +188,10 @@ function nextCursor(next: string | null, ids: readonly string[], limit: number):
   if ((next === null) !== (ids.length < limit)) bad();
   if (next !== null && journalCursorPosition(next) !== ids.at(-1)) bad();
 }
-/** A list row's display texts within the protocol's name bound; the contract validator checked the rest. */
+/** A list row's display texts within the protocol's name bound and its job market within the id bound; the contract validator checked the rest. */
 function rowTexts(trip: JournalTripListItem): void {
   for (const field of [trip.job.sourceCity, trip.job.sourceCompany, trip.job.destinationCity, trip.job.destinationCompany, trip.job.cargo]) if (field.available) name(field.value);
+  if (trip.job.market.available) bounded(trip.job.market.value, ID_BYTES);
 }
 
 /** The purpose and schema version that every journal answer carries (J3). */

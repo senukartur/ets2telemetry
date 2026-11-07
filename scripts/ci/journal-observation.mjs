@@ -31,21 +31,23 @@ const local = utcMs => {
   const d = new Date(utcMs), p = n => String(n).padStart(2, '0');
   return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())}`;
 };
+/** Every anchor's job market badge: the shared fixture job is a freight market job, not special transport (ET-072). */
+const JOB_TYPE = 'Freight market';
 /** The anchors on page 3 of the unfiltered list, newest first, with their hand-written row texts (ETS2 metric, ATS US customary). */
 const ANCHOR_ROWS = [
-  {trip: T.manySamples, started: local(BASE_UTC + 205_000), game: 'ATS', route: ROUTE, outcome: 'In progress', completeness: 'Unknown', observed: NOT_OBSERVED, fuel: NOT_OBSERVED, cargo: 'Synthetic Cargo'},
+  {trip: T.manySamples, started: local(BASE_UTC + 205_000), game: 'ATS', route: ROUTE, outcome: 'In progress', completeness: 'Unknown', observed: NOT_OBSERVED, fuel: NOT_OBSERVED, cargo: 'Synthetic Cargo', jobType: JOB_TYPE},
   {trip: T.zeroValues, started: local(BASE_UTC + 203_000), game: 'ATS', route: '(empty) → unavailable (not provided by the game)', outcome: 'Delivered', completeness: 'Complete',
-    observed: '0.0 mi', fuel: NOT_OBSERVED, cargo: NOT_OBSERVED},
-  {trip: T.open, started: local(BASE_UTC + 101_000), game: 'ETS2', route: ROUTE, outcome: 'In progress', completeness: 'Unknown', observed: NOT_OBSERVED, fuel: NOT_OBSERVED, cargo: 'Synthetic Cargo'},
+    observed: '0.0 mi', fuel: NOT_OBSERVED, cargo: NOT_OBSERVED, jobType: JOB_TYPE},
+  {trip: T.open, started: local(BASE_UTC + 101_000), game: 'ETS2', route: ROUTE, outcome: 'In progress', completeness: 'Unknown', observed: NOT_OBSERVED, fuel: NOT_OBSERVED, cargo: 'Synthetic Cargo', jobType: JOB_TYPE},
   {trip: T.restartClosed, started: local(BASE_UTC + 27_000), game: 'ETS2', route: ROUTE, outcome: 'No outcome — the game or plugin restarted', completeness: 'Partial', observed: NOT_OBSERVED,
-    fuel: NOT_OBSERVED, cargo: 'Synthetic Cargo'},
+    fuel: NOT_OBSERVED, cargo: 'Synthetic Cargo', jobType: JOB_TYPE},
   {trip: T.gapClosed, started: local(BASE_UTC + 22_000), game: 'ETS2', route: ROUTE, outcome: 'No outcome — events were lost', completeness: 'Partial', observed: NOT_OBSERVED, fuel: NOT_OBSERVED,
-    cargo: 'Synthetic Cargo'},
+    cargo: 'Synthetic Cargo', jobType: JOB_TYPE},
   {trip: T.differentJob, started: local(BASE_UTC + 20_000), game: 'ETS2', route: ROUTE, outcome: 'No outcome — a different job started', completeness: 'Partial', observed: NOT_OBSERVED,
-    fuel: NOT_OBSERVED, cargo: 'Synthetic Cargo'},
+    fuel: NOT_OBSERVED, cargo: 'Synthetic Cargo', jobType: JOB_TYPE},
   {trip: T.cancelled, started: local(BASE_UTC + 12_000), game: 'ETS2', route: ROUTE, outcome: 'Cancelled', completeness: 'Complete', observed: NOT_OBSERVED, fuel: NOT_OBSERVED,
-    cargo: 'Synthetic Cancel Cargo'},
-  {trip: T.delivered, started: local(BASE_UTC + 4_000), game: 'ETS2', route: ROUTE, outcome: 'Delivered', completeness: 'Complete', observed: '152.0 km', fuel: NOT_OBSERVED, cargo: 'Synthetic Cargo'}
+    cargo: 'Synthetic Cancel Cargo', jobType: JOB_TYPE},
+  {trip: T.delivered, started: local(BASE_UTC + 4_000), game: 'ETS2', route: ROUTE, outcome: 'Delivered', completeness: 'Complete', observed: '152.0 km', fuel: NOT_OBSERVED, cargo: 'Synthetic Cargo', jobType: JOB_TYPE}
 ];
 const NO_TRUCK = 'No truck was recorded for this trip. A trip whose recording started during the job has no truck until the game sends it again.';
 const NO_TRAILER = 'No trailer was recorded for this trip. A trip whose recording started during the job has no trailer until the game sends it again.';
@@ -86,7 +88,8 @@ function listState(expected) {
   const rows = [...d.querySelectorAll('[data-testid="journal-list"] [data-testid="journal-row"]')].map(row => {
     const cell = id => row.querySelector(`[data-testid="${id}"]`)?.textContent ?? null;
     return {trip: row.getAttribute('data-trip'), started: cell('journal-row-started'), game: cell('journal-row-game-name'), route: cell('journal-row-route'), outcome: cell('journal-row-outcome'),
-      completeness: cell('journal-row-completeness'), observed: cell('journal-row-observed'), fuel: cell('journal-row-fuel'), cargo: cell('journal-row-cargo')};
+      completeness: cell('journal-row-completeness'), observed: cell('journal-row-observed'), fuel: cell('journal-row-fuel'), cargo: cell('journal-row-cargo'),
+      jobType: cell('journal-row-job-type')};
   });
   const state = {page: text('journal-list-page'), error: text('journal-list-error'), empty: text('journal-empty'), emptyNote: text('journal-empty-note'), banner: text('journal-banner'),
     next: d.querySelector('[data-testid="journal-list-next"]')?.disabled === false, previous: d.querySelector('[data-testid="journal-list-previous"]')?.disabled === false, rows};
@@ -105,7 +108,8 @@ function detailState(expected) {
     const id = node.getAttribute('data-testid').slice('journal-section-'.length, -'-note'.length);
     (notes[id] ??= []).push(node.textContent);
   }
-  return {error, title: text('journal-detail-title'), outcome: text('journal-detail-outcome'), completeness: text('journal-detail-completeness'), fields, notes,
+  return {error, title: text('journal-detail-title'), outcome: text('journal-detail-outcome'), completeness: text('journal-detail-completeness'),
+    jobType: text('journal-detail-job-type'), special: text('journal-detail-special'), fields, notes,
     banner: d.querySelector('[data-testid="journal-banner"]')?.textContent ?? null};
 }
 function tableState(expected) {
@@ -268,6 +272,7 @@ export async function runJournalSeeded({dashboard, record}) {
     record.anchorDetails.push(actual);
     assert.equal(detail.error, null); assert.equal(detail.banner, BANNER);
     assert.deepEqual(actual, expected, `Detail of ${expected.trip} differs from the hand-written texts`);
+    assert.deepEqual({jobType: detail.jobType, special: detail.special}, {jobType: JOB_TYPE, special: null}, `Job type badges of ${expected.trip} differ`);
     if (expected.trip === T.delivered) {
       // The timeline window and the sample gap row of J14 (seconds 1, 2 and 4).
       const timeline = await openTable(dashboard, 'timeline', 6);

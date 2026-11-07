@@ -113,6 +113,8 @@ class Raw {constructor(readonly reply: unknown) {}}
 const raw = (reply: unknown) => new Raw(reply);
 /** A cargo name of 257 UTF-8 bytes, one over the protocol's NAME_BYTES. */
 const LONG_NAME = 'é'.repeat(128) + 'x';
+/** A job market of 129 UTF-8 bytes, one over the protocol's ID_BYTES (ET-072). */
+const LONG_MARKET = 'é'.repeat(64) + 'x';
 
 describe('the export header read (ET-016 PR-5)', () => {
   const DATABASE_UUID = 'f0000000-0000-4000-8000-000000000001', INFO = {database: {purpose: 'history', schemaVersion: 2}, databaseUuid: DATABASE_UUID};
@@ -169,7 +171,11 @@ describe('main accepts a service reply only when it answers the request exactly 
       p.intervals[0].detail = {cause: 'truck-change', annotation: true, atEventSeq: '2', count: 3} as typeof INTERVAL.detail; })],
     ['a sample page', SAMPLES, SAMPLE_PAGE],
     ['a full sample page', SAMPLES, {...SAMPLE_PAGE, samples: numbered(SAMPLE, 'id', 300, 11), nextCursor: '310'}],
-    ['an empty sample page', SAMPLES, {...SAMPLE_PAGE, samples: []}]
+    ['an empty sample page', SAMPLES, {...SAMPLE_PAGE, samples: []}],
+    // ET-072: the job summary's market is forwarded raw, up to the protocol's id bound; an unknown value is not refused.
+    ['a trip whose job market is 128 bytes', TRIPS, changed(TRIP_PAGE, p => { p.trips[0].job.market = {available: true, value: 'é'.repeat(64)}; })],
+    ['a trip of an unknown job market without a special-job flag', TRIPS, changed(TRIP_PAGE, p => {
+      p.trips[0].job.market = {available: true, value: 'future_market'}; p.trips[0].job.isSpecialJob = {available: false, reason: 'not-supported'} as never; })]
   ])('forwards %s unchanged', (_name, query, value) => {
     expect(parseJournalReply(query, {ok: true, value})).toEqual({ok: true, value});
   });
@@ -202,6 +208,13 @@ describe('main accepts a service reply only when it answers the request exactly 
     ['a trip row with a process id', TRIPS, changed(TRIP_PAGE, p => { (p.trips[0] as Record<string, unknown>).processId = 4242; })],
     ['a trip row with a path', TRIPS, changed(TRIP_PAGE, p => { (p as Record<string, unknown>).path = 'C:\\Users\\owner'; })],
     ['a cargo name over the protocol name bound', TRIPS, changed(TRIP_PAGE, p => { p.trips[0].job.cargo = {available: true, value: LONG_NAME} as never; })],
+    // ET-072: the job market and special-job flag of the job summary.
+    ['a job summary without its market', TRIPS, changed(TRIP_PAGE, p => { delete (p.trips[0].job as {market?: unknown}).market; })],
+    ['a job summary without its special-job flag', TRIPS, changed(TRIP_PAGE, p => { delete (p.trips[0].job as {isSpecialJob?: unknown}).isSpecialJob; })],
+    ['a numeric job market', TRIPS, changed(TRIP_PAGE, p => { (p.trips[0].job as {market: unknown}).market = {available: true, value: 1}; })],
+    ['a numeric special-job flag', TRIPS, changed(TRIP_PAGE, p => { (p.trips[0].job as {isSpecialJob: unknown}).isSpecialJob = {available: true, value: 0}; })],
+    ['a job market over the protocol id bound', TRIPS, changed(TRIP_PAGE, p => { p.trips[0].job.market = {available: true, value: LONG_MARKET}; })],
+    ['a detail whose job summary market is over the protocol id bound', DETAIL_QUERY, changed(DETAIL, p => { p.trip.job.market = {available: true, value: LONG_MARKET}; })],
     ['an unavailable distance without its reason', TRIPS, changed(TRIP_PAGE, p => { (p.trips[0] as {observedDistanceM: unknown}).observedDistanceM = {available: false}; })],
     ['the detail of another trip', {kind: 'trip', tripUuid: OTHER_TRIP}, DETAIL],
     ['a detail with a Windows session id', DETAIL_QUERY, changed(DETAIL, p => { (p.trip as Record<string, unknown>).windowsSessionId = 1; })],
