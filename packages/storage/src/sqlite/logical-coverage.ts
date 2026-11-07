@@ -122,7 +122,7 @@ export function originalCoverage(db: Database.Database, row: Row): LogicalCovera
   // Both the absence and the start must remain trustworthy; a gap before a later clear can hide a load.
   const gapAfter = previousJob && started && String(started.event_seq) < String(previousJob.event_seq) ? started.event_seq : previousJob?.event_seq ?? '00000000000000000000';
   const gap = event && get(db, 'SELECT id FROM event_gaps WHERE plugin_session_ref=? AND last_event_seq>? AND first_event_seq<=? LIMIT 1', row.plugin_session_ref, gapAfter, event.event_seq);
-  const observed = row.opened_by === 'event' && event?.type === 'job.configured' && event.first_redelivered === 0n && started && !reset && !gap
+  const observed = row.opened_by === 'event' && event?.type === 'job.configured' && event.first_redelivered === 0n && (started || previousJob?.type === 'job.cleared') && !reset && !gap
     && (!previousJob || previousJob.type === 'job.cleared' && previousJob.first_redelivered === 0n);
   const notes=db.prepare('SELECT detail_json FROM completeness_intervals WHERE trip_ref=? ORDER BY id LIMIT 129').all(row.id) as Row[];
   const pending=notes.some(note=>{const detail=typeof note.detail_json!=='string'?null:JSON.parse(note.detail_json) as Row;return detail?.cause==='observed-acceptance'&&detail.phase==='pending'&&validAcceptanceDetail(detail);});
@@ -184,7 +184,8 @@ export function advanceCoverage(db: Database.Database, id: unknown, _group: Row,
     if (interval.kind === 'discontinuity' && detail.cause === 'opened-at-load' && coverage.phase === 'pending' && cleanLoadWindow(db,row,false)) continue;
     if (interval.kind === 'discontinuity' && detail.cause === 'restart' && coverage.phase === 'pending' && cleanLoadWindow(db, row, false)
       && typeof detail.continuationOf === 'string' && get(db, `SELECT t.id FROM trips t JOIN logical_memberships m ON m.trip_ref=t.id WHERE t.trip_uuid=? AND m.logical_ref=? AND t.closed_by_session_ref=? AND t.close_reason='restart'`, detail.continuationOf, id, row.plugin_session_ref)) continue;
-    if (interval.kind === 'discontinuity' && detail.annotation === true && detail.label === 'crossing') continue;
+    if (interval.kind === 'discontinuity' && detail.annotation === true && (detail.label === 'crossing'
+      || detail.cause === 'game-time-jump' && detail.label === 'possible-sleep' && detail.stationary === true)) continue;
     if (interval.kind === 'event-loss') coverage.losses |= COVERAGE_LOSS.event;
     else if (interval.kind === 'sample-loss') coverage.losses |= COVERAGE_LOSS.sample;
     else if (interval.kind === 'restore-loss') coverage.losses |= COVERAGE_LOSS.restore;
