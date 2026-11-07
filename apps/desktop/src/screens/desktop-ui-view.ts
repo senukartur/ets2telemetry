@@ -3,7 +3,10 @@ import type {HardModeStatus} from '../../../../packages/contracts/src/hard-mode'
 import {resolveDisplayUnits} from '../../../../packages/telemetry-core/src/display-profile';
 import {fixed} from '../../../../packages/telemetry-core/src/format';
 import {convertSpeed} from '../../../../packages/telemetry-core/src/units';
-import {liveSources} from '../live-sources';
+import {liveSources, type LiveSources} from '../live-sources';
+import {connectionReasonText} from '../live-dashboard-text';
+import {hardModeView} from '../hard-mode/view';
+import {t} from '../i18n';
 import {appCopy} from './app-copy';
 import type {AppLanguage} from '../../../../packages/contracts/src';
 import {initialLive} from '../live-state';
@@ -79,4 +82,83 @@ export function pluginStatusText(targets: readonly Pick<PluginTargetView, 'state
     : targets.some(target => target.state === 'missing') ? 'Not installed'
     : targets.length && targets.every(target => target.state === 'excluded') ? 'Not managed (game excluded)' : 'Unknown';
   return appCopy(state, language);
+}
+
+export type StatusTone = 'ok' | 'warn' | 'error' | 'neutral';
+export interface StatusChip {text: string; tone: StatusTone}
+export type ShellRoute = 'live' | 'hardMode' | 'journal' | 'settings' | 'account';
+/** The sidebar groups in order (ET-074); the top bar's breadcrumb names the group of the current route. */
+export const NAV_GROUPS = [
+  {id: 'drive', routes: ['live', 'hardMode', 'journal']},
+  {id: 'app', routes: ['settings']},
+  {id: 'company', routes: ['account']}
+] as const satisfies readonly {id: string; routes: readonly ShellRoute[]}[];
+export type NavGroupId = typeof NAV_GROUPS[number]['id'];
+export function routeGroup(route: ShellRoute): NavGroupId {
+  return NAV_GROUPS.find(group => (group.routes as readonly ShellRoute[]).includes(route))?.id ?? 'drive';
+}
+
+/**
+ * The top bar's game chip (ET-074). Only what the renderer knows is shown: the game and, while connected, its mode when the
+ * v1 evidence is strong enough, else the connection word. Stale and lost connections name their state, never an age.
+ */
+export function connectionChip(status: LiveTelemetry['status'] | undefined, game: string, mode: string | null, language: AppLanguage = 'en'): StatusChip {
+  const word = (value: NonNullable<LiveTelemetry['status']>) => t(`ui.status.${value}`, undefined, language);
+  const prefixed = (text: string) => game ? `${game} · ${text}` : text;
+  switch (status) {
+    case 'connected': return {text: game && mode ? t('chip.game.live', {game, mode}, language) : prefixed(word('connected')), tone: 'ok'};
+    case 'paused': return {text: game ? t('chip.game.paused', {game}, language) : word('paused'), tone: 'warn'};
+    case 'stale': case 'disconnected': return {text: prefixed(word(status)), tone: 'error'};
+    case undefined: case 'waiting': return {text: t('chip.game.waiting', undefined, language), tone: 'neutral'};
+    default: return {text: word(status), tone: connectionTone(status)};
+  }
+}
+
+/** "Plugin n/m": installed targets of the games that are not excluded, with the state words while not all are installed. */
+export function pluginChip(targets: readonly Pick<PluginTargetView, 'state'>[], language: AppLanguage = 'en'): StatusChip {
+  const managed = targets.filter(target => target.state !== 'excluded').length, installed = targets.filter(target => target.state === 'installed').length;
+  const text = !managed ? `${t('ui.plugin', undefined, language)} · ${pluginStatusText(targets, language)}`
+    : `${t('chip.plugin', {n: installed, m: managed}, language)}${installed < managed ? ` · ${pluginStatusText(targets, language)}` : ''}`;
+  return {text, tone: pluginTone(targets)};
+}
+
+/** "Hard Mode n/12" from the current assessment; a loss for this trip and an unknown assessment say so in words. */
+export function hardModeChip(status: HardModeStatus, nowUtcMs: number, language: AppLanguage = 'en'): StatusChip {
+  const tone = hardModeTone(status);
+  if (status.trip?.firstLoss) return {text: t('chip.hm.lost', undefined, language), tone};
+  if (status.assessment.state === 'unknown') return {text: t('hm.status.unknown', undefined, language), tone};
+  return {text: t('chip.hm.fail', {n: hardModeView(status, nowUtcMs, language).passed}, language), tone};
+}
+
+/** The Live page state (ET-074): current values are connected or paused; a lost stream is stale; anything else waits. */
+export type LiveScreenState = 'connected' | 'paused' | 'stale' | 'waiting';
+export function liveScreenState(status: LiveTelemetry['status'] | undefined, current: boolean, paused: boolean): LiveScreenState {
+  if (current) return paused ? 'paused' : 'connected';
+  return status === 'stale' || status === 'disconnected' ? 'stale' : 'waiting';
+}
+
+/**
+ * The game mode for the game chip and the Game session card: v1's current mode evidence through the combiner's freshness.
+ * TruckersMP needs strong evidence; single-player is strong evidence or the ordinary weak module scan, which the owner
+ * decided on November 2, 2026 to present as single-player (the same rule as journal-view.ts). Anything else is not shown.
+ */
+export function liveGameMode(sources: Pick<LiveSources, 'v1Current' | 'v1State' | 'field'>): 'single-player' | 'truckersmp' | null {
+  const reading = sources.v1State?.gameMode;
+  if (!sources.v1Current || sources.field('game-mode').state !== 'value' || reading?.state !== 'value') return null;
+  const {mode, confidence, method} = reading.value;
+  if (mode === 'truckersmp') return confidence === 'strong' ? 'truckersmp' : null;
+  return mode === 'single-player' && (confidence === 'strong' || method === 'module-scan' && confidence === 'weak') ? 'single-player' : null;
+}
+
+const NO_NEW_DATA = /(?:no recent (?:v1 )?SDK capture|no recent current observation|awaits a current observation)$/i;
+/** The stale reason in the Live subline: the expiry reasons read "no new data from the game", others as the connection reason. */
+export function staleReasonText(reason: string | undefined, language: AppLanguage = 'en'): string | null {
+  if (!reason) return null;
+  return NO_NEW_DATA.test(reason) ? t('live.staleReason', undefined, language) : connectionReasonText(reason, language);
+}
+/** The Live page subline: what the values are worth now. Only the stale state adds a reason; nothing claims an update rate. */
+export function liveSubline(state: LiveScreenState, game: string, reason: string | undefined, language: AppLanguage = 'en'): string {
+  const detail = state === 'connected' ? game ? t('live.sub.connected', {game}, language) : t('ui.status.connected', undefined, language) : t(`live.sub.${state}`, undefined, language);
+  const why = state === 'stale' ? staleReasonText(reason, language) : null;
+  return t('live.sub', {v: why ? `${detail} · ${why}` : detail}, language);
 }

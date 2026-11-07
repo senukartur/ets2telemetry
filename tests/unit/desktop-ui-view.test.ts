@@ -5,7 +5,8 @@ import {initialLive} from '../../apps/desktop/src/live-state';
 import {v1Projection} from '../shared/live-v1-fixtures';
 import {dashboardFuel} from '../../apps/desktop/src/speed-display';
 import {describe, expect, it} from 'vitest';
-import {clampRatio, connectionTone, desktopLiveView, gaugeArc, hardModeTone, pluginTone, pluginStatusText, recordingMotion, recordingTone} from '../../apps/desktop/src/screens/desktop-ui-view';
+import {clampRatio, connectionChip, connectionTone, desktopLiveView, gaugeArc, hardModeChip, hardModeTone, liveGameMode, liveScreenState, liveSubline, pluginChip, pluginTone,
+  pluginStatusText, recordingMotion, recordingTone, routeGroup, staleReasonText} from '../../apps/desktop/src/screens/desktop-ui-view';
 import {liveDashboardText} from '../../apps/desktop/src/live-dashboard-text';
 import {unknownHardMode} from '../../packages/telemetry-core/src/hard-mode';
 import type {HardModeStatus} from '../../packages/contracts/src/hard-mode';
@@ -195,4 +196,78 @@ it('uses the verified ATS v1-only attachment for display units without authorizi
   expect(rows().find(row => row.id === 'route-remaining')).toMatchObject({value: '93.8 mi'});
   expect(rows({ets2: 'metric', ats: 'metric'}).find(row => row.id === 'route-remaining')).toMatchObject({value: '151.0 km'});
   expect(overlayPresentation(partial)).toMatchObject({source: 'ATS', freshness: 'unavailable', speed: '—', speedUnit: 'mph'});
+});
+
+// ET-074: the compact shell's chips and the Live page state. Expected strings are written by hand from en.ts and ru.ts.
+describe('compact shell chips and Live states (ET-074, REG-009, REG-002)', () => {
+  it('names the game and its mode or the connection word, and never invents a stale age', () => {
+    expect(connectionChip('connected', 'ETS2', 'Single-player', 'en')).toEqual({text: 'ETS2 · Single-player', tone: 'ok'});
+    expect(connectionChip('connected', 'ATS', 'Одиночная игра', 'ru')).toEqual({text: 'ATS · Одиночная игра', tone: 'ok'});
+    expect(connectionChip('connected', 'ETS2', null, 'en')).toEqual({text: 'ETS2 · Connected', tone: 'ok'});
+    expect(connectionChip('connected', 'ETS2', null, 'ru')).toEqual({text: 'ETS2 · Подключено', tone: 'ok'});
+    expect(connectionChip('paused', 'ETS2', 'Single-player', 'en')).toEqual({text: 'ETS2 paused', tone: 'warn'});
+    expect(connectionChip('paused', 'ATS', null, 'ru')).toEqual({text: 'ATS на паузе', tone: 'warn'});
+    expect(connectionChip('stale', 'ETS2', 'Single-player', 'en')).toEqual({text: 'ETS2 · No current data', tone: 'error'});
+    expect(connectionChip('disconnected', 'ATS', null, 'ru')).toEqual({text: 'ATS · Отключено', tone: 'error'});
+    for (const status of ['stale', 'disconnected'] as const) for (const language of ['en', 'ru'] as const) expect(connectionChip(status, 'ETS2', null, language).text).not.toMatch(/12/);
+    expect(connectionChip('waiting', '', null, 'en')).toEqual({text: 'Waiting for the game', tone: 'neutral'});
+    expect(connectionChip(undefined, '', null, 'ru')).toEqual({text: 'Ожидание игры', tone: 'neutral'});
+    expect(connectionChip('incompatible', 'ETS2', null, 'en')).toEqual({text: 'Version mismatch', tone: 'error'});
+    expect(connectionChip('restarting', '', null, 'ru')).toEqual({text: 'Служба перезапускается', tone: 'neutral'});
+  });
+  it('counts installed plugins of the managed games and keeps the state words while not all are installed', () => {
+    expect(pluginChip([{state: 'installed'}, {state: 'installed'}], 'en')).toEqual({text: 'Plugin 2/2', tone: 'ok'});
+    expect(pluginChip([{state: 'installed'}, {state: 'blocked'}], 'en')).toEqual({text: 'Plugin 1/2 · Blocked', tone: 'error'});
+    expect(pluginChip([{state: 'installed'}, {state: 'missing'}], 'ru')).toEqual({text: 'Плагин 1/2 · Не установлен', tone: 'neutral'});
+    expect(pluginChip([{state: 'installed'}, {state: 'excluded'}], 'en').text).toBe('Plugin 1/1');
+    expect(pluginChip([], 'en')).toEqual({text: 'Plugin · Unknown', tone: 'neutral'});
+    expect(pluginChip([{state: 'excluded'}], 'en').text).toBe('Plugin · Not managed (game excluded)');
+  });
+  it('shows Hard Mode n/12, the loss for this trip and an unknown assessment in words', () => {
+    const base: HardModeStatus = {assessment: unknownHardMode(0), trip: null};
+    const assessed = (passing: number): HardModeStatus => ({...base, assessment: {...base.assessment, state: passing === 12 ? 'pass' : 'fail',
+      rules: base.assessment.rules.map((rule, index) => ({...rule, state: index < passing ? 'pass' : 'fail'}))}});
+    const lost = {firstLoss: {}} as HardModeStatus['trip'];
+    expect(hardModeChip(assessed(12), 0, 'en')).toEqual({text: 'Hard Mode 12/12', tone: 'ok'});
+    expect(hardModeChip(assessed(10), 0, 'ru')).toEqual({text: 'Hard Mode 10/12', tone: 'warn'});
+    expect(hardModeChip({...assessed(12), trip: lost}, 0, 'en')).toEqual({text: 'Hard Mode lost', tone: 'error'});
+    expect(hardModeChip({...assessed(12), trip: lost}, 0, 'ru').text).toBe('Hard Mode потерян');
+    expect(hardModeChip(base, 0, 'en')).toEqual({text: 'Hard Mode unknown', tone: 'neutral'});
+  });
+  it.each([
+    ['connected', true, false, 'connected'], ['connected', true, true, 'paused'], ['paused', true, true, 'paused'],
+    ['stale', false, false, 'stale'], ['disconnected', false, false, 'stale'], ['waiting', false, false, 'waiting'], ['incompatible', false, false, 'waiting'],
+    ['unavailable', false, false, 'waiting'], ['restarting', false, false, 'waiting'], ['service-failed', false, false, 'waiting'], [undefined, false, false, 'waiting'],
+    ['connected', false, false, 'waiting']
+  ] as const)('maps status %s (current %s, paused %s) to the %s Live state', (status, current, paused, state) => expect(liveScreenState(status, current, paused)).toBe(state));
+  it('reads the mode from current v1 evidence: strong TruckersMP, single-player also from the ordinary weak module scan', () => {
+    const mode = (patch: object | null, live = smokePair()) => {
+      if (patch) live.v1!.observation!.sourceStatus.gameMode = {...live.v1!.observation!.sourceStatus.gameMode, ...patch};
+      return liveGameMode(desktopLiveView(live).sources);
+    };
+    expect(mode(null)).toBe('single-player');
+    expect(mode({mode: 'single-player', method: 'process-scan', confidence: 'strong'})).toBe('single-player');
+    expect(mode({mode: 'truckersmp', method: 'module-scan', confidence: 'strong'})).toBe('truckersmp');
+    expect(mode({mode: 'truckersmp', method: 'process-scan', confidence: 'weak'})).toBeNull();
+    expect(mode({mode: 'single-player', method: 'process-scan', confidence: 'weak'})).toBeNull();
+    expect(mode({mode: 'unknown', method: 'none', confidence: 'none'})).toBeNull();
+    expect(mode(null, {...smokePair(), v1: undefined})).toBeNull();
+    expect(mode(null, smokePair({status: 'stale', fresh: false, reason: 'Main has no recent v1 SDK capture'}))).toBeNull();
+  });
+  it('words the stale reason for the subline and passes other reasons through the connection reason text', () => {
+    expect(staleReasonText('Main has no recent SDK capture', 'en')).toBe('no new data from the game');
+    expect(staleReasonText('Renderer has no recent v1 SDK capture', 'ru')).toBe('нет новых данных от игры');
+    expect(staleReasonText('Replacement live subscription awaits a current observation', 'en')).toBe('no new data from the game');
+    expect(staleReasonText('Fixture diagnostic detail', 'ru')).toBe('Fixture diagnostic detail');
+    expect(staleReasonText(undefined, 'en')).toBeNull();
+    expect(liveSubline('connected', 'ETS2', undefined, 'en')).toBe('Real-time game data · ETS2, values are current');
+    expect(liveSubline('paused', 'ETS2', undefined, 'ru')).toBe('Данные игры в реальном времени · игра на паузе, значения текущие');
+    expect(liveSubline('stale', 'ETS2', 'Main has no recent SDK capture', 'en')).toBe('Real-time game data · values are out of date and dimmed · no new data from the game');
+    expect(liveSubline('stale', 'ATS', 'Renderer has no recent SDK capture', 'ru')).toBe('Данные игры в реальном времени · значения устарели и приглушены · нет новых данных от игры');
+    expect(liveSubline('waiting', '', 'Waiting for game', 'ru')).toBe('Данные игры в реальном времени · игра не подключена');
+    for (const language of ['en', 'ru'] as const) expect(liveSubline('connected', 'ETS2', undefined, language)).not.toMatch(/20/);
+  });
+  it('maps every route to its sidebar group', () => {
+    expect((['live', 'hardMode', 'journal', 'settings', 'account'] as const).map(routeGroup)).toEqual(['drive', 'drive', 'drive', 'app', 'company']);
+  });
 });

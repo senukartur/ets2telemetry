@@ -1016,5 +1016,15 @@ export const RU_DICTIONARY: TranslationDictionary = channelCopyTable(Object.free
   'hm.now': 'Сейчас {detected} · нужно {required}',
   'hm.required.parkingShort': 'Нормальная',
   'j.incomeNote': 'Ожидаемый доход из заказа. Фактическая выплата или штраф — в карточке рейса.',
-  'tr.raw': 'Записанные данные: интервалы, события и сэмплы'
+  'tr.raw': 'Записанные данные: интервалы, события и сэмплы',
+  'shell.breadcrumb': 'Где вы',
+  'shell.status': 'Состояние',
+  'live.instruments': 'Приборы',
+  'live.sub': 'Данные игры в реальном времени · {v}',
+  'live.sub.connected': '{game}, значения актуальны',
+  'live.sub.paused': 'игра на паузе, значения текущие',
+  'live.sub.stale': 'значения устарели и приглушены',
+  'live.sub.waiting': 'игра не подключена',
+  'live.noJobHint': 'Нет активного заказа. Поля появятся, когда игра передаст заказ.',
+  'live.staleReason': 'нет новых данных от игры'
 }));

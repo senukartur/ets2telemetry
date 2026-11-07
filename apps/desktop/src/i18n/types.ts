@@ -600,6 +600,8 @@ export type I18nKey =
   | 'upd.check' | 'upd.check.pending' | 'upd.check.upToDate' | 'upd.check.available' | 'upd.check.failed' | 'upd.check.unsupported' | 'upd.check.ready' | 'upd.check.rejected'
   | 'ver.line' | 'ver.unknown' | 'ver.dev' | 'ver.staging' | 'ver.stagingA'
   | 'lang.title' | 'lang.en' | 'lang.ru' | 'lang.saveFailed'
-  | 'ui.moreAbout' | 's.interface' | 'live.time' | 'live.nextBreak' | 'hm.howChecked' | 'hm.now' | 'hm.required.parkingShort' | 'j.incomeNote' | 'tr.raw';
+  | 'ui.moreAbout' | 's.interface' | 'live.time' | 'live.nextBreak' | 'hm.howChecked' | 'hm.now' | 'hm.required.parkingShort' | 'j.incomeNote' | 'tr.raw'
+  | 'shell.breadcrumb' | 'shell.status' | 'live.instruments' | 'live.sub' | 'live.sub.connected' | 'live.sub.paused' | 'live.sub.stale' | 'live.sub.waiting'
+  | 'live.noJobHint' | 'live.staleReason';
 
 export type TranslationDictionary = Readonly<Record<I18nKey, string>>;

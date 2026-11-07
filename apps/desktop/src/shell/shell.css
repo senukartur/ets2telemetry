@@ -8,7 +8,7 @@ button:not(:disabled), select:not(:disabled) { cursor: pointer; }
 /* The screen heading takes programmatic focus on each route change for screen readers; it is not a control, so no ring. */
 h1[tabindex="-1"]:focus { outline: none; }
 [hidden] { display: none !important; }
-[data-slot="card"] { border-radius: 12px; gap: 0; padding: 0; overflow-wrap: anywhere; box-shadow: none; }
+[data-slot="card"] { border-radius: var(--yu-radius-card); gap: 0; padding: 0; overflow-wrap: anywhere; box-shadow: none; }
 [data-slot="card-header"] { padding: 14px 16px; border-bottom: 1px solid var(--yu-divider); }
 [data-slot="card-title"] { border-left: var(--yu-title-bar); padding-left: 10px; font-size: 15px; font-weight: 700; }
 [data-slot="card-title"] h1, [data-slot="card-title"] h2 { font-size: inherit; margin: 0; }
@@ -21,24 +21,31 @@ h1[tabindex="-1"]:focus { outline: none; }
 .badge-ets2 { color: var(--yu-ets2-fg); background: var(--yu-ets2-bg); border-color: var(--yu-ets2-border); }
 .badge-ats { color: var(--yu-ats-fg); background: var(--yu-ats-bg); border-color: var(--yu-ats-border); }
 .yu-app { height: 100vh; display: grid; grid-template-rows: 32px minmax(0,1fr); }
-.yu-titlebar { display: flex; align-items: center; gap: 8px; height: 32px; padding: 0 160px 0 10px; background: var(--yu-bg-chrome); color: var(--yu-text-muted); border-bottom: 1px solid var(--yu-divider-chrome); font-size: 12px; app-region: drag; -webkit-app-region: drag; user-select: none; }
-.yu-titlebar img { width: 20px; height: 20px; object-fit: contain; }
-.yu-body { display: grid; grid-template-columns: 220px minmax(0,1fr); min-height: 0; }
-.yu-sidebar { position: relative; display: flex; flex-direction: column; min-height: 0; overflow-y: auto; padding: 18px 12px 12px; background: var(--yu-bg-chrome); border-right: 1px solid var(--yu-divider-chrome); }
-.yu-lockup { display: flex; gap: 12px; align-items: center; margin: 0 4px 24px; }
-.yu-lockup img { width: 40px; height: 40px; object-fit: contain; }
-.yu-lockup strong { display: block; font-size: 15px; } .yu-lockup small { font-size: 11px; color: var(--yu-text-muted); }
-.yu-nav-group { font-size: 11px; text-transform: uppercase; letter-spacing: .6px; color: var(--yu-text-muted); margin: 18px 12px 7px; }
-.yu-nav-item { display: flex; align-items: center; gap: 10px; min-height: 38px; width: 100%; text-align: left; color: var(--yu-text-secondary); padding: 8px 10px; border: 1px solid transparent; margin-bottom: 3px; }
-.yu-nav-item svg { width: 18px; height: 18px; flex: none; }
-.yu-nav-item[aria-current="page"] { color: var(--yu-selected-fg); background: var(--yu-selected-bg); border-color: var(--yu-selected-border); font-weight: 500; }
-.yu-sidebar-footer { margin-top: auto; padding-top: 18px; }
-.yu-recording { display: flex; align-items: center; gap: 10px; width: 100%; text-align: left; border: 1px solid var(--yu-border); background: var(--yu-bg-inset); border-radius: 10px; padding: 9px 10px; margin-bottom: 12px; cursor: help; transition: background-color .15s, border-color .15s; }
-.yu-recording:hover, .yu-recording:focus-visible, .yu-recording[data-state="delayed-open"], .yu-recording[data-state="instant-open"] { background: var(--yu-bg-card); border-color: var(--yu-border-input); }
+.yu-titlebar { display: flex; align-items: center; gap: 8px; height: 32px; padding: 0 160px 0 10px; background: var(--yu-bg-chrome); color: var(--yu-text-secondary); border-bottom: 1px solid var(--yu-divider-chrome); font-size: 12px; app-region: drag; -webkit-app-region: drag; user-select: none; }
+.yu-body { display: grid; grid-template-columns: var(--yu-sidebar-w) minmax(0,1fr); min-height: 0; }
+/* ET-074 compact shell: the 216 px sidebar holds the lockup, three nav groups and the footer, 14 px apart. */
+.yu-sidebar { position: relative; display: flex; flex-direction: column; gap: 14px; min-height: 0; overflow-y: auto; padding: 12px 10px; background: var(--yu-bg-chrome); border-right: 1px solid var(--yu-divider-chrome); }
+.yu-lockup { display: flex; gap: 8px; align-items: center; padding: 0 4px; }
+.yu-lockup img { flex: none; width: 28px; height: 28px; object-fit: contain; }
+.yu-lockup strong { display: block; font-size: 14px; font-weight: 700; line-height: 1.2; color: var(--yu-text-strong); } .yu-lockup small { display: block; font-size: 11px; line-height: 1.2; color: var(--yu-text-muted); }
+.yu-sidebar > nav { display: flex; flex-direction: column; gap: 14px; }
+.yu-nav-section { display: flex; flex-direction: column; gap: 1px; }
+.yu-nav-group { font-size: 11px; font-weight: 500; text-transform: uppercase; letter-spacing: .5px; color: var(--yu-text-muted); margin: 0; padding: 0 8px 4px; }
+.yu-nav-item { display: flex; align-items: center; gap: 8px; min-height: var(--yu-nav-item-h); width: 100%; text-align: left; color: var(--yu-text-secondary); padding: 5px 8px; border: 0; background: transparent; }
+.yu-nav-item svg { width: 16px; height: 16px; flex: none; color: var(--yu-text-subtle); }
+/* A long label wraps to a second line; it is never cut off or ellipsized. */
+.yu-nav-label { flex: 1; min-width: 0; line-height: 1.25; white-space: normal; overflow-wrap: anywhere; }
+.yu-nav-item:hover { background: var(--yu-neutral-bg); }
+.yu-nav-item[aria-current="page"] { color: var(--yu-text-strong); background: var(--yu-nav-active-bg); font-weight: 500; }
+.yu-nav-item[aria-current="page"] svg { color: var(--yu-accent-light); }
+.yu-sidebar-footer { margin-top: auto; display: flex; flex-direction: column; gap: 4px; }
+.yu-recording { display: flex; align-items: center; gap: 8px; width: 100%; min-height: 32px; text-align: left; border: 0; background: transparent; border-radius: var(--yu-radius-control); padding: 0 8px; cursor: help; transition: background-color .15s; }
+.yu-recording:hover, .yu-recording:focus-visible, .yu-recording[data-state="delayed-open"], .yu-recording[data-state="instant-open"] { background: var(--yu-neutral-bg); }
 .yu-recording:focus-visible { outline: 2px solid var(--yu-accent-light); outline-offset: 2px; }
-.yu-recording-label { flex: 1; min-width: 0; font-size: 13px; font-weight: 500; line-height: 1.3; color: var(--yu-text); }
-.yu-recording-badge { flex: none; font-size: 11px; padding: 1px 6px; border-radius: 6px; border: 1px solid var(--yu-neutral-border); background: var(--yu-neutral-bg); color: var(--yu-neutral-fg); }
-.yu-recording-info { flex: none; width: 16px; height: 16px; color: var(--yu-text-muted); transition: color .15s; }
+.yu-recording .yu-dot { width: 8px; height: 8px; }
+.yu-recording-label { flex: 1; min-width: 0; font-size: 12px; font-weight: 500; line-height: 1.3; color: var(--yu-text); }
+.yu-recording-badge { flex: none; font-size: 11px; padding: 1px 6px; border-radius: 4px; border: 1px solid var(--yu-neutral-border); background: var(--yu-neutral-bg); color: var(--yu-neutral-fg); }
+.yu-recording-info { flex: none; width: 14px; height: 14px; color: var(--yu-text-subtle); transition: color .15s; }
 .yu-recording:hover .yu-recording-info, .yu-recording:focus-visible .yu-recording-info, .yu-recording[data-state$="-open"] .yu-recording-info { color: var(--yu-text-secondary); }
 /* Recording dot: the colour follows recordingTone and the animation recordingMotion (desktop-ui-view.ts). */
 .yu-dot { position: relative; flex: none; width: 10px; height: 10px; border-radius: 50%; background: var(--yu-dot-ok); --yu-dot-color: var(--yu-dot-ok); }
@@ -54,28 +61,41 @@ h1[tabindex="-1"]:focus { outline: none; }
 /* The global reduced-motion rule shortens durations, which would make an infinite ring flicker; stop it instead. */
 @media (prefers-reduced-motion: reduce) { .yu-dot, .yu-dot::after { animation: none !important; } }
 /* ET-055 UP10: the update control under the recording indicator; hidden while idle, checking or unsupported. */
-.yu-update { display: flex; align-items: center; gap: 10px; width: 100%; min-height: 38px; text-align: left; border: 1px solid var(--yu-selected-border); background: var(--yu-selected-bg); color: var(--yu-selected-fg); border-radius: 10px; padding: 8px 10px; margin-bottom: 6px; cursor: pointer; transition: background-color .15s, border-color .15s; }
-.yu-update:not([aria-disabled="true"]):hover { border-color: var(--yu-accent-light); }
+/* ET-074: a ghost row with the dot at its right end (order); the warn and error tones keep their colours. */
+.yu-update { display: flex; align-items: center; gap: 8px; width: 100%; min-height: 32px; text-align: left; border: 1px solid transparent; background: transparent; color: #93C5FD; border-radius: var(--yu-radius-control); padding: 0 8px; cursor: pointer; transition: background-color .15s, border-color .15s; }
+.yu-update:not([aria-disabled="true"]):hover { background: var(--yu-neutral-bg); }
+.yu-update .yu-dot { order: 2; width: 7px; height: 7px; }
 .yu-update:focus-visible { outline: 2px solid var(--yu-accent-light); outline-offset: 2px; }
-.yu-update[data-tone="neutral"] { border-color: var(--yu-border); background: var(--yu-bg-inset); color: var(--yu-text); }
+.yu-update[data-tone="neutral"] { color: var(--yu-text); }
 .yu-update[data-tone="warn"] { border-color: var(--yu-warn-border); background: var(--yu-warn-bg); color: var(--yu-warn-fg); }
 .yu-update[data-tone="error"] { border-color: var(--yu-err-border); background: var(--yu-err-bg); color: var(--yu-err-fg); }
 .yu-update[aria-disabled="true"] { cursor: default; }
 .yu-update-icon { flex: none; width: 16px; height: 16px; }
-.yu-update-label { flex: 1; min-width: 0; font-size: 13px; font-weight: 500; line-height: 1.3; font-variant-numeric: tabular-nums; }
+.yu-update-label { flex: 1; min-width: 0; font-size: 12px; font-weight: 500; line-height: 1.3; font-variant-numeric: tabular-nums; }
 .yu-update-icon[data-motion="spin"][data-window-focused="true"] { animation: yu-spin 1.2s linear infinite; }
 @keyframes yu-spin { to { transform: rotate(360deg); } }
 @media (prefers-reduced-motion: reduce) { .yu-update-icon { animation: none !important; } }
 .yu-update-progress { height: 4px; border-radius: 2px; background: var(--yu-border); overflow: hidden; margin: 0 2px 8px; }
 .yu-update-progress i { display: block; height: 100%; background: var(--yu-accent-light); }
 /* ET-055 UP11: the version line; a staging build adds a warn-toned badge. */
-.yu-version { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; font-size: 12px; color: var(--yu-text-muted); font-variant-numeric: tabular-nums; margin: 0 2px 12px; }
+.yu-version { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; font-size: 11px; color: var(--yu-text-muted); font-variant-numeric: tabular-nums; margin: 0; padding: 2px 8px 4px; }
 .yu-version-badge { font-size: 11px; padding: 1px 6px; border-radius: 6px; border: 1px solid var(--yu-warn-border); background: var(--yu-warn-bg); color: var(--yu-warn-fg); }
 .yu-column { min-width: 0; min-height: 0; display: flex; flex-direction: column; }
-.yu-topbar { min-height: 52px; display: flex; flex-wrap: wrap; align-items: center; gap: 8px; padding: 10px 20px; border-bottom: 1px solid var(--yu-divider-chrome); background: var(--yu-bg-chrome); }
+.yu-exit { width: 100%; justify-content: flex-start; gap: 8px; height: 32px; padding: 0 8px; border: 1px solid var(--yu-divider-chrome); background: var(--yu-bg-app); color: var(--yu-text-secondary); font-size: 12px; font-weight: 500; }
+.yu-exit:not(:disabled):hover { background: var(--yu-neutral-bg); color: var(--yu-text); }
+.yu-topbar { min-height: var(--yu-topbar-h); display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; padding: 8px 16px; border-bottom: 1px solid var(--yu-divider-chrome); background: var(--yu-bg-chrome); }
 .yu-topbar h1 { font-size: 18px; font-weight: 700; margin-right: auto; }
+.yu-breadcrumb { flex: 1; min-width: 0; display: flex; align-items: center; gap: 6px; color: var(--yu-text-muted); white-space: nowrap; }
+.yu-breadcrumb [aria-current="page"] { color: var(--yu-text); font-weight: 500; }
+.yu-breadcrumb-separator { color: var(--yu-text-subtle); }
+.yu-status-chips { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+.yu-chip[data-slot="badge"] { height: var(--yu-control-h-xs); min-height: var(--yu-control-h-xs); padding: 0 8px; gap: 5px; border-radius: var(--yu-radius-chip); font-size: 12px; font-weight: 500; }
+.yu-chip-dot { flex: none; width: 6px; height: 6px; border-radius: 50%; background: currentColor; }
 /* Relative: visually hidden (sr-only) descriptions stay inside the scroll area instead of growing the window (ET-057). */
-.yu-content { position: relative; flex: 1; min-height: 0; overflow: auto; scrollbar-gutter: stable; padding: 18px 20px; }
+.yu-content { position: relative; flex: 1; min-height: 0; overflow: auto; scrollbar-gutter: stable; padding: 16px 20px 24px; }
+.yu-page-header { margin-bottom: 12px; }
+.yu-page-header h1 { margin: 0; font-size: var(--yu-text-screen); font-weight: 700; line-height: 1.3; color: var(--yu-text-strong); }
+.yu-page-sub { margin: 0; font-size: 12px; color: var(--yu-text-muted); }
 .yu-content > div { min-width: 0; }
 .yu-stack { display: grid; gap: 14px; }
 .yu-settings { display: grid; grid-template-columns: 200px minmax(0,1fr); gap: 18px; align-items: start; }
@@ -92,37 +112,6 @@ h1[tabindex="-1"]:focus { outline: none; }
 .yu-kv { display: flex; justify-content: space-between; align-items: baseline; gap: 16px; padding: 7px 0; border-bottom: 1px solid var(--yu-divider); }
 .yu-kv dt { color: var(--yu-text-muted); } .yu-kv dd { margin: 0; text-align: right; overflow-wrap: anywhere; }
 @media (prefers-reduced-motion: reduce) { *, *::before, *::after { animation-duration: .01ms !important; transition-duration: .01ms !important; scroll-behavior: auto !important; } }
-
-.yu-live-top { container-type: inline-size; display: grid; grid-template-columns: minmax(0, 1fr); gap: 14px; align-items: start; }
-.yu-live-bottom { display: grid; grid-template-columns: repeat(3, minmax(0,1fr)); gap: 14px; }
-.yu-instrument { background: var(--yu-tile-gradient); border-color: var(--yu-tile-border); }
-.yu-instrument > [data-slot="card-content"] { display: grid; grid-template-columns: minmax(180px, 1.2fr) 64px minmax(130px,1fr); gap: 10px; align-items: center; padding: 12px; }
-.yu-gauge svg { width: 100%; max-width: 260px; display: block; margin: auto; font-variant-numeric: tabular-nums; }
-.yu-gauge-track { fill: none; stroke: var(--yu-border); stroke-linecap: round; }
-.yu-gauge-speed, .yu-gauge-rpm { fill: none; stroke: var(--yu-accent-light); stroke-linecap: round; }
-.yu-gauge-rpm { stroke: var(--yu-accent); }
-.yu-gauge-tick { fill: var(--yu-text-muted); font-size: 11px; }
-.yu-gauge-number { fill: var(--yu-text); font-size: 48px; font-weight: 500; }
-.yu-gauge-unit { fill: var(--yu-text-muted); font-size: 13px; }
-.yu-gauge-caption { fill: var(--yu-text-secondary); font-size: 13px; }
-.yu-gear { display: flex; flex-direction: column; align-items: center; gap: 8px; }
-.yu-gear > strong { display: grid; place-items: center; min-width: 56px; min-height: 64px; padding: 6px; border: 1px solid var(--yu-accent-light); border-radius: 12px; background: var(--yu-selected-bg); font-size: 32px; font-weight: 500; }
-.yu-fuel strong, .yu-job-metrics strong, .yu-kv dd, .yu-trip-section dd, .yu-gauge-caption, .yu-gauge-tick { font-weight: 500; }
-.yu-fuel { display: flex; align-items: stretch; gap: 12px; font-variant-numeric: tabular-nums; }
-.yu-tank { position: relative; width: 24px; min-width: 24px; border: 1px solid var(--yu-border-input); border-radius: 7px; overflow: hidden; background: var(--yu-bg-inset); }
-.yu-tank i { position: absolute; left: 0; right: 0; bottom: 0; }
-.yu-fuel .yu-metric { display: block; font-size: 19px; font-weight: 500; }
-.yu-not-current .yu-gauge, .yu-not-current .yu-gear, .yu-not-current .yu-fuel { opacity: .65; }
-.yu-route { display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 10px 0; border-bottom: 1px solid var(--yu-divider); }
-.yu-route > div { min-width: 0; } .yu-route svg { width: 14px; height: 14px; display: inline; color: var(--yu-accent-light); margin-right: 5px; }
-.yu-route p { color: var(--yu-text-muted); font-size: 12px; }
-.yu-job-metrics { display: grid; grid-template-columns: repeat(3,minmax(0,1fr)); gap: 14px; }
-.yu-job-metrics span, .yu-job-metrics small { color: var(--yu-text-muted); display: block; font-size: 12px; }
-.yu-job-metrics strong { display: block; margin: 3px 0; font-variant-numeric: tabular-nums; }
-.yu-live-fields { display: grid; grid-template-columns: repeat(2,minmax(0,1fr)); gap: 24px; }
-.yu-live-fields h3 { color: var(--yu-accent-light); padding-bottom: 6px; }
-.yu-connection { display: flex; gap: 12px; align-items: center; padding: 14px 18px; border: 1px solid var(--yu-border); border-radius: 12px; background: var(--yu-bg-inset); }
-.yu-connection svg { width: 26px; height: 26px; color: var(--yu-text-muted); } .yu-connection p { color: var(--yu-text-muted); font-size: 12px; margin-top: 4px; }
 
 /* Journal keeps every raw read and paged table; summary cards and chart are presentation only. */
 .yu-journal-filters {padding-bottom:14px;border-bottom:1px solid var(--yu-border);align-items:end}
@@ -224,10 +213,6 @@ h1[tabindex="-1"]:focus { outline: none; }
 
 
 
-.yu-gear {min-width:0}
-.yu-instrument [data-testid="live-paused"] {grid-column:1/-1;justify-self:start;white-space:normal;overflow-wrap:normal;max-width:100%;height:auto}
-
-.yu-tank-unavailable { position: absolute; inset: 0; display: grid; place-items: center; color: var(--yu-text-muted); font-size: 20px; }
 
 /* Hard Mode is one card: headline row, full-width progress, the in-game fix and a grid of the twelve rules (ET-057). */
 [data-testid="hard-mode-card"] { min-width: 0; container-type: inline-size; }
@@ -245,14 +230,6 @@ h1[tabindex="-1"]:focus { outline: none; }
 .yu-hard-mode-fix { display: flex; align-items: center; gap: 8px; margin: 0; padding: 10px 12px; border: 1px solid var(--yu-warn-border); border-radius: 10px; background: var(--yu-warn-bg); color: var(--yu-warn-fg); }
 .yu-hard-mode-fix > svg { flex: none; width: 16px; height: 16px; }
 
-@container (max-width: 560px) {
-  .yu-instrument > [data-slot="card-content"] { grid-template-columns: minmax(0,1fr) 64px; }
-  .yu-instrument .yu-fuel { grid-column: 1 / -1; min-width: 0; }
-}
-@media (max-width: 900px) {
-  .yu-live-bottom, .yu-live-fields { grid-template-columns: minmax(0,1fr); }
-  .yu-job-metrics { grid-template-columns: minmax(0,1fr); }
-}
 
 /* ET-045b action results: the severity's tone plus a 3px left border; the icon and the word carry it too, never colour alone. */
 .yu-action-result { border-left-width: 3px; }
@@ -294,18 +271,10 @@ button[aria-disabled="true"], [role="switch"][aria-disabled="true"] { cursor: no
 .yu-info-hint svg { width: 14px; height: 14px; }
 .yu-info-hint:hover, .yu-info-hint:focus-visible, .yu-info-hint[data-state$="-open"] { color: var(--yu-accent-light); background: var(--yu-selected-bg); }
 .yu-label-hint { display: flex; align-items: center; gap: 2px; }
-.yu-job-metrics .yu-info-hint-wrap { display: inline-flex; }
 .yu-setting-row > .yu-segmented { flex: 0 1 440px; min-width: 260px; }
 .yu-setting-row { display: flex; align-items: center; justify-content: space-between; gap: 16px; flex-wrap: wrap; min-height: 44px; padding: 6px 0; border-bottom: 1px solid var(--yu-divider); }
 .yu-setting-row:last-child { border-bottom: 0; }
 .yu-setting-row > :first-child { display: inline-flex; align-items: center; font-weight: 500; }
-.yu-live-details > summary { cursor: pointer; list-style: none; display: flex; align-items: center; gap: 8px; padding: 12px 16px; font-weight: 500; color: var(--yu-text-secondary); }
-.yu-live-details > summary::-webkit-details-marker { display: none; }
-.yu-live-details > summary svg { width: 16px; height: 16px; transition: transform .15s; }
-.yu-live-details[open] > summary svg { transform: rotate(90deg); }
-.yu-live-details[open] > summary { border-bottom: 1px solid var(--yu-divider); }
-.yu-live-details > .yu-live-fields { padding: 14px 16px; }
-.yu-live-bottom-2 { display: grid; grid-template-columns: repeat(2, minmax(0,1fr)); gap: 14px; }
 .yu-hard-mode-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; align-items: stretch; padding: 0; margin: 0; list-style: none; }
 .yu-hard-mode-grid > li { display: flex; flex-direction: column; justify-content: center; gap: 2px; min-height: 44px; padding: 4px 12px; border: 1px solid var(--yu-divider); border-radius: 10px; background: var(--yu-bg-inset); }
 .yu-hard-mode-grid > li[data-state="fail"] { border-color: var(--yu-warn-border); background: var(--yu-warn-bg); }
@@ -337,9 +306,100 @@ button[aria-disabled="true"], [role="switch"][aria-disabled="true"] { cursor: no
 .yu-upload-token { display: flex; gap: 8px; }
 .yu-token-input { min-width: 0; width: 100%; border: 1px solid var(--yu-border-input); background: var(--yu-bg-input); color: var(--yu-text); padding: 8px 10px; }
 .yu-account-grid progress { width: 100%; height: 8px; accent-color: var(--yu-accent-light); }
-.yu-sync-chip { display: inline-flex; align-items: center; gap: 6px; padding: 3px 8px; border: 1px solid var(--yu-neutral-border); color: var(--yu-neutral-fg); background: var(--yu-neutral-bg); max-width: 100%; text-align: left; }
-.yu-sync-chip svg { width: 15px; height: 15px; flex: none; }
 .yu-sync-chip[data-tone="ok"] { color: var(--yu-ok-fg); border-color: var(--yu-ok-border); background: var(--yu-ok-bg); }
 .yu-sync-chip[data-tone="warn"] { color: var(--yu-warn-fg); border-color: var(--yu-warn-border); background: var(--yu-warn-bg); }
 .yu-sync-chip[data-tone="error"] { color: var(--yu-err-fg); border-color: var(--yu-err-border); background: var(--yu-err-bg); }
 @media (max-width: 950px) { .yu-account-grid { grid-template-columns: minmax(0,1fr); } }
+
+/* ET-074: the site sync chip is 24 px tall like the other chips; its hit area extends to 32 px. */
+.yu-sync-chip { display: inline-flex; align-items: center; gap: 5px; border: 1px solid var(--yu-neutral-border); color: var(--yu-neutral-fg); background: var(--yu-neutral-bg); max-width: 100%; text-align: left; }
+.yu-sync-chip svg { width: 13px; height: 13px; flex: none; }
+.yu-topbar button.yu-sync-chip { position: relative; height: var(--yu-control-h-xs); min-height: var(--yu-control-h-xs); padding: 0 8px; border-radius: var(--yu-radius-chip); font-size: 12px; font-weight: 500; white-space: nowrap; }
+.yu-topbar button.yu-sync-chip::after { content: ""; position: absolute; inset: -4px 0; }
+
+/* ET-074 Live page (mockup T1): one column up to 1100 px with 12 px gaps. */
+.yu-live-screen { max-width: 1100px; }
+.yu-live { display: grid; gap: 12px; min-width: 0; }
+.yu-connection { display: flex; gap: 14px; align-items: center; padding: 14px; border: 1px solid var(--yu-border); border-radius: var(--yu-radius-card); background: var(--yu-bg-card); }
+.yu-connection-icon { flex: none; display: grid; place-items: center; width: 44px; height: 44px; border-radius: 10px; background: var(--yu-nav-active-bg); color: var(--yu-accent-light); }
+.yu-connection-icon svg { width: 22px; height: 22px; }
+.yu-connection strong { display: block; font-size: 15px; font-weight: 700; color: var(--yu-text-strong); }
+.yu-connection p { margin: 0; font-size: 12px; color: var(--yu-text-secondary); }
+
+/* Instrument: gauge, gear and fuel wrap as one row of flex items. */
+.yu-instrument { background: var(--yu-instrument-gradient); border: 1px solid var(--yu-border); }
+.yu-instrument > [data-slot="card-content"] { display: flex; flex-wrap: wrap; align-items: center; gap: 16px 28px; padding: 14px 18px; }
+.yu-gauge { flex: none; width: 260px; max-width: 100%; }
+.yu-gauge svg { display: block; width: 100%; font-variant-numeric: tabular-nums; }
+.yu-gauge-track { fill: none; stroke: var(--yu-border); stroke-linecap: round; }
+.yu-gauge-speed, .yu-gauge-rpm { fill: none; stroke: var(--yu-accent-light); stroke-linecap: round; }
+.yu-gauge-rpm { stroke: var(--yu-accent); }
+.yu-gauge-tick-line { stroke: var(--yu-text-subtle); }
+.yu-gauge-tick { fill: var(--yu-text-muted); font-size: 11px; }
+.yu-gauge-number { fill: var(--yu-text-strong); font-size: 48px; font-weight: 500; }
+.yu-gauge-unit { fill: var(--yu-text-muted); font-size: 13px; }
+.yu-gauge-caption { fill: var(--yu-text-secondary); font-size: 13px; }
+.yu-gear { flex: none; width: 120px; display: flex; flex-direction: column; align-items: center; gap: 6px; }
+.yu-gear > .yu-muted { font-size: 12px; }
+.yu-gear > strong { min-width: 84px; padding: 6px 10px; border: 1px solid var(--yu-gear-border); border-radius: 8px; background: var(--yu-gear-bg); color: var(--yu-text-strong); font-size: 46px; line-height: 1; text-align: center; }
+.yu-gear > [data-slot="badge"] { max-width: 100%; height: auto; white-space: normal; overflow-wrap: anywhere; text-align: center; }
+.yu-fuel { flex: 1 1 300px; min-width: 0; display: flex; align-items: stretch; gap: 16px; font-variant-numeric: tabular-nums; }
+.yu-tank { position: relative; flex: none; width: 22px; height: 150px; padding: 2px; border: 1px solid var(--yu-border-strong); border-radius: 5px; overflow: hidden; background: var(--yu-bg-app); }
+.yu-tank i { position: absolute; left: 2px; right: 2px; bottom: 2px; max-height: calc(100% - 4px); border-radius: 3px; }
+.yu-tank-unavailable { position: absolute; inset: 0; display: grid; place-items: center; color: var(--yu-text-muted); font-size: 16px; }
+.yu-fuel-info { flex: 1; min-width: 0; display: flex; flex-direction: column; justify-content: space-between; gap: 8px; }
+.yu-fuel-amount { margin: 0; }
+.yu-fuel .yu-metric { font-size: 22px; color: var(--yu-text-strong); }
+.yu-fuel-amount .yu-muted { color: var(--yu-text-secondary); }
+.yu-fuel-rows { display: grid; gap: 8px; margin: 0; }
+.yu-fuel-rows dt { gap: 6px; font-size: 12px; color: var(--yu-text-muted); }
+.yu-fuel-rows dt > svg, .yu-job-metrics span > svg { flex: none; width: 14px; height: 14px; }
+.yu-fuel-rows dd { margin: 0; }
+.yu-fuel-rows strong { font-size: 15px; }
+.yu-fuel-rows small { font-size: 12px; color: var(--yu-text-muted); }
+.yu-fuel strong, .yu-job-metrics strong, .yu-kv dd, .yu-trip-section dd, .yu-gauge-caption, .yu-gauge-tick, .yu-gear > strong { font-weight: 500; }
+
+/* Compact cards: a 13 px header row with a bottom line and no title bar. */
+.yu-live-card > [data-slot="card-header"] { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; padding: 10px 14px; border-bottom-color: var(--yu-border); }
+.yu-live-card [data-slot="card-title"] { flex: 1; min-width: 0; border-left: 0; padding-left: 0; font-size: 13px; color: var(--yu-text-strong); }
+.yu-live-card > [data-slot="card-content"] { padding: 6px 14px 10px; }
+.yu-live-card > [data-slot="card-content"] > p { margin: 6px 0 2px; }
+.yu-tags { display: flex; flex-wrap: wrap; gap: 6px; }
+.yu-tag[data-slot="badge"] { min-height: 0; padding: 1px 6px; border: 0; border-radius: 4px; background: var(--yu-bg-raised); color: var(--yu-text-secondary); font-size: 11px; font-weight: 500; }
+.yu-live-card > .yu-job-body { display: flex; flex-direction: column; gap: 14px; padding: 12px 14px; }
+.yu-route { display: grid; grid-template-columns: minmax(0, max-content) minmax(32px, 1fr) minmax(0, max-content); align-items: center; gap: 14px; }
+.yu-route-end { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.yu-route-end > svg { flex: none; width: 16px; height: 16px; color: var(--yu-text-secondary); }
+.yu-route-end strong, .yu-route-end small { display: block; }
+.yu-route-end strong { font-weight: 500; color: var(--yu-text-strong); }
+.yu-route-end small { font-size: 12px; color: var(--yu-text-muted); }
+.yu-route-destination { justify-content: flex-end; text-align: right; }
+.yu-route-line { height: 6px; border-radius: 3px; background: var(--yu-bg-raised); }
+.yu-job-metrics { display: grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); gap: 12px; }
+.yu-job-metrics > div { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.yu-job-metrics span { display: flex; align-items: center; gap: 6px; font-size: 12px; color: var(--yu-text-muted); }
+.yu-job-metrics strong { font-size: 15px; color: var(--yu-text-strong); }
+.yu-job-metrics small { font-size: 11px; color: var(--yu-text-muted); }
+.yu-job-metrics .yu-job-break { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; color: inherit; }
+.yu-live-cards { display: flex; flex-wrap: wrap; align-items: flex-start; gap: 12px; }
+.yu-live-cards > [data-slot="card"] { flex: 1 1 260px; min-width: 0; }
+
+/* Key-value rows in the compact cards: 5 px rows with a line between them. */
+.yu-live-card .yu-kv { gap: 8px; padding: 5px 0; border-bottom: 0; border-top: 1px solid var(--yu-divider); }
+.yu-live-card .yu-kv:first-child { border-top: 0; }
+.yu-live-card .yu-kv dt { flex: 1; color: var(--yu-text-secondary); }
+
+/* Stale: the values are dashes and dimmed; the badges stay at full strength. */
+[data-live-state="stale"] :is(.yu-gauge, .yu-gear > strong, .yu-fuel, .yu-job-body, .yu-live-cards .yu-kv dd) { opacity: .45; }
+
+/* Every field, collapsed at the bottom. */
+.yu-live-details-card { padding: 0; gap: 0; }
+.yu-live-details > summary { cursor: pointer; list-style: none; display: flex; align-items: center; gap: 8px; min-height: 40px; padding: 8px 14px; font-weight: 500; color: var(--yu-text-secondary); }
+.yu-live-details > summary::-webkit-details-marker { display: none; }
+.yu-live-details > summary svg { width: 16px; height: 16px; transition: transform .15s; }
+.yu-live-details[open] > summary svg { transform: rotate(90deg); }
+.yu-live-details[open] > summary { border-bottom: 1px solid var(--yu-border); }
+.yu-live-details > .yu-live-fields { padding: 12px 14px; }
+.yu-live-fields { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 20px; }
+.yu-live-fields h3 { color: var(--yu-accent-light); padding-bottom: 6px; }
+@media (max-width: 900px) { .yu-live-fields { grid-template-columns: minmax(0, 1fr); } }

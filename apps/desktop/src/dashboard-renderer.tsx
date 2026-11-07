@@ -2,22 +2,22 @@ import {AccountScreen} from './dashboard-upload/account-screen';
 import {SyncChip} from './dashboard-upload/sync-chip';
 import {useDashboardUpload} from './dashboard-upload/use-dashboard-upload';
 import {NowPlayingSettingsCard} from './now-playing/settings-card';
-import {recordingMotion, recordingTone, connectionTone, pluginTone, hardModeTone, pluginStatusText} from './screens/desktop-ui-view';
+import {connectionChip, desktopLiveView, hardModeChip, liveGameMode, liveScreenState, liveSubline, pluginChip, recordingMotion, recordingTone, type ShellRoute} from './screens/desktop-ui-view';
 import {HardModeCard} from './hard-mode/card';
-import React, {useEffect, useRef, useState} from 'react';
+import React, {useEffect, useMemo, useRef, useState} from 'react';
 import type {AppLanguage, AppState, LiveTelemetry, SettingsView, SourceSelection, UnitGame} from '../../../packages/contracts/src';
 import {Card, CardContent, CardHeader, CardTitle} from '@/components/ui/card';
 import {Alert, AlertDescription, AlertTitle} from '@/components/ui/alert';
 import {Button} from '@/components/ui/button';
 import {Label} from '@/components/ui/label';
 import {RadioGroup, RadioGroupItem} from '@/components/ui/radio-group';
-import {Badge} from '@/components/ui/badge';
 import {Tooltip, TooltipContent, TooltipProvider, TooltipTrigger} from '@/components/ui/tooltip';
-import {Gauge, BookOpen, Settings2, Power, Flame, Plug, Info, Cloud} from 'lucide-react';
+import {Power, Info} from 'lucide-react';
 import {useHardModeStatus} from './hard-mode/use-status';
-import {hardModeView} from './hard-mode/view';
 import {useLanguageController} from './shell/use-language';
 import {useWindowFocused} from './shell/use-window-focus';
+import {SidebarNav} from './shell/sidebar-nav';
+import {TopBar} from './shell/top-bar';
 import logo from './assets/logo.png';
 import huninnFontLicense from './assets/huninn-OFL.txt?raw';
 import huninnFontLicenseUrl from './assets/huninn-OFL.txt?url';
@@ -43,7 +43,7 @@ import {CHANNEL} from './channel';
 import './index.css';
 
 export default function App() {
-  const [route, setRoute] = useState<'live' | 'hardMode' | 'journal' | 'settings' | 'account'>('live');
+  const [route, setRoute] = useState<ShellRoute>('live');
   const [panel, setPanel] = useState<'general' | 'overlay' | 'plugin' | 'about' | 'data'>('general');
   const heading = useRef<HTMLHeadingElement>(null);
   const content = useRef<HTMLElement>(null);
@@ -81,8 +81,11 @@ export default function App() {
   // Main pushes the saved settings; until the first push the ET-000 defaults apply.
   const saved = (view: SettingsView) => setApp(current => current && {...current, settings: view});
   const languageController = useLanguageController(settings, saved, () => setLastCard('language'));
-  const hmView = hardModeView(hardMode.status, hardMode.now, language);
   const targets = app ? Object.values(app.plugins.games).flatMap(game => game.targets) : [];
+  // ET-074: one live view for the game chip and the Live subline; the Live page builds its own from the same inputs.
+  const liveView = useMemo(() => desktopLiveView(live, settings?.units, settings?.gearDisplay), [live, settings?.units, settings?.gearDisplay]);
+  const game = live?.observation?.source.game.toUpperCase() ?? '', mode = liveGameMode(liveView.sources);
+  const liveState = liveScreenState(live?.status, liveView.current, liveView.sources.paused);
   const choose = (game: UnitGame, value: string) => {
     if (!isUnitProfile(value)) return;
     setLastCard('units'); setUnits('saving');
@@ -91,16 +94,13 @@ export default function App() {
     }, () => setUnits('failed'));
   };
 
-  const nav = [{id: 'live', Icon: Gauge}, {id: 'hardMode', Icon: Flame}, {id: 'journal', Icon: BookOpen}, {id: 'settings', Icon: Settings2}, {id: 'account', Icon: Cloud}] as const;
   const settingsPanels = ['general', 'overlay', 'plugin', 'about', 'data'] as const;
   const showSettingsState = settings && settings.state !== 'loaded' && settings.state !== 'defaults';
   return <div className="yu-app" data-testid="shell.root">
-    <div className="yu-titlebar" data-testid="shell.titlebar"><img src={logo} alt="" /><span>{CHANNEL.displayName}</span></div>
+    {/* ET-074: the title bar holds the app name and the native window buttons only; the logo is in the sidebar lockup. */}
+    <div className="yu-titlebar" data-testid="shell.titlebar"><span>{CHANNEL.displayName}</span></div>
     <div className="yu-body"><aside className="yu-sidebar" data-testid="shell.sidebar"><div className="yu-lockup" data-testid="shell.sidebar.lockup"><img src={logo} alt="" /><div><strong>Yukon Union</strong><small>{t('app.sub', undefined, language)}</small></div></div>
-      <nav aria-label={t('app.window', undefined, language)}>{nav.map(({id, Icon}) => <React.Fragment key={id}>
-        {id === 'live' || id === 'settings' ? <p className="yu-nav-group">{t(id === 'live' ? 'nav.group.drive' : 'nav.group.app', undefined, language)}</p> : null}
-        <button type="button" className="yu-nav-item" aria-current={route === id ? 'page' : undefined} onClick={() => setRoute(id)} data-testid={`tab-${id}`}><Icon aria-hidden="true" />{t(`nav.${id}`, undefined, language)}</button>
-      </React.Fragment>)}</nav>
+      <SidebarNav route={route} language={language} onNavigate={setRoute} />
       <div className="yu-sidebar-footer"><TooltipProvider delayDuration={150} skipDelayDuration={0}><Tooltip><TooltipTrigger asChild>
         <button type="button" className="yu-recording" data-testid="shell.sidebar.recording" aria-label={recording.testBadge ? `${recording.label}, ${recording.testBadge}` : recording.label}>
           <span className="yu-dot" aria-hidden="true" data-tone={recordingTone(health?.recording.state)} data-motion={recordingMotion(health?.recording.state)} data-window-focused={windowFocused} data-testid="shell.recording.indicator" />
@@ -117,19 +117,20 @@ export default function App() {
         <VersionLine info={app?.application} language={language} testId="shell.sidebar.version" />
         {/* ET-057: the language is chosen in Settings > General only; closing to the tray is explained on Exit. */}
         <TooltipProvider delayDuration={150} skipDelayDuration={0}><Tooltip><TooltipTrigger asChild>
-          <Button variant="ghost" className="w-full" disabled={exit === 'pending'} aria-describedby="shell-exit-hint" data-testid="exit-application" onClick={() => {setExit('pending'); void window.desktop.exitApplication().catch(() => setExit('failed'));}}><Power aria-hidden="true" />{exit === 'pending' ? strings.exitPending : t('side.exit', undefined, language)}</Button>
+          <Button variant="outline" className="yu-exit" disabled={exit === 'pending'} aria-describedby="shell-exit-hint" data-testid="exit-application" onClick={() => {setExit('pending'); void window.desktop.exitApplication().catch(() => setExit('failed'));}}><Power aria-hidden="true" />{exit === 'pending' ? strings.exitPending : t('side.exit', undefined, language)}</Button>
         </TooltipTrigger><TooltipContent side="right" align="end" data-testid="shell.exit.hint">{t('s.closeD', undefined, language)}</TooltipContent></Tooltip></TooltipProvider>
         <span id="shell-exit-hint" className="sr-only" style={{position: 'fixed'}}>{t('s.closeD', undefined, language)}</span>
         {exit === 'failed' ? <p role="status">{strings.exitFailed}</p> : null}
       </div></aside>
-      <div className="yu-column"><header className="yu-topbar" data-testid="shell.topbar"><h1 ref={heading} tabIndex={-1} data-testid="screen-title">{t(`nav.${route}`, undefined, language)}</h1>
+      <div className="yu-column"><TopBar route={route} language={language} connection={connectionChip(live?.status, game, mode ? t(mode === 'truckersmp' ? 'mode.tmp' : 'mode.sp', undefined, language) : null, language)}
+        plugin={pluginChip(targets, language)} hardMode={hardModeChip(hardMode.status, hardMode.now, language)}>
         <SyncChip state={upload.state} language={language} onOpen={() => setRoute('account')} />
-        <Badge variant={connectionTone(live?.status)} data-testid="shell.status.connection"><Gauge aria-hidden="true" />{live?.observation?.source.game.toUpperCase() ?? ''} {t(`ui.status.${live?.status ?? 'waiting'}`, undefined, language)}</Badge>
-        <Badge variant={pluginTone(targets)} data-testid="shell.status.plugin"><Plug aria-hidden="true" />{t('ui.plugin', undefined, language)} · {pluginStatusText(targets, language)}</Badge>
-        <Badge variant={hardModeTone(hardMode.status)} data-testid="shell.status.hardMode"><Flame aria-hidden="true" />{hmView.headline}</Badge>
-      </header><main ref={content} className="yu-content" data-testid="shell.content">
-        <div hidden={route !== 'live'} className="yu-stack" data-testid="live.screen">
-          <LiveDashboard onSelect={game => window.desktop.selectSource(game)} live={live} units={settings?.units} gearDisplay={settings?.gearDisplay} language={language} />
+      </TopBar><main ref={content} className="yu-content" data-testid="shell.content">
+        {/* ET-074: the page title opens the content of every route; it takes focus on each route change. */}
+        <div className="yu-page-header" data-testid="shell.pageHeader"><h1 ref={heading} tabIndex={-1} data-testid="screen-title">{t(`nav.${route}`, undefined, language)}</h1>
+          {route === 'live' ? <p className="yu-page-sub" data-testid="live.sub">{liveSubline(liveState, game, live?.reason, language)}</p> : null}</div>
+        <div hidden={route !== 'live'} className="yu-live-screen" data-testid="live.screen">
+          <LiveDashboard onSelect={game => window.desktop.selectSource(game)} live={live} units={settings?.units} gearDisplay={settings?.gearDisplay} recording={health?.recording} language={language} />
         </div>
         <div hidden={route !== 'hardMode'} className="yu-stack" data-testid="hardMode.screen"><HardModeCard language={language} controller={hardMode} /></div>
         {route === 'journal' ? <JournalBoundary language={language}><Journal uploadStatus={upload.state.status} units={settings?.units} recording={health?.recording.state} language={language} /></JournalBoundary> : null}
