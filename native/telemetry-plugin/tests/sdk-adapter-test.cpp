@@ -272,7 +272,7 @@ void failure_cleanup() {
     host.throw_event = 0; host.fail_event = 0;
     require(adapter->initialize(SCS_TELEMETRY_VERSION_1_01, &params) == SCS_RESULT_ok, "failed init allows retry");
     host.throw_cleanup = true; adapter->shutdown(); auto stopped = read(*adapter);
-    require(host.events.empty() && host.channels.empty() && stopped->continuity.callback_failures == 17, "throwing unregister isolates all cleanup operations"); // 11 channels (ET-052 adds the break channel) and 6 events
+    require(host.events.empty() && host.channels.empty() && stopped->continuity.callback_failures == 18, "throwing unregister isolates all cleanup operations"); // 12 channels (ET-052 adds the break channel, ET-071 cruise control) and 6 events
   }
   auto adapter = std::make_unique<Adapter>(); Host host; auto params = host.params(); host.erroneous = "truck.engine.rpm";
   require(adapter->initialize(SCS_TELEMETRY_VERSION_1_01, &params) == SCS_RESULT_generic_error && host.channels.empty() && host.events.empty(), "unexpected channel registration errors fail closed");
@@ -643,9 +643,10 @@ void v1_nonblocking() {
 // Every v0 publication (state, continuity, revision, diagnostics) and every CAP0 envelope must be identical.
 namespace cap0 = ets2telemetry::cap0;
 struct IsolationFrame { std::unique_ptr<Snapshot> snapshot; std::vector<cap0::Envelope> evidence; };
-// break_mode 0: the host registers the break channel and never calls it; 1: the game does not provide it; 2: it is called in every frame.
-std::vector<IsolationFrame> isolation_run(bool attach, int break_mode = 0) {
-  auto adapter = std::make_unique<Adapter>(); Host host; if (break_mode == 1) host.missing = "mandatory.break"; auto params = host.params();
+// break_mode 0: the host registers the optional v1-only channel `optional` (the break, or cruise control for ET-071) and
+// never calls it; 1: the game does not provide it; 2: it is called in every frame.
+std::vector<IsolationFrame> isolation_run(bool attach, int break_mode = 0, Field optional = Field::mandatory_break) {
+  auto adapter = std::make_unique<Adapter>(); Host host; if (break_mode == 1) host.missing = channel_specs()[static_cast<std::size_t>(optional)].name; auto params = host.params();
   require(adapter->initialize(SCS_TELEMETRY_VERSION_1_01, &params) == SCS_RESULT_ok, "isolation init"); read(*adapter);
   auto queue = std::make_unique<cap0::EvidenceQueue>(); require(queue->prepare(), "CAP0 queue prepared"); queue->open(); adapter->attach_evidence(queue.get());
   auto channel = std::make_unique<v1::EventChannel>(); require(channel->prepare(), "v1 channel prepared");
@@ -653,7 +654,10 @@ std::vector<IsolationFrame> isolation_run(bool attach, int break_mode = 0) {
   adapter->set_consumer(true, true);
   std::vector<IsolationFrame> frames;
   const auto end_frame = [&] {
-    if (break_mode == 2) { auto left = s32(static_cast<std::int32_t>(frames.size()) * 7 - 3); host.channel(Field::mandatory_break, &left); }
+    if (break_mode == 2) {
+      auto value = optional == Field::cruise_control ? floating(static_cast<float>(frames.size()) * 2.5F) : s32(static_cast<std::int32_t>(frames.size()) * 7 - 3);
+      host.channel(optional, &value);
+    }
     host.frame_end(); IsolationFrame output; output.snapshot = std::make_unique<Snapshot>(); require(adapter->read_latest(*output.snapshot), "v0 frame published");
     cap0::Envelope envelope; while (queue->pop(envelope)) output.evidence.push_back(envelope);
     while (channel->front()) channel->pop();
@@ -1245,6 +1249,153 @@ void mandatory_break(const std::filesystem::path& fixtures) {
     require(delivered && observations > 20, "the break was delivered and the script exercised diagnostics");
   }
 }
+
+// ET-071: the optional `truck.cruise_control` channel (float m/s, zero when cruise control is off). The wire expectations
+// are the hand-written minor-3 fixtures; the rest is written out by hand: zero is a value, NULL is not observed, a wrong
+// type or a value outside [0, 1000] is invalid, a refused registration is not-supported and never fails initialization,
+// and the channel changes nothing in v0 or CAP0.
+// The encoded minor-3 `state.cruiseControl` of the adapter's current v1 slot, through the minor-3 contract decoder.
+std::string cruise_wire(Adapter& adapter) {
+  const auto current = v1_read(adapter); const v1::Encoder encoder(v1_identity(*current)); v1::StatusInfo status; status.continuity = current->continuity;
+  const auto frame = v1::encode(encoder.checkpoint(1, UINT64_MAX, current->state, status, 3), 3);
+  return serialized(v1::decode_payload(std::string(frame.begin() + 4, frame.end()), v1::Sender::server, 3).wire.at("data").at("state").at("cruiseControl"));
+}
+std::string fixture_cruise(const std::filesystem::path& minor3, const char* name) {
+  return serialized(v1::decode_payload(read_file(minor3 / (std::string(name) + ".json")), v1::Sender::server, 3).wire.at("data").at("state").at("cruiseControl"));
+}
+// The break rig, delivering the cruise control channel instead.
+struct CruiseRig : BreakRig {
+  using BreakRig::BreakRig;
+  std::unique_ptr<Snapshot> frame(const scs_value_t* value, bool deliver = true, std::uint32_t flags = 0) { start(flags); if (deliver) host.channel(Field::cruise_control, value); host.frame_end(); return read(*adapter); }
+  Reading<double> v0() const { return reading(*current(), Field::cruise_control); }
+  v1::Field<double> v1_cruise() const { return v1_read(*adapter)->state.cruise_control_mps; }
+};
+void cruise_control(const std::filesystem::path& fixtures) {
+  const auto minor3 = fixtures / "protocol-v1" / "minor3";
+  const auto expect = [&](Adapter& adapter, const char* fixture, const char* what) { require(cruise_wire(adapter) == fixture_cruise(minor3, fixture), what); };
+  constexpr auto restart = SCS_TELEMETRY_FRAME_START_FLAG_timer_restart;
+  // Values: a set speed, zero (off), the bound, and a value that changes from frame to frame.
+  {
+    CruiseRig rig; V1Ring ring; rig.host.event(SCS_TELEMETRY_EVENT_started);
+    require(rig.host.channels.count("truck.cruise_control") == 1 && rig.host.channels.at("truck.cruise_control").type == SCS_VALUE_TYPE_float, "registered once as the float channel truck.cruise_control");
+    rig.frame(nullptr, false); ring.drain(*rig.channel);
+    expect(*rig.adapter, "snapshot-cruise-not-observed", "before any callback cruise control is not observed");
+    require(rig.v0().status == Availability::not_observed && rig.v1_cruise().state == v1::FieldState::not_observed, "not observed in the slot and in v1 before any callback");
+    const auto calls = rig.host.api_calls; const auto next = rig.channel->next_event_seq();
+    struct Row { float mps; const char* fixture; };
+    const Row rows[]{{25.0F, "snapshot"}, {0.0F, "snapshot-cruise-zero"}, {1000.0F, "snapshot-cruise-max"}};
+    for (const auto& row : rows) {
+      auto value = floating(row.mps); const auto published = rig.frame(&value); const auto got = reading(*published, Field::cruise_control);
+      require(got.status == Availability::available && got.value == static_cast<double>(row.mps), "the channel reading holds the exact float");
+      require(rig.v1_cruise().available() && rig.v1_cruise().value == static_cast<double>(row.mps), "the v1 copy holds the exact float");
+      expect(*rig.adapter, row.fixture, "the encoded cruise control equals its hand-written fixture");
+    }
+    auto zero = floating(0); rig.frame(&zero);
+    require(rig.v1_cruise().available() && rig.v1_cruise().value == 0 && cruise_wire(*rig.adapter) != fixture_cruise(minor3, "snapshot-cruise-not-observed"), "zero is available and distinct from unavailable");
+    for (const float mps : {22.5F, 22.25F, 13.75F}) { auto value = floating(mps); rig.frame(&value); require(rig.v1_cruise().value == static_cast<double>(mps) && rig.v0().value == static_cast<double>(mps), "a changing value follows each frame"); }
+    // The callback copies one value: no event, no eventSeq and no SDK call, and only the SDK thread ran.
+    require(!rig.channel->front() && rig.channel->next_event_seq() == next && rig.host.api_calls == calls && rig.host.wrong_thread == 0, "the cruise control callback emits no event and calls no SDK function");
+  }
+  // NULL is not observed; a wrong type, a negative, an above-bound or a non-finite value is invalid; a later valid reading recovers.
+  {
+    CruiseRig rig; rig.host.event(SCS_TELEMETRY_EVENT_started);
+    auto value = floating(25); rig.frame(&value);
+    rig.frame(nullptr);
+    require(rig.v0().status == Availability::not_observed && rig.v1_cruise().state == v1::FieldState::not_observed && !rig.v1_cruise().available(), "a NULL value is not observed, never zero");
+    expect(*rig.adapter, "snapshot-cruise-not-observed", "NULL encodes as not-observed");
+    const scs_value_t wrong[]{u32(25), s32(25), s64(25), boolean(true), text("25"), floating(-1), floating(-0.001F), floating(1000.5F), floating(NAN), floating(INFINITY)};
+    for (const auto& bad : wrong) {
+      rig.frame(&value);
+      rig.frame(&bad);
+      require(rig.v0().status == Availability::invalid && rig.v1_cruise().state == v1::FieldState::invalid && !rig.v1_cruise().available(), "a wrong type or an out-of-range value is invalid");
+      expect(*rig.adapter, "snapshot-cruise-invalid", "an invalid value encodes as invalid");
+    }
+    auto zero = floating(0); rig.frame(&zero);
+    require(rig.v0().status == Availability::available && rig.v1_cruise().available() && rig.v1_cruise().value == 0, "a valid reading recovers from invalid");
+  }
+  // Registration: any refusal of the optional channel is not-supported and initialization still succeeds.
+  struct Refusal { const char* label; std::function<void(Host&)> configure; scs_result_t result; };
+  const Refusal refusals[]{
+    {"not found", [](Host& h) { h.missing = "truck.cruise_control"; }, SCS_RESULT_not_found},
+    {"unsupported type", [](Host& h) { h.unsupported_type = "truck.cruise_control"; }, SCS_RESULT_unsupported_type},
+    {"generic error", [](Host& h) { h.erroneous = "truck.cruise_control"; }, SCS_RESULT_generic_error},
+    {"unsupported", [](Host& h) { h.erroneous = "truck.cruise_control"; h.erroneous_result = SCS_RESULT_unsupported; }, SCS_RESULT_unsupported},
+    {"not now", [](Host& h) { h.erroneous = "truck.cruise_control"; h.erroneous_result = SCS_RESULT_not_now; }, SCS_RESULT_not_now},
+    {"invalid parameter", [](Host& h) { h.erroneous = "truck.cruise_control"; h.erroneous_result = SCS_RESULT_invalid_parameter; }, SCS_RESULT_invalid_parameter}};
+  for (const auto& refusal : refusals) {
+    CruiseRig rig(refusal.configure, SCS_RESULT_ok); const auto initial = rig.current();
+    require(initial->channel_results[static_cast<std::size_t>(Field::cruise_control)] == refusal.result, refusal.label);
+    require(reading(*initial, Field::cruise_control).status == Availability::not_supported, "a refused cruise control registration is not-supported");
+    require(!rig.host.channels.count("truck.cruise_control") && rig.host.channels.count("truck.speed") && rig.host.channels.count("mandatory.break") && rig.host.channels.count("truck.world.placement") && rig.host.events.size() == 6, "every other channel and event is registered");
+    rig.host.event(SCS_TELEMETRY_EVENT_started);
+    auto speed = floating(12.5F); auto minutes = s32(95); scs_value_t placement{}; placement.type = SCS_VALUE_TYPE_dplacement; placement.value_dplacement.position = {1, 2, 3};
+    rig.start(); rig.host.channel(Field::speed, &speed); rig.host.channel(Field::mandatory_break, &minutes); rig.host.channel(Field::world_placement, &placement); rig.host.frame_end();
+    const auto published = read(*rig.adapter);
+    require(reading(*published, Field::speed).status == Availability::available && reading(*published, Field::speed).value == 12.5 && rig.v1_break().value == 95 && published->state.world_placement.status == Availability::available, "the other channels are intact");
+    expect(*rig.adapter, "snapshot-cruise-not-supported", "a refused registration encodes as not-supported");
+    rig.frame(nullptr, false, restart);
+    require(rig.v0().status == Availability::not_supported && rig.v1_cruise().state == v1::FieldState::not_supported, "a timer restart keeps the capability verdict");
+  }
+  // Both optional channels refused at once: initialization still succeeds.
+  {
+    CruiseRig rig([](Host& h) { h.missing = "truck.cruise_control"; h.unsupported_type = "mandatory.break"; }, SCS_RESULT_ok);
+    require(rig.v0().status == Availability::not_supported && reading(*rig.current(), Field::mandatory_break).status == Availability::not_supported && rig.host.channels.count("truck.speed"), "both optional channels refused");
+  }
+  // Freshness: the previous frame's value does not survive a timer restart unless the new frame delivered it, and a value
+  // delivered outside any frame is never adopted as fresh.
+  {
+    CruiseRig rig; rig.host.event(SCS_TELEMETRY_EVENT_started);
+    auto value = floating(25); rig.frame(&value);
+    rig.frame(nullptr, false, restart);
+    require(rig.v0().status == Availability::not_observed && rig.v1_cruise().state == v1::FieldState::not_observed, "a timer restart without a new reading clears cruise control");
+    auto fresh = floating(7.5F); rig.frame(&fresh, true, restart);
+    require(rig.v0().status == Availability::available && rig.v0().value == 7.5 && rig.v1_cruise().value == 7.5, "cruise control delivered in the restart frame stays");
+    rig.host.channel(Field::cruise_control, &value);
+    rig.frame(nullptr, false, restart);
+    require(rig.v0().status == Availability::not_observed, "a value delivered outside a frame is not adopted as fresh");
+  }
+  // A truck configuration clears the dynamic channels like the others; each_frame delivery refills it.
+  {
+    CruiseRig rig; rig.host.event(SCS_TELEMETRY_EVENT_started);
+    scs_named_value_t truck[]{attribute("id", text("truck.model.a")), {}};
+    auto value = floating(25); rig.frame(&value);
+    rig.host.config("truck", truck); rig.host.frame_end(); read(*rig.adapter);
+    require(rig.v0().status == Availability::not_observed && rig.v1_cruise().state == v1::FieldState::not_observed, "a truck configuration clears cruise control");
+    value = floating(20); rig.start(); rig.host.config("truck", truck); rig.host.channel(Field::cruise_control, &value); rig.host.frame_end(); read(*rig.adapter);
+    require(rig.v0().value == 20 && rig.v1_cruise().value == 20, "cruise control delivered after the truck configuration stays");
+    value = floating(30); rig.start(); rig.host.channel(Field::cruise_control, &value); rig.host.config("truck", truck); rig.host.frame_end(); read(*rig.adapter);
+    require(rig.v0().status == Availability::not_observed, "cruise control delivered before the truck configuration is cleared with the other dynamic channels");
+  }
+  // Lower minors never carry cruise control, whatever the slot holds.
+  {
+    CruiseRig rig; rig.host.event(SCS_TELEMETRY_EVENT_started);
+    auto value = floating(25); rig.frame(&value);
+    const auto current = v1_read(*rig.adapter); const v1::Encoder encoder(v1_identity(*current)); v1::StatusInfo status; status.continuity = current->continuity;
+    auto without = current->state; without.cruise_control_mps = {};
+    for (const unsigned minor : {0U, 1U, 2U}) {
+      require(v1::encode(encoder.checkpoint(1, UINT64_MAX, current->state, status, minor), minor) == v1::encode(encoder.checkpoint(1, UINT64_MAX, without, status, minor), minor), "lower-minor bytes are identical with and without cruise control");
+      require(v1::encode(encoder.snapshot(1, UINT64_MAX, current->state, status, minor), minor) == v1::encode(encoder.snapshot(1, UINT64_MAX, without, status, minor), minor), "lower-minor snapshot bytes are identical with and without cruise control");
+    }
+    require(v1::encode(encoder.checkpoint(1, UINT64_MAX, current->state, status, 3), 3) != v1::encode(encoder.checkpoint(1, UINT64_MAX, without, status, 3), 3), "minor 3 carries cruise control");
+  }
+  // v0 and CAP0 isolation: a game that provides the channel and one that does not give the same v0 snapshots, ordering,
+  // continuity, diagnostic batches and CAP0 envelopes, apart from the cruise control reading itself.
+  {
+    const auto absent = isolation_run(true, 1, Field::cruise_control), present = isolation_run(true, 2, Field::cruise_control);
+    require(absent.size() == present.size() && present.size() == 8, "cruise control isolation frames");
+    bool delivered = false; std::size_t observations = 0;
+    for (std::size_t i = 0; i < absent.size(); ++i) {
+      same_v0(*absent[i].snapshot, *present[i].snapshot, static_cast<std::size_t>(Field::cruise_control));
+      require(absent[i].evidence.size() == present[i].evidence.size(), "cruise control isolation: CAP0 envelope count");
+      for (std::size_t e = 0; e < absent[i].evidence.size(); ++e) same_cap0(absent[i].evidence[e], present[i].evidence[e]);
+      require(absent[i].snapshot->state.channels[static_cast<std::size_t>(Field::cruise_control)].status == Availability::not_supported, "the absent channel stays not-supported");
+      delivered = delivered || present[i].snapshot->state.channels[static_cast<std::size_t>(Field::cruise_control)].status == Availability::available;
+      for (std::size_t o = 0; o < present[i].snapshot->observation_count; ++o) require(std::string(present[i].snapshot->observations[o].name.c_str()) != "truck.cruise_control", "no v0 diagnostic observation of cruise control");
+      observations += present[i].snapshot->observation_count;
+    }
+    require(delivered && observations > 20, "cruise control was delivered and the script exercised diagnostics");
+  }
+}
 }
 int main(int argc, char** argv) {
   try {
@@ -1260,6 +1411,8 @@ int main(int argc, char** argv) {
     else if (argc == 3 && std::string(argv[1]) == "v1-gearbox") v1_gearbox(argv[2]);
     // ET-052: the optional break channel; needs tests/fixtures for the hand-written minor-2 corpus.
     else if (argc == 3 && std::string(argv[1]) == "mandatory-break") mandatory_break(argv[2]);
+    // ET-071: the optional cruise control channel; needs tests/fixtures for the hand-written minor-3 corpus.
+    else if (argc == 3 && std::string(argv[1]) == "cruise-control") cruise_control(argv[2]);
     else {
       game_mode_evidence(); lifecycle(); config_terminal_and_bounds(); clocks_and_contention(); failure_cleanup(); deferred_log(); missing_game_time_reset(); game_time_reset_callback_orders(); game_time_reset_frame_delimitation();
       v1_capture_records(); v1_state_and_gate(); v1_nonblocking(); v1_isolation(); v1_drain_into_store(); v1_session_boundary();
