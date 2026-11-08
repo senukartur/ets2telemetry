@@ -16,7 +16,7 @@ export function AccountScreen({state, controller, language}: {state: UploadUiSta
   const input = useRef<HTMLInputElement>(null), confirmation = useRef<HTMLHeadingElement>(null), statusHeading = useRef<HTMLHeadingElement>(null);
   const view = uploadView(state, language), status = state.status;
   const hasStatus = status !== null;
-  const previous = useRef({hasStatus, confirming: view.confirming, connected: view.connected, canEnterToken: view.canEnterToken});
+  const previous = useRef({hasStatus, phase: state.phase, confirming: view.confirming, connected: view.connected, canEnterToken: view.canEnterToken});
   const text = (key: string) => t(`upload.${key}` as I18nKey, undefined, language);
   const clear = () => {if (input.current) input.current.value = ''; setToken(''); setVisible(false); setInvalid(false);};
   useEffect(() => () => {if (input.current) input.current.value = '';}, []);
@@ -25,10 +25,11 @@ export function AccountScreen({state, controller, language}: {state: UploadUiSta
     if (previous.current.hasStatus) {
       if (view.confirming && !previous.current.confirming) confirmation.current?.focus();
       else if (view.connected && !previous.current.connected) statusHeading.current?.focus();
-      else if (view.canEnterToken && !previous.current.canEnterToken) input.current?.focus();
+      // A confirmed connection may be published before its reply settles; keep focus on that result.
+      else if (view.canEnterToken && !previous.current.canEnterToken && !(view.connected && previous.current.phase === 'confirming')) input.current?.focus();
     }
-    previous.current = {hasStatus, confirming: view.confirming, connected: view.connected, canEnterToken: view.canEnterToken};
-  }, [hasStatus, view.confirming, view.connected, view.canEnterToken]);
+    previous.current = {hasStatus, phase: state.phase, confirming: view.confirming, connected: view.connected, canEnterToken: view.canEnterToken};
+  }, [hasStatus, state.phase, view.confirming, view.connected, view.canEnterToken]);
   const cancel = () => {clear(); void controller.cancel();};
   const cancellation = state.phase === 'verifying' ? <Button variant="outline" onClick={cancel} disabled={state.abandoned} data-testid="account.cancel">{text('cancel')}</Button> : state.phase === 'cancel-failed' ? <Button variant="outline" onClick={cancel} data-testid="account.cancel">{text('retryCancel')}</Button> : null;
   const tokenForm = view.canEnterToken ? <form onSubmit={event => {

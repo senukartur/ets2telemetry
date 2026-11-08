@@ -148,6 +148,19 @@ export async function runDashboardUploadUiFixture(config) {
     await page.getByTestId('account.form').waitFor(); await expect(input).toBeFocused();
     assert.equal((await application.evaluate(() => globalThis.uploadUiFixture.counts)).disconnect, 1);
     assert.equal(await input.inputValue(), ''); assert.equal(await page.getByTestId('account.counts').count(), 0);
+    stage = 'confirm-notification-before-reply-focus';
+    for (const result of [connected, {...connected, state: 'paused', error: 'NETWORK'}]) {
+      await publish(candidate); await expect(page.locator('#upload-confirm-heading')).toBeFocused();
+      await page.getByTestId('fixture.confirmation.gate').evaluate(node => node.click());
+      await page.getByTestId('account.confirm').click(); await expect(page.getByTestId('account.phase')).toHaveText('Finishing connection…');
+      await settle(result);
+      const resultHeading = page.getByTestId('account.status').locator('h2');
+      await expect(resultHeading).toBeFocused(); await expect(page.getByTestId('account.disconnect')).toBeDisabled();
+      assert.equal(await page.getByTestId('account.form').count(), 0);
+      await page.getByTestId('fixture.confirmation.gate').evaluate(node => node.click());
+      await page.getByTestId('account.form').waitFor(); await expect(resultHeading).toBeFocused();
+    }
+    await publish(base); await page.getByTestId('account.form').waitFor();
     stage = 'security';
     record.security = await application.evaluate(({BrowserWindow}) => {const window = BrowserWindow.getAllWindows()[0], p = window.webContents.getLastWebPreferences(); return {sandbox: p.sandbox, contextIsolation: p.contextIsolation, nodeIntegration: p.nodeIntegration, persistentSession: window.webContents.session.isPersistent(), localDocument: window.webContents.getURL().startsWith('file:')};});
     assert.deepEqual(record.security, {sandbox: true, contextIsolation: true, nodeIntegration: false, persistentSession: false, localDocument: true});

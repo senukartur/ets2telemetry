@@ -18,13 +18,16 @@ function deferred() {
 // Renderer-only gates expose initial-context and retained-status races without changing the isolated preload bridge.
 const initialContext = deferred();
 let verification = {promise: Promise.resolve(), resolve: () => {}};
+let confirmationReply = {promise: Promise.resolve(), resolve: () => {}};
 const controlledBridge: DashboardUploadBridge = {...bridge,
   getDashboardUploadContext: async () => {await initialContext.promise; return bridge.getDashboardUploadContext();},
-  verifyDashboardUploadToken: async token => {await verification.promise; return bridge.verifyDashboardUploadToken(token);}
+  verifyDashboardUploadToken: async token => {await verification.promise; return bridge.verifyDashboardUploadToken(token);},
+  confirmDashboardUpload: async candidateId => {const status = await bridge.confirmDashboardUpload(candidateId); await confirmationReply.promise; return status;}
 };
 function Fixture() {
   const [route, setRoute] = useState<'account' | 'journal'>('account'), [language, setLanguage] = useState<'en' | 'ru'>('en');
   const [contextPending, setContextPending] = useState(true), [holdingVerification, setHoldingVerification] = useState(false);
+  const [holdingConfirmationReply, setHoldingConfirmationReply] = useState(false);
   const upload = useDashboardUpload(route === 'account', controlledBridge), heading = useRef<HTMLHeadingElement>(null);
   const [page, setPage] = useState<JournalTripPage>();
   useEffect(() => {heading.current?.focus();}, [route]);
@@ -39,6 +42,10 @@ function Fixture() {
       if (holdingVerification) verification.resolve(); else verification = deferred();
       setHoldingVerification(value => !value);
     }}>{holdingVerification ? 'Release verification' : 'Hold next verification'}</button>
+    <button hidden data-testid="fixture.confirmation.gate" onClick={() => {
+      if (holdingConfirmationReply) confirmationReply.resolve(); else confirmationReply = deferred();
+      setHoldingConfirmationReply(value => !value);
+    }}>{holdingConfirmationReply ? 'Release confirmation reply' : 'Hold confirmation reply'}</button>
   </nav></aside><div className="yu-column"><header className="yu-topbar"><span>{t(route === 'account' ? 'nav.account' : 'nav.journal', undefined, language)}</span><SyncChip state={upload.state} language={language} onOpen={() => setRoute('account')} /></header>
     <main className="yu-content" data-testid="fixture.content"><div className="yu-page-header"><h1 ref={heading} tabIndex={-1} data-testid="screen-title">{t(route === 'account' ? 'nav.account' : 'nav.journal', undefined, language)}</h1></div>{route === 'account' ? <AccountScreen {...upload} language={language} /> : <section data-testid="fixture.rows" className="yu-stack"><h2>{t('upload.column', undefined, language)}</h2>{page?.sync?.rows.map((row, index) => <div key={row.tripUuid}><span>Source {index + 1} </span><JournalSyncBadge row={row} language={language} /></div>)}</section>}</main>
   </div></div></div>;
