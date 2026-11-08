@@ -15,18 +15,22 @@ export function AccountScreen({state, controller, language}: {state: UploadUiSta
   const [token, setToken] = useState(''), [visible, setVisible] = useState(false), [invalid, setInvalid] = useState(false);
   const input = useRef<HTMLInputElement>(null), confirmation = useRef<HTMLHeadingElement>(null), statusHeading = useRef<HTMLHeadingElement>(null);
   const view = uploadView(state, language), status = state.status;
-  const previous = useRef({confirming: view.confirming, connected: view.connected, canEnterToken: view.canEnterToken});
+  const hasStatus = status !== null;
+  const previous = useRef({hasStatus, confirming: view.confirming, connected: view.connected, canEnterToken: view.canEnterToken});
   const text = (key: string) => t(`upload.${key}` as I18nKey, undefined, language);
   const clear = () => {if (input.current) input.current.value = ''; setToken(''); setVisible(false); setInvalid(false);};
   useEffect(() => () => {if (input.current) input.current.value = '';}, []);
   useEffect(() => {
-    // Move focus only when an action changes the available task, never for progress notifications.
-    if (view.confirming && !previous.current.confirming) confirmation.current?.focus();
-    else if (view.connected && !previous.current.connected) statusHeading.current?.focus();
-    else if (view.canEnterToken && !previous.current.canEnterToken) input.current?.focus();
-    previous.current = {confirming: view.confirming, connected: view.connected, canEnterToken: view.canEnterToken};
-  }, [view.confirming, view.connected, view.canEnterToken]);
+    // Initial context loading keeps route focus; later task transitions may move it, never progress notifications.
+    if (previous.current.hasStatus) {
+      if (view.confirming && !previous.current.confirming) confirmation.current?.focus();
+      else if (view.connected && !previous.current.connected) statusHeading.current?.focus();
+      else if (view.canEnterToken && !previous.current.canEnterToken) input.current?.focus();
+    }
+    previous.current = {hasStatus, confirming: view.confirming, connected: view.connected, canEnterToken: view.canEnterToken};
+  }, [hasStatus, view.confirming, view.connected, view.canEnterToken]);
   const cancel = () => {clear(); void controller.cancel();};
+  const cancellation = state.phase === 'verifying' ? <Button variant="outline" onClick={cancel} disabled={state.abandoned} data-testid="account.cancel">{text('cancel')}</Button> : state.phase === 'cancel-failed' ? <Button variant="outline" onClick={cancel} data-testid="account.cancel">{text('retryCancel')}</Button> : null;
   const tokenForm = view.canEnterToken ? <form onSubmit={event => {
     event.preventDefault();
     if (!isDashboardToken(token)) {setInvalid(true); return;}
@@ -46,7 +50,7 @@ export function AccountScreen({state, controller, language}: {state: UploadUiSta
     <div className={view.connected ? 'yu-stack' : 'yu-account-grid'}>
       {view.connected && status ? <>
         <Card data-testid="account.status"><CardHeader className="yu-account-header"><CardTitle><h2 ref={statusHeading} tabIndex={-1}>{text('status')}</h2></CardTitle>{phase}</CardHeader><CardContent>
-          {feedback}<Owner owner={status.owner} language={language} />
+          {feedback}{cancellation}<Owner owner={status.owner} language={language} />
           <dl className="yu-account-metrics" data-testid="account.counts">{(['pendingSources', 'queuedEvents', 'identityPendingSources', 'heldSources'] as const).map(key => <div key={key}><dt>{text(key)}</dt><dd><strong>{status.progress[key]}</strong><p>{text(`${key}Note`)}</p></dd></div>)}<div><dt>{text('lastUpload')}</dt><dd className="yu-account-date"><span data-testid="account.lastUpload">{view.lastUpload}</span><p>{text('lastUploadNote')}</p></dd></div></dl>
           {status.progress.pressure ? <p className="yu-account-notice" data-tone="warn">{text('pressure')}</p> : null}
         </CardContent></Card>
@@ -68,8 +72,7 @@ export function AccountScreen({state, controller, language}: {state: UploadUiSta
               <p className="yu-account-preview" data-testid="account.preview">{text('preview')}</p>
               <div className="yu-account-actions"><Button onClick={() => {clear(); void controller.confirm();}} disabled={view.busy} data-testid="account.confirm"><ShieldCheck aria-hidden="true" />{text('confirm')}</Button><Button variant="outline" onClick={cancel} disabled={view.busy} data-testid="account.cancel">{text('cancel')}</Button></div>
             </section> : <><dl className="yu-account-metadata"><div><dt>{text('origin')}</dt><dd>{status.origin}</dd></div><div><dt>{text('channel')}</dt><dd>{CHANNEL.displayName}</dd></div></dl>{tokenForm}</>}
-            {state.phase === 'verifying' ? <Button variant="outline" onClick={cancel} disabled={state.abandoned} data-testid="account.cancel">{text('cancel')}</Button> : null}
-            {state.phase === 'cancel-failed' ? <Button variant="outline" onClick={cancel} data-testid="account.cancel">{text('retryCancel')}</Button> : null}
+            {cancellation}
             {state.phase === 'confirming' || status.state === 'connecting' ? <p className="yu-account-notice" data-tone="warn">{text('commit')}</p> : null}
           </>}
           <p className="yu-muted yu-account-local">{text('local')}</p>

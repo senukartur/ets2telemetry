@@ -88,6 +88,23 @@ it.each(['en', 'ru'] as const)('REG-009/010/014 retains busy, refusal and recove
   const pressure = uiState(); pressure.status = {...pressure.status!, state: 'paused', owner, progress: {...pressure.status!.progress, pressure: true}};
   expect(render(pressure, language)).toContain(copy('pressure', language));
 });
+it.each(['en', 'ru'] as const)('REG-012 keeps replacement verification cancellation and recovery available in both connected layouts in %s', language => {
+  for (const connection of ['connected', 'paused'] as const) {
+    const state = uiState(); state.status = {...state.status!, state: connection, owner}; state.phase = 'verifying';
+    const verifying = render(state, language);
+    expect(verifying).toContain('data-testid="account.status"');
+    expect(verifying).toContain(`data-testid="account.cancel">${copy('cancel', language)}</button>`);
+    expect(verifying).not.toContain('data-testid="account.form"');
+    expect(verifying).toContain('disabled="" data-testid="account.disconnect"');
+    state.abandoned = true;
+    expect(render(state, language)).toContain(`disabled="" data-testid="account.cancel">${copy('cancel', language)}</button>`);
+    state.phase = 'cancel-failed'; state.error = 'RETIRED';
+    const recovery = render(state, language);
+    expect(recovery).toContain(`data-testid="account.cancel">${copy('retryCancel', language)}</button>`);
+    expect(recovery).toContain(copy('error.RETIRED', language));
+    expect(recovery).not.toContain('data-testid="account.form"');
+  }
+});
 it.each(['en', 'ru'] as const)('REG-014 maps only authoritative row states to localized badges in %s', language => {
   for (const state of ['unavailable', 'unbound', 'identity-pending', 'pending', 'queued', 'sending', 'held', 'sent'] as const) {
     const view = journalSyncView({tripUuid: '', state, materialVersion: null, latestRevision: null, lastDurableUploadUtcMs: null, reason: state === 'held' ? 'validation' : null}, language);

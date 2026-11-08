@@ -61,7 +61,13 @@ export async function runDashboardUploadUiFixture(config) {
   try {
     const page = await application.firstWindow(); page.setDefaultTimeout(5000);
     const errors = []; page.on('pageerror', error => errors.push(error.name));
+    stage = 'initial-context-focus';
+    await expect(page.getByTestId('screen-title')).toBeFocused();
+    await expect(page.getByTestId('account.phase')).toHaveText('Reading connection…');
+    assert.equal(await page.getByTestId('account.form').count(), 0);
+    await page.getByTestId('fixture.context.release').evaluate(node => node.click());
     await page.getByTestId('account.form').waitFor();
+    await expect(page.getByTestId('screen-title')).toBeFocused();
     const styles = await page.evaluate(() => {
       const button = globalThis.getComputedStyle(globalThis.document.querySelector('[data-testid="account.verify"]'));
       const card = globalThis.getComputedStyle(globalThis.document.querySelector('[data-testid="account.token"]'));
@@ -77,6 +83,21 @@ export async function runDashboardUploadUiFixture(config) {
     const connected = {...base, state: 'connected', owner, progress: {...base.progress, enumeration: 'complete', distinctSources: 10, deliveredSources: 2, pendingSources: 6, identityPendingSources: 1, heldSources: 1, queuedEvents: 3, lastDurableUploadUtcMs: 5000}};
     const publish = status => application.evaluate((_electron, status) => globalThis.uploadUiFixture.publish(status), status);
     const settle = status => application.evaluate((_electron, status) => globalThis.uploadUiFixture.settle(status), status);
+    stage = 'initial-connected-context-focus';
+    await publish(connected); await page.reload();
+    await expect(page.getByTestId('screen-title')).toBeFocused();
+    await expect(page.getByTestId('account.phase')).toHaveText('Reading connection…');
+    await page.getByTestId('fixture.context.release').evaluate(node => node.click());
+    await page.getByTestId('account.status').waitFor(); await expect(page.getByTestId('screen-title')).toBeFocused();
+    stage = 'live-region-identity';
+    const liveRegion = await page.locator('.yu-account [role="status"]').elementHandle();
+    for (const status of [base, candidate, connected, base]) {
+      await publish(status);
+      await expect(page.getByTestId('account.phase')).toHaveText(status.state === 'disconnected' ? 'Not connected' : status.state === 'confirmation-required' ? 'Awaiting confirmation' : 'Connected');
+      assert.equal(await page.locator('.yu-account [role="status"]').count(), 1);
+      assert.equal(await page.evaluate(node => node.isConnected && node === globalThis.document.querySelector('.yu-account [role="status"]'), liveRegion), true, 'UPLOAD_STATUS_REGION_REPLACED');
+    }
+    await liveRegion.dispose();
     stage = 'token-interaction';
     const sentinel = `vtc1_10000000-0000-4000-8000-000000000001_${'z'.repeat(43)}`;
     const input = page.getByTestId('account.token.input');
@@ -202,6 +223,28 @@ export async function runDashboardUploadUiFixture(config) {
     await page.getByTestId('account.token.input').focus();
     await publish({...connected, progress: {...connected.progress, enumeration: 'changing'}}); await page.waitForFunction(() => !globalThis.document.querySelector('progress')?.hasAttribute('value')); record.flags.progress = true;
     await expect(page.getByTestId('account.token.input')).toBeFocused();
+    for (const connection of ['connected', 'paused']) {
+      stage = `cancel-held-replacement-${connection}`;
+      await publish({...connected, state: connection}); await page.getByTestId('account.form').waitFor();
+      const before = await application.evaluate(() => ({...globalThis.uploadUiFixture.counts}));
+      await page.getByTestId('fixture.verification.gate').evaluate(node => node.click());
+      await page.getByTestId('account.token.input').fill(sentinel); await page.getByTestId('account.token.input').press('Enter');
+      await expect(page.getByTestId('account.phase')).toHaveText('Проверка токена…');
+      await expect(page.getByTestId('account.status')).toBeVisible();
+      await expect(page.getByTestId('account.cancel')).toBeEnabled(); await expect(page.getByTestId('account.disconnect')).toBeDisabled();
+      assert.equal(await page.getByTestId('account.token.input').count(), 0);
+      assert.equal((await application.evaluate(() => globalThis.uploadUiFixture.counts)).verify, before.verify);
+      await page.getByTestId('account.cancel').click(); await expect(page.getByTestId('account.cancel')).toBeDisabled();
+      assert.equal((await application.evaluate(() => globalThis.uploadUiFixture.counts)).cancel, before.cancel);
+      await page.getByTestId('fixture.verification.gate').evaluate(node => node.click());
+      await expect.poll(() => application.evaluate(() => globalThis.uploadUiFixture.pendingKind), {timeout: 5000}).toBe('verify');
+      await settle(candidate); await page.getByTestId('account.form').waitFor();
+      const after = await application.evaluate(() => globalThis.uploadUiFixture.counts);
+      assert.deepEqual(after, {...before, verify: before.verify + 1, cancel: before.cancel + 1});
+      assert.equal(await page.getByTestId('account.confirmation').count(), 0);
+      assert.equal(await page.getByTestId('account.token.input').inputValue(), '');
+    }
+    await publish(connected); await page.getByTestId('account.form').waitFor();
     stage = 'replacement-token';
     const previousCounts = await application.evaluate(() => ({...globalThis.uploadUiFixture.counts}));
     await page.getByTestId('account.token.input').fill(sentinel); await page.getByTestId('account.token.input').press('Enter');
