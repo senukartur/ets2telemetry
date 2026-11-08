@@ -344,6 +344,9 @@ button[aria-disabled="true"], [role="switch"][aria-disabled="true"] { cursor: no
 .yu-account-metrics p { margin-top: 3px; font-size: 11px; color: var(--yu-text-muted); }
 .yu-account-delivered { font-weight: 500; }
 .yu-account progress { width: 100%; min-width: 0; height: 6px; accent-color: var(--yu-accent-light); }
+.yu-account progress[value] { appearance: none; border: 0; border-radius: var(--yu-radius-badge); overflow: hidden; background: var(--yu-border); color: var(--yu-accent-light); }
+.yu-account progress[value]::-webkit-progress-bar { background: var(--yu-border); border-radius: var(--yu-radius-badge); }
+.yu-account progress[value]::-webkit-progress-value { background: currentColor; border-radius: var(--yu-radius-badge); }
 .yu-account .yu-account-disconnect { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 12px; }
 .yu-account-disconnect > div { flex: 1 1 300px; min-width: 0; }
 .yu-account-disconnect p { margin-top: 4px; }

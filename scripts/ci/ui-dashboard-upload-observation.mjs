@@ -190,6 +190,15 @@ export async function runDashboardUploadUiFixture(config) {
     }
     await page.getByTestId('fixture.account').click(); await publish(connected); await page.getByTestId('account.firstSync').waitFor();
     assert.equal(await page.locator('progress').getAttribute('value'), '20');
+    const progressPalette = await page.locator('progress').evaluate(node => {
+      const style = globalThis.getComputedStyle(node), probe = globalThis.document.createElement('span');
+      node.parentElement.append(probe);
+      probe.style.color = 'var(--yu-accent-light)'; const fill = globalThis.getComputedStyle(probe).color;
+      probe.style.color = 'var(--yu-border)'; const track = globalThis.getComputedStyle(probe).color;
+      probe.remove();
+      return {customAppearance: style.appearance === 'none', fillMatchesToken: style.color === fill, trackMatchesToken: style.backgroundColor === track};
+    });
+    assert.deepEqual(progressPalette, {customAppearance: true, fillMatchesToken: true, trackMatchesToken: true});
     await page.getByTestId('account.token.input').focus();
     await publish({...connected, progress: {...connected.progress, enumeration: 'changing'}}); await page.waitForFunction(() => !globalThis.document.querySelector('progress')?.hasAttribute('value')); record.flags.progress = true;
     await expect(page.getByTestId('account.token.input')).toBeFocused();
