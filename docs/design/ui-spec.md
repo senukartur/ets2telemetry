@@ -209,13 +209,16 @@ Outcome badges: open → ◌ "In progress" (neutral); delivered → ✓ (ok); ca
 
 | Spec id | Content | Data binding |
 | --- | --- | --- |
-| `trip.header` | Back to the journal, cargo as title, chips (game, mode, job market, Special transport for a special job, outcome, recording, Hard Mode), route and companies and start time | `JournalTripDetail` |
+| `trip.header` | Back to the journal, cargo as the page's only h1 (the shell heading is hidden and the top bar adds `/ cargo`), chips with an icon and a word (game, mode, job market, Special transport for a special job, outcome, recording, Hard Mode), route and companies and start time | `JournalTripDetail` |
 | `trip.export` | **Export JSON** (secondary button) | `exportJournalTrip` (ET-016 PR-5) |
-| `trip.tiles` | Four tiles: distance observed (hero gradient; "planned …" and "game reported …" below), revenue or penalty (teal; "expected …"), real time ("… game time"), fuel used ("from samples, refuels excluded") | Observed `observedDistanceM`, planned from the job, game-reported from the outcome record; money as exact text |
-| `trip.detailTabs` | Segmented tabs **Summary** (speed chart from 1 Hz samples, gaps shaded warn, missing data hatched), **Timeline** (events with time, coloured dot, title, detail), **Completeness** (recorded vs gap bar and interval count) | Samples, `journalEvents`, `journalIntervals` |
-| `trip.speedChart` | Area chart, grid `--yu-divider`, y ticks in the trip's unit, start time and duration on the x axis | `listSamples` |
-| `trip.hardMode` | Qualifies / does not qualify, the evaluation at job start and at delivery, "Settings snapshot kept with the trip" | `is_hard_mode`, `hard_mode_details` (ET-026b) |
-| `trip.money` | Fines, tolls, ferries and trains | Money totals of the trip detail; never netted or converted |
+| `trip.tiles` | One card of four totals with dividers: distance observed ("planned …" and, only for a delivered trip, "game reported …" below), revenue or penalty ("expected …"), recorded time (from the samples, without pauses and gaps; "… game time" below), fuel used ("from samples, refuels excluded") | Observed `observedDistanceM`, planned from the job, game-reported from the outcome record; money as exact text. Recorded time is `samples.count` × 1 s, because elapsed real time is not stored and UTC labels are never durations; no samples is `—` with a reason |
+| `trip.detailTabs` | Line tabs with roving focus, Arrow keys, Home and End: **Summary** (speed chart, then the collapsed sample table), **Timeline** (events with time, coloured dot, title and detail; gaps and refuels between them), **Completeness** (recorded vs gap bar, totals, the no-guessing note and the paged interval table). An inactive tab is unmounted and holds no page | Samples, `journalEvents`, `journalIntervals`; a refuel is a `refuel` annotation with its litres only, since no cost is stored |
+| `trip.speedChart` | The current sample page only (300 s) on one axis: an area and a line per segment, y labels in the trip's unit, elapsed source seconds per segment, a hatched band for each gap (`--yu-warn-*`, fixed width, not to scale) with a legend in words. A gap at a page boundary is listed in Timeline and Completeness | `listSamples`; `journalChart` gaps from source seconds within one clock |
+| `trip.hardMode` | Qualifies / does not qualify, the evaluation at job start and at delivery (latest check while the trip is not delivered), "Settings snapshot kept with the trip", the v2 ratio and diagnostics; not evaluated when no details exist | `is_hard_mode`, `hard_mode_details` (ET-026b) |
+| `trip.money` | Fines, tolls, ferries and trains, one row each | Money totals of the trip detail; never netted or converted |
+| `trip.vehicle` | Truck, the latest configuration of each trailer slot, cargo mass. Truck and trailer mass and trailer length are not recorded and not shown | `truck`, `trailers`, job `cargoMass` |
+| `trip.site` | Only with sync configured for the same settled owner: the upload badge, "Saved by the site …" with its version when sent, the note that the company decides on the site, and that the state is as of the list's read | The list page's validated `sync` row, re-checked on every render; sent never means company acceptance |
+| `trip.fields` | Every J13 field in a collapsed section below the columns | `journalDetailText` |
 
 ### 5.5 Settings (`settings.*`)
 
