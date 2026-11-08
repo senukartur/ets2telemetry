@@ -457,16 +457,29 @@ describe('TEL-034 checkpoint-bound trailer context',()=>{
       :index===1&&coupling?{available:true,value:trailer(1,{id:{available:true,value:'trailer-b'},bodyType:absent,chainType:absent})}:absent);
     return message;
   }
-  async function setup(coupling=false,slots=10){
+  async function setup(coupling=false,slots=10,sparse=false){
     const client=await start(),s=new Script(ETS2_A);ok(await client.upsertSession({message:gameShaped(s.welcome())}));
     ok(await client.commitGap({message:gameShaped(s.gap(6,'noDurableConsumer'))}));
-    const baseline=checkpoint(s,coupling,slots);ok(await client.recordTrailerBaseline({message:baseline}));
+    const baseline=checkpoint(s,coupling,slots);
+    if(sparse){const slot=baseline.data.state.configuration.trailers[1];if(!slot.available)throw new Error("missing coupling fixture");slot.value.index=2;baseline.data.state.configuration.trailers[2]=slot;baseline.data.state.configuration.trailers[1]=absent;}
+    ok(await client.recordTrailerBaseline({message:baseline}));
     const root=await open(client,s);return {client,s,root,baseline};
   }
   async function projected(client:StorageClient,root:string){
     const pin=ok(await prepare(client,root)),mapping=mapUploadProjection(pin,await pages(client,pin));
     if(mapping.status!=='projected')throw new Error(mapping.reason);return {pin,snapshot:mapping.summary.snapshot};
   }
+  it('keeps a sparse checkpoint chain incomplete across bounded replay and worker reopen',async()=>{
+    const {client,s,root}=await setup(true,10,true);
+    for(let i=0;i<150;i++)ok(await client.commitEvent({message:gameShaped(s.event(r.paused()))}));
+    await close(client,s,root,'delivered');const pinId=randomUUID();ok(await client.beginUploadProjection({pinId,tripUuid:root}));
+    expect(ok(await client.advanceUploadProjection(pinId))).toMatchObject({state:'preparing',examined:100});await client.close();
+    const reopened=await start();let state=ok(await reopened.getUploadProjectionPreparation(pinId));
+    while(state.state==='preparing'){state=ok(await reopened.advanceUploadProjection(pinId));expect(state.examined).toBeLessThanOrEqual(100);}
+    const mapping=mapUploadProjection(state.projection!,await pages(reopened,state.projection!));
+    expect(mapping).toMatchObject({status:'projected',summary:{snapshot:{trailers:{complete:false,items:[{index:0},{index:2}]},evidence:{ruleContextComplete:false,reasons:['trailer-context-unavailable']}}}});
+    await reopened.close();
+  });
   it('does not prove a not-merged singleton from a checkpoint in the earlier job after a trailer change (real recorder case15)',async()=>{
     const client=await start(),s=new Script(ETS2_A),sink=new TripRecorderSink(client);
     const sinkOk=<T>(result:SinkResult<T>):T=>{if(!result.ok)throw new Error(result.error.code);return result.value;};

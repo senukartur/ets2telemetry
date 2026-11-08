@@ -41,7 +41,8 @@ export function unresolvedRulePrefix(kind:string,detail:unknown):boolean {
 }
 export function isRuleContext(v:unknown):v is RuleContext {
   return exact(v,['version','status','items','recordingLoss'])&&(v.version===1||v.version===2)&&['proven','changed','unavailable','unproven'].includes(String(v.status))
-    &&isRuleItems(v.items)&&typeof v.recordingLoss==='boolean'&&(v.status!=='proven'||!v.recordingLoss&&chainComplete(v.items));
+    // Old v1/v2 positives may be sparse. Decode them, then reassess completeness at final mapping.
+    &&isRuleItems(v.items)&&typeof v.recordingLoss==='boolean'&&(v.status!=='proven'||!v.recordingLoss&&v.items.length>0&&v.items[0].index===0&&usable(v.items[0].bodyType)&&v.items.every(item=>usable(item.id)));
 }
 export function isRuleReplay(v:unknown):v is RuleReplay {
   const numbers=['baselineBeforeSeq','baselineBeforeId','eventAfter','gapAfterSeq','gapAfterId','next','end','opening','openingNs','openingOrder','lossAfter'];
@@ -50,7 +51,7 @@ export function isRuleReplay(v:unknown):v is RuleReplay {
     &&['opened','changed','unproven','recordingLoss'].every(k=>typeof v[k]==='boolean');
 }
 export function chainComplete(items:RuleTrailer[]):boolean {
-  return items.length>0&&items[0].index===0&&usable(items[0].bodyType)&&items.every(item=>usable(item.id));
+  return items.length>0&&items[0].index===0&&usable(items[0].bodyType)&&items.every((item,index)=>item.index===index&&usable(item.id));
 }
 export function replayRuleEvent(state:RuleReplay,sequence:string,record:EventRecord,clock:string):void {
   if(sequence!==state.next||clock!==state.clock)state.unproven=true;

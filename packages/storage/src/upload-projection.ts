@@ -197,7 +197,7 @@ function projectedSummary(pin:UploadProjection,openingVersions:UploadVersions,it
   const start: UploadTime = f.openedBy === 'checkpoint' ? {utcMs: f.checkpointUtcMs, basis: 'checkpoint', eventSeq: null} : time(f.opening);
   const end = f.outcome === 'open' ? null : time(f.outcomeOccurrence ?? f.close);
   const clockAnomaly = f.clockAnomaly || start.utcMs !== null && end?.utcMs !== null && end?.utcMs !== undefined && end.utcMs < start.utcMs;
-  const proof=pin.ruleContext?.version===1&&pin.ruleContext.status==='proven'?{...pin.ruleContext,status:'unproven' as const}:pin.ruleContext,reasons=new Set<string>();
+  const proof=pin.ruleContext?.status==='proven'&&(pin.ruleContext.version===1||!chainComplete(pin.ruleContext.items))?{...pin.ruleContext,status:'unproven' as const}:pin.ruleContext,reasons=new Set<string>();
   if(proof){
     if(proof.status==='proven'||proof.items.length||proof.status==='changed')items=proof.items;
     if(proof.status!=='proven')reasons.add(`trailer-context-${proof.status}`);

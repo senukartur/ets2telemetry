@@ -464,13 +464,14 @@ it.each(['after-terminal','unknown','overlap','hidden-overlap'] as const)('TEL-0
 });
 
 
-it.each([false,true])('TEL-034 re-evaluates retained version1 complete folds while preserving already frozen bytes (%s)',async frozen=>{
+it.each([[1,false],[1,true],[2,false],[2,true]] as const)('TEL-034 re-evaluates retained version%s complete folds while preserving already frozen bytes (%s)',async(version,frozen)=>{
   const conn=await openConnection(ws.options({purpose:'history'})),storage=new Storage(conn);opened.push(storage);const source=await setup(storage,true),workId=await complete(storage,source),db=conn.writer();
   if(frozen)expect(ok(storage.freezeUploadMaterialization({workId,producerVersion:'test',createdUtcMs:1000})).status).toBe('frozen');
   const original=db.prepare('SELECT event_id,payload FROM upload_envelopes WHERE work_ref=?').get(workId);
   const pin=JSON.parse(db.prepare('SELECT pin_json FROM upload_materializations WHERE work_id=?').pluck().get(workId) as string);
-  pin.ruleContext.version=1;
-  const saved=JSON.parse(db.prepare('SELECT snapshot_json FROM upload_projection_pins WHERE pin_id=?').pluck().get(workId) as string);delete saved.rulePrefix;
+  pin.ruleContext.version=version;
+  if(version===2)pin.ruleContext.items.push({...pin.ruleContext.items[0],index:2});
+  const saved=JSON.parse(db.prepare('SELECT snapshot_json FROM upload_projection_pins WHERE pin_id=?').pluck().get(workId) as string);if(version===1)delete saved.rulePrefix;
   db.prepare('UPDATE upload_projection_pins SET metadata_json=?,snapshot_json=? WHERE pin_id=?').run(JSON.stringify(pin),JSON.stringify(saved),workId);
   db.prepare('UPDATE upload_materializations SET pin_json=? WHERE work_id=?').run(JSON.stringify(pin),workId);
   expect(ok(storage.freezeUploadMaterialization({workId,producerVersion:'test',createdUtcMs:1001})).status).toBe('frozen');

@@ -156,6 +156,13 @@ describe('TEL-034 stored whole-trip rule context',()=>{
     let fold=beginUploadFold(f.pin);for(const page of f.pages)fold=advanceUploadFold(f.pin,fold,page,()=>true);
     expect(finishUploadFold(f.pin,fold)).toEqual(mapUploadProjection(f.pin,f.pages));
   });
+  it('downgrades a retained sparse version2 positive and agrees with the incremental fold',()=>{
+    const f=complete(true);f.pin.ruleContext!.items[1].index=2;f.pin.facts.moneyIncomplete=false;
+    expect(isUploadProjection(f.pin)).toBe(true);
+    expect(mapped(f).summary.snapshot).toMatchObject({trailers:{complete:false},evidence:{ruleContextComplete:false,reasons:['trailer-context-unproven']}});
+    let fold=beginUploadFold(f.pin);for(const page of f.pages)fold=advanceUploadFold(f.pin,fold,page,()=>true);
+    expect(finishUploadFold(f.pin,fold)).toEqual(mapUploadProjection(f.pin,f.pages));
+  });
   it('keeps a retained version1 proven result unproven because it did not examine job-prefix evidence',()=>{
     const f=complete();f.pin.ruleContext!.version=1;expect(isUploadProjection(f.pin)).toBe(true);
     expect(mapped(f).summary.snapshot).toMatchObject({trailers:{complete:false},evidence:{ruleContextComplete:false,reasons:['trailer-context-unproven']}});
