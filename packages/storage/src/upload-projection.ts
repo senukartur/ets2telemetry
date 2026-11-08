@@ -208,6 +208,8 @@ function projectedSummary(pin:UploadProjection,openingVersions:UploadVersions,it
     if(!hasConfigurations)reasons.add('trailer-context-unavailable');
     if(hasIntervals)reasons.add('recording-intervals');
   }
+  // v1 has no separate accounting-uncertainty field; retain its existing wire-visible reason.
+  if(f.moneyIncomplete)reasons.add('accounting-unavailable');
   if(!usable(j.sourceCityId)||!usable(j.destinationCityId)||!usable(j.cargoId))reasons.add('job-context-unavailable');
   if(!j.cargoMass.available||!Number.isFinite(j.cargoMass.value)||j.cargoMass.value<0)reasons.add('cargo-mass-unavailable');
   if (items.length > 10) return hold('unrepresentable');

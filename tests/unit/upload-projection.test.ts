@@ -82,14 +82,14 @@ describe('private Dashboard summary projection', () => {
   it('preserves native terminal money despite aggregate uncertainty and keeps anomalous UTC unknown', () => {
     const f=fixture();f.pin.facts.moneyIncomplete=true;f.pin.facts.opening!.utcMs=3000;const s=mapped(f).summary.snapshot;
     expect(s.observedDistance).toEqual({available:true,value:0,unit:'m'});expect(s.revenue).toEqual(f.pin.facts.revenue);expect(s.penalty).toEqual(absent);
-    expect(s.evidence).toMatchObject({startObserved:false,endObserved:false,clockAnomaly:true});expect(s.evidence.reasons).not.toContain('accounting-unavailable');
+    expect(s.evidence).toMatchObject({startObserved:false,endObserved:false,clockAnomaly:true});expect(s.evidence.reasons).toContain('accounting-unavailable');
     f.pin.facts.opening!.utcMs=Number.MAX_SAFE_INTEGER;expect(mapped(f).summary.snapshot.start).toEqual({utcMs:null,basis:'unknown',eventSeq:null});
   });
   it.each(['0','-9223372036854775808','9223372036854775807'])('preserves exact native cancellation penalty %s with uncertain aggregate accounting', raw => {
     const f=fixture();Object.assign(f.pin.facts,{outcome:'cancelled',revenue:absent,moneyIncomplete:true,
       penalty:{available:true,value:{raw,sdkType:'s64',currency:{status:'unknown'}}}});
     f.pin.facts.outcomeOccurrence!.type='job.cancelled';const s=mapped(f).summary.snapshot;
-    expect(s.penalty).toEqual(f.pin.facts.penalty);expect(s.revenue).toEqual(absent);expect(s.evidence.reasons).not.toContain('accounting-unavailable');
+    expect(s.penalty).toEqual(f.pin.facts.penalty);expect(s.revenue).toEqual(absent);expect(s.evidence.reasons).toContain('accounting-unavailable');
   });
   it.each(['oversized','negative','money','mode','private-field'] as const)('holds contradictory or unrepresentable evidence: %s', fault => {
     const f=fixture();if(fault==='oversized')f.pin.facts.job.cargo={available:true,value:'я'.repeat(129)};
@@ -131,7 +131,7 @@ describe('TEL-034 stored whole-trip rule context',()=>{
       ...(coupling?[{index:1,id:{available:true as const,value:'trailer-b'},bodyType:absent,chainType:absent}]:[])]};return f;
   }
   it.each([false,true])('projects a proven unchanged chain including first-slot-only coupling types (%s)',coupling=>{
-    const f=complete(coupling);f.pin.facts.moneyIncomplete=true;f.pin.facts.clockAnomaly=true;f.pin.facts.gameMode.ambiguous=true;
+    const f=complete(coupling);f.pin.facts.moneyIncomplete=false;f.pin.facts.clockAnomaly=true;f.pin.facts.gameMode.ambiguous=true;
     f.pin.facts.job.cargoMass={available:true,value:0,unit:'kg'};
     const summary=mapped(f).summary.snapshot;
     expect(summary.trailers.complete).toBe(true);expect(summary.trailers.items).toHaveLength(coupling?2:1);
@@ -141,6 +141,20 @@ describe('TEL-034 stored whole-trip rule context',()=>{
     expect(finishUploadFold(f.pin,fold)).toEqual(mapUploadProjection(f.pin,f.pages));
     delete fold.ruleContextVersion;
     const legacy=finishUploadFold(f.pin,fold);expect(legacy).toMatchObject({status:'projected',summary:{snapshot:{trailers:{complete:false},evidence:{ruleContextComplete:false}}}});
+  });
+  it.each([false,true])('retains accounting uncertainty independently of proven trailers and exact native amounts (%s)',moneyIncomplete=>{
+    const f=complete(true);f.pin.facts.moneyIncomplete=moneyIncomplete;
+    f.pin.facts.penalty={available:true,value:{raw:'0',sdkType:'s64',currency:{status:'unknown'}}};
+    f.pin.facts.fuelUsed={available:true,value:12,unit:'L'};
+    const summary=mapped(f).summary.snapshot;
+    expect(summary.trailers.complete).toBe(true);expect(summary.trailers.items).toHaveLength(2);
+    expect(summary.evidence).toMatchObject({ruleContextComplete:!moneyIncomplete,reasons:moneyIncomplete?['accounting-unavailable']:[]});
+    expect(summary.revenue).toEqual({available:true,value:{raw:'-9223372036854775808',sdkType:'s64',currency:{status:'unknown'}}});
+    expect(summary.penalty).toEqual({available:true,value:{raw:'0',sdkType:'s64',currency:{status:'unknown'}}});
+    expect(summary.expectedIncome).toEqual({available:true,value:{raw:'18446744073709551615',sdkType:'u64',currency:{status:'unknown'}}});
+    expect(summary.observedDistance).toEqual({available:true,value:0,unit:'m'});expect(summary.fuelUsed).toEqual({available:true,value:12,unit:'L'});
+    let fold=beginUploadFold(f.pin);for(const page of f.pages)fold=advanceUploadFold(f.pin,fold,page,()=>true);
+    expect(finishUploadFold(f.pin,fold)).toEqual(mapUploadProjection(f.pin,f.pages));
   });
   it.each(['sourceCityId','destinationCityId','cargoId','cargoMass'] as const)('requires stored %s while leaving catalog and ADR resolution to Dashboard',key=>{
     const f=complete();Object.assign(f.pin.facts.job,{[key]:key==='cargoMass'?{...absent,unit:'kg'}:absent});

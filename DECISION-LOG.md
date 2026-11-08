@@ -885,4 +885,4 @@ The owner replaces irreversible loss for new trips with an inclusive 95% passing
 
 ## ET-081 checkpoint trailer baseline storage — November 8, 2026
 
-The owner approved dedicated immutable checkpoint trailer baseline storage and forward migration `0007-trailer-baselines` for reliable whole-trip upload context. The private recorder persists the existing checkpoint's complete slot state before observation, including without an active job; native and HTTP wire contracts remain unchanged. Historical trips without sufficient evidence and unsupported continuation bridges remain incomplete.
+In the November 8 deliver conversation, the owner approved dedicated immutable checkpoint trailer baseline storage and forward migration `0007-trailer-baselines` ([Trello approval record](https://trello.com/c/Rb7ZTC3w#comment-6af0c90fd9ca25b10a2d3284)) for reliable whole-trip upload context. The private recorder persists the existing checkpoint's complete slot state before observation, including without an active job; native and HTTP wire contracts remain unchanged. Historical trips without sufficient evidence and unsupported continuation bridges remain incomplete.

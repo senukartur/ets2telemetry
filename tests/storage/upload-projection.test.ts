@@ -414,7 +414,7 @@ describe('immutable private upload projections through the SQLite worker', () =>
     if(mapped.status==='projected'){
       expect(mapped.summary.snapshot[key]).toEqual(native);expect(mapped.summary.snapshot[key==='revenue'?'penalty':'revenue']).toEqual(absent);
       expect(mapped.summary.snapshot.observedDistance).toEqual({available:true,value:100,unit:'m'});
-      expect(mapped.summary.snapshot.evidence.reasons).not.toContain('accounting-unavailable');
+      expect(mapped.summary.snapshot.evidence.reasons).toContain('accounting-unavailable');
     }
     await client.close();
   });
