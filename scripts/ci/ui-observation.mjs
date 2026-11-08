@@ -77,6 +77,35 @@ const layouts = ['strip', 'card', 'cluster', 'hud'];
 // indicator, 1240 + 114 = 1354, starts the fourth), the card 48 + 24 × 17 = 456, the cluster's panel 36 + 21 × 14 = 330
 // and the HUD 18 + 24 × 17 = 426 (ET-070's 116, 432, 309 and 402 without cruise control).
 const dimensions = {strip: {width: 1280, height: 154}, card: {width: 300, height: 456}, cluster: {width: 440, height: 330}, hud: {width: 320, height: 426}};
+// ET-074: the sidebar group labels and each route's breadcrumb (group / page), as the dictionaries write them.
+const SHELL_TEXT = {
+  en: {groups: ['Drive', 'Application', 'Company'], crumbs: {live: 'Drive/Live', hardMode: 'Drive/Hard Mode', journal: 'Drive/Journal', settings: 'Application/Settings', account: 'Company/Account & sync'}},
+  ru: {groups: ['Вождение', 'Программа', 'Компания'], crumbs: {live: 'Вождение/Сейчас', hardMode: 'Вождение/Hard Mode', journal: 'Вождение/Журнал', settings: 'Программа/Настройки', account: 'Компания/Аккаунт и синхронизация'}}
+};
+/**
+ * ET-074: the compact shell. The title bar has no logo and the lockup has one; the group labels follow the language; every
+ * sidebar label fits its button without ellipsis or a forced single line; the chips keep their order (sync absent while
+ * unconfigured) and the connection chip is inside the viewport.
+ */
+async function observeCompactShell(page, language, size) {
+  const facts = await page.evaluate(() => {
+    const query = selector => [...globalThis.document.querySelectorAll(selector)];
+    const viewport = node => {const box = node.getBoundingClientRect(); return box.width > 0 && box.top >= 0 && box.left >= 0 && box.bottom <= globalThis.innerHeight && box.right <= globalThis.innerWidth;};
+    return {titlebarImages: query('[data-testid="shell.titlebar"] img').length, lockupImages: query('[data-testid="shell.sidebar.lockup"] img').length,
+      groups: query('.yu-sidebar nav .yu-nav-group').map(node => node.textContent),
+      labels: query('.yu-sidebar nav button').map(node => {const label = node.querySelector('.yu-nav-label'), style = globalThis.getComputedStyle(label);
+        return {fits: node.scrollWidth <= node.clientWidth && label.scrollWidth <= label.clientWidth, ellipsis: style.textOverflow === 'ellipsis', nowrap: style.whiteSpace === 'nowrap', height: node.getBoundingClientRect().height};}),
+      chips: query('[data-testid="shell.status"] [data-testid^="shell.status."]').map(node => node.getAttribute('data-testid')),
+      connectionVisible: viewport(globalThis.document.querySelector('[data-testid="shell.status.connection"]'))};
+  });
+  assert.equal(facts.titlebarImages, 0, 'UI_SHELL_TITLEBAR_LOGO');
+  assert.equal(facts.lockupImages, 1, 'UI_SHELL_LOCKUP_LOGO');
+  assert.deepEqual(facts.groups, SHELL_TEXT[language].groups, `UI_SHELL_GROUPS_${language}`);
+  assert.equal(facts.labels.length, 5);
+  for (const label of facts.labels) assert.deepEqual({fits: label.fits, ellipsis: label.ellipsis, nowrap: label.nowrap, target: label.height >= 32}, {fits: true, ellipsis: false, nowrap: false, target: true}, `UI_SHELL_LABEL_TRUNCATED_${language}_${size.width}`);
+  assert.deepEqual(facts.chips, ['shell.status.connection', 'shell.status.plugin', 'shell.status.hardMode'], `UI_SHELL_CHIP_ORDER_${language}_${size.width}`);
+  assert.equal(facts.connectionVisible, true, `UI_SHELL_CONNECTION_CHIP_${language}_${size.width}`);
+}
 const waitState = (page, state) => until(() => page.getByTestId('telemetry-status').innerText(), value => value.startsWith(`${state}:`), `UI_LIVE_${state}`, 5000);
 /** Navigation and a source resume do not establish freshness. Capture all current instrument assertions in one DOM observation. */
 async function waitLiveInstrument(page, language) {
@@ -694,7 +723,9 @@ export async function runUiSmoke({application, dashboard, overlay, source, sourc
       if (config.uiCase === 'shell') {
         for (const route of ['live', 'hardMode', 'journal', 'settings', 'account']) {
           await focusRoute(dashboard, route); await save(route, language, size);
+          assert.equal(await dashboard.getByTestId('shell.breadcrumb').textContent(), SHELL_TEXT[language].crumbs[route], `UI_SHELL_BREADCRUMB_${language}_${route}`);
         }
+        await observeCompactShell(dashboard, language, size);
         assert.deepEqual(await dashboard.locator('.yu-sidebar nav button').evaluateAll(nodes => nodes.map(node => node.getAttribute('data-testid'))), ['tab-live', 'tab-hardMode', 'tab-journal', 'tab-settings', 'tab-account']);
         assert.equal(await dashboard.getByTestId('account.unconfigured').isVisible(), true);
         assert.equal(await dashboard.getByTestId('account.token.input').count(), 0);
@@ -760,8 +791,9 @@ export async function runUiSmoke({application, dashboard, overlay, source, sourc
           });
         if (v1Gap) record.flags.jobRowsAfterV1Gap = true;
         await observeMandatoryBreak({dashboard, sourceV1, language, record});
-        // ET-057: no "This trip" placeholder of dashes; the field list is collapsed until opened.
-        assert.equal(await dashboard.getByTestId('live.trip').count(), 0);
+        // ET-057, ET-074: This trip shows only the recording completeness, never placeholder rows for data the app does not have.
+        assert.equal(await dashboard.getByTestId('live.trip').count(), 1);
+        assert.equal(await dashboard.getByTestId('live.trip').evaluate(node => /Real time|Game time|Fuel used|Реальное время|Игровое время|Израсходовано/.test(node.textContent)), false, 'UI_LIVE_TRIP_PLACEHOLDER');
         assert.ok(await dashboard.getByTestId('live.instrument.gauge').getByRole('img').getAttribute('aria-label'));
         const jobVisible = await dashboard.evaluate(() => {
           const content = globalThis.document.querySelector('[data-testid="shell.content"]'), outer = content.getBoundingClientRect();
@@ -800,7 +832,24 @@ export async function runUiSmoke({application, dashboard, overlay, source, sourc
         }), true, `UI_PAUSE_LABEL_CLIPPED_${language}_${size.width}`);
         await save('paused', language, size);
         source.setPaused(false); await waitState(dashboard, 'connected'); source.hold();
-        try {await waitState(dashboard, 'stale'); assert.equal(await dashboard.locator('.yu-gauge-number').textContent(), '—'); await save('stale', language, size);} finally {source.resume();}
+        try {
+          await waitState(dashboard, 'stale'); assert.equal(await dashboard.locator('.yu-gauge-number').textContent(), '—');
+          // ET-074: v0 stopped while v1 still sends is partial: the banner says the connection is incomplete, v0's values are
+          // dashes and nothing is marked stale.
+          await until(() => dashboard.getByTestId('live-telemetry').getAttribute('data-live-state'), value => value === 'partial', `UI_LIVE_STATE_PARTIAL_${language}`, 5000);
+          const partialText = language === 'en' ? 'Game connection is incomplete. Waiting for the other telemetry stream.' : 'Подключение к игре неполное. Ожидание второго потока телеметрии.';
+          assert.equal(await dashboard.getByTestId('live.waiting').isVisible(), true, `UI_LIVE_PARTIAL_BANNER_${language}`);
+          assert.equal((await dashboard.getByTestId('live.waiting').innerText()).includes(partialText), true, `UI_LIVE_PARTIAL_TEXT_${language}`);
+          assert.equal(await dashboard.getByTestId('live.waiting').locator('strong').innerText(), language === 'en' ? 'Connection incomplete' : 'Подключение неполное', `UI_LIVE_PARTIAL_TITLE_${language}`);
+          assert.equal(await dashboard.getByTestId('live.stale').count(), 0, `UI_LIVE_PARTIAL_STALE_BADGE_${language}`);
+          // Both streams stopped: the stale state, with its badge in the instrument and without the waiting banner.
+          sourceV1.hold();
+          await until(() => dashboard.getByTestId('live-telemetry').getAttribute('data-live-state'), value => value === 'stale', `UI_LIVE_STATE_STALE_${language}`, 5000);
+          assert.equal(await dashboard.locator('.yu-gauge-number').textContent(), '—');
+          assert.equal(await dashboard.getByTestId('live.instrument').getByTestId('live.stale').isVisible(), true, `UI_LIVE_STALE_BADGE_${language}`);
+          assert.equal(await dashboard.getByTestId('live.waiting').count(), 0, `UI_LIVE_STALE_WAITING_${language}`);
+          await save('stale', language, size);
+        } finally {source.resume(); sourceV1.resume();}
         await waitLiveInstrument(dashboard, language);
         Object.assign(record.flags, {numericGauge: true, unavailableVsZero: true, paused: true, staleDashes: true, rawNames: true, noTripPlaceholder: true});
       } else if (config.uiCase === 'journal') {
