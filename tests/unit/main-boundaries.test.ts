@@ -33,7 +33,7 @@ let contents: EventEmitter & {mainFrame: object; send: ReturnType<typeof vi.fn>;
 let resolveBroker: ReturnType<typeof vi.fn>;
 let loadFile: ReturnType<typeof vi.fn>;
 let overlayContents: typeof contents;
-let windows: (EventEmitter & {webContents: typeof contents; hide: ReturnType<typeof vi.fn>; showInactive: ReturnType<typeof vi.fn>; setBounds: ReturnType<typeof vi.fn>;
+let windows: (EventEmitter & {webContents: typeof contents; destroy: ReturnType<typeof vi.fn>; hide: ReturnType<typeof vi.fn>; showInactive: ReturnType<typeof vi.fn>; setBounds: ReturnType<typeof vi.fn>;
   topmost: boolean; setAlwaysOnTop: ReturnType<typeof vi.fn>; moveTop: ReturnType<typeof vi.fn>; setIgnoreMouseEvents: ReturnType<typeof vi.fn>; setFocusable: ReturnType<typeof vi.fn>;
   minimized: boolean; minimize: ReturnType<typeof vi.fn>; restore: ReturnType<typeof vi.fn>; show: ReturnType<typeof vi.fn>; focus: ReturnType<typeof vi.fn>;
   focused: boolean; setMovable: ReturnType<typeof vi.fn>; setSkipTaskbar: ReturnType<typeof vi.fn>; bounds: Electron.Rectangle; visible: boolean})[];
