@@ -1,19 +1,19 @@
-import {journalPageSync} from './journal-view';
-import {JournalSyncBadge} from './dashboard-upload/journal-sync';
+import {journalPageSync, journalRangeText, journalTotalsText} from './journal-view';
 import {type DashboardUploadStatus} from '../../../packages/contracts/src/dashboard-upload';
 import {journalTileValues} from './screens/journal-tiles';
 import {SampleChart} from './screens/sample-chart';
 import {t} from './i18n';
 import {HardModeBadge, HardModeTrip} from './hard-mode/card';
-import {ArrowLeft, Check, ChevronRight, Circle, X, Route, Fuel, Coins, UserRound, UsersRound, CircleHelp, TriangleAlert, Globe, Zap, Package, Truck, Construction} from 'lucide-react';
+import {ArrowLeft, ChevronRight, Route, Fuel, Coins, UserRound, UsersRound, CircleHelp, TriangleAlert, Globe, Zap, Package, Truck, Construction, RefreshCw} from 'lucide-react';
 import React, {useCallback, useEffect, useMemo, useRef, useState} from 'react';
+import {createPortal} from 'react-dom';
 import type {
-  AppLanguage, JournalCallResult, JournalCompleteness, JournalDatabase, JournalGame, JournalOutcome, JournalTripDetail, JournalTripPage, JournalTripsQuery, RecordingHealth, UnitProfiles
+  AppLanguage, JournalCallResult, JournalCompleteness, JournalDatabase, JournalGame, JournalGameMode, JournalJobFilter, JournalOutcome, JournalTripDetail, JournalTripPage, JournalTripsQuery, JournalTripTotals, RecordingHealth, UnitProfiles
 } from '../../../packages/contracts/src';
 import {Alert, AlertDescription} from '@/components/ui/alert';
 import {Badge} from '@/components/ui/badge';
 import {Button} from '@/components/ui/button';
-import {Card, CardContent, CardHeader, CardTitle} from '@/components/ui/card';
+import {Card, CardContent} from '@/components/ui/card';
 import {Select, SelectContent, SelectItem, SelectTrigger, SelectValue} from '@/components/ui/select';
 import {Table, TableBody, TableCell, TableHead, TableHeader, TableRow} from '@/components/ui/table';
 import {Tabs, TabsContent, TabsList, TabsTrigger} from '@/components/ui/tabs';
@@ -21,17 +21,19 @@ import {
   journalBannerText, journalDetailText, journalErrorText, journalEventText, journalExportText, journalIntervalText, journalListText, journalSampleText, type JournalModeBadge, type JournalBadge, type JournalJobBadge,
   type JournalTextOptions
 } from './journal-view';
-import {JOURNAL_COMPLETENESS_TEXT, JOURNAL_EXPORT_STRINGS, JOURNAL_GAME_TEXT, JOURNAL_LABEL_TEXT, JOURNAL_OUTCOME_TEXT, JOURNAL_STRINGS} from './strings';
+import {getJobMarketText, JOURNAL_COMPLETENESS_TEXT, JOURNAL_EXPORT_STRINGS, JOURNAL_GAME_MODE_TEXT, JOURNAL_GAME_TEXT, JOURNAL_LABEL_TEXT, JOURNAL_OUTCOME_TEXT, JOURNAL_STRINGS} from './strings';
 import {copyTable} from './screens/app-copy';
 import {InfoHint} from './info-hint';
 import {ACTIVE_CHANNEL} from './channel';
+import {ShellSlot} from './shell/shell-slots';
+import {TripTable} from './journal-table';
 const JournalLanguage = React.createContext<AppLanguage>('en');
-const baseCopy = {JOURNAL_COMPLETENESS_TEXT, JOURNAL_EXPORT_STRINGS, JOURNAL_GAME_TEXT, JOURNAL_LABEL_TEXT, JOURNAL_OUTCOME_TEXT, JOURNAL_STRINGS};
+const baseCopy = {JOURNAL_COMPLETENESS_TEXT, JOURNAL_EXPORT_STRINGS, JOURNAL_GAME_MODE_TEXT, JOURNAL_GAME_TEXT, JOURNAL_LABEL_TEXT, JOURNAL_OUTCOME_TEXT, JOURNAL_STRINGS};
 const journalCopy = {en: baseCopy, ru: copyTable(baseCopy, 'ru')};
 const useJournalCopy = () => journalCopy[React.useContext(JournalLanguage)];
 
 /**
- * The Journal tab (ET-016 PR-4, J12): a paged trip list with filters and one trip's detail, both thin maps over the pure
+ * The Journal tab (ET-016 PR-4, J12; compact list ET-076): a paged trip list with filters and one trip's detail, both thin maps over the pure
  * texts of journal-view.ts. It reads only through the five journal bridge methods and holds one page of each list at a
  * time; Next and Previous walk a stack of cursors. Since PR-5 a trip's detail has an Export button, which calls the sixth
  * method; main owns the Save dialog and the file, and the tab shows only the fixed result text. Nothing refreshes by itself: a list loads when it opens and on
@@ -95,6 +97,7 @@ function Pager({paged, testId}: {paged: ReturnType<typeof usePagedRead>; testId:
   </div>;
 }
 
+/** The mode badge of the trip detail's header; the list's mode line is in journal-table.tsx. */
 function ModeBadge({mode, testId}: {mode: JournalModeBadge; testId: string}) {
   const Icon = mode.tone === 'warn' ? TriangleAlert : mode.kind === 'single-player' ? UserRound : mode.kind === 'truckersmp' ? UsersRound : CircleHelp;
   return <Badge variant={mode.tone} className="max-w-full whitespace-normal text-left" data-testid={testId}><Icon aria-hidden="true" className="size-3.5 shrink-0" strokeWidth={1.8} /><span className="min-w-0 break-words">{mode.text}</span></Badge>;
@@ -107,68 +110,62 @@ function JobTypeBadge({job, testId}: {job: JournalJobBadge; testId: string}) {
 function SpecialTransportBadge({text, testId}: {text: string; testId: string}) {
   return <Badge variant="neutral" className="max-w-full whitespace-normal text-left" data-testid={testId}><Construction aria-hidden="true" className="size-3.5 shrink-0" strokeWidth={1.8} /><span className="min-w-0 break-words">{text}</span></Badge>;
 }
-interface Filters {game?: JournalGame; outcome?: JournalOutcome; completeness?: JournalCompleteness}
+interface Filters {game?: JournalGame; outcome?: JournalOutcome; completeness?: JournalCompleteness; mode?: JournalGameMode['mode']; jobType?: JournalJobFilter}
 /** A query with only the filters that are set; the preload refuses unknown keys. */
 function tripsQuery(filters: Filters, cursor: string | undefined): JournalTripsQuery {
   return {...(cursor ? {cursor} : {}), ...(filters.game ? {game: filters.game} : {}), ...(filters.outcome ? {outcome: filters.outcome} : {}),
-    ...(filters.completeness ? {completeness: filters.completeness} : {})};
+    ...(filters.completeness ? {completeness: filters.completeness} : {}), ...(filters.mode ? {mode: filters.mode} : {}), ...(filters.jobType ? {jobType: filters.jobType} : {})};
 }
-/** Radix Select items cannot have an empty value, so `All` (no filter) is this fixed item value. */
+/** Radix Select items cannot have an empty value, so the "any" item (no filter) is this fixed item value. */
 const ALL = 'all';
-function FilterSelect<T extends string>({label, value, options, text, onChange, testId}: {
-  label: string; value: T | undefined; options: readonly T[]; text: Readonly<Record<T, string>>; onChange: (value: T | undefined) => void; testId: string;
+function FilterSelect<T extends string>({label, any, value, options, text, onChange, testId}: {
+  label: string; any: string; value: T | undefined; options: readonly T[]; text: Readonly<Record<T, string>>; onChange: (value: T | undefined) => void; testId: string;
 }) {
-  const {JOURNAL_STRINGS} = useJournalCopy();
-  return <div className="flex items-center gap-1 text-sm"><span id={`${testId}-label`}>{label}</span>
-    <Select value={value ?? ALL} onValueChange={next => onChange(options.find(option => option === next))}>
-      <SelectTrigger size="sm" aria-labelledby={`${testId}-label`} data-testid={testId}><SelectValue /></SelectTrigger>
-      <SelectContent>
-        <SelectItem value={ALL}>{JOURNAL_STRINGS.allFilter}</SelectItem>
-        {options.map(option => <SelectItem key={option} value={option}>{text[option]}</SelectItem>)}
-      </SelectContent>
-    </Select></div>;
+  return <Select value={value ?? ALL} onValueChange={next => onChange(options.find(option => option === next))}>
+    <SelectTrigger size="sm" aria-label={label} data-testid={testId}><SelectValue /></SelectTrigger>
+    <SelectContent>
+      <SelectItem value={ALL}>{any}</SelectItem>
+      {options.map(option => <SelectItem key={option} value={option}>{text[option]}</SelectItem>)}
+    </SelectContent>
+  </Select>;
 }
 
 interface Selected {tripUuid: string; game: JournalGame}
-function TripList({filters, options, recording, onDatabase, onOpen, uploadStatus}: {
+function TripList({filters, options, recording, onDatabase, onOpen, uploadStatus, visible, pageNoteSlot}: {
   uploadStatus?: DashboardUploadStatus | null; filters: Filters; options: JournalTextOptions; recording: RecordingHealth['state'] | undefined;
   onDatabase: (database: JournalDatabase) => void; onOpen: (trip: Selected) => void;
+  /** False while a trip is open: the mounted list keeps its page, but its top-bar Refresh and totals line go away. */
+  visible: boolean;
+  /** The toolbar element that shows this list's page note. */
+  pageNoteSlot: HTMLElement | null;
 }) {
-  const {JOURNAL_LABEL_TEXT, JOURNAL_STRINGS} = useJournalCopy();
-  const {game, outcome, completeness} = filters;
-  const read = useCallback<Read<JournalTripPage>>(cursor => window.desktop.listJournalTrips(tripsQuery({game, outcome, completeness}, cursor)), [game, outcome, completeness]);
+  const {JOURNAL_STRINGS} = useJournalCopy();
+  const language = options.language ?? 'en';
+  const {game, outcome, completeness, mode, jobType} = filters;
+  const read = useCallback<Read<JournalTripPage>>(cursor => window.desktop.listJournalTrips(tripsQuery({game, outcome, completeness, mode, jobType}, cursor)), [game, outcome, completeness, mode, jobType]);
   const paged = usePagedRead(read, onDatabase);
-  const filtered = game !== undefined || outcome !== undefined || completeness !== undefined;
+  const filtered = game !== undefined || outcome !== undefined || completeness !== undefined || mode !== undefined || jobType !== undefined;
   const page = paged.loaded.state === 'value' ? paged.loaded.value : undefined;
+  // The answer without a cursor carries the totals; the later pages of the list keep showing them.
+  const [totals, setTotals] = useState<JournalTripTotals>();
+  if (page?.totals && page.totals !== totals) setTotals(page.totals);
   const sync = journalPageSync(page, uploadStatus);
   const text = paged.loaded.state === 'value' ? journalListText(paged.loaded.value, {...options, filtered, recording, firstPage: paged.number === 1}) : undefined;
-  return <div className="space-y-2" data-testid="journal-list">
-    <Pager paged={paged} testId="journal-list" />
-    <Status loaded={paged.loaded} testId="journal-list" />
-    {text?.empty ? <div data-testid="journal-empty-block"><p data-testid="journal-empty">{text.empty}</p>
-      {text.emptyNote ? <p className="text-muted-foreground" data-testid="journal-empty-note">{text.emptyNote}</p> : null}</div> : null}
-    {text?.rows.length ? <Table data-testid="journal-table"><TableHeader><TableRow>
-      <TableHead>{JOURNAL_LABEL_TEXT.started}</TableHead><TableHead style={{width: 220}}>{JOURNAL_LABEL_TEXT.game}</TableHead><TableHead>{JOURNAL_LABEL_TEXT.cargo}</TableHead><TableHead>{JOURNAL_LABEL_TEXT.route}</TableHead>
-      <TableHead>{JOURNAL_LABEL_TEXT.observedDistance}</TableHead><TableHead><span className="yu-label-hint">{JOURNAL_LABEL_TEXT.expectedIncome}<InfoHint label={t('ui.moreAbout', {v: JOURNAL_LABEL_TEXT.expectedIncome}, options.language)}>{t('j.incomeNote', undefined, options.language)}</InfoHint></span></TableHead><TableHead>{JOURNAL_LABEL_TEXT.outcome}</TableHead><TableHead>{JOURNAL_LABEL_TEXT.completeness}</TableHead>
-      <TableHead>{JOURNAL_LABEL_TEXT.fuelUsed}</TableHead>{sync ? <TableHead data-testid="journal-sync-column">{t('upload.column', undefined, options.language)}</TableHead> : null}<TableHead />
-    </TableRow></TableHeader><TableBody>
-      {text.rows.map(row => {const outcome = paged.loaded.state === 'value' ? paged.loaded.value.trips.find(trip => trip.tripUuid === row.tripUuid)?.outcome : undefined;
-        const OutcomeIcon = outcome === 'delivered' ? Check : outcome === 'cancelled' ? X : Circle;
-        return <TableRow key={row.tripUuid} data-testid="journal-row" data-trip={row.tripUuid}>
-          <TableCell data-testid="journal-row-started">{row.started}</TableCell><TableCell data-testid="journal-row-game"><div className="flex max-w-60 flex-wrap items-center gap-1.5"><Badge variant={row.gameId} data-testid="journal-row-game-name">{row.game}</Badge><ModeBadge mode={row.mode} testId="journal-row-mode" /><InfoHint testId={`journal-mode-evidence-${row.tripUuid}`} label={t('ui.moreAbout', {v: JOURNAL_LABEL_TEXT.gameMode}, options.language)}>{row.mode.evidence}</InfoHint></div></TableCell>
-          <TableCell><div data-testid="journal-row-cargo">{row.cargo}{row.isHardMode ? <> <HardModeBadge short language={options.language} /></> : null}</div>
-            <div className="mt-1 flex max-w-60 flex-wrap items-center gap-1.5"><JobTypeBadge job={row.jobType} testId="journal-row-job-type" />{row.specialTransport ? <SpecialTransportBadge text={row.specialTransport} testId="journal-row-special" /> : null}</div></TableCell>
-          <TableCell data-testid="journal-row-route">{row.route}</TableCell>
-          <TableCell><div data-testid="journal-row-observed">{row.observedDistance}</div><small className="yu-muted" data-testid="journal-row-planned">{row.plannedDistance}</small></TableCell>
-          <TableCell><div data-testid="journal-row-expected">{row.expectedIncome}</div></TableCell>
-          <TableCell data-testid="journal-row-outcome"><Badge variant={outcome === 'delivered' ? 'ok' : outcome === 'cancelled' ? 'error' : 'neutral'}><OutcomeIcon aria-hidden="true" className="size-3" />{row.outcome}</Badge></TableCell>
-          <TableCell>{completenessBadge(row.completeness, 'journal-row-completeness')}</TableCell>
-          <TableCell data-testid="journal-row-fuel">{row.fuelUsed}</TableCell>
-          {sync ? <TableCell><JournalSyncBadge row={sync.rows.find(item => item.tripUuid === row.tripUuid)!} language={options.language ?? 'en'} /></TableCell> : null}
-          <TableCell><Button size="sm" variant="outline" data-testid="journal-row-open" onClick={() => onOpen({tripUuid: row.tripUuid, game: row.gameId})}>{JOURNAL_STRINGS.open}</Button></TableCell>
-        </TableRow>;
-      })}
-    </TableBody></Table> : null}
+  const busy = paged.loaded.state === 'loading';
+  const range = page ? journalRangeText(paged.number, page.trips.length, language) : null;
+  return <div data-testid="journal-list">
+    {visible ? <ShellSlot name="actions"><Button size="sm" variant="outline" disabled={busy} onClick={paged.refresh} data-testid="journal-list-refresh"><RefreshCw aria-hidden="true" />{JOURNAL_STRINGS.refresh}</Button></ShellSlot> : null}
+    {visible && totals ? <ShellSlot name="subline"><p className="yu-page-sub" data-testid="journal.count">{journalTotalsText(totals, language)}</p></ShellSlot> : null}
+    {pageNoteSlot ? createPortal(<span data-testid="journal-list-page">{t('j.page', {p: paged.number}, language)}</span>, pageNoteSlot) : null}
+    <section className="yu-journal-card" aria-label={t('j.tripsTable', undefined, language)}>
+      <Status loaded={paged.loaded} testId="journal-list" />
+      {text?.empty ? <div className="yu-journal-empty" data-testid="journal-empty-block"><p data-testid="journal-empty">{text.empty}</p>
+        {text.emptyNote ? <p className="text-muted-foreground" data-testid="journal-empty-note">{text.emptyNote}</p> : null}</div> : null}
+      {text?.rows.length ? <TripTable rows={text.rows} sync={sync} language={language} onOpen={onOpen} /> : null}
+      <div className="yu-journal-footer"><span data-testid="journal-list-footer">{sync ? t('j.syncNote', undefined, language) : range}</span>
+        <Button size="sm" variant="outline" disabled={busy || !paged.previous} onClick={paged.previous} data-testid="journal-list-previous">{JOURNAL_STRINGS.previous}</Button>
+        <Button size="sm" variant="outline" disabled={busy || !paged.next} onClick={paged.next} data-testid="journal-list-next">{JOURNAL_STRINGS.next}</Button></div>
+    </section>
   </div>;
 }
 
@@ -390,39 +387,51 @@ export class JournalBoundary extends React.Component<{children: React.ReactNode;
   }
 }
 
-const GAMES: readonly JournalGame[] = ['ets2', 'ats'];
+const GAMES: readonly (JournalGame | 'all')[] = ['all', 'ets2', 'ats'];
+const MODES: readonly JournalGameMode['mode'][] = ['single-player', 'truckersmp', 'convoy', 'unknown'];
+const JOB_TYPES: readonly JournalJobFilter[] = ['quick-job', 'cargo-market', 'freight-market', 'world-of-trucks', 'other'];
 const OUTCOMES: readonly JournalOutcome[] = ['open', 'delivered', 'cancelled', 'none'];
 const COMPLETENESS: readonly JournalCompleteness[] = ['complete', 'partial', 'unknown'];
 
 export function Journal({units, recording, language, uploadStatus}: {uploadStatus?: DashboardUploadStatus | null; units: UnitProfiles | undefined; recording: RecordingHealth['state'] | undefined; language?: AppLanguage}) {
-  const {JOURNAL_STRINGS, JOURNAL_GAME_TEXT, JOURNAL_OUTCOME_TEXT, JOURNAL_COMPLETENESS_TEXT} = journalCopy[language ?? 'en'];
+  const active = language ?? 'en';
+  const {JOURNAL_STRINGS, JOURNAL_GAME_TEXT, JOURNAL_GAME_MODE_TEXT, JOURNAL_OUTCOME_TEXT, JOURNAL_COMPLETENESS_TEXT} = journalCopy[active];
   const [database, setDatabase] = useState<JournalDatabase>();
   const [filters, setFilters] = useState<Filters>({});
   const [selected, setSelected] = useState<Selected | null>(null);
   const [listVersion, setListVersion] = useState(0);
+  const [pageNoteSlot, setPageNoteSlot] = useState<HTMLElement | null>(null);
   const handleDeleted = useCallback(() => {
     setSelected(null);
     setListVersion(v => v + 1);
   }, []);
   const options = useMemo<JournalTextOptions>(() => ({...(units ? {units} : {}), ...(language ? {language} : {})}), [units, language]);
   const banner = journalBannerText(database, language);
-  const filterKey = `${filters.game ?? ''}|${filters.outcome ?? ''}|${filters.completeness ?? ''}`;
-  return <JournalLanguage.Provider value={language ?? 'en'}><Card size="sm" data-testid="journal"><CardHeader hidden={selected !== null}><CardTitle><h2>{JOURNAL_STRINGS.title}</h2></CardTitle></CardHeader>
-    <CardContent className="space-y-3">
-      {banner ? <Alert variant="destructive"><AlertDescription data-testid="journal-banner">{banner}</AlertDescription></Alert> : null}
-      {selected ? <TripDetail key={selected.tripUuid} trip={selected} options={options} onDatabase={setDatabase} onBack={() => setSelected(null)} onDeleted={handleDeleted} /> : null}
-      {/* The list stays mounted, hidden, while a trip is open, so Back returns to the same page without reading it again. */}
-      <div className="space-y-3" hidden={selected !== null}>
-        <div className="flex flex-wrap gap-3 yu-journal-filters">
-          <FilterSelect label={JOURNAL_STRINGS.gameFilter} value={filters.game} options={GAMES} text={JOURNAL_GAME_TEXT} testId="journal-filter-game"
-            onChange={game => setFilters(current => ({...current, game}))} />
-          <FilterSelect label={JOURNAL_STRINGS.outcomeFilter} value={filters.outcome} options={OUTCOMES} text={JOURNAL_OUTCOME_TEXT} testId="journal-filter-outcome"
-            onChange={outcome => setFilters(current => ({...current, outcome}))} />
-          <FilterSelect label={JOURNAL_STRINGS.completenessFilter} value={filters.completeness} options={COMPLETENESS} text={JOURNAL_COMPLETENESS_TEXT}
-            testId="journal-filter-completeness" onChange={completeness => setFilters(current => ({...current, completeness}))} />
+  const filterKey = `${filters.game ?? ''}|${filters.outcome ?? ''}|${filters.completeness ?? ''}|${filters.mode ?? ''}|${filters.jobType ?? ''}`;
+  const jobTypeText: Readonly<Record<JournalJobFilter, string>> = {'quick-job': getJobMarketText('quick_job', active), 'cargo-market': getJobMarketText('cargo_market', active), 'freight-market': getJobMarketText('freight_market', active),
+    'world-of-trucks': t('j.worldOfTrucks', undefined, active), 'other': t('j.jobOther', undefined, active)};
+  return <JournalLanguage.Provider value={active}><div className="yu-journal" data-testid="journal">
+    {banner ? <Alert variant="destructive"><AlertDescription data-testid="journal-banner">{banner}</AlertDescription></Alert> : null}
+    {selected ? <Card size="sm"><CardContent className="space-y-3"><TripDetail key={selected.tripUuid} trip={selected} options={options} onDatabase={setDatabase} onBack={() => setSelected(null)} onDeleted={handleDeleted} /></CardContent></Card> : null}
+    {/* The list stays mounted, hidden, while a trip is open, so Back returns to the same page without reading it again. */}
+    <div className="yu-journal" hidden={selected !== null}>
+      <div className="yu-journal-toolbar" role="toolbar" aria-label={t('j.filters', undefined, active)} data-testid="journal-toolbar">
+        <div className="yu-segmented" role="group" aria-label={JOURNAL_STRINGS.gameFilter}>
+          {GAMES.map(game => <button key={game} type="button" aria-pressed={(filters.game ?? 'all') === game} data-testid={`journal-filter-game-${game}`}
+            onClick={() => setFilters(current => ({...current, game: game === 'all' ? undefined : game}))}>{game === 'all' ? t('j.all', undefined, active) : JOURNAL_GAME_TEXT[game]}</button>)}
         </div>
-        {/* A filter change starts a new list at its first page. */}
-        <TripList key={`${filterKey}|${listVersion}`} uploadStatus={uploadStatus} filters={filters} options={options} recording={recording} onDatabase={setDatabase} onOpen={setSelected} />
+        <FilterSelect label={t('j.mode', undefined, active)} any={t('j.anyMode', undefined, active)} value={filters.mode} options={MODES} text={JOURNAL_GAME_MODE_TEXT} testId="journal-filter-mode"
+          onChange={mode => setFilters(current => ({...current, mode}))} />
+        <FilterSelect label={t('col.jobType', undefined, active)} any={t('j.anyJobType', undefined, active)} value={filters.jobType} options={JOB_TYPES} text={jobTypeText} testId="journal-filter-job"
+          onChange={jobType => setFilters(current => ({...current, jobType}))} />
+        <FilterSelect label={JOURNAL_STRINGS.outcomeFilter} any={t('j.anyOutcome', undefined, active)} value={filters.outcome} options={OUTCOMES} text={JOURNAL_OUTCOME_TEXT} testId="journal-filter-outcome"
+          onChange={outcome => setFilters(current => ({...current, outcome}))} />
+        <FilterSelect label={JOURNAL_STRINGS.completenessFilter} any={t('j.anyRecording', undefined, active)} value={filters.completeness} options={COMPLETENESS} text={JOURNAL_COMPLETENESS_TEXT}
+          testId="journal-filter-completeness" onChange={completeness => setFilters(current => ({...current, completeness}))} />
+        <span className="yu-journal-note" ref={setPageNoteSlot} />
       </div>
-    </CardContent></Card></JournalLanguage.Provider>;
+      {/* A filter change starts a new list at its first page. */}
+      <TripList key={`${filterKey}|${listVersion}`} uploadStatus={uploadStatus} filters={filters} options={options} recording={recording} onDatabase={setDatabase} onOpen={setSelected} visible={selected === null} pageNoteSlot={pageNoteSlot} />
+    </div>
+  </div></JournalLanguage.Provider>;
 }

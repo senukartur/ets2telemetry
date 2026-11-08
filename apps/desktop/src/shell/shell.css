@@ -109,14 +109,42 @@ h1[tabindex="-1"]:focus { outline: none; }
 .yu-kv dt { color: var(--yu-text-muted); } .yu-kv dd { margin: 0; text-align: right; overflow-wrap: anywhere; }
 @media (prefers-reduced-motion: reduce) { *, *::before, *::after { animation-duration: .01ms !important; transition-duration: .01ms !important; scroll-behavior: auto !important; } }
 
-/* Journal keeps every raw read and paged table; summary cards and chart are presentation only. */
-.yu-journal-filters {padding-bottom:14px;border-bottom:1px solid var(--yu-border);align-items:end}
-[data-testid="journal-table"] {font-size:12px;min-width:1050px}
-[data-testid="journal-table"] th {font-size:11px;color:var(--yu-text-muted);background:var(--yu-bg-inset);white-space:normal}
-[data-testid="journal-table"] td {font-weight:500;padding:12px 8px;max-width:250px;white-space:normal;vertical-align:top}
-[data-testid="journal-table"] tbody tr:hover {background:var(--yu-selected-bg)}
-[data-testid="journal-row-route"] {font-weight: 500;min-width:120px}
-[data-testid="journal-row-game"] {color:var(--yu-accent-light)}
+/* ET-076 trip list (mockup T3): the toolbar, then one card whose table container is the only horizontal scroller. */
+.yu-journal { display: grid; gap: 12px; min-width: 0; }
+.yu-journal-toolbar { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; min-width: 0; }
+.yu-journal-toolbar .yu-segmented button { min-height: 26px; height: 26px; padding: 0 10px; border: 0; border-radius: 4px; background: transparent; color: var(--yu-text-secondary); font-size: 12px; }
+.yu-journal-toolbar .yu-segmented button[aria-pressed="true"] { background: var(--yu-bg-raised); color: var(--yu-text-strong); font-weight: 500; }
+.yu-journal-toolbar .yu-segmented button[aria-pressed="false"]:hover { background: var(--yu-neutral-bg); }
+.yu-journal-note { flex: 1 1 160px; min-width: 0; font-size: 12px; color: var(--yu-text-muted); text-align: right; }
+.yu-journal-card { min-width: 0; border: 1px solid var(--yu-border); border-radius: var(--yu-radius-card); background: var(--yu-bg-card); }
+.yu-journal-card > [role="status"], .yu-journal-card > [data-slot="alert"], .yu-journal-empty { margin: 0; padding: 12px; }
+.yu-journal-empty p { margin: 0; }
+.yu-journal-table { min-width: 1040px; font-size: 13px; font-variant-numeric: tabular-nums; }
+.yu-journal-table th { padding: 8px; background: var(--yu-bg-inset); color: var(--yu-text-muted); font-size: 12px; font-weight: 500; white-space: nowrap; }
+.yu-journal-table td { padding: 7px 8px; vertical-align: top; overflow-wrap: normal; }
+.yu-journal-table tbody tr { border-top: 1px solid var(--yu-divider); }
+.yu-journal-table tbody tr:hover td { background: var(--yu-selected-bg); }
+.yu-journal-table :is(th,td):first-child { padding-left: 12px; }
+.yu-journal-table :is(th,td):last-child { padding-right: 12px; text-align: right; }
+.yu-journal-table .yu-journal-num { text-align: right; white-space: nowrap; }
+.yu-journal-table small { display: block; font-size: 11px; color: var(--yu-text-muted); }
+.yu-journal-table [data-testid="journal-row-started"] { white-space: nowrap; color: var(--yu-text-secondary); }
+.yu-journal-table [data-testid="journal-row-cargo"] { font-weight: 500; color: var(--yu-text-strong); }
+.yu-journal-mode-line { display: flex; align-items: center; gap: 2px; margin-top: 2px; }
+.yu-journal-mode { display: inline-flex; align-items: center; gap: 4px; font-size: 11px; color: var(--yu-text-muted); }
+.yu-journal-mode svg { flex: none; width: 12px; height: 12px; }
+.yu-journal-mode[data-kind="truckersmp"], .yu-journal-mode[data-kind="convoy"] { color: var(--yu-accent-light); }
+.yu-journal-mode[data-variant="warn"] { color: var(--yu-warn-fg); }
+.yu-journal-mode[data-variant="ok"] { color: var(--yu-ok-fg); }
+.yu-journal-table .yu-info-hint { width: 18px; height: 18px; min-height: 18px; }
+.yu-journal-job-world .yu-tag[data-slot="badge"] { color: var(--yu-accent-light); }
+.yu-journal-special { display: flex; align-items: center; gap: 4px; margin-top: 2px; font-size: 11px; color: var(--yu-warn-fg); }
+.yu-journal-special svg { flex: none; width: 12px; height: 12px; }
+.yu-journal-open[data-slot="button"] { color: var(--yu-text-muted); }
+.yu-journal-footer { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; padding: 8px 12px; border-top: 1px solid var(--yu-border); font-size: 12px; color: var(--yu-text-muted); }
+.yu-journal-footer > span { flex: 1 1 200px; min-width: 0; }
+.yu-topbar-actions { display: flex; align-items: center; gap: 6px; }
+.yu-topbar-actions:empty { display: none; }
 .yu-trip-summary {display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:14px}
 .yu-trip-summary>button,.yu-trip-summary>[data-testid="trip.hardMode"],.yu-trip-summary>div.flex {grid-column:1/-1}
 .yu-trip-section {background:var(--yu-bg-inset);border:1px solid var(--yu-border);border-radius:8px;padding:14px;min-width:0}
@@ -138,19 +166,6 @@ h1[tabindex="-1"]:focus { outline: none; }
 .yu-dot[data-tone="error"] {--yu-dot-color:var(--yu-dot-err);background:var(--yu-dot-err)}
 .yu-dot[data-tone="accent"] {--yu-dot-color:var(--yu-accent-light);background:var(--yu-accent-light)}
 
-/* Fixed primary column widths stay readable; the table scrolls inside its card at the minimum window size. */
-[data-testid="journal-table"] {min-width:1400px;table-layout:fixed}
-[data-testid="journal-table"] th:nth-child(1) {width:150px}
-[data-testid="journal-table"] th:nth-child(2) {width:70px}
-[data-testid="journal-table"] th:nth-child(3) {width:180px}
-[data-testid="journal-table"] th:nth-child(4) {width:220px}
-[data-testid="journal-table"] th:nth-child(5) {width:150px}
-[data-testid="journal-table"] th:nth-child(6) {width:210px}
-[data-testid="journal-table"] th:nth-child(7) {width:170px}
-[data-testid="journal-table"] th:nth-child(8) {width:115px}
-[data-testid="journal-table"] th:nth-child(9) {width:140px}
-[data-testid="journal-table"] th:nth-child(10) {width:100px}
-[data-testid="journal-row-game"], [data-testid="journal-row-started"] {white-space:nowrap!important;overflow-wrap:normal}
 [data-testid="journal-row-outcome"] [data-slot="badge"] {white-space:normal;overflow-wrap:normal}
 [data-testid="journal-row-completeness"] {white-space:nowrap;overflow-wrap:normal}
 .yu-trip-header {display:grid;gap:10px;padding-bottom:16px;border-bottom:1px solid var(--yu-border)}

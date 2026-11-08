@@ -264,6 +264,7 @@ export type I18nKey =
   | "copy.unknown"
   | "copy.not-observed"
   | "copy.single-player"
+  | "copy.convoy"
   | "copy.strong-evidence"
   | "copy.weak-evidence-not-confirmed"
   | "copy.no-evidence"
@@ -543,6 +544,8 @@ export type I18nKey =
   | 'val.on' | 'val.off' | 'val.expert' | 'val.simple'
   | 'j.title' | 'j.all' | 'j.outcome' | 'j.recording' | 'j.anyOutcome' | 'j.anyRecording' | 'j.search' | 'j.export' | 'j.refresh'
   | 'col.started' | 'col.game' | 'col.cargo' | 'col.route' | 'col.distance' | 'col.money' | 'col.outcome' | 'col.recording' | 'col.sync'
+  | 'col.gameMode' | 'col.jobType' | 'col.open' | 'col.income' | 'j.filters' | 'j.tripsTable' | 'j.mode' | 'j.anyMode' | 'j.anyJobType' | 'j.jobOther' | 'j.modeUnknown'
+  | 'j.openTrip' | 'j.showing' | 'j.syncNote' | 'j.trips.one' | 'j.trips.few' | 'j.trips.many' | 'j.trips.other' | 'j.hours'
   | 'j.of' | 'j.expected' | 'j.page' | 'j.prev' | 'j.next' | 'j.count'
   | 'out.open' | 'out.delivered' | 'out.late' | 'out.cancelled' | 'out.none'
   | 'sync.sent' | 'sync.queued' | 'sync.error' | 'sync.none'

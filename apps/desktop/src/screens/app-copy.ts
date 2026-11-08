@@ -160,6 +160,7 @@ export const APP_COPY_KEYS: Readonly<Record<string, I18nKey>> = Object.freeze(ch
   "Unknown": "copy.unknown",
   "not observed": "copy.not-observed",
   "Single-player": "copy.single-player",
+  "Convoy": "copy.convoy",
   "strong evidence": "copy.strong-evidence",
   "weak evidence, not confirmed": "copy.weak-evidence-not-confirmed",
   "no evidence": "copy.no-evidence",
