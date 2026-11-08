@@ -89,7 +89,7 @@ describe('chart gaps (ET-077; REG-002/003/008/009/014)', () => {
   });
   it('aggregates the legend per kind and keeps the count of bands without a length', () => {
     expect(chartGapLegend([{afterSegment: 0, kind: 'no-samples', seconds: 10}, {afterSegment: 1, kind: 'source-change', seconds: null}, {afterSegment: 2, kind: 'no-samples', seconds: 5}, {afterSegment: 3, kind: 'source-change', seconds: null}]))
-      .toEqual([{kind: 'no-samples', seconds: 15, count: 2}, {kind: 'source-change', seconds: null, count: 2}]);
+      .toEqual([{kind: 'no-samples', seconds: 15, count: 2, unknown: 0}, {kind: 'source-change', seconds: null, count: 2, unknown: 2}]);
     expect(chartGapLegend([])).toEqual([]);
   });
   const render = (language: 'en' | 'ru') => renderToStaticMarkup(React.createElement(SampleChart, {samples: [sample(0), sample(1), sample(2), sample(10), sample(11), sample(30)], game: 'ets2', language}));
@@ -114,5 +114,15 @@ describe('chart gaps (ET-077; REG-002/003/008/009/014)', () => {
   it('shows a page without any drawable sample as a band with no line', () => {
     const svg = renderToStaticMarkup(React.createElement(SampleChart, {samples: [sample(1, invalid), sample(2, invalid)], game: 'ets2', language: 'en'}));
     expect(svg).toContain('data-testid="trip.chart.gap"'); expect(svg).toContain('no speed for 2 s'); expect(svg).not.toContain('<polyline');
+  });
+  it.each([['en', 'no speed for 2 s · 1 of unknown duration'], ['ru', 'нет скорости 2 с · без известной длительности: 1']] as const)('does not hide gaps of unknown length behind a known total in %s', (language, legend) => {
+    const samples = [sample(1, {...invalid, sourceClockId: 'clock-b'}), sample(2), sample(3), sample(4, invalid), sample(6)];
+    expect(chartGapLegend(journalChart(samples, 'ets2').gaps)).toEqual([{kind: 'no-speed', seconds: 2, count: 2, unknown: 1}]);
+    expect(renderToStaticMarkup(React.createElement(SampleChart, {samples, game: 'ets2', language}))).toContain(legend);
+  });
+  it('shows no legend when no chart is drawn', () => {
+    const html = renderToStaticMarkup(React.createElement(SampleChart, {samples: [], game: 'ets2', language: 'en'}));
+    expect(html).not.toContain('<svg'); expect(html).not.toContain('yu-trip-legend'); expect(html).not.toContain('trip.chart.gaps');
+    expect(render('en')).toContain('yu-trip-legend');
   });
 });

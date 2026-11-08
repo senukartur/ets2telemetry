@@ -84,10 +84,10 @@ export function chartLayout(view: Pick<JournalChartView, 'segments' | 'gaps'>): 
   return {segments, bands};
 }
 
-/** One legend line per kind: how many bands, and the seconds of those that have a length (null when none has). */
-export function chartGapLegend(gaps: readonly ChartGap[]): {kind: ChartGapKind; seconds: number | null; count: number}[] {
+/** One legend line per kind: how many bands, the seconds of those that have a length (null when none has), and how many have none. */
+export function chartGapLegend(gaps: readonly ChartGap[]): {kind: ChartGapKind; seconds: number | null; count: number; unknown: number}[] {
   return (['no-samples', 'no-speed', 'source-change'] as const).flatMap(kind => {
     const matching = gaps.filter(gap => gap.kind === kind), known = matching.filter(gap => gap.seconds !== null);
-    return matching.length ? [{kind, seconds: known.length ? known.reduce((sum, gap) => sum + (gap.seconds ?? 0), 0) : null, count: matching.length}] : [];
+    return matching.length ? [{kind, seconds: known.length ? known.reduce((sum, gap) => sum + (gap.seconds ?? 0), 0) : null, count: matching.length, unknown: matching.length - known.length}] : [];
   });
 }

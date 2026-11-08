@@ -1,4 +1,4 @@
-import {journalCompletenessText, journalPageBound, journalPageSync, journalSiteSaved, journalSyncOwnerCurrent, journalTimelineItems, journalTripSideText} from '../../apps/desktop/src/journal-view';
+import {journalCompletenessText, journalPageBound, journalPageSync, journalSiteFacts, journalSiteRow, journalSiteSaved, journalSyncOwnerCurrent, journalTimelineItems, journalTripSideText} from '../../apps/desktop/src/journal-view';
 import {initialDashboardUploadStatus} from '../../packages/contracts/src/dashboard-upload';
 import {journalTileValues} from '../../apps/desktop/src/screens/journal-tiles';
 import {describe, expect, it} from 'vitest';
@@ -739,7 +739,28 @@ describe('the compact trip page (ET-077; REG-003, REG-009, REG-014)', () => {
     expect(journalCompletenessText({...DELIVERED_DETAIL, intervals: {items: [utcOnly], total: 51, nextCursor: '1'}}, 'ru')).toMatchObject({gaps: 'без известной длительности: 1', intervals: '51', partial: 'Итог по пропускам учитывает первые 1 из 51 интервалов.'});
   });
 
+  it.each([['en', 'none in the first 1', 'Recorded 3 s, gaps none in the first 1'], ['ru', 'нет в первых 1', 'Записано 3 с, пропуски нет в первых 1']] as const)('does not say none when later intervals were not read in %s', (language, gaps, label) => {
+    const annotation = interval('1', BASE_UTC, {annotation: true, cause: 'refuel', kind: 'discontinuity'});
+    expect(journalCompletenessText({...DELIVERED_DETAIL, intervals: {items: [annotation], total: 51, nextCursor: '1'}}, language)).toMatchObject({gaps, bar: {gapCount: 0, label}});
+  });
+
   const origin = 'https://dashboard.example', owner = {origin, accountId: 'a', companyId: 'c', identityEpoch: 'e'};
+  it('REG-012/014 keeps an opened trip\'s list row and shows it only while its owner is current', () => {
+    const status = {...initialDashboardUploadStatus(origin), state: 'connected' as const, owner};
+    const row = {tripUuid: T.delivered, state: 'sent' as const, materialVersion: '1', latestRevision: 3, lastDurableUploadUtcMs: BASE_UTC + 5_000, reason: null};
+    const page: JournalTripPage = {database: {purpose: 'history', schemaVersion: 6}, trips: [], nextCursor: null, sync: {owner, connectionVersion: '1', rows: [row]}};
+    const hidden = [null, undefined, initialDashboardUploadStatus(origin), initialDashboardUploadStatus(null), {...status, state: 'verifying' as const}, {...status, owner: {...owner, identityEpoch: 'other'}}, {...status, origin: null}];
+    const site = journalSiteFacts(page, status, T.delivered);
+    expect(site).toEqual({owner, row});
+    expect(journalSiteFacts(page, status, 'another-trip')).toBeNull();
+    expect(journalSiteFacts(undefined, status, T.delivered)).toBeNull();
+    expect(journalSiteFacts({...page, sync: undefined}, status, T.delivered)).toBeNull();
+    for (const current of hidden) expect(journalSiteFacts(page, current, T.delivered)).toBeNull();
+    expect(journalSiteRow(site, status)).toBe(row);
+    expect(journalSiteRow(site, {...status, state: 'paused'})).toBe(row);
+    for (const current of hidden) expect(journalSiteRow(site, current)).toBeNull();
+    expect(journalSiteRow(null, status)).toBeNull();
+  });
   it('REG-012/014 shows a trip\'s site facts only while sync is configured for the same settled owner', () => {
     const status = {...initialDashboardUploadStatus(origin), state: 'connected' as const, owner};
     expect(journalSyncOwnerCurrent(owner, status)).toBe(true);

@@ -151,8 +151,7 @@ h1[tabindex="-1"]:focus { outline: none; }
 .yu-topbar-actions { display: flex; align-items: center; gap: 6px; }
 .yu-topbar-actions:empty { display: none; }
 .yu-trip-section {background:var(--yu-bg-inset);border:1px solid var(--yu-border);border-radius:8px;padding:14px;min-width:0}
-.yu-trip-section h4 {font-weight:700;font-size:14px;margin-bottom:10px}
-.yu-trip-section dl {font-size:12px;grid-template-columns:minmax(110px,1fr) minmax(0,1.5fr)}
+.yu-trip-section dl {font-size:12px}
 .yu-trip-section dt {color:var(--yu-text-muted)}
 .yu-trip-section dd {overflow-wrap:anywhere;text-align:right;font-variant-numeric:tabular-nums}
 .yu-trip-section[data-testid="journal-section-money"],.yu-trip-section[data-testid="journal-section-trip"] {grid-column:1/-1}

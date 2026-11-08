@@ -785,6 +785,7 @@ export const EN_DICTIONARY: TranslationDictionary = channelCopyTable(Object.free
   'tr.trailerN': 'Trailer {n}',
   'tr.ivCount': 'Completeness intervals',
   'tr.ivNone': 'none',
+  'tr.ivNoneFirst': 'none in the first {shown}',
   'tr.ivUnknown': '{n} of unknown duration',
   'tr.ivBar': 'Recorded {recorded}, gaps {gaps}',
   'tr.ivNote': 'A gap is never filled with guesses: distance and fuel for that time do not count as observed.',

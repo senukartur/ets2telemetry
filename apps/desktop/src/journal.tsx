@@ -1,4 +1,4 @@
-import {journalCompletenessText, journalPageBound, journalPageSync, journalRangeText, journalSyncOwnerCurrent, journalTimelineItems, journalTotalsText, journalTripSideText} from './journal-view';
+import {journalCompletenessText, journalPageBound, journalPageSync, journalRangeText, journalSiteFacts, journalSiteRow, journalTimelineItems, journalTotalsText, journalTripSideText, type JournalSiteFacts} from './journal-view';
 import {type DashboardUploadStatus} from '../../../packages/contracts/src/dashboard-upload';
 import {journalTileValues} from './screens/journal-tiles';
 import {SampleChart} from './screens/sample-chart';
@@ -23,7 +23,6 @@ import {ACTIVE_CHANNEL} from './channel';
 import {ShellSlot} from './shell/shell-slots';
 import {TripTable, type JournalOpenTrip} from './journal-table';
 import {TripCompleteness, TripFields, TripHeading, TripKpis, TripSide, TripTimelineList} from './trip-details';
-import type {DashboardOwner} from '../../../packages/contracts/src/dashboard-upload';
 import type {JournalSyncRow} from '../../../packages/contracts/src/journal';
 const JournalLanguage = React.createContext<AppLanguage>('en');
 const baseCopy = {JOURNAL_COMPLETENESS_TEXT, JOURNAL_EXPORT_STRINGS, JOURNAL_GAME_MODE_TEXT, JOURNAL_GAME_TEXT, JOURNAL_LABEL_TEXT, JOURNAL_OUTCOME_TEXT, JOURNAL_STRINGS};
@@ -114,8 +113,7 @@ function FilterSelect<T extends string>({label, any, value, options, text, onCha
   </Select>;
 }
 
-/** The list row's validated sync facts travel with the opened trip; the trip detail has no sync field of its own. */
-interface Selected {tripUuid: string; game: JournalGame; site: {owner: DashboardOwner; row: JournalSyncRow} | null}
+interface Selected {tripUuid: string; game: JournalGame; site: JournalSiteFacts | null}
 function TripList({filters, options, recording, onDatabase, onOpen, uploadStatus, visible, pageNoteSlot}: {
   uploadStatus?: DashboardUploadStatus | null; filters: Filters; options: JournalTextOptions; recording: RecordingHealth['state'] | undefined;
   onDatabase: (database: JournalDatabase) => void; onOpen: (trip: Selected) => void;
@@ -138,10 +136,7 @@ function TripList({filters, options, recording, onDatabase, onOpen, uploadStatus
   const text = paged.loaded.state === 'value' ? journalListText(paged.loaded.value, {...options, filtered, recording, firstPage: paged.number === 1}) : undefined;
   const busy = paged.loaded.state === 'loading';
   const range = page ? journalRangeText(paged.number, page.trips.length, language) : null;
-  const open = (trip: JournalOpenTrip) => {
-    const row = sync?.rows.find(item => item.tripUuid === trip.tripUuid);
-    onOpen({...trip, site: sync && row ? {owner: sync.owner, row} : null});
-  };
+  const open = (trip: JournalOpenTrip) => onOpen({...trip, site: journalSiteFacts(page, uploadStatus, trip.tripUuid)});
   return <div data-testid="journal-list">
     {visible ? <ShellSlot name="actions"><Button size="sm" variant="outline" disabled={busy} onClick={paged.refresh} data-testid="journal-list-refresh"><RefreshCw aria-hidden="true" />{JOURNAL_STRINGS.refresh}</Button></ShellSlot> : null}
     {visible && totals && paged.loaded.state !== 'error' ? <ShellSlot name="subline"><p className="yu-page-sub" data-testid="journal.count">{journalTotalsText(totals, language)}</p></ShellSlot> : null}
@@ -179,7 +174,7 @@ function Intervals({trip, options, onDatabase}: {trip: Selected; options: Journa
 
 /**
  * The events of one page with the trip's gaps and refuels between them. A page's upper bound is kept for the page after it,
- * because the pager re-reads pages and holds only the current one; event labels only grow, so the bounds never overlap.
+ * because the pager re-reads pages and holds only the current one; labels may not grow, so `journalPageBound` keeps each bound at or above the last and every gap lands on one page.
  */
 function Timeline({trip, options, onDatabase, intervals}: {trip: Selected; options: JournalTextOptions; onDatabase: (database: JournalDatabase) => void; intervals: JournalTripDetail['intervals']}) {
   const language = options.language ?? 'en';
@@ -397,7 +392,7 @@ export function Journal({units, recording, language, uploadStatus}: {uploadStatu
     'world-of-trucks': t('j.worldOfTrucks', undefined, active), 'other': t('j.jobOther', undefined, active)};
   return <JournalLanguage.Provider value={active}><div className="yu-journal" data-testid="journal">
     {banner ? <Alert variant="destructive"><AlertDescription data-testid="journal-banner">{banner}</AlertDescription></Alert> : null}
-    {selected ? <TripDetail key={selected.tripUuid} trip={selected} site={selected.site && journalSyncOwnerCurrent(selected.site.owner, uploadStatus) ? selected.site.row : null} options={options} onDatabase={setDatabase} onBack={() => setSelected(null)} onDeleted={handleDeleted} /> : null}
+    {selected ? <TripDetail key={selected.tripUuid} trip={selected} site={journalSiteRow(selected.site, uploadStatus)} options={options} onDatabase={setDatabase} onBack={() => setSelected(null)} onDeleted={handleDeleted} /> : null}
     {/* The list stays mounted, hidden, while a trip is open, so Back returns to the same page without reading it again. */}
     <div className="yu-journal" hidden={selected !== null}>
       <div className="yu-journal-toolbar" role="group" aria-label={t('j.filters', undefined, active)} data-testid="journal-toolbar">

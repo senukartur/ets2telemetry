@@ -6,8 +6,13 @@ import {journalDurationText, localTime} from '../journal-view';
 
 const bandLabel = (seconds: number | null, language: AppLanguage) => seconds === null ? '?'
   : seconds < 60 ? t('tr.durS', {s: seconds}, language) : seconds < 3600 ? t('tr.durM', {m: Math.floor(seconds / 60)}, language) : t('tr.durH', {h: Math.floor(seconds / 3600)}, language);
-const gapText = (kind: ChartGap['kind'], seconds: number | null, count: number, language: AppLanguage) => kind === 'source-change' ? t('tr.gapSource', {n: count}, language)
-  : seconds === null ? t('tr.gapUnknown', undefined, language) : t(kind === 'no-samples' ? 'tr.gap' : 'tr.gapNoSpeed', {d: journalDurationText(seconds, language)}, language);
+/** A kind's total of known lengths never hides that some of its gaps have none. */
+function gapText(gap: Pick<ChartGap, 'kind' | 'seconds'> & {count: number; unknown: number}, language: AppLanguage) {
+  if (gap.kind === 'source-change') return t('tr.gapSource', {n: gap.count}, language);
+  if (gap.seconds === null) return t('tr.gapUnknown', undefined, language);
+  const known = t(gap.kind === 'no-samples' ? 'tr.gap' : 'tr.gapNoSpeed', {d: journalDurationText(gap.seconds, language)}, language);
+  return gap.unknown > 0 ? `${known} · ${t('tr.ivUnknown', {n: gap.unknown}, language)}` : known;
+}
 
 /**
  * All segments of the page on one axis. Each segment has its own polyline, area and elapsed labels, and a gap is a hatched
@@ -17,10 +22,11 @@ export function SampleChart({samples, game, units, language = 'en'}: {samples: r
   const hatch = `yu-trip-hatch-${useId().replace(/[^a-zA-Z0-9_-]/g, '')}`;
   const chart = journalChart(samples, game, units), layout = chartLayout(chart), label = t('ui.chartPage', undefined, language);
   const zeroY = chartSpeedY(0, chart.domain), unit = translateUnit(chart.unit, language);
-  const legend = chartGapLegend(chart.gaps).map(entry => ({kind: entry.kind, text: gapText(entry.kind, entry.seconds, entry.count, language)}));
+  const legend = chartGapLegend(chart.gaps).map(entry => ({kind: entry.kind, text: gapText(entry, language)}));
+  const drawn = chart.segments.length > 0 || chart.gaps.length > 0;
   return <figure className="yu-chart" data-testid="trip.chart" aria-label={label}>
     <figcaption><strong>{label}</strong><p>{t('ui.chartNote', undefined, language)}</p></figcaption>
-    {chart.segments.length || chart.gaps.length ? <svg viewBox="0 0 590 165" role="img" aria-label={[label, ...legend.map(entry => entry.text)].join('. ')}>
+    {drawn ? <svg viewBox="0 0 590 165" role="img" aria-label={[label, ...legend.map(entry => entry.text)].join('. ')}>
       <title>{label}</title>
       <defs><pattern id={hatch} width="6" height="6" patternUnits="userSpaceOnUse" patternTransform="rotate(45)"><rect width="6" height="6" className="yu-trip-hatch-fill" /><line x1="0" y1="0" x2="0" y2="6" className="yu-trip-hatch-line" /></pattern></defs>
       <path d="M30 20 V130 H560" className="yu-chart-grid" />
@@ -40,13 +46,13 @@ export function SampleChart({samples, game, units, language = 'en'}: {samples: r
         </g>;
       })}
       {layout.bands.map(band => <g key={`${band.gap.afterSegment}`} data-testid="trip.chart.gap" data-kind={band.gap.kind}>
-        <rect x={band.x} y="20" width={band.width} height="110" fill={`url(#${hatch})`}><title>{gapText(band.gap.kind, band.gap.seconds, 1, language)}</title></rect>
+        <rect x={band.x} y="20" width={band.width} height="110" fill={`url(#${hatch})`}><title>{gapText({...band.gap, count: 1, unknown: 0}, language)}</title></rect>
         {band.width >= 20 ? <text x={band.x + band.width / 2} y="75" textAnchor="middle" className="yu-trip-chart-band-label">{bandLabel(band.gap.seconds, language)}</text> : null}
       </g>)}
     </svg> : <p>{t('ui.unavailable', undefined, language)}</p>}
-    <div className="yu-trip-legend">
+    {drawn ? <div className="yu-trip-legend">
       <span><span aria-hidden="true" className="yu-trip-legend-line" />{unit}, {t('tr.samples', undefined, language)}</span>
       {legend.length ? <span data-testid="trip.chart.gaps" className="yu-trip-legend-gaps">{legend.map(entry => <span key={entry.kind} data-kind={entry.kind}><span aria-hidden="true" className="yu-trip-legend-band" />{entry.text}</span>)}</span> : null}
-    </div>
+    </div> : null}
   </figure>;
 }

@@ -498,13 +498,15 @@ function gapTotals(items: readonly JournalInterval[]): {count: number; seconds: 
 }
 /** The Completeness tab's aggregate: recorded time from the sample count and the gaps of the detail's intervals. */
 function journalCompletenessText(detail: JournalTripDetail): JournalCompletenessText {
-  const recordedSeconds = detail.samples.count, totals = gapTotals(detail.intervals.items);
+  const recordedSeconds = detail.samples.count, totals = gapTotals(detail.intervals.items), shown = detail.intervals.items.length;
+  const incomplete = detail.intervals.total > shown;
   const recorded = recordedSeconds > 0 ? journalDurationText(recordedSeconds, language) : '—';
   const parts = [...(totals.unknown < totals.count ? [journalDurationText(totals.seconds, language)] : []),
     ...(totals.unknown > 0 ? [t('tr.ivUnknown', {n: totals.unknown}, language)] : [])];
-  const gaps = totals.count === 0 ? t('tr.ivNone', undefined, language) : parts.join(' · ');
+  // Only the first intervals are read, so "none" could be false about the ones after them.
+  const gaps = totals.count > 0 ? parts.join(' · ') : incomplete ? t('tr.ivNoneFirst', {shown}, language) : t('tr.ivNone', undefined, language);
   return {recorded, gaps, intervals: String(detail.intervals.total), note: t('tr.ivNote', undefined, language),
-    partial: detail.intervals.total > detail.intervals.items.length ? t('tr.ivFirstOnly', {shown: detail.intervals.items.length, total: detail.intervals.total}, language) : null,
+    partial: incomplete ? t('tr.ivFirstOnly', {shown, total: detail.intervals.total}, language) : null,
     bar: {recordedSeconds, gapSeconds: totals.seconds, gapCount: totals.count, label: t('tr.ivBar', {recorded, gaps}, language)}};
 }
 /** `Saved by the site <time> · version <n>`, only for a durable upload; never says that the company accepted the trip. */
@@ -589,6 +591,17 @@ export function journalSyncOwnerCurrent(owner: DashboardOwner | undefined, statu
 /** A loaded page loses its decorations immediately when the displayed connection no longer owns it. */
 export function journalPageSync(page: JournalTripPage | undefined, status: DashboardUploadStatus | null | undefined) {
   return journalSyncOwnerCurrent(page?.sync?.owner, status) ? page?.sync : undefined;
+}
+/** The list row's validated sync facts, kept with an opened trip because the trip detail has no sync field of its own. */
+export interface JournalSiteFacts {owner: DashboardOwner; row: JournalSyncRow}
+/** What opening a trip keeps from the list page: its row, only while the page's sync facts may be shown. */
+export function journalSiteFacts(page: JournalTripPage | undefined, status: DashboardUploadStatus | null | undefined, tripUuid: string): JournalSiteFacts | null {
+  const sync = journalPageSync(page, status), row = sync?.rows.find(item => item.tripUuid === tripUuid);
+  return sync && row ? {owner: sync.owner, row} : null;
+}
+/** The row the Site block shows on this render; a disconnect or an owner change removes it at once. */
+export function journalSiteRow(site: JournalSiteFacts | null, status: DashboardUploadStatus | null | undefined): JournalSyncRow | null {
+  return site && journalSyncOwnerCurrent(site.owner, status) ? site.row : null;
 }
 /** The highest event label seen through this page, so the timeline's page bounds never go back when a label jumps. */
 export function journalPageBound(page: JournalEventPage, after: number | null): number | null {

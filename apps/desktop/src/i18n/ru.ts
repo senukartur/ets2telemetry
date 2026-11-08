@@ -785,6 +785,7 @@ export const RU_DICTIONARY: TranslationDictionary = channelCopyTable(Object.free
   'tr.trailerN': 'Прицеп {n}',
   'tr.ivCount': 'Интервалов полноты',
   'tr.ivNone': 'нет',
+  'tr.ivNoneFirst': 'нет в первых {shown}',
   'tr.ivUnknown': 'без известной длительности: {n}',
   'tr.ivBar': 'Записано {recorded}, пропуски {gaps}',
   'tr.ivNote': 'Пропуск не заполняется догадками: дистанция и расход за это время не считаются наблюдаемыми.',
