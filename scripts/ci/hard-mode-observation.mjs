@@ -1,4 +1,4 @@
-import {chooseSource, chooseLanguage, screen} from './ui-navigation.mjs';
+import {chooseSource, chooseLanguage, screen, isolateDashboardPointer} from './ui-navigation.mjs';
 // Isolated ET-026 app journey: production file reader/monitor -> recorder -> real SQLite worker -> UI/journal/export.
 import assert from 'node:assert/strict';
 import {createServer} from 'node:net';
@@ -119,6 +119,8 @@ const overlayIndicators = page => page.evaluate(() => [...globalThis.document.qu
 export async function runHardModeSmoke({application, dashboard, overlay, source, config, record}) {
   assert.ok(overlay, 'HARD_MODE_OVERLAY_PAGE');
   record.errors = source.errors; record.peerDisconnects = source.peerDisconnects;
+  // ET-067: the rule and caveat hints below open on hover, which a desktop cursor move can cancel (isolateDashboardPointer).
+  await isolateDashboardPointer(application, dashboard); record.osPointerIsolated = true;
   const healthy = () => assert.deepEqual(source.errors, [], 'HARD_MODE_SOURCE_ERROR');
   // Exactly one indicator with the expected state, name and strip text ("HM", struck through only on a loss).
   const overlayPhase = async (phase, state, name) => {
@@ -265,7 +267,9 @@ export async function runHardModeSmoke({application, dashboard, overlay, source,
   await until(() => dashboard.getByTestId('hard-mode-trip-ratio').innerText(), text => /Unknown: [1-9].*excluded/.test(text), 'HARD_MODE_RENDERED_UNKNOWN_COUNT', 5000);
   await overlayPhase('unavailable', 'inactive', 'Hard Mode not active');
   record.unknownExcluded = true;
-  await source.settings('pass'); await until(async () => (await readStatus()).assessment.state, value => value === 'pass', 'HARD_MODE_RESTORED_SETTINGS', 8000);
+  // The read that notices the rewrite reports it as changing; a later read confirms it. Scheduled reads are 5 s apart, so
+  // drive the trusted refresh boundary instead of waiting for two ticks. Refreshes carry no sampling weight.
+  await source.settings('pass'); await proof('HARD_MODE_RESTORED_SETTINGS', value => value.assessment.state === 'pass');
   await until(() => dashboard.locator('[data-testid="hard-mode-card"] .yu-hard-mode-progress [role="status"]').innerText(), text => text === '12 of 12', 'HARD_MODE_RENDERED_RESTORATION', 5000);
   assert.equal(await dashboard.getByTestId('hard-mode-card').getAttribute('data-state'), 'pass');
   assert.doesNotMatch(await dashboard.getByTestId('hard-mode-card').innerText(), /lost for this trip|cannot be restored/);
