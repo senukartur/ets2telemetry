@@ -840,6 +840,7 @@ export async function runUiSmoke({application, dashboard, overlay, source, sourc
           const partialText = language === 'en' ? 'Game connection is incomplete. Waiting for the other telemetry stream.' : 'Подключение к игре неполное. Ожидание второго потока телеметрии.';
           assert.equal(await dashboard.getByTestId('live.waiting').isVisible(), true, `UI_LIVE_PARTIAL_BANNER_${language}`);
           assert.equal((await dashboard.getByTestId('live.waiting').innerText()).includes(partialText), true, `UI_LIVE_PARTIAL_TEXT_${language}`);
+          assert.equal(await dashboard.getByTestId('live.waiting').locator('strong').innerText(), language === 'en' ? 'Connection incomplete' : 'Подключение неполное', `UI_LIVE_PARTIAL_TITLE_${language}`);
           assert.equal(await dashboard.getByTestId('live.stale').count(), 0, `UI_LIVE_PARTIAL_STALE_BADGE_${language}`);
           // Both streams stopped: the stale state, with its badge in the instrument and without the waiting banner.
           sourceV1.hold();

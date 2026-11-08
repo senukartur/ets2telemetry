@@ -67,7 +67,7 @@ export function LiveDashboard({live, units, gearDisplay, recording, language = '
 
   return <div className="yu-live" data-testid="live-telemetry" data-live-state={state}>
     {waiting ? <div className="yu-connection" data-testid="live.waiting"><span className="yu-connection-icon" aria-hidden="true">{status === 'waiting' ? <Clock /> : <WifiOff />}</span><div>
-      <strong>{status === 'waiting' ? t('live.waitTitle', undefined, language) : t(`ui.status.${status}`, undefined, language)}</strong>
+      <strong>{state === 'partial' ? t('live.partialTitle', undefined, language) : status === 'waiting' ? t('live.waitTitle', undefined, language) : t(`ui.status.${status}`, undefined, language)}</strong>
       <p>{connectionText === strings.sourceWaiting ? t('live.waitText', undefined, language) : connectionText}</p></div></div> : null}
     {live?.selection === 'game' && live.reason === 'Both games are available; choose ETS2 or ATS' && onSelect ? <div className="flex flex-wrap gap-2" data-testid="live-game-choice" aria-busy={choosing}>
       {(['ets2', 'ats'] as const).map(game => <Button key={game} type="button" variant="outline" disabled={choosing} data-testid={`live-choose-${game}`} onClick={() => {

@@ -1024,6 +1024,7 @@ export const RU_DICTIONARY: TranslationDictionary = channelCopyTable(Object.free
   'live.sub.stale': 'значения устарели и приглушены',
   'live.sub.waiting': 'игра не подключена',
   'live.sub.partial': 'подключение к игре неполное',
+  'live.partialTitle': 'Подключение неполное',
   'live.noJobHint': 'Нет активного заказа. Поля появятся, когда игра передаст заказ.',
   'live.staleReason': 'нет новых данных от игры'
 }));

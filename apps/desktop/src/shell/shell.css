@@ -391,10 +391,11 @@ button[aria-disabled="true"], [role="switch"][aria-disabled="true"] { cursor: no
 .yu-live-card .yu-kv:first-child { border-top: 0; }
 .yu-live-card .yu-kv dt { flex: 1; color: var(--yu-text-secondary); }
 
-/* Stale: only the value text in the strong and body colours is dimmed (dashes at about 4:1). Labels, notes, hints, badges
-   and the values already in the secondary or muted colour stay at full strength. */
-[data-live-state="stale"] :is(.yu-gauge-number, .yu-gauge-speed, .yu-gauge-rpm, .yu-gear > strong, .yu-fuel-amount strong, .yu-fuel-rows dd strong,
-  .yu-job-metrics strong, .yu-route-end strong, .yu-live-cards .yu-kv dd:not([data-testid="live.trip.recording"])) { opacity: .45; }
+/* Stale: no stream is current, so every value is a dash. The value text in the strong and body colours turns muted, which
+   keeps at least 5.1:1 on every Live surface; labels, notes, hints and badges are unchanged. */
+[data-live-state="stale"] :is(.yu-gear > strong, .yu-fuel-amount strong, .yu-fuel-rows dd strong, .yu-job-metrics strong, .yu-route-end strong,
+  .yu-live-cards .yu-kv dd:not([data-testid="live.trip.recording"])) { color: var(--yu-text-muted); }
+[data-live-state="stale"] .yu-gauge-number { fill: var(--yu-text-muted); }
 
 /* Every field, collapsed at the bottom. */
 .yu-live-details-card { padding: 0; gap: 0; }

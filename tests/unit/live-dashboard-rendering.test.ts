@@ -109,11 +109,12 @@ it.each([['en', 'No current data'], ['ru', 'Нет текущих данных']
 });
 
 describe('partial', () => {
+  const TITLE = {en: 'Connection incomplete', ru: 'Подключение неполное'} as const;
   const PARTIAL = {en: 'Game connection is incomplete. Waiting for the other telemetry stream.', ru: 'Подключение к игре неполное. Ожидание второго потока телеметрии.'} as const;
   it.each(['en', 'ru'] as const)('v0 stale while v1 is current shows the banner and the current v1 values, not the stale badge, in %s', language => {
     const html = render(smokePair({}, STALE), language);
     expect(state(html)).toBe('partial');
-    expect(between(html, 'live.waiting', 'live.instrument')).toContain(`<p>${PARTIAL[language]}</p>`);
+    expect(between(html, 'live.waiting', 'live.instrument')).toContain(`<strong>${TITLE[language]}</strong><p>${PARTIAL[language]}</p>`);
     expect(html).not.toContain('data-testid="live.stale"');
     // v0's values are dashes; v1's job values for the same job stay current.
     expect(html).toContain('data-testid="live-speed-number">—</text>');
@@ -125,7 +126,7 @@ describe('partial', () => {
   it.each(['en', 'ru'] as const)('v0 current while v1 is stale shows the banner and the current v0 values in %s', language => {
     const html = render(smokePair({status: 'stale', fresh: false, reason: 'Main has no recent v1 SDK capture'}), language);
     expect(state(html)).toBe('partial');
-    expect(between(html, 'live.waiting', 'live.instrument')).toContain(`<p>${PARTIAL[language]}</p>`);
+    expect(between(html, 'live.waiting', 'live.instrument')).toContain(`<strong>${TITLE[language]}</strong><p>${PARTIAL[language]}</p>`);
     expect(html).not.toContain('data-testid="live.stale"');
     expect(html).toContain('data-testid="live-speed-number">90</text>');
     expect(html).toContain('<dd data-testid="live.session.mode">—</dd>');
