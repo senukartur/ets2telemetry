@@ -92,6 +92,7 @@ export interface DurableSink {
   releaseCapture?(capture: HardModeCapture): void;
   openSession(welcome: WelcomeMessage): Promise<SinkResult<{committedThroughEventSeq: Uint64}>>;
   commit(message: CoverageMessage, context: CommitContext): Promise<SinkResult<CommitResult>>;
+  checkpoint?(message: Extract<ReadingMessage,{kind:'checkpoint'}>, context: CommitContext): Promise<SinkResult<undefined>>;
   observe?(message: ReadingMessage, context: CommitContext): SinkResult<undefined>;
   restoreLoss?(pluginSessionId: string, storedThroughEventSeq: Uint64, ackedThroughEventSeq: Uint64): Promise<SinkResult<undefined>>;
   readonly samples?: SampleSink;

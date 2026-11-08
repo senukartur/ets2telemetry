@@ -1,3 +1,4 @@
+import {RULE_LOSSES} from './trailer-baselines';
 import {retainUploadDeletion} from './upload-discovery';
 import {validCapturedEndpoint,validAcceptanceDetail} from './logical-coverage';
 import {admittedProfile, associate, projectEndpoint, projectSessionBounds, retireObservedTerminal, projectEffects, projectSample, logicalEnabled, logicalFor, revise} from './logical-trips';
@@ -645,7 +646,8 @@ export function recordCompleteness(conn: StorageConnection, pluginSessionId: str
   if (typeof interval !== 'object' || interval === null) fail('INVALID_INPUT');
   if (typeof options !== 'object' || options === null || Array.isArray(options) || (options.ifAbsent !== undefined && typeof options.ifAbsent !== 'boolean')) fail('INVALID_INPUT');
   const ifAbsent = options.ifAbsent === true;
-  transact(conn, db => { const session = sessionByUuid(db, pluginSessionId); addInterval({db, session, game: session.game, now: conn.now()}, interval, ifAbsent); if (logicalEnabled(db) && interval.tripUuid) revise(db,logicalFor(db,tripRow({db,session,game:session.game,now:conn.now()},interval.tripUuid).id)); });
+  transact(conn, db => { const session = sessionByUuid(db, pluginSessionId); addInterval({db, session, game: session.game, now: conn.now()}, interval, ifAbsent); if (logicalEnabled(db) && interval.tripUuid) revise(db,logicalFor(db,tripRow({db,session,game:session.game,now:conn.now()},interval.tripUuid).id));
+    else if(Number(db.pragma('user_version',{simple:true}))>=7&&(RULE_LOSSES as readonly string[]).includes(interval.kind))projectSessionBounds(db,session.id); });
 }
 
 /**

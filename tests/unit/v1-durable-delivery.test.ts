@@ -864,3 +864,26 @@ describe('ET-016 PR-7 attach op in the storage-commit pipeline (J9)', () => {
     expect([bad.link.closes, bad.delivery.status]).toEqual([[['unavailable', 'INTERNAL']], {state: 'failed', code: 'INTERNAL'}]);
   });
 });
+
+
+it('REG-005/006 awaits checkpoint persistence before observation or future commits, without acknowledging the checkpoint',async()=>{
+  const sink:MemorySink&DurableSink=new MemorySink();let release!:()=>void;
+  sink.checkpoint=()=>new Promise(resolve=>{sink.log.push('checkpoint pending');release=()=>resolve({ok:true,value:undefined});});
+  sink.observe=()=>{sink.log.push('observe checkpoint');return {ok:true,value:undefined};};
+  const delivery=new DurableDelivery(sink),link=new Link(sink.log),connection=delivery.connect(welcome(),link);
+  connection.checkpoint(checkpointAt('0'),RECEIVED);connection.enqueue(range(event(1)),event(1),RECEIVED);
+  await flush();expect(sink.log).toEqual([`open ${P1}`,'checkpoint pending']);expect(link.acks).toEqual([]);
+  release();await delivery.idle();expect(sink.log).toEqual([`open ${P1}`,'checkpoint pending','observe checkpoint','committed 1','ack 1']);await delivery.stop();
+});
+it.each(['DISK_FULL','INTERNAL'] as const)('REG-006 checkpoint persistence failure %s prevents observation and later ACK',async code=>{
+  const sink:MemorySink&DurableSink=new MemorySink();sink.checkpoint=()=>Promise.resolve({ok:false,error:storageError(code)});
+  sink.observe=()=>{throw new Error('Failed checkpoint must not be observed');};
+  const delivery=new DurableDelivery(sink),link=new Link(sink.log),connection=delivery.connect(welcome(),link);
+  connection.checkpoint(checkpointAt('0'),RECEIVED);connection.enqueue(range(event(1)),event(1),RECEIVED);
+  await delivery.idle();expect(link.acks).toEqual([]);expect(sink.through(P1)).toBe(0n);expect(link.closes[0][1]).toBe(code);await delivery.stop();
+});
+it('REG-003/006 checks ACK_AHEAD before attempting checkpoint persistence',async()=>{
+  const sink:MemorySink&DurableSink=new MemorySink();sink.checkpoint=()=>{throw new Error('ACK_AHEAD must not persist baseline');};
+  const delivery=new DurableDelivery(sink),link=new Link(sink.log),connection=delivery.connect(welcome(),link);
+  connection.checkpoint(checkpointAt('1'),RECEIVED);await delivery.idle();expect(link.closes).toEqual([['ack-ahead','ACK_AHEAD_OF_STORAGE']]);await delivery.stop();
+});

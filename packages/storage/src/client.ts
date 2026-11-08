@@ -1,3 +1,4 @@
+import type {TrailerBaselineInput} from './api';
 import {UPLOAD_SYNC_NAMES,isUploadSyncRequest,type UploadSyncCommands} from './upload-sync';
 import type {ProfileObservation} from '../../telemetry-core/src/trips/continuation';
 import type {HardModeObservation} from '../../contracts/src/hard-mode';
@@ -105,6 +106,7 @@ export class StorageClient {
   }
   observeHardMode(game: 'ets2' | 'ats', observation: HardModeObservation, fresh = false): Promise<Result<undefined>> {return this.#request({name: 'observeHardMode', game, observation, fresh});}
   upsertSession(input: {message: unknown}) { return this.#request({name: 'upsertSession', input}); }
+  recordTrailerBaseline(input: TrailerBaselineInput): Promise<Result<undefined>> {return this.#request({name:'recordTrailerBaseline',input});}
   commitEvent(input: {message: unknown; effects?: TripEffect[]; hardMode?: HardModeObservation; hardModeFresh?: boolean; hardModeLoss?: HardModeObservation; profile?: ProfileObservation}): Promise<Result<CommitResult>> { return this.#request({name: 'commitEvent', input}); }
   commitGap(input: {message: unknown; effects?: TripEffect[]; hardMode?: HardModeObservation; hardModeFresh?: boolean; hardModeLoss?: HardModeObservation; profile?: ProfileObservation}): Promise<Result<CommitResult>> { return this.#request({name: 'commitGap', input}); }
   /**

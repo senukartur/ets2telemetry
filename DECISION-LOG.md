@@ -882,3 +882,7 @@ On [ET-070](https://trello.com/c/pFkLfUzR) the owner chose: D1, the lucide `Flam
 ## Hard Mode known-check threshold — November 7, 2026
 
 The owner replaces irreversible loss for new trips with an inclusive 95% passing known-check threshold: delivered outcome, at least one known check, and `pass * 100 >= (pass + fail) * 95`. Unknown checks are separately diagnosed and excluded; temporary file verification failures, restarts and session changes are not permanent rejection. Verified logical continuation preserves summed member counts; heartbeat/manual/status updates add no sampling weight. No separate opening/final pass or anti-cheat guarantee is required. Audit v2 in the existing bounded JSON column and compatible export format 5 carry statistics and persistent reason diagnostics; historical v1 audits and qualification keep their original policy.
+
+## ET-081 checkpoint trailer baseline storage — November 8, 2026
+
+In the November 8 deliver conversation, the owner approved dedicated immutable checkpoint trailer baseline storage and forward migration `0007-trailer-baselines` ([Trello approval record](https://trello.com/c/Rb7ZTC3w#comment-6af0c90fd9ca25b10a2d3284)) for reliable whole-trip upload context. The private recorder persists the existing checkpoint's complete slot state before observation, including without an active job; native and HTTP wire contracts remain unchanged. Historical trips without sufficient evidence and unsupported continuation bridges remain incomplete.

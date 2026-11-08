@@ -11,7 +11,7 @@ import {encodeUploadEnvelope,uploadDigest,type UploadEnvelope} from '../../packa
 import {UPLOAD_MAX_BYTES,UPLOAD_MAX_EVENTS} from '../../packages/storage/src/upload-sync';
 import {recheckUploadProjection} from '../../packages/storage/src/sqlite/upload-projection';
 import {tripUuidFor,type ProfileObservation} from '../../packages/telemetry-core/src';
-import {ETS2_A,job,r,Script} from '../shared/trip-messages';
+import {ETS2_A,job,r,Script,trailer} from '../shared/trip-messages';
 import {failed,ok,TEST_CLOSE_GRACE_MS,workspace} from './helpers';
 import {storageWorker,terminateWorkers} from './recording-helpers';
 let ws:Awaited<ReturnType<typeof workspace>>,opened:Storage[]=[];
@@ -19,11 +19,16 @@ beforeEach(async()=>{ws=await workspace();});afterEach(async()=>{await terminate
 const game=<T extends {source:{origin:string}}>(message:T):T=>({...message,source:{...message.source,origin:'game'}});
 const mode={mode:'unknown',method:'none',confidence:'none'} as const;
 const proof=(s:Script):ProfileObservation=>({version:1,scope:'a'.repeat(64),binding:'b'.repeat(64),game:'ets2',pluginSessionId:s.session,processInstanceId:s.welcome().source.processInstanceId,sourceClockId:s.clockId,afterMonotonicNs:'0',loadGeneration:1});
-async function setup(client:Storage|StorageClient){
+async function setup(client:Storage|StorageClient,baseline=false){
   const install=ok(await client.ensureUploadInstallation()),registrationId=randomUUID(),runId=randomUUID();
   ok(await client.recordUploadRegistration({registrationId,clientInstallationId:install.clientInstallationId!,origin:'https://dashboard.example',accountId:'A',companyId:'company',identityEpoch:'epoch',installationId:randomUUID(),bindingId:randomUUID()}));
   ok(await client.confirmUploadOwner({confirmationId:runId,registrationId,credentialGeneration:'generation',expectedVersion:'0'}));
   const s=new Script(ETS2_A),tripUuid=tripUuidFor(s.session,'1');ok(await client.upsertSession({message:game(s.welcome())}));
+  if(baseline){
+    const checkpoint=game(s.checkpoint(null));checkpoint.data.state.boundaryOrder='0';
+    checkpoint.data.state.configuration.trailers=Array.from({length:10},(_,index)=>index===0?{available:true,value:trailer(0,{bodyType:{available:true,value:'curtainsider'}})}:{available:false,reason:'not-observed'});
+    ok(await client.recordTrailerBaseline({message:checkpoint}));
+  }
   ok(await client.commitEvent({message:game(s.event(r.jobConfigured())),profile:proof(s),effects:[{kind:'trip.open',tripUuid,game:'ets2',gameMode:mode,jobConfiguration:'this-event',recordingCompleteness:'complete',startedUtcMs:1000}]}));
   return {s,tripUuid,registrationId,runId};
 }
@@ -403,4 +408,78 @@ it.each(['authentication','validation'] as const)('REG-005/010/011/012 records a
   const conn=await openConnection(ws.options({purpose:'history'})),storage=new Storage(conn);opened.push(storage);const source=await setup(storage),workId=await complete(storage,source),db=conn.writer();ok(storage.freezeUploadMaterialization({workId,producerVersion:'test',createdUtcMs:1000}));const attempt=ok(storage.claimUploadAttempt({attemptId:randomUUID(),registrationId:source.registrationId,expectedVersion:'1',mode:'any',nowMs:1000}));
   expect(ok(storage.recordUploadAttemptOutcome({attemptId:attempt.attemptId!,kind,retryAtMs:9000,nowMs:2000})).status).toBe('recorded');expect(db.prepare('SELECT state,retry_at,hold_reason FROM upload_envelopes').get()).toEqual({state:kind==='authentication'?'queued':'held',retry_at:9000n,hold_reason:kind});expect(ok(storage.getUploadStoreStatus({registrationId:source.registrationId})).paused).toBe(kind==='authentication'?'authentication':null);
   const before=contentDigest(db);expect(ok(storage.recordUploadAttemptOutcome({attemptId:attempt.attemptId!,kind:'configuration',retryAtMs:10000,nowMs:3000})).status).toBe('stale');expect(contentDigest(db)).toEqual(before);
+});
+
+
+it('TEL-034 does not starve a proven baseline-backed OPEN preparation or freeze on ordinary native/counter progress',async()=>{
+  const conn=await openConnection(ws.options({purpose:'history'})),storage=new Storage(conn);opened.push(storage);const source=await setup(storage,true),db=conn.writer();
+  // Seed cursor filler atomically; the progress commits between materialization advances remain independent.
+  db.transaction(()=>{
+    for(let i=0;i<180;i++)ok(storage.commitEvent({message:game(source.s.event(r.paused()))}));
+    for(let i=0;i<120;i++)ok(storage.recordCompleteness(source.s.session,{tripUuid:source.tripUuid,kind:'sample-loss'}));
+  }).immediate();
+  const progress=(value:number)=>ok(storage.commitEvent({message:game(source.s.event(r.paused())),effects:[{kind:'trip.update',tripUuid:source.tripUuid,set:{observedDistanceM:{available:true,value},fuelUsedL:{available:true,value}}}]}));
+  progress(1);const workId=randomUUID();let work=ok(storage.beginUploadMaterialization({tripUuid:source.tripUuid,registrationId:source.registrationId,workId})),turn=0;
+  while(['preparing','folding'].includes(work.status)&&turn<100){progress(++turn+1);work=ok(storage.advanceUploadMaterialization({workId}));expect(work.examined).toBeLessThanOrEqual(100);}
+  expect(turn).toBeGreaterThan(3);expect(work.status).toBe('complete');
+  const pin=JSON.parse(db.prepare('SELECT pin_json FROM upload_materializations WHERE work_id=?').pluck().get(workId) as string);
+  expect(pin.ruleContext).toMatchObject({status:'proven',recordingLoss:false});expect(recheckUploadProjection(db,pin)).toBe(false);
+  expect(ok(storage.freezeUploadMaterialization({workId,producerVersion:'test',createdUtcMs:1000})).status).toBe('frozen');
+  const attempt=ok(storage.claimUploadAttempt({attemptId:randomUUID(),registrationId:source.registrationId,expectedVersion:'1',mode:'any',nowMs:1000}));
+  expect(attempt.status).toBe('claimed');const envelope=JSON.parse(Buffer.from(attempt.payload!).toString()) as UploadEnvelope;
+  expect(envelope.snapshot.evidence).toMatchObject({ruleContextComplete:true,reasons:[]});expect(envelope.snapshot.trailers.complete).toBe(true);
+  expect(envelope.snapshot.observedDistance).toEqual({available:true,value:1,unit:'m'});
+});
+it.each(['configured','cleared','gap','loss','prefix'] as const)('TEL-034 invalidates a proven OPEN material context on new unlinked %s evidence',async kind=>{
+  const conn=await openConnection(ws.options({purpose:'history'})),storage=new Storage(conn);opened.push(storage);const source=await setup(storage,true),workId=await complete(storage,source),db=conn.writer();
+  const pin=JSON.parse(db.prepare('SELECT pin_json FROM upload_materializations WHERE work_id=?').pluck().get(workId) as string);expect(pin.ruleContext.status).toBe('proven');
+  if(kind==='gap')ok(storage.commitGap({message:game(source.s.gap(1))}));
+  else if(kind==='prefix')ok(storage.recordCompleteness(source.s.session,{tripUuid:source.tripUuid,kind:'discontinuity',detail:{cause:'reload',decision:'not-merged'}}));
+  else if(kind==='loss')ok(storage.recordCompleteness(source.s.session,{kind:'restore-loss',firstEventSeq:source.s.next.toString(),lastEventSeq:source.s.next.toString()}));
+  else ok(storage.commitEvent({message:game(source.s.event(kind==='cleared'?r.trailerCleared():r.trailerConfigured(trailer(0,{id:{available:true,value:'different'}}))))}));
+  expect(ok(storage.freezeUploadMaterialization({workId,producerVersion:'test',createdUtcMs:1000})).status).toBe('stale');
+  ok(storage.releaseUploadMaterialization({workId}));const replacement=await complete(storage,source);
+  expect(ok(storage.freezeUploadMaterialization({workId:replacement,producerVersion:'test',createdUtcMs:1001})).status).toBe('frozen');
+  const attempt=ok(storage.claimUploadAttempt({attemptId:randomUUID(),registrationId:source.registrationId,expectedVersion:'1',mode:'any',nowMs:1001}));
+  expect(attempt.status).toBe('claimed');const summary=(JSON.parse(Buffer.from(attempt.payload!).toString()) as UploadEnvelope).snapshot;
+  expect(summary.evidence.ruleContextComplete).toBe(false);
+  expect(summary.evidence.reasons).toContain(kind==='gap'||kind==='loss'?'recording-intervals':kind==='prefix'?'trailer-context-unproven':'trailer-context-changed');
+});
+
+
+it.each(['after-terminal','unknown','overlap','hidden-overlap'] as const)('TEL-034 safely replaces a closed pending pin after %s session loss evidence',async kind=>{
+  const conn=await openConnection(ws.options({purpose:'history'})),storage=new Storage(conn);opened.push(storage);const source=await setup(storage,true),db=conn.writer();
+  ok(storage.commitEvent({message:game(source.s.event(r.delivered())),effects:[{kind:'trip.close',tripUuid:source.tripUuid,outcome:'delivered',outcomeEvent:'this-event',closeReason:'outcome',recordingCompleteness:'complete',endedUtcMs:2000}]}));
+  const workId=await complete(storage,source),priorVersion=db.prepare('SELECT material_version FROM upload_change_heads').pluck().get();
+  if(kind==='unknown')ok(storage.recordCompleteness(source.s.session,{kind:'restore-loss'}));
+  else {
+    if(kind==='overlap'||kind==='hidden-overlap')ok(storage.recordCompleteness(source.s.session,{kind:'restore-loss',firstEventSeq:'2',lastEventSeq:'2'}));
+    if(kind==='after-terminal'||kind==='hidden-overlap')ok(storage.recordCompleteness(source.s.session,{kind:'restore-loss',firstEventSeq:'3',lastEventSeq:'3'}));
+  }
+  expect(ok(storage.freezeUploadMaterialization({workId,producerVersion:'test',createdUtcMs:1000})).status).toBe('stale');
+  expect(db.prepare('SELECT material_version FROM upload_change_heads').pluck().get()).not.toBe(priorVersion);
+  ok(storage.releaseUploadMaterialization({workId}));const replacement=await complete(storage,source);
+  expect(ok(storage.freezeUploadMaterialization({workId:replacement,producerVersion:'test',createdUtcMs:1001})).status).toBe('frozen');
+  const attempt=ok(storage.claimUploadAttempt({attemptId:randomUUID(),registrationId:source.registrationId,expectedVersion:'1',mode:'any',nowMs:1001}));
+  expect(attempt.status).toBe('claimed');const summary=(JSON.parse(Buffer.from(attempt.payload!).toString()) as UploadEnvelope).snapshot;
+  expect(summary.evidence.ruleContextComplete).toBe(kind==='after-terminal');
+  expect(summary.evidence.reasons).toEqual(kind==='after-terminal'?[]:['recording-intervals','trailer-context-unproven']);
+});
+
+
+it.each([[1,false],[1,true],[2,false],[2,true]] as const)('TEL-034 re-evaluates retained version%s complete folds while preserving already frozen bytes (%s)',async(version,frozen)=>{
+  const conn=await openConnection(ws.options({purpose:'history'})),storage=new Storage(conn);opened.push(storage);const source=await setup(storage,true),workId=await complete(storage,source),db=conn.writer();
+  if(frozen)expect(ok(storage.freezeUploadMaterialization({workId,producerVersion:'test',createdUtcMs:1000})).status).toBe('frozen');
+  const original=db.prepare('SELECT event_id,payload FROM upload_envelopes WHERE work_ref=?').get(workId);
+  const pin=JSON.parse(db.prepare('SELECT pin_json FROM upload_materializations WHERE work_id=?').pluck().get(workId) as string);
+  pin.ruleContext.version=version;
+  if(version===2)pin.ruleContext.items.push({...pin.ruleContext.items[0],index:2});
+  const saved=JSON.parse(db.prepare('SELECT snapshot_json FROM upload_projection_pins WHERE pin_id=?').pluck().get(workId) as string);if(version===1)delete saved.rulePrefix;
+  db.prepare('UPDATE upload_projection_pins SET metadata_json=?,snapshot_json=? WHERE pin_id=?').run(JSON.stringify(pin),JSON.stringify(saved),workId);
+  db.prepare('UPDATE upload_materializations SET pin_json=? WHERE work_id=?').run(JSON.stringify(pin),workId);
+  expect(ok(storage.freezeUploadMaterialization({workId,producerVersion:'test',createdUtcMs:1001})).status).toBe('frozen');
+  if(frozen)expect(db.prepare('SELECT event_id,payload FROM upload_envelopes WHERE work_ref=?').get(workId)).toEqual(original);
+  const attempt=ok(storage.claimUploadAttempt({attemptId:randomUUID(),registrationId:source.registrationId,expectedVersion:'1',mode:'any',nowMs:1001}));
+  expect(attempt.status).toBe('claimed');const snapshot=(JSON.parse(Buffer.from(attempt.payload!).toString()) as UploadEnvelope).snapshot;
+  expect(snapshot.trailers.complete).toBe(frozen);expect(snapshot.evidence).toMatchObject({ruleContextComplete:frozen,reasons:frozen?[]:['trailer-context-unproven']});
 });
