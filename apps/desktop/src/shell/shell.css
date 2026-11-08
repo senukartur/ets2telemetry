@@ -110,7 +110,8 @@ h1[tabindex="-1"]:focus { outline: none; }
 @media (prefers-reduced-motion: reduce) { *, *::before, *::after { animation-duration: .01ms !important; transition-duration: .01ms !important; scroll-behavior: auto !important; } }
 
 /* ET-076 trip list (mockup T3): the toolbar, then one card whose table container is the only horizontal scroller. */
-.yu-journal { display: grid; gap: 12px; min-width: 0; }
+/* minmax(0, 1fr): a column sized by content would widen to the table's min-width, and the page would scroll sideways instead of the table card. */
+.yu-journal { display: grid; grid-template-columns: minmax(0, 1fr); gap: 12px; min-width: 0; }
 .yu-journal-toolbar { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; min-width: 0; }
 .yu-journal-toolbar .yu-segmented button { min-height: 26px; height: 26px; padding: 0 10px; border: 0; border-radius: 4px; background: transparent; color: var(--yu-text-secondary); font-size: 12px; }
 .yu-journal-toolbar .yu-segmented button[aria-pressed="true"] { background: var(--yu-bg-raised); color: var(--yu-text-strong); font-weight: 500; }
