@@ -18,7 +18,18 @@ const repository = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '.
 const electron = path.join(repository, 'node_modules', 'electron', 'dist', 'electron.exe');
 const fixtures = path.join(repository, 'tests', 'fixtures', 'single-instance');
 const started: Run[] = [];
-const HOLDER_READINESS_MS = 8000, REQUEST_RESULT_MS = INSTANCE_EXIT_WAIT_MS + 4000, FINAL_EXIT_MS = 4000;
+const HOLDER_READINESS_MS = 30_000, REQUEST_RESULT_MS = INSTANCE_EXIT_WAIT_MS + 4000;
+/**
+ * Hang guard for an Electron process to end after it exits or is killed, not a timing assertion. A bare Electron main
+ * script calling app.exit, with no lock and no other process, took up to 3.3 s to end on an idle host and 10.6 s with the
+ * processors oversubscribed (November 8, 2026), so a process that is only slow must not hit it. It stays below
+ * HOLDER_READINESS_MS: a cleanup stall retires a pending readiness wait with its own error.
+ */
+const FINAL_EXIT_MS = 20_000;
+/** Every guard of one real case in turn, so that a guard, with its context, reports a stall before the case timeout does. */
+const REAL_CASE_GUARD_MS = HOLDER_READINESS_MS + REQUEST_RESULT_MS + 2 * FINAL_EXIT_MS;
+/** Stops the children, in parallel and each under FINAL_EXIT_MS, then removes their profile folder with its retries. */
+const CLEANUP_GUARD_MS = FINAL_EXIT_MS + 10_000;
 let lockDir: string | undefined;
 afterEach(async () => {
   const profile = lockDir; lockDir = undefined;
@@ -28,7 +39,7 @@ afterEach(async () => {
     if (failed.length) throw new AggregateError(failed.map(value => value.reason), 'RELOCK_CHILD_CLEANUP_FAILED');
     if (profile) await rm(profile, {recursive: true, force: true, maxRetries: 5, retryDelay: 200});
   } finally {vi.useRealTimers();}
-});
+}, CLEANUP_GUARD_MS);
 
 interface Run {lines: string[]; readonly exited: Promise<number | null>; line(prefix: string): Promise<string>; dispose(): Promise<void>}
 type RelockChild = EventEmitter & {stdout: EventEmitter; stderr: EventEmitter; exitCode: number | null; signalCode: NodeJS.Signals | null; kill(): boolean};
@@ -124,7 +135,7 @@ it('the relock observer rejects cleanup stalls and consumes late child errors un
   expect(f.child.listenerCount('error')).toBe(1); f.child.emit('error', new Error('late process failure')); f.child.emit('close'); f.cleaned();
 });
 
-it('a refused requester signals the holder on each request and gets the lock once the holder exits', {timeout: 30_000}, async () => {
+it('a refused requester signals the holder on each request and gets the lock once the holder exits', {timeout: REAL_CASE_GUARD_MS}, async () => {
   lockDir = await mkdtemp(path.join(os.tmpdir(), 'ets2telemetry-relock-'));
   const holder = launch('holder.cjs', {LOCK_DIR: lockDir, HOLDER_EXIT: '1'});
   await holder.line('HOLDER_LOCKED');
@@ -145,7 +156,7 @@ it('a refused requester signals the holder on each request and gets the lock onc
   }
 });
 
-it('a holder that does not exit keeps the lock: the requester gives up after its wait, having signalled on every request', {timeout: 30_000}, async () => {
+it('a holder that does not exit keeps the lock: the requester gives up after its wait, having signalled on every request', {timeout: REAL_CASE_GUARD_MS}, async () => {
   lockDir = await mkdtemp(path.join(os.tmpdir(), 'ets2telemetry-relock-'));
   const holder = launch('holder.cjs', {LOCK_DIR: lockDir, HOLDER_EXIT: '0'});
   await holder.line('HOLDER_LOCKED');
@@ -158,5 +169,5 @@ it('a holder that does not exit keeps the lock: the requester gives up after its
   expect(result.elapsedMs).toBeGreaterThanOrEqual(1500);
   expect(result.requests).toBeGreaterThanOrEqual(2);
   // Every refused request reached the holder.
-  await expect.poll(() => signals(holder).length, {timeout: 2000}).toBe(result.requests);
+  await expect.poll(() => signals(holder).length, {timeout: FINAL_EXIT_MS}).toBe(result.requests);
 });
