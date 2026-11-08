@@ -299,19 +299,64 @@ button[aria-disabled="true"], [role="switch"][aria-disabled="true"] { cursor: no
 .yu-action-row > .yu-info-hint-wrap { order: 1; }
 .yu-action-row > :not(button):not(.yu-info-hint-wrap) { order: 2; flex-basis: 100%; }
 
-.yu-account-grid { display: grid; grid-template-columns: minmax(0,1.25fr) minmax(0,1fr); gap: 16px; align-items: start; }
-.yu-account-grid h2 { display: flex; align-items: center; gap: 8px; }
-.yu-account-grid h2 svg { width: 18px; height: 18px; }
-.yu-upload-identifiers { display: grid; grid-template-columns: minmax(0,1fr) minmax(0,1.25fr); gap: 8px 14px; }
-.yu-upload-identifiers :is(dd,strong) { margin: 0; overflow-wrap: anywhere; font-variant-numeric: tabular-nums; }
-.yu-upload-identifiers :is(dt,span) { color: var(--yu-text-secondary); }
-.yu-upload-token { display: flex; gap: 8px; }
-.yu-token-input { min-width: 0; width: 100%; border: 1px solid var(--yu-border-input); background: var(--yu-bg-input); color: var(--yu-text); padding: 8px 10px; }
-.yu-account-grid progress { width: 100%; height: 8px; accent-color: var(--yu-accent-light); }
+.yu-account { font-size: 12px; line-height: 1.5; }
+.yu-account-grid { display: grid; grid-template-columns: minmax(0,1.62fr) minmax(0,1fr); gap: 14px; align-items: start; }
+.yu-account :is([data-slot="card"], [data-slot="card-content"], dl > div) { min-width: 0; }
+.yu-account [data-slot="card"] { border: 1px solid var(--yu-border); overflow: visible; font-size: 12px; }
+.yu-account [data-slot="card-header"] { padding: 10px 14px; border-radius: var(--yu-radius-card) var(--yu-radius-card) 0 0; background: var(--yu-bg-inset); }
+.yu-account [data-slot="card-title"] { border: 0; padding: 0; font-size: 13px; }
+.yu-account .yu-account-header { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px; }
+.yu-account :is(h2,h3) { font-size: 13px; font-weight: 700; }
+.yu-account h2 { display: flex; align-items: center; gap: 7px; }
+.yu-account h2 svg { width: 16px; height: 16px; }
+.yu-account [data-slot="card-content"] { display: grid; gap: 12px; padding: 14px; }
+.yu-account :is(p,dl,ol,h2,h3) { margin: 0; }
+.yu-account :is(p,dt,dd,strong,[data-slot="badge"]) { overflow-wrap: anywhere; }
+.yu-account [data-slot="badge"] { max-width: 100%; white-space: normal; border-radius: var(--yu-radius-badge); font-size: 11px; }
+.yu-account :is(.yu-account-metadata,.yu-account-owner) { display: grid; grid-template-columns: repeat(3,minmax(0,1fr)); gap: 10px 16px; }
+.yu-account .yu-account-metadata { grid-template-columns: minmax(0,1.5fr) minmax(0,1fr); }
+.yu-account-owner > div:first-child { grid-column: 1 / -1; }
+.yu-account dt { color: var(--yu-text-muted); font-size: 11px; }
+.yu-account dd { margin: 3px 0 0; font-variant-numeric: tabular-nums; }
+.yu-account-form { display: grid; gap: 8px; }
+.yu-account .yu-account-form label { font-size: 12px; }
+.yu-account .yu-upload-token { position: relative; display: flex; min-width: 0; }
+.yu-account .yu-token-input { min-width: 0; width: 100%; min-height: 36px; border: 1px solid var(--yu-border-input); background: var(--yu-bg-input); color: var(--yu-text); padding: 7px 44px 7px 10px; }
+.yu-account .yu-upload-token button { position: absolute; right: 2px; top: 2px; }
+.yu-account button { min-height: 32px; height: auto; max-width: 100%; white-space: normal; overflow-wrap: anywhere; font-size: 12px; }
+.yu-account .yu-upload-token button { height: 32px; width: 36px; }
+.yu-account-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.yu-account [data-testid="account.confirmation"] { display: grid; gap: 12px; }
+.yu-account-notice, .yu-account-preview { padding: 10px 12px; border: 1px solid var(--yu-border); border-radius: var(--yu-radius-control); background: var(--yu-bg-inset); }
+.yu-account-notice[data-tone="warn"] { color: var(--yu-warn-fg); border-color: var(--yu-warn-border); background: var(--yu-warn-bg); }
+.yu-account-notice[data-tone="error"] { color: var(--yu-err-fg); border-color: var(--yu-err-border); background: var(--yu-err-bg); }
+.yu-account-notice p + p { margin-top: 8px; }
+.yu-account-feedback:has(> :only-child) { position: absolute; }
+.yu-account-local, .yu-account-footer { font-size: 11px; }
+.yu-account-local { border-top: 1px solid var(--yu-divider); padding-top: 12px; }
+.yu-account-steps { display: grid; gap: 16px; padding: 0; list-style: none; counter-reset: upload-step; }
+.yu-account-steps li { position: relative; padding-left: 32px; counter-increment: upload-step; }
+.yu-account-steps li::before { content: counter(upload-step); position: absolute; top: 0; left: 0; display: grid; place-items: center; width: 22px; height: 22px; border: 1px solid var(--yu-border); border-radius: var(--yu-radius-badge); color: var(--yu-accent-light); background: var(--yu-bg-inset); font-variant-numeric: tabular-nums; }
+.yu-account-steps p { margin-top: 4px; color: var(--yu-text-muted); }
+.yu-account-metrics { display: grid; grid-template-columns: repeat(5,minmax(0,1fr)); border: 1px solid var(--yu-border); border-radius: var(--yu-radius-control); background: var(--yu-bg-inset); }
+.yu-account-metrics > div { padding: 10px 12px; border-left: 1px solid var(--yu-divider); }
+.yu-account-metrics > div:first-child { border-left: 0; }
+.yu-account-metrics dd { font-size: 22px; color: var(--yu-text-strong); }
+.yu-account-metrics dd.yu-account-date { font-size: 12px; }
+.yu-account-metrics p { margin-top: 3px; font-size: 11px; color: var(--yu-text-muted); }
+.yu-account-delivered { font-weight: 500; }
+.yu-account progress { width: 100%; min-width: 0; height: 6px; accent-color: var(--yu-accent-light); }
+.yu-account progress[value] { appearance: none; border: 0; border-radius: var(--yu-radius-badge); overflow: hidden; background: var(--yu-border); color: var(--yu-accent-light); }
+.yu-account progress[value]::-webkit-progress-bar { background: var(--yu-border); border-radius: var(--yu-radius-badge); }
+.yu-account progress[value]::-webkit-progress-value { background: currentColor; border-radius: var(--yu-radius-badge); }
+.yu-account .yu-account-disconnect { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 12px; }
+.yu-account-disconnect > div { flex: 1 1 300px; min-width: 0; }
+.yu-account-disconnect p { margin-top: 4px; }
+@media (max-width: 950px) { .yu-account-metrics { grid-template-columns: repeat(3,minmax(0,1fr)); } .yu-account-metrics > div { border: 0; } }
+@media (max-width: 760px) { .yu-account-grid { grid-template-columns: minmax(0,1fr); } .yu-account :is(.yu-account-owner,.yu-account-metadata) { grid-template-columns: minmax(0,1fr); } .yu-account-metrics { grid-template-columns: repeat(2,minmax(0,1fr)); } }
 .yu-sync-chip[data-tone="ok"] { color: var(--yu-ok-fg); border-color: var(--yu-ok-border); background: var(--yu-ok-bg); }
 .yu-sync-chip[data-tone="warn"] { color: var(--yu-warn-fg); border-color: var(--yu-warn-border); background: var(--yu-warn-bg); }
 .yu-sync-chip[data-tone="error"] { color: var(--yu-err-fg); border-color: var(--yu-err-border); background: var(--yu-err-bg); }
-@media (max-width: 950px) { .yu-account-grid { grid-template-columns: minmax(0,1fr); } }
 
 /* ET-074: the site sync chip is 24 px tall like the other chips; its hit area extends to 32 px. */
 .yu-sync-chip { display: inline-flex; align-items: center; gap: 5px; border: 1px solid var(--yu-neutral-border); color: var(--yu-neutral-fg); background: var(--yu-neutral-bg); max-width: 100%; text-align: left; }
