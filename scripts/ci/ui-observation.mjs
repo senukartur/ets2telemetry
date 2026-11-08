@@ -1093,15 +1093,30 @@ export async function runUiSmoke({application, dashboard, overlay, source, sourc
         await dashboard.getByTestId('journal-list-next').click(); await until(() => dashboard.getByTestId('journal-list-page').innerText(), text => text.includes('2'), 'UI_JOURNAL_PAGE_TWO');
         const row = dashboard.getByTestId('journal-row').first(), trip = await row.getAttribute('data-trip'); await row.getByTestId('journal-row-open').click();
         await dashboard.getByTestId('journal-detail-title').waitFor({state: 'visible'});
-        assert.equal(await dashboard.getByTestId('trip.header').count(), 1); assert.equal(await dashboard.locator('[data-testid="trip.tiles"] > div').count(), 3);
+        assert.equal(await dashboard.getByTestId('trip.header').count(), 1); assert.equal(await dashboard.locator('[data-testid="trip.tiles"] > div').count(), 4);
         assert.equal(await dashboard.getByTestId('trip.header.cargo').innerText(), 'Synthetic Cargo');
         await save('trip', language, size);
         await dashboard.getByTestId('journal-back').click(); assert.equal(await dashboard.getByTestId('journal-row').first().getAttribute('data-trip'), trip);
         assert.match(await dashboard.getByTestId('journal-list-page').innerText(), /2/);
         await dashboard.getByTestId('journal-list-previous').click(); await until(() => dashboard.getByTestId('journal-row').first().getAttribute('data-trip'), id => id === '7b000000-0000-4000-8000-000000000001', 'UI_JOURNAL_PAGE_ONE');
         await dashboard.getByTestId('journal-row-open').first().click(); await dashboard.getByTestId('journal-detail-title').waitFor({state: 'visible'});
-        await dashboard.getByTestId('trip.raw.toggle').click();
+        // ET-077: the side column stays beside the tabs at both window sizes, and the content never scrolls sideways.
+        const columns = await dashboard.evaluate(() => {
+          const box = selector => globalThis.document.querySelector(selector).getBoundingClientRect(), content = globalThis.document.querySelector('[data-testid="shell.content"]');
+          return {mainRight: box('.yu-trip-main').right, sideLeft: box('.yu-trip-side').left, sideWidth: box('.yu-trip-side').width, overflow: content.scrollWidth > content.clientWidth};
+        });
+        assert.ok(columns.sideLeft >= columns.mainRight && columns.sideWidth >= 260, `UI_TRIP_COLUMNS_${size.width}: ${JSON.stringify(columns)}`);
+        assert.equal(columns.overflow, false, `UI_TRIP_CONTENT_OVERFLOW_${size.width}`);
+        // The tabs follow the WAI-ARIA pattern: arrows, Home and End select a tab, and Tab moves into its panel.
+        const tabSelected = id => dashboard.getByTestId(`journal-detail-tab-${id}`).getAttribute('aria-selected');
+        await dashboard.getByTestId('journal-detail-tab-summary').focus();
+        await dashboard.keyboard.press('ArrowRight'); assert.equal(await tabSelected('timeline'), 'true', 'UI_TRIP_TAB_ARROW');
+        await dashboard.keyboard.press('End'); assert.equal(await tabSelected('intervals'), 'true', 'UI_TRIP_TAB_END');
+        await dashboard.keyboard.press('Home'); assert.equal(await tabSelected('summary'), 'true', 'UI_TRIP_TAB_HOME');
+        await dashboard.keyboard.press('Tab');
+        assert.equal(await dashboard.evaluate(() => globalThis.document.activeElement?.closest('[role="tabpanel"]')?.getAttribute('data-state')), 'active', 'UI_TRIP_TAB_PANEL_FOCUS');
         for (const tab of ['intervals', 'timeline']) {await dashboard.getByTestId(`journal-detail-tab-${tab}`).click(); await dashboard.getByTestId(`journal-${tab === 'timeline' ? 'events' : tab}-loading`).waitFor({state: 'detached'}); await save(tab, language, size);}
+        await dashboard.getByTestId('journal-detail-tab-summary').click();
         await dashboard.getByTestId('journal-samples-loading').waitFor({state: 'detached'}); await dashboard.getByTestId('trip.samples.toggle').click();
         await dashboard.getByTestId('journal-sample-row').first().waitFor({state: 'attached', timeout: 5000});
         assert.equal(await dashboard.getByTestId('journal-sample-row').count(), 300);

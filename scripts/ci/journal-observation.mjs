@@ -118,7 +118,7 @@ function tableState(expected) {
   if (!root || root.querySelector(`[data-testid="${expected.prefix}-loading"]`)) return false;
   const text = id => root.querySelector(`[data-testid="${id}"]`)?.textContent ?? null;
   const rows = [...root.querySelectorAll(`[data-testid="${expected.row}"]`)].map(row => ({kind: row.getAttribute('data-kind'), eventSeq: row.getAttribute('data-event-seq'),
-    cells: [...row.querySelectorAll('td')].map(cell => cell.textContent)}));
+    cells: [...row.querySelectorAll('td, [data-cell]')].map(cell => cell.textContent)}));
   const state = {page: text(`${expected.prefix}-page`), error: text(`${expected.prefix}-error`), header: expected.header ? text(expected.header) : null,
     next: root.querySelector(`[data-testid="${expected.prefix}-next"]`)?.disabled === false, rows};
   if (state.error) return state;
@@ -211,15 +211,13 @@ async function back(dashboard) {
 const table = {
   intervals: {tab: 'journal-detail-tab-intervals', root: 'journal-intervals', prefix: 'journal-intervals', row: 'journal-interval-row', header: 'journal-intervals-total'},
   timeline: {tab: 'journal-detail-tab-timeline', root: 'journal-timeline', prefix: 'journal-events', row: 'journal-event-row', header: 'journal-window'},
-  // ET-057: the sample table is under the trip's chart, not a tab; its rows are in the document while the section is closed.
-  samples: {tab: null, root: 'journal-samples', prefix: 'journal-samples', row: 'journal-sample-row', header: null}
+  // ET-077: the sample table is under the Summary tab's chart; its rows are rendered only while that section is open.
+  samples: {tab: 'journal-detail-tab-summary', root: 'journal-samples', prefix: 'journal-samples', row: 'journal-sample-row', header: null}
 };
 async function openTable(dashboard, kind, count) {
-  // ET-057: the raw tables are a collapsed section of the trip; open it once per trip.
-  if (table[kind].tab) {
-    if (!await dashboard.getByTestId('trip.raw').evaluate(node => node.open, undefined, {timeout: 5000})) await clickTestId(dashboard, 'trip.raw.toggle');
-    await clickTestId(dashboard, table[kind].tab);
-  } else {
+  // ET-077: each table is under its tab of the trip page, and an inactive tab holds no page.
+  await clickTestId(dashboard, table[kind].tab);
+  if (kind === 'samples') {
     // The sample table renders only while its section under the chart is open; a trip without samples has no section.
     await dashboard.getByTestId('journal-samples-loading').waitFor({state: 'detached', timeout: 5000});
     const section = dashboard.getByTestId('trip.samples');
