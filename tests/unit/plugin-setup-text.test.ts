@@ -2,6 +2,7 @@ import {describe, expect, it} from 'vitest';
 import type {PluginBlockReason, PluginGameView, PluginSetupView, PluginTargetState, PluginTargetView} from '../../packages/contracts/src';
 import {connectionDiagnosisText, diagnosticsExportText, MANUAL_COPY_REASONS, pluginFolderChoiceText, pluginSetupText, pluginShowFileText} from '../../apps/desktop/src/plugin-setup-text';
 import type {ConnectionDiagnosisCode} from '../../apps/desktop/src/connection-diagnosis';
+import {t} from '../../apps/desktop/src/i18n';
 
 // REG-015 (ET-017 PR-5, P16, P18): the text of the Game plugin card. Every mode, discovery outcome, folder state, target
 // state, block reason and refusal has a hand-written expected text below; none of them may carry a path.
@@ -262,8 +263,8 @@ it('localizes static templates before inserting plugin identity and folder ordin
 
 
 it.each(['NO_GAME_SELECTED', 'TRANSPORT_FAILED'] as const)('keeps effective source guidance localized after moving its selector: %s', code => {
-  expect(connectionDiagnosisText({code, notes: []}, 'en').line).toContain('Settings > Diagnostics');
+  expect(connectionDiagnosisText({code, notes: []}, 'en').line).toContain(`Settings > ${t('s.data', undefined, 'en')}`);
   expect(connectionDiagnosisText({code, notes: []}, 'en').line).not.toContain('above');
-  expect(connectionDiagnosisText({code, notes: []}, 'ru').line).toContain('в разделе «Настройки > Диагностика»');
+  expect(connectionDiagnosisText({code, notes: []}, 'ru').line).toContain(`в разделе «Настройки > ${t('s.data', undefined, 'ru')}»`);
   expect(connectionDiagnosisText({code, notes: []}, 'ru').line).not.toContain('Settings');
 });
