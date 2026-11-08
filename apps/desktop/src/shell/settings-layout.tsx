@@ -24,10 +24,10 @@ interface SettingsSectionProps {
   children?: React.ReactNode;
 }
 
-/** A section card: an optional heading row, then its rows, one line between each. */
+/** A section card: an optional heading row, then its rows, one line between each. Only a named section is a region. */
 export function SettingsSection({title, label, note, noteId, testId, children}: SettingsSectionProps) {
   const headingId = useId();
-  return <Card size="sm" className="yu-settings-card" role="region" aria-labelledby={title ? headingId : undefined} aria-label={title ? undefined : label} data-testid={testId}>
+  return <Card size="sm" className="yu-settings-card" role={title || label ? 'region' : undefined} aria-labelledby={title ? headingId : undefined} aria-label={title ? undefined : label} data-testid={testId}>
     {title ? <div className="yu-settings-card-head"><h3 id={headingId}>{title}</h3>{note ? <p id={noteId} className="yu-settings-card-note">{note}</p> : null}</div> : null}
     {children}
   </Card>;

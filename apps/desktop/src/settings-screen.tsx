@@ -165,16 +165,18 @@ function DiagnosticsPanel({language, app, live, startup, pluginActions, onSource
         <p data-testid="prototype-notice" className="yu-muted">{recording.notice}</p>
       </div>
     </SettingsSection>
-    <SettingsSection label={t('s.data.bundle', undefined, language)} testId="settings.data.bundle">
+    {/* Like the Game plugin card that held the export before ET-078, the bundle section waits for main's first push. */}
+    {app ? <SettingsSection label={t('s.data.bundle', undefined, language)} testId="settings.data.bundle">
       <DiagnosticsExportRow language={language} {...pluginActions} />
-    </SettingsSection>
+    </SettingsSection> : null}
   </>;
 }
 
 function AboutPanel({language, app}: SettingsScreenProps) {
   return <>
     <SettingsPanelHeader title={t('s.about', undefined, language)} />
-    <SettingsSection label={t('s.about', undefined, language)}>
+    {/* No name of its own: the panel's heading already says "About" and the brand block names the application. */}
+    <SettingsSection>
       <div className="yu-about-brand" data-testid="settings.about.brand"><img src={logo} alt="" width={56} height={56} />
         <div><h3>{CHANNEL.displayName}</h3><p>{t('app.sub', undefined, language)}</p><VersionLine info={app?.application} language={language} testId="settings.about.version" /></div></div>
       <SettingRow label={t('s.about.updates', undefined, language)} className="yu-about-update"><AboutUpdateCheck view={app?.update} language={language} /></SettingRow>

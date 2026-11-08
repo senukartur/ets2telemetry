@@ -47,8 +47,8 @@ const COPY = {
       crawler: {ets2: 'The first gear is the crawler C, and the others are numbered. For gearboxes such as the Scania 13+1.',
         ats: 'The first gear is the crawler L, and the others are numbered. For 13+1 gearboxes.'}},
     fallback: 'Without a layout: 1L, 1H, 2L, 2H…', reverse: 'Reverse R1, R2…, neutral N.',
-    example: {ets2: {automatic: 'Now: N, 1, 2, 3, …, 12, R1', manual: 'Now: C1, C2, 1L, 1H, 2L, …, 6H', crawler: 'Now: N, C, 1, 2, …, 12, R1'},
-      ats: {automatic: 'Now: N, 1, 2, 3, …, 12, R1', manual: 'Now: LL, LH, 1L, 1H, 2L, …, 8H', crawler: 'Now: N, L, 1, 2, …, 12, R1'}},
+    example: {ets2: {automatic: 'For example: N, 1, 2, 3, …, 12, R1', manual: 'For example: C1, C2, 1L, 1H, 2L, …, 6H', crawler: 'For example: N, C, 1, 2, …, 12, R1'},
+      ats: {automatic: 'For example: N, 1, 2, 3, …, 12, R1', manual: 'For example: LL, LH, 1L, 1H, 2L, …, 8H', crawler: 'For example: N, L, 1, 2, …, 12, R1'}},
     failed: 'The gear display change was not saved; the previous setting stays in use.'},
   ru: {title: 'Отображение передач', description: 'Как подписывать передачи на приборах и в оверлее. Записанная телеметрия не меняется.',
     names: {automatic: 'Автоматическая', manual: 'Механическая с делителем', crawler: 'С ползучей'},
@@ -60,8 +60,8 @@ const COPY = {
       crawler: {ets2: 'Первая передача — ползучая C, остальные по номерам. Для коробок вроде Scania 13+1.',
         ats: 'Первая передача — ползучая L, остальные по номерам. Для коробок вроде 13+1.'}},
     fallback: 'Без схемы: 1L, 1H, 2L, 2H…', reverse: 'Задний ход R1, R2…, нейтраль N.',
-    example: {ets2: {automatic: 'Сейчас: N, 1, 2, 3, …, 12, R1', manual: 'Сейчас: C1, C2, 1L, 1H, 2L, …, 6H', crawler: 'Сейчас: N, C, 1, 2, …, 12, R1'},
-      ats: {automatic: 'Сейчас: N, 1, 2, 3, …, 12, R1', manual: 'Сейчас: LL, LH, 1L, 1H, 2L, …, 8H', crawler: 'Сейчас: N, L, 1, 2, …, 12, R1'}},
+    example: {ets2: {automatic: 'Например: N, 1, 2, 3, …, 12, R1', manual: 'Например: C1, C2, 1L, 1H, 2L, …, 6H', crawler: 'Например: N, C, 1, 2, …, 12, R1'},
+      ats: {automatic: 'Например: N, 1, 2, 3, …, 12, R1', manual: 'Например: LL, LH, 1L, 1H, 2L, …, 8H', crawler: 'Например: N, L, 1, 2, …, 12, R1'}},
     failed: 'Изменение отображения передач не сохранено; действует прежняя настройка.'}
 } as const;
 

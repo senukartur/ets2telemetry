@@ -416,6 +416,9 @@ button[aria-disabled="true"], [role="switch"][aria-disabled="true"] { cursor: no
 .yu-setting-hint { display: block; font-size: 12px; line-height: 1.45; color: var(--yu-text-muted); }
 .yu-setting-hint p { margin: 0; }
 .yu-setting-controls { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+/* A segmented control keeps its intrinsic width to the right of the label (the radio group's own w-full would give it a
+   line of its own); a row too narrow for both still wraps it below the label, where its options may wrap too. */
+.yu-setting-row > .yu-segmented { flex: 0 1 auto; width: auto; }
 .yu-setting-value { color: var(--yu-text-secondary); }
 .yu-setting-slider { flex: 0 1 240px; min-width: 160px; }
 .yu-setting-line { margin: 0; padding: 8px 14px; font-size: 12px; }

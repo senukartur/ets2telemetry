@@ -70,11 +70,11 @@ const tag = (html: string, attribute: string) => html.match(new RegExp(`<[a-z]+ 
 const COPY = {
   en: {nav: ['General', 'Overlay', 'Game plugin', 'Diagnostics', 'About'], navLabel: 'Settings sections', general: 'General',
     sub: 'Changes save immediately; a control shows only the saved value.', close: 'Closing the window', closeV: 'Hide to tray', tray: 'Open it again from the tray icon; use Exit to stop it.',
-    units: 'Display units', unitsNote: 'Stored data does not change, only the display', gearNow: 'Now: C1, C2, 1L, 1H, 2L, …, 6H', npHint: 'The track title from a Windows player, in its own window over the game.',
+    units: 'Display units', unitsNote: 'Stored data does not change, only the display', gearExample: 'For example: C1, C2, 1L, 1H, 2L, …, 6H', npHint: 'The track title from a Windows player, in its own window over the game.',
     data: 'Diagnostics', status: 'Connected', service: 'ready', storage: 'verified', bundle: 'Diagnostic bundle', about: 'About', updates: 'Updates', font: 'Font', license: 'Show license'},
   ru: {nav: ['Общие', 'Оверлей', 'Плагин игры', 'Диагностика', 'О программе'], navLabel: 'Разделы настроек', general: 'Общие',
     sub: 'Изменения сохраняются сразу; выбранным показывается только сохранённое значение.', close: 'Закрытие окна', closeV: 'Свернуть в трей', tray: 'Откройте его снова из значка в трее',
-    units: 'Единицы измерения', unitsNote: 'Сохранённые данные не меняются, меняется только отображение', gearNow: 'Сейчас: C1, C2, 1L, 1H, 2L, …, 6H', npHint: 'Название трека из плеера Windows в отдельном окне поверх игры.',
+    units: 'Единицы измерения', unitsNote: 'Сохранённые данные не меняются, меняется только отображение', gearExample: 'Например: C1, C2, 1L, 1H, 2L, …, 6H', npHint: 'Название трека из плеера Windows в отдельном окне поверх игры.',
     data: 'Диагностика', status: 'Подключено', service: 'готово', storage: 'проверено', bundle: 'Пакет диагностики', about: 'О программе', updates: 'Обновления', font: 'Шрифт', license: 'Показать лицензию'}
 } as const;
 
@@ -106,7 +106,7 @@ describe.each(['en', 'ru'] as const)('the Settings screen in %s', language => {
       expect(tag(html, `data-testid="units-${game}"`)).toContain(`aria-labelledby="units-${game}-label"`);
       expect(html).toContain(`id="units-${game}-metric"`); expect(html).toContain(`id="units-${game}-us-customary"`);
     }
-    expect(html).toContain(`data-testid="gear-display-ets2-example">${copy.gearNow}</div>`);
+    expect(html).toContain(`data-testid="gear-display-ets2-example">${copy.gearExample}</div>`);
     expect(html).toContain(`<div class="yu-setting-hint">${copy.npHint}</div>`);
     expect(html).toContain('data-testid="language-select"'); expect(html).toContain('data-testid="autostart-toggle"');
   });
@@ -151,10 +151,17 @@ describe.each(['en', 'ru'] as const)('the Settings screen in %s', language => {
     expect(failed).toContain(`<dd data-testid="health-service"><span data-variant="error">${language === 'en' ? 'failed' : 'ошибка'}</span></dd>`);
     const none = panelOf(render({language, panel: 'data', app: undefined}), 'data');
     expect(none).toContain('<dd data-testid="health-service">—</dd>');
+    // As in the Game plugin card that held it before, the export waits for main's first push.
+    expect(none).not.toContain('settings.data.bundle');
+    expect(none).not.toContain('plugin-export-diagnostics');
   });
   it('shows About: the brand with its version, the update check, the font licence and the uninstall warning', () => {
     const html = panelOf(render({language, panel: 'about'}), 'about');
     expect(html).toContain(`<div class="yu-settings-head"><h2>${copy.about}</h2></div>`);
+    // The brand section is not a second region named like the panel's heading.
+    expect(html).not.toContain(`aria-label="${copy.about}"`);
+    expect(html).toMatch(/<div data-slot="card"[^>]*class="[^"]*yu-settings-card[^"]*"><div class="yu-about-brand"/);
+    expect(html.slice(0, html.indexOf('yu-about-brand'))).not.toContain('role="region"');
     expect(html).toMatch(/data-testid="settings\.about\.brand"><img src="[^"]+" alt="" width="56" height="56"\/><div><h3>Yukon Union Telemetry<\/h3>/);
     expect(html).toContain('data-testid="settings.about.version"');
     expect(html).toContain(`<div class="yu-setting-row yu-about-update"><div class="yu-setting-text"><span class="yu-setting-label">${copy.updates}</span></div><div class="space-y-2" data-testid="settings.about.update">`);
