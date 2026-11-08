@@ -703,7 +703,7 @@ export async function runUiSmoke({application, dashboard, overlay, source, sourc
   const save = (name, language, size, page = dashboard) => capture({page, application, config, record, name, language, size, overlay: page === overlay});
   // ET-067 (isolateDashboardPointer): the flag only records the call; the hover check under the desktop cursor below
   // shows its effect.
-  const dashboardId = await isolateDashboardPointer(application);
+  const dashboardId = await isolateDashboardPointer(application, dashboard);
   record.flags.osPointerIsolated = true;
   // The source selector remains a working diagnostic control, not an invented reference-screen toolbar.
   if (source) await waitState(dashboard, 'connected');

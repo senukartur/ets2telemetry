@@ -120,7 +120,7 @@ export async function runHardModeSmoke({application, dashboard, overlay, source,
   assert.ok(overlay, 'HARD_MODE_OVERLAY_PAGE');
   record.errors = source.errors; record.peerDisconnects = source.peerDisconnects;
   // ET-067: the rule and caveat hints below open on hover, which a desktop cursor move can cancel (isolateDashboardPointer).
-  await isolateDashboardPointer(application); record.osPointerIsolated = true;
+  await isolateDashboardPointer(application, dashboard); record.osPointerIsolated = true;
   const healthy = () => assert.deepEqual(source.errors, [], 'HARD_MODE_SOURCE_ERROR');
   // Exactly one indicator with the expected state, name and strip text ("HM", struck through only on a loss).
   const overlayPhase = async (phase, state, name) => {
