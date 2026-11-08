@@ -1158,7 +1158,7 @@ function Test-RuntimeReceipt {
         foreach ($field in @('unknown','fail','pass','hints','hover','inlineDetails','bilingual','languageHotChange','keyboard','refresh','belowThreshold','unknownExcluded','knownRatio','badge','export','overlayExcluded','persisted','osPointerIsolated')) {
             if ($hardMode.$field -isnot [bool] -or !$hardMode.$field) { $validation.reason = 'HARD_MODE_RESULT_INVALID'; return $validation }
         }
-        if ($hardMode.schemaVersion -ne 6 -or @($hardMode.flags).Count -ne 2 -or $hardMode.flags[0] -isnot [bool] -or $hardMode.flags[0] -or
+        if ($hardMode.schemaVersion -ne 7 -or @($hardMode.flags).Count -ne 2 -or $hardMode.flags[0] -isnot [bool] -or $hardMode.flags[0] -or
             $hardMode.flags[1] -isnot [bool] -or !$hardMode.flags[1] -or @($hardMode.errors).Count -ne 0) { $validation.reason = 'HARD_MODE_RESULT_INVALID'; return $validation }
     }
     # Lifecycle is additive as well; earlier scenario rules are unchanged.

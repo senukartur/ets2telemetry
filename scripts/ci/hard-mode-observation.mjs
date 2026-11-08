@@ -339,7 +339,7 @@ export async function verifyHardModeRun({config, record}) {
   const filename = path.join(smokeDataRoot(config), 'synthetic', 'hard-mode.sqlite');
   const file = await open(filename, 'r'), bytes = Buffer.alloc(100);
   try {await file.read(bytes, 0, 100, 0);} finally {await file.close();}
-  assert.equal(bytes.readUInt32BE(60), 6); record.schemaVersion = 6;
+  assert.equal(bytes.readUInt32BE(60), 7); record.schemaVersion = 7;
   // Running-app journal and export are read through the real worker; independent SQL reconciliation is in storage tests.
   assert.deepEqual(record.flags, [false, true]); record.persisted = true;
 }

@@ -1,3 +1,4 @@
+import type Database from 'better-sqlite3';
 import {V1_MAX_MINOR, validateServerMessage} from '../../../contracts/src/protocol-v1';
 import type {TrailerBaselineInput} from '../api';
 import {canonicalJson, u64Key} from '../codec';
@@ -24,4 +25,22 @@ export function recordTrailerBaseline(conn: StorageConnection, input: TrailerBas
     if(prior){if(prior.configuration_revision!==revision||prior.slots_json!==json)fail('SESSION_CONFLICT');return;}
     db.prepare('INSERT INTO trailer_baselines(plugin_session_ref,next_event_seq,source_clock_uuid,monotonic_ns,boundary_order,configuration_revision,slots_json) VALUES(?,?,?,?,?,?,?)').run(...args,revision,json);
   }).immediate();
+}
+
+
+export const RULE_LOSSES=['event-loss','restore-loss','storage-unavailable'] as const;
+/** Indexed bounded facts shared by preparation and material discovery; ordinary events are excluded. */
+export function ruleLossBounds(db:Database.Database,session:unknown):Record<string,string>{
+  return Object.fromEntries(RULE_LOSSES.map(kind=>{
+    const row=db.prepare('SELECT id FROM completeness_intervals WHERE plugin_session_ref=? AND kind=? ORDER BY id DESC LIMIT 1').get(session,kind) as {id:bigint}|undefined;
+    return [kind,String(row?.id??0n)];
+  }));
+}
+export function ruleNativeBounds(db:Database.Database,session:unknown):{configured:string;cleared:string;gaps:string}{
+  const event=(type:string)=>{
+    const row=db.prepare('SELECT id FROM events WHERE plugin_session_id=? AND type=? ORDER BY id DESC LIMIT 1').get(session,type) as {id:bigint}|undefined;
+    return String(row?.id??0n);
+  };
+  const gap=db.prepare('SELECT id FROM event_gaps WHERE plugin_session_ref=? ORDER BY id DESC LIMIT 1').get(session) as {id:bigint}|undefined;
+  return {configured:event('trailer.configured'),cleared:event('trailer.cleared'),gaps:String(gap?.id??0n)};
 }

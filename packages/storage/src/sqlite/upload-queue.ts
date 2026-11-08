@@ -5,7 +5,7 @@ import {beginUploadFold,advanceUploadFold,finishUploadFold,isUploadUuid,UPLOAD_P
 import {decodeUploadReceipt,encodeUploadEnvelope,uploadDigest,uploadMaterialDigest,type UploadEnvelope} from '../upload-envelope';
 import {UPLOAD_MAX_BYTES,UPLOAD_MAX_EVENTS,type UploadSyncCommands,type UploadWork,type UploadWorkReason,type UploadAttemptResult,type UploadRegistration,type UploadReceiptResult,type UploadCleanup} from '../upload-sync';
 import type {StorageConnection} from './connection';
-import {all,connection,get,required,resolveBinding,type Row} from './upload-discovery';
+import {all,connection,discoverRevision,get,required,resolveBinding,type Row} from './upload-discovery';
 import {beginUploadProjection,advanceUploadProjection,readUploadProjectionPage,recheckUploadMaterialContext,releaseUploadProjection} from './upload-projection';
 import {check,pressure,syncTransaction} from './upload-sync';
 
@@ -16,6 +16,16 @@ function hold(db:ReturnType<StorageConnection['writer']>,work:Row,reason:UploadW
   db.prepare('UPDATE upload_materializations SET state=?,hold_reason=?,examined=0 WHERE work_id=?').run(status,reason,work.work_id);
   if(status==='held')db.prepare('UPDATE upload_source_bindings SET held=1,hold_reason=? WHERE root_ref=?').run(reason,work.root_ref);
   return workStatus({...work,state:status,hold_reason:reason,examined:0});
+}
+/** A changed source-loss highwater can invalidate an unfrozen pin without a recorder revision (closed session loss).
+ * Refresh only the existing root/revision's material key; the next work gets a new version and pin, with no source mutation. */
+function staleMaterial(db:ReturnType<StorageConnection['writer']>,work:Row):UploadWork {
+  const head=get(db,'SELECT * FROM upload_change_heads WHERE root_ref=?',work.root_ref);
+  const member=get(db,'SELECT logical_ref FROM logical_memberships WHERE trip_ref=?',work.root_ref);
+  if(head&&head.material_version===work.material_version&&head.dirty===0n&&member?.logical_ref===work.root_ref){
+    discoverRevision(db,work.root_ref as bigint,head.revision_ref);
+  }
+  return hold(db,work,'material-changed','stale');
 }
 export function beginUploadMaterialization(conn:StorageConnection,input:Input<'beginUploadMaterialization'>,options?:CommitOptions):UploadWork {
   check('beginUploadMaterialization',input);return syncTransaction(conn,db=>{
@@ -40,7 +50,7 @@ export function advanceUploadMaterialization(conn:StorageConnection,input:Input<
     if(['preparing','folding'].includes(String(work.state))&&pressure(db))return transient(input.workId,'pressure','queue-pressure');
     if(work.state==='preparing'){
       const preparation=advanceUploadProjection(conn,String(work.pin_id));
-      if(preparation.state==='invalidated')return hold(db,work,'material-changed','stale');
+      if(preparation.state==='invalidated')return staleMaterial(db,work);
       if(preparation.projection){db.prepare("UPDATE upload_materializations SET state='folding',pin_json=?,fold_json=?,examined=? WHERE work_id=?")
         .run(JSON.stringify(preparation.projection),JSON.stringify(beginUploadFold(preparation.projection)),preparation.examined,input.workId);}
       else db.prepare('UPDATE upload_materializations SET examined=? WHERE work_id=?').run(preparation.examined,input.workId);
@@ -70,7 +80,7 @@ export function freezeUploadMaterialization(conn:StorageConnection,input:Input<'
     const work=required(get(db,'SELECT * FROM upload_materializations WHERE work_id=?',input.workId));if(work.state!=='complete')return workStatus(work);
     const pin=JSON.parse(String(work.pin_json)) as UploadProjection,head=get(db,'SELECT * FROM upload_change_heads WHERE root_ref=?',work.root_ref),bound=resolveBinding(db,work.root_ref);
     if(!bound||bound.registration_ref!==work.registration_ref||bound.held===1n)return hold(db,work,'reconciliation-required');
-    if(!head||head.material_version!==work.material_version||head.dirty!==0n||!recheckUploadMaterialContext(db,pin))return hold(db,work,'material-changed','stale');
+    if(!head||head.material_version!==work.material_version||head.dirty!==0n||!recheckUploadMaterialContext(db,pin))return staleMaterial(db,work);
     const registration=get(db,'SELECT * FROM upload_registrations WHERE registration_id=?',work.registration_ref),installation=get(db,'SELECT client_uuid FROM upload_installation WHERE id=1');
     if(!registration||!installation||registration.client_uuid!==installation.client_uuid||!get(db,'SELECT 1 FROM upload_candidates WHERE trip_ref=?',work.root_ref))return hold(db,work,'reconciliation-required');
     const owner=get(db,'SELECT r.* FROM upload_reservations r JOIN upload_candidates c ON c.ordinal=r.candidate_ref WHERE c.trip_ref=?',work.root_ref);

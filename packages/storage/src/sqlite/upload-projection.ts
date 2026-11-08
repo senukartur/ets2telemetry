@@ -1,3 +1,4 @@
+import {RULE_LOSSES,ruleLossBounds,ruleNativeBounds} from './trailer-baselines';
 import {finishRuleReplay,isRuleBaseline,isRuleReplay,replayRuleEvent,type RuleContext,type RuleReplay} from '../upload-rule-context';
 import type {EventRecord} from '../../../contracts/src/protocol-v1';
 import {randomUUID} from 'node:crypto';
@@ -77,10 +78,6 @@ function facts(db: Database.Database, snap: LogicalSnapshot, pin: LogicalRow): U
       || outcome?.utcMs !== null && outcome?.utcMs !== undefined && row.ended_utc_ms !== null && outcome.utcMs !== n(row.ended_utc_ms)};
 }
 
-const RULE_LOSSES=['event-loss','restore-loss','storage-unavailable'] as const;
-function ruleLossBounds(db:Database.Database,session:unknown):Record<string,string>{
-  return Object.fromEntries(RULE_LOSSES.map(kind=>[kind,String(get(db,'SELECT id FROM completeness_intervals WHERE plugin_session_ref=? AND kind=? ORDER BY id DESC LIMIT 1',session,kind)?.id??0n)]));
-}
 const unproven=():RuleContext=>({version:1,status:'unproven',items:[],recordingLoss:false});
 /** One indexed input or transition per call, including rejected baselines, events and gaps. */
 function advanceRuleContext(db:Database.Database,saved:LogicalRow,snap:LogicalSnapshot,pin:LogicalRow):RuleContext|null {
@@ -143,16 +140,18 @@ function advanceRuleContext(db:Database.Database,saved:LogicalRow,snap:LogicalSn
     if(!interval){state.lossKind++;state.lossAfter='0';return null;}
     state.lossAfter=String(interval.id);
     if(interval.trip_ref!==null&&interval.trip_ref!==snap.logical)return null;
-    if(interval.detail_json!==null&&(JSON.parse(String(interval.detail_json)) as {annotation?:boolean}).annotation===true)return null;
-    if(interval.last_event_seq!==null&&String(interval.last_event_seq)<u64Key(state.baselineBeforeSeq))return null;
-    if(snap.row.outcome!=='open'&&interval.first_event_seq!==null&&String(interval.first_event_seq)>u64Key(state.end))return null;
+    if(interval.detail_json!==null&&(JSON.parse(interval.detail_json as string) as {annotation?:boolean}).annotation===true)return null;
+    if(interval.last_event_seq!==null&&(interval.last_event_seq as string)<u64Key(state.baselineBeforeSeq))return null;
+    if(snap.row.outcome!=='open'&&interval.first_event_seq!==null&&(interval.first_event_seq as string)>u64Key(state.end))return null;
     state.unproven=true;state.recordingLoss=true;return null;
   }
   return finishRuleReplay(state);
 }
-function coverageUnchanged(db:Database.Database,snap:LogicalSnapshot,saved:LogicalRow):boolean {
+function coverageUnchanged(db:Database.Database,snap:LogicalSnapshot,saved:LogicalRow,strict=false):boolean {
   if(saved.ruleLossBounds!==undefined&&JSON.stringify(ruleLossBounds(db,snap.row.plugin_session_ref))!==JSON.stringify(saved.ruleLossBounds))return false;
-  return snap.row.outcome!=='open'||saved.nativeCoverage===undefined
+  if(snap.row.outcome!=='open')return true;
+  if(saved.ruleNativeBounds!==undefined&&JSON.stringify(ruleNativeBounds(db,snap.row.plugin_session_ref))!==JSON.stringify(saved.ruleNativeBounds))return false;
+  return !strict||saved.nativeCoverage===undefined
     ||fromU64Key(required(get(db,'SELECT committed_through_event_seq FROM plugin_sessions WHERE id=?',snap.row.plugin_session_ref)).committed_through_event_seq)===saved.nativeCoverage;
 }
 
@@ -183,7 +182,7 @@ export function beginUploadProjection(conn: StorageConnection, input: UploadProj
       bounds:{members:String(snap.members),events:String(snap.events),gaps:String(snap.gaps),samples:String(snap.samples),intervals:String(snap.intervals),accountingHead:snap.head===null?null:String(snap.head)}};
     db.prepare(`INSERT INTO upload_projection_pins(pin_id,incarnation_uuid,requested_trip_uuid,root_ref,revision_ref,evidence_generation,state,phase,snapshot_json)
       VALUES(?,?,?,?,?,?,'preparing','current',?)`).run(input.pinId,incarnation,input.tripUuid,snap.logical,snap.revision,generation(db,snap.logical),encodeRow({snap,initial,trailerBound:get(db,'SELECT id FROM trailer_baselines ORDER BY id DESC LIMIT 1')?.id??0n,
-        ruleLossBounds:ruleLossBounds(db,snap.row.plugin_session_ref),nativeCoverage:fromU64Key(required(get(db,'SELECT committed_through_event_seq FROM plugin_sessions WHERE id=?',snap.row.plugin_session_ref)).committed_through_event_seq)}));
+        ruleNativeBounds:ruleNativeBounds(db,snap.row.plugin_session_ref),ruleLossBounds:ruleLossBounds(db,snap.row.plugin_session_ref),nativeCoverage:fromU64Key(required(get(db,'SELECT committed_through_event_seq FROM plugin_sessions WHERE id=?',snap.row.plugin_session_ref)).committed_through_event_seq)}));
     return status(retained(db,input.pinId));
   })();
 }
@@ -291,7 +290,7 @@ function recheckContext(db:Database.Database,projection:UploadProjection,latestR
   const state=current(db,projection.requestedTripUuid);
   const latest=get(db,'SELECT id FROM logical_revisions WHERE logical_ref=? ORDER BY id DESC LIMIT 1',pin.root_ref);
   return state.root===projection.rootTripUuid && state.readiness==='ready' && projection.rootReadiness==='ready'
-    && coverageUnchanged(db,(decodeRow(pin.snapshot_json).snap as LogicalSnapshot),decodeRow(pin.snapshot_json))
+    && coverageUnchanged(db,(decodeRow(pin.snapshot_json).snap as LogicalSnapshot),decodeRow(pin.snapshot_json),latestRequired)
     && (!latestRequired||latest?.id===pin.revision_ref) && generation(db,pin.root_ref)===pin.evidence_generation;
 }
 const copies={members:['upload_projection_members','trip_ref'],configurations:['upload_projection_configurations','event_ref'],intervals:['upload_projection_intervals','interval_ref']} as const;

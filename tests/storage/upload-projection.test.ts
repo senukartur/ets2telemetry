@@ -498,8 +498,9 @@ describe('TEL-034 checkpoint-bound trailer context',()=>{
   it('allows identical repeated configuration and ignores a gap strictly after the terminal boundary',async()=>{
     const {client,s,root}=await setup();
     ok(await client.commitEvent({message:gameShaped(s.event(r.trailerConfigured(trailer(0,{id:{available:true,value:'trailer-a'},bodyType:{available:true,value:'curtainsider'}}))))}));
-    await close(client,s,root,'delivered');ok(await client.commitGap({message:gameShaped(s.gap(3))}));
-    expect((await projected(client,root)).snapshot.evidence.ruleContextComplete).toBe(true);await client.close();
+    await close(client,s,root,'delivered');const frozen=await projected(client,root);
+    ok(await client.commitGap({message:gameShaped(s.gap(3))}));ok(await client.commitEvent({message:gameShaped(s.event(r.trailerCleared()))}));
+    expect((await projected(client,root)).snapshot.evidence.ruleContextComplete).toBe(true);await client.close();expect(recheck(frozen.pin)).toBe(true);
   });
   it.each(['short','late','no-baseline','invalid-empty'] as const)('cannot prove %s evidence',async fault=>{
     const client=await start(),s=new Script(ETS2_A);ok(await client.upsertSession({message:gameShaped(s.welcome())}));
@@ -515,10 +516,10 @@ describe('TEL-034 checkpoint-bound trailer context',()=>{
     if(!isOpen)await close(client,s,root,'delivered');
     const {snapshot}=await projected(client,root);expect(snapshot.evidence).toMatchObject({ruleContextComplete:false,reasons:['recording-intervals','trailer-context-unproven']});await client.close();
   });
-  it('invalidates OPEN preparation and publication when native coverage advances without trip effects',async()=>{
+  it('invalidates OPEN preparation and publication when relevant native context advances without trip effects',async()=>{
     const {client,s,root}=await setup();const ready=ok(await prepare(client,root)),pinId=randomUUID();
     ok(await client.beginUploadProjection({pinId,tripUuid:root}));
-    ok(await client.commitEvent({message:gameShaped(s.event(r.paused()))}));
+    ok(await client.commitEvent({message:gameShaped(s.event(r.trailerCleared()))}));
     expect(ok(await client.advanceUploadProjection(pinId))).toMatchObject({state:'invalidated',examined:0});await client.close();expect(recheck(ready)).toBe(false);
   });
   it('resumes a pinned proof cursor across reopen with at most100 inputs per turn and indexed event/gap/baseline scans',async()=>{

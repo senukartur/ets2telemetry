@@ -135,7 +135,7 @@ describe('REG-003/005/008/012/014 durable logical trips', () => {
     ok(storage.observeHardMode('ets2',{assessment,binding:'b'.repeat(64),pluginSessionId:b.session,sourceMonotonicNs:'0',batch:{tripUuid:second,producer:'90000000-0000-4000-8000-000000000001',sequence:1,passingChecks:1,failingChecks:0,unknownChecks:0}},true));
     ok(storage.commitEvent({message:b.event(r.delivered()),effects:[{kind:'trip.close',tripUuid:second,outcome:'delivered',closeReason:'outcome',outcomeEvent:'this-event',recordingCompleteness:'partial',endedUtcMs:3000}]}));
     const detail=validateJournalTripDetail(ok(storage.journalTrip(first)));expect(detail.trip).toMatchObject({isHardMode:false,hardModeDetails:null});expect(ok(storage.journalTrips()).trips).toHaveLength(1);
-    const serializer=new TripExportSerializer(detail,tripExportHeader({uuid:'30000000-0000-4000-8000-000000000001',purpose:'synthetic',schemaVersion:6},'test',4000));
+    const serializer=new TripExportSerializer(detail,tripExportHeader({uuid:'30000000-0000-4000-8000-000000000001',purpose:'synthetic',schemaVersion:7},'test',4000));
     const exported=JSON.parse(serializer.begin()+serializer.rows('sources',ok(storage.journalIntervals(first,{limit:500,cursor:detail.exportBounds.snapshot!.sources})).sources!)+serializer.rows('intervals',ok(storage.journalIntervals(first,{limit:500,cursor:detail.exportBounds.snapshot!.intervals})).intervals)+serializer.rows('events',ok(storage.journalEvents(first,{limit:500,cursor:detail.exportBounds.snapshot!.events})).events)+serializer.end());
     expect(tripExportProblems(exported)).toEqual([]);expect(exported.trip).toMatchObject({is_hard_mode:false,hard_mode_details:null});ok(storage.close());
     readOnly(ws.database,sql=>expect(sql.prepare('SELECT hard_mode_details,is_hard_mode FROM trips WHERE trip_uuid=?').get(first)).toEqual({hard_mode_details:null,is_hard_mode:0}));
@@ -283,7 +283,7 @@ describe('REG-003/005/008/012/014 durable logical trips', () => {
       const detail=ok(await client.journalTrip(original));expect(detail.trip.outcome).toBe('delivered');expect(ok(await client.listTrips()).trips).toHaveLength(3);
       if(scenario==='before-first-start')expect(detail.trip).toMatchObject({isHardMode:true,hardModeDetails:{version:2,passingChecks:3,failingChecks:0,unknownChecks:2}});
       expect(ok(await client.listSamples({tripUuid:original},{afterId:oldSnapshot,includeExcluded:true}))).toHaveLength(prestart?3:2);
-      const service=new JournalService({history:{state:'open',failureCode:null,client,database:{purpose:'synthetic',schemaVersion:6},databaseUuid:summary.databaseUuid},stopping:()=>false,log:()=>undefined});
+      const service=new JournalService({history:{state:'open',failureCode:null,client,database:{purpose:'synthetic',schemaVersion:7},databaseUuid:summary.databaseUuid},stopping:()=>false,log:()=>undefined});
       const filename=path.join(ws.directory,'continuity.json'),exporter=new JournalExporter({read:query=>service.query(query),showSaveDialog:()=>Promise.resolve({canceled:false,filePath:filename}),documents:()=>undefined,localAppData:ws.directory,appVersion:'test',log:()=>undefined});
       expect(await exporter.export(original)).toMatchObject({ok:true,value:{outcome:'saved'}});
       const exported=JSON.parse(readFileSync(filename,'utf8')) as {formatVersion:number;trip:unknown;intervals:unknown[];sources:unknown[];events:{type:string}[];samples:unknown[]};
@@ -1549,7 +1549,7 @@ describe('REG-003/005/008/012/014 durable logical trips', () => {
     ok(storage.close());
     const worker=storageWorker(),client=new StorageClient(worker.handle);
     const summary=ok(await client.open({path:ws.database,backupsDirectory:ws.backups,purpose:'synthetic',appVersion:'test'}));
-    const database={purpose:'synthetic',schemaVersion:6} as const;
+    const database={purpose:'synthetic',schemaVersion:7} as const;
     const service=new JournalService({history:{state:'open',failureCode:null,client,database,databaseUuid:summary.databaseUuid},stopping:()=>false,log:()=>undefined});
     const selected=ok(await client.listSamples({tripUuid:uuid}));expect(selected.map(row=>row.id)).toEqual(['1','2','4','5']);
     for(const limit of [300,3600]){
@@ -1642,7 +1642,7 @@ describe('REG-013 logical singleton migration',()=>{
   it.each([1,2,3])('preserves IDs and raw facts from frozen schema v%i without inferring membership',async version=>{
     const file=ws.copyFixture(`schema-v${version}-representative.sqlite`);
     const before=readOnly(file,db=>db.prepare('SELECT * FROM trips ORDER BY id').all()) as Record<string,unknown>[];
-    const storage=await ws.open({path:file});expect(storage.summary.schemaVersion).toBe(6);
+    const storage=await ws.open({path:file});expect(storage.summary.schemaVersion).toBe(7);
     const list=ok(storage.journalTrips()).trips;
     expect(list.map(t=>t.tripUuid).sort()).toEqual(before.map(t=>t.trip_uuid).sort());
     for(const trip of before)expect(ok(storage.journalTrip(String(trip.trip_uuid))).trip.recordingCompleteness).toBe(trip.recording_completeness);

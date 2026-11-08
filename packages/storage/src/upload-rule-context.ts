@@ -16,7 +16,7 @@ const field=(v:unknown)=>exact(v,['available','value'])&&v.available===true&&typ
 export const usable=(v:Available<string>)=>v.available&&v.value.trim().length>0;
 export function isRuleItems(v:unknown):v is RuleTrailer[] {
   return Array.isArray(v)&&v.length<=10&&v.every((item,i)=>exact(item,['index','id','bodyType','chainType'])&&Number.isInteger(item.index)
-    &&Number(item.index)>=0&&Number(item.index)<=9&&(i===0||v[i-1].index<Number(item.index))&&field(item.id)&&field(item.bodyType)&&field(item.chainType));
+    &&Number(item.index)>=0&&Number(item.index)<=9&&(i===0||(v[i-1] as RuleTrailer).index<Number(item.index))&&field(item.id)&&field(item.bodyType)&&field(item.chainType));
 }
 export function isRuleBaseline(v:unknown):v is {version:1;slots:Available<RuleTrailer>[]} {
   return exact(v,['version','slots'])&&v.version===1&&Array.isArray(v.slots)&&v.slots.length<=10&&v.slots.every((slot,index)=>

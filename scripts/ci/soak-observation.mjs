@@ -200,7 +200,7 @@ export async function runSoakSmoke({application, dashboard, source, config, reco
     closeReason: 'outcome', startedUtcMs: trip.startedUtcMs, endedUtcMs: trip.endedUtcMs}));
   const pages = [];
   for (const size of journalPageSizes(trips.length)) pages.push(trips.slice(pages.length * 50, pages.length * 50 + size));
-  assert.deepEqual(record.journal, {error: null, database: {purpose: 'synthetic', schemaVersion: 6}, pages}, 'The journal pages differ from the expectation');
+  assert.deepEqual(record.journal, {error: null, database: {purpose: 'synthetic', schemaVersion: 7}, pages}, 'The journal pages differ from the expectation');
   record.journal = {pages: pages.map(page => page.length), database: record.journal.database};
   record.journalMatch = true;
   phase('soak-journal-read');
@@ -303,7 +303,7 @@ export async function verifySoakRun({config, record, mainEvents, serviceEvents})
   const files = record.files = {magic: header.subarray(0, 15).toString('latin1'), applicationId: header.readInt32BE(68), userVersion: header.readUInt32BE(60),
     sidecars: ['-wal', '-shm', '-journal'].filter(suffix => existsSync(database + suffix)), syntheticBackups: existsSync(path.join(root, 'synthetic', 'backups')),
     historyDatabase: existsSync(path.join(root, 'data', 'telemetry.sqlite'))};
-  assert.deepEqual(files, {magic: 'SQLite format 3', applicationId: 1163154226, userVersion: 6, sidecars: [], syntheticBackups: false, historyDatabase: false});
+  assert.deepEqual(files, {magic: 'SQLite format 3', applicationId: 1163154226, userVersion: 7, sidecars: [], syntheticBackups: false, historyDatabase: false});
   record.historyDatabaseAbsent = true; record.sidecarsAbsent = true;
 
   // Rows against the hand-written expectation; trips as `trip@<job eventSeq>`.
