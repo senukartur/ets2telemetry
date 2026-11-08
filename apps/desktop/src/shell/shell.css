@@ -131,13 +131,15 @@ h1[tabindex="-1"]:focus { outline: none; }
 .yu-journal-table small { display: block; font-size: 11px; color: var(--yu-text-muted); }
 .yu-journal-table [data-testid="journal-row-started"] { white-space: nowrap; color: var(--yu-text-secondary); }
 .yu-journal-table [data-testid="journal-row-cargo"] { font-weight: 500; color: var(--yu-text-strong); }
+.yu-journal-table [data-testid="journal-row-expected"] { font-size: 11px; color: var(--yu-text-muted); }
 .yu-journal-mode-line { display: flex; align-items: center; gap: 2px; margin-top: 2px; }
 .yu-journal-mode { display: inline-flex; align-items: center; gap: 4px; font-size: 11px; color: var(--yu-text-muted); }
 .yu-journal-mode svg { flex: none; width: 12px; height: 12px; }
 .yu-journal-mode[data-kind="truckersmp"], .yu-journal-mode[data-kind="convoy"] { color: var(--yu-accent-light); }
 .yu-journal-mode[data-variant="warn"] { color: var(--yu-warn-fg); }
 .yu-journal-mode[data-variant="ok"] { color: var(--yu-ok-fg); }
-.yu-journal-table .yu-info-hint { width: 18px; height: 18px; min-height: 18px; }
+/* `button.` matches the specificity of the global button min-height, which this later rule then overrides for the table only. */
+.yu-journal-table button.yu-info-hint { width: 18px; height: 18px; min-height: 18px; }
 .yu-journal-job-world .yu-tag[data-slot="badge"] { color: var(--yu-accent-light); }
 .yu-journal-special { display: flex; align-items: center; gap: 4px; margin-top: 2px; font-size: 11px; color: var(--yu-warn-fg); }
 .yu-journal-special svg { flex: none; width: 12px; height: 12px; }

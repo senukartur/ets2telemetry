@@ -155,7 +155,7 @@ function TripList({filters, options, recording, onDatabase, onOpen, uploadStatus
   const range = page ? journalRangeText(paged.number, page.trips.length, language) : null;
   return <div data-testid="journal-list">
     {visible ? <ShellSlot name="actions"><Button size="sm" variant="outline" disabled={busy} onClick={paged.refresh} data-testid="journal-list-refresh"><RefreshCw aria-hidden="true" />{JOURNAL_STRINGS.refresh}</Button></ShellSlot> : null}
-    {visible && totals ? <ShellSlot name="subline"><p className="yu-page-sub" data-testid="journal.count">{journalTotalsText(totals, language)}</p></ShellSlot> : null}
+    {visible && totals && paged.loaded.state !== 'error' ? <ShellSlot name="subline"><p className="yu-page-sub" data-testid="journal.count">{journalTotalsText(totals, language)}</p></ShellSlot> : null}
     {pageNoteSlot ? createPortal(<span data-testid="journal-list-page">{t('j.page', {p: paged.number}, language)}</span>, pageNoteSlot) : null}
     <section className="yu-journal-card" aria-label={t('j.tripsTable', undefined, language)}>
       <Status loaded={paged.loaded} testId="journal-list" />
@@ -415,7 +415,7 @@ export function Journal({units, recording, language, uploadStatus}: {uploadStatu
     {selected ? <Card size="sm"><CardContent className="space-y-3"><TripDetail key={selected.tripUuid} trip={selected} options={options} onDatabase={setDatabase} onBack={() => setSelected(null)} onDeleted={handleDeleted} /></CardContent></Card> : null}
     {/* The list stays mounted, hidden, while a trip is open, so Back returns to the same page without reading it again. */}
     <div className="yu-journal" hidden={selected !== null}>
-      <div className="yu-journal-toolbar" role="toolbar" aria-label={t('j.filters', undefined, active)} data-testid="journal-toolbar">
+      <div className="yu-journal-toolbar" role="group" aria-label={t('j.filters', undefined, active)} data-testid="journal-toolbar">
         <div className="yu-segmented" role="group" aria-label={JOURNAL_STRINGS.gameFilter}>
           {GAMES.map(game => <button key={game} type="button" aria-pressed={(filters.game ?? 'all') === game} data-testid={`journal-filter-game-${game}`}
             onClick={() => setFilters(current => ({...current, game: game === 'all' ? undefined : game}))}>{game === 'all' ? t('j.all', undefined, active) : JOURNAL_GAME_TEXT[game]}</button>)}
