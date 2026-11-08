@@ -729,6 +729,8 @@ export async function runUiSmoke({application, dashboard, overlay, source, sourc
         assert.deepEqual(await dashboard.locator('.yu-sidebar nav button').evaluateAll(nodes => nodes.map(node => node.getAttribute('data-testid'))), ['tab-live', 'tab-hardMode', 'tab-journal', 'tab-settings', 'tab-account']);
         assert.equal(await dashboard.getByTestId('account.unconfigured').isVisible(), true);
         assert.equal(await dashboard.getByTestId('account.token.input').count(), 0);
+        for (const control of ['account.form', 'account.confirmation', 'account.counts', 'account.firstSync', 'account.disconnect']) assert.equal(await dashboard.getByTestId(control).count(), 0, `UI_UNCONFIGURED_CONTROL_${control}`);
+        assert.ok((await dashboard.getByTestId('account.unconfigured').textContent()).includes(language === 'en' ? 'Your journal and local recording continue to work.' : 'Журнал и локальная запись продолжают работать.'));
         assert.equal(await dashboard.getByTestId('shell.status.sync').count(), 0);
         assert.equal(await dashboard.getByTestId('journal-sync-column').count(), 0);
         record.flags.accountUnconfigured = true;
@@ -744,7 +746,7 @@ export async function runUiSmoke({application, dashboard, overlay, source, sourc
         assert.equal(await dashboard.getByTestId('shell.content').evaluate(node => node.scrollTop), 0, 'UI_ROUTE_RETAINS_HARD_MODE_SCROLL');
         for (const zoom of [1.5, 2]) {
           await application.evaluate(({BrowserWindow}, zoom) => {BrowserWindow.getAllWindows().find(window => !window.webContents.getURL().endsWith('?view=overlay')).webContents.setZoomFactor(zoom);}, zoom);
-          for (const route of ['live', 'hardMode']) {
+          for (const route of ['live', 'hardMode', 'account']) {
             await focusRoute(dashboard, route);
             assert.equal(await dashboard.getByTestId('shell.content').evaluate(node => node.scrollWidth <= node.clientWidth), true, `UI_ZOOM_OVERFLOW_${route}_${zoom}`);
           }

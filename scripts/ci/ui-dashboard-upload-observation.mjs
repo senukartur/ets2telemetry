@@ -66,7 +66,9 @@ export async function runDashboardUploadUiFixture(config) {
       const button = globalThis.getComputedStyle(globalThis.document.querySelector('[data-testid="account.verify"]'));
       const card = globalThis.getComputedStyle(globalThis.document.querySelector('[data-testid="account.token"]'));
       const badge = globalThis.getComputedStyle(globalThis.document.querySelector('[data-slot="badge"]'));
-      return {buttonFlex: button.display === 'inline-flex', cardFlex: card.display === 'flex', cardOpaque: !['transparent', 'rgba(0, 0, 0, 0)'].includes(card.backgroundColor), badgeFlex: badge.display === 'inline-flex'};
+      // Flex-row children blockify inline-flex to flex; shared alignment must still be present.
+      const sharedFlex = style => ['inline-flex', 'flex'].includes(style.display) && style.alignItems === 'center' && style.justifyContent === 'center';
+      return {buttonFlex: sharedFlex(button), cardFlex: card.display === 'flex', cardOpaque: !['transparent', 'rgba(0, 0, 0, 0)'].includes(card.backgroundColor), badgeFlex: sharedFlex(badge)};
     });
     assert.deepEqual(styles, {buttonFlex: true, cardFlex: true, cardOpaque: true, badgeFlex: true}); record.flags.sharedStyles = true;
     const base = await application.evaluate(() => globalThis.uploadUiFixture.status);
@@ -83,8 +85,13 @@ export async function runDashboardUploadUiFixture(config) {
     await input.evaluate((node, value) => {node.focus(); const data = new globalThis.DataTransfer(); data.setData('text/plain', value); node.dispatchEvent(new globalThis.ClipboardEvent('paste', {clipboardData: data, bubbles: true})); const setter = Object.getOwnPropertyDescriptor(globalThis.HTMLInputElement.prototype, 'value').set; setter.call(node, data.getData('text/plain')); node.dispatchEvent(new globalThis.Event('input', {bubbles: true}));}, sentinel);
     assert.equal((await input.inputValue()) === sentinel, true, 'PASTE_NOT_APPLIED'); record.flags.paste = true;
     await page.getByTestId('account.token.visibility').click(); assert.equal(await input.getAttribute('type'), 'text');
+    assert.equal(await page.getByTestId('account.token.visibility').getAttribute('aria-pressed'), 'true');
     await page.getByTestId('account.token.visibility').click(); assert.equal(await input.getAttribute('type'), 'password'); record.flags.visibility = true;
+    await input.focus(); await page.keyboard.press('Tab'); await expect(page.getByTestId('account.token.visibility')).toBeFocused();
+    assert.equal(await page.getByTestId('account.token.visibility').evaluate(node => globalThis.getComputedStyle(node).outlineStyle !== 'none' || globalThis.getComputedStyle(node).boxShadow !== 'none'), true);
+    await page.keyboard.press('Tab'); await expect(page.getByTestId('account.verify')).toBeFocused();
     await input.press('Enter'); await page.getByTestId('account.cancel').waitFor(); record.flags.enter = true;
+    assert.deepEqual(await application.evaluate(() => globalThis.uploadUiFixture.counts), {verify: 1, confirm: 0, cancel: 0, disconnect: 0});
     assert.equal(await input.count(), 0); record.flags.tokenCleared = true;
     stage = 'cancel-navigation';
     await page.getByTestId('fixture.journal').click(); await settle(candidate);
@@ -103,9 +110,23 @@ export async function runDashboardUploadUiFixture(config) {
     record.flags.fixedRefusals = true;
     // Explicit confirmation remains in flight after navigation; no cancellation may undo this authority.
     stage = 'confirm-navigation';
-    await publish(candidate); await page.getByTestId('account.confirm').click(); await page.getByTestId('fixture.journal').click(); await settle(connected);
+    await input.fill(sentinel); await input.press('Enter'); await page.getByTestId('account.cancel').waitFor(); await settle(candidate);
+    await expect(page.locator('#upload-confirm-heading')).toBeFocused();
+    assert.equal((await application.evaluate(() => globalThis.uploadUiFixture.counts)).confirm, 0);
+    assert.equal(await page.getByTestId('account.counts').count(), 0);
+    await page.keyboard.press('Tab'); await expect(page.getByTestId('account.confirm')).toBeFocused();
+    await page.keyboard.press('Tab'); await expect(page.getByTestId('account.cancel')).toBeFocused();
+    await page.getByTestId('account.confirm').click();
+    await expect(page.getByTestId('account.phase')).toHaveText('Finishing connection…');
+    assert.equal((await application.evaluate(() => globalThis.uploadUiFixture.counts)).confirm, 1);
+    await page.getByTestId('fixture.journal').click(); await settle(connected);
     await page.getByTestId('shell.status.sync').click(); await page.getByTestId('account.disconnect').waitFor(); record.flags.chipNavigation = true;
     assert.equal((await application.evaluate(() => globalThis.uploadUiFixture.counts)).cancel, 2); record.flags.confirmNavigation = true;
+    stage = 'disconnect';
+    await page.getByTestId('account.disconnect').focus(); await page.keyboard.press('Enter');
+    await page.getByTestId('account.form').waitFor(); await expect(input).toBeFocused();
+    assert.equal((await application.evaluate(() => globalThis.uploadUiFixture.counts)).disconnect, 1);
+    assert.equal(await input.inputValue(), ''); assert.equal(await page.getByTestId('account.counts').count(), 0);
     stage = 'security';
     record.security = await application.evaluate(({BrowserWindow}) => {const window = BrowserWindow.getAllWindows()[0], p = window.webContents.getLastWebPreferences(); return {sandbox: p.sandbox, contextIsolation: p.contextIsolation, nodeIntegration: p.nodeIntegration, persistentSession: window.webContents.session.isPersistent(), localDocument: window.webContents.getURL().startsWith('file:')};});
     assert.deepEqual(record.security, {sandbox: true, contextIsolation: true, nodeIntegration: false, persistentSession: false, localDocument: true});
@@ -133,7 +154,7 @@ export async function runDashboardUploadUiFixture(config) {
           if (await token.count()) {assert.equal((await token.inputValue()) === '', true, 'TOKEN_NOT_CLEARED'); assert.equal(await token.getAttribute('type'), 'password');}
           assert.equal(await page.evaluate(value => globalThis.document.body.innerText.includes(value) || [...globalThis.document.querySelectorAll('input')].some(node => node.value.includes(value)), sentinel), false);
           stage = `${screen}-${language}-${size.width}-containment`;
-          assert.equal(await page.evaluate(() => globalThis.document.documentElement.scrollWidth <= globalThis.innerWidth && [...globalThis.document.querySelectorAll('.yu-upload-identifiers dd')].every(node => node.scrollWidth <= node.clientWidth)), true); record.flags.contained = true;
+          assert.equal(await page.evaluate(() => globalThis.document.documentElement.scrollWidth <= globalThis.innerWidth && [...globalThis.document.querySelectorAll('.yu-account dd, .yu-account button, .yu-account [data-slot="badge"]')].every(node => node.scrollWidth <= node.clientWidth)), true); record.flags.contained = true;
           stage = `${screen}-${language}-${size.width}-capture`;
           await page.getByTestId('fixture.content').evaluate(node => {node.scrollTop = 0;});
           if (screen === 'first-upload') await page.getByTestId('account.firstSync').scrollIntoViewIfNeeded();
@@ -141,11 +162,44 @@ export async function runDashboardUploadUiFixture(config) {
           await page.screenshot({path: path.join(config.output, file), timeout: 5000}); const bytes = await readFile(path.join(config.output, file));
           record.screenshots.push({file, screen, language, ...size, imageWidth: bytes.readUInt32BE(16), imageHeight: bytes.readUInt32BE(20), bytes: bytes.length, tokenCleared: true});
         }
+        stage = `additional-states-${language}-${size.width}`;
+        await page.getByTestId('fixture.account').click();
+        for (const status of [
+          {...connected, state: 'paused', progress: {...connected.progress, pressure: true}},
+          {...connected, state: 'paused', error: 'AUTHENTICATION'},
+          {...base, state: 'connecting', error: 'TIMEOUT', owner, candidateId: candidate.candidateId},
+          {...base, state: 'disconnected', error: 'CANCELLED'}
+        ]) {
+          await publish(status); await expect(page.getByTestId('account.phase')).toHaveText(status.state === 'connecting' ? (language === 'en' ? 'Connecting…' : 'Подключение…') : status.state === 'paused' ? (language === 'en' ? 'Upload paused' : 'Отправка приостановлена') : (language === 'en' ? 'Not connected' : 'Не подключено'));
+          if (status.error) await page.getByTestId('account.error').waitFor();
+          if (status.progress.pressure) await expect(page.getByTestId('account.status')).toContainText(language === 'en' ? 'Queue capacity reached' : 'Очередь заполнена');
+        }
+        const longOwner = {...owner, accountId: 'a'.repeat(128), companyId: 'c'.repeat(128), identityEpoch: 'e'.repeat(128)};
+        for (const status of [{...candidate, owner: longOwner}, {...connected, owner: longOwner}]) {
+          await publish(status); await expect(page.getByTestId('account.owner')).toContainText(longOwner.identityEpoch);
+          for (const zoom of [1, 1.5, 2]) {
+            await application.evaluate(({BrowserWindow}, zoom) => BrowserWindow.getAllWindows()[0].webContents.setZoomFactor(zoom), zoom);
+            assert.equal(await page.getByTestId('fixture.content').evaluate(node => node.scrollWidth <= node.clientWidth), true, `UPLOAD_ZOOM_OVERFLOW_${language}_${size.width}_${zoom}`);
+            assert.equal(await page.locator('.yu-account dd, .yu-account button, .yu-account p').evaluateAll(nodes => nodes.every(node => node.scrollWidth <= node.clientWidth)), true, 'UPLOAD_LONG_VALUE_OVERFLOW');
+            if (status.candidateId) {await page.getByTestId('account.cancel').focus(); await expect(page.getByTestId('account.cancel')).toBeFocused();}
+            else {await page.getByTestId('account.disconnect').focus(); await expect(page.getByTestId('account.disconnect')).toBeFocused();}
+          }
+          await application.evaluate(({BrowserWindow}) => BrowserWindow.getAllWindows()[0].webContents.setZoomFactor(1));
+        }
       }
     }
     await page.getByTestId('fixture.account').click(); await publish(connected); await page.getByTestId('account.firstSync').waitFor();
     assert.equal(await page.locator('progress').getAttribute('value'), '20');
+    await page.getByTestId('account.token.input').focus();
     await publish({...connected, progress: {...connected.progress, enumeration: 'changing'}}); await page.waitForFunction(() => !globalThis.document.querySelector('progress')?.hasAttribute('value')); record.flags.progress = true;
+    await expect(page.getByTestId('account.token.input')).toBeFocused();
+    stage = 'replacement-token';
+    const previousCounts = await application.evaluate(() => ({...globalThis.uploadUiFixture.counts}));
+    await page.getByTestId('account.token.input').fill(sentinel); await page.getByTestId('account.token.input').press('Enter');
+    await page.getByTestId('account.cancel').waitFor(); await settle(candidate); await page.getByTestId('account.confirmation').waitFor();
+    const replacementCounts = await application.evaluate(() => globalThis.uploadUiFixture.counts);
+    assert.equal(replacementCounts.verify, previousCounts.verify + 1); assert.equal(replacementCounts.confirm, previousCounts.confirm);
+    await page.getByTestId('account.cancel').click(); await page.getByTestId('account.form').waitFor();
     await page.getByTestId('fixture.journal').click(); await page.waitForFunction(() => globalThis.document.activeElement?.getAttribute('data-testid') === 'screen-title'); record.flags.headingFocus = true;
     stage = 'navigation-security';
     const beforeUrl = page.url(); await page.evaluate(() => {const a = globalThis.document.createElement('a'); a.href = 'https://example.invalid'; globalThis.document.body.append(a); a.click(); a.remove();});
