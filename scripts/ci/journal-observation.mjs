@@ -118,7 +118,7 @@ function tableState(expected) {
   if (!root || root.querySelector(`[data-testid="${expected.prefix}-loading"]`)) return false;
   const text = id => root.querySelector(`[data-testid="${id}"]`)?.textContent ?? null;
   const rows = [...root.querySelectorAll(`[data-testid="${expected.row}"]`)].map(row => ({kind: row.getAttribute('data-kind'), eventSeq: row.getAttribute('data-event-seq'),
-    cells: [...row.querySelectorAll('td')].map(cell => cell.textContent)}));
+    cells: [...row.querySelectorAll('td, [data-cell]')].map(cell => cell.textContent)}));
   const state = {page: text(`${expected.prefix}-page`), error: text(`${expected.prefix}-error`), header: expected.header ? text(expected.header) : null,
     next: root.querySelector(`[data-testid="${expected.prefix}-next"]`)?.disabled === false, rows};
   if (state.error) return state;
@@ -211,15 +211,15 @@ async function back(dashboard) {
 const table = {
   intervals: {tab: 'journal-detail-tab-intervals', root: 'journal-intervals', prefix: 'journal-intervals', row: 'journal-interval-row', header: 'journal-intervals-total'},
   timeline: {tab: 'journal-detail-tab-timeline', root: 'journal-timeline', prefix: 'journal-events', row: 'journal-event-row', header: 'journal-window'},
-  // ET-057: the sample table is under the trip's chart, not a tab; its rows are in the document while the section is closed.
-  samples: {tab: null, root: 'journal-samples', prefix: 'journal-samples', row: 'journal-sample-row', header: null}
+  // ET-077: the sample table is under the Summary tab's chart; its rows are rendered only while that section is open.
+  samples: {tab: 'journal-detail-tab-summary', root: 'journal-samples', prefix: 'journal-samples', row: 'journal-sample-row', header: null}
 };
+/** Every row of the current Timeline page, in order: its stable key and whether it is an event, a gap or a refuel. */
+const timelineItems = dashboard => dashboard.getByTestId('journal-timeline').locator('[data-item-key]').evaluateAll(nodes => nodes.map(node => ({key: node.dataset.itemKey, kind: node.dataset.testid})));
 async function openTable(dashboard, kind, count) {
-  // ET-057: the raw tables are a collapsed section of the trip; open it once per trip.
-  if (table[kind].tab) {
-    if (!await dashboard.getByTestId('trip.raw').evaluate(node => node.open, undefined, {timeout: 5000})) await clickTestId(dashboard, 'trip.raw.toggle');
-    await clickTestId(dashboard, table[kind].tab);
-  } else {
+  // ET-077: each table is under its tab of the trip page, and an inactive tab holds no page.
+  await clickTestId(dashboard, table[kind].tab);
+  if (kind === 'samples') {
     // The sample table renders only while its section under the chart is open; a trip without samples has no section.
     await dashboard.getByTestId('journal-samples-loading').waitFor({state: 'detached', timeout: 5000});
     const section = dashboard.getByTestId('trip.samples');
@@ -313,8 +313,23 @@ export async function runJournalSeeded({dashboard, record}) {
   record.pagingSummary = {toll: paging.fields['money-toll'] ?? null, samples: paging.fields['samples-sampleCount'] ?? null};
   assert.deepEqual(record.pagingSummary, {toll: '104 EUR (SDK-documented), 104 amounts', samples: '3600'});
   const timeline = await openTable(dashboard, 'timeline', 100);
+  const firstItems = await timelineItems(dashboard);
   const timeline2 = await nextTable(dashboard, 'timeline', 2, 5);
+  const secondItems = await timelineItems(dashboard);
   await nextTable(dashboard, 'timeline', 1, 100, 'previous');
+  // ET-077: the pager keeps the page bounds, so a walk back and forward shows the same rows in the same places, and the gap
+  // and the refuel beside the page boundary each stay on exactly one page.
+  const firstReturned = await timelineItems(dashboard);
+  await nextTable(dashboard, 'timeline', 2, 5);
+  const secondReturned = await timelineItems(dashboard);
+  await nextTable(dashboard, 'timeline', 1, 100, 'previous');
+  assert.deepEqual(firstReturned, firstItems, 'JOURNAL_TIMELINE_PAGE_1_CHANGED');
+  assert.deepEqual(secondReturned, secondItems, 'JOURNAL_TIMELINE_PAGE_2_CHANGED');
+  const placed = (items, kind) => items.flatMap((item, index) => item.kind === kind ? [{key: item.key, next: items[index + 1]?.key ?? null}] : []);
+  const session = secondItems.find(item => item.kind === 'journal-event-row').key.split(':')[0];
+  record.pagingTimelineBoundary = {firstCount: firstItems.length, secondCount: secondItems.length, gaps: [placed(firstItems, 'journal-timeline-gap').map(item => item.next), placed(secondItems, 'journal-timeline-gap').map(item => item.next)],
+    refuels: [placed(firstItems, 'journal-timeline-refuel').map(item => item.next), placed(secondItems, 'journal-timeline-refuel').map(item => item.next)]};
+  assert.deepEqual(record.pagingTimelineBoundary, {firstCount: 101, secondCount: 6, gaps: [[`${session}:100`], []], refuels: [[], [`${session}:101`]]});
   record.pagingTimeline = {window: timeline.header, first: timeline.rows[0].eventSeq, pageTwo: timeline2.rows.map(row => row.eventSeq), nextOnLast: timeline2.next};
   assert.deepEqual(record.pagingTimeline, {window: "Events of the trip's plugin session from eventSeq 1; the trip is in progress.", first: '1', pageTwo: ['101', '102', '103', '104', '105'],
     nextOnLast: false});
@@ -336,16 +351,16 @@ export async function runJournalSeeded({dashboard, record}) {
   record.samplesPaged = true;
   await back(dashboard);
 
-  // Filters apply before the page limit: no outcome is exactly the three anchors closed without one; partial is 3 + 36.
+  // Filters apply before the page limit: no outcome is exactly the three anchors closed without one; partial is 41, including the paging trip, whose gap makes it partial.
   await chooseFilter(dashboard, 'journal-filter-outcome', 'No outcome');
   const none = await until(dashboard, listState, {page: 1, count: 3, first: T.restartClosed});
   await chooseFilter(dashboard, 'journal-filter-outcome', 'Any outcome');
   await chooseFilter(dashboard, 'journal-filter-completeness', 'Partial');
-  const partial = await until(dashboard, listState, {page: 1, count: 40});
+  const partial = await until(dashboard, listState, {page: 1, count: 41});
   await chooseFilter(dashboard, 'journal-filter-completeness', 'Any recording');
   await until(dashboard, listState, {page: 1, count: 50, first: T.paging});
   record.filters = {none: none.rows.map(row => row.trip), noneNext: none.next, partial: partial.rows.length, partialNext: partial.next};
-  assert.deepEqual(record.filters, {none: [T.restartClosed, T.gapClosed, T.differentJob], noneNext: false, partial: 40, partialNext: false});
+  assert.deepEqual(record.filters, {none: [T.restartClosed, T.gapClosed, T.differentJob], noneNext: false, partial: 41, partialNext: false});
   record.filtersApplied = true;
   // ET-076: the mode and job type filters, each alone and with the outcome filter. Written by hand from the seed: the eight
   // anchors and filler 109 are single-player (656 samples); fillers 0 and 1 of every six are delivered, 38 of 110, and all

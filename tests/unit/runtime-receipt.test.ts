@@ -581,7 +581,7 @@ function journalReceipt(path: (string | number)[] = [], replacement?: Json): str
       deliveredSamples: [{kind: 'sample', speed: '80.1 km/h'}, {kind: 'sample', speed: '0.0 km/h'}, {kind: 'gap', text: 'no samples for 1 s'}, {kind: 'sample', speed: 'unavailable (invalid reading)'}],
       pagingTimeline: {first: '1', pageTwo: ['101', '102', '103', '104', '105'], nextOnLast: false}, pagingIntervals: {pageTwo: 4, nextOnLast: false},
       pagingSamples: {kinds: ['sample'], firstSpeed: '72 km/h', nextOnSecond: true},
-      filters: {none: [trip(5), trip(4), trip(3)], noneNext: false, partial: 40, partialNext: false},
+      filters: {none: [trip(5), trip(4), trip(3)], noneNext: false, partial: 41, partialNext: false},
       restartLauncherExit: 0, files: {magic: 'SQLite format 3', applicationId: 1163154226, userVersion: 7, sidecars: [], syntheticBackups: false},
       exportNoteShown: true, exportsSaved: true, exportCancelledWritesNothing: true, exportTargetRefused: true, dataFolderUnchanged: true,
       exportFolder: ['delivered.json', 'paging.json'],
