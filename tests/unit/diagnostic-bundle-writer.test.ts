@@ -3,13 +3,20 @@
 // rows are written by hand from P17. No real user or data folder is touched: LOCALAPPDATA is a temporary folder.
 import {existsSync} from 'node:fs';
 import {mkdir, readdir, readFile, symlink, unlink, writeFile} from 'node:fs/promises';
-import * as realFs from 'node:fs/promises';
+import * as nodeFs from 'node:fs/promises';
 import path from 'node:path';
 import {afterEach, beforeEach, describe, expect, it, vi} from 'vitest';
 import {DiagnosticBundleExporter, diagnosticBundleFileName, type DiagnosticBundleExporterOptions} from '../../apps/desktop/src/diagnostic-bundle-writer';
 import type {ExportFileSystem} from '../../apps/desktop/src/export-file';
 import {exactLengthPath} from '../shared/paths';
 import {temporaryResources} from '../shared/resources';
+import {unflushed} from '../shared/file-work';
+
+/**
+ * The real file system with the flush to disk of every opened file skipped (unflushed, tests/shared/file-work.ts). No case
+ * observes durability across a power loss; a case that injects a failing sync still sees it.
+ */
+const files = unflushed(nodeFs);
 
 const BUNDLE = '{"format": "ets2telemetry.diagnostics", "version": 1}\n';
 let resources: Awaited<ReturnType<typeof temporaryResources>>;
@@ -27,7 +34,7 @@ function exporter(options: Partial<DiagnosticBundleExporterOptions> & {target?: 
   const showSaveDialog = vi.fn((defaultPath: string) => { void defaultPath; return Promise.resolve(target === null ? {canceled: true, filePath: ''} : {canceled: false, filePath: target}); });
   const build = vi.fn(() => Promise.resolve(BUNDLE));
   const instance = new DiagnosticBundleExporter({build, showSaveDialog, documents: () => 'C:\\Users\\owner\\Documents', localAppData: local, log,
-    now: () => Date.UTC(2026, 9, 17, 8, 30, 15, 250), suffix: () => '0badc0de', delay: () => Promise.resolve(), ...options});
+    now: () => Date.UTC(2026, 9, 17, 8, 30, 15, 250), suffix: () => '0badc0de', delay: () => Promise.resolve(), fs: files, ...options});
   return {instance, log, showSaveDialog, build};
 }
 const events = (log: ReturnType<typeof vi.fn>) => log.mock.calls.map(call => [call[0], call[2] ?? null]);
@@ -76,8 +83,8 @@ describe('a failed export leaves no partial file and the old target unchanged', 
     expect(await readFile(path.join(out, 'diagnostics.json'), 'utf8')).toBe('old bundle');
   };
   it('when the write fails', async () => {
-    const fs: ExportFileSystem = {...realFs, open: async (target, flags) => {
-      const handle = await realFs.open(target, flags);
+    const fs: ExportFileSystem = {...files, open: async (target, flags) => {
+      const handle = await files.open(target, flags);
       return {writeFile: () => Promise.reject(Object.assign(new Error('disk'), {code: 'EIO'})), sync: () => handle.sync(), close: () => handle.close()};
     }};
     const f = exporter({fs});
@@ -86,13 +93,13 @@ describe('a failed export leaves no partial file and the old target unchanged', 
     expect(events(f.log)).toEqual([['DIAGNOSTICS_EXPORT_FAILED', {outcome: 'failed', code: 'EXPORT_WRITE_FAILED', step: 'write', errno: 'EIO'}]]);
   });
   it('when the sync or the rename keeps failing', async () => {
-    const syncing: ExportFileSystem = {...realFs, open: async (target, flags) => {
-      const handle = await realFs.open(target, flags);
+    const syncing: ExportFileSystem = {...files, open: async (target, flags) => {
+      const handle = await files.open(target, flags);
       return {writeFile: (data: string, encoding: 'utf8') => handle.writeFile(data, encoding), sync: () => Promise.reject(Object.assign(new Error('io'), {code: 'EIO'})), close: () => handle.close()};
     }};
     await expect(exporter({fs: syncing}).instance.export()).resolves.toEqual({outcome: 'failed', code: 'EXPORT_WRITE_FAILED'});
     await unchanged();
-    const renaming: ExportFileSystem = {...realFs, rename: vi.fn(() => Promise.reject(Object.assign(new Error('denied'), {code: 'EPERM'})))};
+    const renaming: ExportFileSystem = {...files, rename: vi.fn(() => Promise.reject(Object.assign(new Error('denied'), {code: 'EPERM'})))};
     await expect(exporter({fs: renaming}).instance.export()).resolves.toEqual({outcome: 'failed', code: 'EXPORT_WRITE_FAILED'});
     expect(renaming.rename).toHaveBeenCalledTimes(6);
     await unchanged();
@@ -171,8 +178,8 @@ describe('one export at a time, and the application exit', () => {
   it('removes the partial file when the application exits during the write, and its idle work settles after that', async () => {
     await writeFile(path.join(out, 'diagnostics.json'), 'old bundle');
     const writing = held<void>(), started = held<void>();
-    const fs: ExportFileSystem = {...realFs, open: async (target, flags) => {
-      const handle = await realFs.open(target, flags);
+    const fs: ExportFileSystem = {...files, open: async (target, flags) => {
+      const handle = await files.open(target, flags);
       return {writeFile: async (data: string, encoding: 'utf8') => { started.release(); await writing.promise; return handle.writeFile(data, encoding); },
         sync: () => handle.sync(), close: () => handle.close()};
     }};
@@ -223,9 +230,9 @@ describe('ordinary long target path (282 chars, ET-046)', () => {
     await writeFile(longTarget, 'old bundle');
 
     const fs: ExportFileSystem = {
-      ...realFs,
+      ...files,
       open: async (target, flags) => {
-        const handle = await realFs.open(target, flags);
+        const handle = await files.open(target, flags);
         return {
           writeFile: () => Promise.reject(Object.assign(new Error('disk fail'), {code: 'EIO'})),
           sync: () => handle.sync(),

@@ -128,8 +128,10 @@ const UNFLUSHED = unflushed(fs as unknown as SettingsFileSystem);
  */
 const HELD_TIMERS: SettingsTimers = {setTimeout: () => undefined, clearTimeout: () => undefined};
 function store(fileSystem?: SettingsFileSystem, options: SettingsStoreOptions = {}) {
-  return new SettingsStore(directory, {log: (event, _detail, facts) => events.push({event, ...(facts ? {facts: {...facts}} : {})}),
-    delay: milliseconds => {delays.push(milliseconds); return Promise.resolve();}, now, fs: fileSystem ?? UNFLUSHED, timers: HELD_TIMERS, ...options});
+  // The arrays of the case that creates the store: a save that outlives its case's timeout must not log into the next case.
+  const caseEvents = events, caseDelays = delays;
+  return new SettingsStore(directory, {log: (event, _detail, facts) => caseEvents.push({event, ...(facts ? {facts: {...facts}} : {})}),
+    delay: milliseconds => {caseDelays.push(milliseconds); return Promise.resolve();}, now, fs: fileSystem ?? UNFLUSHED, timers: HELD_TIMERS, ...options});
 }
 /** The real file system, without the flush, with selected operations replaced. */
 function wrapped(overrides: Partial<SettingsFileSystem>): SettingsFileSystem {
@@ -332,7 +334,7 @@ it('removes only stale temporaries of its own pattern, and only when saving', as
 it('serializes concurrent saves and applies them in request order', async () => {
   let active = 0, maximum = 0;
   const settings = store(wrapped({
-    open: async (file, flags) => {if (flags === 'wx') {active++; maximum = Math.max(maximum, active);} return fs.open(file, flags);},
+    open: async (file, flags) => {if (flags === 'wx') {active++; maximum = Math.max(maximum, active);} return UNFLUSHED.open(file, flags);},
     rename: async (from, to) => {await new Promise(resolve => setImmediate(resolve)); await fs.rename(from, to); active--;}
   }));
   await settings.load();
@@ -785,7 +787,7 @@ it('refuses overlay saves for a newer-version file and while the startup read is
 it('serializes unit and overlay saves in one queue so that every change survives', async () => {
   let active = 0, maximum = 0;
   const settings = store(wrapped({
-    open: async (file, flags) => {if (flags === 'wx') {active++; maximum = Math.max(maximum, active);} return fs.open(file, flags);},
+    open: async (file, flags) => {if (flags === 'wx') {active++; maximum = Math.max(maximum, active);} return UNFLUSHED.open(file, flags);},
     rename: async (from, to) => {await new Promise(resolve => setImmediate(resolve)); await fs.rename(from, to); active--;}
   }));
   await settings.load();

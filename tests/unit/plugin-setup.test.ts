@@ -10,7 +10,8 @@ import {PluginRegistry} from '../../apps/desktop/src/plugin-setup/plugin-registr
 import {LAUNCH_DELAY_MS, MAX_LOCKED_RETRIES, POLL_INTERVAL_MS, PluginSetup, PluginSetupError, RUN_TIMEOUT_MS, type PluginSetupPorts} from '../../apps/desktop/src/plugin-setup/plugin-setup';
 import type {PluginBundleResult} from '../../apps/desktop/src/plugin-setup/plugin-bundle';
 import {fakeSteam, type FakeSteam} from '../shared/fake-steam';
-import {guardedTempRoot, type GuardedRoot} from '../shared/guarded-fs';
+import {unflushed} from '../shared/file-work';
+import {guardedTempRoot, type GuardedFs, type GuardedRoot} from '../shared/guarded-fs';
 
 // REG-015 (ET-017 P13, P14, P15, P16): the setup orchestrator in main, in the test-root mode against fake Steam and game
 // folders under the guarded temporary root, with a fake running-game lister and controlled timers. Expected views, logs
@@ -47,6 +48,13 @@ class CaseHarness {
   running: RunningGames = {...NOT_RUNNING};
   bundleResult: PluginBundleResult;
   fs: InstallerFileSystem;
+  /**
+   * The guarded file system with the flush to disk of every opened file skipped (`unflushed`, tests/shared/file-work.ts),
+   * for both the installer and the registry. No case observes durability across a power loss. In full local runs on
+   * November 8, 2026 the only guarded calls over 100 ms were these flushes, 0.4 to 1.3 s each, and a case with several
+   * installs timed out at 5 s.
+   */
+  readonly files: GuardedFs;
   outside: GuardedRoot | undefined;
   private readonly setups: PluginSetup[] = [];
   private readonly spies: {mockRestore(): void}[] = [];
@@ -54,7 +62,8 @@ class CaseHarness {
 
   private constructor(readonly guard: GuardedRoot, readonly steam: FakeSteam, readonly ets2Root: string, readonly atsRoot: string) {
     this.bundleResult = {ok: true, bundle: {bytes: BUNDLE, sha256: SHA, appVersion: '0.2.0', known: [], file: path.join(guard.root, 'bundle', 'ets2telemetry-plugin.dll')}};
-    this.fs = guard.fs;
+    this.files = unflushed(guard.fs);
+    this.fs = this.files;
   }
 
   static async create(): Promise<CaseHarness> {
@@ -155,7 +164,7 @@ class CaseHarness {
   }
   private ports(overrides: Partial<PluginSetupPorts>): PluginSetupPorts {
     return {
-      fs: this.fs, registryFs: this.guard.fs, readBundle: () => Promise.resolve(this.bundleResult),
+      fs: this.fs, registryFs: this.files, readBundle: () => Promise.resolve(this.bundleResult),
       loadRegistry: (directory, registryFs) => PluginRegistry.load(directory, {fs: registryFs, now: () => new Date(UTC), log: (event, _detail, facts) => this.events.push({event, facts})}),
       readSteamRoot: this.readSteamRoot, checkRunning: this.lister, registryDirectory: undefined, dataRoot: undefined, installDirectory: undefined, randomHex: () => '0123456789abcdef',
       ...overrides
@@ -839,9 +848,9 @@ describe('review round 1', () => {
     const h = harness();
     let holding = false;
     const renaming = deferred<void>(), release = deferred<void>();
-    const registryFs = {...h.guard.fs, rename: async (from: string, to: string) => {
+    const registryFs = {...h.files, rename: async (from: string, to: string) => {
       if (holding) {renaming.resolve(); await release.promise;}
-      return h.guard.fs.rename(from, to);
+      return h.files.rename(from, to);
     }} as PluginSetupPorts['registryFs'];
     const setup = h.create({registryFs});
     await h.launch(setup);
