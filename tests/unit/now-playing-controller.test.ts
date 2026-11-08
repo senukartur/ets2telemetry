@@ -78,8 +78,19 @@ it('re-hides and restores click-through when the window was shown outside the co
   expect(calls).toEqual(['hide', 'ignore:true', 'movable:false', 'focusable:false']);
 });
 it('performs the first hide natively, then stays quiet', () => {
-  const {calls} = harness();
+  const {controller, calls} = harness();
   expect(calls.filter(call => call === 'hide')).toEqual(['hide']);
+  calls.length = 0; controller.update(false); controller.update(false);
+  expect(calls).toEqual([]);
+});
+it('repeats the native pass after one that the window interrupted', () => {
+  const {controller, window, calls} = harness(); controller.update(true); controller.updateGame(game());
+  const hide = window.hide;
+  window.hide = () => {hide(); window.webContents.isDestroyed = () => true;};
+  controller.update(false);
+  window.webContents.isDestroyed = () => false; window.hide = hide;
+  calls.length = 0; controller.update(false);
+  expect(calls).toEqual(['hide', 'ignore:true', 'movable:false', 'focusable:false']);
 });
 it('takes interactive state back to click-through on the hide after an edit, then stays quiet', () => {
   const {controller, calls} = harness(); controller.begin(true);

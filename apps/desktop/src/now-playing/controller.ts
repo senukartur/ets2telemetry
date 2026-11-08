@@ -74,20 +74,18 @@ export class NowPlayingController {
     action();
     return this.usable(retiring);
   }
-  private passThrough(retiring = false): void {
+  private passThrough(retiring = false): boolean {
     this.interactive = false;
-    if (!this.apply(() => this.window.setIgnoreMouseEvents(true), retiring)) return;
-    if (!this.apply(() => this.window.setMovable(false), retiring)) return;
-    if (!this.apply(() => this.window.setFocusable(false), retiring)) return;
-    this.apply(() => this.window.setSkipTaskbar(true), retiring);
+    return this.apply(() => this.window.setIgnoreMouseEvents(true), retiring) && this.apply(() => this.window.setMovable(false), retiring) &&
+      this.apply(() => this.window.setFocusable(false), retiring) && this.apply(() => this.window.setSkipTaskbar(true), retiring);
   }
   private hide(retiring = false): void {
     this.visible = false; this.moving = false;
     // Telemetry repeats this at 20 Hz while the widget stays hidden. The window keeps its click-through state, and
     // Electron would redo the native work and emit `hide` for a hidden window. Only the visibility is cheap to re-check.
     if (!retiring && this.concealed && this.usable() && !this.window.isVisible()) return;
-    if (this.apply(() => this.window.hide(), retiring)) this.passThrough(retiring);
-    this.concealed = !this.visible;
+    // A callback of these native calls can place the widget again, so `visible` is read after them.
+    this.concealed = this.apply(() => this.window.hide(), retiring) && this.passThrough(retiring) && !this.visible;
   }
   private place(): void {
     if (!this.usable()) return;
