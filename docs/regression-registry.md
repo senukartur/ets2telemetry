@@ -231,7 +231,7 @@ Columns:
 | `tests/unit/soak-receipt.test.ts` | Node unit (Vitest) | smoke evidence: REG-011, REG-012, REG-014, REG-018 | R, T, V (et-019) | ET-019 (PR-12b) | PR (tests job, `npm test`) | ACK, gap |
 | `tests/unit/speed-display.test.ts` | Node unit (Vitest) | REG-009, REG-012, REG-017 | R, T | ET-008 (#21) | PR (tests job, `npm test`) | — |
 | `tests/unit/steam-discovery.test.ts` | Node unit (Vitest) | REG-015 | R, F, V (et-017) | ET-017 (PR-2) | PR (tests job, `npm test`) | security |
-| `tests/unit/steam-registry.test.ts` | Node unit (Vitest) | REG-015 | R, F, V (et-017) | ET-017 (PR-2) | PR (tests job, `npm test`) | security |
+| `tests/unit/steam-registry.test.ts` | Existing one-worker host-boundaries project; stubbed runs and real Windows PowerShell under the product deadline | REG-015 | R, F, V (et-017) | ET-017 (PR-2) | PR (tests job, `npm test`) | security |
 | `tests/unit/steam-vdf.test.ts` | Node unit (Vitest) | REG-015 | R, F, V (et-017) | ET-017 (PR-2) | PR (tests job, `npm test`) | — |
 | `tests/unit/storage-client.test.ts` | Node unit (Vitest) | REG-007, REG-010, REG-011, REG-014 | R, T | ET-013 (#60); ET-038; ET-103a, ET-103b | PR (tests job, `npm test`) | ACK, regression, private upload ownership/queue/startup-recovery/stale-result bounds, recorder admission/dispatch priority within the combined queue cap |
 | `tests/unit/storage-codec.test.ts` | Node unit (Vitest) | REG-009 | R | ET-013 (#51) | PR (tests job, `npm test`) | — |
