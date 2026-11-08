@@ -2,6 +2,7 @@ import {describe, expect, it} from 'vitest';
 import type {PluginBlockReason, PluginGameView, PluginSetupView, PluginTargetState, PluginTargetView} from '../../packages/contracts/src';
 import {connectionDiagnosisText, diagnosticsExportText, MANUAL_COPY_REASONS, pluginFolderChoiceText, pluginSetupText, pluginShowFileText} from '../../apps/desktop/src/plugin-setup-text';
 import type {ConnectionDiagnosisCode} from '../../apps/desktop/src/connection-diagnosis';
+import {t} from '../../apps/desktop/src/i18n';
 
 // REG-015 (ET-017 PR-5, P16, P18): the text of the Game plugin card. Every mode, discovery outcome, folder state, target
 // state, block reason and refusal has a hand-written expected text below; none of them may carry a path.
@@ -190,7 +191,7 @@ describe('the connection diagnosis and the diagnostics export', () => {
   const DIAGNOSES: Record<ConnectionDiagnosisCode, string> = {
     SERVICE_UNAVAILABLE: 'The telemetry service is not running; see Application status.',
     CONNECTED: 'Receiving telemetry from the selected source.',
-    NO_GAME_SELECTED: 'No game is selected as the source. Choose Euro Truck Simulator 2 or American Truck Simulator in Settings > Data.',
+    NO_GAME_SELECTED: 'No game is selected as the source. Choose Euro Truck Simulator 2 or American Truck Simulator in Settings > Diagnostics.',
     SETUP_DISABLED: 'Not checked: plugin setup is off in this launch.',
     GAME_NOT_FOUND: 'The selected game was not found. Choose its game folder below.',
     PLUGIN_BLOCKED_PERMISSION: 'Windows did not allow the plugin file in a game folder to be read or changed. See the folder line below for what to do.',
@@ -202,7 +203,7 @@ describe('the connection diagnosis and the diagnostics export', () => {
     PLUGIN_BUNDLE_UNAVAILABLE: 'The bundled plugin is missing or damaged. Reinstall Yukon Union Telemetry.',
     PLUGIN_NOT_CHECKED: 'The plugin could not be checked in a game folder; see the folder line below.',
     PLUGIN_MISSING: 'The plugin is not installed in a game folder. Turn on "Manage the plugin for this game" or press Retry.',
-    TRANSPORT_FAILED: 'The game\'s plugin could not be connected, or it is incompatible, and the connection is not tried again by itself. After the plugin is fixed, choose another source and then the game again in Settings > Data, or exit Yukon Union Telemetry from the tray and start it again.',
+    TRANSPORT_FAILED: 'The game\'s plugin could not be connected, or it is incompatible, and the connection is not tried again by itself. After the plugin is fixed, choose another source and then the game again in Settings > Diagnostics, or exit Yukon Union Telemetry from the tray and start it again.',
     NO_RUNNING_SOURCE: 'The plugin is in place. Start the game to connect.'
   };
   it.each(Object.entries(DIAGNOSES))('describes %s', (code, line) => {
@@ -262,8 +263,8 @@ it('localizes static templates before inserting plugin identity and folder ordin
 
 
 it.each(['NO_GAME_SELECTED', 'TRANSPORT_FAILED'] as const)('keeps effective source guidance localized after moving its selector: %s', code => {
-  expect(connectionDiagnosisText({code, notes: []}, 'en').line).toContain('Settings > Data');
+  expect(connectionDiagnosisText({code, notes: []}, 'en').line).toContain(`Settings > ${t('s.data', undefined, 'en')}`);
   expect(connectionDiagnosisText({code, notes: []}, 'en').line).not.toContain('above');
-  expect(connectionDiagnosisText({code, notes: []}, 'ru').line).toContain('в разделе данных');
+  expect(connectionDiagnosisText({code, notes: []}, 'ru').line).toContain(`в разделе «Настройки > ${t('s.data', undefined, 'ru')}»`);
   expect(connectionDiagnosisText({code, notes: []}, 'ru').line).not.toContain('Settings');
 });
