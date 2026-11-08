@@ -165,8 +165,9 @@ function DiagnosticsPanel({language, app, live, startup, pluginActions, onSource
         <p data-testid="prototype-notice" className="yu-muted">{recording.notice}</p>
       </div>
     </SettingsSection>
-    {/* Like the Game plugin card that held the export before ET-078, the bundle section waits for main's first push. */}
-    {app ? <SettingsSection label={t('s.data.bundle', undefined, language)} testId="settings.data.bundle">
+    {/* Like the Game plugin card that held the export before ET-078, the bundle section waits for main's first push. It has
+        no name of its own: its only row is labelled "Diagnostic bundle" already. */}
+    {app ? <SettingsSection testId="settings.data.bundle">
       <DiagnosticsExportRow language={language} {...pluginActions} />
     </SettingsSection> : null}
   </>;

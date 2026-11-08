@@ -140,6 +140,9 @@ describe.each(['en', 'ru'] as const)('the Settings screen in %s', language => {
     expect(html).not.toContain('close-to-tray');
     const bundle = html.slice(html.indexOf('data-testid="settings.data.bundle"'));
     expect(bundle).toContain(`<span class="yu-setting-label">${copy.bundle}</span>`);
+    // The section is no second region named like its only row.
+    expect(tag(html, 'data-testid="settings.data.bundle"')).not.toMatch(/role=|aria-label/);
+    expect(html.split(copy.bundle)).toHaveLength(2);
     expect(bundle).toMatch(/data-testid="plugin-export-diagnostics"[^>]*>[^<]+<\/button><div data-testid="plugin-export-diagnostics-result-region"/);
   });
   it('lists the last problem only while the service is not failing, and the failure alert otherwise', () => {
@@ -170,6 +173,8 @@ describe.each(['en', 'ru'] as const)('the Settings screen in %s', language => {
     expect(html).toContain('SIL OPEN FONT LICENSE');
     const warning = html.slice(html.indexOf('data-testid="uninstall-warning"'), html.indexOf('</ul>'));
     expect(warning.match(/<li>/g)).toHaveLength(4);
+    // The uninstall section is no second region named like its row.
+    expect(tag(html, 'data-testid="uninstall-card"')).not.toMatch(/role=|aria-label/);
     expect(html).toMatch(/data-testid="uninstall-button">[^<]+<\/button>/);
   });
   it('shows the Game plugin card on its panel and hosts the overlay card unchanged', () => {
@@ -177,5 +182,41 @@ describe.each(['en', 'ru'] as const)('the Settings screen in %s', language => {
     expect(panelOf(html, 'plugin')).toContain('data-testid="plugin-card"');
     expect(panelOf(html, 'plugin')).not.toContain('plugin-export-diagnostics');
     expect(panelOf(html, 'overlay').startsWith('data-testid="settings.overlay"><div data-testid="overlay-settings"></div></div>')).toBe(true);
+  });
+});
+
+// ET-078: the Game plugin card and the diagnostics export on Settings > Diagnostics run through one action controller: one
+// pending flag and one stored result. Both panels are mounted, so one render holds both.
+describe('the shared plugin action controller across the Game plugin and Diagnostics panels', () => {
+  const screenWith = (actions: Partial<SettingsScreenProps['pluginActions']>) => {
+    const html = render({panel: 'data', pluginActions: {pending: false, result: null, run: () => null, ...actions}});
+    return {plugin: panelOf(html, 'plugin'), data: panelOf(html, 'data')};
+  };
+  // The fixture's only folder holds the current plugin, so it offers no manual-copy buttons.
+  const PLUGIN_TRIGGERS = ['plugin-ets2-managed', 'plugin-ats-managed', 'plugin-ets2-choose', 'plugin-ats-choose', 'plugin-retry'];
+  const pendingOn = (html: string, id: string) => tag(html, `data-testid="${id}"`).includes('aria-disabled="true"');
+  it('marks the export button and every plugin card control as pending while any of their actions runs', () => {
+    // The flag is shared: a running plugin action and a running export both set it, and both panels follow it.
+    const busy = screenWith({pending: true});
+    expect(pendingOn(busy.data, 'plugin-export-diagnostics')).toBe(true);
+    for (const id of PLUGIN_TRIGGERS) expect(pendingOn(busy.plugin, id), id).toBe(true);
+    const idle = screenWith({pending: false});
+    expect(pendingOn(idle.data, 'plugin-export-diagnostics')).toBe(false);
+    for (const id of PLUGIN_TRIGGERS) expect(pendingOn(idle.plugin, id), id).toBe(false);
+  });
+  it('shows a stored export result only beside the export button', () => {
+    const {plugin, data} = screenWith({result: {action: {kind: 'export-diagnostics'}, outcome: {kind: 'request-failed'}}});
+    expect(tag(data, 'id="plugin-export-diagnostics-result"')).toContain('role="alert"');
+    expect(tag(data, 'data-testid="plugin-export-diagnostics"')).toContain('aria-describedby="plugin-export-diagnostics-result"');
+    expect(plugin).not.toContain('data-severity');
+    expect(plugin).not.toMatch(/aria-describedby="[^"]*-result"/);
+  });
+  it('shows a stored plugin action result only in the Game plugin card', () => {
+    const {plugin, data} = screenWith({result: {action: {kind: 'retry'}, outcome: {kind: 'request-failed'}}});
+    expect(tag(plugin, 'id="plugin-retry-result"')).toContain('role="alert"');
+    expect(tag(plugin, 'data-testid="plugin-retry"')).toContain('aria-describedby="plugin-retry-result"');
+    expect(data).not.toContain('data-severity');
+    expect(data).not.toContain('plugin-export-diagnostics-result"');
+    expect(data).not.toMatch(/aria-describedby="[^"]*-result"/);
   });
 });

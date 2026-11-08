@@ -22,7 +22,8 @@ export function UninstallCard({language = 'en'}: {language?: AppLanguage}) {
     void window.desktop.uninstallApplication().then(result => {setResult(result); setPending(result.outcome === 'started');},
       () => {setResult('refused'); setPending(false);});
   };
-  return <SettingsSection label={UNINSTALL_STRINGS.title} testId="uninstall-card">
+  // No section name: the row below is labelled with the same title, which would otherwise be announced twice.
+  return <SettingsSection testId="uninstall-card">
     <SettingRow label={UNINSTALL_STRINGS.title} hint={UNINSTALL_STRINGS.warningTitle}>
       <Button size="sm" variant="destructive" disabled={pending} data-testid="uninstall-button" onClick={uninstall}>{pending && !answer ? UNINSTALL_STRINGS.pending : UNINSTALL_STRINGS.button}</Button>
     </SettingRow>
