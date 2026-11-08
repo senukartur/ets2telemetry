@@ -94,3 +94,14 @@ it('shows draft controls and locks layout while presets and sections remain avai
   for (const id of ['overlay-scale-down', 'overlay-scale-up', 'overlay-placement-reset', 'overlay-edit-done', 'overlay-edit-cancel',
     'overlay-preset-everything', 'overlay-switch-cargo']) expect(control(html, id), id).not.toContain('disabled');
 });
+
+it.each(['en', 'ru'] as const)('associates the size actions with the current idle/edit instructions (%s)', language => {
+  const strings = getStrings(language), idle = render(settings(language));
+  const editing = render(settings(language), {active: true, layout: 'strip', scale: 1, placement: 'waiting-for-game'});
+  for (const [html, current, stale] of [[idle, strings.overlaySizeHelp, strings.overlaySizeEditingHelp], [editing, strings.overlaySizeEditingHelp, strings.overlaySizeHelp]]) {
+    expect(html).toContain(`id="overlay-size-help" class="yu-overlay-row-hint">${escaped(current)}</p>`);
+    expect(html).not.toContain(escaped(stale));
+    expect(html.match(/id="overlay-size-help"/g)).toHaveLength(1);
+    expect(html).toContain('aria-describedby="overlay-size-help"');
+  }
+});

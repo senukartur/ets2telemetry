@@ -93,7 +93,7 @@ export function OverlaySettingsCard({settings, edit, onSaved, onRequest, showSav
         </RadioGroup>
       </section>
       <section className="yu-overlay-control-row" aria-labelledby="overlay-scale-label">
-        <div><h3 id="overlay-scale-label">{strings.overlayScaleLabel}</h3><p id="overlay-size-help" className="yu-overlay-row-hint">{strings.overlaySizeHelp}</p></div>
+        <div><h3 id="overlay-scale-label">{strings.overlayScaleLabel}</h3><p id="overlay-size-help" className="yu-overlay-row-hint">{editing ? strings.overlaySizeEditingHelp : strings.overlaySizeHelp}</p></div>
         <div className="yu-overlay-row-actions" aria-describedby="overlay-size-help">
           <Button size="sm" variant="outline" disabled={!editing || busy || scale <= OVERLAY_SCALE_MIN} data-testid="overlay-scale-down"
             onClick={() => editCall(() => window.desktop.setOverlayEditScale(stepOverlayScale(scale, -1)))}>{strings.overlayScaleDown}</Button>

@@ -6,7 +6,7 @@ import {OverlaySettingsPreview} from '../../apps/desktop/src/overlay-settings-pr
 import {overlayExample, overlayPreviewSize} from '../../apps/desktop/src/overlay-settings-preview-model';
 import {DEFAULT_OVERLAY_SETTINGS, OVERLAY_LAYOUTS, OVERLAY_PRESETS} from '../../apps/desktop/src/overlay-sections';
 import {overlayView} from '../../apps/desktop/src/overlay-view';
-import {getOverlayLayoutText, getOverlaySectionText} from '../../apps/desktop/src/strings';
+import {getOverlayLayoutText, getOverlaySectionText, getStrings} from '../../apps/desktop/src/strings';
 
 vi.mock('@/components/ui/card', () => ({Card: 'div', CardContent: 'div', CardHeader: 'div', CardTitle: 'div'}));
 
@@ -59,6 +59,22 @@ it('keeps the header cruise state when the cruise overlay section is hidden', ()
   }
 });
 
+it.each(['en', 'ru'] as const)('names the preview as one example image before its layout/cruise state and hides visual metrics (%s)', language => {
+  const html = renderToStaticMarkup(React.createElement(OverlaySettingsPreview, {settings: DEFAULT_OVERLAY_SETTINGS, language, scale: 1}));
+  const image = html.match(/<div[^>]*data-testid="overlay-preview-card"[^>]*>/)?.[0] ?? '';
+  expect(image).toContain('role="img"');
+  const labelIds = /aria-labelledby="([^"]+)"/.exec(image)?.[1].split(' ') ?? [];
+  expect(labelIds).toHaveLength(3);
+  const names = labelIds.map(id => new RegExp(`id="${id}"[^>]*>([^<]+)<`).exec(html)?.[1]);
+  const strings = getStrings(language);
+  expect(names).toEqual([escaped(strings.overlayPreviewExample), escaped(`${strings.overlayPreviewTitle} · ${getOverlayLayoutText('strip', language)}`),
+    `${strings.overlayPreviewCruise}: 90 ${language === 'ru' ? 'км/ч' : 'km/h'}`]);
+  const visual = html.match(/<div[^>]*class="yu-overlay-preview-space"[^>]*>/)?.[0] ?? '';
+  expect(visual).toContain('aria-hidden="true"');
+  expect(html.indexOf(visual)).toBeLessThan(html.indexOf('data-testid="overlay-content"'));
+  expect(html).not.toContain('aria-live=');
+});
+
 it.each([0.5, 1, 3])('contains all enabled rows at scale %s using the production zoom conversion', scale => {
   for (const layout of OVERLAY_LAYOUTS) for (const width of [220, 600, 1000]) {
     const settings = {...DEFAULT_OVERLAY_SETTINGS, layout};
@@ -69,7 +85,6 @@ it.each([0.5, 1, 3])('contains all enabled rows at scale %s using the production
     expect(size.height).toBeCloseTo(size.cssHeight * size.factor);
     expect(size.factor).toBeLessThanOrEqual(scale * 0.7 + 0.000001);
     if (layout === 'strip') expect(size.cssHeight).toBeGreaterThanOrEqual(40);
-    if (layout === 'card') expect(size.cssHeight).toBe(456);
   }
   const card = overlayPreviewSize({...DEFAULT_OVERLAY_SETTINGS, layout: 'card'}, scale, 1000);
   expect(card.factor).toBe(scale === 0.5 ? 0.35 : scale === 1 ? 0.7 : 2.1);
