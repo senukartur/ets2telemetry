@@ -5,7 +5,7 @@ import {DEFAULT_NOW_PLAYING} from './contract';
 import {positionFromBounds, widgetBounds, type Area, type MediaDisplay} from './placement';
 interface WidgetWindow {
   webContents: {isDestroyed(): boolean};
-  isDestroyed(): boolean; hide(): void; showInactive(): void; setBounds(bounds: Area): void; getBounds(): Area;
+  isDestroyed(): boolean; isVisible(): boolean; hide(): void; showInactive(): void; setBounds(bounds: Area): void; getBounds(): Area;
   setIgnoreMouseEvents(ignore: boolean): void; setFocusable(value: boolean): void; setSkipTaskbar(value: boolean): void; setMovable(value: boolean): void;
   setAlwaysOnTop(value: boolean, level: 'screen-saver'): void; isAlwaysOnTop(): boolean; moveTop(): void;
 }
@@ -31,6 +31,8 @@ export class NowPlayingController {
   private interactive = false;
   private moving = false;
   private retired = false;
+  /** A completed native hide and click-through pass that nothing has undone since. */
+  private concealed = false;
   constructor(private readonly window: WidgetWindow, private readonly screen: WidgetScreen, private readonly changed: () => void) {this.passThrough();}
   configure(settings: NowPlayingSettings): void {if (this.retired) return; this.settings = settings; if (!settings.enabled && this.draft) this.end(); this.place();}
   loaded(ready: boolean): void {if (this.retired) return; this.ready = ready; if (!ready && this.draft) this.end(); this.place();}
@@ -80,16 +82,18 @@ export class NowPlayingController {
     action();
     return this.usable(retiring);
   }
-  private passThrough(retiring = false): void {
+  private passThrough(retiring = false): boolean {
     this.interactive = false;
-    if (!this.apply(() => this.window.setIgnoreMouseEvents(true), retiring)) return;
-    if (!this.apply(() => this.window.setMovable(false), retiring)) return;
-    if (!this.apply(() => this.window.setFocusable(false), retiring)) return;
-    this.apply(() => this.window.setSkipTaskbar(true), retiring);
+    return this.apply(() => this.window.setIgnoreMouseEvents(true), retiring) && this.apply(() => this.window.setMovable(false), retiring) &&
+      this.apply(() => this.window.setFocusable(false), retiring) && this.apply(() => this.window.setSkipTaskbar(true), retiring);
   }
   private hide(retiring = false): void {
     this.visible = false; this.moving = false;
-    if (this.apply(() => this.window.hide(), retiring)) this.passThrough(retiring);
+    // Telemetry repeats this at 20 Hz while the widget stays hidden. The window keeps its click-through state, and
+    // Electron would redo the native work and emit `hide` for a hidden window. Only the visibility is cheap to re-check.
+    if (!retiring && this.concealed && this.usable() && !this.window.isVisible()) return;
+    // A callback of these native calls can place the widget again, so `visible` is read after them.
+    this.concealed = this.apply(() => this.window.hide(), retiring) && this.passThrough(retiring) && !this.visible;
   }
   private place(): void {
     if (!this.usable()) return;
@@ -106,6 +110,7 @@ export class NowPlayingController {
     if (moved && !this.apply(() => this.window.setBounds(bounds))) return;
     const actual = this.window.getBounds();
     if (Object.keys(bounds).some(key => Math.abs(actual[key as keyof Area] - bounds[key as keyof Area]) > 1)) {this.hide(); return;}
+    this.concealed = false;
     if (this.draft && !this.interactive) {
       if (!this.apply(() => this.window.setIgnoreMouseEvents(false))) return;
       if (!this.apply(() => this.window.setFocusable(true))) return;
