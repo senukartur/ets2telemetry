@@ -139,7 +139,9 @@ h1[tabindex="-1"]:focus { outline: none; }
 .yu-journal-mode[data-variant="warn"] { color: var(--yu-warn-fg); }
 .yu-journal-mode[data-variant="ok"] { color: var(--yu-ok-fg); }
 /* `button.` matches the specificity of the global button min-height, which this later rule then overrides for the table only. */
-.yu-journal-table button.yu-info-hint { width: 18px; height: 18px; min-height: 18px; }
+.yu-journal-table button.yu-info-hint { position: relative; width: 18px; height: 18px; min-height: 18px; }
+/* The pointer target stays 32 px high inside the cell's 7 px padding, so the row keeps its height and does not reach the next row. */
+.yu-journal-table button.yu-info-hint::after { content: ""; position: absolute; inset: -7px 0; }
 .yu-journal-job-world .yu-tag[data-slot="badge"] { color: var(--yu-accent-light); }
 .yu-journal-special { display: flex; align-items: center; gap: 4px; margin-top: 2px; font-size: 11px; color: var(--yu-warn-fg); }
 .yu-journal-special svg { flex: none; width: 12px; height: 12px; }
