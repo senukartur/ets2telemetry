@@ -3,7 +3,7 @@ import {dashboardObservation} from './dashboard-observation.mjs';
 import assert from 'node:assert/strict';
 import path from 'node:path';
 import {readFile, writeFile, rename, mkdir, rmdir} from 'node:fs/promises';
-import {screen, settingsPanel, chooseLanguage} from './ui-navigation.mjs';
+import {screen, settingsPanel, chooseLanguage, isolateDashboardPointer} from './ui-navigation.mjs';
 import {until} from './lifecycle-observation.mjs';
 import {clusterCentreProbe, clusterSpeedArcProbe, overlayOverflow, stripNumberProbe, zeroLiveObservation} from './renderer-observation.mjs';
 import {SCALE_RANGE_FRAMES, SCALE_RANGE_ZOOM, SCALE_REFERENCE_FRAMES} from './overlay-observation.mjs';
@@ -701,17 +701,9 @@ export async function runUiSmoke({application, dashboard, overlay, source, sourc
   assert.ok(UI_CASES.includes(config.uiCase));
   Object.assign(record, {case: config.uiCase, screenshots: [], languages: [], sizes, flags: {}});
   const save = (name, language, size, page = dashboard) => capture({page, application, config, record, name, language, size, overlay: page === overlay});
-  // ET-067: Playwright drives the pointer through the renderer, but the dashboard is a real window, so the desktop's own
-  // cursor still reaches it, and Windows moves it there whenever a window changes under a resting cursor. One such move
-  // between a hover and Radix's 150 ms delayed open leaves the hint closed. Click-through for OS input only, so every
-  // pointer event the page sees is the driver's; the overlay keeps its own state. Electron cannot read the setting back,
-  // so the flag only records the call; the hover check under the desktop cursor below shows its effect.
-  const dashboardId = await application.evaluate(({BrowserWindow}) => {
-    const window = BrowserWindow.getAllWindows().find(candidate => !candidate.webContents.getURL().endsWith('?view=overlay'));
-    if (!window) throw new Error('UI_DASHBOARD_WINDOW_MISSING');
-    window.setIgnoreMouseEvents(true);
-    return window.id;
-  });
+  // ET-067 (isolateDashboardPointer): the flag only records the call; the hover check under the desktop cursor below
+  // shows its effect.
+  const dashboardId = await isolateDashboardPointer(application);
   record.flags.osPointerIsolated = true;
   // The source selector remains a working diagnostic control, not an invented reference-screen toolbar.
   if (source) await waitState(dashboard, 'connected');
