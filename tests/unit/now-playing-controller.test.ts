@@ -16,7 +16,8 @@ function game(): LiveTelemetry {
 function harness() {
   let bounds = {x: 0, y: 0, width: 300, height: 78};
   const calls: string[] = [];
-  const window = {isDestroyed: () => false, webContents: {isDestroyed: () => false}, hide: (): void => {calls.push('hide');}, showInactive: () => calls.push('showInactive'),
+  let nativeVisible = false;
+  const window = {isDestroyed: () => false, webContents: {isDestroyed: () => false}, isVisible: () => nativeVisible, hide: (): void => {nativeVisible = false; calls.push('hide');}, showInactive: () => {nativeVisible = true; calls.push('showInactive');},
     setBounds: (value: typeof bounds) => {bounds = value;}, getBounds: () => bounds,
     setIgnoreMouseEvents: (value: boolean) => calls.push(`ignore:${value}`), setFocusable: (value: boolean) => calls.push(`focusable:${value}`),
     setSkipTaskbar: vi.fn(), setMovable: (value: boolean) => calls.push(`movable:${value}`), setAlwaysOnTop: vi.fn(), isAlwaysOnTop: () => false, moveTop: vi.fn()};
@@ -57,6 +58,40 @@ it.each(['background', 'minimized', 'expired', 'disconnected', 'synthetic', 'mis
   expect(calls).not.toContain('showInactive'); expect(calls).toContain('ignore:true');
   expect(calls.at(-1)).toBe('focusable:false');
   controller.updateGame(game()); expect(calls.at(-1)).toBe('showInactive');
+});
+it('makes no native calls for repeated updates while hidden and click-through', () => {
+  const {controller, window, calls} = harness(); controller.update(true); controller.updateGame(game());
+  controller.update(false);
+  expect(calls.slice(-4)).toEqual(['hide', 'ignore:true', 'movable:false', 'focusable:false']);
+  window.setSkipTaskbar.mockClear(); calls.length = 0;
+  for (let tick = 0; tick < 5; tick++) controller.updateGame(initialLive());
+  controller.update(false); controller.configure({...DEFAULT_NOW_PLAYING, enabled: true});
+  expect(calls).toEqual([]); expect(window.setSkipTaskbar).not.toHaveBeenCalled();
+  controller.update(true); controller.updateGame(game()); expect(calls).toEqual(['showInactive']);
+  calls.length = 0; controller.update(false);
+  expect(calls).toEqual(['hide', 'ignore:true', 'movable:false', 'focusable:false']);
+});
+it('re-hides and restores click-through when the window was shown outside the controller', () => {
+  const {controller, window, calls} = harness(); controller.update(false);
+  window.showInactive();
+  calls.length = 0; controller.updateGame(initialLive());
+  expect(calls).toEqual(['hide', 'ignore:true', 'movable:false', 'focusable:false']);
+});
+it('performs the first hide natively, then stays quiet', () => {
+  const {calls} = harness();
+  expect(calls.filter(call => call === 'hide')).toEqual(['hide']);
+});
+it('takes interactive state back to click-through on the hide after an edit, then stays quiet', () => {
+  const {controller, calls} = harness(); controller.begin(true);
+  expect(calls).toContain('ignore:false');
+  calls.length = 0; controller.setOwnForeground(false);
+  expect(calls).toEqual(['hide', 'ignore:true', 'movable:false', 'focusable:false']);
+  calls.length = 0; controller.update(false); controller.setOwnForeground(false); expect(calls).toEqual([]);
+});
+it('retires through the native hide even when the window is already concealed', () => {
+  const {controller, calls} = harness(); controller.update(false); calls.length = 0;
+  controller.retire();
+  expect(calls).toEqual(['hide', 'ignore:true', 'movable:false', 'focusable:false']);
 });
 it('contains the normal panel in the DPI-converted game client without changing saved placement', () => {
   const {controller, window, calls, screen} = harness();
