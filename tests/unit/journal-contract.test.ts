@@ -10,6 +10,7 @@ import {HARD_MODE_CONFIG} from '../shared/hard-mode';
 
 const OTHER_TRIP = '7a000000-0000-4000-8000-000000000002';
 const MAX_ROW = '9223372036854775807', MAX_EVENT = '18446744073709551614';
+const LIST_CURSOR = 'l5:00000000-0000-4000-8000-000000000001:5:9:any.any.any.unknown.other';
 
 describe('main parses each journal invoke with its exact argument count and fixes the page size (J10)', () => {
   it.each<[string, Parameters<typeof journalRequest>[0], unknown[], JournalQuery]>([
@@ -17,6 +18,8 @@ describe('main parses each journal invoke with its exact argument count and fixe
     ['list-trips with every filter', 'trips', [{cursor: MAX_ROW, game: 'ats', outcome: 'none', completeness: 'unknown'}],
       {kind: 'trips', query: {cursor: MAX_ROW, game: 'ats', outcome: 'none', completeness: 'unknown'}}],
     ['list-trips with an undefined filter field', 'trips', [{game: undefined, outcome: 'open'}], {kind: 'trips', query: {outcome: 'open'}}],
+    ['list-trips with mode and job type', 'trips', [{mode: 'convoy', jobType: 'world-of-trucks'}], {kind: 'trips', query: {mode: 'convoy', jobType: 'world-of-trucks'}}],
+    ['list-trips with a list cursor', 'trips', [{cursor: LIST_CURSOR, mode: 'unknown', jobType: 'other'}], {kind: 'trips', query: {cursor: LIST_CURSOR, mode: 'unknown', jobType: 'other'}}],
     ['get-trip', 'trip', [TRIP], {kind: 'trip', tripUuid: TRIP}],
     ['list-events, first page', 'events', [TRIP, null], {kind: 'events', tripUuid: TRIP, page: {limit: 100}}],
     ['list-events after the last eventSeq', 'events', [TRIP, MAX_EVENT], {kind: 'events', tripUuid: TRIP, page: {cursor: MAX_EVENT, limit: 100}}],
@@ -34,6 +37,9 @@ describe('main parses each journal invoke with its exact argument count and fixe
     ['list-trips with an unlisted game', 'trips', [{game: 'ets'}]],
     ['list-trips with an unlisted outcome', 'trips', [{outcome: 'open,delivered'}]],
     ['list-trips with an unlisted completeness', 'trips', [{completeness: 'full'}]],
+    ['list-trips with an unlisted mode', 'trips', [{mode: 'coop'}]],
+    ['list-trips with an unlisted job type', 'trips', [{jobType: 'external_market'}]],
+    ['list-trips with a retired l4 cursor', 'trips', [{cursor: 'l4:00000000-0000-4000-8000-000000000001:5:9:any.any.any'}]],
     ['list-trips with cursor 0', 'trips', [{cursor: '0'}]],
     ['list-trips with a cursor beyond 2^63 - 1', 'trips', [{cursor: '9223372036854775808'}]],
     ['list-trips with a numeric cursor', 'trips', [{cursor: 5}]],
@@ -175,7 +181,15 @@ describe('main accepts a service reply only when it answers the request exactly 
     // ET-072: the job summary's market is forwarded raw, up to the protocol's id bound; an unknown value is not refused.
     ['a trip whose job market is 128 bytes', TRIPS, changed(TRIP_PAGE, p => { p.trips[0].job.market = {available: true, value: 'é'.repeat(64)}; })],
     ['a trip of an unknown job market without a special-job flag', TRIPS, changed(TRIP_PAGE, p => {
-      p.trips[0].job.market = {available: true, value: 'future_market'}; p.trips[0].job.isSpecialJob = {available: false, reason: 'not-supported'} as never; })]
+      p.trips[0].job.market = {available: true, value: 'future_market'}; p.trips[0].job.isSpecialJob = {available: false, reason: 'not-supported'} as never; })],
+    // ET-076: every row answers the mode and job type filter; an unavailable or unlisted market is `other`.
+    ['a trip of the filtered mode', {kind: 'trips', query: {mode: 'unknown'}}, TRIP_PAGE],
+    ['a trip of the filtered job type', {kind: 'trips', query: {jobType: 'freight-market'}}, TRIP_PAGE],
+    ['an unavailable market under the other job type', {kind: 'trips', query: {jobType: 'other'}}, changed(TRIP_PAGE, p => { p.trips[0].job.market = {available: false, reason: 'not-supported'} as never; })],
+    ['an unlisted market under the other job type', {kind: 'trips', query: {jobType: 'other'}}, changed(TRIP_PAGE, p => { p.trips[0].job.market = {available: true, value: 'foo_market'}; })],
+    ['an external market under World of Trucks', {kind: 'trips', query: {jobType: 'world-of-trucks'}}, changed(TRIP_PAGE, p => { p.trips[0].job.market = {available: true, value: 'external_market'}; })],
+    ['a first page with totals', TRIPS, {...TRIP_PAGE, totals: {trips: 1, recordedSeconds: 3_600}}],
+    ['a full first page whose totals count more trips', TRIPS, {...TRIP_PAGE, trips: Array(50).fill(LIST_ITEM), nextCursor: '10', totals: {trips: 130, recordedSeconds: 0}}]
   ])('forwards %s unchanged', (_name, query, value) => {
     expect(parseJournalReply(query, {ok: true, value})).toEqual({ok: true, value});
   });
@@ -204,6 +218,15 @@ describe('main accepts a service reply only when it answers the request exactly 
     ['a trip of another game than the filter', {kind: 'trips', query: {game: 'ats'}}, TRIP_PAGE],
     ['a trip of another outcome than the filter', {kind: 'trips', query: {outcome: 'delivered'}}, TRIP_PAGE],
     ['a trip of another completeness than the filter', {kind: 'trips', query: {completeness: 'complete'}}, TRIP_PAGE],
+    ['a trip of another mode than the filter', {kind: 'trips', query: {mode: 'truckersmp'}}, TRIP_PAGE],
+    ['a trip of another job type than the filter', {kind: 'trips', query: {jobType: 'quick-job'}}, TRIP_PAGE],
+    ['an unavailable market under World of Trucks', {kind: 'trips', query: {jobType: 'world-of-trucks'}}, changed(TRIP_PAGE, p => { p.trips[0].job.market = {available: false, reason: 'not-supported'} as never; })],
+    ['an unlisted market under a listed job type', {kind: 'trips', query: {jobType: 'freight-market'}}, changed(TRIP_PAGE, p => { p.trips[0].job.market = {available: true, value: 'foo_market'}; })],
+    ['totals on a later page', {kind: 'trips', query: {cursor: '60'}}, {...TRIP_PAGE, totals: {trips: 1, recordedSeconds: 0}}],
+    ['totals below the page size', TRIPS, {...TRIP_PAGE, trips: Array(2).fill(LIST_ITEM), totals: {trips: 1, recordedSeconds: 0}}],
+    ['totals other than the rows of the last page', TRIPS, {...TRIP_PAGE, totals: {trips: 2, recordedSeconds: 0}}],
+    ['a fractional totals count', TRIPS, {...TRIP_PAGE, totals: {trips: 1, recordedSeconds: 0.5}}],
+    ['totals with an extra key', TRIPS, {...TRIP_PAGE, totals: {trips: 1, recordedSeconds: 0, hours: 0}}],
     ['a next trip cursor at the requested one', {kind: 'trips', query: {cursor: '60'}}, {...TRIP_PAGE, trips: Array(50).fill(LIST_ITEM), nextCursor: '60'}],
     ['a trip row with a process id', TRIPS, changed(TRIP_PAGE, p => { (p.trips[0] as Record<string, unknown>).processId = 4242; })],
     ['a trip row with a path', TRIPS, changed(TRIP_PAGE, p => { (p as Record<string, unknown>).path = 'C:\\Users\\owner'; })],

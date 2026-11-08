@@ -185,7 +185,7 @@ describe('ET-016 journal queries through the production recording wiring', () =>
     await expect(s.read(TRIPS)).resolves.toEqual({ok: false, code: 'DATABASE_OPENING'});
     traced.release();
     await until(() => s.runtime.history.state === 'open', 'the database open', HANG_GUARD_MS);
-    await expect(s.read(TRIPS)).resolves.toEqual({ok: true, value: {database: SYNTHETIC_V3, trips: [], nextCursor: null}});
+    await expect(s.read(TRIPS)).resolves.toEqual({ok: true, value: {database: SYNTHETIC_V3, trips: [], nextCursor: null, totals: {trips: 0, recordedSeconds: 0}}});
     expect(timeline.filter(line => /^(held|done) /.test(line))).toEqual(['held open', 'done open', 'done journalTrips']);
     // Once the orderly stop began, reads are refused.
     await s.stop();

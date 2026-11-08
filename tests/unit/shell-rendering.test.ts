@@ -3,6 +3,7 @@ import {renderToStaticMarkup} from 'react-dom/server';
 import {expect, it, vi} from 'vitest';
 import type {AppLanguage} from '../../packages/contracts/src';
 import {initialDashboardUploadStatus} from '../../packages/contracts/src/dashboard-upload';
+import {ShellSlot, ShellSlotsProvider} from '../../apps/desktop/src/shell/shell-slots';
 import {SidebarNav} from '../../apps/desktop/src/shell/sidebar-nav';
 import {TopBar} from '../../apps/desktop/src/shell/top-bar';
 import {SyncChip} from '../../apps/desktop/src/dashboard-upload/sync-chip';
@@ -61,4 +62,13 @@ it('shows the site sync chip last and only when synchronization is configured', 
   const html = bar('live', 'en', React.createElement(SyncChip, {state: configured, language: 'en', onOpen: () => undefined}));
   expect(html).toMatch(/<button type="button" class="yu-sync-chip"[^>]*data-testid="shell.status.sync"[^>]*aria-label="Account &amp; sync: [^"]+"/);
   expect([...html.matchAll(/data-testid="(shell\.status\.[a-zA-Z]+)"/g)].map(match => match[1]).at(-1)).toBe('shell.status.sync');
+});
+
+it('gives a page a place at the end of the top bar, and renders a slot only once the shell has mounted it (ET-076)', () => {
+  const html = bar('journal', 'en');
+  expect(html).toContain('<div class="yu-topbar-actions"></div>');
+  expect(html.indexOf('yu-topbar-actions')).toBeGreaterThan(html.lastIndexOf('shell.status.'));
+  const content = React.createElement('span', null, 'Refresh');
+  expect(renderToStaticMarkup(React.createElement(ShellSlot, {name: 'actions', children: content}))).toBe('');
+  expect(renderToStaticMarkup(React.createElement(ShellSlotsProvider, {actions: null, subline: null, children: React.createElement(ShellSlot, {name: 'subline', children: content})}))).toBe('');
 });

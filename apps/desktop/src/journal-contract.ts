@@ -6,7 +6,7 @@
 // it. See docs/journal.md#ipc-methods-and-codes-j10-j11.
 import type {JournalCallCode, JournalCallResult, JournalDatabase, JournalSample, JournalStorageCode, JournalTripsQuery} from '../../../packages/contracts/src';
 import {
-  isJournalListCursor, isJournalSnapshotCursor, journalCursorPosition, isJournalEventCursor, isJournalRowCursor, isJournalTripsQuery, isJournalUuid, JOURNAL_EVENT_LIMITS, JOURNAL_INTERVAL_LIMITS, JOURNAL_SAMPLE_LIMITS,
+  journalJobFilterOf, isJournalListCursor, isJournalSnapshotCursor, journalCursorPosition, isJournalEventCursor, isJournalRowCursor, isJournalTripsQuery, isJournalUuid, JOURNAL_EVENT_LIMITS, JOURNAL_INTERVAL_LIMITS, JOURNAL_SAMPLE_LIMITS,
   validateJournalEventPage, validateJournalIntervalPage, validateJournalTripDetail, validateJournalTripPage, type JournalPageQuery, type JournalTripListItem
 } from '../../../packages/contracts/src/journal';
 import {ID_BYTES, NAME_BYTES} from '../../../packages/contracts/src/protocol-v1';
@@ -50,7 +50,7 @@ type PageKind = Extract<JournalQuery, {page: JournalPageQuery}>['kind'];
 
 const isRecord = (value: unknown): value is Record<string, unknown> => typeof value === 'object' && value !== null && !Array.isArray(value);
 const hasExactly = (value: Record<string, unknown>, keys: readonly string[]) => Object.keys(value).length === keys.length && keys.every(key => Object.hasOwn(value, key));
-const TRIP_FILTERS = ['cursor', 'game', 'outcome', 'completeness'] as const;
+const TRIP_FILTERS = ['cursor', 'game', 'outcome', 'completeness', 'mode', 'jobType'] as const;
 const PAGE_LIMITS: Readonly<Record<PageKind, readonly number[]>> = {events: JOURNAL_EVENT_LIMITS, intervals: JOURNAL_INTERVAL_LIMITS, samples: JOURNAL_SAMPLE_LIMITS};
 const pageCursor = (kind: PageKind, value: unknown) => isJournalSnapshotCursor(value) || (kind === 'events' ? isJournalEventCursor(value) : isJournalRowCursor(value));
 
@@ -208,12 +208,15 @@ function checkValue(query: JournalQuery, value: unknown): void {
     return;
   }
   case 'trips': {
-    const page = validateJournalTripPage(value), {cursor, game, outcome, completeness} = query.query;
+    const page = validateJournalTripPage(value), {cursor, game, outcome, completeness, mode, jobType} = query.query;
     for (const trip of page.trips) {
       rowTexts(trip);
       // The filter applies in SQL before the limit; a row that does not match it answers another request.
-      if ((game !== undefined && trip.game !== game) || (outcome !== undefined && trip.outcome !== outcome) || (completeness !== undefined && trip.recordingCompleteness !== completeness)) bad();
+      if ((game !== undefined && trip.game !== game) || (outcome !== undefined && trip.outcome !== outcome) || (completeness !== undefined && trip.recordingCompleteness !== completeness)
+        || (mode !== undefined && trip.gameMode.mode !== mode) || (jobType !== undefined && journalJobFilterOf(trip.job.market) !== jobType)) bad();
     }
+    // Totals count the same filtered list, on the first page only: at least this page, and exactly it when no page follows.
+    if (page.totals !== undefined && (cursor !== undefined || page.totals.trips < page.trips.length || (page.nextCursor === null && page.totals.trips !== page.trips.length))) bad();
     // Newest first: the next page starts below this one, which starts below the cursor.
     if (cursor !== undefined && page.nextCursor !== null && BigInt(isJournalListCursor(page.nextCursor) ? page.nextCursor.split(':')[3] : page.nextCursor) >= BigInt(isJournalListCursor(cursor) ? cursor.split(':')[3] : cursor)) bad();
     return;
