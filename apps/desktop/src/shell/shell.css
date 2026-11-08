@@ -239,25 +239,61 @@ button[aria-disabled="true"], [role="switch"][aria-disabled="true"] { cursor: no
 /* An empty region takes no space between its trigger and the next control. */
 .yu-action-result-region:not(:has(.yu-action-result)) { margin-block: 0; }
 
-/* Overlay settings use the page's ordinary scroll area, including at renderer zoom. */
-.yu-overlay-settings { min-width: 0; container-type: inline-size; }
-.yu-overlay-block { display: grid; gap: 12px; min-width: 0; }
-.yu-overlay-block + .yu-overlay-block { border-top: 1px solid var(--yu-divider); padding-top: 18px; }
-.yu-overlay-section-groups { display: grid; grid-template-columns: repeat(2,minmax(0,1fr)); gap: 20px 24px; }
-.yu-overlay-section-row { display: grid; grid-template-columns: auto minmax(0,1fr); align-items: center; gap: 10px; }
-.yu-overlay-section-row label { line-height: 1.5; flex-wrap: wrap; }
-.yu-overlay-section-row label svg { flex: none; }
-.yu-overlay-settings button:not([role="radio"]):not([role="switch"]) { white-space: normal; height: auto; }
-@container (max-width: 540px) {
-  .yu-overlay-section-groups { grid-template-columns: minmax(0,1fr); }
+/* Overlay settings share the ordinary page scroll area and keep one mounted controller. */
+.yu-overlay-settings {display:grid;gap:16px;min-width:0;container-type:inline-size}
+.yu-overlay-controls [data-slot="card-content"] {padding-block:0}
+.yu-overlay-control-row {display:grid;grid-template-columns:minmax(140px,1fr) minmax(0,2fr);align-items:center;gap:12px 24px;min-width:0;padding-block:14px}
+.yu-overlay-control-row+.yu-overlay-control-row {border-top:1px solid var(--yu-divider)}
+.yu-overlay-control-row h3 {margin:0;font-size:13px;font-weight:500}
+.yu-overlay-control-row>[role="switch"] {justify-self:end}
+.yu-overlay-row-hint {font-size:11px;color:var(--yu-text-muted);margin:4px 0 0;max-width:32ch;line-height:1.4}
+.yu-overlay-row-actions {display:flex;flex-wrap:wrap;align-items:center;justify-content:flex-end;gap:6px;min-width:0}
+.yu-overlay-scale-value {min-width:9ch;text-align:center;font-variant-numeric:tabular-nums;font-size:12px}
+.yu-overlay-opacity-actions {display:grid;grid-template-columns:minmax(80px,1fr) 5ch;align-items:center;gap:14px;width:min(100%,340px);justify-self:end}
+.yu-overlay-opacity-actions>span {text-align:right;font-size:12px}
+.yu-overlay-settings .yu-layout-options {grid-template-columns:repeat(4,minmax(0,1fr));gap:8px}
+.yu-overlay-settings .yu-layout-option {padding:6px;border-radius:var(--yu-radius-control)}
+.yu-overlay-settings .yu-layout-option label {padding:0;gap:4px;justify-items:center;font-size:11px;min-height:62px}
+.yu-overlay-settings .yu-layout-option>[role="radio"] {right:5px;bottom:5px;width:12px;height:12px;min-height:12px}
+.yu-overlay-settings .yu-layout-option:focus-within {outline:2px solid var(--yu-accent-light);outline-offset:2px}
+.yu-overlay-settings .yu-layout-preview {height:38px}
+.yu-overlay-card-heading {display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:10px}
+.yu-overlay-card-heading h3 {margin:0;font-size:13px}
+.yu-overlay-section-title {display:flex;align-items:center;flex-wrap:wrap;gap:10px}
+.yu-overlay-section-title>span {font-size:11px;color:var(--yu-text-muted)}
+.yu-overlay-section-groups {display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:18px 24px;align-items:start}
+.yu-overlay-section-groups>[data-group="job"] {grid-column:3;grid-row:1/3}
+.yu-overlay-section-groups>[data-group="time"] {grid-column:1;grid-row:2}
+.yu-overlay-section-groups h4 {margin:0 0 7px;color:var(--yu-text-muted);font-size:11px;text-transform:uppercase;letter-spacing:.5px}
+.yu-overlay-section-row {display:grid;grid-template-columns:minmax(0,1fr) auto;align-items:center;gap:8px;min-height:34px}
+.yu-overlay-section-row label {line-height:1.35;font-size:12px}
+.yu-overlay-section-row label svg {flex:none;color:var(--yu-text-muted);width:14px;height:14px}
+.yu-overlay-settings button:not([role="radio"]):not([role="switch"]) {white-space:normal;height:auto}
+.yu-overlay-settings :is(button,[role="slider"]) {scroll-margin-block:8px}
+.yu-overlay-cruise-badge {border:1px solid var(--yu-ok-border);background:var(--yu-ok-bg);color:var(--yu-ok-fg);border-radius:var(--yu-radius-control);padding:3px 8px;font-size:11px}
+.yu-overlay-cruise-badge[data-state="off"],.yu-overlay-cruise-badge[data-state="unavailable"] {border-color:var(--yu-neutral-border);background:var(--yu-neutral-bg);color:var(--yu-neutral-fg)}
+.yu-overlay-scene {position:relative;isolation:isolate;min-height:190px;padding:18px 18px 36px;border:1px solid var(--yu-border);border-radius:var(--yu-radius-control);background:linear-gradient(180deg,var(--yu-bg-chrome),var(--yu-bg-input));overflow:hidden}
+.yu-overlay-scene::before {content:'';position:absolute;z-index:-1;inset:35% 0 0;background:linear-gradient(100deg,transparent 15%,var(--yu-neutral-bg) 15% 85%,transparent 85%);border-top:1px solid var(--yu-divider)}
+.yu-overlay-scene::after {content:'';position:absolute;z-index:-1;left:50%;top:45%;bottom:0;border-left:2px dashed var(--yu-border-input);transform:rotate(12deg)}
+.yu-overlay-preview-space {min-height:130px;display:flex;align-items:flex-start;justify-content:flex-start;min-width:0}
+.yu-overlay-preview-space[data-layout="strip"] {justify-content:center}
+.yu-overlay-preview-space[data-layout="card"] {justify-content:flex-end}
+.yu-overlay-preview-bounds {position:relative;flex:none}
+.yu-overlay-example.overlay {position:absolute;left:0;top:0;overflow:visible;transform-origin:top left;pointer-events:none;user-select:none}
+.yu-overlay-example-caption {position:absolute;bottom:9px;right:12px;left:12px;text-align:right;margin:0;font-size:10px;color:var(--yu-text-muted)}
+@container (max-width:720px) {
+  .yu-overlay-control-row {grid-template-columns:minmax(100px,1fr) minmax(0,2fr);gap:12px}
+  .yu-overlay-section-groups {grid-template-columns:repeat(2,minmax(0,1fr))}
+  .yu-overlay-section-groups>[data-group="job"],.yu-overlay-section-groups>[data-group="time"] {grid-column:auto;grid-row:auto}
 }
-@container (max-width: 320px) {
-  .yu-overlay-settings .yu-layout-options { grid-template-columns: minmax(0,1fr); }
+@container (max-width:480px) {
+  .yu-overlay-control-row {grid-template-columns:minmax(0,1fr)}
+  .yu-overlay-control-row:first-child {grid-template-columns:minmax(0,1fr) auto}
+  .yu-overlay-row-actions {justify-content:flex-start}
+  .yu-overlay-opacity-actions {width:100%;justify-self:stretch}
+  .yu-overlay-section-groups {grid-template-columns:minmax(0,1fr)}
+  .yu-overlay-settings .yu-layout-options {grid-template-columns:repeat(2,minmax(0,1fr))}
 }
-
-/* Keep keyboard focus rings clear of the scroll viewport at fractional renderer zoom (ET-049). */
-.yu-overlay-settings :is(button, [role="slider"]) { scroll-margin-block: 8px; }
-
 /* ET-057: explanations live behind an Info icon (info-hint.tsx); the icon keeps a 22 px target next to its label. */
 /* Relative, so the hidden description stays inside its scroll container instead of extending the window. */
 .yu-info-hint-wrap { position: relative; display: inline-flex; align-items: center; vertical-align: middle; }

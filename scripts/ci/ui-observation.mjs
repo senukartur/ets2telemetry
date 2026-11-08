@@ -34,6 +34,7 @@ async function observeOpacityControl({dashboard, config, language, record}) {
     const candidate = Number(await slider.getAttribute('aria-valuenow')); assert.ok(candidate < 80 && candidate >= 40);
     assert.equal(await displayed.isVisible(), true, 'UI_OPACITY_DRAFT_VALUE_VISIBLE');
     assert.equal(await displayed.innerText(), `${candidate}%`, 'UI_OPACITY_DRAFT_VALUE');
+    assert.equal(await dashboard.getByTestId('overlay-preview').locator('[data-testid="overlay-content"]').evaluate(node => node.style.getPropertyValue('--yu-ov-panel')), `rgba(11, 17, 32, ${candidate / 100})`, 'UI_PREVIEW_OPACITY_DRAFT');
     assert.equal((await value()).settings.overlay.backgroundOpacity, 80, 'Held drag must not write');
     await dashboard.mouse.up(); await wait(candidate);
     assert.equal(await displayed.innerText(), `${candidate}%`);
@@ -66,6 +67,83 @@ async function observeOpacitySurfaces({dashboard, overlay, layout, language, siz
   await dashboard.evaluate(() => globalThis.desktop.setOverlayBackgroundOpacity(80));
   await overlay.waitForFunction(() => globalThis.getComputedStyle(globalThis.document.querySelector('[data-testid="overlay-content"]')).getPropertyValue('--yu-ov-panel').includes('0.8'));
   record.flags.backgroundOpacityOverlay = true;
+}
+
+/** Settings examples share production content but never subscribe to the isolated synthetic source. */
+async function observeOverlayPreview({application, dashboard, overlay, source, language, size, record, save}) {
+  await settingsPanel(dashboard, 'overlay');
+  const state = () => dashboard.evaluate(() => globalThis.desktop.getAppState());
+  const initial = (await state()).settings.overlay;
+  const preview = dashboard.getByTestId('overlay-preview');
+  const ids = Object.keys(initial.sections);
+  const probe = () => preview.evaluate(root => {
+    const bounds = root.parentElement.getBoundingClientRect(), scene = root.closest('[data-testid="overlay-preview-scene"]').getBoundingClientRect();
+    const outside = [...root.querySelectorAll('[data-testid^="overlay-section-"],[data-testid="overlay-hard-mode"]')].filter(node => {
+      const box = node.getBoundingClientRect();
+      return box.width <= 0 || box.height <= 0 || box.left < bounds.left - 1 || box.right > bounds.right + 1 || box.top < bounds.top - 1 || box.bottom > bounds.bottom + 1;
+    }).map(node => node.getAttribute('data-testid'));
+    return {layout: root.getAttribute('data-layout'), scale: root.getAttribute('data-scale'), outside,
+      fitsScene: bounds.left >= scene.left && bounds.right <= scene.right && bounds.top >= scene.top && bounds.bottom <= scene.bottom,
+      sections: [...root.querySelectorAll('[data-testid^="overlay-section-"]')].map(node => node.getAttribute('data-testid').slice('overlay-section-'.length)),
+      width: bounds.width, height: bounds.height};
+  });
+  const contained = async name => {
+    const result = await until(probe, value => value.outside.length === 0 && value.fitsScene, `UI_PREVIEW_CONTAINED_${name}_${language}`);
+    (record.overlayPreview ??= []).push({language, ...size, name, ...result});
+    return result;
+  };
+  await dashboard.getByTestId('overlay-preset-everything').click();
+  await until(state, value => Object.values(value.settings.overlay.sections).every(Boolean), 'UI_PREVIEW_ALL');
+  for (const layout of layouts) {
+    await dashboard.locator(`#overlay-layout-${layout}`).focus(); await dashboard.keyboard.press('Space');
+    await until(() => preview.getAttribute('data-layout'), value => value === layout, 'UI_PREVIEW_LAYOUT');
+    const result = await contained(layout);
+    assert.deepEqual([...result.sections].sort(), [...ids].sort());
+    assert.equal(await preview.getByTestId('overlay-speed').textContent(), '84');
+    assert.equal(await preview.getByTestId('overlay-hard-mode').count(), 1);
+    assert.equal(await dashboard.getByTestId('overlay-sections-count').innerText(), language === 'en' ? 'shown 16 of 16' : 'показано 16 из 16');
+    await dashboard.getByTestId('overlay-preview-card').scrollIntoViewIfNeeded();
+    await save(`settings-preview-${layout}`, language, size);
+  }
+  source.setReading(10, 123);
+  try {
+    await until(() => overlay.getByTestId('overlay-speed').textContent(), value => value === '36', 'UI_PREVIEW_SOURCE_CHANGED');
+    assert.equal(await preview.getByTestId('overlay-speed').textContent(), '84');
+    assert.equal(await preview.getByTestId('overlay-fuel').textContent(), '620');
+  } finally {source.setReading(25, 73);}
+  await dashboard.getByTestId('overlay-preset-driving-only').click();
+  await until(() => preview.getByTestId('overlay-section-cargo').count(), value => value === 0, 'UI_PREVIEW_PRESET');
+  await dashboard.getByTestId('overlay-switch-cargo').click();
+  await until(() => preview.getByTestId('overlay-section-cargo').count(), value => value === 1, 'UI_PREVIEW_SECTION');
+  await dashboard.getByTestId('overlay-preset-everything').click();
+  await dashboard.locator('#overlay-layout-strip').click();
+  await until(() => preview.getAttribute('data-layout'), value => value === 'strip', 'UI_PREVIEW_STRIP');
+  await dashboardZoom(application, 2);
+  try {await contained('narrow-strip'); await save('settings-preview-narrow', language, size);}
+  finally {await dashboardZoom(application, 1);}
+  await dashboard.getByTestId('overlay-edit-start').click();
+  await until(state, value => value.overlayEdit.active, 'UI_PREVIEW_EDIT');
+  await dashboard.evaluate(() => globalThis.desktop.setOverlayEditScale(3));
+  await until(() => preview.getAttribute('data-scale'), value => value === '3', 'UI_PREVIEW_SCALE_DRAFT');
+  await contained('large-strip');
+  await dashboard.getByTestId('overlay-edit-cancel').click();
+  await until(() => preview.getAttribute('data-scale'), value => value === String(initial.placements.strip.scale), 'UI_PREVIEW_CANCEL');
+  await dashboard.locator('#overlay-layout-card').click();
+  await dashboard.getByTestId('overlay-edit-start').click();
+  await until(state, value => value.overlayEdit.active, 'UI_PREVIEW_CARD_EDIT');
+  await dashboard.evaluate(() => globalThis.desktop.setOverlayEditScale(3));
+  await until(() => preview.getAttribute('data-scale'), value => value === '3', 'UI_PREVIEW_CARD_SCALE');
+  await contained('large-card');
+  await dashboard.getByTestId('overlay-edit-done').click();
+  await until(state, value => !value.overlayEdit.active && value.settings.overlay.placements.card.scale === 3, 'UI_PREVIEW_DONE');
+  assert.equal(await preview.getAttribute('data-scale'), '3');
+  await dashboard.getByTestId('overlay-edit-start').click();
+  await until(state, value => value.overlayEdit.active, 'UI_PREVIEW_RESTORE_EDIT');
+  await dashboard.evaluate(scale => globalThis.desktop.setOverlayEditScale(scale), initial.placements.card.scale);
+  await dashboard.getByTestId('overlay-edit-done').click();
+  await until(state, value => !value.overlayEdit.active && value.settings.overlay.placements.card.scale === initial.placements.card.scale, 'UI_PREVIEW_RESTORED_SCALE');
+  await dashboard.evaluate(async initial => {await globalThis.desktop.setOverlaySections(initial.sections); await globalThis.desktop.setOverlayLayout(initial.layout);}, initial);
+  record.flags.overlayExamplePreview = true;
 }
 
 export const UI_CASES = ['shell', 'live', 'journal', 'settings', 'overlay'];
@@ -1108,6 +1186,7 @@ export async function runUiSmoke({application, dashboard, overlay, source, sourc
         assert.ok((await dashboard.getByTestId('uninstall-result').innerText()).includes(language === 'en' ? 'installed copy' : 'установленной копии'));
         Object.assign(record.flags, {allPanels: true, allSections: true, committedSave: true, sourceSelector: true, uninstallRefusal: true});
       } else {
+        if (size === sizes[0]) await observeOverlayPreview({application, dashboard, overlay, source, language, size, record, save});
         for (const layout of layouts) {
           await settingsPanel(dashboard, 'overlay'); await dashboard.locator(`#overlay-layout-${layout}`).click();
           await until(() => dashboard.evaluate(() => globalThis.desktop.getAppState()), state => state.settings.overlay.layout === layout, 'UI_LAYOUT_SAVED');

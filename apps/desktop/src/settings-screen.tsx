@@ -66,8 +66,9 @@ export function SettingsScreen(props: SettingsScreenProps) {
       <button key={id} type="button" aria-current={panel === id ? 'page' : undefined} data-testid={`settings.nav.${id}`} onClick={() => onPanel(id)}>{t(`s.${id}`, undefined, language)}</button>)}</nav>
     <div className="yu-settings-panels">
       <div hidden={panel !== 'general'} className="yu-settings-panel" data-testid="settings.general"><GeneralPanel {...props} /></div>
-      {/* ET-079 restyles the overlay card; until then the panel hosts it unchanged, without a panel header. */}
+
       <div hidden={panel !== 'overlay'} className="yu-settings-panel" data-testid="settings.overlay">
+        <SettingsPanelHeader title={t('s.overlay', undefined, language)} />
         <OverlaySettingsCard settings={props.app?.settings} edit={props.app?.overlayEdit} onSaved={props.onSaved} onRequest={() => props.onRequest('overlay')} showSaveError={props.lastCard === 'overlay'} />
       </div>
       <div hidden={panel !== 'plugin'} className="yu-settings-panel" data-testid="settings.plugin"><PluginPanel {...props} /></div>

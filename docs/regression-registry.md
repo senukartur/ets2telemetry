@@ -184,6 +184,7 @@ Columns:
 | `tests/unit/overlay-smoke-source.test.ts` | Node unit (Vitest) | smoke evidence: REG-009, REG-011, REG-016, REG-017 | R | ET-008 (#21) | PR (tests job, `npm test`) | — |
 | `tests/unit/overlay-strip.test.ts` | Node unit (Vitest) | REG-016 | R, F | ET-012c (#76) | PR (tests job, `npm test`) | regression |
 | `tests/unit/overlay-settings-rendering.test.ts` | Node unit (Vitest) | REG-016, REG-017 | R | ET-048 | PR (tests job, `npm test`) | regression |
+| `tests/unit/overlay-settings-preview.test.ts` | Node unit (Vitest) | REG-009, partial REG-016 | R | ET-079 | PR (tests job, `npm test`) | deterministic example data, localization, cruise states, shared content, scale fit and opacity |
 | `tests/unit/overlay-view.test.ts` | Node unit (Vitest) | REG-009, REG-016, REG-017 | R | ET-012a (#70) | PR (tests job, `npm test`) | — |
 | `tests/unit/overlay.test.ts` | Node unit (Vitest) | REG-016 | R, F | ET-008 (#21) | PR (tests job, `npm test`) | security |
 | `tests/unit/package-integrity.test.ts` | Node unit (Vitest) | REG-017 | R | ET-001 (#5) | PR (tests job, `npm test`) | security |

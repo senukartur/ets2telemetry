@@ -47,6 +47,10 @@ it.each(['en', 'ru'] as const)('renders every overlay control together with uniq
     const requirement = OVERLAY_SECTION_REQUIREMENTS[id];
     if (requirement) expect(html).not.toContain(escaped(getOverlayRequirementText(requirement, language)));
   }
+  expect(html).toContain('data-testid="overlay-sections-count"');
+  expect(html).toContain(language === 'ru' ? 'показано 16 из 16' : 'shown 16 of 16');
+  expect(html.match(/class="yu-layout-option" data-selected="true"/g)).toHaveLength(1);
+  expect(html).toContain('data-testid="overlay-preview" data-layout="strip"');
 });
 
 it('keeps final-section and read-only guards on the unified controls', () => {
@@ -56,10 +60,31 @@ it('keeps final-section and read-only guards on the unified controls', () => {
   expect(control(single, 'overlay-switch-speed')).toContain('disabled');
   expect(control(single, 'overlay-switch-rpm')).not.toContain('disabled');
   expect(single).toContain('data-testid="overlay-last-section"');
+  expect(single).toContain('shown 1 of 16');
   const locked = render({...view, writable: false});
   for (const id of ['overlay-enabled', 'overlay-edit-start', ...OVERLAY_SECTION_IDS.map(id => `overlay-switch-${id}`),
     ...Object.keys(OVERLAY_PRESETS).map(id => `overlay-preset-${id}`), 'overlay-layout']) expect(control(locked, id), id).toContain('disabled');
   expect(control(render({...view, overlay: {...view.overlay, enabled: false}}), 'overlay-edit-start')).toContain('disabled');
+});
+
+it('always shows saved size and disabled draft actions until Move starts the explicit edit session', () => {
+  const view = settings('en');
+  view.overlay = {...view.overlay, layout: 'card', placements: {...view.overlay.placements, card: {x: 1, y: 0, scale: 1.4}}};
+  const html = render(view);
+  expect(html).toContain('data-testid="overlay-saved-scale">Scale: 140%');
+  expect(html).toContain('data-testid="overlay-preview" data-layout="card" data-scale="1.4"');
+  for (const id of ['overlay-scale-down', 'overlay-scale-up', 'overlay-placement-reset']) expect(control(html, id)).toContain('disabled');
+  expect(html).toContain('Choose Move overlay to change size. Reset restores position and size.');
+  expect(html).not.toContain('data-testid="overlay-edit-scale"');
+});
+
+it.each([0.5, 3])('shows main-owned draft scale %s in the row and preview with range guards', scale => {
+  const html = render(settings('en'), {active: true, layout: 'strip', scale, placement: 'waiting-for-game'});
+  expect(html).toContain(`data-testid="overlay-edit-scale">Scale: ${scale * 100}%`);
+  expect(html).toContain(`data-testid="overlay-preview" data-layout="strip" data-scale="${scale}"`);
+  expect(control(html, 'overlay-scale-down').includes('disabled')).toBe(scale === 0.5);
+  expect(control(html, 'overlay-scale-up').includes('disabled')).toBe(scale === 3);
+  expect(html).not.toContain('data-testid="overlay-saved-scale"');
 });
 
 it('shows draft controls and locks layout while presets and sections remain available during edit', () => {

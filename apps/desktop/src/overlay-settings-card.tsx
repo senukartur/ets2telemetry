@@ -8,11 +8,12 @@ import {Slider} from '@/components/ui/slider';
 import {OVERLAY_OPACITY_MAX, OVERLAY_OPACITY_MIN} from './overlay-opacity';
 import {Switch} from '@/components/ui/switch';
 import {InfoHint} from './info-hint';
+import {OverlaySettingsPreview} from './overlay-settings-preview';
 import {t} from './i18n';
 import {OVERLAY_SECTION_ICONS} from './overlay-icons';
 import {OVERLAY_SCALE_MAX, OVERLAY_SCALE_MIN, stepOverlayScale} from './overlay-placement';
 import {
-  DEFAULT_OVERLAY_SETTINGS, enabledSectionCount, isOverlayLayout, OVERLAY_GROUPS, OVERLAY_LAYOUTS, OVERLAY_PRESET_IDS, OVERLAY_PRESETS,
+  DEFAULT_OVERLAY_SETTINGS, enabledSectionCount, isOverlayLayout, OVERLAY_GROUPS, OVERLAY_LAYOUTS, OVERLAY_PRESET_IDS, OVERLAY_PRESETS, OVERLAY_SECTION_IDS,
   sameSections
 } from './overlay-sections';
 import {
@@ -71,18 +72,17 @@ export function OverlaySettingsCard({settings, edit, onSaved, onRequest, showSav
       .finally(() => {opacitySaving.current = false; setOpacityDraft(undefined);});
   };
   const busy = editRequest === 'pending' || request === 'saving';
-  return <Card size="sm" className="yu-overlay-settings" data-testid="overlay-settings"><CardHeader><CardTitle><h2>{strings.overlayTitle}</h2></CardTitle></CardHeader>
-    <CardContent className="space-y-4">
-      <section className="yu-overlay-block" aria-labelledby="overlay-visibility-label">
-        <div className="flex items-center gap-2">
-          <Switch id="overlay-enabled" data-testid="overlay-enabled" checked={overlay.enabled} disabled={locked}
-            aria-describedby="overlay-enabled-help" onCheckedChange={next => save(() => window.desktop.setOverlayEnabled(next))} />
-          <Label id="overlay-visibility-label" htmlFor="overlay-enabled">{strings.overlayEnabledLabel}</Label>
-          <InfoHint label={t('ui.moreAbout', {v: strings.overlayEnabledLabel}, language)} testId="overlay-enabled-help" id="overlay-enabled-help">{strings.overlayEnabledHelp}</InfoHint>
-        </div>
+  const scale = editing ? edit.scale : overlay.placements[overlay.layout].scale;
+  return <div className="yu-overlay-settings" data-testid="overlay-settings">
+    <Card size="sm" className="yu-overlay-controls"><CardContent>
+      <section className="yu-overlay-control-row" aria-labelledby="overlay-visibility-label">
+        <div className="yu-label-hint"><Label id="overlay-visibility-label" htmlFor="overlay-enabled">{strings.overlayEnabledLabel}</Label>
+          <InfoHint label={t('ui.moreAbout', {v: strings.overlayEnabledLabel}, language)} testId="overlay-enabled-help" id="overlay-enabled-help">{strings.overlayEnabledHelp}</InfoHint></div>
+        <Switch id="overlay-enabled" data-testid="overlay-enabled" checked={overlay.enabled} disabled={locked}
+          aria-describedby="overlay-enabled-help" onCheckedChange={next => save(() => window.desktop.setOverlayEnabled(next))} />
       </section>
-      <section className="yu-overlay-block" aria-labelledby="overlay-layout-label">
-        <h3 id="overlay-layout-label" className="font-medium">{strings.overlayLayoutLabel}</h3>
+      <section className="yu-overlay-control-row" aria-labelledby="overlay-layout-label">
+        <h3 id="overlay-layout-label">{strings.overlayLayoutLabel}</h3>
         <RadioGroup aria-labelledby="overlay-layout-label" data-testid="overlay-layout" className="yu-layout-options" value={overlay.layout} disabled={locked || editing}
           onValueChange={value => {if (isOverlayLayout(value)) save(() => window.desktop.setOverlayLayout(value));}}>
           {OVERLAY_LAYOUTS.map(layout => <div key={layout} className="yu-layout-option" data-selected={overlay.layout === layout}>
@@ -92,47 +92,52 @@ export function OverlaySettingsCard({settings, edit, onSaved, onRequest, showSav
           </div>)}
         </RadioGroup>
       </section>
-      <section className="yu-overlay-block" aria-labelledby="overlay-opacity-label">
+      <section className="yu-overlay-control-row" aria-labelledby="overlay-scale-label">
+        <div><h3 id="overlay-scale-label">{strings.overlayScaleLabel}</h3><p id="overlay-size-help" className="yu-overlay-row-hint">{strings.overlaySizeHelp}</p></div>
+        <div className="yu-overlay-row-actions" aria-describedby="overlay-size-help">
+          <Button size="sm" variant="outline" disabled={!editing || busy || scale <= OVERLAY_SCALE_MIN} data-testid="overlay-scale-down"
+            onClick={() => editCall(() => window.desktop.setOverlayEditScale(stepOverlayScale(scale, -1)))}>{strings.overlayScaleDown}</Button>
+          <span className="yu-overlay-scale-value" data-testid={editing ? 'overlay-edit-scale' : 'overlay-saved-scale'}>{strings.overlayScaleLabel}: {percent(scale)}</span>
+          <Button size="sm" variant="outline" disabled={!editing || busy || scale >= OVERLAY_SCALE_MAX} data-testid="overlay-scale-up"
+            onClick={() => editCall(() => window.desktop.setOverlayEditScale(stepOverlayScale(scale, 1)))}>{strings.overlayScaleUp}</Button>
+          <Button size="sm" variant="outline" disabled={!editing || busy} data-testid="overlay-placement-reset"
+            onClick={() => editCall(() => window.desktop.resetOverlayEditPlacement())}>{strings.overlayResetPlacement}</Button>
+        </div>
+      </section>
+      <section className="yu-overlay-control-row" aria-labelledby="overlay-opacity-label">
         <span className="yu-label-hint"><Label id="overlay-opacity-label" htmlFor="overlay-opacity-thumb">{strings.overlayOpacityLabel}</Label>
           <InfoHint label={t('ui.moreAbout', {v: strings.overlayOpacityLabel}, language)} testId="overlay-opacity-help" id="overlay-opacity-help">{strings.overlayOpacityHelp}</InfoHint></span>
-        <div className="flex flex-wrap items-center gap-4">
-          <Slider className="max-w-sm min-w-32" data-testid="overlay-opacity" thumbId="overlay-opacity-thumb"
+        <div className="yu-overlay-opacity-actions">
+          <Slider data-testid="overlay-opacity" thumbId="overlay-opacity-thumb"
             labelId="overlay-opacity-label" descriptionId="overlay-opacity-help" min={OVERLAY_OPACITY_MIN} max={OVERLAY_OPACITY_MAX} step={1}
             value={[opacityDraft ?? overlay.backgroundOpacity]} disabled={!settings?.writable} pending={busy}
             onPointerCancel={() => setOpacityDraft(undefined)} onValueChange={([value]) => setOpacityDraft(value)} onValueCommit={commitOpacity} />
-          <span className="min-w-[4ch] text-sm font-medium tabular-nums" data-testid="overlay-opacity-value">{opacityDraft ?? overlay.backgroundOpacity}%</span>
+          <span className="tabular-nums" data-testid="overlay-opacity-value">{opacityDraft ?? overlay.backgroundOpacity}%</span>
         </div>
       </section>
-      <section className="yu-overlay-block" aria-labelledby="overlay-placement-label" data-testid="overlay-placement">
-        <h3 id="overlay-placement-label" className="font-medium yu-label-hint">{strings.overlayPlacementLabel}<InfoHint label={t('ui.moreAbout', {v: strings.overlayPlacementLabel}, language)} testId="overlay-edit-help">{strings.overlayEditHelp}</InfoHint></h3>
-        {edit?.active ? <>
-          <p role="status" data-testid="overlay-edit-status">{getOverlayEditPlacementText(edit.placement, language)}</p>
-          <div className="flex flex-wrap items-center gap-2">
-            <Button size="sm" variant="outline" disabled={busy || edit.scale <= OVERLAY_SCALE_MIN} data-testid="overlay-scale-down"
-              onClick={() => editCall(() => window.desktop.setOverlayEditScale(stepOverlayScale(edit.scale, -1)))}>{strings.overlayScaleDown}</Button>
-            <span data-testid="overlay-edit-scale">{strings.overlayScaleLabel}: {percent(edit.scale)}</span>
-            <Button size="sm" variant="outline" disabled={busy || edit.scale >= OVERLAY_SCALE_MAX} data-testid="overlay-scale-up"
-              onClick={() => editCall(() => window.desktop.setOverlayEditScale(stepOverlayScale(edit.scale, 1)))}>{strings.overlayScaleUp}</Button>
-            <Button size="sm" variant="outline" disabled={busy} data-testid="overlay-placement-reset"
-              onClick={() => editCall(() => window.desktop.resetOverlayEditPlacement())}>{strings.overlayResetPlacement}</Button>
-          </div>
-          <div className="flex flex-wrap gap-2">
+      <section className="yu-overlay-control-row" aria-labelledby="overlay-placement-label" data-testid="overlay-placement">
+        <h3 id="overlay-placement-label" className="yu-label-hint">{strings.overlayPlacementLabel}<InfoHint label={t('ui.moreAbout', {v: strings.overlayPlacementLabel}, language)} testId="overlay-edit-help">{strings.overlayEditHelp}</InfoHint></h3>
+        <div className="yu-overlay-row-actions">
+          {editing ? <>
+            <span role="status" data-testid="overlay-edit-status">{getOverlayEditPlacementText(edit.placement, language)}</span>
             <Button size="sm" disabled={busy} data-testid="overlay-edit-done" onClick={() => finish('save')}>{strings.overlayEditDone}</Button>
             <Button size="sm" variant="outline" disabled={busy} data-testid="overlay-edit-cancel" onClick={() => finish('cancel')}>{strings.overlayEditCancel}</Button>
-          </div>
-        </> : <div className="flex flex-wrap items-center gap-2">
-          <Button size="sm" variant="outline" disabled={locked || busy || !overlay.enabled} data-testid="overlay-edit-start"
-            onClick={() => editCall(() => window.desktop.beginOverlayEdit())}>{strings.overlayEditAction}</Button>
-          <span data-testid="overlay-saved-scale">{strings.overlayScaleLabel}: {percent(overlay.placements[overlay.layout].scale)}</span>
-        </div>}
-        {editRequest === 'failed' ? <p role="status" data-testid="overlay-edit-error">{strings.overlayEditFailed}</p> : null}
+          </> : <Button size="sm" variant="outline" disabled={locked || busy || !overlay.enabled} data-testid="overlay-edit-start"
+            onClick={() => editCall(() => window.desktop.beginOverlayEdit())}>{strings.overlayEditAction}</Button>}
+          {editRequest === 'failed' ? <p role="status" data-testid="overlay-edit-error">{strings.overlayEditFailed}</p> : null}
+        </div>
       </section>
-      {/* Presets are a quick selection of the same section toggles, so they share one block. */}
-      <section className="yu-overlay-block" aria-labelledby="overlay-sections-label" data-testid="overlay-sections">
-        <h3 id="overlay-sections-label" className="font-medium yu-label-hint">{strings.overlaySectionsLabel}<InfoHint label={t('ui.moreAbout', {v: strings.overlaySectionsLabel}, language)} testId="overlay-hidden-note">{strings.overlayHiddenNote}</InfoHint></h3>
-        <div className="space-y-2" role="group" aria-labelledby="overlay-presets-label">
-          <h4 id="overlay-presets-label" className="text-sm text-muted-foreground">{strings.overlayPresetsLabel}</h4>
-          <div className="flex flex-wrap gap-2" data-testid="overlay-presets">
+      {showSaveError && settings?.saveError ? <p role="status" data-testid="overlay-settings-error">{getSettingsSaveErrorText(settings.saveError, language)}</p>
+        : request === 'failed' ? <p role="status" data-testid="overlay-settings-error">{strings.overlaySaveFailed}</p> : null}
+    </CardContent></Card>
+    <OverlaySettingsPreview settings={{...overlay, backgroundOpacity: opacityDraft ?? overlay.backgroundOpacity}} language={language} scale={scale} />
+    <Card size="sm" aria-labelledby="overlay-sections-label" data-testid="overlay-sections">
+      <CardHeader className="yu-overlay-card-heading">
+        <div className="yu-overlay-section-title"><CardTitle><h3 id="overlay-sections-label" className="yu-label-hint">{strings.overlaySectionsLabel}<InfoHint label={t('ui.moreAbout', {v: strings.overlaySectionsLabel}, language)} testId="overlay-hidden-note">{strings.overlayHiddenNote}</InfoHint></h3></CardTitle>
+          <span data-testid="overlay-sections-count">{strings.overlaySectionsCount.replace('{n}', String(enabled)).replace('{total}', String(OVERLAY_SECTION_IDS.length))}</span></div>
+        <div role="group" aria-labelledby="overlay-presets-label">
+          <span id="overlay-presets-label" className="sr-only">{strings.overlayPresetsLabel}</span>
+          <div className="yu-overlay-row-actions" data-testid="overlay-presets">
             {OVERLAY_PRESET_IDS.map(preset => {
               const pressed = sameSections(overlay.sections, OVERLAY_PRESETS[preset]);
               return <Button key={preset} size="sm" variant={pressed ? 'secondary' : 'outline'} aria-pressed={pressed} disabled={locked}
@@ -142,23 +147,22 @@ export function OverlaySettingsCard({settings, edit, onSaved, onRequest, showSav
             })}
           </div>
         </div>
-        <div className="yu-overlay-section-groups">
-        {OVERLAY_GROUPS.map(group => <section key={group.id} className="space-y-2" aria-labelledby={`overlay-group-${group.id}`}>
-          <h4 id={`overlay-group-${group.id}`} className="text-sm text-muted-foreground">{getOverlayGroupText(group.id, language)}</h4>
+      </CardHeader>
+      <CardContent><div className="yu-overlay-section-groups">
+        {OVERLAY_GROUPS.map(group => <section key={group.id} data-group={group.id} aria-labelledby={`overlay-group-${group.id}`}>
+          <h4 id={`overlay-group-${group.id}`}>{getOverlayGroupText(group.id, language)}</h4>
           {group.sections.map(id => {
             const Icon = OVERLAY_SECTION_ICONS[id], checked = overlay.sections[id];
             return <div key={id} className="yu-overlay-section-row">
+              <Label htmlFor={`overlay-section-${id}`}><Icon className="size-4" aria-hidden="true" />{getOverlaySectionText(id, language)}</Label>
               <Switch id={`overlay-section-${id}`} data-testid={`overlay-switch-${id}`} checked={checked} disabled={locked || (checked && enabled === 1)}
                 onCheckedChange={next => save(() => window.desktop.setOverlaySections({...overlay.sections, [id]: next}))} />
-              <div><Label htmlFor={`overlay-section-${id}`}><Icon className="size-4" aria-hidden="true" />{getOverlaySectionText(id, language)}</Label></div>
             </div>;
           })}
         </section>)}
-        </div>
-        {enabled === 1 ? <p className="text-xs text-muted-foreground" data-testid="overlay-last-section">{strings.overlayLastSection}</p> : null}
-      </section>
-      {/* A refused save is reported by main in the settings view; other request failures only locally. */}
-      {showSaveError && settings?.saveError ? <p role="status" data-testid="overlay-settings-error">{getSettingsSaveErrorText(settings.saveError, language)}</p>
-        : request === 'failed' ? <p role="status" data-testid="overlay-settings-error">{strings.overlaySaveFailed}</p> : null}
-    </CardContent></Card>;
+      </div>
+      {enabled === 1 ? <p className="text-xs text-muted-foreground" data-testid="overlay-last-section">{strings.overlayLastSection}</p> : null}
+      </CardContent>
+    </Card>
+  </div>;
 }

@@ -177,11 +177,14 @@ describe.each(['en', 'ru'] as const)('the Settings screen in %s', language => {
     expect(tag(html, 'data-testid="uninstall-card"')).not.toMatch(/role=|aria-label/);
     expect(html).toMatch(/data-testid="uninstall-button">[^<]+<\/button>/);
   });
-  it('shows the Game plugin card on its panel and hosts the overlay card unchanged', () => {
+  it('shows the Game plugin card on its panel and the Overlay panel heading above its mounted controller', () => {
     const html = render({language, panel: 'plugin'});
     expect(panelOf(html, 'plugin')).toContain('data-testid="plugin-card"');
     expect(panelOf(html, 'plugin')).not.toContain('plugin-export-diagnostics');
-    expect(panelOf(html, 'overlay').startsWith('data-testid="settings.overlay"><div data-testid="overlay-settings"></div></div>')).toBe(true);
+    const overlay = panelOf(html, 'overlay');
+    expect(overlay).toContain(`<h2>${language === 'en' ? 'Overlay' : 'Оверлей'}</h2>`);
+    expect(overlay).toContain('data-testid="overlay-settings"');
+    expect(overlay.indexOf('<h2>')).toBeLessThan(overlay.indexOf('data-testid="overlay-settings"'));
   });
 });
 
