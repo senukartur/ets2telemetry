@@ -890,7 +890,31 @@ export async function runUiSmoke({application, dashboard, overlay, source, sourc
         record.flags.syncHidden = true;
         assert.equal(await dashboard.getByTestId('journal-banner').innerText(), language === 'en' ? 'Synthetic test database — never game history' : 'Синтетическая тестовая база — не история игры');
         assert.equal(await dashboard.getByTestId('journal-search-planned').count(), 0);
-        assert.ok(await dashboard.getByTestId('journal-row-game').first().evaluate(node => globalThis.getComputedStyle(node).whiteSpace === 'nowrap' && node.getBoundingClientRect().width >= 64));
+        // ET-076 (mockup T3): the columns and filter options in both languages, Refresh in the top bar and the totals under the title.
+        const journalHeaders = await dashboard.locator('[data-testid="journal-table"] thead th').evaluateAll(cells => cells.map(cell => {
+          const copy = cell.cloneNode(true); copy.querySelectorAll('.sr-only').forEach(node => node.remove()); return copy.textContent.trim();
+        }));
+        assert.deepEqual(journalHeaders, language === 'en'
+          ? ['Started', 'Game · mode', 'Cargo', 'Job type', 'Route', 'Distance', 'Expected income', 'Outcome', 'Recording', '']
+          : ['Начало', 'Игра · режим', 'Груз', 'Тип заказа', 'Маршрут', 'Дистанция', 'Ожидаемый доход', 'Итог', 'Запись', '']);
+        assert.equal(await dashboard.getByTestId('journal.count').innerText(), language === 'en' ? '120 trips · 1.1 h recorded' : '120 рейсов · 1,1 ч записано');
+        assert.equal(await dashboard.getByTestId('journal-list-refresh').evaluate(node => node.closest('.yu-topbar-actions') !== null), true, 'UI_JOURNAL_REFRESH_IN_TOP_BAR');
+        const filterOptions = async (testId) => {
+          await dashboard.getByTestId(testId).click();
+          const options = await dashboard.getByRole('option').allInnerTexts();
+          await dashboard.keyboard.press('Escape');
+          await dashboard.getByRole('option').first().waitFor({state: 'detached'});
+          return options;
+        };
+        assert.deepEqual(await filterOptions('journal-filter-mode'), language === 'en' ? ['Any mode', 'Single-player', 'TruckersMP', 'Convoy', 'Unknown'] : ['Любой режим', 'Одиночная игра', 'TruckersMP', 'Конвой', 'Неизвестно']);
+        assert.deepEqual(await filterOptions('journal-filter-job'), language === 'en'
+          ? ['Any job type', 'Quick job', 'Cargo market', 'Freight market', 'World of Trucks', 'Other']
+          : ['Любой тип заказа', 'Быстрый заказ', 'Рынок грузов', 'Грузоперевозки', 'World of Trucks', 'Другой']);
+        // The horizontal scroll stays inside the table card at both sizes: the content never scrolls sideways.
+        assert.equal(await dashboard.getByTestId('shell.content').evaluate(node => node.scrollWidth <= node.clientWidth), true, `UI_JOURNAL_CONTENT_OVERFLOW_${size.width}`);
+        assert.equal(await dashboard.getByTestId('journal-table').evaluate(node => globalThis.getComputedStyle(node.parentElement).overflowX), 'auto');
+        assert.ok(await dashboard.getByTestId('journal-row-game').first().evaluate(node => node.getBoundingClientRect().width >= 64));
+        assert.equal(await dashboard.getByTestId('journal-row-game-name').first().evaluate(node => globalThis.getComputedStyle(node).whiteSpace), 'nowrap');
         const modeLabel = language === 'en' ? 'TruckersMP · ambiguous evidence' : 'TruckersMP · неоднозначные данные';
         const modeRow = dashboard.getByTestId('journal-row').first();
         assert.equal(await modeRow.getByTestId('journal-row-mode').innerText(), modeLabel);
@@ -917,6 +941,8 @@ export async function runUiSmoke({application, dashboard, overlay, source, sourc
         await save('list', language, size);
         await modeRow.getByTestId('journal-row-open').click();
         await dashboard.getByTestId('journal-detail-title').waitFor({state: 'visible'});
+        assert.equal(await dashboard.getByTestId('journal-list-refresh').count(), 0, 'UI_JOURNAL_REFRESH_ONLY_ON_LIST');
+        assert.equal(await dashboard.getByTestId('journal.count').count(), 0, 'UI_JOURNAL_TOTALS_ONLY_ON_LIST');
         assert.equal(await dashboard.getByTestId('journal-detail-mode').innerText(), modeLabel);
         await save('mode-trip', language, size);
         await dashboard.getByTestId('journal-back').click();
