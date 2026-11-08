@@ -31,7 +31,7 @@ async function start(purpose:'history'|'synthetic'|'replay'='history') {
   const worker=storageWorker(),client=new StorageClient(worker.handle,{closeGraceMs:TEST_CLOSE_GRACE_MS});
   ok(await client.open({path:ws.database,purpose,backupsDirectory:ws.backups,appVersion:'0.1.0-test'}));return client;
 }
-async function open(client:StorageClient,s:Script,verified=true,seq=1,rawTripUuid?:string) {
+async function open(client:Storage|StorageClient,s:Script,verified=true,seq=1,rawTripUuid?:string) {
   ok(await client.upsertSession({message:gameShaped(s.welcome())}));
   if(seq>1)ok(await client.commitGap({message:gameShaped(s.gap(seq-1))}));
   const message=gameShaped(s.event(r.jobConfigured())),uuid=rawTripUuid??tripUuidFor(s.session,message.data.eventSeq);
@@ -457,21 +457,33 @@ describe('TEL-034 checkpoint-bound trailer context',()=>{
       :index===1&&coupling?{available:true,value:trailer(1,{id:{available:true,value:'trailer-b'},bodyType:absent,chainType:absent})}:absent);
     return message;
   }
-  async function setup(coupling=false,slots=10,sparse=false){
-    const client=await start(),s=new Script(ETS2_A);ok(await client.upsertSession({message:gameShaped(s.welcome())}));
-    ok(await client.commitGap({message:gameShaped(s.gap(6,'noDurableConsumer'))}));
-    const baseline=checkpoint(s,coupling,slots);
-    if(sparse){const slot=baseline.data.state.configuration.trailers[1];if(!slot.available)throw new Error("missing coupling fixture");slot.value.index=2;baseline.data.state.configuration.trailers[2]=slot;baseline.data.state.configuration.trailers[1]=absent;}
-    ok(await client.recordTrailerBaseline({message:baseline}));
-    const root=await open(client,s);return {client,s,root,baseline};
+  async function setup(coupling=false,slots=10,sparse=false,fill?:(storage:Storage,s:Script,root:string)=>void){
+    const s=new Script(ETS2_A);
+    const initialize=async(client:Storage|StorageClient)=>{
+      ok(await client.upsertSession({message:gameShaped(s.welcome())}));
+      ok(await client.commitGap({message:gameShaped(s.gap(6,'noDurableConsumer'))}));
+      const baseline=checkpoint(s,coupling,slots);
+      if(sparse){const slot=baseline.data.state.configuration.trailers[1];if(!slot.available)throw new Error("missing coupling fixture");slot.value.index=2;baseline.data.state.configuration.trailers[2]=slot;baseline.data.state.configuration.trailers[1]=absent;}
+      ok(await client.recordTrailerBaseline({message:baseline}));
+      const root=await open(client,s);return {s,root,baseline};
+    };
+    if(fill){
+      const conn=await openConnection(ws.options({purpose:'history'})),storage=tracked(conn);
+      const fixture=await initialize(storage);
+      // Cursor filler is one committed fixture; all pin advances, recorder turns and reopen checks stay separate.
+      conn.writer().transaction(()=>fill(storage,s,fixture.root)).immediate();storage.close();
+      return {...fixture,client:await start()};
+    }
+    const client=await start();return {...await initialize(client),client};
   }
   async function projected(client:StorageClient,root:string){
     const pin=ok(await prepare(client,root)),mapping=mapUploadProjection(pin,await pages(client,pin));
     if(mapping.status!=='projected')throw new Error(mapping.reason);return {pin,snapshot:mapping.summary.snapshot};
   }
   it('keeps a sparse checkpoint chain incomplete across bounded replay and worker reopen',async()=>{
-    const {client,s,root}=await setup(true,10,true);
-    for(let i=0;i<150;i++)ok(await client.commitEvent({message:gameShaped(s.event(r.paused()))}));
+    const {client,s,root}=await setup(true,10,true,(storage,s)=>{
+      for(let i=0;i<150;i++)ok(storage.commitEvent({message:gameShaped(s.event(r.paused()))}));
+    });
     await close(client,s,root,'delivered');const pinId=randomUUID();ok(await client.beginUploadProjection({pinId,tripUuid:root}));
     expect(ok(await client.advanceUploadProjection(pinId))).toMatchObject({state:'preparing',examined:100});await client.close();
     const reopened=await start();let state=ok(await reopened.getUploadProjectionPreparation(pinId));
@@ -528,8 +540,11 @@ describe('TEL-034 checkpoint-bound trailer context',()=>{
     expect(snapshot.evidence).toMatchObject({ruleContextComplete:complete,reasons:complete?[]:['trailer-context-unproven']});await client.close();
   });
   it('persists unresolved-prefix classification across bounded interval-copy turns and reopen',async()=>{
-    const {client,s,root}=await setup();ok(await client.recordCompleteness(s.session,{tripUuid:root,kind:'discontinuity',detail:{cause:'reload',decision:'not-merged'}}));
-    for(let i=0;i<150;i++)ok(await client.recordCompleteness(s.session,{tripUuid:root,kind:'sample-loss'}));await close(client,s,root,'delivered');
+    const {client,s,root}=await setup(false,10,false,(storage,s,root)=>{
+      ok(storage.recordCompleteness(s.session,{tripUuid:root,kind:'discontinuity',detail:{cause:'reload',decision:'not-merged'}}));
+      for(let i=0;i<150;i++)ok(storage.recordCompleteness(s.session,{tripUuid:root,kind:'sample-loss'}));
+    });
+    await close(client,s,root,'delivered');
     const pinId=randomUUID();ok(await client.beginUploadProjection({pinId,tripUuid:root}));expect(ok(await client.advanceUploadProjection(pinId))).toMatchObject({state:'preparing',examined:100});
     await client.close();readOnly(ws.database,db=>{
       const saved=JSON.parse(db.prepare('SELECT snapshot_json FROM upload_projection_pins WHERE pin_id=?').pluck().get(pinId) as string);
@@ -599,7 +614,9 @@ describe('TEL-034 checkpoint-bound trailer context',()=>{
     expect(ok(await client.advanceUploadProjection(pinId))).toMatchObject({state:'invalidated',examined:0});await client.close();expect(recheck(ready)).toBe(false);
   });
   it('resumes a pinned proof cursor across reopen with at most100 inputs per turn and indexed event/gap/baseline scans',async()=>{
-    const {client,s,root}=await setup();for(let i=0;i<220;i++)ok(await client.commitEvent({message:gameShaped(s.event(r.paused()))}));
+    const {client,s,root}=await setup(false,10,false,(storage,s)=>{
+      for(let i=0;i<220;i++)ok(storage.commitEvent({message:gameShaped(s.event(r.paused()))}));
+    });
     await close(client,s,root,'delivered');const pinId=randomUUID();ok(await client.beginUploadProjection({pinId,tripUuid:root}));
     expect(ok(await client.advanceUploadProjection(pinId))).toMatchObject({state:'preparing',examined:100});await client.close();
     const reopened=await start();let state=ok(await reopened.getUploadProjectionPreparation(pinId)),turns=0;

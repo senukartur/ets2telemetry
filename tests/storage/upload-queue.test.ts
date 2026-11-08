@@ -413,8 +413,11 @@ it.each(['authentication','validation'] as const)('REG-005/010/011/012 records a
 
 it('TEL-034 does not starve a proven baseline-backed OPEN preparation or freeze on ordinary native/counter progress',async()=>{
   const conn=await openConnection(ws.options({purpose:'history'})),storage=new Storage(conn);opened.push(storage);const source=await setup(storage,true),db=conn.writer();
-  for(let i=0;i<180;i++)ok(storage.commitEvent({message:game(source.s.event(r.paused()))}));
-  for(let i=0;i<120;i++)ok(storage.recordCompleteness(source.s.session,{tripUuid:source.tripUuid,kind:'sample-loss'}));
+  // Seed cursor filler atomically; the progress commits between materialization advances remain independent.
+  db.transaction(()=>{
+    for(let i=0;i<180;i++)ok(storage.commitEvent({message:game(source.s.event(r.paused()))}));
+    for(let i=0;i<120;i++)ok(storage.recordCompleteness(source.s.session,{tripUuid:source.tripUuid,kind:'sample-loss'}));
+  }).immediate();
   const progress=(value:number)=>ok(storage.commitEvent({message:game(source.s.event(r.paused())),effects:[{kind:'trip.update',tripUuid:source.tripUuid,set:{observedDistanceM:{available:true,value},fuelUsedL:{available:true,value}}}]}));
   progress(1);const workId=randomUUID();let work=ok(storage.beginUploadMaterialization({tripUuid:source.tripUuid,registrationId:source.registrationId,workId})),turn=0;
   while(['preparing','folding'].includes(work.status)&&turn<100){progress(++turn+1);work=ok(storage.advanceUploadMaterialization({workId}));expect(work.examined).toBeLessThanOrEqual(100);}

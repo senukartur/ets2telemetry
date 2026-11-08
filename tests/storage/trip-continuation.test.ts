@@ -13,7 +13,7 @@ import {advanceHardMode, evaluateHardMode, parseHardModeConfig} from '../../pack
 import {HARD_MODE_CONFIG} from '../shared/hard-mode';
 import {V1_CLIENT_MAX_MINOR,V1Ingestion} from '../../apps/desktop/src/v1-ingestion';
 import {serveV1Reactive} from '../../tools/telemetry-simulator/src/v1/reactive';
-import {afterEach, beforeEach, describe, expect, it,vi} from 'vitest';
+import {afterAll, afterEach, beforeAll, beforeEach, describe, expect, it,vi} from 'vitest';
 import {readFileSync,type BigIntStats} from 'node:fs';
 import path from 'node:path';
 import type {SampleInput, Storage} from '../../packages/storage/src';
@@ -1567,22 +1567,30 @@ describe('REG-003/005/008/012/014 durable logical trips', () => {
     expect(ok(await client.listSamples({tripUuid:uuid},{limit:1,includeExcluded:true}))).toHaveLength(1);
     expect(await client.close()).toEqual({clean:true});await worker.handle.terminate();
   });
-  it('pages recording provenance beyond the detail bound without exposing private profile proof',async()=>{
-    const storage=await ws.open();let first='';
-    for(let i=0;i<260;i++){
-      const script=new Script(`10000000-0000-4000-8000-${(i+1000).toString(16).padStart(12,'0')}`),uuid=open(storage,script);
-      first ||= uuid;close(storage,script,uuid);
-    }
-    const detail=validateJournalTripDetail(ok(storage.journalTrip(first)));
-    expect(detail.exportBounds.sourceTotal).toBe(260);expect(detail.exportBounds.sources).toHaveLength(256);
-    let cursor:string|null=detail.exportBounds.snapshot!.sources;const sessions:string[]=[],sizes:number[]=[];
-    while(cursor!==null){
-      const page=validateJournalIntervalPage(ok(storage.journalIntervals(first,{limit:100,cursor})),100);
-      expect(page.sourceTotal).toBe(260);expect(page.intervals).toEqual([]);
-      sizes.push(page.sources!.length);sessions.push(...page.sources!.map(s=>s.pluginSessionId));cursor=page.nextSourceCursor ?? null;
-      expect(JSON.stringify(page)).not.toContain('scope');expect(JSON.stringify(page)).not.toContain('binding');
-    }
-    expect(sizes).toEqual([100,100,60]);expect(new Set(sessions).size).toBe(260);
+  describe('recording provenance fixture',()=>{
+    // 260 sessions require 780 real core commands; build the read fixture outside the ordinary 30 s assertion case.
+    const PROVENANCE_BUILD_BUDGET_MS=120_000;
+    let provenanceWs:Awaited<ReturnType<typeof workspace>>,storage:Storage,first='';
+    beforeAll(async()=>{
+      provenanceWs=await workspace();storage=await provenanceWs.open();
+      for(let i=0;i<260;i++){
+        const script=new Script(`10000000-0000-4000-8000-${(i+1000).toString(16).padStart(12,'0')}`),uuid=open(storage,script);
+        first ||= uuid;close(storage,script,uuid);
+      }
+    },PROVENANCE_BUILD_BUDGET_MS);
+    afterAll(async()=>{await provenanceWs?.dispose();});
+    it('pages recording provenance beyond the detail bound without exposing private profile proof',()=>{
+      const detail=validateJournalTripDetail(ok(storage.journalTrip(first)));
+      expect(detail.exportBounds.sourceTotal).toBe(260);expect(detail.exportBounds.sources).toHaveLength(256);
+      let cursor:string|null=detail.exportBounds.snapshot!.sources;const sessions:string[]=[],sizes:number[]=[];
+      while(cursor!==null){
+        const page=validateJournalIntervalPage(ok(storage.journalIntervals(first,{limit:100,cursor})),100);
+        expect(page.sourceTotal).toBe(260);expect(page.intervals).toEqual([]);
+        sizes.push(page.sources!.length);sessions.push(...page.sources!.map(s=>s.pluginSessionId));cursor=page.nextSourceCursor ?? null;
+        expect(JSON.stringify(page)).not.toContain('scope');expect(JSON.stringify(page)).not.toContain('binding');
+      }
+      expect(sizes).toEqual([100,100,60]);expect(new Set(sessions).size).toBe(260);
+    });
   });
   it.each(['driving','paused'] as const)('records next-day %s continuation before the default sample flush through production ingestion and the Journal reply boundary',async driving=>{
     const base=JSON.parse(readFileSync(scenarioPath('normal-delivery'),'utf8'));
