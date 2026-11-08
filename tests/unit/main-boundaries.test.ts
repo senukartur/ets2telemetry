@@ -3783,7 +3783,13 @@ it('uses the existing fresh game report when current track is enabled after game
   expect(widget.visible).toBe(true);
 });
 it('destroys the current-track window only after a tray exit nested in its publish hide has unwound', async () => {
-  trayAvailable = true; const widget = await readyCurrentTrack();
+  vi.stubEnv('ETS2TELEMETRY_SOURCE_KIND', 'ets2');
+  trayAvailable = true; const widget = await readyCurrentTrack(() => deliver(currentGame()));
+  const source = {id: 's1', sourceAppId: 'Chrome', playback: 'playing' as const, current: true};
+  // Only a window that is showing still reaches the native hide; a hidden one skips it.
+  nowReaderOptions.snapshot({version: 1, type: 'snapshot', requestId: 1, sessions: [source], error: null,
+    selected: {id: source.id, revision: 1, title: 'Fixture track', artist: null, album: null, playback: 'playing', timeline: null, artwork: null}}, 1);
+  expect(widget.visible).toBe(true);
   let duringHide: number | undefined;
   widget.hide.mockImplementationOnce(() => {trayMenuItem('Exit Yukon Union Telemetry').click!(); duringHide = widget.destroy.mock.calls.length;});
   nowReaderOptions.snapshot({version: 1, type: 'snapshot', requestId: 1, sessions: [], error: null, selected: null}, 1);
