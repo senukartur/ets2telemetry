@@ -1,9 +1,9 @@
 // ET-016 PR-5 (J16, J17): the trip export flow in main, against real temporary directories. The journal reads and the
-// Save dialog are scripted; the file system is the real one, wrapped only where a case injects a failure. Expected
-// results, files and log rows are written by hand from J16 (REG-014).
+// Save dialog are scripted; the file system is the real one without the flush to disk, wrapped only where a case injects
+// a failure. Expected results, files and log rows are written by hand from J16 (REG-014).
 import {existsSync} from 'node:fs';
 import {mkdir, readdir, readFile, symlink, unlink, writeFile} from 'node:fs/promises';
-import * as realFs from 'node:fs/promises';
+import * as nodeFs from 'node:fs/promises';
 import path from 'node:path';
 import {afterEach, beforeEach, describe, expect, it, vi} from 'vitest';
 import type {JournalCallResult, JournalTripDetail, TripExportDiagnostics} from '../../packages/contracts/src';
@@ -14,6 +14,13 @@ import {changed, DETAIL, EVENT, INTERVAL, SAMPLE, TRIP} from '../shared/journal-
 import {exactLengthPath} from '../shared/paths';
 import {temporaryResources} from '../shared/resources';
 import {tripExportProblems} from '../shared/trip-export-validator';
+import {unflushed} from '../shared/file-work';
+
+/**
+ * The real file system with the flush to disk of every opened file skipped (unflushed, tests/shared/file-work.ts). No case
+ * observes durability across a power loss; a case that injects a failing sync still sees it.
+ */
+const files = unflushed(nodeFs);
 
 const DATABASE = {purpose: 'synthetic', schemaVersion: 2};
 const DATABASE_UUID = 'f0000000-0000-4000-8000-000000000001';
@@ -48,7 +55,7 @@ function exporter(options: Partial<JournalExporterOptions> & {target?: string | 
   const showSaveDialog = vi.fn((defaultPath: string) => { void defaultPath; return Promise.resolve(target === null ? {canceled: true, filePath: ''} : {canceled: false, filePath: target}); });
   const delays: number[] = [];
   const instance = new JournalExporter({read: j.read, showSaveDialog, documents: () => 'C:\\Users\\owner\\Documents', localAppData: local, appVersion: '0.1.0-test', log,
-    now: () => 1_800_000_000_000, suffix: () => '0badc0de', delay: ms => { delays.push(ms); return Promise.resolve(); }, ...options});
+    now: () => 1_800_000_000_000, suffix: () => '0badc0de', delay: ms => { delays.push(ms); return Promise.resolve(); }, fs: files, ...options});
   return {instance, log, showSaveDialog, delays, queries: j.queries, read: j.read};
 }
 const events = (log: ReturnType<typeof vi.fn>) => log.mock.calls.map(call => [call[0], call[2] ?? null]);
@@ -127,8 +134,8 @@ describe('a saved export (J16, J17)', () => {
   });
   it('appends every part from the current position, so the file is exactly the parts in order (review round 1, finding 4)', async () => {
     const parts: string[] = [];
-    const fs: ExportFileSystem = {...realFs, open: async (target, flags) => {
-      const handle = await realFs.open(target, flags);
+    const fs: ExportFileSystem = {...files, open: async (target, flags) => {
+      const handle = await files.open(target, flags);
       return {writeFile: (data: string, encoding: 'utf8') => { parts.push(data); return handle.writeFile(data, encoding); }, sync: () => handle.sync(), close: () => handle.close()};
     }};
     const f = exporter({fs});
@@ -176,7 +183,7 @@ describe('a saved export (J16, J17)', () => {
   });
   it('retries the final rename while Windows holds the new file, as settings saves do', async () => {
     let failures = 2;
-    const fs: ExportFileSystem = {...realFs, rename: vi.fn((from: string, to: string) => failures-- > 0 ? Promise.reject(Object.assign(new Error('busy'), {code: 'EBUSY'})) : realFs.rename(from, to))};
+    const fs: ExportFileSystem = {...files, rename: vi.fn((from: string, to: string) => failures-- > 0 ? Promise.reject(Object.assign(new Error('busy'), {code: 'EBUSY'})) : files.rename(from, to))};
     const f = exporter({fs});
     expect((await f.instance.export(TRIP)).ok).toBe(true);
     expect(f.delays).toEqual([20, 40]);
@@ -192,8 +199,8 @@ describe('a failed export leaves no partial file and the old target unchanged (J
   };
   it('when a write fails in the middle of a page', async () => {
     let writes = 0;
-    const fs: ExportFileSystem = {...realFs, open: async (target, flags) => {
-      const handle = await realFs.open(target, flags);
+    const fs: ExportFileSystem = {...files, open: async (target, flags) => {
+      const handle = await files.open(target, flags);
       return {writeFile: (data: string, encoding: 'utf8') => ++writes === 3 ? Promise.reject(Object.assign(new Error('disk'), {code: 'EIO'})) : handle.writeFile(data, encoding),
         sync: () => handle.sync(), close: () => handle.close()};
     }};
@@ -210,7 +217,7 @@ describe('a failed export leaves no partial file and the old target unchanged (J
     expect(events(f.log)).toEqual([['JOURNAL_EXPORT_FAILED', {code: 'DATABASE_UNAVAILABLE'}]]);
   });
   it('when the rename keeps failing', async () => {
-    const fs: ExportFileSystem = {...realFs, rename: vi.fn(() => Promise.reject(Object.assign(new Error('denied'), {code: 'EPERM'})))};
+    const fs: ExportFileSystem = {...files, rename: vi.fn(() => Promise.reject(Object.assign(new Error('denied'), {code: 'EPERM'})))};
     const f = exporter({fs});
     await expect(f.instance.export(TRIP)).resolves.toEqual({ok: false, code: 'EXPORT_WRITE_FAILED'});
     expect(fs.rename).toHaveBeenCalledTimes(6);
@@ -260,7 +267,7 @@ describe('refused targets (J16)', () => {
   it('refuses the data folder through a real \\\\localhost admin share', async ({skip}) => {
     const drive = local.slice(0, 1);
     const unc = (target: string) => `\\\\localhost\\${drive}$${target.slice(2)}`;
-    const shareAvailable = await realFs.stat(unc(path.join(local, 'ETS2Telemetry'))).then(stats => stats.isDirectory(), () => false);
+    const shareAvailable = await files.stat(unc(path.join(local, 'ETS2Telemetry'))).then(stats => stats.isDirectory(), () => false);
     // Administrative shares exist on default Windows installations; a host without them cannot run this alias.
     if (!shareAvailable) { skip(`the administrative share \\\\localhost\\${drive}$ is not available on this host`); return; }
     const f = exporter({target: unc(path.join(local, 'ETS2Telemetry', 'data', 'trip.json'))});
@@ -274,7 +281,7 @@ describe('refused targets (J16)', () => {
   it('refuses a UNC alias whose realpath stays unchanged when an ancestor has the identity of the data folder', async () => {
     // Runs everywhere: the alias \\server\share\ETS2Telemetry is the data folder by volume and file index.
     const dataRoot = path.join(local, 'ETS2Telemetry');
-    const fs: ExportFileSystem = {...realFs, open: vi.fn(), realpath: (target: string) => Promise.resolve(target),
+    const fs: ExportFileSystem = {...files, open: vi.fn(), realpath: (target: string) => Promise.resolve(target),
       stat: (target: string) => Promise.resolve(target === dataRoot || target === '\\\\server\\share\\ETS2Telemetry' ? {dev: 7n, ino: 42n} : {dev: 7n, ino: BigInt(target.length)})};
     const f = exporter({target: '\\\\server\\share\\ETS2Telemetry\\data\\trip.json', fs});
     await expect(f.instance.export(TRIP)).resolves.toEqual({ok: false, code: 'EXPORT_TARGET_REFUSED'});
@@ -286,7 +293,7 @@ describe('refused targets (J16)', () => {
   it('refuses a folder deeper than the ancestor bound, which it cannot show to lie outside the data folder', async () => {
     const dataRoot = path.join(local, 'ETS2Telemetry');
     const deep = ['\\\\server\\share', ...Array.from({length: 130}, (_, index) => `d${index}`)].join('\\');
-    const fs: ExportFileSystem = {...realFs, open: vi.fn(), realpath: (target: string) => Promise.resolve(target),
+    const fs: ExportFileSystem = {...files, open: vi.fn(), realpath: (target: string) => Promise.resolve(target),
       // The data root has an identity no other path shares, so only the depth bound can refuse this folder.
       stat: (target: string) => Promise.resolve(target === dataRoot ? {dev: 7n, ino: 42n} : {dev: 7n, ino: BigInt(target.length + 1_000)})};
     const f = exporter({target: `${deep}\\trip.json`, fs});
@@ -404,7 +411,7 @@ describe('one export at a time, and the application exit (J16)', () => {
 });
 
 describe('ordinary long target path (282 chars, ET-046)', () => {
-  it('saves valid document through .partial, syncs, and renames with and without extended prefix', async () => {
+  it('saves valid document through .partial and renames with and without extended prefix', async () => {
     const longTarget = exactLengthPath(out, 'trip-long.json', 282);
     expect(longTarget.length).toBe(282);
     await mkdir(path.dirname(longTarget), {recursive: true});
@@ -435,9 +442,9 @@ describe('ordinary long target path (282 chars, ET-046)', () => {
     await writeFile(longTarget, 'prior content');
 
     const fs: ExportFileSystem = {
-      ...realFs,
+      ...files,
       open: async (target, flags) => {
-        const handle = await realFs.open(target, flags);
+        const handle = await files.open(target, flags);
         return {
           writeFile: () => Promise.reject(Object.assign(new Error('disk fail'), {code: 'EIO'})),
           sync: () => handle.sync(),
