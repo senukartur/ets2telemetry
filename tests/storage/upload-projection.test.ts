@@ -1,3 +1,6 @@
+import type {SinkResult} from '../../apps/desktop/src/durable-sink';
+import {TripRecorderSink} from '../../apps/desktop/src/trip-recorder';
+import type {EventRecord} from '../../packages/contracts/src/protocol-v1';
 // Hand-authored game-shaped streams in isolated temporary databases, never real game or performance evidence.
 import {randomUUID} from 'node:crypto';
 import {vi} from 'vitest';
@@ -464,6 +467,66 @@ describe('TEL-034 checkpoint-bound trailer context',()=>{
     const pin=ok(await prepare(client,root)),mapping=mapUploadProjection(pin,await pages(client,pin));
     if(mapping.status!=='projected')throw new Error(mapping.reason);return {pin,snapshot:mapping.summary.snapshot};
   }
+  it('does not prove a not-merged singleton from a checkpoint in the earlier job after a trailer change (real recorder case15)',async()=>{
+    const client=await start(),s=new Script(ETS2_A),sink=new TripRecorderSink(client);
+    const sinkOk=<T>(result:SinkResult<T>):T=>{if(!result.ok)throw new Error(result.error.code);return result.value;};
+    const feed=async(record:EventRecord,simulation:'paused'|'running'='running')=>{
+      const message=gameShaped(s.event(record,{simulation}));sinkOk(await sink.commit(message,{receivedUtcMs:2000+Number(message.data.eventSeq)}));return message;
+    };
+    sinkOk(await sink.openSession(gameShaped(s.welcome())));
+    await feed(r.truckConfigured(),'paused');await feed(r.trailerConfigured(trailer(0,{id:{available:true,value:'trailer-x'},bodyType:{available:true,value:'curtainsider'}})),'paused');
+    await feed(r.timersRestart(),'paused');await feed(r.started());await feed(r.paused(),'paused');
+    const first=await feed(r.jobConfigured(),'paused'),original=tripUuidFor(s.session,first.data.eventSeq);await feed(r.started());await feed(r.fined());
+    await feed(r.trailerConfigured(trailer(0,{id:{available:true,value:'trailer-a'},bodyType:{available:true,value:'curtainsider'}})));
+    sinkOk(await sink.openSession(gameShaped(s.welcome())));const mid=checkpoint(s);mid.data.state.configuration.job={available:true,value:job()};mid.data.state.boundaryOrder=s.next.toString();
+    sinkOk(await sink.checkpoint(mid));sinkOk(sink.observe(mid,{receivedUtcMs:3000}));
+    await feed(r.timersRestart(),'paused');const resent=await feed(r.jobConfigured(),'paused'),root=tripUuidFor(s.session,resent.data.eventSeq);
+    await feed(r.started());await feed(r.fined());await feed(r.delivered());
+    expect(root).not.toBe(original);const {pin,snapshot}=await projected(client,root);
+    expect(pin.totals.members).toBe(1);expect(pin.facts.moneyIncomplete).toBe(false);
+    const detail=ok(await client.journalIntervals(root,{limit:100}));expect(JSON.stringify(detail)).toContain('not-merged');
+    expect(snapshot.trailers.complete).toBe(false);expect(snapshot.evidence).toMatchObject({ruleContextComplete:false,reasons:['trailer-context-unproven']});
+    await client.close();
+  });
+  it.each([
+    ['discontinuity',{cause:'discontinuity',continuationOf:'70000000-0000-4000-8000-000000000001',decision:'not-merged'},false],
+    ['discontinuity',{cause:'reload',continuationOf:'70000000-0000-4000-8000-000000000001',decision:'not-merged'},false],
+    ['discontinuity',{cause:'opened-at-load'},false],
+    ['discontinuity',{cause:'loaded-job-unverified'},false],
+    ['discontinuity',{cause:'save-load'},false],
+    ['not-connected',{cause:'late-attach'},false],
+    ['not-connected',{cause:'unrecognized-prefix'},false],
+    ['discontinuity',{cause:'unrecognized-prefix'},false],
+    ['discontinuity',{cause:'unrecognized-prefix',annotation:true},false],
+    ['discontinuity',{cause:'reload',annotation:true},false],
+    ['discontinuity',{cause:'unrecognized-prefix',decision:'not-merged',annotation:true},false],
+    ['sample-loss',{},true],
+    ['not-connected',{cause:'disconnected'},true],
+    ['not-connected',{cause:'consumer-restart'},true],
+    ['not-connected',{cause:'opened-before-attach'},false],
+    ['not-connected',{cause:'opened-before-attach',annotation:true},false],
+    ['discontinuity',{cause:'paused-reconnect',annotation:true},true],
+    ['discontinuity',{cause:'menu-job-acceptance',version:1,annotation:true},true],
+    ['discontinuity',{cause:'opened-at-load',annotation:true},true],
+    ['discontinuity',{cause:'game-time-jump',label:'possible-sleep',stationary:true,annotation:true},true]
+  ] as const)('classifies %s %j against a fully observed original prefix (complete %s)',async(kind,detail,complete)=>{
+    const {client,s,root}=await setup();ok(await client.recordCompleteness(s.session,{tripUuid:root,kind,detail}));await close(client,s,root,'delivered');
+    const {snapshot}=await projected(client,root);expect(snapshot.trailers.complete).toBe(complete);
+    expect(snapshot.evidence).toMatchObject({ruleContextComplete:complete,reasons:complete?[]:['trailer-context-unproven']});await client.close();
+  });
+  it('persists unresolved-prefix classification across bounded interval-copy turns and reopen',async()=>{
+    const {client,s,root}=await setup();ok(await client.recordCompleteness(s.session,{tripUuid:root,kind:'discontinuity',detail:{cause:'reload',decision:'not-merged'}}));
+    for(let i=0;i<150;i++)ok(await client.recordCompleteness(s.session,{tripUuid:root,kind:'sample-loss'}));await close(client,s,root,'delivered');
+    const pinId=randomUUID();ok(await client.beginUploadProjection({pinId,tripUuid:root}));expect(ok(await client.advanceUploadProjection(pinId))).toMatchObject({state:'preparing',examined:100});
+    await client.close();readOnly(ws.database,db=>{
+      const saved=JSON.parse(db.prepare('SELECT snapshot_json FROM upload_projection_pins WHERE pin_id=?').pluck().get(pinId) as string);
+      expect(saved.rulePrefix).toEqual({version:1,unproven:true});
+    });
+    const reopened=await start();let state=ok(await reopened.getUploadProjectionPreparation(pinId));
+    while(state.state==='preparing'){state=ok(await reopened.advanceUploadProjection(pinId));expect(state.examined).toBeLessThanOrEqual(100);}
+    const mapped=mapUploadProjection(state.projection!,await pages(reopened,state.projection!));
+    expect(mapped).toMatchObject({status:'projected',summary:{snapshot:{trailers:{complete:false},evidence:{ruleContextComplete:false,reasons:['trailer-context-unproven']}}}});await reopened.close();
+  });
   it.each([false,true])('proves an ordinary later job after startup loss and a no-job all-slot checkpoint (coupling %s)',async coupling=>{
     const {client,s,root,baseline}=await setup(coupling);
     ok(await client.recordTrailerBaseline({message:baseline})); // Exact retry never rewrites the baseline.

@@ -1,5 +1,5 @@
 import {RULE_LOSSES,ruleLossBounds,ruleNativeBounds} from './trailer-baselines';
-import {finishRuleReplay,isRuleBaseline,isRuleReplay,replayRuleEvent,type RuleContext,type RuleReplay} from '../upload-rule-context';
+import {finishRuleReplay,isRuleBaseline,isRulePrefixProof,isRuleReplay,replayRuleEvent,unresolvedRulePrefix,type RuleContext,type RuleReplay} from '../upload-rule-context';
 import type {EventRecord} from '../../../contracts/src/protocol-v1';
 import {randomUUID} from 'node:crypto';
 import type Database from 'better-sqlite3';
@@ -78,10 +78,10 @@ function facts(db: Database.Database, snap: LogicalSnapshot, pin: LogicalRow): U
       || outcome?.utcMs !== null && outcome?.utcMs !== undefined && row.ended_utc_ms !== null && outcome.utcMs !== n(row.ended_utc_ms)};
 }
 
-const unproven=():RuleContext=>({version:1,status:'unproven',items:[],recordingLoss:false});
+const unproven=():RuleContext=>({version:2,status:'unproven',items:[],recordingLoss:false});
 /** One indexed input or transition per call, including rejected baselines, events and gaps. */
 function advanceRuleContext(db:Database.Database,saved:LogicalRow,snap:LogicalSnapshot,pin:LogicalRow):RuleContext|null {
-  if(saved.trailerBound===undefined||saved.ruleLossBounds===undefined)return unproven(); // Retained preparations from older versions have no captured baseline bound.
+  if(saved.trailerBound===undefined||saved.ruleLossBounds===undefined||!isRulePrefixProof(saved.rulePrefix))return unproven(); // Retained preparations without baseline/prefix evidence cannot establish completeness.
   if(saved.ruleReplay!==undefined&&!isRuleReplay(saved.ruleReplay))fail('DATABASE_CORRUPT');
   if(!saved.ruleReplay){
     if(pin.member_count!==1n||snap.row.opened_by!=='event'||snap.row.opened_event_ref===null)return unproven();
@@ -94,7 +94,7 @@ function advanceRuleContext(db:Database.Database,saved:LogicalRow,snap:LogicalSn
     saved.ruleReplay={version:1,phase:'baseline',baselineBeforeSeq:(BigInt(fromU64Key(opening.event_seq))+1n).toString(),baselineBeforeId:'0',
       lossKind:0,lossAfter:'0',eventAfter:'0',gapAfterSeq:'0',gapAfterId:'0',next:'0',end:closed?fromU64Key(snap.row.closed_by_event_seq):String(saved.nativeCoverage),
       opening:fromU64Key(opening.event_seq),clock:String(opening.clock_uuid),openingNs:fromU64Key(opening.occurred_monotonic_ns),openingOrder:fromU64Key(opening.boundary_order),
-      items:[],opened:false,changed:false,unproven:false,recordingLoss:false} satisfies RuleReplay;
+      items:[],opened:false,changed:false,unproven:saved.rulePrefix.unproven,recordingLoss:false} satisfies RuleReplay;
   }
   const state=saved.ruleReplay as RuleReplay,session=snap.row.plugin_session_ref;
   if(state.phase==='baseline'){
@@ -106,7 +106,7 @@ function advanceRuleContext(db:Database.Database,saved:LogicalRow,snap:LogicalSn
     const body:unknown=JSON.parse(String(b.slots_json));
     if(!isRuleBaseline(body))fail('DATABASE_CORRUPT');
     if(body.slots.length!==10)return unproven();
-    state.unproven=body.slots.some(slot=>!slot.available&&slot.reason!=='not-observed');
+    state.unproven ||=body.slots.some(slot=>!slot.available&&slot.reason!=='not-observed');
     state.items=body.slots.flatMap(slot=>slot.available?[slot.value]:[]);
     state.next=fromU64Key(b.next_event_seq);state.eventAfter=(BigInt(state.next)-1n).toString();state.phase='events';
     if(!isRuleReplay(state))fail('DATABASE_CORRUPT');
@@ -181,7 +181,7 @@ export function beginUploadProjection(conn: StorageConnection, input: UploadProj
       snapshot:`u2:${String(info.database_uuid)}:${input.pinId}:${incarnation}:${state.root}:${snap.revision}`,databaseUuid:String(info.database_uuid),purpose:info.purpose,revision:String(snap.revision),
       bounds:{members:String(snap.members),events:String(snap.events),gaps:String(snap.gaps),samples:String(snap.samples),intervals:String(snap.intervals),accountingHead:snap.head===null?null:String(snap.head)}};
     db.prepare(`INSERT INTO upload_projection_pins(pin_id,incarnation_uuid,requested_trip_uuid,root_ref,revision_ref,evidence_generation,state,phase,snapshot_json)
-      VALUES(?,?,?,?,?,?,'preparing','current',?)`).run(input.pinId,incarnation,input.tripUuid,snap.logical,snap.revision,generation(db,snap.logical),encodeRow({snap,initial,trailerBound:get(db,'SELECT id FROM trailer_baselines ORDER BY id DESC LIMIT 1')?.id??0n,
+      VALUES(?,?,?,?,?,?,'preparing','current',?)`).run(input.pinId,incarnation,input.tripUuid,snap.logical,snap.revision,generation(db,snap.logical),encodeRow({snap,initial,rulePrefix:{version:1,unproven:false},trailerBound:get(db,'SELECT id FROM trailer_baselines ORDER BY id DESC LIMIT 1')?.id??0n,
         ruleNativeBounds:ruleNativeBounds(db,snap.row.plugin_session_ref),ruleLossBounds:ruleLossBounds(db,snap.row.plugin_session_ref),nativeCoverage:fromU64Key(required(get(db,'SELECT committed_through_event_seq FROM plugin_sessions WHERE id=?',snap.row.plugin_session_ref)).committed_through_event_seq)}));
     return status(retained(db,input.pinId));
   })();
@@ -198,6 +198,7 @@ export function advanceUploadProjection(conn: StorageConnection, pinId: string, 
     const pin=retained(db,pinId);
     if(pin.state!=='preparing')return status(pin);
     const saved=decodeRow(pin.snapshot_json),snap=saved.snap as LogicalSnapshot;
+    if(saved.rulePrefix!==undefined&&!isRulePrefixProof(saved.rulePrefix))fail('DATABASE_CORRUPT');
     let examined=0;
     if(generation(db,pin.root_ref)!==pin.evidence_generation||!coverageUnchanged(db,snap,saved))pin.state='invalidated';
     while(pin.state==='preparing' && examined<100){
@@ -240,9 +241,10 @@ export function advanceUploadProjection(conn: StorageConnection, pinId: string, 
             DO UPDATE SET qualified=excluded.qualified,raw_trip_uuid=excluded.raw_trip_uuid,row_json=excluded.row_json`).run(pinId,c.event_ref,qualified,uuid,JSON.stringify(row));
           if(!prior)pin.configuration_count=BigInt(String(pin.configuration_count))+1n;
         }else{
-          const c=get(db,'SELECT id,kind,plugin_session_ref FROM completeness_intervals WHERE trip_ref=? AND id>? AND id<=? ORDER BY id LIMIT 1',pin.source_after,pin.item_after,snap.intervals);
+          const c=get(db,'SELECT id,kind,plugin_session_ref,detail_json FROM completeness_intervals WHERE trip_ref=? AND id>? AND id<=? ORDER BY id LIMIT 1',pin.source_after,pin.item_after,snap.intervals);
           if(!c){pin.member_after=pin.source_after;pin.source_after=0n;continue;}
           pin.item_after=c.id;
+          if(isRulePrefixProof(saved.rulePrefix)&&unresolvedRulePrefix(String(c.kind),c.detail_json===null?null:JSON.parse(c.detail_json as string)))saved.rulePrefix.unproven=true;
           const session=required(get(db,'SELECT plugin_session_uuid FROM plugin_sessions WHERE id=?',c.plugin_session_ref));
           const row:UploadInterval={id:String(c.id),kind:c.kind as UploadInterval['kind'],rawTripUuid:String(member.trip_uuid),pluginSessionId:String(session.plugin_session_uuid)};
           db.prepare('INSERT INTO upload_projection_intervals VALUES(?,?,?)').run(pinId,c.id,JSON.stringify(row));

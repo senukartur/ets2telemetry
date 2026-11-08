@@ -127,7 +127,7 @@ it('REG-004/009 folds independently expected pages with constant state and refus
 
 describe('TEL-034 stored whole-trip rule context',()=>{
   function complete(coupling=false){
-    const f=fixture();f.pin.ruleContext={version:1,status:'proven',recordingLoss:false,items:[{index:0,id:{available:true,value:'trailer-a'},bodyType:{available:true,value:'curtainsider'},chainType:absent},
+    const f=fixture();f.pin.ruleContext={version:2,status:'proven',recordingLoss:false,items:[{index:0,id:{available:true,value:'trailer-a'},bodyType:{available:true,value:'curtainsider'},chainType:absent},
       ...(coupling?[{index:1,id:{available:true as const,value:'trailer-b'},bodyType:absent,chainType:absent}]:[])]};return f;
   }
   it.each([false,true])('projects a proven unchanged chain including first-slot-only coupling types (%s)',coupling=>{
@@ -156,6 +156,10 @@ describe('TEL-034 stored whole-trip rule context',()=>{
     let fold=beginUploadFold(f.pin);for(const page of f.pages)fold=advanceUploadFold(f.pin,fold,page,()=>true);
     expect(finishUploadFold(f.pin,fold)).toEqual(mapUploadProjection(f.pin,f.pages));
   });
+  it('keeps a retained version1 proven result unproven because it did not examine job-prefix evidence',()=>{
+    const f=complete();f.pin.ruleContext!.version=1;expect(isUploadProjection(f.pin)).toBe(true);
+    expect(mapped(f).summary.snapshot).toMatchObject({trailers:{complete:false},evidence:{ruleContextComplete:false,reasons:['trailer-context-unproven']}});
+  });
   it.each(['sourceCityId','destinationCityId','cargoId','cargoMass'] as const)('requires stored %s while leaving catalog and ADR resolution to Dashboard',key=>{
     const f=complete();Object.assign(f.pin.facts.job,{[key]:key==='cargoMass'?{...absent,unit:'kg'}:absent});
     expect(mapped(f).summary.snapshot.evidence.ruleContextComplete).toBe(false);
@@ -166,7 +170,8 @@ describe('TEL-034 stored whole-trip rule context',()=>{
     expect(mapped(f).summary.snapshot.evidence).toMatchObject({ruleContextComplete:false,reasons:[`trailer-context-${status}`]});
   });
   it('rejects a complete proof with missing IDs/type, invalid slots or recording loss',()=>{
-    for(const change of [({pin}:ReturnType<typeof complete>)=>{pin.ruleContext!.items[0].bodyType=absent;},
+    for(const change of [({pin}:ReturnType<typeof complete>)=>{pin.ruleContext!.version='2' as never;},
+      ({pin}:ReturnType<typeof complete>)=>{pin.ruleContext!.items[0].bodyType=absent;},
       ({pin}:ReturnType<typeof complete>)=>{pin.ruleContext!.items[0].id={available:true,value:''};},
       ({pin}:ReturnType<typeof complete>)=>{pin.ruleContext!.recordingLoss=true;}]){
       const f=complete();change(f);expect(isUploadProjection(f.pin)).toBe(false);

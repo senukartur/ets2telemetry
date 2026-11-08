@@ -85,5 +85,5 @@ it.each(['before-commit','after-commit','after-answer'])('REG-006/012 commits ra
   const after=String(writer.prepare('SELECT snapshot_json FROM upload_projection_pins WHERE pin_id=?').pluck().get(pinId));
   if(boundary==='before-commit')expect(after).toBe(before);else expect(BigInt(JSON.parse(after).ruleReplay.eventAfter)).toBeGreaterThan(BigInt(JSON.parse(before).ruleReplay.eventAfter));
   let state=ok(reopened.getUploadProjectionPreparation(pinId));while(state.state==='preparing'){state=ok(reopened.advanceUploadProjection(pinId));expect(state.examined).toBeLessThanOrEqual(100);}
-  expect(state.projection!.ruleContext).toMatchObject({version:1,status:'proven',recordingLoss:false});reopened.close();
+  expect(state.projection!.ruleContext).toMatchObject({version:2,status:'proven',recordingLoss:false});reopened.close();
 });

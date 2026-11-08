@@ -1,7 +1,7 @@
 import type {Available, EventRecord} from '../../contracts/src/protocol-v1';
 
 export interface RuleTrailer {index:number;id:Available<string>;bodyType:Available<string>;chainType:Available<string>}
-export interface RuleContext {version:1;status:'proven'|'changed'|'unavailable'|'unproven';items:RuleTrailer[];recordingLoss:boolean}
+export interface RuleContext {version:1|2;status:'proven'|'changed'|'unavailable'|'unproven';items:RuleTrailer[];recordingLoss:boolean}
 export interface RuleReplay {
   version:1;phase:'baseline'|'events'|'gaps'|'losses'|'done';baselineBeforeSeq:string;baselineBeforeId:string;
   lossKind:number;lossAfter:string;eventAfter:string;gapAfterSeq:string;gapAfterId:string;next:string;end:string;opening:string;
@@ -23,8 +23,24 @@ export function isRuleBaseline(v:unknown):v is {version:1;slots:Available<RuleTr
     exact(slot,['available','value'])&&slot.available===true&&isRuleItems([slot.value])&&(slot.value as RuleTrailer).index===index
     ||exact(slot,['available','reason'])&&slot.available===false&&['invalid','not-observed','not-supported'].includes(String(slot.reason)));
 }
+export interface RulePrefixProof {version:1;unproven:boolean}
+export function isRulePrefixProof(v:unknown):v is RulePrefixProof {
+  return exact(v,['version','unproven'])&&v.version===1&&typeof v.unproven==='boolean';
+}
+/** A checkpoint before a new raw opening cannot establish an earlier, unresolved gameplay-job prefix. */
+export function unresolvedRulePrefix(kind:string,detail:unknown):boolean {
+  if(kind!=='discontinuity'&&kind!=='not-connected')return false;
+  const d=object(detail)?detail:{};
+  if(Object.hasOwn(d,'decision')||Object.hasOwn(d,'continuationOf'))return true;
+  const cause=typeof d.cause==='string'?d.cause:'';
+  if(['reload','late-attach','opened-before-attach','loaded-job-unverified','save-load'].includes(cause))return true;
+  if(d.annotation===true&&['opened-at-load','menu-job-acceptance','observed-acceptance','loaded-job-coverage-confirmed','paused-reconnect'].includes(cause))return false;
+  if(kind==='not-connected')return !['disconnected','consumer-restart'].includes(cause);
+  // These measurements do not replace the original job opening; native configuration/gap replay still has to prove it.
+  return !['odometer-regressed','odometer-jump','position-jump','game-time-jump','refuel','truck-change','reading-hole','utc-label-jump'].includes(cause);
+}
 export function isRuleContext(v:unknown):v is RuleContext {
-  return exact(v,['version','status','items','recordingLoss'])&&v.version===1&&['proven','changed','unavailable','unproven'].includes(String(v.status))
+  return exact(v,['version','status','items','recordingLoss'])&&(v.version===1||v.version===2)&&['proven','changed','unavailable','unproven'].includes(String(v.status))
     &&isRuleItems(v.items)&&typeof v.recordingLoss==='boolean'&&(v.status!=='proven'||!v.recordingLoss&&chainComplete(v.items));
 }
 export function isRuleReplay(v:unknown):v is RuleReplay {
@@ -53,5 +69,5 @@ export function replayRuleEvent(state:RuleReplay,sequence:string,record:EventRec
 }
 export function finishRuleReplay(state:RuleReplay):RuleContext {
   const status=state.changed?'changed':state.unproven||!state.opened?'unproven':chainComplete(state.items)?'proven':'unavailable';
-  return {version:1,status,items:state.changed?[]:state.items,recordingLoss:state.recordingLoss};
+  return {version:2,status,items:state.changed?[]:state.items,recordingLoss:state.recordingLoss};
 }
