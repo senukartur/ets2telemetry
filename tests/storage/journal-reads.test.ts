@@ -11,10 +11,11 @@ import {afterAll, beforeAll, describe, expect, it} from 'vitest';
 import {JOURNAL_DETAIL_INTERVALS, JOURNAL_TRIP_PAGE, validateJournalTripDetail, type JournalTripListItem, type JournalTripsQuery} from '../../packages/contracts/src/journal';
 import type {Storage, TripEffect} from '../../packages/storage/src/index';
 import {
-  ANCHOR_GAME_MODE, ANCHOR_JOBS, CHANGED_TRUCK, EUR, JOURNAL_TRIPS as T, MIGRATED_V1_SESSION, MIGRATED_V1_TRIP, seedJournalAnchors, seedJournalFillers, SESSION_B_UTC,
+  ANCHOR_GAME_MODE, ANCHOR_JOBS, CHANGED_TRUCK, EUR, JOURNAL_TRIPS as T, MIGRATED_V1_SESSION, MIGRATED_V1_TRIP, seedJournalAnchors, seedJournalFillers, seedSample, SESSION_B_UTC,
   SESSION_C_UTC, UNKNOWN_CURRENCY, USD, ZERO_DELIVERY, type FillerTrip
 } from '../shared/journal-seed';
 import {ATS_A, BASE_UTC, ETS2_A, ETS2_B, job, money, r, Script, trailer, truck} from '../shared/trip-messages';
+import type {ProfileObservation} from '../../packages/telemetry-core/src';
 import {failed, ok, REPRESENTATIVE, workspace} from './helpers';
 
 const DATABASE = {purpose: 'synthetic', schemaVersion: 6};
@@ -63,7 +64,7 @@ function readAll(query: Omit<JournalTripsQuery, 'cursor'>) {
     expect(page.database).toEqual(DATABASE);
     pages.push(page.trips.length);
     trips.push(...page.trips.map(trip => trip.tripUuid));
-    if (page.trips.length === JOURNAL_TRIP_PAGE) expect(page.nextCursor).toMatch(/^l4:/);
+    if (page.trips.length === JOURNAL_TRIP_PAGE) expect(page.nextCursor).toMatch(/^l5:/);
     else expect(page.nextCursor).toBeNull();
     if (page.nextCursor === null) return {pages, trips};
     cursor = page.nextCursor;
@@ -71,6 +72,149 @@ function readAll(query: Omit<JournalTripsQuery, 'cursor'>) {
   throw new Error('Journal paging did not end within 100 pages');
 }
 const eventSeqs = (tripUuid: string, cursor?: string) => ok(storage.journalEvents(tripUuid, {limit: 100, cursor})).events.map(event => event.eventSeq);
+
+describe('the mode and job type filters and the first-page totals (ET-076; REG-003, REG-009, REG-014)', () => {
+  const uuid = (n: number) => `7c000000-0000-4000-8000-${n.toString(16).padStart(12, '0')}`;
+  const session = (n: number) => `10000000-0000-4000-8000-0000000076${n.toString(16).padStart(2, '0')}`;
+  const MODES = {
+    'single-player': {mode: 'single-player', method: 'module-scan', confidence: 'strong'}, truckersmp: {mode: 'truckersmp', method: 'module-scan', confidence: 'strong'},
+    convoy: {mode: 'convoy', method: 'none', confidence: 'none'}, unknown: {mode: 'unknown', method: 'none', confidence: 'none'}
+  } as const;
+  type Mode = keyof typeof MODES;
+  type Outcome = 'delivered' | 'cancelled' | 'open';
+  const COMPLETENESS = {delivered: 'complete', cancelled: 'partial', open: 'unknown'} as const;
+  const market = (value: string) => ({market: {available: true as const, value}});
+  /** The eight hand-written trips, in creation order: every mode (the journal still reads convoy, which the writer's type no longer offers), every market, an unavailable, an empty and an unlisted one. */
+  const TRIPS: {n: number; game: 'ets2' | 'ats'; mode: Mode; values: Parameters<typeof job>[0]; outcome: Outcome; samples: number}[] = [
+    {n: 1, game: 'ets2', mode: 'single-player', values: market('freight_market'), outcome: 'delivered', samples: 3},
+    {n: 2, game: 'ets2', mode: 'truckersmp', values: market('quick_job'), outcome: 'cancelled', samples: 2},
+    {n: 3, game: 'ets2', mode: 'convoy', values: market('cargo_market'), outcome: 'open', samples: 1},
+    {n: 4, game: 'ats', mode: 'unknown', values: market('external_contracts'), outcome: 'delivered', samples: 0},
+    {n: 5, game: 'ats', mode: 'unknown', values: market('external_market'), outcome: 'cancelled', samples: 4},
+    {n: 6, game: 'ats', mode: 'single-player', values: {market: {available: false, reason: 'not-supported'}}, outcome: 'delivered', samples: 0},
+    {n: 7, game: 'ats', mode: 'truckersmp', values: market(''), outcome: 'open', samples: 0},
+    {n: 8, game: 'ets2', mode: 'unknown', values: market('foo_market'), outcome: 'delivered', samples: 1}
+  ];
+  /** 55 more World of Trucks trips with two samples each: the matches of that job type span two pages. */
+  const PAGED = Array.from({length: 55}, (_, i) => 100 + i);
+  const CONTINUED = uuid(99);
+  const list = (ns: readonly number[]) => ns.map(uuid);
+  const PAGED_NEWEST = [...PAGED].reverse();
+
+  let db: Awaited<ReturnType<typeof workspace>>;
+  let filtered: Storage;
+  beforeAll(async () => {
+    db = await workspace();
+    filtered = await db.open();
+    const clocks = new Map<string, number>();
+    const openTrip = (script: Script, tripUuid: string, modeName: Mode, values: Parameters<typeof job>[0], profile?: ProfileObservation) => {
+      ok(filtered.commitEvent({message: script.event(r.jobConfigured(job(values))), ...(profile ? {profile} : {}), effects: [{kind: 'trip.open', tripUuid, game: script.game, gameMode: MODES[modeName] as Extract<TripEffect, {kind: 'trip.open'}>['gameMode'],
+        jobConfiguration: 'this-event', recordingCompleteness: 'complete', startedUtcMs: BASE_UTC}, {kind: 'event.attribute', tripUuid, attribution: 'trip'}]}));
+    };
+    const addSamples = (script: Script, tripUuid: string, count: number) => {
+      if (count === 0) return;
+      const from = clocks.get(script.session) ?? 0;
+      clocks.set(script.session, from + count);
+      ok(filtered.appendSamples(script.session, Array.from({length: count}, (_, k) => seedSample(script, tripUuid, from + k, BASE_UTC + (from + k) * 1_000))));
+    };
+    const closeTrip = (script: Script, tripUuid: string, outcome: Outcome) => {
+      if (outcome === 'open') return;
+      ok(filtered.commitEvent({message: script.event(outcome === 'delivered' ? r.delivered() : r.cancelled()), effects: [{kind: 'event.attribute', tripUuid, attribution: 'trip'},
+        {kind: 'trip.close', tripUuid, outcome, closeReason: 'outcome', outcomeEvent: 'this-event', recordingCompleteness: COMPLETENESS[outcome], endedUtcMs: BASE_UTC + 900_000}]}));
+    };
+    const scripts = {ets2: new Script(session(1), 'ets2'), ats: new Script(session(2), 'ats')};
+    for (const script of Object.values(scripts)) ok(filtered.upsertSession({message: script.welcome()}));
+    for (const trip of TRIPS) {
+      openTrip(scripts[trip.game], uuid(trip.n), trip.mode, trip.values);
+      addSamples(scripts[trip.game], uuid(trip.n), trip.samples);
+      closeTrip(scripts[trip.game], uuid(trip.n), trip.outcome);
+    }
+    for (const n of PAGED) {
+      openTrip(scripts.ets2, uuid(n), 'truckersmp', market('external_contracts'));
+      addSamples(scripts.ets2, uuid(n), 2);
+    }
+    // One logical trip of two recordings: it opens single-player and goes on as TruckersMP; the list keeps the opening member's mode and job.
+    const proof = (script: Script): ProfileObservation => {
+      const source = script.welcome().source;
+      return {version: 1, scope: 'a'.repeat(64), binding: 'b'.repeat(64), game: source.game, pluginSessionId: source.pluginSessionId, processInstanceId: source.processInstanceId,
+        sourceClockId: script.clockId, afterMonotonicNs: '0', loadGeneration: 1};
+    };
+    const first = new Script(session(3)), second = new Script(session(4));
+    ok(filtered.upsertSession({message: first.welcome()}));
+    openTrip(first, CONTINUED, 'single-player', market('quick_job'), proof(first));
+    addSamples(first, CONTINUED, 2);
+    ok(filtered.commitEvent({message: first.event(r.timersRestart()), effects: [{kind: 'trip.close', tripUuid: CONTINUED, outcome: 'none', closeReason: 'restart', recordingCompleteness: 'partial', endedUtcMs: BASE_UTC + 1_000_000}]}));
+    ok(filtered.upsertSession({message: second.welcome()}));
+    openTrip(second, uuid(98), 'truckersmp', market('quick_job'), proof(second));
+    addSamples(second, uuid(98), 3);
+    closeTrip(second, uuid(98), 'delivered');
+  }, 120_000);
+  afterAll(async () => { await db.dispose(); });
+
+  function readEvery(query: Omit<JournalTripsQuery, 'cursor'>) {
+    const trips: string[] = [], pages: number[] = [];
+    let cursor: string | undefined;
+    for (let round = 0; round < 10; round++) {
+      const page = ok(filtered.journalTrips({...query, cursor}));
+      pages.push(page.trips.length); trips.push(...page.trips.map(trip => trip.tripUuid));
+      if (page.nextCursor === null) return {trips, pages};
+      expect(page.nextCursor).toMatch(/^l5:/);
+      cursor = page.nextCursor;
+    }
+    throw new Error('Journal paging did not end within 10 pages');
+  }
+
+  it.each<[string, Omit<JournalTripsQuery, 'cursor'>, readonly number[], number]>([
+    ['the unknown mode', {mode: 'unknown'}, [8, 5, 4], 5],
+    ['convoy', {mode: 'convoy'}, [3], 1],
+    ['a cargo market job', {jobType: 'cargo-market'}, [3], 1],
+    ['a freight market job', {jobType: 'freight-market'}, [1], 3],
+    ['an unavailable, an empty and an unlisted market as other', {jobType: 'other'}, [8, 7, 6], 1],
+    ['game, mode, outcome and recording together', {game: 'ats', mode: 'unknown', outcome: 'delivered', completeness: 'complete'}, [4], 0],
+    ['game, job type and outcome together', {game: 'ets2', jobType: 'other', outcome: 'delivered'}, [8], 1],
+    ['mode, job type and game together', {game: 'ats', mode: 'truckersmp', jobType: 'other'}, [7], 0],
+    ['a combination no trip has', {mode: 'convoy', jobType: 'quick-job'}, [], 0]
+  ])('returns exactly the trips of %s, with their totals', (_, query, trips, recordedSeconds) => {
+    const page = ok(filtered.journalTrips(query));
+    expect(page.trips.map(trip => trip.tripUuid)).toEqual(list(trips));
+    expect(page.totals).toEqual({trips: trips.length, recordedSeconds});
+    expect(page.nextCursor).toBeNull();
+  });
+  it('filters a continued logical trip by its opening member\'s mode, and counts the samples of both members', () => {
+    const opening = ok(filtered.journalTrips({mode: 'single-player'}));
+    expect(opening.trips.map(trip => trip.tripUuid)).toEqual([CONTINUED, uuid(6), uuid(1)]);
+    expect(opening.trips[0]).toMatchObject({gameMode: MODES['single-player'], gameModeAmbiguous: true, outcome: 'delivered'});
+    expect(opening.totals).toEqual({trips: 3, recordedSeconds: 8});
+    expect(ok(filtered.journalTrips({jobType: 'quick-job'}))).toMatchObject({totals: {trips: 2, recordedSeconds: 7}});
+    expect(ok(filtered.journalTrips({jobType: 'quick-job', mode: 'single-player', outcome: 'delivered'})).trips.map(trip => trip.tripUuid)).toEqual([CONTINUED]);
+    // The second recording is not a row of its own, under its own mode either.
+    expect(ok(filtered.journalTrips({jobType: 'quick-job', mode: 'truckersmp'})).trips.map(trip => trip.tripUuid)).toEqual([uuid(2)]);
+    expect(ok(filtered.journalTrips({jobType: 'quick-job', mode: 'truckersmp'})).totals).toEqual({trips: 1, recordedSeconds: 2});
+  });
+  it('counts every logical trip and its samples without a filter', () => {
+    // 8 trips, 55 paged trips and the continued one; 3 + 2 + 1 + 4 + 1 samples, 55 x 2, and 2 + 3.
+    expect(ok(filtered.journalTrips()).totals).toEqual({trips: 64, recordedSeconds: 126});
+  });
+  it('pages more than 50 matches with l5 cursors, without loss or duplicates, and states the totals on the first page only', () => {
+    const all = readEvery({jobType: 'world-of-trucks'});
+    expect(all.pages).toEqual([50, 7]);
+    expect(all.trips).toEqual([...list(PAGED_NEWEST), uuid(5), uuid(4)]);
+    const first = ok(filtered.journalTrips({jobType: 'world-of-trucks'}));
+    expect(first.totals).toEqual({trips: 57, recordedSeconds: 114});
+    expect(ok(filtered.journalTrips({jobType: 'world-of-trucks', cursor: first.nextCursor!})).totals).toBeUndefined();
+    const truckers = readEvery({mode: 'truckersmp'});
+    expect(truckers.pages).toEqual([50, 7]);
+    expect(truckers.trips).toEqual([...list(PAGED_NEWEST), uuid(7), uuid(2)]);
+  });
+  it.each<[string, Omit<JournalTripsQuery, 'cursor'>]>([
+    ['another job type', {jobType: 'other'}],
+    ['no job type', {}],
+    ['a mode as well', {jobType: 'world-of-trucks', mode: 'truckersmp'}]
+  ])('refuses a cursor reused with %s', (_, changed) => {
+    const {nextCursor} = ok(filtered.journalTrips({jobType: 'world-of-trucks'}));
+    failed(filtered.journalTrips({...changed, cursor: nextCursor!}), 'INVALID_INPUT');
+  });
+});
 
 describe('journal trip list (J5; REG-014)', () => {
   it('lists every trip newest first, 50 per page; a full page has a cursor and the last page has none', () => {
