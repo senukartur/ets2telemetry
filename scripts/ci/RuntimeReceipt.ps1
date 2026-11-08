@@ -459,7 +459,7 @@ function Test-JournalReceipt {
         !(Test-ReceiptInteger -Value $seed.pagingTolls -Minimum 104 -Maximum 104) -or !(Test-ReceiptInteger -Value $seed.pagingSamples -Minimum 3600 -Maximum 3600)) { return $false }
     if ((@($journal.pages | ForEach-Object { $_.count }) -join ',') -cne '50,50,20' -or @($journal.pages)[2].next -isnot [bool] -or @($journal.pages)[2].next) { return $false }
     $filters = $journal.filters
-    if ($null -eq $filters -or @($filters.none).Count -ne 3 -or !(Test-ReceiptInteger -Value $filters.partial -Minimum 40 -Maximum 40)) { return $false }
+    if ($null -eq $filters -or @($filters.none).Count -ne 3 -or !(Test-ReceiptInteger -Value $filters.partial -Minimum 41 -Maximum 41)) { return $false }
     # Review round 1: the B6 viewport bounds and the anchors' order are re-checked here, not only as driver flags. The
     # status, speed and fuel lines must lie inside the first viewport; page 3 lists the anchors newest first, and the
     # details are opened oldest first.
