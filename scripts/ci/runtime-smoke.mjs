@@ -255,7 +255,7 @@ try {
       const refused = await globalThis.desktop.getJournalTrip('C:\\Users\\owner\\telemetry.sqlite').then(() => 'resolved', error => String(error?.message));
       return {answer, refused};
     });
-    assert.deepEqual(result.journal, {answer: {ok: true, value: {database: {purpose: 'history', schemaVersion: 6}, trips: [], nextCursor: null}},
+    assert.deepEqual(result.journal, {answer: {ok: true, value: {database: {purpose: 'history', schemaVersion: 6}, trips: [], nextCursor: null, totals: {trips: 0, recordedSeconds: 0}}},
       refused: 'Invalid journal request'});
     // ET-017 PR-5 review: plugin setup is disabled here; the card says so and disables every control that would change nothing.
     result.pluginCard = await verifyDisabledPluginCard(window);
