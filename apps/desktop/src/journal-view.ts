@@ -97,11 +97,15 @@ export interface JournalTimelineItem {kind: 'event' | 'gap' | 'refuel'; key: str
  */
 export interface JournalTimelineBounds {after: number | null; through: number | null}
 export interface JournalCompletenessText {
-  recorded: string; gaps: string; intervals: string; note: string;
+  recorded: string;
+  /** The limit of the recorded value, which is a plain count of the trip's samples. */
+  recordedNote: string;
+  /** Every non-annotation gap, including those during which samples may still have been written. */
+  gaps: string; intervals: string; note: string;
   /** Set when the trip has more intervals than the detail carries, so the gap total covers only the first ones. */
   partial: string | null;
-  /** Totals for the recorded and gap bar, which is an aggregate and not a time axis. */
-  bar: {recordedSeconds: number; gapSeconds: number; gapCount: number; label: string};
+  /** Totals for the recorded and gaps-without-samples bar, which is an aggregate and not a time axis. */
+  bar: {recordedSeconds: number; gapSeconds: number; gapCount: number; gaps: string; label: string};
 }
 
 type JournalFailure = Extract<JournalCallResult<unknown>, {ok: false}>;
@@ -477,14 +481,23 @@ function journalTimelineItems(page: JournalEventPage, text: JournalEventText, in
   return last ? [...items, ...shown.filter(interval => interval.startUtcMs === null).map(interval => intervalItem(interval, options, game))] : items;
 }
 
-/** The union of the trip's gap lengths: overlapping intervals of one clock are one gap, and only monotonic bounds count. */
+/**
+ * Whether the recording establishes that no sample was written during this interval: the consumer was disconnected or not
+ * running, or no reading arrived (docs/trips.md, T13 and T17). Event loss, a discontinuity, a hole extended over readings and
+ * a producer gap or attach cause reported as `not-connected` do not establish it; `storage-unavailable` is never written,
+ * and `restore-loss` covers an eventSeq range only.
+ */
+const withoutSamples = (interval: JournalInterval) => interval.kind === 'not-connected' ? interval.cause === 'disconnected' || interval.cause === 'consumer-restart'
+  : interval.kind === 'sample-loss' && interval.cause === 'reading-hole' && interval.detail?.includesReadings !== true;
+/** The union of the given gap lengths: overlapping intervals of one session and clock are one gap, and only monotonic bounds count. */
 function gapTotals(items: readonly JournalInterval[]): {count: number; seconds: number; unknown: number} {
   const gaps = items.filter(interval => !interval.annotation), spans = new Map<string, [bigint, bigint][]>();
   let unknown = 0;
   for (const gap of gaps) {
     if (intervalSeconds(gap) === null) {unknown++; continue;}
-    const clock = gap.sourceClockId ?? '';
-    spans.set(clock, [...(spans.get(clock) ?? []), [BigInt(gap.startMonotonicNs ?? 0), BigInt(gap.endMonotonicNs ?? 0)]]);
+    // As in the chart, one plugin session and clock is one source; a missing session is a value of its own.
+    const source = JSON.stringify([gap.pluginSessionId ?? null, gap.sourceClockId]);
+    spans.set(source, [...(spans.get(source) ?? []), [BigInt(gap.startMonotonicNs ?? 0), BigInt(gap.endMonotonicNs ?? 0)]]);
   }
   let total = 0n;
   for (const list of spans.values()) {
@@ -498,16 +511,17 @@ function gapTotals(items: readonly JournalInterval[]): {count: number; seconds: 
 }
 /** The Completeness tab's aggregate: recorded time from the sample count and the gaps of the detail's intervals. */
 function journalCompletenessText(detail: JournalTripDetail): JournalCompletenessText {
-  const recordedSeconds = detail.samples.count, totals = gapTotals(detail.intervals.items), shown = detail.intervals.items.length;
+  const recordedSeconds = detail.samples.count, shown = detail.intervals.items.length;
+  const totals = gapTotals(detail.intervals.items), missing = gapTotals(detail.intervals.items.filter(withoutSamples));
   const incomplete = detail.intervals.total > shown;
   const recorded = recordedSeconds > 0 ? journalDurationText(recordedSeconds, language) : '—';
-  const parts = [...(totals.unknown < totals.count ? [journalDurationText(totals.seconds, language)] : []),
-    ...(totals.unknown > 0 ? [t('tr.ivUnknown', {n: totals.unknown}, language)] : [])];
   // Only the first intervals are read, so "none" could be false about the ones after them.
-  const gaps = totals.count > 0 ? parts.join(' · ') : incomplete ? t('tr.ivNoneFirst', {shown}, language) : t('tr.ivNone', undefined, language);
-  return {recorded, gaps, intervals: String(detail.intervals.total), note: t('tr.ivNote', undefined, language),
+  const describe = (sum: ReturnType<typeof gapTotals>) => sum.count === 0 ? incomplete ? t('tr.ivNoneFirst', {shown}, language) : t('tr.ivNone', undefined, language)
+    : [...(sum.unknown < sum.count ? [journalDurationText(sum.seconds, language)] : []), ...(sum.unknown > 0 ? [t('tr.ivUnknown', {n: sum.unknown}, language)] : [])].join(' · ');
+  const gaps = describe(totals), withoutSampleGaps = describe(missing);
+  return {recorded, recordedNote: t('tr.recordedLimit', undefined, language), gaps, intervals: String(detail.intervals.total), note: t('tr.ivNote', undefined, language),
     partial: incomplete ? t('tr.ivFirstOnly', {shown, total: detail.intervals.total}, language) : null,
-    bar: {recordedSeconds, gapSeconds: totals.seconds, gapCount: totals.count, label: t('tr.ivBar', {recorded, gaps}, language)}};
+    bar: {recordedSeconds, gapSeconds: missing.seconds, gapCount: missing.count, gaps: withoutSampleGaps, label: t('tr.ivBar', {recorded, gaps: withoutSampleGaps}, language)}};
 }
 /** `Saved by the site <time> · version <n>`, only for a durable upload; never says that the company accepted the trip. */
 function journalSiteSaved(row: JournalSyncRow, options: JournalTextOptions = {}): string | null {

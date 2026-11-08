@@ -61,7 +61,23 @@ describe('chart gaps (ET-077; REG-002/003/008/009/014)', () => {
   it('classifies each break and counts whole missing source seconds, never UTC', () => {
     const view = journalChart([sample(1, {utcMs: 900_000}), sample(2, invalid), sample(3, {utcMs: 5}), sample(5), sample(6)], 'ets2');
     expect(view.gaps).toEqual([{afterSegment: 0, kind: 'no-speed', seconds: 1}, {afterSegment: 1, kind: 'no-samples', seconds: 1}]);
-    expect(journalChart([sample(1), sample(2, {accountingIncluded: false}), sample(3)], 'ets2').gaps).toEqual([{afterSegment: 0, kind: 'no-speed', seconds: 1}]);
+    expect(journalChart([sample(1), sample(2, {accountingIncluded: false}), sample(3)], 'ets2').gaps).toEqual([{afterSegment: 0, kind: 'excluded', seconds: 1}]);
+  });
+  it('never claims no speed for a sample outside the accounting, and keeps one band per hole', () => {
+    const excluded = {accountingIncluded: false} as const;
+    expect(journalChart([sample(1), sample(2, invalid), sample(3, excluded), sample(4, invalid), sample(5)], 'ets2').gaps).toEqual([{afterSegment: 0, kind: 'excluded', seconds: 3}]);
+    expect(journalChart([sample(1), sample(2, invalid), sample(3, invalid), sample(4)], 'ets2').gaps).toEqual([{afterSegment: 0, kind: 'no-speed', seconds: 2}]);
+    expect(journalChart([sample(1, excluded), sample(2)], 'ets2').gaps).toEqual([{afterSegment: -1, kind: 'excluded', seconds: 1}]);
+    expect(journalChart([sample(1), sample(2, excluded)], 'ets2').gaps).toEqual([{afterSegment: 0, kind: 'excluded', seconds: 1}]);
+    const two = journalChart([sample(1), sample(2, excluded), sample(3), sample(4, invalid), sample(5)], 'ets2').gaps;
+    expect(two).toEqual([{afterSegment: 0, kind: 'excluded', seconds: 1}, {afterSegment: 1, kind: 'no-speed', seconds: 1}]);
+    expect(new Set(two.map(gap => gap.afterSegment)).size).toBe(two.length);
+  });
+  it.each([['en', 'not counted in this trip for 1 s'], ['ru', 'не учтено в этом рейсе 1 с']] as const)('names excluded samples in the band and the legend in %s', (language, text) => {
+    const svg = renderToStaticMarkup(React.createElement(SampleChart, {samples: [sample(1), sample(2, {accountingIncluded: false}), sample(3)], game: 'ets2', language}));
+    expect(svg).toContain('data-kind="excluded"'); expect(svg).toContain(`<title>${text}</title>`);
+    expect(svg).toMatch(new RegExp(`data-testid="trip\\.chart\\.gaps"[^]*${text}`));
+    expect(svg).not.toContain(language === 'en' ? 'no speed' : 'нет скорости');
   });
   it('gives a source change and a backwards instant no length', () => {
     expect(journalChart([sample(1), sample(2, {sourceClockId: 'clock-b'})], 'ets2').gaps).toEqual([{afterSegment: 0, kind: 'source-change', seconds: null}]);

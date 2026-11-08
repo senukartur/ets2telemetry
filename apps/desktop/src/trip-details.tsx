@@ -126,8 +126,10 @@ export function TripCompleteness({text, language}: {text: JournalCompletenessTex
     <dl>
       <div className="yu-trip-row"><dt>{t('tr.ivRecorded', undefined, language)}</dt><dd data-testid="trip.completeness.recorded">{text.recorded}</dd></div>
       <div className="yu-trip-row"><dt>{t('tr.ivGap', undefined, language)}</dt><dd data-testid="trip.completeness.gaps">{text.gaps}</dd></div>
+      <div className="yu-trip-row"><dt>{t('tr.ivNoSamples', undefined, language)}</dt><dd data-testid="trip.completeness.withoutSamples">{bar.gaps}</dd></div>
       <div className="yu-trip-row"><dt>{t('tr.ivCount', undefined, language)}</dt><dd data-testid="trip.completeness.intervals">{text.intervals}</dd></div>
     </dl>
+    <p className="yu-trip-note" data-testid="trip.completeness.recordedNote">{text.recordedNote}</p>
     {text.partial ? <p className="yu-trip-note" data-testid="trip.completeness.partial">{text.partial}</p> : null}
     <p className="yu-trip-note">{text.note}</p>
   </div>;

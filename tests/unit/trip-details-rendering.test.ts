@@ -26,8 +26,8 @@ const hardMode = (assessment = evaluateHardMode(parseHardModeConfig(HARD_MODE_CO
 
 describe('compact trip page (ET-077)', () => {
   it.each([
-    ['en', ['Distance observed', 'planned 152.0 km', 'game reported 150.0 km', 'Revenue', 'expected 12345 (currency unknown)', 'Recorded time', 'from 1 Hz samples, without pauses and gaps', '7 h 51 min game time', 'Fuel used', 'from samples, refuels excluded']],
-    ['ru', ['Пройдено по одометру', 'по заказу 152.0 км', 'по данным игры 150.0 км', 'Выручка', 'ожидалось 12345 (валюта неизвестна)', 'Записано времени', 'по сэмплам 1 Гц, без пауз и пропусков', '7 ч 51 мин игрового', 'Израсходовано', 'по сэмплам, без заправок']]
+    ['en', ['Distance observed', 'planned 152.0 km', 'game reported 150.0 km', 'Revenue', 'expected 12345 (currency unknown)', 'Recorded time', 'from 1 Hz samples, without pauses and gaps; may include samples not counted in distance and fuel', '7 h 51 min game time', 'Fuel used', 'from samples, refuels excluded']],
+    ['ru', ['Пройдено по одометру', 'по заказу 152.0 км', 'по данным игры 150.0 км', 'Выручка', 'ожидалось 12345 (валюта неизвестна)', 'Записано времени', 'по сэмплам 1 Гц, без пауз и пропусков; могут входить сэмплы, не учтённые в дистанции и расходе', '7 ч 51 мин игрового', 'Израсходовано', 'по сэмплам, без заправок']]
   ] as const)('labels the planned, game-reported and observed totals separately in %s', (language, texts) => {
     const html = kpis(DELIVERED, language);
     for (const text of texts) expect(html).toContain(text);
@@ -99,7 +99,9 @@ describe('compact trip page (ET-077)', () => {
 
   it('shows the completeness totals and the no-guessing note', () => {
     const html = renderToStaticMarkup(React.createElement(TripCompleteness, {text: journalCompletenessText(OPEN, 'ru'), language: 'ru'}));
-    expect(html).toContain('role="img"'); expect(html).toContain('aria-label="Записано 1 с, пропуски нет"');
+    expect(html).toContain('role="img"'); expect(html).toContain('aria-label="Записано 1 с, пропуски без сэмплов нет"');
+    expect(html).toContain('Пропуски без сэмплов'); expect(html).toMatch(/data-testid="trip\.completeness\.withoutSamples">нет</);
+    expect(html).toMatch(/data-testid="trip\.completeness\.recordedNote">В записанное время могут входить сэмплы/);
     expect(html).toContain('Пропуск не заполняется догадками');
     expect(html).toMatch(/data-testid="trip\.completeness\.intervals">1</);
   });

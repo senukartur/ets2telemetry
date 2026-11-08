@@ -564,7 +564,7 @@ it('separates typed hero amounts and missing values from their provenance withou
   expect(journalTileValues(DELIVERED_DETAIL, {language: 'ru'})).toEqual({distance: {value: '152.0 км', note: null},
     fuel: {value: '—', note: 'недоступно (не наблюдалось)'}, money: {value: '15000 EUR', note: 'Валюта подтверждена SDK'},
     planned: '152.0 км', gameDistance: '151.3 км', expected: '12345 (валюта неизвестна)',
-    recorded: {value: '3 с', note: 'по сэмплам 1 Гц, без пауз и пропусков'}, gameTime: '7 ч 51 мин игрового'});
+    recorded: {value: '3 с', note: 'по сэмплам 1 Гц, без пауз и пропусков; могут входить сэмплы, не учтённые в дистанции и расходе'}, gameTime: '7 ч 51 мин игрового'});
   expect(journalTileValues(ZERO_DETAIL).distance).toEqual({value: '0.0 mi', note: null});
   expect(journalTileValues(ZERO_DETAIL).fuel).toEqual({value: '0.0 US gal', note: null});
   const detail = structuredClone(DELIVERED_DETAIL);
@@ -635,7 +635,7 @@ describe('the compact trip page (ET-077; REG-003, REG-009, REG-014)', () => {
   it('derives recorded time from the sample count and never from the UTC labels', () => {
     // A week between the labels and 13,860 samples: the tile shows the samples.
     const recorded = journalTileValues(withSamples(13_860, BASE_UTC, BASE_UTC + 604_800_000)).recorded;
-    expect(recorded).toEqual({value: '3 h 51 min', note: 'from 1 Hz samples, without pauses and gaps'});
+    expect(recorded).toEqual({value: '3 h 51 min', note: 'from 1 Hz samples, without pauses and gaps; may include samples not counted in distance and fuel'});
     expect(journalTileValues(withSamples(725, BASE_UTC, BASE_UTC + 1)).recorded.value).toBe('12 min 5 s');
     expect(journalTileValues(withSamples(46, null, null)).recorded.value).toBe('46 s');
   });
@@ -730,7 +730,32 @@ describe('the compact trip page (ET-077; REG-003, REG-009, REG-014)', () => {
       interval('3', 3), interval('4', 4, {annotation: true, cause: 'refuel', kind: 'discontinuity', startMonotonicNs: '1000000000', endMonotonicNs: '91000000000'})];
     const text = journalCompletenessText({...DELIVERED_DETAIL, samples: {count: 13_860, firstUtcMs: null, lastUtcMs: null}, intervals: {items, total: 4, nextCursor: null}});
     expect(text).toMatchObject({recorded: '3 h 51 min', gaps: '15 s · 1 of unknown duration', intervals: '4', partial: null,
-      bar: {recordedSeconds: 13_860, gapSeconds: 15, gapCount: 3, label: 'Recorded 3 h 51 min, gaps 15 s · 1 of unknown duration'}});
+      bar: {recordedSeconds: 13_860, gapSeconds: 15, gapCount: 3, label: 'Recorded 3 h 51 min, gaps without samples 15 s · 1 of unknown duration'}});
+  });
+  it('joins overlapping gaps only within one plugin session and clock', () => {
+    const span = (id: string, changes: Partial<JournalInterval>) => interval(id, 1, {startMonotonicNs: '0', endMonotonicNs: '10000000000', ...changes});
+    const gaps = (items: JournalInterval[]) => journalCompletenessText({...DELIVERED_DETAIL, intervals: {items, total: items.length, nextCursor: null}}).gaps;
+    expect(gaps([span('1', {pluginSessionId: 'a'}), span('2', {pluginSessionId: 'b'})])).toBe('20 s');
+    expect(gaps([span('1', {pluginSessionId: 'a'}), span('2', {pluginSessionId: 'a'})])).toBe('10 s');
+    expect(gaps([span('1', {}), span('2', {})])).toBe('10 s');
+    expect(gaps([span('1', {pluginSessionId: 'a'}), span('2', {})])).toBe('20 s');
+    expect(gaps([span('1', {pluginSessionId: 'a', sourceClockId: 'x'}), span('2', {pluginSessionId: 'a', sourceClockId: 'y'})])).toBe('20 s');
+  });
+  it('draws only the gaps with no samples written in the bar and keeps every gap in the Gaps row', () => {
+    const span = (id: string, from: number, to: number, changes: Partial<JournalInterval>) => interval(id, 1, {startMonotonicNs: `${from}000000000`, endMonotonicNs: `${to}000000000`, ...changes});
+    const items = [span('1', 1, 11, {}), span('2', 20, 25, {kind: 'not-connected', cause: 'disconnected'}), interval('3', 1, {kind: 'not-connected', cause: 'consumer-restart'}),
+      span('4', 30, 60, {kind: 'event-loss', cause: 'gap'}), span('5', 70, 80, {kind: 'discontinuity', cause: 'reload'}), span('6', 100, 120, {detail: {includesReadings: true}}),
+      span('7', 130, 140, {kind: 'not-connected', cause: 'gap'}), span('8', 150, 160, {cause: 'sample-backlog'}), span('9', 170, 180, {kind: 'storage-unavailable', cause: null}), interval('10', 1, {kind: 'restore-loss', cause: null}),
+      span('11', 200, 290, {kind: 'discontinuity', cause: 'refuel', annotation: true})];
+    const text = journalCompletenessText({...DELIVERED_DETAIL, intervals: {items, total: items.length, nextCursor: null}});
+    expect(text.gaps).toBe('1 min 45 s · 2 of unknown duration');
+    expect(text.bar).toEqual({recordedSeconds: 3, gapSeconds: 15, gapCount: 3, gaps: '15 s · 1 of unknown duration', label: 'Recorded 3 s, gaps without samples 15 s · 1 of unknown duration'});
+    const ru = journalCompletenessText({...DELIVERED_DETAIL, intervals: {items: [span('4', 30, 60, {kind: 'event-loss', cause: 'gap'})], total: 1, nextCursor: null}}, 'ru');
+    expect(ru).toMatchObject({gaps: '30 с', bar: {gapCount: 0, gapSeconds: 0, gaps: 'нет', label: 'Записано 3 с, пропуски без сэмплов нет'}});
+  });
+  it('states the limit of the recorded value', () => {
+    expect(journalCompletenessText(DELIVERED_DETAIL).recordedNote).toBe('Recorded time may include samples not counted in distance and fuel.');
+    expect(journalCompletenessText(DELIVERED_DETAIL, 'ru').recordedNote).toBe('В записанное время могут входить сэмплы, не учтённые в дистанции и расходе.');
   });
   it('says none, says unknown and says when only the first intervals are in the total', () => {
     expect(journalCompletenessText(DELIVERED_DETAIL)).toMatchObject({recorded: '3 s', gaps: 'none', intervals: '0', bar: {gapCount: 0}});
@@ -739,7 +764,7 @@ describe('the compact trip page (ET-077; REG-003, REG-009, REG-014)', () => {
     expect(journalCompletenessText({...DELIVERED_DETAIL, intervals: {items: [utcOnly], total: 51, nextCursor: '1'}}, 'ru')).toMatchObject({gaps: 'без известной длительности: 1', intervals: '51', partial: 'Итог по пропускам учитывает первые 1 из 51 интервалов.'});
   });
 
-  it.each([['en', 'none in the first 1', 'Recorded 3 s, gaps none in the first 1'], ['ru', 'нет в первых 1', 'Записано 3 с, пропуски нет в первых 1']] as const)('does not say none when later intervals were not read in %s', (language, gaps, label) => {
+  it.each([['en', 'none in the first 1', 'Recorded 3 s, gaps without samples none in the first 1'], ['ru', 'нет в первых 1', 'Записано 3 с, пропуски без сэмплов нет в первых 1']] as const)('does not say none when later intervals were not read in %s', (language, gaps, label) => {
     const annotation = interval('1', BASE_UTC, {annotation: true, cause: 'refuel', kind: 'discontinuity'});
     expect(journalCompletenessText({...DELIVERED_DETAIL, intervals: {items: [annotation], total: 51, nextCursor: '1'}}, language)).toMatchObject({gaps, bar: {gapCount: 0, label}});
   });

@@ -6,11 +6,12 @@ import {journalDurationText, localTime} from '../journal-view';
 
 const bandLabel = (seconds: number | null, language: AppLanguage) => seconds === null ? '?'
   : seconds < 60 ? t('tr.durS', {s: seconds}, language) : seconds < 3600 ? t('tr.durM', {m: Math.floor(seconds / 60)}, language) : t('tr.durH', {h: Math.floor(seconds / 3600)}, language);
+const GAP_TEXT = {'no-samples': 'tr.gap', 'no-speed': 'tr.gapNoSpeed', excluded: 'tr.gapExcluded'} as const;
 /** A kind's total of known lengths never hides that some of its gaps have none. */
 function gapText(gap: Pick<ChartGap, 'kind' | 'seconds'> & {count: number; unknown: number}, language: AppLanguage) {
   if (gap.kind === 'source-change') return t('tr.gapSource', {n: gap.count}, language);
   if (gap.seconds === null) return t('tr.gapUnknown', undefined, language);
-  const known = t(gap.kind === 'no-samples' ? 'tr.gap' : 'tr.gapNoSpeed', {d: journalDurationText(gap.seconds, language)}, language);
+  const known = t(GAP_TEXT[gap.kind], {d: journalDurationText(gap.seconds, language)}, language);
   return gap.unknown > 0 ? `${known} · ${t('tr.ivUnknown', {n: gap.unknown}, language)}` : known;
 }
 
