@@ -152,6 +152,7 @@ Columns:
 | `tests/unit/journal-delete.test.ts` | Node unit (Vitest) | REG-011, REG-012, REG-014 | F, T | ET-065 | PR (tests job, `npm test`) | security, channel restriction, contract arity |
 | `tests/unit/journal-service.test.ts` | Node unit (Vitest) | REG-011, REG-014 | R, F | ET-016a (#97) | PR (tests job, `npm test`) | — |
 | `tests/unit/journal-view.test.ts` | Node unit (Vitest) | REG-009, REG-014, REG-017 | R, F | ET-016a (#98); ET-059 | PR (tests job, `npm test`) | gap, trip completeness, mode evidence |
+| `tests/unit/journal-rendering.test.ts` | Node unit (Vitest) | REG-009, REG-014 | R, F | ET-076 | PR (tests job, `npm test`) | mode evidence |
 | `tests/unit/info-hint-rendering.test.ts` | Node unit (Vitest) | REG-009 | R | ET-057 (#225) | PR (tests job, `npm test`) | — |
 | `tests/unit/live-dashboard-break-rendering.test.ts` | Node unit (Vitest) | REG-009 | R, F | ET-052 PR-4 | PR (tests job, `npm test`) | — |
 | `tests/unit/live-dashboard-text.test.ts` | Node unit (Vitest) | REG-002, REG-003, REG-009 | R, F | ET-010b (#62) | PR (tests job, `npm test`) | — |
@@ -232,7 +233,7 @@ Columns:
 | `tests/unit/soak-receipt.test.ts` | Node unit (Vitest) | smoke evidence: REG-011, REG-012, REG-014, REG-018 | R, T, V (et-019) | ET-019 (PR-12b) | PR (tests job, `npm test`) | ACK, gap |
 | `tests/unit/speed-display.test.ts` | Node unit (Vitest) | REG-009, REG-012, REG-017 | R, T | ET-008 (#21) | PR (tests job, `npm test`) | — |
 | `tests/unit/steam-discovery.test.ts` | Node unit (Vitest) | REG-015 | R, F, V (et-017) | ET-017 (PR-2) | PR (tests job, `npm test`) | security |
-| `tests/unit/steam-registry.test.ts` | Node unit (Vitest) | REG-015 | R, F, V (et-017) | ET-017 (PR-2) | PR (tests job, `npm test`) | security |
+| `tests/unit/steam-registry.test.ts` | Existing one-worker host-boundaries project; stubbed runs and real Windows PowerShell under the product deadline | REG-015 | R, F, V (et-017) | ET-017 (PR-2) | PR (tests job, `npm test`) | security |
 | `tests/unit/steam-vdf.test.ts` | Node unit (Vitest) | REG-015 | R, F, V (et-017) | ET-017 (PR-2) | PR (tests job, `npm test`) | — |
 | `tests/unit/storage-client.test.ts` | Node unit (Vitest) | REG-007, REG-010, REG-011, REG-014 | R, T | ET-013 (#60); ET-038; ET-103a, ET-103b | PR (tests job, `npm test`) | ACK, regression, private upload ownership/queue/startup-recovery/stale-result bounds, recorder admission/dispatch priority within the combined queue cap |
 | `tests/unit/storage-codec.test.ts` | Node unit (Vitest) | REG-009 | R | ET-013 (#51) | PR (tests job, `npm test`) | — |

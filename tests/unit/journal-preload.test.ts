@@ -59,6 +59,11 @@ it('forwards validated arguments on the fixed channels and resolves with main\'s
   expect(ipc.send).not.toHaveBeenCalled();
 });
 
+it('forwards the mode and job type filters on a fresh copy (ET-076)', async () => {
+  await bridge.listJournalTrips({mode: 'single-player', jobType: 'world-of-trucks'});
+  expect(ipc.invoke.mock.calls).toEqual([['journal:list-trips', {mode: 'single-player', jobType: 'world-of-trucks'}]]);
+});
+
 it('forwards a fresh copy of the filter, never the renderer object', async () => {
   const filter = {game: 'ets2' as const};
   await bridge.listJournalTrips(filter);
@@ -91,6 +96,8 @@ it.each<[string, (bridge: DesktopBridge) => Promise<unknown>]>([
   ['an unlisted game', b => b.listJournalTrips({game: 'ets' as never})],
   ['an unlisted outcome', b => b.listJournalTrips({outcome: 'finished' as never})],
   ['an unlisted completeness', b => b.listJournalTrips({completeness: 'full' as never})],
+  ['an unlisted mode', b => b.listJournalTrips({mode: 'coop' as never})],
+  ['an unlisted job type', b => b.listJournalTrips({jobType: 'external_market' as never})],
   ['a trip cursor of 0', b => b.listJournalTrips({cursor: '0'})],
   ['a filter that is not an object', b => b.listJournalTrips('ets2' as never)],
   ['a null filter', b => b.listJournalTrips(null as never)]

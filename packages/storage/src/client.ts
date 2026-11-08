@@ -195,7 +195,7 @@ export class StorageClient {
    */
   journalTrips(query?: JournalTripsQuery): Promise<JournalResult<JournalTripPage>> {
     if (query === undefined) return this.#request({name: 'journalTrips'});
-    return this.#request({name: 'journalTrips', query: isObject(query) ? {cursor: query.cursor, game: query.game, outcome: query.outcome, completeness: query.completeness} : query});
+    return this.#request({name: 'journalTrips', query: isObject(query) ? {cursor: query.cursor, game: query.game, outcome: query.outcome, completeness: query.completeness, mode: query.mode, jobType: query.jobType} : query});
   }
   journalTrip(tripUuid: string): Promise<JournalResult<JournalTripDetail>> { return this.#request({name: 'journalTrip', tripUuid}); }
   journalEvents(tripUuid: string, page: JournalPageQuery): Promise<JournalResult<JournalEventPage>> {

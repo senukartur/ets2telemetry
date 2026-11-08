@@ -220,7 +220,8 @@ const sortMoney = (totals: Json[]) => [...totals].sort((a, b) => String(a.catego
 async function expectJournal(journal: JournalService, s: Scenario, trips: TripExpectation[]) {
   const seed = s.input.seed, coverage = s.rows.coverage.committedThroughEventSeq;
   const page = await value<{database: unknown; trips: Json[]; nextCursor: string | null}>(journal, {kind: 'trips', query: {}});
-  expect(relabel(page, seed)).toEqual({database: SYNTHETIC_V3, trips: trips.map(t => t.listItem), nextCursor: null});
+  // ET-076: a read without a cursor also counts the trips and their one-second samples.
+  expect(relabel(page, seed)).toEqual({database: SYNTHETIC_V3, trips: trips.map(t => t.listItem), nextCursor: null, totals: {trips: trips.length, recordedSeconds: trips.reduce((sum, t) => sum + t.samples.length, 0)}});
   // Every filter, from the hand-written outcome, completeness and game of each trip (the list order is newest first).
   for (const [key, values] of [['outcome', OUTCOMES], ['completeness', COMPLETENESS], ['game', GAMES]] as const) {
     for (const v of values) {

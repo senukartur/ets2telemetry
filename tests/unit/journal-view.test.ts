@@ -8,7 +8,7 @@ import type {
 } from '../../packages/contracts/src';
 import type {EventRecord} from '../../packages/contracts/src/protocol-v1';
 import {
-  journalBannerText, journalDetailText, journalErrorText, journalEventText, journalIntervalText, journalListText, journalSampleText, type JournalSection
+  journalBannerText, journalDetailText, journalErrorText, journalEventText, journalIntervalText, journalListText, journalRangeText, journalSampleText, journalTotalsText, type JournalSection
 } from '../../apps/desktop/src/journal-view';
 import {ANCHOR_JOBS, CHANGED_TRUCK, EUR, JOURNAL_TRIPS as T, MIGRATED_V1_SESSION, MIGRATED_V1_TRIP, UNKNOWN_CURRENCY, USD, ZERO_DELIVERY} from '../shared/journal-seed';
 import {BASE_UTC, ETS2_A, ETS2_B, ATS_A, job, money, trailer, truck} from '../shared/trip-messages';
@@ -29,6 +29,8 @@ const MODE = {mode: 'single-player', method: 'module-scan', confidence: 'weak'} 
 const CLOCK = '2c000000-0000-4000-8000-00000000000a';
 /** The job market badge of every anchor: the shared fixture job is a freight market job (ET-072). */
 const FREIGHT_BADGE = {kind: 'freight-market', text: 'Freight market'} as const;
+/** The Job type column of every anchor's list row (ET-076). */
+const FREIGHT_LINE = {...FREIGHT_BADGE, sub: null} as const;
 
 function summary(job: typeof ANCHOR_JOBS.delivered): JournalTripListItem['job'] {
   return {source: 'event', sourceCity: job.sourceCity, sourceCompany: job.sourceCompany, destinationCity: job.destinationCity, destinationCompany: job.destinationCompany,
@@ -95,26 +97,26 @@ describe('journal list (J13; REG-014, REG-009)', () => {
     const text = journalListText(page([OPEN, ZERO, GAP_CLOSED, CANCELLED, DELIVERED], '42'), {units: DEFAULT, timeZone: ZONE, filtered: false, recording: 'disabled'});
     expect(text.empty).toBeNull(); expect(text.emptyNote).toBeNull(); expect(text.hasNext).toBe(true);
     expect(text.rows).toEqual([
-      {mode: {kind: 'single-player', text: 'Single-player', evidence: 'Single-player', tone: 'neutral'}, jobType: FREIGHT_BADGE, specialTransport: null, isHardMode: false, tripUuid: T.open, gameId: 'ets2', started: '2026-10-11 02:01:41', game: 'ETS2', route: 'Synthetic City A → Synthetic City B', cargo: 'Synthetic Cargo', outcome: 'In progress',
-        completeness: {text: 'Unknown', variant: 'outline'}, plannedDistance: '152.0 km', observedDistance: 'unavailable (not observed)', fuelUsed: 'unavailable (not observed)',
+      {mode: {kind: 'single-player', text: 'Single-player', evidence: 'Single-player', tone: 'neutral'}, jobType: FREIGHT_LINE, specialTransport: null, isHardMode: false, tripUuid: T.open, gameId: 'ets2', started: '2026-10-11 02:01:41', game: 'ETS2', route: 'Synthetic City A → Synthetic City B', cargo: 'Synthetic Cargo', companies: 'Synthetic Company A · Synthetic Company B', outcome: 'In progress', outcomeKind: 'open',
+        completeness: {text: 'Unknown', variant: 'outline'}, plannedDistance: '152.0 km', plannedOf: 'of 152.0 km', observedDistance: 'unavailable (not observed)',
         expectedIncome: '12345 (currency unknown)'},
-      {mode: {kind: 'single-player', text: 'Single-player', evidence: 'Single-player', tone: 'neutral'}, jobType: FREIGHT_BADGE, specialTransport: null, isHardMode: false, tripUuid: T.zeroValues, gameId: 'ats', started: '2026-10-11 02:03:23', game: 'ATS', route: '(empty) → unavailable (not provided by the game)', cargo: 'unavailable (not observed)',
-        outcome: 'Delivered', completeness: {text: 'Complete', variant: 'secondary'}, plannedDistance: '0.0 mi', observedDistance: '0.0 mi', fuelUsed: '0.0 US gal',
+      {mode: {kind: 'single-player', text: 'Single-player', evidence: 'Single-player', tone: 'neutral'}, jobType: FREIGHT_LINE, specialTransport: null, isHardMode: false, tripUuid: T.zeroValues, gameId: 'ats', started: '2026-10-11 02:03:23', game: 'ATS', route: '(empty) → unavailable (not provided by the game)', cargo: 'unavailable (not observed)', companies: 'Synthetic Company A · Synthetic Company B',
+        outcome: 'Delivered', outcomeKind: 'delivered', completeness: {text: 'Complete', variant: 'secondary'}, plannedDistance: '0.0 mi', plannedOf: 'of 0.0 mi', observedDistance: '0.0 mi',
         expectedIncome: '0 USD (SDK-documented)'},
-      {mode: {kind: 'single-player', text: 'Single-player', evidence: 'Single-player', tone: 'neutral'}, jobType: FREIGHT_BADGE, specialTransport: null, isHardMode: false, tripUuid: T.gapClosed, gameId: 'ets2', started: '2026-10-11 02:00:22', game: 'ETS2', route: 'Synthetic City A → Synthetic City B', cargo: 'Synthetic Cargo',
-        outcome: 'No outcome — events were lost', completeness: {text: 'Partial', variant: 'destructive'}, plannedDistance: '152.0 km', observedDistance: 'unavailable (not observed)',
-        fuelUsed: 'unavailable (not observed)', expectedIncome: '12345 (currency unknown)'},
-      {mode: {kind: 'single-player', text: 'Single-player', evidence: 'Single-player', tone: 'neutral'}, jobType: FREIGHT_BADGE, specialTransport: null, isHardMode: false, tripUuid: T.cancelled, gameId: 'ets2', started: '2026-10-11 02:00:12', game: 'ETS2', route: 'Synthetic City A → Synthetic City B', cargo: 'Synthetic Cancel Cargo',
-        outcome: 'Cancelled', completeness: {text: 'Complete', variant: 'secondary'}, plannedDistance: '152.0 km', observedDistance: 'unavailable (not observed)',
-        fuelUsed: 'unavailable (not observed)', expectedIncome: '12345 (currency unknown)'},
-      {mode: {kind: 'single-player', text: 'Single-player', evidence: 'Single-player', tone: 'neutral'}, jobType: FREIGHT_BADGE, specialTransport: null, isHardMode: false, tripUuid: T.delivered, gameId: 'ets2', started: '2026-10-11 02:00:04', game: 'ETS2', route: 'Synthetic City A → Synthetic City B', cargo: 'Synthetic Cargo',
-        outcome: 'Delivered', completeness: {text: 'Complete', variant: 'secondary'}, plannedDistance: '152.0 km', observedDistance: '152.0 km', fuelUsed: 'unavailable (not observed)',
+      {mode: {kind: 'single-player', text: 'Single-player', evidence: 'Single-player', tone: 'neutral'}, jobType: FREIGHT_LINE, specialTransport: null, isHardMode: false, tripUuid: T.gapClosed, gameId: 'ets2', started: '2026-10-11 02:00:22', game: 'ETS2', route: 'Synthetic City A → Synthetic City B', cargo: 'Synthetic Cargo', companies: 'Synthetic Company A · Synthetic Company B',
+        outcome: 'No outcome — events were lost', outcomeKind: 'none', completeness: {text: 'Partial', variant: 'destructive'}, plannedDistance: '152.0 km', plannedOf: 'of 152.0 km', observedDistance: 'unavailable (not observed)',
+        expectedIncome: '12345 (currency unknown)'},
+      {mode: {kind: 'single-player', text: 'Single-player', evidence: 'Single-player', tone: 'neutral'}, jobType: FREIGHT_LINE, specialTransport: null, isHardMode: false, tripUuid: T.cancelled, gameId: 'ets2', started: '2026-10-11 02:00:12', game: 'ETS2', route: 'Synthetic City A → Synthetic City B', cargo: 'Synthetic Cancel Cargo', companies: 'Synthetic Company A · Synthetic Company B',
+        outcome: 'Cancelled', outcomeKind: 'cancelled', completeness: {text: 'Complete', variant: 'secondary'}, plannedDistance: '152.0 km', plannedOf: 'of 152.0 km', observedDistance: 'unavailable (not observed)',
+        expectedIncome: '12345 (currency unknown)'},
+      {mode: {kind: 'single-player', text: 'Single-player', evidence: 'Single-player', tone: 'neutral'}, jobType: FREIGHT_LINE, specialTransport: null, isHardMode: false, tripUuid: T.delivered, gameId: 'ets2', started: '2026-10-11 02:00:04', game: 'ETS2', route: 'Synthetic City A → Synthetic City B', cargo: 'Synthetic Cargo', companies: 'Synthetic Company A · Synthetic Company B',
+        outcome: 'Delivered', outcomeKind: 'delivered', completeness: {text: 'Complete', variant: 'secondary'}, plannedDistance: '152.0 km', plannedOf: 'of 152.0 km', observedDistance: '152.0 km',
         expectedIncome: '12345 (currency unknown)'}
     ]);
   });
   it('converts with the other profile of each game', () => {
     const text = journalListText(page([ZERO, DELIVERED]), {units: SWAPPED, timeZone: ZONE, filtered: false});
-    expect(text.rows.map(row => [row.plannedDistance, row.observedDistance, row.fuelUsed])).toEqual([['0.0 km', '0.0 km', '0.0 L'], ['94.4 mi', '94.4 mi', 'unavailable (not observed)']]);
+    expect(text.rows.map(row => [row.plannedDistance, row.observedDistance])).toEqual([['0.0 km', '0.0 km'], ['94.4 mi', '94.4 mi']]);
     expect(text.hasNext).toBe(false);
   });
   it('without settings uses the ET-000 defaults', () => {
@@ -300,7 +302,7 @@ describe('trip detail (J13, J21, J22; REG-014, REG-009)', () => {
   });
 });
 
-describe('job market badges of the list and the trip header (ET-072; REG-009, REG-014)', () => {
+describe('the job market badges of the trip header (ET-072; REG-009, REG-014)', () => {
   type Market = JournalTripListItem['job']['market'];
   type Special = JournalTripListItem['job']['isSpecialJob'];
   /** The delivered anchor with one job market and special-job flag in both its list summary and its job values. */
@@ -308,13 +310,10 @@ describe('job market badges of the list and the trip header (ET-072; REG-009, RE
     const trip = {...DELIVERED_DETAIL.trip, job: {...DELIVERED_DETAIL.trip.job, market, isSpecialJob}};
     return {trip, detail: {...DELIVERED_DETAIL, trip, job: {...DELIVERED_DETAIL.job, values: {...DELIVERED_DETAIL.job.values, market, isSpecialJob}}}};
   };
-  /** The list row's badges; the trip header shows the same badges. */
+  /** The trip header's badges; the list's Job type column (ET-076) has its own texts, tested below. */
   const badges = (market: Market, isSpecialJob: Special, language: 'en' | 'ru') => {
-    const {trip, detail} = withJob(market, isSpecialJob);
-    const row = journalListText({database: DATABASE, trips: [trip], nextCursor: null}, {filtered: false, language}).rows[0];
-    const header = journalDetailText(detail, {language});
-    expect({jobType: header.jobType, specialTransport: header.specialTransport}).toEqual({jobType: row.jobType, specialTransport: row.specialTransport});
-    return {jobType: row.jobType, specialTransport: row.specialTransport};
+    const header = journalDetailText(withJob(market, isSpecialJob).detail, {language});
+    return {jobType: header.jobType, specialTransport: header.specialTransport};
   };
   it('names every SDK job market in both languages, the external markets as World of Trucks', () => {
     for (const [raw, kind, en, ru] of [
@@ -359,6 +358,70 @@ describe('job market badges of the list and the trip header (ET-072; REG-009, RE
       expect(badges(value('cargo_market'), special, 'en').specialTransport).toBeNull();
       expect(badges(value('cargo_market'), special, 'ru').specialTransport).toBeNull();
     }
+  });
+});
+
+describe('the compact list rows (ET-076; REG-009, REG-014)', () => {
+  type Market = JournalTripListItem['job']['market'];
+  const rowOf = (trip: JournalTripListItem, language: 'en' | 'ru' = 'en') => journalListText({database: DATABASE, trips: [trip], nextCursor: null}, {filtered: false, language}).rows[0];
+  const withMarket = (market: Market, isSpecialJob: JournalTripListItem['job']['isSpecialJob'] = value(false)): JournalTripListItem => ({...DELIVERED, job: {...DELIVERED.job, market, isSpecialJob}});
+  it('shows every mode, and an unknown mode never as single-player', () => {
+    const mode = (gameMode: JournalTripListItem['gameMode'], ambiguous = false, language: 'en' | 'ru' = 'en') => rowOf({...DELIVERED, gameMode, gameModeAmbiguous: ambiguous}, language).mode.text;
+    expect(mode({mode: 'unknown', method: 'none', confidence: 'none'})).toBe('Mode unknown');
+    expect(mode({mode: 'unknown', method: 'none', confidence: 'none'}, false, 'ru')).toBe('Режим неизвестен');
+    expect(mode({mode: 'unknown', method: 'none', confidence: 'none'}, true)).toBe('Mode unknown · ambiguous evidence');
+    expect(mode({mode: 'single-player', method: 'module-scan', confidence: 'weak'})).toBe('Single-player');
+    expect(mode({mode: 'single-player', method: 'process-scan', confidence: 'weak'})).toBe('Single-player · unconfirmed');
+    expect(mode({mode: 'truckersmp', method: 'process-scan', confidence: 'strong'})).toBe('TruckersMP');
+    expect(mode({mode: 'convoy', method: 'none', confidence: 'none'})).toBe('Convoy · unconfirmed');
+    expect(mode({mode: 'convoy', method: 'none', confidence: 'none'}, false, 'ru')).toBe('Конвой · не подтверждено');
+    expect(rowOf({...DELIVERED, gameMode: {mode: 'unknown', method: 'none', confidence: 'none'}}).mode).toMatchObject({kind: 'unknown', tone: 'neutral', evidence: 'Unknown'});
+  });
+  it('labels every known market, both external markets as World of Trucks with the market name below', () => {
+    for (const [raw, kind, en, ruText, enSub, ruSub] of [
+      ['cargo_market', 'cargo-market', 'Cargo market', 'Рынок грузов', null, null],
+      ['freight_market', 'freight-market', 'Freight market', 'Грузоперевозки', null, null],
+      ['quick_job', 'quick-job', 'Quick job', 'Быстрый заказ', null, null],
+      ['external_contracts', 'world-of-trucks', 'World of Trucks', 'World of Trucks', 'External contracts', 'Внешние контракты'],
+      ['external_market', 'world-of-trucks', 'World of Trucks', 'World of Trucks', 'External market', 'Внешний рынок']
+    ] as const) {
+      expect(rowOf(withMarket(value(raw))).jobType, raw).toEqual({kind, text: en, sub: enSub});
+      expect(rowOf(withMarket(value(raw)), 'ru').jobType, raw).toEqual({kind, text: ruText, sub: ruSub});
+    }
+  });
+  it('shows any other market verbatim, an empty one as (empty) and an unavailable one with its reason', () => {
+    expect(rowOf(withMarket(value('foo_market'))).jobType).toEqual({kind: 'other', text: 'foo_market', sub: null});
+    expect(rowOf(withMarket(value('constructor'))).jobType).toEqual({kind: 'other', text: 'constructor', sub: null});
+    expect(rowOf(withMarket(value(''))).jobType).toEqual({kind: 'other', text: '(empty)', sub: null});
+    expect(rowOf(withMarket(value('')), 'ru').jobType).toEqual({kind: 'other', text: '(пусто)', sub: null});
+    expect(rowOf(withMarket(NO)).jobType).toEqual({kind: 'unavailable', text: 'unavailable (not observed)', sub: null});
+    expect(rowOf(withMarket({available: false, reason: 'not-supported'})).jobType).toEqual({kind: 'unavailable', text: 'unavailable (not provided by the game)', sub: null});
+    expect(rowOf(withMarket({available: false, reason: 'invalid'}), 'ru').jobType).toEqual({kind: 'unavailable', text: 'недоступно (некорректное значение)', sub: null});
+  });
+  it('keeps Special transport apart from the job type line, also with World of Trucks', () => {
+    expect(rowOf(withMarket(value('external_market'), value(true)))).toMatchObject({jobType: {text: 'World of Trucks', sub: 'External market'}, specialTransport: 'Special transport'});
+    expect(rowOf(withMarket(value('quick_job'), value(false))).specialTransport).toBeNull();
+  });
+  it('shows the companies and the planned distance line', () => {
+    expect(rowOf({...DELIVERED, job: {...DELIVERED.job, sourceCompany: value(''), destinationCompany: NO}})).toMatchObject({companies: '(empty) · unavailable (not observed)'});
+    expect(rowOf(DELIVERED)).toMatchObject({observedDistance: '152.0 km', plannedDistance: '152.0 km', plannedOf: 'of 152.0 km'});
+    expect(rowOf(DELIVERED, 'ru').plannedOf).toBe('из 152.0 км');
+  });
+  it.each([
+    [0, 0, '0 trips · 0.0 h recorded', '0 рейсов · 0,0 ч записано'],
+    [1, 1_440, '1 trip · 0.4 h recorded', '1 рейс · 0,4 ч записано'],
+    [2, 35_964, '2 trips · 9.9 h recorded', '2 рейса · 9,9 ч записано'],
+    [5, 36_000, '5 trips · 10 h recorded', '5 рейсов · 10 ч записано'],
+    [21, 765_720, '21 trips · 212 h recorded', '21 рейс · 212 ч записано']
+  ])('writes the totals for %i trips and %i seconds', (trips, recordedSeconds, en, ru) => {
+    expect(journalTotalsText({trips, recordedSeconds}, 'en')).toBe(en);
+    expect(journalTotalsText({trips, recordedSeconds}, 'ru')).toBe(ru);
+  });
+  it('states the shown rows of a page', () => {
+    expect(journalRangeText(1, 50)).toBe('Showing 1–50');
+    expect(journalRangeText(2, 50, 'ru')).toBe('Показано 51–100');
+    expect(journalRangeText(3, 7)).toBe('Showing 101–107');
+    expect(journalRangeText(4, 0)).toBeNull();
   });
 });
 
@@ -535,9 +598,11 @@ describe('journal mode badges', () => {
       const before = structuredClone(trip);
       const list = journalListText({database: DATABASE, trips: [trip], nextCursor: null}, {filtered: false, language}).rows[0].mode;
       const detail = journalDetailText({...DELIVERED_DETAIL, trip}, {language}).mode;
-      expect(list).toEqual(detail);
+      // The list says `Mode unknown` for an unknown mode (ET-076); the trip header keeps `Unknown`.
+      const listLabel = mode.mode === 'unknown' ? (language === 'en' ? 'Mode unknown' : 'Режим неизвестен') : language === 'en' ? en : ru;
+      expect(list).toEqual({...detail, text: detail.text.replace(language === 'en' ? 'Unknown' : 'Неизвестно', listLabel)});
       expect(list.kind).toBe(before.gameMode.mode);
-      expect(list.text).toBe(`${language === 'en' ? en : ru}${ambiguous ? language === 'en' ? ' · ambiguous evidence' : ' · неоднозначные данные' : ''}`);
+      expect(list.text).toBe(`${listLabel}${ambiguous ? language === 'en' ? ' · ambiguous evidence' : ' · неоднозначные данные' : ''}`);
       expect(list.tone).toBe(ambiguous ? 'warn' : tone);
       if (mode.mode === 'single-player' && mode.method === 'module-scan') {
         expect(list.evidence).toBe(`${language === 'en' ? en : ru}${ambiguous ? language === 'en' ? '; ambiguous evidence' : '; неоднозначные данные' : ''}`);

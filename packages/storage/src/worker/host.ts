@@ -109,7 +109,7 @@ export function serveStorage(port: HostPort, testOptions: HostTestOptions = {}):
     case 'readUploadProjectionPage': return storage.readUploadProjectionPage(command.query);
     // ET-016: only the parsed fields are forwarded; the parser already refused any other key.
     case 'journalTrips': return storage.journalTrips(command.query === undefined ? undefined
-      : {cursor: command.query.cursor, game: command.query.game, outcome: command.query.outcome, completeness: command.query.completeness});
+      : {cursor: command.query.cursor, game: command.query.game, outcome: command.query.outcome, completeness: command.query.completeness, mode: command.query.mode, jobType: command.query.jobType});
     case 'journalTrip': return storage.journalTrip(command.tripUuid);
     case 'journalEvents': return storage.journalEvents(command.tripUuid, {cursor: command.page.cursor, limit: command.page.limit});
     case 'journalIntervals': return storage.journalIntervals(command.tripUuid, {cursor: command.page.cursor, limit: command.page.limit});
