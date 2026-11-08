@@ -601,6 +601,7 @@ export type I18nKey =
   | 'ver.line' | 'ver.unknown' | 'ver.dev' | 'ver.staging' | 'ver.stagingA'
   | 'lang.title' | 'lang.en' | 'lang.ru' | 'lang.saveFailed'
   | 'ui.moreAbout' | 's.interface' | 'hm.howChecked' | 'hm.now' | 'hm.required.parkingShort' | 'j.incomeNote' | 'tr.raw'
+  | 'hm.currentSettings' | 'hm.conditionsTitle' | 'hm.noticePersisted' | 'hm.noticeParking' | 'hm.noticeSnapshots'
   | 'shell.breadcrumb' | 'shell.status' | 'live.instruments' | 'live.sub' | 'live.sub.connected' | 'live.sub.paused' | 'live.sub.stale' | 'live.sub.waiting' | 'live.sub.partial' | 'live.partialTitle'
   | 'live.noJobHint' | 'live.staleReason';
 

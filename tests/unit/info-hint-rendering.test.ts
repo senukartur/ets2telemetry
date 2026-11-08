@@ -39,7 +39,8 @@ it('shows current and required values only for a failing Hard Mode rule, and the
   expect(html).toMatch(/data-testid="hard-mode-fix">.*Options → Gameplay: Fatigue simulation\./);
   expect(html).toMatch(/<button type="button" class="yu-info-hint" aria-label="How Hard Mode is checked"/);
   expect(html).toMatch(/<span id="[^"]+" class="sr-only" data-testid="hard-mode-caveats">[\s\S]*Read-only checks observe persisted settings\./);
-  expect(html).not.toMatch(/g_fatigue|g_fuel_simulation/);
+  // ET-075: each row now displays its cvar name as required by the T2 compact layout.
+  expect(html).toMatch(/g_fatigue/);
 });
 
 it('shows no in-game fix line when every Hard Mode rule passes', () => {
