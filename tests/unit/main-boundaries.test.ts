@@ -33,7 +33,7 @@ let contents: EventEmitter & {mainFrame: object; send: ReturnType<typeof vi.fn>;
 let resolveBroker: ReturnType<typeof vi.fn>;
 let loadFile: ReturnType<typeof vi.fn>;
 let overlayContents: typeof contents;
-let windows: (EventEmitter & {webContents: typeof contents; hide: ReturnType<typeof vi.fn>; showInactive: ReturnType<typeof vi.fn>; setBounds: ReturnType<typeof vi.fn>;
+let windows: (EventEmitter & {webContents: typeof contents; destroy: ReturnType<typeof vi.fn>; hide: ReturnType<typeof vi.fn>; showInactive: ReturnType<typeof vi.fn>; setBounds: ReturnType<typeof vi.fn>;
   topmost: boolean; setAlwaysOnTop: ReturnType<typeof vi.fn>; moveTop: ReturnType<typeof vi.fn>; setIgnoreMouseEvents: ReturnType<typeof vi.fn>; setFocusable: ReturnType<typeof vi.fn>;
   minimized: boolean; minimize: ReturnType<typeof vi.fn>; restore: ReturnType<typeof vi.fn>; show: ReturnType<typeof vi.fn>; focus: ReturnType<typeof vi.fn>;
   focused: boolean; setMovable: ReturnType<typeof vi.fn>; setSkipTaskbar: ReturnType<typeof vi.fn>; bounds: Electron.Rectangle; visible: boolean})[];
@@ -3781,6 +3781,27 @@ it('uses the existing fresh game report when current track is enabled after game
   nowReaderOptions.snapshot({version: 1, type: 'snapshot', requestId: 1, sessions: [source], error: null,
     selected: {id: source.id, revision: 1, title: 'Fixture track', artist: null, album: null, playback: 'playing', timeline: null, artwork: null}}, 1);
   expect(widget.visible).toBe(true);
+});
+it('destroys the current-track window only after a tray exit nested in its publish hide has unwound', async () => {
+  trayAvailable = true; const widget = await readyCurrentTrack();
+  let duringHide: number | undefined;
+  widget.hide.mockImplementationOnce(() => {trayMenuItem('Exit Yukon Union Telemetry').click!(); duringHide = widget.destroy.mock.calls.length;});
+  nowReaderOptions.snapshot({version: 1, type: 'snapshot', requestId: 1, sessions: [], error: null, selected: null}, 1);
+  expect(duringHide).toBe(0); expect(widget.destroy).not.toHaveBeenCalled();
+  await vi.advanceTimersByTimeAsync(0);
+  expect(widget.destroy).toHaveBeenCalledOnce();
+});
+it('keeps a current-track window enabled again before the previous one is destroyed', async () => {
+  const previous = await readyCurrentTrack();
+  await handlers.get('settings:set-now-playing-enabled')!(trusted(), false);
+  await handlers.get('settings:set-now-playing-enabled')!(trusted(), true);
+  expect(previous.destroy).not.toHaveBeenCalled();
+  const replacement = windows.at(-1)!; expect(replacement).not.toBe(previous);
+  await vi.advanceTimersByTimeAsync(0);
+  expect(previous.destroy).toHaveBeenCalledOnce(); expect(replacement.destroy).not.toHaveBeenCalled();
+  Object.assign(replacement.webContents.mainFrame, {url: pathToFileURL(loadFile.mock.lastCall![0]).href}); replacement.webContents.emit('did-finish-load');
+  ipc.emit('now-playing:subscribe', {sender: replacement.webContents, senderFrame: replacement.webContents.mainFrame}, replacement.webContents.postMessage.mock.lastCall![1].generation);
+  expect(handlers.get('now-playing-edit:begin')!(trusted())).toEqual({active: true, placement: 'not-foreground'});
 });
 it('accepts native retained B after explicit B returns to Automatic while Windows-current A also plays', async () => {
   await readyCurrentTrack();

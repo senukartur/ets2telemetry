@@ -74,7 +74,7 @@ CI is not claimed: the draft pull request must be checked by manual dispatch, an
 What to do and what to look at, for the owner. Nothing here is an instruction to the application.
 
 1. Install a build that contains this change (the installer of the `main` run after the PR merges, or a local update fixture as used for ET-044 and ET-045). Keep a copy of `%LOCALAPPDATA%\ETS2Telemetry\data\telemetry.sqlite` first if you want to return to the present history.
-2. Start the application, select ETS2 or ATS in Settings → Data, and start the game. The dashboard should move from `Waiting for the recorded source to connect` to `Recording`.
+2. Start the application, select ETS2 or ATS in Settings → Diagnostics, and start the game. The dashboard should move from `Waiting for the recorded source to connect` to `Recording`.
 3. Take a short job, drive, stop on the road, use the menu, then deliver (or cancel) it.
 4. Open the Journal: the trip should be there with its outcome and completeness. Open its details, and export the JSON.
 5. Report what the dashboard said at each step, any `Recording problem` alert with its text, and the exported file. A gap is recorded as a gap and is not an error by itself.
