@@ -127,9 +127,10 @@ async function observeOverlayPreview({application, dashboard, overlay, source, l
     const image = dashboard.getByTestId('overlay-preview-card');
     const exampleLabel = language === 'en' ? 'Example data · not live telemetry' : 'Пример данных · не текущая телеметрия';
     const accessibleName = [exampleLabel, await image.locator('h3').textContent(), await image.getByTestId('overlay-preview-cruise').textContent()].join(' ');
-    assert.equal(await dashboard.getByRole('img', {name: accessibleName, exact: true}).count(), 1, 'UI_PREVIEW_EXAMPLE_ACCESSIBLE_NAME');
-    const accessible = await image.ariaSnapshot();
-    assert.match(accessible, /^- img /, 'UI_PREVIEW_EXAMPLE_IMAGE');
+    const accessibleImage = dashboard.getByRole('img', {name: accessibleName, exact: true});
+    assert.equal(await accessibleImage.count(), 1, 'UI_PREVIEW_EXAMPLE_ACCESSIBLE_NAME');
+    assert.equal(await accessibleImage.getAttribute('data-testid'), 'overlay-preview-card', 'UI_PREVIEW_EXAMPLE_IMAGE');
+    const accessible = await accessibleImage.ariaSnapshot();
     for (const sample of ['84', '620', 'Northport', 'Pinehaven']) assert.equal(accessible.includes(sample), false, 'UI_PREVIEW_VISUAL_METRICS_HIDDEN');
     assert.deepEqual([...result.sections].sort(), [...ids].sort());
     assert.equal(await preview.getByTestId('overlay-speed').textContent(), '84');
