@@ -3,7 +3,7 @@ import {dashboardObservation} from './dashboard-observation.mjs';
 import assert from 'node:assert/strict';
 import path from 'node:path';
 import {readFile, writeFile, rename, mkdir, rmdir} from 'node:fs/promises';
-import {screen, settingsPanel, chooseLanguage} from './ui-navigation.mjs';
+import {screen, settingsPanel, chooseLanguage, isolateDashboardPointer} from './ui-navigation.mjs';
 import {until} from './lifecycle-observation.mjs';
 import {clusterCentreProbe, clusterSpeedArcProbe, overlayOverflow, stripNumberProbe, zeroLiveObservation} from './renderer-observation.mjs';
 import {SCALE_RANGE_FRAMES, SCALE_RANGE_ZOOM, SCALE_REFERENCE_FRAMES} from './overlay-observation.mjs';
@@ -70,7 +70,7 @@ async function observeOpacitySurfaces({dashboard, overlay, layout, language, siz
 
 export const UI_CASES = ['shell', 'live', 'journal', 'settings', 'overlay'];
 const sizes = [{width: 1280, height: 800}, {width: 1100, height: 720}];
-const panels = ['general', 'overlay', 'plugin', 'about', 'data'];
+const panels = ['general', 'overlay', 'plugin', 'data', 'about'];
 const layouts = ['strip', 'card', 'cluster', 'hud'];
 // ET-071: the reserved windows at zoom 1 for sixteen sections and ET-070's fixed Hard Mode row: the strip is four rows at
 // 1280 CSS px (38 × 4 + 2 = 154; inner 1254: the rows end at range 1120, destination 1172 and the break 1240, and the
@@ -564,6 +564,40 @@ async function observeSettingsNavigation({dashboard, language, size, zoom, recor
   assert.equal(await dashboard.getByTestId('settings.overlay').isVisible(), true);
   (record.settingsNavigation ??= []).push({language, width: size.width, zoom, placements});
 }
+/** ET-078: no compact row of the visible Settings panel is wider than its box, in either language and window size. */
+async function observeSettingsRows({dashboard, panel, language, size, record}) {
+  const overflow = await dashboard.getByTestId(`settings.${panel}`).evaluate(node => new Promise(resolve => globalThis.requestAnimationFrame(() =>
+    resolve([...node.querySelectorAll('.yu-setting-row')].filter(row => row.scrollWidth > row.clientWidth + 1)
+      .map(row => row.querySelector('.yu-setting-label')?.textContent ?? row.className)))));
+  assert.deepEqual(overflow, [], `UI_SETTINGS_ROW_OVERFLOW_${language}_${size.width}_${panel}`);
+  record.flags.settingsRowsFit = true;
+}
+/**
+ * ET-078: the Settings sub-navigation from the keyboard. Enter on a native nav button opens its panel and marks it current;
+ * the panel stays selected after leaving Settings and coming back; Shift+Tab and Tab reach the neighbouring buttons and
+ * Space opens one too.
+ */
+async function observeSettingsKeyboard({dashboard, language, size, record}) {
+  const nav = id => dashboard.getByTestId(`settings.nav.${id}`);
+  const focused = () => dashboard.evaluate(() => globalThis.document.activeElement?.getAttribute('data-testid') ?? null);
+  const current = async () => (await Promise.all(panels.map(async id => await nav(id).getAttribute('aria-current') === 'page' ? id : null))).filter(Boolean);
+  const label = `${language}_${size.width}`;
+  await settingsPanel(dashboard, 'general');
+  await nav('plugin').focus(); await dashboard.keyboard.press('Enter');
+  assert.equal(await dashboard.getByTestId('settings.plugin').isVisible(), true, `UI_SETTINGS_NAV_ENTER_${label}`);
+  assert.deepEqual(await current(), ['plugin'], `UI_SETTINGS_NAV_CURRENT_${label}`);
+  await screen(dashboard, 'live'); await screen(dashboard, 'settings');
+  assert.equal(await dashboard.getByTestId('settings.plugin').isVisible(), true, `UI_SETTINGS_PANEL_NOT_KEPT_${label}`);
+  assert.deepEqual(await current(), ['plugin'], `UI_SETTINGS_PANEL_NOT_KEPT_${label}`);
+  await nav('plugin').focus(); await dashboard.keyboard.press('Shift+Tab');
+  assert.equal(await focused(), 'settings.nav.overlay', `UI_SETTINGS_NAV_SHIFT_TAB_${label}`);
+  await dashboard.keyboard.press('Tab'); await dashboard.keyboard.press('Tab');
+  assert.equal(await focused(), 'settings.nav.data', `UI_SETTINGS_NAV_TAB_${label}`);
+  await dashboard.keyboard.press('Space');
+  assert.equal(await dashboard.getByTestId('settings.data').isVisible(), true, `UI_SETTINGS_NAV_SPACE_${label}`);
+  assert.deepEqual(await current(), ['data'], `UI_SETTINGS_NAV_SPACE_${label}`);
+  Object.assign(record.flags, {settingsKeyboard: true, settingsPanelKept: true});
+}
 async function observeUnifiedOverlay({application, dashboard, language, size, record}) {
   assert.deepEqual(await dashboard.getByTestId('settings.nav').locator('button').evaluateAll(nodes => nodes.map(node => node.getAttribute('data-testid'))), panels.map(id => `settings.nav.${id}`));
   assert.equal(await dashboard.getByTestId('settings.sections').count(), 0);
@@ -636,9 +670,9 @@ async function observeOverlayEditing({dashboard, config, record}) {
   assert.notDeepEqual(await readFile(file), bytes);
   record.flags.overlayEditing = true;
 }
-/** The export result has no horizontal overflow and its box lies inside the Game plugin card. */
+/** The export result has no horizontal overflow and its box lies inside the diagnostic bundle section (ET-078). */
 const exportResultContained = page => page.evaluate(() => new Promise(resolve => globalThis.requestAnimationFrame(() => globalThis.requestAnimationFrame(() => {
-  const body = globalThis.document.querySelector('[data-testid="plugin-export-diagnostics-result"]'), card = globalThis.document.querySelector('[data-testid="plugin-card"]');
+  const body = globalThis.document.querySelector('[data-testid="plugin-export-diagnostics-result"]'), card = globalThis.document.querySelector('[data-testid="settings.data.bundle"]');
   if (!body || !card) {resolve(false); return;}
   const box = body.getBoundingClientRect(), bounds = card.getBoundingClientRect();
   resolve(body.scrollWidth <= body.clientWidth && box.width > 0 && box.left >= bounds.left - 0.5 && box.right <= bounds.right + 0.5);
@@ -646,6 +680,7 @@ const exportResultContained = page => page.evaluate(() => new Promise(resolve =>
 /**
  * ET-045b: "Export diagnostics…" from the keyboard with a cancelled Save dialog answers beside its button as information,
  * in the selected language, keeps focus on the button and fits the card (at 1100×720 also at zoom 1.5). Nothing is written.
+ * ET-078: the button is on Settings > Diagnostics.
  */
 async function observeExportResult({application, dashboard, language, size, record}) {
   await stubSaveDialog(application, {canceled: true, filePath: ''});
@@ -701,17 +736,9 @@ export async function runUiSmoke({application, dashboard, overlay, source, sourc
   assert.ok(UI_CASES.includes(config.uiCase));
   Object.assign(record, {case: config.uiCase, screenshots: [], languages: [], sizes, flags: {}});
   const save = (name, language, size, page = dashboard) => capture({page, application, config, record, name, language, size, overlay: page === overlay});
-  // ET-067: Playwright drives the pointer through the renderer, but the dashboard is a real window, so the desktop's own
-  // cursor still reaches it, and Windows moves it there whenever a window changes under a resting cursor. One such move
-  // between a hover and Radix's 150 ms delayed open leaves the hint closed. Click-through for OS input only, so every
-  // pointer event the page sees is the driver's; the overlay keeps its own state. Electron cannot read the setting back,
-  // so the flag only records the call; the hover check under the desktop cursor below shows its effect.
-  const dashboardId = await application.evaluate(({BrowserWindow}) => {
-    const window = BrowserWindow.getAllWindows().find(candidate => !candidate.webContents.getURL().endsWith('?view=overlay'));
-    if (!window) throw new Error('UI_DASHBOARD_WINDOW_MISSING');
-    window.setIgnoreMouseEvents(true);
-    return window.id;
-  });
+  // ET-067 (isolateDashboardPointer): the flag only records the call; the hover check under the desktop cursor below
+  // shows its effect.
+  const dashboardId = await isolateDashboardPointer(application, dashboard);
   record.flags.osPointerIsolated = true;
   // The source selector remains a working diagnostic control, not an invented reference-screen toolbar.
   if (source) await waitState(dashboard, 'connected');
@@ -729,6 +756,8 @@ export async function runUiSmoke({application, dashboard, overlay, source, sourc
         assert.deepEqual(await dashboard.locator('.yu-sidebar nav button').evaluateAll(nodes => nodes.map(node => node.getAttribute('data-testid'))), ['tab-live', 'tab-hardMode', 'tab-journal', 'tab-settings', 'tab-account']);
         assert.equal(await dashboard.getByTestId('account.unconfigured').isVisible(), true);
         assert.equal(await dashboard.getByTestId('account.token.input').count(), 0);
+        for (const control of ['account.form', 'account.confirmation', 'account.counts', 'account.firstSync', 'account.disconnect']) assert.equal(await dashboard.getByTestId(control).count(), 0, `UI_UNCONFIGURED_CONTROL_${control}`);
+        assert.ok((await dashboard.getByTestId('account.unconfigured').textContent()).includes(language === 'en' ? 'Your journal and local recording continue to work.' : 'Журнал и локальная запись продолжают работать.'));
         assert.equal(await dashboard.getByTestId('shell.status.sync').count(), 0);
         assert.equal(await dashboard.getByTestId('journal-sync-column').count(), 0);
         record.flags.accountUnconfigured = true;
@@ -744,7 +773,7 @@ export async function runUiSmoke({application, dashboard, overlay, source, sourc
         assert.equal(await dashboard.getByTestId('shell.content').evaluate(node => node.scrollTop), 0, 'UI_ROUTE_RETAINS_HARD_MODE_SCROLL');
         for (const zoom of [1.5, 2]) {
           await application.evaluate(({BrowserWindow}, zoom) => {BrowserWindow.getAllWindows().find(window => !window.webContents.getURL().endsWith('?view=overlay')).webContents.setZoomFactor(zoom);}, zoom);
-          for (const route of ['live', 'hardMode']) {
+          for (const route of ['live', 'hardMode', 'account']) {
             await focusRoute(dashboard, route);
             assert.equal(await dashboard.getByTestId('shell.content').evaluate(node => node.scrollWidth <= node.clientWidth), true, `UI_ZOOM_OVERFLOW_${route}_${zoom}`);
           }
@@ -945,7 +974,8 @@ export async function runUiSmoke({application, dashboard, overlay, source, sourc
             assert.equal(await dashboard.getByTestId('autostart-toggle').isDisabled(), true);
             assert.equal(await dashboard.getByTestId('autostart-not-installed-note').isVisible(), true);
           }
-          if (panel === 'plugin') await observeExportResult({application, dashboard, language, size, record});
+          if (panel !== 'overlay') await observeSettingsRows({dashboard, panel, language, size, record});
+          if (panel === 'data') await observeExportResult({application, dashboard, language, size, record});
           if (panel === 'about') {
             // ET-055 UP11: About repeats the sidebar version line; a launch that never checks disables Check for updates.
             assert.equal(await dashboard.getByTestId('settings.about.version.name').textContent(), await dashboard.getByTestId('shell.sidebar.version.name').textContent());
@@ -961,6 +991,7 @@ export async function runUiSmoke({application, dashboard, overlay, source, sourc
         assert.equal(await license.locator('pre').innerText(), await readFile(path.join(config.checkout, 'apps/desktop/src/assets/huninn-OFL.txt'), 'utf8'));
         assert.match(await license.locator('pre').getAttribute('data-license-asset'), /huninn-OFL[^/]*\.txt$/);
         await dashboard.keyboard.press('Enter'); record.flags.fontLicense = true;
+        await observeSettingsKeyboard({dashboard, language, size, record});
         await settingsPanel(dashboard, 'overlay');
         const visibility = dashboard.getByRole('switch', {name: language === 'en' ? 'Show overlay' : 'Показывать оверлей', exact: true});
         await waitOverlayVisibility(dashboard, {enabled: true}, 'UI_OVERLAY_INITIAL_RENDERED');

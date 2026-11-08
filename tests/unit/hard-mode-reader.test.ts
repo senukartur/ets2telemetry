@@ -71,15 +71,17 @@ afterEach(async () => {
 const processFacts = () => Promise.resolve({pid: source.processId, createdUtcMs: created, executable: 'C:\\Synthetic\\eurotrucks2.exe', commandLine: 'eurotrucks2.exe'});
 const reader = () => ownedReader({documents: path.join(root, 'Documents'), process: processFacts});
 const read = (r = reader()) => r.read(source, '100', created + 10000, new AbortController().signal);
-/** Establish a metadata-visible edit independently of host timestamp granularity or an unfinished sibling byte read. */
-async function writeSettingsChange(filename: string, text: string) {
+/** Establish a metadata-visible edit of a file or directory independently of host timestamp granularity or an unfinished sibling byte read.
+ * A change inside one Windows clock tick (up to ~15.6 ms) can leave the target's mtime and ctime unchanged. */
+async function metadataVisibleChange(filename: string, change: () => Promise<unknown>) {
   const before=await stat(filename,{bigint:true}),first=new Date('2026-10-22T12:00:00Z');
-  await writeFile(filename,text);
+  await change();
   const timestamp=before.mtimeNs===BigInt(first.getTime())*1_000_000n?new Date('2026-10-23T12:00:00Z'):first;
   await utimes(filename,timestamp,timestamp);
   const after=await stat(filename,{bigint:true});expect(after.mtimeNs).not.toBe(before.mtimeNs);
   return {before,after};
 }
+const writeSettingsChange=(filename: string, text: string)=>metadataVisibleChange(filename,()=>writeFile(filename,text));
 function gate<T = void>() {let resolve!: (value: T) => void; const promise = new Promise<T>(yes => {resolve = yes;}); return {promise, resolve};}
 const unknownObservation=():HardModeObservation=>({assessment:unknownHardMode(0),binding:null,pluginSessionId:null,sourceMonotonicNs:null});
 function nativeFrame(value: unknown): Buffer {
@@ -985,7 +987,7 @@ describe('ET-026 isolated reader (REG-008/010/011)', () => {
     let audit = {...newHardModeDetails(initial.assessment, initial.binding), passingChecks: 1};
     r.onInvalidate(profileChanged => {audit = advanceHardModeV2(audit, {assessment: unknownHardMode(created + 10001), binding: null, pluginSessionId: null, sourceMonotonicNs: null,
       diagnostic: profileChanged ? 'profile-verification' : 'settings-changing'});});
-    if (trigger === 'save-directory') await mkdir(path.join(profile,'save','synthetic-save'), {recursive:true});
+    if (trigger === 'save-directory') await metadataVisibleChange(profile, () => mkdir(path.join(profile,'save','synthetic-save'), {recursive:true}));
     else await writeSettingsChange(path.join(profile,'config.cfg'), HARD_MODE_CONFIG + (trigger === 'unrelated-setting' ? '\nuset r_vsync "0"' : ''));
     const verified = await read(r); audit = advanceHardModeV2(audit, verified);
     expect(verified.assessment.state).toBe('pass'); expect(verified.binding).toBe(initial.binding);

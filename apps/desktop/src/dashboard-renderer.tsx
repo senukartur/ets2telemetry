@@ -1,16 +1,11 @@
 import {AccountScreen} from './dashboard-upload/account-screen';
 import {SyncChip} from './dashboard-upload/sync-chip';
 import {useDashboardUpload} from './dashboard-upload/use-dashboard-upload';
-import {NowPlayingSettingsCard} from './now-playing/settings-card';
 import {connectionChip, desktopLiveView, hardModeChip, liveGameMode, liveScreenState, liveSourcesPartial, liveSubline, pluginChip, recordingMotion, recordingTone, type ShellRoute} from './screens/desktop-ui-view';
 import {HardModeCard} from './hard-mode/card';
 import React, {useEffect, useMemo, useRef, useState} from 'react';
-import type {AppLanguage, AppState, LiveTelemetry, SettingsView, SourceSelection, UnitGame} from '../../../packages/contracts/src';
-import {Card, CardContent, CardHeader, CardTitle} from '@/components/ui/card';
-import {Alert, AlertDescription, AlertTitle} from '@/components/ui/alert';
+import type {AppLanguage, AppState, LiveTelemetry, SettingsView} from '../../../packages/contracts/src';
 import {Button} from '@/components/ui/button';
-import {Label} from '@/components/ui/label';
-import {RadioGroup, RadioGroupItem} from '@/components/ui/radio-group';
 import {Tooltip, TooltipContent, TooltipProvider, TooltipTrigger} from '@/components/ui/tooltip';
 import {Power, Info} from 'lucide-react';
 import {useHardModeStatus} from './hard-mode/use-status';
@@ -19,32 +14,22 @@ import {useWindowFocused} from './shell/use-window-focus';
 import {SidebarNav} from './shell/sidebar-nav';
 import {TopBar} from './shell/top-bar';
 import logo from './assets/logo.png';
-import huninnFontLicense from './assets/huninn-OFL.txt?raw';
-import huninnFontLicenseUrl from './assets/huninn-OFL.txt?url';
 import {createStartupLine} from './dashboard-startup';
 import {recordingStatusText} from './recording-status-text';
 import {LiveDashboard} from './live-dashboard';
-import {LanguageCard} from './language-card';
-import {AutostartCard} from './autostart-card';
-import {OverlaySettingsCard} from './overlay-settings-card';
-import {GearDisplayCard} from './gear-display-card';
-import {PluginSetupCard} from './plugin-setup-card';
-import {UninstallCard} from './uninstall-card';
-import {AboutUpdateCheck, SidebarUpdateControl, VersionLine} from './update-control';
-import {connectionDiagnosis} from './connection-diagnosis';
+import {usePluginActions} from './plugin-setup-card';
+import {SettingsScreen, type SettingsCard, type SettingsPanel} from './settings-screen';
+import {SidebarUpdateControl, VersionLine} from './update-control';
 import {Journal, JournalBoundary} from './journal';
-import {DEFAULT_UNIT_PROFILES, isUnitProfile, UNIT_GAMES, UNIT_PROFILE_IDS} from './unit-profiles';
-import {
-  getAppErrorText, getServiceHealthText, getSettingsSaveErrorText, getSettingsStateText,
-  getStorageHealthText, getStrings, getUnitGameText, getUnitProfileText
-} from './strings';
+import {getStrings} from './strings';
 import {t} from './i18n';
 import {CHANNEL} from './channel';
 import './index.css';
 
 export default function App() {
   const [route, setRoute] = useState<ShellRoute>('live');
-  const [panel, setPanel] = useState<'general' | 'overlay' | 'plugin' | 'about' | 'data'>('general');
+  // The Settings panel stays selected across route changes within a session (ET-078).
+  const [panel, setPanel] = useState<SettingsPanel>('general');
   const heading = useRef<HTMLHeadingElement>(null);
   const content = useRef<HTMLElement>(null);
   const hardMode = useHardModeStatus();
@@ -58,9 +43,10 @@ export default function App() {
   const [live, setLive] = useState<LiveTelemetry>();
   const [app, setApp] = useState<AppState>();
   const [exit, setExit] = useState<'idle' | 'pending' | 'failed'>('idle');
-  const [units, setUnits] = useState<'idle' | 'saving' | 'failed'>('idle');
   // Main reports one `saveError` for the whole settings file; it is shown in the card whose request caused it.
-  const [lastCard, setLastCard] = useState<'units' | 'gear' | 'overlay' | 'language' | 'autostart'>('units');
+  const [lastCard, setLastCard] = useState<SettingsCard>('units');
+  // ET-078: one card action controller for the Game plugin card and the diagnostics export on Settings > Diagnostics.
+  const pluginActions = usePluginActions();
   const [startupLine] = useState(() => createStartupLine(() => window.desktop.getStatus(), setStartup));
   useEffect(() => {
     startupLine.start();
@@ -73,11 +59,9 @@ export default function App() {
   const strings = getStrings(language);
   useEffect(() => {document.documentElement.lang = language;}, [language]);
   const health = app?.health;
-  const problem = health && (health.service === 'failed' || health.service === 'restarting') && health.lastError;
   // ET-015c PR-4 (G8): the recording status text; until main's first push the status is not known.
   const recording = recordingStatusText(health?.recording ?? {state: 'unknown'}, language);
   const windowFocused = useWindowFocused();
-  const recordingAlertVariant = health?.recording.state === 'retrying' ? 'default' : 'destructive';
   // Main pushes the saved settings; until the first push the ET-000 defaults apply.
   const saved = (view: SettingsView) => setApp(current => current && {...current, settings: view});
   const languageController = useLanguageController(settings, saved, () => setLastCard('language'));
@@ -86,16 +70,6 @@ export default function App() {
   const liveView = useMemo(() => desktopLiveView(live, settings?.units, settings?.gearDisplay), [live, settings?.units, settings?.gearDisplay]);
   const game = live?.observation?.source.game.toUpperCase() ?? '', mode = liveGameMode(liveView.sources);
   const liveState = liveScreenState(live?.status, liveView.current, liveView.sources.paused, liveSourcesPartial(live));
-  const choose = (game: UnitGame, value: string) => {
-    if (!isUnitProfile(value)) return;
-    setLastCard('units'); setUnits('saving');
-    void window.desktop.setUnitProfile(game, value).then(view => {
-      saved(view); setUnits('idle');
-    }, () => setUnits('failed'));
-  };
-
-  const settingsPanels = ['general', 'overlay', 'plugin', 'about', 'data'] as const;
-  const showSettingsState = settings && settings.state !== 'loaded' && settings.state !== 'defaults';
   return <div className="yu-app" data-testid="shell.root">
     {/* ET-074: the title bar holds the app name and the native window buttons only; the logo is in the sidebar lockup. */}
     <div className="yu-titlebar" data-testid="shell.titlebar"><span>{CHANNEL.displayName}</span></div>
@@ -135,55 +109,9 @@ export default function App() {
         <div hidden={route !== 'hardMode'} className="yu-stack" data-testid="hardMode.screen"><HardModeCard language={language} controller={hardMode} /></div>
         {route === 'journal' ? <JournalBoundary language={language}><Journal uploadStatus={upload.state.status} units={settings?.units} recording={health?.recording.state} language={language} /></JournalBoundary> : null}
         {route === 'account' ? <AccountScreen state={upload.state} controller={upload.controller} language={language} /> : null}
-        <div hidden={route !== 'settings'} className="yu-settings" data-testid="settings.screen"><nav className="yu-settings-nav" aria-label={t('nav.settings', undefined, language)} data-testid="settings.nav">{settingsPanels.map(id => <button key={id} type="button" aria-current={panel === id ? 'page' : undefined} data-testid={`settings.nav.${id}`} onClick={() => setPanel(id)}>{t(`s.${id}`, undefined, language)}</button>)}</nav>
-          <div className="yu-stack"><div hidden={panel !== 'general'} className="yu-stack" data-testid="settings.general">
-            {/* ET-057: how the saved settings were read is shown only when it matters (defaults kept, read-only or invalid file). */}
-            {showSettingsState ? <Alert><AlertDescription data-testid="settings-state">{getSettingsStateText(settings.state, language)}</AlertDescription></Alert> : null}
-            <Card size="sm"><CardHeader><CardTitle><h2>{t('s.interface', undefined, language)}</h2></CardTitle></CardHeader><CardContent>
-              <LanguageCard settings={settings} onSaved={saved} controller={languageController} showSaveError={lastCard === 'language'} />
-              <AutostartCard settings={settings} status={app?.autostart} onSaved={saved} onRequest={() => setLastCard('autostart')} showSaveError={lastCard === 'autostart'} />
-            </CardContent></Card>
-            <Card size="sm" data-testid="settings.units"><CardHeader><CardTitle><h2>{strings.unitsTitle}</h2></CardTitle></CardHeader><CardContent>
-    {UNIT_GAMES.map(game => <div key={game} className="yu-setting-row">
-      <span id={`units-${game}-label`}>{getUnitGameText(game, language)}</span>
-      {/* A choice shows as selected only after main saved it; a failed save leaves the previous one. */}
-      <RadioGroup aria-labelledby={`units-${game}-label`} data-testid={`units-${game}`} className="yu-segmented" value={settings?.units[game] ?? DEFAULT_UNIT_PROFILES[game]}
-        disabled={!settings?.writable || units === 'saving'} onValueChange={value => choose(game, value)}>
-        {UNIT_PROFILE_IDS.map(option => <div key={option} className="yu-segment-option">
-          <RadioGroupItem value={option} id={`units-${game}-${option}`} /><Label htmlFor={`units-${game}-${option}`}>{getUnitProfileText(option, language)}</Label>
-        </div>)}
-      </RadioGroup>
-    </div>)}
-    {/* A refused save is reported by main in the settings view; other request failures only locally. */}
-    {settings?.saveError && lastCard === 'units' ? <p role="status" data-testid="settings-error">{getSettingsSaveErrorText(settings.saveError, language)}</p>
-      : units === 'failed' ? <p role="status" data-testid="settings-error">{strings.unitsSaveFailed}</p> : null}
-            </CardContent></Card>
-            <NowPlayingSettingsCard settings={settings} view={app?.nowPlaying} onSaved={saved} />
-            <GearDisplayCard settings={settings} onSaved={saved} onRequest={() => setLastCard('gear')} showSaveError={lastCard === 'gear'} />
-          </div>
-          <div hidden={panel !== 'overlay'} data-testid="settings.overlay"><OverlaySettingsCard settings={settings} edit={app?.overlayEdit} onSaved={saved} onRequest={() => setLastCard('overlay')} showSaveError={lastCard === 'overlay'} />
-            </div>
-          <div hidden={panel !== 'plugin'} data-testid="settings.plugin"><PluginSetupCard language={language} view={app?.plugins} diagnosis={app ? connectionDiagnosis(app.plugins, live?.status ?? 'waiting', live?.selection ?? 'game', app.health) : undefined} onView={plugins => setApp(current => current && {...current, plugins})} /></div>
-          <div hidden={panel !== 'data'} className="yu-stack" data-testid="settings.data"><Card><CardHeader><CardTitle><h2>{t('ui.diagnostics', undefined, language)}</h2></CardTitle></CardHeader><CardContent className="space-y-3"><p data-testid="startup-status">{startup}</p><p data-testid="prototype-notice" className="yu-muted">{recording.notice}</p>
-            <label>{strings.sourceLabel} <select data-testid="source-select" value={live?.selection ?? 'game'} onChange={event => {void window.desktop.selectSource(event.target.value as SourceSelection).catch(() => setStartup(strings.sourceSelectionFailed));}}><option value="game">{strings.sourceSelectPrompt}</option><option value="ets2">Euro Truck Simulator 2</option><option value="ats">American Truck Simulator</option><option value="synthetic">{strings.sourceSyntheticFixture}</option><option value="replay">{strings.sourceReplayFixture}</option></select></label>
-            <p data-testid="telemetry-status">{live?.status ?? 'waiting'}: {live?.reason ?? strings.startupWaiting}</p><p>{t('ui.origin', undefined, language)}: {live?.observation?.source.origin ?? (live?.selection === 'synthetic' || live?.selection === 'replay' ? live.selection : 'game')}; {t(live?.fresh ? 'ui.current' : 'ui.notCurrent', undefined, language)}; {t('ui.coverageUnknown', undefined, language)}.</p>
-          </CardContent></Card>  <Card size="sm"><CardHeader><CardTitle><h2>{strings.healthTitle}</h2></CardTitle></CardHeader><CardContent className="space-y-2">
-    {problem ? <Alert variant="destructive" data-testid="health-alert"><AlertTitle>{strings.serviceFailedTitle}</AlertTitle><AlertDescription>{getAppErrorText(problem, language)}</AlertDescription></Alert> : null}
-    <dl className="grid grid-cols-[auto_1fr] gap-x-4 gap-y-1" data-testid="app-health">
-      <dt>{strings.serviceLabel}</dt><dd data-testid="health-service">{health ? getServiceHealthText(health.service, language) : '—'}</dd>
-      <dt>{strings.storageLabel}</dt><dd data-testid="health-storage">{health ? getStorageHealthText(health.storage, language) : '—'}</dd>
-      <dt>{strings.recordingLabel}</dt><dd data-testid="health-recording">{health ? recording.headline : '—'}</dd>
-      {health && recording.detail.length ? <dd className="col-start-2" data-testid="health-recording-detail">{recording.detail.map(line => <p key={line}>{line}</p>)}</dd> : null}
-      {health && recording.losses.length ? <dd className="col-start-2" data-testid="health-recording-losses">{recording.losses.map(line => <p key={line}>{line}</p>)}</dd> : null}
-      {health?.lastError && !problem ? <><dt>{strings.lastErrorLabel}</dt><dd>{getAppErrorText(health.lastError, language)}</dd></> : null}
-    </dl>
-    {health && recording.alert ? <Alert variant={recordingAlertVariant}><AlertTitle>{strings.recordingProblemTitle}</AlertTitle>
-      <AlertDescription data-testid="health-recording-alert">{recording.alert}</AlertDescription></Alert> : null}
-    <Alert><AlertDescription data-testid="close-to-tray">{strings.closeToTray}</AlertDescription></Alert>
-  </CardContent></Card></div>
-          <div hidden={panel !== 'about'} className="yu-stack" data-testid="settings.about"><Card><CardContent><div className="flex items-center gap-4 py-4" data-testid="settings.about.brand"><img src={logo} alt="" width={64} height={64} /><div><h2 className="text-lg font-bold">{CHANNEL.displayName}</h2><p>{t('app.sub', undefined, language)}</p></div></div><div className="space-y-3 pb-4"><VersionLine info={app?.application} language={language} testId="settings.about.version" /><AboutUpdateCheck view={app?.update} language={language} /></div><details className="yu-font-license" data-testid="settings.about.font-license"><summary>Huninn · SIL Open Font License 1.1</summary><pre data-license-asset={huninnFontLicenseUrl}>{huninnFontLicense}</pre></details></CardContent></Card><UninstallCard language={language} /></div>
-          </div>
-        </div>
+        <SettingsScreen hidden={route !== 'settings'} language={language} panel={panel} onPanel={setPanel} app={app} live={live} startup={startup} onSaved={saved}
+          lastCard={lastCard} onRequest={setLastCard} languageController={languageController} pluginActions={pluginActions}
+          onPlugins={plugins => setApp(current => current && {...current, plugins})} onSourceFailed={() => setStartup(strings.sourceSelectionFailed)} />
       </main></div>
     </div>
   </div>;

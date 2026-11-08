@@ -131,11 +131,11 @@ const environment = diagnostics => ({...(config.mode === 'installed' ? installed
   // ET-017 PR-5: the test-root mode, confined to the fake root inside this run's isolated output folder.
   ...(pluginFixture ? {ETS2TELEMETRY_PLUGIN_SETUP_ROOT: pluginFixture.root} : {})});
 // The sidebar recording dot pulses endlessly while the dashboard window has focus, which it has in these runs, and every
-// frame costs CPU under the Job's 25% cap: it timed out the packaged Hard Mode journey (PR #203). Only the UI shards check
-// motion, so every other scenario stops that one animation through a constructed stylesheet (CSSOM, which the renderer's
-// CSP does not restrict) on every document of every launch. Emulating prefers-reduced-motion would change the whole UI's
-// motion. See docs/ci.md#recording-dot-animation-in-runtime-smokes.
-const stillRecordingDot = config.scenario !== 'ui';
+// frame costs CPU under the Job's 25% cap, and the trace screencast captures each frame: it timed out the packaged Hard
+// Mode journey (PR #203) and the Journal UI shard. No check observes the running pulse (the UI shards read the indicator's
+// data-motion and data-window-focused attributes, which stay unchanged), so every scenario stops that one animation through
+// a constructed stylesheet (CSSOM, which the renderer's CSP does not restrict) on every document of every launch. Emulating
+// prefers-reduced-motion would change the whole UI's motion. See docs/ci.md#recording-dot-animation-in-runtime-smokes.
 function stopRecordingDot() {
   const apply = () => {
     const sheet = new globalThis.CSSStyleSheet(); sheet.replaceSync('.yu-dot, .yu-dot::after { animation: none !important; }');
@@ -145,11 +145,9 @@ function stopRecordingDot() {
 }
 async function launch(diagnostics) {
   const launched = await electron.launch(launchOptions(diagnostics));
-  if (stillRecordingDot) {
-    await launched.context().addInitScript(stopRecordingDot);
-    const apply = page => page.evaluate(stopRecordingDot).catch(() => {});
-    launched.windows().forEach(apply); launched.on('window', apply);
-  }
+  await launched.context().addInitScript(stopRecordingDot);
+  const apply = page => page.evaluate(stopRecordingDot).catch(() => {});
+  launched.windows().forEach(apply); launched.on('window', apply);
   return launched;
 }
 const launchOptions = diagnostics => ({timeout: 20000, cwd: config.cwd,
@@ -205,9 +203,9 @@ try {
     const dot = globalThis.document.querySelector('[data-testid="shell.recording.indicator"]');
     return dot ? globalThis.getComputedStyle(dot, '::after').animationName === 'none' && globalThis.getComputedStyle(dot).animationName === 'none' : null;
   };
-  if (stillRecordingDot) await window.waitForFunction(dotAnimation, undefined, {timeout: 5000}).catch(() => {throw new Error('RECORDING_DOT_NOT_STILL');});
+  await window.waitForFunction(dotAnimation, undefined, {timeout: 5000}).catch(() => {throw new Error('RECORDING_DOT_NOT_STILL');});
   result.recordingDotStill = await window.evaluate(dotAnimation);
-  if (stillRecordingDot) assert.equal(result.recordingDotStill, true, 'RECORDING_DOT_NOT_STILL');
+  assert.equal(result.recordingDotStill, true, 'RECORDING_DOT_NOT_STILL');
   assert.equal(result.runtime.packaged, config.mode !== 'development');
   if (config.mode === 'installed') {
     // ET-018 PR-1 (U11): the installed executable itself runs, from an unrelated working directory, with the minimal PATH.

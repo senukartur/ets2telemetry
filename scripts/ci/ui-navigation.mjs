@@ -14,6 +14,22 @@ export async function waitForStartup(page, left = cap => cap, readyCap = 10000) 
   await page.getByText('Telemetry service ready; isolated storage probe verified', {exact: true}).waitFor({state: 'visible', timeout: left(readyCap)});
   await screen(page, 'live', left);
 }
+/**
+ * ET-067: Playwright drives the pointer through the renderer, but the dashboard is a real window, so the desktop's own
+ * cursor still reaches it, and Windows moves it there whenever a window changes under a resting cursor. One such move
+ * between a hover and Radix's 150 ms delayed open leaves a hint closed. Click-through for OS input only, so every pointer
+ * event the page sees is the driver's; the overlay keeps its own state. The window is the one showing the driven
+ * dashboard page, and exactly one. Electron cannot read the setting back, so a caller can only record the call; the UI
+ * shards' hover under the desktop cursor shows its effect. Returns the dashboard window's id.
+ */
+export function isolateDashboardPointer(application, dashboard) {
+  return application.evaluate(({BrowserWindow}, url) => {
+    const windows = BrowserWindow.getAllWindows().filter(candidate => !candidate.isDestroyed() && candidate.webContents.getURL() === url);
+    if (windows.length !== 1) throw new Error(`UI_DASHBOARD_WINDOW_${windows.length ? 'AMBIGUOUS' : 'MISSING'}`);
+    windows[0].setIgnoreMouseEvents(true);
+    return windows[0].id;
+  }, dashboard.url());
+}
 export async function chooseSource(page, value) {
   await settingsPanel(page, 'data');
   await page.getByTestId('source-select').selectOption(value);
