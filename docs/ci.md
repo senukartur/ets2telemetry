@@ -211,7 +211,7 @@ The wrapper copies these values to `wrapper-result.json` under `resourceFacts` a
 
 The sidebar recording dot pulses endlessly while the dashboard window has focus ([application lifecycle](app-lifecycle.md#recording-on-the-dashboard-and-in-the-tray-et-015c-pr-4)). The window has focus in these runs, and every animated frame costs CPU under the Job's 25% cap. On PR #203 (run 40578063106) the pulse doubled the Hard Mode hint loops on a hosted runner (18–19 s instead of 8–9 s) and timed out the packaged Hard Mode journey at 60 s. Locally the same journey took 28.2 s with the pulse and 22.4 s without it.
 
-The trace screencast also captures every animated frame. With the pulse, the hosted Journal UI shard composited about 23 frames per second for its whole journey and its trace stop took 13 s, and slow hosted runs ended at the 120 s Job deadline (`DRIVER_RESULT_MISSING`, Job exit 124).
+The trace screencast also captures every animated frame, so the pulse costs CPU in the UI shards too, most in the long Journal shard.
 
 Every runtime smoke scenario, the `ui` shards included, therefore stops that one animation. On every document of every launch (Playwright's `addInitScript`, plus the windows already open), the driver adopts a constructed stylesheet that sets `animation: none` on `.yu-dot` and its ring. CSSOM stylesheets are not restricted by the renderer's CSP. The driver then waits up to 5 s until the dashboard's dot and ring compute `animation-name: none`, fails with `RECORDING_DOT_NOT_STILL` otherwise, and records the result as `recordingDotStill` in `result.json`. Nothing else in the UI changes.
 
