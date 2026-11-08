@@ -697,7 +697,7 @@ CREATE TRIGGER upload_trip_created AFTER INSERT ON trips WHEN EXISTS(SELECT 1 FR
       SELECT next_ordinal,NEW.id,NEW.trip_uuid,active_registration,active_run FROM upload_connection WHERE id=1;
     UPDATE upload_connection SET next_ordinal=next_ordinal+1 WHERE id=1; END;
 CREATE TRIGGER upload_context_insert AFTER INSERT ON upload_projection_evidence_versions
-    WHEN EXISTS(SELECT 1 FROM upload_candidates WHERE trip_ref=NEW.root_ref) BEGIN 
+    WHEN EXISTS(SELECT 1 FROM upload_candidates WHERE trip_ref=NEW.root_ref) BEGIN
   UPDATE upload_connection SET next_change=next_change+1 WHERE id=1;
   INSERT INTO upload_change_heads(root_ref,revision_ref,position,material_version,material_key,dirty)
     SELECT r.logical_ref,r.id,(SELECT next_change-1 FROM upload_connection WHERE id=1),1,'',1 FROM logical_revisions r
@@ -709,7 +709,7 @@ CREATE TRIGGER upload_context_insert AFTER INSERT ON upload_projection_evidence_
   UPDATE upload_source_bindings SET pending=1 WHERE root_ref=NEW.root_ref;
  END;
 CREATE TRIGGER upload_context_update AFTER UPDATE ON upload_projection_evidence_versions
-    WHEN EXISTS(SELECT 1 FROM upload_candidates WHERE trip_ref=NEW.root_ref) BEGIN 
+    WHEN EXISTS(SELECT 1 FROM upload_candidates WHERE trip_ref=NEW.root_ref) BEGIN
   UPDATE upload_connection SET next_change=next_change+1 WHERE id=1;
   INSERT INTO upload_change_heads(root_ref,revision_ref,position,material_version,material_key,dirty)
     SELECT r.logical_ref,r.id,(SELECT next_change-1 FROM upload_connection WHERE id=1),1,'',1 FROM logical_revisions r
