@@ -542,5 +542,5 @@ it('localizes automatic waiting, simultaneous choice, partial attachment and mis
   expect(gameConnectionText(partial)).toBe('Game connection is incomplete. Waiting for the other telemetry stream.');
   expect(liveDashboardText(partial, undefined, 'ru').sections.at(-1)).toMatchObject({rows: [], status: 'Ожидание игры: Ожидание игры'});
   partial.v1.status = 'incompatible'; partial.v1.reason = 'Game protocol target mismatch';
-  expect(gameConnectionText(partial, 'ru')).toBe('Источники игры не совпадают. Переподключитесь или выберите источник в «Настройки > Данные».');
+  expect(gameConnectionText(partial, 'ru')).toBe('Источники игры не совпадают. Переподключитесь или выберите источник в «Настройки > Диагностика».');
 });

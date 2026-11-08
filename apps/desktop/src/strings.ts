@@ -47,7 +47,7 @@ export const STRINGS = channelCopyTable(Object.freeze({
   sourceChoice: 'Both games are available. Choose which game to connect to.',
   sourcePairWaiting: 'Waiting for matching game sources after a session change.',
   sourcePartial: 'Game connection is incomplete. Waiting for the other telemetry stream.',
-  sourceMismatch: 'The game sources do not match. Reconnect or choose a source in Settings > Data.',
+  sourceMismatch: 'The game sources do not match. Reconnect or choose a source in Settings > Diagnostics.',
   sourceAmbiguous: 'Multiple instances of a game were found. Close the extra instance to connect.',
   sourceRejected: 'The game connection could not be verified. Check Settings > Game plugin.',
   sourceChoosing: 'Connecting…',
@@ -143,7 +143,7 @@ export const STRINGS_RU: Readonly<Record<StringKey, string>> = channelCopyTable(
   sourceChoice: 'Доступны обе игры. Выберите игру для подключения.',
   sourcePairWaiting: 'Ожидание согласованных источников игры после смены сессии.',
   sourcePartial: 'Подключение к игре неполное. Ожидание второго потока телеметрии.',
-  sourceMismatch: 'Источники игры не совпадают. Переподключитесь или выберите источник в «Настройки > Данные».',
+  sourceMismatch: 'Источники игры не совпадают. Переподключитесь или выберите источник в «Настройки > Диагностика».',
   sourceAmbiguous: 'Найдено несколько экземпляров игры. Закройте лишний экземпляр для подключения.',
   sourceRejected: 'Не удалось проверить подключение к игре. Откройте «Настройки > Игровой плагин».',
   sourceChoosing: 'Подключение…',
@@ -1031,7 +1031,7 @@ export const PLUGIN_FOLDER_REFUSAL_TEXT: Readonly<Record<PluginFolderRefusal, st
 export const CONNECTION_DIAGNOSIS_TEXT: Readonly<Record<ConnectionDiagnosisCode, string>> = channelCopyTable(Object.freeze({
   SERVICE_UNAVAILABLE: 'The telemetry service is not running; see Application status.',
   CONNECTED: 'Receiving telemetry from the selected source.',
-  NO_GAME_SELECTED: 'No game is selected as the source. Choose Euro Truck Simulator 2 or American Truck Simulator in Settings > Data.',
+  NO_GAME_SELECTED: 'No game is selected as the source. Choose Euro Truck Simulator 2 or American Truck Simulator in Settings > Diagnostics.',
   SETUP_DISABLED: 'Not checked: plugin setup is off in this launch.',
   GAME_NOT_FOUND: 'The selected game was not found. Choose its game folder below.',
   PLUGIN_BLOCKED_PERMISSION: 'Windows did not allow the plugin file in a game folder to be read or changed. See the folder line below for what to do.',
@@ -1041,7 +1041,7 @@ export const CONNECTION_DIAGNOSIS_TEXT: Readonly<Record<ConnectionDiagnosisCode,
   PLUGIN_BUNDLE_UNAVAILABLE: 'The bundled plugin is missing or damaged. Reinstall Yukon Union Telemetry.',
   PLUGIN_NOT_CHECKED: 'The plugin could not be checked in a game folder; see the folder line below.',
   PLUGIN_MISSING: 'The plugin is not installed in a game folder. Turn on "Manage the plugin for this game" or press Retry.',
-  TRANSPORT_FAILED: 'The game\'s plugin could not be connected, or it is incompatible, and the connection is not tried again by itself. After the plugin is fixed, choose another source and then the game again in Settings > Data, or exit Yukon Union Telemetry from the tray and start it again.',
+  TRANSPORT_FAILED: 'The game\'s plugin could not be connected, or it is incompatible, and the connection is not tried again by itself. After the plugin is fixed, choose another source and then the game again in Settings > Diagnostics, or exit Yukon Union Telemetry from the tray and start it again.',
   NO_RUNNING_SOURCE: 'The plugin is in place. Start the game to connect.'
 }));
 export const CONNECTION_DIAGNOSIS_NOTE_TEXT: Readonly<Record<ConnectionDiagnosisNote, string>> = channelCopyTable(Object.freeze({
