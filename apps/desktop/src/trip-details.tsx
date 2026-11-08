@@ -108,7 +108,7 @@ export function TripSide({detail, side, site, language, options}: {detail: Journ
 /** Timeline rows. Each keeps the event table's five cells in order, so the eventSeq and the attribution stay on the row. */
 export function TripTimelineList({items}: {items: readonly JournalTimelineItem[]}) {
   return <ol className="yu-trip-timeline">{items.map(item => <li key={item.key} className="yu-trip-event" data-tone={item.tone}
-    data-testid={item.kind === 'event' ? 'journal-event-row' : item.kind === 'gap' ? 'journal-timeline-gap' : 'journal-timeline-refuel'} {...(item.kind === 'event' ? {'data-event-seq': item.eventSeq} : {})}>
+    data-testid={item.kind === 'event' ? 'journal-event-row' : item.kind === 'gap' ? 'journal-timeline-gap' : 'journal-timeline-refuel'} data-item-key={item.key} {...(item.kind === 'event' ? {'data-event-seq': item.eventSeq} : {})}>
     <span data-cell="seq" className="yu-trip-event-seq">{item.eventSeq}</span><span data-cell="time" className="yu-trip-event-time">{item.time}</span>
     <span data-cell="type" className="yu-trip-event-type">{item.type}</span><span data-cell="detail" className="yu-trip-event-detail">{item.detail}</span>
     <span data-cell="attribution" className="yu-trip-event-who">{item.attribution}</span>

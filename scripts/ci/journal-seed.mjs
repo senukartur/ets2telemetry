@@ -8,7 +8,7 @@
 // exist yet, in the LOCALAPPDATA the driver isolated for this run; the data root is `ETS2Telemetry` or, for a staging
 // build (ET-055), `ETS2TelemetryStaging`. It refuses any other path. The history database is
 // never opened. Contents: the eight hand-written anchors and 110 filler trips of tests/shared/journal-seed.ts, then one
-// open ETS2 paging trip with 104 tolls, 104 annotations and 3,600 one-second samples, so the timeline, completeness and
+// open ETS2 paging trip with 104 tolls, 104 completeness intervals and 3,600 one-second samples, so the timeline, completeness and
 // sample tables each have more than one page. Prints one JSON line with the counts and the elapsed time.
 // Usage: electron <bundle> <database path>
 import {existsSync} from 'node:fs';
@@ -71,17 +71,23 @@ async function main() {
       commitEvent: input => storage.commitEvent({...input, effects: input.effects?.map(effect => effect.kind === 'trip.open' && effect.tripUuid.endsWith('00000000006d')
         ? {...effect, gameMode: {mode: 'single-player', method: 'module-scan', confidence: 'weak'}} : effect)})
     }, FILLERS);
-    // The paging trip: opened by its job, then each toll is attributed to it and adds one truck-change annotation.
+    // The paging trip: opened by its job, then each toll is attributed to it and adds one completeness interval. Those are
+    // truck-change annotations, except that the first two are a gap and a refuel labelled just before and just after event
+    // 100, the last event of the timeline's first page: they are among the 50 intervals the trip detail carries.
     const script = new Script(PAGING_SESSION, 'ets2', {utcMs: PAGING_UTC});
     check(storage.upsertSession({message: script.welcome()}), 'paging session');
     const configured = script.event(r.jobConfigured(job({cargoId: {available: true, value: 'synthetic_paging_cargo'}})));
     check(storage.commitEvent({message: configured, effects: [{kind: 'trip.open', tripUuid: PAGING_TRIP, game: 'ets2', gameMode: {mode: 'truckersmp', method: 'module-scan', confidence: 'strong'},
       jobConfiguration: 'this-event', recordingCompleteness: 'unknown', startedUtcMs: PAGING_UTC + 1_000}, {kind: 'trip.update', tripUuid: PAGING_TRIP, set: {gameModeAmbiguous: true}}]}), 'paging job');
+    const boundaryIntervals = [
+      {kind: 'sample-loss', startUtcMs: PAGING_UTC + 99_500, endUtcMs: PAGING_UTC + 99_900, startMonotonicNs: '99000000000', endMonotonicNs: '104000000000', sourceClockId: script.clockId, detail: {cause: 'reading-hole'}},
+      {kind: 'discontinuity', startUtcMs: PAGING_UTC + 100_500, detail: {cause: 'refuel', annotation: true, addedLiters: 120, atMonotonicNs: '105000000000'}}
+    ];
     for (let i = 0; i < PAGING_TOLLS; i++) {
       const toll = script.event({type: 'player.tollgate.paid', amount: money('1', 's64', EUR)});
       const atEventSeq = toll.data.eventSeq;
       check(storage.commitEvent({message: toll, effects: [{kind: 'event.attribute', tripUuid: PAGING_TRIP, attribution: 'trip'},
-        {kind: 'completeness.add', interval: {tripUuid: PAGING_TRIP, kind: 'discontinuity', detail: {cause: 'truck-change', annotation: true, atEventSeq}}}]}), `paging toll ${atEventSeq}`);
+        {kind: 'completeness.add', interval: {tripUuid: PAGING_TRIP, ...(boundaryIntervals[i] ?? {kind: 'discontinuity', detail: {cause: 'truck-change', annotation: true, atEventSeq}})}}]}), `paging toll ${atEventSeq}`);
     }
     check(storage.appendSamples(PAGING_SESSION, Array.from({length: PAGING_SAMPLES}, (_, second) =>
       seedSample(script, PAGING_TRIP, second, PAGING_UTC + 200_000 + second * 1_000, {speed: {available: true, value: variant === '--ui-signed' ? [-20, 0, 20][second % 3] : 20 + (second % 5)}}))), 'paging samples');
