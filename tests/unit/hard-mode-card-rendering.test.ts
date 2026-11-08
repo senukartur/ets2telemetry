@@ -90,6 +90,32 @@ describe('HardModeCard rendering (REG-009, REG-010)', () => {
     }
   });
 
+  it('renders both loss notification and in-game fix banner when trip is lost and settings fail', () => {
+    const failingConfig = HARD_MODE_CONFIG.replace('g_fuel_simulation "1"', 'g_fuel_simulation "0"');
+    const assessment = evaluateHardMode(parseHardModeConfig(failingConfig), 1000, 'fixture');
+    const lossTrip: HardModeDetailsV1 = {
+      version: 1,
+      binding: null,
+      opening: assessment,
+      latest: assessment,
+      firstLoss: {
+        rule: 'police',
+        reason: 'outside-limit',
+        values: [0],
+        atUtcMs: 1700000000000,
+      },
+      manualDelivery: null,
+    };
+    const html = renderToStaticMarkup(
+      React.createElement(HardModeCard, {
+        language: 'en',
+        controller: makeController({status: {assessment, trip: lossTrip}}),
+      })
+    );
+    expect(html).toContain('data-testid="hard-mode-loss"');
+    expect(html).toContain('data-testid="hard-mode-fix"');
+  });
+
   it('renders unknown state showing Unknown values and ? mark without pass or fail classification', () => {
     const assessment = unknownHardMode(1000, 'missing');
     for (const language of ['en', 'ru'] as const) {
@@ -100,20 +126,87 @@ describe('HardModeCard rendering (REG-009, REG-010)', () => {
         })
       );
       expect(html).toContain('data-state="unknown"');
+      expect(html).toContain('badge-neutral');
+      expect(html).toContain(language === 'en' ? 'Hard Mode unknown' : 'Hard Mode не определён');
+      expect(html).not.toMatch(/Hard Mode (unknown|не определён) ·/);
       expect(html).toContain(language === 'en' ? 'Unknown' : 'Неизвестно');
       expect(html).not.toContain('data-state="pass"');
+      expect(html).not.toContain('data-state="fail"');
+      for (const id of ['fuel', 'air', 'police', 'fatigue', 'limiter', 'truck', 'trailer', 'parking', 'rain', 'events', 'braking', 'traffic']) {
+        expect(html).toContain(`data-testid="hard-mode-rule-${id}" data-state="unknown"`);
+      }
+      expect(html).toContain('<span class="yu-hard-mode-mark" aria-hidden="true">?</span>');
+      expect(html).not.toContain('<span class="yu-hard-mode-mark" aria-hidden="true">✓</span>');
+      expect(html).not.toContain('<span class="yu-hard-mode-mark" aria-hidden="true">✕</span>');
+    }
+  });
+
+  it('renders neutral badge and reading text when not loaded', () => {
+    for (const language of ['en', 'ru'] as const) {
+      const html = renderToStaticMarkup(
+        React.createElement(HardModeCard, {
+          language,
+          controller: makeController({loaded: false}),
+        })
+      );
+      expect(html).toContain('badge-neutral');
+      expect(html).toContain(language === 'en' ? 'Reading settings…' : 'Чтение настроек…');
+      expect(html).not.toMatch(/· \d+ of 12|· \d+ из 12/);
+    }
+  });
+
+  it('renders neutral badge and unavailable notice when error occurs', () => {
+    for (const language of ['en', 'ru'] as const) {
+      const html = renderToStaticMarkup(
+        React.createElement(HardModeCard, {
+          language,
+          controller: makeController({error: true}),
+        })
+      );
+      expect(html).toContain('badge-neutral');
+      expect(html).toContain(language === 'en' ? 'Settings could not be read. Required evidence is unknown.' : 'Не удалось прочитать настройки. Необходимые данные неизвестны.');
     }
   });
 
   it('preserves full RU/EN parity and leaks no forbidden English tokens on Russian pages', () => {
-    const html = renderToStaticMarkup(
+    const ruHtml = renderToStaticMarkup(
       React.createElement(HardModeCard, {
         language: 'ru',
         controller: makeController(),
       })
     );
-    // Smoke test assertion compatibility
-    expect(html).not.toMatch(/Detected:|Required:|Reason:|Check again|Current settings|Read-only/);
+    const enHtml = renderToStaticMarkup(
+      React.createElement(HardModeCard, {
+        language: 'en',
+        controller: makeController(),
+      })
+    );
+    // Concrete Russian texts rendered
+    expect(ruHtml).toContain('Текущие настройки');
+    expect(ruHtml).toContain('Проверить снова');
+    expect(ruHtml).toContain('Все 12 условий должны выполняться одновременно');
+    expect(ruHtml).toContain('Проверяются только сохранённые настройки профиля');
+    expect(ruHtml).toContain('В игре:');
+    expect(ruHtml).toContain('Нужно:');
+
+    // Concrete English texts rendered
+    expect(enHtml).toContain('Current settings');
+    expect(enHtml).toContain('Check again');
+    expect(enHtml).toContain('All 12 must hold at the same time');
+    expect(enHtml).toContain('Only saved profile settings are read');
+    expect(enHtml).toContain('In game:');
+    expect(enHtml).toContain('Required:');
+
+    // Smoke test assertion against leaking forbidden English tokens
+    expect(ruHtml).not.toMatch(/Detected:|Required:|Reason:|Check again|Current settings|Read-only/);
+  });
+
+  it('maintains complete key parity between en and ru for all hm keys', async () => {
+    const {EN_DICTIONARY} = await import('../../apps/desktop/src/i18n/en');
+    const {RU_DICTIONARY} = await import('../../apps/desktop/src/i18n/ru');
+    const enHmKeys = Object.keys(EN_DICTIONARY).filter(k => k.startsWith('hm.')).sort();
+    const ruHmKeys = Object.keys(RU_DICTIONARY).filter(k => k.startsWith('hm.')).sort();
+    expect(enHmKeys).toEqual(ruHmKeys);
   });
 
   it('never promises or claims finished trip qualification', () => {

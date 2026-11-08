@@ -1,5 +1,5 @@
 import React from 'react';
-import {Flame, TriangleAlert, Check, X, Info} from 'lucide-react';
+import {Flame, TriangleAlert, Check, X, CircleHelp, Info} from 'lucide-react';
 import type {HardModeDetails} from '../../../../packages/contracts/src/hard-mode';
 import {Button} from '../components/ui/button';
 import {Badge} from '../components/ui/badge';
@@ -34,12 +34,28 @@ export function HardModeCard({language = 'en', controller}: {language?: AppLangu
   const view = hardModeView(status, now, language);
   const failing = view.rows.filter(row => row.state === 'fail');
   const isLost = Boolean(status.trip?.firstLoss);
-  const isPass = status.assessment.state === 'pass';
+  const isPass = loaded && !error && status.assessment.state === 'pass';
+  const isUnknown = !loaded || error || (!isLost && status.assessment.state === 'unknown');
 
-  const badgeVariant = isLost ? 'destructive' : isPass ? 'default' : 'secondary';
-  const badgeClass = isLost ? 'badge-error' : isPass ? 'badge-ok' : 'badge-warn';
-  const badgeIcon = isLost ? <X className="size-3 mr-1" aria-hidden="true" /> : isPass ? <Check className="size-3 mr-1" aria-hidden="true" /> : <TriangleAlert className="size-3 mr-1" aria-hidden="true" />;
-  const badgeText = `${view.headline} · ${t('hm.configuredCount', {n: view.passed}, language)}`;
+  const badgeVariant = !loaded || error ? 'neutral' : isLost ? 'error' : isPass ? 'ok' : isUnknown ? 'neutral' : 'warn';
+  const badgeIcon = !loaded || error ? (
+    <CircleHelp className="size-3 mr-1" aria-hidden="true" />
+  ) : isLost ? (
+    <X className="size-3 mr-1" aria-hidden="true" />
+  ) : isPass ? (
+    <Check className="size-3 mr-1" aria-hidden="true" />
+  ) : isUnknown ? (
+    <CircleHelp className="size-3 mr-1" aria-hidden="true" />
+  ) : (
+    <TriangleAlert className="size-3 mr-1" aria-hidden="true" />
+  );
+  const badgeText = !loaded
+    ? t('hm.reading', undefined, language)
+    : error
+      ? t('hm.unavailable', undefined, language)
+      : isUnknown
+        ? view.headline
+        : `${view.headline} · ${t('hm.configuredCount', {n: view.passed}, language)}`;
 
   return (
     <div className="yu-stack" data-testid="hard-mode-card" data-state={isLost ? 'lost' : status.assessment.state}>
@@ -59,7 +75,7 @@ export function HardModeCard({language = 'en', controller}: {language?: AppLangu
               </h2>
             </CardTitle>
             <div className="yu-hard-mode-badge-wrap ml-auto">
-              <Badge variant={badgeVariant} className={badgeClass}>
+              <Badge variant={badgeVariant}>
                 {badgeIcon}
                 <span>{badgeText}</span>
               </Badge>
@@ -119,7 +135,7 @@ export function HardModeCard({language = 'en', controller}: {language?: AppLangu
         </div>
       ) : null}
 
-      {loaded && failing.length > 0 && !isLost ? (
+      {loaded && failing.length > 0 ? (
         <div className="yu-hard-mode-fix flex items-start gap-2 rounded-lg border border-[var(--yu-warn-border)] bg-[var(--yu-warn-bg)] p-3 text-sm text-[var(--yu-warn-fg)]">
           <TriangleAlert className="size-4 shrink-0 mt-0.5" aria-hidden="true" />
           <p data-testid="hard-mode-fix">{t('hm.fix', {settings: failing.map(row => row.label).join(', ')}, language)}</p>

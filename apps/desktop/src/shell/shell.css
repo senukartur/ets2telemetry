@@ -285,7 +285,7 @@ button[aria-disabled="true"], [role="switch"][aria-disabled="true"] { cursor: no
 .yu-hard-mode-grid > li[data-state="pass"] .yu-hard-mode-mark { color: var(--yu-ok-fg); }
 .yu-hard-mode-grid > li[data-state="fail"] .yu-hard-mode-mark { color: var(--yu-warn-fg); }
 .yu-hard-mode-grid > li[data-state="unknown"] .yu-hard-mode-mark { color: var(--yu-text-muted); }
-.yu-hard-mode-grid .yu-hard-mode-values { margin-top: 4px; padding: 4px 8px; border-radius: 4px; font-size: 11px; background: rgba(0,0,0,0.15); color: var(--yu-warn-fg); }
+.yu-hard-mode-grid .yu-hard-mode-values { margin-top: 4px; padding: 4px 8px; border-radius: 4px; font-size: 11px; background: var(--yu-bg-inset); color: var(--yu-warn-fg); }
 .yu-hard-mode-grid .yu-hard-mode-values p { margin: 0; }
 @container (max-width: 680px) { .yu-hard-mode-grid { grid-template-columns: minmax(0, 1fr); } }
 .yu-trip-raw { border: 1px solid var(--yu-border); border-radius: 10px; background: var(--yu-bg-inset); }
