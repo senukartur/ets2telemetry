@@ -1,0 +1,11 @@
+{
+  "provenance": "Synthetic schema5 fixture copied and upgraded using frozen migrations1-6 at base6b0c9e5; one hand-authored delivered envelope and receipt were added. No real user data.",
+  "schemaVersion": 6,
+  "trips": 4,
+  "pins": 2,
+  "envelopes": 1,
+  "receipts": 1,
+  "eventId": "90000000-0000-4000-8000-000000000004",
+  "receiptId": "90000000-0000-4000-8000-000000000005",
+  "legacyReason": "catalog-context-unavailable"
+}

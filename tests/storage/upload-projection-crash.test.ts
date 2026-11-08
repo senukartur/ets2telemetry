@@ -1,3 +1,5 @@
+import {Script,ETS2_A,r,trailer} from '../shared/trip-messages';
+import {tripUuidFor} from '../../packages/telemetry-core/src';
 import {spawn,type ChildProcess} from 'node:child_process';
 import {once} from 'node:events';
 import {randomUUID} from 'node:crypto';
@@ -65,4 +67,23 @@ describe('REG-006/012 durable projection worker crash boundaries',()=>{
     do{state=ok(reopened.releaseUploadProjection(pinId));expect(state.examined).toBeLessThanOrEqual(100);}while(state.state==='releasing');
     ok(reopened.deleteTrip(root));expect(ok(reopened.releaseUploadProjection(pinId)).state).toBe('released');reopened.close();
   });
+});
+
+
+it.each(['before-commit','after-commit','after-answer'])('REG-006/012 commits raw proof cursor atomically at %s',async boundary=>{
+  const conn=await openConnection(ws.options()),storage=tracked(conn),db=conn.writer(),s=new Script(ETS2_A);
+  ok(storage.upsertSession({message:s.welcome()}));const baseline=s.checkpoint(null);baseline.data.state.boundaryOrder='0';
+  baseline.data.state.configuration.trailers=Array.from({length:10},(_,index)=>index===0?{available:true,value:trailer(0,{bodyType:{available:true,value:'curtainsider'}})}:{available:false,reason:'not-observed'});
+  ok(storage.recordTrailerBaseline({message:baseline}));const opening=s.event(r.jobConfigured()),root=tripUuidFor(s.session,opening.data.eventSeq);
+  ok(storage.commitEvent({message:opening,effects:[{kind:'trip.open',tripUuid:root,game:'ets2',gameMode:{mode:'unknown',method:'none',confidence:'none'},jobConfiguration:'this-event',recordingCompleteness:'complete',startedUtcMs:1000}]}));
+  for(let i=0;i<250;i++)ok(storage.commitEvent({message:s.event(r.paused())}));
+  ok(storage.commitEvent({message:s.event(r.delivered()),effects:[{kind:'trip.close',tripUuid:root,outcome:'delivered',closeReason:'outcome',outcomeEvent:'this-event',recordingCompleteness:'complete',endedUtcMs:2000}]}));
+  const pinId=randomUUID();ok(storage.beginUploadProjection({pinId,tripUuid:root}));expect(ok(storage.advanceUploadProjection(pinId))).toMatchObject({state:'preparing',examined:100});
+  const snapshot=()=>String(db.prepare('SELECT snapshot_json FROM upload_projection_pins WHERE pin_id=?').pluck().get(pinId)),before=snapshot();
+  expect(JSON.parse(before).ruleReplay.phase).toBe('events');storage.close();await kill(ws.database,pinId,'advanceUploadProjection',boundary);
+  const reopenedConn=await openConnection(ws.options()),reopened=tracked(reopenedConn),writer=reopenedConn.writer();
+  const after=String(writer.prepare('SELECT snapshot_json FROM upload_projection_pins WHERE pin_id=?').pluck().get(pinId));
+  if(boundary==='before-commit')expect(after).toBe(before);else expect(BigInt(JSON.parse(after).ruleReplay.eventAfter)).toBeGreaterThan(BigInt(JSON.parse(before).ruleReplay.eventAfter));
+  let state=ok(reopened.getUploadProjectionPreparation(pinId));while(state.state==='preparing'){state=ok(reopened.advanceUploadProjection(pinId));expect(state.examined).toBeLessThanOrEqual(100);}
+  expect(state.projection!.ruleContext).toMatchObject({version:1,status:'proven',recordingLoss:false});reopened.close();
 });

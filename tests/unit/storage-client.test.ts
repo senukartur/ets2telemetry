@@ -852,3 +852,12 @@ it('REG-005/010/011/012 strictly validates bounded authoritative scheduling diag
 it.each([null,undefined,'invalid'])('REG-005/010/011/012 fails the client closed on missing or invalid retry correlation %s',async retryEventId=>{
   const f=fixture(),read=f.client.getUploadSchedulingHints({registrationId:P1});expect(f.sent[0].command).toEqual({name:'getUploadSchedulingHints',input:{registrationId:P1}});f.ok(1,{status:'ready',registrationId:P1,version:'1',credentialGeneration:P1,retryAtMs:300000,failureStreak:1,retryEventId,paused:null,held:null});await expect(read).resolves.toEqual(error('WORKER_FAILED'));expect(f.client.state).toBe('failed');
 });
+
+
+it('REG-010 permits only the private checkpoint baseline input and rejects extra fields',()=>{
+  const request={type:'storage.request',id:1,command:{name:'recordTrailerBaseline',input:{message:{kind:'checkpoint'}}}};
+  expect(parseRequest(request).ok).toBe(true);
+  for(const command of [{...request.command,sql:'SELECT 1'},{...request.command,input:{...request.command.input,extra:true}},{name:'recordTrailerBaseline',input:null}]){
+    expect(parseRequest({...request,command}).ok).toBe(false);
+  }
+});

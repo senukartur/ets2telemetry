@@ -1,3 +1,5 @@
+import {recordTrailerBaseline} from './sqlite/trailer-baselines';
+import type {TrailerBaselineInput} from './api';
 import type {UploadSyncCommands} from './upload-sync';
 import * as sync from './sqlite/upload-sync';
 import * as queue from './sqlite/upload-queue';
@@ -36,6 +38,7 @@ export class Storage {
   get summary(): OpenSummary { return this.connection.summary; }
   get closed(): boolean { return this.connection.closed; }
   upsertSession(input: {message: unknown}) { return attempt(() => writes.upsertSession(this.connection, input)); }
+  recordTrailerBaseline(input: TrailerBaselineInput): Result<void> {return attempt(() => recordTrailerBaseline(this.connection,input));}
   commitEvent(input: {message: unknown; effects?: TripEffect[]; hardMode?: HardModeObservation; hardModeFresh?: boolean; hardModeLoss?: HardModeObservation; profile?: ProfileObservation}, options?: CommitOptions): Result<CommitResult> { return attempt(() => writes.commitEvent(this.connection, input, options)); }
   commitGap(input: {message: unknown; effects?: TripEffect[]; hardMode?: HardModeObservation; hardModeFresh?: boolean; hardModeLoss?: HardModeObservation; profile?: ProfileObservation}, options?: CommitOptions): Result<CommitResult> { return attempt(() => writes.commitGap(this.connection, input, options)); }
   appendSamples(pluginSessionId: string, rows: SampleInput[], options?: SampleAppendOptions, commitOptions?: CommitOptions): Result<SampleAppendResult> {

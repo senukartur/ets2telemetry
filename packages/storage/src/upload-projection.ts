@@ -1,3 +1,4 @@
+import {chainComplete,isRuleContext,usable,type RuleContext} from './upload-rule-context';
 // Private service/worker contract. No renderer DTOs or durable publication authority.
 import {EVENT_TYPES, type Available, type GameMode, type JobConfiguration, type Measure, type Money} from '../../contracts/src/protocol-v1';
 import type {CloseReason, RecordingCompleteness, TripOutcome} from './api';
@@ -28,6 +29,8 @@ export interface UploadProjection {
   snapshot: string; databaseUuid: string; purpose: 'history' | 'synthetic' | 'replay'; revision: string;
   bounds: {members: string; events: string; gaps: string; samples: string; intervals: string; accountingHead: string | null};
   totals: Record<UploadPageKind, number>; facts: UploadFacts;
+  /** Optional only for retained pre-proof pins. Never part of the HTTP summary. */
+  ruleContext?: RuleContext;
 }
 export interface UploadProjectionBegin {pinId: string; tripUuid: string}
 export interface UploadProjectionPreparation {
@@ -95,10 +98,13 @@ export function isUploadPageQuery(v: unknown): v is UploadProjectionPageQuery {
   return v.cursor.startsWith(prefix) && positive(v.cursor.slice(prefix.length));
 }
 export function isUploadProjection(v: unknown, requested?: string): v is UploadProjection {
+  if (!record(v)) return false;
+  const {ruleContext,...legacy}=v;
+  if (ruleContext!==undefined&&!isRuleContext(ruleContext))return false;
   if (!shape({requestedTripUuid: isUploadUuid, rootTripUuid: isUploadUuid, readiness: one('ready','identity-pending','redirected'), rootReadiness: readiness,
     snapshot: v => !!uploadSnapshotParts(v), databaseUuid: isUploadUuid, purpose: one('history','synthetic','replay'), revision: positive,
-    bounds: shape({members: decimal, events: decimal, gaps: decimal, samples: decimal, intervals: decimal, accountingHead: nullable(positive)}), totals, facts})(v)) return false;
-  const p = v as UploadProjection, token = uploadSnapshotParts(p.snapshot)!;
+    bounds: shape({members: decimal, events: decimal, gaps: decimal, samples: decimal, intervals: decimal, accountingHead: nullable(positive)}), totals, facts})(legacy)) return false;
+  const p = v as unknown as UploadProjection, token = uploadSnapshotParts(p.snapshot)!;
   return (requested === undefined || requested === p.requestedTripUuid) && token[1] === p.databaseUuid && token[4] === p.rootTripUuid && token[5] === p.revision && (p.requestedTripUuid !== p.rootTripUuid ? p.readiness === 'redirected' : p.readiness === p.rootReadiness);
 }
 export const isUploadProjectionBegin = (v: unknown): v is UploadProjectionBegin => shape({pinId: isUploadUuid, tripUuid: isUploadUuid})(v);
@@ -168,7 +174,7 @@ export function mapUploadProjection(pin: UploadProjection, pages: readonly Uploa
   if (![f.opening,f.outcomeOccurrence].every(owned) || !closeOwned || configs.some(c => !owned(c.occurrence))
  || !lifecycleValid(pin)) return hold('evidence-contradictory');
   const changed=new Set(configs.map(c=>c.index)).size!==configs.length;
-  return projectedSummary(pin,openingMember.versions,changed?[]:configs.map(c=>({index:c.index,id:c.idValue,bodyType:c.bodyType,chainType:c.chainType})),configs.length>0,intervals.length>0,changed);
+  return projectedSummary(pin,openingMember.versions,changed?[]:configs.map(c=>({index:c.index,id:c.idValue,bodyType:c.bodyType,chainType:c.chainType})),configs.length>0,intervals.some(i=>i.kind!=='sample-loss'),changed);
 }
 function lifecycleValid(pin:UploadProjection):boolean {
   const f=pin.facts;
@@ -191,14 +197,19 @@ function projectedSummary(pin:UploadProjection,openingVersions:UploadVersions,it
   const start: UploadTime = f.openedBy === 'checkpoint' ? {utcMs: f.checkpointUtcMs, basis: 'checkpoint', eventSeq: null} : time(f.opening);
   const end = f.outcome === 'open' ? null : time(f.outcomeOccurrence ?? f.close);
   const clockAnomaly = f.clockAnomaly || start.utcMs !== null && end?.utcMs !== null && end?.utcMs !== undefined && end.utcMs < start.utcMs;
-  const reasons = new Set<string>(['catalog-context-unavailable']);
-  if (hasIntervals) reasons.add('recording-intervals');
-  if (clockAnomaly) reasons.add('clock-anomaly');
-  if (f.gameMode.ambiguous) reasons.add('game-mode-ambiguous');
-  if (f.moneyIncomplete) reasons.add('accounting-unavailable');
-  // History is rule context, not ten active slots. Never describe changing configurations as a complete current chain.
-  if (changed) reasons.add('trailer-context-changed');
-  if (!hasConfigurations) reasons.add('trailer-context-unavailable');
+  const proof=pin.ruleContext,reasons=new Set<string>();
+  if(proof){
+    if(proof.status==='proven'||proof.items.length||proof.status==='changed')items=proof.items;
+    if(proof.status!=='proven')reasons.add(`trailer-context-${proof.status}`);
+    if(proof.recordingLoss)reasons.add('recording-intervals');
+  }else{
+    reasons.add('trailer-context-unproven');
+    if(changed)reasons.add('trailer-context-changed');
+    if(!hasConfigurations)reasons.add('trailer-context-unavailable');
+    if(hasIntervals)reasons.add('recording-intervals');
+  }
+  if(!usable(j.sourceCityId)||!usable(j.destinationCityId)||!usable(j.cargoId))reasons.add('job-context-unavailable');
+  if(!j.cargoMass.available||!Number.isFinite(j.cargoMass.value)||j.cargoMass.value<0)reasons.add('cargo-mass-unavailable');
   if (items.length > 10) return hold('unrepresentable');
   const place = (prefix: 'source' | 'destination'): UploadPlace => ({cityId: j[`${prefix}CityId`], cityName: j[`${prefix}City`], companyId: j[`${prefix}CompanyId`], companyName: j[`${prefix}Company`]});
   const summary: UploadSummary = {source: {provider: 'ets2telemetry', game: f.game, tripId: pin.rootTripUuid, pluginSessionId: f.pluginSessionId, databaseUuid: pin.databaseUuid, origin: 'game'}, snapshot: {
@@ -207,10 +218,10 @@ function projectedSummary(pin:UploadProjection,openingVersions:UploadVersions,it
     context: {gameBuild: absent, sourceLocale: absent, mapId: absent, dlcIds: absent, versions: openingVersions}, gameMode: f.gameMode,
     job: {origin: place('source'), destination: place('destination'), cargoId: j.cargoId, cargoName: j.cargo, cargoMass: j.cargoMass, cargoUnitMass: j.cargoUnitMass,
       cargoUnitCount: j.cargoUnitCount, market: j.market, isSpecialJob: j.isSpecialJob, cargoLoaded: j.cargoLoaded},
-    trailers: {complete: false, items}, plannedDistance: j.plannedDistance, observedDistance: f.observedDistance, deliveredDistance: f.deliveredDistance,
+    trailers: {complete: proof?.status==='proven', items}, plannedDistance: j.plannedDistance, observedDistance: f.observedDistance, deliveredDistance: f.deliveredDistance,
     fuelUsed: f.fuelUsed, cargoDamage: f.cargoDamage, expectedIncome: j.expectedIncome, revenue: f.revenue, penalty: f.penalty,
     evidence: {startObserved: start.basis === 'event' && !clockAnomaly, endObserved: !!f.outcomeOccurrence && end?.basis === 'event' && !clockAnomaly,
-      ruleContextComplete: false, clockAnomaly, reasons: [...reasons].sort()}
+      ruleContextComplete: reasons.size===0, clockAnomaly, reasons: [...reasons].sort()}
   }};
   // Validate the exact allowlisted wire subset, including Dashboard's UTF-8, numeric and money limits.
   if (!wireValuesFit(summary)) return hold('unrepresentable');
@@ -240,12 +251,12 @@ function wireValuesFit(summary: UploadSummary): boolean {
 
 /** Constant-size durable fold: at most ten trailer slots and three occurrence checks, never full history arrays. */
 export interface UploadFold {
-  kind:number;cursor:string|null;counts:Record<UploadPageKind,number>;openingVersions:UploadVersions|null;
+  ruleContextVersion?:1;kind:number;cursor:string|null;counts:Record<UploadPageKind,number>;openingVersions:UploadVersions|null;
   openingOwned:boolean;outcomeOwned:boolean;closeOwned:boolean;hasIntervals:boolean;changed:boolean;
   items:UploadSummary['snapshot']['trailers']['items'];invalid:Extract<UploadMapping,{status:'hold'}>['reason']|null;
 }
 export function beginUploadFold(pin:UploadProjection):UploadFold {
-  return {kind:0,cursor:null,counts:{members:0,configurations:0,intervals:0},openingVersions:null,openingOwned:pin.facts.opening===null,
+  return {ruleContextVersion:1,kind:0,cursor:null,counts:{members:0,configurations:0,intervals:0},openingVersions:null,openingOwned:pin.facts.opening===null,
     outcomeOwned:pin.facts.outcomeOccurrence===null,closeOwned:pin.facts.close===null,hasIntervals:false,changed:false,items:[],invalid:null};
 }
 export function advanceUploadFold(pin:UploadProjection,prior:UploadFold,page:UploadProjectionPage,isMember:(rawTripUuid:string,pluginSessionId:string)=>boolean):UploadFold {
@@ -268,7 +279,7 @@ export function advanceUploadFold(pin:UploadProjection,prior:UploadFold,page:Upl
         if(fold.items.some(item=>item.index===config.index)){fold.changed=true;fold.items=[];}
         else fold.items.push({index:config.index,id:config.idValue,bodyType:config.bodyType,chainType:config.chainType});
       }
-    }else fold.hasIntervals=true;
+    }else if((row as UploadInterval).kind!=='sample-loss')fold.hasIntervals=true;
   }
   fold.counts[kind]+=page.rows.length;fold.cursor=page.nextCursor;
   if(page.nextCursor===null){if(fold.counts[kind]!==pin.totals[kind])fold.invalid='evidence-incomplete';fold.kind++;}
@@ -282,7 +293,7 @@ export function finishUploadFold(pin:UploadProjection,fold:UploadFold):UploadMap
   if(fold.kind!==3||UPLOAD_PAGE_KINDS.some(kind=>fold.counts[kind]!==pin.totals[kind]))return {status:'hold',reason:'evidence-incomplete'};
   if(!fold.openingVersions)return {status:'hold',reason:'source-ineligible'};
   if(!fold.openingOwned||!fold.outcomeOwned||!fold.closeOwned||!lifecycleValid(pin))return {status:'hold',reason:'evidence-contradictory'};
-  return projectedSummary(pin,fold.openingVersions,fold.items,fold.counts.configurations>0,fold.hasIntervals,fold.changed);
+  return projectedSummary(fold.ruleContextVersion===1?pin:{...pin,ruleContext:undefined},fold.openingVersions,fold.items,fold.counts.configurations>0,fold.hasIntervals,fold.changed);
 }
 
 /** Exact closed source/snapshot shape shared with the frozen-envelope boundary. */
@@ -308,5 +319,7 @@ export function isUploadSummary(value:unknown):value is UploadSummary {
     && (!s.evidence.startObserved||s.start.basis==='event'&&s.start.eventSeq===s.openedEventSeq)
     && (!s.evidence.endObserved||s.end?.basis==='event'&&s.end.eventSeq===s.outcomeEventSeq)
     && (s.start.utcMs===null||s.end?.utcMs===null||s.end?.utcMs===undefined||s.end.utcMs>=s.start.utcMs||s.evidence.clockAnomaly)
+    && (!s.trailers.complete||chainComplete(s.trailers.items))
+    && (!s.evidence.ruleContextComplete||s.evidence.reasons.length===0&&s.trailers.complete&&usable(s.job.origin.cityId)&&usable(s.job.destination.cityId)&&usable(s.job.cargoId)&&s.job.cargoMass.available)
     && new Set(s.trailers.items.map(item=>item.index)).size===s.trailers.items.length;
 }

@@ -76,20 +76,20 @@ describe('private Dashboard summary projection', () => {
     f.pages[2].rows=Array.from({length:51},(_,i)=>({id:String(i+1),rawTripUuid:root,pluginSessionId:ETS2_A,kind:'event-loss'}));f.pages[2].total=51;
     for(const page of f.pages)page.snapshot=f.pin.snapshot;
     const value=mapped(f);expect(value.summary.snapshot.trailers).toEqual({complete:false,items:[]});
-    expect(value.summary.snapshot.evidence.reasons).toEqual(['catalog-context-unavailable','recording-intervals','trailer-context-changed']);
+    expect(value.summary.snapshot.evidence.reasons).toEqual(['recording-intervals','trailer-context-changed','trailer-context-unproven']);
     const wire=JSON.stringify(value.summary);for(const key of ['rawTripUuid','proof','profile','samples','position','occurrence','revision','accountingHead'])expect(wire).not.toContain(`"${key}"`);
   });
   it('preserves native terminal money despite aggregate uncertainty and keeps anomalous UTC unknown', () => {
     const f=fixture();f.pin.facts.moneyIncomplete=true;f.pin.facts.opening!.utcMs=3000;const s=mapped(f).summary.snapshot;
     expect(s.observedDistance).toEqual({available:true,value:0,unit:'m'});expect(s.revenue).toEqual(f.pin.facts.revenue);expect(s.penalty).toEqual(absent);
-    expect(s.evidence).toMatchObject({startObserved:false,endObserved:false,clockAnomaly:true});expect(s.evidence.reasons).toContain('accounting-unavailable');
+    expect(s.evidence).toMatchObject({startObserved:false,endObserved:false,clockAnomaly:true});expect(s.evidence.reasons).not.toContain('accounting-unavailable');
     f.pin.facts.opening!.utcMs=Number.MAX_SAFE_INTEGER;expect(mapped(f).summary.snapshot.start).toEqual({utcMs:null,basis:'unknown',eventSeq:null});
   });
   it.each(['0','-9223372036854775808','9223372036854775807'])('preserves exact native cancellation penalty %s with uncertain aggregate accounting', raw => {
     const f=fixture();Object.assign(f.pin.facts,{outcome:'cancelled',revenue:absent,moneyIncomplete:true,
       penalty:{available:true,value:{raw,sdkType:'s64',currency:{status:'unknown'}}}});
     f.pin.facts.outcomeOccurrence!.type='job.cancelled';const s=mapped(f).summary.snapshot;
-    expect(s.penalty).toEqual(f.pin.facts.penalty);expect(s.revenue).toEqual(absent);expect(s.evidence.reasons).toContain('accounting-unavailable');
+    expect(s.penalty).toEqual(f.pin.facts.penalty);expect(s.revenue).toEqual(absent);expect(s.evidence.reasons).not.toContain('accounting-unavailable');
   });
   it.each(['oversized','negative','money','mode','private-field'] as const)('holds contradictory or unrepresentable evidence: %s', fault => {
     const f=fixture();if(fault==='oversized')f.pin.facts.job.cargo={available:true,value:'я'.repeat(129)};
@@ -122,4 +122,40 @@ it('REG-004/009 folds independently expected pages with constant state and refus
     expect(JSON.stringify(fold).length).toBeLessThan(2500);expect(fold.items.length).toBeLessThanOrEqual(10);
   }
   expect(fold.counts.members).toBe(10_001);expect(fold.kind).toBe(1);
+});
+
+
+describe('TEL-034 stored whole-trip rule context',()=>{
+  function complete(coupling=false){
+    const f=fixture();f.pin.ruleContext={version:1,status:'proven',recordingLoss:false,items:[{index:0,id:{available:true,value:'trailer-a'},bodyType:{available:true,value:'curtainsider'},chainType:absent},
+      ...(coupling?[{index:1,id:{available:true as const,value:'trailer-b'},bodyType:absent,chainType:absent}]:[])]};return f;
+  }
+  it.each([false,true])('projects a proven unchanged chain including first-slot-only coupling types (%s)',coupling=>{
+    const f=complete(coupling);f.pin.facts.moneyIncomplete=true;f.pin.facts.clockAnomaly=true;f.pin.facts.gameMode.ambiguous=true;
+    f.pin.facts.job.cargoMass={available:true,value:0,unit:'kg'};
+    const summary=mapped(f).summary.snapshot;
+    expect(summary.trailers.complete).toBe(true);expect(summary.trailers.items).toHaveLength(coupling?2:1);
+    expect(summary.evidence).toMatchObject({ruleContextComplete:true,reasons:[],clockAnomaly:true});
+    expect(summary.gameMode.ambiguous).toBe(true);expect(summary.cargoDamage).toEqual(f.pin.facts.cargoDamage);
+    let fold=beginUploadFold(f.pin);for(const page of f.pages)fold=advanceUploadFold(f.pin,fold,page,()=>true);
+    expect(finishUploadFold(f.pin,fold)).toEqual(mapUploadProjection(f.pin,f.pages));
+    delete fold.ruleContextVersion;
+    const legacy=finishUploadFold(f.pin,fold);expect(legacy).toMatchObject({status:'projected',summary:{snapshot:{trailers:{complete:false},evidence:{ruleContextComplete:false}}}});
+  });
+  it.each(['sourceCityId','destinationCityId','cargoId','cargoMass'] as const)('requires stored %s while leaving catalog and ADR resolution to Dashboard',key=>{
+    const f=complete();Object.assign(f.pin.facts.job,{[key]:key==='cargoMass'?{...absent,unit:'kg'}:absent});
+    expect(mapped(f).summary.snapshot.evidence.ruleContextComplete).toBe(false);
+    expect(mapped(f).summary.snapshot.evidence.reasons).toEqual([key==='cargoMass'?'cargo-mass-unavailable':'job-context-unavailable']);
+  });
+  it.each(['changed','unavailable','unproven'] as const)('preserves the bounded %s reason',status=>{
+    const f=complete();f.pin.ruleContext!.status=status;f.pin.ruleContext!.items=[];
+    expect(mapped(f).summary.snapshot.evidence).toMatchObject({ruleContextComplete:false,reasons:[`trailer-context-${status}`]});
+  });
+  it('rejects a complete proof with missing IDs/type, invalid slots or recording loss',()=>{
+    for(const change of [({pin}:ReturnType<typeof complete>)=>{pin.ruleContext!.items[0].bodyType=absent;},
+      ({pin}:ReturnType<typeof complete>)=>{pin.ruleContext!.items[0].id={available:true,value:''};},
+      ({pin}:ReturnType<typeof complete>)=>{pin.ruleContext!.recordingLoss=true;}]){
+      const f=complete();change(f);expect(isUploadProjection(f.pin)).toBe(false);
+    }
+  });
 });

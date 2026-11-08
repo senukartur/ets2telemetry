@@ -1,7 +1,9 @@
+import {finishRuleReplay,isRuleBaseline,isRuleReplay,replayRuleEvent,type RuleContext,type RuleReplay} from '../upload-rule-context';
+import type {EventRecord} from '../../../contracts/src/protocol-v1';
 import {randomUUID} from 'node:crypto';
 import type Database from 'better-sqlite3';
 import type {Available, Money} from '../../../contracts/src/protocol-v1';
-import {fromAvailability, fromU64Key, toReal, toSafeNumber} from '../codec';
+import {fromAvailability, fromU64Key, toReal, toSafeNumber, u64Key} from '../codec';
 import {fail} from '../errors';
 import {MAX_UPLOAD_PROJECTION_PINS,isUploadPageQuery, isUploadProjection, isUploadProjectionPage, isUploadUuid, isUploadProjectionBegin, uploadSnapshotParts,
   type QualifiedOccurrence, type UploadConfiguration, type UploadFacts, type UploadInterval, type UploadMember,
@@ -75,6 +77,85 @@ function facts(db: Database.Database, snap: LogicalSnapshot, pin: LogicalRow): U
       || outcome?.utcMs !== null && outcome?.utcMs !== undefined && row.ended_utc_ms !== null && outcome.utcMs !== n(row.ended_utc_ms)};
 }
 
+const RULE_LOSSES=['event-loss','restore-loss','storage-unavailable'] as const;
+function ruleLossBounds(db:Database.Database,session:unknown):Record<string,string>{
+  return Object.fromEntries(RULE_LOSSES.map(kind=>[kind,String(get(db,'SELECT id FROM completeness_intervals WHERE plugin_session_ref=? AND kind=? ORDER BY id DESC LIMIT 1',session,kind)?.id??0n)]));
+}
+const unproven=():RuleContext=>({version:1,status:'unproven',items:[],recordingLoss:false});
+/** One indexed input or transition per call, including rejected baselines, events and gaps. */
+function advanceRuleContext(db:Database.Database,saved:LogicalRow,snap:LogicalSnapshot,pin:LogicalRow):RuleContext|null {
+  if(saved.trailerBound===undefined||saved.ruleLossBounds===undefined)return unproven(); // Retained preparations from older versions have no captured baseline bound.
+  if(saved.ruleReplay!==undefined&&!isRuleReplay(saved.ruleReplay))fail('DATABASE_CORRUPT');
+  if(!saved.ruleReplay){
+    if(pin.member_count!==1n||snap.row.opened_by!=='event'||snap.row.opened_event_ref===null)return unproven();
+    const opening=required(get(db,'SELECT e.*,c.clock_uuid FROM events e JOIN clocks c ON c.id=e.source_clock_ref WHERE e.id=?',snap.row.opened_event_ref));
+    if(opening.occurred_monotonic_ns_state!=='available')return unproven();
+    const closed=snap.row.outcome!=='open';
+    if(closed&&get(db,'SELECT 1 FROM observation_closes WHERE trip_ref=?',snap.logical))return unproven();
+    if(closed&&!get(db,'SELECT id FROM events WHERE plugin_session_id=? AND event_seq=? AND id<=?',snap.row.closed_by_session_ref,snap.row.closed_by_event_seq,snap.events))return unproven();
+    if(closed&&(snap.row.closed_by_session_ref!==snap.row.plugin_session_ref||snap.row.closed_by_event_seq===null))return unproven();
+    saved.ruleReplay={version:1,phase:'baseline',baselineBeforeSeq:(BigInt(fromU64Key(opening.event_seq))+1n).toString(),baselineBeforeId:'0',
+      lossKind:0,lossAfter:'0',eventAfter:'0',gapAfterSeq:'0',gapAfterId:'0',next:'0',end:closed?fromU64Key(snap.row.closed_by_event_seq):String(saved.nativeCoverage),
+      opening:fromU64Key(opening.event_seq),clock:String(opening.clock_uuid),openingNs:fromU64Key(opening.occurred_monotonic_ns),openingOrder:fromU64Key(opening.boundary_order),
+      items:[],opened:false,changed:false,unproven:false,recordingLoss:false} satisfies RuleReplay;
+  }
+  const state=saved.ruleReplay as RuleReplay,session=snap.row.plugin_session_ref;
+  if(state.phase==='baseline'){
+    const b=get(db,`SELECT * FROM trailer_baselines WHERE plugin_session_ref=? AND next_event_seq<=?
+      AND (next_event_seq,id)<(?,?) ORDER BY next_event_seq DESC,id DESC LIMIT 1`,session,u64Key(state.opening),u64Key(state.baselineBeforeSeq),BigInt(state.baselineBeforeId));
+    if(!b)return unproven();
+    state.baselineBeforeSeq=fromU64Key(b.next_event_seq);state.baselineBeforeId=String(b.id);
+    if((b.id as bigint)>(saved.trailerBound as bigint)||b.source_clock_uuid!==state.clock||String(b.monotonic_ns)>u64Key(state.openingNs)||String(b.boundary_order)>=u64Key(state.openingOrder))return null;
+    const body:unknown=JSON.parse(String(b.slots_json));
+    if(!isRuleBaseline(body))fail('DATABASE_CORRUPT');
+    if(body.slots.length!==10)return unproven();
+    state.unproven=body.slots.some(slot=>!slot.available&&slot.reason!=='not-observed');
+    state.items=body.slots.flatMap(slot=>slot.available?[slot.value]:[]);
+    state.next=fromU64Key(b.next_event_seq);state.eventAfter=(BigInt(state.next)-1n).toString();state.phase='events';
+    if(!isRuleReplay(state))fail('DATABASE_CORRUPT');
+    return null;
+  }
+  if(state.phase==='events'){
+    const e=get(db,`SELECT e.*,c.clock_uuid FROM events e JOIN clocks c ON c.id=e.source_clock_ref
+      WHERE e.plugin_session_id=? AND e.event_seq>? AND e.event_seq<=? ORDER BY e.event_seq LIMIT 1`,session,u64Key(state.eventAfter),u64Key(state.end));
+    if(!e||(e.id as bigint)>snap.events){
+      if(BigInt(state.next)<=BigInt(state.end))state.unproven=true;
+      state.phase='gaps';return null;
+    }
+    replayRuleEvent(state,fromU64Key(e.event_seq),(JSON.parse(String(e.payload_json)) as {record:EventRecord}).record,String(e.clock_uuid));
+    return null;
+  }
+  if(state.phase==='gaps'){
+    const gap=get(db,`SELECT id,first_event_seq,last_event_seq FROM event_gaps WHERE plugin_session_ref=? AND first_event_seq<=?
+      AND (first_event_seq,id)>(?,?) ORDER BY first_event_seq,id LIMIT 1`,session,u64Key(state.end),u64Key(state.gapAfterSeq),BigInt(state.gapAfterId));
+    if(!gap){state.phase='losses';return null;}
+    state.gapAfterSeq=fromU64Key(gap.first_event_seq);state.gapAfterId=String(gap.id);
+    // The baseline includes every event below its exclusive boundary. Earlier losses do not contaminate later jobs.
+    const baselineNext=BigInt(state.baselineBeforeSeq);
+    if((gap.id as bigint)<=snap.gaps&&BigInt(fromU64Key(gap.last_event_seq))>=baselineNext){state.unproven=true;state.recordingLoss=true;}
+    return null;
+  }
+  if(state.phase==='losses'){
+    const kind=RULE_LOSSES[state.lossKind];
+    if(!kind){state.phase='done';return finishRuleReplay(state);}
+    const bounds=saved.ruleLossBounds as Record<string,string>;
+    const interval=get(db,'SELECT * FROM completeness_intervals WHERE plugin_session_ref=? AND kind=? AND id>? AND id<=? ORDER BY id LIMIT 1',session,kind,BigInt(state.lossAfter),BigInt(bounds[kind]));
+    if(!interval){state.lossKind++;state.lossAfter='0';return null;}
+    state.lossAfter=String(interval.id);
+    if(interval.trip_ref!==null&&interval.trip_ref!==snap.logical)return null;
+    if(interval.detail_json!==null&&(JSON.parse(String(interval.detail_json)) as {annotation?:boolean}).annotation===true)return null;
+    if(interval.last_event_seq!==null&&String(interval.last_event_seq)<u64Key(state.baselineBeforeSeq))return null;
+    if(snap.row.outcome!=='open'&&interval.first_event_seq!==null&&String(interval.first_event_seq)>u64Key(state.end))return null;
+    state.unproven=true;state.recordingLoss=true;return null;
+  }
+  return finishRuleReplay(state);
+}
+function coverageUnchanged(db:Database.Database,snap:LogicalSnapshot,saved:LogicalRow):boolean {
+  if(saved.ruleLossBounds!==undefined&&JSON.stringify(ruleLossBounds(db,snap.row.plugin_session_ref))!==JSON.stringify(saved.ruleLossBounds))return false;
+  return snap.row.outcome!=='open'||saved.nativeCoverage===undefined
+    ||fromU64Key(required(get(db,'SELECT committed_through_event_seq FROM plugin_sessions WHERE id=?',snap.row.plugin_session_ref)).committed_through_event_seq)===saved.nativeCoverage;
+}
+
 const generation = (db: Database.Database, root: unknown) => get(db,'SELECT generation FROM upload_projection_evidence_versions WHERE root_ref=?',root)?.generation ?? 0n;
 const retained = (db: Database.Database, pinId: string) => {const pin=get(db,'SELECT * FROM upload_projection_pins WHERE pin_id=?',pinId);if(!pin)fail('INVALID_INPUT');return pin;};
 function status(pin: LogicalRow): UploadProjectionPreparation {
@@ -101,7 +182,8 @@ export function beginUploadProjection(conn: StorageConnection, input: UploadProj
       snapshot:`u2:${String(info.database_uuid)}:${input.pinId}:${incarnation}:${state.root}:${snap.revision}`,databaseUuid:String(info.database_uuid),purpose:info.purpose,revision:String(snap.revision),
       bounds:{members:String(snap.members),events:String(snap.events),gaps:String(snap.gaps),samples:String(snap.samples),intervals:String(snap.intervals),accountingHead:snap.head===null?null:String(snap.head)}};
     db.prepare(`INSERT INTO upload_projection_pins(pin_id,incarnation_uuid,requested_trip_uuid,root_ref,revision_ref,evidence_generation,state,phase,snapshot_json)
-      VALUES(?,?,?,?,?,?,'preparing','current',?)`).run(input.pinId,incarnation,input.tripUuid,snap.logical,snap.revision,generation(db,snap.logical),encodeRow({snap,initial}));
+      VALUES(?,?,?,?,?,?,'preparing','current',?)`).run(input.pinId,incarnation,input.tripUuid,snap.logical,snap.revision,generation(db,snap.logical),encodeRow({snap,initial,trailerBound:get(db,'SELECT id FROM trailer_baselines ORDER BY id DESC LIMIT 1')?.id??0n,
+        ruleLossBounds:ruleLossBounds(db,snap.row.plugin_session_ref),nativeCoverage:fromU64Key(required(get(db,'SELECT committed_through_event_seq FROM plugin_sessions WHERE id=?',snap.row.plugin_session_ref)).committed_through_event_seq)}));
     return status(retained(db,input.pinId));
   })();
 }
@@ -118,7 +200,7 @@ export function advanceUploadProjection(conn: StorageConnection, pinId: string, 
     if(pin.state!=='preparing')return status(pin);
     const saved=decodeRow(pin.snapshot_json),snap=saved.snap as LogicalSnapshot;
     let examined=0;
-    if(generation(db,pin.root_ref)!==pin.evidence_generation)pin.state='invalidated';
+    if(generation(db,pin.root_ref)!==pin.evidence_generation||!coverageUnchanged(db,snap,saved))pin.state='invalidated';
     while(pin.state==='preparing' && examined<100){
       examined++;
       if(pin.phase==='current'||pin.phase==='previous'){
@@ -169,7 +251,9 @@ export function advanceUploadProjection(conn: StorageConnection, pinId: string, 
         }
       }else{
         if(pin.member_count===0n)fail('DATABASE_CORRUPT');
-        const value={...saved.initial as object,totals:{members:n(pin.member_count),configurations:n(pin.configuration_count),intervals:n(pin.interval_count)},facts:facts(db,snap,pin)};
+        const ruleContext=advanceRuleContext(db,saved,snap,pin);
+        if(!ruleContext)continue;
+        const value={...saved.initial as object,ruleContext,totals:{members:n(pin.member_count),configurations:n(pin.configuration_count),intervals:n(pin.interval_count)},facts:facts(db,snap,pin)};
         if(!isUploadProjection(value))fail('DATABASE_CORRUPT');
         pin.metadata_json=JSON.stringify(value);pin.state='ready';
       }
@@ -177,7 +261,7 @@ export function advanceUploadProjection(conn: StorageConnection, pinId: string, 
     if(generation(db,pin.root_ref)!==pin.evidence_generation){pin.state='invalidated';pin.metadata_json=null;}
     db.prepare(`UPDATE upload_projection_pins SET state=@state,phase=@phase,member_after=@member_after,item_after=@item_after,source_after=@source_after,
       member_count=@member_count,configuration_count=@configuration_count,interval_count=@interval_count,outcome_trip_ref=@outcome_trip_ref,
-      close_trip_ref=@close_trip_ref,metadata_json=@metadata_json,examined=@examined WHERE pin_id=@pin_id`).run({...pin,examined});
+      close_trip_ref=@close_trip_ref,metadata_json=@metadata_json,snapshot_json=@snapshot_json,examined=@examined WHERE pin_id=@pin_id`).run({...pin,snapshot_json:encodeRow(saved),examined});
     hooks?.beforeCommit?.();
     return status({...pin,examined});
   })();
@@ -207,6 +291,7 @@ function recheckContext(db:Database.Database,projection:UploadProjection,latestR
   const state=current(db,projection.requestedTripUuid);
   const latest=get(db,'SELECT id FROM logical_revisions WHERE logical_ref=? ORDER BY id DESC LIMIT 1',pin.root_ref);
   return state.root===projection.rootTripUuid && state.readiness==='ready' && projection.rootReadiness==='ready'
+    && coverageUnchanged(db,(decodeRow(pin.snapshot_json).snap as LogicalSnapshot),decodeRow(pin.snapshot_json))
     && (!latestRequired||latest?.id===pin.revision_ref) && generation(db,pin.root_ref)===pin.evidence_generation;
 }
 const copies={members:['upload_projection_members','trip_ref'],configurations:['upload_projection_configurations','event_ref'],intervals:['upload_projection_intervals','interval_ref']} as const;

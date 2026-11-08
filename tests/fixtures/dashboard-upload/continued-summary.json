@@ -29,7 +29,7 @@
       "deliveredDistance":{"available":true,"value":151250.5,"unit":"m"},"fuelUsed":{"available":false,"reason":"not-observed","unit":"L"},"cargoDamage":{"available":true,"value":0.0125,"unit":"fraction"},
       "expectedIncome":{"available":true,"value":{"raw":"18446744073709551615","sdkType":"u64","currency":{"status":"unknown"}}},
       "revenue":{"available":true,"value":{"raw":"-9223372036854775808","sdkType":"s64","currency":{"status":"unknown"}}},"penalty":{"available":false,"reason":"not-observed"},
-      "evidence":{"startObserved":true,"endObserved":true,"ruleContextComplete":false,"clockAnomaly":false,"reasons":["catalog-context-unavailable"]}
+      "evidence":{"startObserved":true,"endObserved":true,"ruleContextComplete":false,"clockAnomaly":false,"reasons":["trailer-context-unproven"]}
     }
   }
 }
