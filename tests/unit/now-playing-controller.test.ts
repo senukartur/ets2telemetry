@@ -1,5 +1,5 @@
 import {expect, it, vi} from 'vitest';
-import {NowPlayingController} from '../../apps/desktop/src/now-playing/controller';
+import {destroyRetiredWindow, NowPlayingController} from '../../apps/desktop/src/now-playing/controller';
 import {DEFAULT_NOW_PLAYING} from '../../apps/desktop/src/now-playing/contract';
 import {readFileSync} from 'node:fs';
 import {initialLive} from '../../apps/desktop/src/live-state';
@@ -106,6 +106,31 @@ it('retires before native hide callbacks and never resumes a reentrant placement
   expect(controller.editState()).toEqual({active: false, placement: 'unavailable'});
   expect(() => controller.begin(true)).toThrow('Current track edit unavailable');
   expect(calls).toEqual([]);
+});
+it('keeps the window alive for a native hide that an exit interrupts, then ignores later publishes', async () => {
+  const {controller, window, calls} = harness(); controller.update(true); controller.updateGame(game());
+  let destroyed = false, exited = false;
+  const native = Object.assign(window, {isDestroyed: () => destroyed, destroy: () => {destroyed = true;}});
+  window.webContents.isDestroyed = () => destroyed;
+  // The exit runs inside hide(); Electron's own listener then reads the window on the way out.
+  window.hide = () => {
+    calls.push('hide');
+    if (!exited) {exited = true; controller.retire(); destroyRetiredWindow(native);}
+    if (destroyed) throw new TypeError('Object has been destroyed');
+  };
+  expect(() => controller.update(false)).not.toThrow();
+  expect(destroyed).toBe(false);
+  await new Promise(resolve => setImmediate(resolve));
+  expect(destroyed).toBe(true);
+  calls.length = 0;
+  expect(() => {controller.updateGame(game()); controller.update(false); controller.topologyChanged();}).not.toThrow();
+  expect(calls).toEqual([]);
+});
+it('leaves a retired window that closed on its own before its turn', async () => {
+  const window = {isDestroyed: () => false, destroy: vi.fn()};
+  destroyRetiredWindow(window); window.isDestroyed = () => true;
+  await new Promise(resolve => setImmediate(resolve));
+  expect(window.destroy).not.toHaveBeenCalled();
 });
 it('stops a placement when a bounds callback retires its window', () => {
   const {controller, window, calls} = harness(); controller.update(true);

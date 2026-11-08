@@ -8,7 +8,7 @@ import {UPLOAD_CHANNELS,type UploadAction} from './dashboard-upload/contract';
 import {dataPaths} from './paths';
 import {pathToFileURL} from 'node:url';
 import {acceptsSelectedSession} from './now-playing/selection';
-import {NowPlayingController} from './now-playing/controller';
+import {destroyRetiredWindow, NowPlayingController} from './now-playing/controller';
 import {MediaReader, verifiedMediaReader} from './now-playing/reader';
 import {parseSnapshot, MAX_MEDIA_FRAME} from './now-playing/protocol';
 import type {MediaSnapshot} from './now-playing/protocol';
@@ -448,7 +448,7 @@ function runApplication(profileError: unknown): void {
     const previous = nowWindow;
     if (previous) releaseNowWindow(previous); else retireNowDocument();
     nowTrack = null; nowSource = null; nowReaderIdle = nowReader.stop();
-    if (previous && !previous.isDestroyed()) previous.destroy();
+    if (previous) destroyRetiredWindow(previous);
   }
   function releaseNowWindow(created: BrowserWindow): void {
     if (nowWindow !== created) return;

@@ -10,6 +10,14 @@ interface WidgetWindow {
   setAlwaysOnTop(value: boolean, level: 'screen-saver'): void; isAlwaysOnTop(): boolean; moveTop(): void;
 }
 interface WidgetScreen {getAllDisplays(): MediaDisplay[]; getPrimaryDisplay(): MediaDisplay; getDisplayMatching(bounds: Area): MediaDisplay; screenToDipRect(window: null, bounds: Area): Area}
+/**
+ * Destroys a retired window on a later turn, never on the caller's stack. Inspector-delivered work, such as a smoke's
+ * tray exit, can run inside a native call of this window: destroying it during `hide()` makes Electron's own `hide`
+ * listener throw `Object has been destroyed`, or crashes the process, and no check before the call can see that.
+ */
+export function destroyRetiredWindow(window: {isDestroyed(): boolean; destroy(): void}): void {
+  setImmediate(() => {if (!window.isDestroyed()) window.destroy();});
+}
 /** Main owns the edit draft; renderer snapshots grant no movement authority. */
 export class NowPlayingController {
   private settings: NowPlayingSettings = DEFAULT_NOW_PLAYING;
