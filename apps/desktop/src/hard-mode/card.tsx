@@ -1,17 +1,19 @@
 import React from 'react';
-import {Flame, TriangleAlert} from 'lucide-react';
+import {Flame, TriangleAlert, Check, X, CircleHelp, Info} from 'lucide-react';
 import type {HardModeDetails} from '../../../../packages/contracts/src/hard-mode';
 import {Button} from '../components/ui/button';
 import {Badge} from '../components/ui/badge';
-import {Card, CardContent, CardTitle} from '../components/ui/card';
+import {Card, CardContent, CardTitle, CardHeader} from '../components/ui/card';
 import {Tooltip, TooltipContent, TooltipProvider, TooltipTrigger} from '../components/ui/tooltip';
 import {t, type AppLanguage} from '../i18n';
 import {InfoHint} from '../info-hint';
 import type {HardModeController} from './use-status';
 import {hardModeView, hardModeState, hardModeLossText, hardModeRatioText, hardModeDiagnosticText} from './view';
+
 export function HardModeBadge({short = false, language = 'en'}: {short?: boolean; language?: AppLanguage}) {
   return <Badge data-testid="hard-mode-badge"><Flame className="mr-1 size-3" aria-hidden="true" />{short ? 'HM' : t('hm.title', undefined, language)}</Badge>;
 }
+
 /** A trip's Hard Mode result; the audit (opening and latest state, snapshots) is behind the Info icon (ET-057). */
 export function HardModeTrip({qualified, details, language = 'en'}: {qualified: boolean; details: HardModeDetails | null; language?: AppLanguage}) {
   const title = t('hm.title', undefined, language);
@@ -26,41 +28,185 @@ export function HardModeTrip({qualified, details, language = 'en'}: {qualified: 
     {details?.firstLoss ? <p>{t('hm.firstLoss', {loss: hardModeLossText(details.firstLoss, language)}, language)}</p> : null}
   </section>;
 }
-/**
- * The Hard Mode page (ET-057): one card with the headline, source and recheck on one row, a full-width progress bar and
- * the twelve rules as a grid. A passing or unknown rule shows its mark and name; a failing rule also shows its current and
- * required values on one line, and the in-game fix names the failing settings. Every rule's full detail (state, values,
- * reason) is in its tooltip, and the read-only caveats are behind one Info icon next to the headline.
- */
+
 export function HardModeCard({language = 'en', controller}: {language?: AppLanguage; controller: HardModeController}) {
   const {status, now, busy, error, loaded, check} = controller;
   const view = hardModeView(status, now, language);
   const failing = view.rows.filter(row => row.state === 'fail');
-  return <Card data-testid="hard-mode-card" data-state={status.trip?.firstLoss ? 'lost' : status.assessment.state}><CardContent className="yu-hard-mode-summary">
-    <div className="yu-hard-mode-head"><CardTitle><h2 className="flex items-center gap-2"><Flame className="size-5" aria-hidden="true" />{view.headline}
-      <InfoHint label={t('hm.howChecked', undefined, language)} side="bottom" align="start" testId="hard-mode-caveats">
-        <span className="block">{t('hm.rule', undefined, language)}</span>
-        <span className="block">{t('hm.notice', undefined, language)}</span>
-        <span className="block">{t('hm.distinction', undefined, language)}</span>
-      </InfoHint></h2></CardTitle>
-      <p data-testid="hard-mode-source" className="yu-muted">{view.source} · {view.age}</p>
-      <Button variant="outline" disabled={busy} onClick={check} data-testid="hard-mode-refresh">{t(busy ? 'hm.checking' : 'hm.recheck', undefined, language)}</Button></div>
-    <div className="yu-hard-mode-progress"><progress value={view.passed} max={12} aria-label={t('hm.progress', undefined, language)} data-state={status.assessment.state} />
-      <p role="status">{!loaded ? t('hm.reading', undefined, language) : t('hm.configuredCount', {n: view.passed}, language)}</p></div>
-    {error ? <p role="status">{t('hm.unavailable', undefined, language)}</p> : null}
-    {view.ratio ? <p role="status" data-testid="hard-mode-trip-ratio">{view.ratio} {t('hm.recoverable', undefined, language)}</p> : null}
-    {view.diagnostic ? <p data-testid="hard-mode-diagnostic">{view.diagnostic}</p> : null}
-    {view.loss ? <p role="status" data-testid="hard-mode-loss">{view.loss}</p> : null}
-    {loaded && failing.length ? <p className="yu-hard-mode-fix" data-testid="hard-mode-fix"><TriangleAlert aria-hidden="true" />{t('hm.fix', {settings: failing.map(row => row.label).join(', ')}, language)}</p> : null}
-    <TooltipProvider disableHoverableContent delayDuration={100} skipDelayDuration={0}><ol className="yu-hard-mode-grid" data-testid="hard-mode-details">{view.rows.map(row => <li key={row.id} data-testid={`hard-mode-rule-${row.id}`} data-state={row.state}>
-      <Tooltip><TooltipTrigger asChild><button type="button" data-testid={`hard-mode-name-${row.id}`} aria-label={`${row.label}: ${row.stateText}`} className="rounded-sm text-left focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring">
-        <span className="yu-hard-mode-mark" aria-hidden="true">{row.state === 'pass' ? '✓' : row.state === 'fail' ? '✕' : '?'}</span>
-        <span>{row.label}</span>
-      </button></TooltipTrigger><TooltipContent data-testid={`hard-mode-hint-${row.id}`}>
-        <p className="font-medium">{row.label}: {row.stateText}</p><p>{t('hm.detected', {value: row.detected}, language)}</p><p>{t('hm.required', {value: row.required}, language)}</p>
-        <p>{t('hm.reason', {value: row.reason}, language)}</p>
-      </TooltipContent></Tooltip>
-      {row.state === 'fail' ? <div className="yu-hard-mode-values" data-testid={`hard-mode-detail-rule-${row.id}`}><p>{row.inline}</p></div> : null}
-    </li>)}</ol></TooltipProvider>
-  </CardContent></Card>;
+  const isLost = Boolean(status.trip?.firstLoss);
+  const isPass = loaded && !error && status.assessment.state === 'pass';
+  const isUnknown = !loaded || error || (!isLost && status.assessment.state === 'unknown');
+
+  const badgeVariant = !loaded || error ? 'neutral' : isLost ? 'error' : isPass ? 'ok' : isUnknown ? 'neutral' : 'warn';
+  const badgeIcon = !loaded || error ? (
+    <CircleHelp className="size-3 mr-1" aria-hidden="true" />
+  ) : isLost ? (
+    <X className="size-3 mr-1" aria-hidden="true" />
+  ) : isPass ? (
+    <Check className="size-3 mr-1" aria-hidden="true" />
+  ) : isUnknown ? (
+    <CircleHelp className="size-3 mr-1" aria-hidden="true" />
+  ) : (
+    <TriangleAlert className="size-3 mr-1" aria-hidden="true" />
+  );
+  const badgeText = !loaded
+    ? t('hm.reading', undefined, language)
+    : error
+      ? t('hm.unavailable', undefined, language)
+      : isUnknown
+        ? view.headline
+        : `${view.headline} · ${t('hm.configuredCount', {n: view.passed}, language)}`;
+
+  return (
+    <div className="yu-stack" data-testid="hard-mode-card" data-state={isLost ? 'lost' : status.assessment.state}>
+      {/* 1. Top Summary Card */}
+      <Card>
+        <CardContent className="yu-hard-mode-summary p-4">
+          <div className="yu-hard-mode-head">
+            <CardTitle>
+              <h2 className="flex items-center gap-2">
+                <Flame className="size-5 text-[var(--yu-accent)]" aria-hidden="true" />
+                <span>{t('hm.currentSettings', undefined, language)}</span>
+                <InfoHint label={t('hm.howChecked', undefined, language)} side="bottom" align="start" testId="hard-mode-caveats">
+                  <span className="block">{t('hm.rule', undefined, language)}</span>
+                  <span className="block">{t('hm.notice', undefined, language)}</span>
+                  <span className="block">{t('hm.distinction', undefined, language)}</span>
+                </InfoHint>
+              </h2>
+            </CardTitle>
+            <div className="yu-hard-mode-badge-wrap ml-auto">
+              <Badge variant={badgeVariant}>
+                {badgeIcon}
+                <span>{badgeText}</span>
+              </Badge>
+            </div>
+          </div>
+
+          <div className="flex flex-wrap items-center justify-between gap-2 text-sm text-[var(--yu-text-secondary)]">
+            <p data-testid="hard-mode-source" className="yu-muted">
+              {view.source} · {view.age}
+            </p>
+            <Button
+              variant="outline"
+              size="sm"
+              disabled={busy}
+              onClick={check}
+              data-testid="hard-mode-refresh"
+            >
+              {t(busy ? 'hm.checking' : 'hm.recheck', undefined, language)}
+            </Button>
+          </div>
+
+          <div className="yu-hard-mode-progress">
+            <progress
+              value={view.passed}
+              max={12}
+              aria-label={t('hm.progress', undefined, language)}
+              data-state={status.assessment.state}
+            />
+            <p role="status" className="text-xs font-medium">
+              {!loaded ? t('hm.reading', undefined, language) : t('hm.configuredCount', {n: view.passed}, language)}
+            </p>
+          </div>
+
+          {error ? <p role="status" className="text-sm text-[var(--yu-err-fg)]">{t('hm.unavailable', undefined, language)}</p> : null}
+        </CardContent>
+      </Card>
+
+      {/* 2. Status Explanation Banners */}
+      {view.ratio ? (
+        <div className="rounded-lg border border-[var(--yu-border)] bg-[var(--yu-bg-card)] p-3 text-sm">
+          <p role="status" data-testid="hard-mode-trip-ratio">
+            {view.ratio} {t('hm.recoverable', undefined, language)}
+          </p>
+        </div>
+      ) : null}
+
+      {view.diagnostic ? (
+        <p data-testid="hard-mode-diagnostic" className="text-xs text-[var(--yu-text-muted)]">
+          {view.diagnostic}
+        </p>
+      ) : null}
+
+      {view.loss ? (
+        <div className="yu-hard-mode-loss flex items-start gap-2 rounded-lg border border-[var(--yu-err-border)] bg-[var(--yu-err-bg)] p-3 text-sm text-[var(--yu-err-fg)]" role="status">
+          <X className="size-4 shrink-0 mt-0.5" aria-hidden="true" />
+          <p data-testid="hard-mode-loss">{view.loss}</p>
+        </div>
+      ) : null}
+
+      {loaded && failing.length > 0 ? (
+        <div className="yu-hard-mode-fix flex items-start gap-2 rounded-lg border border-[var(--yu-warn-border)] bg-[var(--yu-warn-bg)] p-3 text-sm text-[var(--yu-warn-fg)]">
+          <TriangleAlert className="size-4 shrink-0 mt-0.5" aria-hidden="true" />
+          <p data-testid="hard-mode-fix">{t('hm.fix', {settings: failing.map(row => row.label).join(', ')}, language)}</p>
+        </div>
+      ) : null}
+
+      {/* 3. Conditions List */}
+      <Card>
+        <CardHeader className="py-3 px-4 border-b border-[var(--yu-border)]">
+          <h3 className="text-sm font-semibold text-[var(--yu-text-strong)]">
+            {t('hm.conditionsTitle', undefined, language)}
+          </h3>
+        </CardHeader>
+        <CardContent className="p-4">
+          <TooltipProvider disableHoverableContent delayDuration={100} skipDelayDuration={0}>
+            <ol className="yu-hard-mode-grid" data-testid="hard-mode-details">
+              {view.rows.map(row => {
+                const mark = row.state === 'pass' ? '✓' : row.state === 'fail' ? '✕' : '?';
+                return (
+                  <li key={row.id} data-testid={`hard-mode-rule-${row.id}`} data-state={row.state} className="yu-hard-mode-item">
+                    <Tooltip>
+                      <TooltipTrigger asChild>
+                        <button
+                          type="button"
+                          data-testid={`hard-mode-name-${row.id}`}
+                          aria-label={`${row.label}: ${row.stateText}`}
+                          className="font-medium text-sm text-left truncate flex items-center gap-1.5 hover:underline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring"
+                        >
+                          <span className="yu-hard-mode-mark" aria-hidden="true">{mark}</span>
+                          <span>{row.label}</span>
+                        </button>
+                      </TooltipTrigger>
+                      <TooltipContent data-testid={`hard-mode-hint-${row.id}`}>
+                        <p className="font-medium">{row.label}: {row.stateText}</p>
+                        <p>{t('hm.detected', {value: row.detected}, language)}</p>
+                        <p>{t('hm.required', {value: row.required}, language)}</p>
+                        <p>{t('hm.reason', {value: row.reason}, language)}</p>
+                      </TooltipContent>
+                    </Tooltip>
+                    <p className="text-xs font-mono text-[var(--yu-text-muted)] truncate">{row.keys}</p>
+                    <div className="text-xs mt-1 space-y-0.5 text-[var(--yu-text-secondary)]">
+                      <p><span className="text-[var(--yu-text-muted)]">{t('hm.col.required', undefined, language)}:</span> {row.required}</p>
+                      <p><span className="text-[var(--yu-text-muted)]">{t('hm.col.detected', undefined, language)}:</span> {row.detected}</p>
+                    </div>
+                    {row.state === 'fail' ? (
+                      <div className="yu-hard-mode-values" data-testid={`hard-mode-detail-rule-${row.id}`}>
+                        <p>{row.inline}</p>
+                      </div>
+                    ) : null}
+                  </li>
+                );
+              })}
+            </ol>
+          </TooltipProvider>
+        </CardContent>
+      </Card>
+
+      {/* 4. "What is checked" Caveats Card */}
+      <Card>
+        <CardHeader className="py-3 px-4 border-b border-[var(--yu-border)]">
+          <h3 className="text-sm font-semibold flex items-center gap-1.5 text-[var(--yu-text-strong)]">
+            <Info className="size-4 text-[var(--yu-text-muted)]" aria-hidden="true" />
+            <span>{t('hm.howChecked', undefined, language)}</span>
+          </h3>
+        </CardHeader>
+        <CardContent className="p-4 text-xs text-[var(--yu-text-secondary)] space-y-1.5">
+          <p>1. {t('hm.noticePersisted', undefined, language)}</p>
+          <p>2. {t('hm.noticeParking', undefined, language)}</p>
+          <p>3. {t('hm.noticeSnapshots', undefined, language)}</p>
+        </CardContent>
+      </Card>
+    </div>
+  );
 }
