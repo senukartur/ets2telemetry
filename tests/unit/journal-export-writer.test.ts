@@ -411,7 +411,7 @@ describe('one export at a time, and the application exit (J16)', () => {
 });
 
 describe('ordinary long target path (282 chars, ET-046)', () => {
-  it('saves valid document through .partial, syncs, and renames with and without extended prefix', async () => {
+  it('saves valid document through .partial and renames with and without extended prefix', async () => {
     const longTarget = exactLengthPath(out, 'trip-long.json', 282);
     expect(longTarget.length).toBe(282);
     await mkdir(path.dirname(longTarget), {recursive: true});

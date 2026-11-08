@@ -50,9 +50,8 @@ class CaseHarness {
   fs: InstallerFileSystem;
   /**
    * The guarded file system with the flush to disk of every opened file skipped (`unflushed`, tests/shared/file-work.ts),
-   * for both the installer and the registry. No case observes durability across a power loss. In full local runs on
-   * November 8, 2026 the only guarded calls over 100 ms were these flushes, 0.4 to 1.3 s each, and a case with several
-   * installs timed out at 5 s.
+   * for both the installer and the registry. No case observes durability across a power loss, and the flush can stall
+   * for seconds on Windows (TESTING.md section 6).
    */
   readonly files: GuardedFs;
   outside: GuardedRoot | undefined;

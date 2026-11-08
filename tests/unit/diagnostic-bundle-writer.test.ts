@@ -201,7 +201,7 @@ describe('one export at a time, and the application exit', () => {
 });
 
 describe('ordinary long target path (282 chars, ET-046)', () => {
-  it('writes valid bundle, syncs, and renames with and without extended prefix', async () => {
+  it('writes valid bundle and renames with and without extended prefix', async () => {
     const longTarget = exactLengthPath(out, 'diagnostics-long.json', 282);
     expect(longTarget.length).toBe(282);
     await mkdir(path.dirname(longTarget), {recursive: true});
