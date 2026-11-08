@@ -248,7 +248,8 @@ export async function runJournalSeeded({dashboard, record}) {
   assert.equal(await dashboard.getByTestId('live-speed-number').isHidden(), true, 'The Live panel is shown while the Journal tab is open');
   pages.push({...rowSummary(page1.rows), next: page1.next, previous: page1.previous});
   await clickTestId(dashboard, 'journal-list-next');
-  const page2 = await until(dashboard, listState, {page: 2, count: 50, first: filler(60)});
+  // The answer of a later page has no totals: the first page's stay on screen.
+  const page2 = await until(dashboard, listState, {page: 2, count: 50, first: filler(60), totals: '120 trips · 1.1 h recorded'});
   pages.push({...rowSummary(page2.rows), next: page2.next, previous: page2.previous});
   await clickTestId(dashboard, 'journal-list-next');
   const page3 = await until(dashboard, listState, {page: 3, count: 20, first: filler(10)});

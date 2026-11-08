@@ -937,6 +937,9 @@ export async function runUiSmoke({application, dashboard, overlay, source, sourc
         await dashboard.getByTestId('journal-mode-evidence-7b000000-0000-4000-8000-000000000001-tooltip').waitFor({state: 'hidden'});
         assert.equal(await hint.evaluate(node => node === globalThis.document.activeElement), true);
         await dashboard.locator('[data-testid="journal-table"]').evaluate(node => {node.parentElement.scrollLeft = 0;});
+        // The hint in the mode line is 18 px high: the global button min-height would make every row taller (mockup T3).
+        assert.equal(await hint.evaluate(node => node.getBoundingClientRect().height), 18, 'UI_JOURNAL_HINT_HEIGHT');
+        (record.journalRowHeights ??= []).push({language, size, rowHeight: await dashboard.locator('[data-trip="7f000000-0000-4000-8000-00000000006d"]').evaluate(node => node.getBoundingClientRect().height)});
         assert.ok(await modeRow.getByTestId('journal-row-mode').evaluate(node => node.scrollWidth <= node.clientWidth && node.scrollHeight <= node.clientHeight));
         await save('list', language, size);
         await modeRow.getByTestId('journal-row-open').click();
