@@ -69,6 +69,23 @@ async function observeOpacitySurfaces({dashboard, overlay, layout, language, siz
   record.flags.backgroundOpacityOverlay = true;
 }
 
+/** Card labels keep the production inline SVG and text on the same line, including inside dashboard preflight. */
+function cardLabelPresentation(root) {
+  const labels = [...root.querySelectorAll('.overlay-row dt')];
+  const rows = labels.map(label => {
+    const icon = label.querySelector('svg'), style = globalThis.getComputedStyle(icon), iconBox = icon.getBoundingClientRect();
+    const text = [...label.childNodes].find(node => node.nodeType === 3 && node.textContent.trim());
+    const range = globalThis.document.createRange(); range.selectNodeContents(text);
+    const boxes = [...range.getClientRects()].filter(box => box.width > 0 && box.height > 0), box = boxes[0];
+    // An ellipsized text node can expose both its full and visible fragment; fragments on one baseline are one line.
+    return {display: style.display, verticalAlign: style.verticalAlign,
+      sameLine: boxes.length > 0 && boxes.every(fragment => Math.abs(fragment.top - box.top) <= 1 &&
+        iconBox.right <= fragment.left && iconBox.top < fragment.bottom && iconBox.bottom > fragment.top)};
+  });
+  return {count: rows.length, display: [...new Set(rows.map(row => row.display))], verticalAlign: [...new Set(rows.map(row => row.verticalAlign))],
+    sameLine: rows.length > 0 && rows.every(row => row.sameLine)};
+}
+
 /** Settings examples share production content but never subscribe to the isolated synthetic source. */
 async function observeOverlayPreview({application, dashboard, overlay, source, language, size, record, save}) {
   await settingsPanel(dashboard, 'overlay');
@@ -89,7 +106,15 @@ async function observeOverlayPreview({application, dashboard, overlay, source, l
   });
   const contained = async name => {
     const result = await until(probe, value => value.outside.length === 0 && value.fitsScene, `UI_PREVIEW_CONTAINED_${name}_${language}`);
-    (record.overlayPreview ??= []).push({language, ...size, name, ...result});
+    if (result.layout === 'card') {
+      const example = await preview.evaluate(cardLabelPresentation), production = await overlay.getByTestId('overlay-root').evaluate(cardLabelPresentation);
+      assert.deepEqual(example.display, production.display, 'UI_PREVIEW_CARD_ICON_DISPLAY');
+      assert.deepEqual(example.verticalAlign, production.verticalAlign, 'UI_PREVIEW_CARD_ICON_ALIGNMENT');
+      assert.equal(example.sameLine, true, 'UI_PREVIEW_CARD_LABEL_LINE');
+      assert.equal(production.sameLine, true, 'UI_OVERLAY_CARD_LABEL_LINE');
+      result.cardRows = {...example, matchesActual: true};
+    }
+    (record.overlayPreview ??= []).push({language, viewportWidth: size.width, viewportHeight: size.height, name, ...result});
     return result;
   };
   await dashboard.getByTestId('overlay-preset-everything').click();
@@ -97,6 +122,7 @@ async function observeOverlayPreview({application, dashboard, overlay, source, l
   for (const layout of layouts) {
     await dashboard.locator(`#overlay-layout-${layout}`).focus(); await dashboard.keyboard.press('Space');
     await until(() => preview.getAttribute('data-layout'), value => value === layout, 'UI_PREVIEW_LAYOUT');
+    await overlay.waitForFunction(layout => globalThis.document.querySelector('[data-testid="overlay-root"]')?.getAttribute('data-layout') === layout, layout, {timeout: 5000});
     const result = await contained(layout);
     assert.deepEqual([...result.sections].sort(), [...ids].sort());
     assert.equal(await preview.getByTestId('overlay-speed').textContent(), '84');
@@ -119,7 +145,19 @@ async function observeOverlayPreview({application, dashboard, overlay, source, l
   await dashboard.locator('#overlay-layout-strip').click();
   await until(() => preview.getAttribute('data-layout'), value => value === 'strip', 'UI_PREVIEW_STRIP');
   await dashboardZoom(application, 2);
-  try {await contained('narrow-strip'); await save('settings-preview-narrow', language, size);}
+  try {
+    await contained('narrow-strip');
+    await dashboard.getByTestId('overlay-preview-card').evaluate(node => node.scrollIntoView({block: 'start'}));
+    const visible = await dashboard.getByTestId('overlay-preview-card').evaluate(card => {
+      const viewport = globalThis.document.querySelector('.yu-content').getBoundingClientRect();
+      return ['h3', '[data-testid="overlay-section-speed"]'].every(selector => {
+        const box = card.querySelector(selector).getBoundingClientRect();
+        return box.width > 0 && box.height > 0 && box.top >= viewport.top && box.bottom <= viewport.bottom;
+      });
+    });
+    assert.equal(visible, true, 'UI_PREVIEW_NARROW_CAPTURE_VISIBLE');
+    await save('settings-preview-narrow', language, size);
+  }
   finally {await dashboardZoom(application, 1);}
   await dashboard.getByTestId('overlay-edit-start').click();
   await until(state, value => value.overlayEdit.active, 'UI_PREVIEW_EDIT');
@@ -129,6 +167,7 @@ async function observeOverlayPreview({application, dashboard, overlay, source, l
   await dashboard.getByTestId('overlay-edit-cancel').click();
   await until(() => preview.getAttribute('data-scale'), value => value === String(initial.placements.strip.scale), 'UI_PREVIEW_CANCEL');
   await dashboard.locator('#overlay-layout-card').click();
+  await overlay.waitForFunction(() => globalThis.document.querySelector('[data-testid="overlay-root"]')?.getAttribute('data-layout') === 'card', undefined, {timeout: 5000});
   await dashboard.getByTestId('overlay-edit-start').click();
   await until(state, value => value.overlayEdit.active, 'UI_PREVIEW_CARD_EDIT');
   await dashboard.evaluate(() => globalThis.desktop.setOverlayEditScale(3));
@@ -701,13 +740,19 @@ async function observeUnifiedOverlay({application, dashboard, language, size, re
         const scroll = globalThis.document.querySelector('.yu-content'), bounds = scroll.getBoundingClientRect(), focus = globalThis.document.activeElement.getBoundingClientRect();
         const overflow = [scroll, card, ...card.querySelectorAll('section, label, button:not([role="radio"]):not([role="switch"]), p')]
           .filter(node => node.scrollWidth > node.clientWidth + 1).map(node => node.getAttribute('data-testid') ?? node.tagName);
+        const overflowDetails = [...card.querySelectorAll('section')].filter(node => node.scrollWidth > node.clientWidth + 1).map(node => ({
+          label: node.getAttribute('aria-labelledby'), width: node.clientWidth, scrollWidth: node.scrollWidth,
+          controls: [...node.querySelectorAll('[role="switch"],[role="radio"]')].map(control => {
+            const box = control.getBoundingClientRect(), parent = node.getBoundingClientRect(), after = globalThis.getComputedStyle(control, '::after');
+            return {id: control.id, rightInset: parent.right - box.right, afterRight: after.right, afterLeft: after.left};
+          })}));
         // Radix rails/dots intentionally have expanded pseudo-hit areas; check their boxes, not scrollWidth.
         const controlsContained = [...card.querySelectorAll('button')].every(node => {const box = node.getBoundingClientRect(), parent = card.getBoundingClientRect(); return box.left >= parent.left && box.right <= parent.right;});
-        resolve({overflow, controlsContained, focusTop: focus.top, focusBottom: focus.bottom, viewportTop: bounds.top, viewportBottom: bounds.bottom, scrolled: scroll.scrollTop > 0, focusVisible: focus.width > 0 && focus.left >= bounds.left && focus.right <= bounds.right && focus.top >= bounds.top && focus.bottom <= bounds.bottom});
+        resolve({overflow, overflowDetails, controlsContained, focusTop: focus.top, focusBottom: focus.bottom, viewportTop: bounds.top, viewportBottom: bounds.bottom, scrolled: scroll.scrollTop > 0, focusVisible: focus.width > 0 && focus.left >= bounds.left && focus.right <= bounds.right && focus.top >= bounds.top && focus.bottom <= bounds.bottom});
       })));
+      (record.overlayScroll ??= []).push({language, width: size.width, zoom, ...observation});
       assert.deepEqual(observation.overflow, [], `UI_OVERLAY_OVERFLOW_${language}_${size.width}_${zoom}`);
       assert.equal(observation.controlsContained, true, JSON.stringify({language, zoom, ...observation})); assert.equal(observation.scrolled, true, JSON.stringify({language, zoom, ...observation})); assert.equal(observation.focusVisible, true, JSON.stringify({language, zoom, ...observation}));
-      (record.overlayScroll ??= []).push({language, width: size.width, zoom, ...observation});
     } finally {await dashboardZoom(application, 1);}
   }
   record.flags.overlayScroll = true;

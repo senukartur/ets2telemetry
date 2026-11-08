@@ -6,7 +6,7 @@ import {OverlaySettingsPreview} from '../../apps/desktop/src/overlay-settings-pr
 import {overlayExample, overlayPreviewSize} from '../../apps/desktop/src/overlay-settings-preview-model';
 import {DEFAULT_OVERLAY_SETTINGS, OVERLAY_LAYOUTS, OVERLAY_PRESETS} from '../../apps/desktop/src/overlay-sections';
 import {overlayView} from '../../apps/desktop/src/overlay-view';
-import {getOverlaySectionText} from '../../apps/desktop/src/strings';
+import {getOverlayLayoutText, getOverlaySectionText} from '../../apps/desktop/src/strings';
 
 vi.mock('@/components/ui/card', () => ({Card: 'div', CardContent: 'div', CardHeader: 'div', CardTitle: 'div'}));
 
@@ -22,6 +22,7 @@ it.each(['en', 'ru'] as const)('shares enabled order, localized values and the f
     expect(view.items.map(item => item.label)).toEqual(driving.map(id => getOverlaySectionText(id, language)));
     expect(view.items[3]).toMatchObject({value: '90', unit: language === 'ru' ? 'км/ч' : 'km/h'});
     const html = renderToStaticMarkup(React.createElement(OverlaySettingsPreview, {settings, language, scale: 1}));
+    expect(html).toContain(escaped(`${language === 'ru' ? 'Предпросмотр' : 'Preview'} · ${getOverlayLayoutText(layout, language)}`));
     for (const id of driving) expect(html.match(new RegExp(`data-testid="overlay-section-${id}"`, 'g')), id).toHaveLength(1);
     expect(html).not.toContain('data-testid="overlay-section-cargo"');
     expect(html.match(/data-testid="overlay-hard-mode"/g)).toHaveLength(1);

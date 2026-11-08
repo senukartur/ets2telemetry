@@ -4,7 +4,7 @@ import {Card, CardContent, CardHeader, CardTitle} from '@/components/ui/card';
 import {OverlayContent} from './overlay-content';
 import {overlayExample, overlayPreviewSize, type ExampleCruiseState} from './overlay-settings-preview-model';
 import {overlayView} from './overlay-view';
-import {getStrings} from './strings';
+import {getOverlayLayoutText, getStrings} from './strings';
 import './renderer.css';
 
 export function OverlaySettingsPreview({settings, language, scale, cruise = 'active'}: {
@@ -24,7 +24,7 @@ export function OverlaySettingsPreview({settings, language, scale, cruise = 'act
   const cruiseItem = overlayView(overlayExample({...settings, sections: {...settings.sections, 'cruise-control': true}}, language, cruise))
     .items.find(item => item.id === 'cruise-control');
   return <Card size="sm" className="yu-overlay-preview-card" data-testid="overlay-preview-card">
-    <CardHeader className="yu-overlay-card-heading"><CardTitle><h3>{strings.overlayPreviewTitle}</h3></CardTitle>
+    <CardHeader className="yu-overlay-card-heading"><CardTitle><h3>{strings.overlayPreviewTitle} · {getOverlayLayoutText(settings.layout, language)}</h3></CardTitle>
       <span className="yu-overlay-cruise-badge" data-state={cruise} data-testid="overlay-preview-cruise">{strings.overlayPreviewCruise}: {[cruiseItem?.value, cruiseItem?.unit].filter(Boolean).join(' ')}</span>
     </CardHeader>
     <CardContent><div className="yu-overlay-scene" data-testid="overlay-preview-scene">
