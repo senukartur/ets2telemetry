@@ -1026,5 +1026,18 @@ export const EN_DICTIONARY: TranslationDictionary = channelCopyTable(Object.free
   'live.sub.partial': 'game connection is incomplete',
   'live.partialTitle': 'Connection incomplete',
   'live.noJobHint': 'No active job. The fields appear when the game reports a job.',
-  'live.staleReason': 'no new data from the game'
+  'live.staleReason': 'no new data from the game',
+  's.nav': 'Settings sections',
+  's.general.sub': 'Changes save immediately; a control shows only the saved value.',
+  's.plugin.sub': 'The plugin carries telemetry from the game. It is installed only while the game is closed; files it did not install are never overwritten.',
+  's.data.sub': 'Technical details for troubleshooting. Usually nothing needs changing here.',
+  's.units.note': 'Stored data does not change, only the display',
+  's.gear.example': 'Now: {v}',
+  'np.enabledD': 'The track title from a Windows player, in its own window over the game.',
+  's.data.sourceD': 'Automatic follows the running game. Synthetic and replay sources are for testing and never enter your trip history.',
+  's.data.state': 'State',
+  's.data.bundle': 'Diagnostic bundle',
+  's.about.updates': 'Updates',
+  's.about.font': 'Font',
+  's.about.license': 'Show license'
 }));

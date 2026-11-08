@@ -5,7 +5,7 @@ import {initialLive} from '../../apps/desktop/src/live-state';
 import {v1Projection} from '../shared/live-v1-fixtures';
 import {dashboardFuel} from '../../apps/desktop/src/speed-display';
 import {describe, expect, it} from 'vitest';
-import {clampRatio, connectionChip, connectionTone, desktopLiveView, gaugeArc, hardModeChip, hardModeTone, liveGameMode, liveScreenState, liveSourcesPartial, liveSubline, pluginChip, pluginTone,
+import {clampRatio, connectionChip, connectionTone, desktopLiveView, gaugeArc, hardModeChip, hardModeTone, liveGameMode, liveScreenState, liveSourcesPartial, liveSubline, pluginChip, pluginTargetTone, pluginTone, serviceTone, storageTone,
   pluginStatusText, recordingMotion, recordingTone, routeGroup, staleReasonText} from '../../apps/desktop/src/screens/desktop-ui-view';
 import {gameConnectionText, liveDashboardText} from '../../apps/desktop/src/live-dashboard-text';
 import {getStrings} from '../../apps/desktop/src/strings';
@@ -86,6 +86,16 @@ it.each([
 it.each([
   ['installed', 'ok'], ['outdated', 'warn'], ['working', 'warn'], ['blocked', 'error'], ['missing', 'neutral'], ['excluded', 'neutral']
 ] as const)('colors plugin %s without presenting missing as installed', (state, tone) => expect(pluginTone([{state: state}])).toBe(tone));
+// ET-078: the Settings badges of one game folder, the telemetry service and the storage probe.
+it.each([
+  ['installed', 'ok'], ['outdated', 'warn'], ['working', 'warn'], ['blocked', 'error'], ['missing', 'neutral'], ['excluded', 'neutral']
+] as const)('colors one plugin folder %s on Settings', (state, tone) => expect(pluginTargetTone(state)).toBe(tone));
+it.each([
+  ['ready', 'ok'], ['starting', 'warn'], ['restarting', 'warn'], ['failed', 'error'], ['stopping', 'neutral']
+] as const)('colors the service %s on Settings', (service, tone) => expect(serviceTone(service)).toBe(tone));
+it.each([
+  ['verified', 'ok'], ['pending', 'neutral'], ['failed', 'error']
+] as const)('colors the storage %s on Settings', (storage, tone) => expect(storageTone(storage)).toBe(tone));
 it('gives blocked plugin state precedence, requires every target installed and handles no target', () => {
   expect(pluginTone([])).toBe('neutral'); expect(pluginTone([{state: 'installed'}, {state: 'missing'}])).toBe('neutral');
   expect(pluginTone([{state: 'working'}, {state: 'blocked'}])).toBe('error');

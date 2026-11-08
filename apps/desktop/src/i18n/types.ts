@@ -602,6 +602,8 @@ export type I18nKey =
   | 'lang.title' | 'lang.en' | 'lang.ru' | 'lang.saveFailed'
   | 'ui.moreAbout' | 's.interface' | 'hm.howChecked' | 'hm.now' | 'hm.required.parkingShort' | 'j.incomeNote' | 'tr.raw'
   | 'shell.breadcrumb' | 'shell.status' | 'live.instruments' | 'live.sub' | 'live.sub.connected' | 'live.sub.paused' | 'live.sub.stale' | 'live.sub.waiting' | 'live.sub.partial' | 'live.partialTitle'
-  | 'live.noJobHint' | 'live.staleReason';
+  | 'live.noJobHint' | 'live.staleReason'
+  | 's.nav' | 's.general.sub' | 's.plugin.sub' | 's.data.sub' | 's.units.note' | 's.gear.example' | 'np.enabledD' | 's.data.sourceD' | 's.data.state' | 's.data.bundle'
+  | 's.about.updates' | 's.about.font' | 's.about.license';
 
 export type TranslationDictionary = Readonly<Record<I18nKey, string>>;

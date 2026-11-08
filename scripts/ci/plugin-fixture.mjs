@@ -300,14 +300,15 @@ const DIAGNOSTICS_CANCELLED = 'Export cancelled. Nothing was written.';
 const DIAGNOSTICS_SAVED = 'Diagnostics saved.';
 
 /**
- * ET-017 PR-6 (P17): "Export diagnostics…" in run B. Main's Save dialog is replaced through Playwright's main-process
- * evaluate, as in the journal export journey (journal-observation.mjs): a cancelled dialog writes nothing, then a target
+ * ET-017 PR-6 (P17): "Export diagnostics…" in run B, on Settings > Diagnostics since ET-078. Main's Save dialog is
+ * replaced through Playwright's main-process evaluate, as in the journal export journey (journal-observation.mjs): a
+ * cancelled dialog writes nothing, then a target
  * in this run's output folder receives the bundle. The bundle must be the v1 format with the test-root plugin view and
  * the fixed diagnosis, hold log rows of both logs, and contain no path, no fixture root and no output folder. The user and
  * computer names are looked for only in runtime content (diagnostics-bundle-check.mjs), where the bundle redacts them.
  */
 export async function runDiagnosticsExport({application, dashboard, config, fixture, record}) {
-  await settingsPanel(dashboard, 'plugin');
+  await settingsPanel(dashboard, 'data');
   const directory = path.join(config.output, 'diagnostics-export'), file = path.join(directory, 'diagnostics.json');
   await mkdir(directory);
   const button = dashboard.getByTestId('plugin-export-diagnostics');
@@ -367,10 +368,11 @@ export async function verifyDisabledPluginCard(dashboard) {
   assert.deepEqual(record.controls, Object.fromEntries(CHANGING_CONTROLS.map(id => [id, true])));
   record.controlsDisabled = true;
   // ET-017 PR-6 (P17): the scaffold launch selects no game, so the diagnosis line shows that fixed text; the diagnostics
-  // export stays available in the disabled mode.
+  // export stays available in the disabled mode (on Settings > Diagnostics since ET-078).
   record.diagnosis = await dashboard.getByTestId('plugin-diagnosis').innerText();
   assert.equal(record.diagnosis, NO_GAME_SELECTED_DIAGNOSIS);
   record.diagnosisShown = true;
+  await settingsPanel(dashboard, 'data');
   assert.equal(await dashboard.getByTestId('plugin-export-diagnostics').isEnabled(), true);
   record.exportAvailable = true;
   return record;

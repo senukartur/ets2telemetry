@@ -8,8 +8,9 @@ import {getSettingsSaveErrorText, getUnitGameText} from '../../apps/desktop/src/
 import {t} from '../../apps/desktop/src/i18n';
 import type {AppLanguage, GearDisplayModes, SettingsView} from '../../packages/contracts/src';
 
-// ET-050: the gear display card on Settings > Units. Substitute only the shadcn primitives; the card's labels, ids,
-// committed state, locks and error rules remain real. Expected texts are the hand-written EN/RU copy.
+// ET-050: the gear display section on Settings > General. Substitute only the shadcn primitives; the card's labels, ids,
+// committed state, locks and error rules remain real. Expected texts are the hand-written EN/RU copy. ET-078: each game is
+// one compact row with the three short mode names and a hint with the committed mode's example labels.
 vi.mock('@/components/ui/card', () => ({Card: 'div', CardContent: 'div', CardHeader: 'div', CardTitle: 'div'}));
 vi.mock('@/components/ui/label', () => ({Label: 'label'}));
 // The trigger renders its single child, as asChild does; the content renders in place of the portal.
@@ -45,8 +46,9 @@ const COPY = {
         ats: 'When the game reports the truck\'s gearbox layout, the labels follow it, including the crawler gears LL, LH. Otherwise they are range-splitter pairs.'},
       crawler: {ets2: 'The first gear is the crawler C, and the others are numbered. For gearboxes such as the Scania 13+1.',
         ats: 'The first gear is the crawler L, and the others are numbered. For 13+1 gearboxes.'}},
-    fallback: 'Without a layout: 1L, 1H, 2L, 2H…', reverse: 'Reverse R1, R2…, neutral N.', automatic: 'Automatic (1, 2, 3)', manual: 'Manual range-splitter (1L, 1H, 2L…)',
-    crawler: {ets2: 'Crawler first (C, 1, 2, 3…)', ats: 'Crawler first (L, 1, 2, 3…)'},
+    fallback: 'Without a layout: 1L, 1H, 2L, 2H…', reverse: 'Reverse R1, R2…, neutral N.',
+    example: {ets2: {automatic: 'Now: N, 1, 2, 3, …, 12, R1', manual: 'Now: C1, C2, 1L, 1H, 2L, …, 6H', crawler: 'Now: N, C, 1, 2, …, 12, R1'},
+      ats: {automatic: 'Now: N, 1, 2, 3, …, 12, R1', manual: 'Now: LL, LH, 1L, 1H, 2L, …, 8H', crawler: 'Now: N, L, 1, 2, …, 12, R1'}},
     failed: 'The gear display change was not saved; the previous setting stays in use.'},
   ru: {title: 'Отображение передач', description: 'Как подписывать передачи на приборах и в оверлее. Записанная телеметрия не меняется.',
     names: {automatic: 'Автоматическая', manual: 'Механическая с делителем', crawler: 'С ползучей'},
@@ -57,8 +59,9 @@ const COPY = {
         ats: 'Если игра сообщает схему коробки грузовика, подписи следуют ей, включая ползучие LL, LH. Иначе — пары с делителем.'},
       crawler: {ets2: 'Первая передача — ползучая C, остальные по номерам. Для коробок вроде Scania 13+1.',
         ats: 'Первая передача — ползучая L, остальные по номерам. Для коробок вроде 13+1.'}},
-    fallback: 'Без схемы: 1L, 1H, 2L, 2H…', reverse: 'Задний ход R1, R2…, нейтраль N.', automatic: 'Автоматическая (1, 2, 3)', manual: 'Механическая с делителем (1L, 1H, 2L…)',
-    crawler: {ets2: 'С ползучей (C, 1, 2, 3…)', ats: 'С ползучей (L, 1, 2, 3…)'},
+    fallback: 'Без схемы: 1L, 1H, 2L, 2H…', reverse: 'Задний ход R1, R2…, нейтраль N.',
+    example: {ets2: {automatic: 'Сейчас: N, 1, 2, 3, …, 12, R1', manual: 'Сейчас: C1, C2, 1L, 1H, 2L, …, 6H', crawler: 'Сейчас: N, C, 1, 2, …, 12, R1'},
+      ats: {automatic: 'Сейчас: N, 1, 2, 3, …, 12, R1', manual: 'Сейчас: LL, LH, 1L, 1H, 2L, …, 8H', crawler: 'Сейчас: N, L, 1, 2, …, 12, R1'}},
     failed: 'Изменение отображения передач не сохранено; действует прежняя настройка.'}
 } as const;
 
@@ -67,26 +70,32 @@ it.each(['en', 'ru'] as const)('renders one labelled, described group per game w
   expect(html).toContain(escaped(COPY[language].title));
   expect(t('s.gear', undefined, language)).toBe(COPY[language].title);
   expect(html).toContain(`id="gear-display-description"`);
-  expect(html).toContain(`<p id="gear-display-description" class="sr-only">${escaped(COPY[language].description)}</p>`);
+  // ET-078: the description is the section's visible note; the groups keep it as their description.
+  expect(html).toContain(`<p id="gear-display-description" class="yu-settings-card-note">${escaped(COPY[language].description)}</p>`);
   for (const game of ['ets2', 'ats'] as const) {
     expect(html.match(new RegExp(`data-testid="gear-display-${game}"`, 'g'))).toHaveLength(1);
-    expect(html).toContain(`<p id="gear-display-${game}-label">${escaped(getUnitGameText(game, language))}</p>`);
+    expect(html).toContain(`<span id="gear-display-${game}-label" class="yu-setting-label">${escaped(getUnitGameText(game, language))}</span>`);
     expect(group(html, game)).toContain(`aria-labelledby="gear-display-${game}-label"`);
     expect(group(html, game)).toContain('aria-describedby="gear-display-description"');
-    for (const mode of ['automatic', 'manual'] as const) {
+    // ET-078: the three options carry the short mode names; the example labels moved to the row's hint. The crawler
+    // option keeps one name for both games (ET-050b owner option B names each game's crawler in its hint and example).
+    for (const mode of ['automatic', 'manual', 'crawler'] as const) {
       expect(html).toContain(`id="gear-display-${game}-${mode}"`);
-      expect(html).toContain(`<label for="gear-display-${game}-${mode}">${escaped(COPY[language][mode])}</label>`);
+      expect(html).toContain(`<label for="gear-display-${game}-${mode}">${escaped(COPY[language].names[mode])}</label>`);
     }
-    // ET-050b owner option B: the third option names the game's own crawler.
-    expect(html).toContain(`id="gear-display-${game}-crawler"`);
-    expect(html).toContain(`<label for="gear-display-${game}-crawler">${escaped(COPY[language].crawler[game])}</label>`);
     expect(html.match(new RegExp(`<button[^>]*id="gear-display-${game}-`, 'g'))).toHaveLength(3);
-    // Review finding: three options stack in one column instead of wrapping into the two-column segmented grid.
-    expect(group(html, game)).toContain('class="yu-segmented yu-segmented-stacked"');
+    expect(group(html, game)).toContain('class="yu-segmented"');
   }
   const ids = [...html.matchAll(/\sid="([^"]+)"/g)].map(match => match[1]);
   expect(new Set(ids).size).toBe(ids.length);
   expect(html).not.toContain('data-testid="gear-display-error"');
+});
+it.each(['en', 'ru'] as const)('shows the committed mode\'s example labels in each game\'s hint in %s', language => {
+  for (const [ets2, ats] of [['automatic', 'manual'], ['manual', 'crawler'], ['crawler', 'automatic']] as const) {
+    const html = render(settings(language, {ets2, ats}));
+    expect(html).toContain(`data-testid="gear-display-ets2-example">${escaped(COPY[language].example.ets2[ets2])}</div>`);
+    expect(html).toContain(`data-testid="gear-display-ats-example">${escaped(COPY[language].example.ats[ats])}</div>`);
+  }
 });
 it('shows only the committed mode of each game, and automatic before the settings arrive', () => {
   const html = render(settings('en', {ets2: 'manual', ats: 'automatic'}));

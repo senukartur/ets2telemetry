@@ -98,10 +98,6 @@ h1[tabindex="-1"]:focus { outline: none; }
 .yu-page-sub { margin: 0; font-size: 12px; color: var(--yu-text-muted); }
 .yu-content > div { min-width: 0; }
 .yu-stack { display: grid; gap: 14px; }
-.yu-settings { display: grid; grid-template-columns: 200px minmax(0,1fr); gap: 18px; align-items: start; }
-.yu-settings-nav { display: grid; gap: 4px; }
-.yu-settings-nav button { min-height: 38px; padding: 8px 12px; text-align: left; border: 1px solid transparent; }
-.yu-settings-nav button[aria-current="page"] { background: var(--yu-selected-bg); color: var(--yu-selected-fg); border-color: var(--yu-selected-border); }
 .yu-menu { z-index: 80; min-width: 180px; background: var(--yu-bg-card); color: var(--yu-text); border: 1px solid var(--yu-border); padding: 5px; border-radius: 10px; box-shadow: 0 12px 32px #0006; }
 .yu-menu-item { padding: 8px 12px; border-radius: 6px; cursor: pointer; outline: none; }
 .yu-menu-item[data-highlighted] { background: var(--yu-selected-bg); }
@@ -189,24 +185,23 @@ h1[tabindex="-1"]:focus { outline: none; }
 [role="switch"] [data-slot="switch-thumb"] {background:var(--yu-text);width:16px;height:16px}
 [role="switch"][data-state="unchecked"] {background:var(--yu-border-input)}
 .yu-settings label {min-height:32px;align-items:center}
-.yu-segmented {display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:4px;background:var(--yu-bg-input);border:1px solid var(--yu-border-input);border-radius:8px;padding:4px}
-/* ET-050b: the gear display group has three options; a stacked column keeps every label on its own full-width row. */
-.yu-segmented.yu-segmented-stacked {grid-template-columns:minmax(0,1fr)}
-.yu-segment-option {position:relative;min-height:32px;border-radius:5px;border:1px solid transparent;text-align:center}
-.yu-segment-option:has([data-state="checked"]) {background:var(--yu-selected-bg);border-color:var(--yu-selected-border);color:var(--yu-selected-fg)}
+/* ET-078 compact segmented control (mockup T5): a 2 px track, 26 px segments; the selected one is raised. Long options wrap. */
+.yu-segmented {display:inline-flex;flex-wrap:wrap;gap:2px;max-width:100%;padding:2px;background:var(--yu-bg-chrome);border:1px solid var(--yu-border);border-radius:var(--yu-radius-control)}
+.yu-segment-option {position:relative;min-width:0;min-height:26px;border-radius:4px;text-align:center;color:var(--yu-text-secondary)}
+.yu-segment-option:has([data-state="checked"]) {background:var(--yu-bg-raised);color:var(--yu-text-strong);font-weight:500}
+.yu-segment-option:not(:has([data-state="checked"])):not(:has(:disabled)):hover {background:var(--yu-neutral-bg)}
 .yu-segment-option:has(:focus-visible) {outline:2px solid var(--yu-accent-light);outline-offset:2px}
 .yu-segment-option:has(:disabled) {opacity:.5}
-.yu-segment-option>[role="radio"] {position:absolute;inset:0;width:100%;height:100%;min-height:32px;opacity:0;border:0}
+.yu-segment-option>[role="radio"] {position:absolute;inset:0;width:100%;height:100%;min-height:26px;opacity:0;border:0}
 .yu-segment-option>[role="radio"]::after {inset:0}
-.yu-segment-option label {display:flex;justify-content:center;padding:7px 10px;pointer-events:none;font-size:12px}
+.yu-settings .yu-segment-option label {display:flex;align-items:center;justify-content:center;min-height:26px;padding:3px 10px;line-height:1.3;pointer-events:none;font-size:12px}
 /* An option with its own hint: the info icon at the right edge says that hovering or focusing it explains the option. */
-.yu-segment-option-hinted label {padding-inline:32px}
-.yu-segment-info {position:absolute;right:10px;top:50%;width:14px;height:14px;transform:translateY(-50%);color:var(--yu-text-muted);pointer-events:none;transition:color .15s}
+.yu-settings .yu-segment-option-hinted label {padding-inline:10px 26px}
+.yu-segment-info {position:absolute;right:8px;top:50%;width:12px;height:12px;transform:translateY(-50%);color:var(--yu-text-muted);pointer-events:none;transition:color .15s}
 .yu-segment-option-hinted:hover .yu-segment-info, .yu-segment-option-hinted:has(:focus-visible) .yu-segment-info, .yu-segment-option-hinted[data-state$="-open"] .yu-segment-info {color:var(--yu-accent-light)}
 .yu-gear-examples {display:flex;flex-wrap:wrap;gap:4px}
 .yu-gear-chip {min-width:24px;padding:1px 6px;border:1px solid var(--yu-border);border-radius:var(--yu-radius-badge);background:var(--yu-bg-input);color:var(--yu-text);font-size:12px;text-align:center;font-variant-numeric:tabular-nums}
 
-.yu-font-license { margin-top: 16px; }
 .yu-font-license summary { cursor: pointer; min-height: 32px; display: flex; align-items: center; }
 .yu-font-license summary:focus-visible { outline: 2px solid var(--yu-accent); outline-offset: 2px; }
 .yu-font-license pre { white-space: pre-wrap; overflow-wrap: anywhere; max-height: 260px; overflow: auto; font-size: 12px; color: var(--yu-text-secondary); }
@@ -257,9 +252,6 @@ button[aria-disabled="true"], [role="switch"][aria-disabled="true"] { cursor: no
 @container (max-width: 320px) {
   .yu-overlay-settings .yu-layout-options { grid-template-columns: minmax(0,1fr); }
 }
-@media (max-width: 900px) {
-  .yu-settings { grid-template-columns: minmax(0,1fr); }
-}
 
 /* Keep keyboard focus rings clear of the scroll viewport at fractional renderer zoom (ET-049). */
 .yu-overlay-settings :is(button, [role="slider"]) { scroll-margin-block: 8px; }
@@ -271,10 +263,6 @@ button[aria-disabled="true"], [role="switch"][aria-disabled="true"] { cursor: no
 .yu-info-hint svg { width: 14px; height: 14px; }
 .yu-info-hint:hover, .yu-info-hint:focus-visible, .yu-info-hint[data-state$="-open"] { color: var(--yu-accent-light); background: var(--yu-selected-bg); }
 .yu-label-hint { display: flex; align-items: center; gap: 2px; }
-.yu-setting-row > .yu-segmented { flex: 0 1 440px; min-width: 260px; }
-.yu-setting-row { display: flex; align-items: center; justify-content: space-between; gap: 16px; flex-wrap: wrap; min-height: 44px; padding: 6px 0; border-bottom: 1px solid var(--yu-divider); }
-.yu-setting-row:last-child { border-bottom: 0; }
-.yu-setting-row > :first-child { display: inline-flex; align-items: center; font-weight: 500; }
 .yu-hard-mode-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; align-items: stretch; padding: 0; margin: 0; list-style: none; }
 .yu-hard-mode-grid > li { display: flex; flex-direction: column; justify-content: center; gap: 2px; min-height: 44px; padding: 4px 12px; border: 1px solid var(--yu-divider); border-radius: 10px; background: var(--yu-bg-inset); }
 .yu-hard-mode-grid > li[data-state="fail"] { border-color: var(--yu-warn-border); background: var(--yu-warn-bg); }
@@ -292,10 +280,6 @@ button[aria-disabled="true"], [role="switch"][aria-disabled="true"] { cursor: no
 .yu-trip-raw > summary svg { width: 16px; height: 16px; transition: transform .15s; }
 .yu-trip-raw[open] > summary svg { transform: rotate(90deg); }
 .yu-trip-raw > [data-testid="trip.detailTabs"] { padding: 0 14px 14px; }
-/* The hint follows its button visually; the result region stays next to the button in the document (ET-045b). */
-.yu-action-row { display: flex; flex-wrap: wrap; align-items: center; row-gap: 4px; }
-.yu-action-row > .yu-info-hint-wrap { order: 1; }
-.yu-action-row > :not(button):not(.yu-info-hint-wrap) { order: 2; flex-basis: 100%; }
 
 .yu-account-grid { display: grid; grid-template-columns: minmax(0,1.25fr) minmax(0,1fr); gap: 16px; align-items: start; }
 .yu-account-grid h2 { display: flex; align-items: center; gap: 8px; }
@@ -408,3 +392,85 @@ button[aria-disabled="true"], [role="switch"][aria-disabled="true"] { cursor: no
 .yu-live-fields { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 20px; }
 .yu-live-fields h3 { color: var(--yu-accent-light); padding-bottom: 6px; }
 @media (max-width: 900px) { .yu-live-fields { grid-template-columns: minmax(0, 1fr); } }
+
+/* ET-078 Settings (mockup T5): a 170 px sub-navigation beside the panel column, up to 1100 px; one column at 900 px and below. */
+.yu-settings { display: grid; grid-template-columns: 170px minmax(0,1fr); gap: 20px; align-items: start; max-width: 1100px; }
+.yu-settings-nav { display: flex; flex-direction: column; gap: 1px; }
+.yu-settings-nav button { display: flex; align-items: center; min-height: 32px; padding: 0 10px; border: 0; border-radius: var(--yu-radius-control); background: transparent; color: var(--yu-text-secondary); font-size: 13px; line-height: 1.25; text-align: left; }
+.yu-settings-nav button:hover { background: var(--yu-neutral-bg); }
+.yu-settings-nav button[aria-current="page"] { background: var(--yu-nav-active-bg); color: var(--yu-text-strong); font-weight: 500; }
+.yu-settings-panels, .yu-settings-panel { display: grid; gap: 12px; min-width: 0; }
+.yu-settings-head h2 { margin: 0; font-size: 18px; font-weight: 700; line-height: 1.3; color: var(--yu-text-strong); }
+.yu-settings-head p { margin: 0; font-size: 12px; color: var(--yu-text-muted); }
+/* Section cards: an optional 13 px heading row, then rows with a line between them. */
+.yu-settings .yu-settings-card { border: 1px solid var(--yu-border); background: var(--yu-bg-card); font-size: 13px; }
+.yu-settings-card > * + * { border-top: 1px solid var(--yu-border); }
+.yu-settings-card > :is(.yu-setting-msg, .yu-uninstall-warning, .yu-uninstall-result) { border-top: 0; }
+.yu-settings-card-head { display: flex; flex-wrap: wrap; align-items: baseline; gap: 2px 12px; padding: 10px 14px; }
+.yu-settings-card-head h3 { flex: 1 1 auto; margin: 0; font-size: 13px; font-weight: 700; color: var(--yu-text-strong); }
+.yu-settings-card-note { margin: 0; font-size: 12px; color: var(--yu-text-muted); }
+/* A row: the label and hint, then the controls; they wrap below the text when the row is narrow. */
+.yu-setting-row { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 16px; padding: 10px 14px; }
+.yu-setting-text { display: block; flex: 1 1 220px; min-width: 0; }
+.yu-settings .yu-setting-label { display: block; min-height: 0; font-size: 13px; font-weight: 500; line-height: 1.45; color: var(--yu-text); }
+.yu-setting-hint { display: block; font-size: 12px; line-height: 1.45; color: var(--yu-text-muted); }
+.yu-setting-hint p { margin: 0; }
+.yu-setting-controls { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.yu-setting-value { color: var(--yu-text-secondary); }
+.yu-setting-slider { flex: 0 1 240px; min-width: 160px; }
+.yu-setting-line { margin: 0; padding: 8px 14px; font-size: 12px; }
+.yu-setting-msg { margin: 0; padding: 0 14px 10px; }
+.yu-setting-row > .yu-action-result-region { flex-basis: 100%; }
+/* An empty result region adds no row gap below its button. */
+.yu-setting-row > .yu-action-result-region:not(:has(.yu-action-result)) { margin-top: -8px; }
+.yu-settings select { height: 32px; max-width: 100%; padding: 0 8px; border: 1px solid var(--yu-border-strong); background: var(--yu-bg-app); color: var(--yu-text); }
+.yu-settings .yu-settings-card button[data-slot="button"] { height: 32px; }
+.yu-telemetry-status { font-family: ui-monospace, Consolas, monospace; overflow-wrap: anywhere; }
+/* Diagnostics: the application status as a compact list with a 160 px label column. */
+.yu-health-body { display: grid; gap: 8px; padding: 10px 14px; }
+.yu-health-body > p { margin: 0; font-size: 12px; }
+.yu-health { display: grid; grid-template-columns: 160px minmax(0,1fr); align-items: center; gap: 6px 8px; margin: 0; }
+.yu-health dt { color: var(--yu-text-secondary); }
+.yu-health dd { margin: 0; min-width: 0; }
+.yu-health dd p { margin: 0; }
+.yu-health .yu-health-more { grid-column: 2; }
+/* Game plugin: a block per game; each folder is an inset sub-row with its status badge. */
+.yu-plugin-top { display: grid; gap: 8px; padding: 10px 14px; }
+.yu-plugin-top p { margin: 0; }
+.yu-plugin-game { display: grid; gap: 6px; justify-items: start; padding: 10px 14px; }
+.yu-plugin-game > :not(button) { justify-self: stretch; }
+.yu-plugin-game-head { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 10px; }
+.yu-plugin-game-head h4 { flex: 1 1 200px; min-width: 0; margin: 0; font-size: 13px; font-weight: 700; color: var(--yu-text-strong); }
+.yu-plugin-game-head > .yu-action-result-region, .yu-plugin-footer > .yu-action-result-region { flex-basis: 100%; }
+.yu-plugin-manage { display: flex; align-items: center; gap: 8px; }
+.yu-plugin-note { margin: 0; font-size: 12px; color: var(--yu-text-muted); }
+.yu-plugin-target { display: grid; gap: 4px; padding: 8px 10px; border-radius: var(--yu-radius-control); background: var(--yu-bg-inset); }
+.yu-plugin-target p { margin: 0; font-size: 12px; }
+.yu-plugin-target .yu-plugin-target-head { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 10px; }
+.yu-plugin-folder { font-size: 12px; color: var(--yu-text-muted); }
+.yu-plugin-target-head [data-slot="badge"] { white-space: normal; }
+.yu-plugin-actions { display: flex; flex-wrap: wrap; gap: 6px; }
+.yu-plugin-footer { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; padding: 10px 14px; }
+/* About: the brand block, the update check laid out in its row, the font licence row and the uninstall warning. */
+.yu-about-brand { display: flex; align-items: center; gap: 14px; padding: 14px; }
+.yu-about-brand img { flex: none; width: 56px; height: 56px; object-fit: contain; }
+.yu-about-brand h3 { margin: 0; font-size: 15px; font-weight: 700; color: var(--yu-text-strong); }
+.yu-about-brand p { margin: 0; font-size: 12px; color: var(--yu-text-muted); }
+.yu-about-brand .yu-version { padding: 0; font-size: 12px; color: var(--yu-text-secondary); }
+.yu-about-update [data-testid="settings.about.update"] { display: contents; }
+.yu-about-update [data-testid="settings.about.update"] > * { margin-block: 0; }
+.yu-about-update [data-testid="settings.about.update"] > :not(button) { flex-basis: 100%; }
+.yu-about-update [data-testid="settings.about.update"] > p { font-size: 12px; }
+.yu-about-update [data-testid="settings.about.update"] > .yu-action-result-region:not(:has(.yu-action-result)) { margin-top: -8px; }
+.yu-settings .yu-font-license > summary { list-style: none; display: flex; flex-wrap: wrap; align-items: center; gap: 8px 16px; padding: 10px 14px; }
+.yu-font-license > summary::-webkit-details-marker { display: none; }
+.yu-font-license-toggle { display: inline-flex; align-items: center; min-height: 32px; padding: 0 10px; border-radius: var(--yu-radius-control); font-size: 12px; font-weight: 500; color: var(--yu-text-secondary); }
+.yu-font-license > summary:hover .yu-font-license-toggle { background: var(--yu-neutral-bg); color: var(--yu-text); }
+.yu-settings .yu-font-license pre { margin: 0 14px 12px; }
+.yu-uninstall-warning { margin: 0 14px 12px; padding: 8px 12px; border: 1px solid var(--yu-err-border); border-left-width: 3px; border-radius: var(--yu-radius-control); background: var(--yu-err-bg); color: var(--yu-err-fg); font-size: 12px; }
+.yu-uninstall-warning ul { display: grid; gap: 2px; margin: 0; padding-left: 16px; list-style: disc; }
+.yu-uninstall-result { display: grid; gap: 4px; padding: 0 14px 12px; }
+.yu-uninstall-result p { margin: 0; }
+@media (max-width: 900px) {
+  .yu-settings { grid-template-columns: minmax(0,1fr); }
+}

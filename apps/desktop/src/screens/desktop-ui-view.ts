@@ -1,4 +1,4 @@
-import type {GearDisplayModes, LiveTelemetry, RecordingHealth, PluginTargetView, UnitProfiles} from '../../../../packages/contracts/src';
+import type {GearDisplayModes, LiveTelemetry, RecordingHealth, PluginTargetState, PluginTargetView, ServiceHealth, StorageHealth, UnitProfiles} from '../../../../packages/contracts/src';
 import type {HardModeStatus} from '../../../../packages/contracts/src/hard-mode';
 import {resolveDisplayUnits} from '../../../../packages/telemetry-core/src/display-profile';
 import {fixed} from '../../../../packages/telemetry-core/src/format';
@@ -68,6 +68,22 @@ export function pluginTone(targets: readonly Pick<PluginTargetView, 'state'>[]):
   if (targets.some(target => target.state === 'blocked')) return 'error';
   if (targets.some(target => target.state === 'outdated' || target.state === 'working')) return 'warn';
   return targets.length && targets.every(target => target.state === 'installed') ? 'ok' : 'neutral';
+}
+/** One game folder's plugin state on Settings > Game plugin (ET-078); its status word and icon carry it too. */
+export function pluginTargetTone(state: PluginTargetState): 'ok' | 'warn' | 'error' | 'neutral' {
+  if (state === 'installed') return 'ok';
+  if (state === 'outdated' || state === 'working') return 'warn';
+  return state === 'blocked' ? 'error' : 'neutral';
+}
+/** The telemetry service on Settings > Diagnostics (ET-078); the badge keeps the service's own words. */
+export function serviceTone(service: ServiceHealth): 'ok' | 'warn' | 'error' | 'neutral' {
+  if (service === 'ready') return 'ok';
+  if (service === 'starting' || service === 'restarting') return 'warn';
+  return service === 'failed' ? 'error' : 'neutral';
+}
+/** The storage probe on Settings > Diagnostics (ET-078); pending is not a problem yet. */
+export function storageTone(storage: StorageHealth): 'ok' | 'warn' | 'error' | 'neutral' {
+  return storage === 'verified' ? 'ok' : storage === 'failed' ? 'error' : 'neutral';
 }
 export function hardModeTone(status: HardModeStatus): 'ok' | 'warn' | 'error' | 'neutral' {
   if (status.trip?.firstLoss) return 'error';
