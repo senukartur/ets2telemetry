@@ -49,6 +49,8 @@ export default function App() {
   // ET-076: the elements of the top bar and page header where the Journal shows its Refresh and totals.
   const [actionsSlot, setActionsSlot] = useState<HTMLElement | null>(null);
   const [sublineSlot, setSublineSlot] = useState<HTMLElement | null>(null);
+  // ET-077: the top bar's element where an open trip adds its cargo after the page's crumb.
+  const [breadcrumbSlot, setBreadcrumbSlot] = useState<HTMLElement | null>(null);
   // ET-078: one card action controller for the Game plugin card and the diagnostics export on Settings > Diagnostics.
   const pluginActions = usePluginActions();
   const [startupLine] = useState(() => createStartupLine(() => window.desktop.getStatus(), setStartup));
@@ -100,7 +102,7 @@ export default function App() {
         <span id="shell-exit-hint" className="sr-only" style={{position: 'fixed'}}>{t('s.closeD', undefined, language)}</span>
         {exit === 'failed' ? <p role="status">{strings.exitFailed}</p> : null}
       </div></aside>
-      <ShellSlotsProvider actions={actionsSlot} subline={sublineSlot}><div className="yu-column"><TopBar route={route} language={language} actionsRef={setActionsSlot} connection={connectionChip(live?.status, game, mode ? t(mode === 'truckersmp' ? 'mode.tmp' : 'mode.sp', undefined, language) : null, language)}
+      <ShellSlotsProvider actions={actionsSlot} subline={sublineSlot} breadcrumb={breadcrumbSlot}><div className="yu-column"><TopBar route={route} language={language} actionsRef={setActionsSlot} breadcrumbRef={setBreadcrumbSlot} connection={connectionChip(live?.status, game, mode ? t(mode === 'truckersmp' ? 'mode.tmp' : 'mode.sp', undefined, language) : null, language)}
         plugin={pluginChip(targets, language)} hardMode={hardModeChip(hardMode.status, hardMode.now, language)}>
         <SyncChip state={upload.state} language={language} onOpen={() => setRoute('account')} />
       </TopBar><main ref={content} className="yu-content" data-testid="shell.content">

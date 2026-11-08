@@ -1,4 +1,4 @@
-import {journalPageSync} from '../../apps/desktop/src/journal-view';
+import {journalCompletenessText, journalPageBound, journalPageSync, journalSiteSaved, journalSyncOwnerCurrent, journalTimelineItems, journalTripSideText} from '../../apps/desktop/src/journal-view';
 import {initialDashboardUploadStatus} from '../../packages/contracts/src/dashboard-upload';
 import {journalTileValues} from '../../apps/desktop/src/screens/journal-tiles';
 import {describe, expect, it} from 'vitest';
@@ -562,7 +562,9 @@ it('keeps stored SDK names equal to known UI labels exact in both selected langu
 
 it('separates typed hero amounts and missing values from their provenance without converting exact money', () => {
   expect(journalTileValues(DELIVERED_DETAIL, {language: 'ru'})).toEqual({distance: {value: '152.0 км', note: null},
-    fuel: {value: '—', note: 'недоступно (не наблюдалось)'}, money: {value: '15000 EUR', note: 'Валюта подтверждена SDK'}, realDuration: '—'});
+    fuel: {value: '—', note: 'недоступно (не наблюдалось)'}, money: {value: '15000 EUR', note: 'Валюта подтверждена SDK'},
+    planned: '152.0 км', gameDistance: '151.3 км', expected: '12345 (валюта неизвестна)',
+    recorded: {value: '3 с', note: 'по сэмплам 1 Гц, без пауз и пропусков'}, gameTime: '7 ч 51 мин игрового'});
   expect(journalTileValues(ZERO_DETAIL).distance).toEqual({value: '0.0 mi', note: null});
   expect(journalTileValues(ZERO_DETAIL).fuel).toEqual({value: '0.0 US gal', note: null});
   const detail = structuredClone(DELIVERED_DETAIL);
@@ -626,4 +628,131 @@ it('REG-012/014 retains same-owner read-time assessments across connection versi
   const refreshed: JournalTripPage = {...previous, sync: {...previous.sync!, connectionVersion: '3', rows: [{...previous.sync!.rows[0], state: 'pending', materialVersion: '2', lastDurableUploadUtcMs: null}]}};
   expect(journalPageSync(previous, status)).toBe(previous.sync); expect(journalPageSync(refreshed, status)).toBe(refreshed.sync);
   expect(journalPageSync(previous, {...status, owner: {...owner, identityEpoch: 'new'}})).toBeUndefined(); expect(previous.sync?.rows[0].state).toBe('sent');
+});
+
+describe('the compact trip page (ET-077; REG-003, REG-009, REG-014)', () => {
+  const withSamples = (count: number, firstUtcMs: number | null, lastUtcMs: number | null): JournalTripDetail => ({...DELIVERED_DETAIL, samples: {count, firstUtcMs, lastUtcMs}});
+  it('derives recorded time from the sample count and never from the UTC labels', () => {
+    // A week between the labels and 13,860 samples: the tile shows the samples.
+    const recorded = journalTileValues(withSamples(13_860, BASE_UTC, BASE_UTC + 604_800_000)).recorded;
+    expect(recorded).toEqual({value: '3 h 51 min', note: 'from 1 Hz samples, without pauses and gaps'});
+    expect(journalTileValues(withSamples(725, BASE_UTC, BASE_UTC + 1)).recorded.value).toBe('12 min 5 s');
+    expect(journalTileValues(withSamples(46, null, null)).recorded.value).toBe('46 s');
+  });
+  it('shows no samples as a dash with its reason, never as zero time', () => {
+    expect(journalTileValues(withSamples(0, null, null))).toMatchObject({recorded: {value: '—', note: 'no samples recorded'}});
+    expect(journalTileValues(withSamples(0, null, null), {language: 'ru'}).recorded).toEqual({value: '—', note: 'сэмплы не записаны'});
+  });
+  it('keeps planned, game-reported and observed values under separate labels', () => {
+    expect(journalTileValues(DELIVERED_DETAIL)).toMatchObject({distance: {value: '152.0 km'}, planned: '152.0 km', gameDistance: '151.3 km', expected: '12345 (currency unknown)', gameTime: '7 h 51 min game time'});
+    expect(journalTileValues(OPEN_DETAIL)).toMatchObject({distance: {value: '—', note: 'unavailable (not observed)'}, gameDistance: null, gameTime: 'game time not available'});
+    expect(journalTileValues(CANCELLED_DETAIL)).toMatchObject({gameDistance: null, gameTime: 'game time not available', money: {value: '12000 EUR'}});
+  });
+  it('keeps an unavailable delivery duration unavailable, and zero is a value', () => {
+    const detail = structuredClone(DELIVERED_DETAIL);
+    if (detail.outcomeDetails?.record.type !== 'job.delivered') throw new Error('Delivered fixture unavailable');
+    detail.outcomeDetails.record.deliveryDuration = {available: false, reason: 'not-observed', unit: 'min'} as never;
+    expect(journalTileValues(detail).gameTime).toBe('game time not available');
+    expect(journalTileValues(ZERO_DETAIL).fuel).toEqual({value: '0.0 US gal', note: null});
+  });
+
+  it('builds the route, the money rows and the vehicle from the detail', () => {
+    expect(journalTripSideText(DELIVERED_DETAIL, {timeZone: ZONE})).toEqual({
+      route: 'Synthetic City A, Synthetic Company A → Synthetic City B, Synthetic Company B · started 2026-10-11 02:00:04',
+      money: {notes: [], rows: [
+        {id: 'fine', label: 'Fines', value: '401 EUR (SDK-documented), 2 amounts'}, {id: 'toll', label: 'Tolls', value: '35 EUR (SDK-documented), 1 amount'},
+        {id: 'ferry', label: 'Ferries', value: '677 EUR (SDK-documented), 1 amount'}, {id: 'train', label: 'Trains', value: 'none recorded'}]},
+      vehicle: {notes: [], rows: [{id: 'truck', label: 'Truck', value: 'Synthetic Brand Synthetic Truck'}, {id: 'trailer-0', label: 'Trailer', value: 'dryvan'}, {id: 'cargoMass', label: 'Cargo mass', value: '18.0 t'}]}
+    });
+  });
+  it('never sums money across categories, and an incomplete total shows only its note', () => {
+    expect(journalTripSideText({...DELIVERED_DETAIL, money: {incomplete: true, totals: [], unavailable: []}}).money).toEqual({rows: [], notes: ['Complete money totals are unavailable. No partial sum is shown as a total.']});
+    expect(journalTripSideText(CANCELLED_DETAIL).money.rows[0].value).toBe('9007199254741238 EUR (SDK-documented), 3 amounts; 50 (currency unknown), 1 amount');
+  });
+  it('shows the latest configuration of each trailer slot and says when the vehicle is unknown', () => {
+    const items = [{eventSeq: '2', values: trailer(0, {bodyType: value('old')})}, {eventSeq: '3', values: trailer(1, {bodyType: value('dolly')})}, {eventSeq: '4', values: trailer(0, {bodyType: value('curtain')})}];
+    const rows = journalTripSideText({...DELIVERED_DETAIL, trailers: {items, total: 3}}).vehicle.rows;
+    expect(rows.filter(row => row.id.startsWith('trailer'))).toEqual([{id: 'trailer-0', label: 'Trailer 1', value: 'curtain'}, {id: 'trailer-1', label: 'Trailer 2', value: 'dolly'}]);
+    const none = journalTripSideText({...DELIVERED_DETAIL, truck: null, trailers: {items: [], total: 0}}, {language: 'ru'}).vehicle;
+    expect(none.rows.map(row => row.id)).toEqual(['cargoMass']);
+    expect(none.notes).toHaveLength(2);
+  });
+
+  const interval = (id: string, startUtcMs: number | null, changes: Partial<JournalInterval> = {}): JournalInterval => ({id, kind: 'sample-loss', annotation: false, cause: 'reading-hole', startUtcMs, endUtcMs: null,
+    startMonotonicNs: null, endMonotonicNs: null, sourceClockId: CLOCK, firstEventSeq: null, lastEventSeq: null, detail: null, ...changes});
+  const event = (seq: string, utc: number | null): JournalEvent => ({eventSeq: seq, type: 'simulation.paused', record: {type: 'simulation.paused'},
+    occurred: {utcUnixMs: utc === null ? {available: false, reason: 'not-observed'} : value(String(utc))} as JournalEvent['occurred'], attribution: null});
+  const trip = {tripUuid: T.delivered, game: 'ets2'} as const;
+  const page = (events: JournalEvent[], nextCursor: string | null): JournalEventPage => ({database: DATABASE, window: DELIVERED_DETAIL.window, events, nextCursor});
+  const keys = (source: JournalEventPage, intervals: JournalInterval[], after: number | null) => journalTimelineItems(source, journalEventText(source, trip), intervals, {after, through: journalPageBound(source, after)}, 'ets2').map(item => item.key);
+  const ids = (items: string[]) => items.filter(key => key.startsWith('interval-'));
+
+  it('places every interval on exactly one page across a page boundary', () => {
+    const intervals = [interval('1', 500), interval('2', 1_500), interval('3', 3_000), interval('4', 3_500), interval('5', 6_000), interval('6', null), interval('7', 2_500, {annotation: true, cause: 'refuel', kind: 'discontinuity'})];
+    const first = page([event('1', 1_000), event('2', 2_000), event('3', 3_000)], '3'), second = page([event('4', 4_000), event('5', 5_000)], null);
+    const pageOne = keys(first, intervals, null), pageTwo = keys(second, intervals, journalPageBound(first, null));
+    expect(pageOne).toEqual(['interval-1', `${ETS2_A}:1`, 'interval-2', `${ETS2_A}:2`, 'interval-7', `${ETS2_A}:3`, 'interval-3']);
+    expect(pageTwo).toEqual(['interval-4', `${ETS2_A}:4`, `${ETS2_A}:5`, 'interval-5', 'interval-6']);
+    expect([...ids(pageOne), ...ids(pageTwo)].sort()).toEqual(['interval-1', 'interval-2', 'interval-3', 'interval-4', 'interval-5', 'interval-6', 'interval-7']);
+  });
+  it('does not repeat or drop a gap when a label jumps back or a page has no labels', () => {
+    const intervals = [interval('1', 2_500)];
+    const first = page([event('1', 3_000), event('2', 1_000)], '2'), second = page([event('3', 2_000)], null);
+    expect(journalPageBound(first, null)).toBe(3_000);
+    expect(ids(keys(first, intervals, null))).toEqual(['interval-1']);
+    expect(ids(keys(second, intervals, journalPageBound(first, null)))).toEqual([]);
+    const unlabelled = page([event('1', null)], '1'), last = page([], null);
+    expect(ids(keys(unlabelled, intervals, null))).toEqual([]);
+    expect(ids(keys(last, intervals, journalPageBound(unlabelled, null)))).toEqual(['interval-1']);
+  });
+  it('lists gaps and refuels but not other annotations, and keeps event order', () => {
+    const intervals = [interval('1', 1_500, {annotation: true, cause: 'truck-change', kind: 'discontinuity'}), interval('2', 1_600, {kind: 'event-loss', cause: 'gap', firstEventSeq: '4', lastEventSeq: '6'})];
+    const source = page([event('9', 1_000), event('10', 3_000)], null);
+    const items = journalTimelineItems(source, journalEventText(source, trip, {timeZone: ZONE}), intervals, {after: null, through: 3_000}, 'ets2', {timeZone: ZONE});
+    expect(items.map(item => item.kind)).toEqual(['event', 'gap', 'event']);
+    expect(items[0]).toMatchObject({eventSeq: '9', tone: 'neutral'});
+    expect(items[1]).toMatchObject({tone: 'warn', type: 'Gap: lost events', detail: 'Lost events · duration unknown', eventSeq: 'eventSeq 4–6', attribution: '—'});
+  });
+  it('shows a gap length only from monotonic bounds, and refuel litres only when they are a finite number', () => {
+    const gap = interval('1', null, {startUtcMs: BASE_UTC, endUtcMs: BASE_UTC + 3_600_000, startMonotonicNs: '1000000000', endMonotonicNs: '47000000000'});
+    const utcOnly = interval('2', null, {startUtcMs: BASE_UTC, endUtcMs: BASE_UTC + 3_600_000});
+    const source = page([], null), text = journalEventText(source, trip);
+    const items = journalTimelineItems(source, text, [gap, utcOnly, interval('3', 1, {annotation: true, cause: 'refuel', kind: 'discontinuity', detail: {addedLiters: 286}}), interval('4', 2, {annotation: true, cause: 'refuel', kind: 'discontinuity', detail: {addedLiters: 'many'}})], {after: null, through: null}, 'ets2', {units: DEFAULT, timeZone: ZONE});
+    expect(items.find(item => item.key === 'interval-1')?.detail).toBe('Missing one-second samples · 46 s');
+    expect(items.find(item => item.key === 'interval-2')?.detail).toBe('Missing one-second samples · duration unknown');
+    expect(items.find(item => item.key === 'interval-3')).toMatchObject({kind: 'refuel', tone: 'ok', type: 'Refuelled', detail: '286.0 L', time: '1970-01-01 01:00:00'});
+    expect(items.find(item => item.key === 'interval-4')).toMatchObject({kind: 'refuel', detail: '—'});
+    expect(journalTimelineItems(source, text, [interval('3', 1, {annotation: true, cause: 'refuel', kind: 'discontinuity', detail: {addedLiters: 286}})], {after: null, through: null}, 'ats', {units: DEFAULT, timeZone: ZONE})[0].detail).toBe('75.6 US gal');
+  });
+
+  it('adds gap lengths as a union of monotonic spans and counts the unknown ones apart', () => {
+    const items = [interval('1', 1, {startMonotonicNs: '1000000000', endMonotonicNs: '11000000000'}), interval('2', 2, {startMonotonicNs: '6000000000', endMonotonicNs: '16000000000'}),
+      interval('3', 3), interval('4', 4, {annotation: true, cause: 'refuel', kind: 'discontinuity', startMonotonicNs: '1000000000', endMonotonicNs: '91000000000'})];
+    const text = journalCompletenessText({...DELIVERED_DETAIL, samples: {count: 13_860, firstUtcMs: null, lastUtcMs: null}, intervals: {items, total: 4, nextCursor: null}});
+    expect(text).toMatchObject({recorded: '3 h 51 min', gaps: '15 s · 1 of unknown duration', intervals: '4', partial: null,
+      bar: {recordedSeconds: 13_860, gapSeconds: 15, gapCount: 3, label: 'Recorded 3 h 51 min, gaps 15 s · 1 of unknown duration'}});
+  });
+  it('says none, says unknown and says when only the first intervals are in the total', () => {
+    expect(journalCompletenessText(DELIVERED_DETAIL)).toMatchObject({recorded: '3 s', gaps: 'none', intervals: '0', bar: {gapCount: 0}});
+    const utcOnly = interval('1', BASE_UTC, {endUtcMs: BASE_UTC + 3_600_000});
+    expect(journalCompletenessText({...DELIVERED_DETAIL, samples: {count: 0, firstUtcMs: null, lastUtcMs: null}, intervals: {items: [utcOnly], total: 1, nextCursor: null}})).toMatchObject({recorded: '—', gaps: '1 of unknown duration', bar: {gapSeconds: 0}});
+    expect(journalCompletenessText({...DELIVERED_DETAIL, intervals: {items: [utcOnly], total: 51, nextCursor: '1'}}, 'ru')).toMatchObject({gaps: 'без известной длительности: 1', intervals: '51', partial: 'Итог по пропускам учитывает первые 1 из 51 интервалов.'});
+  });
+
+  const origin = 'https://dashboard.example', owner = {origin, accountId: 'a', companyId: 'c', identityEpoch: 'e'};
+  it('REG-012/014 shows a trip\'s site facts only while sync is configured for the same settled owner', () => {
+    const status = {...initialDashboardUploadStatus(origin), state: 'connected' as const, owner};
+    expect(journalSyncOwnerCurrent(owner, status)).toBe(true);
+    expect(journalSyncOwnerCurrent(owner, {...status, state: 'paused'})).toBe(true);
+    for (const hidden of [null, undefined, initialDashboardUploadStatus(null), {...status, state: 'verifying' as const}, {...status, owner: {...owner, identityEpoch: 'other'}}, {...status, origin: null}]) expect(journalSyncOwnerCurrent(owner, hidden)).toBe(false);
+    expect(journalSyncOwnerCurrent(undefined, status)).toBe(false);
+  });
+  it('words a durable upload as saved by the site and shows nothing for any other state', () => {
+    const row = {tripUuid: T.delivered, state: 'sent' as const, materialVersion: '1', latestRevision: 3, lastDurableUploadUtcMs: BASE_UTC + 5_000, reason: null};
+    expect(journalSiteSaved(row, {timeZone: ZONE})).toBe('Saved by the site 2026-10-11 02:00:05 · version 3');
+    expect(journalSiteSaved(row, {timeZone: ZONE, language: 'ru'})).toBe('Сохранено сайтом 2026-10-11 02:00:05 · версия 3');
+    expect(journalSiteSaved({...row, latestRevision: null}, {timeZone: ZONE})).toBe('Saved by the site 2026-10-11 02:00:05');
+    expect(journalSiteSaved({...row, state: 'sending'})).toBeNull();
+    expect(journalSiteSaved({...row, lastDurableUploadUtcMs: null})).toBeNull();
+  });
 });
