@@ -3,7 +3,7 @@ import {renderToStaticMarkup} from 'react-dom/server';
 import {describe, expect, it, vi} from 'vitest';
 import type {PluginSetupView} from '../../packages/contracts/src';
 import {ActionResultRegion} from '../../apps/desktop/src/action-result';
-import {PluginSetupCard, PluginSetupCardView} from '../../apps/desktop/src/plugin-setup-card';
+import {DiagnosticsExportRow, PluginSetupCardView} from '../../apps/desktop/src/plugin-setup-card';
 import type {ActionResultText} from '../../apps/desktop/src/plugin-action-result';
 
 // REG-015 (ET-045b): the markup of an action result and its live regions. Only the shadcn containers are substituted;
@@ -16,7 +16,7 @@ vi.mock('@/components/ui/alert', () => ({
   AlertDescription: (props: Props) => React.createElement('div', {'data-slot': 'alert-description', ...props})
 }));
 vi.mock('@/components/ui/card', () => ({Card: (props: Props) => React.createElement('div', strip(['size'])(props)), CardContent: 'div', CardHeader: 'div', CardTitle: 'div'}));
-vi.mock('@/components/ui/badge', () => ({Badge: (props: Props) => React.createElement('span', strip(['variant'])(props))}));
+vi.mock('@/components/ui/badge', () => ({Badge: (props: Props) => React.createElement('span', {...strip(['variant'])(props), 'data-variant': props.variant})}));
 vi.mock('@/components/ui/button', () => ({Button: (props: Props) => React.createElement('button', strip(['size', 'variant'])(props))}));
 vi.mock('@/components/ui/label', () => ({Label: 'label'}));
 vi.mock('@/components/ui/switch', () => ({Switch: (props: Props) => React.createElement('button', {role: 'switch', 'aria-checked': Boolean(props.checked), ...strip(['checked', 'onCheckedChange'])(props)})}));
@@ -59,10 +59,10 @@ describe('the Game plugin card before any action', () => {
     ets2: {excluded: false, discovery: 'found', manualFolder: 'none', unlistedFolders: 0, targets: [{id: 'ets2:steam:0', source: 'steam', ordinal: 0, state: 'blocked',
       reason: 'PERMISSION_DENIED', installed: {version: '0.1.0', sha256Prefix: 'aaaaaaaaaaaa'}, lastFailure: null}]},
     ats: {excluded: false, discovery: 'found', manualFolder: 'none', unlistedFolders: 0, targets: []}}};
-  const html = renderToStaticMarkup(React.createElement(PluginSetupCard, {view, diagnosis: undefined, onView: () => undefined, language: 'en'}));
+  const html = renderToStaticMarkup(React.createElement(PluginSetupCardView, {view, diagnosis: undefined, onView: () => undefined, language: 'en', pending: false, run: () => null, result: null}));
   it('has an empty live region right after every trigger', () => {
     for (const [trigger, slot] of [['plugin-ets2-managed', 'plugin-ets2-managed'], ['plugin-ats-managed', 'plugin-ats-managed'], ['plugin-ets2-choose', 'plugin-ets2-choose'],
-      ['plugin-ats-choose', 'plugin-ats-choose'], ['plugin-retry', 'plugin-retry'], ['plugin-export-diagnostics', 'plugin-export-diagnostics'],
+      ['plugin-ats-choose', 'plugin-ats-choose'], ['plugin-retry', 'plugin-retry'],
       ['plugin-target-ets2-steam-0-show-file', 'plugin-target-ets2-steam-0'], ['plugin-target-ets2-steam-0-open-folder', 'plugin-target-ets2-steam-0']]) {
       expect(html, trigger).toContain(`id="${trigger}" data-testid="${trigger}"`);
       expect(html, slot).toContain(`<div data-testid="${slot}-result-region" class="yu-action-result-region">${politeOpen}</div></div>`);
@@ -70,9 +70,18 @@ describe('the Game plugin card before any action', () => {
     // The switch's region follows its row; a button's region follows the button or its row.
     expect(html).toMatch(/Retry<\/button><div data-testid="plugin-retry-result-region"/);
     expect(html).toMatch(/Choose game folder…<\/button><div data-testid="plugin-ats-choose-result-region"/);
-    expect(html).toMatch(/Export diagnostics…<\/button><div data-testid="plugin-export-diagnostics-result-region"/);
     expect(html).toMatch(/Manage the plugin for this game<\/label><\/div><div data-testid="plugin-ets2-managed-result-region"/);
     expect(html).toMatch(/Open game plugins folder<\/button><\/div><div data-testid="plugin-target-ets2-steam-0-result-region"/);
+  });
+  it('no longer holds the diagnostics export, which moved to Settings > Diagnostics (ET-078)', () => {
+    expect(html).not.toContain('plugin-export-diagnostics');
+    expect(html).not.toContain('Export diagnostics…');
+  });
+  it('names each game with its game badge and shows only the status word in a folder\'s state badge', () => {
+    expect(html).toContain('<span data-variant="ets2">ETS2</span><h4 id="plugin-ets2-title">Euro Truck Simulator 2</h4>');
+    expect(html).toContain('<span data-variant="ats">ATS</span><h4 id="plugin-ats-title">American Truck Simulator</h4>');
+    // The icon is a hidden lucide SVG, never a text glyph, so the badge's text is the status word alone.
+    expect(html).toMatch(/<span data-testid="plugin-target-ets2-steam-0-state" data-variant="error"><svg[^>]*class="lucide lucide-circle-x[^"]*"[^>]*aria-hidden="true"[^>]*>.*?<\/svg>Blocked<\/span>/);
   });
   it('has no result, no card-wide result line and no pending or described control', () => {
     expect(html).not.toContain('role="alert"');
@@ -96,10 +105,43 @@ describe('the Game plugin card before any action', () => {
   });
   it('marks every control pending while a call runs, keeping them focusable', () => {
     const pending = renderToStaticMarkup(React.createElement(PluginSetupCardView, {view, diagnosis: undefined, onView: () => undefined, language: 'en', pending: true, run: () => null, result: null}));
-    expect(pending.match(/aria-disabled="true"/g)).toHaveLength(8);
+    // The two switches, the two folder buttons, Retry and the folder's two buttons; the export is no longer in the card.
+    expect(pending.match(/aria-disabled="true"/g)).toHaveLength(7);
     expect(pending).not.toMatch(/ disabled=""/);
   });
   it('marks the static mode note as a note, not an alert', () => {
     expect(html).toContain('<div data-slot="alert" role="note"><div data-slot="alert-description" data-testid="plugin-mode">Test mode: plugin setup works only inside a test folder.</div></div>');
+  });
+});
+
+// ET-078: "Export diagnostics…" on Settings > Diagnostics, driven by the card's action controller.
+describe('the diagnostics export row', () => {
+  const row = (pending: boolean, result: React.ComponentProps<typeof DiagnosticsExportRow>['result'], language: 'en' | 'ru' = 'en') =>
+    renderToStaticMarkup(React.createElement(DiagnosticsExportRow, {language, pending, result, run: () => null}));
+  it('has its empty live region right after the button and the export note as the row hint', () => {
+    const html = row(false, null);
+    expect(html).toContain('id="plugin-export-diagnostics" data-testid="plugin-export-diagnostics"');
+    expect(html).toMatch(/Export diagnostics…<\/button><div data-testid="plugin-export-diagnostics-result-region"/);
+    expect(html).toContain(`<div data-testid="plugin-export-diagnostics-result-region" class="yu-action-result-region">${politeOpen}</div></div>`);
+    expect(html).toContain('Saves one JSON file with versions, states and recent log codes, without paths or user and computer names. Nothing is uploaded.');
+    expect(html).not.toContain('aria-disabled="');
+    expect(html).not.toContain('aria-describedby="');
+  });
+  it('is pending while any card action runs, keeping the button focusable', () => {
+    const html = row(true, null);
+    expect(html.match(/aria-disabled="true"/g)).toHaveLength(1);
+    expect(html).not.toMatch(/ disabled=""/);
+  });
+  it('shows a stored export failure as an alert after the button, described by it', () => {
+    const html = row(false, {action: {kind: 'export-diagnostics'}, outcome: {kind: 'request-failed'}});
+    expect(html).toContain(`Export diagnostics…</button><div data-testid="plugin-export-diagnostics-result-region" class="yu-action-result-region">${politeOpen}</div>`
+      + '<div data-slot="alert" role="alert" id="plugin-export-diagnostics-result" data-testid="plugin-export-diagnostics-result" data-severity="failed" class="yu-action-result">');
+    expect(html).toMatch(/id="plugin-export-diagnostics" data-testid="plugin-export-diagnostics" aria-describedby="plugin-export-diagnostics-result"/);
+    expect(html.match(/role="alert"/g)).toHaveLength(1);
+  });
+  it('leaves a result of a card action to the card', () => {
+    const html = row(false, {action: {kind: 'retry'}, outcome: {kind: 'request-failed'}});
+    expect(html).not.toContain('data-severity');
+    expect(html).not.toContain('aria-describedby="');
   });
 });

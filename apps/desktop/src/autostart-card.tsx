@@ -1,10 +1,9 @@
 import React, {useState} from 'react';
 import type {AppLanguage, AutostartRegistrationStatus, SettingsView} from '../../../packages/contracts/src';
 import {Switch} from '@/components/ui/switch';
-import {Label} from '@/components/ui/label';
 import {Badge} from '@/components/ui/badge';
 import {t} from './i18n';
-import {InfoHint} from './info-hint';
+import {SettingRow} from './shell/settings-layout';
 import {getAutostartBadgeVariant, getAutostartStatusBadgeText, getSettingsSaveErrorText} from './strings';
 
 export interface AutostartCardProps {
@@ -15,13 +14,15 @@ export interface AutostartCardProps {
   showSaveError?: boolean;
 }
 
-/** ET-057: one row of Settings > General > Interface. The switch's label is the setting's name; the badge is its registration. */
+/**
+ * ET-057: one row of Settings > General > Interface. The switch's label is the setting's name; the badge is its registration.
+ * ET-078: the explanation and the not-installed note are the row's hint.
+ */
 export function AutostartCard({settings, status, onSaved, onRequest, showSaveError}: AutostartCardProps) {
   const [request, setRequest] = useState<'idle' | 'saving' | 'failed'>('idle');
   const language: AppLanguage = settings?.language ?? 'en';
   const locked = !settings?.writable || request === 'saving';
   const notInstalled = status === 'not-installed';
-  const label = t('s.autostart', undefined, language);
 
   const toggle = (enabled: boolean) => {
     onRequest?.();
@@ -37,10 +38,11 @@ export function AutostartCard({settings, status, onSaved, onRequest, showSaveErr
 
   return (
     <div data-testid="autostart-card">
-      <div className="yu-setting-row">
-        <span><Label htmlFor="autostart-toggle" className="cursor-pointer">{label}</Label>
-          <InfoHint label={t('ui.moreAbout', {v: label}, language)}>{t('s.autostartD', undefined, language)}</InfoHint></span>
-        <span className="flex items-center gap-3">
+      <SettingRow label={t('s.autostart', undefined, language)} labelFor="autostart-toggle" hint={<>
+        {t('s.autostartD', undefined, language)}
+        {notInstalled ? <span className="block" data-testid="autostart-not-installed-note">{t('s.autostart.notInstalledNote', undefined, language)}</span> : null}
+      </>}>
+        <span className="yu-setting-controls">
           <Badge variant={getAutostartBadgeVariant(status)} data-testid="autostart-status">
             {getAutostartStatusBadgeText(status, language)}
           </Badge>
@@ -52,18 +54,13 @@ export function AutostartCard({settings, status, onSaved, onRequest, showSaveErr
             onCheckedChange={toggle}
           />
         </span>
-      </div>
-      {notInstalled ? (
-        <p className="text-xs text-muted-foreground" data-testid="autostart-not-installed-note">
-          {t('s.autostart.notInstalledNote', undefined, language)}
-        </p>
-      ) : null}
+      </SettingRow>
       {showSaveError && settings?.saveError ? (
-        <p role="status" className="text-sm text-destructive" data-testid="autostart-save-error">
+        <p role="status" className="yu-setting-msg text-sm text-destructive" data-testid="autostart-save-error">
           {getSettingsSaveErrorText(settings.saveError, language)}
         </p>
       ) : request === 'failed' ? (
-        <p role="status" className="text-sm text-destructive" data-testid="autostart-save-error">
+        <p role="status" className="yu-setting-msg text-sm text-destructive" data-testid="autostart-save-error">
           {t('s.autostart.saveFailed', undefined, language)}
         </p>
       ) : null}

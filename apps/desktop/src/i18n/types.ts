@@ -557,7 +557,7 @@ export type I18nKey =
   | 's.lang' | 's.langD' | 's.autostart' | 's.autostartD' | 's.autostart.active' | 's.autostart.disabled' | 's.autostart.notInstalled' | 's.autostart.notInstalledNote' | 's.autostart.failed' | 's.autostart.saveFailed'
   | 's.close' | 's.closeD' | 's.closeV'
   | 's.u.metric' | 's.u.us' | 's.u.d'
-  | 's.gear' | 's.gear.d' | 's.gear.automatic' | 's.gear.manual' | 's.gear.crawler.ets2' | 's.gear.crawler.ats' | 's.gear.saveFailed'
+  | 's.gear' | 's.gear.d' | 's.gear.saveFailed'
   | 's.gear.name.automatic' | 's.gear.name.manual' | 's.gear.name.crawler'
   | 's.gear.hint.automatic' | 's.gear.hint.manual.ets2' | 's.gear.hint.manual.ats' | 's.gear.hint.manualFallback'
   | 's.gear.hint.crawler.ets2' | 's.gear.hint.crawler.ats' | 's.gear.hint.reverse'
@@ -603,6 +603,8 @@ export type I18nKey =
   | 'ui.moreAbout' | 's.interface' | 'hm.howChecked' | 'hm.now' | 'hm.required.parkingShort' | 'j.incomeNote' | 'tr.raw'
   | 'hm.currentSettings' | 'hm.conditionsTitle' | 'hm.noticePersisted' | 'hm.noticeParking' | 'hm.noticeSnapshots'
   | 'shell.breadcrumb' | 'shell.status' | 'live.instruments' | 'live.sub' | 'live.sub.connected' | 'live.sub.paused' | 'live.sub.stale' | 'live.sub.waiting' | 'live.sub.partial' | 'live.partialTitle'
-  | 'live.noJobHint' | 'live.staleReason';
+  | 'live.noJobHint' | 'live.staleReason'
+  | 's.nav' | 's.general.sub' | 's.plugin.sub' | 's.data.sub' | 's.units.note' | 's.gear.example' | 'np.enabledD' | 's.data.sourceD' | 's.data.state' | 's.data.bundle'
+  | 's.about.updates' | 's.about.font' | 's.about.license';
 
 export type TranslationDictionary = Readonly<Record<I18nKey, string>>;
