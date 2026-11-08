@@ -211,7 +211,9 @@ The wrapper copies these values to `wrapper-result.json` under `resourceFacts` a
 
 The sidebar recording dot pulses endlessly while the dashboard window has focus ([application lifecycle](app-lifecycle.md#recording-on-the-dashboard-and-in-the-tray-et-015c-pr-4)). The window has focus in these runs, and every animated frame costs CPU under the Job's 25% cap. On PR #203 (run 40578063106) the pulse doubled the Hard Mode hint loops on a hosted runner (18–19 s instead of 8–9 s) and timed out the packaged Hard Mode journey at 60 s. Locally the same journey took 28.2 s with the pulse and 22.4 s without it.
 
-Every runtime smoke scenario except `ui` therefore stops that one animation. On every document of every launch (Playwright's `addInitScript`, plus the windows already open), the driver adopts a constructed stylesheet that sets `animation: none` on `.yu-dot` and its ring. CSSOM stylesheets are not restricted by the renderer's CSP. The driver then waits up to 5 s until the dashboard's dot and ring compute `animation-name: none`, fails with `RECORDING_DOT_NOT_STILL` otherwise, and records the result as `recordingDotStill` in `result.json`. Nothing else in the UI changes.
+The trace screencast also captures every animated frame. With the pulse, the hosted Journal UI shard composited about 23 frames per second for its whole journey and its trace stop took 13 s, and slow hosted runs ended at the 120 s Job deadline (`DRIVER_RESULT_MISSING`, Job exit 124).
+
+Every runtime smoke scenario, the `ui` shards included, therefore stops that one animation. On every document of every launch (Playwright's `addInitScript`, plus the windows already open), the driver adopts a constructed stylesheet that sets `animation: none` on `.yu-dot` and its ring. CSSOM stylesheets are not restricted by the renderer's CSP. The driver then waits up to 5 s until the dashboard's dot and ring compute `animation-name: none`, fails with `RECORDING_DOT_NOT_STILL` otherwise, and records the result as `recordingDotStill` in `result.json`. Nothing else in the UI changes.
 
 Two broader approaches were tried and rejected on October 27, 2026:
 
@@ -222,8 +224,8 @@ While testing these variants locally, the Hard Mode journey's parameter-tooltip 
 
 What this does and does not cover:
 
-- The `ui` shards run with normal motion. They are the only runtime checks of animation: the indicator's `data-motion` and focus gating, and the Cluster speed arc's transition.
-- The other scenarios check their journeys without the dot's animation cost. Their time and resource evidence is therefore no measure of the pulse.
+- The `ui` shards still check the indicator's `data-motion` and `data-window-focused` attributes, which the stylesheet does not change, and the overlay's Cluster speed arc transition, which it does not reach. No runtime check observes the running pulse itself.
+- Every scenario checks its journey without the dot's animation cost. Its time and resource evidence is therefore no measure of the pulse.
 - The session-end audit (`session-end-smoke.mjs`) launches the application itself without the switch. It does not interact with the dashboard.
 
 ## Recorded acceptance and final-head gate
