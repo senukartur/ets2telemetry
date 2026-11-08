@@ -874,18 +874,19 @@ function Test-UiReceipt {
         'live' { $flags += @('numericGauge','unavailableVsZero','paused','staleDashes','rawNames','noTripPlaceholder','jobViewport','jobRowsAfterV1Gap','hmNamesReadable','fullWidthTelemetry','tankUnknownVsZero','mandatoryBreak'); $screens = @('current','zero','missing','paused','stale') }
         'journal' { $flags += @('syntheticBanner','pageReturn','chartBounded','rawTabs','noPlannedSearch','tripRegions','tableReadable','signedChart'); $screens = @('list','mode-trip','weak-mode-trip','trip','intervals','timeline','samples') }
         'settings' { $flags += @('allPanels','allSections','committedSave','sourceSelector','uninstallRefusal','refusedSave','readOnly','controlsKeyboard','lastEnabled','fontLicense','overlayVisibility','visibilityFailedSave','actionResult','overlayOpacity','opacityFailedSave','opacityReadOnly','overlayUnified','overlayEditing','overlayScroll','scaleControl','gearDisplay','gearDisplayFailedSave'); $screens = @('general','overlay','overlay-sections','plugin','about','data','save-error') }
-        'overlay' { $flags += @('fourLayouts','transparent','contained','independentFont','missing','paused','staleDashes','heroSubsets','formatterProfiles','stableNumbers','opacityKeyboardFocus','opacityGestures','backgroundOpacityOverlay','clusterRpmContained','scaleRange','clusterSpeedArc','gearDisplayManual','gearboxLabels'); $screens = @('strip','card','cluster','hud') }
+        'overlay' { $flags += @('fourLayouts','transparent','contained','independentFont','missing','paused','staleDashes','heroSubsets','formatterProfiles','stableNumbers','opacityKeyboardFocus','opacityGestures','backgroundOpacityOverlay','clusterRpmContained','scaleRange','clusterSpeedArc','gearDisplayManual','gearboxLabels','overlayExamplePreview'); $screens = @('strip','card','cluster','hud') }
     }
     foreach ($flag in $flags) { if ($ui.flags.$flag -isnot [bool] -or !$ui.flags.$flag) { return $false } }
     if ($ExpectedUiCase -ceq 'shell' -and !(Test-UploadUiReceipt -Value $Driver.uploadUi -Directory $Directory -Phases $Driver.phases)) { return $false }
     if ($ExpectedUiCase -ceq 'journal' -and ($ui.flags.syncHidden -isnot [bool] -or !$ui.flags.syncHidden)) { return $false }
-    # ET-045e: the overlay shard adds six English 1280x800 scale reference screenshots to its 64 layout screenshots.
-    if (@($ui.screenshots).Count -ne $(if ($ExpectedUiCase -ceq 'overlay') { 70 } elseif ($ExpectedUiCase -ceq 'settings') { 30 } else { 4 * $screens.Count })) { return $false }
+    # Overlay: 64 layout screenshots, six English scale references, and five Settings previews per language at 1280x800.
+    if (@($ui.screenshots).Count -ne $(if ($ExpectedUiCase -ceq 'overlay') { 80 } elseif ($ExpectedUiCase -ceq 'settings') { 30 } else { 4 * $screens.Count })) { return $false }
     foreach ($language in @('en','ru')) {
         foreach ($size in @(@{width=1280;height=800},@{width=1100;height=720})) {
             $pairScreens = $screens
             if ($ExpectedUiCase -ceq 'overlay') {
                 $pairScreens = @($screens | ForEach-Object { $_; "$_-missing"; "$_-paused"; "$_-stale" })
+                if ($size.width -eq 1280) { $pairScreens += @('settings-preview-strip','settings-preview-card','settings-preview-cluster','settings-preview-hud','settings-preview-narrow') }
             }
             foreach ($screen in $pairScreens) {
                 $rows = @($ui.screenshots | Where-Object { $_.language -ceq $language -and $_.width -eq $size.width -and $_.height -eq $size.height -and $_.screen -ceq $screen })
@@ -905,11 +906,40 @@ function Test-UiReceipt {
                 $imageWidth = [double]$header[16] * 16777216 + [double]$header[17] * 65536 + [double]$header[18] * 256 + $header[19]
                 $imageHeight = [double]$header[20] * 16777216 + [double]$header[21] * 65536 + [double]$header[22] * 256 + $header[23]
                 if ($imageWidth -ne $row.imageWidth -or $imageHeight -ne $row.imageHeight) { return $false }
-                if ($ExpectedUiCase -cne 'overlay' -and ($imageWidth -ne $size.width -or $imageHeight -ne $size.height)) { return $false }
+                if (($ExpectedUiCase -cne 'overlay' -or $screen.StartsWith('settings-preview-')) -and ($imageWidth -ne $size.width -or $imageHeight -ne $size.height)) { return $false }
             }
         }
     }
     if ($ExpectedUiCase -ceq 'overlay') {
+        $previewNames = @('strip','card','cluster','hud','narrow-strip','large-strip','large-card')
+        $previewSections = 'speed,gear,rpm,cruise-control,fuel,range,sdk-consumption,cargo,origin,destination,distance-driven,distance-remaining,deadline,expected-income,game-time,mandatory-break'
+        if (@($ui.overlayPreview).Count -ne 14) { return $false }
+        foreach ($language in @('en','ru')) {
+            foreach ($name in $previewNames) {
+                $observations = @($ui.overlayPreview | Where-Object { $_.language -ceq $language -and $_.name -ceq $name })
+                if ($observations.Count -ne 1) { return $false }
+                $observation = $observations[0]
+                $layout = if ($name -ceq 'narrow-strip' -or $name -ceq 'large-strip') { 'strip' } elseif ($name -ceq 'large-card') { 'card' } else { $name }
+                $scale = if ($name.StartsWith('large-')) { '3' } else { '1' }
+                if ($observation.layout -cne $layout -or $observation.scale -isnot [string] -or $observation.scale -cne $scale -or
+                    !(Test-ReceiptInteger -Value $observation.viewportWidth -Minimum 1280 -Maximum 1280) -or
+                    !(Test-ReceiptInteger -Value $observation.viewportHeight -Minimum 800 -Maximum 800) -or
+                    $observation.fitsScene -isnot [bool] -or !$observation.fitsScene -or @($observation.outside).Count -ne 0 -or
+                    (@($observation.sections) -join ',') -cne $previewSections) { return $false }
+                foreach ($dimension in @('width','height')) {
+                    $number = $observation.$dimension
+                    if (($number -isnot [int] -and $number -isnot [long] -and $number -isnot [double] -and $number -isnot [decimal]) -or
+                        [double]::IsNaN([double]$number) -or [double]::IsInfinity([double]$number) -or $number -le 0 -or $number -gt 4096) { return $false }
+                }
+                if ($observation.width -gt $observation.viewportWidth) { return $false }
+                if ($layout -ceq 'card') {
+                    $rows = $observation.cardRows
+                    if ($null -eq $rows -or !(Test-ReceiptInteger -Value $rows.count -Minimum 14 -Maximum 14) -or
+                        (@($rows.display) -join ',') -cne 'inline' -or (@($rows.verticalAlign) -join ',') -cne '-2px' -or
+                        $rows.sameLine -isnot [bool] -or !$rows.sameLine -or $rows.matchesActual -isnot [bool] -or !$rows.matchesActual) { return $false }
+                }
+            }
+        }
         foreach ($screen in @('scale-strip','scale-card','scale-cluster','scale-hud','scale-strip-old70','scale-strip-old100')) {
             $rows = @($ui.screenshots | Where-Object { $_.screen -ceq $screen })
             if ($rows.Count -ne 1) { return $false }

@@ -47,7 +47,14 @@ describe('renderer stylesheet isolation', () => {
       const dashboardStyles = stylesFor('src/dashboard-renderer.tsx');
       expect(overlayStyles).toHaveLength(1);
       expect(dashboardStyles.length).toBeGreaterThan(0);
-      expect(overlayStyles.some(style => dashboardStyles.includes(style))).toBe(false);
+      // The Settings preview shares overlay-safe CSS; shadcn/base styles stay exclusive to the dashboard.
+      const sharedStyles = overlayStyles.filter(style => dashboardStyles.includes(style));
+      expect(sharedStyles).toEqual(overlayStyles);
+      const dashboardOnlyStyles = dashboardStyles.filter(style => !overlayStyles.includes(style));
+      expect(dashboardOnlyStyles.length).toBeGreaterThan(0);
+      const dashboardOnlyCss = (await Promise.all(dashboardOnlyStyles.map(style => readFile(path.join(outputDirectory, style), 'utf8')))).join('\n');
+      expect(dashboardOnlyCss).toContain('--background');
+      expect(dashboardOnlyCss).toContain('.bg-card');
       const overlayCss = await readFile(path.join(outputDirectory, overlayStyles[0]), 'utf8');
       expect(overlayCss).toMatch(/\.overlay-body\s*\{[^}]*background:\s*(?:transparent|0 0)[;}]/);
       expect(overlayCss).toMatch(/html:has\(\.overlay-body\)\s*\{[^}]*background:\s*(?:transparent|0 0)[;}]/);
@@ -55,6 +62,7 @@ describe('renderer stylesheet isolation', () => {
       expect(overlayCss).toMatch(/Huninn/);
       expect(overlayCss).toMatch(/url\([^)]*\.woff2/);
       expect(overlayCss).not.toMatch(/--background|--tw-|--radix-/);
+      expect(overlayCss).not.toMatch(/(?:^|\})\s*(?:html|body)\s*\{/);
       // ET-012a: the transparent overlay never blurs what is behind it (no backdrop-filter, decision L6/brief).
       expect(overlayCss).not.toMatch(/backdrop-filter/);
       const overlayModules = staticClosure('src/overlay-renderer.tsx').flatMap(key => chunkModules.get(manifest[key].file) ?? []).join('\n').replaceAll('\\', '/');
@@ -75,7 +83,8 @@ describe('renderer stylesheet isolation', () => {
       expect(dashboardCss).toContain('.bg-card');
       // Every face must be a real offline asset in both renderer closures, including Russian text.
       for (const css of [overlayCss, dashboardCss]) {
-        const faces = [...css.matchAll(/@font-face\s*\{([^}]+)\}/g)].map(match => match[1]);
+        // Dashboard base and shared overlay CSS may repeat the same face; there are still exactly three definitions.
+        const faces = [...new Set([...css.matchAll(/@font-face\s*\{([^}]+)\}/g)].map(match => match[1]))];
         expect(faces).toHaveLength(3);
         expect(css).not.toMatch(/url\(["']?(?:https?:|data:)/);
         for (const subset of ['latin', 'latin-ext', 'cyrillic']) {

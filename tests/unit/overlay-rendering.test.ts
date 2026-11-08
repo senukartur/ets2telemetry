@@ -3,6 +3,7 @@ import React from 'react';
 import {renderToStaticMarkup} from 'react-dom/server';
 import {expect, it, vi} from 'vitest';
 import {OverlayContent} from '../../apps/desktop/src/overlay-renderer';
+import {OverlayContent as PureOverlayContent} from '../../apps/desktop/src/overlay-content';
 import {overlayView} from '../../apps/desktop/src/overlay-view';
 import {LiveDashboard} from '../../apps/desktop/src/live-dashboard';
 import {smokeV0} from '../shared/live-v1-fixtures';
@@ -14,6 +15,7 @@ vi.mock('@/components/ui/card', () => ({Card: 'div', CardContent: 'div', CardHea
 vi.mock('@/components/ui/badge', () => ({Badge: 'span'}));
 const base: OverlayPresentation = {source: 'ETS2', origin: 'synthetic', status: 'connected', speed: '90', speedUnit: 'km/h', fuel: '73.0', fuelUnit: 'L',
   freshness: 'current', layout: 'strip', paused: false, editing: false, sections: [{id: 'speed', state: 'value', text: '90 km/h'}, {id: 'fuel', state: 'value', text: '73.0 L'}]};
+it('retains the runtime export as the shared display-only component', () => {expect(OverlayContent).toBe(PureOverlayContent);});
 it.each(['strip', 'card', 'cluster', 'hud'] as const)('renders sparse/populated %s inside one display anchor at top/centre/bottom', layout => {
   for (const sections of [[], base.sections]) for (const y of [0, 0.5, 1]) {
     const html = renderToStaticMarkup(React.createElement(OverlayContent, {view: overlayView({...base, layout, sections, contentAnchorY: y})}));
