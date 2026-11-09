@@ -1,6 +1,6 @@
 import React, {Fragment} from 'react';
 import {HardModeCue, HardModeIcon, SectionIcon, TagIcon} from './overlay-icons';
-import {STRIP_FIXED_WIDTH_SECTIONS, STRIP_HARD_MODE_MAX_WIDTH_CSS, STRIP_ITEM_MAX_WIDTH_CSS, STRIP_TAG_MAX_WIDTH_CSS} from './overlay-strip';
+import {STRIP_HARD_MODE_MAX_WIDTH_CSS, STRIP_ITEM_MAX_WIDTH_CSS, STRIP_TAG_MAX_WIDTH_CSS} from './overlay-strip';
 import {overlayCardParts, type OverlayHardModeItem, type OverlayItem, type OverlayTag, type OverlayView} from './overlay-view';
 
 /** Ring geometry of the cluster's RPM gauge in SVG user units. */
@@ -59,7 +59,7 @@ function Strip({view}: {view: OverlayView}) {
     {view.groups.map((group, index) => <Fragment key={group.id}>
       {group.items.map((item, position) => <span key={item.id} className={index > 0 && position === 0 ? 'overlay-item overlay-group-start' : 'overlay-item'}
         data-testid={`overlay-section-${item.id}`} aria-label={item.short} {...urgencyMarks(item, item.short)}
-        style={{maxWidth: STRIP_ITEM_MAX_WIDTH_CSS[item.id], ...(STRIP_FIXED_WIDTH_SECTIONS.has(item.id) ? {minWidth: STRIP_ITEM_MAX_WIDTH_CSS[item.id]} : {})}}>
+        style={{maxWidth: STRIP_ITEM_MAX_WIDTH_CSS[item.id]}}>
         <SectionIcon id={item.id} /><Value item={item} />
       </span>)}
     </Fragment>)}

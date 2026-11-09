@@ -3,7 +3,7 @@ import {expect, it} from 'vitest';
 import type {OverlaySectionId, OverlaySections} from '../../packages/contracts/src';
 import {DEFAULT_OVERLAY_SECTIONS, OVERLAY_PRESETS, OVERLAY_SECTION_IDS} from '../../apps/desktop/src/overlay-sections';
 import {
-  STRIP_BORDER_CSS, STRIP_COLUMN_GAP_CSS, STRIP_FIXED_WIDTH_SECTIONS, STRIP_HARD_MODE_MAX_WIDTH_CSS, STRIP_ITEM_MAX_WIDTH_CSS, STRIP_PADDING_X_CSS, STRIP_ROW_HEIGHT_CSS,
+  STRIP_BORDER_CSS, STRIP_COLUMN_GAP_CSS, STRIP_HARD_MODE_MAX_WIDTH_CSS, STRIP_ITEM_MAX_WIDTH_CSS, STRIP_PADDING_X_CSS, STRIP_ROW_HEIGHT_CSS,
   STRIP_TAG_MAX_WIDTH_CSS, STRIP_TAG_SLOTS, stripCssHeight, stripRowCount
 } from '../../apps/desktop/src/overlay-strip';
 
@@ -27,8 +27,6 @@ it('fixes the hand-written maximum widths of every strip item', () => {
   expect({slots: STRIP_TAG_SLOTS, tag: STRIP_TAG_MAX_WIDTH_CSS, row: STRIP_ROW_HEIGHT_CSS, border: STRIP_BORDER_CSS, padding: STRIP_PADDING_X_CSS,
     gap: STRIP_COLUMN_GAP_CSS}).toEqual({slots: 2, tag: 96, row: 38, border: 1, padding: 12, gap: 14});
   expect(STRIP_HARD_MODE_MAX_WIDTH_CSS).toBe(100);
-  // ET-071: only cruise control is always exactly its cap, so a value, OFF and the dash take the same width.
-  expect([...STRIP_FIXED_WIDTH_SECTIONS]).toEqual(['cruise-control']);
 });
 
 it.each([

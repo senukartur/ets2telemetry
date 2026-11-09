@@ -224,6 +224,7 @@ export async function runHardModeSmoke({application, dashboard, overlay, source,
     await renderedFixture('HARD_MODE_INLINE_' + lang, {details: true});
     // ET-057: the caveats are the headline's hint. Open it by hover and by keyboard and read the tooltip a driver sees.
     const caveatButton = dashboard.locator('[data-testid="hard-mode-card"] h2 .yu-info-hint'), caveatTip = dashboard.getByTestId('hard-mode-caveats-tooltip');
+    assert.equal(await caveatButton.evaluate(node => {const b = node.getBoundingClientRect(); return Math.round(b.width) === 22 && Math.round(b.height) === 22;}), true, `Hard Mode caveat hint is not a 22x22 circle (${lang})`);
     const hoverText = await tooltipPhase('hover', 'caveats', lang, async () => {
       await caveatButton.hover(); await caveatTip.waitFor({state: 'visible'});
       const text = await caveatTip.innerText();
