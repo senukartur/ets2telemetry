@@ -643,7 +643,14 @@
   }
 }
 
-@custom-variant dark (@media (prefers-color-scheme: dark));
+/* The resolved theme drives the variant. `:is(:root *)` keeps the specificity of the earlier `.dark` class selector. */
+@custom-variant dark {
+  @media (prefers-color-scheme: dark) {
+    &:is(:root *) {
+      @slot;
+    }
+  }
+}
 
 @theme inline {
     --font-heading: var(--font-sans);

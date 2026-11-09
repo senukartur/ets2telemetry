@@ -43,6 +43,9 @@ const TINTED = [['--yu-ok-fg', '--yu-ok-bg'], ['--yu-warn-fg', '--yu-warn-bg'], 
 // The surfaces a status tint is composited over: the page, chrome and card (never over a raised or tinted surface).
 const TINT_SURFACES = ['--yu-bg-app', '--yu-bg-chrome', '--yu-bg-card', '--yu-bg-inset'] as const;
 
+// #E2E8F0 on the #EDF1F7 chrome measures about 1.09:1, the near-identical #EEF2F7 about 1.01:1.
+const HOVER_MIN_CONTRAST = 1.05;
+
 describe('the light theme palette', () => {
   it.each(TEXT.flatMap(text => SURFACES.map(surface => [text, surface] as const)))('keeps %s readable on %s', (text, surface) => {
     expect(contrast(parseColor(token(text)), parseColor(token(surface)))).toBeGreaterThanOrEqual(4.5);
@@ -57,6 +60,10 @@ describe('the light theme palette', () => {
     const colours = [...dark].filter(([, value]) => /#|rgba?\(|linear-gradient|^none$/.test(value)).map(([name]) => name);
     expect(colours.length).toBeGreaterThan(50);
     expect(colours.filter(name => !light.has(name))).toEqual([]);
+  });
+  it('keeps the navigation and segment hover visible on the chrome surface', () => {
+    expect(contrast(parseColor(token('--yu-hover-bg')), parseColor(token('--yu-bg-chrome')))).toBeGreaterThanOrEqual(HOVER_MIN_CONTRAST);
+    expect(contrast(parseColor(token('--yu-neutral-bg')), parseColor(token('--yu-bg-chrome')))).toBeLessThan(HOVER_MIN_CONTRAST);
   });
   it('overrides --chart-3, a raw colour of the shadcn mapping', () => {
     expect(light.get('--chart-3')).toBe('#0D9488');
@@ -73,15 +80,25 @@ describe('the shared files and the dark scope', () => {
     expect(WINDOW_CHROME.light).toMatchObject({background: light.get('--yu-bg-app'), titleBar: light.get('--yu-bg-chrome')});
   });
   it('gives the new tokens the dark values their call sites resolved before', () => {
-    expect(Object.fromEntries(['--yu-accent-text', '--yu-ok-graphic', '--yu-warn-graphic', '--yu-update-fg', '--yu-switch-thumb', '--yu-segment-selected-bg', '--yu-segment-selected-shadow', '--yu-menu-shadow']
+    expect(Object.fromEntries(['--yu-accent-text', '--yu-ok-graphic', '--yu-warn-graphic', '--yu-update-fg', '--yu-switch-thumb', '--yu-segment-selected-bg', '--yu-segment-selected-shadow', '--yu-menu-shadow', '--yu-hover-bg']
       .map(name => [name, dark.get(name)]))).toEqual({'--yu-accent-text': '#60A5FA', '--yu-ok-graphic': '#34D399', '--yu-warn-graphic': '#FBBF24', '--yu-update-fg': '#93C5FD',
-      '--yu-switch-thumb': '#E2E8F0', '--yu-segment-selected-bg': '#1E293B', '--yu-segment-selected-shadow': 'none', '--yu-menu-shadow': '0 12px 32px #0006'});
+      '--yu-switch-thumb': '#E2E8F0', '--yu-segment-selected-bg': '#1E293B', '--yu-segment-selected-shadow': 'none', '--yu-menu-shadow': '0 12px 32px #0006', '--yu-hover-bg': '#151D2C'});
   });
   it('scopes the dark palette and colour scheme to .yu-theme-dark and lets :root follow the resolved theme', () => {
     expect(appTokens).toContain(':root { color-scheme: light dark; }');
     expect(appTokens).toContain('.yu-theme-dark { color-scheme: dark; }');
     expect(appTokens).toMatch(/:root, \.yu-theme-dark \{/);
     expect(appTokens).not.toMatch(/^\s*color-scheme: dark;/m);
+  });
+  it('re-declares the shadcn mapping in the dark scope, with the dark --chart-3, and overrides it in light on :root only', () => {
+    expect(css).toMatch(/:root, \.yu-theme-dark \{\s*--background: var\(--yu-bg-app\);[^}]*--chart-3: #2DD4BF;/);
+    expect(lightBlock).toMatch(/^@media \(prefers-color-scheme: light\) \{\s*:root \{/);
+    expect(lightBlock).not.toContain('.yu-theme-dark');
+  });
+  it('uses the hover token on the navigation rows and both segment controls', () => {
+    for (const selector of ['.yu-nav-item:hover', '.yu-settings-nav button:hover', '.yu-journal-toolbar .yu-segmented button[aria-pressed="false"]:hover', '.yu-segment-option:not(:has([data-state="checked"])):not(:has(:disabled)):hover']) {
+      expect(shell).toMatch(new RegExp(`${selector.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')} \\{ ?background: ?var\\(--yu-hover-bg\\)`));
+    }
   });
   it('keeps the shell free of the literal colours the theme replaced', () => {
     expect(shell).not.toMatch(/color: #93C5FD|box-shadow: 0 12px 32px #0006/);

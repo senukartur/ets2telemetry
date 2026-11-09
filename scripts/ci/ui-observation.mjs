@@ -680,6 +680,8 @@ async function observeThemeSwitch({application, dashboard, dashboardId, record})
       const root = globalThis.getComputedStyle(globalThis.document.documentElement), scene = globalThis.document.querySelector('[data-testid="overlay-preview-scene"]');
       return {prefersDark: globalThis.matchMedia('(prefers-color-scheme: dark)').matches, pageBackground: root.getPropertyValue('--yu-bg-app').trim().toUpperCase(),
         logo: globalThis.document.querySelector('.yu-lockup img').currentSrc, sceneChrome: scene ? globalThis.getComputedStyle(scene).getPropertyValue('--yu-bg-chrome').trim().toUpperCase() : null,
+        sceneBackground: scene ? globalThis.getComputedStyle(scene).getPropertyValue('--background').trim().toUpperCase() : null, sceneChart: scene ? globalThis.getComputedStyle(scene).getPropertyValue('--chart-3').trim().toUpperCase() : null,
+        rootChart: root.getPropertyValue('--chart-3').trim().toUpperCase(),
         sentinel: globalThis.__et082NoReload === true};
     });
     return {...main, ...page};
@@ -700,6 +702,9 @@ async function observeThemeSwitch({application, dashboard, dashboardId, record})
     assert.equal(light.background, '#F5F7FB', 'UI_THEME_LIGHT_WINDOW');
     assert.match(light.logo, /logo-dark/, 'UI_THEME_LIGHT_LOGO');
     assert.equal(light.sceneChrome, '#0A101D', 'UI_THEME_LIGHT_PREVIEW_STAYS_DARK');
+    assert.equal(light.sceneBackground, '#0E1525', 'UI_THEME_LIGHT_PREVIEW_STAYS_DARK');
+    assert.equal(light.sceneChart, '#2DD4BF', 'UI_THEME_LIGHT_PREVIEW_STAYS_DARK');
+    assert.equal(light.rootChart, '#0D9488', 'UI_THEME_LIGHT_CHART');
     const dark = await choose('dark', true);
     assert.equal(dark.themeSource, 'dark', 'UI_THEME_DARK_SOURCE');
     assert.equal(dark.prefersDark, true, 'UI_THEME_DARK_MEDIA');
@@ -707,6 +712,9 @@ async function observeThemeSwitch({application, dashboard, dashboardId, record})
     assert.equal(dark.background, '#0E1525', 'UI_THEME_DARK_WINDOW');
     assert.doesNotMatch(dark.logo, /logo-dark/, 'UI_THEME_DARK_LOGO');
     assert.equal(dark.sceneChrome, '#0A101D', 'UI_THEME_DARK_PREVIEW');
+    assert.equal(dark.sceneBackground, '#0E1525', 'UI_THEME_DARK_PREVIEW');
+    assert.equal(dark.sceneChart, '#2DD4BF', 'UI_THEME_DARK_PREVIEW');
+    assert.equal(dark.rootChart, '#2DD4BF', 'UI_THEME_DARK_CHART');
     const osDark = await application.evaluate(({nativeTheme}) => {nativeTheme.themeSource = 'system'; const resolved = nativeTheme.shouldUseDarkColors; nativeTheme.themeSource = 'dark'; return resolved;});
     const system = await choose('system', osDark);
     assert.equal(system.themeSource, 'system', 'UI_THEME_SYSTEM_SOURCE');

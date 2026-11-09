@@ -36,7 +36,7 @@ h1[tabindex="-1"]:focus { outline: none; }
 .yu-nav-item svg { width: 16px; height: 16px; flex: none; color: var(--yu-text-subtle); }
 /* A long label wraps to a second line; it is never cut off or ellipsized. */
 .yu-nav-label { flex: 1; min-width: 0; line-height: 1.25; white-space: normal; overflow-wrap: anywhere; }
-.yu-nav-item:hover { background: var(--yu-neutral-bg); }
+.yu-nav-item:hover { background: var(--yu-hover-bg); }
 .yu-nav-item[aria-current="page"] { color: var(--yu-text-strong); background: var(--yu-nav-active-bg); font-weight: 500; }
 .yu-nav-item[aria-current="page"] svg { color: var(--yu-accent-light); }
 .yu-sidebar-footer { margin-top: auto; display: flex; flex-direction: column; gap: 4px; }
@@ -116,7 +116,7 @@ h1[tabindex="-1"]:focus { outline: none; }
 .yu-journal-toolbar { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; min-width: 0; }
 .yu-journal-toolbar .yu-segmented button { min-height: 26px; height: 26px; padding: 0 10px; border: 0; border-radius: 4px; background: transparent; color: var(--yu-text-secondary); font-size: 12px; }
 .yu-journal-toolbar .yu-segmented button[aria-pressed="true"] { background: var(--yu-segment-selected-bg); box-shadow: var(--yu-segment-selected-shadow); color: var(--yu-text-strong); font-weight: 500; }
-.yu-journal-toolbar .yu-segmented button[aria-pressed="false"]:hover { background: var(--yu-neutral-bg); }
+.yu-journal-toolbar .yu-segmented button[aria-pressed="false"]:hover { background: var(--yu-hover-bg); }
 .yu-journal-note { flex: 1 1 160px; min-width: 0; font-size: 12px; color: var(--yu-text-muted); text-align: right; }
 .yu-journal-card { min-width: 0; border: 1px solid var(--yu-border); border-radius: var(--yu-radius-card); background: var(--yu-bg-card); }
 .yu-journal-card > [role="status"], .yu-journal-card > [data-slot="alert"], .yu-journal-empty { margin: 0; padding: 12px; }
@@ -284,7 +284,7 @@ h1[tabindex="-1"]:focus { outline: none; }
 .yu-segmented {display:inline-flex;flex-wrap:wrap;gap:2px;max-width:100%;padding:2px;background:var(--yu-bg-chrome);border:1px solid var(--yu-border);border-radius:var(--yu-radius-control)}
 .yu-segment-option {position:relative;min-width:0;min-height:26px;border-radius:4px;text-align:center;color:var(--yu-text-secondary)}
 .yu-segment-option:has([data-state="checked"]) {background:var(--yu-segment-selected-bg);box-shadow:var(--yu-segment-selected-shadow);color:var(--yu-text-strong);font-weight:500}
-.yu-segment-option:not(:has([data-state="checked"])):not(:has(:disabled)):hover {background:var(--yu-neutral-bg)}
+.yu-segment-option:not(:has([data-state="checked"])):not(:has(:disabled)):hover {background:var(--yu-hover-bg)}
 .yu-segment-option:has(:focus-visible) {outline:2px solid var(--yu-accent-light);outline-offset:2px}
 .yu-segment-option:has(:disabled) {opacity:.5}
 .yu-segment-option>[role="radio"] {position:absolute;inset:0;width:100%;height:100%;min-height:26px;opacity:0;border:0}
@@ -571,7 +571,7 @@ button[aria-disabled="true"], [role="switch"][aria-disabled="true"] { cursor: no
 .yu-settings { display: grid; grid-template-columns: 170px minmax(0,1fr); gap: 20px; align-items: start; max-width: 1100px; }
 .yu-settings-nav { display: flex; flex-direction: column; gap: 1px; }
 .yu-settings-nav button { display: flex; align-items: center; min-height: 32px; padding: 0 10px; border: 0; border-radius: var(--yu-radius-control); background: transparent; color: var(--yu-text-secondary); font-size: 13px; line-height: 1.25; text-align: left; }
-.yu-settings-nav button:hover { background: var(--yu-neutral-bg); }
+.yu-settings-nav button:hover { background: var(--yu-hover-bg); }
 .yu-settings-nav button[aria-current="page"] { background: var(--yu-nav-active-bg); color: var(--yu-text-strong); font-weight: 500; }
 .yu-settings-panels, .yu-settings-panel { display: grid; gap: 12px; min-width: 0; }
 .yu-settings-head h2 { margin: 0; font-size: 18px; font-weight: 700; line-height: 1.3; color: var(--yu-text-strong); }

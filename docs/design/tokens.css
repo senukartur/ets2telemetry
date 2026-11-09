@@ -11,7 +11,9 @@
  *   through their usual variables (`bg-card`, `text-muted-foreground`, `border`, `ring`, ...).
  * - Use the `--yu-*` tokens directly only for things shadcn has no variable for: status colours, game chips, the
  *   metric-tile gradient and the overlay.
- * - An element of the main window that must stay dark in the light theme (the overlay preview) takes `.yu-theme-dark`.
+ * - An element of the main window that must stay dark in the light theme (the overlay preview) takes `.yu-theme-dark`, which
+ *   re-declares the dark `--yu-*` tokens and the shadcn mapping. Tailwind `dark:` variants are media-query based and do not
+ *   follow this scope.
  * - Overlay window: it must not load the shadcn base stylesheet. Import only the `--yu-ov-*` block into the overlay's
  *   own CSS (apps/desktop/src/renderer.css).
  */
@@ -62,6 +64,7 @@
   --yu-warn-fg: #FBBF24;    --yu-warn-bg: rgba(251, 191, 36, 0.10); --yu-warn-border: rgba(251, 191, 36, 0.30);
   --yu-err-fg: #FCA5A5;     --yu-err-bg: rgba(248, 113, 113, 0.10); --yu-err-border: rgba(248, 113, 113, 0.32);
   --yu-neutral-fg: #A3B1C6; --yu-neutral-bg: #151D2C;               --yu-neutral-border: #2A3548;
+  --yu-hover-bg: #151D2C;        /* hover of navigation rows and segments */
   --yu-ok-graphic: #34D399; --yu-warn-graphic: #FBBF24; /* bars, hatches and progress: 3:1 surfaces, not text */
   --yu-online: #34D399;            /* live dot */
   /* Recording indicator dot: saturated so the colour reads at 10 px; its label carries the meaning */
@@ -111,7 +114,7 @@
 }
 
 /* shadcn mapping: paste into apps/desktop/src/index.css instead of the neutral :root/.dark blocks */
-:root {
+:root, .yu-theme-dark {
   --background: var(--yu-bg-app);
   --foreground: var(--yu-text);
   --card: var(--yu-bg-card);
@@ -192,6 +195,7 @@
     --yu-warn-fg: #92400E;    --yu-warn-bg: rgba(217, 119, 6, 0.10); --yu-warn-border: rgba(217, 119, 6, 0.35);
     --yu-err-fg: #B91C1C;     --yu-err-bg: rgba(220, 38, 38, 0.08); --yu-err-border: rgba(220, 38, 38, 0.30);
     --yu-neutral-fg: #44546A; --yu-neutral-bg: #EEF2F7;             --yu-neutral-border: #CBD5E1;
+    --yu-hover-bg: #E2E8F0;
     --yu-ok-graphic: #059669; --yu-warn-graphic: #B45309;
     --yu-online: #059669;
     /* Not #7F8DA3: the neutral dot needs 3:1 on the chrome surface. */
