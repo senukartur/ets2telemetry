@@ -31,7 +31,7 @@ export function statement(db: Database.Database, sql: string): Database.Statemen
   return prepared;
 }
 const insert = (table: string, columns: readonly string[]) => `INSERT INTO ${table} (${columns.join(', ')}) VALUES (${columns.map(() => '?').join(', ')})`;
-const GAMES = ['ets2', 'ats'], MODES = ['single-player', 'truckersmp', 'unknown', 'convoy'], METHODS = ['module-scan', 'process-scan', 'none'], CONFIDENCES = ['strong', 'weak', 'none'];
+const GAMES = ['ets2', 'ats'], MODES = ['single-player', 'truckersmp', 'haulmp', 'unknown', 'convoy'], METHODS = ['module-scan', 'process-scan', 'none'], CONFIDENCES = ['strong', 'weak', 'none'];
 const COMPLETENESS = ['complete', 'partial', 'unknown'], OUTCOMES = ['delivered', 'cancelled', 'none'];
 const CLOSE_REASONS = ['outcome', 'configuration-cleared', 'different-job', 'restart', 'discontinuity', 'gap'];
 const ATTRIBUTIONS = ['trip', 'trip-before-loaded', 'free-driving', 'ambiguous'];

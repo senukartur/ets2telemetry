@@ -11,6 +11,7 @@ import {afterEach, beforeEach, describe, expect, it} from 'vitest';
 import type {JobConfiguration} from '../../packages/contracts/src/protocol-v1';
 import {StorageClient, workerHandle} from '../../packages/storage/src/client';
 import type {AttachInput, Storage, TripEffect} from '../../packages/storage/src/index';
+import {seedSample} from '../shared/journal-seed';
 import {BASE_UTC, ETS2_A, ETS2_B, Script, job, r} from '../shared/trip-messages';
 import {failed, ok, readOnly, TEST_CLOSE_GRACE_MS, workspace} from './helpers';
 
@@ -44,6 +45,61 @@ function sessionWithCoverage(storage: Storage) {
 }
 const counts = (file: string) => readOnly(file, db => Object.fromEntries(['job_configurations', 'trips', 'completeness_intervals', 'events']
   .map(table => [table, (db.prepare(`SELECT count(*) AS n FROM ${table}`).get() as {n: number}).n])));
+
+describe('HaulMP trip recording', () => {
+  const haulmp = {mode: 'haulmp', method: 'module-scan', confidence: 'strong'} as const;
+
+  it.each([
+    {openedBy: 'event', openedEventSeq: '1', recordingCompleteness: 'complete'},
+    {openedBy: 'checkpoint', openedEventSeq: null, recordingCompleteness: 'partial'}
+  ] as const)('persists a delivered trip opened by $openedBy', async ({openedBy, openedEventSeq, recordingCompleteness}) => {
+    const storage = await ws.open(), s = new Script(ETS2_A);
+    ok(storage.upsertSession({message: s.welcome({...haulmp, module: {available: true, value: 'haulmp_stub.dll'}})}));
+    const tripUuid = openedBy === 'event' ? '7c000000-0000-4000-8000-000000000001' : attachUuid(ETS2_A, '1');
+    const effect = open(tripUuid, {gameMode: haulmp, recordingCompleteness});
+    if (openedBy === 'event') {
+      expect(ok(storage.commitEvent({message: s.event(r.jobConfigured(), {advanceMs: 0}), effects: [effect]})))
+        .toEqual({status: 'committed', committedThroughEventSeq: '1'});
+    } else {
+      expect(ok(storage.openAttachedTrip(attachInput(ETS2_A, '1', {effects: [effect, lateAttach(tripUuid, '1')]}))))
+        .toEqual({status: 'committed'});
+    }
+
+    const reading = s.snapshot();
+    const sample = seedSample(s, tripUuid, 1, BASE_UTC + 1_000, {speed: {available: true, value: 20}});
+    expect(ok(storage.appendSamples(ETS2_A, [{...sample, monotonicNs: reading.capture.monotonicNs}])))
+      .toEqual({appended: 1, skipped: 0});
+    expect(ok(storage.commitEvent({message: s.event(r.delivered()), effects: [
+      {kind: 'trip.close', tripUuid, outcome: 'delivered', closeReason: 'outcome', outcomeEvent: 'this-event',
+        recordingCompleteness, endedUtcMs: BASE_UTC + 2_000}
+    ]})).status).toBe('committed');
+    storage.close();
+
+    const reopened = await ws.open();
+    const delivered = {tripUuid, game: 'ets2', gameMode: haulmp, outcome: 'delivered', recordingCompleteness};
+    const page = ok(reopened.journalTrips({mode: 'haulmp'}));
+    expect(page.trips).toMatchObject([delivered]);
+    expect(page.totals).toEqual({trips: 1, recordedSeconds: 1});
+    expect(ok(reopened.listSamples({tripUuid}))).toMatchObject([{tripUuid, utcMs: BASE_UTC + 1_000, speed: {available: true, value: 20}}]);
+    const detail = ok(reopened.journalTrip(tripUuid));
+    expect(detail.trip).toMatchObject({...delivered, openedBy, openedEventSeq});
+    if (openedBy === 'checkpoint') {
+      expect(detail.intervals.items).toMatchObject([{kind: 'not-connected', detail: {cause: 'late-attach', source: 'checkpoint', nextEventSeq: '1'}}]);
+    }
+  });
+
+  it('rejects an unsupported opening mode and rolls back the job configuration and event', async () => {
+    const storage = await ws.open(), s = new Script(ETS2_A);
+    ok(storage.upsertSession({message: s.welcome()}));
+    const unsupported = {...MODE, mode: 'unsupported'} as unknown as typeof MODE;
+    failed(storage.commitEvent({message: s.event(r.jobConfigured()), effects: [
+      open('7c000000-0000-4000-8000-000000000001', {gameMode: unsupported})
+    ]}), 'INVALID_INPUT');
+    expect(ok(storage.committedThrough(ETS2_A))).toBe('0');
+    storage.close();
+    expect(counts(ws.database)).toEqual({job_configurations: 0, trips: 0, completeness_intervals: 0, events: 0});
+  });
+});
 
 describe('openAttachedTrip (J9)', () => {
   it('stores the checkpoint job and an open trip with no opening event, applies its intervals and leaves coverage unchanged', async () => {
