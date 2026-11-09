@@ -3,13 +3,16 @@
 // SDK value is m/s, zero or a negative value means no limit (a value, never unavailable), and a limit reads in whole units.
 // 25 m/s = 25 × 3.6 = 90 km/h = 25 × 2.236936 = 55.92 mph, so 56 mph.
 // 13.888889 × 3.6 = 50.0000004. 29.0576 × 3.6 = 104.607 and × 2.236936 = 64.9999. 33.3333 × 3.6 = 119.99988.
+// A limit needs at least half a unit: 0.5 / 3.6 = 0.13889 m/s and 0.5 / 2.236936 = 0.22352 m/s. 0.1 m/s is 0.36 km/h and
+// 0.2237 mph; 0.13 × 3.6 = 0.468 and 0.14 × 3.6 = 0.504; 0.2235 × 2.236936 = 0.49996 and 0.2236 × 2.236936 = 0.50018;
+// 0.14 × 2.236936 = 0.3132 mph.
 import {readFileSync} from 'node:fs';
 import {resolve} from 'node:path';
 import {describe, expect, it} from 'vitest';
 import * as v1 from '../../packages/contracts/src/protocol-v1';
 import * as v0 from '../../packages/contracts/src/protocol-v0';
 import {
-  buildLiveView, carriesField, formatSpeedLimit, normalizeV0State, normalizeV1State, resolveDisplayUnits, SPEED_LIMIT_NONE, speedLimitActive, V0_CARRIED_FIELDS,
+  buildLiveView, carriesField, formatSpeedLimit, normalizeV0State, normalizeV1State, resolveDisplayUnits, SPEED_LIMIT_NONE, V0_CARRIED_FIELDS,
   type LiveViewSource, type NormalizedLiveState
 } from '../../packages/telemetry-core/src';
 
@@ -33,14 +36,18 @@ const withLimit = (state: NormalizedLiveState, mps: number): NormalizedLiveState
 describe('ET-084 speed limit text', () => {
   it.each([[0], [-0], [-1], [-1000], [-1e-300]])('reads %f m/s as no limit, a value and never a dash', mps => {
     expect(SPEED_LIMIT_NONE).toBe('none');
-    expect(speedLimitActive(mps)).toBe(false);
     expect(formatSpeedLimit(mps, 'km/h')).toBe('none'); expect(formatSpeedLimit(mps, 'mph')).toBe('none');
+  });
+  it.each([
+    [0.1, 'km/h', 'none'], [0.1, 'mph', 'none'], [0.13, 'km/h', 'none'], [0.14, 'km/h', '1 km/h'], [0.14, 'mph', 'none'], [0.2235, 'mph', 'none'], [0.2236, 'mph', '1 mph']
+  ] as const)('never shows a limit of 0: %f m/s in %s reads %s', (mps, unit, text) => {
+    expect(formatSpeedLimit(mps, unit)).toBe(text);
   });
   it.each([
     [25, 'km/h', '90 km/h'], [25, 'mph', '56 mph'], [13.888889, 'km/h', '50 km/h'], [29.0576, 'km/h', '105 km/h'], [29.0576, 'mph', '65 mph'], [33.3333, 'km/h', '120 km/h'],
     [1000, 'km/h', '3600 km/h'], [1000, 'mph', '2237 mph']
   ] as const)('reads %f m/s as %s %s in whole units', (mps, unit, text) => {
-    expect(speedLimitActive(mps)).toBe(true); expect(formatSpeedLimit(mps, unit)).toBe(text);
+    expect(formatSpeedLimit(mps, unit)).toBe(text);
   });
 });
 
@@ -93,6 +100,7 @@ describe('ET-084 speed limit row in the live view', () => {
   it('keeps no limit distinct from every unavailable reading', () => {
     expect(limitRow(v1Normalized('snapshot-limit-zero'))).toEqual({id: 'speed-limit', state: 'value', text: 'none'});
     expect(limitRow(v1Normalized('snapshot-limit-negative'), 'ats')).toEqual({id: 'speed-limit', state: 'value', text: 'none'});
+    expect(limitRow(withLimit(base, 0.1))).toEqual({id: 'speed-limit', state: 'value', text: 'none'});
     expect(limitRow(v1Normalized('snapshot-limit-not-observed'))).toEqual({id: 'speed-limit', state: 'missing', text: 'unavailable', reason: 'not-observed'});
     expect(limitRow(v1Normalized('snapshot-limit-not-supported'))).toMatchObject({state: 'missing', reason: 'not-supported'});
     expect(limitRow(v1Normalized('snapshot-limit-invalid'))).toMatchObject({state: 'missing', reason: 'invalid'});

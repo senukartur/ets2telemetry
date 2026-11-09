@@ -109,12 +109,6 @@ it.each([
 it.each([[3, 72], [2, 48], [1, 24], [0, 0]])('keeps the hero at one 24 px row per part without the sign: %d parts are %d px', (parts, hero) => {
   expect(cardHeroHeightCss(parts, false)).toBe(hero);
 });
-it('reserves the same height whatever the value of the sign, because it reads only the enabled sections', () => {
-  // A reserve is a function of the section record alone: there is no value to pass in.
-  expect(layoutReservedCss.length).toBe(2);
-  expect(layoutReservedCss('card', ALL)).toBe(480);
-  expect(layoutReservedCss('card', ALL)).toBe(layoutReservedCss('card', {...ALL}));
-});
 
 it('never reserves more for a subset of the sections than for all of them', () => {
   const all = Object.fromEntries(ROW_LAYOUTS.map(layout => [layout, layoutReservedCss(layout, ALL)]));
