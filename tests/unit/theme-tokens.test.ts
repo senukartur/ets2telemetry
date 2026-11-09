@@ -100,4 +100,19 @@ describe('the shared files and the dark scope', () => {
       expect(shell).toMatch(new RegExp(`${selector.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')} \\{ ?background: ?var\\(--yu-hover-bg\\)`));
     }
   });
+  it('keeps the info hint button circular without global button min-height stretching it into an oval', () => {
+    expect(shell).toMatch(/button:not\(\[role="radio"\]\):not\(\[role="switch"\]\):not\(\.yu-info-hint\)/);
+    const blockMatch = /button\.yu-info-hint,\s*\.yu-info-hint\s*\{([^}]+)\}/.exec(shell);
+    expect(blockMatch).toBeTruthy();
+    if (!blockMatch) throw new Error('Missing .yu-info-hint block in shell.css');
+    const decls = new Map([...blockMatch[1].matchAll(/([a-z0-9-]+)\s*:\s*([^;]+);/g)].map(m => [m[1].trim(), m[2].trim()]));
+    expect(decls.get('width')).toBe('22px');
+    expect(decls.get('height')).toBe('22px');
+    expect(decls.get('min-width')).toBe('22px');
+    expect(decls.get('min-height')).toBe('22px');
+    expect(decls.get('max-width')).toBe('22px');
+    expect(decls.get('max-height')).toBe('22px');
+    expect(decls.get('aspect-ratio')).toBe('1 / 1');
+    expect(decls.get('border-radius')).toBe('50% !important');
+  });
 });

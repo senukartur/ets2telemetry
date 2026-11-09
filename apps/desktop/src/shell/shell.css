@@ -139,7 +139,7 @@ h1[tabindex="-1"]:focus { outline: none; }
 .yu-journal-mode[data-kind="truckersmp"], .yu-journal-mode[data-kind="convoy"] { color: var(--yu-accent-text); }
 .yu-journal-mode[data-variant="warn"] { color: var(--yu-warn-fg); }
 .yu-journal-mode[data-variant="ok"] { color: var(--yu-ok-fg); }
-/* `button.` matches the specificity of the global button min-height, which this later rule then overrides for the table only. */
+/* Table-specific 18 px size: overrides the base 22 px .yu-info-hint sizing through descendant specificity. */
 .yu-journal-table button.yu-info-hint { position: relative; width: 18px; height: 18px; min-width: 18px; min-height: 18px; max-width: 18px; max-height: 18px; }
 /* The pointer target stays 32 px high inside the cell's 7 px padding, so the row keeps its height and does not reach the next row. */
 .yu-journal-table button.yu-info-hint::after { content: ""; position: absolute; inset: -7px 0; }
