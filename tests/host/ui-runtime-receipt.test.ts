@@ -7,7 +7,7 @@ import {receiptBatchTimeout, validateRuntimeReceipts} from '../shared/runtime-re
 const screens = {shell: ['live', 'hardMode', 'journal', 'settings', 'account'], live: ['current', 'zero', 'missing', 'paused', 'stale'],
   journal: ['list', 'mode-trip', 'weak-mode-trip', 'trip', 'intervals', 'timeline', 'samples'], settings: ['general', 'overlay', 'overlay-sections', 'plugin', 'about', 'data', 'save-error'], overlay: ['strip', 'card', 'cluster', 'hud']};
 const common = ['bilingual', 'bothSizes', 'security', 'offlineFonts', 'recordingIndicator', 'osPointerIsolated', 'hoverUnderDesktopCursor', 'versionLine', 'updateHidden'];
-const flags = {shell: ['navigation', 'headingFocus','hardModePage', 'journalUnmount', 'exitHintKeyboard', 'exitAvailable', 'noAccountPlaceholder', 'accountUnconfigured'],
+const flags = {shell: ['navigation', 'headingFocus','hardModePage', 'journalUnmount', 'exitHintKeyboard', 'exitAvailable', 'noAccountPlaceholder', 'accountBuildConfiguration'],
   live: ['numericGauge', 'unavailableVsZero', 'paused', 'staleDashes', 'rawNames', 'noTripPlaceholder', 'jobViewport', 'jobRowsAfterV1Gap', 'hmNamesReadable','fullWidthTelemetry','tankUnknownVsZero','mandatoryBreak'],
   journal: ['syntheticBanner', 'pageReturn', 'chartBounded', 'rawTabs', 'noPlannedSearch', 'tripRegions', 'tableReadable','signedChart','syncHidden'], settings: ['allPanels', 'allSections', 'committedSave', 'sourceSelector', 'uninstallRefusal', 'refusedSave', 'readOnly', 'controlsKeyboard', 'lastEnabled', 'fontLicense', 'overlayVisibility', 'visibilityFailedSave', 'actionResult', 'overlayOpacity','opacityFailedSave','opacityReadOnly','overlayUnified', 'overlayEditing', 'overlayScroll', 'scaleControl', 'gearDisplay', 'gearDisplayFailedSave'],
   overlay: ['fourLayouts', 'transparent', 'contained', 'independentFont', 'missing', 'paused', 'staleDashes', 'heroSubsets','formatterProfiles', 'stableNumbers', 'opacityKeyboardFocus','opacityGestures','backgroundOpacityOverlay','clusterRpmContained', 'scaleRange', 'clusterSpeedArc', 'gearDisplayManual', 'gearboxLabels','overlayExamplePreview']};
@@ -33,7 +33,7 @@ function uploadFixture() {
 function fixture(uiCase: Case) {
   return {passed: true, commit: 'candidate', mode: 'packaged', scenarioKind: 'ui', phases: ['upload-ui-fixture-started', 'upload-ui-fixture-completed', 'telemetry-source-started', 'launch-requested'].map(phase => ({phase})), uploadUi: uiCase === 'shell' ? uploadFixture() : undefined, // ET-050: the settings shard refuses units, visibility, opacity and gear display once per language and size (16, before 12).
     mainEvents: [...mainEvents, ...Array.from({length: 16}, () => ({event: 'SETTINGS_WRITE_FAILED', facts: {step: 'target', code: null}}))], serviceEvents, ui: {case: uiCase, languages: ['en', 'ru'], sizes,
-    firstLauncherExit: 0, saveFailureFacts: Array.from({length: 16}, () => ({step: 'target', code: null})),
+    dashboardConfigured: false, firstLauncherExit: 0, saveFailureFacts: Array.from({length: 16}, () => ({step: 'target', code: null})),
     readOnly: {state: 'newer-version', writable: false, language: 'en', bytesUnchanged: true, launcherExit: 0, windows, mainEvents: [...mainEvents, {event: 'SETTINGS_FALLBACK', facts: {state: 'newer-version'}}], serviceEvents},
     flags: Object.fromEntries([...common, ...flags[uiCase]].map(flag => [flag, true])),
     overlayPreview: uiCase === 'overlay' ? ['en', 'ru'].flatMap(language => previewNames.map(name => ({language, viewportWidth: 1280, viewportHeight: 800, name,
@@ -62,6 +62,7 @@ const variants: {name: string; uiCase: Case; change?: (value: Fixture) => void; 
     {name: 'configured fixture empty module graph', uiCase: 'shell', change: value => {value.uploadUi!.moduleGraphs[0] = 0;}},
     {name: 'configured fixture extra bridge authority', uiCase: 'shell', change: value => {value.uploadUi!.flags.bridgeIsolation = false;}},
     {name: 'configured fixture permission allowed', uiCase: 'shell', change: value => {value.uploadUi!.security.permissionsDenied = false;}},
+    {name: 'missing packaged Dashboard state', uiCase: 'shell', change: value => {Reflect.deleteProperty(value.ui, 'dashboardConfigured');}},
     {name: 'configured fixture reordered launch phases', uiCase: 'shell', change: value => {value.phases.reverse();}},
     {name: 'configured fixture missing source phase', uiCase: 'shell', change: value => {value.phases.splice(2, 1);}},
     {name: 'configured fixture remote request allowed', uiCase: 'shell', change: value => {value.uploadUi!.security.remoteFetchDenied = false;}},

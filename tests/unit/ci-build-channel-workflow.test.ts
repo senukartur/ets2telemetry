@@ -31,6 +31,20 @@ it('uploads the installer artifact under the channel that was built, with that c
   expect(build).not.toMatch(/YukonUnionTelemetry-(?:Staging-)?Setup-\*/);
 });
 
+it('requires the configured Dashboard origin in official staging builds', async () => {
+  const text = await workflow();
+  const build = job(text, 'windows-build');
+  const staging = job(text, 'windows-staging-build');
+  expect(build).toContain("ETS2TELEMETRY_DASHBOARD_ORIGIN: ${{ github.ref != 'refs/heads/main' && vars.ETS2TELEMETRY_DASHBOARD_ORIGIN || '' }}");
+  expect(staging).toContain('ETS2TELEMETRY_DASHBOARD_ORIGIN: ${{ vars.ETS2TELEMETRY_DASHBOARD_ORIGIN }}');
+  for (const jobText of [build, staging]) {
+    const guard = jobText.indexOf('- name: Require the official staging Dashboard origin');
+    expect(guard).toBeGreaterThan(0);
+    expect(guard).toBeLessThan(jobText.indexOf('run: npm ci'));
+    expect(jobText).toContain("if (!$env:ETS2TELEMETRY_DASHBOARD_ORIGIN) { throw");
+  }
+});
+
 // ET-055 PR-5 changed this requirement: the staging lifecycle exists, so the notice step is gone and a staging build is
 // installed like a production one; the side-by-side step needs both channels and so runs on main only.
 it('runs the hosted installer lifecycle for the built channel, and the side-by-side scenario on main only', async () => {

@@ -870,13 +870,14 @@ function Test-UiReceipt {
     $flags = @('bilingual','bothSizes','security','offlineFonts','recordingIndicator','osPointerIsolated','hoverUnderDesktopCursor','versionLine','updateHidden')
     $screens = @()
     switch -CaseSensitive ($ExpectedUiCase) {
-        'shell' { $flags += @('navigation','headingFocus','hardModePage','journalUnmount','exitHintKeyboard','exitAvailable','noAccountPlaceholder','accountUnconfigured'); $screens = @('live','hardMode','journal','settings','account') }
+        'shell' { $flags += @('navigation','headingFocus','hardModePage','journalUnmount','exitHintKeyboard','exitAvailable','noAccountPlaceholder','accountBuildConfiguration'); $screens = @('live','hardMode','journal','settings','account') }
         'live' { $flags += @('numericGauge','unavailableVsZero','paused','staleDashes','rawNames','noTripPlaceholder','jobViewport','jobRowsAfterV1Gap','hmNamesReadable','fullWidthTelemetry','tankUnknownVsZero','mandatoryBreak'); $screens = @('current','zero','missing','paused','stale') }
         'journal' { $flags += @('syntheticBanner','pageReturn','chartBounded','rawTabs','noPlannedSearch','tripRegions','tableReadable','signedChart'); $screens = @('list','mode-trip','weak-mode-trip','trip','intervals','timeline','samples') }
         'settings' { $flags += @('allPanels','allSections','committedSave','sourceSelector','uninstallRefusal','refusedSave','readOnly','controlsKeyboard','lastEnabled','fontLicense','overlayVisibility','visibilityFailedSave','actionResult','overlayOpacity','opacityFailedSave','opacityReadOnly','overlayUnified','overlayEditing','overlayScroll','scaleControl','gearDisplay','gearDisplayFailedSave'); $screens = @('general','overlay','overlay-sections','plugin','about','data','save-error') }
         'overlay' { $flags += @('fourLayouts','transparent','contained','independentFont','missing','paused','staleDashes','heroSubsets','formatterProfiles','stableNumbers','opacityKeyboardFocus','opacityGestures','backgroundOpacityOverlay','clusterRpmContained','scaleRange','clusterSpeedArc','gearDisplayManual','gearboxLabels','overlayExamplePreview'); $screens = @('strip','card','cluster','hud') }
     }
     foreach ($flag in $flags) { if ($ui.flags.$flag -isnot [bool] -or !$ui.flags.$flag) { return $false } }
+    if ($ExpectedUiCase -cin @('shell','journal') -and $ui.dashboardConfigured -isnot [bool]) { return $false }
     if ($ExpectedUiCase -ceq 'shell' -and !(Test-UploadUiReceipt -Value $Driver.uploadUi -Directory $Directory -Phases $Driver.phases)) { return $false }
     if ($ExpectedUiCase -ceq 'journal' -and ($ui.flags.syncHidden -isnot [bool] -or !$ui.flags.syncHidden)) { return $false }
     # Overlay: 64 layout screenshots, six English scale references, and five Settings previews per language at 1280x800.

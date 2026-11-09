@@ -24,6 +24,11 @@ export const uploadSafe=(v:unknown):v is number=>typeof v==='number'&&Number.isS
 export const uploadUuid=(v:unknown):v is string=>typeof v==='string'&&/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(v);
 export const uploadText=(v:unknown):v is string=>typeof v==='string'&&new TextEncoder().encode(v).byteLength>0&&new TextEncoder().encode(v).byteLength<=128&&Array.from(v).every(c=>c.charCodeAt(0)>31&&c.charCodeAt(0)!==127);
 export const dashboardOrigin=(v:unknown):v is string=>{if(!uploadText(v))return false;try{const u=new URL(v);return u.protocol==='https:'&&u.origin===v;}catch{return false;}};
+export function isReleaseDashboardOrigin(value: unknown): value is string {
+  if (!dashboardOrigin(value)) return false;
+  const host = new URL(value).hostname.toLowerCase();
+  return !(host === 'localhost' || host === '[::1]' || host === '0.0.0.0' || host.startsWith('127.') || host.endsWith('.localhost'));
+}
 export const isDashboardToken=(v:unknown):v is string=>typeof v==='string'&&v.length<=128&&/^vtc1_[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}_[A-Za-z0-9_-]{43}$/.test(v);
 export const isDashboardOwner=uploadShape({origin:dashboardOrigin,accountId:uploadText,companyId:uploadText,identityEpoch:uploadText});
 export const sameDashboardOwner=(a:DashboardOwner,b:DashboardOwner)=>a.origin===b.origin&&a.accountId===b.accountId&&a.companyId===b.companyId&&a.identityEpoch===b.identityEpoch;

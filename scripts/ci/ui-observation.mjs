@@ -212,7 +212,7 @@ const SHELL_TEXT = {
  * sidebar label fits its button without ellipsis or a forced single line; the chips keep their order (sync absent while
  * unconfigured) and the connection chip is inside the viewport.
  */
-async function observeCompactShell(page, language, size) {
+async function observeCompactShell(page, language, size, dashboardConfigured) {
   const facts = await page.evaluate(() => {
     const query = selector => [...globalThis.document.querySelectorAll(selector)];
     const viewport = node => {const box = node.getBoundingClientRect(); return box.width > 0 && box.top >= 0 && box.left >= 0 && box.bottom <= globalThis.innerHeight && box.right <= globalThis.innerWidth;};
@@ -228,7 +228,9 @@ async function observeCompactShell(page, language, size) {
   assert.deepEqual(facts.groups, SHELL_TEXT[language].groups, `UI_SHELL_GROUPS_${language}`);
   assert.equal(facts.labels.length, 5);
   for (const label of facts.labels) assert.deepEqual({fits: label.fits, ellipsis: label.ellipsis, nowrap: label.nowrap, target: label.height >= 32}, {fits: true, ellipsis: false, nowrap: false, target: true}, `UI_SHELL_LABEL_TRUNCATED_${language}_${size.width}`);
-  assert.deepEqual(facts.chips, ['shell.status.connection', 'shell.status.plugin', 'shell.status.hardMode'], `UI_SHELL_CHIP_ORDER_${language}_${size.width}`);
+  const chips = ['shell.status.connection', 'shell.status.plugin', 'shell.status.hardMode'];
+  if (dashboardConfigured) chips.push('shell.status.sync');
+  assert.deepEqual(facts.chips, chips, `UI_SHELL_CHIP_ORDER_${language}_${size.width}`);
   assert.equal(facts.connectionVisible, true, `UI_SHELL_CONNECTION_CHIP_${language}_${size.width}`);
 }
 const waitState = (page, state) => until(() => page.getByTestId('telemetry-status').innerText(), value => value.startsWith(`${state}:`), `UI_LIVE_${state}`, 5000);
@@ -938,15 +940,22 @@ export async function runUiSmoke({application, dashboard, overlay, source, sourc
           await focusRoute(dashboard, route); await save(route, language, size);
           assert.equal(await dashboard.getByTestId('shell.breadcrumb').textContent(), SHELL_TEXT[language].crumbs[route], `UI_SHELL_BREADCRUMB_${language}_${route}`);
         }
-        await observeCompactShell(dashboard, language, size);
+        await observeCompactShell(dashboard, language, size, config.dashboardConfigured);
         assert.deepEqual(await dashboard.locator('.yu-sidebar nav button').evaluateAll(nodes => nodes.map(node => node.getAttribute('data-testid'))), ['tab-live', 'tab-hardMode', 'tab-journal', 'tab-settings', 'tab-account']);
-        assert.equal(await dashboard.getByTestId('account.unconfigured').isVisible(), true);
-        assert.equal(await dashboard.getByTestId('account.token.input').count(), 0);
-        for (const control of ['account.form', 'account.confirmation', 'account.counts', 'account.firstSync', 'account.disconnect']) assert.equal(await dashboard.getByTestId(control).count(), 0, `UI_UNCONFIGURED_CONTROL_${control}`);
-        assert.ok((await dashboard.getByTestId('account.unconfigured').textContent()).includes(language === 'en' ? 'Your journal and local recording continue to work.' : 'Журнал и локальная запись продолжают работать.'));
-        assert.equal(await dashboard.getByTestId('shell.status.sync').count(), 0);
-        assert.equal(await dashboard.getByTestId('journal-sync-column').count(), 0);
-        record.flags.accountUnconfigured = true;
+        if (config.dashboardConfigured) {
+          await dashboard.getByTestId('account.form').waitFor({state: 'visible'});
+          assert.equal(await dashboard.getByTestId('account.token.input').getAttribute('type'), 'password');
+          assert.equal(await dashboard.getByTestId('account.unconfigured').count(), 0);
+        } else {
+          await dashboard.getByTestId('account.unconfigured').waitFor({state: 'visible'});
+          assert.equal(await dashboard.getByTestId('account.token.input').count(), 0);
+          assert.equal(await dashboard.getByTestId('account.form').count(), 0);
+          assert.ok((await dashboard.getByTestId('account.unconfigured').textContent()).includes(language === 'en' ? 'Your journal and local recording continue to work.' : 'Журнал и локальная запись продолжают работать.'));
+        }
+        for (const control of ['account.confirmation', 'account.counts', 'account.firstSync', 'account.disconnect']) assert.equal(await dashboard.getByTestId(control).count(), 0, `UI_DISCONNECTED_CONTROL_${control}`);
+        record.dashboardConfigured = await dashboard.getByTestId('account.token.input').isVisible();
+        assert.equal(record.dashboardConfigured, config.dashboardConfigured);
+        record.flags.accountBuildConfiguration = true;
         await dashboard.getByTestId('tab-hardMode').focus(); await dashboard.keyboard.press('Enter');
         await dashboard.waitForFunction(() => globalThis.document.activeElement?.getAttribute('data-testid') === 'screen-title');
         assert.equal(await dashboard.getByTestId('hardMode.screen').isVisible(), true);
@@ -1070,7 +1079,8 @@ export async function runUiSmoke({application, dashboard, overlay, source, sourc
       } else if (config.uiCase === 'journal') {
         await screen(dashboard, 'journal');
         await until(() => dashboard.getByTestId('journal-row').count(), count => count === 50, 'UI_JOURNAL_FIRST_PAGE');
-        assert.equal(await dashboard.getByTestId('shell.status.sync').count(), 0);
+        record.dashboardConfigured = await dashboard.getByTestId('shell.status.sync').isVisible();
+        assert.equal(record.dashboardConfigured, config.dashboardConfigured);
         assert.equal(await dashboard.getByTestId('journal-sync-column').count(), 0);
         assert.equal(await dashboard.getByTestId('journal-row-sync').count(), 0);
         record.flags.syncHidden = true;
