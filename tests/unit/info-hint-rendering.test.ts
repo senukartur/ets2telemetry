@@ -1,3 +1,4 @@
+import {readFileSync} from 'node:fs';
 import React from 'react';
 import {renderToStaticMarkup} from 'react-dom/server';
 import {expect, it, vi} from 'vitest';
@@ -62,4 +63,10 @@ it.each(['en','ru'] as const)('shows current rules separately from recoverable v
   const trip=renderToStaticMarkup(React.createElement(HardModeTrip,{language,qualified:false,details}));
   expect(trip).toContain('94/100');expect(trip).toContain('≥95%');
   expect(trip).toContain(language==='en'?'Settings changed':'Изменение настроек');
+});
+
+it('keeps the info hint button circular in shell.css without global button min-height stretching it into an oval', () => {
+  const css = readFileSync('apps/desktop/src/shell/shell.css', 'utf8').replace(/\r\n/g, '\n');
+  expect(css).toMatch(/button:not\(\[role="radio"\]\):not\(\[role="switch"\]\):not\(\.yu-info-hint\)/);
+  expect(css).toMatch(/button\.yu-info-hint, \.yu-info-hint\s*\{[^}]*width:\s*22px;[^}]*height:\s*22px;[^}]*min-height:\s*22px;[^}]*aspect-ratio:\s*1\s*\/\s*1;[^}]*border-radius:\s*50%/);
 });
