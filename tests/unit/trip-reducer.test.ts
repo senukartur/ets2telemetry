@@ -541,6 +541,19 @@ describe('game-mode opening evidence', () => {
     const next = run(state, [s.event(r.jobConfigured(otherJob()), paused)]);
     expect(next.effects.flat()).toContainEqual(expect.objectContaining({kind: 'trip.open', gameMode: {mode: 'truckersmp', method: 'module-scan', confidence: 'strong'}}));
   });
+
+  it('opens a trip with haulmp mode and marks contradictory mode transitions as ambiguous', () => {
+    const s = new Script(ETS2_A), {rows, trip} = acceptedJob(s);
+    let state = play(rows);
+    const haulmpObserved = s.event(r.gameMode({mode: 'haulmp', method: 'module-scan', confidence: 'strong', module: 'haulmp_stub.dll'}));
+    const changed = run(state, [haulmpObserved]);
+    state = changed.state;
+    expect(changed.effects[0]).toEqual([{kind: 'trip.update', tripUuid: trip, set: {gameModeAmbiguous: true}}]);
+    expect(tripView(state, 'ets2').current).toMatchObject({gameMode: UNKNOWN_MODE, gameModeAmbiguous: true});
+    state = run(state, [s.event(r.paused(), paused), s.event(r.delivered(), paused), s.event(r.jobCleared(), paused)]).state;
+    const next = run(state, [s.event(r.jobConfigured(otherJob()), paused)]);
+    expect(next.effects.flat()).toContainEqual(expect.objectContaining({kind: 'trip.open', gameMode: {mode: 'haulmp', method: 'module-scan', confidence: 'strong'}}));
+  });
 });
 
 describe('delivery semantics (T3, T5)', () => {

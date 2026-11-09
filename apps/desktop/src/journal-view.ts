@@ -205,7 +205,7 @@ function gameModeText(mode: JournalGameMode, ambiguous: boolean): string {
 function gameModeBadge(mode: JournalGameMode, ambiguous: boolean, label: string = JOURNAL_GAME_MODE_TEXT[mode.mode]): JournalModeBadge {
   const unconfirmed = mode.mode !== 'unknown' && mode.confidence !== 'strong' && !ordinarySinglePlayer(mode);
   const text = `${label}${unconfirmed ? ` · ${JOURNAL_STRINGS.gameModeUnconfirmed}` : ''}${ambiguous ? ` · ${JOURNAL_STRINGS.gameModeChanged}` : ''}`;
-  return {kind: mode.mode, text, evidence: gameModeText(mode, ambiguous), tone: ambiguous || unconfirmed ? 'warn' : mode.mode === 'truckersmp' ? 'ok' : 'neutral'};
+  return {kind: mode.mode, text, evidence: gameModeText(mode, ambiguous), tone: ambiguous || unconfirmed ? 'warn' : mode.mode === 'truckersmp' || mode.mode === 'haulmp' ? 'ok' : 'neutral'};
 }
 /** The mode line of a list row: an unknown mode reads `Mode unknown` under the game chip, never as single-player. */
 const modeLine = (mode: JournalGameMode, ambiguous: boolean) => gameModeBadge(mode, ambiguous, mode.mode === 'unknown' ? t('j.modeUnknown', undefined, language) : JOURNAL_GAME_MODE_TEXT[mode.mode]);

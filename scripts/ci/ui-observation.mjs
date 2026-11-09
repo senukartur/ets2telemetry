@@ -1037,7 +1037,7 @@ export async function runUiSmoke({application, dashboard, overlay, source, sourc
           await dashboard.getByRole('option').first().waitFor({state: 'detached'});
           return options;
         };
-        assert.deepEqual(await filterOptions('journal-filter-mode'), language === 'en' ? ['Any mode', 'Single-player', 'TruckersMP', 'Convoy', 'Unknown'] : ['Любой режим', 'Одиночная игра', 'TruckersMP', 'Конвой', 'Неизвестно']);
+        assert.deepEqual(await filterOptions('journal-filter-mode'), language === 'en' ? ['Any mode', 'Single-player', 'TruckersMP', 'HaulMP', 'Convoy', 'Unknown'] : ['Любой режим', 'Одиночная игра', 'TruckersMP', 'HaulMP', 'Конвой', 'Неизвестно']);
         assert.deepEqual(await filterOptions('journal-filter-job'), language === 'en'
           ? ['Any job type', 'Quick job', 'Cargo market', 'Freight market', 'World of Trucks', 'Other']
           : ['Любой тип заказа', 'Быстрый заказ', 'Рынок грузов', 'Грузоперевозки', 'World of Trucks', 'Другой']);

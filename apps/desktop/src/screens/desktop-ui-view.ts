@@ -173,10 +173,11 @@ export function liveScreenState(status: LiveTelemetry['status'] | undefined, cur
  * TruckersMP needs strong evidence; single-player is strong evidence or the ordinary weak module scan, which the owner
  * decided on November 2, 2026 to present as single-player (the same rule as journal-view.ts). Anything else is not shown.
  */
-export function liveGameMode(sources: Pick<LiveSources, 'v1Current' | 'v1State' | 'field'>): 'single-player' | 'truckersmp' | null {
+export function liveGameMode(sources: Pick<LiveSources, 'v1Current' | 'v1State' | 'field'>): 'single-player' | 'truckersmp' | 'haulmp' | null {
   const reading = sources.v1State?.gameMode;
   if (!sources.v1Current || sources.field('game-mode').state !== 'value' || reading?.state !== 'value') return null;
   const {mode, confidence, method} = reading.value;
+  if (mode === 'haulmp') return confidence === 'strong' ? 'haulmp' : null;
   if (mode === 'truckersmp') return confidence === 'strong' ? 'truckersmp' : null;
   return mode === 'single-player' && (confidence === 'strong' || method === 'module-scan' && confidence === 'weak') ? 'single-player' : null;
 }

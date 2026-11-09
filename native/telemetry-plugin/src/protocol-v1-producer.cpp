@@ -51,7 +51,7 @@ Json flag(const Field<bool>& f) { return field(f, [](bool v) { return Json{v}; }
 Json game_time(const GameTimePod& g) { return Json{Object{{"minutes", field(g.minutes, [](std::uint32_t v) { return decimal(v); })}, {"clockId", uuid(g.clock_id)}}}; }
 const char* simulation(SimulationState s) { return s == SimulationState::running ? "running" : s == SimulationState::paused ? "paused" : "unavailable"; }
 Object game_mode(const GameModePod& g) {
-  const char* mode = g.mode == GameModeKind::single_player ? "single-player" : g.mode == GameModeKind::truckersmp ? "truckersmp" : "unknown";
+  const char* mode = g.mode == GameModeKind::single_player ? "single-player" : g.mode == GameModeKind::truckersmp ? "truckersmp" : g.mode == GameModeKind::haulmp ? "haulmp" : "unknown";
   const char* method = g.method == DetectionMethod::module_scan ? "module-scan" : g.method == DetectionMethod::process_scan ? "process-scan" : "none";
   const char* confidence = g.confidence == Confidence::strong ? "strong" : g.confidence == Confidence::weak ? "weak" : "none";
   return {{"mode", text_value(mode)}, {"method", text_value(method)}, {"confidence", text_value(confidence)}, {"module", text(g.module, TextKind::nonempty_id)}};

@@ -47,10 +47,10 @@ describe('CSV parsing', () => {
 
 describe('matching', () => {
   it('matches the game executables case-insensitively and exactly', () => {
-    expect(runningGames([{name: 'EuroTrucks2.EXE', pid: 1}])).toEqual({ets2: true, ats: false, client: false});
-    expect(runningGames([{name: 'AMTRUCKS.exe', pid: 1}])).toEqual({ets2: false, ats: true, client: false});
+    expect(runningGames([{name: 'EuroTrucks2.EXE', pid: 1}])).toEqual({ets2: true, ats: false, client: false, haulmp: false});
+    expect(runningGames([{name: 'AMTRUCKS.exe', pid: 1}])).toEqual({ets2: false, ats: true, client: false, haulmp: false});
     expect(runningGames([{name: 'notamtrucks.exe', pid: 1}, {name: 'eurotrucks2.exe.bak', pid: 2}, {name: 'eurotrucks2', pid: 3}, {name: 'eurotrucks.exe', pid: 4}]))
-      .toEqual({ets2: false, ats: false, client: false});
+      .toEqual({ets2: false, ats: false, client: false, haulmp: false});
   });
 
   it('treats every truckersmp* image as the client, in any case', () => {
@@ -60,13 +60,24 @@ describe('matching', () => {
     expect(runningGames([{name: 'my-truckersmp.exe', pid: 9}]).client).toBe(false);
   });
 
+  it('treats every haulmp* image as the HaulMP client/launcher, in any case', () => {
+    for (const name of ['HaulMP.exe', 'HaulMP.Launcher.exe', 'HaulMP.Tablet.exe', 'HaulMP.Accounts.exe', 'HaulMP.Dependencies.exe', 'HAULMP.EXE', 'haulmp-app.exe']) {
+      expect([name, runningGames([{name, pid: 9}]).haulmp]).toEqual([name, true]);
+    }
+    expect(runningGames([{name: 'my-haulmp.exe', pid: 9}]).haulmp).toBe(false);
+  });
+
   it('blocks a game for its own process or the client, and never for the other game', () => {
-    expect(blockingProcess('ets2', {ets2: true, ats: false, client: false})).toBe('GAME_RUNNING');
-    expect(blockingProcess('ats', {ets2: true, ats: false, client: false})).toBeNull();
-    expect(blockingProcess('ats', {ets2: false, ats: true, client: true})).toBe('GAME_RUNNING');
-    expect(blockingProcess('ets2', {ets2: false, ats: false, client: true})).toBe('CLIENT_RUNNING');
-    expect(blockingProcess('ats', {ets2: false, ats: false, client: true})).toBe('CLIENT_RUNNING');
-    expect(blockingProcess('ets2', {ets2: false, ats: false, client: false})).toBeNull();
+    expect(blockingProcess('ets2', {ets2: true, ats: false, client: false, haulmp: false})).toBe('GAME_RUNNING');
+    expect(blockingProcess('ats', {ets2: true, ats: false, client: false, haulmp: false})).toBeNull();
+    expect(blockingProcess('ats', {ets2: false, ats: true, client: true, haulmp: false})).toBe('GAME_RUNNING');
+    expect(blockingProcess('ets2', {ets2: false, ats: false, client: true, haulmp: false})).toBe('CLIENT_RUNNING');
+    expect(blockingProcess('ats', {ets2: false, ats: false, client: true, haulmp: false})).toBe('CLIENT_RUNNING');
+    expect(blockingProcess('ets2', {ets2: false, ats: false, client: false, haulmp: false})).toBeNull();
+    expect(blockingProcess('ets2', {ets2: false, ats: false, client: false, haulmp: true})).toBe('HAULMP_RUNNING');
+    expect(blockingProcess('ats', {ets2: false, ats: false, client: false, haulmp: true})).toBeNull();
+    expect(blockingProcess('ets2', {ets2: true, ats: false, client: false, haulmp: true})).toBe('GAME_RUNNING');
+    expect(blockingProcess('ets2', {ets2: false, ats: false, client: true, haulmp: true})).toBe('HAULMP_RUNNING');
   });
 });
 
@@ -81,7 +92,7 @@ describe('the fixed tasklist call', () => {
   });
   it('runs absolute tasklist.exe with fixed arguments, a hidden window, no shell, 10 s and 1 MiB', async () => {
     const {execFile, calls} = stub({stdout: [row('explorer.exe', 10), row('TruckersMP-Launcher.exe', 11)].join('\r\n')});
-    expect(await checkRunningGames({execFile, env})).toEqual({ok: true, running: {ets2: false, ats: false, client: true}});
+    expect(await checkRunningGames({execFile, env})).toEqual({ok: true, running: {ets2: false, ats: false, client: true, haulmp: false}});
     expect(calls).toEqual([{file: 'C:\\Windows\\System32\\tasklist.exe', args: ['/fo', 'csv', '/nh'],
       options: {encoding: 'buffer', timeout: 10_000, maxBuffer: 1024 * 1024, windowsHide: true, shell: false}}]);
   });

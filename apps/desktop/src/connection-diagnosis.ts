@@ -31,7 +31,7 @@ export interface ConnectionDiagnosis {
 /** Block reasons that need Windows permissions the application does not have (P12): the manual copy helps. */
 const PERMISSION_REASONS: readonly PluginBlockReason[] = ['PERMISSION_DENIED', 'READ_ONLY_FILE'];
 /** Block reasons that end when the game, TruckersMP or the program that holds the file closes. */
-const WAITING_REASONS: readonly PluginBlockReason[] = ['GAME_RUNNING', 'CLIENT_RUNNING', 'TARGET_LOCKED'];
+const WAITING_REASONS: readonly PluginBlockReason[] = ['GAME_RUNNING', 'CLIENT_RUNNING', 'HAULMP_RUNNING', 'TARGET_LOCKED'];
 /** Block reasons after which the folder's plugin could not be checked at all: a linked folder or a read failure. */
 const UNCHECKED_REASONS: readonly PluginBlockReason[] = ['LINKED_FOLDER', 'IO_ERROR'];
 /** Target states without this application's current plugin in place. */

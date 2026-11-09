@@ -9,6 +9,7 @@ import {SCHEMA_V4} from './schema-v4';
 import {SCHEMA_V5} from './schema-v5';
 import {SCHEMA_V6} from './schema-v6';
 import {SCHEMA_V7} from './schema-v7';
+import {SCHEMA_V8} from './schema-v8';
 
 /** PRAGMA application_id of every database this application creates: the ASCII bytes 'ETS2'. */
 export const APPLICATION_ID = 0x45545332;
@@ -26,7 +27,8 @@ export const MIGRATIONS: readonly Migration[] = Object.freeze([
   Object.freeze({version: 4, name: '0004-logical-trips', up(db: Database.Database) {for (const statement of SCHEMA_V4) db.exec(statement); let after=0n;for(;;){const rows=db.prepare('SELECT id FROM trips WHERE id>? ORDER BY id LIMIT 100').all(after) as {id:bigint}[];if(!rows.length)break;for(const row of rows)revise(db,row.id);after=rows.at(-1)!.id;}}}),
   Object.freeze({version: 5, name: '0005-upload-projections', up(db: Database.Database) {for (const statement of SCHEMA_V5) db.exec(statement);}}),
   Object.freeze({version: 6, name: '0006-upload-ownership-queue', up(db: Database.Database) {for (const statement of SCHEMA_V6) db.exec(statement);}}),
-  Object.freeze({version: 7, name: '0007-trailer-baselines', up(db: Database.Database) {for (const statement of SCHEMA_V7) db.exec(statement);}})
+  Object.freeze({version: 7, name: '0007-trailer-baselines', up(db: Database.Database) {for (const statement of SCHEMA_V7) db.exec(statement);}}),
+  Object.freeze({version: 8, name: '0008-haulmp-mode', foreignKeysOff: true, up(db: Database.Database) {for (const statement of SCHEMA_V8) db.exec(statement);}})
 ]);
 
 /** The schema version a migration list produces; versions must be 1, 2, ... without gaps. */

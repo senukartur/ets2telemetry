@@ -262,6 +262,7 @@ describe('trip detail (J13, J21, J22; REG-014, REG-009)', () => {
     const mode = (gameMode: JournalTripListItem['gameMode'], ambiguous = false) =>
       fields(journalDetailText({...DELIVERED_DETAIL, trip: {...DELIVERED_DETAIL.trip, gameMode, gameModeAmbiguous: ambiguous}}).sections, 'trip').gameMode;
     expect(mode({mode: 'truckersmp', method: 'process-scan', confidence: 'strong'})).toBe('TruckersMP (strong evidence, process scan)');
+    expect(mode({mode: 'haulmp', method: 'module-scan', confidence: 'strong'})).toBe('HaulMP (strong evidence, module scan)');
     expect(mode({mode: 'unknown', method: 'none', confidence: 'none'})).toBe('Unknown');
     expect(mode(MODE, true)).toBe('Single-player; ambiguous evidence');
   });
@@ -373,9 +374,13 @@ describe('the compact list rows (ET-076; REG-009, REG-014)', () => {
     expect(mode({mode: 'single-player', method: 'module-scan', confidence: 'weak'})).toBe('Single-player');
     expect(mode({mode: 'single-player', method: 'process-scan', confidence: 'weak'})).toBe('Single-player · unconfirmed');
     expect(mode({mode: 'truckersmp', method: 'process-scan', confidence: 'strong'})).toBe('TruckersMP');
+    expect(mode({mode: 'haulmp', method: 'module-scan', confidence: 'strong'})).toBe('HaulMP');
+    expect(mode({mode: 'haulmp', method: 'module-scan', confidence: 'strong'}, false, 'ru')).toBe('HaulMP');
+    expect(mode({mode: 'haulmp', method: 'module-scan', confidence: 'strong'}, true)).toBe('HaulMP · ambiguous evidence');
     expect(mode({mode: 'convoy', method: 'none', confidence: 'none'})).toBe('Convoy · unconfirmed');
     expect(mode({mode: 'convoy', method: 'none', confidence: 'none'}, false, 'ru')).toBe('Конвой · не подтверждено');
     expect(rowOf({...DELIVERED, gameMode: {mode: 'unknown', method: 'none', confidence: 'none'}}).mode).toMatchObject({kind: 'unknown', tone: 'neutral', evidence: 'Unknown'});
+    expect(rowOf({...DELIVERED, gameMode: {mode: 'haulmp', method: 'module-scan', confidence: 'strong'}}).mode).toMatchObject({kind: 'haulmp', tone: 'ok', text: 'HaulMP', evidence: 'HaulMP (strong evidence, module scan)'});
   });
   it('labels every known market, both external markets as World of Trucks with the market name below', () => {
     for (const [raw, kind, en, ruText, enSub, ruSub] of [

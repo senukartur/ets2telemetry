@@ -55,11 +55,11 @@ it('keeps a loaded plugin DLL byte-identical: TARGET_LOCKED with a wrong lister,
   // The GAME_RUNNING assertion below means something only when no real game or client runs now. A fake host that an
   // earlier chain step has just stopped may take a moment to exit, so the listing is retried for up to 10 s.
   let before = await checkRunningGames();
-  for (const end = Date.now() + 10_000; Date.now() < end && !(before.ok && !before.running.ets2 && !before.running.ats && !before.running.client);) {
+  for (const end = Date.now() + 10_000; Date.now() < end && !(before.ok && !before.running.ets2 && !before.running.ats && !before.running.client && !before.running.haulmp);) {
     await new Promise(resolve => setTimeout(resolve, 500));
     before = await checkRunningGames();
   }
-  expect(before.ok && before.running, 'ETS2, ATS or TruckersMP is running; close it before this test').toEqual({ets2: false, ats: false, client: false});
+  expect(before.ok && before.running, 'ETS2, ATS or TruckersMP is running; close it before this test').toEqual({ets2: false, ats: false, client: false, haulmp: false});
 
   const loaded = await fsp.readFile(artifacts.dll);
   const next = Buffer.concat([loaded, Buffer.from('ETS2Telemetry plugin-lock test update')]);
@@ -101,7 +101,11 @@ it('keeps a loaded plugin DLL byte-identical: TARGET_LOCKED with a wrong lister,
   host.stdin.end('exit\n');
   expect(await until(() => host!.exitCode !== null, 10_000), 'fake SDK host exited').toBe(true);
   expect(host.exitCode).toBe(0);
-  const after = await checkRunningGames();
+  let after = await checkRunningGames();
+  for (const end = Date.now() + 10_000; Date.now() < end && !(after.ok && !after.running.ets2 && !after.running.ats && !after.running.client && !after.running.haulmp);) {
+    await new Promise(resolve => setTimeout(resolve, 500));
+    after = await checkRunningGames();
+  }
   expect(after.ok && after.running.ets2).toBe(false);
   expect((await real.ensureInstalled(target)).outcome).toBe('updated');
   expect(await fsp.readFile(dll)).toEqual(next);

@@ -883,7 +883,7 @@ export const JOURNAL_REASON_TEXT: Readonly<Record<UnavailableReason, string>> = 
   'not-observed': 'not observed', 'not-supported': 'not provided by the game', 'invalid': 'invalid reading'
 });
 export const JOURNAL_GAME_MODE_TEXT: Readonly<Record<GameMode['mode'] | 'convoy', string>> = Object.freeze({
-  'single-player': 'Single-player', 'truckersmp': 'TruckersMP', 'unknown': 'Unknown', 'convoy': 'Convoy'
+  'single-player': 'Single-player', 'truckersmp': 'TruckersMP', 'haulmp': 'HaulMP', 'unknown': 'Unknown', 'convoy': 'Convoy'
 });
 /** Raw evidence terms; the Journal formatter applies D9's module-absence presentation exception. */
 export const JOURNAL_GAME_MODE_EVIDENCE_TEXT = Object.freeze({
@@ -1017,6 +1017,7 @@ export const PLUGIN_STATE_TEXT: Readonly<Record<PluginTargetState, string>> = Ob
 export const PLUGIN_REASON_TEXT: Readonly<Record<PluginBlockReason, string>> = channelCopyTable(Object.freeze({
   GAME_RUNNING: 'The game is running; the plugin is changed after you close it.',
   CLIENT_RUNNING: 'TruckersMP is running; the plugin is changed after you close it.',
+  HAULMP_RUNNING: 'HaulMP is running; the plugin is changed after you close it.',
   TARGET_LOCKED: 'Another program is using the plugin file; it is tried again later.',
   PERMISSION_DENIED: 'Windows denied access to the game\'s plugins folder.',
   READ_ONLY_FILE: 'The plugin file is read-only; it is left as it is.',
@@ -1133,6 +1134,7 @@ export const UNINSTALL_TARGET_TEXT = Object.freeze({
 export const UNINSTALL_REASON_TEXT: Readonly<Record<UninstallBlockCode, string>> = channelCopyTable(Object.freeze({
   GAME_RUNNING: 'the game is running. Close it, then try again.',
   CLIENT_RUNNING: 'TruckersMP is running. Close it, then try again.',
+  HAULMP_RUNNING: 'HaulMP is running. Close it, then try again.',
   TARGET_LOCKED: 'another program is using the plugin file. Close it, then try again.',
   PERMISSION_DENIED: 'Windows denied access to the game\'s plugins folder.',
   READ_ONLY_FILE: 'the plugin file is read-only. Clear its read-only attribute, then try again.',

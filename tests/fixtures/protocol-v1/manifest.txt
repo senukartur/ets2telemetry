@@ -36,6 +36,7 @@ event-player-tollgate-paid.json valid
 event-player-use-ferry.json valid
 event-player-use-train.json valid
 event-source-game-mode.json valid
+event-source-game-mode-haulmp.json valid
 event-job-delivered-zero-revenue.json valid
 event-job-delivered-unavailable-revenue.json valid
 event-job-configured-documented-currency.json valid
@@ -136,6 +137,7 @@ currency-v0-verified.json invalid
 currency-lowercase-code.json invalid
 game-mode-single-player-strong.json invalid
 game-mode-truckersmp-no-module.json invalid
+game-mode-haulmp-no-module.json invalid
 game-mode-unknown-weak.json invalid
 game-mode-unknown-with-module.json invalid
 game-mode-convoy.json invalid

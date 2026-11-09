@@ -368,7 +368,7 @@ export class JournalBoundary extends React.Component<{children: React.ReactNode;
 }
 
 const GAMES: readonly (JournalGame | 'all')[] = ['all', 'ets2', 'ats'];
-const MODES: readonly JournalGameMode['mode'][] = ['single-player', 'truckersmp', 'convoy', 'unknown'];
+const MODES: readonly JournalGameMode['mode'][] = ['single-player', 'truckersmp', 'haulmp', 'convoy', 'unknown'];
 const JOB_TYPES: readonly JournalJobFilter[] = ['quick-job', 'cargo-market', 'freight-market', 'world-of-trucks', 'other'];
 const OUTCOMES: readonly JournalOutcome[] = ['open', 'delivered', 'cancelled', 'none'];
 const COMPLETENESS: readonly JournalCompleteness[] = ['complete', 'partial', 'unknown'];

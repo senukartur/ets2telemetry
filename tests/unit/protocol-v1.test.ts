@@ -97,6 +97,11 @@ describe('REG-009 availability, units, time and money', () => {
     expect(cp.data.status.gameMode).toEqual({mode: 'single-player', method: 'module-scan', confidence: 'weak', module: {available: false, reason: 'not-observed'}});
     const mode = server('event-source-game-mode'); if (mode.kind !== 'event' || mode.data.record.type !== 'source.gameMode') throw new Error('fixture');
     expect(mode.data.record.mode).toBe('truckersmp'); expect(mode.data.record.confidence).toBe('strong');
+    const haulmpMode = server('event-source-game-mode-haulmp'); if (haulmpMode.kind !== 'event' || haulmpMode.data.record.type !== 'source.gameMode') throw new Error('fixture');
+    expect(haulmpMode.data.record.mode).toBe('haulmp');
+    expect(haulmpMode.data.record.method).toBe('module-scan');
+    expect(haulmpMode.data.record.confidence).toBe('strong');
+    expect(haulmpMode.data.record.module).toEqual({available: true, value: 'haulmp_stub.dll'});
   });
 });
 

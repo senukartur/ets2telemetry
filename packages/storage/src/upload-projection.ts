@@ -76,7 +76,7 @@ const jobFields: [string, Check][] = [
 ];
 const jobCheck = shape(Object.fromEntries(jobFields));
 const occurrence = shape({pluginSessionId: isUploadUuid, rawTripUuid: isUploadUuid, eventSeq: sequence, type: one(...EVENT_TYPES), utcMs: nullable(count)});
-const mode = shape({mode: one('unknown','single-player','truckersmp'), method: one('none','module-scan','process-scan'), confidence: one('none','weak','strong'), ambiguous: bool});
+const mode = shape({mode: one('unknown','single-player','truckersmp','haulmp'), method: one('none','module-scan','process-scan'), confidence: one('none','weak','strong'), ambiguous: bool});
 const facts = shape({game: one('ets2','ats'), pluginSessionId: isUploadUuid, outcome: one('open','none','delivered','cancelled'),
   closeReason: nullable(one('outcome','configuration-cleared','different-job','restart','discontinuity','gap')), recordingCompleteness: one('complete','partial','unknown'),
   openedBy: one('event','checkpoint'), checkpointNextEventSeq: nullable(sequence), checkpointUtcMs: nullable(count), opening: nullable(occurrence), outcomeOccurrence: nullable(occurrence), close: nullable(occurrence),
