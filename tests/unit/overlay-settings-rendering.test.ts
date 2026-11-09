@@ -16,7 +16,7 @@ vi.mock('@/components/ui/slider', () => ({Slider: 'input'}));
 vi.mock('@/components/ui/switch', () => ({Switch: ({checked, ...props}: {checked: boolean}) =>
   React.createElement('button', {...props, role: 'switch', 'aria-checked': checked})}));
 
-const settings = (language: AppLanguage): SettingsView => ({nowPlaying: DEFAULT_NOW_PLAYING, language, autostart: false, units: {ets2: 'metric', ats: 'us-customary'}, gearDisplay: {ets2: 'automatic', ats: 'automatic'},
+const settings = (language: AppLanguage): SettingsView => ({nowPlaying: DEFAULT_NOW_PLAYING, language, autostart: false, theme: 'system', units: {ets2: 'metric', ats: 'us-customary'}, gearDisplay: {ets2: 'automatic', ats: 'automatic'},
   overlay: DEFAULT_OVERLAY_SETTINGS, state: 'loaded', writable: true, saveError: null});
 const render = (view: SettingsView, edit: OverlayEditState = {active: false}) => renderToStaticMarkup(React.createElement(OverlaySettingsCard,
   {settings: view, edit, onSaved: vi.fn(), onRequest: vi.fn(), showSaveError: true}));
@@ -104,4 +104,10 @@ it.each(['en', 'ru'] as const)('associates the size actions with the current idl
     expect(html.match(/id="overlay-size-help"/g)).toHaveLength(1);
     expect(html).toContain('aria-describedby="overlay-size-help"');
   }
+});
+
+// ET-082: the layout thumbnails keep the held-dark look of the T6 board.
+it('renders the layout thumbnails in the dark token scope', () => {
+  const html = render(settings('en'));
+  expect(html.match(/yu-layout-preview-[a-z]+ yu-theme-dark/g)).toHaveLength(4);
 });

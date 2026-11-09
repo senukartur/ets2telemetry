@@ -8,8 +8,8 @@ import {SettingsStore} from '../../apps/desktop/src/settings-store';
 it('purely migrates v11 defaults without changing existing fields or SQLite, and independently falls back invalid media fields', () => {
   const old = {...DEFAULT_SETTINGS, nowPlaying: undefined, format: 'ets2telemetry.settings', version: 11, language: 'ru', autostart: true};
   const before = structuredClone(old), migrated = migrateToCurrent(old, 11);
-  // ET-071: the chain continues to v13, whose step only sets cruise control on, which the current defaults already have.
-  expect(migrated).toEqual({...old, version: 13, nowPlaying: {enabled: false, style: 'minimal', backgroundOpacity: 80, position: {displayId: null, x: 1, y: 0.75}}}); expect(old).toEqual(before);
+  // ET-071: the chain continues to v13, whose step only sets cruise control on, which the current defaults already have; ET-082: v14 adds the upgraders' dark theme.
+  expect(migrated).toEqual({...old, version: 14, theme: 'dark', nowPlaying: {enabled: false, style: 'minimal', backgroundOpacity: 80, position: {displayId: null, x: 1, y: 0.75}}}); expect(old).toEqual(before);
   const current = {...DEFAULT_SETTINGS, format: 'ets2telemetry.settings', version: 12, nowPlaying: {enabled: true, style: 'bad', backgroundOpacity: 39, position: {displayId: null, x: 2, y: 0}}};
   const parsed = parseSettings(Buffer.from(JSON.stringify(current)));
   expect(parsed).toMatchObject({state: 'loaded-with-fallbacks', settings: {nowPlaying: {...DEFAULT_NOW_PLAYING, enabled: true}}, fallbackFields: ['nowPlaying.style', 'nowPlaying.backgroundOpacity', 'nowPlaying.position']});
@@ -23,6 +23,6 @@ it('preserves startup bytes and preferences through durable media saves and rest
     await store.setNowPlayingEnabled(true); await store.setNowPlayingEnabled(false);
     const bytes = await readFile(file, 'utf8'), restarted = new SettingsStore(directory);
     expect((await restarted.load()).nowPlaying).toEqual({enabled: false, style: 'full', backgroundOpacity: 40, position: {displayId: '2', x: 0.4, y: 0.6}});
-    expect(bytes).toBe(serializeSettings({...DEFAULT_SETTINGS, nowPlaying: store.view().nowPlaying})); expect(await readFile(file, 'utf8')).toBe(bytes);
+    expect(bytes).toBe(serializeSettings({...DEFAULT_SETTINGS, theme: 'dark', nowPlaying: store.view().nowPlaying})); // a migrated older file stays dark (ET-082) expect(await readFile(file, 'utf8')).toBe(bytes);
   } finally {await rm(directory, {recursive: true, force: true});}
 });

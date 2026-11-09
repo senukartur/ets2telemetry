@@ -26,6 +26,7 @@ h1[tabindex="-1"]:focus { outline: none; }
 /* ET-074 compact shell: the 216 px sidebar holds the lockup, three nav groups and the footer, 14 px apart. */
 .yu-sidebar { position: relative; display: flex; flex-direction: column; gap: 14px; min-height: 0; overflow-y: auto; padding: 12px 10px; background: var(--yu-bg-chrome); border-right: 1px solid var(--yu-divider-chrome); }
 .yu-lockup { display: flex; gap: 8px; align-items: center; padding: 0 4px; }
+.yu-lockup picture { display: block; flex: none; }
 .yu-lockup img { flex: none; width: 28px; height: 28px; object-fit: contain; }
 .yu-lockup strong { display: block; font-size: 14px; font-weight: 700; line-height: 1.2; color: var(--yu-text-strong); } .yu-lockup small { display: block; font-size: 11px; line-height: 1.2; color: var(--yu-text-muted); }
 .yu-sidebar > nav { display: flex; flex-direction: column; gap: 14px; }
@@ -35,7 +36,7 @@ h1[tabindex="-1"]:focus { outline: none; }
 .yu-nav-item svg { width: 16px; height: 16px; flex: none; color: var(--yu-text-subtle); }
 /* A long label wraps to a second line; it is never cut off or ellipsized. */
 .yu-nav-label { flex: 1; min-width: 0; line-height: 1.25; white-space: normal; overflow-wrap: anywhere; }
-.yu-nav-item:hover { background: var(--yu-neutral-bg); }
+.yu-nav-item:hover { background: var(--yu-hover-bg); }
 .yu-nav-item[aria-current="page"] { color: var(--yu-text-strong); background: var(--yu-nav-active-bg); font-weight: 500; }
 .yu-nav-item[aria-current="page"] svg { color: var(--yu-accent-light); }
 .yu-sidebar-footer { margin-top: auto; display: flex; flex-direction: column; gap: 4px; }
@@ -62,7 +63,7 @@ h1[tabindex="-1"]:focus { outline: none; }
 @media (prefers-reduced-motion: reduce) { .yu-dot, .yu-dot::after { animation: none !important; } }
 /* ET-055 UP10: the update control under the recording indicator; hidden while idle, checking or unsupported. */
 /* ET-074: a ghost row with the dot at its right end (order); the warn and error tones keep their colours. */
-.yu-update { display: flex; align-items: center; gap: 8px; width: 100%; min-height: 32px; text-align: left; border: 1px solid transparent; background: transparent; color: #93C5FD; border-radius: var(--yu-radius-control); padding: 0 8px; cursor: pointer; transition: background-color .15s, border-color .15s; }
+.yu-update { display: flex; align-items: center; gap: 8px; width: 100%; min-height: 32px; text-align: left; border: 1px solid transparent; background: transparent; color: var(--yu-update-fg); border-radius: var(--yu-radius-control); padding: 0 8px; cursor: pointer; transition: background-color .15s, border-color .15s; }
 .yu-update:not([aria-disabled="true"]):hover { background: var(--yu-neutral-bg); }
 .yu-update .yu-dot { order: 2; width: 7px; height: 7px; }
 .yu-update:focus-visible { outline: 2px solid var(--yu-accent-light); outline-offset: 2px; }
@@ -98,10 +99,10 @@ h1[tabindex="-1"]:focus { outline: none; }
 .yu-page-sub { margin: 0; font-size: 12px; color: var(--yu-text-muted); }
 .yu-content > div { min-width: 0; }
 .yu-stack { display: grid; gap: 14px; }
-.yu-menu { z-index: 80; min-width: 180px; background: var(--yu-bg-card); color: var(--yu-text); border: 1px solid var(--yu-border); padding: 5px; border-radius: 10px; box-shadow: 0 12px 32px #0006; }
+.yu-menu { z-index: 80; min-width: 180px; background: var(--yu-bg-card); color: var(--yu-text); border: 1px solid var(--yu-border); padding: 5px; border-radius: 10px; box-shadow: var(--yu-menu-shadow); }
 .yu-menu-item { padding: 8px 12px; border-radius: 6px; cursor: pointer; outline: none; }
 .yu-menu-item[data-highlighted] { background: var(--yu-selected-bg); }
-.yu-menu-item[data-state="checked"] { color: var(--yu-accent-light); font-weight: 500; }
+.yu-menu-item[data-state="checked"] { color: var(--yu-accent-text); font-weight: 500; }
 .yu-muted { color: var(--yu-text-muted); } .yu-number, dd, progress { font-variant-numeric: tabular-nums; }
 .yu-placeholder { border: 1px dashed var(--yu-border-input); border-radius: 12px; background: var(--yu-bg-inset); padding: 20px; }
 .yu-placeholder h2 { margin: 10px 0; font-size: 16px; font-weight: 700; }
@@ -114,8 +115,8 @@ h1[tabindex="-1"]:focus { outline: none; }
 .yu-journal { display: grid; grid-template-columns: minmax(0, 1fr); gap: 12px; min-width: 0; }
 .yu-journal-toolbar { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; min-width: 0; }
 .yu-journal-toolbar .yu-segmented button { min-height: 26px; height: 26px; padding: 0 10px; border: 0; border-radius: 4px; background: transparent; color: var(--yu-text-secondary); font-size: 12px; }
-.yu-journal-toolbar .yu-segmented button[aria-pressed="true"] { background: var(--yu-bg-raised); color: var(--yu-text-strong); font-weight: 500; }
-.yu-journal-toolbar .yu-segmented button[aria-pressed="false"]:hover { background: var(--yu-neutral-bg); }
+.yu-journal-toolbar .yu-segmented button[aria-pressed="true"] { background: var(--yu-segment-selected-bg); box-shadow: var(--yu-segment-selected-shadow); color: var(--yu-text-strong); font-weight: 500; }
+.yu-journal-toolbar .yu-segmented button[aria-pressed="false"]:hover { background: var(--yu-hover-bg); }
 .yu-journal-note { flex: 1 1 160px; min-width: 0; font-size: 12px; color: var(--yu-text-muted); text-align: right; }
 .yu-journal-card { min-width: 0; border: 1px solid var(--yu-border); border-radius: var(--yu-radius-card); background: var(--yu-bg-card); }
 .yu-journal-card > [role="status"], .yu-journal-card > [data-slot="alert"], .yu-journal-empty { margin: 0; padding: 12px; }
@@ -135,14 +136,14 @@ h1[tabindex="-1"]:focus { outline: none; }
 .yu-journal-mode-line { display: flex; align-items: center; gap: 2px; margin-top: 2px; }
 .yu-journal-mode { display: inline-flex; align-items: center; gap: 4px; font-size: 11px; color: var(--yu-text-muted); }
 .yu-journal-mode svg { flex: none; width: 12px; height: 12px; }
-.yu-journal-mode[data-kind="truckersmp"], .yu-journal-mode[data-kind="convoy"] { color: var(--yu-accent-light); }
+.yu-journal-mode[data-kind="truckersmp"], .yu-journal-mode[data-kind="convoy"] { color: var(--yu-accent-text); }
 .yu-journal-mode[data-variant="warn"] { color: var(--yu-warn-fg); }
 .yu-journal-mode[data-variant="ok"] { color: var(--yu-ok-fg); }
 /* `button.` matches the specificity of the global button min-height, which this later rule then overrides for the table only. */
 .yu-journal-table button.yu-info-hint { position: relative; width: 18px; height: 18px; min-height: 18px; }
 /* The pointer target stays 32 px high inside the cell's 7 px padding, so the row keeps its height and does not reach the next row. */
 .yu-journal-table button.yu-info-hint::after { content: ""; position: absolute; inset: -7px 0; }
-.yu-journal-job-world .yu-tag[data-slot="badge"] { color: var(--yu-accent-light); }
+.yu-journal-job-world .yu-tag[data-slot="badge"] { color: var(--yu-accent-text); }
 .yu-journal-special { display: flex; align-items: center; gap: 4px; margin-top: 2px; font-size: 11px; color: var(--yu-warn-fg); }
 .yu-journal-special svg { flex: none; width: 12px; height: 12px; }
 .yu-journal-open[data-slot="button"] { color: var(--yu-text-muted); }
@@ -178,7 +179,7 @@ h1[tabindex="-1"]:focus { outline: none; }
 .yu-trip-crumbs:empty { display: none; }
 .yu-trip-crumb { min-width: 0; overflow: hidden; text-overflow: ellipsis; color: var(--yu-text); font-weight: 500; }
 .yu-trip { container-type: inline-size; display: grid; grid-template-columns: minmax(0, 1fr); gap: 12px; min-width: 0; font-variant-numeric: tabular-nums; }
-.yu-trip-back { justify-self: start; display: inline-flex; align-items: center; gap: 4px; min-height: 24px; padding: 0; border: 0; background: transparent; color: var(--yu-accent-light); font-size: 12px; cursor: pointer; }
+.yu-trip-back { justify-self: start; display: inline-flex; align-items: center; gap: 4px; min-height: 24px; padding: 0; border: 0; background: transparent; color: var(--yu-accent-text); font-size: 12px; cursor: pointer; }
 .yu-trip-back:hover { color: var(--yu-selected-fg); }
 .yu-trip-back svg { width: 14px; height: 14px; }
 .yu-trip-header { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 6px 12px; align-items: start; }
@@ -227,11 +228,11 @@ h1[tabindex="-1"]:focus { outline: none; }
 .yu-trip-chart-hit { fill: transparent; }
 .yu-chart .yu-trip-chart-band-label { fill: var(--yu-warn-fg); paint-order: stroke; stroke: var(--yu-bg-card); stroke-width: 3px; }
 .yu-trip-hatch-fill { fill: var(--yu-warn-bg); }
-.yu-trip-hatch-line { stroke: var(--yu-warn-fg); stroke-width: 1.5; stroke-opacity: .6; }
+.yu-trip-hatch-line { stroke: var(--yu-warn-graphic); stroke-width: 1.5; stroke-opacity: .6; }
 .yu-trip-legend, .yu-trip-legend-gaps { display: flex; flex-wrap: wrap; gap: 4px 14px; font-size: 11px; color: var(--yu-text-secondary); }
 .yu-trip-legend { margin-top: 6px; }
 .yu-trip-legend-line { display: inline-block; width: 14px; height: 3px; margin-right: 6px; vertical-align: middle; background: var(--yu-accent-light); }
-.yu-trip-legend-band { display: inline-block; width: 10px; height: 10px; margin-right: 6px; vertical-align: middle; border: 1px solid var(--yu-warn-fg); background: var(--yu-warn-bg); }
+.yu-trip-legend-band { display: inline-block; width: 10px; height: 10px; margin-right: 6px; vertical-align: middle; border: 1px solid var(--yu-warn-graphic); background: var(--yu-warn-bg); }
 .yu-trip-samples { border: 1px solid var(--yu-border); border-radius: var(--yu-radius-control); background: var(--yu-bg-inset); }
 .yu-trip-samples > summary, .yu-trip-fields > summary { display: flex; align-items: center; gap: 8px; padding: 8px 12px; list-style: none; cursor: pointer; font-weight: 500; color: var(--yu-text-secondary); }
 .yu-trip-samples > summary::-webkit-details-marker, .yu-trip-fields > summary::-webkit-details-marker { display: none; }
@@ -257,8 +258,8 @@ h1[tabindex="-1"]:focus { outline: none; }
 .yu-trip-event-who { grid-area: who; font-size: 11px; color: var(--yu-text-muted); text-align: right; }
 .yu-trip-completeness { display: grid; gap: 10px; }
 .yu-trip-bar { display: flex; gap: 2px; height: 14px; overflow: hidden; border-radius: 4px; background: var(--yu-bg-raised); }
-.yu-trip-bar-recorded { flex: 1 1 0; background: var(--yu-ok-fg); }
-.yu-trip-bar-gap { flex: 0 0 4px; background: var(--yu-warn-fg); }
+.yu-trip-bar-recorded { flex: 1 1 0; background: var(--yu-ok-graphic); }
+.yu-trip-bar-gap { flex: 0 0 4px; background: var(--yu-warn-graphic); }
 @container (max-width: 720px) {
   .yu-trip-columns, .yu-trip-header { grid-template-columns: minmax(0, 1fr); }
   .yu-trip-actions { justify-content: flex-start; max-width: none; }
@@ -276,14 +277,14 @@ h1[tabindex="-1"]:focus { outline: none; }
 /* Radix primitives keep compact rails/dots; their existing expanded pseudo-hit areas and associated labels remain >=32px. */
 [role="radio"] {min-height:16px;height:16px;width:16px;border-radius:50%}
 [role="switch"] {min-height:18.4px;height:18.4px;border-radius:999px}
-[role="switch"] [data-slot="switch-thumb"] {background:var(--yu-text);width:16px;height:16px}
+[role="switch"] [data-slot="switch-thumb"] {background:var(--yu-switch-thumb);width:16px;height:16px}
 [role="switch"][data-state="unchecked"] {background:var(--yu-border-input)}
 .yu-settings label {min-height:32px;align-items:center}
 /* ET-078 compact segmented control (mockup T5): a 2 px track, 26 px segments; the selected one is raised. Long options wrap. */
 .yu-segmented {display:inline-flex;flex-wrap:wrap;gap:2px;max-width:100%;padding:2px;background:var(--yu-bg-chrome);border:1px solid var(--yu-border);border-radius:var(--yu-radius-control)}
 .yu-segment-option {position:relative;min-width:0;min-height:26px;border-radius:4px;text-align:center;color:var(--yu-text-secondary)}
-.yu-segment-option:has([data-state="checked"]) {background:var(--yu-bg-raised);color:var(--yu-text-strong);font-weight:500}
-.yu-segment-option:not(:has([data-state="checked"])):not(:has(:disabled)):hover {background:var(--yu-neutral-bg)}
+.yu-segment-option:has([data-state="checked"]) {background:var(--yu-segment-selected-bg);box-shadow:var(--yu-segment-selected-shadow);color:var(--yu-text-strong);font-weight:500}
+.yu-segment-option:not(:has([data-state="checked"])):not(:has(:disabled)):hover {background:var(--yu-hover-bg)}
 .yu-segment-option:has(:focus-visible) {outline:2px solid var(--yu-accent-light);outline-offset:2px}
 .yu-segment-option:has(:disabled) {opacity:.5}
 .yu-segment-option>[role="radio"] {position:absolute;inset:0;width:100%;height:100%;min-height:26px;opacity:0;border:0}
@@ -313,8 +314,8 @@ h1[tabindex="-1"]:focus { outline: none; }
 .yu-hard-mode-progress progress { width: 100%; height: 6px; border: 0; border-radius: 999px; overflow: hidden; appearance: none; background: var(--yu-border); }
 .yu-hard-mode-progress progress::-webkit-progress-bar { background: var(--yu-border); border-radius: 999px; }
 .yu-hard-mode-progress progress::-webkit-progress-value { background: var(--yu-text-secondary); border-radius: 999px; }
-.yu-hard-mode-progress progress[data-state="pass"]::-webkit-progress-value { background: var(--yu-ok-fg); }
-.yu-hard-mode-progress progress[data-state="fail"]::-webkit-progress-value { background: var(--yu-warn-fg); }
+.yu-hard-mode-progress progress[data-state="pass"]::-webkit-progress-value { background: var(--yu-ok-graphic); }
+.yu-hard-mode-progress progress[data-state="fail"]::-webkit-progress-value { background: var(--yu-warn-graphic); }
 .yu-hard-mode-progress [role="status"] { flex: none; margin: 0; font-size: 12px; color: var(--yu-text-muted); text-align: right; }
 .yu-hard-mode-fix { display: flex; align-items: flex-start; gap: 8px; margin: 0; padding: 10px 12px; border: 1px solid var(--yu-warn-border); border-radius: var(--yu-radius-card); background: var(--yu-warn-bg); color: var(--yu-warn-fg); }
 .yu-hard-mode-fix > svg { flex: none; width: 16px; height: 16px; margin-top: 2px; }
@@ -446,7 +447,7 @@ button[aria-disabled="true"], [role="switch"][aria-disabled="true"] { cursor: no
 .yu-account-local { border-top: 1px solid var(--yu-divider); padding-top: 12px; }
 .yu-account-steps { display: grid; gap: 16px; padding: 0; list-style: none; counter-reset: upload-step; }
 .yu-account-steps li { position: relative; padding-left: 32px; counter-increment: upload-step; }
-.yu-account-steps li::before { content: counter(upload-step); position: absolute; top: 0; left: 0; display: grid; place-items: center; width: 22px; height: 22px; border: 1px solid var(--yu-border); border-radius: var(--yu-radius-badge); color: var(--yu-accent-light); background: var(--yu-bg-inset); font-variant-numeric: tabular-nums; }
+.yu-account-steps li::before { content: counter(upload-step); position: absolute; top: 0; left: 0; display: grid; place-items: center; width: 22px; height: 22px; border: 1px solid var(--yu-border); border-radius: var(--yu-radius-badge); color: var(--yu-accent-text); background: var(--yu-bg-inset); font-variant-numeric: tabular-nums; }
 .yu-account-steps p { margin-top: 4px; color: var(--yu-text-muted); }
 .yu-account-metrics { display: grid; grid-template-columns: repeat(5,minmax(0,1fr)); border: 1px solid var(--yu-border); border-radius: var(--yu-radius-control); background: var(--yu-bg-inset); }
 .yu-account-metrics > div { padding: 10px 12px; border-left: 1px solid var(--yu-divider); }
@@ -563,14 +564,14 @@ button[aria-disabled="true"], [role="switch"][aria-disabled="true"] { cursor: no
 .yu-live-details[open] > summary { border-bottom: 1px solid var(--yu-border); }
 .yu-live-details > .yu-live-fields { padding: 12px 14px; }
 .yu-live-fields { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 20px; }
-.yu-live-fields h3 { color: var(--yu-accent-light); padding-bottom: 6px; }
+.yu-live-fields h3 { color: var(--yu-accent-text); padding-bottom: 6px; }
 @media (max-width: 900px) { .yu-live-fields { grid-template-columns: minmax(0, 1fr); } }
 
 /* ET-078 Settings (mockup T5): a 170 px sub-navigation beside the panel column, up to 1100 px; one column at 900 px and below. */
 .yu-settings { display: grid; grid-template-columns: 170px minmax(0,1fr); gap: 20px; align-items: start; max-width: 1100px; }
 .yu-settings-nav { display: flex; flex-direction: column; gap: 1px; }
 .yu-settings-nav button { display: flex; align-items: center; min-height: 32px; padding: 0 10px; border: 0; border-radius: var(--yu-radius-control); background: transparent; color: var(--yu-text-secondary); font-size: 13px; line-height: 1.25; text-align: left; }
-.yu-settings-nav button:hover { background: var(--yu-neutral-bg); }
+.yu-settings-nav button:hover { background: var(--yu-hover-bg); }
 .yu-settings-nav button[aria-current="page"] { background: var(--yu-nav-active-bg); color: var(--yu-text-strong); font-weight: 500; }
 .yu-settings-panels, .yu-settings-panel { display: grid; gap: 12px; min-width: 0; }
 .yu-settings-head h2 { margin: 0; font-size: 18px; font-weight: 700; line-height: 1.3; color: var(--yu-text-strong); }
@@ -629,6 +630,7 @@ button[aria-disabled="true"], [role="switch"][aria-disabled="true"] { cursor: no
 .yu-plugin-footer { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; padding: 10px 14px; }
 /* About: the brand block, the update check laid out in its row, the font licence row and the uninstall warning. */
 .yu-about-brand { display: flex; align-items: center; gap: 14px; padding: 14px; }
+.yu-about-brand picture { display: block; flex: none; }
 .yu-about-brand img { flex: none; width: 56px; height: 56px; object-fit: contain; }
 .yu-about-brand h3 { margin: 0; font-size: 15px; font-weight: 700; color: var(--yu-text-strong); }
 .yu-about-brand p { margin: 0; font-size: 12px; color: var(--yu-text-muted); }

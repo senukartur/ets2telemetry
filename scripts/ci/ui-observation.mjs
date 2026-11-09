@@ -668,6 +668,61 @@ const EXPORT_RESULT = {
 const dashboardZoom = (application, zoom) => application.evaluate(({BrowserWindow}, zoom) => {
   BrowserWindow.getAllWindows().find(window => !window.webContents.getURL().endsWith('?view=overlay')).webContents.setZoomFactor(zoom);
 }, zoom);
+/**
+ * ET-082: the theme preference through the real nativeTheme path. The harness pins the dark scheme by emulation, so this
+ * lifts it first; the settings window itself never reloads, which the sentinel proves.
+ */
+async function observeThemeSwitch({application, dashboard, dashboardId, record}) {
+  const appState = () => dashboard.evaluate(() => globalThis.desktop.getAppState());
+  const observe = async () => {
+    const main = await application.evaluate(({BrowserWindow, nativeTheme}, id) => ({themeSource: nativeTheme.themeSource, dark: nativeTheme.shouldUseDarkColors, background: BrowserWindow.fromId(id).getBackgroundColor().toUpperCase()}), dashboardId);
+    const page = await dashboard.evaluate(() => {
+      const root = globalThis.getComputedStyle(globalThis.document.documentElement), scene = globalThis.document.querySelector('[data-testid="overlay-preview-scene"]');
+      return {prefersDark: globalThis.matchMedia('(prefers-color-scheme: dark)').matches, pageBackground: root.getPropertyValue('--yu-bg-app').trim().toUpperCase(),
+        logo: globalThis.document.querySelector('.yu-lockup img').currentSrc, sceneChrome: scene ? globalThis.getComputedStyle(scene).getPropertyValue('--yu-bg-chrome').trim().toUpperCase() : null,
+        sceneBackground: scene ? globalThis.getComputedStyle(scene).getPropertyValue('--background').trim().toUpperCase() : null, sceneChart: scene ? globalThis.getComputedStyle(scene).getPropertyValue('--chart-3').trim().toUpperCase() : null,
+        rootChart: root.getPropertyValue('--chart-3').trim().toUpperCase(),
+        sentinel: globalThis.__et082NoReload === true};
+    });
+    return {...main, ...page};
+  };
+  const choose = async (theme, prefersDark) => {
+    await dashboard.locator(`#theme-${theme}`).click({timeout: 5000});
+    await until(appState, state => state.settings.theme === theme && !state.settings.saveError, `UI_THEME_SAVED_${theme}`);
+    await dashboard.waitForFunction(dark => globalThis.matchMedia('(prefers-color-scheme: dark)').matches === dark, prefersDark, {timeout: 5000});
+    return observe();
+  };
+  await dashboard.emulateMedia({colorScheme: null});
+  await dashboard.evaluate(() => {globalThis.__et082NoReload = true;});
+  try {
+    const light = await choose('light', false);
+    assert.equal(light.themeSource, 'light', 'UI_THEME_LIGHT_SOURCE');
+    assert.equal(light.prefersDark, false, 'UI_THEME_LIGHT_MEDIA');
+    assert.equal(light.pageBackground, '#F5F7FB', 'UI_THEME_LIGHT_TOKEN');
+    assert.equal(light.background, '#F5F7FB', 'UI_THEME_LIGHT_WINDOW');
+    assert.match(light.logo, /logo-dark/, 'UI_THEME_LIGHT_LOGO');
+    assert.equal(light.sceneChrome, '#0A101D', 'UI_THEME_LIGHT_PREVIEW_STAYS_DARK');
+    assert.equal(light.sceneBackground, '#0E1525', 'UI_THEME_LIGHT_PREVIEW_STAYS_DARK');
+    assert.equal(light.sceneChart, '#2DD4BF', 'UI_THEME_LIGHT_PREVIEW_STAYS_DARK');
+    assert.equal(light.rootChart, '#0D9488', 'UI_THEME_LIGHT_CHART');
+    const dark = await choose('dark', true);
+    assert.equal(dark.themeSource, 'dark', 'UI_THEME_DARK_SOURCE');
+    assert.equal(dark.prefersDark, true, 'UI_THEME_DARK_MEDIA');
+    assert.equal(dark.pageBackground, '#0E1525', 'UI_THEME_DARK_TOKEN');
+    assert.equal(dark.background, '#0E1525', 'UI_THEME_DARK_WINDOW');
+    assert.doesNotMatch(dark.logo, /logo-dark/, 'UI_THEME_DARK_LOGO');
+    assert.equal(dark.sceneChrome, '#0A101D', 'UI_THEME_DARK_PREVIEW');
+    assert.equal(dark.sceneBackground, '#0E1525', 'UI_THEME_DARK_PREVIEW');
+    assert.equal(dark.sceneChart, '#2DD4BF', 'UI_THEME_DARK_PREVIEW');
+    assert.equal(dark.rootChart, '#2DD4BF', 'UI_THEME_DARK_CHART');
+    const osDark = await application.evaluate(({nativeTheme}) => {nativeTheme.themeSource = 'system'; const resolved = nativeTheme.shouldUseDarkColors; nativeTheme.themeSource = 'dark'; return resolved;});
+    const system = await choose('system', osDark);
+    assert.equal(system.themeSource, 'system', 'UI_THEME_SYSTEM_SOURCE');
+    assert.equal(system.prefersDark, system.dark, 'UI_THEME_SYSTEM_FOLLOWS_NATIVE');
+    assert.equal(system.sentinel, true, 'UI_THEME_RELOADED');
+    Object.assign(record, {theme: {light, dark, system}});
+  } finally {await dashboard.emulateMedia({colorScheme: 'dark'});}
+}
 async function observeSettingsNavigation({dashboard, language, size, zoom, record}) {
   const placements = [];
   for (const panel of ['overlay', ...panels.filter(id => id !== 'overlay')]) {
@@ -1149,6 +1204,7 @@ export async function runUiSmoke({application, dashboard, overlay, source, sourc
             assert.equal(await dashboard.getByTestId('autostart-card').isVisible(), true);
             assert.equal(await dashboard.getByTestId('autostart-toggle').isDisabled(), true);
             assert.equal(await dashboard.getByTestId('autostart-not-installed-note').isVisible(), true);
+            if (language === 'en' && size === sizes[0]) await observeThemeSwitch({application, dashboard, dashboardId, record});
           }
           if (panel !== 'overlay') await observeSettingsRows({dashboard, panel, language, size, record});
           if (panel === 'data') await observeExportResult({application, dashboard, language, size, record});

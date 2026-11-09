@@ -28,7 +28,7 @@ export function OverlaySettingsPreview({settings, language, scale, cruise = 'act
     <CardHeader className="yu-overlay-card-heading"><CardTitle><h3 id={headingId}>{strings.overlayPreviewTitle} · {getOverlayLayoutText(settings.layout, language)}</h3></CardTitle>
       <span id={cruiseId} className="yu-overlay-cruise-badge" data-state={cruise} data-testid="overlay-preview-cruise">{strings.overlayPreviewCruise}: {[cruiseItem?.value, cruiseItem?.unit].filter(Boolean).join(' ')}</span>
     </CardHeader>
-    <CardContent><div className="yu-overlay-scene" data-testid="overlay-preview-scene">
+    <CardContent><div className="yu-overlay-scene yu-theme-dark" data-testid="overlay-preview-scene">
       <div ref={frame} className="yu-overlay-preview-space" data-layout={settings.layout} aria-hidden="true">
         <div className="yu-overlay-preview-bounds" data-testid="overlay-preview-bounds" style={{width: size.width, height: size.height}}>
           <div className={`overlay overlay-${settings.layout} yu-overlay-example`} data-testid="overlay-preview" data-layout={settings.layout}

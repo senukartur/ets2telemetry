@@ -3,14 +3,14 @@ import type {NowPlayingPosition, NowPlayingStyle} from '../../../packages/contra
 import {randomUUID} from 'node:crypto';
 import * as nodeFs from 'node:fs/promises';
 import path from 'node:path';
-import type {AppLanguage, GearDisplayMode, OverlayLayout, OverlayPlacement, OverlaySections, SettingsSaveError, SettingsState, SettingsView, UnitGame, UnitProfile} from '../../../packages/contracts/src';
+import type {AppLanguage, GearDisplayMode, OverlayLayout, OverlayPlacement, OverlaySections, SettingsSaveError, SettingsState, SettingsView, ThemePreference, UnitGame, UnitProfile} from '../../../packages/contracts/src';
 import {isOverlayOpacity} from './overlay-opacity';
 import {withPlacement} from './overlay-placement';
 import {enabledSectionCount} from './overlay-sections';
 import type {DiagnosticFacts} from './diagnostics';
 import {dataPaths} from './paths';
 import {isGearDisplayMode, isUnitGame} from './unit-profiles';
-import {DEFAULT_SETTINGS, MAX_SETTINGS_BYTES, parseSettings, serializeSettings, type Settings} from './settings-schema';
+import {DEFAULT_SETTINGS, isThemePreference, MAX_SETTINGS_BYTES, parseSettings, serializeSettings, type Settings} from './settings-schema';
 
 // Persistent settings in %LOCALAPPDATA%\ETS2Telemetry\settings\settings.json (docs/settings.md). Main owns the only
 // instance. Loading never writes; a change is applied in memory only after its atomic write and rename succeeded.
@@ -123,7 +123,7 @@ export class SettingsStore {
   get knownAutostartIntent(): boolean | undefined {return this.autostartKnown ? this.settings.autostart : undefined;}
 
   view(): SettingsView {
-    return {nowPlaying: this.settings.nowPlaying, language: this.settings.language, autostart: this.settings.autostart, units: this.settings.units, gearDisplay: this.settings.gearDisplay, overlay: this.settings.overlay, state: this.state, writable: !READ_ONLY_STATES.includes(this.state), saveError: this.saveError};
+    return {nowPlaying: this.settings.nowPlaying, language: this.settings.language, autostart: this.settings.autostart, theme: this.settings.theme, units: this.settings.units, gearDisplay: this.settings.gearDisplay, overlay: this.settings.overlay, state: this.state, writable: !READ_ONLY_STATES.includes(this.state), saveError: this.saveError};
   }
 
   /**
@@ -192,6 +192,12 @@ export class SettingsStore {
   /** Serialized save of the Start with Windows setting (ET-031). */
   setAutostart(autostart: boolean): Promise<SettingsView> {
     return this.enqueue(settings => ({next: {...settings, autostart}, facts: {autostart}}));
+  }
+
+  /** Serialized save of the main-window theme preference (ET-082). */
+  setTheme(theme: ThemePreference): Promise<SettingsView> {
+    if (!isThemePreference(theme)) return Promise.reject(new Error('Invalid theme request'));
+    return this.enqueue(settings => ({next: {...settings, theme}, facts: {theme}}));
   }
 
   /** Serialized save of one game's profile. Resolves with the applied settings only after the durable rename. */

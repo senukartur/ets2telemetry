@@ -185,7 +185,7 @@ it('marks v1 data stale when the subscription closes or a replacement port await
 it('preserves the frozen narrow bridge and rejects privileged source values before IPC', async () => {
   expect(Object.isFrozen(bridge)).toBe(true); expect(Object.keys(bridge).sort()).toEqual(['beginOverlayEdit', 'checkForUpdates', 'choosePluginFolder', 'deleteJournalTrip', 'exitApplication', 'exportDiagnostics', 'exportJournalTrip', 'finishOverlayEdit', 'getAppState', 'getHardModeStatus', 'getJournalTrip', 'getStatus',
     'listJournalEvents', 'listJournalIntervals', 'listJournalSamples', 'listJournalTrips', 'openPluginFolder', 'refreshHardMode',
-    'resetOverlayEditPlacement', 'retryPluginSetup', 'selectSource', 'setAutostart', 'setGearDisplay', 'setLanguage', 'setOverlayBackgroundOpacity', 'setOverlayEditScale', 'setOverlayEnabled', 'setOverlayLayout', 'setOverlaySections', 'setPluginGameExcluded', 'setUnitProfile',
+    'resetOverlayEditPlacement', 'retryPluginSetup', 'selectSource', 'setAutostart', 'setGearDisplay', 'setLanguage', 'setTheme', 'setOverlayBackgroundOpacity', 'setOverlayEditScale', 'setOverlayEnabled', 'setOverlayLayout', 'setOverlaySections', 'setPluginGameExcluded', 'setUnitProfile',
     'showPluginFile', 'subscribeAppState', 'subscribeLive', 'uninstallApplication', 'updateApplication', 'setNowPlayingEnabled', 'setNowPlayingStyle', 'setNowPlayingBackgroundOpacity', 'selectNowPlayingSource', 'beginNowPlayingEdit', 'resetNowPlayingEditPlacement', 'finishNowPlayingEdit',
     'getDashboardUploadContext', 'verifyDashboardUploadToken', 'confirmDashboardUpload', 'cancelDashboardUpload', 'disconnectDashboardUpload', 'subscribeDashboardUpload'].sort());
   await expect(bridge.selectSource('C:\\arbitrary.exe' as never)).rejects.toThrow('Invalid source selection');
@@ -227,7 +227,7 @@ it('appends the application state and exit methods after the original three brid
   // ET-016 PR-5 the trip export, ET-017 PR-4 the five plugin setup methods, ET-017 PR-6 the diagnostics export and ET-018
   // PR-4 the in-app uninstall. ET-050 adds the gear display setter right after the unit profile setter. ET-055 appends the
   // update click and the manual update check. ET-103c appends six safe Dashboard upload methods after all legacy keys.
-  expect(Object.keys(bridge)).toEqual(['getStatus', 'selectSource', 'subscribeLive', 'getAppState', 'subscribeAppState', 'exitApplication', 'setLanguage', 'setAutostart', 'setUnitProfile',
+  expect(Object.keys(bridge)).toEqual(['getStatus', 'selectSource', 'subscribeLive', 'getAppState', 'subscribeAppState', 'exitApplication', 'setLanguage', 'setTheme', 'setAutostart', 'setUnitProfile',
     'setGearDisplay', 'setOverlayBackgroundOpacity', 'setOverlayEnabled', 'setOverlayLayout', 'setOverlaySections', 'beginOverlayEdit', 'setOverlayEditScale', 'resetOverlayEditPlacement', 'finishOverlayEdit',
     'listJournalTrips', 'getJournalTrip', 'listJournalEvents', 'listJournalIntervals', 'listJournalSamples', 'exportJournalTrip', 'deleteJournalTrip',
     'retryPluginSetup', 'choosePluginFolder', 'setPluginGameExcluded', 'showPluginFile', 'openPluginFolder', 'exportDiagnostics', 'uninstallApplication', 'getHardModeStatus', 'refreshHardMode',
@@ -262,6 +262,17 @@ it('validates language requests before IPC and forwards exactly an allowed langu
   expect(ipc.invoke).not.toHaveBeenCalled();
   await bridge.setLanguage('ru');
   expect(ipc.invoke).toHaveBeenCalledWith('settings:set-language', 'ru');
+});
+// ET-082: one setter of the existing kind; an invalid value never reaches IPC.
+it('validates theme requests before IPC and forwards exactly an allowed theme', async () => {
+  await expect(bridge.setTheme('blue' as never)).rejects.toThrow('Invalid theme');
+  await expect(bridge.setTheme(1 as never)).rejects.toThrow('Invalid theme');
+  await expect(bridge.setTheme(undefined as never)).rejects.toThrow('Invalid theme');
+  expect(ipc.invoke).not.toHaveBeenCalled();
+  for (const theme of ['light', 'dark', 'system'] as const) {
+    await bridge.setTheme(theme);
+    expect(ipc.invoke).toHaveBeenLastCalledWith('settings:set-theme', theme);
+  }
 });
 it('validates autostart requests before IPC and forwards exactly a boolean', async () => {
   await expect(bridge.setAutostart('true' as never)).rejects.toThrow('Invalid autostart');
