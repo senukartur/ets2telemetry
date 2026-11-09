@@ -13,7 +13,7 @@ import {
 // ET-070 (owner decisions D2, D3; the requirement changed): the fixed Hard Mode indicator is the last strip item after every
 // selection, at most 100 px with its 14 px gap. The rows below that it changes are marked ET-070; the others were re-derived
 // with it and are unchanged on purpose.
-// ET-071: cruise control is a fixed 140 px item after RPM. The rows it changes are marked ET-071 and re-derived by hand with
+// ET-071: cruise control is an item after RPM reserved at its 140 px cap (content-sized like speed since ET-057). The rows it changes are marked ET-071 and re-derived by hand with
 // the sequence tags 96, 96, speed 140, gear 90, RPM 130, cruise control 140, fuel 190, range 140, SDK consumption 230, cargo,
 // origin and destination 300, distance driven and remaining 150, deadline 220, income 300, game time 200, the break 150 and
 // the indicator 100, each after a 14 px gap.
@@ -31,9 +31,8 @@ it('fixes the hand-written maximum widths of every strip item', () => {
   expect({slots: STRIP_TAG_SLOTS, tag: STRIP_TAG_MAX_WIDTH_CSS, row: STRIP_ROW_HEIGHT_CSS, border: STRIP_BORDER_CSS, padding: STRIP_PADDING_X_CSS,
     gap: STRIP_COLUMN_GAP_CSS}).toEqual({slots: 2, tag: 96, row: 38, border: 1, padding: 12, gap: 14});
   expect(STRIP_HARD_MODE_MAX_WIDTH_CSS).toBe(100);
-  // ET-071: cruise control is always exactly its cap, so a value, OFF and the dash take the same width. ET-084: so is the
-  // speed limit sign, for a limit, no limit and no reading.
-  expect([...STRIP_FIXED_WIDTH_SECTIONS]).toEqual(['cruise-control', 'speed-limit']);
+  // ET-084: only the speed limit sign is always exactly its cap, so a limit, no limit and no reading take the same width.
+  expect([...STRIP_FIXED_WIDTH_SECTIONS]).toEqual(['speed-limit']);
 });
 
 it.each([

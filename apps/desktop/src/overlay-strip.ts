@@ -27,11 +27,12 @@ export const STRIP_ITEM_MAX_WIDTH_CSS: Readonly<Record<OverlaySectionId, number>
 });
 
 /**
- * Sections whose strip item is always exactly its maximum width (ET-071): the renderer sets the minimum width to the cap,
- * so switching between a set speed, `OFF` and a dash never resizes the item or moves its neighbours. The speed limit sign
- * (ET-084) is the item's whole 32 px: no icon, no unit, and it is never a group's first item because the driving group comes first.
+ * Sections whose strip item is always exactly its maximum width: only the speed limit sign (ET-084). The renderer sets the
+ * minimum width to the cap, so the ETS2 sign (32 px wide), the ATS sign (26 px wide) and the no-limit state take the same
+ * item width and never move a neighbour. The sign is the item's whole 32 px: no icon, no unit, and no divider, because it
+ * belongs to the first group.
  */
-export const STRIP_FIXED_WIDTH_SECTIONS: ReadonlySet<OverlaySectionId> = new Set<OverlaySectionId>(['cruise-control', 'speed-limit']);
+export const STRIP_FIXED_WIDTH_SECTIONS: ReadonlySet<OverlaySectionId> = new Set<OverlaySectionId>(['speed-limit']);
 
 /**
  * ET-070 (owner decisions D2, D3): the fixed Hard Mode indicator is the strip's last item after every enabled section. Its

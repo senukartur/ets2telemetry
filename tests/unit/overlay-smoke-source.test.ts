@@ -581,9 +581,9 @@ describe('hidden overlay evidence capture', () => {
     const {HIDDEN_OVERLAY_DOM_TIMEOUT_MS} = await import(observationModule);
     expect(HIDDEN_OVERLAY_DOM_TIMEOUT_MS).toBe(10000);
     const overlay = fakeOverlay('ok', () => new Promise<string>(() => undefined));
-    const started = performance.now();
+    // The DOM read never settles, so only the 50 ms bound can reject: the code names the bound that fired, and the default
+    // 10 s bound could not fire inside this case's 5 s timeout. The elapsed time would measure the host, not the bound.
     await expect(capture(overlay, {domTimeout: 50})).rejects.toThrow('HIDDEN_OVERLAY_DOM_NOT_READ_WITHIN_50_MS');
-    expect(performance.now() - started).toBeLessThan(2000);
     expect(overlay.requests).toEqual([]);
   });
 });

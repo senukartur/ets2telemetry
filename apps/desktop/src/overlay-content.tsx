@@ -66,8 +66,8 @@ function Tags({tags, maxWidth}: {tags: OverlayTag[]; maxWidth?: number}) {
  * 38 px rows (ET-012c): tags, then the groups' items with icons, wrapped whole onto as many rows as the window reserves
  * for the enabled sections. The first item of each later group draws a thin divider before itself, so an item that
  * starts a row keeps its divider. Every item is capped at the maximum width main reserved for it (overlay-strip.ts); a
- * longer value ends in an ellipsis, so every enabled section stays inside the window. A fixed-width section (ET-071) also
- * has that width as its minimum, so its value changes never move a neighbour.
+ * longer value ends in an ellipsis, so every enabled section stays inside the window. The speed limit sign (ET-084) also
+ * has that width as its minimum, so its states never move a neighbour.
  */
 function Strip({view}: {view: OverlayView}) {
   return <div className="overlay-surface overlay-strip-row">

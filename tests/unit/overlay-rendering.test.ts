@@ -155,7 +155,7 @@ it('adds no urgency marks to a normal or unavailable break, nor to any other sec
 });
 
 // ET-071: cruise control in every layout with the lucide CircleGauge, a three-digit reserve like speed, and in the strip a
-// fixed 140 px slot (minimum = maximum) in every state, so a set speed, OFF and the dash never move a neighbour. The texts are
+// strip sizing matching speed with a 140 px cap. The texts are
 // hand-written from strings.ts: a set speed splits into number and unit, OFF is localized and the dash has no unit.
 const CRUISE_STATES: {section: OverlayPresentation['sections'][number]; en: {value: string; unit?: string}; ru: {value: string; unit?: string}}[] = [
   {section: {id: 'cruise-control', state: 'value', text: '90 km/h'}, en: {value: '90', unit: 'km/h'}, ru: {value: '90', unit: 'км/ч'}},
@@ -163,7 +163,7 @@ const CRUISE_STATES: {section: OverlayPresentation['sections'][number]; en: {val
   {section: {id: 'cruise-control', state: 'unavailable'}, en: {value: '—'}, ru: {value: '—'}}
 ];
 const CRUISE_LABELS = {en: {short: 'Cruise', label: 'Cruise control'}, ru: {short: 'Круиз', label: 'Круиз-контроль'}} as const;
-it.each(['en', 'ru'] as const)('renders cruise control with its icon, reserve and a fixed strip slot in every state and layout in %s', language => {
+it.each(['en', 'ru'] as const)('renders cruise control with its icon, reserve and a content-sized strip item in every state and layout in %s', language => {
   const labels = CRUISE_LABELS[language];
   for (const expected of CRUISE_STATES) {
     const sections: OverlayPresentation['sections'] = [{id: 'speed', state: 'value', text: '90 km/h'}, expected.section, {id: 'fuel', state: 'value', text: '73.0 L'}];
@@ -176,13 +176,11 @@ it.each(['en', 'ru'] as const)('renders cruise control with its icon, reserve an
       expect(html, label).toContain(`<strong class="overlay-value" data-testid="overlay-cruise-control" data-reserve="000">${text.value}</strong>`);
       if (text.unit) expect(html, label).toContain(`<span class="overlay-unit" data-testid="overlay-cruise-control-unit">${text.unit}</span>`);
       else expect(html, label).not.toContain('overlay-cruise-control-unit');
+      expect(html, label).not.toContain('min-width');
       if (layout === 'strip') {
-        expect(html, label).toContain(`data-testid="overlay-section-cruise-control" aria-label="${labels.short}" style="max-width:140px;min-width:140px"`);
-        // Only cruise control has a minimum width; speed and fuel keep their caps alone.
-        expect(html.match(/min-width/g), label).toHaveLength(1);
+        expect(html, label).toContain(`data-testid="overlay-section-cruise-control" aria-label="${labels.short}" style="max-width:140px"`);
         expect(html, label).toContain('data-testid="overlay-section-speed" aria-label="' + (language === 'en' ? 'Speed' : 'Скорость') + '" style="max-width:140px"');
       } else {
-        expect(html, label).not.toContain('min-width');
         expect(html, label).toContain(layout === 'card' ? `</svg>${labels.label}</dt>` : layout === 'cluster' ? `</svg>${labels.short}</span>` : `<span class="overlay-label">${labels.short}</span>`);
       }
     }
@@ -313,14 +311,14 @@ it('keeps the sign art untranslated and the accessible names localized in Russia
   expect(signHtml('strip', 'ETS2', limitSections('none'), 'ru')).toContain('aria-label="Ограничение скорости: без ограничения"');
   expect(signHtml('cluster', 'ETS2', limitSections(), 'ru')).toContain('aria-label="Ограничение скорости: нет данных"');
 });
-it('reserves the strip sign its fixed 32 px slot in every state, and only the cruise control and sign items have a minimum width', () => {
+it('reserves the strip sign its fixed 32 px slot in every state, and only the sign item has a minimum width', () => {
   for (const {source, text, name} of SIGN_CASES) {
     const html = signHtml('strip', source, limitSections(text));
     expect(html, name).toContain(`data-testid="overlay-section-speed-limit" aria-label="${name}" style="max-width:32px;min-width:32px"`);
     expect(html.match(/min-width/g), name).toHaveLength(1);
   }
   const both = signHtml('strip', 'ETS2', [{id: 'cruise-control', state: 'value', text: 'off'}, ...limitSections('90 km/h')]);
-  expect(both.match(/min-width/g)).toHaveLength(2);
+  expect(both.match(/min-width/g)).toHaveLength(1);
 });
 it.each([
   {sections: ['speed', 'gear', 'rpm'], height: 96, count: 3, withSpeed: true},
