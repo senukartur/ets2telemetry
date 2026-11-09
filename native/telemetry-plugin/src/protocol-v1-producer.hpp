@@ -31,10 +31,11 @@ std::vector<std::string> welcome_event_types(bool gameplay_events_registered, bo
 
 // Every builder returns the wire tree of one server message. `capture_ns` must not precede any source-clock time the
 // message carries (occurred, lost or retention times); encode() rejects such a message.
-// `minor` is the minor the connection selected (ET-050b B1, ET-052, ET-071, default 0). Every message of a connection
+// `minor` is the minor the connection selected (ET-050b B1, ET-052, ET-071, ET-084, default 0). Every message of a connection
 // carries it in its envelope and the welcome announces it; only checkpoints and snapshots differ in content:
-// `state.gearbox` from minor 1, `state.nextMandatoryBreak` from minor 2 and `state.cruiseControl` from minor 3. A message
-// of minor 0, 1 or 2 is byte-identical to the original encoding of that minor: none of them carries cruise control.
+// `state.gearbox` from minor 1, `state.nextMandatoryBreak` from minor 2, `state.cruiseControl` from minor 3 and
+// `state.speedLimit` from minor 4. A message of minor 0 to 3 is byte-identical to the original encoding of that minor:
+// none of them carries the speed limit.
 class Encoder {
  public:
   explicit Encoder(SessionIdentity identity) : identity_(std::move(identity)) {}

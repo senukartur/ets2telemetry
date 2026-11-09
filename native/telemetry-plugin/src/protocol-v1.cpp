@@ -188,10 +188,11 @@ Gearbox gearbox(const Json& g) {
 }
 constexpr const char* state_keys[] = {"simulation", "speed", "fuel", "fuelCapacity", "engineRpm", "gear", "odometer", "averageConsumption", "estimatedRange",
   "navigationDistance", "gameTime", "captureUtcUnixMs", "boundaryOrder", "worldPlacement", "configuration", "window"};
-// The minor-0 state, plus `gearbox` from minor 1, `nextMandatoryBreak` from minor 2 and `cruiseControl` from minor 3,
-// exactly as the envelope minor says; returns the boundary order.
-std::uint64_t state(const Json& o, unsigned minor, std::optional<Gearbox>& box, std::optional<Measure>& next_break, std::optional<Measure>& cruise) {
-  if (minor >= 3) exact(o, state_keys, {"gearbox", "nextMandatoryBreak", "cruiseControl"});
+// The minor-0 state, plus `gearbox` from minor 1, `nextMandatoryBreak` from minor 2, `cruiseControl` from minor 3 and
+// `speedLimit` from minor 4, exactly as the envelope minor says; returns the boundary order.
+std::uint64_t state(const Json& o, unsigned minor, std::optional<Gearbox>& box, std::optional<Measure>& next_break, std::optional<Measure>& cruise, std::optional<Measure>& limit) {
+  if (minor >= 4) exact(o, state_keys, {"gearbox", "nextMandatoryBreak", "cruiseControl", "speedLimit"});
+  else if (minor == 3) exact(o, state_keys, {"gearbox", "nextMandatoryBreak", "cruiseControl"});
   else if (minor == 2) exact(o, state_keys, {"gearbox", "nextMandatoryBreak"}); else if (minor == 1) exact(o, state_keys, {"gearbox"}); else exact(o, state_keys, {});
   choice(at(o, "simulation"), {"running", "paused", "unavailable"});
   measure(at(o, "speed"), "m/s", -1000, 1000); measure(at(o, "fuel"), "L", 0, 1e6); measure(at(o, "fuelCapacity"), "L", 0, 1e6);
@@ -219,6 +220,8 @@ std::uint64_t state(const Json& o, unsigned minor, std::optional<Gearbox>& box, 
   if (minor >= 2) next_break = measure(at(o, "nextMandatoryBreak"), "min", -2147483648.0, 2147483647.0, true);
   // Never negative, with the same magnitude bound as speed; zero (cruise control off) is a value (ET-071).
   if (minor >= 3) cruise = measure(at(o, "cruiseControl"), "m/s", 0, 1000);
+  // Speed's bounds: zero and negative are values meaning no limit (ET-084).
+  if (minor >= 4) limit = measure(at(o, "speedLimit"), "m/s", -1000, 1000);
   return boundary_order;
 }
 SourceStatus status(const Json& o, std::uint64_t capture_ns) {
@@ -338,7 +341,7 @@ Message server_message(const Json& o, unsigned max) {
       record(d, {"boundarySeq", "state", "status", "continuity"});
       const auto boundary = std::get_if<std::string>(&at(d, "boundarySeq").value); if (!boundary || *boundary != str(at(o, "seq"))) fail(); v.boundary_seq = m.seq;
     } else record(d, {"state", "status", "continuity"});
-    v.boundary_order = state(at(d, "state"), m.minor, v.gearbox, v.next_mandatory_break, v.cruise_control); v.status = status(at(d, "status"), capture_ns);
+    v.boundary_order = state(at(d, "state"), m.minor, v.gearbox, v.next_mandatory_break, v.cruise_control, v.speed_limit); v.status = status(at(d, "status"), capture_ns);
     const auto& c = at(d, "continuity"); record(c, {"coalescedSnapshots", "offlineTransitions"});
     v.continuity = {u64(at(c, "coalescedSnapshots")), u64(at(c, "offlineTransitions"))}; m.state = std::move(v);
   } else if (m.kind == "event") {
