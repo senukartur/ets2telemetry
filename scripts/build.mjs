@@ -4,7 +4,7 @@ import path from 'node:path';
 import { builtinModules } from 'node:module';
 import {readdirSync, readFileSync, writeFileSync} from 'node:fs';
 import {resolveBuild} from './build-channel.mjs';
-import {sourceHashes} from './source-inputs.mjs';
+import {sha256, sourceHashes} from './source-inputs.mjs';
 import {stageUninstallExecutor} from './uninstall-executor.mjs';
 import {isReleaseDashboardOrigin} from '../packages/contracts/src/dashboard-upload.ts';
 const sources = sourceHashes();
@@ -45,4 +45,5 @@ for (const [name, pattern] of emitted) {
 if (JSON.stringify(sources) !== JSON.stringify(sourceHashes())) throw new Error('Sources changed during build; rebuild before packaging');
 // The deferred-cleanup executor with this build's `$Channel` line, which forge.config.cjs packages (ET-055 UP12).
 stageUninstallExecutor(resolved.channel);
-writeFileSync('apps/desktop/dist/build-evidence.json', JSON.stringify({builtUtc: new Date().toISOString(), channel: resolved.channel, version: resolved.version, dashboardConfigured: dashboardOrigin !== null, sources}, null, 2) + '\n');
+writeFileSync('apps/desktop/dist/build-evidence.json', JSON.stringify({builtUtc: new Date().toISOString(), channel: resolved.channel, version: resolved.version,
+  dashboardConfigured: dashboardOrigin !== null, dashboardOriginSha256: dashboardOrigin && sha256(dashboardOrigin), sources}, null, 2) + '\n');

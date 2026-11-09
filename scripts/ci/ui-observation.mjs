@@ -954,6 +954,7 @@ export async function runUiSmoke({application, dashboard, overlay, source, sourc
         }
         for (const control of ['account.confirmation', 'account.counts', 'account.firstSync', 'account.disconnect']) assert.equal(await dashboard.getByTestId(control).count(), 0, `UI_DISCONNECTED_CONTROL_${control}`);
         record.dashboardConfigured = await dashboard.getByTestId('account.token.input').isVisible();
+        assert.equal(record.dashboardConfigured, config.dashboardConfigured);
         record.flags.accountBuildConfiguration = true;
         await dashboard.getByTestId('tab-hardMode').focus(); await dashboard.keyboard.press('Enter');
         await dashboard.waitForFunction(() => globalThis.document.activeElement?.getAttribute('data-testid') === 'screen-title');

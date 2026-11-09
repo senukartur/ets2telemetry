@@ -35,6 +35,7 @@ assert.equal(metadata.channel, build.channel, `Package was built for the ${metad
 assert.equal(metadata.version, build.version, 'Package was built with another version');
 const dashboardOrigin = process.env.ETS2TELEMETRY_DASHBOARD_ORIGIN || null;
 assert.equal(metadata.dashboardConfigured, dashboardOrigin !== null, 'Package Dashboard configuration differs from the build environment');
+assert.ok(metadata.dashboardOriginSha256 === (dashboardOrigin && sha256(dashboardOrigin)), 'Package Dashboard origin differs from the build environment');
 // Electron names userData and the single-instance lock after the packaged productName and reports this version.
 const packagedManifest = JSON.parse(read('package.json'));
 assert.equal(packagedManifest.productName, identity.productName, 'Packaged productName differs from the build channel');
@@ -55,7 +56,7 @@ for (const filename of files) {
   if (dashboardOrigin && /\.[cm]?js$/.test(filename)) {
     const receivesOrigin = filename === 'main.cjs' || filename === 'telemetry-service.cjs';
     const text = bytes.toString('utf8');
-    assert.equal(text.includes(`"${dashboardOrigin}"`) || text.includes(`'${dashboardOrigin}'`), receivesOrigin, `Unexpected Dashboard origin configuration in ${filename}`);
+    assert.equal(text.includes(dashboardOrigin), receivesOrigin, `Unexpected Dashboard origin configuration in ${filename}`);
   }
 }
 for (const name of ['main', 'preload', 'overlay-preload', 'now-playing-preload', 'telemetry-service', 'storage-worker']) {
