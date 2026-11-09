@@ -48,12 +48,12 @@ function evidence() {
     {time: at(16), pid: B, event: 'APP_EXIT', detail: {code: 0}}
   ];
   const service: Row[] = [
-    {time: at(1), pid: A_SERVICE, event: 'HISTORY_STORAGE_OPENED', facts: {schemaVersion: 6, created: false, migratedFrom: null}},
+    {time: at(1), pid: A_SERVICE, event: 'HISTORY_STORAGE_OPENED', facts: {schemaVersion: 8, created: false, migratedFrom: null}},
     {time: at(1), pid: A_SERVICE, event: 'RECORDING_TARGET', facts: {purpose: 'synthetic'}},
     {time: at(8), pid: A_SERVICE, event: 'SHUTDOWN_STEP', facts: {phase: 'flush', name: 'recording-flush', outcome: 'ok', ms: 3}},
     {time: at(9), pid: A_SERVICE, event: 'SHUTDOWN_STEP', facts: {phase: 'storage', name: 'history-storage', outcome: 'ok', ms: 40}},
     {time: at(9), pid: A_SERVICE, event: 'HISTORY_STORAGE_CLOSED'},
-    {time: at(13), pid: B_SERVICE, event: 'HISTORY_STORAGE_OPENED', facts: {schemaVersion: 6, created: false, migratedFrom: null}},
+    {time: at(13), pid: B_SERVICE, event: 'HISTORY_STORAGE_OPENED', facts: {schemaVersion: 8, created: false, migratedFrom: null}},
     {time: at(13), pid: B_SERVICE, event: 'RECORDING_TARGET', facts: {purpose: 'synthetic'}},
     {time: at(16), pid: B_SERVICE, event: 'HISTORY_STORAGE_CLOSED'}
   ];
@@ -135,11 +135,13 @@ describe('update-from-feed driver commands', () => {
         .toMatch(/^RESTART_BEFORE_RECORDING_FLUSH/);
       expect(await failure(value => {value.observed.restartedImage = 'LocalAppData\\ETS2TelemetryStagingDesktop\\app-0.1.0-stg000000\\ETS2TelemetryDesktopStaging.exe';}))
         .toMatch(/^RESTARTED_IMAGE_NOT_B/);
-      expect(await failure(value => {value.service = value.service.map(row => row.pid === B_SERVICE && row.event === 'HISTORY_STORAGE_OPENED' ? {...row, facts: {schemaVersion: 6, created: true, migratedFrom: null}} : row);}))
+      expect(await failure(value => {value.service = value.service.map(row => row.pid === B_SERVICE && row.event === 'HISTORY_STORAGE_OPENED' ? {...row, facts: {schemaVersion: 8, created: true, migratedFrom: null}} : row);}))
         .toMatch(/^RESTARTED_HISTORY_UNEXPECTED/);
       expect(await failure(value => {value.service = value.service.map(row => row.pid === B_SERVICE && row.event === 'HISTORY_STORAGE_OPENED' ? {...row, facts: {schemaVersion: 3, created: false, migratedFrom: null}} : row);}))
         .toMatch(/^RESTARTED_HISTORY_UNEXPECTED/);
-      expect(await failure(value => {value.service = value.service.map(row => row.pid === B_SERVICE && row.event === 'HISTORY_STORAGE_OPENED' ? {...row, facts: {schemaVersion: 6, created: false, migratedFrom: 1}} : row);}))
+      expect(await failure(value => {value.service = value.service.map(row => row.pid === B_SERVICE && row.event === 'HISTORY_STORAGE_OPENED' ? {...row, facts: {schemaVersion: 7, created: false, migratedFrom: null}} : row);}))
+        .toMatch(/^RESTARTED_HISTORY_UNEXPECTED/);
+      expect(await failure(value => {value.service = value.service.map(row => row.pid === B_SERVICE && row.event === 'HISTORY_STORAGE_OPENED' ? {...row, facts: {schemaVersion: 8, created: false, migratedFrom: 1}} : row);}))
         .toMatch(/^RESTARTED_HISTORY_UNEXPECTED/);
       expect(await failure(value => {value.observed.requester = {locked: false};})).toMatch(/^RESTARTED_INSTANCE_DID_NOT_EXIT/);
       expect(await failure(value => {value.main.push({time: at(17), pid: B, event: 'RENDER_PROCESS_GONE'});})).toMatch(/^FAILURE_EVENT_LOGGED/);

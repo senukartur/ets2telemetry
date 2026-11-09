@@ -41,6 +41,7 @@ jobs:
       electron_config_cache: ${{ github.workspace }}\.local\cache\electron
       PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD: '1'
       ETS2TELEMETRY_SOURCE_COMMIT: ${{ github.event.pull_request.head.sha || github.sha }}
+      ETS2TELEMETRY_DASHBOARD_ORIGIN: ${{ github.ref != 'refs/heads/main' && vars.ETS2TELEMETRY_DASHBOARD_ORIGIN || '' }}
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
       # ET-055 PR-4 (UP13, docs/ci.md#build-channels-et-055-pr-4): only main builds production, for the release artifact: a push
@@ -59,6 +60,10 @@ jobs:
         run: |
           if ($env:GITHUB_RUN_NUMBER -cnotmatch '^[1-9][0-9]{0,5}$') { throw 'GITHUB_RUN_NUMBER must be 1 to 6 digits for the staging version.' }
           Add-Content -LiteralPath $env:GITHUB_ENV -Value ('ETS2TELEMETRY_STAGING_RUN_NUMBER=' + $env:GITHUB_RUN_NUMBER.PadLeft(6, '0'))
+      - name: Require the official staging Dashboard origin
+        if: github.repository == 'senukartur/ets2telemetry' && github.ref != 'refs/heads/main' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository)
+        run: |
+          if (!$env:ETS2TELEMETRY_DASHBOARD_ORIGIN) { throw 'Set the staging Dashboard origin in the repository Actions variables.' }
       - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5
         with:
           node-version: '24.19.0'
@@ -701,6 +706,7 @@ jobs:
       PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD: '1'
       ETS2TELEMETRY_SOURCE_COMMIT: ${{ github.event.pull_request.head.sha || github.sha }}
       ETS2TELEMETRY_BUILD_CHANNEL: staging
+      ETS2TELEMETRY_DASHBOARD_ORIGIN: ${{ vars.ETS2TELEMETRY_DASHBOARD_ORIGIN }}
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
       # ET-055 UP15: the staging version is <base>-stg.<6-digit run number>, so successive main runs sort upward and none
@@ -710,6 +716,10 @@ jobs:
         run: |
           if ($env:GITHUB_RUN_NUMBER -cnotmatch '^[1-9][0-9]{0,5}$') { throw 'GITHUB_RUN_NUMBER must be 1 to 6 digits for the staging version.' }
           Add-Content -LiteralPath $env:GITHUB_ENV -Value ('ETS2TELEMETRY_STAGING_RUN_NUMBER=' + $env:GITHUB_RUN_NUMBER.PadLeft(6, '0'))
+      - name: Require the official staging Dashboard origin
+        if: github.repository == 'senukartur/ets2telemetry'
+        run: |
+          if (!$env:ETS2TELEMETRY_DASHBOARD_ORIGIN) { throw 'Set the staging Dashboard origin in the repository Actions variables.' }
       - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5
         with:
           node-version: '24.19.0'

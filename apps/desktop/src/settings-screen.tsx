@@ -4,7 +4,6 @@ import {Alert, AlertDescription, AlertTitle} from '@/components/ui/alert';
 import {Badge} from '@/components/ui/badge';
 import {Label} from '@/components/ui/label';
 import {RadioGroup, RadioGroupItem} from '@/components/ui/radio-group';
-import logo from './assets/logo.png';
 import huninnFontLicense from './assets/huninn-OFL.txt?raw';
 import huninnFontLicenseUrl from './assets/huninn-OFL.txt?url';
 import {AutostartCard} from './autostart-card';
@@ -13,6 +12,8 @@ import {connectionDiagnosis} from './connection-diagnosis';
 import {GearDisplayCard} from './gear-display-card';
 import {t} from './i18n';
 import {LanguageCard} from './language-card';
+import {ThemedLogo} from './shell/themed-logo';
+import {ThemeCard} from './theme-card';
 import {NowPlayingSettingsCard} from './now-playing/settings-card';
 import {OverlaySettingsCard} from './overlay-settings-card';
 import {DiagnosticsExportRow, PluginSetupCardView, type PluginActions} from './plugin-setup-card';
@@ -31,7 +32,7 @@ import {DEFAULT_UNIT_PROFILES, isUnitProfile, UNIT_GAMES, UNIT_PROFILE_IDS} from
 export const SETTINGS_PANELS = ['general', 'overlay', 'plugin', 'data', 'about'] as const;
 export type SettingsPanel = typeof SETTINGS_PANELS[number];
 /** The card whose request made main's last settings save; main's one `saveError` is shown only there. */
-export type SettingsCard = 'units' | 'gear' | 'overlay' | 'language' | 'autostart';
+export type SettingsCard = 'units' | 'gear' | 'overlay' | 'language' | 'theme' | 'autostart';
 
 export interface SettingsScreenProps {
   hidden: boolean;
@@ -66,8 +67,9 @@ export function SettingsScreen(props: SettingsScreenProps) {
       <button key={id} type="button" aria-current={panel === id ? 'page' : undefined} data-testid={`settings.nav.${id}`} onClick={() => onPanel(id)}>{t(`s.${id}`, undefined, language)}</button>)}</nav>
     <div className="yu-settings-panels">
       <div hidden={panel !== 'general'} className="yu-settings-panel" data-testid="settings.general"><GeneralPanel {...props} /></div>
-      {/* ET-079 restyles the overlay card; until then the panel hosts it unchanged, without a panel header. */}
+
       <div hidden={panel !== 'overlay'} className="yu-settings-panel" data-testid="settings.overlay">
+        <SettingsPanelHeader title={t('s.overlay', undefined, language)} />
         <OverlaySettingsCard settings={props.app?.settings} edit={props.app?.overlayEdit} onSaved={props.onSaved} onRequest={() => props.onRequest('overlay')} showSaveError={props.lastCard === 'overlay'} />
       </div>
       <div hidden={panel !== 'plugin'} className="yu-settings-panel" data-testid="settings.plugin"><PluginPanel {...props} /></div>
@@ -94,6 +96,7 @@ function GeneralPanel({language, app, onSaved, lastCard, onRequest, languageCont
     {showSettingsState ? <Alert><AlertDescription data-testid="settings-state">{getSettingsStateText(settings.state, language)}</AlertDescription></Alert> : null}
     <SettingsSection label={t('s.interface', undefined, language)}>
       <LanguageCard settings={settings} onSaved={onSaved} controller={languageController} showSaveError={lastCard === 'language'} />
+      <ThemeCard settings={settings} onSaved={onSaved} onRequest={() => onRequest('theme')} showSaveError={lastCard === 'theme'} />
       <AutostartCard settings={settings} status={app?.autostart} onSaved={onSaved} onRequest={() => onRequest('autostart')} showSaveError={lastCard === 'autostart'} />
       <SettingRow label={t('s.close', undefined, language)} hint={strings.closeToTray} hintTestId="close-to-tray">
         <span className="yu-setting-value">{t('s.closeV', undefined, language)}</span>
@@ -178,7 +181,7 @@ function AboutPanel({language, app}: SettingsScreenProps) {
     <SettingsPanelHeader title={t('s.about', undefined, language)} />
     {/* No name of its own: the panel's heading already says "About" and the brand block names the application. */}
     <SettingsSection>
-      <div className="yu-about-brand" data-testid="settings.about.brand"><img src={logo} alt="" width={56} height={56} />
+      <div className="yu-about-brand" data-testid="settings.about.brand"><ThemedLogo width={56} height={56} />
         <div><h3>{CHANNEL.displayName}</h3><p>{t('app.sub', undefined, language)}</p><VersionLine info={app?.application} language={language} testId="settings.about.version" /></div></div>
       <SettingRow label={t('s.about.updates', undefined, language)} className="yu-about-update"><AboutUpdateCheck view={app?.update} language={language} /></SettingRow>
       <details className="yu-font-license" data-testid="settings.about.font-license">

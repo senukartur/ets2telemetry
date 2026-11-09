@@ -83,7 +83,7 @@ describe.each(['en', 'ru'] as const)('the Settings screen in %s', language => {
   it('keeps the sub-navigation order and marks only the selected panel, hiding the others', () => {
     for (const panel of SETTINGS_PANELS) {
       const html = render({language, panel});
-      // React adds a preload link for the About logo before the screen.
+      // React may add a preload link for an image before the screen; the About logo is now a <picture> (ET-082).
       expect(html).toContain('<div class="yu-settings" data-testid="settings.screen"><nav class="yu-settings-nav"');
       expect(html).toContain(`aria-label="${copy.navLabel}" data-testid="settings.nav"`);
       const buttons = [...html.matchAll(/<button type="button"( aria-current="page")? data-testid="settings\.nav\.([a-z]+)">([^<]+)<\/button>/g)];
@@ -93,6 +93,13 @@ describe.each(['en', 'ru'] as const)('the Settings screen in %s', language => {
       for (const id of SETTINGS_PANELS) expect(tag(html, `data-testid="settings.${id}"`).includes('hidden=""'), id).toBe(id !== panel);
     }
     expect(render({language, hidden: true})).toContain('<div hidden="" class="yu-settings" data-testid="settings.screen">');
+  });
+  it('places the theme row between the language and Start with Windows (ET-082)', () => {
+    const html = panelOf(render({language}), 'general');
+    const lang = html.indexOf('data-testid="language-card"'), theme = html.indexOf('data-testid="theme-card"'), autostart = html.indexOf('data-testid="autostart-card"');
+    expect(lang).toBeGreaterThan(-1); expect(theme).toBeGreaterThan(lang); expect(autostart).toBeGreaterThan(theme);
+    expect(tag(html, 'data-testid="theme-select"')).toContain('aria-labelledby="theme-label"');
+    expect(html).toContain('id="theme-system"');
   });
   it('shows General as compact rows: interface, closing the window, units, gear display and Now Playing', () => {
     const html = panelOf(render({language, app: appState(language, {gearDisplay: {ets2: 'manual', ats: 'automatic'}})}), 'general');
@@ -113,7 +120,7 @@ describe.each(['en', 'ru'] as const)('the Settings screen in %s', language => {
   it('locks every General control while the settings are read-only and shows how they were read', () => {
     const html = panelOf(render({language, app: appState(language, {state: 'newer-version', writable: false})}), 'general');
     expect(html).toContain('data-testid="settings-state"');
-    for (const group of ['units-ets2', 'units-ats', 'gear-display-ets2', 'gear-display-ats']) expect(tag(html, `data-testid="${group}"`), group).toContain('aria-disabled="true"');
+    for (const group of ['theme-select', 'units-ets2', 'units-ats', 'gear-display-ets2', 'gear-display-ats']) expect(tag(html, `data-testid="${group}"`), group).toContain('aria-disabled="true"');
     expect(html).toMatch(/<div data-slot="select" data-value="[a-z]+" data-disabled="">/);
     expect(tag(html, 'data-testid="autostart-toggle"')).toContain('disabled=""');
     expect(tag(html, 'id="now-playing-enabled"')).toContain('disabled=""');
@@ -165,7 +172,7 @@ describe.each(['en', 'ru'] as const)('the Settings screen in %s', language => {
     expect(html).not.toContain(`aria-label="${copy.about}"`);
     expect(html).toMatch(/<div data-slot="card"[^>]*class="[^"]*yu-settings-card[^"]*"><div class="yu-about-brand"/);
     expect(html.slice(0, html.indexOf('yu-about-brand'))).not.toContain('role="region"');
-    expect(html).toMatch(/data-testid="settings\.about\.brand"><img src="[^"]+" alt="" width="56" height="56"\/><div><h3>Yukon Union Telemetry<\/h3>/);
+    expect(html).toMatch(/data-testid="settings\.about\.brand"><picture><source media="\(prefers-color-scheme: light\)" srcSet="[^"]*logo-dark[^"]*"\/><img src="[^"]*logo\.png[^"]*" alt="" width="56" height="56"\/><\/picture><div><h3>Yukon Union Telemetry<\/h3>/);
     expect(html).toContain('data-testid="settings.about.version"');
     expect(html).toContain(`<div class="yu-setting-row yu-about-update"><div class="yu-setting-text"><span class="yu-setting-label">${copy.updates}</span></div><div class="space-y-2" data-testid="settings.about.update">`);
     expect(html).toContain('data-testid="settings-about-update-check"');
@@ -177,11 +184,14 @@ describe.each(['en', 'ru'] as const)('the Settings screen in %s', language => {
     expect(tag(html, 'data-testid="uninstall-card"')).not.toMatch(/role=|aria-label/);
     expect(html).toMatch(/data-testid="uninstall-button">[^<]+<\/button>/);
   });
-  it('shows the Game plugin card on its panel and hosts the overlay card unchanged', () => {
+  it('shows the Game plugin card on its panel and the Overlay panel heading above its mounted controller', () => {
     const html = render({language, panel: 'plugin'});
     expect(panelOf(html, 'plugin')).toContain('data-testid="plugin-card"');
     expect(panelOf(html, 'plugin')).not.toContain('plugin-export-diagnostics');
-    expect(panelOf(html, 'overlay').startsWith('data-testid="settings.overlay"><div data-testid="overlay-settings"></div></div>')).toBe(true);
+    const overlay = panelOf(html, 'overlay');
+    expect(overlay).toContain(`<h2>${language === 'en' ? 'Overlay' : 'Оверлей'}</h2>`);
+    expect(overlay).toContain('data-testid="overlay-settings"');
+    expect(overlay.indexOf('<h2>')).toBeLessThan(overlay.indexOf('data-testid="overlay-settings"'));
   });
 });
 

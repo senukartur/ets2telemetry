@@ -59,6 +59,14 @@ describe('journal reads at scale (J5; REG-014)', () => {
     expect(ats.trips).toEqual([...expected, JOURNAL_TRIPS.manySamples]);
     expect(new Set(ats.trips).size).toBe(ats.trips.length);
   });
+  it('counts the first page\'s totals over every trip and sample at this size (ET-076)', () => {
+    // The fillers hold 360,000 samples; the anchors 4 + 2 + 1 + 650, one of which (the delivered anchor's second 0) is free driving.
+    const started = performance.now(), first = ok(storage.journalTrips({}));
+    const firstMs = performance.now() - started, later = performance.now(), second = ok(storage.journalTrips({cursor: first.nextCursor!}));
+    process.stderr.write(`JOURNAL_SCALE_FIRST_PAGE_WITH_TOTALS_MS ${(firstMs).toFixed(1)}\nJOURNAL_SCALE_LATER_PAGE_MS ${(performance.now() - later).toFixed(1)}\n`);
+    expect(first.totals).toEqual({trips: 1_008, recordedSeconds: 360_656});
+    expect(second.totals).toBeUndefined();
+  });
   it('reads a generated trip\'s detail, samples and timeline at this size', () => {
     const trip = fillers[TRIPS - 1].tripUuid, detail = ok(storage.journalTrip(trip));
     expect(detail.samples.count).toBe(SAMPLES_PER_TRIP);
@@ -76,7 +84,9 @@ describe('journal reads at scale (J5; REG-014)', () => {
  */
 const PLANS: Record<Exclude<keyof typeof JOURNAL_QUERIES, 'userVersion'>, {params: unknown[]; uses: string[]}> = {
   purpose: {params: [], uses: ['SEARCH database_info USING INTEGER PRIMARY KEY (rowid=?)']},
-  tripPage: {params: [9_223_372_036_854_775_807n, null, null, 'open', 'open', null, null, 50], uses: ['SEARCH trips USING INTEGER PRIMARY KEY (rowid<?)']},
+  tripPage: {params: [9_223_372_036_854_775_807n, null, null, 'open', 'open', null, null, null, null, null, null, 50], uses: ['SEARCH trips USING INTEGER PRIMARY KEY (rowid<?)']},
+  logicalTotals: {params: [9_223_372_036_854_775_807n, null, null, 'open', 'open', null, null, 'unknown', 'unknown', 'other', 'other'], uses: ['SEARCH s USING COVERING INDEX samples_trip (trip_ref=? AND id<?)']},
+  tripTotals: {params: [null, null, 'open', 'open', null, null, 'unknown', 'unknown', 'other', 'other'], uses: ['SEARCH s USING COVERING INDEX samples_trip (trip_ref=?)']},
   tripByUuid: {params: [JOURNAL_TRIPS.delivered], uses: ['SEARCH trips USING INDEX sqlite_autoindex_trips_1 (trip_uuid=?)']},
   job: {params: [1n], uses: ['SEARCH job_configurations USING INTEGER PRIMARY KEY (rowid=?)']},
   session: {params: [1n], uses: ['SEARCH plugin_sessions USING INTEGER PRIMARY KEY (rowid=?)']},

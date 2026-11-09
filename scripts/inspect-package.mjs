@@ -33,6 +33,9 @@ const metadata = JSON.parse(read('apps/desktop/dist/build-evidence.json'));
 assert.deepEqual(metadata.sources, sourceHashes(), 'Package was built from stale source inputs');
 assert.equal(metadata.channel, build.channel, `Package was built for the ${metadata.channel} channel, not ${build.channel}`);
 assert.equal(metadata.version, build.version, 'Package was built with another version');
+const dashboardOrigin = process.env.ETS2TELEMETRY_DASHBOARD_ORIGIN || null;
+assert.equal(metadata.dashboardConfigured, dashboardOrigin !== null, 'Package Dashboard configuration differs from the build environment');
+assert.ok(metadata.dashboardOriginSha256 === (dashboardOrigin && sha256(dashboardOrigin)), 'Package Dashboard origin differs from the build environment');
 // Electron names userData and the single-instance lock after the packaged productName and reports this version.
 const packagedManifest = JSON.parse(read('package.json'));
 assert.equal(packagedManifest.productName, identity.productName, 'Packaged productName differs from the build channel');
@@ -48,7 +51,13 @@ function collect(directory, prefix = '') {
 collect('apps/desktop/dist');
 for (const filename of files) {
   const packaged = `apps/desktop/dist/${filename}`;
-  assert.equal(sha256(read(packaged)), sha256(readFileSync(packaged)), `Stale bundled file: ${filename}`);
+  const bytes = read(packaged);
+  assert.equal(sha256(bytes), sha256(readFileSync(packaged)), `Stale bundled file: ${filename}`);
+  if (dashboardOrigin && /\.[cm]?js$/.test(filename)) {
+    const receivesOrigin = filename === 'main.cjs' || filename === 'telemetry-service.cjs';
+    const text = bytes.toString('utf8');
+    assert.equal(text.includes(dashboardOrigin), receivesOrigin, `Unexpected Dashboard origin configuration in ${filename}`);
+  }
 }
 for (const name of ['main', 'preload', 'overlay-preload', 'now-playing-preload', 'telemetry-service', 'storage-worker']) {
   const filename = `apps/desktop/dist/${name}.cjs`;

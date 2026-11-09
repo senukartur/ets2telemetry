@@ -13,6 +13,10 @@ interface TopBarProps {
   hardMode: StatusChip;
   /** The site sync chip (`SyncChip`), which renders nothing while synchronization is not configured. */
   children?: React.ReactNode;
+  /** Receives the element after the chips, where a page shows its actions through the `actions` shell slot (ET-076). */
+  actionsRef?: React.Ref<HTMLDivElement>;
+  /** Receives the element after the page's crumb, where an open trip names itself through the `breadcrumb` shell slot (ET-077). */
+  breadcrumbRef?: React.Ref<HTMLSpanElement>;
 }
 
 /**
@@ -20,12 +24,13 @@ interface TopBarProps {
  * and site sync. Every chip carries its state in words; the tone repeats it. The group is not a live region, because the
  * game chip changes many times a second while the stream connects.
  */
-export function TopBar({route, language, connection, plugin, hardMode, children}: TopBarProps) {
+export function TopBar({route, language, connection, plugin, hardMode, children, actionsRef, breadcrumbRef}: TopBarProps) {
   return <header className="yu-topbar" data-testid="shell.topbar">
     <nav className="yu-breadcrumb" aria-label={t('shell.breadcrumb', undefined, language)} data-testid="shell.breadcrumb">
       <span>{t(`nav.group.${routeGroup(route)}`, undefined, language)}</span>
       <span className="yu-breadcrumb-separator" aria-hidden="true">/</span>
       <span aria-current="page">{t(`nav.${route}`, undefined, language)}</span>
+      <span className="yu-trip-crumbs" ref={breadcrumbRef} />
     </nav>
     <div className="yu-status-chips" role="group" aria-label={t('shell.status', undefined, language)} data-testid="shell.status">
       <Badge variant={connection.tone} className="yu-chip" data-testid="shell.status.connection"><span className="yu-chip-dot" aria-hidden="true" />{connection.text}</Badge>
@@ -33,5 +38,6 @@ export function TopBar({route, language, connection, plugin, hardMode, children}
       <Badge variant={hardMode.tone} className="yu-chip" data-testid="shell.status.hardMode"><Flame aria-hidden="true" />{hardMode.text}</Badge>
       {children}
     </div>
+    <div className="yu-topbar-actions" ref={actionsRef} />
   </header>;
 }

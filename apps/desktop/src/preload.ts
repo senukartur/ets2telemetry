@@ -10,7 +10,7 @@ import {isOverlayOpacity} from './overlay-opacity';
 import {isOverlayLayout, parseOverlaySections} from './overlay-sections';
 import {isOverlayEditOutcome, parseOverlayEditScale} from './overlay-placement';
 import {isGearDisplayMode, isUnitGame, isUnitProfile} from './unit-profiles';
-import {isAppLanguage} from './settings-schema';
+import {isAppLanguage, isThemePreference} from './settings-schema';
 import {copyTripsQuery, isPageArgument, JOURNAL_CHANNELS, JOURNAL_DELETE_TRIP_CHANNEL, JOURNAL_EXPORT_CHANNEL} from './journal-contract';
 import {ACTIVE_CHANNEL} from './channel';
 import {isJournalUuid} from '../../../packages/contracts/src/journal';
@@ -168,6 +168,9 @@ const bridge: DesktopBridge = {
   setLanguage: language => isAppLanguage(language)
     ? ipcRenderer.invoke('settings:set-language', language)
     : Promise.reject(new Error('Invalid language request')),
+  setTheme: theme => isThemePreference(theme)
+    ? ipcRenderer.invoke('settings:set-theme', theme)
+    : Promise.reject(new Error('Invalid theme request')),
   setAutostart: enabled => typeof enabled === 'boolean'
     ? ipcRenderer.invoke('settings:set-autostart', enabled)
     : Promise.reject(new Error('Invalid autostart request')),

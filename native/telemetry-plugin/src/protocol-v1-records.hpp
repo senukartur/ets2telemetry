@@ -61,7 +61,7 @@ struct OccurrencePod {
   SimulationState simulation = SimulationState::unavailable; std::uint64_t configuration_revision = 0, boundary_order = 0;
 };
 
-enum class GameModeKind : std::uint8_t { unknown = 0, single_player = 1, truckersmp = 2 };
+enum class GameModeKind : std::uint8_t { unknown = 0, single_player = 1, truckersmp = 2, haulmp = 3 };
 enum class DetectionMethod : std::uint8_t { none = 0, module_scan = 1, process_scan = 2 };
 enum class Confidence : std::uint8_t { none = 0, weak = 1, strong = 2 };
 // Game-mode evidence (D9). Unavailable detection defaults to unknown/none/none with no module.

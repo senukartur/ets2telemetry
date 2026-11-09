@@ -14,6 +14,17 @@ describe('REG-004/005/009/010 frozen Dashboard v1 boundary',()=>{
     expect(e.snapshot.expectedIncome).toMatchObject({available:true,value:{raw:'18446744073709551615',sdkType:'u64'}});
     expect(validateUploadEnvelope({...e,type:'trip.corrected'})).toBe(true);
   });
+  it('freezes accounting uncertainty with complete trailers while preserving supported values and exact native money',()=>{
+    const e=envelope();e.snapshot.trailers.complete=true;e.snapshot.trailers.items[0].bodyType={available:true,value:'curtainsider'};
+    e.snapshot.evidence.ruleContextComplete=false;e.snapshot.evidence.reasons=['accounting-unavailable'];
+    const encoded=encodeUploadEnvelope(e);expect(encoded).toBeDefined();
+    const frozen=JSON.parse(new TextDecoder().decode(encoded)) as UploadEnvelope;
+    expect(frozen.snapshot.trailers.complete).toBe(true);
+    expect(frozen.snapshot.evidence).toMatchObject({ruleContextComplete:false,reasons:['accounting-unavailable']});
+    expect(frozen.snapshot.revenue).toEqual({available:true,value:{raw:'-9223372036854775808',sdkType:'s64',currency:{status:'unknown'}}});
+    expect(frozen.snapshot.expectedIncome).toEqual({available:true,value:{raw:'18446744073709551615',sdkType:'u64',currency:{status:'unknown'}}});
+    expect(frozen.snapshot.observedDistance).toEqual({available:true,value:0,unit:'m'});
+  });
   it.each(['extra','unsafe','zero-revision','money','lone-surrogate','lifecycle','owner','oversize','depth'] as const)('rejects invalid envelope: %s',fault=>{
     const e=envelope();if(fault==='extra')Object.assign(e,{token:'private'});
     if(fault==='unsafe')e.createdUtcMs=Number.MAX_SAFE_INTEGER+1;

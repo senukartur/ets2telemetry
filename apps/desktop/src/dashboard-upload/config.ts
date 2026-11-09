@@ -1,13 +1,10 @@
-import {dashboardOrigin} from '../../../../packages/contracts/src/dashboard-upload';
-import type {ReleaseChannel} from '../channel';
-// Activation requires a separately approved deployment change. No renderer/env/CLI override exists.
-export const DASHBOARD_ORIGINS:Readonly<Record<ReleaseChannel,string|null>>=Object.freeze({production:null,staging:null});
-export function isReleaseDashboardOrigin(value:unknown):value is string {
-  if(!dashboardOrigin(value))return false;
-  const host=new URL(value).hostname.toLowerCase();return !(host==='localhost'||host==='[::1]'||host==='0.0.0.0'||host.startsWith('127.')||host.endsWith('.localhost'));
-}
-export function configuredDashboardOrigin(channel:ReleaseChannel):string|null {
-  const value=DASHBOARD_ORIGINS[channel];if(value===null)return null;
-  if(!isReleaseDashboardOrigin(value))throw Error('INVALID_UPLOAD_CONFIGURATION');
-  return value;
+import {isReleaseDashboardOrigin} from '../../../../packages/contracts/src/dashboard-upload';
+import {ACTIVE_CHANNEL, type ReleaseChannel} from '../channel';
+
+// The builder injects one origin for this artifact's channel. Nothing reads the runtime environment.
+declare const __ETS2TELEMETRY_DASHBOARD_ORIGIN__: string | null;
+export function configuredDashboardOrigin(channel: ReleaseChannel): string | null {
+  if (channel !== ACTIVE_CHANNEL || typeof __ETS2TELEMETRY_DASHBOARD_ORIGIN__ === 'undefined' || __ETS2TELEMETRY_DASHBOARD_ORIGIN__ === null) return null;
+  if (!isReleaseDashboardOrigin(__ETS2TELEMETRY_DASHBOARD_ORIGIN__)) throw Error('INVALID_UPLOAD_CONFIGURATION');
+  return __ETS2TELEMETRY_DASHBOARD_ORIGIN__;
 }

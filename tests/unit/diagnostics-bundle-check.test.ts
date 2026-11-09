@@ -1,7 +1,7 @@
 import {DEFAULT_NOW_PLAYING} from '../../apps/desktop/src/now-playing/contract';
 import {describe, expect, it} from 'vitest';
 import type {AppHealth, AppLanguage, GearDisplayMode, LiveTelemetry, OverlayLayout, OverlaySectionId, PluginDiscoveryOutcome, PluginGame, PluginManualFolderState, PluginSetupMode, PluginSetupView, PluginTargetState,
-  PluginTargetView, RecordingHealth, RecordingTarget, RecordingTrip, ServiceHealth, SettingsState, SettingsView, SourceSelection, StorageHealth, UnitProfile} from '../../packages/contracts/src';
+  PluginTargetView, RecordingHealth, RecordingTarget, RecordingTrip, ServiceHealth, SettingsState, SettingsView, SourceSelection, StorageHealth, ThemePreference, UnitProfile} from '../../packages/contracts/src';
 import {DEFAULT_OVERLAY_SETTINGS} from '../../apps/desktop/src/overlay-sections';
 import {buildDiagnosticBundle, type DiagnosticBundleInput} from '../../apps/desktop/src/diagnostic-bundle';
 import {checkDiagnosticsBundle, ENUMS, runtimeStrings, schemaTokens} from '../../scripts/ci/diagnostics-bundle-check.mjs';
@@ -11,7 +11,7 @@ import {checkDiagnosticsBundle, ENUMS, runtimeStrings, schemaTokens} from '../..
 // smoke reads (`mode`, `root`). The names and paths are invented.
 
 const HEALTH: AppHealth = {service: 'ready', storage: 'verified', recording: {state: 'disabled'}, lastError: null};
-const SETTINGS: SettingsView = {nowPlaying: DEFAULT_NOW_PLAYING, language: 'en', autostart: false, units: {ets2: 'metric', ats: 'us-customary'}, gearDisplay: {ets2: 'automatic', ats: 'automatic'}, overlay: DEFAULT_OVERLAY_SETTINGS, state: 'defaults', writable: true, saveError: null};
+const SETTINGS: SettingsView = {nowPlaying: DEFAULT_NOW_PLAYING, language: 'en', autostart: false, theme: 'system', units: {ets2: 'metric', ats: 'us-customary'}, gearDisplay: {ets2: 'automatic', ats: 'automatic'}, overlay: DEFAULT_OVERLAY_SETTINGS, state: 'defaults', writable: true, saveError: null};
 const PLUGINS: PluginSetupView = {mode: 'test-root', bundled: {version: '0.2.0', sha256Prefix: '0123456789ab'}, running: false, games: {
   ets2: {excluded: false, discovery: 'found', manualFolder: 'set', unlistedFolders: 0, targets: []},
   ats: {excluded: true, discovery: 'found', manualFolder: 'none', unlistedFolders: 0, targets: []}}};
@@ -112,6 +112,7 @@ describe('names outside the runtime strings', () => {
       tripPhase: {idle: true, active: true, 'awaiting-outcome': true, 'reload-check': true} satisfies Record<RecordingTrip['phase'], true>,
       tripCompleteness: {unknown: true, partial: true, complete: true} satisfies Record<NonNullable<RecordingTrip['completeness']>, true>,
       language: {en: true, ru: true} satisfies Record<AppLanguage, true>,
+      theme: {light: true, dark: true, system: true} satisfies Record<ThemePreference, true>,
       unitProfile: {metric: true, 'us-customary': true} satisfies Record<UnitProfile, true>,
       gearDisplay: {automatic: true, manual: true, crawler: true} satisfies Record<GearDisplayMode, true>,
       overlayLayout: {strip: true, card: true, cluster: true, hud: true} satisfies Record<OverlayLayout, true>,

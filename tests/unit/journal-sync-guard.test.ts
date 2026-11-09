@@ -12,6 +12,11 @@ it('REG-010/012/014 removes metadata across origin, owner, version, document and
   }
   expect(guardJournalSync(page, undefined, scope).sync).toBeUndefined();
 });
+it('REG-010/014 keeps the first-page totals when it removes the sync facts (ET-076)', () => {
+  const withTotals: JournalTripPage = {...page, totals: {trips: 12, recordedSeconds: 3_600}};
+  expect(guardJournalSync(withTotals, scope, {...scope, connectionVersion: '3'})).toEqual({database: page.database, trips: [], nextCursor: null, totals: {trips: 12, recordedSeconds: 3_600}});
+  expect(guardJournalSync(withTotals, scope, structuredClone(scope))).toEqual(withTotals);
+});
 it('REG-010/014 refuses malformed and extra sync facts before forwarding', () => {
   expect(() => guardJournalSync({...page, sync: {...page.sync!, credentialGeneration: 'secret'} as never}, scope, scope)).toThrow();
   expect(() => guardJournalSync({...page, sync: {...page.sync!, rows: [{} as never]}}, scope, scope)).toThrow();

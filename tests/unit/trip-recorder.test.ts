@@ -50,6 +50,8 @@ class FakeSocket extends EventEmitter implements TelemetrySocket {
  * or scripted to fail; every attempt is logged with its effects before the outcome.
  */
 class ModelStorage implements TripRecorderClient {
+  readonly baselines: unknown[]=[];
+  recordTrailerBaseline(input:{message:unknown}) {this.baselines.push(input.message);return ok(undefined);}
   readonly model = new TripStorageModel();
   readonly attempts: {eventSeq: string; effects: TripEffect[]}[] = [];
   readonly violations: string[] = [];
@@ -746,4 +748,12 @@ describe('ET-016 PR-7 late-attach trips through the trip recorder (J9)', () => {
     expect(await restarted.commit(s.event(r.jobConfigured()), context)).toMatchObject({ok: true, value: {status: 'committed'}});
     expect([storage.model.trips.map(t => [t.tripUuid, t.outcome]), storage.violations]).toEqual([[[trip, 'open']], []]);
   });
+});
+
+
+it('REG-003/005 persists no-job checkpoints before later trip events without replacing them during older replay',async()=>{
+  const storage=new ModelStorage();const recorder=start(storage);connectLatest();const s=new Script(ETS2_A);
+  const welcome=s.welcome(),older=s.event(r.trailerConfigured()),checkpoint=s.checkpoint(null,1),replayed=s.redeliver(older),future=s.event(r.jobConfigured());
+  latest().feed(welcome,checkpoint,replayed,future);await settle();
+  expect(storage.baselines).toEqual([checkpoint]);expect(recorder.view('ets2').phase).toBe('active');expect(latest().acks).toEqual(['1','2']);
 });

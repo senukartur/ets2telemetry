@@ -36,9 +36,10 @@ describe('REG-013/REG-007 verified backups', () => {
     ok(storage.beginUploadProjection({pinId:readyId,tripUuid}));const ready=ok(storage.advanceUploadProjection(readyId));expect(ready.state).toBe('ready');
     db.transaction(()=>{for(let i=0;i<160;i++)db.exec("INSERT INTO completeness_intervals(plugin_session_ref,trip_ref,kind,created_utc_ms) VALUES(1,1,'sample-loss',1000)");})();revise(db,1n);
     ok(storage.beginUploadProjection({pinId:preparingId,tripUuid}));const preparing=ok(storage.advanceUploadProjection(preparingId));expect(preparing.state).toBe('preparing');
-    const source=contentDigest(db);expect(source.rowCounts.upload_projection_pins).toBe(2);expect(source.rowCounts.upload_projection_evidence_versions).toBe(1);
+    ok(storage.recordTrailerBaseline({message:(await import('./helpers')).v1('checkpoint')}));
+    const source=contentDigest(db);expect(source.rowCounts.trailer_baselines).toBe(1);expect(source.rowCounts.upload_projection_pins).toBe(2);expect(source.rowCounts.upload_projection_evidence_versions).toBe(1);
     expect(source.rowCounts.upload_projection_intervals).toBeGreaterThan(0);
-    const backup=await backupBeforeMigration(db,{file,backupsDirectory:ws.backups,databaseUuid:storage.summary.databaseUuid,fromVersion:6,now:ws.now,appVersion:'0.1.0-test'});
+    const backup=await backupBeforeMigration(db,{file,backupsDirectory:ws.backups,databaseUuid:storage.summary.databaseUuid,fromVersion:7,now:ws.now,appVersion:'0.1.0-test'});
     const copy=path.join(ws.backups,backup.fileName);expect(digestOf(copy)).toEqual(source);
     const manifest=JSON.parse(readFileSync(copy.replace(/\.sqlite$/,'.json'),'utf8'));expect(manifest.rowCounts).toEqual(source.rowCounts);expect(manifest.logicalDigest).toBe(source.logicalDigest);
     const copied=tracked(await openConnection(ws.options({path:copy})));
@@ -174,7 +175,7 @@ it('REG-012/013 copies owners, unbound reservations, scan cursors, frozen bytes,
   const active=ok(storage.claimUploadAttempt({attemptId:randomUUID(),registrationId:source.registrationId,expectedVersion:'2',mode:'any',nowMs:10000}));expect(active.payload).toEqual(first.payload);ok(storage.disconnectUploadOwner({expectedVersion:'2'}));
   const script=new Script('10000000-0000-4000-8000-000000000099'),tripUuid=tripUuidFor(script.session,'1');ok(storage.upsertSession({message:uploadGame(script.welcome())}));ok(storage.commitEvent({message:uploadGame(script.event(r.jobConfigured())),profile:{...uploadProof(script),scope:'c'.repeat(64)},effects:[{kind:'trip.open',tripUuid,game:'ets2',gameMode:{mode:'unknown',method:'none',confidence:'none'},jobConfiguration:'this-event',recordingCompleteness:'complete',startedUtcMs:3000}]}));
   const digest=contentDigest(db);expect(digest.rowCounts.upload_envelopes).toBe(2);expect(digest.rowCounts.upload_receipts).toBe(1);expect(digest.rowCounts.upload_candidates).toBe(2);expect(digest.rowCounts.upload_connection).toBe(1);
-  const backup=await backupBeforeMigration(db,{file:ws.database,backupsDirectory:ws.backups,databaseUuid:storage.summary.databaseUuid,fromVersion:6,now:ws.now,appVersion:'test'}),copy=path.join(ws.backups,backup.fileName);expect(digestOf(copy)).toEqual(digest);
+  const backup=await backupBeforeMigration(db,{file:ws.database,backupsDirectory:ws.backups,databaseUuid:storage.summary.databaseUuid,fromVersion:7,now:ws.now,appVersion:'test'}),copy=path.join(ws.backups,backup.fileName);expect(digestOf(copy)).toEqual(digest);
   const replicaConn=await openConnection(ws.options({path:copy,purpose:'history'})),replica=tracked(replicaConn);expect(contentDigest(replicaConn.writer())).toEqual(digest);
   expect(ok(replica.ensureUploadInstallation())).toEqual(ok(storage.ensureUploadInstallation()));expect(ok(replica.getUploadStoreStatus({registrationId:source.registrationId}))).toEqual(ok(storage.getUploadStoreStatus({registrationId:source.registrationId})));
   for(const item of [replica,storage]){expect(ok(item.recoverUploadAttempt({attemptId:active.attemptId!})).status).toBe('recovered');expect(ok(item.reclaimUploadPayloads({limit:1}))).toMatchObject({examined:1,reclaimed:1,events:1});}

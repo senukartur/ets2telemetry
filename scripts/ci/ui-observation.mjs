@@ -34,6 +34,7 @@ async function observeOpacityControl({dashboard, config, language, record}) {
     const candidate = Number(await slider.getAttribute('aria-valuenow')); assert.ok(candidate < 80 && candidate >= 40);
     assert.equal(await displayed.isVisible(), true, 'UI_OPACITY_DRAFT_VALUE_VISIBLE');
     assert.equal(await displayed.innerText(), `${candidate}%`, 'UI_OPACITY_DRAFT_VALUE');
+    assert.equal(await dashboard.getByTestId('overlay-preview').locator('[data-testid="overlay-content"]').evaluate(node => node.style.getPropertyValue('--yu-ov-panel')), `rgba(11, 17, 32, ${candidate / 100})`, 'UI_PREVIEW_OPACITY_DRAFT');
     assert.equal((await value()).settings.overlay.backgroundOpacity, 80, 'Held drag must not write');
     await dashboard.mouse.up(); await wait(candidate);
     assert.equal(await displayed.innerText(), `${candidate}%`);
@@ -68,6 +69,130 @@ async function observeOpacitySurfaces({dashboard, overlay, layout, language, siz
   record.flags.backgroundOpacityOverlay = true;
 }
 
+/** Card labels keep the production inline SVG and text on the same line, including inside dashboard preflight. */
+function cardLabelPresentation(root) {
+  const labels = [...root.querySelectorAll('.overlay-row dt')];
+  const rows = labels.map(label => {
+    const icon = label.querySelector('svg'), style = globalThis.getComputedStyle(icon), iconBox = icon.getBoundingClientRect();
+    const text = [...label.childNodes].find(node => node.nodeType === 3 && node.textContent.trim());
+    const range = globalThis.document.createRange(); range.selectNodeContents(text);
+    const boxes = [...range.getClientRects()].filter(box => box.width > 0 && box.height > 0), box = boxes[0];
+    // An ellipsized text node can expose both its full and visible fragment; fragments on one baseline are one line.
+    return {display: style.display, verticalAlign: style.verticalAlign,
+      sameLine: boxes.length > 0 && boxes.every(fragment => Math.abs(fragment.top - box.top) <= 1 &&
+        iconBox.right <= fragment.left && iconBox.top < fragment.bottom && iconBox.bottom > fragment.top)};
+  });
+  return {count: rows.length, display: [...new Set(rows.map(row => row.display))], verticalAlign: [...new Set(rows.map(row => row.verticalAlign))],
+    sameLine: rows.length > 0 && rows.every(row => row.sameLine)};
+}
+
+/** Settings examples share production content but never subscribe to the isolated synthetic source. */
+async function observeOverlayPreview({application, dashboard, overlay, source, language, size, record, save}) {
+  await settingsPanel(dashboard, 'overlay');
+  const state = () => dashboard.evaluate(() => globalThis.desktop.getAppState());
+  const initial = (await state()).settings.overlay;
+  const preview = dashboard.getByTestId('overlay-preview');
+  const ids = Object.keys(initial.sections);
+  const probe = () => preview.evaluate(root => {
+    const bounds = root.parentElement.getBoundingClientRect(), scene = root.closest('[data-testid="overlay-preview-scene"]').getBoundingClientRect();
+    const outside = [...root.querySelectorAll('[data-testid^="overlay-section-"],[data-testid="overlay-hard-mode"]')].filter(node => {
+      const box = node.getBoundingClientRect();
+      return box.width <= 0 || box.height <= 0 || box.left < bounds.left - 1 || box.right > bounds.right + 1 || box.top < bounds.top - 1 || box.bottom > bounds.bottom + 1;
+    }).map(node => node.getAttribute('data-testid'));
+    return {layout: root.getAttribute('data-layout'), scale: root.getAttribute('data-scale'), outside,
+      fitsScene: bounds.left >= scene.left && bounds.right <= scene.right && bounds.top >= scene.top && bounds.bottom <= scene.bottom,
+      sections: [...root.querySelectorAll('[data-testid^="overlay-section-"]')].map(node => node.getAttribute('data-testid').slice('overlay-section-'.length)),
+      width: bounds.width, height: bounds.height};
+  });
+  const contained = async name => {
+    const result = await until(probe, value => value.outside.length === 0 && value.fitsScene, `UI_PREVIEW_CONTAINED_${name}_${language}`);
+    if (result.layout === 'card') {
+      const example = await preview.evaluate(cardLabelPresentation), production = await overlay.getByTestId('overlay-root').evaluate(cardLabelPresentation);
+      assert.deepEqual(example.display, production.display, 'UI_PREVIEW_CARD_ICON_DISPLAY');
+      assert.deepEqual(example.verticalAlign, production.verticalAlign, 'UI_PREVIEW_CARD_ICON_ALIGNMENT');
+      assert.equal(example.sameLine, true, 'UI_PREVIEW_CARD_LABEL_LINE');
+      assert.equal(production.sameLine, true, 'UI_OVERLAY_CARD_LABEL_LINE');
+      result.cardRows = {...example, matchesActual: true};
+    }
+    (record.overlayPreview ??= []).push({language, viewportWidth: size.width, viewportHeight: size.height, name, ...result});
+    return result;
+  };
+  await dashboard.getByTestId('overlay-preset-everything').click();
+  await until(state, value => Object.values(value.settings.overlay.sections).every(Boolean), 'UI_PREVIEW_ALL');
+  for (const layout of layouts) {
+    await dashboard.locator(`#overlay-layout-${layout}`).focus(); await dashboard.keyboard.press('Space');
+    await until(() => preview.getAttribute('data-layout'), value => value === layout, 'UI_PREVIEW_LAYOUT');
+    await overlay.waitForFunction(layout => globalThis.document.querySelector('[data-testid="overlay-root"]')?.getAttribute('data-layout') === layout, layout, {timeout: 5000});
+    const result = await contained(layout);
+    const image = dashboard.getByTestId('overlay-preview-card');
+    const exampleLabel = language === 'en' ? 'Example data · not live telemetry' : 'Пример данных · не текущая телеметрия';
+    const accessibleName = [exampleLabel, await image.locator('h3').textContent(), await image.getByTestId('overlay-preview-cruise').textContent()].join(' ');
+    const accessibleImage = dashboard.getByRole('img', {name: accessibleName, exact: true});
+    assert.equal(await accessibleImage.count(), 1, 'UI_PREVIEW_EXAMPLE_ACCESSIBLE_NAME');
+    assert.equal(await accessibleImage.getAttribute('data-testid'), 'overlay-preview-card', 'UI_PREVIEW_EXAMPLE_IMAGE');
+    const accessible = await accessibleImage.ariaSnapshot();
+    for (const sample of ['84', '620', 'Northport', 'Pinehaven']) assert.equal(accessible.includes(sample), false, 'UI_PREVIEW_VISUAL_METRICS_HIDDEN');
+    assert.deepEqual([...result.sections].sort(), [...ids].sort());
+    assert.equal(await preview.getByTestId('overlay-speed').textContent(), '84');
+    assert.equal(await preview.getByTestId('overlay-hard-mode').count(), 1);
+    assert.equal(await dashboard.getByTestId('overlay-sections-count').innerText(), language === 'en' ? 'shown 16 of 16' : 'показано 16 из 16');
+    await dashboard.getByTestId('overlay-preview-card').scrollIntoViewIfNeeded();
+    await save(`settings-preview-${layout}`, language, size);
+  }
+  source.setReading(10, 123);
+  try {
+    await until(() => overlay.getByTestId('overlay-speed').textContent(), value => value === '36', 'UI_PREVIEW_SOURCE_CHANGED');
+    assert.equal(await preview.getByTestId('overlay-speed').textContent(), '84');
+    assert.equal(await preview.getByTestId('overlay-fuel').textContent(), '620');
+  } finally {source.setReading(25, 73);}
+  await dashboard.getByTestId('overlay-preset-driving-only').click();
+  await until(() => preview.getByTestId('overlay-section-cargo').count(), value => value === 0, 'UI_PREVIEW_PRESET');
+  await dashboard.getByTestId('overlay-switch-cargo').click();
+  await until(() => preview.getByTestId('overlay-section-cargo').count(), value => value === 1, 'UI_PREVIEW_SECTION');
+  await dashboard.getByTestId('overlay-preset-everything').click();
+  await dashboard.locator('#overlay-layout-strip').click();
+  await until(() => preview.getAttribute('data-layout'), value => value === 'strip', 'UI_PREVIEW_STRIP');
+  await dashboardZoom(application, 2);
+  try {
+    await contained('narrow-strip');
+    await dashboard.getByTestId('overlay-preview-card').evaluate(node => node.scrollIntoView({block: 'start'}));
+    const visible = await dashboard.getByTestId('overlay-preview-card').evaluate(card => {
+      const viewport = globalThis.document.querySelector('.yu-content').getBoundingClientRect();
+      return ['h3', '[data-testid="overlay-section-speed"]'].every(selector => {
+        const box = card.querySelector(selector).getBoundingClientRect();
+        return box.width > 0 && box.height > 0 && box.top >= viewport.top && box.bottom <= viewport.bottom;
+      });
+    });
+    assert.equal(visible, true, 'UI_PREVIEW_NARROW_CAPTURE_VISIBLE');
+    await save('settings-preview-narrow', language, size);
+  }
+  finally {await dashboardZoom(application, 1);}
+  await dashboard.getByTestId('overlay-edit-start').click();
+  await until(state, value => value.overlayEdit.active, 'UI_PREVIEW_EDIT');
+  await dashboard.evaluate(() => globalThis.desktop.setOverlayEditScale(3));
+  await until(() => preview.getAttribute('data-scale'), value => value === '3', 'UI_PREVIEW_SCALE_DRAFT');
+  await contained('large-strip');
+  await dashboard.getByTestId('overlay-edit-cancel').click();
+  await until(() => preview.getAttribute('data-scale'), value => value === String(initial.placements.strip.scale), 'UI_PREVIEW_CANCEL');
+  await dashboard.locator('#overlay-layout-card').click();
+  await overlay.waitForFunction(() => globalThis.document.querySelector('[data-testid="overlay-root"]')?.getAttribute('data-layout') === 'card', undefined, {timeout: 5000});
+  await dashboard.getByTestId('overlay-edit-start').click();
+  await until(state, value => value.overlayEdit.active, 'UI_PREVIEW_CARD_EDIT');
+  await dashboard.evaluate(() => globalThis.desktop.setOverlayEditScale(3));
+  await until(() => preview.getAttribute('data-scale'), value => value === '3', 'UI_PREVIEW_CARD_SCALE');
+  await contained('large-card');
+  await dashboard.getByTestId('overlay-edit-done').click();
+  await until(state, value => !value.overlayEdit.active && value.settings.overlay.placements.card.scale === 3, 'UI_PREVIEW_DONE');
+  assert.equal(await preview.getAttribute('data-scale'), '3');
+  await dashboard.getByTestId('overlay-edit-start').click();
+  await until(state, value => value.overlayEdit.active, 'UI_PREVIEW_RESTORE_EDIT');
+  await dashboard.evaluate(scale => globalThis.desktop.setOverlayEditScale(scale), initial.placements.card.scale);
+  await dashboard.getByTestId('overlay-edit-done').click();
+  await until(state, value => !value.overlayEdit.active && value.settings.overlay.placements.card.scale === initial.placements.card.scale, 'UI_PREVIEW_RESTORED_SCALE');
+  await dashboard.evaluate(async initial => {await globalThis.desktop.setOverlaySections(initial.sections); await globalThis.desktop.setOverlayLayout(initial.layout);}, initial);
+  record.flags.overlayExamplePreview = true;
+}
+
 export const UI_CASES = ['shell', 'live', 'journal', 'settings', 'overlay'];
 const sizes = [{width: 1280, height: 800}, {width: 1100, height: 720}];
 const panels = ['general', 'overlay', 'plugin', 'data', 'about'];
@@ -87,7 +212,7 @@ const SHELL_TEXT = {
  * sidebar label fits its button without ellipsis or a forced single line; the chips keep their order (sync absent while
  * unconfigured) and the connection chip is inside the viewport.
  */
-async function observeCompactShell(page, language, size) {
+async function observeCompactShell(page, language, size, dashboardConfigured) {
   const facts = await page.evaluate(() => {
     const query = selector => [...globalThis.document.querySelectorAll(selector)];
     const viewport = node => {const box = node.getBoundingClientRect(); return box.width > 0 && box.top >= 0 && box.left >= 0 && box.bottom <= globalThis.innerHeight && box.right <= globalThis.innerWidth;};
@@ -103,7 +228,9 @@ async function observeCompactShell(page, language, size) {
   assert.deepEqual(facts.groups, SHELL_TEXT[language].groups, `UI_SHELL_GROUPS_${language}`);
   assert.equal(facts.labels.length, 5);
   for (const label of facts.labels) assert.deepEqual({fits: label.fits, ellipsis: label.ellipsis, nowrap: label.nowrap, target: label.height >= 32}, {fits: true, ellipsis: false, nowrap: false, target: true}, `UI_SHELL_LABEL_TRUNCATED_${language}_${size.width}`);
-  assert.deepEqual(facts.chips, ['shell.status.connection', 'shell.status.plugin', 'shell.status.hardMode'], `UI_SHELL_CHIP_ORDER_${language}_${size.width}`);
+  const chips = ['shell.status.connection', 'shell.status.plugin', 'shell.status.hardMode'];
+  if (dashboardConfigured) chips.push('shell.status.sync');
+  assert.deepEqual(facts.chips, chips, `UI_SHELL_CHIP_ORDER_${language}_${size.width}`);
   assert.equal(facts.connectionVisible, true, `UI_SHELL_CONNECTION_CHIP_${language}_${size.width}`);
 }
 const waitState = (page, state) => until(() => page.getByTestId('telemetry-status').innerText(), value => value.startsWith(`${state}:`), `UI_LIVE_${state}`, 5000);
@@ -543,6 +670,61 @@ const EXPORT_RESULT = {
 const dashboardZoom = (application, zoom) => application.evaluate(({BrowserWindow}, zoom) => {
   BrowserWindow.getAllWindows().find(window => !window.webContents.getURL().endsWith('?view=overlay')).webContents.setZoomFactor(zoom);
 }, zoom);
+/**
+ * ET-082: the theme preference through the real nativeTheme path. The harness pins the dark scheme by emulation, so this
+ * lifts it first; the settings window itself never reloads, which the sentinel proves.
+ */
+async function observeThemeSwitch({application, dashboard, dashboardId, record}) {
+  const appState = () => dashboard.evaluate(() => globalThis.desktop.getAppState());
+  const observe = async () => {
+    const main = await application.evaluate(({BrowserWindow, nativeTheme}, id) => ({themeSource: nativeTheme.themeSource, dark: nativeTheme.shouldUseDarkColors, background: BrowserWindow.fromId(id).getBackgroundColor().toUpperCase()}), dashboardId);
+    const page = await dashboard.evaluate(() => {
+      const root = globalThis.getComputedStyle(globalThis.document.documentElement), scene = globalThis.document.querySelector('[data-testid="overlay-preview-scene"]');
+      return {prefersDark: globalThis.matchMedia('(prefers-color-scheme: dark)').matches, pageBackground: root.getPropertyValue('--yu-bg-app').trim().toUpperCase(),
+        logo: globalThis.document.querySelector('.yu-lockup img').currentSrc, sceneChrome: scene ? globalThis.getComputedStyle(scene).getPropertyValue('--yu-bg-chrome').trim().toUpperCase() : null,
+        sceneBackground: scene ? globalThis.getComputedStyle(scene).getPropertyValue('--background').trim().toUpperCase() : null, sceneChart: scene ? globalThis.getComputedStyle(scene).getPropertyValue('--chart-3').trim().toUpperCase() : null,
+        rootChart: root.getPropertyValue('--chart-3').trim().toUpperCase(),
+        sentinel: globalThis.__et082NoReload === true};
+    });
+    return {...main, ...page};
+  };
+  const choose = async (theme, prefersDark) => {
+    await dashboard.locator(`#theme-${theme}`).click({timeout: 5000});
+    await until(appState, state => state.settings.theme === theme && !state.settings.saveError, `UI_THEME_SAVED_${theme}`);
+    await dashboard.waitForFunction(dark => globalThis.matchMedia('(prefers-color-scheme: dark)').matches === dark, prefersDark, {timeout: 5000});
+    return observe();
+  };
+  await dashboard.emulateMedia({colorScheme: null});
+  await dashboard.evaluate(() => {globalThis.__et082NoReload = true;});
+  try {
+    const light = await choose('light', false);
+    assert.equal(light.themeSource, 'light', 'UI_THEME_LIGHT_SOURCE');
+    assert.equal(light.prefersDark, false, 'UI_THEME_LIGHT_MEDIA');
+    assert.equal(light.pageBackground, '#F5F7FB', 'UI_THEME_LIGHT_TOKEN');
+    assert.equal(light.background, '#F5F7FB', 'UI_THEME_LIGHT_WINDOW');
+    assert.match(light.logo, /logo-dark/, 'UI_THEME_LIGHT_LOGO');
+    assert.equal(light.sceneChrome, '#0A101D', 'UI_THEME_LIGHT_PREVIEW_STAYS_DARK');
+    assert.equal(light.sceneBackground, '#0E1525', 'UI_THEME_LIGHT_PREVIEW_STAYS_DARK');
+    assert.equal(light.sceneChart, '#2DD4BF', 'UI_THEME_LIGHT_PREVIEW_STAYS_DARK');
+    assert.equal(light.rootChart, '#0D9488', 'UI_THEME_LIGHT_CHART');
+    const dark = await choose('dark', true);
+    assert.equal(dark.themeSource, 'dark', 'UI_THEME_DARK_SOURCE');
+    assert.equal(dark.prefersDark, true, 'UI_THEME_DARK_MEDIA');
+    assert.equal(dark.pageBackground, '#0E1525', 'UI_THEME_DARK_TOKEN');
+    assert.equal(dark.background, '#0E1525', 'UI_THEME_DARK_WINDOW');
+    assert.doesNotMatch(dark.logo, /logo-dark/, 'UI_THEME_DARK_LOGO');
+    assert.equal(dark.sceneChrome, '#0A101D', 'UI_THEME_DARK_PREVIEW');
+    assert.equal(dark.sceneBackground, '#0E1525', 'UI_THEME_DARK_PREVIEW');
+    assert.equal(dark.sceneChart, '#2DD4BF', 'UI_THEME_DARK_PREVIEW');
+    assert.equal(dark.rootChart, '#2DD4BF', 'UI_THEME_DARK_CHART');
+    const osDark = await application.evaluate(({nativeTheme}) => {nativeTheme.themeSource = 'system'; const resolved = nativeTheme.shouldUseDarkColors; nativeTheme.themeSource = 'dark'; return resolved;});
+    const system = await choose('system', osDark);
+    assert.equal(system.themeSource, 'system', 'UI_THEME_SYSTEM_SOURCE');
+    assert.equal(system.prefersDark, system.dark, 'UI_THEME_SYSTEM_FOLLOWS_NATIVE');
+    assert.equal(system.sentinel, true, 'UI_THEME_RELOADED');
+    Object.assign(record, {theme: {light, dark, system}});
+  } finally {await dashboard.emulateMedia({colorScheme: 'dark'});}
+}
 async function observeSettingsNavigation({dashboard, language, size, zoom, record}) {
   const placements = [];
   for (const panel of ['overlay', ...panels.filter(id => id !== 'overlay')]) {
@@ -623,13 +805,19 @@ async function observeUnifiedOverlay({application, dashboard, language, size, re
         const scroll = globalThis.document.querySelector('.yu-content'), bounds = scroll.getBoundingClientRect(), focus = globalThis.document.activeElement.getBoundingClientRect();
         const overflow = [scroll, card, ...card.querySelectorAll('section, label, button:not([role="radio"]):not([role="switch"]), p')]
           .filter(node => node.scrollWidth > node.clientWidth + 1).map(node => node.getAttribute('data-testid') ?? node.tagName);
+        const overflowDetails = [...card.querySelectorAll('section')].filter(node => node.scrollWidth > node.clientWidth + 1).map(node => ({
+          label: node.getAttribute('aria-labelledby'), width: node.clientWidth, scrollWidth: node.scrollWidth,
+          controls: [...node.querySelectorAll('[role="switch"],[role="radio"]')].map(control => {
+            const box = control.getBoundingClientRect(), parent = node.getBoundingClientRect(), after = globalThis.getComputedStyle(control, '::after');
+            return {id: control.id, rightInset: parent.right - box.right, afterRight: after.right, afterLeft: after.left};
+          })}));
         // Radix rails/dots intentionally have expanded pseudo-hit areas; check their boxes, not scrollWidth.
         const controlsContained = [...card.querySelectorAll('button')].every(node => {const box = node.getBoundingClientRect(), parent = card.getBoundingClientRect(); return box.left >= parent.left && box.right <= parent.right;});
-        resolve({overflow, controlsContained, focusTop: focus.top, focusBottom: focus.bottom, viewportTop: bounds.top, viewportBottom: bounds.bottom, scrolled: scroll.scrollTop > 0, focusVisible: focus.width > 0 && focus.left >= bounds.left && focus.right <= bounds.right && focus.top >= bounds.top && focus.bottom <= bounds.bottom});
+        resolve({overflow, overflowDetails, controlsContained, focusTop: focus.top, focusBottom: focus.bottom, viewportTop: bounds.top, viewportBottom: bounds.bottom, scrolled: scroll.scrollTop > 0, focusVisible: focus.width > 0 && focus.left >= bounds.left && focus.right <= bounds.right && focus.top >= bounds.top && focus.bottom <= bounds.bottom});
       })));
+      (record.overlayScroll ??= []).push({language, width: size.width, zoom, ...observation});
       assert.deepEqual(observation.overflow, [], `UI_OVERLAY_OVERFLOW_${language}_${size.width}_${zoom}`);
       assert.equal(observation.controlsContained, true, JSON.stringify({language, zoom, ...observation})); assert.equal(observation.scrolled, true, JSON.stringify({language, zoom, ...observation})); assert.equal(observation.focusVisible, true, JSON.stringify({language, zoom, ...observation}));
-      (record.overlayScroll ??= []).push({language, width: size.width, zoom, ...observation});
     } finally {await dashboardZoom(application, 1);}
   }
   record.flags.overlayScroll = true;
@@ -752,15 +940,22 @@ export async function runUiSmoke({application, dashboard, overlay, source, sourc
           await focusRoute(dashboard, route); await save(route, language, size);
           assert.equal(await dashboard.getByTestId('shell.breadcrumb').textContent(), SHELL_TEXT[language].crumbs[route], `UI_SHELL_BREADCRUMB_${language}_${route}`);
         }
-        await observeCompactShell(dashboard, language, size);
+        await observeCompactShell(dashboard, language, size, config.dashboardConfigured);
         assert.deepEqual(await dashboard.locator('.yu-sidebar nav button').evaluateAll(nodes => nodes.map(node => node.getAttribute('data-testid'))), ['tab-live', 'tab-hardMode', 'tab-journal', 'tab-settings', 'tab-account']);
-        assert.equal(await dashboard.getByTestId('account.unconfigured').isVisible(), true);
-        assert.equal(await dashboard.getByTestId('account.token.input').count(), 0);
-        for (const control of ['account.form', 'account.confirmation', 'account.counts', 'account.firstSync', 'account.disconnect']) assert.equal(await dashboard.getByTestId(control).count(), 0, `UI_UNCONFIGURED_CONTROL_${control}`);
-        assert.ok((await dashboard.getByTestId('account.unconfigured').textContent()).includes(language === 'en' ? 'Your journal and local recording continue to work.' : 'Журнал и локальная запись продолжают работать.'));
-        assert.equal(await dashboard.getByTestId('shell.status.sync').count(), 0);
-        assert.equal(await dashboard.getByTestId('journal-sync-column').count(), 0);
-        record.flags.accountUnconfigured = true;
+        if (config.dashboardConfigured) {
+          await dashboard.getByTestId('account.form').waitFor({state: 'visible'});
+          assert.equal(await dashboard.getByTestId('account.token.input').getAttribute('type'), 'password');
+          assert.equal(await dashboard.getByTestId('account.unconfigured').count(), 0);
+        } else {
+          await dashboard.getByTestId('account.unconfigured').waitFor({state: 'visible'});
+          assert.equal(await dashboard.getByTestId('account.token.input').count(), 0);
+          assert.equal(await dashboard.getByTestId('account.form').count(), 0);
+          assert.ok((await dashboard.getByTestId('account.unconfigured').textContent()).includes(language === 'en' ? 'Your journal and local recording continue to work.' : 'Журнал и локальная запись продолжают работать.'));
+        }
+        for (const control of ['account.confirmation', 'account.counts', 'account.firstSync', 'account.disconnect']) assert.equal(await dashboard.getByTestId(control).count(), 0, `UI_DISCONNECTED_CONTROL_${control}`);
+        record.dashboardConfigured = await dashboard.getByTestId('account.token.input').isVisible();
+        assert.equal(record.dashboardConfigured, config.dashboardConfigured);
+        record.flags.accountBuildConfiguration = true;
         await dashboard.getByTestId('tab-hardMode').focus(); await dashboard.keyboard.press('Enter');
         await dashboard.waitForFunction(() => globalThis.document.activeElement?.getAttribute('data-testid') === 'screen-title');
         assert.equal(await dashboard.getByTestId('hardMode.screen').isVisible(), true);
@@ -884,13 +1079,38 @@ export async function runUiSmoke({application, dashboard, overlay, source, sourc
       } else if (config.uiCase === 'journal') {
         await screen(dashboard, 'journal');
         await until(() => dashboard.getByTestId('journal-row').count(), count => count === 50, 'UI_JOURNAL_FIRST_PAGE');
-        assert.equal(await dashboard.getByTestId('shell.status.sync').count(), 0);
+        record.dashboardConfigured = await dashboard.getByTestId('shell.status.sync').isVisible();
+        assert.equal(record.dashboardConfigured, config.dashboardConfigured);
         assert.equal(await dashboard.getByTestId('journal-sync-column').count(), 0);
         assert.equal(await dashboard.getByTestId('journal-row-sync').count(), 0);
         record.flags.syncHidden = true;
         assert.equal(await dashboard.getByTestId('journal-banner').innerText(), language === 'en' ? 'Synthetic test database — never game history' : 'Синтетическая тестовая база — не история игры');
         assert.equal(await dashboard.getByTestId('journal-search-planned').count(), 0);
-        assert.ok(await dashboard.getByTestId('journal-row-game').first().evaluate(node => globalThis.getComputedStyle(node).whiteSpace === 'nowrap' && node.getBoundingClientRect().width >= 64));
+        // ET-076 (mockup T3): the columns and filter options in both languages, Refresh in the top bar and the totals under the title.
+        const journalHeaders = await dashboard.locator('[data-testid="journal-table"] thead th').evaluateAll(cells => cells.map(cell => {
+          const copy = cell.cloneNode(true); copy.querySelectorAll('.sr-only').forEach(node => node.remove()); return copy.textContent.trim();
+        }));
+        assert.deepEqual(journalHeaders, language === 'en'
+          ? ['Started', 'Game · mode', 'Cargo', 'Job type', 'Route', 'Distance', 'Expected income', 'Outcome', 'Recording', '']
+          : ['Начало', 'Игра · режим', 'Груз', 'Тип заказа', 'Маршрут', 'Дистанция', 'Ожидаемый доход', 'Итог', 'Запись', '']);
+        assert.equal(await dashboard.getByTestId('journal.count').innerText(), language === 'en' ? '120 trips · 1.1 h recorded' : '120 рейсов · 1,1 ч записано');
+        assert.equal(await dashboard.getByTestId('journal-list-refresh').evaluate(node => node.closest('.yu-topbar-actions') !== null), true, 'UI_JOURNAL_REFRESH_IN_TOP_BAR');
+        const filterOptions = async (testId) => {
+          await dashboard.getByTestId(testId).click();
+          const options = await dashboard.getByRole('option').allInnerTexts();
+          await dashboard.keyboard.press('Escape');
+          await dashboard.getByRole('option').first().waitFor({state: 'detached'});
+          return options;
+        };
+        assert.deepEqual(await filterOptions('journal-filter-mode'), language === 'en' ? ['Any mode', 'Single-player', 'TruckersMP', 'HaulMP', 'Convoy', 'Unknown'] : ['Любой режим', 'Одиночная игра', 'TruckersMP', 'HaulMP', 'Конвой', 'Неизвестно']);
+        assert.deepEqual(await filterOptions('journal-filter-job'), language === 'en'
+          ? ['Any job type', 'Quick job', 'Cargo market', 'Freight market', 'World of Trucks', 'Other']
+          : ['Любой тип заказа', 'Быстрый заказ', 'Рынок грузов', 'Грузоперевозки', 'World of Trucks', 'Другой']);
+        // The horizontal scroll stays inside the table card at both sizes: the content never scrolls sideways.
+        assert.equal(await dashboard.getByTestId('shell.content').evaluate(node => node.scrollWidth <= node.clientWidth), true, `UI_JOURNAL_CONTENT_OVERFLOW_${size.width}`);
+        assert.equal(await dashboard.getByTestId('journal-table').evaluate(node => globalThis.getComputedStyle(node.parentElement).overflowX), 'auto');
+        assert.ok(await dashboard.getByTestId('journal-row-game').first().evaluate(node => node.getBoundingClientRect().width >= 64));
+        assert.equal(await dashboard.getByTestId('journal-row-game-name').first().evaluate(node => globalThis.getComputedStyle(node).whiteSpace), 'nowrap');
         const modeLabel = language === 'en' ? 'TruckersMP · ambiguous evidence' : 'TruckersMP · неоднозначные данные';
         const modeRow = dashboard.getByTestId('journal-row').first();
         assert.equal(await modeRow.getByTestId('journal-row-mode').innerText(), modeLabel);
@@ -913,10 +1133,16 @@ export async function runUiSmoke({application, dashboard, overlay, source, sourc
         await dashboard.getByTestId('journal-mode-evidence-7b000000-0000-4000-8000-000000000001-tooltip').waitFor({state: 'hidden'});
         assert.equal(await hint.evaluate(node => node === globalThis.document.activeElement), true);
         await dashboard.locator('[data-testid="journal-table"]').evaluate(node => {node.parentElement.scrollLeft = 0;});
+        // The hint in the mode line is 18 px high: the global button min-height would make every row taller (mockup T3).
+        assert.equal(await hint.evaluate(node => node.getBoundingClientRect().height), 18, 'UI_JOURNAL_HINT_HEIGHT');
+        assert.equal(await hint.evaluate(node => globalThis.getComputedStyle(node, '::after').height), '32px', 'UI_JOURNAL_HINT_TARGET');
+        (record.journalRowHeights ??= []).push({language, size, rowHeight: await dashboard.locator('[data-trip="7f000000-0000-4000-8000-00000000006d"]').evaluate(node => node.getBoundingClientRect().height)});
         assert.ok(await modeRow.getByTestId('journal-row-mode').evaluate(node => node.scrollWidth <= node.clientWidth && node.scrollHeight <= node.clientHeight));
         await save('list', language, size);
         await modeRow.getByTestId('journal-row-open').click();
         await dashboard.getByTestId('journal-detail-title').waitFor({state: 'visible'});
+        assert.equal(await dashboard.getByTestId('journal-list-refresh').count(), 0, 'UI_JOURNAL_REFRESH_ONLY_ON_LIST');
+        assert.equal(await dashboard.getByTestId('journal.count').count(), 0, 'UI_JOURNAL_TOTALS_ONLY_ON_LIST');
         assert.equal(await dashboard.getByTestId('journal-detail-mode').innerText(), modeLabel);
         await save('mode-trip', language, size);
         await dashboard.getByTestId('journal-back').click();
@@ -932,15 +1158,30 @@ export async function runUiSmoke({application, dashboard, overlay, source, sourc
         await dashboard.getByTestId('journal-list-next').click(); await until(() => dashboard.getByTestId('journal-list-page').innerText(), text => text.includes('2'), 'UI_JOURNAL_PAGE_TWO');
         const row = dashboard.getByTestId('journal-row').first(), trip = await row.getAttribute('data-trip'); await row.getByTestId('journal-row-open').click();
         await dashboard.getByTestId('journal-detail-title').waitFor({state: 'visible'});
-        assert.equal(await dashboard.getByTestId('trip.header').count(), 1); assert.equal(await dashboard.locator('[data-testid="trip.tiles"] > div').count(), 3);
+        assert.equal(await dashboard.getByTestId('trip.header').count(), 1); assert.equal(await dashboard.locator('[data-testid="trip.tiles"] > div').count(), 4);
         assert.equal(await dashboard.getByTestId('trip.header.cargo').innerText(), 'Synthetic Cargo');
         await save('trip', language, size);
         await dashboard.getByTestId('journal-back').click(); assert.equal(await dashboard.getByTestId('journal-row').first().getAttribute('data-trip'), trip);
         assert.match(await dashboard.getByTestId('journal-list-page').innerText(), /2/);
         await dashboard.getByTestId('journal-list-previous').click(); await until(() => dashboard.getByTestId('journal-row').first().getAttribute('data-trip'), id => id === '7b000000-0000-4000-8000-000000000001', 'UI_JOURNAL_PAGE_ONE');
         await dashboard.getByTestId('journal-row-open').first().click(); await dashboard.getByTestId('journal-detail-title').waitFor({state: 'visible'});
-        await dashboard.getByTestId('trip.raw.toggle').click();
+        // ET-077: the side column stays beside the tabs at both window sizes, and the content never scrolls sideways.
+        const columns = await dashboard.evaluate(() => {
+          const box = selector => globalThis.document.querySelector(selector).getBoundingClientRect(), content = globalThis.document.querySelector('[data-testid="shell.content"]');
+          return {mainRight: box('.yu-trip-main').right, sideLeft: box('.yu-trip-side').left, sideWidth: box('.yu-trip-side').width, overflow: content.scrollWidth > content.clientWidth};
+        });
+        assert.ok(columns.sideLeft >= columns.mainRight && columns.sideWidth >= 260, `UI_TRIP_COLUMNS_${size.width}: ${JSON.stringify(columns)}`);
+        assert.equal(columns.overflow, false, `UI_TRIP_CONTENT_OVERFLOW_${size.width}`);
+        // The tabs follow the WAI-ARIA pattern: arrows, Home and End select a tab, and Tab moves into its panel.
+        const tabSelected = id => dashboard.getByTestId(`journal-detail-tab-${id}`).getAttribute('aria-selected');
+        await dashboard.getByTestId('journal-detail-tab-summary').focus();
+        await dashboard.keyboard.press('ArrowRight'); assert.equal(await tabSelected('timeline'), 'true', 'UI_TRIP_TAB_ARROW');
+        await dashboard.keyboard.press('End'); assert.equal(await tabSelected('intervals'), 'true', 'UI_TRIP_TAB_END');
+        await dashboard.keyboard.press('Home'); assert.equal(await tabSelected('summary'), 'true', 'UI_TRIP_TAB_HOME');
+        await dashboard.keyboard.press('Tab');
+        assert.equal(await dashboard.evaluate(() => globalThis.document.activeElement?.closest('[role="tabpanel"]')?.getAttribute('data-state')), 'active', 'UI_TRIP_TAB_PANEL_FOCUS');
         for (const tab of ['intervals', 'timeline']) {await dashboard.getByTestId(`journal-detail-tab-${tab}`).click(); await dashboard.getByTestId(`journal-${tab === 'timeline' ? 'events' : tab}-loading`).waitFor({state: 'detached'}); await save(tab, language, size);}
+        await dashboard.getByTestId('journal-detail-tab-summary').click();
         await dashboard.getByTestId('journal-samples-loading').waitFor({state: 'detached'}); await dashboard.getByTestId('trip.samples.toggle').click();
         await dashboard.getByTestId('journal-sample-row').first().waitFor({state: 'attached', timeout: 5000});
         assert.equal(await dashboard.getByTestId('journal-sample-row').count(), 300);
@@ -973,6 +1214,7 @@ export async function runUiSmoke({application, dashboard, overlay, source, sourc
             assert.equal(await dashboard.getByTestId('autostart-card').isVisible(), true);
             assert.equal(await dashboard.getByTestId('autostart-toggle').isDisabled(), true);
             assert.equal(await dashboard.getByTestId('autostart-not-installed-note').isVisible(), true);
+            if (language === 'en' && size === sizes[0]) await observeThemeSwitch({application, dashboard, dashboardId, record});
           }
           if (panel !== 'overlay') await observeSettingsRows({dashboard, panel, language, size, record});
           if (panel === 'data') await observeExportResult({application, dashboard, language, size, record});
@@ -1108,6 +1350,7 @@ export async function runUiSmoke({application, dashboard, overlay, source, sourc
         assert.ok((await dashboard.getByTestId('uninstall-result').innerText()).includes(language === 'en' ? 'installed copy' : 'установленной копии'));
         Object.assign(record.flags, {allPanels: true, allSections: true, committedSave: true, sourceSelector: true, uninstallRefusal: true});
       } else {
+        if (size === sizes[0]) await observeOverlayPreview({application, dashboard, overlay, source, language, size, record, save});
         for (const layout of layouts) {
           await settingsPanel(dashboard, 'overlay'); await dashboard.locator(`#overlay-layout-${layout}`).click();
           await until(() => dashboard.evaluate(() => globalThis.desktop.getAppState()), state => state.settings.overlay.layout === layout, 'UI_LAYOUT_SAVED');

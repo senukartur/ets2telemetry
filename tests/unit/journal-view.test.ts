@@ -1,4 +1,4 @@
-import {journalPageSync} from '../../apps/desktop/src/journal-view';
+import {journalCompletenessText, journalPageBound, journalPageSync, journalSiteFacts, journalSiteRow, journalSiteSaved, journalSyncOwnerCurrent, journalTimelineItems, journalTripSideText} from '../../apps/desktop/src/journal-view';
 import {initialDashboardUploadStatus} from '../../packages/contracts/src/dashboard-upload';
 import {journalTileValues} from '../../apps/desktop/src/screens/journal-tiles';
 import {describe, expect, it} from 'vitest';
@@ -8,7 +8,7 @@ import type {
 } from '../../packages/contracts/src';
 import type {EventRecord} from '../../packages/contracts/src/protocol-v1';
 import {
-  journalBannerText, journalDetailText, journalErrorText, journalEventText, journalIntervalText, journalListText, journalSampleText, type JournalSection
+  journalBannerText, journalDetailText, journalErrorText, journalEventText, journalIntervalText, journalListText, journalRangeText, journalSampleText, journalTotalsText, type JournalSection
 } from '../../apps/desktop/src/journal-view';
 import {ANCHOR_JOBS, CHANGED_TRUCK, EUR, JOURNAL_TRIPS as T, MIGRATED_V1_SESSION, MIGRATED_V1_TRIP, UNKNOWN_CURRENCY, USD, ZERO_DELIVERY} from '../shared/journal-seed';
 import {BASE_UTC, ETS2_A, ETS2_B, ATS_A, job, money, trailer, truck} from '../shared/trip-messages';
@@ -29,6 +29,8 @@ const MODE = {mode: 'single-player', method: 'module-scan', confidence: 'weak'} 
 const CLOCK = '2c000000-0000-4000-8000-00000000000a';
 /** The job market badge of every anchor: the shared fixture job is a freight market job (ET-072). */
 const FREIGHT_BADGE = {kind: 'freight-market', text: 'Freight market'} as const;
+/** The Job type column of every anchor's list row (ET-076). */
+const FREIGHT_LINE = {...FREIGHT_BADGE, sub: null} as const;
 
 function summary(job: typeof ANCHOR_JOBS.delivered): JournalTripListItem['job'] {
   return {source: 'event', sourceCity: job.sourceCity, sourceCompany: job.sourceCompany, destinationCity: job.destinationCity, destinationCompany: job.destinationCompany,
@@ -95,26 +97,26 @@ describe('journal list (J13; REG-014, REG-009)', () => {
     const text = journalListText(page([OPEN, ZERO, GAP_CLOSED, CANCELLED, DELIVERED], '42'), {units: DEFAULT, timeZone: ZONE, filtered: false, recording: 'disabled'});
     expect(text.empty).toBeNull(); expect(text.emptyNote).toBeNull(); expect(text.hasNext).toBe(true);
     expect(text.rows).toEqual([
-      {mode: {kind: 'single-player', text: 'Single-player', evidence: 'Single-player', tone: 'neutral'}, jobType: FREIGHT_BADGE, specialTransport: null, isHardMode: false, tripUuid: T.open, gameId: 'ets2', started: '2026-10-11 02:01:41', game: 'ETS2', route: 'Synthetic City A → Synthetic City B', cargo: 'Synthetic Cargo', outcome: 'In progress',
-        completeness: {text: 'Unknown', variant: 'outline'}, plannedDistance: '152.0 km', observedDistance: 'unavailable (not observed)', fuelUsed: 'unavailable (not observed)',
+      {mode: {kind: 'single-player', text: 'Single-player', evidence: 'Single-player', tone: 'neutral'}, jobType: FREIGHT_LINE, specialTransport: null, isHardMode: false, tripUuid: T.open, gameId: 'ets2', started: '2026-10-11 02:01:41', game: 'ETS2', route: 'Synthetic City A → Synthetic City B', cargo: 'Synthetic Cargo', companies: 'Synthetic Company A · Synthetic Company B', outcome: 'In progress', outcomeKind: 'open',
+        completeness: {text: 'Unknown', variant: 'outline'}, plannedDistance: '152.0 km', plannedOf: 'of 152.0 km', observedDistance: 'unavailable (not observed)',
         expectedIncome: '12345 (currency unknown)'},
-      {mode: {kind: 'single-player', text: 'Single-player', evidence: 'Single-player', tone: 'neutral'}, jobType: FREIGHT_BADGE, specialTransport: null, isHardMode: false, tripUuid: T.zeroValues, gameId: 'ats', started: '2026-10-11 02:03:23', game: 'ATS', route: '(empty) → unavailable (not provided by the game)', cargo: 'unavailable (not observed)',
-        outcome: 'Delivered', completeness: {text: 'Complete', variant: 'secondary'}, plannedDistance: '0.0 mi', observedDistance: '0.0 mi', fuelUsed: '0.0 US gal',
+      {mode: {kind: 'single-player', text: 'Single-player', evidence: 'Single-player', tone: 'neutral'}, jobType: FREIGHT_LINE, specialTransport: null, isHardMode: false, tripUuid: T.zeroValues, gameId: 'ats', started: '2026-10-11 02:03:23', game: 'ATS', route: '(empty) → unavailable (not provided by the game)', cargo: 'unavailable (not observed)', companies: 'Synthetic Company A · Synthetic Company B',
+        outcome: 'Delivered', outcomeKind: 'delivered', completeness: {text: 'Complete', variant: 'secondary'}, plannedDistance: '0.0 mi', plannedOf: 'of 0.0 mi', observedDistance: '0.0 mi',
         expectedIncome: '0 USD (SDK-documented)'},
-      {mode: {kind: 'single-player', text: 'Single-player', evidence: 'Single-player', tone: 'neutral'}, jobType: FREIGHT_BADGE, specialTransport: null, isHardMode: false, tripUuid: T.gapClosed, gameId: 'ets2', started: '2026-10-11 02:00:22', game: 'ETS2', route: 'Synthetic City A → Synthetic City B', cargo: 'Synthetic Cargo',
-        outcome: 'No outcome — events were lost', completeness: {text: 'Partial', variant: 'destructive'}, plannedDistance: '152.0 km', observedDistance: 'unavailable (not observed)',
-        fuelUsed: 'unavailable (not observed)', expectedIncome: '12345 (currency unknown)'},
-      {mode: {kind: 'single-player', text: 'Single-player', evidence: 'Single-player', tone: 'neutral'}, jobType: FREIGHT_BADGE, specialTransport: null, isHardMode: false, tripUuid: T.cancelled, gameId: 'ets2', started: '2026-10-11 02:00:12', game: 'ETS2', route: 'Synthetic City A → Synthetic City B', cargo: 'Synthetic Cancel Cargo',
-        outcome: 'Cancelled', completeness: {text: 'Complete', variant: 'secondary'}, plannedDistance: '152.0 km', observedDistance: 'unavailable (not observed)',
-        fuelUsed: 'unavailable (not observed)', expectedIncome: '12345 (currency unknown)'},
-      {mode: {kind: 'single-player', text: 'Single-player', evidence: 'Single-player', tone: 'neutral'}, jobType: FREIGHT_BADGE, specialTransport: null, isHardMode: false, tripUuid: T.delivered, gameId: 'ets2', started: '2026-10-11 02:00:04', game: 'ETS2', route: 'Synthetic City A → Synthetic City B', cargo: 'Synthetic Cargo',
-        outcome: 'Delivered', completeness: {text: 'Complete', variant: 'secondary'}, plannedDistance: '152.0 km', observedDistance: '152.0 km', fuelUsed: 'unavailable (not observed)',
+      {mode: {kind: 'single-player', text: 'Single-player', evidence: 'Single-player', tone: 'neutral'}, jobType: FREIGHT_LINE, specialTransport: null, isHardMode: false, tripUuid: T.gapClosed, gameId: 'ets2', started: '2026-10-11 02:00:22', game: 'ETS2', route: 'Synthetic City A → Synthetic City B', cargo: 'Synthetic Cargo', companies: 'Synthetic Company A · Synthetic Company B',
+        outcome: 'No outcome — events were lost', outcomeKind: 'none', completeness: {text: 'Partial', variant: 'destructive'}, plannedDistance: '152.0 km', plannedOf: 'of 152.0 km', observedDistance: 'unavailable (not observed)',
+        expectedIncome: '12345 (currency unknown)'},
+      {mode: {kind: 'single-player', text: 'Single-player', evidence: 'Single-player', tone: 'neutral'}, jobType: FREIGHT_LINE, specialTransport: null, isHardMode: false, tripUuid: T.cancelled, gameId: 'ets2', started: '2026-10-11 02:00:12', game: 'ETS2', route: 'Synthetic City A → Synthetic City B', cargo: 'Synthetic Cancel Cargo', companies: 'Synthetic Company A · Synthetic Company B',
+        outcome: 'Cancelled', outcomeKind: 'cancelled', completeness: {text: 'Complete', variant: 'secondary'}, plannedDistance: '152.0 km', plannedOf: 'of 152.0 km', observedDistance: 'unavailable (not observed)',
+        expectedIncome: '12345 (currency unknown)'},
+      {mode: {kind: 'single-player', text: 'Single-player', evidence: 'Single-player', tone: 'neutral'}, jobType: FREIGHT_LINE, specialTransport: null, isHardMode: false, tripUuid: T.delivered, gameId: 'ets2', started: '2026-10-11 02:00:04', game: 'ETS2', route: 'Synthetic City A → Synthetic City B', cargo: 'Synthetic Cargo', companies: 'Synthetic Company A · Synthetic Company B',
+        outcome: 'Delivered', outcomeKind: 'delivered', completeness: {text: 'Complete', variant: 'secondary'}, plannedDistance: '152.0 km', plannedOf: 'of 152.0 km', observedDistance: '152.0 km',
         expectedIncome: '12345 (currency unknown)'}
     ]);
   });
   it('converts with the other profile of each game', () => {
     const text = journalListText(page([ZERO, DELIVERED]), {units: SWAPPED, timeZone: ZONE, filtered: false});
-    expect(text.rows.map(row => [row.plannedDistance, row.observedDistance, row.fuelUsed])).toEqual([['0.0 km', '0.0 km', '0.0 L'], ['94.4 mi', '94.4 mi', 'unavailable (not observed)']]);
+    expect(text.rows.map(row => [row.plannedDistance, row.observedDistance])).toEqual([['0.0 km', '0.0 km'], ['94.4 mi', '94.4 mi']]);
     expect(text.hasNext).toBe(false);
   });
   it('without settings uses the ET-000 defaults', () => {
@@ -260,6 +262,7 @@ describe('trip detail (J13, J21, J22; REG-014, REG-009)', () => {
     const mode = (gameMode: JournalTripListItem['gameMode'], ambiguous = false) =>
       fields(journalDetailText({...DELIVERED_DETAIL, trip: {...DELIVERED_DETAIL.trip, gameMode, gameModeAmbiguous: ambiguous}}).sections, 'trip').gameMode;
     expect(mode({mode: 'truckersmp', method: 'process-scan', confidence: 'strong'})).toBe('TruckersMP (strong evidence, process scan)');
+    expect(mode({mode: 'haulmp', method: 'module-scan', confidence: 'strong'})).toBe('HaulMP (strong evidence, module scan)');
     expect(mode({mode: 'unknown', method: 'none', confidence: 'none'})).toBe('Unknown');
     expect(mode(MODE, true)).toBe('Single-player; ambiguous evidence');
   });
@@ -300,7 +303,7 @@ describe('trip detail (J13, J21, J22; REG-014, REG-009)', () => {
   });
 });
 
-describe('job market badges of the list and the trip header (ET-072; REG-009, REG-014)', () => {
+describe('the job market badges of the trip header (ET-072; REG-009, REG-014)', () => {
   type Market = JournalTripListItem['job']['market'];
   type Special = JournalTripListItem['job']['isSpecialJob'];
   /** The delivered anchor with one job market and special-job flag in both its list summary and its job values. */
@@ -308,13 +311,10 @@ describe('job market badges of the list and the trip header (ET-072; REG-009, RE
     const trip = {...DELIVERED_DETAIL.trip, job: {...DELIVERED_DETAIL.trip.job, market, isSpecialJob}};
     return {trip, detail: {...DELIVERED_DETAIL, trip, job: {...DELIVERED_DETAIL.job, values: {...DELIVERED_DETAIL.job.values, market, isSpecialJob}}}};
   };
-  /** The list row's badges; the trip header shows the same badges. */
+  /** The trip header's badges; the list's Job type column (ET-076) has its own texts, tested below. */
   const badges = (market: Market, isSpecialJob: Special, language: 'en' | 'ru') => {
-    const {trip, detail} = withJob(market, isSpecialJob);
-    const row = journalListText({database: DATABASE, trips: [trip], nextCursor: null}, {filtered: false, language}).rows[0];
-    const header = journalDetailText(detail, {language});
-    expect({jobType: header.jobType, specialTransport: header.specialTransport}).toEqual({jobType: row.jobType, specialTransport: row.specialTransport});
-    return {jobType: row.jobType, specialTransport: row.specialTransport};
+    const header = journalDetailText(withJob(market, isSpecialJob).detail, {language});
+    return {jobType: header.jobType, specialTransport: header.specialTransport};
   };
   it('names every SDK job market in both languages, the external markets as World of Trucks', () => {
     for (const [raw, kind, en, ru] of [
@@ -359,6 +359,74 @@ describe('job market badges of the list and the trip header (ET-072; REG-009, RE
       expect(badges(value('cargo_market'), special, 'en').specialTransport).toBeNull();
       expect(badges(value('cargo_market'), special, 'ru').specialTransport).toBeNull();
     }
+  });
+});
+
+describe('the compact list rows (ET-076; REG-009, REG-014)', () => {
+  type Market = JournalTripListItem['job']['market'];
+  const rowOf = (trip: JournalTripListItem, language: 'en' | 'ru' = 'en') => journalListText({database: DATABASE, trips: [trip], nextCursor: null}, {filtered: false, language}).rows[0];
+  const withMarket = (market: Market, isSpecialJob: JournalTripListItem['job']['isSpecialJob'] = value(false)): JournalTripListItem => ({...DELIVERED, job: {...DELIVERED.job, market, isSpecialJob}});
+  it('shows every mode, and an unknown mode never as single-player', () => {
+    const mode = (gameMode: JournalTripListItem['gameMode'], ambiguous = false, language: 'en' | 'ru' = 'en') => rowOf({...DELIVERED, gameMode, gameModeAmbiguous: ambiguous}, language).mode.text;
+    expect(mode({mode: 'unknown', method: 'none', confidence: 'none'})).toBe('Mode unknown');
+    expect(mode({mode: 'unknown', method: 'none', confidence: 'none'}, false, 'ru')).toBe('Режим неизвестен');
+    expect(mode({mode: 'unknown', method: 'none', confidence: 'none'}, true)).toBe('Mode unknown · ambiguous evidence');
+    expect(mode({mode: 'single-player', method: 'module-scan', confidence: 'weak'})).toBe('Single-player');
+    expect(mode({mode: 'single-player', method: 'process-scan', confidence: 'weak'})).toBe('Single-player · unconfirmed');
+    expect(mode({mode: 'truckersmp', method: 'process-scan', confidence: 'strong'})).toBe('TruckersMP');
+    expect(mode({mode: 'haulmp', method: 'module-scan', confidence: 'strong'})).toBe('HaulMP');
+    expect(mode({mode: 'haulmp', method: 'module-scan', confidence: 'strong'}, false, 'ru')).toBe('HaulMP');
+    expect(mode({mode: 'haulmp', method: 'module-scan', confidence: 'strong'}, true)).toBe('HaulMP · ambiguous evidence');
+    expect(mode({mode: 'convoy', method: 'none', confidence: 'none'})).toBe('Convoy · unconfirmed');
+    expect(mode({mode: 'convoy', method: 'none', confidence: 'none'}, false, 'ru')).toBe('Конвой · не подтверждено');
+    expect(rowOf({...DELIVERED, gameMode: {mode: 'unknown', method: 'none', confidence: 'none'}}).mode).toMatchObject({kind: 'unknown', tone: 'neutral', evidence: 'Unknown'});
+    expect(rowOf({...DELIVERED, gameMode: {mode: 'haulmp', method: 'module-scan', confidence: 'strong'}}).mode).toMatchObject({kind: 'haulmp', tone: 'ok', text: 'HaulMP', evidence: 'HaulMP (strong evidence, module scan)'});
+  });
+  it('labels every known market, both external markets as World of Trucks with the market name below', () => {
+    for (const [raw, kind, en, ruText, enSub, ruSub] of [
+      ['cargo_market', 'cargo-market', 'Cargo market', 'Рынок грузов', null, null],
+      ['freight_market', 'freight-market', 'Freight market', 'Грузоперевозки', null, null],
+      ['quick_job', 'quick-job', 'Quick job', 'Быстрый заказ', null, null],
+      ['external_contracts', 'world-of-trucks', 'World of Trucks', 'World of Trucks', 'External contracts', 'Внешние контракты'],
+      ['external_market', 'world-of-trucks', 'World of Trucks', 'World of Trucks', 'External market', 'Внешний рынок']
+    ] as const) {
+      expect(rowOf(withMarket(value(raw))).jobType, raw).toEqual({kind, text: en, sub: enSub});
+      expect(rowOf(withMarket(value(raw)), 'ru').jobType, raw).toEqual({kind, text: ruText, sub: ruSub});
+    }
+  });
+  it('shows any other market verbatim, an empty one as (empty) and an unavailable one with its reason', () => {
+    expect(rowOf(withMarket(value('foo_market'))).jobType).toEqual({kind: 'other', text: 'foo_market', sub: null});
+    expect(rowOf(withMarket(value('constructor'))).jobType).toEqual({kind: 'other', text: 'constructor', sub: null});
+    expect(rowOf(withMarket(value(''))).jobType).toEqual({kind: 'other', text: '(empty)', sub: null});
+    expect(rowOf(withMarket(value('')), 'ru').jobType).toEqual({kind: 'other', text: '(пусто)', sub: null});
+    expect(rowOf(withMarket(NO)).jobType).toEqual({kind: 'unavailable', text: 'unavailable (not observed)', sub: null});
+    expect(rowOf(withMarket({available: false, reason: 'not-supported'})).jobType).toEqual({kind: 'unavailable', text: 'unavailable (not provided by the game)', sub: null});
+    expect(rowOf(withMarket({available: false, reason: 'invalid'}), 'ru').jobType).toEqual({kind: 'unavailable', text: 'недоступно (некорректное значение)', sub: null});
+  });
+  it('keeps Special transport apart from the job type line, also with World of Trucks', () => {
+    expect(rowOf(withMarket(value('external_market'), value(true)))).toMatchObject({jobType: {text: 'World of Trucks', sub: 'External market'}, specialTransport: 'Special transport'});
+    expect(rowOf(withMarket(value('quick_job'), value(false))).specialTransport).toBeNull();
+  });
+  it('shows the companies and the planned distance line', () => {
+    expect(rowOf({...DELIVERED, job: {...DELIVERED.job, sourceCompany: value(''), destinationCompany: NO}})).toMatchObject({companies: '(empty) · unavailable (not observed)'});
+    expect(rowOf(DELIVERED)).toMatchObject({observedDistance: '152.0 km', plannedDistance: '152.0 km', plannedOf: 'of 152.0 km'});
+    expect(rowOf(DELIVERED, 'ru').plannedOf).toBe('из 152.0 км');
+  });
+  it.each([
+    [0, 0, '0 trips · 0.0 h recorded', '0 рейсов · 0,0 ч записано'],
+    [1, 1_440, '1 trip · 0.4 h recorded', '1 рейс · 0,4 ч записано'],
+    [2, 35_964, '2 trips · 9.9 h recorded', '2 рейса · 9,9 ч записано'],
+    [5, 36_000, '5 trips · 10 h recorded', '5 рейсов · 10 ч записано'],
+    [21, 765_720, '21 trips · 212 h recorded', '21 рейс · 212 ч записано']
+  ])('writes the totals for %i trips and %i seconds', (trips, recordedSeconds, en, ru) => {
+    expect(journalTotalsText({trips, recordedSeconds}, 'en')).toBe(en);
+    expect(journalTotalsText({trips, recordedSeconds}, 'ru')).toBe(ru);
+  });
+  it('states the shown rows of a page', () => {
+    expect(journalRangeText(1, 50)).toBe('Showing 1–50');
+    expect(journalRangeText(2, 50, 'ru')).toBe('Показано 51–100');
+    expect(journalRangeText(3, 7)).toBe('Showing 101–107');
+    expect(journalRangeText(4, 0)).toBeNull();
   });
 });
 
@@ -499,7 +567,9 @@ it('keeps stored SDK names equal to known UI labels exact in both selected langu
 
 it('separates typed hero amounts and missing values from their provenance without converting exact money', () => {
   expect(journalTileValues(DELIVERED_DETAIL, {language: 'ru'})).toEqual({distance: {value: '152.0 км', note: null},
-    fuel: {value: '—', note: 'недоступно (не наблюдалось)'}, money: {value: '15000 EUR', note: 'Валюта подтверждена SDK'}, realDuration: '—'});
+    fuel: {value: '—', note: 'недоступно (не наблюдалось)'}, money: {value: '15000 EUR', note: 'Валюта подтверждена SDK'},
+    planned: '152.0 км', gameDistance: '151.3 км', expected: '12345 (валюта неизвестна)',
+    recorded: {value: '3 с', note: 'по сэмплам 1 Гц, без пауз и пропусков; могут входить сэмплы, не учтённые в дистанции и расходе'}, gameTime: '7 ч 51 мин игрового'});
   expect(journalTileValues(ZERO_DETAIL).distance).toEqual({value: '0.0 mi', note: null});
   expect(journalTileValues(ZERO_DETAIL).fuel).toEqual({value: '0.0 US gal', note: null});
   const detail = structuredClone(DELIVERED_DETAIL);
@@ -535,9 +605,11 @@ describe('journal mode badges', () => {
       const before = structuredClone(trip);
       const list = journalListText({database: DATABASE, trips: [trip], nextCursor: null}, {filtered: false, language}).rows[0].mode;
       const detail = journalDetailText({...DELIVERED_DETAIL, trip}, {language}).mode;
-      expect(list).toEqual(detail);
+      // The list says `Mode unknown` for an unknown mode (ET-076); the trip header keeps `Unknown`.
+      const listLabel = mode.mode === 'unknown' ? (language === 'en' ? 'Mode unknown' : 'Режим неизвестен') : language === 'en' ? en : ru;
+      expect(list).toEqual({...detail, text: detail.text.replace(language === 'en' ? 'Unknown' : 'Неизвестно', listLabel)});
       expect(list.kind).toBe(before.gameMode.mode);
-      expect(list.text).toBe(`${language === 'en' ? en : ru}${ambiguous ? language === 'en' ? ' · ambiguous evidence' : ' · неоднозначные данные' : ''}`);
+      expect(list.text).toBe(`${listLabel}${ambiguous ? language === 'en' ? ' · ambiguous evidence' : ' · неоднозначные данные' : ''}`);
       expect(list.tone).toBe(ambiguous ? 'warn' : tone);
       if (mode.mode === 'single-player' && mode.method === 'module-scan') {
         expect(list.evidence).toBe(`${language === 'en' ? en : ru}${ambiguous ? language === 'en' ? '; ambiguous evidence' : '; неоднозначные данные' : ''}`);
@@ -561,4 +633,177 @@ it('REG-012/014 retains same-owner read-time assessments across connection versi
   const refreshed: JournalTripPage = {...previous, sync: {...previous.sync!, connectionVersion: '3', rows: [{...previous.sync!.rows[0], state: 'pending', materialVersion: '2', lastDurableUploadUtcMs: null}]}};
   expect(journalPageSync(previous, status)).toBe(previous.sync); expect(journalPageSync(refreshed, status)).toBe(refreshed.sync);
   expect(journalPageSync(previous, {...status, owner: {...owner, identityEpoch: 'new'}})).toBeUndefined(); expect(previous.sync?.rows[0].state).toBe('sent');
+});
+
+describe('the compact trip page (ET-077; REG-003, REG-009, REG-014)', () => {
+  const withSamples = (count: number, firstUtcMs: number | null, lastUtcMs: number | null): JournalTripDetail => ({...DELIVERED_DETAIL, samples: {count, firstUtcMs, lastUtcMs}});
+  it('derives recorded time from the sample count and never from the UTC labels', () => {
+    // A week between the labels and 13,860 samples: the tile shows the samples.
+    const recorded = journalTileValues(withSamples(13_860, BASE_UTC, BASE_UTC + 604_800_000)).recorded;
+    expect(recorded).toEqual({value: '3 h 51 min', note: 'from 1 Hz samples, without pauses and gaps; may include samples not counted in distance and fuel'});
+    expect(journalTileValues(withSamples(725, BASE_UTC, BASE_UTC + 1)).recorded.value).toBe('12 min 5 s');
+    expect(journalTileValues(withSamples(46, null, null)).recorded.value).toBe('46 s');
+  });
+  it('shows no samples as a dash with its reason, never as zero time', () => {
+    expect(journalTileValues(withSamples(0, null, null))).toMatchObject({recorded: {value: '—', note: 'no samples recorded'}});
+    expect(journalTileValues(withSamples(0, null, null), {language: 'ru'}).recorded).toEqual({value: '—', note: 'сэмплы не записаны'});
+  });
+  it('keeps planned, game-reported and observed values under separate labels', () => {
+    expect(journalTileValues(DELIVERED_DETAIL)).toMatchObject({distance: {value: '152.0 km'}, planned: '152.0 km', gameDistance: '151.3 km', expected: '12345 (currency unknown)', gameTime: '7 h 51 min game time'});
+    expect(journalTileValues(OPEN_DETAIL)).toMatchObject({distance: {value: '—', note: 'unavailable (not observed)'}, gameDistance: null, gameTime: 'game time not available'});
+    expect(journalTileValues(CANCELLED_DETAIL)).toMatchObject({gameDistance: null, gameTime: 'game time not available', money: {value: '12000 EUR'}});
+  });
+  it('keeps an unavailable delivery duration unavailable, and zero is a value', () => {
+    const detail = structuredClone(DELIVERED_DETAIL);
+    if (detail.outcomeDetails?.record.type !== 'job.delivered') throw new Error('Delivered fixture unavailable');
+    detail.outcomeDetails.record.deliveryDuration = {available: false, reason: 'not-observed', unit: 'min'} as never;
+    expect(journalTileValues(detail).gameTime).toBe('game time not available');
+    expect(journalTileValues(ZERO_DETAIL).fuel).toEqual({value: '0.0 US gal', note: null});
+  });
+
+  it('builds the route, the money rows and the vehicle from the detail', () => {
+    expect(journalTripSideText(DELIVERED_DETAIL, {timeZone: ZONE})).toEqual({
+      route: 'Synthetic City A, Synthetic Company A → Synthetic City B, Synthetic Company B · started 2026-10-11 02:00:04',
+      money: {notes: [], rows: [
+        {id: 'fine', label: 'Fines', value: '401 EUR (SDK-documented), 2 amounts'}, {id: 'toll', label: 'Tolls', value: '35 EUR (SDK-documented), 1 amount'},
+        {id: 'ferry', label: 'Ferries', value: '677 EUR (SDK-documented), 1 amount'}, {id: 'train', label: 'Trains', value: 'none recorded'}]},
+      vehicle: {notes: [], rows: [{id: 'truck', label: 'Truck', value: 'Synthetic Brand Synthetic Truck'}, {id: 'trailer-0', label: 'Trailer', value: 'dryvan'}, {id: 'cargoMass', label: 'Cargo mass', value: '18.0 t'}]}
+    });
+  });
+  it('never sums money across categories, and an incomplete total shows only its note', () => {
+    expect(journalTripSideText({...DELIVERED_DETAIL, money: {incomplete: true, totals: [], unavailable: []}}).money).toEqual({rows: [], notes: ['Complete money totals are unavailable. No partial sum is shown as a total.']});
+    expect(journalTripSideText(CANCELLED_DETAIL).money.rows[0].value).toBe('9007199254741238 EUR (SDK-documented), 3 amounts; 50 (currency unknown), 1 amount');
+  });
+  it('shows the latest configuration of each trailer slot and says when the vehicle is unknown', () => {
+    const items = [{eventSeq: '2', values: trailer(0, {bodyType: value('old')})}, {eventSeq: '3', values: trailer(1, {bodyType: value('dolly')})}, {eventSeq: '4', values: trailer(0, {bodyType: value('curtain')})}];
+    const rows = journalTripSideText({...DELIVERED_DETAIL, trailers: {items, total: 3}}).vehicle.rows;
+    expect(rows.filter(row => row.id.startsWith('trailer'))).toEqual([{id: 'trailer-0', label: 'Trailer 1', value: 'curtain'}, {id: 'trailer-1', label: 'Trailer 2', value: 'dolly'}]);
+    const none = journalTripSideText({...DELIVERED_DETAIL, truck: null, trailers: {items: [], total: 0}}, {language: 'ru'}).vehicle;
+    expect(none.rows.map(row => row.id)).toEqual(['cargoMass']);
+    expect(none.notes).toHaveLength(2);
+  });
+
+  const interval = (id: string, startUtcMs: number | null, changes: Partial<JournalInterval> = {}): JournalInterval => ({id, kind: 'sample-loss', annotation: false, cause: 'reading-hole', startUtcMs, endUtcMs: null,
+    startMonotonicNs: null, endMonotonicNs: null, sourceClockId: CLOCK, firstEventSeq: null, lastEventSeq: null, detail: null, ...changes});
+  const event = (seq: string, utc: number | null): JournalEvent => ({eventSeq: seq, type: 'simulation.paused', record: {type: 'simulation.paused'},
+    occurred: {utcUnixMs: utc === null ? {available: false, reason: 'not-observed'} : value(String(utc))} as JournalEvent['occurred'], attribution: null});
+  const trip = {tripUuid: T.delivered, game: 'ets2'} as const;
+  const page = (events: JournalEvent[], nextCursor: string | null): JournalEventPage => ({database: DATABASE, window: DELIVERED_DETAIL.window, events, nextCursor});
+  const keys = (source: JournalEventPage, intervals: JournalInterval[], after: number | null) => journalTimelineItems(source, journalEventText(source, trip), intervals, {after, through: journalPageBound(source, after)}, 'ets2').map(item => item.key);
+  const ids = (items: string[]) => items.filter(key => key.startsWith('interval-'));
+
+  it('places every interval on exactly one page across a page boundary', () => {
+    const intervals = [interval('1', 500), interval('2', 1_500), interval('3', 3_000), interval('4', 3_500), interval('5', 6_000), interval('6', null), interval('7', 2_500, {annotation: true, cause: 'refuel', kind: 'discontinuity'})];
+    const first = page([event('1', 1_000), event('2', 2_000), event('3', 3_000)], '3'), second = page([event('4', 4_000), event('5', 5_000)], null);
+    const pageOne = keys(first, intervals, null), pageTwo = keys(second, intervals, journalPageBound(first, null));
+    expect(pageOne).toEqual(['interval-1', `${ETS2_A}:1`, 'interval-2', `${ETS2_A}:2`, 'interval-7', `${ETS2_A}:3`, 'interval-3']);
+    expect(pageTwo).toEqual(['interval-4', `${ETS2_A}:4`, `${ETS2_A}:5`, 'interval-5', 'interval-6']);
+    expect([...ids(pageOne), ...ids(pageTwo)].sort()).toEqual(['interval-1', 'interval-2', 'interval-3', 'interval-4', 'interval-5', 'interval-6', 'interval-7']);
+  });
+  it('does not repeat or drop a gap when a label jumps back or a page has no labels', () => {
+    const intervals = [interval('1', 2_500)];
+    const first = page([event('1', 3_000), event('2', 1_000)], '2'), second = page([event('3', 2_000)], null);
+    expect(journalPageBound(first, null)).toBe(3_000);
+    expect(ids(keys(first, intervals, null))).toEqual(['interval-1']);
+    expect(ids(keys(second, intervals, journalPageBound(first, null)))).toEqual([]);
+    const unlabelled = page([event('1', null)], '1'), last = page([], null);
+    expect(ids(keys(unlabelled, intervals, null))).toEqual([]);
+    expect(ids(keys(last, intervals, journalPageBound(unlabelled, null)))).toEqual(['interval-1']);
+  });
+  it('lists gaps and refuels but not other annotations, and keeps event order', () => {
+    const intervals = [interval('1', 1_500, {annotation: true, cause: 'truck-change', kind: 'discontinuity'}), interval('2', 1_600, {kind: 'event-loss', cause: 'gap', firstEventSeq: '4', lastEventSeq: '6'})];
+    const source = page([event('9', 1_000), event('10', 3_000)], null);
+    const items = journalTimelineItems(source, journalEventText(source, trip, {timeZone: ZONE}), intervals, {after: null, through: 3_000}, 'ets2', {timeZone: ZONE});
+    expect(items.map(item => item.kind)).toEqual(['event', 'gap', 'event']);
+    expect(items[0]).toMatchObject({eventSeq: '9', tone: 'neutral'});
+    expect(items[1]).toMatchObject({tone: 'warn', type: 'Gap: lost events', detail: 'Lost events · duration unknown', eventSeq: 'eventSeq 4–6', attribution: '—'});
+  });
+  it('shows a gap length only from monotonic bounds, and refuel litres only when they are a finite number', () => {
+    const gap = interval('1', null, {startUtcMs: BASE_UTC, endUtcMs: BASE_UTC + 3_600_000, startMonotonicNs: '1000000000', endMonotonicNs: '47000000000'});
+    const utcOnly = interval('2', null, {startUtcMs: BASE_UTC, endUtcMs: BASE_UTC + 3_600_000});
+    const source = page([], null), text = journalEventText(source, trip);
+    const items = journalTimelineItems(source, text, [gap, utcOnly, interval('3', 1, {annotation: true, cause: 'refuel', kind: 'discontinuity', detail: {addedLiters: 286}}), interval('4', 2, {annotation: true, cause: 'refuel', kind: 'discontinuity', detail: {addedLiters: 'many'}})], {after: null, through: null}, 'ets2', {units: DEFAULT, timeZone: ZONE});
+    expect(items.find(item => item.key === 'interval-1')?.detail).toBe('Missing one-second samples · 46 s');
+    expect(items.find(item => item.key === 'interval-2')?.detail).toBe('Missing one-second samples · duration unknown');
+    expect(items.find(item => item.key === 'interval-3')).toMatchObject({kind: 'refuel', tone: 'ok', type: 'Refuelled', detail: '286.0 L', time: '1970-01-01 01:00:00'});
+    expect(items.find(item => item.key === 'interval-4')).toMatchObject({kind: 'refuel', detail: '—'});
+    expect(journalTimelineItems(source, text, [interval('3', 1, {annotation: true, cause: 'refuel', kind: 'discontinuity', detail: {addedLiters: 286}})], {after: null, through: null}, 'ats', {units: DEFAULT, timeZone: ZONE})[0].detail).toBe('75.6 US gal');
+  });
+
+  it('adds gap lengths as a union of monotonic spans and counts the unknown ones apart', () => {
+    const items = [interval('1', 1, {startMonotonicNs: '1000000000', endMonotonicNs: '11000000000'}), interval('2', 2, {startMonotonicNs: '6000000000', endMonotonicNs: '16000000000'}),
+      interval('3', 3), interval('4', 4, {annotation: true, cause: 'refuel', kind: 'discontinuity', startMonotonicNs: '1000000000', endMonotonicNs: '91000000000'})];
+    const text = journalCompletenessText({...DELIVERED_DETAIL, samples: {count: 13_860, firstUtcMs: null, lastUtcMs: null}, intervals: {items, total: 4, nextCursor: null}});
+    expect(text).toMatchObject({recorded: '3 h 51 min', gaps: '15 s · 1 of unknown duration', intervals: '4', partial: null,
+      bar: {recordedSeconds: 13_860, gapSeconds: 15, gapCount: 3, label: 'Recorded 3 h 51 min, gaps without samples 15 s · 1 of unknown duration'}});
+  });
+  it('joins overlapping gaps only within one plugin session and clock', () => {
+    const span = (id: string, changes: Partial<JournalInterval>) => interval(id, 1, {startMonotonicNs: '0', endMonotonicNs: '10000000000', ...changes});
+    const gaps = (items: JournalInterval[]) => journalCompletenessText({...DELIVERED_DETAIL, intervals: {items, total: items.length, nextCursor: null}}).gaps;
+    expect(gaps([span('1', {pluginSessionId: 'a'}), span('2', {pluginSessionId: 'b'})])).toBe('20 s');
+    expect(gaps([span('1', {pluginSessionId: 'a'}), span('2', {pluginSessionId: 'a'})])).toBe('10 s');
+    expect(gaps([span('1', {}), span('2', {})])).toBe('10 s');
+    expect(gaps([span('1', {pluginSessionId: 'a'}), span('2', {})])).toBe('20 s');
+    expect(gaps([span('1', {pluginSessionId: 'a', sourceClockId: 'x'}), span('2', {pluginSessionId: 'a', sourceClockId: 'y'})])).toBe('20 s');
+  });
+  it('draws only the gaps with no samples written in the bar and keeps every gap in the Gaps row', () => {
+    const span = (id: string, from: number, to: number, changes: Partial<JournalInterval>) => interval(id, 1, {startMonotonicNs: `${from}000000000`, endMonotonicNs: `${to}000000000`, ...changes});
+    const items = [span('1', 1, 11, {}), span('2', 20, 25, {kind: 'not-connected', cause: 'disconnected'}), interval('3', 1, {kind: 'not-connected', cause: 'consumer-restart'}),
+      span('4', 30, 60, {kind: 'event-loss', cause: 'gap'}), span('5', 70, 80, {kind: 'discontinuity', cause: 'reload'}), span('6', 100, 120, {detail: {includesReadings: true}}),
+      span('7', 130, 140, {kind: 'not-connected', cause: 'gap'}), span('8', 150, 160, {cause: 'sample-backlog'}), span('9', 170, 180, {kind: 'storage-unavailable', cause: null}), interval('10', 1, {kind: 'restore-loss', cause: null}),
+      span('11', 200, 290, {kind: 'discontinuity', cause: 'refuel', annotation: true})];
+    const text = journalCompletenessText({...DELIVERED_DETAIL, intervals: {items, total: items.length, nextCursor: null}});
+    expect(text.gaps).toBe('1 min 45 s · 2 of unknown duration');
+    expect(text.bar).toEqual({recordedSeconds: 3, gapSeconds: 15, gapCount: 3, gaps: '15 s · 1 of unknown duration', label: 'Recorded 3 s, gaps without samples 15 s · 1 of unknown duration'});
+    const ru = journalCompletenessText({...DELIVERED_DETAIL, intervals: {items: [span('4', 30, 60, {kind: 'event-loss', cause: 'gap'})], total: 1, nextCursor: null}}, 'ru');
+    expect(ru).toMatchObject({gaps: '30 с', bar: {gapCount: 0, gapSeconds: 0, gaps: 'нет', label: 'Записано 3 с, пропуски без сэмплов нет'}});
+  });
+  it('states the limit of the recorded value', () => {
+    expect(journalCompletenessText(DELIVERED_DETAIL).recordedNote).toBe('Recorded time may include samples not counted in distance and fuel.');
+    expect(journalCompletenessText(DELIVERED_DETAIL, 'ru').recordedNote).toBe('В записанное время могут входить сэмплы, не учтённые в дистанции и расходе.');
+  });
+  it('says none, says unknown and says when only the first intervals are in the total', () => {
+    expect(journalCompletenessText(DELIVERED_DETAIL)).toMatchObject({recorded: '3 s', gaps: 'none', intervals: '0', bar: {gapCount: 0}});
+    const utcOnly = interval('1', BASE_UTC, {endUtcMs: BASE_UTC + 3_600_000});
+    expect(journalCompletenessText({...DELIVERED_DETAIL, samples: {count: 0, firstUtcMs: null, lastUtcMs: null}, intervals: {items: [utcOnly], total: 1, nextCursor: null}})).toMatchObject({recorded: '—', gaps: '1 of unknown duration', bar: {gapSeconds: 0}});
+    expect(journalCompletenessText({...DELIVERED_DETAIL, intervals: {items: [utcOnly], total: 51, nextCursor: '1'}}, 'ru')).toMatchObject({gaps: 'без известной длительности: 1', intervals: '51', partial: 'Итог по пропускам учитывает первые 1 из 51 интервалов.'});
+  });
+
+  it.each([['en', 'none in the first 1', 'Recorded 3 s, gaps without samples none in the first 1'], ['ru', 'нет в первых 1', 'Записано 3 с, пропуски без сэмплов нет в первых 1']] as const)('does not say none when later intervals were not read in %s', (language, gaps, label) => {
+    const annotation = interval('1', BASE_UTC, {annotation: true, cause: 'refuel', kind: 'discontinuity'});
+    expect(journalCompletenessText({...DELIVERED_DETAIL, intervals: {items: [annotation], total: 51, nextCursor: '1'}}, language)).toMatchObject({gaps, bar: {gapCount: 0, label}});
+  });
+
+  const origin = 'https://dashboard.example', owner = {origin, accountId: 'a', companyId: 'c', identityEpoch: 'e'};
+  it('REG-012/014 keeps an opened trip\'s list row and shows it only while its owner is current', () => {
+    const status = {...initialDashboardUploadStatus(origin), state: 'connected' as const, owner};
+    const row = {tripUuid: T.delivered, state: 'sent' as const, materialVersion: '1', latestRevision: 3, lastDurableUploadUtcMs: BASE_UTC + 5_000, reason: null};
+    const page: JournalTripPage = {database: {purpose: 'history', schemaVersion: 6}, trips: [], nextCursor: null, sync: {owner, connectionVersion: '1', rows: [row]}};
+    const hidden = [null, undefined, initialDashboardUploadStatus(origin), initialDashboardUploadStatus(null), {...status, state: 'verifying' as const}, {...status, owner: {...owner, identityEpoch: 'other'}}, {...status, origin: null}];
+    const site = journalSiteFacts(page, status, T.delivered);
+    expect(site).toEqual({owner, row});
+    expect(journalSiteFacts(page, status, 'another-trip')).toBeNull();
+    expect(journalSiteFacts(undefined, status, T.delivered)).toBeNull();
+    expect(journalSiteFacts({...page, sync: undefined}, status, T.delivered)).toBeNull();
+    for (const current of hidden) expect(journalSiteFacts(page, current, T.delivered)).toBeNull();
+    expect(journalSiteRow(site, status)).toBe(row);
+    expect(journalSiteRow(site, {...status, state: 'paused'})).toBe(row);
+    for (const current of hidden) expect(journalSiteRow(site, current)).toBeNull();
+    expect(journalSiteRow(null, status)).toBeNull();
+  });
+  it('REG-012/014 shows a trip\'s site facts only while sync is configured for the same settled owner', () => {
+    const status = {...initialDashboardUploadStatus(origin), state: 'connected' as const, owner};
+    expect(journalSyncOwnerCurrent(owner, status)).toBe(true);
+    expect(journalSyncOwnerCurrent(owner, {...status, state: 'paused'})).toBe(true);
+    for (const hidden of [null, undefined, initialDashboardUploadStatus(null), {...status, state: 'verifying' as const}, {...status, owner: {...owner, identityEpoch: 'other'}}, {...status, origin: null}]) expect(journalSyncOwnerCurrent(owner, hidden)).toBe(false);
+    expect(journalSyncOwnerCurrent(undefined, status)).toBe(false);
+  });
+  it('words a durable upload as saved by the site and shows nothing for any other state', () => {
+    const row = {tripUuid: T.delivered, state: 'sent' as const, materialVersion: '1', latestRevision: 3, lastDurableUploadUtcMs: BASE_UTC + 5_000, reason: null};
+    expect(journalSiteSaved(row, {timeZone: ZONE})).toBe('Saved by the site 2026-10-11 02:00:05 · version 3');
+    expect(journalSiteSaved(row, {timeZone: ZONE, language: 'ru'})).toBe('Сохранено сайтом 2026-10-11 02:00:05 · версия 3');
+    expect(journalSiteSaved({...row, latestRevision: null}, {timeZone: ZONE})).toBe('Saved by the site 2026-10-11 02:00:05');
+    expect(journalSiteSaved({...row, state: 'sending'})).toBeNull();
+    expect(journalSiteSaved({...row, lastDurableUploadUtcMs: null})).toBeNull();
+  });
 });

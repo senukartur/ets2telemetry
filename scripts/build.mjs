@@ -4,16 +4,25 @@ import path from 'node:path';
 import { builtinModules } from 'node:module';
 import {readdirSync, readFileSync, writeFileSync} from 'node:fs';
 import {resolveBuild} from './build-channel.mjs';
-import {sourceHashes} from './source-inputs.mjs';
+import {sha256, sourceHashes} from './source-inputs.mjs';
 import {stageUninstallExecutor} from './uninstall-executor.mjs';
+import {isReleaseDashboardOrigin} from '../packages/contracts/src/dashboard-upload.ts';
 const sources = sourceHashes();
 // ET-055: the build channel and version (scripts/build-channel.mjs) replace the build-time constants of
 // apps/desktop/src/channel.ts and apps/desktop/src/app-version.ts in every bundle, main to renderer.
 const resolved = resolveBuild();
 const define = {__ETS2TELEMETRY_BUILD_CHANNEL__: JSON.stringify(resolved.channel), __ETS2TELEMETRY_APP_VERSION__: JSON.stringify(resolved.version)};
+const dashboardOrigin = process.env.ETS2TELEMETRY_DASHBOARD_ORIGIN || null;
+if (dashboardOrigin !== null && resolved.channel === 'production') {
+  throw new Error('Dashboard upload has not been enabled for production builds.');
+}
+if (dashboardOrigin !== null && !isReleaseDashboardOrigin(dashboardOrigin)) {
+  throw new Error('ETS2TELEMETRY_DASHBOARD_ORIGIN must be a canonical non-loopback HTTPS origin.');
+}
+const dashboardDefine = {...define, __ETS2TELEMETRY_DASHBOARD_ORIGIN__: JSON.stringify(dashboardOrigin)};
 const external = ['electron', 'better-sqlite3', ...builtinModules, ...builtinModules.map(x => `node:${x}`)];
 for (const name of ['main', 'preload', 'overlay-preload', 'now-playing/preload', 'telemetry-service', 'storage-worker']) {
-  await build({configFile:false, define, build:{outDir:'apps/desktop/dist',emptyOutDir:name === 'main',lib:{entry:`apps/desktop/src/${name}.ts`,formats:['cjs'],fileName:()=>`${name === 'now-playing/preload' ? 'now-playing-preload' : name}.cjs`},rollupOptions:{external}}});
+  await build({configFile:false, define: name === 'main' || name === 'telemetry-service' ? dashboardDefine : define, build:{outDir:'apps/desktop/dist',emptyOutDir:name === 'main',lib:{entry:`apps/desktop/src/${name}.ts`,formats:['cjs'],fileName:()=>`${name === 'now-playing/preload' ? 'now-playing-preload' : name}.cjs`},rollupOptions:{external}}});
 }
 // The page title is the channel's display name (the main window shows it until the renderer loads). Production keeps the
 // tracked index.html text.
@@ -36,4 +45,5 @@ for (const [name, pattern] of emitted) {
 if (JSON.stringify(sources) !== JSON.stringify(sourceHashes())) throw new Error('Sources changed during build; rebuild before packaging');
 // The deferred-cleanup executor with this build's `$Channel` line, which forge.config.cjs packages (ET-055 UP12).
 stageUninstallExecutor(resolved.channel);
-writeFileSync('apps/desktop/dist/build-evidence.json', JSON.stringify({builtUtc: new Date().toISOString(), channel: resolved.channel, version: resolved.version, sources}, null, 2) + '\n');
+writeFileSync('apps/desktop/dist/build-evidence.json', JSON.stringify({builtUtc: new Date().toISOString(), channel: resolved.channel, version: resolved.version,
+  dashboardConfigured: dashboardOrigin !== null, dashboardOriginSha256: dashboardOrigin && sha256(dashboardOrigin), sources}, null, 2) + '\n');

@@ -35,19 +35,19 @@ const local = utcMs => {
 const JOB_TYPE = 'Freight market';
 /** The anchors on page 3 of the unfiltered list, newest first, with their hand-written row texts (ETS2 metric, ATS US customary). */
 const ANCHOR_ROWS = [
-  {trip: T.manySamples, started: local(BASE_UTC + 205_000), game: 'ATS', route: ROUTE, outcome: 'In progress', completeness: 'Unknown', observed: NOT_OBSERVED, fuel: NOT_OBSERVED, cargo: 'Synthetic Cargo', jobType: JOB_TYPE},
+  {trip: T.manySamples, started: local(BASE_UTC + 205_000), game: 'ATS', route: ROUTE, outcome: 'In progress', completeness: 'Unknown', observed: NOT_OBSERVED, cargo: 'Synthetic Cargo', jobType: JOB_TYPE},
   {trip: T.zeroValues, started: local(BASE_UTC + 203_000), game: 'ATS', route: '(empty) → unavailable (not provided by the game)', outcome: 'Delivered', completeness: 'Complete',
-    observed: '0.0 mi', fuel: NOT_OBSERVED, cargo: NOT_OBSERVED, jobType: JOB_TYPE},
-  {trip: T.open, started: local(BASE_UTC + 101_000), game: 'ETS2', route: ROUTE, outcome: 'In progress', completeness: 'Unknown', observed: NOT_OBSERVED, fuel: NOT_OBSERVED, cargo: 'Synthetic Cargo', jobType: JOB_TYPE},
+    observed: '0.0 mi', cargo: NOT_OBSERVED, jobType: JOB_TYPE},
+  {trip: T.open, started: local(BASE_UTC + 101_000), game: 'ETS2', route: ROUTE, outcome: 'In progress', completeness: 'Unknown', observed: NOT_OBSERVED, cargo: 'Synthetic Cargo', jobType: JOB_TYPE},
   {trip: T.restartClosed, started: local(BASE_UTC + 27_000), game: 'ETS2', route: ROUTE, outcome: 'No outcome — the game or plugin restarted', completeness: 'Partial', observed: NOT_OBSERVED,
-    fuel: NOT_OBSERVED, cargo: 'Synthetic Cargo', jobType: JOB_TYPE},
-  {trip: T.gapClosed, started: local(BASE_UTC + 22_000), game: 'ETS2', route: ROUTE, outcome: 'No outcome — events were lost', completeness: 'Partial', observed: NOT_OBSERVED, fuel: NOT_OBSERVED,
+    cargo: 'Synthetic Cargo', jobType: JOB_TYPE},
+  {trip: T.gapClosed, started: local(BASE_UTC + 22_000), game: 'ETS2', route: ROUTE, outcome: 'No outcome — events were lost', completeness: 'Partial', observed: NOT_OBSERVED,
     cargo: 'Synthetic Cargo', jobType: JOB_TYPE},
   {trip: T.differentJob, started: local(BASE_UTC + 20_000), game: 'ETS2', route: ROUTE, outcome: 'No outcome — a different job started', completeness: 'Partial', observed: NOT_OBSERVED,
-    fuel: NOT_OBSERVED, cargo: 'Synthetic Cargo', jobType: JOB_TYPE},
-  {trip: T.cancelled, started: local(BASE_UTC + 12_000), game: 'ETS2', route: ROUTE, outcome: 'Cancelled', completeness: 'Complete', observed: NOT_OBSERVED, fuel: NOT_OBSERVED,
+    cargo: 'Synthetic Cargo', jobType: JOB_TYPE},
+  {trip: T.cancelled, started: local(BASE_UTC + 12_000), game: 'ETS2', route: ROUTE, outcome: 'Cancelled', completeness: 'Complete', observed: NOT_OBSERVED,
     cargo: 'Synthetic Cancel Cargo', jobType: JOB_TYPE},
-  {trip: T.delivered, started: local(BASE_UTC + 4_000), game: 'ETS2', route: ROUTE, outcome: 'Delivered', completeness: 'Complete', observed: '152.0 km', fuel: NOT_OBSERVED, cargo: 'Synthetic Cargo', jobType: JOB_TYPE}
+  {trip: T.delivered, started: local(BASE_UTC + 4_000), game: 'ETS2', route: ROUTE, outcome: 'Delivered', completeness: 'Complete', observed: '152.0 km', cargo: 'Synthetic Cargo', jobType: JOB_TYPE}
 ];
 const NO_TRUCK = 'No truck was recorded for this trip. A trip whose recording started during the job has no truck until the game sends it again.';
 const NO_TRAILER = 'No trailer was recorded for this trip. A trip whose recording started during the job has no trailer until the game sends it again.';
@@ -88,13 +88,14 @@ function listState(expected) {
   const rows = [...d.querySelectorAll('[data-testid="journal-list"] [data-testid="journal-row"]')].map(row => {
     const cell = id => row.querySelector(`[data-testid="${id}"]`)?.textContent ?? null;
     return {trip: row.getAttribute('data-trip'), started: cell('journal-row-started'), game: cell('journal-row-game-name'), route: cell('journal-row-route'), outcome: cell('journal-row-outcome'),
-      completeness: cell('journal-row-completeness'), observed: cell('journal-row-observed'), fuel: cell('journal-row-fuel'), cargo: cell('journal-row-cargo'),
+      completeness: cell('journal-row-completeness'), observed: cell('journal-row-observed'), cargo: cell('journal-row-cargo'),
       jobType: cell('journal-row-job-type')};
   });
-  const state = {page: text('journal-list-page'), error: text('journal-list-error'), empty: text('journal-empty'), emptyNote: text('journal-empty-note'), banner: text('journal-banner'),
+  const state = {page: text('journal-list-page'), totals: text('journal.count'), error: text('journal-list-error'), empty: text('journal-empty'), emptyNote: text('journal-empty-note'), banner: text('journal-banner'),
     next: d.querySelector('[data-testid="journal-list-next"]')?.disabled === false, previous: d.querySelector('[data-testid="journal-list-previous"]')?.disabled === false, rows};
   if (state.error) return state;
-  return state.page?.startsWith(`Page ${expected.page}.`) && (expected.first === undefined || rows[0]?.trip === expected.first) && rows.length === expected.count ? state : false;
+  return state.page?.startsWith(`Page ${expected.page} ·`) && (expected.first === undefined || rows[0]?.trip === expected.first) && rows.length === expected.count
+    && (expected.totals === undefined || state.totals === expected.totals) ? state : false;
 }
 function detailState(expected) {
   const d = globalThis.document, root = d.querySelector('[data-testid="journal-detail"]');
@@ -117,7 +118,7 @@ function tableState(expected) {
   if (!root || root.querySelector(`[data-testid="${expected.prefix}-loading"]`)) return false;
   const text = id => root.querySelector(`[data-testid="${id}"]`)?.textContent ?? null;
   const rows = [...root.querySelectorAll(`[data-testid="${expected.row}"]`)].map(row => ({kind: row.getAttribute('data-kind'), eventSeq: row.getAttribute('data-event-seq'),
-    cells: [...row.querySelectorAll('td')].map(cell => cell.textContent)}));
+    cells: [...row.querySelectorAll('td, [data-cell]')].map(cell => cell.textContent)}));
   const state = {page: text(`${expected.prefix}-page`), error: text(`${expected.prefix}-error`), header: expected.header ? text(expected.header) : null,
     next: root.querySelector(`[data-testid="${expected.prefix}-next"]`)?.disabled === false, rows};
   if (state.error) return state;
@@ -210,15 +211,15 @@ async function back(dashboard) {
 const table = {
   intervals: {tab: 'journal-detail-tab-intervals', root: 'journal-intervals', prefix: 'journal-intervals', row: 'journal-interval-row', header: 'journal-intervals-total'},
   timeline: {tab: 'journal-detail-tab-timeline', root: 'journal-timeline', prefix: 'journal-events', row: 'journal-event-row', header: 'journal-window'},
-  // ET-057: the sample table is under the trip's chart, not a tab; its rows are in the document while the section is closed.
-  samples: {tab: null, root: 'journal-samples', prefix: 'journal-samples', row: 'journal-sample-row', header: null}
+  // ET-077: the sample table is under the Summary tab's chart; its rows are rendered only while that section is open.
+  samples: {tab: 'journal-detail-tab-summary', root: 'journal-samples', prefix: 'journal-samples', row: 'journal-sample-row', header: null}
 };
+/** Every row of the current Timeline page, in order: its stable key and whether it is an event, a gap or a refuel. */
+const timelineItems = dashboard => dashboard.getByTestId('journal-timeline').locator('[data-item-key]').evaluateAll(nodes => nodes.map(node => ({key: node.dataset.itemKey, kind: node.dataset.testid})));
 async function openTable(dashboard, kind, count) {
-  // ET-057: the raw tables are a collapsed section of the trip; open it once per trip.
-  if (table[kind].tab) {
-    if (!await dashboard.getByTestId('trip.raw').evaluate(node => node.open, undefined, {timeout: 5000})) await clickTestId(dashboard, 'trip.raw.toggle');
-    await clickTestId(dashboard, table[kind].tab);
-  } else {
+  // ET-077: each table is under its tab of the trip page, and an inactive tab holds no page.
+  await clickTestId(dashboard, table[kind].tab);
+  if (kind === 'samples') {
     // The sample table renders only while its section under the chart is open; a trip without samples has no section.
     await dashboard.getByTestId('journal-samples-loading').waitFor({state: 'detached', timeout: 5000});
     const section = dashboard.getByTestId('trip.samples');
@@ -241,12 +242,14 @@ export async function runJournalSeeded({dashboard, record}) {
   const BANNER = 'Synthetic test database — never game history';
   await clickTestId(dashboard, 'tab-journal');
   const pages = record.pages = [];
-  const page1 = await until(dashboard, listState, {page: 1, count: 50, first: T.paging});
+  // 120 logical trips; 3 + 2 + 1 + 650 anchor samples, 3,600 of the paging trip and 5 of the logical trip are 4,261 seconds, 1.18 h shown rounded down.
+  const page1 = await until(dashboard, listState, {page: 1, count: 50, first: T.paging, totals: '120 trips · 1.1 h recorded'});
   assert.equal(page1.banner, BANNER); record.syntheticBannerShown = true;
   assert.equal(await dashboard.getByTestId('live-speed-number').isHidden(), true, 'The Live panel is shown while the Journal tab is open');
   pages.push({...rowSummary(page1.rows), next: page1.next, previous: page1.previous});
   await clickTestId(dashboard, 'journal-list-next');
-  const page2 = await until(dashboard, listState, {page: 2, count: 50, first: filler(60)});
+  // The answer of a later page has no totals: the first page's stay on screen.
+  const page2 = await until(dashboard, listState, {page: 2, count: 50, first: filler(60), totals: '120 trips · 1.1 h recorded'});
   pages.push({...rowSummary(page2.rows), next: page2.next, previous: page2.previous});
   await clickTestId(dashboard, 'journal-list-next');
   const page3 = await until(dashboard, listState, {page: 3, count: 20, first: filler(10)});
@@ -310,8 +313,23 @@ export async function runJournalSeeded({dashboard, record}) {
   record.pagingSummary = {toll: paging.fields['money-toll'] ?? null, samples: paging.fields['samples-sampleCount'] ?? null};
   assert.deepEqual(record.pagingSummary, {toll: '104 EUR (SDK-documented), 104 amounts', samples: '3600'});
   const timeline = await openTable(dashboard, 'timeline', 100);
+  const firstItems = await timelineItems(dashboard);
   const timeline2 = await nextTable(dashboard, 'timeline', 2, 5);
+  const secondItems = await timelineItems(dashboard);
   await nextTable(dashboard, 'timeline', 1, 100, 'previous');
+  // ET-077: the pager keeps the page bounds, so a walk back and forward shows the same rows in the same places, and the gap
+  // and the refuel beside the page boundary each stay on exactly one page.
+  const firstReturned = await timelineItems(dashboard);
+  await nextTable(dashboard, 'timeline', 2, 5);
+  const secondReturned = await timelineItems(dashboard);
+  await nextTable(dashboard, 'timeline', 1, 100, 'previous');
+  assert.deepEqual(firstReturned, firstItems, 'JOURNAL_TIMELINE_PAGE_1_CHANGED');
+  assert.deepEqual(secondReturned, secondItems, 'JOURNAL_TIMELINE_PAGE_2_CHANGED');
+  const placed = (items, kind) => items.flatMap((item, index) => item.kind === kind ? [{key: item.key, next: items[index + 1]?.key ?? null}] : []);
+  const session = secondItems.find(item => item.kind === 'journal-event-row').key.split(':')[0];
+  record.pagingTimelineBoundary = {firstCount: firstItems.length, secondCount: secondItems.length, gaps: [placed(firstItems, 'journal-timeline-gap').map(item => item.next), placed(secondItems, 'journal-timeline-gap').map(item => item.next)],
+    refuels: [placed(firstItems, 'journal-timeline-refuel').map(item => item.next), placed(secondItems, 'journal-timeline-refuel').map(item => item.next)]};
+  assert.deepEqual(record.pagingTimelineBoundary, {firstCount: 101, secondCount: 6, gaps: [[`${session}:100`], []], refuels: [[], [`${session}:101`]]});
   record.pagingTimeline = {window: timeline.header, first: timeline.rows[0].eventSeq, pageTwo: timeline2.rows.map(row => row.eventSeq), nextOnLast: timeline2.next};
   assert.deepEqual(record.pagingTimeline, {window: "Events of the trip's plugin session from eventSeq 1; the trip is in progress.", first: '1', pageTwo: ['101', '102', '103', '104', '105'],
     nextOnLast: false});
@@ -333,17 +351,35 @@ export async function runJournalSeeded({dashboard, record}) {
   record.samplesPaged = true;
   await back(dashboard);
 
-  // Filters apply before the page limit: no outcome is exactly the three anchors closed without one; partial is 3 + 36.
+  // Filters apply before the page limit: no outcome is exactly the three anchors closed without one; partial is 41, including the paging trip, whose gap makes it partial.
   await chooseFilter(dashboard, 'journal-filter-outcome', 'No outcome');
   const none = await until(dashboard, listState, {page: 1, count: 3, first: T.restartClosed});
-  await chooseFilter(dashboard, 'journal-filter-outcome', 'All');
+  await chooseFilter(dashboard, 'journal-filter-outcome', 'Any outcome');
   await chooseFilter(dashboard, 'journal-filter-completeness', 'Partial');
-  const partial = await until(dashboard, listState, {page: 1, count: 40});
-  await chooseFilter(dashboard, 'journal-filter-completeness', 'All');
+  const partial = await until(dashboard, listState, {page: 1, count: 41});
+  await chooseFilter(dashboard, 'journal-filter-completeness', 'Any recording');
   await until(dashboard, listState, {page: 1, count: 50, first: T.paging});
   record.filters = {none: none.rows.map(row => row.trip), noneNext: none.next, partial: partial.rows.length, partialNext: partial.next};
-  assert.deepEqual(record.filters, {none: [T.restartClosed, T.gapClosed, T.differentJob], noneNext: false, partial: 40, partialNext: false});
+  assert.deepEqual(record.filters, {none: [T.restartClosed, T.gapClosed, T.differentJob], noneNext: false, partial: 41, partialNext: false});
   record.filtersApplied = true;
+  // ET-076: the mode and job type filters, each alone and with the outcome filter. Written by hand from the seed: the eight
+  // anchors and filler 109 are single-player (656 samples); fillers 0 and 1 of every six are delivered, 38 of 110, and all
+  // but filler 109 have an unknown mode; every seeded job is a freight market job.
+  await chooseFilter(dashboard, 'journal-filter-mode', 'Single-player');
+  const singlePlayer = await until(dashboard, listState, {page: 1, count: 9, first: filler(109), totals: '9 trips · 0.1 h recorded'});
+  await chooseFilter(dashboard, 'journal-filter-mode', 'Unknown');
+  await chooseFilter(dashboard, 'journal-filter-outcome', 'Delivered');
+  const unknownDelivered = await until(dashboard, listState, {page: 1, count: 37, first: filler(108), totals: '37 trips · 0.0 h recorded'});
+  await chooseFilter(dashboard, 'journal-filter-mode', 'Any mode');
+  await chooseFilter(dashboard, 'journal-filter-outcome', 'Any outcome');
+  await chooseFilter(dashboard, 'journal-filter-job', 'Quick job');
+  const quickJob = await until(dashboard, listState, {page: 1, count: 0, totals: '0 trips · 0.0 h recorded'});
+  await chooseFilter(dashboard, 'journal-filter-job', 'Freight market');
+  const freight = await until(dashboard, listState, {page: 1, count: 50, first: T.paging, totals: '120 trips · 1.1 h recorded'});
+  await chooseFilter(dashboard, 'journal-filter-job', 'Any job type');
+  await until(dashboard, listState, {page: 1, count: 50, first: T.paging});
+  record.modeJobFilters = {singlePlayer: singlePlayer.rows.length, unknownDelivered: unknownDelivered.rows.length, quickJobEmpty: quickJob.empty, freightNext: freight.next};
+  assert.deepEqual(record.modeJobFilters, {singlePlayer: 9, unknownDelivered: 37, quickJobEmpty: 'No trips match these filters', freightNext: true});
   await clickTestId(dashboard,'journal-list-next');await until(dashboard,listState,{page:2,count:50,first:filler(60)});
   await clickTestId(dashboard,'journal-list-next');const logicalList=await until(dashboard,listState,{page:3,count:20,first:filler(10)});
   assert.equal(logicalList.rows.filter(row=>row.trip===LOGICAL_TRIP).length,1);
@@ -467,7 +503,7 @@ export async function runJournalExport({application, dashboard, config, record})
     assert.deepEqual(problemsOf(document), [], `The ${name} export is not a valid format version 5 document`);
     assert.deepEqual({format: document.format, formatVersion: document.formatVersion, application: document.header.application, purpose: document.header.database.purpose,
       schemaVersion: document.header.database.schemaVersion, sessionOrigin: document.header.sessionOrigin},
-    {format: 'ets2telemetry.trip-export', formatVersion: 5, application: {name: 'ETS2Telemetry', version: smokeBuild(config).version}, purpose: 'synthetic', schemaVersion: 6, sessionOrigin: 'synthetic'});
+    {format: 'ets2telemetry.trip-export', formatVersion: 5, application: {name: 'ETS2Telemetry', version: smokeBuild(config).version}, purpose: 'synthetic', schemaVersion: 8, sessionOrigin: 'synthetic'});
   }
   assert.equal(documents.paging.header.database.uuid, documents.delivered.header.database.uuid);
   // Current synthetic seeds supply no verification observations: zero known checks cannot qualify.
@@ -527,14 +563,14 @@ export async function verifyJournalRun({config, record, restartMainEvents, resta
   assert.deepEqual(record.exportEvents, EXPORT_EVENTS);
   assert.ok(![...restartMainEvents.filter(row => !expectedRefusal(row)), ...restartServiceEvents].some(row => FAILURE_EVENTS.test(row.event)));
   assert.deepEqual(restartServiceEvents.filter(row => row.event === 'RECORDING_TARGET').map(row => row.facts), [{purpose: 'synthetic'}]);
-  assert.deepEqual(restartServiceEvents.filter(row => row.event === 'HISTORY_STORAGE_OPENED').map(row => row.facts), [{schemaVersion: 6, created: false, migratedFrom: null}]);
+  assert.deepEqual(restartServiceEvents.filter(row => row.event === 'HISTORY_STORAGE_OPENED').map(row => row.facts), [{schemaVersion: 8, created: false, migratedFrom: null}]);
   assert.equal(restartServiceEvents.filter(row => row.event === 'HISTORY_STORAGE_CLOSED').length, 1);
   assert.deepEqual(restartMainEvents.filter(row => row.event === 'APP_EXIT_REQUESTED').map(row => row.facts?.reason), ['app-quit']);
   const database = journalDatabase(config), header = Buffer.alloc(100), file = await open(database, 'r');
   try {await file.read(header, 0, 100, 0);} finally {await file.close();}
   const files = record.files = {magic: header.subarray(0, 15).toString('latin1'), applicationId: header.readInt32BE(68), userVersion: header.readUInt32BE(60),
     sidecars: ['-wal', '-shm', '-journal'].filter(suffix => existsSync(database + suffix)), syntheticBackups: existsSync(path.join(path.dirname(database), 'backups'))};
-  assert.deepEqual(files, {magic: 'SQLite format 3', applicationId: 1163154226, userVersion: 6, sidecars: [], syntheticBackups: false});
+  assert.deepEqual(files, {magic: 'SQLite format 3', applicationId: 1163154226, userVersion: 8, sidecars: [], syntheticBackups: false});
   record.shutdownClean = true;
 }
 

@@ -2,20 +2,27 @@
  * Yukon Union Telemetry design tokens.
  *
  * Source of truth for the desktop UI colours, type and shapes. The values follow the Yukon Union community style
- * guide so the telemetry app and the company dashboard look like one product. There is no light theme.
+ * guide so the telemetry app and the company dashboard look like one product. The first block is the dark palette; the
+ * light palette follows the shadcn mapping in a prefers-color-scheme media query.
  *
  * How to use (see docs/design/ui-spec.md#tokens):
  * - Main window: replace the `:root` and `.dark` colour blocks in apps/desktop/src/index.css with the
- *   "shadcn mapping" block below and keep `color-scheme: dark` on :root. shadcn components then pick up the palette
+ *   "shadcn mapping" block below and keep `color-scheme: light dark` on :root. shadcn components then pick up the palette
  *   through their usual variables (`bg-card`, `text-muted-foreground`, `border`, `ring`, ...).
  * - Use the `--yu-*` tokens directly only for things shadcn has no variable for: status colours, game chips, the
  *   metric-tile gradient and the overlay.
+ * - An element of the main window that must stay dark in the light theme (the overlay preview) takes `.yu-theme-dark`, which
+ *   re-declares the dark `--yu-*` tokens and the shadcn mapping. Tailwind `dark:` variants are media-query based and do not
+ *   follow this scope.
  * - Overlay window: it must not load the shadcn base stylesheet. Import only the `--yu-ov-*` block into the overlay's
  *   own CSS (apps/desktop/src/renderer.css).
  */
 
-:root {
-  color-scheme: dark;
+:root { color-scheme: light dark; }
+.yu-theme-dark { color-scheme: dark; }
+
+:root, .yu-theme-dark {
+  /* Dark palette; the light one is at the end of this shared block. */
 
   /* Surfaces */
   --yu-bg-app: #0E1525;          /* window work area */
@@ -43,18 +50,22 @@
   --yu-accent: #2563EB;
   --yu-accent-fg: #FFFFFF;
   --yu-accent-light: #60A5FA;    /* links, focus ring, progress fill, gauge arc */
+  --yu-accent-text: #60A5FA;     /* text-only uses of the accent: links and accent labels; icons keep accent-light */
   --yu-selected-bg: rgba(37, 99, 235, 0.16);
   --yu-selected-border: rgba(96, 165, 250, 0.45);
   --yu-selected-fg: #DBEAFE;
   --yu-nav-active-bg: #182238;   /* active sidebar item, waiting banner icon tile */
   --yu-gear-bg: #10203D;         /* Live gear box */
   --yu-gear-border: #2F5BC4;
+  --yu-update-fg: #93C5FD;       /* sidebar update control */
 
   /* Status: always paired with an icon and a label, never colour alone */
   --yu-ok-fg: #34D399;      --yu-ok-bg: rgba(52, 211, 153, 0.10);  --yu-ok-border: rgba(52, 211, 153, 0.30);
   --yu-warn-fg: #FBBF24;    --yu-warn-bg: rgba(251, 191, 36, 0.10); --yu-warn-border: rgba(251, 191, 36, 0.30);
   --yu-err-fg: #FCA5A5;     --yu-err-bg: rgba(248, 113, 113, 0.10); --yu-err-border: rgba(248, 113, 113, 0.32);
   --yu-neutral-fg: #A3B1C6; --yu-neutral-bg: #151D2C;               --yu-neutral-border: #2A3548;
+  --yu-hover-bg: #151D2C;        /* hover of navigation rows and segments */
+  --yu-ok-graphic: #34D399; --yu-warn-graphic: #FBBF24; /* bars, hatches and progress: 3:1 surfaces, not text */
   --yu-online: #34D399;            /* live dot */
   /* Recording indicator dot: saturated so the colour reads at 10 px; its label carries the meaning */
   --yu-dot-ok: #34D399; --yu-dot-warn: #F59E0B; --yu-dot-err: #F87171; --yu-dot-neutral: #6B7280;
@@ -70,6 +81,12 @@
   --yu-tile-border: rgba(96, 165, 250, 0.5);
   --yu-tile-teal-gradient: linear-gradient(135deg, rgba(20, 184, 166, 0.28), rgba(31, 41, 55, 0.95) 70%);
   --yu-tile-teal-border: rgba(45, 212, 191, 0.45);
+
+  /* Controls */
+  --yu-switch-thumb: #E2E8F0;
+  --yu-segment-selected-bg: #1E293B;
+  --yu-segment-selected-shadow: none;
+  --yu-menu-shadow: 0 12px 32px #0006;
 
   /* Shape */
   --yu-radius-card: 8px;
@@ -97,7 +114,7 @@
 }
 
 /* shadcn mapping: paste into apps/desktop/src/index.css instead of the neutral :root/.dark blocks */
-:root {
+:root, .yu-theme-dark {
   --background: var(--yu-bg-app);
   --foreground: var(--yu-text);
   --card: var(--yu-bg-card);
@@ -130,4 +147,78 @@
   --sidebar-accent-foreground: var(--yu-selected-fg);
   --sidebar-border: var(--yu-divider-chrome);
   --sidebar-ring: var(--yu-accent-light);
+}
+
+/*
+ * Light theme (ET-082). main sets Chromium's colour scheme through nativeTheme.themeSource, so this block applies before
+ * the first paint and follows the Windows colour mode without a reload. An element with .yu-theme-dark keeps the dark tokens.
+ */
+@media (prefers-color-scheme: light) {
+  :root {
+    /* Surfaces */
+    --yu-bg-app: #F5F7FB;
+    --yu-bg-chrome: #EDF1F7;
+    --yu-bg-card: #FFFFFF;
+    --yu-bg-raised: #E2E8F0;
+    --yu-bg-inset: #EEF2F7;
+    --yu-bg-input: #FFFFFF;
+
+    /* Lines */
+    --yu-border: #D8DFE9;
+    --yu-border-input: #7F8DA3;
+    --yu-border-strong: #7F8DA3;
+    --yu-divider: #E6EBF2;
+    --yu-divider-chrome: #D5DCE7;
+
+    /* Text */
+    --yu-text: #1E293B;
+    --yu-text-strong: #0F172A;
+    --yu-text-secondary: #44546A;
+    --yu-text-muted: #566579;
+    --yu-text-subtle: #566579;
+
+    /* Accent */
+    --yu-accent: #2563EB;
+    --yu-accent-fg: #FFFFFF;
+    --yu-accent-light: #2563EB;
+    --yu-accent-text: #1D4ED8;
+    --yu-selected-bg: rgba(37, 99, 235, 0.10);
+    --yu-selected-border: rgba(37, 99, 235, 0.45);
+    --yu-selected-fg: #1D4ED8;
+    --yu-nav-active-bg: #DCE7FB;
+    --yu-gear-bg: #E3ECFD;
+    --yu-gear-border: #2563EB;
+    --yu-update-fg: #1D4ED8;
+
+    /* Status */
+    --yu-ok-fg: #065F46;      --yu-ok-bg: rgba(5, 150, 105, 0.10);  --yu-ok-border: rgba(5, 150, 105, 0.32);
+    --yu-warn-fg: #92400E;    --yu-warn-bg: rgba(217, 119, 6, 0.10); --yu-warn-border: rgba(217, 119, 6, 0.35);
+    --yu-err-fg: #B91C1C;     --yu-err-bg: rgba(220, 38, 38, 0.08); --yu-err-border: rgba(220, 38, 38, 0.30);
+    --yu-neutral-fg: #44546A; --yu-neutral-bg: #EEF2F7;             --yu-neutral-border: #CBD5E1;
+    --yu-hover-bg: #E2E8F0;
+    --yu-ok-graphic: #059669; --yu-warn-graphic: #B45309;
+    --yu-online: #059669;
+    /* Not #7F8DA3: the neutral dot needs 3:1 on the chrome surface. */
+    --yu-dot-ok: #059669; --yu-dot-warn: #B45309; --yu-dot-err: #DC2626; --yu-dot-neutral: #566579;
+    --yu-progress-pending: #B45309;
+
+    /* Games */
+    --yu-ets2-fg: #0369A1; --yu-ets2-bg: rgba(2, 132, 199, 0.12);  --yu-ets2-border: rgba(2, 132, 199, 0.35);
+    --yu-ats-fg: #6D28D9;  --yu-ats-bg: rgba(124, 58, 237, 0.12);  --yu-ats-border: rgba(124, 58, 237, 0.35);
+
+    /* Metric tiles */
+    --yu-instrument-gradient: linear-gradient(135deg, #E6EEFD, #FFFFFF 60%);
+    --yu-tile-gradient: linear-gradient(135deg, rgba(37, 99, 235, 0.12), #FFFFFF 70%);
+    --yu-tile-border: rgba(37, 99, 235, 0.35);
+    --yu-tile-teal-gradient: linear-gradient(135deg, rgba(13, 148, 136, 0.12), #FFFFFF 70%);
+    --yu-tile-teal-border: rgba(13, 148, 136, 0.35);
+
+    /* Controls */
+    --yu-switch-thumb: #FFFFFF;
+    --yu-segment-selected-bg: #FFFFFF;
+    --yu-segment-selected-shadow: 0 0 0 1px #CBD5E1;
+    --yu-menu-shadow: 0 12px 32px rgba(15, 23, 42, 0.16);
+
+    --chart-3: #0D9488;
+  }
 }

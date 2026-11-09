@@ -346,6 +346,12 @@ export class DurableDelivery {
         connection.link.close('ack-ahead', 'ACK_AHEAD_OF_STORAGE');
         return;
       }
+      if(this.sink.checkpoint){
+        const result=await this.call(()=>this.sink.checkpoint!(op.message,{receivedUtcMs:op.receivedUtcMs}));
+        if(connection.dropped||this.stopped)return;
+        if(!result.ok){this.failure(connection,result.error);return;}
+        if(result.value!==undefined){this.failure(connection,internal());return;}
+      }
       this.observe(connection, op.message, op.receivedUtcMs);
       return;
     }

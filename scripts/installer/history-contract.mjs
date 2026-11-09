@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 
-// The upgraded database, written by hand from the frozen version-1 fixture and migrations 0002-journal through 0006-upload-ownership-queue
+// The upgraded database, written by hand from the frozen version-1 fixture and migrations 0002-journal through 0008-haulmp-mode
 // (docs/storage.md); `backup` is filled from the one manifest the migration wrote, and `appVersion` is the version the
 // migrating application reports: `0.1.0` in production, `0.1.0-stg.000000` in staging (ET-055 PR-5). The fixture's own
 // rows (its creation and migration 0001) keep the `0.1.0` they were written with.
@@ -28,7 +28,7 @@ export function expectedDatabase(backup, appVersion) {
   const counts = {plugin_sessions: 1, clocks: 2, events: 5, event_gaps: 1, job_configurations: 1, truck_configurations: 1, trailer_configurations: 1,
     event_amounts: 1, trips: 1, trip_trailers: 1, event_attributions: 4, completeness_intervals: 1, samples: 3};
   return {
-    userVersion: 6, applicationId: 1163154226, integrity: ['ok'], foreignKeyViolations: 0,
+    userVersion: 8, applicationId: 1163154226, integrity: ['ok'], foreignKeyViolations: 0,
     info: [{database_uuid: 'f0000000-0000-4000-8000-000000000001', purpose: 'synthetic', accepted_origin: 'synthetic', created_utc_ms: 1791676800000, created_app_version: '0.1.0'}],
     counts: {...counts, observation_closes: 0, logical_trips: 1, logical_memberships: 1, logical_trucks: 0, logical_progress: 0, logical_projection_states: 1, logical_revisions: 1},
     migrations: [{version: 1, name: '0001-initial', app_version: '0.1.0', backup_file_name: null, backup_sha256: null},
@@ -36,7 +36,9 @@ export function expectedDatabase(backup, appVersion) {
       {version: 3, name: '0003-hard-mode', app_version: appVersion, backup_file_name: backup.fileName, backup_sha256: backup.fileSha256},
       {version: 4, name: '0004-logical-trips', app_version: appVersion, backup_file_name: backup.fileName, backup_sha256: backup.fileSha256},
       {version: 5, name: '0005-upload-projections', app_version: appVersion, backup_file_name: backup.fileName, backup_sha256: backup.fileSha256},
-      {version: 6, name: '0006-upload-ownership-queue', app_version: appVersion, backup_file_name: backup.fileName, backup_sha256: backup.fileSha256}],
+      {version: 6, name: '0006-upload-ownership-queue', app_version: appVersion, backup_file_name: backup.fileName, backup_sha256: backup.fileSha256},
+      {version: 7, name: '0007-trailer-baselines', app_version: appVersion, backup_file_name: backup.fileName, backup_sha256: backup.fileSha256},
+      {version: 8, name: '0008-haulmp-mode', app_version: appVersion, backup_file_name: backup.fileName, backup_sha256: backup.fileSha256}],
     sessions: [{plugin_session_uuid: '10000000-0000-4000-8000-000000000001', game: 'ets2', origin: 'synthetic', committed_through_event_seq: '00000000000000000006'}],
     events: [{id: 1, event_seq: '00000000000000000001', type: 'job.configured'}, {id: 2, event_seq: '00000000000000000002', type: 'truck.configured'},
       {id: 3, event_seq: '00000000000000000003', type: 'trailer.configured'}, {id: 4, event_seq: '00000000000000000006', type: 'job.cancelled'},

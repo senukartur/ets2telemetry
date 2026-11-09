@@ -33,7 +33,7 @@ let contents: EventEmitter & {mainFrame: object; send: ReturnType<typeof vi.fn>;
 let resolveBroker: ReturnType<typeof vi.fn>;
 let loadFile: ReturnType<typeof vi.fn>;
 let overlayContents: typeof contents;
-let windows: (EventEmitter & {webContents: typeof contents; destroy: ReturnType<typeof vi.fn>; hide: ReturnType<typeof vi.fn>; showInactive: ReturnType<typeof vi.fn>; setBounds: ReturnType<typeof vi.fn>;
+let windows: (EventEmitter & {webContents: typeof contents; setTitleBarOverlay: ReturnType<typeof vi.fn>; setBackgroundColor: ReturnType<typeof vi.fn>; themeAtConstruction: string; isDestroyed: () => boolean; destroy: ReturnType<typeof vi.fn>; hide: ReturnType<typeof vi.fn>; showInactive: ReturnType<typeof vi.fn>; setBounds: ReturnType<typeof vi.fn>;
   topmost: boolean; setAlwaysOnTop: ReturnType<typeof vi.fn>; moveTop: ReturnType<typeof vi.fn>; setIgnoreMouseEvents: ReturnType<typeof vi.fn>; setFocusable: ReturnType<typeof vi.fn>;
   minimized: boolean; minimize: ReturnType<typeof vi.fn>; restore: ReturnType<typeof vi.fn>; show: ReturnType<typeof vi.fn>; focus: ReturnType<typeof vi.fn>;
   focused: boolean; setMovable: ReturnType<typeof vi.fn>; setSkipTaskbar: ReturnType<typeof vi.fn>; bounds: Electron.Rectangle; visible: boolean})[];
@@ -108,7 +108,8 @@ const UPDATE_UNSUPPORTED = {state: 'unsupported', available: null, progress: nul
 let nowReaderOptions: MediaReaderOptions;
 let nowReaderSelection: ReturnType<typeof vi.fn<(id: string | null) => void>>;
 let decodeImage: ReturnType<typeof vi.fn<(buffer: Buffer) => {addRepresentation: ReturnType<typeof vi.fn>; getSize: () => {width: number; height: number}; isEmpty: () => boolean}>>;
-let settingsView: {nowPlaying: typeof DEFAULT_NOW_PLAYING; autostart: boolean; units: {ets2: string; ats: string}; gearDisplay?: {ets2: string; ats: string}; overlay: {enabled: boolean; backgroundOpacity: number; layout: string; sections: Record<string, boolean>; placements: Record<string, {x: number; y: number; scale: number}>}; state: string; writable: boolean; saveError: string | null};
+let nativeTheme: EventEmitter & {themeSource: string; shouldUseDarkColors: boolean};
+let settingsView: {nowPlaying: typeof DEFAULT_NOW_PLAYING; autostart: boolean; theme?: string; units: {ets2: string; ats: string}; gearDisplay?: {ets2: string; ats: string}; overlay: {enabled: boolean; backgroundOpacity: number; layout: string; sections: Record<string, boolean>; placements: Record<string, {x: number; y: number; scale: number}>}; state: string; writable: boolean; saveError: string | null};
 type OverlayWrite = (kind: 'backgroundOpacity' | 'enabled' | 'layout' | 'sections' | 'placement', value: unknown) => Promise<unknown>;
 let overlayWrite: ReturnType<typeof vi.fn<OverlayWrite>>;
 type SettingsWrite = (game: string, profile: string) => Promise<unknown>;
@@ -142,6 +143,7 @@ function installFixture() {
   windows = []; channels = []; configurations = [];
   loadFile = vi.fn(() => Promise.resolve());
   handlers = new Map(); ipc = new EventEmitter();
+  nativeTheme = Object.assign(new EventEmitter(), {themeSource: 'system', shouldUseDarkColors: true});
   Object.assign(ipc, {handle: (name: string, handler: typeof handlers extends Map<string, infer H> ? H : never) => handlers.set(name, handler)});
   resolveBroker = vi.fn(() => undefined);
   showSaveDialog = vi.fn(() => Promise.resolve({canceled: true, filePath: ''}));
@@ -150,7 +152,7 @@ function installFixture() {
   shell = {showItemInFolder: vi.fn(), openPath: vi.fn(() => Promise.resolve(''))};
   forkCalls = [];
   decodeImage = vi.fn(() => ({addRepresentation: vi.fn(), getSize: () => ({width: 1, height: 1}), isEmpty: () => false}));
-  vi.doMock('electron', () => ({app, ipcMain: ipc, utilityProcess: {fork: (...args: unknown[]) => {
+  vi.doMock('electron', () => ({app, nativeTheme, ipcMain: ipc, utilityProcess: {fork: (...args: unknown[]) => {
     forkCalls.push(args);
     if (forks++ === 0) return child;
     const next = Object.assign(new EventEmitter(), {postMessage: vi.fn(), kill: vi.fn(() => true)}); children.push(next); return next;
@@ -167,6 +169,7 @@ function installFixture() {
       focused = false; isFocused = () => this.focused; setMovable = vi.fn(); setSkipTaskbar = vi.fn(); bounds = {x: 0, y: 0, width: 0, height: 0}; getBounds = () => ({...this.bounds});
       // Models Windows: isAlwaysOnTop() reports the HWND style, which external z-order changes can clear.
       topmost = false; isAlwaysOnTop = () => this.topmost; setAlwaysOnTop = vi.fn((flag: boolean) => {this.topmost = flag;}); moveTop = vi.fn();
+      setTitleBarOverlay = vi.fn(); setBackgroundColor = vi.fn(); themeAtConstruction = nativeTheme.themeSource;
       constructor(configuration: Electron.BrowserWindowConstructorOptions) {super(); configurations.push(configuration); windows.push(this);}
       isDestroyed() {return false;} loadFile = loadFile;
     },
@@ -192,7 +195,7 @@ function installFixture() {
     createDiagnostics: (...args: unknown[]) => {diagnosticsCalls.push(args); return log;}}));
   vi.doMock('../../apps/desktop/src/broker-artifact', () => ({brokerConfiguration: resolveBroker, createBrokerResolver: () => resolveBroker}));
   vi.stubEnv('ETS2TELEMETRY_SOURCE_KIND', 'synthetic');
-  settingsView = {nowPlaying: DEFAULT_NOW_PLAYING, autostart: false, units: {ets2: 'metric', ats: 'us-customary'}, overlay: DEFAULT_OVERLAY, state: 'defaults', writable: true, saveError: null};
+  settingsView = {nowPlaying: DEFAULT_NOW_PLAYING, autostart: false, theme: 'system', units: {ets2: 'metric', ats: 'us-customary'}, overlay: DEFAULT_OVERLAY, state: 'defaults', writable: true, saveError: null};
   settingsWrite = vi.fn<SettingsWrite>(); gearWrite = vi.fn<SettingsWrite>(); overlayWrite = vi.fn<OverlayWrite>(); autostartWrite = vi.fn((enabled: boolean) => {settingsView = {...settingsView, autostart: enabled}; return Promise.resolve(settingsView);}); settingsIdle = undefined; settingsDirectories = []; settingsLoaded = true; settingsLoading = Promise.resolve();
   settingsChanged = undefined; autostartKnown = true;
   vi.doMock('../../apps/desktop/src/settings-store', () => ({
@@ -211,6 +214,7 @@ function installFixture() {
       setOverlayBackgroundOpacity(opacity: number) {return overlayWrite('backgroundOpacity', opacity);}
       setOverlayEnabled(enabled: boolean) {return overlayWrite('enabled', enabled);}
       setAutostart(autostart: boolean) {return autostartWrite(autostart);}
+      setTheme(theme: string) {settingsView = {...settingsView, theme}; return Promise.resolve(settingsView);}
       setOverlayLayout(layout: string) {return overlayWrite('layout', layout);}
       setOverlaySections(sections: unknown) {return overlayWrite('sections', sections);}
       setOverlayPlacement(layout: string, placement: unknown) {return overlayWrite('placement', [layout, placement]);}
@@ -891,7 +895,7 @@ it('reopens a new dashboard from the tray that resubscribes without a second ups
   ipc.emit('telemetry:subscribe', reopenedSender);
   expect(reopened.postMessage).toHaveBeenCalledWith('telemetry:port', null, [channels.at(-1)!.port2]);
   expect(upstreamRequests()).toBe(1); expect(children).toHaveLength(1);
-  expect(handlers.get('app:get-state')!(reopenedSender)).toEqual({nowPlaying: {state: 'disabled', sources: [], selection: {kind: 'automatic'}, error: null, edit: {active: false, placement: 'unavailable'}}, health: {service: 'ready', storage: 'verified', recording: {state: 'unknown'}, lastError: null}, settings: {nowPlaying: DEFAULT_NOW_PLAYING, autostart: false, units: {ets2: 'metric', ats: 'us-customary'}, overlay: DEFAULT_OVERLAY, state: 'defaults', writable: true, saveError: null}, overlayEdit: DRIVING, plugins: PLUGINS_DISABLED, autostart: 'not-installed', application: APPLICATION, update: UPDATE_UNSUPPORTED});
+  expect(handlers.get('app:get-state')!(reopenedSender)).toEqual({nowPlaying: {state: 'disabled', sources: [], selection: {kind: 'automatic'}, error: null, edit: {active: false, placement: 'unavailable'}}, health: {service: 'ready', storage: 'verified', recording: {state: 'unknown'}, lastError: null}, settings: {nowPlaying: DEFAULT_NOW_PLAYING, autostart: false, theme: 'system', units: {ets2: 'metric', ats: 'us-customary'}, overlay: DEFAULT_OVERLAY, state: 'defaults', writable: true, saveError: null}, overlayEdit: DRIVING, plugins: PLUGINS_DISABLED, autostart: 'not-installed', application: APPLICATION, update: UPDATE_UNSUPPORTED});
   // A second tray open focuses the existing window instead of creating another.
   trays[0].emit('click'); expect(windows).toHaveLength(3); expect(windows[2].show).toHaveBeenCalledOnce(); expect(windows[2].focus).toHaveBeenCalledOnce();
 });
@@ -1099,7 +1103,7 @@ it('shows restart exhaustion in health and the tray and stays running until an e
     children.at(-1)!.emit('exit', 1); await vi.advanceTimersByTimeAsync(1000);
     if (crash < 2) {children.at(-1)!.emit('message', {type: 'ready'}); await settle();}
   }
-  expect(handlers.get('app:get-state')!(trusted())).toEqual({nowPlaying: {state: 'disabled', sources: [], selection: {kind: 'automatic'}, error: null, edit: {active: false, placement: 'unavailable'}}, health: {service: 'failed', storage: 'pending', recording: {state: 'unknown'}, lastError: 'SERVICE_RESTART_EXHAUSTED'}, settings: {nowPlaying: DEFAULT_NOW_PLAYING, autostart: false, units: {ets2: 'metric', ats: 'us-customary'}, overlay: DEFAULT_OVERLAY, state: 'defaults', writable: true, saveError: null}, overlayEdit: DRIVING, plugins: PLUGINS_DISABLED, autostart: 'not-installed', application: APPLICATION, update: UPDATE_UNSUPPORTED});
+  expect(handlers.get('app:get-state')!(trusted())).toEqual({nowPlaying: {state: 'disabled', sources: [], selection: {kind: 'automatic'}, error: null, edit: {active: false, placement: 'unavailable'}}, health: {service: 'failed', storage: 'pending', recording: {state: 'unknown'}, lastError: 'SERVICE_RESTART_EXHAUSTED'}, settings: {nowPlaying: DEFAULT_NOW_PLAYING, autostart: false, theme: 'system', units: {ets2: 'metric', ats: 'us-customary'}, overlay: DEFAULT_OVERLAY, state: 'defaults', writable: true, saveError: null}, overlayEdit: DRIVING, plugins: PLUGINS_DISABLED, autostart: 'not-installed', application: APPLICATION, update: UPDATE_UNSUPPORTED});
   await vi.advanceTimersByTimeAsync(500);
   expect(trays[0].setImage).toHaveBeenCalled(); expect(trays[0].setToolTip).toHaveBeenLastCalledWith('Yukon Union Telemetry\nService failed');
   expect(app.exit).not.toHaveBeenCalled();
@@ -1131,7 +1135,7 @@ it('answers a dashboard opened during a service restart with a not-ready status,
   expect(handlers.get('scaffold:status')!(sender)).toBeNull();
   expect(() => handlers.get('scaffold:status')!(trusted())).toThrow('Untrusted');
   ipc.emit('app:subscribe-state', sender);
-  expect(reopened.send).toHaveBeenLastCalledWith('app:state', {nowPlaying: {state: 'disabled', sources: [], selection: {kind: 'automatic'}, error: null, edit: {active: false, placement: 'unavailable'}}, health: expect.objectContaining({service: 'restarting'}), settings: {nowPlaying: DEFAULT_NOW_PLAYING, autostart: false, units: {ets2: 'metric', ats: 'us-customary'}, overlay: DEFAULT_OVERLAY, state: 'defaults', writable: true, saveError: null}, overlayEdit: DRIVING, plugins: PLUGINS_DISABLED, autostart: 'not-installed', application: APPLICATION, update: UPDATE_UNSUPPORTED});
+  expect(reopened.send).toHaveBeenLastCalledWith('app:state', {nowPlaying: {state: 'disabled', sources: [], selection: {kind: 'automatic'}, error: null, edit: {active: false, placement: 'unavailable'}}, health: expect.objectContaining({service: 'restarting'}), settings: {nowPlaying: DEFAULT_NOW_PLAYING, autostart: false, theme: 'system', units: {ets2: 'metric', ats: 'us-customary'}, overlay: DEFAULT_OVERLAY, state: 'defaults', writable: true, saveError: null}, overlayEdit: DRIVING, plugins: PLUGINS_DISABLED, autostart: 'not-installed', application: APPLICATION, update: UPDATE_UNSUPPORTED});
   // When the pushed health reports ready, the status query already answers with the ready status.
   let statusAtReadyPush: unknown;
   reopened.send.mockImplementation((channel: string, state: {nowPlaying: {state: 'disabled', sources: [], selection: {kind: 'automatic'}, error: null, edit: {active: false, placement: 'unavailable'}}, health: {service: string}}) => {
@@ -1268,7 +1272,7 @@ it('applies a settings read that settles after the load budget to the dashboard 
   expect(windows[1].showInactive).not.toHaveBeenCalled(); consumeOverlay(overlayChannel);
   await drainOverlay(overlayChannel, 150);
   // The store applies the late read (t = 200 ms) and reports it; main reads the new view from the store.
-  settingsView = {nowPlaying: DEFAULT_NOW_PLAYING, autostart: false, units: {ets2: 'us-customary', ats: 'us-customary'}, overlay: DEFAULT_OVERLAY, state: 'loaded', writable: true, saveError: null};
+  settingsView = {nowPlaying: DEFAULT_NOW_PLAYING, autostart: false, theme: 'system', units: {ets2: 'us-customary', ats: 'us-customary'}, overlay: DEFAULT_OVERLAY, state: 'loaded', writable: true, saveError: null};
   expect(settingsChanged).toBeTypeOf('function'); settingsChanged!();
   expect(pushes().at(-1)).toEqual({nowPlaying: {state: 'disabled', sources: [], selection: {kind: 'automatic'}, error: null, edit: {active: false, placement: 'unavailable'}}, health: {service: 'ready', storage: 'verified', recording: {state: 'unknown'}, lastError: null}, settings: settingsView, overlayEdit: DRIVING, plugins: PLUGINS_DISABLED, autostart: 'not-installed', application: APPLICATION, update: UPDATE_UNSUPPORTED});
   expect(handlers.get('app:get-state')!(trusted())).toMatchObject({settings: settingsView});
@@ -1304,7 +1308,7 @@ it('applies a unit profile only after the durable save and republishes the overl
   // Not durable yet: nothing applied, pushed or republished.
   expect(settingsWrite).toHaveBeenCalledExactlyOnceWith('ets2', 'us-customary');
   expect(pushes()).toHaveLength(before); expect(overlayProjection(overlayChannel)).toMatchObject({speedUnit: 'km/h'});
-  settingsView = {nowPlaying: DEFAULT_NOW_PLAYING, autostart: false, units: {ets2: 'us-customary', ats: 'us-customary'}, overlay: DEFAULT_OVERLAY, state: 'loaded', writable: true, saveError: null}; saved.resolve(settingsView);
+  settingsView = {nowPlaying: DEFAULT_NOW_PLAYING, autostart: false, theme: 'system', units: {ets2: 'us-customary', ats: 'us-customary'}, overlay: DEFAULT_OVERLAY, state: 'loaded', writable: true, saveError: null}; saved.resolve(settingsView);
   await expect(request).resolves.toEqual(settingsView);
   expect(pushes().at(-1)).toEqual({nowPlaying: {state: 'disabled', sources: [], selection: {kind: 'automatic'}, error: null, edit: {active: false, placement: 'unavailable'}}, health: {service: 'ready', storage: 'verified', recording: {state: 'unknown'}, lastError: null}, settings: settingsView, overlayEdit: DRIVING, plugins: PLUGINS_DISABLED, autostart: 'not-installed', application: APPLICATION, update: UPDATE_UNSUPPORTED});
   await vi.advanceTimersByTimeAsync(50);
@@ -1334,14 +1338,14 @@ it.each(['SETTINGS_WRITE_FAILED', 'SETTINGS_READ_ONLY'] as const)('keeps the uni
   // The store records the refusal in its view, as the real store does.
   settingsWrite.mockImplementation(() => {settingsView = {...settingsView, saveError: code}; return Promise.reject(new FakeSettingsError(code));});
   await expect(saveUnits(trusted(), 'ets2', 'us-customary')).rejects.toThrow(code === 'SETTINGS_READ_ONLY' ? 'Settings are read-only' : 'Settings could not be saved');
-  const refused = {nowPlaying: {state: 'disabled', sources: [], selection: {kind: 'automatic'}, error: null, edit: {active: false, placement: 'unavailable'}}, health, settings: {nowPlaying: DEFAULT_NOW_PLAYING, autostart: false, units: {ets2: 'metric', ats: 'us-customary'}, overlay: DEFAULT_OVERLAY, state: 'defaults', writable: true, saveError: code}, overlayEdit: DRIVING, plugins: PLUGINS_DISABLED, autostart: 'not-installed', application: APPLICATION, update: UPDATE_UNSUPPORTED};
+  const refused = {nowPlaying: {state: 'disabled', sources: [], selection: {kind: 'automatic'}, error: null, edit: {active: false, placement: 'unavailable'}}, health, settings: {nowPlaying: DEFAULT_NOW_PLAYING, autostart: false, theme: 'system', units: {ets2: 'metric', ats: 'us-customary'}, overlay: DEFAULT_OVERLAY, state: 'defaults', writable: true, saveError: code}, overlayEdit: DRIVING, plugins: PLUGINS_DISABLED, autostart: 'not-installed', application: APPLICATION, update: UPDATE_UNSUPPORTED};
   expect(handlers.get('app:get-state')!(trusted())).toEqual(refused);
   expect(contents.send).toHaveBeenLastCalledWith('app:state', refused);
   await vi.advanceTimersByTimeAsync(50); expect(overlayChannel.port1.postMessage.mock.calls).toHaveLength(deliveries);
   // A later successful save clears the settings error and still leaves the service problem in place.
-  settingsWrite.mockImplementation(() => {settingsView = {nowPlaying: DEFAULT_NOW_PLAYING, autostart: false, units: {ets2: 'metric', ats: 'us-customary'}, overlay: DEFAULT_OVERLAY, state: 'loaded', writable: true, saveError: null}; return Promise.resolve(settingsView);});
+  settingsWrite.mockImplementation(() => {settingsView = {nowPlaying: DEFAULT_NOW_PLAYING, autostart: false, theme: 'system', units: {ets2: 'metric', ats: 'us-customary'}, overlay: DEFAULT_OVERLAY, state: 'loaded', writable: true, saveError: null}; return Promise.resolve(settingsView);});
   await saveUnits(trusted(), 'ats', 'us-customary');
-  const saved = {nowPlaying: {state: 'disabled', sources: [], selection: {kind: 'automatic'}, error: null, edit: {active: false, placement: 'unavailable'}}, health, settings: {nowPlaying: DEFAULT_NOW_PLAYING, autostart: false, units: {ets2: 'metric', ats: 'us-customary'}, overlay: DEFAULT_OVERLAY, state: 'loaded', writable: true, saveError: null}, overlayEdit: DRIVING, plugins: PLUGINS_DISABLED, autostart: 'not-installed', application: APPLICATION, update: UPDATE_UNSUPPORTED};
+  const saved = {nowPlaying: {state: 'disabled', sources: [], selection: {kind: 'automatic'}, error: null, edit: {active: false, placement: 'unavailable'}}, health, settings: {nowPlaying: DEFAULT_NOW_PLAYING, autostart: false, theme: 'system', units: {ets2: 'metric', ats: 'us-customary'}, overlay: DEFAULT_OVERLAY, state: 'loaded', writable: true, saveError: null}, overlayEdit: DRIVING, plugins: PLUGINS_DISABLED, autostart: 'not-installed', application: APPLICATION, update: UPDATE_UNSUPPORTED};
   expect(handlers.get('app:get-state')!(trusted())).toEqual(saved);
   expect(contents.send).toHaveBeenLastCalledWith('app:state', saved);
 });
@@ -1417,10 +1421,10 @@ it('exits after at most 1000 ms when an in-flight settings save does not settle'
 it('reports the settings view in the gated lifecycle facts', () => isolatedProfile(async profile => {
   vi.stubEnv('ETS2TELEMETRY_LIVE_SMOKE', '1'); vi.stubEnv('ETS2TELEMETRY_DIAGNOSTIC_DIR', 'C:\\isolated\\diagnostics');
   vi.stubEnv('ETS2TELEMETRY_PROFILE_DIR', profile); trayAvailable = true;
-  settingsView = {nowPlaying: DEFAULT_NOW_PLAYING, autostart: false, units: {ets2: 'metric', ats: 'us-customary'}, overlay: DEFAULT_OVERLAY, state: 'invalid-file', writable: true, saveError: null}; await ready();
+  settingsView = {nowPlaying: DEFAULT_NOW_PLAYING, autostart: false, theme: 'system', units: {ets2: 'metric', ats: 'us-customary'}, overlay: DEFAULT_OVERLAY, state: 'invalid-file', writable: true, saveError: null}; await ready();
   let facts: Record<string, unknown> | undefined;
   app.emit('ets2telemetry:diagnostic-lifecycle-state', (state: Record<string, unknown>) => {facts = state;});
-  expect(facts).toMatchObject({settings: {nowPlaying: DEFAULT_NOW_PLAYING, autostart: false, units: {ets2: 'metric', ats: 'us-customary'}, overlay: DEFAULT_OVERLAY, state: 'invalid-file', writable: true, saveError: null}});
+  expect(facts).toMatchObject({settings: {nowPlaying: DEFAULT_NOW_PLAYING, autostart: false, theme: 'system', units: {ets2: 'metric', ats: 'us-customary'}, overlay: DEFAULT_OVERLAY, state: 'invalid-file', writable: true, saveError: null}});
 }));
 // ET-012a: overlay layouts and sections. The snapshot's game client is 1920 x 1080 at (-1920, 0) and the fixture's
 // screen conversion is the identity. ET-045e changed the requirement for the scale: the default setting 1 renders at
@@ -3783,7 +3787,13 @@ it('uses the existing fresh game report when current track is enabled after game
   expect(widget.visible).toBe(true);
 });
 it('destroys the current-track window only after a tray exit nested in its publish hide has unwound', async () => {
-  trayAvailable = true; const widget = await readyCurrentTrack();
+  vi.stubEnv('ETS2TELEMETRY_SOURCE_KIND', 'ets2');
+  trayAvailable = true; const widget = await readyCurrentTrack(() => deliver(currentGame()));
+  const source = {id: 's1', sourceAppId: 'Chrome', playback: 'playing' as const, current: true};
+  // Only a window that is showing still reaches the native hide; a hidden one skips it.
+  nowReaderOptions.snapshot({version: 1, type: 'snapshot', requestId: 1, sessions: [source], error: null,
+    selected: {id: source.id, revision: 1, title: 'Fixture track', artist: null, album: null, playback: 'playing', timeline: null, artwork: null}}, 1);
+  expect(widget.visible).toBe(true);
   let duringHide: number | undefined;
   widget.hide.mockImplementationOnce(() => {trayMenuItem('Exit Yukon Union Telemetry').click!(); duringHide = widget.destroy.mock.calls.length;});
   nowReaderOptions.snapshot({version: 1, type: 'snapshot', requestId: 1, sessions: [], error: null, selected: null}, 1);
@@ -3831,4 +3841,52 @@ it.each(['widget-reload', 'port-close', 'disable', 'dashboard-retired', 'exit'])
   expect(widget.visible).toBe(false); expect(widget.setIgnoreMouseEvents).toHaveBeenLastCalledWith(true);
   const writes = widget.setIgnoreMouseEvents.mock.calls.length;
   await vi.advanceTimersByTimeAsync(150); expect(widget.setIgnoreMouseEvents).toHaveBeenCalledTimes(writes);
+});
+
+// ET-082 (REG-012, REG-017): main sets the theme source before the dashboard exists, so its first paint has the saved theme.
+const LIGHT_BAR = {color: '#EDF1F7', symbolColor: '#4A5A70', height: 32};
+const DARK_BAR = {color: '#0A101D', symbolColor: '#94A3B8', height: 32};
+it('sets the saved theme source before the dashboard constructor and uses the matching chrome (ET-082)', async () => {
+  settingsView = {...settingsView, theme: 'light'}; nativeTheme.shouldUseDarkColors = false;
+  await ready();
+  expect(windows[0].themeAtConstruction).toBe('light');
+  expect(configurations[0]).toMatchObject({titleBarOverlay: LIGHT_BAR, backgroundColor: '#F5F7FB'});
+  expect(nativeTheme.themeSource).toBe('light');
+  // The overlay window keeps its own transparent options.
+  expect(configurations[1]).not.toHaveProperty('titleBarOverlay');
+});
+it('uses dark chrome when the resolved theme is dark (ET-082)', async () => {
+  settingsView = {...settingsView, theme: 'dark'}; nativeTheme.shouldUseDarkColors = true;
+  await ready();
+  expect(windows[0].themeAtConstruction).toBe('dark');
+  expect(configurations[0]).toMatchObject({titleBarOverlay: DARK_BAR, backgroundColor: '#0E1525'});
+});
+it('re-syncs the theme source from a late settings read without a reload (ET-082)', async () => {
+  await ready();
+  expect(nativeTheme.themeSource).toBe('system');
+  settingsView = {...settingsView, theme: 'dark'}; settingsChanged!();
+  expect(nativeTheme.themeSource).toBe('dark');
+  expect(loadFile).toHaveBeenCalledTimes(2);
+});
+it('updates the live dashboard window when the resolved theme changes and survives a destroyed one (ET-082)', async () => {
+  await ready();
+  nativeTheme.shouldUseDarkColors = false; nativeTheme.emit('updated');
+  expect(windows[0].setTitleBarOverlay).toHaveBeenLastCalledWith(LIGHT_BAR);
+  expect(windows[0].setBackgroundColor).toHaveBeenLastCalledWith('#F5F7FB');
+  expect(windows[1].setTitleBarOverlay).not.toHaveBeenCalled();
+  nativeTheme.shouldUseDarkColors = true; nativeTheme.emit('updated');
+  expect(windows[0].setTitleBarOverlay).toHaveBeenLastCalledWith(DARK_BAR);
+  expect(windows[0].setBackgroundColor).toHaveBeenLastCalledWith('#0E1525');
+  const calls = windows[0].setTitleBarOverlay.mock.calls.length;
+  windows[0].isDestroyed = () => true;
+  expect(() => nativeTheme.emit('updated')).not.toThrow();
+  expect(windows[0].setTitleBarOverlay).toHaveBeenCalledTimes(calls);
+});
+it('accepts only a valid theme from the trusted dashboard and applies it after the save (ET-082)', async () => {
+  await ready(); const set = handlers.get('settings:set-theme')!;
+  await expect(set(overlayTrusted(), 'light')).rejects.toThrow('Untrusted');
+  for (const bad of [[], ['blue'], [1], ['light', 'extra']]) await expect(set(trusted(), ...bad)).rejects.toThrow('Invalid theme request');
+  expect(settingsView.theme).toBe('system'); expect(nativeTheme.themeSource).toBe('system');
+  await expect(set(trusted(), 'light')).resolves.toMatchObject({theme: 'light'});
+  expect(nativeTheme.themeSource).toBe('light');
 });

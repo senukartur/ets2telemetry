@@ -210,7 +210,7 @@ async function value<T>(journal: JournalService, query: JournalQuery): Promise<T
   if (!result.ok) throw new Error(`The journal ${query.kind} read failed with ${result.code}`);
   return result.value as T;
 }
-const SYNTHETIC_V3 = {purpose: 'synthetic', schemaVersion: 6};
+const SYNTHETIC_V3 = {purpose: 'synthetic', schemaVersion: 8};
 const OUTCOMES = ['open', 'delivered', 'cancelled', 'none'] as const, COMPLETENESS = ['complete', 'partial', 'unknown'] as const, GAMES = ['ets2', 'ats'] as const;
 const withoutId = <T extends {id:string;pluginSessionId?:unknown;rawTripUuid?:unknown}>(rows:T[])=>rows.map(({id,pluginSessionId,rawTripUuid,...rest})=>{void id;void pluginSessionId;void rawTripUuid;return rest;});
 const eventTuple = (e: {eventSeq: string; type: string; attribution: Json | null}) => [e.eventSeq,e.type,e.attribution===null?null:{kind:e.attribution.kind,tripUuid:e.attribution.tripUuid}];
@@ -220,7 +220,8 @@ const sortMoney = (totals: Json[]) => [...totals].sort((a, b) => String(a.catego
 async function expectJournal(journal: JournalService, s: Scenario, trips: TripExpectation[]) {
   const seed = s.input.seed, coverage = s.rows.coverage.committedThroughEventSeq;
   const page = await value<{database: unknown; trips: Json[]; nextCursor: string | null}>(journal, {kind: 'trips', query: {}});
-  expect(relabel(page, seed)).toEqual({database: SYNTHETIC_V3, trips: trips.map(t => t.listItem), nextCursor: null});
+  // ET-076: a read without a cursor also counts the trips and their one-second samples.
+  expect(relabel(page, seed)).toEqual({database: SYNTHETIC_V3, trips: trips.map(t => t.listItem), nextCursor: null, totals: {trips: trips.length, recordedSeconds: trips.reduce((sum, t) => sum + t.samples.length, 0)}});
   // Every filter, from the hand-written outcome, completeness and game of each trip (the list order is newest first).
   for (const [key, values] of [['outcome', OUTCOMES], ['completeness', COMPLETENESS], ['game', GAMES]] as const) {
     for (const v of values) {

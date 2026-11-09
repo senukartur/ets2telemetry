@@ -5,6 +5,8 @@ import type {ProfileObservation} from '../../telemetry-core/src/trips/continuati
 import type {Available, GameMode, JobConfiguration, Uint64} from '../../contracts/src/protocol-v1';
 
 export type {Uint64};
+/** Private full checkpoint evidence; no public preload or native protocol change. */
+export interface TrailerBaselineInput {message: unknown}
 /** What a database file holds. History accepts only game data; synthetic and replay data live in separate files. */
 export type Purpose = 'history' | 'synthetic' | 'replay';
 export type Origin = 'game' | 'synthetic' | 'replay';

@@ -14,18 +14,27 @@ export function HardModeBadge({short = false, language = 'en'}: {short?: boolean
   return <Badge data-testid="hard-mode-badge"><Flame className="mr-1 size-3" aria-hidden="true" />{short ? 'HM' : t('hm.title', undefined, language)}</Badge>;
 }
 
-/** A trip's Hard Mode result; the audit (opening and latest state, snapshots) is behind the Info icon (ET-057). */
-export function HardModeTrip({qualified, details, language = 'en'}: {qualified: boolean; details: HardModeDetails | null; language?: AppLanguage}) {
+const HM_MARKS = {pass: '✓', fail: '✕', unknown: '?'} as const;
+/** One evaluation of a trip: its mark and state in words and how many of the twelve rules passed then. */
+function HardModeEvaluation({label, assessment, language, testId}: {label: string; assessment: HardModeDetails['opening']; language: AppLanguage; testId: string}) {
+  const passed = assessment.rules.filter(rule => rule.state === 'pass').length;
+  return <div className="yu-trip-row"><dt>{label}</dt><dd data-testid={testId} data-state={assessment.state}><span aria-hidden="true">{HM_MARKS[assessment.state]} </span><span className="sr-only">{hardModeState(assessment.state, language)}: </span>{t('hm.configuredCount', {n: passed}, language)}</dd></div>;
+}
+
+/** A trip's Hard Mode card (ET-077, mockup T4): the result, the evaluation at job start and the latest one, and the v2 and first-loss evidence. */
+export function HardModeTrip({qualified, details, delivered = false, language = 'en'}: {qualified: boolean; details: HardModeDetails | null; delivered?: boolean; language?: AppLanguage}) {
   const title = t('hm.title', undefined, language);
-  return <section className="space-y-1" data-testid="trip-hard-mode"><h4 className="flex items-center gap-1 font-medium"><Flame className="size-4" aria-hidden="true" />{title}</h4>
-    <p className="flex flex-wrap items-center gap-1">{t(qualified ? 'hm.tripYes' : 'hm.tripNo', undefined, language)}{qualified ? <> <HardModeBadge language={language} /></> : null}
-      <InfoHint label={t('ui.moreAbout', {v: title}, language)}>
-        {details ? <><span className="block">{t('hm.audit', {opening: hardModeState(details.opening.state, language), latest: hardModeState(details.latest.state, language)}, language)}</span>
-          <span className="block">{t('hm.snapshots', undefined, language)}</span></> : <span className="block">{t('hm.notEvaluated', undefined, language)}</span>}
-        <span className="block text-xs text-muted-foreground">{t('hm.notice', undefined, language)}</span>
-      </InfoHint></p>
-    {details?.version === 2 ? <><p>{hardModeRatioText(details, language)}</p>{details.firstDiagnostic ? <p>{hardModeDiagnosticText(details.firstDiagnostic, language)}</p> : null}{details.latestDiagnostic && JSON.stringify(details.latestDiagnostic) !== JSON.stringify(details.firstDiagnostic) ? <p>{hardModeDiagnosticText(details.latestDiagnostic, language)}</p> : null}</> : null}
-    {details?.firstLoss ? <p>{t('hm.firstLoss', {loss: hardModeLossText(details.firstLoss, language)}, language)}</p> : null}
+  return <section className="yu-trip-card" data-testid="trip-hard-mode" aria-labelledby="yu-trip-hard-mode">
+    <div className="yu-trip-card-head"><h2 id="yu-trip-hard-mode">{title}</h2></div>
+    <div className="yu-trip-card-body">
+      <p className="yu-trip-verdict" data-state={qualified ? 'pass' : 'neutral'}>{qualified ? <Check aria-hidden="true" /> : <X aria-hidden="true" />}<span>{t(qualified ? 'hm.tripYes' : 'hm.tripNo', undefined, language)}</span>
+        <InfoHint label={t('ui.moreAbout', {v: title}, language)}><span className="block text-xs text-muted-foreground">{t('hm.notice', undefined, language)}</span></InfoHint></p>
+      {details ? <><dl><HardModeEvaluation label={t('tr.hmStart', undefined, language)} assessment={details.opening} language={language} testId="trip.hardMode.opening" />
+        <HardModeEvaluation label={t(delivered ? 'tr.hmEnd' : 'tr.hmLatest', undefined, language)} assessment={details.latest} language={language} testId="trip.hardMode.latest" /></dl>
+        <p className="yu-trip-note">{t('tr.hmSnapshot', undefined, language)}</p></> : <p className="yu-trip-note" data-testid="trip.hardMode.notEvaluated">{t('hm.notEvaluated', undefined, language)}</p>}
+      {details?.version === 2 ? <><p>{hardModeRatioText(details, language)}</p>{details.firstDiagnostic ? <p className="yu-trip-note">{hardModeDiagnosticText(details.firstDiagnostic, language)}</p> : null}{details.latestDiagnostic && JSON.stringify(details.latestDiagnostic) !== JSON.stringify(details.firstDiagnostic) ? <p className="yu-trip-note">{hardModeDiagnosticText(details.latestDiagnostic, language)}</p> : null}</> : null}
+      {details?.firstLoss ? <p>{t('hm.firstLoss', {loss: hardModeLossText(details.firstLoss, language)}, language)}</p> : null}
+    </div>
   </section>;
 }
 

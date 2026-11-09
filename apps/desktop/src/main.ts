@@ -17,7 +17,7 @@ import type {MediaTrack, NowPlayingDisplay, NowPlayingView} from '../../../packa
 import {initialSource, resolveSourceMode} from './source-mode';
 import {HardModeServiceCache} from './hard-mode/service-status';
 import {overlayHardMode, sameOverlayHardMode} from './overlay-hard-mode';
-import {app, BrowserWindow, dialog, ipcMain, Menu, MessageChannelMain, nativeImage, net, safeStorage, screen, shell, Tray, utilityProcess, type MessagePortMain, type UtilityProcess, type IpcMainEvent, type IpcMainInvokeEvent} from 'electron';
+import {app, BrowserWindow, dialog, ipcMain, Menu, MessageChannelMain, nativeImage, nativeTheme, net, safeStorage, screen, shell, Tray, utilityProcess, type MessagePortMain, type UtilityProcess, type IpcMainEvent, type IpcMainInvokeEvent} from 'electron';
 import {spawn} from 'node:child_process';
 import {existsSync, mkdirSync, readFileSync, lstatSync} from 'node:fs';
 import * as nodeFsPromises from 'node:fs/promises';
@@ -29,7 +29,8 @@ import type {AppHealth, AppLanguage, AppState, AutostartRegistrationStatus, AppU
   SourceSelection, UnitProfiles, GearDisplayModes, ApplicationInfo, UpdateView} from '../../../packages/contracts/src';
 import {SettingsBusyError, SettingsError, SettingsStore, settingsDirectory} from './settings-store';
 import {isGearDisplayMode, isUnitGame, isUnitProfile} from './unit-profiles';
-import {isAppLanguage} from './settings-schema';
+import {isAppLanguage, isThemePreference} from './settings-schema';
+import {titleBarOverlayOptions, windowBackground} from './window-theme';
 import {applyAutostartRegistration, inspectAutostartRegistration, queryAutostartStatus, removeAutostartLoginItem, resolveAutostartTarget, type AutostartTarget} from './autostart';
 import {processEntrypoint} from './entrypoints';
 import {BUNDLE_FLUSH_MS, createDiagnostics, MAIN_EXIT_FLUSH_MS, type DiagnosticFacts} from './diagnostics';
@@ -665,6 +666,7 @@ function runApplication(profileError: unknown): void {
   // its expiry timers are untouched, and the placement uses the last observation the controller already holds.
   function settingsChanged(): void {
     const view = settingsStore.view();
+    syncTheme();
     // Pending defaults are not the saved visibility; wait for the read result or existing read-limit fallback.
     syncNowPlaying();
     const enabled = view.state !== 'loading' && view.overlay.enabled;
@@ -879,11 +881,26 @@ function runApplication(profileError: unknown): void {
       rendererEpoch++; subscribed = false; appStateSubscribed = false; dashboardSubscriptions.close(); dashboardPort = undefined;
     }
   }
+  // ET-082: the saved preference drives Chromium's colour scheme through nativeTheme, so CSS needs no class or push channel.
+  function syncTheme(): void {
+    const {theme} = settingsStore.view();
+    if (nativeTheme.themeSource !== theme) nativeTheme.themeSource = theme;
+  }
+  // Covers a changed preference and, in `system` mode, a changed Windows colour mode; CSS follows by itself.
+  nativeTheme.on('updated', () => {
+    const target = window;
+    if (!target || target.isDestroyed()) return;
+    const dark = nativeTheme.shouldUseDarkColors;
+    target.setTitleBarOverlay(titleBarOverlayOptions(dark));
+    target.setBackgroundColor(windowBackground(dark));
+  });
   function createWindow(): void {
+    syncTheme();
+    const dark = nativeTheme.shouldUseDarkColors;
     // A packaged window inherits the executable's icon (forge packagerConfig.icon). Development runs electron.exe, so it
     // points at the same generated .ico of its channel in the repository.
     const icon = app.isPackaged ? undefined : path.join(__dirname, '..', '..', '..', 'resources', ...(ACTIVE_CHANNEL === 'staging' ? ['staging'] : []), 'icon', 'app.ico');
-    const created = window = new BrowserWindow({width: 1280, height: 800, minWidth: 1100, minHeight: 720, title: CHANNEL.displayName, ...(icon && existsSync(icon) ? {icon} : {}),titleBarStyle: 'hidden', titleBarOverlay: {color: '#0A101D', symbolColor: '#94A3B8', height: 32}, webPreferences: {preload: path.join(__dirname, 'preload.cjs'), contextIsolation: true, sandbox: true, nodeIntegration: false}});
+    const created = window = new BrowserWindow({width: 1280, height: 800, minWidth: 1100, minHeight: 720, title: CHANNEL.displayName, ...(icon && existsSync(icon) ? {icon} : {}),titleBarStyle: 'hidden', titleBarOverlay: titleBarOverlayOptions(dark), backgroundColor: windowBackground(dark), webPreferences: {preload: path.join(__dirname, 'preload.cjs'), contextIsolation: true, sandbox: true, nodeIntegration: false}});
     timeline?.('DASHBOARD_WINDOW_CREATED'); observeLoads(created.webContents, 'DASHBOARD');
     created.webContents.setWindowOpenHandler(() => ({action: 'deny'}));
     created.webContents.on('will-navigate', event => event.preventDefault());
@@ -1174,6 +1191,13 @@ function runApplication(profileError: unknown): void {
     const [language] = request;
     if (request.length !== 1 || !isAppLanguage(language)) throw new Error('Invalid language request');
     return saveSettings(() => settingsStore.setLanguage(language));
+  });
+  // Exactly one theme preference; saveSettings applies it through settingsChanged after the durable write.
+  ipcMain.handle('settings:set-theme', async (event, ...request: unknown[]) => {
+    if (!trusted(event)) throw new Error('Untrusted settings request');
+    const [theme] = request;
+    if (request.length !== 1 || !isThemePreference(theme)) throw new Error('Invalid theme request');
+    return saveSettings(() => settingsStore.setTheme(theme));
   });
   // Exactly a game and a profile id; the store serializes saves and refuses more than four outstanding ones.
   ipcMain.handle('settings:set-unit-profile', async (event, ...request: unknown[]) => {
