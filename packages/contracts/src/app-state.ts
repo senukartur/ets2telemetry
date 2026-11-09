@@ -76,6 +76,8 @@ export type GearDisplayMode = 'automatic' | 'manual' | 'crawler';
 export type GearDisplayModes = Readonly<Record<UnitGame, GearDisplayMode>>;
 /** Application user interface languages (ET-029). */
 export type AppLanguage = 'en' | 'ru';
+/** Main-window colour theme preference (ET-082); `system` follows the Windows colour mode. */
+export type ThemePreference = 'light' | 'dark' | 'system';
 /** Windows login item registration state (ET-031). */
 export type AutostartRegistrationStatus = 'registered' | 'unregistered' | 'not-installed' | 'failed';
 /**
@@ -141,6 +143,8 @@ export interface SettingsView {
   nowPlaying: NowPlayingSettings;
   language: AppLanguage;
   autostart: boolean;
+  /** The saved main-window theme preference (ET-082). */
+  theme: ThemePreference;
   units: UnitProfiles;
   /** The per-game gear display mode (ET-050). */
   gearDisplay: GearDisplayModes;

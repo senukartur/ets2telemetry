@@ -15,7 +15,7 @@ import {temporaryResources} from '../shared/resources';
 
 const USER = 'Jane.Doe', MACHINE = 'TRUCKER-PC7';
 const HEALTH: AppHealth = {service: 'ready', storage: 'verified', recording: {state: 'disabled'}, lastError: null};
-const SETTINGS: SettingsView = {nowPlaying: DEFAULT_NOW_PLAYING, language: 'en', autostart: false, units: {ets2: 'metric', ats: 'us-customary'}, gearDisplay: {ets2: 'manual', ats: 'automatic'}, overlay: {enabled: true, backgroundOpacity: 80, layout: 'strip', sections: {
+const SETTINGS: SettingsView = {nowPlaying: DEFAULT_NOW_PLAYING, language: 'en', autostart: false, theme: 'system', units: {ets2: 'metric', ats: 'us-customary'}, gearDisplay: {ets2: 'manual', ats: 'automatic'}, overlay: {enabled: true, backgroundOpacity: 80, layout: 'strip', sections: {
   'speed': true, 'gear': true, 'rpm': true, 'cruise-control': true, 'fuel': true, 'range': true, 'sdk-consumption': true, 'cargo': true, 'origin': true, 'destination': true,
   'distance-driven': true, 'distance-remaining': true, 'deadline': true, 'expected-income': true, 'game-time': true, 'mandatory-break': true},
 placements: {strip: {x: 0.5, y: 0, scale: 1}, card: {x: 1, y: 0, scale: 1}, cluster: {x: 0, y: 1, scale: 1}, hud: {x: 0, y: 0, scale: 1}}},

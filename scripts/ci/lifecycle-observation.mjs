@@ -21,7 +21,7 @@ const SETTINGS_SEED = '{"format":"ets2telemetry.settings","version":1,"units":{"
 // ET-052: the format became v11, which adds the overlay section `mandatory-break` (on by default) as the last section key.
 // ET-071: the current format is v13, which adds the overlay section `cruise-control` (on by default) after `rpm`.
 const placementLines = (layout, x, y, last = false) => [`      "${layout}": {`, `        "x": ${x},`, `        "y": ${y},`, '        "scale": 1', last ? '      }' : '      },'];
-const SETTINGS_SAVED = ['{', '  "format": "ets2telemetry.settings",', '  "version": 13,', '  "language": "en",', '  "autostart": false,', '  "units": {', '    "ets2": "us-customary",', '    "ats": "us-customary"', '  },',
+const SETTINGS_SAVED = ['{', '  "format": "ets2telemetry.settings",', '  "version": 14,', '  "language": "en",', '  "autostart": false,', '  "theme": "system",', '  "units": {', '    "ets2": "us-customary",', '    "ats": "us-customary"', '  },',
   '  "gearDisplay": {', '    "ets2": "manual",', '    "ats": "automatic"', '  },',
   '  "overlay": {', '    "enabled": false,', '    "backgroundOpacity": 80,', '    "layout": "strip",', '    "sections": {', '      "speed": true,', '      "gear": true,', '      "rpm": true,', '      "cruise-control": true,', '      "fuel": true,',
   '      "range": true,', '      "sdk-consumption": true,', '      "cargo": true,', '      "origin": true,', '      "destination": true,', '      "distance-driven": true,',
