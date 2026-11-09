@@ -18,6 +18,9 @@ tests/fixtures/protocol-v1/minor2/*.txt text eol=lf
 # Minor-3 fixtures (ET-071) live in their own directory, so the older manifests and their readers stay unchanged.
 tests/fixtures/protocol-v1/minor3/*.json -text
 tests/fixtures/protocol-v1/minor3/*.txt text eol=lf
+# Minor-4 fixtures (ET-084) live in their own directory, so the older manifests and their readers stay unchanged.
+tests/fixtures/protocol-v1/minor4/*.json -text
+tests/fixtures/protocol-v1/minor4/*.txt text eol=lf
 # These size fixtures are valid JSON padded with trailing spaces to an exact byte length.
 tests/fixtures/protocol-v1/checkpoint-size-limit.json -whitespace
 tests/fixtures/protocol-v1/checkpoint-oversized.json -whitespace
