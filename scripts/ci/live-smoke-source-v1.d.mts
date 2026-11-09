@@ -15,6 +15,8 @@ export interface LiveSmokeSourceV1 {
   setBreak(measure: {available: true; value: number; unit: 'min'} | {available: false; reason: string; unit: 'min'} | undefined): void;
   /** ET-071: the cruise control of the following state messages, a wire measure of unit m/s; undefined restores 25 m/s. */
   setCruiseControl(measure: {available: true; value: number; unit: 'm/s'} | {available: false; reason: string; unit: 'm/s'} | undefined): void;
+  /** ET-084: the speed limit of the following state messages, a wire measure of unit m/s; undefined restores 22.5 m/s. */
+  setSpeedLimit(measure: {available: true; value: number; unit: 'm/s'} | {available: false; reason: string; unit: 'm/s'} | undefined): void;
   statistics(): LiveSmokeSourceV1Statistics;
 }
 export function startLiveSmokeSourceV1(checkout: string): Promise<LiveSmokeSourceV1>;

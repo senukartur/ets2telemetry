@@ -36,7 +36,7 @@ export const SYNTHETIC_V0_VALUE_IDS = Object.freeze(SYNTHETIC_V0_LIVE_ROWS.map((
 export const SYNTHETIC_V0_HIDDEN_ROWS = Object.freeze([
   'live-speed', 'live-fuel', 'live-route-remaining', 'live-deadline', 'live-source-city', 'live-source-company', 'live-destination-company',
   'live-cargo-mass', 'live-market', 'live-special-job', 'live-cargo-loaded', 'live-truck-plate', 'live-trailers', 'live-position', 'live-bearing',
-  'live-game-mode', 'live-event-loss', 'live-mandatory-break', 'live-cruise-control', 'live-paused', 'live-job-missing'
+  'live-game-mode', 'live-event-loss', 'live-mandatory-break', 'live-cruise-control', 'live-speed-limit', 'live-paused', 'live-job-missing'
 ]);
 
 // Self-contained browser callback. Every expected element exists exactly once, is visible with a non-empty box and has
@@ -82,9 +82,11 @@ export async function waitForNotCurrentLive(page, values, status, hidden = []) {
 // 18000 kg, plate SYN 0001, an unnamed dryvan trailer, heading 0.25 (bearing 270°) and two events lost without a durable
 // consumer. live-dashboard-text.test.ts ties them to the card builder. ET-052: the smoke source's protocol v1 minor 2 states
 // carry the next mandatory break, 95 game minutes ("1 h 35 min"), which is soon (an urgency badge, asserted by the UI case).
-// ET-071: its minor-3 states carry a cruise control set speed of 25 m/s, 90.0 km/h in the metric profile.
+// ET-071: its states carry a cruise control set speed of 25 m/s, 90.0 km/h in the metric profile. ET-084: and a speed limit
+// of 22.5 m/s, 22.5 × 3.6 = 81 km/h in whole units.
 export const SYNTHETIC_V1_LIVE_ROWS = Object.freeze([
   ['live-cruise-control', '90.0 km/h'],
+  ['live-speed-limit', '81 km/h'],
   ['live-route-remaining', '151.0 km'],
   ['live-deadline', 'in 10 h 55 min'],
   ['live-deadline-note', 'game time'],
@@ -118,6 +120,7 @@ export const SYNTHETIC_V0V1_LIVE_ROWS = Object.freeze([
   ['live-gear', 'R1'],
   ['live-engine-rpm', '600 rpm'],
   ['live-cruise-control', '90.0 km/h'],
+  ['live-speed-limit', '81 km/h'],
   ['live-fuel-capacity', '1000 L'],
   ['live-fuel-level', '7%'],
   ['live-sdk-average-consumption', '25.0 L/100 km'],
@@ -175,25 +178,26 @@ export const SYNTHETIC_V1_OVERLAY_CURRENT = Object.freeze({
   'overlay-cargo': 'Synthetic Cargo', 'overlay-cargo-detail': '18 t', 'overlay-destination': 'Synthetic City B',
   // ET-052: the smoke source's states carry a next mandatory break of 95 game minutes (1 h 35 min). ET-071: and a cruise
   // control set speed of 25 m/s, shown like speed as the whole number 90 with its unit km/h.
-  'overlay-mandatory-break': '1 h 35 min', 'overlay-cruise-control': '90', 'overlay-cruise-control-unit': 'km/h', 'overlay-speed': '90', 'freshness': 'current'
+  // ET-084: and a limit of 22.5 m/s, whose sign holds the whole number 81 and no unit in the strip.
+  'overlay-mandatory-break': '1 h 35 min', 'overlay-cruise-control': '90', 'overlay-cruise-control-unit': 'km/h', 'overlay-speed-limit': '81', 'overlay-speed': '90', 'freshness': 'current'
 });
 /** The strip sections the pair shows, in canonical order: range stays hidden (its estimate is not observed). */
-export const SYNTHETIC_V1_STRIP_SECTIONS = Object.freeze(['speed', 'gear', 'rpm', 'cruise-control', 'fuel', 'sdk-consumption', 'cargo', 'origin', 'destination',
+export const SYNTHETIC_V1_STRIP_SECTIONS = Object.freeze(['speed', 'gear', 'rpm', 'cruise-control', 'speed-limit', 'fuel', 'sdk-consumption', 'cargo', 'origin', 'destination',
   'distance-remaining', 'deadline', 'expected-income', 'game-time', 'mandatory-break']);
 /** v0 not current: every shown section is a dash and no detail remains. */
 export const SYNTHETIC_V1_OVERLAY_V0_STALE = Object.freeze({
   'overlay-origin': '—', 'overlay-distance-remaining': '—', 'overlay-deadline': '—', 'overlay-cargo': '—', 'overlay-cargo-detail': null,
-  'overlay-destination': '—', 'overlay-mandatory-break': '—', 'overlay-cruise-control': '—', 'overlay-cruise-control-unit': null, 'overlay-speed': '—', 'freshness': 'stale'
+  'overlay-destination': '—', 'overlay-mandatory-break': '—', 'overlay-cruise-control': '—', 'overlay-cruise-control-unit': null, 'overlay-speed-limit': '—', 'overlay-speed': '—', 'freshness': 'stale'
 });
 /** v1 not current while v0 is: the v1 sections are dashes, the mixed sections keep their v0 part (game ids, no mass). */
 export const SYNTHETIC_V1_OVERLAY_V1_STALE = Object.freeze({
   'overlay-origin': '—', 'overlay-distance-remaining': '—', 'overlay-deadline': '—', 'overlay-cargo': 'cargo.logs', 'overlay-cargo-detail': null,
-  'overlay-destination': 'city.warszawa', 'overlay-mandatory-break': '—', 'overlay-cruise-control': '—', 'overlay-cruise-control-unit': null, 'overlay-speed': '90', 'freshness': 'current'
+  'overlay-destination': 'city.warszawa', 'overlay-mandatory-break': '—', 'overlay-cruise-control': '—', 'overlay-cruise-control-unit': null, 'overlay-speed-limit': '—', 'overlay-speed': '90', 'freshness': 'current'
 });
 /** Both sources stopped: dashes only; the freshness depends on which status arrives first, so it is not compared. */
 export const SYNTHETIC_V1_OVERLAY_STOPPED = Object.freeze({
   'overlay-origin': '—', 'overlay-distance-remaining': '—', 'overlay-deadline': '—', 'overlay-cargo': '—', 'overlay-cargo-detail': null,
-  'overlay-destination': '—', 'overlay-mandatory-break': '—', 'overlay-cruise-control': '—', 'overlay-cruise-control-unit': null, 'overlay-speed': '—'
+  'overlay-destination': '—', 'overlay-mandatory-break': '—', 'overlay-cruise-control': '—', 'overlay-cruise-control-unit': null, 'overlay-speed-limit': '—', 'overlay-speed': '—'
 });
 
 // Self-contained browser callback for the overlay document. Each listed element exists once with exactly the expected
