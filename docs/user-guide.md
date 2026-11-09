@@ -186,7 +186,7 @@ It is on by default, also after an update, and you can switch it off under **Dri
 
 ## Speed limit on the overlay
 
-The overlay has a **Speed limit** section (Russian: **Ограничение скорости**; short name **Limit** / **Лимит** in the Minimal HUD) after cruise control. It shows the limit the game reports for the road ahead, in the game's units, as a road sign: round with a red border in ETS2 and rectangular in ATS. A dashed sign with a dash (`—`) means that no limit applies or that the value is not available, for example with an older plugin still loaded in a running game.
+The overlay has a **Speed limit** section (Russian: **Ограничение скорости**; short name **Limit** / **Лимит** in the Minimal HUD) after cruise control. It shows the navigation speed limit the game reports, in the game's units, as a road sign: round with a red border in ETS2 and rectangular in ATS. A dashed sign with a dash (`—`) means that no limit applies or that the value is not available, for example with an older plugin still loaded in a running game.
 
 The value follows the game's Route Advisor speed limit option, so if the game does not show a limit there, the overlay may not show one either. The section is on by default, also after an update, and you can switch it off under **Driving** in **Settings → Overlay → Sections**. The **Everything** and **Driving only** presets include it; **Job focus** does not, so after the update a Job focus selection matches no preset until you choose it again. The Card and the Minimal HUD grow by one row, an earlier version treats settings saved by this version as newer, and the value is not recorded.
 
