@@ -20,6 +20,8 @@ const SETTINGS_SEED = '{"format":"ets2telemetry.settings","version":1,"units":{"
 // ET-050b: the format became v10, which changes only the version and adds the crawler gear mode.
 // ET-052: the format became v11, which adds the overlay section `mandatory-break` (on by default) as the last section key.
 // ET-071: the current format is v13, which adds the overlay section `cruise-control` (on by default) after `rpm`.
+// ET-082: the current format is v14, which adds `theme` after `autostart`. The seed is an invalid file, not an older format, so
+// run A gets the new-install default `system` (no dark migration), its saves write that value and run B loads it back.
 const placementLines = (layout, x, y, last = false) => [`      "${layout}": {`, `        "x": ${x},`, `        "y": ${y},`, '        "scale": 1', last ? '      }' : '      },'];
 const SETTINGS_SAVED = ['{', '  "format": "ets2telemetry.settings",', '  "version": 14,', '  "language": "en",', '  "autostart": false,', '  "theme": "system",', '  "units": {', '    "ets2": "us-customary",', '    "ats": "us-customary"', '  },',
   '  "gearDisplay": {', '    "ets2": "manual",', '    "ats": "automatic"', '  },',
@@ -157,7 +159,7 @@ export async function runLifecycleSmoke({application, launcher, dashboard, overl
   const stateText = await until(() => dashboard.getByTestId('settings-state').innerText(),
     text => !text.startsWith('Saved settings are still being read'), 'DASHBOARD_SETTINGS_STILL_PENDING');
   record.settingsInitial = {view: settled.settings, files: await settingsFiles(config), stateText};
-  assert.deepEqual(settled.settings, {language: 'en', autostart: false, units: {ets2: 'metric', ats: 'us-customary'}, gearDisplay: AUTOMATIC_GEARS, overlay: DEFAULT_OVERLAY,
+  assert.deepEqual(settled.settings, {language: 'en', autostart: false, theme: 'system', units: {ets2: 'metric', ats: 'us-customary'}, gearDisplay: AUTOMATIC_GEARS, overlay: DEFAULT_OVERLAY,
     nowPlaying: {enabled: false, style: 'minimal', backgroundOpacity: 80, position: {displayId: null, x: 1, y: 0.75}}, state: 'invalid-file', writable: true, saveError: null});
   record.settingsSeededInvalidFile = true;
   assert.deepEqual(record.settingsInitial.files, [{name: 'settings.json', content: SETTINGS_SEED}]);
@@ -215,7 +217,7 @@ export async function runLifecycleSmoke({application, launcher, dashboard, overl
   // 3b. Saving ETS2's US customary profile quarantines the seeded file unchanged, writes the exact v2 content and
   // switches both the dashboard and the overlay to mph and US gallons.
   record.settingsSaveView = await trayDashboard.evaluate(() => globalThis.desktop.setUnitProfile('ets2', 'us-customary'));
-  assert.deepEqual(record.settingsSaveView, {language: 'en', autostart: false, units: {ets2: 'us-customary', ats: 'us-customary'}, gearDisplay: AUTOMATIC_GEARS, overlay: DEFAULT_OVERLAY,
+  assert.deepEqual(record.settingsSaveView, {language: 'en', autostart: false, theme: 'system', units: {ets2: 'us-customary', ats: 'us-customary'}, gearDisplay: AUTOMATIC_GEARS, overlay: DEFAULT_OVERLAY,
     nowPlaying: {enabled: false, style: 'minimal', backgroundOpacity: 80, position: {displayId: null, x: 1, y: 0.75}}, state: 'loaded', writable: true, saveError: null});
   const saved = await settingsFiles(config);
   record.settingsAfterSave = saved.map(({name}) => name);
@@ -282,7 +284,7 @@ export async function verifyLifecycleRestart({application, record, rendererPages
   record.recordingNotRecordedShown = true;
   record.restartRecovered = true;
   record.restart.settingsState = state.settings.state;
-  assert.deepEqual(state.settings, {language: 'en', autostart: false, units: {ets2: 'us-customary', ats: 'us-customary'}, gearDisplay: SAVED_GEARS, overlay: {...DEFAULT_OVERLAY, enabled: false},
+  assert.deepEqual(state.settings, {language: 'en', autostart: false, theme: 'system', units: {ets2: 'us-customary', ats: 'us-customary'}, gearDisplay: SAVED_GEARS, overlay: {...DEFAULT_OVERLAY, enabled: false},
     nowPlaying: {enabled: false, style: 'minimal', backgroundOpacity: 80, position: {displayId: null, x: 1, y: 0.75}}, state: 'loaded', writable: true, saveError: null});
   record.restart.gearDisplay = state.settings.gearDisplay;
   record.gearDisplayRestarted = true;
