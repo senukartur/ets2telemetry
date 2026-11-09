@@ -1,15 +1,26 @@
-import {describe,it,expect} from 'vitest';
+import {describe,it,expect,vi} from 'vitest';
 import {randomUUID} from 'node:crypto';
-import {initialDashboardUploadStatus,isDashboardUploadStatus,isDashboardToken} from '../../packages/contracts/src/dashboard-upload';
-import {DASHBOARD_ORIGINS,isReleaseDashboardOrigin,configuredDashboardOrigin} from '../../apps/desktop/src/dashboard-upload/config';
+import {initialDashboardUploadStatus,isDashboardUploadStatus,isDashboardToken,isReleaseDashboardOrigin} from '../../packages/contracts/src/dashboard-upload';
+import {configuredDashboardOrigin} from '../../apps/desktop/src/dashboard-upload/config';
 import {connectionResponse,registrationResponse,jsonBody} from '../../apps/desktop/src/dashboard-upload/control-response';
 import {isUploadServiceRequest,isUploadServiceCancel,isUploadServiceReply,uploadReplyMatches} from '../../apps/desktop/src/dashboard-upload/service-contract';
 const bytes=(v:unknown)=>Buffer.from(JSON.stringify(v));
 const token=`vtc1_${randomUUID()}_${'a'.repeat(43)}`;
 describe('REG-010/012 closed Dashboard upload boundaries',()=>{
-  it('keeps both release origins absent and rejects loopback, paths and credential URLs',()=>{
-    expect(DASHBOARD_ORIGINS).toEqual({production:null,staging:null});expect(configuredDashboardOrigin('staging')).toBeNull();
+  it('leaves an unconfigured build offline and rejects loopback, paths and credential URLs',()=>{
+    expect(configuredDashboardOrigin('production')).toBeNull();expect(configuredDashboardOrigin('staging')).toBeNull();
     for(const value of ['https://localhost','https://127.0.0.1','https://[::1]','http://dashboard.example','https://dashboard.example/','https://user@dashboard.example'])expect(isReleaseDashboardOrigin(value)).toBe(false);
+  });
+  it('uses the embedded origin for the active channel only',()=>{
+    const origin = 'https://dashboard.example';
+    vi.stubGlobal('__ETS2TELEMETRY_DASHBOARD_ORIGIN__', origin);
+    try {
+      // Unbundled tests use the production identity, while staging artifacts carry their own channel define.
+      expect(configuredDashboardOrigin('production')).toBe(origin);
+      expect(configuredDashboardOrigin('staging')).toBeNull();
+    } finally {
+      vi.unstubAllGlobals();
+    }
   });
   it('never trims or transforms the exact bounded ASCII token',()=>{expect(isDashboardToken(token)).toBe(true);for(const value of [` ${token}`,`${token}\n`,token.replace('vtc1','VTC1'),'x'.repeat(129),null])expect(isDashboardToken(value)).toBe(false);});
   it('validates actual pinned control responses and caps compatible limits',()=>{

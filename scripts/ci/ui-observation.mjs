@@ -940,13 +940,19 @@ export async function runUiSmoke({application, dashboard, overlay, source, sourc
         }
         await observeCompactShell(dashboard, language, size);
         assert.deepEqual(await dashboard.locator('.yu-sidebar nav button').evaluateAll(nodes => nodes.map(node => node.getAttribute('data-testid'))), ['tab-live', 'tab-hardMode', 'tab-journal', 'tab-settings', 'tab-account']);
-        assert.equal(await dashboard.getByTestId('account.unconfigured').isVisible(), true);
-        assert.equal(await dashboard.getByTestId('account.token.input').count(), 0);
-        for (const control of ['account.form', 'account.confirmation', 'account.counts', 'account.firstSync', 'account.disconnect']) assert.equal(await dashboard.getByTestId(control).count(), 0, `UI_UNCONFIGURED_CONTROL_${control}`);
-        assert.ok((await dashboard.getByTestId('account.unconfigured').textContent()).includes(language === 'en' ? 'Your journal and local recording continue to work.' : 'Журнал и локальная запись продолжают работать.'));
-        assert.equal(await dashboard.getByTestId('shell.status.sync').count(), 0);
-        assert.equal(await dashboard.getByTestId('journal-sync-column').count(), 0);
-        record.flags.accountUnconfigured = true;
+        if (config.dashboardConfigured) {
+          await dashboard.getByTestId('account.form').waitFor({state: 'visible'});
+          assert.equal(await dashboard.getByTestId('account.token.input').getAttribute('type'), 'password');
+          assert.equal(await dashboard.getByTestId('account.unconfigured').count(), 0);
+        } else {
+          await dashboard.getByTestId('account.unconfigured').waitFor({state: 'visible'});
+          assert.equal(await dashboard.getByTestId('account.token.input').count(), 0);
+          assert.equal(await dashboard.getByTestId('account.form').count(), 0);
+          assert.ok((await dashboard.getByTestId('account.unconfigured').textContent()).includes(language === 'en' ? 'Your journal and local recording continue to work.' : 'Журнал и локальная запись продолжают работать.'));
+        }
+        for (const control of ['account.confirmation', 'account.counts', 'account.firstSync', 'account.disconnect']) assert.equal(await dashboard.getByTestId(control).count(), 0, `UI_DISCONNECTED_CONTROL_${control}`);
+        assert.equal(await dashboard.getByTestId('shell.status.sync').count(), config.dashboardConfigured ? 1 : 0);
+        record.flags.accountBuildConfiguration = true;
         await dashboard.getByTestId('tab-hardMode').focus(); await dashboard.keyboard.press('Enter');
         await dashboard.waitForFunction(() => globalThis.document.activeElement?.getAttribute('data-testid') === 'screen-title');
         assert.equal(await dashboard.getByTestId('hardMode.screen').isVisible(), true);
@@ -1070,7 +1076,7 @@ export async function runUiSmoke({application, dashboard, overlay, source, sourc
       } else if (config.uiCase === 'journal') {
         await screen(dashboard, 'journal');
         await until(() => dashboard.getByTestId('journal-row').count(), count => count === 50, 'UI_JOURNAL_FIRST_PAGE');
-        assert.equal(await dashboard.getByTestId('shell.status.sync').count(), 0);
+        assert.equal(await dashboard.getByTestId('shell.status.sync').count(), config.dashboardConfigured ? 1 : 0);
         assert.equal(await dashboard.getByTestId('journal-sync-column').count(), 0);
         assert.equal(await dashboard.getByTestId('journal-row-sync').count(), 0);
         record.flags.syncHidden = true;

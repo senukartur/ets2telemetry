@@ -870,7 +870,7 @@ function Test-UiReceipt {
     $flags = @('bilingual','bothSizes','security','offlineFonts','recordingIndicator','osPointerIsolated','hoverUnderDesktopCursor','versionLine','updateHidden')
     $screens = @()
     switch -CaseSensitive ($ExpectedUiCase) {
-        'shell' { $flags += @('navigation','headingFocus','hardModePage','journalUnmount','exitHintKeyboard','exitAvailable','noAccountPlaceholder','accountUnconfigured'); $screens = @('live','hardMode','journal','settings','account') }
+        'shell' { $flags += @('navigation','headingFocus','hardModePage','journalUnmount','exitHintKeyboard','exitAvailable','noAccountPlaceholder','accountBuildConfiguration'); $screens = @('live','hardMode','journal','settings','account') }
         'live' { $flags += @('numericGauge','unavailableVsZero','paused','staleDashes','rawNames','noTripPlaceholder','jobViewport','jobRowsAfterV1Gap','hmNamesReadable','fullWidthTelemetry','tankUnknownVsZero','mandatoryBreak'); $screens = @('current','zero','missing','paused','stale') }
         'journal' { $flags += @('syntheticBanner','pageReturn','chartBounded','rawTabs','noPlannedSearch','tripRegions','tableReadable','signedChart'); $screens = @('list','mode-trip','weak-mode-trip','trip','intervals','timeline','samples') }
         'settings' { $flags += @('allPanels','allSections','committedSave','sourceSelector','uninstallRefusal','refusedSave','readOnly','controlsKeyboard','lastEnabled','fontLicense','overlayVisibility','visibilityFailedSave','actionResult','overlayOpacity','opacityFailedSave','opacityReadOnly','overlayUnified','overlayEditing','overlayScroll','scaleControl','gearDisplay','gearDisplayFailedSave'); $screens = @('general','overlay','overlay-sections','plugin','about','data','save-error') }

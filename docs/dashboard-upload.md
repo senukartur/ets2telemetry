@@ -1,6 +1,6 @@
 # Dashboard upload specification
 
-**Owner-accepted specification and local upload implementation.** [ET-101](https://trello.com/c/v8LZYyH3) defines the desktop side of [VTC-024](https://trello.com/c/aluAoQAX). The [scope decision](../DECISION-LOG.md#et-101-dashboard-upload-scope--november-6-2026) permits preparation before ET-021; the [identity acceptance](../DECISION-LOG.md#et-101-continued-trip-identity-acceptance--november-6-2026) closes the specification decision. The private consumer, protected credentials and safe connection API are implemented with both channel origins unset. Deployment, release, actual desktop/Dashboard/MySQL acceptance (ET-103d/VTC-024) and the ET-032 visual interface remain separate work; local MVP acceptance is not waived.
+**Owner-accepted specification and desktop upload implementation.** [ET-101](https://trello.com/c/v8LZYyH3) defines the desktop side of [VTC-024](https://trello.com/c/aluAoQAX). The [scope decision](../DECISION-LOG.md#et-101-dashboard-upload-scope--november-6-2026) permits preparation before ET-021; the [identity acceptance](../DECISION-LOG.md#et-101-continued-trip-identity-acceptance--november-6-2026) closes the specification decision. The [build environment](setup.md#build-channels-et-055) supplies the fixed Dashboard origin for the selected channel. Actual desktop/Dashboard/MySQL acceptance (ET-103d/VTC-024) and local MVP acceptance remain separate.
 
 ## Contract and product boundary
 

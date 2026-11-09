@@ -76,6 +76,8 @@ jobs:
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
       - name: Forge package
         if: env.SOAK_TARGET == 'application'
+        env:
+          ETS2TELEMETRY_DASHBOARD_ORIGIN: ${{ vars.ETS2TELEMETRY_DASHBOARD_ORIGIN }}
         run: |
           npm run package
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
