@@ -6,8 +6,8 @@ import path from 'node:path';
 import {afterEach, beforeEach, describe, expect, it} from 'vitest';
 import type {AtomicFileSystem} from '../../apps/desktop/src/plugin-setup/atomic-json-file';
 import type {RunningGames} from '../../apps/desktop/src/plugin-setup/game-processes';
-import {MAX_PLUGIN_FILE_BYTES, PluginInstaller, TARGET_RETRY_DELAYS_MS, type InstallerFileSystem, type PluginTarget, type RunningCheck,
-  type VerifiedPluginBundle} from '../../apps/desktop/src/plugin-setup/plugin-installer';
+import {MAX_PLUGIN_FILE_BYTES, PluginInstaller, TARGET_RETRY_DELAYS_MS, type InstallerFileSystem, type PluginActionResult,
+  type PluginTarget, type RunningCheck, type VerifiedPluginBundle} from '../../apps/desktop/src/plugin-setup/plugin-installer';
 import {MAX_INSTALL_RECORDS, parsePluginRegistry, PluginRegistry, type InstallRecord, type PendingIntent} from '../../apps/desktop/src/plugin-setup/plugin-registry';
 import {guardedTempRoot, type GuardedRoot} from '../shared/guarded-fs';
 import {fakeSteam, type FakeSteam} from '../shared/fake-steam';
@@ -30,14 +30,10 @@ const fileContext = new AsyncLocalStorage<string>();
 // allowance; retry timing and power-loss performance are not inferred from it.
 const RAW_SYNC_CASE_FS_OPERATIONS = 225;
 const RAW_SYNC_CASE_FS_WORK_BUDGET_MS = fileWorkBudget(RAW_SYNC_CASE_FS_OPERATIONS);
-// A crash-recovery case runs an installer up to its crash, the recovery and one more install, all with the real flush
-// (at most 290 requests counted on November 8, 2026), so it has its own checked cap and work allowance.
-const CRASH_CASE_FS_OPERATIONS = 300;
-const CRASH_CASE_FS_WORK_BUDGET_MS = fileWorkBudget(CRASH_CASE_FS_OPERATIONS);
-let fileWork: {count: number; measured: boolean; cap: number; last: string | null; current: Map<number, string>; byType: Record<string, number>};
+let fileWork: {count: number; measured: boolean; last: string | null; current: Map<number, string>; byType: Record<string, number>};
 let fileHook: ReturnType<typeof createHook>;
 const fileWorkContext = () => ({count: fileWork.count, byType: fileWork.byType, last: fileWork.last, current: [...fileWork.current.values()].slice(0, 8)});
-function measuredCase(work: () => Promise<void>, cap = RAW_SYNC_CASE_FS_OPERATIONS): Promise<void> {fileWork.measured = true; fileWork.cap = cap; return caseWork(work);}
+function measuredCase(work: () => Promise<void>): Promise<void> {fileWork.measured = true; return caseWork(work);}
 // A timed-out case must settle before its guarded root is removed or the next case replaces the globals.
 const pendingCaseWork = new Set<Promise<void>>();
 function caseWork(work: () => Promise<void>): Promise<void> {
@@ -62,7 +58,7 @@ const notRunning: RunningCheck = () => Promise.resolve({ok: true, running: {ets2
 const runningWith = (running: Partial<RunningGames>): RunningCheck => () => Promise.resolve({ok: true, running: {ets2: false, ats: false, client: false, ...running}});
 
 beforeEach(() => fileContext.run('fixture', async () => {
-  fileWork = {count: 0, measured: false, cap: RAW_SYNC_CASE_FS_OPERATIONS, last: null, current: new Map(), byType: {}};
+  fileWork = {count: 0, measured: false, last: null, current: new Map(), byType: {}};
   fileHook = createHook({init(id, type) {
     const context = fileContext.getStore();
     if (!context || !['FSREQPROMISE', 'FSREQCALLBACK', 'FILEHANDLECLOSEREQ'].includes(type)) return;
@@ -101,7 +97,7 @@ afterEach(async ({task}) => {
     await fileContext.run('teardown', () => completedGuard.dispose());
     if (fileWork.measured) {
       const context = JSON.stringify(fileWorkContext());
-      expect(fileWork.count, context).toBeLessThanOrEqual(fileWork.cap);
+      expect(fileWork.count, context).toBeLessThanOrEqual(RAW_SYNC_CASE_FS_OPERATIONS);
     }
     expect(violations).toEqual([]);
   } finally {fileHook.disable();}
@@ -559,6 +555,11 @@ function bind(handle: Awaited<ReturnType<InstallerFileSystem['open']>>) {
 }
 
 describe('crash recovery', () => {
+  beforeEach(() => {
+    // Process death leaves writes already accepted by the OS available to recovery.
+    guard = withoutFlush(guard);
+  });
+
   // A crash stops every later file operation: from the crash on, each call of the first installer and its registry
   // never settles. A fresh registry and installer then recover from what is on disk only.
   type Crash = 'after step 6' | 'after step 7' | 'after step 9' | 'after step 10';
@@ -596,10 +597,22 @@ describe('crash recovery', () => {
         await after({op: 'registry-rename', target: from});
       }
     };
-    return {fs: game.fs, registryFs, reached, crashed: () => crashed};
+    const untilCrashed = (first: Promise<PluginActionResult>) => Promise.race([
+      reached,
+      first.then(({outcome, reason}) => {
+        throw new Error(`Installer returned before the crash point ${crash} (${reason ?? outcome})`);
+      })
+    ]);
+    return {fs: game.fs, registryFs, untilCrashed};
   }
-  // After the crash the first installer never settles; if it answers first, the crash point was never reached.
-  const untilCrashed = (crashed: {reached: Promise<void>}, first: Promise<unknown>) => Promise.race([crashed.reached, first]);
+
+  it('reports an installer that returns before reaching the crash point', () => caseWork(async () => {
+    const setup = await game();
+    const crashed = crashing('after step 7', setup);
+    const registry = await loadRegistry(crashed.registryFs);
+    const first = installer(registry, {fs: crashed.fs, checkRunning: runningWith({ets2: true})}).ensureInstalled(setup.target);
+    await expect(crashed.untilCrashed(first)).rejects.toThrow('Installer returned before the crash point after step 7 (GAME_RUNNING)');
+  }));
 
   // [scenario, crash, target bytes after recovery, plugins folder exists, install record after recovery]
   const CASES: [string, Crash, 'none' | 'old' | 'bundle', boolean, 'none' | 'old' | 'installed'][] = [
@@ -612,15 +625,14 @@ describe('crash recovery', () => {
     ['update of a recorded older file', 'after step 9', 'bundle', true, 'installed'],
     ['update of a recorded older file', 'after step 10', 'bundle', true, 'installed']
   ];
-  it.each(CASES)('%s, crashed %s, recovers to the hand-written state', {timeout: CRASH_CASE_FS_WORK_BUDGET_MS}, (scenario, crash, content, pluginsExist, recordAfter) => measuredCase(async () => {
+  it.each(CASES)('%s, crashed %s, recovers to the hand-written state', (scenario, crash, content, pluginsExist, recordAfter) => caseWork(async () => {
     const update = scenario.startsWith('update');
     const setup = await game(update ? {content: OLD} : {});
     const oldRecord = record(setup, {sha256: sha(OLD), appVersion: '0.1.0'});
     if (update) await (await loadRegistry()).update(document => ({...document, installs: [oldRecord]}));
     const crashed = crashing(crash, setup);
     const first = await loadRegistry(crashed.registryFs);
-    await untilCrashed(crashed, installer(first, {fs: crashed.fs}).ensureInstalled(setup.target));
-    expect(crashed.crashed()).toBe(true);
+    await crashed.untilCrashed(installer(first, {fs: crashed.fs}).ensureInstalled(setup.target));
     expect((await registryOnDisk()).pending).toHaveLength(1);
 
     const registry = await loadRegistry();
@@ -636,19 +648,18 @@ describe('crash recovery', () => {
     expect(events).toEqual([{event: 'PLUGIN_RECOVERED', facts: {game: 'ets2', source: 'steam', op: update ? 'update' : 'install',
       outcome: recordAfter === 'installed' ? 'installed' : 'not-installed'}}]);
     expect((await installer(registry).ensureInstalled(setup.target)).outcome).toBe(recordAfter === 'installed' ? 'unchanged' : update ? 'updated' : 'installed');
-  }, CRASH_CASE_FS_OPERATIONS));
+  }));
 
-  it('keeps an intent while its game runs and recovers it once the game is closed', {timeout: CRASH_CASE_FS_WORK_BUDGET_MS}, () => measuredCase(async () => {
+  it('keeps an intent while its game runs and recovers it once the game is closed', () => caseWork(async () => {
     const setup = await game();
     const crashed = crashing('after step 7', setup);
-    await untilCrashed(crashed, installer(await loadRegistry(crashed.registryFs), {fs: crashed.fs}).ensureInstalled(setup.target));
-    expect(crashed.crashed()).toBe(true);
+    await crashed.untilCrashed(installer(await loadRegistry(crashed.registryFs), {fs: crashed.fs}).ensureInstalled(setup.target));
     const registry = await loadRegistry();
     expect(await installer(registry, {checkRunning: runningWith({ets2: true})}).recover()).toEqual({recovered: 0, remaining: 1, reason: null});
     expect(await exists(path.win32.join(setup.plugins, TEMP_NAME))).toBe(true);
     expect(await installer(registry).recover()).toEqual({recovered: 1, remaining: 0, reason: null});
     expect(await exists(setup.plugins)).toBe(false);
-  }, CRASH_CASE_FS_OPERATIONS));
+  }));
 });
 
 describe('review round 1', () => {
