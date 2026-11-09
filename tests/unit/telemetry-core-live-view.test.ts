@@ -227,6 +227,8 @@ describe('REG-009 v1 dashboard values', () => {
     const worst = v1Data('checkpoint-worst');
     const strong = normalizeV1State(worst.state, worst.status);
     expect(fields(viewOf(live('snapshot'), strong))['game-mode'].text).toBe('TruckersMP (strong evidence, module-scan)');
+    const haulmpState = {...state, gameMode: value({mode: 'haulmp' as const, method: 'module-scan' as const, confidence: 'strong' as const, module: {state: 'value' as const, value: 'haulmp_stub.dll'}})};
+    expect(fields(viewOf(live('snapshot'), haulmpState))['game-mode'].text).toBe('HaulMP (strong evidence, module-scan)');
     expect(fields(viewOf(live('snapshot'), strong))['event-loss'].text).toBe('110680464442257309690');
   });
   it('reports game mode as not observed without a status block', () => {

@@ -297,6 +297,8 @@ describe('compact shell chips and Live states (ET-074, REG-009, REG-002)', () =>
     expect(mode(null)).toBe('single-player');
     expect(mode({mode: 'single-player', method: 'process-scan', confidence: 'strong'})).toBe('single-player');
     expect(mode({mode: 'truckersmp', method: 'module-scan', confidence: 'strong'})).toBe('truckersmp');
+    expect(mode({mode: 'haulmp', method: 'module-scan', confidence: 'strong'})).toBe('haulmp');
+    expect(mode({mode: 'haulmp', method: 'module-scan', confidence: 'weak'})).toBeNull();
     expect(mode({mode: 'truckersmp', method: 'process-scan', confidence: 'weak'})).toBeNull();
     expect(mode({mode: 'single-player', method: 'process-scan', confidence: 'weak'})).toBeNull();
     expect(mode({mode: 'unknown', method: 'none', confidence: 'none'})).toBeNull();

@@ -425,6 +425,7 @@ export type I18nKey =
   | "copy.setting-up"
   | "copy.the-game-is-running-the-plugin-is-changed-after-you-close-it"
   | "copy.truckersmp-is-running-the-plugin-is-changed-after-you-close-it"
+  | "copy.haulmp-is-running-the-plugin-is-changed-after-you-close-it"
   | "copy.another-program-is-using-the-plugin-file-it-is-tried-again-later"
   | "copy.windows-denied-access-to-the-game-s-plugins-folder"
   | "copy.the-plugin-file-is-read-only-it-is-left-as-it-is"
@@ -490,6 +491,7 @@ export type I18nKey =
   | "copy.the-uninstall-request-was-refused"
   | "copy.the-game-is-running-close-it-then-try-again"
   | "copy.truckersmp-is-running-close-it-then-try-again"
+  | "copy.haulmp-is-running-close-it-then-try-again"
   | "copy.another-program-is-using-the-plugin-file-close-it-then-try-again"
   | "copy.the-plugin-file-is-read-only-clear-its-read-only-attribute-then-try"
   | "copy.the-game-folder-holds-unexpected-entries-so-it-is-not-changed"
@@ -526,7 +528,7 @@ export type I18nKey =
   | 'rec.waiting' | 'rec.waitingSub' | 'rec.lost' | 'rec.lostSub'
   | 'chip.game.live' | 'chip.game.paused' | 'chip.game.waiting' | 'chip.game.lost'
   | 'chip.plugin' | 'chip.hm.pass' | 'chip.hm.fail' | 'chip.hm.lost' | 'chip.sync'
-  | 'mode.sp' | 'mode.tmp' | 'stale' | 'paused'
+  | 'mode.sp' | 'mode.tmp' | 'mode.haulmp' | 'stale' | 'paused'
   | 'live.title' | 'live.speed' | 'live.gear' | 'live.rpm' | 'live.fuel' | 'live.of' | 'live.range' | 'live.rangeNote'
   | 'live.cons' | 'live.consNote' | 'live.consNoteAts'
   | 'live.job' | 'live.market.freight' | 'live.market.cargo' | 'live.driven' | 'live.remaining' | 'live.planned' | 'live.plannedNote'

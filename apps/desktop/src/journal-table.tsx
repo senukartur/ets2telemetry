@@ -21,7 +21,7 @@ export interface JournalOpenTrip {tripUuid: string; game: JournalGame}
 const completenessVariant = (badge: JournalBadge) => badge.variant === 'secondary' ? 'ok' : badge.variant === 'destructive' ? 'warn' : 'neutral';
 
 function ModeLine({mode}: {mode: JournalModeBadge}) {
-  const Icon = mode.tone === 'warn' ? TriangleAlert : mode.kind === 'single-player' ? UserRound : mode.kind === 'truckersmp' ? UsersRound : CircleHelp;
+  const Icon = mode.tone === 'warn' ? TriangleAlert : mode.kind === 'single-player' ? UserRound : mode.kind === 'truckersmp' || mode.kind === 'haulmp' ? UsersRound : CircleHelp;
   return <span className="yu-journal-mode" data-testid="journal-row-mode" data-kind={mode.kind} data-variant={mode.tone}><Icon aria-hidden="true" strokeWidth={1.8} /><span>{mode.text}</span></span>;
 }
 

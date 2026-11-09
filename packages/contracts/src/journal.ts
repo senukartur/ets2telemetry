@@ -190,7 +190,7 @@ export const isJournalEventCursor = (value: unknown): value is string => typeof 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 /** Versioned source-qualified page token. Numeric row/event cursors remain accepted for legacy pages. */
 export const isJournalListCursor = (value: unknown): value is string => typeof value === 'string' && value.length <= 160
-  && /^l5:[0-9a-f-]{36}:(0|[1-9][0-9]{0,18}):[1-9][0-9]{0,18}:(ets2|ats|any)\.(open|delivered|cancelled|none|any)\.(complete|partial|unknown|any)\.(single-player|truckersmp|convoy|unknown|any)\.(quick-job|cargo-market|freight-market|world-of-trucks|other|any)$/.test(value)
+  && /^l5:[0-9a-f-]{36}:(0|[1-9][0-9]{0,18}):[1-9][0-9]{0,18}:(ets2|ats|any)\.(open|delivered|cancelled|none|any)\.(complete|partial|unknown|any)\.(single-player|truckersmp|haulmp|convoy|unknown|any)\.(quick-job|cargo-market|freight-market|world-of-trucks|other|any)$/.test(value)
   && BigInt(value.split(':')[2]) <= MAX_ROW_ID && BigInt(value.split(':')[3]) <= MAX_ROW_ID;
 export const isJournalSnapshotCursor = (value: unknown): value is string => typeof value === 'string' && value.length <= 240
   && /^v4:[0-9a-f-]{36}:[0-9a-f-]{36}:[1-9][0-9]{0,18}:[eisr]:(0|[1-9][0-9]{0,18})$/.test(value)
@@ -205,7 +205,7 @@ function onlyKeys(value: Record<string, unknown>, keys: readonly string[]): bool
 }
 const GAMES: readonly unknown[] = ['ets2', 'ats'], OUTCOMES: readonly unknown[] = ['open', 'delivered', 'cancelled', 'none'];
 const COMPLETENESS: readonly unknown[] = ['complete', 'partial', 'unknown'];
-const MODES: readonly unknown[] = ['single-player', 'truckersmp', 'convoy', 'unknown'], JOB_TYPES: readonly unknown[] = ['quick-job', 'cargo-market', 'freight-market', 'world-of-trucks', 'other'];
+const MODES: readonly unknown[] = ['single-player', 'truckersmp', 'haulmp', 'convoy', 'unknown'], JOB_TYPES: readonly unknown[] = ['quick-job', 'cargo-market', 'freight-market', 'world-of-trucks', 'other'];
 /** A strict `journalTrips` query: absent, or an object of only the listed filters with listed values and a valid cursor. */
 export function isJournalTripsQuery(value: unknown): value is JournalTripsQuery | undefined {
   if (value === undefined) return true;
@@ -297,7 +297,7 @@ function database(value: unknown): void {
 }
 function gameMode(value: unknown): void {
   const o = exact(value, ['mode', 'method', 'confidence']);
-  oneOf(o.mode, ['single-player', 'truckersmp', 'unknown', 'convoy']); oneOf(o.method, ['module-scan', 'process-scan', 'none']); oneOf(o.confidence, ['strong', 'weak', 'none']);
+  oneOf(o.mode, ['single-player', 'truckersmp', 'haulmp', 'unknown', 'convoy']); oneOf(o.method, ['module-scan', 'process-scan', 'none']); oneOf(o.confidence, ['strong', 'weak', 'none']);
 }
 const LIST_KEYS = ['isHardMode', 'hardModeDetails', 'tripUuid', 'game', 'gameMode', 'gameModeAmbiguous', 'outcome', 'closeReason', 'recordingCompleteness', 'startedUtcMs', 'endedUtcMs', 'observedDistanceM', 'fuelUsedL', 'job'];
 const CLOSE_REASONS: readonly unknown[] = ['outcome', 'configuration-cleared', 'different-job', 'restart', 'discontinuity', 'gap'];

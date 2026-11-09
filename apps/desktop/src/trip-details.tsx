@@ -19,7 +19,7 @@ import type {journalTileValues} from './screens/journal-tiles';
 type Tiles = ReturnType<typeof journalTileValues>;
 
 function ModeBadge({mode, testId}: {mode: JournalModeBadge; testId: string}) {
-  const Icon = mode.tone === 'warn' ? TriangleAlert : mode.kind === 'single-player' ? UserRound : mode.kind === 'truckersmp' ? UsersRound : CircleHelp;
+  const Icon = mode.tone === 'warn' ? TriangleAlert : mode.kind === 'single-player' ? UserRound : mode.kind === 'truckersmp' || mode.kind === 'haulmp' ? UsersRound : CircleHelp;
   return <Badge variant={mode.tone} className="yu-trip-chip" data-testid={testId}><Icon aria-hidden="true" strokeWidth={1.8} /><span>{mode.text}</span></Badge>;
 }
 /** The job market badge (ET-072): one neutral badge whose icon names the market kind, never a good or bad tone. */

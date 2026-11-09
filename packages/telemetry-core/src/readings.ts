@@ -52,7 +52,7 @@ export interface LiveTrailer {index: number; model: NamedEntity; brand: NamedEnt
 /** Game-world coordinates, never latitude/longitude. Orientation is in SDK unit fractions of a full turn. */
 export interface LiveWorldPlacement {position: {x: number; y: number; z: number}; orientation: {heading: number; pitch: number; roll: number}}
 export interface GameModeView {
-  mode: 'single-player' | 'truckersmp' | 'unknown'; method: 'module-scan' | 'process-scan' | 'none';
+  mode: 'single-player' | 'truckersmp' | 'haulmp' | 'unknown'; method: 'module-scan' | 'process-scan' | 'none';
   confidence: 'strong' | 'weak' | 'none'; module: Reading<string>;
 }
 /** One H-shifter slot of the SDK layout: a nonzero gear index (reverse negative), its handle position and selector bits. */

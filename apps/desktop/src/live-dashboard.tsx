@@ -139,7 +139,7 @@ export function LiveDashboard({live, units, gearDisplay, recording, language = '
         [t('live.plate', undefined, language), value('truck-plate')], [t('live.trailer', undefined, language), value('trailers')], [t('live.odometer', undefined, language), value('odometer')]])}</CardContent></Card>
       <Card className="yu-live-card" data-testid="live.session"><CardHeader>{title('live.session')}</CardHeader><CardContent>{rows([
         [t('live.clock', undefined, language), value('game-time')],
-        ...shown('game-mode') ? [[t('live.mode', undefined, language), mode ? t(mode === 'truckersmp' ? 'mode.tmp' : 'mode.sp', undefined, language) : '—', 'live.session.mode'] as [string, string, string]] : [],
+        ...shown('game-mode') ? [[t('live.mode', undefined, language), mode ? t(mode === 'haulmp' ? 'mode.haulmp' : mode === 'truckersmp' ? 'mode.tmp' : 'mode.sp', undefined, language) : '—', 'live.session.mode'] as [string, string, string]] : [],
         [t('live.protocol', undefined, language), protocol, 'live.session.protocol'],
         ...shown('event-loss') ? [[t('live.lostEvents', undefined, language), value('event-loss'), 'live.session.lostEvents'] as [string, string, string]] : []])}</CardContent></Card>
     </div>

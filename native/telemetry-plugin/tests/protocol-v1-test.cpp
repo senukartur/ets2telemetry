@@ -387,6 +387,9 @@ void semantics(const Fixtures& f) {
   auto mode_record = field(field(f.server("event-source-game-mode").wire, "data"), "record"); std::get<Json::Object>(mode_record.value).erase("type");
   const auto game_mode = read_game_mode(mode_record);
   check(game_mode.mode == "truckersmp" && game_mode.confidence == "strong", "game mode event");
+  auto haulmp_mode_record = field(field(f.server("event-source-game-mode-haulmp").wire, "data"), "record"); std::get<Json::Object>(haulmp_mode_record.value).erase("type");
+  const auto haulmp_game_mode = read_game_mode(haulmp_mode_record);
+  check(haulmp_game_mode.mode == "haulmp" && haulmp_game_mode.confidence == "strong" && haulmp_game_mode.module.value == "haulmp_stub.dll", "haulmp game mode event");
   check(cp.source->origin == "synthetic" && cp.state->boundary_seq == cp.seq, "synthetic provenance and boundary");
 
   const auto max = f.server("max-seq"); check(max.seq == u64_max && max.capture.monotonic_ns == u64_max, "maximum message seq");

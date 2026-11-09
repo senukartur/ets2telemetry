@@ -18,7 +18,7 @@ import {ATS_A, BASE_UTC, ETS2_A, ETS2_B, job, money, r, Script, trailer, truck} 
 import type {ProfileObservation} from '../../packages/telemetry-core/src';
 import {failed, ok, REPRESENTATIVE, workspace} from './helpers';
 
-const DATABASE = {purpose: 'synthetic', schemaVersion: 7};
+const DATABASE = {purpose: 'synthetic', schemaVersion: 8};
 const NOT_OBSERVED = {available: false, reason: 'not-observed'} as const;
 const text = (value: string) => ({available: true as const, value});
 /** The job market and special-job flag of every seeded job and of the version 1 fixture's job: stored before ET-072, read without a migration. */
@@ -31,7 +31,7 @@ beforeAll(async () => {
   ws = await workspace();
   ws.copyFixture(REPRESENTATIVE, ws.database);
   storage = await ws.open();
-  expect(storage.summary).toMatchObject({schemaVersion: 7, migratedFrom: 1});
+  expect(storage.summary).toMatchObject({schemaVersion: 8, migratedFrom: 1});
   await seedJournalAnchors(storage);
   fillers = await seedJournalFillers(storage, 110);
 }, 120_000);

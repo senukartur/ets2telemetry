@@ -166,7 +166,7 @@ describe('REG-013 schema migrations', () => {
   });
   it('refuses an empty SQLite file with a user version at inspection, before the writer opens', async () => {
     const file = path.join(ws.directory, 'versioned-empty.sqlite');
-    const db = new Database(file); db.pragma('user_version = 7'); db.close();
+    const db = new Database(file); db.pragma('user_version = 8'); db.close();
     let writerReached = false;
     await expectRefused(file, 'DATABASE_UNRECOGNIZED');
     failed(await openStorage(ws.options({path: file, testHooks: {afterInspect: () => { writerReached = true; }}})), 'DATABASE_UNRECOGNIZED');
@@ -183,12 +183,12 @@ describe('REG-013/REG-017 installer history contract', () => {
   it('accepts the actual version 1 to current migration and rejects corrupted upgrade evidence', async () => {
     const copy = ws.copyFixture(REPRESENTATIVE), original = readVersion1(copy);
     const storage = await ws.open({path: copy, migrations: CURRENT_MIGRATIONS});
-    expect(storage.summary).toMatchObject({schemaVersion: 7, created: false, migratedFrom: 1});
+    expect(storage.summary).toMatchObject({schemaVersion: 8, created: false, migratedFrom: 1});
     expectMigratedFromVersion1(storage, copy, original, path.join(ws.backups, storage.summary.backupFileName!));
     const facts = collectHistory(Database, copy, ws.backups);
     expect(() => assertHistoryFacts(facts, '0.1.0-test')).not.toThrow();
     const reopened = await ws.open({path: copy, migrations: CURRENT_MIGRATIONS});
-    expect(reopened.summary).toMatchObject({schemaVersion: 7, created: false});
+    expect(reopened.summary).toMatchObject({schemaVersion: 8, created: false});
     expect(reopened.summary.migratedFrom).toBeUndefined();
     reopened.close();
     expect(() => assertHistoryFacts(collectHistory(Database, copy, ws.backups), '0.1.0-test')).not.toThrow();
@@ -230,7 +230,7 @@ it('REG-013 migrates frozen schema4 additively and preserves every existing tabl
   const copy=ws.copyFixture('schema-v4-representative.sqlite'),before=digestOf(copy);
   const tables=readOnly(copy,db=>db.prepare("SELECT name FROM sqlite_schema WHERE type='table' AND name NOT LIKE 'sqlite_%'").pluck().all()) as string[];
   const rows=readOnly(copy,db=>Object.fromEntries(tables.map(table=>[table,db.prepare(`SELECT * FROM ${table} ORDER BY rowid`).all()])));
-  const storage=await ws.open({path:copy,migrations:CURRENT_MIGRATIONS});expect(storage.summary).toMatchObject({schemaVersion:7,migratedFrom:4});
+  const storage=await ws.open({path:copy,migrations:CURRENT_MIGRATIONS});expect(storage.summary).toMatchObject({schemaVersion:8,migratedFrom:4});
   expect(digestOf(path.join(ws.backups,storage.summary.backupFileName!))).toEqual(before);storage.close();
   readOnly(copy,db=>{
     for(const table of tables.filter(t=>t!=='schema_migrations'))expect(db.prepare(`SELECT * FROM ${table} ORDER BY rowid`).all(),table).toEqual(rows[table]);
@@ -243,7 +243,7 @@ it('REG-006/013 migrates frozen schema5 additively after a verified backup witho
   const copy=ws.copyFixture('schema-v5-representative.sqlite'),before=digestOf(copy);
   const tables=readOnly(copy,db=>db.prepare("SELECT name FROM sqlite_schema WHERE type='table' AND name NOT LIKE 'sqlite_%' AND name<>'schema_migrations' ORDER BY name").pluck().all()) as string[];
   const rows=readOnly(copy,db=>tables.map(table=>db.prepare(`SELECT * FROM ${table} ORDER BY rowid`).all()));
-  const storage=await ws.open({path:copy,migrations:CURRENT_MIGRATIONS});expect(storage.summary).toMatchObject({schemaVersion:7,migratedFrom:5});
+  const storage=await ws.open({path:copy,migrations:CURRENT_MIGRATIONS});expect(storage.summary).toMatchObject({schemaVersion:8,migratedFrom:5});
   expect(digestOf(path.join(ws.backups,storage.summary.backupFileName!))).toEqual(before);
   const ready=ok(storage.getUploadProjectionPreparation('80000000-0000-4000-8000-000000000001'));expect(ready.state).toBe('ready');
   storage.close();readOnly(copy,db=>{
@@ -258,7 +258,7 @@ it('REG-006/013 migrates schema6 without rewriting frozen upload bytes, receipts
   const copy=ws.copyFixture('schema-v6-representative.sqlite'),before=digestOf(copy);
   const tables=readOnly(copy,db=>db.prepare("SELECT name FROM sqlite_schema WHERE type='table' AND name NOT LIKE 'sqlite_%' AND name<>'schema_migrations' ORDER BY name").pluck().all()) as string[];
   const rows=readOnly(copy,db=>tables.map(table=>db.prepare(`SELECT * FROM ${table} ORDER BY rowid`).all()));
-  const storage=await ws.open({path:copy,migrations:CURRENT_MIGRATIONS});expect(storage.summary).toMatchObject({schemaVersion:7,migratedFrom:6});
+  const storage=await ws.open({path:copy,migrations:CURRENT_MIGRATIONS});expect(storage.summary).toMatchObject({schemaVersion:8,migratedFrom:6});
   expect(digestOf(path.join(ws.backups,storage.summary.backupFileName!))).toEqual(before);storage.close();
   readOnly(copy,db=>{expect(tables.map(table=>db.prepare(`SELECT * FROM ${table} ORDER BY rowid`).all())).toEqual(rows);
     expect(db.prepare('SELECT * FROM trailer_baselines').all()).toEqual([]);expect(db.pragma('foreign_key_check')).toEqual([]);});

@@ -44,7 +44,7 @@ export const MAX_LOCKED_RETRIES = 3;
  * Block reasons that keep the 15 s poll running. A failed listing (RUNNING_CHECK_FAILED) is retried as soon as the poll's
  * own listing succeeds, so a transient failure on a loaded machine never leaves the plugin unchanged for the session.
  */
-const POLL_REASONS: readonly PluginBlockReason[] = ['GAME_RUNNING', 'CLIENT_RUNNING', 'TARGET_LOCKED', 'RUNNING_CHECK_FAILED'];
+const POLL_REASONS: readonly PluginBlockReason[] = ['GAME_RUNNING', 'CLIENT_RUNNING', 'HAULMP_RUNNING', 'TARGET_LOCKED', 'RUNNING_CHECK_FAILED'];
 const PREFIX_LENGTH = 12;
 
 type Log = (event: string, detail?: unknown, facts?: DiagnosticFacts) => void;
@@ -614,7 +614,7 @@ export class PluginSetup {
     let locked = false;
     for (const {game, reason} of this.waits()) {
       if (reason === 'RUNNING_CHECK_FAILED') return true;
-      if (reason === 'GAME_RUNNING' || reason === 'CLIENT_RUNNING') {
+      if (reason === 'GAME_RUNNING' || reason === 'CLIENT_RUNNING' || reason === 'HAULMP_RUNNING') {
         if (blockingProcess(game, running) !== reason) return true;
       } else if (reason === 'TARGET_LOCKED') locked = true;
     }

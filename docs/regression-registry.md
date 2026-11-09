@@ -278,6 +278,7 @@ Columns:
 | `tests/storage/late-attach.test.ts` | Storage (Vitest under Electron) | REG-003 | R | ET-016b (#99) | PR (tests job, `npm run test:storage`) | dedup, trip completeness |
 | `tests/storage/migration-crash.test.ts` | Storage (Vitest under Electron) | REG-006, REG-013 | R, F | ET-019 (PR-2) | PR (tests job, `npm run test:storage`) | historical fixture |
 | `tests/storage/migrations.test.ts` | Storage (Vitest under Electron) | REG-013 | R, F | ET-013 (#51), ET-081 | PR (tests job, `npm run test:storage`) | historical fixture, schema6-to7 frozen upload/receipt preservation and failed-migration rollback |
+| `tests/storage/migration-v8.test.ts` | Storage (Vitest under Electron) | REG-013, REG-014 | F, T | ET-062 | PR (tests job, `npm run test:storage`) | migration 0008-haulmp-mode table rebuild, CHECK constraints, historical v1/v2 upgrade, trigger immutability and rollback |
 | `tests/storage/open-durability.test.ts` | Storage (Vitest under Electron) | REG-006, REG-007 | V (et-013) | ET-013 (#51) | PR (tests job, `npm run test:storage`) | ACK |
 | `tests/storage/producer-loss.test.ts` | Storage (Vitest under Electron) | REG-003, REG-005, REG-007, REG-011, REG-014 | R, F, T, V (et-019) | ET-019 (PR-3) | PR (tests job, `npm run test:storage`) | ACK, dedup, gap, trip completeness |
 | `tests/storage/recording-runtime.test.ts` | Storage (Vitest under Electron) | REG-003, REG-005, REG-006, REG-010, REG-011, REG-012 | R, F | ET-015c (#89), ET-056 | PR (tests job, `npm run test:storage`) | ACK, gap |

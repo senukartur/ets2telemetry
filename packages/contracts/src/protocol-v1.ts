@@ -57,7 +57,7 @@ export type Currency = {status: 'unknown'} | {status: 'sdk-documented'; code: st
 /** Raw SDK money as an exact decimal string; never a JSON number and never converted. */
 export interface Money {raw: string; sdkType: 's64' | 'u64'; currency: Currency}
 export interface GameMode {
-  mode: 'single-player' | 'truckersmp' | 'unknown'; method: 'module-scan' | 'process-scan' | 'none';
+  mode: 'single-player' | 'truckersmp' | 'haulmp' | 'unknown'; method: 'module-scan' | 'process-scan' | 'none';
   confidence: 'strong' | 'weak' | 'none'; module: Available<string>;
 }
 export interface JobConfiguration {
@@ -261,12 +261,12 @@ function trailer(o: Record<string, unknown>): number {
   return num(o.index, 0, V1_LIMITS.trailerSlots - 1, true);
 }
 function gameMode(o: Record<string, unknown>) {
-  const mode = choice(o.mode, ['single-player', 'truckersmp', 'unknown']), method = choice(o.method, ['module-scan', 'process-scan', 'none']);
+  const mode = choice(o.mode, ['single-player', 'truckersmp', 'haulmp', 'unknown']), method = choice(o.method, ['module-scan', 'process-scan', 'none']);
   const confidence = choice(o.confidence, ['strong', 'weak', 'none']), module = available(o.module, value => text(value, ID_BYTES, false));
   // Unknown pairs only with none; a missing module is weak evidence, so single-player is never strong.
   if ((mode === 'unknown') !== (method === 'none') || (mode === 'unknown') !== (confidence === 'none')) fail();
   if (mode === 'single-player' && confidence === 'strong') fail();
-  if (mode === 'truckersmp' && method === 'module-scan' && module.available !== true) fail();
+  if ((mode === 'truckersmp' || mode === 'haulmp') && method === 'module-scan' && module.available !== true) fail();
   // Only a module scan can name a module.
   if (method !== 'module-scan' && module.available === true) fail();
 }
