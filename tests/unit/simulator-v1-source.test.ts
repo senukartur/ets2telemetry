@@ -204,8 +204,8 @@ describe('simulator v1 gearbox capture (ET-050b)', () => {
 describe('simulator v1 mandatory break capture (ET-052)', () => {
   const breakOf = (a: AdapterModel) => a.published.nextMandatoryBreak;
   it('lists the channel before the placement in registration order', () => {
-    // ET-071 registers cruise control between the break and the placement.
-    expect(CHANNELS.slice(-3)).toEqual(['mandatory.break', 'cruise_control', 'world.placement']);
+    // ET-071 and ET-084 register cruise control and the speed limit between the break and the placement.
+    expect(CHANNELS.slice(-4)).toEqual(['mandatory.break', 'cruise_control', 'navigation.speed.limit', 'world.placement']);
     expect(CHANNELS.indexOf('mandatory.break')).toBeGreaterThan(CHANNELS.indexOf('navigation.distance'));
   });
   it('is not-observed before any callback and carries each s32 value exactly, zero and negative included', () => {
@@ -314,5 +314,61 @@ describe('simulator v1 cruise control capture (ET-071)', () => {
     expect(Object.hasOwn(withCruise.published.state, 'cruiseControl')).toBe(false);
     expect(withCruise.channel.drain()).toEqual([]);
     expect(withCruise.channel.nextEventSeq).toBe(1n);
+  });
+});
+
+// ET-084: the optional `truck.navigation.speed.limit` channel with the native adapter's rules (docs/native-transport-v1.md):
+// float m/s, zero and a negative reading are values (no limit), a value outside [-1000, 1000] invalid and never clamped, a
+// callback without a value not-observed, a refused registration not-supported, and a copy that does not advance the shared
+// boundary order.
+describe('simulator v1 speed limit capture (ET-084)', () => {
+  const limitOf = (a: AdapterModel) => a.published.speedLimit;
+  it('is not-observed before any callback and carries each float32 value exactly, zero, negative and the bounds included', () => {
+    const a = adapter();
+    expect(limitOf(a)).toEqual({available: false, reason: 'not-observed', unit: 'm/s'});
+    for (const value of [25, 0, -1, 13.75, 1000, -1000]) {
+      a.frame(false, {'navigation.speed.limit': value}, 0);
+      expect([value, limitOf(a)]).toEqual([value, {available: true, value, unit: 'm/s'}]);
+    }
+  });
+  it('maps an out-of-range value to invalid, a callback without a value to not-observed and a wrong-typed one to invalid, then recovers', () => {
+    const a = adapter();
+    for (const value of [1000.5, -1000.5, 4096, -4096]) {
+      a.frame(false, {'navigation.speed.limit': value}, 0);
+      expect([value, limitOf(a)]).toEqual([value, {available: false, reason: 'invalid', unit: 'm/s'}]);
+    }
+    a.frame(false, {'navigation.speed.limit': null}, 1);
+    expect(limitOf(a)).toEqual({available: false, reason: 'not-observed', unit: 'm/s'});
+    a.frame(false, {'navigation.speed.limit': 'invalid'}, 2);
+    expect(limitOf(a)).toEqual({available: false, reason: 'invalid', unit: 'm/s'});
+    a.frame(false, {'navigation.speed.limit': 25}, 3);
+    expect(limitOf(a)).toEqual({available: true, value: 25, unit: 'm/s'});
+  });
+  it('clears the reading at a timer restart and at a truck configuration unless the new frame delivers it', () => {
+    const a = adapter();
+    a.frame(false, {'navigation.speed.limit': 25}, 0); a.frame(false, {speed: 5}, 1);
+    expect(limitOf(a)).toEqual({available: true, value: 25, unit: 'm/s'});
+    a.frame(true, {}, 2);
+    expect(limitOf(a)).toEqual({available: false, reason: 'not-observed', unit: 'm/s'});
+    a.frame(false, {'navigation.speed.limit': 25}, 3); a.frame(true, {'navigation.speed.limit': 0}, 4);
+    expect(limitOf(a)).toEqual({available: true, value: 0, unit: 'm/s'});
+    a.configuration('truck', [], 'terminated', 5); a.frame(false, {}, 6);
+    expect(limitOf(a)).toEqual({available: false, reason: 'not-observed', unit: 'm/s'});
+  });
+  it('reports not-supported whatever a frame lists when the registration is refused, and never as zero', () => {
+    const a = adapter({speedLimit: 'not-supported'});
+    expect(limitOf(a)).toEqual({available: false, reason: 'not-supported', unit: 'm/s'});
+    a.frame(false, {'navigation.speed.limit': 25}, 0);
+    expect(limitOf(a)).toEqual({available: false, reason: 'not-supported', unit: 'm/s'});
+    expect(limitOf(adapter({speedLimit: 'registered'}))).toEqual({available: false, reason: 'not-observed', unit: 'm/s'});
+  });
+  it('does not advance the shared boundary order and emits no record, event or eventSeq', () => {
+    const without = adapter(), withLimit = adapter();
+    without.frame(false, {speed: 9}, 0); withLimit.frame(false, {speed: 9, 'navigation.speed.limit': 25}, 0);
+    expect(withLimit.published.state).toEqual(without.published.state);
+    // The published state itself never carries the limit; the producer adds it on minor-4 connections only.
+    expect(Object.hasOwn(withLimit.published.state, 'speedLimit')).toBe(false);
+    expect(withLimit.channel.drain()).toEqual([]);
+    expect(withLimit.channel.nextEventSeq).toBe(1n);
   });
 });

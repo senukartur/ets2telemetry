@@ -10,11 +10,13 @@ import {smokePair, v1Projection, v1SourceState} from '../shared/live-v1-fixtures
 
 const STATE_KEYS = ['simulation', 'speed', 'fuel', 'fuelCapacity', 'engineRpm', 'gear', 'odometer', 'averageConsumption', 'estimatedRange',
   'navigationDistance', 'gameTime', 'captureUtcUnixMs', 'boundaryOrder', 'worldPlacement', 'configuration', 'gearbox', 'nextMandatoryBreak',
-  'cruiseControl'];
+  'cruiseControl', 'speedLimit'];
 /** ET-052 MB5: a minor-0 or minor-1 state carries no break, so the projection reports it not-supported. */
 const NOT_SUPPORTED_BREAK = {available: false, reason: 'not-supported', unit: 'min'};
 /** ET-071: a state below minor 3 carries no cruise control, so the projection reports it not-supported. */
 const NOT_SUPPORTED_CRUISE = {available: false, reason: 'not-supported', unit: 'm/s'};
+/** ET-084: a state below minor 4 carries no speed limit, so the projection reports it not-supported. */
+const NOT_SUPPORTED_LIMIT = {available: false, reason: 'not-supported', unit: 'm/s'};
 /** ET-050b B7: a minor-0 state carries no gearbox, so the projection reports every part not-supported. */
 const NOT_SUPPORTED = {forwardGears: {available: false, reason: 'not-supported'}, reverseGears: {available: false, reason: 'not-supported'}, hshifter: {available: false, reason: 'not-supported'}};
 const minor1 = (name: string) => {
@@ -37,9 +39,15 @@ const minor3 = (name: string) => {
   if (m.kind !== 'checkpoint' && m.kind !== 'snapshot') throw new Error(`${name} is not a state message`);
   return m;
 };
+const minor4 = (name: string) => {
+  const m = decodePayload(new Uint8Array(readFileSync(`tests/fixtures/protocol-v1/minor4/${name}.json`)), 'server', {maxMinor: 4}) as ServerMessage;
+  if (m.kind !== 'checkpoint' && m.kind !== 'snapshot') throw new Error(`${name} is not a state message`);
+  return m;
+};
 const minor1SourceState = (name: string) => sourceStateOf(minor1(name));
 const minor2SourceState = (name: string) => sourceStateOf(minor2(name));
 const minor3SourceState = (name: string) => sourceStateOf(minor3(name));
+const minor4SourceState = (name: string) => sourceStateOf(minor4(name));
 
 describe('liveV1Projection', () => {
   const projection = liveV1Projection(v1SourceState());
@@ -117,6 +125,27 @@ describe('liveV1Projection', () => {
     expect(liveV1Projection(minor3SourceState('snapshot')).observation!.state.nextMandatoryBreak).toEqual(minor3('snapshot').data.state.nextMandatoryBreak);
     expect(liveV1Projection(minor3SourceState('snapshot')).observation!.state.gearbox).toEqual(minor3('snapshot').data.state.gearbox);
   });
+  it('carries the minor-4 speed limit exactly, zero and negative included, and reports an older state as not-supported (ET-084)', () => {
+    for (const live of [projection, liveV1Projection(minor1SourceState('checkpoint')), liveV1Projection(minor2SourceState('checkpoint')), liveV1Projection(minor3SourceState('checkpoint')),
+      liveV1Projection(minor4SourceState('checkpoint-minor-3')), liveV1Projection(minor4SourceState('checkpoint-minor-0'))]) {
+      expect(live.observation!.state.speedLimit).toEqual(NOT_SUPPORTED_LIMIT);
+    }
+    // A minor-4 state carries what the wire carried: 25 and 22.5 m/s, zero and -1 (no limit), the bounds and each unavailable reading.
+    for (const [name, expected] of [
+      ['checkpoint', {available: true, value: 25, unit: 'm/s'}], ['snapshot', {available: true, value: 22.5, unit: 'm/s'}],
+      ['snapshot-limit-zero', {available: true, value: 0, unit: 'm/s'}], ['snapshot-limit-negative', {available: true, value: -1, unit: 'm/s'}],
+      ['snapshot-limit-max', {available: true, value: 1000, unit: 'm/s'}], ['snapshot-limit-min', {available: true, value: -1000, unit: 'm/s'}],
+      ['snapshot-limit-not-observed', {available: false, reason: 'not-observed', unit: 'm/s'}], ['snapshot-limit-not-supported', {available: false, reason: 'not-supported', unit: 'm/s'}],
+      ['snapshot-limit-invalid', {available: false, reason: 'invalid', unit: 'm/s'}]
+    ] as const) {
+      const live = liveV1Projection(minor4SourceState(name));
+      expect([name, live.observation!.state.speedLimit]).toEqual([name, expected]);
+      expect(Object.keys(live.observation!.state)).toEqual(STATE_KEYS);
+      expect(parseLiveV1(structuredClone(live), 'synthetic')).toBeDefined();
+    }
+    // Cruise control rides along unchanged beside it.
+    expect(liveV1Projection(minor4SourceState('snapshot')).observation!.state.cruiseControl).toEqual(minor4('snapshot').data.state.cruiseControl);
+  });
   it('omits the observation before the first one', () => {
     expect(liveV1Projection(v1SourceState('snapshot-live', {status: 'waiting', reason: 'Awaiting selected source', fresh: false, observation: undefined})))
       .toEqual({selection: 'synthetic', status: 'waiting', reason: 'Awaiting selected source', fresh: false});
@@ -175,6 +204,14 @@ describe('parseLiveV1', () => {
     ['a cruise control in km/h', mutate(value => {observation(value).state.cruiseControl = {available: true, value: 90, unit: 'km/h'};})],
     ['a cruise control as a string', mutate(value => {observation(value).state.cruiseControl = {available: true, value: '25', unit: 'm/s'};})],
     ['an unavailable cruise control with a value', mutate(value => {observation(value).state.cruiseControl = {available: false, reason: 'not-observed', unit: 'm/s', value: 0};})],
+    // ET-084: the projection always carries the speed limit, a number from -1,000 to 1,000 with unit m/s.
+    ['a missing speed limit', mutate(value => {delete observation(value).state.speedLimit;})],
+    ['a null speed limit', mutate(value => {observation(value).state.speedLimit = null;})],
+    ['a speed limit above 1000 m/s', mutate(value => {observation(value).state.speedLimit = {available: true, value: 1000.5, unit: 'm/s'};})],
+    ['a speed limit below -1000 m/s', mutate(value => {observation(value).state.speedLimit = {available: true, value: -1000.5, unit: 'm/s'};})],
+    ['a speed limit in km/h', mutate(value => {observation(value).state.speedLimit = {available: true, value: 90, unit: 'km/h'};})],
+    ['a speed limit as a string', mutate(value => {observation(value).state.speedLimit = {available: true, value: '25', unit: 'm/s'};})],
+    ['an unavailable speed limit with a value', mutate(value => {observation(value).state.speedLimit = {available: false, reason: 'not-observed', unit: 'm/s', value: 0};})],
     ['fresh data without an observation', mutate(value => {delete value.observation;})],
     ['fresh stale data', mutate(value => {value.status = 'stale';})],
     ['a service status', mutate(value => {value.status = 'service-failed'; value.fresh = false;})],
@@ -207,6 +244,13 @@ describe('parseLiveV1', () => {
     [{available: false, reason: 'not-observed', unit: 'm/s'}], [{available: false, reason: 'not-supported', unit: 'm/s'}], [{available: false, reason: 'invalid', unit: 'm/s'}]
   ])('accepts the cruise control %j (ET-071)', measure => {
     const value = mutate(v => {observation(v).state.cruiseControl = structuredClone(measure);});
+    expect(parseLiveV1(value, 'synthetic')).toBe(value);
+  });
+  it.each([
+    [{available: true, value: 25, unit: 'm/s'}], [{available: true, value: 0, unit: 'm/s'}], [{available: true, value: -1, unit: 'm/s'}], [{available: true, value: 1000, unit: 'm/s'}], [{available: true, value: -1000, unit: 'm/s'}],
+    [{available: false, reason: 'not-observed', unit: 'm/s'}], [{available: false, reason: 'not-supported', unit: 'm/s'}], [{available: false, reason: 'invalid', unit: 'm/s'}]
+  ])('accepts the speed limit %j (ET-084)', measure => {
+    const value = mutate(v => {observation(v).state.speedLimit = structuredClone(measure);});
     expect(parseLiveV1(value, 'synthetic')).toBe(value);
   });
   it('accepts a 256-character reason and a stale projection that keeps its observation', () => {

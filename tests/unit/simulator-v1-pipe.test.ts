@@ -8,9 +8,9 @@ import net from 'node:net';
 import {randomUUID} from 'node:crypto';
 import {describe, expect, it} from 'vitest';
 import {FrameDecoder, PROTOCOL_V1, V1_MAX_MINOR, encodeFrame as encodeAnyMinor, type ProtocolMessage, type ServerMessage} from '../../packages/contracts/src/protocol-v1';
-// ET-050b, ET-052, ET-071: these raw clients offer minor 3, as the scripted client does by default and as the contract's
-// highest minor is, so the producer selects minor 3 and every frame after the hello carries {1,3}.
-const M3 = {major: 1, minor: 3} as const;
+// ET-050b, ET-052, ET-071, ET-084: these raw clients offer minor 4, as the scripted client does by default and as the
+// contract's highest minor is, so the producer selects minor 4 and every frame after the hello carries {1,4}.
+const M4 = {major: 1, minor: 4} as const;
 const encodeFrame = (message: ProtocolMessage) => encodeAnyMinor(message, {maxMinor: V1_MAX_MINOR});
 import {V1Consumer} from '../../packages/contracts/src/protocol-v1-delivery';
 import {readFixtureFile} from '../../tools/telemetry-simulator/src/fixture-file';
@@ -32,7 +32,7 @@ const inline = (steps: Json[], transport: Json[]): Json => ({format: 'ets2teleme
  * The hello of the inline scenario's first client instance, as its script sends it. The lockstep server compares it with the
  * scripted client's hello, whose default offer is minor 2 (ET-052 MB3).
  */
-const hello = (durableEvents = true) => encodeFrame({version: PROTOCOL_V1, kind: 'hello', data: {clientInstanceId: seededId('pipe-test', 'client-instance-1'), minMinor: 0, maxMinor: 3, durableEvents}});
+const hello = (durableEvents = true) => encodeFrame({version: PROTOCOL_V1, kind: 'hello', data: {clientInstanceId: seededId('pipe-test', 'client-instance-1'), minMinor: 0, maxMinor: 4, durableEvents}});
 
 /** A raw test client: connects, sends `first`, decodes server frames and records how the connection ended. */
 function rawClient(endpoint: string, first?: Uint8Array) {
@@ -287,7 +287,7 @@ describe('simulator v1 pipe CLI', () => {
       await until(() => first.messages.some(m => m.kind === 'event'));
       // 1,500 ms after the event arrived, so at least 500 ms after the 1,000 ms bound would have ended the wait.
       await new Promise(r => setTimeout(r, 1500));
-      first.socket.write(encodeFrame({version: M3, kind: 'ack', data: {pluginSessionId: first.messages[0].source.pluginSessionId, throughEventSeq: '1'}}));
+      first.socket.write(encodeFrame({version: M4, kind: 'ack', data: {pluginSessionId: first.messages[0].source.pluginSessionId, throughEventSeq: '1'}}));
       expect((await first.closed).messages.map(m => m.kind)).toEqual(['welcome', 'checkpoint', 'event']);
       const second = await rawClient(endpoint, hello(true)).closed, checkpoint = second.messages.find(m => m.kind === 'checkpoint');
       expect(checkpoint?.kind === 'checkpoint' && checkpoint.data.status.delivery.ackedThroughEventSeq).toBe('1');

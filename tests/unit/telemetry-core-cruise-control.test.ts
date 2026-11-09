@@ -79,7 +79,7 @@ describe('ET-071 cruise control row in the live view', () => {
   const base = v1Normalized('snapshot');
   it('is a v1-only row in the motion section, after engine RPM', () => {
     const view = buildLiveView(live(), base, resolveDisplayUnits('ets2'));
-    expect(view.sections.find(section => section.id === 'motion')!.fields.map(field => field.id)).toEqual(['speed', 'gear', 'engine-rpm', 'cruise-control']);
+    expect(view.sections.find(section => section.id === 'motion')!.fields.map(field => field.id)).toEqual(['speed', 'gear', 'engine-rpm', 'cruise-control', 'speed-limit']);
     expect(V0_CARRIED_FIELDS.has('cruise-control')).toBe(false);
     expect(carriesField('v0', 'cruise-control')).toBe(false); expect(carriesField('v1', 'cruise-control')).toBe(true);
   });
