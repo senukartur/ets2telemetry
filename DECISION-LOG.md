@@ -886,3 +886,7 @@ The owner replaces irreversible loss for new trips with an inclusive 95% passing
 ## ET-081 checkpoint trailer baseline storage — November 8, 2026
 
 In the November 8 deliver conversation, the owner approved dedicated immutable checkpoint trailer baseline storage and forward migration `0007-trailer-baselines` ([Trello approval record](https://trello.com/c/Rb7ZTC3w#comment-6af0c90fd9ca25b10a2d3284)) for reliable whole-trip upload context. The private recorder persists the existing checkpoint's complete slot state before observation, including without an active job; native and HTTP wire contracts remain unchanged. Historical trips without sufficient evidence and unsupported continuation bridges remain incomplete.
+
+## ET-082 light theme — November 9, 2026
+
+On [ET-082](https://trello.com/c/bDfsm83C) the owner authorized implementation and merge, without a release. The light theme shows a dark variant of the logo with no plate behind it. Settings upgraded from any older format stay `dark`; only a new install, without a settings file, defaults to `system`.

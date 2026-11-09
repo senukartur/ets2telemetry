@@ -63,7 +63,7 @@ Account & sync verifies a personal token, then asks the driver to confirm the ex
 
 ### Application
 
-The application runs in the notification area as a single instance. Closing the main window hides it; recording and the overlay continue until the driver chooses Exit. It can start with Windows and shows its interface in English or Russian. Game-provided names (cargo, cities, companies, trucks) are never translated.
+The application runs in the notification area as a single instance. Closing the main window hides it; recording and the overlay continue until the driver chooses Exit. It can start with Windows and shows its interface in English or Russian, in a light or dark theme that can follow the Windows setting. Game-provided names (cargo, cities, companies, trucks) are never translated.
 
 ### Installation, updates and uninstall
 

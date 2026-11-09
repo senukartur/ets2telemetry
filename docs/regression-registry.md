@@ -160,6 +160,9 @@ Columns:
 | `tests/unit/live-dashboard-rendering.test.ts` | Node unit (Vitest) rendering the compact Live page with `renderToStaticMarkup`, only the shadcn containers substituted | REG-002, REG-009 | F | ET-074 | PR (tests job, `npm test`) | trip completeness, regression (stale shows dimmed dashes and its badge, not the waiting banner; zero speed versus missing; the `fuel` text and every details test id exactly once) |
 | `tests/unit/shell-rendering.test.ts` | Node unit (Vitest) rendering the sidebar groups and the top bar with `renderToStaticMarkup` | — | — | ET-074 | PR (tests job, `npm test`) | — |
 | `tests/unit/settings-screen-rendering.test.ts` | Node unit (Vitest) rendering the compact Settings screen with `renderToStaticMarkup` | — | — | ET-078 | PR (tests job, `npm test`) | — |
+| `tests/unit/theme-card-rendering.test.ts` | Node unit (Vitest) rendering the theme row of Settings → General with `renderToStaticMarkup` | — | — | ET-082 | PR (tests job, `npm test`) | — |
+| `tests/unit/theme-tokens.test.ts` | Node unit (Vitest), static checks of the light and dark token files: contrast, completeness and the unchanged dark values | — | — | ET-082 | PR (tests job, `npm test`) | — |
+| `tests/unit/window-theme.test.ts` | Node unit (Vitest) of the native window colours for each resolved theme | — | — | ET-082 | PR (tests job, `npm test`) | — |
 | `tests/unit/live-smoke-source-v1.test.ts` | Node unit (Vitest) | REG-003, REG-010, REG-011 | R, F | ET-010c (#73) | PR (tests job, `npm test`) | — |
 | `tests/unit/live-sources.test.ts` | Node unit (Vitest) | REG-002, REG-009, REG-010 | R | ET-010c (#73), ET-056 | PR (tests job, `npm test`) | — |
 | `tests/unit/live-v1.test.ts` | Node unit (Vitest) | REG-010 | R | ET-010c (#73) | PR (tests job, `npm test`) | security |
