@@ -37,8 +37,7 @@ In ET-029, the Russian localization and i18n framework are implemented following
 3. **Unavailable is not zero.** A missing value shows `—` (or is hidden where the rules say so), never `0`. A value that stops updating becomes unavailable: on Live a stale stream shows dashes dimmed to the muted colour and a stale badge, never frozen numbers.
 4. **Keep the data distinctions.** Planned, observed and game-reported distance; expected income and revenue or penalty; real time and game time; job outcome and recording completeness. Each pair is shown side by side and labelled, never merged.
 5. **Name the SDK values honestly.** Average consumption is labelled "SDK mean, not a trip average" (ATS: "mostly static"). Range is "the game's estimate". Money is exact raw digits with the currency code, without grouping or symbols (`48210 EUR`).
-6. **Dark only.** There is no light theme. `color-scheme: dark` is set on `:root`.
-7. **Desktop density.** One step denser than the web dashboard: body 13 px, controls 32 px, status chips 24 px. Interactive targets are at least 32 px (a 24 px chip that is a button extends its hit area to 32 px); text contrast is at least 4.5:1.
+6. **Desktop density.** One step denser than the web dashboard: body 13 px, controls 32 px, status chips 24 px. Interactive targets are at least 32 px (a 24 px chip that is a button extends its hit area to 32 px); text contrast is at least 4.5:1.
 
 ## 3. Tokens, type and icons
 
