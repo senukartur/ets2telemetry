@@ -89,6 +89,9 @@ export const STRINGS = channelCopyTable(Object.freeze({
   overlayBreakDue: 'due now',
   /** The overlay's cruise control value while cruise control is off (ET-071): a value, never the unavailable dash. */
   overlayCruiseOff: 'OFF',
+  overlaySpeedLimitName: 'Speed limit: {value}',
+  overlaySpeedLimitNoneName: 'Speed limit: no limit',
+  overlaySpeedLimitUnavailableName: 'Speed limit: unavailable',
   /**
    * The overlay's fixed Hard Mode indicator (ET-070): the card and cluster row label, the strip and HUD short label, the
    * row value of a loss and the accessible names per state; `{n}` is the number of rules that pass.
@@ -189,6 +192,9 @@ export const STRINGS_RU: Readonly<Record<StringKey, string>> = channelCopyTable(
   overlayBreakSoon: 'скоро',
   overlayBreakDue: 'пора',
   overlayCruiseOff: 'ВЫКЛ',
+  overlaySpeedLimitName: 'Ограничение скорости: {value}',
+  overlaySpeedLimitNoneName: 'Ограничение скорости: без ограничения',
+  overlaySpeedLimitUnavailableName: 'Ограничение скорости: нет данных',
   overlayHardModeLabel: 'Hard Mode',
   overlayHardModeShort: 'HM',
   overlayHardModeLost: 'потерян',
@@ -677,12 +683,12 @@ export function getOverlayLayoutText(layout: OverlayLayout, language: AppLanguag
  * (ET-045a), while the dashboard keeps "SDK average consumption" with its note.
  */
 export const OVERLAY_SECTION_TEXT: Readonly<Record<OverlaySectionId, string>> = Object.freeze({
-  'speed': 'Speed', 'gear': 'Gear', 'rpm': 'Engine RPM', 'cruise-control': 'Cruise control', 'fuel': 'Fuel', 'range': 'Estimated range', 'sdk-consumption': 'Consumption',
+  'speed': 'Speed', 'gear': 'Gear', 'rpm': 'Engine RPM', 'cruise-control': 'Cruise control', 'speed-limit': 'Speed limit', 'fuel': 'Fuel', 'range': 'Estimated range', 'sdk-consumption': 'Consumption',
   'cargo': 'Cargo', 'origin': 'Origin', 'destination': 'Destination', 'distance-driven': 'Distance driven', 'distance-remaining': 'Distance remaining',
   'deadline': 'Delivery deadline', 'expected-income': 'Expected income', 'game-time': 'Game time', 'mandatory-break': 'Next mandatory break'
 });
 export const OVERLAY_SECTION_TEXT_RU: Readonly<Record<OverlaySectionId, string>> = Object.freeze({
-  'speed': 'Скорость', 'gear': 'Передача', 'rpm': 'Обороты двигателя', 'cruise-control': 'Круиз-контроль', 'fuel': 'Топливо', 'range': 'Запас хода', 'sdk-consumption': 'Расход',
+  'speed': 'Скорость', 'gear': 'Передача', 'rpm': 'Обороты двигателя', 'cruise-control': 'Круиз-контроль', 'speed-limit': 'Ограничение скорости', 'fuel': 'Топливо', 'range': 'Запас хода', 'sdk-consumption': 'Расход',
   'cargo': 'Груз', 'origin': 'Отправление', 'destination': 'Назначение', 'distance-driven': 'Пройденное расстояние', 'distance-remaining': 'Оставшееся расстояние',
   'deadline': 'Срок доставки', 'expected-income': 'Ожидаемый доход', 'game-time': 'Игровое время', 'mandatory-break': 'До обязательного перерыва'
 });
@@ -692,12 +698,12 @@ export function getOverlaySectionText(section: OverlaySectionId, language: AppLa
 
 /** Short labels for the strip, cluster panel and HUD. */
 export const OVERLAY_SECTION_SHORT_TEXT: Readonly<Record<OverlaySectionId, string>> = Object.freeze({
-  'speed': 'Speed', 'gear': 'Gear', 'rpm': 'RPM', 'cruise-control': 'Cruise', 'fuel': 'Fuel', 'range': 'Range', 'sdk-consumption': 'Consumption',
+  'speed': 'Speed', 'gear': 'Gear', 'rpm': 'RPM', 'cruise-control': 'Cruise', 'speed-limit': 'Limit', 'fuel': 'Fuel', 'range': 'Range', 'sdk-consumption': 'Consumption',
   'cargo': 'Cargo', 'origin': 'From', 'destination': 'To', 'distance-driven': 'Driven', 'distance-remaining': 'Remaining',
   'deadline': 'Due', 'expected-income': 'Expected', 'game-time': 'Time', 'mandatory-break': 'Break'
 });
 export const OVERLAY_SECTION_SHORT_TEXT_RU: Readonly<Record<OverlaySectionId, string>> = Object.freeze({
-  'speed': 'Скорость', 'gear': 'Передача', 'rpm': 'Обороты', 'cruise-control': 'Круиз', 'fuel': 'Топливо', 'range': 'Запас хода', 'sdk-consumption': 'Расход',
+  'speed': 'Скорость', 'gear': 'Передача', 'rpm': 'Обороты', 'cruise-control': 'Круиз', 'speed-limit': 'Лимит', 'fuel': 'Топливо', 'range': 'Запас хода', 'sdk-consumption': 'Расход',
   'cargo': 'Груз', 'origin': 'Откуда', 'destination': 'Куда', 'distance-driven': 'Пройдено', 'distance-remaining': 'Осталось',
   'deadline': 'Срок', 'expected-income': 'Ожидается', 'game-time': 'Время', 'mandatory-break': 'Перерыв'
 });

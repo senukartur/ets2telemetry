@@ -36,6 +36,22 @@ function urgencyMarks(item: OverlayItem, name: string): {'data-urgency'?: string
 function hardModeMarks(item: OverlayHardModeItem): {'data-testid': string; 'data-state': string; 'aria-label': string} {
   return {'data-testid': item.testId, 'data-state': item.state, 'aria-label': item.name};
 }
+/**
+ * The speed limit road sign (ET-084) in a fixed box per layout and shape (renderer.css), so no value, state or font change
+ * resizes it. "SPEED" and "LIMIT" are sign art of the ATS sign beside its number: untranslated, hidden from assistive
+ * technology, and left out in the strip's small box. The accessible name is on the item that holds the sign.
+ */
+function SpeedLimitSign({item, variant}: {item: OverlayItem; variant: 'strip' | 'card' | 'cluster'}) {
+  const sign = item.sign!;
+  return <span className={`overlay-sign overlay-sign-${variant}`} data-shape={sign.shape} data-state={sign.state} data-digits={sign.digits}>
+    {sign.shape === 'rectangle' && variant !== 'strip' && sign.state === 'limit' ? <span className="overlay-sign-words" aria-hidden="true"><span>SPEED</span><span>LIMIT</span></span> : null}
+    <strong className="overlay-sign-number" data-testid={item.testId}>{sign.number}</strong>
+  </span>;
+}
+/** The accessible name of the item holding the sign or the HUD's sign line; nothing for any other item. */
+function signMarks(item: OverlayItem): {'aria-label'?: string} {
+  return item.sign ? {'aria-label': item.sign.name} : {};
+}
 /** "HM", struck through on a loss: the strip's and the HUD's label of the indicator. */
 function HardModeShort({item, className}: {item: OverlayHardModeItem; className: string}) {
   return <span className={`${className} overlay-hm-text${item.struck ? ' overlay-hm-struck' : ''}`}>{item.short}</span>;
@@ -58,9 +74,9 @@ function Strip({view}: {view: OverlayView}) {
     <Tags tags={view.tags} maxWidth={STRIP_TAG_MAX_WIDTH_CSS} />
     {view.groups.map((group, index) => <Fragment key={group.id}>
       {group.items.map((item, position) => <span key={item.id} className={index > 0 && position === 0 ? 'overlay-item overlay-group-start' : 'overlay-item'}
-        data-testid={`overlay-section-${item.id}`} aria-label={item.short} {...urgencyMarks(item, item.short)}
+        data-testid={`overlay-section-${item.id}`} aria-label={item.short} {...urgencyMarks(item, item.short)} {...signMarks(item)}
         style={{maxWidth: STRIP_ITEM_MAX_WIDTH_CSS[item.id], ...(STRIP_FIXED_WIDTH_SECTIONS.has(item.id) ? {minWidth: STRIP_ITEM_MAX_WIDTH_CSS[item.id]} : {})}}>
-        <SectionIcon id={item.id} /><Value item={item} />
+        {item.sign ? <SpeedLimitSign item={item} variant="strip" /> : <><SectionIcon id={item.id} /><Value item={item} /></>}
       </span>)}
     </Fragment>)}
     {/* ET-070: the fixed Hard Mode indicator after every section, with its own divider and the width main reserved for it. */}
@@ -80,8 +96,9 @@ function CardLayout({view}: {view: OverlayView}) {
   const parts = overlayCardParts(view);
   return <div className="overlay-surface overlay-card-body">
     <header className="overlay-card-header"><span className="overlay-source">{view.source}</span><Tags tags={view.tags} /></header>
-    {parts.hero.length ? <div className="overlay-card-hero" data-count={parts.hero.length} data-speed={String(parts.hero.some(item => item.id === 'speed'))} data-testid="overlay-card-hero" style={{height: parts.heroHeight}}>
+    {parts.hero.length || parts.sign ? <div className="overlay-card-hero" data-count={parts.hero.length} data-sign={String(parts.sign !== undefined)} data-speed={String(parts.hero.some(item => item.id === 'speed'))} data-testid="overlay-card-hero" style={{height: parts.heroHeight}}>
       {parts.hero.map(item => <div className={`overlay-card-${item.id}`} key={item.id} data-testid={`overlay-section-${item.id}`} aria-label={item.label}><Value item={item} /></div>)}
+      {parts.sign ? <div className="overlay-card-speed-limit" data-testid="overlay-section-speed-limit" {...signMarks(parts.sign)}><SpeedLimitSign item={parts.sign} variant="card" /></div> : null}
     </div> : null}
     <dl className="overlay-rows">
       {parts.rows.map(item => <div key={item.id} className="overlay-row" data-testid={`overlay-section-${item.id}`} {...urgencyMarks(item, item.label)}>
@@ -99,11 +116,15 @@ function CardLayout({view}: {view: OverlayView}) {
  * remaining sections in a side panel of fixed-height
  * rows that takes its content height (ET-012d); main reserves the window's height for the panel's rows. The gauge centre
  * (ET-045d) is a three-row grid: the gear above, the speed exactly centred and the RPM below, each capped so that it stays
- * inside the inner ring.
+ * inside the inner ring. The speed limit sign (ET-084) overlaps the gauge's top left corner; without a gauge it stands in a
+ * fixed slot in the gauge's place, so it never takes a panel row.
  */
 function Cluster({view}: {view: OverlayView}) {
   const gauge = view.gauge, ring = gauge?.rpm?.ring ?? 0, speedRing = gauge?.speed?.speedRing ?? 0;
+  const signItem = view.items.find(item => item.sign);
+  const sign = signItem ? <div className="overlay-cluster-sign" data-testid="overlay-section-speed-limit" {...signMarks(signItem)}><SpeedLimitSign item={signItem} variant="cluster" /></div> : null;
   return <div className="overlay-cluster-body">
+    {!gauge ? sign : null}
     {gauge ? <div className="overlay-gauge">
       <svg className="overlay-ring" viewBox="0 0 120 120" aria-hidden="true" focusable="false">
         {gauge.speed ? <circle className="overlay-ring-track overlay-speed-track" data-testid="overlay-speed-track" cx="60" cy="60" r={SPEED_RING_RADIUS} /> : null}
@@ -121,6 +142,7 @@ function Cluster({view}: {view: OverlayView}) {
         {gauge.gear ? <div className="overlay-gauge-gear" data-testid="overlay-section-gear" aria-label={gauge.gear.short}><Value item={gauge.gear} /></div> : null}
         {gauge.rpm ? <div className="overlay-gauge-rpm" data-testid="overlay-section-rpm" aria-label={gauge.rpm.short}><Value item={gauge.rpm} /></div> : null}
       </div>
+      {sign}
     </div> : null}
     <div className="overlay-surface overlay-panel">
       <div className="overlay-panel-tags"><span className="overlay-source">{view.source}</span><Tags tags={view.tags} /></div>
@@ -141,8 +163,9 @@ function Cluster({view}: {view: OverlayView}) {
 function Hud({view}: {view: OverlayView}) {
   return <div className="overlay-hud-lines">
     {view.tags.length ? <div className="overlay-hud-tags"><Tags tags={view.tags} /></div> : null}
-    {view.items.map(item => <div key={item.id} className="overlay-hud-line" data-testid={`overlay-section-${item.id}`} {...urgencyMarks(item, item.short)}>
-      <SectionIcon id={item.id} size={14} /><span className="overlay-label">{item.short}</span><Value item={item} />
+    {view.items.map(item => <div key={item.id} className="overlay-hud-line" data-testid={`overlay-section-${item.id}`} {...urgencyMarks(item, item.short)} {...signMarks(item)}>
+      {item.sign ? <span className="overlay-sign-glyph" data-shape={item.sign.shape} data-state={item.sign.state} aria-hidden="true" /> : <SectionIcon id={item.id} size={14} />}
+      <span className="overlay-label">{item.short}</span><Value item={item} />
     </div>)}
     <div className="overlay-hud-line overlay-hard-mode" {...hardModeMarks(view.hardMode)}>
       <HardModeIcon size={14} /><HardModeShort item={view.hardMode} className="overlay-label" />

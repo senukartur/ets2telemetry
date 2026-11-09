@@ -6,10 +6,10 @@ import {DEFAULT_OVERLAY_PLACEMENTS, normalizeFraction, normalizeScale, parseOver
 import {DEFAULT_OVERLAY_SECTIONS, DEFAULT_OVERLAY_SETTINGS, isOverlayLayout, OVERLAY_LAYOUTS, OVERLAY_SECTION_IDS} from './overlay-sections';
 import {DEFAULT_GEAR_DISPLAY, DEFAULT_UNIT_PROFILES, isGearDisplayMode, isUnitProfile, UNIT_GAMES} from './unit-profiles';
 
-// Settings file format v14 (docs/settings.md). Pure parsing and serialization; the store owns file access.
+// Settings file format v15 (docs/settings.md). Pure parsing and serialization; the store owns file access.
 
 export const SETTINGS_FORMAT = 'ets2telemetry.settings';
-export const SETTINGS_VERSION = 14;
+export const SETTINGS_VERSION = 15;
 /** Larger files are rejected as invalid without being parsed. */
 export const MAX_SETTINGS_BYTES = 64 * 1024;
 
@@ -54,7 +54,7 @@ export const DEFAULT_SETTINGS: Settings = Object.freeze({
 export type SettingsField = 'nowPlaying.enabled' | 'nowPlaying.style' | 'nowPlaying.backgroundOpacity' | 'nowPlaying.position' | 'overlay.backgroundOpacity' | 'overlay.enabled' | 'language' | 'autostart' | 'theme' | `units.${UnitGame}` | `gearDisplay.${UnitGame}` | 'overlay.layout' | 'overlay.sections' | `overlay.sections.${OverlaySectionId}`
   | 'overlay.placements' | `overlay.placements.${OverlayLayout}`;
 /** Set when the file was upgraded in memory from an older format; the file itself stays unchanged until the next save. */
-type Migrated = {migratedFrom?: 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9 | 10 | 11 | 12 | 13};
+type Migrated = {migratedFrom?: 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9 | 10 | 11 | 12 | 13 | 14};
 export type ParsedSettings =
   | ({state: 'loaded'; settings: Settings} & Migrated)
   /** A valid file with some invalid or missing fields; they use defaults until the next save rewrites them. */
@@ -101,6 +101,9 @@ const isRecord = (value: unknown): value is Record<string, unknown> => typeof va
  * v13 -> v14 adds the theme preference as dark (ET-082, owner decision of November 9, 2026: existing users stay dark; only a
  * new install follows the system). A stray pre-v14 `theme` key is replaced, as v8 -> v9 did for `gearDisplay`. The bump makes
  * an older build read a v14 file as newer-version instead of dropping the theme on its next save.
+ * v14 -> v15 adds the overlay section `speed-limit`, switched on also for upgraders (ET-084, as ET-071 did for cruise control),
+ * on a copy of an `overlay.sections` record exactly like v12 -> v13, so every other saved choice is preserved. The bump makes
+ * an older build read a v15 file as newer-version instead of dropping the new key on its next save.
  * Version 0 and below have no path.
  */
 const MIGRATIONS: ReadonlyMap<number, (raw: Record<string, unknown>) => Record<string, unknown>> = new Map<number, (raw: Record<string, unknown>) => Record<string, unknown>>([
@@ -118,7 +121,9 @@ const MIGRATIONS: ReadonlyMap<number, (raw: Record<string, unknown>) => Record<s
   [11, (raw: Record<string, unknown>) => ({...raw, version: 12, nowPlaying: {...DEFAULT_NOW_PLAYING, position: {...DEFAULT_NOW_PLAYING.position}}})],
   [12, (raw: Record<string, unknown>) => ({...raw, version: 13,
     overlay: isRecord(raw.overlay) && isRecord(raw.overlay.sections) ? {...raw.overlay, sections: {...raw.overlay.sections, 'cruise-control': true}} : raw.overlay})],
-  [13, (raw: Record<string, unknown>) => ({...raw, version: 14, theme: UPGRADED_THEME})]
+  [13, (raw: Record<string, unknown>) => ({...raw, version: 14, theme: UPGRADED_THEME})],
+  [14, (raw: Record<string, unknown>) => ({...raw, version: 15,
+    overlay: isRecord(raw.overlay) && isRecord(raw.overlay.sections) ? {...raw.overlay, sections: {...raw.overlay.sections, 'speed-limit': true}} : raw.overlay})]
 ]);
 
 /** Upgrades an older raw document to the current version through the migration chain, or undefined without a complete path. */
@@ -196,7 +201,7 @@ export function parseSettings(bytes: Uint8Array): ParsedSettings {
     document = migrateToCurrent(raw, version);
     if (!document) return {state: 'unsupported-older'};
   }
-  const migrated: Migrated = version === 1 || version === 2 || version === 3 || version === 4 || version === 5 || version === 6 || version === 7 || version === 8 || version === 9 || version === 10 || version === 11 || version === 12 || version === 13 ? {migratedFrom: version} : {};
+  const migrated: Migrated = version === 1 || version === 2 || version === 3 || version === 4 || version === 5 || version === 6 || version === 7 || version === 8 || version === 9 || version === 10 || version === 11 || version === 12 || version === 13 || version === 14 ? {migratedFrom: version} : {};
   const fallbackFields: SettingsField[] = [];
 
   let language: AppLanguage = DEFAULT_APP_LANGUAGE;
@@ -233,7 +238,7 @@ export function parseSettings(bytes: Uint8Array): ParsedSettings {
 }
 
 /**
- * The exact v14 file content: UTF-8 without a byte order mark, two-space indentation, a trailing newline, language,
+ * The exact v15 file content: UTF-8 without a byte order mark, two-space indentation, a trailing newline, language,
  * autostart, the theme, both games' unit profiles followed by their gear display modes,
  * all sixteen overlay sections in canonical order and the placements of all four layouts in canonical order, each with
  * x and y rounded to four decimals and the scale to two.

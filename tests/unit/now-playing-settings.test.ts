@@ -8,8 +8,8 @@ import {SettingsStore} from '../../apps/desktop/src/settings-store';
 it('purely migrates v11 defaults without changing existing fields or SQLite, and independently falls back invalid media fields', () => {
   const old = {...DEFAULT_SETTINGS, nowPlaying: undefined, format: 'ets2telemetry.settings', version: 11, language: 'ru', autostart: true};
   const before = structuredClone(old), migrated = migrateToCurrent(old, 11);
-  // ET-071: the chain continues to v13, whose step only sets cruise control on, which the current defaults already have; ET-082: v14 adds the upgraders' dark theme.
-  expect(migrated).toEqual({...old, version: 14, theme: 'dark', nowPlaying: {enabled: false, style: 'minimal', backgroundOpacity: 80, position: {displayId: null, x: 1, y: 0.75}}}); expect(old).toEqual(before);
+  // ET-071: the chain continues to v13, whose step only sets cruise control on, which the current defaults already have; ET-082: v14 adds the upgraders' dark theme; ET-084: v15 only sets the speed limit on, which the current defaults also have.
+  expect(migrated).toEqual({...old, version: 15, theme: 'dark', nowPlaying: {enabled: false, style: 'minimal', backgroundOpacity: 80, position: {displayId: null, x: 1, y: 0.75}}}); expect(old).toEqual(before);
   const current = {...DEFAULT_SETTINGS, format: 'ets2telemetry.settings', version: 12, nowPlaying: {enabled: true, style: 'bad', backgroundOpacity: 39, position: {displayId: null, x: 2, y: 0}}};
   const parsed = parseSettings(Buffer.from(JSON.stringify(current)));
   expect(parsed).toMatchObject({state: 'loaded-with-fallbacks', settings: {nowPlaying: {...DEFAULT_NOW_PLAYING, enabled: true}}, fallbackFields: ['nowPlaying.style', 'nowPlaying.backgroundOpacity', 'nowPlaying.position']});

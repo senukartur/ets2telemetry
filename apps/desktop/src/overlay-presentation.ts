@@ -24,6 +24,7 @@ const SECTION_FIELDS: Readonly<Record<OverlaySectionId, {parts: readonly LiveFie
   'gear': {parts: ['gear']},
   'rpm': {parts: ['engine-rpm']},
   'cruise-control': {parts: ['cruise-control']},
+  'speed-limit': {parts: ['speed-limit']},
   'fuel': {parts: ['fuel'], detail: 'fuel-level'},
   'range': {parts: ['estimated-range']},
   'sdk-consumption': {parts: ['sdk-average-consumption']},
@@ -41,11 +42,11 @@ const SECTION_FIELDS: Readonly<Record<OverlaySectionId, {parts: readonly LiveFie
 const BASELINE_SECTIONS: ReadonlySet<OverlaySectionId> = new Set<OverlaySectionId>(['speed', 'fuel']);
 /**
  * Sections that show a dash, not nothing, while current when a carried v1 observation gives them no value (ET-052 MB9): the
- * next mandatory break or the cruise control speed (ET-071) is "not supported" by an older plugin, "not observed" by the
+ * next mandatory break, the cruise control speed (ET-071) or the speed limit (ET-084) is "not supported" by an older plugin, "not observed" by the
  * game, invalid, or its v1 data is stale. Without a v1 observation the section follows ET-012a's L5 rule like every other
  * v1-only section.
  */
-const DASH_WHEN_CARRIED: ReadonlySet<OverlaySectionId> = new Set<OverlaySectionId>(['mandatory-break', 'cruise-control']);
+const DASH_WHEN_CARRIED: ReadonlySet<OverlaySectionId> = new Set<OverlaySectionId>(['mandatory-break', 'cruise-control', 'speed-limit']);
 
 /**
  * The overlay's read-only display projection, built in main. Canonical v0 m/s and liters remain unchanged; values are
@@ -75,6 +76,10 @@ const DASH_WHEN_CARRIED: ReadonlySet<OverlaySectionId> = new Set<OverlaySectionI
  * The cruise control speed (ET-071) also comes from the v1 projection (minor 3) and is not tied to the job. A set speed is
  * the speed section's whole number and unit; zero is `off`, a value and never a dash (REG-009); no value is a dash like
  * the break.
+ *
+ * The speed limit (ET-084) comes from the v1 projection (minor 4) and is not tied to the job. The section text is the live
+ * field's as is, a whole number and unit or `none` at zero and below, so there is no second conversion path. No value is a
+ * dash like the break, and a stale value is never kept or smoothed.
  *
  * `editing` (ET-012b) only marks the overlay edit mode for the renderer; it changes no section or value.
  *

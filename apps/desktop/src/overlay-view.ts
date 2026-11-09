@@ -2,7 +2,8 @@ import type {AppLanguage, OverlayHardModeState, OverlayLayout, OverlayPresentati
 import {OVERLAY_HARD_MODE_RULES, sanitizeOverlayHardMode} from './overlay-hard-mode';
 import {DEFAULT_OVERLAY_OPACITY, isOverlayOpacity} from './overlay-opacity';
 import {CRUISE_CONTROL_OFF} from '../../../packages/telemetry-core/src/cruise-control';
-import {CARD_ROW_HEIGHT_CSS} from './overlay-rows';
+import {SPEED_LIMIT_NONE} from '../../../packages/telemetry-core/src/speed-limit';
+import {cardHeroHeightCss} from './overlay-rows';
 import {localizedMeasurement} from './screens/app-copy';
 import {CLUSTER_GAUGE_SECTIONS, OVERLAY_GROUPS, type OverlayGroupId} from './overlay-sections';
 import {getOverlaySectionShortText, getOverlaySectionText, getStrings} from './strings';
@@ -13,6 +14,18 @@ import {localizeDeadlineString, localizeGameTimeString, translateUnit} from './i
 // formatter-localization.test.ts binds these localization paths to real formatter output; unit-profiles.test.ts guards
 // against duplicated numeric conversion constants and rounding here.
 
+/**
+ * The speed limit road sign (ET-084). `shape` follows the game: a rectangle for ATS, otherwise a circle. `state` is
+ * `limit` with a number; `no-limit` is the dashed form with a dash, both for no limit and for an unavailable reading, which
+ * only `name`, the accessible name in words, tells apart. `digits` selects the smaller font at three digits.
+ */
+export interface OverlaySign {
+  shape: 'circle' | 'rectangle';
+  state: 'limit' | 'no-limit';
+  number: string;
+  digits: number;
+  name: string;
+}
 export interface OverlayItem {
   id: OverlaySectionId;
   testId: `overlay-${OverlaySectionId}`;
@@ -44,6 +57,8 @@ export interface OverlayItem {
    */
   urgency?: OverlayUrgency;
   urgencyName?: string;
+  /** Set only on the `speed-limit` item: `value` and `unit` feed the HUD line, this the road sign of the other layouts. */
+  sign?: OverlaySign;
   unavailable: boolean;
 }
 /**
@@ -176,6 +191,18 @@ export function overlayView(presentation: OverlayPresentation = OVERLAY_PLACEHOL
       return section.text.endsWith(suffix) ? {...base, value: section.text.slice(0, -suffix.length), unit: translateUnit(presentation.speedUnit, language)}
         : {...base, value: section.text};
     }
+    // ET-084: a limit splits into number and unit like a set speed. No limit and no reading are a dash without a unit, and
+    // the same fixed sign, so a change between the three states never moves anything; only the accessible name differs.
+    if (section.id === 'speed-limit') {
+      const shape = presentation.source === 'ATS' ? 'rectangle' as const : 'circle' as const;
+      const dashed = (name: string): OverlayItem => ({...base, value: DASH, sign: {shape, state: 'no-limit', number: DASH, digits: DASH.length, name}});
+      if (!available) return dashed(strings.overlaySpeedLimitUnavailableName);
+      if (section.text === SPEED_LIMIT_NONE) return dashed(strings.overlaySpeedLimitNoneName);
+      const suffix = ` ${presentation.speedUnit}`, unit = section.text.endsWith(suffix) ? translateUnit(presentation.speedUnit, language) : undefined;
+      const number = unit === undefined ? section.text : section.text.slice(0, -suffix.length);
+      const sign: OverlaySign = {shape, state: 'limit', number, digits: number.length, name: strings.overlaySpeedLimitName.replace('{value}', unit === undefined ? number : `${number} ${unit}`)};
+      return {...base, value: number, ...(unit === undefined ? {} : {unit}), sign};
+    }
     let value = available ? section.text : DASH;
     if (available) {
       if (section.id === 'game-time') {
@@ -207,15 +234,20 @@ export function overlayView(presentation: OverlayPresentation = OVERLAY_PLACEHOL
     layout: presentation.layout, source: presentation.source, origin: presentation.origin, status: presentation.status, freshness: presentation.freshness,
     paused: presentation.paused, dim: presentation.freshness !== 'current', tags, items, groups,
     ...(gaugeShown ? {gauge: {speed: byId.get('speed'), gear: byId.get('gear'), rpm: byId.get('rpm')}} : {}),
-    panel: gaugeShown ? items.filter(item => !CLUSTER_GAUGE_SECTIONS.has(item.id)) : items,
+    // ET-084: the speed limit sign sits on the gauge or in its place, never in the side panel.
+    panel: items.filter(item => !CLUSTER_GAUGE_SECTIONS.has(item.id) && !item.sign),
     hardMode: overlayHardModeItem(presentation.hardMode, language),
     backgroundOpacity: isOverlayOpacity(presentation.backgroundOpacity) ? presentation.backgroundOpacity : DEFAULT_OVERLAY_OPACITY,
     editing: presentation.editing === true, contentAnchorY: contentAnchorY(presentation)
   };
 }
 
-/** Card hierarchy uses precisely the existing reserved rows, including every subset of speed/gear/RPM. */
+/**
+ * Card hierarchy uses precisely the reserved rows, including every subset of speed/gear/RPM. The speed limit sign (ET-084)
+ * joins the hero in its own slot, so it is neither a hero part nor a row.
+ */
 export function overlayCardParts(view: Pick<OverlayView, 'items'>) {
   const hero = view.items.filter(item => CLUSTER_GAUGE_SECTIONS.has(item.id));
-  return {hero, rows: view.items.filter(item => !CLUSTER_GAUGE_SECTIONS.has(item.id)), heroHeight: hero.length * CARD_ROW_HEIGHT_CSS};
+  const sign = view.items.find(item => item.sign);
+  return {hero, sign, rows: view.items.filter(item => !CLUSTER_GAUGE_SECTIONS.has(item.id) && !item.sign), heroHeight: cardHeroHeightCss(hero.length, sign !== undefined)};
 }

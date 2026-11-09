@@ -16,6 +16,7 @@ export function overlayExample(settings: OverlaySettings, language: AppLanguage,
     rpm: {id: 'rpm', state: 'value', text: '1420 rpm', ring: 1420 / 3000},
     'cruise-control': cruise === 'unavailable' ? {id: 'cruise-control', state: 'unavailable'}
       : {id: 'cruise-control', state: 'value', text: cruise === 'active' ? '90 km/h' : CRUISE_CONTROL_OFF},
+    'speed-limit': {id: 'speed-limit', state: 'value', text: '90 km/h'},
     fuel: {id: 'fuel', state: 'value', text: '620 L', detail: '72%'},
     range: {id: 'range', state: 'value', text: '1820 km'},
     'sdk-consumption': {id: 'sdk-consumption', state: 'value', text: '34 L/100 km'},

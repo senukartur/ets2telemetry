@@ -311,7 +311,7 @@ it('validates gear display requests before IPC and forwards exactly a game and a
   expect(ipc.invoke.mock.calls).toEqual([['settings:set-gear-display', 'ets2', 'manual'], ['settings:set-gear-display', 'ats', 'automatic']]);
 });
 // ET-012a: two appended overlay settings methods; each validates before IPC and forwards only the validated value.
-const ALL_ON = {'speed': true, 'gear': true, 'rpm': true, 'cruise-control': true, 'fuel': true, 'range': true, 'sdk-consumption': true, 'cargo': true, 'origin': true,
+const ALL_ON = {'speed': true, 'gear': true, 'rpm': true, 'cruise-control': true, 'speed-limit': true, 'fuel': true, 'range': true, 'sdk-consumption': true, 'cargo': true, 'origin': true,
   'destination': true, 'distance-driven': true, 'distance-remaining': true, 'deadline': true, 'expected-income': true, 'game-time': true, 'mandatory-break': true};
 const without = (record: Record<string, boolean>, key: string) => Object.fromEntries(Object.entries(record).filter(([name]) => name !== key));
 it('validates overlay layout requests before IPC and forwards exactly one layout id', async () => {

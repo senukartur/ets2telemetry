@@ -48,7 +48,7 @@ it.each(['en', 'ru'] as const)('renders every overlay control together with uniq
     if (requirement) expect(html).not.toContain(escaped(getOverlayRequirementText(requirement, language)));
   }
   expect(html).toContain('data-testid="overlay-sections-count"');
-  expect(html).toContain(language === 'ru' ? 'показано 16 из 16' : 'shown 16 of 16');
+  expect(html).toContain(language === 'ru' ? 'показано 17 из 17' : 'shown 17 of 17');
   expect(html.match(/class="yu-layout-option" data-selected="true"/g)).toHaveLength(1);
   expect(html).toContain('data-testid="overlay-preview" data-layout="strip"');
 });
@@ -60,7 +60,7 @@ it('keeps final-section and read-only guards on the unified controls', () => {
   expect(control(single, 'overlay-switch-speed')).toContain('disabled');
   expect(control(single, 'overlay-switch-rpm')).not.toContain('disabled');
   expect(single).toContain('data-testid="overlay-last-section"');
-  expect(single).toContain('shown 1 of 16');
+  expect(single).toContain('shown 1 of 17');
   const locked = render({...view, writable: false});
   for (const id of ['overlay-enabled', 'overlay-edit-start', ...OVERLAY_SECTION_IDS.map(id => `overlay-switch-${id}`),
     ...Object.keys(OVERLAY_PRESETS).map(id => `overlay-preset-${id}`), 'overlay-layout']) expect(control(locked, id), id).toContain('disabled');
