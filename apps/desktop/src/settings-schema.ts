@@ -240,7 +240,7 @@ export function parseSettings(bytes: Uint8Array): ParsedSettings {
 /**
  * The exact v15 file content: UTF-8 without a byte order mark, two-space indentation, a trailing newline, language,
  * autostart, the theme, both games' unit profiles followed by their gear display modes,
- * all sixteen overlay sections in canonical order and the placements of all four layouts in canonical order, each with
+ * all seventeen overlay sections in canonical order and the placements of all four layouts in canonical order, each with
  * x and y rounded to four decimals and the scale to two.
  */
 export function serializeSettings(settings: Settings): string {

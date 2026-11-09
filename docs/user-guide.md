@@ -166,7 +166,7 @@ Overlay measurements use whole numbers rounded to the nearest unit (`200.2 km` �
 
 Open **Settings → Overlay** and change **Show overlay** (Russian: **Показывать оверлей**). The switch changes after saving succeeds and stays saved after restarting. Hiding the overlay keeps telemetry updating. It does not change whether recording is available. Turning it off during position editing discards unsaved position and size changes; editing is unavailable while it is off. Turning it on shows it when a supported game is in front and current telemetry/window information is available. If saving fails, the previous setting and edit draft stay in effect.
 
-The **Preview** card uses invented example data, never your live game telemetry. It follows the selected layout, size, background opacity and enabled sections, including size and opacity drafts while you edit. Large layouts fit within the preview; Strip wraps whole items. This illustrates appearance rather than the exact position in a game window. The Sections card groups all sixteen switches under Driving, Fuel, Job and Time and counts the enabled ones; its presets change those same switches.
+The **Preview** card uses invented example data, never your live game telemetry. It follows the selected layout, size, background opacity and enabled sections, including size and opacity drafts while you edit. Large layouts fit within the preview; Strip wraps whole items. This illustrates appearance rather than the exact position in a game window. The Sections card groups all seventeen switches under Driving, Fuel, Job and Time and counts the enabled ones; its presets change those same switches.
 
 ## Next mandatory break on the overlay (ET-052)
 
