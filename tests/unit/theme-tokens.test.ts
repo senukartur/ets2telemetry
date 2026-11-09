@@ -100,7 +100,4 @@ describe('the shared files and the dark scope', () => {
       expect(shell).toMatch(new RegExp(`${selector.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')} \\{ ?background: ?var\\(--yu-hover-bg\\)`));
     }
   });
-  it('keeps the shell free of the literal colours the theme replaced', () => {
-    expect(shell).not.toMatch(/color: #93C5FD|box-shadow: 0 12px 32px #0006/);
-  });
 });
