@@ -58,9 +58,12 @@ jobs:
       - name: Staging run number on a branch dispatch
         if: github.event_name == 'workflow_dispatch' && startsWith(github.ref, 'refs/heads/') && github.ref != 'refs/heads/main'
         run: |
-          if ($env:GITHUB_REPOSITORY -ieq 'senukartur/ets2telemetry' -and !$env:ETS2TELEMETRY_DASHBOARD_ORIGIN) { throw 'Set the staging Dashboard origin in the repository Actions variables.' }
           if ($env:GITHUB_RUN_NUMBER -cnotmatch '^[1-9][0-9]{0,5}$') { throw 'GITHUB_RUN_NUMBER must be 1 to 6 digits for the staging version.' }
           Add-Content -LiteralPath $env:GITHUB_ENV -Value ('ETS2TELEMETRY_STAGING_RUN_NUMBER=' + $env:GITHUB_RUN_NUMBER.PadLeft(6, '0'))
+      - name: Require the official staging Dashboard origin
+        if: github.repository == 'senukartur/ets2telemetry' && github.ref != 'refs/heads/main' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository)
+        run: |
+          if (!$env:ETS2TELEMETRY_DASHBOARD_ORIGIN) { throw 'Set the staging Dashboard origin in the repository Actions variables.' }
       - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5
         with:
           node-version: '24.19.0'
@@ -711,9 +714,12 @@ jobs:
       # a run number beyond 6 digits stops the job instead of wrapping.
       - name: Staging run number for the release version
         run: |
-          if ($env:GITHUB_REPOSITORY -ieq 'senukartur/ets2telemetry' -and !$env:ETS2TELEMETRY_DASHBOARD_ORIGIN) { throw 'Set the staging Dashboard origin in the repository Actions variables.' }
           if ($env:GITHUB_RUN_NUMBER -cnotmatch '^[1-9][0-9]{0,5}$') { throw 'GITHUB_RUN_NUMBER must be 1 to 6 digits for the staging version.' }
           Add-Content -LiteralPath $env:GITHUB_ENV -Value ('ETS2TELEMETRY_STAGING_RUN_NUMBER=' + $env:GITHUB_RUN_NUMBER.PadLeft(6, '0'))
+      - name: Require the official staging Dashboard origin
+        if: github.repository == 'senukartur/ets2telemetry'
+        run: |
+          if (!$env:ETS2TELEMETRY_DASHBOARD_ORIGIN) { throw 'Set the staging Dashboard origin in the repository Actions variables.' }
       - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5
         with:
           node-version: '24.19.0'

@@ -1,7 +1,10 @@
 import {describe,it,expect,vi} from 'vitest';
 import {randomUUID} from 'node:crypto';
+import {execFile} from 'node:child_process';
+import {promisify} from 'node:util';
 import {initialDashboardUploadStatus,isDashboardUploadStatus,isDashboardToken,isReleaseDashboardOrigin} from '../../packages/contracts/src/dashboard-upload';
 import {configuredDashboardOrigin} from '../../apps/desktop/src/dashboard-upload/config';
+import {ACTIVE_CHANNEL, RELEASE_CHANNELS} from '../../apps/desktop/src/channel';
 import {connectionResponse,registrationResponse,jsonBody} from '../../apps/desktop/src/dashboard-upload/control-response';
 import {isUploadServiceRequest,isUploadServiceCancel,isUploadServiceReply,uploadReplyMatches} from '../../apps/desktop/src/dashboard-upload/service-contract';
 const bytes=(v:unknown)=>Buffer.from(JSON.stringify(v));
@@ -15,13 +18,28 @@ describe('REG-010/012 closed Dashboard upload boundaries',()=>{
     const origin = 'https://dashboard.example';
     vi.stubGlobal('__ETS2TELEMETRY_DASHBOARD_ORIGIN__', origin);
     try {
-      // Unbundled tests use the production identity, while staging artifacts carry their own channel define.
-      expect(configuredDashboardOrigin('production')).toBe(origin);
-      expect(configuredDashboardOrigin('staging')).toBeNull();
+      expect(configuredDashboardOrigin(ACTIVE_CHANNEL)).toBe(origin);
+      const otherChannel = RELEASE_CHANNELS.find(channel => channel !== ACTIVE_CHANNEL)!;
+      expect(configuredDashboardOrigin(otherChannel)).toBeNull();
     } finally {
       vi.unstubAllGlobals();
     }
   });
+  it('fails closed when the embedded origin is invalid',()=>{
+    vi.stubGlobal('__ETS2TELEMETRY_DASHBOARD_ORIGIN__', 'http://dashboard.example');
+    try {
+      expect(()=>configuredDashboardOrigin(ACTIVE_CHANNEL)).toThrow('INVALID_UPLOAD_CONFIGURATION');
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+  it('rejects an invalid staging build origin before bundling',async()=>{
+    const env: NodeJS.ProcessEnv = {...process.env, ETS2TELEMETRY_DASHBOARD_ORIGIN: 'http://dashboard.example'};
+    delete env.ETS2TELEMETRY_BUILD_CHANNEL;
+    delete env.ETS2TELEMETRY_STAGING_RUN_NUMBER;
+    await expect(promisify(execFile)(process.execPath, ['scripts/build.mjs'], {env, timeout: 8000}))
+      .rejects.toThrow('ETS2TELEMETRY_DASHBOARD_ORIGIN must be a canonical non-loopback HTTPS origin.');
+  }, 10000);
   it('never trims or transforms the exact bounded ASCII token',()=>{expect(isDashboardToken(token)).toBe(true);for(const value of [` ${token}`,`${token}\n`,token.replace('vtc1','VTC1'),'x'.repeat(129),null])expect(isDashboardToken(value)).toBe(false);});
   it('validates actual pinned control responses and caps compatible limits',()=>{
     const response={contract:{major:1,minor:0},accountId:'a',companyId:'c',identityEpoch:'e',limits:{maxEventBytes:100000,maxDepth:20,eventsPerMinute:120,burst:30}};

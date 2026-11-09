@@ -953,6 +953,7 @@ export async function runUiSmoke({application, dashboard, overlay, source, sourc
           assert.ok((await dashboard.getByTestId('account.unconfigured').textContent()).includes(language === 'en' ? 'Your journal and local recording continue to work.' : 'Журнал и локальная запись продолжают работать.'));
         }
         for (const control of ['account.confirmation', 'account.counts', 'account.firstSync', 'account.disconnect']) assert.equal(await dashboard.getByTestId(control).count(), 0, `UI_DISCONNECTED_CONTROL_${control}`);
+        record.dashboardConfigured = await dashboard.getByTestId('account.token.input').isVisible();
         record.flags.accountBuildConfiguration = true;
         await dashboard.getByTestId('tab-hardMode').focus(); await dashboard.keyboard.press('Enter');
         await dashboard.waitForFunction(() => globalThis.document.activeElement?.getAttribute('data-testid') === 'screen-title');
@@ -1077,7 +1078,8 @@ export async function runUiSmoke({application, dashboard, overlay, source, sourc
       } else if (config.uiCase === 'journal') {
         await screen(dashboard, 'journal');
         await until(() => dashboard.getByTestId('journal-row').count(), count => count === 50, 'UI_JOURNAL_FIRST_PAGE');
-        assert.equal(await dashboard.getByTestId('shell.status.sync').count(), config.dashboardConfigured ? 1 : 0);
+        record.dashboardConfigured = await dashboard.getByTestId('shell.status.sync').isVisible();
+        assert.equal(record.dashboardConfigured, config.dashboardConfigured);
         assert.equal(await dashboard.getByTestId('journal-sync-column').count(), 0);
         assert.equal(await dashboard.getByTestId('journal-row-sync').count(), 0);
         record.flags.syncHidden = true;

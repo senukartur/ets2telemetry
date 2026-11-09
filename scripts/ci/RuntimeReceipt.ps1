@@ -877,6 +877,7 @@ function Test-UiReceipt {
         'overlay' { $flags += @('fourLayouts','transparent','contained','independentFont','missing','paused','staleDashes','heroSubsets','formatterProfiles','stableNumbers','opacityKeyboardFocus','opacityGestures','backgroundOpacityOverlay','clusterRpmContained','scaleRange','clusterSpeedArc','gearDisplayManual','gearboxLabels','overlayExamplePreview'); $screens = @('strip','card','cluster','hud') }
     }
     foreach ($flag in $flags) { if ($ui.flags.$flag -isnot [bool] -or !$ui.flags.$flag) { return $false } }
+    if ($ExpectedUiCase -cin @('shell','journal') -and $ui.dashboardConfigured -isnot [bool]) { return $false }
     if ($ExpectedUiCase -ceq 'shell' -and !(Test-UploadUiReceipt -Value $Driver.uploadUi -Directory $Directory -Phases $Driver.phases)) { return $false }
     if ($ExpectedUiCase -ceq 'journal' -and ($ui.flags.syncHidden -isnot [bool] -or !$ui.flags.syncHidden)) { return $false }
     # Overlay: 64 layout screenshots, six English scale references, and five Settings previews per language at 1280x800.

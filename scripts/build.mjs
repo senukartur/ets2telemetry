@@ -13,6 +13,9 @@ const sources = sourceHashes();
 const resolved = resolveBuild();
 const define = {__ETS2TELEMETRY_BUILD_CHANNEL__: JSON.stringify(resolved.channel), __ETS2TELEMETRY_APP_VERSION__: JSON.stringify(resolved.version)};
 const dashboardOrigin = process.env.ETS2TELEMETRY_DASHBOARD_ORIGIN || null;
+if (dashboardOrigin !== null && resolved.channel === 'production') {
+  throw new Error('Dashboard upload has not been enabled for production builds.');
+}
 if (dashboardOrigin !== null && !isReleaseDashboardOrigin(dashboardOrigin)) {
   throw new Error('ETS2TELEMETRY_DASHBOARD_ORIGIN must be a canonical non-loopback HTTPS origin.');
 }
