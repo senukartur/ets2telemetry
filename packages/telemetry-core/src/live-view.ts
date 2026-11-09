@@ -10,6 +10,7 @@ import {
 } from './format';
 import type {GearLabels} from './gear-labels';
 import {formatCruiseControl} from './cruise-control';
+import {formatSpeedLimit} from './speed-limit';
 import {breakUrgency, formatMandatoryBreak, type NotableBreakUrgency} from './mandatory-break';
 import {missing, valueOf, type GameModeView, type LiveTrailer, type LiveTruck, type MissingReason, type NamedEntity, type NormalizedLiveState, type Reading} from './readings';
 
@@ -18,7 +19,7 @@ export type ViewReason = MissingReason | 'not-current' | 'zero-consumption' | 'n
 export type FieldNote =
   'sdk-mean' | 'ats-mostly-static' | 'game-estimate' | 'job-offer-excludes-ferry' | 'game-time' | 'game-world-coordinates' | 'cargo-market-only';
 export type LiveFieldId =
-  'speed' | 'gear' | 'engine-rpm' | 'cruise-control' | 'fuel' | 'fuel-capacity' | 'fuel-level' | 'sdk-average-consumption' | 'estimated-range' | 'odometer' |
+  'speed' | 'gear' | 'engine-rpm' | 'cruise-control' | 'speed-limit' | 'fuel' | 'fuel-capacity' | 'fuel-level' | 'sdk-average-consumption' | 'estimated-range' | 'odometer' |
   'route-remaining' | 'game-time' | 'deadline' | 'mandatory-break' | 'cargo' | 'source-city' | 'source-company' | 'destination-city' | 'destination-company' |
   'cargo-mass' | 'market' | 'special-job' | 'cargo-loaded' | 'planned-distance' | 'expected-income' | 'truck' | 'truck-plate' | 'trailers' |
   'position' | 'bearing' | 'game-mode' | 'event-loss';
@@ -193,7 +194,9 @@ export function buildLiveView(live: LiveViewSource, state: NormalizedLiveState |
       f('gear', s.gear, value => formatGear(value, gear.mode, gear.labels, gear.crawler)),
       f('engine-rpm', s.engineRpm, formatRpm),
       // v1 only (minor 3): the set speed in the profile's speed unit, or `off` at zero (ET-071).
-      f('cruise-control', s.cruiseControl, value => formatCruiseControl(value, units.speed))
+      f('cruise-control', s.cruiseControl, value => formatCruiseControl(value, units.speed)),
+      // v1 only (minor 4): the limit in whole units of the profile's speed unit, or `none` at zero or below (ET-084).
+      f('speed-limit', s.speedLimit, value => formatSpeedLimit(value, units.speed))
     ]},
     {id: 'fuel', fields: [
       f('fuel', s.fuel, value => formatVolume(value, units.volume, 1)),
@@ -264,7 +267,7 @@ function unknownState(): NormalizedLiveState {
   return {
     protocol: 'v0', simulation: 'unavailable', speed: none, gear: none, engineRpm: none, fuel: none, fuelCapacity: none, averageConsumption: none,
     estimatedRange: none, odometer: none, navigationDistance: none, gameTime: {minutes: none, clockId: ''}, worldPlacement: none, job: none,
-    truck: none, trailers: none, gameMode: none, eventLoss: none, gearbox: none, nextMandatoryBreak: none, cruiseControl: none,
+    truck: none, trailers: none, gameMode: none, eventLoss: none, gearbox: none, nextMandatoryBreak: none, cruiseControl: none, speedLimit: none,
     configurationRevision: '0'
   };
 }

@@ -15,6 +15,7 @@ export const APP_COPY_KEYS: Readonly<Record<string, I18nKey>> = Object.freeze(ch
   "Gear": "copy.gear",
   "Engine RPM": "copy.engine-rpm",
   "Cruise control": "copy.cruise-control",
+  "Speed limit": "copy.speed-limit",
   "Fuel": "copy.fuel",
   "Fuel capacity": "copy.fuel-capacity",
   "Fuel level": "copy.fuel-level",

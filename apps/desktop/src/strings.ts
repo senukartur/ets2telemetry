@@ -614,7 +614,7 @@ export function getSettingsStateText(state: SettingsState, language: AppLanguage
 // Live dashboard labels (ET-010 N5). Each map covers every telemetry-core id, so a new id fails to compile until it
 // has a text. Values themselves are formatted by telemetry-core; these maps hold only labels, reasons and notes.
 export const LIVE_FIELD_TEXT: Readonly<Record<LiveFieldId, string>> = Object.freeze({
-  'speed': 'Speed', 'gear': 'Gear', 'engine-rpm': 'Engine RPM', 'cruise-control': 'Cruise control', 'fuel': 'Fuel', 'fuel-capacity': 'Fuel capacity', 'fuel-level': 'Fuel level',
+  'speed': 'Speed', 'gear': 'Gear', 'engine-rpm': 'Engine RPM', 'cruise-control': 'Cruise control', 'speed-limit': 'Speed limit', 'fuel': 'Fuel', 'fuel-capacity': 'Fuel capacity', 'fuel-level': 'Fuel level',
   'sdk-average-consumption': 'SDK average consumption', 'estimated-range': 'Estimated range', 'odometer': 'Odometer',
   'route-remaining': 'Route remaining', 'game-time': 'Game time', 'deadline': 'Delivery deadline', 'mandatory-break': 'Next mandatory break', 'cargo': 'Cargo', 'source-city': 'Source city',
   'source-company': 'Source company', 'destination-city': 'Destination city', 'destination-company': 'Destination company',

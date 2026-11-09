@@ -1,0 +1,29 @@
+{
+  "scenario": "speed-limit",
+  "authoredFrom": [
+    "docs/protocol/v1.md §7: minor 4 adds state.speedLimit in m/s; zero and negative readings are values meaning no limit, a NULL callback is not-observed and a wrong-typed value is invalid",
+    "docs/protocol/v1.md §7: a new state slot is sent at once when 50 ms have passed since the last state message",
+    "OD-5 S7: the frame_start and frame_end callbacks advance boundaryOrder by one each and the speed channel by one; the v1-only speed limit channel advances nothing"
+  ],
+  "connections": [
+    {
+      "durableRequested": true, "closedBy": "disconnect", "clientInstance": 1,
+      "welcome": {"minor": 4},
+      "checkpoint": {"atMs": 50, "ackedThroughEventSeq": "0", "nextEventSeq": "1",
+        "state": {"boundaryOrder": "3", "speed": {"available": true, "value": 20, "unit": "m/s"}, "speedLimit": {"available": true, "value": 25, "unit": "m/s"}}},
+      "coverage": [],
+      "acks": [],
+      "snapshots": [
+        {"atMs": 110, "state": {"boundaryOrder": "5", "speedLimit": {"available": true, "value": 13.75, "unit": "m/s"}}},
+        {"atMs": 210, "state": {"boundaryOrder": "7", "speedLimit": {"available": true, "value": 0, "unit": "m/s"}}},
+        {"atMs": 310, "state": {"boundaryOrder": "9", "speedLimit": {"available": true, "value": -1, "unit": "m/s"}}},
+        {"atMs": 410, "state": {"boundaryOrder": "11", "speedLimit": {"available": false, "reason": "not-observed", "unit": "m/s"}}},
+        {"atMs": 510, "state": {"boundaryOrder": "13", "speedLimit": {"available": false, "reason": "invalid", "unit": "m/s"}}},
+        {"atMs": 610, "state": {"boundaryOrder": "15", "speedLimit": {"available": true, "value": 29.5, "unit": "m/s"}}}
+      ],
+      "end": null
+    }
+  ],
+  "store": {"ackedThroughEventSeq": "0", "nextEventSeq": "1", "eventLoss": {}},
+  "retired": null
+}
