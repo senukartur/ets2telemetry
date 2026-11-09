@@ -224,6 +224,7 @@ export async function runHardModeSmoke({application, dashboard, overlay, source,
     await renderedFixture('HARD_MODE_INLINE_' + lang, {details: true});
     // ET-057: the caveats are the headline's hint. Open it by hover and by keyboard and read the tooltip a driver sees.
     const caveatButton = dashboard.locator('[data-testid="hard-mode-card"] h2 .yu-info-hint'), caveatTip = dashboard.getByTestId('hard-mode-caveats-tooltip');
+    assert.equal(await caveatButton.evaluate(node => {const b = node.getBoundingClientRect(); return Math.round(b.width) === 22 && Math.round(b.height) === 22;}), true, `Hard Mode caveat hint is not a 22x22 circle (${lang})`);
     const hoverText = await tooltipPhase('hover', 'caveats', lang, async () => {
       await caveatButton.hover(); await caveatTip.waitFor({state: 'visible'});
       const text = await caveatTip.innerText();
@@ -339,7 +340,7 @@ export async function verifyHardModeRun({config, record}) {
   const filename = path.join(smokeDataRoot(config), 'synthetic', 'hard-mode.sqlite');
   const file = await open(filename, 'r'), bytes = Buffer.alloc(100);
   try {await file.read(bytes, 0, 100, 0);} finally {await file.close();}
-  assert.equal(bytes.readUInt32BE(60), 6); record.schemaVersion = 6;
+  assert.equal(bytes.readUInt32BE(60), 8); record.schemaVersion = 8;
   // Running-app journal and export are read through the real worker; independent SQL reconciliation is in storage tests.
   assert.deepEqual(record.flags, [false, true]); record.persisted = true;
 }

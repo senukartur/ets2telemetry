@@ -19,6 +19,7 @@ const KEY = testKey('controller');
 const NONE: RunningCheck = {ok: true, running: {ets2: false, ats: false, client: false}};
 const EPOCH = Date.UTC(2026, 9, 28, 12, 0, 0);
 let guard: GuardedRoot;
+const controllers: UpdateController[] = [];
 let installRoot: string, dataRoot: string;
 beforeEach(async () => {
   vi.useFakeTimers({toFake: ['setTimeout', 'clearTimeout', 'Date']}); vi.setSystemTime(EPOCH);
@@ -27,6 +28,8 @@ beforeEach(async () => {
   dataRoot = path.win32.join(guard.root, 'LocalAppData', 'ETS2Telemetry');
 });
 afterEach(async () => {
+  // Stop scheduled checks and await aborted downloads before removing their guarded files.
+  for (const controller of controllers.splice(0)) {controller.retire(); await controller.idle();}
   vi.useRealTimers();
   const violations = [...guard.violations];
   await guard.dispose();
@@ -89,6 +92,7 @@ function harness(options: Options = {}): Harness {
       expect(parseUpdateView(controller.view), JSON.stringify(controller.view)).toEqual(controller.view);
       views.push(controller.view);
     }});
+  controllers.push(controller);
   return {controller, views, log, requestExit, runUpdate, checkRunning, fetch, state, applied};
 }
 const LATEST = `${GITHUB}/releases/latest/download`;
@@ -110,6 +114,8 @@ async function started(h: Harness): Promise<void> {
   await until(() => vi.getTimerCount() > 0);
 }
 const PKG = packageBytes(200_000);
+// Two file writes suffice to exercise size/hash refusal; the success case above retains the larger streaming fixture.
+const REFUSED_PKG = packageBytes(2_048);
 const AVAILABLE_CHECK = {outcome: 'available', failure: null, atUtcMs: EPOCH + FIRST_CHECK_DELAY_MS};
 
 describe('reduceUpdate', () => {
@@ -276,7 +282,7 @@ describe('click, download and apply', () => {
     ['a short package', (pkg: PackageFixture) => pkg.bytes.subarray(0, pkg.bytes.length - 1), 'HASH_MISMATCH'],
     ['a longer package', (pkg: PackageFixture) => Buffer.concat([pkg.bytes, Buffer.from([0])]), 'HASH_MISMATCH']
   ])('refuses %s, leaves no partial file and never runs Update.exe', async (_name, served, failure) => {
-    const h = harness({routes: productionRoutes(PKG, {[PACKAGE_URL]: {stream: () => chunkedBody(served(PKG))}})});
+    const h = harness({routes: productionRoutes(REFUSED_PKG, {[PACKAGE_URL]: {stream: () => chunkedBody(served(REFUSED_PKG), 1_024)}})});
     await startAndCheck(h);
     await h.controller.apply();
     await until(() => h.controller.view.state === 'failed');
@@ -288,6 +294,10 @@ describe('click, download and apply', () => {
     await h.controller.apply();
     await until(() => h.fetch.requests.length > 0);
     expect(h.fetch.requests.map(entry => entry.url)).toEqual([PACKAGE_URL]);
+    await until(() => h.controller.view.state === 'failed');
+    expect(h.controller.view.failure).toBe(failure);
+    expect(await readdir(dataRoot)).toEqual([]);
+    expect(h.runUpdate).not.toHaveBeenCalled();
   });
   it('stops a stalled download after 60 s without data and removes its partial file', async () => {
     const h = harness({routes: productionRoutes(PKG, {[PACKAGE_URL]: {stream: () => chunkedBody(PKG.bytes, 16_384, 2)}})});

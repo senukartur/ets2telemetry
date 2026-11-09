@@ -11,7 +11,7 @@ export function guardJournalSync(page: JournalTripPage, before: JournalUploadSco
   if (before && after && before.documentEpoch === after.documentEpoch && before.utilityGeneration === after.utilityGeneration &&
       before.connectionVersion === after.connectionVersion && sameDashboardOwner(before.owner, after.owner) &&
       page.sync.connectionVersion === after.connectionVersion && sameDashboardOwner(page.sync.owner, after.owner)) return page;
-  return {database: page.database, trips: page.trips, nextCursor: page.nextCursor};
+  return {database: page.database, trips: page.trips, nextCursor: page.nextCursor, ...(page.totals ? {totals: page.totals} : {})};
 }
 
 /** Main's async Journal wiring. Sender and argument validation remain with the IPC handler. */

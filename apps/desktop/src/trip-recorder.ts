@@ -34,7 +34,7 @@ export {RECORDER_FAILURE_CLASS, type RecorderErrorCode} from './durable-sink';
 
 /** The storage commands the recorder uses: the durable path, the restore-loss marker, the cold-start reads and the samples. */
 export type TripRecorderClient = Pick<StorageClient, 'upsertSession' | 'committedThrough' | 'commitEvent' | 'commitGap' | 'recordCompleteness' | 'listTrips' | 'getEvent' |
-  'listEvents' | 'appendSamples' | 'openAttachedTrip'> & Partial<Pick<StorageClient, 'observeHardMode' | 'getTrip' | 'journalTrip'>>;
+  'listEvents' | 'appendSamples' | 'openAttachedTrip' | 'recordTrailerBaseline'> & Partial<Pick<StorageClient, 'observeHardMode' | 'getTrip' | 'journalTrip'>>;
 
 const RECORDER_CODE: Readonly<Record<TripErrorCode, RecorderErrorCode>> = {
   ORDER_VIOLATION: 'TRIP_ORDER_VIOLATION', COVERAGE_MISMATCH: 'TRIP_COVERAGE_MISMATCH', UNKNOWN_SESSION: 'TRIP_UNKNOWN_SESSION'
@@ -417,6 +417,9 @@ export class TripRecorderSink implements DurableSink {
     return result;
   }
 
+  async checkpoint(message: Extract<ReadingMessage,{kind:'checkpoint'}>): Promise<SinkResult<undefined>> {
+    return this.client.recordTrailerBaseline({message});
+  }
   observe(message: ReadingMessage, context: CommitContext): SinkResult<undefined> {
     let next = this.state;
     const previousReading=this.state.sessions[message.source.pluginSessionId]?.lastReading,previousGameClock=previousReading?.gameTime.clockId;

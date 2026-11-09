@@ -72,7 +72,7 @@ describe('storage worker', () => {
   it('opens, commits, reads and closes through the real worker, and a new worker reopens the same history', async () => {
     const first = startWorker();
     const summary = ok(await first.client.open(options()));
-    expect(summary).toMatchObject({schemaVersion: 6, created: true, purpose: 'synthetic'});
+    expect(summary).toMatchObject({schemaVersion: 8, created: true, purpose: 'synthetic'});
     expect(ok(await first.client.upsertSession({message: v1('welcome')}))).toEqual({created: true, committedThroughEventSeq: '0'});
     expect(ok(await first.client.commitEvent({message: v1('event-job-configured'), effects: [openTrip, {kind: 'event.attribute', tripUuid: T1, attribution: 'trip'}]})))
       .toEqual({status: 'committed', committedThroughEventSeq: '1'});
@@ -262,10 +262,14 @@ describe('storage worker', () => {
     // The seed writes the anchors through the client, as a later seeding script would.
     await seedJournalAnchors(client);
     const page = ok(await client.journalTrips());
-    expect(page.database).toEqual({purpose: 'synthetic', schemaVersion: 6});
+    expect(page.database).toEqual({purpose: 'synthetic', schemaVersion: 8});
     expect(page.trips.map(trip => trip.tripUuid)).toEqual([T.manySamples, T.zeroValues, T.open, T.restartClosed, T.gapClosed, T.differentJob, T.cancelled, T.delivered]);
     expect(page.nextCursor).toBeNull();
     expect(ok(await client.journalTrips({game: 'ats', outcome: 'delivered', completeness: 'complete'})).trips.map(trip => trip.tripUuid)).toEqual([T.zeroValues]);
+    // ET-076: both filters reach storage through the client and the worker host; every anchor is single-player and a freight market job.
+    expect(ok(await client.journalTrips({mode: 'single-player', jobType: 'freight-market', game: 'ats', outcome: 'delivered'})).trips.map(trip => trip.tripUuid)).toEqual([T.zeroValues]);
+    expect(ok(await client.journalTrips({mode: 'truckersmp'})).trips).toEqual([]);
+    expect(ok(await client.journalTrips({jobType: 'quick-job'})).trips).toEqual([]);
     expect(ok(await client.journalTrips({cursor: '2'})).trips.map(trip => trip.tripUuid)).toEqual([T.delivered]);
     const detail = ok(await client.journalTrip(T.delivered));
     expect(detail.window).toEqual({known: true, pluginSessionId: ETS2_A, fromEventSeq: '4', throughEventSeq: '9', end: 'close-event'});
@@ -358,7 +362,7 @@ require(workerData.entry);
       {name: 'journalIntervals', tripUuid: T.delivered, page: {limit: 3_600}},
       {name: 'journalIntervals', tripUuid: T.delivered, page: {limit: 100, cursor: '01'}},
       // Well-formed requests pass the parser and reach the host, which has no open database yet.
-      {name: 'journalTrips', query: {cursor: '9223372036854775807', game: 'ats', outcome: 'open', completeness: 'unknown'}},
+      {name: 'journalTrips', query: {cursor: '9223372036854775807', game: 'ats', outcome: 'open', completeness: 'unknown', mode: 'convoy', jobType: 'world-of-trucks'}},
       {name: 'journalEvents', tripUuid: T.delivered, page: {limit: 500, cursor: '18446744073709551614'}}
     ];
     commands.forEach((command, index) => worker.postMessage({type: 'storage.request', id: index + 1, command}));

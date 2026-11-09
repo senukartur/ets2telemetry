@@ -1,15 +1,15 @@
 import {DEFAULT_NOW_PLAYING, isOpacity, isStyle, isPosition} from './now-playing/contract';
 import type {NowPlayingSettings} from '../../../packages/contracts/src/now-playing';
 import {DEFAULT_OVERLAY_OPACITY, isOverlayOpacity} from './overlay-opacity';
-import type {AppLanguage, GearDisplayMode, GearDisplayModes, OverlayLayout, OverlayPlacement, OverlaySectionId, OverlaySections, OverlaySettings, UnitGame, UnitProfiles} from '../../../packages/contracts/src';
+import type {AppLanguage, GearDisplayMode, GearDisplayModes, OverlayLayout, OverlayPlacement, OverlaySectionId, OverlaySections, OverlaySettings, ThemePreference, UnitGame, UnitProfiles} from '../../../packages/contracts/src';
 import {DEFAULT_OVERLAY_PLACEMENTS, normalizeFraction, normalizeScale, parseOverlayPlacement} from './overlay-placement';
 import {DEFAULT_OVERLAY_SECTIONS, DEFAULT_OVERLAY_SETTINGS, isOverlayLayout, OVERLAY_LAYOUTS, OVERLAY_SECTION_IDS} from './overlay-sections';
 import {DEFAULT_GEAR_DISPLAY, DEFAULT_UNIT_PROFILES, isGearDisplayMode, isUnitProfile, UNIT_GAMES} from './unit-profiles';
 
-// Settings file format v13 (docs/settings.md). Pure parsing and serialization; the store owns file access.
+// Settings file format v14 (docs/settings.md). Pure parsing and serialization; the store owns file access.
 
 export const SETTINGS_FORMAT = 'ets2telemetry.settings';
-export const SETTINGS_VERSION = 13;
+export const SETTINGS_VERSION = 14;
 /** Larger files are rejected as invalid without being parsed. */
 export const MAX_SETTINGS_BYTES = 64 * 1024;
 
@@ -20,10 +20,21 @@ export function isAppLanguage(value: unknown): value is AppLanguage {
   return value === 'en' || value === 'ru';
 }
 
+/** The theme of a new install, and of every state without readable settings (ET-082). */
+export const DEFAULT_THEME: ThemePreference = 'system';
+/** What a file from before v14 migrates to: the owner decided on November 9, 2026 that existing users stay dark. */
+const UPGRADED_THEME: ThemePreference = 'dark';
+
+export function isThemePreference(value: unknown): value is ThemePreference {
+  return value === 'light' || value === 'dark' || value === 'system';
+}
+
 export interface Settings {
   nowPlaying: NowPlayingSettings;
   language: AppLanguage;
   autostart: boolean;
+  /** The main-window theme preference (ET-082). */
+  theme: ThemePreference;
   units: UnitProfiles;
   /** Per-game gear display mode (ET-050). */
   gearDisplay: GearDisplayModes;
@@ -32,6 +43,7 @@ export interface Settings {
 export const DEFAULT_SETTINGS: Settings = Object.freeze({
   language: DEFAULT_APP_LANGUAGE,
   autostart: false,
+  theme: DEFAULT_THEME,
   units: DEFAULT_UNIT_PROFILES,
   gearDisplay: DEFAULT_GEAR_DISPLAY,
   nowPlaying: DEFAULT_NOW_PLAYING,
@@ -39,10 +51,10 @@ export const DEFAULT_SETTINGS: Settings = Object.freeze({
 });
 
 /** Field paths that can fall back to their default independently. */
-export type SettingsField = 'nowPlaying.enabled' | 'nowPlaying.style' | 'nowPlaying.backgroundOpacity' | 'nowPlaying.position' | 'overlay.backgroundOpacity' | 'overlay.enabled' | 'language' | 'autostart' | `units.${UnitGame}` | `gearDisplay.${UnitGame}` | 'overlay.layout' | 'overlay.sections' | `overlay.sections.${OverlaySectionId}`
+export type SettingsField = 'nowPlaying.enabled' | 'nowPlaying.style' | 'nowPlaying.backgroundOpacity' | 'nowPlaying.position' | 'overlay.backgroundOpacity' | 'overlay.enabled' | 'language' | 'autostart' | 'theme' | `units.${UnitGame}` | `gearDisplay.${UnitGame}` | 'overlay.layout' | 'overlay.sections' | `overlay.sections.${OverlaySectionId}`
   | 'overlay.placements' | `overlay.placements.${OverlayLayout}`;
 /** Set when the file was upgraded in memory from an older format; the file itself stays unchanged until the next save. */
-type Migrated = {migratedFrom?: 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9 | 10 | 11 | 12};
+type Migrated = {migratedFrom?: 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9 | 10 | 11 | 12 | 13};
 export type ParsedSettings =
   | ({state: 'loaded'; settings: Settings} & Migrated)
   /** A valid file with some invalid or missing fields; they use defaults until the next save rewrites them. */
@@ -86,6 +98,9 @@ const isRecord = (value: unknown): value is Record<string, unknown> => typeof va
  * v12 -> v13 adds the overlay section `cruise-control`, switched on also for upgraders (ET-071, as ET-052 D2 did for the
  * break), on a copy of an `overlay.sections` record exactly like v10 -> v11, so every other saved choice is preserved.
  * The bump makes an older build read a v13 file as newer-version instead of dropping the new key on its next save.
+ * v13 -> v14 adds the theme preference as dark (ET-082, owner decision of November 9, 2026: existing users stay dark; only a
+ * new install follows the system). A stray pre-v14 `theme` key is replaced, as v8 -> v9 did for `gearDisplay`. The bump makes
+ * an older build read a v14 file as newer-version instead of dropping the theme on its next save.
  * Version 0 and below have no path.
  */
 const MIGRATIONS: ReadonlyMap<number, (raw: Record<string, unknown>) => Record<string, unknown>> = new Map<number, (raw: Record<string, unknown>) => Record<string, unknown>>([
@@ -102,7 +117,8 @@ const MIGRATIONS: ReadonlyMap<number, (raw: Record<string, unknown>) => Record<s
     overlay: isRecord(raw.overlay) && isRecord(raw.overlay.sections) ? {...raw.overlay, sections: {...raw.overlay.sections, 'mandatory-break': true}} : raw.overlay})],
   [11, (raw: Record<string, unknown>) => ({...raw, version: 12, nowPlaying: {...DEFAULT_NOW_PLAYING, position: {...DEFAULT_NOW_PLAYING.position}}})],
   [12, (raw: Record<string, unknown>) => ({...raw, version: 13,
-    overlay: isRecord(raw.overlay) && isRecord(raw.overlay.sections) ? {...raw.overlay, sections: {...raw.overlay.sections, 'cruise-control': true}} : raw.overlay})]
+    overlay: isRecord(raw.overlay) && isRecord(raw.overlay.sections) ? {...raw.overlay, sections: {...raw.overlay.sections, 'cruise-control': true}} : raw.overlay})],
+  [13, (raw: Record<string, unknown>) => ({...raw, version: 14, theme: UPGRADED_THEME})]
 ]);
 
 /** Upgrades an older raw document to the current version through the migration chain, or undefined without a complete path. */
@@ -180,7 +196,7 @@ export function parseSettings(bytes: Uint8Array): ParsedSettings {
     document = migrateToCurrent(raw, version);
     if (!document) return {state: 'unsupported-older'};
   }
-  const migrated: Migrated = version === 1 || version === 2 || version === 3 || version === 4 || version === 5 || version === 6 || version === 7 || version === 8 || version === 9 || version === 10 || version === 11 || version === 12 ? {migratedFrom: version} : {};
+  const migrated: Migrated = version === 1 || version === 2 || version === 3 || version === 4 || version === 5 || version === 6 || version === 7 || version === 8 || version === 9 || version === 10 || version === 11 || version === 12 || version === 13 ? {migratedFrom: version} : {};
   const fallbackFields: SettingsField[] = [];
 
   let language: AppLanguage = DEFAULT_APP_LANGUAGE;
@@ -190,6 +206,10 @@ export function parseSettings(bytes: Uint8Array): ParsedSettings {
   let autostart = false;
   if (typeof document.autostart === 'boolean') autostart = document.autostart;
   else fallbackFields.push('autostart');
+
+  let theme: ThemePreference = DEFAULT_THEME;
+  if (isThemePreference(document.theme)) theme = document.theme;
+  else fallbackFields.push('theme');
 
   const units = isRecord(document.units) ? document.units : {};
   const resolved = {} as Record<UnitGame, UnitProfiles[UnitGame]>;
@@ -208,13 +228,13 @@ export function parseSettings(bytes: Uint8Array): ParsedSettings {
   }
   const overlay = parseOverlay(document.overlay, fallbackFields);
   const nowPlaying = parseNowPlaying(document.nowPlaying, fallbackFields);
-  const settings: Settings = {nowPlaying, language, autostart, units: Object.freeze(resolved), gearDisplay: Object.freeze(gears), overlay: Object.freeze(overlay)};
+  const settings: Settings = {nowPlaying, language, autostart, theme, units: Object.freeze(resolved), gearDisplay: Object.freeze(gears), overlay: Object.freeze(overlay)};
   return fallbackFields.length ? {state: 'loaded-with-fallbacks', settings, fallbackFields, ...migrated} : {state: 'loaded', settings, ...migrated};
 }
 
 /**
- * The exact v13 file content: UTF-8 without a byte order mark, two-space indentation, a trailing newline, language,
- * both games' unit profiles followed by their gear display modes,
+ * The exact v14 file content: UTF-8 without a byte order mark, two-space indentation, a trailing newline, language,
+ * autostart, the theme, both games' unit profiles followed by their gear display modes,
  * all sixteen overlay sections in canonical order and the placements of all four layouts in canonical order, each with
  * x and y rounded to four decimals and the scale to two.
  */
@@ -229,6 +249,7 @@ export function serializeSettings(settings: Settings): string {
     version: SETTINGS_VERSION,
     language: settings.language,
     autostart: settings.autostart,
+    theme: settings.theme,
     units: {ets2: settings.units.ets2, ats: settings.units.ats},
     gearDisplay: {ets2: settings.gearDisplay.ets2, ats: settings.gearDisplay.ats},
     overlay: {enabled: settings.overlay.enabled, backgroundOpacity: settings.overlay.backgroundOpacity, layout: settings.overlay.layout, sections, placements},

@@ -12,8 +12,9 @@ import {useHardModeStatus} from './hard-mode/use-status';
 import {useLanguageController} from './shell/use-language';
 import {useWindowFocused} from './shell/use-window-focus';
 import {SidebarNav} from './shell/sidebar-nav';
+import {ShellSlotsProvider} from './shell/shell-slots';
 import {TopBar} from './shell/top-bar';
-import logo from './assets/logo.png';
+import {ThemedLogo} from './shell/themed-logo';
 import {createStartupLine} from './dashboard-startup';
 import {recordingStatusText} from './recording-status-text';
 import {LiveDashboard} from './live-dashboard';
@@ -45,6 +46,11 @@ export default function App() {
   const [exit, setExit] = useState<'idle' | 'pending' | 'failed'>('idle');
   // Main reports one `saveError` for the whole settings file; it is shown in the card whose request caused it.
   const [lastCard, setLastCard] = useState<SettingsCard>('units');
+  // ET-076: the elements of the top bar and page header where the Journal shows its Refresh and totals.
+  const [actionsSlot, setActionsSlot] = useState<HTMLElement | null>(null);
+  const [sublineSlot, setSublineSlot] = useState<HTMLElement | null>(null);
+  // ET-077: the top bar's element where an open trip adds its cargo after the page's crumb.
+  const [breadcrumbSlot, setBreadcrumbSlot] = useState<HTMLElement | null>(null);
   // ET-078: one card action controller for the Game plugin card and the diagnostics export on Settings > Diagnostics.
   const pluginActions = usePluginActions();
   const [startupLine] = useState(() => createStartupLine(() => window.desktop.getStatus(), setStartup));
@@ -73,7 +79,7 @@ export default function App() {
   return <div className="yu-app" data-testid="shell.root">
     {/* ET-074: the title bar holds the app name and the native window buttons only; the logo is in the sidebar lockup. */}
     <div className="yu-titlebar" data-testid="shell.titlebar"><span>{CHANNEL.displayName}</span></div>
-    <div className="yu-body"><aside className="yu-sidebar" data-testid="shell.sidebar"><div className="yu-lockup" data-testid="shell.sidebar.lockup"><img src={logo} alt="" /><div><strong>Yukon Union</strong><small>{t('app.sub', undefined, language)}</small></div></div>
+    <div className="yu-body"><aside className="yu-sidebar" data-testid="shell.sidebar"><div className="yu-lockup" data-testid="shell.sidebar.lockup"><ThemedLogo /><div><strong>Yukon Union</strong><small>{t('app.sub', undefined, language)}</small></div></div>
       <SidebarNav route={route} language={language} onNavigate={setRoute} />
       <div className="yu-sidebar-footer"><TooltipProvider delayDuration={150} skipDelayDuration={0}><Tooltip><TooltipTrigger asChild>
         <button type="button" className="yu-recording" data-testid="shell.sidebar.recording" aria-label={recording.testBadge ? `${recording.label}, ${recording.testBadge}` : recording.label}>
@@ -96,13 +102,14 @@ export default function App() {
         <span id="shell-exit-hint" className="sr-only" style={{position: 'fixed'}}>{t('s.closeD', undefined, language)}</span>
         {exit === 'failed' ? <p role="status">{strings.exitFailed}</p> : null}
       </div></aside>
-      <div className="yu-column"><TopBar route={route} language={language} connection={connectionChip(live?.status, game, mode ? t(mode === 'truckersmp' ? 'mode.tmp' : 'mode.sp', undefined, language) : null, language)}
+      <ShellSlotsProvider actions={actionsSlot} subline={sublineSlot} breadcrumb={breadcrumbSlot}><div className="yu-column"><TopBar route={route} language={language} actionsRef={setActionsSlot} breadcrumbRef={setBreadcrumbSlot} connection={connectionChip(live?.status, game, mode ? t(mode === 'haulmp' ? 'mode.haulmp' : mode === 'truckersmp' ? 'mode.tmp' : 'mode.sp', undefined, language) : null, language)}
         plugin={pluginChip(targets, language)} hardMode={hardModeChip(hardMode.status, hardMode.now, language)}>
         <SyncChip state={upload.state} language={language} onOpen={() => setRoute('account')} />
       </TopBar><main ref={content} className="yu-content" data-testid="shell.content">
         {/* ET-074: the page title opens the content of every route; it takes focus on each route change. */}
-        <div className="yu-page-header" data-testid="shell.pageHeader"><h1 ref={heading} tabIndex={-1} data-testid="screen-title">{t(`nav.${route}`, undefined, language)}</h1>
-          {route === 'live' ? <p className="yu-page-sub" data-testid="live.sub">{liveSubline(liveState, game, live?.reason, language)}</p> : null}</div>
+        <div className="yu-page-header" data-testid="shell.pageHeader"><h1 ref={heading} tabIndex={-1} data-testid="screen-title">{route === 'journal' ? t('j.title', undefined, language) : t(`nav.${route}`, undefined, language)}</h1>
+          {route === 'live' ? <p className="yu-page-sub" data-testid="live.sub">{liveSubline(liveState, game, live?.reason, language)}</p> : null}
+          <div ref={setSublineSlot} /></div>
         <div hidden={route !== 'live'} className="yu-live-screen" data-testid="live.screen">
           <LiveDashboard onSelect={game => window.desktop.selectSource(game)} live={live} units={settings?.units} gearDisplay={settings?.gearDisplay} recording={health?.recording} language={language} />
         </div>
@@ -112,7 +119,7 @@ export default function App() {
         <SettingsScreen hidden={route !== 'settings'} language={language} panel={panel} onPanel={setPanel} app={app} live={live} startup={startup} onSaved={saved}
           lastCard={lastCard} onRequest={setLastCard} languageController={languageController} pluginActions={pluginActions}
           onPlugins={plugins => setApp(current => current && {...current, plugins})} onSourceFailed={() => setStartup(strings.sourceSelectionFailed)} />
-      </main></div>
+      </main></div></ShellSlotsProvider>
     </div>
   </div>;
 }

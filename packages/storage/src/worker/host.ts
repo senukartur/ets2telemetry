@@ -78,6 +78,7 @@ export function serveStorage(port: HostPort, testOptions: HostTestOptions = {}):
     case 'upsertSession': return storage.upsertSession({message: command.input.message});
     // Only the message and its effects are forwarded; in-process commit options never come from a message, only from
     // a test entry's in-process testOptions.
+    case 'recordTrailerBaseline': return storage.recordTrailerBaseline(command.input);
     case 'commitEvent': return storage.commitEvent({message: command.input.message, effects: command.input.effects, hardMode: command.input.hardMode, hardModeFresh: command.input.hardModeFresh, hardModeLoss: command.input.hardModeLoss, profile: command.input.profile}, testOptions.commitOptions?.(command));
     case 'commitGap': return storage.commitGap({message: command.input.message, effects: command.input.effects, hardMode: command.input.hardMode, hardModeFresh: command.input.hardModeFresh, hardModeLoss: command.input.hardModeLoss, profile: command.input.profile}, testOptions.commitOptions?.(command));
     // Only `uniqueSeconds` of the options is forwarded; the commit options come from the in-process testOptions only.
@@ -108,7 +109,7 @@ export function serveStorage(port: HostPort, testOptions: HostTestOptions = {}):
     case 'readUploadProjectionPage': return storage.readUploadProjectionPage(command.query);
     // ET-016: only the parsed fields are forwarded; the parser already refused any other key.
     case 'journalTrips': return storage.journalTrips(command.query === undefined ? undefined
-      : {cursor: command.query.cursor, game: command.query.game, outcome: command.query.outcome, completeness: command.query.completeness});
+      : {cursor: command.query.cursor, game: command.query.game, outcome: command.query.outcome, completeness: command.query.completeness, mode: command.query.mode, jobType: command.query.jobType});
     case 'journalTrip': return storage.journalTrip(command.tripUuid);
     case 'journalEvents': return storage.journalEvents(command.tripUuid, {cursor: command.page.cursor, limit: command.page.limit});
     case 'journalIntervals': return storage.journalIntervals(command.tripUuid, {cursor: command.page.cursor, limit: command.page.limit});

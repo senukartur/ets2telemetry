@@ -17,12 +17,14 @@ export const TASKLIST_MAX_OUTPUT_BYTES = 1024 * 1024;
 export const GAME_PROCESS_NAMES: Readonly<Record<PluginGame, string>> = Object.freeze({ets2: 'eurotrucks2.exe', ats: 'amtrucks.exe'});
 /** Any image name starting with this prefix is a TruckersMP client process and blocks both games. */
 export const CLIENT_PROCESS_PREFIX = 'truckersmp';
+/** Any image name starting with this prefix is a HaulMP client/launcher process and blocks ETS2. */
+export const HAULMP_PROCESS_PREFIX = 'haulmp';
 
 export interface ProcessRow {readonly name: string; readonly pid: number}
 /** A process row with its Windows session number (tasklist's fourth column), or null when that column is not a number. */
 export interface SessionProcessRow extends ProcessRow {readonly session: number | null}
-export interface RunningGames {readonly ets2: boolean; readonly ats: boolean; readonly client: boolean}
-export type BlockingProcess = 'GAME_RUNNING' | 'CLIENT_RUNNING';
+export interface RunningGames {readonly ets2: boolean; readonly ats: boolean; readonly client: boolean; readonly haulmp?: boolean}
+export type BlockingProcess = 'GAME_RUNNING' | 'CLIENT_RUNNING' | 'HAULMP_RUNNING';
 export type ProcessListing = {readonly ok: true; readonly rows: readonly ProcessRow[]} | {readonly ok: false; readonly code: 'RUNNING_CHECK_FAILED'; readonly reason: string};
 
 /** One CSV record of quoted fields with `""` as an escaped quote, as tasklist writes it. Undefined if malformed. */
@@ -71,13 +73,15 @@ export function runningGames(rows: readonly ProcessRow[]): RunningGames {
   return {
     ets2: names.includes(GAME_PROCESS_NAMES.ets2),
     ats: names.includes(GAME_PROCESS_NAMES.ats),
-    client: names.some(name => name.startsWith(CLIENT_PROCESS_PREFIX))
+    client: names.some(name => name.startsWith(CLIENT_PROCESS_PREFIX)),
+    haulmp: names.some(name => name.startsWith(HAULMP_PROCESS_PREFIX))
   };
 }
 
 /** Why a change to `game`'s plugin must wait: the game itself, or a TruckersMP client that may start either game. */
 export function blockingProcess(game: PluginGame, running: RunningGames): BlockingProcess | null {
   if (running[game]) return 'GAME_RUNNING';
+  if (game === 'ets2' && Boolean(running.haulmp)) return 'HAULMP_RUNNING';
   return running.client ? 'CLIENT_RUNNING' : null;
 }
 

@@ -94,7 +94,7 @@ const diagnosticEvents = async directory => (await readFile(path.join(directory,
 // never reports it unavailable, and closes it in its storage shutdown step before its single stopped report.
 const verifyHistoryEvents = (service, created) => {
   const opened = service.filter(row => row.event === 'HISTORY_STORAGE_OPENED').map(row => row.facts);
-  assert.deepEqual(opened, created.map(value => ({schemaVersion: 6, created: value, migratedFrom: null})));
+  assert.deepEqual(opened, created.map(value => ({schemaVersion: 8, created: value, migratedFrom: null})));
   assert.ok(!service.some(row => row.event === 'HISTORY_STORAGE_UNAVAILABLE'), 'History storage was unavailable');
   const closed = service.flatMap((row, index) => row.event === 'HISTORY_STORAGE_CLOSED' ? [index] : []);
   const stopped = service.findLastIndex(row => row.event === 'SERVICE_REPORT' && row.detail?.type === 'stopped');
@@ -112,7 +112,7 @@ const verifyHistoryFile = async () => {
   const facts = {magic: header.subarray(0, 15).toString('latin1'), applicationId: header.readInt32BE(68), userVersion: header.readUInt32BE(60),
     sidecars: ['-wal', '-shm', '-journal'].filter(suffix => existsSync(database + suffix)),
     backups: existsSync(path.join(smokeDataRoot(config), 'backups'))};
-  assert.deepEqual(facts, {magic: 'SQLite format 3', applicationId: 1163154226, userVersion: 6, sidecars: [], backups: false});
+  assert.deepEqual(facts, {magic: 'SQLite format 3', applicationId: 1163154226, userVersion: 8, sidecars: [], backups: false});
   return facts;
 };
 // Every launch of one run shares the isolated profile, TEMP, APPDATA and LOCALAPPDATA; only the diagnostic directory may differ.
@@ -150,7 +150,8 @@ async function launch(diagnostics) {
   launched.windows().forEach(apply); launched.on('window', apply);
   return launched;
 }
-const launchOptions = diagnostics => ({timeout: 20000, cwd: config.cwd,
+// Playwright's electron.launch emulates the light colour scheme by default; a smoke asserts the dark theme unless it says otherwise (ET-082).
+const launchOptions = diagnostics => ({timeout: 20000, cwd: config.cwd, colorScheme: 'dark',
   ...(config.mode !== 'development' ? {executablePath: config.executable, args: config.forceRendererProcessReuse ? ['--renderer-process-limit=1'] : []} :
     {args: [config.checkout, ...(config.forceRendererProcessReuse ? ['--renderer-process-limit=1'] : [])]}),
   env: environment(diagnostics)});
@@ -226,7 +227,7 @@ try {
   result.actual = await window.evaluate(async () => ({require: typeof globalThis.require,
     process: typeof globalThis.process, keys: Object.keys(globalThis.desktop),
     frozen: Object.isFrozen(globalThis.desktop), status: await globalThis.desktop.getStatus()}));
-  assert.deepEqual(result.actual, {require: 'undefined', process: 'undefined', keys: ['getStatus', 'selectSource', 'subscribeLive', 'getAppState', 'subscribeAppState', 'exitApplication', 'setLanguage', 'setAutostart', 'setUnitProfile', 'setGearDisplay', 'setOverlayBackgroundOpacity', 'setOverlayEnabled', 'setOverlayLayout', 'setOverlaySections',
+  assert.deepEqual(result.actual, {require: 'undefined', process: 'undefined', keys: ['getStatus', 'selectSource', 'subscribeLive', 'getAppState', 'subscribeAppState', 'exitApplication', 'setLanguage', 'setTheme', 'setAutostart', 'setUnitProfile', 'setGearDisplay', 'setOverlayBackgroundOpacity', 'setOverlayEnabled', 'setOverlayLayout', 'setOverlaySections',
     'beginOverlayEdit', 'setOverlayEditScale', 'resetOverlayEditPlacement', 'finishOverlayEdit',
     'listJournalTrips', 'getJournalTrip', 'listJournalEvents', 'listJournalIntervals', 'listJournalSamples', 'exportJournalTrip', 'deleteJournalTrip',
     'retryPluginSetup', 'choosePluginFolder', 'setPluginGameExcluded', 'showPluginFile', 'openPluginFolder', 'exportDiagnostics', 'uninstallApplication', 'getHardModeStatus', 'refreshHardMode', 'updateApplication', 'checkForUpdates', 'setNowPlayingEnabled', 'setNowPlayingStyle', 'setNowPlayingBackgroundOpacity', 'selectNowPlayingSource', 'beginNowPlayingEdit', 'resetNowPlayingEditPlacement', 'finishNowPlayingEdit', 'getDashboardUploadContext','verifyDashboardUploadToken','confirmDashboardUpload','cancelDashboardUpload','disconnectDashboardUpload','subscribeDashboardUpload'],
@@ -255,7 +256,7 @@ try {
       const refused = await globalThis.desktop.getJournalTrip('C:\\Users\\owner\\telemetry.sqlite').then(() => 'resolved', error => String(error?.message));
       return {answer, refused};
     });
-    assert.deepEqual(result.journal, {answer: {ok: true, value: {database: {purpose: 'history', schemaVersion: 6}, trips: [], nextCursor: null}},
+    assert.deepEqual(result.journal, {answer: {ok: true, value: {database: {purpose: 'history', schemaVersion: 8}, trips: [], nextCursor: null, totals: {trips: 0, recordedSeconds: 0}}},
       refused: 'Invalid journal request'});
     // ET-017 PR-5 review: plugin setup is disabled here; the card says so and disables every control that would change nothing.
     result.pluginCard = await verifyDisabledPluginCard(window);

@@ -88,6 +88,7 @@ describe('a game folder', () => {
   const REASONS: Record<PluginBlockReason, string> = {
     GAME_RUNNING: 'The game is running; the plugin is changed after you close it.',
     CLIENT_RUNNING: 'TruckersMP is running; the plugin is changed after you close it.',
+    HAULMP_RUNNING: 'HaulMP is running; the plugin is changed after you close it.',
     TARGET_LOCKED: 'Another program is using the plugin file; it is tried again later.',
     PERMISSION_DENIED: 'Windows denied access to the game\'s plugins folder.',
     READ_ONLY_FILE: 'The plugin file is read-only; it is left as it is.',

@@ -28,6 +28,7 @@ export interface WorkerOpenOptions {path: string; purpose: Purpose; backupsDirec
 /** Hard Mode freshness verdicts are private, frozen at service monotonic intake/offer; never worker UTC ages. */
 export interface StorageCommands extends UploadSyncCommands {
   open: {args: {options: WorkerOpenOptions}; value: OpenSummary};
+  recordTrailerBaseline: {args: {input: {message: unknown}}; value: undefined};
   upsertSession: {args: {input: {message: unknown}}; value: {created: boolean; committedThroughEventSeq: Uint64}};
   commitEvent: {args: {input: {message: unknown; effects?: TripEffect[]; hardMode?: HardModeObservation; hardModeFresh?: boolean; hardModeLoss?: HardModeObservation; profile?: ProfileObservation}}; value: CommitResult};
   commitGap: {args: {input: {message: unknown; effects?: TripEffect[]; hardMode?: HardModeObservation; hardModeFresh?: boolean; hardModeLoss?: HardModeObservation; profile?: ProfileObservation}}; value: CommitResult};
@@ -71,7 +72,7 @@ export interface StorageResponse {type: 'storage.response'; id: number; result: 
 export type ParsedResponse = StorageResponse | {type: 'storage.response'; id: number; result: {ok: false; error: JournalAnswerError}; journalAnswerInvalid: true};
 
 export const COMMAND_NAMES: readonly CommandName[] = Object.freeze([
-  ...UPLOAD_SYNC_NAMES, 'observeHardMode', 'open', 'upsertSession', 'commitEvent', 'commitGap', 'appendSamples', 'recordCompleteness', 'openAttachedTrip', 'committedThrough', 'getSession', 'getEvent',
+  ...UPLOAD_SYNC_NAMES, 'recordTrailerBaseline', 'observeHardMode', 'open', 'upsertSession', 'commitEvent', 'commitGap', 'appendSamples', 'recordCompleteness', 'openAttachedTrip', 'committedThrough', 'getSession', 'getEvent',
   'listEvents', 'getTrip', 'deleteTrip', 'listTrips', 'listSamples', 'storageInfo', 'beginUploadProjection', 'advanceUploadProjection', 'getUploadProjectionPreparation', 'releaseUploadProjection', 'readUploadProjectionPage', 'journalTrips', 'journalTrip', 'journalEvents', 'journalIntervals', 'close'
 ] as const);
 
@@ -145,6 +146,7 @@ export function parseRequest(message: unknown): {ok: true; id: number; command: 
   const id = message.id, command = message.command;
   if (!isRecord(command) || typeof command.name !== 'string' || !(COMMAND_NAMES as readonly string[]).includes(command.name)) return {ok: false, id};
   const name = command.name as CommandName;
+  if(name==='recordTrailerBaseline' && (Object.keys(command).sort().join(',')!=='input,name'||!isRecord(command.input)||Object.keys(command.input).join(',')!=='message'))return {ok:false,id};
   if(isUploadSyncName(name))return isUploadSyncRequest(command)?{ok:true,id,command:command as StorageCommand}:{ok:false,id};
   if(name==='beginUploadProjection' && (Object.keys(command).sort().join(',')!=='input,name' || !isUploadProjectionBegin(command.input)))return {ok:false,id};
   if(['advanceUploadProjection','getUploadProjectionPreparation','releaseUploadProjection'].includes(name)
@@ -199,7 +201,7 @@ function validValue(command: StorageCommand, value: unknown): boolean {
   case 'openAttachedTrip': return isRecord(value) && Object.keys(value).length === 1 && (value.status === 'committed' || value.status === 'duplicate');
   case 'open': return isRecord(value) && typeof value.schemaVersion === 'number' && typeof value.created === 'boolean' && isText(value.databaseUuid) && isText(value.purpose);
   case 'upsertSession': return isRecord(value) && typeof value.created === 'boolean' && isUint64(value.committedThroughEventSeq);
-  case 'close': case 'recordCompleteness': case 'observeHardMode': case 'deleteTrip': return value === undefined;
+  case 'recordTrailerBaseline': case 'close': case 'recordCompleteness': case 'observeHardMode': case 'deleteTrip': return value === undefined;
   // ET-016: a journal page reaches main and the renderer, so its value is checked exactly; parseResponse turns a
   // mismatch into a per-command error rather than a client failure.
   case 'journalTrips': case 'journalTrip': case 'journalEvents': case 'journalIntervals':

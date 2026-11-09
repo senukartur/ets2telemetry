@@ -76,6 +76,8 @@ export type GearDisplayMode = 'automatic' | 'manual' | 'crawler';
 export type GearDisplayModes = Readonly<Record<UnitGame, GearDisplayMode>>;
 /** Application user interface languages (ET-029). */
 export type AppLanguage = 'en' | 'ru';
+/** Main-window colour theme preference (ET-082); `system` follows the Windows colour mode. */
+export type ThemePreference = 'light' | 'dark' | 'system';
 /** Windows login item registration state (ET-031). */
 export type AutostartRegistrationStatus = 'registered' | 'unregistered' | 'not-installed' | 'failed';
 /**
@@ -141,6 +143,8 @@ export interface SettingsView {
   nowPlaying: NowPlayingSettings;
   language: AppLanguage;
   autostart: boolean;
+  /** The saved main-window theme preference (ET-082). */
+  theme: ThemePreference;
   units: UnitProfiles;
   /** The per-game gear display mode (ET-050). */
   gearDisplay: GearDisplayModes;
@@ -163,7 +167,7 @@ export type PluginGame = 'ets2' | 'ats';
  * Why a plugin change for one game folder did not happen or must wait (ET-017 P16). apps/desktop/src/plugin-setup/
  * plugin-setup.ts asserts at compile time that this equals the installer's codes.
  */
-export type PluginBlockReason = 'GAME_RUNNING' | 'CLIENT_RUNNING' | 'TARGET_LOCKED' | 'PERMISSION_DENIED' | 'READ_ONLY_FILE' | 'UNRECOGNIZED_FILE'
+export type PluginBlockReason = 'GAME_RUNNING' | 'CLIENT_RUNNING' | 'HAULMP_RUNNING' | 'TARGET_LOCKED' | 'PERMISSION_DENIED' | 'READ_ONLY_FILE' | 'UNRECOGNIZED_FILE'
   | 'LINKED_FOLDER' | 'DISK_FULL' | 'IO_ERROR' | 'VERIFY_FAILED' | 'RUNNING_CHECK_FAILED' | 'REGISTRY_UNAVAILABLE' | 'BUNDLE_UNAVAILABLE';
 /** How the game was found through Steam; `pending` until the first discovery of this application run finished. */
 export type PluginDiscoveryOutcome = 'pending' | 'found' | 'not-found' | 'steam-not-found' | 'steam-list-invalid';

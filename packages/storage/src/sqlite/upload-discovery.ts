@@ -1,3 +1,4 @@
+import {ruleLossBounds,ruleNativeBounds} from './trailer-baselines';
 import {validCoverage} from './logical-coverage';
 import type Database from 'better-sqlite3';
 import {fail} from '../errors';
@@ -68,7 +69,9 @@ export function discoverRevision(db:Database.Database,root:bigint,revision:unkno
   const atom=(value:unknown)=>{const s=String(value&&typeof value==='object'&&'$integer' in value?value.$integer:value);return `${s.length}:${s}`;};
   const coverage=validCoverage(row._coverage)?row._coverage:undefined,endpoint=coverage?.endpoint;
   const quality=[coverage?.start,coverage?.phase,coverage?.losses,coverage?.acceptancePending??false,endpoint?.distanceM.available,endpoint?(endpoint.distanceM.available?null:endpoint.distanceM.reason):null,endpoint?.fuelUsedL.available,endpoint?(endpoint.fuelUsedL.available?null:endpoint.fuelUsedL.reason):null];
-  const materialKey=[...fields.map(field=>row[field]),...quality,evidence,r.retired,r.proof_json===null?0:1,head?.distance_m===null?'distance-unknown':'distance-supported',
+  const ruleContext=Number(db.pragma('user_version',{simple:true}))>=7
+    ?JSON.stringify([outcome==='open'?ruleNativeBounds(db,BigInt((row.plugin_session_ref as {$integer:string}).$integer)):null,ruleLossBounds(db,BigInt((row.plugin_session_ref as {$integer:string}).$integer))]):null;
+  const materialKey=[ruleContext,...fields.map(field=>row[field]),...quality,evidence,r.retired,r.proof_json===null?0:1,head?.distance_m===null?'distance-unknown':'distance-supported',
     head?.fuel_used_l===null?'fuel-unknown':'fuel-supported',...(outcome==='open'?[]:[r.progress_head,row.observed_distance_m,row.fuel_used_l,endpoint?.distanceM.available?endpoint.distanceM.value:null,endpoint?.fuelUsedL.available?endpoint.fuelUsedL.value:null])].map(atom).join('|');
   const prior=get(db,'SELECT * FROM upload_change_heads WHERE root_ref=?',root),material=!prior||prior.material_key!==materialKey||prior.dirty===1n;
   const position=connection(db).next_change;

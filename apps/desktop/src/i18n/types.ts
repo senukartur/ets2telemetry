@@ -264,6 +264,7 @@ export type I18nKey =
   | "copy.unknown"
   | "copy.not-observed"
   | "copy.single-player"
+  | "copy.convoy"
   | "copy.strong-evidence"
   | "copy.weak-evidence-not-confirmed"
   | "copy.no-evidence"
@@ -424,6 +425,7 @@ export type I18nKey =
   | "copy.setting-up"
   | "copy.the-game-is-running-the-plugin-is-changed-after-you-close-it"
   | "copy.truckersmp-is-running-the-plugin-is-changed-after-you-close-it"
+  | "copy.haulmp-is-running-the-plugin-is-changed-after-you-close-it"
   | "copy.another-program-is-using-the-plugin-file-it-is-tried-again-later"
   | "copy.windows-denied-access-to-the-game-s-plugins-folder"
   | "copy.the-plugin-file-is-read-only-it-is-left-as-it-is"
@@ -489,6 +491,7 @@ export type I18nKey =
   | "copy.the-uninstall-request-was-refused"
   | "copy.the-game-is-running-close-it-then-try-again"
   | "copy.truckersmp-is-running-close-it-then-try-again"
+  | "copy.haulmp-is-running-close-it-then-try-again"
   | "copy.another-program-is-using-the-plugin-file-close-it-then-try-again"
   | "copy.the-plugin-file-is-read-only-clear-its-read-only-attribute-then-try"
   | "copy.the-game-folder-holds-unexpected-entries-so-it-is-not-changed"
@@ -525,7 +528,7 @@ export type I18nKey =
   | 'rec.waiting' | 'rec.waitingSub' | 'rec.lost' | 'rec.lostSub'
   | 'chip.game.live' | 'chip.game.paused' | 'chip.game.waiting' | 'chip.game.lost'
   | 'chip.plugin' | 'chip.hm.pass' | 'chip.hm.fail' | 'chip.hm.lost' | 'chip.sync'
-  | 'mode.sp' | 'mode.tmp' | 'stale' | 'paused'
+  | 'mode.sp' | 'mode.tmp' | 'mode.haulmp' | 'stale' | 'paused'
   | 'live.title' | 'live.speed' | 'live.gear' | 'live.rpm' | 'live.fuel' | 'live.of' | 'live.range' | 'live.rangeNote'
   | 'live.cons' | 'live.consNote' | 'live.consNoteAts'
   | 'live.job' | 'live.market.freight' | 'live.market.cargo' | 'live.driven' | 'live.remaining' | 'live.planned' | 'live.plannedNote'
@@ -543,6 +546,8 @@ export type I18nKey =
   | 'val.on' | 'val.off' | 'val.expert' | 'val.simple'
   | 'j.title' | 'j.all' | 'j.outcome' | 'j.recording' | 'j.anyOutcome' | 'j.anyRecording' | 'j.search' | 'j.export' | 'j.refresh'
   | 'col.started' | 'col.game' | 'col.cargo' | 'col.route' | 'col.distance' | 'col.money' | 'col.outcome' | 'col.recording' | 'col.sync'
+  | 'col.gameMode' | 'col.jobType' | 'col.open' | 'col.income' | 'j.filters' | 'j.tripsTable' | 'j.mode' | 'j.anyMode' | 'j.anyJobType' | 'j.jobOther' | 'j.modeUnknown'
+  | 'j.openTrip' | 'j.showing' | 'j.syncNote' | 'j.trips.one' | 'j.trips.few' | 'j.trips.many' | 'j.trips.other' | 'j.hours'
   | 'j.of' | 'j.expected' | 'j.page' | 'j.prev' | 'j.next' | 'j.count'
   | 'out.open' | 'out.delivered' | 'out.late' | 'out.cancelled' | 'out.none'
   | 'sync.sent' | 'sync.queued' | 'sync.error' | 'sync.none'
@@ -552,9 +557,10 @@ export type I18nKey =
   | 'tr.tab.summary' | 'tr.tab.timeline' | 'tr.tab.completeness' | 'tr.speed' | 'tr.samples' | 'tr.gap'
   | 'tr.money' | 'tr.fines' | 'tr.tolls' | 'tr.ferry' | 'tr.hmStart' | 'tr.hmEnd' | 'tr.hmSnapshot' | 'tr.truck'
   | 'tr.ivRecorded' | 'tr.ivGap' | 'tr.ivTotal'
+  | 'tr.tabs' | 'tr.kpis' | 'tr.started' | 'tr.recordedTime' | 'tr.recordedNote' | 'tr.recordedLimit' | 'tr.ivNoSamples' | 'tr.recordedNone' | 'tr.gameTimeNone' | 'tr.durS' | 'tr.durM' | 'tr.durH' | 'tr.durMs' | 'tr.durHm' | 'tr.gapNoSpeed' | 'tr.gapExcluded' | 'tr.gapSource' | 'tr.gapUnknown' | 'tr.hmLatest' | 'tr.truckLabel' | 'tr.trailerLabel' | 'tr.trailerN' | 'tr.ivCount' | 'tr.ivNone' | 'tr.ivNoneFirst' | 'tr.ivUnknown' | 'tr.ivBar' | 'tr.ivNote' | 'tr.ivFirstOnly' | 'tr.intervalsMore' | 'tr.allFields' | 'tr.site' | 'tr.siteSaved' | 'tr.siteRevision'
   | 'ev.accepted' | 'ev.refuel' | 'ev.fine' | 'ev.toll' | 'ev.gap' | 'ev.delivered' | 'ev.cancelled' | 'ev.closed' | 'ev.recording'
   | 's.general' | 's.units' | 's.overlay' | 's.plugin' | 's.data' | 's.about'
-  | 's.lang' | 's.langD' | 's.autostart' | 's.autostartD' | 's.autostart.active' | 's.autostart.disabled' | 's.autostart.notInstalled' | 's.autostart.notInstalledNote' | 's.autostart.failed' | 's.autostart.saveFailed'
+  | 's.lang' | 's.langD' | 's.theme' | 's.themeD' | 's.autostart' | 's.autostartD' | 's.autostart.active' | 's.autostart.disabled' | 's.autostart.notInstalled' | 's.autostart.notInstalledNote' | 's.autostart.failed' | 's.autostart.saveFailed'
   | 's.close' | 's.closeD' | 's.closeV'
   | 's.u.metric' | 's.u.us' | 's.u.d'
   | 's.gear' | 's.gear.d' | 's.gear.saveFailed'
@@ -600,7 +606,8 @@ export type I18nKey =
   | 'upd.check' | 'upd.check.pending' | 'upd.check.upToDate' | 'upd.check.available' | 'upd.check.failed' | 'upd.check.unsupported' | 'upd.check.ready' | 'upd.check.rejected'
   | 'ver.line' | 'ver.unknown' | 'ver.dev' | 'ver.staging' | 'ver.stagingA'
   | 'lang.title' | 'lang.en' | 'lang.ru' | 'lang.saveFailed'
-  | 'ui.moreAbout' | 's.interface' | 'hm.howChecked' | 'hm.now' | 'hm.required.parkingShort' | 'j.incomeNote' | 'tr.raw'
+  | 'theme.light' | 'theme.dark' | 'theme.system' | 'theme.saveFailed'
+  | 'ui.moreAbout' | 's.interface' | 'hm.howChecked' | 'hm.now' | 'hm.required.parkingShort' | 'j.incomeNote'
   | 'hm.currentSettings' | 'hm.conditionsTitle' | 'hm.noticePersisted' | 'hm.noticeParking' | 'hm.noticeSnapshots'
   | 'shell.breadcrumb' | 'shell.status' | 'live.instruments' | 'live.sub' | 'live.sub.connected' | 'live.sub.paused' | 'live.sub.stale' | 'live.sub.waiting' | 'live.sub.partial' | 'live.partialTitle'
   | 'live.noJobHint' | 'live.staleReason'

@@ -392,7 +392,7 @@ function Test-RecordingReceipt {
     # Files and rows: the closed synthetic database without sidecars, no history database, and the expected rows.
     $files = $recording.files
     if ($null -eq $files -or @($files.sidecars).Count -ne 0 -or $files.historyDatabase -isnot [bool] -or $files.historyDatabase -or
-        $files.syntheticBackups -isnot [bool] -or $files.syntheticBackups -or !(Test-ReceiptInteger -Value $files.userVersion -Minimum 6 -Maximum 6)) { return $false }
+        $files.syntheticBackups -isnot [bool] -or $files.syntheticBackups -or !(Test-ReceiptInteger -Value $files.userVersion -Minimum 8 -Maximum 8)) { return $false }
     $database = $recording.database
     if ($null -eq $database -or (@($database.integrity) -join ',') -cne 'ok' -or !(Test-ReceiptInteger -Value $database.foreignKeyViolations -Minimum 0 -Maximum 0) -or
         $database.purpose -cne 'synthetic' -or @($database.sessions).Count -ne 1 -or $database.sessions[0].origin -cne 'synthetic' -or
@@ -459,7 +459,7 @@ function Test-JournalReceipt {
         !(Test-ReceiptInteger -Value $seed.pagingTolls -Minimum 104 -Maximum 104) -or !(Test-ReceiptInteger -Value $seed.pagingSamples -Minimum 3600 -Maximum 3600)) { return $false }
     if ((@($journal.pages | ForEach-Object { $_.count }) -join ',') -cne '50,50,20' -or @($journal.pages)[2].next -isnot [bool] -or @($journal.pages)[2].next) { return $false }
     $filters = $journal.filters
-    if ($null -eq $filters -or @($filters.none).Count -ne 3 -or !(Test-ReceiptInteger -Value $filters.partial -Minimum 40 -Maximum 40)) { return $false }
+    if ($null -eq $filters -or @($filters.none).Count -ne 3 -or !(Test-ReceiptInteger -Value $filters.partial -Minimum 41 -Maximum 41)) { return $false }
     # Review round 1: the B6 viewport bounds and the anchors' order are re-checked here, not only as driver flags. The
     # status, speed and fuel lines must lie inside the first viewport; page 3 lists the anchors newest first, and the
     # details are opened oldest first.
@@ -499,7 +499,7 @@ function Test-JournalReceipt {
     if (!(Test-ReceiptInteger -Value $journal.restartLauncherExit -Minimum 0 -Maximum 0) -or $Driver.launcherExit -ne 0 -or
         $null -eq $Driver.probesAfterExit -or @($Driver.probesAfterExit).Count -ne 0) { return $false }
     $files = $journal.files
-    if ($null -eq $files -or !(Test-ReceiptInteger -Value $files.userVersion -Minimum 6 -Maximum 6) -or @($files.sidecars).Count -ne 0 -or
+    if ($null -eq $files -or !(Test-ReceiptInteger -Value $files.userVersion -Minimum 8 -Maximum 8) -or @($files.sidecars).Count -ne 0 -or
         $files.syntheticBackups -isnot [bool] -or $files.syntheticBackups) { return $false }
     # Run 1 opened the new history database; run 2 only the existing synthetic one.
     $serviceEvents = @($Driver.serviceEvents); $restartService = @($journal.restartServiceEvents)
@@ -512,7 +512,7 @@ function Test-JournalReceipt {
     foreach ($run in @(@{rows=$serviceEvents; created=$true}, @{rows=$restartService; created=$false})) {
         $opened = @($run.rows | Where-Object { $_.event -ceq 'HISTORY_STORAGE_OPENED' })
         if ($opened.Count -ne 1 -or $opened[0].facts.created -isnot [bool] -or $opened[0].facts.created -ne $run.created -or
-            !(Test-ReceiptInteger -Value $opened[0].facts.schemaVersion -Minimum 6 -Maximum 6)) { return $false }
+            !(Test-ReceiptInteger -Value $opened[0].facts.schemaVersion -Minimum 8 -Maximum 8)) { return $false }
         if (@($run.rows | Where-Object { $_.event -ceq 'HISTORY_STORAGE_CLOSED' }).Count -ne 1) { return $false }
     }
     $targets = @($restartService | Where-Object { $_.event -ceq 'RECORDING_TARGET' })
@@ -637,7 +637,7 @@ function Test-SoakReceipt {
     # (packages/contracts/src/journal.ts), so M trips give floor(M / 50) full pages and a last page of M % 50, empty when
     # M is a multiple of 50.
     $pages = @($soak.journal.pages)
-    if ($soak.journal.database.purpose -cne 'synthetic' -or !(Test-ReceiptInteger -Value $soak.journal.database.schemaVersion -Minimum 6 -Maximum 6)) { return $false }
+    if ($soak.journal.database.purpose -cne 'synthetic' -or !(Test-ReceiptInteger -Value $soak.journal.database.schemaVersion -Minimum 8 -Maximum 8)) { return $false }
     foreach ($page in $pages) { if (!(Test-ReceiptInteger -Value $page -Minimum 0 -Maximum 50)) { return $false } }
     $expectedPages = @(@(50) * [int][math]::Floor($m / 50)) + @($m % 50)
     if ((@($pages | ForEach-Object { [string]$_ }) -join ',') -cne ($expectedPages -join ',')) { return $false } # rule: journal pages
@@ -656,7 +656,7 @@ function Test-SoakReceipt {
     $stopMs = [double]$source.scenarioMs
     if (!(Test-ReceiptInteger -Value $tail.lastSecond -Minimum (1000 + [math]::Floor(($stopMs - 100) / 1000)) -Maximum (1000 + [math]::Floor($stopMs / 1000)))) { return $false } # rule: tail stop
     $files = $soak.files
-    if ($null -eq $files -or $files.magic -cne 'SQLite format 3' -or !(Test-ReceiptInteger -Value $files.userVersion -Minimum 6 -Maximum 6) -or @($files.sidecars).Count -ne 0 -or
+    if ($null -eq $files -or $files.magic -cne 'SQLite format 3' -or !(Test-ReceiptInteger -Value $files.userVersion -Minimum 8 -Maximum 8) -or @($files.sidecars).Count -ne 0 -or
         $files.historyDatabase -isnot [bool] -or $files.historyDatabase -or $files.syntheticBackups -isnot [bool] -or $files.syntheticBackups) { return $false }
     # H11: at most one exit flush row, which wrote what was pending without a loss.
     foreach ($exit in @($soak.sampleExits)) {
@@ -870,22 +870,24 @@ function Test-UiReceipt {
     $flags = @('bilingual','bothSizes','security','offlineFonts','recordingIndicator','osPointerIsolated','hoverUnderDesktopCursor','versionLine','updateHidden')
     $screens = @()
     switch -CaseSensitive ($ExpectedUiCase) {
-        'shell' { $flags += @('navigation','headingFocus','hardModePage','journalUnmount','exitHintKeyboard','exitAvailable','noAccountPlaceholder','accountUnconfigured'); $screens = @('live','hardMode','journal','settings','account') }
+        'shell' { $flags += @('navigation','headingFocus','hardModePage','journalUnmount','exitHintKeyboard','exitAvailable','noAccountPlaceholder','accountBuildConfiguration'); $screens = @('live','hardMode','journal','settings','account') }
         'live' { $flags += @('numericGauge','unavailableVsZero','paused','staleDashes','rawNames','noTripPlaceholder','jobViewport','jobRowsAfterV1Gap','hmNamesReadable','fullWidthTelemetry','tankUnknownVsZero','mandatoryBreak'); $screens = @('current','zero','missing','paused','stale') }
         'journal' { $flags += @('syntheticBanner','pageReturn','chartBounded','rawTabs','noPlannedSearch','tripRegions','tableReadable','signedChart'); $screens = @('list','mode-trip','weak-mode-trip','trip','intervals','timeline','samples') }
         'settings' { $flags += @('allPanels','allSections','committedSave','sourceSelector','uninstallRefusal','refusedSave','readOnly','controlsKeyboard','lastEnabled','fontLicense','overlayVisibility','visibilityFailedSave','actionResult','overlayOpacity','opacityFailedSave','opacityReadOnly','overlayUnified','overlayEditing','overlayScroll','scaleControl','gearDisplay','gearDisplayFailedSave'); $screens = @('general','overlay','overlay-sections','plugin','about','data','save-error') }
-        'overlay' { $flags += @('fourLayouts','transparent','contained','independentFont','missing','paused','staleDashes','heroSubsets','formatterProfiles','stableNumbers','opacityKeyboardFocus','opacityGestures','backgroundOpacityOverlay','clusterRpmContained','scaleRange','clusterSpeedArc','gearDisplayManual','gearboxLabels'); $screens = @('strip','card','cluster','hud') }
+        'overlay' { $flags += @('fourLayouts','transparent','contained','independentFont','missing','paused','staleDashes','heroSubsets','formatterProfiles','stableNumbers','opacityKeyboardFocus','opacityGestures','backgroundOpacityOverlay','clusterRpmContained','scaleRange','clusterSpeedArc','gearDisplayManual','gearboxLabels','overlayExamplePreview'); $screens = @('strip','card','cluster','hud') }
     }
     foreach ($flag in $flags) { if ($ui.flags.$flag -isnot [bool] -or !$ui.flags.$flag) { return $false } }
+    if ($ExpectedUiCase -cin @('shell','journal') -and $ui.dashboardConfigured -isnot [bool]) { return $false }
     if ($ExpectedUiCase -ceq 'shell' -and !(Test-UploadUiReceipt -Value $Driver.uploadUi -Directory $Directory -Phases $Driver.phases)) { return $false }
     if ($ExpectedUiCase -ceq 'journal' -and ($ui.flags.syncHidden -isnot [bool] -or !$ui.flags.syncHidden)) { return $false }
-    # ET-045e: the overlay shard adds six English 1280x800 scale reference screenshots to its 64 layout screenshots.
-    if (@($ui.screenshots).Count -ne $(if ($ExpectedUiCase -ceq 'overlay') { 70 } elseif ($ExpectedUiCase -ceq 'settings') { 30 } else { 4 * $screens.Count })) { return $false }
+    # Overlay: 64 layout screenshots, six English scale references, and five Settings previews per language at 1280x800.
+    if (@($ui.screenshots).Count -ne $(if ($ExpectedUiCase -ceq 'overlay') { 80 } elseif ($ExpectedUiCase -ceq 'settings') { 30 } else { 4 * $screens.Count })) { return $false }
     foreach ($language in @('en','ru')) {
         foreach ($size in @(@{width=1280;height=800},@{width=1100;height=720})) {
             $pairScreens = $screens
             if ($ExpectedUiCase -ceq 'overlay') {
                 $pairScreens = @($screens | ForEach-Object { $_; "$_-missing"; "$_-paused"; "$_-stale" })
+                if ($size.width -eq 1280) { $pairScreens += @('settings-preview-strip','settings-preview-card','settings-preview-cluster','settings-preview-hud','settings-preview-narrow') }
             }
             foreach ($screen in $pairScreens) {
                 $rows = @($ui.screenshots | Where-Object { $_.language -ceq $language -and $_.width -eq $size.width -and $_.height -eq $size.height -and $_.screen -ceq $screen })
@@ -905,11 +907,40 @@ function Test-UiReceipt {
                 $imageWidth = [double]$header[16] * 16777216 + [double]$header[17] * 65536 + [double]$header[18] * 256 + $header[19]
                 $imageHeight = [double]$header[20] * 16777216 + [double]$header[21] * 65536 + [double]$header[22] * 256 + $header[23]
                 if ($imageWidth -ne $row.imageWidth -or $imageHeight -ne $row.imageHeight) { return $false }
-                if ($ExpectedUiCase -cne 'overlay' -and ($imageWidth -ne $size.width -or $imageHeight -ne $size.height)) { return $false }
+                if (($ExpectedUiCase -cne 'overlay' -or $screen.StartsWith('settings-preview-')) -and ($imageWidth -ne $size.width -or $imageHeight -ne $size.height)) { return $false }
             }
         }
     }
     if ($ExpectedUiCase -ceq 'overlay') {
+        $previewNames = @('strip','card','cluster','hud','narrow-strip','large-strip','large-card')
+        $previewSections = 'speed,gear,rpm,cruise-control,fuel,range,sdk-consumption,cargo,origin,destination,distance-driven,distance-remaining,deadline,expected-income,game-time,mandatory-break'
+        if (@($ui.overlayPreview).Count -ne 14) { return $false }
+        foreach ($language in @('en','ru')) {
+            foreach ($name in $previewNames) {
+                $observations = @($ui.overlayPreview | Where-Object { $_.language -ceq $language -and $_.name -ceq $name })
+                if ($observations.Count -ne 1) { return $false }
+                $observation = $observations[0]
+                $layout = if ($name -ceq 'narrow-strip' -or $name -ceq 'large-strip') { 'strip' } elseif ($name -ceq 'large-card') { 'card' } else { $name }
+                $scale = if ($name.StartsWith('large-')) { '3' } else { '1' }
+                if ($observation.layout -cne $layout -or $observation.scale -isnot [string] -or $observation.scale -cne $scale -or
+                    !(Test-ReceiptInteger -Value $observation.viewportWidth -Minimum 1280 -Maximum 1280) -or
+                    !(Test-ReceiptInteger -Value $observation.viewportHeight -Minimum 800 -Maximum 800) -or
+                    $observation.fitsScene -isnot [bool] -or !$observation.fitsScene -or @($observation.outside).Count -ne 0 -or
+                    (@($observation.sections) -join ',') -cne $previewSections) { return $false }
+                foreach ($dimension in @('width','height')) {
+                    $number = $observation.$dimension
+                    if (($number -isnot [int] -and $number -isnot [long] -and $number -isnot [double] -and $number -isnot [decimal]) -or
+                        [double]::IsNaN([double]$number) -or [double]::IsInfinity([double]$number) -or $number -le 0 -or $number -gt 4096) { return $false }
+                }
+                if ($observation.width -gt $observation.viewportWidth) { return $false }
+                if ($layout -ceq 'card') {
+                    $rows = $observation.cardRows
+                    if ($null -eq $rows -or !(Test-ReceiptInteger -Value $rows.count -Minimum 14 -Maximum 14) -or
+                        (@($rows.display) -join ',') -cne 'inline' -or (@($rows.verticalAlign) -join ',') -cne '-2px' -or
+                        $rows.sameLine -isnot [bool] -or !$rows.sameLine -or $rows.matchesActual -isnot [bool] -or !$rows.matchesActual) { return $false }
+                }
+            }
+        }
         foreach ($screen in @('scale-strip','scale-card','scale-cluster','scale-hud','scale-strip-old70','scale-strip-old100')) {
             $rows = @($ui.screenshots | Where-Object { $_.screen -ceq $screen })
             if ($rows.Count -ne 1) { return $false }
@@ -1128,7 +1159,7 @@ function Test-RuntimeReceipt {
         foreach ($field in @('unknown','fail','pass','hints','hover','inlineDetails','bilingual','languageHotChange','keyboard','refresh','belowThreshold','unknownExcluded','knownRatio','badge','export','overlayExcluded','persisted','osPointerIsolated')) {
             if ($hardMode.$field -isnot [bool] -or !$hardMode.$field) { $validation.reason = 'HARD_MODE_RESULT_INVALID'; return $validation }
         }
-        if ($hardMode.schemaVersion -ne 6 -or @($hardMode.flags).Count -ne 2 -or $hardMode.flags[0] -isnot [bool] -or $hardMode.flags[0] -or
+        if ($hardMode.schemaVersion -ne 8 -or @($hardMode.flags).Count -ne 2 -or $hardMode.flags[0] -isnot [bool] -or $hardMode.flags[0] -or
             $hardMode.flags[1] -isnot [bool] -or !$hardMode.flags[1] -or @($hardMode.errors).Count -ne 0) { $validation.reason = 'HARD_MODE_RESULT_INVALID'; return $validation }
     }
     # Lifecycle is additive as well; earlier scenario rules are unchanged.

@@ -126,3 +126,18 @@ it('REG-013 freezes actual schema5, ready copied evidence and an interrupted pre
     expect(db.prepare('SELECT count(*) FROM completeness_intervals WHERE trip_ref=2').pluck().get()).toBe(expected.root2Intervals);
   });
 });
+
+
+it('REG-013 freezes schema6 with delivered upload bytes, receipt and retained preparations',async()=>{
+  const copy=ws.copyFixture('schema-v6-representative.sqlite'),expected=JSON.parse(readFileSync(path.join(STORAGE_FIXTURES,'schema-v6-representative.expected.json'),'utf8'));
+  const storage=await ws.open({path:copy,migrations:MIGRATIONS.slice(0,6)});expect(storage.summary.schemaVersion).toBe(6);storage.close();
+  const fresh=await ws.open({migrations:MIGRATIONS.slice(0,6)});fresh.close();expect(schemaOf(copy)).toEqual(schemaOf(ws.database));
+  readOnly(copy,db=>{
+    for(const [table,count] of [['trips',expected.trips],['upload_projection_pins',expected.pins],['upload_envelopes',expected.envelopes],['upload_receipts',expected.receipts]]){
+      expect(db.prepare(`SELECT count(*) FROM ${table}`).pluck().get()).toBe(count);
+    }
+    const bytes=db.prepare('SELECT payload FROM upload_envelopes WHERE event_id=?').pluck().get(expected.eventId) as Buffer;
+    expect(JSON.parse(bytes.toString()).snapshot.evidence.reasons).toEqual([expected.legacyReason]);
+    expect(db.prepare('SELECT receipt_id FROM upload_receipts WHERE event_ref=?').pluck().get(expected.eventId)).toBe(expected.receiptId);
+  });
+});

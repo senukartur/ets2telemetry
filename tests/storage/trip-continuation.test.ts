@@ -13,7 +13,7 @@ import {advanceHardMode, evaluateHardMode, parseHardModeConfig} from '../../pack
 import {HARD_MODE_CONFIG} from '../shared/hard-mode';
 import {V1_CLIENT_MAX_MINOR,V1Ingestion} from '../../apps/desktop/src/v1-ingestion';
 import {serveV1Reactive} from '../../tools/telemetry-simulator/src/v1/reactive';
-import {afterEach, beforeEach, describe, expect, it,vi} from 'vitest';
+import {afterAll, afterEach, beforeAll, beforeEach, describe, expect, it,vi} from 'vitest';
 import {readFileSync,type BigIntStats} from 'node:fs';
 import path from 'node:path';
 import type {SampleInput, Storage} from '../../packages/storage/src';
@@ -21,7 +21,7 @@ import {attachTripUuidFor,tripUuidFor, type ProfileObservation} from '../../pack
 import {validateJournalTripDetail, validateJournalEventPage,validateJournalIntervalPage} from '../../packages/contracts/src/journal';
 import {ETS2_A, ETS2_B, job, otherJob, r, Script, trailer} from '../shared/trip-messages';
 import {MIGRATIONS,openStorage} from '../../packages/storage/src';
-import {ok,failed,digestOf,readOnly,STORAGE_FIXTURES,workspace} from './helpers';
+import {ok,failed,digestOf,readOnly,STORAGE_FIXTURES,TEST_CLOSE_GRACE_MS,workspace} from './helpers';
 import {ClientSocket,guarded,runRecording,terminateWorkers} from './recording-helpers';
 import {scenarioPath} from '../shared/simulator-v1-expected';
 import {seededId} from '../../tools/telemetry-simulator/src/v1/source';
@@ -90,12 +90,12 @@ function close(storage: Storage, script: Script, uuid: string, terminal = false)
 
 describe('REG-003/005/008/012/014 durable logical trips', () => {
   it.each([1,3])('sums v2 member check counts across %s sessions and worker/database reopen', async sessions => {
-    let worker=storageWorker(),client=new StorageClient(worker.handle),original='';
+    let worker=storageWorker(),client=new StorageClient(worker.handle,{closeGraceMs:TEST_CLOSE_GRACE_MS}),original='';
     try {
       ok(await client.open({path:ws.database,backupsDirectory:ws.backups,purpose:'synthetic',appVersion:'test-v2'}));
       const ids=[ETS2_A,ETS2_B,'10000000-0000-4000-8000-0000000000d4'];
       for(let i=0;i<sessions;i++) {
-        if(i>0) {expect(await client.close()).toEqual({clean:true});worker=storageWorker();client=new StorageClient(worker.handle);
+        if(i>0) {expect(await client.close()).toEqual({clean:true});worker=storageWorker();client=new StorageClient(worker.handle,{closeGraceMs:TEST_CLOSE_GRACE_MS});
           ok(await client.open({path:ws.database,backupsDirectory:ws.backups,purpose:'synthetic',appVersion:'test-v2'}));}
         const script=new Script(ids[i]);ok(await client.upsertSession({message:script.welcome()}));
         const configured=script.event(r.jobConfigured()),uuid=tripUuidFor(script.session,configured.data.eventSeq);original ||= uuid;
@@ -135,7 +135,7 @@ describe('REG-003/005/008/012/014 durable logical trips', () => {
     ok(storage.observeHardMode('ets2',{assessment,binding:'b'.repeat(64),pluginSessionId:b.session,sourceMonotonicNs:'0',batch:{tripUuid:second,producer:'90000000-0000-4000-8000-000000000001',sequence:1,passingChecks:1,failingChecks:0,unknownChecks:0}},true));
     ok(storage.commitEvent({message:b.event(r.delivered()),effects:[{kind:'trip.close',tripUuid:second,outcome:'delivered',closeReason:'outcome',outcomeEvent:'this-event',recordingCompleteness:'partial',endedUtcMs:3000}]}));
     const detail=validateJournalTripDetail(ok(storage.journalTrip(first)));expect(detail.trip).toMatchObject({isHardMode:false,hardModeDetails:null});expect(ok(storage.journalTrips()).trips).toHaveLength(1);
-    const serializer=new TripExportSerializer(detail,tripExportHeader({uuid:'30000000-0000-4000-8000-000000000001',purpose:'synthetic',schemaVersion:6},'test',4000));
+    const serializer=new TripExportSerializer(detail,tripExportHeader({uuid:'30000000-0000-4000-8000-000000000001',purpose:'synthetic',schemaVersion:8},'test',4000));
     const exported=JSON.parse(serializer.begin()+serializer.rows('sources',ok(storage.journalIntervals(first,{limit:500,cursor:detail.exportBounds.snapshot!.sources})).sources!)+serializer.rows('intervals',ok(storage.journalIntervals(first,{limit:500,cursor:detail.exportBounds.snapshot!.intervals})).intervals)+serializer.rows('events',ok(storage.journalEvents(first,{limit:500,cursor:detail.exportBounds.snapshot!.events})).events)+serializer.end());
     expect(tripExportProblems(exported)).toEqual([]);expect(exported.trip).toMatchObject({is_hard_mode:false,hard_mode_details:null});ok(storage.close());
     readOnly(ws.database,sql=>expect(sql.prepare('SELECT hard_mode_details,is_hard_mode FROM trips WHERE trip_uuid=?').get(first)).toEqual({hard_mode_details:null,is_hard_mode:0}));
@@ -165,7 +165,7 @@ describe('REG-003/005/008/012/014 durable logical trips', () => {
   });
   it.each(['after-driving','before-first-start','chain-break'] as const)('retains 750m and 1.5L through menu acceptance, sleep and three saved sources: %s',async scenario=>{
     const values=job({market:{available:true,value:'external_contracts'}}),signals=new EventEmitter(),coverage=new Map<string,string>(),acks:{stored:string;through:string}[]=[];
-    let worker=storageWorker(),client=new StorageClient(worker.handle),ingestion:V1Ingestion|undefined,currentProof:ProfileObservation|undefined,qualified=true;
+    let worker=storageWorker(),client=new StorageClient(worker.handle,{closeGraceMs:TEST_CLOSE_GRACE_MS}),ingestion:V1Ingestion|undefined,currentProof:ProfileObservation|undefined,qualified=true;
     const token={};let currentSink:TripRecorderSink;const prestart=scenario!=='after-driving',broken=scenario==='chain-break';let coalesced=false;
     const create=()=>{
       const commit=client.commitEvent.bind(client),gap=client.commitGap.bind(client),attach=client.openAttachedTrip.bind(client);
@@ -187,7 +187,7 @@ describe('REG-003/005/008/012/014 durable logical trips', () => {
     };
     try{
       for(let index=0;index<3;index++){
-        if(index===2){await ingestion!.stop();expect(await client.close()).toEqual({clean:true});worker=storageWorker();client=new StorageClient(worker.handle);
+        if(index===2){await ingestion!.stop();expect(await client.close()).toEqual({clean:true});worker=storageWorker();client=new StorageClient(worker.handle,{closeGraceMs:TEST_CLOSE_GRACE_MS});
           summary=ok(await client.open({path:ws.database,backupsDirectory:ws.backups,purpose:'synthetic',appVersion:'test'}));create();}
         const s=new Script([ETS2_A,ETS2_B,'10000000-0000-4000-8000-0000000000d4'][index]),welcome=s.welcome();currentProof=proof(s);
         const endpoint=`\\\\.\\pipe\\ETS2Telemetry-SYNTHETIC-TEST-v1-${process.pid}-${s.session}`;
@@ -203,7 +203,8 @@ describe('REG-003/005/008/012/014 durable logical trips', () => {
             while(buffered.length>=4&&buffered.length>=buffered.readUInt32LE()+4){const size=buffered.readUInt32LE(),message=decodePayload(buffered.subarray(4,size+4),'client') as ClientMessage;buffered=buffered.subarray(size+4);
               if(message.kind==='hello'){send(welcome);send(checkpoint);}
               if(message.kind==='ack'){acks.push({through:message.data.throughEventSeq,stored:coverage.get(message.data.pluginSessionId)??'0'});signals.emit('ack',message.data.throughEventSeq);}
-              if(message.kind==='clock.probe'){const ns=BigInt(last.capture.monotonicNs)+3n;send({...welcome,kind:'clock.reply',capture:{clockId:s.clockId,monotonicNs:String(ns)},data:{probeId:message.data.probeId,receivedMonotonicNs:String(ns-2n),sentMonotonicNs:String(ns-1n)}});}
+              // A probe can arrive after peer.end(): the half-closed source does not answer, because a write after end is an uncaught stream error.
+              if(message.kind==='clock.probe'&&!socket.writableEnded){const ns=BigInt(last.capture.monotonicNs)+3n;send({...welcome,kind:'clock.reply',capture:{clockId:s.clockId,monotonicNs:String(ns)},data:{probeId:message.data.probeId,receivedMonotonicNs:String(ns-2n),sentMonotonicNs:String(ns-1n)}});}
             }
           });
         });
@@ -283,7 +284,7 @@ describe('REG-003/005/008/012/014 durable logical trips', () => {
       const detail=ok(await client.journalTrip(original));expect(detail.trip.outcome).toBe('delivered');expect(ok(await client.listTrips()).trips).toHaveLength(3);
       if(scenario==='before-first-start')expect(detail.trip).toMatchObject({isHardMode:true,hardModeDetails:{version:2,passingChecks:3,failingChecks:0,unknownChecks:2}});
       expect(ok(await client.listSamples({tripUuid:original},{afterId:oldSnapshot,includeExcluded:true}))).toHaveLength(prestart?3:2);
-      const service=new JournalService({history:{state:'open',failureCode:null,client,database:{purpose:'synthetic',schemaVersion:6},databaseUuid:summary.databaseUuid},stopping:()=>false,log:()=>undefined});
+      const service=new JournalService({history:{state:'open',failureCode:null,client,database:{purpose:'synthetic',schemaVersion:8},databaseUuid:summary.databaseUuid},stopping:()=>false,log:()=>undefined});
       const filename=path.join(ws.directory,'continuity.json'),exporter=new JournalExporter({read:query=>service.query(query),showSaveDialog:()=>Promise.resolve({canceled:false,filePath:filename}),documents:()=>undefined,localAppData:ws.directory,appVersion:'test',log:()=>undefined});
       expect(await exporter.export(original)).toMatchObject({ok:true,value:{outcome:'saved'}});
       const exported=JSON.parse(readFileSync(filename,'utf8')) as {formatVersion:number;trip:unknown;intervals:unknown[];sources:unknown[];events:{type:string}[];samples:unknown[]};
@@ -436,7 +437,7 @@ describe('REG-003/005/008/012/014 durable logical trips', () => {
   });
   it.each(['observed','running','no-absence-reading','before-first-start','prestart-gap','prestart-replayed','prestart-regression','prestart-reset','prestart-previous-job','prestart-checkpoint','first-job','first-job-with-gap','configured-before-timer','reset-before-config','replayed','replayed-clear','gap-after-absence','gap-before-clear','gap-before-clear-recovered','previous-configuration','regression-before-config','no-profile','pending-profile','late-profile'] as const)(
     'recognizes a contiguous new job independently of pause and profile timing: %s', async variant=>{
-      const worker=storageWorker(),client=new StorageClient(worker.handle),s=new Script(ETS2_A),context={receivedUtcMs:1000};
+      const worker=storageWorker(),client=new StorageClient(worker.handle,{closeGraceMs:TEST_CLOSE_GRACE_MS}),s=new Script(ETS2_A),context={receivedUtcMs:1000};
       ok(await client.open({path:ws.database,backupsDirectory:ws.backups,purpose:'synthetic',appVersion:'test'}));
       let currentProof=proof(s),qualified=true,clock=s.clockId,order=100;const token={};
       const recorder=new TripRecorderSink(client,{profileEvidence:()=>qualified?currentProof:undefined,
@@ -497,7 +498,7 @@ describe('REG-003/005/008/012/014 durable logical trips', () => {
     });
   it.each(['plain','intermediate','same-second-pending','steady-pause','steady-pause-pending','stale-qualified','long-pending','profile-change','load-change','revoked','coalesced','offline'] as const)(
     'keeps the owned predecessor of a corroborated 250m step: %s', async variant => {
-      const worker=storageWorker(),client=new StorageClient(worker.handle),s=new Script(ETS2_A),context={receivedUtcMs:1000};
+      const worker=storageWorker(),client=new StorageClient(worker.handle,{closeGraceMs:TEST_CLOSE_GRACE_MS}),s=new Script(ETS2_A),context={receivedUtcMs:1000};
       ok(await client.open({path:ws.database,backupsDirectory:ws.backups,purpose:'synthetic',appVersion:'test'}));
       let qualified=true,token={},captured=proof(s);const written:SampleInput[]=[];
       const append=client.appendSamples.bind(client);client.appendSamples=(session,rows,options)=>{written.push(...structuredClone(rows));return append(session,rows,options);};
@@ -566,6 +567,7 @@ describe('REG-003/005/008/012/014 durable logical trips', () => {
     };
     const launch=<T>(work:Promise<T>)=>{launched.push(work);void work.catch(()=>undefined);return work;};
     const watchdog=variant.startsWith('watchdog-');let clientNs=0n,wireSeq=0n,boundary=100n;const revision='1';const now=()=>++clientNs;const diagnostics:string[]=[];
+    // The production close grace stays: this case asserts no clean close, and its cleanup has its own 4 s budget below TEST_CLOSE_GRACE_MS.
     const worker=storageWorker(),client=new StorageClient(worker.handle),script=new Script(ETS2_A),welcome=script.welcome();
     let holdPersist=false,persistHeld=false,enterPersist!:()=>void,releasePersist!:()=>void;
     const persistEntered=new Promise<void>(resolve=>{enterPersist=resolve;}),persistRelease=new Promise<void>(resolve=>{releasePersist=resolve;}),persist=client.openAttachedTrip.bind(client);
@@ -887,7 +889,7 @@ describe('REG-003/005/008/012/014 durable logical trips', () => {
     expect(trip.recordingCompleteness).toBe('complete');storage.close();
   });
   it.each(['ferry-sampled','train-sampled','ferry-captured','train-captured'] as const)('does not bridge an explicit transfer through the recorder and real worker: %s',async variant=>{
-    const worker=storageWorker(),client=new StorageClient(worker.handle),s=new Script(ETS2_A),context={receivedUtcMs:1000};
+    const worker=storageWorker(),client=new StorageClient(worker.handle,{closeGraceMs:TEST_CLOSE_GRACE_MS}),s=new Script(ETS2_A),context={receivedUtcMs:1000};
     succeeded(await client.open({path:ws.database,backupsDirectory:ws.backups,purpose:'synthetic',appVersion:'test'}));
     const recorder=new TripRecorderSink(client,{profileEvidence:()=>proof(s)});
     succeeded(await recorder.openSession(s.welcome()));succeeded(recorder.observe(s.checkpoint(null),context));succeeded(await recorder.commit(s.event(r.started()),context));
@@ -910,7 +912,7 @@ describe('REG-003/005/008/012/014 durable logical trips', () => {
     expect(await client.close()).toEqual({clean:true});
   });
   it.each(['clean','counter','unqualified','foreign-trip','foreign-plugin','foreign-clock','foreign-proof','foreign-process','foreign-scope','foreign-load','late-proof','stale','ahead','ferry-first','train-second','gap','profile-change','clock-change','intermediate-regression','intermediate-teleport','intermediate-refuel'] as const)('advances two captured pauses through an unsampled running reading only with owned continuous evidence: %s',async variant=>{
-    const worker=storageWorker(),client=new StorageClient(worker.handle),s=new Script(ETS2_A),context={receivedUtcMs:1000};
+    const worker=storageWorker(),client=new StorageClient(worker.handle,{closeGraceMs:TEST_CLOSE_GRACE_MS}),s=new Script(ETS2_A),context={receivedUtcMs:1000};
     let currentProof:ProfileObservation|undefined=proof(s);succeeded(await client.open({path:ws.database,backupsDirectory:ws.backups,purpose:'synthetic',appVersion:'test'}));
     const recorder=new TripRecorderSink(client,{profileEvidence:()=>currentProof});succeeded(await recorder.openSession(s.welcome()));succeeded(recorder.observe(s.checkpoint(null),context));
     succeeded(await recorder.commit(s.event(r.started()),context));const event=s.event(r.jobConfigured());succeeded(await recorder.commit(event,context));
@@ -978,7 +980,7 @@ describe('REG-003/005/008/012/014 durable logical trips', () => {
     expect(ok(storage.journalTrip(uuid)).trip.recordingCompleteness).toBe(cause==='truck-change'?'unknown':'partial');storage.close();
   });
   it('rejects malformed captured boundaries at the real worker without changing coverage or samples',async()=>{
-    const worker=storageWorker(),client=new StorageClient(worker.handle),script=new Script(ETS2_A);
+    const worker=storageWorker(),client=new StorageClient(worker.handle,{closeGraceMs:TEST_CLOSE_GRACE_MS}),script=new Script(ETS2_A);
     ok(await client.open({path:ws.database,backupsDirectory:ws.backups,purpose:'synthetic',appVersion:'test'}));
     ok(await client.upsertSession({message:script.welcome()}));
     const event=script.event(r.jobConfigured()),uuid=tripUuidFor(script.session,event.data.eventSeq);
@@ -1050,7 +1052,7 @@ describe('REG-003/005/008/012/014 durable logical trips', () => {
     const third={...second,id:'coverage-third',seed:'coverage-third',steps:[pause(5),truck,base.steps[1],configured,frame(50,343.75,94.5,95,502,0),start(100),
       frame(200,375,94,100,502),frame(1200,437.5,93,120,502),frame(2200,500,92,140,502),{...base.steps[9],atMs:2300},{...base.steps[10],atMs:2310}],
       transport:[{atMs:0,action:'connect',client:{durable:true}},{atMs:2400,action:'disconnect'}]};
-    let currentProof:ProfileObservation|undefined,worker=storageWorker(),client=new StorageClient(worker.handle),ingestion:V1Ingestion;
+    let currentProof:ProfileObservation|undefined,worker=storageWorker(),client=new StorageClient(worker.handle,{closeGraceMs:TEST_CLOSE_GRACE_MS}),ingestion:V1Ingestion;
     const acks:{through:string;stored:string}[]=[];let original='';let closed:()=>void=()=>undefined;const coverage=new Map<string,string>();
     const create=()=>{
       const event=client.commitEvent.bind(client),gap=client.commitGap.bind(client);
@@ -1069,7 +1071,7 @@ describe('REG-003/005/008/012/014 durable logical trips', () => {
     };
     ok(await client.open({path:ws.database,backupsDirectory:ws.backups,purpose:'synthetic',appVersion:'test'}));create();
     for(const [index,input] of [first,second,third].entries()){
-      if(index===2){await ingestion!.stop();expect(await client.close()).toEqual({clean:true});worker=storageWorker();client=new StorageClient(worker.handle);
+      if(index===2){await ingestion!.stop();expect(await client.close()).toEqual({clean:true});worker=storageWorker();client=new StorageClient(worker.handle,{closeGraceMs:TEST_CLOSE_GRACE_MS});
         ok(await client.open({path:ws.database,backupsDirectory:ws.backups,purpose:'synthetic',appVersion:'test'}));create();}
       const source=scenarioSource(replayV1(input).scenario);
       currentProof={version:1,scope:'e'.repeat(64),binding:'f'.repeat(64),game:'ets2',pluginSessionId:source.pluginSessionId,processInstanceId:source.processInstanceId,
@@ -1088,7 +1090,7 @@ describe('REG-003/005/008/012/014 durable logical trips', () => {
     expect(await client.close()).toEqual({clean:true});
   },60_000);
   it.each(['sample-conflict','captured-conflict','sample-equivalent','captured-equivalent','restart-equivalent','candidate-overflow','captured-overflow','path-overflow'] as const)('requires a unique retained saved accounting prefix: %s',async variant=>{
-    let worker=storageWorker(),client=new StorageClient(worker.handle);const a=new Script(ETS2_A),b=new Script(ETS2_B),context={receivedUtcMs:1000};
+    let worker=storageWorker(),client=new StorageClient(worker.handle,{closeGraceMs:TEST_CLOSE_GRACE_MS});const a=new Script(ETS2_A),b=new Script(ETS2_B),context={receivedUtcMs:1000};
     let lastBoundary:Parameters<StorageClient['openAttachedTrip']>[0]|undefined;
     const attach=client.openAttachedTrip.bind(client);client.openAttachedTrip=input=>{if(input.endpoint)lastBoundary=structuredClone(input);return attach(input);};
     let currentProof=proof(a);ok(await client.open({path:ws.database,backupsDirectory:ws.backups,purpose:'synthetic',appVersion:'test'}));
@@ -1130,7 +1132,7 @@ describe('REG-003/005/008/012/014 durable logical trips', () => {
         for(let n=0;n<257;n++)head=append.run(head,head).lastInsertRowid as bigint;
         db.prepare('UPDATE logical_trips SET progress_head=? WHERE trip_uuid=?').run(head,uuid);
       }finally{db.close();}
-      worker=storageWorker();client=new StorageClient(worker.handle);ok(await client.open({path:ws.database,backupsDirectory:ws.backups,purpose:'synthetic',appVersion:'test'}));
+      worker=storageWorker();client=new StorageClient(worker.handle,{closeGraceMs:TEST_CLOSE_GRACE_MS});ok(await client.open({path:ws.database,backupsDirectory:ws.backups,purpose:'synthetic',appVersion:'test'}));
       recorder=new TripRecorderSink(client,{profileEvidence:()=>currentProof});
     }
     currentProof=proof(b);succeeded(await recorder.openSession(b.welcome()));succeeded(recorder.observe(b.checkpoint(null),context));succeeded(await recorder.commit(b.gap(2),context));
@@ -1155,7 +1157,7 @@ describe('REG-003/005/008/012/014 durable logical trips', () => {
   it.each(['between-ticks','earlier-prefix','between-ticks-noisy','earlier-prefix-noisy'] as const)('resumes a captured PAUSED save before its first advancing running sample: %s',async variant=>{
     const earlier=variant.startsWith('earlier-prefix'),noisy=variant.endsWith('noisy');
     const accepted=<T>(result:{ok:true;value:T}|{ok:false;error:{code:string}}):T=>{if(!result.ok)throw new Error(result.error.code);return result.value;};
-    const worker=storageWorker(),client=new StorageClient(worker.handle);let currentProof:ProfileObservation|undefined;
+    const worker=storageWorker(),client=new StorageClient(worker.handle,{closeGraceMs:TEST_CLOSE_GRACE_MS});let currentProof:ProfileObservation|undefined;
     ok(await client.open({path:ws.database,backupsDirectory:ws.backups,purpose:'synthetic',appVersion:'test'}));
     const recorder=new TripRecorderSink(client,{profileEvidence:()=>currentProof}),context={receivedUtcMs:1000},a=new Script(ETS2_A),b=new Script(ETS2_B);
     const capture=async(s:Script,odo:number,fuel:number,minutes:string,x:number,simulation:'running'|'paused',advance=1000)=>{
@@ -1196,13 +1198,13 @@ describe('REG-003/005/008/012/014 durable logical trips', () => {
     'keeps three-session completeness evidence-dependent across a persistent recorder and full restart: %s', async variant => {
     const accepted = <T>(result: {ok:true;value:T}|{ok:false;error:{code:string}}):T => {if(!result.ok)throw new Error(result.error.code);return result.value;};
     let currentProof: ProfileObservation | undefined;
-    let worker=storageWorker(), client=new StorageClient(worker.handle);
+    let worker=storageWorker(), client=new StorageClient(worker.handle,{closeGraceMs:TEST_CLOSE_GRACE_MS});
     const createRecorder=()=>new TripRecorderSink(client,{profileEvidence:()=>currentProof});
     ok(await client.open({path:ws.database,backupsDirectory:ws.backups,purpose:'synthetic',appVersion:'test'}));
     let recorder=createRecorder(), original=''; const context={receivedUtcMs:1000};
     const scripts=[new Script(ETS2_A),new Script(ETS2_B),new Script('10000000-0000-4000-8000-000000000009')];
     for(const [index,script] of scripts.entries()) {
-      if(index===2){expect(await client.close()).toEqual({clean:true});worker=storageWorker();client=new StorageClient(worker.handle);
+      if(index===2){expect(await client.close()).toEqual({clean:true});worker=storageWorker();client=new StorageClient(worker.handle,{closeGraceMs:TEST_CLOSE_GRACE_MS});
         ok(await client.open({path:ws.database,backupsDirectory:ws.backups,purpose:'synthetic',appVersion:'test'}));recorder=createRecorder();}
       currentProof=proof(script); accepted(await recorder.openSession(script.welcome()));accepted(recorder.observe(script.checkpoint(null),context));
       if(index===0 && variant!=='unobserved-start')accepted(await recorder.commit(script.event(r.started()),context));
@@ -1242,7 +1244,7 @@ describe('REG-003/005/008/012/014 durable logical trips', () => {
     {name:'unsupported reconnect endpoint',firstMs:1000,advanced:false,missingEndpoint:true}
   ])('uses the owned running checkpoint counter baseline: $name',async({firstMs,advanced,missingEndpoint})=>{
     const accepted=<T>(result:{ok:true;value:T}|{ok:false;error:{code:string}}):T=>{if(!result.ok)throw new Error(result.error.code);return result.value;};
-    const worker=storageWorker(),client=new StorageClient(worker.handle),s=new Script(ETS2_A),context={receivedUtcMs:1000};
+    const worker=storageWorker(),client=new StorageClient(worker.handle,{closeGraceMs:TEST_CLOSE_GRACE_MS}),s=new Script(ETS2_A),context={receivedUtcMs:1000};
     ok(await client.open({path:ws.database,backupsDirectory:ws.backups,purpose:'synthetic',appVersion:'test'}));
     const recorder=new TripRecorderSink(client,{profileEvidence:()=>proof(s)});
     accepted(await recorder.openSession(s.welcome()));accepted(recorder.observe(s.checkpoint(null),context));
@@ -1277,7 +1279,7 @@ describe('REG-003/005/008/012/014 durable logical trips', () => {
   });
   it('counts ordinary driving after historical nonzero counters and a later coalescing advance',async()=>{
     const accepted=<T>(result:{ok:true;value:T}|{ok:false;error:{code:string}}):T=>{if(!result.ok)throw new Error(result.error.code);return result.value;};
-    const worker=storageWorker(),client=new StorageClient(worker.handle),s=new Script(ETS2_A),context={receivedUtcMs:1000};
+    const worker=storageWorker(),client=new StorageClient(worker.handle,{closeGraceMs:TEST_CLOSE_GRACE_MS}),s=new Script(ETS2_A),context={receivedUtcMs:1000};
     ok(await client.open({path:ws.database,backupsDirectory:ws.backups,purpose:'synthetic',appVersion:'test'}));
     const recorder=new TripRecorderSink(client,{profileEvidence:()=>proof(s)});
     accepted(await recorder.openSession(s.welcome()));accepted(recorder.observe(s.checkpoint(null),context));
@@ -1304,7 +1306,7 @@ describe('REG-003/005/008/012/014 durable logical trips', () => {
     {name:'conflicting recorded and current facts',initial:null,current:200,middle:false,joins:false},
     {name:'recorded facts conflicting with candidate constraints',initial:200,current:null,middle:false,joins:false}
   ])('retains raw canonical evidence through delayed proof: $name',async({initial,current,middle,joins})=>{
-    const worker=storageWorker(),client=new StorageClient(worker.handle);
+    const worker=storageWorker(),client=new StorageClient(worker.handle,{closeGraceMs:TEST_CLOSE_GRACE_MS});
     ok(await client.open({path:ws.database,backupsDirectory:ws.backups,purpose:'synthetic',appVersion:'test'}));
     const offer=(value:number|null)=>job({plannedDistance:value===null?{available:false,reason:'not-observed',unit:'m'}:{available:true,value:value*1000,unit:'m'}});
     const openRaw=async(s:Script,distance:number|null)=>{
@@ -1345,7 +1347,7 @@ describe('REG-003/005/008/012/014 durable logical trips', () => {
   });
   it('does not bridge a same-raw short reconnect without lost events through the recorder and worker',async()=>{
     const accepted=<T>(result:{ok:true;value:T}|{ok:false;error:{code:string}}):T=>{if(!result.ok)throw new Error(result.error.code);return result.value;};
-    const worker=storageWorker(),client=new StorageClient(worker.handle),s=new Script(ETS2_A),context={receivedUtcMs:1000};
+    const worker=storageWorker(),client=new StorageClient(worker.handle,{closeGraceMs:TEST_CLOSE_GRACE_MS}),s=new Script(ETS2_A),context={receivedUtcMs:1000};
     ok(await client.open({path:ws.database,backupsDirectory:ws.backups,purpose:'synthetic',appVersion:'test'}));
     const recorder=new TripRecorderSink(client,{profileEvidence:()=>proof(s)});
     accepted(await recorder.openSession(s.welcome()));accepted(recorder.observe(s.checkpoint(null),context));
@@ -1368,7 +1370,7 @@ describe('REG-003/005/008/012/014 durable logical trips', () => {
   });
   it('leaves a reconnect checkpoint unassigned while a replay gap can hide job replacement',async()=>{
     const accepted=<T>(result:{ok:true;value:T}|{ok:false;error:{code:string}}):T=>{if(!result.ok)throw new Error(result.error.code);return result.value;};
-    const worker=storageWorker(),client=new StorageClient(worker.handle);
+    const worker=storageWorker(),client=new StorageClient(worker.handle,{closeGraceMs:TEST_CLOSE_GRACE_MS});
     ok(await client.open({path:ws.database,backupsDirectory:ws.backups,purpose:'synthetic',appVersion:'test'}));
     const recorder=new TripRecorderSink(client),s=new Script(ETS2_A),context={receivedUtcMs:1000};
     accepted(await recorder.openSession(s.welcome()));accepted(recorder.observe(s.checkpoint(null),context));
@@ -1547,9 +1549,9 @@ describe('REG-003/005/008/012/014 durable logical trips', () => {
     const storage=await ws.open(),s=new Script(ETS2_A),uuid=open(storage,s);
     for(const [second,odo] of [[1,1000000],[2,1000050],[3,1000100],[4,1000060],[5,1000100]])sample(storage,s,uuid,second,odo);
     ok(storage.close());
-    const worker=storageWorker(),client=new StorageClient(worker.handle);
+    const worker=storageWorker(),client=new StorageClient(worker.handle,{closeGraceMs:TEST_CLOSE_GRACE_MS});
     const summary=ok(await client.open({path:ws.database,backupsDirectory:ws.backups,purpose:'synthetic',appVersion:'test'}));
-    const database={purpose:'synthetic',schemaVersion:6} as const;
+    const database={purpose:'synthetic',schemaVersion:8} as const;
     const service=new JournalService({history:{state:'open',failureCode:null,client,database,databaseUuid:summary.databaseUuid},stopping:()=>false,log:()=>undefined});
     const selected=ok(await client.listSamples({tripUuid:uuid}));expect(selected.map(row=>row.id)).toEqual(['1','2','4','5']);
     for(const limit of [300,3600]){
@@ -1567,22 +1569,30 @@ describe('REG-003/005/008/012/014 durable logical trips', () => {
     expect(ok(await client.listSamples({tripUuid:uuid},{limit:1,includeExcluded:true}))).toHaveLength(1);
     expect(await client.close()).toEqual({clean:true});await worker.handle.terminate();
   });
-  it('pages recording provenance beyond the detail bound without exposing private profile proof',async()=>{
-    const storage=await ws.open();let first='';
-    for(let i=0;i<260;i++){
-      const script=new Script(`10000000-0000-4000-8000-${(i+1000).toString(16).padStart(12,'0')}`),uuid=open(storage,script);
-      first ||= uuid;close(storage,script,uuid);
-    }
-    const detail=validateJournalTripDetail(ok(storage.journalTrip(first)));
-    expect(detail.exportBounds.sourceTotal).toBe(260);expect(detail.exportBounds.sources).toHaveLength(256);
-    let cursor:string|null=detail.exportBounds.snapshot!.sources;const sessions:string[]=[],sizes:number[]=[];
-    while(cursor!==null){
-      const page=validateJournalIntervalPage(ok(storage.journalIntervals(first,{limit:100,cursor})),100);
-      expect(page.sourceTotal).toBe(260);expect(page.intervals).toEqual([]);
-      sizes.push(page.sources!.length);sessions.push(...page.sources!.map(s=>s.pluginSessionId));cursor=page.nextSourceCursor ?? null;
-      expect(JSON.stringify(page)).not.toContain('scope');expect(JSON.stringify(page)).not.toContain('binding');
-    }
-    expect(sizes).toEqual([100,100,60]);expect(new Set(sessions).size).toBe(260);
+  describe('recording provenance fixture',()=>{
+    // 260 sessions require 780 real core commands; build the read fixture outside the ordinary 30 s assertion case.
+    const PROVENANCE_BUILD_BUDGET_MS=120_000;
+    let provenanceWs:Awaited<ReturnType<typeof workspace>>,storage:Storage,first='';
+    beforeAll(async()=>{
+      provenanceWs=await workspace();storage=await provenanceWs.open();
+      for(let i=0;i<260;i++){
+        const script=new Script(`10000000-0000-4000-8000-${(i+1000).toString(16).padStart(12,'0')}`),uuid=open(storage,script);
+        first ||= uuid;close(storage,script,uuid);
+      }
+    },PROVENANCE_BUILD_BUDGET_MS);
+    afterAll(async()=>{await provenanceWs?.dispose();});
+    it('pages recording provenance beyond the detail bound without exposing private profile proof',()=>{
+      const detail=validateJournalTripDetail(ok(storage.journalTrip(first)));
+      expect(detail.exportBounds.sourceTotal).toBe(260);expect(detail.exportBounds.sources).toHaveLength(256);
+      let cursor:string|null=detail.exportBounds.snapshot!.sources;const sessions:string[]=[],sizes:number[]=[];
+      while(cursor!==null){
+        const page=validateJournalIntervalPage(ok(storage.journalIntervals(first,{limit:100,cursor})),100);
+        expect(page.sourceTotal).toBe(260);expect(page.intervals).toEqual([]);
+        sizes.push(page.sources!.length);sessions.push(...page.sources!.map(s=>s.pluginSessionId));cursor=page.nextSourceCursor ?? null;
+        expect(JSON.stringify(page)).not.toContain('scope');expect(JSON.stringify(page)).not.toContain('binding');
+      }
+      expect(sizes).toEqual([100,100,60]);expect(new Set(sessions).size).toBe(260);
+    });
   });
   it.each(['driving','paused'] as const)('records next-day %s continuation before the default sample flush through production ingestion and the Journal reply boundary',async driving=>{
     const base=JSON.parse(readFileSync(scenarioPath('normal-delivery'),'utf8'));
@@ -1642,7 +1652,7 @@ describe('REG-013 logical singleton migration',()=>{
   it.each([1,2,3])('preserves IDs and raw facts from frozen schema v%i without inferring membership',async version=>{
     const file=ws.copyFixture(`schema-v${version}-representative.sqlite`);
     const before=readOnly(file,db=>db.prepare('SELECT * FROM trips ORDER BY id').all()) as Record<string,unknown>[];
-    const storage=await ws.open({path:file});expect(storage.summary.schemaVersion).toBe(6);
+    const storage=await ws.open({path:file});expect(storage.summary.schemaVersion).toBe(8);
     const list=ok(storage.journalTrips()).trips;
     expect(list.map(t=>t.tripUuid).sort()).toEqual(before.map(t=>t.trip_uuid).sort());
     for(const trip of before)expect(ok(storage.journalTrip(String(trip.trip_uuid))).trip.recordingCompleteness).toBe(trip.recording_completeness);

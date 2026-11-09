@@ -168,7 +168,7 @@ export function overlayView(presentation: OverlayPresentation = OVERLAY_PLACEHOL
         : {...base, value: section.text, ...ring};
     }
     // ET-071: a set speed splits into number and unit like speed; `off` is the localized word and a dash has no unit, and
-    // the strip's fixed slot (STRIP_FIXED_WIDTH_SECTIONS) keeps all three the same width.
+    // a dash has no unit.
     if (section.id === 'cruise-control') {
       if (!available) return {...base, value: DASH};
       if (section.text === CRUISE_CONTROL_OFF) return {...base, value: strings.overlayCruiseOff};

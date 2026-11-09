@@ -38,12 +38,25 @@ export interface JournalGameMode {mode: GameMode['mode'] | 'convoy'; method: Gam
 export type JournalAttributionKind = 'trip' | 'trip-before-loaded' | 'free-driving' | 'ambiguous';
 export type JournalIntervalKind = 'event-loss' | 'not-connected' | 'storage-unavailable' | 'sample-loss' | 'discontinuity' | 'restore-loss';
 export type JournalMoneyCategory = 'fine' | 'toll' | 'ferry' | 'train';
+/** The job type filter of the list. The five values partition all trips: a market that is not listed, is empty or is unavailable is `other`. */
+export type JournalJobFilter = 'quick-job' | 'cargo-market' | 'freight-market' | 'world-of-trucks' | 'other';
+/**
+ * The kind of each documented raw `job.market` value. The SDK names no market World of Trucks; the community reading of
+ * `external_*` does. Shared by the list filter's SQL, main's reply check and the display, so they cannot disagree.
+ */
+export const JOURNAL_MARKET_KINDS: Readonly<Record<string, Exclude<JournalJobFilter, 'other'>>> = Object.freeze({
+  'quick_job': 'quick-job', 'cargo_market': 'cargo-market', 'freight_market': 'freight-market', 'external_contracts': 'world-of-trucks', 'external_market': 'world-of-trucks'
+});
+/** The job type filter that a trip's market falls under: its kind, or `other` for any other value, '' and an unavailable market. */
+export function journalJobFilterOf(market: Available<string>): JournalJobFilter {
+  return market.available && Object.hasOwn(JOURNAL_MARKET_KINDS, market.value) ? JOURNAL_MARKET_KINDS[market.value] : 'other';
+}
 
 /**
  * A `journalTrips` query. Every filter is applied in SQL before the page limit. `cursor` is the opaque `nextCursor` of
  * the previous page read with the same filter.
  */
-export interface JournalTripsQuery {cursor?: string; game?: JournalGame; outcome?: JournalOutcome; completeness?: JournalCompleteness}
+export interface JournalTripsQuery {cursor?: string; game?: JournalGame; outcome?: JournalOutcome; completeness?: JournalCompleteness; mode?: JournalGameMode['mode']; jobType?: JournalJobFilter}
 /** A page of a trip's timeline or completeness intervals. `limit` must be one of the allowed values of that read. */
 export interface JournalPageQuery {cursor?: string; limit: number}
 
@@ -81,7 +94,9 @@ export interface JournalSyncRow {
   reason: 'validation' | 'reconciliation' | null;
 }
 export interface JournalTripSync {owner: DashboardOwner; connectionVersion: string; rows: JournalSyncRow[]}
-export interface JournalTripPage {database: JournalDatabase; trips: JournalTripListItem[]; nextCursor: string | null; sync?: JournalTripSync}
+/** Of the logical trips matching the filter at the page's snapshot: their number and their one-second samples. Only on a read without a cursor. */
+export interface JournalTripTotals {trips: number; recordedSeconds: number}
+export interface JournalTripPage {database: JournalDatabase; trips: JournalTripListItem[]; nextCursor: string | null; sync?: JournalTripSync; totals?: JournalTripTotals}
 
 /**
  * The trip's timeline window (J7). A known window lists the events of the trip's own plugin session from
@@ -175,7 +190,7 @@ export const isJournalEventCursor = (value: unknown): value is string => typeof 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 /** Versioned source-qualified page token. Numeric row/event cursors remain accepted for legacy pages. */
 export const isJournalListCursor = (value: unknown): value is string => typeof value === 'string' && value.length <= 160
-  && /^l4:[0-9a-f-]{36}:(0|[1-9][0-9]{0,18}):[1-9][0-9]{0,18}:(ets2|ats|any)\.(open|delivered|cancelled|none|any)\.(complete|partial|unknown|any)$/.test(value)
+  && /^l5:[0-9a-f-]{36}:(0|[1-9][0-9]{0,18}):[1-9][0-9]{0,18}:(ets2|ats|any)\.(open|delivered|cancelled|none|any)\.(complete|partial|unknown|any)\.(single-player|truckersmp|haulmp|convoy|unknown|any)\.(quick-job|cargo-market|freight-market|world-of-trucks|other|any)$/.test(value)
   && BigInt(value.split(':')[2]) <= MAX_ROW_ID && BigInt(value.split(':')[3]) <= MAX_ROW_ID;
 export const isJournalSnapshotCursor = (value: unknown): value is string => typeof value === 'string' && value.length <= 240
   && /^v4:[0-9a-f-]{36}:[0-9a-f-]{36}:[1-9][0-9]{0,18}:[eisr]:(0|[1-9][0-9]{0,18})$/.test(value)
@@ -190,12 +205,14 @@ function onlyKeys(value: Record<string, unknown>, keys: readonly string[]): bool
 }
 const GAMES: readonly unknown[] = ['ets2', 'ats'], OUTCOMES: readonly unknown[] = ['open', 'delivered', 'cancelled', 'none'];
 const COMPLETENESS: readonly unknown[] = ['complete', 'partial', 'unknown'];
+const MODES: readonly unknown[] = ['single-player', 'truckersmp', 'haulmp', 'convoy', 'unknown'], JOB_TYPES: readonly unknown[] = ['quick-job', 'cargo-market', 'freight-market', 'world-of-trucks', 'other'];
 /** A strict `journalTrips` query: absent, or an object of only the listed filters with listed values and a valid cursor. */
 export function isJournalTripsQuery(value: unknown): value is JournalTripsQuery | undefined {
   if (value === undefined) return true;
-  if (!isRecord(value) || !onlyKeys(value, ['cursor', 'game', 'outcome', 'completeness'])) return false;
+  if (!isRecord(value) || !onlyKeys(value, ['cursor', 'game', 'outcome', 'completeness', 'mode', 'jobType'])) return false;
   return (value.cursor === undefined || (isJournalRowCursor(value.cursor) || isJournalListCursor(value.cursor))) && (value.game === undefined || GAMES.includes(value.game))
-    && (value.outcome === undefined || OUTCOMES.includes(value.outcome)) && (value.completeness === undefined || COMPLETENESS.includes(value.completeness));
+    && (value.outcome === undefined || OUTCOMES.includes(value.outcome)) && (value.completeness === undefined || COMPLETENESS.includes(value.completeness))
+    && (value.mode === undefined || MODES.includes(value.mode)) && (value.jobType === undefined || JOB_TYPES.includes(value.jobType));
 }
 /** A strict page query: a `limit` from the allowed set and an optional cursor of the given kind. */
 export function isJournalPageQuery(value: unknown, limits: readonly number[], cursor: 'row' | 'event'): value is JournalPageQuery {
@@ -280,7 +297,7 @@ function database(value: unknown): void {
 }
 function gameMode(value: unknown): void {
   const o = exact(value, ['mode', 'method', 'confidence']);
-  oneOf(o.mode, ['single-player', 'truckersmp', 'unknown', 'convoy']); oneOf(o.method, ['module-scan', 'process-scan', 'none']); oneOf(o.confidence, ['strong', 'weak', 'none']);
+  oneOf(o.mode, ['single-player', 'truckersmp', 'haulmp', 'unknown', 'convoy']); oneOf(o.method, ['module-scan', 'process-scan', 'none']); oneOf(o.confidence, ['strong', 'weak', 'none']);
 }
 const LIST_KEYS = ['isHardMode', 'hardModeDetails', 'tripUuid', 'game', 'gameMode', 'gameModeAmbiguous', 'outcome', 'closeReason', 'recordingCompleteness', 'startedUtcMs', 'endedUtcMs', 'observedDistanceM', 'fuelUsedL', 'job'];
 const CLOSE_REASONS: readonly unknown[] = ['outcome', 'configuration-cleared', 'different-job', 'restart', 'discontinuity', 'gap'];
@@ -374,9 +391,10 @@ function page(rows: unknown, limit: number, cursor: unknown, check: (value: unkn
 }
 /** Validates a `journalTrips` answer exactly; throws JournalContractError otherwise. */
 export function validateJournalTripPage(value: unknown): JournalTripPage {
-  const o = exact(value, ['database', 'trips', 'nextCursor', ...(isRecord(value) && Object.hasOwn(value, 'sync') ? ['sync'] : [])]);
+  const o = exact(value, ['database', 'trips', 'nextCursor', ...(isRecord(value) && Object.hasOwn(value, 'sync') ? ['sync'] : []), ...(isRecord(value) && Object.hasOwn(value, 'totals') ? ['totals'] : [])]);
   database(o.database);
   for (const trip of page(o.trips, JOURNAL_TRIP_PAGE, o.nextCursor, value => {if (!isJournalListCursor(value)) rowId(value);})) listItem(exact(trip, LIST_KEYS));
+  if (Object.hasOwn(o, 'totals')) { const totals = exact(o.totals, ['trips', 'recordedSeconds']); count(totals.trips); count(totals.recordedSeconds); }
   if (Object.hasOwn(o, 'sync')) {
     const sync = exact(o.sync, ['owner', 'connectionVersion', 'rows']);
     if (!isDashboardOwner(sync.owner) || (o.database as JournalDatabase).purpose !== 'history') bad();

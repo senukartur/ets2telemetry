@@ -136,13 +136,13 @@ double trailer(const Json& o) {
   return num(at(o, "index"), 0, limits.trailer_slots - 1, true);
 }
 GameMode game_mode(const Json& o) {
-  GameMode g; g.mode = choice(at(o, "mode"), {"single-player", "truckersmp", "unknown"}); g.method = choice(at(o, "method"), {"module-scan", "process-scan", "none"});
+  GameMode g; g.mode = choice(at(o, "mode"), {"single-player", "truckersmp", "haulmp", "unknown"}); g.method = choice(at(o, "method"), {"module-scan", "process-scan", "none"});
   g.confidence = choice(at(o, "confidence"), {"strong", "weak", "none"});
   g.module = available<std::string>(at(o, "module"), [](const Json& v) { return text(v, id_bytes, false); });
   // Unknown pairs only with none; a missing module is weak evidence, so single-player is never strong.
   if ((g.mode == "unknown") != (g.method == "none") || (g.mode == "unknown") != (g.confidence == "none")) fail();
   if (g.mode == "single-player" && g.confidence == "strong") fail();
-  if (g.mode == "truckersmp" && g.method == "module-scan" && !g.module.value) fail();
+  if ((g.mode == "truckersmp" || g.mode == "haulmp") && g.method == "module-scan" && !g.module.value) fail();
   // Only a module scan can name a module.
   if (g.method != "module-scan" && g.module.value) fail();
   return g;

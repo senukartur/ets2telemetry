@@ -50,7 +50,7 @@ const ACK_LINES = ACKS.map(seq => `ack ${seq}`);
 const TRIP_ROW = {game: 'ets2', gameMode: {mode: 'unknown', method: 'none', confidence: 'none'}, gameModeAmbiguous: false, recordingCompleteness: 'partial',
   startedUtcMs: 1_800_000_000_030, job: {source: 'event', plannedDistance: {available: true, value: 152_000, unit: 'm'},
     expectedIncome: {available: true, value: {raw: '12345', sdkType: 'u64', currency: {status: 'unknown'}}}}};
-const SYNTHETIC_V3 = {purpose: 'synthetic', schemaVersion: 6};
+const SYNTHETIC_V3 = {purpose: 'synthetic', schemaVersion: 8};
 
 /** One service's recording runtime for `synthetic:<name>` and the journal service over its database, as the service builds them. */
 function service(name: string, worker: StorageWorkerHandle, timeline: string[], sampleFlushMs = NO_FLUSH_TIMER_MS) {
@@ -185,7 +185,7 @@ describe('ET-016 journal queries through the production recording wiring', () =>
     await expect(s.read(TRIPS)).resolves.toEqual({ok: false, code: 'DATABASE_OPENING'});
     traced.release();
     await until(() => s.runtime.history.state === 'open', 'the database open', HANG_GUARD_MS);
-    await expect(s.read(TRIPS)).resolves.toEqual({ok: true, value: {database: SYNTHETIC_V3, trips: [], nextCursor: null}});
+    await expect(s.read(TRIPS)).resolves.toEqual({ok: true, value: {database: SYNTHETIC_V3, trips: [], nextCursor: null, totals: {trips: 0, recordedSeconds: 0}}});
     expect(timeline.filter(line => /^(held|done) /.test(line))).toEqual(['held open', 'done open', 'done journalTrips']);
     // Once the orderly stop began, reads are refused.
     await s.stop();

@@ -1,8 +1,9 @@
-import {sameDashboardOwner, type DashboardUploadStatus} from '../../../packages/contracts/src/dashboard-upload';
+import {sameDashboardOwner, type DashboardOwner, type DashboardUploadStatus} from '../../../packages/contracts/src/dashboard-upload';
 import type {
   AppLanguage, JournalCallResult, JournalDatabase, JournalExportResult, JournalEvent, JournalEventPage, JournalGame, JournalGameMode, JournalInterval, JournalIntervalPage, JournalMoneyTotals,
-  JournalSample, JournalSamplePage, JournalTripDetail, JournalTripListItem, JournalTripPage, JournalWindow, RecordingHealth, UnitProfiles
+  JournalOutcome, JournalSample, JournalSamplePage, JournalSyncRow, JournalTripDetail, JournalTripListItem, JournalTripPage, JournalTripTotals, JournalWindow, RecordingHealth, UnitProfiles
 } from '../../../packages/contracts/src';
+import {JOURNAL_MARKET_KINDS, JOURNAL_TRIP_PAGE} from '../../../packages/contracts/src/journal';
 import type {Currency, EventRecord, Money, UnavailableReason} from '../../../packages/contracts/src/protocol-v1';
 import {resolveDisplayUnits, type DisplayUnits} from '../../../packages/telemetry-core/src/display-profile';
 import {
@@ -49,16 +50,23 @@ export interface JournalModeBadge {kind: JournalGameMode['mode']; text: string; 
  */
 export type JournalJobKind = 'cargo-market' | 'freight-market' | 'quick-job' | 'world-of-trucks' | 'other' | 'unavailable';
 export interface JournalJobBadge {kind: JournalJobKind; text: string}
+/** The Job type column of the list (ET-076): the market's label and, for World of Trucks, the market's name below it. */
+export interface JournalJobLine {kind: JournalJobKind; text: string; sub: string | null}
 export interface JournalTripRow {
   mode: JournalModeBadge;
-  /** The job market badge; `specialTransport` is its label only when the game marked the job as special. */
-  jobType: JournalJobBadge; specialTransport: string | null;
+  /** The job type line; `specialTransport` is its label only when the game marked the job as special. */
+  jobType: JournalJobLine; specialTransport: string | null;
   tripUuid: string; isHardMode: boolean; gameId: JournalGame; started: string; game: string; route: string; cargo: string;
-  /** `Delivered`, `Cancelled`, `In progress` or `No outcome — <why it closed>`. */
-  outcome: string;
+  /** `Source company · destination company`. */
+  companies: string;
+  /** `Delivered`, `Cancelled`, `In progress` or `No outcome — <why it closed>`; `outcomeKind` is the raw outcome for the badge's tone. */
+  outcome: string; outcomeKind: JournalOutcome;
   /** Recording completeness, always shown as its own badge. */
   completeness: JournalBadge;
-  plannedDistance: string; observedDistance: string; fuelUsed: string; expectedIncome: string;
+  plannedDistance: string;
+  /** `of <planned distance>`, the line under the observed distance. */
+  plannedOf: string;
+  observedDistance: string; expectedIncome: string;
 }
 export interface JournalListText {rows: JournalTripRow[]; empty: string | null; emptyNote: string | null; hasNext: boolean}
 export interface JournalDetailText {
@@ -76,13 +84,34 @@ export type JournalSampleRow =
 /** A column heading of the sample table; `note` says what its values are, such as the SDK mean. */
 export interface JournalColumn {label: string; note?: string}
 export interface JournalSampleText {columns: JournalColumn[]; rows: JournalSampleRow[]; empty: string | null; hasNext: boolean}
+/** One row of a trip's side card. */
+export interface JournalSideRow {id: string; label: string; value: string}
+/** The route line and the side cards of a trip (mockup T4); every value is the same text as the trip's full field list. */
+export interface JournalTripSideText {route: string; money: {rows: JournalSideRow[]; notes: string[]}; vehicle: {rows: JournalSideRow[]; notes: string[]}}
+export type JournalTimelineTone = 'info' | 'ok' | 'warn' | 'error' | 'neutral';
+/** One timeline row: an event, a recording gap or a refuel. The cells keep the event table's order. */
+export interface JournalTimelineItem {kind: 'event' | 'gap' | 'refuel'; key: string; tone: JournalTimelineTone; eventSeq: string; time: string; type: string; detail: string; attribution: string}
+/**
+ * Which interval labels belong to one timeline page: after the previous page's bound, through this page's. A page with
+ * no bound of its own places nothing, and the last page has no upper bound, so every interval lands on exactly one page.
+ */
+export interface JournalTimelineBounds {after: number | null; through: number | null}
+export interface JournalCompletenessText {
+  recorded: string;
+  /** The limit of the recorded value, which is a plain count of the trip's samples. */
+  recordedNote: string;
+  /** Every non-annotation gap, including those during which samples may still have been written. */
+  gaps: string; intervals: string; note: string;
+  /** Set when the trip has more intervals than the detail carries, so the gap total covers only the first ones. */
+  partial: string | null;
+  /** Totals for the recorded and gaps-without-samples bar, which is an aggregate and not a time axis. */
+  bar: {recordedSeconds: number; gapSeconds: number; gapCount: number; gaps: string; label: string};
+}
 
 type JournalFailure = Extract<JournalCallResult<unknown>, {ok: false}>;
 type Avail<T> = {available: true; value: T} | {available: false; reason: UnavailableReason};
-/** The badge kinds of the SDK job markets; the SDK names no market World of Trucks, the community reading of external_* does. */
-const JOB_KINDS: Readonly<Record<string, JournalJobKind>> = Object.freeze({
-  'cargo_market': 'cargo-market', 'freight_market': 'freight-market', 'quick_job': 'quick-job', 'external_contracts': 'world-of-trucks', 'external_market': 'world-of-trucks'
-});
+/** The badge kinds of the SDK job markets, the map the list filter's SQL also uses. */
+const JOB_KINDS: Readonly<Record<string, JournalJobKind>> = JOURNAL_MARKET_KINDS;
 
 function createJournalText(language: AppLanguage) {
  const formatVolume = (...args: Parameters<typeof coreFormatVolume>) => localizedMeasurement(coreFormatVolume(...args), language);
@@ -173,11 +202,13 @@ function gameModeText(mode: JournalGameMode, ambiguous: boolean): string {
   const evidence = mode.mode === 'unknown' || ordinarySinglePlayer(mode) ? '' : ` (${JOURNAL_GAME_MODE_EVIDENCE_TEXT.confidence[mode.confidence]}, ${JOURNAL_GAME_MODE_EVIDENCE_TEXT.method[mode.method]})`;
   return `${JOURNAL_GAME_MODE_TEXT[mode.mode]}${evidence}${ambiguous ? `; ${JOURNAL_STRINGS.gameModeChanged}` : ''}`;
 }
-function gameModeBadge(mode: JournalGameMode, ambiguous: boolean): JournalModeBadge {
+function gameModeBadge(mode: JournalGameMode, ambiguous: boolean, label: string = JOURNAL_GAME_MODE_TEXT[mode.mode]): JournalModeBadge {
   const unconfirmed = mode.mode !== 'unknown' && mode.confidence !== 'strong' && !ordinarySinglePlayer(mode);
-  const text = `${JOURNAL_GAME_MODE_TEXT[mode.mode]}${unconfirmed ? ` · ${JOURNAL_STRINGS.gameModeUnconfirmed}` : ''}${ambiguous ? ` · ${JOURNAL_STRINGS.gameModeChanged}` : ''}`;
-  return {kind: mode.mode, text, evidence: gameModeText(mode, ambiguous), tone: ambiguous || unconfirmed ? 'warn' : mode.mode === 'truckersmp' ? 'ok' : 'neutral'};
+  const text = `${label}${unconfirmed ? ` · ${JOURNAL_STRINGS.gameModeUnconfirmed}` : ''}${ambiguous ? ` · ${JOURNAL_STRINGS.gameModeChanged}` : ''}`;
+  return {kind: mode.mode, text, evidence: gameModeText(mode, ambiguous), tone: ambiguous || unconfirmed ? 'warn' : mode.mode === 'truckersmp' || mode.mode === 'haulmp' ? 'ok' : 'neutral'};
 }
+/** The mode line of a list row: an unknown mode reads `Mode unknown` under the game chip, never as single-player. */
+const modeLine = (mode: JournalGameMode, ambiguous: boolean) => gameModeBadge(mode, ambiguous, mode.mode === 'unknown' ? t('j.modeUnknown', undefined, language) : JOURNAL_GAME_MODE_TEXT[mode.mode]);
 const routeText = (job: JournalTripListItem['job']) => `${nameOf(job.sourceCity)} → ${nameOf(job.destinationCity)}`;
 /**
  * The job market badge: a documented market's label, prefixed with World of Trucks for the external markets; any other
@@ -189,16 +220,28 @@ function jobTypeBadge(market: Avail<string>): JournalJobBadge {
   const kind = JOB_KINDS[market.value], label = BASE_COPY.getJobMarketText(market.value, language);
   return {kind, text: kind === 'world-of-trucks' ? `${t('j.worldOfTrucks', undefined, language)} · ${label}` : label};
 }
+/**
+ * The list's Job type column: a documented market's label, World of Trucks for the external markets with the market's
+ * name below it, any other value verbatim (`(empty)` for an empty one) and `unavailable (reason)` when the game gave none.
+ */
+function jobLine(market: Avail<string>): JournalJobLine {
+  if (!market.available) return {kind: 'unavailable', text: unavailable(market.reason), sub: null};
+  if (!Object.hasOwn(JOB_KINDS, market.value)) return {kind: 'other', text: name(market.value), sub: null};
+  const kind = JOB_KINDS[market.value], label = BASE_COPY.getJobMarketText(market.value, language);
+  return kind === 'world-of-trucks' ? {kind, text: t('j.worldOfTrucks', undefined, language), sub: label} : {kind, text: label, sub: null};
+}
 /** `Special transport` only when the game marked the job as special; false and unavailable show nothing. */
 const specialTransport = (special: Avail<boolean>) => special.available && special.value ? t('j.specialTransport', undefined, language) : null;
 
 function tripRow(trip: JournalTripListItem, options: JournalTextOptions): JournalTripRow {
   const units = unitsFor(trip.game, options);
+  const plannedDistance = show(trip.job.plannedDistance, distance(units));
   return {
-    mode: gameModeBadge(trip.gameMode, trip.gameModeAmbiguous), jobType: jobTypeBadge(trip.job.market), specialTransport: specialTransport(trip.job.isSpecialJob), tripUuid: trip.tripUuid, gameId: trip.game, started: localTime(trip.startedUtcMs, options.timeZone), game: JOURNAL_GAME_TEXT[trip.game], route: routeText(trip.job),
-    isHardMode: trip.isHardMode, cargo: nameOf(trip.job.cargo), outcome: outcomeText(trip), completeness: completenessBadge(trip.recordingCompleteness),
-    plannedDistance: show(trip.job.plannedDistance, distance(units)), observedDistance: show(trip.observedDistanceM, distance(units)),
-    fuelUsed: show(trip.fuelUsedL, volume(units)), expectedIncome: show(trip.job.expectedIncome, moneyText)
+    mode: modeLine(trip.gameMode, trip.gameModeAmbiguous), jobType: jobLine(trip.job.market), specialTransport: specialTransport(trip.job.isSpecialJob), tripUuid: trip.tripUuid, gameId: trip.game, started: localTime(trip.startedUtcMs, options.timeZone), game: JOURNAL_GAME_TEXT[trip.game], route: routeText(trip.job),
+    companies: `${nameOf(trip.job.sourceCompany)} · ${nameOf(trip.job.destinationCompany)}`,
+    isHardMode: trip.isHardMode, cargo: nameOf(trip.job.cargo), outcome: outcomeText(trip), outcomeKind: trip.outcome, completeness: completenessBadge(trip.recordingCompleteness),
+    plannedDistance, plannedOf: t('j.of', {v: plannedDistance}, language), observedDistance: show(trip.observedDistanceM, distance(units)),
+    expectedIncome: show(trip.job.expectedIncome, moneyText)
   };
 }
 
@@ -302,6 +345,34 @@ function journalDetailText(detail: JournalTripDetail, options: JournalTextOption
   return {mode: gameModeBadge(trip.gameMode, trip.gameModeAmbiguous), jobType: jobTypeBadge(job.market), specialTransport: specialTransport(job.isSpecialJob), title: `${JOURNAL_GAME_TEXT[trip.game]}: ${routeText(trip.job)}`, outcome: outcomeText(trip), completeness: completenessBadge(trip.recordingCompleteness), sections};
 }
 
+/** The available values joined by `separator`, or the first value's `unavailable (reason)` when none is available. */
+const joined = (separator: string, ...values: Avail<string>[]) => {
+  const present = values.filter(item => item.available);
+  return present.length ? present.map(nameOf).join(separator) : nameOf(values[0]);
+};
+/** The route line and the side cards of a trip's page, built from the same detail as its field list. */
+function journalTripSideText(detail: JournalTripDetail, options: JournalTextOptions = {}): JournalTripSideText {
+  const {trip, job: {values: job}} = detail, units = unitsFor(trip.game, options);
+  const started = t('tr.started', {v: localTime(trip.startedUtcMs, options.timeZone)}, language);
+  const money = moneyLines(detail.money);
+  // A trip keeps every configuration in commit order, so the latest of each trailer slot wins.
+  const trailers = [...new Map(detail.trailers.items.map(({values}) => [values.index, values])).values()].sort((a, b) => a.index - b.index);
+  const truck = detail.truck?.values;
+  return {
+    route: `${joined(', ', job.sourceCity, job.sourceCompany)} → ${joined(', ', job.destinationCity, job.destinationCompany)} · ${started}`,
+    money: {rows: money.fields.map(({id, label, value}) => ({id, label, value})), notes: money.notes},
+    vehicle: {
+      rows: [
+        ...(truck ? [{id: 'truck', label: t('tr.truckLabel', undefined, language), value: joined(' ', truck.brand, truck.name)}] : []),
+        ...trailers.map(trailer => ({id: `trailer-${trailer.index}`, label: trailers.length > 1 ? t('tr.trailerN', {n: trailer.index + 1}, language) : t('tr.trailerLabel', undefined, language),
+          value: joined(', ', trailer.bodyType, trailer.brand, trailer.name)})),
+        {id: 'cargoMass', label: JOURNAL_LABEL_TEXT.cargoMass, value: show(job.cargoMass, kg => formatMass(kg, units.mass))}
+      ],
+      notes: [...(truck ? [] : [JOURNAL_STRINGS.noTruck]), ...(trailers.length ? [] : [JOURNAL_STRINGS.noTrailers])]
+    }
+  };
+}
+
 /** An interval cause from the recorder's fixed list; anything else is `other`, never stored text. */
 function causeText(interval: JournalInterval): string {
   const cause = interval.cause === null ? JOURNAL_STRINGS.none : Object.hasOwn(JOURNAL_INTERVAL_CAUSE_TEXT, interval.cause) ? JOURNAL_INTERVAL_CAUSE_TEXT[interval.cause] : JOURNAL_OTHER_CAUSE;
@@ -370,6 +441,95 @@ function consumptionText(litersPer100Km: number, units: DisplayUnits): string {
   const result = formatConsumption(litersPer100Km, units.consumption);
   return 'text' in result ? result.text : result.reason === 'zero-consumption' ? JOURNAL_STRINGS.zeroConsumption : unavailable('invalid');
 }
+/** The UTC label of an event as a number; only a label, never a duration. */
+const eventLabel = (event: JournalEvent) => event.occurred.utcUnixMs.available ? Number(event.occurred.utcUnixMs.value) : null;
+/** A source-monotonic length in whole seconds, null without both bounds. UTC labels are never used for a duration. */
+function intervalSeconds(interval: JournalInterval): number | null {
+  if (interval.startMonotonicNs === null || interval.endMonotonicNs === null) return null;
+  const length = BigInt(interval.endMonotonicNs) - BigInt(interval.startMonotonicNs);
+  return length < 0n ? null : length === 0n ? 0 : Math.max(1, Number((length + 500_000_000n) / 1_000_000_000n));
+}
+const EVENT_TONES: Readonly<Partial<Record<EventRecord['type'], JournalTimelineTone>>> = {'job.configured': 'info', 'job.delivered': 'ok', 'job.cancelled': 'error', 'player.fined': 'error'};
+function intervalItem(interval: JournalInterval, options: JournalTextOptions, game: JournalGame): JournalTimelineItem {
+  const shared = {key: `interval-${interval.id}`, time: interval.startUtcMs === null ? '—' : localTime(interval.startUtcMs, options.timeZone),
+    eventSeq: interval.firstEventSeq !== null && interval.lastEventSeq !== null ? fill(JOURNAL_STRINGS.eventRange, {first: interval.firstEventSeq, last: interval.lastEventSeq}) : '—', attribution: '—'};
+  if (interval.annotation) {
+    const added = interval.detail?.addedLiters;
+    return {...shared, kind: 'refuel', tone: 'ok', type: t('ev.refuel', undefined, language), detail: typeof added === 'number' && Number.isFinite(added) ? volume(unitsFor(game, options))(added) : '—'};
+  }
+  const seconds = intervalSeconds(interval), kind = JOURNAL_INTERVAL_KIND_TEXT[interval.kind];
+  return {...shared, kind: 'gap', tone: 'warn', type: `${t('tr.ivGap', undefined, language)}: ${interval.cause === null ? kind : causeText(interval)}`,
+    detail: `${kind} · ${seconds === null ? t('tr.gapUnknown', undefined, language) : journalDurationText(seconds, language)}`};
+}
+/**
+ * One timeline page with the trip's gaps and refuels inserted by their UTC labels. Events keep their eventSeq order and
+ * their text; a label only decides where a row is shown. An interval without a label comes last on the last page.
+ */
+function journalTimelineItems(page: JournalEventPage, text: JournalEventText, intervals: readonly JournalInterval[], bounds: JournalTimelineBounds, game: JournalGame, options: JournalTextOptions = {}): JournalTimelineItem[] {
+  const last = page.nextCursor === null, shown = intervals.filter(interval => !interval.annotation || interval.cause === 'refuel');
+  const placed = shown.filter((interval): interval is JournalInterval & {startUtcMs: number} => interval.startUtcMs !== null
+    && (bounds.after === null || interval.startUtcMs > bounds.after) && (last || (bounds.through !== null && interval.startUtcMs <= bounds.through)))
+    .sort((a, b) => a.startUtcMs - b.startUtcMs || Number(BigInt(a.id) - BigInt(b.id)));
+  const items: JournalTimelineItem[] = [];
+  let next = 0;
+  text.rows.forEach((row, index) => {
+    const event = page.events[index], label = eventLabel(event);
+    while (label !== null && next < placed.length && placed[next].startUtcMs < label) items.push(intervalItem(placed[next++], options, game));
+    items.push({...row, kind: 'event', tone: EVENT_TONES[event.type] ?? 'neutral'});
+  });
+  while (next < placed.length) items.push(intervalItem(placed[next++], options, game));
+  return last ? [...items, ...shown.filter(interval => interval.startUtcMs === null).map(interval => intervalItem(interval, options, game))] : items;
+}
+
+/**
+ * Whether the recording establishes that no sample was written during this interval: the consumer was disconnected or not
+ * running, or no reading arrived (docs/trips.md, T13 and T17). Event loss, a discontinuity, a hole extended over readings and
+ * a producer gap or attach cause reported as `not-connected` do not establish it; `storage-unavailable` is never written,
+ * and `restore-loss` covers an eventSeq range only.
+ */
+const withoutSamples = (interval: JournalInterval) => interval.kind === 'not-connected' ? interval.cause === 'disconnected' || interval.cause === 'consumer-restart'
+  : interval.kind === 'sample-loss' && interval.cause === 'reading-hole' && interval.detail?.includesReadings !== true;
+/** The union of the given gap lengths: overlapping intervals of one session and clock are one gap, and only monotonic bounds count. */
+function gapTotals(items: readonly JournalInterval[]): {count: number; seconds: number; unknown: number} {
+  const gaps = items.filter(interval => !interval.annotation), spans = new Map<string, [bigint, bigint][]>();
+  let unknown = 0;
+  for (const gap of gaps) {
+    if (intervalSeconds(gap) === null) {unknown++; continue;}
+    // As in the chart, one plugin session and clock is one source; a missing session is a value of its own.
+    const source = JSON.stringify([gap.pluginSessionId ?? null, gap.sourceClockId]);
+    spans.set(source, [...(spans.get(source) ?? []), [BigInt(gap.startMonotonicNs ?? 0), BigInt(gap.endMonotonicNs ?? 0)]]);
+  }
+  let total = 0n;
+  for (const list of spans.values()) {
+    let reached: bigint | null = null;
+    for (const [start, end] of list.sort((a, b) => a[0] < b[0] ? -1 : a[0] > b[0] ? 1 : 0)) {
+      if (reached === null || start >= reached) {total += end - start; reached = end;}
+      else if (end > reached) {total += end - reached; reached = end;}
+    }
+  }
+  return {count: gaps.length, seconds: total === 0n ? 0 : Math.max(1, Number((total + 500_000_000n) / 1_000_000_000n)), unknown};
+}
+/** The Completeness tab's aggregate: recorded time from the sample count and the gaps of the detail's intervals. */
+function journalCompletenessText(detail: JournalTripDetail): JournalCompletenessText {
+  const recordedSeconds = detail.samples.count, shown = detail.intervals.items.length;
+  const totals = gapTotals(detail.intervals.items), missing = gapTotals(detail.intervals.items.filter(withoutSamples));
+  const incomplete = detail.intervals.total > shown;
+  const recorded = recordedSeconds > 0 ? journalDurationText(recordedSeconds, language) : '—';
+  // Only the first intervals are read, so "none" could be false about the ones after them.
+  const describe = (sum: ReturnType<typeof gapTotals>) => sum.count === 0 ? incomplete ? t('tr.ivNoneFirst', {shown}, language) : t('tr.ivNone', undefined, language)
+    : [...(sum.unknown < sum.count ? [journalDurationText(sum.seconds, language)] : []), ...(sum.unknown > 0 ? [t('tr.ivUnknown', {n: sum.unknown}, language)] : [])].join(' · ');
+  const gaps = describe(totals), withoutSampleGaps = describe(missing);
+  return {recorded, recordedNote: t('tr.recordedLimit', undefined, language), gaps, intervals: String(detail.intervals.total), note: t('tr.ivNote', undefined, language),
+    partial: incomplete ? t('tr.ivFirstOnly', {shown, total: detail.intervals.total}, language) : null,
+    bar: {recordedSeconds, gapSeconds: missing.seconds, gapCount: missing.count, gaps: withoutSampleGaps, label: t('tr.ivBar', {recorded, gaps: withoutSampleGaps}, language)}};
+}
+/** `Saved by the site <time> · version <n>`, only for a durable upload; never says that the company accepted the trip. */
+function journalSiteSaved(row: JournalSyncRow, options: JournalTextOptions = {}): string | null {
+  if (row.state !== 'sent' || row.lastDurableUploadUtcMs === null) return null;
+  const saved = t('tr.siteSaved', {time: localTime(row.lastDurableUploadUtcMs, options.timeZone)}, language);
+  return row.latestRevision === null ? saved : `${saved} · ${t('tr.siteRevision', {n: row.latestRevision}, language)}`;
+}
+
 const sourceSecond = (sample: JournalSample) => BigInt(sample.monotonicNs) / 1_000_000_000n;
 /**
  * One page of the trip's one-second samples (J14). Between consecutive rows of the same source clock whose source
@@ -399,11 +559,15 @@ function journalSampleText(page: JournalSamplePage, game: JournalGame, options: 
     hasNext: page.nextCursor !== null};
 }
 
-  return {localTime, journalErrorText, journalExportText, journalBannerText, outcomeText, completenessBadge, gameModeText, journalListText, journalDetailText, journalIntervalText, journalEventText, journalSampleText};
+  return {localTime, journalErrorText, journalExportText, journalBannerText, outcomeText, completenessBadge, gameModeText, journalListText, journalDetailText, journalTripSideText, journalIntervalText, journalEventText, journalTimelineItems, journalCompletenessText, journalSiteSaved, journalSampleText};
 }
 const texts = {en: createJournalText('en'), ru: createJournalText('ru')};
 export const journalListText = (...args: Parameters<typeof texts.en.journalListText>): ReturnType<typeof texts.en.journalListText> => texts[args[1]?.language ?? 'en'].journalListText(...args);
 export const journalDetailText = (...args: Parameters<typeof texts.en.journalDetailText>): ReturnType<typeof texts.en.journalDetailText> => texts[args[1]?.language ?? 'en'].journalDetailText(...args);
+export const journalTripSideText = (...args: Parameters<typeof texts.en.journalTripSideText>): ReturnType<typeof texts.en.journalTripSideText> => texts[args[1]?.language ?? 'en'].journalTripSideText(...args);
+export const journalTimelineItems = (...args: Parameters<typeof texts.en.journalTimelineItems>): ReturnType<typeof texts.en.journalTimelineItems> => texts[args[5]?.language ?? 'en'].journalTimelineItems(...args);
+export const journalCompletenessText = (detail: JournalTripDetail, language: AppLanguage = 'en'): JournalCompletenessText => texts[language].journalCompletenessText(detail);
+export const journalSiteSaved = (row: JournalSyncRow, options: JournalTextOptions = {}): string | null => texts[options.language ?? 'en'].journalSiteSaved(row, options);
 export const journalIntervalText = (...args: Parameters<typeof texts.en.journalIntervalText>): ReturnType<typeof texts.en.journalIntervalText> => texts[args[1]?.language ?? 'en'].journalIntervalText(...args);
 export const journalEventText = (...args: Parameters<typeof texts.en.journalEventText>): ReturnType<typeof texts.en.journalEventText> => texts[args[2]?.language ?? 'en'].journalEventText(...args);
 export const journalSampleText = (...args: Parameters<typeof texts.en.journalSampleText>): ReturnType<typeof texts.en.journalSampleText> => texts[args[2]?.language ?? 'en'].journalSampleText(...args);
@@ -415,7 +579,55 @@ export const completenessBadge = (completeness: JournalTripListItem['recordingCo
 export const localTime = texts.en.localTime;
 export const gameModeText = (mode: JournalGameMode, ambiguous: boolean, language: AppLanguage = 'en'): string => texts[language].gameModeText(mode, ambiguous);
 
+const LOCALES: Readonly<Record<AppLanguage, string>> = {en: 'en-US', ru: 'ru-RU'};
+const PLURAL_FORMS: readonly string[] = ['one', 'few', 'many', 'other'];
+/** The page subline of the list (ET-076), for instance `128 trips · 212 h recorded`. Hours below 10 keep one decimal; every hours value is rounded down, so recorded time is never overstated. */
+export function journalTotalsText(totals: JournalTripTotals, language: AppLanguage = 'en'): string {
+  const hours = totals.recordedSeconds / 3_600;
+  const shown = hours < 10
+    ? new Intl.NumberFormat(LOCALES[language], {minimumFractionDigits: 1, maximumFractionDigits: 1}).format(Math.floor(hours * 10) / 10)
+    : new Intl.NumberFormat(LOCALES[language], {maximumFractionDigits: 0, useGrouping: false}).format(Math.floor(hours));
+  const form = new Intl.PluralRules(LOCALES[language]).select(totals.trips);
+  const key = `j.trips.${PLURAL_FORMS.includes(form) ? form : 'other'}` as 'j.trips.one' | 'j.trips.few' | 'j.trips.many' | 'j.trips.other';
+  return `${t(key, {n: totals.trips}, language)} · ${t('j.hours', {h: shown}, language)}`;
+}
+/** `Showing 51–100`: the rows of the current page among the list. Null on an empty page. */
+export function journalRangeText(pageNumber: number, rows: number, language: AppLanguage = 'en'): string | null {
+  if (rows === 0) return null;
+  const from = (pageNumber - 1) * JOURNAL_TRIP_PAGE + 1;
+  return t('j.showing', {from, to: from + rows - 1}, language);
+}
+
+/** Whether facts read for `owner` may still be shown: sync is configured, the owner is settled and it is the same owner. */
+export function journalSyncOwnerCurrent(owner: DashboardOwner | undefined, status: DashboardUploadStatus | null | undefined): boolean {
+  return Boolean(status?.origin && status.owner && ['connected', 'paused'].includes(status.state) && owner && sameDashboardOwner(status.owner, owner));
+}
 /** A loaded page loses its decorations immediately when the displayed connection no longer owns it. */
 export function journalPageSync(page: JournalTripPage | undefined, status: DashboardUploadStatus | null | undefined) {
-  return status?.origin && status.owner && ['connected', 'paused'].includes(status.state) && page?.sync && sameDashboardOwner(status.owner, page.sync.owner) ? page.sync : undefined;
+  return journalSyncOwnerCurrent(page?.sync?.owner, status) ? page?.sync : undefined;
+}
+/** The list row's validated sync facts, kept with an opened trip because the trip detail has no sync field of its own. */
+export interface JournalSiteFacts {owner: DashboardOwner; row: JournalSyncRow}
+/** What opening a trip keeps from the list page: its row, only while the page's sync facts may be shown. */
+export function journalSiteFacts(page: JournalTripPage | undefined, status: DashboardUploadStatus | null | undefined, tripUuid: string): JournalSiteFacts | null {
+  const sync = journalPageSync(page, status), row = sync?.rows.find(item => item.tripUuid === tripUuid);
+  return sync && row ? {owner: sync.owner, row} : null;
+}
+/** The row the Site block shows on this render; a disconnect or an owner change removes it at once. */
+export function journalSiteRow(site: JournalSiteFacts | null, status: DashboardUploadStatus | null | undefined): JournalSyncRow | null {
+  return site && journalSyncOwnerCurrent(site.owner, status) ? site.row : null;
+}
+/** The highest event label seen through this page, so the timeline's page bounds never go back when a label jumps. */
+export function journalPageBound(page: JournalEventPage, after: number | null): number | null {
+  return page.events.reduce<number | null>((bound, event) => {
+    const label = event.occurred.utcUnixMs.available ? Number(event.occurred.utcUnixMs.value) : null;
+    return label === null ? bound : bound === null ? label : Math.max(bound, label);
+  }, after);
+}
+/** A count of seconds as `46 s`, `12 min 5 s` or `3 h 51 min`; hours and minutes round down, so time is never overstated. */
+export function journalDurationText(seconds: number, language: AppLanguage = 'en'): string {
+  const whole = Math.max(0, Math.floor(seconds));
+  if (whole < 60) return t('tr.durS', {s: whole}, language);
+  if (whole < 3_600) return t('tr.durMs', {m: Math.floor(whole / 60), s: whole % 60}, language);
+  return t('tr.durHm', {h: Math.floor(whole / 3_600), m: Math.floor(whole % 3_600 / 60)}, language);
 }

@@ -268,11 +268,20 @@ export async function verifyRendererStyles(dashboard, overlay) {
     const card = document.querySelector('[data-slot="card"]:not(.yu-instrument)');
     // ET-012a: the overlay root is transparent; each layout's first visible surface paints the background.
     const widget = document.querySelector('.overlay-surface');
+    const stylesheetEvidence = Array.from(document.styleSheets).map(sheet => {
+      const css = Array.from(sheet.cssRules).map(rule => rule.cssText).join('\n');
+      return {href: sheet.href, overlayContent: css.includes('.overlay-content'),
+        theme: /--background\s*:/.test(css), dashboardBase: /--tw-|--radix-|\.bg-card\b/.test(css),
+        unscopedPage: /(?:^|\})\s*(?:html|body)\s*\{/m.test(css),
+        offlineFont: /@font-face/.test(css) && /Huninn/.test(css),
+        remoteAsset: /url\(\s*["']?(?:https?:|data:)/i.test(css),
+        backdropFilter: /\bbackdrop-filter\s*:/.test(css)};
+    });
     return {htmlBackground: style(document.documentElement).backgroundColor,
       bodyBackground: style(document.body).backgroundColor,
       themeBackground: style(document.documentElement).getPropertyValue('--background').trim(),
       fontFaces: Array.from(document.fonts).map(font => font.family), loadedFonts,
-      stylesheets: Array.from(document.styleSheets).map(sheet => sheet.href),
+      stylesheets: stylesheetEvidence.map(sheet => sheet.href), stylesheetEvidence,
       cardBackground: card ? style(card).backgroundColor : null,
       widgetBackground: widget ? style(widget).backgroundColor : null,
       widgetBackdropFilter: widget ? style(widget).backdropFilter : null};
@@ -289,7 +298,18 @@ export async function verifyRendererStyles(dashboard, overlay) {
   assert.equal(overlayStyles.widgetBackground, 'rgba(11, 17, 32, 0.8)');
   assert.equal(overlayStyles.widgetBackdropFilter, 'none', 'Overlay must not blur the game behind it');
   assert.ok(mainStyles.stylesheets.length > 0 && overlayStyles.stylesheets.length > 0);
-  assert.ok(overlayStyles.stylesheets.every(href => href && !mainStyles.stylesheets.includes(href)), 'Renderer CSS assets must be separate');
+  assert.ok([...mainStyles.stylesheets, ...overlayStyles.stylesheets].every(Boolean), 'Renderer CSS assets must have inspectable URLs');
+  // The Settings preview shares the overlay's safe display CSS; dashboard base styles remain exclusive to main.
+  const shared = overlayStyles.stylesheets.filter(href => mainStyles.stylesheets.includes(href));
+  assert.deepEqual(shared, overlayStyles.stylesheets, 'The preview must load the same overlay display stylesheet');
+  for (const href of shared) {
+    const evidence = overlayStyles.stylesheetEvidence.find(sheet => sheet.href === href);
+    assert.deepEqual(mainStyles.stylesheetEvidence.find(sheet => sheet.href === href), evidence, 'Shared renderer CSS rules must match');
+    assert.deepEqual({...evidence, href: undefined}, {href: undefined, overlayContent: true, theme: false, dashboardBase: false,
+      unscopedPage: false, offlineFont: true, remoteAsset: false, backdropFilter: false}, 'Shared CSS must contain only overlay-safe display rules and offline fonts');
+  }
+  const dashboardOnly = mainStyles.stylesheetEvidence.filter(sheet => !shared.includes(sheet.href));
+  assert.ok(dashboardOnly.some(sheet => sheet.theme && sheet.dashboardBase), 'Dashboard must load its own shadcn/base stylesheet');
   return {dashboard: mainStyles, overlay: overlayStyles};
 }
 

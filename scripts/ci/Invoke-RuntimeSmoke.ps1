@@ -64,6 +64,8 @@ if ($Scenario -eq 'soak') { $config.soakMinutes = $SoakMinutes }
 $config.commit = (& git -C $checkout rev-parse HEAD)
 if ($LASTEXITCODE -ne 0) { throw 'Commit identity unavailable.' }
 $config.channel = $built.channel; $config.appVersion = $built.version
+$desktopBuild = Get-Content -LiteralPath (Join-Path $checkout 'apps/desktop/dist/build-evidence.json') -Raw | ConvertFrom-Json
+$config.dashboardConfigured = $desktopBuild.dashboardConfigured -eq $true
 $config.executable = if ($Mode -eq 'installed') { $installedExecutable } else { Join-Path $checkout ($built.packageDirectory + '/' + $built.executable) }
 if ($Mode -eq 'packaged' -and !(Test-Path -LiteralPath $config.executable -PathType Leaf)) { throw 'Forge package missing.' }
 if ($Mode -eq 'packaged') {

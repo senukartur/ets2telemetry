@@ -11,7 +11,7 @@ html:has(.overlay-body) { background: transparent; }
 .overlay-surface:empty { display: none; }
 .overlay-icon { flex: none; color: var(--yu-ov-icon); }
 .overlay-value-group { display: inline-flex; align-items: baseline; gap: 4px; white-space: nowrap; min-width: 0; }
-/* Value sizes (ET-045d): strip 17 px/500 with speed 19 px, card rows 12 px with a 34/24/16 px hero speed, cluster panel
+/* Value sizes (ET-045d): strip 17 px/500 with speed and cruise speed 19 px, card rows 12 px with a 34/24/16 px hero speed, cluster panel
    12 px with a 34 px gauge speed, HUD 13 px with speed 15 px. No value is smaller than its 12 px label; units and details
    are 12 px except the 11 px Cluster RPM unit, which is a unit, not a value. */
 .overlay-value { font-weight: 500; }
@@ -39,7 +39,8 @@ html:has(.overlay-body) { background: transparent; }
 .overlay-group-start { position: relative; padding-left: 15px; }
 .overlay-group-start::before { content: ''; position: absolute; left: 0; top: 8px; bottom: 8px; width: 1px; background: rgba(255, 255, 255, .3); }
 .overlay-strip .overlay-value { font-size: 17px; font-weight: 500; }
-.overlay-strip [data-testid="overlay-speed"] { font-size: 19px; }
+.overlay-strip [data-testid="overlay-speed"],
+.overlay-strip [data-testid="overlay-cruise-control"] { font-size: 19px; }
 /* Stable numbers (ET-045d): speed, gear and RPM reserve the width of their widest expected value (overlay-view.ts) through
    an invisible zero-height block of the same font, so 9 to 10, 99 to 100 or 999 to 1000 never resizes the section or moves
    its neighbours. Digits align right, so the unit stays put. The reserve is CSS content: the value's text is unchanged. */

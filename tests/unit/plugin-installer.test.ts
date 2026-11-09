@@ -6,8 +6,8 @@ import path from 'node:path';
 import {afterEach, beforeEach, describe, expect, it} from 'vitest';
 import type {AtomicFileSystem} from '../../apps/desktop/src/plugin-setup/atomic-json-file';
 import type {RunningGames} from '../../apps/desktop/src/plugin-setup/game-processes';
-import {MAX_PLUGIN_FILE_BYTES, PluginInstaller, TARGET_RETRY_DELAYS_MS, type InstallerFileSystem, type PluginTarget, type RunningCheck,
-  type VerifiedPluginBundle} from '../../apps/desktop/src/plugin-setup/plugin-installer';
+import {MAX_PLUGIN_FILE_BYTES, PluginInstaller, TARGET_RETRY_DELAYS_MS, type InstallerFileSystem, type PluginActionResult,
+  type PluginTarget, type RunningCheck, type VerifiedPluginBundle} from '../../apps/desktop/src/plugin-setup/plugin-installer';
 import {MAX_INSTALL_RECORDS, parsePluginRegistry, PluginRegistry, type InstallRecord, type PendingIntent} from '../../apps/desktop/src/plugin-setup/plugin-registry';
 import {guardedTempRoot, type GuardedRoot} from '../shared/guarded-fs';
 import {fakeSteam, type FakeSteam} from '../shared/fake-steam';
@@ -555,24 +555,31 @@ function bind(handle: Awaited<ReturnType<InstallerFileSystem['open']>>) {
 }
 
 describe('crash recovery', () => {
+  beforeEach(() => {
+    // Process death leaves writes already accepted by the OS available to recovery.
+    guard = withoutFlush(guard);
+  });
+
   // A crash stops every later file operation: from the crash on, each call of the first installer and its registry
   // never settles. A fresh registry and installer then recover from what is on disk only.
   type Crash = 'after step 6' | 'after step 7' | 'after step 9' | 'after step 10';
   const hang = () => new Promise<never>(() => undefined);
   function crashing(crash: Crash, setup: Setup) {
-    let crashed = false;
+    let crashed = false, reachedCrash!: () => void;
+    const reached = new Promise<void>(resolve => {reachedCrash = resolve;});
+    const stopHere = () => {crashed = true; reachedCrash();};
     const temp = path.win32.join(setup.plugins, TEMP_NAME);
     let registryOpens = 0;
     const stopIfCrashed = () => crashed ? hang() : undefined;
     const before: Hook = call => {
       if (crashed) return hang();
-      if (crash === 'after step 10' && call.op === 'registry-open' && ++registryOpens === 2) {crashed = true; return hang();}
+      if (crash === 'after step 10' && call.op === 'registry-open' && ++registryOpens === 2) {stopHere(); return hang();}
       return undefined;
     };
     const after: Hook = call => {
-      if (crash === 'after step 6' && call.op === 'registry-rename') crashed = true;
-      if (crash === 'after step 7' && call.op === 'close' && call.target === temp) crashed = true;
-      if (crash === 'after step 9' && call.op === 'rename' && call.to === setup.dll) crashed = true;
+      if (crash === 'after step 6' && call.op === 'registry-rename') stopHere();
+      if (crash === 'after step 7' && call.op === 'close' && call.target === temp) stopHere();
+      if (crash === 'after step 9' && call.op === 'rename' && call.to === setup.dll) stopHere();
       return stopIfCrashed();
     };
     const game = instrument(guarded(), before, after);
@@ -590,12 +597,22 @@ describe('crash recovery', () => {
         await after({op: 'registry-rename', target: from});
       }
     };
-    return {fs: game.fs, registryFs, crashed: () => crashed};
+    const untilCrashed = (first: Promise<PluginActionResult>) => Promise.race([
+      reached,
+      first.then(({outcome, reason}) => {
+        throw new Error(`Installer returned before the crash point ${crash} (${reason ?? outcome})`);
+      })
+    ]);
+    return {fs: game.fs, registryFs, untilCrashed};
   }
-  const untilCrashed = async (crashed: () => boolean) => {
-    const deadline = Date.now() + 10_000;
-    while (!crashed() && Date.now() < deadline) await new Promise(resolve => setTimeout(resolve, 5));
-  };
+
+  it('reports an installer that returns before reaching the crash point', () => caseWork(async () => {
+    const setup = await game();
+    const crashed = crashing('after step 7', setup);
+    const registry = await loadRegistry(crashed.registryFs);
+    const first = installer(registry, {fs: crashed.fs, checkRunning: runningWith({ets2: true})}).ensureInstalled(setup.target);
+    await expect(crashed.untilCrashed(first)).rejects.toThrow('Installer returned before the crash point after step 7 (GAME_RUNNING)');
+  }));
 
   // [scenario, crash, target bytes after recovery, plugins folder exists, install record after recovery]
   const CASES: [string, Crash, 'none' | 'old' | 'bundle', boolean, 'none' | 'old' | 'installed'][] = [
@@ -608,16 +625,14 @@ describe('crash recovery', () => {
     ['update of a recorded older file', 'after step 9', 'bundle', true, 'installed'],
     ['update of a recorded older file', 'after step 10', 'bundle', true, 'installed']
   ];
-  it.each(CASES)('%s, crashed %s, recovers to the hand-written state', async (scenario, crash, content, pluginsExist, recordAfter) => {
+  it.each(CASES)('%s, crashed %s, recovers to the hand-written state', (scenario, crash, content, pluginsExist, recordAfter) => caseWork(async () => {
     const update = scenario.startsWith('update');
     const setup = await game(update ? {content: OLD} : {});
     const oldRecord = record(setup, {sha256: sha(OLD), appVersion: '0.1.0'});
     if (update) await (await loadRegistry()).update(document => ({...document, installs: [oldRecord]}));
     const crashed = crashing(crash, setup);
     const first = await loadRegistry(crashed.registryFs);
-    void installer(first, {fs: crashed.fs}).ensureInstalled(setup.target);
-    await untilCrashed(crashed.crashed);
-    expect(crashed.crashed()).toBe(true);
+    await crashed.untilCrashed(installer(first, {fs: crashed.fs}).ensureInstalled(setup.target));
     expect((await registryOnDisk()).pending).toHaveLength(1);
 
     const registry = await loadRegistry();
@@ -633,19 +648,18 @@ describe('crash recovery', () => {
     expect(events).toEqual([{event: 'PLUGIN_RECOVERED', facts: {game: 'ets2', source: 'steam', op: update ? 'update' : 'install',
       outcome: recordAfter === 'installed' ? 'installed' : 'not-installed'}}]);
     expect((await installer(registry).ensureInstalled(setup.target)).outcome).toBe(recordAfter === 'installed' ? 'unchanged' : update ? 'updated' : 'installed');
-  });
+  }));
 
-  it('keeps an intent while its game runs and recovers it once the game is closed', async () => {
+  it('keeps an intent while its game runs and recovers it once the game is closed', () => caseWork(async () => {
     const setup = await game();
     const crashed = crashing('after step 7', setup);
-    void installer(await loadRegistry(crashed.registryFs), {fs: crashed.fs}).ensureInstalled(setup.target);
-    await untilCrashed(crashed.crashed);
+    await crashed.untilCrashed(installer(await loadRegistry(crashed.registryFs), {fs: crashed.fs}).ensureInstalled(setup.target));
     const registry = await loadRegistry();
     expect(await installer(registry, {checkRunning: runningWith({ets2: true})}).recover()).toEqual({recovered: 0, remaining: 1, reason: null});
     expect(await exists(path.win32.join(setup.plugins, TEMP_NAME))).toBe(true);
     expect(await installer(registry).recover()).toEqual({recovered: 1, remaining: 0, reason: null});
     expect(await exists(setup.plugins)).toBe(false);
-  });
+  }));
 });
 
 describe('review round 1', () => {

@@ -624,7 +624,7 @@ describe('ET-015a recording gate in the service (R3, R10, R14)', () => {
     const client = {
       observeHardMode: () => answer(undefined), getTrip: () => answer(undefined), journalTrip: () => Promise.resolve({ok:false,code:'TRIP_NOT_FOUND'}),
       upsertSession: () => answer({created: true, committedThroughEventSeq: '0'}), committedThrough: () => answer('0'),
-      listTrips: () => answer({trips: [], nextCursor: null}), getEvent: () => answer(undefined), listEvents: () => answer([]), recordCompleteness: () => answer(undefined),
+      listTrips: () => answer({trips: [], nextCursor: null}), getEvent: () => answer(undefined), listEvents: () => answer([]), recordTrailerBaseline: () => answer(undefined), recordCompleteness: () => answer(undefined),
       commitGap: () => answer({status: 'committed', committedThroughEventSeq: '0'}),
       commitEvent: (input: {message: {data: {eventSeq: string}}}) => {
         commits.push(input.message.data.eventSeq);
@@ -666,7 +666,7 @@ describe('ET-015a recording gate in the service (R3, R10, R14)', () => {
     const client = {
       observeHardMode: () => answer(undefined), getTrip: () => answer(undefined), journalTrip: () => Promise.resolve({ok:false,code:'TRIP_NOT_FOUND'}),
       upsertSession: () => answer({created: true, committedThroughEventSeq: '0'}), committedThrough: () => answer('0'),
-      listTrips: () => answer({trips: [], nextCursor: null}), getEvent: () => answer(undefined), listEvents: () => answer([]), recordCompleteness: () => answer(undefined),
+      listTrips: () => answer({trips: [], nextCursor: null}), getEvent: () => answer(undefined), listEvents: () => answer([]), recordTrailerBaseline: () => answer(undefined), recordCompleteness: () => answer(undefined),
       appendSamples: (session: string, rows: {monotonicNs: string}[], options: unknown) => {
         order.push('appendSamples'); appended.push([session, rows.map(row => row.monotonicNs), options]);
         return answer({appended: rows.length, skipped: 0});
@@ -853,7 +853,7 @@ describe('ET-015c recording status on the parent port', () => {
     const client = {
       observeHardMode: () => answer(undefined), getTrip: () => answer(undefined), journalTrip: () => Promise.resolve({ok:false,code:'TRIP_NOT_FOUND'}),
       upsertSession: () => answer({created: true, committedThroughEventSeq: '0'}), committedThrough: () => answer('0'),
-      listTrips: () => answer({trips: [], nextCursor: null}), getEvent: () => answer(undefined), listEvents: () => answer([]), recordCompleteness: () => answer(undefined)
+      listTrips: () => answer({trips: [], nextCursor: null}), getEvent: () => answer(undefined), listEvents: () => answer([]), recordTrailerBaseline: () => answer(undefined), recordCompleteness: () => answer(undefined)
     } as unknown as StorageClient;
     const f = await stoppedService(stopProbe, undefined, {realV1: true});
     const zero = {lostEvents: 0, eventLoss: 0, notConnected: 0, sampleLoss: 0, restoreLoss: 0, droppedSamples: 0};
@@ -889,7 +889,7 @@ describe('ET-015c recording status on the parent port', () => {
     const client = {
       observeHardMode: () => answer(undefined), getTrip: () => answer(undefined), journalTrip: () => Promise.resolve({ok:false,code:'TRIP_NOT_FOUND'}),
       upsertSession: () => answer({created: true, committedThroughEventSeq: '0'}), committedThrough: () => answer('0'),
-      listTrips: () => answer({trips: [], nextCursor: null}), getEvent: () => answer(undefined), listEvents: () => answer([]), recordCompleteness: () => answer(undefined)
+      listTrips: () => answer({trips: [], nextCursor: null}), getEvent: () => answer(undefined), listEvents: () => answer([]), recordTrailerBaseline: () => answer(undefined), recordCompleteness: () => answer(undefined)
     } as unknown as StorageClient;
     const f = await stoppedService(stopProbe, undefined, {realV1: true});
     try {

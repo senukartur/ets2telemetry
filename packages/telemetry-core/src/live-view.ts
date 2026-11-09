@@ -151,7 +151,7 @@ function trailersReading(trailers: Reading<Reading<LiveTrailer>[]>): Reading<str
 function gameModeText(mode: GameModeView): string {
   if (mode.mode === 'unknown') return 'unknown';
   // A weak result, such as a single-player guess from a missing module, always states its weak evidence.
-  return `${mode.mode === 'truckersmp' ? 'TruckersMP' : 'single-player'} (${mode.confidence} evidence, ${mode.method})`;
+  return `${mode.mode === 'truckersmp' ? 'TruckersMP' : mode.mode === 'haulmp' ? 'HaulMP' : 'single-player'} (${mode.confidence} evidence, ${mode.method})`;
 }
 
 /**

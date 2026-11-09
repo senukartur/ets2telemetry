@@ -297,6 +297,7 @@ export async function runRecording(input: Json, database: {path: string; backups
       return counted(commit());
     };
     const storage: TripRecorderClient = {
+      recordTrailerBaseline: input => client.recordTrailerBaseline(input),
       upsertSession: input => client.upsertSession(input), committedThrough: session => client.committedThrough(session),
       commitEvent: input => scripted(() => client.commitEvent(input)), commitGap: input => scripted(() => client.commitGap(input)),
       recordCompleteness: (session, interval, options) => client.recordCompleteness(session, interval, options),

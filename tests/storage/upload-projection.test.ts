@@ -1,3 +1,6 @@
+import type {SinkResult} from '../../apps/desktop/src/durable-sink';
+import {TripRecorderSink} from '../../apps/desktop/src/trip-recorder';
+import type {EventRecord} from '../../packages/contracts/src/protocol-v1';
 // Hand-authored game-shaped streams in isolated temporary databases, never real game or performance evidence.
 import {randomUUID} from 'node:crypto';
 import {vi} from 'vitest';
@@ -28,7 +31,7 @@ async function start(purpose:'history'|'synthetic'|'replay'='history') {
   const worker=storageWorker(),client=new StorageClient(worker.handle,{closeGraceMs:TEST_CLOSE_GRACE_MS});
   ok(await client.open({path:ws.database,purpose,backupsDirectory:ws.backups,appVersion:'0.1.0-test'}));return client;
 }
-async function open(client:StorageClient,s:Script,verified=true,seq=1,rawTripUuid?:string) {
+async function open(client:Storage|StorageClient,s:Script,verified=true,seq=1,rawTripUuid?:string) {
   ok(await client.upsertSession({message:gameShaped(s.welcome())}));
   if(seq>1)ok(await client.commitGap({message:gameShaped(s.gap(seq-1))}));
   const message=gameShaped(s.event(r.jobConfigured())),uuid=rawTripUuid??tripUuidFor(s.session,message.data.eventSeq);
@@ -316,7 +319,7 @@ describe('immutable private upload projections through the SQLite worker', () =>
       {kind:'trip.open',tripUuid:child,game:'ets2',gameMode:mode,jobConfiguration:'this-event',trailerConfigurations:[{eventSeq:'1'}],recordingCompleteness:'partial',startedUtcMs:2000},
       {kind:'event.attribute',tripUuid:child,attribution:'trip'}]}));
     const pin=ok(await prepare(client,child)),complete=await pages(client,pin);
-    expect(pin.rootTripUuid).toBe(root);expect(pin.totals).toMatchObject({members:2,configurations:1});
+    expect(pin.rootTripUuid).toBe(root);expect(pin.totals).toMatchObject({members:2,configurations:1});expect(pin.ruleContext?.status).toBe('unproven');
     expect(complete.find(p=>p.kind==='configurations')!.rows[0]).toMatchObject({occurrence:{pluginSessionId:ETS2_B,rawTripUuid:child,eventSeq:'1'}});
     expect(mapUploadProjection(pin,complete).status).toBe('projected');
     expect(await pages(client,unqualified)).toEqual(unqualifiedPages);
@@ -443,5 +446,201 @@ describe('immutable private upload projections through the SQLite worker', () =>
     expect(released.state).toBe('released');ok(await client.deleteTrip(uuid,{rejectIfOpen:false}));expect(ok(await client.getTrip(uuid))).toBeUndefined();failed(await client.readUploadProjectionPage({snapshot:pin.snapshot,kind:'members',limit:1}),'INVALID_INPUT');await client.close();expect(recheck(pin)).toBe(false);
     readOnly(ws.database,db=>{for(const table of ['upload_projection_pins','upload_projection_members','upload_projection_configurations','upload_projection_intervals'])expect(db.prepare(`SELECT count(*) FROM ${table}`).pluck().get()).toBe(0);
       for(const table of ['trips','upload_candidates','upload_reservations','upload_change_heads','upload_source_transitions'])expect(db.prepare(`SELECT count(*) FROM ${table}`).pluck().get()).toBe(0);});
+  });
+});
+
+
+describe('TEL-034 checkpoint-bound trailer context',()=>{
+  function checkpoint(s:Script,coupling=false,slots=10){
+    const message=gameShaped(s.checkpoint(null));message.data.state.boundaryOrder='0';
+    message.data.state.configuration.trailers=Array.from({length:slots},(_,index)=>index===0?{available:true,value:trailer(0,{id:{available:true,value:'trailer-a'},bodyType:{available:true,value:'curtainsider'}})}
+      :index===1&&coupling?{available:true,value:trailer(1,{id:{available:true,value:'trailer-b'},bodyType:absent,chainType:absent})}:absent);
+    return message;
+  }
+  async function setup(coupling=false,slots=10,sparse=false,fill?:(storage:Storage,s:Script,root:string)=>void){
+    const s=new Script(ETS2_A);
+    const initialize=async(client:Storage|StorageClient)=>{
+      ok(await client.upsertSession({message:gameShaped(s.welcome())}));
+      ok(await client.commitGap({message:gameShaped(s.gap(6,'noDurableConsumer'))}));
+      const baseline=checkpoint(s,coupling,slots);
+      if(sparse){const slot=baseline.data.state.configuration.trailers[1];if(!slot.available)throw new Error("missing coupling fixture");slot.value.index=2;baseline.data.state.configuration.trailers[2]=slot;baseline.data.state.configuration.trailers[1]=absent;}
+      ok(await client.recordTrailerBaseline({message:baseline}));
+      const root=await open(client,s);return {s,root,baseline};
+    };
+    if(fill){
+      const conn=await openConnection(ws.options({purpose:'history'})),storage=tracked(conn);
+      const fixture=await initialize(storage);
+      // Cursor filler is one committed fixture; all pin advances, recorder turns and reopen checks stay separate.
+      conn.writer().transaction(()=>fill(storage,s,fixture.root)).immediate();storage.close();
+      return {...fixture,client:await start()};
+    }
+    const client=await start();return {...await initialize(client),client};
+  }
+  async function projected(client:StorageClient,root:string){
+    const pin=ok(await prepare(client,root)),mapping=mapUploadProjection(pin,await pages(client,pin));
+    if(mapping.status!=='projected')throw new Error(mapping.reason);return {pin,snapshot:mapping.summary.snapshot};
+  }
+  it('keeps a sparse checkpoint chain incomplete across bounded replay and worker reopen',async()=>{
+    const {client,s,root}=await setup(true,10,true,(storage,s)=>{
+      for(let i=0;i<150;i++)ok(storage.commitEvent({message:gameShaped(s.event(r.paused()))}));
+    });
+    await close(client,s,root,'delivered');const pinId=randomUUID();ok(await client.beginUploadProjection({pinId,tripUuid:root}));
+    expect(ok(await client.advanceUploadProjection(pinId))).toMatchObject({state:'preparing',examined:100});await client.close();
+    const reopened=await start();let state=ok(await reopened.getUploadProjectionPreparation(pinId));
+    while(state.state==='preparing'){state=ok(await reopened.advanceUploadProjection(pinId));expect(state.examined).toBeLessThanOrEqual(100);}
+    const mapping=mapUploadProjection(state.projection!,await pages(reopened,state.projection!));
+    expect(mapping).toMatchObject({status:'projected',summary:{snapshot:{trailers:{complete:false,items:[{index:0},{index:2}]},evidence:{ruleContextComplete:false,reasons:['trailer-context-unavailable']}}}});
+    await reopened.close();
+  });
+  it('does not prove a not-merged singleton from a checkpoint in the earlier job after a trailer change (real recorder case15)',async()=>{
+    const client=await start(),s=new Script(ETS2_A),sink=new TripRecorderSink(client);
+    const sinkOk=<T>(result:SinkResult<T>):T=>{if(!result.ok)throw new Error(result.error.code);return result.value;};
+    const feed=async(record:EventRecord,simulation:'paused'|'running'='running')=>{
+      const message=gameShaped(s.event(record,{simulation}));sinkOk(await sink.commit(message,{receivedUtcMs:2000+Number(message.data.eventSeq)}));return message;
+    };
+    sinkOk(await sink.openSession(gameShaped(s.welcome())));
+    await feed(r.truckConfigured(),'paused');await feed(r.trailerConfigured(trailer(0,{id:{available:true,value:'trailer-x'},bodyType:{available:true,value:'curtainsider'}})),'paused');
+    await feed(r.timersRestart(),'paused');await feed(r.started());await feed(r.paused(),'paused');
+    const first=await feed(r.jobConfigured(),'paused'),original=tripUuidFor(s.session,first.data.eventSeq);await feed(r.started());await feed(r.fined());
+    await feed(r.trailerConfigured(trailer(0,{id:{available:true,value:'trailer-a'},bodyType:{available:true,value:'curtainsider'}})));
+    sinkOk(await sink.openSession(gameShaped(s.welcome())));const mid=checkpoint(s);mid.data.state.configuration.job={available:true,value:job()};mid.data.state.boundaryOrder=s.next.toString();
+    sinkOk(await sink.checkpoint(mid));sinkOk(sink.observe(mid,{receivedUtcMs:3000}));
+    await feed(r.timersRestart(),'paused');const resent=await feed(r.jobConfigured(),'paused'),root=tripUuidFor(s.session,resent.data.eventSeq);
+    await feed(r.started());await feed(r.fined());await feed(r.delivered());
+    expect(root).not.toBe(original);const {pin,snapshot}=await projected(client,root);
+    expect(pin.totals.members).toBe(1);expect(pin.facts.moneyIncomplete).toBe(false);
+    const detail=ok(await client.journalIntervals(root,{limit:100}));expect(JSON.stringify(detail)).toContain('not-merged');
+    expect(snapshot.trailers.complete).toBe(false);expect(snapshot.evidence).toMatchObject({ruleContextComplete:false,reasons:['trailer-context-unproven']});
+    await client.close();
+  });
+  it.each([
+    ['discontinuity',{cause:'discontinuity',continuationOf:'70000000-0000-4000-8000-000000000001',decision:'not-merged'},false],
+    ['discontinuity',{cause:'reload',continuationOf:'70000000-0000-4000-8000-000000000001',decision:'not-merged'},false],
+    ['discontinuity',{cause:'opened-at-load'},false],
+    ['discontinuity',{cause:'loaded-job-unverified'},false],
+    ['discontinuity',{cause:'save-load'},false],
+    ['not-connected',{cause:'late-attach'},false],
+    ['not-connected',{cause:'unrecognized-prefix'},false],
+    ['discontinuity',{cause:'unrecognized-prefix'},false],
+    ['discontinuity',{cause:'unrecognized-prefix',annotation:true},false],
+    ['discontinuity',{cause:'reload',annotation:true},false],
+    ['discontinuity',{cause:'unrecognized-prefix',decision:'not-merged',annotation:true},false],
+    ['sample-loss',{},true],
+    ['not-connected',{cause:'disconnected'},true],
+    ['not-connected',{cause:'consumer-restart'},true],
+    ['not-connected',{cause:'opened-before-attach'},false],
+    ['not-connected',{cause:'opened-before-attach',annotation:true},false],
+    ['discontinuity',{cause:'paused-reconnect',annotation:true},true],
+    ['discontinuity',{cause:'menu-job-acceptance',version:1,annotation:true},true],
+    ['discontinuity',{cause:'opened-at-load',annotation:true},true],
+    ['discontinuity',{cause:'game-time-jump',label:'possible-sleep',stationary:true,annotation:true},true]
+  ] as const)('classifies %s %j against a fully observed original prefix (complete %s)',async(kind,detail,complete)=>{
+    const {client,s,root}=await setup();ok(await client.recordCompleteness(s.session,{tripUuid:root,kind,detail}));await close(client,s,root,'delivered');
+    const {snapshot}=await projected(client,root);expect(snapshot.trailers.complete).toBe(complete);
+    expect(snapshot.evidence).toMatchObject({ruleContextComplete:complete,reasons:complete?[]:['trailer-context-unproven']});await client.close();
+  });
+  it('persists unresolved-prefix classification across bounded interval-copy turns and reopen',async()=>{
+    const {client,s,root}=await setup(false,10,false,(storage,s,root)=>{
+      ok(storage.recordCompleteness(s.session,{tripUuid:root,kind:'discontinuity',detail:{cause:'reload',decision:'not-merged'}}));
+      for(let i=0;i<150;i++)ok(storage.recordCompleteness(s.session,{tripUuid:root,kind:'sample-loss'}));
+    });
+    await close(client,s,root,'delivered');
+    const pinId=randomUUID();ok(await client.beginUploadProjection({pinId,tripUuid:root}));expect(ok(await client.advanceUploadProjection(pinId))).toMatchObject({state:'preparing',examined:100});
+    await client.close();readOnly(ws.database,db=>{
+      const saved=JSON.parse(db.prepare('SELECT snapshot_json FROM upload_projection_pins WHERE pin_id=?').pluck().get(pinId) as string);
+      expect(saved.rulePrefix).toEqual({version:1,unproven:true});
+    });
+    const reopened=await start();let state=ok(await reopened.getUploadProjectionPreparation(pinId));
+    while(state.state==='preparing'){state=ok(await reopened.advanceUploadProjection(pinId));expect(state.examined).toBeLessThanOrEqual(100);}
+    const mapped=mapUploadProjection(state.projection!,await pages(reopened,state.projection!));
+    expect(mapped).toMatchObject({status:'projected',summary:{snapshot:{trailers:{complete:false},evidence:{ruleContextComplete:false,reasons:['trailer-context-unproven']}}}});await reopened.close();
+  });
+  it.each([false,true])('proves an ordinary later job after startup loss and a no-job all-slot checkpoint (coupling %s)',async coupling=>{
+    const {client,s,root,baseline}=await setup(coupling);
+    ok(await client.recordTrailerBaseline({message:baseline})); // Exact retry never rewrites the baseline.
+    ok(await client.recordCompleteness(s.session,{tripUuid:root,kind:'sample-loss'}));
+    await close(client,s,root,'delivered');const result=await projected(client,root);
+    expect(result.snapshot.trailers.complete).toBe(true);expect(result.snapshot.trailers.items).toHaveLength(coupling?2:1);
+    if(coupling)expect(result.snapshot.trailers.items[1]).toMatchObject({index:1,bodyType:absent,chainType:absent});
+    expect(result.snapshot.evidence).toMatchObject({ruleContextComplete:true,reasons:[]});
+    await client.close();expect(readOnly(ws.database,db=>db.prepare('SELECT count(*) FROM trailer_baselines').pluck().get())).toBe(1);
+  });
+  it.each(['changed','clear-restore','hidden-change'] as const)('observes %s even when no configuration is linked to the trip',async fault=>{
+    const {client,s,root}=await setup();
+    if(fault==='clear-restore')ok(await client.commitEvent({message:gameShaped(s.event(r.trailerCleared()))}));
+    else ok(await client.commitEvent({message:gameShaped(s.event(r.trailerConfigured(trailer(0,{id:{available:true,value:'other-trailer'}}))))}));
+    for(let i=0;i<(fault==='hidden-change'?16:1);i++)ok(await client.commitEvent({message:gameShaped(s.event(r.trailerConfigured(trailer(0,{id:{available:true,value:'trailer-a'},bodyType:{available:true,value:'curtainsider'}})))),effects:fault==='hidden-change'?[{kind:'trip.update',tripUuid:root,set:{trailerConfigurations:['this-event']}}]:[]}));
+    await close(client,s,root,'delivered');const {pin,snapshot}=await projected(client,root);
+    expect(pin.totals.configurations).toBe(fault==='hidden-change'?16:0);expect(snapshot.trailers).toEqual({complete:false,items:[]});
+    expect(snapshot.evidence).toMatchObject({ruleContextComplete:false,reasons:['trailer-context-changed']});await client.close();
+  });
+  it.each(['event-loss','restore-loss','storage-unavailable','sample-loss'] as const)('classifies interval-only %s evidence, including unassigned session losses',async kind=>{
+    const {client,s,root}=await setup();ok(await client.recordCompleteness(s.session,{kind,firstEventSeq:'8',lastEventSeq:'10'}));
+    const {snapshot}=await projected(client,root);
+    expect(snapshot.evidence).toMatchObject({ruleContextComplete:kind==='sample-loss',reasons:kind==='sample-loss'?[]:['recording-intervals','trailer-context-unproven']});await client.close();
+  });
+  it('keeps baseline and interval bounds pinned and rechecks new unassigned loss before publication',async()=>{
+    const client=await start(),s=new Script(ETS2_A);ok(await client.upsertSession({message:gameShaped(s.welcome())}));const baseline=checkpoint(s),root=await open(client,s),pinId=randomUUID();
+    ok(await client.beginUploadProjection({pinId,tripUuid:root}));ok(await client.recordTrailerBaseline({message:baseline}));
+    let state=ok(await client.advanceUploadProjection(pinId));while(state.state==='preparing')state=ok(await client.advanceUploadProjection(pinId));expect(state.projection!.ruleContext?.status).toBe('unproven');
+    const ready=ok(await prepare(client,root));expect(ready.ruleContext?.status).toBe('proven');
+    ok(await client.recordCompleteness(s.session,{kind:'restore-loss',firstEventSeq:'2',lastEventSeq:'3'}));await client.close();expect(recheck(ready)).toBe(false);
+  });
+  it('allows identical repeated configuration and ignores a gap strictly after the terminal boundary',async()=>{
+    const {client,s,root}=await setup();
+    ok(await client.commitEvent({message:gameShaped(s.event(r.trailerConfigured(trailer(0,{id:{available:true,value:'trailer-a'},bodyType:{available:true,value:'curtainsider'}}))))}));
+    await close(client,s,root,'delivered');const frozen=await projected(client,root);
+    ok(await client.commitGap({message:gameShaped(s.gap(3))}));ok(await client.commitEvent({message:gameShaped(s.event(r.trailerCleared()))}));
+    expect((await projected(client,root)).snapshot.evidence.ruleContextComplete).toBe(true);await client.close();expect(recheck(frozen.pin)).toBe(true);
+  });
+  it.each(['short','late','no-baseline','invalid-empty'] as const)('cannot prove %s evidence',async fault=>{
+    const client=await start(),s=new Script(ETS2_A);ok(await client.upsertSession({message:gameShaped(s.welcome())}));
+    const b=checkpoint(s,false,fault==='short'?2:10);
+    if(fault==='invalid-empty')b.data.state.configuration.trailers[2]={available:false,reason:'invalid'};
+    if(fault!=='late'&&fault!=='no-baseline')ok(await client.recordTrailerBaseline({message:b}));
+    const root=await open(client,s);
+    if(fault==='late')ok(await client.recordTrailerBaseline({message:checkpoint(s)}));
+    await close(client,s,root,'delivered');expect((await projected(client,root)).snapshot.evidence).toMatchObject({ruleContextComplete:false,reasons:['trailer-context-unproven']});await client.close();
+  });
+  it.each([false,true])('detects a gap inside the proof span including an OPEN tail (open %s)',async isOpen=>{
+    const {client,s,root}=await setup();ok(await client.commitGap({message:gameShaped(s.gap(4))}));
+    if(!isOpen)await close(client,s,root,'delivered');
+    const {snapshot}=await projected(client,root);expect(snapshot.evidence).toMatchObject({ruleContextComplete:false,reasons:['recording-intervals','trailer-context-unproven']});await client.close();
+  });
+  it('invalidates OPEN preparation and publication when relevant native context advances without trip effects',async()=>{
+    const {client,s,root}=await setup();const ready=ok(await prepare(client,root)),pinId=randomUUID();
+    ok(await client.beginUploadProjection({pinId,tripUuid:root}));
+    ok(await client.commitEvent({message:gameShaped(s.event(r.trailerCleared()))}));
+    expect(ok(await client.advanceUploadProjection(pinId))).toMatchObject({state:'invalidated',examined:0});await client.close();expect(recheck(ready)).toBe(false);
+  });
+  it('resumes a pinned proof cursor across reopen with at most100 inputs per turn and indexed event/gap/baseline scans',async()=>{
+    const {client,s,root}=await setup(false,10,false,(storage,s)=>{
+      for(let i=0;i<220;i++)ok(storage.commitEvent({message:gameShaped(s.event(r.paused()))}));
+    });
+    await close(client,s,root,'delivered');const pinId=randomUUID();ok(await client.beginUploadProjection({pinId,tripUuid:root}));
+    expect(ok(await client.advanceUploadProjection(pinId))).toMatchObject({state:'preparing',examined:100});await client.close();
+    const reopened=await start();let state=ok(await reopened.getUploadProjectionPreparation(pinId)),turns=0;
+    while(state.state==='preparing'){state=ok(await reopened.advanceUploadProjection(pinId));expect(state.examined).toBeLessThanOrEqual(100);turns++;}
+    expect(turns).toBeGreaterThan(1);const mapping=mapUploadProjection(state.projection!,await pages(reopened,state.projection!));
+    expect(mapping).toMatchObject({status:'projected',summary:{snapshot:{evidence:{ruleContextComplete:true,reasons:[]}}}});await reopened.close();
+    readOnly(ws.database,db=>{
+      const saved=JSON.parse(String(db.prepare('SELECT snapshot_json FROM upload_projection_pins WHERE pin_id=?').pluck().get(pinId)));
+      expect(saved.ruleReplay.phase).toBe('done');expect(saved.ruleReplay.items).toHaveLength(1);
+      for(const sql of ["SELECT * FROM trailer_baselines WHERE plugin_session_ref=1 AND next_event_seq<='00000000000000000007' AND (next_event_seq,id)<('00000000000000000007',9223372036854775807) ORDER BY next_event_seq DESC,id DESC LIMIT 1",
+        "SELECT id FROM events WHERE plugin_session_id=1 AND event_seq>'00000000000000000007' AND event_seq<='00000000000000000230' ORDER BY event_seq LIMIT 1",
+        "SELECT id FROM event_gaps WHERE plugin_session_ref=1 AND first_event_seq<='00000000000000000230' AND (first_event_seq,id)>('00000000000000000000',0) ORDER BY first_event_seq,id LIMIT 1"]){
+        const details=(db.prepare(`EXPLAIN QUERY PLAN ${sql}`).all() as {detail:string}[]).map(row=>row.detail).join(' ');
+        expect(details).toMatch(/SEARCH .*INDEX/);expect(details).not.toMatch(/SCAN |TEMP B-TREE/);
+      }
+    });
+  });
+  it('rejects contradictory checkpoints, mismatched sessions and unknown private fields without changing coverage',async()=>{
+    const {client,s,baseline}=await setup();const before=ok(await client.committedThrough(s.session));
+    const contradiction=structuredClone(baseline);contradiction.data.state.configuration.trailers[0]={available:true,value:trailer(0)};
+    failed(await client.recordTrailerBaseline({message:contradiction}),'SESSION_CONFLICT');
+    const identity=structuredClone(baseline);identity.source.processId++;
+    failed(await client.recordTrailerBaseline({message:identity}),'SESSION_CONFLICT');
+    failed(await client.recordTrailerBaseline({message:baseline,extra:true} as never),'INVALID_INPUT');
+    expect(ok(await client.committedThrough(s.session))).toBe(before);await client.close();
   });
 });

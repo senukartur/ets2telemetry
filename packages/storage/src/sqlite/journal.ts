@@ -6,7 +6,7 @@ import {ACCOUNTING_PATH, applyProgress, logicalEnabled, decodeRow} from './logic
 // EXPLAIN QUERY PLAN. Values keep their availability and exact money; nothing is converted. See docs/journal.md.
 import type Database from 'better-sqlite3';
 import {
-  isJournalPageQuery, isJournalTripsQuery, JOURNAL_DETAIL_INTERVALS, JOURNAL_DETAIL_TRAILERS, JOURNAL_EVENT_LIMITS, JOURNAL_INTERVAL_LIMITS, JOURNAL_MONEY_AMOUNTS, JOURNAL_TRIP_PAGE,
+  isJournalPageQuery, isJournalTripsQuery, JOURNAL_DETAIL_INTERVALS, JOURNAL_MARKET_KINDS, JOURNAL_DETAIL_TRAILERS, JOURNAL_EVENT_LIMITS, JOURNAL_INTERVAL_LIMITS, JOURNAL_MONEY_AMOUNTS, JOURNAL_TRIP_PAGE,
   type JournalDatabase, type JournalEvent, type JournalEventPage, type JournalInterval, type JournalIntervalPage, type JournalMoneyCategory, type JournalMoneyTotal,
   type JournalMoneyTotals, type JournalMoneyUnavailable, type JournalOutcomeRecord, type JournalPageQuery, type JournalTripDetail, type JournalTripListItem,
   type JournalTripPage, type JournalTripsQuery, type JournalWindow
@@ -23,6 +23,18 @@ import {journalSync} from './journal-sync';
 const MAX_ROW_ID = 9_223_372_036_854_775_807n;
 const MONEY_TYPES: Readonly<Record<string, JournalMoneyCategory>> = {'player.fined': 'fine', 'player.tollgate.paid': 'toll', 'player.use.ferry': 'ferry', 'player.use.train': 'train'};
 const CATEGORY_ORDER: readonly JournalMoneyCategory[] = ['fine', 'toll', 'ferry', 'train'];
+/** The job type filter of the job configuration `j`: fixed literals of JOURNAL_MARKET_KINDS, never input. An unavailable market has a NULL value, so it is `other`. */
+const JOB_FILTER_OF_J = `CASE j.market ${Object.entries(JOURNAL_MARKET_KINDS).map(([market, kind]) => `WHEN '${market}' THEN '${kind}'`).join(' ')} ELSE 'other' END`;
+/** The WHERE predicates of a list read on the projected state row: each filter's value twice, in the order of FILTER_ARGS. */
+const LOGICAL_FILTERS = `(? IS NULL OR json_extract(state.row_json,'$.game') = ?) AND (? IS NULL OR json_extract(state.row_json,'$.outcome') = ?)
+      AND (? IS NULL OR json_extract(state.row_json,'$.recording_completeness') = ?) AND (? IS NULL OR json_extract(state.row_json,'$.game_mode') = ?)
+      AND (? IS NULL OR (SELECT ${JOB_FILTER_OF_J} FROM job_configurations j WHERE j.id = CAST(json_extract(state.row_json,'$.job_configuration_ref."$integer"') AS INTEGER)) = ?)`;
+/** The same predicates on the columns of `trips`, for a database older than schema version 4. */
+const LEGACY_FILTERS = `(? IS NULL OR game = ?) AND (? IS NULL OR outcome = ?) AND (? IS NULL OR recording_completeness = ?) AND (? IS NULL OR game_mode = ?)
+    AND (? IS NULL OR (SELECT ${JOB_FILTER_OF_J} FROM job_configurations j WHERE j.id = job_configuration_ref) = ?)`;
+/** Each filter's value twice, in the order of LOGICAL_FILTERS and LEGACY_FILTERS. */
+const FILTER_ARGS = ({game, outcome, completeness, mode, jobType}: JournalTripsQuery) =>
+  [game ?? null, game ?? null, outcome ?? null, outcome ?? null, completeness ?? null, completeness ?? null, mode ?? null, mode ?? null, jobType ?? null, jobType ?? null];
 
 /**
  * Every journal statement. Each one reaches its rows through a primary key, the events UNIQUE (session, eventSeq) index,
@@ -33,8 +45,16 @@ export const JOURNAL_QUERIES = {
   purpose: 'SELECT purpose FROM database_info WHERE id = 1',
   userVersion: 'PRAGMA user_version',
   /** A newest-first trip page: the filter is part of the WHERE clause, so it applies before the LIMIT. */
-  tripPage: `SELECT * FROM trips WHERE id < ? AND (? IS NULL OR game = ?) AND (? IS NULL OR outcome = ?) AND (? IS NULL OR recording_completeness = ?)
-    ORDER BY id DESC LIMIT ?`,
+  tripPage: `SELECT * FROM trips WHERE id < ? AND ${LEGACY_FILTERS} ORDER BY id DESC LIMIT ?`,
+  /** The matching logical trips at a snapshot and their one-second samples, each member bounded by the trip's own revision. */
+  logicalTotals: `WITH matching AS (SELECT r.id AS revision, r.logical_ref, r.member_through, r.sample_through FROM logical_revisions r
+      JOIN logical_projection_states state ON state.id = r.state_ref
+      WHERE r.id = (SELECT max(v.id) FROM logical_revisions v WHERE v.logical_ref = r.logical_ref AND v.id <= ?) AND r.member_through > 0 AND ${LOGICAL_FILTERS})
+    SELECT count(*) AS trips, coalesce(sum((SELECT count(*) FROM logical_snapshot_memberships x JOIN samples s ON s.trip_ref = x.trip_ref
+      WHERE x.logical_ref = m.logical_ref AND x.trip_ref <= m.member_through AND x.from_revision < m.revision AND (x.through_revision IS NULL OR x.through_revision >= m.revision)
+      AND s.id <= m.sample_through)), 0) AS seconds FROM matching m`,
+  /** The legacy path of logicalTotals, on a database older than schema version 4: every matching trip and its samples. */
+  tripTotals: `SELECT count(*) AS trips, coalesce(sum((SELECT count(*) FROM samples s WHERE s.trip_ref = trips.id)), 0) AS seconds FROM trips WHERE ${LEGACY_FILTERS}`,
   tripByUuid: 'SELECT * FROM trips WHERE trip_uuid = ?',
   job: 'SELECT * FROM job_configurations WHERE id = ?',
   session: 'SELECT plugin_session_uuid, committed_through_event_seq FROM plugin_sessions WHERE id = ?',
@@ -133,8 +153,9 @@ export function listItem(db: Database.Database, r: Row): JournalTripListItem {
 }
 
 /**
- * Trips newest first, at most JOURNAL_TRIP_PAGE per page. The optional game, outcome and completeness filter is part of
- * the SQL WHERE clause, so a page is full whenever more matching trips exist; a full page always has a cursor.
+ * Trips newest first, at most JOURNAL_TRIP_PAGE per page. The optional game, outcome, completeness, mode and job type
+ * filter is part of the SQL WHERE clause, so a page is full whenever more matching trips exist; a full page always has a
+ * cursor. A read without a cursor also answers the `totals` of the same snapshot.
  */
 export function journalTrips(conn: StorageConnection, query: JournalTripsQuery = {}): JournalTripPage {
   if (!isJournalTripsQuery(query)) fail('INVALID_INPUT');
@@ -148,26 +169,26 @@ export function journalTrips(conn: StorageConnection, query: JournalTripsQuery =
 function tripPage(conn: StorageConnection, query: JournalTripsQuery): JournalTripPage {
   const db = conn.reader(), q = query ?? {};
   if (logicalEnabled(db)) {
-    const filter = `${q.game ?? 'any'}.${q.outcome ?? 'any'}.${q.completeness ?? 'any'}`;
+    const filter = `${q.game ?? 'any'}.${q.outcome ?? 'any'}.${q.completeness ?? 'any'}.${q.mode ?? 'any'}.${q.jobType ?? 'any'}`;
     const dbUuid = String(get(db,'SELECT database_uuid FROM database_info WHERE id=1')!.database_uuid);
-    const previous = q.cursor?.startsWith('l4:') ? q.cursor.split(':') : undefined;
+    const previous = q.cursor?.startsWith('l5:') ? q.cursor.split(':') : undefined;
     if (previous && (previous[1] !== dbUuid || previous[4] !== filter)) fail('INVALID_INPUT');
     const watermark = previous ? BigInt(previous[2]) : get(db, 'SELECT coalesce(max(id),0) AS id FROM logical_revisions')!.id;
     const before = previous ? BigInt(previous[3]) : q.cursor === undefined ? MAX_ROW_ID : BigInt(q.cursor);
     const rows = all(db, `SELECT state.row_json,r.logical_ref,r.progress_head FROM logical_revisions r JOIN logical_projection_states state ON state.id=r.state_ref WHERE r.id =
       (SELECT max(v.id) FROM logical_revisions v WHERE v.logical_ref = r.logical_ref AND v.id <= ?)
       AND r.logical_ref < ? AND r.member_through > 0
-      AND (? IS NULL OR json_extract(state.row_json,'$.game') = ?) AND (? IS NULL OR json_extract(state.row_json,'$.outcome') = ?)
-      AND (? IS NULL OR json_extract(state.row_json,'$.recording_completeness') = ?) ORDER BY r.logical_ref DESC LIMIT ?`,
-      watermark, before, q.game ?? null, q.game ?? null, q.outcome ?? null, q.outcome ?? null,
-      q.completeness ?? null, q.completeness ?? null, JOURNAL_TRIP_PAGE);
-    return {database: database(db), trips: rows.map(r => listItem(db, applyProgress(db,decodeRow(r.row_json),r.progress_head))), nextCursor: rows.length === JOURNAL_TRIP_PAGE ? `l4:${dbUuid}:${String(watermark)}:${String(rows.at(-1)!.logical_ref)}:${filter}` : null};
+      AND ${LOGICAL_FILTERS} ORDER BY r.logical_ref DESC LIMIT ?`,
+      watermark, before, ...FILTER_ARGS(q), JOURNAL_TRIP_PAGE);
+    return {database: database(db), trips: rows.map(r => listItem(db, applyProgress(db,decodeRow(r.row_json),r.progress_head))), nextCursor: rows.length === JOURNAL_TRIP_PAGE ? `l5:${dbUuid}:${String(watermark)}:${String(rows.at(-1)!.logical_ref)}:${filter}` : null,
+      ...(q.cursor === undefined ? {totals: totalsOf(get(db, JOURNAL_QUERIES.logicalTotals, watermark, ...FILTER_ARGS(q))!)} : {})};
   }
-  const game = q.game ?? null, outcome = q.outcome ?? null, completeness = q.completeness ?? null;
   const before = q.cursor === undefined ? MAX_ROW_ID : BigInt(q.cursor);
-  const rows = all(db, JOURNAL_QUERIES.tripPage, before, game, game, outcome, outcome, completeness, completeness, JOURNAL_TRIP_PAGE);
-  return {database: database(db), trips: rows.map(r => listItem(db, r)), nextCursor: rows.length === JOURNAL_TRIP_PAGE ? String(rows[rows.length - 1].id) : null};
+  const rows = all(db, JOURNAL_QUERIES.tripPage, before, ...FILTER_ARGS(q), JOURNAL_TRIP_PAGE);
+  return {database: database(db), trips: rows.map(r => listItem(db, r)), nextCursor: rows.length === JOURNAL_TRIP_PAGE ? String(rows[rows.length - 1].id) : null,
+    ...(q.cursor === undefined ? {totals: totalsOf(get(db, JOURNAL_QUERIES.tripTotals, ...FILTER_ARGS(q))!)} : {})};
 }
+const totalsOf = (row: Row) => ({trips: toSafeNumber(row.trips, Number.MAX_SAFE_INTEGER, 0), recordedSeconds: toSafeNumber(row.seconds, Number.MAX_SAFE_INTEGER, 0)});
 
 interface Window {dto: JournalWindow; session: bigint; from: bigint; through: bigint | null}
 /**
