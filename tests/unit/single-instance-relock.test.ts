@@ -19,15 +19,14 @@ const electron = path.join(repository, 'node_modules', 'electron', 'dist', 'elec
 const fixtures = path.join(repository, 'tests', 'fixtures', 'single-instance');
 const started: Run[] = [];
 const HOLDER_READINESS_MS = 30_000, REQUEST_RESULT_MS = INSTANCE_EXIT_WAIT_MS + 4000;
+const HOLDER_SIGNAL_POLL_MS = 2000;
 /**
- * Hang guard for an Electron process to end after it exits or is killed, not a timing assertion. A bare Electron main
- * script calling app.exit, with no lock and no other process, took up to 3.3 s to end on an idle host and 10.6 s with the
- * processors oversubscribed (November 8, 2026), so a process that is only slow must not hit it. It stays below
- * HOLDER_READINESS_MS: a cleanup stall retires a pending readiness wait with its own error.
+ * Allow for slow Electron shutdown under host load. Keep this guard below HOLDER_READINESS_MS so a cleanup stall
+ * retires a pending readiness wait with its own error.
  */
 const FINAL_EXIT_MS = 20_000;
-/** Every guard of one real case in turn, so that a guard, with its context, reports a stall before the case timeout does. */
-const REAL_CASE_GUARD_MS = HOLDER_READINESS_MS + REQUEST_RESULT_MS + 2 * FINAL_EXIT_MS;
+/** The longer case waits for two exits. Leave 5 s for setup and assertions so the inner guards can report a stall. */
+const REAL_CASE_GUARD_MS = HOLDER_READINESS_MS + REQUEST_RESULT_MS + 2 * FINAL_EXIT_MS + 5000;
 /** Stops the children, in parallel and each under FINAL_EXIT_MS, then removes their profile folder with its retries. */
 const CLEANUP_GUARD_MS = FINAL_EXIT_MS + 10_000;
 let lockDir: string | undefined;
@@ -169,5 +168,5 @@ it('a holder that does not exit keeps the lock: the requester gives up after its
   expect(result.elapsedMs).toBeGreaterThanOrEqual(1500);
   expect(result.requests).toBeGreaterThanOrEqual(2);
   // Every refused request reached the holder.
-  await expect.poll(() => signals(holder).length, {timeout: FINAL_EXIT_MS}).toBe(result.requests);
+  await expect.poll(() => signals(holder).length, {timeout: HOLDER_SIGNAL_POLL_MS}).toBe(result.requests);
 });
